@@ -91,9 +91,9 @@ async function ensureResponseConsumed(res: Response) {
 }
 
 describe("OpenResponses HTTP API (e2e)", () => {
-  it("rejects when disabled (default + config)", { timeout: 120_000 }, async () => {
+  it("rejects when disabled (default + config)", { timeout: 15_000 }, async () => {
     const port = await getFreePort();
-    const _server = await startServer(port);
+    const server = await startServer(port);
     try {
       const res = await postResponses(port, {
         model: "openclaw",
@@ -102,7 +102,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
       expect(res.status).toBe(404);
       await ensureResponseConsumed(res);
     } finally {
-      // shared server
+      await server.close({ reason: "test done" });
     }
 
     const disabledPort = await getFreePort();

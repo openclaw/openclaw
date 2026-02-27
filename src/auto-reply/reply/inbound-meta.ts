@@ -16,9 +16,9 @@ export function buildInboundMetaSystemPrompt(ctx: TemplateContext): string {
 
   // Keep system metadata strictly free of attacker-controlled strings (sender names, group subjects, etc.).
   // Those belong in the user-role "untrusted context" blocks.
-  // Per-message identifiers (message_id, reply_to_id, sender_id) are also excluded here: they change
-  // on every turn and would bust prefix-based prompt caches on local model providers. They are
-  // included in the user-role conversation info block via buildInboundUserContextPrefix() instead.
+  // Per-message identifiers and dynamic flags are also excluded here: they change on turns/replies
+  // and would bust prefix-based prompt caches on providers that use stable system prefixes.
+  // They are included in the user-role conversation info block instead.
 
   // Resolve channel identity: prefer explicit channel, then surface, then provider.
   // For webchat/Hub Chat sessions (when Surface is 'webchat' or undefined with no real channel),
@@ -43,14 +43,6 @@ export function buildInboundMetaSystemPrompt(ctx: TemplateContext): string {
     provider: safeTrim(ctx.Provider),
     surface: safeTrim(ctx.Surface),
     chat_type: chatType ?? (isDirect ? "direct" : undefined),
-    flags: {
-      is_group_chat: !isDirect ? true : undefined,
-      was_mentioned: ctx.WasMentioned === true ? true : undefined,
-      has_reply_context: Boolean(ctx.ReplyToBody),
-      has_forwarded_context: Boolean(ctx.ForwardedFrom),
-      has_thread_starter: Boolean(safeTrim(ctx.ThreadStarterBody)),
-      history_count: Array.isArray(ctx.InboundHistory) ? ctx.InboundHistory.length : 0,
-    },
   };
 
   // Keep the instructions local to the payload so the meaning survives prompt overrides.
@@ -75,18 +67,32 @@ export function buildInboundUserContextPrefix(ctx: TemplateContext): string {
   const messageId = safeTrim(ctx.MessageSid);
   const messageIdFull = safeTrim(ctx.MessageSidFull);
   const conversationInfo = {
-    message_id: messageId,
-    message_id_full: messageIdFull && messageIdFull !== messageId ? messageIdFull : undefined,
-    reply_to_id: safeTrim(ctx.ReplyToId),
-    sender_id: safeTrim(ctx.SenderId),
+    message_id: isDirect ? undefined : messageId,
+    message_id_full: isDirect
+      ? undefined
+      : messageIdFull && messageIdFull !== messageId
+        ? messageIdFull
+        : undefined,
+    reply_to_id: isDirect ? undefined : safeTrim(ctx.ReplyToId),
+    sender_id: isDirect ? undefined : safeTrim(ctx.SenderId),
     conversation_label: isDirect ? undefined : safeTrim(ctx.ConversationLabel),
-    sender: safeTrim(ctx.SenderE164) ?? safeTrim(ctx.SenderId) ?? safeTrim(ctx.SenderUsername),
+    sender: isDirect
+      ? undefined
+      : (safeTrim(ctx.SenderE164) ?? safeTrim(ctx.SenderId) ?? safeTrim(ctx.SenderUsername)),
     group_subject: safeTrim(ctx.GroupSubject),
     group_channel: safeTrim(ctx.GroupChannel),
     group_space: safeTrim(ctx.GroupSpace),
     thread_label: safeTrim(ctx.ThreadLabel),
     is_forum: ctx.IsForum === true ? true : undefined,
+    is_group_chat: !isDirect ? true : undefined,
     was_mentioned: ctx.WasMentioned === true ? true : undefined,
+    has_reply_context: ctx.ReplyToBody ? true : undefined,
+    has_forwarded_context: ctx.ForwardedFrom ? true : undefined,
+    has_thread_starter: safeTrim(ctx.ThreadStarterBody) ? true : undefined,
+    history_count:
+      Array.isArray(ctx.InboundHistory) && ctx.InboundHistory.length > 0
+        ? ctx.InboundHistory.length
+        : undefined,
   };
   if (Object.values(conversationInfo).some((v) => v !== undefined)) {
     blocks.push(

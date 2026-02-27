@@ -81,6 +81,7 @@ export function buildEmbeddedExtensionFactories(params: {
     setCompactionSafeguardRuntime(params.sessionManager, {
       maxHistoryShare: compactionCfg?.maxHistoryShare,
       contextWindowTokens: contextWindowInfo.tokens,
+      model: params.model,
     });
     factories.push(compactionSafeguardExtension);
   }

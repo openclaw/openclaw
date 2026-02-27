@@ -1,6 +1,6 @@
 {
   "name": "openclaw",
-  "version": "2026.2.22-2",
+  "version": "2026.2.23",
   "description": "Multi-channel AI gateway with extensible messaging integrations",
   "keywords": [],
   "homepage": "https://github.com/openclaw/openclaw#readme",
@@ -182,6 +182,8 @@
     "osc-progress": "^0.3.0",
     "pdfjs-dist": "^5.4.624",
     "playwright-core": "1.58.2",
+    "playwright-extra": "^4.3.6",
+    "puppeteer-extra-plugin-stealth": "^2.11.2",
     "qrcode-terminal": "^0.12.0",
     "sharp": "^0.34.5",
     "sqlite-vec": "0.1.7-alpha.2",
@@ -239,13 +241,13 @@
       "tough-cookie": "4.1.3"
     },
     "onlyBuiltDependencies": [
+      "@discordjs/opus",
       "@lydell/node-pty",
       "@matrix-org/matrix-sdk-crypto-nodejs",
       "@napi-rs/canvas",
       "@whiskeysockets/baileys",
       "authenticate-pam",
       "esbuild",
-      "koffi",
       "node-llama-cpp",
       "protobufjs",
       "sharp"

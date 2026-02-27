@@ -193,7 +193,7 @@ describe("gateway server models + voicewake", () => {
 
   test(
     "voicewake.get returns defaults and voicewake.set broadcasts",
-    { timeout: 60_000 },
+    { timeout: 20_000 },
     async () => {
       await withTempHome(async (homeDir) => {
         const initial = await rpcReq<{ triggers: string[] }>(ws, "voicewake.get");
@@ -379,7 +379,7 @@ describe("gateway server misc", () => {
     });
   });
 
-  test("send dedupes by idempotencyKey", { timeout: 60_000 }, async () => {
+  test("send dedupes by idempotencyKey", { timeout: 15_000 }, async () => {
     const prevRegistry = getActivePluginRegistry() ?? emptyRegistry;
     try {
       setActivePluginRegistry(whatsappRegistry);
@@ -452,8 +452,9 @@ describe("gateway server misc", () => {
 
   test("refuses to start when port already bound", async () => {
     const { server: blocker, port: blockedPort } = await occupyPort();
-    await expect(startGatewayServer(blockedPort)).rejects.toBeInstanceOf(GatewayLockError);
-    await expect(startGatewayServer(blockedPort)).rejects.toThrow(/already listening/i);
+    const startup = startGatewayServer(blockedPort);
+    await expect(startup).rejects.toBeInstanceOf(GatewayLockError);
+    await expect(startup).rejects.toThrow(/already listening/i);
     blocker.close();
   });
 

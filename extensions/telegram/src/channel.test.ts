@@ -4,9 +4,9 @@ import type {
   OpenClawConfig,
   PluginRuntime,
   ResolvedTelegramAccount,
-  RuntimeEnv,
 } from "openclaw/plugin-sdk";
 import { describe, expect, it, vi } from "vitest";
+import { createRuntimeEnv } from "../../test-utils/runtime-env.js";
 import { telegramPlugin } from "./channel.js";
 import { setTelegramRuntime } from "./runtime.js";
 
@@ -25,20 +25,10 @@ function createCfg(): OpenClawConfig {
   } as OpenClawConfig;
 }
 
-function createRuntimeEnv(): RuntimeEnv {
-  return {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn((code: number): never => {
-      throw new Error(`exit ${code}`);
-    }),
-  };
-}
-
 function createStartAccountCtx(params: {
   cfg: OpenClawConfig;
   accountId: string;
-  runtime: RuntimeEnv;
+  runtime: ReturnType<typeof createRuntimeEnv>;
 }): ChannelGatewayContext<ResolvedTelegramAccount> {
   const account = telegramPlugin.config.resolveAccount(
     params.cfg,

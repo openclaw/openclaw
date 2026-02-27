@@ -17,6 +17,7 @@ export type ExecSafeBinConfigScope = {
 const INTERPRETER_LIKE_SAFE_BINS = new Set([
   "ash",
   "bash",
+  "busybox",
   "bun",
   "cmd",
   "cmd.exe",
@@ -40,6 +41,7 @@ const INTERPRETER_LIKE_SAFE_BINS = new Set([
   "python3",
   "ruby",
   "sh",
+  "toybox",
   "wscript",
   "zsh",
 ]);

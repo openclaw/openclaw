@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { AuthProfileStore } from "./auth-profiles.js";
 import { saveAuthProfileStore } from "./auth-profiles.js";
 import { AUTH_STORE_VERSION } from "./auth-profiles/constants.js";
+import { isAnthropicBillingError } from "./live-auth-keys.js";
 import { runWithModelFallback } from "./model-fallback.js";
 import { makeModelFallbackCfg } from "./test-helpers/model-fallback-config-fixture.js";
 
@@ -104,6 +105,60 @@ function createOverrideFailureRun(params: {
     }
     throw new Error(`unexpected fallback candidate: ${provider}/${model}`);
   });
+}
+
+function makeSingleProviderStore(params: {
+  provider: string;
+  usageStat: NonNullable<AuthProfileStore["usageStats"]>[string];
+}): AuthProfileStore {
+  const profileId = `${params.provider}:default`;
+  return {
+    version: AUTH_STORE_VERSION,
+    profiles: {
+      [profileId]: {
+        type: "api_key",
+        provider: params.provider,
+        key: "test-key",
+      },
+    },
+    usageStats: {
+      [profileId]: params.usageStat,
+    },
+  };
+}
+
+function createFallbackOnlyRun() {
+  return vi.fn().mockImplementation(async (providerId, modelId) => {
+    if (providerId === "fallback") {
+      return "ok";
+    }
+    throw new Error(`unexpected provider: ${providerId}/${modelId}`);
+  });
+}
+
+async function expectSkippedUnavailableProvider(params: {
+  providerPrefix: string;
+  usageStat: NonNullable<AuthProfileStore["usageStats"]>[string];
+  expectedReason: string;
+}) {
+  const provider = `${params.providerPrefix}-${crypto.randomUUID()}`;
+  const cfg = makeProviderFallbackCfg(provider);
+  const store = makeSingleProviderStore({
+    provider,
+    usageStat: params.usageStat,
+  });
+  const run = createFallbackOnlyRun();
+
+  const result = await runWithStoredAuth({
+    cfg,
+    store,
+    provider,
+    run,
+  });
+
+  expect(result.result).toBe("ok");
+  expect(run.mock.calls).toEqual([["fallback", "ok-model"]]);
+  expect(result.attempts[0]?.reason).toBe(params.expectedReason);
 }
 
 describe("runWithModelFallback", () => {
@@ -309,86 +364,26 @@ describe("runWithModelFallback", () => {
   });
 
   it("skips providers when all profiles are in cooldown", async () => {
-    const provider = `cooldown-test-${crypto.randomUUID()}`;
-    const profileId = `${provider}:default`;
-
-    const store: AuthProfileStore = {
-      version: AUTH_STORE_VERSION,
-      profiles: {
-        [profileId]: {
-          type: "api_key",
-          provider,
-          key: "test-key",
-        },
+    await expectSkippedUnavailableProvider({
+      providerPrefix: "cooldown-test",
+      usageStat: {
+        cooldownUntil: Date.now() + 5 * 60_000,
       },
-      usageStats: {
-        [profileId]: {
-          cooldownUntil: Date.now() + 5 * 60_000,
-        },
-      },
-    };
-
-    const cfg = makeProviderFallbackCfg(provider);
-    const run = vi.fn().mockImplementation(async (providerId, modelId) => {
-      if (providerId === "fallback") {
-        return "ok";
-      }
-      throw new Error(`unexpected provider: ${providerId}/${modelId}`);
+      expectedReason: "rate_limit",
     });
-
-    const result = await runWithStoredAuth({
-      cfg,
-      store,
-      provider,
-      run,
-    });
-
-    expect(result.result).toBe("ok");
-    expect(run.mock.calls).toEqual([["fallback", "ok-model"]]);
-    expect(result.attempts[0]?.reason).toBe("rate_limit");
   });
 
   it("propagates disabled reason when all profiles are unavailable", async () => {
-    const provider = `disabled-test-${crypto.randomUUID()}`;
-    const profileId = `${provider}:default`;
     const now = Date.now();
-
-    const store: AuthProfileStore = {
-      version: AUTH_STORE_VERSION,
-      profiles: {
-        [profileId]: {
-          type: "api_key",
-          provider,
-          key: "test-key",
-        },
+    await expectSkippedUnavailableProvider({
+      providerPrefix: "disabled-test",
+      usageStat: {
+        disabledUntil: now + 5 * 60_000,
+        disabledReason: "billing",
+        failureCounts: { rate_limit: 4 },
       },
-      usageStats: {
-        [profileId]: {
-          disabledUntil: now + 5 * 60_000,
-          disabledReason: "billing",
-          failureCounts: { rate_limit: 4 },
-        },
-      },
-    };
-
-    const cfg = makeProviderFallbackCfg(provider);
-    const run = vi.fn().mockImplementation(async (providerId, modelId) => {
-      if (providerId === "fallback") {
-        return "ok";
-      }
-      throw new Error(`unexpected provider: ${providerId}/${modelId}`);
+      expectedReason: "billing",
     });
-
-    const result = await runWithStoredAuth({
-      cfg,
-      store,
-      provider,
-      run,
-    });
-
-    expect(result.result).toBe("ok");
-    expect(run.mock.calls).toEqual([["fallback", "ok-model"]]);
-    expect(result.attempts[0]?.reason).toBe("billing");
   });
 
   it("does not skip when any profile is available", async () => {
@@ -654,5 +649,38 @@ describe("runWithModelFallback", () => {
     expect(run).toHaveBeenCalledTimes(2);
     expect(result.provider).toBe("openai");
     expect(result.model).toBe("gpt-4.1-mini");
+  });
+});
+
+describe("isAnthropicBillingError", () => {
+  it("does not false-positive on plain 'a 402' prose", () => {
+    const samples = [
+      "Use a 402 stainless bolt",
+      "Book a 402 room",
+      "There is a 402 near me",
+      "The building at 402 Main Street",
+    ];
+
+    for (const sample of samples) {
+      expect(isAnthropicBillingError(sample)).toBe(false);
+    }
+  });
+
+  it("matches real 402 billing payload contexts including JSON keys", () => {
+    const samples = [
+      "HTTP 402 Payment Required",
+      "status: 402",
+      "error code 402",
+      '{"status":402,"type":"error"}',
+      '{"code":402,"message":"payment required"}',
+      '{"error":{"code":402,"message":"billing hard limit reached"}}',
+      "got a 402 from the API",
+      "returned 402",
+      "received a 402 response",
+    ];
+
+    for (const sample of samples) {
+      expect(isAnthropicBillingError(sample)).toBe(true);
+    }
   });
 });

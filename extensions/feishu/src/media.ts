@@ -7,7 +7,7 @@ import { createFeishuClient } from "./client.js";
 import { normalizeFeishuExternalKey } from "./external-keys.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { assertFeishuMessageApiSuccess, toFeishuSendResult } from "./send-result.js";
-import { resolveReceiveIdType, normalizeFeishuTarget } from "./targets.js";
+import { resolveFeishuSendTarget } from "./send-target.js";
 
 export type DownloadImageResult = {
   buffer: Buffer;
@@ -268,18 +268,11 @@ export async function sendImageFeishu(params: {
   accountId?: string;
 }): Promise<SendMediaResult> {
   const { cfg, to, imageKey, replyToMessageId, accountId } = params;
-  const account = resolveFeishuAccount({ cfg, accountId });
-  if (!account.configured) {
-    throw new Error(`Feishu account "${account.accountId}" not configured`);
-  }
-
-  const client = createFeishuClient(account);
-  const receiveId = normalizeFeishuTarget(to);
-  if (!receiveId) {
-    throw new Error(`Invalid Feishu target: ${to}`);
-  }
-
-  const receiveIdType = resolveReceiveIdType(receiveId);
+  const { client, receiveId, receiveIdType } = resolveFeishuSendTarget({
+    cfg,
+    to,
+    accountId,
+  });
   const content = JSON.stringify({ image_key: imageKey });
 
   if (replyToMessageId) {
@@ -320,18 +313,11 @@ export async function sendFileFeishu(params: {
 }): Promise<SendMediaResult> {
   const { cfg, to, fileKey, replyToMessageId, accountId } = params;
   const msgType = params.msgType ?? "file";
-  const account = resolveFeishuAccount({ cfg, accountId });
-  if (!account.configured) {
-    throw new Error(`Feishu account "${account.accountId}" not configured`);
-  }
-
-  const client = createFeishuClient(account);
-  const receiveId = normalizeFeishuTarget(to);
-  if (!receiveId) {
-    throw new Error(`Invalid Feishu target: ${to}`);
-  }
-
-  const receiveIdType = resolveReceiveIdType(receiveId);
+  const { client, receiveId, receiveIdType } = resolveFeishuSendTarget({
+    cfg,
+    to,
+    accountId,
+  });
   const content = JSON.stringify({ file_key: fileKey });
 
   if (replyToMessageId) {

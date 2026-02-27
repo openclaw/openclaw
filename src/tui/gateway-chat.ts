@@ -146,6 +146,10 @@ export class GatewayChatClient {
         });
       },
       onClose: (_code, reason) => {
+        // Reset so waitForReady() blocks again until the next successful reconnect.
+        this.readyPromise = new Promise((resolve) => {
+          this.resolveReady = resolve;
+        });
         this.onDisconnected?.(reason);
       },
       onGap: (info) => {

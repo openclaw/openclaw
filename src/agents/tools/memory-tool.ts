@@ -14,6 +14,13 @@ const MemorySearchSchema = Type.Object({
   query: Type.String(),
   maxResults: Type.Optional(Type.Number()),
   minScore: Type.Optional(Type.Number()),
+  startDate: Type.Optional(Type.String({ description: "Start date filter (YYYY-MM-DD)" })),
+  endDate: Type.Optional(Type.String({ description: "End date filter (YYYY-MM-DD)" })),
+  sector: Type.Optional(
+    Type.String({
+      description: "Filter by sector: semantic, procedural, episodic, emotional, reflective",
+    }),
+  ),
 });
 
 const MemoryGetSchema = Type.Object({
@@ -56,6 +63,9 @@ export function createMemorySearchTool(options: {
       const query = readStringParam(params, "query", { required: true });
       const maxResults = readNumberParam(params, "maxResults");
       const minScore = readNumberParam(params, "minScore");
+      const startDate = readStringParam(params, "startDate");
+      const endDate = readStringParam(params, "endDate");
+      const sector = readStringParam(params, "sector");
       const { manager, error } = await getMemorySearchManager({
         cfg,
         agentId,
@@ -69,17 +79,42 @@ export function createMemorySearchTool(options: {
           mode: citationsMode,
           sessionKey: options.agentSessionKey,
         });
+
+        // Build temporal filter for OpenMemory backend
+        const backendConfig = resolveMemoryBackendConfig({ cfg, agentId });
+        let temporal: { startTime?: number; endTime?: number; sector?: string } | undefined;
+        if (backendConfig.backend === "openmemory") {
+          if (startDate || endDate || sector) {
+            temporal = {};
+            if (startDate) {
+              temporal.startTime = new Date(startDate).getTime();
+            }
+            if (endDate) {
+              temporal.endTime = new Date(endDate + "T23:59:59").getTime(); // End of day
+            }
+            if (sector) {
+              temporal.sector = sector as
+                | "semantic"
+                | "procedural"
+                | "episodic"
+                | "emotional"
+                | "reflective";
+            }
+          }
+        }
+
         const rawResults = await manager.search(query, {
           maxResults,
           minScore,
           sessionKey: options.agentSessionKey,
+          temporal,
         });
         const status = manager.status();
         const decorated = decorateCitations(rawResults, includeCitations);
-        const resolved = resolveMemoryBackendConfig({ cfg, agentId });
+        // Re-use backendConfig from above for QMD limits
         const results =
           status.backend === "qmd"
-            ? clampResultsByInjectedChars(decorated, resolved.qmd?.limits.maxInjectedChars)
+            ? clampResultsByInjectedChars(decorated, backendConfig.qmd?.limits.maxInjectedChars)
             : decorated;
         const searchMode = (status.custom as { searchMode?: string } | undefined)?.searchMode;
         return jsonResult({
@@ -239,4 +274,165 @@ function deriveChatTypeFromSessionKey(sessionKey?: string): "direct" | "group" |
     return "group";
   }
   return "direct";
+}
+
+const MemoryAddSchema = Type.Object({
+  content: Type.String({ description: "The memory content to store" }),
+  tags: Type.Optional(
+    Type.Array(Type.String(), { description: "Optional tags for categorization" }),
+  ),
+  sector: Type.Optional(
+    Type.String({
+      description: "Optional sector hint: episodic, semantic, procedural, emotional, reflective",
+    }),
+  ),
+});
+
+/**
+ * Create memory_add tool for writing memories to OpenMemory
+ */
+export function createMemoryAddTool(options: {
+  config?: OpenClawConfig;
+  agentSessionKey?: string;
+}): AnyAgentTool | null {
+  const cfg = options.config;
+  if (!cfg) {
+    return null;
+  }
+
+  // Check if OpenMemory backend is configured
+  const agentId = resolveSessionAgentId({
+    sessionKey: options.agentSessionKey,
+    config: cfg,
+  });
+  const resolved = resolveMemoryBackendConfig({ cfg, agentId });
+  if (resolved.backend !== "openmemory" || !resolved.openmemory) {
+    // Only enable memory_add when OpenMemory is the backend
+    return null;
+  }
+
+  return {
+    label: "Memory Add",
+    name: "memory_add",
+    description:
+      "Store a durable memory in OpenMemory. Use for facts, decisions, preferences, or events worth remembering long-term. OpenMemory auto-classifies into sectors (semantic/procedural/episodic/emotional/reflective) and manages decay.",
+    parameters: MemoryAddSchema,
+    execute: async (_toolCallId, params) => {
+      const content = readStringParam(params, "content", { required: true });
+      const tags = (params as Record<string, unknown>).tags as string[] | undefined;
+      const sector = readStringParam(params, "sector");
+
+      try {
+        // Dynamically import to avoid circular dependencies
+        const { OpenMemoryClient } = await import("../../memory/openmemory-client.js");
+        const client = await OpenMemoryClient.create(resolved.openmemory!);
+
+        if (!client) {
+          return jsonResult({
+            ok: false,
+            error: "OpenMemory server unavailable",
+          });
+        }
+
+        const result = await client.add({
+          content,
+          tags,
+          metadata: {
+            source: "agent",
+            date: new Date().toISOString().split("T")[0],
+            sessionKey: options.agentSessionKey,
+            sectorHint: sector,
+          },
+        });
+
+        return jsonResult({
+          ok: true,
+          id: result.id,
+          sector: result.primary_sector,
+          sectors: result.sectors,
+          salience: result.salience,
+        });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return jsonResult({
+          ok: false,
+          error: message,
+        });
+      }
+    },
+  };
+}
+
+const MemoryRelatedSchema = Type.Object({
+  memoryId: Type.String({ description: "The memory ID to find related memories for" }),
+  maxResults: Type.Optional(
+    Type.Number({ description: "Maximum number of related memories to return" }),
+  ),
+});
+
+/**
+ * Create memory_related tool for finding related memories via waypoint graph
+ */
+export function createMemoryRelatedTool(options: {
+  config?: OpenClawConfig;
+  agentSessionKey?: string;
+}): AnyAgentTool | null {
+  const cfg = options.config;
+  if (!cfg) {
+    return null;
+  }
+
+  const agentId = resolveSessionAgentId({
+    sessionKey: options.agentSessionKey,
+    config: cfg,
+  });
+  const resolved = resolveMemoryBackendConfig({ cfg, agentId });
+  if (resolved.backend !== "openmemory" || !resolved.openmemory) {
+    return null;
+  }
+
+  return {
+    label: "Memory Related",
+    name: "memory_related",
+    description:
+      "Find memories related to a given memory via the waypoint graph. Use to discover connections, patterns, and related context. Returns memories that were mentioned or occurred near the same time.",
+    parameters: MemoryRelatedSchema,
+    execute: async (_toolCallId, params) => {
+      const memoryId = readStringParam(params, "memoryId", { required: true });
+      const maxResults = readNumberParam(params, "maxResults");
+
+      try {
+        const { OpenMemoryClient } = await import("../../memory/openmemory-client.js");
+        const client = await OpenMemoryClient.create(resolved.openmemory!);
+
+        if (!client) {
+          return jsonResult({
+            ok: false,
+            error: "OpenMemory server unavailable",
+          });
+        }
+
+        const related = await client.related(memoryId, maxResults);
+
+        return jsonResult({
+          ok: true,
+          source: memoryId,
+          count: related.length,
+          related: related.map((r) => ({
+            id: r.id,
+            content: r.content.slice(0, 200) + (r.content.length > 200 ? "..." : ""),
+            weight: r.weight,
+            sector: r.primary_sector,
+            salience: r.salience,
+          })),
+        });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return jsonResult({
+          ok: false,
+          error: message,
+        });
+      }
+    },
+  };
 }

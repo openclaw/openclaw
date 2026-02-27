@@ -8,6 +8,7 @@ export type MemorySearchResult = {
   snippet: string;
   source: MemorySource;
   citation?: string;
+  importanceScore?: number;
 };
 
 export type MemoryEmbeddingProbeResult = {
@@ -22,7 +23,7 @@ export type MemorySyncProgressUpdate = {
 };
 
 export type MemoryProviderStatus = {
-  backend: "builtin" | "qmd";
+  backend: "builtin" | "qmd" | "openmemory";
   provider: string;
   model?: string;
   requestedProvider?: string;
@@ -61,7 +62,16 @@ export type MemoryProviderStatus = {
 export interface MemorySearchManager {
   search(
     query: string,
-    opts?: { maxResults?: number; minScore?: number; sessionKey?: string },
+    opts?: {
+      maxResults?: number;
+      minScore?: number;
+      sessionKey?: string;
+      temporal?: {
+        startTime?: number;
+        endTime?: number;
+        sector?: string;
+      };
+    },
   ): Promise<MemorySearchResult[]>;
   readFile(params: {
     relPath: string;

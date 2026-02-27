@@ -1,4 +1,7 @@
-import { extractShellWrapperCommand } from "./exec-wrapper-resolution.js";
+import {
+  extractShellWrapperCommand,
+  hasEnvManipulationBeforeShellWrapper,
+} from "./exec-wrapper-resolution.js";
 
 export type SystemRunCommandValidation =
   | {
@@ -54,8 +57,14 @@ export function validateSystemRunCommandConsistency(params: {
     typeof params.rawCommand === "string" && params.rawCommand.trim().length > 0
       ? params.rawCommand.trim()
       : null;
-  const shellCommand = extractShellWrapperCommand(params.argv).command;
-  const inferred = shellCommand !== null ? shellCommand.trim() : formatExecCommand(params.argv);
+  const shellWrapperResolution = extractShellWrapperCommand(params.argv);
+  const shellCommand = shellWrapperResolution.command;
+  const envManipulationBeforeShellWrapper =
+    shellWrapperResolution.isWrapper && hasEnvManipulationBeforeShellWrapper(params.argv);
+  const inferred =
+    shellCommand !== null && !envManipulationBeforeShellWrapper
+      ? shellCommand.trim()
+      : formatExecCommand(params.argv);
 
   if (raw && raw !== inferred) {
     return {
@@ -72,10 +81,15 @@ export function validateSystemRunCommandConsistency(params: {
   return {
     ok: true,
     // Only treat this as a shell command when argv is a recognized shell wrapper.
-    // For direct argv execution, rawCommand is purely display/approval text and
-    // must match the formatted argv.
-    shellCommand: shellCommand !== null ? (raw ?? shellCommand) : null,
-    cmdText: raw ?? shellCommand ?? inferred,
+    // For direct argv execution and shell wrappers with env prelude modifiers,
+    // rawCommand is purely display/approval text and must match the formatted argv.
+    shellCommand:
+      shellCommand !== null
+        ? envManipulationBeforeShellWrapper
+          ? shellCommand
+          : (raw ?? shellCommand)
+        : null,
+    cmdText: raw ?? inferred,
   };
 }
 

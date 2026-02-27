@@ -45,12 +45,14 @@ const createCall = (startedAt: number): CallRecord => ({
 
 const createManager = (calls: CallRecord[]) => {
   const endCall = vi.fn(async () => ({ success: true }));
+  const processEvent = vi.fn();
   const manager = {
     getActiveCalls: () => calls,
     endCall,
+    processEvent,
   } as unknown as CallManager;
 
-  return { manager, endCall };
+  return { manager, endCall, processEvent };
 };
 
 describe("VoiceCallWebhookServer stale call reaper", () => {
@@ -111,6 +113,54 @@ describe("VoiceCallWebhookServer stale call reaper", () => {
       await server.start();
       await vi.advanceTimersByTimeAsync(60_000);
       expect(endCall).not.toHaveBeenCalled();
+    } finally {
+      await server.stop();
+    }
+  });
+});
+
+describe("VoiceCallWebhookServer replay handling", () => {
+  it("acknowledges replayed webhook requests and skips event side effects", async () => {
+    const replayProvider: VoiceCallProvider = {
+      ...provider,
+      verifyWebhook: () => ({ ok: true, isReplay: true }),
+      parseWebhookEvent: () => ({
+        events: [
+          {
+            id: "evt-replay",
+            dedupeKey: "stable-replay",
+            type: "call.speech",
+            callId: "call-1",
+            providerCallId: "provider-call-1",
+            timestamp: Date.now(),
+            transcript: "hello",
+            isFinal: true,
+          },
+        ],
+        statusCode: 200,
+      }),
+    };
+    const { manager, processEvent } = createManager([]);
+    const config = createConfig({ serve: { port: 0, bind: "127.0.0.1", path: "/voice/webhook" } });
+    const server = new VoiceCallWebhookServer(config, manager, replayProvider);
+
+    try {
+      const baseUrl = await server.start();
+      const address = (
+        server as unknown as { server?: { address?: () => unknown } }
+      ).server?.address?.();
+      const requestUrl = new URL(baseUrl);
+      if (address && typeof address === "object" && "port" in address && address.port) {
+        requestUrl.port = String(address.port);
+      }
+      const response = await fetch(requestUrl.toString(), {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: "CallSid=CA123&SpeechResult=hello",
+      });
+
+      expect(response.status).toBe(200);
+      expect(processEvent).not.toHaveBeenCalled();
     } finally {
       await server.stop();
     }

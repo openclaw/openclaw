@@ -61,6 +61,79 @@ describe("resolveExtraParams", () => {
 
     expect(result).toBeUndefined();
   });
+
+  it("returns per-agent params when agentId matches", () => {
+    const result = resolveExtraParams({
+      cfg: {
+        agents: {
+          list: [
+            {
+              id: "risk-reviewer",
+              params: { cacheRetention: "none" },
+            },
+          ],
+        },
+      },
+      provider: "anthropic",
+      modelId: "claude-opus-4-6",
+      agentId: "risk-reviewer",
+    });
+
+    expect(result).toEqual({ cacheRetention: "none" });
+  });
+
+  it("merges per-agent params over global model defaults", () => {
+    const result = resolveExtraParams({
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "anthropic/claude-opus-4-6": {
+                params: {
+                  temperature: 0.5,
+                  cacheRetention: "long",
+                },
+              },
+            },
+          },
+          list: [
+            {
+              id: "risk-reviewer",
+              params: { cacheRetention: "none" },
+            },
+          ],
+        },
+      },
+      provider: "anthropic",
+      modelId: "claude-opus-4-6",
+      agentId: "risk-reviewer",
+    });
+
+    expect(result).toEqual({
+      temperature: 0.5,
+      cacheRetention: "none",
+    });
+  });
+
+  it("ignores per-agent params when agentId does not match", () => {
+    const result = resolveExtraParams({
+      cfg: {
+        agents: {
+          list: [
+            {
+              id: "risk-reviewer",
+              params: { cacheRetention: "none" },
+            },
+          ],
+        },
+      },
+      provider: "anthropic",
+      modelId: "claude-opus-4-6",
+      agentId: "main",
+    });
+
+    expect(result).toBeUndefined();
+  });
 });
 
 describe("applyExtraParamsToAgent", () => {
@@ -129,6 +202,114 @@ describe("applyExtraParamsToAgent", () => {
     return calls[0]?.headers;
   }
 
+  it("does not inject reasoning when thinkingLevel is off (default) for OpenRouter", () => {
+    // Regression: "off" is a truthy string, so the old code injected
+    // reasoning: { effort: "none" }, causing a 400 on models that require
+    // reasoning (e.g. deepseek/deepseek-r1).
+    const payloads: Record<string, unknown>[] = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = { model: "deepseek/deepseek-r1" };
+      options?.onPayload?.(payload);
+      payloads.push(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(
+      agent,
+      undefined,
+      "openrouter",
+      "deepseek/deepseek-r1",
+      undefined,
+      "off",
+    );
+
+    const model = {
+      api: "openai-completions",
+      provider: "openrouter",
+      id: "deepseek/deepseek-r1",
+    } as Model<"openai-completions">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]).not.toHaveProperty("reasoning");
+    expect(payloads[0]).not.toHaveProperty("reasoning_effort");
+  });
+
+  it("injects reasoning.effort when thinkingLevel is non-off for OpenRouter", () => {
+    const payloads: Record<string, unknown>[] = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = {};
+      options?.onPayload?.(payload);
+      payloads.push(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(agent, undefined, "openrouter", "openrouter/auto", undefined, "low");
+
+    const model = {
+      api: "openai-completions",
+      provider: "openrouter",
+      id: "openrouter/auto",
+    } as Model<"openai-completions">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.reasoning).toEqual({ effort: "low" });
+  });
+
+  it("removes legacy reasoning_effort and keeps reasoning unset when thinkingLevel is off", () => {
+    const payloads: Record<string, unknown>[] = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = { reasoning_effort: "high" };
+      options?.onPayload?.(payload);
+      payloads.push(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(agent, undefined, "openrouter", "openrouter/auto", undefined, "off");
+
+    const model = {
+      api: "openai-completions",
+      provider: "openrouter",
+      id: "openrouter/auto",
+    } as Model<"openai-completions">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]).not.toHaveProperty("reasoning_effort");
+    expect(payloads[0]).not.toHaveProperty("reasoning");
+  });
+
+  it("does not inject effort when payload already has reasoning.max_tokens", () => {
+    const payloads: Record<string, unknown>[] = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = { reasoning: { max_tokens: 256 } };
+      options?.onPayload?.(payload);
+      payloads.push(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(agent, undefined, "openrouter", "openrouter/auto", undefined, "low");
+
+    const model = {
+      api: "openai-completions",
+      provider: "openrouter",
+      id: "openrouter/auto",
+    } as Model<"openai-completions">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]).toEqual({ reasoning: { max_tokens: 256 } });
+  });
+
   it("adds OpenRouter attribution headers to stream options", () => {
     const { calls, agent } = createOptionsCaptureAgent();
 
@@ -149,6 +330,73 @@ describe("applyExtraParamsToAgent", () => {
       "X-Title": "OpenClaw",
       "X-Custom": "1",
     });
+  });
+
+  it("disables prompt caching for non-Anthropic Bedrock models", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+
+    applyExtraParamsToAgent(agent, undefined, "amazon-bedrock", "amazon.nova-micro-v1");
+
+    const model = {
+      api: "openai-completions",
+      provider: "amazon-bedrock",
+      id: "amazon.nova-micro-v1",
+    } as Model<"openai-completions">;
+    const context: Context = { messages: [] };
+
+    void agent.streamFn?.(model, context, {});
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.cacheRetention).toBe("none");
+  });
+
+  it("keeps Anthropic Bedrock models eligible for provider-side caching", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+
+    applyExtraParamsToAgent(agent, undefined, "amazon-bedrock", "us.anthropic.claude-sonnet-4-5");
+
+    const model = {
+      api: "openai-completions",
+      provider: "amazon-bedrock",
+      id: "us.anthropic.claude-sonnet-4-5",
+    } as Model<"openai-completions">;
+    const context: Context = { messages: [] };
+
+    void agent.streamFn?.(model, context, {});
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.cacheRetention).toBeUndefined();
+  });
+
+  it("passes through explicit cacheRetention for Anthropic Bedrock models", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "amazon-bedrock/us.anthropic.claude-opus-4-6-v1": {
+              params: {
+                cacheRetention: "long",
+              },
+            },
+          },
+        },
+      },
+    };
+
+    applyExtraParamsToAgent(agent, cfg, "amazon-bedrock", "us.anthropic.claude-opus-4-6-v1");
+
+    const model = {
+      api: "openai-completions",
+      provider: "amazon-bedrock",
+      id: "us.anthropic.claude-opus-4-6-v1",
+    } as Model<"openai-completions">;
+    const context: Context = { messages: [] };
+
+    void agent.streamFn?.(model, context, {});
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.cacheRetention).toBe("long");
   });
 
   it("adds Anthropic 1M beta header when context1m is enabled for Opus/Sonnet", () => {
@@ -179,7 +427,7 @@ describe("applyExtraParamsToAgent", () => {
     });
   });
 
-  it("preserves oauth-2025-04-20 beta when context1m is enabled with an OAuth token", () => {
+  it("skips context1m beta for OAuth tokens but preserves OAuth-required betas", () => {
     const calls: Array<SimpleStreamOptions | undefined> = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {
       calls.push(options);
@@ -220,7 +468,7 @@ describe("applyExtraParamsToAgent", () => {
     // Must include the OAuth-required betas so they aren't stripped by pi-ai's mergeHeaders
     expect(betaHeader).toContain("oauth-2025-04-20");
     expect(betaHeader).toContain("claude-code-20250219");
-    expect(betaHeader).toContain("context-1m-2025-08-07");
+    expect(betaHeader).not.toContain("context-1m-2025-08-07");
   });
 
   it("merges existing anthropic-beta headers with configured betas", () => {

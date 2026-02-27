@@ -23,14 +23,14 @@ async function settleTimers<T>(promise: Promise<T>): Promise<T> {
   return promise;
 }
 
-function mockSuccessResponse() {
+function mockResponse(statusCode: number, body: string) {
   const httpsRequest = vi.mocked(https.request);
   httpsRequest.mockImplementation((_url: any, _opts: any, callback: any) => {
     const res = new EventEmitter() as any;
-    res.statusCode = 200;
+    res.statusCode = statusCode;
     process.nextTick(() => {
       callback(res);
-      res.emit("data", Buffer.from('{"success":true}'));
+      res.emit("data", Buffer.from(body));
       res.emit("end");
     });
     const req = new EventEmitter() as any;
@@ -41,22 +41,12 @@ function mockSuccessResponse() {
   });
 }
 
+function mockSuccessResponse() {
+  mockResponse(200, '{"success":true}');
+}
+
 function mockFailureResponse(statusCode = 500) {
-  const httpsRequest = vi.mocked(https.request);
-  httpsRequest.mockImplementation((_url: any, _opts: any, callback: any) => {
-    const res = new EventEmitter() as any;
-    res.statusCode = statusCode;
-    process.nextTick(() => {
-      callback(res);
-      res.emit("data", Buffer.from("error"));
-      res.emit("end");
-    });
-    const req = new EventEmitter() as any;
-    req.write = vi.fn();
-    req.end = vi.fn();
-    req.destroy = vi.fn();
-    return req;
-  });
+  mockResponse(statusCode, "error");
 }
 
 describe("sendMessage", () => {

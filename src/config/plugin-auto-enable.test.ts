@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { validateConfigObject } from "./config.js";
 import { applyPluginAutoEnable } from "./plugin-auto-enable.js";
 
 describe("applyPluginAutoEnable", () => {
@@ -48,6 +49,23 @@ describe("applyPluginAutoEnable", () => {
     expect(result.changes).toEqual([]);
   });
 
+  it("keeps auto-enabled WhatsApp config schema-valid", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        channels: {
+          whatsapp: {
+            allowFrom: ["+15555550123"],
+          },
+        },
+      },
+      env: {},
+    });
+
+    expect(result.config.channels?.whatsapp?.enabled).toBe(true);
+    const validated = validateConfigObject(result.config);
+    expect(validated.ok).toBe(true);
+  });
+
   it("respects explicit disable", () => {
     const result = applyPluginAutoEnable({
       config: {
@@ -92,8 +110,8 @@ describe("applyPluginAutoEnable", () => {
       config: {
         auth: {
           profiles: {
-            "google-antigravity:default": {
-              provider: "google-antigravity",
+            "google-gemini-cli:default": {
+              provider: "google-gemini-cli",
               mode: "oauth",
             },
           },
@@ -102,7 +120,7 @@ describe("applyPluginAutoEnable", () => {
       env: {},
     });
 
-    expect(result.config.plugins?.entries?.["google-antigravity-auth"]?.enabled).toBe(true);
+    expect(result.config.plugins?.entries?.["google-gemini-cli-auth"]?.enabled).toBe(true);
   });
 
   it("skips when plugins are globally disabled", () => {

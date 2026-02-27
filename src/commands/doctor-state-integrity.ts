@@ -2,9 +2,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveOAuthDir, resolveStateDir } from "../config/paths.js";
 import {
+  formatSessionArchiveTimestamp,
+  isPrimarySessionTranscriptFileName,
   loadSessionStore,
   resolveMainSessionKey,
   resolveSessionFilePath,
@@ -202,6 +205,7 @@ export async function noteStateIntegrity(
   const sessionsDir = resolveSessionTranscriptsDirForAgent(agentId, env, homedir);
   const storePath = resolveStorePath(cfg.session?.store, { agentId });
   const storeDir = path.dirname(storePath);
+  const absoluteStorePath = path.resolve(storePath);
   const displayStateDir = shortenHomePath(stateDir);
   const displayOauthDir = shortenHomePath(oauthDir);
   const displaySessionsDir = shortenHomePath(sessionsDir);
@@ -257,8 +261,15 @@ export async function noteStateIntegrity(
   }
   if (stateDirExists && process.platform !== "win32") {
     try {
-      const stat = fs.statSync(stateDir);
-      if ((stat.mode & 0o077) !== 0) {
+      const dirLstat = fs.lstatSync(stateDir);
+      const isDirSymlink = dirLstat.isSymbolicLink();
+      // For symlinks, check the resolved target permissions instead of the
+      // symlink itself (which always reports 777). Skip the warning only when
+      // the target lives in a known immutable store (e.g. /nix/store/).
+      const stat = isDirSymlink ? fs.statSync(stateDir) : dirLstat;
+      const resolvedDir = isDirSymlink ? fs.realpathSync(stateDir) : stateDir;
+      const isImmutableStore = resolvedDir.startsWith("/nix/store/");
+      if (!isImmutableStore && (stat.mode & 0o077) !== 0) {
         warnings.push(
           `- State directory permissions are too open (${displayStateDir}). Recommend chmod 700.`,
         );
@@ -278,10 +289,14 @@ export async function noteStateIntegrity(
 
   if (configPath && existsFile(configPath) && process.platform !== "win32") {
     try {
-      const linkStat = fs.lstatSync(configPath);
-      const stat = fs.statSync(configPath);
-      const isSymlink = linkStat.isSymbolicLink();
-      if (!isSymlink && (stat.mode & 0o077) !== 0) {
+      const configLstat = fs.lstatSync(configPath);
+      const isSymlink = configLstat.isSymbolicLink();
+      // For symlinks, check the resolved target permissions. Skip the warning
+      // only when the target lives in an immutable store (e.g. /nix/store/).
+      const stat = isSymlink ? fs.statSync(configPath) : configLstat;
+      const resolvedConfig = isSymlink ? fs.realpathSync(configPath) : configPath;
+      const isImmutableConfig = resolvedConfig.startsWith("/nix/store/");
+      if (!isImmutableConfig && (stat.mode & 0o077) !== 0) {
         warnings.push(
           `- Config file is group/world readable (${displayConfigPath ?? configPath}). Recommend chmod 600.`,
         );
@@ -408,7 +423,11 @@ export async function noteStateIntegrity(
     });
     if (missing.length > 0) {
       warnings.push(
-        `- ${missing.length}/${recent.length} recent sessions are missing transcripts. Check for deleted session files or split state dirs.`,
+        [
+          `- ${missing.length}/${recent.length} recent sessions are missing transcripts.`,
+          `  Verify sessions in store: ${formatCliCommand(`openclaw sessions --store "${absoluteStorePath}"`)}`,
+          `  Preview cleanup impact: ${formatCliCommand(`openclaw sessions cleanup --store "${absoluteStorePath}" --dry-run`)}`,
+        ].join("\n"),
       );
     }
 
@@ -430,6 +449,54 @@ export async function noteStateIntegrity(
           warnings.push(
             `- Main session transcript has only ${lineCount} line. Session history may not be appending.`,
           );
+        }
+      }
+    }
+  }
+
+  if (existsDir(sessionsDir)) {
+    const referencedTranscriptPaths = new Set<string>();
+    for (const [, entry] of entries) {
+      if (!entry?.sessionId) {
+        continue;
+      }
+      try {
+        referencedTranscriptPaths.add(
+          path.resolve(resolveSessionFilePath(entry.sessionId, entry, sessionPathOpts)),
+        );
+      } catch {
+        // ignore invalid legacy paths
+      }
+    }
+    const sessionDirEntries = fs.readdirSync(sessionsDir, { withFileTypes: true });
+    const orphanTranscriptPaths = sessionDirEntries
+      .filter((entry) => entry.isFile() && isPrimarySessionTranscriptFileName(entry.name))
+      .map((entry) => path.resolve(path.join(sessionsDir, entry.name)))
+      .filter((filePath) => !referencedTranscriptPaths.has(filePath));
+    if (orphanTranscriptPaths.length > 0) {
+      warnings.push(
+        `- Found ${orphanTranscriptPaths.length} orphan transcript file(s) in ${displaySessionsDir}. They are not referenced by sessions.json and can consume disk over time.`,
+      );
+      const archiveOrphans = await prompter.confirmSkipInNonInteractive({
+        message: `Archive ${orphanTranscriptPaths.length} orphan transcript file(s) in ${displaySessionsDir}?`,
+        initialValue: false,
+      });
+      if (archiveOrphans) {
+        let archived = 0;
+        const archivedAt = formatSessionArchiveTimestamp();
+        for (const orphanPath of orphanTranscriptPaths) {
+          const archivedPath = `${orphanPath}.deleted.${archivedAt}`;
+          try {
+            fs.renameSync(orphanPath, archivedPath);
+            archived += 1;
+          } catch (err) {
+            warnings.push(
+              `- Failed to archive orphan transcript ${shortenHomePath(orphanPath)}: ${String(err)}`,
+            );
+          }
+        }
+        if (archived > 0) {
+          changes.push(`- Archived ${archived} orphan transcript file(s) in ${displaySessionsDir}`);
         }
       }
     }

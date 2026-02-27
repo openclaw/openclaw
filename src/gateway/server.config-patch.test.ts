@@ -13,24 +13,42 @@ import {
 
 installGatewayTestHooks({ scope: "suite" });
 
-let server: Awaited<ReturnType<typeof startServerWithClient>>["server"];
-let ws: Awaited<ReturnType<typeof startServerWithClient>>["ws"];
+let startedServer: Awaited<ReturnType<typeof startServerWithClient>> | null = null;
+let sharedTempRoot: string;
+
+function requireWs(): Awaited<ReturnType<typeof startServerWithClient>>["ws"] {
+  if (!startedServer) {
+    throw new Error("gateway test server not started");
+  }
+  return startedServer.ws;
+}
 
 beforeAll(async () => {
-  const started = await startServerWithClient(undefined, { controlUiEnabled: true });
-  server = started.server;
-  ws = started.ws;
-  await connectOk(ws);
+  sharedTempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-config-"));
+  startedServer = await startServerWithClient(undefined, { controlUiEnabled: true });
+  await connectOk(requireWs());
 });
 
 afterAll(async () => {
-  ws.close();
-  await server.close();
+  if (!startedServer) {
+    return;
+  }
+  startedServer.ws.close();
+  await startedServer.server.close();
+  startedServer = null;
+  await fs.rm(sharedTempRoot, { recursive: true, force: true });
 });
+
+async function resetTempDir(name: string): Promise<string> {
+  const dir = path.join(sharedTempRoot, name);
+  await fs.rm(dir, { recursive: true, force: true });
+  await fs.mkdir(dir, { recursive: true });
+  return dir;
+}
 
 describe("gateway config methods", () => {
   it("rejects config.patch when raw is not an object", async () => {
-    const res = await rpcReq<{ ok?: boolean }>(ws, "config.patch", {
+    const res = await rpcReq<{ ok?: boolean }>(requireWs(), "config.patch", {
       raw: "[]",
     });
     expect(res.ok).toBe(false);
@@ -40,7 +58,7 @@ describe("gateway config methods", () => {
 
 describe("gateway server sessions", () => {
   it("filters sessions by agentId", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-agents-"));
+    const dir = await resetTempDir("agents");
     testState.sessionConfig = {
       store: path.join(dir, "{agentId}", "sessions.json"),
     };
@@ -78,7 +96,7 @@ describe("gateway server sessions", () => {
 
     const homeSessions = await rpcReq<{
       sessions: Array<{ key: string }>;
-    }>(ws, "sessions.list", {
+    }>(requireWs(), "sessions.list", {
       includeGlobal: false,
       includeUnknown: false,
       agentId: "home",
@@ -91,7 +109,7 @@ describe("gateway server sessions", () => {
 
     const workSessions = await rpcReq<{
       sessions: Array<{ key: string }>;
-    }>(ws, "sessions.list", {
+    }>(requireWs(), "sessions.list", {
       includeGlobal: false,
       includeUnknown: false,
       agentId: "work",
@@ -101,7 +119,7 @@ describe("gateway server sessions", () => {
   });
 
   it("resolves and patches main alias to default agent main key", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-"));
+    const dir = await resetTempDir("main-alias");
     const storePath = path.join(dir, "sessions.json");
     testState.sessionStorePath = storePath;
     testState.agentsConfig = { list: [{ id: "ops", default: true }] };
@@ -119,13 +137,13 @@ describe("gateway server sessions", () => {
       },
     });
 
-    const resolved = await rpcReq<{ ok: true; key: string }>(ws, "sessions.resolve", {
+    const resolved = await rpcReq<{ ok: true; key: string }>(requireWs(), "sessions.resolve", {
       key: "main",
     });
     expect(resolved.ok).toBe(true);
     expect(resolved.payload?.key).toBe("agent:ops:work");
 
-    const patched = await rpcReq<{ ok: true; key: string }>(ws, "sessions.patch", {
+    const patched = await rpcReq<{ ok: true; key: string }>(requireWs(), "sessions.patch", {
       key: "main",
       thinkingLevel: "medium",
     });

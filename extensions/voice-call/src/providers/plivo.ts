@@ -30,6 +30,29 @@ export interface PlivoProviderOptions {
 type PendingSpeak = { text: string; locale?: string };
 type PendingListen = { language?: string };
 
+function getHeader(
+  headers: Record<string, string | string[] | undefined>,
+  name: string,
+): string | undefined {
+  const value = headers[name.toLowerCase()];
+  if (Array.isArray(value)) {
+    return value[0];
+  }
+  return value;
+}
+
+function createPlivoRequestDedupeKey(ctx: WebhookContext): string {
+  const nonceV3 = getHeader(ctx.headers, "x-plivo-signature-v3-nonce");
+  if (nonceV3) {
+    return `plivo:v3:${nonceV3}`;
+  }
+  const nonceV2 = getHeader(ctx.headers, "x-plivo-signature-v2-nonce");
+  if (nonceV2) {
+    return `plivo:v2:${nonceV2}`;
+  }
+  return `plivo:fallback:${crypto.createHash("sha256").update(ctx.rawBody).digest("hex")}`;
+}
+
 export class PlivoProvider implements VoiceCallProvider {
   readonly name = "plivo" as const;
 
@@ -104,7 +127,7 @@ export class PlivoProvider implements VoiceCallProvider {
       console.warn(`[plivo] Webhook verification failed: ${result.reason}`);
     }
 
-    return { ok: result.ok, reason: result.reason };
+    return { ok: result.ok, reason: result.reason, isReplay: result.isReplay };
   }
 
   parseWebhookEvent(ctx: WebhookContext): ProviderWebhookParseResult {
@@ -173,7 +196,8 @@ export class PlivoProvider implements VoiceCallProvider {
 
     // Normal events.
     const callIdFromQuery = this.getCallIdFromQuery(ctx);
-    const event = this.normalizeEvent(parsed, callIdFromQuery);
+    const dedupeKey = createPlivoRequestDedupeKey(ctx);
+    const event = this.normalizeEvent(parsed, callIdFromQuery, dedupeKey);
 
     return {
       events: event ? [event] : [],
@@ -186,7 +210,11 @@ export class PlivoProvider implements VoiceCallProvider {
     };
   }
 
-  private normalizeEvent(params: URLSearchParams, callIdOverride?: string): NormalizedEvent | null {
+  private normalizeEvent(
+    params: URLSearchParams,
+    callIdOverride?: string,
+    dedupeKey?: string,
+  ): NormalizedEvent | null {
     const callUuid = params.get("CallUUID") || "";
     const requestUuid = params.get("RequestUUID") || "";
 
@@ -201,6 +229,7 @@ export class PlivoProvider implements VoiceCallProvider {
 
     const baseEvent = {
       id: crypto.randomUUID(),
+      dedupeKey,
       callId: callIdOverride || callUuid || requestUuid,
       providerCallId: callUuid || requestUuid || undefined,
       timestamp: Date.now(),
@@ -331,31 +360,40 @@ export class PlivoProvider implements VoiceCallProvider {
     });
   }
 
-  async playTts(input: PlayTtsInput): Promise<void> {
-    const callUuid = this.requestUuidToCallUuid.get(input.providerCallId) ?? input.providerCallId;
+  private resolveCallContext(params: {
+    providerCallId: string;
+    callId: string;
+    operation: string;
+  }): {
+    callUuid: string;
+    webhookBase: string;
+  } {
+    const callUuid = this.requestUuidToCallUuid.get(params.providerCallId) ?? params.providerCallId;
     const webhookBase =
-      this.callUuidToWebhookUrl.get(callUuid) || this.callIdToWebhookUrl.get(input.callId);
+      this.callUuidToWebhookUrl.get(callUuid) || this.callIdToWebhookUrl.get(params.callId);
     if (!webhookBase) {
       throw new Error("Missing webhook URL for this call (provider state missing)");
     }
-
     if (!callUuid) {
-      throw new Error("Missing Plivo CallUUID for playTts");
+      throw new Error(`Missing Plivo CallUUID for ${params.operation}`);
     }
+    return { callUuid, webhookBase };
+  }
 
-    const transferUrl = new URL(webhookBase);
+  private async transferCallLeg(params: {
+    callUuid: string;
+    webhookBase: string;
+    callId: string;
+    flow: "xml-speak" | "xml-listen";
+  }): Promise<void> {
+    const transferUrl = new URL(params.webhookBase);
     transferUrl.searchParams.set("provider", "plivo");
-    transferUrl.searchParams.set("flow", "xml-speak");
-    transferUrl.searchParams.set("callId", input.callId);
-
-    this.pendingSpeakByCallId.set(input.callId, {
-      text: input.text,
-      locale: input.locale,
-    });
+    transferUrl.searchParams.set("flow", params.flow);
+    transferUrl.searchParams.set("callId", params.callId);
 
     await this.apiRequest({
       method: "POST",
-      endpoint: `/Call/${callUuid}/`,
+      endpoint: `/Call/${params.callUuid}/`,
       body: {
         legs: "aleg",
         aleg_url: transferUrl.toString(),
@@ -364,35 +402,42 @@ export class PlivoProvider implements VoiceCallProvider {
     });
   }
 
+  async playTts(input: PlayTtsInput): Promise<void> {
+    const { callUuid, webhookBase } = this.resolveCallContext({
+      providerCallId: input.providerCallId,
+      callId: input.callId,
+      operation: "playTts",
+    });
+
+    this.pendingSpeakByCallId.set(input.callId, {
+      text: input.text,
+      locale: input.locale,
+    });
+
+    await this.transferCallLeg({
+      callUuid,
+      webhookBase,
+      callId: input.callId,
+      flow: "xml-speak",
+    });
+  }
+
   async startListening(input: StartListeningInput): Promise<void> {
-    const callUuid = this.requestUuidToCallUuid.get(input.providerCallId) ?? input.providerCallId;
-    const webhookBase =
-      this.callUuidToWebhookUrl.get(callUuid) || this.callIdToWebhookUrl.get(input.callId);
-    if (!webhookBase) {
-      throw new Error("Missing webhook URL for this call (provider state missing)");
-    }
-
-    if (!callUuid) {
-      throw new Error("Missing Plivo CallUUID for startListening");
-    }
-
-    const transferUrl = new URL(webhookBase);
-    transferUrl.searchParams.set("provider", "plivo");
-    transferUrl.searchParams.set("flow", "xml-listen");
-    transferUrl.searchParams.set("callId", input.callId);
+    const { callUuid, webhookBase } = this.resolveCallContext({
+      providerCallId: input.providerCallId,
+      callId: input.callId,
+      operation: "startListening",
+    });
 
     this.pendingListenByCallId.set(input.callId, {
       language: input.language,
     });
 
-    await this.apiRequest({
-      method: "POST",
-      endpoint: `/Call/${callUuid}/`,
-      body: {
-        legs: "aleg",
-        aleg_url: transferUrl.toString(),
-        aleg_method: "POST",
-      },
+    await this.transferCallLeg({
+      callUuid,
+      webhookBase,
+      callId: input.callId,
+      flow: "xml-listen",
     });
   }
 

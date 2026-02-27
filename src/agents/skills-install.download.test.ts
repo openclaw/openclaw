@@ -2,13 +2,15 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { createTempHomeEnv } from "../test-utils/temp-home.js";
-import { setTempStateDir, writeDownloadSkill } from "./skills-install.download-test-utils.js";
-import { installSkill } from "./skills-install.js";
-
-const runCommandWithTimeoutMock = vi.fn();
-const scanDirectoryWithSummaryMock = vi.fn();
-const fetchWithSsrFGuardMock = vi.fn();
+import { installDownloadSpec } from "./skills-install-download.js";
+import { setTempStateDir } from "./skills-install.download-test-utils.js";
+import {
+  fetchWithSsrFGuardMock,
+  hasBinaryMock,
+  runCommandWithTimeoutMock,
+} from "./skills-install.test-mocks.js";
+import { resolveSkillToolsRootDir } from "./skills/tools-dir.js";
+import type { SkillEntry, SkillInstallSpec } from "./skills/types.js";
 
 vi.mock("../process/exec.js", () => ({
   runCommandWithTimeout: (...args: unknown[]) => runCommandWithTimeoutMock(...args),
@@ -18,13 +20,10 @@ vi.mock("../infra/net/fetch-guard.js", () => ({
   fetchWithSsrFGuard: (...args: unknown[]) => fetchWithSsrFGuardMock(...args),
 }));
 
-vi.mock("../security/skill-scanner.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../security/skill-scanner.js")>();
-  return {
-    ...actual,
-    scanDirectoryWithSummary: (...args: unknown[]) => scanDirectoryWithSummaryMock(...args),
-  };
-});
+vi.mock("./skills.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./skills.js")>()),
+  hasBinary: (bin: string) => hasBinaryMock(bin),
+}));
 
 async function fileExists(filePath: string): Promise<boolean> {
   try {
@@ -53,6 +52,54 @@ const TAR_GZ_TRAVERSAL_BUFFER = Buffer.from(
   "base64",
 );
 
+function buildEntry(name: string): SkillEntry {
+  const skillDir = path.join(workspaceDir, "skills", name);
+  return {
+    skill: {
+      name,
+      description: `${name} test skill`,
+      source: "openclaw-workspace",
+      filePath: path.join(skillDir, "SKILL.md"),
+      baseDir: skillDir,
+      disableModelInvocation: false,
+    },
+    frontmatter: {},
+  };
+}
+
+function buildDownloadSpec(params: {
+  url: string;
+  archive: "tar.gz" | "tar.bz2" | "zip";
+  targetDir: string;
+  stripComponents?: number;
+}): SkillInstallSpec {
+  return {
+    kind: "download",
+    id: "dl",
+    url: params.url,
+    archive: params.archive,
+    extract: true,
+    targetDir: params.targetDir,
+    ...(typeof params.stripComponents === "number"
+      ? { stripComponents: params.stripComponents }
+      : {}),
+  };
+}
+
+async function installDownloadSkill(params: {
+  name: string;
+  url: string;
+  archive: "tar.gz" | "tar.bz2" | "zip";
+  targetDir: string;
+  stripComponents?: number;
+}) {
+  return installDownloadSpec({
+    entry: buildEntry(params.name),
+    spec: buildDownloadSpec(params),
+    timeoutMs: 30_000,
+  });
+}
+
 function mockArchiveResponse(buffer: Uint8Array): void {
   const blobPart = Uint8Array.from(buffer);
   fetchWithSsrFGuardMock.mockResolvedValue({
@@ -77,8 +124,8 @@ function mockTarExtractionFlow(params: {
   verboseListOutput: string;
   extract: "ok" | "reject";
 }) {
-  runCommandWithTimeoutMock.mockImplementation(async (argv: unknown[]) => {
-    const cmd = argv as string[];
+  runCommandWithTimeoutMock.mockImplementation(async (...argv: unknown[]) => {
+    const cmd = (argv[0] ?? []) as string[];
     if (cmd[0] === "tar" && cmd[1] === "tf") {
       return runCommandResult({ stdout: params.listOutput });
     }
@@ -95,61 +142,10 @@ function mockTarExtractionFlow(params: {
   });
 }
 
-function seedZipDownloadResponse() {
-  mockArchiveResponse(new Uint8Array(SAFE_ZIP_BUFFER));
-}
-
-async function installZipDownloadSkill(params: {
-  workspaceDir: string;
-  name: string;
-  targetDir: string;
-}) {
-  const url = "https://example.invalid/good.zip";
-  seedZipDownloadResponse();
-  await writeDownloadSkill({
-    workspaceDir: params.workspaceDir,
-    name: params.name,
-    installId: "dl",
-    url,
-    archive: "zip",
-    targetDir: params.targetDir,
-  });
-
-  return installSkill({
-    workspaceDir: params.workspaceDir,
-    skillName: params.name,
-    installId: "dl",
-  });
-}
-
-async function writeTarBz2Skill(params: {
-  workspaceDir: string;
-  stateDir: string;
-  name: string;
-  url: string;
-  stripComponents?: number;
-}) {
-  const targetDir = path.join(params.stateDir, "tools", params.name, "target");
-  await writeDownloadSkill({
-    workspaceDir: params.workspaceDir,
-    name: params.name,
-    installId: "dl",
-    url: params.url,
-    archive: "tar.bz2",
-    ...(typeof params.stripComponents === "number"
-      ? { stripComponents: params.stripComponents }
-      : {}),
-    targetDir,
-  });
-}
-
 let workspaceDir = "";
 let stateDir = "";
-let restoreTempHome: (() => Promise<void>) | null = null;
 
 beforeAll(async () => {
-  const tempHome = await createTempHomeEnv("openclaw-skills-install-home-");
-  restoreTempHome = () => tempHome.restore();
   workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skills-install-"));
   stateDir = setTempStateDir(workspaceDir);
 });
@@ -160,27 +156,17 @@ afterAll(async () => {
     workspaceDir = "";
     stateDir = "";
   }
-  if (restoreTempHome) {
-    await restoreTempHome();
-    restoreTempHome = null;
-  }
 });
 
-beforeEach(async () => {
+beforeEach(() => {
   runCommandWithTimeoutMock.mockReset();
   runCommandWithTimeoutMock.mockResolvedValue(runCommandResult());
-  scanDirectoryWithSummaryMock.mockReset();
   fetchWithSsrFGuardMock.mockReset();
-  scanDirectoryWithSummaryMock.mockResolvedValue({
-    scannedFiles: 0,
-    critical: 0,
-    warn: 0,
-    info: 0,
-    findings: [],
-  });
+  hasBinaryMock.mockReset();
+  hasBinaryMock.mockReturnValue(true);
 });
 
-describe("installSkill download extraction safety", () => {
+describe("installDownloadSpec extraction safety", () => {
   it("rejects archive traversal writes outside targetDir", async () => {
     for (const testCase of [
       {
@@ -198,23 +184,15 @@ describe("installSkill download extraction safety", () => {
         buffer: TAR_GZ_TRAVERSAL_BUFFER,
       },
     ]) {
-      const targetDir = path.join(stateDir, "tools", testCase.name, "target");
+      const entry = buildEntry(testCase.name);
+      const targetDir = path.join(resolveSkillToolsRootDir(entry), "target");
       const outsideWritePath = path.join(workspaceDir, "outside-write", "pwned.txt");
 
       mockArchiveResponse(new Uint8Array(testCase.buffer));
-      await writeDownloadSkill({
-        workspaceDir,
-        name: testCase.name,
-        installId: "dl",
-        url: testCase.url,
-        archive: testCase.archive,
-        targetDir,
-      });
 
-      const result = await installSkill({
-        workspaceDir,
-        skillName: testCase.name,
-        installId: "dl",
+      const result = await installDownloadSkill({
+        ...testCase,
+        targetDir,
       });
       expect(result.ok, testCase.label).toBe(false);
       expect(await fileExists(outsideWritePath), testCase.label).toBe(false);
@@ -222,68 +200,60 @@ describe("installSkill download extraction safety", () => {
   });
 
   it("extracts zip with stripComponents safely", async () => {
-    const targetDir = path.join(stateDir, "tools", "zip-good", "target");
-    const url = "https://example.invalid/good.zip";
+    const entry = buildEntry("zip-good");
+    const targetDir = path.join(resolveSkillToolsRootDir(entry), "target");
 
     mockArchiveResponse(new Uint8Array(STRIP_COMPONENTS_ZIP_BUFFER));
 
-    await writeDownloadSkill({
-      workspaceDir,
+    const result = await installDownloadSkill({
       name: "zip-good",
-      installId: "dl",
-      url,
+      url: "https://example.invalid/good.zip",
       archive: "zip",
       stripComponents: 1,
       targetDir,
     });
-
-    const result = await installSkill({ workspaceDir, skillName: "zip-good", installId: "dl" });
     expect(result.ok).toBe(true);
     expect(await fs.readFile(path.join(targetDir, "hello.txt"), "utf-8")).toBe("hi");
   });
 
   it("rejects targetDir escapes outside the per-skill tools root", async () => {
-    for (const testCase of [{ name: "relative-traversal", targetDir: "../outside" }]) {
-      mockArchiveResponse(new Uint8Array(SAFE_ZIP_BUFFER));
-      await writeDownloadSkill({
-        workspaceDir,
-        name: testCase.name,
-        installId: "dl",
-        url: "https://example.invalid/good.zip",
-        archive: "zip",
-        targetDir: testCase.targetDir,
-      });
-      const beforeFetchCalls = fetchWithSsrFGuardMock.mock.calls.length;
-      const result = await installSkill({
-        workspaceDir,
-        skillName: testCase.name,
-        installId: "dl",
-      });
-      expect(result.ok).toBe(false);
-      expect(result.stderr).toContain("Refusing to install outside the skill tools directory");
-      expect(fetchWithSsrFGuardMock.mock.calls.length).toBe(beforeFetchCalls);
-    }
+    mockArchiveResponse(new Uint8Array(SAFE_ZIP_BUFFER));
+    const beforeFetchCalls = fetchWithSsrFGuardMock.mock.calls.length;
 
+    const result = await installDownloadSkill({
+      name: "relative-traversal",
+      url: "https://example.invalid/good.zip",
+      archive: "zip",
+      targetDir: "../outside",
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.stderr).toContain("Refusing to install outside the skill tools directory");
+    expect(fetchWithSsrFGuardMock.mock.calls.length).toBe(beforeFetchCalls);
     expect(stateDir.length).toBeGreaterThan(0);
   });
 
   it("allows relative targetDir inside the per-skill tools root", async () => {
-    const result = await installZipDownloadSkill({
-      workspaceDir,
+    mockArchiveResponse(new Uint8Array(SAFE_ZIP_BUFFER));
+    const entry = buildEntry("relative-targetdir");
+
+    const result = await installDownloadSkill({
       name: "relative-targetdir",
+      url: "https://example.invalid/good.zip",
+      archive: "zip",
       targetDir: "runtime",
     });
     expect(result.ok).toBe(true);
     expect(
       await fs.readFile(
-        path.join(stateDir, "tools", "relative-targetdir", "runtime", "hello.txt"),
+        path.join(resolveSkillToolsRootDir(entry), "runtime", "hello.txt"),
         "utf-8",
       ),
     ).toBe("hi");
   });
 });
 
-describe("installSkill download extraction safety (tar.bz2)", () => {
+describe("installDownloadSpec extraction safety (tar.bz2)", () => {
   it("handles tar.bz2 extraction safety edge-cases", async () => {
     for (const testCase of [
       {
@@ -320,7 +290,10 @@ describe("installSkill download extraction safety (tar.bz2)", () => {
         expectedExtract: false,
       },
     ]) {
+      const entry = buildEntry(testCase.name);
+      const targetDir = path.join(resolveSkillToolsRootDir(entry), "target");
       const commandCallCount = runCommandWithTimeoutMock.mock.calls.length;
+
       mockArchiveResponse(new Uint8Array([1, 2, 3]));
       mockTarExtractionFlow({
         listOutput: testCase.listOutput,
@@ -328,20 +301,12 @@ describe("installSkill download extraction safety (tar.bz2)", () => {
         extract: testCase.extract,
       });
 
-      await writeTarBz2Skill({
-        workspaceDir,
-        stateDir,
+      const result = await installDownloadSkill({
         name: testCase.name,
         url: testCase.url,
-        ...(typeof testCase.stripComponents === "number"
-          ? { stripComponents: testCase.stripComponents }
-          : {}),
-      });
-
-      const result = await installSkill({
-        workspaceDir,
-        skillName: testCase.name,
-        installId: "dl",
+        archive: "tar.bz2",
+        stripComponents: testCase.stripComponents,
+        targetDir,
       });
       expect(result.ok, testCase.label).toBe(testCase.expectedOk);
 

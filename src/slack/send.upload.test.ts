@@ -1,20 +1,9 @@
 import type { WebClient } from "@slack/web-api";
 import { describe, expect, it, vi } from "vitest";
+import { installSlackBlockTestMocks } from "./blocks.test-helpers.js";
 
 // --- Module mocks (must precede dynamic import) ---
-
-vi.mock("../config/config.js", () => ({
-  loadConfig: () => ({}),
-}));
-
-vi.mock("./accounts.js", () => ({
-  resolveSlackAccount: () => ({
-    accountId: "default",
-    botToken: "xoxb-test",
-    botTokenSource: "config",
-    config: {},
-  }),
-}));
+installSlackBlockTestMocks();
 
 vi.mock("../web/media.js", () => ({
   loadWebMedia: vi.fn(async () => ({

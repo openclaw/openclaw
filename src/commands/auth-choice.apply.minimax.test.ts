@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { applyAuthChoiceMiniMax } from "./auth-choice.apply.minimax.js";
 import {
@@ -114,7 +115,9 @@ describe("applyAuthChoiceMiniMax", () => {
         provider,
         mode: "api_key",
       });
-      expect(result?.config.agents?.defaults?.model?.primary).toBe(expectedModel);
+      expect(resolveAgentModelPrimaryValue(result?.config.agents?.defaults?.model)).toBe(
+        expectedModel,
+      );
       expect(text).not.toHaveBeenCalled();
       expect(confirm).not.toHaveBeenCalled();
 
@@ -144,7 +147,9 @@ describe("applyAuthChoiceMiniMax", () => {
       provider: "minimax-cn",
       mode: "api_key",
     });
-    expect(result?.config.agents?.defaults?.model?.primary).toBe("minimax-cn/MiniMax-M2.5");
+    expect(resolveAgentModelPrimaryValue(result?.config.agents?.defaults?.model)).toBe(
+      "minimax-cn/MiniMax-M2.5",
+    );
     expect(text).not.toHaveBeenCalled();
     expect(confirm).toHaveBeenCalled();
 
@@ -176,7 +181,9 @@ describe("applyAuthChoiceMiniMax", () => {
       provider: "minimax",
       mode: "api_key",
     });
-    expect(result?.config.agents?.defaults?.model?.primary).toBe("minimax/MiniMax-M2.5-Lightning");
+    expect(resolveAgentModelPrimaryValue(result?.config.agents?.defaults?.model)).toBe(
+      "minimax/MiniMax-M2.5-Lightning",
+    );
     expect(text).not.toHaveBeenCalled();
     expect(confirm).not.toHaveBeenCalled();
 

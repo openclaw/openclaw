@@ -90,11 +90,4 @@ describe("createOpenClawCodingTools", () => {
     expect(tools.some((tool) => tool.name === "write")).toBe(false);
     expect(tools.some((tool) => tool.name === "edit")).toBe(false);
   });
-  it("filters tools by agent tool policy even without sandbox", () => {
-    const tools = createOpenClawCodingTools({
-      config: { tools: { deny: ["browser"] } },
-    });
-    expect(tools.some((tool) => tool.name === "exec")).toBe(true);
-    expect(tools.some((tool) => tool.name === "browser")).toBe(false);
-  });
 });

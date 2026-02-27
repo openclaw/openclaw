@@ -51,6 +51,43 @@ function createForwarder(params: {
   return { deliver, forwarder };
 }
 
+function makeSessionCfg(options: { discordExecApprovalsEnabled?: boolean } = {}): OpenClawConfig {
+  return {
+    ...(options.discordExecApprovalsEnabled
+      ? {
+          channels: {
+            discord: {
+              execApprovals: {
+                enabled: true,
+                approvers: ["123"],
+              },
+            },
+          },
+        }
+      : {}),
+    approvals: { exec: { enabled: true, mode: "session" } },
+  } as OpenClawConfig;
+}
+
+async function expectDiscordSessionTargetRequest(params: {
+  cfg: OpenClawConfig;
+  expectedAccepted: boolean;
+  expectedDeliveryCount: number;
+}) {
+  vi.useFakeTimers();
+  const { deliver, forwarder } = createForwarder({
+    cfg: params.cfg,
+    resolveSessionTarget: () => ({ channel: "discord", to: "channel:123" }),
+  });
+
+  await expect(forwarder.handleRequested(baseRequest)).resolves.toBe(params.expectedAccepted);
+  if (params.expectedDeliveryCount === 0) {
+    expect(deliver).not.toHaveBeenCalled();
+    return;
+  }
+  expect(deliver).toHaveBeenCalledTimes(params.expectedDeliveryCount);
+}
+
 describe("exec approval forwarder", () => {
   it("forwards to session target and resolves", async () => {
     vi.useFakeTimers();
@@ -123,67 +160,56 @@ describe("exec approval forwarder", () => {
     expect(deliver).not.toHaveBeenCalled();
   });
 
-  it("returns false when all targets are skipped", async () => {
-    vi.useFakeTimers();
+  it("rejects unsafe nested-repetition regex in sessionFilter", async () => {
     const cfg = {
-      channels: {
-        discord: {
-          execApprovals: {
-            enabled: true,
-            approvers: ["123"],
-          },
+      approvals: {
+        exec: {
+          enabled: true,
+          mode: "session",
+          sessionFilter: ["(a+)+$"],
         },
       },
-      approvals: { exec: { enabled: true, mode: "session" } },
     } as OpenClawConfig;
 
     const { deliver, forwarder } = createForwarder({
       cfg,
-      resolveSessionTarget: () => ({ channel: "discord", to: "channel:123" }),
+      resolveSessionTarget: () => ({ channel: "slack", to: "U1" }),
     });
 
-    await expect(forwarder.handleRequested(baseRequest)).resolves.toBe(false);
+    const request = {
+      ...baseRequest,
+      request: {
+        ...baseRequest.request,
+        sessionKey: `${"a".repeat(28)}!`,
+      },
+    };
+
+    await expect(forwarder.handleRequested(request)).resolves.toBe(false);
     expect(deliver).not.toHaveBeenCalled();
+  });
+
+  it("returns false when all targets are skipped", async () => {
+    await expectDiscordSessionTargetRequest({
+      cfg: makeSessionCfg({ discordExecApprovalsEnabled: true }),
+      expectedAccepted: false,
+      expectedDeliveryCount: 0,
+    });
   });
 
   it("forwards to discord when discord exec approvals handler is disabled", async () => {
-    vi.useFakeTimers();
-    const cfg = {
-      approvals: { exec: { enabled: true, mode: "session" } },
-    } as OpenClawConfig;
-
-    const { deliver, forwarder } = createForwarder({
-      cfg,
-      resolveSessionTarget: () => ({ channel: "discord", to: "channel:123" }),
+    await expectDiscordSessionTargetRequest({
+      cfg: makeSessionCfg(),
+      expectedAccepted: true,
+      expectedDeliveryCount: 1,
     });
-
-    await expect(forwarder.handleRequested(baseRequest)).resolves.toBe(true);
-
-    expect(deliver).toHaveBeenCalledTimes(1);
   });
 
   it("skips discord forwarding when discord exec approvals handler is enabled", async () => {
-    vi.useFakeTimers();
-    const cfg = {
-      channels: {
-        discord: {
-          execApprovals: {
-            enabled: true,
-            approvers: ["123"],
-          },
-        },
-      },
-      approvals: { exec: { enabled: true, mode: "session" } },
-    } as OpenClawConfig;
-
-    const { deliver, forwarder } = createForwarder({
-      cfg,
-      resolveSessionTarget: () => ({ channel: "discord", to: "channel:123" }),
+    await expectDiscordSessionTargetRequest({
+      cfg: makeSessionCfg({ discordExecApprovalsEnabled: true }),
+      expectedAccepted: false,
+      expectedDeliveryCount: 0,
     });
-
-    await expect(forwarder.handleRequested(baseRequest)).resolves.toBe(false);
-
-    expect(deliver).not.toHaveBeenCalled();
   });
 
   it("can forward resolved notices without pending cache when request payload is present", async () => {

@@ -223,12 +223,15 @@ export function resolveThreadSessionKeys(params: {
   threadId?: string | null;
   parentSessionKey?: string;
   useSuffix?: boolean;
+  normalizeThreadId?: (threadId: string) => string;
 }): { sessionKey: string; parentSessionKey?: string } {
   const threadId = (params.threadId ?? "").trim();
   if (!threadId) {
     return { sessionKey: params.baseSessionKey, parentSessionKey: undefined };
   }
-  const normalizedThreadId = threadId.toLowerCase();
+  const normalizedThreadId = (params.normalizeThreadId ?? ((value: string) => value.toLowerCase()))(
+    threadId,
+  );
   const useSuffix = params.useSuffix ?? true;
   const sessionKey = useSuffix
     ? `${params.baseSessionKey}:thread:${normalizedThreadId}`

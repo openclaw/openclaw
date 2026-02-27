@@ -2,6 +2,7 @@ import type { TranslationMap } from "../lib/types.ts";
 
 export const pt_BR: TranslationMap = {
   common: {
+    version: "Versão",
     health: "Saúde",
     ok: "OK",
     offline: "Offline",

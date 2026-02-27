@@ -122,11 +122,14 @@ running after `tools.exec.approvalRunningNoticeMs`, a single `Exec running` noti
 
 ## Allowlist + safe bins
 
-Allowlist enforcement matches **resolved binary paths only** (no basename matches). When
+Manual allowlist enforcement matches **resolved binary paths only** (no basename matches). When
 `security=allowlist`, shell commands are auto-allowed only if every pipeline segment is
 allowlisted or a safe bin. Chaining (`;`, `&&`, `||`) and redirections are rejected in
 allowlist mode unless every top-level segment satisfies the allowlist (including safe bins).
 Redirections remain unsupported.
+
+`autoAllowSkills` is a separate convenience path in exec approvals. It is not the same as
+manual path allowlist entries. For strict explicit trust, keep `autoAllowSkills` disabled.
 
 Use the two controls for different jobs:
 

@@ -29,6 +29,22 @@ function createPerplexitySearchTool(perplexityConfig?: { apiKey?: string; baseUr
   });
 }
 
+function createKimiSearchTool(kimiConfig?: { apiKey?: string; baseUrl?: string; model?: string }) {
+  return createWebSearchTool({
+    config: {
+      tools: {
+        web: {
+          search: {
+            provider: "kimi",
+            ...(kimiConfig ? { kimi: kimiConfig } : {}),
+          },
+        },
+      },
+    },
+    sandboxed: true,
+  });
+}
+
 function parseFirstRequestBody(mockFetch: ReturnType<typeof installMockFetch>) {
   const request = mockFetch.mock.calls[0]?.[1] as RequestInit | undefined;
   const requestBody = request?.body;
@@ -203,6 +219,99 @@ describe("web_search perplexity baseUrl defaults", () => {
       const body = parseFirstRequestBody(mockFetch);
       expect(body.model).toBe(expectedModel);
     }
+  });
+});
+
+describe("web_search kimi provider", () => {
+  const priorFetch = global.fetch;
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    global.fetch = priorFetch;
+  });
+
+  it("returns a setup hint when Kimi key is missing", async () => {
+    vi.stubEnv("KIMI_API_KEY", "");
+    vi.stubEnv("MOONSHOT_API_KEY", "");
+    const tool = createKimiSearchTool();
+    const result = await tool?.execute?.("call-1", { query: "test" });
+    expect(result?.details).toMatchObject({ error: "missing_kimi_api_key" });
+  });
+
+  it("runs the Kimi web_search tool flow and echoes tool results", async () => {
+    const mockFetch = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => {
+      const idx = mockFetch.mock.calls.length;
+      if (idx === 1) {
+        return new Response(
+          JSON.stringify({
+            choices: [
+              {
+                finish_reason: "tool_calls",
+                message: {
+                  role: "assistant",
+                  content: "",
+                  reasoning_content: "searching",
+                  tool_calls: [
+                    {
+                      id: "call_1",
+                      type: "function",
+                      function: {
+                        name: "$web_search",
+                        arguments: JSON.stringify({ q: "openclaw" }),
+                      },
+                    },
+                  ],
+                },
+              },
+            ],
+            search_results: [
+              { title: "OpenClaw", url: "https://openclaw.ai/docs", content: "docs" },
+            ],
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      return new Response(
+        JSON.stringify({
+          choices: [
+            { finish_reason: "stop", message: { role: "assistant", content: "final answer" } },
+          ],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    });
+    global.fetch = withFetchPreconnect(mockFetch);
+
+    const tool = createKimiSearchTool({
+      apiKey: "kimi-config-key",
+      baseUrl: "https://api.moonshot.ai/v1",
+      model: "moonshot-v1-128k",
+    });
+    const result = await tool?.execute?.("call-1", { query: "latest openclaw release" });
+
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    const secondRequest = mockFetch.mock.calls[1]?.[1];
+    const secondBody = JSON.parse(
+      typeof secondRequest?.body === "string" ? secondRequest.body : "{}",
+    ) as {
+      messages?: Array<Record<string, unknown>>;
+    };
+    const toolMessage = secondBody.messages?.find((message) => message.role === "tool") as
+      | { content?: string; tool_call_id?: string }
+      | undefined;
+    expect(toolMessage?.tool_call_id).toBe("call_1");
+    expect(JSON.parse(toolMessage?.content ?? "{}")).toMatchObject({
+      search_results: [{ url: "https://openclaw.ai/docs" }],
+    });
+
+    const details = result?.details as {
+      citations?: string[];
+      content?: string;
+      provider?: string;
+    };
+    expect(details.provider).toBe("kimi");
+    expect(details.citations).toEqual(["https://openclaw.ai/docs"]);
+    expect(details.content).toContain("final answer");
   });
 });
 

@@ -217,6 +217,13 @@ export async function launchOpenClawChrome(
     // Stealth: hide navigator.webdriver from automation detection (#80)
     args.push("--disable-blink-features=AutomationControlled");
 
+    // Stealth: override user agent to remove "Headless" identifier
+    if (resolved.headless) {
+      args.push(
+        "--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36",
+      );
+    }
+
     // Append user-configured extra arguments (e.g., stealth flags, window size)
     if (resolved.extraArgs.length > 0) {
       args.push(...resolved.extraArgs);

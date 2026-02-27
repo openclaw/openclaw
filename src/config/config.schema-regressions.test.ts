@@ -63,6 +63,18 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(true);
   });
 
+  it("accepts channels.whatsapp.enabled", () => {
+    const res = validateConfigObject({
+      channels: {
+        whatsapp: {
+          enabled: true,
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
   it("rejects unsafe iMessage remoteHost", () => {
     const res = validateConfigObject({
       channels: {
@@ -84,6 +96,19 @@ describe("config schema regressions", () => {
         imessage: {
           attachmentRoots: ["/Users/*/Library/Messages/Attachments"],
           remoteAttachmentRoots: ["/Volumes/relay/attachments"],
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts string values for agents defaults model inputs", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          model: "anthropic/claude-opus-4-6",
+          imageModel: "openai/gpt-4.1-mini",
         },
       },
     });

@@ -1,13 +1,20 @@
 import type { SessionSendPolicyConfig } from "./types.base.js";
 
-export type MemoryBackend = "builtin" | "qmd";
+export type MemoryBackend = "builtin" | "qmd" | "openmemory";
 export type MemoryCitationsMode = "auto" | "on" | "off";
 export type MemoryQmdSearchMode = "query" | "search" | "vsearch";
+
+export type MemoryOpenMemoryConfig = {
+  url: string;
+  userId?: string;
+  timeout?: number;
+};
 
 export type MemoryConfig = {
   backend?: MemoryBackend;
   citations?: MemoryCitationsMode;
   qmd?: MemoryQmdConfig;
+  openmemory?: MemoryOpenMemoryConfig;
 };
 
 export type MemoryQmdConfig = {

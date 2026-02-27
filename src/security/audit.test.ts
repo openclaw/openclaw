@@ -1,10 +1,10 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { captureEnv, withEnvAsync } from "../test-utils/env.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { collectPluginsCodeSafetyFindings } from "./audit-extra.js";
 import type { SecurityAuditOptions, SecurityAuditReport } from "./audit.js";
 import { runSecurityAudit } from "./audit.js";
@@ -15,7 +15,8 @@ const isWindows = process.platform === "win32";
 function stubChannelPlugin(params: {
   id: "discord" | "slack" | "telegram";
   label: string;
-  resolveAccount: (cfg: OpenClawConfig) => unknown;
+  resolveAccount: (cfg: OpenClawConfig, accountId: string | null | undefined) => unknown;
+  listAccountIds?: (cfg: OpenClawConfig) => string[];
 }): ChannelPlugin {
   return {
     id: params.id,
@@ -31,11 +32,15 @@ function stubChannelPlugin(params: {
     },
     security: {},
     config: {
-      listAccountIds: (cfg) => {
-        const enabled = Boolean((cfg.channels as Record<string, unknown> | undefined)?.[params.id]);
-        return enabled ? ["default"] : [];
-      },
-      resolveAccount: (cfg) => params.resolveAccount(cfg),
+      listAccountIds:
+        params.listAccountIds ??
+        ((cfg) => {
+          const enabled = Boolean(
+            (cfg.channels as Record<string, unknown> | undefined)?.[params.id],
+          );
+          return enabled ? ["default"] : [];
+        }),
+      resolveAccount: (cfg, accountId) => params.resolveAccount(cfg, accountId),
       isEnabled: () => true,
       isConfigured: () => true,
     },
@@ -45,19 +50,46 @@ function stubChannelPlugin(params: {
 const discordPlugin = stubChannelPlugin({
   id: "discord",
   label: "Discord",
-  resolveAccount: (cfg) => ({ config: cfg.channels?.discord ?? {} }),
+  listAccountIds: (cfg) => {
+    const ids = Object.keys(cfg.channels?.discord?.accounts ?? {});
+    return ids.length > 0 ? ids : ["default"];
+  },
+  resolveAccount: (cfg, accountId) => {
+    const resolvedAccountId = typeof accountId === "string" && accountId ? accountId : "default";
+    const base = cfg.channels?.discord ?? {};
+    const account = cfg.channels?.discord?.accounts?.[resolvedAccountId] ?? {};
+    return { config: { ...base, ...account } };
+  },
 });
 
 const slackPlugin = stubChannelPlugin({
   id: "slack",
   label: "Slack",
-  resolveAccount: (cfg) => ({ config: cfg.channels?.slack ?? {} }),
+  listAccountIds: (cfg) => {
+    const ids = Object.keys(cfg.channels?.slack?.accounts ?? {});
+    return ids.length > 0 ? ids : ["default"];
+  },
+  resolveAccount: (cfg, accountId) => {
+    const resolvedAccountId = typeof accountId === "string" && accountId ? accountId : "default";
+    const base = cfg.channels?.slack ?? {};
+    const account = cfg.channels?.slack?.accounts?.[resolvedAccountId] ?? {};
+    return { config: { ...base, ...account } };
+  },
 });
 
 const telegramPlugin = stubChannelPlugin({
   id: "telegram",
   label: "Telegram",
-  resolveAccount: (cfg) => ({ config: cfg.channels?.telegram ?? {} }),
+  listAccountIds: (cfg) => {
+    const ids = Object.keys(cfg.channels?.telegram?.accounts ?? {});
+    return ids.length > 0 ? ids : ["default"];
+  },
+  resolveAccount: (cfg, accountId) => {
+    const resolvedAccountId = typeof accountId === "string" && accountId ? accountId : "default";
+    const base = cfg.channels?.telegram ?? {};
+    const account = cfg.channels?.telegram?.accounts?.[resolvedAccountId] ?? {};
+    return { config: { ...base, ...account } };
+  },
 });
 
 function successfulProbeResult(url: string) {
@@ -103,6 +135,7 @@ function expectNoFinding(res: SecurityAuditReport, checkId: string): void {
 describe("security audit", () => {
   let fixtureRoot = "";
   let caseId = 0;
+  let channelSecurityStateDir = "";
 
   const makeTmpDir = async (label: string) => {
     const dir = path.join(fixtureRoot, `case-${caseId++}-${label}`);
@@ -110,14 +143,23 @@ describe("security audit", () => {
     return dir;
   };
 
-  const withStateDir = async (label: string, fn: (tmp: string) => Promise<void>) => {
-    const tmp = await makeTmpDir(label);
-    await fs.mkdir(path.join(tmp, "credentials"), { recursive: true, mode: 0o700 });
-    await withEnvAsync({ OPENCLAW_STATE_DIR: tmp }, async () => await fn(tmp));
+  const withChannelSecurityStateDir = async (fn: (tmp: string) => Promise<void>) => {
+    const credentialsDir = path.join(channelSecurityStateDir, "credentials");
+    await fs.rm(credentialsDir, { recursive: true, force: true });
+    await fs.mkdir(credentialsDir, { recursive: true, mode: 0o700 });
+    await withEnvAsync(
+      { OPENCLAW_STATE_DIR: channelSecurityStateDir },
+      async () => await fn(channelSecurityStateDir),
+    );
   };
 
   beforeAll(async () => {
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-security-audit-"));
+    channelSecurityStateDir = path.join(fixtureRoot, "channel-security");
+    await fs.mkdir(path.join(channelSecurityStateDir, "credentials"), {
+      recursive: true,
+      mode: 0o700,
+    });
   });
 
   afterAll(async () => {
@@ -177,17 +219,44 @@ describe("security audit", () => {
     }
   });
 
-  it("warns when non-loopback bind has auth but no auth rate limit", async () => {
-    const cfg: OpenClawConfig = {
-      gateway: {
-        bind: "lan",
-        auth: { token: "secret" },
+  it("evaluates gateway auth rate-limit warning based on configuration", async () => {
+    const cases: Array<{
+      name: string;
+      cfg: OpenClawConfig;
+      expectWarn: boolean;
+    }> = [
+      {
+        name: "no rate limit",
+        cfg: {
+          gateway: {
+            bind: "lan",
+            auth: { token: "secret" },
+          },
+        },
+        expectWarn: true,
       },
-    };
-
-    const res = await audit(cfg, { env: {} });
-
-    expect(hasFinding(res, "gateway.auth_no_rate_limit", "warn")).toBe(true);
+      {
+        name: "rate limit configured",
+        cfg: {
+          gateway: {
+            bind: "lan",
+            auth: {
+              token: "secret",
+              rateLimit: { maxAttempts: 10, windowMs: 60_000, lockoutMs: 300_000 },
+            },
+          },
+        },
+        expectWarn: false,
+      },
+    ];
+    await Promise.all(
+      cases.map(async (testCase) => {
+        const res = await audit(testCase.cfg, { env: {} });
+        expect(hasFinding(res, "gateway.auth_no_rate_limit", "warn"), testCase.name).toBe(
+          testCase.expectWarn,
+        );
+      }),
+    );
   });
 
   it("scores dangerous gateway.tools.allow over HTTP by exposure", async () => {
@@ -219,182 +288,204 @@ describe("security audit", () => {
         expectedSeverity: "critical",
       },
     ];
-    for (const testCase of cases) {
-      const res = await audit(testCase.cfg, { env: {} });
-      expect(
-        hasFinding(res, "gateway.tools_invoke_http.dangerous_allow", testCase.expectedSeverity),
-        testCase.name,
-      ).toBe(true);
-    }
+    await Promise.all(
+      cases.map(async (testCase) => {
+        const res = await audit(testCase.cfg, { env: {} });
+        expect(
+          hasFinding(res, "gateway.tools_invoke_http.dangerous_allow", testCase.expectedSeverity),
+          testCase.name,
+        ).toBe(true);
+      }),
+    );
   });
 
-  it("does not warn for auth rate limiting when configured", async () => {
-    const cfg: OpenClawConfig = {
-      gateway: {
-        bind: "lan",
-        auth: {
-          token: "secret",
-          rateLimit: { maxAttempts: 10, windowMs: 60_000, lockoutMs: 300_000 },
-        },
-      },
-    };
-
-    const res = await audit(cfg, { env: {} });
-
-    expect(hasFinding(res, "gateway.auth_no_rate_limit")).toBe(false);
-  });
-
-  it("warns when exec host is explicitly sandbox while sandbox mode is off", async () => {
-    const cfg: OpenClawConfig = {
-      tools: {
-        exec: {
-          host: "sandbox",
-        },
-      },
-      agents: {
-        defaults: {
-          sandbox: {
-            mode: "off",
+  it("warns when sandbox exec host is selected while sandbox mode is off", async () => {
+    const cases: Array<{
+      name: string;
+      cfg: OpenClawConfig;
+      checkId:
+        | "tools.exec.host_sandbox_no_sandbox_defaults"
+        | "tools.exec.host_sandbox_no_sandbox_agents";
+    }> = [
+      {
+        name: "defaults host is sandbox",
+        cfg: {
+          tools: {
+            exec: {
+              host: "sandbox",
+            },
           },
-        },
-      },
-    };
-
-    const res = await audit(cfg);
-
-    expect(hasFinding(res, "tools.exec.host_sandbox_no_sandbox_defaults", "warn")).toBe(true);
-  });
-
-  it("warns when an agent sets exec host=sandbox with sandbox mode off", async () => {
-    const cfg: OpenClawConfig = {
-      tools: {
-        exec: {
-          host: "gateway",
-        },
-      },
-      agents: {
-        defaults: {
-          sandbox: {
-            mode: "off",
-          },
-        },
-        list: [
-          {
-            id: "ops",
-            tools: {
-              exec: {
-                host: "sandbox",
+          agents: {
+            defaults: {
+              sandbox: {
+                mode: "off",
               },
             },
           },
-        ],
-      },
-    };
-
-    const res = await audit(cfg);
-
-    expect(hasFinding(res, "tools.exec.host_sandbox_no_sandbox_agents", "warn")).toBe(true);
-  });
-
-  it("warns for interpreter safeBins entries without explicit profiles", async () => {
-    const cfg: OpenClawConfig = {
-      tools: {
-        exec: {
-          safeBins: ["python3"],
         },
+        checkId: "tools.exec.host_sandbox_no_sandbox_defaults",
       },
-      agents: {
-        list: [
-          {
-            id: "ops",
-            tools: {
-              exec: {
-                safeBins: ["node"],
+      {
+        name: "agent override host is sandbox",
+        cfg: {
+          tools: {
+            exec: {
+              host: "gateway",
+            },
+          },
+          agents: {
+            defaults: {
+              sandbox: {
+                mode: "off",
               },
             },
-          },
-        ],
-      },
-    };
-
-    const res = await audit(cfg);
-
-    expect(hasFinding(res, "tools.exec.safe_bins_interpreter_unprofiled", "warn")).toBe(true);
-  });
-
-  it("does not warn for interpreter safeBins when explicit profiles are present", async () => {
-    const cfg: OpenClawConfig = {
-      tools: {
-        exec: {
-          safeBins: ["python3"],
-          safeBinProfiles: {
-            python3: {
-              maxPositional: 0,
-            },
-          },
-        },
-      },
-      agents: {
-        list: [
-          {
-            id: "ops",
-            tools: {
-              exec: {
-                safeBins: ["node"],
-                safeBinProfiles: {
-                  node: {
-                    maxPositional: 0,
+            list: [
+              {
+                id: "ops",
+                tools: {
+                  exec: {
+                    host: "sandbox",
                   },
+                },
+              },
+            ],
+          },
+        },
+        checkId: "tools.exec.host_sandbox_no_sandbox_agents",
+      },
+    ];
+    await Promise.all(
+      cases.map(async (testCase) => {
+        const res = await audit(testCase.cfg);
+        expect(hasFinding(res, testCase.checkId, "warn"), testCase.name).toBe(true);
+      }),
+    );
+  });
+
+  it("warns for interpreter safeBins only when explicit profiles are missing", async () => {
+    const cases: Array<{
+      name: string;
+      cfg: OpenClawConfig;
+      expected: boolean;
+    }> = [
+      {
+        name: "missing profiles",
+        cfg: {
+          tools: {
+            exec: {
+              safeBins: ["python3"],
+            },
+          },
+          agents: {
+            list: [
+              {
+                id: "ops",
+                tools: {
+                  exec: {
+                    safeBins: ["node"],
+                  },
+                },
+              },
+            ],
+          },
+        },
+        expected: true,
+      },
+      {
+        name: "profiles configured",
+        cfg: {
+          tools: {
+            exec: {
+              safeBins: ["python3"],
+              safeBinProfiles: {
+                python3: {
+                  maxPositional: 0,
                 },
               },
             },
           },
-        ],
+          agents: {
+            list: [
+              {
+                id: "ops",
+                tools: {
+                  exec: {
+                    safeBins: ["node"],
+                    safeBinProfiles: {
+                      node: {
+                        maxPositional: 0,
+                      },
+                    },
+                  },
+                },
+              },
+            ],
+          },
+        },
+        expected: false,
       },
-    };
-
-    const res = await audit(cfg);
-
-    expect(
-      res.findings.some((f) => f.checkId === "tools.exec.safe_bins_interpreter_unprofiled"),
-    ).toBe(false);
+    ];
+    await Promise.all(
+      cases.map(async (testCase) => {
+        const res = await audit(testCase.cfg);
+        expect(
+          hasFinding(res, "tools.exec.safe_bins_interpreter_unprofiled", "warn"),
+          testCase.name,
+        ).toBe(testCase.expected);
+      }),
+    );
   });
 
-  it("warns when loopback control UI lacks trusted proxies", async () => {
-    const cfg: OpenClawConfig = {
-      gateway: {
-        bind: "loopback",
-        controlUi: { enabled: true },
+  it("evaluates loopback control UI and logging exposure findings", async () => {
+    const cases: Array<{
+      name: string;
+      cfg: OpenClawConfig;
+      checkId:
+        | "gateway.trusted_proxies_missing"
+        | "gateway.loopback_no_auth"
+        | "logging.redact_off";
+      severity: "warn" | "critical";
+      opts?: Omit<SecurityAuditOptions, "config">;
+    }> = [
+      {
+        name: "loopback control UI without trusted proxies",
+        cfg: {
+          gateway: {
+            bind: "loopback",
+            controlUi: { enabled: true },
+          },
+        },
+        checkId: "gateway.trusted_proxies_missing",
+        severity: "warn",
       },
-    };
-
-    const res = await audit(cfg);
-
-    expectFinding(res, "gateway.trusted_proxies_missing", "warn");
-  });
-
-  it("flags loopback control UI without auth as critical", async () => {
-    const cfg: OpenClawConfig = {
-      gateway: {
-        bind: "loopback",
-        controlUi: { enabled: true },
-        auth: {},
+      {
+        name: "loopback control UI without auth",
+        cfg: {
+          gateway: {
+            bind: "loopback",
+            controlUi: { enabled: true },
+            auth: {},
+          },
+        },
+        checkId: "gateway.loopback_no_auth",
+        severity: "critical",
+        opts: { env: {} },
       },
-    };
-
-    const res = await audit(cfg, { env: {} });
-
-    expectFinding(res, "gateway.loopback_no_auth", "critical");
-  });
-
-  it("flags logging.redactSensitive=off", async () => {
-    const cfg: OpenClawConfig = {
-      logging: { redactSensitive: "off" },
-    };
-
-    const res = await audit(cfg);
-
-    expectFinding(res, "logging.redact_off", "warn");
+      {
+        name: "logging redactSensitive off",
+        cfg: {
+          logging: { redactSensitive: "off" },
+        },
+        checkId: "logging.redact_off",
+        severity: "warn",
+      },
+    ];
+    await Promise.all(
+      cases.map(async (testCase) => {
+        const res = await audit(testCase.cfg, testCase.opts);
+        expect(hasFinding(res, testCase.checkId, testCase.severity), testCase.name).toBe(true);
+      }),
+    );
   });
 
   it("treats Windows ACL-only perms as secure", async () => {
@@ -666,14 +757,16 @@ describe("security audit", () => {
         detailIncludes: ["mistral-8b", "sandbox=all"],
       },
     ];
-    for (const testCase of cases) {
-      const res = await audit(testCase.cfg);
-      const finding = res.findings.find((f) => f.checkId === "models.small_params");
-      expect(finding?.severity, testCase.name).toBe(testCase.expectedSeverity);
-      for (const text of testCase.detailIncludes) {
-        expect(finding?.detail, `${testCase.name}:${text}`).toContain(text);
-      }
-    }
+    await Promise.all(
+      cases.map(async (testCase) => {
+        const res = await audit(testCase.cfg);
+        const finding = res.findings.find((f) => f.checkId === "models.small_params");
+        expect(finding?.severity, testCase.name).toBe(testCase.expectedSeverity);
+        for (const text of testCase.detailIncludes) {
+          expect(finding?.detail, `${testCase.name}:${text}`).toContain(text);
+        }
+      }),
+    );
   });
 
   it("checks sandbox docker mode-off findings with/without agent override", async () => {
@@ -712,12 +805,14 @@ describe("security audit", () => {
         expectedPresent: false,
       },
     ];
-    for (const testCase of cases) {
-      const res = await audit(testCase.cfg);
-      expect(hasFinding(res, "sandbox.docker_config_mode_off"), testCase.name).toBe(
-        testCase.expectedPresent,
-      );
-    }
+    await Promise.all(
+      cases.map(async (testCase) => {
+        const res = await audit(testCase.cfg);
+        expect(hasFinding(res, "sandbox.docker_config_mode_off"), testCase.name).toBe(
+          testCase.expectedPresent,
+        );
+      }),
+    );
   });
 
   it("flags dangerous sandbox docker config (binds/network/seccomp/apparmor)", async () => {
@@ -797,19 +892,21 @@ describe("security audit", () => {
         expectedPresent: false,
       },
     ];
-    for (const testCase of cases) {
-      const res = await audit(testCase.cfg);
-      const finding = res.findings.find(
-        (f) => f.checkId === "sandbox.browser_cdp_bridge_unrestricted",
-      );
-      expect(Boolean(finding), testCase.name).toBe(testCase.expectedPresent);
-      if (testCase.expectedPresent) {
-        expect(finding?.severity, testCase.name).toBe(testCase.expectedSeverity);
-        if (testCase.detailIncludes) {
-          expect(finding?.detail, testCase.name).toContain(testCase.detailIncludes);
+    await Promise.all(
+      cases.map(async (testCase) => {
+        const res = await audit(testCase.cfg);
+        const finding = res.findings.find(
+          (f) => f.checkId === "sandbox.browser_cdp_bridge_unrestricted",
+        );
+        expect(Boolean(finding), testCase.name).toBe(testCase.expectedPresent);
+        if (testCase.expectedPresent) {
+          expect(finding?.severity, testCase.name).toBe(testCase.expectedSeverity);
+          if (testCase.detailIncludes) {
+            expect(finding?.detail, testCase.name).toContain(testCase.detailIncludes);
+          }
         }
-      }
-    }
+      }),
+    );
   });
 
   it("flags ineffective gateway.nodes.denyCommands entries", async () => {
@@ -859,15 +956,17 @@ describe("security audit", () => {
       },
     ];
 
-    for (const testCase of cases) {
-      const res = await audit(testCase.cfg);
-      const finding = res.findings.find(
-        (f) => f.checkId === "gateway.nodes.allow_commands_dangerous",
-      );
-      expect(finding?.severity, testCase.name).toBe(testCase.expectedSeverity);
-      expect(finding?.detail, testCase.name).toContain("camera.snap");
-      expect(finding?.detail, testCase.name).toContain("screen.record");
-    }
+    await Promise.all(
+      cases.map(async (testCase) => {
+        const res = await audit(testCase.cfg);
+        const finding = res.findings.find(
+          (f) => f.checkId === "gateway.nodes.allow_commands_dangerous",
+        );
+        expect(finding?.severity, testCase.name).toBe(testCase.expectedSeverity);
+        expect(finding?.detail, testCase.name).toContain("camera.snap");
+        expect(finding?.detail, testCase.name).toContain("screen.record");
+      }),
+    );
   });
 
   it("does not flag dangerous allowCommands entries when denied again", async () => {
@@ -1037,6 +1136,38 @@ describe("security audit", () => {
     expect(finding?.detail).toContain("tools.exec.applyPatch.workspaceOnly=false");
   });
 
+  it("flags non-loopback Control UI without allowed origins", async () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        bind: "lan",
+        auth: { mode: "token", token: "very-long-browser-token-0123456789" },
+      },
+    };
+
+    const res = await audit(cfg);
+    expectFinding(res, "gateway.control_ui.allowed_origins_required", "critical");
+  });
+
+  it("flags dangerous host-header origin fallback and suppresses missing allowed-origins finding", async () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        bind: "lan",
+        auth: { mode: "token", token: "very-long-browser-token-0123456789" },
+        controlUi: {
+          dangerouslyAllowHostHeaderOriginFallback: true,
+        },
+      },
+    };
+
+    const res = await audit(cfg);
+    expectFinding(res, "gateway.control_ui.host_header_origin_fallback", "critical");
+    expectNoFinding(res, "gateway.control_ui.allowed_origins_required");
+    const flags = res.findings.find((f) => f.checkId === "config.insecure_or_dangerous_flags");
+    expect(flags?.detail ?? "").toContain(
+      "gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true",
+    );
+  });
+
   it("scores X-Real-IP fallback risk by gateway exposure", async () => {
     const trustedProxyCfg = (trustedProxies: string[]): OpenClawConfig => ({
       gateway: {
@@ -1109,13 +1240,15 @@ describe("security audit", () => {
       },
     ];
 
-    for (const testCase of cases) {
-      const res = await audit(testCase.cfg);
-      expect(
-        hasFinding(res, "gateway.real_ip_fallback_enabled", testCase.expectedSeverity),
-        testCase.name,
-      ).toBe(true);
-    }
+    await Promise.all(
+      cases.map(async (testCase) => {
+        const res = await audit(testCase.cfg);
+        expect(
+          hasFinding(res, "gateway.real_ip_fallback_enabled", testCase.expectedSeverity),
+          testCase.name,
+        ).toBe(true);
+      }),
+    );
   });
 
   it("scores mDNS full mode risk by gateway bind mode", async () => {
@@ -1158,13 +1291,15 @@ describe("security audit", () => {
       },
     ];
 
-    for (const testCase of cases) {
-      const res = await audit(testCase.cfg);
-      expect(
-        hasFinding(res, "discovery.mdns_full_mode", testCase.expectedSeverity),
-        testCase.name,
-      ).toBe(true);
-    }
+    await Promise.all(
+      cases.map(async (testCase) => {
+        const res = await audit(testCase.cfg);
+        expect(
+          hasFinding(res, "discovery.mdns_full_mode", testCase.expectedSeverity),
+          testCase.name,
+        ).toBe(true);
+      }),
+    );
   });
 
   it("evaluates trusted-proxy auth guardrails", async () => {
@@ -1241,17 +1376,19 @@ describe("security audit", () => {
       },
     ];
 
-    for (const testCase of cases) {
-      const res = await audit(testCase.cfg);
-      expect(
-        hasFinding(res, testCase.expectedCheckId, testCase.expectedSeverity),
-        testCase.name,
-      ).toBe(true);
-      if (testCase.suppressesGenericSharedSecretFindings) {
-        expect(hasFinding(res, "gateway.bind_no_auth"), testCase.name).toBe(false);
-        expect(hasFinding(res, "gateway.auth_no_rate_limit"), testCase.name).toBe(false);
-      }
-    }
+    await Promise.all(
+      cases.map(async (testCase) => {
+        const res = await audit(testCase.cfg);
+        expect(
+          hasFinding(res, testCase.expectedCheckId, testCase.expectedSeverity),
+          testCase.name,
+        ).toBe(true);
+        if (testCase.suppressesGenericSharedSecretFindings) {
+          expect(hasFinding(res, "gateway.bind_no_auth"), testCase.name).toBe(false);
+          expect(hasFinding(res, "gateway.auth_no_rate_limit"), testCase.name).toBe(false);
+        }
+      }),
+    );
   });
 
   it("warns when multiple DM senders share the main session", async () => {
@@ -1304,7 +1441,7 @@ describe("security audit", () => {
   });
 
   it("flags Discord native commands without a guild user allowlist", async () => {
-    await withStateDir("discord", async () => {
+    await withChannelSecurityStateDir(async () => {
       const cfg: OpenClawConfig = {
         channels: {
           discord: {
@@ -1341,7 +1478,7 @@ describe("security audit", () => {
   });
 
   it("does not flag Discord slash commands when dm.allowFrom includes a Discord snowflake id", async () => {
-    await withStateDir("discord-allowfrom-snowflake", async () => {
+    await withChannelSecurityStateDir(async () => {
       const cfg: OpenClawConfig = {
         channels: {
           discord: {
@@ -1378,7 +1515,7 @@ describe("security audit", () => {
   });
 
   it("warns when Discord allowlists contain name-based entries", async () => {
-    await withStateDir("discord-name-based-allowlist", async (tmp) => {
+    await withChannelSecurityStateDir(async (tmp) => {
       await fs.writeFile(
         path.join(tmp, "credentials", "discord-allowFrom.json"),
         JSON.stringify({ version: 1, allowFrom: ["team.owner"] }),
@@ -1427,8 +1564,118 @@ describe("security audit", () => {
     });
   });
 
+  it("marks Discord name-based allowlists as break-glass when dangerous matching is enabled", async () => {
+    await withChannelSecurityStateDir(async () => {
+      const cfg: OpenClawConfig = {
+        channels: {
+          discord: {
+            enabled: true,
+            token: "t",
+            dangerouslyAllowNameMatching: true,
+            allowFrom: ["Alice#1234"],
+          },
+        },
+      };
+
+      const res = await runSecurityAudit({
+        config: cfg,
+        includeFilesystem: false,
+        includeChannelSecurity: true,
+        plugins: [discordPlugin],
+      });
+
+      const finding = res.findings.find(
+        (entry) => entry.checkId === "channels.discord.allowFrom.name_based_entries",
+      );
+      expect(finding).toBeDefined();
+      expect(finding?.severity).toBe("info");
+      expect(finding?.detail).toContain("out-of-scope");
+      expect(res.findings).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            checkId: "channels.discord.allowFrom.dangerous_name_matching_enabled",
+            severity: "info",
+          }),
+        ]),
+      );
+    });
+  });
+
+  it("audits non-default Discord accounts for dangerous name matching", async () => {
+    await withChannelSecurityStateDir(async () => {
+      const cfg: OpenClawConfig = {
+        channels: {
+          discord: {
+            enabled: true,
+            token: "t",
+            accounts: {
+              alpha: { token: "a" },
+              beta: {
+                token: "b",
+                dangerouslyAllowNameMatching: true,
+              },
+            },
+          },
+        },
+      };
+
+      const res = await runSecurityAudit({
+        config: cfg,
+        includeFilesystem: false,
+        includeChannelSecurity: true,
+        plugins: [discordPlugin],
+      });
+
+      expect(res.findings).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            checkId: "channels.discord.allowFrom.dangerous_name_matching_enabled",
+            title: expect.stringContaining("(account: beta)"),
+            severity: "info",
+          }),
+        ]),
+      );
+    });
+  });
+
+  it("audits name-based allowlists on non-default Discord accounts", async () => {
+    await withChannelSecurityStateDir(async () => {
+      const cfg: OpenClawConfig = {
+        channels: {
+          discord: {
+            enabled: true,
+            token: "t",
+            accounts: {
+              alpha: {
+                token: "a",
+                allowFrom: ["123456789012345678"],
+              },
+              beta: {
+                token: "b",
+                allowFrom: ["Alice#1234"],
+              },
+            },
+          },
+        },
+      };
+
+      const res = await runSecurityAudit({
+        config: cfg,
+        includeFilesystem: false,
+        includeChannelSecurity: true,
+        plugins: [discordPlugin],
+      });
+
+      const finding = res.findings.find(
+        (entry) => entry.checkId === "channels.discord.allowFrom.name_based_entries",
+      );
+      expect(finding).toBeDefined();
+      expect(finding?.detail).toContain("channels.discord.accounts.beta.allowFrom:Alice#1234");
+    });
+  });
+
   it("does not warn when Discord allowlists use ID-style entries only", async () => {
-    await withStateDir("discord-id-only-allowlist", async () => {
+    await withChannelSecurityStateDir(async () => {
       const cfg: OpenClawConfig = {
         channels: {
           discord: {
@@ -1471,7 +1718,7 @@ describe("security audit", () => {
   });
 
   it("flags Discord slash commands when access-group enforcement is disabled and no users allowlist exists", async () => {
-    await withStateDir("discord-open", async () => {
+    await withChannelSecurityStateDir(async () => {
       const cfg: OpenClawConfig = {
         commands: { useAccessGroups: false },
         channels: {
@@ -1509,7 +1756,7 @@ describe("security audit", () => {
   });
 
   it("flags Slack slash commands without a channel users allowlist", async () => {
-    await withStateDir("slack", async () => {
+    await withChannelSecurityStateDir(async () => {
       const cfg: OpenClawConfig = {
         channels: {
           slack: {
@@ -1541,7 +1788,7 @@ describe("security audit", () => {
   });
 
   it("flags Slack slash commands when access-group enforcement is disabled", async () => {
-    await withStateDir("slack-open", async () => {
+    await withChannelSecurityStateDir(async () => {
       const cfg: OpenClawConfig = {
         commands: { useAccessGroups: false },
         channels: {
@@ -1574,7 +1821,7 @@ describe("security audit", () => {
   });
 
   it("flags Telegram group commands without a sender allowlist", async () => {
-    await withStateDir("telegram", async () => {
+    await withChannelSecurityStateDir(async () => {
       const cfg: OpenClawConfig = {
         channels: {
           telegram: {
@@ -1605,7 +1852,7 @@ describe("security audit", () => {
   });
 
   it("warns when Telegram allowFrom entries are non-numeric (legacy @username configs)", async () => {
-    await withStateDir("telegram-invalid-allowfrom", async () => {
+    await withChannelSecurityStateDir(async () => {
       const cfg: OpenClawConfig = {
         channels: {
           telegram: {
@@ -1668,15 +1915,17 @@ describe("security audit", () => {
         },
       },
     ];
-    for (const testCase of cases) {
-      const res = await audit(cfg, {
-        deep: true,
-        deepTimeoutMs: 50,
-        probeGatewayFn: testCase.probeGatewayFn,
-      });
-      testCase.assertDeep?.(res);
-      expect(hasFinding(res, "gateway.probe_failed", "warn"), testCase.name).toBe(true);
-    }
+    await Promise.all(
+      cases.map(async (testCase) => {
+        const res = await audit(cfg, {
+          deep: true,
+          deepTimeoutMs: 50,
+          probeGatewayFn: testCase.probeGatewayFn,
+        });
+        testCase.assertDeep?.(res);
+        expect(hasFinding(res, "gateway.probe_failed", "warn"), testCase.name).toBe(true);
+      }),
+    );
   });
 
   it("classifies legacy and weak-tier model identifiers", async () => {
@@ -1703,17 +1952,19 @@ describe("security audit", () => {
         expectedAbsentCheckId: "models.weak_tier",
       },
     ];
-    for (const testCase of cases) {
-      const res = await audit({
-        agents: { defaults: { model: { primary: testCase.model } } },
-      });
-      for (const expected of testCase.expectedFindings ?? []) {
-        expect(hasFinding(res, expected.checkId, expected.severity), testCase.name).toBe(true);
-      }
-      if (testCase.expectedAbsentCheckId) {
-        expect(hasFinding(res, testCase.expectedAbsentCheckId), testCase.name).toBe(false);
-      }
-    }
+    await Promise.all(
+      cases.map(async (testCase) => {
+        const res = await audit({
+          agents: { defaults: { model: { primary: testCase.model } } },
+        });
+        for (const expected of testCase.expectedFindings ?? []) {
+          expect(hasFinding(res, expected.checkId, expected.severity), testCase.name).toBe(true);
+        }
+        if (testCase.expectedAbsentCheckId) {
+          expect(hasFinding(res, testCase.expectedAbsentCheckId), testCase.name).toBe(false);
+        }
+      }),
+    );
   });
 
   it("warns when hooks token looks short", async () => {
@@ -1780,16 +2031,18 @@ describe("security audit", () => {
         expectedSeverity: "critical",
       },
     ];
-    for (const testCase of cases) {
-      const res = await audit(testCase.cfg);
-      expect(
-        hasFinding(res, "hooks.request_session_key_enabled", testCase.expectedSeverity),
-        testCase.name,
-      ).toBe(true);
-      if (testCase.expectsPrefixesMissing) {
-        expect(hasFinding(res, "hooks.request_session_key_prefixes_missing", "warn")).toBe(true);
-      }
-    }
+    await Promise.all(
+      cases.map(async (testCase) => {
+        const res = await audit(testCase.cfg);
+        expect(
+          hasFinding(res, "hooks.request_session_key_enabled", testCase.expectedSeverity),
+          testCase.name,
+        ).toBe(true);
+        if (testCase.expectsPrefixesMissing) {
+          expect(hasFinding(res, "hooks.request_session_key_prefixes_missing", "warn")).toBe(true);
+        }
+      }),
+    );
   });
 
   it("scores gateway HTTP no-auth findings by exposure", async () => {
@@ -1824,16 +2077,18 @@ describe("security audit", () => {
       },
     ];
 
-    for (const testCase of cases) {
-      const res = await audit(testCase.cfg, { env: {} });
-      expectFinding(res, "gateway.http.no_auth", testCase.expectedSeverity);
-      if (testCase.detailIncludes) {
-        const finding = res.findings.find((entry) => entry.checkId === "gateway.http.no_auth");
-        for (const text of testCase.detailIncludes) {
-          expect(finding?.detail, `${testCase.name}:${text}`).toContain(text);
+    await Promise.all(
+      cases.map(async (testCase) => {
+        const res = await audit(testCase.cfg, { env: {} });
+        expectFinding(res, "gateway.http.no_auth", testCase.expectedSeverity);
+        if (testCase.detailIncludes) {
+          const finding = res.findings.find((entry) => entry.checkId === "gateway.http.no_auth");
+          for (const text of testCase.detailIncludes) {
+            expect(finding?.detail, `${testCase.name}:${text}`).toContain(text);
+          }
         }
-      }
-    }
+      }),
+    );
   });
 
   it("does not report gateway.http.no_auth when auth mode is token", async () => {
@@ -2442,18 +2697,6 @@ description: test skill
   });
 
   describe("maybeProbeGateway auth selection", () => {
-    let envSnapshot: ReturnType<typeof captureEnv>;
-
-    beforeEach(() => {
-      envSnapshot = captureEnv(["OPENCLAW_GATEWAY_TOKEN", "OPENCLAW_GATEWAY_PASSWORD"]);
-      delete process.env.OPENCLAW_GATEWAY_TOKEN;
-      delete process.env.OPENCLAW_GATEWAY_PASSWORD;
-    });
-
-    afterEach(() => {
-      envSnapshot.restore();
-    });
-
     const makeProbeCapture = () => {
       let capturedAuth: { token?: string; password?: string } | undefined;
       return {
@@ -2468,15 +2711,15 @@ description: test skill
       };
     };
 
-    const setProbeEnv = (env?: { token?: string; password?: string }) => {
-      delete process.env.OPENCLAW_GATEWAY_TOKEN;
-      delete process.env.OPENCLAW_GATEWAY_PASSWORD;
+    const makeProbeEnv = (env?: { token?: string; password?: string }) => {
+      const probeEnv: NodeJS.ProcessEnv = {};
       if (env?.token !== undefined) {
-        process.env.OPENCLAW_GATEWAY_TOKEN = env.token;
+        probeEnv.OPENCLAW_GATEWAY_TOKEN = env.token;
       }
       if (env?.password !== undefined) {
-        process.env.OPENCLAW_GATEWAY_PASSWORD = env.password;
+        probeEnv.OPENCLAW_GATEWAY_PASSWORD = env.password;
       }
+      return probeEnv;
     };
 
     it("applies token precedence across local/remote gateway modes", async () => {
@@ -2538,12 +2781,18 @@ description: test skill
         },
       ];
 
-      for (const testCase of cases) {
-        setProbeEnv(testCase.env);
-        const { probeGatewayFn, getAuth } = makeProbeCapture();
-        await audit(testCase.cfg, { deep: true, deepTimeoutMs: 50, probeGatewayFn });
-        expect(getAuth()?.token, testCase.name).toBe(testCase.expectedToken);
-      }
+      await Promise.all(
+        cases.map(async (testCase) => {
+          const { probeGatewayFn, getAuth } = makeProbeCapture();
+          await audit(testCase.cfg, {
+            deep: true,
+            deepTimeoutMs: 50,
+            probeGatewayFn,
+            env: makeProbeEnv(testCase.env),
+          });
+          expect(getAuth()?.token, testCase.name).toBe(testCase.expectedToken);
+        }),
+      );
     });
 
     it("applies password precedence for remote gateways", async () => {
@@ -2576,12 +2825,18 @@ description: test skill
         },
       ];
 
-      for (const testCase of cases) {
-        setProbeEnv(testCase.env);
-        const { probeGatewayFn, getAuth } = makeProbeCapture();
-        await audit(testCase.cfg, { deep: true, deepTimeoutMs: 50, probeGatewayFn });
-        expect(getAuth()?.password, testCase.name).toBe(testCase.expectedPassword);
-      }
+      await Promise.all(
+        cases.map(async (testCase) => {
+          const { probeGatewayFn, getAuth } = makeProbeCapture();
+          await audit(testCase.cfg, {
+            deep: true,
+            deepTimeoutMs: 50,
+            probeGatewayFn,
+            env: makeProbeEnv(testCase.env),
+          });
+          expect(getAuth()?.password, testCase.name).toBe(testCase.expectedPassword);
+        }),
+      );
     });
   });
 });

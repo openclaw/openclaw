@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, vi } from "vitest";
 import type { MockFn } from "../test-utils/vitest-mock-fn.js";
-import type { CronEvent } from "./service.js";
+import type { CronEvent, CronServiceDeps } from "./service.js";
 import { CronService } from "./service.js";
 import { createCronServiceState, type CronServiceState } from "./service/state.js";
 import type { CronJob } from "./types.js";
@@ -138,6 +138,42 @@ export function createStartedCronServiceWithFinishedBarrier(params: {
     onEvent: finished.onEvent,
   });
   return { cron, enqueueSystemEvent, requestHeartbeatNow, finished };
+}
+
+export async function withCronServiceForTest(
+  params: {
+    makeStorePath: () => Promise<{ storePath: string; cleanup: () => Promise<void> }>;
+    logger: ReturnType<typeof createNoopLogger>;
+    cronEnabled: boolean;
+    runIsolatedAgentJob?: CronServiceDeps["runIsolatedAgentJob"];
+  },
+  run: (context: {
+    cron: CronService;
+    enqueueSystemEvent: ReturnType<typeof vi.fn>;
+    requestHeartbeatNow: ReturnType<typeof vi.fn>;
+  }) => Promise<void>,
+): Promise<void> {
+  const store = await params.makeStorePath();
+  const enqueueSystemEvent = vi.fn();
+  const requestHeartbeatNow = vi.fn();
+  const cron = new CronService({
+    cronEnabled: params.cronEnabled,
+    storePath: store.storePath,
+    log: params.logger,
+    enqueueSystemEvent,
+    requestHeartbeatNow,
+    runIsolatedAgentJob:
+      params.runIsolatedAgentJob ??
+      (vi.fn(async () => ({ status: "ok" as const, summary: "done" })) as never),
+  });
+
+  await cron.start();
+  try {
+    await run({ cron, enqueueSystemEvent, requestHeartbeatNow });
+  } finally {
+    cron.stop();
+    await store.cleanup();
+  }
 }
 
 export function createRunningCronServiceState(params: {

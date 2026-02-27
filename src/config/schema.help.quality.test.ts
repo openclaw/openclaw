@@ -101,6 +101,7 @@ const TARGET_KEYS = [
   "models.providers.*.auth",
   "models.providers.*.authHeader",
   "gateway.reload.mode",
+  "gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback",
   "gateway.controlUi.allowInsecureAuth",
   "gateway.controlUi.dangerouslyDisableDeviceAuth",
   "cron",
@@ -110,6 +111,9 @@ const TARGET_KEYS = [
   "cron.webhook",
   "cron.webhookToken",
   "cron.sessionRetention",
+  "cron.runLog",
+  "cron.runLog.maxBytes",
+  "cron.runLog.keepLines",
   "session",
   "session.scope",
   "session.dmScope",
@@ -150,6 +154,9 @@ const TARGET_KEYS = [
   "session.maintenance.pruneDays",
   "session.maintenance.maxEntries",
   "session.maintenance.rotateBytes",
+  "session.maintenance.resetArchiveRetention",
+  "session.maintenance.maxDiskBytes",
+  "session.maintenance.highWaterBytes",
   "approvals",
   "approvals.exec",
   "approvals.exec.enabled",
@@ -513,6 +520,7 @@ const FINAL_BACKLOG_TARGET_KEYS = [
   "browser.snapshotDefaults.mode",
   "browser.ssrfPolicy",
   "browser.ssrfPolicy.allowPrivateNetwork",
+  "browser.ssrfPolicy.dangerouslyAllowPrivateNetwork",
   "browser.ssrfPolicy.allowedHostnames",
   "browser.ssrfPolicy.hostnameAllowlist",
   "diagnostics.enabled",
@@ -536,6 +544,22 @@ const FINAL_BACKLOG_TARGET_KEYS = [
 ] as const;
 
 describe("config help copy quality", () => {
+  function expectOperationalGuidance(
+    keys: readonly string[],
+    guidancePattern: RegExp,
+    minLength = 80,
+  ) {
+    for (const key of keys) {
+      const help = FIELD_HELP[key];
+      expect(help, `missing help for ${key}`).toBeDefined();
+      expect(help.length, `help too short for ${key}`).toBeGreaterThanOrEqual(minLength);
+      expect(
+        guidancePattern.test(help),
+        `help should include operational guidance for ${key}`,
+      ).toBe(true);
+    }
+  }
+
   it("keeps root section labels and help complete", () => {
     for (const key of ROOT_SECTIONS) {
       expect(FIELD_LABELS[key], `missing root label for ${key}`).toBeDefined();
@@ -550,57 +574,31 @@ describe("config help copy quality", () => {
   });
 
   it("covers the target confusing fields with non-trivial explanations", () => {
-    for (const key of TARGET_KEYS) {
-      const help = FIELD_HELP[key];
-      expect(help, `missing help for ${key}`).toBeDefined();
-      expect(help.length, `help too short for ${key}`).toBeGreaterThanOrEqual(80);
-      expect(
-        /(default|keep|use|enable|disable|controls|selects|sets|defines)/i.test(help),
-        `help should include operational guidance for ${key}`,
-      ).toBe(true);
-    }
+    expectOperationalGuidance(
+      TARGET_KEYS,
+      /(default|keep|use|enable|disable|controls|selects|sets|defines)/i,
+    );
   });
 
   it("covers tools/hooks help keys with non-trivial operational guidance", () => {
-    for (const key of TOOLS_HOOKS_TARGET_KEYS) {
-      const help = FIELD_HELP[key];
-      expect(help, `missing help for ${key}`).toBeDefined();
-      expect(help.length, `help too short for ${key}`).toBeGreaterThanOrEqual(80);
-      expect(
-        /(default|keep|use|enable|disable|controls|set|sets|increase|lower|prefer|tune|avoid|choose|when)/i.test(
-          help,
-        ),
-        `help should include operational guidance for ${key}`,
-      ).toBe(true);
-    }
+    expectOperationalGuidance(
+      TOOLS_HOOKS_TARGET_KEYS,
+      /(default|keep|use|enable|disable|controls|set|sets|increase|lower|prefer|tune|avoid|choose|when)/i,
+    );
   });
 
   it("covers channels/agents help keys with non-trivial operational guidance", () => {
-    for (const key of CHANNELS_AGENTS_TARGET_KEYS) {
-      const help = FIELD_HELP[key];
-      expect(help, `missing help for ${key}`).toBeDefined();
-      expect(help.length, `help too short for ${key}`).toBeGreaterThanOrEqual(80);
-      expect(
-        /(default|keep|use|enable|disable|controls|set|sets|increase|lower|prefer|tune|avoid|choose|when)/i.test(
-          help,
-        ),
-        `help should include operational guidance for ${key}`,
-      ).toBe(true);
-    }
+    expectOperationalGuidance(
+      CHANNELS_AGENTS_TARGET_KEYS,
+      /(default|keep|use|enable|disable|controls|set|sets|increase|lower|prefer|tune|avoid|choose|when)/i,
+    );
   });
 
   it("covers final backlog help keys with non-trivial operational guidance", () => {
-    for (const key of FINAL_BACKLOG_TARGET_KEYS) {
-      const help = FIELD_HELP[key];
-      expect(help, `missing help for ${key}`).toBeDefined();
-      expect(help.length, `help too short for ${key}`).toBeGreaterThanOrEqual(80);
-      expect(
-        /(default|keep|use|enable|disable|controls|set|sets|increase|lower|prefer|tune|avoid|choose|when)/i.test(
-          help,
-        ),
-        `help should include operational guidance for ${key}`,
-      ).toBe(true);
-    }
+    expectOperationalGuidance(
+      FINAL_BACKLOG_TARGET_KEYS,
+      /(default|keep|use|enable|disable|controls|set|sets|increase|lower|prefer|tune|avoid|choose|when)/i,
+    );
   });
 
   it("documents option behavior for enum-style fields", () => {
@@ -673,6 +671,27 @@ describe("config help copy quality", () => {
     const deprecated = FIELD_HELP["session.maintenance.pruneDays"];
     expect(/deprecated/i.test(deprecated)).toBe(true);
     expect(deprecated.includes("session.maintenance.pruneAfter")).toBe(true);
+
+    const resetRetention = FIELD_HELP["session.maintenance.resetArchiveRetention"];
+    expect(resetRetention.includes(".reset.")).toBe(true);
+    expect(/false/i.test(resetRetention)).toBe(true);
+
+    const maxDisk = FIELD_HELP["session.maintenance.maxDiskBytes"];
+    expect(maxDisk.includes("500mb")).toBe(true);
+
+    const highWater = FIELD_HELP["session.maintenance.highWaterBytes"];
+    expect(highWater.includes("80%")).toBe(true);
+  });
+
+  it("documents cron run-log retention controls", () => {
+    const runLog = FIELD_HELP["cron.runLog"];
+    expect(runLog.includes("cron/runs")).toBe(true);
+
+    const maxBytes = FIELD_HELP["cron.runLog.maxBytes"];
+    expect(maxBytes.includes("2mb")).toBe(true);
+
+    const keepLines = FIELD_HELP["cron.runLog.keepLines"];
+    expect(keepLines.includes("2000")).toBe(true);
   });
 
   it("documents approvals filters and target semantics", () => {

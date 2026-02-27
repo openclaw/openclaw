@@ -216,17 +216,17 @@ describe("resolveProviderAuths key normalization", () => {
   it("keeps raw google token when token payload is not JSON", async () => {
     await withSuiteHome(async (home) => {
       await writeAuthProfiles(home, {
-        "google-antigravity:default": {
+        "google-gemini-cli:default": {
           type: "token",
-          provider: "google-antigravity",
+          provider: "google-gemini-cli",
           token: "plain-google-token",
         },
       });
 
       const auths = await resolveProviderAuths({
-        providers: ["google-antigravity"],
+        providers: ["google-gemini-cli"],
       });
-      expect(auths).toEqual([{ provider: "google-antigravity", token: "plain-google-token" }]);
+      expect(auths).toEqual([{ provider: "google-gemini-cli", token: "plain-google-token" }]);
     }, {});
   });
 

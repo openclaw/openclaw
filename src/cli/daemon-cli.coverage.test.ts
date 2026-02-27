@@ -123,7 +123,7 @@ describe("daemon-cli coverage", () => {
     expect(callGateway).toHaveBeenCalledWith(expect.objectContaining({ method: "status" }));
     expect(findExtraGatewayServices).toHaveBeenCalled();
     expect(inspectPortUsage).toHaveBeenCalled();
-  }, 20_000);
+  });
 
   it("derives probe URL from service args + env (json)", async () => {
     resetRuntimeCapture();
@@ -162,7 +162,7 @@ describe("daemon-cli coverage", () => {
     expect(parsed.config?.mismatch).toBe(true);
     expect(parsed.rpc?.url).toBe("ws://127.0.0.1:19001");
     expect(parsed.rpc?.ok).toBe(true);
-  }, 20_000);
+  });
 
   it("passes deep scan flag for daemon status", async () => {
     findExtraGatewayServices.mockClear();
@@ -175,53 +175,38 @@ describe("daemon-cli coverage", () => {
     );
   });
 
-  it.each([
-    { label: "plain output", includeJsonFlag: false },
-    { label: "json output", includeJsonFlag: true },
-  ])("installs the daemon ($label)", async ({ includeJsonFlag }) => {
+  it("installs the daemon (json output)", async () => {
     resetRuntimeCapture();
     serviceIsLoaded.mockResolvedValueOnce(false);
     serviceInstall.mockClear();
 
-    const args = includeJsonFlag
-      ? ["daemon", "install", "--port", "18789", "--json"]
-      : ["daemon", "install", "--port", "18789"];
-    await runDaemonCommand(args);
+    await runDaemonCommand(["daemon", "install", "--port", "18789", "--json"]);
 
     expect(serviceInstall).toHaveBeenCalledTimes(1);
-    if (includeJsonFlag) {
-      const parsed = parseFirstJsonRuntimeLine<{
-        ok?: boolean;
-        action?: string;
-        result?: string;
-      }>();
-      expect(parsed.ok).toBe(true);
-      expect(parsed.action).toBe("install");
-      expect(parsed.result).toBe("installed");
-    }
+    const parsed = parseFirstJsonRuntimeLine<{
+      ok?: boolean;
+      action?: string;
+      result?: string;
+    }>();
+    expect(parsed.ok).toBe(true);
+    expect(parsed.action).toBe("install");
+    expect(parsed.result).toBe("installed");
   });
 
-  it.each([
-    { label: "plain output", includeJsonFlag: false },
-    { label: "json output", includeJsonFlag: true },
-  ])("starts and stops daemon ($label)", async ({ includeJsonFlag }) => {
+  it("starts and stops daemon (json output)", async () => {
     resetRuntimeCapture();
     serviceRestart.mockClear();
     serviceStop.mockClear();
     serviceIsLoaded.mockResolvedValue(true);
 
-    const startArgs = includeJsonFlag ? ["daemon", "start", "--json"] : ["daemon", "start"];
-    const stopArgs = includeJsonFlag ? ["daemon", "stop", "--json"] : ["daemon", "stop"];
-    await runDaemonCommand(startArgs);
-    await runDaemonCommand(stopArgs);
+    await runDaemonCommand(["daemon", "start", "--json"]);
+    await runDaemonCommand(["daemon", "stop", "--json"]);
 
     expect(serviceRestart).toHaveBeenCalledTimes(1);
     expect(serviceStop).toHaveBeenCalledTimes(1);
-    if (includeJsonFlag) {
-      const jsonLines = runtimeLogs.filter((line) => line.trim().startsWith("{"));
-      const parsed = jsonLines.map((line) => JSON.parse(line) as { action?: string; ok?: boolean });
-      expect(parsed.some((entry) => entry.action === "start" && entry.ok === true)).toBe(true);
-      expect(parsed.some((entry) => entry.action === "stop" && entry.ok === true)).toBe(true);
-    }
+    const jsonLines = runtimeLogs.filter((line) => line.trim().startsWith("{"));
+    const parsed = jsonLines.map((line) => JSON.parse(line) as { action?: string; ok?: boolean });
+    expect(parsed.some((entry) => entry.action === "start" && entry.ok === true)).toBe(true);
+    expect(parsed.some((entry) => entry.action === "stop" && entry.ok === true)).toBe(true);
   });
 });

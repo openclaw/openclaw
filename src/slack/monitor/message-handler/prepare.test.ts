@@ -60,6 +60,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
       dmEnabled: true,
       dmPolicy: "open",
       allowFrom: [],
+      allowNameMatching: false,
       groupDmEnabled: true,
       groupDmChannels: [],
       defaultRequireMention: params.defaultRequireMention ?? true,

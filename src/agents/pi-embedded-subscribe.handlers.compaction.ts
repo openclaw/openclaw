@@ -24,8 +24,12 @@ export function handleAutoCompactionStart(ctx: EmbeddedPiSubscribeContext) {
       .runBeforeCompaction(
         {
           messageCount: ctx.params.session.messages?.length ?? 0,
+          messages: ctx.params.session.messages,
+          sessionFile: ctx.params.session.sessionFile,
         },
-        {},
+        {
+          sessionKey: ctx.params.sessionKey,
+        },
       )
       .catch((err) => {
         ctx.log.warn(`before_compaction hook failed: ${String(err)}`);

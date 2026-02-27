@@ -6,6 +6,8 @@ import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { fetchRemoteMedia } from "../media/fetch.js";
+import { withEnvAsync } from "../test-utils/env.js";
+import { clearMediaUnderstandingBinaryCacheForTests } from "./runner.js";
 
 vi.mock("../agents/model-auth.js", () => ({
   resolveApiKeyForProvider: vi.fn(async () => ({
@@ -115,12 +117,38 @@ async function createTempMediaFile(params: { fileName: string; content: Buffer |
   return mediaPath;
 }
 
+async function createMockExecutable(dir: string, name: string) {
+  const executablePath = path.join(dir, name);
+  await fs.writeFile(executablePath, "echo mocked\n", { mode: 0o755 });
+  return executablePath;
+}
+
+async function withMediaAutoDetectEnv<T>(
+  env: Record<string, string | undefined>,
+  run: () => Promise<T>,
+): Promise<T> {
+  return await withEnvAsync(
+    {
+      SHERPA_ONNX_MODEL_DIR: undefined,
+      WHISPER_CPP_MODEL: undefined,
+      OPENAI_API_KEY: undefined,
+      GROQ_API_KEY: undefined,
+      DEEPGRAM_API_KEY: undefined,
+      GEMINI_API_KEY: undefined,
+      OPENCLAW_AGENT_DIR: undefined,
+      PI_CODING_AGENT_DIR: undefined,
+      ...env,
+    },
+    run,
+  );
+}
+
 async function createAudioCtx(params?: {
   body?: string;
   fileName?: string;
   mediaType?: string;
   content?: Buffer | string;
-}) {
+}): Promise<MsgContext> {
   const mediaPath = await createTempMediaFile({
     fileName: params?.fileName ?? "note.ogg",
     content: params?.content ?? Buffer.from([0, 255, 0, 1, 2, 3, 4, 5, 6, 7, 8]),
@@ -130,6 +158,24 @@ async function createAudioCtx(params?: {
     MediaPath: mediaPath,
     MediaType: params?.mediaType ?? "audio/ogg",
   } satisfies MsgContext;
+}
+
+async function setupAudioAutoDetectCase(stdout: string): Promise<{
+  ctx: MsgContext;
+  cfg: OpenClawConfig;
+}> {
+  const ctx = await createAudioCtx({
+    fileName: "sample.wav",
+    mediaType: "audio/wav",
+    content: "audio",
+  });
+  const cfg: OpenClawConfig = { tools: { media: { audio: {} } } };
+  const execModule = await import("../process/exec.js");
+  vi.mocked(execModule.runExec).mockResolvedValueOnce({
+    stdout,
+    stderr: "",
+  });
+  return { ctx, cfg };
 }
 
 async function applyWithDisabledMedia(params: {
@@ -179,6 +225,7 @@ describe("applyMediaUnderstanding", () => {
       contentType: "audio/ogg",
       fileName: "note.ogg",
     });
+    clearMediaUnderstandingBinaryCacheForTests();
   });
 
   afterAll(async () => {
@@ -355,6 +402,99 @@ describe("applyMediaUnderstanding", () => {
     expect(result.appliedAudio).toBe(true);
     expect((ctx as unknown as { Transcript?: string }).Transcript).toBe("cli transcript");
     expect(ctx.Body).toBe("[Audio]\nTranscript:\ncli transcript");
+  });
+
+  it("auto-detects sherpa for audio when binary and model files are available", async () => {
+    const binDir = await createTempMediaDir();
+    const modelDir = await createTempMediaDir();
+    await createMockExecutable(binDir, "sherpa-onnx-offline");
+    await fs.writeFile(path.join(modelDir, "tokens.txt"), "a");
+    await fs.writeFile(path.join(modelDir, "encoder.onnx"), "a");
+    await fs.writeFile(path.join(modelDir, "decoder.onnx"), "a");
+    await fs.writeFile(path.join(modelDir, "joiner.onnx"), "a");
+
+    const { ctx, cfg } = await setupAudioAutoDetectCase('{"text":"sherpa ok"}');
+    const execModule = await import("../process/exec.js");
+    const mockedRunExec = vi.mocked(execModule.runExec);
+
+    await withMediaAutoDetectEnv(
+      {
+        PATH: binDir,
+        SHERPA_ONNX_MODEL_DIR: modelDir,
+      },
+      async () => {
+        const result = await applyMediaUnderstanding({ ctx, cfg });
+        expect(result.appliedAudio).toBe(true);
+      },
+    );
+
+    expect(ctx.Transcript).toBe("sherpa ok");
+    expect(mockedRunExec).toHaveBeenCalledWith(
+      "sherpa-onnx-offline",
+      expect.any(Array),
+      expect.any(Object),
+    );
+  });
+
+  it("auto-detects whisper-cli when sherpa is unavailable", async () => {
+    const binDir = await createTempMediaDir();
+    const modelDir = await createTempMediaDir();
+    await createMockExecutable(binDir, "whisper-cli");
+    const modelPath = path.join(modelDir, "tiny.bin");
+    await fs.writeFile(modelPath, "model");
+
+    const { ctx, cfg } = await setupAudioAutoDetectCase("whisper cpp ok\n");
+    const execModule = await import("../process/exec.js");
+    const mockedRunExec = vi.mocked(execModule.runExec);
+
+    await withMediaAutoDetectEnv(
+      {
+        PATH: binDir,
+        WHISPER_CPP_MODEL: modelPath,
+      },
+      async () => {
+        const result = await applyMediaUnderstanding({ ctx, cfg });
+        expect(result.appliedAudio).toBe(true);
+      },
+    );
+
+    expect(ctx.Transcript).toBe("whisper cpp ok");
+    expect(mockedRunExec).toHaveBeenCalledWith(
+      "whisper-cli",
+      expect.any(Array),
+      expect.any(Object),
+    );
+  });
+
+  it("skips audio auto-detect when no supported binaries or provider keys are available", async () => {
+    const emptyBinDir = await createTempMediaDir();
+    const isolatedAgentDir = await createTempMediaDir();
+    const ctx = await createAudioCtx({
+      fileName: "sample.wav",
+      mediaType: "audio/wav",
+      content: "audio",
+    });
+    const cfg: OpenClawConfig = { tools: { media: { audio: {} } } };
+
+    const execModule = await import("../process/exec.js");
+    const mockedRunExec = vi.mocked(execModule.runExec);
+    mockedRunExec.mockReset();
+
+    await withMediaAutoDetectEnv(
+      {
+        PATH: emptyBinDir,
+        OPENCLAW_AGENT_DIR: isolatedAgentDir,
+        PI_CODING_AGENT_DIR: isolatedAgentDir,
+      },
+      async () => {
+        const result = await applyMediaUnderstanding({ ctx, cfg });
+        expect(result.appliedAudio).toBe(false);
+      },
+    );
+
+    expect(ctx.Transcript).toBeUndefined();
+    expect(ctx.Body).toBe("<media:audio>");
+    expect(mockedRunExec).not.toHaveBeenCalled();
   });
 
   it("uses CLI image understanding and preserves caption for commands", async () => {

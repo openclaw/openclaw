@@ -91,40 +91,59 @@ describe("web auto-reply", () => {
     expect(() => formatEnvelopeTimestamp(d, " America/Los_Angeles ")).not.toThrow();
   });
 
-  it("reconnects after a connection close", async () => {
-    const closeResolvers: Array<() => void> = [];
-    const sleep = vi.fn(async () => {});
-    const listenerFactory = vi.fn(async () => {
-      let _resolve!: () => void;
-      const onClose = new Promise<void>((res) => {
-        _resolve = res;
-        closeResolvers.push(res);
-      });
-      return { close: vi.fn(), onClose };
-    });
-    const { runtime, controller, run } = startMonitorWebChannel({
-      monitorWebChannelFn: monitorWebChannel as never,
-      listenerFactory,
-      sleep,
-    });
-
-    await Promise.resolve();
-    expect(listenerFactory).toHaveBeenCalledTimes(1);
-
-    closeResolvers[0]?.();
-    await vi.waitFor(
-      () => {
-        expect(listenerFactory).toHaveBeenCalledTimes(2);
+  it("handles reconnect progress and max-attempt stop behavior", async () => {
+    for (const scenario of [
+      {
+        reconnect: { initialMs: 10, maxMs: 10, maxAttempts: 3, factor: 1.1 },
+        expectedCallsAfterFirstClose: 2,
+        closeTwiceAndFinish: false,
+        expectedError: "Retry 1",
       },
-      { timeout: 500, interval: 5 },
-    );
-    expect(listenerFactory).toHaveBeenCalledTimes(2);
-    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("Retry 1"));
+      {
+        reconnect: { initialMs: 5, maxMs: 5, maxAttempts: 2, factor: 1.1 },
+        expectedCallsAfterFirstClose: 2,
+        closeTwiceAndFinish: true,
+        expectedError: "max attempts reached",
+      },
+    ]) {
+      const closeResolvers: Array<() => void> = [];
+      const sleep = vi.fn(async () => {});
+      const listenerFactory = vi.fn(async () => {
+        const onClose = new Promise<void>((res) => {
+          closeResolvers.push(res);
+        });
+        return { close: vi.fn(), onClose };
+      });
+      const { runtime, controller, run } = startMonitorWebChannel({
+        monitorWebChannelFn: monitorWebChannel as never,
+        listenerFactory,
+        sleep,
+        reconnect: scenario.reconnect,
+      });
 
-    controller.abort();
-    closeResolvers[1]?.();
-    await Promise.resolve();
-    await run;
+      await Promise.resolve();
+      expect(listenerFactory).toHaveBeenCalledTimes(1);
+
+      closeResolvers.shift()?.();
+      await vi.waitFor(
+        () => {
+          expect(listenerFactory).toHaveBeenCalledTimes(scenario.expectedCallsAfterFirstClose);
+        },
+        { timeout: 250, interval: 2 },
+      );
+
+      if (scenario.closeTwiceAndFinish) {
+        closeResolvers.shift()?.();
+        await run;
+      } else {
+        controller.abort();
+        closeResolvers.shift()?.();
+        await Promise.resolve();
+        await run;
+      }
+
+      expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining(scenario.expectedError));
+    }
   });
   it("forces reconnect when watchdog closes without onClose", async () => {
     vi.useFakeTimers();
@@ -166,7 +185,7 @@ describe("web auto-reply", () => {
         () => {
           expect(capturedOnMessage).toBeTypeOf("function");
         },
-        { timeout: 500, interval: 5 },
+        { timeout: 250, interval: 2 },
       );
 
       const reply = vi.fn().mockResolvedValue(undefined);
@@ -193,7 +212,7 @@ describe("web auto-reply", () => {
         () => {
           expect(listenerFactory).toHaveBeenCalledTimes(2);
         },
-        { timeout: 500, interval: 5 },
+        { timeout: 250, interval: 2 },
       );
 
       controller.abort();
@@ -203,51 +222,6 @@ describe("web auto-reply", () => {
     } finally {
       vi.useRealTimers();
     }
-  }, 15_000);
-
-  it("stops after hitting max reconnect attempts", { timeout: 60_000 }, async () => {
-    const closeResolvers: Array<() => void> = [];
-    const sleep = vi.fn(async () => {});
-    const listenerFactory = vi.fn(async () => {
-      const onClose = new Promise<void>((res) => closeResolvers.push(res));
-      return { close: vi.fn(), onClose };
-    });
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    };
-
-    const run = monitorWebChannel(
-      false,
-      listenerFactory as never,
-      true,
-      async () => ({ text: "ok" }),
-      runtime as never,
-      undefined,
-      {
-        heartbeatSeconds: 1,
-        reconnect: { initialMs: 5, maxMs: 5, maxAttempts: 2, factor: 1.1 },
-        sleep,
-      },
-    );
-
-    await Promise.resolve();
-    expect(listenerFactory).toHaveBeenCalledTimes(1);
-
-    closeResolvers.shift()?.();
-    await vi.waitFor(
-      () => {
-        expect(listenerFactory).toHaveBeenCalledTimes(2);
-      },
-      { timeout: 500, interval: 5 },
-    );
-    expect(listenerFactory).toHaveBeenCalledTimes(2);
-
-    closeResolvers.shift()?.();
-    await run;
-
-    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("max attempts reached"));
   });
 
   it("processes inbound messages without batching and preserves timestamps", async () => {

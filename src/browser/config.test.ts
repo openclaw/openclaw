@@ -177,14 +177,25 @@ describe("browser config", () => {
       },
     });
     expect(resolved.ssrfPolicy).toEqual({
-      allowPrivateNetwork: true,
+      dangerouslyAllowPrivateNetwork: true,
       allowedHostnames: ["localhost"],
       hostnameAllowlist: ["*.trusted.example"],
     });
   });
 
-  it("keeps browser SSRF policy undefined when not configured", () => {
+  it("defaults browser SSRF policy to trusted-network mode", () => {
     const resolved = resolveBrowserConfig({});
-    expect(resolved.ssrfPolicy).toBeUndefined();
+    expect(resolved.ssrfPolicy).toEqual({
+      dangerouslyAllowPrivateNetwork: true,
+    });
+  });
+
+  it("supports explicit strict mode by disabling private network access", () => {
+    const resolved = resolveBrowserConfig({
+      ssrfPolicy: {
+        dangerouslyAllowPrivateNetwork: false,
+      },
+    });
+    expect(resolved.ssrfPolicy).toEqual({});
   });
 });

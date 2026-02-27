@@ -232,62 +232,6 @@ describe("resolveModel", () => {
     });
   });
 
-  it("builds an antigravity forward-compat fallback for claude-opus-4-6-thinking", () => {
-    mockDiscoveredModel({
-      provider: "google-antigravity",
-      modelId: "claude-opus-4-5-thinking",
-      templateModel: buildForwardCompatTemplate({
-        id: "claude-opus-4-5-thinking",
-        name: "Claude Opus 4.5 Thinking",
-        provider: "google-antigravity",
-        api: "google-gemini-cli",
-        baseUrl: "https://daily-cloudcode-pa.sandbox.googleapis.com",
-      }),
-    });
-
-    expectResolvedForwardCompatFallback({
-      provider: "google-antigravity",
-      id: "claude-opus-4-6-thinking",
-      expectedModel: {
-        provider: "google-antigravity",
-        id: "claude-opus-4-6-thinking",
-        api: "google-gemini-cli",
-        baseUrl: "https://daily-cloudcode-pa.sandbox.googleapis.com",
-        reasoning: true,
-        contextWindow: 200000,
-        maxTokens: 64000,
-      },
-    });
-  });
-
-  it("builds an antigravity forward-compat fallback for claude-opus-4-6", () => {
-    mockDiscoveredModel({
-      provider: "google-antigravity",
-      modelId: "claude-opus-4-5",
-      templateModel: buildForwardCompatTemplate({
-        id: "claude-opus-4-5",
-        name: "Claude Opus 4.5",
-        provider: "google-antigravity",
-        api: "google-gemini-cli",
-        baseUrl: "https://daily-cloudcode-pa.sandbox.googleapis.com",
-      }),
-    });
-
-    expectResolvedForwardCompatFallback({
-      provider: "google-antigravity",
-      id: "claude-opus-4-6",
-      expectedModel: {
-        provider: "google-antigravity",
-        id: "claude-opus-4-6",
-        api: "google-gemini-cli",
-        baseUrl: "https://daily-cloudcode-pa.sandbox.googleapis.com",
-        reasoning: true,
-        contextWindow: 200000,
-        maxTokens: 64000,
-      },
-    });
-  });
-
   it("builds a zai forward-compat fallback for glm-5", () => {
     mockDiscoveredModel({
       provider: "zai",

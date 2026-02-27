@@ -115,6 +115,28 @@ function createEaccesProcStatSpy() {
   });
 }
 
+function createPortProbeConnectionSpy(result: "connect" | "refused") {
+  return vi.spyOn(net, "createConnection").mockImplementation(() => {
+    const socket = new EventEmitter() as net.Socket;
+    socket.destroy = vi.fn();
+    setImmediate(() => {
+      if (result === "connect") {
+        socket.emit("connect");
+        return;
+      }
+      socket.emit("error", Object.assign(new Error("ECONNREFUSED"), { code: "ECONNREFUSED" }));
+    });
+    return socket;
+  });
+}
+
+async function writeRecentLockFile(env: NodeJS.ProcessEnv, startTime = 111) {
+  await writeLockFile(env, {
+    startTime,
+    createdAt: new Date().toISOString(),
+  });
+}
+
 describe("gateway lock", () => {
   beforeAll(async () => {
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gateway-lock-"));
@@ -214,18 +236,8 @@ describe("gateway lock", () => {
   it("treats lock as stale when owner pid is alive but configured port is free", async () => {
     vi.useRealTimers();
     const env = await makeEnv();
-    await writeLockFile(env, {
-      startTime: 111,
-      createdAt: new Date().toISOString(),
-    });
-    const connectSpy = vi.spyOn(net, "createConnection").mockImplementation(() => {
-      const socket = new EventEmitter() as net.Socket;
-      socket.destroy = vi.fn();
-      setImmediate(() => {
-        socket.emit("error", Object.assign(new Error("ECONNREFUSED"), { code: "ECONNREFUSED" }));
-      });
-      return socket;
-    });
+    await writeRecentLockFile(env);
+    const connectSpy = createPortProbeConnectionSpy("refused");
 
     const lock = await acquireForTest(env, {
       timeoutMs: 80,
@@ -242,18 +254,8 @@ describe("gateway lock", () => {
   it("keeps lock when configured port is busy and owner pid is alive", async () => {
     vi.useRealTimers();
     const env = await makeEnv();
-    await writeLockFile(env, {
-      startTime: 111,
-      createdAt: new Date().toISOString(),
-    });
-    const connectSpy = vi.spyOn(net, "createConnection").mockImplementation(() => {
-      const socket = new EventEmitter() as net.Socket;
-      socket.destroy = vi.fn();
-      setImmediate(() => {
-        socket.emit("connect");
-      });
-      return socket;
-    });
+    await writeRecentLockFile(env);
+    const connectSpy = createPortProbeConnectionSpy("connect");
     try {
       const pending = acquireForTest(env, {
         timeoutMs: 20,

@@ -14,10 +14,17 @@ import type {
 import { resolveUserPath } from "../utils.js";
 import { splitShellArgs } from "../utils/shell-argv.js";
 
+export type ResolvedOpenMemoryConfig = {
+  url: string;
+  userId?: string;
+  timeout?: number;
+};
+
 export type ResolvedMemoryBackendConfig = {
   backend: MemoryBackend;
   citations: MemoryCitationsMode;
   qmd?: ResolvedQmdConfig;
+  openmemory?: ResolvedOpenMemoryConfig;
 };
 
 export type ResolvedQmdCollection = {
@@ -300,6 +307,25 @@ export function resolveMemoryBackendConfig(params: {
 }): ResolvedMemoryBackendConfig {
   const backend = params.cfg.memory?.backend ?? DEFAULT_BACKEND;
   const citations = params.cfg.memory?.citations ?? DEFAULT_CITATIONS;
+
+  // Handle OpenMemory backend
+  if (backend === "openmemory") {
+    const omCfg = params.cfg.memory?.openmemory;
+    if (!omCfg?.url) {
+      // No URL configured, fall back to builtin
+      return { backend: "builtin", citations };
+    }
+    return {
+      backend: "openmemory",
+      citations,
+      openmemory: {
+        url: omCfg.url,
+        userId: omCfg.userId,
+        timeout: omCfg.timeout,
+      },
+    };
+  }
+
   if (backend !== "qmd") {
     return { backend: "builtin", citations };
   }

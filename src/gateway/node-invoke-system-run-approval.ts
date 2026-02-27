@@ -17,6 +17,7 @@ type SystemRunParamsLike = {
 
 type ApprovalLookup = {
   getSnapshot: (recordId: string) => ExecApprovalRecord | null;
+  consumeAllowOnce?: (recordId: string) => boolean;
 };
 
 type ApprovalClient = {
@@ -114,6 +115,7 @@ function pickSystemRunParams(raw: Record<string, unknown>): Record<string, unkno
  * bypassing node-host approvals by injecting control fields into `node.invoke`.
  */
 export function sanitizeSystemRunParamsForForwarding(opts: {
+  nodeId?: string | null;
   rawParams: unknown;
   client: ApprovalClient | null;
   execApprovalManager?: ApprovalLookup;
@@ -188,6 +190,30 @@ export function sanitizeSystemRunParamsForForwarding(opts: {
     };
   }
 
+  const targetNodeId = normalizeString(opts.nodeId);
+  if (!targetNodeId) {
+    return {
+      ok: false,
+      message: "node.invoke requires nodeId",
+      details: { code: "MISSING_NODE_ID", runId },
+    };
+  }
+  const approvalNodeId = normalizeString(snapshot.request.nodeId);
+  if (!approvalNodeId) {
+    return {
+      ok: false,
+      message: "approval id missing node binding",
+      details: { code: "APPROVAL_NODE_BINDING_MISSING", runId },
+    };
+  }
+  if (approvalNodeId !== targetNodeId) {
+    return {
+      ok: false,
+      message: "approval id not valid for this node",
+      details: { code: "APPROVAL_NODE_MISMATCH", runId },
+    };
+  }
+
   // Prefer binding by device identity (stable across reconnects / per-call clients like callGateway()).
   // Fallback to connId only when device identity is not available.
   const snapshotDeviceId = snapshot.requestedByDeviceId ?? null;
@@ -220,9 +246,22 @@ export function sanitizeSystemRunParamsForForwarding(opts: {
   }
 
   // Normal path: enforce the decision recorded by the gateway.
-  if (snapshot.decision === "allow-once" || snapshot.decision === "allow-always") {
+  if (snapshot.decision === "allow-once") {
+    if (typeof manager.consumeAllowOnce !== "function" || !manager.consumeAllowOnce(runId)) {
+      return {
+        ok: false,
+        message: "approval required",
+        details: { code: "APPROVAL_REQUIRED", runId },
+      };
+    }
     next.approved = true;
-    next.approvalDecision = snapshot.decision;
+    next.approvalDecision = "allow-once";
+    return { ok: true, params: next };
+  }
+
+  if (snapshot.decision === "allow-always") {
+    next.approved = true;
+    next.approvalDecision = "allow-always";
     return { ok: true, params: next };
   }
 
