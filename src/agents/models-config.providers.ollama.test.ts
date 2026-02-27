@@ -194,4 +194,40 @@ describe("Ollama provider", () => {
     // Native Ollama provider does not need streaming: false workaround
     expect(mockOllamaModel).not.toHaveProperty("params");
   });
+
+  it("should skip discovery when explicit models are configured", async () => {
+    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
+    process.env.OLLAMA_API_KEY = "test-key";
+
+    try {
+      const explicitModels = [
+        {
+          id: "gpt-oss:20b",
+          name: "GPT-OSS 20B",
+          reasoning: false,
+          input: ["text"] as const,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 8192,
+          maxTokens: 81920,
+        },
+      ];
+
+      const providers = await resolveImplicitProviders({
+        agentDir,
+        explicitProviders: {
+          ollama: {
+            baseUrl: "http://remote-ollama:11434",
+            api: "ollama",
+            models: explicitModels,
+          },
+        },
+      });
+
+      // Should use explicit models, not run discovery
+      expect(providers?.ollama?.models).toEqual(explicitModels);
+      expect(providers?.ollama?.baseUrl).toBe("http://remote-ollama:11434");
+    } finally {
+      delete process.env.OLLAMA_API_KEY;
+    }
+  });
 });
