@@ -266,6 +266,49 @@ function compactExistingToolResultsInPlace(params: {
   return reduced;
 }
 
+/**
+ * Fallback: after compacting older tool results, if context is still over budget,
+ * progressively truncate trailing tool results (largest first). We never replace them
+ * with the compaction placeholder -- the agent needs to see *something* from its
+ * latest turn -- but we shrink them so the request fits the provider context window.
+ */
+function truncateTrailingToolResultsToFitBudget(params: {
+  messages: AgentMessage[];
+  compactBeforeIndex: number;
+  contextBudgetChars: number;
+}): void {
+  const { messages, compactBeforeIndex, contextBudgetChars } = params;
+
+  // Collect indices of trailing tool results with their current sizes, largest first.
+  const trailing: Array<{ index: number; chars: number }> = [];
+  for (let i = compactBeforeIndex; i < messages.length; i++) {
+    if (isToolResultMessage(messages[i])) {
+      trailing.push({ index: i, chars: estimateMessageChars(messages[i]) });
+    }
+  }
+  trailing.sort((a, b) => b.chars - a.chars);
+
+  for (const entry of trailing) {
+    const currentChars = estimateContextChars(messages);
+    if (currentChars <= contextBudgetChars) {
+      return;
+    }
+
+    const overflow = currentChars - contextBudgetChars;
+    const msg = messages[entry.index];
+    const msgChars = estimateMessageChars(msg);
+    // Shrink this result to fit: its new budget is its current size minus the overflow,
+    // but keep at least enough room for the truncation notice.
+    const targetChars = Math.max(
+      CONTEXT_LIMIT_TRUNCATION_NOTICE.length * 2,
+      msgChars - overflow,
+    );
+
+    const truncated = truncateToolResultToChars(msg, targetChars);
+    applyMessageMutationInPlace(msg, truncated);
+  }
+}
+
 function applyMessageMutationInPlace(target: AgentMessage, source: AgentMessage): void {
   if (target === source) {
     return;
@@ -310,6 +353,18 @@ function enforceToolResultContextBudgetInPlace(params: {
     charsNeeded: currentChars - contextBudgetChars,
     compactBeforeIndex,
   });
+
+  // Fallback: if still over budget after compacting older results (e.g. huge user
+  // message plus large trailing tool outputs), progressively truncate trailing tool
+  // results so the request fits the provider context window.
+  currentChars = estimateContextChars(messages);
+  if (currentChars > contextBudgetChars) {
+    truncateTrailingToolResultsToFitBudget({
+      messages,
+      compactBeforeIndex,
+      contextBudgetChars,
+    });
+  }
 }
 
 export function installToolResultContextGuard(params: {

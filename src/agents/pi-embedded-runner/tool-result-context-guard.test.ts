@@ -339,6 +339,81 @@ describe("installToolResultContextGuard", () => {
     expect(new2Text).not.toBe(PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER);
   });
 
+  it("truncates trailing tool results as fallback when compacting older results is insufficient", async () => {
+    const agent = makeGuardableAgent();
+
+    // contextWindowTokens: 1_000 => budget ~3000 chars, maxSingle ~1000 chars
+    // Tool result char estimate is 2x raw length (weighted).
+    installToolResultContextGuard({
+      agent,
+      contextWindowTokens: 1_000,
+    });
+
+    // Large user message + no older tool results to compact + large trailing results.
+    // User: 2500 chars. Two trailing tool results: each 400 chars raw (800 estimated).
+    // Total: 2500 + 800 + 800 = 4100, well over 3000 budget.
+    // Without the fallback, the guard would leave context at ~4100 (no older results
+    // to compact). With the fallback, trailing results get truncated to fit.
+    const contextForNextCall = [
+      makeUser("u".repeat(2_500)),
+      makeToolResult("call_trail_1", "a".repeat(400)),
+      makeToolResult("call_trail_2", "b".repeat(400)),
+    ];
+
+    await agent.transformContext?.(contextForNextCall, new AbortController().signal);
+
+    const trail1Text = getToolResultText(contextForNextCall[1]);
+    const trail2Text = getToolResultText(contextForNextCall[2]);
+
+    // Trailing results must NOT be fully replaced with the compaction placeholder
+    expect(trail1Text).not.toBe(PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER);
+    expect(trail2Text).not.toBe(PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER);
+
+    // At least one trailing result should have been truncated to bring context under budget
+    const totalTrailLen = trail1Text.length + trail2Text.length;
+    expect(totalTrailLen).toBeLessThan(400 + 400);
+    // The truncated result(s) should contain the truncation notice
+    const combinedText = trail1Text + trail2Text;
+    expect(combinedText).toContain(CONTEXT_LIMIT_TRUNCATION_NOTICE);
+  });
+
+  it("truncates trailing results after compacting older ones when still over budget", async () => {
+    const agent = makeGuardableAgent();
+
+    // contextWindowTokens: 1_000 => budget ~3000 chars, maxSingle ~1000 chars
+    // Tool result estimated chars = raw_chars * 2 (weighted).
+    installToolResultContextGuard({
+      agent,
+      contextWindowTokens: 1_000,
+    });
+
+    // Huge user message + one small older tool result (compaction frees little) +
+    // large trailing result. After compacting the older result, still over budget.
+    // User: 2700 chars. Old tool: 200 raw (400 estimated, compacts to ~92).
+    // Trailing: 500 raw (1000 estimated).
+    // After old compaction: 2700 + 92 + ~4 + 1000 = 3796 (still over 3000).
+    // Overflow ~796, so fallback targets trailing at max(96, 1000-796) = 204 chars.
+    // truncateToolResultToChars(msg, 204) truncates 500 raw chars down to ~204.
+    const contextForNextCall = [
+      makeUser("u".repeat(2_700)),
+      makeToolResult("call_old", "x".repeat(200)),
+      makeAssistant("resp"),
+      makeToolResult("call_trail", "y".repeat(500)),
+    ];
+
+    await agent.transformContext?.(contextForNextCall, new AbortController().signal);
+
+    // Old tool result should be compacted
+    const oldText = getToolResultText(contextForNextCall[1]);
+    expect(oldText).toBe(PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER);
+
+    // Trailing tool result should be truncated, not compacted
+    const trailText = getToolResultText(contextForNextCall[3]);
+    expect(trailText).not.toBe(PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER);
+    expect(trailText.length).toBeLessThan(500);
+    expect(trailText).toContain(CONTEXT_LIMIT_TRUNCATION_NOTICE);
+  });
+
   it("does not compact when all tool results are trailing (no older turns exist)", async () => {
     const agent = makeGuardableAgent();
 
