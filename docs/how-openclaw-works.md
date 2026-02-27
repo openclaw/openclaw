@@ -171,3 +171,41 @@ Mental model: **"a notebook, a filing cabinet, and a librarian"**
 **The Librarian.** To recall information from weeks or months ago, the agent relies on a search system that indexes everything in your workspace using vector embeddings -- mathematical fingerprints of meaning. Unlike simple keyword search, this approach understands concepts. A query about "deployment steps" will find notes titled "setup instructions" even though the words differ, because the underlying meaning is similar. The search blends keyword matching (weighted at 30%) with semantic similarity (weighted at 70%) for the best results. This means the agent can draw on its entire history of notes and conversations, not just what fits in the current context window.
 
 **For developers:** Temporal decay applies exponential scoring reduction to older notes with a configurable half-life (default 30 days), so recent information naturally ranks higher in search results without manually curating relevance. MMR (Maximal Marginal Relevance) re-ranks results using Jaccard similarity to prevent redundant or near-duplicate snippets from dominating the top positions. Embedding providers include cloud options (OpenAI, Gemini, Voyage, Mistral) and a fully local option via node-llama-cpp for users who want no data leaving their machine. Storage uses SQLite with the sqlite-vec extension for efficient cosine similarity search over vector embeddings, keeping the entire index in a single portable database file.
+
+---
+
+# Part 5: Performance Testing
+
+## Test Environment
+
+All benchmarks were collected on a Mac Mini M2 (Apple Silicon) with 16 GB of RAM, running on a standard home broadband connection. The cloud model was Claude Sonnet 4.5 accessed through the Anthropic API via the OpenClaw Gateway -- the same path a real user's message would take. The local model was qwen3:8b (8 billion parameters) running on Ollama, called directly through its local API rather than through the OpenClaw pipeline. These tests are not laboratory-grade benchmarks; they are real-world measurements meant to give you a feel for what day-to-day usage is like.
+
+## Use Case 1: Simple Q&A
+
+The first test was a straightforward factual question requiring no tools -- pure language model reasoning. The prompt asked the model to explain the three laws of thermodynamics, each in one sentence. This is the kind of quick lookup question you might send your assistant from a messaging app while reading an article.
+
+| Metric | Cloud (Claude Sonnet) | Local (qwen3:8b) |
+|--------|----------------------|-------------------|
+| Total response time | ~9 seconds | ~57 seconds |
+| Response quality | Excellent (5/5) -- accurate, concise, included bonus context | Good (4/5) -- accurate, clear, slightly verbose |
+| Tokens generated | ~150 | ~949 (includes internal reasoning) |
+
+The cloud model returned a polished, concise answer in under ten seconds, and as a bonus included the zeroth law of thermodynamics without being asked. The local model produced an accurate and clear response as well, but took roughly six times longer and generated significantly more tokens -- much of that spent on internal chain-of-thought reasoning before arriving at its final answer.
+
+## Use Case 2: File Operations
+
+The second test involved reading a 20-line text file, adding line numbers to each line, and writing the result back -- a task that exercises tool calling (file read and file write) in addition to reasoning. This was tested end-to-end through the OpenClaw Gateway with the cloud model only, because the local model was not configured as an OpenClaw model provider and therefore could not participate in the tool-calling pipeline.
+
+| Metric | Cloud (Claude Sonnet) | Local (qwen3:8b) |
+|--------|----------------------|-------------------|
+| Total time | ~12.5 seconds | ~60-70 seconds (estimated) |
+| Tool calls | 2 (read + write) | Expected similar |
+| Accuracy | Perfect -- all 20 lines correctly numbered | Not tested end-to-end |
+
+The cloud model completed the entire operation in about 12.5 seconds, making two tool calls (one to read the file, one to write the numbered version back) and producing a perfect result. The local model estimate is extrapolated from the roughly 6x inference speed ratio observed in the Q&A test. Running this test end-to-end with a local model would require configuring Ollama as an OpenClaw model provider, which is supported but was not part of this particular benchmark setup.
+
+## Analysis
+
+Cloud models deliver significantly faster responses -- roughly six times faster for simple queries in this test. The quality difference, while present, is more subtle: both models answered correctly, but the cloud model produced more polished output with contextual additions that showed deeper comprehension. For tasks that benefit from speed or complex reasoning -- multi-step tool chains, nuanced writing, or anything where you are waiting on the other end of a chat message -- cloud models are the clear choice. The 9-second response time for a factual question and 12.5 seconds for a file operation with two tool calls are both fast enough to feel conversational.
+
+Local models shine in different scenarios. When privacy is paramount -- no data leaves your machine, period -- local inference is the only option that truly delivers. The same applies when you are offline, in a restricted network environment, or simply want to avoid per-token API costs (local inference is free after the initial hardware investment). An 8-billion-parameter model like qwen3:8b handles straightforward factual and reasoning tasks well, and larger local models in the 70-billion-parameter range narrow the quality gap with cloud models considerably. The practical sweet spot for many users is a hybrid approach: route demanding tasks (complex tool chains, creative writing, nuanced analysis) to a cloud model, and handle routine queries (quick lookups, simple file operations, casual conversation) locally. OpenClaw's fallback system makes this seamless -- you configure your preferred model order once, and the Gateway routes automatically.
