@@ -42,10 +42,16 @@ function snapshotMtimes(
     }
   }
   // Seed optional files that may not be in the list yet.
+  // Use stat (not a blind sentinel) so case-insensitive filesystems (macOS)
+  // don't false-positive when e.g. MEMORY.md exists but memory.md is seeded.
   for (const name of OPTIONAL_BOOTSTRAP_FILENAMES) {
     const filePath = path.join(workspaceDir, name);
     if (!m.has(filePath)) {
-      m.set(filePath, MISSING_SENTINEL);
+      try {
+        m.set(filePath, statSync(filePath).mtimeMs);
+      } catch {
+        m.set(filePath, MISSING_SENTINEL);
+      }
     }
   }
   return m;

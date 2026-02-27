@@ -231,6 +231,37 @@ describe("mtime-based staleness detection", () => {
     expect(mockLoad).toHaveBeenCalledTimes(2);
   });
 
+  it("does not false-positive stale when MEMORY.md exists (optional file tracking)", async () => {
+    // Regression: optional file seeding must stat the path rather than blindly
+    // using MISSING_SENTINEL, otherwise on case-insensitive filesystems (macOS)
+    // memory.md resolves to MEMORY.md and the cache appears stale every time.
+    const memoryPath = path.join(tmpDir, "MEMORY.md");
+    fs.writeFileSync(memoryPath, "# Memory");
+
+    const v1: WorkspaceBootstrapFile[] = [
+      {
+        name: "USER.md" as WorkspaceBootstrapFile["name"],
+        path: tmpFile,
+        content: "# v1",
+        missing: false,
+      },
+      {
+        name: "MEMORY.md" as WorkspaceBootstrapFile["name"],
+        path: memoryPath,
+        content: "# Memory",
+        missing: false,
+      },
+    ];
+    mockLoad.mockResolvedValue(v1);
+
+    await getOrLoadBootstrapFiles({ workspaceDir: tmpDir, sessionKey: "s1" });
+    await getOrLoadBootstrapFiles({ workspaceDir: tmpDir, sessionKey: "s1" });
+    await getOrLoadBootstrapFiles({ workspaceDir: tmpDir, sessionKey: "s1" });
+
+    // Should only load once — optional file seeding must not cause false staleness
+    expect(mockLoad).toHaveBeenCalledTimes(1);
+  });
+
   it("reloads when MEMORY.md is created after initial cache (optional file)", async () => {
     const memoryPath = path.join(tmpDir, "MEMORY.md");
     // Initial load returns no memory file (it didn't exist)
