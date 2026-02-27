@@ -14,14 +14,12 @@ const TYPING_EMOJI = "Typing"; // Typing indicator emoji
  *
  * - 99991400: Rate limit (too many requests per second)
  * - 99991403: Monthly API call quota exceeded
- * - 99991404: Tenant API call quota exceeded
- * - 99991429: API rate limit (alternative code used by some endpoints)
  * - 429: Standard HTTP 429 returned as a Feishu SDK error code
  * - 99991400: Rate limit (too many requests per second)
  *
  * @see https://open.feishu.cn/document/server-docs/getting-started/server-error-codes
  */
-const FEISHU_BACKOFF_CODES = new Set([99991400, 99991403, 99991404, 99991429, 429]);
+const FEISHU_BACKOFF_CODES = new Set([99991400, 99991403, 429]);
 
 /**
  * Custom error class for Feishu backoff conditions detected from non-throwing
