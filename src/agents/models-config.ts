@@ -15,20 +15,10 @@ type ModelsConfig = NonNullable<OpenClawConfig["models"]>;
 
 const DEFAULT_MODE: NonNullable<ModelsConfig["mode"]> = "merge";
 
-function resolvePreferredTokenLimit(
-  explicitValue: unknown,
-  implicitValue: unknown,
-): number | undefined {
-  const implicit = typeof implicitValue === "number" ? implicitValue : undefined;
-  if (typeof explicitValue !== "number") {
-    return implicit;
-  }
-  if (implicit === undefined) {
-    return explicitValue;
-  }
+function resolvePreferredTokenLimit(explicitValue: number, implicitValue: number): number {
   // Keep catalog refresh behavior for stale low values while preserving
   // intentional larger user overrides (for example Ollama >128k contexts).
-  return explicitValue > implicit ? explicitValue : implicit;
+  return explicitValue > implicitValue ? explicitValue : implicitValue;
 }
 
 function mergeProviderModels(implicit: ProviderConfig, explicit: ProviderConfig): ProviderConfig {
