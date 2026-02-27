@@ -1,6 +1,6 @@
 {
   "name": "openclaw",
-  "version": "2026.2.26",
+  "version": "2026.2.27",
   "description": "Multi-channel AI gateway with extensible messaging integrations",
   "keywords": [],
   "homepage": "https://github.com/openclaw/openclaw#readme",
@@ -180,6 +180,8 @@
     "dotenv": "^17.3.1",
     "express": "^5.2.1",
     "file-type": "^21.3.0",
+    "gaxios": "7.1.2",
+    "google-auth-library": "10.5.0",
     "grammy": "^1.40.1",
     "https-proxy-agent": "^7.0.6",
     "ipaddr.js": "^2.3.0",
@@ -189,6 +191,7 @@
     "linkedom": "^0.18.12",
     "long": "^5.3.2",
     "markdown-it": "^14.1.1",
+    "node-domexception": "npm:@nolyfill/domexception@^1.0.28",
     "node-edge-tts": "^1.2.10",
     "opusscript": "^0.1.1",
     "osc-progress": "^0.3.0",
@@ -227,7 +230,7 @@
   },
   "peerDependencies": {
     "@napi-rs/canvas": "^0.1.89",
-    "node-llama-cpp": "3.15.1"
+    "node-llama-cpp": "3.16.2"
   },
   "optionalDependencies": {
     "@discordjs/opus": "^0.10.0"
@@ -246,6 +249,7 @@
       "form-data": "2.5.4",
       "minimatch": "10.2.4",
       "qs": "6.14.2",
+      "node-domexception": "npm:@nolyfill/domexception@^1.0.28",
       "@sinclair/typebox": "0.34.48",
       "tar": "7.5.9",
       "tough-cookie": "4.1.3"
