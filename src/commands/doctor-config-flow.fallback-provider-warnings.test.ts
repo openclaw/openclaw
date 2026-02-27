@@ -250,6 +250,70 @@ describe("collectFallbackProviderWarnings", () => {
       "bad-provider-3",
     ]);
   });
+
+  it("derives default provider from primary model for providerless fallbacks", () => {
+    // When the primary model is "openai/gpt-4.5", providerless fallback entries
+    // like "gpt-4o" should be treated as "openai/gpt-4o" (not "anthropic/gpt-4o").
+    const warnings = collectFallbackProviderWarnings({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-4.5",
+            fallbacks: ["gpt-4o"],
+          },
+        },
+      },
+    });
+
+    // "openai" is a built-in provider, so no warnings expected.
+    expect(warnings).toEqual([]);
+  });
+
+  it("warns for providerless fallback when primary uses a custom provider", () => {
+    // When the primary model uses a custom provider not in the known set,
+    // providerless fallbacks inherit that provider and should trigger a warning.
+    const warnings = collectFallbackProviderWarnings({
+      agents: {
+        defaults: {
+          model: {
+            primary: "my-custom/my-model",
+            fallbacks: ["fallback-model"],
+          },
+        },
+      },
+    });
+
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0].provider).toBe("my-custom");
+    expect(warnings[0].entry).toBe("fallback-model");
+  });
+
+  it("derives per-agent default provider from the agent model primary", () => {
+    // Per-agent fallbacks should use the agent's own primary model provider
+    // as the default, not the global default provider.
+    const warnings = collectFallbackProviderWarnings({
+      agents: {
+        defaults: {
+          model: {
+            primary: "anthropic/claude-opus-4-6",
+          },
+        },
+        list: [
+          {
+            id: "openai-agent",
+            model: {
+              primary: "openai/gpt-4.5",
+              fallbacks: ["gpt-4o"],
+            },
+          },
+        ],
+      },
+    });
+
+    // "gpt-4o" should be resolved as "openai/gpt-4o" (from agent primary),
+    // not "anthropic/gpt-4o" (from global default).
+    expect(warnings).toEqual([]);
+  });
 });
 
 describe("doctor config flow fallback provider integration", () => {

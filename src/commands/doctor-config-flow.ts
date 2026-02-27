@@ -1,7 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { ZodIssue } from "zod";
-import { normalizeProviderId, parseModelRef } from "../agents/model-selection.js";
+import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
+import {
+  normalizeProviderId,
+  parseModelRef,
+  resolveConfiguredModelRef,
+} from "../agents/model-selection.js";
 import { IMPLICIT_PROVIDER_IDS } from "../agents/models-config.providers.js";
 import { normalizeChatChannelId } from "../channels/registry.js";
 import {
@@ -1797,14 +1802,23 @@ export function collectFallbackProviderWarnings(cfg: OpenClawConfig): FallbackPr
   const definedList = [...definedProviderIds].toSorted();
   const warnings: FallbackProviderWarning[] = [];
 
-  const DEFAULT_PROVIDER = "anthropic";
+  // Derive the effective default provider from the configured primary model,
+  // matching the runtime behavior in resolveFallbackCandidates (model-fallback.ts).
+  // This ensures providerless fallback entries like "fallback-model" are validated
+  // against the same provider that the runtime would infer, not a hardcoded "anthropic".
+  const primaryRef = resolveConfiguredModelRef({
+    cfg,
+    defaultProvider: DEFAULT_PROVIDER,
+    defaultModel: DEFAULT_MODEL,
+  });
+  const effectiveDefaultProvider = primaryRef.provider;
 
-  const checkFallback = (pathLabel: string, entry: string) => {
+  const checkFallback = (pathLabel: string, entry: string, defaultProvider: string) => {
     const trimmed = entry.trim();
     if (!trimmed) {
       return;
     }
-    const ref = parseModelRef(trimmed, DEFAULT_PROVIDER);
+    const ref = parseModelRef(trimmed, defaultProvider);
     if (!ref) {
       return;
     }
@@ -1822,37 +1836,73 @@ export function collectFallbackProviderWarnings(cfg: OpenClawConfig): FallbackPr
   // Check agents.defaults.model fallbacks.
   const defaultModelFallbacks = resolveAgentModelFallbackValues(cfg.agents?.defaults?.model);
   for (let i = 0; i < defaultModelFallbacks.length; i++) {
-    checkFallback(`agents.defaults.model.fallbacks[${i}]`, defaultModelFallbacks[i]);
+    checkFallback(
+      `agents.defaults.model.fallbacks[${i}]`,
+      defaultModelFallbacks[i],
+      effectiveDefaultProvider,
+    );
   }
 
   // Check agents.defaults.imageModel fallbacks.
   const defaultImageFallbacks = resolveAgentModelFallbackValues(cfg.agents?.defaults?.imageModel);
   for (let i = 0; i < defaultImageFallbacks.length; i++) {
-    checkFallback(`agents.defaults.imageModel.fallbacks[${i}]`, defaultImageFallbacks[i]);
+    checkFallback(
+      `agents.defaults.imageModel.fallbacks[${i}]`,
+      defaultImageFallbacks[i],
+      effectiveDefaultProvider,
+    );
   }
 
   // Check agents.defaults.subagents.model fallbacks.
   const subagentFallbacks = resolveAgentModelFallbackValues(cfg.agents?.defaults?.subagents?.model);
   for (let i = 0; i < subagentFallbacks.length; i++) {
-    checkFallback(`agents.defaults.subagents.model.fallbacks[${i}]`, subagentFallbacks[i]);
+    checkFallback(
+      `agents.defaults.subagents.model.fallbacks[${i}]`,
+      subagentFallbacks[i],
+      effectiveDefaultProvider,
+    );
   }
 
   // Check per-agent fallbacks.
+  // Each agent may override the primary model, so derive its effective default
+  // provider from its own model primary (falling back to the global default).
   const agentList = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
   for (const agent of agentList) {
     if (!agent || typeof agent !== "object") {
       continue;
     }
     const agentId = typeof agent.id === "string" ? agent.id : "?";
+
+    // Derive per-agent default provider: if the agent specifies a model with an
+    // explicit provider prefix, use that; otherwise fall back to the global default.
+    const agentModelPrimary = (() => {
+      const raw =
+        typeof agent.model === "string"
+          ? agent.model.trim()
+          : agent.model && typeof agent.model === "object"
+            ? (agent.model.primary ?? "").trim()
+            : "";
+      if (!raw) {
+        return null;
+      }
+      return parseModelRef(raw, effectiveDefaultProvider);
+    })();
+    const agentDefaultProvider = agentModelPrimary?.provider ?? effectiveDefaultProvider;
+
     const agentFallbacks = resolveAgentModelFallbackValues(agent.model);
     for (let i = 0; i < agentFallbacks.length; i++) {
-      checkFallback(`agents.list[${agentId}].model.fallbacks[${i}]`, agentFallbacks[i]);
+      checkFallback(
+        `agents.list[${agentId}].model.fallbacks[${i}]`,
+        agentFallbacks[i],
+        agentDefaultProvider,
+      );
     }
     const subagentModelFallbacks = resolveAgentModelFallbackValues(agent.subagents?.model);
     for (let i = 0; i < subagentModelFallbacks.length; i++) {
       checkFallback(
         `agents.list[${agentId}].subagents.model.fallbacks[${i}]`,
         subagentModelFallbacks[i],
+        agentDefaultProvider,
       );
     }
   }
