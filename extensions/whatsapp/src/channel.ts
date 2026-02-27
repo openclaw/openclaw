@@ -305,6 +305,7 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
       accountId,
       deps,
       gifPlayback,
+      fileName,
     }) => {
       const send = deps?.sendWhatsApp ?? getWhatsAppRuntime().channel.whatsapp.sendMessageWhatsApp;
       const result = await send(to, text, {
@@ -314,6 +315,7 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
         mediaLocalRoots,
         accountId: accountId ?? undefined,
         gifPlayback,
+        fileName,
       });
       return { channel: "whatsapp", ...result };
     },

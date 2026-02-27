@@ -38,6 +38,8 @@ type MessageSendParams = {
   mediaUrl?: string;
   mediaUrls?: string[];
   gifPlayback?: boolean;
+  /** Explicit document filename for file attachments (e.g. WhatsApp documents). */
+  fileName?: string;
   accountId?: string;
   replyToId?: string;
   threadId?: string | number;
@@ -223,6 +225,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       replyToId: params.replyToId,
       threadId: params.threadId,
       gifPlayback: params.gifPlayback,
+      fileName: params.fileName,
       deps: params.deps,
       bestEffort: params.bestEffort,
       abortSignal: params.abortSignal,
@@ -255,6 +258,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       mediaUrl: params.mediaUrl,
       mediaUrls: mirrorMediaUrls.length ? mirrorMediaUrls : params.mediaUrls,
       gifPlayback: params.gifPlayback,
+      fileName: params.fileName,
       accountId: params.accountId,
       agentId: params.agentId,
       channel,

@@ -88,6 +88,8 @@ export async function executeSendAction(params: {
   mediaUrl?: string;
   mediaUrls?: string[];
   gifPlayback?: boolean;
+  /** Explicit document filename for file attachments (e.g. WhatsApp documents). */
+  fileName?: string;
   bestEffort?: boolean;
   replyToId?: string;
   threadId?: string | number;
@@ -135,6 +137,7 @@ export async function executeSendAction(params: {
     replyToId: params.replyToId,
     threadId: params.threadId,
     gifPlayback: params.gifPlayback,
+    fileName: params.fileName,
     dryRun: params.ctx.dryRun,
     bestEffort: params.bestEffort ?? undefined,
     deps: params.ctx.deps,

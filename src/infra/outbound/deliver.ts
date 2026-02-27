@@ -131,6 +131,8 @@ type ChannelHandlerParams = {
   identity?: OutboundIdentity;
   deps?: OutboundSendDeps;
   gifPlayback?: boolean;
+  /** Explicit document filename for file attachments (e.g. WhatsApp documents). */
+  fileName?: string;
   silent?: boolean;
   mediaLocalRoots?: readonly string[];
 };
@@ -203,6 +205,7 @@ function createChannelOutboundContextBase(
     threadId: params.threadId,
     identity: params.identity,
     gifPlayback: params.gifPlayback,
+    fileName: params.fileName,
     deps: params.deps,
     silent: params.silent,
     mediaLocalRoots: params.mediaLocalRoots,
@@ -222,6 +225,8 @@ type DeliverOutboundPayloadsCoreParams = {
   identity?: OutboundIdentity;
   deps?: OutboundSendDeps;
   gifPlayback?: boolean;
+  /** Explicit document filename for file attachments (e.g. WhatsApp documents). */
+  fileName?: string;
   abortSignal?: AbortSignal;
   bestEffort?: boolean;
   onError?: (err: unknown, payload: NormalizedOutboundPayload) => void;
@@ -536,6 +541,7 @@ async function deliverOutboundPayloadsCore(
     threadId: params.threadId,
     identity: params.identity,
     gifPlayback: params.gifPlayback,
+    fileName: params.fileName,
     silent: params.silent,
     mediaLocalRoots,
   });

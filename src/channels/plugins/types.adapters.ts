@@ -92,6 +92,8 @@ export type ChannelOutboundContext = {
   mediaUrl?: string;
   mediaLocalRoots?: readonly string[];
   gifPlayback?: boolean;
+  /** Explicit document filename for file attachments (e.g. WhatsApp documents). */
+  fileName?: string;
   replyToId?: string | null;
   threadId?: string | number | null;
   accountId?: string | null;

@@ -140,6 +140,24 @@ describe("web outbound", () => {
     });
   });
 
+  it("uses explicit fileName option over media-inferred name for documents", async () => {
+    const buf = Buffer.from("pdf");
+    loadWebMediaMock.mockResolvedValueOnce({
+      buffer: buf,
+      contentType: "application/pdf",
+      kind: "document",
+      fileName: "inferred.pdf",
+    });
+    await sendMessageWhatsApp("+1555", "report", {
+      verbose: false,
+      mediaUrl: "/tmp/inferred.pdf",
+      fileName: "quarterly-report.pdf",
+    });
+    expect(sendMessage).toHaveBeenLastCalledWith("+1555", "report", buf, "application/pdf", {
+      fileName: "quarterly-report.pdf",
+    });
+  });
+
   it("sends polls via active listener", async () => {
     const result = await sendPollWhatsApp(
       "+1555",
