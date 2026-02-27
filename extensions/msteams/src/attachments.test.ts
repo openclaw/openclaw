@@ -32,9 +32,7 @@ const fetchRemoteMediaMock = vi.fn(
     }
     if (!res.ok) {
       const text = await res.text().catch(() => "unknown");
-      throw new Error(
-        `Failed to fetch media from ${finalUrl}: HTTP ${res.status}; body: ${text}`,
-      );
+      throw new Error(`Failed to fetch media from ${finalUrl}: HTTP ${res.status}; body: ${text}`);
     }
     const buffer = Buffer.from(await res.arrayBuffer());
     if (typeof params.maxBytes === "number" && buffer.byteLength > params.maxBytes) {
@@ -60,9 +58,7 @@ const runtimeStub = {
     media: {
       saveMediaBuffer: (...args: unknown[]) => saveMediaBufferMock(...args),
       fetchRemoteMedia: (...args: unknown[]) =>
-        fetchRemoteMediaMock(
-          ...(args as Parameters<typeof fetchRemoteMediaMock>),
-        ),
+        fetchRemoteMediaMock(...(args as Parameters<typeof fetchRemoteMediaMock>)),
     },
   },
 } as unknown as PluginRuntime;

@@ -92,11 +92,7 @@ export async function downloadBlueBubblesAttachment(
   if (runtime) {
     const ssrfPolicy = resolveBlueBubblesDownloadSsrfPolicy(baseUrl, allowPrivateNetwork);
     const fetchImpl = (input: RequestInfo | URL, init?: RequestInit) =>
-      blueBubblesFetchWithTimeout(
-        String(input),
-        { method: "GET", ...init },
-        opts.timeoutMs,
-      );
+      blueBubblesFetchWithTimeout(String(input), { method: "GET", ...init }, opts.timeoutMs);
     let result: { buffer: Buffer; contentType?: string; fileName?: string };
     try {
       result = await runtime.channel.media.fetchRemoteMedia({
@@ -108,14 +104,11 @@ export async function downloadBlueBubblesAttachment(
     } catch (err) {
       const errAny = err as { code?: string; message?: string };
       if (errAny.code === "max_bytes") {
-        throw new Error(
-          `BlueBubbles attachment too large (exceeds ${maxBytes} bytes)`,
-        );
+        throw new Error(`BlueBubbles attachment too large (exceeds ${maxBytes} bytes)`);
       }
       throw err;
     }
-    const contentType =
-      result.contentType ?? attachment.mimeType ?? undefined;
+    const contentType = result.contentType ?? attachment.mimeType ?? undefined;
     return { buffer: new Uint8Array(result.buffer), contentType };
   }
   const res = await blueBubblesFetchWithTimeout(url, { method: "GET" }, opts.timeoutMs);

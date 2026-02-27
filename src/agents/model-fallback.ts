@@ -231,9 +231,7 @@ function resolveFallbackCandidates(params: {
   // Determine the current model's position within the configured chain.
   // The "chain" is: [configured-primary, ...configuredFallbacks].
   const currentKey = modelKey(normalizedCurrent.provider, normalizedCurrent.model);
-  const configuredPrimaryKey = primary
-    ? modelKey(primary.provider, primary.model)
-    : null;
+  const configuredPrimaryKey = primary ? modelKey(primary.provider, primary.model) : null;
   const isCurrentPrimary = currentKey === configuredPrimaryKey;
   const currentFallbackIdx = configuredFallbacks.findIndex(
     (fb) => modelKey(fb.provider, fb.model) === currentKey,
@@ -252,10 +250,7 @@ function resolveFallbackCandidates(params: {
     for (let j = currentFallbackIdx + 1; j < configuredFallbacks.length; j++) {
       addCandidate(configuredFallbacks[j], false);
     }
-  } else if (
-    primary &&
-    normalizedCurrent.provider === primary.provider
-  ) {
+  } else if (primary && normalizedCurrent.provider === primary.provider) {
     // Current model is from the same provider as the configured primary
     // but a different model (e.g. a version variant or session override).
     // Use the full configured fallback chain so same-provider alternatives

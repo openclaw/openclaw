@@ -175,7 +175,9 @@ export const dispatchTelegramMessage = async ({
           try {
             void bot.api.deleteMessage(chatId, preview.messageId);
           } catch {
-            logVerbose(`telegram: failed to delete superseded reasoning preview ${preview.messageId}`);
+            logVerbose(
+              `telegram: failed to delete superseded reasoning preview ${preview.messageId}`,
+            );
           }
         },
         log: logVerbose,
@@ -447,9 +449,7 @@ export const dispatchTelegramMessage = async ({
       });
       return true;
     } catch (err) {
-      logVerbose(
-        `telegram: reasoning preview edit failed (${String(err)})`,
-      );
+      logVerbose(`telegram: reasoning preview edit failed (${String(err)})`);
       return false;
     }
   };
@@ -482,10 +482,7 @@ export const dispatchTelegramMessage = async ({
 
           if (info.kind === "final") {
             // Check for reasoning-only final payloads.
-            if (
-              typeof finalText === "string" &&
-              isReasoningOnlyPayload(finalText)
-            ) {
+            if (typeof finalText === "string" && isReasoningOnlyPayload(finalText)) {
               if (reasoningStreamEnabled && reasoningDraftStream) {
                 // Edit the reasoning preview with expanded final text.
                 void reasoningDraftStream.stop();
@@ -502,11 +499,7 @@ export const dispatchTelegramMessage = async ({
             }
 
             // Handle think-tag finals: split into reasoning and answer lanes.
-            if (
-              reasoningStreamEnabled &&
-              reasoningDraftStream &&
-              typeof finalText === "string"
-            ) {
+            if (reasoningStreamEnabled && reasoningDraftStream && typeof finalText === "string") {
               const parsed = parseThinkTags(finalText);
               if (parsed) {
                 if (parsed.reasoning) {
@@ -662,7 +655,9 @@ export const dispatchTelegramMessage = async ({
       replyOptions: {
         skillFilter,
         disableBlockStreaming,
-        onPartialReply: hasDraftStream ? (payload) => updateDraftFromPartial(payload.text) : undefined,
+        onPartialReply: hasDraftStream
+          ? (payload) => updateDraftFromPartial(payload.text)
+          : undefined,
         onAssistantMessageStart: answerDraftStream
           ? () => {
               logVerbose(
@@ -679,15 +674,16 @@ export const dispatchTelegramMessage = async ({
               draftChunker?.reset();
             }
           : undefined,
-        onReasoningStream: reasoningStreamEnabled && reasoningDraftStream
-          ? (payload: { text?: string }) => {
-              if (reasoningEnded && hasStreamedReasoningMessage) {
-                reasoningDraftStream.forceNewMessage();
-                reasoningEnded = false;
+        onReasoningStream:
+          reasoningStreamEnabled && reasoningDraftStream
+            ? (payload: { text?: string }) => {
+                if (reasoningEnded && hasStreamedReasoningMessage) {
+                  reasoningDraftStream.forceNewMessage();
+                  reasoningEnded = false;
+                }
+                updateReasoningDraft(payload.text);
               }
-              updateReasoningDraft(payload.text);
-            }
-          : undefined,
+            : undefined,
         onReasoningEnd: hasDraftStream
           ? () => {
               reasoningEnded = true;

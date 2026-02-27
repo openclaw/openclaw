@@ -1,5 +1,5 @@
-import { EnvHttpProxyAgent } from "undici";
 import { Type } from "@sinclair/typebox";
+import { EnvHttpProxyAgent } from "undici";
 import type { BotConfig } from "../../config/config.js";
 import type { AnyAgentTool } from "./common.js";
 import { formatCliCommand } from "../../cli/command-format.js";
@@ -789,8 +789,7 @@ async function runGeminiSearch(params: {
 
   const data = (await res.json()) as GeminiSearchResponse;
   const candidate = data.candidates?.[0];
-  const content =
-    candidate?.content?.parts?.map((p) => p.text ?? "").join("") || "No response";
+  const content = candidate?.content?.parts?.map((p) => p.text ?? "").join("") || "No response";
   const citations = (candidate?.groundingMetadata?.groundingChunks ?? [])
     .map((chunk) => chunk.web?.uri)
     .filter((uri): uri is string => Boolean(uri));
@@ -846,11 +845,7 @@ async function runKimiSearch(params: {
 
     const followUpBody = {
       model: params.model,
-      messages: [
-        { role: "user", content: params.query },
-        choice.message,
-        ...toolMessages,
-      ],
+      messages: [{ role: "user", content: params.query }, choice.message, ...toolMessages],
     };
 
     const followUpRes = await fetch(endpoint, {
@@ -867,15 +862,15 @@ async function runKimiSearch(params: {
     if (!followUpRes.ok) {
       const detailResult = await readResponseText(followUpRes, { maxBytes: 64_000 });
       const detail = detailResult.text;
-      throw new Error(`Kimi API error (${followUpRes.status}): ${detail || followUpRes.statusText}`);
+      throw new Error(
+        `Kimi API error (${followUpRes.status}): ${detail || followUpRes.statusText}`,
+      );
     }
 
     const followUpData = (await followUpRes.json()) as KimiSearchResponse;
     const finalChoice = followUpData.choices?.[0];
     const content = finalChoice?.message?.content ?? "No response";
-    const citations = searchResults
-      .map((r) => r.url)
-      .filter((url): url is string => Boolean(url));
+    const citations = searchResults.map((r) => r.url).filter((url): url is string => Boolean(url));
 
     return { content, citations };
   }

@@ -300,8 +300,7 @@ export function resolveProfilesUnavailableReason(params: {
       now < stats.disabledUntil &&
       stats.disabledReason
     ) {
-      disabledReasons[stats.disabledReason] =
-        (disabledReasons[stats.disabledReason] ?? 0) + 1;
+      disabledReasons[stats.disabledReason] = (disabledReasons[stats.disabledReason] ?? 0) + 1;
     }
 
     // Also aggregate from failureCounts for fallback ranking.
