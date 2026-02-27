@@ -209,3 +209,32 @@ The cloud model completed the entire operation in about 12.5 seconds, making two
 Cloud models deliver significantly faster responses -- roughly six times faster for simple queries in this test. The quality difference, while present, is more subtle: both models answered correctly, but the cloud model produced more polished output with contextual additions that showed deeper comprehension. For tasks that benefit from speed or complex reasoning -- multi-step tool chains, nuanced writing, or anything where you are waiting on the other end of a chat message -- cloud models are the clear choice. The 9-second response time for a factual question and 12.5 seconds for a file operation with two tool calls are both fast enough to feel conversational.
 
 Local models shine in different scenarios. When privacy is paramount -- no data leaves your machine, period -- local inference is the only option that truly delivers. The same applies when you are offline, in a restricted network environment, or simply want to avoid per-token API costs (local inference is free after the initial hardware investment). An 8-billion-parameter model like qwen3:8b handles straightforward factual and reasoning tasks well, and larger local models in the 70-billion-parameter range narrow the quality gap with cloud models considerably. The practical sweet spot for many users is a hybrid approach: route demanding tasks (complex tool chains, creative writing, nuanced analysis) to a cloud model, and handle routine queries (quick lookups, simple file operations, casual conversation) locally. OpenClaw's fallback system makes this seamless -- you configure your preferred model order once, and the Gateway routes automatically.
+
+---
+
+# Part 6: Alternatives and When to Choose What
+
+## Brief Profiles
+
+**Auto-GPT.** Designed for autonomous multi-step task execution. Launches "missions" that run to completion without continuous interaction. Best for one-shot complex automation; lacks always-on presence and multi-channel messaging support.
+
+**Open Interpreter.** A lightweight CLI agent that can run code and interact with your computer through the terminal. Session-scoped with no persistent memory between runs. Best for quick developer tasks and scripting from the command line.
+
+**LangChain Agent.** A framework for building custom AI agents, not a ready-to-use product. Extremely flexible but requires significant development effort to create a working agent. Best for teams building bespoke agent-powered applications.
+
+**Claude Code.** Anthropic's developer-focused CLI and IDE tool for software engineering tasks. Deep editor integration and codebase awareness. Best for developers who want an AI pair programmer inside their development environment.
+
+## Head-to-Head Comparison
+
+| Dimension | OpenClaw | Auto-GPT | Open Interpreter | LangChain Agent | Claude Code |
+|-----------|----------|----------|-----------------|-----------------|-------------|
+| Positioning | Personal always-on assistant | Autonomous task runner | Smart terminal | Developer framework | AI pair programmer |
+| Multi-channel | 12+ native (WhatsApp, Telegram, Slack, Feishu...) | None | None | Build your own | None |
+| Always-on | Yes (Gateway daemon) | No (run-to-complete) | No (session) | Depends on implementation | No (session) |
+| Persistent Memory | 3-layer system | Short-term + vector | Session only | Build your own | Session + project |
+| Local Models | Native (Ollama, vLLM, LM Studio) | Limited | Yes | Via wrappers | No |
+| Local-first Data | Yes | Partial | Yes | Depends | Yes |
+
+## When to Choose What
+
+Choose OpenClaw if you want an always-on personal assistant reachable across your messaging apps, with persistent memory and local data sovereignty. Choose Claude Code if you are a developer wanting AI integrated into your coding workflow. Choose Open Interpreter for quick, one-off tasks in the terminal. Choose LangChain if you are building a custom agent-powered product and need maximum flexibility. Choose Auto-GPT for autonomous multi-step missions that run without interaction.
