@@ -30,12 +30,12 @@ The model reads the assembled context — persona, memory, conversation history 
 
 ## 2. Comparison with Alternatives
 
-A one-sentence mental model for each project:
+One-sentence mental model for each:
 
-- **Auto-GPT** — autonomous task runner that launches one-shot missions to completion.
-- **LangChain Agent** — developer toolkit for building custom agents, not a ready-to-use product.
+- **Auto-GPT** — autonomous task runner that launches one-shot missions.
+- **LangChain Agent** — developer toolkit for building custom agents.
 - **Open Interpreter** — smart terminal with session-scoped CLI interaction.
-- **Claude Code** — AI pair programmer integrated into IDE and command line.
+- **Claude Code** — AI pair programmer for IDE and command line.
 - **OpenClaw** — personal assistant that lives in your messaging apps.
 
 | Dimension | OpenClaw | Auto-GPT | Open Interpreter | LangChain Agent | Claude Code |
@@ -47,9 +47,9 @@ A one-sentence mental model for each project:
 | Local Models | Native (Ollama, vLLM, LM Studio) | Limited | Yes | Via wrappers | No |
 | Local-first Data | Yes — all data on your machine | Partial | Yes | Depends | Yes |
 
-**Strengths.** Always-on presence across 12+ messaging channels means you interact through apps you already use — no special interface required. Native support for Chinese ecosystem channels (Feishu) and providers (Qwen, DeepSeek) serves users in that region. Local-first architecture keeps all conversations and memory on your hardware. The three-layer memory system provides continuity that survives individual sessions. A plugin architecture makes it straightforward to add channels, tools, or behaviors.
+**Strengths.** Always-on presence across 12+ channels means you interact through apps you already use. Native support for Chinese ecosystem channels (Feishu) and providers (Qwen, DeepSeek) serves that region. Local-first architecture keeps all data on your hardware. Three-layer memory provides continuity across sessions. A plugin architecture makes adding channels, tools, or behaviors straightforward.
 
-**Limitations.** OpenClaw is single-user by design — a personal assistant, not a team platform. The Gateway requires always-on hardware (a local machine or server you control). Initial setup — model provider, channel connections, memory configuration — has a steeper learning curve than hosted solutions. Local model quality depends directly on available hardware; smaller machines are limited to smaller models.
+**Limitations.** Single-user by design — a personal assistant, not a team platform. Requires always-on hardware you control. Setup (model provider, channels, memory) has a steeper learning curve than hosted solutions. Local model quality depends on available hardware.
 
 ---
 
@@ -57,7 +57,7 @@ A one-sentence mental model for each project:
 
 ### Feishu Extension
 
-We contributed bug fixes and new features to the Feishu channel extension — resolving `resolveAllowFrom` string handling issues and adding public permission management (`get_public`, `update_public` actions for `feishu_perm`) with corresponding tests. This work enables OpenClaw to operate within the Chinese enterprise ecosystem. Four Feishu app accounts are configured across our deployment, covering different workspaces and use cases.
+We contributed bug fixes and new features to the Feishu channel extension — resolving message routing issues in the allowlist system and adding document permission management capabilities (querying and modifying sharing settings), with test coverage. This work enables OpenClaw to operate within the Chinese enterprise ecosystem. Four Feishu app accounts are configured and operational.
 
 ### Peekaboo (macOS UI Automation)
 
@@ -90,7 +90,7 @@ From any connected messaging channel, a user can write Feishu documents, coordin
 
 ### Test Environment
 
-All measurements were collected on a Mac mini M4 (Apple Silicon) with 32 GB RAM on standard home broadband. The cloud model was Claude Sonnet 4.6 via the Anthropic API through the OpenClaw Gateway. The local model was qwen3:8b (8B parameters) on Ollama, called directly through its local API.
+All measurements on a Mac mini M4 with 32 GB RAM over standard home broadband. Cloud model: Claude Sonnet 4.6 via Anthropic API through the OpenClaw Gateway. Local model: qwen3:8b (8B parameters) on Ollama.
 
 ### Simple Q&A
 
@@ -102,22 +102,22 @@ A factual question requiring no tools — pure language model reasoning (explain
 | Quality | Excellent (5/5) — accurate, concise, bonus context | Good (4/5) — accurate, slightly verbose |
 | Tokens generated | ~150 | ~949 (includes internal reasoning) |
 
-The cloud model returned a polished answer in under ten seconds and included the zeroth law unprompted. The local model was accurate but took roughly 6x longer, spending most tokens on internal chain-of-thought reasoning.
+The cloud model returned a polished answer in under ten seconds, including the zeroth law unprompted. The local model was accurate but took 6x longer, spending most tokens on internal chain-of-thought reasoning.
 
 ### File Operations
 
-Reading a 20-line file, adding line numbers, and writing it back — exercises tool calling (read + write) in addition to reasoning:
+Reading a 20-line file, adding line numbers, and writing it back — exercises tool calling (read + write) in addition to reasoning. Only the cloud model was benchmarked for tool-calling tasks.
 
-| Metric | Cloud (Claude Sonnet) | Local (qwen3:8b) |
-|--------|----------------------|-------------------|
-| Total time | ~12.5 seconds | ~60-70 seconds (estimated) |
-| Tool calls | 2 (read + write) | Expected similar |
-| Accuracy | Perfect | Not tested end-to-end |
+| Metric | Cloud (Claude Sonnet) |
+|--------|----------------------|
+| Total time | ~12.5 seconds |
+| Tool calls | 2 (read + write) |
+| Accuracy | Perfect |
 
-The cloud model completed the operation in 12.5 seconds with two tool calls and a perfect result. The local estimate is extrapolated from the 6x speed ratio observed in Q&A.
+The cloud model completed the operation in 12.5 seconds with two clean tool calls and a correct result.
 
 ### Analysis
 
-Cloud models deliver roughly 6x faster responses with more polished output. For tasks requiring speed, complex reasoning, or multi-step tool chains, cloud is the clear choice — 9 seconds for factual Q&A and 12.5 seconds for file operations feel conversational.
+Cloud models deliver roughly 6x faster responses with more polished output. For speed, complex reasoning, or multi-step tool chains, cloud is the clear choice — 9-second Q&A and 12.5-second file operations feel conversational.
 
-Local models win on privacy (no data leaves your machine), offline availability, and cost (free after hardware investment). The practical sweet spot is hybrid mode: route demanding tasks to cloud, handle routine queries locally. OpenClaw makes this seamless — configure your preferred model order once, and the Gateway routes automatically.
+Local models win on privacy (no data leaves your machine), offline availability, and zero marginal cost. The practical sweet spot is hybrid mode: route demanding tasks to cloud, handle routine queries locally. OpenClaw supports this natively — configure model priority once, and the Gateway routes automatically.
