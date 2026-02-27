@@ -9,3 +9,11 @@ export async function runWithModelFallback(params: {
     model: params.model,
   };
 }
+
+export function resolveFallbackCandidates() {
+  return [];
+}
+
+export function resolveModelFallbackOptions() {
+  return {};
+}
