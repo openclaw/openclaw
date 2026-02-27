@@ -27,7 +27,7 @@ import {
   firstDefined,
   isSenderAllowed,
   normalizeAllowFrom,
-  normalizeAllowFromWithStore,
+  normalizeDmAllowFromWithStore,
 } from "./bot-access.js";
 import {
   getLineSourceInfo,
@@ -147,7 +147,7 @@ async function shouldProcessLineEvent(
     undefined,
     account.accountId,
   ).catch(() => []);
-  const effectiveDmAllow = normalizeAllowFromWithStore({
+  const effectiveDmAllow = normalizeDmAllowFromWithStore({
     allowFrom: account.config.allowFrom,
     storeAllowFrom,
     dmPolicy,
