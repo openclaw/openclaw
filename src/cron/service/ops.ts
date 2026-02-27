@@ -270,6 +270,10 @@ export async function update(state: CronServiceState, id: string, patch: CronJob
     await ensureLoaded(state, { skipRecompute: true });
     const job = findJobOrThrow(state, id);
     const now = state.deps.nowMs();
+    // Snapshot before patch so we can detect any schedule change, including
+    // timezone-only edits that the old `patch.schedule !== undefined` check
+    // could miss (#27996).
+    const prevScheduleSnapshot = JSON.stringify(job.schedule);
     applyJobPatch(job, patch, { defaultAgentId: state.deps.defaultAgentId });
     if (job.schedule.kind === "every") {
       const anchor = job.schedule.anchorMs;
@@ -287,7 +291,7 @@ export async function update(state: CronServiceState, id: string, patch: CronJob
         };
       }
     }
-    const scheduleChanged = patch.schedule !== undefined;
+    const scheduleChanged = JSON.stringify(job.schedule) !== prevScheduleSnapshot;
     const enabledChanged = patch.enabled !== undefined;
 
     job.updatedAtMs = now;
