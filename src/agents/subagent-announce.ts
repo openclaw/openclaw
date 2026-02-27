@@ -1,5 +1,5 @@
 import { resolveQueueSettings } from "../auto-reply/reply/queue.js";
-import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../config/agent-limits.js";
 import { loadConfig } from "../config/config.js";
 import {
@@ -32,6 +32,10 @@ import {
   queueEmbeddedPiMessage,
   waitForEmbeddedPiRunEnd,
 } from "./pi-embedded.js";
+import {
+  runSubagentAnnounceDispatch,
+  type SubagentAnnounceDeliveryResult,
+} from "./subagent-announce-dispatch.js";
 import { type AnnounceQueueItem, enqueueAnnounce } from "./subagent-announce-queue.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import type { SpawnSubagentMode } from "./subagent-spawn.js";
@@ -51,14 +55,6 @@ const DIRECT_ANNOUNCE_TRANSIENT_RETRY_DELAYS_MS = FAST_TEST_MODE
 type ToolResultMessage = {
   role?: unknown;
   content?: unknown;
-};
-
-type SubagentDeliveryPath = "queued" | "steered" | "direct" | "none";
-
-type SubagentAnnounceDeliveryResult = {
-  delivered: boolean;
-  path: SubagentDeliveryPath;
-  error?: string;
 };
 
 function resolveSubagentAnnounceTimeoutMs(cfg: ReturnType<typeof loadConfig>): number {
@@ -705,27 +701,6 @@ async function maybeQueueSubagentAnnounce(params: {
   return "none";
 }
 
-function queueOutcomeToDeliveryResult(
-  outcome: "steered" | "queued" | "none",
-): SubagentAnnounceDeliveryResult {
-  if (outcome === "steered") {
-    return {
-      delivered: true,
-      path: "steered",
-    };
-  }
-  if (outcome === "queued") {
-    return {
-      delivered: true,
-      path: "queued",
-    };
-  }
-  return {
-    delivered: false,
-    path: "none",
-  };
-}
-
 async function sendSubagentAnnounceDirectly(params: {
   targetRequesterSessionKey: string;
   triggerMessage: string;
@@ -905,64 +880,34 @@ async function deliverSubagentAnnouncement(params: {
   directIdempotencyKey: string;
   signal?: AbortSignal;
 }): Promise<SubagentAnnounceDeliveryResult> {
-  if (params.signal?.aborted) {
-    return {
-      delivered: false,
-      path: "none",
-    };
-  }
-  // Non-completion mode mirrors historical behavior: try queued/steered delivery first,
-  // then (only if not queued) attempt direct delivery.
-  if (!params.expectsCompletionMessage) {
-    const queueOutcome = await maybeQueueSubagentAnnounce({
-      requesterSessionKey: params.requesterSessionKey,
-      announceId: params.announceId,
-      triggerMessage: params.triggerMessage,
-      summaryLine: params.summaryLine,
-      requesterOrigin: params.requesterOrigin,
-      signal: params.signal,
-    });
-    const queued = queueOutcomeToDeliveryResult(queueOutcome);
-    if (queued.delivered) {
-      return queued;
-    }
-  }
-
-  // Completion-mode uses direct send first so manual spawns can return immediately
-  // in the common ready-to-deliver case.
-  const direct = await sendSubagentAnnounceDirectly({
-    targetRequesterSessionKey: params.targetRequesterSessionKey,
-    triggerMessage: params.triggerMessage,
-    completionMessage: params.completionMessage,
-    directIdempotencyKey: params.directIdempotencyKey,
-    completionDirectOrigin: params.completionDirectOrigin,
-    completionRouteMode: params.completionRouteMode,
-    spawnMode: params.spawnMode,
-    directOrigin: params.directOrigin,
-    requesterIsSubagent: params.requesterIsSubagent,
+  return await runSubagentAnnounceDispatch({
     expectsCompletionMessage: params.expectsCompletionMessage,
     signal: params.signal,
-    bestEffortDeliver: params.bestEffortDeliver,
+    queue: async () =>
+      await maybeQueueSubagentAnnounce({
+        requesterSessionKey: params.requesterSessionKey,
+        announceId: params.announceId,
+        triggerMessage: params.triggerMessage,
+        summaryLine: params.summaryLine,
+        requesterOrigin: params.requesterOrigin,
+        signal: params.signal,
+      }),
+    direct: async () =>
+      await sendSubagentAnnounceDirectly({
+        targetRequesterSessionKey: params.targetRequesterSessionKey,
+        triggerMessage: params.triggerMessage,
+        completionMessage: params.completionMessage,
+        directIdempotencyKey: params.directIdempotencyKey,
+        completionDirectOrigin: params.completionDirectOrigin,
+        completionRouteMode: params.completionRouteMode,
+        spawnMode: params.spawnMode,
+        directOrigin: params.directOrigin,
+        requesterIsSubagent: params.requesterIsSubagent,
+        expectsCompletionMessage: params.expectsCompletionMessage,
+        signal: params.signal,
+        bestEffortDeliver: params.bestEffortDeliver,
+      }),
   });
-  if (direct.delivered || !params.expectsCompletionMessage) {
-    return direct;
-  }
-
-  // If completion path failed direct delivery, try queueing as a fallback so the
-  // report can still be delivered once the requester session is idle.
-  const queueOutcome = await maybeQueueSubagentAnnounce({
-    requesterSessionKey: params.requesterSessionKey,
-    announceId: params.announceId,
-    triggerMessage: params.triggerMessage,
-    summaryLine: params.summaryLine,
-    requesterOrigin: params.requesterOrigin,
-    signal: params.signal,
-  });
-  if (queueOutcome === "steered" || queueOutcome === "queued") {
-    return queueOutcomeToDeliveryResult(queueOutcome);
-  }
-
-  return direct;
 }
 
 function loadSessionEntryByKey(sessionKey: string) {
@@ -979,6 +924,8 @@ export function buildSubagentSystemPrompt(params: {
   childSessionKey: string;
   label?: string;
   task?: string;
+  /** Whether ACP-specific routing guidance should be included. Defaults to true. */
+  acpEnabled?: boolean;
   /** Depth of the child being spawned (1 = sub-agent, 2 = sub-sub-agent). */
   childDepth?: number;
   /** Config value: max allowed spawn depth. */
@@ -993,6 +940,7 @@ export function buildSubagentSystemPrompt(params: {
     typeof params.maxSpawnDepth === "number"
       ? params.maxSpawnDepth
       : DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH;
+  const acpEnabled = params.acpEnabled !== false;
   const canSpawn = childDepth < maxSpawnDepth;
   const parentLabel = childDepth >= 2 ? "parent orchestrator" : "main agent";
 
@@ -1038,6 +986,17 @@ export function buildSubagentSystemPrompt(params: {
       "Default workflow: spawn work, continue orchestrating, and wait for auto-announced completions.",
       "Do NOT repeatedly poll `subagents list` in a loop unless you are actively debugging or intervening.",
       "Coordinate their work and synthesize results before reporting back.",
+      ...(acpEnabled
+        ? [
+            'For ACP harness sessions (codex/claudecode/gemini), use `sessions_spawn` with `runtime: "acp"` (set `agentId` unless `acp.defaultAgent` is configured).',
+            '`agents_list` and `subagents` apply to OpenClaw sub-agents (`runtime: "subagent"`); ACP harness ids are controlled by `acp.allowedAgents`.',
+            "Do not ask users to run slash commands or CLI when `sessions_spawn` can do it directly.",
+            "Do not use `exec` (`openclaw ...`, `acpx ...`) to spawn ACP sessions.",
+            'Use `subagents` only for OpenClaw subagents (`runtime: "subagent"`).',
+            "Subagent results auto-announce back to you; ACP sessions continue in their bound thread.",
+            "Avoid polling loops; spawn, orchestrate, and synthesize results.",
+          ]
+        : []),
       "",
     );
   } else if (childDepth >= 2) {
@@ -1200,6 +1159,9 @@ export async function runSubagentAnnounceFlow(params: {
     }
 
     if (isAnnounceSkip(reply)) {
+      return true;
+    }
+    if (isSilentReplyText(reply, SILENT_REPLY_TOKEN)) {
       return true;
     }
 

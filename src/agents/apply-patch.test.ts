@@ -13,6 +13,15 @@ async function withTempDir<T>(fn: (dir: string) => Promise<T>) {
   }
 }
 
+async function withWorkspaceTempDir<T>(fn: (dir: string) => Promise<T>) {
+  const dir = await fs.mkdtemp(path.join(process.cwd(), "openclaw-patch-workspace-"));
+  try {
+    return await fn(dir);
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+}
+
 function buildAddFilePatch(targetPath: string): string {
   return `*** Begin Patch
 *** Add File: ${targetPath}

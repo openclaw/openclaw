@@ -1053,7 +1053,7 @@ private fun PermissionsStep(
     }
     PermissionToggleRow(
       title = "Microphone",
-      subtitle = "Talk mode + voice features",
+      subtitle = "Voice tab transcription",
       checked = enableMicrophone,
       granted = isPermissionGranted(context, Manifest.permission.RECORD_AUDIO),
       onCheckedChange = onMicrophoneChange,

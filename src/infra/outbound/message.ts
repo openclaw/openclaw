@@ -1,4 +1,3 @@
-import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
 import { callGatewayLeastPrivilege, randomIdempotencyKey } from "../../gateway/call.js";
@@ -10,6 +9,10 @@ import {
   type GatewayClientMode,
   type GatewayClientName,
 } from "../../utils/message-channel.js";
+import {
+  normalizeDeliverableOutboundChannel,
+  resolveOutboundChannelPlugin,
+} from "./channel-resolution.js";
 import { resolveMessageChannelSelection } from "./channel-selection.js";
 import {
   deliverOutboundPayloads,
@@ -17,6 +20,7 @@ import {
   type OutboundSendDeps,
 } from "./deliver.js";
 import { normalizeReplyPayloadsForDelivery } from "./payloads.js";
+import { buildOutboundSessionContext } from "./session-context.js";
 import { resolveOutboundTarget } from "./targets.js";
 
 export type MessageGatewayOptions = {
@@ -107,17 +111,18 @@ async function resolveRequiredChannel(params: {
   cfg: OpenClawConfig;
   channel?: string;
 }): Promise<string> {
-  const channel = params.channel?.trim()
-    ? normalizeChannelId(params.channel)
-    : (await resolveMessageChannelSelection({ cfg: params.cfg })).channel;
-  if (!channel) {
-    throw new Error(`Unknown channel: ${params.channel}`);
+  if (params.channel?.trim()) {
+    const normalized = normalizeDeliverableOutboundChannel(params.channel);
+    if (!normalized) {
+      throw new Error(`Unknown channel: ${params.channel}`);
+    }
+    return normalized;
   }
-  return channel;
+  return (await resolveMessageChannelSelection({ cfg: params.cfg })).channel;
 }
 
-function resolveRequiredPlugin(channel: string) {
-  const plugin = getChannelPlugin(channel);
+function resolveRequiredPlugin(channel: string, cfg: OpenClawConfig) {
+  const plugin = resolveOutboundChannelPlugin({ channel, cfg });
   if (!plugin) {
     throw new Error(`Unknown channel: ${channel}`);
   }
@@ -166,7 +171,7 @@ async function callMessageGateway<T>(params: {
 export async function sendMessage(params: MessageSendParams): Promise<MessageSendResult> {
   const cfg = params.cfg ?? loadConfig();
   const channel = await resolveRequiredChannel({ cfg, channel: params.channel });
-  const plugin = resolveRequiredPlugin(channel);
+  const plugin = resolveRequiredPlugin(channel, cfg);
   const deliveryMode = plugin.outbound?.deliveryMode ?? "direct";
   const normalizedPayloads = normalizeReplyPayloadsForDelivery([
     {
@@ -208,11 +213,16 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       throw resolvedTarget.error;
     }
 
+    const outboundSession = buildOutboundSessionContext({
+      cfg,
+      agentId: params.agentId,
+      sessionKey: params.mirror?.sessionKey,
+    });
     const results = await deliverOutboundPayloads({
       cfg,
       channel: outboundChannel,
       to: resolvedTarget.to,
-      agentId: params.agentId,
+      session: outboundSession,
       accountId: params.accountId,
       payloads: normalizedPayloads,
       replyToId: params.replyToId,
@@ -251,6 +261,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       mediaUrls: mirrorMediaUrls.length ? mirrorMediaUrls : params.mediaUrls,
       gifPlayback: params.gifPlayback,
       accountId: params.accountId,
+      agentId: params.agentId,
       channel,
       sessionKey: params.mirror?.sessionKey,
       idempotencyKey: params.idempotencyKey ?? randomIdempotencyKey(),
@@ -278,7 +289,7 @@ export async function sendPoll(params: MessagePollParams): Promise<MessagePollRe
     durationSeconds: params.durationSeconds,
     durationHours: params.durationHours,
   };
-  const plugin = resolveRequiredPlugin(channel);
+  const plugin = resolveRequiredPlugin(channel, cfg);
   const outbound = plugin?.outbound;
   if (!outbound?.sendPoll) {
     throw new Error(`Unsupported poll channel: ${channel}`);

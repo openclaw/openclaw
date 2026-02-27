@@ -3,9 +3,11 @@ import os from "node:os";
 import path from "node:path";
 
 export const POSIX_OPENCLAW_TMP_DIR = "/tmp/openclaw";
+const TMP_DIR_ACCESS_MODE = fs.constants.W_OK | fs.constants.X_OK;
 
 type ResolvePreferredOpenClawTmpDirOptions = {
   accessSync?: (path: string, mode?: number) => void;
+  chmodSync?: (path: string, mode: number) => void;
   lstatSync?: (path: string) => {
     isDirectory(): boolean;
     isSymbolicLink(): boolean;
@@ -15,6 +17,7 @@ type ResolvePreferredOpenClawTmpDirOptions = {
   mkdirSync?: (path: string, opts: { recursive: boolean; mode?: number }) => void;
   getuid?: () => number | undefined;
   tmpdir?: () => string;
+  warn?: (message: string) => void;
 };
 
 type MaybeNodeError = { code?: string };
@@ -32,8 +35,10 @@ export function resolvePreferredOpenClawTmpDir(
   options: ResolvePreferredOpenClawTmpDirOptions = {},
 ): string {
   const accessSync = options.accessSync ?? fs.accessSync;
+  const chmodSync = options.chmodSync ?? fs.chmodSync;
   const lstatSync = options.lstatSync ?? fs.lstatSync;
   const mkdirSync = options.mkdirSync ?? fs.mkdirSync;
+  const warn = options.warn ?? ((message: string) => console.warn(message));
   const getuid =
     options.getuid ??
     (() => {
@@ -66,7 +71,7 @@ export function resolvePreferredOpenClawTmpDir(
     return path.join(base, suffix);
   };
 
-  const isTrustedPreferredDir = (st: {
+  const isTrustedTmpDir = (st: {
     isDirectory(): boolean;
     isSymbolicLink(): boolean;
     mode?: number;
@@ -75,17 +80,13 @@ export function resolvePreferredOpenClawTmpDir(
     return st.isDirectory() && !st.isSymbolicLink() && isSecureDirForUser(st);
   };
 
-  const resolvePreferredState = (
-    requireWritableAccess: boolean,
-  ): "available" | "missing" | "invalid" => {
+  const resolveDirState = (candidatePath: string): "available" | "missing" | "invalid" => {
     try {
-      const preferred = lstatSync(POSIX_OPENCLAW_TMP_DIR);
-      if (!isTrustedPreferredDir(preferred)) {
+      const candidate = lstatSync(candidatePath);
+      if (!isTrustedTmpDir(candidate)) {
         return "invalid";
       }
-      if (requireWritableAccess) {
-        accessSync(POSIX_OPENCLAW_TMP_DIR, fs.constants.W_OK | fs.constants.X_OK);
-      }
+      accessSync(candidatePath, TMP_DIR_ACCESS_MODE);
       return "available";
     } catch (err) {
       if (isNodeErrorWithCode(err, "ENOENT")) {

@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   CircularIncludeError,
   ConfigIncludeError,
+  MAX_INCLUDE_FILE_BYTES,
   deepMerge,
   type IncludeResolver,
   resolveConfigIncludes,

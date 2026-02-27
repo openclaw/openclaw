@@ -179,7 +179,8 @@ function createBoundThreadBindingManager(params: {
 }): ThreadBindingManager {
   return {
     accountId: params.accountId,
-    getSessionTtlMs: () => 24 * 60 * 60 * 1000,
+    getIdleTimeoutMs: () => 24 * 60 * 60 * 1000,
+    getMaxAgeMs: () => 0,
     getByThreadId: (threadId: string) =>
       threadId === params.threadId
         ? {
@@ -191,11 +192,15 @@ function createBoundThreadBindingManager(params: {
             agentId: params.agentId,
             boundBy: "system",
             boundAt: Date.now(),
+            lastActivityAt: Date.now(),
+            idleTimeoutMs: 24 * 60 * 60 * 1000,
+            maxAgeMs: 0,
           }
         : undefined,
     getBySessionKey: () => undefined,
     listBySessionKey: () => [],
     listBindings: () => [],
+    touchThread: () => null,
     bindTarget: async () => null,
     unbindThread: () => null,
     unbindBySessionKey: () => [],
