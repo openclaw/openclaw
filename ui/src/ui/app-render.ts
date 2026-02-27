@@ -812,27 +812,30 @@ export function renderApp(state: AppViewState) {
                   if (!configValue) {
                     return;
                   }
-                  const list = (configValue as { agents?: { list?: unknown[] } }).agents?.list;
-                  if (!Array.isArray(list)) {
-                    return;
-                  }
-                  const index = list.findIndex(
-                    (entry) =>
-                      entry &&
-                      typeof entry === "object" &&
-                      "id" in entry &&
-                      (entry as { id?: string }).id === agentId,
-                  );
-                  if (index < 0) {
-                    return;
-                  }
-                  const basePath = ["agents", "list", index, "model"];
+                  const cfgTyped = configValue as {
+                    agents?: { list?: unknown[]; defaults?: { model?: unknown } };
+                  };
+                  const list = cfgTyped.agents?.list;
+                  const index = Array.isArray(list)
+                    ? list.findIndex(
+                        (entry) =>
+                          entry &&
+                          typeof entry === "object" &&
+                          "id" in entry &&
+                          (entry as { id?: string }).id === agentId,
+                      )
+                    : -1;
+                  const isListEntry = index >= 0;
+                  const basePath = isListEntry
+                    ? ["agents", "list", index, "model"]
+                    : ["agents", "defaults", "model"];
                   if (!modelId) {
                     removeConfigFormValue(state, basePath);
                     return;
                   }
-                  const entry = list[index] as { model?: unknown };
-                  const existing = entry?.model;
+                  const existing = isListEntry
+                    ? (list![index] as { model?: unknown })?.model
+                    : cfgTyped.agents?.defaults?.model;
                   if (existing && typeof existing === "object" && !Array.isArray(existing)) {
                     const fallbacks = (existing as { fallbacks?: unknown }).fallbacks;
                     const next = {
@@ -848,24 +851,27 @@ export function renderApp(state: AppViewState) {
                   if (!configValue) {
                     return;
                   }
-                  const list = (configValue as { agents?: { list?: unknown[] } }).agents?.list;
-                  if (!Array.isArray(list)) {
-                    return;
-                  }
-                  const index = list.findIndex(
-                    (entry) =>
-                      entry &&
-                      typeof entry === "object" &&
-                      "id" in entry &&
-                      (entry as { id?: string }).id === agentId,
-                  );
-                  if (index < 0) {
-                    return;
-                  }
-                  const basePath = ["agents", "list", index, "model"];
-                  const entry = list[index] as { model?: unknown };
+                  const cfgTyped = configValue as {
+                    agents?: { list?: unknown[]; defaults?: { model?: unknown } };
+                  };
+                  const list = cfgTyped.agents?.list;
+                  const index = Array.isArray(list)
+                    ? list.findIndex(
+                        (entry) =>
+                          entry &&
+                          typeof entry === "object" &&
+                          "id" in entry &&
+                          (entry as { id?: string }).id === agentId,
+                      )
+                    : -1;
+                  const isListEntry = index >= 0;
+                  const basePath = isListEntry
+                    ? ["agents", "list", index, "model"]
+                    : ["agents", "defaults", "model"];
+                  const existing = isListEntry
+                    ? (list![index] as { model?: unknown }).model
+                    : cfgTyped.agents?.defaults?.model;
                   const normalized = fallbacks.map((name) => name.trim()).filter(Boolean);
-                  const existing = entry.model;
                   const resolvePrimary = () => {
                     if (typeof existing === "string") {
                       return existing.trim() || null;
