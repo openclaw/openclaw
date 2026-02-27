@@ -1,21 +1,105 @@
 services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: openclaw
+      POSTGRES_PASSWORD: openclaw
+      POSTGRES_DB: openclaw
+    volumes:
+      - openclaw-postgres:/var/lib/postgresql/data
+    ports:
+      - "${OPENCLAW_POSTGRES_PORT:-5432}:5432"
+    restart: unless-stopped
+
+  openclaw-gateway-dev:
+    profiles: ["dev"]
+    build: .
+    environment:
+      HOME: /home/node
+      TERM: xterm-256color
+      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN}
+      OPENCLAW_DATASTORE: postgres
+      OPENCLAW_STATE_DB_URL: ${OPENCLAW_STATE_DB_URL:-postgresql://openclaw:openclaw@postgres:5432/openclaw}
+      CLAUDE_AI_SESSION_KEY: ${CLAUDE_AI_SESSION_KEY}
+      CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY}
+      CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE}
+    volumes:
+      - .:/app
+      - openclaw-node-modules:/app/node_modules
+      - openclaw-pnpm-store:/home/node/.local/share/pnpm/store
+      - ${OPENCLAW_CONFIG_DIR:-./.openclaw}:/home/node/.openclaw
+      - ${OPENCLAW_WORKSPACE_DIR:-./.openclaw/workspace}:/home/node/.openclaw/workspace
+    ports:
+      - "${OPENCLAW_GATEWAY_PORT:-18789}:18789"
+      - "${OPENCLAW_BRIDGE_PORT:-18790}:18790"
+    init: true
+    restart: unless-stopped
+    depends_on:
+      - postgres
+    command: ["bash", "-lc", "pnpm install && pnpm gateway:watch"]
+
+  openclaw-ui-dev:
+    profiles: ["dev"]
+    build: .
+    environment:
+      HOME: /home/node
+      TERM: xterm-256color
+    volumes:
+      - .:/app
+      - openclaw-node-modules:/app/node_modules
+      - openclaw-pnpm-store:/home/node/.local/share/pnpm/store
+    ports:
+      - "${OPENCLAW_UI_PORT:-5173}:5173"
+    init: true
+    restart: unless-stopped
+    command:
+      [
+        "bash",
+        "-lc",
+        "pnpm install && pnpm ui:dev -- --host 0.0.0.0 --port 5173",
+      ]
+
+  openclaw-dev-bootstrap-host:
+    profiles: ["dev-host"]
+    image: node:22-bookworm
+    environment:
+      HOME: /home/node
+      TERM: xterm-256color
+    working_dir: /app
+    volumes:
+      - .:/app
+      - ${OPENCLAW_CONFIG_DIR:-./.openclaw}:/home/node/.openclaw
+      - ${OPENCLAW_WORKSPACE_DIR:-./.openclaw/workspace}:/home/node/.openclaw/workspace
+    init: true
+    restart: "no"
+    command:
+      [
+        "bash",
+        "-lc",
+        "corepack enable && corepack prepare pnpm@10.23.0 --activate && pnpm install --no-frozen-lockfile",
+      ]
+
   openclaw-gateway:
     image: ${OPENCLAW_IMAGE:-openclaw:local}
     environment:
       HOME: /home/node
       TERM: xterm-256color
       OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN}
+      OPENCLAW_DATASTORE: postgres
+      OPENCLAW_STATE_DB_URL: ${OPENCLAW_STATE_DB_URL:-postgresql://openclaw:openclaw@postgres:5432/openclaw}
       CLAUDE_AI_SESSION_KEY: ${CLAUDE_AI_SESSION_KEY}
       CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY}
       CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE}
     volumes:
-      - ${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw
-      - ${OPENCLAW_WORKSPACE_DIR}:/home/node/.openclaw/workspace
+      - ${OPENCLAW_CONFIG_DIR:-./.openclaw}:/home/node/.openclaw
+      - ${OPENCLAW_WORKSPACE_DIR:-./.openclaw/workspace}:/home/node/.openclaw/workspace
     ports:
       - "${OPENCLAW_GATEWAY_PORT:-18789}:18789"
       - "${OPENCLAW_BRIDGE_PORT:-18790}:18790"
     init: true
     restart: unless-stopped
+    depends_on:
+      - postgres
     command:
       [
         "node",
@@ -33,14 +117,23 @@ services:
       HOME: /home/node
       TERM: xterm-256color
       OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN}
+      OPENCLAW_DATASTORE: postgres
+      OPENCLAW_STATE_DB_URL: ${OPENCLAW_STATE_DB_URL:-postgresql://openclaw:openclaw@postgres:5432/openclaw}
       BROWSER: echo
       CLAUDE_AI_SESSION_KEY: ${CLAUDE_AI_SESSION_KEY}
       CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY}
       CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE}
     volumes:
-      - ${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw
-      - ${OPENCLAW_WORKSPACE_DIR}:/home/node/.openclaw/workspace
+      - ${OPENCLAW_CONFIG_DIR:-./.openclaw}:/home/node/.openclaw
+      - ${OPENCLAW_WORKSPACE_DIR:-./.openclaw/workspace}:/home/node/.openclaw/workspace
     stdin_open: true
     tty: true
     init: true
+    depends_on:
+      - postgres
     entrypoint: ["node", "dist/index.js"]
+
+volumes:
+  openclaw-postgres:
+  openclaw-node-modules:
+  openclaw-pnpm-store:

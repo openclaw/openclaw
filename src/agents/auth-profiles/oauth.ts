@@ -101,12 +101,12 @@ type ResolveApiKeyForProfileParams = {
 
 type SecretDefaults = NonNullable<OpenClawConfig["secrets"]>["defaults"];
 
-function adoptNewerMainOAuthCredential(params: {
+async function adoptNewerMainOAuthCredential(params: {
   store: AuthProfileStore;
   profileId: string;
   agentDir?: string;
   cred: OAuthCredentials & { type: "oauth"; provider: string; email?: string };
-}): (OAuthCredentials & { type: "oauth"; provider: string; email?: string }) | null {
+}): Promise<(OAuthCredentials & { type: "oauth"; provider: string; email?: string }) | null> {
   if (!params.agentDir) {
     return null;
   }
@@ -120,7 +120,7 @@ function adoptNewerMainOAuthCredential(params: {
       (!Number.isFinite(params.cred.expires) || mainCred.expires > params.cred.expires)
     ) {
       params.store.profiles[params.profileId] = { ...mainCred };
-      saveAuthProfileStore(params.store, params.agentDir);
+      await saveAuthProfileStore(params.store, params.agentDir);
       log.info("adopted newer OAuth credentials from main agent", {
         profileId: params.profileId,
         agentDir: params.agentDir,
@@ -191,7 +191,7 @@ async function refreshOAuthTokenWithLock(params: {
       ...result.newCredentials,
       type: "oauth",
     };
-    saveAuthProfileStore(store, params.agentDir);
+    await saveAuthProfileStore(store, params.agentDir);
 
     return result;
   });
@@ -353,12 +353,12 @@ export async function resolveApiKeyForProfile(
   }
 
   const oauthCred =
-    adoptNewerMainOAuthCredential({
+    (await adoptNewerMainOAuthCredential({
       store,
       profileId,
       agentDir: params.agentDir,
       cred,
-    }) ?? cred;
+    })) ?? cred;
 
   if (Date.now() < oauthCred.expires) {
     return buildOAuthProfileResult({
@@ -421,7 +421,7 @@ export async function resolveApiKeyForProfile(
         if (mainCred?.type === "oauth" && Date.now() < mainCred.expires) {
           // Main agent has fresh credentials - copy them to this agent and use them
           refreshedStore.profiles[profileId] = { ...mainCred };
-          saveAuthProfileStore(refreshedStore, params.agentDir);
+          await saveAuthProfileStore(refreshedStore, params.agentDir);
           log.info("inherited fresh OAuth credentials from main agent", {
             profileId,
             agentDir: params.agentDir,

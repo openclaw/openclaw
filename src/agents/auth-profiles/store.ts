@@ -1,9 +1,8 @@
 import fs from "node:fs";
 import type { OAuthCredentials } from "@mariozechner/pi-ai";
 import { resolveOAuthPath } from "../../config/paths.js";
-import { withFileLock } from "../../infra/file-lock.js";
-import { loadJsonFile, saveJsonFile } from "../../infra/json-file.js";
-import { AUTH_STORE_LOCK_OPTIONS, AUTH_STORE_VERSION, log } from "./constants.js";
+import { getDatastore, resolveDatastoreType } from "../../infra/datastore.js";
+import { AUTH_STORE_VERSION, log } from "./constants.js";
 import { syncExternalCliCredentials } from "./external-cli-sync.js";
 import { ensureAuthStoreFile, resolveAuthStorePath, resolveLegacyAuthStorePath } from "./paths.js";
 import type { AuthProfileCredential, AuthProfileStore, ProfileUsageStats } from "./types.js";
@@ -82,17 +81,24 @@ export async function updateAuthProfileStoreWithLock(params: {
   updater: (store: AuthProfileStore) => boolean;
 }): Promise<AuthProfileStore | null> {
   const authPath = resolveAuthStorePath(params.agentDir);
-  ensureAuthStoreFile(authPath);
+  if (resolveDatastoreType() === "fs") {
+    ensureAuthStoreFile(authPath);
+  }
 
   try {
-    return await withFileLock(authPath, AUTH_STORE_LOCK_OPTIONS, async () => {
+    let resultStore: AuthProfileStore | null = null;
+    await getDatastore().updateWithLock<AuthProfileStore>(authPath, (raw) => {
+      // ensureAuthProfileStore reads from multiple sources (runtime snapshots,
+      // legacy stores, main agent fallback). Call it to get the merged store.
       const store = ensureAuthProfileStore(params.agentDir);
       const shouldSave = params.updater(store);
+      resultStore = store;
       if (shouldSave) {
-        saveAuthProfileStore(store, params.agentDir);
+        return { changed: true, result: buildSavePayload(store) };
       }
-      return store;
+      return { changed: false, result: raw ?? { version: AUTH_STORE_VERSION, profiles: {} } };
     });
+    return resultStore;
   } catch {
     return null;
   }
@@ -278,7 +284,7 @@ function mergeAuthProfileStores(
 
 function mergeOAuthFileIntoStore(store: AuthProfileStore): boolean {
   const oauthPath = resolveOAuthPath();
-  const oauthRaw = loadJsonFile(oauthPath);
+  const oauthRaw = getDatastore().read(oauthPath);
   if (!oauthRaw || typeof oauthRaw !== "object") {
     return false;
   }
@@ -339,7 +345,7 @@ function applyLegacyStore(store: AuthProfileStore, legacy: LegacyAuthStore): voi
 }
 
 function loadCoercedStore(authPath: string): AuthProfileStore | null {
-  const raw = loadJsonFile(authPath);
+  const raw = getDatastore().read(authPath);
   return coerceAuthStore(raw);
 }
 
@@ -350,11 +356,13 @@ export function loadAuthProfileStore(): AuthProfileStore {
     // Sync from external CLI tools on every load.
     const synced = syncExternalCliCredentials(asStore);
     if (synced) {
-      saveJsonFile(authPath, asStore);
+      void getDatastore()
+        .write(authPath, asStore)
+        .catch(() => {});
     }
     return asStore;
   }
-  const legacyRaw = loadJsonFile(resolveLegacyAuthStorePath());
+  const legacyRaw = getDatastore().read(resolveLegacyAuthStorePath());
   const legacy = coerceLegacyStore(legacyRaw);
   if (legacy) {
     const store: AuthProfileStore = {
@@ -383,7 +391,9 @@ function loadAuthProfileStoreForAgent(
     // sync external CLI credentials in-memory, but never persist while readOnly.
     const synced = syncExternalCliCredentials(asStore);
     if (synced && !readOnly) {
-      saveJsonFile(authPath, asStore);
+      void getDatastore()
+        .write(authPath, asStore)
+        .catch(() => {});
     }
     return asStore;
   }
@@ -391,17 +401,19 @@ function loadAuthProfileStoreForAgent(
   // Fallback: inherit auth-profiles from main agent if subagent has none
   if (agentDir && !readOnly) {
     const mainAuthPath = resolveAuthStorePath(); // without agentDir = main
-    const mainRaw = loadJsonFile(mainAuthPath);
+    const mainRaw = getDatastore().read(mainAuthPath);
     const mainStore = coerceAuthStore(mainRaw);
     if (mainStore && Object.keys(mainStore.profiles).length > 0) {
       // Clone main store to subagent directory for auth inheritance
-      saveJsonFile(authPath, mainStore);
+      void getDatastore()
+        .write(authPath, mainStore)
+        .catch(() => {});
       log.info("inherited auth-profiles from main agent", { agentDir });
       return mainStore;
     }
   }
 
-  const legacyRaw = loadJsonFile(resolveLegacyAuthStorePath(agentDir));
+  const legacyRaw = getDatastore().read(resolveLegacyAuthStorePath(agentDir));
   const legacy = coerceLegacyStore(legacyRaw);
   const store: AuthProfileStore = {
     version: AUTH_STORE_VERSION,
@@ -417,7 +429,9 @@ function loadAuthProfileStoreForAgent(
   const forceReadOnly = process.env.OPENCLAW_AUTH_STORE_READONLY === "1";
   const shouldWrite = !readOnly && !forceReadOnly && (legacy !== null || mergedOAuth || syncedCli);
   if (shouldWrite) {
-    saveJsonFile(authPath, store);
+    void getDatastore()
+      .write(authPath, store)
+      .catch(() => {});
   }
 
   // PR #368: legacy auth.json could get re-migrated from other agent dirs,
@@ -481,8 +495,8 @@ export function ensureAuthProfileStore(
   return merged;
 }
 
-export function saveAuthProfileStore(store: AuthProfileStore, agentDir?: string): void {
-  const authPath = resolveAuthStorePath(agentDir);
+/** Build a storage-safe payload: strip secret values that have keychain refs. */
+function buildSavePayload(store: AuthProfileStore): AuthProfileStore {
   const profiles = Object.fromEntries(
     Object.entries(store.profiles).map(([profileId, credential]) => {
       if (credential.type === "api_key" && credential.keyRef && credential.key !== undefined) {
@@ -498,12 +512,19 @@ export function saveAuthProfileStore(store: AuthProfileStore, agentDir?: string)
       return [profileId, credential];
     }),
   ) as AuthProfileStore["profiles"];
-  const payload = {
+  return {
     version: AUTH_STORE_VERSION,
     profiles,
     order: store.order ?? undefined,
     lastGood: store.lastGood ?? undefined,
     usageStats: store.usageStats ?? undefined,
   } satisfies AuthProfileStore;
-  saveJsonFile(authPath, payload);
+}
+
+export async function saveAuthProfileStore(
+  store: AuthProfileStore,
+  agentDir?: string,
+): Promise<void> {
+  const authPath = resolveAuthStorePath(agentDir);
+  await getDatastore().write(authPath, buildSavePayload(store));
 }

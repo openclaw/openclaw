@@ -43,11 +43,11 @@ export async function setAuthProfileOrder(params: {
   });
 }
 
-export function upsertAuthProfile(params: {
+export async function upsertAuthProfile(params: {
   profileId: string;
   credential: AuthProfileCredential;
   agentDir?: string;
-}): void {
+}): Promise<void> {
   const credential =
     params.credential.type === "api_key"
       ? {
@@ -61,7 +61,7 @@ export function upsertAuthProfile(params: {
         : params.credential;
   const store = ensureAuthProfileStore(params.agentDir);
   store.profiles[params.profileId] = credential;
-  saveAuthProfileStore(store, params.agentDir);
+  await saveAuthProfileStore(store, params.agentDir);
 }
 
 export async function upsertAuthProfileWithLock(params: {
@@ -112,5 +112,5 @@ export async function markAuthProfileGood(params: {
     return;
   }
   store.lastGood = { ...store.lastGood, [provider]: profileId };
-  saveAuthProfileStore(store, agentDir);
+  await saveAuthProfileStore(store, agentDir);
 }

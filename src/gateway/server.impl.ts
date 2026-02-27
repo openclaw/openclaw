@@ -324,6 +324,10 @@ export async function startGatewayServer(
       }
     });
 
+  // Initialize the datastore (preloads PG cache if using PostgreSQL backend).
+  const { initDatastore } = await import("../infra/datastore.js");
+  await initDatastore();
+
   // Fail fast before startup if required refs are unresolved.
   let cfgAtStart: OpenClawConfig;
   {

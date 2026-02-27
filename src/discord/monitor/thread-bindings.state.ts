@@ -1,7 +1,6 @@
-import fs from "node:fs";
 import path from "node:path";
 import { resolveStateDir } from "../../config/paths.js";
-import { loadJsonFile, saveJsonFile } from "../../infra/json-file.js";
+import { getDatastore } from "../../infra/datastore.js";
 import { normalizeAccountId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import {
   DEFAULT_THREAD_BINDING_IDLE_TIMEOUT_MS,
@@ -428,7 +427,7 @@ export function shouldPersistBindingMutations(): boolean {
   if (shouldPersistAnyBindingState()) {
     return true;
   }
-  return fs.existsSync(resolveThreadBindingsPath());
+  return getDatastore().read(resolveThreadBindingsPath()) != null;
 }
 
 export function saveBindingsToDisk(params: { force?: boolean; minIntervalMs?: number } = {}) {
@@ -456,7 +455,9 @@ export function saveBindingsToDisk(params: { force?: boolean; minIntervalMs?: nu
     version: THREAD_BINDINGS_VERSION,
     bindings,
   };
-  saveJsonFile(resolveThreadBindingsPath(), payload);
+  void getDatastore()
+    .write(resolveThreadBindingsPath(), payload)
+    .catch(() => {});
   THREAD_BINDINGS_STATE.lastPersistedAtMs = now;
 }
 
@@ -469,7 +470,7 @@ export function ensureBindingsLoaded() {
   BINDINGS_BY_SESSION_KEY.clear();
   REUSABLE_WEBHOOKS_BY_ACCOUNT_CHANNEL.clear();
 
-  const raw = loadJsonFile(resolveThreadBindingsPath());
+  const raw = getDatastore().read(resolveThreadBindingsPath());
   if (!raw || typeof raw !== "object") {
     return;
   }

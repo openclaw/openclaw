@@ -7,6 +7,7 @@ import {
   normalizeDeviceAuthRole,
   normalizeDeviceAuthScopes,
 } from "../shared/device-auth.js";
+import { getDatastore } from "./datastore.js";
 
 const DEVICE_AUTH_FILE = "device-auth.json";
 
@@ -16,12 +17,8 @@ function resolveDeviceAuthPath(env: NodeJS.ProcessEnv = process.env): string {
 
 function readStore(filePath: string): DeviceAuthStore | null {
   try {
-    if (!fs.existsSync(filePath)) {
-      return null;
-    }
-    const raw = fs.readFileSync(filePath, "utf8");
-    const parsed = JSON.parse(raw) as DeviceAuthStore;
-    if (parsed?.version !== 1 || typeof parsed.deviceId !== "string") {
+    const parsed = getDatastore().read<DeviceAuthStore>(filePath);
+    if (!parsed || parsed.version !== 1 || typeof parsed.deviceId !== "string") {
       return null;
     }
     if (!parsed.tokens || typeof parsed.tokens !== "object") {
@@ -34,13 +31,17 @@ function readStore(filePath: string): DeviceAuthStore | null {
 }
 
 function writeStore(filePath: string, store: DeviceAuthStore): void {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, `${JSON.stringify(store, null, 2)}\n`, { mode: 0o600 });
-  try {
-    fs.chmodSync(filePath, 0o600);
-  } catch {
-    // best-effort
-  }
+  void getDatastore()
+    .write(filePath, store)
+    .then(() => {
+      // best-effort: restrict permissions on the file (security-sensitive tokens)
+      try {
+        fs.chmodSync(filePath, 0o600);
+      } catch {
+        // no-op — postgres backend has no file to chmod
+      }
+    })
+    .catch(() => {});
 }
 
 export function loadDeviceAuthToken(params: {
