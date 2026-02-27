@@ -1,10 +1,32 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
+  isPrivateOrReservedIP,
   isUrlAllowed,
+  resolveAndValidateIP,
   resolveAllowedHosts,
   resolveAuthAllowedHosts,
   resolveMediaSsrfPolicy,
+  safeFetch,
 } from "./shared.js";
+
+const publicResolve = async () => ({ address: "13.107.136.10" });
+const privateResolve = (ip: string) => async () => ({ address: ip });
+const failingResolve = async () => {
+  throw new Error("DNS failure");
+};
+
+function mockFetchWithRedirect(redirectMap: Record<string, string>, finalBody = "ok") {
+  return vi.fn(async (url: string, init?: RequestInit) => {
+    const target = redirectMap[url];
+    if (target && init?.redirect === "manual") {
+      return new Response(null, {
+        status: 302,
+        headers: { location: target },
+      });
+    }
+    return new Response(finalBody, { status: 200 });
+  });
+}
 
 describe("msteams attachment allowlists", () => {
   it("normalizes wildcard host lists", () => {
@@ -17,6 +39,13 @@ describe("msteams attachment allowlists", () => {
     expect(isUrlAllowed("https://contoso.sharepoint.com/file.png", allowHosts)).toBe(true);
     expect(isUrlAllowed("http://contoso.sharepoint.com/file.png", allowHosts)).toBe(false);
     expect(isUrlAllowed("https://evil.example.com/file.png", allowHosts)).toBe(false);
+  });
+
+  it("builds shared SSRF policy from suffix allowlist", () => {
+    expect(resolveMediaSsrfPolicy(["sharepoint.com"])).toEqual({
+      hostnameAllowlist: ["sharepoint.com", "*.sharepoint.com"],
+    });
+    expect(resolveMediaSsrfPolicy(["*"])).toBeUndefined();
   });
 
   it.each([

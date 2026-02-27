@@ -1,4 +1,3 @@
-import { fetchWithBearerAuthScopeFallback } from "openclaw/plugin-sdk";
 import { getMSTeamsRuntime } from "../runtime.js";
 import { downloadAndStoreMSTeamsRemoteMedia } from "./remote-media.js";
 import {
@@ -12,6 +11,7 @@ import {
   resolveRequestUrl,
   resolveAuthAllowedHosts,
   resolveAllowedHosts,
+  safeFetch,
 } from "./shared.js";
 import type {
   MSTeamsAccessTokenProvider,
@@ -91,16 +91,14 @@ async function fetchWithAuthFallback(params: {
   tokenProvider?: MSTeamsAccessTokenProvider;
   fetchFn?: typeof fetch;
   requestInit?: RequestInit;
+  allowHosts: string[];
   authAllowHosts: string[];
 }): Promise<Response> {
-  return await fetchWithBearerAuthScopeFallback({
+  const firstAttempt = await safeFetch({
     url: params.url,
-    scopes: scopeCandidatesForUrl(params.url),
-    tokenProvider: params.tokenProvider,
+    allowHosts: params.allowHosts,
     fetchFn: params.fetchFn,
     requestInit: params.requestInit,
-    requireHttps: true,
-    shouldAttachAuth: (url) => isUrlAllowed(url, params.authAllowHosts),
   });
   if (firstAttempt.ok) {
     return firstAttempt;
@@ -116,6 +114,7 @@ async function fetchWithAuthFallback(params: {
   }
 
   const scopes = scopeCandidatesForUrl(params.url);
+  const fetchFn = params.fetchFn ?? fetch;
   for (const scope of scopes) {
     try {
       const token = await params.tokenProvider.getAccessToken(scope);
@@ -129,7 +128,6 @@ async function fetchWithAuthFallback(params: {
           ...params.requestInit,
           headers: authHeaders,
         },
-        resolveFn: params.resolveFn,
       });
       if (authAttempt.ok) {
         return authAttempt;
@@ -138,25 +136,6 @@ async function fetchWithAuthFallback(params: {
         // Non-auth failures (including redirects in guarded fetch mode) should
         // be handled by the caller's redirect/error policy.
         return authAttempt;
-      }
-
-      const finalUrl =
-        typeof authAttempt.url === "string" && authAttempt.url ? authAttempt.url : "";
-      if (!finalUrl || finalUrl === params.url || !isUrlAllowed(finalUrl, params.authAllowHosts)) {
-        continue;
-      }
-      const redirectedAuthAttempt = await safeFetch({
-        url: finalUrl,
-        allowHosts: params.allowHosts,
-        fetchFn,
-        requestInit: {
-          ...params.requestInit,
-          headers: authHeaders,
-        },
-        resolveFn: params.resolveFn,
-      });
-      if (redirectedAuthAttempt.ok) {
-        return redirectedAuthAttempt;
       }
     } catch {
       // Try the next scope.
@@ -262,6 +241,7 @@ export async function downloadMSTeamsAttachments(params: {
             tokenProvider: params.tokenProvider,
             fetchFn: params.fetchFn,
             requestInit: init,
+            allowHosts,
             authAllowHosts,
           }),
       });
