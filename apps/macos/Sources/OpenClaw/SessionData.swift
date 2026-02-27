@@ -70,6 +70,7 @@ struct SessionRow: Identifiable {
     let id: String
     let key: String
     let kind: SessionKind
+    let label: String?
     let displayName: String?
     let provider: String?
     let subject: String?
@@ -88,8 +89,8 @@ struct SessionRow: Identifiable {
         relativeAge(from: self.updatedAt)
     }
 
-    var label: String {
-        self.displayName ?? self.key
+    var displayLabel: String {
+        self.label ?? self.displayName ?? self.key
     }
 
     var flagLabels: [String] {
@@ -145,6 +146,7 @@ extension SessionRow {
                 id: "direct-1",
                 key: "user@example.com",
                 kind: .direct,
+                label: nil,
                 displayName: nil,
                 provider: nil,
                 subject: nil,
@@ -162,6 +164,7 @@ extension SessionRow {
                 id: "group-1",
                 key: "discord:channel:release-squad",
                 kind: .group,
+                label: nil,
                 displayName: "discord:#release-squad",
                 provider: "discord",
                 subject: nil,
@@ -179,6 +182,7 @@ extension SessionRow {
                 id: "global",
                 key: "global",
                 kind: .global,
+                label: nil,
                 displayName: nil,
                 provider: nil,
                 subject: nil,
@@ -302,6 +306,7 @@ enum SessionLoader {
                 id: entry.key,
                 key: entry.key,
                 kind: SessionKind.from(key: entry.key),
+                label: entry.label,
                 displayName: entry.displayName,
                 provider: entry.provider,
                 subject: entry.subject,

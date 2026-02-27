@@ -227,6 +227,7 @@ struct OpenClawChatComposer: View {
         let match = self.viewModel.sessions.first { $0.key == self.viewModel.sessionKey }
         return OpenClawChatSessionEntry.preferredLabel(
             forKey: self.viewModel.sessionKey,
+            label: match?.label,
             displayName: match?.displayName)
     }
 

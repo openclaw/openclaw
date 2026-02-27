@@ -36,7 +36,7 @@ struct SessionMenuLabelView: View {
                 height: self.barHeight)
 
             HStack(alignment: .firstTextBaseline, spacing: 2) {
-                Text(self.row.label)
+                Text(self.row.displayLabel)
                     .font(.caption.weight(self.row.key == "main" ? .semibold : .regular))
                     .foregroundStyle(self.primaryTextColor)
                     .lineLimit(1)

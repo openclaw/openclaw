@@ -10,6 +10,7 @@ public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashabl
 
     public let key: String
     public let kind: String?
+    public let label: String?
     public let displayName: String?
     public let surface: String?
     public let subject: String?
@@ -44,40 +45,20 @@ public struct OpenClawChatSessionsListResponse: Codable, Sendable {
 public extension OpenClawChatSessionEntry {
     /// Preferred label for showing this session in UI.
     ///
-    /// Rules:
-    /// - Prefer explicit `displayName` when present.
-    /// - If missing, disambiguate Telegram forum topic sessions for Aj's group.
-    /// - Otherwise fall back to `key`.
+    /// Resolution order:
+    /// 1. `label` — explicit label set in gateway config or sessions store (most specific)
+    /// 2. `displayName` — channel-derived display name
+    /// 3. `key` — raw session key as last resort
     var preferredLabel: String {
-        return Self.preferredLabel(forKey: self.key, displayName: self.displayName)
+        return Self.preferredLabel(forKey: self.key, label: self.label, displayName: self.displayName)
     }
 
-    static func preferredLabel(forKey key: String, displayName: String?) -> String {
+    static func preferredLabel(forKey key: String, label: String? = nil, displayName: String?) -> String {
+        if let label = label?.trimmingCharacters(in: .whitespacesAndNewlines), !label.isEmpty {
+            return label
+        }
         let trimmed = (displayName ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmed.isEmpty { return trimmed }
-
-        if let topicId = Self.telegramTopicIdIfKnownGroup(from: key) {
-            switch topicId {
-            case 1: return "General"
-            case 3: return "Config & Setup"
-            case 5: return "Tasks"
-            case 7: return "Memory"
-            case 9: return "Notes"
-            case 11: return "Coding Projects"
-            case 199: return "Cron Jobs"
-            default: return "Topic \(topicId)"
-            }
-        }
-
         return key
-    }
-
-    private static func telegramTopicIdIfKnownGroup(from sessionKey: String) -> Int? {
-        // Example: agent:main:telegram:group:-1003818623107:topic:5
-        let marker = "telegram:group:-1003818623107:topic:"
-        guard let range = sessionKey.range(of: marker) else { return nil }
-        let remainder = sessionKey[range.upperBound...]
-        guard let idStr = remainder.split(separator: ":").first else { return nil }
-        return Int(idStr)
     }
 }
