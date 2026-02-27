@@ -162,6 +162,9 @@ object InvokeCommandRegistry {
         name = OpenClawDeviceCommand.Health.rawValue,
       ),
       InvokeCommandSpec(
+        name = OpenClawDeviceCommand.Battery.rawValue,
+      ),
+      InvokeCommandSpec(
         name = OpenClawNotificationsCommand.List.rawValue,
       ),
       InvokeCommandSpec(

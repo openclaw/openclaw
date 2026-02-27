@@ -84,6 +84,7 @@ enum class OpenClawDeviceCommand(val rawValue: String) {
   Info("device.info"),
   Permissions("device.permissions"),
   Health("device.health"),
+  Battery("device.battery"),
   ;
 
   companion object {
