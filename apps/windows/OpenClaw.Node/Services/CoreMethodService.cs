@@ -13,6 +13,7 @@ namespace OpenClaw.Node.Services
     {
         private readonly DateTimeOffset _startedAtUtc;
         private readonly ConcurrentDictionary<string, PairRequest> _pendingPairRequests = new();
+        private readonly object _pendingPairGate = new();
         private readonly string _pendingPairCachePath;
 
         public bool HeartbeatsEnabled { get; private set; } = true;
@@ -180,9 +181,12 @@ namespace OpenClaw.Node.Services
                 var requestId = TryGetString(payload, "requestId");
                 if (!string.IsNullOrWhiteSpace(requestId))
                 {
-                    if (_pendingPairRequests.TryRemove(requestId!, out _))
+                    lock (_pendingPairGate)
                     {
-                        PersistPendingPairRequests();
+                        if (_pendingPairRequests.TryRemove(requestId!, out _))
+                        {
+                            PersistPendingPairRequestsUnsafe();
+                        }
                     }
                     return true;
                 }
@@ -195,19 +199,29 @@ namespace OpenClaw.Node.Services
         public void AddPendingPairRequest(string requestId, string? deviceLabel = null, string kind = "device")
         {
             if (string.IsNullOrWhiteSpace(requestId)) return;
-            _pendingPairRequests[requestId] = new PairRequest
+
+            lock (_pendingPairGate)
             {
-                RequestId = requestId,
-                DeviceLabel = string.IsNullOrWhiteSpace(deviceLabel) ? "unknown-device" : deviceLabel,
-                Kind = string.IsNullOrWhiteSpace(kind) ? "device" : kind,
-                RequestedAt = DateTimeOffset.UtcNow
-            };
-            PersistPendingPairRequests();
+                _pendingPairRequests[requestId] = new PairRequest
+                {
+                    RequestId = requestId,
+                    DeviceLabel = string.IsNullOrWhiteSpace(deviceLabel) ? "unknown-device" : deviceLabel,
+                    Kind = string.IsNullOrWhiteSpace(kind) ? "device" : kind,
+                    RequestedAt = DateTimeOffset.UtcNow
+                };
+                PersistPendingPairRequestsUnsafe();
+            }
         }
 
         public Task<object?> HandleDevicePairListAsync(RequestFrame _)
         {
-            var items = _pendingPairRequests.Values
+            PairRequest[] snapshot;
+            lock (_pendingPairGate)
+            {
+                snapshot = _pendingPairRequests.Values.ToArray();
+            }
+
+            var items = snapshot
                 .Where(x => x.Kind == "device")
                 .OrderByDescending(x => x.RequestedAt)
                 .Select(x => new
@@ -223,7 +237,13 @@ namespace OpenClaw.Node.Services
 
         public Task<object?> HandleNodePairListAsync(RequestFrame _)
         {
-            var items = _pendingPairRequests.Values
+            PairRequest[] snapshot;
+            lock (_pendingPairGate)
+            {
+                snapshot = _pendingPairRequests.Values.ToArray();
+            }
+
+            var items = snapshot
                 .Where(x => x.Kind == "node")
                 .OrderByDescending(x => x.RequestedAt)
                 .Select(x => new
@@ -261,10 +281,14 @@ namespace OpenClaw.Node.Services
                 });
             }
 
-            var existed = _pendingPairRequests.TryRemove(requestId!, out _);
-            if (existed)
+            bool existed;
+            lock (_pendingPairGate)
             {
-                PersistPendingPairRequests();
+                existed = _pendingPairRequests.TryRemove(requestId!, out _);
+                if (existed)
+                {
+                    PersistPendingPairRequestsUnsafe();
+                }
             }
             return Task.FromResult<object?>(new
             {
@@ -296,14 +320,17 @@ namespace OpenClaw.Node.Services
                     return;
                 }
 
-                foreach (var item in items)
+                lock (_pendingPairGate)
                 {
-                    if (item == null || string.IsNullOrWhiteSpace(item.RequestId))
+                    foreach (var item in items)
                     {
-                        continue;
-                    }
+                        if (item == null || string.IsNullOrWhiteSpace(item.RequestId))
+                        {
+                            continue;
+                        }
 
-                    _pendingPairRequests[item.RequestId] = item;
+                        _pendingPairRequests[item.RequestId] = item;
+                    }
                 }
             }
             catch
@@ -313,6 +340,14 @@ namespace OpenClaw.Node.Services
         }
 
         private void PersistPendingPairRequests()
+        {
+            lock (_pendingPairGate)
+            {
+                PersistPendingPairRequestsUnsafe();
+            }
+        }
+
+        private void PersistPendingPairRequestsUnsafe()
         {
             try
             {
