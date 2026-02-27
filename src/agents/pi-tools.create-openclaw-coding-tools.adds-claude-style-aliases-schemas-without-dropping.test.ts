@@ -104,6 +104,61 @@ describe("createOpenClawCodingTools", () => {
       expect(params.required ?? []).not.toContain("file_path");
     });
 
+    it("adds cmd alias to exec schema without dropping command", () => {
+      const base: AgentTool = {
+        name: "exec",
+        label: "exec",
+        description: "test",
+        parameters: Type.Object({
+          command: Type.String({ description: "Shell command" }),
+          workdir: Type.Optional(Type.String()),
+        }),
+        execute: vi.fn(),
+      };
+
+      const patched = __testing.patchToolSchemaForClaudeCompatibility(base);
+      const params = patched.parameters as {
+        properties?: Record<string, unknown>;
+        required?: string[];
+      };
+      const props = params.properties ?? {};
+
+      expect(props.cmd).toEqual(props.command);
+      expect(params.required ?? []).not.toContain("command");
+    });
+
+    it("normalizes cmd to command at runtime for exec tool", async () => {
+      const execute = vi.fn(async (_id, args) => args);
+      const tool: AgentTool = {
+        name: "exec",
+        label: "exec",
+        description: "test",
+        parameters: Type.Object({
+          command: Type.String(),
+        }),
+        execute,
+      };
+
+      const wrapped = __testing.wrapToolParamNormalization(tool, [
+        { keys: ["command", "cmd"], label: "command (command or cmd)" },
+      ]);
+
+      await wrapped.execute("tool-exec-1", { cmd: "ls -la" });
+      expect(execute).toHaveBeenCalledWith(
+        "tool-exec-1",
+        { command: "ls -la" },
+        undefined,
+        undefined,
+      );
+
+      await expect(wrapped.execute("tool-exec-2", {})).rejects.toThrow(
+        /Missing required parameter.*command/,
+      );
+      await expect(wrapped.execute("tool-exec-2", {})).rejects.toThrow(
+        /Supply correct parameters before retrying\./,
+      );
+    });
+
     it("normalizes file_path to path and enforces required groups at runtime", async () => {
       const execute = vi.fn(async (_id, args) => args);
       const tool: AgentTool = {

@@ -43,6 +43,13 @@ import {
   resolveWorkdir,
   truncateMiddle,
 } from "./bash-tools.shared.js";
+import {
+  CLAUDE_PARAM_GROUPS,
+  assertRequiredParams,
+  normalizeToolParams,
+  patchToolSchemaForClaudeCompatibility,
+} from "./pi-tools.read.js";
+import type { AnyAgentTool } from "./pi-tools.types.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
 
 export type { BashSandboxConfig } from "./bash-tools.shared.js";
@@ -200,14 +207,23 @@ export function createExecTool(
     defaults?.agentId ??
     (parsedAgentSession ? resolveAgentIdFromSessionKey(defaults?.sessionKey) : undefined);
 
-  return {
+  // Build the base tool, then patch schema to accept `cmd` as alias for `command`,
+  // mirroring how read/write/edit accept `file_path` alongside `path`.
+  const baseTool: AnyAgentTool = {
     name: "exec",
     label: "exec",
     description:
       "Execute shell commands with background continuation. Use yieldMs/background to continue later via process tool. Use pty=true for TTY-required commands (terminal UIs, coding agents).",
     parameters: execSchema,
     execute: async (_toolCallId, args, signal, onUpdate) => {
-      const params = args as {
+      // Normalize aliases (cmd → command) before validation, matching the
+      // pattern used by read/write/edit for file_path → path.
+      const normalized = normalizeToolParams(args);
+      const record =
+        normalized ??
+        (args && typeof args === "object" ? (args as Record<string, unknown>) : undefined);
+      assertRequiredParams(record, CLAUDE_PARAM_GROUPS.exec, "exec");
+      const params = (normalized ?? args) as {
         command: string;
         workdir?: string;
         env?: Record<string, string>;
@@ -592,6 +608,9 @@ export function createExecTool(
       });
     },
   };
+
+  // oxlint-disable-next-line typescript/no-explicit-any
+  return patchToolSchemaForClaudeCompatibility(baseTool) as AgentTool<any, ExecToolDetails>;
 }
 
 export const execTool = createExecTool();
