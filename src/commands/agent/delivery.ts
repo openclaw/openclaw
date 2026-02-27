@@ -227,19 +227,24 @@ export async function deliverAgentCommandResult(params: {
       // Deduplicate payloads already sent via the messaging tool during this turn.
       // Use deliveryChannel (not turnSourceChannel) — non-messaging triggers
       // like "cron-event" would bypass dedup.
+      const sentTargets = result.messagingToolSentTargets ?? [];
+      const sentTexts = result.messagingToolSentTexts ?? [];
       const suppress = shouldSuppressMessagingToolReplies({
         messageProvider: resolveOriginMessageProvider({
           originatingChannel: deliveryChannel,
           provider: deliveryChannel,
         }),
-        messagingToolSentTargets: result.messagingToolSentTargets ?? [],
+        messagingToolSentTargets: sentTargets,
         originatingTo: deliveryTarget,
         accountId: resolvedAccountId,
       });
-      const dedupedPayloads = suppress
+      // If target metadata is unavailable, keep legacy text-only dedupe behavior
+      // (mirrors buildReplyPayloads in agent-runner-payloads.ts).
+      const shouldDedupe = suppress || sentTargets.length === 0;
+      const dedupedPayloads = shouldDedupe
         ? filterMessagingToolDuplicates({
             payloads: deliveryPayloads,
-            sentTexts: result.messagingToolSentTexts ?? [],
+            sentTexts,
           })
         : deliveryPayloads;
       if (dedupedPayloads.length > 0) {
