@@ -16,18 +16,36 @@ export function enforceEmbeddingMaxInputTokens(
   const out: MemoryChunk[] = [];
 
   for (const chunk of chunks) {
-    if (estimateUtf8Bytes(chunk.text) <= maxInputTokens) {
+    const effectiveText = chunk.embedText ?? chunk.text;
+    if (estimateUtf8Bytes(effectiveText) <= maxInputTokens) {
       out.push(chunk);
       continue;
     }
 
-    for (const text of splitTextToUtf8ByteLimit(chunk.text, maxInputTokens)) {
-      out.push({
-        startLine: chunk.startLine,
-        endLine: chunk.endLine,
-        text,
-        hash: hashText(text),
-      });
+    // When splitting an over-limit chunk, split based on the embedding text
+    // but keep text/embedText aligned so cache keys stay correct.
+    if (chunk.embedText) {
+      const splitEmbedTexts = splitTextToUtf8ByteLimit(chunk.embedText, maxInputTokens);
+      const splitTexts = splitTextToUtf8ByteLimit(chunk.text, maxInputTokens);
+      for (let i = 0; i < splitEmbedTexts.length; i++) {
+        const embedText = splitEmbedTexts[i];
+        out.push({
+          startLine: chunk.startLine,
+          endLine: chunk.endLine,
+          text: splitTexts[i] ?? embedText,
+          embedText,
+          hash: hashText(embedText),
+        });
+      }
+    } else {
+      for (const text of splitTextToUtf8ByteLimit(chunk.text, maxInputTokens)) {
+        out.push({
+          startLine: chunk.startLine,
+          endLine: chunk.endLine,
+          text,
+          hash: hashText(text),
+        });
+      }
     }
   }
 
