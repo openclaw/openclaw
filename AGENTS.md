@@ -129,6 +129,12 @@
   4. Validate refreshed branch with targeted tests + build, and compare commit intent with `git cherry -v upstream/main HEAD` + `git range-diff`.
   5. Publish only with `git push --force-with-lease=refs/heads/bugfixes/rollup:<old-remote-sha>`.
   6. Verify remote commit set, keep backup ref for rollback, and remove temporary worktree/refresh branch.
+- Adding future fixes/modifications to rollup (best practice):
+  1. Start each change on a short-lived feature branch from latest `upstream/main` (not directly on `bugfixes/rollup`).
+  2. Validate on the feature branch first, then move only intended commits into `bugfixes/rollup` via `git cherry-pick -x` (or controlled rebase).
+  3. Keep `bugfixes/rollup` as a clean, intentional patch stack (bugfixes + explicitly approved fork deltas; avoid unrelated experiments).
+  4. Before any rollup refresh/publish, create a backup ref and verify intent with `git cherry -v upstream/main bugfixes/rollup`.
+  5. Push rollup updates with `--force-with-lease` only, and keep at least one recent rollback backup ref.
 
 ## GitHub Search (`gh`)
 
