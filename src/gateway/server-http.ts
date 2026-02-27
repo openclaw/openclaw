@@ -693,9 +693,13 @@ export function createGatewayHttpServer(opts: {
       console.error(
         `[gateway] unhandled HTTP error on ${req.method} ${req.url}: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`,
       );
-      res.statusCode = 500;
-      res.setHeader("Content-Type", "text/plain; charset=utf-8");
-      res.end("Internal Server Error");
+      if (!res.headersSent) {
+        res.statusCode = 500;
+        res.setHeader("Content-Type", "text/plain; charset=utf-8");
+      }
+      if (!res.writableEnded) {
+        res.end("Internal Server Error");
+      }
     }
   }
 

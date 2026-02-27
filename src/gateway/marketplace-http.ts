@@ -176,8 +176,8 @@ async function handleStreamingRelay(
   tenant: { orgId: string; userId: string },
   opts: MarketplaceHttpOptions,
 ): Promise<void> {
-  setSseHeaders(res);
   res.setHeader("X-Marketplace-Request-Id", requestId);
+  setSseHeaders(res);
 
   await new Promise<void>((resolve) => {
     let completed = false;
