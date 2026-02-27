@@ -1225,6 +1225,7 @@ export async function processMessage(
                   caption: caption ?? undefined,
                   replyToId: replyToMessageGuid || null,
                   accountId: account.accountId,
+                  asVoice: payload.audioAsVoice === true,
                 });
               } catch (err) {
                 forgetPendingOutboundMessageId(pendingId);
