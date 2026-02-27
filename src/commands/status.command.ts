@@ -2,6 +2,7 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { withProgress } from "../cli/progress.js";
 import { resolveGatewayPort } from "../config/config.js";
 import { buildGatewayConnectionDetails, callGateway } from "../gateway/call.js";
+import { isLoopbackHost } from "../gateway/net.js";
 import { info } from "../globals.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import type { HeartbeatEventPayload } from "../infra/heartbeat-events.js";
@@ -73,11 +74,7 @@ function isLoopbackWsUrl(url?: string | null): boolean {
     if (parsed.protocol !== "ws:" && parsed.protocol !== "wss:") {
       return false;
     }
-    const host = parsed.hostname.toLowerCase();
-    const normalizedHost = host.startsWith("[") && host.endsWith("]") ? host.slice(1, -1) : host;
-    return (
-      normalizedHost === "localhost" || normalizedHost === "127.0.0.1" || normalizedHost === "::1"
-    );
+    return isLoopbackHost(parsed.hostname);
   } catch {
     return false;
   }
