@@ -393,6 +393,7 @@ export const configHandlers: GatewayRequestHandlers = {
       {
         ok: true,
         path: CONFIG_PATH,
+        changedPaths,
         config: redactConfigObject(validated.config, schemaPatch.uiHints),
         restart,
         sentinel: {

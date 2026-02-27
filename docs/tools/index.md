@@ -446,15 +446,17 @@ Restart or apply updates to the running Gateway process (in-place).
 Core actions:
 
 - `restart` (authorizes + sends `SIGUSR1` for in-process restart; `openclaw gateway` restart in-place)
-- `config.get` / `config.schema`
+- `config.get` / `config.fetch-full` / `config.schema`
 - `config.apply` (validate + write config + restart + wake)
-- `config.patch` (merge partial update + restart + wake)
+- `config.patch` (merge partial update + restart + wake; default response is minimal diff)
 - `update.run` (run update + restart + wake)
 
 Notes:
 
 - Use `delayMs` (defaults to 2000) to avoid interrupting an in-flight reply.
 - `restart` is enabled by default; set `commands.restart: false` to disable it.
+- Use `config.fetch-full` when you explicitly need the full config snapshot.
+- Use `config.patch` with `outputMode: "full"` if you need the full post-write payload.
 
 ### `sessions_list` / `sessions_history` / `sessions_send` / `sessions_spawn` / `session_status`
 

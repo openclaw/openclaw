@@ -1,18 +1,20 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { withEnvAsync } from "../test-utils/env.js";
 import "./test-helpers/fast-core-tools.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 
+async function defaultGatewayToolMock(method: string) {
+  if (method === "config.get") {
+    return { hash: "hash-1" };
+  }
+  return { ok: true };
+}
+
 vi.mock("./tools/gateway.js", () => ({
-  callGatewayTool: vi.fn(async (method: string) => {
-    if (method === "config.get") {
-      return { hash: "hash-1" };
-    }
-    return { ok: true };
-  }),
+  callGatewayTool: vi.fn(defaultGatewayToolMock),
   readGatewayCallOptions: vi.fn(() => ({})),
 }));
 
@@ -50,7 +52,64 @@ function expectConfigMutationCall(params: {
   );
 }
 
+function estimateTokenUsageFromText(text: string): number {
+  // Keep benchmark deterministic and dependency-free with the same heuristic
+  // used in compaction/tool-result truncation paths.
+  return Math.ceil(text.length / 4);
+}
+
+function readToolResultText(result: { content?: Array<{ type?: string; text?: string }> }): string {
+  const block = result.content?.find(
+    (entry): entry is { type: string; text: string } =>
+      entry.type === "text" && typeof entry.text === "string",
+  );
+  expect(block).toBeDefined();
+  return block?.text ?? "";
+}
+
+function buildLargeConfigFixture(): Record<string, unknown> {
+  const groups = Object.fromEntries(
+    Array.from({ length: 64 }, (_, index) => [
+      `team-${index}`,
+      {
+        requireMention: index % 2 === 0,
+        allowlist: [`ops-${index}`, `alerts-${index}`, `releases-${index}`],
+      },
+    ]),
+  );
+  return {
+    agents: {
+      defaults: {
+        workspace: "~/openclaw",
+        model: "gpt-5",
+      },
+    },
+    channels: {
+      telegram: {
+        groups,
+      },
+      discord: {
+        guilds: groups,
+      },
+    },
+    tools: {
+      browser: {
+        enabled: true,
+      },
+      web_search: {
+        provider: "brave",
+      },
+    },
+  };
+}
+
 describe("gateway tool", () => {
+  beforeEach(async () => {
+    const { callGatewayTool } = await import("./tools/gateway.js");
+    vi.mocked(callGatewayTool).mockReset();
+    vi.mocked(callGatewayTool).mockImplementation(defaultGatewayToolMock);
+  });
+
   it("marks gateway as owner-only", async () => {
     const tool = requireGatewayTool();
     expect(tool.ownerOnly).toBe(true);
@@ -136,6 +195,202 @@ describe("gateway tool", () => {
       raw,
       sessionKey,
     });
+  });
+
+  it("returns minimal-diff output for config.patch by default", async () => {
+    const { callGatewayTool } = await import("./tools/gateway.js");
+    const sessionKey = "agent:main:whatsapp:dm:+15555550123";
+    const tool = requireGatewayTool(sessionKey);
+    const raw = '{ channels: { telegram: { groups: { "*": { requireMention: false } } } } }';
+
+    vi.mocked(callGatewayTool).mockImplementation(async (method: string) => {
+      if (method === "config.get") {
+        return { hash: "hash-1" };
+      }
+      if (method === "config.patch") {
+        return {
+          ok: true,
+          path: "~/.openclaw/openclaw.json",
+          changedPaths: ["channels.telegram.groups.*.requireMention"],
+          config: { channels: { telegram: { groups: { "*": { requireMention: false } } } } },
+        };
+      }
+      return { ok: true };
+    });
+
+    const result = await tool.execute("call5", {
+      action: "config.patch",
+      raw,
+    });
+    const details = result.details as {
+      ok?: boolean;
+      result?: Record<string, unknown>;
+    };
+
+    expect(details.ok).toBe(true);
+    expect(details.result).toMatchObject({
+      ok: true,
+      changedPaths: ["channels.telegram.groups.*.requireMention"],
+      outputMode: "minimal-diff",
+      fetchFullConfigAction: "config.fetch-full",
+    });
+    expect(details.result?.config).toBeUndefined();
+  });
+
+  it("derives minimal-diff paths from raw patch when changedPaths is missing", async () => {
+    const { callGatewayTool } = await import("./tools/gateway.js");
+    const sessionKey = "agent:main:whatsapp:dm:+15555550123";
+    const tool = requireGatewayTool(sessionKey);
+    const raw = '{ channels: { telegram: { groups: { "*": { requireMention: false } } } } }';
+
+    vi.mocked(callGatewayTool).mockImplementation(async (method: string) => {
+      if (method === "config.get") {
+        return { hash: "hash-1" };
+      }
+      if (method === "config.patch") {
+        return {
+          ok: true,
+          path: "~/.openclaw/openclaw.json",
+          config: { channels: { telegram: { groups: { "*": { requireMention: false } } } } },
+        };
+      }
+      return { ok: true };
+    });
+
+    const result = await tool.execute("call5b", {
+      action: "config.patch",
+      raw,
+    });
+    const details = result.details as {
+      ok?: boolean;
+      result?: Record<string, unknown>;
+    };
+    const changedPaths = details.result?.changedPaths;
+
+    expect(details.ok).toBe(true);
+    expect(Array.isArray(changedPaths)).toBe(true);
+    expect(changedPaths).toContain("channels.telegram.groups.*.requireMention");
+    expect(details.result?.changedPathsSource).toBe("requested-patch");
+  });
+
+  it("returns full config.patch output when outputMode=full", async () => {
+    const { callGatewayTool } = await import("./tools/gateway.js");
+    const sessionKey = "agent:main:whatsapp:dm:+15555550123";
+    const tool = requireGatewayTool(sessionKey);
+    const raw = '{ channels: { telegram: { groups: { "*": { requireMention: false } } } } }';
+
+    vi.mocked(callGatewayTool).mockImplementation(async (method: string) => {
+      if (method === "config.get") {
+        return { hash: "hash-1" };
+      }
+      if (method === "config.patch") {
+        return {
+          ok: true,
+          path: "~/.openclaw/openclaw.json",
+          changedPaths: ["channels.telegram.groups.*.requireMention"],
+          config: { channels: { telegram: { groups: { "*": { requireMention: false } } } } },
+        };
+      }
+      return { ok: true };
+    });
+
+    const result = await tool.execute("call6", {
+      action: "config.patch",
+      raw,
+      outputMode: "full",
+    });
+    const details = result.details as {
+      ok?: boolean;
+      result?: Record<string, unknown>;
+    };
+
+    expect(details.ok).toBe(true);
+    expect(details.result?.config).toBeDefined();
+    expect(details.result?.outputMode).toBeUndefined();
+  });
+
+  it("rejects unsupported config.patch outputMode values", async () => {
+    const tool = requireGatewayTool("agent:main:whatsapp:dm:+15555550123");
+    const raw = '{ channels: { telegram: { groups: { "*": { requireMention: false } } } } }';
+
+    await expect(
+      tool.execute("call6b", {
+        action: "config.patch",
+        raw,
+        outputMode: "diff-only",
+      }),
+    ).rejects.toThrow(/Invalid outputMode/i);
+  });
+
+  it("supports explicit full snapshot fetch via config.fetch-full", async () => {
+    const { callGatewayTool } = await import("./tools/gateway.js");
+    const tool = requireGatewayTool();
+    const fullSnapshot = {
+      hash: "hash-2",
+      config: buildLargeConfigFixture(),
+    };
+    vi.mocked(callGatewayTool).mockImplementation(async (method: string) => {
+      if (method === "config.get") {
+        return fullSnapshot;
+      }
+      return { ok: true };
+    });
+
+    const result = await tool.execute("call7", {
+      action: "config.fetch-full",
+    });
+    const details = result.details as {
+      ok?: boolean;
+      result?: Record<string, unknown>;
+    };
+
+    expect(callGatewayTool).toHaveBeenCalledWith("config.get", expect.any(Object), {});
+    expect(details).toMatchObject({
+      ok: true,
+      result: fullSnapshot,
+    });
+  });
+
+  it("benchmarks lower token usage for minimal-diff vs full config.patch output", async () => {
+    const { callGatewayTool } = await import("./tools/gateway.js");
+    const tool = requireGatewayTool("agent:main:whatsapp:dm:+15555550123");
+    const raw = '{ channels: { telegram: { groups: { "*": { requireMention: false } } } } }';
+    const fullConfig = buildLargeConfigFixture();
+    const patchResult = {
+      ok: true,
+      path: "~/.openclaw/openclaw.json",
+      changedPaths: ["channels.telegram.groups.*.requireMention"],
+      config: fullConfig,
+      restart: { ok: true, pid: 1234, signal: "SIGUSR1", delayMs: 2000 },
+      sentinel: { path: "/tmp/restart-sentinel.json" },
+    };
+
+    vi.mocked(callGatewayTool).mockImplementation(async (method: string) => {
+      if (method === "config.get") {
+        return { hash: "hash-1" };
+      }
+      if (method === "config.patch") {
+        return patchResult;
+      }
+      return { ok: true };
+    });
+
+    const fullOutput = await tool.execute("call8", {
+      action: "config.patch",
+      raw,
+      outputMode: "full",
+    });
+    const minimalOutput = await tool.execute("call9", {
+      action: "config.patch",
+      raw,
+    });
+
+    const fullTokens = estimateTokenUsageFromText(readToolResultText(fullOutput));
+    const minimalTokens = estimateTokenUsageFromText(readToolResultText(minimalOutput));
+
+    expect(fullTokens).toBeGreaterThan(0);
+    expect(minimalTokens).toBeLessThan(fullTokens);
+    expect(minimalTokens / fullTokens).toBeLessThan(0.5);
   });
 
   it("passes update.run through gateway call", async () => {

@@ -419,6 +419,8 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain("## OpenClaw Self-Update");
+    expect(prompt).toContain("config.fetch-full");
+    expect(prompt).toContain("config.patch");
     expect(prompt).toContain("config.apply");
     expect(prompt).toContain("update.run");
   });
