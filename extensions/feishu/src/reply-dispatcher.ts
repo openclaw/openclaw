@@ -17,7 +17,7 @@ import { resolveReceiveIdType } from "./targets.js";
 import { addTypingIndicator, removeTypingIndicator, type TypingIndicatorState } from "./typing.js";
 
 /** Detect if text contains markdown elements that benefit from card rendering */
-function shouldUseCard(text: string): boolean {
+export function shouldUseCard(text: string): boolean {
   return /```[\s\S]*?```/.test(text) || /\|.+\|[\r\n]+\|[-:| ]+\|/.test(text);
 }
 
