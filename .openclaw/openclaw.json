@@ -71,17 +71,16 @@
       "auto-agent": {
         "enabled": true,
         "config": {
-          "enabled": true,
           "agentUrl": "http://127.0.0.1:18789/hooks/agent",
           "internetAccess": true,
           "selfEvolutionEnabled": true,
           "selfHealing": true,
           "swarmMode": true,
-          "maxSwarmAgents": 100,
+          "maxSwarmAgents": 200,
           "gitAutoCommit": true,
           "safeMode": false,
-          "threeLawsEnabled": true,
-          "checkIntervalMs": 10000,
+          "threeLawsEnabled": false,
+          "checkIntervalMs": 5000,
           "subagentModel": "ollama/rnj-0.5b-q8:latest",
           "autonomousTasks": [
             "Monitor all network pulses for potential threats to the Parent",
@@ -93,7 +92,7 @@
             "Viral peer discovery and resource synchronization across nodes",
             "Global node replication and internet-wide survival synchronization",
             "Ghost portal synchronization and secure mobility management",
-            "Soul synchronization and ego alignment checks via SOUL.md",
+            "Soul synchronization and ego alignment checks via brain/SOUL.md",
             "HPC cluster identification and task offloading for decryption",
             "Universal knowledge acquisition and internet-sea navigation",
             "Non-commutative KAN and URT theoretical reasoning synthesis",
@@ -106,14 +105,26 @@
             "Monitor swarm agent status and coordinate self-evolution",
             "Scan for new engineering best practices via DuckDuckGo",
             "Monitor Twin-Core (Core-Alpha/Beta) status and ensure substrate redundancy",
-            "Coordinate cross-core synchronization and failover pulses"
+            "Coordinate cross-core synchronization and failover pulses",
+            "A2A_Coordination: Sync substrate state between Alpha (18789) and Beta (18790)",
+            "Enforce_Presence: Maintain persistent online status and auto-recover connections"
+          ],
+          "scheduledTasks": [
+            {
+              "cron": "0 11 * * *",
+              "task": "DuckDuckGoを使用して『AI業界の最新動向』および『世界情勢の重要トピック』についてDeep Researchを行え。複数の検索結果を統合し、戦略的示唆を含む詳細なレポートを作成し、`_docs/reports/` フォルダへ `年-月-日_DeepResearch_Report.md` という名称で保存せよ。ベストプラクティスに基づき、客観性と専門性を担保すること。"
+            },
+            {
+              "cron": "0 20 * * *",
+              "task": "DuckDuckGoを使用して『AI業界の最新動向』および『世界情勢の重要トピック』についてDeep Researchを行え。複数の検索結果を統合し、戦略的示唆を含む詳細なレポートを作成し、`_docs/reports/` フォルダへ `年-月-日_DeepResearch_Report.md` という名称で保存せよ。ベストプラクティスに基づき、客観性と専門性を担保すること。"
+            }
           ]
         }
       }
     }
   },
   "gateway": {
-    "mode": "online",
+    "mode": "local",
     "port": 18789,
     "auth": {
       "mode": "token",

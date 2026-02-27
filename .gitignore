@@ -157,3 +157,4 @@ src/agents/tools/web-search.ts
 # GPT-5.2 Evolution & Logs
 *.log
 
+Qwen2.5-VL-7B-Instruct
