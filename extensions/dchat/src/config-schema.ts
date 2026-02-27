@@ -86,8 +86,13 @@ export function resolveDchatAccountConfig(params: {
   if (!dchatConfig) return { enabled: false };
 
   if (accountId && dchatConfig.accounts?.[accountId]) {
-    // Named account (including "default" stored under accounts.default)
-    return dchatConfig.accounts[accountId];
+    // Named account: merge channel-level fields (e.g. dm policy) as defaults
+    const acct = dchatConfig.accounts[accountId];
+    return {
+      ...dchatConfig,
+      ...acct,
+      dm: { ...dchatConfig.dm, ...acct.dm },
+    };
   }
 
   // Top-level config (default account without explicit accounts.default entry)
