@@ -6,9 +6,13 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {
+      "anthropicAuthToken": {
+        "type": "string",
+        "description": "OAuth/setup token Anthropic (sk-ant-oat01-...). Preferível ao anthropicApiKey para tokens OAuth. Tem prioridade sobre anthropicApiKey."
+      },
       "anthropicApiKey": {
         "type": "string",
-        "description": "Anthropic API key para chamadas LLM diretas. Opcional se ANTHROPIC_API_KEY estiver no ambiente."
+        "description": "API key Anthropic (sk-ant-api03-...). Para tokens OAuth, use anthropicAuthToken. Opcional — descoberto automaticamente via auth-profiles."
       },
       "model": {
         "type": "string",
@@ -56,6 +60,10 @@
       }
     },
     "uiHints": {
+      "anthropicAuthToken": {
+        "label": "Anthropic Auth Token (OAuth)",
+        "sensitive": true
+      },
       "anthropicApiKey": {
         "label": "Anthropic API Key",
         "sensitive": true

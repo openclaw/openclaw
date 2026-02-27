@@ -1,4 +1,5 @@
-﻿import fs from "node:fs";
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import Anthropic from "@anthropic-ai/sdk";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
@@ -8,6 +9,7 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 // ---------------------------------------------------------------------------
 
 type PluginConfig = {
+  anthropicAuthToken?: string; // OAuth/setup token (sk-ant-oat01-...). Prioridade sobre anthropicApiKey.
   anthropicApiKey?: string;
   model?: string;
   ownerName?: string;
@@ -21,6 +23,161 @@ type PluginConfig = {
   supabaseServiceKey?: string;
   openaiApiKey?: string;
 };
+
+// ---------------------------------------------------------------------------
+// Auth resolution
+// ---------------------------------------------------------------------------
+
+/** Remove espaços, tabs e quebras de linha que podem corromper tokens */
+function normalizeSecret(raw: string): string {
+  return raw.replace(/[\r\n\t]/g, "").trim();
+}
+
+type AnthropicCreds =
+  | { source: string; mode: "oauth"; authToken: string }
+  | { source: string; mode: "apikey"; apiKey: string };
+
+/**
+ * Resolve credenciais Anthropic com ordem de precedência definida.
+ *
+ * Ordem:
+ *   1. config.anthropicAuthToken (OAuth explícito)
+ *   2. config.anthropicApiKey (API key explícita — ou OAuth legado com warning)
+ *   3. auth-profiles.json do agente (preferindo lastGood[anthropic])
+ *   4. ANTHROPIC_AUTH_TOKEN env (OAuth — lido nativamente pelo SDK)
+ *   5. ANTHROPIC_API_KEY env (legado — detecta OAuth por prefixo)
+ */
+function resolveAnthropicCreds(config: PluginConfig, agentId = "main"): AnthropicCreds | null {
+  // 1. Config explícita: campo OAuth dedicado
+  if (config.anthropicAuthToken) {
+    return {
+      source: "config.anthropicAuthToken",
+      mode: "oauth",
+      authToken: normalizeSecret(config.anthropicAuthToken),
+    };
+  }
+
+  // 2. Config explícita: campo de API key (mas pode ser OAuth legado)
+  if (config.anthropicApiKey) {
+    const key = normalizeSecret(config.anthropicApiKey);
+    if (key.startsWith("sk-ant-oat")) {
+      console.warn(
+        "[iris-handover] config.anthropicApiKey parece ser um OAuth token (sk-ant-oat...). " +
+          "Prefira usar config.anthropicAuthToken para tokens OAuth. Tratando como legacy oauth.",
+      );
+      return { source: "config.anthropicApiKey (legacy oauth)", mode: "oauth", authToken: key };
+    }
+    return { source: "config.anthropicApiKey", mode: "apikey", apiKey: key };
+  }
+
+  // 3. Auth-profiles store: ~/.openclaw/agents/{agentId}/agent/auth-profiles.json
+  try {
+    const storePath = path.join(
+      os.homedir(),
+      ".openclaw",
+      "agents",
+      agentId,
+      "agent",
+      "auth-profiles.json",
+    );
+    const raw = fs.readFileSync(storePath, "utf-8");
+    const store = JSON.parse(raw) as {
+      profiles?: Record<string, unknown>;
+      lastGood?: Record<string, string>;
+    };
+    const profiles = store.profiles ?? {};
+    const lastGoodId = store.lastGood?.["anthropic"];
+
+    // Montar lista de candidatos: lastGood primeiro, depois os demais ordenados
+    const typeOrder: Record<string, number> = { api_key: 0, token: 1, oauth: 2 };
+    const candidates: [string, Record<string, string>][] = [];
+    if (lastGoodId && profiles[lastGoodId]) {
+      candidates.push([lastGoodId, profiles[lastGoodId] as Record<string, string>]);
+    }
+    const others = Object.entries(profiles)
+      .filter(
+        ([id, v]) => id !== lastGoodId && (v as Record<string, string>).provider === "anthropic",
+      )
+      .sort(([, a], [, b]) => {
+        return (
+          (typeOrder[(a as Record<string, string>).type] ?? 9) -
+          (typeOrder[(b as Record<string, string>).type] ?? 9)
+        );
+      });
+    for (const [id, cred] of others) candidates.push([id, cred as Record<string, string>]);
+
+    for (const [profileId, c] of candidates) {
+      if (c.provider !== "anthropic") continue;
+      if (c.type === "api_key" && c.key) {
+        return {
+          source: `auth-profiles (${profileId})`,
+          mode: "apikey",
+          apiKey: normalizeSecret(c.key),
+        };
+      }
+      if (c.type === "token" && c.token) {
+        return {
+          source: `auth-profiles (${profileId})`,
+          mode: "oauth",
+          authToken: normalizeSecret(c.token),
+        };
+      }
+      if (c.type === "oauth" && c.access) {
+        return {
+          source: `auth-profiles (${profileId})`,
+          mode: "oauth",
+          authToken: normalizeSecret(c.access),
+        };
+      }
+    }
+  } catch {
+    // Store ausente ou malformado — continua para env vars
+  }
+
+  // 4. Env OAuth dedicada (diferente de ANTHROPIC_API_KEY — não é lida automaticamente como apiKey)
+  const envAuthToken = process.env.ANTHROPIC_AUTH_TOKEN;
+  if (envAuthToken) {
+    return {
+      source: "ANTHROPIC_AUTH_TOKEN env",
+      mode: "oauth",
+      authToken: normalizeSecret(envAuthToken),
+    };
+  }
+
+  // 5. Env legacy: ANTHROPIC_API_KEY (pode conter OAuth token colocado no lugar errado)
+  const envApiKey = process.env.ANTHROPIC_API_KEY;
+  if (envApiKey) {
+    const key = normalizeSecret(envApiKey);
+    if (key.startsWith("sk-ant-oat")) {
+      console.warn(
+        "[iris-handover] ANTHROPIC_API_KEY contém OAuth token (sk-ant-oat...). " +
+          "Use ANTHROPIC_AUTH_TOKEN para tokens OAuth. Tratando como legacy oauth.",
+      );
+      return { source: "ANTHROPIC_API_KEY env (legacy oauth)", mode: "oauth", authToken: key };
+    }
+    return { source: "ANTHROPIC_API_KEY env", mode: "apikey", apiKey: key };
+  }
+
+  return null;
+}
+
+/**
+ * Instancia o Anthropic SDK com opções MUTUAMENTE EXCLUSIVAS.
+ *
+ * CRÍTICO: Sempre passar null explicitamente no campo não-usado.
+ * O SDK v0.39.0 auto-lê process.env.ANTHROPIC_API_KEY como `apiKey` por padrão.
+ * Se apiKey não for null, ele prevalece sobre authToken (X-Api-Key tem prioridade).
+ * OAuth token em X-Api-Key → 401 invalid x-api-key.
+ */
+function createAnthropicClient(creds: AnthropicCreds): Anthropic {
+  if (creds.mode === "oauth") {
+    return new Anthropic({ apiKey: null, authToken: creds.authToken });
+  }
+  return new Anthropic({ apiKey: creds.apiKey, authToken: null });
+}
+
+// Exported for testing
+export { resolveAnthropicCreds, createAnthropicClient, type AnthropicCreds };
 
 // ---------------------------------------------------------------------------
 // Constants — ported from iris-handover.ts
@@ -334,14 +491,20 @@ RULES:
 export default function register(api: OpenClawPluginApi) {
   const config = (api.pluginConfig ?? {}) as PluginConfig;
 
-  // anthropicApiKey is optional: Anthropic SDK auto-reads ANTHROPIC_API_KEY env var if not set
-  const hasKey = config.anthropicApiKey ?? process.env.ANTHROPIC_API_KEY;
-  if (!hasKey) {
+  // Verificação em registration time (usa agentId "main" como padrão)
+  const registrationCreds = resolveAnthropicCreds(config);
+  if (!registrationCreds) {
     console.warn(
-      "[iris-handover] Nenhum anthropicApiKey no config nem ANTHROPIC_API_KEY no env — plugin desativado.",
+      "[iris-handover] Nenhuma credencial Anthropic encontrada. " +
+        "Fontes verificadas: config.anthropicAuthToken, config.anthropicApiKey, " +
+        "auth-profiles.json, ANTHROPIC_AUTH_TOKEN env, ANTHROPIC_API_KEY env. " +
+        "Plugin desativado.",
     );
     return;
   }
+  console.log(
+    `[iris-handover] Plugin registrado. Credencial: ${registrationCreds.source} (modo: ${registrationCreds.mode})`,
+  );
 
   api.on("before_compaction", async (event, ctx) => {
     const workspace = ctx.workspaceDir ?? process.cwd();
@@ -411,11 +574,13 @@ export default function register(api: OpenClawPluginApi) {
       language: config.language ?? "pt-BR",
     });
 
-    // Call Anthropic SDK directly
+    // Call Anthropic SDK with properly resolved credentials
+    const agentId = ctx.agentId ?? "main";
+    let creds: AnthropicCreds | null = null;
     try {
-      const client = new Anthropic(
-        config.anthropicApiKey ? { apiKey: config.anthropicApiKey } : {},
-      );
+      creds = resolveAnthropicCreds(config, agentId);
+      if (!creds) throw new Error("Sem credencial Anthropic disponível");
+      const client = createAnthropicClient(creds);
       const response = await client.messages.create({
         model: config.model ?? "claude-sonnet-4-20250514",
         max_tokens: 4096,
@@ -461,7 +626,9 @@ export default function register(api: OpenClawPluginApi) {
     } catch (err) {
       // Silent fallback — must not crash the compaction
       console.warn(
-        `[iris-handover] Falhou ao gerar handover: ${err instanceof Error ? err.message : String(err)}`,
+        `[iris-handover] Falhou ao gerar handover` +
+          (creds ? ` (fonte: ${creds.source}, modo: ${creds.mode})` : "") +
+          `:\n  ${err instanceof Error ? err.message : String(err)}`,
       );
     }
   });
