@@ -1,5 +1,6 @@
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import { initI18n } from "../i18n/index.js";
 import { loadDotEnv } from "../infra/dotenv.js";
 import { normalizeEnv } from "../infra/env.js";
 import { formatUncaughtError } from "../infra/errors.js";
@@ -65,6 +66,10 @@ export async function runCli(argv: string[] = process.argv) {
   const normalizedArgv = normalizeWindowsArgv(argv);
   loadDotEnv({ quiet: true });
   normalizeEnv();
+
+  // Initialize i18n for localized error messages
+  initI18n();
+
   if (shouldEnsureCliPath(normalizedArgv)) {
     ensureOpenClawCliOnPath();
   }

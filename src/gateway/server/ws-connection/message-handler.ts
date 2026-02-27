@@ -477,8 +477,8 @@ export function attachGatewayWsMessageHandler(params: {
               configSnapshot.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true,
           });
           if (!originCheck.ok) {
-            const errorMessage =
-              "origin not allowed (open the Control UI from the gateway host or allow it in gateway.controlUi.allowedOrigins)";
+            const originExample = requestOrigin ?? "https://bot.example.com";
+            const errorMessage = `origin not allowed: ${originExample}\n\nTo fix this, add the following to your config.yml:\n\ngateway:\n  controlUi:\n    allowedOrigins:\n      - "${originExample}"\n\nOr open the Control UI from the gateway host directly.\n\nDocs: https://docs.openclaw.ai/config/allowed-origins`;
             markHandshakeFailure("origin-mismatch", {
               origin: requestOrigin ?? "n/a",
               host: requestHost ?? "n/a",

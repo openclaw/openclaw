@@ -31,41 +31,44 @@ export async function getMemorySearchManager(params: {
     if (!qmdCheck.available) {
       log.warn(`QMD binary not available: ${qmdCheck.error}`);
       log.warn("Falling back to builtin memory backend. To use QMD, install it and ensure it's on PATH.");
-    } else if (!statusOnly) {
-      const cached = QMD_MANAGER_CACHE.get(cacheKey);
-      if (cached) {
-        return { manager: cached };
-      }
-    }
-
-    try {
-      const { QmdMemoryManager } = await import("./qmd-manager.js");
-      const primary = await QmdMemoryManager.create({
-        cfg: params.cfg,
-        agentId: params.agentId,
-        resolved,
-        mode: statusOnly ? "status" : "full",
-      });
-      if (primary) {
-        if (statusOnly) {
-          return { manager: primary };
+    } else {
+      // Only try to create QMD manager if binary is available
+      if (!statusOnly) {
+        const cached = QMD_MANAGER_CACHE.get(cacheKey);
+        if (cached) {
+          return { manager: cached };
         }
-        const wrapper = new FallbackMemoryManager(
-          {
-            primary,
-            fallbackFactory: async () => {
-              const { MemoryIndexManager } = await import("./manager.js");
-              return await MemoryIndexManager.get(params);
-            },
-          },
-          () => QMD_MANAGER_CACHE.delete(cacheKey),
-        );
-        QMD_MANAGER_CACHE.set(cacheKey, wrapper);
-        return { manager: wrapper };
       }
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      log.warn(`qmd memory unavailable; falling back to builtin: ${message}`);
+
+      try {
+        const { QmdMemoryManager } = await import("./qmd-manager.js");
+        const primary = await QmdMemoryManager.create({
+          cfg: params.cfg,
+          agentId: params.agentId,
+          resolved,
+          mode: statusOnly ? "status" : "full",
+        });
+        if (primary) {
+          if (statusOnly) {
+            return { manager: primary };
+          }
+          const wrapper = new FallbackMemoryManager(
+            {
+              primary,
+              fallbackFactory: async () => {
+                const { MemoryIndexManager } = await import("./manager.js");
+                return await MemoryIndexManager.get(params);
+              },
+            },
+            () => QMD_MANAGER_CACHE.delete(cacheKey),
+          );
+          QMD_MANAGER_CACHE.set(cacheKey, wrapper);
+          return { manager: wrapper };
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        log.warn(`qmd memory unavailable; falling back to builtin: ${message}`);
+      }
     }
   }
 

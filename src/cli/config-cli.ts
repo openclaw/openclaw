@@ -3,7 +3,9 @@ import JSON5 from "json5";
 import { readConfigFileSnapshot, writeConfigFile } from "../config/config.js";
 import { isBlockedObjectKey } from "../config/prototype-keys.js";
 import { redactConfigObject } from "../config/redact-snapshot.js";
-import { danger, info } from "../globals.js";
+import { validateConfigObjectWithPlugins } from "../config/validation.js";
+import { danger, info, success, warn } from "../globals.js";
+import { t } from "../i18n/index.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
@@ -360,5 +362,52 @@ export function registerConfigCli(program: Command) {
     .argument("<path>", "Config path (dot or bracket notation)")
     .action(async (path: string) => {
       await runConfigUnset({ path });
+    });
+
+  cmd
+    .command("validate")
+    .description("Validate the current configuration and show detailed error messages")
+    .option("--json", "Output JSON", false)
+    .action(async (opts) => {
+      try {
+        const snapshot = await readConfigFileSnapshot();
+        const result = validateConfigObjectWithPlugins(snapshot.config);
+
+        if (opts.json) {
+          defaultRuntime.log(JSON.stringify(result, null, 2));
+          return;
+        }
+
+        if (result.ok) {
+          defaultRuntime.log(success("✓ Configuration is valid"));
+          if (result.warnings.length > 0) {
+            defaultRuntime.log(warn("\nWarnings:"));
+            for (const w of result.warnings) {
+              defaultRuntime.log(`  - ${w.path}: ${w.message}`);
+            }
+          }
+        } else {
+          defaultRuntime.log(danger("✗ Configuration has errors:\n"));
+          for (const issue of result.issues) {
+            defaultRuntime.log(danger(`  ❌ ${issue.path || "<root>"}`));
+            defaultRuntime.log(`     ${issue.message}\n`);
+
+            // Provide helpful suggestions for common errors
+            if (issue.path.includes("allowedOrigins")) {
+              defaultRuntime.log(info(t("info.config.example")));
+              defaultRuntime.log(`     gateway:`);
+              defaultRuntime.log(`       controlUi:`);
+              defaultRuntime.log(`         allowedOrigins:`);
+              defaultRuntime.log(`           - "https://your-domain.com"`);
+              defaultRuntime.log();
+            }
+          }
+          defaultRuntime.log(info(t("info.docs.link", { url: "https://docs.openclaw.ai/config" })));
+          defaultRuntime.exit(1);
+        }
+      } catch (err) {
+        defaultRuntime.error(danger(String(err)));
+        defaultRuntime.exit(1);
+      }
     });
 }

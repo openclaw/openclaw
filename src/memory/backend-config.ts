@@ -370,24 +370,32 @@ export async function checkQmdBinaryAvailable(
 
   try {
     // Try to run `qmd --version` to verify the binary works
-    const { stdout } = await execFileAsync(resolvedCommand, ["--version"], {
+    // On Windows, .cmd files need shell: true to execute properly
+    const needsShell = isWindows && resolvedCommand.endsWith(".cmd");
+    await execFileAsync(resolvedCommand, ["--version"], {
       timeout: timeoutMs,
       encoding: "utf8",
+      shell: needsShell,
     });
-    const version = stdout.trim().split("\n")[0];
     return { available: true, path: resolvedCommand };
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err);
+    const errorLower = error.toLowerCase();
     // Check for various "not found" error patterns across platforms
     const notFoundPatterns = [
-      "ENOENT",
+      "enoent",
       "not found",
       "cannot find",
-      "EINVAL", // Windows spawn EINVAL for non-existent executables
+      "einval", // Windows spawn EINVAL for non-existent executables
       "spawn",
+      "not recognized", // Windows "not recognized as an internal or external command"
+      "不是内部或外部命令", // Chinese Windows "not recognized" message
+      "returned non-zero", // Shell execution failed (exit code != 0)
     ];
-    const isNotFound = notFoundPatterns.some((pattern) => error.includes(pattern));
-    if (isNotFound) {
+    const isNotFound = notFoundPatterns.some((pattern) => errorLower.includes(pattern.toLowerCase()));
+    // Also check if the command name appears in the error (common for "not found" errors)
+    const isCommandMentioned = error.includes(command) || error.includes(resolvedCommand);
+    if (isNotFound || (isCommandMentioned && errorLower.includes("fail"))) {
       return {
         available: false,
         error: `QMD binary "${command}" not found on PATH. Please install QMD or check your configuration.`,
