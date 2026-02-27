@@ -1,0 +1,141 @@
+#!/usr/bin/env python3
+"""
+search_experience — 從 LanceDB 記憶庫檢索經驗
+================================================
+
+用法:
+  search_experience "HTTP 409 Conflict"
+  search_experience "LINE reply token" --limit 3
+  search_experience "部署" --tags "deploy,docker"
+  search_experience --stats
+  search_experience --list
+  search_experience --delete exp_1234567890_abcd1234
+"""
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent))
+from db import ExperienceDB
+
+
+def format_experience(exp: dict, verbose: bool = False) -> str:
+    """Format an experience entry for human-readable output."""
+    lines = []
+    score = exp.get("score", "")
+    score_str = f" ({score:.0%})" if isinstance(score, (int, float)) else ""
+
+    severity_emoji = {"info": "ℹ️", "warning": "⚠️", "critical": "🔴"}.get(exp.get("severity", ""), "")
+    lines.append(f"{severity_emoji} [{exp['id']}]{score_str}")
+    lines.append(f"  現象: {exp['phenomenon']}")
+    if exp.get("cause"):
+        lines.append(f"  原因: {exp['cause']}")
+    if exp.get("solution"):
+        lines.append(f"  解法: {exp['solution']}")
+    if verbose and exp.get("methodology"):
+        lines.append(f"  方法論: {exp['methodology']}")
+    tags = exp.get("tags", [])
+    if tags:
+        lines.append(f"  標籤: {', '.join(tags)}")
+    if verbose:
+        lines.append(f"  來源: {exp.get('source', '?')} | 命中: {exp.get('hit_count', 0)} | 時間: {exp.get('created_at', '?')}")
+    return "\n".join(lines)
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Search experience memory database",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument("query", nargs="?", default="", help="搜索查詢")
+    parser.add_argument("-n", "--limit", type=int, default=5, help="最大結果數")
+    parser.add_argument("--min-score", type=float, default=0.3, help="最低相關度")
+    parser.add_argument("-t", "--tags", default="", help="標籤過濾（逗號分隔）")
+    parser.add_argument("--severity", default="", help="嚴重等級過濾")
+    parser.add_argument("--json", action="store_true", help="JSON 輸出")
+    parser.add_argument("-v", "--verbose", action="store_true", help="詳細輸出")
+    parser.add_argument("--stats", action="store_true", help="顯示統計")
+    parser.add_argument("--list", action="store_true", help="列出所有經驗")
+    parser.add_argument("--delete", default="", help="刪除指定 ID 的經驗")
+    parser.add_argument("--count", action="store_true", help="顯示總數")
+
+    args = parser.parse_args()
+
+    db = ExperienceDB()
+
+    # Stats mode
+    if args.stats:
+        stats = db.stats()
+        if args.json:
+            print(json.dumps(stats, indent=2, ensure_ascii=False))
+        else:
+            print(f"📊 Experience Memory Stats")
+            print(f"   Total: {stats.get('total', 0)}")
+            print(f"   By severity: {stats.get('by_severity', {})}")
+            print(f"   By source: {stats.get('by_source', {})}")
+            if stats.get("most_hit"):
+                print(f"   Most referenced:")
+                for item in stats["most_hit"]:
+                    print(f"     - [{item['id']}] {item['phenomenon'][:50]} (hits: {item['hit_count']})")
+        return
+
+    # List mode
+    if args.list:
+        results = db.list_all(limit=args.limit)
+        if args.json:
+            print(json.dumps(results, indent=2, ensure_ascii=False))
+        else:
+            if not results:
+                print("(empty database)")
+                return
+            for exp in results:
+                print(format_experience(exp, verbose=args.verbose))
+                print()
+        return
+
+    # Delete mode
+    if args.delete:
+        try:
+            db.delete(args.delete)
+            print(f"✅ Deleted: {args.delete}")
+        except ValueError as e:
+            print(f"❌ {e}", file=sys.stderr)
+            sys.exit(1)
+        return
+
+    # Count mode
+    if args.count:
+        print(db.count())
+        return
+
+    # Search mode (default)
+    if not args.query:
+        parser.error("需要搜索查詢，或使用 --stats / --list / --count")
+
+    tags_filter = [t.strip() for t in args.tags.split(",") if t.strip()] if args.tags else None
+    severity_filter = args.severity if args.severity else None
+
+    results = db.search(
+        query=args.query,
+        limit=args.limit,
+        min_score=args.min_score,
+        tags_filter=tags_filter,
+        severity_filter=severity_filter,
+    )
+
+    if args.json:
+        print(json.dumps(results, indent=2, ensure_ascii=False))
+    else:
+        if not results:
+            print(f"🔍 No relevant experiences found for: \"{args.query}\"")
+            return
+        print(f"🔍 Found {len(results)} experiences for: \"{args.query}\"\n")
+        for exp in results:
+            print(format_experience(exp, verbose=args.verbose))
+            print()
+
+
+if __name__ == "__main__":
+    main()

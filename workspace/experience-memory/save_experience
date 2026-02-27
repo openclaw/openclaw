@@ -1,0 +1,101 @@
+#!/usr/bin/env python3
+"""
+save_experience — 將經驗寫入 LanceDB 記憶庫
+==============================================
+
+用法:
+  save_experience --phenomenon "報錯描述" --cause "原因" --solution "解法" \
+                  --methodology "方法論" --tags "tag1,tag2" --severity critical
+
+  # 管道模式（JSON stdin）：
+  echo '{"phenomenon":"...","cause":"...","solution":"..."}' | save_experience --json
+
+  # 快速模式（只提供現象和解法）：
+  save_experience -p "HTTP 409 Conflict" -s "停掉重複的 polling 實例"
+"""
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+# Add parent to path
+sys.path.insert(0, str(Path(__file__).parent))
+from db import ExperienceDB
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Save an experience to the memory database",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument("-p", "--phenomenon", default="", help="現象/報錯描述")
+    parser.add_argument("-c", "--cause", default="", help="根因分析")
+    parser.add_argument("-s", "--solution", default="", help="解決方案")
+    parser.add_argument("-m", "--methodology", default="", help="方法論/架構原則")
+    parser.add_argument("-t", "--tags", default="", help="標籤（逗號分隔）")
+    parser.add_argument("--severity", default="info", choices=["info", "warning", "critical"])
+    parser.add_argument("--source", default="manual", help="來源 (manual/auto/tg-import/session-extract)")
+    parser.add_argument("--json", action="store_true", help="從 stdin 讀取 JSON")
+    parser.add_argument("--quiet", "-q", action="store_true", help="安靜模式，只輸出 ID")
+
+    args = parser.parse_args()
+
+    db = ExperienceDB()
+
+    if args.json:
+        # Read JSON from stdin
+        data = json.loads(sys.stdin.read())
+        if isinstance(data, list):
+            results = []
+            for item in data:
+                result = db.save(
+                    phenomenon=item.get("phenomenon", ""),
+                    cause=item.get("cause", ""),
+                    solution=item.get("solution", ""),
+                    methodology=item.get("methodology", ""),
+                    tags=item.get("tags", []),
+                    severity=item.get("severity", "info"),
+                    source=item.get("source", args.source),
+                )
+                results.append(result)
+            if args.quiet:
+                for r in results:
+                    print(r["id"])
+            else:
+                print(json.dumps(results, indent=2, ensure_ascii=False))
+            return
+        else:
+            result = db.save(
+                phenomenon=data.get("phenomenon", ""),
+                cause=data.get("cause", ""),
+                solution=data.get("solution", ""),
+                methodology=data.get("methodology", ""),
+                tags=data.get("tags", []),
+                severity=data.get("severity", "info"),
+                source=data.get("source", args.source),
+            )
+    else:
+        if not args.phenomenon and not args.solution:
+            parser.error("至少需要 --phenomenon 或 --solution")
+        tags = [t.strip() for t in args.tags.split(",") if t.strip()] if args.tags else []
+        result = db.save(
+            phenomenon=args.phenomenon,
+            cause=args.cause,
+            solution=args.solution,
+            methodology=args.methodology,
+            tags=tags,
+            severity=args.severity,
+            source=args.source,
+        )
+
+    if args.quiet:
+        print(result["id"])
+    else:
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+        print(f"\n✅ Experience saved: {result['id']}", file=sys.stderr)
+        print(f"   Total in DB: {db.count()}", file=sys.stderr)
+
+
+if __name__ == "__main__":
+    main()
