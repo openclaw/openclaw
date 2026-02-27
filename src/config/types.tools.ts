@@ -502,6 +502,19 @@ export type ToolsConfig = {
       userAgent?: string;
       /** Use Readability to extract main content (default: true). */
       readability?: boolean;
+      /** SSRF policy for web fetch requests. */
+      ssrfPolicy?: {
+        /** Legacy alias for private-network access. Prefer dangerouslyAllowPrivateNetwork. */
+        allowPrivateNetwork?: boolean;
+        /** If true, permit fetch to private/internal networks. Default: false */
+        dangerouslyAllowPrivateNetwork?: boolean;
+        /** If true, allow RFC 2544 benchmark range (198.18.0.0/15) used by Clash/mihomo fake-ip. */
+        allowRfc2544BenchmarkRange?: boolean;
+        /** Explicitly allowed hostnames (exact-match). */
+        allowedHostnames?: string[];
+        /** Hostname allowlist patterns (supports "*.example.com" wildcards). */
+        hostnameAllowlist?: string[];
+      };
       firecrawl?: {
         /** Enable Firecrawl fallback (default: true when apiKey is set). */
         enabled?: boolean;

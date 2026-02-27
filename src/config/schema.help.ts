@@ -626,6 +626,18 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.web.fetch.userAgent": "Override User-Agent header for web_fetch requests.",
   "tools.web.fetch.readability":
     "Use Readability to extract main content from HTML (fallbacks to basic HTML cleanup).",
+  "tools.web.fetch.ssrfPolicy":
+    "Server-side request forgery guardrail settings for web_fetch requests. Keep restrictive defaults in production and open only explicitly approved targets.",
+  "tools.web.fetch.ssrfPolicy.allowPrivateNetwork":
+    "Legacy alias for tools.web.fetch.ssrfPolicy.dangerouslyAllowPrivateNetwork. Prefer the dangerously-named key so risk intent is explicit.",
+  "tools.web.fetch.ssrfPolicy.dangerouslyAllowPrivateNetwork":
+    "Allows web_fetch to reach private-network address ranges. Default is false (unlike browser which defaults to true). Enable for trusted-network setups.",
+  "tools.web.fetch.ssrfPolicy.allowRfc2544BenchmarkRange":
+    "Allows web_fetch to reach the RFC 2544 benchmarking range (198.18.0.0/15), commonly used by Clash/mihomo fake-ip mode. Default: false.",
+  "tools.web.fetch.ssrfPolicy.allowedHostnames":
+    "Explicit hostname allowlist exceptions for SSRF policy checks on web_fetch requests. Keep this list minimal.",
+  "tools.web.fetch.ssrfPolicy.hostnameAllowlist":
+    'Hostname allowlist patterns for web_fetch SSRF policy. Supports exact hosts and "*.example.com" wildcard subdomains.',
   "tools.web.fetch.firecrawl.enabled": "Enable Firecrawl fallback for web_fetch (if configured).",
   "tools.web.fetch.firecrawl.apiKey": "Firecrawl API key (fallback: FIRECRAWL_API_KEY env var).",
   "tools.web.fetch.firecrawl.baseUrl":

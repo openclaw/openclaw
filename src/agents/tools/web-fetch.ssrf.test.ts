@@ -39,6 +39,13 @@ function setMockFetch(
 
 async function createWebFetchToolForTest(params?: {
   firecrawl?: { enabled?: boolean; apiKey?: string };
+  ssrfPolicy?: {
+    allowPrivateNetwork?: boolean;
+    dangerouslyAllowPrivateNetwork?: boolean;
+    allowRfc2544BenchmarkRange?: boolean;
+    allowedHostnames?: string[];
+    hostnameAllowlist?: string[];
+  };
 }) {
   const { createWebFetchTool } = await import("./web-tools.js");
   return createWebFetchTool({
@@ -48,6 +55,7 @@ async function createWebFetchToolForTest(params?: {
           fetch: {
             cacheTtlMinutes: 0,
             firecrawl: params?.firecrawl ?? { enabled: false },
+            ssrfPolicy: params?.ssrfPolicy,
           },
         },
       },
@@ -141,5 +149,84 @@ describe("web_fetch SSRF protection", () => {
       status: 200,
       extractor: "raw",
     });
+  });
+
+  it("allows private IPs when dangerouslyAllowPrivateNetwork is set", async () => {
+    // Mock resolvePinnedHostnameWithPolicy to return a private IP pinned result
+    vi.spyOn(ssrf, "resolvePinnedHostnameWithPolicy").mockResolvedValue({
+      hostname: "private.test",
+      addresses: ["10.0.0.5"],
+      lookup: (() => {}) as unknown as ReturnType<typeof ssrf.createPinnedLookup>,
+    });
+
+    setMockFetch().mockResolvedValue(textResponse("internal-ok"));
+    const tool = await createWebFetchToolForTest({
+      ssrfPolicy: { dangerouslyAllowPrivateNetwork: true },
+    });
+
+    const result = await tool?.execute?.("call", { url: "https://private.test/resource" });
+    expect(result?.details).toMatchObject({
+      status: 200,
+    });
+  });
+
+  it("allows private IPs when legacy allowPrivateNetwork is set", async () => {
+    vi.spyOn(ssrf, "resolvePinnedHostnameWithPolicy").mockResolvedValue({
+      hostname: "local.test",
+      addresses: ["192.168.1.1"],
+      lookup: (() => {}) as unknown as ReturnType<typeof ssrf.createPinnedLookup>,
+    });
+
+    setMockFetch().mockResolvedValue(textResponse("internal-ok"));
+    const tool = await createWebFetchToolForTest({
+      ssrfPolicy: { allowPrivateNetwork: true },
+    });
+
+    const result = await tool?.execute?.("call", { url: "https://local.test/api" });
+    expect(result?.details).toMatchObject({
+      status: 200,
+    });
+  });
+
+  it("allows RFC 2544 range when allowRfc2544BenchmarkRange is set", async () => {
+    // 198.18.x.x is the Clash/mihomo fake-ip range
+    vi.spyOn(ssrf, "resolvePinnedHostnameWithPolicy").mockResolvedValue({
+      hostname: "clash-fake.test",
+      addresses: ["198.18.0.42"],
+      lookup: (() => {}) as unknown as ReturnType<typeof ssrf.createPinnedLookup>,
+    });
+
+    setMockFetch().mockResolvedValue(textResponse("fake-ip-ok"));
+    const tool = await createWebFetchToolForTest({
+      ssrfPolicy: { allowRfc2544BenchmarkRange: true },
+    });
+
+    const result = await tool?.execute?.("call", { url: "https://clash-fake.test/page" });
+    expect(result?.details).toMatchObject({
+      status: 200,
+    });
+  });
+
+  it("blocks RFC 2544 range without allowRfc2544BenchmarkRange", async () => {
+    // Without policy, resolvePinnedHostnameWithPolicy rejects the private IP
+    vi.spyOn(ssrf, "resolvePinnedHostnameWithPolicy").mockRejectedValue(
+      new ssrf.SsrFBlockedError("Blocked: resolves to private/internal/special-use IP address"),
+    );
+
+    setMockFetch();
+    const tool = await createWebFetchToolForTest();
+
+    await expectBlockedUrl(tool, "https://clash-fake.test/page", /private|internal|blocked/i);
+  });
+
+  it("still blocks private IPs without ssrfPolicy", async () => {
+    vi.spyOn(ssrf, "resolvePinnedHostnameWithPolicy").mockRejectedValue(
+      new ssrf.SsrFBlockedError("Blocked: resolves to private/internal/special-use IP address"),
+    );
+
+    setMockFetch();
+    const tool = await createWebFetchToolForTest();
+
+    await expectBlockedUrl(tool, "https://private.test/resource", /private|internal|blocked/i);
   });
 });

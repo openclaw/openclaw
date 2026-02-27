@@ -1,6 +1,6 @@
 import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
-import { SsrFBlockedError } from "../../infra/net/ssrf.js";
+import { SsrFBlockedError, type SsrFPolicy } from "../../infra/net/ssrf.js";
 import { logDebug } from "../../logger.js";
 import { wrapExternalContent, wrapWebContent } from "../../security/external-content.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
@@ -99,6 +99,47 @@ function resolveFetchReadabilityEnabled(fetch?: WebFetchConfig): boolean {
     return fetch.readability;
   }
   return true;
+}
+
+function normalizeStringList(raw?: string[]): string[] | undefined {
+  if (!Array.isArray(raw) || raw.length === 0) {
+    return undefined;
+  }
+  const values = raw.map((v) => v.trim()).filter((v): v is string => v.length > 0);
+  return values.length > 0 ? values : undefined;
+}
+
+/** Resolve ssrfPolicy from web fetch config, returning undefined when no policy options are set. */
+function resolveFetchSsrFPolicy(fetch?: WebFetchConfig): SsrFPolicy | undefined {
+  if (!fetch || typeof fetch !== "object") {
+    return undefined;
+  }
+  const raw = "ssrfPolicy" in fetch ? fetch.ssrfPolicy : undefined;
+  if (!raw || typeof raw !== "object") {
+    return undefined;
+  }
+  const ssrf = raw as Record<string, unknown>;
+  const allowPrivateNetwork =
+    ssrf.dangerouslyAllowPrivateNetwork === true || ssrf.allowPrivateNetwork === true;
+  const allowRfc2544BenchmarkRange = ssrf.allowRfc2544BenchmarkRange === true;
+  const allowedHostnames = normalizeStringList(ssrf.allowedHostnames as string[] | undefined);
+  const hostnameAllowlist = normalizeStringList(ssrf.hostnameAllowlist as string[] | undefined);
+
+  if (
+    !allowPrivateNetwork &&
+    !allowRfc2544BenchmarkRange &&
+    !allowedHostnames &&
+    !hostnameAllowlist
+  ) {
+    return undefined;
+  }
+
+  return {
+    ...(allowPrivateNetwork ? { dangerouslyAllowPrivateNetwork: true } : {}),
+    ...(allowRfc2544BenchmarkRange ? { allowRfc2544BenchmarkRange: true } : {}),
+    ...(allowedHostnames ? { allowedHostnames } : {}),
+    ...(hostnameAllowlist ? { hostnameAllowlist } : {}),
+  };
 }
 
 function resolveFetchMaxCharsCap(fetch?: WebFetchConfig): number {
@@ -446,6 +487,7 @@ type WebFetchRuntimeParams = FirecrawlRuntimeParams & {
   cacheTtlMs: number;
   userAgent: string;
   readabilityEnabled: boolean;
+  ssrfPolicy?: SsrFPolicy;
 };
 
 function toFirecrawlContentParams(
@@ -527,6 +569,7 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
       url: params.url,
       maxRedirects: params.maxRedirects,
       timeoutSeconds: params.timeoutSeconds,
+      policy: params.ssrfPolicy,
       init: {
         headers: {
           Accept: "text/markdown, text/html;q=0.9, */*;q=0.1",
@@ -718,6 +761,7 @@ export function createWebFetchTool(options?: {
     return null;
   }
   const readabilityEnabled = resolveFetchReadabilityEnabled(fetch);
+  const ssrfPolicy = resolveFetchSsrFPolicy(fetch);
   const firecrawl = resolveFirecrawlConfig(fetch);
   const firecrawlApiKey = resolveFirecrawlApiKey(firecrawl);
   const firecrawlEnabled = resolveFirecrawlEnabled({ firecrawl, apiKey: firecrawlApiKey });
@@ -758,6 +802,7 @@ export function createWebFetchTool(options?: {
         cacheTtlMs: resolveCacheTtlMs(fetch?.cacheTtlMinutes, DEFAULT_CACHE_TTL_MINUTES),
         userAgent,
         readabilityEnabled,
+        ssrfPolicy,
         firecrawlEnabled,
         firecrawlApiKey,
         firecrawlBaseUrl,
