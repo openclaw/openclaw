@@ -81,9 +81,13 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.AMERICAN_CLAW_DISPATCH_TOKEN }}
         run: |
-          gh pr create \
-            --title "sync: merge ${{ steps.check.outputs.commit_count }} upstream commits ($(date +%Y-%m-%d))" \
-            --body "## Upstream Sync
+          echo "Waiting for GitHub to index the branch..."
+          sleep 10
+
+          for attempt in 1 2; do
+            if gh pr create \
+              --title "sync: merge ${{ steps.check.outputs.commit_count }} upstream commits ($(date +%Y-%m-%d))" \
+              --body "## Upstream Sync
 
           **${{ steps.check.outputs.commit_count }}** new commits from [openclaw/openclaw](https://github.com/openclaw/openclaw).
 
@@ -93,17 +97,33 @@ jobs:
           \`\`\`
 
           **Status:** Clean merge, no conflicts." \
-            --base main \
-            --head "${{ steps.merge.outputs.branch }}"
+              --base main \
+              --head "${{ steps.merge.outputs.branch }}"; then
+              echo "PR created successfully on attempt $attempt"
+              break
+            fi
+
+            if [ "$attempt" -eq 1 ]; then
+              echo "PR creation failed, retrying in 30s..."
+              sleep 30
+            else
+              echo "PR creation failed after 2 attempts"
+              exit 1
+            fi
+          done
 
       - name: Create draft PR (conflicts)
         if: steps.check.outputs.has_changes == 'true' && steps.merge.outputs.merge_clean == 'false'
         env:
           GH_TOKEN: ${{ secrets.AMERICAN_CLAW_DISPATCH_TOKEN }}
         run: |
-          PR_URL=$(gh pr create \
-            --title "sync: merge ${{ steps.check.outputs.commit_count }} upstream commits ($(date +%Y-%m-%d)) — CONFLICTS" \
-            --body "## Upstream Sync — Conflicts Detected
+          echo "Waiting for GitHub to index the branch..."
+          sleep 10
+
+          for attempt in 1 2; do
+            if PR_URL=$(gh pr create \
+              --title "sync: merge ${{ steps.check.outputs.commit_count }} upstream commits ($(date +%Y-%m-%d)) — CONFLICTS" \
+              --body "## Upstream Sync — Conflicts Detected
 
           **${{ steps.check.outputs.commit_count }}** new commits from [openclaw/openclaw](https://github.com/openclaw/openclaw).
 
@@ -118,12 +138,22 @@ jobs:
           \`\`\`
 
           **Action required:** Checkout this branch, resolve conflicts, and push." \
-            --base main \
-            --head "${{ steps.merge.outputs.branch }}" \
-            --draft)
-          echo "Created PR: $PR_URL"
-          # Add label separately so missing label doesn't fail the workflow
-          gh pr edit "$PR_URL" --add-label "conflicts" || echo "Warning: could not add 'conflicts' label"
+              --base main \
+              --head "${{ steps.merge.outputs.branch }}" \
+              --draft); then
+              echo "Created PR: $PR_URL"
+              gh pr edit "$PR_URL" --add-label "conflicts" || echo "Warning: could not add 'conflicts' label"
+              break
+            fi
+
+            if [ "$attempt" -eq 1 ]; then
+              echo "PR creation failed, retrying in 30s..."
+              sleep 30
+            else
+              echo "PR creation failed after 2 attempts"
+              exit 1
+            fi
+          done
 
       - name: Alert on failure
         if: failure() && steps.check.outputs.has_changes == 'true'
@@ -133,4 +163,8 @@ jobs:
           gh api repos/justuseapen/american-claw/dispatches \
             -f event_type="sync-failure" \
             -f 'client_payload[error]=Upstream sync workflow failed' \
-            -f 'client_payload[run_url]=${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}'
+            -f 'client_payload[run_url]=${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}' \
+            -f 'client_payload[branch]=${{ steps.merge.outputs.branch }}' \
+            -f 'client_payload[commit_count]=${{ steps.check.outputs.commit_count }}' \
+            -f 'client_payload[merge_clean]=${{ steps.merge.outputs.merge_clean }}' \
+            -f 'client_payload[conflicts]=${{ steps.merge.outputs.conflicts }}'
