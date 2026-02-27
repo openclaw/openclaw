@@ -18,7 +18,9 @@ import {
   resolveMirroredTranscriptText,
 } from "../../config/sessions.js";
 import type { sendMessageDiscord } from "../../discord/send.js";
+import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import type { sendMessageIMessage } from "../../imessage/send.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { markdownToSignalTextChunks, type SignalTextStyleRange } from "../../signal/format.js";
@@ -31,10 +33,13 @@ import { ackDelivery, enqueueDelivery, failDelivery } from "./delivery-queue.js"
 import type { OutboundIdentity } from "./identity.js";
 import type { NormalizedOutboundPayload } from "./payloads.js";
 import { normalizeReplyPayloadsForDelivery } from "./payloads.js";
+import type { OutboundSessionContext } from "./session-context.js";
 import type { OutboundChannel } from "./targets.js";
 
 export type { NormalizedOutboundPayload } from "./payloads.js";
 export { normalizeOutboundPayloads } from "./payloads.js";
+
+const log = createSubsystemLogger("outbound/deliver");
 
 type SendMatrixMessage = (
   to: string,
@@ -77,9 +82,28 @@ type ChannelHandler = {
   chunker: Chunker | null;
   chunkerMode?: "text" | "markdown";
   textChunkLimit?: number;
-  sendPayload?: (payload: ReplyPayload) => Promise<OutboundDeliveryResult>;
-  sendText: (text: string) => Promise<OutboundDeliveryResult>;
-  sendMedia: (caption: string, mediaUrl: string) => Promise<OutboundDeliveryResult>;
+  sendPayload?: (
+    payload: ReplyPayload,
+    overrides?: {
+      replyToId?: string | null;
+      threadId?: string | number | null;
+    },
+  ) => Promise<OutboundDeliveryResult>;
+  sendText: (
+    text: string,
+    overrides?: {
+      replyToId?: string | null;
+      threadId?: string | number | null;
+    },
+  ) => Promise<OutboundDeliveryResult>;
+  sendMedia: (
+    caption: string,
+    mediaUrl: string,
+    overrides?: {
+      replyToId?: string | null;
+      threadId?: string | number | null;
+    },
+  ) => Promise<OutboundDeliveryResult>;
 };
 
 type ChannelHandlerParams = {
@@ -118,27 +142,35 @@ function createPluginHandler(
   const sendMedia = outbound.sendMedia;
   const chunker = outbound.chunker ?? null;
   const chunkerMode = outbound.chunkerMode;
+  const resolveCtx = (overrides?: {
+    replyToId?: string | null;
+    threadId?: string | number | null;
+  }): Omit<ChannelOutboundContext, "text" | "mediaUrl"> => ({
+    ...baseCtx,
+    replyToId: overrides?.replyToId ?? baseCtx.replyToId,
+    threadId: overrides?.threadId ?? baseCtx.threadId,
+  });
   return {
     chunker,
     chunkerMode,
     textChunkLimit: outbound.textChunkLimit,
     sendPayload: outbound.sendPayload
-      ? async (payload) =>
+      ? async (payload, overrides) =>
           outbound.sendPayload!({
-            ...baseCtx,
+            ...resolveCtx(overrides),
             text: payload.text ?? "",
             mediaUrl: payload.mediaUrl,
             payload,
           })
       : undefined,
-    sendText: async (text) =>
+    sendText: async (text, overrides) =>
       sendText({
-        ...baseCtx,
+        ...resolveCtx(overrides),
         text,
       }),
-    sendMedia: async (caption, mediaUrl) =>
+    sendMedia: async (caption, mediaUrl, overrides) =>
       sendMedia({
-        ...baseCtx,
+        ...resolveCtx(overrides),
         text: caption,
         mediaUrl,
       }),
@@ -179,8 +211,8 @@ type DeliverOutboundPayloadsCoreParams = {
   bestEffort?: boolean;
   onError?: (err: unknown, payload: NormalizedOutboundPayload) => void;
   onPayload?: (payload: NormalizedOutboundPayload) => void;
-  /** Active agent id for media local-root scoping. */
-  agentId?: string;
+  /** Session/agent context used for hooks and media local-root scoping. */
+  session?: OutboundSessionContext;
   mirror?: {
     sessionKey: string;
     agentId?: string;
@@ -266,7 +298,7 @@ async function deliverOutboundPayloadsCore(
   const sendSignal = params.deps?.sendSignal ?? sendMessageSignal;
   const mediaLocalRoots = getAgentScopedMediaLocalRoots(
     cfg,
-    params.agentId ?? params.mirror?.agentId,
+    params.session?.agentId ?? params.mirror?.agentId,
   );
   const results: OutboundDeliveryResult[] = [];
   const handler = await createChannelHandler({
@@ -302,10 +334,13 @@ async function deliverOutboundPayloadsCore(
       })
     : undefined;
 
-  const sendTextChunks = async (text: string) => {
+  const sendTextChunks = async (
+    text: string,
+    overrides?: { replyToId?: string | null; threadId?: string | number | null },
+  ) => {
     throwIfAborted(abortSignal);
     if (!handler.chunker || textLimit === undefined) {
-      results.push(await handler.sendText(text));
+      results.push(await handler.sendText(text, overrides));
       return;
     }
     if (chunkMode === "newline") {
@@ -325,7 +360,7 @@ async function deliverOutboundPayloadsCore(
         }
         for (const chunk of chunks) {
           throwIfAborted(abortSignal);
-          results.push(await handler.sendText(chunk));
+          results.push(await handler.sendText(chunk, overrides));
         }
       }
       return;
@@ -333,7 +368,7 @@ async function deliverOutboundPayloadsCore(
     const chunks = handler.chunker(text, textLimit);
     for (const chunk of chunks) {
       throwIfAborted(abortSignal);
-      results.push(await handler.sendText(chunk));
+      results.push(await handler.sendText(chunk, overrides));
     }
   };
 
@@ -413,30 +448,65 @@ async function deliverOutboundPayloadsCore(
     return normalized ? [normalized] : [];
   });
   const hookRunner = getGlobalHookRunner();
+  const sessionKeyForInternalHooks = params.mirror?.sessionKey ?? params.session?.key;
+  if (
+    hookRunner?.hasHooks("message_sent") &&
+    params.session?.agentId &&
+    !sessionKeyForInternalHooks
+  ) {
+    log.warn(
+      "deliverOutboundPayloads: session.agentId present without session key; internal message:sent hook will be skipped",
+      {
+        channel,
+        to,
+        agentId: params.session.agentId,
+      },
+    );
+  }
   for (const payload of normalizedPayloads) {
     const payloadSummary: NormalizedOutboundPayload = {
       text: payload.text ?? "",
       mediaUrls: payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []),
       channelData: payload.channelData,
     };
-    const emitMessageSent = (success: boolean, error?: string) => {
-      if (!hookRunner?.hasHooks("message_sent")) {
+    const emitMessageSent = (params: {
+      success: boolean;
+      content: string;
+      error?: string;
+      messageId?: string;
+    }) => {
+      if (hookRunner?.hasHooks("message_sent")) {
+        void hookRunner
+          .runMessageSent(
+            {
+              to,
+              content: params.content,
+              success: params.success,
+              ...(params.error ? { error: params.error } : {}),
+            },
+            {
+              channelId: channel,
+              accountId: accountId ?? undefined,
+              conversationId: to,
+            },
+          )
+          .catch(() => {});
+      }
+      if (!sessionKeyForInternalHooks) {
         return;
       }
-      void hookRunner
-        .runMessageSent(
-          {
-            to,
-            content: payloadSummary.text,
-            success,
-            ...(error ? { error } : {}),
-          },
-          {
-            channelId: channel,
-            accountId: accountId ?? undefined,
-          },
-        )
-        .catch(() => {});
+      void triggerInternalHook(
+        createInternalHookEvent("message", "sent", sessionKeyForInternalHooks, {
+          to,
+          content: params.content,
+          success: params.success,
+          ...(params.error ? { error: params.error } : {}),
+          channelId: channel,
+          accountId: accountId ?? undefined,
+          conversationId: to,
+          messageId: params.messageId,
+        }),
+      ).catch(() => {});
     };
     try {
       throwIfAborted(abortSignal);
@@ -469,35 +539,63 @@ async function deliverOutboundPayloadsCore(
       }
 
       params.onPayload?.(payloadSummary);
+      const sendOverrides = {
+        replyToId: effectivePayload.replyToId ?? params.replyToId ?? undefined,
+        threadId: params.threadId ?? undefined,
+      };
       if (handler.sendPayload && effectivePayload.channelData) {
-        results.push(await handler.sendPayload(effectivePayload));
-        emitMessageSent(true);
+        const delivery = await handler.sendPayload(effectivePayload, sendOverrides);
+        results.push(delivery);
+        emitMessageSent({
+          success: true,
+          content: payloadSummary.text,
+          messageId: delivery.messageId,
+        });
         continue;
       }
       if (payloadSummary.mediaUrls.length === 0) {
+        const beforeCount = results.length;
         if (isSignalChannel) {
           await sendSignalTextChunks(payloadSummary.text);
         } else {
-          await sendTextChunks(payloadSummary.text);
+          await sendTextChunks(payloadSummary.text, sendOverrides);
         }
-        emitMessageSent(true);
+        const messageId = results.at(-1)?.messageId;
+        emitMessageSent({
+          success: results.length > beforeCount,
+          content: payloadSummary.text,
+          messageId,
+        });
         continue;
       }
 
       let first = true;
+      let lastMessageId: string | undefined;
       for (const url of payloadSummary.mediaUrls) {
         throwIfAborted(abortSignal);
         const caption = first ? payloadSummary.text : "";
         first = false;
         if (isSignalChannel) {
-          results.push(await sendSignalMedia(caption, url));
+          const delivery = await sendSignalMedia(caption, url);
+          results.push(delivery);
+          lastMessageId = delivery.messageId;
         } else {
-          results.push(await handler.sendMedia(caption, url));
+          const delivery = await handler.sendMedia(caption, url, sendOverrides);
+          results.push(delivery);
+          lastMessageId = delivery.messageId;
         }
       }
-      emitMessageSent(true);
+      emitMessageSent({
+        success: true,
+        content: payloadSummary.text,
+        messageId: lastMessageId,
+      });
     } catch (err) {
-      emitMessageSent(false, err instanceof Error ? err.message : String(err));
+      emitMessageSent({
+        success: false,
+        content: payloadSummary.text,
+        error: err instanceof Error ? err.message : String(err),
+      });
       if (!params.bestEffort) {
         throw err;
       }
@@ -517,5 +615,6 @@ async function deliverOutboundPayloadsCore(
       });
     }
   }
+
   return results;
 }

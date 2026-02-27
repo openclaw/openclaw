@@ -8,12 +8,19 @@ import {
 } from "../config/sessions.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
 import { runCronIsolatedAgentTurn } from "../cron/isolated-agent.js";
-import { appendCronRunLog, resolveCronRunLogPath } from "../cron/run-log.js";
+import {
+  appendCronRunLog,
+  resolveCronRunLogPath,
+  resolveCronRunLogPruneOptions,
+} from "../cron/run-log.js";
 import { CronService } from "../cron/service.js";
 import { resolveCronStorePath } from "../cron/store.js";
 import { normalizeHttpWebhookUrl } from "../cron/webhook-url.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { runHeartbeatOnce } from "../infra/heartbeat-runner.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
+import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
+import { SsrFBlockedError } from "../infra/net/ssrf.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { getChildLogger } from "../logging.js";
 import { normalizeAgentId, toAgentStoreSessionKey } from "../routing/session-key.js";
@@ -141,6 +148,7 @@ export function buildGatewayCronService(params: {
   };
 
   const defaultAgentId = resolveDefaultAgentId(params.cfg);
+  const runLogPrune = resolveCronRunLogPruneOptions(params.cfg.cron?.runLog);
   const resolveSessionStorePath = (agentId?: string) =>
     resolveStorePath(params.cfg.session?.store, {
       agentId: agentId ?? defaultAgentId,
@@ -182,13 +190,14 @@ export function buildGatewayCronService(params: {
         deps: { ...params.deps, runtime: defaultRuntime },
       });
     },
-    runIsolatedAgentJob: async ({ job, message }) => {
+    runIsolatedAgentJob: async ({ job, message, abortSignal }) => {
       const { agentId, cfg: runtimeConfig } = resolveCronAgent(job.agentId);
       return await runCronIsolatedAgentTurn({
         cfg: runtimeConfig,
         deps: params.deps,
         job,
         message,
+        abortSignal,
         agentId,
         sessionKey: `cron:${job.id}`,
         lane: "cron",
@@ -243,46 +252,71 @@ export function buildGatewayCronService(params: {
           const timeout = setTimeout(() => {
             abortController.abort();
           }, CRON_WEBHOOK_TIMEOUT_MS);
-          void fetch(webhookTarget.url, {
-            method: "POST",
-            headers,
-            body: JSON.stringify(evt),
-            signal: abortController.signal,
-          })
-            .catch((err) => {
-              cronLogger.warn(
-                {
-                  err: String(err),
-                  jobId: evt.jobId,
-                  webhookUrl: redactWebhookUrl(webhookTarget.url),
+
+          void (async () => {
+            try {
+              const result = await fetchWithSsrFGuard({
+                url: webhookTarget.url,
+                init: {
+                  method: "POST",
+                  headers,
+                  body: JSON.stringify(evt),
+                  signal: abortController.signal,
                 },
-                "cron: webhook delivery failed",
-              );
-            })
-            .finally(() => {
+              });
+              await result.release();
+            } catch (err) {
+              if (err instanceof SsrFBlockedError) {
+                cronLogger.warn(
+                  {
+                    reason: formatErrorMessage(err),
+                    jobId: evt.jobId,
+                    webhookUrl: redactWebhookUrl(webhookTarget.url),
+                  },
+                  "cron: webhook delivery blocked by SSRF guard",
+                );
+              } else {
+                cronLogger.warn(
+                  {
+                    err: formatErrorMessage(err),
+                    jobId: evt.jobId,
+                    webhookUrl: redactWebhookUrl(webhookTarget.url),
+                  },
+                  "cron: webhook delivery failed",
+                );
+              }
+            } finally {
               clearTimeout(timeout);
-            });
+            }
+          })();
         }
         const logPath = resolveCronRunLogPath({
           storePath,
           jobId: evt.jobId,
         });
-        void appendCronRunLog(logPath, {
-          ts: Date.now(),
-          jobId: evt.jobId,
-          action: "finished",
-          status: evt.status,
-          error: evt.error,
-          summary: evt.summary,
-          sessionId: evt.sessionId,
-          sessionKey: evt.sessionKey,
-          runAtMs: evt.runAtMs,
-          durationMs: evt.durationMs,
-          nextRunAtMs: evt.nextRunAtMs,
-          model: evt.model,
-          provider: evt.provider,
-          usage: evt.usage,
-        }).catch((err) => {
+        void appendCronRunLog(
+          logPath,
+          {
+            ts: Date.now(),
+            jobId: evt.jobId,
+            action: "finished",
+            status: evt.status,
+            error: evt.error,
+            summary: evt.summary,
+            delivered: evt.delivered,
+            deliveryStatus: evt.deliveryStatus,
+            deliveryError: evt.deliveryError,
+            sessionId: evt.sessionId,
+            sessionKey: evt.sessionKey,
+            runAtMs: evt.runAtMs,
+            durationMs: evt.durationMs,
+            nextRunAtMs: evt.nextRunAtMs,
+            model: evt.model,
+            provider: evt.provider,
+            usage: evt.usage,
+          },
+          runLogPrune,
+        ).catch((err) => {
           cronLogger.warn({ err: String(err), logPath }, "cron: run log append failed");
         });
       }

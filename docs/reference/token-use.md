@@ -36,6 +36,12 @@ Everything the model receives counts toward the context limit:
 - Compaction summaries and pruning artifacts
 - Provider wrappers or safety headers (not visible, but still counted)
 
+For images, OpenClaw downscales transcript/tool image payloads before provider calls.
+Use `agents.defaults.imageMaxDimensionPx` (default: `1200`) to tune this:
+
+- Lower values usually reduce vision-token usage and payload size.
+- Higher values preserve more visual detail for OCR/UI-heavy screenshots.
+
 For a practical breakdown (per injected file, tools, skills, and system prompt size), use `/context list` or `/context detail`. See [Context](/concepts/context).
 
 ## How to see current token usage
@@ -82,6 +88,11 @@ Heartbeat can keep the cache **warm** across idle gaps. If your model cache TTL
 is `1h`, setting the heartbeat interval just under that (e.g., `55m`) can avoid
 re-caching the full prompt, reducing cache write costs.
 
+In multi-agent setups, you can keep one shared model config and tune cache behavior
+per agent with `agents.list[].params.cacheRetention`.
+
+For a full knob-by-knob guide, see [Prompt Caching](/reference/prompt-caching).
+
 For Anthropic API pricing, cache reads are significantly cheaper than input
 tokens, while cache writes are billed at a higher multiplier. See Anthropic’s
 prompt caching pricing for the latest rates and TTL multipliers:
@@ -102,10 +113,56 @@ agents:
       every: "55m"
 ```
 
+### Example: mixed traffic with per-agent cache strategy
+
+```yaml
+agents:
+  defaults:
+    model:
+      primary: "anthropic/claude-opus-4-6"
+    models:
+      "anthropic/claude-opus-4-6":
+        params:
+          cacheRetention: "long" # default baseline for most agents
+  list:
+    - id: "research"
+      default: true
+      heartbeat:
+        every: "55m" # keep long cache warm for deep sessions
+    - id: "alerts"
+      params:
+        cacheRetention: "none" # avoid cache writes for bursty notifications
+```
+
+`agents.list[].params` merges on top of the selected model's `params`, so you can
+override only `cacheRetention` and inherit other model defaults unchanged.
+
+### Example: enable Anthropic 1M context beta header
+
+Anthropic's 1M context window is currently beta-gated. OpenClaw can inject the
+required `anthropic-beta` value when you enable `context1m` on supported Opus
+or Sonnet models.
+
+```yaml
+agents:
+  defaults:
+    models:
+      "anthropic/claude-opus-4-6":
+        params:
+          context1m: true
+```
+
+This maps to Anthropic's `context-1m-2025-08-07` beta header.
+
+If you authenticate Anthropic with OAuth/subscription tokens (`sk-ant-oat-*`),
+OpenClaw skips the `context-1m-*` beta header because Anthropic currently
+rejects that combination with HTTP 401.
+
 ## Tips for reducing token pressure
 
 - Use `/compact` to summarize long sessions.
 - Trim large tool outputs in your workflows.
+- Lower `agents.defaults.imageMaxDimensionPx` for screenshot-heavy sessions.
 - Keep skill descriptions short (skill list is injected into the prompt).
 - Prefer smaller models for verbose, exploratory work.
 

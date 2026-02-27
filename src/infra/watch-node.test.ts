@@ -9,13 +9,18 @@ const createFakeProcess = () =>
     execPath: "/usr/local/bin/node",
   }) as unknown as NodeJS.Process;
 
+const createWatchHarness = () => {
+  const child = Object.assign(new EventEmitter(), {
+    kill: vi.fn(),
+  });
+  const spawn = vi.fn(() => child);
+  const fakeProcess = createFakeProcess();
+  return { child, spawn, fakeProcess };
+};
+
 describe("watch-node script", () => {
   it("wires node watch to run-node with watched source/config paths", async () => {
-    const child = Object.assign(new EventEmitter(), {
-      kill: vi.fn(),
-    });
-    const spawn = vi.fn(() => child);
-    const fakeProcess = createFakeProcess();
+    const { child, spawn, fakeProcess } = createWatchHarness();
 
     const runPromise = runWatchMain({
       args: ["gateway", "--force"],
@@ -54,11 +59,7 @@ describe("watch-node script", () => {
   });
 
   it("terminates child on SIGINT and returns shell interrupt code", async () => {
-    const child = Object.assign(new EventEmitter(), {
-      kill: vi.fn(),
-    });
-    const spawn = vi.fn(() => child);
-    const fakeProcess = createFakeProcess();
+    const { child, spawn, fakeProcess } = createWatchHarness();
 
     const runPromise = runWatchMain({
       args: ["gateway", "--force"],
@@ -70,6 +71,24 @@ describe("watch-node script", () => {
     const exitCode = await runPromise;
 
     expect(exitCode).toBe(130);
+    expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+    expect(fakeProcess.listenerCount("SIGINT")).toBe(0);
+    expect(fakeProcess.listenerCount("SIGTERM")).toBe(0);
+  });
+
+  it("terminates child on SIGTERM and returns shell terminate code", async () => {
+    const { child, spawn, fakeProcess } = createWatchHarness();
+
+    const runPromise = runWatchMain({
+      args: ["gateway", "--force"],
+      process: fakeProcess,
+      spawn,
+    });
+
+    fakeProcess.emit("SIGTERM");
+    const exitCode = await runPromise;
+
+    expect(exitCode).toBe(143);
     expect(child.kill).toHaveBeenCalledWith("SIGTERM");
     expect(fakeProcess.listenerCount("SIGINT")).toBe(0);
     expect(fakeProcess.listenerCount("SIGTERM")).toBe(0);

@@ -91,7 +91,8 @@ export async function persistInlineDirectives(params: {
     }
     if (directives.hasReasoningDirective && directives.reasoningLevel) {
       if (directives.reasoningLevel === "off") {
-        delete sessionEntry.reasoningLevel;
+        // Persist explicit off so it overrides model-capability defaults.
+        sessionEntry.reasoningLevel = "off";
       } else {
         sessionEntry.reasoningLevel = directives.reasoningLevel;
       }

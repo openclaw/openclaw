@@ -21,6 +21,15 @@ type PackageJson = {
   version?: string;
 };
 
+function normalizePluginSyncVersion(version: string): string {
+  const normalized = version.trim().replace(/^v/, "");
+  const base = /^([0-9]+\.[0-9]+\.[0-9]+)/.exec(normalized)?.[1];
+  if (base) {
+    return base;
+  }
+  return normalized.replace(/[-+].*$/, "");
+}
+
 function runPackDry(): PackResult[] {
   const raw = execSync("npm pack --dry-run --json --ignore-scripts", {
     encoding: "utf8",
@@ -34,8 +43,9 @@ function checkPluginVersions() {
   const rootPackagePath = resolve("package.json");
   const rootPackage = JSON.parse(readFileSync(rootPackagePath, "utf8")) as PackageJson;
   const targetVersion = rootPackage.version;
+  const targetBaseVersion = targetVersion ? normalizePluginSyncVersion(targetVersion) : null;
 
-  if (!targetVersion) {
+  if (!targetVersion || !targetBaseVersion) {
     console.error("release-check: root package.json missing version.");
     process.exit(1);
   }
@@ -60,13 +70,15 @@ function checkPluginVersions() {
       continue;
     }
 
-    if (pkg.version !== targetVersion) {
+    if (normalizePluginSyncVersion(pkg.version) !== targetBaseVersion) {
       mismatches.push(`${pkg.name} (${pkg.version})`);
     }
   }
 
   if (mismatches.length > 0) {
-    console.error(`release-check: plugin versions must match ${targetVersion}:`);
+    console.error(
+      `release-check: plugin versions must match release base ${targetBaseVersion} (root ${targetVersion}):`,
+    );
     for (const item of mismatches) {
       console.error(`  - ${item}`);
     }

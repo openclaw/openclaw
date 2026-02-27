@@ -1,16 +1,24 @@
-import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { listChannelPlugins } from "../channels/plugins/index.js";
 import type { ChannelId } from "../channels/plugins/types.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig, GatewayBindMode } from "../config/config.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
 import { isLoopbackHost, resolveGatewayBindHost } from "../gateway/net.js";
-import { readChannelAllowFromStore } from "../pairing/pairing-store.js";
+import { resolveDmAllowState } from "../security/dm-policy-shared.js";
 import { note } from "../terminal/note.js";
+import { resolveDefaultChannelAccountContext } from "./channel-account-context.js";
 
 export async function noteSecurityWarnings(cfg: OpenClawConfig) {
   const warnings: string[] = [];
   const auditHint = `- Run: ${formatCliCommand("openclaw security audit --deep")}`;
+
+  if (cfg.approvals?.exec?.enabled === false) {
+    warnings.push(
+      "- Note: approvals.exec.enabled=false disables approval forwarding only.",
+      "  Host exec gating still comes from ~/.openclaw/exec-approvals.json.",
+      `  Check local policy with: ${formatCliCommand("openclaw approvals get --gateway")}`,
+    );
+  }
 
   // ===========================================
   // GATEWAY NETWORK EXPOSURE CHECK
@@ -42,6 +50,11 @@ export async function noteSecurityWarnings(cfg: OpenClawConfig) {
     (resolvedAuth.mode === "token" && hasToken) ||
     (resolvedAuth.mode === "password" && hasPassword);
   const bindDescriptor = `"${gatewayBind}" (${resolvedBindHost})`;
+  const saferRemoteAccessLines = [
+    "  Safer remote access: keep bind loopback and use Tailscale Serve/Funnel or an SSH tunnel.",
+    "  Example tunnel: ssh -N -L 18789:127.0.0.1:18789 user@gateway-host",
+    "  Docs: https://docs.openclaw.ai/gateway/remote",
+  ];
 
   if (isExposed) {
     if (!hasSharedSecret) {
@@ -61,6 +74,7 @@ export async function noteSecurityWarnings(cfg: OpenClawConfig) {
         `- CRITICAL: Gateway bound to ${bindDescriptor} without authentication.`,
         `  Anyone on your network (or internet if port-forwarded) can fully control your agent.`,
         `  Fix: ${formatCliCommand("openclaw config set gateway.bind loopback")}`,
+        ...saferRemoteAccessLines,
         ...authFixLines,
       );
     } else {
@@ -68,6 +82,7 @@ export async function noteSecurityWarnings(cfg: OpenClawConfig) {
       warnings.push(
         `- WARNING: Gateway bound to ${bindDescriptor} (network-accessible).`,
         `  Ensure your auth credentials are strong and not exposed.`,
+        ...saferRemoteAccessLines,
       );
     }
   }
@@ -75,6 +90,7 @@ export async function noteSecurityWarnings(cfg: OpenClawConfig) {
   const warnDmPolicy = async (params: {
     label: string;
     provider: ChannelId;
+    accountId: string;
     dmPolicy: string;
     allowFrom?: Array<string | number> | null;
     policyPath?: string;
@@ -84,21 +100,13 @@ export async function noteSecurityWarnings(cfg: OpenClawConfig) {
   }) => {
     const dmPolicy = params.dmPolicy;
     const policyPath = params.policyPath ?? `${params.allowFromPath}policy`;
-    const configAllowFrom = (params.allowFrom ?? []).map((v) => String(v).trim());
-    const hasWildcard = configAllowFrom.includes("*");
-    const storeAllowFrom = await readChannelAllowFromStore(params.provider).catch(() => []);
-    const normalizedCfg = configAllowFrom
-      .filter((v) => v !== "*")
-      .map((v) => (params.normalizeEntry ? params.normalizeEntry(v) : v))
-      .map((v) => v.trim())
-      .filter(Boolean);
-    const normalizedStore = storeAllowFrom
-      .map((v) => (params.normalizeEntry ? params.normalizeEntry(v) : v))
-      .map((v) => v.trim())
-      .filter(Boolean);
-    const allowCount = Array.from(new Set([...normalizedCfg, ...normalizedStore])).length;
+    const { hasWildcard, allowCount, isMultiUserDm } = await resolveDmAllowState({
+      provider: params.provider,
+      accountId: params.accountId,
+      allowFrom: params.allowFrom,
+      normalizeEntry: params.normalizeEntry,
+    });
     const dmScope = cfg.session?.dmScope ?? "main";
-    const isMultiUserDm = hasWildcard || allowCount > 1;
 
     if (dmPolicy === "open") {
       const allowFromPath = `${params.allowFromPath}allowFrom`;
@@ -135,20 +143,11 @@ export async function noteSecurityWarnings(cfg: OpenClawConfig) {
     if (!plugin.security) {
       continue;
     }
-    const accountIds = plugin.config.listAccountIds(cfg);
-    const defaultAccountId = resolveChannelDefaultAccountId({
-      plugin,
-      cfg,
-      accountIds,
-    });
-    const account = plugin.config.resolveAccount(cfg, defaultAccountId);
-    const enabled = plugin.config.isEnabled ? plugin.config.isEnabled(account, cfg) : true;
+    const { defaultAccountId, account, enabled, configured } =
+      await resolveDefaultChannelAccountContext(plugin, cfg);
     if (!enabled) {
       continue;
     }
-    const configured = plugin.config.isConfigured
-      ? await plugin.config.isConfigured(account, cfg)
-      : true;
     if (!configured) {
       continue;
     }
@@ -161,6 +160,7 @@ export async function noteSecurityWarnings(cfg: OpenClawConfig) {
       await warnDmPolicy({
         label: plugin.meta.label ?? plugin.id,
         provider: plugin.id,
+        accountId: defaultAccountId,
         dmPolicy: dmPolicy.policy,
         allowFrom: dmPolicy.allowFrom,
         policyPath: dmPolicy.policyPath,

@@ -1,5 +1,6 @@
 import Foundation
 import Network
+import OpenClawKit
 import Testing
 @testable import OpenClaw
 
@@ -101,5 +102,31 @@ import Testing
         controller._test_triggerAutoConnect()
 
         #expect(controller._test_didAutoConnect() == false)
+    }
+
+    @Test @MainActor func manualConnectionsForceTLSForNonLoopbackHosts() async {
+        let appModel = NodeAppModel()
+        let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+
+        #expect(controller._test_resolveManualUseTLS(host: "gateway.example.com", useTLS: false) == true)
+        #expect(controller._test_resolveManualUseTLS(host: "openclaw.local", useTLS: false) == true)
+        #expect(controller._test_resolveManualUseTLS(host: "127.attacker.example", useTLS: false) == true)
+
+        #expect(controller._test_resolveManualUseTLS(host: "localhost", useTLS: false) == false)
+        #expect(controller._test_resolveManualUseTLS(host: "127.0.0.1", useTLS: false) == false)
+        #expect(controller._test_resolveManualUseTLS(host: "::1", useTLS: false) == false)
+        #expect(controller._test_resolveManualUseTLS(host: "[::1]", useTLS: false) == false)
+        #expect(controller._test_resolveManualUseTLS(host: "::ffff:127.0.0.1", useTLS: false) == false)
+        #expect(controller._test_resolveManualUseTLS(host: "0.0.0.0", useTLS: false) == false)
+    }
+
+    @Test @MainActor func manualDefaultPortUses443OnlyForTailnetTLSHosts() async {
+        let appModel = NodeAppModel()
+        let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+
+        #expect(controller._test_resolveManualPort(host: "gateway.example.com", port: 0, useTLS: true) == 18789)
+        #expect(controller._test_resolveManualPort(host: "device.sample.ts.net", port: 0, useTLS: true) == 443)
+        #expect(controller._test_resolveManualPort(host: "device.sample.ts.net.", port: 0, useTLS: true) == 443)
+        #expect(controller._test_resolveManualPort(host: "device.sample.ts.net", port: 18789, useTLS: true) == 18789)
     }
 }

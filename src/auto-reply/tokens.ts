@@ -11,10 +11,28 @@ export function isSilentReplyText(
     return false;
   }
   const escaped = escapeRegExp(token);
-  const prefix = new RegExp(`^\\s*${escaped}(?=$|\\W)`);
-  if (prefix.test(text)) {
-    return true;
+  // Match only the exact silent token with optional surrounding whitespace.
+  // This prevents
+  // substantive replies ending with NO_REPLY from being suppressed (#19537).
+  return new RegExp(`^\\s*${escaped}\\s*$`).test(text);
+}
+
+export function isSilentReplyPrefixText(
+  text: string | undefined,
+  token: string = SILENT_REPLY_TOKEN,
+): boolean {
+  if (!text) {
+    return false;
   }
-  const suffix = new RegExp(`\\b${escaped}\\b\\W*$`);
-  return suffix.test(text);
+  const normalized = text.trimStart().toUpperCase();
+  if (!normalized) {
+    return false;
+  }
+  if (!normalized.includes("_")) {
+    return false;
+  }
+  if (/[^A-Z_]/.test(normalized)) {
+    return false;
+  }
+  return token.toUpperCase().startsWith(normalized);
 }

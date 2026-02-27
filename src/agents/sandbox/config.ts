@@ -4,6 +4,7 @@ import {
   DEFAULT_SANDBOX_BROWSER_AUTOSTART_TIMEOUT_MS,
   DEFAULT_SANDBOX_BROWSER_CDP_PORT,
   DEFAULT_SANDBOX_BROWSER_IMAGE,
+  DEFAULT_SANDBOX_BROWSER_NETWORK,
   DEFAULT_SANDBOX_BROWSER_NOVNC_PORT,
   DEFAULT_SANDBOX_BROWSER_PREFIX,
   DEFAULT_SANDBOX_BROWSER_VNC_PORT,
@@ -23,14 +24,35 @@ import type {
   SandboxScope,
 } from "./types.js";
 
+export const DANGEROUS_SANDBOX_DOCKER_BOOLEAN_KEYS = [
+  "dangerouslyAllowReservedContainerTargets",
+  "dangerouslyAllowExternalBindSources",
+  "dangerouslyAllowContainerNamespaceJoin",
+] as const;
+
+type DangerousSandboxDockerBooleanKey = (typeof DANGEROUS_SANDBOX_DOCKER_BOOLEAN_KEYS)[number];
+type DangerousSandboxDockerBooleans = Pick<SandboxDockerConfig, DangerousSandboxDockerBooleanKey>;
+
+function resolveDangerousSandboxDockerBooleans(
+  agentDocker?: Partial<SandboxDockerConfig>,
+  globalDocker?: Partial<SandboxDockerConfig>,
+): DangerousSandboxDockerBooleans {
+  const resolved = {} as DangerousSandboxDockerBooleans;
+  for (const key of DANGEROUS_SANDBOX_DOCKER_BOOLEAN_KEYS) {
+    resolved[key] = agentDocker?.[key] ?? globalDocker?.[key];
+  }
+  return resolved;
+}
+
 export function resolveSandboxBrowserDockerCreateConfig(params: {
   docker: SandboxDockerConfig;
   browser: SandboxBrowserConfig;
 }): SandboxDockerConfig {
+  const browserNetwork = params.browser.network.trim();
   const base: SandboxDockerConfig = {
     ...params.docker,
     // Browser container needs network access for Chrome, downloads, etc.
-    network: "bridge",
+    network: browserNetwork || DEFAULT_SANDBOX_BROWSER_NETWORK,
     // For hashing and consistency, treat browser image as the docker image even though we
     // pass it separately as the final `docker create` argument.
     image: params.browser.image,
@@ -93,6 +115,7 @@ export function resolveSandboxDockerConfig(params: {
     dns: agentDocker?.dns ?? globalDocker?.dns,
     extraHosts: agentDocker?.extraHosts ?? globalDocker?.extraHosts,
     binds: binds.length ? binds : undefined,
+    ...resolveDangerousSandboxDockerBooleans(agentDocker, globalDocker),
   };
 }
 
@@ -113,7 +136,9 @@ export function resolveSandboxBrowserConfig(params: {
       agentBrowser?.containerPrefix ??
       globalBrowser?.containerPrefix ??
       DEFAULT_SANDBOX_BROWSER_PREFIX,
+    network: agentBrowser?.network ?? globalBrowser?.network ?? DEFAULT_SANDBOX_BROWSER_NETWORK,
     cdpPort: agentBrowser?.cdpPort ?? globalBrowser?.cdpPort ?? DEFAULT_SANDBOX_BROWSER_CDP_PORT,
+    cdpSourceRange: agentBrowser?.cdpSourceRange ?? globalBrowser?.cdpSourceRange,
     vncPort: agentBrowser?.vncPort ?? globalBrowser?.vncPort ?? DEFAULT_SANDBOX_BROWSER_VNC_PORT,
     noVncPort:
       agentBrowser?.noVncPort ?? globalBrowser?.noVncPort ?? DEFAULT_SANDBOX_BROWSER_NOVNC_PORT,

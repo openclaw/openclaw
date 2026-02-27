@@ -1,12 +1,18 @@
 import crypto from "node:crypto";
 import { formatThinkingLevels, normalizeThinkLevel } from "../auto-reply/thinking.js";
+import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../config/agent-limits.js";
 import { loadConfig } from "../config/config.js";
 import { callGateway } from "../gateway/call.js";
-import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
+import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import {
+  isCronSessionKey,
+  normalizeAgentId,
+  parseAgentSessionKey,
+} from "../routing/session-key.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { resolveAgentConfig } from "./agent-scope.js";
 import { AGENT_LANE_SUBAGENT } from "./lanes.js";
-import { resolveDefaultModelForAgent } from "./model-selection.js";
+import { resolveSubagentSpawnModelSelection } from "./model-selection.js";
 import { buildSubagentSystemPrompt } from "./subagent-announce.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import { countActiveRunsForSession, registerSubagentRun } from "./subagent-registry.js";
@@ -17,6 +23,9 @@ import {
   resolveMainSessionAlias,
 } from "./tools/sessions-helpers.js";
 
+export const SUBAGENT_SPAWN_MODES = ["run", "session"] as const;
+export type SpawnSubagentMode = (typeof SUBAGENT_SPAWN_MODES)[number];
+
 export type SpawnSubagentParams = {
   task: string;
   label?: string;
@@ -24,7 +33,10 @@ export type SpawnSubagentParams = {
   model?: string;
   thinking?: string;
   runTimeoutSeconds?: number;
+  thread?: boolean;
+  mode?: SpawnSubagentMode;
   cleanup?: "delete" | "keep";
+  expectsCompletionMessage?: boolean;
 };
 
 export type SpawnSubagentContext = {
@@ -39,15 +51,18 @@ export type SpawnSubagentContext = {
   requesterAgentIdOverride?: string;
 };
 
-export const SUBAGENT_SPAWN_ACCEPTED_NOTE = "auto-announces on completion, do not poll";
+export const SUBAGENT_SPAWN_ACCEPTED_NOTE =
+  "auto-announces on completion, do not poll/sleep. The response will be sent back as an user message.";
+export const SUBAGENT_SPAWN_SESSION_ACCEPTED_NOTE =
+  "thread-bound session stays active after this task; continue in-thread for follow-ups.";
 
 export type SpawnSubagentResult = {
   status: "accepted" | "forbidden" | "error";
   childSessionKey?: string;
   runId?: string;
+  mode?: SpawnSubagentMode;
   note?: string;
   modelApplied?: boolean;
-  warning?: string;
   error?: string;
 };
 
@@ -66,19 +81,86 @@ export function splitModelRef(ref?: string) {
   return { provider: undefined, model: trimmed };
 }
 
-export function normalizeModelSelection(value: unknown): string | undefined {
-  if (typeof value === "string") {
-    const trimmed = value.trim();
-    return trimmed || undefined;
+function resolveSpawnMode(params: {
+  requestedMode?: SpawnSubagentMode;
+  threadRequested: boolean;
+}): SpawnSubagentMode {
+  if (params.requestedMode === "run" || params.requestedMode === "session") {
+    return params.requestedMode;
   }
-  if (!value || typeof value !== "object") {
-    return undefined;
+  // Thread-bound spawns should default to persistent sessions.
+  return params.threadRequested ? "session" : "run";
+}
+
+function summarizeError(err: unknown): string {
+  if (err instanceof Error) {
+    return err.message;
   }
-  const primary = (value as { primary?: unknown }).primary;
-  if (typeof primary === "string" && primary.trim()) {
-    return primary.trim();
+  if (typeof err === "string") {
+    return err;
   }
-  return undefined;
+  return "error";
+}
+
+async function ensureThreadBindingForSubagentSpawn(params: {
+  hookRunner: ReturnType<typeof getGlobalHookRunner>;
+  childSessionKey: string;
+  agentId: string;
+  label?: string;
+  mode: SpawnSubagentMode;
+  requesterSessionKey?: string;
+  requester: {
+    channel?: string;
+    accountId?: string;
+    to?: string;
+    threadId?: string | number;
+  };
+}): Promise<{ status: "ok" } | { status: "error"; error: string }> {
+  const hookRunner = params.hookRunner;
+  if (!hookRunner?.hasHooks("subagent_spawning")) {
+    return {
+      status: "error",
+      error:
+        "thread=true is unavailable because no channel plugin registered subagent_spawning hooks.",
+    };
+  }
+
+  try {
+    const result = await hookRunner.runSubagentSpawning(
+      {
+        childSessionKey: params.childSessionKey,
+        agentId: params.agentId,
+        label: params.label,
+        mode: params.mode,
+        requester: params.requester,
+        threadRequested: true,
+      },
+      {
+        childSessionKey: params.childSessionKey,
+        requesterSessionKey: params.requesterSessionKey,
+      },
+    );
+    if (result?.status === "error") {
+      const error = result.error.trim();
+      return {
+        status: "error",
+        error: error || "Failed to prepare thread binding for this subagent session.",
+      };
+    }
+    if (result?.status !== "ok" || !result.threadBindingReady) {
+      return {
+        status: "error",
+        error:
+          "Unable to create or bind a thread for this subagent session. Session mode is unavailable for this target.",
+      };
+    }
+    return { status: "ok" };
+  } catch (err) {
+    return {
+      status: "error",
+      error: `Thread bind failed: ${summarizeError(err)}`,
+    };
+  }
 }
 
 export async function spawnSubagentDirect(
@@ -90,22 +172,47 @@ export async function spawnSubagentDirect(
   const requestedAgentId = params.agentId;
   const modelOverride = params.model;
   const thinkingOverrideRaw = params.thinking;
+  const requestThreadBinding = params.thread === true;
+  const spawnMode = resolveSpawnMode({
+    requestedMode: params.mode,
+    threadRequested: requestThreadBinding,
+  });
+  if (spawnMode === "session" && !requestThreadBinding) {
+    return {
+      status: "error",
+      error: 'mode="session" requires thread=true so the subagent can stay bound to a thread.',
+    };
+  }
   const cleanup =
-    params.cleanup === "keep" || params.cleanup === "delete" ? params.cleanup : "keep";
+    spawnMode === "session"
+      ? "keep"
+      : params.cleanup === "keep" || params.cleanup === "delete"
+        ? params.cleanup
+        : "keep";
+  const expectsCompletionMessage = params.expectsCompletionMessage !== false;
   const requesterOrigin = normalizeDeliveryContext({
     channel: ctx.agentChannel,
     accountId: ctx.agentAccountId,
     to: ctx.agentTo,
     threadId: ctx.agentThreadId,
   });
+  const hookRunner = getGlobalHookRunner();
+  const cfg = loadConfig();
+
+  // When agent omits runTimeoutSeconds, use the config default.
+  // Falls back to 0 (no timeout) if config key is also unset,
+  // preserving current behavior for existing deployments.
+  const cfgSubagentTimeout =
+    typeof cfg?.agents?.defaults?.subagents?.runTimeoutSeconds === "number" &&
+    Number.isFinite(cfg.agents.defaults.subagents.runTimeoutSeconds)
+      ? Math.max(0, Math.floor(cfg.agents.defaults.subagents.runTimeoutSeconds))
+      : 0;
   const runTimeoutSeconds =
     typeof params.runTimeoutSeconds === "number" && Number.isFinite(params.runTimeoutSeconds)
       ? Math.max(0, Math.floor(params.runTimeoutSeconds))
-      : 0;
-  let modelWarning: string | undefined;
+      : cfgSubagentTimeout;
   let modelApplied = false;
-
-  const cfg = loadConfig();
+  let threadBindingReady = false;
   const { mainKey, alias } = resolveMainSessionAlias(cfg);
   const requesterSessionKey = ctx.agentSessionKey;
   const requesterInternalKey = requesterSessionKey
@@ -122,7 +229,8 @@ export async function spawnSubagentDirect(
   });
 
   const callerDepth = getSubagentDepthFromSessionStore(requesterInternalKey, { cfg });
-  const maxSpawnDepth = cfg.agents?.defaults?.subagents?.maxSpawnDepth ?? 1;
+  const maxSpawnDepth =
+    cfg.agents?.defaults?.subagents?.maxSpawnDepth ?? DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH;
   if (callerDepth >= maxSpawnDepth) {
     return {
       status: "forbidden",
@@ -164,16 +272,11 @@ export async function spawnSubagentDirect(
   const childDepth = callerDepth + 1;
   const spawnedByKey = requesterInternalKey;
   const targetAgentConfig = resolveAgentConfig(cfg, targetAgentId);
-  const runtimeDefaultModel = resolveDefaultModelForAgent({
+  const resolvedModel = resolveSubagentSpawnModelSelection({
     cfg,
     agentId: targetAgentId,
+    modelOverride,
   });
-  const resolvedModel =
-    normalizeModelSelection(modelOverride) ??
-    normalizeModelSelection(targetAgentConfig?.subagents?.model) ??
-    normalizeModelSelection(cfg.agents?.defaults?.subagents?.model) ??
-    normalizeModelSelection(cfg.agents?.defaults?.model?.primary) ??
-    normalizeModelSelection(`${runtimeDefaultModel.provider}/${runtimeDefaultModel.model}`);
 
   const resolvedThinkingDefaultRaw =
     readStringParam(targetAgentConfig?.subagents ?? {}, "thinking") ??
@@ -220,16 +323,11 @@ export async function spawnSubagentDirect(
     } catch (err) {
       const messageText =
         err instanceof Error ? err.message : typeof err === "string" ? err : "error";
-      const recoverable =
-        messageText.includes("invalid model") || messageText.includes("model not allowed");
-      if (!recoverable) {
-        return {
-          status: "error",
-          error: messageText,
-          childSessionKey,
-        };
-      }
-      modelWarning = messageText;
+      return {
+        status: "error",
+        error: messageText,
+        childSessionKey,
+      };
     }
   }
   if (thinkingOverride !== undefined) {
@@ -252,19 +350,58 @@ export async function spawnSubagentDirect(
       };
     }
   }
+  if (requestThreadBinding) {
+    const bindResult = await ensureThreadBindingForSubagentSpawn({
+      hookRunner,
+      childSessionKey,
+      agentId: targetAgentId,
+      label: label || undefined,
+      mode: spawnMode,
+      requesterSessionKey: requesterInternalKey,
+      requester: {
+        channel: requesterOrigin?.channel,
+        accountId: requesterOrigin?.accountId,
+        to: requesterOrigin?.to,
+        threadId: requesterOrigin?.threadId,
+      },
+    });
+    if (bindResult.status === "error") {
+      try {
+        await callGateway({
+          method: "sessions.delete",
+          params: { key: childSessionKey, emitLifecycleHooks: false },
+          timeoutMs: 10_000,
+        });
+      } catch {
+        // Best-effort cleanup only.
+      }
+      return {
+        status: "error",
+        error: bindResult.error,
+        childSessionKey,
+      };
+    }
+    threadBindingReady = true;
+  }
   const childSystemPrompt = buildSubagentSystemPrompt({
     requesterSessionKey,
     requesterOrigin,
     childSessionKey,
     label: label || undefined,
     task,
+    acpEnabled: cfg.acp?.enabled !== false,
     childDepth,
     maxSpawnDepth,
   });
   const childTaskMessage = [
     `[Subagent Context] You are running as a subagent (depth ${childDepth}/${maxSpawnDepth}). Results auto-announce to your requester; do not busy-poll for status.`,
+    spawnMode === "session"
+      ? "[Subagent Context] This subagent session is persistent and remains available for thread follow-up messages."
+      : undefined,
     `[Subagent Task]: ${task}`,
-  ].join("\n\n");
+  ]
+    .filter((line): line is string => Boolean(line))
+    .join("\n\n");
 
   const childIdem = crypto.randomUUID();
   let childRunId: string = childIdem;
@@ -296,8 +433,50 @@ export async function spawnSubagentDirect(
       childRunId = response.runId;
     }
   } catch (err) {
-    const messageText =
-      err instanceof Error ? err.message : typeof err === "string" ? err : "error";
+    if (threadBindingReady) {
+      const hasEndedHook = hookRunner?.hasHooks("subagent_ended") === true;
+      let endedHookEmitted = false;
+      if (hasEndedHook) {
+        try {
+          await hookRunner?.runSubagentEnded(
+            {
+              targetSessionKey: childSessionKey,
+              targetKind: "subagent",
+              reason: "spawn-failed",
+              sendFarewell: true,
+              accountId: requesterOrigin?.accountId,
+              runId: childRunId,
+              outcome: "error",
+              error: "Session failed to start",
+            },
+            {
+              runId: childRunId,
+              childSessionKey,
+              requesterSessionKey: requesterInternalKey,
+            },
+          );
+          endedHookEmitted = true;
+        } catch {
+          // Spawn should still return an actionable error even if cleanup hooks fail.
+        }
+      }
+      // Always delete the provisional child session after a failed spawn attempt.
+      // If we already emitted subagent_ended above, suppress a duplicate lifecycle hook.
+      try {
+        await callGateway({
+          method: "sessions.delete",
+          params: {
+            key: childSessionKey,
+            deleteTranscript: true,
+            emitLifecycleHooks: !endedHookEmitted,
+          },
+          timeoutMs: 10_000,
+        });
+      } catch {
+        // Best-effort only.
+      }
+    }
+    const messageText = summarizeError(err);
     return {
       status: "error",
       error: messageText,
@@ -317,14 +496,55 @@ export async function spawnSubagentDirect(
     label: label || undefined,
     model: resolvedModel,
     runTimeoutSeconds,
+    expectsCompletionMessage,
+    spawnMode,
   });
+
+  if (hookRunner?.hasHooks("subagent_spawned")) {
+    try {
+      await hookRunner.runSubagentSpawned(
+        {
+          runId: childRunId,
+          childSessionKey,
+          agentId: targetAgentId,
+          label: label || undefined,
+          requester: {
+            channel: requesterOrigin?.channel,
+            accountId: requesterOrigin?.accountId,
+            to: requesterOrigin?.to,
+            threadId: requesterOrigin?.threadId,
+          },
+          threadRequested: requestThreadBinding,
+          mode: spawnMode,
+        },
+        {
+          runId: childRunId,
+          childSessionKey,
+          requesterSessionKey: requesterInternalKey,
+        },
+      );
+    } catch {
+      // Spawn should still return accepted if spawn lifecycle hooks fail.
+    }
+  }
+
+  // Check if we're in a cron isolated session - don't add "do not poll" note
+  // because cron sessions end immediately after the agent produces a response,
+  // so the agent needs to wait for subagent results to keep the turn alive.
+  const isCronSession = isCronSessionKey(ctx.agentSessionKey);
+  const note =
+    spawnMode === "session"
+      ? SUBAGENT_SPAWN_SESSION_ACCEPTED_NOTE
+      : isCronSession
+        ? undefined
+        : SUBAGENT_SPAWN_ACCEPTED_NOTE;
 
   return {
     status: "accepted",
     childSessionKey,
     runId: childRunId,
-    note: SUBAGENT_SPAWN_ACCEPTED_NOTE,
+    mode: spawnMode,
+    note,
     modelApplied: resolvedModel ? modelApplied : undefined,
-    warning: modelWarning,
   };
 }

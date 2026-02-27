@@ -12,7 +12,9 @@ export type ChannelId = ChatChannelId | (string & {});
 
 export type ChannelOutboundTargetMode = "explicit" | "implicit" | "heartbeat";
 
-export type ChannelAgentTool = AgentTool<TSchema, unknown>;
+export type ChannelAgentTool = AgentTool<TSchema, unknown> & {
+  ownerOnly?: boolean;
+};
 
 export type ChannelAgentToolFactory = (params: { cfg?: OpenClawConfig }) => ChannelAgentTool[];
 
@@ -247,6 +249,7 @@ export type ChannelThreadingContext = {
   From?: string;
   To?: string;
   ChatType?: string;
+  CurrentMessageId?: string | number;
   ReplyToId?: string;
   ReplyToIdFull?: string;
   ThreadLabel?: string;
@@ -257,6 +260,7 @@ export type ChannelThreadingToolContext = {
   currentChannelId?: string;
   currentChannelProvider?: ChannelId;
   currentThreadTs?: string;
+  currentMessageId?: string | number;
   replyToMode?: "off" | "first" | "all";
   hasRepliedRef?: { value: boolean };
   /**
@@ -303,7 +307,13 @@ export type ChannelMessageActionContext = {
   action: ChannelMessageActionName;
   cfg: OpenClawConfig;
   params: Record<string, unknown>;
+  mediaLocalRoots?: readonly string[];
   accountId?: string | null;
+  /**
+   * Trusted sender id from inbound context. This is server-injected and must
+   * never be sourced from tool/model-controlled params.
+   */
+  requesterSenderId?: string | null;
   gateway?: {
     url?: string;
     token?: string;

@@ -5,6 +5,7 @@ import { parseFeishuMessageEvent } from "./bot.js";
 function makeEvent(
   chatType: "p2p" | "group",
   mentions?: Array<{ key: string; name: string; id: { open_id?: string } }>,
+  text = "hello",
 ) {
   return {
     sender: {
@@ -15,8 +16,22 @@ function makeEvent(
       chat_id: "oc_chat1",
       chat_type: chatType,
       message_type: "text",
-      content: JSON.stringify({ text: "hello" }),
+      content: JSON.stringify({ text }),
       mentions,
+    },
+  };
+}
+
+function makePostEvent(content: unknown) {
+  return {
+    sender: { sender_id: { user_id: "u1", open_id: "ou_sender" } },
+    message: {
+      message_id: "msg_1",
+      chat_id: "oc_chat1",
+      chat_type: "group",
+      message_type: "post",
+      content: JSON.stringify(content),
+      mentions: [],
     },
   };
 }
@@ -62,66 +77,53 @@ describe("parseFeishuMessageEvent – mentionedBot", () => {
     expect(ctx.mentionedBot).toBe(false);
   });
 
+  it("treats mention.name regex metacharacters as literals when stripping", () => {
+    const event = makeEvent(
+      "group",
+      [{ key: "@_bot_1", name: ".*", id: { open_id: BOT_OPEN_ID } }],
+      "@NotBot hello",
+    );
+    const ctx = parseFeishuMessageEvent(event as any, BOT_OPEN_ID);
+    expect(ctx.content).toBe("@NotBot hello");
+  });
+
+  it("treats mention.key regex metacharacters as literals when stripping", () => {
+    const event = makeEvent(
+      "group",
+      [{ key: ".*", name: "Bot", id: { open_id: BOT_OPEN_ID } }],
+      "hello world",
+    );
+    const ctx = parseFeishuMessageEvent(event as any, BOT_OPEN_ID);
+    expect(ctx.content).toBe("hello world");
+  });
+
   it("returns mentionedBot=true for post message with at (no top-level mentions)", () => {
     const BOT_OPEN_ID = "ou_bot_123";
-    const postContent = JSON.stringify({
+    const event = makePostEvent({
       content: [
         [{ tag: "at", user_id: BOT_OPEN_ID, user_name: "claw" }],
         [{ tag: "text", text: "What does this document say" }],
       ],
     });
-    const event = {
-      sender: { sender_id: { user_id: "u1", open_id: "ou_sender" } },
-      message: {
-        message_id: "msg_1",
-        chat_id: "oc_chat1",
-        chat_type: "group",
-        message_type: "post",
-        content: postContent,
-        mentions: [],
-      },
-    };
     const ctx = parseFeishuMessageEvent(event as any, BOT_OPEN_ID);
     expect(ctx.mentionedBot).toBe(true);
   });
 
   it("returns mentionedBot=false for post message with no at", () => {
-    const postContent = JSON.stringify({
+    const event = makePostEvent({
       content: [[{ tag: "text", text: "hello" }]],
     });
-    const event = {
-      sender: { sender_id: { user_id: "u1", open_id: "ou_sender" } },
-      message: {
-        message_id: "msg_1",
-        chat_id: "oc_chat1",
-        chat_type: "group",
-        message_type: "post",
-        content: postContent,
-        mentions: [],
-      },
-    };
     const ctx = parseFeishuMessageEvent(event as any, "ou_bot_123");
     expect(ctx.mentionedBot).toBe(false);
   });
 
   it("returns mentionedBot=false for post message with at for another user", () => {
-    const postContent = JSON.stringify({
+    const event = makePostEvent({
       content: [
         [{ tag: "at", user_id: "ou_other", user_name: "other" }],
         [{ tag: "text", text: "hello" }],
       ],
     });
-    const event = {
-      sender: { sender_id: { user_id: "u1", open_id: "ou_sender" } },
-      message: {
-        message_id: "msg_1",
-        chat_id: "oc_chat1",
-        chat_type: "group",
-        message_type: "post",
-        content: postContent,
-        mentions: [],
-      },
-    };
     const ctx = parseFeishuMessageEvent(event as any, "ou_bot_123");
     expect(ctx.mentionedBot).toBe(false);
   });
