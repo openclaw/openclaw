@@ -27,6 +27,8 @@ export type RouteReplyParams = {
   to: string;
   /** Session key for deriving agent identity defaults (multi-agent). */
   sessionKey?: string;
+  /** Optional durable turn id for outbox-linking and restart-safe recovery. */
+  turnId?: string;
   /** Provider account id (multi-account). */
   accountId?: string;
   /** Thread id for replies (Telegram topic id or Matrix thread event id). */
@@ -133,6 +135,7 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
       channel: channelId,
       to,
       accountId: accountId ?? undefined,
+      turnId: params.turnId,
       payloads: [normalized],
       replyToId: resolvedReplyToId ?? null,
       threadId: resolvedThreadId,

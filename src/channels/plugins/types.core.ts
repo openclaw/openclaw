@@ -144,6 +144,7 @@ export type ChannelAccountSnapshot = {
   bot?: unknown;
   publicKey?: string | null;
   profile?: unknown;
+  outboundContract?: "v1" | "v2";
   channelAccessToken?: string;
   channelSecret?: string;
 };

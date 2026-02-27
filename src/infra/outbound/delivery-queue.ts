@@ -44,7 +44,9 @@ type QueuedDeliveryPayload = {
   mirror?: DeliveryMirrorPayload;
 };
 
-type QueuedDeliveryParams = QueuedDeliveryPayload;
+type QueuedDeliveryParams = QueuedDeliveryPayload & {
+  turnId?: string;
+};
 
 export interface QueuedDelivery extends QueuedDeliveryPayload {
   id: string;
@@ -52,6 +54,7 @@ export interface QueuedDelivery extends QueuedDeliveryPayload {
   retryCount: number;
   lastAttemptAt?: number;
   lastError?: string;
+  turnId?: string;
 }
 
 export type RecoverySummary = {
@@ -59,6 +62,8 @@ export type RecoverySummary = {
   failed: number;
   skippedMaxRetries: number;
   deferredBackoff: number;
+  /** Entries skipped because they were enqueued after gateway startup (live delivery in progress). */
+  skippedStartupCutoff: number;
 };
 
 export type DeliverFn = (
@@ -127,7 +132,16 @@ export async function enqueueDelivery(
     `INSERT INTO message_outbox
        (id, turn_id, channel, account_id, target, payload, queued_at, status, attempt_count, next_attempt_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?)`,
-  ).run(id, null, params.channel, params.accountId ?? "", params.to, payload, now, now);
+  ).run(
+    id,
+    params.turnId ?? null,
+    params.channel,
+    params.accountId ?? "",
+    params.to,
+    payload,
+    now,
+    now,
+  );
   return id;
 }
 
@@ -198,25 +212,47 @@ export async function failDelivery(id: string, error: string, stateDir?: string)
 }
 
 /** Load pending queue entries eligible for retry now. */
-export async function loadPendingDeliveries(stateDir?: string): Promise<QueuedDelivery[]> {
+export async function loadPendingDeliveries(
+  stateDir?: string,
+  startupCutoff?: number,
+): Promise<QueuedDelivery[]> {
   const db = getLifecycleDb(stateDir);
   try {
+    // When a startupCutoff is supplied (gateway startup timestamp), exclude entries that were
+    // enqueued during this instance's lifetime and have never been attempted. Those entries are
+    // actively being delivered on the direct path; picking them up would cause duplicate sends.
+    // Entries enqueued before startup (crash survivors) or entries that have already had at least
+    // one attempt (transient failures) are always included.
     const now = Date.now();
-    const rows = db
-      .prepare(
-        `SELECT id, payload, queued_at, attempt_count, last_attempt_at, last_error
-           FROM message_outbox
-          WHERE status IN ('queued', 'failed_retryable')
-            AND next_attempt_at <= ?
-          ORDER BY queued_at ASC`,
-      )
-      .all(now) as Array<{
+    const rows = (
+      startupCutoff !== undefined
+        ? db
+            .prepare(
+              `SELECT id, payload, queued_at, attempt_count, last_attempt_at, last_error, turn_id
+                 FROM message_outbox
+                WHERE status IN ('queued', 'failed_retryable')
+                  AND next_attempt_at <= ?
+                  AND (queued_at < ? OR last_attempt_at IS NOT NULL OR attempt_count > 0)
+                ORDER BY queued_at ASC`,
+            )
+            .all(now, startupCutoff)
+        : db
+            .prepare(
+              `SELECT id, payload, queued_at, attempt_count, last_attempt_at, last_error, turn_id
+                 FROM message_outbox
+                WHERE status IN ('queued', 'failed_retryable')
+                  AND next_attempt_at <= ?
+                ORDER BY queued_at ASC`,
+            )
+            .all(now)
+    ) as Array<{
       id: string;
       payload: string;
       queued_at: number;
       attempt_count: number;
       last_attempt_at: number | null;
       last_error: string | null;
+      turn_id: string | null;
     }>;
 
     const entries: QueuedDelivery[] = [];
@@ -230,6 +266,7 @@ export async function loadPendingDeliveries(stateDir?: string): Promise<QueuedDe
           retryCount: row.attempt_count,
           ...(row.last_attempt_at != null ? { lastAttemptAt: row.last_attempt_at } : {}),
           ...(row.last_error ? { lastError: row.last_error } : {}),
+          ...(row.turn_id ? { turnId: row.turn_id } : {}),
         });
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : String(err);
@@ -348,7 +385,7 @@ export async function importLegacyFileQueue(stateDir?: string): Promise<void> {
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         ).run(
           entry.id,
-          null,
+          entry.turnId ?? null,
           entry.channel,
           entry.accountId ?? "",
           entry.to,
@@ -377,6 +414,9 @@ export async function recoverPendingDeliveries(opts: {
   cfg: OpenClawConfig;
   stateDir?: string;
   maxRecoveryMs?: number;
+  /** Timestamp of this gateway instance's startup. Entries enqueued after this time with no
+   *  prior attempt are skipped — they are actively being delivered on the direct path. */
+  startupCutoff?: number;
 }): Promise<RecoverySummary> {
   if (resolveExpireAction(opts.cfg) === "fail") {
     const db = getLifecycleDb(opts.stateDir);
@@ -397,7 +437,28 @@ export async function recoverPendingDeliveries(opts: {
     }
   }
 
-  const pending = await loadPendingDeliveries(opts.stateDir);
+  const pending = await loadPendingDeliveries(opts.stateDir, opts.startupCutoff);
+
+  // Count entries excluded by the startup cutoff so the log reflects full activity.
+  let skippedStartupCutoff = 0;
+  if (opts.startupCutoff !== undefined) {
+    const db = getLifecycleDb(opts.stateDir);
+    try {
+      const row = db
+        .prepare(
+          `SELECT COUNT(*) AS cnt FROM message_outbox
+            WHERE status IN ('queued','failed_retryable')
+              AND next_attempt_at <= ?
+              AND queued_at >= ?
+              AND last_attempt_at IS NULL
+              AND attempt_count = 0`,
+        )
+        .get(Date.now(), opts.startupCutoff) as { cnt: number } | undefined;
+      skippedStartupCutoff = row?.cnt ?? 0;
+    } catch {
+      // non-fatal
+    }
+  }
 
   if (pending.length === 0) {
     return {
@@ -405,6 +466,7 @@ export async function recoverPendingDeliveries(opts: {
       failed: 0,
       skippedMaxRetries: 0,
       deferredBackoff: 0,
+      skippedStartupCutoff,
     };
   }
   opts.log.info(`Found ${pending.length} pending delivery entries — starting recovery`);
@@ -445,6 +507,7 @@ export async function recoverPendingDeliveries(opts: {
         gifPlayback: entry.gifPlayback,
         silent: entry.silent,
         mirror: entry.mirror,
+        turnId: entry.turnId,
         skipQueue: true,
       });
       await ackDelivery(entry.id, opts.stateDir);
@@ -460,7 +523,7 @@ export async function recoverPendingDeliveries(opts: {
     }
   }
 
-  return { recovered, failed, skippedMaxRetries, deferredBackoff };
+  return { recovered, failed, skippedMaxRetries, deferredBackoff, skippedStartupCutoff };
 }
 
 const PERMANENT_ERROR_PATTERNS: readonly RegExp[] = [

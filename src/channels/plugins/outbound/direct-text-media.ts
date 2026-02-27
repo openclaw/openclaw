@@ -88,9 +88,39 @@ export function createDirectTextMediaOutbound<
 
   return {
     deliveryMode: "direct",
+    outboundContract: "v2",
     chunker: chunkText,
     chunkerMode: "text",
     textChunkLimit: 4000,
+    sendFinal: async (ctx) => {
+      const media =
+        ctx.payload.mediaUrl ??
+        (Array.isArray(ctx.payload.mediaUrls) && ctx.payload.mediaUrls.length > 0
+          ? ctx.payload.mediaUrls[0]
+          : undefined);
+      if (media) {
+        return await sendDirect({
+          cfg: ctx.cfg,
+          to: ctx.to,
+          text: ctx.payload.text ?? ctx.text,
+          mediaUrl: media,
+          mediaLocalRoots: ctx.mediaLocalRoots,
+          accountId: ctx.accountId,
+          deps: ctx.deps,
+          replyToId: ctx.payload.replyToId ?? ctx.replyToId,
+          buildOptions: params.buildMediaOptions,
+        });
+      }
+      return await sendDirect({
+        cfg: ctx.cfg,
+        to: ctx.to,
+        text: ctx.payload.text ?? ctx.text,
+        accountId: ctx.accountId,
+        deps: ctx.deps,
+        replyToId: ctx.payload.replyToId ?? ctx.replyToId,
+        buildOptions: params.buildTextOptions,
+      });
+    },
     sendText: async ({ cfg, to, text, accountId, deps, replyToId }) => {
       return await sendDirect({
         cfg,

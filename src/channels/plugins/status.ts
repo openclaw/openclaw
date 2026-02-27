@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../../config/config.js";
+import { resolveOutboundContractVersion } from "./outbound/compat.js";
 import type { ChannelAccountSnapshot, ChannelPlugin } from "./types.js";
 
 // Channel docking: status snapshots flow through plugin.status hooks here.
@@ -10,15 +11,20 @@ export async function buildChannelAccountSnapshot<ResolvedAccount>(params: {
   probe?: unknown;
   audit?: unknown;
 }): Promise<ChannelAccountSnapshot> {
+  const outboundContract = resolveOutboundContractVersion(params.plugin.outbound);
   const account = params.plugin.config.resolveAccount(params.cfg, params.accountId);
   if (params.plugin.status?.buildAccountSnapshot) {
-    return await params.plugin.status.buildAccountSnapshot({
+    const snapshot = await params.plugin.status.buildAccountSnapshot({
       account,
       cfg: params.cfg,
       runtime: params.runtime,
       probe: params.probe,
       audit: params.audit,
     });
+    return {
+      ...snapshot,
+      ...(snapshot.outboundContract ? {} : { outboundContract }),
+    };
   }
   const enabled = params.plugin.config.isEnabled
     ? params.plugin.config.isEnabled(account, params.cfg)
@@ -32,5 +38,6 @@ export async function buildChannelAccountSnapshot<ResolvedAccount>(params: {
     accountId: params.accountId,
     enabled,
     configured,
+    outboundContract,
   };
 }

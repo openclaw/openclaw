@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/config.js";
+import { resolveOutboundContractVersion } from "./plugins/outbound/compat.js";
 import type { ChannelAccountSnapshot } from "./plugins/types.core.js";
 import type { ChannelPlugin } from "./plugins/types.plugin.js";
 
@@ -11,10 +12,12 @@ export function buildChannelAccountSnapshot(params: {
   configured: boolean;
 }): ChannelAccountSnapshot {
   const described = params.plugin.config.describeAccount?.(params.account, params.cfg);
+  const outboundContract = resolveOutboundContractVersion(params.plugin.outbound);
   return {
     enabled: params.enabled,
     configured: params.configured,
     ...described,
+    outboundContract,
     accountId: params.accountId,
   };
 }

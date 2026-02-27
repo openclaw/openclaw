@@ -110,6 +110,7 @@ export const ChannelAccountSnapshotSchema = Type.Object(
     probe: Type.Optional(Type.Unknown()),
     audit: Type.Optional(Type.Unknown()),
     application: Type.Optional(Type.Unknown()),
+    outboundContract: Type.Optional(Type.Union([Type.Literal("v1"), Type.Literal("v2")])),
   },
   { additionalProperties: true },
 );

@@ -1,6 +1,8 @@
 import type { TypingCallbacks } from "../../channels/typing.js";
 import type { HumanDelayConfig } from "../../config/types.js";
+import { ackDelivery, enqueueDelivery, failDelivery } from "../../infra/outbound/delivery-queue.js";
 import { sleep } from "../../utils.js";
+import type { DeliverableMessageChannel } from "../../utils/message-channel.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { registerDispatcher } from "./dispatcher-registry.js";
 import { normalizeReplyPayload, type NormalizeReplySkipReason } from "./normalize-reply.js";
@@ -8,6 +10,22 @@ import type { ResponsePrefixContext } from "./response-prefix-template.js";
 import type { TypingController } from "./typing.js";
 
 export type ReplyDispatchKind = "tool" | "block" | "final";
+
+export type DeliveryQueueContext = {
+  channel: DeliverableMessageChannel;
+  to: string;
+  turnId?: string;
+  accountId?: string;
+  threadId?: string | number | null;
+  replyToId?: string | null;
+  bestEffort?: boolean;
+  gifPlayback?: boolean;
+  silent?: boolean;
+};
+
+export type ReplyDeliveryStats = {
+  successfulSends: number;
+};
 
 type ReplyDispatchErrorHandler = (err: unknown, info: { kind: ReplyDispatchKind }) => void;
 
@@ -75,6 +93,8 @@ export type ReplyDispatcher = {
   sendToolResult: (payload: ReplyPayload) => boolean;
   sendBlockReply: (payload: ReplyPayload) => boolean;
   sendFinalReply: (payload: ReplyPayload) => boolean;
+  setDeliveryQueueContext?: (context: DeliveryQueueContext | undefined) => void;
+  getDeliveryStats?: () => ReplyDeliveryStats;
   waitForIdle: () => Promise<void>;
   getQueuedCounts: () => Record<ReplyDispatchKind, number>;
   markComplete: () => void;
@@ -117,6 +137,8 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
     block: 0,
     final: 0,
   };
+  let deliveryQueueContext: DeliveryQueueContext | undefined;
+  let successfulSends = 0;
 
   // Register this dispatcher globally for gateway restart coordination.
   const { unregister } = registerDispatcher({
@@ -153,9 +175,36 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
             await sleep(delayMs);
           }
         }
-        // Safe: deliver is called inside an async .then() callback, so even a synchronous
-        // throw becomes a rejection that flows through .catch()/.finally(), ensuring cleanup.
-        await options.deliver(normalized, { kind });
+        let queueId: string | null = null;
+        if (deliveryQueueContext) {
+          queueId = await enqueueDelivery({
+            channel: deliveryQueueContext.channel,
+            to: deliveryQueueContext.to,
+            accountId: deliveryQueueContext.accountId,
+            payloads: [normalized],
+            threadId: deliveryQueueContext.threadId,
+            replyToId: normalized.replyToId ?? deliveryQueueContext.replyToId,
+            bestEffort: deliveryQueueContext.bestEffort,
+            gifPlayback: deliveryQueueContext.gifPlayback,
+            silent: deliveryQueueContext.silent,
+            turnId: deliveryQueueContext.turnId,
+          }).catch(() => null);
+        }
+        try {
+          // Safe: deliver is called inside an async .then() callback, so even a synchronous
+          // throw becomes a rejection that flows through .catch()/.finally(), ensuring cleanup.
+          await options.deliver(normalized, { kind });
+          successfulSends += 1;
+          if (queueId) {
+            await ackDelivery(queueId).catch(() => {});
+          }
+        } catch (err) {
+          if (queueId) {
+            const message = err instanceof Error ? err.message : String(err);
+            await failDelivery(queueId, message).catch(() => {});
+          }
+          throw err;
+        }
       })
       .catch((err) => {
         options.onError?.(err, { kind });
@@ -202,6 +251,10 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
     sendToolResult: (payload) => enqueue("tool", payload),
     sendBlockReply: (payload) => enqueue("block", payload),
     sendFinalReply: (payload) => enqueue("final", payload),
+    setDeliveryQueueContext: (context) => {
+      deliveryQueueContext = context;
+    },
+    getDeliveryStats: () => ({ successfulSends }),
     waitForIdle: () => sendChain,
     getQueuedCounts: () => ({ ...queuedCounts }),
     markComplete,

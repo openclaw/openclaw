@@ -91,6 +91,7 @@ async function sendSlackOutboundMessage(params: {
 
 export const slackOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
+  outboundContract: "v2",
   chunker: null,
   textChunkLimit: 4000,
   sendText: async ({ to, text, accountId, deps, replyToId, threadId, identity }) => {

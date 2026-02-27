@@ -50,6 +50,8 @@ export type MsgContext = {
   MessageSid?: string;
   /** Provider-specific full message id when MessageSid is a shortened alias. */
   MessageSidFull?: string;
+  /** Durable message-turn id used by lifecycle recovery and outbox linking. */
+  MessageTurnId?: string;
   MessageSids?: string[];
   MessageSidFirst?: string;
   MessageSidLast?: string;
@@ -89,6 +91,8 @@ export type MsgContext = {
   MediaTypes?: string[];
   /** Telegram sticker metadata (emoji, set name, file IDs, cached description). */
   Sticker?: StickerMetadata;
+  /** True when current-turn sticker media is present in MediaPaths (false for cached-description path). */
+  StickerMediaIncluded?: boolean;
   OutputDir?: string;
   OutputBase?: string;
   /** Remote host for SCP when media lives on a different machine (e.g., openclaw@192.168.64.3). */

@@ -76,6 +76,7 @@ async function maybeSendDiscordWebhookText(params: {
 
 export const discordOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
+  outboundContract: "v2",
   chunker: null,
   textChunkLimit: 2000,
   pollMaxOptions: 10,
