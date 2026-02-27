@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { filterMessagingToolMediaDuplicates } from "./reply-payloads.js";
+import {
+  filterMessagingToolMediaDuplicates,
+  shouldSuppressMessagingToolReplies,
+} from "./reply-payloads.js";
 
 describe("filterMessagingToolMediaDuplicates", () => {
   it("strips mediaUrl when it matches sentMediaUrls", () => {
@@ -73,5 +76,57 @@ describe("filterMessagingToolMediaDuplicates", () => {
       sentMediaUrls: ["file:///tmp/photo%20one.jpg"],
     });
     expect(result).toEqual([{ text: "hello", mediaUrl: undefined, mediaUrls: undefined }]);
+  });
+});
+
+describe("shouldSuppressMessagingToolReplies", () => {
+  it("suppresses when provider and target match", () => {
+    expect(
+      shouldSuppressMessagingToolReplies({
+        messageProvider: "whatsapp",
+        messagingToolSentTargets: [{ tool: "whatsapp", provider: "whatsapp", to: "+15551234567" }],
+        originatingTo: "+15551234567",
+      }),
+    ).toBe(true);
+  });
+
+  it("does not suppress when provider mismatches sent target", () => {
+    expect(
+      shouldSuppressMessagingToolReplies({
+        messageProvider: "cron-event",
+        messagingToolSentTargets: [{ tool: "whatsapp", provider: "whatsapp", to: "+15551234567" }],
+        originatingTo: "+15551234567",
+      }),
+    ).toBe(false);
+  });
+
+  it("does not suppress when target differs", () => {
+    expect(
+      shouldSuppressMessagingToolReplies({
+        messageProvider: "whatsapp",
+        messagingToolSentTargets: [{ tool: "whatsapp", provider: "whatsapp", to: "+15559999999" }],
+        originatingTo: "+15551234567",
+      }),
+    ).toBe(false);
+  });
+
+  it("does not suppress when no targets were sent", () => {
+    expect(
+      shouldSuppressMessagingToolReplies({
+        messageProvider: "whatsapp",
+        messagingToolSentTargets: [],
+        originatingTo: "+15551234567",
+      }),
+    ).toBe(false);
+  });
+
+  it("does not suppress when provider is undefined", () => {
+    expect(
+      shouldSuppressMessagingToolReplies({
+        messageProvider: undefined,
+        messagingToolSentTargets: [{ tool: "whatsapp", provider: "whatsapp", to: "+15551234567" }],
+        originatingTo: "+15551234567",
+      }),
+    ).toBe(false);
   });
 });

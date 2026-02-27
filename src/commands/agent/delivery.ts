@@ -1,4 +1,9 @@
 import { AGENT_LANE_NESTED } from "../../agents/lanes.js";
+import { resolveOriginMessageProvider } from "../../auto-reply/reply/origin-routing.js";
+import {
+  filterMessagingToolDuplicates,
+  shouldSuppressMessagingToolReplies,
+} from "../../auto-reply/reply/reply-payloads.js";
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import { createOutboundSendDeps, type CliDeps } from "../../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -219,20 +224,40 @@ export async function deliverAgentCommandResult(params: {
   }
   if (deliver && deliveryChannel && !isInternalMessageChannel(deliveryChannel)) {
     if (deliveryTarget) {
-      await deliverOutboundPayloads({
-        cfg,
-        channel: deliveryChannel,
-        to: deliveryTarget,
+      // Deduplicate payloads already sent via the messaging tool during this turn.
+      // Use deliveryChannel (not turnSourceChannel) — non-messaging triggers
+      // like "cron-event" would bypass dedup.
+      const suppress = shouldSuppressMessagingToolReplies({
+        messageProvider: resolveOriginMessageProvider({
+          originatingChannel: deliveryChannel,
+          provider: deliveryChannel,
+        }),
+        messagingToolSentTargets: result.messagingToolSentTargets ?? [],
+        originatingTo: deliveryTarget,
         accountId: resolvedAccountId,
-        payloads: deliveryPayloads,
-        session: outboundSession,
-        replyToId: resolvedReplyToId ?? null,
-        threadId: resolvedThreadTarget ?? null,
-        bestEffort: bestEffortDeliver,
-        onError: (err) => logDeliveryError(err),
-        onPayload: logPayload,
-        deps: createOutboundSendDeps(deps),
       });
+      const dedupedPayloads = suppress
+        ? filterMessagingToolDuplicates({
+            payloads: deliveryPayloads,
+            sentTexts: result.messagingToolSentTexts ?? [],
+          })
+        : deliveryPayloads;
+      if (dedupedPayloads.length > 0) {
+        await deliverOutboundPayloads({
+          cfg,
+          channel: deliveryChannel,
+          to: deliveryTarget,
+          accountId: resolvedAccountId,
+          payloads: dedupedPayloads,
+          session: outboundSession,
+          replyToId: resolvedReplyToId ?? null,
+          threadId: resolvedThreadTarget ?? null,
+          bestEffort: bestEffortDeliver,
+          onError: (err) => logDeliveryError(err),
+          onPayload: logPayload,
+          deps: createOutboundSendDeps(deps),
+        });
+      }
     }
   }
 
