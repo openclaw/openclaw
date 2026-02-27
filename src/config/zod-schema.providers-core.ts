@@ -167,6 +167,13 @@ export const TelegramAccountSchemaBase = z
       .strict()
       .optional(),
     proxy: z.string().optional(),
+    apiRoot: z
+      .string()
+      .url()
+      .optional()
+      .describe(
+        "Custom Telegram Bot API server root URL (e.g. http://localhost:8081). Passed to grammY as apiRoot. Defaults to https://api.telegram.org.",
+      ),
     webhookUrl: z
       .string()
       .optional()

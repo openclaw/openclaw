@@ -118,9 +118,10 @@ function createTelegramHttpLogger(cfg: ReturnType<typeof loadConfig>) {
   };
 }
 
-function resolveTelegramClientOptions(
-  account: ResolvedTelegramAccount,
-): ApiClientOptions | undefined {
+function resolveTelegramClientOptions(account: ResolvedTelegramAccount): {
+  client?: ApiClientOptions;
+  apiRoot?: string;
+} {
   const proxyUrl = account.config.proxy?.trim();
   const proxyFetch = proxyUrl ? makeProxyFetch(proxyUrl) : undefined;
   const fetchImpl = resolveTelegramFetch(proxyFetch, {
@@ -131,12 +132,15 @@ function resolveTelegramClientOptions(
     Number.isFinite(account.config.timeoutSeconds)
       ? Math.max(1, Math.floor(account.config.timeoutSeconds))
       : undefined;
-  return fetchImpl || timeoutSeconds
-    ? {
-        ...(fetchImpl ? { fetch: fetchImpl as unknown as ApiClientOptions["fetch"] } : {}),
-        ...(timeoutSeconds ? { timeoutSeconds } : {}),
-      }
-    : undefined;
+  const apiRoot = account.config.apiRoot?.trim() || undefined;
+  const client =
+    fetchImpl || timeoutSeconds
+      ? {
+          ...(fetchImpl ? { fetch: fetchImpl as unknown as ApiClientOptions["fetch"] } : {}),
+          ...(timeoutSeconds ? { timeoutSeconds } : {}),
+        }
+      : undefined;
+  return { client, apiRoot };
 }
 
 function resolveToken(explicit: string | undefined, params: { accountId: string; token: string }) {
@@ -330,8 +334,11 @@ function resolveTelegramApiContext(opts: {
     accountId: opts.accountId,
   });
   const token = resolveToken(opts.token, account);
-  const client = resolveTelegramClientOptions(account);
-  const api = (opts.api ?? new Bot(token, client ? { client } : undefined).api) as TelegramApi;
+  const { client, apiRoot } = resolveTelegramClientOptions(account);
+  const mergedClient =
+    client || apiRoot ? { ...client, ...(apiRoot ? { apiRoot } : {}) } : undefined;
+  const api = (opts.api ??
+    new Bot(token, mergedClient ? { client: mergedClient } : undefined).api) as TelegramApi;
   return { cfg, account, api };
 }
 
@@ -1192,8 +1199,10 @@ export async function createForumTopicTelegram(
   const token = resolveToken(opts.token, account);
   // Accept topic-qualified targets (e.g. telegram:group:<id>:topic:<thread>)
   // but createForumTopic must always target the base supergroup chat id.
-  const client = resolveTelegramClientOptions(account);
-  const api = opts.api ?? new Bot(token, client ? { client } : undefined).api;
+  const { client, apiRoot } = resolveTelegramClientOptions(account);
+  const mergedClient =
+    client || apiRoot ? { ...client, ...(apiRoot ? { apiRoot } : {}) } : undefined;
+  const api = opts.api ?? new Bot(token, mergedClient ? { client: mergedClient } : undefined).api;
   const target = parseTelegramTarget(chatId);
   const normalizedChatId = await resolveAndPersistChatId({
     cfg,
