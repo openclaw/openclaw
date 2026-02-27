@@ -26,6 +26,29 @@ type PatternDef = {
   description?: string;
 };
 
+/**
+ * Prompt-injection detection patterns (L-01 ReDoS audit — 2026-02-27).
+ *
+ * Each pattern was reviewed for catastrophic backtracking (ReDoS).  No
+ * vulnerable patterns were found.  Key safety properties:
+ *
+ * - **Bounded quantifiers** (`{0,64}`, `{0,80}`, `{0,120}`, `{0,200}`):
+ *   The only `+`/`*` without explicit upper bounds are `\S+` and `[^\n]+`.
+ *   Both operate on disjoint character classes (`\S` ∩ `\s` = ∅;
+ *   `[^\n]` ∩ `\n` = ∅), so backtracking is O(n) worst-case, never
+ *   exponential.
+ *
+ * - **No nested quantifiers**: There are no patterns of the form `(a+)+` or
+ *   `(\s*\w+)+` that would cause polynomial or exponential backtracking.
+ *
+ * - **No ambiguous alternation under a common quantifier**: Alternations are
+ *   guarded by anchors (`\b`, `^`, `$`) or fixed structural tokens that
+ *   prevent exponential scan.
+ *
+ * If new patterns are added, verify that they satisfy the properties above
+ * before committing. Use the `safe-regex` or `vuln-regex-detector` tool to
+ * assist with automated screening.
+ */
 const INJECTION_PATTERN_DEFS: PatternDef[] = [
   {
     id: "ignore-previous-instructions",

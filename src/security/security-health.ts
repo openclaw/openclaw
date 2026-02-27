@@ -171,6 +171,22 @@ async function queryMonitoringHealth(): Promise<MonitoringHealth> {
   }
 }
 
+/**
+ * Query Phase 4 injection-defense health for the last 24 hours.
+ *
+ * **Status semantics (DC-4):**
+ * - `"critical"` — one or more `critical`-severity injection events detected.
+ *   This indicates a likely active attack attempt and should trigger immediate
+ *   operator review.  Previously returned `"warn"` (AR-5 regression), which
+ *   under-represented the signal; corrected in Sprint 6.
+ * - `"warn"` — non-critical injection events detected but no critical ones.
+ *   Suspicious content was blocked but no confirmed high-severity indicator.
+ * - `"good"` — no injection events in the last 24 hours.
+ *
+ * On error (e.g. events manager not yet initialised), returns `status: "warn"`
+ * with zero counts so callers can distinguish an uninitialised subsystem from
+ * a genuinely healthy one.
+ */
 async function queryInjectionDefenseHealth(): Promise<InjectionDefenseHealth> {
   try {
     const { querySecurityEvents } = await import("./security-events.js");
