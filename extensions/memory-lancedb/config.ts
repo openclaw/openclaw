@@ -5,8 +5,10 @@ import { join } from "node:path";
 export type MemoryConfig = {
   embedding: {
     provider: "openai";
-    model?: string;
+    model: string;
     apiKey: string;
+    baseUrl?: string;
+    dimensions?: number;
   };
   dbPath?: string;
   autoCapture?: boolean;
@@ -81,7 +83,9 @@ function resolveEnvVars(value: string): string {
 
 function resolveEmbeddingModel(embedding: Record<string, unknown>): string {
   const model = typeof embedding.model === "string" ? embedding.model : DEFAULT_MODEL;
-  vectorDimsForModel(model);
+  if (typeof embedding.dimensions !== "number") {
+    vectorDimsForModel(model);
+  }
   return model;
 }
 
@@ -101,7 +105,7 @@ export const memoryConfigSchema = {
     if (!embedding || typeof embedding.apiKey !== "string") {
       throw new Error("embedding.apiKey is required");
     }
-    assertAllowedKeys(embedding, ["apiKey", "model"], "embedding config");
+    assertAllowedKeys(embedding, ["apiKey", "model", "baseUrl", "dimensions"], "embedding config");
 
     const model = resolveEmbeddingModel(embedding);
 
@@ -119,6 +123,9 @@ export const memoryConfigSchema = {
         provider: "openai",
         model,
         apiKey: resolveEnvVars(embedding.apiKey),
+        baseUrl:
+          typeof embedding.baseUrl === "string" ? resolveEnvVars(embedding.baseUrl) : undefined,
+        dimensions: typeof embedding.dimensions === "number" ? embedding.dimensions : undefined,
       },
       dbPath: typeof cfg.dbPath === "string" ? cfg.dbPath : DEFAULT_DB_PATH,
       autoCapture: cfg.autoCapture === true,
@@ -132,6 +139,18 @@ export const memoryConfigSchema = {
       sensitive: true,
       placeholder: "sk-proj-...",
       help: "API key for OpenAI embeddings (or use ${OPENAI_API_KEY})",
+    },
+    "embedding.baseUrl": {
+      label: "Base URL",
+      placeholder: "https://api.openai.com/v1",
+      help: "Base URL for compatible providers (e.g. http://localhost:11434/v1)",
+      advanced: true,
+    },
+    "embedding.dimensions": {
+      label: "Dimensions",
+      placeholder: "1536",
+      help: "Vector dimensions for custom models (required for non-standard models)",
+      advanced: true,
     },
     "embedding.model": {
       label: "Embedding Model",
