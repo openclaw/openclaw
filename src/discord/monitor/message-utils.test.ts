@@ -314,6 +314,77 @@ describe("resolveMediaList", () => {
     });
   });
 
+  it("downloads direct attachments", async () => {
+    const attachment = {
+      id: "att-direct",
+      url: "https://cdn.discordapp.com/attachments/1/photo.png",
+      filename: "photo.png",
+      content_type: "image/png",
+    };
+    fetchRemoteMedia.mockResolvedValueOnce({
+      buffer: Buffer.from("image"),
+      contentType: "image/png",
+    });
+    saveMediaBuffer.mockResolvedValueOnce({
+      path: "/tmp/photo.png",
+      contentType: "image/png",
+    });
+
+    const result = await resolveMediaList(
+      asMessage({
+        attachments: [attachment],
+      }),
+      512,
+    );
+
+    expect(fetchRemoteMedia).toHaveBeenCalledTimes(1);
+    expect(fetchRemoteMedia).toHaveBeenCalledWith({
+      url: attachment.url,
+      filePathHint: attachment.filename,
+      maxBytes: 512,
+      fetchImpl: undefined,
+    });
+    expect(saveMediaBuffer).toHaveBeenCalledTimes(1);
+    expect(saveMediaBuffer).toHaveBeenCalledWith(expect.any(Buffer), "image/png", "inbound", 512);
+    expect(result).toEqual([
+      {
+        path: "/tmp/photo.png",
+        contentType: "image/png",
+        placeholder: "<media:image>",
+      },
+    ]);
+  });
+
+  it("forwards fetchImpl to direct attachment downloads (proxy support)", async () => {
+    const proxyFetch = vi.fn() as unknown as typeof fetch;
+    const attachment = {
+      id: "att-proxy-direct",
+      url: "https://cdn.discordapp.com/attachments/1/proxy-photo.png",
+      filename: "proxy-photo.png",
+      content_type: "image/png",
+    };
+    fetchRemoteMedia.mockResolvedValueOnce({
+      buffer: Buffer.from("image"),
+      contentType: "image/png",
+    });
+    saveMediaBuffer.mockResolvedValueOnce({
+      path: "/tmp/proxy-photo.png",
+      contentType: "image/png",
+    });
+
+    await resolveMediaList(
+      asMessage({
+        attachments: [attachment],
+      }),
+      512,
+      proxyFetch,
+    );
+
+    expect(fetchRemoteMedia).toHaveBeenCalledWith(
+      expect.objectContaining({ fetchImpl: proxyFetch }),
+    );
+  });
+
   it("forwards fetchImpl to sticker downloads", async () => {
     const proxyFetch = vi.fn() as unknown as typeof fetch;
     const sticker = {
