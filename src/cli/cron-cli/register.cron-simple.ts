@@ -45,9 +45,9 @@ export function registerCronSimpleCommands(cron: Command) {
       .action(async (id, opts) => {
         try {
           // First check if job exists and get its status
-          const listRes = await callGatewayFromCli("cron.list", opts, {});
-          const jobs = Array.isArray(listRes) ? listRes : [];
-          const job = jobs.find((j: { id?: string; name?: string }) => j.id === id || j.name === id);
+          const listRes = (await callGatewayFromCli("cron.list", opts, {})) as { jobs?: Array<{ id?: string; name?: string; state?: { runningAtMs?: number } }> } | null;
+          const jobs = listRes?.jobs ?? [];
+          const job = jobs.find((j) => j.id === id || j.name === id);
 
           if (!job) {
             const errorMsg = opts.json
@@ -76,9 +76,9 @@ export function registerCronSimpleCommands(cron: Command) {
           if (opts.json) {
             defaultRuntime.log(JSON.stringify({ ok: true, removed, id: jobId }, null, 2));
           } else if (removed) {
-            defaultRuntime.log(`✓ ${t("success.cron.jobRemoved", { name: job.name })} (${jobId})`);
+            defaultRuntime.log(`✓ ${t("success.cron.jobRemoved", { name: job.name ?? jobId })} (${jobId})`);
           } else {
-            defaultRuntime.log(`⚠️  Job not removed: ${job.name} (${jobId})`);
+            defaultRuntime.log(`⚠️  Job not removed: ${job.name ?? jobId} (${jobId})`);
           }
         } catch (err) {
           defaultRuntime.error(danger(String(err)));
@@ -151,12 +151,11 @@ export function registerCronSimpleCommands(cron: Command) {
       .option("--json", "Output JSON", false)
       .action(async (opts) => {
         try {
-          const listRes = await callGatewayFromCli("cron.list", opts, { includeDisabled: true });
-          const jobs = Array.isArray(listRes) ? listRes : [];
+          const listRes = (await callGatewayFromCli("cron.list", opts, { includeDisabled: true })) as { jobs?: Array<{ id?: string; name?: string; enabled?: boolean; state?: { runningAtMs?: number } }> } | null;
+          const jobs = listRes?.jobs ?? [];
 
-          // Find jobs with issues
-          const staleJobs = jobs.filter((j: { state?: { runningAtMs?: number }; enabled?: boolean }) => {
-            // Jobs stuck in running state for too long (over 1 hour)
+          // Find jobs with issues - stuck in running state for too long (over 1 hour)
+          const staleJobs = jobs.filter((j) => {
             if (j.state?.runningAtMs) {
               const runningFor = Date.now() - j.state.runningAtMs;
               return runningFor > 60 * 60 * 1000; // 1 hour
@@ -164,7 +163,7 @@ export function registerCronSimpleCommands(cron: Command) {
             return false;
           });
 
-          const disabledJobs = jobs.filter((j: { enabled?: boolean }) => j.enabled === false);
+          const disabledJobs = jobs.filter((j) => j.enabled === false);
 
           if (opts.dryRun) {
             const result = {
@@ -183,14 +182,26 @@ Run without --dry-run to clean up stale jobs.`);
             return;
           }
 
-          // Clean up stale jobs by resetting their running state
+          // Clean up stale jobs by disabling then re-enabling to reset runningAtMs
           let cleaned = 0;
           for (const job of staleJobs) {
             try {
+              const wasEnabled = job.enabled !== false;
+
+              // First disable to reset runningAtMs
               await callGatewayFromCli("cron.update", opts, {
                 id: job.id,
-                patch: { enabled: job.enabled }, // Re-enable to reset state
+                patch: { enabled: false },
               });
+
+              // Then re-enable if it was originally enabled
+              if (wasEnabled) {
+                await callGatewayFromCli("cron.update", opts, {
+                  id: job.id,
+                  patch: { enabled: true },
+                });
+              }
+
               cleaned++;
             } catch {
               // Ignore errors for individual jobs

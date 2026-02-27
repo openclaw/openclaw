@@ -26,6 +26,14 @@ export async function getMemorySearchManager(params: {
     const statusOnly = params.purpose === "status";
     const cacheKey = buildQmdCacheKey(params.agentId, resolved.qmd);
 
+    // Check cache first before probing binary (avoids unnecessary subprocess calls)
+    if (!statusOnly) {
+      const cached = QMD_MANAGER_CACHE.get(cacheKey);
+      if (cached) {
+        return { manager: cached };
+      }
+    }
+
     // Check if QMD binary is available before attempting to create manager
     const qmdCheck = await checkQmdBinaryAvailable(resolved.qmd.command);
     if (!qmdCheck.available) {
@@ -33,13 +41,6 @@ export async function getMemorySearchManager(params: {
       log.warn("Falling back to builtin memory backend. To use QMD, install it and ensure it's on PATH.");
     } else {
       // Only try to create QMD manager if binary is available
-      if (!statusOnly) {
-        const cached = QMD_MANAGER_CACHE.get(cacheKey);
-        if (cached) {
-          return { manager: cached };
-        }
-      }
-
       try {
         const { QmdMemoryManager } = await import("./qmd-manager.js");
         const primary = await QmdMemoryManager.create({
