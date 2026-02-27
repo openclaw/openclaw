@@ -161,6 +161,7 @@
     "grammy": "^1.40.0",
     "https-proxy-agent": "^7.0.6",
     "iovalkey": "^0.3.3",
+    "ipaddr.js": "^2.3.0",
     "jiti": "^2.6.1",
     "json5": "^2.2.3",
     "jszip": "^3.10.1",
