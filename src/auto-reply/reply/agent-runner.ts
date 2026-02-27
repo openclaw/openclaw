@@ -62,8 +62,16 @@ const BLOCK_REPLY_SEND_TIMEOUT_MS = 15_000;
 const UNSCHEDULED_REMINDER_NOTE =
   "Note: I did not schedule a reminder in this turn, so this will not trigger automatically.";
 const REMINDER_COMMITMENT_PATTERNS: RegExp[] = [
-  /\b(?:i\s*['’]?ll|i will)\s+(?:make sure to\s+)?(?:remember|remind|ping|follow up|follow-up|check back|circle back)\b/i,
-  /\b(?:i\s*['’]?ll|i will)\s+(?:set|create|schedule)\s+(?:a\s+)?reminder\b/i,
+  /\b(?:i\s*['']?ll|i will)\s+(?:make sure to\s+)?(?:remember|remind|ping|follow up|follow-up|check back|circle back)\b/i,
+  /\b(?:i\s*['']?ll|i will)\s+(?:set|create|schedule)\s+(?:a\s+)?reminder\b/i,
+];
+
+// Patterns that indicate a reminder was actually scheduled (e.g. via exec + openclaw cron add)
+const REMINDER_CONFIRMED_PATTERNS: RegExp[] = [
+  /\breminder\s+(?:is\s+)?set\b/i,
+  /\breminder\s+(?:has been\s+)?(?:created|scheduled|added)\b/i,
+  /\bcron\s+(?:job\s+)?(?:created|scheduled|added|set)\b/i,
+  /\bscheduled\s+for\b.*\b(?:tomorrow|today|monday|tuesday|wednesday|thursday|friday|saturday|sunday|\d{1,2}[:\s]?\d{2}|[ap]m)\b/i,
 ];
 
 function hasUnbackedReminderCommitment(text: string): boolean {
@@ -72,6 +80,10 @@ function hasUnbackedReminderCommitment(text: string): boolean {
     return false;
   }
   if (normalized.includes(UNSCHEDULED_REMINDER_NOTE.toLowerCase())) {
+    return false;
+  }
+  // If the text confirms a reminder was set, don't treat it as unbacked
+  if (REMINDER_CONFIRMED_PATTERNS.some((pattern) => pattern.test(text))) {
     return false;
   }
   return REMINDER_COMMITMENT_PATTERNS.some((pattern) => pattern.test(text));
@@ -702,7 +714,7 @@ export async function runReplyAgent(params: {
             }
           })
           .catch(() => {
-            // Silent failure — post-compaction context is best-effort
+            // Silent failure - post-compaction context is best-effort
           });
 
         // Set pending audit flag for Layer 3 (post-compaction read audit)
@@ -723,7 +735,7 @@ export async function runReplyAgent(params: {
 
     // Post-compaction read audit (Layer 3)
     if (sessionKey && pendingPostCompactionAudits.get(sessionKey)) {
-      pendingPostCompactionAudits.delete(sessionKey); // Delete FIRST — one-shot only
+      pendingPostCompactionAudits.delete(sessionKey); // Delete FIRST - one-shot only
       try {
         const sessionFile = activeSessionEntry?.sessionFile;
         if (sessionFile) {
@@ -736,7 +748,7 @@ export async function runReplyAgent(params: {
           }
         }
       } catch {
-        // Silent failure — audit is best-effort
+        // Silent failure - audit is best-effort
       }
     }
 

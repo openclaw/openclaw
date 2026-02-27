@@ -1097,6 +1097,34 @@ describe("runReplyAgent reminder commitment guard", () => {
       text: "I'll remind you tomorrow morning.",
     });
   });
+
+  it("skips guard note when text confirms reminder was scheduled", async () => {
+    // Even without successfulCronAdds, if the text itself confirms scheduling,
+    // we should not append the guard note (fixes false positive detection)
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "I'll remind you tomorrow. Reminder is set for 9am." }],
+      meta: {},
+      successfulCronAdds: 0,
+    });
+
+    const result = await createRun();
+    expect(result).toMatchObject({
+      text: "I'll remind you tomorrow. Reminder is set for 9am.",
+    });
+  });
+
+  it("skips guard note when text mentions cron job was created", async () => {
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "I'll remind you about this. Cron job created for tomorrow at 8am." }],
+      meta: {},
+      successfulCronAdds: 0,
+    });
+
+    const result = await createRun();
+    expect(result).toMatchObject({
+      text: "I'll remind you about this. Cron job created for tomorrow at 8am.",
+    });
+  });
 });
 
 describe("runReplyAgent fallback reasoning tags", () => {
