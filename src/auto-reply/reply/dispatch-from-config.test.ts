@@ -1716,6 +1716,94 @@ describe("dispatchReplyFromConfig", () => {
     expect(finalCalls[0][0]).toMatchObject({ text: "The answer is 42" });
   });
 
+  describe("voiceNoteLoop", () => {
+    it("disabled (default): suppresses inboundAudio flag so TTS auto=inbound does not trigger", async () => {
+      setNoAbort();
+      const cfg = {
+        messages: { tts: { auto: "inbound", provider: "edge" } },
+      } as OpenClawConfig;
+      const dispatcher = createDispatcher();
+      const ctx = buildTestCtx({
+        Provider: "whatsapp",
+        MediaType: "audio/ogg",
+        Body: "<media:audio>",
+      });
+
+      const replyResolver = async () => ({ text: "Hello there" }) satisfies ReplyPayload;
+      await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+      const finalCalls = (dispatcher.sendFinalReply as ReturnType<typeof vi.fn>).mock.calls;
+      expect(finalCalls).toHaveLength(1);
+      expect(finalCalls[0][0]).toMatchObject({ text: "Hello there" });
+      expect(finalCalls[0][0].mediaUrl).toBeUndefined();
+    });
+
+    it("enabled: allows inboundAudio flag so TTS auto=inbound can trigger", async () => {
+      setNoAbort();
+      const cfg = {
+        messages: {
+          tts: { auto: "inbound", provider: "edge", voiceNoteLoop: "enabled" },
+        },
+      } as OpenClawConfig;
+      const dispatcher = createDispatcher();
+      const ctx = buildTestCtx({
+        Provider: "whatsapp",
+        MediaType: "audio/ogg",
+        Body: "<media:audio>",
+      });
+
+      const replyResolver = async () => ({ text: "Hello there" }) satisfies ReplyPayload;
+      await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+      const finalCalls = (dispatcher.sendFinalReply as ReturnType<typeof vi.fn>).mock.calls;
+      expect(finalCalls).toHaveLength(1);
+      expect(finalCalls[0][0]).toBeDefined();
+    });
+
+    it("both: preserves text alongside TTS audio in final reply", async () => {
+      setNoAbort();
+      const cfg = {
+        messages: {
+          tts: { auto: "inbound", provider: "edge", voiceNoteLoop: "both" },
+        },
+      } as OpenClawConfig;
+      const dispatcher = createDispatcher();
+      const ctx = buildTestCtx({
+        Provider: "whatsapp",
+        MediaType: "audio/ogg",
+        Body: "<media:audio>",
+      });
+
+      const replyResolver = async () => ({ text: "Hello there" }) satisfies ReplyPayload;
+      await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+      const finalCalls = (dispatcher.sendFinalReply as ReturnType<typeof vi.fn>).mock.calls;
+      expect(finalCalls).toHaveLength(1);
+      expect(finalCalls[0][0].text).toBe("Hello there");
+    });
+
+    it("enabled without inbound audio: does not strip text", async () => {
+      setNoAbort();
+      const cfg = {
+        messages: {
+          tts: { auto: "always", provider: "edge", voiceNoteLoop: "enabled" },
+        },
+      } as OpenClawConfig;
+      const dispatcher = createDispatcher();
+      const ctx = buildTestCtx({
+        Provider: "whatsapp",
+        Body: "Hello",
+      });
+
+      const replyResolver = async () => ({ text: "Hi back" }) satisfies ReplyPayload;
+      await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+      const finalCalls = (dispatcher.sendFinalReply as ReturnType<typeof vi.fn>).mock.calls;
+      expect(finalCalls).toHaveLength(1);
+      expect(finalCalls[0][0].text).toBe("Hi back");
+    });
+  });
+
   it("suppresses isReasoning payloads from block replies (generic dispatch path)", async () => {
     setNoAbort();
     const dispatcher = createDispatcher();
