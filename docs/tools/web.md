@@ -310,7 +310,7 @@ search:
 }
 ```
 
-### Notes
+### SearXNG notes
 
 - Results include `engine` and `category` fields in addition to title, URL, and snippet.
 - The `count` / `maxResults` config applies as normal (default: 5, max: 10).
