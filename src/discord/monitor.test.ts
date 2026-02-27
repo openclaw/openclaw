@@ -937,7 +937,7 @@ function makeReactionListenerParams(overrides?: {
   groupDmChannels?: string[];
   dmPolicy?: "open" | "pairing" | "allowlist" | "disabled";
   allowFrom?: string[];
-  groupPolicy?: "open" | "allowlist" | "disabled" | "listen-only";
+  groupPolicy?: "open" | "allowlist" | "disabled";
   allowNameMatching?: boolean;
   guildEntries?: Record<string, DiscordGuildEntryResolved>;
 }) {

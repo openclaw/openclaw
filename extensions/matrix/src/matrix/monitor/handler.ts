@@ -51,7 +51,7 @@ export type MatrixMonitorHandlerParams = {
   allowFrom: string[];
   roomsConfig: Record<string, MatrixRoomConfig> | undefined;
   mentionRegexes: ReturnType<PluginRuntime["channel"]["mentions"]["buildMentionRegexes"]>;
-  groupPolicy: "open" | "allowlist" | "disabled" | "listen-only";
+  groupPolicy: "open" | "allowlist" | "disabled";
   replyToMode: ReplyToMode;
   threadReplies: "off" | "inbound" | "always";
   dmEnabled: boolean;

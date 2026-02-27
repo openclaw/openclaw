@@ -20,8 +20,6 @@ export type ChannelGroupConfig = {
 export type ChannelGroupPolicy = {
   allowlistEnabled: boolean;
   allowed: boolean;
-  /** When true, inbound group messages are processed but outbound replies are suppressed. */
-  listenOnly?: boolean;
   groupConfig?: ChannelGroupConfig;
   defaultConfig?: ChannelGroupConfig;
 };
@@ -300,7 +298,7 @@ function resolveChannelGroups(
   return accountGroups ?? channelConfig.groups;
 }
 
-type ChannelGroupPolicyMode = "open" | "allowlist" | "disabled" | "listen-only";
+type ChannelGroupPolicyMode = "open" | "allowlist" | "disabled";
 
 function resolveChannelGroupPolicyMode(
   cfg: OpenClawConfig,
@@ -348,18 +346,13 @@ export function resolveChannelGroupPolicy(params: {
   // allow the group through — sender-level filtering handles access control.
   const senderFilterBypass =
     groupPolicy === "allowlist" && !hasGroups && Boolean(params.hasGroupAllowFrom);
-  // listen-only: allow inbound but mark for outbound suppression.
-  const isListenOnly = groupPolicy === "listen-only";
   const allowed =
     groupPolicy === "disabled"
       ? false
-      : isListenOnly
-        ? true
-        : !allowlistEnabled || allowAll || Boolean(groupConfig) || senderFilterBypass;
+      : !allowlistEnabled || allowAll || Boolean(groupConfig) || senderFilterBypass;
   return {
     allowlistEnabled,
     allowed,
-    listenOnly: isListenOnly || undefined,
     groupConfig,
     defaultConfig,
   };

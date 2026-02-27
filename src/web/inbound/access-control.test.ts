@@ -67,60 +67,6 @@ describe("checkInboundAccessControl pairing grace", () => {
   });
 });
 
-describe("WhatsApp groupPolicy listen-only", () => {
-  it("allows group message with listenOnly flag when groupPolicy=listen-only", async () => {
-    setAccessControlTestConfig({
-      channels: {
-        whatsapp: {
-          groupPolicy: "listen-only",
-          allowFrom: ["*"],
-        },
-      },
-    });
-
-    const result = await checkInboundAccessControl({
-      accountId: "default",
-      from: "+15550001111",
-      selfE164: "+15550009999",
-      senderE164: "+15550001111",
-      group: true,
-      pushName: "Alice",
-      isFromMe: false,
-      sock: { sendMessage: sendMessageMock },
-      remoteJid: "group@g.us",
-    });
-
-    expect(result.allowed).toBe(true);
-    expect(result.listenOnly).toBe(true);
-  });
-
-  it("does not set listenOnly for DMs even when groupPolicy=listen-only", async () => {
-    setAccessControlTestConfig({
-      channels: {
-        whatsapp: {
-          groupPolicy: "listen-only",
-          allowFrom: ["*"],
-        },
-      },
-    });
-
-    const result = await checkInboundAccessControl({
-      accountId: "default",
-      from: "+15550001111",
-      selfE164: "+15550009999",
-      senderE164: "+15550001111",
-      group: false,
-      pushName: "Alice",
-      isFromMe: false,
-      sock: { sendMessage: sendMessageMock },
-      remoteJid: "15550001111@s.whatsapp.net",
-    });
-
-    expect(result.allowed).toBe(true);
-    expect(result.listenOnly).toBeUndefined();
-  });
-});
-
 describe("WhatsApp dmPolicy precedence", () => {
   it("uses account-level dmPolicy instead of channel-level (#8736)", async () => {
     // Channel-level says "pairing" but the account-level says "allowlist".

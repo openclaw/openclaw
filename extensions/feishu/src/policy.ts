@@ -92,7 +92,7 @@ export function resolveFeishuGroupToolPolicy(
 }
 
 export function isFeishuGroupAllowed(params: {
-  groupPolicy: "open" | "allowlist" | "disabled" | "listen-only";
+  groupPolicy: "open" | "allowlist" | "disabled";
   allowFrom: Array<string | number>;
   senderId: string;
   senderIds?: Array<string | null | undefined>;

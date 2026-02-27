@@ -101,7 +101,7 @@ export type CoreConfig = {
   channels?: {
     matrix?: MatrixConfig;
     defaults?: {
-      groupPolicy?: "open" | "allowlist" | "disabled" | "listen-only";
+      groupPolicy?: "open" | "allowlist" | "disabled";
     };
   };
   commands?: {
