@@ -23,6 +23,7 @@ type OnboardProviderAuthOptionKey = keyof Pick<
   | "xaiApiKey"
   | "litellmApiKey"
   | "qianfanApiKey"
+  | "upstageApiKey"
   | "volcengineApiKey"
   | "byteplusApiKey"
 >;
@@ -183,6 +184,13 @@ export const ONBOARD_PROVIDER_AUTH_FLAGS: ReadonlyArray<OnboardProviderAuthFlag>
     cliFlag: "--qianfan-api-key",
     cliOption: "--qianfan-api-key <key>",
     description: "QIANFAN API key",
+  },
+  {
+    optionKey: "upstageApiKey",
+    authChoice: "upstage-api-key",
+    cliFlag: "--upstage-api-key",
+    cliOption: "--upstage-api-key <key>",
+    description: "Upstage API key",
   },
   {
     optionKey: "volcengineApiKey",
