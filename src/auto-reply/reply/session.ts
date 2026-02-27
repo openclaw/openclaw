@@ -439,6 +439,7 @@ export async function initSessionState(params: {
   }
 
   const baseEntry = !isNewSession && freshEntry ? entry : undefined;
+  const preservedEntry = baseEntry ?? entry;
   // Track the originating channel/to for announce routing (subagent announce-back).
   // Synthetic providers (heartbeat/cron/exec events) should not mutate persistent
   // delivery routing context used for user-originated replies.
@@ -453,7 +454,7 @@ export async function initSessionState(params: {
     : (ctx.OriginatingChannel as string | undefined);
   const lastChannelRaw = resolveLastChannelRaw({
     originatingChannelRaw,
-    persistedLastChannel: baseEntry?.lastChannel,
+    persistedLastChannel: preservedEntry?.lastChannel,
     sessionKey,
   });
 <<<<<<< HEAD
