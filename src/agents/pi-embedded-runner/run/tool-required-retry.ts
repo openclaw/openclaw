@@ -29,7 +29,7 @@ const TOOL_HELP_QUESTION_PATTERNS = [
   /\bhow (?:do|can) i\b/i,
   /\bcan you (?:explain|show|tell)(?: me)? (?:how|what|which|why|where)\b/i,
   /\bcan you (?:explain|show|tell)(?: me)? (?:the )?(?:command|steps?|way)\b/i,
-  /\bhow to\b/i,
+  /^\s*how to\b/i,
   /\bshould i (?:run|use)\b/i,
   /\b(?:explain|show|tell)(?: me)? (?:the )?command\b/i,
   /^(?:explain|show|tell)(?: me)? (?:how|what|which|why|where)\b/i,
@@ -42,7 +42,7 @@ const ACK_ONLY_PATTERNS = [
 ] as const;
 
 const RESULT_LIKE_PATTERNS = [
-  /\b(done|completed|finished|here(?:'|’)s|result|found|fixed|updated)\b/i,
+  /\b(done|completed|finished|here(?:'|’)s|result|found)\b/i,
   /```/,
   /\n\s*[-*]\s+/,
 ] as const;

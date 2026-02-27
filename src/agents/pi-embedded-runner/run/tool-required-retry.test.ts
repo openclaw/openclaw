@@ -237,4 +237,42 @@ describe("tool-required retry guard", () => {
 
     expect(shouldRetry).toBe(true);
   });
+
+  it("does retry ack-only text that says it will be fixed", () => {
+    const shouldRetry = shouldRetryToolRequiredToolless({
+      provider: "openai-codex",
+      prompt: "Run tests and fix the file in this repo.",
+      assistantTexts: ["Acknowledged, I'll get this fixed now."],
+      lastAssistant: { stopReason: "end_turn", content: [] } as never,
+      toolMetas: [],
+      didSendViaMessagingTool: false,
+      hasClientToolCall: false,
+      disableTools: false,
+      promptError: null,
+      aborted: false,
+      timedOut: false,
+      timedOutDuringCompaction: false,
+    });
+
+    expect(shouldRetry).toBe(true);
+  });
+
+  it("does not classify mixed execution prompts containing 'how to' as help-only", () => {
+    const shouldRetry = shouldRetryToolRequiredToolless({
+      provider: "openai-codex",
+      prompt: "Run tests and show how to fix the file in this repo.",
+      assistantTexts: ["Acknowledged. I'll do that now."],
+      lastAssistant: { stopReason: "end_turn", content: [] } as never,
+      toolMetas: [],
+      didSendViaMessagingTool: false,
+      hasClientToolCall: false,
+      disableTools: false,
+      promptError: null,
+      aborted: false,
+      timedOut: false,
+      timedOutDuringCompaction: false,
+    });
+
+    expect(shouldRetry).toBe(true);
+  });
 });
