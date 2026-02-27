@@ -269,20 +269,41 @@ export function createFollowupRunner(params: {
         replyToChannel,
       });
 
+      const messageProvider = resolveOriginMessageProvider({
+        originatingChannel: queued.originatingChannel,
+        provider: queued.run.messageProvider,
+      });
+      const originatingTo = resolveOriginMessageTo({
+        originatingTo: queued.originatingTo,
+      });
+      const originAccountId = resolveOriginAccountId({
+        originatingAccountId: queued.originatingAccountId,
+        accountId: queued.run.agentAccountId,
+      });
+
       const now = Date.now();
       const recentWindowActive =
         typeof sessionEntry?.lastMessagingToolSentAt === "number" &&
         now - sessionEntry.lastMessagingToolSentAt <= RECENT_MESSAGING_TOOL_DEDUPE_WINDOW_MS;
+      const recentTargetMatch =
+        recentWindowActive &&
+        shouldSuppressMessagingToolReplies({
+          messageProvider,
+          messagingToolSentTargets: sessionEntry?.lastMessagingToolSentTargets,
+          originatingTo,
+          accountId: originAccountId,
+        });
+
       const sentTexts = [
         ...(runResult.messagingToolSentTexts ?? []),
-        ...(recentWindowActive ? (sessionEntry?.lastMessagingToolSentTexts ?? []) : []),
+        ...(recentTargetMatch ? (sessionEntry?.lastMessagingToolSentTexts ?? []) : []),
       ];
       const sentMediaUrls = [
         ...(runResult.messagingToolSentMediaUrls ?? []),
-        ...(recentWindowActive ? (sessionEntry?.lastMessagingToolSentMediaUrls ?? []) : []),
+        ...(recentTargetMatch ? (sessionEntry?.lastMessagingToolSentMediaUrls ?? []) : []),
       ];
       // Keep target-based suppression scoped to the current run only.
-      // Session-level dedupe state is used for text/media duplicate filtering.
+      // Session-level dedupe state is used for text/media duplicate filtering when target matches.
       const sentTargets = runResult.messagingToolSentTargets ?? [];
 
       const dedupedPayloads = filterMessagingToolDuplicates({
@@ -294,18 +315,10 @@ export function createFollowupRunner(params: {
         sentMediaUrls,
       });
       const suppressMessagingToolReplies = shouldSuppressMessagingToolReplies({
-        messageProvider: resolveOriginMessageProvider({
-          originatingChannel: queued.originatingChannel,
-          provider: queued.run.messageProvider,
-        }),
+        messageProvider,
         messagingToolSentTargets: sentTargets,
-        originatingTo: resolveOriginMessageTo({
-          originatingTo: queued.originatingTo,
-        }),
-        accountId: resolveOriginAccountId({
-          originatingAccountId: queued.originatingAccountId,
-          accountId: queued.run.agentAccountId,
-        }),
+        originatingTo,
+        accountId: originAccountId,
       });
       const finalPayloads = suppressMessagingToolReplies ? [] : mediaFilteredPayloads;
 
