@@ -202,6 +202,9 @@ export function syncTelegramMenuCommands(params: {
           operation: "setMyCommands",
           runtime,
           fn: () => bot.api.setMyCommands(retryCommands),
+          // Suppress redundant error log for BOT_COMMANDS_TOO_MUCH; the retry
+          // loop below handles it with its own descriptive message.
+          shouldLog: (err) => !isBotCommandsTooMuchError(err),
         });
         await writeCachedCommandHash(accountId, botIdentity, currentHash);
         return;

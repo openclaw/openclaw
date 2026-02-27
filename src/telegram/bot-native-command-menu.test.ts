@@ -280,4 +280,69 @@ describe("bot-native-command-menu", () => {
       "Telegram rejected 100 commands (BOT_COMMANDS_TOO_MUCH); retrying with 80.",
     );
   });
+
+  it("does not emit redundant error logs for BOT_COMMANDS_TOO_MUCH retries", async () => {
+    const deleteMyCommands = vi.fn(async () => undefined);
+    const setMyCommands = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("400: Bad Request: BOT_COMMANDS_TOO_MUCH"))
+      .mockResolvedValue(undefined);
+    const runtimeError = vi.fn();
+
+    syncTelegramMenuCommands({
+      bot: {
+        api: { deleteMyCommands, setMyCommands },
+      } as unknown as Parameters<typeof syncTelegramMenuCommands>[0]["bot"],
+      runtime: {
+        log: vi.fn(),
+        error: runtimeError,
+        exit: vi.fn(),
+      } as Parameters<typeof syncTelegramMenuCommands>[0]["runtime"],
+      commandsToRegister: Array.from({ length: 50 }, (_, i) => ({
+        command: `cmd_${i}`,
+        description: `Command ${i}`,
+      })),
+    });
+
+    await vi.waitFor(() => {
+      expect(setMyCommands).toHaveBeenCalledTimes(2);
+    });
+
+    // The retry loop handles BOT_COMMANDS_TOO_MUCH with its own log message;
+    // withTelegramApiErrorLogging should NOT emit a redundant error line.
+    const errorCalls = runtimeError.mock.calls.map((args) => String(args[0]));
+    for (const msg of errorCalls) {
+      expect(msg).not.toMatch(/BOT_COMMANDS_TOO_MUCH/i);
+    }
+  });
+
+  it("leaves menu empty after exhausting all retry attempts", async () => {
+    const deleteMyCommands = vi.fn(async () => undefined);
+    const setMyCommands = vi
+      .fn()
+      .mockRejectedValue(new Error("400: Bad Request: BOT_COMMANDS_TOO_MUCH"));
+    const runtimeError = vi.fn();
+
+    syncTelegramMenuCommands({
+      bot: {
+        api: { deleteMyCommands, setMyCommands },
+      } as unknown as Parameters<typeof syncTelegramMenuCommands>[0]["bot"],
+      runtime: {
+        log: vi.fn(),
+        error: runtimeError,
+        exit: vi.fn(),
+      } as Parameters<typeof syncTelegramMenuCommands>[0]["runtime"],
+      // Small set so retries exhaust quickly
+      commandsToRegister: [{ command: "cmd_0", description: "Command 0" }],
+    });
+
+    await vi.waitFor(() => {
+      expect(runtimeError).toHaveBeenCalledWith(expect.stringContaining("leaving menu empty"));
+    });
+
+    // Verify the function did not throw/crash -- the outer catch should not fire
+    // with a BOT_COMMANDS_TOO_MUCH error (it returns gracefully).
+    const errorCalls = runtimeError.mock.calls.map((args) => String(args[0]));
+    expect(errorCalls.some((msg) => msg.includes("command sync failed"))).toBe(false);
+  });
 });
