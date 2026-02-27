@@ -5,6 +5,7 @@ import {
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "../../config/runtime-group-policy.js";
 import { logVerbose } from "../../globals.js";
+import { isOutboundSuppressed } from "../../infra/outbound/suppress-outbound.js";
 import { buildPairingReply } from "../../pairing/pairing-messages.js";
 import { upsertChannelPairingRequest } from "../../pairing/pairing-store.js";
 import {
@@ -168,8 +169,17 @@ export async function checkInboundAccessControl(params: {
     }
     if (access.decision === "pairing" && !isSamePhone) {
       const candidate = params.from;
-      if (suppressPairingReply) {
-        logVerbose(`Skipping pairing reply for historical DM from ${candidate}.`);
+      const outboundSuppressed = isOutboundSuppressed({
+        cfg,
+        channel: "whatsapp",
+        accountId: account.accountId,
+      });
+      if (suppressPairingReply || outboundSuppressed) {
+        logVerbose(
+          outboundSuppressed
+            ? `[suppressOutbound] Blocked pairing reply for ${candidate}.`
+            : `Skipping pairing reply for historical DM from ${candidate}.`,
+        );
       } else {
         const { code, created } = await upsertChannelPairingRequest({
           channel: "whatsapp",

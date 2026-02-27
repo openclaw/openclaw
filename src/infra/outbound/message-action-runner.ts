@@ -46,6 +46,7 @@ import {
 } from "./outbound-policy.js";
 import { executePollAction, executeSendAction } from "./outbound-send-service.js";
 import { ensureOutboundSessionEntry, resolveOutboundSessionRoute } from "./outbound-session.js";
+import { isOutboundSuppressed } from "./suppress-outbound.js";
 import { resolveChannelTarget, type ResolvedMessagingTarget } from "./target-resolver.js";
 import { extractToolPayload } from "./tool-payload.js";
 
@@ -767,6 +768,11 @@ export async function runMessageAction(
   });
 
   const gateway = resolveGateway(input);
+
+  // Block all outbound actions (send, poll, plugin) when suppressOutbound is active.
+  if (!dryRun && isOutboundSuppressed({ cfg, channel, accountId })) {
+    throw new Error(`Outbound suppressed for channel ${channel} (listen-only mode)`);
+  }
 
   if (action === "send") {
     return handleSendAction({

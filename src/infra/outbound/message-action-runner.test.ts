@@ -1081,3 +1081,52 @@ describe("runMessageAction accountId defaults", () => {
     expect(ctx.params.accountId).toBe("account-b");
   });
 });
+
+describe("suppressOutbound blocks agent tool actions", () => {
+  const suppressed = {
+    channels: {
+      slack: {
+        botToken: "xoxb-test",
+        appToken: "xapp-test",
+        suppressOutbound: true,
+      },
+    },
+  } as OpenClawConfig;
+
+  it("blocks send when suppressOutbound is active", async () => {
+    await expect(
+      runMessageAction({
+        cfg: suppressed,
+        action: "send",
+        params: { channel: "slack", target: "#general", message: "hi" },
+        dryRun: false,
+      }),
+    ).rejects.toThrow(/outbound suppressed/i);
+  });
+
+  it("blocks poll when suppressOutbound is active", async () => {
+    await expect(
+      runMessageAction({
+        cfg: suppressed,
+        action: "poll",
+        params: {
+          channel: "slack",
+          target: "#general",
+          question: "pick",
+          options: ["a", "b"],
+        },
+        dryRun: false,
+      }),
+    ).rejects.toThrow(/outbound suppressed/i);
+  });
+
+  it("does not block dry-run actions", async () => {
+    const result = await runMessageAction({
+      cfg: suppressed,
+      action: "send",
+      params: { channel: "slack", target: "#general", message: "hi" },
+      dryRun: true,
+    });
+    expect(result.kind).toBe("send");
+  });
+});
