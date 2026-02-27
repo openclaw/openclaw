@@ -54,7 +54,7 @@ const routeStatus: RouteSpec = {
 };
 
 const routeSessions: RouteSpec = {
-  // Fast-path only bare `sessions`; subcommands (e.g. `sessions cleanup`)
+  // Fast-path only bare `sessions`; subcommands (e.g. `sessions cleanup`, `sessions scrub`)
   // must fall through to Commander so nested handlers run.
   match: (path) => path[0] === "sessions" && !path[1],
   run: async (argv) => {
