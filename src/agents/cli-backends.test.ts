@@ -3,6 +3,21 @@ import type { OpenClawConfig } from "../config/config.js";
 import { resolveCliBackendConfig } from "./cli-backends.js";
 
 describe("resolveCliBackendConfig reliability merge", () => {
+  it("uses codex resume args that match codex exec resume contract", () => {
+    const resolved = resolveCliBackendConfig("codex-cli");
+
+    expect(resolved).not.toBeNull();
+    expect(resolved?.config.resumeArgs).toEqual([
+      "exec",
+      "resume",
+      "--dangerously-bypass-approvals-and-sandbox",
+      "--skip-git-repo-check",
+      "{sessionId}",
+    ]);
+    expect(resolved?.config.resumeArgs).not.toContain("--color");
+    expect(resolved?.config.resumeArgs).not.toContain("--sandbox");
+  });
+
   it("deep-merges reliability watchdog overrides for codex", () => {
     const cfg = {
       agents: {

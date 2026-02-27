@@ -5,6 +5,7 @@ import { loadModelCatalog } from "../agents/model-catalog.js";
 import {
   buildAllowedModelSet,
   buildModelAliasIndex,
+  isCliProvider,
   modelKey,
   normalizeProviderId,
   resolveConfiguredModelRef,
@@ -46,6 +47,10 @@ function hasAuthForProvider(
   cfg: OpenClawConfig,
   store: ReturnType<typeof ensureAuthProfileStore>,
 ) {
+  // CLI backends manage their own auth (external binary handles credentials).
+  if (isCliProvider(provider, cfg)) {
+    return true;
+  }
   if (listProfilesForProvider(store, provider).length > 0) {
     return true;
   }

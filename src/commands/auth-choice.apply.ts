@@ -4,6 +4,7 @@ import type { WizardPrompter } from "../wizard/prompts.js";
 import { applyAuthChoiceAnthropic } from "./auth-choice.apply.anthropic.js";
 import { applyAuthChoiceApiProviders } from "./auth-choice.apply.api-providers.js";
 import { applyAuthChoiceBytePlus } from "./auth-choice.apply.byteplus.js";
+import { applyAuthChoiceCliBackends } from "./auth-choice.apply.cli-backends.js";
 import { applyAuthChoiceCopilotProxy } from "./auth-choice.apply.copilot-proxy.js";
 import { applyAuthChoiceGitHubCopilot } from "./auth-choice.apply.github-copilot.js";
 import { applyAuthChoiceGoogleGeminiCli } from "./auth-choice.apply.google-gemini-cli.js";
@@ -49,6 +50,7 @@ export async function applyAuthChoice(
     applyAuthChoiceXAI,
     applyAuthChoiceVolcengine,
     applyAuthChoiceBytePlus,
+    applyAuthChoiceCliBackends,
   ];
 
   for (const handler of handlers) {

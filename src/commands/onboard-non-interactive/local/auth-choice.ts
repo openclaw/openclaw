@@ -135,15 +135,13 @@ export async function applyNonInteractiveAuthChoice(params: {
     return true;
   };
 
-  if (authChoice === "claude-cli" || authChoice === "codex-cli") {
-    runtime.error(
-      [
-        `Auth choice "${authChoice}" is deprecated.`,
-        'Use "--auth-choice token" (Anthropic setup-token) or "--auth-choice openai-codex".',
-      ].join("\n"),
-    );
-    runtime.exit(1);
-    return null;
+  if (authChoice === "claude-cli") {
+    nextConfig = applyPrimaryModel(nextConfig, "claude-cli/sonnet");
+    return nextConfig;
+  }
+  if (authChoice === "codex-cli") {
+    nextConfig = applyPrimaryModel(nextConfig, "codex-cli/codex");
+    return nextConfig;
   }
 
   if (authChoice === "setup-token") {
