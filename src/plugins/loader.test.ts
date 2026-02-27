@@ -109,6 +109,9 @@ function loadBundledMemoryPluginRegistry(options?: {
         slots: {
           memory: "memory-core",
         },
+        entries: {
+          "memory-core": { enabled: true },
+        },
       },
     },
   });
