@@ -45,6 +45,13 @@ export async function noteMemorySearchHealth(
       if (hasLocalEmbeddings(resolved.local)) {
         return; // local model file exists
       }
+      // Some local embedding providers (e.g. node-llama-cpp) can resolve a model
+      // from their own on-disk cache even when no explicit modelPath is
+      // configured. If the running gateway reports embeddings ready, avoid a
+      // false-positive warning.
+      if (opts?.gatewayMemoryProbe?.checked && opts.gatewayMemoryProbe.ready) {
+        return;
+      }
       note(
         [
           'Memory search provider is set to "local" but no local model file was found.',
