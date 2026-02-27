@@ -56,7 +56,7 @@ canonical_build_from_version() {
   return 1
 }
 
-if [[ -z "${APP_BUILD+x}" ]]; then
+if [[ -z "${APP_BUILD:-}" ]]; then
   APP_BUILD="$GIT_BUILD_NUMBER"
   if CANONICAL_BUILD="$(canonical_build_from_version "$APP_VERSION")"; then
     if [[ "$CANONICAL_BUILD" =~ ^[0-9]+$ ]] && (( CANONICAL_BUILD > APP_BUILD )); then
