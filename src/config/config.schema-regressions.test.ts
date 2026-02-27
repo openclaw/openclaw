@@ -116,6 +116,34 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(true);
   });
 
+  it("accepts BlueBubbles allowPrivateNetwork at channel level", () => {
+    const res = validateConfigObject({
+      channels: {
+        bluebubbles: {
+          allowPrivateNetwork: true,
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts BlueBubbles allowPrivateNetwork at account level", () => {
+    const res = validateConfigObject({
+      channels: {
+        bluebubbles: {
+          accounts: {
+            default: {
+              allowPrivateNetwork: true,
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
   it("rejects relative iMessage attachment roots", () => {
     const res = validateConfigObject({
       channels: {
