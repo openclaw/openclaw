@@ -1,6 +1,7 @@
 import path from "node:path";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { Type } from "@sinclair/typebox";
+import { resolveWakeAgentId } from "../config/sessions/main-session.js";
 import type { ExecAsk, ExecHost, ExecSecurity } from "../infra/exec-approvals.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { isDangerousHostEnvVarName } from "../infra/host-env-security.js";
@@ -238,8 +239,9 @@ function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "faile
   const summary = output
     ? `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel}) :: ${output}`
     : `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel})`;
+  const agentId = resolveWakeAgentId(sessionKey);
   enqueueSystemEvent(summary, { sessionKey });
-  requestHeartbeatNow({ reason: `exec:${session.id}:exit`, sessionKey });
+  requestHeartbeatNow({ reason: `exec:${session.id}:exit`, sessionKey, agentId });
 }
 
 export function createApprovalSlug(id: string) {
@@ -264,8 +266,9 @@ export function emitExecSystemEvent(
   if (!sessionKey) {
     return;
   }
+  const agentId = resolveWakeAgentId(sessionKey);
   enqueueSystemEvent(text, { sessionKey, contextKey: opts.contextKey });
-  requestHeartbeatNow({ reason: "exec-event", sessionKey });
+  requestHeartbeatNow({ reason: "exec-event", sessionKey, agentId });
 }
 
 export async function runExecProcess(opts: {

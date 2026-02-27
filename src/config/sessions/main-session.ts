@@ -3,6 +3,7 @@ import {
   DEFAULT_AGENT_ID,
   normalizeAgentId,
   normalizeMainKey,
+  parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
 } from "../../routing/session-key.js";
 import { loadConfig } from "../config.js";
@@ -27,7 +28,35 @@ export function resolveMainSessionKeyFromConfig(): string {
   return resolveMainSessionKey(loadConfig());
 }
 
+/**
+ * Resolve the default agent ID from config.
+ * When session.scope is "global", resolveMainSessionKeyFromConfig() returns "global"
+ * which is not in agent:*:* format, so resolveAgentIdFromSessionKey falls back to "main".
+ * This helper returns the actual default agent, even in global scope.
+ */
+export function resolveDefaultAgentIdFromConfig(): string {
+  const cfg = loadConfig();
+  const agents = cfg?.agents?.list ?? [];
+  const defaultAgentId =
+    agents.find((agent) => agent?.default)?.id ?? agents[0]?.id ?? DEFAULT_AGENT_ID;
+  return normalizeAgentId(defaultAgentId);
+}
+
 export { resolveAgentIdFromSessionKey };
+
+/**
+ * Resolve the agent ID to use for heartbeat wakes from a sessionKey.
+ * For `agent:*:*` keys, extracts the agent ID from the key.
+ * For non-agent keys (e.g. "global", "node-xxx"), falls back to the
+ * config's default agent instead of the hardcoded "main" default.
+ */
+export function resolveWakeAgentId(sessionKey: string | undefined | null): string {
+  const parsed = parseAgentSessionKey(sessionKey);
+  if (parsed) {
+    return normalizeAgentId(parsed.agentId);
+  }
+  return resolveDefaultAgentIdFromConfig();
+}
 
 export function resolveAgentMainSessionKey(params: {
   cfg?: { session?: { mainKey?: string } };

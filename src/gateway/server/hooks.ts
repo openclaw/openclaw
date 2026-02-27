@@ -1,7 +1,10 @@
 import { randomUUID } from "node:crypto";
 import type { CliDeps } from "../../cli/deps.js";
 import { loadConfig } from "../../config/config.js";
-import { resolveMainSessionKeyFromConfig } from "../../config/sessions.js";
+import {
+  resolveDefaultAgentIdFromConfig,
+  resolveMainSessionKeyFromConfig,
+} from "../../config/sessions.js";
 import { runCronIsolatedAgentTurn } from "../../cron/isolated-agent.js";
 import type { CronJob } from "../../cron/types.js";
 import { requestHeartbeatNow } from "../../infra/heartbeat-wake.js";
@@ -27,9 +30,12 @@ export function createGatewayHooksRequestHandler(params: {
 
   const dispatchWakeHook = (value: { text: string; mode: "now" | "next-heartbeat" }) => {
     const sessionKey = resolveMainSessionKeyFromConfig();
+    // Resolve the actual default agent so global-scope configs (sessionKey="global")
+    // still target the correct agent instead of falling back to "main".
+    const agentId = resolveDefaultAgentIdFromConfig();
     enqueueSystemEvent(value.text, { sessionKey });
     if (value.mode === "now") {
-      requestHeartbeatNow({ reason: "hook:wake", sessionKey });
+      requestHeartbeatNow({ reason: "hook:wake", sessionKey, agentId });
     }
   };
 
@@ -39,6 +45,7 @@ export function createGatewayHooksRequestHandler(params: {
       targetAgentId: value.agentId,
     });
     const mainSessionKey = resolveMainSessionKeyFromConfig();
+    const mainAgentId = resolveDefaultAgentIdFromConfig();
     const jobId = randomUUID();
     const now = Date.now();
     const job: CronJob = {
@@ -85,7 +92,11 @@ export function createGatewayHooksRequestHandler(params: {
             sessionKey: mainSessionKey,
           });
           if (value.wakeMode === "now") {
-            requestHeartbeatNow({ reason: `hook:${jobId}`, sessionKey: mainSessionKey });
+            requestHeartbeatNow({
+              reason: `hook:${jobId}`,
+              sessionKey: mainSessionKey,
+              agentId: mainAgentId,
+            });
           }
         }
       } catch (err) {
@@ -94,7 +105,11 @@ export function createGatewayHooksRequestHandler(params: {
           sessionKey: mainSessionKey,
         });
         if (value.wakeMode === "now") {
-          requestHeartbeatNow({ reason: `hook:${jobId}:error`, sessionKey: mainSessionKey });
+          requestHeartbeatNow({
+            reason: `hook:${jobId}:error`,
+            sessionKey: mainSessionKey,
+            agentId: mainAgentId,
+          });
         }
       }
     })();

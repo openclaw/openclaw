@@ -4,6 +4,7 @@ import { createOutboundSendDeps } from "../cli/outbound-send-deps.js";
 import { agentCommandFromIngress } from "../commands/agent.js";
 import { loadConfig } from "../config/config.js";
 import { updateSessionStore } from "../config/sessions.js";
+import { resolveWakeAgentId } from "../config/sessions/main-session.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { deliverOutboundPayloads } from "../infra/outbound/deliver.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
@@ -573,8 +574,9 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
         }
       }
 
+      const agentId = resolveWakeAgentId(sessionKey);
       enqueueSystemEvent(text, { sessionKey, contextKey: runId ? `exec:${runId}` : "exec" });
-      requestHeartbeatNow({ reason: "exec-event", sessionKey });
+      requestHeartbeatNow({ reason: "exec-event", sessionKey, agentId });
       return;
     }
     case "push.apns.register": {
