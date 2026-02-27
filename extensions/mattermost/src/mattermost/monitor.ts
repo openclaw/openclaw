@@ -231,6 +231,13 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     log: (message) => logVerboseMessage(message),
   });
 
+  // Trust the configured Mattermost baseUrl hostname for media fetching.
+  // Self-hosted Mattermost servers typically resolve to private IPs, which
+  // would otherwise be blocked by SSRF protection. Since the user has
+  // explicitly configured this host, we allow media downloads from it.
+  const baseHostname = new URL(client.baseUrl).hostname;
+  const mediaSsrfPolicy = { hostnameAllowlist: [baseHostname] };
+
   const resolveMattermostMedia = async (
     fileIds?: string[] | null,
   ): Promise<MattermostMediaInfo[]> => {
@@ -250,6 +257,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           },
           filePathHint: fileId,
           maxBytes: mediaMaxBytes,
+          ssrfPolicy: mediaSsrfPolicy,
         });
         const saved = await core.channel.media.saveMediaBuffer(
           fetched.buffer,
