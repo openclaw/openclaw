@@ -7,6 +7,11 @@ import {
   resolveAgentMainSessionKey,
 } from "../config/sessions.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
+import {
+  type TenantContext,
+  runWithTenantContext,
+  runWithTenantContextAsync,
+} from "../config/tenant-context.js";
 import { runCronIsolatedAgentTurn } from "../cron/isolated-agent.js";
 import {
   appendCronRunLog,
@@ -25,6 +30,7 @@ import { enqueueSystemEvent } from "../infra/system-events.js";
 import { getChildLogger } from "../logging.js";
 import { normalizeAgentId, toAgentStoreSessionKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
+import type { GlobalExecutionPool } from "./execution-pool.js";
 
 export type GatewayCronState = {
   cron: CronService;
@@ -318,6 +324,283 @@ export function buildGatewayCronService(params: {
           runLogPrune,
         ).catch((err) => {
           cronLogger.warn({ err: String(err), logPath }, "cron: run log append failed");
+        });
+      }
+    },
+  });
+
+  return { cron, storePath, cronEnabled };
+}
+
+/**
+ * Build a CronService for a specific tenant.
+ *
+ * Must be called within `runWithTenantContextAsync(tenantCtx, ...)` so that
+ * `loadConfig()` and `resolveCronStorePath()` resolve to the tenant's paths.
+ *
+ * All CronService callbacks are wrapped in `runWithTenantContext*()` closures
+ * using the captured `tenantCtx`. This ensures that when the CronService timer
+ * fires (which loses AsyncLocalStorage context), the callbacks still resolve
+ * tenant-specific config, paths, and agents.
+ */
+export function buildGatewayCronServiceForTenant(params: {
+  tenantCtx: TenantContext;
+  deps: CliDeps;
+  broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
+  executionPool?: GlobalExecutionPool;
+}): GatewayCronState {
+  const { tenantCtx } = params;
+  const tenantTag = `[tenant:${tenantCtx.tenantId}]`;
+
+  // loadConfig() resolves to tenant config because caller has ALS context active.
+  const cfg = loadConfig();
+
+  const cronLogger = getChildLogger({ module: "cron", tenant: tenantCtx.tenantId });
+  const storePath = resolveCronStorePath(cfg.cron?.store);
+  const cronEnabled = process.env.OPENCLAW_SKIP_CRON !== "1" && cfg.cron?.enabled !== false;
+
+  // --- Inner helpers (identical to buildGatewayCronService) ---
+  // These call loadConfig() which needs ALS context. They are only called
+  // from within the runWithTenantContext* wrappers below.
+
+  const resolveCronAgent = (requested?: string | null) => {
+    const runtimeConfig = loadConfig();
+    const normalized =
+      typeof requested === "string" && requested.trim() ? normalizeAgentId(requested) : undefined;
+    const hasAgent =
+      normalized !== undefined &&
+      Array.isArray(runtimeConfig.agents?.list) &&
+      runtimeConfig.agents.list.some(
+        (entry) =>
+          entry && typeof entry.id === "string" && normalizeAgentId(entry.id) === normalized,
+      );
+    const agentId = hasAgent ? normalized : resolveDefaultAgentId(runtimeConfig);
+    return { agentId, cfg: runtimeConfig };
+  };
+
+  const resolveCronSessionKey = (p: {
+    runtimeConfig: ReturnType<typeof loadConfig>;
+    agentId: string;
+    requestedSessionKey?: string | null;
+  }) => {
+    const requested = p.requestedSessionKey?.trim();
+    if (!requested) {
+      return resolveAgentMainSessionKey({ cfg: p.runtimeConfig, agentId: p.agentId });
+    }
+    const candidate = toAgentStoreSessionKey({
+      agentId: p.agentId,
+      requestKey: requested,
+      mainKey: p.runtimeConfig.session?.mainKey,
+    });
+    const canonical = canonicalizeMainSessionAlias({
+      cfg: p.runtimeConfig,
+      agentId: p.agentId,
+      sessionKey: candidate,
+    });
+    if (canonical !== "global") {
+      const sessionAgentId = resolveAgentIdFromSessionKey(canonical);
+      if (normalizeAgentId(sessionAgentId) !== normalizeAgentId(p.agentId)) {
+        return resolveAgentMainSessionKey({ cfg: p.runtimeConfig, agentId: p.agentId });
+      }
+    }
+    return canonical;
+  };
+
+  const resolveCronWakeTarget = (opts?: { agentId?: string; sessionKey?: string | null }) => {
+    const runtimeConfig = loadConfig();
+    const requestedAgentId = opts?.agentId ? resolveCronAgent(opts.agentId).agentId : undefined;
+    const derivedAgentId =
+      requestedAgentId ??
+      (opts?.sessionKey
+        ? normalizeAgentId(resolveAgentIdFromSessionKey(opts.sessionKey))
+        : undefined);
+    const agentId = derivedAgentId || undefined;
+    const sessionKey =
+      opts?.sessionKey && agentId
+        ? resolveCronSessionKey({ runtimeConfig, agentId, requestedSessionKey: opts.sessionKey })
+        : undefined;
+    return { runtimeConfig, agentId, sessionKey };
+  };
+
+  const defaultAgentId = resolveDefaultAgentId(cfg);
+  const runLogPrune = resolveCronRunLogPruneOptions(cfg.cron?.runLog);
+  const warnedLegacyWebhookJobs = new Set<string>();
+
+  // --- CronService with tenant-context-wrapped callbacks ---
+
+  const cron = new CronService({
+    storePath,
+    cronEnabled,
+    cronConfig: cfg.cron,
+    defaultAgentId,
+    resolveSessionStorePath: (agentId?: string) =>
+      runWithTenantContext(tenantCtx, () =>
+        resolveStorePath(cfg.session?.store, { agentId: agentId ?? defaultAgentId }),
+      ),
+    sessionStorePath: resolveStorePath(cfg.session?.store, { agentId: defaultAgentId }),
+
+    enqueueSystemEvent: (text, opts) => {
+      runWithTenantContext(tenantCtx, () => {
+        const { agentId, cfg: runtimeConfig } = resolveCronAgent(opts?.agentId);
+        const sessionKey = resolveCronSessionKey({
+          runtimeConfig,
+          agentId,
+          requestedSessionKey: opts?.sessionKey,
+        });
+        enqueueSystemEvent(text, { sessionKey, contextKey: opts?.contextKey });
+      });
+    },
+
+    requestHeartbeatNow: (opts) => {
+      runWithTenantContext(tenantCtx, () => {
+        const { agentId, sessionKey } = resolveCronWakeTarget(opts);
+        requestHeartbeatNow({ reason: opts?.reason, agentId, sessionKey });
+      });
+    },
+
+    runHeartbeatOnce: async (opts) => {
+      return await runWithTenantContextAsync(tenantCtx, async () => {
+        const { runtimeConfig, agentId, sessionKey } = resolveCronWakeTarget(opts);
+        return await runHeartbeatOnce({
+          cfg: runtimeConfig,
+          reason: opts?.reason,
+          agentId,
+          sessionKey,
+          deps: { ...params.deps, runtime: defaultRuntime },
+        });
+      });
+    },
+
+    runIsolatedAgentJob: async ({ job, message, abortSignal }) => {
+      const execute = () =>
+        runWithTenantContextAsync(tenantCtx, async () => {
+          const { agentId, cfg: runtimeConfig } = resolveCronAgent(job.agentId);
+          return await runCronIsolatedAgentTurn({
+            cfg: runtimeConfig,
+            deps: params.deps,
+            job,
+            message,
+            abortSignal,
+            agentId,
+            sessionKey: `cron:${job.id}`,
+            lane: "cron",
+          });
+        });
+      if (params.executionPool) {
+        return params.executionPool.submit({ tenantId: tenantCtx.tenantId, execute });
+      }
+      return execute();
+    },
+
+    log: getChildLogger({ module: "cron", storePath, tenant: tenantCtx.tenantId }),
+
+    onEvent: (evt) => {
+      params.broadcast("cron", evt, { dropIfSlow: true });
+      if (evt.action === "finished") {
+        runWithTenantContext(tenantCtx, () => {
+          const webhookToken = cfg.cron?.webhookToken?.trim();
+          const legacyWebhook = cfg.cron?.webhook?.trim();
+          const job = cron.getJob(evt.jobId);
+          const legacyNotify = (job as { notify?: unknown } | undefined)?.notify === true;
+          const webhookTarget = resolveCronWebhookTarget({
+            delivery:
+              job?.delivery && typeof job.delivery.mode === "string"
+                ? { mode: job.delivery.mode, to: job.delivery.to }
+                : undefined,
+            legacyNotify,
+            legacyWebhook,
+          });
+
+          if (!webhookTarget && job?.delivery?.mode === "webhook") {
+            cronLogger.warn(
+              { jobId: evt.jobId, deliveryTo: job.delivery.to },
+              `${tenantTag} cron: skipped webhook delivery, delivery.to must be a valid http(s) URL`,
+            );
+          }
+
+          if (webhookTarget?.source === "legacy" && !warnedLegacyWebhookJobs.has(evt.jobId)) {
+            warnedLegacyWebhookJobs.add(evt.jobId);
+            cronLogger.warn(
+              { jobId: evt.jobId, legacyWebhook: redactWebhookUrl(webhookTarget.url) },
+              `${tenantTag} cron: deprecated notify+cron.webhook fallback in use, migrate to delivery.mode=webhook with delivery.to`,
+            );
+          }
+
+          if (webhookTarget && evt.summary) {
+            const headers: Record<string, string> = { "Content-Type": "application/json" };
+            if (webhookToken) {
+              headers.Authorization = `Bearer ${webhookToken}`;
+            }
+            const abortController = new AbortController();
+            const timeout = setTimeout(() => abortController.abort(), CRON_WEBHOOK_TIMEOUT_MS);
+
+            void (async () => {
+              try {
+                const result = await fetchWithSsrFGuard({
+                  url: webhookTarget.url,
+                  init: {
+                    method: "POST",
+                    headers,
+                    body: JSON.stringify(evt),
+                    signal: abortController.signal,
+                  },
+                });
+                await result.release();
+              } catch (err) {
+                if (err instanceof SsrFBlockedError) {
+                  cronLogger.warn(
+                    {
+                      reason: formatErrorMessage(err),
+                      jobId: evt.jobId,
+                      webhookUrl: redactWebhookUrl(webhookTarget.url),
+                    },
+                    `${tenantTag} cron: webhook delivery blocked by SSRF guard`,
+                  );
+                } else {
+                  cronLogger.warn(
+                    {
+                      err: formatErrorMessage(err),
+                      jobId: evt.jobId,
+                      webhookUrl: redactWebhookUrl(webhookTarget.url),
+                    },
+                    `${tenantTag} cron: webhook delivery failed`,
+                  );
+                }
+              } finally {
+                clearTimeout(timeout);
+              }
+            })();
+          }
+
+          const logPath = resolveCronRunLogPath({ storePath, jobId: evt.jobId });
+          void appendCronRunLog(
+            logPath,
+            {
+              ts: Date.now(),
+              jobId: evt.jobId,
+              action: "finished",
+              status: evt.status,
+              error: evt.error,
+              summary: evt.summary,
+              delivered: evt.delivered,
+              deliveryStatus: evt.deliveryStatus,
+              deliveryError: evt.deliveryError,
+              sessionId: evt.sessionId,
+              sessionKey: evt.sessionKey,
+              runAtMs: evt.runAtMs,
+              durationMs: evt.durationMs,
+              nextRunAtMs: evt.nextRunAtMs,
+              model: evt.model,
+              provider: evt.provider,
+              usage: evt.usage,
+            },
+            runLogPrune,
+          ).catch((err) => {
+            cronLogger.warn(
+              { err: String(err), logPath },
+              `${tenantTag} cron: run log append failed`,
+            );
+          });
         });
       }
     },

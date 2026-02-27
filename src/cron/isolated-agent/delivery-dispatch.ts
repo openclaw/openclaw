@@ -9,6 +9,7 @@ import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
 import { resolveAgentOutboundIdentity } from "../../infra/outbound/identity.js";
 import { resolveOutboundSessionRoute } from "../../infra/outbound/outbound-session.js";
 import { logWarn } from "../../logger.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import type { CronJob, CronRunTelemetry } from "../types.js";
 import type { DeliveryTargetResolution } from "./delivery-target.js";
 import { pickSummaryFromOutput } from "./helpers.js";
@@ -388,8 +389,14 @@ export async function dispatchCronDelivery(
     // Forum/topic targets should also use direct delivery. Announce flow can
     // be swallowed by ANNOUNCE_SKIP/NO_REPLY in the target agent turn, which
     // silently drops cron output for topic-bound sessions.
+    //
+    // Webchat uses direct delivery because sendWebchat handles transcript
+    // persistence + broadcast atomically — the announce path would silently
+    // drop output when no browser tab has an active SSE connection.
     const useDirectDelivery =
-      params.deliveryPayloadHasStructuredContent || params.resolvedDelivery.threadId != null;
+      params.deliveryPayloadHasStructuredContent ||
+      params.resolvedDelivery.threadId != null ||
+      params.resolvedDelivery.channel === INTERNAL_MESSAGE_CHANNEL;
     if (useDirectDelivery) {
       const directResult = await deliverViaDirect(params.resolvedDelivery);
       if (directResult) {

@@ -232,8 +232,6 @@ JOB SCHEMA (for add action):
   "name": "string (optional)",
   "schedule": { ... },      // Required: when to run
   "payload": { ... },       // Required: what to execute
-  "delivery": { ... },      // Optional: announce summary or webhook POST
-  "sessionTarget": "main" | "isolated",  // Required
   "enabled": true | false   // Optional, default true
 }
 
@@ -248,23 +246,11 @@ SCHEDULE TYPES (schedule.kind):
 ISO timestamps without an explicit timezone are treated as UTC.
 
 PAYLOAD TYPES (payload.kind):
-- "systemEvent": Injects text as system event into session
+- "agentTurn": Runs agent with message (without session memory)
+  { "kind": "agentTurn", "message": "<prompt>", "thinking": "<optional>", "timeoutSeconds": <optional, 0 means no timeout> }
+- "systemEvent": Note-to-self. You will read it on your next heartbeat (not cron).
   { "kind": "systemEvent", "text": "<message>" }
-- "agentTurn": Runs agent with message (isolated sessions only)
-  { "kind": "agentTurn", "message": "<prompt>", "model": "<optional>", "thinking": "<optional>", "timeoutSeconds": <optional, 0 means no timeout> }
-
-DELIVERY (top-level):
-  { "mode": "none|announce|webhook", "channel": "<optional>", "to": "<optional>", "bestEffort": <optional-bool> }
-  - Default for isolated agentTurn jobs (when delivery omitted): "announce"
-  - announce: send to chat channel (optional channel/to target)
-  - webhook: send finished-run event as HTTP POST to delivery.to (URL required)
-  - If the task needs to send to a specific chat/recipient, set announce delivery.channel/to; do not call messaging tools inside the run.
-
-CRITICAL CONSTRAINTS:
-- sessionTarget="main" REQUIRES payload.kind="systemEvent"
-- sessionTarget="isolated" REQUIRES payload.kind="agentTurn"
-- For webhook callbacks, use delivery.mode="webhook" with delivery.to set to a URL.
-Default: prefer isolated agentTurn jobs unless the user explicitly wants a main-session system event.
+  Requires heartbeat to be active and set to a recurring interval (e.g. every 5 minutes).
 
 WAKE MODES (for wake action):
 - "next-heartbeat" (default): Wake on next heartbeat
@@ -318,7 +304,6 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
               "sessionKey",
               "message",
               "text",
-              "model",
               "thinking",
               "timeoutSeconds",
               "allowUnsafeExternalContent",
@@ -433,6 +418,22 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
               }
             }
           }
+          // Defense-in-depth: strip model from LLM-created payloads.
+          // Model selection is handled by the agent's configured defaults.
+          if (
+            job &&
+            typeof job === "object" &&
+            "payload" in job &&
+            isRecord((job as { payload?: unknown }).payload)
+          ) {
+            delete (job as { payload: Record<string, unknown> }).payload.model;
+          }
+          // Auto-set sessionTarget from payload.kind so LLMs don't need to choose.
+          if (job && typeof job === "object" && "payload" in job) {
+            const kind = (job as { payload?: { kind?: string } }).payload?.kind;
+            (job as { sessionTarget?: string }).sessionTarget =
+              kind === "systemEvent" ? "main" : "isolated";
+          }
           return jsonResult(await callGateway("cron.add", gatewayOpts, job));
         }
         case "update": {
@@ -444,6 +445,14 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
             throw new Error("patch required");
           }
           const patch = normalizeCronJobPatch(params.patch) ?? params.patch;
+          // Auto-set sessionTarget if payload.kind changed.
+          if (patch && typeof patch === "object" && "payload" in patch) {
+            const kind = (patch as { payload?: { kind?: string } }).payload?.kind;
+            if (kind) {
+              (patch as { sessionTarget?: string }).sessionTarget =
+                kind === "systemEvent" ? "main" : "isolated";
+            }
+          }
           return jsonResult(
             await callGateway("cron.update", gatewayOpts, {
               id,

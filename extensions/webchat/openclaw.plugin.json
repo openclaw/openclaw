@@ -1,0 +1,9 @@
+{
+  "id": "webchat",
+  "channels": ["webchat"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

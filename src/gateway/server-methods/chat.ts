@@ -9,6 +9,7 @@ import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.j
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
+import { getTenantIdFromContext } from "../../config/tenant-context.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import {
   stripInlineDirectiveTagsForDisplay,
@@ -858,36 +859,47 @@ export const chatHandlers: GatewayRequestHandlers = {
       });
 
       let agentRunStarted = false;
-      void dispatchInboundMessage({
-        ctx,
-        cfg,
-        dispatcher,
-        replyOptions: {
-          runId: clientRunId,
-          abortSignal: abortController.signal,
-          images: parsedImages.length > 0 ? parsedImages : undefined,
-          onAgentRunStart: (runId) => {
-            agentRunStarted = true;
-            const connId = typeof client?.connId === "string" ? client.connId : undefined;
-            const wantsToolEvents = hasGatewayClientCap(
-              client?.connect?.caps,
-              GATEWAY_CLIENT_CAPS.TOOL_EVENTS,
-            );
-            if (connId && wantsToolEvents) {
-              context.registerToolEventRecipient(runId, connId);
-              // Register for any other active runs *in the same session* so
-              // late-joining clients (e.g. page refresh mid-response) receive
-              // in-progress tool events without leaking cross-session data.
-              for (const [activeRunId, active] of context.chatAbortControllers) {
-                if (activeRunId !== runId && active.sessionKey === p.sessionKey) {
-                  context.registerToolEventRecipient(activeRunId, connId);
+      const chatDispatch = () =>
+        dispatchInboundMessage({
+          ctx,
+          cfg,
+          dispatcher,
+          replyOptions: {
+            runId: clientRunId,
+            abortSignal: abortController.signal,
+            images: parsedImages.length > 0 ? parsedImages : undefined,
+            onAgentRunStart: (runId) => {
+              agentRunStarted = true;
+              const connId = typeof client?.connId === "string" ? client.connId : undefined;
+              const wantsToolEvents = hasGatewayClientCap(
+                client?.connect?.caps,
+                GATEWAY_CLIENT_CAPS.TOOL_EVENTS,
+              );
+              if (connId && wantsToolEvents) {
+                context.registerToolEventRecipient(runId, connId);
+                // Register for any other active runs *in the same session* so
+                // late-joining clients (e.g. page refresh mid-response) receive
+                // in-progress tool events without leaking cross-session data.
+                for (const [activeRunId, active] of context.chatAbortControllers) {
+                  if (activeRunId !== runId && active.sessionKey === p.sessionKey) {
+                    context.registerToolEventRecipient(activeRunId, connId);
+                  }
                 }
               }
-            }
+            },
+            onModelSelected,
           },
-          onModelSelected,
-        },
-      })
+        });
+
+      // Route through the global execution pool for cross-tenant fairness.
+      // In single-tenant mode (no pool or no tenant context), execute directly.
+      const tenantId = getTenantIdFromContext();
+      const pooledDispatch =
+        tenantId && context.executionPool
+          ? context.executionPool.submit({ tenantId, execute: chatDispatch })
+          : chatDispatch();
+
+      void pooledDispatch
         .then(() => {
           if (!agentRunStarted) {
             const combinedReply = finalReplyParts

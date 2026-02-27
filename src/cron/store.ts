@@ -1,13 +1,18 @@
 import fs from "node:fs";
 import path from "node:path";
 import JSON5 from "json5";
+import { resolveStateDir } from "../config/paths.js";
 import { expandHomePrefix } from "../infra/home-dir.js";
-import { CONFIG_DIR } from "../utils.js";
 import type { CronStoreFile } from "./types.js";
 
-export const DEFAULT_CRON_DIR = path.join(CONFIG_DIR, "cron");
-export const DEFAULT_CRON_STORE_PATH = path.join(DEFAULT_CRON_DIR, "jobs.json");
-
+/**
+ * Resolve the cron store path.
+ *
+ * When no explicit `storePath` is provided, resolves dynamically via
+ * `resolveStateDir()` which respects the current tenant context
+ * (AsyncLocalStorage). This ensures each tenant gets its own cron store
+ * in multi-tenant mode.
+ */
 export function resolveCronStorePath(storePath?: string) {
   if (storePath?.trim()) {
     const raw = storePath.trim();
@@ -16,7 +21,7 @@ export function resolveCronStorePath(storePath?: string) {
     }
     return path.resolve(raw);
   }
-  return DEFAULT_CRON_STORE_PATH;
+  return path.join(resolveStateDir(), "cron", "jobs.json");
 }
 
 export async function loadCronStore(storePath: string): Promise<CronStoreFile> {

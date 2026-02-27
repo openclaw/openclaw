@@ -18,6 +18,7 @@ import {
   writeConfigFile,
 } from "../config/config.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
+import { getTenantContext, getTenantIdFromContext } from "../config/tenant-context.js";
 import { clearAgentRunContext, onAgentEvent } from "../infra/agent-events.js";
 import {
   ensureControlUiAssetsBuilt,
@@ -50,11 +51,13 @@ import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.j
 import { startChannelHealthMonitor } from "./channel-health-monitor.js";
 import { startGatewayConfigReloader } from "./config-reload.js";
 import type { ControlUiRootState } from "./control-ui.js";
+import { CronServiceRegistry } from "./cron-registry.js";
 import {
   GATEWAY_EVENT_UPDATE_AVAILABLE,
   type GatewayUpdateAvailableEventPayload,
 } from "./events.js";
 import { ExecApprovalManager } from "./exec-approval-manager.js";
+import { GlobalExecutionPool } from "./execution-pool.js";
 import { NodeRegistry } from "./node-registry.js";
 import type { startBrowserControlServerIfEnabled } from "./server-browser.js";
 import { createChannelManager } from "./server-channels.js";
@@ -442,6 +445,15 @@ export async function startGatewayServer(
   // which are standalone API callers.
   deps.sendMessageWebchat = createSendWebchat({ broadcast, nodeSendToSession });
 
+  // Global execution pool: shared by cron and chat for cross-tenant fairness.
+  const executionPool = new GlobalExecutionPool();
+  const cronRegistry = new CronServiceRegistry({
+    deps,
+    broadcast,
+    executionPool,
+  });
+
+  // Default (non-tenant) CronService for single-tenant backward compatibility.
   let cronState = buildGatewayCronService({
     cfg: cfgAtStart,
     deps,
@@ -561,6 +573,10 @@ export async function startGatewayServer(
 
   if (!minimalTestGateway) {
     void cron.start().catch((err) => logCron.error(`failed to start: ${String(err)}`));
+    // Scan existing tenant data dirs and start their per-tenant cron services
+    void cronRegistry
+      .startExisting()
+      .catch((err) => logCron.error(`failed to start tenant cron services: ${String(err)}`));
   }
 
   // Recover pending outbound deliveries from previous crash/restart.
@@ -607,8 +623,26 @@ export async function startGatewayServer(
     broadcast,
     context: {
       deps,
-      cron,
-      cronStorePath,
+      executionPool,
+      get cron() {
+        // In multi-tenant context, resolve the per-tenant CronService.
+        // The getter fires when context.cron is accessed from an RPC handler,
+        // which runs inside runWithTenantContextAsync — so ALS is active.
+        const tenantId = getTenantIdFromContext();
+        if (tenantId) {
+          const tenantCtx = getTenantContext()!;
+          return cronRegistry.getOrCreate(tenantCtx).cron;
+        }
+        return cron;
+      },
+      get cronStorePath() {
+        const tenantId = getTenantIdFromContext();
+        if (tenantId) {
+          const tenantCtx = getTenantContext()!;
+          return cronRegistry.getOrCreate(tenantCtx).storePath;
+        }
+        return cronStorePath;
+      },
       execApprovalManager,
       loadGatewayModelCatalog,
       getHealthCache,
@@ -763,6 +797,7 @@ export async function startGatewayServer(
     stopChannel,
     pluginServices,
     cron,
+    cronRegistry,
     heartbeatRunner,
     updateCheckStop: stopGatewayUpdateCheck,
     nodePresenceTimers,
@@ -800,6 +835,7 @@ export async function startGatewayServer(
       authRateLimiter?.dispose();
       browserAuthRateLimiter.dispose();
       channelHealthMonitor?.stop();
+      executionPool.stop();
       await close(opts);
     },
   };

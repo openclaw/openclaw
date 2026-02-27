@@ -337,6 +337,22 @@ export function attachGatewayWsConnectionHandler(params: {
       clearHandshakeTimer: () => clearTimeout(handshakeTimer),
       getClient: () => client,
       setClient: (next) => {
+        // Evict any existing client with the same client.id to prevent
+        // stale connections from accumulating after unclean reconnects.
+        const nextClientId = next.connect.client.id;
+        for (const existing of clients) {
+          if (existing.connect.client.id === nextClientId && existing.connId !== next.connId) {
+            logWsControl.warn(
+              `evicting stale conn=${existing.connId} superseded by conn=${next.connId} (client.id=${nextClientId})`,
+            );
+            try {
+              existing.socket.close(4001, "superseded");
+            } catch {
+              /* ignore — socket may already be closed */
+            }
+            clients.delete(existing);
+          }
+        }
         client = next;
         clients.add(next);
       },
