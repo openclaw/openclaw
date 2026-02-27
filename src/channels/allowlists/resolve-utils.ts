@@ -166,3 +166,32 @@ export function summarizeMapping(
     runtime.log?.(lines.join("\n"));
   }
 }
+
+/** Log resolved IDs grouped by section (channels, guilds, unresolved), mirroring the
+ *  interactive `noteChannelLookupSummary` output so hot-reload and startup show the same info. */
+export function logResolutionSummary(
+  label: string,
+  sections: Array<{ title: string; values: string[] }>,
+  unresolved: string[],
+  runtime: RuntimeEnv,
+): void {
+  const lines: string[] = [];
+  for (const section of sections) {
+    if (section.values.length === 0) {
+      continue;
+    }
+    const sample = section.values.slice(0, 8);
+    const suffix =
+      section.values.length > sample.length ? ` (+${section.values.length - sample.length})` : "";
+    lines.push(`${label}: ${section.title}: ${sample.join(", ")}${suffix}`);
+  }
+  if (unresolved.length > 0) {
+    const sample = unresolved.slice(0, 8);
+    const suffix =
+      unresolved.length > sample.length ? ` (+${unresolved.length - sample.length})` : "";
+    lines.push(`${label}: unresolved (kept as typed): ${sample.join(", ")}${suffix}`);
+  }
+  if (lines.length > 0) {
+    runtime.log?.(lines.join("\n"));
+  }
+}

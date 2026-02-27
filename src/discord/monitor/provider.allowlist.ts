@@ -2,6 +2,7 @@ import {
   addAllowlistUserEntriesFromConfigEntry,
   buildAllowlistResolutionSummary,
   canonicalizeAllowlistWithResolvedIds,
+  logResolutionSummary,
   patchAllowlistUsersInConfigEntries,
   summarizeMapping,
 } from "../../channels/allowlists/resolve-utils.js";
@@ -190,6 +191,23 @@ async function resolveGuildEntriesByChannelAllowlist(params: {
       }
     }
     summarizeMapping("discord channels", mapping, unresolved, params.runtime);
+    // Log the resolved channel/guild IDs separately so hot-reload and startup
+    // show the same friendly summary as interactive config edit.
+    const resolvedChannelIds = resolved
+      .filter((e) => e.resolved && e.channelId)
+      .map((e) => e.channelId as string);
+    const resolvedGuildIds = resolved
+      .filter((e) => e.resolved && e.guildId && !e.channelId)
+      .map((e) => e.guildId as string);
+    logResolutionSummary(
+      "discord",
+      [
+        { title: "resolved channels", values: resolvedChannelIds },
+        { title: "resolved guilds", values: resolvedGuildIds },
+      ],
+      unresolved,
+      params.runtime,
+    );
     return nextGuilds;
   } catch (err) {
     params.runtime.log?.(

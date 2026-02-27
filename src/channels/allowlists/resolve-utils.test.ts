@@ -1,8 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import type { RuntimeEnv } from "../../runtime.js";
 import {
   addAllowlistUserEntriesFromConfigEntry,
   buildAllowlistResolutionSummary,
   canonicalizeAllowlistWithResolvedIds,
+  logResolutionSummary,
   patchAllowlistUsersInConfigEntries,
 } from "./resolve-utils.js";
 
@@ -92,5 +94,56 @@ describe("patchAllowlistUsersInConfigEntries", () => {
     });
     expect((patched.alpha as { users: string[] }).users).toEqual(["111", "Bob"]);
     expect((patched.beta as { users: string[] }).users).toEqual(["*"]);
+  });
+});
+
+describe("logResolutionSummary", () => {
+  it("logs resolved sections and unresolved entries via runtime.log", () => {
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() } as unknown as RuntimeEnv;
+    logResolutionSummary(
+      "discord",
+      [
+        { title: "resolved channels", values: ["c1", "c2"] },
+        { title: "resolved guilds", values: ["g1"] },
+      ],
+      ["unknown-entry"],
+      runtime,
+    );
+    expect(runtime.log).toHaveBeenCalledOnce();
+    const logged = (runtime.log as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
+    expect(logged).toContain("discord: resolved channels: c1, c2");
+    expect(logged).toContain("discord: resolved guilds: g1");
+    expect(logged).toContain("discord: unresolved (kept as typed): unknown-entry");
+  });
+
+  it("skips empty sections", () => {
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() } as unknown as RuntimeEnv;
+    logResolutionSummary(
+      "discord",
+      [
+        { title: "resolved channels", values: [] },
+        { title: "resolved guilds", values: ["g1"] },
+      ],
+      [],
+      runtime,
+    );
+    const logged = (runtime.log as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
+    expect(logged).not.toContain("resolved channels");
+    expect(logged).toContain("discord: resolved guilds: g1");
+  });
+
+  it("does not log when there is nothing to report", () => {
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() } as unknown as RuntimeEnv;
+    logResolutionSummary("discord", [{ title: "resolved channels", values: [] }], [], runtime);
+    expect(runtime.log).not.toHaveBeenCalled();
+  });
+
+  it("truncates long lists with count suffix", () => {
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() } as unknown as RuntimeEnv;
+    const values = Array.from({ length: 12 }, (_, i) => `c${i}`);
+    logResolutionSummary("discord", [{ title: "resolved channels", values }], [], runtime);
+    const logged = (runtime.log as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
+    expect(logged).toContain("(+4)");
+    expect(logged).not.toContain("c8");
   });
 });
