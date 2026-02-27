@@ -28,14 +28,17 @@ function isLocalEndpoint(url: string): boolean {
   try {
     const parsed = new URL(url);
     const host = parsed.hostname.toLowerCase();
+    // Handle IPv6 localhost: URL.hostname returns "[::1]" for ::1
+    const normalizedHost = host.replace(/^\[|\]$/g, "");
     return (
-      host === "localhost" ||
-      host === "127.0.0.1" ||
-      host === "::1" ||
-      host.startsWith("192.168.") ||
-      host.startsWith("10.") ||
-      host.startsWith("172.16.") ||
-      host.endsWith(".local")
+      normalizedHost === "localhost" ||
+      normalizedHost === "127.0.0.1" ||
+      normalizedHost === "::1" ||
+      normalizedHost.startsWith("192.168.") ||
+      normalizedHost.startsWith("10.") ||
+      // RFC1918 172.16.0.0/12 covers 172.16.x.x through 172.31.x.x
+      /^172\.(1[6-9]|2[0-9]|3[01])\./.test(normalizedHost) ||
+      normalizedHost.endsWith(".local")
     );
   } catch {
     return false;
