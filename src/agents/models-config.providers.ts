@@ -236,6 +236,38 @@ export function resolveOllamaApiBase(configuredBaseUrl?: string): string {
   return trimmed.replace(/\/v1$/i, "");
 }
 
+async function queryOllamaContextWindow(
+  apiBase: string,
+  modelName: string,
+): Promise<number | undefined> {
+  try {
+    const response = await fetch(`${apiBase}/api/show`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: modelName }),
+      signal: AbortSignal.timeout(3000),
+    });
+    if (!response.ok) {
+      return undefined;
+    }
+    const data = (await response.json()) as { model_info?: Record<string, unknown> };
+    if (!data.model_info) {
+      return undefined;
+    }
+    for (const [key, value] of Object.entries(data.model_info)) {
+      if (key.endsWith(".context_length") && typeof value === "number" && Number.isFinite(value)) {
+        const contextWindow = Math.floor(value);
+        if (contextWindow > 0) {
+          return contextWindow;
+        }
+      }
+    }
+    return undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 async function discoverOllamaModels(
   baseUrl?: string,
   opts?: { quiet?: boolean },
@@ -260,20 +292,28 @@ async function discoverOllamaModels(
       log.debug("No Ollama models found on local instance");
       return [];
     }
-    return data.models.map((model) => {
-      const modelId = model.name;
-      const isReasoning =
-        modelId.toLowerCase().includes("r1") || modelId.toLowerCase().includes("reasoning");
-      return {
-        id: modelId,
-        name: modelId,
-        reasoning: isReasoning,
-        input: ["text"],
-        cost: OLLAMA_DEFAULT_COST,
-        contextWindow: OLLAMA_DEFAULT_CONTEXT_WINDOW,
-        maxTokens: OLLAMA_DEFAULT_MAX_TOKENS,
-      };
-    });
+    const discovered = await Promise.allSettled(
+      data.models.map(async (model) => {
+        const modelId = model.name;
+        const contextWindow = await queryOllamaContextWindow(apiBase, modelId);
+        const isReasoning =
+          modelId.toLowerCase().includes("r1") || modelId.toLowerCase().includes("reasoning");
+        return {
+          id: modelId,
+          name: modelId,
+          reasoning: isReasoning,
+          input: ["text"],
+          cost: OLLAMA_DEFAULT_COST,
+          contextWindow: contextWindow ?? OLLAMA_DEFAULT_CONTEXT_WINDOW,
+          maxTokens: OLLAMA_DEFAULT_MAX_TOKENS,
+        } satisfies ModelDefinitionConfig;
+      }),
+    );
+    return discovered
+      .filter((result): result is PromiseFulfilledResult<ModelDefinitionConfig> => {
+        return result.status === "fulfilled";
+      })
+      .map((result) => result.value);
   } catch (error) {
     if (!opts?.quiet) {
       log.warn(`Failed to discover Ollama models: ${String(error)}`);

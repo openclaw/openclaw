@@ -15,6 +15,22 @@ type ModelsConfig = NonNullable<OpenClawConfig["models"]>;
 
 const DEFAULT_MODE: NonNullable<ModelsConfig["mode"]> = "merge";
 
+function resolvePreferredTokenLimit(
+  explicitValue: unknown,
+  implicitValue: unknown,
+): number | undefined {
+  const implicit = typeof implicitValue === "number" ? implicitValue : undefined;
+  if (typeof explicitValue !== "number") {
+    return implicit;
+  }
+  if (implicit === undefined) {
+    return explicitValue;
+  }
+  // Keep catalog refresh behavior for stale low values while preserving
+  // intentional larger user overrides (for example Ollama >128k contexts).
+  return explicitValue > implicit ? explicitValue : implicit;
+}
+
 function mergeProviderModels(implicit: ProviderConfig, explicit: ProviderConfig): ProviderConfig {
   const implicitModels = Array.isArray(implicit.models) ? implicit.models : [];
   const explicitModels = Array.isArray(explicit.models) ? explicit.models : [];
@@ -55,8 +71,11 @@ function mergeProviderModels(implicit: ProviderConfig, explicit: ProviderConfig)
       ...explicitModel,
       input: implicitModel.input,
       reasoning: "reasoning" in explicitModel ? explicitModel.reasoning : implicitModel.reasoning,
-      contextWindow: implicitModel.contextWindow,
-      maxTokens: implicitModel.maxTokens,
+      contextWindow: resolvePreferredTokenLimit(
+        explicitModel.contextWindow,
+        implicitModel.contextWindow,
+      ),
+      maxTokens: resolvePreferredTokenLimit(explicitModel.maxTokens, implicitModel.maxTokens),
     };
   });
 
