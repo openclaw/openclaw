@@ -101,9 +101,9 @@ export function sanitizeThinkingForRecovery(messages: AgentMessage[]): {
       return { messages, prefill: false };
 
     case "incomplete-thinking":
-      // Drop the entire message
+      // Drop only the incomplete assistant message, preserve any subsequent turns
       return {
-        messages: messages.slice(0, lastAssistantIdx),
+        messages: [...messages.slice(0, lastAssistantIdx), ...messages.slice(lastAssistantIdx + 1)],
         prefill: false,
       };
 

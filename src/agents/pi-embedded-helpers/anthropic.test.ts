@@ -29,6 +29,23 @@ describe("sanitizeThinkingForRecovery", () => {
     expect(result.prefill).toBe(false);
   });
 
+  it("preserves trailing turns when dropping incomplete assistant (user turn after)", () => {
+    const messages: AgentMessage[] = [
+      { role: "user", content: "hello" } as AgentMessage,
+      {
+        role: "assistant",
+        content: [{ type: "thinking", thinking: "partial thought...", signature: undefined }],
+      } as AgentMessage,
+      { role: "user", content: "follow up question" } as AgentMessage,
+    ];
+    const result = sanitizeThinkingForRecovery(messages);
+    expect(result.messages).toEqual([
+      { role: "user", content: "hello" },
+      { role: "user", content: "follow up question" },
+    ]);
+    expect(result.prefill).toBe(false);
+  });
+
   it("marks prefill when thinking is signed but no text block exists (crash between phases)", () => {
     const messages: AgentMessage[] = [
       { role: "user", content: "hello" } as AgentMessage,
