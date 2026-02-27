@@ -17,7 +17,8 @@ import {
 import {
   formatThreadBindingDisabledError,
   formatThreadBindingSpawnDisabledError,
-  resolveThreadBindingSessionTtlMsForChannel,
+  resolveThreadBindingIdleTimeoutMsForChannel,
+  resolveThreadBindingMaxAgeMsForChannel,
   resolveThreadBindingSpawnPolicy,
 } from "../channels/thread-bindings-policy.js";
 import { loadConfig } from "../config/config.js";
@@ -329,7 +330,12 @@ export async function spawnAcpDirect(
           introText: resolveThreadBindingIntroText({
             agentId: targetAgentId,
             label: params.label || undefined,
-            sessionTtlMs: resolveThreadBindingSessionTtlMsForChannel({
+            idleTimeoutMs: resolveThreadBindingIdleTimeoutMsForChannel({
+              cfg,
+              channel: preparedBinding.channel,
+              accountId: preparedBinding.accountId,
+            }),
+            maxAgeMs: resolveThreadBindingMaxAgeMsForChannel({
               cfg,
               channel: preparedBinding.channel,
               accountId: preparedBinding.accountId,

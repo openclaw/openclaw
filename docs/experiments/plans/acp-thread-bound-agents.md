@@ -638,7 +638,7 @@ Add independent ACP dispatch kill switch:
 
 - `/focus <sessionKey>` continues to support ACP targets
 - `/unfocus` keeps current semantics
-- `/session ttl` remains the top level TTL override
+- `/session idle` and `/session max-age` replace the old TTL override
 
 ## Phased rollout
 

@@ -1,5 +1,5 @@
 export {
-  formatThreadBindingTtlLabel,
+  formatThreadBindingDurationLabel,
   resolveThreadBindingFarewellText,
   resolveThreadBindingIntroText,
   resolveThreadBindingThreadName,

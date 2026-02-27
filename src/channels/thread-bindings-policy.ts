@@ -2,11 +2,13 @@ import type { OpenClawConfig } from "../config/config.js";
 import { normalizeAccountId } from "../routing/session-key.js";
 
 export const DISCORD_THREAD_BINDING_CHANNEL = "discord";
-const DEFAULT_THREAD_BINDING_TTL_HOURS = 24;
+const DEFAULT_THREAD_BINDING_IDLE_HOURS = 24;
+const DEFAULT_THREAD_BINDING_MAX_AGE_HOURS = 0;
 
 type SessionThreadBindingsConfigShape = {
   enabled?: unknown;
-  ttlHours?: unknown;
+  idleHours?: unknown;
+  maxAgeHours?: unknown;
   spawnSubagentSessions?: unknown;
   spawnAcpSessions?: unknown;
 };
@@ -38,7 +40,7 @@ function normalizeBoolean(value: unknown): boolean | undefined {
   return value;
 }
 
-function normalizeThreadBindingTtlHours(raw: unknown): number | undefined {
+function normalizeThreadBindingHours(raw: unknown): number | undefined {
   if (typeof raw !== "number" || !Number.isFinite(raw)) {
     return undefined;
   }
@@ -48,15 +50,26 @@ function normalizeThreadBindingTtlHours(raw: unknown): number | undefined {
   return raw;
 }
 
-export function resolveThreadBindingSessionTtlMs(params: {
-  channelTtlHoursRaw: unknown;
-  sessionTtlHoursRaw: unknown;
+export function resolveThreadBindingIdleTimeoutMs(params: {
+  channelIdleHoursRaw: unknown;
+  sessionIdleHoursRaw: unknown;
 }): number {
-  const ttlHours =
-    normalizeThreadBindingTtlHours(params.channelTtlHoursRaw) ??
-    normalizeThreadBindingTtlHours(params.sessionTtlHoursRaw) ??
-    DEFAULT_THREAD_BINDING_TTL_HOURS;
-  return Math.floor(ttlHours * 60 * 60 * 1000);
+  const idleHours =
+    normalizeThreadBindingHours(params.channelIdleHoursRaw) ??
+    normalizeThreadBindingHours(params.sessionIdleHoursRaw) ??
+    DEFAULT_THREAD_BINDING_IDLE_HOURS;
+  return Math.floor(idleHours * 60 * 60 * 1000);
+}
+
+export function resolveThreadBindingMaxAgeMs(params: {
+  channelMaxAgeHoursRaw: unknown;
+  sessionMaxAgeHoursRaw: unknown;
+}): number {
+  const maxAgeHours =
+    normalizeThreadBindingHours(params.channelMaxAgeHoursRaw) ??
+    normalizeThreadBindingHours(params.sessionMaxAgeHoursRaw) ??
+    DEFAULT_THREAD_BINDING_MAX_AGE_HOURS;
+  return Math.floor(maxAgeHours * 60 * 60 * 1000);
 }
 
 export function resolveThreadBindingsEnabled(params: {
@@ -124,7 +137,7 @@ export function resolveThreadBindingSpawnPolicy(params: {
   };
 }
 
-export function resolveThreadBindingSessionTtlMsForChannel(params: {
+export function resolveThreadBindingIdleTimeoutMsForChannel(params: {
   cfg: OpenClawConfig;
   channel: string;
   accountId?: string;
@@ -136,9 +149,27 @@ export function resolveThreadBindingSessionTtlMsForChannel(params: {
     channel,
     accountId,
   });
-  return resolveThreadBindingSessionTtlMs({
-    channelTtlHoursRaw: account?.ttlHours ?? root?.ttlHours,
-    sessionTtlHoursRaw: params.cfg.session?.threadBindings?.ttlHours,
+  return resolveThreadBindingIdleTimeoutMs({
+    channelIdleHoursRaw: account?.idleHours ?? root?.idleHours,
+    sessionIdleHoursRaw: params.cfg.session?.threadBindings?.idleHours,
+  });
+}
+
+export function resolveThreadBindingMaxAgeMsForChannel(params: {
+  cfg: OpenClawConfig;
+  channel: string;
+  accountId?: string;
+}): number {
+  const channel = normalizeChannelId(params.channel);
+  const accountId = normalizeAccountId(params.accountId);
+  const { root, account } = resolveChannelThreadBindings({
+    cfg: params.cfg,
+    channel,
+    accountId,
+  });
+  return resolveThreadBindingMaxAgeMs({
+    channelMaxAgeHoursRaw: account?.maxAgeHours ?? root?.maxAgeHours,
+    sessionMaxAgeHoursRaw: params.cfg.session?.threadBindings?.maxAgeHours,
   });
 }
 

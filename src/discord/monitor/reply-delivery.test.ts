@@ -210,6 +210,31 @@ describe("deliverDiscordReply", () => {
     expect(sendMessageDiscordMock).not.toHaveBeenCalled();
   });
 
+  it("touches bound-thread activity after outbound delivery", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-02-20T00:00:00.000Z"));
+      const threadBindings = await createBoundThreadBindings();
+      vi.setSystemTime(new Date("2026-02-20T00:02:00.000Z"));
+
+      await deliverDiscordReply({
+        replies: [{ text: "Activity ping" }],
+        target: "channel:thread-1",
+        token: "token",
+        runtime,
+        textLimit: 2000,
+        sessionKey: "agent:main:subagent:child",
+        threadBindings,
+      });
+
+      expect(threadBindings.getByThreadId("thread-1")?.lastActivityAt).toBe(
+        new Date("2026-02-20T00:02:00.000Z").getTime(),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("falls back to bot send when webhook delivery fails", async () => {
     const threadBindings = await createBoundThreadBindings();
     sendWebhookMessageDiscordMock.mockRejectedValueOnce(new Error("rate limited"));
