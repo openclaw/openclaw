@@ -395,6 +395,7 @@ export function buildGatewayCronService(params: {
                 void sendFailureNotificationAnnounce(
                   params.deps,
                   agentId,
+                  job.id,
                   {
                     channel: failureDest.channel,
                     to: failureDest.to,

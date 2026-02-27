@@ -127,7 +127,8 @@ describe("resolveFailureDestination", () => {
     const result = resolveFailureDestination(job, globalConfig);
     expect(result).not.toBeNull();
     expect(result?.mode).toBe("webhook");
-    expect(result?.channel).toBeUndefined(); // webhook mode doesn't use channel
+    // webhook mode uses 'to' field for URL, channel is not applicable
+    expect(result?.channel).toBeUndefined();
     expect(result?.to).toBe("#global-alerts");
   });
 
@@ -219,5 +220,54 @@ describe("resolveFailureDestination", () => {
     });
     const result = resolveFailureDestination(job);
     expect(result?.mode).toBe("announce");
+  });
+
+  it("returns null when failureDestination matches primary delivery (duplicate prevention)", () => {
+    const job = makeJob({
+      delivery: {
+        mode: "announce",
+        channel: "telegram",
+        to: "123",
+        failureDestination: {
+          channel: "telegram",
+          to: "123",
+        },
+      },
+    });
+    const result = resolveFailureDestination(job);
+    expect(result).toBeNull();
+  });
+
+  it("returns null when failureDestination webhook matches primary webhook", () => {
+    const job = makeJob({
+      delivery: {
+        mode: "webhook",
+        to: "https://example.com/webhook",
+        failureDestination: {
+          to: "https://example.com/webhook",
+          mode: "webhook",
+        },
+      },
+    });
+    const result = resolveFailureDestination(job);
+    expect(result).toBeNull();
+  });
+
+  it("allows different failureDestination from primary delivery", () => {
+    const job = makeJob({
+      delivery: {
+        mode: "announce",
+        channel: "telegram",
+        to: "123",
+        failureDestination: {
+          channel: "slack",
+          to: "#alerts",
+        },
+      },
+    });
+    const result = resolveFailureDestination(job);
+    expect(result).not.toBeNull();
+    expect(result?.channel).toBe("slack");
+    expect(result?.to).toBe("#alerts");
   });
 });

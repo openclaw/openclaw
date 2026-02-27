@@ -1,6 +1,6 @@
 import type { CliDeps } from "../cli/deps.js";
 import type { CronFailureDestinationConfig } from "../config/types.cron.js";
-import type { CronDeliveryMode, CronJob, CronMessageChannel } from "./types.js";
+import type { CronDelivery, CronDeliveryMode, CronJob, CronMessageChannel } from "./types.js";
 import { loadConfig } from "../config/config.js";
 import { resolveDeliveryTarget } from "./isolated-agent/delivery-target.js";
 import { deliverOutboundPayloads } from "../infra/outbound/deliver.js";
@@ -108,6 +108,13 @@ export type CronFailureDeliveryPlan = {
   accountId?: string;
 };
 
+export type CronFailureDestinationInput = {
+  channel?: CronMessageChannel;
+  to?: string;
+  accountId?: string;
+  mode?: "announce" | "webhook";
+};
+
 function normalizeFailureMode(value: unknown): "announce" | "webhook" | undefined {
   if (typeof value !== "string") {
     return undefined;
@@ -124,7 +131,7 @@ export function resolveFailureDestination(
   globalConfig?: CronFailureDestinationConfig,
 ): CronFailureDeliveryPlan | null {
   const delivery = job.delivery;
-  const jobFailureDest = delivery?.failureDestination;
+  const jobFailureDest = delivery?.failureDestination as CronFailureDestinationInput | undefined;
   const hasJobFailureDest = jobFailureDest && typeof jobFailureDest === "object";
 
   let channel: CronMessageChannel | undefined;
@@ -133,10 +140,10 @@ export function resolveFailureDestination(
   let mode: "announce" | "webhook" | undefined;
 
   if (hasJobFailureDest) {
-    channel = normalizeChannel((jobFailureDest as { channel?: unknown }).channel);
-    to = normalizeTo((jobFailureDest as { to?: unknown }).to);
-    accountId = normalizeAccountId((jobFailureDest as { accountId?: unknown }).accountId);
-    mode = normalizeFailureMode((jobFailureDest as { mode?: unknown }).mode);
+    channel = normalizeChannel(jobFailureDest.channel);
+    to = normalizeTo(jobFailureDest.to);
+    accountId = normalizeAccountId(jobFailureDest.accountId);
+    mode = normalizeFailureMode(jobFailureDest.mode);
   } else if (globalConfig) {
     channel = normalizeChannel(globalConfig.channel);
     to = normalizeTo(globalConfig.to);
@@ -149,12 +156,42 @@ export function resolveFailureDestination(
   }
 
   const resolvedMode = mode ?? "announce";
-  return {
+  const result: CronFailureDeliveryPlan = {
     mode: resolvedMode,
     channel: resolvedMode === "announce" ? (channel ?? "last") : undefined,
     to,
     accountId,
   };
+
+  if (delivery && isSameDeliveryTarget(delivery, result)) {
+    return null;
+  }
+
+  return result;
+}
+
+function isSameDeliveryTarget(
+  delivery: CronDelivery,
+  failurePlan: CronFailureDeliveryPlan,
+): boolean {
+  const primaryMode = delivery.mode ?? "none";
+  if (primaryMode === "none") {
+    return false;
+  }
+
+  const primaryChannel = delivery.channel;
+  const primaryTo = delivery.to;
+  const primaryAccountId = delivery.accountId;
+
+  if (failurePlan.mode === "webhook") {
+    return primaryMode === "webhook" && primaryTo === failurePlan.to;
+  }
+
+  return (
+    failurePlan.channel === primaryChannel &&
+    failurePlan.to === primaryTo &&
+    failurePlan.accountId === primaryAccountId
+  );
 }
 
 const FAILURE_NOTIFICATION_TIMEOUT_MS = 30_000;
@@ -163,6 +200,7 @@ const cronDeliveryLogger = getChildLogger({ subsystem: "cron-delivery" });
 export async function sendFailureNotificationAnnounce(
   deps: CliDeps,
   agentId: string,
+  jobId: string,
   target: { channel?: string; to?: string; accountId?: string },
   message: string,
 ): Promise<void> {
@@ -185,7 +223,7 @@ export async function sendFailureNotificationAnnounce(
   const session = buildOutboundSessionContext({
     cfg,
     agentId,
-    sessionKey: "cron:failure",
+    sessionKey: `cron:${jobId}:failure`,
   });
 
   const abortController = new AbortController();
