@@ -91,7 +91,7 @@ describe("fetchWithSsrFGuard hardening", () => {
     const result = await fetchWithSsrFGuard({
       url: "http://198.18.0.153/file",
       fetchImpl,
-      policy: { allowRfc2544BenchmarkRange: true },
+      policy: { allowCidrs: ["198.18.0.0/15"] },
     });
     expect(result.response.status).toBe(200);
   });

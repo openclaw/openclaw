@@ -517,6 +517,12 @@ export type ToolsConfig = {
         /** Timeout in seconds for Firecrawl requests. */
         timeoutSeconds?: number;
       };
+      ssrfPolicy?: {
+        /** Allow web_fetch to access private/internal network addresses (default: false). */
+        allowPrivateNetwork?: boolean;
+        /** CIDR ranges to allow through SSRF protection (e.g. '198.18.0.0/15', '10.0.0.0/8'). */
+        allowCidrs?: string[];
+      };
     };
   };
   media?: MediaToolsConfig;

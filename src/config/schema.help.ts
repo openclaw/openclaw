@@ -685,6 +685,10 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.web.fetch.firecrawl.maxAgeMs":
     "Firecrawl maxAge (ms) for cached results when supported by the API.",
   "tools.web.fetch.firecrawl.timeoutSeconds": "Timeout in seconds for Firecrawl requests.",
+  "tools.web.fetch.ssrfPolicy.allowPrivateNetwork":
+    "Allow web_fetch to access private/internal network addresses (default false). Use with caution.",
+  "tools.web.fetch.ssrfPolicy.allowCidrs":
+    "List of CIDR ranges (e.g. 198.18.0.0/15, 10.0.0.0/8) to allow through SSRF protection. Use for fake-IP proxy environments or trusted internal networks.",
   models:
     "Model catalog root for provider definitions, merge/replace behavior, and optional Bedrock discovery integration. Keep provider definitions explicit and validated before relying on production failover paths.",
   "models.mode":
