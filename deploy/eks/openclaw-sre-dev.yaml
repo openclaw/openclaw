@@ -40,10 +40,18 @@ spec:
             - |
               set -eu
               mkdir -p /state/skills/morpho-sre/references
+              mkdir -p /state/skills/morpho-sre/scripts
               cp /seed-config/openclaw.json /state/openclaw.json
               cp /seed-skills/SKILL.md /state/skills/morpho-sre/SKILL.md
               cp /seed-skills/repo-map.md /state/skills/morpho-sre/references/repo-map.md
+              cp /seed-skills/image-repo-map.sh /state/skills/morpho-sre/scripts/image-repo-map.sh
+              cp /seed-skills/grafana-api.sh /state/skills/morpho-sre/scripts/grafana-api.sh
+              chmod +x /state/skills/morpho-sre/scripts/image-repo-map.sh
+              chmod +x /state/skills/morpho-sre/scripts/grafana-api.sh
               cp /seed-skills/safety.md /state/skills/morpho-sre/references/safety.md
+              if [ -f /seed-skills/skills-bundle.tar.gz ]; then
+                tar -xzf /seed-skills/skills-bundle.tar.gz -C /state
+              fi
               chown -R 1000:1000 /state
           volumeMounts:
             - name: state
@@ -93,6 +101,33 @@ spec:
                 VAULT_TOKEN="$(curl -sS -X POST "${VAULT_ADDR}/v1/auth/${AUTH_PATH}/login" -H "Content-Type: application/json" --data "$LOGIN_BODY" | jq -r '.auth.client_token // empty')"
                 export VAULT_TOKEN
               fi
+              if [ -n "${GITHUB_APP_ID:-}" ] && [ -n "${GITHUB_APP_PRIVATE_KEY:-}" ] && command -v node >/dev/null 2>&1 && command -v curl >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
+                APP_JWT="$(GITHUB_APP_ID="$GITHUB_APP_ID" GITHUB_APP_PRIVATE_KEY="$GITHUB_APP_PRIVATE_KEY" node - <<'NODE'
+              const crypto = require('crypto');
+              const appId = process.env.GITHUB_APP_ID;
+              const keyRaw = process.env.GITHUB_APP_PRIVATE_KEY || '';
+              const key = keyRaw.replace(/\\n/g, '\n');
+              const now = Math.floor(Date.now() / 1000);
+              const header = { alg: 'RS256', typ: 'JWT' };
+              const payload = { iat: now - 60, exp: now + 540, iss: appId };
+              const b64 = (obj) => Buffer.from(JSON.stringify(obj)).toString('base64url');
+              const input = `${b64(header)}.${b64(payload)}`;
+              const signature = crypto.createSign('RSA-SHA256').update(input).sign(key, 'base64url');
+              process.stdout.write(`${input}.${signature}`);
+              NODE
+                )"
+                INSTALLATION_ID="${GITHUB_APP_INSTALLATION_ID:-}"
+                if [ -z "$INSTALLATION_ID" ]; then
+                  INSTALLATION_ID="$(curl -sS -H "Authorization: Bearer ${APP_JWT}" -H "Accept: application/vnd.github+json" https://api.github.com/app/installations | jq -r '.[] | select(.account.login=="morpho-org") | .id' | head -n1)"
+                fi
+                if [ -n "$INSTALLATION_ID" ]; then
+                  GITHUB_APP_TOKEN="$(curl -sS -X POST -H "Authorization: Bearer ${APP_JWT}" -H "Accept: application/vnd.github+json" "https://api.github.com/app/installations/${INSTALLATION_ID}/access_tokens" | jq -r '.token // empty')"
+                  if [ -n "$GITHUB_APP_TOKEN" ]; then
+                    export GITHUB_TOKEN="$GITHUB_APP_TOKEN"
+                    export GH_TOKEN="$GITHUB_APP_TOKEN"
+                  fi
+                fi
+              fi
               exec openclaw gateway --bind lan --port 18789 --allow-unconfigured
           envFrom:
             - secretRef:
@@ -126,18 +161,6 @@ spec:
                   name: carapulse-secrets
                   key: vault-token
                   optional: true
-            - name: BOUNDARY_ADDR
-              valueFrom:
-                secretKeyRef:
-                  name: carapulse-secrets
-                  key: boundary-addr
-                  optional: true
-            - name: BOUNDARY_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: carapulse-secrets
-                  key: boundary-token
-                  optional: true
             - name: ARGOCD_BASE_URL
               valueFrom:
                 secretKeyRef:
@@ -149,6 +172,30 @@ spec:
                 secretKeyRef:
                   name: carapulse-secrets
                   key: argocd-token
+                  optional: true
+            - name: ARGOCD_AUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: carapulse-secrets
+                  key: argocd-token
+                  optional: true
+            - name: GITHUB_APP_ID
+              valueFrom:
+                secretKeyRef:
+                  name: carapulse-secrets
+                  key: github-app-id
+                  optional: true
+            - name: GITHUB_APP_INSTALLATION_ID
+              valueFrom:
+                secretKeyRef:
+                  name: carapulse-secrets
+                  key: github-app-installation-id
+                  optional: true
+            - name: GITHUB_APP_PRIVATE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: carapulse-secrets
+                  key: github-app-private-key
                   optional: true
           ports:
             - name: http
