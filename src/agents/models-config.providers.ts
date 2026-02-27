@@ -166,6 +166,17 @@ const OPENROUTER_DEFAULT_COST = {
   cacheWrite: 0,
 };
 
+export const VIVGRID_BASE_URL = "https://api.vivgrid.com/v1";
+export const VIVGRID_DEFAULT_MODEL_ID = "auto";
+const VIVGRID_DEFAULT_CONTEXT_WINDOW = 262144;
+const VIVGRID_DEFAULT_MAX_TOKENS = 32768;
+const VIVGRID_DEFAULT_COST = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+};
+
 const VLLM_BASE_URL = "http://127.0.0.1:8000/v1";
 const VLLM_DEFAULT_CONTEXT_WINDOW = 128000;
 const VLLM_DEFAULT_MAX_TOKENS = 8192;
@@ -828,6 +839,24 @@ function buildOpenrouterProvider(): ProviderConfig {
   };
 }
 
+export function buildVivgridProvider(): ProviderConfig {
+  return {
+    baseUrl: VIVGRID_BASE_URL,
+    api: "openai-completions",
+    models: [
+      {
+        id: VIVGRID_DEFAULT_MODEL_ID,
+        name: "Vivgrid Auto",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: VIVGRID_DEFAULT_COST,
+        contextWindow: VIVGRID_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: VIVGRID_DEFAULT_MAX_TOKENS,
+      },
+    ],
+  };
+}
+
 async function buildVllmProvider(params?: {
   baseUrl?: string;
   apiKey?: string;
@@ -1134,6 +1163,13 @@ export async function resolveImplicitProviders(params: {
     resolveApiKeyFromProfiles({ provider: "kilocode", store: authStore });
   if (kilocodeKey) {
     providers.kilocode = { ...buildKilocodeProvider(), apiKey: kilocodeKey };
+  }
+
+  const vivgridKey =
+    resolveEnvApiKeyVarName("vivgrid") ??
+    resolveApiKeyFromProfiles({ provider: "vivgrid", store: authStore });
+  if (vivgridKey) {
+    providers.vivgrid = { ...buildVivgridProvider(), apiKey: vivgridKey };
   }
 
   return providers;

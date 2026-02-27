@@ -23,6 +23,7 @@ type OnboardProviderAuthOptionKey = keyof Pick<
   | "xaiApiKey"
   | "litellmApiKey"
   | "qianfanApiKey"
+  | "vivgridApiKey"
   | "volcengineApiKey"
   | "byteplusApiKey"
 >;
@@ -183,6 +184,13 @@ export const ONBOARD_PROVIDER_AUTH_FLAGS: ReadonlyArray<OnboardProviderAuthFlag>
     cliFlag: "--qianfan-api-key",
     cliOption: "--qianfan-api-key <key>",
     description: "QIANFAN API key",
+  },
+  {
+    optionKey: "vivgridApiKey",
+    authChoice: "vivgrid-api-key",
+    cliFlag: "--vivgrid-api-key",
+    cliOption: "--vivgrid-api-key <key>",
+    description: "Vivgrid API key",
   },
   {
     optionKey: "volcengineApiKey",
