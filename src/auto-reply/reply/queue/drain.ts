@@ -19,14 +19,24 @@ type OriginRoutingMetadata = Pick<
 >;
 
 function resolveOriginRoutingMetadata(items: FollowupRun[]): OriginRoutingMetadata {
+  // Use one concrete source item to avoid mixing channel/to/account/thread from
+  // different queued messages under concurrent traffic.
+  const source =
+    [...items]
+      .toReversed()
+      .find(
+        (item) =>
+          item.originatingChannel ||
+          item.originatingTo ||
+          item.originatingAccountId ||
+          (item.originatingThreadId != null && item.originatingThreadId !== ""),
+      ) ?? items.at(-1);
+
   return {
-    originatingChannel: items.find((item) => item.originatingChannel)?.originatingChannel,
-    originatingTo: items.find((item) => item.originatingTo)?.originatingTo,
-    originatingAccountId: items.find((item) => item.originatingAccountId)?.originatingAccountId,
-    // Support both number (Telegram topic) and string (Slack thread_ts) thread IDs.
-    originatingThreadId: items.find(
-      (item) => item.originatingThreadId != null && item.originatingThreadId !== "",
-    )?.originatingThreadId,
+    originatingChannel: source?.originatingChannel,
+    originatingTo: source?.originatingTo,
+    originatingAccountId: source?.originatingAccountId,
+    originatingThreadId: source?.originatingThreadId,
   };
 }
 

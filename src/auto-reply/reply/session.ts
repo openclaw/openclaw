@@ -440,25 +440,42 @@ export async function initSessionState(params: {
 
   const baseEntry = !isNewSession && freshEntry ? entry : undefined;
   // Track the originating channel/to for announce routing (subagent announce-back).
-  const originatingChannelRaw = ctx.OriginatingChannel as string | undefined;
+  // Synthetic providers (heartbeat/cron/exec events) should not mutate persistent
+  // delivery routing context used for user-originated replies.
+  const providerRaw = String(ctx.Provider ?? "")
+    .trim()
+    .toLowerCase();
+  const isSyntheticProvider =
+    providerRaw === "heartbeat" || providerRaw === "cron-event" || providerRaw === "exec-event";
+
+  const originatingChannelRaw = isSyntheticProvider
+    ? undefined
+    : (ctx.OriginatingChannel as string | undefined);
   const lastChannelRaw = resolveLastChannelRaw({
     originatingChannelRaw,
     persistedLastChannel: baseEntry?.lastChannel,
     sessionKey,
   });
+<<<<<<< HEAD
   const lastToRaw = resolveLastToRaw({
     originatingChannelRaw,
-    originatingToRaw: ctx.OriginatingTo,
-    toRaw: ctx.To,
+    originatingToRaw: isSyntheticProvider ? undefined : ctx.OriginatingTo,
+    toRaw: isSyntheticProvider ? undefined : ctx.To,
     persistedLastTo: baseEntry?.lastTo,
     persistedLastChannel: baseEntry?.lastChannel,
     sessionKey,
   });
-  const lastAccountIdRaw = ctx.AccountId || baseEntry?.lastAccountId;
+  const lastAccountIdRaw = isSyntheticProvider
+    ? baseEntry?.lastAccountId
+    : ctx.AccountId || baseEntry?.lastAccountId;
   // Only fall back to persisted threadId for thread sessions.  Non-thread
   // sessions (e.g. DM without topics) must not inherit a stale threadId from a
   // previous interaction that happened inside a topic/thread.
-  const lastThreadIdRaw = ctx.MessageThreadId || (isThread ? baseEntry?.lastThreadId : undefined);
+  const lastThreadIdRaw = isSyntheticProvider
+    ? isThread
+      ? baseEntry?.lastThreadId
+      : undefined
+    : ctx.MessageThreadId || (isThread ? baseEntry?.lastThreadId : undefined);
   const deliveryFields = normalizeSessionDeliveryFields({
     deliveryContext: {
       channel: lastChannelRaw,
