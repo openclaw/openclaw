@@ -178,6 +178,44 @@ describe("secret ref resolver", () => {
     expect(value).toBe("value:openai/api-key");
   });
 
+  it("uses timeoutMs as the default no-output timeout for exec providers", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-secrets-resolve-exec-delay-"));
+    cleanupRoots.push(root);
+    const scriptPath = path.join(root, "resolver-delay.mjs");
+    await writeSecureFile(
+      scriptPath,
+      [
+        "#!/usr/bin/env node",
+        "setTimeout(() => {",
+        "  process.stdout.write(JSON.stringify({ protocolVersion: 1, values: { delayed: 'ok' } }));",
+        "}, 2200);",
+      ].join("\n"),
+      0o700,
+    );
+
+    const value = await resolveSecretRefString(
+      { source: "exec", provider: "execmain", id: "delayed" },
+      {
+        config: {
+          secrets: {
+            providers: {
+              execmain: {
+                source: "exec",
+                command: scriptPath,
+                passEnv: ["PATH"],
+                timeoutMs: 5000,
+              },
+            },
+          },
+        },
+      },
+    );
+    expect(value).toBe("ok");
+  });
+
   it("supports non-JSON single-value exec output when jsonOnly is false", async () => {
     if (process.platform === "win32") {
       return;
