@@ -47,18 +47,12 @@ class NotificationsHandler private constructor(
   constructor(appContext: Context) : this(appContext = appContext, stateProvider = SystemNotificationsStateProvider)
 
   suspend fun handleNotificationsList(_paramsJson: String?): GatewaySession.InvokeResult {
-    val snapshot = stateProvider.readSnapshot(appContext)
-    if (snapshot.enabled && !snapshot.connected) {
-      stateProvider.requestServiceRebind(appContext)
-    }
+    val snapshot = readSnapshotWithRebind()
     return GatewaySession.InvokeResult.ok(snapshotPayloadJson(snapshot))
   }
 
   suspend fun handleNotificationsActions(paramsJson: String?): GatewaySession.InvokeResult {
-    val snapshot = stateProvider.readSnapshot(appContext)
-    if (snapshot.enabled && !snapshot.connected) {
-      stateProvider.requestServiceRebind(appContext)
-    }
+    readSnapshotWithRebind()
 
     val params = parseParamsObject(paramsJson)
       ?: return GatewaySession.InvokeResult.error(
@@ -119,6 +113,14 @@ class NotificationsHandler private constructor(
         put("action", JsonPrimitive(actionRaw))
       }.toString()
     return GatewaySession.InvokeResult.ok(payload)
+  }
+
+  private fun readSnapshotWithRebind(): DeviceNotificationSnapshot {
+    val snapshot = stateProvider.readSnapshot(appContext)
+    if (snapshot.enabled && !snapshot.connected) {
+      stateProvider.requestServiceRebind(appContext)
+    }
+    return snapshot
   }
 
   private fun snapshotPayloadJson(snapshot: DeviceNotificationSnapshot): String {
