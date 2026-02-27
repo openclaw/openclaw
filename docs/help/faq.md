@@ -2465,14 +2465,14 @@ Fix:
 
 <Warning>
 `--force` regenerates `gateway.cmd` from scratch and recreates the system service.
-Back up `gateway.cmd` first if you have customized it. On Windows, this also creates
-an NSSM service, which may conflict if you use Task Scheduler or another auto-start method.
+Back up `gateway.cmd` first if you have customized it. On Windows, this also recreates
+the Scheduled Task, which may conflict if you use another auto-start method.
 See [Gateway Troubleshooting](/gateway/troubleshooting#pairing-and-device-identity-state-changed) for details.
 </Warning>
 
 ```bash
 # back up gateway.cmd first if customized
-cp "$(openclaw gateway status --json | jq -r .gatewayCmd)" gateway.cmd.bak
+cp ~/.openclaw/gateway.cmd gateway.cmd.bak
 openclaw gateway install --force
 ```
 
