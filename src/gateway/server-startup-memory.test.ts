@@ -72,7 +72,9 @@ describe("startGatewayMemoryBackend", () => {
     await startGatewayMemoryBackend({ cfg, log });
 
     expect(log.warn).toHaveBeenCalledWith(
-      'qmd memory startup initialization failed for agent "main": qmd missing',
+      'qmd memory backend unavailable for agent "main": qmd missing. ' +
+        "Falling back to builtin provider; custom QMD paths will not be indexed. " +
+        'Run "openclaw doctor" for details.',
     );
     expect(log.info).toHaveBeenCalledWith(
       'qmd memory startup initialization armed for agent "ops"',

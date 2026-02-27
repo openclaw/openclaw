@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fsSync from "node:fs";
 import { resolveAgentDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveMemorySearchConfig } from "../agents/memory-search.js";
@@ -37,6 +38,24 @@ export async function noteMemorySearchHealth(
   // separate embedding provider is needed. Skip the provider check entirely.
   const backendConfig = resolveMemoryBackendConfig({ cfg, agentId });
   if (backendConfig.backend === "qmd") {
+    // Verify that the qmd binary is actually available on PATH.
+    const qmdCommand = backendConfig.qmd?.command ?? "qmd";
+    if (!isCommandOnPath(qmdCommand)) {
+      note(
+        [
+          `Memory backend is set to "qmd" but the "${qmdCommand}" binary was not found on PATH.`,
+          "Memory will silently fall back to the builtin provider, which only indexes",
+          "local memory/*.md files. Custom QMD paths (e.g. Obsidian vaults) will not be indexed.",
+          "",
+          "Fix (pick one):",
+          "- Install qmd: https://github.com/fynbos-dev/qmd",
+          `- Switch to builtin: ${formatCliCommand("openclaw config set memory.backend builtin")}`,
+          "",
+          `Verify: ${formatCliCommand("openclaw memory status --deep")}`,
+        ].join("\n"),
+        "Memory search",
+      );
+    }
     return;
   }
 
@@ -229,4 +248,15 @@ function buildGatewayProbeWarning(
   return detail
     ? `Gateway memory probe for default agent is not ready: ${detail}`
     : "Gateway memory probe for default agent is not ready.";
+}
+
+/** Lightweight check whether a command is resolvable via the system PATH. */
+export function isCommandOnPath(command: string): boolean {
+  const which = process.platform === "win32" ? "where" : "which";
+  try {
+    execFileSync(which, [command], { stdio: "ignore", timeout: 5_000 });
+    return true;
+  } catch {
+    return false;
+  }
 }

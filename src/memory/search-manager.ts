@@ -65,7 +65,9 @@ export async function getMemorySearchManager(params: {
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      log.warn(`qmd memory unavailable; falling back to builtin: ${message}`);
+      log.warn(
+        `qmd memory unavailable; falling back to builtin provider (custom QMD paths will not be indexed): ${message}`,
+      );
     }
   }
 

@@ -21,7 +21,9 @@ export async function startGatewayMemoryBackend(params: {
     const { manager, error } = await getMemorySearchManager({ cfg: params.cfg, agentId });
     if (!manager) {
       params.log.warn(
-        `qmd memory startup initialization failed for agent "${agentId}": ${error ?? "unknown error"}`,
+        `qmd memory backend unavailable for agent "${agentId}": ${error ?? "unknown error"}. ` +
+          "Falling back to builtin provider; custom QMD paths will not be indexed. " +
+          'Run "openclaw doctor" for details.',
       );
       continue;
     }

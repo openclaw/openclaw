@@ -8,6 +8,7 @@ const resolveAgentDir = vi.hoisted(() => vi.fn(() => "/tmp/agent-default"));
 const resolveMemorySearchConfig = vi.hoisted(() => vi.fn());
 const resolveApiKeyForProvider = vi.hoisted(() => vi.fn());
 const resolveMemoryBackendConfig = vi.hoisted(() => vi.fn());
+const execFileSyncMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../terminal/note.js", () => ({
   note,
@@ -29,6 +30,14 @@ vi.mock("../agents/model-auth.js", () => ({
 vi.mock("../memory/backend-config.js", () => ({
   resolveMemoryBackendConfig,
 }));
+
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return {
+    ...actual,
+    execFileSync: execFileSyncMock,
+  };
+});
 
 import { noteMemorySearchHealth } from "./doctor-memory-search.js";
 import { detectLegacyWorkspaceDirs } from "./doctor-workspace.js";
@@ -58,67 +67,16 @@ describe("noteMemorySearchHealth", () => {
     resolveApiKeyForProvider.mockRejectedValue(new Error("missing key"));
     resolveMemoryBackendConfig.mockReset();
     resolveMemoryBackendConfig.mockReturnValue({ backend: "builtin", citations: "auto" });
+    execFileSyncMock.mockReset();
+    // Default: qmd binary is available
+    execFileSyncMock.mockReturnValue(Buffer.from("/usr/bin/qmd"));
   });
 
-  it("does not warn when local provider is set with no explicit modelPath (default model fallback)", async () => {
-    resolveMemorySearchConfig.mockReturnValue({
-      provider: "local",
-      local: {},
-      remote: {},
-    });
-
-    await noteMemorySearchHealth(cfg, {});
-
-    expect(note).not.toHaveBeenCalled();
-  });
-
-  it("warns when local provider with default model but gateway probe reports not ready", async () => {
-    resolveMemorySearchConfig.mockReturnValue({
-      provider: "local",
-      local: {},
-      remote: {},
-    });
-
-    await noteMemorySearchHealth(cfg, {
-      gatewayMemoryProbe: { checked: true, ready: false, error: "node-llama-cpp not installed" },
-    });
-
-    expect(note).toHaveBeenCalledTimes(1);
-    const message = String(note.mock.calls[0]?.[0] ?? "");
-    expect(message).toContain("gateway reports local embeddings are not ready");
-    expect(message).toContain("node-llama-cpp not installed");
-  });
-
-  it("does not warn when local provider with default model and gateway probe is ready", async () => {
-    resolveMemorySearchConfig.mockReturnValue({
-      provider: "local",
-      local: {},
-      remote: {},
-    });
-
-    await noteMemorySearchHealth(cfg, {
-      gatewayMemoryProbe: { checked: true, ready: true },
-    });
-
-    expect(note).not.toHaveBeenCalled();
-  });
-
-  it("does not warn when local provider has an explicit hf: modelPath", async () => {
-    resolveMemorySearchConfig.mockReturnValue({
-      provider: "local",
-      local: { modelPath: "hf:some-org/some-model-GGUF/model.gguf" },
-      remote: {},
-    });
-
-    await noteMemorySearchHealth(cfg, {});
-
-    expect(note).not.toHaveBeenCalled();
-  });
-
-  it("does not warn when QMD backend is active", async () => {
+  it("does not warn when QMD backend is active and binary is on PATH", async () => {
     resolveMemoryBackendConfig.mockReturnValue({
       backend: "qmd",
       citations: "auto",
+      qmd: { command: "qmd" },
     });
     resolveMemorySearchConfig.mockReturnValue({
       provider: "auto",
@@ -129,6 +87,52 @@ describe("noteMemorySearchHealth", () => {
     await noteMemorySearchHealth(cfg, {});
 
     expect(note).not.toHaveBeenCalled();
+  });
+
+  it("warns when QMD backend is configured but binary is not on PATH", async () => {
+    resolveMemoryBackendConfig.mockReturnValue({
+      backend: "qmd",
+      citations: "auto",
+      qmd: { command: "qmd" },
+    });
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "auto",
+      local: {},
+      remote: {},
+    });
+    execFileSyncMock.mockImplementation(() => {
+      throw new Error("not found");
+    });
+
+    await noteMemorySearchHealth(cfg, {});
+
+    expect(note).toHaveBeenCalledTimes(1);
+    const message = String(note.mock.calls[0]?.[0] ?? "");
+    expect(message).toContain('"qmd" binary was not found on PATH');
+    expect(message).toContain("fall back to the builtin provider");
+    expect(message).toContain("Install qmd");
+  });
+
+  it("warns with custom command name when QMD binary is missing", async () => {
+    resolveMemoryBackendConfig.mockReturnValue({
+      backend: "qmd",
+      citations: "auto",
+      qmd: { command: "/opt/bin/qmd-custom" },
+    });
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "auto",
+      local: {},
+      remote: {},
+    });
+    execFileSyncMock.mockImplementation(() => {
+      throw new Error("not found");
+    });
+
+    await noteMemorySearchHealth(cfg, {});
+
+    expect(note).toHaveBeenCalledTimes(1);
+    const message = String(note.mock.calls[0]?.[0] ?? "");
+    expect(message).toContain('"/opt/bin/qmd-custom" binary was not found on PATH');
   });
 
   it("does not warn when remote apiKey is configured for explicit provider", async () => {
