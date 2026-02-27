@@ -54,6 +54,12 @@ export type ResolvedAgentRoute = {
     | "binding.account"
     | "binding.channel"
     | "default";
+  /**
+   * When true, the resolved agent (and the default fallback) are both restricted
+   * from the current chat type via `groupChat.allowedChatTypes`. Callers should
+   * skip message processing for this route.
+   */
+  blocked?: boolean;
 };
 
 export { DEFAULT_ACCOUNT_ID, DEFAULT_AGENT_ID } from "./session-key.js";
@@ -332,6 +338,16 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
     // only restricted agents are intended for that context (#25963).
     if (peer && !isAgentAllowedForChatType(input.cfg, resolvedAgentId, peer.kind)) {
       const defaultAgentId = pickFirstExistingAgentId(input.cfg, resolveDefaultAgentId(input.cfg));
+      // Also enforce allowedChatTypes on the default fallback agent so it cannot
+      // bypass the same restriction that blocked the binding-matched agent.
+      if (!isAgentAllowedForChatType(input.cfg, defaultAgentId, peer.kind)) {
+        if (shouldLogVerbose()) {
+          logDebug(
+            `[routing] agent ${resolvedAgentId} and default agent ${defaultAgentId} both not allowed for chat type ${peer.kind}; returning blocked route`,
+          );
+        }
+        return { ...buildRoute(defaultAgentId, "default"), blocked: true as const };
+      }
       if (shouldLogVerbose()) {
         logDebug(
           `[routing] agent ${resolvedAgentId} not allowed for chat type ${peer.kind}; falling back to default agent ${defaultAgentId}`,

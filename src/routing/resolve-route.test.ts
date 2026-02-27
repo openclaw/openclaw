@@ -703,3 +703,149 @@ describe("role-based agent routing", () => {
     });
   });
 });
+
+describe("allowedChatTypes enforcement on default fallback agent", () => {
+  test("binding-matched agent blocked, default agent also blocked → route.blocked=true", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [
+          {
+            id: "restricted",
+            groupChat: { allowedChatTypes: ["direct"] },
+          },
+          {
+            id: "home",
+            default: true,
+            groupChat: { allowedChatTypes: ["direct"] },
+          },
+        ],
+      },
+      bindings: [
+        {
+          agentId: "restricted",
+          match: { channel: "discord", guildId: "g1" },
+        },
+      ],
+    };
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "discord",
+      guildId: "g1",
+      peer: { kind: "channel", id: "c1" },
+    });
+    // Both agents are restricted to "direct" only, so a "channel" peer should be blocked.
+    expect(route.agentId).toBe("home");
+    expect(route.matchedBy).toBe("default");
+    expect(route.blocked).toBe(true);
+  });
+
+  test("binding-matched agent blocked, default agent allowed → falls back without blocked", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [
+          {
+            id: "restricted",
+            groupChat: { allowedChatTypes: ["direct"] },
+          },
+          {
+            id: "home",
+            default: true,
+            // No allowedChatTypes → unrestricted, allowed everywhere.
+          },
+        ],
+      },
+      bindings: [
+        {
+          agentId: "restricted",
+          match: { channel: "discord", guildId: "g1" },
+        },
+      ],
+    };
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "discord",
+      guildId: "g1",
+      peer: { kind: "channel", id: "c1" },
+    });
+    expect(route.agentId).toBe("home");
+    expect(route.matchedBy).toBe("default");
+    expect(route.blocked).toBeUndefined();
+  });
+
+  test("no binding matched, default agent blocked → route.blocked=true", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [
+          {
+            id: "home",
+            default: true,
+            groupChat: { allowedChatTypes: ["direct"] },
+          },
+        ],
+      },
+    };
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "whatsapp",
+      peer: { kind: "group", id: "group-1" },
+    });
+    // Default agent only allows "direct"; a "group" peer should be blocked.
+    expect(route.agentId).toBe("home");
+    expect(route.matchedBy).toBe("default");
+    expect(route.blocked).toBe(true);
+  });
+
+  test("no allowedChatTypes configured → no blocked field (backward compatible)", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [
+          {
+            id: "home",
+            default: true,
+            // No groupChat config at all.
+          },
+        ],
+      },
+    };
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "whatsapp",
+      peer: { kind: "group", id: "group-1" },
+    });
+    expect(route.agentId).toBe("home");
+    expect(route.matchedBy).toBe("default");
+    expect(route.blocked).toBeUndefined();
+  });
+
+  test("binding-matched agent allowed → normal routing, no blocked field", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [
+          {
+            id: "groupbot",
+            groupChat: { allowedChatTypes: ["channel", "group"] },
+          },
+          {
+            id: "home",
+            default: true,
+          },
+        ],
+      },
+      bindings: [
+        {
+          agentId: "groupbot",
+          match: { channel: "discord", guildId: "g1" },
+        },
+      ],
+    };
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "discord",
+      guildId: "g1",
+      peer: { kind: "channel", id: "c1" },
+    });
+    expect(route.agentId).toBe("groupbot");
+    expect(route.matchedBy).toBe("binding.guild");
+    expect(route.blocked).toBeUndefined();
+  });
+});
