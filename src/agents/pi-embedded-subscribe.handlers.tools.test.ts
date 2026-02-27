@@ -339,3 +339,107 @@ describe("messaging tool media URL tracking", () => {
     expect(ctx.state.pendingMessagingMediaUrls.has("tool-m3")).toBe(false);
   });
 });
+
+describe("handleToolExecutionEnd late event after unsubscribe", () => {
+  it("commits pending messaging text when tool-end arrives after unsubscribe", async () => {
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "message",
+      toolCallId: "tool-late-text",
+      args: { action: "send", to: "channel:123", content: "hello" },
+    } as never);
+
+    ctx.state.unsubscribed = true;
+
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "message",
+      toolCallId: "tool-late-text",
+      isError: false,
+      result: { ok: true },
+    } as never);
+
+    expect(ctx.state.messagingToolSentTexts).toContain("hello");
+    expect(ctx.state.pendingMessagingTexts.has("tool-late-text")).toBe(false);
+  });
+
+  it("does not push to toolMetas when tool-end arrives after unsubscribe", async () => {
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "exec",
+      toolCallId: "tool-late-meta",
+      args: { command: "echo hi" },
+    } as never);
+
+    ctx.state.unsubscribed = true;
+    const toolMetasBefore = ctx.state.toolMetas.length;
+
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "exec",
+      toolCallId: "tool-late-meta",
+      isError: false,
+      result: { output: "hi" },
+    } as never);
+
+    expect(ctx.state.toolMetas.length).toBe(toolMetasBefore);
+  });
+
+  it("does not clear lastToolError when a successful late tool-end arrives after unsubscribe", async () => {
+    const { ctx } = createTestContext();
+
+    ctx.state.lastToolError = {
+      toolName: "message",
+      meta: undefined,
+      error: "previous error",
+      mutatingAction: false,
+      actionFingerprint: undefined,
+    };
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "exec",
+      toolCallId: "tool-late-success",
+      args: { command: "echo hi" },
+    } as never);
+
+    ctx.state.unsubscribed = true;
+
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "exec",
+      toolCallId: "tool-late-success",
+      isError: false,
+      result: { output: "hi" },
+    } as never);
+
+    expect(ctx.state.lastToolError?.error).toBe("previous error");
+  });
+
+  it("does not set lastToolError when a failed late tool-end arrives after unsubscribe", async () => {
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "exec",
+      toolCallId: "tool-late-fail",
+      args: { command: "echo hi" },
+    } as never);
+
+    ctx.state.unsubscribed = true;
+
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "exec",
+      toolCallId: "tool-late-fail",
+      isError: true,
+      result: "Error: failed",
+    } as never);
+
+    expect(ctx.state.lastToolError).toBeUndefined();
+  });
+});
