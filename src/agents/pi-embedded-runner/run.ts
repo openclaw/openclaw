@@ -58,6 +58,11 @@ import { runEmbeddedAttempt } from "./run/attempt.js";
 import type { RunEmbeddedPiAgentParams } from "./run/params.js";
 import { buildEmbeddedRunPayloads } from "./run/payloads.js";
 import {
+  buildToolRequiredRetryPrompt,
+  shouldRetryToolRequiredToolless,
+  TOOLLESS_ACK_MAX_RETRIES,
+} from "./run/tool-required-retry.js";
+import {
   truncateOversizedToolResultsInSession,
   sessionLikelyHasOversizedToolResults,
 } from "./tool-result-truncation.js";
@@ -516,6 +521,8 @@ export async function runEmbeddedPiAgent(
       let lastRunPromptUsage: ReturnType<typeof normalizeUsage> | undefined;
       let autoCompactionCount = 0;
       let runLoopIterations = 0;
+      let toollessAckRetries = 0;
+      let forceToolRequiredRetryPrompt = false;
       const maybeMarkAuthProfileFailure = async (failure: {
         profileId?: string;
         reason?: Parameters<typeof markAuthProfileFailure>[0]["reason"] | null;
@@ -569,8 +576,12 @@ export async function runEmbeddedPiAgent(
           attemptedThinking.add(thinkLevel);
           await fs.mkdir(resolvedWorkspace, { recursive: true });
 
-          const prompt =
+          const basePrompt =
             provider === "anthropic" ? scrubAnthropicRefusalMagic(params.prompt) : params.prompt;
+          const prompt = forceToolRequiredRetryPrompt
+            ? buildToolRequiredRetryPrompt(basePrompt)
+            : basePrompt;
+          forceToolRequiredRetryPrompt = false;
 
           const attempt = await runEmbeddedAttempt({
             sessionId: params.sessionId,
@@ -667,6 +678,53 @@ export async function runEmbeddedPiAgent(
             lastAssistant?.stopReason === "error"
               ? lastAssistant.errorMessage?.trim() || formattedAssistantErrorText
               : undefined;
+          const shouldRetryToolRequired = shouldRetryToolRequiredToolless({
+            provider,
+            prompt: params.prompt,
+            assistantTexts: attempt.assistantTexts,
+            lastAssistant,
+            toolMetas: attempt.toolMetas,
+            didSendViaMessagingTool: attempt.didSendViaMessagingTool,
+            hasClientToolCall: Boolean(attempt.clientToolCall),
+            promptError,
+            aborted,
+            timedOut,
+            timedOutDuringCompaction,
+          });
+          if (shouldRetryToolRequired) {
+            if (toollessAckRetries < TOOLLESS_ACK_MAX_RETRIES) {
+              toollessAckRetries += 1;
+              forceToolRequiredRetryPrompt = true;
+              log.warn(
+                `codex toolless ack detected; retrying with explicit tool-use instruction ` +
+                  `(attempt ${toollessAckRetries}/${TOOLLESS_ACK_MAX_RETRIES}) for ${provider}/${modelId}`,
+              );
+              continue;
+            }
+            return {
+              payloads: [
+                {
+                  text:
+                    "The model completed without running required tools for this task. " +
+                    "Please retry, or switch to another model/provider.",
+                  isError: true,
+                },
+              ],
+              meta: {
+                durationMs: Date.now() - started,
+                agentMeta: {
+                  sessionId: sessionIdUsed,
+                  provider,
+                  model: model.id,
+                },
+                systemPromptReport: attempt.systemPromptReport,
+                error: {
+                  kind: "premature_completion",
+                  message: "Model returned acknowledgement text without tool use on a tool task.",
+                },
+              },
+            };
+          }
 
           const contextOverflowError = !aborted
             ? (() => {
