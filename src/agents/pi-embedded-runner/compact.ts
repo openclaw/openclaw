@@ -14,6 +14,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import { getMachineDisplayName } from "../../infra/machine-name.js";
 import { generateSecureToken } from "../../infra/secure-random.js";
+import { ingestSessionToMemory } from "../../memory/session-ingest.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { type enqueueCommand, enqueueCommandInLane } from "../../process/command-queue.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../../routing/session-key.js";
@@ -693,6 +694,25 @@ export async function compactEmbeddedPiSessionDirect(
             });
           }
         }
+        // Ingest full pre-compaction messages into memory index without
+        // blocking compaction, preserving detailed session recall.
+        if (params.workspaceDir) {
+          void ingestSessionToMemory({
+            messages: originalMessages,
+            sessionKey: params.sessionKey,
+            sessionId: params.sessionId,
+            workspaceDir: params.workspaceDir,
+            config: params.config,
+            agentId: sessionAgentId,
+          }).then((result) => {
+            if (result.error) {
+              log.warn(`session memory ingest failed: ${result.error}`);
+            }
+          }).catch((err) => {
+            log.warn(`session memory ingest rejected: ${String(err)}`);
+          });
+        }
+
         const diagEnabled = log.isEnabled("debug");
         const preMetrics = diagEnabled ? summarizeCompactionMessages(session.messages) : undefined;
         if (diagEnabled && preMetrics) {
