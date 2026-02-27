@@ -178,7 +178,7 @@ Mental model: **"a notebook, a filing cabinet, and a librarian"**
 
 ## Test Environment
 
-All benchmarks were collected on a Mac Mini M2 (Apple Silicon) with 16 GB of RAM, running on a standard home broadband connection. The cloud model was Claude Sonnet 4.5 accessed through the Anthropic API via the OpenClaw Gateway -- the same path a real user's message would take. The local model was qwen3:8b (8 billion parameters) running on Ollama, called directly through its local API rather than through the OpenClaw pipeline. These tests are not laboratory-grade benchmarks; they are real-world measurements meant to give you a feel for what day-to-day usage is like.
+All benchmarks were collected on a Mac mini M4 (Apple Silicon) with 32 GB of RAM, running on a standard home broadband connection. The cloud model was Claude Sonnet 4.6 accessed through the Anthropic API via the OpenClaw Gateway -- the same path a real user's message would take. The local model was qwen3:8b (8 billion parameters) running on Ollama, called directly through its local API rather than through the OpenClaw pipeline. These tests are not laboratory-grade benchmarks; they are real-world measurements meant to give you a feel for what day-to-day usage is like.
 
 ## Use Case 1: Simple Q&A
 
