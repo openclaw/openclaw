@@ -31,6 +31,7 @@ import type { ExecElevatedDefaults } from "../bash-tools.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import { getApiKeyForModel, resolveModelAuthMode } from "../model-auth.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
+import { dropLeadingOrphanToolMessages } from "../compaction.js";
 import {
   ensureSessionHeader,
   validateAnthropicTurns,
@@ -431,8 +432,9 @@ export async function compactEmbeddedPiSessionDirect(
           validated,
           getDmHistoryLimitFromSessionKey(params.sessionKey, params.config),
         );
-        if (limited.length > 0) {
-          session.agent.replaceMessages(limited);
+        const noOrphanTools = dropLeadingOrphanToolMessages(limited);
+        if (noOrphanTools.length > 0) {
+          session.agent.replaceMessages(noOrphanTools);
         }
         const result = await session.compact(params.customInstructions);
         // Estimate tokens after compaction by summing token estimates for remaining messages

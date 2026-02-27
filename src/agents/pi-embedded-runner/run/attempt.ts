@@ -26,6 +26,7 @@ import { isReasoningTagProvider } from "../../../utils/provider-utils.js";
 import { isSubagentSessionKey } from "../../../routing/session-key.js";
 import { resolveUserPath } from "../../../utils.js";
 import { createCacheTrace } from "../../cache-trace.js";
+import { dropLeadingOrphanToolMessages } from "../../compaction.js";
 import { createAnthropicPayloadLogger } from "../../anthropic-payload-log.js";
 import { resolveOpenClawAgentDir } from "../../agent-paths.js";
 import { resolveSessionAgentIds } from "../../agent-scope.js";
@@ -554,9 +555,12 @@ export async function runEmbeddedAttempt(
           validated,
           getDmHistoryLimitFromSessionKey(params.sessionKey, params.config),
         );
-        cacheTrace?.recordStage("session:limited", { messages: limited });
-        if (limited.length > 0) {
-          activeSession.agent.replaceMessages(limited);
+        const noOrphanTools = dropLeadingOrphanToolMessages(limited);
+        cacheTrace?.recordStage("session:limited", { messages: noOrphanTools });
+        if (noOrphanTools.length > 0) {
+          activeSession.agent.replaceMessages(noOrphanTools);
+        } else {
+          activeSession.agent.replaceMessages([]);
         }
       } catch (err) {
         sessionManager.flushPendingToolResults?.();

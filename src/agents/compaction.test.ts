@@ -5,6 +5,7 @@ import {
   estimateMessagesTokens,
   pruneHistoryForContextShare,
   splitMessagesByTokenShare,
+  dropLeadingOrphanToolMessages,
 } from "./compaction.js";
 
 function makeMessage(id: number, size: number): AgentMessage {
@@ -145,5 +146,62 @@ describe("pruneHistoryForContextShare", () => {
     expect(pruned.droppedChunks).toBe(0);
     expect(pruned.droppedMessagesList).toEqual([]);
     expect(pruned.messages.length).toBe(1);
+  });
+
+  it("strips leading orphan tool_result messages after dropping chunks", () => {
+    const toolResult = (id: number): AgentMessage =>
+      ({
+        role: "toolResult",
+        toolCallId: `call_${id}`,
+        toolName: "test",
+        content: [{ type: "text", text: "ok" }],
+        timestamp: id,
+      }) as AgentMessage;
+    const assistant = (id: number, size: number): AgentMessage =>
+      ({
+        role: "assistant",
+        content: "a".repeat(size),
+        timestamp: id,
+      }) as AgentMessage;
+    // Chunk boundary will drop first chunk; second chunk starts with tool_result(s).
+    const messages: AgentMessage[] = [
+      makeMessage(1, 2000),
+      assistant(2, 2000),
+      toolResult(3),
+      makeMessage(4, 2000),
+      assistant(5, 2000),
+      toolResult(6),
+      makeMessage(7, 2000),
+    ];
+    const maxContextTokens = 2000;
+    const pruned = pruneHistoryForContextShare({
+      messages,
+      maxContextTokens,
+      maxHistoryShare: 0.5,
+      parts: 2,
+    });
+    expect(pruned.droppedChunks).toBeGreaterThan(0);
+    const roles = pruned.messages.map((m) => (m as { role?: string }).role);
+    expect(roles[0]).not.toBe("toolResult");
+  });
+
+  it("dropLeadingOrphanToolMessages leaves non-tool start unchanged", () => {
+    const messages: AgentMessage[] = [makeMessage(1, 100), makeMessage(2, 100)];
+    expect(dropLeadingOrphanToolMessages(messages)).toBe(messages);
+  });
+
+  it("dropLeadingOrphanToolMessages strips leading toolResult only", () => {
+    const toolResult = (id: number): AgentMessage =>
+      ({
+        role: "toolResult",
+        toolCallId: `call_${id}`,
+        toolName: "test",
+        content: [],
+        timestamp: id,
+      }) as AgentMessage;
+    const messages: AgentMessage[] = [toolResult(1), toolResult(2), makeMessage(3, 100)];
+    const out = dropLeadingOrphanToolMessages(messages);
+    expect(out.length).toBe(1);
+    expect((out[0] as { role?: string }).role).toBe("user");
   });
 });

@@ -304,6 +304,21 @@ export async function summarizeInStages(params: {
   });
 }
 
+/**
+ * Remove leading tool_result messages. When history is trimmed by dropping an
+ * initial chunk, the kept list can start with tool results whose tool_use was
+ * in the dropped chunk; the API requires each tool_result to have a matching
+ * tool_use in the immediately previous message, so leading tool messages must
+ * be dropped to avoid invalid_request_error.
+ */
+export function dropLeadingOrphanToolMessages(messages: AgentMessage[]): AgentMessage[] {
+  let i = 0;
+  while (i < messages.length && (messages[i] as { role?: string }).role === "toolResult") {
+    i += 1;
+  }
+  return i === 0 ? messages : messages.slice(i);
+}
+
 export function pruneHistoryForContextShare(params: {
   messages: AgentMessage[];
   maxContextTokens: number;
@@ -339,6 +354,10 @@ export function pruneHistoryForContextShare(params: {
     droppedTokens += estimateMessagesTokens(dropped);
     allDroppedMessages.push(...dropped);
     keptMessages = rest.flat();
+    // After dropping a chunk, the kept list might start with tool_result messages whose
+    // corresponding tool_use was in the dropped chunk. Leading tool messages have no
+    // preceding assistant message, so they cause "unexpected tool_use_id" from the API.
+    keptMessages = dropLeadingOrphanToolMessages(keptMessages);
   }
 
   return {
