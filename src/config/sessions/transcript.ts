@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
-import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
+import { guardSessionManager } from "../../agents/session-tool-result-guard-wrapper.js";
+import { parseSessionThreadInfo } from "./delivery-info.js";
 import {
   resolveDefaultSessionStorePath,
   resolveSessionFilePath,
@@ -204,19 +205,14 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
     ...params.message,
     ...(explicitIdempotencyKey ? { idempotencyKey: explicitIdempotencyKey } : {}),
   } as Parameters<SessionManager["appendMessage"]>[0];
-  const sessionManager = SessionManager.open(sessionFile);
+  // Use guardSessionManager so write-time secret redaction is applied before
+  // the message is persisted to the session JSONL. The guard also emits
+  // transcript update events internally via sessionKey, so no separate
+  // emitSessionTranscriptUpdate call is needed here.
+  const rawSessionManager = SessionManager.open(sessionFile);
+  const sessionManager = guardSessionManager(rawSessionManager, { sessionKey });
   const messageId = sessionManager.appendMessage(message);
 
-  switch (params.updateMode ?? "inline") {
-    case "inline":
-      emitSessionTranscriptUpdate({ sessionFile, sessionKey, message, messageId });
-      break;
-    case "file-only":
-      emitSessionTranscriptUpdate(sessionFile);
-      break;
-    case "none":
-      break;
-  }
   return { ok: true, sessionFile, messageId };
 }
 
