@@ -56,7 +56,7 @@ export const DEFAULT_EMOJIS: Required<StatusReactionEmojis> = {
   web: "⚡",
   done: "👍",
   error: "😱",
-  stallSoft: "🥱",
+  stallSoft: "⏳",
   stallHard: "😨",
 };
 
