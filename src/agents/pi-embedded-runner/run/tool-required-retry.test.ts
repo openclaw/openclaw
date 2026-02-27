@@ -389,4 +389,42 @@ describe("tool-required retry guard", () => {
 
     expect(shouldRetry).toBe(true);
   });
+
+  it("does not classify mixed execution prompts containing 'should i run' as help-only", () => {
+    const shouldRetry = shouldRetryToolRequiredToolless({
+      provider: "openai-codex",
+      prompt: "Should I run tests in this repo and fix the failing file?",
+      assistantTexts: ["Acknowledged. I'll do that now."],
+      lastAssistant: { stopReason: "end_turn", content: [] } as never,
+      toolMetas: [],
+      didSendViaMessagingTool: false,
+      hasClientToolCall: false,
+      disableTools: false,
+      promptError: null,
+      aborted: false,
+      timedOut: false,
+      timedOutDuringCompaction: false,
+    });
+
+    expect(shouldRetry).toBe(true);
+  });
+
+  it("does classify 'should i run the command' prompts as help guidance", () => {
+    const shouldRetry = shouldRetryToolRequiredToolless({
+      provider: "openai-codex",
+      prompt: "Should I run the command to inspect logs in this repo?",
+      assistantTexts: ["I'll explain which command to use."],
+      lastAssistant: { stopReason: "end_turn", content: [] } as never,
+      toolMetas: [],
+      didSendViaMessagingTool: false,
+      hasClientToolCall: false,
+      disableTools: false,
+      promptError: null,
+      aborted: false,
+      timedOut: false,
+      timedOutDuringCompaction: false,
+    });
+
+    expect(shouldRetry).toBe(false);
+  });
 });

@@ -40,7 +40,7 @@ const TOOL_HELP_QUESTION_PATTERNS = [
   /\bcould you (?:explain|show|tell)(?: me)? (?:how|what|which|why|where)\b/i,
   /\bcould you (?:explain|show|tell)(?: me)? (?:the )?(?:command|steps?|way)\b/i,
   /^\s*how to\b/i,
-  /\bshould i (?:run|use)\b/i,
+  /\bshould i (?:run|use)(?: (?:the )?(?:command|tool|steps?|way))\b/i,
   /^(?:explain|show|tell)(?: me)? (?:how|what|which|why|where)\b/i,
   /^(?:explain|show|tell)(?: me)? (?:the )?(?:command|steps?|way)\b/i,
 ] as const;
