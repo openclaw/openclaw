@@ -14,10 +14,10 @@ OpenClaw includes Vivgrid as a built-in provider.
 - Provider: `vivgrid`
 - Auth env var: `VIVGRID_API_KEY`
 - Base URL: `https://api.vivgrid.com/v1`
-- Default model ref: `vivgrid/auto`
+- Default model ref: `vivgrid/gpt-5-mini`
 - Default API mode: `openai-completions`
 
-Built-in Vivgrid fallback catalog keeps only `vivgrid/auto` for maximum compatibility.
+Built-in Vivgrid fallback catalog keeps only `vivgrid/gpt-5-mini` for maximum compatibility.
 Responses-only or Claude models are populated from dynamic discovery and mapped with model-level `api`.
 
 ## Quick start
@@ -35,7 +35,7 @@ openclaw onboard --non-interactive \
   --vivgrid-api-key "$VIVGRID_API_KEY"
 ```
 
-This sets `agents.defaults.model.primary` to `vivgrid/auto`.
+This sets `agents.defaults.model.primary` to `vivgrid/gpt-5-mini`.
 
 ## API mode
 
@@ -47,7 +47,7 @@ Use this pattern when some models (for example codex-style models) require Respo
 OpenClaw attempts to discover Vivgrid models dynamically from `GET /v1/models` when Vivgrid is enabled.
 
 - On success, discovered models are used as the provider catalog.
-- On failure or empty result, OpenClaw falls back to built-in default (`auto`).
+- On failure or empty result, OpenClaw falls back to built-in default (`gpt-5-mini`).
 - Vivgrid `/models` currently returns model ids only in most environments.
 - OpenClaw maps model-level API primarily by model id naming rules:
   - ids containing `codex` -> `openai-responses`
@@ -63,7 +63,7 @@ OpenClaw attempts to discover Vivgrid models dynamically from `GET /v1/models` w
         api: "openai-completions",
         baseUrl: "https://api.vivgrid.com/v1",
         models: [
-          { id: "auto", name: "Vivgrid Auto", reasoning: true, input: ["text"] },
+          { id: "gpt-5-mini", name: "Vivgrid GPT-5 mini", reasoning: true, input: ["text"] },
           { id: "gpt-codex", name: "gpt-codex", api: "openai-responses", reasoning: true },
         ],
       },
