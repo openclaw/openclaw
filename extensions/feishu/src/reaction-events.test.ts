@@ -20,7 +20,7 @@ const {
     replyOptions: {},
     markDispatchIdle: vi.fn(),
   })),
-  mockReadAllowFromStore: vi.fn(() => Promise.resolve([])),
+  mockReadAllowFromStore: vi.fn((): Promise<string[]> => Promise.resolve([])),
 }));
 
 vi.mock("./send.js", () => ({
