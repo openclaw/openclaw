@@ -580,10 +580,6 @@ export function applyQianfanConfig(cfg: OpenClawConfig): OpenClawConfig {
 
 export function applyVivgridProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
   const models = { ...cfg.agents?.defaults?.models };
-  models[VIVGRID_MODEL_REF] = {
-    ...models[VIVGRID_MODEL_REF],
-    alias: models[VIVGRID_MODEL_REF]?.alias ?? "Vivgrid",
-  };
   const defaultProvider = buildVivgridProvider();
   const existingProvider = cfg.models?.providers?.vivgrid as
     | {
