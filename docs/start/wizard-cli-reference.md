@@ -33,6 +33,7 @@ It does not install or modify anything on the remote host.
   <Step title="Existing config detection">
     - If `~/.openclaw/openclaw.json` exists, choose Keep, Modify, or Reset.
     - Re-running the wizard does not wipe anything unless you explicitly choose Reset (or pass `--reset`).
+    - CLI `--reset` defaults to `config+creds+sessions`; use `--reset-scope full` to also remove workspace.
     - If config is invalid or contains legacy keys, the wizard stops and asks you to run `openclaw doctor` before continuing.
     - Reset uses `trash` and offers scopes:
       - Config only
@@ -139,8 +140,7 @@ What you set:
 
   </Accordion>
   <Accordion title="OpenAI API key">
-    Uses `OPENAI_API_KEY` if present or prompts for a key, then saves it to
-    `~/.openclaw/.env` so launchd can read it.
+    Uses `OPENAI_API_KEY` if present or prompts for a key, then stores the credential in auth profiles.
 
     Sets `agents.defaults.model` to `openai/gpt-5.1-codex` when model is unset, `openai/*`, or `openai-codex/*`.
 
@@ -178,6 +178,10 @@ What you set:
   <Accordion title="Custom provider">
     Works with OpenAI-compatible and Anthropic-compatible endpoints.
 
+    Interactive onboarding supports the same API key storage choices as other provider API key flows:
+    - **Paste API key now** (plaintext)
+    - **Use secret reference** (env ref or configured provider ref, with preflight validation)
+
     Non-interactive flags:
     - `--auth-choice custom-api-key`
     - `--custom-base-url`
@@ -202,6 +206,24 @@ Credential and profile paths:
 - OAuth credentials: `~/.openclaw/credentials/oauth.json`
 - Auth profiles (API keys + OAuth): `~/.openclaw/agents/<agentId>/agent/auth-profiles.json`
 
+API key storage mode:
+
+- Default onboarding behavior persists API keys as plaintext values in auth profiles.
+- `--secret-input-mode ref` enables reference mode instead of plaintext key storage.
+  In interactive onboarding, you can choose either:
+  - environment variable ref (for example `keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" }`)
+  - configured provider ref (`file` or `exec`) with provider alias + id
+- Interactive reference mode runs a fast preflight validation before saving.
+  - Env refs: validates variable name + non-empty value in the current onboarding environment.
+  - Provider refs: validates provider config and resolves the requested id.
+  - If preflight fails, onboarding shows the error and lets you retry.
+- In non-interactive mode, `--secret-input-mode ref` is env-backed only.
+  - Set the provider env var in the onboarding process environment.
+  - Inline key flags (for example `--openai-api-key`) require that env var to be set; otherwise onboarding fails fast.
+  - For custom providers, non-interactive `ref` mode stores `models.providers.<id>.apiKey` as `{ source: "env", provider: "default", id: "CUSTOM_API_KEY" }`.
+  - In that custom-provider case, `--custom-api-key` requires `CUSTOM_API_KEY` to be set; otherwise onboarding fails fast.
+- Existing plaintext setups continue to work unchanged.
+
 <Note>
 Headless and server tip: complete OAuth on a machine with a browser, then copy
 `~/.openclaw/credentials/oauth.json` (or `$OPENCLAW_STATE_DIR/credentials/oauth.json`)
@@ -215,6 +237,7 @@ Typical fields in `~/.openclaw/openclaw.json`:
 - `agents.defaults.workspace`
 - `agents.defaults.model` / `models.providers` (if Minimax chosen)
 - `gateway.*` (mode, bind, auth, tailscale)
+- `session.dmScope` (local onboarding defaults this to `per-channel-peer` when unset; existing explicit values are preserved)
 - `channels.telegram.botToken`, `channels.discord.token`, `channels.signal.*`, `channels.imessage.*`
 - Channel allowlists (Slack, Discord, Matrix, Microsoft Teams) when you opt in during prompts (names resolve to IDs when possible)
 - `skills.install.nodeManager`

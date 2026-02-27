@@ -4,39 +4,44 @@ import { parseSlackTarget, resolveSlackChannelId } from "./targets.js";
 
 describe("parseSlackTarget", () => {
   it("parses user mentions and prefixes", () => {
-    expect(parseSlackTarget("<@U123>")).toMatchObject({
-      kind: "user",
-      id: "U123",
-      normalized: "user:u123",
-    });
-    expect(parseSlackTarget("user:U456")).toMatchObject({
-      kind: "user",
-      id: "U456",
-      normalized: "user:u456",
-    });
-    expect(parseSlackTarget("slack:U789")).toMatchObject({
-      kind: "user",
-      id: "U789",
-      normalized: "user:u789",
-    });
+    const cases = [
+      { input: "<@U123>", id: "U123", normalized: "user:u123" },
+      { input: "user:U456", id: "U456", normalized: "user:u456" },
+      { input: "slack:U789", id: "U789", normalized: "user:u789" },
+    ] as const;
+    for (const testCase of cases) {
+      expect(parseSlackTarget(testCase.input), testCase.input).toMatchObject({
+        kind: "user",
+        id: testCase.id,
+        normalized: testCase.normalized,
+      });
+    }
   });
 
   it("parses channel targets", () => {
-    expect(parseSlackTarget("channel:C123")).toMatchObject({
-      kind: "channel",
-      id: "C123",
-      normalized: "channel:c123",
-    });
-    expect(parseSlackTarget("#C999")).toMatchObject({
-      kind: "channel",
-      id: "C999",
-      normalized: "channel:c999",
-    });
+    const cases = [
+      { input: "channel:C123", id: "C123", normalized: "channel:c123" },
+      { input: "#C999", id: "C999", normalized: "channel:c999" },
+    ] as const;
+    for (const testCase of cases) {
+      expect(parseSlackTarget(testCase.input), testCase.input).toMatchObject({
+        kind: "channel",
+        id: testCase.id,
+        normalized: testCase.normalized,
+      });
+    }
   });
 
   it("rejects invalid @ and # targets", () => {
-    expect(() => parseSlackTarget("@bob-1")).toThrow(/Slack DMs require a user id/);
-    expect(() => parseSlackTarget("#general-1")).toThrow(/Slack channels require a channel id/);
+    const cases = [
+      { input: "@bob-1", expectedMessage: /Slack DMs require a user id/ },
+      { input: "#general-1", expectedMessage: /Slack channels require a channel id/ },
+    ] as const;
+    for (const testCase of cases) {
+      expect(() => parseSlackTarget(testCase.input), testCase.input).toThrow(
+        testCase.expectedMessage,
+      );
+    }
   });
 });
 

@@ -59,12 +59,7 @@ struct AgentWorkspaceTests {
         try "hello".write(to: marker, atomically: true, encoding: .utf8)
 
         let result = AgentWorkspace.bootstrapSafety(for: tmp)
-        switch result {
-        case .unsafe:
-            break
-        case .safe:
-            #expect(Bool(false), "Expected unsafe bootstrap safety result.")
-        }
+        #expect(result.unsafeReason != nil)
     }
 
     @Test
@@ -77,12 +72,7 @@ struct AgentWorkspaceTests {
         try "# AGENTS.md".write(to: agents, atomically: true, encoding: .utf8)
 
         let result = AgentWorkspace.bootstrapSafety(for: tmp)
-        switch result {
-        case .safe:
-            break
-        case .unsafe:
-            #expect(Bool(false), "Expected safe bootstrap safety result.")
-        }
+        #expect(result.unsafeReason == nil)
     }
 
     @Test

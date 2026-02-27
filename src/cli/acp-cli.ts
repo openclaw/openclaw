@@ -45,7 +45,7 @@ export function registerAcpCli(program: Command) {
     .option("--require-existing", "Fail if the session key/label does not exist", false)
     .option("--reset-session", "Reset the session key before first use", false)
     .option("--no-prefix-cwd", "Do not prefix prompts with the working directory", false)
-    .option("--verbose, -v", "Verbose logging to stderr", false)
+    .option("-v, --verbose", "Verbose logging to stderr", false)
     .addHelpText(
       "after",
       () => `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/acp", "docs.openclaw.ai/cli/acp")}\n`,
@@ -96,7 +96,7 @@ export function registerAcpCli(program: Command) {
     .option("--server <command>", "ACP server command (default: openclaw)")
     .option("--server-args <args...>", "Extra arguments for the ACP server")
     .option("--server-verbose", "Enable verbose logging on the ACP server", false)
-    .option("--verbose, -v", "Verbose client logging", false)
+    .option("-v, --verbose", "Verbose client logging", false)
     .action(async (opts, command) => {
       const inheritedVerbose = inheritOptionFromParent<boolean>(command, "verbose");
       try {

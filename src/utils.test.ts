@@ -20,6 +20,15 @@ import {
   withWhatsAppPrefix,
 } from "./utils.js";
 
+function withTempDirSync<T>(prefix: string, run: (dir: string) => T): T {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  try {
+    return run(dir);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 describe("normalizePath", () => {
   it("adds leading slash when missing", () => {
     expect(normalizePath("foo")).toBe("/foo");
@@ -42,10 +51,11 @@ describe("withWhatsAppPrefix", () => {
 
 describe("ensureDir", () => {
   it("creates nested directory", async () => {
-    const tmp = await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-test-"));
-    const target = path.join(tmp, "nested", "dir");
-    await ensureDir(target);
-    expect(fs.existsSync(target)).toBe(true);
+    await withTempDirSync("openclaw-test-", async (tmp) => {
+      const target = path.join(tmp, "nested", "dir");
+      await ensureDir(target);
+      expect(fs.existsSync(target)).toBe(true);
+    });
   });
 });
 
@@ -97,19 +107,19 @@ describe("jidToE164", () => {
   });
 
   it("maps @lid from authDir mapping files", () => {
-    const authDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-"));
-    const mappingPath = path.join(authDir, "lid-mapping-456_reverse.json");
-    fs.writeFileSync(mappingPath, JSON.stringify("5559876"));
-    expect(jidToE164("456@lid", { authDir })).toBe("+5559876");
-    fs.rmSync(authDir, { recursive: true, force: true });
+    withTempDirSync("openclaw-auth-", (authDir) => {
+      const mappingPath = path.join(authDir, "lid-mapping-456_reverse.json");
+      fs.writeFileSync(mappingPath, JSON.stringify("5559876"));
+      expect(jidToE164("456@lid", { authDir })).toBe("+5559876");
+    });
   });
 
   it("maps @hosted.lid from authDir mapping files", () => {
-    const authDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-"));
-    const mappingPath = path.join(authDir, "lid-mapping-789_reverse.json");
-    fs.writeFileSync(mappingPath, JSON.stringify(4440001));
-    expect(jidToE164("789@hosted.lid", { authDir })).toBe("+4440001");
-    fs.rmSync(authDir, { recursive: true, force: true });
+    withTempDirSync("openclaw-auth-", (authDir) => {
+      const mappingPath = path.join(authDir, "lid-mapping-789_reverse.json");
+      fs.writeFileSync(mappingPath, JSON.stringify(4440001));
+      expect(jidToE164("789@hosted.lid", { authDir })).toBe("+4440001");
+    });
   });
 
   it("accepts hosted PN JIDs", () => {
@@ -117,13 +127,13 @@ describe("jidToE164", () => {
   });
 
   it("falls back through lidMappingDirs in order", () => {
-    const first = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-lid-a-"));
-    const second = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-lid-b-"));
-    const mappingPath = path.join(second, "lid-mapping-321_reverse.json");
-    fs.writeFileSync(mappingPath, JSON.stringify("123321"));
-    expect(jidToE164("321@lid", { lidMappingDirs: [first, second] })).toBe("+123321");
-    fs.rmSync(first, { recursive: true, force: true });
-    fs.rmSync(second, { recursive: true, force: true });
+    withTempDirSync("openclaw-lid-a-", (first) => {
+      withTempDirSync("openclaw-lid-b-", (second) => {
+        const mappingPath = path.join(second, "lid-mapping-321_reverse.json");
+        fs.writeFileSync(mappingPath, JSON.stringify("123321"));
+        expect(jidToE164("321@lid", { lidMappingDirs: [first, second] })).toBe("+123321");
+      });
+    });
   });
 });
 
@@ -194,6 +204,14 @@ describe("resolveJidToE164", () => {
     await expect(resolveJidToE164("888@s.whatsapp.net", { lidLookup })).resolves.toBe("+888");
     expect(lidLookup.getPNForLID).not.toHaveBeenCalled();
   });
+
+  it("returns null when lidLookup throws", async () => {
+    const lidLookup = {
+      getPNForLID: vi.fn().mockRejectedValue(new Error("lookup failed")),
+    };
+    await expect(resolveJidToE164("777@lid", { lidLookup })).resolves.toBeNull();
+    expect(lidLookup.getPNForLID).toHaveBeenCalledWith("777@lid");
+  });
 });
 
 describe("resolveUserPath", () => {
@@ -221,5 +239,10 @@ describe("resolveUserPath", () => {
   it("keeps blank paths blank", () => {
     expect(resolveUserPath("")).toBe("");
     expect(resolveUserPath("   ")).toBe("");
+  });
+
+  it("returns empty string for undefined/null input", () => {
+    expect(resolveUserPath(undefined as unknown as string)).toBe("");
+    expect(resolveUserPath(null as unknown as string)).toBe("");
   });
 });

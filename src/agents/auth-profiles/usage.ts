@@ -3,6 +3,25 @@ import { normalizeProviderId } from "../model-selection.js";
 import { saveAuthProfileStore, updateAuthProfileStoreWithLock } from "./store.js";
 import type { AuthProfileFailureReason, AuthProfileStore, ProfileUsageStats } from "./types.js";
 
+const FAILURE_REASON_PRIORITY: AuthProfileFailureReason[] = [
+  "auth_permanent",
+  "auth",
+  "billing",
+  "format",
+  "model_not_found",
+  "timeout",
+  "rate_limit",
+  "unknown",
+];
+const FAILURE_REASON_SET = new Set<AuthProfileFailureReason>(FAILURE_REASON_PRIORITY);
+const FAILURE_REASON_ORDER = new Map<AuthProfileFailureReason, number>(
+  FAILURE_REASON_PRIORITY.map((reason, index) => [reason, index]),
+);
+
+function isAuthCooldownBypassedForProvider(provider: string | undefined): boolean {
+  return normalizeProviderId(provider ?? "") === "openrouter";
+}
+
 export function resolveProfileUnusableUntil(
   stats: Pick<ProfileUsageStats, "cooldownUntil" | "disabledUntil">,
 ): number | null {
@@ -19,12 +38,94 @@ export function resolveProfileUnusableUntil(
  * Check if a profile is currently in cooldown (due to rate limiting or errors).
  */
 export function isProfileInCooldown(store: AuthProfileStore, profileId: string): boolean {
+  if (isAuthCooldownBypassedForProvider(store.profiles[profileId]?.provider)) {
+    return false;
+  }
   const stats = store.usageStats?.[profileId];
   if (!stats) {
     return false;
   }
   const unusableUntil = resolveProfileUnusableUntil(stats);
   return unusableUntil ? Date.now() < unusableUntil : false;
+}
+
+function isActiveUnusableWindow(until: number | undefined, now: number): boolean {
+  return typeof until === "number" && Number.isFinite(until) && until > 0 && now < until;
+}
+
+/**
+ * Infer the most likely reason all candidate profiles are currently unavailable.
+ *
+ * We prefer explicit active `disabledReason` values (for example billing/auth)
+ * over generic cooldown buckets, then fall back to failure-count signals.
+ */
+export function resolveProfilesUnavailableReason(params: {
+  store: AuthProfileStore;
+  profileIds: string[];
+  now?: number;
+}): AuthProfileFailureReason | null {
+  const now = params.now ?? Date.now();
+  const scores = new Map<AuthProfileFailureReason, number>();
+  const addScore = (reason: AuthProfileFailureReason, value: number) => {
+    if (!FAILURE_REASON_SET.has(reason) || value <= 0 || !Number.isFinite(value)) {
+      return;
+    }
+    scores.set(reason, (scores.get(reason) ?? 0) + value);
+  };
+
+  for (const profileId of params.profileIds) {
+    const stats = params.store.usageStats?.[profileId];
+    if (!stats) {
+      continue;
+    }
+
+    const disabledActive = isActiveUnusableWindow(stats.disabledUntil, now);
+    if (disabledActive && stats.disabledReason && FAILURE_REASON_SET.has(stats.disabledReason)) {
+      // Disabled reasons are explicit and high-signal; weight heavily.
+      addScore(stats.disabledReason, 1_000);
+      continue;
+    }
+
+    const cooldownActive = isActiveUnusableWindow(stats.cooldownUntil, now);
+    if (!cooldownActive) {
+      continue;
+    }
+
+    let recordedReason = false;
+    for (const [rawReason, rawCount] of Object.entries(stats.failureCounts ?? {})) {
+      const reason = rawReason as AuthProfileFailureReason;
+      const count = typeof rawCount === "number" ? rawCount : 0;
+      if (!FAILURE_REASON_SET.has(reason) || count <= 0) {
+        continue;
+      }
+      addScore(reason, count);
+      recordedReason = true;
+    }
+    if (!recordedReason) {
+      addScore("rate_limit", 1);
+    }
+  }
+
+  if (scores.size === 0) {
+    return null;
+  }
+
+  let best: AuthProfileFailureReason | null = null;
+  let bestScore = -1;
+  let bestPriority = Number.MAX_SAFE_INTEGER;
+  for (const reason of FAILURE_REASON_PRIORITY) {
+    const score = scores.get(reason);
+    if (typeof score !== "number") {
+      continue;
+    }
+    const priority = FAILURE_REASON_ORDER.get(reason) ?? Number.MAX_SAFE_INTEGER;
+    if (score > bestScore || (score === bestScore && priority < bestPriority)) {
+      best = reason;
+      bestScore = score;
+      bestPriority = priority;
+    }
+  }
+  return best;
 }
 
 /**
@@ -332,11 +433,25 @@ export function resolveProfileUnusableUntilForDisplay(
   store: AuthProfileStore,
   profileId: string,
 ): number | null {
+  if (isAuthCooldownBypassedForProvider(store.profiles[profileId]?.provider)) {
+    return null;
+  }
   const stats = store.usageStats?.[profileId];
   if (!stats) {
     return null;
   }
   return resolveProfileUnusableUntil(stats);
+}
+
+function keepActiveWindowOrRecompute(params: {
+  existingUntil: number | undefined;
+  now: number;
+  recomputedUntil: number;
+}): number {
+  const { existingUntil, now, recomputedUntil } = params;
+  const hasActiveWindow =
+    typeof existingUntil === "number" && Number.isFinite(existingUntil) && existingUntil > now;
+  return hasActiveWindow ? existingUntil : recomputedUntil;
 }
 
 function computeNextProfileUsageStats(params: {
@@ -366,20 +481,26 @@ function computeNextProfileUsageStats(params: {
     lastFailureAt: params.now,
   };
 
-  if (params.reason === "billing") {
-    const billingCount = failureCounts.billing ?? 1;
+  if (params.reason === "billing" || params.reason === "auth_permanent") {
+    const billingCount = failureCounts[params.reason] ?? 1;
     const backoffMs = calculateAuthProfileBillingDisableMsWithConfig({
       errorCount: billingCount,
       baseMs: params.cfgResolved.billingBackoffMs,
       maxMs: params.cfgResolved.billingMaxMs,
     });
-    updatedStats.disabledUntil = params.now + backoffMs;
-    updatedStats.disabledReason = "billing";
+    // Keep active disable windows immutable so retries within the window cannot
+    // extend recovery time indefinitely.
+    updatedStats.disabledUntil = keepActiveWindowOrRecompute({
+      existingUntil: params.existing.disabledUntil,
+      now: params.now,
+      recomputedUntil: params.now + backoffMs,
+    });
+    updatedStats.disabledReason = params.reason;
   } else {
-    // Compute backoff: prefer server-provided Retry-After, then calculated
+    // Compute backoff: prefer server-provided Retry-After, then calculated.
     let backoffMs: number;
     if (params.retryAfterMs && params.retryAfterMs > 0) {
-      // Cap server-provided value at 15 min to avoid pathologically long waits
+      // Cap server-provided value at 15 min to avoid pathologically long waits.
       backoffMs = Math.min(params.retryAfterMs, 15 * 60 * 1000);
     } else if (params.reason === "timeout") {
       const timeoutCount = failureCounts.timeout ?? 1;
@@ -389,17 +510,28 @@ function computeNextProfileUsageStats(params: {
     }
 
     if (params.model) {
-      // Record per-model cooldown instead of global profile cooldown
+      // Record per-model cooldown instead of global profile cooldown.
       const existingMc = updatedStats.modelCooldowns ?? {};
       const prevEntry = existingMc[params.model] ?? {};
+      const recomputedUntil = params.now + backoffMs;
       existingMc[params.model] = {
-        cooldownUntil: params.now + backoffMs,
+        cooldownUntil: keepActiveWindowOrRecompute({
+          existingUntil: prevEntry.cooldownUntil,
+          now: params.now,
+          recomputedUntil,
+        }),
         errorCount: (prevEntry.errorCount ?? 0) + 1,
         lastFailureAt: params.now,
       };
       updatedStats.modelCooldowns = existingMc;
     } else {
-      updatedStats.cooldownUntil = params.now + backoffMs;
+      // Keep active cooldown windows immutable so retries within the window
+      // cannot push recovery further out.
+      updatedStats.cooldownUntil = keepActiveWindowOrRecompute({
+        existingUntil: params.existing.cooldownUntil,
+        now: params.now,
+        recomputedUntil: params.now + backoffMs,
+      });
     }
   }
 
@@ -407,8 +539,9 @@ function computeNextProfileUsageStats(params: {
 }
 
 /**
- * Mark a profile as failed for a specific reason. Billing failures are treated
- * as "disabled" (longer backoff) vs the regular cooldown window.
+ * Mark a profile as failed for a specific reason. Billing and permanent-auth
+ * failures are treated as "disabled" (longer backoff) vs the regular cooldown
+ * window.
  */
 export async function markAuthProfileFailure(params: {
   store: AuthProfileStore;
@@ -422,11 +555,15 @@ export async function markAuthProfileFailure(params: {
   retryAfterMs?: number;
 }): Promise<void> {
   const { store, profileId, reason, agentDir, cfg, model, retryAfterMs } = params;
+  const profile = store.profiles[profileId];
+  if (!profile || isAuthCooldownBypassedForProvider(profile.provider)) {
+    return;
+  }
   const updated = await updateAuthProfileStoreWithLock({
     agentDir,
     updater: (freshStore) => {
       const profile = freshStore.profiles[profileId];
-      if (!profile) {
+      if (!profile || isAuthCooldownBypassedForProvider(profile.provider)) {
         return false;
       }
       freshStore.usageStats = freshStore.usageStats ?? {};
@@ -518,6 +655,9 @@ export async function clearAuthProfileCooldown(params: {
         errorCount: 0,
         cooldownUntil: undefined,
         modelCooldowns: undefined,
+        disabledUntil: undefined,
+        disabledReason: undefined,
+        failureCounts: undefined,
       };
       return true;
     },
@@ -535,6 +675,9 @@ export async function clearAuthProfileCooldown(params: {
     errorCount: 0,
     cooldownUntil: undefined,
     modelCooldowns: undefined,
+    disabledUntil: undefined,
+    disabledReason: undefined,
+    failureCounts: undefined,
   };
   saveAuthProfileStore(store, agentDir);
 }

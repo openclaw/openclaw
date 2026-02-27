@@ -94,11 +94,27 @@ Note: Binary detection is best-effort across macOS/Linux/Windows; ensure the CLI
 }
 ```
 
+### Provider-only (Mistral Voxtral)
+
+```json5
+{
+  tools: {
+    media: {
+      audio: {
+        enabled: true,
+        models: [{ provider: "mistral", model: "voxtral-mini-latest" }],
+      },
+    },
+  },
+}
+```
+
 ## Notes & limits
 
 - Provider auth follows the standard model auth order (auth profiles, env vars, `models.providers.*.apiKey`).
 - Deepgram picks up `DEEPGRAM_API_KEY` when `provider: "deepgram"` is used.
 - Deepgram setup details: [Deepgram (audio transcription)](/providers/deepgram).
+- Mistral setup details: [Mistral](/providers/mistral).
 - Audio providers can override `baseUrl`, `headers`, and `providerOptions` via `tools.media.audio`.
 - Default size cap is 20MB (`tools.media.audio.maxBytes`). Oversize audio is skipped for that model and the next entry is tried.
 - Default `maxChars` for audio is **unset** (full transcript). Set `tools.media.audio.maxChars` or per-entry `maxChars` to trim output.

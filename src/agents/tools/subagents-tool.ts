@@ -7,6 +7,7 @@ import {
   sortSubagentRuns,
   type SubagentTargetResolution,
 } from "../../auto-reply/reply/subagents-utils.js";
+import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../../config/agent-limits.js";
 import { loadConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionStore, resolveStorePath, updateSessionStore } from "../../config/sessions.js";
@@ -199,7 +200,8 @@ function resolveRequesterKey(params: {
   // Check if this sub-agent can spawn children (orchestrator).
   // If so, it should see its own children, not its parent's children.
   const callerDepth = getSubagentDepthFromSessionStore(callerSessionKey, { cfg: params.cfg });
-  const maxSpawnDepth = params.cfg.agents?.defaults?.subagents?.maxSpawnDepth ?? 1;
+  const maxSpawnDepth =
+    params.cfg.agents?.defaults?.subagents?.maxSpawnDepth ?? DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH;
   if (callerDepth < maxSpawnDepth) {
     // Orchestrator sub-agent: use its own session key as requester
     // so it sees children it spawned.

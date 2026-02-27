@@ -86,6 +86,8 @@ If pairing is fine but `system.run` fails, fix exec approvals/allowlist.
 - `LOCATION_BACKGROUND_UNAVAILABLE` → app is backgrounded but only While Using permission exists.
 - `SYSTEM_RUN_DENIED: approval required` → exec request needs explicit approval.
 - `SYSTEM_RUN_DENIED: allowlist miss` → command blocked by allowlist mode.
+  On Windows node hosts, shell-wrapper forms like `cmd.exe /c ...` are treated as allowlist misses in
+  allowlist mode unless approved via ask flow.
 
 ## Fast recovery loop
 

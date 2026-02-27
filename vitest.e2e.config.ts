@@ -5,9 +5,8 @@ import baseConfig from "./vitest.config.ts";
 const base = baseConfig as unknown as Record<string, unknown>;
 const isCI = process.env.CI === "true" || process.env.GITHUB_ACTIONS === "true";
 const cpuCount = os.cpus().length;
-const defaultWorkers = isCI
-  ? Math.min(4, Math.max(2, Math.floor(cpuCount * 0.5)))
-  : Math.min(8, Math.max(4, Math.floor(cpuCount * 0.6)));
+// Keep e2e runs deterministic and cheap by default; callers can still override via OPENCLAW_E2E_WORKERS.
+const defaultWorkers = isCI ? Math.min(2, Math.max(1, Math.floor(cpuCount * 0.25))) : 1;
 const requestedWorkers = Number.parseInt(process.env.OPENCLAW_E2E_WORKERS ?? "", 10);
 const e2eWorkers =
   Number.isFinite(requestedWorkers) && requestedWorkers > 0
@@ -25,7 +24,7 @@ export default defineConfig({
     pool: "vmForks",
     maxWorkers: e2eWorkers,
     silent: !verboseE2E,
-    include: ["test/**/*.e2e.test.ts", "src/**/*.e2e.test.ts"],
+    include: ["test/**/*.e2e.test.ts"],
     exclude,
   },
 });

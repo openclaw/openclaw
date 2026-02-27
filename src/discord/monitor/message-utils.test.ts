@@ -1,4 +1,5 @@
 import { ChannelType, type Client, type Message } from "@buape/carbon";
+import { StickerFormatType } from "discord-api-types/v10";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const fetchRemoteMedia = vi.fn();
@@ -22,6 +23,7 @@ const {
   resolveDiscordMessageChannelId,
   resolveDiscordMessageText,
   resolveForwardedMediaList,
+  resolveMediaList,
 } = await import("./message-utils.js");
 
 function asMessage(payload: Record<string, unknown>): Message {
@@ -57,8 +59,8 @@ describe("resolveDiscordMessageChannelId", () => {
 
 describe("resolveForwardedMediaList", () => {
   beforeEach(() => {
-    fetchRemoteMedia.mockReset();
-    saveMediaBuffer.mockReset();
+    fetchRemoteMedia.mockClear();
+    saveMediaBuffer.mockClear();
   });
 
   it("downloads forwarded attachments", async () => {
@@ -90,6 +92,8 @@ describe("resolveForwardedMediaList", () => {
     expect(fetchRemoteMedia).toHaveBeenCalledWith({
       url: attachment.url,
       filePathHint: attachment.filename,
+      maxBytes: 512,
+      fetchImpl: undefined,
     });
     expect(saveMediaBuffer).toHaveBeenCalledTimes(1);
     expect(saveMediaBuffer).toHaveBeenCalledWith(expect.any(Buffer), "image/png", "inbound", 512);
@@ -98,6 +102,80 @@ describe("resolveForwardedMediaList", () => {
         path: "/tmp/image.png",
         contentType: "image/png",
         placeholder: "<media:image>",
+      },
+    ]);
+  });
+
+  it("forwards fetchImpl to forwarded attachment downloads", async () => {
+    const proxyFetch = vi.fn() as unknown as typeof fetch;
+    const attachment = {
+      id: "att-proxy",
+      url: "https://cdn.discordapp.com/attachments/1/proxy.png",
+      filename: "proxy.png",
+      content_type: "image/png",
+    };
+    fetchRemoteMedia.mockResolvedValueOnce({
+      buffer: Buffer.from("image"),
+      contentType: "image/png",
+    });
+    saveMediaBuffer.mockResolvedValueOnce({
+      path: "/tmp/proxy.png",
+      contentType: "image/png",
+    });
+
+    await resolveForwardedMediaList(
+      asMessage({
+        rawData: {
+          message_snapshots: [{ message: { attachments: [attachment] } }],
+        },
+      }),
+      512,
+      proxyFetch,
+    );
+
+    expect(fetchRemoteMedia).toHaveBeenCalledWith(
+      expect.objectContaining({ fetchImpl: proxyFetch }),
+    );
+  });
+
+  it("downloads forwarded stickers", async () => {
+    const sticker = {
+      id: "sticker-1",
+      name: "wave",
+      format_type: StickerFormatType.PNG,
+    };
+    fetchRemoteMedia.mockResolvedValueOnce({
+      buffer: Buffer.from("sticker"),
+      contentType: "image/png",
+    });
+    saveMediaBuffer.mockResolvedValueOnce({
+      path: "/tmp/sticker.png",
+      contentType: "image/png",
+    });
+
+    const result = await resolveForwardedMediaList(
+      asMessage({
+        rawData: {
+          message_snapshots: [{ message: { sticker_items: [sticker] } }],
+        },
+      }),
+      512,
+    );
+
+    expect(fetchRemoteMedia).toHaveBeenCalledTimes(1);
+    expect(fetchRemoteMedia).toHaveBeenCalledWith({
+      url: "https://media.discordapp.net/stickers/sticker-1.png",
+      filePathHint: "wave.png",
+      maxBytes: 512,
+      fetchImpl: undefined,
+    });
+    expect(saveMediaBuffer).toHaveBeenCalledTimes(1);
+    expect(saveMediaBuffer).toHaveBeenCalledWith(expect.any(Buffer), "image/png", "inbound", 512);
+    expect(result).toEqual([
+      {
+        path: "/tmp/sticker.png",
+        contentType: "image/png",
+        placeholder: "<media:sticker>",
       },
     ]);
   });
@@ -121,6 +199,82 @@ describe("resolveForwardedMediaList", () => {
 
     expect(result).toEqual([]);
     expect(fetchRemoteMedia).not.toHaveBeenCalled();
+  });
+});
+
+describe("resolveMediaList", () => {
+  beforeEach(() => {
+    fetchRemoteMedia.mockClear();
+    saveMediaBuffer.mockClear();
+  });
+
+  it("downloads stickers", async () => {
+    const sticker = {
+      id: "sticker-2",
+      name: "hello",
+      format_type: StickerFormatType.PNG,
+    };
+    fetchRemoteMedia.mockResolvedValueOnce({
+      buffer: Buffer.from("sticker"),
+      contentType: "image/png",
+    });
+    saveMediaBuffer.mockResolvedValueOnce({
+      path: "/tmp/sticker-2.png",
+      contentType: "image/png",
+    });
+
+    const result = await resolveMediaList(
+      asMessage({
+        stickers: [sticker],
+      }),
+      512,
+    );
+
+    expect(fetchRemoteMedia).toHaveBeenCalledTimes(1);
+    expect(fetchRemoteMedia).toHaveBeenCalledWith({
+      url: "https://media.discordapp.net/stickers/sticker-2.png",
+      filePathHint: "hello.png",
+      maxBytes: 512,
+      fetchImpl: undefined,
+    });
+    expect(saveMediaBuffer).toHaveBeenCalledTimes(1);
+    expect(saveMediaBuffer).toHaveBeenCalledWith(expect.any(Buffer), "image/png", "inbound", 512);
+    expect(result).toEqual([
+      {
+        path: "/tmp/sticker-2.png",
+        contentType: "image/png",
+        placeholder: "<media:sticker>",
+      },
+    ]);
+  });
+
+  it("forwards fetchImpl to sticker downloads", async () => {
+    const proxyFetch = vi.fn() as unknown as typeof fetch;
+    const sticker = {
+      id: "sticker-proxy",
+      name: "proxy-sticker",
+      format_type: StickerFormatType.PNG,
+    };
+    fetchRemoteMedia.mockResolvedValueOnce({
+      buffer: Buffer.from("sticker"),
+      contentType: "image/png",
+    });
+    saveMediaBuffer.mockResolvedValueOnce({
+      path: "/tmp/sticker-proxy.png",
+      contentType: "image/png",
+    });
+
+    await resolveMediaList(
+      asMessage({
+        stickers: [sticker],
+      }),
+      512,
+      proxyFetch,
+    );
+
+    expect(fetchRemoteMedia).toHaveBeenCalledWith(
+      expect.objectContaining({ fetchImpl: proxyFetch }),
+    );
   });
 });
 
@@ -151,6 +305,95 @@ describe("resolveDiscordMessageText", () => {
 
     expect(text).toContain("[Forwarded message from @Bob]");
     expect(text).toContain("forwarded hello");
+  });
+
+  it("uses sticker placeholders when content is empty", () => {
+    const text = resolveDiscordMessageText(
+      asMessage({
+        content: "",
+        stickers: [
+          {
+            id: "sticker-3",
+            name: "party",
+            format_type: StickerFormatType.PNG,
+          },
+        ],
+      }),
+    );
+
+    expect(text).toBe("<media:sticker> (1 sticker)");
+  });
+
+  it("uses embed title when content is empty", () => {
+    const text = resolveDiscordMessageText(
+      asMessage({
+        content: "",
+        embeds: [{ title: "Breaking" }],
+      }),
+    );
+
+    expect(text).toBe("Breaking");
+  });
+
+  it("uses embed description when content is empty", () => {
+    const text = resolveDiscordMessageText(
+      asMessage({
+        content: "",
+        embeds: [{ description: "Details" }],
+      }),
+    );
+
+    expect(text).toBe("Details");
+  });
+
+  it("joins embed title and description when content is empty", () => {
+    const text = resolveDiscordMessageText(
+      asMessage({
+        content: "",
+        embeds: [{ title: "Breaking", description: "Details" }],
+      }),
+    );
+
+    expect(text).toBe("Breaking\nDetails");
+  });
+
+  it("prefers message content over embed fallback text", () => {
+    const text = resolveDiscordMessageText(
+      asMessage({
+        content: "hello from content",
+        embeds: [{ title: "Breaking", description: "Details" }],
+      }),
+    );
+
+    expect(text).toBe("hello from content");
+  });
+
+  it("joins forwarded snapshot embed title and description when content is empty", () => {
+    const text = resolveDiscordMessageText(
+      asMessage({
+        content: "",
+        rawData: {
+          message_snapshots: [
+            {
+              message: {
+                content: "",
+                embeds: [{ title: "Forwarded title", description: "Forwarded details" }],
+                attachments: [],
+                author: {
+                  id: "u2",
+                  username: "Bob",
+                  discriminator: "0",
+                },
+              },
+            },
+          ],
+        },
+      }),
+      { includeForwarded: true },
+    );
+
+    expect(text).toContain("[Forwarded message from @Bob]");
+    expect(text).toContain("Forwarded title\nForwarded details");
   });
 });
 

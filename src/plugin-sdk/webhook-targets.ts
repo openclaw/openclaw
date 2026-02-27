@@ -38,6 +38,51 @@ export function resolveWebhookTargets<T>(
   return { path, targets };
 }
 
+export type WebhookTargetMatchResult<T> =
+  | { kind: "none" }
+  | { kind: "single"; target: T }
+  | { kind: "ambiguous" };
+
+export function resolveSingleWebhookTarget<T>(
+  targets: readonly T[],
+  isMatch: (target: T) => boolean,
+): WebhookTargetMatchResult<T> {
+  let matched: T | undefined;
+  for (const target of targets) {
+    if (!isMatch(target)) {
+      continue;
+    }
+    if (matched) {
+      return { kind: "ambiguous" };
+    }
+    matched = target;
+  }
+  if (!matched) {
+    return { kind: "none" };
+  }
+  return { kind: "single", target: matched };
+}
+
+export async function resolveSingleWebhookTargetAsync<T>(
+  targets: readonly T[],
+  isMatch: (target: T) => Promise<boolean>,
+): Promise<WebhookTargetMatchResult<T>> {
+  let matched: T | undefined;
+  for (const target of targets) {
+    if (!(await isMatch(target))) {
+      continue;
+    }
+    if (matched) {
+      return { kind: "ambiguous" };
+    }
+    matched = target;
+  }
+  if (!matched) {
+    return { kind: "none" };
+  }
+  return { kind: "single", target: matched };
+}
+
 export function rejectNonPostWebhookRequest(req: IncomingMessage, res: ServerResponse): boolean {
   if (req.method === "POST") {
     return false;

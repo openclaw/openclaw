@@ -1,4 +1,8 @@
-export type ToolProfileId = "minimal" | "coding" | "messaging" | "full";
+import {
+  CORE_TOOL_GROUPS,
+  resolveCoreToolProfilePolicy,
+  type ToolProfileId,
+} from "./tool-catalog.js";
 
 type ToolProfilePolicy = {
   allow?: string[];
@@ -10,72 +14,7 @@ const TOOL_NAME_ALIASES: Record<string, string> = {
   "apply-patch": "apply_patch",
 };
 
-export const TOOL_GROUPS: Record<string, string[]> = {
-  // NOTE: Keep canonical (lowercase) tool names here.
-  "group:memory": ["memory_search", "memory_get"],
-  "group:web": ["web_search", "web_fetch"],
-  // Basic workspace/file tools
-  "group:fs": ["read", "write", "edit", "apply_patch"],
-  // Host/runtime execution tools
-  "group:runtime": ["exec", "process"],
-  // Session management tools
-  "group:sessions": [
-    "sessions_list",
-    "sessions_history",
-    "sessions_send",
-    "sessions_spawn",
-    "subagents",
-    "session_status",
-  ],
-  // UI helpers
-  "group:ui": ["browser", "canvas"],
-  // Automation + infra
-  "group:automation": ["cron", "gateway"],
-  // Messaging surface
-  "group:messaging": ["message"],
-  // Nodes + device tools
-  "group:nodes": ["nodes"],
-  // All OpenClaw native tools (excludes provider plugins).
-  "group:openclaw": [
-    "browser",
-    "canvas",
-    "nodes",
-    "cron",
-    "message",
-    "gateway",
-    "agents_list",
-    "sessions_list",
-    "sessions_history",
-    "sessions_send",
-    "sessions_spawn",
-    "subagents",
-    "session_status",
-    "memory_search",
-    "memory_get",
-    "web_search",
-    "web_fetch",
-    "image",
-  ],
-};
-
-const TOOL_PROFILES: Record<ToolProfileId, ToolProfilePolicy> = {
-  minimal: {
-    allow: ["session_status"],
-  },
-  coding: {
-    allow: ["group:fs", "group:runtime", "group:sessions", "group:memory", "image"],
-  },
-  messaging: {
-    allow: [
-      "group:messaging",
-      "sessions_list",
-      "sessions_history",
-      "sessions_send",
-      "session_status",
-    ],
-  },
-  full: {},
-};
+export const TOOL_GROUPS: Record<string, string[]> = { ...CORE_TOOL_GROUPS };
 
 export function normalizeToolName(name: string) {
   const normalized = name.trim().toLowerCase();
@@ -104,18 +43,7 @@ export function expandToolGroups(list?: string[]) {
 }
 
 export function resolveToolProfilePolicy(profile?: string): ToolProfilePolicy | undefined {
-  if (!profile) {
-    return undefined;
-  }
-  const resolved = TOOL_PROFILES[profile as ToolProfileId];
-  if (!resolved) {
-    return undefined;
-  }
-  if (!resolved.allow && !resolved.deny) {
-    return undefined;
-  }
-  return {
-    allow: resolved.allow ? [...resolved.allow] : undefined,
-    deny: resolved.deny ? [...resolved.deny] : undefined,
-  };
+  return resolveCoreToolProfilePolicy(profile);
 }
+
+export type { ToolProfileId };

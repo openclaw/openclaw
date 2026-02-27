@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { expectGeneratedTokenPersistedToGatewayAuth } from "../test-utils/auth-token-assertions.js";
 
 const mocks = vi.hoisted(() => ({
   writeConfigFile: vi.fn(async (_cfg: OpenClawConfig) => {}),
@@ -36,8 +37,21 @@ describe("ensureGatewayStartupAuth", () => {
 
   beforeEach(() => {
     vi.restoreAllMocks();
-    mocks.writeConfigFile.mockReset();
+    mocks.writeConfigFile.mockClear();
   });
+
+  async function expectNoTokenGeneration(cfg: OpenClawConfig, mode: string) {
+    const result = await ensureGatewayStartupAuth({
+      cfg,
+      env: {} as NodeJS.ProcessEnv,
+      persist: true,
+    });
+
+    expect(result.generatedToken).toBeUndefined();
+    expect(result.persistedGeneratedToken).toBe(false);
+    expect(result.auth.mode).toBe(mode);
+    expect(mocks.writeConfigFile).not.toHaveBeenCalled();
+  }
 
   it("generates and persists a token when startup auth is missing", async () => {
     const result = await ensureGatewayStartupAuth({
@@ -49,11 +63,12 @@ describe("ensureGatewayStartupAuth", () => {
     expect(result.generatedToken).toMatch(/^[0-9a-f]{48}$/);
     expect(result.persistedGeneratedToken).toBe(true);
     expect(result.auth.mode).toBe("token");
-    expect(result.auth.token).toBe(result.generatedToken);
     expect(mocks.writeConfigFile).toHaveBeenCalledTimes(1);
-    const persisted = mocks.writeConfigFile.mock.calls[0]?.[0];
-    expect(persisted?.gateway?.auth?.mode).toBe("token");
-    expect(persisted?.gateway?.auth?.token).toBe(result.generatedToken);
+    expectGeneratedTokenPersistedToGatewayAuth({
+      generatedToken: result.generatedToken,
+      authToken: result.auth.token,
+      persistedConfig: mocks.writeConfigFile.mock.calls[0]?.[0],
+    });
   });
 
   it("does not generate when token already exists", async () => {
@@ -79,64 +94,43 @@ describe("ensureGatewayStartupAuth", () => {
   });
 
   it("does not generate in password mode", async () => {
-    const cfg: OpenClawConfig = {
-      gateway: {
-        auth: {
-          mode: "password",
+    await expectNoTokenGeneration(
+      {
+        gateway: {
+          auth: {
+            mode: "password",
+          },
         },
       },
-    };
-    const result = await ensureGatewayStartupAuth({
-      cfg,
-      env: {} as NodeJS.ProcessEnv,
-      persist: true,
-    });
-
-    expect(result.generatedToken).toBeUndefined();
-    expect(result.persistedGeneratedToken).toBe(false);
-    expect(result.auth.mode).toBe("password");
-    expect(mocks.writeConfigFile).not.toHaveBeenCalled();
+      "password",
+    );
   });
 
   it("does not generate in trusted-proxy mode", async () => {
-    const cfg: OpenClawConfig = {
-      gateway: {
-        auth: {
-          mode: "trusted-proxy",
-          trustedProxy: { userHeader: "x-forwarded-user" },
+    await expectNoTokenGeneration(
+      {
+        gateway: {
+          auth: {
+            mode: "trusted-proxy",
+            trustedProxy: { userHeader: "x-forwarded-user" },
+          },
         },
       },
-    };
-    const result = await ensureGatewayStartupAuth({
-      cfg,
-      env: {} as NodeJS.ProcessEnv,
-      persist: true,
-    });
-
-    expect(result.generatedToken).toBeUndefined();
-    expect(result.persistedGeneratedToken).toBe(false);
-    expect(result.auth.mode).toBe("trusted-proxy");
-    expect(mocks.writeConfigFile).not.toHaveBeenCalled();
+      "trusted-proxy",
+    );
   });
 
   it("does not generate in explicit none mode", async () => {
-    const cfg: OpenClawConfig = {
-      gateway: {
-        auth: {
-          mode: "none",
+    await expectNoTokenGeneration(
+      {
+        gateway: {
+          auth: {
+            mode: "none",
+          },
         },
       },
-    };
-    const result = await ensureGatewayStartupAuth({
-      cfg,
-      env: {} as NodeJS.ProcessEnv,
-      persist: true,
-    });
-
-    expect(result.generatedToken).toBeUndefined();
-    expect(result.persistedGeneratedToken).toBe(false);
-    expect(result.auth.mode).toBe("none");
-    expect(mocks.writeConfigFile).not.toHaveBeenCalled();
+      "none",
+    );
   });
 
   it("treats undefined token override as no override", async () => {

@@ -4,6 +4,7 @@ import { loadConfig } from "../config/config.js";
 import { resolvePairingSetupFromConfig, encodePairingSetupCode } from "../pairing/setup-code.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { defaultRuntime } from "../runtime.js";
+import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
 
 type QrCliOptions = {
@@ -38,6 +39,10 @@ export function registerQrCli(program: Command) {
   program
     .command("qr")
     .description("Generate an iOS pairing QR code and setup code")
+    .addHelpText(
+      "after",
+      () => `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/qr", "docs.openclaw.ai/cli/qr")}\n`,
+    )
     .option(
       "--remote",
       "Use gateway.remote.url and gateway.remote token/password (ignores device-pair publicUrl)",

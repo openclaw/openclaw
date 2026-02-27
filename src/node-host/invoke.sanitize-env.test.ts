@@ -1,50 +1,55 @@
 import { describe, expect, it } from "vitest";
+import { withEnv } from "../test-utils/env.js";
 import { sanitizeEnv } from "./invoke.js";
 import { buildNodeInvokeResultParams } from "./runner.js";
 
 describe("node-host sanitizeEnv", () => {
   it("ignores PATH overrides", () => {
-    const prev = process.env.PATH;
-    process.env.PATH = "/usr/bin";
-    try {
-      const env = sanitizeEnv({ PATH: "/tmp/evil:/usr/bin" }) ?? {};
+    withEnv({ PATH: "/usr/bin" }, () => {
+      const env = sanitizeEnv({ PATH: "/tmp/evil:/usr/bin" });
       expect(env.PATH).toBe("/usr/bin");
-    } finally {
-      if (prev === undefined) {
-        delete process.env.PATH;
-      } else {
-        process.env.PATH = prev;
-      }
-    }
+    });
   });
 
   it("blocks dangerous env keys/prefixes", () => {
-    const prevPythonPath = process.env.PYTHONPATH;
-    const prevLdPreload = process.env.LD_PRELOAD;
-    try {
-      delete process.env.PYTHONPATH;
-      delete process.env.LD_PRELOAD;
-      const env =
-        sanitizeEnv({
+    withEnv(
+      { PYTHONPATH: undefined, LD_PRELOAD: undefined, BASH_ENV: undefined, SHELLOPTS: undefined },
+      () => {
+        const env = sanitizeEnv({
           PYTHONPATH: "/tmp/pwn",
           LD_PRELOAD: "/tmp/pwn.so",
+          BASH_ENV: "/tmp/pwn.sh",
+          SHELLOPTS: "xtrace",
+          PS4: "$(touch /tmp/pwned)",
           FOO: "bar",
-        }) ?? {};
-      expect(env.FOO).toBe("bar");
-      expect(env.PYTHONPATH).toBeUndefined();
-      expect(env.LD_PRELOAD).toBeUndefined();
-    } finally {
-      if (prevPythonPath === undefined) {
-        delete process.env.PYTHONPATH;
-      } else {
-        process.env.PYTHONPATH = prevPythonPath;
-      }
-      if (prevLdPreload === undefined) {
-        delete process.env.LD_PRELOAD;
-      } else {
-        process.env.LD_PRELOAD = prevLdPreload;
-      }
-    }
+        });
+        expect(env.FOO).toBe("bar");
+        expect(env.PYTHONPATH).toBeUndefined();
+        expect(env.LD_PRELOAD).toBeUndefined();
+        expect(env.BASH_ENV).toBeUndefined();
+        expect(env.SHELLOPTS).toBeUndefined();
+        expect(env.PS4).toBeUndefined();
+      },
+    );
+  });
+
+  it("blocks dangerous override-only env keys", () => {
+    withEnv({ HOME: "/Users/trusted", ZDOTDIR: "/Users/trusted/.zdot" }, () => {
+      const env = sanitizeEnv({
+        HOME: "/tmp/evil-home",
+        ZDOTDIR: "/tmp/evil-zdotdir",
+      });
+      expect(env.HOME).toBe("/Users/trusted");
+      expect(env.ZDOTDIR).toBe("/Users/trusted/.zdot");
+    });
+  });
+
+  it("drops dangerous inherited env keys even without overrides", () => {
+    withEnv({ PATH: "/usr/bin:/bin", BASH_ENV: "/tmp/pwn.sh" }, () => {
+      const env = sanitizeEnv(undefined);
+      expect(env.PATH).toBe("/usr/bin:/bin");
+      expect(env.BASH_ENV).toBeUndefined();
+    });
   });
 });
 

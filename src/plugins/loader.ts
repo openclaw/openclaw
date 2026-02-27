@@ -4,14 +4,14 @@ import { fileURLToPath } from "node:url";
 import { createJiti } from "jiti";
 import type { OpenClawConfig } from "../config/config.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
+import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { isPathInsideWithRealpath } from "../security/scan-paths.js";
 import { resolveUserPath } from "../utils.js";
 import { clearPluginCommands } from "./commands.js";
 import {
   applyTestPluginDefaults,
   normalizePluginsConfig,
-  resolveEnableState,
+  resolveEffectiveEnableState,
   resolveMemorySlotDecision,
   type NormalizedPluginsConfig,
 } from "./config-state.js";
@@ -48,20 +48,25 @@ const defaultLogger = () => createSubsystemLogger("plugins");
 const resolvePluginSdkAliasFile = (params: {
   srcFile: string;
   distFile: string;
+  modulePath?: string;
 }): string | null => {
   try {
-    const modulePath = fileURLToPath(import.meta.url);
+    const modulePath = params.modulePath ?? fileURLToPath(import.meta.url);
     const isProduction = process.env.NODE_ENV === "production";
     const isTest = process.env.VITEST || process.env.NODE_ENV === "test";
+    const normalizedModulePath = modulePath.replace(/\\/g, "/");
+    const isDistRuntime = normalizedModulePath.includes("/dist/");
     let cursor = path.dirname(modulePath);
     for (let i = 0; i < 6; i += 1) {
       const srcCandidate = path.join(cursor, "src", "plugin-sdk", params.srcFile);
       const distCandidate = path.join(cursor, "dist", "plugin-sdk", params.distFile);
-      const orderedCandidates = isProduction
-        ? isTest
-          ? [distCandidate, srcCandidate]
-          : [distCandidate]
-        : [srcCandidate, distCandidate];
+      const orderedCandidates = isDistRuntime
+        ? [distCandidate, srcCandidate]
+        : isProduction
+          ? isTest
+            ? [distCandidate, srcCandidate]
+            : [distCandidate]
+          : [srcCandidate, distCandidate];
       for (const candidate of orderedCandidates) {
         if (fs.existsSync(candidate)) {
           return candidate;
@@ -84,6 +89,10 @@ const resolvePluginSdkAlias = (): string | null =>
 
 const resolvePluginSdkAccountIdAlias = (): string | null => {
   return resolvePluginSdkAliasFile({ srcFile: "account-id.ts", distFile: "account-id.js" });
+};
+
+export const __testing = {
+  resolvePluginSdkAliasFile,
 };
 
 function buildCacheKey(params: {
@@ -173,6 +182,31 @@ function createPluginRecord(params: {
     configUiHints: undefined,
     configJsonSchema: undefined,
   };
+}
+
+function recordPluginError(params: {
+  logger: PluginLogger;
+  registry: PluginRegistry;
+  record: PluginRecord;
+  seenIds: Map<string, PluginRecord["origin"]>;
+  pluginId: string;
+  origin: PluginRecord["origin"];
+  error: unknown;
+  logPrefix: string;
+  diagnosticMessagePrefix: string;
+}) {
+  const errorText = String(params.error);
+  params.logger.error(`${params.logPrefix}${errorText}`);
+  params.record.status = "error";
+  params.record.error = errorText;
+  params.registry.plugins.push(params.record);
+  params.seenIds.set(params.pluginId, params.origin);
+  params.registry.diagnostics.push({
+    level: "error",
+    pluginId: params.record.id,
+    source: params.record.source,
+    message: `${params.diagnosticMessagePrefix}${errorText}`,
+  });
 }
 
 function pushDiagnostics(diagnostics: PluginDiagnostic[], append: PluginDiagnostic[]) {
@@ -447,7 +481,12 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       continue;
     }
 
-    const enableState = resolveEnableState(pluginId, candidate.origin, normalized);
+    const enableState = resolveEffectiveEnableState({
+      id: pluginId,
+      origin: candidate.origin,
+      config: normalized,
+      rootConfig: cfg,
+    });
     const entry = normalized.entries[pluginId];
     const record = createPluginRecord({
       id: pluginId,
@@ -486,13 +525,19 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       continue;
     }
 
-    if (
-      !isPathInsideWithRealpath(candidate.rootDir, candidate.source, {
-        requireRealpath: true,
-      })
-    ) {
+    const pluginRoot = safeRealpathOrResolve(candidate.rootDir);
+    const opened = openBoundaryFileSync({
+      absolutePath: candidate.source,
+      rootPath: pluginRoot,
+      boundaryLabel: "plugin root",
+      // Discovery stores rootDir as realpath but source may still be a lexical alias
+      // (e.g. /var/... vs /private/var/... on macOS). Canonical boundary checks
+      // still enforce containment; skip lexical pre-check to avoid false escapes.
+      skipLexicalRootCheck: true,
+    });
+    if (!opened.ok) {
       record.status = "error";
-      record.error = "plugin entry path escapes plugin root";
+      record.error = "plugin entry path escapes plugin root or fails alias checks";
       registry.plugins.push(record);
       seenIds.set(pluginId, candidate.origin);
       registry.diagnostics.push({
@@ -503,21 +548,23 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       });
       continue;
     }
+    const safeSource = opened.path;
+    fs.closeSync(opened.fd);
 
     let mod: OpenClawPluginModule | null = null;
     try {
-      mod = getJiti()(candidate.source) as OpenClawPluginModule;
+      mod = getJiti()(safeSource) as OpenClawPluginModule;
     } catch (err) {
-      logger.error(`[plugins] ${record.id} failed to load from ${record.source}: ${String(err)}`);
-      record.status = "error";
-      record.error = String(err);
-      registry.plugins.push(record);
-      seenIds.set(pluginId, candidate.origin);
-      registry.diagnostics.push({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: `failed to load plugin: ${String(err)}`,
+      recordPluginError({
+        logger,
+        registry,
+        record,
+        seenIds,
+        pluginId,
+        origin: candidate.origin,
+        error: err,
+        logPrefix: `[plugins] ${record.id} failed to load from ${record.source}: `,
+        diagnosticMessagePrefix: "failed to load plugin: ",
       });
       continue;
     }
@@ -634,18 +681,16 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       registry.plugins.push(record);
       seenIds.set(pluginId, candidate.origin);
     } catch (err) {
-      logger.error(
-        `[plugins] ${record.id} failed during register from ${record.source}: ${String(err)}`,
-      );
-      record.status = "error";
-      record.error = String(err);
-      registry.plugins.push(record);
-      seenIds.set(pluginId, candidate.origin);
-      registry.diagnostics.push({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: `plugin failed during register: ${String(err)}`,
+      recordPluginError({
+        logger,
+        registry,
+        record,
+        seenIds,
+        pluginId,
+        origin: candidate.origin,
+        error: err,
+        logPrefix: `[plugins] ${record.id} failed during register from ${record.source}: `,
+        diagnosticMessagePrefix: "plugin failed during register: ",
       });
     }
   }
@@ -669,4 +714,12 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   setActivePluginRegistry(registry, cacheKey);
   initializeGlobalHookRunner(registry);
   return registry;
+}
+
+function safeRealpathOrResolve(value: string): string {
+  try {
+    return fs.realpathSync(value);
+  } catch {
+    return path.resolve(value);
+  }
 }

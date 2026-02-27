@@ -54,6 +54,7 @@ export async function resolveCommandsSystemPromptBundle(
     try {
       return createOpenClawCodingTools({
         config: params.cfg,
+        agentId: params.agentId,
         workspaceDir,
         sessionKey: params.sessionKey,
         messageProvider: params.command.channel,
@@ -74,6 +75,7 @@ export async function resolveCommandsSystemPromptBundle(
   const { sessionAgentId } = resolveSessionAgentIds({
     sessionKey: params.sessionKey,
     config: params.cfg,
+    agentId: params.agentId,
   });
   const defaultModelRef = resolveDefaultModelForAgent({
     cfg: params.cfg,
@@ -124,6 +126,7 @@ export async function resolveCommandsSystemPromptBundle(
     skillsPrompt,
     heartbeatPrompt: undefined,
     ttsHint,
+    acpEnabled: params.cfg?.acp?.enabled !== false,
     runtimeInfo,
     sandboxInfo,
     memoryCitationsMode: params.cfg?.memory?.citations,

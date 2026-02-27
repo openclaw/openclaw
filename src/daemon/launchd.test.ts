@@ -5,12 +5,14 @@ import {
   isLaunchAgentListed,
   parseLaunchctlPrint,
   repairLaunchAgentBootstrap,
+  restartLaunchAgent,
   resolveLaunchAgentPlistPath,
 } from "./launchd.js";
 
 const state = vi.hoisted(() => ({
   launchctlCalls: [] as string[][],
   listOutput: "",
+  printOutput: "",
   bootstrapError: "",
   dirs: new Set<string>(),
   files: new Map<string, string>(),
@@ -34,6 +36,9 @@ vi.mock("./exec-file.js", () => ({
     state.launchctlCalls.push(call);
     if (call[0] === "list") {
       return { stdout: state.listOutput, stderr: "", code: 0 };
+    }
+    if (call[0] === "print") {
+      return { stdout: state.printOutput, stderr: "", code: 0 };
     }
     if (call[0] === "bootstrap" && state.bootstrapError) {
       return { stdout: "", stderr: state.bootstrapError, code: 1 };
@@ -71,6 +76,7 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 beforeEach(() => {
   state.launchctlCalls.length = 0;
   state.listOutput = "";
+  state.printOutput = "";
   state.bootstrapError = "";
   state.dirs.clear();
   state.files.clear();
@@ -177,6 +183,86 @@ describe("launchd install", () => {
     expect(plist).toContain("<key>EnvironmentVariables</key>");
     expect(plist).toContain("<key>TMPDIR</key>");
     expect(plist).toContain(`<string>${tmpDir}</string>`);
+  });
+
+  it("writes KeepAlive=true policy", async () => {
+    const env = createDefaultLaunchdEnv();
+    await installLaunchAgent({
+      env,
+      stdout: new PassThrough(),
+      programArguments: defaultProgramArguments,
+    });
+
+    const plistPath = resolveLaunchAgentPlistPath(env);
+    const plist = state.files.get(plistPath) ?? "";
+    expect(plist).toContain("<key>KeepAlive</key>");
+    expect(plist).toContain("<true/>");
+    expect(plist).not.toContain("<key>SuccessfulExit</key>");
+    expect(plist).toContain("<key>ThrottleInterval</key>");
+    expect(plist).toContain("<integer>60</integer>");
+  });
+
+  it("restarts LaunchAgent with bootout-bootstrap-kickstart order", async () => {
+    const env = createDefaultLaunchdEnv();
+    await restartLaunchAgent({
+      env,
+      stdout: new PassThrough(),
+    });
+
+    const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
+    const label = "ai.openclaw.gateway";
+    const plistPath = resolveLaunchAgentPlistPath(env);
+    const bootoutIndex = state.launchctlCalls.findIndex(
+      (c) => c[0] === "bootout" && c[1] === `${domain}/${label}`,
+    );
+    const bootstrapIndex = state.launchctlCalls.findIndex(
+      (c) => c[0] === "bootstrap" && c[1] === domain && c[2] === plistPath,
+    );
+    const kickstartIndex = state.launchctlCalls.findIndex(
+      (c) => c[0] === "kickstart" && c[1] === "-k" && c[2] === `${domain}/${label}`,
+    );
+
+    expect(bootoutIndex).toBeGreaterThanOrEqual(0);
+    expect(bootstrapIndex).toBeGreaterThanOrEqual(0);
+    expect(kickstartIndex).toBeGreaterThanOrEqual(0);
+    expect(bootoutIndex).toBeLessThan(bootstrapIndex);
+    expect(bootstrapIndex).toBeLessThan(kickstartIndex);
+  });
+
+  it("waits for previous launchd pid to exit before bootstrapping", async () => {
+    const env = createDefaultLaunchdEnv();
+    state.printOutput = ["state = running", "pid = 4242"].join("\n");
+    const killSpy = vi.spyOn(process, "kill");
+    killSpy
+      .mockImplementationOnce(() => true)
+      .mockImplementationOnce(() => {
+        const err = new Error("no such process") as NodeJS.ErrnoException;
+        err.code = "ESRCH";
+        throw err;
+      });
+
+    vi.useFakeTimers();
+    try {
+      const restartPromise = restartLaunchAgent({
+        env,
+        stdout: new PassThrough(),
+      });
+      await vi.advanceTimersByTimeAsync(250);
+      await restartPromise;
+      expect(killSpy).toHaveBeenCalledWith(4242, 0);
+      const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
+      const label = "ai.openclaw.gateway";
+      const bootoutIndex = state.launchctlCalls.findIndex(
+        (c) => c[0] === "bootout" && c[1] === `${domain}/${label}`,
+      );
+      const bootstrapIndex = state.launchctlCalls.findIndex((c) => c[0] === "bootstrap");
+      expect(bootoutIndex).toBeGreaterThanOrEqual(0);
+      expect(bootstrapIndex).toBeGreaterThanOrEqual(0);
+      expect(bootoutIndex).toBeLessThan(bootstrapIndex);
+    } finally {
+      vi.useRealTimers();
+      killSpy.mockRestore();
+    }
   });
 
   it("shows actionable guidance when launchctl gui domain does not support bootstrap", async () => {

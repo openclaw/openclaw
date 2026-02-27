@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { getSubagentDepth, isCronSessionKey } from "../sessions/session-key-utils.js";
-import { classifySessionKeyShape } from "./session-key.js";
+import {
+  deriveSessionChatType,
+  getSubagentDepth,
+  isCronSessionKey,
+} from "../sessions/session-key-utils.js";
+import {
+  classifySessionKeyShape,
+  parseAgentSessionKey,
+  toAgentStoreSessionKey,
+} from "./session-key.js";
 
 describe("classifySessionKeyShape", () => {
   it("classifies empty keys as missing", () => {
@@ -64,5 +72,46 @@ describe("isCronSessionKey", () => {
     expect(isCronSessionKey("agent:main:subagent:worker")).toBe(false);
     expect(isCronSessionKey("cron:job-1")).toBe(false);
     expect(isCronSessionKey(undefined)).toBe(false);
+  });
+});
+
+describe("deriveSessionChatType", () => {
+  it("detects canonical direct/group/channel session keys", () => {
+    expect(deriveSessionChatType("agent:main:discord:direct:user1")).toBe("direct");
+    expect(deriveSessionChatType("agent:main:telegram:group:g1")).toBe("group");
+    expect(deriveSessionChatType("agent:main:discord:channel:c1")).toBe("channel");
+  });
+
+  it("detects legacy direct markers", () => {
+    expect(deriveSessionChatType("agent:main:telegram:dm:123456")).toBe("direct");
+    expect(deriveSessionChatType("telegram:dm:123456")).toBe("direct");
+  });
+
+  it("detects legacy discord guild channel keys", () => {
+    expect(deriveSessionChatType("discord:acc-1:guild-123:channel-456")).toBe("channel");
+  });
+
+  it("returns unknown for main or malformed session keys", () => {
+    expect(deriveSessionChatType("agent:main:main")).toBe("unknown");
+    expect(deriveSessionChatType("agent:main")).toBe("unknown");
+    expect(deriveSessionChatType("")).toBe("unknown");
+  });
+});
+
+describe("session key canonicalization", () => {
+  it("parses agent keys case-insensitively and returns lowercase tokens", () => {
+    expect(parseAgentSessionKey("AGENT:Main:Hook:Webhook:42")).toEqual({
+      agentId: "main",
+      rest: "hook:webhook:42",
+    });
+  });
+
+  it("does not double-prefix already-qualified agent keys", () => {
+    expect(
+      toAgentStoreSessionKey({
+        agentId: "main",
+        requestKey: "agent:main:main",
+      }),
+    ).toBe("agent:main:main");
   });
 });

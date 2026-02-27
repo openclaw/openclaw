@@ -3,7 +3,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
-import { loadOpenClawPlugins } from "./loader.js";
+import { withEnv } from "../test-utils/env.js";
+import { __testing, loadOpenClawPlugins } from "./loader.js";
 
 type TempPlugin = { dir: string; file: string; id: string };
 
@@ -11,6 +12,26 @@ const fixtureRoot = path.join(os.tmpdir(), `openclaw-plugin-${randomUUID()}`);
 let tempDirIndex = 0;
 const prevBundledDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
 const EMPTY_PLUGIN_SCHEMA = { type: "object", additionalProperties: false, properties: {} };
+const BUNDLED_TELEGRAM_PLUGIN_BODY = `export default { id: "telegram", register(api) {
+  api.registerChannel({
+    plugin: {
+      id: "telegram",
+      meta: {
+        id: "telegram",
+        label: "Telegram",
+        selectionLabel: "Telegram",
+        docsPath: "/channels/telegram",
+        blurb: "telegram channel"
+      },
+      capabilities: { chatTypes: ["direct"] },
+      config: {
+        listAccountIds: () => [],
+        resolveAccount: () => ({ accountId: "default" })
+      },
+      outbound: { deliveryMode: "direct" }
+    }
+  });
+} };`;
 
 function makeTempDir() {
   const dir = path.join(fixtureRoot, `case-${tempDirIndex++}`);
@@ -93,6 +114,23 @@ function loadBundledMemoryPluginRegistry(options?: {
   });
 }
 
+function setupBundledTelegramPlugin() {
+  const bundledDir = makeTempDir();
+  writePlugin({
+    id: "telegram",
+    body: BUNDLED_TELEGRAM_PLUGIN_BODY,
+    dir: bundledDir,
+    filename: "telegram.js",
+  });
+  process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
+}
+
+function expectTelegramLoaded(registry: ReturnType<typeof loadOpenClawPlugins>) {
+  const telegram = registry.plugins.find((entry) => entry.id === "telegram");
+  expect(telegram?.status).toBe("loaded");
+  expect(registry.channels.some((entry) => entry.plugin.id === "telegram")).toBe(true);
+}
+
 afterEach(() => {
   if (prevBundledDir === undefined) {
     delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
@@ -149,33 +187,7 @@ describe("loadOpenClawPlugins", () => {
   });
 
   it("loads bundled telegram plugin when enabled", () => {
-    const bundledDir = makeTempDir();
-    writePlugin({
-      id: "telegram",
-      body: `export default { id: "telegram", register(api) {
-  api.registerChannel({
-    plugin: {
-      id: "telegram",
-      meta: {
-        id: "telegram",
-        label: "Telegram",
-        selectionLabel: "Telegram",
-        docsPath: "/channels/telegram",
-        blurb: "telegram channel"
-      },
-      capabilities: { chatTypes: ["direct"] },
-      config: {
-        listAccountIds: () => [],
-        resolveAccount: () => ({ accountId: "default" })
-      },
-      outbound: { deliveryMode: "direct" }
-    }
-  });
-	} };`,
-      dir: bundledDir,
-      filename: "telegram.js",
-    });
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
+    setupBundledTelegramPlugin();
 
     const registry = loadOpenClawPlugins({
       cache: false,
@@ -189,9 +201,51 @@ describe("loadOpenClawPlugins", () => {
       },
     });
 
+    expectTelegramLoaded(registry);
+  });
+
+  it("loads bundled channel plugins when channels.<id>.enabled=true", () => {
+    setupBundledTelegramPlugin();
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: {
+        channels: {
+          telegram: {
+            enabled: true,
+          },
+        },
+        plugins: {
+          enabled: true,
+        },
+      },
+    });
+
+    expectTelegramLoaded(registry);
+  });
+
+  it("still respects explicit disable via plugins.entries for bundled channels", () => {
+    setupBundledTelegramPlugin();
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: {
+        channels: {
+          telegram: {
+            enabled: true,
+          },
+        },
+        plugins: {
+          entries: {
+            telegram: { enabled: false },
+          },
+        },
+      },
+    });
+
     const telegram = registry.plugins.find((entry) => entry.id === "telegram");
-    expect(telegram?.status).toBe("loaded");
-    expect(registry.channels.some((entry) => entry.plugin.id === "telegram")).toBe(true);
+    expect(telegram?.status).toBe("disabled");
+    expect(telegram?.error).toBe("disabled in config");
   });
 
   it("enables bundled memory plugin when selected by slot", () => {
@@ -239,6 +293,32 @@ describe("loadOpenClawPlugins", () => {
     const loaded = registry.plugins.find((entry) => entry.id === "allowed");
     expect(loaded?.status).toBe("loaded");
     expect(Object.keys(registry.gatewayHandlers)).toContain("allowed.ping");
+  });
+
+  it("loads plugins when source and root differ only by realpath alias", () => {
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
+    const plugin = writePlugin({
+      id: "alias-safe",
+      body: `export default { id: "alias-safe", register() {} };`,
+    });
+    const realRoot = fs.realpathSync(plugin.dir);
+    if (realRoot === plugin.dir) {
+      return;
+    }
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["alias-safe"],
+        },
+      },
+    });
+
+    const loaded = registry.plugins.find((entry) => entry.id === "alias-safe");
+    expect(loaded?.status).toBe("loaded");
   });
 
   it("denylist disables plugins even if allowed", () => {
@@ -516,10 +596,8 @@ describe("loadOpenClawPlugins", () => {
 
   it("warns when loaded non-bundled plugin has no install/load-path provenance", () => {
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
-    const prevStateDir = process.env.OPENCLAW_STATE_DIR;
     const stateDir = makeTempDir();
-    process.env.OPENCLAW_STATE_DIR = stateDir;
-    try {
+    withEnv({ OPENCLAW_STATE_DIR: stateDir, CLAWDBOT_STATE_DIR: undefined }, () => {
       const globalDir = path.join(stateDir, "extensions", "rogue");
       fs.mkdirSync(globalDir, { recursive: true });
       writePlugin({
@@ -552,13 +630,7 @@ describe("loadOpenClawPlugins", () => {
             msg.includes("rogue") && msg.includes("loaded without install/load-path provenance"),
         ),
       ).toBe(true);
-    } finally {
-      if (prevStateDir === undefined) {
-        delete process.env.OPENCLAW_STATE_DIR;
-      } else {
-        process.env.OPENCLAW_STATE_DIR = prevStateDir;
-      }
-    }
+    });
   });
 
   it("rejects plugin entry files that escape plugin root via symlink", () => {
@@ -603,5 +675,91 @@ describe("loadOpenClawPlugins", () => {
     const record = registry.plugins.find((entry) => entry.id === "symlinked");
     expect(record?.status).not.toBe("loaded");
     expect(registry.diagnostics.some((entry) => entry.message.includes("escapes"))).toBe(true);
+  });
+
+  it("rejects plugin entry files that escape plugin root via hardlink", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
+    const pluginDir = makeTempDir();
+    const outsideDir = makeTempDir();
+    const outsideEntry = path.join(outsideDir, "outside.js");
+    const linkedEntry = path.join(pluginDir, "entry.js");
+    fs.writeFileSync(
+      outsideEntry,
+      'export default { id: "hardlinked", register() { throw new Error("should not run"); } };',
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "openclaw.plugin.json"),
+      JSON.stringify(
+        {
+          id: "hardlinked",
+          configSchema: EMPTY_PLUGIN_SCHEMA,
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    try {
+      fs.linkSync(outsideEntry, linkedEntry);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "EXDEV") {
+        return;
+      }
+      throw err;
+    }
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: {
+        plugins: {
+          load: { paths: [linkedEntry] },
+          allow: ["hardlinked"],
+        },
+      },
+    });
+
+    const record = registry.plugins.find((entry) => entry.id === "hardlinked");
+    expect(record?.status).not.toBe("loaded");
+    expect(registry.diagnostics.some((entry) => entry.message.includes("escapes"))).toBe(true);
+  });
+
+  it("prefers dist plugin-sdk alias when loader runs from dist", () => {
+    const root = makeTempDir();
+    const srcFile = path.join(root, "src", "plugin-sdk", "index.ts");
+    const distFile = path.join(root, "dist", "plugin-sdk", "index.js");
+    fs.mkdirSync(path.dirname(srcFile), { recursive: true });
+    fs.mkdirSync(path.dirname(distFile), { recursive: true });
+    fs.writeFileSync(srcFile, "export {};\n", "utf-8");
+    fs.writeFileSync(distFile, "export {};\n", "utf-8");
+
+    const resolved = __testing.resolvePluginSdkAliasFile({
+      srcFile: "index.ts",
+      distFile: "index.js",
+      modulePath: path.join(root, "dist", "plugins", "loader.js"),
+    });
+    expect(resolved).toBe(distFile);
+  });
+
+  it("prefers src plugin-sdk alias when loader runs from src in non-production", () => {
+    const root = makeTempDir();
+    const srcFile = path.join(root, "src", "plugin-sdk", "index.ts");
+    const distFile = path.join(root, "dist", "plugin-sdk", "index.js");
+    fs.mkdirSync(path.dirname(srcFile), { recursive: true });
+    fs.mkdirSync(path.dirname(distFile), { recursive: true });
+    fs.writeFileSync(srcFile, "export {};\n", "utf-8");
+    fs.writeFileSync(distFile, "export {};\n", "utf-8");
+
+    const resolved = withEnv({ NODE_ENV: undefined }, () =>
+      __testing.resolvePluginSdkAliasFile({
+        srcFile: "index.ts",
+        distFile: "index.js",
+        modulePath: path.join(root, "src", "plugins", "loader.ts"),
+      }),
+    );
+    expect(resolved).toBe(srcFile);
   });
 });

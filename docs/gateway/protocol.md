@@ -170,6 +170,14 @@ The Gateway treats these as **claims** and enforces server-side allowlists.
 - Nodes may call `skills.bins` to fetch the current list of skill executables
   for auto-allow checks.
 
+### Operator helper methods
+
+- Operators may call `tools.catalog` (`operator.read`) to fetch the runtime tool catalog for an
+  agent. The response includes grouped tools and provenance metadata:
+  - `source`: `core` or `plugin`
+  - `pluginId`: plugin owner when `source="plugin"`
+  - `optional`: whether a plugin tool is optional
+
 ## Exec approvals
 
 - When an exec request needs approval, the gateway broadcasts `exec.approval.requested`.
@@ -204,9 +212,35 @@ The Gateway treats these as **claims** and enforces server-side allowlists.
 - **Local** connects include loopback and the gateway host’s own tailnet address
   (so same‑host tailnet binds can still auto‑approve).
 - All WS clients must include `device` identity during `connect` (operator + node).
-  Control UI can omit it **only** when `gateway.controlUi.allowInsecureAuth` is enabled
-  (or `gateway.controlUi.dangerouslyDisableDeviceAuth` for break-glass use).
-- Non-local connections must sign the server-provided `connect.challenge` nonce.
+  Control UI can omit it **only** when `gateway.controlUi.dangerouslyDisableDeviceAuth`
+  is enabled for break-glass use.
+- All connections must sign the server-provided `connect.challenge` nonce.
+
+### Device auth migration diagnostics
+
+For legacy clients that still use pre-challenge signing behavior, `connect` now returns
+`DEVICE_AUTH_*` detail codes under `error.details.code` with a stable `error.details.reason`.
+
+Common migration failures:
+
+| Message                     | details.code                     | details.reason           | Meaning                                            |
+| --------------------------- | -------------------------------- | ------------------------ | -------------------------------------------------- |
+| `device nonce required`     | `DEVICE_AUTH_NONCE_REQUIRED`     | `device-nonce-missing`   | Client omitted `device.nonce` (or sent blank).     |
+| `device nonce mismatch`     | `DEVICE_AUTH_NONCE_MISMATCH`     | `device-nonce-mismatch`  | Client signed with a stale/wrong nonce.            |
+| `device signature invalid`  | `DEVICE_AUTH_SIGNATURE_INVALID`  | `device-signature`       | Signature payload does not match v2 payload.       |
+| `device signature expired`  | `DEVICE_AUTH_SIGNATURE_EXPIRED`  | `device-signature-stale` | Signed timestamp is outside allowed skew.          |
+| `device identity mismatch`  | `DEVICE_AUTH_DEVICE_ID_MISMATCH` | `device-id-mismatch`     | `device.id` does not match public key fingerprint. |
+| `device public key invalid` | `DEVICE_AUTH_PUBLIC_KEY_INVALID` | `device-public-key`      | Public key format/canonicalization failed.         |
+
+Migration target:
+
+- Always wait for `connect.challenge`.
+- Sign the v2 payload that includes the server nonce.
+- Send the same nonce in `connect.params.device.nonce`.
+- Preferred signature payload is `v3`, which binds `platform` and `deviceFamily`
+  in addition to device/client/role/scopes/token/nonce fields.
+- Legacy `v2` signatures remain accepted for compatibility, but paired-device
+  metadata pinning still controls command policy on reconnect.
 
 ## TLS + pinning
 

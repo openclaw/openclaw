@@ -26,6 +26,10 @@ import { renderTable } from "../terminal/table.js";
 import { theme } from "../terminal/theme.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
 import { formatCliCommand } from "./command-format.js";
+import {
+  buildNpmInstallRecordFields,
+  resolvePinnedNpmInstallRecordForCli,
+} from "./npm-resolution.js";
 import { promptYesNo } from "./prompt.js";
 
 export type HooksListOptions = {
@@ -177,6 +181,25 @@ function createInstallLogger() {
 
 function logGatewayRestartHint() {
   defaultRuntime.log("Restart the gateway to load hooks.");
+}
+
+function logIntegrityDriftWarning(
+  hookId: string,
+  drift: {
+    resolution: { resolvedSpec?: string };
+    spec: string;
+    expectedIntegrity: string;
+    actualIntegrity: string;
+  },
+) {
+  const specLabel = drift.resolution.resolvedSpec ?? drift.spec;
+  defaultRuntime.log(
+    theme.warn(
+      `Integrity drift detected for "${hookId}" (${specLabel})` +
+        `\nExpected: ${drift.expectedIntegrity}` +
+        `\nActual:   ${drift.actualIntegrity}`,
+    ),
+  );
 }
 
 async function readInstalledPackageVersion(dir: string): Promise<string | undefined> {
@@ -660,29 +683,19 @@ export function registerHooksCli(program: Command): void {
       }
 
       let next = enableInternalHookEntries(cfg, result.hooks);
-      const resolvedSpec = result.npmResolution?.resolvedSpec;
-      const recordSpec = opts.pin && resolvedSpec ? resolvedSpec : raw;
-      if (opts.pin && !resolvedSpec) {
-        defaultRuntime.log(
-          theme.warn("Could not resolve exact npm version for --pin; storing original npm spec."),
-        );
-      }
-      if (opts.pin && resolvedSpec) {
-        defaultRuntime.log(`Pinned npm install record to ${resolvedSpec}.`);
-      }
+      const installRecord = resolvePinnedNpmInstallRecordForCli(
+        raw,
+        Boolean(opts.pin),
+        result.targetDir,
+        result.version,
+        result.npmResolution,
+        defaultRuntime.log,
+        theme.warn,
+      );
 
       next = recordHookInstall(next, {
         hookId: result.hookPackId,
-        source: "npm",
-        spec: recordSpec,
-        installPath: result.targetDir,
-        version: result.version,
-        resolvedName: result.npmResolution?.name,
-        resolvedVersion: result.npmResolution?.version,
-        resolvedSpec: result.npmResolution?.resolvedSpec,
-        integrity: result.npmResolution?.integrity,
-        shasum: result.npmResolution?.shasum,
-        resolvedAt: result.npmResolution?.resolvedAt,
+        ...installRecord,
         hooks: result.hooks,
       });
       await writeConfigFile(next);
@@ -741,14 +754,7 @@ export function registerHooksCli(program: Command): void {
             expectedHookPackId: hookId,
             expectedIntegrity: record.integrity,
             onIntegrityDrift: async (drift) => {
-              const specLabel = drift.resolution.resolvedSpec ?? drift.spec;
-              defaultRuntime.log(
-                theme.warn(
-                  `Integrity drift detected for "${hookId}" (${specLabel})` +
-                    `\nExpected: ${drift.expectedIntegrity}` +
-                    `\nActual:   ${drift.actualIntegrity}`,
-                ),
-              );
+              logIntegrityDriftWarning(hookId, drift);
               return true;
             },
             logger: createInstallLogger(),
@@ -774,14 +780,7 @@ export function registerHooksCli(program: Command): void {
           expectedHookPackId: hookId,
           expectedIntegrity: record.integrity,
           onIntegrityDrift: async (drift) => {
-            const specLabel = drift.resolution.resolvedSpec ?? drift.spec;
-            defaultRuntime.log(
-              theme.warn(
-                `Integrity drift detected for "${hookId}" (${specLabel})` +
-                  `\nExpected: ${drift.expectedIntegrity}` +
-                  `\nActual:   ${drift.actualIntegrity}`,
-              ),
-            );
+            logIntegrityDriftWarning(hookId, drift);
             return await promptYesNo(`Continue updating "${hookId}" with this artifact?`);
           },
           logger: createInstallLogger(),
@@ -794,16 +793,12 @@ export function registerHooksCli(program: Command): void {
         const nextVersion = result.version ?? (await readInstalledPackageVersion(result.targetDir));
         nextCfg = recordHookInstall(nextCfg, {
           hookId,
-          source: "npm",
-          spec: record.spec,
-          installPath: result.targetDir,
-          version: nextVersion,
-          resolvedName: result.npmResolution?.name,
-          resolvedVersion: result.npmResolution?.version,
-          resolvedSpec: result.npmResolution?.resolvedSpec,
-          integrity: result.npmResolution?.integrity,
-          shasum: result.npmResolution?.shasum,
-          resolvedAt: result.npmResolution?.resolvedAt,
+          ...buildNpmInstallRecordFields({
+            spec: record.spec,
+            installPath: result.targetDir,
+            version: nextVersion,
+            resolution: result.npmResolution,
+          }),
           hooks: result.hooks,
         });
         updatedCount += 1;
