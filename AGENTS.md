@@ -135,6 +135,9 @@
   3. Keep `bugfixes/rollup` as a clean, intentional patch stack (bugfixes + explicitly approved fork deltas; avoid unrelated experiments).
   4. Before any rollup refresh/publish, create a backup ref and verify intent with `git cherry -v upstream/main bugfixes/rollup`.
   5. Push rollup updates with `--force-with-lease` only, and keep at least one recent rollback backup ref.
+- Rollup automation:
+  - Local safe refresh helper: `scripts/refresh-rollup-safe.sh` (`--push` to publish, default is no push).
+  - CI policy guard: `.github/workflows/rollup-policy-check.yml` runs `scripts/check-rollup-policy.sh` on `bugfixes/rollup`.
 
 ## GitHub Search (`gh`)
 

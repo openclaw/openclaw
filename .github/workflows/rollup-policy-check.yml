@@ -1,0 +1,42 @@
+name: Rollup Policy Check
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - bugfixes/rollup
+  pull_request:
+    branches:
+      - bugfixes/rollup
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rollup-policy-check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    env:
+      UPSTREAM_REPO: openclaw/openclaw
+      UPSTREAM_REMOTE: upstream
+      UPSTREAM_REF: main
+      ROLLUP_BRANCH: bugfixes/rollup
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch upstream refs
+        run: |
+          set -euo pipefail
+          git remote add "${UPSTREAM_REMOTE}" "https://github.com/${UPSTREAM_REPO}.git" 2>/dev/null || true
+          git fetch --prune "${UPSTREAM_REMOTE}"
+
+      - name: Run rollup policy checks
+        run: |
+          set -euo pipefail
+          bash scripts/check-rollup-policy.sh
