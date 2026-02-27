@@ -84,6 +84,24 @@ function readOptionalTargetAndTimeout(params: Record<string, unknown>) {
   return { targetId, timeoutMs };
 }
 
+/**
+ * Read URL parameter with alias support.
+ * Supports both 'targetUrl' (canonical) and 'url' (alias for backwards compatibility).
+ */
+function readUrlParam(params: Record<string, unknown>, options: { required?: boolean } = {}) {
+  const { required = false } = options;
+  // Try targetUrl first (canonical name)
+  let url = typeof params.targetUrl === "string" ? params.targetUrl.trim() : undefined;
+  // Fall back to url alias
+  if (!url && typeof params.url === "string") {
+    url = params.url.trim();
+  }
+  if (!url && required) {
+    throw new Error("targetUrl required (or 'url' as alias)");
+  }
+  return url;
+}
+
 type BrowserProxyFile = {
   path: string;
   base64: string;
@@ -405,9 +423,7 @@ export function createBrowserTool(opts?: {
             return formatTabsToolResult(tabs);
           }
         case "open": {
-          const targetUrl = readStringParam(params, "targetUrl", {
-            required: true,
-          });
+          const targetUrl = readUrlParam(params, { required: true });
           if (proxyRequest) {
             const result = await proxyRequest({
               method: "POST",
@@ -635,9 +651,7 @@ export function createBrowserTool(opts?: {
           });
         }
         case "navigate": {
-          const targetUrl = readStringParam(params, "targetUrl", {
-            required: true,
-          });
+          const targetUrl = readUrlParam(params, { required: true });
           const targetId = readStringParam(params, "targetId");
           if (proxyRequest) {
             const result = await proxyRequest({
