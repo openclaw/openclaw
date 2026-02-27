@@ -4,6 +4,7 @@ import { runRegisteredCli } from "../test-utils/command-runner.js";
 
 const githubCopilotLoginCommand = vi.fn();
 const modelsStatusCommand = vi.fn().mockResolvedValue(undefined);
+const modelsAuthLoginCommand = vi.fn().mockResolvedValue(undefined);
 const noopAsync = vi.fn(async () => undefined);
 
 vi.mock("../commands/models.js", () => ({
@@ -13,7 +14,7 @@ vi.mock("../commands/models.js", () => ({
   modelsAliasesListCommand: noopAsync,
   modelsAliasesRemoveCommand: noopAsync,
   modelsAuthAddCommand: noopAsync,
-  modelsAuthLoginCommand: noopAsync,
+  modelsAuthLoginCommand,
   modelsAuthOrderClearCommand: noopAsync,
   modelsAuthOrderGetCommand: noopAsync,
   modelsAuthOrderSetCommand: noopAsync,
@@ -44,6 +45,7 @@ describe("models cli", () => {
   beforeEach(() => {
     githubCopilotLoginCommand.mockClear();
     modelsStatusCommand.mockClear();
+    modelsAuthLoginCommand.mockClear();
   });
 
   function createProgram() {
@@ -88,6 +90,26 @@ describe("models cli", () => {
     await runModelsCommand(args);
     expect(modelsStatusCommand).toHaveBeenCalledWith(
       expect.objectContaining({ agent: "poe" }),
+      expect.any(Object),
+    );
+  });
+
+  it("forwards --profile-id to models auth login command", async () => {
+    await runModelsCommand([
+      "models",
+      "auth",
+      "login",
+      "--provider",
+      "openai-codex",
+      "--profile-id",
+      "openai-codex:alt1",
+    ]);
+
+    expect(modelsAuthLoginCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "openai-codex",
+        profileId: "openai-codex:alt1",
+      }),
       expect.any(Object),
     );
   });
