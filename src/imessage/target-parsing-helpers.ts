@@ -48,9 +48,7 @@ export function parseChatTargetPrefixesOrThrow(
     if (params.lower.startsWith(prefix)) {
       const value = stripPrefix(params.trimmed, prefix);
       if (!/^\d+$/.test(value)) {
-        throw new Error(
-          `Invalid chat_id: ${value}. Use chat_identifier: for hex identifiers.`,
-        );
+        throw new Error(`Invalid chat_id: ${value}. Use chat_identifier: for hex identifiers.`);
       }
       const chatId = Number.parseInt(value, 10);
       if (!Number.isFinite(chatId)) {
