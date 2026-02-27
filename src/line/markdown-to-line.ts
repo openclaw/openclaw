@@ -371,6 +371,13 @@ export function stripMarkdown(text: string): string {
   result = result.replace(/\n{3,}/g, "\n\n");
   result = result.trim();
 
+  // Edge case: if input had content but result is empty (e.g., "***" or "---"),
+  // return the original text to avoid sending empty messages
+  const originalTrimmed = text.trim();
+  if (result === "" && originalTrimmed !== "") {
+    return originalTrimmed;
+  }
+
   return result;
 }
 

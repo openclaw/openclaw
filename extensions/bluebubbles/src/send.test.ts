@@ -390,14 +390,17 @@ describe("send", () => {
       ).rejects.toThrow("requires text");
     });
 
-    it("throws when text becomes empty after markdown stripping", async () => {
-      // Edge case: input like "***" or "---" passes initial check but becomes empty after stripMarkdown
+    it("sends text that was previously horizontal rule markdown", async () => {
+      // After the stripMarkdown fix, "***" now returns "***" instead of empty string
+      mockFetch.mockResolvedValueOnce(
+        new Response(JSON.stringify({ data: { guid: "ok" } }), { status: 200 }),
+      );
       await expect(
         sendMessageBlueBubbles("+15551234567", "***", {
           serverUrl: "http://localhost:1234",
           password: "test",
         }),
-      ).rejects.toThrow("empty after markdown removal");
+      ).resolves.toBeDefined();
     });
 
     it("throws when serverUrl is missing", async () => {

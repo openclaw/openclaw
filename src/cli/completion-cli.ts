@@ -334,6 +334,27 @@ export async function installCompletion(shell: string, yes: boolean, binName = "
     }
     sourceLine = formatCompletionSourceLine("bash", binName, cachePath);
   } else if (shell === "fish") {
+    // For fish, prefer installing directly to completions directory
+    // which is the standard fish way and doesn't require modifying config.fish
+    const fishCompletionsDir = path.join(home, ".config", "fish", "completions");
+    const fishCompletionFile = path.join(fishCompletionsDir, `${binName}.fish`);
+    
+    try {
+      await fs.mkdir(fishCompletionsDir, { recursive: true });
+      const script = await fs.readFile(cachePath, "utf-8");
+      await fs.writeFile(fishCompletionFile, script, "utf-8");
+      if (!yes) {
+        console.log(`Completion installed to ${fishCompletionFile}`);
+        console.log(`Restart your shell or run: source ${fishCompletionFile}`);
+      }
+      return;
+    } catch (err) {
+      // Fall back to config.fish method if completions dir fails
+      if (!yes) {
+        console.warn(`Failed to install to ${fishCompletionsDir}, falling back to config.fish`);
+      }
+    }
+    
     profilePath = path.join(home, ".config", "fish", "config.fish");
     sourceLine = formatCompletionSourceLine("fish", binName, cachePath);
   } else {

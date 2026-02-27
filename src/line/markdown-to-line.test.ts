@@ -168,6 +168,20 @@ Some ~~deleted~~ content.`;
     expect(result).not.toContain("~~");
     expect(result).not.toContain(">");
   });
+
+  it("returns original text when result would be empty (horizontal rules)", () => {
+    // Edge case: "***" or "---" alone becomes empty after stripping
+    // but we should return the original to avoid empty messages
+    expect(stripMarkdown("***")).toBe("***");
+    expect(stripMarkdown("---")).toBe("---");
+    expect(stripMarkdown("___")).toBe("___");
+  });
+
+  it("returns original text for mixed hr-like content", () => {
+    // These should still be processed normally since they have other content
+    expect(stripMarkdown("***\nSome text\n***")).toBe("Some text");
+    expect(stripMarkdown("Above\n---\nBelow")).toBe("Above\n\nBelow");
+  });
 });
 
 describe("convertTableToFlexBubble", () => {

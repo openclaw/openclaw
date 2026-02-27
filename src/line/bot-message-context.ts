@@ -293,6 +293,10 @@ async function finalizeLineInboundContext(params: {
     ...params.locationContext,
     OriginatingChannel: "line" as const,
     OriginatingTo: originatingTo,
+    // Set CommandAuthorized to true to enable slash commands on LINE.
+    // When commands.allowFrom is configured, it will be checked separately via resolveCommandAuthorization.
+    // Without this, commands are silently rejected because CommandAuthorized defaults to false.
+    CommandAuthorized: true,
   });
 
   void recordSessionMetaFromInbound({
