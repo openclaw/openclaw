@@ -1,7 +1,9 @@
 import {
+  DEFAULT_ACCOUNT_ID,
   buildPendingHistoryContextFromMap,
   clearHistoryEntriesIfEnabled,
   DEFAULT_GROUP_HISTORY_LIMIT,
+  createScopedPairingAccess,
   logInboundDrop,
   recordPendingHistoryEntryIfEnabled,
   resolveControlCommandGate,
@@ -57,6 +59,11 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     log,
   } = deps;
   const core = getMSTeamsRuntime();
+  const pairing = createScopedPairingAccess({
+    core,
+    channel: "msteams",
+    accountId: DEFAULT_ACCOUNT_ID,
+  });
   const logVerboseMessage = (message: string) => {
     if (core.logging.shouldLogVerbose()) {
       log.debug?.(message);
@@ -132,8 +139,9 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     const dmPolicy = msteamsCfg?.dmPolicy ?? "pairing";
     const storedAllowFrom = await readStoreAllowFromForDmPolicy({
       provider: "msteams",
+      accountId: pairing.accountId,
       dmPolicy,
-      readStore: (provider) => core.channel.pairing.readAllowFromStore(provider),
+      readStore: pairing.readStoreForDmPolicy,
     });
     const useAccessGroups = cfg.commands?.useAccessGroups !== false;
 
@@ -200,8 +208,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         allowNameMatching: isDangerousNameMatchingEnabled(msteamsCfg),
       });
       if (access.decision === "pairing") {
-        const request = await core.channel.pairing.upsertPairingRequest({
-          channel: "msteams",
+        const request = await pairing.upsertPairingRequest({
           id: senderId,
           meta: { name: senderName },
         });

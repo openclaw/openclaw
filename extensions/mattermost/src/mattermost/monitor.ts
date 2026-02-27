@@ -8,6 +8,7 @@ import type {
 import {
   buildAgentMediaPayload,
   DM_GROUP_ACCESS_REASON,
+  createScopedPairingAccess,
   createReplyPrefixOptions,
   createTypingCallbacks,
   logInboundDrop,
@@ -170,6 +171,11 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
   const account = resolveMattermostAccount({
     cfg,
     accountId: opts.accountId,
+  });
+  const pairing = createScopedPairingAccess({
+    core,
+    channel: "mattermost",
+    accountId: account.accountId,
   });
   const allowNameMatching = isDangerousNameMatchingEnabled(account.config);
   const botToken = opts.botToken?.trim() || account.botToken?.trim();
@@ -362,8 +368,9 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     const storeAllowFrom = normalizeMattermostAllowList(
       await readStoreAllowFromForDmPolicy({
         provider: "mattermost",
+        accountId: account.accountId,
         dmPolicy,
-        readStore: (provider) => core.channel.pairing.readAllowFromStore(provider),
+        readStore: pairing.readStoreForDmPolicy,
       }),
     );
     const accessDecision = resolveDmGroupAccessWithLists({
@@ -424,8 +431,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           return;
         }
         if (accessDecision.decision === "pairing") {
-          const { code, created } = await core.channel.pairing.upsertPairingRequest({
-            channel: "mattermost",
+          const { code, created } = await pairing.upsertPairingRequest({
             id: senderId,
             meta: { name: senderName },
           });
@@ -862,8 +868,9 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     const storeAllowFrom = normalizeMattermostAllowList(
       await readStoreAllowFromForDmPolicy({
         provider: "mattermost",
+        accountId: account.accountId,
         dmPolicy,
-        readStore: (provider) => core.channel.pairing.readAllowFromStore(provider),
+        readStore: pairing.readStoreForDmPolicy,
       }),
     );
     const reactionAccess = resolveDmGroupAccessWithLists({

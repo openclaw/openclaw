@@ -4,6 +4,11 @@
 `<repo-root>/apps/windows`
 
 ## What works now
+
+## MVP status
+- ✅ Core 4-phase plan is complete (Phase 1–4 delivered).
+- ✅ Remaining work is optional polish/follow-up, not phase-blocking.
+
 1. `OpenClaw.Node` builds/runs.
 2. Connects to real local OpenClaw gateway and completes handshake (`hello-ok`).
 3. Receives `connect.challenge`, sends `connect` request in gateway frame format.
@@ -136,4 +141,4 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\node-reload.ps1
 1. Keep running `RUN_REAL_GATEWAY_INTEGRATION=1 dotnet test --filter "FullyQualifiedName~RealGatewayIntegrationTests" -p:Platform=x64` before major merges (now with signed device-auth handshake on connect; suite covers node-connect/status plus screen.list/camera.list/window.list/window.rect response-shape paths, screen.record generic + explicit screenIndex path, and camera.snap generic + explicit deviceId/front-back shape paths when available).
 2. On Windows hosts, ensure camera prerequisites are explicit in onboarding/docs: Camera privacy toggles enabled for desktop apps.
 3. Extend camera validation on true multi-camera hardware (distinct front/back/external) to tune device-selection heuristics beyond single-camera semantics.
-4. If needed later, persist pairing pending cache to disk (currently in-memory only).
+4. Pairing pending cache is already persisted to disk (`~/.openclaw/identity/pending-pairs.json`) and reloaded on startup.

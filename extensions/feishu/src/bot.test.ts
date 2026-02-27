@@ -239,7 +239,10 @@ describe("handleFeishuMessage command authorization", () => {
 
     await dispatchMessage({ cfg, event });
 
-    expect(mockReadAllowFromStore).toHaveBeenCalledWith("feishu");
+    expect(mockReadAllowFromStore).toHaveBeenCalledWith({
+      channel: "feishu",
+      accountId: "default",
+    });
     expect(mockResolveCommandAuthorizedFromAuthorizers).not.toHaveBeenCalled();
     expect(mockFinalizeInboundContext).toHaveBeenCalledTimes(1);
     expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(1);
@@ -278,6 +281,7 @@ describe("handleFeishuMessage command authorization", () => {
 
     expect(mockUpsertPairingRequest).toHaveBeenCalledWith({
       channel: "feishu",
+      accountId: "default",
       id: "ou-unapproved",
       meta: { name: undefined },
     });
