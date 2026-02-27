@@ -1155,10 +1155,12 @@ export async function processMessage(
     }
   };
   const startTyping = async () => {
-    if (!typingChatGuid || streamingActive) {
+    if (!typingChatGuid) {
       return;
     }
-    streamingActive = true;
+    if (!streamingActive) {
+      streamingActive = true;
+    }
     clearTypingRestartTimer();
     try {
       await sendBlueBubblesTyping(typingChatGuid, true, {
@@ -1323,7 +1325,10 @@ export async function processMessage(
           }
         },
         onReplyStart: async () => {
-          if (!typingChatGuid || typingStartsOnMessage) {
+          if (!typingChatGuid) {
+            return;
+          }
+          if (typingStartsOnMessage && !streamingActive) {
             return;
           }
           await startTyping();

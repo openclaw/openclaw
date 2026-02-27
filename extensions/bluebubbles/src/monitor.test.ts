@@ -2483,6 +2483,58 @@ describe("BlueBubbles webhook monitor", () => {
       );
     });
 
+    it("refreshes typing keepalive when onReplyStart is called repeatedly", async () => {
+      const { sendBlueBubblesTyping } = await import("./chat.js");
+      vi.mocked(sendBlueBubblesTyping).mockClear();
+
+      const account = createMockAccount();
+      const config: OpenClawConfig = {};
+      const core = createMockRuntime();
+      setBlueBubblesRuntime(core);
+
+      unregister = registerBlueBubblesWebhookTarget({
+        account,
+        config,
+        runtime: { log: vi.fn(), error: vi.fn() },
+        core,
+        path: "/bluebubbles-webhook",
+      });
+
+      const payload = {
+        type: "new-message",
+        data: {
+          text: "hello",
+          handle: { address: "+15551234567" },
+          isGroup: false,
+          isFromMe: false,
+          guid: "msg-1",
+          chatGuid: "iMessage;-;+15551234567",
+          date: Date.now(),
+        },
+      };
+
+      mockDispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(async (params) => {
+        await params.dispatcherOptions.onReplyStart?.();
+        await params.dispatcherOptions.onReplyStart?.();
+      });
+
+      const req = createMockRequest("POST", "/bluebubbles-webhook", payload);
+      const res = createMockResponse();
+
+      await handleBlueBubblesWebhookRequest(req, res);
+      await flushAsync();
+
+      const typingStartCalls = vi
+        .mocked(sendBlueBubblesTyping)
+        .mock.calls.filter((call) => call[1] === true);
+      expect(typingStartCalls.length).toBeGreaterThanOrEqual(2);
+      expect(sendBlueBubblesTyping).toHaveBeenCalledWith(
+        expect.any(String),
+        false,
+        expect.any(Object),
+      );
+    });
+
     it("does not send typing indicator for tapback messages", async () => {
       const { sendBlueBubblesTyping } = await import("./chat.js");
       vi.mocked(sendBlueBubblesTyping).mockClear();
