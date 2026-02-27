@@ -166,12 +166,6 @@ export class CallManager {
       return;
     }
 
-    // Twilio has provider-specific state for speaking (<Say> fallback) and can
-    // fail for inbound calls; keep existing Twilio behavior unchanged.
-    if (this.provider.name === "twilio") {
-      return;
-    }
-
     void this.speakInitialMessage(call.providerCallId);
   }
 

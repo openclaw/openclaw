@@ -111,28 +111,31 @@ describe("CallManager", () => {
     expect(manager.getCallByProviderCallId("request-uuid")).toBeUndefined();
   });
 
-  it("speaks initial message on answered for notify mode (non-Twilio)", async () => {
-    const { manager, provider } = createManagerHarness();
+  it.each(["plivo", "twilio"] as const)(
+    "speaks initial message on answered for notify mode (%s)",
+    async (providerName) => {
+      const { manager, provider } = createManagerHarness({}, new FakeProvider(providerName));
 
-    const { callId, success } = await manager.initiateCall("+15550000002", undefined, {
-      message: "Hello there",
-      mode: "notify",
-    });
-    expect(success).toBe(true);
+      const { callId, success } = await manager.initiateCall("+15550000002", undefined, {
+        message: "Hello there",
+        mode: "notify",
+      });
+      expect(success).toBe(true);
 
-    manager.processEvent({
-      id: "evt-2",
-      type: "call.answered",
-      callId,
-      providerCallId: "call-uuid",
-      timestamp: Date.now(),
-    });
+      manager.processEvent({
+        id: `evt-2-${providerName}`,
+        type: "call.answered",
+        callId,
+        providerCallId: "call-uuid",
+        timestamp: Date.now(),
+      });
 
-    await new Promise((resolve) => setTimeout(resolve, 0));
+      await new Promise((resolve) => setTimeout(resolve, 0));
 
-    expect(provider.playTtsCalls).toHaveLength(1);
-    expect(provider.playTtsCalls[0]?.text).toBe("Hello there");
-  });
+      expect(provider.playTtsCalls).toHaveLength(1);
+      expect(provider.playTtsCalls[0]?.text).toBe("Hello there");
+    },
+  );
 
   it("rejects inbound calls with missing caller ID when allowlist enabled", () => {
     const { manager, provider } = createManagerHarness({
