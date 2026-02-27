@@ -1,7 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-vi.mock("../../../src/agents/pi-embedded-runner.js", () => {
+vi.mock("openclaw/plugin-sdk", async (importOriginal) => {
+  const actual = (await importOriginal()) as Record<string, unknown>;
   return {
+    ...actual,
     runEmbeddedPiAgent: vi.fn(async () => ({
       meta: { startedAt: Date.now() },
       payloads: [{ text: "{}" }],
@@ -9,7 +11,7 @@ vi.mock("../../../src/agents/pi-embedded-runner.js", () => {
   };
 });
 
-import { runEmbeddedPiAgent } from "../../../src/agents/pi-embedded-runner.js";
+import { runEmbeddedPiAgent } from "openclaw/plugin-sdk";
 import { createLlmTaskTool } from "./llm-task-tool.js";
 
 // oxlint-disable-next-line typescript/no-explicit-any

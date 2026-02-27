@@ -32,6 +32,7 @@ async function loadRunEmbeddedPiAgent(): Promise<RunEmbeddedPiAgentFn> {
   return mod.runEmbeddedPiAgent as RunEmbeddedPiAgentFn;
 }
 
+
 function stripCodeFences(s: string): string {
   const trimmed = s.trim();
   const m = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
@@ -187,7 +188,6 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
         const sessionFile = path.join(tmpDir, "session.json");
 
         const runEmbeddedPiAgent = await loadRunEmbeddedPiAgent();
-
         const result = await runEmbeddedPiAgent({
           sessionId,
           sessionFile,
