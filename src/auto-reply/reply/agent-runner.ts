@@ -465,8 +465,8 @@ export async function runReplyAgent(params: {
             }),
           });
         } catch (error) {
-          logger.warning(
-            "Failed to persist messaging-tool dedupe state for session {}: {}",
+          console.warn(
+            "Failed to persist messaging-tool dedupe state for session",
             sessionKey,
             error,
           );
