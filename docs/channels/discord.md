@@ -251,6 +251,36 @@ Once DMs are working, you can set up your Discord server as a full workspace whe
 
 Now create some channels on your Discord server and start chatting. Your agent can see the channel name, and each channel gets its own isolated session — so you can set up `#coding`, `#home`, `#research`, or whatever fits your workflow.
 
+## Recommended: Multi-agent progress and clean replies
+
+When running multiple agents in a Discord server, the default streaming modes can create visual noise — partial message previews keep updating mid-stream across agents. A better pattern is to use **block streaming** with **verbose output** so users see real-time progress (tool calls, file reads, searches) while the final answer arrives as one clean, complete message.
+
+```json5
+{
+  channels: {
+    discord: {
+      blockStreaming: true,
+    },
+  },
+  agents: {
+    defaults: {
+      blockStreamingBreak: "text_end",
+      verboseDefault: "on",
+    },
+  },
+}
+```
+
+Why this works well:
+
+- **`blockStreaming: true`** delivers the final answer as a single message instead of streaming token-by-token previews.
+- **`blockStreamingBreak: "text_end"`** flushes output at natural text boundaries (paragraph breaks), so long answers still arrive progressively rather than all at once.
+- **`verboseDefault: "on"`** shows tool call progress in real time (searching, reading files, running code) so the channel never feels idle while agents work.
+
+The result: users see live status updates while agents think and act, then get clean final replies without the flicker of partial streaming. This is especially effective when multiple agents share a server, since each agent's progress is clearly visible without overlapping partial message edits.
+
+See [Streaming and Chunking](/concepts/streaming) for details on block streaming behavior and tuning options.
+
 ## Runtime model
 
 - Gateway owns the Discord connection.
