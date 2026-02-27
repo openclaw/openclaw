@@ -18,6 +18,10 @@
       "supabaseAnonKey": {
         "type": "string",
         "description": "Supabase anon key — used in the browser UI for Realtime subscriptions. Falls back to service key if not set (local use only)."
+      },
+      "storageBucket": {
+        "type": "string",
+        "description": "Supabase Storage bucket name for media uploads (Phase 3 sending). Must be public. Default: iris-media."
       }
     },
     "uiHints": {
@@ -32,6 +36,10 @@
       "supabaseAnonKey": {
         "label": "Anon Key (optional)",
         "sensitive": true
+      },
+      "storageBucket": {
+        "label": "Storage Bucket (optional)",
+        "placeholder": "iris-media"
       }
     }
   }

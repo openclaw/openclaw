@@ -433,7 +433,8 @@ export async function dispatchReplyFromConfig(params: {
         ...params.replyOptions,
         onToolResult: (payload: ReplyPayload) => {
           const run = async () => {
-            if ((cfg.agents?.defaults?.replyMode ?? "auto") === "tool-only") {
+            const hasMedia = payload.mediaUrls?.length || payload.mediaUrl;
+            if ((cfg.agents?.defaults?.replyMode ?? "auto") === "tool-only" && !hasMedia) {
               return;
             }
             const ttsPayload = await maybeApplyTtsToPayload({

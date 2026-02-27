@@ -10,6 +10,15 @@ type PluginConfig = {
   supabaseUrl: string;
   supabaseServiceKey: string;
   supabaseAnonKey?: string;
+  storageBucket?: string;
+};
+
+type ElevenLabsCfg = {
+  apiKey: string;
+  voiceId: string;
+  modelId?: string;
+  languageCode?: string;
+  baseUrl?: string;
 };
 
 function supabaseHeaders(config: PluginConfig) {
@@ -91,6 +100,167 @@ async function supabaseUpdateTranscriptionByFallback(
     throw new Error(`Supabase fallback patch error ${patchRes.status}: ${body}`);
   }
   return true;
+}
+
+// ── Phase 3 helpers ──
+
+function readBody(req: IncomingMessage): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    req.on("data", (chunk: Buffer) => chunks.push(chunk));
+    req.on("end", () => resolve(Buffer.concat(chunks)));
+    req.on("error", reject);
+  });
+}
+
+async function supabaseStorageUpload(
+  config: PluginConfig,
+  path: string,
+  buffer: Buffer,
+  contentType: string,
+): Promise<string> {
+  const bucket = config.storageBucket ?? "iris-media";
+
+  // 1. Upload the file
+  const uploadUrl = `${config.supabaseUrl}/storage/v1/object/${bucket}/${path}`;
+  const uploadRes = await fetch(uploadUrl, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${config.supabaseServiceKey}`,
+      apikey: config.supabaseServiceKey,
+      "Content-Type": contentType,
+    },
+    body: buffer as unknown as BodyInit,
+  });
+  if (!uploadRes.ok) {
+    const body = await uploadRes.text().catch(() => "");
+    throw new Error(`Supabase Storage upload error ${uploadRes.status}: ${body}`);
+  }
+
+  // 2. Generate a signed URL valid for 5 minutes (enough for WhatsApp/Telegram to download)
+  const signUrl = `${config.supabaseUrl}/storage/v1/object/sign/${bucket}/${path}`;
+  const signRes = await fetch(signUrl, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${config.supabaseServiceKey}`,
+      apikey: config.supabaseServiceKey,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ expiresIn: 300 }),
+  });
+  if (!signRes.ok) {
+    const body = await signRes.text().catch(() => "");
+    throw new Error(`Supabase Storage sign error ${signRes.status}: ${body}`);
+  }
+  const { signedURL } = (await signRes.json()) as { signedURL: string };
+  // signedURL is relative to /storage/v1 (e.g. "/object/sign/bucket/path?token=...")
+  // but some Supabase versions already include /storage/v1 — handle both
+  const base = signedURL.startsWith("/storage/v1")
+    ? config.supabaseUrl
+    : `${config.supabaseUrl}/storage/v1`;
+  return `${base}${signedURL}`;
+}
+
+async function ttsElevenLabs(text: string, cfg: ElevenLabsCfg): Promise<Buffer> {
+  const base = (cfg.baseUrl ?? "https://api.elevenlabs.io").replace(/\/$/, "");
+  const url = `${base}/v1/text-to-speech/${cfg.voiceId}?output_format=mp3_44100_128`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      "xi-api-key": cfg.apiKey,
+      "Content-Type": "application/json",
+      Accept: "audio/mpeg",
+    },
+    body: JSON.stringify({
+      text,
+      model_id: cfg.modelId ?? "eleven_multilingual_v2",
+      language_code: cfg.languageCode ?? "pt",
+    }),
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(`ElevenLabs TTS error ${res.status}: ${body}`);
+  }
+  return Buffer.from(await res.arrayBuffer());
+}
+
+async function sendViaChannel(
+  api: OpenClawPluginApi,
+  channel: string | null | undefined,
+  to: string,
+  opts: { text?: string; mediaUrl?: string; contentType?: string; accountId?: string },
+): Promise<void> {
+  const ch = (channel ?? "whatsapp").toLowerCase();
+  const isAudio =
+    !!opts.contentType?.startsWith("audio/") ||
+    !!opts.mediaUrl?.match(/\.(mp3|ogg|opus|m4a|webm|wav)(\?|$)/i);
+
+  if (ch === "telegram") {
+    await (
+      api.runtime.channel as unknown as Record<
+        string,
+        Record<string, (...args: unknown[]) => Promise<unknown>>
+      >
+    ).telegram.sendMessageTelegram(to, opts.text ?? "", {
+      mediaUrl: opts.mediaUrl,
+      asVoice: isAudio,
+      accountId: opts.accountId,
+    });
+  } else {
+    await (
+      api.runtime.channel as unknown as Record<
+        string,
+        Record<string, (...args: unknown[]) => Promise<unknown>>
+      >
+    ).whatsapp.sendMessageWhatsApp(to, opts.text ?? "", {
+      mediaUrl: opts.mediaUrl,
+      accountId: opts.accountId,
+    });
+  }
+}
+
+function mediaTypeFromContentType(contentType: string | undefined): string | null {
+  if (!contentType) return null;
+  if (contentType.startsWith("audio/")) return "audio";
+  if (contentType.startsWith("image/")) return "image";
+  if (contentType.startsWith("video/")) return "video";
+  return "document";
+}
+
+async function insertOutboundRow(
+  config: PluginConfig,
+  opts: {
+    chatId: string;
+    channel: string;
+    accountId?: string | null;
+    body?: string | null;
+    mediaUrl?: string | null;
+    contentType?: string | null;
+  },
+): Promise<void> {
+  const row = {
+    sender: opts.accountId ?? "iris",
+    sender_name: null,
+    chat_id: opts.chatId,
+    direction: "outbound",
+    body: opts.body ?? null,
+    media_url: opts.mediaUrl ?? null,
+    media_type: mediaTypeFromContentType(opts.contentType ?? undefined),
+    channel: opts.channel,
+    session_key: opts.accountId ?? null,
+    timestamp: new Date().toISOString(),
+    is_read: true,
+    replied: true,
+  };
+  await supabaseInsert(config, row);
+}
+
+function jsonResponse(res: ServerResponse, status: number, body: unknown): void {
+  const payload = JSON.stringify(body);
+  res.setHeader("Content-Type", "application/json; charset=utf-8");
+  res.setHeader("Cache-Control", "no-store");
+  res.statusCode = status;
+  res.end(payload);
 }
 
 function toIso(ts: number | undefined): string {
@@ -246,6 +416,168 @@ export default function register(api: OpenClawPluginApi) {
       res.setHeader("Content-Type", "text/html; charset=utf-8");
       res.setHeader("Cache-Control", "no-store");
       res.end(html);
+    },
+  });
+
+  // ── POST /conversations/send — envio de texto ──
+  api.registerHttpRoute({
+    path: "/conversations/send",
+    handler: async (req: IncomingMessage, res: ServerResponse) => {
+      if (req.method !== "POST") {
+        jsonResponse(res, 405, { ok: false, error: "Method Not Allowed" });
+        return;
+      }
+      try {
+        const body = await readBody(req);
+        const data = JSON.parse(body.toString("utf-8")) as {
+          chatId?: string;
+          channel?: string;
+          accountId?: string;
+          message?: string;
+        };
+        if (!data.chatId || !data.message) {
+          jsonResponse(res, 400, { ok: false, error: "chatId and message are required" });
+          return;
+        }
+        log(`SEND text to=${data.chatId} channel=${data.channel ?? "whatsapp"}`);
+        await sendViaChannel(api, data.channel, data.chatId, {
+          text: data.message,
+          accountId: data.accountId,
+        });
+        insertOutboundRow(config, {
+          chatId: data.chatId,
+          channel: data.channel ?? "whatsapp",
+          accountId: data.accountId,
+          body: data.message,
+        }).catch((err: unknown) => logError("Failed to insert outbound text row:", err));
+        jsonResponse(res, 200, { ok: true });
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        logError("POST /conversations/send failed:", err);
+        jsonResponse(res, 500, { ok: false, error: msg });
+      }
+    },
+  });
+
+  // ── POST /conversations/send-tts — texto → áudio ElevenLabs ──
+  api.registerHttpRoute({
+    path: "/conversations/send-tts",
+    handler: async (req: IncomingMessage, res: ServerResponse) => {
+      if (req.method !== "POST") {
+        jsonResponse(res, 405, { ok: false, error: "Method Not Allowed" });
+        return;
+      }
+      try {
+        const body = await readBody(req);
+        const data = JSON.parse(body.toString("utf-8")) as {
+          chatId?: string;
+          channel?: string;
+          accountId?: string;
+          text?: string;
+        };
+        if (!data.chatId || !data.text) {
+          jsonResponse(res, 400, { ok: false, error: "chatId and text are required" });
+          return;
+        }
+
+        const fullCfg = api.runtime.config.loadConfig() as Record<string, unknown>;
+        const messages = fullCfg.messages as Record<string, unknown> | undefined;
+        const tts = messages?.tts as Record<string, unknown> | undefined;
+        const elCfg = tts?.elevenlabs as ElevenLabsCfg | undefined;
+
+        if (!elCfg?.apiKey || !elCfg?.voiceId) {
+          jsonResponse(res, 500, {
+            ok: false,
+            error: "ElevenLabs not configured. Set messages.tts.elevenlabs in openclaw.json.",
+          });
+          return;
+        }
+
+        log(
+          `SEND TTS to=${data.chatId} channel=${data.channel ?? "whatsapp"} chars=${data.text.length}`,
+        );
+        const audioBuffer = await ttsElevenLabs(data.text, elCfg);
+        const path = `tts/${Date.now()}.mp3`;
+        const url = await supabaseStorageUpload(config, path, audioBuffer, "audio/mpeg");
+        await sendViaChannel(api, data.channel, data.chatId, {
+          mediaUrl: url,
+          contentType: "audio/mpeg",
+          accountId: data.accountId,
+        });
+        insertOutboundRow(config, {
+          chatId: data.chatId,
+          channel: data.channel ?? "whatsapp",
+          accountId: data.accountId,
+          body: data.text,
+          mediaUrl: url,
+          contentType: "audio/mpeg",
+        }).catch((err: unknown) => logError("Failed to insert outbound TTS row:", err));
+        jsonResponse(res, 200, { ok: true, url });
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        logError("POST /conversations/send-tts failed:", err);
+        jsonResponse(res, 500, { ok: false, error: msg });
+      }
+    },
+  });
+
+  // ── POST /conversations/send-media — arquivo bruto ──
+  // Query params: chatId, channel, accountId, contentType, filename, caption
+  api.registerHttpRoute({
+    path: "/conversations/send-media",
+    handler: async (req: IncomingMessage, res: ServerResponse) => {
+      if (req.method !== "POST") {
+        jsonResponse(res, 405, { ok: false, error: "Method Not Allowed" });
+        return;
+      }
+      try {
+        const reqUrl = new URL(req.url ?? "/", "http://localhost");
+        const chatId = reqUrl.searchParams.get("chatId");
+        const channel = reqUrl.searchParams.get("channel") ?? "whatsapp";
+        const accountId = reqUrl.searchParams.get("accountId") ?? undefined;
+        const contentType =
+          reqUrl.searchParams.get("contentType") ??
+          (req.headers["content-type"] as string | undefined) ??
+          "application/octet-stream";
+        const filename = reqUrl.searchParams.get("filename") ?? `file-${Date.now()}`;
+        const caption = reqUrl.searchParams.get("caption") ?? undefined;
+
+        if (!chatId) {
+          jsonResponse(res, 400, { ok: false, error: "chatId query param is required" });
+          return;
+        }
+
+        const buffer = await readBody(req);
+        if (buffer.length === 0) {
+          jsonResponse(res, 400, { ok: false, error: "Empty body" });
+          return;
+        }
+
+        // Sanitize filename to avoid path traversal
+        const safeName = filename.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 64);
+        const path = `uploads/${Date.now()}-${safeName}`;
+        log(`SEND media to=${chatId} channel=${channel} type=${contentType} size=${buffer.length}`);
+        const url = await supabaseStorageUpload(config, path, buffer, contentType);
+        await sendViaChannel(api, channel, chatId, {
+          text: caption,
+          mediaUrl: url,
+          contentType,
+          accountId,
+        });
+        insertOutboundRow(config, {
+          chatId,
+          channel,
+          accountId,
+          body: caption ?? null,
+          mediaUrl: url,
+          contentType,
+        }).catch((err: unknown) => logError("Failed to insert outbound media row:", err));
+        jsonResponse(res, 200, { ok: true, url });
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        logError("POST /conversations/send-media failed:", err);
+        jsonResponse(res, 500, { ok: false, error: msg });
+      }
     },
   });
 }
