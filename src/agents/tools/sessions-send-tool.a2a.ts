@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { callGateway } from "../../gateway/call.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -118,7 +119,13 @@ export async function runSessionsSendA2AFlow(params: {
       sourceChannel: params.requesterChannel,
       sourceTool: "sessions_send",
     });
-    if (announceTarget && announceReply && announceReply.trim() && !isAnnounceSkip(announceReply)) {
+    if (
+      announceTarget &&
+      announceReply &&
+      announceReply.trim() &&
+      !isAnnounceSkip(announceReply) &&
+      !isSilentReplyText(announceReply, SILENT_REPLY_TOKEN)
+    ) {
       try {
         await callGateway({
           method: "send",
