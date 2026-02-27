@@ -319,6 +319,12 @@ const MAX_SAFE_REDIRECTS = 5;
 export async function safeFetch(params: {
   url: string;
   allowHosts: string[];
+  /**
+   * Optional allowlist for forwarding Authorization across redirects.
+   * When set, Authorization is stripped before following redirects to hosts
+   * outside this list.
+   */
+  authorizationAllowHosts?: string[];
   fetchFn?: typeof fetch;
   requestInit?: RequestInit;
   resolveFn?: (hostname: string) => Promise<{ address: string }>;
@@ -330,6 +336,7 @@ export async function safeFetch(params: {
     typeof params.requestInit === "object" &&
     "dispatcher" in (params.requestInit as Record<string, unknown>),
   );
+  const currentHeaders = new Headers(params.requestInit?.headers);
   let currentUrl = params.url;
 
   if (!isUrlAllowed(currentUrl, params.allowHosts)) {
@@ -348,6 +355,7 @@ export async function safeFetch(params: {
   for (let i = 0; i <= MAX_SAFE_REDIRECTS; i++) {
     const res = await fetchFn(currentUrl, {
       ...params.requestInit,
+      headers: currentHeaders,
       redirect: "manual",
     });
 
@@ -370,6 +378,16 @@ export async function safeFetch(params: {
     // Validate redirect target against hostname allowlist
     if (!isUrlAllowed(redirectUrl, params.allowHosts)) {
       throw new Error(`Media redirect target blocked by allowlist: ${redirectUrl}`);
+    }
+
+    // Prevent credential bleed: only keep Authorization on redirect hops that
+    // are explicitly auth-allowlisted.
+    if (
+      currentHeaders.has("authorization") &&
+      params.authorizationAllowHosts &&
+      !isUrlAllowed(redirectUrl, params.authorizationAllowHosts)
+    ) {
+      currentHeaders.delete("authorization");
     }
 
     // When a pinned dispatcher is already injected by an upstream guard

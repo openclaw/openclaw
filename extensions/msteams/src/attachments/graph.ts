@@ -10,7 +10,9 @@ import {
   normalizeContentType,
   resolveMediaSsrfPolicy,
   resolveRequestUrl,
+  resolveAuthAllowedHosts,
   resolveAllowedHosts,
+  safeFetch,
 } from "./shared.js";
 import type {
   MSTeamsAccessTokenProvider,
@@ -242,6 +244,7 @@ export async function downloadMSTeamsGraphMedia(params: {
     return { media: [] };
   }
   const allowHosts = resolveAllowedHosts(params.allowHosts);
+  const authAllowHosts = resolveAuthAllowedHosts(params.authAllowHosts);
   const ssrfPolicy = resolveMediaSsrfPolicy(allowHosts);
   const messageUrl = params.messageUrl;
   let accessToken: string;
@@ -304,8 +307,21 @@ export async function downloadMSTeamsGraphMedia(params: {
               fetchImpl: async (input, init) => {
                 const requestUrl = resolveRequestUrl(input);
                 const headers = new Headers(init?.headers);
-                headers.set("Authorization", `Bearer ${accessToken}`);
-                return await fetchFn(requestUrl, { ...init, headers });
+                if (isUrlAllowed(requestUrl, authAllowHosts)) {
+                  headers.set("Authorization", `Bearer ${accessToken}`);
+                } else {
+                  headers.delete("Authorization");
+                }
+                return await safeFetch({
+                  url: requestUrl,
+                  allowHosts,
+                  authorizationAllowHosts: authAllowHosts,
+                  fetchFn,
+                  requestInit: {
+                    ...init,
+                    headers,
+                  },
+                });
               },
             });
             sharePointMedia.push(media);
@@ -313,35 +329,6 @@ export async function downloadMSTeamsGraphMedia(params: {
           } catch {
             // Ignore SharePoint download failures.
           }
-          const encodedUrl = Buffer.from(shareUrl).toString("base64url");
-          const sharesUrl = `${GRAPH_ROOT}/shares/u!${encodedUrl}/driveItem/content`;
-
-          const media = await downloadAndStoreMSTeamsRemoteMedia({
-            url: sharesUrl,
-            filePathHint: name,
-            maxBytes: params.maxBytes,
-            contentTypeHint: "application/octet-stream",
-            preserveFilenames: params.preserveFilenames,
-            fetchImpl: async (input, init) => {
-              const requestUrl = resolveRequestUrl(input);
-              const headers = new Headers(init?.headers);
-              headers.set("Authorization", `Bearer ${accessToken}`);
-              return await safeFetch({
-                url: requestUrl,
-                allowHosts,
-                authorizationAllowHosts: params.authAllowHosts,
-                fetchFn,
-                requestInit: {
-                  ...init,
-                  headers,
-                },
-              });
-            },
-          });
-          sharePointMedia.push(media);
-          downloadedReferenceUrls.add(shareUrl);
-        } catch {
-          // Ignore SharePoint download failures.
         }
       }
     } finally {
@@ -387,7 +374,7 @@ export async function downloadMSTeamsGraphMedia(params: {
     maxBytes: params.maxBytes,
     tokenProvider: params.tokenProvider,
     allowHosts,
-    authAllowHosts: params.authAllowHosts,
+    authAllowHosts,
     fetchFn: params.fetchFn,
     preserveFilenames: params.preserveFilenames,
   });
