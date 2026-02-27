@@ -81,9 +81,13 @@ function hasInboundMedia(msg: Message): boolean {
   );
 }
 
-function hasReplyTargetMedia(msg: Message): boolean {
+function resolveReplyTargetMessage(msg: Message): Message | undefined {
   const externalReply = (msg as Message & { external_reply?: Message }).external_reply;
-  const replyTarget = msg.reply_to_message ?? externalReply;
+  return msg.reply_to_message ?? externalReply;
+}
+
+function hasReplyTargetMedia(msg: Message): boolean {
+  const replyTarget = resolveReplyTargetMessage(msg);
   return Boolean(replyTarget && hasInboundMedia(replyTarget));
 }
 
@@ -229,19 +233,20 @@ export const registerTelegramHandlers = ({
         return;
       }
       const first = entries[0];
-      const baseCtx = first.ctx;
+      const anchor = last;
       const syntheticMessage = buildSyntheticTextMessage({
-        base: first.msg,
+        base: anchor.msg,
         text: combinedText,
-        date: last.msg.date ?? first.msg.date,
+        date: anchor.msg.date ?? first.msg.date,
+        from: anchor.msg.from ?? first.msg.from,
       });
-      const messageIdOverride = last.msg.message_id ? String(last.msg.message_id) : undefined;
-      const syntheticCtx = buildSyntheticContext(baseCtx, syntheticMessage);
-      const replyMedia = await resolveReplyMediaForMessage(baseCtx, syntheticMessage);
+      const messageIdOverride = anchor.msg.message_id ? String(anchor.msg.message_id) : undefined;
+      const syntheticCtx = buildSyntheticContext(anchor.ctx, syntheticMessage);
+      const replyMedia = await resolveReplyMediaForMessage(anchor.ctx, anchor.msg);
       await processMessage(
         syntheticCtx,
         combinedMedia,
-        first.storeAllowFrom,
+        anchor.storeAllowFrom,
         messageIdOverride ? { messageIdOverride } : undefined,
         replyMedia,
       );
@@ -425,7 +430,7 @@ export const registerTelegramHandlers = ({
     ctx: TelegramContext,
     msg: Message,
   ): Promise<TelegramMediaRef[]> => {
-    const replyMessage = msg.reply_to_message;
+    const replyMessage = resolveReplyTargetMessage(msg);
     if (!replyMessage || !hasInboundMedia(replyMessage)) {
       return [];
     }
