@@ -133,3 +133,64 @@ describe("web search provider auto-detection", () => {
     ).toBe("gemini");
   });
 });
+
+describe("searxng provider config", () => {
+  it("accepts searxng provider with url", () => {
+    const res = validateConfigObject(
+      buildWebSearchProviderConfig({
+        enabled: true,
+        provider: "searxng",
+        providerConfig: {
+          url: "http://192.168.1.210:8080",
+        },
+      }),
+    );
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts searxng provider with full config", () => {
+    const res = validateConfigObject(
+      buildWebSearchProviderConfig({
+        enabled: true,
+        provider: "searxng",
+        providerConfig: {
+          url: "http://192.168.1.210:8080",
+          engines: ["google", "duckduckgo"],
+          categories: "images",
+          language: "en",
+          safeSearch: 0,
+        },
+      }),
+    );
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts searxng provider with no extra config (uses defaults)", () => {
+    const res = validateConfigObject(
+      buildWebSearchProviderConfig({
+        provider: "searxng",
+      }),
+    );
+    expect(res.ok).toBe(true);
+  });
+
+  it("explicit searxng provider wins regardless of available API keys", () => {
+    const result = resolveSearchProvider({ provider: "searxng" } as unknown as Parameters<
+      typeof resolveSearchProvider
+    >[0]);
+    expect(result).toBe("searxng");
+  });
+
+  it("rejects unknown safeSearch value", () => {
+    const res = validateConfigObject(
+      buildWebSearchProviderConfig({
+        provider: "searxng",
+        providerConfig: {
+          url: "http://localhost:8080",
+          safeSearch: 5 as 0 | 1 | 2,
+        },
+      }),
+    );
+    expect(res.ok).toBe(false);
+  });
+});
