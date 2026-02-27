@@ -349,8 +349,11 @@ export async function recoverPendingDeliveries(opts: {
       opts.log.info(`Recovered delivery ${entry.id} to ${entry.channel}:${entry.to}`);
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
+      const enhancedErrMsg = enhanceErrorMessageWithHint(errMsg, entry.to, entry.threadId);
       if (isPermanentDeliveryError(errMsg)) {
-        opts.log.warn(`Delivery ${entry.id} hit permanent error — moving to failed/: ${errMsg}`);
+        opts.log.warn(
+          `Delivery ${entry.id} hit permanent error — moving to failed/: ${enhancedErrMsg}`,
+        );
         try {
           await moveToFailed(entry.id, opts.stateDir);
         } catch (moveErr) {
@@ -360,12 +363,12 @@ export async function recoverPendingDeliveries(opts: {
         continue;
       }
       try {
-        await failDelivery(entry.id, errMsg, opts.stateDir);
+        await failDelivery(entry.id, enhancedErrMsg, opts.stateDir);
       } catch {
         // Best-effort update.
       }
       failed += 1;
-      opts.log.warn(`Retry failed for delivery ${entry.id}: ${errMsg}`);
+      opts.log.warn(`Retry failed for delivery ${entry.id}: ${enhancedErrMsg}`);
     }
   }
 
@@ -387,6 +390,32 @@ const PERMANENT_ERROR_PATTERNS: readonly RegExp[] = [
   /recipient is not a valid/i,
   /outbound not configured for channel/i,
 ];
+
+/**
+ * Enhances error messages with helpful hints for specific cases.
+ * Currently handles Telegram forum topic permission errors that are
+ * indistinguishable from "bot was kicked" errors.
+ */
+function enhanceErrorMessageWithHint(
+  error: string,
+  target: string,
+  threadId?: string | number | null,
+): string {
+  // Check if this is the "bot was kicked" error
+  if (!/forbidden: bot was kicked/i.test(error)) {
+    return error;
+  }
+
+  // Check if target contains a forum topic (":topic:" syntax) or threadId is set
+  const hasTopic =
+    target.includes(":topic:") || (threadId !== undefined && threadId !== null && threadId !== "");
+
+  if (hasTopic) {
+    return `${error}\nHint: The target includes a forum topic. This error may indicate the topic restricts posting to admins only, not that the bot was removed from the group. Try changing the topic ID or granting the bot posting rights in that topic.`;
+  }
+
+  return error;
+}
 
 export function isPermanentDeliveryError(error: string): boolean {
   return PERMANENT_ERROR_PATTERNS.some((re) => re.test(error));

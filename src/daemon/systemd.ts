@@ -29,7 +29,21 @@ import {
   parseSystemdExecStart,
 } from "./systemd-unit.js";
 
+export type SystemdScope = "user" | "system";
+
+function resolveSystemdScope(env: GatewayServiceEnv): SystemdScope {
+  const scope = env.OPENCLAW_SYSTEMD_SCOPE?.trim()?.toLowerCase();
+  if (scope === "system") {
+    return "system";
+  }
+  return "user";
+}
+
 function resolveSystemdUnitPathForName(env: GatewayServiceEnv, name: string): string {
+  const scope = resolveSystemdScope(env);
+  if (scope === "system") {
+    return path.posix.join("/etc/systemd/system", `${name}.service`);
+  }
   const home = toPosixPath(resolveHomeDir(env));
   return path.posix.join(home, ".config", "systemd", "user", `${name}.service`);
 }
