@@ -406,6 +406,7 @@ export function buildAllowedModelSet(params: {
 
   const allowedKeys = new Set<string>();
   const syntheticCatalogEntries = new Map<string, ModelCatalogEntry>();
+  let allowAllVivgrid = false;
   for (const raw of rawAllowlist) {
     const parsed = parseModelRef(String(raw), params.defaultProvider);
     if (!parsed) {
@@ -415,6 +416,9 @@ export function buildAllowedModelSet(params: {
     // Explicit allowlist entries are always trusted, even when bundled catalog
     // data is stale and does not include the configured model yet.
     allowedKeys.add(key);
+    if (parsed.provider === "vivgrid") {
+      allowAllVivgrid = true;
+    }
 
     if (!catalogKeys.has(key) && !syntheticCatalogEntries.has(key)) {
       syntheticCatalogEntries.set(key, {
@@ -427,6 +431,17 @@ export function buildAllowedModelSet(params: {
 
   if (defaultKey) {
     allowedKeys.add(defaultKey);
+  }
+
+  // Vivgrid models are remote-project controlled and can change dynamically.
+  // If user allowlists any vivgrid/* key, expose all discovered Vivgrid models
+  // so /models and pickers show the full current Vivgrid model set.
+  if (allowAllVivgrid) {
+    for (const entry of params.catalog) {
+      if (entry.provider === "vivgrid") {
+        allowedKeys.add(modelKey(entry.provider, entry.id));
+      }
+    }
   }
 
   const allowedCatalog = [

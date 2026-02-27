@@ -122,7 +122,7 @@ const AUTH_CHOICE_GROUP_DEFS: {
   {
     value: "vivgrid",
     label: "Vivgrid",
-    hint: "OpenAI-compatible (Responses API)",
+    hint: "API key + OpenAI-compatible",
     choices: ["vivgrid-api-key"],
   },
   {
