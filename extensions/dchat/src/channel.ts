@@ -156,7 +156,9 @@ export const dchatPlugin: ChannelPlugin<ResolvedDchatAccount> = {
     chunkerMode: "text",
     textChunkLimit: 4000,
     sendText: async ({ to, text, accountId }) => {
-      const resolvedAccountId = accountId ?? DEFAULT_ACCOUNT_ID;
+      const resolvedAccountId =
+        accountId ??
+        resolveDefaultDchatAccountId(getDchatRuntime().config.loadConfig() as CoreConfig);
       const bus = getBusForAccount(resolvedAccountId);
       if (!bus) {
         throw new Error(`D-Chat account "${resolvedAccountId}" not connected`);
@@ -226,6 +228,19 @@ export const dchatPlugin: ChannelPlugin<ResolvedDchatAccount> = {
         name: input.name,
       });
       const seed = input.accessToken?.trim();
+      if (resolvedAccountId === DEFAULT_ACCOUNT_ID) {
+        return {
+          ...namedConfig,
+          channels: {
+            ...namedConfig.channels,
+            dchat: {
+              ...(namedConfig as CoreConfig).channels?.dchat,
+              enabled: true,
+              ...(seed ? { seed } : {}),
+            },
+          },
+        } as CoreConfig;
+      }
       return {
         ...namedConfig,
         channels: {
@@ -233,7 +248,14 @@ export const dchatPlugin: ChannelPlugin<ResolvedDchatAccount> = {
           dchat: {
             ...(namedConfig as CoreConfig).channels?.dchat,
             enabled: true,
-            ...(seed ? { seed } : {}),
+            accounts: {
+              ...(namedConfig as CoreConfig).channels?.dchat?.accounts,
+              [resolvedAccountId]: {
+                ...(namedConfig as CoreConfig).channels?.dchat?.accounts?.[resolvedAccountId],
+                enabled: true,
+                ...(seed ? { seed } : {}),
+              },
+            },
           },
         },
       } as CoreConfig;
@@ -476,11 +498,15 @@ export const dchatPlugin: ChannelPlugin<ResolvedDchatAccount> = {
                 From:
                   inbound.chatType === "direct"
                     ? `dchat:${src}`
-                    : `dchat:topic:${inbound.groupSubject ?? ""}`,
+                    : inbound.sessionKey.startsWith("dchat:group:")
+                      ? `dchat:group:${inbound.groupSubject ?? ""}`
+                      : `dchat:topic:${inbound.groupSubject ?? ""}`,
                 To:
                   inbound.chatType === "direct"
                     ? `dchat:${src}`
-                    : `topic:${inbound.groupSubject ?? ""}`,
+                    : inbound.sessionKey.startsWith("dchat:group:")
+                      ? `group:${inbound.groupSubject ?? ""}`
+                      : `topic:${inbound.groupSubject ?? ""}`,
                 SessionKey: route.sessionKey,
                 AccountId: account.accountId,
                 ChatType: inbound.chatType === "direct" ? "direct" : "channel",

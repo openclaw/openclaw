@@ -85,11 +85,12 @@ export function resolveDchatAccountConfig(params: {
   const dchatConfig = cfg.channels?.dchat;
   if (!dchatConfig) return { enabled: false };
 
-  if (accountId && accountId !== DEFAULT_ACCOUNT_ID && dchatConfig.accounts?.[accountId]) {
+  if (accountId && dchatConfig.accounts?.[accountId]) {
+    // Named account (including "default" stored under accounts.default)
     return dchatConfig.accounts[accountId];
   }
 
-  // Top-level config
+  // Top-level config (default account without explicit accounts.default entry)
   return dchatConfig;
 }
 
@@ -104,10 +105,11 @@ export function resolveDchatAccount(params: {
   const hasSeed = Boolean(accountConfig.seed?.trim());
   const hasKeystore = Boolean(accountConfig.keystoreJson?.trim());
 
+  const baseEnabled = cfg.channels?.dchat?.enabled !== false;
   return {
     accountId,
     name: accountConfig.name || accountId,
-    enabled: accountConfig.enabled !== false,
+    enabled: baseEnabled && accountConfig.enabled !== false,
     configured: hasSeed,
     seed: accountConfig.seed?.trim(),
     numSubClients: accountConfig.numSubClients ?? 4,

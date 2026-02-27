@@ -92,7 +92,14 @@ export class NknBus extends EventEmitter {
       return this.address;
     } catch (err) {
       this.setState("disconnected");
-      this.client = null;
+      if (this.client) {
+        try {
+          this.client.close();
+        } catch {
+          // ignore close errors during cleanup
+        }
+        this.client = null;
+      }
       throw err;
     }
   }

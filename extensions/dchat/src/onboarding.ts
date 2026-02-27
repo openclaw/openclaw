@@ -7,13 +7,16 @@ import {
   type ChannelOnboardingDmPolicy,
   type WizardPrompter,
 } from "openclaw/plugin-sdk";
-import { resolveDchatAccount, type CoreConfig } from "./config-schema.js";
+import { listDchatAccountIds, resolveDchatAccount, type CoreConfig } from "./config-schema.js";
 
 const channel = "dchat" as const;
 
 function setDchatDmPolicy(cfg: CoreConfig, policy: DmPolicy) {
+  const existingAllowFrom = cfg.channels?.dchat?.dm?.allowFrom ?? [];
   const allowFrom =
-    policy === "open" ? addWildcardAllowFrom(cfg.channels?.dchat?.dm?.allowFrom) : undefined;
+    policy === "open"
+      ? addWildcardAllowFrom(existingAllowFrom)
+      : existingAllowFrom.filter((e) => String(e) !== "*");
   return {
     ...cfg,
     channels: {
@@ -23,7 +26,7 @@ function setDchatDmPolicy(cfg: CoreConfig, policy: DmPolicy) {
         dm: {
           ...cfg.channels?.dchat?.dm,
           policy,
-          ...(allowFrom ? { allowFrom } : {}),
+          allowFrom,
         },
       },
     },
@@ -80,12 +83,16 @@ const dmPolicy: ChannelOnboardingDmPolicy = {
 export const dchatOnboardingAdapter: ChannelOnboardingAdapter = {
   channel,
   getStatus: async ({ cfg }) => {
-    const account = resolveDchatAccount({ cfg: cfg as CoreConfig });
+    const typedCfg = cfg as CoreConfig;
+    const accountIds = listDchatAccountIds(typedCfg);
+    const anyConfigured = accountIds.some(
+      (id) => resolveDchatAccount({ cfg: typedCfg, accountId: id }).configured,
+    );
     return {
       channel,
-      configured: account.configured,
-      statusLines: [`D-Chat: ${account.configured ? "configured" : "needs wallet seed"}`],
-      selectionHint: account.configured ? "configured" : "needs seed",
+      configured: anyConfigured,
+      statusLines: [`D-Chat: ${anyConfigured ? "configured" : "needs wallet seed"}`],
+      selectionHint: anyConfigured ? "configured" : "needs seed",
     };
   },
   configure: async ({ cfg, prompter, forceAllowFrom }) => {
@@ -105,9 +112,9 @@ export const dchatOnboardingAdapter: ChannelOnboardingAdapter = {
       );
     }
 
-    // Check for env var
+    // Check for env var (validate same 64-hex format as prompted input)
     const envSeed = process.env.DCHAT_SEED?.trim() || process.env.NKN_SEED?.trim();
-    if (envSeed && !existing.seed) {
+    if (envSeed && /^[0-9a-f]{64}$/i.test(envSeed) && !existing.seed) {
       const useEnv = await prompter.confirm({
         message: "NKN seed env var detected. Use env value?",
         initialValue: true,
