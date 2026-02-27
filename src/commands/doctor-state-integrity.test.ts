@@ -168,9 +168,7 @@ describe("doctor state integrity oauth dir checks", () => {
     expect(text).toContain("recent sessions are missing transcripts");
     expect(text).toMatch(/bot sessions --store ".*sessions\.json"/);
     expect(text).toMatch(/bot sessions cleanup --store ".*sessions\.json" --dry-run/);
-    expect(text).toMatch(
-      /bot sessions cleanup --store ".*sessions\.json" --enforce --fix-missing/,
-    );
+    expect(text).toMatch(/bot sessions cleanup --store ".*sessions\.json" --enforce --fix-missing/);
     expect(text).not.toContain("--active");
     expect(text).not.toContain(" ls ");
   });

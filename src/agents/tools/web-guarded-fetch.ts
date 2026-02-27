@@ -1,9 +1,9 @@
+import type { SsrFPolicy } from "../../infra/net/ssrf.js";
 import {
   fetchWithSsrFGuard,
   type GuardedFetchOptions,
   type GuardedFetchResult,
 } from "../../infra/net/fetch-guard.js";
-import type { SsrFPolicy } from "../../infra/net/ssrf.js";
 
 export const WEB_TOOLS_TRUSTED_NETWORK_SSRF_POLICY: SsrFPolicy = {
   dangerouslyAllowPrivateNetwork: true,

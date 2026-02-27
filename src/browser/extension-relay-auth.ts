@@ -6,8 +6,7 @@ const DEFAULT_RELAY_PROBE_TIMEOUT_MS = 500;
 const BOT_RELAY_BROWSER = "Bot/extension-relay";
 
 function resolveGatewayAuthToken(): string | null {
-  const envToken =
-    process.env.BOT_GATEWAY_TOKEN?.trim() || process.env.BOT_GATEWAY_TOKEN?.trim();
+  const envToken = process.env.BOT_GATEWAY_TOKEN?.trim() || process.env.BOT_GATEWAY_TOKEN?.trim();
   if (envToken) {
     return envToken;
   }

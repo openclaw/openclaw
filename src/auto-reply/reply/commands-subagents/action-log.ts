@@ -1,5 +1,5 @@
-import { callGateway } from "../../../gateway/call.js";
 import type { CommandHandlerResult } from "../commands-types.js";
+import { callGateway } from "../../../gateway/call.js";
 import { formatRunLabel } from "../subagents-utils.js";
 import {
   type ChatMessage,

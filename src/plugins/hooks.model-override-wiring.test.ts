@@ -7,25 +7,20 @@
  * 3. before_agent_start remains a legacy compatibility fallback
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createHookRunner } from "./hooks.js";
-import { createEmptyPluginRegistry, type PluginRegistry } from "./registry.js";
 import type {
   PluginHookAgentContext,
   PluginHookBeforeAgentStartResult,
   PluginHookBeforeModelResolveEvent,
-  PluginHookBeforeModelResolveResult,
   PluginHookBeforePromptBuildEvent,
-  PluginHookBeforePromptBuildResult,
   PluginHookRegistration,
 } from "./types.js";
+import { createHookRunner } from "./hooks.js";
+import { createEmptyPluginRegistry, type PluginRegistry } from "./registry.js";
 
 function addBeforeModelResolveHook(
   registry: PluginRegistry,
   pluginId: string,
-  handler: (
-    event: PluginHookBeforeModelResolveEvent,
-    ctx: PluginHookAgentContext,
-  ) => PluginHookBeforeModelResolveResult | Promise<PluginHookBeforeModelResolveResult>,
+  handler: (event: PluginHookBeforeModelResolveEvent, ctx: PluginHookAgentContext) => unknown,
   priority?: number,
 ) {
   registry.typedHooks.push({
@@ -40,10 +35,7 @@ function addBeforeModelResolveHook(
 function addBeforePromptBuildHook(
   registry: PluginRegistry,
   pluginId: string,
-  handler: (
-    event: PluginHookBeforePromptBuildEvent,
-    ctx: PluginHookAgentContext,
-  ) => PluginHookBeforePromptBuildResult | Promise<PluginHookBeforePromptBuildResult>,
+  handler: (event: PluginHookBeforePromptBuildEvent, ctx: PluginHookAgentContext) => unknown,
   priority?: number,
 ) {
   registry.typedHooks.push({

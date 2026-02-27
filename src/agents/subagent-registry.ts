@@ -1,3 +1,4 @@
+import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { loadConfig } from "../config/config.js";
 import {
   loadSessionStore,
@@ -40,7 +41,6 @@ import {
   persistSubagentRunsToDisk,
   restoreSubagentRunsFromDisk,
 } from "./subagent-registry-state.js";
-import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { resolveAgentTimeoutMs } from "./timeout.js";
 
 export type { SubagentRunRecord } from "./subagent-registry.types.js";

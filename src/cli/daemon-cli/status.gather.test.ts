@@ -30,9 +30,7 @@ const resolveGatewayBindHost = vi.fn(
 );
 const pickPrimaryTailnetIPv4 = vi.fn(() => "100.64.0.9");
 const resolveGatewayPort = vi.fn((_cfg?: unknown, _env?: unknown) => 18789);
-const resolveStateDir = vi.fn(
-  (env: NodeJS.ProcessEnv) => env.BOT_STATE_DIR ?? "/tmp/bot-cli",
-);
+const resolveStateDir = vi.fn((env: NodeJS.ProcessEnv) => env.BOT_STATE_DIR ?? "/tmp/bot-cli");
 const resolveConfigPath = vi.fn((env: NodeJS.ProcessEnv, stateDir: string) => {
   return env.BOT_CONFIG_PATH ?? `${stateDir}/bot.json`;
 });

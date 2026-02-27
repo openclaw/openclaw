@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
-import { createWizardPrompter as buildWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter, WizardSelectParams } from "./prompts.js";
+import { createWizardPrompter as buildWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 
 const mocks = vi.hoisted(() => ({
   randomToken: vi.fn(),

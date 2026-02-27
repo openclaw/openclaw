@@ -1,5 +1,8 @@
-import { resolveEnvApiKey } from "../agents/model-auth.js";
 import type { BotConfig } from "../config/types.js";
+import type { WizardPrompter } from "../wizard/prompts.js";
+import type { ApplyAuthChoiceParams } from "./auth-choice.apply.js";
+import type { SecretInputMode } from "./onboard-types.js";
+import { resolveEnvApiKey } from "../agents/model-auth.js";
 import { type SecretInput, type SecretRef } from "../config/types.secrets.js";
 import { encodeJsonPointerToken } from "../secrets/json-pointer.js";
 import { PROVIDER_ENV_VARS } from "../secrets/provider-env-vars.js";
@@ -8,11 +11,8 @@ import {
   resolveDefaultSecretProviderAlias,
 } from "../secrets/ref-contract.js";
 import { resolveSecretRefString } from "../secrets/resolve.js";
-import type { WizardPrompter } from "../wizard/prompts.js";
 import { formatApiKeyPreview } from "./auth-choice.api-key.js";
-import type { ApplyAuthChoiceParams } from "./auth-choice.apply.js";
 import { applyDefaultModelChoice } from "./auth-choice.default-model.js";
-import type { SecretInputMode } from "./onboard-types.js";
 
 const ENV_SOURCE_LABEL_RE = /(?:^|:\s)([A-Z][A-Z0-9_]*)$/;
 const ENV_SECRET_REF_ID_RE = /^[A-Z][A-Z0-9_]{0,127}$/;

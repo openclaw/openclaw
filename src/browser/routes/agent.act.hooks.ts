@@ -1,7 +1,7 @@
 import type { BrowserRouteContext } from "../server-context.js";
+import type { BrowserRouteRegistrar } from "./types.js";
 import { readBody, resolveTargetIdFromBody, withPlaywrightRouteContext } from "./agent.shared.js";
 import { DEFAULT_UPLOAD_DIR, resolveExistingPathsWithinRoot } from "./path-output.js";
-import type { BrowserRouteRegistrar } from "./types.js";
 import { jsonError, toBoolean, toNumber, toStringArray, toStringOrEmpty } from "./utils.js";
 
 export function registerBrowserAgentActHookRoutes(

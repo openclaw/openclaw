@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
-import { resolveWritablePathWithinRoot } from "./path-output.js";
 import type { BrowserResponse } from "./types.js";
+import { resolveWritablePathWithinRoot } from "./path-output.js";
 
 export async function ensureOutputRootDir(rootDir: string): Promise<void> {
   await fs.mkdir(rootDir, { recursive: true });

@@ -1,7 +1,7 @@
 import type { CommandInteraction, CommandWithSubcommands } from "@buape/carbon";
 import { describe, expect, it, vi } from "vitest";
-import { createDiscordVoiceCommand } from "./command.js";
 import type { DiscordVoiceManager } from "./manager.js";
+import { createDiscordVoiceCommand } from "./command.js";
 
 function findVoiceSubcommand(command: CommandWithSubcommands, name: string) {
   const subcommands = (

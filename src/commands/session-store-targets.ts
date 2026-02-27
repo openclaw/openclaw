@@ -1,6 +1,6 @@
+import type { BotConfig } from "../config/types.bot.js";
 import { listAgentIds, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveStorePath } from "../config/sessions.js";
-import type { BotConfig } from "../config/types.bot.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 
 export type SessionStoreSelectionOptions = {

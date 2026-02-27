@@ -1,4 +1,3 @@
-import { createInterface } from "node:readline";
 import type {
   AcpRuntimeCapabilities,
   AcpRuntimeDoctorReport,
@@ -12,6 +11,7 @@ import type {
   PluginLogger,
 } from "bot/plugin-sdk";
 import { AcpRuntimeError } from "bot/plugin-sdk";
+import { createInterface } from "node:readline";
 import {
   ACPX_LOCAL_INSTALL_COMMAND,
   ACPX_PINNED_VERSION,

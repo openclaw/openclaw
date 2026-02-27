@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
+import type { NextcloudTalkInboundMessage } from "./types.js";
 import { startWebhookServer } from "./monitor.test-harness.js";
 import { generateNextcloudTalkSignature } from "./signature.js";
-import type { NextcloudTalkInboundMessage } from "./types.js";
 
 function createSignedRequest(body: string): { random: string; signature: string } {
   return generateNextcloudTalkSignature({

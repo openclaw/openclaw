@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { GatewayRequestHandler } from "./server-methods/types.js";
 import {
   __testing as controlPlaneRateLimitTesting,
   resolveControlPlaneRateLimitKey,
 } from "./control-plane-rate-limit.js";
 import { handleGatewayRequest } from "./server-methods.js";
-import type { GatewayRequestHandler } from "./server-methods/types.js";
 
 const noWebchat = () => false;
 

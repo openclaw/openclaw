@@ -355,9 +355,7 @@ describe("web_search kimi provider", () => {
                 },
               },
             ],
-            search_results: [
-              { title: "Bot", url: "https://hanzo.bot/docs", content: "docs" },
-            ],
+            search_results: [{ title: "Bot", url: "https://hanzo.bot/docs", content: "docs" }],
           }),
           { status: 200, headers: { "content-type": "application/json" } },
         );

@@ -1,5 +1,5 @@
-import { extractHandleFromChatGuid, normalizeBlueBubblesHandle } from "./targets.js";
 import type { BlueBubblesAttachment } from "./types.js";
+import { extractHandleFromChatGuid, normalizeBlueBubblesHandle } from "./targets.js";
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)

@@ -10,10 +10,7 @@ import { captureEnv } from "../test-utils/env.js";
 const bundledPluginsDirSnapshot = captureEnv(["BOT_BUNDLED_PLUGINS_DIR"]);
 
 beforeAll(() => {
-  process.env.BOT_BUNDLED_PLUGINS_DIR = path.join(
-    os.tmpdir(),
-    "bot-test-no-bundled-extensions",
-  );
+  process.env.BOT_BUNDLED_PLUGINS_DIR = path.join(os.tmpdir(), "bot-test-no-bundled-extensions");
 });
 
 afterAll(() => {

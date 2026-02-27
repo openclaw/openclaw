@@ -1,8 +1,8 @@
 import "./isolated-agent.mocks.js";
 import fs from "node:fs/promises";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { runSubagentAnnounceFlow } from "../agents/subagent-announce.js";
 import type { CliDeps } from "../cli/deps.js";
+import { runSubagentAnnounceFlow } from "../agents/subagent-announce.js";
 import {
   createCliDeps,
   mockAgentPayloads,

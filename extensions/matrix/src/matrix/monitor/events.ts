@@ -1,8 +1,8 @@
 import type { MatrixClient } from "@vector-im/matrix-bot-sdk";
 import type { PluginRuntime, RuntimeLogger } from "bot/plugin-sdk";
 import type { MatrixAuth } from "../client.js";
-import { sendReadReceiptMatrix } from "../send.js";
 import type { MatrixRawEvent } from "./types.js";
+import { sendReadReceiptMatrix } from "../send.js";
 import { EventType } from "./types.js";
 
 function createSelfUserIdResolver(client: Pick<MatrixClient, "getUserId">) {

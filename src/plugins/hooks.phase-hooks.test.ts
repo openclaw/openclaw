@@ -1,20 +1,13 @@
 import { beforeEach, describe, expect, it } from "vitest";
+import type { PluginHookRegistration } from "./types.js";
 import { createHookRunner } from "./hooks.js";
 import { createEmptyPluginRegistry, type PluginRegistry } from "./registry.js";
-import type {
-  PluginHookBeforeModelResolveResult,
-  PluginHookBeforePromptBuildResult,
-  PluginHookRegistration,
-} from "./types.js";
 
 function addTypedHook(
   registry: PluginRegistry,
   hookName: "before_model_resolve" | "before_prompt_build",
   pluginId: string,
-  handler: () =>
-    | PluginHookBeforeModelResolveResult
-    | PluginHookBeforePromptBuildResult
-    | Promise<PluginHookBeforeModelResolveResult | PluginHookBeforePromptBuildResult>,
+  handler: () => unknown,
   priority?: number,
 ) {
   registry.typedHooks.push({

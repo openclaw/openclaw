@@ -1,6 +1,6 @@
+import type { HandleCommandsParams } from "../commands-types.js";
 import { DISCORD_THREAD_BINDING_CHANNEL } from "../../../channels/thread-bindings-policy.js";
 import { resolveConversationIdFromTargets } from "../../../infra/outbound/conversation-id.js";
-import type { HandleCommandsParams } from "../commands-types.js";
 
 function normalizeString(value: unknown): string {
   if (typeof value === "string") {

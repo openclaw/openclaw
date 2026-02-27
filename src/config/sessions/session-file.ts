@@ -1,6 +1,6 @@
+import type { SessionEntry } from "./types.js";
 import { resolveSessionFilePath } from "./paths.js";
 import { updateSessionStore } from "./store.js";
-import type { SessionEntry } from "./types.js";
 
 export async function resolveAndPersistSessionFile(params: {
   sessionId: string;

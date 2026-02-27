@@ -1,10 +1,10 @@
 import type { AcpRuntimeEvent } from "../../acp/runtime/types.js";
-import { EmbeddedBlockChunker } from "../../agents/pi-embedded-block-chunker.js";
 import type { BotConfig } from "../../config/config.js";
 import type { ReplyPayload } from "../types.js";
+import type { ReplyDispatchKind } from "./reply-dispatcher.js";
+import { EmbeddedBlockChunker } from "../../agents/pi-embedded-block-chunker.js";
 import { createBlockReplyPipeline } from "./block-reply-pipeline.js";
 import { resolveEffectiveBlockStreamingConfig } from "./block-streaming.js";
-import type { ReplyDispatchKind } from "./reply-dispatcher.js";
 
 const DEFAULT_ACP_STREAM_COALESCE_IDLE_MS = 350;
 const DEFAULT_ACP_STREAM_MAX_CHUNK_CHARS = 1800;

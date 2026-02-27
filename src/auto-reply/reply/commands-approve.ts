@@ -1,3 +1,4 @@
+import type { CommandHandler } from "./commands-types.js";
 import { callGateway } from "../../gateway/call.js";
 import { logVerbose } from "../../globals.js";
 import {
@@ -5,7 +6,6 @@ import {
   GATEWAY_CLIENT_NAMES,
   isInternalMessageChannel,
 } from "../../utils/message-channel.js";
-import type { CommandHandler } from "./commands-types.js";
 
 const COMMAND = "/approve";
 

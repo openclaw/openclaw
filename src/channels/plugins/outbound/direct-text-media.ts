@@ -1,8 +1,8 @@
-import { chunkText } from "../../../auto-reply/chunk.js";
 import type { BotConfig } from "../../../config/config.js";
 import type { OutboundSendDeps } from "../../../infra/outbound/deliver.js";
-import { resolveChannelMediaMaxBytes } from "../media-limits.js";
 import type { ChannelOutboundAdapter } from "../types.js";
+import { chunkText } from "../../../auto-reply/chunk.js";
+import { resolveChannelMediaMaxBytes } from "../media-limits.js";
 
 type DirectSendOptions = {
   accountId?: string | null;
@@ -49,10 +49,7 @@ export function createDirectTextMediaOutbound<
 >(params: {
   channel: "imessage" | "signal";
   resolveSender: (deps: OutboundSendDeps | undefined) => DirectSendFn<TOpts, TResult>;
-  resolveMaxBytes: (params: {
-    cfg: BotConfig;
-    accountId?: string | null;
-  }) => number | undefined;
+  resolveMaxBytes: (params: { cfg: BotConfig; accountId?: string | null }) => number | undefined;
   buildTextOptions: (params: DirectSendOptions) => TOpts;
   buildMediaOptions: (params: DirectSendOptions) => TOpts;
 }): ChannelOutboundAdapter {

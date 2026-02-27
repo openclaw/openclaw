@@ -1,3 +1,4 @@
+import type { NodeDaemonRuntime } from "./node-daemon-runtime.js";
 import { formatNodeServiceDescription } from "../daemon/constants.js";
 import { resolveNodeProgramArguments } from "../daemon/program-args.js";
 import { resolvePreferredNodePath } from "../daemon/runtime-paths.js";
@@ -7,7 +8,6 @@ import {
   emitNodeRuntimeWarning,
   type DaemonInstallWarnFn,
 } from "./daemon-install-runtime-warning.js";
-import type { NodeDaemonRuntime } from "./node-daemon-runtime.js";
 
 export type NodeInstallPlan = {
   programArguments: string[];

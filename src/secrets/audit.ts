@@ -734,11 +734,7 @@ export function resolveSecretsAuditExitCode(report: SecretsAuditReport, check: b
   return 0;
 }
 
-export function applySecretsPlanTarget(
-  config: BotConfig,
-  pathLabel: string,
-  value: unknown,
-): void {
+export function applySecretsPlanTarget(config: BotConfig, pathLabel: string, value: unknown): void {
   const segments = parseDotPath(pathLabel);
   if (segments.length === 0) {
     throw new Error("Invalid target path.");

@@ -1,11 +1,12 @@
 import type { ExecApprovalForwarder } from "../../infra/exec-approval-forwarder.js";
+import type { ExecApprovalManager } from "../exec-approval-manager.js";
+import type { GatewayRequestHandlers } from "./types.js";
 import {
   DEFAULT_EXEC_APPROVAL_TIMEOUT_MS,
   type ExecApprovalDecision,
 } from "../../infra/exec-approvals.js";
 import { buildSystemRunApprovalBindingV1 } from "../../infra/system-run-approval-binding.js";
 import { resolveSystemRunApprovalRequestContext } from "../../infra/system-run-approval-context.js";
-import type { ExecApprovalManager } from "../exec-approval-manager.js";
 import {
   ErrorCodes,
   errorShape,
@@ -13,7 +14,6 @@ import {
   validateExecApprovalRequestParams,
   validateExecApprovalResolveParams,
 } from "../protocol/index.js";
-import type { GatewayRequestHandlers } from "./types.js";
 
 export function createExecApprovalHandlers(
   manager: ExecApprovalManager,

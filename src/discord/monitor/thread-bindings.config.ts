@@ -1,8 +1,8 @@
+import type { BotConfig } from "../../config/config.js";
 import {
   resolveThreadBindingSessionTtlMs,
   resolveThreadBindingsEnabled,
 } from "../../channels/thread-bindings-policy.js";
-import type { BotConfig } from "../../config/config.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
 
 export { resolveThreadBindingSessionTtlMs, resolveThreadBindingsEnabled };

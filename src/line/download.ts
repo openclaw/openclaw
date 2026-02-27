@@ -1,5 +1,5 @@
-import fs from "node:fs";
 import { messagingApi } from "@line/bot-sdk";
+import fs from "node:fs";
 import { logVerbose } from "../globals.js";
 import { buildRandomTempFilePath } from "../plugin-sdk/temp-path.js";
 

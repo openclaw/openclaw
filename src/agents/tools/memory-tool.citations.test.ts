@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
+import type { BotConfig } from "../../config/config.js";
 import {
   resetMemoryToolMockState,
   setMemoryBackend,
@@ -6,7 +7,6 @@ import {
   setMemorySearchImpl,
   type MemoryReadParams,
 } from "../../../test/helpers/memory-tool-manager-mock.js";
-import type { BotConfig } from "../../config/config.js";
 import { createMemoryGetTool, createMemorySearchTool } from "./memory-tool.js";
 
 function asBotConfig(config: Partial<BotConfig>): BotConfig {

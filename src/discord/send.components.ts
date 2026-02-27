@@ -5,6 +5,7 @@ import {
   type RequestClient,
 } from "@buape/carbon";
 import { ChannelType, Routes } from "discord-api-types/v10";
+import type { DiscordSendResult } from "./send.types.js";
 import { loadConfig } from "../config/config.js";
 import { recordChannelActivity } from "../infra/channel-activity.js";
 import { loadWebMedia } from "../web/media.js";
@@ -26,7 +27,6 @@ import {
   stripUndefinedFields,
   SUPPRESS_NOTIFICATIONS_FLAG,
 } from "./send.shared.js";
-import type { DiscordSendResult } from "./send.types.js";
 
 const DISCORD_FORUM_LIKE_TYPES = new Set<number>([ChannelType.GuildForum, ChannelType.GuildMedia]);
 

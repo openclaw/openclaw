@@ -1,8 +1,9 @@
-import fs from "node:fs/promises";
 import type { OAuthCredentials } from "@mariozechner/pi-ai";
+import fs from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
+import type { AuthChoice } from "./onboard-types.js";
+import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import { applyAuthChoice, resolvePreferredProviderForAuthChoice } from "./auth-choice.js";
 import { GOOGLE_GEMINI_DEFAULT_MODEL } from "./google-gemini-model-default.js";
 import {
@@ -10,7 +11,6 @@ import {
   ZAI_CODING_CN_BASE_URL,
   ZAI_CODING_GLOBAL_BASE_URL,
 } from "./onboard-auth.js";
-import type { AuthChoice } from "./onboard-types.js";
 import {
   authProfilePathForAgent,
   createAuthTestLifecycle,

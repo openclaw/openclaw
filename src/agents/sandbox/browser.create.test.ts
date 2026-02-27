@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { SandboxConfig } from "./types.js";
 import { BROWSER_BRIDGES } from "./browser-bridges.js";
 import { ensureSandboxBrowser } from "./browser.js";
 import { resetNoVncObserverTokensForTests } from "./novnc-auth.js";
-import type { SandboxConfig } from "./types.js";
 
 const dockerMocks = vi.hoisted(() => ({
   dockerContainerState: vi.fn(),
@@ -178,9 +178,7 @@ describe("ensureSandboxBrowser create args", () => {
       (call: unknown[]) => Array.isArray(call[0]) && call[0][0] === "create",
     )?.[0] as string[] | undefined;
     const envEntries = envEntriesFromDockerArgs(createArgs ?? []);
-    expect(envEntries.some((entry) => entry.startsWith("BOT_BROWSER_NOVNC_PASSWORD="))).toBe(
-      false,
-    );
+    expect(envEntries.some((entry) => entry.startsWith("BOT_BROWSER_NOVNC_PASSWORD="))).toBe(false);
     expect(result?.noVncUrl).toBeUndefined();
   });
 });

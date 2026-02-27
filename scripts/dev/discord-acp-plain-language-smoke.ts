@@ -212,9 +212,7 @@ function parseArgs(): Args {
     process.env.DISCORD_BOT_TOKEN ||
     "";
   const botTokenPrefix =
-    resolveArg("--bot-token-prefix") ||
-    process.env.BOT_DISCORD_SMOKE_BOT_TOKEN_PREFIX ||
-    "Bot";
+    resolveArg("--bot-token-prefix") || process.env.BOT_DISCORD_SMOKE_BOT_TOKEN_PREFIX || "Bot";
   const targetAgent =
     resolveArg("--agent") ||
     process.env.BOT_DISCORD_SMOKE_AGENT ||

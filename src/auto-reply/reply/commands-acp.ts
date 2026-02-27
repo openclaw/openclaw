@@ -1,3 +1,8 @@
+import type {
+  CommandHandler,
+  CommandHandlerResult,
+  HandleCommandsParams,
+} from "./commands-types.js";
 import { logVerbose } from "../../globals.js";
 import {
   handleAcpDoctorAction,
@@ -27,11 +32,6 @@ import {
   resolveAcpHelpText,
   stopWithText,
 } from "./commands-acp/shared.js";
-import type {
-  CommandHandler,
-  CommandHandlerResult,
-  HandleCommandsParams,
-} from "./commands-types.js";
 
 type AcpActionHandler = (
   params: HandleCommandsParams,

@@ -1,11 +1,11 @@
 import { cancel, multiselect as clackMultiselect, isCancel } from "@clack/prompts";
+import type { RuntimeEnv } from "../../runtime.js";
 import { resolveApiKeyForProvider } from "../../agents/model-auth.js";
 import { type ModelScanResult, scanOpenRouterModels } from "../../agents/model-scan.js";
 import { withProgressTotals } from "../../cli/progress.js";
 import { loadConfig } from "../../config/config.js";
 import { logConfigUpdated } from "../../config/logging.js";
 import { toAgentModelListLike } from "../../config/model-input.js";
-import type { RuntimeEnv } from "../../runtime.js";
 import {
   stylePromptHint,
   stylePromptMessage,

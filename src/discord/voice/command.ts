@@ -10,10 +10,11 @@ import {
   ChannelType as DiscordChannelType,
   type APIApplicationCommandChannelOption,
 } from "discord-api-types/v10";
-import { resolveCommandAuthorizedFromAuthorizers } from "../../channels/command-gating.js";
 import type { BotConfig } from "../../config/config.js";
-import { isDangerousNameMatchingEnabled } from "../../config/dangerous-name-matching.js";
 import type { DiscordAccountConfig } from "../../config/types.js";
+import type { DiscordVoiceManager } from "./manager.js";
+import { resolveCommandAuthorizedFromAuthorizers } from "../../channels/command-gating.js";
+import { isDangerousNameMatchingEnabled } from "../../config/dangerous-name-matching.js";
 import {
   allowListMatches,
   isDiscordGroupAllowedByPolicy,
@@ -26,7 +27,6 @@ import {
 import { resolveDiscordChannelInfo } from "../monitor/message-utils.js";
 import { resolveDiscordSenderIdentity } from "../monitor/sender-identity.js";
 import { resolveDiscordThreadParentInfo } from "../monitor/threading.js";
-import type { DiscordVoiceManager } from "./manager.js";
 
 const VOICE_CHANNEL_TYPES: NonNullable<APIApplicationCommandChannelOption["channel_types"]> = [
   DiscordChannelType.GuildVoice,

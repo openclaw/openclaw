@@ -65,9 +65,9 @@ describe("Nix integration (U3, U5, U9)", () => {
 
     it("STATE_DIR respects BOT_HOME when state override is unset", () => {
       const customHome = path.join(path.sep, "custom", "home");
-      expect(
-        resolveStateDir(envWith({ BOT_HOME: customHome, BOT_STATE_DIR: undefined })),
-      ).toBe(path.join(path.resolve(customHome), ".hanzo/bot"));
+      expect(resolveStateDir(envWith({ BOT_HOME: customHome, BOT_STATE_DIR: undefined }))).toBe(
+        path.join(path.resolve(customHome), ".hanzo/bot"),
+      );
     });
 
     it("CONFIG_PATH defaults to BOT_HOME/.hanzoai/bot.json", () => {
@@ -93,9 +93,7 @@ describe("Nix integration (U3, U5, U9)", () => {
 
     it("CONFIG_PATH respects BOT_CONFIG_PATH override", () => {
       expect(
-        resolveConfigPathCandidate(
-          envWith({ BOT_CONFIG_PATH: "/nix/store/abc/bot.json" }),
-        ),
+        resolveConfigPathCandidate(envWith({ BOT_CONFIG_PATH: "/nix/store/abc/bot.json" })),
       ).toBe(path.resolve("/nix/store/abc/bot.json"));
     });
 
@@ -202,19 +200,13 @@ describe("Nix integration (U3, U5, U9)", () => {
 
     it("prefers BOT_GATEWAY_PORT over config", () => {
       expect(
-        resolveGatewayPort(
-          { gateway: { port: 19002 } },
-          envWith({ BOT_GATEWAY_PORT: "19001" }),
-        ),
+        resolveGatewayPort({ gateway: { port: 19002 } }, envWith({ BOT_GATEWAY_PORT: "19001" })),
       ).toBe(19001);
     });
 
     it("falls back to config when env is invalid", () => {
       expect(
-        resolveGatewayPort(
-          { gateway: { port: 19003 } },
-          envWith({ BOT_GATEWAY_PORT: "nope" }),
-        ),
+        resolveGatewayPort({ gateway: { port: 19003 } }, envWith({ BOT_GATEWAY_PORT: "nope" })),
       ).toBe(19003);
     });
   });

@@ -54,7 +54,7 @@ Use ACP when you want an external harness runtime. Use sub-agents when you want 
 
 | Area          | ACP session                           | Sub-agent run                      |
 | ------------- | ------------------------------------- | ---------------------------------- |
-| Runtime       | ACP backend plugin (for example acpx) | Bot native sub-agent runtime  |
+| Runtime       | ACP backend plugin (for example acpx) | Bot native sub-agent runtime       |
 | Session key   | `agent:<agentId>:acp:<uuid>`          | `agent:<agentId>:subagent:<uuid>`  |
 | Main commands | `/acp ...`                            | `/subagents ...`                   |
 | Spawn tool    | `sessions_spawn` with `runtime:"acp"` | `sessions_spawn` (default runtime) |

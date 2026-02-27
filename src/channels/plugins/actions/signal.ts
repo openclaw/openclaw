@@ -1,8 +1,8 @@
+import type { ChannelMessageActionAdapter, ChannelMessageActionName } from "../types.js";
 import { createActionGate, jsonResult, readStringParam } from "../../../agents/tools/common.js";
 import { listEnabledSignalAccounts, resolveSignalAccount } from "../../../signal/accounts.js";
 import { resolveSignalReactionLevel } from "../../../signal/reaction-level.js";
 import { sendReactionSignal, removeReactionSignal } from "../../../signal/send-reactions.js";
-import type { ChannelMessageActionAdapter, ChannelMessageActionName } from "../types.js";
 
 const providerId = "signal";
 const GROUP_PREFIX = "group:";

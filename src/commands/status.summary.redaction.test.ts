@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { redactSensitiveStatusSummary } from "./status.summary.js";
 import type { StatusSummary } from "./status.types.js";
+import { redactSensitiveStatusSummary } from "./status.summary.js";
 
 function createRecentSessionRow() {
   return {

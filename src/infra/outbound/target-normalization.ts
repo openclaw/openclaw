@@ -1,5 +1,5 @@
-import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import type { ChannelId } from "../../channels/plugins/types.js";
+import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 
 export function normalizeChannelTargetInput(raw: string): string {
   return raw.trim();

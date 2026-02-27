@@ -1,5 +1,6 @@
-import { abortEmbeddedPiRun } from "../../agents/pi-embedded.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import type { CommandHandler } from "./commands-types.js";
+import { abortEmbeddedPiRun } from "../../agents/pi-embedded.js";
 import { logVerbose } from "../../globals.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import {
@@ -15,7 +16,6 @@ import {
   stopSubagentsForRequester,
 } from "./abort.js";
 import { persistAbortTargetEntry } from "./commands-session-store.js";
-import type { CommandHandler } from "./commands-types.js";
 import { clearSessionQueues } from "./queue.js";
 
 type AbortTarget = {

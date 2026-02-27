@@ -1,6 +1,6 @@
 import path from "node:path";
-import { resolveAgentSessionDirs } from "../../agents/session-dirs.js";
 import type { BotConfig } from "../../config/config.js";
+import { resolveAgentSessionDirs } from "../../agents/session-dirs.js";
 import { loadConfig } from "../../config/config.js";
 import { resolveStateDir } from "../../config/paths.js";
 import { loadSessionStore, resolveStorePath, updateSessionStore } from "../../config/sessions.js";
@@ -41,10 +41,10 @@ function resolveStoreSessionKey(store: Record<string, SessionEntry>, sessionKey:
   return lower;
 }
 
-export function resolveSessionStorePathForAcp(params: {
-  sessionKey: string;
-  cfg?: BotConfig;
-}): { cfg: BotConfig; storePath: string } {
+export function resolveSessionStorePathForAcp(params: { sessionKey: string; cfg?: BotConfig }): {
+  cfg: BotConfig;
+  storePath: string;
+} {
   const cfg = params.cfg ?? loadConfig();
   const parsed = parseAgentSessionKey(params.sessionKey);
   const storePath = resolveStorePath(cfg.session?.store, {

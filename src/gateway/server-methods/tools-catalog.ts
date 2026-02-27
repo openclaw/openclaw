@@ -1,3 +1,4 @@
+import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import {
   listAgentIds,
   resolveAgentDir,
@@ -17,7 +18,6 @@ import {
   formatValidationErrors,
   validateToolsCatalogParams,
 } from "../protocol/index.js";
-import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 
 type ToolCatalogEntry = {
   id: string;

@@ -1,13 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { BotConfig } from "../config/config.js";
+import type { RuntimeEnv } from "../runtime.js";
 import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
 import * as acpManagerModule from "../acp/control-plane/manager.js";
 import { AcpRuntimeError } from "../acp/runtime/errors.js";
 import * as embeddedModule from "../agents/pi-embedded.js";
-import type { BotConfig } from "../config/config.js";
 import * as configModule from "../config/config.js";
-import type { RuntimeEnv } from "../runtime.js";
 import { agentCommand } from "./agent.js";
 
 const loadConfigSpy = vi.spyOn(configModule, "loadConfig");

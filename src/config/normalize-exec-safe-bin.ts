@@ -1,6 +1,6 @@
+import type { BotConfig } from "./types.js";
 import { normalizeSafeBinProfileFixtures } from "../infra/exec-safe-bin-policy.js";
 import { normalizeTrustedSafeBinDirs } from "../infra/exec-safe-bin-trust.js";
-import type { BotConfig } from "./types.js";
 
 export function normalizeExecSafeBinProfilesInConfig(cfg: BotConfig): void {
   const normalizeExec = (exec: unknown) => {

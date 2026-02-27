@@ -2,11 +2,11 @@ import { once } from "node:events";
 import http from "node:http";
 import { describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
-import { MediaStreamHandler } from "./media-stream.js";
 import type {
   OpenAIRealtimeSTTProvider,
   RealtimeSTTSession,
 } from "./providers/stt-openai-realtime.js";
+import { MediaStreamHandler } from "./media-stream.js";
 
 const createStubSession = (): RealtimeSTTSession => ({
   connect: async () => {},

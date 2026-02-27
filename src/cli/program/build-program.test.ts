@@ -1,5 +1,5 @@
-import process from "node:process";
 import { Command } from "commander";
+import process from "node:process";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProgramContext } from "./context.js";
 

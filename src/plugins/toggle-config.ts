@@ -1,5 +1,5 @@
-import { normalizeChatChannelId } from "../channels/registry.js";
 import type { BotConfig } from "../config/config.js";
+import { normalizeChatChannelId } from "../channels/registry.js";
 
 export function setPluginEnabledInConfig(
   config: BotConfig,

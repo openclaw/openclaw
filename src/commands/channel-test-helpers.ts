@@ -1,3 +1,5 @@
+import type { ChannelChoice } from "./onboard-types.js";
+import type { ChannelOnboardingAdapter } from "./onboarding/types.js";
 import { discordPlugin } from "../../extensions/discord/src/channel.js";
 import { imessagePlugin } from "../../extensions/imessage/src/channel.js";
 import { signalPlugin } from "../../extensions/signal/src/channel.js";
@@ -6,9 +8,7 @@ import { telegramPlugin } from "../../extensions/telegram/src/channel.js";
 import { whatsappPlugin } from "../../extensions/whatsapp/src/channel.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
-import type { ChannelChoice } from "./onboard-types.js";
 import { getChannelOnboardingAdapter } from "./onboarding/registry.js";
-import type { ChannelOnboardingAdapter } from "./onboarding/types.js";
 
 export function setDefaultChannelPluginRegistryForTests(): void {
   const channels = [

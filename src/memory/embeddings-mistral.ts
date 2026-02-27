@@ -1,9 +1,9 @@
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
+import type { EmbeddingProvider, EmbeddingProviderOptions } from "./embeddings.js";
 import {
   createRemoteEmbeddingProvider,
   resolveRemoteEmbeddingClient,
 } from "./embeddings-remote-provider.js";
-import type { EmbeddingProvider, EmbeddingProviderOptions } from "./embeddings.js";
 
 export type MistralEmbeddingClient = {
   baseUrl: string;

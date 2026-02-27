@@ -74,9 +74,7 @@ function expectDockerSetupCommand(command: string) {
   ).toBe(true);
 }
 
-function createDefaultsSandboxConfig(
-  scope: "agent" | "shared" | "session" = "agent",
-): BotConfig {
+function createDefaultsSandboxConfig(scope: "agent" | "shared" | "session" = "agent"): BotConfig {
   return {
     agents: {
       defaults: {

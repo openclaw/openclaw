@@ -333,9 +333,7 @@ describe("secret ref resolver", () => {
     if (process.platform === "win32") {
       return;
     }
-    const root = await fs.mkdtemp(
-      path.join(os.tmpdir(), "bot-secrets-resolve-exec-protocol-"),
-    );
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "bot-secrets-resolve-exec-protocol-"));
     cleanupRoots.push(root);
     const scriptPath = path.join(root, "resolver-protocol.mjs");
     await writeSecureFile(

@@ -1,3 +1,4 @@
+import type { SandboxConfig } from "./types.js";
 import { stopBrowserBridgeServer } from "../../browser/bridge-server.js";
 import { defaultRuntime } from "../../runtime.js";
 import { BROWSER_BRIDGES } from "./browser-bridges.js";
@@ -10,7 +11,6 @@ import {
   type SandboxBrowserRegistryEntry,
   type SandboxRegistryEntry,
 } from "./registry.js";
-import type { SandboxConfig } from "./types.js";
 
 let lastPruneAtMs = 0;
 

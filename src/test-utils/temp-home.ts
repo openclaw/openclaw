@@ -3,13 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { captureEnv } from "./env.js";
 
-const HOME_ENV_KEYS = [
-  "HOME",
-  "USERPROFILE",
-  "HOMEDRIVE",
-  "HOMEPATH",
-  "BOT_STATE_DIR",
-] as const;
+const HOME_ENV_KEYS = ["HOME", "USERPROFILE", "HOMEDRIVE", "HOMEPATH", "BOT_STATE_DIR"] as const;
 
 export type TempHomeEnv = {
   home: string;

@@ -1,5 +1,5 @@
-import { sendMessageIMessage } from "../../../imessage/send.js";
 import type { OutboundSendDeps } from "../../../infra/outbound/deliver.js";
+import { sendMessageIMessage } from "../../../imessage/send.js";
 import {
   createScopedChannelMediaMaxBytesResolver,
   createDirectTextMediaOutbound,

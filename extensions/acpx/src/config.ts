@@ -1,6 +1,6 @@
+import type { BotPluginConfigSchema } from "bot/plugin-sdk";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { BotPluginConfigSchema } from "bot/plugin-sdk";
 
 export const ACPX_PERMISSION_MODES = ["approve-all", "approve-reads", "deny-all"] as const;
 export type AcpxPermissionMode = (typeof ACPX_PERMISSION_MODES)[number];

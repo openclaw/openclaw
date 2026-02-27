@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { AcpRuntime } from "./types.js";
 import { AcpRuntimeError } from "./errors.js";
 import {
   __testing,
@@ -7,7 +8,6 @@ import {
   requireAcpRuntimeBackend,
   unregisterAcpRuntimeBackend,
 } from "./registry.js";
-import type { AcpRuntime } from "./types.js";
 
 function createRuntimeStub(): AcpRuntime {
   return {

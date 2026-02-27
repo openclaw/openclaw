@@ -1,6 +1,6 @@
+import type { AuthProfileCredential, AuthProfileStore } from "../agents/auth-profiles.js";
 import { resolveBotAgentDir } from "../agents/agent-paths.js";
 import { listAgentIds, resolveAgentDir } from "../agents/agent-scope.js";
-import type { AuthProfileCredential, AuthProfileStore } from "../agents/auth-profiles.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   loadAuthProfileStoreForSecretsRuntime,
@@ -95,7 +95,7 @@ function pushAssignment(context: ResolverContext, assignment: SecretAssignment):
 
 function collectModelProviderAssignments(params: {
   providers: Record<string, ProviderLike>;
-  defaults: SecretDefaults | undefined;
+  defaults: SecretDefaults;
   context: ResolverContext;
 }): void {
   for (const [providerId, provider] of Object.entries(params.providers)) {
@@ -116,7 +116,7 @@ function collectModelProviderAssignments(params: {
 
 function collectSkillAssignments(params: {
   entries: Record<string, SkillEntryLike>;
-  defaults: SecretDefaults | undefined;
+  defaults: SecretDefaults;
   context: ResolverContext;
 }): void {
   for (const [skillKey, entry] of Object.entries(params.entries)) {
@@ -138,7 +138,7 @@ function collectSkillAssignments(params: {
 function collectGoogleChatAccountAssignment(params: {
   target: GoogleChatAccountLike;
   path: string;
-  defaults: SecretDefaults | undefined;
+  defaults: SecretDefaults;
   context: ResolverContext;
 }): void {
   const explicitRef = coerceSecretRef(params.target.serviceAccountRef, params.defaults);
@@ -170,7 +170,7 @@ function collectGoogleChatAccountAssignment(params: {
 
 function collectGoogleChatAssignments(params: {
   googleChat: GoogleChatAccountLike;
-  defaults: SecretDefaults | undefined;
+  defaults: SecretDefaults;
   context: ResolverContext;
 }): void {
   collectGoogleChatAccountAssignment({
@@ -195,10 +195,7 @@ function collectGoogleChatAssignments(params: {
   }
 }
 
-function collectConfigAssignments(params: {
-  config: BotConfig;
-  context: ResolverContext;
-}): void {
+function collectConfigAssignments(params: { config: BotConfig; context: ResolverContext }): void {
   const defaults = params.context.sourceConfig.secrets?.defaults;
   const providers = params.config.models?.providers as Record<string, ProviderLike> | undefined;
   if (providers) {
@@ -232,7 +229,7 @@ function collectApiKeyProfileAssignment(params: {
   profile: ApiKeyCredentialLike;
   profileId: string;
   agentDir: string;
-  defaults: SecretDefaults | undefined;
+  defaults: SecretDefaults;
   context: ResolverContext;
 }): void {
   const keyRef = coerceSecretRef(params.profile.keyRef, params.defaults);
@@ -262,7 +259,7 @@ function collectTokenProfileAssignment(params: {
   profile: TokenCredentialLike;
   profileId: string;
   agentDir: string;
-  defaults: SecretDefaults | undefined;
+  defaults: SecretDefaults;
   context: ResolverContext;
 }): void {
   const tokenRef = coerceSecretRef(params.profile.tokenRef, params.defaults);

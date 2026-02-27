@@ -1,6 +1,6 @@
-import fs from "node:fs";
-import { confirm } from "@clack/prompts";
 import type { Command } from "commander";
+import { confirm } from "@clack/prompts";
+import fs from "node:fs";
 import { danger } from "../globals.js";
 import { defaultRuntime } from "../runtime.js";
 import { runSecretsApply } from "../secrets/apply.js";

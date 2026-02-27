@@ -1,10 +1,10 @@
+import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { GATEWAY_CLIENT_CAPS } from "../protocol/client-info.js";
 import type { GatewayRequestContext } from "./types.js";
+import { GATEWAY_CLIENT_CAPS } from "../protocol/client-info.js";
 
 const mockState = vi.hoisted(() => ({
   transcriptPath: "",

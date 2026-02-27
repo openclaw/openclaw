@@ -1,5 +1,5 @@
-import { createSessionManagerRuntimeRegistry } from "../session-manager-runtime-registry.js";
 import type { EffectiveContextPruningSettings } from "./settings.js";
+import { createSessionManagerRuntimeRegistry } from "../session-manager-runtime-registry.js";
 
 export type ContextPruningRuntimeValue = {
   settings: EffectiveContextPruningSettings;

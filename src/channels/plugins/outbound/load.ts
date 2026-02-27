@@ -1,5 +1,5 @@
-import { createChannelRegistryLoader } from "../registry-loader.js";
 import type { ChannelId, ChannelOutboundAdapter } from "../types.js";
+import { createChannelRegistryLoader } from "../registry-loader.js";
 
 // Channel docking: outbound sends should stay cheap to import.
 //

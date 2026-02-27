@@ -1,5 +1,5 @@
-import { ErrorCodes, errorShape } from "../protocol/index.js";
 import type { GatewayRequestHandlers } from "./types.js";
+import { ErrorCodes, errorShape } from "../protocol/index.js";
 
 export function createSecretsHandlers(params: {
   reloadSecrets: () => Promise<{ warningCount: number }>;

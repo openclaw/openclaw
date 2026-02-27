@@ -1,5 +1,5 @@
-import { isRecord } from "../../../utils.js";
 import type { ChannelAccountSnapshot, ChannelStatusIssue } from "../types.js";
+import { isRecord } from "../../../utils.js";
 export { isRecord };
 
 export function asString(value: unknown): string | undefined {

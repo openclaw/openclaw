@@ -1,8 +1,8 @@
 import type { Command } from "commander";
+import type { ProgramContext } from "./context.js";
 import { getPrimaryCommand, hasHelpOrVersion } from "../argv.js";
 import { reparseProgramFromActionArgs } from "./action-reparse.js";
 import { removeCommandByName } from "./command-tree.js";
-import type { ProgramContext } from "./context.js";
 import { registerSubCliCommands } from "./register.subclis.js";
 
 type CommandRegisterParams = {

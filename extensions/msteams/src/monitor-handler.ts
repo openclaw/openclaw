@@ -1,13 +1,13 @@
 import type { BotConfig, RuntimeEnv } from "bot/plugin-sdk";
 import type { MSTeamsConversationStore } from "./conversation-store.js";
-import { buildFileInfoCard, parseFileConsentInvoke, uploadToConsentUrl } from "./file-consent.js";
-import { normalizeMSTeamsConversationId } from "./inbound.js";
 import type { MSTeamsAdapter } from "./messenger.js";
-import { createMSTeamsMessageHandler } from "./monitor-handler/message-handler.js";
 import type { MSTeamsMonitorLogger } from "./monitor-types.js";
-import { getPendingUpload, removePendingUpload } from "./pending-uploads.js";
 import type { MSTeamsPollStore } from "./polls.js";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
+import { buildFileInfoCard, parseFileConsentInvoke, uploadToConsentUrl } from "./file-consent.js";
+import { normalizeMSTeamsConversationId } from "./inbound.js";
+import { createMSTeamsMessageHandler } from "./monitor-handler/message-handler.js";
+import { getPendingUpload, removePendingUpload } from "./pending-uploads.js";
 
 export type MSTeamsAccessTokenProvider = {
   getAccessToken: (scope: string) => Promise<string>;

@@ -1,6 +1,7 @@
 import type { PluginRuntime } from "bot/plugin-sdk";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import "./test-mocks.js";
+import type { BlueBubblesSendTarget } from "./types.js";
 import { getCachedBlueBubblesPrivateApiStatus } from "./probe.js";
 import { clearBlueBubblesRuntime, setBlueBubblesRuntime } from "./runtime.js";
 import { sendMessageBlueBubbles, resolveChatGuidForTarget } from "./send.js";
@@ -9,7 +10,6 @@ import {
   installBlueBubblesFetchTestHooks,
   mockBlueBubblesPrivateApiStatusOnce,
 } from "./test-harness.js";
-import type { BlueBubblesSendTarget } from "./types.js";
 
 const mockFetch = vi.fn();
 const privateApiStatusMock = vi.mocked(getCachedBlueBubblesPrivateApiStatus);

@@ -1,5 +1,6 @@
-import { readAcpSessionEntry } from "../../acp/runtime/session-meta.js";
 import type { BotConfig } from "../../config/config.js";
+import type { ThreadBindingRecord, ThreadBindingTargetKind } from "./thread-bindings.types.js";
+import { readAcpSessionEntry } from "../../acp/runtime/session-meta.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
 import { parseDiscordTarget } from "../targets.js";
 import { resolveChannelIdForBinding } from "./thread-bindings.discord-api.js";
@@ -22,7 +23,6 @@ import {
   setBindingRecord,
   shouldPersistBindingMutations,
 } from "./thread-bindings.state.js";
-import type { ThreadBindingRecord, ThreadBindingTargetKind } from "./thread-bindings.types.js";
 
 export type AcpThreadBindingReconciliationResult = {
   checked: number;

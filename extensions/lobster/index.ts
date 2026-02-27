@@ -1,8 +1,4 @@
-import type {
-  AnyAgentTool,
-  BotPluginApi,
-  BotPluginToolFactory,
-} from "../../src/plugins/types.js";
+import type { AnyAgentTool, BotPluginApi, BotPluginToolFactory } from "../../src/plugins/types.js";
 import { createLobsterTool } from "./src/lobster-tool.js";
 
 export default function register(api: BotPluginApi) {

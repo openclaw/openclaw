@@ -1,6 +1,6 @@
 import path from "node:path";
-import { assertSandboxPath } from "./sandbox-paths.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
+import { assertSandboxPath } from "./sandbox-paths.js";
 
 export type SandboxedBridgeMediaPathConfig = {
   root: string;

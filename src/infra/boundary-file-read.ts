@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import { resolveBoundaryPath, resolveBoundaryPathSync } from "./boundary-path.js";
 import type { PathAliasPolicy } from "./path-alias-guards.js";
+import { resolveBoundaryPath, resolveBoundaryPathSync } from "./boundary-path.js";
 import { openVerifiedFileSync, type SafeOpenSyncFailureReason } from "./safe-open-sync.js";
 
 type BoundaryReadFs = Pick<

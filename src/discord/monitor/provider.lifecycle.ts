@@ -1,10 +1,10 @@
 import type { Client } from "@buape/carbon";
 import type { GatewayPlugin } from "@buape/carbon/gateway";
-import { danger } from "../../globals.js";
 import type { RuntimeEnv } from "../../runtime.js";
+import type { DiscordVoiceManager } from "../voice/manager.js";
+import { danger } from "../../globals.js";
 import { attachDiscordGatewayLogging } from "../gateway-logging.js";
 import { getDiscordGatewayEmitter, waitForDiscordGatewayStop } from "../monitor.gateway.js";
-import type { DiscordVoiceManager } from "../voice/manager.js";
 import { registerGateway, unregisterGateway } from "./gateway-registry.js";
 
 type ExecApprovalsHandler = {

@@ -1,9 +1,9 @@
+import type { SsrFPolicy } from "bot/plugin-sdk";
 import {
   buildHostnameAllowlistPolicyFromSuffixAllowlist,
   isHttpsUrlAllowedByHostnameSuffixAllowlist,
   normalizeHostnameSuffixAllowlist,
 } from "bot/plugin-sdk";
-import type { SsrFPolicy } from "bot/plugin-sdk";
 import type { MSTeamsAttachmentLike } from "./types.js";
 
 type InlineImageCandidate =

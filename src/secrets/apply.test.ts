@@ -2,8 +2,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { runSecretsApply } from "./apply.js";
 import type { SecretsApplyPlan } from "./plan.js";
+import { runSecretsApply } from "./apply.js";
 
 function stripVolatileConfigMeta(input: string): Record<string, unknown> {
   const parsed = JSON.parse(input) as Record<string, unknown>;

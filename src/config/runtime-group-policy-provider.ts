@@ -1,5 +1,5 @@
-import { resolveRuntimeGroupPolicy } from "./runtime-group-policy.js";
 import type { GroupPolicy } from "./types.base.js";
+import { resolveRuntimeGroupPolicy } from "./runtime-group-policy.js";
 
 export function resolveProviderRuntimeGroupPolicy(params: {
   providerConfigPresent: boolean;

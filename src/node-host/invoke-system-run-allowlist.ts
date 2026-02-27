@@ -1,3 +1,4 @@
+import type { RunResult } from "./invoke-types.js";
 import {
   analyzeArgvCommand,
   evaluateExecAllowlist,
@@ -9,7 +10,6 @@ import {
   type SkillBinTrustEntry,
 } from "../infra/exec-approvals.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
-import type { RunResult } from "./invoke-types.js";
 
 export type SystemRunAllowlistAnalysis = {
   analysisOk: boolean;

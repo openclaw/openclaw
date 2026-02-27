@@ -1,11 +1,7 @@
-import type {
-  ChannelAccountSnapshot,
-  ChannelGatewayContext,
-  BotConfig,
-} from "bot/plugin-sdk";
+import type { ChannelAccountSnapshot, ChannelGatewayContext, BotConfig } from "bot/plugin-sdk";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createRuntimeEnv } from "../../test-utils/runtime-env.js";
 import type { ResolvedNextcloudTalkAccount } from "./accounts.js";
+import { createRuntimeEnv } from "../../test-utils/runtime-env.js";
 
 const hoisted = vi.hoisted(() => ({
   monitorNextcloudTalkProvider: vi.fn(),

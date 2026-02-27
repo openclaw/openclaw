@@ -1,10 +1,10 @@
-import fs from "node:fs";
-import path from "node:path";
-import * as PiCodingAgent from "@mariozechner/pi-coding-agent";
 import type {
   AuthStorage as PiAuthStorage,
   ModelRegistry as PiModelRegistry,
 } from "@mariozechner/pi-coding-agent";
+import * as PiCodingAgent from "@mariozechner/pi-coding-agent";
+import fs from "node:fs";
+import path from "node:path";
 import { ensureAuthProfileStore } from "./auth-profiles.js";
 import { resolvePiCredentialMapFromStore, type PiCredentialMap } from "./pi-auth-credentials.js";
 

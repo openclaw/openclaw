@@ -1,3 +1,4 @@
+import type { MSTeamsAttachmentLike, MSTeamsHtmlAttachmentSummary } from "./types.js";
 import {
   ATTACHMENT_TAG_RE,
   extractHtmlFromAttachment,
@@ -6,7 +7,6 @@ import {
   isLikelyImageAttachment,
   safeHostForUrl,
 } from "./shared.js";
-import type { MSTeamsAttachmentLike, MSTeamsHtmlAttachmentSummary } from "./types.js";
 
 export function summarizeMSTeamsHtmlAttachments(
   attachments: MSTeamsAttachmentLike[] | undefined,

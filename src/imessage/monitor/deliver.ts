@@ -1,12 +1,12 @@
-import { chunkTextWithMode, resolveChunkMode } from "../../auto-reply/chunk.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
+import type { RuntimeEnv } from "../../runtime.js";
+import type { createIMessageRpcClient } from "../client.js";
+import type { SentMessageCache } from "./echo-cache.js";
+import { chunkTextWithMode, resolveChunkMode } from "../../auto-reply/chunk.js";
 import { loadConfig } from "../../config/config.js";
 import { resolveMarkdownTableMode } from "../../config/markdown-tables.js";
 import { convertMarkdownTables } from "../../markdown/tables.js";
-import type { RuntimeEnv } from "../../runtime.js";
-import type { createIMessageRpcClient } from "../client.js";
 import { sendMessageIMessage } from "../send.js";
-import type { SentMessageCache } from "./echo-cache.js";
 
 export async function deliverReplies(params: {
   replies: ReplyPayload[];

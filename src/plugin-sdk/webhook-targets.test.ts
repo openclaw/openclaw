@@ -1,5 +1,5 @@
-import { EventEmitter } from "node:events";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import {
   registerWebhookTarget,
