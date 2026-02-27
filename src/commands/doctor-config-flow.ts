@@ -1,7 +1,11 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+import { normalizeChatChannelId } from "../channels/registry.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { CONFIG_PATH } from "../config/config.js";
 import { findLegacyConfigIssues } from "../config/legacy.js";
+import { LEGACY_CONFIG_FILENAMES, resolveStateDir } from "../config/paths.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { listPluginDoctorLegacyConfigRules } from "../plugins/doctor-contract-registry.js";
 import { note } from "../terminal/note.js";
@@ -34,6 +38,48 @@ function hasLegacyInternalHookHandlers(raw: unknown): boolean {
   return Array.isArray(handlers) && handlers.length > 0;
 }
 
+/**
+ * Rename stale legacy config files to `<name>.migrated` when `openclaw.json`
+ * already exists in the same directory.  This prevents the gateway from
+ * picking them up and producing validation-error log spam (issue #11465).
+ */
+export async function renameStaleLegacyConfigs(
+  env: NodeJS.ProcessEnv = process.env,
+  stateDir?: string,
+): Promise<string[]> {
+  const changes: string[] = [];
+  const dir = stateDir ?? resolveStateDir(env);
+  const primaryPath = path.join(dir, "openclaw.json");
+
+  try {
+    await fs.access(primaryPath);
+  } catch {
+    // openclaw.json doesn't exist — nothing to clean up
+    return changes;
+  }
+
+  for (const legacyName of LEGACY_CONFIG_FILENAMES) {
+    const legacyPath = path.join(dir, legacyName);
+    try {
+      await fs.access(legacyPath);
+    } catch {
+      continue;
+    }
+    const migratedPath = `${legacyPath}.migrated`;
+
+    try {
+      await fs.rename(legacyPath, migratedPath);
+      changes.push(`Renamed stale legacy config: ${legacyPath} -> ${migratedPath}`);
+    } catch (err) {
+      // Log the specific error for debugging, but continue best-effort
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      changes.push(`Failed to rename ${legacyPath}: ${errorMsg}`);
+    }
+  }
+
+  return changes;
+}
+
 export async function loadAndMaybeMigrateDoctorConfig(params: {
   options: DoctorOptions;
   confirm: (p: { message: string; initialValue: boolean }) => Promise<boolean>;
@@ -42,6 +88,11 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   const preflight = await runDoctorConfigPreflight();
   let snapshot = preflight.snapshot;
   const baseCfg = preflight.baseConfig;
+
+  const staleLegacyChanges = await renameStaleLegacyConfigs(process.env);
+  if (staleLegacyChanges.length > 0) {
+    note(staleLegacyChanges.map((entry) => `- ${entry}`).join("\n"), "Doctor changes");
+  }
   let cfg: OpenClawConfig = baseCfg;
   let candidate = structuredClone(baseCfg);
   let pendingChanges = false;
