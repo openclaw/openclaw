@@ -153,7 +153,9 @@ describe("checkQmdBinaryAvailable", () => {
   it("returns available=false when qmd binary is not found", async () => {
     const result = await checkQmdBinaryAvailable("nonexistent-qmd-binary-12345");
     expect(result.available).toBe(false);
-    expect(result.error).toContain("not found");
+    if (!result.available) {
+      expect(result.error).toContain("not found");
+    }
   });
 
   it("returns available=true when qmd binary is available", async () => {

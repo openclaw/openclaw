@@ -141,11 +141,36 @@ export function registerCronSimpleCommands(cron: Command) {
       .option("--json", "Output JSON", false)
       .action(async (opts) => {
         try {
-          const listRes = (await callGatewayFromCli("cron.list", opts, { includeDisabled: true })) as { jobs?: Array<{ id?: string; name?: string; enabled?: boolean; state?: { runningAtMs?: number } }> } | null;
-          const jobs = listRes?.jobs ?? [];
+          // Fetch all jobs across pages
+          const allJobs: Array<{ id?: string; name?: string; enabled?: boolean; state?: { runningAtMs?: number } }> = [];
+          let offset: number | undefined;
+          let hasMore = true;
+
+          while (hasMore) {
+            const listRes = (await callGatewayFromCli("cron.list", opts, {
+              includeDisabled: true,
+              offset,
+              limit: 200, // Max page size
+            })) as {
+              jobs?: Array<{ id?: string; name?: string; enabled?: boolean; state?: { runningAtMs?: number } }>;
+              hasMore?: boolean;
+              nextOffset?: number;
+            } | null;
+
+            const jobs = listRes?.jobs ?? [];
+            allJobs.push(...jobs);
+
+            hasMore = listRes?.hasMore ?? false;
+            offset = listRes?.nextOffset;
+
+            // Safety limit to prevent infinite loops
+            if (allJobs.length >= 10000) {
+              break;
+            }
+          }
 
           // Find jobs with issues - stuck in running state for too long (over 1 hour)
-          const staleJobs = jobs.filter((j) => {
+          const staleJobs = allJobs.filter((j) => {
             if (j.state?.runningAtMs) {
               const runningFor = Date.now() - j.state.runningAtMs;
               return runningFor > 60 * 60 * 1000; // 1 hour
@@ -153,7 +178,7 @@ export function registerCronSimpleCommands(cron: Command) {
             return false;
           });
 
-          const disabledJobs = jobs.filter((j) => j.enabled === false);
+          const disabledJobs = allJobs.filter((j) => j.enabled === false);
 
           if (opts.dryRun) {
             const result = {
@@ -161,12 +186,12 @@ export function registerCronSimpleCommands(cron: Command) {
               dryRun: true,
               staleJobs: staleJobs.length,
               disabledJobs: disabledJobs.length,
-              totalJobs: jobs.length,
+              totalJobs: allJobs.length,
             };
             defaultRuntime.log(opts.json ? JSON.stringify(result, null, 2) : `Dry run results:
 - Stale jobs (running >1h): ${staleJobs.length}
 - Disabled jobs: ${disabledJobs.length}
-- Total jobs: ${jobs.length}
+- Total jobs: ${allJobs.length}
 
 Run without --dry-run to clean up stale jobs.`);
             return;
@@ -203,7 +228,7 @@ Run without --dry-run to clean up stale jobs.`);
             cleaned,
             staleJobs: staleJobs.length,
             disabledJobs: disabledJobs.length,
-            totalJobs: jobs.length,
+            totalJobs: allJobs.length,
           };
 
           if (opts.json) {
@@ -212,7 +237,7 @@ Run without --dry-run to clean up stale jobs.`);
             defaultRuntime.log(`✓ Cleanup complete:
 - Reset ${cleaned} stale jobs
 - Found ${disabledJobs.length} disabled jobs (use 'cron rm' to remove)
-- Total jobs: ${jobs.length}`);
+- Total jobs: ${allJobs.length}`);
           }
         } catch (err) {
           defaultRuntime.error(danger(String(err)));

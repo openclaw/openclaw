@@ -367,11 +367,12 @@ export function resolveMemoryBackendConfig(params: {
  * Check if the QMD binary is available on the system PATH.
  * Returns the resolved command path if available, null otherwise.
  * Results are cached to avoid repeated subprocess calls.
+ * Transient failures (timeouts) are not cached to allow retry.
  */
 export async function checkQmdBinaryAvailable(
   command = "qmd",
   timeoutMs = 5000,
-): Promise<{ available: true; path: string } | { available: false; error: string }> {
+): Promise<{ available: true; path: string } | { available: false; error: string; transient?: boolean }> {
   const cacheKey = `${command}:${timeoutMs}`;
 
   // Check cache first
@@ -398,6 +399,18 @@ export async function checkQmdBinaryAvailable(
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err);
     const errorLower = error.toLowerCase();
+
+    // Check for transient errors (timeouts) - these should NOT be cached
+    const transientPatterns = ["timeout", "etimedout", "econnreset", "eai_again"];
+    const isTransient = transientPatterns.some((pattern) => errorLower.includes(pattern));
+    if (isTransient) {
+      return {
+        available: false as const,
+        error: `QMD binary check timed out: ${error}. Please try again.`,
+        transient: true,
+      };
+    }
+
     // Check for various "not found" error patterns across platforms
     const notFoundPatterns = [
       "enoent",
@@ -407,7 +420,6 @@ export async function checkQmdBinaryAvailable(
       "spawn",
       "not recognized", // Windows "not recognized as an internal or external command"
       "不是内部或外部命令", // Chinese Windows "not recognized" message
-      "returned non-zero", // Shell execution failed (exit code != 0)
     ];
     const isNotFound = notFoundPatterns.some((pattern) => errorLower.includes(pattern.toLowerCase()));
     // Also check if the command name appears in the error (common for "not found" errors)
@@ -420,6 +432,8 @@ export async function checkQmdBinaryAvailable(
       QMD_AVAILABILITY_CACHE.set(cacheKey, result);
       return result;
     }
+
+    // Other failures (e.g., returned non-zero) - cache as unavailable
     const result = {
       available: false as const,
       error: `QMD binary check failed: ${error}`,

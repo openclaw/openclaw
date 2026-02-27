@@ -371,10 +371,41 @@ export function registerConfigCli(program: Command) {
     .action(async (opts) => {
       try {
         const snapshot = await readConfigFileSnapshot();
+
+        // Check if snapshot itself is valid (handles parse/include/env-substitution failures)
+        if (!snapshot.valid) {
+          const errorResult = {
+            ok: false,
+            issues: snapshot.issues.map((issue) => ({
+              path: issue.path || "<root>",
+              message: issue.message,
+            })),
+            warnings: [],
+          };
+
+          if (opts.json) {
+            defaultRuntime.log(JSON.stringify(errorResult, null, 2));
+            defaultRuntime.exit(1);
+            return;
+          }
+
+          defaultRuntime.log(danger("✗ Configuration has errors:\n"));
+          for (const issue of snapshot.issues) {
+            defaultRuntime.log(danger(`  ❌ ${issue.path || "<root>"}`));
+            defaultRuntime.log(`     ${issue.message}\n`);
+          }
+          defaultRuntime.log(info(t("info.docs.link", { url: "https://docs.openclaw.ai/config" })));
+          defaultRuntime.exit(1);
+          return;
+        }
+
         const result = validateConfigObjectWithPlugins(snapshot.config);
 
         if (opts.json) {
           defaultRuntime.log(JSON.stringify(result, null, 2));
+          if (!result.ok) {
+            defaultRuntime.exit(1);
+          }
           return;
         }
 
