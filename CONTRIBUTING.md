@@ -8,6 +8,7 @@ Welcome to the lobster tank! 🦞
 - **Vision:** [`VISION.md`](VISION.md)
 - **Discord:** https://discord.gg/qkhbAGHRBT
 - **X/Twitter:** [@steipete](https://x.com/steipete) / [@openclaw](https://x.com/openclaw)
+- **Code Owners:** [`.github/CODEOWNERS`](.github/CODEOWNERS) — auto-assigns reviewers by area
 
 ## Maintainers
 
@@ -60,6 +61,8 @@ Welcome to the lobster tank! 🦞
   - Github [@visionik](https://github.com/visionik) · X: [@visionik](https://x.com/visionik)
 - **Josh Lehman** - Compaction, Tlon/Urbit subsystem
   - Github [@jalehman](https://github.com/jalehman) · X: [@jlehman\_](https://x.com/jlehman_)
+
+> **Note:** Maintainer areas are enforced via [`.github/CODEOWNERS`](.github/CODEOWNERS). When maintainer responsibilities change, update both this list and the CODEOWNERS file.
 
 ## How to Contribute
 

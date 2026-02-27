@@ -1,0 +1,142 @@
+# OpenClaw CODEOWNERS
+# https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+#
+# Maintainer areas derived from CONTRIBUTING.md.
+# Last-match-wins: more specific rules must appear after broader ones.
+# Default owner applies to all files not matched by a more specific rule.
+
+# Default — Benevolent Dictator
+*                                       @steipete
+
+# ──────────────────────────────────────
+# Discord — @thewilloftheshadow
+# ──────────────────────────────────────
+src/discord/                            @thewilloftheshadow
+extensions/discord/                     @thewilloftheshadow
+
+# ──────────────────────────────────────
+# Memory (QMD), TUI, IRC, Lobster — @vignesh07
+# ──────────────────────────────────────
+src/memory/                             @vignesh07
+src/tui/                                @vignesh07
+extensions/irc/                         @vignesh07
+extensions/lobster/                     @vignesh07
+extensions/memory-core/                 @vignesh07
+extensions/memory-lancedb/              @vignesh07
+src/config/types.irc.ts                 @vignesh07
+src/config/schema.irc.ts                @vignesh07
+
+# ──────────────────────────────────────
+# Telegram — @joshp123, @obviyus
+# ──────────────────────────────────────
+src/telegram/                           @joshp123 @obviyus
+extensions/telegram/                    @joshp123 @obviyus
+src/channels/telegram/                  @joshp123 @obviyus
+
+# ──────────────────────────────────────
+# Gateway / API — @joshp123
+# ──────────────────────────────────────
+src/gateway/                            @joshp123
+
+# ──────────────────────────────────────
+# iOS app — @obviyus, @mbelinky, @ngutman
+# ──────────────────────────────────────
+apps/ios/                               @obviyus @mbelinky @ngutman
+
+# ──────────────────────────────────────
+# macOS app — @tyler6204, @ngutman
+# ──────────────────────────────────────
+apps/macos/                             @tyler6204 @ngutman
+
+# ──────────────────────────────────────
+# Agents / subagents — @tyler6204, @vincentkoc, @onutc, @joshavant
+# ──────────────────────────────────────
+src/agents/                             @tyler6204 @vincentkoc @onutc @joshavant
+
+# ──────────────────────────────────────
+# Cron, BlueBubbles — @tyler6204
+# ──────────────────────────────────────
+src/cron/                               @tyler6204
+extensions/bluebubbles/                 @tyler6204
+
+# ──────────────────────────────────────
+# Hooks — @vincentkoc
+# ──────────────────────────────────────
+src/hooks/                              @vincentkoc
+
+# ──────────────────────────────────────
+# Telemetry — @vincentkoc
+# ──────────────────────────────────────
+extensions/diagnostics-otel/            @vincentkoc
+
+# ──────────────────────────────────────
+# Docs — @sebslight, @BunsDev
+# ──────────────────────────────────────
+docs/                                   @sebslight @BunsDev
+
+# ──────────────────────────────────────
+# Runtime Hardening (infra) — @sebslight
+# ──────────────────────────────────────
+src/infra/                              @sebslight
+
+# ──────────────────────────────────────
+# Security — @mbelinky, @vincentkoc, @joshavant
+# (after src/infra/ so specific files override the broad rule)
+# ──────────────────────────────────────
+src/security/                           @mbelinky @vincentkoc @joshavant
+src/secrets/                            @mbelinky @vincentkoc @joshavant
+src/infra/net/fetch-guard.ts            @mbelinky @vincentkoc @joshavant
+src/infra/net/fetch-guard.ssrf.test.ts  @mbelinky @vincentkoc @joshavant
+
+# ──────────────────────────────────────
+# JS Infra, CI, packaging — @cpojer
+# ──────────────────────────────────────
+package.json                            @cpojer
+pnpm-lock.yaml                          @cpojer
+tsconfig*.json                          @cpojer
+rollup*.js                              @cpojer
+.github/workflows/                      @cpojer
+scripts/                                @cpojer
+
+# ──────────────────────────────────────
+# CLI, Web UI, Sessions — @gumadeiras
+# ──────────────────────────────────────
+src/cli/                                @gumadeiras @joshavant
+src/commands/                           @gumadeiras
+ui/                                     @gumadeiras
+src/sessions/                           @gumadeiras
+
+# ──────────────────────────────────────
+# ACP subsystem — @visionik, @onutc
+# ──────────────────────────────────────
+src/acp/                                @visionik @onutc
+extensions/acpx/                        @visionik @onutc
+
+# ──────────────────────────────────────
+# MS Teams — @onutc
+# ──────────────────────────────────────
+extensions/msteams/                     @onutc
+
+# ──────────────────────────────────────
+# Signal — @joshp123
+# ──────────────────────────────────────
+src/signal/                             @joshp123
+extensions/signal/                      @joshp123
+
+# ──────────────────────────────────────
+# Slack — @joshp123
+# ──────────────────────────────────────
+src/slack/                              @joshp123
+extensions/slack/                       @joshp123
+
+# ──────────────────────────────────────
+# WhatsApp — @joshp123
+# ──────────────────────────────────────
+src/web/                                @joshp123
+src/whatsapp/                           @joshp123
+extensions/whatsapp/                    @joshp123
+
+# ──────────────────────────────────────
+# Android app (unclaimed — default owner)
+# ──────────────────────────────────────
+apps/android/                           @steipete
