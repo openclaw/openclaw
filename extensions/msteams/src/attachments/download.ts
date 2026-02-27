@@ -86,6 +86,10 @@ function scopeCandidatesForUrl(url: string): string[] {
   }
 }
 
+function isRedirectStatus(status: number): boolean {
+  return status === 301 || status === 302 || status === 303 || status === 307 || status === 308;
+}
+
 async function fetchWithAuthFallback(params: {
   url: string;
   tokenProvider?: MSTeamsAccessTokenProvider;
@@ -123,6 +127,7 @@ async function fetchWithAuthFallback(params: {
       const authAttempt = await safeFetch({
         url: params.url,
         allowHosts: params.allowHosts,
+        authorizationAllowHosts: params.authAllowHosts,
         fetchFn,
         requestInit: {
           ...params.requestInit,
@@ -132,10 +137,13 @@ async function fetchWithAuthFallback(params: {
       if (authAttempt.ok) {
         return authAttempt;
       }
-      if (authAttempt.status !== 401 && authAttempt.status !== 403) {
-        // Non-auth failures (including redirects in guarded fetch mode) should
-        // be handled by the caller's redirect/error policy.
+      if (isRedirectStatus(authAttempt.status)) {
+        // Redirects in guarded fetch mode must propagate to the outer guard.
         return authAttempt;
+      }
+      if (authAttempt.status !== 401 && authAttempt.status !== 403) {
+        // Preserve scope fallback semantics for non-auth failures.
+        continue;
       }
     } catch {
       // Try the next scope.

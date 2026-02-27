@@ -164,8 +164,12 @@ const IMAGE_ATTACHMENT = { contentType: CONTENT_TYPE_IMAGE_PNG, contentUrl: TEST
 const PNG_BUFFER = Buffer.from("png");
 const PNG_BASE64 = PNG_BUFFER.toString("base64");
 const PDF_BUFFER = Buffer.from("pdf");
-const createTokenProvider = (token = "token") => ({
-  getAccessToken: vi.fn(async () => token),
+const createTokenProvider = (
+  tokenOrResolver: string | ((scope: string) => string | Promise<string>) = "token",
+) => ({
+  getAccessToken: vi.fn(async (scope: string) =>
+    typeof tokenOrResolver === "function" ? await tokenOrResolver(scope) : tokenOrResolver,
+  ),
 });
 const asSingleItemArray = <T>(value: T) => [value];
 const withLabel = <T extends object>(label: string, fields: T): T & LabeledCase => ({
@@ -742,6 +746,73 @@ describe("msteams attachments", () => {
       expectAttachmentMediaLength(media, 1);
       expect(tokenProvider.getAccessToken).toHaveBeenCalledOnce();
       expect(fetchMock.mock.calls.map(([calledUrl]) => String(calledUrl))).toContain(redirectedUrl);
+    });
+
+    it("continues scope fallback after non-auth failure and succeeds on later scope", async () => {
+      let authAttempt = 0;
+      const tokenProvider = createTokenProvider((scope) => `token:${scope}`);
+      const fetchMock = vi.fn(async (_url: string, opts?: RequestInit) => {
+        const auth = new Headers(opts?.headers).get("Authorization");
+        if (!auth) {
+          return createTextResponse("unauthorized", 401);
+        }
+        authAttempt += 1;
+        if (authAttempt === 1) {
+          return createTextResponse("upstream transient", 500);
+        }
+        return createBufferResponse(PNG_BUFFER, CONTENT_TYPE_IMAGE_PNG);
+      });
+
+      const media = await downloadAttachmentsWithFetch(
+        createImageAttachments(TEST_URL_IMAGE),
+        fetchMock,
+        { tokenProvider, authAllowHosts: [TEST_HOST] },
+      );
+
+      expectAttachmentMediaLength(media, 1);
+      expect(tokenProvider.getAccessToken).toHaveBeenCalledTimes(2);
+    });
+
+    it("does not forward Authorization to redirects outside auth allowlist", async () => {
+      const tokenProvider = createTokenProvider("top-secret-token");
+      const graphFileUrl = createUrlForHost(GRAPH_HOST, "file");
+      const seen: Array<{ url: string; auth: string }> = [];
+      const fetchMock = vi.fn(async (url: string, opts?: RequestInit) => {
+        const auth = new Headers(opts?.headers).get("Authorization") ?? "";
+        seen.push({ url, auth });
+        if (url === graphFileUrl && !auth) {
+          return new Response("unauthorized", { status: 401 });
+        }
+        if (url === graphFileUrl && auth) {
+          return new Response("", {
+            status: 302,
+            headers: { location: "https://attacker.azureedge.net/collect" },
+          });
+        }
+        if (url === "https://attacker.azureedge.net/collect") {
+          return new Response(Buffer.from("png"), {
+            status: 200,
+            headers: { "content-type": CONTENT_TYPE_IMAGE_PNG },
+          });
+        }
+        return createNotFoundResponse();
+      });
+
+      const media = await downloadMSTeamsAttachments(
+        buildDownloadParams([{ contentType: CONTENT_TYPE_IMAGE_PNG, contentUrl: graphFileUrl }], {
+          tokenProvider,
+          allowHosts: [GRAPH_HOST, AZUREEDGE_HOST],
+          authAllowHosts: [GRAPH_HOST],
+          fetchFn: asFetchFn(fetchMock),
+        }),
+      );
+
+      expectSingleMedia(media);
+      const redirected = seen.find(
+        (entry) => entry.url === "https://attacker.azureedge.net/collect",
+      );
+      expect(redirected).toBeDefined();
+      expect(redirected?.auth).toBe("");
     });
 
     it("skips urls outside the allowlist", async () => {
