@@ -226,14 +226,7 @@ Local models shine in different scenarios. When privacy is paramount -- no data 
 
 ## Head-to-Head Comparison
 
-| Dimension | OpenClaw | Auto-GPT | Open Interpreter | LangChain Agent | Claude Code |
-|-----------|----------|----------|-----------------|-----------------|-------------|
-| Positioning | Personal always-on assistant | Autonomous task runner | Smart terminal | Developer framework | AI pair programmer |
-| Multi-channel | 12+ native (WhatsApp, Telegram, Slack, Feishu...) | None | None | Build your own | None |
-| Always-on | Yes (Gateway daemon) | No (run-to-complete) | No (session) | Depends on implementation | No (session) |
-| Persistent Memory | 3-layer system | Short-term + vector | Session only | Build your own | Session + project |
-| Local Models | Native (Ollama, vLLM, LM Studio) | Limited | Yes | Via wrappers | No |
-| Local-first Data | Yes | Partial | Yes | Depends | Yes |
+For a side-by-side feature comparison across all five projects, see the [comparison table in Part 3](#comparison-with-other-agent-frameworks).
 
 ## When to Choose What
 
