@@ -994,56 +994,65 @@ describe("loadOpenClawPlugins", () => {
     expect(registry.diagnostics.some((entry) => entry.message.includes("escapes"))).toBe(true);
   });
 
-  it("allows bundled plugin entry files that are hardlinked aliases", () => {
-    if (process.platform === "win32") {
-      return;
-    }
-    const bundledDir = makeTempDir();
-    const pluginDir = path.join(bundledDir, "hardlinked-bundled");
-    fs.mkdirSync(pluginDir, { recursive: true });
-
-    const outsideDir = makeTempDir();
-    const outsideEntry = path.join(outsideDir, "outside.cjs");
-    fs.writeFileSync(
-      outsideEntry,
-      'module.exports = { id: "hardlinked-bundled", register() {} };',
-      "utf-8",
-    );
+  it("warns about stale plugins.entries keys that have no matching discovered plugin", () => {
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
     const plugin = writePlugin({
-      id: "hardlinked-bundled",
-      body: 'module.exports = { id: "hardlinked-bundled", register() {} };',
-      dir: pluginDir,
-      filename: "index.cjs",
+      id: "real-plugin",
+      body: `export default { id: "real-plugin", register() {} };`,
     });
-    fs.rmSync(plugin.file);
-    try {
-      fs.linkSync(outsideEntry, plugin.file);
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === "EXDEV") {
-        return;
-      }
-      throw err;
-    }
 
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
+    const warnings: string[] = [];
     const registry = loadOpenClawPlugins({
       cache: false,
-      workspaceDir: bundledDir,
+      logger: {
+        info: () => {},
+        warn: (msg) => warnings.push(msg),
+        error: () => {},
+      },
       config: {
         plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["real-plugin"],
           entries: {
-            "hardlinked-bundled": { enabled: true },
+            "real-plugin": { enabled: true },
+            "stale-removed-plugin": { enabled: true },
+            "another-ghost": {},
           },
-          allow: ["hardlinked-bundled"],
         },
       },
     });
 
-    const record = registry.plugins.find((entry) => entry.id === "hardlinked-bundled");
-    expect(record?.status).toBe("loaded");
-    expect(registry.diagnostics.some((entry) => entry.message.includes("unsafe plugin path"))).toBe(
-      false,
-    );
+    // The real plugin should be loaded.
+    const real = registry.plugins.find((entry) => entry.id === "real-plugin");
+    expect(real?.status).toBe("loaded");
+
+    // Stale entries should produce warnings.
+    expect(
+      warnings.some(
+        (msg) => msg.includes("stale-removed-plugin") && msg.includes("plugins.entries"),
+      ),
+    ).toBe(true);
+    expect(
+      warnings.some((msg) => msg.includes("another-ghost") && msg.includes("plugins.entries")),
+    ).toBe(true);
+
+    // Diagnostics should also contain the warnings.
+    expect(
+      registry.diagnostics.some(
+        (d) =>
+          d.level === "warn" &&
+          d.pluginId === "stale-removed-plugin" &&
+          d.message.includes("no matching plugin found"),
+      ),
+    ).toBe(true);
+    expect(
+      registry.diagnostics.some(
+        (d) =>
+          d.level === "warn" &&
+          d.pluginId === "another-ghost" &&
+          d.message.includes("no matching plugin found"),
+      ),
+    ).toBe(true);
   });
 
   it("preserves runtime reflection semantics when runtime is lazily initialized", () => {

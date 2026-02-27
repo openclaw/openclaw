@@ -832,6 +832,21 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     });
   }
 
+  // Warn about stale plugins.entries keys that don't match any discovered plugin.
+  // This catches the case where a plugin was removed/renamed across upgrades but
+  // the config still references it, which can be confusing when debugging startup issues.
+  for (const entryId of Object.keys(normalized.entries)) {
+    if (!seenIds.has(entryId)) {
+      const message = `Unknown plugin "${entryId}" in plugins.entries — no matching plugin found on disk. Remove this entry from plugins.entries in openclaw.json to silence this warning.`;
+      logger.warn(`[plugins] ${message}`);
+      registry.diagnostics.push({
+        level: "warn",
+        pluginId: entryId,
+        message,
+      });
+    }
+  }
+
   warnAboutUntrackedLoadedPlugins({
     registry,
     provenance,
