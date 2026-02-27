@@ -45,7 +45,7 @@ describe("Volcengine and BytePlus providers", () => {
     delete process.env.VOLCANO_ENGINE_API_KEY;
     delete process.env.BYTEPLUS_API_KEY;
 
-    upsertAuthProfile({
+    await upsertAuthProfile({
       profileId: "volcengine:default",
       credential: {
         type: "api_key",
@@ -54,7 +54,7 @@ describe("Volcengine and BytePlus providers", () => {
       },
       agentDir,
     });
-    upsertAuthProfile({
+    await upsertAuthProfile({
       profileId: "byteplus:default",
       credential: {
         type: "api_key",

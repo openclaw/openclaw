@@ -233,7 +233,7 @@ export async function applyNonInteractiveAuthChoice(params: {
     }
 
     const profileId = opts.tokenProfileId?.trim() || buildTokenProfileId({ provider, name: "" });
-    upsertAuthProfile({
+    await upsertAuthProfile({
       profileId,
       credential: {
         type: "token",

@@ -44,7 +44,7 @@ export async function applyAuthChoiceAnthropic(
       name: String(profileNameRaw ?? ""),
     });
 
-    upsertAuthProfile({
+    await upsertAuthProfile({
       profileId: namedProfileId,
       agentDir: params.agentDir,
       credential: {

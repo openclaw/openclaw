@@ -91,7 +91,7 @@ export async function applyAuthChoicePluginProvider(
   }
 
   for (const profile of result.profiles) {
-    upsertAuthProfile({
+    await upsertAuthProfile({
       profileId: profile.profileId,
       credential: profile.credential,
       agentDir,

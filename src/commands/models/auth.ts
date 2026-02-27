@@ -96,7 +96,7 @@ export async function modelsAuthSetupTokenCommand(
   const token = String(tokenInput ?? "").trim();
   const profileId = resolveDefaultTokenProfileId(provider);
 
-  upsertAuthProfile({
+  await upsertAuthProfile({
     profileId,
     credential: {
       type: "token",
@@ -143,7 +143,7 @@ export async function modelsAuthPasteTokenCommand(
       ? Date.now() + parseDurationMs(String(opts.expiresIn ?? "").trim(), { defaultUnit: "d" })
       : undefined;
 
-  upsertAuthProfile({
+  await upsertAuthProfile({
     profileId,
     credential: {
       type: "token",
@@ -345,7 +345,7 @@ export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: Runtim
   });
 
   for (const profile of result.profiles) {
-    upsertAuthProfile({
+    await upsertAuthProfile({
       profileId: profile.profileId,
       credential: profile.credential,
       agentDir,

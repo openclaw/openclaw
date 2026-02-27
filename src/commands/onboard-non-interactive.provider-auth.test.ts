@@ -678,7 +678,7 @@ describe("onboard (non-interactive): provider auth", () => {
     await withOnboardEnv(
       "openclaw-onboard-custom-provider-profile-fallback-",
       async ({ configPath, runtime }) => {
-        upsertAuthProfile({
+        await upsertAuthProfile({
           profileId: `${CUSTOM_LOCAL_PROVIDER_ID}:default`,
           credential: {
             type: "api_key",
