@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { DEFAULT_SEND_GAP_MS, enqueueSend } from "./send-queue.js";
+import { DEFAULT_SEND_GAP_MS, enqueueSend, resetSendQueueForTest } from "./send-queue.js";
 
 function deferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
@@ -14,9 +14,11 @@ function deferred<T>() {
 describe("enqueueSend", () => {
   beforeEach(() => {
     vi.useFakeTimers();
+    resetSendQueueForTest();
   });
 
   afterEach(() => {
+    resetSendQueueForTest();
     vi.useRealTimers();
   });
 
@@ -36,10 +38,7 @@ describe("enqueueSend", () => {
       return "two";
     });
 
-    await vi.advanceTimersByTimeAsync(DEFAULT_SEND_GAP_MS);
-    expect(events).toEqual(["start1"]);
-
-    await vi.advanceTimersByTimeAsync(DEFAULT_SEND_GAP_MS * 2);
+    await vi.advanceTimersByTimeAsync(0);
     expect(events).toEqual(["start1"]);
 
     gate.resolve();
@@ -63,9 +62,20 @@ describe("enqueueSend", () => {
       return "b";
     });
 
-    await vi.advanceTimersByTimeAsync(DEFAULT_SEND_GAP_MS);
     await Promise.all([a, b]);
     expect(events.sort()).toEqual(["a", "b"]);
+  });
+
+  it("does not apply gap delay to the first send in a room", async () => {
+    const delayFn = vi.fn(async (_ms: number) => {});
+
+    const result = await enqueueSend("!room:example.org", async () => "ok", {
+      gapMs: DEFAULT_SEND_GAP_MS,
+      delayFn,
+    });
+
+    expect(result).toBe("ok");
+    expect(delayFn).not.toHaveBeenCalled();
   });
 
   it("continues queue after failures", async () => {
@@ -76,7 +86,7 @@ describe("enqueueSend", () => {
       (error) => ({ ok: false as const, error }),
     );
 
-    await vi.advanceTimersByTimeAsync(DEFAULT_SEND_GAP_MS);
+    await vi.advanceTimersByTimeAsync(0);
     const firstResult = await first;
     expect(firstResult.ok).toBe(false);
     if (firstResult.ok) {
@@ -86,7 +96,7 @@ describe("enqueueSend", () => {
     expect(firstResult.error.message).toBe("boom");
 
     const second = enqueueSend("!room:example.org", async () => "ok");
-    await vi.advanceTimersByTimeAsync(DEFAULT_SEND_GAP_MS);
+    await vi.advanceTimersByTimeAsync(0);
     await expect(second).resolves.toBe("ok");
   });
 
@@ -107,7 +117,7 @@ describe("enqueueSend", () => {
       return "two";
     });
 
-    await vi.advanceTimersByTimeAsync(DEFAULT_SEND_GAP_MS);
+    await vi.advanceTimersByTimeAsync(0);
     expect(events).toEqual(["start1"]);
 
     gate.resolve();
@@ -147,8 +157,7 @@ describe("enqueueSend", () => {
     await expect(first).resolves.toBe("one");
     await expect(second).resolves.toBe("two");
     expect(events).toEqual(["first", "second"]);
-    expect(delayFn).toHaveBeenCalledTimes(2);
+    expect(delayFn).toHaveBeenCalledTimes(1);
     expect(delayFn).toHaveBeenNthCalledWith(1, 7);
-    expect(delayFn).toHaveBeenNthCalledWith(2, 7);
   });
 });
