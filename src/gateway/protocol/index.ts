@@ -44,6 +44,10 @@ import {
   AgentWaitParamsSchema,
   type ChannelsLogoutParams,
   ChannelsLogoutParamsSchema,
+  type TalkConfigParams,
+  TalkConfigParamsSchema,
+  type TalkConfigResult,
+  TalkConfigResultSchema,
   type ChannelsStatusParams,
   ChannelsStatusParamsSchema,
   type ChannelsStatusResult,
@@ -91,6 +95,8 @@ import {
   DevicePairApproveParamsSchema,
   type DevicePairListParams,
   DevicePairListParamsSchema,
+  type DevicePairRemoveParams,
+  DevicePairRemoveParamsSchema,
   type DevicePairRejectParams,
   DevicePairRejectParamsSchema,
   type DeviceTokenRevokeParams,
@@ -151,6 +157,9 @@ import {
   type PollParams,
   PollParamsSchema,
   PROTOCOL_VERSION,
+  type PushTestParams,
+  PushTestParamsSchema,
+  PushTestResultSchema,
   type PresenceEntry,
   PresenceEntrySchema,
   ProtocolSchemas,
@@ -186,6 +195,9 @@ import {
   SkillsStatusParamsSchema,
   type SkillsUpdateParams,
   SkillsUpdateParamsSchema,
+  type ToolsCatalogParams,
+  ToolsCatalogParamsSchema,
+  type ToolsCatalogResult,
   type Snapshot,
   SnapshotSchema,
   type StateVersion,
@@ -271,6 +283,7 @@ export const validateNodeInvokeResultParams = ajv.compile<NodeInvokeResultParams
   NodeInvokeResultParamsSchema,
 );
 export const validateNodeEventParams = ajv.compile<NodeEventParams>(NodeEventParamsSchema);
+export const validatePushTestParams = ajv.compile<PushTestParams>(PushTestParamsSchema);
 export const validateSessionsListParams = ajv.compile<SessionsListParams>(SessionsListParamsSchema);
 export const validateSessionsPreviewParams = ajv.compile<SessionsPreviewParams>(
   SessionsPreviewParamsSchema,
@@ -300,6 +313,7 @@ export const validateWizardNextParams = ajv.compile<WizardNextParams>(WizardNext
 export const validateWizardCancelParams = ajv.compile<WizardCancelParams>(WizardCancelParamsSchema);
 export const validateWizardStatusParams = ajv.compile<WizardStatusParams>(WizardStatusParamsSchema);
 export const validateTalkModeParams = ajv.compile<TalkModeParams>(TalkModeParamsSchema);
+export const validateTalkConfigParams = ajv.compile<TalkConfigParams>(TalkConfigParamsSchema);
 export const validateChannelsStatusParams = ajv.compile<ChannelsStatusParams>(
   ChannelsStatusParamsSchema,
 );
@@ -308,6 +322,7 @@ export const validateChannelsLogoutParams = ajv.compile<ChannelsLogoutParams>(
 );
 export const validateModelsListParams = ajv.compile<ModelsListParams>(ModelsListParamsSchema);
 export const validateSkillsStatusParams = ajv.compile<SkillsStatusParams>(SkillsStatusParamsSchema);
+export const validateToolsCatalogParams = ajv.compile<ToolsCatalogParams>(ToolsCatalogParamsSchema);
 export const validateSkillsBinsParams = ajv.compile<SkillsBinsParams>(SkillsBinsParamsSchema);
 export const validateSkillsInstallParams =
   ajv.compile<SkillsInstallParams>(SkillsInstallParamsSchema);
@@ -327,6 +342,9 @@ export const validateDevicePairApproveParams = ajv.compile<DevicePairApprovePara
 );
 export const validateDevicePairRejectParams = ajv.compile<DevicePairRejectParams>(
   DevicePairRejectParamsSchema,
+);
+export const validateDevicePairRemoveParams = ajv.compile<DevicePairRemoveParams>(
+  DevicePairRemoveParamsSchema,
 );
 export const validateDeviceTokenRotateParams = ajv.compile<DeviceTokenRotateParams>(
   DeviceTokenRotateParamsSchema,
@@ -418,6 +436,8 @@ export {
   AgentIdentityParamsSchema,
   AgentIdentityResultSchema,
   WakeParamsSchema,
+  PushTestParamsSchema,
+  PushTestResultSchema,
   NodePairRequestParamsSchema,
   NodePairListParamsSchema,
   NodePairApproveParamsSchema,
@@ -446,6 +466,8 @@ export {
   WizardNextResultSchema,
   WizardStartResultSchema,
   WizardStatusResultSchema,
+  TalkConfigParamsSchema,
+  TalkConfigResultSchema,
   ChannelsStatusParamsSchema,
   ChannelsStatusResultSchema,
   ChannelsLogoutParamsSchema,
@@ -469,6 +491,7 @@ export {
   AgentsListResultSchema,
   ModelsListParamsSchema,
   SkillsStatusParamsSchema,
+  ToolsCatalogParamsSchema,
   SkillsInstallParamsSchema,
   SkillsUpdateParamsSchema,
   CronJobSchema,
@@ -532,6 +555,8 @@ export type {
   WizardNextResult,
   WizardStartResult,
   WizardStatusResult,
+  TalkConfigParams,
+  TalkConfigResult,
   TalkModeParams,
   ChannelsStatusParams,
   ChannelsStatusResult,
@@ -555,6 +580,8 @@ export type {
   AgentsListParams,
   AgentsListResult,
   SkillsStatusParams,
+  ToolsCatalogParams,
+  ToolsCatalogResult,
   SkillsBinsParams,
   SkillsBinsResult,
   SkillsInstallParams,

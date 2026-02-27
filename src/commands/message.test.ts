@@ -1,4 +1,4 @@
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   ChannelMessageActionAdapter,
   ChannelOutboundAdapter,
@@ -7,7 +7,7 @@ import type {
 import type { CliDeps } from "../cli/deps.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
-const loadMessageCommand = async () => await import("./message.js");
+import { captureEnv } from "../test-utils/env.js";
 
 let testConfig: Record<string, unknown> = {};
 vi.mock("../config/config.js", async (importOriginal) => {
@@ -20,37 +20,37 @@ vi.mock("../config/config.js", async (importOriginal) => {
 
 const callGatewayMock = vi.fn();
 vi.mock("../gateway/call.js", () => ({
-  callGateway: (...args: unknown[]) => callGatewayMock(...args),
+  callGateway: callGatewayMock,
+  callGatewayLeastPrivilege: callGatewayMock,
   randomIdempotencyKey: () => "idem-1",
 }));
 
 const webAuthExists = vi.fn(async () => false);
 vi.mock("../web/session.js", () => ({
-  webAuthExists: (...args: unknown[]) => webAuthExists(...args),
+  webAuthExists,
 }));
 
-const handleDiscordAction = vi.fn(async () => ({ details: { ok: true } }));
+const handleDiscordAction = vi.fn(async (..._args: unknown[]) => ({ details: { ok: true } }));
 vi.mock("../agents/tools/discord-actions.js", () => ({
-  handleDiscordAction: (...args: unknown[]) => handleDiscordAction(...args),
+  handleDiscordAction,
 }));
 
-const handleSlackAction = vi.fn(async () => ({ details: { ok: true } }));
+const handleSlackAction = vi.fn(async (..._args: unknown[]) => ({ details: { ok: true } }));
 vi.mock("../agents/tools/slack-actions.js", () => ({
-  handleSlackAction: (...args: unknown[]) => handleSlackAction(...args),
+  handleSlackAction,
 }));
 
-const handleTelegramAction = vi.fn(async () => ({ details: { ok: true } }));
+const handleTelegramAction = vi.fn(async (..._args: unknown[]) => ({ details: { ok: true } }));
 vi.mock("../agents/tools/telegram-actions.js", () => ({
-  handleTelegramAction: (...args: unknown[]) => handleTelegramAction(...args),
+  handleTelegramAction,
 }));
 
-const handleWhatsAppAction = vi.fn(async () => ({ details: { ok: true } }));
+const handleWhatsAppAction = vi.fn(async (..._args: unknown[]) => ({ details: { ok: true } }));
 vi.mock("../agents/tools/whatsapp-actions.js", () => ({
-  handleWhatsAppAction: (...args: unknown[]) => handleWhatsAppAction(...args),
+  handleWhatsAppAction,
 }));
 
-const originalTelegramToken = process.env.TELEGRAM_BOT_TOKEN;
-const originalDiscordToken = process.env.DISCORD_BOT_TOKEN;
+let envSnapshot: ReturnType<typeof captureEnv>;
 
 const setRegistry = async (registry: ReturnType<typeof createTestRegistry>) => {
   const { setActivePluginRegistry } = await import("../plugins/runtime.js");
@@ -58,22 +58,21 @@ const setRegistry = async (registry: ReturnType<typeof createTestRegistry>) => {
 };
 
 beforeEach(async () => {
+  envSnapshot = captureEnv(["TELEGRAM_BOT_TOKEN", "DISCORD_BOT_TOKEN"]);
   process.env.TELEGRAM_BOT_TOKEN = "";
   process.env.DISCORD_BOT_TOKEN = "";
   testConfig = {};
-  vi.resetModules();
   await setRegistry(createTestRegistry([]));
-  callGatewayMock.mockReset();
-  webAuthExists.mockReset().mockResolvedValue(false);
-  handleDiscordAction.mockReset();
-  handleSlackAction.mockReset();
-  handleTelegramAction.mockReset();
-  handleWhatsAppAction.mockReset();
+  callGatewayMock.mockClear();
+  webAuthExists.mockClear().mockResolvedValue(false);
+  handleDiscordAction.mockClear();
+  handleSlackAction.mockClear();
+  handleTelegramAction.mockClear();
+  handleWhatsAppAction.mockClear();
 });
 
-afterAll(() => {
-  process.env.TELEGRAM_BOT_TOKEN = originalTelegramToken;
-  process.env.DISCORD_BOT_TOKEN = originalDiscordToken;
+afterEach(() => {
+  envSnapshot.restore();
 });
 
 const runtime: RuntimeEnv = {
@@ -118,31 +117,59 @@ const createStubPlugin = (params: {
   outbound: params.outbound,
 });
 
+type ChannelActionParams = Parameters<
+  NonNullable<NonNullable<ChannelPlugin["actions"]>["handleAction"]>
+>[0];
+
+const createDiscordPollPluginRegistration = () => ({
+  pluginId: "discord",
+  source: "test",
+  plugin: createStubPlugin({
+    id: "discord",
+    label: "Discord",
+    actions: {
+      listActions: () => ["poll"],
+      handleAction: (async ({ action, params, cfg, accountId }: ChannelActionParams) => {
+        return await handleDiscordAction(
+          { action, to: params.to, accountId: accountId ?? undefined },
+          cfg,
+        );
+      }) as unknown as NonNullable<ChannelPlugin["actions"]>["handleAction"],
+    },
+  }),
+});
+
+const createTelegramSendPluginRegistration = () => ({
+  pluginId: "telegram",
+  source: "test",
+  plugin: createStubPlugin({
+    id: "telegram",
+    label: "Telegram",
+    actions: {
+      listActions: () => ["send"],
+      handleAction: (async ({ action, params, cfg, accountId }: ChannelActionParams) => {
+        return await handleTelegramAction(
+          { action, to: params.to, accountId: accountId ?? undefined },
+          cfg,
+        );
+      }) as unknown as NonNullable<ChannelPlugin["actions"]>["handleAction"],
+    },
+  }),
+});
+
+const { messageCommand } = await import("./message.js");
+
 describe("messageCommand", () => {
   it("defaults channel when only one configured", async () => {
     process.env.TELEGRAM_BOT_TOKEN = "token-abc";
     await setRegistry(
       createTestRegistry([
         {
-          pluginId: "telegram",
-          source: "test",
-          plugin: createStubPlugin({
-            id: "telegram",
-            label: "Telegram",
-            actions: {
-              listActions: () => ["send"],
-              handleAction: async ({ action, params, cfg, accountId }) =>
-                await handleTelegramAction(
-                  { action, to: params.to, accountId: accountId ?? undefined },
-                  cfg,
-                ),
-            },
-          }),
+          ...createTelegramSendPluginRegistration(),
         },
       ]),
     );
     const deps = makeDeps();
-    const { messageCommand } = await loadMessageCommand();
     await messageCommand(
       {
         target: "123456",
@@ -160,41 +187,14 @@ describe("messageCommand", () => {
     await setRegistry(
       createTestRegistry([
         {
-          pluginId: "telegram",
-          source: "test",
-          plugin: createStubPlugin({
-            id: "telegram",
-            label: "Telegram",
-            actions: {
-              listActions: () => ["send"],
-              handleAction: async ({ action, params, cfg, accountId }) =>
-                await handleTelegramAction(
-                  { action, to: params.to, accountId: accountId ?? undefined },
-                  cfg,
-                ),
-            },
-          }),
+          ...createTelegramSendPluginRegistration(),
         },
         {
-          pluginId: "discord",
-          source: "test",
-          plugin: createStubPlugin({
-            id: "discord",
-            label: "Discord",
-            actions: {
-              listActions: () => ["poll"],
-              handleAction: async ({ action, params, cfg, accountId }) =>
-                await handleDiscordAction(
-                  { action, to: params.to, accountId: accountId ?? undefined },
-                  cfg,
-                ),
-            },
-          }),
+          ...createDiscordPollPluginRegistration(),
         },
       ]),
     );
     const deps = makeDeps();
-    const { messageCommand } = await loadMessageCommand();
     await expect(
       messageCommand(
         {
@@ -225,7 +225,6 @@ describe("messageCommand", () => {
       ]),
     );
     const deps = makeDeps();
-    const { messageCommand } = await loadMessageCommand();
     await messageCommand(
       {
         action: "send",
@@ -243,25 +242,11 @@ describe("messageCommand", () => {
     await setRegistry(
       createTestRegistry([
         {
-          pluginId: "discord",
-          source: "test",
-          plugin: createStubPlugin({
-            id: "discord",
-            label: "Discord",
-            actions: {
-              listActions: () => ["poll"],
-              handleAction: async ({ action, params, cfg, accountId }) =>
-                await handleDiscordAction(
-                  { action, to: params.to, accountId: accountId ?? undefined },
-                  cfg,
-                ),
-            },
-          }),
+          ...createDiscordPollPluginRegistration(),
         },
       ]),
     );
     const deps = makeDeps();
-    const { messageCommand } = await loadMessageCommand();
     await messageCommand(
       {
         action: "poll",

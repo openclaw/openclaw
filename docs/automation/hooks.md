@@ -41,12 +41,13 @@ The hooks system allows you to:
 
 ### Bundled Hooks
 
-OpenClaw ships with four bundled hooks that are automatically discovered:
+OpenClaw ships with five bundled hooks that are automatically discovered:
 
-- **💾 session-memory**: Saves session context to your agent workspace (default `~/.openclaw/workspace/memory/`) when you issue `/new`
+- **🗓️ daily-memory**: Creates empty daily log templates in `<workspace>/memory/` for today and upcoming days
+- **💾 session-memory**: Saves session context to your agent workspace (default `~/.openclaw/workspace/memory/`) when you issue `/new` or `/reset`
+- **📎 bootstrap-extra-files**: Injects additional workspace bootstrap files from configured glob/path patterns during `agent:bootstrap`
 - **📝 command-logger**: Logs all command events to `~/.openclaw/logs/commands.log`
 - **🚀 boot-md**: Runs `BOOT.md` when the gateway starts (requires internal hooks enabled)
-- **😈 soul-evil**: Swaps injected `SOUL.md` content with `SOUL_EVIL.md` during a purge window or by random chance
 
 List available hooks:
 
@@ -103,6 +104,8 @@ Hook packs are standard npm packages that export one or more hooks via `openclaw
 openclaw hooks install <path-or-spec>
 ```
 
+Npm specs are registry-only (package name + optional version/tag). Git/URL/file specs are rejected.
+
 Example `package.json`:
 
 ```json
@@ -117,6 +120,12 @@ Example `package.json`:
 
 Each entry points to a hook directory containing `HOOK.md` and `handler.ts` (or `index.ts`).
 Hook packs can ship dependencies; they will be installed under `~/.openclaw/hooks/<id>`.
+Each `openclaw.hooks` entry must stay inside the package directory after symlink
+resolution; entries that escape are rejected.
+
+Security note: `openclaw hooks install` installs dependencies with `npm install --ignore-scripts`
+(no lifecycle scripts). Keep hook pack dependency trees "pure JS/TS" and avoid packages that rely
+on `postinstall` builds.
 
 ## Hook Structure
 
@@ -128,7 +137,7 @@ The `HOOK.md` file contains metadata in YAML frontmatter plus Markdown documenta
 ---
 name: my-hook
 description: "Short description of what this hook does"
-homepage: https://docs.openclaw.ai/hooks#my-hook
+homepage: https://docs.openclaw.ai/automation/hooks#my-hook
 metadata:
   { "openclaw": { "emoji": "🔗", "events": ["command:new"], "requires": { "bins": ["node"] } } }
 ---
@@ -174,9 +183,7 @@ The `metadata.openclaw` object supports:
 The `handler.ts` file exports a `HookHandler` function:
 
 ```typescript
-import type { HookHandler } from "../../src/hooks/hooks.js";
-
-const myHandler: HookHandler = async (event) => {
+const myHandler = async (event) => {
   // Only trigger on 'new' command
   if (event.type !== "command" || event.action !== "new") {
     return;
@@ -201,12 +208,13 @@ Each event includes:
 
 ```typescript
 {
-  type: 'command' | 'session' | 'agent' | 'gateway',
-  action: string,              // e.g., 'new', 'reset', 'stop'
+  type: 'command' | 'session' | 'agent' | 'gateway' | 'message',
+  action: string,              // e.g., 'new', 'reset', 'stop', 'received', 'sent'
   sessionKey: string,          // Session identifier
   timestamp: Date,             // When the event occurred
   messages: string[],          // Push messages here to send to user
   context: {
+    // Command events:
     sessionEntry?: SessionEntry,
     sessionId?: string,
     sessionFile?: string,
@@ -214,7 +222,13 @@ Each event includes:
     senderId?: string,
     workspaceDir?: string,
     bootstrapFiles?: WorkspaceBootstrapFile[],
-    cfg?: OpenClawConfig
+    cfg?: OpenClawConfig,
+    // Message events (see Message Events section for full details):
+    from?: string,             // message:received
+    to?: string,               // message:sent
+    content?: string,
+    channelId?: string,
+    success?: boolean,         // message:sent
   }
 }
 ```
@@ -240,6 +254,103 @@ Triggered when the gateway starts:
 
 - **`gateway:startup`**: After channels start and hooks are loaded
 
+## Bundled Hooks
+
+### `daily-memory`
+
+Creates daily memory files during `agent:bootstrap` and `gateway:startup`.
+
+Configuration:
+
+```json
+{
+  "hooks": {
+    "internal": {
+      "enabled": true,
+      "entries": {
+        "daily-memory": {
+          "enabled": true,
+          "template": "# {{date}} - Daily Log\n\n## Morning Notes\n\n## Afternoon Progress\n\n## Evening Reflection\n",
+          "createDaysAhead": 1
+        }
+      }
+    }
+  }
+}
+```
+
+- `template`: Markdown template for new files. `{{date}}` is replaced with the current date.
+- `createDaysAhead`: Number of future daily files to create in addition to today.
+
+This hook is intentionally limited to file creation. Reminder delivery and session-end prompts are
+out of scope here; use cron or heartbeat if you want reminder-style nudges today.
+
+### Message Events
+
+Triggered when messages are received or sent:
+
+- **`message`**: All message events (general listener)
+- **`message:received`**: When an inbound message is received from any channel
+- **`message:sent`**: When an outbound message is successfully sent
+
+#### Message Event Context
+
+Message events include rich context about the message:
+
+```typescript
+// message:received context
+{
+  from: string,           // Sender identifier (phone number, user ID, etc.)
+  content: string,        // Message content
+  timestamp?: number,     // Unix timestamp when received
+  channelId: string,      // Channel (e.g., "whatsapp", "telegram", "discord")
+  accountId?: string,     // Provider account ID for multi-account setups
+  conversationId?: string, // Chat/conversation ID
+  messageId?: string,     // Message ID from the provider
+  metadata?: {            // Additional provider-specific data
+    to?: string,
+    provider?: string,
+    surface?: string,
+    threadId?: string,
+    senderId?: string,
+    senderName?: string,
+    senderUsername?: string,
+    senderE164?: string,
+  }
+}
+
+// message:sent context
+{
+  to: string,             // Recipient identifier
+  content: string,        // Message content that was sent
+  success: boolean,       // Whether the send succeeded
+  error?: string,         // Error message if sending failed
+  channelId: string,      // Channel (e.g., "whatsapp", "telegram", "discord")
+  accountId?: string,     // Provider account ID
+  conversationId?: string, // Chat/conversation ID
+  messageId?: string,     // Message ID returned by the provider
+}
+```
+
+#### Example: Message Logger Hook
+
+```typescript
+const isMessageReceivedEvent = (event: { type: string; action: string }) =>
+  event.type === "message" && event.action === "received";
+const isMessageSentEvent = (event: { type: string; action: string }) =>
+  event.type === "message" && event.action === "sent";
+
+const handler = async (event) => {
+  if (isMessageReceivedEvent(event as { type: string; action: string })) {
+    console.log(`[message-logger] Received from ${event.context.from}: ${event.context.content}`);
+  } else if (isMessageSentEvent(event as { type: string; action: string })) {
+    console.log(`[message-logger] Sent to ${event.context.to}: ${event.context.content}`);
+  }
+};
+
+export default handler;
+```
+
 ### Tool Result Hooks (Plugin API)
 
 These hooks are not event-stream listeners; they let plugins synchronously adjust tool results before OpenClaw persists them.
@@ -253,8 +364,6 @@ Planned event types:
 - **`session:start`**: When a new session begins
 - **`session:end`**: When a session ends
 - **`agent:error`**: When an agent encounters an error
-- **`message:sent`**: When a message is sent
-- **`message:received`**: When a message is received
 
 ## Creating Custom Hooks
 
@@ -287,9 +396,7 @@ This hook does something useful when you issue `/new`.
 ### 4. Create handler.ts
 
 ```typescript
-import type { HookHandler } from "../../src/hooks/hooks.js";
-
-const handler: HookHandler = async (event) => {
+const handler = async (event) => {
   if (event.type !== "command" || event.action !== "new") {
     return;
   }
@@ -394,6 +501,8 @@ The old config format still works for backwards compatibility:
 }
 ```
 
+Note: `module` must be a workspace-relative path. Absolute paths and traversal outside the workspace are rejected.
+
 **Migration**: Use the new discovery-based system for new hooks. Legacy handlers are loaded after directory-based hooks.
 
 ## CLI Commands
@@ -446,11 +555,52 @@ openclaw hooks disable command-logger
 
 ## Bundled hook reference
 
+### daily-memory
+
+Creates empty daily memory files for today and upcoming days.
+
+**Events**: `agent:bootstrap`, `gateway:startup`
+
+**Requirements**: `workspace.dir` must be configured
+
+**Output**: `<workspace>/memory/YYYY-MM-DD.md`
+
+**Config**:
+
+```json
+{
+  "hooks": {
+    "internal": {
+      "enabled": true,
+      "entries": {
+        "daily-memory": {
+          "enabled": true,
+          "template": "# {{date}} - Daily Log\n\n## Morning Notes\n",
+          "createDaysAhead": 1
+        }
+      }
+    }
+  }
+}
+```
+
+**What it does**:
+
+1. Creates today’s daily memory file if it is missing
+2. Creates future daily files up to `createDaysAhead`
+3. Leaves existing files untouched
+
+**Enable**:
+
+```bash
+openclaw hooks enable daily-memory
+```
+
 ### session-memory
 
-Saves session context to memory when you issue `/new`.
+Saves session context to memory when you issue `/new` or `/reset`.
 
-**Events**: `command:new`
+**Events**: `command:new`, `command:reset`
 
 **Requirements**: `workspace.dir` must be configured
 
@@ -483,6 +633,47 @@ Saves session context to memory when you issue `/new`.
 
 ```bash
 openclaw hooks enable session-memory
+```
+
+### bootstrap-extra-files
+
+Injects additional bootstrap files (for example monorepo-local `AGENTS.md` / `TOOLS.md`) during `agent:bootstrap`.
+
+**Events**: `agent:bootstrap`
+
+**Requirements**: `workspace.dir` must be configured
+
+**Output**: No files written; bootstrap context is modified in-memory only.
+
+**Config**:
+
+```json
+{
+  "hooks": {
+    "internal": {
+      "enabled": true,
+      "entries": {
+        "bootstrap-extra-files": {
+          "enabled": true,
+          "paths": ["packages/*/AGENTS.md", "packages/*/TOOLS.md"]
+        }
+      }
+    }
+  }
+}
+```
+
+**Notes**:
+
+- Paths are resolved relative to workspace.
+- Files must stay inside workspace (realpath-checked).
+- Only recognized bootstrap basenames are loaded.
+- Subagent allowlist is preserved (`AGENTS.md` and `TOOLS.md` only).
+
+**Enable**:
+
+```bash
+openclaw hooks enable bootstrap-extra-files
 ```
 
 ### command-logger
@@ -525,42 +716,6 @@ grep '"action":"new"' ~/.openclaw/logs/commands.log | jq .
 
 ```bash
 openclaw hooks enable command-logger
-```
-
-### soul-evil
-
-Swaps injected `SOUL.md` content with `SOUL_EVIL.md` during a purge window or by random chance.
-
-**Events**: `agent:bootstrap`
-
-**Docs**: [SOUL Evil Hook](/hooks/soul-evil)
-
-**Output**: No files written; swaps happen in-memory only.
-
-**Enable**:
-
-```bash
-openclaw hooks enable soul-evil
-```
-
-**Config**:
-
-```json
-{
-  "hooks": {
-    "internal": {
-      "enabled": true,
-      "entries": {
-        "soul-evil": {
-          "enabled": true,
-          "file": "SOUL_EVIL.md",
-          "chance": 0.1,
-          "purge": { "at": "21:00", "duration": "15m" }
-        }
-      }
-    }
-  }
-}
 ```
 
 ### boot-md
@@ -654,7 +809,9 @@ metadata: { "openclaw": { "events": ["command"] } } # General - more overhead
 The gateway logs hook loading at startup:
 
 ```
-Registered hook: session-memory -> command:new
+Registered hook: daily-memory -> agent:bootstrap, gateway:startup
+Registered hook: session-memory -> command:new, command:reset
+Registered hook: bootstrap-extra-files -> agent:bootstrap
 Registered hook: command-logger -> command
 Registered hook: boot-md -> gateway:startup
 ```
@@ -708,13 +865,17 @@ Test your handlers in isolation:
 
 ```typescript
 import { test } from "vitest";
-import { createHookEvent } from "./src/hooks/hooks.js";
 import myHandler from "./hooks/my-hook/handler.js";
 
 test("my handler works", async () => {
-  const event = createHookEvent("command", "new", "test-session", {
-    foo: "bar",
-  });
+  const event = {
+    type: "command",
+    action: "new",
+    sessionKey: "test-session",
+    timestamp: new Date(),
+    messages: [],
+    context: { foo: "bar" },
+  };
 
   await myHandler(event);
 

@@ -34,6 +34,11 @@ Check your Node version with `node --version` if you are unsure.
         ```bash
         curl -fsSL https://openclaw.ai/install.sh | bash
         ```
+        <img
+  src="/assets/install-script.svg"
+  alt="Install Script Process"
+  className="rounded-lg"
+/>
       </Tab>
       <Tab title="Windows (PowerShell)">
         ```powershell
@@ -95,6 +100,16 @@ If the Control UI loads, your Gateway is ready for use.
 
   </Accordion>
 </AccordionGroup>
+
+## Useful environment variables
+
+If you run OpenClaw as a service account or want custom config/state locations:
+
+- `OPENCLAW_HOME` sets the home directory used for internal path resolution.
+- `OPENCLAW_STATE_DIR` overrides the state directory.
+- `OPENCLAW_CONFIG_PATH` overrides the config file path.
+
+Full environment variable reference: [Environment vars](/help/environment).
 
 ## Go deeper
 

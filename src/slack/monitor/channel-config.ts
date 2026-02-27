@@ -1,11 +1,11 @@
-import type { SlackReactionNotificationMode } from "../../config/config.js";
-import type { SlackMessageEvent } from "../types.js";
 import {
   applyChannelMatchMeta,
   buildChannelKeyCandidates,
   resolveChannelEntryMatchWithFallback,
   type ChannelMatchSource,
 } from "../../channels/channel-config.js";
+import type { SlackReactionNotificationMode } from "../../config/config.js";
+import type { SlackMessageEvent } from "../types.js";
 import { allowListMatches, normalizeAllowListLower, normalizeSlackSlug } from "./allow-list.js";
 
 export type SlackChannelConfigResolved = {
@@ -18,6 +18,18 @@ export type SlackChannelConfigResolved = {
   matchKey?: string;
   matchSource?: ChannelMatchSource;
 };
+
+export type SlackChannelConfigEntry = {
+  enabled?: boolean;
+  allow?: boolean;
+  requireMention?: boolean;
+  allowBots?: boolean;
+  users?: Array<string | number>;
+  skills?: string[];
+  systemPrompt?: string;
+};
+
+export type SlackChannelConfigEntries = Record<string, SlackChannelConfigEntry>;
 
 function firstDefined<T>(...values: Array<T | undefined>) {
   for (const value of values) {
@@ -35,6 +47,7 @@ export function shouldEmitSlackReactionNotification(params: {
   userId: string;
   userName?: string | null;
   allowlist?: Array<string | number> | null;
+  allowNameMatching?: boolean;
 }) {
   const { mode, botId, messageAuthorId, userId, userName, allowlist } = params;
   const effectiveMode = mode ?? "own";
@@ -56,6 +69,7 @@ export function shouldEmitSlackReactionNotification(params: {
       allowList: users,
       id: userId,
       name: userName ?? undefined,
+      allowNameMatching: params.allowNameMatching,
     });
   }
   return true;
@@ -74,18 +88,7 @@ export function resolveSlackChannelLabel(params: { channelId?: string; channelNa
 export function resolveSlackChannelConfig(params: {
   channelId: string;
   channelName?: string;
-  channels?: Record<
-    string,
-    {
-      enabled?: boolean;
-      allow?: boolean;
-      requireMention?: boolean;
-      allowBots?: boolean;
-      users?: Array<string | number>;
-      skills?: string[];
-      systemPrompt?: string;
-    }
-  >;
+  channels?: SlackChannelConfigEntries;
   defaultRequireMention?: boolean;
 }): SlackChannelConfigResolved | null {
   const { channelId, channelName, channels, defaultRequireMention } = params;
@@ -93,8 +96,16 @@ export function resolveSlackChannelConfig(params: {
   const keys = Object.keys(entries);
   const normalizedName = channelName ? normalizeSlackSlug(channelName) : "";
   const directName = channelName ? channelName.trim() : "";
+  // Slack always delivers channel IDs in uppercase (e.g. C0ABC12345) but
+  // operators commonly write them in lowercase in their config. Add both
+  // case variants so the lookup is case-insensitive without requiring a full
+  // entry-scan. buildChannelKeyCandidates deduplicates identical keys.
+  const channelIdLower = channelId.toLowerCase();
+  const channelIdUpper = channelId.toUpperCase();
   const candidates = buildChannelKeyCandidates(
     channelId,
+    channelIdLower !== channelId ? channelIdLower : undefined,
+    channelIdUpper !== channelId ? channelIdUpper : undefined,
     channelName ? `#${directName}` : undefined,
     directName,
     normalizedName,

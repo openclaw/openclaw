@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { captureEnv } from "../test-utils/env.js";
 import * as tailscale from "./tailscale.js";
 
 const {
@@ -11,8 +12,26 @@ const {
 } = tailscale;
 const tailscaleBin = expect.stringMatching(/tailscale$/i);
 
+function createRuntimeWithExitError() {
+  return {
+    error: vi.fn(),
+    log: vi.fn(),
+    exit: ((code: number) => {
+      throw new Error(`exit ${code}`);
+    }) as (code: number) => never,
+  };
+}
+
 describe("tailscale helpers", () => {
+  let envSnapshot: ReturnType<typeof captureEnv>;
+
+  beforeEach(() => {
+    envSnapshot = captureEnv(["OPENCLAW_TEST_TAILSCALE_BINARY"]);
+    process.env.OPENCLAW_TEST_TAILSCALE_BINARY = "tailscale";
+  });
+
   afterEach(() => {
+    envSnapshot.restore();
     vi.restoreAllMocks();
   });
 
@@ -37,35 +56,50 @@ describe("tailscale helpers", () => {
   it("ensureGoInstalled installs when missing and user agrees", async () => {
     const exec = vi.fn().mockRejectedValueOnce(new Error("no go")).mockResolvedValue({}); // brew install go
     const prompt = vi.fn().mockResolvedValue(true);
-    const runtime = {
-      error: vi.fn(),
-      log: vi.fn(),
-      exit: ((code: number) => {
-        throw new Error(`exit ${code}`);
-      }) as (code: number) => never,
-    };
+    const runtime = createRuntimeWithExitError();
     await ensureGoInstalled(exec as never, prompt, runtime);
     expect(exec).toHaveBeenCalledWith("brew", ["install", "go"]);
+  });
+
+  it("ensureGoInstalled exits when missing and user declines install", async () => {
+    const exec = vi.fn().mockRejectedValueOnce(new Error("no go"));
+    const prompt = vi.fn().mockResolvedValue(false);
+    const runtime = createRuntimeWithExitError();
+
+    await expect(ensureGoInstalled(exec as never, prompt, runtime)).rejects.toThrow("exit 1");
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      "Go is required to build tailscaled from source. Aborting.",
+    );
+    expect(exec).toHaveBeenCalledTimes(1);
   });
 
   it("ensureTailscaledInstalled installs when missing and user agrees", async () => {
     const exec = vi.fn().mockRejectedValueOnce(new Error("missing")).mockResolvedValue({});
     const prompt = vi.fn().mockResolvedValue(true);
-    const runtime = {
-      error: vi.fn(),
-      log: vi.fn(),
-      exit: ((code: number) => {
-        throw new Error(`exit ${code}`);
-      }) as (code: number) => never,
-    };
+    const runtime = createRuntimeWithExitError();
     await ensureTailscaledInstalled(exec as never, prompt, runtime);
     expect(exec).toHaveBeenCalledWith("brew", ["install", "tailscale"]);
+  });
+
+  it("ensureTailscaledInstalled exits when missing and user declines install", async () => {
+    const exec = vi.fn().mockRejectedValueOnce(new Error("missing"));
+    const prompt = vi.fn().mockResolvedValue(false);
+    const runtime = createRuntimeWithExitError();
+
+    await expect(ensureTailscaledInstalled(exec as never, prompt, runtime)).rejects.toThrow(
+      "exit 1",
+    );
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      "tailscaled is required for user-space funnel. Aborting.",
+    );
+    expect(exec).toHaveBeenCalledTimes(1);
   });
 
   it("enableTailscaleServe attempts normal first, then sudo", async () => {
     // 1. First attempt fails
     // 2. Second attempt (sudo) succeeds
-    vi.spyOn(tailscale, "getTailscaleBinary").mockResolvedValue("tailscale");
     const exec = vi
       .fn()
       .mockRejectedValueOnce(new Error("permission denied"))
@@ -89,7 +123,6 @@ describe("tailscale helpers", () => {
   });
 
   it("enableTailscaleServe does NOT use sudo if first attempt succeeds", async () => {
-    vi.spyOn(tailscale, "getTailscaleBinary").mockResolvedValue("tailscale");
     const exec = vi.fn().mockResolvedValue({ stdout: "" });
 
     await enableTailscaleServe(3000, exec as never);
@@ -103,7 +136,6 @@ describe("tailscale helpers", () => {
   });
 
   it("disableTailscaleServe uses fallback", async () => {
-    vi.spyOn(tailscale, "getTailscaleBinary").mockResolvedValue("tailscale");
     const exec = vi
       .fn()
       .mockRejectedValueOnce(new Error("permission denied"))
@@ -125,7 +157,6 @@ describe("tailscale helpers", () => {
     // 1. status (success)
     // 2. enable (fails)
     // 3. enable sudo (success)
-    vi.spyOn(tailscale, "getTailscaleBinary").mockResolvedValue("tailscale");
     const exec = vi
       .fn()
       .mockResolvedValueOnce({ stdout: JSON.stringify({ BackendState: "Running" }) }) // status
@@ -166,7 +197,6 @@ describe("tailscale helpers", () => {
   });
 
   it("enableTailscaleServe skips sudo on non-permission errors", async () => {
-    vi.spyOn(tailscale, "getTailscaleBinary").mockResolvedValue("tailscale");
     const exec = vi.fn().mockRejectedValueOnce(new Error("boom"));
 
     await expect(enableTailscaleServe(3000, exec as never)).rejects.toThrow("boom");
@@ -175,7 +205,6 @@ describe("tailscale helpers", () => {
   });
 
   it("enableTailscaleServe rethrows original error if sudo fails", async () => {
-    vi.spyOn(tailscale, "getTailscaleBinary").mockResolvedValue("tailscale");
     const originalError = Object.assign(new Error("permission denied"), {
       stderr: "permission denied",
     });

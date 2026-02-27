@@ -1,6 +1,7 @@
 {
   "$schema": "https://mintlify.com/docs.json",
   "name": "OpenClaw",
+  "description": "Self-hosted gateway that connects WhatsApp, Telegram, Discord, iMessage, and more to AI coding agents. Run a single Gateway process on your own machine and message your AI assistant from anywhere.",
   "theme": "mint",
   "icons": {
     "library": "lucide"
@@ -22,6 +23,14 @@
     "primary": "#FF5A36",
     "dark": "#FF5A36",
     "light": "#FF8A6B"
+  },
+  "styling": {
+    "codeblocks": {
+      "theme": {
+        "dark": "min-dark",
+        "light": "min-light"
+      }
+    }
   },
   "navbar": {
     "links": [
@@ -83,6 +92,10 @@
       "destination": "/providers/moonshot"
     },
     {
+      "source": "/mistral",
+      "destination": "/providers/mistral"
+    },
+    {
       "source": "/openrouter",
       "destination": "/providers/openrouter"
     },
@@ -124,7 +137,7 @@
     },
     {
       "source": "/providers/grammy",
-      "destination": "/channels/grammy"
+      "destination": "/channels/telegram"
     },
     {
       "source": "/providers/imessage",
@@ -263,6 +276,10 @@
       "destination": "/start/openclaw"
     },
     {
+      "source": "/start/pairing",
+      "destination": "/channels/pairing"
+    },
+    {
       "source": "/clawhub",
       "destination": "/tools/clawhub"
     },
@@ -311,6 +328,10 @@
       "destination": "/install/docker"
     },
     {
+      "source": "/podman",
+      "destination": "/install/podman"
+    },
+    {
       "source": "/doctor",
       "destination": "/gateway/doctor"
     },
@@ -344,7 +365,11 @@
     },
     {
       "source": "/grammy",
-      "destination": "/channels/grammy"
+      "destination": "/channels/telegram"
+    },
+    {
+      "source": "/channels/grammy",
+      "destination": "/channels/telegram"
     },
     {
       "source": "/group-messages",
@@ -511,12 +536,12 @@
       "destination": "/channels/pairing"
     },
     {
-      "source": "/plans/cron-add-hardening",
-      "destination": "/experiments/plans/cron-add-hardening"
+      "source": "/experiments/plans/cron-add-hardening",
+      "destination": "/automation/cron-jobs"
     },
     {
-      "source": "/plans/group-policy-hardening",
-      "destination": "/experiments/plans/group-policy-hardening"
+      "source": "/experiments/plans/group-policy-hardening",
+      "destination": "/channels/groups"
     },
     {
       "source": "/poll",
@@ -777,6 +802,10 @@
     {
       "source": "/platforms/northflank",
       "destination": "/install/northflank"
+    },
+    {
+      "source": "/gateway/trusted-proxy",
+      "destination": "/gateway/trusted-proxy-auth"
     }
   ],
   "navigation": {
@@ -801,7 +830,12 @@
               },
               {
                 "group": "First steps",
-                "pages": ["start/getting-started", "start/wizard", "start/onboarding"]
+                "pages": [
+                  "start/getting-started",
+                  "start/onboarding-overview",
+                  "start/wizard",
+                  "start/onboarding"
+                ]
               },
               {
                 "group": "Guides",
@@ -818,7 +852,13 @@
               },
               {
                 "group": "Other install methods",
-                "pages": ["install/docker", "install/nix", "install/ansible", "install/bun"]
+                "pages": [
+                  "install/docker",
+                  "install/podman",
+                  "install/nix",
+                  "install/ansible",
+                  "install/bun"
+                ]
               },
               {
                 "group": "Maintenance",
@@ -855,17 +895,23 @@
                 "pages": [
                   "channels/whatsapp",
                   "channels/telegram",
-                  "channels/grammy",
                   "channels/discord",
+                  "channels/irc",
                   "channels/slack",
                   "channels/feishu",
                   "channels/googlechat",
                   "channels/mattermost",
                   "channels/signal",
                   "channels/imessage",
+                  "channels/bluebubbles",
                   "channels/msteams",
+                  "channels/synology-chat",
                   "channels/line",
                   "channels/matrix",
+                  "channels/nextcloud-talk",
+                  "channels/nostr",
+                  "channels/tlon",
+                  "channels/twitch",
                   "channels/zalo",
                   "channels/zalouser"
                 ]
@@ -960,7 +1006,12 @@
               },
               {
                 "group": "Agent coordination",
-                "pages": ["tools/agent-send", "tools/subagents", "tools/multi-agent-sandbox-tools"]
+                "pages": [
+                  "tools/agent-send",
+                  "tools/subagents",
+                  "tools/acp-agents",
+                  "tools/multi-agent-sandbox-tools"
+                ]
               },
               {
                 "group": "Skills",
@@ -974,7 +1025,7 @@
               },
               {
                 "group": "Extensions",
-                "pages": ["plugins/voice-call", "plugins/zalouser"]
+                "pages": ["plugins/community", "plugins/voice-call", "plugins/zalouser"]
               },
               {
                 "group": "Automation",
@@ -988,10 +1039,6 @@
                   "automation/poll",
                   "automation/auth-monitoring"
                 ]
-              },
-              {
-                "group": "Hooks",
-                "pages": ["hooks/soul-evil"]
               },
               {
                 "group": "Media and devices",
@@ -1029,9 +1076,11 @@
                   "providers/anthropic",
                   "providers/openai",
                   "providers/openrouter",
+                  "providers/litellm",
                   "providers/bedrock",
                   "providers/vercel-ai-gateway",
                   "providers/moonshot",
+                  "providers/mistral",
                   "providers/minimax",
                   "providers/opencode",
                   "providers/glm",
@@ -1092,8 +1141,12 @@
                     "group": "Configuration and operations",
                     "pages": [
                       "gateway/configuration",
+                      "gateway/configuration-reference",
                       "gateway/configuration-examples",
                       "gateway/authentication",
+                      "gateway/secrets",
+                      "gateway/secrets-plan-contract",
+                      "gateway/trusted-proxy-auth",
                       "gateway/health",
                       "gateway/heartbeat",
                       "gateway/doctor",
@@ -1155,14 +1208,20 @@
                 "group": "CLI commands",
                 "pages": [
                   "cli/index",
+                  "cli/acp",
                   "cli/agent",
                   "cli/agents",
                   "cli/approvals",
                   "cli/browser",
                   "cli/channels",
+                  "cli/clawbot",
+                  "cli/completion",
+                  "cli/config",
                   "cli/configure",
                   "cli/cron",
+                  "cli/daemon",
                   "cli/dashboard",
+                  "cli/devices",
                   "cli/directory",
                   "cli/dns",
                   "cli/docs",
@@ -1174,12 +1233,15 @@
                   "cli/memory",
                   "cli/message",
                   "cli/models",
+                  "cli/node",
                   "cli/nodes",
                   "cli/onboard",
                   "cli/pairing",
                   "cli/plugins",
+                  "cli/qr",
                   "cli/reset",
                   "cli/sandbox",
+                  "cli/secrets",
                   "cli/security",
                   "cli/sessions",
                   "cli/setup",
@@ -1189,7 +1251,8 @@
                   "cli/tui",
                   "cli/uninstall",
                   "cli/update",
-                  "cli/voicecall"
+                  "cli/voicecall",
+                  "cli/webhooks"
                 ]
               },
               {
@@ -1212,7 +1275,7 @@
               },
               {
                 "group": "Technical reference",
-                "pages": ["reference/wizard", "reference/token-use"]
+                "pages": ["reference/wizard", "reference/token-use", "reference/prompt-caching"]
               },
               {
                 "group": "Concept internals",
@@ -1231,6 +1294,14 @@
               {
                 "group": "Release notes",
                 "pages": ["reference/RELEASING", "reference/test"]
+              },
+              {
+                "group": "Experiments",
+                "pages": [
+                  "experiments/onboarding-config-protocol",
+                  "experiments/research/memory",
+                  "experiments/proposals/model-config"
+                ]
               }
             ]
           },
@@ -1263,7 +1334,7 @@
               },
               {
                 "group": "Contributing",
-                "pages": ["help/submitting-a-pr", "help/submitting-an-issue"]
+                "pages": ["ci"]
               },
               {
                 "group": "Docs meta",
@@ -1360,7 +1431,6 @@
                 "pages": [
                   "zh-CN/channels/whatsapp",
                   "zh-CN/channels/telegram",
-                  "zh-CN/channels/grammy",
                   "zh-CN/channels/discord",
                   "zh-CN/channels/slack",
                   "zh-CN/channels/feishu",
@@ -1497,10 +1567,6 @@
                   "zh-CN/automation/poll",
                   "zh-CN/automation/auth-monitoring"
                 ]
-              },
-              {
-                "group": "Hooks",
-                "pages": ["zh-CN/hooks/soul-evil"]
               },
               {
                 "group": "媒体与设备",
@@ -1750,6 +1816,16 @@
               {
                 "group": "发布说明",
                 "pages": ["zh-CN/reference/RELEASING", "zh-CN/reference/test"]
+              },
+              {
+                "group": "实验性功能",
+                "pages": [
+                  "zh-CN/experiments/onboarding-config-protocol",
+                  "zh-CN/experiments/plans/cron-add-hardening",
+                  "zh-CN/experiments/plans/group-policy-hardening",
+                  "zh-CN/experiments/research/memory",
+                  "zh-CN/experiments/proposals/model-config"
+                ]
               }
             ]
           },
@@ -1786,12 +1862,26 @@
                 "pages": ["zh-CN/start/setup"]
               },
               {
-                "group": "贡献",
-                "pages": ["zh-CN/help/submitting-a-pr", "zh-CN/help/submitting-an-issue"]
-              },
-              {
                 "group": "文档元信息",
                 "pages": ["zh-CN/start/hubs", "zh-CN/start/docs-directory"]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "language": "ja",
+        "tabs": [
+          {
+            "tab": "はじめに",
+            "groups": [
+              {
+                "group": "概要",
+                "pages": ["ja-JP/index"]
+              },
+              {
+                "group": "初回セットアップ",
+                "pages": ["ja-JP/start/getting-started", "ja-JP/start/wizard"]
               }
             ]
           }

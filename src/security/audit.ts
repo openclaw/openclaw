@@ -1,24 +1,40 @@
-import type { ChannelId } from "../channels/plugins/types.js";
-import type { OpenClawConfig } from "../config/config.js";
-import type { ExecFn } from "./windows-acl.js";
+import { isIP } from "node:net";
+import path from "node:path";
+import { resolveSandboxConfigForAgent } from "../agents/sandbox.js";
+import { execDockerRaw } from "../agents/sandbox/docker.js";
 import { resolveBrowserConfig, resolveProfile } from "../browser/config.js";
-import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
+import { resolveBrowserControlAuth } from "../browser/control-auth.js";
 import { listChannelPlugins } from "../channels/plugins/index.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import { resolveNativeCommandsEnabled, resolveNativeSkillsEnabled } from "../config/commands.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
 import { buildGatewayConnectionDetails } from "../gateway/call.js";
+import { resolveGatewayProbeAuth } from "../gateway/probe-auth.js";
 import { probeGateway } from "../gateway/probe.js";
-import { readChannelAllowFromStore } from "../pairing/pairing-store.js";
+import {
+  listInterpreterLikeSafeBins,
+  resolveMergedSafeBinProfileFixtures,
+} from "../infra/exec-safe-bin-runtime-policy.js";
+import { normalizeTrustedSafeBinDirs } from "../infra/exec-safe-bin-trust.js";
+import { collectChannelSecurityFindings } from "./audit-channel.js";
 import {
   collectAttackSurfaceSummaryFindings,
   collectExposureMatrixFindings,
+  collectGatewayHttpNoAuthFindings,
+  collectGatewayHttpSessionKeyOverrideFindings,
   collectHooksHardeningFindings,
   collectIncludeFilePermFindings,
   collectInstalledSkillsCodeSafetyFindings,
+  collectLikelyMultiUserSetupFindings,
+  collectSandboxBrowserHashLabelFindings,
+  collectMinimalProfileOverrideFindings,
   collectModelHygieneFindings,
+  collectNodeDangerousAllowCommandFindings,
+  collectNodeDenyCommandPatternFindings,
   collectSmallModelRiskFindings,
+  collectSandboxDangerousConfigFindings,
+  collectSandboxDockerNoopFindings,
   collectPluginsTrustFindings,
   collectSecretsInConfigFindings,
   collectPluginsCodeSafetyFindings,
@@ -31,6 +47,9 @@ import {
   formatPermissionRemediation,
   inspectPathPermissions,
 } from "./audit-fs.js";
+import { collectEnabledInsecureOrDangerousFlags } from "./dangerous-config-flags.js";
+import { DEFAULT_GATEWAY_HTTP_TOOL_DENY } from "./dangerous-tools.js";
+import type { ExecFn } from "./windows-acl.js";
 
 export type SecurityAuditSeverity = "info" | "warn" | "critical";
 
@@ -82,6 +101,8 @@ export type SecurityAuditOptions = {
   probeGatewayFn?: typeof probeGateway;
   /** Dependency injection for tests (Windows ACL checks). */
   execIcacls?: ExecFn;
+  /** Dependency injection for tests (Docker label checks). */
+  execDockerRawFn?: typeof execDockerRaw;
 };
 
 function countBySeverity(findings: SecurityAuditFinding[]): SecurityAuditSummary {
@@ -105,24 +126,6 @@ function normalizeAllowFromList(list: Array<string | number> | undefined | null)
     return [];
   }
   return list.map((v) => String(v).trim()).filter(Boolean);
-}
-
-function classifyChannelWarningSeverity(message: string): SecurityAuditSeverity {
-  const s = message.toLowerCase();
-  if (
-    s.includes("dms: open") ||
-    s.includes('grouppolicy="open"') ||
-    s.includes('dmpolicy="open"')
-  ) {
-    return "critical";
-  }
-  if (s.includes("allows any") || s.includes("anyone can dm") || s.includes("public")) {
-    return "critical";
-  }
-  if (s.includes("locked") || s.includes("disabled")) {
-    return "info";
-  }
-  return "warn";
 }
 
 async function collectFilesystemFindings(params: {
@@ -199,6 +202,7 @@ async function collectFilesystemFindings(params: {
     exec: params.execIcacls,
   });
   if (configPerms.ok) {
+    const skipReadablePermWarnings = configPerms.isSymlink;
     if (configPerms.isSymlink) {
       findings.push({
         checkId: "fs.config.symlink",
@@ -221,7 +225,7 @@ async function collectFilesystemFindings(params: {
           env: params.env,
         }),
       });
-    } else if (configPerms.worldReadable) {
+    } else if (!skipReadablePermWarnings && configPerms.worldReadable) {
       findings.push({
         checkId: "fs.config.perms_world_readable",
         severity: "critical",
@@ -235,7 +239,7 @@ async function collectFilesystemFindings(params: {
           env: params.env,
         }),
       });
-    } else if (configPerms.groupReadable) {
+    } else if (!skipReadablePermWarnings && configPerms.groupReadable) {
       findings.push({
         checkId: "fs.config.perms_group_readable",
         severity: "warn",
@@ -265,6 +269,11 @@ function collectGatewayConfigFindings(
   const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
   const auth = resolveGatewayAuth({ authConfig: cfg.gateway?.auth, tailscaleMode, env });
   const controlUiEnabled = cfg.gateway?.controlUi?.enabled !== false;
+  const controlUiAllowedOrigins = (cfg.gateway?.controlUi?.allowedOrigins ?? [])
+    .map((value) => value.trim())
+    .filter(Boolean);
+  const dangerouslyAllowHostHeaderOriginFallback =
+    cfg.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true;
   const trustedProxies = Array.isArray(cfg.gateway?.trustedProxies)
     ? cfg.gateway.trustedProxies
     : [];
@@ -274,8 +283,37 @@ function collectGatewayConfigFindings(
     (auth.mode === "token" && hasToken) || (auth.mode === "password" && hasPassword);
   const hasTailscaleAuth = auth.allowTailscale && tailscaleMode === "serve";
   const hasGatewayAuth = hasSharedSecret || hasTailscaleAuth;
+  const allowRealIpFallback = cfg.gateway?.allowRealIpFallback === true;
+  const mdnsMode = cfg.discovery?.mdns?.mode ?? "minimal";
 
-  if (bind !== "loopback" && !hasSharedSecret) {
+  // HTTP /tools/invoke is intended for narrow automation, not session orchestration/admin operations.
+  // If operators opt-in to re-enabling these tools over HTTP, warn loudly so the choice is explicit.
+  const gatewayToolsAllowRaw = Array.isArray(cfg.gateway?.tools?.allow)
+    ? cfg.gateway?.tools?.allow
+    : [];
+  const gatewayToolsAllow = new Set(
+    gatewayToolsAllowRaw
+      .map((v) => (typeof v === "string" ? v.trim().toLowerCase() : ""))
+      .filter(Boolean),
+  );
+  const reenabledOverHttp = DEFAULT_GATEWAY_HTTP_TOOL_DENY.filter((name) =>
+    gatewayToolsAllow.has(name),
+  );
+  if (reenabledOverHttp.length > 0) {
+    const extraRisk = bind !== "loopback" || tailscaleMode === "funnel";
+    findings.push({
+      checkId: "gateway.tools_invoke_http.dangerous_allow",
+      severity: extraRisk ? "critical" : "warn",
+      title: "Gateway HTTP /tools/invoke re-enables dangerous tools",
+      detail:
+        `gateway.tools.allow includes ${reenabledOverHttp.join(", ")} which removes them from the default HTTP deny list. ` +
+        "This can allow remote session spawning / control-plane actions via HTTP and increases RCE blast radius if the gateway is reachable.",
+      remediation:
+        "Remove these entries from gateway.tools.allow (recommended). " +
+        "If you keep them enabled, keep gateway.bind loopback-only (or tailnet-only), restrict network exposure, and treat the gateway token/password as full-admin.",
+    });
+  }
+  if (bind !== "loopback" && !hasSharedSecret && auth.mode !== "trusted-proxy") {
     findings.push({
       checkId: "gateway.bind_no_auth",
       severity: "critical",
@@ -310,6 +348,70 @@ function collectGatewayConfigFindings(
       remediation: "Set gateway.auth (token recommended) or keep the Control UI local-only.",
     });
   }
+  if (
+    bind !== "loopback" &&
+    controlUiEnabled &&
+    controlUiAllowedOrigins.length === 0 &&
+    !dangerouslyAllowHostHeaderOriginFallback
+  ) {
+    findings.push({
+      checkId: "gateway.control_ui.allowed_origins_required",
+      severity: "critical",
+      title: "Non-loopback Control UI missing explicit allowed origins",
+      detail:
+        "Control UI is enabled on a non-loopback bind but gateway.controlUi.allowedOrigins is empty. " +
+        "Strict origin policy requires explicit allowed origins for non-loopback deployments.",
+      remediation:
+        "Set gateway.controlUi.allowedOrigins to full trusted origins (for example https://control.example.com). " +
+        "If your deployment intentionally relies on Host-header origin fallback, set gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true.",
+    });
+  }
+  if (dangerouslyAllowHostHeaderOriginFallback) {
+    const exposed = bind !== "loopback";
+    findings.push({
+      checkId: "gateway.control_ui.host_header_origin_fallback",
+      severity: exposed ? "critical" : "warn",
+      title: "DANGEROUS: Host-header origin fallback enabled",
+      detail:
+        "gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true enables Host-header origin fallback " +
+        "for Control UI/WebChat websocket checks and weakens DNS rebinding protections.",
+      remediation:
+        "Disable gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback and configure explicit gateway.controlUi.allowedOrigins.",
+    });
+  }
+
+  if (allowRealIpFallback) {
+    const hasNonLoopbackTrustedProxy = trustedProxies.some(
+      (proxy) => !isStrictLoopbackTrustedProxyEntry(proxy),
+    );
+    const exposed =
+      bind !== "loopback" || (auth.mode === "trusted-proxy" && hasNonLoopbackTrustedProxy);
+    findings.push({
+      checkId: "gateway.real_ip_fallback_enabled",
+      severity: exposed ? "critical" : "warn",
+      title: "X-Real-IP fallback is enabled",
+      detail:
+        "gateway.allowRealIpFallback=true trusts X-Real-IP when trusted proxies omit X-Forwarded-For. " +
+        "Misconfigured proxies that forward client-supplied X-Real-IP can spoof source IP and local-client checks.",
+      remediation:
+        "Keep gateway.allowRealIpFallback=false (default). Only enable this when your trusted proxy " +
+        "always overwrites X-Real-IP and cannot provide X-Forwarded-For.",
+    });
+  }
+
+  if (mdnsMode === "full") {
+    const exposed = bind !== "loopback";
+    findings.push({
+      checkId: "discovery.mdns_full_mode",
+      severity: exposed ? "critical" : "warn",
+      title: "mDNS full mode can leak host metadata",
+      detail:
+        'discovery.mdns.mode="full" publishes cliPath/sshPort in local-network TXT records. ' +
+        "This can reveal usernames, filesystem layout, and management ports.",
+      remediation:
+        'Prefer discovery.mdns.mode="minimal" (recommended) or "off", especially when gateway.bind is not loopback.',
+    });
+  }
 
   if (tailscaleMode === "funnel") {
     findings.push({
@@ -331,10 +433,10 @@ function collectGatewayConfigFindings(
   if (cfg.gateway?.controlUi?.allowInsecureAuth === true) {
     findings.push({
       checkId: "gateway.control_ui.insecure_auth",
-      severity: "critical",
-      title: "Control UI allows insecure HTTP auth",
+      severity: "warn",
+      title: "Control UI insecure auth toggle enabled",
       detail:
-        "gateway.controlUi.allowInsecureAuth=true allows token-only auth over HTTP and skips device identity.",
+        "gateway.controlUi.allowInsecureAuth=true does not bypass secure context or device identity checks; only dangerouslyDisableDeviceAuth disables Control UI device identity checks.",
       remediation: "Disable it or switch to HTTPS (Tailscale Serve) or localhost.",
     });
   }
@@ -350,6 +452,18 @@ function collectGatewayConfigFindings(
     });
   }
 
+  const enabledDangerousFlags = collectEnabledInsecureOrDangerousFlags(cfg);
+  if (enabledDangerousFlags.length > 0) {
+    findings.push({
+      checkId: "config.insecure_or_dangerous_flags",
+      severity: "warn",
+      title: "Insecure or dangerous config flags enabled",
+      detail: `Detected ${enabledDangerousFlags.length} enabled flag(s): ${enabledDangerousFlags.join(", ")}.`,
+      remediation:
+        "Disable these flags when not actively debugging, or keep deployment scoped to trusted/local-only networks.",
+    });
+  }
+
   const token =
     typeof auth.token === "string" && auth.token.trim().length > 0 ? auth.token.trim() : null;
   if (auth.mode === "token" && token && token.length < 24) {
@@ -361,10 +475,114 @@ function collectGatewayConfigFindings(
     });
   }
 
+  if (auth.mode === "trusted-proxy") {
+    const trustedProxies = cfg.gateway?.trustedProxies ?? [];
+    const trustedProxyConfig = cfg.gateway?.auth?.trustedProxy;
+
+    findings.push({
+      checkId: "gateway.trusted_proxy_auth",
+      severity: "critical",
+      title: "Trusted-proxy auth mode enabled",
+      detail:
+        'gateway.auth.mode="trusted-proxy" delegates authentication to a reverse proxy. ' +
+        "Ensure your proxy (Pomerium, Caddy, nginx) handles auth correctly and that gateway.trustedProxies " +
+        "only contains IPs of your actual proxy servers.",
+      remediation:
+        "Verify: (1) Your proxy terminates TLS and authenticates users. " +
+        "(2) gateway.trustedProxies is restricted to proxy IPs only. " +
+        "(3) Direct access to the Gateway port is blocked by firewall. " +
+        "See /gateway/trusted-proxy-auth for setup guidance.",
+    });
+
+    if (trustedProxies.length === 0) {
+      findings.push({
+        checkId: "gateway.trusted_proxy_no_proxies",
+        severity: "critical",
+        title: "Trusted-proxy auth enabled but no trusted proxies configured",
+        detail:
+          'gateway.auth.mode="trusted-proxy" but gateway.trustedProxies is empty. ' +
+          "All requests will be rejected.",
+        remediation: "Set gateway.trustedProxies to the IP(s) of your reverse proxy.",
+      });
+    }
+
+    if (!trustedProxyConfig?.userHeader) {
+      findings.push({
+        checkId: "gateway.trusted_proxy_no_user_header",
+        severity: "critical",
+        title: "Trusted-proxy auth missing userHeader config",
+        detail:
+          'gateway.auth.mode="trusted-proxy" but gateway.auth.trustedProxy.userHeader is not configured.',
+        remediation:
+          "Set gateway.auth.trustedProxy.userHeader to the header name your proxy uses " +
+          '(e.g., "x-forwarded-user", "x-pomerium-claim-email").',
+      });
+    }
+
+    const allowUsers = trustedProxyConfig?.allowUsers ?? [];
+    if (allowUsers.length === 0) {
+      findings.push({
+        checkId: "gateway.trusted_proxy_no_allowlist",
+        severity: "warn",
+        title: "Trusted-proxy auth allows all authenticated users",
+        detail:
+          "gateway.auth.trustedProxy.allowUsers is empty, so any user authenticated by your proxy can access the Gateway.",
+        remediation:
+          "Consider setting gateway.auth.trustedProxy.allowUsers to restrict access to specific users " +
+          '(e.g., ["nick@example.com"]).',
+      });
+    }
+  }
+
+  if (bind !== "loopback" && auth.mode !== "trusted-proxy" && !cfg.gateway?.auth?.rateLimit) {
+    findings.push({
+      checkId: "gateway.auth_no_rate_limit",
+      severity: "warn",
+      title: "No auth rate limiting configured",
+      detail:
+        "gateway.bind is not loopback but no gateway.auth.rateLimit is configured. " +
+        "Without rate limiting, brute-force auth attacks are not mitigated.",
+      remediation:
+        "Set gateway.auth.rateLimit (e.g. { maxAttempts: 10, windowMs: 60000, lockoutMs: 300000 }).",
+    });
+  }
+
   return findings;
 }
 
-function collectBrowserControlFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
+// Keep this stricter than isLoopbackAddress on purpose: this check is for
+// trust boundaries, so only explicit localhost proxy hops are treated as local.
+function isStrictLoopbackTrustedProxyEntry(entry: string): boolean {
+  const candidate = entry.trim();
+  if (!candidate) {
+    return false;
+  }
+  if (!candidate.includes("/")) {
+    return candidate === "127.0.0.1" || candidate.toLowerCase() === "::1";
+  }
+
+  const [rawIp, rawPrefix] = candidate.split("/", 2);
+  if (!rawIp || !rawPrefix) {
+    return false;
+  }
+  const ipVersion = isIP(rawIp.trim());
+  const prefix = Number.parseInt(rawPrefix.trim(), 10);
+  if (!Number.isInteger(prefix)) {
+    return false;
+  }
+  if (ipVersion === 4) {
+    return rawIp.trim() === "127.0.0.1" && prefix === 32;
+  }
+  if (ipVersion === 6) {
+    return prefix === 128 && rawIp.trim().toLowerCase() === "::1";
+  }
+  return false;
+}
+
+function collectBrowserControlFindings(
+  cfg: OpenClawConfig,
+  env: NodeJS.ProcessEnv,
+): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
 
   let resolved: ReturnType<typeof resolveBrowserConfig>;
@@ -383,6 +601,20 @@ function collectBrowserControlFindings(cfg: OpenClawConfig): SecurityAuditFindin
 
   if (!resolved.enabled) {
     return findings;
+  }
+
+  const browserAuth = resolveBrowserControlAuth(cfg, env);
+  if (!browserAuth.token && !browserAuth.password) {
+    findings.push({
+      checkId: "browser.control_no_auth",
+      severity: "critical",
+      title: "Browser control has no auth",
+      detail:
+        "Browser control HTTP routes are enabled but no gateway.auth token/password is configured. " +
+        "Any local process (or SSRF to loopback) can call browser control endpoints.",
+      remediation:
+        "Set gateway.auth.token (recommended) or gateway.auth.password so browser control HTTP routes require authentication. Restarting the gateway will auto-generate gateway.auth.token when browser control is enabled.",
+    });
   }
 
   for (const name of Object.keys(resolved.profiles)) {
@@ -461,392 +693,192 @@ function collectElevatedFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
   return findings;
 }
 
-async function collectChannelSecurityFindings(params: {
-  cfg: OpenClawConfig;
-  plugins: ReturnType<typeof listChannelPlugins>;
-}): Promise<SecurityAuditFinding[]> {
+function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
+  const globalExecHost = cfg.tools?.exec?.host;
+  const defaultSandboxMode = resolveSandboxConfigForAgent(cfg).mode;
+  const defaultHostIsExplicitSandbox = globalExecHost === "sandbox";
 
-  const coerceNativeSetting = (value: unknown): boolean | "auto" | undefined => {
-    if (value === true) {
-      return true;
+  if (defaultHostIsExplicitSandbox && defaultSandboxMode === "off") {
+    findings.push({
+      checkId: "tools.exec.host_sandbox_no_sandbox_defaults",
+      severity: "warn",
+      title: "Exec host is sandbox but sandbox mode is off",
+      detail:
+        "tools.exec.host is explicitly set to sandbox while agents.defaults.sandbox.mode=off. " +
+        "In this mode, exec runs directly on the gateway host.",
+      remediation:
+        'Enable sandbox mode (`agents.defaults.sandbox.mode="non-main"` or `"all"`) or set tools.exec.host to "gateway" with approvals.',
+    });
+  }
+
+  const agents = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
+  const riskyAgents = agents
+    .filter(
+      (entry) =>
+        entry &&
+        typeof entry === "object" &&
+        typeof entry.id === "string" &&
+        entry.tools?.exec?.host === "sandbox" &&
+        resolveSandboxConfigForAgent(cfg, entry.id).mode === "off",
+    )
+    .map((entry) => entry.id)
+    .slice(0, 5);
+
+  if (riskyAgents.length > 0) {
+    findings.push({
+      checkId: "tools.exec.host_sandbox_no_sandbox_agents",
+      severity: "warn",
+      title: "Agent exec host uses sandbox while sandbox mode is off",
+      detail:
+        `agents.list.*.tools.exec.host is set to sandbox for: ${riskyAgents.join(", ")}. ` +
+        "With sandbox mode off, exec runs directly on the gateway host.",
+      remediation:
+        'Enable sandbox mode for these agents (`agents.list[].sandbox.mode`) or set their tools.exec.host to "gateway".',
+    });
+  }
+
+  const normalizeConfiguredSafeBins = (entries: unknown): string[] => {
+    if (!Array.isArray(entries)) {
+      return [];
     }
-    if (value === false) {
-      return false;
+    return Array.from(
+      new Set(
+        entries
+          .map((entry) => (typeof entry === "string" ? entry.trim().toLowerCase() : ""))
+          .filter((entry) => entry.length > 0),
+      ),
+    ).toSorted();
+  };
+  const normalizeConfiguredTrustedDirs = (entries: unknown): string[] => {
+    if (!Array.isArray(entries)) {
+      return [];
     }
-    if (value === "auto") {
-      return "auto";
+    return normalizeTrustedSafeBinDirs(
+      entries.filter((entry): entry is string => typeof entry === "string"),
+    );
+  };
+  const classifyRiskySafeBinTrustedDir = (entry: string): string | null => {
+    const raw = entry.trim();
+    if (!raw) {
+      return null;
     }
-    return undefined;
+    if (!path.isAbsolute(raw)) {
+      return "relative path (trust boundary depends on process cwd)";
+    }
+    const normalized = path.resolve(raw).replace(/\\/g, "/").toLowerCase();
+    if (
+      normalized === "/tmp" ||
+      normalized.startsWith("/tmp/") ||
+      normalized === "/var/tmp" ||
+      normalized.startsWith("/var/tmp/") ||
+      normalized === "/private/tmp" ||
+      normalized.startsWith("/private/tmp/")
+    ) {
+      return "temporary directory is mutable and easy to poison";
+    }
+    if (
+      normalized === "/usr/local/bin" ||
+      normalized === "/opt/homebrew/bin" ||
+      normalized === "/opt/local/bin" ||
+      normalized === "/home/linuxbrew/.linuxbrew/bin"
+    ) {
+      return "package-manager bin directory (often user-writable)";
+    }
+    if (
+      normalized.startsWith("/users/") ||
+      normalized.startsWith("/home/") ||
+      normalized.includes("/.local/bin")
+    ) {
+      return "home-scoped bin directory (typically user-writable)";
+    }
+    if (/^[a-z]:\/users\//.test(normalized)) {
+      return "home-scoped bin directory (typically user-writable)";
+    }
+    return null;
   };
 
-  const warnDmPolicy = async (input: {
-    label: string;
-    provider: ChannelId;
-    dmPolicy: string;
-    allowFrom?: Array<string | number> | null;
-    policyPath?: string;
-    allowFromPath: string;
-    normalizeEntry?: (raw: string) => string;
-  }) => {
-    const policyPath = input.policyPath ?? `${input.allowFromPath}policy`;
-    const configAllowFrom = normalizeAllowFromList(input.allowFrom);
-    const hasWildcard = configAllowFrom.includes("*");
-    const dmScope = params.cfg.session?.dmScope ?? "main";
-    const storeAllowFrom = await readChannelAllowFromStore(input.provider).catch(() => []);
-    const normalizeEntry = input.normalizeEntry ?? ((value: string) => value);
-    const normalizedCfg = configAllowFrom
-      .filter((value) => value !== "*")
-      .map((value) => normalizeEntry(value))
-      .map((value) => value.trim())
-      .filter(Boolean);
-    const normalizedStore = storeAllowFrom
-      .map((value) => normalizeEntry(value))
-      .map((value) => value.trim())
-      .filter(Boolean);
-    const allowCount = Array.from(new Set([...normalizedCfg, ...normalizedStore])).length;
-    const isMultiUserDm = hasWildcard || allowCount > 1;
-
-    if (input.dmPolicy === "open") {
-      const allowFromKey = `${input.allowFromPath}allowFrom`;
-      findings.push({
-        checkId: `channels.${input.provider}.dm.open`,
-        severity: "critical",
-        title: `${input.label} DMs are open`,
-        detail: `${policyPath}="open" allows anyone to DM the bot.`,
-        remediation: `Use pairing/allowlist; if you really need open DMs, ensure ${allowFromKey} includes "*".`,
-      });
-      if (!hasWildcard) {
-        findings.push({
-          checkId: `channels.${input.provider}.dm.open_invalid`,
-          severity: "warn",
-          title: `${input.label} DM config looks inconsistent`,
-          detail: `"open" requires ${allowFromKey} to include "*".`,
-        });
+  const globalExec = cfg.tools?.exec;
+  const riskyTrustedDirHits: string[] = [];
+  const collectRiskyTrustedDirHits = (scopePath: string, entries: unknown): void => {
+    for (const entry of normalizeConfiguredTrustedDirs(entries)) {
+      const reason = classifyRiskySafeBinTrustedDir(entry);
+      if (!reason) {
+        continue;
       }
-    }
-
-    if (input.dmPolicy === "disabled") {
-      findings.push({
-        checkId: `channels.${input.provider}.dm.disabled`,
-        severity: "info",
-        title: `${input.label} DMs are disabled`,
-        detail: `${policyPath}="disabled" ignores inbound DMs.`,
-      });
-      return;
-    }
-
-    if (dmScope === "main" && isMultiUserDm) {
-      findings.push({
-        checkId: `channels.${input.provider}.dm.scope_main_multiuser`,
-        severity: "warn",
-        title: `${input.label} DMs share the main session`,
-        detail:
-          "Multiple DM senders currently share the main session, which can leak context across users.",
-        remediation:
-          'Set session.dmScope="per-channel-peer" (or "per-account-channel-peer" for multi-account channels) to isolate DM sessions per sender.',
-      });
+      riskyTrustedDirHits.push(`- ${scopePath}.safeBinTrustedDirs: ${entry} (${reason})`);
     }
   };
-
-  for (const plugin of params.plugins) {
-    if (!plugin.security) {
+  collectRiskyTrustedDirHits("tools.exec", globalExec?.safeBinTrustedDirs);
+  for (const entry of agents) {
+    if (!entry || typeof entry !== "object" || typeof entry.id !== "string") {
       continue;
     }
-    const accountIds = plugin.config.listAccountIds(params.cfg);
-    const defaultAccountId = resolveChannelDefaultAccountId({
-      plugin,
-      cfg: params.cfg,
-      accountIds,
+    collectRiskyTrustedDirHits(
+      `agents.list.${entry.id}.tools.exec`,
+      entry.tools?.exec?.safeBinTrustedDirs,
+    );
+  }
+
+  const interpreterHits: string[] = [];
+  const globalSafeBins = normalizeConfiguredSafeBins(globalExec?.safeBins);
+  if (globalSafeBins.length > 0) {
+    const merged = resolveMergedSafeBinProfileFixtures({ global: globalExec }) ?? {};
+    const interpreters = listInterpreterLikeSafeBins(globalSafeBins).filter((bin) => !merged[bin]);
+    if (interpreters.length > 0) {
+      interpreterHits.push(`- tools.exec.safeBins: ${interpreters.join(", ")}`);
+    }
+  }
+
+  for (const entry of agents) {
+    if (!entry || typeof entry !== "object" || typeof entry.id !== "string") {
+      continue;
+    }
+    const agentExec = entry.tools?.exec;
+    const agentSafeBins = normalizeConfiguredSafeBins(agentExec?.safeBins);
+    if (agentSafeBins.length === 0) {
+      continue;
+    }
+    const merged =
+      resolveMergedSafeBinProfileFixtures({
+        global: globalExec,
+        local: agentExec,
+      }) ?? {};
+    const interpreters = listInterpreterLikeSafeBins(agentSafeBins).filter((bin) => !merged[bin]);
+    if (interpreters.length === 0) {
+      continue;
+    }
+    interpreterHits.push(
+      `- agents.list.${entry.id}.tools.exec.safeBins: ${interpreters.join(", ")}`,
+    );
+  }
+
+  if (interpreterHits.length > 0) {
+    findings.push({
+      checkId: "tools.exec.safe_bins_interpreter_unprofiled",
+      severity: "warn",
+      title: "safeBins includes interpreter/runtime binaries without explicit profiles",
+      detail:
+        `Detected interpreter-like safeBins entries missing explicit profiles:\n${interpreterHits.join("\n")}\n` +
+        "These entries can turn safeBins into a broad execution surface when used with permissive argv profiles.",
+      remediation:
+        "Remove interpreter/runtime bins from safeBins (prefer allowlist entries) or define hardened tools.exec.safeBinProfiles.<bin> rules.",
     });
-    const account = plugin.config.resolveAccount(params.cfg, defaultAccountId);
-    const enabled = plugin.config.isEnabled ? plugin.config.isEnabled(account, params.cfg) : true;
-    if (!enabled) {
-      continue;
-    }
-    const configured = plugin.config.isConfigured
-      ? await plugin.config.isConfigured(account, params.cfg)
-      : true;
-    if (!configured) {
-      continue;
-    }
+  }
 
-    if (plugin.id === "discord") {
-      const discordCfg =
-        (account as { config?: Record<string, unknown> } | null)?.config ??
-        ({} as Record<string, unknown>);
-      const nativeEnabled = resolveNativeCommandsEnabled({
-        providerId: "discord",
-        providerSetting: coerceNativeSetting(
-          (discordCfg.commands as { native?: unknown } | undefined)?.native,
-        ),
-        globalSetting: params.cfg.commands?.native,
-      });
-      const nativeSkillsEnabled = resolveNativeSkillsEnabled({
-        providerId: "discord",
-        providerSetting: coerceNativeSetting(
-          (discordCfg.commands as { nativeSkills?: unknown } | undefined)?.nativeSkills,
-        ),
-        globalSetting: params.cfg.commands?.nativeSkills,
-      });
-      const slashEnabled = nativeEnabled || nativeSkillsEnabled;
-      if (slashEnabled) {
-        const defaultGroupPolicy = params.cfg.channels?.defaults?.groupPolicy;
-        const groupPolicy =
-          (discordCfg.groupPolicy as string | undefined) ?? defaultGroupPolicy ?? "allowlist";
-        const guildEntries = (discordCfg.guilds as Record<string, unknown> | undefined) ?? {};
-        const guildsConfigured = Object.keys(guildEntries).length > 0;
-        const hasAnyUserAllowlist = Object.values(guildEntries).some((guild) => {
-          if (!guild || typeof guild !== "object") {
-            return false;
-          }
-          const g = guild as Record<string, unknown>;
-          if (Array.isArray(g.users) && g.users.length > 0) {
-            return true;
-          }
-          const channels = g.channels;
-          if (!channels || typeof channels !== "object") {
-            return false;
-          }
-          return Object.values(channels as Record<string, unknown>).some((channel) => {
-            if (!channel || typeof channel !== "object") {
-              return false;
-            }
-            const c = channel as Record<string, unknown>;
-            return Array.isArray(c.users) && c.users.length > 0;
-          });
-        });
-        const dmAllowFromRaw = (discordCfg.dm as { allowFrom?: unknown } | undefined)?.allowFrom;
-        const dmAllowFrom = Array.isArray(dmAllowFromRaw) ? dmAllowFromRaw : [];
-        const storeAllowFrom = await readChannelAllowFromStore("discord").catch(() => []);
-        const ownerAllowFromConfigured =
-          normalizeAllowFromList([...dmAllowFrom, ...storeAllowFrom]).length > 0;
-
-        const useAccessGroups = params.cfg.commands?.useAccessGroups !== false;
-        if (
-          !useAccessGroups &&
-          groupPolicy !== "disabled" &&
-          guildsConfigured &&
-          !hasAnyUserAllowlist
-        ) {
-          findings.push({
-            checkId: "channels.discord.commands.native.unrestricted",
-            severity: "critical",
-            title: "Discord slash commands are unrestricted",
-            detail:
-              "commands.useAccessGroups=false disables sender allowlists for Discord slash commands unless a per-guild/channel users allowlist is configured; with no users allowlist, any user in allowed guild channels can invoke /… commands.",
-            remediation:
-              "Set commands.useAccessGroups=true (recommended), or configure channels.discord.guilds.<id>.users (or channels.discord.guilds.<id>.channels.<channel>.users).",
-          });
-        } else if (
-          useAccessGroups &&
-          groupPolicy !== "disabled" &&
-          guildsConfigured &&
-          !ownerAllowFromConfigured &&
-          !hasAnyUserAllowlist
-        ) {
-          findings.push({
-            checkId: "channels.discord.commands.native.no_allowlists",
-            severity: "warn",
-            title: "Discord slash commands have no allowlists",
-            detail:
-              "Discord slash commands are enabled, but neither an owner allowFrom list nor any per-guild/channel users allowlist is configured; /… commands will be rejected for everyone.",
-            remediation:
-              "Add your user id to channels.discord.dm.allowFrom (or approve yourself via pairing), or configure channels.discord.guilds.<id>.users.",
-          });
-        }
-      }
-    }
-
-    if (plugin.id === "slack") {
-      const slackCfg =
-        (account as { config?: Record<string, unknown>; dm?: Record<string, unknown> } | null)
-          ?.config ?? ({} as Record<string, unknown>);
-      const nativeEnabled = resolveNativeCommandsEnabled({
-        providerId: "slack",
-        providerSetting: coerceNativeSetting(
-          (slackCfg.commands as { native?: unknown } | undefined)?.native,
-        ),
-        globalSetting: params.cfg.commands?.native,
-      });
-      const nativeSkillsEnabled = resolveNativeSkillsEnabled({
-        providerId: "slack",
-        providerSetting: coerceNativeSetting(
-          (slackCfg.commands as { nativeSkills?: unknown } | undefined)?.nativeSkills,
-        ),
-        globalSetting: params.cfg.commands?.nativeSkills,
-      });
-      const slashCommandEnabled =
-        nativeEnabled ||
-        nativeSkillsEnabled ||
-        (slackCfg.slashCommand as { enabled?: unknown } | undefined)?.enabled === true;
-      if (slashCommandEnabled) {
-        const useAccessGroups = params.cfg.commands?.useAccessGroups !== false;
-        if (!useAccessGroups) {
-          findings.push({
-            checkId: "channels.slack.commands.slash.useAccessGroups_off",
-            severity: "critical",
-            title: "Slack slash commands bypass access groups",
-            detail:
-              "Slack slash/native commands are enabled while commands.useAccessGroups=false; this can allow unrestricted /… command execution from channels/users you didn't explicitly authorize.",
-            remediation: "Set commands.useAccessGroups=true (recommended).",
-          });
-        } else {
-          const dmAllowFromRaw = (account as { dm?: { allowFrom?: unknown } } | null)?.dm
-            ?.allowFrom;
-          const dmAllowFrom = Array.isArray(dmAllowFromRaw) ? dmAllowFromRaw : [];
-          const storeAllowFrom = await readChannelAllowFromStore("slack").catch(() => []);
-          const ownerAllowFromConfigured =
-            normalizeAllowFromList([...dmAllowFrom, ...storeAllowFrom]).length > 0;
-          const channels = (slackCfg.channels as Record<string, unknown> | undefined) ?? {};
-          const hasAnyChannelUsersAllowlist = Object.values(channels).some((value) => {
-            if (!value || typeof value !== "object") {
-              return false;
-            }
-            const channel = value as Record<string, unknown>;
-            return Array.isArray(channel.users) && channel.users.length > 0;
-          });
-          if (!ownerAllowFromConfigured && !hasAnyChannelUsersAllowlist) {
-            findings.push({
-              checkId: "channels.slack.commands.slash.no_allowlists",
-              severity: "warn",
-              title: "Slack slash commands have no allowlists",
-              detail:
-                "Slack slash/native commands are enabled, but neither an owner allowFrom list nor any channels.<id>.users allowlist is configured; /… commands will be rejected for everyone.",
-              remediation:
-                "Approve yourself via pairing (recommended), or set channels.slack.dm.allowFrom and/or channels.slack.channels.<id>.users.",
-            });
-          }
-        }
-      }
-    }
-
-    const dmPolicy = plugin.security.resolveDmPolicy?.({
-      cfg: params.cfg,
-      accountId: defaultAccountId,
-      account,
+  if (riskyTrustedDirHits.length > 0) {
+    findings.push({
+      checkId: "tools.exec.safe_bin_trusted_dirs_risky",
+      severity: "warn",
+      title: "safeBinTrustedDirs includes risky mutable directories",
+      detail:
+        `Detected risky safeBinTrustedDirs entries:\n${riskyTrustedDirHits.slice(0, 10).join("\n")}` +
+        (riskyTrustedDirHits.length > 10
+          ? `\n- +${riskyTrustedDirHits.length - 10} more entries.`
+          : ""),
+      remediation:
+        "Prefer root-owned immutable bins, keep default trust dirs (/bin, /usr/bin), and avoid trusting temporary/home/package-manager paths unless tightly controlled.",
     });
-    if (dmPolicy) {
-      await warnDmPolicy({
-        label: plugin.meta.label ?? plugin.id,
-        provider: plugin.id,
-        dmPolicy: dmPolicy.policy,
-        allowFrom: dmPolicy.allowFrom,
-        policyPath: dmPolicy.policyPath,
-        allowFromPath: dmPolicy.allowFromPath,
-        normalizeEntry: dmPolicy.normalizeEntry,
-      });
-    }
-
-    if (plugin.security.collectWarnings) {
-      const warnings = await plugin.security.collectWarnings({
-        cfg: params.cfg,
-        accountId: defaultAccountId,
-        account,
-      });
-      for (const message of warnings ?? []) {
-        const trimmed = String(message).trim();
-        if (!trimmed) {
-          continue;
-        }
-        findings.push({
-          checkId: `channels.${plugin.id}.warning.${findings.length + 1}`,
-          severity: classifyChannelWarningSeverity(trimmed),
-          title: `${plugin.meta.label ?? plugin.id} security warning`,
-          detail: trimmed.replace(/^-\s*/, ""),
-        });
-      }
-    }
-
-    if (plugin.id === "telegram") {
-      const allowTextCommands = params.cfg.commands?.text !== false;
-      if (!allowTextCommands) {
-        continue;
-      }
-
-      const telegramCfg =
-        (account as { config?: Record<string, unknown> } | null)?.config ??
-        ({} as Record<string, unknown>);
-      const defaultGroupPolicy = params.cfg.channels?.defaults?.groupPolicy;
-      const groupPolicy =
-        (telegramCfg.groupPolicy as string | undefined) ?? defaultGroupPolicy ?? "allowlist";
-      const groups = telegramCfg.groups as Record<string, unknown> | undefined;
-      const groupsConfigured = Boolean(groups) && Object.keys(groups ?? {}).length > 0;
-      const groupAccessPossible =
-        groupPolicy === "open" || (groupPolicy === "allowlist" && groupsConfigured);
-      if (!groupAccessPossible) {
-        continue;
-      }
-
-      const storeAllowFrom = await readChannelAllowFromStore("telegram").catch(() => []);
-      const storeHasWildcard = storeAllowFrom.some((v) => String(v).trim() === "*");
-      const groupAllowFrom = Array.isArray(telegramCfg.groupAllowFrom)
-        ? telegramCfg.groupAllowFrom
-        : [];
-      const groupAllowFromHasWildcard = groupAllowFrom.some((v) => String(v).trim() === "*");
-      const anyGroupOverride = Boolean(
-        groups &&
-        Object.values(groups).some((value) => {
-          if (!value || typeof value !== "object") {
-            return false;
-          }
-          const group = value as Record<string, unknown>;
-          const allowFrom = Array.isArray(group.allowFrom) ? group.allowFrom : [];
-          if (allowFrom.length > 0) {
-            return true;
-          }
-          const topics = group.topics;
-          if (!topics || typeof topics !== "object") {
-            return false;
-          }
-          return Object.values(topics as Record<string, unknown>).some((topicValue) => {
-            if (!topicValue || typeof topicValue !== "object") {
-              return false;
-            }
-            const topic = topicValue as Record<string, unknown>;
-            const topicAllow = Array.isArray(topic.allowFrom) ? topic.allowFrom : [];
-            return topicAllow.length > 0;
-          });
-        }),
-      );
-
-      const hasAnySenderAllowlist =
-        storeAllowFrom.length > 0 || groupAllowFrom.length > 0 || anyGroupOverride;
-
-      if (storeHasWildcard || groupAllowFromHasWildcard) {
-        findings.push({
-          checkId: "channels.telegram.groups.allowFrom.wildcard",
-          severity: "critical",
-          title: "Telegram group allowlist contains wildcard",
-          detail:
-            'Telegram group sender allowlist contains "*", which allows any group member to run /… commands and control directives.',
-          remediation:
-            'Remove "*" from channels.telegram.groupAllowFrom and pairing store; prefer explicit user ids/usernames.',
-        });
-        continue;
-      }
-
-      if (!hasAnySenderAllowlist) {
-        const providerSetting = (telegramCfg.commands as { nativeSkills?: unknown } | undefined)
-          // oxlint-disable-next-line typescript/no-explicit-any
-          ?.nativeSkills as any;
-        const skillsEnabled = resolveNativeSkillsEnabled({
-          providerId: "telegram",
-          providerSetting,
-          globalSetting: params.cfg.commands?.nativeSkills,
-        });
-        findings.push({
-          checkId: "channels.telegram.groups.allowFrom.missing",
-          severity: "critical",
-          title: "Telegram group commands have no sender allowlist",
-          detail:
-            `Telegram group access is enabled but no sender allowlist is configured; this allows any group member to invoke /… commands` +
-            (skillsEnabled ? " (including skill commands)." : "."),
-          remediation:
-            "Approve yourself via pairing (recommended), or set channels.telegram.groupAllowFrom (or per-group groups.<id>.allowFrom).",
-        });
-      }
-    }
   }
 
   return findings;
@@ -854,6 +886,7 @@ async function collectChannelSecurityFindings(params: {
 
 async function maybeProbeGateway(params: {
   cfg: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
   timeoutMs: number;
   probe: typeof probeGateway;
 }): Promise<SecurityAuditReport["deep"]> {
@@ -864,30 +897,10 @@ async function maybeProbeGateway(params: {
     typeof params.cfg.gateway?.remote?.url === "string" ? params.cfg.gateway.remote.url.trim() : "";
   const remoteUrlMissing = isRemoteMode && !remoteUrlRaw;
 
-  const resolveAuth = (mode: "local" | "remote") => {
-    const authToken = params.cfg.gateway?.auth?.token;
-    const authPassword = params.cfg.gateway?.auth?.password;
-    const remote = params.cfg.gateway?.remote;
-    const token =
-      mode === "remote"
-        ? typeof remote?.token === "string" && remote.token.trim()
-          ? remote.token.trim()
-          : undefined
-        : process.env.OPENCLAW_GATEWAY_TOKEN?.trim() ||
-          (typeof authToken === "string" && authToken.trim() ? authToken.trim() : undefined);
-    const password =
-      process.env.OPENCLAW_GATEWAY_PASSWORD?.trim() ||
-      (mode === "remote"
-        ? typeof remote?.password === "string" && remote.password.trim()
-          ? remote.password.trim()
-          : undefined
-        : typeof authPassword === "string" && authPassword.trim()
-          ? authPassword.trim()
-          : undefined);
-    return { token, password };
-  };
-
-  const auth = !isRemoteMode || remoteUrlMissing ? resolveAuth("local") : resolveAuth("remote");
+  const auth =
+    !isRemoteMode || remoteUrlMissing
+      ? resolveGatewayProbeAuth({ cfg: params.cfg, env: params.env, mode: "local" })
+      : resolveGatewayProbeAuth({ cfg: params.cfg, env: params.env, mode: "remote" });
   const res = await params.probe({ url, auth, timeoutMs: params.timeoutMs }).catch((err) => ({
     ok: false,
     url,
@@ -924,14 +937,23 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
   findings.push(...collectSyncedFolderFindings({ stateDir, configPath }));
 
   findings.push(...collectGatewayConfigFindings(cfg, env));
-  findings.push(...collectBrowserControlFindings(cfg));
+  findings.push(...collectBrowserControlFindings(cfg, env));
   findings.push(...collectLoggingFindings(cfg));
   findings.push(...collectElevatedFindings(cfg));
-  findings.push(...collectHooksHardeningFindings(cfg));
+  findings.push(...collectExecRuntimeFindings(cfg));
+  findings.push(...collectHooksHardeningFindings(cfg, env));
+  findings.push(...collectGatewayHttpNoAuthFindings(cfg, env));
+  findings.push(...collectGatewayHttpSessionKeyOverrideFindings(cfg));
+  findings.push(...collectSandboxDockerNoopFindings(cfg));
+  findings.push(...collectSandboxDangerousConfigFindings(cfg));
+  findings.push(...collectNodeDenyCommandPatternFindings(cfg));
+  findings.push(...collectNodeDangerousAllowCommandFindings(cfg));
+  findings.push(...collectMinimalProfileOverrideFindings(cfg));
   findings.push(...collectSecretsInConfigFindings(cfg));
   findings.push(...collectModelHygieneFindings(cfg));
   findings.push(...collectSmallModelRiskFindings({ cfg, env }));
   findings.push(...collectExposureMatrixFindings(cfg));
+  findings.push(...collectLikelyMultiUserSetupFindings(cfg));
 
   const configSnapshot =
     opts.includeFilesystem !== false
@@ -956,6 +978,11 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
     findings.push(
       ...(await collectStateDeepFilesystemFindings({ cfg, env, stateDir, platform, execIcacls })),
     );
+    findings.push(
+      ...(await collectSandboxBrowserHashLabelFindings({
+        execDockerRawFn: opts.execDockerRawFn,
+      })),
+    );
     findings.push(...(await collectPluginsTrustFindings({ cfg, stateDir })));
     if (opts.deep === true) {
       findings.push(...(await collectPluginsCodeSafetyFindings({ stateDir })));
@@ -972,6 +999,7 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
     opts.deep === true
       ? await maybeProbeGateway({
           cfg,
+          env,
           timeoutMs: Math.max(250, opts.deepTimeoutMs ?? 5000),
           probe: opts.probeGatewayFn ?? probeGateway,
         })

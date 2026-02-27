@@ -13,30 +13,26 @@ export const TlonAuthorizationSchema = z.object({
   channelRules: z.record(z.string(), TlonChannelRuleSchema).optional(),
 });
 
-export const TlonAccountSchema = z.object({
+const tlonCommonConfigFields = {
   name: z.string().optional(),
   enabled: z.boolean().optional(),
   ship: ShipSchema.optional(),
   url: z.string().optional(),
   code: z.string().optional(),
+  allowPrivateNetwork: z.boolean().optional(),
   groupChannels: z.array(ChannelNestSchema).optional(),
   dmAllowlist: z.array(ShipSchema).optional(),
   autoDiscoverChannels: z.boolean().optional(),
   showModelSignature: z.boolean().optional(),
   responsePrefix: z.string().optional(),
+} satisfies z.ZodRawShape;
+
+export const TlonAccountSchema = z.object({
+  ...tlonCommonConfigFields,
 });
 
 export const TlonConfigSchema = z.object({
-  name: z.string().optional(),
-  enabled: z.boolean().optional(),
-  ship: ShipSchema.optional(),
-  url: z.string().optional(),
-  code: z.string().optional(),
-  groupChannels: z.array(ChannelNestSchema).optional(),
-  dmAllowlist: z.array(ShipSchema).optional(),
-  autoDiscoverChannels: z.boolean().optional(),
-  showModelSignature: z.boolean().optional(),
-  responsePrefix: z.string().optional(),
+  ...tlonCommonConfigFields,
   authorization: TlonAuthorizationSchema.optional(),
   defaultAuthorizedShips: z.array(ShipSchema).optional(),
   accounts: z.record(z.string(), TlonAccountSchema).optional(),

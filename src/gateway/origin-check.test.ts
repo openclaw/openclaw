@@ -2,12 +2,21 @@ import { describe, expect, it } from "vitest";
 import { checkBrowserOrigin } from "./origin-check.js";
 
 describe("checkBrowserOrigin", () => {
-  it("accepts same-origin host matches", () => {
+  it("accepts same-origin host matches only with legacy host-header fallback", () => {
     const result = checkBrowserOrigin({
       requestHost: "127.0.0.1:18789",
       origin: "http://127.0.0.1:18789",
+      allowHostHeaderOriginFallback: true,
     });
     expect(result.ok).toBe(true);
+  });
+
+  it("rejects same-origin host matches when legacy host-header fallback is disabled", () => {
+    const result = checkBrowserOrigin({
+      requestHost: "gateway.example.com:18789",
+      origin: "https://gateway.example.com:18789",
+    });
+    expect(result.ok).toBe(false);
   });
 
   it("accepts loopback host mismatches for dev", () => {

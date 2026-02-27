@@ -22,30 +22,7 @@ export type BrowserServerState = {
   profiles: Map<string, ProfileRuntimeState>;
 };
 
-export type BrowserRouteContext = {
-  state: () => BrowserServerState;
-  forProfile: (profileName?: string) => ProfileContext;
-  listProfiles: () => Promise<ProfileStatus[]>;
-  // Legacy methods delegate to default profile for backward compatibility
-  ensureBrowserAvailable: () => Promise<void>;
-  ensureTabAvailable: (targetId?: string) => Promise<BrowserTab>;
-  isHttpReachable: (timeoutMs?: number) => Promise<boolean>;
-  isReachable: (timeoutMs?: number) => Promise<boolean>;
-  listTabs: () => Promise<BrowserTab[]>;
-  openTab: (url: string) => Promise<BrowserTab>;
-  focusTab: (targetId: string) => Promise<void>;
-  closeTab: (targetId: string) => Promise<void>;
-  stopRunningBrowser: () => Promise<{ stopped: boolean }>;
-  resetProfile: () => Promise<{
-    moved: boolean;
-    from: string;
-    to?: string;
-  }>;
-  mapTabError: (err: unknown) => { status: number; message: string } | null;
-};
-
-export type ProfileContext = {
-  profile: ResolvedBrowserProfile;
+type BrowserProfileActions = {
   ensureBrowserAvailable: () => Promise<void>;
   ensureTabAvailable: (targetId?: string) => Promise<BrowserTab>;
   isHttpReachable: (timeoutMs?: number) => Promise<boolean>;
@@ -57,6 +34,18 @@ export type ProfileContext = {
   stopRunningBrowser: () => Promise<{ stopped: boolean }>;
   resetProfile: () => Promise<{ moved: boolean; from: string; to?: string }>;
 };
+
+export type BrowserRouteContext = {
+  state: () => BrowserServerState;
+  forProfile: (profileName?: string) => ProfileContext;
+  listProfiles: () => Promise<ProfileStatus[]>;
+  // Legacy methods delegate to default profile for backward compatibility
+  mapTabError: (err: unknown) => { status: number; message: string } | null;
+} & BrowserProfileActions;
+
+export type ProfileContext = {
+  profile: ResolvedBrowserProfile;
+} & BrowserProfileActions;
 
 export type ProfileStatus = {
   name: string;
@@ -72,4 +61,5 @@ export type ProfileStatus = {
 export type ContextOptions = {
   getState: () => BrowserServerState | null;
   onEnsureAttachTarget?: (profile: ResolvedBrowserProfile) => Promise<void>;
+  refreshConfigFromDisk?: boolean;
 };

@@ -1,3 +1,5 @@
+import type { DmPolicy, GroupPolicy } from "openclaw/plugin-sdk";
+
 export type { DmPolicy, GroupPolicy } from "openclaw/plugin-sdk";
 
 export type BlueBubblesGroupConfig = {
@@ -44,8 +46,15 @@ export type BlueBubblesAccountConfig = {
   blockStreamingCoalesce?: Record<string, unknown>;
   /** Max outbound media size in MB. */
   mediaMaxMb?: number;
+  /**
+   * Explicit allowlist of local directory roots permitted for outbound media paths.
+   * Local paths are rejected unless they resolve under one of these roots.
+   */
+  mediaLocalRoots?: string[];
   /** Send read receipts for incoming messages (default: true). */
   sendReadReceipts?: boolean;
+  /** Allow fetching from private/internal IP addresses (e.g. localhost). Required for same-host BlueBubbles setups. */
+  allowPrivateNetwork?: boolean;
   /** Per-group configuration keyed by chat GUID or identifier. */
   groups?: Record<string, BlueBubblesGroupConfig>;
 };

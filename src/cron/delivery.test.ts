@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { CronJob } from "./types.js";
 import { resolveCronDeliveryPlan } from "./delivery.js";
+import type { CronJob } from "./types.js";
 
 function makeJob(overrides: Partial<CronJob>): CronJob {
   const now = Date.now();
@@ -41,5 +41,35 @@ describe("resolveCronDeliveryPlan", () => {
     );
     expect(plan.mode).toBe("none");
     expect(plan.requested).toBe(false);
+  });
+
+  it("resolves webhook mode without channel routing", () => {
+    const plan = resolveCronDeliveryPlan(
+      makeJob({
+        delivery: { mode: "webhook", to: "https://example.invalid/cron" },
+      }),
+    );
+    expect(plan.mode).toBe("webhook");
+    expect(plan.requested).toBe(false);
+    expect(plan.channel).toBeUndefined();
+    expect(plan.to).toBe("https://example.invalid/cron");
+  });
+
+  it("threads delivery.accountId when explicitly configured", () => {
+    const plan = resolveCronDeliveryPlan(
+      makeJob({
+        delivery: {
+          mode: "announce",
+          channel: "telegram",
+          to: "123",
+          accountId: " bot-a ",
+        },
+      }),
+    );
+    expect(plan.mode).toBe("announce");
+    expect(plan.requested).toBe(true);
+    expect(plan.channel).toBe("telegram");
+    expect(plan.to).toBe("123");
+    expect(plan.accountId).toBe("bot-a");
   });
 });

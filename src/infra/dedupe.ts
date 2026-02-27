@@ -1,5 +1,8 @@
+import { pruneMapToMaxSize } from "./map-size.js";
+
 export type DedupeCache = {
   check: (key: string | undefined | null, now?: number) => boolean;
+  peek: (key: string | undefined | null, now?: number) => boolean;
   clear: () => void;
   size: () => number;
 };
@@ -32,13 +35,22 @@ export function createDedupeCache(options: DedupeCacheOptions): DedupeCache {
       cache.clear();
       return;
     }
-    while (cache.size > maxSize) {
-      const oldestKey = cache.keys().next().value;
-      if (!oldestKey) {
-        break;
-      }
-      cache.delete(oldestKey);
+    pruneMapToMaxSize(cache, maxSize);
+  };
+
+  const hasUnexpired = (key: string, now: number, touchOnRead: boolean): boolean => {
+    const existing = cache.get(key);
+    if (existing === undefined) {
+      return false;
     }
+    if (ttlMs > 0 && now - existing >= ttlMs) {
+      cache.delete(key);
+      return false;
+    }
+    if (touchOnRead) {
+      touch(key, now);
+    }
+    return true;
   };
 
   return {
@@ -46,14 +58,18 @@ export function createDedupeCache(options: DedupeCacheOptions): DedupeCache {
       if (!key) {
         return false;
       }
-      const existing = cache.get(key);
-      if (existing !== undefined && (ttlMs <= 0 || now - existing < ttlMs)) {
-        touch(key, now);
+      if (hasUnexpired(key, now, true)) {
         return true;
       }
       touch(key, now);
       prune(now);
       return false;
+    },
+    peek: (key, now = Date.now()) => {
+      if (!key) {
+        return false;
+      }
+      return hasUnexpired(key, now, false);
     },
     clear: () => {
       cache.clear();

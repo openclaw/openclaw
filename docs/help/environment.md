@@ -74,6 +74,47 @@ You can reference env vars directly in config string values using `${VAR_NAME}` 
 
 See [Configuration: Env var substitution](/gateway/configuration#env-var-substitution-in-config) for full details.
 
+## Secret refs vs `${ENV}` strings
+
+OpenClaw supports two env-driven patterns:
+
+- `${VAR}` string substitution in config values.
+- SecretRef objects (`{ source: "env", provider: "default", id: "VAR" }`) for fields that support secrets references.
+
+Both resolve from process env at activation time. SecretRef details are documented in [Secrets Management](/gateway/secrets).
+
+## Path-related env vars
+
+| Variable               | Purpose                                                                                                                                                                          |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `OPENCLAW_HOME`        | Override the home directory used for all internal path resolution (`~/.openclaw/`, agent dirs, sessions, credentials). Useful when running OpenClaw as a dedicated service user. |
+| `OPENCLAW_STATE_DIR`   | Override the state directory (default `~/.openclaw`).                                                                                                                            |
+| `OPENCLAW_CONFIG_PATH` | Override the config file path (default `~/.openclaw/openclaw.json`).                                                                                                             |
+
+## Logging
+
+| Variable             | Purpose                                                                                                                                                                                      |
+| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `OPENCLAW_LOG_LEVEL` | Override log level for both file and console (e.g. `debug`, `trace`). Takes precedence over `logging.level` and `logging.consoleLevel` in config. Invalid values are ignored with a warning. |
+
+### `OPENCLAW_HOME`
+
+When set, `OPENCLAW_HOME` replaces the system home directory (`$HOME` / `os.homedir()`) for all internal path resolution. This enables full filesystem isolation for headless service accounts.
+
+**Precedence:** `OPENCLAW_HOME` > `$HOME` > `USERPROFILE` > `os.homedir()`
+
+**Example** (macOS LaunchDaemon):
+
+```xml
+<key>EnvironmentVariables</key>
+<dict>
+  <key>OPENCLAW_HOME</key>
+  <string>/Users/kira</string>
+</dict>
+```
+
+`OPENCLAW_HOME` can also be set to a tilde path (e.g. `~/svc`), which gets expanded using `$HOME` before use.
+
 ## Related
 
 - [Gateway configuration](/gateway/configuration)

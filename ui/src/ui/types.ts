@@ -1,3 +1,5 @@
+export type UpdateAvailable = import("../../../src/infra/update-startup.js").UpdateAvailable;
+
 export type ChannelsStatusSnapshot = {
   ts: number;
   channelOrder: string[];
@@ -284,6 +286,7 @@ export type ConfigSnapshot = {
 export type ConfigUiHint = {
   label?: string;
   help?: string;
+  tags?: string[];
   group?: string;
   order?: number;
   advanced?: boolean;
@@ -340,6 +343,35 @@ export type AgentsListResult = {
   mainKey: string;
   scope: string;
   agents: GatewayAgentRow[];
+};
+
+export type ToolCatalogProfile = {
+  id: "minimal" | "coding" | "messaging" | "full";
+  label: string;
+};
+
+export type ToolCatalogEntry = {
+  id: string;
+  label: string;
+  description: string;
+  source: "core" | "plugin";
+  pluginId?: string;
+  optional?: boolean;
+  defaultProfiles: Array<"minimal" | "coding" | "messaging" | "full">;
+};
+
+export type ToolCatalogGroup = {
+  id: string;
+  label: string;
+  source: "core" | "plugin";
+  pluginId?: string;
+  tools: ToolCatalogEntry[];
+};
+
+export type ToolsCatalogResult = {
+  agentId: string;
+  profiles: ToolCatalogProfile[];
+  groups: ToolCatalogGroup[];
 };
 
 export type AgentIdentityResult = {
@@ -424,227 +456,20 @@ export type SessionsPatchResult = {
   };
 };
 
-export type SessionsUsageEntry = {
-  key: string;
-  label?: string;
-  sessionId?: string;
-  updatedAt?: number;
-  agentId?: string;
-  channel?: string;
-  chatType?: string;
-  origin?: {
-    label?: string;
-    provider?: string;
-    surface?: string;
-    chatType?: string;
-    from?: string;
-    to?: string;
-    accountId?: string;
-    threadId?: string | number;
-  };
-  modelOverride?: string;
-  providerOverride?: string;
-  modelProvider?: string;
-  model?: string;
-  usage: {
-    input: number;
-    output: number;
-    cacheRead: number;
-    cacheWrite: number;
-    totalTokens: number;
-    totalCost: number;
-    inputCost?: number;
-    outputCost?: number;
-    cacheReadCost?: number;
-    cacheWriteCost?: number;
-    missingCostEntries: number;
-    firstActivity?: number;
-    lastActivity?: number;
-    durationMs?: number;
-    activityDates?: string[]; // YYYY-MM-DD dates when session had activity
-    dailyBreakdown?: Array<{ date: string; tokens: number; cost: number }>;
-    dailyMessageCounts?: Array<{
-      date: string;
-      total: number;
-      user: number;
-      assistant: number;
-      toolCalls: number;
-      toolResults: number;
-      errors: number;
-    }>;
-    dailyLatency?: Array<{
-      date: string;
-      count: number;
-      avgMs: number;
-      p95Ms: number;
-      minMs: number;
-      maxMs: number;
-    }>;
-    dailyModelUsage?: Array<{
-      date: string;
-      provider?: string;
-      model?: string;
-      tokens: number;
-      cost: number;
-      count: number;
-    }>;
-    messageCounts?: {
-      total: number;
-      user: number;
-      assistant: number;
-      toolCalls: number;
-      toolResults: number;
-      errors: number;
-    };
-    toolUsage?: {
-      totalCalls: number;
-      uniqueTools: number;
-      tools: Array<{ name: string; count: number }>;
-    };
-    modelUsage?: Array<{
-      provider?: string;
-      model?: string;
-      count: number;
-      totals: SessionsUsageTotals;
-    }>;
-    latency?: {
-      count: number;
-      avgMs: number;
-      p95Ms: number;
-      minMs: number;
-      maxMs: number;
-    };
-  } | null;
-  contextWeight?: {
-    systemPrompt: { chars: number; projectContextChars: number; nonProjectContextChars: number };
-    skills: { promptChars: number; entries: Array<{ name: string; blockChars: number }> };
-    tools: {
-      listChars: number;
-      schemaChars: number;
-      entries: Array<{ name: string; summaryChars: number; schemaChars: number }>;
-    };
-    injectedWorkspaceFiles: Array<{
-      name: string;
-      path: string;
-      rawChars: number;
-      injectedChars: number;
-      truncated: boolean;
-    }>;
-  } | null;
-};
-
-export type SessionsUsageTotals = {
-  input: number;
-  output: number;
-  cacheRead: number;
-  cacheWrite: number;
-  totalTokens: number;
-  totalCost: number;
-  inputCost: number;
-  outputCost: number;
-  cacheReadCost: number;
-  cacheWriteCost: number;
-  missingCostEntries: number;
-};
-
-export type SessionsUsageResult = {
-  updatedAt: number;
-  startDate: string;
-  endDate: string;
-  sessions: SessionsUsageEntry[];
-  totals: SessionsUsageTotals;
-  aggregates: {
-    messages: {
-      total: number;
-      user: number;
-      assistant: number;
-      toolCalls: number;
-      toolResults: number;
-      errors: number;
-    };
-    tools: {
-      totalCalls: number;
-      uniqueTools: number;
-      tools: Array<{ name: string; count: number }>;
-    };
-    byModel: Array<{
-      provider?: string;
-      model?: string;
-      count: number;
-      totals: SessionsUsageTotals;
-    }>;
-    byProvider: Array<{
-      provider?: string;
-      model?: string;
-      count: number;
-      totals: SessionsUsageTotals;
-    }>;
-    byAgent: Array<{ agentId: string; totals: SessionsUsageTotals }>;
-    byChannel: Array<{ channel: string; totals: SessionsUsageTotals }>;
-    latency?: {
-      count: number;
-      avgMs: number;
-      p95Ms: number;
-      minMs: number;
-      maxMs: number;
-    };
-    dailyLatency?: Array<{
-      date: string;
-      count: number;
-      avgMs: number;
-      p95Ms: number;
-      minMs: number;
-      maxMs: number;
-    }>;
-    modelDaily?: Array<{
-      date: string;
-      provider?: string;
-      model?: string;
-      tokens: number;
-      cost: number;
-      count: number;
-    }>;
-    daily: Array<{
-      date: string;
-      tokens: number;
-      cost: number;
-      messages: number;
-      toolCalls: number;
-      errors: number;
-    }>;
-  };
-};
-
-export type CostUsageDailyEntry = SessionsUsageTotals & { date: string };
-
-export type CostUsageSummary = {
-  updatedAt: number;
-  days: number;
-  daily: CostUsageDailyEntry[];
-  totals: SessionsUsageTotals;
-};
-
-export type SessionUsageTimePoint = {
-  timestamp: number;
-  input: number;
-  output: number;
-  cacheRead: number;
-  cacheWrite: number;
-  totalTokens: number;
-  cost: number;
-  cumulativeTokens: number;
-  cumulativeCost: number;
-};
-
-export type SessionUsageTimeSeries = {
-  sessionId?: string;
-  points: SessionUsageTimePoint[];
-};
+export type {
+  CostUsageDailyEntry,
+  CostUsageSummary,
+  SessionsUsageEntry,
+  SessionsUsageResult,
+  SessionsUsageTotals,
+  SessionUsageTimePoint,
+  SessionUsageTimeSeries,
+} from "./usage-types.ts";
 
 export type CronSchedule =
   | { kind: "at"; at: string }
   | { kind: "every"; everyMs: number; anchorMs?: number }
-  | { kind: "cron"; expr: string; tz?: string };
+  | { kind: "cron"; expr: string; tz?: string; staggerMs?: number };
 
 export type CronSessionTarget = "main" | "isolated";
 export type CronWakeMode = "next-heartbeat" | "now";
@@ -654,12 +479,13 @@ export type CronPayload =
   | {
       kind: "agentTurn";
       message: string;
+      model?: string;
       thinking?: string;
       timeoutSeconds?: number;
     };
 
 export type CronDelivery = {
-  mode: "none" | "announce";
+  mode: "none" | "announce" | "webhook";
   channel?: string;
   to?: string;
   bestEffort?: boolean;
@@ -697,20 +523,60 @@ export type CronStatus = {
   nextWakeAtMs?: number | null;
 };
 
+export type CronJobsEnabledFilter = "all" | "enabled" | "disabled";
+export type CronJobsSortBy = "nextRunAtMs" | "updatedAtMs" | "name";
+export type CronSortDir = "asc" | "desc";
+export type CronRunsStatusFilter = "all" | "ok" | "error" | "skipped";
+export type CronRunsStatusValue = "ok" | "error" | "skipped";
+export type CronDeliveryStatus = "delivered" | "not-delivered" | "unknown" | "not-requested";
+export type CronRunScope = "job" | "all";
+
 export type CronRunLogEntry = {
   ts: number;
   jobId: string;
-  status: "ok" | "error" | "skipped";
+  jobName?: string;
+  status?: CronRunsStatusValue;
   durationMs?: number;
   error?: string;
   summary?: string;
+  deliveryStatus?: CronDeliveryStatus;
+  deliveryError?: string;
+  delivered?: boolean;
+  runAtMs?: number;
+  nextRunAtMs?: number;
+  model?: string;
+  provider?: string;
+  usage?: {
+    input_tokens?: number;
+    output_tokens?: number;
+    total_tokens?: number;
+    cache_read_tokens?: number;
+    cache_write_tokens?: number;
+  };
   sessionId?: string;
   sessionKey?: string;
 };
 
+export type CronJobsListResult = {
+  jobs?: CronJob[];
+  total?: number;
+  offset?: number;
+  limit?: number;
+  hasMore?: boolean;
+  nextOffset?: number | null;
+};
+
+export type CronRunsResult = {
+  entries?: CronRunLogEntry[];
+  total?: number;
+  offset?: number;
+  limit?: number;
+  hasMore?: boolean;
+  nextOffset?: number | null;
+};
+
 export type SkillsStatusConfigCheck = {
   path: string;
-  value: unknown;
   satisfied: boolean;
 };
 

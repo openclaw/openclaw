@@ -1,4 +1,7 @@
 import type { ModelDefinitionConfig } from "../config/types.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+
+const log = createSubsystemLogger("venice-models");
 
 export const VENICE_BASE_URL = "https://api.venice.ai/api/v1";
 export const VENICE_DEFAULT_MODEL_ID = "llama-3.3-70b";
@@ -300,6 +303,11 @@ export function buildVeniceModelDefinition(entry: VeniceCatalogEntry): ModelDefi
     cost: VENICE_DEFAULT_COST,
     contextWindow: entry.contextWindow,
     maxTokens: entry.maxTokens,
+    // Avoid usage-only streaming chunks that can break OpenAI-compatible parsers.
+    // See: https://github.com/openclaw/openclaw/issues/15819
+    compat: {
+      supportsUsageInStreaming: false,
+    },
   };
 }
 
@@ -340,15 +348,13 @@ export async function discoverVeniceModels(): Promise<ModelDefinitionConfig[]> {
     });
 
     if (!response.ok) {
-      console.warn(
-        `[venice-models] Failed to discover models: HTTP ${response.status}, using static catalog`,
-      );
+      log.warn(`Failed to discover models: HTTP ${response.status}, using static catalog`);
       return VENICE_MODEL_CATALOG.map(buildVeniceModelDefinition);
     }
 
     const data = (await response.json()) as VeniceModelsResponse;
     if (!Array.isArray(data.data) || data.data.length === 0) {
-      console.warn("[venice-models] No models found from API, using static catalog");
+      log.warn("No models found from API, using static catalog");
       return VENICE_MODEL_CATALOG.map(buildVeniceModelDefinition);
     }
 
@@ -381,13 +387,17 @@ export async function discoverVeniceModels(): Promise<ModelDefinitionConfig[]> {
           cost: VENICE_DEFAULT_COST,
           contextWindow: apiModel.model_spec.availableContextTokens || 128000,
           maxTokens: 8192,
+          // Avoid usage-only streaming chunks that can break OpenAI-compatible parsers.
+          compat: {
+            supportsUsageInStreaming: false,
+          },
         });
       }
     }
 
     return models.length > 0 ? models : VENICE_MODEL_CATALOG.map(buildVeniceModelDefinition);
   } catch (error) {
-    console.warn(`[venice-models] Discovery failed: ${String(error)}, using static catalog`);
+    log.warn(`Discovery failed: ${String(error)}, using static catalog`);
     return VENICE_MODEL_CATALOG.map(buildVeniceModelDefinition);
   }
 }

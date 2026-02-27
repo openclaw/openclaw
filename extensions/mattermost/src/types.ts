@@ -7,6 +7,11 @@ export type MattermostAccountConfig = {
   name?: string;
   /** Optional provider capability tags used for agent/runtime guidance. */
   capabilities?: string[];
+  /**
+   * Break-glass override: allow mutable identity matching (@username/display name) in allowlists.
+   * Default behavior is ID-only matching.
+   */
+  dangerouslyAllowNameMatching?: boolean;
   /** Allow channel-initiated config writes (default: true). */
   configWrites?: boolean;
   /** If false, do not start this Mattermost account. Default: true. */
@@ -44,6 +49,11 @@ export type MattermostAccountConfig = {
   blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
   /** Outbound response prefix override for this channel/account. */
   responsePrefix?: string;
+  /** Action toggles for this account. */
+  actions?: {
+    /** Enable message reaction actions. Default: true. */
+    reactions?: boolean;
+  };
 };
 
 export type MattermostConfig = {

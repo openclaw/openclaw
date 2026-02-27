@@ -34,6 +34,16 @@ deployments work at a high level.
 Remote access: [Gateway remote](/gateway/remote)  
 Platforms hub: [Platforms](/platforms)
 
+## Shared company agent on a VPS
+
+This is a valid setup when the users are in one trust boundary (for example one company team), and the agent is business-only.
+
+- Keep it on a dedicated runtime (VPS/VM/container + dedicated OS user/accounts).
+- Do not sign that runtime into personal Apple/Google accounts or personal browser/password-manager profiles.
+- If users are adversarial to each other, split by gateway/host/OS user.
+
+Security model details: [Security](/gateway/security)
+
 ## Using nodes with a VPS
 
 You can keep the Gateway in the cloud and pair **nodes** on your local devices

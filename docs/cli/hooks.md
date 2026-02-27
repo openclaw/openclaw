@@ -8,7 +8,7 @@ title: "hooks"
 
 # `openclaw hooks`
 
-Manage agent hooks (event-driven automations for commands like `/new`, `/reset`, and gateway startup).
+Manage agent hooks (event-driven automations for commands like `/new`, `/reset`, agent bootstrap, and gateway startup).
 
 Related:
 
@@ -32,13 +32,14 @@ List all discovered hooks from workspace, managed, and bundled directories.
 **Example output:**
 
 ```
-Hooks (4/4 ready)
+Hooks (5/5 ready)
 
 Ready:
   🚀 boot-md ✓ - Run BOOT.md on gateway startup
+  📎 bootstrap-extra-files ✓ - Inject extra workspace bootstrap files during agent bootstrap
   📝 command-logger ✓ - Log all command events to a centralized audit file
-  💾 session-memory ✓ - Save session context to memory when /new command is issued
-  😈 soul-evil ✓ - Swap injected SOUL content during a purge window or by random chance
+  🗓️ daily-memory ✓ - Create daily memory log templates on startup and agent bootstrap
+  💾 session-memory ✓ - Save session context to memory when /new or /reset is issued
 ```
 
 **Example (verbose):**
@@ -84,14 +85,14 @@ openclaw hooks info session-memory
 ```
 💾 session-memory ✓ Ready
 
-Save session context to memory when /new command is issued
+Save session context to memory when /new or /reset is issued
 
 Details:
   Source: openclaw-bundled
   Path: /path/to/openclaw/hooks/bundled/session-memory/HOOK.md
   Handler: /path/to/openclaw/hooks/bundled/session-memory/handler.ts
-  Homepage: https://docs.openclaw.ai/hooks#session-memory
-  Events: command:new
+  Homepage: https://docs.openclaw.ai/automation/hooks#session-memory
+  Events: command:new, command:reset
 
 Requirements:
   Config: ✓ workspace.dir
@@ -114,8 +115,8 @@ Show summary of hook eligibility status (how many are ready vs. not ready).
 ```
 Hooks Status
 
-Total hooks: 4
-Ready: 4
+Total hooks: 5
+Ready: 5
 Not ready: 0
 ```
 
@@ -188,9 +189,13 @@ openclaw hooks disable command-logger
 
 ```bash
 openclaw hooks install <path-or-spec>
+openclaw hooks install <npm-spec> --pin
 ```
 
 Install a hook pack from a local folder/archive or npm.
+
+Npm specs are **registry-only** (package name + optional version/tag). Git/URL/file
+specs are rejected. Dependency installs run with `--ignore-scripts` for safety.
 
 **What it does:**
 
@@ -201,6 +206,7 @@ Install a hook pack from a local folder/archive or npm.
 **Options:**
 
 - `-l, --link`: Link a local directory instead of copying (adds it to `hooks.internal.load.extraDirs`)
+- `--pin`: Record npm installs as exact resolved `name@version` in `hooks.internal.installs`
 
 **Supported archives:** `.zip`, `.tgz`, `.tar.gz`, `.tar`
 
@@ -234,11 +240,48 @@ Update installed hook packs (npm installs only).
 - `--all`: Update all tracked hook packs
 - `--dry-run`: Show what would change without writing
 
+When a stored integrity hash exists and the fetched artifact hash changes,
+OpenClaw prints a warning and asks for confirmation before proceeding. Use
+global `--yes` to bypass prompts in CI/non-interactive runs.
+
 ## Bundled Hooks
+
+### daily-memory
+
+Creates daily memory log templates for today and upcoming days.
+
+**Events:** `agent:bootstrap`, `gateway:startup`
+
+Enable it:
+
+```bash
+openclaw hooks enable daily-memory
+```
+
+Config:
+
+```json
+{
+  "hooks": {
+    "internal": {
+      "enabled": true,
+      "entries": {
+        "daily-memory": {
+          "enabled": true,
+          "template": "# {{date}} - Daily Log\n\n## Morning Notes\n",
+          "createDaysAhead": 1
+        }
+      }
+    }
+  }
+}
+```
+
+**See:** [daily-memory documentation](/automation/hooks#daily-memory)
 
 ### session-memory
 
-Saves session context to memory when you issue `/new`.
+Saves session context to memory when you issue `/new` or `/reset`.
 
 **Enable:**
 
@@ -249,6 +292,18 @@ openclaw hooks enable session-memory
 **Output:** `~/.openclaw/workspace/memory/YYYY-MM-DD-slug.md`
 
 **See:** [session-memory documentation](/automation/hooks#session-memory)
+
+### bootstrap-extra-files
+
+Injects additional bootstrap files (for example monorepo-local `AGENTS.md` / `TOOLS.md`) during `agent:bootstrap`.
+
+**Enable:**
+
+```bash
+openclaw hooks enable bootstrap-extra-files
+```
+
+**See:** [bootstrap-extra-files documentation](/automation/hooks#bootstrap-extra-files)
 
 ### command-logger
 
@@ -276,18 +331,6 @@ grep '"action":"new"' ~/.openclaw/logs/commands.log | jq .
 ```
 
 **See:** [command-logger documentation](/automation/hooks#command-logger)
-
-### soul-evil
-
-Swaps injected `SOUL.md` content with `SOUL_EVIL.md` during a purge window or by random chance.
-
-**Enable:**
-
-```bash
-openclaw hooks enable soul-evil
-```
-
-**See:** [SOUL Evil Hook](/hooks/soul-evil)
 
 ### boot-md
 

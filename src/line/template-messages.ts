@@ -1,4 +1,13 @@
 import type { messagingApi } from "@line/bot-sdk";
+import {
+  datetimePickerAction,
+  messageAction,
+  postbackAction,
+  uriAction,
+  type Action,
+} from "./actions.js";
+
+export { datetimePickerAction, messageAction, postbackAction, uriAction };
 
 type TemplateMessage = messagingApi.TemplateMessage;
 type ConfirmTemplate = messagingApi.ConfirmTemplate;
@@ -7,7 +16,23 @@ type CarouselTemplate = messagingApi.CarouselTemplate;
 type CarouselColumn = messagingApi.CarouselColumn;
 type ImageCarouselTemplate = messagingApi.ImageCarouselTemplate;
 type ImageCarouselColumn = messagingApi.ImageCarouselColumn;
-type Action = messagingApi.Action;
+
+type TemplatePayloadAction = {
+  type?: "uri" | "postback" | "message";
+  uri?: string;
+  data?: string;
+  label: string;
+};
+
+function buildTemplatePayloadAction(action: TemplatePayloadAction): Action {
+  if (action.type === "uri" && action.uri) {
+    return uriAction(action.label, action.uri);
+  }
+  if (action.type === "postback" && action.data) {
+    return postbackAction(action.label, action.data, action.label);
+  }
+  return messageAction(action.label, action.data ?? action.label);
+}
 
 /**
  * Create a confirm template (yes/no style dialog)
@@ -147,64 +172,6 @@ export function createImageCarouselColumn(imageUrl: string, action: Action): Ima
 // Action Helpers (same as rich-menu but re-exported for convenience)
 // ============================================================================
 
-/**
- * Create a message action (sends text when tapped)
- */
-export function messageAction(label: string, text?: string): Action {
-  return {
-    type: "message",
-    label: label.slice(0, 20),
-    text: text ?? label,
-  };
-}
-
-/**
- * Create a URI action (opens a URL when tapped)
- */
-export function uriAction(label: string, uri: string): Action {
-  return {
-    type: "uri",
-    label: label.slice(0, 20),
-    uri,
-  };
-}
-
-/**
- * Create a postback action (sends data to webhook when tapped)
- */
-export function postbackAction(label: string, data: string, displayText?: string): Action {
-  return {
-    type: "postback",
-    label: label.slice(0, 20),
-    data: data.slice(0, 300),
-    displayText: displayText?.slice(0, 300),
-  };
-}
-
-/**
- * Create a datetime picker action
- */
-export function datetimePickerAction(
-  label: string,
-  data: string,
-  mode: "date" | "time" | "datetime",
-  options?: {
-    initial?: string;
-    max?: string;
-    min?: string;
-  },
-): Action {
-  return {
-    type: "datetimepicker",
-    label: label.slice(0, 20),
-    data: data.slice(0, 300),
-    mode,
-    initial: options?.initial,
-    max: options?.max,
-    min: options?.min,
-  };
-}
-
 // ============================================================================
 // Convenience Builders
 // ============================================================================
@@ -343,16 +310,9 @@ export function buildTemplateMessageFromPayload(
     }
 
     case "buttons": {
-      const actions: Action[] = payload.actions.slice(0, 4).map((action) => {
-        if (action.type === "uri" && action.uri) {
-          return uriAction(action.label, action.uri);
-        }
-        if (action.type === "postback" && action.data) {
-          return postbackAction(action.label, action.data, action.label);
-        }
-        // Default to message action
-        return messageAction(action.label, action.data ?? action.label);
-      });
+      const actions: Action[] = payload.actions
+        .slice(0, 4)
+        .map((action) => buildTemplatePayloadAction(action));
 
       return createButtonTemplate(payload.title, payload.text, actions, {
         thumbnailImageUrl: payload.thumbnailImageUrl,
@@ -362,15 +322,9 @@ export function buildTemplateMessageFromPayload(
 
     case "carousel": {
       const columns: CarouselColumn[] = payload.columns.slice(0, 10).map((col) => {
-        const colActions: Action[] = col.actions.slice(0, 3).map((action) => {
-          if (action.type === "uri" && action.uri) {
-            return uriAction(action.label, action.uri);
-          }
-          if (action.type === "postback" && action.data) {
-            return postbackAction(action.label, action.data, action.label);
-          }
-          return messageAction(action.label, action.data ?? action.label);
-        });
+        const colActions: Action[] = col.actions
+          .slice(0, 3)
+          .map((action) => buildTemplatePayloadAction(action));
 
         return createCarouselColumn({
           title: col.title,

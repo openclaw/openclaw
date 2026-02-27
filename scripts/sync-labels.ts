@@ -14,10 +14,14 @@ const COLOR_BY_PREFIX = new Map<string, string>([
   ["docs", "0075ca"],
   ["cli", "f9d0c4"],
   ["gateway", "d4c5f9"],
+  ["size", "fbca04"],
 ]);
 
 const configPath = resolve(".github/labeler.yml");
-const labelNames = extractLabelNames(readFileSync(configPath, "utf8"));
+const EXTRA_LABELS = ["size: XS", "size: S", "size: M", "size: L", "size: XL"] as const;
+const labelNames = [
+  ...new Set([...extractLabelNames(readFileSync(configPath, "utf8")), ...EXTRA_LABELS]),
+];
 
 if (!labelNames.length) {
   throw new Error("labeler.yml must declare at least one label.");

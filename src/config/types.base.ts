@@ -1,4 +1,4 @@
-import type { NormalizedChatType } from "../channels/chat-type.js";
+import type { ChatType } from "../channels/chat-type.js";
 
 export type ReplyMode = "text" | "command";
 export type TypingMode = "never" | "instant" | "thinking" | "message";
@@ -50,8 +50,14 @@ export type HumanDelayConfig = {
 export type SessionSendPolicyAction = "allow" | "deny";
 export type SessionSendPolicyMatch = {
   channel?: string;
-  chatType?: NormalizedChatType;
+  chatType?: ChatType;
+  /**
+   * Session key prefix match.
+   * Note: some consumers match against a normalized key (for example, stripping `agent:<id>:`).
+   */
   keyPrefix?: string;
+  /** Optional raw session-key prefix match for consumers that normalize session keys. */
+  rawKeyPrefix?: string;
 };
 export type SessionSendPolicyRule = {
   action: SessionSendPolicyAction;
@@ -71,9 +77,24 @@ export type SessionResetConfig = {
   idleMinutes?: number;
 };
 export type SessionResetByTypeConfig = {
+  direct?: SessionResetConfig;
+  /** @deprecated Use `direct` instead. Kept for backward compatibility. */
   dm?: SessionResetConfig;
   group?: SessionResetConfig;
   thread?: SessionResetConfig;
+};
+
+export type SessionThreadBindingsConfig = {
+  /**
+   * Master switch for thread-bound session routing features.
+   * Channel/provider keys can override this default.
+   */
+  enabled?: boolean;
+  /**
+   * Auto-unfocus TTL for thread-bound sessions (hours).
+   * Set to 0 to disable. Default: 24.
+   */
+  ttlHours?: number;
 };
 
 export type SessionConfig = {
@@ -91,17 +112,59 @@ export type SessionConfig = {
   store?: string;
   typingIntervalSeconds?: number;
   typingMode?: TypingMode;
+  /**
+   * Max parent transcript token count allowed for thread/session forking.
+   * If parent totalTokens is above this value, OpenClaw skips parent fork and
+   * starts a fresh thread session instead. Set to 0 to disable this guard.
+   */
+  parentForkMaxTokens?: number;
   mainKey?: string;
   sendPolicy?: SessionSendPolicyConfig;
   agentToAgent?: {
     /** Max ping-pong turns between requester/target (0–5). Default: 5. */
     maxPingPongTurns?: number;
   };
+  /** Shared defaults for thread-bound session routing across channels/providers. */
+  threadBindings?: SessionThreadBindingsConfig;
+  /** Automatic session store maintenance (pruning, capping, file rotation). */
+  maintenance?: SessionMaintenanceConfig;
+};
+
+export type SessionMaintenanceMode = "enforce" | "warn";
+
+export type SessionMaintenanceConfig = {
+  /** Whether to enforce maintenance or warn only. Default: "warn". */
+  mode?: SessionMaintenanceMode;
+  /** Remove session entries older than this duration (e.g. "30d", "12h"). Default: "30d". */
+  pruneAfter?: string | number;
+  /** Deprecated. Use pruneAfter instead. */
+  pruneDays?: number;
+  /** Maximum number of session entries to keep. Default: 500. */
+  maxEntries?: number;
+  /** Rotate sessions.json when it exceeds this size (e.g. "10mb"). Default: 10mb. */
+  rotateBytes?: number | string;
+  /**
+   * Retention for archived reset transcripts (`*.reset.<timestamp>`).
+   * Set `false` to disable reset-archive cleanup. Default: same as `pruneAfter` (30d).
+   */
+  resetArchiveRetention?: string | number | false;
+  /**
+   * Optional per-agent sessions-directory disk budget (e.g. "500mb").
+   * When exceeded, warn (mode=warn) or enforce oldest-first cleanup (mode=enforce).
+   */
+  maxDiskBytes?: number | string;
+  /**
+   * Target size after disk-budget cleanup (high-water mark), e.g. "400mb".
+   * Default: 80% of maxDiskBytes.
+   */
+  highWaterBytes?: number | string;
 };
 
 export type LoggingConfig = {
   level?: "silent" | "fatal" | "error" | "warn" | "info" | "debug" | "trace";
   file?: string;
+  /** Maximum size of a single log file in bytes before writes are suppressed. Default: 500 MB. */
+  maxFileBytes?: number;
   consoleLevel?: "silent" | "fatal" | "error" | "warn" | "info" | "debug" | "trace";
   consoleStyle?: "pretty" | "compact" | "json";
   /** Redact sensitive tokens in tool summaries. Default: "tools". */
