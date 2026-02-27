@@ -151,6 +151,8 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
     `groupAllowFrom` is used for group sender filtering. If not set, Telegram falls back to `allowFrom`.
     `groupAllowFrom` entries must be numeric Telegram user IDs.
+    Security boundary (`2026.2.25+`): group sender auth does **not** inherit DM pairing-store approvals.
+    Pairing stays DM-only. For groups, set `groupAllowFrom` or per-group/per-topic `allowFrom`.
     Runtime note: if `channels.telegram` is completely missing, runtime falls back to `groupPolicy="allowlist"` for group policy evaluation (even if `channels.defaults.groupPolicy` is set).
 
     Example: allow any member in one specific group:
@@ -720,7 +722,7 @@ Primary reference:
 - `channels.telegram.dmPolicy`: `pairing | allowlist | open | disabled` (default: pairing).
 - `channels.telegram.allowFrom`: DM allowlist (numeric Telegram user IDs). `allowlist` requires at least one sender ID. `open` requires `"*"`. `openclaw doctor --fix` can resolve legacy `@username` entries to IDs and can restore allowlist entries from pairing-store files when available.
 - `channels.telegram.groupPolicy`: `open | allowlist | disabled` (default: allowlist).
-- `channels.telegram.groupAllowFrom`: group sender allowlist (numeric Telegram user IDs). `openclaw doctor --fix` can resolve legacy `@username` entries to IDs.
+- `channels.telegram.groupAllowFrom`: group sender allowlist (numeric Telegram user IDs). `openclaw doctor --fix` can resolve legacy `@username` entries to IDs. Group auth does not use DM pairing-store fallback (`2026.2.25+`).
 - Multi-account precedence:
   - `channels.telegram.accounts.default.allowFrom` and `channels.telegram.accounts.default.groupAllowFrom` apply only to the `default` account.
   - Named accounts inherit `channels.telegram.allowFrom` and `channels.telegram.groupAllowFrom` when account-level values are unset.
