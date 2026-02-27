@@ -62,6 +62,11 @@ class GatewaySession(
   private val onInvoke: (suspend (InvokeRequest) -> InvokeResult)? = null,
   private val onTlsFingerprint: ((stableId: String, fingerprint: String) -> Unit)? = null,
 ) {
+  private companion object {
+    // Keep connect timeout above observed gateway unauthorized close on lower-end devices.
+    private const val CONNECT_RPC_TIMEOUT_MS = 12_000L
+  }
+
   data class InvokeRequest(
     val id: String,
     val nodeId: String,
@@ -302,26 +307,13 @@ class GatewaySession(
       val identity = identityStore.loadOrCreate()
       val storedToken = deviceAuthStore.loadToken(identity.deviceId, options.role)
       val trimmedToken = token?.trim().orEmpty()
-      val authToken = if (storedToken.isNullOrBlank()) trimmedToken else storedToken
+      // QR/setup/manual shared token must take precedence; stale role tokens can survive re-onboarding.
+      val authToken = if (trimmedToken.isNotBlank()) trimmedToken else storedToken.orEmpty()
       val payload = buildConnectParams(identity, connectNonce, authToken, password?.trim())
-      var res = request("connect", payload, timeoutMs = 8_000)
+      val res = request("connect", payload, timeoutMs = CONNECT_RPC_TIMEOUT_MS)
       if (!res.ok) {
         val msg = res.error?.message ?: "connect failed"
-        val hasStoredToken = !storedToken.isNullOrBlank()
-        val canRetryWithShared = hasStoredToken && trimmedToken.isNotBlank()
-        if (canRetryWithShared) {
-          val sharedPayload = buildConnectParams(identity, connectNonce, trimmedToken, password?.trim())
-          val sharedRes = request("connect", sharedPayload, timeoutMs = 8_000)
-          if (!sharedRes.ok) {
-            val retryMsg = sharedRes.error?.message ?: msg
-            throw IllegalStateException(retryMsg)
-          }
-          // Stored device token was bypassed successfully; clear stale token for future connects.
-          deviceAuthStore.clearToken(identity.deviceId, options.role)
-          res = sharedRes
-        } else {
-          throw IllegalStateException(msg)
-        }
+        throw IllegalStateException(msg)
       }
       handleConnectSuccess(res, identity.deviceId)
       connectDeferred.complete(Unit)

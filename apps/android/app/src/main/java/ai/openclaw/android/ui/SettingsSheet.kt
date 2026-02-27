@@ -9,7 +9,6 @@ import android.os.Build
 import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
@@ -32,8 +31,6 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.text.KeyboardActions
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material3.Button
@@ -48,7 +45,7 @@ import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -56,41 +53,33 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import ai.openclaw.android.BuildConfig
 import ai.openclaw.android.LocationMode
 import ai.openclaw.android.MainViewModel
-import ai.openclaw.android.VoiceWakeMode
-import ai.openclaw.android.WakeWords
 
 @Composable
 fun SettingsSheet(viewModel: MainViewModel) {
   val context = LocalContext.current
+  val lifecycleOwner = LocalLifecycleOwner.current
   val instanceId by viewModel.instanceId.collectAsState()
   val displayName by viewModel.displayName.collectAsState()
   val cameraEnabled by viewModel.cameraEnabled.collectAsState()
   val locationMode by viewModel.locationMode.collectAsState()
   val locationPreciseEnabled by viewModel.locationPreciseEnabled.collectAsState()
   val preventSleep by viewModel.preventSleep.collectAsState()
-  val wakeWords by viewModel.wakeWords.collectAsState()
-  val voiceWakeMode by viewModel.voiceWakeMode.collectAsState()
-  val voiceWakeStatusText by viewModel.voiceWakeStatusText.collectAsState()
-  val isConnected by viewModel.isConnected.collectAsState()
   val canvasDebugStatusEnabled by viewModel.canvasDebugStatusEnabled.collectAsState()
 
   val listState = rememberLazyListState()
-  val (wakeWordsText, setWakeWordsText) = remember { mutableStateOf("") }
-  val focusManager = LocalFocusManager.current
-  var wakeWordsHadFocus by remember { mutableStateOf(false) }
   val deviceModel =
     remember {
       listOfNotNull(Build.MANUFACTURER, Build.MODEL)
@@ -115,14 +104,6 @@ fun SettingsSheet(viewModel: MainViewModel) {
       trailingIconColor = mobileTextSecondary,
       leadingIconColor = mobileTextSecondary,
     )
-
-  LaunchedEffect(wakeWords) { setWakeWordsText(wakeWords.joinToString(", ")) }
-  val commitWakeWords = {
-    val parsed = WakeWords.parseIfChanged(wakeWordsText, wakeWords)
-    if (parsed != null) {
-      viewModel.setWakeWords(parsed)
-    }
-  }
 
   val permissionLauncher =
     rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { perms ->
@@ -165,9 +146,16 @@ fun SettingsSheet(viewModel: MainViewModel) {
       }
     }
 
+  var micPermissionGranted by
+    remember {
+      mutableStateOf(
+        ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
+          PackageManager.PERMISSION_GRANTED,
+      )
+    }
   val audioPermissionLauncher =
-    rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { _ ->
-      // Status text is handled by NodeRuntime.
+    rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+      micPermissionGranted = granted
     }
 
   val smsPermissionAvailable =
@@ -186,6 +174,22 @@ fun SettingsSheet(viewModel: MainViewModel) {
       smsPermissionGranted = granted
       viewModel.refreshGatewayConnection()
     }
+
+  DisposableEffect(lifecycleOwner, context) {
+    val observer =
+      LifecycleEventObserver { _, event ->
+        if (event == Lifecycle.Event.ON_RESUME) {
+          micPermissionGranted =
+            ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
+              PackageManager.PERMISSION_GRANTED
+          smsPermissionGranted =
+            ContextCompat.checkSelfPermission(context, Manifest.permission.SEND_SMS) ==
+              PackageManager.PERMISSION_GRANTED
+        }
+      }
+    lifecycleOwner.lifecycle.addObserver(observer)
+    onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+  }
 
   fun setCameraEnabledChecked(checked: Boolean) {
     if (!checked) {
@@ -302,7 +306,7 @@ fun SettingsSheet(viewModel: MainViewModel) {
 
       item { HorizontalDivider(color = mobileBorder) }
 
-    // Voice
+      // Voice
       item {
         Text(
           "VOICE",
@@ -310,120 +314,48 @@ fun SettingsSheet(viewModel: MainViewModel) {
           color = mobileAccent,
         )
       }
-    item {
-      val enabled = voiceWakeMode != VoiceWakeMode.Off
-      ListItem(
-        modifier = settingsRowModifier(),
-        colors = listItemColors,
-        headlineContent = { Text("Voice Wake", style = mobileHeadline) },
-        supportingContent = { Text(voiceWakeStatusText, style = mobileCallout) },
-        trailingContent = {
-          Switch(
-            checked = enabled,
-            onCheckedChange = { on ->
-              if (on) {
-                val micOk =
-                  ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
-                    PackageManager.PERMISSION_GRANTED
-                if (!micOk) audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
-                viewModel.setVoiceWakeMode(VoiceWakeMode.Foreground)
+      item {
+        ListItem(
+          modifier = settingsRowModifier(),
+          colors = listItemColors,
+          headlineContent = { Text("Microphone permission", style = mobileHeadline) },
+          supportingContent = {
+            Text(
+              if (micPermissionGranted) {
+                "Granted. Use the Voice tab mic button to capture transcript."
               } else {
-                viewModel.setVoiceWakeMode(VoiceWakeMode.Off)
-              }
-            },
-          )
-        },
-      )
-    }
-    item {
-      AnimatedVisibility(visible = voiceWakeMode != VoiceWakeMode.Off) {
-        Column(verticalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
-          ListItem(
-            modifier = settingsRowModifier(),
-            colors = listItemColors,
-            headlineContent = { Text("Foreground Only", style = mobileHeadline) },
-            supportingContent = { Text("Listens only while OpenClaw is open.", style = mobileCallout) },
-            trailingContent = {
-              RadioButton(
-                selected = voiceWakeMode == VoiceWakeMode.Foreground,
-                onClick = {
-                  val micOk =
-                    ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
-                      PackageManager.PERMISSION_GRANTED
-                  if (!micOk) audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
-                  viewModel.setVoiceWakeMode(VoiceWakeMode.Foreground)
-                },
+                "Required for Voice tab transcription."
+              },
+              style = mobileCallout,
+            )
+          },
+          trailingContent = {
+            Button(
+              onClick = {
+                if (micPermissionGranted) {
+                  openAppSettings(context)
+                } else {
+                  audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                }
+              },
+              colors = settingsPrimaryButtonColors(),
+              shape = RoundedCornerShape(14.dp),
+            ) {
+              Text(
+                if (micPermissionGranted) "Manage" else "Grant",
+                style = mobileCallout.copy(fontWeight = FontWeight.Bold),
               )
-            },
-          )
-          ListItem(
-            modifier = settingsRowModifier(),
-            colors = listItemColors,
-            headlineContent = { Text("Always", style = mobileHeadline) },
-            supportingContent = { Text("Keeps listening in the background (shows a persistent notification).", style = mobileCallout) },
-            trailingContent = {
-              RadioButton(
-                selected = voiceWakeMode == VoiceWakeMode.Always,
-                onClick = {
-                  val micOk =
-                    ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
-                      PackageManager.PERMISSION_GRANTED
-                  if (!micOk) audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
-                  viewModel.setVoiceWakeMode(VoiceWakeMode.Always)
-                },
-              )
-            },
-          )
-        }
-      }
-    }
-    item {
-      OutlinedTextField(
-        value = wakeWordsText,
-        onValueChange = setWakeWordsText,
-        label = { Text("Wake Words (comma-separated)", style = mobileCaption1, color = mobileTextSecondary) },
-        modifier =
-          Modifier.fillMaxWidth().onFocusChanged { focusState ->
-            if (focusState.isFocused) {
-              wakeWordsHadFocus = true
-            } else if (wakeWordsHadFocus) {
-              wakeWordsHadFocus = false
-              commitWakeWords()
             }
           },
-        singleLine = true,
-        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-        keyboardActions =
-          KeyboardActions(
-            onDone = {
-              commitWakeWords()
-              focusManager.clearFocus()
-            },
-          ),
-        textStyle = mobileBody.copy(color = mobileText),
-        colors = settingsTextFieldColors(),
-      )
-    }
-      item {
-        Button(
-          onClick = viewModel::resetWakeWordsDefaults,
-          colors = settingsPrimaryButtonColors(),
-          shape = RoundedCornerShape(14.dp),
-        ) {
-          Text("Reset defaults", style = mobileCallout.copy(fontWeight = FontWeight.Bold))
-        }
+        )
       }
-    item {
-      Text(
-        if (isConnected) {
-          "Any node can edit wake words. Changes sync via the gateway."
-        } else {
-          "Connect to a gateway to sync wake words globally."
-        },
-        style = mobileCallout,
-        color = mobileTextSecondary,
-      )
-    }
+      item {
+        Text(
+          "Voice wake and talk modes were removed. Voice now uses one mic on/off flow in the Voice tab.",
+          style = mobileCallout,
+          color = mobileTextSecondary,
+        )
+      }
 
       item { HorizontalDivider(color = mobileBorder) }
 
