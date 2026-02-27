@@ -1,8 +1,7 @@
+import { createRequire } from "node:module";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { TextContent } from "@mariozechner/pi-ai";
 import type { SessionEntry, SessionManager } from "@mariozechner/pi-coding-agent";
-import fs from "node:fs";
-import { createRequire } from "node:module";
 import type { RedactSensitiveMode } from "../logging/redact.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import type {
@@ -215,27 +214,29 @@ export function installSessionToolResultGuard(
     return transformer ? transformer(message) : message;
   };
 
-  // Resolve redact options once at installation time to avoid calling
-  // loadConfig() on every text block during persistence.
-  const redactOptions: ResolvedRedactOptions = {};
-  try {
-    // Import config to check redact mode/patterns. If config is unavailable
-    // (e.g., in tests), fall back to defaults (mode=undefined uses "tools").
-    const configModule = requireConfig("../config/config.js") as {
-      loadConfig?: () => { logging?: { redactSensitive?: string; redactPatterns?: string[] } };
-    };
-    const cfg = configModule.loadConfig?.().logging;
-    if (cfg?.redactSensitive) {
-      redactOptions.mode = cfg.redactSensitive as RedactSensitiveMode;
+  // Resolve redact options lazily per persistence call so that runtime config
+  // changes (e.g., config reload, test mutations) are picked up immediately.
+  const resolveRedactOptions = (): ResolvedRedactOptions => {
+    const opts: ResolvedRedactOptions = {};
+    try {
+      const configModule = requireConfig("../config/config.js") as {
+        loadConfig?: () => { logging?: { redactSensitive?: string; redactPatterns?: string[] } };
+      };
+      const cfg = configModule.loadConfig?.().logging;
+      if (cfg?.redactSensitive) {
+        opts.mode = cfg.redactSensitive as RedactSensitiveMode;
+      }
+      if (cfg?.redactPatterns) {
+        opts.patterns = cfg.redactPatterns;
+      }
+    } catch {
+      // Config not available — use defaults.
     }
-    if (cfg?.redactPatterns) {
-      redactOptions.patterns = cfg.redactPatterns;
-    }
-  } catch {
-    // Config not available — use defaults.
-  }
+    return opts;
+  };
 
-  const redactEntry = (entry: SessionEntry) => redactEntryForPersistence(entry, redactOptions);
+  const redactEntry = (entry: SessionEntry) =>
+    redactEntryForPersistence(entry, resolveRedactOptions());
 
   // Wrap _persist and _rewriteFile to redact secrets at the serialization boundary.
   // This ensures in-memory entries (used by LLM via buildSessionContext) stay
@@ -265,14 +266,19 @@ export function installSessionToolResultGuard(
   const originalRewriteFile = sm._rewriteFile.bind(sm);
 
   sm._persist = (entry: SessionEntry) => {
-    // Swap fileEntries with redacted copies, call original, then restore.
-    // The original _persist reads fileEntries directly during bulk-flush.
-    const original = sm.fileEntries;
-    sm.fileEntries = original.map((e) => redactEntry(e));
-    try {
+    if (!sm.flushed) {
+      // Bulk-flush path: upstream _persist iterates all fileEntries.
+      // Swap the full array with redacted copies.
+      const original = sm.fileEntries;
+      sm.fileEntries = original.map((e) => redactEntry(e));
+      try {
+        originalPersist(redactEntry(entry));
+      } finally {
+        sm.fileEntries = original;
+      }
+    } else {
+      // Append path: upstream only writes the single entry — O(1).
       originalPersist(redactEntry(entry));
-    } finally {
-      sm.fileEntries = original;
     }
   };
 
