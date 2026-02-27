@@ -4,7 +4,10 @@ import fs from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
 import { resolveConfigPath, resolveGatewayLockDir, resolveStateDir } from "../config/paths.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isPidAlive } from "../shared/pid-alive.js";
+
+const log = createSubsystemLogger("gateway/lock");
 
 const DEFAULT_TIMEOUT_MS = 5000;
 const DEFAULT_POLL_INTERVAL_MS = 100;
@@ -260,7 +263,10 @@ export async function acquireGatewayLock(
         await fs.rm(lockPath, { force: true });
         continue;
       }
-      if (ownerStatus !== "alive") {
+      if (ownerPid && ownerStatus === "unknown") {
+        log.warn(`lock owner status unknown for pid ${ownerPid}; waiting for next probe`);
+      }
+      if (!ownerPid) {
         let stale = false;
         if (lastPayload?.createdAt) {
           const createdAt = Date.parse(lastPayload.createdAt);

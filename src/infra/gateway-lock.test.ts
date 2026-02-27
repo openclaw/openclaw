@@ -286,6 +286,47 @@ describe("gateway lock", () => {
     expect(lock).toBeNull();
   });
 
+  it("does not remove lock when owner status is unknown even past staleMs", async () => {
+    vi.useRealTimers();
+    const env = await makeEnv();
+    await writeLockFile(env, {
+      startTime: 111,
+      createdAt: new Date(Date.now() - 60_000).toISOString(),
+    });
+    const spy = createEaccesProcStatSpy();
+
+    const pending = acquireForTest(env, {
+      timeoutMs: 30,
+      staleMs: 5,
+      platform: "linux",
+    });
+    await expect(pending).rejects.toBeInstanceOf(GatewayLockError);
+
+    spy.mockRestore();
+  });
+
+  it("removes corrupt lock file with no pid when stale", async () => {
+    vi.useRealTimers();
+    const env = await makeEnv();
+    const { lockPath } = resolveLockPath(env);
+    await fs.writeFile(
+      lockPath,
+      JSON.stringify({
+        createdAt: new Date(Date.now() - 60_000).toISOString(),
+        configPath: "bogus",
+      }),
+      "utf8",
+    );
+
+    const lock = await acquireForTest(env, {
+      timeoutMs: 80,
+      pollIntervalMs: 5,
+      staleMs: 5,
+    });
+    expect(lock).not.toBeNull();
+    await lock?.release();
+  });
+
   it("wraps unexpected fs errors as GatewayLockError", async () => {
     const env = await makeEnv();
     const openSpy = vi.spyOn(fs, "open").mockRejectedValueOnce(
