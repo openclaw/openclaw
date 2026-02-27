@@ -11,6 +11,7 @@ import type { FeishuSendResult } from "./types.js";
 export type FeishuMessageInfo = {
   messageId: string;
   chatId: string;
+  chatType?: "p2p" | "group";
   senderId?: string;
   senderOpenId?: string;
   content: string;
@@ -45,6 +46,7 @@ export async function getMessageFeishu(params: {
         items?: Array<{
           message_id?: string;
           chat_id?: string;
+          chat_type?: string;
           msg_type?: string;
           body?: { content?: string };
           sender?: {
@@ -77,9 +79,13 @@ export async function getMessageFeishu(params: {
       // Keep raw content if parsing fails
     }
 
+    const chatType =
+      item.chat_type === "p2p" || item.chat_type === "group" ? item.chat_type : undefined;
+
     return {
       messageId: item.message_id ?? messageId,
       chatId: item.chat_id ?? "",
+      chatType,
       senderId: item.sender?.id,
       senderOpenId: item.sender?.id_type === "open_id" ? item.sender?.id : undefined,
       content,
