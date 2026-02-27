@@ -22,6 +22,7 @@ import {
   cleanupGlobalRenameDirs,
   detectGlobalInstallManagerForRoot,
   globalInstallArgs,
+  globalInstallFallbackArgs,
 } from "./update-global.js";
 
 export type UpdateStepResult = {
@@ -875,6 +876,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
     const channel = opts.channel ?? DEFAULT_PACKAGE_CHANNEL;
     const tag = normalizeTag(opts.tag ?? channelToNpmTag(channel));
     const spec = `${packageName}@${tag}`;
+    const steps: UpdateStepResult[] = [];
     const updateStep = await runStep({
       runCommand,
       name: "global update",
@@ -885,13 +887,33 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
       stepIndex: 0,
       totalSteps: 1,
     });
-    const steps = [updateStep];
+    steps.push(updateStep);
+
+    let finalStep = updateStep;
+    if (updateStep.exitCode !== 0) {
+      const fallbackArgv = globalInstallFallbackArgs(globalManager, spec);
+      if (fallbackArgv) {
+        const fallbackStep = await runStep({
+          runCommand,
+          name: "global update (omit optional)",
+          argv: fallbackArgv,
+          cwd: pkgRoot,
+          timeoutMs,
+          progress,
+          stepIndex: 0,
+          totalSteps: 1,
+        });
+        steps.push(fallbackStep);
+        finalStep = fallbackStep;
+      }
+    }
+
     const afterVersion = await readPackageVersion(pkgRoot);
     return {
-      status: updateStep.exitCode === 0 ? "ok" : "error",
+      status: finalStep.exitCode === 0 ? "ok" : "error",
       mode: globalManager,
       root: pkgRoot,
-      reason: updateStep.exitCode === 0 ? undefined : updateStep.name,
+      reason: finalStep.exitCode === 0 ? undefined : finalStep.name,
       before: { version: beforeVersion },
       after: { version: afterVersion },
       steps,

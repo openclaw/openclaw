@@ -417,6 +417,51 @@ describe("runGatewayUpdate", () => {
     expect(await pathExists(staleDir)).toBe(false);
   });
 
+  it("retries global npm update with --omit=optional when initial install fails", async () => {
+    const nodeModules = path.join(tempDir, "node_modules");
+    const pkgRoot = path.join(nodeModules, "openclaw");
+    await seedGlobalPackageRoot(pkgRoot);
+
+    let firstAttempt = true;
+    const runCommand = async (argv: string[]) => {
+      const key = argv.join(" ");
+      if (key === `git -C ${pkgRoot} rev-parse --show-toplevel`) {
+        return { stdout: "", stderr: "not a git repository", code: 128 };
+      }
+      if (key === "npm root -g") {
+        return { stdout: nodeModules, stderr: "", code: 0 };
+      }
+      if (key === "pnpm root -g") {
+        return { stdout: "", stderr: "", code: 1 };
+      }
+      if (key === "npm i -g openclaw@latest --no-fund --no-audit --loglevel=error") {
+        firstAttempt = false;
+        return { stdout: "", stderr: "node-gyp failed", code: 1 };
+      }
+      if (
+        key === "npm i -g openclaw@latest --omit=optional --no-fund --no-audit --loglevel=error"
+      ) {
+        await fs.writeFile(
+          path.join(pkgRoot, "package.json"),
+          JSON.stringify({ name: "openclaw", version: "2.0.0" }),
+          "utf-8",
+        );
+        return { stdout: "ok", stderr: "", code: 0 };
+      }
+      return { stdout: "", stderr: "", code: 0 };
+    };
+
+    const result = await runWithCommand(runCommand, { cwd: pkgRoot });
+
+    expect(firstAttempt).toBe(false);
+    expect(result.status).toBe("ok");
+    expect(result.mode).toBe("npm");
+    expect(result.steps.map((s) => s.name)).toEqual([
+      "global update",
+      "global update (omit optional)",
+    ]);
+  });
+
   it("updates global bun installs when detected", async () => {
     const bunInstall = path.join(tempDir, "bun-install");
     await withEnvAsync({ BUN_INSTALL: bunInstall }, async () => {
