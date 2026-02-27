@@ -1065,6 +1065,19 @@ describe("normalizeOutboundPayloadsForJson", () => {
     ]);
     expect(normalized).toEqual([{ text: "final answer", mediaUrl: null, mediaUrls: undefined }]);
   });
+
+  it("suppresses internal tool-trace envelopes", () => {
+    const normalized = normalizeOutboundPayloadsForJson([
+      {
+        text: [
+          "NO_REPLY",
+          "assistant to=functions.memory_search comment json",
+          '{"query":"incident","maxResults":3}',
+        ].join("\n"),
+      },
+    ]);
+    expect(normalized).toEqual([]);
+  });
 });
 
 describe("normalizeOutboundPayloads", () => {
@@ -1080,6 +1093,19 @@ describe("normalizeOutboundPayloads", () => {
       { text: "final answer" },
     ]);
     expect(normalized).toEqual([{ text: "final answer", mediaUrls: [] }]);
+  });
+
+  it("suppresses internal tool-trace envelopes", () => {
+    const normalized = normalizeOutboundPayloads([
+      {
+        text: [
+          "NO_REPLY",
+          "assistant to=functions.memory_search մեկնաբանություն json",
+          '{"query":"recent incident internal tool trace leaked into user chat happened today","maxResults":3}',
+        ].join("\n"),
+      },
+    ]);
+    expect(normalized).toEqual([]);
   });
 });
 

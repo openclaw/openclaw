@@ -18,6 +18,19 @@ export type OutboundPayloadJson = {
   channelData?: Record<string, unknown>;
 };
 
+const INTERNAL_TRACE_PATTERNS: ReadonlyArray<RegExp> = [
+  /\bassistant\s+to=functions\.[a-z0-9_]+\b/i,
+  /\bfunctions\.[a-z0-9_]+\b/i,
+  /\b(memory_search|tool_call|function_call)\b/i,
+];
+
+function isInternalTraceLeakText(text: string | undefined): boolean {
+  if (!text) {
+    return false;
+  }
+  return INTERNAL_TRACE_PATTERNS.some((pattern) => pattern.test(text));
+}
+
 function mergeMediaUrls(...lists: Array<ReadonlyArray<string | undefined> | undefined>): string[] {
   const seen = new Set<string>();
   const merged: string[] = [];
@@ -66,6 +79,9 @@ export function normalizeReplyPayloadsForDelivery(
       replyToCurrent: payload.replyToCurrent || parsed.replyToCurrent,
       audioAsVoice: Boolean(payload.audioAsVoice || parsed.audioAsVoice),
     };
+    if (isInternalTraceLeakText(next.text)) {
+      return [];
+    }
     if (parsed.isSilent && mergedMedia.length === 0) {
       return [];
     }
