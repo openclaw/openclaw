@@ -17,6 +17,7 @@ import type { loadConfig } from "../../../config/config.js";
 import { resolveMarkdownTableMode } from "../../../config/markdown-tables.js";
 import { recordSessionMetaFromInbound } from "../../../config/sessions.js";
 import { logVerbose, shouldLogVerbose } from "../../../globals.js";
+import { isOutboundSuppressed } from "../../../infra/outbound/suppress-outbound.js";
 import type { getChildLogger } from "../../../logging.js";
 import { getAgentScopedMediaLocalRoots } from "../../../media/local-roots.js";
 import type { resolveAgentRoute } from "../../../routing/resolve-route.js";
@@ -396,9 +397,16 @@ export async function processMessage(params: {
       },
       deliver: async (payload: ReplyPayload, info) => {
         if (info.kind !== "final") {
-          // Only deliver final replies to external messaging channels (WhatsApp).
-          // Block (reasoning/thinking) and tool updates are meant for the internal
-          // web UI only; sending them here leaks chain-of-thought to end users.
+          return;
+        }
+        if (
+          isOutboundSuppressed({
+            cfg: params.cfg,
+            channel: "whatsapp",
+            accountId: params.route.accountId,
+          })
+        ) {
+          whatsappOutboundLog.debug(`[suppressOutbound] Blocked auto-reply to ${params.msg.from}`);
           return;
         }
         await deliverWebReply({

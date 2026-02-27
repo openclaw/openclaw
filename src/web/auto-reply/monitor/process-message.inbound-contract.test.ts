@@ -345,6 +345,7 @@ describe("web processMessage inbound contract", () => {
     expect(updateLastRouteMock).not.toHaveBeenCalled();
   });
 
+<<<<<<< HEAD
   it("does not update main last route for non-owner sender when main DM scope is pinned", async () => {
     const updateLastRouteMock = vi.mocked(updateLastRouteInBackground);
     updateLastRouteMock.mockClear();
@@ -415,5 +416,38 @@ describe("web processMessage inbound contract", () => {
     await processMessage(args);
 
     expect(updateLastRouteMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("blocks auto-reply delivery when suppressOutbound is active", async () => {
+    const rememberSentText = vi.fn();
+    await processMessage(
+      makeProcessMessageArgs({
+        routeSessionKey: "agent:main:whatsapp:direct:+1555",
+        groupHistoryKey: "+1555",
+        rememberSentText,
+        cfg: {
+          channels: { whatsapp: { suppressOutbound: true } },
+          messages: {},
+          session: { store: sessionStorePath },
+        } as unknown as ReturnType<typeof import("../../../config/config.js").loadConfig>,
+        msg: {
+          id: "msg-suppress",
+          from: "+1555",
+          to: "+2000",
+          chatType: "direct",
+          body: "hi",
+        },
+      }),
+    );
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const deliver = (capturedDispatchParams as any)?.dispatcherOptions?.deliver as
+      | ((payload: { text?: string }, info: { kind: "final" }) => Promise<void>)
+      | undefined;
+    expect(deliver).toBeTypeOf("function");
+
+    await deliver?.({ text: "reply" }, { kind: "final" });
+    expect(deliverWebReplyMock).not.toHaveBeenCalled();
+    expect(rememberSentText).not.toHaveBeenCalled();
   });
 });
