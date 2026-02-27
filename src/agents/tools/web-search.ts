@@ -977,42 +977,40 @@ async function runSearxngSearch(params: {
     endpoint.searchParams.set("engines", params.engines.join(","));
   }
 
-  const { response: res, release } = await fetchWithSsrFGuard({
-    url: endpoint.toString(),
-    timeoutMs: params.timeoutSeconds * 1000,
-    policy: TRUSTED_NETWORK_SSRF_POLICY,
-    init: {
-      method: "GET",
-      headers: {
-        Accept: "application/json",
-        "User-Agent": "OpenClaw/1.0 (web_search; +https://openclaw.ai)",
+  return withWebToolsNetworkGuard(
+    {
+      url: endpoint.toString(),
+      timeoutSeconds: params.timeoutSeconds,
+      init: {
+        method: "GET",
+        headers: {
+          Accept: "application/json",
+          "User-Agent": "OpenClaw/1.0 (web_search; +https://openclaw.ai)",
+        },
       },
     },
-  });
+    async ({ response: res }) => {
+      if (!res.ok) {
+        const detailResult = await readResponseText(res, { maxBytes: 16_000 });
+        throw new Error(`SearXNG error (${res.status}): ${detailResult.text || res.statusText}`);
+      }
 
-  try {
-    if (!res.ok) {
-      const detailResult = await readResponseText(res, { maxBytes: 16_000 });
-      throw new Error(`SearXNG error (${res.status}): ${detailResult.text || res.statusText}`);
-    }
+      const data = (await res.json()) as SearxngResponse;
+      const raw = Array.isArray(data.results) ? data.results : [];
+      const trimmed = raw.slice(0, params.count);
 
-    const data = (await res.json()) as SearxngResponse;
-    const raw = Array.isArray(data.results) ? data.results : [];
-    const trimmed = raw.slice(0, params.count);
-
-    return {
-      results: trimmed.map((entry) => ({
-        title: entry.title ?? "",
-        url: entry.url ?? "",
-        description: entry.content ?? "",
-        engine: entry.engine,
-        category: entry.category,
-        published: entry.publishedDate,
-      })),
-    };
-  } finally {
-    await release();
-  }
+      return {
+        results: trimmed.map((entry) => ({
+          title: entry.title ?? "",
+          url: entry.url ?? "",
+          description: entry.content ?? "",
+          engine: entry.engine,
+          category: entry.category,
+          published: entry.publishedDate,
+        })),
+      };
+    },
+  );
 }
 
 function resolveGeminiConfig(search?: WebSearchConfig): GeminiConfig {
