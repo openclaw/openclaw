@@ -1,9 +1,10 @@
-import { completeSimple, type AssistantMessage } from "@mariozechner/pi-ai";
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { type AssistantMessage, completeSimple } from "@mariozechner/pi-ai";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ensureCustomApiRegistered } from "../agents/custom-api-registry.js";
 import { getApiKeyForModel } from "../agents/model-auth.js";
 import { resolveModel } from "../agents/pi-embedded-runner/model.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { runCommandWithTimeout } from "../process/exec.js";
 import { withEnv } from "../test-utils/env.js";
 import * as tts from "./tts.js";
 
@@ -19,6 +20,11 @@ vi.mock("@mariozechner/pi-ai/oauth", () => ({
   getOAuthProviders: () => [],
   getOAuthApiKey: vi.fn(async () => null),
 }));
+
+vi.mock("../process/exec.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../process/exec.js")>();
+  return { ...original, runCommandWithTimeout: vi.fn() };
+});
 
 vi.mock("../agents/pi-embedded-runner/model.js", () => ({
   resolveModel: vi.fn((provider: string, modelId: string) => ({
@@ -67,7 +73,9 @@ const {
   resolveEdgeOutputFormat,
 } = _test;
 
-const mockAssistantMessage = (content: AssistantMessage["content"]): AssistantMessage => ({
+const mockAssistantMessage = (
+  content: AssistantMessage["content"],
+): AssistantMessage => ({
   role: "assistant",
   content,
   api: "openai-completions",
@@ -119,7 +127,9 @@ describe("tts", () => {
         { value: "voice?param=value", expected: false },
       ] as const;
       for (const testCase of cases) {
-        expect(isValidVoiceId(testCase.value), testCase.value).toBe(testCase.expected);
+        expect(isValidVoiceId(testCase.value), testCase.value).toBe(
+          testCase.expected,
+        );
       }
     });
   });
@@ -129,7 +139,9 @@ describe("tts", () => {
       for (const voice of OPENAI_TTS_VOICES) {
         expect(isValidOpenAIVoice(voice)).toBe(true);
       }
-      for (const newerVoice of ["ballad", "cedar", "juniper", "marin", "verse"]) {
+      for (
+        const newerVoice of ["ballad", "cedar", "juniper", "marin", "verse"]
+      ) {
         expect(isValidOpenAIVoice(newerVoice), newerVoice).toBe(true);
       }
     });
@@ -143,7 +155,9 @@ describe("tts", () => {
     });
 
     it("treats the default endpoint with trailing slash as the default endpoint", () => {
-      expect(isValidOpenAIVoice("kokoro-custom-voice", "https://api.openai.com/v1/")).toBe(false);
+      expect(
+        isValidOpenAIVoice("kokoro-custom-voice", "https://api.openai.com/v1/"),
+      ).toBe(false);
     });
   });
 
@@ -164,26 +178,39 @@ describe("tts", () => {
         { model: "gpt-4", expected: false },
       ] as const;
       for (const testCase of cases) {
-        expect(isValidOpenAIModel(testCase.model), testCase.model).toBe(testCase.expected);
+        expect(isValidOpenAIModel(testCase.model), testCase.model).toBe(
+          testCase.expected,
+        );
       }
     });
 
     it("treats the default endpoint with trailing slash as the default endpoint", () => {
-      expect(isValidOpenAIModel("kokoro-custom-model", "https://api.openai.com/v1/")).toBe(false);
+      expect(
+        isValidOpenAIModel("kokoro-custom-model", "https://api.openai.com/v1/"),
+      ).toBe(false);
     });
   });
 
   describe("resolveOpenAITtsInstructions", () => {
     it("keeps instructions only for gpt-4o-mini-tts variants", () => {
-      expect(resolveOpenAITtsInstructions("gpt-4o-mini-tts", " Speak warmly ")).toBe(
+      expect(resolveOpenAITtsInstructions("gpt-4o-mini-tts", " Speak warmly "))
+        .toBe(
+          "Speak warmly",
+        );
+      expect(
+        resolveOpenAITtsInstructions(
+          "gpt-4o-mini-tts-2025-12-15",
+          "Speak warmly",
+        ),
+      ).toBe(
         "Speak warmly",
       );
-      expect(resolveOpenAITtsInstructions("gpt-4o-mini-tts-2025-12-15", "Speak warmly")).toBe(
-        "Speak warmly",
-      );
-      expect(resolveOpenAITtsInstructions("tts-1", "Speak warmly")).toBeUndefined();
-      expect(resolveOpenAITtsInstructions("tts-1-hd", "Speak warmly")).toBeUndefined();
-      expect(resolveOpenAITtsInstructions("gpt-4o-mini-tts", "   ")).toBeUndefined();
+      expect(resolveOpenAITtsInstructions("tts-1", "Speak warmly"))
+        .toBeUndefined();
+      expect(resolveOpenAITtsInstructions("tts-1-hd", "Speak warmly"))
+        .toBeUndefined();
+      expect(resolveOpenAITtsInstructions("gpt-4o-mini-tts", "   "))
+        .toBeUndefined();
     });
   });
 
@@ -230,9 +257,15 @@ describe("tts", () => {
       for (const testCase of cases) {
         const output = resolveOutputFormat(testCase.channel);
         expect(output.openai, testCase.channel).toBe(testCase.expected.openai);
-        expect(output.elevenlabs, testCase.channel).toBe(testCase.expected.elevenlabs);
-        expect(output.extension, testCase.channel).toBe(testCase.expected.extension);
-        expect(output.voiceCompatible, testCase.channel).toBe(testCase.expected.voiceCompatible);
+        expect(output.elevenlabs, testCase.channel).toBe(
+          testCase.expected.elevenlabs,
+        );
+        expect(output.extension, testCase.channel).toBe(
+          testCase.expected.extension,
+        );
+        expect(output.voiceCompatible, testCase.channel).toBe(
+          testCase.expected.voiceCompatible,
+        );
       }
     });
   });
@@ -265,14 +298,19 @@ describe("tts", () => {
       ] as const;
       for (const testCase of cases) {
         const config = resolveTtsConfig(testCase.cfg);
-        expect(resolveEdgeOutputFormat(config), testCase.name).toBe(testCase.expected);
+        expect(resolveEdgeOutputFormat(config), testCase.name).toBe(
+          testCase.expected,
+        );
       }
     });
   });
 
   describe("parseTtsDirectives", () => {
     it("extracts overrides and strips directives when enabled", () => {
-      const policy = resolveModelOverridePolicy({ enabled: true, allowProvider: true });
+      const policy = resolveModelOverridePolicy({
+        enabled: true,
+        allowProvider: true,
+      });
       const input =
         "Hello [[tts:provider=elevenlabs voiceId=pMsXgVXv3BLzUgSXRplE stability=0.4 speed=1.1]] world\n\n" +
         "[[tts:text]](laughs) Read the song once more.[[/tts:text]]";
@@ -287,7 +325,10 @@ describe("tts", () => {
     });
 
     it("accepts edge as provider override", () => {
-      const policy = resolveModelOverridePolicy({ enabled: true, allowProvider: true });
+      const policy = resolveModelOverridePolicy({
+        enabled: true,
+        allowProvider: true,
+      });
       const input = "Hello [[tts:provider=edge]] world";
       const result = parseTtsDirectives(input, policy);
 
@@ -332,7 +373,9 @@ describe("tts", () => {
       const result = parseTtsDirectives(input, policy, defaultBaseUrl);
 
       expect(result.overrides.openai?.voice).toBeUndefined();
-      expect(result.warnings).toContain('invalid OpenAI voice "kokoro-chinese"');
+      expect(result.warnings).toContain(
+        'invalid OpenAI voice "kokoro-chinese"',
+      );
     });
   });
 
@@ -383,7 +426,9 @@ describe("tts", () => {
 
     it("uses summaryModel override when configured", async () => {
       const cfg: OpenClawConfig = {
-        agents: { defaults: { model: { primary: "anthropic/claude-opus-4-5" } } },
+        agents: {
+          defaults: { model: { primary: "anthropic/claude-opus-4-5" } },
+        },
         messages: { tts: { summaryModel: "openai/gpt-4.1-mini" } },
       };
       const config = resolveTtsConfig(cfg);
@@ -395,7 +440,12 @@ describe("tts", () => {
         timeoutMs: 30_000,
       });
 
-      expect(resolveModel).toHaveBeenCalledWith("openai", "gpt-4.1-mini", undefined, cfg);
+      expect(resolveModel).toHaveBeenCalledWith(
+        "openai",
+        "gpt-4.1-mini",
+        undefined,
+        cfg,
+      );
     });
 
     it("registers the Ollama api before direct summarization", async () => {
@@ -424,7 +474,10 @@ describe("tts", () => {
         timeoutMs: 30_000,
       });
 
-      expect(ensureCustomApiRegistered).toHaveBeenCalledWith("ollama", expect.any(Function));
+      expect(ensureCustomApiRegistered).toHaveBeenCalledWith(
+        "ollama",
+        expect.any(Function),
+      );
     });
 
     it("validates targetLength bounds", async () => {
@@ -447,7 +500,8 @@ describe("tts", () => {
             `Invalid targetLength: ${testCase.targetLength}`,
           );
         } else {
-          await expect(call, String(testCase.targetLength)).resolves.toBeDefined();
+          await expect(call, String(testCase.targetLength)).resolves
+            .toBeDefined();
         }
       }
     });
@@ -660,7 +714,11 @@ describe("tts", () => {
         tts: {
           auto: "inbound",
           provider: "openai",
-          openai: { apiKey: "test-key", model: "gpt-4o-mini-tts", voice: "alloy" },
+          openai: {
+            apiKey: "test-key",
+            model: "gpt-4o-mini-tts",
+            voice: "alloy",
+          },
         },
       },
     };
@@ -725,7 +783,9 @@ describe("tts", () => {
             kind: "final",
             inboundAudio: testCase.inboundAudio,
           });
-          expect(fetchMock, testCase.name).toHaveBeenCalledTimes(testCase.expectedFetchCalls);
+          expect(fetchMock, testCase.name).toHaveBeenCalledTimes(
+            testCase.expectedFetchCalls,
+          );
           if (testCase.expectSamePayload) {
             expect(result, testCase.name).toBe(testCase.payload);
           } else {
@@ -759,6 +819,355 @@ describe("tts", () => {
 
         expect(result.mediaUrl).toBeDefined();
         expect(fetchMock).toHaveBeenCalledTimes(1);
+      });
+    });
+  });
+
+  describe("local provider", () => {
+    const baseCfg = (): OpenClawConfig => ({
+      agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
+      messages: {
+        tts: {
+          auto: "always",
+          provider: "local",
+          // Disable all cloud providers so they don't pollute errors.
+          edge: { enabled: false },
+          local: {
+            command: "/usr/local/bin/fake-tts",
+            args: ["--text", "{{Text}}", "--out", "{{Output}}"],
+          },
+        },
+      },
+    });
+
+    const okResult = () => ({
+      stdout: "",
+      stderr: "",
+      code: 0 as number | null,
+      signal: null as NodeJS.Signals | null,
+      killed: false,
+      termination: "exit" as const,
+    });
+
+    beforeEach(() => {
+      vi.mocked(runCommandWithTimeout).mockResolvedValue(okResult());
+    });
+
+    // ── config resolution ───────────────────────────────────────────────────
+
+    describe("resolveTtsConfig", () => {
+      it("maps local.command and local.args from raw config", () => {
+        const config = tts.resolveTtsConfig(baseCfg());
+        expect(config.local?.command).toBe("/usr/local/bin/fake-tts");
+        expect(config.local?.args).toEqual([
+          "--text",
+          "{{Text}}",
+          "--out",
+          "{{Output}}",
+        ]);
+      });
+
+      it("defaults args to [] when omitted", () => {
+        const cfg: OpenClawConfig = {
+          ...baseCfg(),
+          messages: {
+            tts: {
+              local: { command: "/bin/tts" },
+            },
+          },
+        };
+        const config = tts.resolveTtsConfig(cfg);
+        expect(config.local?.args).toEqual([]);
+      });
+
+      it("sets config.local to undefined when command is missing or absent", () => {
+        const cases: OpenClawConfig[] = [
+          {
+            agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
+            messages: { tts: {} },
+          },
+          {
+            agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
+            // @ts-expect-error – intentionally testing runtime behaviour
+            messages: { tts: { local: {} } },
+          },
+          {
+            agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
+            // @ts-expect-error – intentionally testing runtime behaviour
+            messages: { tts: { local: { command: "" } } },
+          },
+        ];
+        for (const cfg of cases) {
+          expect(tts.resolveTtsConfig(cfg).local).toBeUndefined();
+        }
+      });
+    });
+
+    // ── isTtsProviderConfigured ──────────────────────────────────────────────
+
+    describe("isTtsProviderConfigured", () => {
+      it("returns true when local.command is set", () => {
+        const config = tts.resolveTtsConfig(baseCfg());
+        expect(tts.isTtsProviderConfigured(config, "local")).toBe(true);
+      });
+
+      it("returns false when local config is absent", () => {
+        const config = tts.resolveTtsConfig({
+          agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
+          messages: { tts: {} },
+        });
+        expect(tts.isTtsProviderConfigured(config, "local")).toBe(false);
+      });
+    });
+
+    // ── textToSpeech ────────────────────────────────────────────────────────
+
+    describe("textToSpeech", () => {
+      it("returns success with an mp3 audioPath for non-Telegram channels", async () => {
+        const result = await tts.textToSpeech({
+          text: "Hello world",
+          cfg: baseCfg(),
+          prefsPath: `/tmp/tts-local-test-${Date.now()}.json`,
+          channel: "whatsapp",
+        });
+
+        expect(result.success).toBe(true);
+        expect(result.provider).toBe("local");
+        expect(result.audioPath).toMatch(/\.mp3$/);
+        expect(result.latencyMs).toBeGreaterThanOrEqual(0);
+        expect(runCommandWithTimeout).toHaveBeenCalledTimes(1);
+      });
+
+      it("uses .ogg extension and opus format placeholder for Telegram", async () => {
+        const cfg: OpenClawConfig = {
+          ...baseCfg(),
+          messages: {
+            tts: {
+              ...baseCfg().messages!.tts,
+              local: {
+                command: "/bin/tts",
+                args: ["--format", "{{Format}}", "--out", "{{Output}}"],
+              },
+            },
+          },
+        };
+
+        vi.mocked(runCommandWithTimeout).mockImplementation(async (argv) => {
+          // Capture what was passed so we can assert on it.
+          (vi.mocked(runCommandWithTimeout) as ReturnType<typeof vi.fn> & {
+            lastArgv?: string[];
+          }).lastArgv = argv;
+          return okResult();
+        });
+
+        const result = await tts.textToSpeech({
+          text: "Hello Telegram",
+          cfg,
+          prefsPath: `/tmp/tts-local-telegram-${Date.now()}.json`,
+          channel: "telegram",
+        });
+
+        expect(result.success).toBe(true);
+        expect(result.audioPath).toMatch(/\.ogg$/);
+        const argv =
+          (vi.mocked(runCommandWithTimeout) as ReturnType<typeof vi.fn> & {
+            lastArgv?: string[];
+          }).lastArgv ?? [];
+        expect(argv).toContain("opus");
+      });
+
+      it("substitutes {{Text}}, {{Output}}, {{Channel}}, {{Format}} placeholders in args", async () => {
+        const cfg: OpenClawConfig = {
+          ...baseCfg(),
+          messages: {
+            tts: {
+              ...baseCfg().messages!.tts,
+              local: {
+                command: "/bin/tts",
+                args: ["{{Text}}", "{{Output}}", "{{Channel}}", "{{Format}}"],
+              },
+            },
+          },
+        };
+
+        let capturedArgv: string[] = [];
+        vi.mocked(runCommandWithTimeout).mockImplementation(async (argv) => {
+          capturedArgv = argv;
+          return okResult();
+        });
+
+        const prefsPath = `/tmp/tts-local-placeholders-${Date.now()}.json`;
+        await tts.textToSpeech({
+          text: "synthesize this",
+          cfg,
+          prefsPath,
+          channel: "whatsapp",
+        });
+
+        expect(capturedArgv[0]).toBe("/bin/tts");
+        expect(capturedArgv[1]).toBe("synthesize this"); // {{Text}}
+        expect(capturedArgv[2]).toMatch(/\.mp3$/); // {{Output}}
+        expect(capturedArgv[3]).toBe("whatsapp"); // {{Channel}}
+        expect(capturedArgv[4]).toBe("mp3"); // {{Format}}
+      });
+
+      it("passes no extra args when args array is empty", async () => {
+        const cfg: OpenClawConfig = {
+          ...baseCfg(),
+          messages: {
+            tts: {
+              ...baseCfg().messages!.tts,
+              local: { command: "/bin/tts" },
+            },
+          },
+        };
+
+        let capturedArgv: string[] = [];
+        vi.mocked(runCommandWithTimeout).mockImplementation(async (argv) => {
+          capturedArgv = argv;
+          return okResult();
+        });
+
+        await tts.textToSpeech({
+          text: "hello",
+          cfg,
+          prefsPath: `/tmp/tts-local-noargs-${Date.now()}.json`,
+        });
+
+        expect(capturedArgv).toEqual(["/bin/tts"]);
+      });
+
+      it("passes timeoutMs from config through to runCommandWithTimeout", async () => {
+        const cfg: OpenClawConfig = {
+          ...baseCfg(),
+          messages: {
+            tts: {
+              ...baseCfg().messages!.tts,
+              timeoutMs: 12345,
+              local: { command: "/bin/tts" },
+            },
+          },
+        };
+
+        let capturedOpts: unknown;
+        vi.mocked(runCommandWithTimeout).mockImplementation(
+          async (_argv, opts) => {
+            capturedOpts = opts;
+            return okResult();
+          },
+        );
+
+        await tts.textToSpeech({
+          text: "hello",
+          cfg,
+          prefsPath: `/tmp/tts-local-timeout-${Date.now()}.json`,
+        });
+
+        expect((capturedOpts as { timeoutMs: number }).timeoutMs).toBe(12345);
+      });
+
+      it("falls through with error when no command is configured", async () => {
+        // No local.command → config.local is undefined → 'continue' to next provider.
+        // All cloud providers also disabled/unconfigured → overall failure.
+        const cfg: OpenClawConfig = {
+          agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
+          messages: {
+            tts: {
+              auto: "always",
+              provider: "local",
+              edge: { enabled: false },
+              // local intentionally omitted
+            },
+          },
+        };
+
+        const result = await tts.textToSpeech({
+          text: "hello",
+          cfg,
+          prefsPath: `/tmp/tts-local-noconfig-${Date.now()}.json`,
+        });
+
+        expect(result.success).toBe(false);
+        expect(result.error).toContain("local: no command configured");
+        // runCommandWithTimeout should never have been called.
+        expect(runCommandWithTimeout).not.toHaveBeenCalled();
+      });
+
+      it("throws and falls back when exit code is non-zero", async () => {
+        vi.mocked(runCommandWithTimeout).mockResolvedValue({
+          ...okResult(),
+          code: 1,
+          stderr: "voice synthesis failed",
+        });
+
+        const result = await tts.textToSpeech({
+          text: "hello",
+          cfg: baseCfg(),
+          prefsPath: `/tmp/tts-local-fail-${Date.now()}.json`,
+        });
+
+        expect(result.success).toBe(false);
+        expect(result.error).toContain("local: voice synthesis failed");
+      });
+
+      it("uses fallback message when exit is non-zero and stderr is empty", async () => {
+        vi.mocked(runCommandWithTimeout).mockResolvedValue({
+          ...okResult(),
+          code: 127,
+          stderr: "   ",
+        });
+
+        const result = await tts.textToSpeech({
+          text: "hello",
+          cfg: baseCfg(),
+          prefsPath: `/tmp/tts-local-empty-stderr-${Date.now()}.json`,
+        });
+
+        expect(result.success).toBe(false);
+        expect(result.error).toContain("local TTS command failed");
+      });
+
+      it("falls back to remaining providers when local throws", async () => {
+        vi.mocked(runCommandWithTimeout).mockRejectedValue(
+          new Error("ENOENT: command not found"),
+        );
+
+        // Local fails, edge disabled, no cloud keys → all-failure result.
+        const result = await tts.textToSpeech({
+          text: "hello",
+          cfg: baseCfg(),
+          prefsPath: `/tmp/tts-local-throw-${Date.now()}.json`,
+        });
+
+        expect(result.success).toBe(false);
+        // Local error is captured; other providers also tried.
+        expect(result.error).toContain("local: ENOENT: command not found");
+      });
+
+      it("channel is 'unknown' when no channel is provided", async () => {
+        let capturedArgv: string[] = [];
+        const cfg: OpenClawConfig = {
+          ...baseCfg(),
+          messages: {
+            tts: {
+              ...baseCfg().messages!.tts,
+              local: { command: "/bin/tts", args: ["{{Channel}}"] },
+            },
+          },
+        };
+        vi.mocked(runCommandWithTimeout).mockImplementation(async (argv) => {
+          capturedArgv = argv;
+          return okResult();
+        });
+
+        await tts.textToSpeech({
+          text: "hello",
+          cfg,
+          prefsPath: `/tmp/tts-local-nochannel-${Date.now()}.json`,
+          // channel intentionally omitted
+        });
+
+        expect(capturedArgv[1]).toBe("unknown");
       });
     });
   });

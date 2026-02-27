@@ -1,6 +1,6 @@
 import type { SecretInput } from "./types.secrets.js";
 
-export type TtsProvider = "elevenlabs" | "openai" | "edge";
+export type TtsProvider = "elevenlabs" | "openai" | "edge" | "local";
 
 export type TtsMode = "final" | "all";
 
@@ -79,6 +79,13 @@ export type TtsConfig = {
     saveSubtitles?: boolean;
     proxy?: string;
     timeoutMs?: number;
+  };
+  /** Local command-based TTS provider. */
+  local?: {
+    /** Executable to run for TTS synthesis. */
+    command: string;
+    /** Arguments passed to the command. Supports {{Text}}, {{Output}}, {{Channel}}, {{Format}} placeholders. */
+    args?: string[];
   };
   /** Optional path for local TTS user preferences JSON. */
   prefsPath?: string;
