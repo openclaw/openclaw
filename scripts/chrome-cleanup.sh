@@ -261,8 +261,8 @@ do_scan() {
     # Phase 2: If more than MAX_CHROME_INSTANCES remain, kill oldest non-CDP
     local remaining="${#surviving[@]}"
     if [[ "$remaining" -gt "$MAX_CHROME_INSTANCES" ]]; then
-        # Sort by elapsed time (oldest first), prefer non-CDP
-        IFS=$'\n' read -r -d '' -a sorted < <(printf '%s\n' "${surviving[@]}" | sort -t: -k2 -n)
+        # Sort by elapsed time (newest first), keep newest, kill oldest excess
+        IFS=$'\n' read -r -d '' -a sorted < <(printf '%s\n' "${surviving[@]}" | sort -t: -k2 -nr)
         
         local to_kill=$(( remaining - MAX_CHROME_INSTANCES ))
         for entry in "${sorted[@]:$MAX_CHROME_INSTANCES}"; do
