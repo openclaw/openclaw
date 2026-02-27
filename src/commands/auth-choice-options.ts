@@ -138,6 +138,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     choices: ["opencode-zen"],
   },
   {
+    value: "opencode-go",
+    label: "OpenCode Go",
+    hint: "API key",
+    choices: ["opencode-go"],
+  },
+  {
     value: "xiaomi",
     label: "Xiaomi",
     hint: "API key",

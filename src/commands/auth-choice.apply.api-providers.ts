@@ -37,6 +37,8 @@ import {
   applyMoonshotProviderConfigCn,
   applyOpencodeZenConfig,
   applyOpencodeZenProviderConfig,
+  applyOpencodeGoConfig,
+  applyOpencodeGoProviderConfig,
   applySyntheticConfig,
   applySyntheticProviderConfig,
   applyTogetherConfig,
@@ -70,6 +72,7 @@ import {
   setMistralApiKey,
   setMoonshotApiKey,
   setOpencodeZenApiKey,
+  setOpencodeGoApiKey,
   setSyntheticApiKey,
   setTogetherApiKey,
   setVeniceApiKey,
@@ -79,6 +82,7 @@ import {
   ZAI_DEFAULT_MODEL_REF,
 } from "./onboard-auth.js";
 import type { AuthChoice, SecretInputMode } from "./onboard-types.js";
+import { OPENCODE_GO_DEFAULT_MODEL } from "./opencode-go-model-default.js";
 import { OPENCODE_ZEN_DEFAULT_MODEL } from "./opencode-zen-model-default.js";
 import { detectZaiEndpoint } from "./zai-endpoint-detect.js";
 
@@ -99,6 +103,7 @@ const API_KEY_TOKEN_PROVIDER_AUTH_CHOICE: Record<string, AuthChoice> = {
   huggingface: "huggingface-api-key",
   mistral: "mistral-api-key",
   opencode: "opencode-zen",
+  "opencode-go": "opencode-go",
   kilocode: "kilocode-api-key",
   qianfan: "qianfan-api-key",
 };
@@ -249,6 +254,24 @@ const SIMPLE_API_KEY_PROVIDER_FLOWS: Partial<Record<AuthChoice, SimpleApiKeyProv
       "OpenCode Zen bills per request. Check your OpenCode dashboard for details.",
     ].join("\n"),
     noteTitle: "OpenCode Zen",
+  },
+  "opencode-go": {
+    provider: "opencode-go",
+    profileId: "opencode-go:default",
+    expectedProviders: ["opencode-go"],
+    envLabel: "OPENCODE_GO_API_KEY",
+    promptMessage: "Enter OpenCode Go API key",
+    setCredential: setOpencodeGoApiKey,
+    defaultModel: OPENCODE_GO_DEFAULT_MODEL,
+    applyDefaultConfig: applyOpencodeGoConfig,
+    applyProviderConfig: applyOpencodeGoProviderConfig,
+    noteDefault: OPENCODE_GO_DEFAULT_MODEL,
+    noteMessage: [
+      "OpenCode Go provides access to GLM-5, MiniMax 2.5, and Kimi K2.5 models.",
+      "Get your API key at: https://opencode.ai/auth",
+      "OpenCode Go bills per request. Check your OpenCode dashboard for details.",
+    ].join("\n"),
+    noteTitle: "OpenCode Go",
   },
   "together-api-key": {
     provider: "together",

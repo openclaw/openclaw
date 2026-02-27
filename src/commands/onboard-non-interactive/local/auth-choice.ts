@@ -22,6 +22,7 @@ import {
   applyMoonshotConfig,
   applyMoonshotConfigCn,
   applyOpencodeZenConfig,
+  applyOpencodeGoConfig,
   applyOpenrouterConfig,
   applySyntheticConfig,
   applyVeniceConfig,
@@ -46,6 +47,7 @@ import {
   setMoonshotApiKey,
   setOpenaiApiKey,
   setOpencodeZenApiKey,
+  setOpencodeGoApiKey,
   setOpenrouterApiKey,
   setSyntheticApiKey,
   setVolcengineApiKey,
@@ -866,6 +868,33 @@ export async function applyNonInteractiveAuthChoice(params: {
       mode: "api_key",
     });
     return applyOpencodeZenConfig(nextConfig);
+  }
+
+  if (authChoice === "opencode-go") {
+    const resolved = await resolveApiKey({
+      provider: "opencode-go",
+      cfg: baseConfig,
+      flagValue: opts.opencodeGoApiKey,
+      flagName: "--opencode-go-api-key",
+      envVar: "OPENCODE_GO_API_KEY (or OPENCODE_API_KEY)",
+      runtime,
+    });
+    if (!resolved) {
+      return null;
+    }
+    if (
+      !(await maybeSetResolvedApiKey(resolved, (value) =>
+        setOpencodeGoApiKey(value, undefined, apiKeyStorageOptions),
+      ))
+    ) {
+      return null;
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "opencode-go:default",
+      provider: "opencode-go",
+      mode: "api_key",
+    });
+    return applyOpencodeGoConfig(nextConfig);
   }
 
   if (authChoice === "together-api-key") {

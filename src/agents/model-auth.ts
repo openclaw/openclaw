@@ -275,6 +275,10 @@ export function resolveEnvApiKey(provider: string): EnvApiKeyResult | null {
     return pick("OPENCODE_API_KEY") ?? pick("OPENCODE_ZEN_API_KEY");
   }
 
+  if (normalized === "opencode-go") {
+    return pick("OPENCODE_GO_API_KEY") ?? pick("OPENCODE_API_KEY");
+  }
+
   if (normalized === "qwen-portal") {
     return pick("QWEN_OAUTH_TOKEN") ?? pick("QWEN_PORTAL_API_KEY");
   }
