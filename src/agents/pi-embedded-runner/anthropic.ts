@@ -1,4 +1,4 @@
-import type { AgentMessage, StreamFn } from "@mariozechner/pi-agent-core";
+import type { StreamFn } from "@mariozechner/pi-agent-core";
 
 const THINKING_BLOCK_ERROR_PATTERN = /thinking or redacted_thinking blocks?.* cannot be modified/i;
 
@@ -14,67 +14,99 @@ export function wrapAnthropicStreamWithRecovery(
   const wrapped: StreamFn = (model, context, options) => {
     const ctx = context as unknown as Record<string, unknown> | undefined;
 
-    // Get the stream from inner function
-    const streamOrPromise = innerStreamFn(model, context, options);
+    const attemptStream = () => innerStreamFn(model, context, options);
+    const retryWithCleanedContext = () => {
+      const cleaned = stripAllThinkingBlocks(ctx);
+      const newContext = { ...ctx, messages: cleaned } as unknown as typeof context;
+      return innerStreamFn(model, newContext, options);
+    };
 
-    // If it's a promise, wrap it to catch errors
+    const streamOrPromise = attemptStream();
+
+    // Handle Promise-based returns (error at request time)
     if (streamOrPromise instanceof Promise) {
       return streamOrPromise.catch((err: unknown) => {
-        return handleStreamError(err, innerStreamFn, model, ctx, context, options, sessionMeta);
-      }) as ReturnType<StreamFn>;
+        if (shouldRecover(err, sessionMeta)) {
+          sessionMeta.recovered = true;
+          return retryWithCleanedContext();
+        }
+        throw err;
+      }) as unknown as ReturnType<StreamFn>;
     }
 
-    // For sync streams, we can't easily intercept errors without consuming the stream
-    // The error will propagate through the normal path
-    return streamOrPromise;
+    // For async iterables, wrap to catch errors during iteration
+    return wrapAsyncIterableWithRecovery(
+      streamOrPromise,
+      sessionMeta,
+      retryWithCleanedContext,
+    ) as unknown as ReturnType<StreamFn>;
   };
   return wrapped;
 }
 
-function handleStreamError(
-  err: unknown,
-  innerStreamFn: StreamFn,
-  model: Parameters<StreamFn>[0],
-  ctx: Record<string, unknown> | undefined,
-  context: Parameters<StreamFn>[1],
-  options: Parameters<StreamFn>[2],
-  sessionMeta: { id: string; recovered?: boolean },
-): ReturnType<StreamFn> {
+function shouldRecover(err: unknown, sessionMeta: { id: string; recovered?: boolean }): boolean {
   const errMsg = err instanceof Error ? err.message : String(err);
 
   if (!THINKING_BLOCK_ERROR_PATTERN.test(errMsg)) {
-    throw err;
+    return false;
   }
   if (sessionMeta.recovered) {
     console.error(
       `[session-recovery] Session ${sessionMeta.id}: thinking block error ` +
         `persists after recovery. Not retrying again.`,
     );
-    throw err;
+    return false;
   }
 
   console.warn(
     `[session-recovery] Session ${sessionMeta.id}: thinking block error. ` +
       `Nuclear fallback: stripping ALL thinking blocks, retrying once.`,
   );
+  return true;
+}
 
-  // Nuclear: strip ALL thinking from ALL messages
-  const messages = Array.isArray(ctx?.messages) ? (ctx.messages as AgentMessage[]) : [];
-  const cleaned = messages.map((msg) => {
-    if (msg.role !== "assistant" || !Array.isArray(msg.content)) {
+interface ContentBlock {
+  type?: string;
+  [key: string]: unknown;
+}
+
+function stripAllThinkingBlocks(ctx: Record<string, unknown> | undefined): unknown[] {
+  const messages = Array.isArray(ctx?.messages) ? ctx.messages : [];
+  return messages.map((msg: unknown) => {
+    const m = msg as { role?: string; content?: unknown };
+    if (m.role !== "assistant" || !Array.isArray(m.content)) {
       return msg;
     }
-    const stripped = (msg.content as Array<{ type?: string }>).filter(
+    const stripped = (m.content as ContentBlock[]).filter(
       (block) => block?.type !== "thinking" && block?.type !== "redacted_thinking",
     );
     if (stripped.length === 0) {
-      return { ...msg, content: [{ type: "text", text: "" }] };
+      return { ...m, content: [{ type: "text", text: "" }] };
     }
-    return { ...msg, content: stripped };
+    return { ...m, content: stripped };
   });
+}
 
-  sessionMeta.recovered = true;
-  const newContext = { ...ctx, messages: cleaned } as unknown as typeof context;
-
-  return innerStreamFn(model, newContext, options);
+async function* wrapAsyncIterableWithRecovery(
+  stream: ReturnType<StreamFn>,
+  sessionMeta: { id: string; recovered?: boolean },
+  retryFn: () => ReturnType<StreamFn>,
+): AsyncGenerator {
+  try {
+    const resolved = stream instanceof Promise ? await stream : stream;
+    for await (const chunk of resolved as AsyncIterable<unknown>) {
+      yield chunk;
+    }
+  } catch (err: unknown) {
+    if (shouldRecover(err, sessionMeta)) {
+      sessionMeta.recovered = true;
+      const retryStream = retryFn();
+      const resolvedRetry = retryStream instanceof Promise ? await retryStream : retryStream;
+      for await (const chunk of resolvedRetry as AsyncIterable<unknown>) {
+        yield chunk;
+      }
+      return;
+    }
+    throw err;
+  }
 }
