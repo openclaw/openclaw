@@ -8563,7 +8563,7 @@ snapshots:
 
   '@types/nodemailer@7.0.11':
     dependencies:
-      '@types/node': 25.3.0
+      '@types/node': 25.3.1
 
   '@types/qrcode-terminal@0.12.2': {}
 
