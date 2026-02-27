@@ -99,6 +99,7 @@ export async function cleanOldMedia(ttlMs = DEFAULT_TTL_MS) {
           return;
         }
         if (stat.isDirectory() && !stat.isSymbolicLink()) {
+          await removeExpiredFilesRecursively(fullPath);
           return;
         }
         if (!stat.isFile()) {
