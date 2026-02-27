@@ -40,6 +40,11 @@ services:
     volumes:
       - ${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw
       - ${OPENCLAW_WORKSPACE_DIR}:/home/node/.openclaw/workspace
+    # Share the gateway's network namespace so the CLI can reach ws://127.0.0.1:18789
+    # (plaintext ws:// is blocked for non-loopback hosts by security checks)
+    network_mode: service:openclaw-gateway
+    depends_on:
+      - openclaw-gateway
     stdin_open: true
     tty: true
     init: true
