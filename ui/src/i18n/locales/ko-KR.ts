@@ -120,6 +120,7 @@ export const ko_KR: TranslationMap = {
     zhCN: "简体中文 (Simplified Chinese)",
     zhTW: "繁體中文 (Traditional Chinese)",
     ptBR: "Português (Brazilian Portuguese)",
+    de: "Deutsch (독일어)",
     koKR: "한국어 (Korean)",
   },
 };
