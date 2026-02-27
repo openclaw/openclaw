@@ -398,20 +398,18 @@ public actor GatewayChannelActor {
         }
         let signedAtMs = Int(Date().timeIntervalSince1970 * 1000)
         let connectNonce = try await self.waitForConnectChallenge()
-        let scopesValue = scopes.joined(separator: ",")
-        let payloadParts = [
-            "v2",
-            identity?.deviceId ?? "",
-            clientId,
-            clientMode,
-            role,
-            scopesValue,
-            String(signedAtMs),
-            authToken ?? "",
-            connectNonce,
-        ]
-        let payload = payloadParts.joined(separator: "|")
         if includeDeviceIdentity, let identity {
+            let payload = GatewayDeviceAuthPayload.buildV3(
+                deviceId: identity.deviceId,
+                clientId: clientId,
+                clientMode: clientMode,
+                role: role,
+                scopes: scopes,
+                signedAtMs: signedAtMs,
+                token: authToken,
+                nonce: connectNonce,
+                platform: platform,
+                deviceFamily: InstanceIdentity.deviceFamily)
             if let signature = DeviceIdentityStore.signPayload(payload, identity: identity),
                let publicKey = DeviceIdentityStore.publicKeyBase64Url(identity) {
                 let device: [String: ProtoAnyCodable] = [

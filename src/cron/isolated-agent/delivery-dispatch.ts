@@ -8,6 +8,7 @@ import { resolveAgentMainSessionKey } from "../../config/sessions.js";
 import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
 import { resolveAgentOutboundIdentity } from "../../infra/outbound/identity.js";
 import { resolveOutboundSessionRoute } from "../../infra/outbound/outbound-session.js";
+import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
 import { logWarn } from "../../logger.js";
 import type { CronJob, CronRunTelemetry } from "../types.js";
 import type { DeliveryTargetResolution } from "./delivery-target.js";
@@ -170,6 +171,11 @@ export async function dispatchCronDelivery(
         });
       }
       deliveryAttempted = true;
+      const deliverySession = buildOutboundSessionContext({
+        cfg: params.cfgWithAgentDefaults,
+        agentId: params.agentId,
+        sessionKey: params.agentSessionKey,
+      });
       const deliveryResults = await deliverOutboundPayloads({
         cfg: params.cfgWithAgentDefaults,
         channel: delivery.channel,
@@ -177,7 +183,7 @@ export async function dispatchCronDelivery(
         accountId: delivery.accountId,
         threadId: delivery.threadId,
         payloads: payloadsForDelivery,
-        agentId: params.agentId,
+        session: deliverySession,
         identity,
         bestEffort: params.deliveryBestEffort,
         deps: createOutboundSendDeps(params.deps),
