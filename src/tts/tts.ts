@@ -707,6 +707,22 @@ export async function textToSpeech(params: {
           }
           throw new Error(localResult.stderr.trim() || "local TTS command failed");
         }
+        // Verify the command actually wrote the expected output file.  A zero
+        // exit code is not sufficient: the command may ignore {{Output}} and
+        // write to stdout/elsewhere instead.  Without this check the caller
+        // would treat the result as successful, skip provider fallback, and
+        // later fail when it tries to open a non-existent path.
+        if (!existsSync(audioPath)) {
+          try {
+            rmSync(tempDir, { recursive: true, force: true });
+          } catch {
+            // ignore cleanup errors
+          }
+          errors.push(
+            "local: command exited 0 but did not create output file — check {{Output}} placeholder in args",
+          );
+          continue;
+        }
         scheduleCleanup(tempDir);
         const voiceCompatible = isVoiceCompatibleAudio({ fileName: audioPath });
         return {

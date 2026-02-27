@@ -1,5 +1,6 @@
+import { existsSync } from "node:fs";
 import { completeSimple, type AssistantMessage } from "@mariozechner/pi-ai";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getApiKeyForModel } from "../agents/model-auth.js";
 import { resolveModel } from "../agents/pi-embedded-runner/model.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -8,9 +9,24 @@ import { runCommandWithTimeout } from "../process/exec.js";
 import { withEnv, withEnvAsync } from "../test-utils/env.js";
 import * as tts from "./tts.js";
 
+// Capture original existsSync before vi.mock replaces it, so tests outside
+// the local-provider textToSpeech describe can restore the real behaviour.
+// `var` is used (instead of `let`) because vi.mock factories are hoisted above
+// `let`/`const` declarations and would hit the temporal dead zone otherwise.
+// eslint-disable-next-line no-var
+var _origExistsSync: typeof existsSync;
+
 vi.mock("../process/exec.js", async (importOriginal) => {
   const original = await importOriginal<typeof import("../process/exec.js")>();
   return { ...original, runCommandWithTimeout: vi.fn() };
+});
+
+// Wrap existsSync so the local-provider tests can control whether the output
+// file is "present" without touching the real filesystem.
+vi.mock("node:fs", async (importOriginal) => {
+  const original = await importOriginal<typeof import("node:fs")>();
+  _origExistsSync = original.existsSync;
+  return { ...original, existsSync: vi.fn(original.existsSync) };
 });
 
 vi.mock("@mariozechner/pi-ai", () => ({
@@ -730,6 +746,18 @@ describe("tts", () => {
     // ── textToSpeech ────────────────────────────────────────────────────────
 
     describe("textToSpeech", () => {
+      // The mocked runCommandWithTimeout never writes a real file; make
+      // existsSync return true by default so success-path tests pass.  The
+      // readPrefs callers that also use existsSync are wrapped in try/catch and
+      // tolerate a missing file, so this override is safe for the whole block.
+      beforeEach(() => {
+        vi.mocked(existsSync).mockReturnValue(true);
+      });
+      afterEach(() => {
+        // Restore passthrough behaviour for tests outside this describe block.
+        vi.mocked(existsSync).mockImplementation(_origExistsSync);
+      });
+
       it("returns success with an mp3 audioPath for non-Telegram channels", async () => {
         const result = await tts.textToSpeech({
           text: "Hello world",
@@ -1070,6 +1098,23 @@ describe("tts", () => {
         });
 
         expect(capturedArgv[1]).toBe("unknown");
+      });
+
+      it("falls back with error when command exits 0 but output file is missing", async () => {
+        // Simulate a command that ignores {{Output}} and writes to stdout instead.
+        vi.mocked(existsSync).mockReturnValue(false);
+
+        const result = await tts.textToSpeech({
+          text: "hello",
+          cfg: baseCfg(),
+          prefsPath: `/tmp/tts-local-no-file-${Date.now()}.json`,
+          channel: "whatsapp",
+        });
+
+        expect(result.success).toBe(false);
+        expect(result.error).toContain("local: command exited 0 but did not create output file");
+        // Provider fallback should have been attempted (all others unconfigured here).
+        expect(runCommandWithTimeout).toHaveBeenCalledTimes(1);
       });
     });
   });
