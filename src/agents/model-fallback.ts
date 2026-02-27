@@ -236,7 +236,7 @@ function resolveFallbackCandidates(params: {
   const currentFallbackIdx = configuredFallbacks.findIndex(
     (fb) => modelKey(fb.provider, fb.model) === currentKey,
   );
-  const isCurrentInChain = isCurrentPrimary || currentFallbackIdx >= 0;
+  const _isCurrentInChain = isCurrentPrimary || currentFallbackIdx >= 0;
 
   if (isCurrentPrimary) {
     // Current model IS the configured primary: append all configured
