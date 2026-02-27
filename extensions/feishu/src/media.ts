@@ -306,8 +306,8 @@ export async function sendFileFeishu(params: {
   cfg: ClawdbotConfig;
   to: string;
   fileKey: string;
-  /** Use "media" for audio/video files, "file" for documents */
-  msgType?: "file" | "media";
+  /** Use "audio" for voice messages (green bar), "media" for video, "file" for documents */
+  msgType?: "file" | "media" | "audio";
   replyToMessageId?: string;
   accountId?: string;
 }): Promise<SendMediaResult> {
@@ -427,15 +427,51 @@ export async function sendMediaFeishu(params: {
       fileType,
       accountId,
     });
-    // Feishu requires msg_type "media" for audio/video, "file" for documents
-    const isMedia = fileType === "mp4" || fileType === "opus";
+    // Feishu msg_type: "audio" = voice bar (green bar), "media" = video, "file" = document
+    const msgType = fileType === "opus" ? "audio" : fileType === "mp4" ? "media" : "file";
     return sendFileFeishu({
       cfg,
       to,
       fileKey,
-      msgType: isMedia ? "media" : "file",
+      msgType,
       replyToMessageId,
       accountId,
     });
   }
+}
+
+/**
+ * Send a voice message as a voice bar (green bar) in Feishu.
+ * The audio must be in opus format. Feishu only supports opus for voice bars.
+ * The file is uploaded with file_type "opus" and sent with msg_type "audio".
+ */
+export async function sendVoiceFeishu(params: {
+  cfg: ClawdbotConfig;
+  to: string;
+  audio: Buffer | string; // Buffer or file path (must be opus-encoded)
+  fileName?: string;
+  duration?: number; // Duration in milliseconds (shown on the voice bar)
+  replyToMessageId?: string;
+  accountId?: string;
+}): Promise<SendMediaResult> {
+  const { cfg, to, audio, duration, replyToMessageId, accountId } = params;
+  const fileName = params.fileName ?? "voice.opus";
+
+  const { fileKey } = await uploadFileFeishu({
+    cfg,
+    file: audio,
+    fileName,
+    fileType: "opus",
+    duration,
+    accountId,
+  });
+
+  return sendFileFeishu({
+    cfg,
+    to,
+    fileKey,
+    msgType: "audio",
+    replyToMessageId,
+    accountId,
+  });
 }

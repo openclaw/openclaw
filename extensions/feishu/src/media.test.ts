@@ -36,7 +36,12 @@ vi.mock("./runtime.js", () => ({
   }),
 }));
 
-import { downloadImageFeishu, downloadMessageResourceFeishu, sendMediaFeishu } from "./media.js";
+import {
+  downloadImageFeishu,
+  downloadMessageResourceFeishu,
+  sendMediaFeishu,
+  sendVoiceFeishu,
+} from "./media.js";
 
 function expectPathIsolatedToTmpRoot(pathValue: string, key: string): void {
   expect(pathValue).not.toContain(key);
@@ -129,7 +134,7 @@ describe("sendMediaFeishu msg_type routing", () => {
     );
   });
 
-  it("uses msg_type=media for opus", async () => {
+  it("uses msg_type=audio for opus (voice bar)", async () => {
     await sendMediaFeishu({
       cfg: {} as any,
       to: "user:ou_target",
@@ -145,7 +150,7 @@ describe("sendMediaFeishu msg_type routing", () => {
 
     expect(messageCreateMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        data: expect.objectContaining({ msg_type: "media" }),
+        data: expect.objectContaining({ msg_type: "audio" }),
       }),
     );
   });
@@ -275,5 +280,48 @@ describe("sendMediaFeishu msg_type routing", () => {
     ).rejects.toThrow("invalid file_key");
 
     expect(messageResourceGetMock).not.toHaveBeenCalled();
+  });
+
+  it("sendVoiceFeishu sends with msg_type=audio and file_type=opus", async () => {
+    await sendVoiceFeishu({
+      cfg: {} as any,
+      to: "user:ou_target",
+      audio: Buffer.from("opus-audio-data"),
+      duration: 5000,
+    });
+
+    expect(fileCreateMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          file_type: "opus",
+          file_name: "voice.opus",
+          duration: 5000,
+        }),
+      }),
+    );
+
+    expect(messageCreateMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ msg_type: "audio" }),
+      }),
+    );
+  });
+
+  it("sendVoiceFeishu supports reply", async () => {
+    await sendVoiceFeishu({
+      cfg: {} as any,
+      to: "user:ou_target",
+      audio: Buffer.from("opus-audio-data"),
+      replyToMessageId: "om_parent",
+    });
+
+    expect(messageReplyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: { message_id: "om_parent" },
+        data: expect.objectContaining({ msg_type: "audio" }),
+      }),
+    );
+
+    expect(messageCreateMock).not.toHaveBeenCalled();
   });
 });
