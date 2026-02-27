@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { homedir } from "node:os";
 import path from "node:path";
 import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
 import { type ExecHost, maxAsk, minSecurity } from "../infra/exec-approvals.js";
@@ -377,6 +378,7 @@ export function createExecTool(
             paramsEnv: params.env,
             sandboxEnv: sandbox.env,
             containerWorkdir: containerWorkdir ?? sandbox.containerWorkdir,
+            homeOverride: sandbox.backend === "seatbelt" ? homedir() : undefined,
           })
         : mergedEnv;
 

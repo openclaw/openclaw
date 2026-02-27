@@ -22,6 +22,7 @@ import {
 } from "./bash-process-registry.js";
 import {
   buildDockerExecArgs,
+  buildSeatbeltExecArgs,
   chunkString,
   clampWithDefault,
   readEnvInt,
@@ -377,6 +378,21 @@ export async function runExecProcess(opts: {
         stdinMode: "pipe-open";
       } = (() => {
     if (opts.sandbox) {
+      if (opts.sandbox.backend === "seatbelt") {
+        return {
+          mode: "child" as const,
+          argv: [
+            "sandbox-exec",
+            ...buildSeatbeltExecArgs({
+              command: execCommand,
+              profilePath: opts.sandbox.seatbelt.profilePath,
+              definitions: opts.sandbox.seatbelt.params,
+            }),
+          ],
+          env: opts.env,
+          stdinMode: opts.usePty ? ("pipe-open" as const) : ("pipe-closed" as const),
+        };
+      }
       return {
         mode: "child" as const,
         argv: [

@@ -7,28 +7,46 @@ import { assertSandboxPath } from "./sandbox-paths.js";
 
 const CHUNK_LIMIT = 8 * 1024;
 
-export type BashSandboxConfig = {
-  containerName: string;
+type BashSandboxBaseConfig = {
   workspaceDir: string;
   containerWorkdir: string;
   env?: Record<string, string>;
 };
+
+export type BashDockerSandboxConfig = BashSandboxBaseConfig & {
+  backend?: "docker";
+  containerName: string;
+};
+
+export type BashSeatbeltSandboxConfig = BashSandboxBaseConfig & {
+  backend: "seatbelt";
+  seatbelt: {
+    profilePath: string;
+    params?: Record<string, string>;
+  };
+};
+
+export type BashSandboxConfig = BashDockerSandboxConfig | BashSeatbeltSandboxConfig;
 
 export function buildSandboxEnv(params: {
   defaultPath: string;
   paramsEnv?: Record<string, string>;
   sandboxEnv?: Record<string, string>;
   containerWorkdir: string;
+  homeOverride?: string;
 }) {
   const env: Record<string, string> = {
     PATH: params.defaultPath,
-    HOME: params.containerWorkdir,
+    HOME: params.homeOverride ?? params.containerWorkdir,
   };
   for (const [key, value] of Object.entries(params.sandboxEnv ?? {})) {
     env[key] = value;
   }
   for (const [key, value] of Object.entries(params.paramsEnv ?? {})) {
     env[key] = value;
+  }
+  if (params.homeOverride) {
+    env.HOME = params.homeOverride;
   }
   return env;
 }
@@ -76,6 +94,19 @@ export function buildDockerExecArgs(params: {
     ? 'export PATH="${OPENCLAW_PREPEND_PATH}:$PATH"; unset OPENCLAW_PREPEND_PATH; '
     : "";
   args.push(params.containerName, "sh", "-lc", `${pathExport}${params.command}`);
+  return args;
+}
+
+export function buildSeatbeltExecArgs(params: {
+  command: string;
+  profilePath: string;
+  definitions?: Record<string, string>;
+}) {
+  const args = ["-f", params.profilePath];
+  for (const [key, value] of Object.entries(params.definitions ?? {})) {
+    args.push("-D", `${key}=${value}`);
+  }
+  args.push("sh", "-lc", params.command);
   return args;
 }
 
