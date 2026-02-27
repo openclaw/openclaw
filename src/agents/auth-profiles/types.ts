@@ -42,6 +42,7 @@ export type AuthProfileFailureReason =
   | "rate_limit"
   | "billing"
   | "timeout"
+  | "infrastructure"
   | "model_not_found"
   | "session_expired"
   | "unknown";

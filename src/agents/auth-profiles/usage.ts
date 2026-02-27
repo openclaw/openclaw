@@ -10,6 +10,7 @@ const FAILURE_REASON_PRIORITY: AuthProfileFailureReason[] = [
   "format",
   "model_not_found",
   "timeout",
+  "infrastructure",
   "rate_limit",
   "unknown",
 ];

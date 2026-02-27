@@ -55,6 +55,8 @@ export function resolveFailoverStatus(reason: FailoverReason): number | undefine
       return 403;
     case "timeout":
       return 408;
+    case "infrastructure":
+      return 502;
     case "format":
       return 400;
     case "model_not_found":
@@ -175,7 +177,10 @@ export function resolveFailoverReasonFromError(err: unknown): FailoverReason | n
   if (status === 408) {
     return "timeout";
   }
-  if (status === 502 || status === 503 || status === 504) {
+  if (status === 502 || status === 503) {
+    return "infrastructure";
+  }
+  if (status === 504) {
     return "timeout";
   }
   if (status === 400) {
