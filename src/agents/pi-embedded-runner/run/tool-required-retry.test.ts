@@ -275,4 +275,42 @@ describe("tool-required retry guard", () => {
 
     expect(shouldRetry).toBe(true);
   });
+
+  it("does not classify 'could you explain how to' guidance prompts as execution tasks", () => {
+    const shouldRetry = shouldRetryToolRequiredToolless({
+      provider: "openai-codex",
+      prompt: "Could you explain how to run tests in this repo?",
+      assistantTexts: ["I'll explain how to run tests in this repo."],
+      lastAssistant: { stopReason: "end_turn", content: [] } as never,
+      toolMetas: [],
+      didSendViaMessagingTool: false,
+      hasClientToolCall: false,
+      disableTools: false,
+      promptError: null,
+      aborted: false,
+      timedOut: false,
+      timedOutDuringCompaction: false,
+    });
+
+    expect(shouldRetry).toBe(false);
+  });
+
+  it("does not classify 'how can we' guidance prompts as execution tasks", () => {
+    const shouldRetry = shouldRetryToolRequiredToolless({
+      provider: "openai-codex",
+      prompt: "How can we inspect logs in this repo?",
+      assistantTexts: ["I'll explain how we can inspect logs in this repo."],
+      lastAssistant: { stopReason: "end_turn", content: [] } as never,
+      toolMetas: [],
+      didSendViaMessagingTool: false,
+      hasClientToolCall: false,
+      disableTools: false,
+      promptError: null,
+      aborted: false,
+      timedOut: false,
+      timedOutDuringCompaction: false,
+    });
+
+    expect(shouldRetry).toBe(false);
+  });
 });
