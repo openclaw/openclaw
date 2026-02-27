@@ -194,6 +194,11 @@ private const val defaultTalkProvider = "elevenlabs"
     this.defaultVoiceId = voiceId?.trim()?.takeIf { it.isNotEmpty() }
   }
 
+  suspend fun ensureChatSubscribed() {
+    reloadConfig()
+    subscribeChatIfNeeded(session = session, sessionKey = mainSessionKey.ifBlank { "main" })
+  }
+
   fun setMainSessionKey(sessionKey: String?) {
     val trimmed = sessionKey?.trim().orEmpty()
     if (trimmed.isEmpty()) return
@@ -242,10 +247,21 @@ private const val defaultTalkProvider = "elevenlabs"
     }
   }
 
+  /** When true, play TTS for all final chat responses (even ones we didn't initiate). */
+  @Volatile var ttsOnAllResponses = false
+
+  fun playTtsForText(text: String) {
+    scope.launch {
+      reloadConfig()
+      _isSpeaking.value = true
+      _statusText.value = "Speaking…"
+      playAssistant(text)
+    }
+  }
+
   fun handleGatewayEvent(event: String, payloadJson: String?) {
     if (event != "chat") return
     if (payloadJson.isNullOrBlank()) return
-    val pending = pendingRunId ?: return
     val obj =
       try {
         json.parseToJsonElement(payloadJson).asObjectOrNull()
@@ -253,8 +269,30 @@ private const val defaultTalkProvider = "elevenlabs"
         null
       } ?: return
     val runId = obj["runId"].asStringOrNull() ?: return
-    if (runId != pending) return
     val state = obj["state"].asStringOrNull() ?: return
+
+    // If this is a response we initiated, handle normally
+    val pending = pendingRunId
+    if (pending != null && runId != pending) {
+      // Not our run — but if ttsOnAllResponses, still play TTS for final
+      if (ttsOnAllResponses && state == "final") {
+        val text = extractTextFromChatEventMessage(obj["message"])
+        if (!text.isNullOrBlank()) {
+          playTtsForText(text)
+        }
+      }
+      return
+    }
+    if (pending == null) {
+      // No pending run — play TTS for final if ttsOnAllResponses
+      if (ttsOnAllResponses && state == "final") {
+        val text = extractTextFromChatEventMessage(obj["message"])
+        if (!text.isNullOrBlank()) {
+          playTtsForText(text)
+        }
+      }
+      return
+    }
     Log.d(tag, "chat event arrived runId=$runId state=$state pendingRunId=$pendingRunId")
     val terminal =
       when (state) {

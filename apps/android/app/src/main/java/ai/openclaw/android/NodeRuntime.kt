@@ -488,8 +488,15 @@ class NodeRuntime(context: Context) {
 
     scope.launch {
       prefs.talkEnabled.collect { enabled ->
+        // MicCaptureManager handles STT + send to gateway.
+        // TalkModeManager plays TTS on assistant responses.
         micCapture.setMicEnabled(enabled)
-        talkMode.setEnabled(enabled)
+        if (enabled) {
+          // Enable TTS and subscribe to chat events.
+          // ttsOnAllResponses stays true even after mic off — response may arrive after send.
+          talkMode.ttsOnAllResponses = true
+          scope.launch { talkMode.ensureChatSubscribed() }
+        }
         externalAudioCaptureActive.value = enabled
       }
     }

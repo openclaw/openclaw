@@ -99,6 +99,11 @@ class MicCaptureManager(
       sendQueuedIfIdle()
     } else {
       stop()
+      // Capture any partial transcript that didn't get a final result from the recognizer
+      val partial = _liveTranscript.value?.trim().orEmpty()
+      if (partial.isNotEmpty() && sessionSegments.isEmpty()) {
+        sessionSegments.add(partial)
+      }
       flushSessionToQueue()
       sendQueuedIfIdle()
     }
@@ -499,8 +504,8 @@ class MicCaptureManager(
         val text = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION).orEmpty().firstOrNull()
         if (!text.isNullOrBlank()) {
           onFinalTranscript(text)
-          flushSessionToQueue()
-          sendQueuedIfIdle()
+          // Don't auto-send on silence — accumulate transcript.
+          // Send happens when mic is toggled off (setMicEnabled(false)).
         }
         scheduleRestart()
       }
