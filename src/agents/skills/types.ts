@@ -79,6 +79,16 @@ export type SkillEligibilityContext = {
   };
 };
 
+/** A diagnostic from skill loading (e.g. YAML parse error in SKILL.md). */
+export type SkillLoadDiagnostic = {
+  type: "warning" | "error";
+  message: string;
+  /** Absolute path to the skill file that triggered the diagnostic. */
+  path?: string;
+  /** Source label for the skill directory (e.g. "openclaw-managed"). */
+  source?: string;
+};
+
 export type SkillSnapshot = {
   prompt: string;
   skills: Array<{ name: string; primaryEnv?: string; requiredEnv?: string[] }>;

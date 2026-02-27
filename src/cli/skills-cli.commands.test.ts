@@ -49,6 +49,7 @@ describe("registerSkillsCli", () => {
     workspaceDir: "/tmp/workspace",
     managedSkillsDir: "/tmp/workspace/.skills",
     skills: [],
+    diagnostics: [],
   };
 
   async function runCli(args: string[]) {

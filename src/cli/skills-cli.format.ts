@@ -1,4 +1,5 @@
 import type { SkillStatusEntry, SkillStatusReport } from "../agents/skills-status.js";
+import type { SkillLoadDiagnostic } from "../agents/skills.js";
 import { renderTable } from "../terminal/table.js";
 import { theme } from "../terminal/theme.js";
 import { shortenHomePath } from "../utils.js";
@@ -27,19 +28,19 @@ function appendClawHubHint(output: string, json?: boolean): string {
 
 function formatSkillStatus(skill: SkillStatusEntry): string {
   if (skill.eligible) {
-    return theme.success("✓ ready");
+    return theme.success("\u2713 ready");
   }
   if (skill.disabled) {
-    return theme.warn("⏸ disabled");
+    return theme.warn("\u23F8 disabled");
   }
   if (skill.blockedByAllowlist) {
-    return theme.warn("🚫 blocked");
+    return theme.warn("\uD83D\uDEAB blocked");
   }
-  return theme.error("✗ missing");
+  return theme.error("\u2717 missing");
 }
 
 function formatSkillName(skill: SkillStatusEntry): string {
-  const emoji = skill.emoji ?? "📦";
+  const emoji = skill.emoji ?? "\uD83D\uDCE6";
   return `${emoji} ${theme.command(skill.name)}`;
 }
 
@@ -63,8 +64,23 @@ function formatSkillMissingSummary(skill: SkillStatusEntry): string {
   return missing.join("; ");
 }
 
+/** Derive a short name from a diagnostic's file path (parent dir name or filename). */
+function diagnosticSkillName(diag: SkillLoadDiagnostic): string {
+  if (!diag.path) {
+    return "(unknown)";
+  }
+  const parts = diag.path.split("/");
+  const fileName = parts[parts.length - 1] ?? "";
+  // For SKILL.md, use the parent directory name as the skill identifier.
+  if (fileName.toLowerCase() === "skill.md" && parts.length >= 2) {
+    return parts[parts.length - 2] ?? "(unknown)";
+  }
+  return fileName;
+}
+
 export function formatSkillsList(report: SkillStatusReport, opts: SkillsListOptions): string {
   const skills = opts.eligible ? report.skills.filter((s) => s.eligible) : report.skills;
+  const diagnostics = report.diagnostics ?? [];
 
   if (opts.json) {
     const jsonReport = {
@@ -83,11 +99,21 @@ export function formatSkillsList(report: SkillStatusReport, opts: SkillsListOpti
         homepage: s.homepage,
         missing: s.missing,
       })),
+      ...(diagnostics.length > 0
+        ? {
+            diagnostics: diagnostics.map((d) => ({
+              type: d.type,
+              message: d.message,
+              path: d.path,
+              source: d.source,
+            })),
+          }
+        : {}),
     };
     return JSON.stringify(jsonReport, null, 2);
   }
 
-  if (skills.length === 0) {
+  if (skills.length === 0 && diagnostics.length === 0) {
     const message = opts.eligible
       ? `No eligible skills found. Run \`${formatCliCommand("openclaw skills list")}\` to see all skills.`
       : "No skills found.";
@@ -106,6 +132,18 @@ export function formatSkillsList(report: SkillStatusReport, opts: SkillsListOpti
       Missing: missing ? theme.warn(missing) : "",
     };
   });
+
+  // Append diagnostic rows for skills that failed to load (e.g. YAML parse errors).
+  for (const diag of diagnostics) {
+    const name = diagnosticSkillName(diag);
+    rows.push({
+      Status: theme.warn("!! parse error"),
+      Skill: theme.warn(name),
+      Description: theme.warn(diag.message),
+      Source: diag.source ?? "",
+      Missing: "",
+    });
+  }
 
   const columns = [
     { key: "Status", header: "Status", minWidth: 10 },
@@ -154,14 +192,14 @@ export function formatSkillInfo(
   }
 
   const lines: string[] = [];
-  const emoji = skill.emoji ?? "📦";
+  const emoji = skill.emoji ?? "\uD83D\uDCE6";
   const status = skill.eligible
-    ? theme.success("✓ Ready")
+    ? theme.success("\u2713 Ready")
     : skill.disabled
-      ? theme.warn("⏸ Disabled")
+      ? theme.warn("\u23F8 Disabled")
       : skill.blockedByAllowlist
-        ? theme.warn("🚫 Blocked by allowlist")
-        : theme.error("✗ Missing requirements");
+        ? theme.warn("\uD83D\uDEAB Blocked by allowlist")
+        : theme.error("\u2717 Missing requirements");
 
   lines.push(`${emoji} ${theme.heading(skill.name)} ${status}`);
   lines.push("");
@@ -191,7 +229,7 @@ export function formatSkillInfo(
     if (skill.requirements.bins.length > 0) {
       const binsStatus = skill.requirements.bins.map((bin) => {
         const missing = skill.missing.bins.includes(bin);
-        return missing ? theme.error(`✗ ${bin}`) : theme.success(`✓ ${bin}`);
+        return missing ? theme.error(`\u2717 ${bin}`) : theme.success(`\u2713 ${bin}`);
       });
       lines.push(`${theme.muted("  Binaries:")} ${binsStatus.join(", ")}`);
     }
@@ -199,28 +237,28 @@ export function formatSkillInfo(
       const anyBinsMissing = skill.missing.anyBins.length > 0;
       const anyBinsStatus = skill.requirements.anyBins.map((bin) => {
         const missing = anyBinsMissing;
-        return missing ? theme.error(`✗ ${bin}`) : theme.success(`✓ ${bin}`);
+        return missing ? theme.error(`\u2717 ${bin}`) : theme.success(`\u2713 ${bin}`);
       });
       lines.push(`${theme.muted("  Any binaries:")} ${anyBinsStatus.join(", ")}`);
     }
     if (skill.requirements.env.length > 0) {
       const envStatus = skill.requirements.env.map((env) => {
         const missing = skill.missing.env.includes(env);
-        return missing ? theme.error(`✗ ${env}`) : theme.success(`✓ ${env}`);
+        return missing ? theme.error(`\u2717 ${env}`) : theme.success(`\u2713 ${env}`);
       });
       lines.push(`${theme.muted("  Environment:")} ${envStatus.join(", ")}`);
     }
     if (skill.requirements.config.length > 0) {
       const configStatus = skill.requirements.config.map((cfg) => {
         const missing = skill.missing.config.includes(cfg);
-        return missing ? theme.error(`✗ ${cfg}`) : theme.success(`✓ ${cfg}`);
+        return missing ? theme.error(`\u2717 ${cfg}`) : theme.success(`\u2713 ${cfg}`);
       });
       lines.push(`${theme.muted("  Config:")} ${configStatus.join(", ")}`);
     }
     if (skill.requirements.os.length > 0) {
       const osStatus = skill.requirements.os.map((osName) => {
         const missing = skill.missing.os.includes(osName);
-        return missing ? theme.error(`✗ ${osName}`) : theme.success(`✓ ${osName}`);
+        return missing ? theme.error(`\u2717 ${osName}`) : theme.success(`\u2713 ${osName}`);
       });
       lines.push(`${theme.muted("  OS:")} ${osStatus.join(", ")}`);
     }
@@ -230,7 +268,7 @@ export function formatSkillInfo(
     lines.push("");
     lines.push(theme.heading("Install options:"));
     for (const inst of skill.install) {
-      lines.push(`  ${theme.warn("→")} ${inst.label}`);
+      lines.push(`  ${theme.warn("\u2192")} ${inst.label}`);
     }
   }
 
@@ -244,6 +282,7 @@ export function formatSkillsCheck(report: SkillStatusReport, opts: SkillsCheckOp
   const missingReqs = report.skills.filter(
     (s) => !s.eligible && !s.disabled && !s.blockedByAllowlist,
   );
+  const diagnostics = report.diagnostics ?? [];
 
   if (opts.json) {
     return JSON.stringify(
@@ -254,6 +293,7 @@ export function formatSkillsCheck(report: SkillStatusReport, opts: SkillsCheckOp
           disabled: disabled.length,
           blocked: blocked.length,
           missingRequirements: missingReqs.length,
+          parseErrors: diagnostics.length,
         },
         eligible: eligible.map((s) => s.name),
         disabled: disabled.map((s) => s.name),
@@ -263,6 +303,15 @@ export function formatSkillsCheck(report: SkillStatusReport, opts: SkillsCheckOp
           missing: s.missing,
           install: s.install,
         })),
+        ...(diagnostics.length > 0
+          ? {
+              parseErrors: diagnostics.map((d) => ({
+                message: d.message,
+                path: d.path,
+                source: d.source,
+              })),
+            }
+          : {}),
       },
       null,
       2,
@@ -273,16 +322,23 @@ export function formatSkillsCheck(report: SkillStatusReport, opts: SkillsCheckOp
   lines.push(theme.heading("Skills Status Check"));
   lines.push("");
   lines.push(`${theme.muted("Total:")} ${report.skills.length}`);
-  lines.push(`${theme.success("✓")} ${theme.muted("Eligible:")} ${eligible.length}`);
-  lines.push(`${theme.warn("⏸")} ${theme.muted("Disabled:")} ${disabled.length}`);
-  lines.push(`${theme.warn("🚫")} ${theme.muted("Blocked by allowlist:")} ${blocked.length}`);
-  lines.push(`${theme.error("✗")} ${theme.muted("Missing requirements:")} ${missingReqs.length}`);
+  lines.push(`${theme.success("\u2713")} ${theme.muted("Eligible:")} ${eligible.length}`);
+  lines.push(`${theme.warn("\u23F8")} ${theme.muted("Disabled:")} ${disabled.length}`);
+  lines.push(
+    `${theme.warn("\uD83D\uDEAB")} ${theme.muted("Blocked by allowlist:")} ${blocked.length}`,
+  );
+  lines.push(
+    `${theme.error("\u2717")} ${theme.muted("Missing requirements:")} ${missingReqs.length}`,
+  );
+  if (diagnostics.length > 0) {
+    lines.push(`${theme.warn("!!")} ${theme.muted("Parse errors:")} ${diagnostics.length}`);
+  }
 
   if (eligible.length > 0) {
     lines.push("");
     lines.push(theme.heading("Ready to use:"));
     for (const skill of eligible) {
-      const emoji = skill.emoji ?? "📦";
+      const emoji = skill.emoji ?? "\uD83D\uDCE6";
       lines.push(`  ${emoji} ${skill.name}`);
     }
   }
@@ -291,9 +347,23 @@ export function formatSkillsCheck(report: SkillStatusReport, opts: SkillsCheckOp
     lines.push("");
     lines.push(theme.heading("Missing requirements:"));
     for (const skill of missingReqs) {
-      const emoji = skill.emoji ?? "📦";
+      const emoji = skill.emoji ?? "\uD83D\uDCE6";
       const missing = formatSkillMissingSummary(skill);
       lines.push(`  ${emoji} ${skill.name} ${theme.muted(`(${missing})`)}`);
+    }
+  }
+
+  if (diagnostics.length > 0) {
+    lines.push("");
+    lines.push(theme.heading("Parse errors:"));
+    lines.push(
+      theme.muted("  These skills failed to load due to YAML/frontmatter errors in SKILL.md."),
+    );
+    lines.push(theme.muted("  Tip: wrap description values containing `: ` in quotes."));
+    for (const diag of diagnostics) {
+      const name = diagnosticSkillName(diag);
+      const pathHint = diag.path ? ` ${theme.muted(`(${shortenHomePath(diag.path)})`)}` : "";
+      lines.push(`  ${theme.warn("!!")} ${name}: ${diag.message}${pathHint}`);
     }
   }
 

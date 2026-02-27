@@ -7,13 +7,14 @@ import {
   hasBinary,
   isBundledSkillAllowed,
   isConfigPathTruthy,
-  loadWorkspaceSkillEntries,
+  loadWorkspaceSkillEntriesWithDiagnostics,
   resolveBundledAllowlist,
   resolveSkillConfig,
   resolveSkillsInstallPreferences,
   type SkillEntry,
   type SkillEligibilityContext,
   type SkillInstallSpec,
+  type SkillLoadDiagnostic,
   type SkillsInstallPreferences,
 } from "./skills.js";
 import { resolveBundledSkillsContext } from "./skills/bundled-context.js";
@@ -52,6 +53,8 @@ export type SkillStatusReport = {
   workspaceDir: string;
   managedSkillsDir: string;
   skills: SkillStatusEntry[];
+  /** Diagnostics from skill loading (e.g. YAML parse errors in SKILL.md files). */
+  diagnostics: SkillLoadDiagnostic[];
 };
 
 function resolveSkillKey(entry: SkillEntry): string {
@@ -230,18 +233,27 @@ export function buildWorkspaceSkillStatus(
     config?: OpenClawConfig;
     managedSkillsDir?: string;
     entries?: SkillEntry[];
+    /** Pre-computed diagnostics; only used when entries are provided externally. */
+    diagnostics?: SkillLoadDiagnostic[];
     eligibility?: SkillEligibilityContext;
   },
 ): SkillStatusReport {
   const managedSkillsDir = opts?.managedSkillsDir ?? path.join(CONFIG_DIR, "skills");
   const bundledContext = resolveBundledSkillsContext();
-  const skillEntries =
-    opts?.entries ??
-    loadWorkspaceSkillEntries(workspaceDir, {
+  let skillEntries: SkillEntry[];
+  let loadDiagnostics: SkillLoadDiagnostic[];
+  if (opts?.entries) {
+    skillEntries = opts.entries;
+    loadDiagnostics = opts.diagnostics ?? [];
+  } else {
+    const result = loadWorkspaceSkillEntriesWithDiagnostics(workspaceDir, {
       config: opts?.config,
       managedSkillsDir,
       bundledSkillsDir: bundledContext.dir,
     });
+    skillEntries = result.entries;
+    loadDiagnostics = result.diagnostics;
+  }
   const prefs = resolveSkillsInstallPreferences(opts?.config);
   return {
     workspaceDir,
@@ -249,5 +261,6 @@ export function buildWorkspaceSkillStatus(
     skills: skillEntries.map((entry) =>
       buildSkillStatus(entry, opts?.config, prefs, opts?.eligibility, bundledContext.names),
     ),
+    diagnostics: loadDiagnostics,
   };
 }

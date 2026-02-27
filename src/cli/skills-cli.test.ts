@@ -29,11 +29,15 @@ function createMockSkill(overrides: Partial<SkillStatusEntry> = {}): SkillStatus
   };
 }
 
-function createMockReport(skills: SkillStatusEntry[]): SkillStatusReport {
+function createMockReport(
+  skills: SkillStatusEntry[],
+  diagnostics: SkillStatusReport["diagnostics"] = [],
+): SkillStatusReport {
   return {
     workspaceDir: "/workspace",
     managedSkillsDir: "/managed",
     skills,
+    diagnostics,
   };
 }
 
@@ -93,6 +97,42 @@ describe("skills-cli", () => {
       expect(output).toContain("missing");
       expect(output).toContain("anyBins");
       expect(output).toContain("os:");
+    });
+
+    it("shows parse error diagnostics as warning rows", () => {
+      const report = createMockReport(
+        [createMockSkill({ name: "good-skill", eligible: true })],
+        [
+          {
+            type: "warning",
+            message: "Nested mappings are not allowed in compact mappings",
+            path: "/home/user/.openclaw/skills/bad-skill/SKILL.md",
+            source: "openclaw-managed",
+          },
+        ],
+      );
+      const output = formatSkillsList(report, {});
+      expect(output).toContain("parse error");
+      expect(output).toContain("bad-skill");
+      expect(output).toContain("Nested mappings");
+    });
+
+    it("includes diagnostics in JSON output", () => {
+      const report = createMockReport(
+        [],
+        [
+          {
+            type: "warning",
+            message: "YAML parse error",
+            path: "/tmp/skills/broken/SKILL.md",
+            source: "openclaw-extra",
+          },
+        ],
+      );
+      const output = formatSkillsList(report, { json: true });
+      const parsed = JSON.parse(output);
+      expect(parsed.diagnostics).toHaveLength(1);
+      expect(parsed.diagnostics[0].message).toBe("YAML parse error");
     });
 
     it("filters to eligible only with --eligible flag", () => {
@@ -169,6 +209,43 @@ describe("skills-cli", () => {
       expect(output).toContain("not-ready");
       expect(output).toContain("go"); // missing binary
       expect(output).toContain("npx clawhub");
+    });
+
+    it("shows parse errors section in check output", () => {
+      const report = createMockReport(
+        [createMockSkill({ name: "ready-1", eligible: true })],
+        [
+          {
+            type: "warning",
+            message: "failed to parse skill file",
+            path: "/tmp/broken-skill/SKILL.md",
+            source: "openclaw-workspace",
+          },
+        ],
+      );
+      const output = formatSkillsCheck(report, {});
+      expect(output).toContain("Parse errors:");
+      expect(output).toContain("broken-skill");
+      expect(output).toContain("failed to parse skill file");
+      expect(output).toContain("Tip:");
+    });
+
+    it("includes parseErrors in check JSON output", () => {
+      const report = createMockReport(
+        [],
+        [
+          {
+            type: "warning",
+            message: "bad yaml",
+            path: "/tmp/x/SKILL.md",
+            source: "openclaw-managed",
+          },
+        ],
+      );
+      const output = formatSkillsCheck(report, { json: true });
+      const parsed = JSON.parse(output);
+      expect(parsed.summary.parseErrors).toBe(1);
+      expect(parsed.parseErrors).toHaveLength(1);
     });
   });
 

@@ -25,6 +25,7 @@ import type {
   SkillEligibilityContext,
   SkillCommandSpec,
   SkillEntry,
+  SkillLoadDiagnostic,
   SkillSnapshot,
 } from "./types.js";
 
@@ -205,28 +206,58 @@ function resolveNestedSkillsRoot(
   return { baseDir: dir };
 }
 
-function unwrapLoadedSkills(loaded: unknown): Skill[] {
+type UnwrappedSkills = {
+  skills: Skill[];
+  diagnostics: SkillLoadDiagnostic[];
+};
+
+function unwrapLoadedSkills(loaded: unknown, source?: string): UnwrappedSkills {
   if (Array.isArray(loaded)) {
-    return loaded as Skill[];
+    return { skills: loaded as Skill[], diagnostics: [] };
   }
-  if (loaded && typeof loaded === "object" && "skills" in loaded) {
-    const skills = (loaded as { skills?: unknown }).skills;
-    if (Array.isArray(skills)) {
-      return skills as Skill[];
+  if (loaded && typeof loaded === "object") {
+    const obj = loaded as Record<string, unknown>;
+    const skills = Array.isArray(obj.skills) ? (obj.skills as Skill[]) : [];
+    const rawDiags = Array.isArray(obj.diagnostics) ? obj.diagnostics : [];
+    // Convert pi-coding-agent ResourceDiagnostic[] to our SkillLoadDiagnostic[].
+    // Only surface diagnostics for skills that were NOT successfully loaded (i.e. parse errors).
+    const loadedPaths = new Set(skills.map((s) => s.filePath));
+    const diagnostics: SkillLoadDiagnostic[] = [];
+    for (const d of rawDiags) {
+      if (d && typeof d === "object" && "message" in d) {
+        const diag = d as { type?: string; message: string; path?: string };
+        // Skip diagnostics for successfully loaded skills (name-mismatch warnings, etc.)
+        if (diag.path && loadedPaths.has(diag.path)) {
+          continue;
+        }
+        diagnostics.push({
+          type: diag.type === "error" ? "error" : "warning",
+          message: diag.message,
+          path: typeof diag.path === "string" ? diag.path : undefined,
+          source,
+        });
+      }
     }
+    return { skills, diagnostics };
   }
-  return [];
+  return { skills: [], diagnostics: [] };
 }
 
-function loadSkillEntries(
+type LoadSkillEntriesResult = {
+  entries: SkillEntry[];
+  diagnostics: SkillLoadDiagnostic[];
+};
+
+function loadSkillEntriesInternal(
   workspaceDir: string,
   opts?: {
     config?: OpenClawConfig;
     managedSkillsDir?: string;
     bundledSkillsDir?: string;
   },
-): SkillEntry[] {
+): LoadSkillEntriesResult {
   const limits = resolveSkillsLimits(opts?.config);
+  const allDiagnostics: SkillLoadDiagnostic[] = [];
 
   const loadSkills = (params: { dir: string; source: string }): Skill[] => {
     const resolved = resolveNestedSkillsRoot(params.dir, {
@@ -253,7 +284,9 @@ function loadSkillEntries(
       }
 
       const loaded = loadSkillsFromDir({ dir: baseDir, source: params.source });
-      return unwrapLoadedSkills(loaded);
+      const result = unwrapLoadedSkills(loaded, params.source);
+      allDiagnostics.push(...result.diagnostics);
+      return result.skills;
     }
 
     const childDirs = listChildDirectories(baseDir);
@@ -304,7 +337,9 @@ function loadSkillEntries(
       }
 
       const loaded = loadSkillsFromDir({ dir: skillDir, source: params.source });
-      loadedSkills.push(...unwrapLoadedSkills(loaded));
+      const result = unwrapLoadedSkills(loaded, params.source);
+      loadedSkills.push(...result.skills);
+      allDiagnostics.push(...result.diagnostics);
 
       if (loadedSkills.length >= limits.maxSkillsLoadedPerSource) {
         break;
@@ -402,7 +437,19 @@ function loadSkillEntries(
       invocation: resolveSkillInvocationPolicy(frontmatter),
     };
   });
-  return skillEntries;
+  return { entries: skillEntries, diagnostics: allDiagnostics };
+}
+
+/** Backward-compatible wrapper: returns only entries, discards diagnostics. */
+function loadSkillEntries(
+  workspaceDir: string,
+  opts?: {
+    config?: OpenClawConfig;
+    managedSkillsDir?: string;
+    bundledSkillsDir?: string;
+  },
+): SkillEntry[] {
+  return loadSkillEntriesInternal(workspaceDir, opts).entries;
 }
 
 function applySkillsPromptLimits(params: { skills: Skill[]; config?: OpenClawConfig }): {
@@ -545,6 +592,18 @@ export function loadWorkspaceSkillEntries(
   },
 ): SkillEntry[] {
   return loadSkillEntries(workspaceDir, opts);
+}
+
+/** Like loadWorkspaceSkillEntries but also returns diagnostics (e.g. YAML parse errors). */
+export function loadWorkspaceSkillEntriesWithDiagnostics(
+  workspaceDir: string,
+  opts?: {
+    config?: OpenClawConfig;
+    managedSkillsDir?: string;
+    bundledSkillsDir?: string;
+  },
+): { entries: SkillEntry[]; diagnostics: SkillLoadDiagnostic[] } {
+  return loadSkillEntriesInternal(workspaceDir, opts);
 }
 
 function resolveUniqueSyncedSkillDirName(base: string, used: Set<string>): string {
