@@ -153,6 +153,12 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.noopPaths).toContain("gateway.remote.url");
   });
 
+  it("treats secrets config changes as no-op for gateway restart planning", () => {
+    const plan = buildGatewayReloadPlan(["secrets.providers.default.path"]);
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.noopPaths).toContain("secrets.providers.default.path");
+  });
+
   it("defaults unknown paths to restart", () => {
     const plan = buildGatewayReloadPlan(["unknownField"]);
     expect(plan.restartGateway).toBe(true);
@@ -278,5 +284,55 @@ describe("startGatewayConfigReloader", () => {
     expect(log.warn).toHaveBeenCalledWith("config reload skipped (config file not found)");
 
     await reloader.stop();
+  });
+
+  it("contains restart callback failures and retries on subsequent changes", async () => {
+    const readSnapshot = vi
+      .fn<() => Promise<ConfigFileSnapshot>>()
+      .mockResolvedValueOnce(
+        makeSnapshot({
+          config: {
+            gateway: { reload: { debounceMs: 0 }, port: 18790 },
+          },
+          hash: "restart-1",
+        }),
+      )
+      .mockResolvedValueOnce(
+        makeSnapshot({
+          config: {
+            gateway: { reload: { debounceMs: 0 }, port: 18791 },
+          },
+          hash: "restart-2",
+        }),
+      );
+    const { watcher, onHotReload, onRestart, log, reloader } = createReloaderHarness(readSnapshot);
+    onRestart.mockRejectedValueOnce(new Error("restart-check failed"));
+    onRestart.mockResolvedValueOnce(undefined);
+
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => {
+      unhandled.push(reason);
+    };
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      watcher.emit("change");
+      await vi.runOnlyPendingTimersAsync();
+      await Promise.resolve();
+
+      expect(onHotReload).not.toHaveBeenCalled();
+      expect(onRestart).toHaveBeenCalledTimes(1);
+      expect(log.error).toHaveBeenCalledWith("config restart failed: Error: restart-check failed");
+      expect(unhandled).toEqual([]);
+
+      watcher.emit("change");
+      await vi.runOnlyPendingTimersAsync();
+      await Promise.resolve();
+
+      expect(onRestart).toHaveBeenCalledTimes(2);
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+      await reloader.stop();
+    }
   });
 });

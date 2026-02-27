@@ -17,7 +17,7 @@ final class RemindersService: RemindersServicing {
         let statusFilter = params.status ?? .incomplete
 
         let predicate = store.predicateForReminders(in: nil)
-        let payload = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<[OpenClawReminderPayload], Error>) in
+        let payload: [OpenClawReminderPayload] = try await withCheckedThrowingContinuation { cont in
             store.fetchReminders(matching: predicate) { items in
                 let formatter = ISO8601DateFormatter()
                 let filtered = (items ?? []).filter { reminder in

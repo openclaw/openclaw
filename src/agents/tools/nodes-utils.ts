@@ -5,11 +5,60 @@ import { callGatewayTool, type GatewayCallOptions } from "./gateway.js";
 
 export type { NodeListNode };
 
+type DefaultNodeFallback = "none" | "first";
+
+type DefaultNodeSelectionOptions = {
+  capability?: string;
+  fallback?: DefaultNodeFallback;
+  preferLocalMac?: boolean;
+};
+
+function messageFromError(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  if (typeof error === "string") {
+    return error;
+  }
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "message" in error &&
+    typeof (error as { message?: unknown }).message === "string"
+  ) {
+    return (error as { message: string }).message;
+  }
+  if (typeof error === "object" && error !== null) {
+    try {
+      return JSON.stringify(error);
+    } catch {
+      return "";
+    }
+  }
+  return "";
+}
+
+function shouldFallbackToPairList(error: unknown): boolean {
+  const message = messageFromError(error).toLowerCase();
+  if (!message.includes("node.list")) {
+    return false;
+  }
+  return (
+    message.includes("unknown method") ||
+    message.includes("method not found") ||
+    message.includes("not implemented") ||
+    message.includes("unsupported")
+  );
+}
+
 async function loadNodes(opts: GatewayCallOptions): Promise<NodeListNode[]> {
   try {
     const res = await callGatewayTool("node.list", opts, {});
     return parseNodeList(res);
-  } catch {
+  } catch (error) {
+    if (!shouldFallbackToPairList(error)) {
+      throw error;
+    }
     const res = await callGatewayTool("node.pair.list", opts, {});
     const { paired } = parsePairingList(res);
     return paired.map((n) => ({
@@ -21,31 +70,67 @@ async function loadNodes(opts: GatewayCallOptions): Promise<NodeListNode[]> {
   }
 }
 
-function pickDefaultNode(nodes: NodeListNode[]): NodeListNode | null {
-  const withCanvas = nodes.filter((n) =>
-    Array.isArray(n.caps) ? n.caps.includes("canvas") : true,
+function isLocalMacNode(node: NodeListNode): boolean {
+  return (
+    node.platform?.toLowerCase().startsWith("mac") === true &&
+    typeof node.nodeId === "string" &&
+    node.nodeId.startsWith("mac-")
   );
-  if (withCanvas.length === 0) {
+}
+
+function compareDefaultNodeOrder(a: NodeListNode, b: NodeListNode): number {
+  const aConnectedAt = Number.isFinite(a.connectedAtMs) ? (a.connectedAtMs ?? 0) : -1;
+  const bConnectedAt = Number.isFinite(b.connectedAtMs) ? (b.connectedAtMs ?? 0) : -1;
+  if (aConnectedAt !== bConnectedAt) {
+    return bConnectedAt - aConnectedAt;
+  }
+  return a.nodeId.localeCompare(b.nodeId);
+}
+
+export function selectDefaultNodeFromList(
+  nodes: NodeListNode[],
+  options: DefaultNodeSelectionOptions = {},
+): NodeListNode | null {
+  const capability = options.capability?.trim();
+  const withCapability = capability
+    ? nodes.filter((n) => (Array.isArray(n.caps) ? n.caps.includes(capability) : true))
+    : nodes;
+  if (withCapability.length === 0) {
     return null;
   }
 
-  const connected = withCanvas.filter((n) => n.connected);
-  const candidates = connected.length > 0 ? connected : withCanvas;
+  const connected = withCapability.filter((n) => n.connected);
+  const candidates = connected.length > 0 ? connected : withCapability;
   if (candidates.length === 1) {
     return candidates[0];
   }
 
-  const local = candidates.filter(
-    (n) =>
-      n.platform?.toLowerCase().startsWith("mac") &&
-      typeof n.nodeId === "string" &&
-      n.nodeId.startsWith("mac-"),
-  );
-  if (local.length === 1) {
-    return local[0];
+  const preferLocalMac = options.preferLocalMac ?? true;
+  if (preferLocalMac) {
+    const local = candidates.filter(isLocalMacNode);
+    if (local.length === 1) {
+      return local[0];
+    }
   }
 
-  return null;
+  const fallback = options.fallback ?? "none";
+  if (fallback === "none") {
+    return null;
+  }
+
+  const ordered = [...candidates].toSorted(compareDefaultNodeOrder);
+  // Multiple candidates — pick the first connected canvas-capable node.
+  // For A2UI and other canvas operations, any node works since multi-node
+  // setups broadcast surfaces across devices.
+  return ordered[0] ?? null;
+}
+
+function pickDefaultNode(nodes: NodeListNode[]): NodeListNode | null {
+  return selectDefaultNodeFromList(nodes, {
+    capability: "canvas",
+    fallback: "first",
+    preferLocalMac: true,
+  });
 }
 
 export async function listNodes(opts: GatewayCallOptions): Promise<NodeListNode[]> {
