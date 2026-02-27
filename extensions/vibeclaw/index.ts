@@ -96,7 +96,7 @@ const vibeClawPlugin = {
       ].join("\n");
 
       return {
-        systemPrompt: (params.systemPrompt ?? "") + vibeClawContext,
+        prependContext: vibeClawContext,
       };
     });
 

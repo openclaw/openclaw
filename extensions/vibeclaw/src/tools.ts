@@ -227,7 +227,7 @@ export function createInstallTool(client: VibeIndexClient, config: VibeClawConfi
         const result = await installSkillFromGitHub(
           skill.github_owner,
           skill.github_repo,
-          skill.name,
+          skill.slug || skill.name,
           { force: args.force },
         );
 
@@ -455,8 +455,10 @@ export function createAuditTool(client: VibeIndexClient) {
           output += "\n";
         }
 
-        if (flagged.length === 0) {
+        if (flagged.length === 0 && unknown.length === 0) {
           output += "All installed skills passed the security check.";
+        } else if (flagged.length === 0 && unknown.length > 0) {
+          output += `No flagged skills, but ${unknown.length} skill(s) could not be verified.`;
         } else {
           output += `⚠️ ${flagged.length} skill(s) should be uninstalled immediately.`;
         }
