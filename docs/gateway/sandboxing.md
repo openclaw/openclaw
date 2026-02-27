@@ -7,8 +7,13 @@ status: active
 
 # Sandboxing
 
-OpenClaw can run **tools inside Docker containers** to reduce blast radius.
-This is **optional** and controlled by configuration (`agents.defaults.sandbox` or
+OpenClaw can run **tools inside isolated sandboxes** to reduce blast radius.
+Two sandbox backends are supported:
+
+- **Docker** (default): persistent containers via Docker Engine.
+- **Bubblewrap (bwrap)**: lightweight Linux namespace isolation without Docker.
+
+Sandboxing is **optional** and controlled by configuration (`agents.defaults.sandbox` or
 `agents.list[].sandbox`). If sandboxing is off, tools run on the host.
 The Gateway stays on the host; tool execution runs in an isolated sandbox
 when enabled.
@@ -186,6 +191,99 @@ Debugging:
 Each agent can override sandbox + tools:
 `agents.list[].sandbox` and `agents.list[].tools` (plus `agents.list[].tools.sandbox.tools` for sandbox tool policy).
 See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for precedence.
+
+## Backend: Docker vs Bubblewrap
+
+`agents.defaults.sandbox.backend` selects the isolation runtime:
+
+- `"docker"` (default): uses persistent Docker containers. Requires Docker Engine.
+- `"bwrap"`: uses [bubblewrap](https://github.com/containers/bubblewrap) Linux
+  namespace isolation. No Docker required. Each tool invocation runs in a fresh
+  namespace — there is no persistent container.
+
+### When to use bwrap
+
+- Linux hosts where Docker is unavailable or undesirable (e.g. VPS without Docker, CI, Podman-only setups).
+- You want lightweight per-invocation isolation without container image management.
+- You don't need the browser sandbox (bwrap does not support sandboxed browser containers).
+
+### When to use Docker
+
+- You want the strongest isolation with cgroups, seccomp, AppArmor, and resource limits.
+- You need sandboxed browser support (Chromium + CDP in a container).
+- You're on macOS or Windows (bwrap is Linux-only).
+
+### Minimal bwrap enable example
+
+```json5
+{
+  agents: {
+    defaults: {
+      sandbox: {
+        mode: "non-main",
+        backend: "bwrap",
+        scope: "session",
+        workspaceAccess: "none",
+      },
+    },
+  },
+}
+```
+
+Requirements:
+
+- Linux with user namespace support (`sysctl kernel.unprivileged_userns_clone=1` or root).
+- `bwrap` binary on `$PATH` (install via `apt install bubblewrap`, `dnf install bubblewrap`, etc.).
+- The host filesystem paths `/usr`, `/bin`, `/sbin`, `/lib`, `/lib64`, `/etc` are
+  bind-mounted read-only into the namespace by default.
+
+### bwrap configuration
+
+`agents.defaults.sandbox.bwrap` controls namespace settings:
+
+```json5
+{
+  agents: {
+    defaults: {
+      sandbox: {
+        backend: "bwrap",
+        mode: "all",
+        workspaceAccess: "rw",
+        bwrap: {
+          workdir: "/workspace", // namespace CWD (default: "/workspace")
+          readOnlyRoot: true, // read-only root fs (default: true)
+          tmpfs: ["/tmp", "/var/tmp", "/run"], // tmpfs mounts (default)
+          unshareNet: true, // no network (default: true)
+          unsharePid: true, // PID namespace (default: true)
+          unshareIpc: true, // IPC namespace (default: true)
+          unshareCgroup: false, // cgroup namespace (default: false)
+          newSession: true, // TIOCSTI protection (default: true)
+          dieWithParent: true, // kill on parent exit (default: true)
+          mountProc: true, // mount /proc in namespace (default: true)
+          rootBinds: ["/usr", "/bin", "/sbin", "/lib", "/lib64", "/etc"],
+          extraBinds: ["/home/user/data:/data:ro"],
+          env: { LANG: "C.UTF-8" },
+        },
+      },
+    },
+  },
+}
+```
+
+### Differences from Docker backend
+
+| Feature                   | Docker                        | bwrap                          |
+| ------------------------- | ----------------------------- | ------------------------------ |
+| Persistent container      | Yes                           | No (fresh namespace per call)  |
+| Container image           | Required                      | Not needed                     |
+| Browser sandbox           | Supported                     | Not supported                  |
+| Network isolation         | `docker.network: "none"`      | `bwrap.unshareNet: true`       |
+| Resource limits (cgroups) | `memory`, `cpus`, `pidsLimit` | Not available                  |
+| Seccomp / AppArmor        | Supported                     | Not available                  |
+| Custom bind mounts        | `docker.binds`                | `bwrap.extraBinds`             |
+| Setup command             | Runs once per container       | Runs once per namespace        |
+| `sandbox recreate`        | Removes container             | No-op (no container to remove) |
+| Platform                  | Linux, macOS, Windows         | Linux only                     |
 
 ## Minimal enable example
 

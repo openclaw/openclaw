@@ -9,7 +9,7 @@ status: active
 
 OpenClaw has three related (but different) controls:
 
-1. **Sandbox** (`agents.defaults.sandbox.*` / `agents.list[].sandbox.*`) decides **where tools run** (Docker vs host).
+1. **Sandbox** (`agents.defaults.sandbox.*` / `agents.list[].sandbox.*`) decides **where tools run** (Docker / bwrap / host).
 2. **Tool policy** (`tools.*`, `tools.sandbox.tools.*`, `agents.list[].tools.*`) decides **which tools are available/allowed**.
 3. **Elevated** (`tools.elevated.*`, `agents.list[].tools.elevated.*`) is an **exec-only escape hatch** to run on the host when you’re sandboxed.
 
@@ -33,17 +33,25 @@ It prints:
 
 ## Sandbox: where tools run
 
-Sandboxing is controlled by `agents.defaults.sandbox.mode`:
+Sandboxing is controlled by `agents.defaults.sandbox.mode` and `agents.defaults.sandbox.backend`:
+
+Mode:
 
 - `"off"`: everything runs on the host.
-- `"non-main"`: only non-main sessions are sandboxed (common “surprise” for groups/channels).
+- `"non-main"`: only non-main sessions are sandboxed (common "surprise" for groups/channels).
 - `"all"`: everything is sandboxed.
 
-See [Sandboxing](/gateway/sandboxing) for the full matrix (scope, workspace mounts, images).
+Backend:
+
+- `"docker"` (default): persistent Docker containers.
+- `"bwrap"`: lightweight Linux namespace isolation via bubblewrap. No Docker required.
+
+See [Sandboxing](/gateway/sandboxing) for the full matrix (scope, workspace mounts, images, bwrap config).
 
 ### Bind mounts (security quick check)
 
-- `docker.binds` _pierces_ the sandbox filesystem: whatever you mount is visible inside the container with the mode you set (`:ro` or `:rw`).
+- Docker: `docker.binds` _pierces_ the sandbox filesystem: whatever you mount is visible inside the container with the mode you set (`:ro` or `:rw`).
+- bwrap: `bwrap.extraBinds` does the same for namespace mounts.
 - Default is read-write if you omit the mode; prefer `:ro` for source/secrets.
 - `scope: "shared"` ignores per-agent binds (only global binds apply).
 - Binding `/var/run/docker.sock` effectively hands host control to the sandbox; only do this intentionally.

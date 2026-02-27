@@ -14,7 +14,7 @@ Docker is **optional**. Use it only if you want a containerized gateway or to va
 
 - **Yes**: you want an isolated, throwaway gateway environment or to run OpenClaw on a host without local installs.
 - **No**: you’re running on your own machine and just want the fastest dev loop. Use the normal install flow instead.
-- **Sandboxing note**: agent sandboxing uses Docker too, but it does **not** require the full gateway to run in Docker. See [Sandboxing](/gateway/sandboxing).
+- **Sandboxing note**: agent sandboxing uses Docker too, but it does **not** require the full gateway to run in Docker. On Linux, you can also use the [bubblewrap (bwrap) sandbox backend](/gateway/sandboxing#backend-docker-vs-bubblewrap) as a lightweight alternative that doesn't require Docker at all. See [Sandboxing](/gateway/sandboxing).
 
 This guide covers:
 

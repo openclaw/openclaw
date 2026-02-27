@@ -288,6 +288,7 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
       },
       sandbox: {
         mode: "non-main",
+        backend: "docker", // or "bwrap" for Linux namespace isolation
         perSession: true,
         workspaceRoot: "~/.openclaw/sandboxes",
         docker: {

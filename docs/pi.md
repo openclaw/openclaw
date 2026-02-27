@@ -471,7 +471,14 @@ if (fallbackThinking) {
 
 ## Sandbox Integration
 
-When sandbox mode is enabled, tools and paths are constrained:
+When sandbox mode is enabled, tools and paths are constrained.
+`resolveSandboxContext()` branches on the configured backend:
+
+- **Docker** (`backend: "docker"`): creates/starts a persistent container via
+  `ensureSandboxContainer()`, file I/O goes through `SandboxFsBridge` (Docker exec).
+- **bwrap** (`backend: "bwrap"`): checks `bwrap` availability via
+  `ensureBwrapAvailable()`, file I/O goes through `BwrapFsBridgeImpl`
+  (each operation spawns a fresh namespace).
 
 ```typescript
 const sandbox = await resolveSandboxContext({
@@ -482,10 +489,20 @@ const sandbox = await resolveSandboxContext({
 
 if (sandboxRoot) {
   // Use sandboxed read/edit/write tools
-  // Exec runs in container
-  // Browser uses bridge URL
+  // Exec runs in container (docker) or namespace (bwrap)
+  // Browser uses bridge URL (Docker only)
 }
 ```
+
+Key files:
+
+- `src/agents/sandbox/context.ts` — backend-aware context resolution
+- `src/agents/sandbox/docker.ts` — Docker container lifecycle
+- `src/agents/sandbox/bwrap.ts` — bwrap arg building + availability checks
+- `src/agents/sandbox/bwrap-fs-bridge.ts` — `SandboxFsBridge` impl for bwrap
+- `src/agents/sandbox/fs-bridge.ts` — Docker `SandboxFsBridge` impl
+- `src/agents/bash-tools.exec-runtime.ts` — exec spawn (branches on backend)
+- `src/agents/bash-tools.shared.ts` — `buildDockerExecArgs` / `buildBwrapExecArgs`
 
 ## Provider-Specific Handling
 

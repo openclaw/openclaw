@@ -203,8 +203,9 @@ When validation fails:
   </Accordion>
 
   <Accordion title="Enable sandboxing">
-    Run agent sessions in isolated Docker containers:
+    Run agent sessions in isolated sandboxes. Two backends are available:
 
+    **Docker** (default):
     ```json5
     {
       agents: {
@@ -219,6 +220,23 @@ When validation fails:
     ```
 
     Build the image first: `scripts/sandbox-setup.sh`
+
+    **Bubblewrap (bwrap)** — Linux only, no Docker required:
+    ```json5
+    {
+      agents: {
+        defaults: {
+          sandbox: {
+            mode: "non-main",
+            backend: "bwrap",
+            scope: "session",
+          },
+        },
+      },
+    }
+    ```
+
+    Requires `bwrap` on `$PATH` (`apt install bubblewrap`).
 
     See [Sandboxing](/gateway/sandboxing) for the full guide and [full reference](/gateway/configuration-reference#sandbox) for all options.
 

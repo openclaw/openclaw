@@ -7,11 +7,18 @@ status: active
 
 # Sandbox CLI
 
-Manage Docker-based sandbox containers for isolated agent execution.
+Manage sandbox containers and inspect effective sandbox policy.
 
 ## Overview
 
-OpenClaw can run agents in isolated Docker containers for security. The `sandbox` commands help you manage these containers, especially after updates or configuration changes.
+OpenClaw can run agents in isolated sandboxes for security. Two backends are
+supported: **Docker** (persistent containers) and **bwrap** (Linux namespace
+isolation). The `sandbox` commands help you manage containers and inspect
+effective policy.
+
+Note: `sandbox list` and `sandbox recreate` apply to the **Docker backend
+only** (bwrap has no persistent containers to manage). `sandbox explain` works
+with both backends.
 
 ## Commands
 
@@ -123,12 +130,15 @@ Gateway’s container naming and avoids mismatches when scope/session keys chang
 
 Sandbox settings live in `~/.openclaw/openclaw.json` under `agents.defaults.sandbox` (per-agent overrides go in `agents.list[].sandbox`):
 
+**Docker backend:**
+
 ```jsonc
 {
   "agents": {
     "defaults": {
       "sandbox": {
         "mode": "all", // off, non-main, all
+        "backend": "docker", // docker (default) or bwrap
         "scope": "agent", // session, agent, shared
         "docker": {
           "image": "openclaw-sandbox:bookworm-slim",
@@ -138,6 +148,29 @@ Sandbox settings live in `~/.openclaw/openclaw.json` under `agents.defaults.sand
         "prune": {
           "idleHours": 24, // Auto-prune after 24h idle
           "maxAgeDays": 7, // Auto-prune after 7 days
+        },
+      },
+    },
+  },
+}
+```
+
+**bwrap backend** (Linux only, no Docker required):
+
+```jsonc
+{
+  "agents": {
+    "defaults": {
+      "sandbox": {
+        "mode": "all",
+        "backend": "bwrap",
+        "scope": "session",
+        "bwrap": {
+          "workdir": "/workspace",
+          "unshareNet": true,
+          "unsharePid": true,
+          "readOnlyRoot": true,
+          "mountProc": true,
         },
       },
     },

@@ -931,7 +931,7 @@ See [Typing Indicators](/concepts/typing-indicators).
 
 ### `agents.defaults.sandbox`
 
-Optional **Docker sandboxing** for the embedded agent. See [Sandboxing](/gateway/sandboxing) for the full guide.
+Optional **sandboxing** for the embedded agent. Two backends are supported: **Docker** (default) and **bubblewrap (bwrap)**. See [Sandboxing](/gateway/sandboxing) for the full guide.
 
 ```json5
 {
@@ -939,6 +939,7 @@ Optional **Docker sandboxing** for the embedded agent. See [Sandboxing](/gateway
     defaults: {
       sandbox: {
         mode: "non-main", // off | non-main | all
+        backend: "docker", // docker | bwrap
         scope: "agent", // session | agent | shared
         workspaceAccess: "none", // none | ro | rw
         workspaceRoot: "~/.openclaw/sandboxes",
@@ -966,6 +967,21 @@ Optional **Docker sandboxing** for the embedded agent. See [Sandboxing](/gateway
           dns: ["1.1.1.1", "8.8.8.8"],
           extraHosts: ["internal.service:10.0.0.5"],
           binds: ["/home/user/source:/source:rw"],
+        },
+        bwrap: {
+          workdir: "/workspace",
+          readOnlyRoot: true,
+          tmpfs: ["/tmp", "/var/tmp", "/run"],
+          unshareNet: true,
+          unsharePid: true,
+          unshareIpc: true,
+          unshareCgroup: false,
+          newSession: true,
+          dieWithParent: true,
+          mountProc: true,
+          rootBinds: ["/usr", "/bin", "/sbin", "/lib", "/lib64", "/etc"],
+          extraBinds: ["/home/user/data:/data:ro"],
+          env: { LANG: "C.UTF-8" },
         },
         browser: {
           enabled: false,
@@ -1013,6 +1029,11 @@ Optional **Docker sandboxing** for the embedded agent. See [Sandboxing](/gateway
 
 <Accordion title="Sandbox details">
 
+**Backend:**
+
+- `docker` (default): persistent Docker containers. Requires Docker Engine.
+- `bwrap`: lightweight Linux namespace isolation via [bubblewrap](https://github.com/containers/bubblewrap). No Docker required. Linux only.
+
 **Workspace access:**
 
 - `none`: per-scope sandbox workspace under `~/.openclaw/sandboxes`
@@ -1035,7 +1056,7 @@ Optional **Docker sandboxing** for the embedded agent. See [Sandboxing](/gateway
 
 **`docker.binds`** mounts additional host directories; global and per-agent binds are merged.
 
-**Sandboxed browser** (`sandbox.browser.enabled`): Chromium + CDP in a container. noVNC URL injected into system prompt. Does not require `browser.enabled` in main config.
+**Sandboxed browser** (`sandbox.browser.enabled`): Chromium + CDP in a container. noVNC URL injected into system prompt. Does not require `browser.enabled` in main config. Only available with the Docker backend.
 noVNC observer access uses VNC auth by default and OpenClaw emits a short-lived token URL (instead of exposing the password in the shared URL).
 
 - `allowHostControl: false` (default) blocks sandboxed sessions from targeting the host browser.

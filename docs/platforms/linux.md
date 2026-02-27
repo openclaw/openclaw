@@ -34,6 +34,48 @@ Step-by-step VPS guide: [exe.dev](/install/exe-dev)
 - [Gateway runbook](/gateway)
 - [Configuration](/gateway/configuration)
 
+## Sandboxing
+
+On Linux, you can sandbox agent tools using two backends:
+
+- **Docker**: persistent containers via Docker Engine. See [Docker install](/install/docker).
+- **Bubblewrap (bwrap)**: lightweight Linux namespace isolation without Docker. Install via your package manager:
+
+```bash
+# Debian/Ubuntu
+sudo apt install bubblewrap
+
+# Fedora/RHEL
+sudo dnf install bubblewrap
+
+# Arch
+sudo pacman -S bubblewrap
+```
+
+Enable bwrap sandboxing:
+
+```json5
+{
+  agents: {
+    defaults: {
+      sandbox: {
+        mode: "non-main",
+        backend: "bwrap",
+      },
+    },
+  },
+}
+```
+
+bwrap requires Linux with user namespace support. Check:
+
+```bash
+sysctl kernel.unprivileged_userns_clone
+# Should return 1. If 0: sudo sysctl kernel.unprivileged_userns_clone=1
+```
+
+See [Sandboxing](/gateway/sandboxing) for the full guide.
+
 ## Gateway service install (CLI)
 
 Use one of these:

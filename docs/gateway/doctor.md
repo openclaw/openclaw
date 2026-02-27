@@ -198,8 +198,11 @@ catalog and allowlist and warns when it won’t resolve or is disallowed.
 
 ### 7) Sandbox image repair
 
-When sandboxing is enabled, doctor checks Docker images and offers to build or
-switch to legacy names if the current image is missing.
+When sandboxing is enabled with the Docker backend, doctor checks Docker images
+and offers to build or switch to legacy names if the current image is missing.
+
+When using the bwrap backend, doctor checks that the `bwrap` binary is available
+on `$PATH` and that user namespaces are enabled on the host.
 
 ### 8) Gateway service migrations and cleanup hints
 
