@@ -57,7 +57,11 @@ export function resolveModel(
 
   if (!model) {
     const providers = cfg?.models?.providers ?? {};
-    const inlineModels = buildInlineProviderModels(providers);
+    // Filter out disabled providers so their inline models are not discoverable.
+    const activeProviders = Object.fromEntries(
+      Object.entries(providers).filter(([, p]) => p.enabled !== false),
+    );
+    const inlineModels = buildInlineProviderModels(activeProviders);
     const normalizedProvider = normalizeProviderId(provider);
     const inlineMatch = inlineModels.find(
       (entry) => normalizeProviderId(entry.provider) === normalizedProvider && entry.id === modelId,
@@ -95,7 +99,7 @@ export function resolveModel(
       return { model: fallbackModel, authStorage, modelRegistry };
     }
     const providerCfg = providers[provider];
-    if (providerCfg || modelId.startsWith("mock-")) {
+    if ((providerCfg && providerCfg.enabled !== false) || modelId.startsWith("mock-")) {
       const configuredModel = providerCfg?.models?.find((candidate) => candidate.id === modelId);
       const fallbackModel: Model<Api> = normalizeModelCompat({
         id: modelId,

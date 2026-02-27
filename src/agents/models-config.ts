@@ -119,10 +119,22 @@ export async function ensureOpenClawModelsJson(
 
   // Filter out explicitly disabled providers (enabled: false) before resolution.
   const rawProviders = cfg.models?.providers ?? {};
+  const disabledIds = new Set(
+    Object.entries(rawProviders)
+      .filter(([, p]) => p.enabled === false)
+      .map(([id]) => id),
+  );
   const explicitProviders = Object.fromEntries(
     Object.entries(rawProviders).filter(([, p]) => p.enabled !== false),
   );
   const implicitProviders = await resolveImplicitProviders({ agentDir, explicitProviders });
+  // Suppress implicit providers whose ID was explicitly disabled in config,
+  // so ambient credentials (e.g. MINIMAX_API_KEY) don't re-add a disabled provider.
+  if (implicitProviders) {
+    for (const id of disabledIds) {
+      delete implicitProviders[id];
+    }
+  }
   const providers: Record<string, ProviderConfig> = mergeProviders({
     implicit: implicitProviders,
     explicit: explicitProviders,
@@ -157,6 +169,11 @@ export async function ensureOpenClawModelsJson(
       >;
       mergedProviders = {};
       for (const [key, entry] of Object.entries(existingProviders)) {
+        // Skip providers explicitly disabled in config — toggling enabled: false
+        // must remove the provider from the merged output, not preserve the stale entry.
+        if (disabledIds.has(key)) {
+          continue;
+        }
         mergedProviders[key] = entry;
       }
       for (const [key, newEntry] of Object.entries(providers)) {
