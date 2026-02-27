@@ -174,6 +174,71 @@ describe("nodes notifications_list", () => {
   });
 });
 
+describe("nodes device_status and device_info", () => {
+  it("invokes device.status and returns payload", async () => {
+    callGateway.mockImplementation(async ({ method, params }) => {
+      if (method === "node.list") {
+        return mockNodeList(["device.status", "device.info"]);
+      }
+      if (method === "node.invoke") {
+        expect(params).toMatchObject({
+          nodeId: NODE_ID,
+          command: "device.status",
+          params: {},
+        });
+        return {
+          payload: {
+            battery: { state: "charging", lowPowerModeEnabled: false },
+          },
+        };
+      }
+      return unexpectedGatewayMethod(method);
+    });
+
+    const result = await executeNodes({
+      action: "device_status",
+      node: NODE_ID,
+    });
+
+    expect(result.content?.[0]).toMatchObject({
+      type: "text",
+      text: expect.stringContaining('"battery"'),
+    });
+  });
+
+  it("invokes device.info and returns payload", async () => {
+    callGateway.mockImplementation(async ({ method, params }) => {
+      if (method === "node.list") {
+        return mockNodeList(["device.status", "device.info"]);
+      }
+      if (method === "node.invoke") {
+        expect(params).toMatchObject({
+          nodeId: NODE_ID,
+          command: "device.info",
+          params: {},
+        });
+        return {
+          payload: {
+            systemName: "Android",
+            appVersion: "1.0.0",
+          },
+        };
+      }
+      return unexpectedGatewayMethod(method);
+    });
+
+    const result = await executeNodes({
+      action: "device_info",
+      node: NODE_ID,
+    });
+
+    expect(result.content?.[0]).toMatchObject({
+      type: "text",
+      text: expect.stringContaining('"systemName"'),
+    });
+  });
+});
+
 describe("nodes run", () => {
   it("passes invoke and command timeouts", async () => {
     callGateway.mockImplementation(async ({ method, params }) => {
