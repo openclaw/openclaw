@@ -18,7 +18,37 @@ import type { SecretInputMode } from "./onboard-types.js";
 const DEFAULT_OLLAMA_BASE_URL = "http://127.0.0.1:11434/v1";
 const DEFAULT_CONTEXT_WINDOW = 4096;
 const DEFAULT_MAX_TOKENS = 4096;
-const VERIFY_TIMEOUT_MS = 120000; // 2 minutes for local LLMs
+const VERIFY_TIMEOUT_MS = 10000; // 10 seconds for remote APIs
+const VERIFY_TIMEOUT_LOCAL_MS = 120000; // 2 minutes for local LLMs
+
+/**
+ * Check if a URL points to a local endpoint (localhost, 127.0.0.1, etc.)
+ */
+function isLocalEndpoint(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    const host = parsed.hostname.toLowerCase();
+    return (
+      host === "localhost" ||
+      host === "127.0.0.1" ||
+      host === "::1" ||
+      host.startsWith("192.168.") ||
+      host.startsWith("10.") ||
+      host.startsWith("172.16.") ||
+      host.endsWith(".local")
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Get appropriate verification timeout based on endpoint type.
+ * Local LLMs need more time; remote APIs should fail fast.
+ */
+function getVerifyTimeoutMs(endpoint: string): number {
+  return isLocalEndpoint(endpoint) ? VERIFY_TIMEOUT_LOCAL_MS : VERIFY_TIMEOUT_MS;
+}
 
 /**
  * Detects if a URL is from Azure AI Foundry or Azure OpenAI.
@@ -282,6 +312,7 @@ async function requestVerification(params: {
   headers: Record<string, string>;
   body: Record<string, unknown>;
 }): Promise<VerificationResult> {
+  const timeoutMs = getVerifyTimeoutMs(params.endpoint);
   try {
     const res = await fetchWithTimeout(
       params.endpoint,
@@ -293,7 +324,7 @@ async function requestVerification(params: {
         },
         body: JSON.stringify(params.body),
       },
-      VERIFY_TIMEOUT_MS,
+      timeoutMs,
     );
     return { ok: res.ok, status: res.status };
   } catch (error) {
