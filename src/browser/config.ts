@@ -281,6 +281,8 @@ export function resolveProfile(
   let cdpHost = resolved.cdpHost;
   let cdpPort = profile.cdpPort ?? 0;
   let cdpUrl = "";
+  // "clawd" is a legacy alias accepted by the zod schema for backwards
+  // compatibility; it resolves to "openclaw" here (the default fallback).
   const driver =
     profile.driver === "extension"
       ? "extension"
