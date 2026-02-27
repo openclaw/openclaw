@@ -28,13 +28,13 @@ Edge TTS uses Microsoft Edge's online neural TTS service via the `node-edge-tts`
 library. It's a hosted service (not local), uses Microsoft’s endpoints, and does
 not require an API key. `node-edge-tts` exposes speech configuration options and
 output formats, but not all options are supported by the Edge service.
-citeturn2search0
+citeturn2search0
 
 Because Edge TTS is a public web service without a published SLA or quota, treat
 it as best-effort. If you need guaranteed limits and support, use OpenAI or
 ElevenLabs. Microsoft's Speech REST API documents a 10‑minute audio limit per
 request; Edge TTS does not publish limits, so assume similar or lower limits.
-citeturn0search3
+citeturn0search3
 
 ## Optional keys
 
@@ -374,7 +374,7 @@ These override `messages.tts.*` for that host.
   - `node-edge-tts` accepts an `outputFormat`, but not all formats are available
     from the Edge service. citeturn2search0
   - Output format values follow Microsoft Speech output formats (including
-    Ogg/WebM Opus). citeturn1search0
+    Ogg/WebM Opus). citeturn1search0
   - Telegram `sendVoice` accepts OGG/MP3/M4A; use OpenAI/ElevenLabs if you need
     guaranteed Opus voice notes. citeturn1search1
   - If the configured Edge output format fails, OpenClaw retries with MP3.
