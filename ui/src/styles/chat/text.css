@@ -9,8 +9,9 @@
   border: 1px dashed rgba(255, 255, 255, 0.18);
   background: rgba(255, 255, 255, 0.04);
   color: var(--muted);
-  font-size: 12px;
-  line-height: 1.4;
+  font-size: 14px;
+  line-height: 1.5;
+  font-family: var(--font-body);
 }
 
 :root[data-theme="light"] .chat-thinking {

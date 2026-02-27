@@ -34,13 +34,14 @@ import type { DmPolicy, TelegramGroupConfig, TelegramTopicConfig } from "../conf
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { recordChannelActivity } from "../infra/channel-activity.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
+import { maybeOverrideRouteByKeywords } from "../routing/route-keyword-override.js";
 import { resolveThreadSessionKeys } from "../routing/session-key.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import {
   firstDefined,
   isSenderAllowed,
-  normalizeAllowFrom,
-  normalizeDmAllowFromWithStore,
+  normalizeAllowFromWithStore,
+  resolveSenderAllowMatch,
 } from "./bot-access.js";
 import {
   buildGroupLabel,
@@ -59,7 +60,6 @@ import {
   resolveTelegramThreadSpec,
 } from "./bot/helpers.js";
 import type { StickerMetadata, TelegramContext } from "./bot/types.js";
-import { enforceTelegramDmAccess } from "./dm-access.js";
 import { evaluateTelegramGroupBaseAccess } from "./group-access.js";
 import { resolveTelegramGroupPromptSettings } from "./group-config-helpers.js";
 import {
@@ -101,7 +101,6 @@ type ResolveGroupRequireMention = (chatId: string | number) => boolean;
 export type BuildTelegramMessageContextParams = {
   primaryCtx: TelegramContext;
   allMedia: TelegramMediaRef[];
-  replyMedia?: TelegramMediaRef[];
   storeAllowFrom: string[];
   options?: TelegramMessageContextOptions;
   bot: Bot;
@@ -117,8 +116,6 @@ export type BuildTelegramMessageContextParams = {
   resolveGroupActivation: ResolveGroupActivation;
   resolveGroupRequireMention: ResolveGroupRequireMention;
   resolveTelegramGroupConfig: ResolveTelegramGroupConfig;
-  /** Global (per-account) handler for sendChatAction 401 backoff (#27092). */
-  sendChatActionHandler: import("./sendchataction-401-backoff.js").TelegramSendChatActionHandler;
 };
 
 async function resolveStickerVisionSupport(params: {
@@ -144,7 +141,6 @@ async function resolveStickerVisionSupport(params: {
 export const buildTelegramMessageContext = async ({
   primaryCtx,
   allMedia,
-  replyMedia = [],
   storeAllowFrom,
   options,
   bot,
@@ -160,9 +156,13 @@ export const buildTelegramMessageContext = async ({
   resolveGroupActivation,
   resolveGroupRequireMention,
   resolveTelegramGroupConfig,
-  sendChatActionHandler,
 }: BuildTelegramMessageContextParams) => {
   const msg = primaryCtx.message;
+  recordChannelActivity({
+    channel: "telegram",
+    accountId: account.accountId,
+    direction: "inbound",
+  });
   const chatId = msg.chat.id;
   const isGroup = msg.chat.type === "group" || msg.chat.type === "supergroup";
   const messageThreadId = (msg as { message_thread_id?: number }).message_thread_id;
@@ -178,7 +178,7 @@ export const buildTelegramMessageContext = async ({
   const peerId = isGroup ? buildTelegramGroupPeerId(chatId, resolvedThreadId) : String(chatId);
   const parentPeer = buildTelegramParentPeer({ isGroup, resolvedThreadId, chatId });
   // Fresh config for bindings lookup; other routing inputs are payload-derived.
-  const route = resolveAgentRoute({
+  const initialRoute = resolveAgentRoute({
     cfg: loadConfig(),
     channel: "telegram",
     accountId: account.accountId,
@@ -187,6 +187,14 @@ export const buildTelegramMessageContext = async ({
       id: peerId,
     },
     parentPeer,
+  });
+  const rawBodyForOverride = (msg.text ?? msg.caption ?? "").trim();
+  const route = maybeOverrideRouteByKeywords({
+    cfg,
+    route: initialRoute,
+    body: rawBodyForOverride,
+    channel: "telegram",
+    peer: { kind: isGroup ? "group" : "direct", id: peerId },
   });
   const baseSessionKey = route.sessionKey;
   // DMs: use raw messageThreadId for thread sessions (not forum topic ids)
@@ -197,10 +205,13 @@ export const buildTelegramMessageContext = async ({
       : null;
   const sessionKey = threadKeys?.sessionKey ?? baseSessionKey;
   const mentionRegexes = buildMentionRegexes(cfg, route.agentId);
-  const effectiveDmAllow = normalizeDmAllowFromWithStore({ allowFrom, storeAllowFrom, dmPolicy });
+  const effectiveDmAllow = normalizeAllowFromWithStore({ allowFrom, storeAllowFrom, dmPolicy });
   const groupAllowOverride = firstDefined(topicConfig?.allowFrom, groupConfig?.allowFrom);
-  // Group sender checks are explicit and must not inherit DM pairing-store entries.
-  const effectiveGroupAllow = normalizeAllowFrom(groupAllowOverride ?? groupAllowFrom);
+  const effectiveGroupAllow = normalizeAllowFromWithStore({
+    allowFrom: groupAllowOverride ?? groupAllowFrom,
+    storeAllowFrom,
+    dmPolicy,
+  });
   const hasGroupAllowOverride = typeof groupAllowOverride !== "undefined";
   const senderId = msg.from?.id ? String(msg.from.id) : "";
   const senderUsername = msg.from?.username ?? "";
@@ -248,12 +259,7 @@ export const buildTelegramMessageContext = async ({
   const sendTyping = async () => {
     await withTelegramApiErrorLogging({
       operation: "sendChatAction",
-      fn: () =>
-        sendChatActionHandler.sendChatAction(
-          chatId,
-          "typing",
-          buildTypingThreadParams(replyThreadId),
-        ),
+      fn: () => bot.api.sendChatAction(chatId, "typing", buildTypingThreadParams(replyThreadId)),
     });
   };
 
@@ -262,37 +268,93 @@ export const buildTelegramMessageContext = async ({
       await withTelegramApiErrorLogging({
         operation: "sendChatAction",
         fn: () =>
-          sendChatActionHandler.sendChatAction(
-            chatId,
-            "record_voice",
-            buildTypingThreadParams(replyThreadId),
-          ),
+          bot.api.sendChatAction(chatId, "record_voice", buildTypingThreadParams(replyThreadId)),
       });
     } catch (err) {
       logVerbose(`telegram record_voice cue failed for chat ${chatId}: ${String(err)}`);
     }
   };
 
-  if (
-    !(await enforceTelegramDmAccess({
-      isGroup,
-      dmPolicy,
-      msg,
-      chatId,
-      effectiveDmAllow,
-      accountId: account.accountId,
-      bot,
-      logger,
-    }))
-  ) {
-    return null;
-  }
+  // DM access control (secure defaults): "pairing" (default) / "allowlist" / "open" / "disabled"
+  if (!isGroup) {
+    if (dmPolicy === "disabled") {
+      return null;
+    }
 
-  recordChannelActivity({
-    channel: "telegram",
-    accountId: account.accountId,
-    direction: "inbound",
-  });
+    if (dmPolicy !== "open") {
+      const senderUsername = msg.from?.username ?? "";
+      const senderUserId = msg.from?.id != null ? String(msg.from.id) : null;
+      const candidate = senderUserId ?? String(chatId);
+      const allowMatch = resolveSenderAllowMatch({
+        allow: effectiveDmAllow,
+        senderId: candidate,
+        senderUsername,
+      });
+      const allowMatchMeta = `matchKey=${allowMatch.matchKey ?? "none"} matchSource=${
+        allowMatch.matchSource ?? "none"
+      }`;
+      const allowed =
+        effectiveDmAllow.hasWildcard || (effectiveDmAllow.hasEntries && allowMatch.allowed);
+      if (!allowed) {
+        if (dmPolicy === "pairing") {
+          try {
+            const from = msg.from as
+              | {
+                  first_name?: string;
+                  last_name?: string;
+                  username?: string;
+                  id?: number;
+                }
+              | undefined;
+            const telegramUserId = from?.id ? String(from.id) : candidate;
+            const { code, created } = await upsertChannelPairingRequest({
+              channel: "telegram",
+              id: telegramUserId,
+              accountId: account.accountId,
+              meta: {
+                username: from?.username,
+                firstName: from?.first_name,
+                lastName: from?.last_name,
+              },
+            });
+            if (created) {
+              logger.info(
+                {
+                  chatId: String(chatId),
+                  senderUserId: senderUserId ?? undefined,
+                  username: from?.username,
+                  firstName: from?.first_name,
+                  lastName: from?.last_name,
+                  matchKey: allowMatch.matchKey ?? "none",
+                  matchSource: allowMatch.matchSource ?? "none",
+                },
+                "telegram pairing request",
+              );
+              await withTelegramApiErrorLogging({
+                operation: "sendMessage",
+                fn: () =>
+                  bot.api.sendMessage(
+                    chatId,
+                    buildPairingReply({
+                      channel: "telegram",
+                      idLine: `Your Telegram user id: ${telegramUserId}`,
+                      code,
+                    }),
+                  ),
+              });
+            }
+          } catch (err) {
+            logVerbose(`telegram pairing reply failed for chat ${chatId}: ${String(err)}`);
+          }
+        } else {
+          logVerbose(
+            `Blocked unauthorized telegram sender ${candidate} (dmPolicy=${dmPolicy}, ${allowMatchMeta})`,
+          );
+        }
+        return null;
+      }
+    }
+  }
 
   const botUsername = primaryCtx.me?.username?.toLowerCase();
   const allowForCommands = isGroup ? effectiveGroupAllow : effectiveDmAllow;
@@ -642,8 +704,6 @@ export const buildTelegramMessageContext = async ({
           timestamp: entry.timestamp,
         }))
       : undefined;
-  const currentMediaForContext = stickerCacheHit ? [] : allMedia;
-  const contextMedia = [...currentMediaForContext, ...replyMedia];
   const ctxPayload = finalizeInboundContext({
     Body: combinedBody,
     // Agent prompt should be the raw user text only; metadata/context is provided via system prompt.
@@ -689,18 +749,26 @@ export const buildTelegramMessageContext = async ({
     ForwardedDate: forwardOrigin?.date ? forwardOrigin.date * 1000 : undefined,
     Timestamp: msg.date ? msg.date * 1000 : undefined,
     WasMentioned: isGroup ? effectiveWasMentioned : undefined,
-    // Filter out cached stickers from current-message media; reply media is still valid context.
-    MediaPath: contextMedia.length > 0 ? contextMedia[0]?.path : undefined,
-    MediaType: contextMedia.length > 0 ? contextMedia[0]?.contentType : undefined,
-    MediaUrl: contextMedia.length > 0 ? contextMedia[0]?.path : undefined,
-    MediaPaths: contextMedia.length > 0 ? contextMedia.map((m) => m.path) : undefined,
-    MediaUrls: contextMedia.length > 0 ? contextMedia.map((m) => m.path) : undefined,
-    MediaTypes:
-      contextMedia.length > 0
-        ? (contextMedia.map((m) => m.contentType).filter(Boolean) as string[])
+    // Filter out cached stickers from media - their description is already in the message body
+    MediaPath: stickerCacheHit ? undefined : allMedia[0]?.path,
+    MediaType: stickerCacheHit ? undefined : allMedia[0]?.contentType,
+    MediaUrl: stickerCacheHit ? undefined : allMedia[0]?.path,
+    MediaPaths: stickerCacheHit
+      ? undefined
+      : allMedia.length > 0
+        ? allMedia.map((m) => m.path)
+        : undefined,
+    MediaUrls: stickerCacheHit
+      ? undefined
+      : allMedia.length > 0
+        ? allMedia.map((m) => m.path)
+        : undefined,
+    MediaTypes: stickerCacheHit
+      ? undefined
+      : allMedia.length > 0
+        ? (allMedia.map((m) => m.contentType).filter(Boolean) as string[])
         : undefined,
     Sticker: allMedia[0]?.stickerMetadata,
-    StickerMediaIncluded: allMedia[0]?.stickerMetadata ? !stickerCacheHit : undefined,
     ...(locationData ? toLocationContext(locationData) : undefined),
     CommandAuthorized: commandAuthorized,
     // For groups: use resolved forum topic id; for DMs: use raw messageThreadId

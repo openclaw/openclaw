@@ -340,7 +340,7 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 13px;
+  font-size: 14px;
 }
 
 /* Icon button style */
@@ -430,7 +430,7 @@
   display: flex;
   align-items: center;
   gap: 4px;
-  font-size: 12px;
+  font-size: 14px;
   padding: 4px 10px;
   background: rgba(255, 255, 255, 0.04);
   border-radius: 6px;

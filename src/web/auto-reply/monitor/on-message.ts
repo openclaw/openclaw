@@ -3,6 +3,7 @@ import type { MsgContext } from "../../../auto-reply/templating.js";
 import { loadConfig } from "../../../config/config.js";
 import { logVerbose } from "../../../globals.js";
 import { resolveAgentRoute } from "../../../routing/resolve-route.js";
+import { maybeOverrideRouteByKeywords } from "../../../routing/route-keyword-override.js";
 import { buildGroupHistoryKey } from "../../../routing/session-key.js";
 import { normalizeE164 } from "../../../utils.js";
 import type { MentionConfig } from "../mentions.js";
@@ -64,14 +65,22 @@ export function createWebOnMessageHandler(params: {
     const conversationId = msg.conversationId ?? msg.from;
     const peerId = resolvePeerId(msg);
     // Fresh config for bindings lookup; other routing inputs are payload-derived.
-    const route = resolveAgentRoute({
-      cfg: loadConfig(),
+    const cfg = loadConfig();
+    const initialRoute = resolveAgentRoute({
+      cfg,
       channel: "whatsapp",
       accountId: msg.accountId,
       peer: {
         kind: msg.chatType === "group" ? "group" : "direct",
         id: peerId,
       },
+    });
+    const route = maybeOverrideRouteByKeywords({
+      cfg,
+      route: initialRoute,
+      body: msg.body ?? "",
+      channel: "whatsapp",
+      peer: { kind: msg.chatType === "group" ? "group" : "direct", id: peerId },
     });
     const groupHistoryKey =
       msg.chatType === "group"

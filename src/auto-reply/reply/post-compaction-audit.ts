@@ -2,24 +2,91 @@ import fs from "node:fs";
 import path from "node:path";
 
 // Default required files — constants, extensible to config later
+// memory pattern: matches both memory/YYYY-MM-DD.md and memory/timeline/YYYY-MM-DD.md (RippleJay)
 const DEFAULT_REQUIRED_READS: Array<string | RegExp> = [
   "WORKFLOW_AUTO.md",
-  /memory\/\d{4}-\d{2}-\d{2}\.md/, // daily memory files
+  /memory\/(?:timeline\/)?\d{4}-\d{2}-\d{2}\.md/, // daily memory (standard + RippleJay)
 ];
+
+const CONFIG_PATHS = ["audit/post_compaction_required.json", "audit/startup_files.json"];
+
+type WorkspaceConfig = {
+  required?: string[];
+  patterns?: string[];
+  items?: Array<{ path: string; level?: string }>;
+};
+
+function loadRequiredReadsFromWorkspace(workspaceDir: string): Array<string | RegExp> | null {
+  for (const relPath of CONFIG_PATHS) {
+    const configPath = path.join(workspaceDir, relPath);
+    try {
+      if (!fs.existsSync(configPath)) {
+        continue;
+      }
+      const raw = fs.readFileSync(configPath, "utf-8");
+      const cfg = JSON.parse(raw) as WorkspaceConfig;
+      const result: Array<string | RegExp> = [];
+      if (Array.isArray(cfg.required)) {
+        result.push(...cfg.required);
+      }
+      if (Array.isArray(cfg.items)) {
+        for (const item of cfg.items) {
+          if (item.level === "P0" && typeof item.path === "string") {
+            result.push(item.path);
+          }
+        }
+      }
+      if (Array.isArray(cfg.patterns)) {
+        for (const p of cfg.patterns) {
+          if (typeof p === "string") {
+            try {
+              result.push(new RegExp(p));
+            } catch {
+              // skip invalid regex
+            }
+          } else if (
+            p &&
+            typeof p === "object" &&
+            "regex" in p &&
+            typeof (p as { regex: string }).regex === "string"
+          ) {
+            const regex = (p as { regex: string; level?: string }).regex;
+            if ((p as { level?: string }).level === "P0" || !("level" in p)) {
+              try {
+                result.push(new RegExp(regex));
+              } catch {
+                // skip invalid regex
+              }
+            }
+          }
+        }
+      }
+      if (result.length > 0) {
+        return result;
+      }
+    } catch {
+      // silent fallback to default
+    }
+  }
+  return null;
+}
 
 /**
  * Audit whether agent read required startup files after compaction.
  * Returns list of missing file patterns.
+ * Loads config from workspace/audit/post_compaction_required.json if present.
  */
 export function auditPostCompactionReads(
   readFilePaths: string[],
   workspaceDir: string,
-  requiredReads: Array<string | RegExp> = DEFAULT_REQUIRED_READS,
+  requiredReads?: Array<string | RegExp>,
 ): { passed: boolean; missingPatterns: string[] } {
+  const resolved =
+    requiredReads ?? loadRequiredReadsFromWorkspace(workspaceDir) ?? DEFAULT_REQUIRED_READS;
   const normalizedReads = readFilePaths.map((p) => path.resolve(workspaceDir, p));
   const missingPatterns: string[] = [];
 
-  for (const required of requiredReads) {
+  for (const required of resolved) {
     if (typeof required === "string") {
       const requiredResolved = path.resolve(workspaceDir, required);
       const found = normalizedReads.some((r) => r === requiredResolved);
