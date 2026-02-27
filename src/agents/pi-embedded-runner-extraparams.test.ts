@@ -194,7 +194,7 @@ describe("applyExtraParamsToAgent", () => {
       api: "anthropic-messages",
       provider: "anthropic",
       id: params.modelId,
-    } as Model<"anthropic-messages">;
+    } as unknown as Model<"anthropic-messages">;
     const context: Context = { messages: [] };
     void agent.streamFn?.(model, context, params.options ?? {});
 
@@ -228,7 +228,7 @@ describe("applyExtraParamsToAgent", () => {
       api: "openai-completions",
       provider: "openrouter",
       id: "deepseek/deepseek-r1",
-    } as Model<"openai-completions">;
+    } as unknown as Model<"openai-completions">;
     const context: Context = { messages: [] };
     void agent.streamFn?.(model, context, {});
 
@@ -253,7 +253,7 @@ describe("applyExtraParamsToAgent", () => {
       api: "openai-completions",
       provider: "openrouter",
       id: "openrouter/auto",
-    } as Model<"openai-completions">;
+    } as unknown as Model<"openai-completions">;
     const context: Context = { messages: [] };
     void agent.streamFn?.(model, context, {});
 
@@ -277,7 +277,7 @@ describe("applyExtraParamsToAgent", () => {
       api: "openai-completions",
       provider: "openrouter",
       id: "openrouter/auto",
-    } as Model<"openai-completions">;
+    } as unknown as Model<"openai-completions">;
     const context: Context = { messages: [] };
     void agent.streamFn?.(model, context, {});
 
@@ -302,7 +302,7 @@ describe("applyExtraParamsToAgent", () => {
       api: "openai-completions",
       provider: "openrouter",
       id: "openrouter/auto",
-    } as Model<"openai-completions">;
+    } as unknown as Model<"openai-completions">;
     const context: Context = { messages: [] };
     void agent.streamFn?.(model, context, {});
 
@@ -333,7 +333,7 @@ describe("applyExtraParamsToAgent", () => {
       api: "openai-completions",
       provider: "siliconflow",
       id: "Pro/MiniMaxAI/MiniMax-M2.1",
-    } as Model<"openai-completions">;
+    } as unknown as Model<"openai-completions">;
     const context: Context = { messages: [] };
     void agent.streamFn?.(model, context, {});
 
@@ -364,7 +364,7 @@ describe("applyExtraParamsToAgent", () => {
       api: "openai-completions",
       provider: "siliconflow",
       id: "deepseek-ai/DeepSeek-V3.2",
-    } as Model<"openai-completions">;
+    } as unknown as Model<"openai-completions">;
     const context: Context = { messages: [] };
     void agent.streamFn?.(model, context, {});
 
@@ -409,7 +409,7 @@ describe("applyExtraParamsToAgent", () => {
       api: "google-generative-ai",
       provider: "atproxy",
       id: "gemini-3.1-pro-high",
-    } as Model<"google-generative-ai">;
+    } as unknown as Model<"google-generative-ai">;
     const context: Context = { messages: [] };
     void agent.streamFn?.(model, context, {});
 
@@ -456,7 +456,7 @@ describe("applyExtraParamsToAgent", () => {
       api: "google-generative-ai",
       provider: "atproxy",
       id: "gemini-3.1-pro-high",
-    } as Model<"google-generative-ai">;
+    } as unknown as Model<"google-generative-ai">;
     const context: Context = { messages: [] };
     void agent.streamFn?.(model, context, {});
 
@@ -477,7 +477,7 @@ describe("applyExtraParamsToAgent", () => {
       api: "openai-completions",
       provider: "openrouter",
       id: "openrouter/auto",
-    } as Model<"openai-completions">;
+    } as unknown as Model<"openai-completions">;
     const context: Context = { messages: [] };
 
     void agent.streamFn?.(model, context, { headers: { "X-Custom": "1" } });
@@ -512,7 +512,7 @@ describe("applyExtraParamsToAgent", () => {
       api: "openai-codex-responses",
       provider: "openai-codex",
       id: "gpt-5.3-codex",
-    } as Model<"openai-codex-responses">;
+    } as unknown as Model<"openai-codex-responses">;
     const context: Context = { messages: [] };
     void agent.streamFn?.(model, context, {});
 
@@ -529,7 +529,7 @@ describe("applyExtraParamsToAgent", () => {
       api: "openai-codex-responses",
       provider: "openai-codex",
       id: "gpt-5.3-codex",
-    } as Model<"openai-codex-responses">;
+    } as unknown as Model<"openai-codex-responses">;
     const context: Context = { messages: [] };
     void agent.streamFn?.(model, context, {});
 
@@ -546,7 +546,7 @@ describe("applyExtraParamsToAgent", () => {
       api: "openai-responses",
       provider: "openai",
       id: "gpt-5",
-    } as Model<"openai-responses">;
+    } as unknown as Model<"openai-responses">;
     const context: Context = { messages: [] };
     void agent.streamFn?.(model, context, {});
 
@@ -576,7 +576,7 @@ describe("applyExtraParamsToAgent", () => {
       api: "openai-codex-responses",
       provider: "openai-codex",
       id: "gpt-5.3-codex",
-    } as Model<"openai-codex-responses">;
+    } as unknown as Model<"openai-codex-responses">;
     const context: Context = { messages: [] };
     void agent.streamFn?.(model, context, {});
 
@@ -606,7 +606,7 @@ describe("applyExtraParamsToAgent", () => {
       api: "openai-codex-responses",
       provider: "openai-codex",
       id: "gpt-5.3-codex",
-    } as Model<"openai-codex-responses">;
+    } as unknown as Model<"openai-codex-responses">;
     const context: Context = { messages: [] };
     void agent.streamFn?.(model, context, { transport: "sse" });
 
@@ -636,7 +636,7 @@ describe("applyExtraParamsToAgent", () => {
       api: "openai-codex-responses",
       provider: "openai-codex",
       id: "gpt-5.3-codex",
-    } as Model<"openai-codex-responses">;
+    } as unknown as Model<"openai-codex-responses">;
     const context: Context = { messages: [] };
     void agent.streamFn?.(model, context, {});
 
@@ -653,7 +653,7 @@ describe("applyExtraParamsToAgent", () => {
       api: "openai-completions",
       provider: "amazon-bedrock",
       id: "amazon.nova-micro-v1",
-    } as Model<"openai-completions">;
+    } as unknown as Model<"openai-completions">;
     const context: Context = { messages: [] };
 
     void agent.streamFn?.(model, context, {});
@@ -671,7 +671,7 @@ describe("applyExtraParamsToAgent", () => {
       api: "openai-completions",
       provider: "amazon-bedrock",
       id: "us.anthropic.claude-sonnet-4-5",
-    } as Model<"openai-completions">;
+    } as unknown as Model<"openai-completions">;
     const context: Context = { messages: [] };
 
     void agent.streamFn?.(model, context, {});
@@ -702,7 +702,7 @@ describe("applyExtraParamsToAgent", () => {
       api: "openai-completions",
       provider: "amazon-bedrock",
       id: "us.anthropic.claude-opus-4-6-v1",
-    } as Model<"openai-completions">;
+    } as unknown as Model<"openai-completions">;
     const context: Context = { messages: [] };
 
     void agent.streamFn?.(model, context, {});
@@ -721,7 +721,7 @@ describe("applyExtraParamsToAgent", () => {
       api: "anthropic-messages",
       provider: "anthropic",
       id: "claude-opus-4-6",
-    } as Model<"anthropic-messages">;
+    } as unknown as Model<"anthropic-messages">;
     const context: Context = { messages: [] };
 
     // Simulate pi-agent-core passing apiKey in options (API key, not OAuth token)
@@ -766,7 +766,7 @@ describe("applyExtraParamsToAgent", () => {
       api: "anthropic-messages",
       provider: "anthropic",
       id: "claude-sonnet-4-6",
-    } as Model<"anthropic-messages">;
+    } as unknown as Model<"anthropic-messages">;
     const context: Context = { messages: [] };
 
     // Simulate pi-agent-core passing an OAuth token (sk-ant-oat-*) as apiKey
@@ -822,7 +822,7 @@ describe("applyExtraParamsToAgent", () => {
         provider: "openai",
         id: "gpt-5",
         baseUrl: "https://api.openai.com/v1",
-      } as Model<"openai-responses">,
+      } as unknown as Model<"openai-responses">,
     });
     expect(payload.store).toBe(true);
   });
@@ -836,7 +836,7 @@ describe("applyExtraParamsToAgent", () => {
         provider: "openai",
         id: "gpt-5",
         baseUrl: "https://proxy.example.com/v1",
-      } as Model<"openai-responses">,
+      } as unknown as Model<"openai-responses">,
     });
     expect(payload.store).toBe(false);
   });
@@ -853,7 +853,7 @@ describe("applyExtraParamsToAgent", () => {
             provider: "openai-codex",
             id: "codex-mini-latest",
             baseUrl: "https://chatgpt.com/backend-api/codex/responses",
-          } as Model<"openai-codex-responses">,
+          } as unknown as Model<"openai-codex-responses">,
         }),
     },
     {
@@ -867,7 +867,7 @@ describe("applyExtraParamsToAgent", () => {
             provider: "openai-codex",
             id: "codex-mini-latest",
             baseUrl: "https://chatgpt.com/backend-api/codex/responses",
-          } as Model<"openai-codex-responses">,
+          } as unknown as Model<"openai-codex-responses">,
           options: {},
         }),
     },
