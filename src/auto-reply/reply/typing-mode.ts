@@ -125,7 +125,8 @@ export function createTypingSignaler(params: {
   };
 
   const signalToolStart = async () => {
-    if (disabled) {
+    if (disabled || shouldStartOnMessageStart) {
+      // In "message" mode, don't start typing on tool calls — wait for actual text output.
       return;
     }
     // Start typing as soon as tools begin executing, even before the first text delta.
