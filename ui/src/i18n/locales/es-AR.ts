@@ -120,7 +120,6 @@ export const es_AR: TranslationMap = {
     zhCN: "简体中文 (Chino Simplificado)",
     zhTW: "繁體中文 (Chino Tradicional)",
     ptBR: "Português (Portugués Brasileño)",
-    ptPT: "Português (Portugués Europeo)",
     esAR: "Español (Español Argentino)",
   },
 };
