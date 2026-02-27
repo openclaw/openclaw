@@ -10,44 +10,9 @@ import re
 from datetime import datetime
 from pathlib import Path
 from shared.db import resolve_ops_db_path
+from shared.telegram import send_dm as _tg_send_dm, is_suppressed as _tg_is_suppressed
 
 DB_PATH = resolve_ops_db_path()
-CHAT_ID = "492860021"
-
-def send_telegram(message: str, chat_id: str = CHAT_ID) -> bool:
-    import urllib.request
-    
-    token = ""
-    config_file = Path.home() / ".openclaw/openclaw.json"
-    if config_file.exists():
-        with open(config_file) as f:
-            data = json.load(f)
-            channels = data.get('channels', {})
-            telegram = channels.get('telegram', {})
-            token = telegram.get('botToken', '')
-    
-    if not token:
-        print("❌ Telegram Bot Token 없음")
-        return False
-    
-    url = f"https://api.telegram.org/bot{token}/sendMessage"
-    
-    if len(message) > 3500:
-        message = message[:3500] + "\n\n... (계속)"
-    
-    payload = {"chat_id": chat_id, "text": message}
-    data = json.dumps(payload).encode("utf-8")
-    headers = {"Content-Type": "application/json"}
-    
-    req = urllib.request.Request(url, data=data, headers=headers, method="POST")
-    
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            result = json.loads(resp.read().decode("utf-8"))
-            return result.get("ok", False)
-    except Exception as e:
-        print(f"❌ 전송 실패: {e}")
-        return False
 
 
 def _clean_sentence(text: str, max_len: int = 80) -> str:
@@ -246,10 +211,6 @@ def check_and_notify():
 
     print(f"[{datetime.now().strftime('%H:%M:%S')}] {len(rows)}개 태스크 알림...")
 
-    # 인프라 실패 패턴 — 에이전트가 해결 불가한 LLM/네트워크 장애
-    _INFRA_FAIL_KW = ("timed out", "timeout", "empty_response", "cooldown",
-                       "connection refused", "econnrefused")
-
     # 태스크를 하나의 메시지로 묶기 (최대 3000자)
     blocks = []
     notified_ids = []
@@ -258,7 +219,7 @@ def check_and_notify():
         task_id, title, agent, result_note, completed_at, status = row
 
         # 인프라 실패는 알림 스킵 (notify_flag만 마킹하여 재전송 방지)
-        if status == "failed" and any(k in (result_note or "").lower() for k in _INFRA_FAIL_KW):
+        if status == "failed" and _tg_is_suppressed(result_note or ""):
             notified_ids.append(task_id)
             continue
 
@@ -289,7 +250,7 @@ def check_and_notify():
     if len(message) > 3500:
         message = message[:3500] + "\n\n… (일부 생략)"
 
-    if send_telegram(message):
+    if _tg_send_dm(message):
         for tid in notified_ids:
             cursor.execute(
                 "UPDATE bus_commands SET notify_flag = 1 WHERE id = ?",

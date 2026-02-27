@@ -33,9 +33,17 @@ except ImportError:
     pass  # fallback: raw sqlite3 still works
 
 try:
-    from shared.vault_paths import VAULT as _VAULT_PATH
+    from shared.vault_paths import (
+        VAULT as _VAULT_PATH, INBOX as _INBOX,
+        LEGACY_NOTES as _LEGACY_NOTES, PLAYBOOK as _PLAYBOOK,
+        VAULT_CATEGORY_DIRS as _VAULT_CATEGORY_DIRS,
+    )
 except ImportError:
     _VAULT_PATH = Path(os.path.expanduser("~/knowledge"))
+    _INBOX = _VAULT_PATH / "100 캡처" / "110 수신함"
+    _LEGACY_NOTES = _VAULT_PATH / "100 지식" / "120 노트"
+    _PLAYBOOK = _VAULT_PATH / "800 운영" / "820 플레이북"
+    _VAULT_CATEGORY_DIRS = {}
 
 def _get_model_chain_orig(default_model="openclaw:main", include_default=True):
     return [default_model]
@@ -108,6 +116,17 @@ _STOP_SECTIONS = {"[분석]", "[판단]", "[검증]", "[현황]", "[리스크]",
 
 # Whitelist: only these script prefixes are allowed
 _CMD_WHITELIST_PREFIXES = [
+    # OpenClaw CLI (Gateway 관리)
+    "openclaw gateway status",
+    "openclaw gateway restart",
+    "openclaw gateway start",
+    "openclaw gateway stop",
+    "openclaw status",
+    # 로컬 API 확인
+    "curl http://127.0.0.1:18789",
+    "curl http://localhost:18789",
+    "curl http://127.0.0.1:3344",
+    "curl http://localhost:3344",
     # 핵심 도구
     "python3 ontology_core.py",
     "python3 knowledge_os.py",
@@ -134,6 +153,9 @@ _CMD_WHITELIST_PREFIXES = [
     "python3 pipeline/shipbuilding_cycle_tracker.py",
     "python3 pipeline/choi_report_collector.py",
     "python3 pipeline/telegram_popular_posts.py",
+    "python3 pipeline/vault_flow_health.py",
+    "python3 pipeline/company_insight_tracker.py",
+    "python3 pipeline/daily_intelligence_report.py",
     "python3 pipeline/system_dashboard.py",
     "python3.13 pipeline/twitter_collector.py",
     "/opt/homebrew/bin/python3.13 pipeline/twitter_collector.py",
@@ -343,6 +365,12 @@ def _execute_tool_cmd(cmd: str) -> str:
         first = " ".join(argv[:2]) if len(argv) >= 2 else argv[0]
         if not any(ln.startswith(p.lower()) for p in _CMD_WHITELIST_PREFIXES if p):
             return "(blocked: not in whitelist)"
+        # Ensure PYTHONPATH includes scripts so internal imports (shared.*) resolve
+        env = os.environ.copy()
+        sp_pypath = env.get("PYTHONPATH", "")
+        scripts_path = str(Path(work_dir) / "..")
+        if scripts_path not in sp_pypath:
+            env["PYTHONPATH"] = (sp_pypath + os.pathsep + scripts_path).strip(os.pathsep)
         p = subprocess.run(
             argv,
             shell=False,
@@ -351,6 +379,7 @@ def _execute_tool_cmd(cmd: str) -> str:
             timeout=TOOL_USE_CMD_TIMEOUT,
             cwd=work_dir,
             check=False,
+            env=env,
         )
         out = (p.stdout or "").strip()
         err = (p.stderr or "").strip()
@@ -527,8 +556,8 @@ def bus_post(agent: str, content: str, ref: str = "", msg_type: str = "status") 
         pass
 
 PLAYBOOKS_DIR_CANDIDATES = [
-    Path("/Users/ron/.openclaw/workspace/knowledge/300 운영/320 플레이북/329 비넘버 통합"),
-    Path("/Users/ron/.openclaw/workspace/knowledge/300 운영/320 플레이북"),
+    _PLAYBOOK / "329 비넘버 통합",
+    _PLAYBOOK,
 ]
 PLAYBOOKS_DIR = next((p for p in PLAYBOOKS_DIR_CANDIDATES if p.exists()), PLAYBOOKS_DIR_CANDIDATES[0])
 
@@ -563,7 +592,11 @@ _BUS_TOKEN = _BUS_TOKEN_FILE.read_text().strip() if _BUS_TOKEN_FILE.exists() els
 # WORKSPACE already defined at module top (line 52)
 CONFIG_PATH = Path("/Users/ron/.openclaw/openclaw.json")
 APPROVAL_DB = WORKSPACE / "data" / "approvals.db"
-TELEGRAM_CHAT_ID = 492860021
+# Telegram — via shared.telegram
+try:
+    from shared.telegram import send_dm as _tg_send_dm
+except (ImportError, Exception):
+    _tg_send_dm = lambda text, **kw: False
 
 # --- Critical action classification ---
 CRITICAL_KEYWORDS = [
@@ -577,30 +610,6 @@ CRITICAL_KEYWORDS = [
     "백업 복구", "restore", "롤백", "rollback",
 ]
 
-def _get_bot_token() -> str:
-    try:
-        cfg = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
-        return cfg["channels"]["telegram"]["botToken"]
-    except Exception:
-        return ""
-
-def _send_telegram_dm(text: str) -> bool:
-    token = _get_bot_token()
-    if not token:
-        return False
-    from urllib.request import Request as _Req, urlopen as _open
-    url = f"https://api.telegram.org/bot{token}/sendMessage"
-    payload = json.dumps({
-        "chat_id": TELEGRAM_CHAT_ID,
-        "text": text,
-        "parse_mode": "HTML",
-    }).encode("utf-8")
-    req = _Req(url, data=payload, headers={"Content-Type": "application/json"})
-    try:
-        with _open(req, timeout=15) as r:
-            return r.status == 200
-    except Exception:
-        return False
 
 def _init_approval_db():
     APPROVAL_DB.parent.mkdir(parents=True, exist_ok=True)
@@ -646,7 +655,7 @@ def request_approval(cmd_id: int, agent: str, title: str, reason: str) -> int:
         f"승인: /approve {approval_id}\n"
         f"거부: /reject {approval_id}"
     )
-    _send_telegram_dm(msg)
+    _tg_send_dm(msg, level="critical")
     return approval_id
 
 def check_approval_status(approval_id: int) -> str:
@@ -746,7 +755,18 @@ def run_cmd(cmd: list[str], timeout: int = 120) -> tuple[int, str, str]:
                     if p.is_file() and p.stat().st_size < 5 * 1024 * 1024:  # limit 5MB per file
                         pre_hashes[str(p)] = _sha256_of_file(p)
 
-    p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=False)
+    # Ensure PYTHONPATH when invoking workspace scripts so shared.* imports resolve
+    env = os.environ.copy()
+    cwd = None
+    # If executing a workspace script path, run from scripts/ and set PYTHONPATH
+    for part in cmd:
+        if str(WORKSPACE / "scripts") in str(part) or (isinstance(part, str) and part.endswith(".py") and "scripts/" in part):
+            cwd = str(WORKSPACE / "scripts")
+            sp_pypath = env.get("PYTHONPATH", "")
+            if str(WORKSPACE / "scripts") not in sp_pypath:
+                env["PYTHONPATH"] = (sp_pypath + os.pathsep + str(WORKSPACE / "scripts")).strip(os.pathsep)
+            break
+    p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=False, cwd=cwd, env=env)
 
     post_hashes = {}
     if modifies_workspace:
@@ -1318,18 +1338,14 @@ def _handle_data_analyst(title: str, body: str, text: str) -> tuple[bool, str]:
 
     # ZK 지식 현황
     if any(k in text for k in ["지식", "ZK", "제텔", "노트", "공백", "연결", "볼트"]):
-        vault = _VAULT_PATH
-        inbox_count = len(list((vault / "100 지식" / "110 수신함").glob("*.md"))) if (vault / "100 지식" / "110 수신함").exists() else 0
-        # v3: 5 category dirs + legacy 120 노트
-        cat_dirs = ["120 기업", "125 시장", "130 산업분석", "135 프로그래밍", "140 인사이트"]
+        inbox_count = len(list(_INBOX.glob("*.md"))) if _INBOX.exists() else 0
+        # v3: category dirs + legacy 120 노트
         notes_count = 0
-        for cd in cat_dirs:
-            d = vault / "100 지식" / cd
+        for d in _VAULT_CATEGORY_DIRS.values():
             if d.exists():
                 notes_count += len(list(d.glob("*.md")))
-        legacy_d = vault / "100 지식" / "120 노트"
-        if legacy_d.exists():
-            notes_count += len(list(legacy_d.glob("*.md")))
+        if _LEGACY_NOTES.exists():
+            notes_count += len(list(_LEGACY_NOTES.glob("*.md")))
         context_parts.append(f"[ZK현황] 수신함={inbox_count}건, 노트={notes_count}건")
         # 파이프라인 결과
         filtered_dir = WORKSPACE / "memory" / "filtered-ideas"

@@ -53,6 +53,12 @@ try:
 except ImportError:
     _make_logger = None
 
+try:
+    from shared.telegram import send_dm as _tg_send_dm, is_suppressed as _tg_is_suppressed
+except (ImportError, Exception):
+    _tg_send_dm = lambda text, **kw: None
+    _tg_is_suppressed = lambda text: False
+
 def get_model_chain(default_model="openclaw:main", include_default=True):
     return [default_model]
 
@@ -2036,41 +2042,7 @@ BUS_CB_THRESHOLD = int(os.environ.get("ORCH_BUS_CB_THRESHOLD", "5"))       # 동
 BUS_CB_WINDOW_SEC = int(os.environ.get("ORCH_BUS_CB_WINDOW_SEC", "3600"))   # 1시간 sliding window
 BUS_CB_COOLDOWN_SEC = int(os.environ.get("ORCH_BUS_CB_COOLDOWN_SEC", "43200"))  # 12시간 후 자동 해제 (기존 24h→12h 단축)
 
-# Telegram DM for circuit breaker alerts
-_CB_BOT_TOKEN = None
-
-def _get_cb_bot_token():
-    global _CB_BOT_TOKEN
-    if _CB_BOT_TOKEN:
-        return _CB_BOT_TOKEN
-    try:
-        with open(os.path.join(HOME, ".openclaw/openclaw.json")) as f:
-            _CB_BOT_TOKEN = json.load(f)["channels"]["telegram"]["botToken"]
-    except Exception:
-        _CB_BOT_TOKEN = ""
-    return _CB_BOT_TOKEN
-
-
-def _cb_send_telegram_dm(text):
-    """Send circuit breaker alert to Telegram DM (chat_id: 492860021)."""
-    token = _get_cb_bot_token()
-    if not token:
-        return
-    try:
-        payload = json.dumps({
-            "chat_id": 492860021,
-            "text": text[:4000],
-            "parse_mode": "HTML",
-        }).encode("utf-8")
-        req = Request(
-            "https://api.telegram.org/bot{}/sendMessage".format(token),
-            data=payload,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        urlopen(req, timeout=10)
-    except Exception:
-        pass
+# Telegram DM for circuit breaker alerts — via shared.telegram (imported at top)
 
 
 def _compute_error_signature(title, result_note):
@@ -2201,8 +2173,7 @@ def _update_circuit_breakers(state):
     # 4. Send Telegram alerts for newly tripped breakers
     #    (인프라 실패 — timeout/cooldown 등 — 는 텔레그램 DM 스킵, 로그만 기록)
     for key, sig, agent, info in tripped_this_cycle:
-        is_infra = any(p in sig.lower() for p in _INFRA_FAIL_PATTERNS)
-        if is_infra:
+        if _tg_is_suppressed(sig):
             log("BUS_CB: infra-fail sig='{}' agent={} — Telegram DM suppressed".format(sig, agent))
         else:
             msg = (
@@ -2214,7 +2185,7 @@ def _update_circuit_breakers(state):
                 "Action: blocking retries + new tasks for 24h".format(
                     sig, agent, info["count"], info["last_title"][:60])
             )
-            _cb_send_telegram_dm(msg)
+            _tg_send_dm(msg, level="alert")
         bus_write("harry", "alert", "[BUS-CB] {} tripped for agent={} ({} fails)".format(
             sig, agent, info["count"]))
 

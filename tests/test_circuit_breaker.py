@@ -246,7 +246,7 @@ class TestUpdateCircuitBreakers:
     """Test bus_commands circuit breaker state updates."""
 
     def test_trips_after_threshold_hits(self, tmp_db):
-        """3 same-signature failures -> trips breaker."""
+        """3 same-signature failures -> trips breaker (threshold patched to 3)."""
         conn = sqlite3.connect(tmp_db)
         now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         for i in range(3):
@@ -260,7 +260,8 @@ class TestUpdateCircuitBreakers:
         state = {"circuit_breakers": {}}
         with patch.object(orch, 'OPS_DB', tmp_db), \
              patch.object(orch, 'DATA_DB', tmp_db), \
-             patch('orchestrator._cb_send_telegram_dm'):
+             patch.object(orch, 'BUS_CB_THRESHOLD', 3), \
+             patch('orchestrator._tg_send_dm'):
             orch._update_circuit_breakers(state)
 
         breakers = state["circuit_breakers"]
@@ -282,7 +283,7 @@ class TestUpdateCircuitBreakers:
         state = {"circuit_breakers": {}}
         with patch.object(orch, 'OPS_DB', tmp_db), \
              patch.object(orch, 'DATA_DB', tmp_db), \
-             patch('orchestrator._cb_send_telegram_dm'):
+             patch('orchestrator._tg_send_dm'):
             orch._update_circuit_breakers(state)
 
         breakers = state["circuit_breakers"]
@@ -304,7 +305,7 @@ class TestUpdateCircuitBreakers:
         }
 
         with patch('orchestrator.ops_db_query', return_value=[]), \
-             patch('orchestrator._cb_send_telegram_dm'):
+             patch('orchestrator._tg_send_dm'):
             orch._update_circuit_breakers(state)
 
         assert len(state["circuit_breakers"]) == 0
