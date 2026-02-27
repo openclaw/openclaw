@@ -50,6 +50,18 @@ export function rewriteLegacyGatewayBinaryArgv(argv: string[]): string[] {
   return next;
 }
 
+export function syncProcessArgvForNormalizedArgs(params: {
+  sourceArgv: string[];
+  normalizedArgv: string[];
+  currentArgv?: string[];
+}): string[] {
+  const currentArgv = params.currentArgv ?? process.argv;
+  if (params.sourceArgv !== currentArgv) {
+    return currentArgv;
+  }
+  return params.normalizedArgv;
+}
+
 export function shouldRegisterPrimarySubcommand(argv: string[]): boolean {
   return !hasHelpOrVersion(argv);
 }
@@ -90,6 +102,7 @@ export function shouldEnsureCliPath(argv: string[]): boolean {
 
 export async function runCli(argv: string[] = process.argv) {
   const normalizedArgv = rewriteLegacyGatewayBinaryArgv(normalizeWindowsArgv(argv));
+  process.argv = syncProcessArgvForNormalizedArgs({ sourceArgv: argv, normalizedArgv });
   loadDotEnv({ quiet: true });
   normalizeEnv();
   if (shouldEnsureCliPath(normalizedArgv)) {

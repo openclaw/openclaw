@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   rewriteLegacyGatewayBinaryArgv,
   rewriteUpdateFlagArgv,
+  syncProcessArgvForNormalizedArgs,
   shouldEnsureCliPath,
   shouldRegisterPrimarySubcommand,
   shouldSkipPluginCommandRegistration,
@@ -75,6 +76,33 @@ describe("rewriteLegacyGatewayBinaryArgv", () => {
   it("avoids double-prefixing when gateway is already present", () => {
     const argv = ["node", "/usr/local/bin/openclaw-gateway", "gateway", "status"];
     expect(rewriteLegacyGatewayBinaryArgv(argv)).toBe(argv);
+  });
+});
+
+describe("syncProcessArgvForNormalizedArgs", () => {
+  it("syncs global argv when normalization started from process.argv", () => {
+    const current = ["node", "/usr/local/bin/openclaw-gateway", "discover"];
+    const normalized = rewriteLegacyGatewayBinaryArgv(current);
+    expect(
+      syncProcessArgvForNormalizedArgs({
+        sourceArgv: current,
+        normalizedArgv: normalized,
+        currentArgv: current,
+      }),
+    ).toEqual(["node", "/usr/local/bin/openclaw-gateway", "gateway", "discover"]);
+  });
+
+  it("leaves process argv untouched when runCli receives a custom argv input", () => {
+    const source = ["node", "/usr/local/bin/openclaw-gateway", "discover"];
+    const current = ["node", "/usr/local/bin/openclaw", "status"];
+    const normalized = rewriteLegacyGatewayBinaryArgv(source);
+    expect(
+      syncProcessArgvForNormalizedArgs({
+        sourceArgv: source,
+        normalizedArgv: normalized,
+        currentArgv: current,
+      }),
+    ).toBe(current);
   });
 });
 
