@@ -355,7 +355,10 @@ describe("chunkMarkdown — section strategy", () => {
   it("does not regress on long unstructured content without headings", () => {
     // No ## headings at all — simulates raw logs, plain notes, etc.
     // Section strategy treats this as a single section, then sub-splits if needed
-    const lines = Array.from({ length: 200 }, (_, i) => `Unstructured log entry ${i}: some data here`);
+    const lines = Array.from(
+      { length: 200 },
+      (_, i) => `Unstructured log entry ${i}: some data here`,
+    );
     const content = lines.join("\n");
     const sectionChunks = chunkMarkdown(content, { tokens: 400, overlap: 0, strategy: "section" });
     // All content must be captured (no data loss)
@@ -425,7 +428,7 @@ describe("chunkMarkdown — section strategy", () => {
       Array.from({ length: n }, (_, i) => `${prefix} line ${i + 1}`);
 
     const content = [
-      ...makeLines(20, "Preamble"),  // No heading before first section
+      ...makeLines(20, "Preamble"), // No heading before first section
       "",
       "## Only Section",
       "",
