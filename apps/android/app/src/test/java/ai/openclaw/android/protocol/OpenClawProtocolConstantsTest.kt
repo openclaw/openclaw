@@ -46,11 +46,14 @@ class OpenClawProtocolConstantsTest {
   @Test
   fun notificationsCommandsUseStableStrings() {
     assertEquals("notifications.list", OpenClawNotificationsCommand.List.rawValue)
+    assertEquals("notifications.actions", OpenClawNotificationsCommand.Actions.rawValue)
   }
 
   @Test
   fun deviceCommandsUseStableStrings() {
     assertEquals("device.status", OpenClawDeviceCommand.Status.rawValue)
     assertEquals("device.info", OpenClawDeviceCommand.Info.rawValue)
+    assertEquals("device.permissions", OpenClawDeviceCommand.Permissions.rawValue)
+    assertEquals("device.health", OpenClawDeviceCommand.Health.rawValue)
   }
 }
