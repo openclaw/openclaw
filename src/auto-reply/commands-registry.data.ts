@@ -265,15 +265,15 @@ function buildChatCommands(): ChatCommandDefinition[] {
     defineChatCommand({
       key: "session",
       nativeName: "session",
-      description: "Manage session-level settings (for example /session ttl).",
+      description: "Manage session-level settings (for example /session idle).",
       textAlias: "/session",
       category: "session",
       args: [
         {
           name: "action",
-          description: "ttl",
+          description: "idle | max-age",
           type: "string",
-          choices: ["ttl"],
+          choices: ["idle", "max-age"],
         },
         {
           name: "value",

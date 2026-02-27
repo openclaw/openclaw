@@ -83,6 +83,80 @@ OpenClaw uses `pi-ai` for model streaming. For `openai-codex/*` models you can s
 }
 ```
 
+### OpenAI Responses server-side compaction
+
+For direct OpenAI Responses models (`openai/*` using `api: "openai-responses"` with
+`baseUrl` on `api.openai.com`), OpenClaw now auto-enables OpenAI server-side
+compaction payload hints:
+
+- Forces `store: true` (unless model compat sets `supportsStore: false`)
+- Injects `context_management: [{ type: "compaction", compact_threshold: ... }]`
+
+By default, `compact_threshold` is `70%` of model `contextWindow` (or `80000`
+when unavailable).
+
+### Enable server-side compaction explicitly
+
+Use this when you want to force `context_management` injection on compatible
+Responses models (for example Azure OpenAI Responses):
+
+```json5
+{
+  agents: {
+    defaults: {
+      models: {
+        "azure-openai-responses/gpt-4o": {
+          params: {
+            responsesServerCompaction: true,
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+### Enable with a custom threshold
+
+```json5
+{
+  agents: {
+    defaults: {
+      models: {
+        "openai/gpt-5": {
+          params: {
+            responsesServerCompaction: true,
+            responsesCompactThreshold: 120000,
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+### Disable server-side compaction
+
+```json5
+{
+  agents: {
+    defaults: {
+      models: {
+        "openai/gpt-5": {
+          params: {
+            responsesServerCompaction: false,
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+`responsesServerCompaction` only controls `context_management` injection.
+Direct OpenAI Responses models still force `store: true` unless compat sets
+`supportsStore: false`.
+
 ## Notes
 
 - Model refs always use `provider/model` (see [/concepts/models](/concepts/models)).
