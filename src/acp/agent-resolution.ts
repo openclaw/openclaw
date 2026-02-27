@@ -29,7 +29,7 @@ export function resolveAcpAgent(
   }
 
   // Try to resolve from fleet agents list
-  const fleetAgent = agentsList.find((a) => a.id === candidate);
+  const fleetAgent = agentsList.find((a) => a.id.toLowerCase() === normalizedCandidate);
   if (fleetAgent) {
     const model =
       typeof fleetAgent.model === "string" ? fleetAgent.model : (fleetAgent.model?.primary ?? "");
