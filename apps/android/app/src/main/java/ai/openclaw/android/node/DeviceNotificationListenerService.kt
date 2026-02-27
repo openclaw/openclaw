@@ -54,6 +54,10 @@ data class NotificationActionResult(
   val message: String? = null,
 )
 
+internal fun actionRequiresClearableNotification(kind: NotificationActionKind): Boolean {
+  return kind == NotificationActionKind.Dismiss
+}
+
 private object DeviceNotificationStore {
   private val lock = Any()
   private var connected = false
@@ -221,7 +225,7 @@ class DeviceNotificationListenerService : NotificationListenerService() {
           code = "NOTIFICATION_NOT_FOUND",
           message = "NOTIFICATION_NOT_FOUND: notification key not found",
         )
-    if (!sbn.isClearable) {
+    if (actionRequiresClearableNotification(request.kind) && !sbn.isClearable) {
       return NotificationActionResult(
         ok = false,
         code = "NOTIFICATION_NOT_CLEARABLE",

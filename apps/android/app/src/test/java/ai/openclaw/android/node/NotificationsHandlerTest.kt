@@ -182,6 +182,13 @@ class NotificationsHandlerTest {
     assertTrue((sanitized ?: "").all { it == 'x' })
   }
 
+  @Test
+  fun notificationsActionClearablePolicy_onlyRequiresClearableForDismiss() {
+    assertTrue(actionRequiresClearableNotification(NotificationActionKind.Dismiss))
+    assertFalse(actionRequiresClearableNotification(NotificationActionKind.Open))
+    assertFalse(actionRequiresClearableNotification(NotificationActionKind.Reply))
+  }
+
   private fun parsePayload(result: GatewaySession.InvokeResult): JsonObject {
     val payloadJson = result.payloadJson ?: error("expected payload")
     return Json.parseToJsonElement(payloadJson).jsonObject
