@@ -570,6 +570,30 @@ export async function dispatchReplyFromConfig(params: {
     const counts = dispatcher.getQueuedCounts();
     counts.final += routedFinalCount;
     recordProcessed("completed");
+
+    // Emit message:sent internal hook for embedded runtime channels (Telegram, etc.)
+    // This bridges the gap where deliverOutboundPayloads (non-embedded path) emits
+    // message_sent but the embedded path does not.
+    if (sessionKey) {
+      const sentContent =
+        replies
+          .map((r) => r.text ?? "")
+          .filter(Boolean)
+          .join("\n") || accumulatedBlockText;
+      if (sentContent) {
+        void triggerInternalHook(
+          createInternalHookEvent("message", "sent", sessionKey, {
+            to: conversationId,
+            content: sentContent,
+            success: true,
+            channelId,
+            accountId: ctx.AccountId,
+            conversationId,
+          }),
+        ).catch(() => {});
+      }
+    }
+
     markIdle("message_completed");
     return { queuedFinal, counts };
   } catch (err) {
