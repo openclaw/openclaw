@@ -85,7 +85,8 @@ export const translations: Translations = {
     "error.channel.notFound": "Canal no encontrado: {{channel}}",
     "error.channel.authFailed": "Error de autenticación del canal: {{channel}}",
     "error.cron.jobNotFound": "Trabajo cron no encontrado: {{id}}",
-    "error.cron.jobRunning": "El trabajo cron se está ejecutando, use --force para eliminar de todos modos",
+    "error.cron.jobRunning":
+      "El trabajo cron se está ejecutando, use --force para eliminar de todos modos",
     "error.origin.notAllowed": "Origen no permitido: {{origin}}",
     "success.cron.jobRemoved": "Trabajo eliminado exitosamente: {{name}}",
     "success.cron.jobAdded": "Trabajo agregado exitosamente: {{name}}",
@@ -98,7 +99,8 @@ export const translations: Translations = {
     "error.channel.notFound": "Canal non trouvé: {{channel}}",
     "error.channel.authFailed": "Échec de l'authentification du canal: {{channel}}",
     "error.cron.jobNotFound": "Tâche cron non trouvée: {{id}}",
-    "error.cron.jobRunning": "La tâche cron est en cours d'exécution, utilisez --force pour supprimer quand même",
+    "error.cron.jobRunning":
+      "La tâche cron est en cours d'exécution, utilisez --force pour supprimer quand même",
     "error.origin.notAllowed": "Origine non autorisée: {{origin}}",
     "success.cron.jobRemoved": "Tâche supprimée avec succès: {{name}}",
     "success.cron.jobAdded": "Tâche ajoutée avec succès: {{name}}",

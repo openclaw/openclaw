@@ -60,7 +60,11 @@ export function registerCronSimpleCommands(cron: Command) {
           // Provide helpful error messages for common cases
           if (errorMessage.includes("not found") || errorMessage.includes("not exist")) {
             const errorMsg = opts.json
-              ? JSON.stringify({ ok: false, error: t("error.cron.jobNotFound", { id }), id }, null, 2)
+              ? JSON.stringify(
+                  { ok: false, error: t("error.cron.jobNotFound", { id }), id },
+                  null,
+                  2,
+                )
               : `❌ ${t("error.cron.jobNotFound", { id })}`;
             defaultRuntime.log(errorMsg);
           } else if (errorMessage.includes("running")) {
@@ -141,7 +145,12 @@ export function registerCronSimpleCommands(cron: Command) {
       .action(async (opts) => {
         try {
           // Fetch all jobs across pages
-          const allJobs: Array<{ id?: string; name?: string; enabled?: boolean; state?: { runningAtMs?: number } }> = [];
+          const allJobs: Array<{
+            id?: string;
+            name?: string;
+            enabled?: boolean;
+            state?: { runningAtMs?: number };
+          }> = [];
           let offset: number | undefined;
           let hasMore = true;
 
@@ -151,7 +160,12 @@ export function registerCronSimpleCommands(cron: Command) {
               offset,
               limit: 200, // Max page size
             })) as {
-              jobs?: Array<{ id?: string; name?: string; enabled?: boolean; state?: { runningAtMs?: number } }>;
+              jobs?: Array<{
+                id?: string;
+                name?: string;
+                enabled?: boolean;
+                state?: { runningAtMs?: number };
+              }>;
               hasMore?: boolean;
               nextOffset?: number;
             } | null;
@@ -187,12 +201,16 @@ export function registerCronSimpleCommands(cron: Command) {
               disabledJobs: disabledJobs.length,
               totalJobs: allJobs.length,
             };
-            defaultRuntime.log(opts.json ? JSON.stringify(result, null, 2) : `Dry run results:
+            defaultRuntime.log(
+              opts.json
+                ? JSON.stringify(result, null, 2)
+                : `Dry run results:
 - Stale jobs (running >1h): ${staleJobs.length}
 - Disabled jobs: ${disabledJobs.length}
 - Total jobs: ${allJobs.length}
 
-Run without --dry-run to clean up stale jobs.`);
+Run without --dry-run to clean up stale jobs.`,
+            );
             return;
           }
 

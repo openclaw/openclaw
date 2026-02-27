@@ -378,7 +378,9 @@ export function resolveMemoryBackendConfig(params: {
 export async function checkQmdBinaryAvailable(
   command = "qmd",
   timeoutMs = 5000,
-): Promise<{ available: true; path: string } | { available: false; error: string; transient?: boolean }> {
+): Promise<
+  { available: true; path: string } | { available: false; error: string; transient?: boolean }
+> {
   const cacheKey = `${command}:${timeoutMs}`;
   const now = Date.now();
 
@@ -434,7 +436,9 @@ export async function checkQmdBinaryAvailable(
       "not recognized", // Windows "not recognized as an internal or external command"
       "不是内部或外部命令", // Chinese Windows "not recognized" message
     ];
-    const isNotFound = notFoundPatterns.some((pattern) => errorLower.includes(pattern.toLowerCase()));
+    const isNotFound = notFoundPatterns.some((pattern) =>
+      errorLower.includes(pattern.toLowerCase()),
+    );
     // Also check if the command name appears in the error (common for "not found" errors)
     const isCommandMentioned = error.includes(command) || error.includes(resolvedCommand);
     if (isNotFound || (isCommandMentioned && errorLower.includes("fail"))) {

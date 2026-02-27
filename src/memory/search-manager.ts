@@ -38,7 +38,9 @@ export async function getMemorySearchManager(params: {
     const qmdCheck = await checkQmdBinaryAvailable(resolved.qmd.command);
     if (!qmdCheck.available) {
       log.warn(`QMD binary not available: ${qmdCheck.error}`);
-      log.warn("Falling back to builtin memory backend. To use QMD, install it and ensure it's on PATH.");
+      log.warn(
+        "Falling back to builtin memory backend. To use QMD, install it and ensure it's on PATH.",
+      );
     } else {
       // Only try to create QMD manager if binary is available
       try {
