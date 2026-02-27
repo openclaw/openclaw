@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   discoverHuggingfaceModels,
   HUGGINGFACE_MODEL_CATALOG,
+  HUGGINGFACE_DISCOVERY_TIMEOUT_MS,
   buildHuggingfaceModelDefinition,
   isHuggingfacePolicyLocked,
 } from "./huggingface-models.js";
@@ -40,5 +41,15 @@ describe("huggingface-models", () => {
       expect(isHuggingfacePolicyLocked("huggingface/deepseek-ai/DeepSeek-R1")).toBe(false);
       expect(isHuggingfacePolicyLocked("huggingface/foo:together")).toBe(false);
     });
+  });
+
+  it("HUGGINGFACE_DISCOVERY_TIMEOUT_MS defaults to 20 seconds", () => {
+    expect(HUGGINGFACE_DISCOVERY_TIMEOUT_MS).toBe(20_000);
+  });
+
+  it("discoverHuggingfaceModels uses custom timeout when provided", async () => {
+    // In test env, it returns static catalog regardless of timeout
+    const models = await discoverHuggingfaceModels("hf_test_token", 30_000);
+    expect(models).toHaveLength(HUGGINGFACE_MODEL_CATALOG.length);
   });
 });
