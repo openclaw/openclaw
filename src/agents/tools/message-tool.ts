@@ -198,6 +198,21 @@ function buildSendSchema(options: {
     quoteText: Type.Optional(
       Type.String({ description: "Quote text for Telegram reply_parameters" }),
     ),
+    linkPreviewOptions: Type.Optional(
+      Type.Object(
+        {
+          is_disabled: Type.Optional(Type.Boolean()),
+          url: Type.Optional(Type.String()),
+          prefer_small_media: Type.Optional(Type.Boolean()),
+          prefer_large_media: Type.Optional(Type.Boolean()),
+          show_above_text: Type.Optional(Type.Boolean()),
+        },
+        {
+          description:
+            "Telegram link preview options. Controls link unfurling behavior per message.",
+        },
+      ),
+    ),
     bestEffort: Type.Optional(Type.Boolean()),
     gifPlayback: Type.Optional(Type.Boolean()),
     buttons: Type.Optional(

@@ -41,6 +41,15 @@ import { resolveTelegramVoiceSend } from "./voice.js";
 type TelegramApi = Bot["api"];
 type TelegramApiOverride = Partial<TelegramApi>;
 
+/** Per-message link preview options (maps to Telegram API link_preview_options). */
+type TelegramLinkPreviewOptions = {
+  is_disabled?: boolean;
+  url?: string;
+  prefer_small_media?: boolean;
+  prefer_large_media?: boolean;
+  show_above_text?: boolean;
+};
+
 type TelegramSendOpts = {
   cfg?: ReturnType<typeof loadConfig>;
   token?: string;
@@ -67,6 +76,8 @@ type TelegramSendOpts = {
   messageThreadId?: number;
   /** Inline keyboard buttons (reply markup). */
   buttons?: TelegramInlineButtons;
+  /** Per-message link preview options. Overrides account-level linkPreview config. */
+  linkPreviewOptions?: TelegramLinkPreviewOptions;
 };
 
 type TelegramSendResult = {
@@ -504,9 +515,12 @@ export async function sendMessageTelegram(
   });
   const renderHtmlText = (value: string) => renderTelegramHtmlText(value, { textMode, tableMode });
 
-  // Resolve link preview setting from config (default: enabled).
-  const linkPreviewEnabled = account.config.linkPreview ?? true;
-  const linkPreviewOptions = linkPreviewEnabled ? undefined : { is_disabled: true };
+  // Per-message link_preview_options override account-level linkPreview config.
+  const linkPreviewOptions: TelegramLinkPreviewOptions | undefined = opts.linkPreviewOptions
+    ? opts.linkPreviewOptions
+    : (account.config.linkPreview ?? true)
+      ? undefined
+      : { is_disabled: true };
 
   const sendTelegramText = async (
     rawText: string,

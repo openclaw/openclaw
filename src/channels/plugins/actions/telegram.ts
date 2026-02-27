@@ -30,6 +30,10 @@ function readTelegramSendParams(params: Record<string, unknown>) {
   const asVoice = typeof params.asVoice === "boolean" ? params.asVoice : undefined;
   const silent = typeof params.silent === "boolean" ? params.silent : undefined;
   const quoteText = readStringParam(params, "quoteText");
+  const linkPreviewOptions =
+    params.linkPreviewOptions != null && typeof params.linkPreviewOptions === "object"
+      ? (params.linkPreviewOptions as Record<string, unknown>)
+      : undefined;
   return {
     to,
     content,
@@ -40,6 +44,7 @@ function readTelegramSendParams(params: Record<string, unknown>) {
     asVoice,
     silent,
     quoteText: quoteText ?? undefined,
+    linkPreviewOptions,
   };
 }
 

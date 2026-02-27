@@ -223,6 +223,17 @@ export async function handleTelegramAction(
       integer: true,
     });
     const quoteText = readStringParam(params, "quoteText");
+    // Per-message link preview control (maps to Telegram API link_preview_options).
+    const linkPreviewOptions =
+      params.linkPreviewOptions != null && typeof params.linkPreviewOptions === "object"
+        ? (params.linkPreviewOptions as {
+            is_disabled?: boolean;
+            url?: string;
+            prefer_small_media?: boolean;
+            prefer_large_media?: boolean;
+            show_above_text?: boolean;
+          })
+        : undefined;
     const token = resolveTelegramToken(cfg, { accountId }).token;
     if (!token) {
       throw new Error(
@@ -240,6 +251,7 @@ export async function handleTelegramAction(
       quoteText: quoteText ?? undefined,
       asVoice: typeof params.asVoice === "boolean" ? params.asVoice : undefined,
       silent: typeof params.silent === "boolean" ? params.silent : undefined,
+      linkPreviewOptions,
     });
     return jsonResult({
       ok: true,

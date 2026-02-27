@@ -329,6 +329,64 @@ describe("sendMessageTelegram", () => {
     }
   });
 
+  it("uses per-message linkPreviewOptions when provided", async () => {
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 10, chat: { id: "123" } });
+    const api = { sendMessage } as unknown as {
+      sendMessage: typeof sendMessage;
+    };
+    loadConfig.mockReturnValue({});
+    await sendMessageTelegram("123", "check https://example.com", {
+      token: "tok",
+      api,
+      linkPreviewOptions: { is_disabled: true },
+    });
+    expect(sendMessage.mock.calls[0]?.[2]).toEqual(
+      expect.objectContaining({
+        link_preview_options: { is_disabled: true },
+      }),
+    );
+  });
+
+  it("per-message linkPreviewOptions overrides config linkPreview", async () => {
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 11, chat: { id: "123" } });
+    const api = { sendMessage } as unknown as {
+      sendMessage: typeof sendMessage;
+    };
+    // Config disables link preview, but per-message opts enable with specific URL
+    loadConfig.mockReturnValue({
+      channels: { telegram: { linkPreview: false } },
+    });
+    await sendMessageTelegram("123", "check this out", {
+      token: "tok",
+      api,
+      linkPreviewOptions: { url: "https://example.com", prefer_small_media: true },
+    });
+    expect(sendMessage.mock.calls[0]?.[2]).toEqual(
+      expect.objectContaining({
+        link_preview_options: { url: "https://example.com", prefer_small_media: true },
+      }),
+    );
+  });
+
+  it("falls back to config linkPreview when no per-message linkPreviewOptions", async () => {
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 12, chat: { id: "123" } });
+    const api = { sendMessage } as unknown as {
+      sendMessage: typeof sendMessage;
+    };
+    loadConfig.mockReturnValue({
+      channels: { telegram: { linkPreview: false } },
+    });
+    await sendMessageTelegram("123", "check this out", {
+      token: "tok",
+      api,
+    });
+    expect(sendMessage.mock.calls[0]?.[2]).toEqual(
+      expect.objectContaining({
+        link_preview_options: { is_disabled: true },
+      }),
+    );
+  });
+
   it("fails when Telegram text send returns no message_id", async () => {
     const sendMessage = vi.fn().mockResolvedValue({
       chat: { id: "123" },
