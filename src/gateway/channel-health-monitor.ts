@@ -8,6 +8,7 @@ const DEFAULT_CHECK_INTERVAL_MS = 5 * 60_000;
 const DEFAULT_STARTUP_GRACE_MS = 60_000;
 const DEFAULT_COOLDOWN_CYCLES = 2;
 const DEFAULT_MAX_RESTARTS_PER_HOUR = 3;
+const DEFAULT_STALE_INBOUND_THRESHOLD_MS = 15 * 60_000; // 15 minutes
 const ONE_HOUR_MS = 60 * 60_000;
 
 export type ChannelHealthMonitorDeps = {
@@ -32,12 +33,16 @@ function isManagedAccount(snapshot: { enabled?: boolean; configured?: boolean })
   return snapshot.enabled !== false && snapshot.configured !== false;
 }
 
-function isChannelHealthy(snapshot: {
-  running?: boolean;
-  connected?: boolean;
-  enabled?: boolean;
-  configured?: boolean;
-}): boolean {
+function isChannelHealthy(
+  snapshot: {
+    running?: boolean;
+    connected?: boolean;
+    enabled?: boolean;
+    configured?: boolean;
+    lastInboundAt?: number | null;
+  },
+  staleThresholdMs: number = DEFAULT_STALE_INBOUND_THRESHOLD_MS,
+): boolean {
   if (!isManagedAccount(snapshot)) {
     return true;
   }
@@ -47,6 +52,15 @@ function isChannelHealthy(snapshot: {
   if (snapshot.connected === false) {
     return false;
   }
+
+  // Detect zombie polling: running but no inbound for too long
+  if (snapshot.lastInboundAt != null) {
+    const stalenessMs = Date.now() - snapshot.lastInboundAt;
+    if (stalenessMs > staleThresholdMs) {
+      return false; // trigger restart
+    }
+  }
+
   return true;
 }
 
@@ -105,6 +119,17 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
             continue;
           }
 
+          // Log stale detection for observability
+          if (
+            status.lastInboundAt != null &&
+            Date.now() - status.lastInboundAt > DEFAULT_STALE_INBOUND_THRESHOLD_MS
+          ) {
+            const stalenessMin = Math.round((Date.now() - status.lastInboundAt) / 60_000);
+            log.warn?.(
+              `[${channelId}:${accountId}] health-monitor: detected stale channel (no inbound for ${stalenessMin}min)`,
+            );
+          }
+
           const key = rKey(channelId, accountId);
           const record = restartRecords.get(key) ?? {
             lastRestartAt: 0,
@@ -127,7 +152,12 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
             ? status.reconnectAttempts && status.reconnectAttempts >= 10
               ? "gave-up"
               : "stopped"
-            : "stuck";
+            : status.connected === false
+              ? "disconnected"
+              : status.lastInboundAt != null &&
+                  Date.now() - status.lastInboundAt > DEFAULT_STALE_INBOUND_THRESHOLD_MS
+                ? "stale"
+                : "stuck";
 
           log.info?.(`[${channelId}:${accountId}] health-monitor: restarting (reason: ${reason})`);
 
