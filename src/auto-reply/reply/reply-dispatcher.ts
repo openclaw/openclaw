@@ -14,7 +14,7 @@ export type ReplyDispatchKind = "tool" | "block" | "final";
 export type DeliveryQueueContext = {
   channel: DeliverableMessageChannel;
   to: string;
-  turnId?: string;
+  turnId: string;
   accountId?: string;
   threadId?: string | number | null;
   replyToId?: string | null;

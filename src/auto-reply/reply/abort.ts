@@ -16,6 +16,7 @@ import {
   updateSessionStore,
 } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
+import { abortTurnsForSession } from "../../infra/message-lifecycle/turns.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
 import { normalizeCommandBody, type CommandNormalizeOptions } from "../commands-registry.js";
@@ -334,11 +335,15 @@ export async function tryFastAbortFromMessage(params: {
       setAbortMemory(abortKey, true);
     }
     const { stopped } = stopSubagentsForRequester({ cfg, requesterSessionKey });
+    abortTurnsForSession(key ?? targetKey);
     return { handled: true, aborted, stoppedSubagents: stopped };
   }
 
   if (abortKey) {
     setAbortMemory(abortKey, true);
+  }
+  if (requesterSessionKey) {
+    abortTurnsForSession(requesterSessionKey);
   }
   const { stopped } = stopSubagentsForRequester({ cfg, requesterSessionKey });
   return { handled: true, aborted: false, stoppedSubagents: stopped };

@@ -45,6 +45,45 @@ export function getLifecycleDb(stateDir?: string): DatabaseSync {
 
 export function ensureLifecycleSchema(db: DatabaseSync): void {
   db.exec(`
+    CREATE TABLE IF NOT EXISTS message_turns (
+      id                TEXT NOT NULL PRIMARY KEY,
+      channel           TEXT NOT NULL DEFAULT '',
+      account_id        TEXT NOT NULL DEFAULT '',
+      external_id       TEXT,
+      dedupe_key        TEXT,
+      session_key       TEXT NOT NULL DEFAULT '',
+      payload           TEXT NOT NULL DEFAULT '{}',
+      route_channel     TEXT NOT NULL DEFAULT '',
+      route_to          TEXT NOT NULL DEFAULT '',
+      route_account_id  TEXT,
+      route_thread_id   TEXT,
+      route_reply_to_id TEXT,
+      accepted_at       INTEGER NOT NULL,
+      updated_at        INTEGER NOT NULL,
+      status            TEXT NOT NULL DEFAULT 'accepted',
+      attempt_count     INTEGER NOT NULL DEFAULT 0,
+      next_attempt_at   INTEGER NOT NULL,
+      terminal_reason   TEXT,
+      completed_at      INTEGER
+    );
+  `);
+
+  db.exec("DROP INDEX IF EXISTS idx_message_turns_dedup");
+  db.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_message_turns_dedup
+      ON message_turns(dedupe_key)
+      WHERE dedupe_key IS NOT NULL;
+  `);
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_message_turns_resume
+      ON message_turns(status, next_attempt_at, updated_at);
+  `);
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_message_turns_session_status
+      ON message_turns(session_key, status);
+  `);
+
+  db.exec(`
     CREATE TABLE IF NOT EXISTS message_outbox (
       id              TEXT NOT NULL PRIMARY KEY,
       turn_id         TEXT,
