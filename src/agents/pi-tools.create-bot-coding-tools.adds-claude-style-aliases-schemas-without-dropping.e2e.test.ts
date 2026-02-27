@@ -1,13 +1,12 @@
+import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
+import { Type } from "@sinclair/typebox";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
-import { Type } from "@sinclair/typebox";
 import { describe, expect, it, vi } from "vitest";
 import "./test-helpers/fast-coding-tools.js";
 import { createBotTools } from "./bot-tools.js";
 import { __testing, createBotCodingTools } from "./pi-tools.js";
-import { createSandboxedReadTool } from "./pi-tools.read.js";
 import { createBotReadTool, createSandboxedReadTool } from "./pi-tools.read.js";
 import { createHostSandboxFsBridge } from "./test-helpers/host-sandbox-fs-bridge.js";
 import { createBrowserTool } from "./tools/browser-tool.js";
@@ -518,7 +517,6 @@ describe("createBotCodingTools", () => {
     }
   });
   it("applies sandbox path guards to file_path alias", async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "bot-sbx-"));
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "hanzo-bot-sbx-"));
     const outsidePath = path.join(os.tmpdir(), "bot-outside.txt");
     await fs.writeFile(outsidePath, "outside", "utf8");

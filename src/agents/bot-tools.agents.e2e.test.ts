@@ -59,13 +59,6 @@ describe("agents_list", () => {
   });
 
   it("defaults to the requester agent only", async () => {
-    const tool = createBotTools({
-      agentSessionKey: "main",
-    }).find((candidate) => candidate.name === "agents_list");
-    if (!tool) {
-      throw new Error("missing agents_list tool");
-    }
-
     const tool = requireAgentsListTool();
     const result = await tool.execute("call1", {});
     expect(result.details).toMatchObject({
@@ -89,14 +82,6 @@ describe("agents_list", () => {
         id: "research",
         name: "Research",
       },
-    };
-
-    const tool = createBotTools({
-      agentSessionKey: "main",
-    }).find((candidate) => candidate.name === "agents_list");
-    if (!tool) {
-      throw new Error("missing agents_list tool");
-    }
     ]);
 
     const tool = requireAgentsListTool();
@@ -117,14 +102,6 @@ describe("agents_list", () => {
         id: "research",
         name: "Research",
       },
-    };
-
-    const tool = createBotTools({
-      agentSessionKey: "main",
-    }).find((candidate) => candidate.name === "agents_list");
-    if (!tool) {
-      throw new Error("missing agents_list tool");
-    }
       {
         id: "coder",
         name: "Coder",
@@ -148,24 +125,6 @@ describe("agents_list", () => {
           allowAgents: ["research"],
         },
       },
-      agents: {
-        list: [
-          {
-            id: "main",
-            subagents: {
-              allowAgents: ["research"],
-            },
-          },
-        ],
-      },
-    };
-
-    const tool = createBotTools({
-      agentSessionKey: "main",
-    }).find((candidate) => candidate.name === "agents_list");
-    if (!tool) {
-      throw new Error("missing agents_list tool");
-    }
     ]);
 
     const tool = requireAgentsListTool();

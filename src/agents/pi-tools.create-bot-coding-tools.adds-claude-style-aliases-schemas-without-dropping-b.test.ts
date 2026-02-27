@@ -3,7 +3,6 @@ import type { BotConfig } from "../config/config.js";
 import "./test-helpers/fast-coding-tools.js";
 import { createBotCodingTools } from "./pi-tools.js";
 
-const defaultTools = createBotCodingTools();
 const defaultTools = createBotCodingTools({ senderIsOwner: true });
 
 describe("createBotCodingTools", () => {
@@ -58,8 +57,6 @@ describe("createBotCodingTools", () => {
     expect(defaultTools.some((tool) => tool.name === "apply_patch")).toBe(false);
   });
   it("gates apply_patch behind tools.exec.applyPatch for OpenAI models", () => {
-    const config: BotConfig = {
-
     const enabledConfig: BotConfig = {
       tools: {
         exec: {
@@ -68,7 +65,6 @@ describe("createBotCodingTools", () => {
       },
     };
     const openAiTools = createBotCodingTools({
-      config,
       config: enabledConfig,
       modelProvider: "openai",
       modelId: "gpt-5.2",
@@ -76,7 +72,6 @@ describe("createBotCodingTools", () => {
     expect(openAiTools.some((tool) => tool.name === "apply_patch")).toBe(true);
 
     const anthropicTools = createBotCodingTools({
-      config,
       config: enabledConfig,
       modelProvider: "anthropic",
       modelId: "claude-opus-4-5",
@@ -84,8 +79,6 @@ describe("createBotCodingTools", () => {
     expect(anthropicTools.some((tool) => tool.name === "apply_patch")).toBe(false);
   });
   it("respects apply_patch allowModels", () => {
-    const config: BotConfig = {
-
     const allowModelsConfig: BotConfig = {
       tools: {
         exec: {
@@ -94,7 +87,6 @@ describe("createBotCodingTools", () => {
       },
     };
     const allowed = createBotCodingTools({
-      config,
       config: allowModelsConfig,
       modelProvider: "openai",
       modelId: "gpt-5.2",
@@ -102,7 +94,6 @@ describe("createBotCodingTools", () => {
     expect(allowed.some((tool) => tool.name === "apply_patch")).toBe(true);
 
     const denied = createBotCodingTools({
-      config,
       config: allowModelsConfig,
       modelProvider: "openai",
       modelId: "gpt-5-mini",
@@ -110,8 +101,6 @@ describe("createBotCodingTools", () => {
     expect(denied.some((tool) => tool.name === "apply_patch")).toBe(false);
   });
   it("keeps canonical tool names for Anthropic OAuth (pi-ai remaps on the wire)", () => {
-    const tools = createBotCodingTools({
-
     const oauthTools = createBotCodingTools({
       modelProvider: "anthropic",
       modelAuthMode: "oauth",
