@@ -15,7 +15,7 @@ import { createSandboxFsBridge } from "./fs-bridge.js";
 import { maybePruneSandboxes } from "./prune.js";
 import { resolveSandboxRuntimeStatus } from "./runtime-status.js";
 import { createSeatbeltFsBridge } from "./seatbelt-fs-bridge.js";
-import { ensureSeatbeltDemoProfiles } from "./seatbelt-profiles.js";
+import { ensureSeatbeltDemoProfiles, SEATBELT_DEMO_PROFILE_NAMES } from "./seatbelt-profiles.js";
 import { resolveSandboxScopeKey, resolveSandboxWorkspaceDir } from "./shared.js";
 import type {
   SandboxContext,
@@ -140,13 +140,19 @@ async function resolveSeatbeltContextConfig(params: {
   };
 
   if (!(await hasProfile())) {
+    const isDemoProfile = SEATBELT_DEMO_PROFILE_NAMES.includes(
+      profile as (typeof SEATBELT_DEMO_PROFILE_NAMES)[number],
+    );
     let ensureError: unknown;
-    try {
-      await ensureSeatbeltDemoProfiles({
-        profileDir: params.cfg.seatbelt.profileDir,
-      });
-    } catch (error) {
-      ensureError = error;
+
+    if (isDemoProfile) {
+      try {
+        await ensureSeatbeltDemoProfiles({
+          profileDir: params.cfg.seatbelt.profileDir,
+        });
+      } catch (error) {
+        ensureError = error;
+      }
     }
 
     if (!(await hasProfile())) {

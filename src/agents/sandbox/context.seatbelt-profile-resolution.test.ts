@@ -78,20 +78,16 @@ describe("resolveSeatbeltContextConfig profile handling", () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-seatbelt-work-"));
     cleanupPaths.push(profileDir, workspaceDir);
 
-    await expect(
-      resolveSandboxContext({
-        config: createSeatbeltConfig({ profileDir, profile: "custom-missing" }),
-        sessionKey: "agent:main:main",
-        workspaceDir,
-      }),
-    ).rejects.toThrow(/Seatbelt profile "custom-missing" not found/);
+    const contextPromise = resolveSandboxContext({
+      config: createSeatbeltConfig({ profileDir, profile: "custom-missing" }),
+      sessionKey: "agent:main:main",
+      workspaceDir,
+    });
 
-    await expect(
-      resolveSandboxContext({
-        config: createSeatbeltConfig({ profileDir, profile: "custom-missing" }),
-        sessionKey: "agent:main:main",
-        workspaceDir,
-      }),
-    ).rejects.toThrow(/openclaw doctor/);
+    await expect(contextPromise).rejects.toThrow(/Seatbelt profile "custom-missing" not found/);
+    await expect(contextPromise).rejects.toThrow(/openclaw doctor/);
+
+    const profileDirEntries = await fs.readdir(profileDir);
+    expect(profileDirEntries).toEqual([]);
   });
 });

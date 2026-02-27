@@ -77,6 +77,32 @@ describe("sandbox seatbelt config", () => {
     expect(res.ok).toBe(true);
   });
 
+  it("rejects traversal-like seatbelt profile names", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          sandbox: {
+            backend: "seatbelt",
+            seatbelt: {
+              profile: "../../etc/evil",
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(
+        res.issues.some(
+          (issue) =>
+            issue.path.includes("seatbelt.profile") ||
+            issue.message.toLowerCase().includes("profile name must use only"),
+        ),
+      ).toBe(true);
+    }
+  });
+
   it("rejects seatbelt backend on non-darwin platforms", () => {
     const res = withPlatform("linux", () =>
       validateConfigObject({

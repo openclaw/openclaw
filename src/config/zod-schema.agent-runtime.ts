@@ -201,7 +201,13 @@ export const SandboxDockerSchema = z
 export const SandboxSeatbeltSchema = z
   .object({
     profileDir: z.string().optional(),
-    profile: z.string().optional(),
+    profile: z
+      .string()
+      .regex(
+        /^[a-zA-Z0-9_-]+(?:\.sb)?$/,
+        "Seatbelt profile name must use only letters, numbers, '_' or '-' (optional .sb suffix).",
+      )
+      .optional(),
     params: z.record(z.string(), z.string()).optional(),
   })
   .strict()
