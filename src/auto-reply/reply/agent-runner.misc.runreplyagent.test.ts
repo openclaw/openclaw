@@ -22,6 +22,8 @@ vi.mock("../../agents/model-fallback.js", () => ({
     model: string;
     run: (provider: string, model: string) => Promise<unknown>;
   }) => runWithModelFallbackMock(params),
+  resolveFallbackCandidates: () => [],
+  resolveModelFallbackOptions: () => ({}),
 }));
 
 vi.mock("../../agents/pi-embedded.js", async () => {

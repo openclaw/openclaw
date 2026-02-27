@@ -67,6 +67,8 @@ vi.mock("../../agents/model-fallback.js", () => ({
     model,
     attempts: [],
   }),
+  resolveFallbackCandidates: () => [],
+  resolveModelFallbackOptions: () => ({}),
 }));
 
 vi.mock("../../agents/pi-embedded.js", () => ({
