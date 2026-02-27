@@ -32,21 +32,48 @@ function makeAccount(
   };
 }
 
-function makeStalledReq(method: string): IncomingMessage {
+function makeReq(method: string, body: string): IncomingMessage {
   const req = new EventEmitter() as IncomingMessage & {
     destroyed: boolean;
-    destroy: () => void;
   };
   req.method = method;
   req.headers = {};
   req.socket = { remoteAddress: "127.0.0.1" } as any;
   req.destroyed = false;
-  req.destroy = () => {
+  req.destroy = ((_: Error | undefined) => {
+    if (req.destroyed) {
+      return req;
+    }
+    req.destroyed = true;
+    return req;
+  }) as IncomingMessage["destroy"];
+
+  // Simulate body delivery
+  process.nextTick(() => {
     if (req.destroyed) {
       return;
     }
-    req.destroyed = true;
+    req.emit("data", Buffer.from(body));
+    req.emit("end");
+  });
+
+  return req;
+}
+function makeStalledReq(method: string): IncomingMessage {
+  const req = new EventEmitter() as IncomingMessage & {
+    destroyed: boolean;
   };
+  req.method = method;
+  req.headers = {};
+  req.socket = { remoteAddress: "127.0.0.1" } as any;
+  req.destroyed = false;
+  req.destroy = ((_: Error | undefined) => {
+    if (req.destroyed) {
+      return req;
+    }
+    req.destroyed = true;
+    return req;
+  }) as IncomingMessage["destroy"];
   return req;
 }
 
