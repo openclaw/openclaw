@@ -188,6 +188,12 @@ function parseMessageContent(content: string, messageType: string): string {
       const { textContent } = parsePostContent(content);
       return textContent;
     }
+    if (messageType === "share_chat") {
+      // Handle merged/forwarded messages (share_chat)
+      // This indicates a message that was forwarded from a chat
+      // The actual content requires additional API calls to fetch
+      return "[Forwarded message - original content requires additional API call to retrieve]";
+    }
     return content;
   } catch {
     return content;
@@ -293,6 +299,15 @@ function parsePostContent(content: string): {
             if (imageKey) {
               imageKeys.push(imageKey);
             }
+          } else if (element.tag === "code" || element.tag === "code_block") {
+            // Inline or block code
+            const code = element.text || element.content || "";
+            textContent += `\`${code}\``;
+          } else if (element.tag === "pre") {
+            // Preformatted text / code block
+            const lang = element.language || "";
+            const code = element.text || element.content || "";
+            textContent += `\n\`\`\`${lang}\n${code}\n\`\`\`\n`;
           }
         }
         textContent += "\n";
