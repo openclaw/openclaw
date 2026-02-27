@@ -10,7 +10,7 @@ title: "ACP Agents"
 
 # ACP agents
 
-ACP sessions let OpenClaw run external coding harnesses (for example Pi, Claude Code, Codex, OpenCode, and Gemini CLI) through an ACP backend plugin.
+[Agent Client Protocol (ACP)](https://agentclientprotocol.com/) sessions let OpenClaw run external coding harnesses (for example Pi, Claude Code, Codex, OpenCode, and Gemini CLI) through an ACP backend plugin.
 
 If you ask OpenClaw in plain language to "run this in Codex" or "start Claude Code in a thread", OpenClaw should route that request to the ACP runtime (not the native sub-agent runtime).
 
@@ -68,7 +68,7 @@ When thread bindings are enabled for a channel adapter, ACP sessions can be boun
 - OpenClaw binds a thread to a target ACP session.
 - Follow-up messages in that thread route to the bound ACP session.
 - ACP output is delivered back to the same thread.
-- Unfocus/close/archive/TTL expiry removes the binding.
+- Unfocus/close/archive/idle-timeout or max-age expiry removes the binding.
 
 Thread binding support is adapter-specific. If the active channel adapter does not support thread bindings, OpenClaw returns a clear unsupported/unavailable message.
 
@@ -272,7 +272,8 @@ Thread binding config is channel-adapter specific. Example for Discord:
   session: {
     threadBindings: {
       enabled: true,
-      ttlHours: 24,
+      idleHours: 24,
+      maxAgeHours: 0,
     },
   },
   channels: {
