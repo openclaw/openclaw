@@ -1,6 +1,5 @@
 /**
- * Listen-only mode: resolve whether outbound delivery is suppressed for a
- * given channel/account combination.
+ * Resolve whether outbound delivery is suppressed for a channel/account.
  *
  * Resolution order (first defined value wins):
  *   1. Account-level:  channels.<channel>.accounts.<accountId>.suppressOutbound
@@ -15,7 +14,7 @@ type ProviderConfig = {
   accounts?: Record<string, { suppressOutbound?: boolean } | undefined>;
 };
 
-/** Returns `true` when outbound should be suppressed (listen-only mode). */
+/** Returns `true` when outbound delivery should be suppressed. */
 export function isOutboundSuppressed(params: {
   cfg: OpenClawConfig;
   channel: string;

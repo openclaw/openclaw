@@ -786,15 +786,12 @@ export async function runMessageAction(
 
   const gateway = resolveGateway(input);
 
-  // Block outbound-write actions when suppressOutbound is active.
-  // Read-only queries (search, list, info) are exempt so inbound/operational
-  // workflows continue to work in listen-only mode.
   if (
     !dryRun &&
     !SUPPRESS_EXEMPT_ACTIONS.has(action) &&
     isOutboundSuppressed({ cfg, channel, accountId })
   ) {
-    throw new Error(`Outbound suppressed for channel ${channel} (listen-only mode)`);
+    throw new Error(`Outbound suppressed for channel ${channel}`);
   }
 
   if (action === "send") {

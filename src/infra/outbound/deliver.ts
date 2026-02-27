@@ -452,7 +452,6 @@ export async function deliverOutboundPayloads(
 ): Promise<OutboundDeliveryResult[]> {
   const { channel, to, payloads } = params;
 
-  // Listen-only mode: suppress all outbound when configured.
   if (isOutboundSuppressed({ cfg: params.cfg, channel, accountId: params.accountId })) {
     console.warn(
       `[suppressOutbound] Blocked ${payloads.length} outbound payload(s) → ${channel}/${to}` +

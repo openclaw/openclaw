@@ -173,10 +173,7 @@ export const sendHandlers: GatewayRequestHandlers = {
       respond(
         false,
         undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `Outbound suppressed for channel ${channel} (listen-only mode)`,
-        ),
+        errorShape(ErrorCodes.INVALID_REQUEST, `Outbound suppressed for channel ${channel}`),
       );
       return;
     }
@@ -414,16 +411,12 @@ export const sendHandlers: GatewayRequestHandlers = {
         ? request.accountId.trim()
         : undefined;
 
-    // Listen-only mode: block poll sends when suppressOutbound is active.
     if (isOutboundSuppressed({ cfg, channel, accountId })) {
       console.warn(`[suppressOutbound] Blocked poll → ${channel}/${to}`);
       respond(
         false,
         undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `Outbound suppressed for channel ${channel} (listen-only mode)`,
-        ),
+        errorShape(ErrorCodes.INVALID_REQUEST, `Outbound suppressed for channel ${channel}`),
       );
       return;
     }

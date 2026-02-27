@@ -396,6 +396,9 @@ export async function processMessage(params: {
         }
       },
       deliver: async (payload: ReplyPayload, info) => {
+        // Only deliver final replies to external messaging channels (WhatsApp).
+        // Block (reasoning/thinking) and tool updates are meant for the internal
+        // web UI only; sending them here leaks chain-of-thought to end users.
         if (info.kind !== "final") {
           return;
         }
