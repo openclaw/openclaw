@@ -589,6 +589,26 @@ describe("statusCommand", () => {
     expect(joined).toContain("trusted-proxy");
   });
 
+  it("uses probed gateway port in nonce tunnel guidance", async () => {
+    mocks.probeGateway.mockResolvedValueOnce({
+      ok: false,
+      url: "wss://forward.example.com:24444",
+      connectLatencyMs: null,
+      error: "connect failed: device nonce required",
+      close: { code: 1008, reason: "connect failed" },
+      health: null,
+      status: null,
+      presence: null,
+      configSnapshot: null,
+    });
+
+    runtimeLogMock.mockClear();
+    await statusCommand({}, runtime as never);
+    const joined = runtimeLogMock.mock.calls.map((c: unknown[]) => String(c[0])).join("\n");
+    expect(joined).toContain("ssh -L 24444:127.0.0.1:24444 <user>@<host>");
+    expect(joined).toContain("http://127.0.0.1:24444");
+  });
+
   it("includes sessions across agents in JSON output", async () => {
     const originalAgents = mocks.listAgentsForGateway.getMockImplementation();
     const originalResolveStorePath = mocks.resolveStorePath.getMockImplementation();

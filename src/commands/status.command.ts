@@ -84,9 +84,30 @@ function resolveNonceRecoveryContext(params: {
   error?: string | null;
   closeReason?: string | null;
   gatewayUrl?: string | null;
+  fallbackPort: number;
 }): {
   loopbackUrl: boolean;
+  tunnelPort: number;
 } | null {
+  const resolveTunnelPort = (): number => {
+    try {
+      const raw = params.gatewayUrl;
+      if (!raw) {
+        return params.fallbackPort;
+      }
+      const parsed = new URL(raw);
+      if ((parsed.protocol === "ws:" || parsed.protocol === "wss:") && parsed.port) {
+        const numeric = Number.parseInt(parsed.port, 10);
+        if (Number.isFinite(numeric) && numeric > 0 && numeric <= 65_535) {
+          return numeric;
+        }
+      }
+    } catch {
+      // Use configured fallback below.
+    }
+    return params.fallbackPort;
+  };
+
   const source = [params.error, params.closeReason]
     .filter((part) => typeof part === "string" && part.trim().length > 0)
     .join(" ")
@@ -103,6 +124,7 @@ function resolveNonceRecoveryContext(params: {
   }
   return {
     loopbackUrl: isLoopbackWsUrl(params.gatewayUrl),
+    tunnelPort: resolveTunnelPort(),
   };
 }
 
@@ -259,12 +281,13 @@ export async function statusCommand(
   const tableWidth = Math.max(60, (process.stdout.columns ?? 120) - 1);
 
   const dashboard = (() => {
+    const configuredGatewayPort = resolveGatewayPort(cfg);
     const controlUiEnabled = cfg.gateway?.controlUi?.enabled ?? true;
     if (!controlUiEnabled) {
       return "disabled";
     }
     const links = resolveControlUiLinks({
-      port: resolveGatewayPort(cfg),
+      port: configuredGatewayPort,
       bind: cfg.gateway?.bind,
       customBindHost: cfg.gateway?.customBindHost,
       basePath: cfg.gateway?.controlUi?.basePath,
@@ -307,6 +330,7 @@ export async function statusCommand(
     error: gatewayProbe?.error ?? null,
     closeReason: gatewayProbe?.close?.reason ?? null,
     gatewayUrl: gatewayProbe?.url ?? gatewayConnection.url,
+    fallbackPort: resolveGatewayPort(cfg),
   });
 
   const agentsValue = (() => {
@@ -502,8 +526,12 @@ export async function statusCommand(
     if (!nonceRecovery.loopbackUrl) {
       runtime.log(theme.muted("Use a local SSH tunnel instead of a provider web proxy."));
     }
-    runtime.log(theme.muted("Tunnel: ssh -L 18789:127.0.0.1:18789 <user>@<host>"));
-    runtime.log(theme.muted("Then open: http://127.0.0.1:18789"));
+    runtime.log(
+      theme.muted(
+        `Tunnel: ssh -L ${nonceRecovery.tunnelPort}:127.0.0.1:${nonceRecovery.tunnelPort} <user>@<host>`,
+      ),
+    );
+    runtime.log(theme.muted(`Then open: http://127.0.0.1:${nonceRecovery.tunnelPort}`));
     runtime.log(
       theme.muted(
         "If you must stay behind a reverse proxy, configure gateway auth mode as trusted-proxy.",
