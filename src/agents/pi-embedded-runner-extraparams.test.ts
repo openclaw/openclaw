@@ -853,7 +853,7 @@ describe("applyExtraParamsToAgent", () => {
             provider: "openai-codex",
             id: "codex-mini-latest",
             baseUrl: "https://chatgpt.com/backend-api/codex/responses",
-          } as Model<"openai-codex-responses">,
+          } as unknown as Model<"openai-codex-responses">,
         }),
     },
     {
@@ -867,7 +867,7 @@ describe("applyExtraParamsToAgent", () => {
             provider: "openai-codex",
             id: "codex-mini-latest",
             baseUrl: "https://chatgpt.com/backend-api/codex/responses",
-          } as Model<"openai-codex-responses">,
+          } as unknown as Model<"openai-codex-responses">,
           options: {},
         }),
     },

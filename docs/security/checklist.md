@@ -47,6 +47,7 @@ Run these checks before connecting OpenClaw to any real accounts or services.
   ```
 
 - [ ] **Any installed skills scanned before use**
+
   ```bash
   openclaw skill scan /path/to/skill
   ```
@@ -82,6 +83,7 @@ Run these checks before connecting OpenClaw to any real accounts or services.
   ```
 
 - [ ] **Review security posture**
+
   ```bash
   openclaw security health
   ```
@@ -131,6 +133,7 @@ Run these checks before connecting OpenClaw to any real accounts or services.
   ```
 
 - [ ] **Review channel allowlists** — remove users who should no longer have access
+
   ```bash
   openclaw doctor   # check channel DM policy warnings
   ```
@@ -183,6 +186,7 @@ If you suspect a credential was exposed or unusual activity occurred:
    ```
 
 7. **Check audit log integrity**
+
    ```bash
    openclaw security health   # look for "BROKEN" in audit integrity row
    ```
