@@ -578,7 +578,11 @@ async function deliverOutboundPayloadsCore(
             buttons: buttons as Array<Array<{ text: string; callback_data: string }>>,
           });
           results.push({ channel: "telegram", ...result });
-          emitMessageSent(true);
+          emitMessageSent({
+            success: true,
+            content: payloadSummary.text,
+            messageId: result.messageId,
+          });
           continue;
         }
       }
