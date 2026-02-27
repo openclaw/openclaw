@@ -190,6 +190,10 @@ export function parseTtsDirectives(
             if (!policy.allowModelId) {
               break;
             }
+            if (!isValidOpenAIModel(rawValue)) {
+              warnings.push(`invalid OpenAI model "${rawValue}"`);
+              break;
+            }
             overrides.openai = { ...overrides.openai, model: rawValue };
             break;
           case "elevenlabs_model":
