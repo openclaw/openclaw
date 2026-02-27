@@ -3,6 +3,7 @@ import path from "node:path";
 import { type OpenClawConfig, loadConfig } from "../config/config.js";
 import { isRecord } from "../utils.js";
 import { resolveOpenClawAgentDir } from "./agent-paths.js";
+import { KEYLESS_LOCAL_PLACEHOLDER } from "./model-auth.js";
 import {
   normalizeProviders,
   type ProviderConfig,
@@ -155,7 +156,13 @@ export async function ensureOpenClawModelsJson(
           | undefined;
         if (existing) {
           const preserved: Record<string, unknown> = {};
-          if (typeof existing.apiKey === "string" && existing.apiKey) {
+          // Don't preserve the keyless placeholder — real credentials from env
+          // vars or auth profiles must take precedence on subsequent startups.
+          if (
+            typeof existing.apiKey === "string" &&
+            existing.apiKey &&
+            existing.apiKey !== KEYLESS_LOCAL_PLACEHOLDER
+          ) {
             preserved.apiKey = existing.apiKey;
           }
           if (typeof existing.baseUrl === "string" && existing.baseUrl) {

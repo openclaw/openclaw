@@ -465,7 +465,12 @@ export function normalizeProviders(params: {
     const hasModels =
       Array.isArray(normalizedProvider.models) && normalizedProvider.models.length > 0;
     const normalizedApiKey = normalizeOptionalSecretInput(normalizedProvider.apiKey);
-    const hasConfiguredApiKey = Boolean(normalizedApiKey || normalizedProvider.apiKey);
+    // Treat the keyless placeholder as unconfigured so env vars / auth profiles
+    // can override it on subsequent startups.
+    const isPlaceholderOnly =
+      KEYLESS_LOCAL_PROVIDERS.has(normalizedKey) && normalizedApiKey === KEYLESS_LOCAL_PLACEHOLDER;
+    const hasConfiguredApiKey =
+      !isPlaceholderOnly && Boolean(normalizedApiKey || normalizedProvider.apiKey);
     if (hasModels && !hasConfiguredApiKey) {
       const authMode =
         normalizedProvider.auth ?? (normalizedKey === "amazon-bedrock" ? "aws-sdk" : undefined);

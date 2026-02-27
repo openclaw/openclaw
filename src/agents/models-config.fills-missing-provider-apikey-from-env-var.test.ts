@@ -244,6 +244,61 @@ describe("models-config", () => {
     });
   });
 
+  it("does not preserve keyless placeholder apiKey during merge so env var takes over", async () => {
+    await withTempHome(async () => {
+      const agentDir = resolveOpenClawAgentDir();
+      await fs.mkdir(agentDir, { recursive: true });
+      // Simulate a previous run that wrote "local" as the placeholder
+      await fs.writeFile(
+        path.join(agentDir, "models.json"),
+        JSON.stringify(
+          {
+            providers: {
+              ollama: {
+                baseUrl: "http://127.0.0.1:11434",
+                apiKey: "local",
+                api: "ollama",
+                models: [{ id: "llama3:latest", name: "llama3", input: ["text"] }],
+              },
+            },
+          },
+          null,
+          2,
+        ),
+        "utf8",
+      );
+
+      const prevKey = process.env.OLLAMA_API_KEY;
+      process.env.OLLAMA_API_KEY = "sk-real-ollama-key";
+      try {
+        await ensureOpenClawModelsJson({
+          models: {
+            mode: "merge",
+            providers: {
+              ollama: {
+                baseUrl: "http://127.0.0.1:11434",
+                api: "ollama",
+                models: [],
+              },
+            },
+          },
+        });
+
+        const parsed = await readGeneratedModelsJson<{
+          providers: Record<string, { apiKey?: string }>;
+        }>();
+        // Real env var must win over the persisted placeholder
+        expect(parsed.providers.ollama?.apiKey).toBe("OLLAMA_API_KEY");
+      } finally {
+        if (prevKey === undefined) {
+          delete process.env.OLLAMA_API_KEY;
+        } else {
+          process.env.OLLAMA_API_KEY = prevKey;
+        }
+      }
+    });
+  });
+
   it("refreshes stale explicit moonshot model capabilities from implicit catalog", async () => {
     await withTempHome(async () => {
       const prevKey = process.env.MOONSHOT_API_KEY;
