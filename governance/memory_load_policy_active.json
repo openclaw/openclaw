@@ -1,0 +1,6 @@
+{
+  "activePolicyPath": "governance/memory_load_policy_v1_1.json",
+  "version": "v1.1",
+  "enforce": false,
+  "reportOnly": true
+}

@@ -87,6 +87,7 @@ import {
 } from "../google.js";
 import { getDmHistoryLimitFromSessionKey, limitHistoryTurns } from "../history.js";
 import { log } from "../logger.js";
+import { sanitizeMemoryToolResultsByPolicy } from "../memory-context-policy-guard.js";
 import { buildModelAliasLines } from "../model.js";
 import {
   clearActiveEmbeddedRun,
@@ -881,9 +882,14 @@ export async function runEmbeddedAttempt(
         const limited = transcriptPolicy.repairToolUseResultPairing
           ? sanitizeToolUseResultPairing(truncated)
           : truncated;
-        cacheTrace?.recordStage("session:limited", { messages: limited });
-        if (limited.length > 0) {
-          activeSession.agent.replaceMessages(limited);
+        const memoryPolicySanitized = await sanitizeMemoryToolResultsByPolicy({
+          messages: limited,
+          sessionKey: params.sessionKey,
+          taskId: params.runId,
+        });
+        cacheTrace?.recordStage("session:limited", { messages: memoryPolicySanitized });
+        if (memoryPolicySanitized.length > 0) {
+          activeSession.agent.replaceMessages(memoryPolicySanitized);
         }
       } catch (err) {
         await flushPendingToolResultsAfterIdle({

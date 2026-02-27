@@ -9,6 +9,12 @@ import { resolveSessionAgentId } from "../agent-scope.js";
 import { resolveMemorySearchConfig } from "../memory-search.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readNumberParam, readStringParam } from "./common.js";
+import {
+  appendMemoryLoadTelemetry,
+  buildTelemetryRecord,
+  enforceMemoryLoadPolicy,
+  resolveMemoryLoadPolicy,
+} from "./memory-load-policy.js";
 
 const MemorySearchSchema = Type.Object({
   query: Type.String(),
@@ -56,6 +62,7 @@ export function createMemorySearchTool(options: {
       const query = readStringParam(params, "query", { required: true });
       const maxResults = readNumberParam(params, "maxResults");
       const minScore = readNumberParam(params, "minScore");
+      const policyRuntime = await resolveMemoryLoadPolicy();
       const { manager, error } = await getMemorySearchManager({
         cfg,
         agentId,
@@ -74,14 +81,53 @@ export function createMemorySearchTool(options: {
           minScore,
           sessionKey: options.agentSessionKey,
         });
+
+        const candidatePaths = rawResults.map((entry) => entry.path);
+        const decision = enforceMemoryLoadPolicy({
+          query,
+          candidatePaths,
+          confidence: 1,
+          missSignals: 0,
+          policy: policyRuntime.policy,
+          mode: policyRuntime.mode,
+        });
+
+        const filtered = rawResults.filter((entry) => decision.allowedPaths.includes(entry.path));
+        const violationCode =
+          policyRuntime.mode.enforce && filtered.length === 0
+            ? "MEMORY_POLICY_BLOCK_SEARCH"
+            : undefined;
+
         const status = manager.status();
-        const decorated = decorateCitations(rawResults, includeCitations);
+        const decorated = decorateCitations(filtered, includeCitations);
         const resolved = resolveMemoryBackendConfig({ cfg, agentId });
         const results =
           status.backend === "qmd"
             ? clampResultsByInjectedChars(decorated, resolved.qmd?.limits.maxInjectedChars)
             : decorated;
         const searchMode = (status.custom as { searchMode?: string } | undefined)?.searchMode;
+
+        await appendMemoryLoadTelemetry(
+          buildTelemetryRecord({
+            sessionKey: options.agentSessionKey,
+            taskId: _toolCallId,
+            policyVersion: policyRuntime.policy.version,
+            query,
+            candidatePaths,
+            decision,
+            violationCode,
+          }),
+        );
+
+        if (violationCode) {
+          return jsonResult({
+            results: [],
+            disabled: true,
+            error: "memory search blocked by policy",
+            policyVersion: policyRuntime.policy.version,
+          });
+        }
+
         return jsonResult({
           results,
           provider: status.provider,
@@ -89,6 +135,7 @@ export function createMemorySearchTool(options: {
           fallback: status.fallback,
           citations: citationsMode,
           mode: searchMode,
+          policyVersion: policyRuntime.policy.version,
         });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
@@ -117,6 +164,47 @@ export function createMemoryGetTool(options: {
       const relPath = readStringParam(params, "path", { required: true });
       const from = readNumberParam(params, "from", { integer: true });
       const lines = readNumberParam(params, "lines", { integer: true });
+      const policyRuntime = await resolveMemoryLoadPolicy();
+      const decision = enforceMemoryLoadPolicy({
+        query: `memory_get:${relPath}`,
+        candidatePaths: [relPath],
+        confidence: 1,
+        missSignals: 0,
+        policy: policyRuntime.policy,
+        mode: policyRuntime.mode,
+      });
+      const normalizedRelPath = relPath.replaceAll("\\", "/");
+      const allowed = decision.allowedPaths.some(
+        (p) =>
+          p === normalizedRelPath ||
+          (p === "MEMORY.md" && /(^|\/)MEMORY\.md$/i.test(normalizedRelPath)),
+      );
+
+      const violationCode =
+        policyRuntime.mode.enforce && !allowed ? "MEMORY_POLICY_BLOCK_READ" : undefined;
+
+      await appendMemoryLoadTelemetry(
+        buildTelemetryRecord({
+          sessionKey: options.agentSessionKey,
+          taskId: _toolCallId,
+          policyVersion: policyRuntime.policy.version,
+          query: `memory_get:${relPath}`,
+          candidatePaths: [relPath],
+          decision,
+          violationCode,
+        }),
+      );
+
+      if (violationCode) {
+        return jsonResult({
+          path: relPath,
+          text: "",
+          disabled: true,
+          error: "memory read blocked by policy",
+          policyVersion: policyRuntime.policy.version,
+        });
+      }
+
       const { manager, error } = await getMemorySearchManager({
         cfg,
         agentId,
@@ -130,7 +218,7 @@ export function createMemoryGetTool(options: {
           from: from ?? undefined,
           lines: lines ?? undefined,
         });
-        return jsonResult(result);
+        return jsonResult({ ...result, policyVersion: policyRuntime.policy.version });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         return jsonResult({ path: relPath, text: "", disabled: true, error: message });
