@@ -144,6 +144,52 @@ describe("extractGeminiCliCredentials", () => {
     }
   }
 
+  // Windows npm global install layout
+  // npm installs global packages at: C:\Users\<user>\AppData\Roaming\npm\
+  // Binary: C:\Users\<user>\AppData\Roaming\npm\gemini.cmd
+  // Package: C:\Users\<user>\AppData\Roaming\npm\node_modules\@google\gemini-cli
+  function installWindowsNpmGlobalLayout(params: {
+    oauth2Exists?: boolean;
+    oauth2Content?: string;
+  }) {
+    const binDir = join(rootDir, "Users", "testuser", "AppData", "Roaming", "npm");
+    const geminiPath = join(binDir, "gemini.cmd");
+    const resolvedPath = geminiPath;
+    // Windows npm global: oauth2.js is in gemini-cli-core which is a nested dependency
+    const oauth2Path = join(
+      binDir,
+      "node_modules",
+      "@google",
+      "gemini-cli",
+      "node_modules",
+      "@google",
+      "gemini-cli-core",
+      "dist",
+      "code_assist",
+      "oauth2.js",
+    );
+    process.env.PATH = binDir;
+
+    mockExistsSync.mockImplementation((p: string) => {
+      const normalized = normalizePath(p);
+      // On Windows: gemini.cmd, on macOS/Linux: gemini (no extension)
+      if (
+        normalized === normalizePath(geminiPath) ||
+        normalized === normalizePath(geminiPath.replace(".cmd", ""))
+      ) {
+        return true;
+      }
+      if (params.oauth2Exists && normalized === normalizePath(oauth2Path)) {
+        return true;
+      }
+      return false;
+    });
+    mockRealpathSync.mockReturnValue(resolvedPath);
+    if (params.oauth2Content !== undefined) {
+      mockReadFileSync.mockReturnValue(params.oauth2Content);
+    }
+  }
+
   beforeEach(async () => {
     vi.clearAllMocks();
     originalPath = process.env.PATH;
@@ -177,6 +223,19 @@ describe("extractGeminiCliCredentials", () => {
 
   it("extracts credentials when PATH entry is an npm global shim", async () => {
     installNpmShimLayout({ oauth2Exists: true, oauth2Content: FAKE_OAUTH2_CONTENT });
+
+    const { extractGeminiCliCredentials, clearCredentialsCache } = await import("./oauth.js");
+    clearCredentialsCache();
+    const result = extractGeminiCliCredentials();
+
+    expect(result).toEqual({
+      clientId: FAKE_CLIENT_ID,
+      clientSecret: FAKE_CLIENT_SECRET,
+    });
+  });
+
+  it("extracts credentials from Windows npm global install", async () => {
+    installWindowsNpmGlobalLayout({ oauth2Exists: true, oauth2Content: FAKE_OAUTH2_CONTENT });
 
     const { extractGeminiCliCredentials, clearCredentialsCache } = await import("./oauth.js");
     clearCredentialsCache();

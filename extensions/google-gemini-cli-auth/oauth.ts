@@ -84,6 +84,7 @@ export function extractGeminiCliCredentials(): { clientId: string; clientSecret:
     let content: string | null = null;
     for (const geminiCliDir of geminiCliDirs) {
       const searchPaths = [
+        // Standard layout: gemini-cli-core as direct dependency
         join(
           geminiCliDir,
           "node_modules",
@@ -96,6 +97,32 @@ export function extractGeminiCliCredentials(): { clientId: string; clientSecret:
         ),
         join(
           geminiCliDir,
+          "node_modules",
+          "@google",
+          "gemini-cli-core",
+          "dist",
+          "code_assist",
+          "oauth2.js",
+        ),
+        // Windows npm global: @google/gemini-cli contains @google/gemini-cli-core as nested dependency
+        join(
+          geminiCliDir,
+          "node_modules",
+          "@google",
+          "gemini-cli",
+          "node_modules",
+          "@google",
+          "gemini-cli-core",
+          "dist",
+          "src",
+          "code_assist",
+          "oauth2.js",
+        ),
+        join(
+          geminiCliDir,
+          "node_modules",
+          "@google",
+          "gemini-cli",
           "node_modules",
           "@google",
           "gemini-cli-core",
