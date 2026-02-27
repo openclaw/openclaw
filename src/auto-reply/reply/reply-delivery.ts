@@ -105,7 +105,9 @@ export function createBlockReplyDeliveryHandler(params: {
     const blockHasMedia = hasRenderableMedia(blockPayload);
 
     // Skip empty payloads unless they have audioAsVoice flag (need to track it).
-    if (!blockPayload.text && !blockHasMedia && !blockPayload.audioAsVoice) {
+    // Use trim() to catch whitespace-only strings that would otherwise pass the truthy check.
+    const blockText = blockPayload.text?.trim() ?? "";
+    if (!blockText && !blockHasMedia && !blockPayload.audioAsVoice) {
       return;
     }
     if (normalized.isSilent && !blockHasMedia) {
