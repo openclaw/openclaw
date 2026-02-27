@@ -111,6 +111,19 @@ services:
     networks:
       - openclaw-net
 
+  # One-shot service: clear stale LINE session history before deploy
+  # Usage: docker compose -f docker/docker-compose.prod.yml run --rm clear-sessions
+  clear-sessions:
+    image: ${DOCKER_IMAGE:-piboonsak/openclaw:latest}
+    entrypoint: ["bash", "/scripts/clear-sessions.sh"]
+    volumes:
+      - openclaw-state:/data/.openclaw
+      - ./scripts/clear-sessions.sh:/scripts/clear-sessions.sh:ro
+    profiles:
+      - maintenance
+    networks:
+      - openclaw-net
+
 # Named volumes for data persistence
 volumes:
   openclaw-state:

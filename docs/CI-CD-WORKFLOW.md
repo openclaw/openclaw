@@ -164,6 +164,21 @@ cd /docker/openclaw-sgnl
 # Pull new image from Docker Hub
 docker pull piboonsak/openclaw:latest
 
+# Clear stale LINE session history (prevents "learned helplessness")
+# Script backs up large sessions (>50KB) before clearing
+docker exec openclaw-sgnl-openclaw-1 bash -c '
+  DIR=/data/.openclaw/agents/main/sessions
+  SUFFIX=bak.$(date -u +%Y%m%dT%H%M%SZ)
+  for f in "$DIR"/line-*.jsonl; do
+    [ -f "$f" ] || continue
+    size=$(stat -c%s "$f" 2>/dev/null || echo 0)
+    [ "$size" -lt 51200 ] && continue
+    cp "$f" "${f}.${SUFFIX}" && : > "$f"
+    echo "Cleared $(basename "$f") (was ${size}B)"
+  done
+'
+# Or if script is mounted: docker compose --profile maintenance run --rm clear-sessions
+
 # Restart containers with new image (use docker compose v2 syntax)
 docker compose down
 docker compose up -d
@@ -458,8 +473,10 @@ docker-compose -f docker/docker-compose.prod.yml up -d
 **VPS (production):**
 - Container: `openclaw-sgnl-openclaw-1`
 - Config: `/data/.openclaw/openclaw.json` (inside container)
-- Workspace: `/data/openclaw/workspace/` (Docker volume)
+- Workspace: `/data/.openclaw/workspace/` (inside container)
+- Sessions: `/data/.openclaw/agents/main/sessions/` (inside container)
 - Logs: `docker logs openclaw-sgnl-openclaw-1`
+- Clear sessions script: `docker/scripts/clear-sessions.sh`
 
 ### Key Commands
 
@@ -478,6 +495,11 @@ docker exec openclaw-sgnl-openclaw-1 openclaw --version
 
 # Check gateway health
 docker exec openclaw-sgnl-openclaw-1 openclaw channels status --probe
+
+# Clear stale LINE session history (run before deploy)
+docker exec openclaw-sgnl-openclaw-1 bash /app/docker/scripts/clear-sessions.sh
+# Or via compose profile:
+# docker compose --profile maintenance run --rm clear-sessions
 ```
 
 ### Environment Variables (Hostinger UI)
