@@ -203,7 +203,7 @@ export async function sendFailureNotificationAnnounce(
       payloads: [{ text: message }],
       session,
       identity,
-      bestEffort: true,
+      bestEffort: false,
       deps: createOutboundSendDeps(deps),
       abortSignal: abortController.signal,
     });

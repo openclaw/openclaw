@@ -381,6 +381,14 @@ export function buildGatewayCronService(params: {
                       clearTimeout(timeout);
                     }
                   })();
+                } else {
+                  cronLogger.warn(
+                    {
+                      jobId: evt.jobId,
+                      failureDestTo: failureDest.to,
+                    },
+                    "cron: failure destination webhook URL is invalid, skipping",
+                  );
                 }
               } else if (failureDest.mode === "announce") {
                 const { agentId } = resolveCronAgent(job.agentId);
