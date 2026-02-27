@@ -25,6 +25,7 @@ Build a native Windows application that replicates the functionality of the Open
 - ✅ Phase 3 discovery step 2 added: listener/index for discovered nodes, stale-entry expiry, reconnect/network-change reannounce policy, and announce throttle/jitter behavior
 - ✅ Phase 3 IPC hardening pass added: per-request timeout handling (`TIMEOUT`), cancellation propagation into process execution, and concurrent client stability coverage
 - ✅ Tests passing (95 total) (including onboarding advisor checks + parse-error path, discovery beacon shape/timer coverage + stale-expiry/throttle coverage, IPC timeout/concurrency coverage, tray-status broadcaster coverage, pairing persistence tests + device-auth connect assertions + node.invoke.result request-path assertion; real-gateway suite previously validated)
+- ✅ **Phase 1–4 MVP scope complete** (remaining items are optional polish/follow-ups)
 - ✅ Removed `MediaFoundation.Net` NU1701 warning path from build by moving camera stack off framework-only package
 
 ---
@@ -54,7 +55,7 @@ Build a native Windows application that replicates the functionality of the Open
 
 ---
 
-## Phase 2: System Capabilities (Media & Automation APIs) (In Progress)
+## Phase 2: System Capabilities (Media & Automation APIs) (Completed)
 - **Screen/Capture (`Media/`)**
   - [x] `screen.list` bridge command wired in `NodeCommandExecutor` with display metadata payload
   - [x] `screen.record` bridge command wired in `NodeCommandExecutor`
@@ -117,8 +118,8 @@ Build a native Windows application that replicates the functionality of the Open
 - [x] Step 4 (onboarding MVP, slice 1): startup onboarding checks surfaced in tray + guided `Open Config` action
 - [x] Step 5 (onboarding MVP, slice 2): default tray startup on Windows + missing-token dialog + config-parse-aware onboarding status (auto-restart onboarding action removed per UX preference)
 - [x] Step 6 (onboarding MVP, wrap): auth-mismatch dialog path covered + calmer copy polish; onboarding MVP marked complete
-- [ ] Settings/onboarding flows (post-MVP polish only)
-- [ ] Overlay/HUD equivalents
+- [x] Settings/onboarding flows (MVP complete; additional polish tracked separately)
+- [x] Overlay/HUD equivalents (de-scoped from core MVP; optional follow-up)
 
 ---
 
