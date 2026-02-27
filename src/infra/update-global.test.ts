@@ -52,7 +52,8 @@ describe("checkPackageOwnership", () => {
     const result = await checkPackageOwnership(pkgRoot, { uid: 99999 });
     expect(result.ok).toBe(false);
     // node_modules dir itself should appear in foreignFiles
-    const nmEntry = result.foreignFiles.find((f) => f.endsWith("/node_modules"));
+    // Use path.sep for cross-platform compatibility (backslash on Windows)
+    const nmEntry = result.foreignFiles.find((f) => f.endsWith(path.sep + "node_modules"));
     expect(nmEntry).toBeDefined();
   });
 
