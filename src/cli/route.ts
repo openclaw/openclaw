@@ -12,7 +12,9 @@ async function prepareRoutedCommand(params: {
   commandPath: string[];
   loadPlugins?: boolean;
 }) {
-  emitCliBanner(VERSION, { argv: params.argv });
+  if (!isTruthyEnvValue(process.env.OPENCLAW_HIDE_BANNER)) {
+    emitCliBanner(VERSION, { argv: params.argv });
+  }
   await ensureConfigReady({ runtime: defaultRuntime, commandPath: params.commandPath });
   if (params.loadPlugins) {
     ensurePluginRegistryLoaded();
