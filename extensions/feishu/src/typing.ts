@@ -58,11 +58,28 @@ export function isFeishuBackoffError(err: unknown): boolean {
 }
 
 /**
+ * Check whether a Feishu SDK response object contains a backoff error code.
+ *
+ * The Feishu SDK sometimes returns a normal response (no throw) with an
+ * API-level error code in the response body. This must be detected so the
+ * circuit breaker can trip. See codex review on #28157.
+ */
+export function hasBackoffCodeInResponse(response: unknown): boolean {
+  if (typeof response !== "object" || response === null) {
+    return false;
+  }
+  const code = (response as { code?: number }).code;
+  return typeof code === "number" && FEISHU_BACKOFF_CODES.has(code);
+}
+
+/**
  * Add a typing indicator (reaction) to a message.
  *
  * Rate-limit and quota errors are re-thrown so the circuit breaker in
  * `createTypingCallbacks` (typing-start-guard) can trip and stop the
  * keepalive loop. See #28062.
+ *
+ * Also checks for backoff codes in non-throwing SDK responses (#28157).
  */
 export async function addTypingIndicator(params: {
   cfg: ClawdbotConfig;
@@ -84,6 +101,14 @@ export async function addTypingIndicator(params: {
         reaction_type: { emoji_type: TYPING_EMOJI },
       },
     });
+
+    // Feishu SDK may return a normal response with an API-level error code
+    // instead of throwing. Detect backoff codes and throw to trip the breaker.
+    if (hasBackoffCodeInResponse(response)) {
+      const code = (response as { code?: number }).code;
+      console.log(`[feishu] typing indicator response contains backoff code ${code}, stopping keepalive`);
+      throw new Error(`Feishu API backoff: code ${code}`);
+    }
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK response type
     const reactionId = (response as any)?.data?.reaction_id ?? null;
@@ -122,12 +147,19 @@ export async function removeTypingIndicator(params: {
   const client = createFeishuClient(account);
 
   try {
-    await client.im.messageReaction.delete({
+    const result = await client.im.messageReaction.delete({
       path: {
         message_id: state.messageId,
         reaction_id: state.reactionId,
       },
     });
+
+    // Check for backoff codes in non-throwing SDK responses
+    if (hasBackoffCodeInResponse(result)) {
+      const code = (result as { code?: number }).code;
+      console.log(`[feishu] typing indicator removal response contains backoff code ${code}, stopping keepalive`);
+      throw new Error(`Feishu API backoff: code ${code}`);
+    }
   } catch (err) {
     if (isFeishuBackoffError(err)) {
       console.log(`[feishu] typing indicator removal hit rate-limit/quota, stopping keepalive`);

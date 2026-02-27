@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isFeishuBackoffError } from "./typing.js";
+import { isFeishuBackoffError, hasBackoffCodeInResponse } from "./typing.js";
 
 describe("isFeishuBackoffError", () => {
   it("returns true for HTTP 429 (AxiosError shape)", () => {
@@ -51,5 +51,40 @@ describe("isFeishuBackoffError", () => {
   it("returns true for 429 even without data", () => {
     const err = { response: { status: 429 } };
     expect(isFeishuBackoffError(err)).toBe(true);
+  });
+});
+
+describe("hasBackoffCodeInResponse", () => {
+  it("returns true for response with quota exceeded code", () => {
+    const response = { code: 99991403, msg: "quota exceeded", data: null };
+    expect(hasBackoffCodeInResponse(response)).toBe(true);
+  });
+
+  it("returns true for response with rate limit code", () => {
+    const response = { code: 99991400, msg: "rate limit", data: null };
+    expect(hasBackoffCodeInResponse(response)).toBe(true);
+  });
+
+  it("returns false for successful response (code 0)", () => {
+    const response = { code: 0, msg: "success", data: { reaction_id: "r1" } };
+    expect(hasBackoffCodeInResponse(response)).toBe(false);
+  });
+
+  it("returns false for other error codes", () => {
+    const response = { code: 99991401, msg: "other error", data: null };
+    expect(hasBackoffCodeInResponse(response)).toBe(false);
+  });
+
+  it("returns false for null", () => {
+    expect(hasBackoffCodeInResponse(null)).toBe(false);
+  });
+
+  it("returns false for undefined", () => {
+    expect(hasBackoffCodeInResponse(undefined)).toBe(false);
+  });
+
+  it("returns false for response without code field", () => {
+    const response = { data: { reaction_id: "r1" } };
+    expect(hasBackoffCodeInResponse(response)).toBe(false);
   });
 });
