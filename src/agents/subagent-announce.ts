@@ -1,5 +1,5 @@
 import { resolveQueueSettings } from "../auto-reply/reply/queue.js";
-import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
+import { parseInlineDirectives } from "../utils/directive-tags.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../config/agent-limits.js";
 import { loadConfig } from "../config/config.js";
@@ -83,8 +83,12 @@ function buildCompletionDeliveryMessage(params: {
   outcome?: SubagentRunOutcome;
   announceType?: SubagentAnnounceType;
 }): string {
-  // Strip reply directive tags (e.g. [[reply_to:6100]]) before delivery (#24600)
-  const findingsText = parseReplyDirectives(params.findings).text.trim();
+  // Strip only [[reply_to:...]] tags; preserve MEDIA: lines and [[audio_as_voice]]
+  // so the downstream send path can parse them for attachments/voice flags (#24600)
+  const findingsText = parseInlineDirectives(params.findings, {
+    stripReplyTags: true,
+    stripAudioTag: false,
+  }).text.trim();
   if (isAnnounceSkip(findingsText)) {
     return "";
   }
