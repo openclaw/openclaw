@@ -1,4 +1,5 @@
 import { Buffer } from "node:buffer";
+import { EventEmitter } from "node:events";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DeviceIdentity } from "../infra/device-identity.js";
 import { captureEnv } from "../test-utils/env.js";
@@ -10,12 +11,13 @@ const storeDeviceAuthTokenMock = vi.hoisted(() => vi.fn());
 const clearDevicePairingMock = vi.hoisted(() => vi.fn());
 const logDebugMock = vi.hoisted(() => vi.fn());
 
-type WsEvent = "open" | "message" | "close" | "error";
+type WsEvent = "open" | "message" | "close" | "error" | "unexpected-response";
 type WsEventHandlers = {
   open: () => void;
   message: (data: string | Buffer) => void;
   close: (code: number, reason: Buffer) => void;
   error: (err: unknown) => void;
+  "unexpected-response": (request: unknown, response: EventEmitter) => void;
 };
 
 class MockWebSocket {
@@ -23,6 +25,7 @@ class MockWebSocket {
   private messageHandlers: WsEventHandlers["message"][] = [];
   private closeHandlers: WsEventHandlers["close"][] = [];
   private errorHandlers: WsEventHandlers["error"][] = [];
+  private unexpectedResponseHandlers: WsEventHandlers["unexpected-response"][] = [];
   readonly sent: string[] = [];
 
   constructor(_url: string, _options?: unknown) {
@@ -33,6 +36,7 @@ class MockWebSocket {
   on(event: "message", handler: WsEventHandlers["message"]): void;
   on(event: "close", handler: WsEventHandlers["close"]): void;
   on(event: "error", handler: WsEventHandlers["error"]): void;
+  on(event: "unexpected-response", handler: WsEventHandlers["unexpected-response"]): void;
   on(event: WsEvent, handler: WsEventHandlers[WsEvent]): void {
     switch (event) {
       case "open":
@@ -46,6 +50,9 @@ class MockWebSocket {
         return;
       case "error":
         this.errorHandlers.push(handler as WsEventHandlers["error"]);
+        return;
+      case "unexpected-response":
+        this.unexpectedResponseHandlers.push(handler as WsEventHandlers["unexpected-response"]);
         return;
       default:
         return;
@@ -74,6 +81,26 @@ class MockWebSocket {
     for (const handler of this.closeHandlers) {
       handler(code, Buffer.from(reason));
     }
+  }
+
+  emitUnexpectedResponse(params: {
+    statusCode?: number;
+    statusMessage?: string;
+    body?: string;
+  }): void {
+    const response = new EventEmitter() as EventEmitter & {
+      statusCode?: number;
+      statusMessage?: string;
+    };
+    response.statusCode = params.statusCode;
+    response.statusMessage = params.statusMessage;
+    for (const handler of this.unexpectedResponseHandlers) {
+      handler({}, response);
+    }
+    if (params.body !== undefined) {
+      response.emit("data", Buffer.from(params.body));
+    }
+    response.emit("end");
   }
 }
 
@@ -307,6 +334,35 @@ describe("GatewayClient close handling", () => {
     expect(clearDeviceAuthTokenMock).not.toHaveBeenCalled();
     expect(clearDevicePairingMock).not.toHaveBeenCalled();
     expect(onClose).toHaveBeenCalledWith(1008, "unauthorized: signature invalid");
+    client.stop();
+  });
+
+  it("surfaces HTTP upgrade rejection details when close reason is empty", () => {
+    const onClose = vi.fn();
+    const onConnectError = vi.fn();
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      onClose,
+      onConnectError,
+    });
+
+    client.start();
+    getLatestWs().emitUnexpectedResponse({
+      statusCode: 401,
+      statusMessage: "Unauthorized",
+      body: "Unauthorized",
+    });
+    getLatestWs().emitClose(1006, "");
+
+    expect(onConnectError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.stringContaining("HTTP 401 Unauthorized"),
+      }),
+    );
+    expect(onClose).toHaveBeenCalledWith(
+      1006,
+      expect.stringContaining("gateway upgrade rejected (HTTP 401 Unauthorized): Unauthorized"),
+    );
     client.stop();
   });
 

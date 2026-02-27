@@ -1,3 +1,4 @@
+import { Buffer } from "node:buffer";
 import { randomUUID } from "node:crypto";
 import { WebSocket, type ClientOptions, type CertMeta } from "ws";
 import {
@@ -96,6 +97,7 @@ export class GatewayClient {
   private lastTick: number | null = null;
   private tickIntervalMs = 30_000;
   private tickTimer: NodeJS.Timeout | null = null;
+  private upgradeRejectHint: string | null = null;
 
   constructor(opts: GatewayClientOptions) {
     this.opts = {
@@ -167,8 +169,46 @@ export class GatewayClient {
         // oxlint-disable-next-line typescript/no-explicit-any
       }) as any;
     }
+    this.upgradeRejectHint = null;
     this.ws = new WebSocket(url, wsOptions);
 
+    this.ws.on("unexpected-response", (_request, response) => {
+      const statusCode = response.statusCode;
+      const statusText = response.statusMessage?.trim();
+      let bufferedBytes = 0;
+      const bodyChunks: Buffer[] = [];
+      response.on("data", (chunk: Buffer | string) => {
+        if (bufferedBytes >= 1024) {
+          return;
+        }
+        const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        const remaining = 1024 - bufferedBytes;
+        if (buf.length <= remaining) {
+          bodyChunks.push(buf);
+          bufferedBytes += buf.length;
+          return;
+        }
+        bodyChunks.push(buf.subarray(0, remaining));
+        bufferedBytes += remaining;
+      });
+      response.on("end", () => {
+        const bodyRaw = Buffer.concat(bodyChunks).toString("utf8");
+        const body = bodyRaw.replace(/\s+/g, " ").trim();
+        const bodySuffix = body ? `: ${body}` : "";
+        const statusSuffix = statusText ? ` ${statusText}` : "";
+        const hint =
+          typeof statusCode === "number"
+            ? `gateway upgrade rejected (HTTP ${statusCode}${statusSuffix})${bodySuffix}`
+            : `gateway upgrade rejected${bodySuffix}`;
+        this.upgradeRejectHint = hint;
+        this.opts.onConnectError?.(new Error(hint));
+      });
+      response.on("error", () => {
+        const hint = "gateway upgrade rejected (failed to read response body)";
+        this.upgradeRejectHint = hint;
+        this.opts.onConnectError?.(new Error(hint));
+      });
+    });
     this.ws.on("open", () => {
       if (url.startsWith("wss://") && this.opts.tlsFingerprint) {
         const tlsError = this.validateTlsFingerprint();
@@ -182,7 +222,11 @@ export class GatewayClient {
     });
     this.ws.on("message", (data) => this.handleMessage(rawDataToString(data)));
     this.ws.on("close", (code, reason) => {
-      const reasonText = rawDataToString(reason);
+      let reasonText = rawDataToString(reason);
+      if (!reasonText && code === 1006 && this.upgradeRejectHint) {
+        reasonText = this.upgradeRejectHint;
+      }
+      this.upgradeRejectHint = null;
       this.ws = null;
       // Clear persisted device auth state only when device-token auth was active.
       // Shared token/password failures can return the same close reason but should
