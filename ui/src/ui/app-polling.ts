@@ -14,14 +14,11 @@ export function startNodesPolling(host: PollingHost) {
   if (host.nodesPollInterval != null) {
     return;
   }
-  host.nodesPollInterval = window.setInterval(
-    () => {
-      if (document.visibilityState === "visible") {
-        void loadNodes(host as unknown as OpenClawApp, { quiet: true });
-      }
-    },
-    5000,
-  );
+  host.nodesPollInterval = window.setInterval(() => {
+    if (document.visibilityState === "visible") {
+      void loadNodes(host as unknown as OpenClawApp, { quiet: true });
+    }
+  }, 5000);
 }
 
 export function stopNodesPolling(host: PollingHost) {
