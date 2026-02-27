@@ -187,6 +187,12 @@ export async function prepareSlackMessage(params: {
   const historyKey =
     isThreadReply && ctx.threadHistoryScope === "thread" ? sessionKey : message.channel;
 
+  // Resolve storePath early so it can be used for both the implicitMention check
+  // (thread participation) and the later session-recording steps.
+  const storePath = resolveStorePath(ctx.cfg.session?.store, {
+    agentId: route.agentId,
+  });
+
   const mentionRegexes = buildMentionRegexes(cfg, route.agentId);
   const hasAnyMention = /<@[^>]+>/.test(message.text ?? "");
   const explicitlyMentioned = Boolean(
@@ -204,11 +210,37 @@ export async function prepareSlackMessage(params: {
           canResolveExplicit: Boolean(ctx.botUserId),
         },
       }));
+  // Treat as an implicit mention when:
+  // (a) the bot authored the thread root message (original behaviour), OR
+  // (b) the bot has previously replied in this thread (session already exists).
+  //     This covers scenario where the bot joined a thread via @mention but is
+  //     NOT the parent_user_id, so follow-up replies without @mention still
+  //     reach the bot (fixes: #25760).
+  //
+  // Thread session participation check: For thread replies, check both:
+  // 1. The thread-specific session (if bot has previously replied in this thread)
+  // 2. The base channel session (handles routing discontinuity)
+  //
+  // Why check the base session: Thread sessions are deferred during prepare
+  // (PR #19083). When the bot replies to the first @mention in a thread:
+  // - Internally: Gateway routes the response to the CHANNEL session (thread
+  //   session doesn't exist yet due to deferred creation)
+  // - On Slack: Bot's reply displays as a THREAD message (correct UI)
+  //
+  // This creates a discontinuity: the bot's participation exists in the channel
+  // session internally, but appears as a thread message externally. We check
+  // both sessions to bridge this gap.
+  const botParticipatedInThread =
+    isThreadReply &&
+    Boolean(
+      readSessionUpdatedAt({ storePath, sessionKey }) ||
+      readSessionUpdatedAt({ storePath, sessionKey: baseSessionKey }),
+    );
   const implicitMention = Boolean(
     !isDirectMessage &&
     ctx.botUserId &&
     message.thread_ts &&
-    message.parent_user_id === ctx.botUserId,
+    (message.parent_user_id === ctx.botUserId || botParticipatedInThread),
   );
 
   const sender = message.user ? await ctx.resolveUserName(message.user) : null;
@@ -403,9 +435,14 @@ export async function prepareSlackMessage(params: {
       ? `slack:channel:${message.channel}`
       : `slack:group:${message.channel}`;
 
-  // Add simple sender preamble for context (who is speaking in the thread)
-  // This is important for multi-human threads so the LLM can track participants
-  enqueueSystemEvent(`Slack message from ${senderName}`, {
+  // Add sender preamble with thread context
+  // For threads, indicate it's a multi-user conversation so the LLM knows to be selective
+  // about whether to participate or NO_REPLY when the message is directed at someone else
+  const isThread = isThreadReply && threadTs;
+  const senderNote = isThread
+    ? `Slack message detected on thread: ${senderName} speaking`
+    : `Slack message from ${senderName}`;
+  enqueueSystemEvent(senderNote, {
     sessionKey,
     contextKey: `slack:message:${message.channel}:${message.ts ?? "unknown"}`,
   });
@@ -422,9 +459,6 @@ export async function prepareSlackMessage(params: {
       ? ` thread_ts: ${threadTs}${message.parent_user_id ? ` parent_user_id: ${message.parent_user_id}` : ""}`
       : "";
   const textWithId = `${rawBody}\n[slack message id: ${message.ts} channel: ${message.channel}${threadInfo}]`;
-  const storePath = resolveStorePath(ctx.cfg.session?.store, {
-    agentId: route.agentId,
-  });
   const envelopeOptions = resolveEnvelopeFormatOptions(ctx.cfg);
   const previousTimestamp = readSessionUpdatedAt({
     storePath,
