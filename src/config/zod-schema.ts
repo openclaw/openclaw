@@ -384,6 +384,15 @@ export const OpenClawSchema = z
           })
           .strict()
           .optional(),
+        failureDestination: z
+          .object({
+            channel: z.string().optional(),
+            to: z.string().optional(),
+            accountId: z.string().optional(),
+            mode: z.enum(["announce", "webhook"]).optional(),
+          })
+          .strict()
+          .optional(),
       })
       .strict()
       .superRefine((val, ctx) => {

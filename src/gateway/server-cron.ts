@@ -7,6 +7,7 @@ import {
   resolveAgentMainSessionKey,
 } from "../config/sessions.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
+import { resolveFailureDestination } from "../cron/delivery.js";
 import { runCronIsolatedAgentTurn } from "../cron/isolated-agent.js";
 import {
   appendCronRunLog,
@@ -310,6 +311,98 @@ export function buildGatewayCronService(params: {
             }
           })();
         }
+
+        if (evt.status === "error" && job) {
+          const failureDest = resolveFailureDestination(job, params.cfg.cron?.failureDestination);
+          if (failureDest) {
+            const isBestEffort =
+              job.delivery?.bestEffort === true ||
+              (job.payload.kind === "agentTurn" && job.payload.bestEffortDeliver === true);
+
+            if (!isBestEffort) {
+              const failureMessage = `Cron job "${job.name}" failed: ${evt.error ?? "unknown error"}`;
+              const failurePayload = {
+                jobId: job.id,
+                jobName: job.name,
+                status: evt.status,
+                error: evt.error,
+                runAtMs: evt.runAtMs,
+                durationMs: evt.durationMs,
+                nextRunAtMs: evt.nextRunAtMs,
+              };
+
+              if (failureDest.mode === "webhook" && failureDest.channel) {
+                const webhookUrl = normalizeHttpWebhookUrl(failureDest.channel);
+                if (webhookUrl) {
+                  const headers: Record<string, string> = {
+                    "Content-Type": "application/json",
+                  };
+                  if (params.cfg.cron?.webhookToken) {
+                    headers.Authorization = `Bearer ${params.cfg.cron.webhookToken.trim()}`;
+                  }
+                  const abortController = new AbortController();
+                  const timeout = setTimeout(() => {
+                    abortController.abort();
+                  }, CRON_WEBHOOK_TIMEOUT_MS);
+
+                  void (async () => {
+                    try {
+                      const result = await fetchWithSsrFGuard({
+                        url: webhookUrl,
+                        init: {
+                          method: "POST",
+                          headers,
+                          body: JSON.stringify(failurePayload),
+                          signal: abortController.signal,
+                        },
+                      });
+                      await result.release();
+                    } catch (err) {
+                      if (err instanceof SsrFBlockedError) {
+                        cronLogger.warn(
+                          {
+                            reason: formatErrorMessage(err),
+                            jobId: evt.jobId,
+                            webhookUrl: redactWebhookUrl(webhookUrl),
+                          },
+                          "cron: failure destination webhook blocked by SSRF guard",
+                        );
+                      } else {
+                        cronLogger.warn(
+                          {
+                            err: formatErrorMessage(err),
+                            jobId: evt.jobId,
+                            webhookUrl: redactWebhookUrl(webhookUrl),
+                          },
+                          "cron: failure destination webhook failed",
+                        );
+                      }
+                    } finally {
+                      clearTimeout(timeout);
+                    }
+                  })();
+                }
+              } else if (failureDest.mode === "announce") {
+                const { agentId, cfg: runtimeConfig } = resolveCronAgent(job.agentId);
+                const sessionKey = resolveCronSessionKey({
+                  runtimeConfig,
+                  agentId,
+                  requestedSessionKey: job.sessionKey,
+                });
+                enqueueSystemEvent(`[Cron Failure] ${failureMessage}`, {
+                  sessionKey,
+                  contextKey: `cron:${job.id}:failure`,
+                });
+                requestHeartbeatNow({
+                  reason: `cron:${job.id}:failure`,
+                  agentId,
+                  sessionKey,
+                });
+              }
+            }
+          }
+        }
+
         const logPath = resolveCronRunLogPath({
           storePath,
           jobId: evt.jobId,

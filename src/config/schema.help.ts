@@ -1076,6 +1076,14 @@ export const FIELD_HELP: Record<string, string> = {
     "Maximum bytes per cron run-log file before pruning rewrites to the last keepLines entries (for example `2mb`, default `2000000`).",
   "cron.runLog.keepLines":
     "How many trailing run-log lines to retain when a file exceeds maxBytes (default `2000`). Increase for longer forensic history or lower for smaller disks.",
+  "cron.failureDestination":
+    "Default destination for failure notifications when cron jobs fail. Jobs can override this with their own `delivery.failureDestination`. When not configured, failures are logged but not sent to any channel.",
+  "cron.failureDestination.channel":
+    "Channel to send failure notifications to (e.g., `telegram`, `slack`, `whatsapp`, or `last` for the most recently used channel).",
+  "cron.failureDestination.to":
+    "Recipient identifier for the failure notification (e.g., chat ID, phone number, or channel-specific target).",
+  "cron.failureDestination.mode":
+    "Delivery mode for failure notifications: `announce` sends via the agent system to messaging channels, `webhook` sends an HTTP POST with JSON payload.",
   hooks:
     "Inbound webhook automation surface for mapping external events into wake or agent actions in OpenClaw. Keep this locked down with explicit token/session/agent controls before exposing it beyond trusted networks.",
   "hooks.enabled":

@@ -1,3 +1,10 @@
+export type CronFailureDestinationConfig = {
+  channel?: string;
+  to?: string;
+  accountId?: string;
+  mode?: "announce" | "webhook";
+};
+
 export type CronConfig = {
   enabled?: boolean;
   store?: string;
@@ -23,4 +30,9 @@ export type CronConfig = {
     maxBytes?: number | string;
     keepLines?: number;
   };
+  /**
+   * Default destination for failure notifications across all cron jobs.
+   * Jobs can override this with their own delivery.failureDestination.
+   */
+  failureDestination?: CronFailureDestinationConfig;
 };

@@ -18,6 +18,13 @@ export type CronMessageChannel = ChannelId | "last";
 
 export type CronDeliveryMode = "none" | "announce" | "webhook";
 
+export type CronFailureDestination = {
+  channel?: CronMessageChannel;
+  to?: string;
+  accountId?: string;
+  mode?: "announce" | "webhook";
+};
+
 export type CronDelivery = {
   mode: CronDeliveryMode;
   channel?: CronMessageChannel;
@@ -25,6 +32,7 @@ export type CronDelivery = {
   /** Explicit channel account id for multi-account setups (e.g. multiple Telegram bots). */
   accountId?: string;
   bestEffort?: boolean;
+  failureDestination?: CronFailureDestination;
 };
 
 export type CronDeliveryPatch = Partial<CronDelivery>;

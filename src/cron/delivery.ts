@@ -1,3 +1,4 @@
+import type { CronFailureDestinationConfig } from "../config/types.cron.js";
 import type { CronDeliveryMode, CronJob, CronMessageChannel } from "./types.js";
 
 export type CronDeliveryPlan = {
@@ -88,5 +89,61 @@ export function resolveCronDeliveryPlan(job: CronJob): CronDeliveryPlan {
     to,
     source: "payload",
     requested,
+  };
+}
+
+export type CronFailureDeliveryPlan = {
+  mode: "announce" | "webhook";
+  channel?: CronMessageChannel;
+  to?: string;
+  accountId?: string;
+};
+
+function normalizeFailureMode(value: unknown): "announce" | "webhook" | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim().toLowerCase();
+  if (trimmed === "announce" || trimmed === "webhook") {
+    return trimmed;
+  }
+  return undefined;
+}
+
+export function resolveFailureDestination(
+  job: CronJob,
+  globalConfig?: CronFailureDestinationConfig,
+): CronFailureDeliveryPlan | null {
+  const delivery = job.delivery;
+  const jobFailureDest = delivery?.failureDestination;
+  const hasJobFailureDest = jobFailureDest && typeof jobFailureDest === "object";
+
+  let channel: CronMessageChannel | undefined;
+  let to: string | undefined;
+  let accountId: string | undefined;
+  let mode: "announce" | "webhook" | undefined;
+
+  if (hasJobFailureDest) {
+    channel = normalizeChannel((jobFailureDest as { channel?: unknown }).channel);
+    to = normalizeTo((jobFailureDest as { to?: unknown }).to);
+    accountId = normalizeAccountId((jobFailureDest as { accountId?: unknown }).accountId);
+    mode = normalizeFailureMode((jobFailureDest as { mode?: unknown }).mode);
+  } else if (globalConfig) {
+    channel = normalizeChannel(globalConfig.channel);
+    to = normalizeTo(globalConfig.to);
+    accountId = normalizeAccountId(globalConfig.accountId);
+    mode = normalizeFailureMode(globalConfig.mode);
+  }
+
+  if (!channel && !to && !mode) {
+    return null;
+  }
+
+  const resolvedMode = mode ?? "announce";
+  return {
+    mode: resolvedMode,
+    channel: resolvedMode === "announce" ? (channel ?? "last") : undefined,
+    to,
+    accountId,
   };
 }
