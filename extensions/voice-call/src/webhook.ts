@@ -284,6 +284,17 @@ export class VoiceCallWebhookServer {
   ): Promise<void> {
     const url = new URL(req.url || "/", `http://${req.headers.host}`);
 
+    // Serve hold-music TwiML for call-waiting queue (Twilio waitUrl sends GET or POST)
+    if (url.pathname === "/voice/hold-music") {
+      res.setHeader("Content-Type", "text/xml");
+      res.end(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="alice">All agents are currently busy. Please hold.</Say>
+  <Play loop="0">http://com.twilio.sounds.music.s3.amazonaws.com/MARKOVICHAMP-B8.mp3</Play>
+</Response>`);
+      return;
+    }
+
     // Check path
     if (!this.isWebhookPathMatch(url.pathname, webhookPath)) {
       res.statusCode = 404;
