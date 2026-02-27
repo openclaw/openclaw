@@ -68,6 +68,14 @@ describe("tool-policy", () => {
     expect(group).toContain("subagents");
     expect(group).toContain("session_status");
     expect(group).toContain("tts");
+    // group:fs tools
+    expect(group).toContain("read");
+    expect(group).toContain("write");
+    expect(group).toContain("edit");
+    expect(group).toContain("apply_patch");
+    // group:runtime tools
+    expect(group).toContain("exec");
+    expect(group).toContain("process");
   });
 
   it("normalizes tool names and aliases", () => {

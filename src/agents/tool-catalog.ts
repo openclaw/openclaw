@@ -45,6 +45,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     description: "Read file contents",
     sectionId: "fs",
     profiles: ["coding"],
+    includeInOpenClawGroup: true,
   },
   {
     id: "write",
@@ -52,6 +53,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     description: "Create or overwrite files",
     sectionId: "fs",
     profiles: ["coding"],
+    includeInOpenClawGroup: true,
   },
   {
     id: "edit",
@@ -59,6 +61,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     description: "Make precise edits",
     sectionId: "fs",
     profiles: ["coding"],
+    includeInOpenClawGroup: true,
   },
   {
     id: "apply_patch",
@@ -66,6 +69,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     description: "Patch files (OpenAI)",
     sectionId: "fs",
     profiles: ["coding"],
+    includeInOpenClawGroup: true,
   },
   {
     id: "exec",
@@ -73,6 +77,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     description: "Run shell commands",
     sectionId: "runtime",
     profiles: ["coding"],
+    includeInOpenClawGroup: true,
   },
   {
     id: "process",
@@ -80,6 +85,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     description: "Manage background processes",
     sectionId: "runtime",
     profiles: ["coding"],
+    includeInOpenClawGroup: true,
   },
   {
     id: "web_search",
