@@ -1,8 +1,26 @@
 ---
 name: tgcc-agents
 description: 'Interact with TGCC-managed agents (sentinella, kyobot, saemem) via the supervisor protocol. Use when: routing tasks to persistent Telegram bots managed by TGCC, checking TGCC agent status, or coordinating across TGCC-managed CC sessions. NOT for: spawning new CC sessions (use coding-agent skill), direct Telegram bot interaction, or tasks that don't involve TGCC agents.'
+homepage: https://github.com/botverse/tgcc
 metadata:
-  { "openclaw": { "emoji": "🔌" } }
+  {
+    "openclaw":
+      {
+        "emoji": "🔌",
+        "requires": { "bins": ["tgcc"], "sockets": ["/tmp/tgcc/ctl/tgcc.sock"] },
+        "install":
+          [
+            {
+              "id": "npm",
+              "kind": "npm",
+              "package": "@fonz/tgcc",
+              "bins": ["tgcc"],
+              "label": "Install TGCC (npm)",
+            },
+          ],
+        "setup": "After install, run `tgcc init` to configure agents and `tgcc install` to start as a service. Then add `tgccSupervisor.socket` to your OpenClaw config.",
+      },
+  }
 ---
 
 # TGCC Agents — Supervisor Protocol Integration
