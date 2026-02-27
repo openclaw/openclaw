@@ -69,10 +69,12 @@ See [OpenAI provider](/providers/openai) for model params and overrides.
 
 ## Post-compaction audit
 
-After every compaction (auto or manual), OpenClaw runs a **post-compaction
-audit** that checks whether the agent re-read a set of required startup files.
-If any are missing, a warning is injected into the session so the agent can
-recover.
+After auto-compaction, OpenClaw runs a **post-compaction audit** that checks
+whether the agent re-read a set of required startup files. If any are missing,
+a warning is injected into the session so the agent can recover.
+
+The audit currently fires after **auto-compaction only**. Manual `/compact`
+does not trigger the audit.
 
 The default required files are:
 
@@ -102,11 +104,10 @@ Resume the conversation naturally without announcing the reset.
 ```
 
 Place this file in the root of your [agent workspace](/concepts/agent-workspace).
-`openclaw setup` will create a default if one does not exist.
 
 ### How the audit works
 
-1. Compaction completes (auto or `/compact`).
+1. Auto-compaction completes.
 2. OpenClaw injects the "Session Startup" and "Red Lines" sections from
    `AGENTS.md` as a post-compaction context reminder.
 3. On the **next agent turn**, the audit reads the session history and checks
@@ -122,12 +123,6 @@ Place this file in the root of your [agent workspace](/concepts/agent-workspace)
 
 The audit is **one-shot per compaction** (it fires once, then resets) and
 **best-effort** (failures are silently ignored).
-
-### Customizing the required files
-
-The default list is defined in `post-compaction-audit.ts`. You can override it
-by passing a custom `requiredReads` array in your agent configuration. Both
-literal file names and regular expressions are supported.
 
 ## Tips
 

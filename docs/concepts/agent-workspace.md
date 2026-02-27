@@ -91,11 +91,11 @@ These are the standard files OpenClaw expects inside the workspace:
   - Keep it short to avoid token burn.
 
 - `WORKFLOW_AUTO.md`
-  - Post-compaction recovery checklist.
+  - Optional post-compaction recovery checklist.
   - Lists the files the agent should re-read after context compaction so
     operating protocols are restored.
-  - Checked by the [post-compaction audit](/concepts/compaction#post-compaction-audit).
-    If the agent does not read this file after a compaction, a warning is
+  - Checked by the [post-compaction audit](/concepts/compaction#post-compaction-audit)
+    after auto-compaction. If the agent does not read this file, a warning is
     injected into the session.
 
 - `BOOT.md`
