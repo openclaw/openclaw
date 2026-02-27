@@ -71,3 +71,46 @@ In practice, the flow looks like this: install Ollama, use it to pull a model (f
 The most flexible setup combines cloud and local models in a single configuration -- think of it as having a primary pilot and a backup co-pilot. You designate one model as your primary (say, a cloud model for its reasoning strength) and one or more others as fallbacks (say, a fast local model for when the cloud is unreachable). If the primary provider errors out -- network blip, rate limit, outage -- OpenClaw automatically switches to the next model in the fallback chain, seamlessly and mid-conversation. The user on the other end of the chat never needs to know a swap happened.
 
 Recovery is equally hands-off. When a provider fails, it enters a cooldown period during which OpenClaw stops sending it requests. In the background, the Gateway periodically retests the provider with lightweight probe requests. Once the provider responds successfully, OpenClaw restores it to active duty and resumes using it according to its original priority. The entire cycle -- detection, fallback, cooldown, probe, recovery -- happens without any manual intervention.
+
+---
+
+# Part 3: Features and Comparison
+
+## Core Features
+
+| Feature | Description |
+|---------|-------------|
+| Multi-channel | 12+ messaging channels including WhatsApp, Telegram, Slack, Discord, Signal, iMessage, Feishu, and more |
+| Always-on | Background Gateway daemon -- your assistant is always reachable |
+| Tool System | Shell commands, file operations, browser automation, media understanding, scheduled tasks, webhooks |
+| Persistent Memory | Three layers: identity files, conversation history, semantic search across all notes |
+| Multi-model | 10+ providers (Anthropic, OpenAI, Google, DeepSeek, Qwen, Mistral...) with cloud and local model support |
+| Plugin System | Extend with channel plugins, tool plugins, and lifecycle hooks |
+| Local-first | All data -- conversations, memory, tool output -- stays on your machine |
+
+## Comparison with Other Agent Frameworks
+
+Before comparing features side by side, it helps to have a one-sentence mental model for each project:
+
+- **Auto-GPT** = "autonomous task runner" -- launches one-shot missions that run to completion.
+- **LangChain Agent** = "developer toolkit" -- a framework to build your own agent, not a ready-to-use product.
+- **Open Interpreter** = "smart terminal" -- CLI-only, session-scoped, lightweight.
+- **Claude Code** = "AI pair programmer" -- IDE/CLI focused, optimized for software engineering.
+- **OpenClaw** = "personal assistant that lives in your messaging apps."
+
+With those mental models in mind, here is how the projects compare across key dimensions:
+
+| Dimension | OpenClaw | Auto-GPT | Open Interpreter | LangChain Agent | Claude Code |
+|-----------|----------|----------|-----------------|-----------------|-------------|
+| Positioning | Personal always-on assistant | Autonomous task runner | Smart terminal | Developer framework | AI pair programmer |
+| Multi-channel | 12+ native (WhatsApp, Telegram, Slack, Feishu...) | None | None | Build your own | None |
+| Always-on | Yes (Gateway daemon) | No (run-to-complete) | No (session) | Depends on implementation | No (session) |
+| Persistent Memory | 3-layer system | Short-term + vector | Session only | Build your own | Session + project |
+| Local Models | Native (Ollama, vLLM, LM Studio) | Limited | Yes | Via wrappers | No |
+| Local-first Data | Yes | Partial | Yes | Depends | Yes |
+
+## Strengths and Limitations
+
+**Strengths.** OpenClaw's defining advantage is its always-on presence across the messaging apps you already use -- you do not need to open a special interface or remember a URL. Native support for 12+ channels, including Chinese ecosystem channels like Feishu, means it meets you where you are. All data stays on your machine, giving you full sovereignty over conversations and memory. The three-layer memory system (bootstrap files, session history, semantic search) provides continuity that survives individual conversations. Broad model provider support -- including Chinese-region providers like Qwen and DeepSeek -- lets you pick the best model for your situation, and the plugin architecture makes it straightforward to add new channels, tools, or behaviors without modifying the core.
+
+**Limitations.** OpenClaw is single-user by design: it is a personal assistant, not a team or enterprise platform. The Gateway must run continuously on a local machine (or a server you control), which means you need hardware that stays on and connected. Initial setup -- choosing a model provider, connecting channels, configuring memory -- has a steeper learning curve than hosted solutions where you simply sign up and start chatting. And if you choose to run local models, the quality of responses depends directly on the hardware available to you; smaller machines will be limited to smaller, less capable models.
