@@ -5,8 +5,10 @@ import { captureEnv } from "../test-utils/env.js";
 let envSnapshot: ReturnType<typeof captureEnv>;
 
 beforeAll(() => {
-  envSnapshot = captureEnv(["OPENCLAW_PROFILE"]);
+  envSnapshot = captureEnv(["OPENCLAW_PROFILE", "OPENCLAW_GATEWAY_PORT", "CLAWDBOT_GATEWAY_PORT"]);
   process.env.OPENCLAW_PROFILE = "isolated";
+  delete process.env.OPENCLAW_GATEWAY_PORT;
+  delete process.env.CLAWDBOT_GATEWAY_PORT;
 });
 
 afterAll(() => {
@@ -589,7 +591,7 @@ describe("statusCommand", () => {
     expect(joined).toContain("trusted-proxy");
   });
 
-  it("uses configured gateway port for nonce guidance when probe URL is proxy-facing", async () => {
+  it("uses probe URL port for nonce guidance when listener port is not configured", async () => {
     mocks.probeGateway.mockResolvedValueOnce({
       ok: false,
       url: "wss://forward.example.com:24444",
@@ -605,8 +607,38 @@ describe("statusCommand", () => {
     runtimeLogMock.mockClear();
     await statusCommand({}, runtime as never);
     const joined = runtimeLogMock.mock.calls.map((c: unknown[]) => String(c[0])).join("\n");
-    expect(joined).toContain("ssh -L 18789:127.0.0.1:18789 <user>@<host>");
-    expect(joined).toContain("http://127.0.0.1:18789");
+    expect(joined).toContain("ssh -L 24444:127.0.0.1:24444 <user>@<host>");
+    expect(joined).toContain("http://127.0.0.1:24444");
+  });
+
+  it("uses configured listener port for nonce guidance when probe URL is non-loopback", async () => {
+    const previousGatewayPort = process.env.OPENCLAW_GATEWAY_PORT;
+    process.env.OPENCLAW_GATEWAY_PORT = "18789";
+    try {
+      mocks.probeGateway.mockResolvedValueOnce({
+        ok: false,
+        url: "wss://forward.example.com:24444",
+        connectLatencyMs: null,
+        error: "connect failed: device nonce required",
+        close: { code: 1008, reason: "connect failed" },
+        health: null,
+        status: null,
+        presence: null,
+        configSnapshot: null,
+      });
+
+      runtimeLogMock.mockClear();
+      await statusCommand({}, runtime as never);
+      const joined = runtimeLogMock.mock.calls.map((c: unknown[]) => String(c[0])).join("\n");
+      expect(joined).toContain("ssh -L 18789:127.0.0.1:18789 <user>@<host>");
+      expect(joined).toContain("http://127.0.0.1:18789");
+    } finally {
+      if (previousGatewayPort === undefined) {
+        delete process.env.OPENCLAW_GATEWAY_PORT;
+      } else {
+        process.env.OPENCLAW_GATEWAY_PORT = previousGatewayPort;
+      }
+    }
   });
 
   it("uses loopback probe URL port in nonce guidance when URL is direct gateway", async () => {

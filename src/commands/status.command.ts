@@ -88,26 +88,40 @@ function resolveNonceRecoveryContext(params: {
   closeReason?: string | null;
   gatewayUrl?: string | null;
   fallbackPort: number;
+  listenerPortConfigured: boolean;
 }): {
   loopbackUrl: boolean;
   tunnelPort: number;
 } | null {
   const resolveTunnelPort = (): number => {
     const raw = params.gatewayUrl;
-    // Recovery guidance should target the gateway listener directly. For
-    // non-loopback URLs we may be looking at a reverse-proxy edge port (e.g. 443),
-    // so prefer configured gateway port unless the probe itself is loopback.
-    if (!raw || !isLoopbackWsUrl(raw)) {
+    if (!raw) {
       return params.fallbackPort;
     }
     try {
       const parsed = new URL(raw);
-      if ((parsed.protocol === "ws:" || parsed.protocol === "wss:") && parsed.port) {
+      if (parsed.protocol !== "ws:" && parsed.protocol !== "wss:") {
+        return params.fallbackPort;
+      }
+
+      const loopback = isLoopbackWsUrl(raw);
+      let parsedPort: number | null = null;
+      if (parsed.port) {
         const numeric = Number.parseInt(parsed.port, 10);
         if (Number.isFinite(numeric) && numeric > 0 && numeric <= 65_535) {
-          return numeric;
+          parsedPort = numeric;
         }
       }
+
+      if (loopback) {
+        return parsedPort ?? params.fallbackPort;
+      }
+      // For non-loopback URLs, prefer explicit listener settings; otherwise use
+      // the probed URL port when available.
+      if (params.listenerPortConfigured) {
+        return params.fallbackPort;
+      }
+      return parsedPort ?? params.fallbackPort;
     } catch {
       // Use configured fallback below.
     }
@@ -132,6 +146,24 @@ function resolveNonceRecoveryContext(params: {
     loopbackUrl: isLoopbackWsUrl(params.gatewayUrl),
     tunnelPort: resolveTunnelPort(),
   };
+}
+
+function resolveExplicitGatewayPort(
+  cfg: { gateway?: { port?: number } } | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): number | null {
+  const envRaw = env.OPENCLAW_GATEWAY_PORT?.trim() || env.CLAWDBOT_GATEWAY_PORT?.trim();
+  if (envRaw) {
+    const parsed = Number.parseInt(envRaw, 10);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return parsed;
+    }
+  }
+  const configPort = cfg?.gateway?.port;
+  if (typeof configPort === "number" && Number.isFinite(configPort) && configPort > 0) {
+    return configPort;
+  }
+  return null;
 }
 
 export async function statusCommand(
@@ -286,8 +318,10 @@ export async function statusCommand(
 
   const tableWidth = Math.max(60, (process.stdout.columns ?? 120) - 1);
 
+  const explicitGatewayPort = resolveExplicitGatewayPort(cfg);
+  const configuredGatewayPort = explicitGatewayPort ?? resolveGatewayPort(cfg);
+
   const dashboard = (() => {
-    const configuredGatewayPort = resolveGatewayPort(cfg);
     const controlUiEnabled = cfg.gateway?.controlUi?.enabled ?? true;
     if (!controlUiEnabled) {
       return "disabled";
@@ -336,7 +370,8 @@ export async function statusCommand(
     error: gatewayProbe?.error ?? null,
     closeReason: gatewayProbe?.close?.reason ?? null,
     gatewayUrl: gatewayProbe?.url ?? gatewayConnection.url,
-    fallbackPort: resolveGatewayPort(cfg),
+    fallbackPort: configuredGatewayPort,
+    listenerPortConfigured: explicitGatewayPort !== null,
   });
 
   const agentsValue = (() => {
