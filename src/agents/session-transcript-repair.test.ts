@@ -314,4 +314,76 @@ describe("sanitizeToolCallInputs", () => {
       : [];
     expect(types).toEqual(["text", "toolUse"]);
   });
+
+  it("preserves last assistant message with thinking blocks even if tool name is not allowed", () => {
+    const thinkingAssistant = {
+      role: "assistant",
+      content: [
+        { type: "thinking", thinking: "let me think..." },
+        { type: "toolCall", id: "call_exec", name: "exec", arguments: { command: "ls" } },
+        { type: "text", text: "done" },
+      ],
+    };
+    const input = [
+      { role: "user", content: "hello" },
+      thinkingAssistant,
+    ] as unknown as AgentMessage[];
+
+    // allowedToolNames does NOT include "exec" — normally it would be dropped
+    const out = sanitizeToolCallInputs(input, { allowedToolNames: ["read"] });
+
+    // The last assistant message must be preserved unchanged because it has thinking blocks
+    expect(out).toHaveLength(2);
+    expect(out[1]).toBe(thinkingAssistant);
+  });
+
+  it("preserves last assistant message with redacted_thinking blocks", () => {
+    const thinkingAssistant = {
+      role: "assistant",
+      content: [
+        { type: "redacted_thinking", data: "AQID" },
+        { type: "toolCall", id: "call_exec", name: "exec", arguments: { command: "ls" } },
+        { type: "text", text: "result" },
+      ],
+    };
+    const input = [
+      { role: "user", content: "hello" },
+      thinkingAssistant,
+    ] as unknown as AgentMessage[];
+
+    const out = sanitizeToolCallInputs(input, { allowedToolNames: ["read"] });
+
+    expect(out).toHaveLength(2);
+    expect(out[1]).toBe(thinkingAssistant);
+  });
+
+  it("still filters non-last assistant messages with thinking blocks", () => {
+    const input = [
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "thought" },
+          { type: "toolCall", id: "call_exec", name: "exec", arguments: { command: "ls" } },
+          { type: "text", text: "first" },
+        ],
+      },
+      { role: "user", content: "next" },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "last response" }],
+      },
+    ] as unknown as AgentMessage[];
+
+    // The first assistant message is NOT the last, so its exec tool call should be dropped
+    const out = sanitizeToolCallInputs(input, { allowedToolNames: ["read"] });
+
+    const firstAssistant = out[0] as Extract<AgentMessage, { role: "assistant" }>;
+    const toolCalls = Array.isArray(firstAssistant.content)
+      ? firstAssistant.content.filter((b) => {
+          const t = (b as { type?: unknown }).type;
+          return t === "toolCall" || t === "toolUse" || t === "functionCall";
+        })
+      : [];
+    expect(toolCalls).toHaveLength(0);
+  });
 });

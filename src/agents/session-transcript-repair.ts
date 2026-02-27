@@ -132,13 +132,47 @@ export function repairToolCallInputs(
   const out: AgentMessage[] = [];
   const allowedToolNames = normalizeAllowedToolNames(options?.allowedToolNames);
 
-  for (const msg of messages) {
+  // Find the last assistant message index. If it contains thinking or
+  // redacted_thinking blocks, we must skip it from tool call filtering —
+  // Anthropic requires the latest assistant message to be byte-for-byte identical
+  // to the original response when it contains thinking blocks.
+  // See: https://github.com/openclaw/openclaw/issues/28414
+  let lastAssistantIdx = -1;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (m && typeof m === "object" && m.role === "assistant" && Array.isArray(m.content)) {
+      lastAssistantIdx = i;
+      break;
+    }
+  }
+  const skipLastAssistant =
+    lastAssistantIdx >= 0 &&
+    Array.isArray(
+      (messages[lastAssistantIdx] as Extract<AgentMessage, { role: "assistant" }>).content,
+    ) &&
+    (messages[lastAssistantIdx] as Extract<AgentMessage, { role: "assistant" }>).content.some(
+      (block) => {
+        const t =
+          block && typeof block === "object" ? (block as { type?: unknown }).type : undefined;
+        return t === "thinking" || t === "redacted_thinking";
+      },
+    );
+
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i];
     if (!msg || typeof msg !== "object") {
       out.push(msg);
       continue;
     }
 
     if (msg.role !== "assistant" || !Array.isArray(msg.content)) {
+      out.push(msg);
+      continue;
+    }
+
+    // Skip the last assistant message when it contains thinking blocks —
+    // Anthropic requires it to be unmodified.
+    if (skipLastAssistant && i === lastAssistantIdx) {
       out.push(msg);
       continue;
     }
