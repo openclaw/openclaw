@@ -10,6 +10,7 @@ import type {
 } from "@mariozechner/pi-ai";
 import { createAssistantMessageEventStream } from "@mariozechner/pi-ai";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { retryWithBackoff } from "../utils/retry.js";
 
 const log = createSubsystemLogger("ollama-stream");
 
@@ -452,11 +453,18 @@ export function createOllamaStreamFn(baseUrl: string): StreamFn {
           headers.Authorization = `Bearer ${options.apiKey}`;
         }
 
-        const response = await fetch(chatUrl, {
-          method: "POST",
-          headers,
-          body: JSON.stringify(body),
-          signal: options?.signal,
+        const response = await retryWithBackoff(async (signal) => {
+          return await fetch(chatUrl, {
+            method: "POST",
+            headers,
+            body: JSON.stringify(body),
+            signal: options?.signal ?? signal,
+          });
+        }, {
+          attempts: 3,
+          baseMs: 200,
+          maxMs: 3000,
+          timeoutMs: 12000, // per-attempt timeout for ollama calls
         });
 
         if (!response.ok) {
