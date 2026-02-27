@@ -939,6 +939,8 @@ Periodic heartbeat runs.
       compaction: {
         mode: "safeguard", // default | safeguard
         reserveTokensFloor: 24000,
+        identifierPolicy: "strict", // strict | off | custom
+        identifierInstructions: "Preserve deployment IDs, ticket IDs, and host:port pairs exactly.", // used when identifierPolicy=custom
         memoryFlush: {
           enabled: true,
           softThresholdTokens: 6000,
@@ -952,6 +954,8 @@ Periodic heartbeat runs.
 ```
 
 - `mode`: `default` or `safeguard` (chunked summarization for long histories). See [Compaction](/concepts/compaction).
+- `identifierPolicy`: `strict` (default), `off`, or `custom`. `strict` prepends built-in opaque identifier retention guidance during compaction summarization.
+- `identifierInstructions`: optional custom identifier-preservation text used when `identifierPolicy=custom`.
 - `memoryFlush`: silent agentic turn before auto-compaction to store durable memories. Skipped when workspace is read-only.
 
 ### `agents.defaults.contextPruning`
