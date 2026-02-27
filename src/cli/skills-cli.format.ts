@@ -150,7 +150,14 @@ export function formatSkillInfo(
   }
 
   if (opts.json) {
-    return JSON.stringify(skill, null, 2);
+    // Strip ANSI escape codes from emoji field to ensure valid JSON output
+    // eslint-disable-next-line no-control-regex
+    const ansiPattern = /[\u001B\u009B][[\]()#;?]*(?:(?:(?:[a-zA-Z\d]*(?:;[a-zA-Z\d]*)*)?\u0007)|(?:(?:\d{1,4}(?:;\d{0,4})*)?[\dA-PR-TZcf-ntqry=><~]))/g;
+    const cleanSkill = {
+      ...skill,
+      emoji: skill.emoji?.replace(ansiPattern, ""),
+    };
+    return JSON.stringify(cleanSkill, null, 2);
   }
 
   const lines: string[] = [];
