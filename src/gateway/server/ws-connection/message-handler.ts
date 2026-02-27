@@ -88,7 +88,7 @@ import { isUnauthorizedRoleError, UnauthorizedFloodGuard } from "./unauthorized-
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
-const DEVICE_SIGNATURE_SKEW_MS = 2 * 60 * 1000;
+const DEFAULT_DEVICE_SIGNATURE_SKEW_MS = 2 * 60 * 1000;
 const BROWSER_ORIGIN_LOOPBACK_RATE_LIMIT_IP = "198.18.0.1";
 
 type HandshakeBrowserSecurityContext = {
@@ -277,6 +277,8 @@ export function attachGatewayWsMessageHandler(params: {
   const configSnapshot = loadConfig();
   const trustedProxies = configSnapshot.gateway?.trustedProxies ?? [];
   const allowRealIpFallback = configSnapshot.gateway?.allowRealIpFallback === true;
+  const deviceSignatureSkewMs =
+    configSnapshot.gateway?.deviceSignatureSkewMs ?? DEFAULT_DEVICE_SIGNATURE_SKEW_MS;
   const clientIp = resolveClientIp({
     remoteAddr,
     forwardedFor,
@@ -644,11 +646,20 @@ export function attachGatewayWsMessageHandler(params: {
             return;
           }
           const signedAt = device.signedAt;
+          const serverNowMs = Date.now();
+          const deltaMs =
+            typeof signedAt === "number" ? Math.abs(serverNowMs - signedAt) : undefined;
           if (
             typeof signedAt !== "number" ||
-            Math.abs(Date.now() - signedAt) > DEVICE_SIGNATURE_SKEW_MS
+            (deltaMs !== undefined && deltaMs > deviceSignatureSkewMs)
           ) {
-            rejectDeviceAuthInvalid("device-signature-stale", "device signature expired");
+            logGateway.warn(
+              `device signature stale: deviceId=${device.id} signedAtMs=${signedAt} serverNowMs=${serverNowMs} deltaMs=${deltaMs ?? "N/A"} allowedSkewMs=${deviceSignatureSkewMs}`,
+            );
+            rejectDeviceAuthInvalid(
+              "device-signature-stale",
+              `device signature expired (clock delta: ${deltaMs ?? "unknown"}ms, allowed: ${deviceSignatureSkewMs}ms)`,
+            );
             return;
           }
           const providedNonce = typeof device.nonce === "string" ? device.nonce.trim() : "";

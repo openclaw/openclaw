@@ -362,4 +362,9 @@ export type GatewayConfig = {
    * Set to 0 to disable. Default: 5.
    */
   channelHealthCheckMinutes?: number;
+  /**
+   * Device signature timestamp skew tolerance in milliseconds.
+   * Signatures older than this are rejected as stale. Default: 120000 (2 minutes).
+   */
+  deviceSignatureSkewMs?: number;
 };
