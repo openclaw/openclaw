@@ -35,8 +35,6 @@ namespace OpenClaw.Node
 
             try
             {
-            var defaultClientId = BuildDefaultNodeClientId();
-
             var connectParams = new ConnectParams
             {
                 MinProtocol = Constants.GatewayProtocolVersion,
@@ -44,7 +42,7 @@ namespace OpenClaw.Node
                 Role = "node",
                 Client = new Dictionary<string, object>
                 {
-                    { "id", defaultClientId },
+                    { "id", "node-host" },
                     { "displayName", Environment.MachineName },
                     { "platform", "windows" },
                     { "mode", "node" },
@@ -273,27 +271,6 @@ namespace OpenClaw.Node
             {
                 // expected
             }
-        }
-
-        private static string BuildDefaultNodeClientId()
-        {
-            try
-            {
-                var identity = new DeviceIdentityService().LoadOrCreate();
-                if (!string.IsNullOrWhiteSpace(identity.DeviceId))
-                {
-                    return $"node-{identity.DeviceId[..Math.Min(identity.DeviceId.Length, 24)]}";
-                }
-            }
-            catch
-            {
-                // fall through to machine-based fallback
-            }
-
-            var machine = string.IsNullOrWhiteSpace(Environment.MachineName)
-                ? "host"
-                : Environment.MachineName.Trim().ToLowerInvariant();
-            return $"node-{machine}";
         }
 
         private static string ResolveGatewayUrl(string[] args, out string? configReadError)
