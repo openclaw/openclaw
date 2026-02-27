@@ -499,6 +499,7 @@ export async function compactEmbeddedPiSessionDirect(
       docsPath: docsPath ?? undefined,
       ttsHint,
       promptMode,
+      acpEnabled: params.config?.acp?.enabled !== false,
       runtimeInfo,
       reactionGuidance,
       messageToolHints,

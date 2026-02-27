@@ -13,13 +13,14 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
     },
   };
 
-  function makeRecord(command: string): ExecApprovalRecord {
+  function makeRecord(command: string, commandArgv?: string[]): ExecApprovalRecord {
     return {
       id: "approval-1",
       request: {
         host: "node",
         nodeId: "node-1",
         command,
+        commandArgv,
         cwd: null,
         agentId: null,
         sessionKey: null,
@@ -135,6 +136,64 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
       execApprovalManager: manager(
         makeRecord('/usr/bin/env BASH_ENV=/tmp/payload.sh bash -lc "echo SAFE"'),
       ),
+      nowMs: now,
+    });
+    expectAllowOnceForwardingResult(result);
+  });
+
+  test("rejects trailing-space argv mismatch against legacy command-only approval", () => {
+    const result = sanitizeSystemRunParamsForForwarding({
+      rawParams: {
+        command: ["runner "],
+        runId: "approval-1",
+        approved: true,
+        approvalDecision: "allow-once",
+      },
+      nodeId: "node-1",
+      client,
+      execApprovalManager: manager(makeRecord("runner")),
+      nowMs: now,
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error("unreachable");
+    }
+    expect(result.message).toContain("approval id does not match request");
+    expect(result.details?.code).toBe("APPROVAL_REQUEST_MISMATCH");
+  });
+
+  test("enforces commandArgv identity when approval includes argv binding", () => {
+    const result = sanitizeSystemRunParamsForForwarding({
+      rawParams: {
+        command: ["echo", "SAFE"],
+        runId: "approval-1",
+        approved: true,
+        approvalDecision: "allow-once",
+      },
+      nodeId: "node-1",
+      client,
+      execApprovalManager: manager(makeRecord("echo SAFE", ["echo SAFE"])),
+      nowMs: now,
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error("unreachable");
+    }
+    expect(result.message).toContain("approval id does not match request");
+    expect(result.details?.code).toBe("APPROVAL_REQUEST_MISMATCH");
+  });
+
+  test("accepts matching commandArgv binding for trailing-space argv", () => {
+    const result = sanitizeSystemRunParamsForForwarding({
+      rawParams: {
+        command: ["runner "],
+        runId: "approval-1",
+        approved: true,
+        approvalDecision: "allow-once",
+      },
+      nodeId: "node-1",
+      client,
+      execApprovalManager: manager(makeRecord('"runner "', ["runner "])),
       nowMs: now,
     });
     expectAllowOnceForwardingResult(result);

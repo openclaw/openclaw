@@ -43,6 +43,41 @@ beforeEach(() => {
 });
 
 describe("nodes camera_snap", () => {
+  it("uses front/high-quality defaults when params are omitted", async () => {
+    callGateway.mockImplementation(async ({ method, params }) => {
+      if (method === "node.list") {
+        return mockNodeList();
+      }
+      if (method === "node.invoke") {
+        expect(params).toMatchObject({
+          command: "camera.snap",
+          params: {
+            facing: "front",
+            maxWidth: 1600,
+            quality: 0.95,
+          },
+        });
+        return {
+          payload: {
+            format: "jpg",
+            base64: "aGVsbG8=",
+            width: 1,
+            height: 1,
+          },
+        };
+      }
+      return unexpectedGatewayMethod(method);
+    });
+
+    const result = await executeNodes({
+      action: "camera_snap",
+      node: NODE_ID,
+    });
+
+    const images = (result.content ?? []).filter((block) => block.type === "image");
+    expect(images).toHaveLength(1);
+  });
+
   it("maps jpg payloads to image/jpeg", async () => {
     callGateway.mockImplementation(async ({ method }) => {
       if (method === "node.list") {
@@ -99,6 +134,42 @@ describe("nodes camera_snap", () => {
       node: NODE_ID,
       facing: "front",
       deviceId: "cam-123",
+    });
+  });
+});
+
+describe("nodes notifications_list", () => {
+  it("invokes notifications.list and returns payload", async () => {
+    callGateway.mockImplementation(async ({ method, params }) => {
+      if (method === "node.list") {
+        return mockNodeList(["notifications.list"]);
+      }
+      if (method === "node.invoke") {
+        expect(params).toMatchObject({
+          nodeId: NODE_ID,
+          command: "notifications.list",
+          params: {},
+        });
+        return {
+          payload: {
+            enabled: true,
+            connected: true,
+            count: 1,
+            notifications: [{ key: "n1", packageName: "com.example.app" }],
+          },
+        };
+      }
+      return unexpectedGatewayMethod(method);
+    });
+
+    const result = await executeNodes({
+      action: "notifications_list",
+      node: NODE_ID,
+    });
+
+    expect(result.content?.[0]).toMatchObject({
+      type: "text",
+      text: expect.stringContaining('"notifications"'),
     });
   });
 });

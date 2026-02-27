@@ -130,7 +130,9 @@ Use this when debugging auth or deciding what to back up:
 - **Telegram bot token**: config/env or `channels.telegram.tokenFile`
 - **Discord bot token**: config/env (token file not yet supported)
 - **Slack tokens**: config/env (`channels.slack.*`)
-- **Pairing allowlists**: `~/.openclaw/credentials/<channel>-allowFrom.json`
+- **Pairing allowlists**:
+  - `~/.openclaw/credentials/<channel>-allowFrom.json` (default account)
+  - `~/.openclaw/credentials/<channel>-<accountId>-allowFrom.json` (non-default accounts)
 - **Model auth profiles**: `~/.openclaw/agents/<agentId>/agent/auth-profiles.json`
 - **Legacy OAuth import**: `~/.openclaw/credentials/oauth.json`
   More detail: [Security](/gateway/security#credential-storage-map).
