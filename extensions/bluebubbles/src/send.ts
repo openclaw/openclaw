@@ -88,8 +88,7 @@ function resolvePrivateApiDecision(params: {
 }): PrivateApiDecision {
   const { privateApiStatus, wantsReplyThread, wantsEffect } = params;
   const needsPrivateApi = wantsReplyThread || wantsEffect;
-  const canUsePrivateApi =
-    needsPrivateApi && isBlueBubblesPrivateApiStatusEnabled(privateApiStatus);
+  const canUsePrivateApi = isBlueBubblesPrivateApiStatusEnabled(privateApiStatus);
   const throwEffectDisabledError = wantsEffect && privateApiStatus === false;
   if (!needsPrivateApi || privateApiStatus !== null) {
     return { canUsePrivateApi, throwEffectDisabledError };
@@ -316,6 +315,7 @@ async function createNewChatWithMessage(params: {
   const payload = {
     addresses: [params.address],
     message: params.message,
+    method: "private-api" as const,
     tempGuid: `temp-${crypto.randomUUID()}`,
   };
   const res = await blueBubblesFetchWithTimeout(
