@@ -100,6 +100,10 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   >();
   private sessionWarm = new Set<string>();
   private syncing: Promise<void> | null = null;
+  private readonlyRecoveryAttempts = 0;
+  private readonlyRecoverySuccesses = 0;
+  private readonlyRecoveryFailures = 0;
+  private readonlyRecoveryLastError?: string;
 
   static async get(params: {
     cfg: OpenClawConfig;
@@ -414,8 +418,52 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   }
 
   private isReadonlyDbError(err: unknown): boolean {
-    const message = err instanceof Error ? err.message : String(err);
-    return /attempt to write a readonly database|SQLITE_READONLY/i.test(message);
+    const readonlyPattern =
+      /attempt to write a readonly database|database is read-only|SQLITE_READONLY/i;
+    const messages = new Set<string>();
+
+    const pushValue = (value: unknown): void => {
+      if (typeof value !== "string") {
+        return;
+      }
+      const normalized = value.trim();
+      if (!normalized) {
+        return;
+      }
+      messages.add(normalized);
+    };
+
+    pushValue(err instanceof Error ? err.message : String(err));
+    if (err && typeof err === "object") {
+      const record = err as Record<string, unknown>;
+      pushValue(record.message);
+      pushValue(record.code);
+      pushValue(record.name);
+      if (record.cause && typeof record.cause === "object") {
+        const cause = record.cause as Record<string, unknown>;
+        pushValue(cause.message);
+        pushValue(cause.code);
+        pushValue(cause.name);
+      }
+    }
+
+    return [...messages].some((value) => readonlyPattern.test(value));
+  }
+
+  private extractErrorReason(err: unknown): string {
+    if (err instanceof Error && err.message.trim()) {
+      return err.message;
+    }
+    if (err && typeof err === "object") {
+      const record = err as Record<string, unknown>;
+      if (typeof record.message === "string" && record.message.trim()) {
+        return record.message;
+      }
+      if (typeof record.code === "string" && record.code.trim()) {
+        return record.code;
+      }
+    }
+    return String(err);
   }
 
   private async runSyncWithReadonlyRecovery(params?: {
@@ -430,7 +478,9 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       if (!this.isReadonlyDbError(err) || this.closed) {
         throw err;
       }
-      const reason = err instanceof Error ? err.message : String(err);
+      const reason = this.extractErrorReason(err);
+      this.readonlyRecoveryAttempts += 1;
+      this.readonlyRecoveryLastError = reason;
       log.warn(`memory sync readonly handle detected; reopening sqlite connection`, { reason });
       try {
         this.db.close();
@@ -442,7 +492,13 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       this.ensureSchema();
       const meta = this.readMeta();
       this.vector.dims = meta?.vectorDims;
-      await this.runSync(params);
+      try {
+        await this.runSync(params);
+        this.readonlyRecoverySuccesses += 1;
+      } catch (retryErr) {
+        this.readonlyRecoveryFailures += 1;
+        throw retryErr;
+      }
     }
   }
 
@@ -623,6 +679,12 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       custom: {
         searchMode,
         providerUnavailableReason: this.providerUnavailableReason,
+        readonlyRecovery: {
+          attempts: this.readonlyRecoveryAttempts,
+          successes: this.readonlyRecoverySuccesses,
+          failures: this.readonlyRecoveryFailures,
+          lastError: this.readonlyRecoveryLastError,
+        },
       },
     };
   }

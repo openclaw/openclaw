@@ -65,6 +65,56 @@ describe("memory manager readonly recovery", () => {
 
     expect(runSyncSpy).toHaveBeenCalledTimes(2);
     expect(openDatabaseSpy).toHaveBeenCalledTimes(1);
+    expect(manager.status().custom?.readonlyRecovery).toEqual({
+      attempts: 1,
+      successes: 1,
+      failures: 0,
+      lastError: "attempt to write a readonly database",
+    });
+  });
+
+  it("reopens sqlite and retries when readonly appears in error code", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          workspace: workspaceDir,
+          memorySearch: {
+            provider: "openai",
+            model: "mock-embed",
+            store: { path: indexPath },
+            sync: { watch: false, onSessionStart: false, onSearch: false },
+          },
+        },
+        list: [{ id: "main", default: true }],
+      },
+    } as OpenClawConfig;
+
+    manager = await getRequiredMemoryIndexManager({ cfg, agentId: "main" });
+
+    const runSyncSpy = vi.spyOn(
+      manager as unknown as {
+        runSync: (params?: { reason?: string; force?: boolean }) => Promise<void>;
+      },
+      "runSync",
+    );
+    runSyncSpy
+      .mockRejectedValueOnce({ message: "write failed", code: "SQLITE_READONLY" })
+      .mockResolvedValueOnce(undefined);
+    const openDatabaseSpy = vi.spyOn(
+      manager as unknown as { openDatabase: () => DatabaseSync },
+      "openDatabase",
+    );
+
+    await manager.sync({ reason: "test" });
+
+    expect(runSyncSpy).toHaveBeenCalledTimes(2);
+    expect(openDatabaseSpy).toHaveBeenCalledTimes(1);
+    expect(manager.status().custom?.readonlyRecovery).toEqual({
+      attempts: 1,
+      successes: 1,
+      failures: 0,
+      lastError: "write failed",
+    });
   });
 
   it("does not retry non-readonly sync errors", async () => {
