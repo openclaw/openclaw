@@ -12,6 +12,7 @@ import { applyGoogleGeminiModelDefault } from "../../google-gemini-model-default
 import { applyPrimaryModel } from "../../model-picker.js";
 import {
   applyAuthProfileConfig,
+  applyEternalAIConfig,
   applyCloudflareAiGatewayConfig,
   applyKilocodeConfig,
   applyQianfanConfig,
@@ -34,6 +35,7 @@ import {
   applyXiaomiConfig,
   applyZaiConfig,
   setAnthropicApiKey,
+  setEternalAIApiKey,
   setCloudflareAiGatewayConfig,
   setByteplusApiKey,
   setQianfanApiKey,
@@ -796,6 +798,29 @@ export async function applyNonInteractiveAuthChoice(params: {
       mode: "api_key",
     });
     return applyVeniceConfig(nextConfig);
+  }
+
+  if (authChoice === "eternalai-api-key") {
+    const resolved = await resolveNonInteractiveApiKey({
+      provider: "eternalai",
+      cfg: baseConfig,
+      flagValue: opts.eternalaiApiKey,
+      flagName: "--eternalai-api-key",
+      envVar: "ETERNALAI_API_KEY",
+      runtime,
+    });
+    if (!resolved) {
+      return null;
+    }
+    if (resolved.source !== "profile") {
+      await setEternalAIApiKey(resolved.key);
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "eternalai:default",
+      provider: "eternalai",
+      mode: "api_key",
+    });
+    return applyEternalAIConfig(nextConfig);
   }
 
   if (

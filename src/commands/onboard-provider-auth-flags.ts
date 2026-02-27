@@ -17,6 +17,7 @@ type OnboardProviderAuthOptionKey = keyof Pick<
   | "minimaxApiKey"
   | "syntheticApiKey"
   | "veniceApiKey"
+  | "eternalaiApiKey"
   | "togetherApiKey"
   | "huggingfaceApiKey"
   | "opencodeZenApiKey"
@@ -141,6 +142,13 @@ export const ONBOARD_PROVIDER_AUTH_FLAGS: ReadonlyArray<OnboardProviderAuthFlag>
     cliFlag: "--venice-api-key",
     cliOption: "--venice-api-key <key>",
     description: "Venice API key",
+  },
+  {
+    optionKey: "eternalaiApiKey",
+    authChoice: "eternalai-api-key",
+    cliFlag: "--eternalai-api-key",
+    cliOption: "--eternalai-api-key <key>",
+    description: "EternalAI API key",
   },
   {
     optionKey: "togetherApiKey",

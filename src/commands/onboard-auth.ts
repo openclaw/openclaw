@@ -1,10 +1,16 @@
 export {
+  ETERNALAI_DEFAULT_MODEL_ID,
+  ETERNALAI_DEFAULT_MODEL_REF,
+} from "../agents/eternalai-models.js";
+export {
   SYNTHETIC_DEFAULT_MODEL_ID,
   SYNTHETIC_DEFAULT_MODEL_REF,
 } from "../agents/synthetic-models.js";
 export { VENICE_DEFAULT_MODEL_ID, VENICE_DEFAULT_MODEL_REF } from "../agents/venice-models.js";
 export {
   applyAuthProfileConfig,
+  applyEternalAIConfig,
+  applyEternalAIProviderConfig,
   applyCloudflareAiGatewayConfig,
   applyCloudflareAiGatewayProviderConfig,
   applyHuggingfaceConfig,
@@ -63,6 +69,7 @@ export {
   OPENROUTER_DEFAULT_MODEL_REF,
   setOpenaiApiKey,
   setAnthropicApiKey,
+  setEternalAIApiKey,
   setCloudflareAiGatewayConfig,
   setByteplusApiKey,
   setQianfanApiKey,

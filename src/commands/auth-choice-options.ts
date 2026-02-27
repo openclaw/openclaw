@@ -10,6 +10,7 @@ export type AuthChoiceOption = {
   label: string;
   hint?: string;
 };
+
 export type AuthChoiceGroup = {
   value: AuthChoiceGroupId;
   label: string;
@@ -166,6 +167,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     label: "Venice AI",
     hint: "Privacy-focused (uncensored models)",
     choices: ["venice-api-key"],
+  },
+  {
+    value: "eternalai",
+    label: "EternalAI",
+    hint: "Privacy-focused (uncensored models)",
+    choices: ["eternalai-api-key"],
   },
   {
     value: "litellm",
