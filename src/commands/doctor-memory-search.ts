@@ -42,7 +42,9 @@ export async function noteMemorySearchHealth(
   // If a specific provider is configured (not "auto"), check only that one.
   if (resolved.provider !== "auto") {
     if (resolved.provider === "local") {
-      if (hasLocalEmbeddings(resolved.local)) {
+      // Check both local.modelPath and the generic model field - either can
+      // contain a valid local/hf/http path for the local provider.
+      if (hasLocalEmbeddings(resolved.local) || hasModelAsLocalPath(resolved.model)) {
         return; // local model file exists
       }
       note(
@@ -95,7 +97,8 @@ export async function noteMemorySearchHealth(
   }
 
   // provider === "auto": check all providers in resolution order
-  if (hasLocalEmbeddings(resolved.local)) {
+  // Also check the model field for hf:/http(s): paths which work with local provider
+  if (hasLocalEmbeddings(resolved.local) || hasModelAsLocalPath(resolved.model)) {
     return;
   }
   for (const provider of ["openai", "gemini", "voyage", "mistral"] as const) {
@@ -135,23 +138,42 @@ export async function noteMemorySearchHealth(
   );
 }
 
-function hasLocalEmbeddings(local: { modelPath?: string }): boolean {
+function hasLocalEmbeddings(local: { modelPath?: string }, model?: string): boolean {
   const modelPath = local.modelPath?.trim();
-  if (!modelPath) {
+  // Check local.modelPath first
+  if (modelPath) {
+    // Remote/downloadable models (hf: or http:) aren't pre-resolved on disk,
+    // so we can't confirm availability without a network call. Treat as
+    // potentially available — the user configured it intentionally.
+    if (/^(hf:|https?:)/i.test(modelPath)) {
+      return true;
+    }
+    const resolved = resolveUserPath(modelPath);
+    try {
+      return fsSync.statSync(resolved).isFile();
+    } catch {
+      return false;
+    }
+  }
+  // Also check memorySearch.model for hf: or https: URLs (e.g., embeddinggemma)
+  if (model) {
+    if (/^(hf:|https?:)/i.test(model.trim())) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function hasModelAsLocalPath(model: string): boolean {
+  const trimmed = model?.trim();
+  if (!trimmed) {
     return false;
   }
-  // Remote/downloadable models (hf: or http:) aren't pre-resolved on disk,
-  // so we can't confirm availability without a network call. Treat as
-  // potentially available — the user configured it intentionally.
-  if (/^(hf:|https?:)/i.test(modelPath)) {
+  // Model field can also contain hf: or http(s): paths for local provider
+  if (/^(hf:|https?:)/i.test(trimmed)) {
     return true;
   }
-  const resolved = resolveUserPath(modelPath);
-  try {
-    return fsSync.statSync(resolved).isFile();
-  } catch {
-    return false;
-  }
+  return false;
 }
 
 async function hasApiKeyForProvider(
