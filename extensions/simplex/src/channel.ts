@@ -146,6 +146,7 @@ export const simplexPlugin: ChannelPlugin<ResolvedSimplexAccount> = {
       }
       const runtime = getSimplexRuntime();
       const bus = startSimplexBus({
+        wsUrl: account.wsUrl,
         onMessage: async (msg) => {
           ctx.log?.debug?.(
             `[${account.accountId}] DM from ${msg.contactName}: ${msg.text.slice(0, 50)}...`,
