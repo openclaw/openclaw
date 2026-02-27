@@ -90,11 +90,14 @@ function resolveNonceRecoveryContext(params: {
   tunnelPort: number;
 } | null {
   const resolveTunnelPort = (): number => {
+    const raw = params.gatewayUrl;
+    // Recovery guidance should target the gateway listener directly. For
+    // non-loopback URLs we may be looking at a reverse-proxy edge port (e.g. 443),
+    // so prefer configured gateway port unless the probe itself is loopback.
+    if (!raw || !isLoopbackWsUrl(raw)) {
+      return params.fallbackPort;
+    }
     try {
-      const raw = params.gatewayUrl;
-      if (!raw) {
-        return params.fallbackPort;
-      }
       const parsed = new URL(raw);
       if ((parsed.protocol === "ws:" || parsed.protocol === "wss:") && parsed.port) {
         const numeric = Number.parseInt(parsed.port, 10);
