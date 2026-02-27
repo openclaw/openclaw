@@ -138,28 +138,18 @@ export async function handleToolExecutionStart(
     return;
   }
 
-  // Flush pending block replies to preserve message boundaries before tool execution.
-  ctx.flushBlockReplyBuffer();
-  if (ctx.params.onBlockReplyFlush) {
-    await ctx.params.onBlockReplyFlush();
-  }
-
   const rawToolName = String(evt.toolName);
   const toolName = normalizeToolName(rawToolName);
   const toolCallId = String(evt.toolCallId);
   const args = evt.args;
   const runId = ctx.params.runId;
 
-  // Check unsubscribed again after async operations (flushBlockReplyBuffer) to prevent
-  // race where timeout/unsubscribe happens during those operations, which would leave state dirty.
-  if (ctx.state.unsubscribed) {
-    ctx.log.debug(`tool_execution_start skipped (unsubscribed after flush): tool=${toolName}`);
-    return;
-  }
-
   // Capture start time once for consistent timestamps across state and hook tracking.
   const startTime = Date.now();
 
+  // CRITICAL: Set up ALL tracking state SYNCHRONOUSLY before any async operations.
+  // This prevents a race where handleToolExecutionEnd runs before we've recorded
+  // the start, which would leave toolExecutionCount permanently > 0.
   // Track tool execution with reference counting to properly handle concurrent tools.
   // toolExecutionCount tracks all active tools, while activeToolName/CallId/StartTime
   // track only the most recent (used for timeout snapshots).
@@ -171,6 +161,19 @@ export async function handleToolExecutionStart(
 
   // Track start time and args for after_tool_call hook.
   ctx.state.toolStartData.set(toolCallId, { startTime, args });
+
+  // Flush pending block replies to preserve message boundaries before tool execution.
+  ctx.flushBlockReplyBuffer();
+  if (ctx.params.onBlockReplyFlush) {
+    await ctx.params.onBlockReplyFlush();
+  }
+
+  // Check unsubscribed again after async operations (flushBlockReplyBuffer) to prevent
+  // race where timeout/unsubscribe happens during those operations, which would leave state dirty.
+  if (ctx.state.unsubscribed) {
+    ctx.log.debug(`tool_execution_start skipped (unsubscribed after flush): tool=${toolName}`);
+    return;
+  }
 
   if (toolName === "read") {
     const record = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
@@ -244,10 +247,10 @@ export async function handleToolExecutionStart(
     }
   }
 
-  // Final check after all state mutations to prevent dirty state on late unsubscribe.
+  // Final check after all async operations to prevent dirty state on late unsubscribe.
   // If unsubscribe happened after we set state above, clean up before returning.
   if (ctx.state.unsubscribed) {
-    ctx.log.debug(`tool_execution_start cleanup (unsubscribed after state set): tool=${toolName}`);
+    ctx.log.debug(`tool_execution_start cleanup (unsubscribed after flush): tool=${toolName}`);
     ctx.state.toolExecutionCount = Math.max(0, ctx.state.toolExecutionCount - 1);
     ctx.state.toolExecutionInFlight = ctx.state.toolExecutionCount > 0;
     if (ctx.state.activeToolCallId === toolCallId) {
