@@ -39,9 +39,14 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.jsonObject
+import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
+import java.time.Instant
 import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicLong
@@ -145,6 +150,20 @@ class NodeRuntime(context: Context) {
     getOperatorCanvasHostUrl = { operatorSession.currentCanvasHostUrl() },
   )
 
+
+  private val telemetryCollector: TelemetryCollector = TelemetryCollector(
+    appContext = appContext,
+    scope = scope,
+    locationCaptureManager = location,
+    batteryEnabled = { backgroundBatteryHistoryEnabled.value },
+    locationEnabled = { backgroundLocationHistoryEnabled.value },
+    locationMode = { locationMode.value },
+    locationPreciseEnabled = { locationPreciseEnabled.value },
+    samplingMode = { telemetrySamplingMode.value },
+    retention = { telemetryRetention.value },
+    syncEnabled = { telemetrySyncEnabled.value },
+  )
+
   private val connectionManager: ConnectionManager = ConnectionManager(
     prefs = prefs,
     cameraEnabled = { cameraEnabled.value },
@@ -195,6 +214,15 @@ class NodeRuntime(context: Context) {
     val fingerprintSha256: String,
   )
 
+  data class TelemetryStatus(
+    val batterySamples: Int = 0,
+    val locationSamples: Int = 0,
+    val lastBatteryAt: String? = null,
+    val lastLocationAt: String? = null,
+    val updatedAtMs: Long = System.currentTimeMillis(),
+  )
+
+
   private val _isConnected = MutableStateFlow(false)
   val isConnected: StateFlow<Boolean> = _isConnected.asStateFlow()
   private val _nodeConnected = MutableStateFlow(false)
@@ -202,6 +230,9 @@ class NodeRuntime(context: Context) {
 
   private val _statusText = MutableStateFlow("Offline")
   val statusText: StateFlow<String> = _statusText.asStateFlow()
+
+  private val _telemetryStatus = MutableStateFlow(TelemetryStatus())
+  val telemetryStatus: StateFlow<TelemetryStatus> = _telemetryStatus.asStateFlow()
 
   private val _gatewayReconnectAttempts = MutableStateFlow(0)
   val gatewayReconnectAttempts: StateFlow<Int> = _gatewayReconnectAttempts.asStateFlow()
@@ -590,6 +621,22 @@ class NodeRuntime(context: Context) {
       prefs.loadGatewayToken()
     }
 
+    telemetryCollector.start()
+
+    scope.launch(Dispatchers.IO) {
+      while (true) {
+        refreshTelemetryStatus()
+        delay(15_000)
+      }
+    }
+
+    scope.launch(Dispatchers.IO) {
+      while (true) {
+        runCatching { syncTelemetryBacklog() }
+        delay(30_000)
+      }
+    }
+
     scope.launch {
       prefs.talkEnabled.collect { enabled ->
         // MicCaptureManager handles STT + send to gateway.
@@ -830,6 +877,85 @@ class NodeRuntime(context: Context) {
   fun declineGatewayTrustPrompt() {
     _pendingGatewayTrust.value = null
     _statusText.value = "Offline"
+  }
+
+  private fun refreshTelemetryStatus() {
+    val telemetryDir = File(appContext.filesDir, "telemetry")
+    val batteryFile = File(telemetryDir, "battery_history.jsonl")
+    val locationFile = File(telemetryDir, "location_history.jsonl")
+
+    fun parse(file: File): Pair<Int, String?> {
+      if (!file.exists()) return 0 to null
+      val lines = runCatching { file.readLines().filter { it.isNotBlank() } }.getOrElse { emptyList() }
+      val last = lines.lastOrNull()
+      val ts =
+        runCatching {
+          if (last == null) null
+          else {
+            val root = json.parseToJsonElement(last).jsonObject
+            root["capturedAt"]?.jsonPrimitive?.content
+          }
+        }.getOrNull()
+      return lines.size to ts
+    }
+
+    val (batteryCount, lastBattery) = parse(batteryFile)
+    val (locationCount, lastLocation) = parse(locationFile)
+    _telemetryStatus.value =
+      TelemetryStatus(
+        batterySamples = batteryCount,
+        locationSamples = locationCount,
+        lastBatteryAt = lastBattery,
+        lastLocationAt = lastLocation,
+        updatedAtMs = System.currentTimeMillis(),
+      )
+  }
+
+  private suspend fun syncTelemetryBacklog() {
+    if (!_nodeConnected.value) return
+    if (!telemetrySyncEnabled.value) return
+
+    val telemetryDir = File(appContext.filesDir, "telemetry")
+    syncStream(
+      stream = "battery",
+      file = File(telemetryDir, "battery_history.jsonl"),
+      eventName = "telemetry.battery.batch",
+    )
+    syncStream(
+      stream = "location",
+      file = File(telemetryDir, "location_history.jsonl"),
+      eventName = "telemetry.location.batch",
+    )
+  }
+
+  private suspend fun syncStream(stream: String, file: File, eventName: String) {
+    if (!file.exists()) return
+    val lines = runCatching { file.readLines().filter { it.isNotBlank() } }.getOrElse { emptyList() }
+    if (lines.isEmpty()) return
+
+    val cursor = prefs.loadTelemetrySyncCursor(stream)
+    val pending =
+      lines.mapNotNull { line ->
+        runCatching { json.parseToJsonElement(line).jsonObject }.getOrNull()
+      }.filter { obj ->
+        val ts = obj["capturedAt"]?.jsonPrimitive?.content
+        cursor == null || (ts != null && ts > cursor)
+      }.takeLast(50)
+
+    if (pending.isEmpty()) return
+
+    val payload =
+      buildJsonObject {
+        put("stream", JsonPrimitive(stream))
+        put("count", JsonPrimitive(pending.size))
+        put("samples", buildJsonArray { pending.forEach { add(it) } })
+      }.toString()
+
+    val sent = nodeSession.sendNodeEvent(event = eventName, payloadJson = payload)
+    if (!sent) return
+
+    val latest = pending.lastOrNull()?.get("capturedAt")?.jsonPrimitive?.content ?: return
+    prefs.saveTelemetrySyncCursor(stream, latest)
   }
 
   private fun hasRecordAudioPermission(): Boolean {

@@ -323,6 +323,17 @@ class SecurePrefs(context: Context) {
     _telemetryRetention.value = retention
   }
 
+
+  fun loadTelemetrySyncCursor(stream: String): String? {
+    val key = "telemetry.sync.cursor.$stream"
+    return plainPrefs.getString(key, null)?.trim()?.takeIf { it.isNotEmpty() }
+  }
+
+  fun saveTelemetrySyncCursor(stream: String, capturedAt: String) {
+    val key = "telemetry.sync.cursor.$stream"
+    plainPrefs.edit { putString(key, capturedAt.trim()) }
+  }
+
   private fun loadVoiceWakeMode(): VoiceWakeMode {
     val raw = plainPrefs.getString(voiceWakeModeKey, null)
     val resolved = VoiceWakeMode.fromRawValue(raw)
