@@ -1,4 +1,4 @@
-import { emitDiagnosticEvent } from "../infra/diagnostic-events.js";
+import { emitDiagnosticEvent, onDiagnosticEvent } from "../infra/diagnostic-events.js";
 import {
   diagnosticSessionStates,
   getDiagnosticSessionState,
@@ -20,6 +20,27 @@ const webhookStats = {
 };
 
 let lastActivityAt = 0;
+
+// Lane-level stats (Telemetry MVP v1)
+const laneStats = new Map<
+  string,
+  { queueDepth: number; lastWaitMs?: number; lastEventAt: number }
+>();
+
+// Keep laneStats in sync via diagnostic event bus (single pipeline)
+onDiagnosticEvent((evt) => {
+  const now = Date.now();
+  if (evt.type === "queue.lane.enqueue") {
+    laneStats.set(evt.lane, { queueDepth: evt.queueSize, lastEventAt: now });
+  } else if (evt.type === "queue.lane.dequeue") {
+    laneStats.set(evt.lane, {
+      queueDepth: evt.queueSize,
+      lastWaitMs: evt.waitMs,
+      lastEventAt: now,
+    });
+  }
+});
+
 const startTimeMs = Date.now();
 
 function markActivity() {
@@ -405,6 +426,14 @@ export function getTelemetrySnapshot() {
       totalQueued,
       stateCount: diagnosticSessionStates.size,
     },
+    lanes: {
+      global: laneStats.get("global") ?? { queueDepth: 0, lastEventAt: 0 },
+      provider_openai_codex: laneStats.get("provider:openai-codex") ?? {
+        queueDepth: 0,
+        lastEventAt: 0,
+      },
+    },
+
     lastActivityAt,
   };
 }
