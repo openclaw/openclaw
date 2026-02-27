@@ -3,15 +3,22 @@ import { AppShell } from "@/components/layout/AppShell";
 import { AccountingPage } from "@/pages/AccountingPage";
 import { AgentDetailPage } from "@/pages/AgentDetailPage";
 import { AgentsPage } from "@/pages/AgentsPage";
+import { AnalyticsPage } from "@/pages/AnalyticsPage";
 import { BusinessGoalsPage } from "@/pages/BusinessGoalsPage";
+import { CompliancePage } from "@/pages/CompliancePage";
+import { CustomersPage } from "@/pages/CustomersPage";
 import { DecisionsPage } from "@/pages/DecisionsPage";
-import { HRPage } from "@/pages/HRPage";
+import { EcommercePage } from "@/pages/EcommercePage";
 import { InventoryPage } from "@/pages/InventoryPage";
 import { KnowledgeGraphPage } from "@/pages/KnowledgeGraphPage";
+import { LegalPage } from "@/pages/LegalPage";
+import { MarketingPage } from "@/pages/MarketingPage";
 import { OnboardingPage } from "@/pages/OnboardingPage";
 import { OverviewPage } from "@/pages/OverviewPage";
 import { PerformancePage } from "@/pages/PerformancePage";
 import { ProjectsPage } from "@/pages/ProjectsPage";
+import { SuppliersPage } from "@/pages/SuppliersPage";
+import { SupplyChainPage } from "@/pages/SupplyChainPage";
 import { TimelinePage } from "@/pages/TimelinePage";
 import { WorkflowEditorPage } from "@/pages/WorkflowEditorPage";
 import { WorkflowsPage } from "@/pages/WorkflowsPage";
@@ -78,10 +85,45 @@ const accountingRoute = createRoute({
   path: "/accounting",
   component: AccountingPage,
 });
-const hrRoute = createRoute({
+const customersRoute = createRoute({
   getParentRoute: () => rootRoute,
-  path: "/hr",
-  component: HRPage,
+  path: "/customers",
+  component: CustomersPage,
+});
+const ecommerceRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/ecommerce",
+  component: EcommercePage,
+});
+const suppliersRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/suppliers",
+  component: SuppliersPage,
+});
+const supplyChainRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/supply-chain",
+  component: SupplyChainPage,
+});
+const legalRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/legal",
+  component: LegalPage,
+});
+const complianceRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/compliance",
+  component: CompliancePage,
+});
+const marketingRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/marketing",
+  component: MarketingPage,
+});
+const analyticsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/analytics",
+  component: AnalyticsPage,
 });
 const onboardingRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -130,7 +172,14 @@ const routeTree = rootRoute.addChildren([
   timelineRoute,
   inventoryRoute,
   accountingRoute,
-  hrRoute,
+  customersRoute,
+  ecommerceRoute,
+  suppliersRoute,
+  supplyChainRoute,
+  legalRoute,
+  complianceRoute,
+  marketingRoute,
+  analyticsRoute,
   onboardingRoute,
   decisionsRoute,
   goalsRoute,
