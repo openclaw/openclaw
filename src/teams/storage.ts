@@ -35,8 +35,9 @@ export function getTeamsBaseDir(): string {
   //    .../teams/<teamName>/agents/<name>/workspace  (teammate workspace)
   //    .../teams/<teamName>/agents/<name>/agent       (teammate agent dir)
   //    Match pattern: /teams/<x>/agents/<y>/
+  //    Normalize backslashes to forward slashes for Windows compatibility
   const cwd = process.cwd();
-  const teamsMatch = cwd.match(/^(.+\/teams)\/[^/]+\/agents\/[^/]+/);
+  const teamsMatch = cwd.replace(/\\/g, "/").match(/^(.+\/teams)\/[^/]+\/agents\/[^/]+/);
   if (teamsMatch) {
     return teamsMatch[1];
   }
