@@ -1,14 +1,9 @@
+import fs from "node:fs";
 import path from "node:path";
 
-const DEFAULT_SAFE_BIN_TRUSTED_DIRS = [
-  "/bin",
-  "/usr/bin",
-  "/usr/local/bin",
-  "/opt/homebrew/bin",
-  "/opt/local/bin",
-  "/snap/bin",
-  "/run/current-system/sw/bin",
-];
+// Keep defaults to OS-managed immutable bins only.
+// User/package-manager bins must be opted in via tools.exec.safeBinTrustedDirs.
+const DEFAULT_SAFE_BIN_TRUSTED_DIRS = ["/bin", "/usr/bin"];
 
 type TrustedSafeBinDirsParams = {
   baseDirs?: readonly string[];
@@ -23,6 +18,12 @@ type TrustedSafeBinPathParams = {
 type TrustedSafeBinCache = {
   key: string;
   dirs: Set<string>;
+};
+
+export type WritableTrustedSafeBinDir = {
+  dir: string;
+  groupWritable: boolean;
+  worldWritable: boolean;
 };
 
 let trustedSafeBinCache: TrustedSafeBinCache | null = null;
@@ -93,4 +94,33 @@ export function isTrustedSafeBinPath(params: TrustedSafeBinPathParams): boolean 
   const trustedDirs = params.trustedDirs ?? getTrustedSafeBinDirs();
   const resolvedDir = path.dirname(path.resolve(params.resolvedPath));
   return trustedDirs.has(resolvedDir);
+}
+
+export function listWritableExplicitTrustedSafeBinDirs(
+  entries?: readonly string[] | null,
+): WritableTrustedSafeBinDir[] {
+  if (process.platform === "win32") {
+    return [];
+  }
+  const resolved = resolveTrustedSafeBinDirs(normalizeTrustedSafeBinDirs(entries));
+  const hits: WritableTrustedSafeBinDir[] = [];
+  for (const dir of resolved) {
+    let stat: fs.Stats;
+    try {
+      stat = fs.statSync(dir);
+    } catch {
+      continue;
+    }
+    if (!stat.isDirectory()) {
+      continue;
+    }
+    const mode = stat.mode & 0o777;
+    const groupWritable = (mode & 0o020) !== 0;
+    const worldWritable = (mode & 0o002) !== 0;
+    if (!groupWritable && !worldWritable) {
+      continue;
+    }
+    hits.push({ dir, groupWritable, worldWritable });
+  }
+  return hits;
 }

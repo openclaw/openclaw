@@ -24,6 +24,14 @@ import {
   type ExecAllowlistEntry,
 } from "./exec-approvals.js";
 
+function buildNestedEnvShellCommand(params: {
+  envExecutable: string;
+  depth: number;
+  payload: string;
+}): string[] {
+  return [...Array(params.depth).fill(params.envExecutable), "/bin/sh", "-c", params.payload];
+}
+
 describe("exec approvals allowlist matching", () => {
   const baseResolution = {
     rawExecutable: "rg",
@@ -295,6 +303,40 @@ describe("exec approvals command resolution", () => {
 
     expect(analysis.ok).toBe(true);
     expect(analysis.segments[0]?.resolution?.policyBlocked).toBe(true);
+    expect(allowlistEval.allowlistSatisfied).toBe(false);
+    expect(allowlistEval.segmentSatisfiedBy).toEqual([null]);
+  });
+
+  it("fails closed when transparent env wrappers exceed unwrap depth", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    const binDir = path.join(dir, "bin");
+    fs.mkdirSync(binDir, { recursive: true });
+    const envPath = path.join(binDir, "env");
+    fs.writeFileSync(envPath, "#!/bin/sh\n");
+    fs.chmodSync(envPath, 0o755);
+
+    const analysis = analyzeArgvCommand({
+      argv: buildNestedEnvShellCommand({
+        envExecutable: envPath,
+        depth: 5,
+        payload: "echo pwned",
+      }),
+      cwd: dir,
+      env: makePathEnv(binDir),
+    });
+    const allowlistEval = evaluateExecAllowlist({
+      analysis,
+      allowlist: [{ pattern: envPath }],
+      safeBins: normalizeSafeBins([]),
+      cwd: dir,
+    });
+
+    expect(analysis.ok).toBe(true);
+    expect(analysis.segments[0]?.resolution?.policyBlocked).toBe(true);
+    expect(analysis.segments[0]?.resolution?.blockedWrapper).toBe("env");
     expect(allowlistEval.allowlistSatisfied).toBe(false);
     expect(allowlistEval.segmentSatisfiedBy).toEqual([null]);
   });

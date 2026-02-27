@@ -101,6 +101,23 @@ Use this decision table:
 - Touching gateway networking / WS protocol / pairing: add `pnpm test:e2e`
 - Debugging “my bot is down” / provider-specific failures / tool calling: run a narrowed `pnpm test:live`
 
+## Live: Android node capability sweep
+
+- Test: `src/gateway/android-node.capabilities.live.test.ts`
+- Script: `pnpm android:test:integration`
+- Goal: invoke **every command currently advertised** by a connected Android node and assert command contract behavior.
+- Scope:
+  - Preconditioned/manual setup (the suite does not install/run/pair the app).
+  - Command-by-command gateway `node.invoke` validation for the selected Android node.
+- Required pre-setup:
+  - Android app already connected + paired to the gateway.
+  - App kept in foreground.
+  - Permissions/capture consent granted for capabilities you expect to pass.
+- Optional target overrides:
+  - `OPENCLAW_ANDROID_NODE_ID` or `OPENCLAW_ANDROID_NODE_NAME`.
+  - `OPENCLAW_ANDROID_GATEWAY_URL` / `OPENCLAW_ANDROID_GATEWAY_TOKEN` / `OPENCLAW_ANDROID_GATEWAY_PASSWORD`.
+- Full Android setup details: [Android App](/platforms/android)
+
 ## Live: model smoke (profile keys)
 
 Live tests are split into two layers so we can isolate failures:
@@ -335,6 +352,11 @@ These run `pnpm test:live` inside the repo Docker image, mounting your local con
 - Onboarding wizard (TTY, full scaffolding): `pnpm test:docker:onboard` (script: `scripts/e2e/onboard-docker.sh`)
 - Gateway networking (two containers, WS auth + health): `pnpm test:docker:gateway-network` (script: `scripts/e2e/gateway-network-docker.sh`)
 - Plugins (custom extension load + registry smoke): `pnpm test:docker:plugins` (script: `scripts/e2e/plugins-docker.sh`)
+
+Manual ACP plain-language thread smoke (not CI):
+
+- `bun scripts/dev/discord-acp-plain-language-smoke.ts --channel <discord-channel-id> ...`
+- Keep this script for regression/debug workflows. It may be needed again for ACP thread routing validation, so do not delete it.
 
 Useful env vars:
 

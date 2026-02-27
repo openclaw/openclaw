@@ -3,6 +3,7 @@ import {
   resolveSandboxConfigForAgent,
   resolveSandboxToolPolicyForAgent,
 } from "../agents/sandbox.js";
+import { isDangerousNetworkMode, normalizeNetworkMode } from "../agents/sandbox/network-mode.js";
 /**
  * Synchronous security audit collector functions.
  *
@@ -830,13 +831,21 @@ export function collectSandboxDangerousConfigFindings(cfg: OpenClawConfig): Secu
     }
 
     const network = typeof docker.network === "string" ? docker.network : undefined;
-    if (network && network.trim().toLowerCase() === "host") {
+    const normalizedNetwork = normalizeNetworkMode(network);
+    if (isDangerousNetworkMode(network)) {
+      const modeLabel = normalizedNetwork === "host" ? '"host"' : `"${network}"`;
+      const detail =
+        normalizedNetwork === "host"
+          ? `${source}.network is "host" which bypasses container network isolation entirely.`
+          : `${source}.network is ${modeLabel} which joins another container namespace and can bypass sandbox network isolation.`;
       findings.push({
         checkId: "sandbox.dangerous_network_mode",
         severity: "critical",
-        title: "Network host mode in sandbox config",
-        detail: `${source}.network is "host" which bypasses container network isolation entirely.`,
-        remediation: `Set ${source}.network to "bridge" or "none".`,
+        title: "Dangerous network mode in sandbox config",
+        detail,
+        remediation:
+          `Set ${source}.network to "bridge", "none", or a custom bridge network name.` +
+          ` Use ${source}.dangerouslyAllowContainerNamespaceJoin=true only as a break-glass override when you fully trust this runtime.`,
       });
     }
 
@@ -946,11 +955,11 @@ export function collectNodeDenyCommandPatternFindings(cfg: OpenClawConfig): Secu
     severity: "warn",
     title: "Some gateway.nodes.denyCommands entries are ineffective",
     detail:
-      "gateway.nodes.denyCommands uses exact command-name matching only.\n" +
+      "gateway.nodes.denyCommands uses exact node command-name matching only (for example `system.run`), not shell-text filtering inside a command payload.\n" +
       detailParts.map((entry) => `- ${entry}`).join("\n"),
     remediation:
       `Use exact command names (for example: ${examples.join(", ")}). ` +
-      "If you need broader restrictions, remove risky commands from allowCommands/default workflows.",
+      "If you need broader restrictions, remove risky command IDs from allowCommands/default workflows and tighten tools.exec policy.",
   });
 
   return findings;

@@ -182,6 +182,12 @@ describe("buildSandboxCreateArgs", () => {
       expected: /network mode "host" is blocked/,
     },
     {
+      name: "network container namespace join",
+      containerName: "openclaw-sbx-container-network",
+      cfg: createSandboxConfig({ network: "container:peer" }),
+      expected: /network mode "container:peer" is blocked by default/,
+    },
+    {
       name: "seccomp unconfined",
       containerName: "openclaw-sbx-seccomp",
       cfg: createSandboxConfig({ seccompProfile: "unconfined" }),
@@ -270,5 +276,19 @@ describe("buildSandboxCreateArgs", () => {
       allowReservedContainerTargets: true,
     });
     expect(args).toEqual(expect.arrayContaining(["-v", "/tmp/override:/workspace:rw"]));
+  });
+
+  it("allows container namespace join with explicit dangerous override", () => {
+    const cfg = createSandboxConfig({
+      network: "container:peer",
+      dangerouslyAllowContainerNamespaceJoin: true,
+    });
+    const args = buildSandboxCreateArgs({
+      name: "openclaw-sbx-container-network-override",
+      cfg,
+      scopeKey: "main",
+      createdAtMs: 1700000000000,
+    });
+    expect(args).toEqual(expect.arrayContaining(["--network", "container:peer"]));
   });
 });

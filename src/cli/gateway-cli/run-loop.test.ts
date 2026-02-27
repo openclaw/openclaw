@@ -9,6 +9,7 @@ const consumeGatewaySigusr1RestartAuthorization = vi.fn(() => true);
 const isGatewaySigusr1RestartExternallyAllowed = vi.fn(() => false);
 const markGatewaySigusr1RestartHandled = vi.fn();
 const getActiveTaskCount = vi.fn(() => 0);
+const markGatewayDraining = vi.fn();
 const waitForActiveTasks = vi.fn(async (_timeoutMs: number) => ({ drained: true }));
 const resetAllLanes = vi.fn();
 const restartGatewayProcessWithFreshPid = vi.fn<
@@ -37,6 +38,7 @@ vi.mock("../../infra/process-respawn.js", () => ({
 
 vi.mock("../../process/command-queue.js", () => ({
   getActiveTaskCount: () => getActiveTaskCount(),
+  markGatewayDraining: () => markGatewayDraining(),
   waitForActiveTasks: (timeoutMs: number) => waitForActiveTasks(timeoutMs),
   resetAllLanes: () => resetAllLanes(),
 }));
@@ -213,6 +215,7 @@ describe("runGatewayLoop", () => {
       await new Promise<void>((resolve) => setImmediate(resolve));
 
       expect(waitForActiveTasks).toHaveBeenCalledWith(30_000);
+      expect(markGatewayDraining).toHaveBeenCalledTimes(1);
       expect(gatewayLog.warn).toHaveBeenCalledWith(DRAIN_TIMEOUT_LOG);
       expect(closeFirst).toHaveBeenCalledWith({
         reason: "gateway restarting",
@@ -229,6 +232,7 @@ describe("runGatewayLoop", () => {
         restartExpectedMs: 1500,
       });
       expect(markGatewaySigusr1RestartHandled).toHaveBeenCalledTimes(2);
+      expect(markGatewayDraining).toHaveBeenCalledTimes(2);
       expect(resetAllLanes).toHaveBeenCalledTimes(2);
       expect(acquireGatewayLock).toHaveBeenCalledTimes(3);
     });

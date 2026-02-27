@@ -6,6 +6,8 @@ import {
   resolveExistingPathsWithinRoot,
   resolvePathsWithinRoot,
   resolvePathWithinRoot,
+  resolveStrictExistingPathsWithinRoot,
+  resolveWritablePathWithinRoot,
 } from "./paths.js";
 
 async function createFixtureRoot(): Promise<{ baseDir: string; uploadsDir: string }> {
@@ -194,6 +196,29 @@ describe("resolveExistingPathsWithinRoot", () => {
   );
 });
 
+describe("resolveStrictExistingPathsWithinRoot", () => {
+  function expectInvalidResult(
+    result: Awaited<ReturnType<typeof resolveStrictExistingPathsWithinRoot>>,
+    expectedSnippet: string,
+  ) {
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain(expectedSnippet);
+    }
+  }
+
+  it("rejects missing files instead of returning lexical fallbacks", async () => {
+    await withFixtureRoot(async ({ uploadsDir }) => {
+      const result = await resolveStrictExistingPathsWithinRoot({
+        rootDir: uploadsDir,
+        requestedPaths: ["missing.txt"],
+        scopeLabel: "uploads directory",
+      });
+      expectInvalidResult(result, "regular non-symlink file");
+    });
+  });
+});
+
 describe("resolvePathWithinRoot", () => {
   it("uses default file name when requested path is blank", () => {
     const result = resolvePathWithinRoot({
@@ -219,6 +244,45 @@ describe("resolvePathWithinRoot", () => {
       expect(result.error).toContain("must stay within uploads directory");
     }
   });
+});
+
+describe("resolveWritablePathWithinRoot", () => {
+  it("accepts a writable path under root when parent is a real directory", async () => {
+    await withFixtureRoot(async ({ uploadsDir }) => {
+      const result = await resolveWritablePathWithinRoot({
+        rootDir: uploadsDir,
+        requestedPath: "safe.txt",
+        scopeLabel: "uploads directory",
+      });
+      expect(result).toEqual({
+        ok: true,
+        path: path.resolve(uploadsDir, "safe.txt"),
+      });
+    });
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "rejects write paths routed through a symlinked parent directory",
+    async () => {
+      await withFixtureRoot(async ({ baseDir, uploadsDir }) => {
+        const outsideDir = path.join(baseDir, "outside");
+        await fs.mkdir(outsideDir, { recursive: true });
+        const symlinkDir = path.join(uploadsDir, "escape-link");
+        await fs.symlink(outsideDir, symlinkDir);
+
+        const result = await resolveWritablePathWithinRoot({
+          rootDir: uploadsDir,
+          requestedPath: "escape-link/pwned.txt",
+          scopeLabel: "uploads directory",
+        });
+
+        expect(result.ok).toBe(false);
+        if (!result.ok) {
+          expect(result.error).toContain("must stay within uploads directory");
+        }
+      });
+    },
+  );
 });
 
 describe("resolvePathsWithinRoot", () => {

@@ -70,6 +70,56 @@ const replyLogger = {
 };
 
 describe("deliverWebReply", () => {
+  it("suppresses payloads flagged as reasoning", async () => {
+    const msg = makeMsg();
+
+    await deliverWebReply({
+      replyResult: { text: "Reasoning:\n_hidden_", isReasoning: true },
+      msg,
+      maxMediaBytes: 1024 * 1024,
+      textLimit: 200,
+      replyLogger,
+      skipLog: true,
+    });
+
+    expect(msg.reply).not.toHaveBeenCalled();
+    expect(msg.sendMedia).not.toHaveBeenCalled();
+  });
+
+  it("suppresses payloads that start with reasoning prefix text", async () => {
+    const msg = makeMsg();
+
+    await deliverWebReply({
+      replyResult: { text: "   \n Reasoning:\n_hidden_" },
+      msg,
+      maxMediaBytes: 1024 * 1024,
+      textLimit: 200,
+      replyLogger,
+      skipLog: true,
+    });
+
+    expect(msg.reply).not.toHaveBeenCalled();
+    expect(msg.sendMedia).not.toHaveBeenCalled();
+  });
+
+  it("does not suppress messages that mention Reasoning: mid-text", async () => {
+    const msg = makeMsg();
+
+    await deliverWebReply({
+      replyResult: { text: "Intro line\nReasoning: appears in content but is not a prefix" },
+      msg,
+      maxMediaBytes: 1024 * 1024,
+      textLimit: 200,
+      replyLogger,
+      skipLog: true,
+    });
+
+    expect(msg.reply).toHaveBeenCalledTimes(1);
+    expect(msg.reply).toHaveBeenCalledWith(
+      "Intro line\nReasoning: appears in content but is not a prefix",
+    );
+  });
+
   it("sends chunked text replies and logs a summary", async () => {
     const msg = makeMsg();
 

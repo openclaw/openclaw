@@ -25,8 +25,11 @@ import {
 import { logVerbose, shouldLogVerbose } from "../../../globals.js";
 import type { getChildLogger } from "../../../logging.js";
 import { getAgentScopedMediaLocalRoots } from "../../../media/local-roots.js";
-import { readChannelAllowFromStore } from "../../../pairing/pairing-store.js";
 import type { resolveAgentRoute } from "../../../routing/resolve-route.js";
+import {
+  readStoreAllowFromForDmPolicy,
+  resolveDmGroupAccessWithCommandGate,
+} from "../../../security/dm-policy-shared.js";
 import { jidToE164, normalizeE164 } from "../../../utils.js";
 import { resolveWhatsAppAccount } from "../../accounts.js";
 import { newConnectionId } from "../../reconnect.js";
@@ -48,15 +51,6 @@ export type GroupHistoryEntry = {
   senderJid?: string;
 };
 
-function normalizeAllowFromE164(values: Array<string | number> | undefined): string[] {
-  const list = Array.isArray(values) ? values : [];
-  return list
-    .map((entry) => String(entry).trim())
-    .filter((entry) => entry && entry !== "*")
-    .map((entry) => normalizeE164(entry))
-    .filter((entry): entry is string => Boolean(entry));
-}
-
 async function resolveWhatsAppCommandAuthorized(params: {
   cfg: ReturnType<typeof loadConfig>;
   msg: WebInboundMsg;
@@ -76,39 +70,47 @@ async function resolveWhatsAppCommandAuthorized(params: {
 
   const account = resolveWhatsAppAccount({ cfg: params.cfg, accountId: params.msg.accountId });
   const dmPolicy = account.dmPolicy ?? "pairing";
+  const groupPolicy = account.groupPolicy ?? "allowlist";
   const configuredAllowFrom = account.allowFrom ?? [];
   const configuredGroupAllowFrom =
     account.groupAllowFrom ?? (configuredAllowFrom.length > 0 ? configuredAllowFrom : undefined);
 
-  if (isGroup) {
-    if (!configuredGroupAllowFrom || configuredGroupAllowFrom.length === 0) {
-      return false;
-    }
-    if (configuredGroupAllowFrom.some((v) => String(v).trim() === "*")) {
-      return true;
-    }
-    return normalizeAllowFromE164(configuredGroupAllowFrom).includes(senderE164);
-  }
-
-  const storeAllowFrom =
-    dmPolicy === "allowlist"
-      ? []
-      : await readChannelAllowFromStore("whatsapp", process.env, params.msg.accountId).catch(
-          () => [],
-        );
-  const combinedAllowFrom = Array.from(
-    new Set([...(configuredAllowFrom ?? []), ...storeAllowFrom]),
-  );
-  const allowFrom =
-    combinedAllowFrom.length > 0
-      ? combinedAllowFrom
+  const storeAllowFrom = isGroup
+    ? []
+    : await readStoreAllowFromForDmPolicy({
+        provider: "whatsapp",
+        accountId: params.msg.accountId,
+        dmPolicy,
+      });
+  const dmAllowFrom =
+    configuredAllowFrom.length > 0
+      ? configuredAllowFrom
       : params.msg.selfE164
         ? [params.msg.selfE164]
         : [];
-  if (allowFrom.some((v) => String(v).trim() === "*")) {
-    return true;
-  }
-  return normalizeAllowFromE164(allowFrom).includes(senderE164);
+  const access = resolveDmGroupAccessWithCommandGate({
+    isGroup,
+    dmPolicy,
+    groupPolicy,
+    allowFrom: dmAllowFrom,
+    groupAllowFrom: configuredGroupAllowFrom,
+    storeAllowFrom,
+    isSenderAllowed: (allowEntries) => {
+      if (allowEntries.includes("*")) {
+        return true;
+      }
+      const normalizedEntries = allowEntries
+        .map((entry) => normalizeE164(String(entry)))
+        .filter((entry): entry is string => Boolean(entry));
+      return normalizedEntries.includes(senderE164);
+    },
+    command: {
+      useAccessGroups,
+      allowTextCommands: true,
+      hasControlCommand: true,
+    },
+  });
+  return access.commandAuthorized;
 }
 
 export async function processMessage(params: {

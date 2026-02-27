@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   classifyFailoverReason,
   isAuthErrorMessage,
+  isAuthPermanentErrorMessage,
   isBillingErrorMessage,
   isCloudCodeAssistFormatError,
   isCloudflareOrHtmlErrorPage,
@@ -15,6 +16,39 @@ import {
   parseImageDimensionError,
   parseImageSizeError,
 } from "./pi-embedded-helpers.js";
+
+describe("isAuthPermanentErrorMessage", () => {
+  it("matches permanent auth failure patterns", () => {
+    const samples = [
+      "invalid_api_key",
+      "api key revoked",
+      "api key deactivated",
+      "key has been disabled",
+      "key has been revoked",
+      "account has been deactivated",
+      "could not authenticate api key",
+      "could not validate credentials",
+      "API_KEY_REVOKED",
+      "api_key_deleted",
+    ];
+    for (const sample of samples) {
+      expect(isAuthPermanentErrorMessage(sample)).toBe(true);
+    }
+  });
+  it("does not match transient auth errors", () => {
+    const samples = [
+      "unauthorized",
+      "invalid token",
+      "authentication failed",
+      "forbidden",
+      "access denied",
+      "token has expired",
+    ];
+    for (const sample of samples) {
+      expect(isAuthPermanentErrorMessage(sample)).toBe(false);
+    }
+  });
+});
 
 describe("isAuthErrorMessage", () => {
   it("matches credential validation errors", () => {
@@ -68,6 +102,40 @@ describe("isBillingErrorMessage", () => {
     for (const sample of falsePositives) {
       expect(isBillingErrorMessage(sample)).toBe(false);
     }
+  });
+  it("does not false-positive on long assistant responses mentioning billing keywords", () => {
+    // Simulate a multi-paragraph assistant response that mentions billing terms
+    const longResponse =
+      "Sure! Here's how to set up billing for your SaaS application.\n\n" +
+      "## Payment Integration\n\n" +
+      "First, you'll need to configure your payment gateway. Most providers offer " +
+      "a dashboard where you can manage credits, view invoices, and upgrade your plan. " +
+      "The billing page typically shows your current balance and payment history.\n\n" +
+      "## Managing Credits\n\n" +
+      "Users can purchase credits through the billing portal. When their credit balance " +
+      "runs low, send them a notification to upgrade their plan or add more credits. " +
+      "You should also handle insufficient balance cases gracefully.\n\n" +
+      "## Subscription Plans\n\n" +
+      "Offer multiple plan tiers with different features. Allow users to upgrade or " +
+      "downgrade their plan at any time. Make sure the billing cycle is clear.\n\n" +
+      "Let me know if you need more details on any of these topics!";
+    expect(longResponse.length).toBeGreaterThan(512);
+    expect(isBillingErrorMessage(longResponse)).toBe(false);
+  });
+  it("still matches explicit 402 markers in long payloads", () => {
+    const longStructuredError =
+      '{"error":{"code":402,"message":"payment required","details":"' + "x".repeat(700) + '"}}';
+    expect(longStructuredError.length).toBeGreaterThan(512);
+    expect(isBillingErrorMessage(longStructuredError)).toBe(true);
+  });
+  it("does not match long numeric text that is not a billing error", () => {
+    const longNonError =
+      "Quarterly report summary: subsystem A returned 402 records after retry. " +
+      "This is an analytics count, not an HTTP/API billing failure. " +
+      "Notes: " +
+      "x".repeat(700);
+    expect(longNonError.length).toBeGreaterThan(512);
+    expect(isBillingErrorMessage(longNonError)).toBe(false);
   });
   it("still matches real HTTP 402 billing errors", () => {
     const realErrors = [
@@ -400,6 +468,12 @@ describe("classifyFailoverReason", () => {
     expect(classifyFailoverReason("429 too many requests")).toBe("rate_limit");
     expect(classifyFailoverReason("resource has been exhausted")).toBe("rate_limit");
     expect(
+      classifyFailoverReason("model_cooldown: All credentials for model gpt-5 are cooling down"),
+    ).toBe("rate_limit");
+    expect(classifyFailoverReason("all credentials for model x are cooling down")).toBe(
+      "rate_limit",
+    );
+    expect(
       classifyFailoverReason(
         '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
       ),
@@ -439,6 +513,12 @@ describe("classifyFailoverReason", () => {
         '{"error":{"code":503,"message":"The model is overloaded. Please try later","status":"UNAVAILABLE"}}',
       ),
     ).toBe("rate_limit");
+  });
+  it("classifies permanent auth errors as auth_permanent", () => {
+    expect(classifyFailoverReason("invalid_api_key")).toBe("auth_permanent");
+    expect(classifyFailoverReason("Your api key has been revoked")).toBe("auth_permanent");
+    expect(classifyFailoverReason("key has been disabled")).toBe("auth_permanent");
+    expect(classifyFailoverReason("account has been deactivated")).toBe("auth_permanent");
   });
   it("classifies JSON api_error internal server failures as timeout", () => {
     expect(
