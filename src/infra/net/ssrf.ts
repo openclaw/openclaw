@@ -362,11 +362,25 @@ export async function resolvePinnedHostname(
   return await resolvePinnedHostnameWithPolicy(hostname, { lookupFn });
 }
 
+/** Default TCP keepalive connect options to prevent connections from hanging after Mac sleep. */
+const TCP_KEEPALIVE_CONNECT_DEFAULTS: Record<string, unknown> = {
+  autoSelectFamily: true,
+  autoSelectFamilyAttemptTimeout: 300,
+  keepAlive: true,
+  keepAliveInitialDelay: 15_000, // send OS-level keepalive probes after 15s idle
+};
+
+/** Default Agent-level keepalive options to close stale idle connections. */
+const AGENT_KEEPALIVE_DEFAULTS = {
+  keepAliveTimeout: 20_000, // close idle connections after 20s
+  keepAliveMaxTimeout: 60_000,
+};
+
 function withPinnedLookup(
   lookup: PinnedHostname["lookup"],
   connect?: Record<string, unknown>,
 ): Record<string, unknown> {
-  return connect ? { ...connect, lookup } : { lookup };
+  return { ...TCP_KEEPALIVE_CONNECT_DEFAULTS, ...(connect ?? {}), lookup };
 }
 
 function resolvePinnedDispatcherLookup(
@@ -408,6 +422,7 @@ export function createPinnedDispatcher(
   if (!policy || policy.mode === "direct") {
     return new Agent({
       connect: withPinnedLookup(lookup, policy?.connect),
+      ...AGENT_KEEPALIVE_DEFAULTS,
     });
   }
 
