@@ -300,6 +300,7 @@ describe("gateway server chat", () => {
       const pngB64 =
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
 
+      const callsBeforeImage = spyCalls.length;
       const reqId = "chat-img";
       ws.send(
         JSON.stringify({
@@ -330,7 +331,6 @@ describe("gateway server chat", () => {
       expect(imgRes.ok).toBe(true);
       expect(imgRes.payload?.runId).toBeDefined();
 
-      const callsBeforeImage = spyCalls.length;
       await waitFor(() => spyCalls.length > callsBeforeImage, 8000);
       const imgOpts = spyCalls.at(-1)?.[1] as
         | { images?: Array<{ type: string; data: string; mimeType: string }> }
