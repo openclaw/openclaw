@@ -333,12 +333,18 @@ describe("buildServiceEnvironment", () => {
     const env = buildServiceEnvironment({
       env: { HOME: "/home/user" },
       port: 18789,
+      platform: "darwin",
     });
-    if (process.platform === "darwin") {
-      expect(env.NODE_EXTRA_CA_CERTS).toBe("/etc/ssl/cert.pem");
-    } else {
-      expect(env.NODE_EXTRA_CA_CERTS).toBeUndefined();
-    }
+    expect(env.NODE_EXTRA_CA_CERTS).toBe("/etc/ssl/cert.pem");
+  });
+
+  it("does not default NODE_EXTRA_CA_CERTS on non-macOS", () => {
+    const env = buildServiceEnvironment({
+      env: { HOME: "/home/user" },
+      port: 18789,
+      platform: "linux",
+    });
+    expect(env.NODE_EXTRA_CA_CERTS).toBeUndefined();
   });
 
   it("respects user-provided NODE_EXTRA_CA_CERTS over the default", () => {
@@ -388,12 +394,17 @@ describe("buildNodeServiceEnvironment", () => {
   it("defaults NODE_EXTRA_CA_CERTS to system cert bundle on macOS for node services", () => {
     const env = buildNodeServiceEnvironment({
       env: { HOME: "/home/user" },
+      platform: "darwin",
     });
-    if (process.platform === "darwin") {
-      expect(env.NODE_EXTRA_CA_CERTS).toBe("/etc/ssl/cert.pem");
-    } else {
-      expect(env.NODE_EXTRA_CA_CERTS).toBeUndefined();
-    }
+    expect(env.NODE_EXTRA_CA_CERTS).toBe("/etc/ssl/cert.pem");
+  });
+
+  it("does not default NODE_EXTRA_CA_CERTS on non-macOS for node services", () => {
+    const env = buildNodeServiceEnvironment({
+      env: { HOME: "/home/user" },
+      platform: "linux",
+    });
+    expect(env.NODE_EXTRA_CA_CERTS).toBeUndefined();
   });
 
   it("respects user-provided NODE_EXTRA_CA_CERTS for node services", () => {
