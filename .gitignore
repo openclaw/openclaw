@@ -95,10 +95,19 @@ USER.md
 /local/
 package-lock.json
 .claude/settings.local.json
+.claude/
 .agents/
 .agents
 .agent/
 skills-lock.json
+
+# IDE / editor / agent config (NEVER COMMIT)
+.cursor/
+.vscode/
+CODEBASE_ANALYSIS.md
+CREDENTIAL_FIREWALL_PLAN.md
+SECRETS_PROVIDER_PLAN.md
+agent-transcripts/
 
 # Local iOS signing overrides
 apps/ios/LocalSigning.xcconfig
