@@ -269,6 +269,12 @@ importers:
 
   extensions/bluebubbles: {}
 
+  extensions/canvas-lms:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
+
   extensions/copilot-proxy: {}
 
   extensions/diagnostics-otel:
