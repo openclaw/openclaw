@@ -167,6 +167,27 @@ describe("browser tool snapshot maxChars", () => {
     expect(browserClientMocks.browserProfiles).toHaveBeenCalledWith(undefined);
   });
 
+  it("accepts url alias for open action", async () => {
+    const tool = createBrowserTool();
+    await tool.execute?.("call-1", { action: "open", url: "https://example.com" });
+
+    expect(browserClientMocks.browserOpenTab).toHaveBeenCalledWith(
+      undefined,
+      "https://example.com",
+      expect.objectContaining({ profile: undefined }),
+    );
+  });
+
+  it("accepts url alias for navigate action", async () => {
+    const tool = createBrowserTool();
+    await tool.execute?.("call-1", { action: "navigate", url: "https://example.com" });
+
+    expect(browserActionsMocks.browserNavigate).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({ url: "https://example.com", targetId: undefined }),
+    );
+  });
+
   it("passes refs mode through to browser snapshot", async () => {
     const tool = createBrowserTool();
     await tool.execute?.("call-1", { action: "snapshot", snapshotFormat: "ai", refs: "aria" });
