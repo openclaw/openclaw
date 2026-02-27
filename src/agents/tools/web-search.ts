@@ -1,11 +1,11 @@
 import { Type } from "@sinclair/typebox";
-import { formatCliCommand } from "../../cli/command-format.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { AnyAgentTool } from "./common.js";
+import { formatCliCommand } from "../../cli/command-format.js";
 import { logVerbose } from "../../globals.js";
 import { matchesHostnameAllowlist, normalizeHostnameAllowlist } from "../../infra/net/ssrf.js";
 import { wrapWebContent } from "../../security/external-content.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
-import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readNumberParam, readStringParam } from "./common.js";
 import {
   WEB_TOOLS_TRUSTED_NETWORK_SSRF_POLICY,
@@ -21,7 +21,6 @@ import {
   resolveCacheTtlMs,
   resolveTimeoutSeconds,
   resolveUrlAllowlist,
-  withTimeout,
   writeCache,
 } from "./web-shared.js";
 
