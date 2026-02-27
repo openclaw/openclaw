@@ -158,4 +158,31 @@ describe("gateway usage helpers", () => {
     expect(b.totals.totalTokens).toBe(1);
     expect(vi.mocked(loadCostUsageSummary)).toHaveBeenCalledTimes(1);
   });
+
+  it("loadCostUsageSummaryCached isolates cache entries by archive inclusion", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-02-05T00:00:00.000Z"));
+
+    const config = {} as OpenClawConfig;
+    await __test.loadCostUsageSummaryCached({
+      startMs: 1,
+      endMs: 2,
+      config,
+      includeArchivedTranscripts: false,
+    });
+    await __test.loadCostUsageSummaryCached({
+      startMs: 1,
+      endMs: 2,
+      config,
+      includeArchivedTranscripts: true,
+    });
+
+    expect(vi.mocked(loadCostUsageSummary)).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(loadCostUsageSummary).mock.calls[0]?.[0]?.includeArchivedTranscripts).toBe(
+      false,
+    );
+    expect(vi.mocked(loadCostUsageSummary).mock.calls[1]?.[0]?.includeArchivedTranscripts).toBe(
+      true,
+    );
+  });
 });

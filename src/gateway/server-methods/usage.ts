@@ -259,6 +259,7 @@ async function discoverAllSessionsForUsage(params: {
   config: ReturnType<typeof loadConfig>;
   startMs: number;
   endMs: number;
+  includeArchivedTranscripts?: boolean;
 }): Promise<DiscoveredSessionWithAgent[]> {
   const agents = listAgentsForGateway(params.config).agents;
   const results = await Promise.all(
@@ -267,6 +268,7 @@ async function discoverAllSessionsForUsage(params: {
         agentId: agent.id,
         startMs: params.startMs,
         endMs: params.endMs,
+        includeArchivedTranscripts: params.includeArchivedTranscripts,
       });
       return sessions.map((session) => ({ ...session, agentId: agent.id }));
     }),
@@ -278,8 +280,9 @@ async function loadCostUsageSummaryCached(params: {
   startMs: number;
   endMs: number;
   config: ReturnType<typeof loadConfig>;
+  includeArchivedTranscripts?: boolean;
 }): Promise<CostUsageSummary> {
-  const cacheKey = `${params.startMs}-${params.endMs}`;
+  const cacheKey = `${params.startMs}-${params.endMs}-${params.includeArchivedTranscripts ? "1" : "0"}`;
   const now = Date.now();
   const cached = costUsageCache.get(cacheKey);
   if (cached?.summary && cached.updatedAt && now - cached.updatedAt < COST_USAGE_CACHE_TTL_MS) {
@@ -298,6 +301,7 @@ async function loadCostUsageSummaryCached(params: {
     startMs: params.startMs,
     endMs: params.endMs,
     config: params.config,
+    includeArchivedTranscripts: params.includeArchivedTranscripts,
   })
     .then((summary) => {
       costUsageCache.set(cacheKey, { summary, updatedAt: Date.now() });
@@ -409,7 +413,14 @@ export const usageHandlers: GatewayRequestHandlers = {
       mode: params?.mode,
       utcOffset: params?.utcOffset,
     });
-    const summary = await loadCostUsageSummaryCached({ startMs, endMs, config });
+    const includeArchivedTranscripts =
+      typeof params?.includeArchived === "boolean" ? params.includeArchived : true;
+    const summary = await loadCostUsageSummaryCached({
+      startMs,
+      endMs,
+      config,
+      includeArchivedTranscripts,
+    });
     respond(true, summary, undefined);
   },
   "sessions.usage": async ({ respond, params }) => {
@@ -435,6 +446,7 @@ export const usageHandlers: GatewayRequestHandlers = {
     });
     const limit = typeof p.limit === "number" && Number.isFinite(p.limit) ? p.limit : 50;
     const includeContextWeight = p.includeContextWeight ?? false;
+    const includeArchivedTranscripts = p.includeArchived ?? true;
     const specificKey = typeof p.key === "string" ? p.key.trim() : null;
 
     // Load session store for named sessions
@@ -510,6 +522,7 @@ export const usageHandlers: GatewayRequestHandlers = {
         config,
         startMs,
         endMs,
+        includeArchivedTranscripts,
       });
 
       // Build a map of sessionId -> store entry for quick lookup

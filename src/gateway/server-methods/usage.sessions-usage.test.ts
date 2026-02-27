@@ -29,29 +29,31 @@ vi.mock("../../infra/session-cost-usage.js", async () => {
   );
   return {
     ...actual,
-    discoverAllSessions: vi.fn(async (params?: { agentId?: string }) => {
-      if (params?.agentId === "main") {
-        return [
-          {
-            sessionId: "s-main",
-            sessionFile: "/tmp/agents/main/sessions/s-main.jsonl",
-            mtime: 100,
-            firstUserMessage: "hello",
-          },
-        ];
-      }
-      if (params?.agentId === "opus") {
-        return [
-          {
-            sessionId: "s-opus",
-            sessionFile: "/tmp/agents/opus/sessions/s-opus.jsonl",
-            mtime: 200,
-            firstUserMessage: "hi",
-          },
-        ];
-      }
-      return [];
-    }),
+    discoverAllSessions: vi.fn(
+      async (params?: { agentId?: string; includeArchivedTranscripts?: boolean }) => {
+        if (params?.agentId === "main") {
+          return [
+            {
+              sessionId: "s-main",
+              sessionFile: "/tmp/agents/main/sessions/s-main.jsonl",
+              mtime: 100,
+              firstUserMessage: "hello",
+            },
+          ];
+        }
+        if (params?.agentId === "opus") {
+          return [
+            {
+              sessionId: "s-opus",
+              sessionFile: "/tmp/agents/opus/sessions/s-opus.jsonl",
+              mtime: 200,
+              firstUserMessage: "hi",
+            },
+          ];
+        }
+        return [];
+      },
+    ),
     loadSessionCostSummary: vi.fn(async () => ({
       input: 0,
       output: 0,
@@ -138,6 +140,12 @@ describe("sessions.usage", () => {
     expect(vi.mocked(discoverAllSessions)).toHaveBeenCalledTimes(2);
     expect(vi.mocked(discoverAllSessions).mock.calls[0]?.[0]?.agentId).toBe("main");
     expect(vi.mocked(discoverAllSessions).mock.calls[1]?.[0]?.agentId).toBe("opus");
+    expect(vi.mocked(discoverAllSessions).mock.calls[0]?.[0]?.includeArchivedTranscripts).toBe(
+      true,
+    );
+    expect(vi.mocked(discoverAllSessions).mock.calls[1]?.[0]?.includeArchivedTranscripts).toBe(
+      true,
+    );
 
     const sessions = expectSuccessfulSessionsUsage(respond);
     expect(sessions).toHaveLength(2);
@@ -147,6 +155,18 @@ describe("sessions.usage", () => {
     expect(sessions[0].agentId).toBe("opus");
     expect(sessions[1].key).toBe("agent:main:s-main");
     expect(sessions[1].agentId).toBe("main");
+  });
+
+  it("can opt out of archived transcripts via includeArchived=false", async () => {
+    await runSessionsUsage({ ...BASE_USAGE_RANGE, includeArchived: false });
+
+    expect(vi.mocked(discoverAllSessions)).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(discoverAllSessions).mock.calls[0]?.[0]?.includeArchivedTranscripts).toBe(
+      false,
+    );
+    expect(vi.mocked(discoverAllSessions).mock.calls[1]?.[0]?.includeArchivedTranscripts).toBe(
+      false,
+    );
   });
 
   it("resolves store entries by sessionId when queried via discovered agent-prefixed key", async () => {

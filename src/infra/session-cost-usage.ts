@@ -5,6 +5,7 @@ import type { NormalizedUsage, UsageLike } from "../agents/usage.js";
 import { normalizeUsage } from "../agents/usage.js";
 import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { parseSessionArchiveTimestamp } from "../config/sessions/artifacts.js";
 import {
   resolveSessionFilePath,
   resolveSessionTranscriptsDirForAgent,
@@ -66,6 +67,37 @@ const emptyTotals = (): CostUsageTotals => ({
   cacheWriteCost: 0,
   missingCostEntries: 0,
 });
+
+const TRANSCRIPT_SUFFIX = ".jsonl";
+const ARCHIVED_TRANSCRIPT_MARKER = `${TRANSCRIPT_SUFFIX}.`;
+const LEGACY_ARCHIVED_TRANSCRIPT_MARKER = `${TRANSCRIPT_SUFFIX}.archived-`;
+
+function isUsageTranscriptFileName(fileName: string, includeArchivedTranscripts: boolean): boolean {
+  if (fileName.endsWith(TRANSCRIPT_SUFFIX)) {
+    return true;
+  }
+  if (!includeArchivedTranscripts) {
+    return false;
+  }
+  if (parseSessionArchiveTimestamp(fileName, "reset") != null) {
+    return true;
+  }
+  if (parseSessionArchiveTimestamp(fileName, "deleted") != null) {
+    return true;
+  }
+  return fileName.includes(LEGACY_ARCHIVED_TRANSCRIPT_MARKER);
+}
+
+function extractSessionIdFromTranscriptFileName(fileName: string): string | undefined {
+  if (fileName.endsWith(TRANSCRIPT_SUFFIX)) {
+    return fileName.slice(0, -TRANSCRIPT_SUFFIX.length);
+  }
+  const markerIndex = fileName.indexOf(ARCHIVED_TRANSCRIPT_MARKER);
+  if (markerIndex <= 0) {
+    return undefined;
+  }
+  return fileName.slice(0, markerIndex);
+}
 
 const toFiniteNumber = (value: unknown): number | undefined => {
   if (typeof value !== "number") {
@@ -293,6 +325,7 @@ export async function loadCostUsageSummary(params?: {
   days?: number; // Deprecated, for backwards compatibility
   config?: OpenClawConfig;
   agentId?: string;
+  includeArchivedTranscripts?: boolean;
 }): Promise<CostUsageSummary> {
   const now = new Date();
   let sinceTime: number;
@@ -315,10 +348,14 @@ export async function loadCostUsageSummary(params?: {
 
   const sessionsDir = resolveSessionTranscriptsDirForAgent(params?.agentId);
   const entries = await fs.promises.readdir(sessionsDir, { withFileTypes: true }).catch(() => []);
+  const includeArchivedTranscripts = params?.includeArchivedTranscripts ?? false;
   const files = (
     await Promise.all(
       entries
-        .filter((entry) => entry.isFile() && entry.name.endsWith(".jsonl"))
+        .filter(
+          (entry) =>
+            entry.isFile() && isUsageTranscriptFileName(entry.name, includeArchivedTranscripts),
+        )
         .map(async (entry) => {
           const filePath = path.join(sessionsDir, entry.name);
           const stats = await fs.promises.stat(filePath).catch(() => null);
@@ -386,14 +423,16 @@ export async function discoverAllSessions(params?: {
   agentId?: string;
   startMs?: number;
   endMs?: number;
+  includeArchivedTranscripts?: boolean;
 }): Promise<DiscoveredSession[]> {
   const sessionsDir = resolveSessionTranscriptsDirForAgent(params?.agentId);
   const entries = await fs.promises.readdir(sessionsDir, { withFileTypes: true }).catch(() => []);
+  const includeArchivedTranscripts = params?.includeArchivedTranscripts ?? false;
 
   const discovered: DiscoveredSession[] = [];
 
   for (const entry of entries) {
-    if (!entry.isFile() || !entry.name.endsWith(".jsonl")) {
+    if (!entry.isFile() || !isUsageTranscriptFileName(entry.name, includeArchivedTranscripts)) {
       continue;
     }
 
@@ -409,8 +448,10 @@ export async function discoverAllSessions(params?: {
     }
     // Do not exclude by endMs: a session can have activity in range even if it continued later.
 
-    // Extract session ID from filename (remove .jsonl)
-    const sessionId = entry.name.slice(0, -6);
+    const sessionId = extractSessionIdFromTranscriptFileName(entry.name);
+    if (!sessionId) {
+      continue;
+    }
 
     // Try to read first user message for label extraction
     let firstUserMessage: string | undefined;

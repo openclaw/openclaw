@@ -126,6 +126,8 @@ export const SessionsUsageParamsSchema = Type.Object(
     limit: Type.Optional(Type.Integer({ minimum: 1 })),
     /** Include context weight breakdown (systemPromptReport). */
     includeContextWeight: Type.Optional(Type.Boolean()),
+    /** Include reset/deleted transcript archives in usage aggregation. */
+    includeArchived: Type.Optional(Type.Boolean()),
   },
   { additionalProperties: false },
 );

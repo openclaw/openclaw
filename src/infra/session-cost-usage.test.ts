@@ -231,6 +231,80 @@ describe("session cost usage", () => {
     });
   });
 
+  it("includes reset/deleted transcript archives when explicitly requested", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cost-archives-"));
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+
+    const files = [
+      {
+        name: "sess-live.jsonl",
+        tokens: 10,
+      },
+      {
+        name: "sess-reset.jsonl.reset.2026-02-20T12-00-00.000Z",
+        tokens: 20,
+      },
+      {
+        name: "sess-deleted.jsonl.deleted.2026-02-20T13-00-00.000Z",
+        tokens: 30,
+      },
+    ];
+
+    for (const file of files) {
+      await fs.writeFile(
+        path.join(sessionsDir, file.name),
+        JSON.stringify({
+          type: "message",
+          timestamp: "2026-02-20T12:00:00.000Z",
+          message: {
+            role: "assistant",
+            usage: { input: file.tokens, output: 0, totalTokens: file.tokens },
+          },
+        }),
+        "utf-8",
+      );
+    }
+
+    await withStateDir(root, async () => {
+      const withoutArchived = await loadCostUsageSummary({ days: 30 });
+      expect(withoutArchived.totals.totalTokens).toBe(10);
+
+      const withArchived = await loadCostUsageSummary({
+        days: 30,
+        includeArchivedTranscripts: true,
+      });
+      expect(withArchived.totals.totalTokens).toBe(60);
+    });
+  });
+
+  it("discovers archived transcripts when includeArchivedTranscripts is enabled", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-discover-archives-"));
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+
+    await fs.writeFile(path.join(sessionsDir, "sess-live.jsonl"), "", "utf-8");
+    await fs.writeFile(
+      path.join(sessionsDir, "sess-reset.jsonl.reset.2026-02-20T12-00-00.000Z"),
+      "",
+      "utf-8",
+    );
+    await fs.writeFile(
+      path.join(sessionsDir, "sess-deleted.jsonl.deleted.2026-02-20T13-00-00.000Z"),
+      "",
+      "utf-8",
+    );
+
+    await withStateDir(root, async () => {
+      const withoutArchived = await discoverAllSessions();
+      expect(withoutArchived.map((session) => session.sessionId)).toEqual(["sess-live"]);
+
+      const withArchived = await discoverAllSessions({ includeArchivedTranscripts: true });
+      const discoveredIds = new Set(withArchived.map((session) => session.sessionId));
+      expect(discoveredIds).toEqual(new Set(["sess-live", "sess-reset", "sess-deleted"]));
+    });
+  });
+
   it("resolves non-main absolute sessionFile using explicit agentId for cost summary", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cost-agent-"));
     const workerSessionsDir = path.join(root, "agents", "worker1", "sessions");
