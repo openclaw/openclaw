@@ -182,11 +182,14 @@ export function registerCronSimpleCommands(cron: Command) {
             }
           }
 
-          // Find jobs with issues - stuck in running state for too long (over 1 hour)
+          // Find jobs with issues - stuck in running state for too long (over 2 hours)
+          // Align with scheduler's STUCK_RUN_MS threshold (2 hours) to avoid clearing
+          // running markers early for legitimate long-running jobs
+          const STUCK_RUN_MS = 2 * 60 * 60 * 1000;
           const staleJobs = allJobs.filter((j) => {
             if (j.state?.runningAtMs) {
               const runningFor = Date.now() - j.state.runningAtMs;
-              return runningFor > 60 * 60 * 1000; // 1 hour
+              return runningFor > STUCK_RUN_MS;
             }
             return false;
           });
