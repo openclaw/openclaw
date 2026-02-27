@@ -114,3 +114,60 @@ With those mental models in mind, here is how the projects compare across key di
 **Strengths.** OpenClaw's defining advantage is its always-on presence across the messaging apps you already use -- you do not need to open a special interface or remember a URL. Native support for 12+ channels, including Chinese ecosystem channels like Feishu, means it meets you where you are. All data stays on your machine, giving you full sovereignty over conversations and memory. The three-layer memory system (bootstrap files, session history, semantic search) provides continuity that survives individual conversations. Broad model provider support -- including Chinese-region providers like Qwen and DeepSeek -- lets you pick the best model for your situation, and the plugin architecture makes it straightforward to add new channels, tools, or behaviors without modifying the core.
 
 **Limitations.** OpenClaw is single-user by design: it is a personal assistant, not a team or enterprise platform. The Gateway must run continuously on a local machine (or a server you control), which means you need hardware that stays on and connected. Initial setup -- choosing a model provider, connecting channels, configuring memory -- has a steeper learning curve than hosted solutions where you simply sign up and start chatting. And if you choose to run local models, the quality of responses depends directly on the hardware available to you; smaller machines will be limited to smaller, less capable models.
+
+---
+
+# Part 4: Technical Deep-Dive
+
+## Agent Architecture
+
+Mental model: **"think-act-observe loop"**
+
+When you send a message, the agent does not just fire off a single request and return a canned answer. Instead, it enters a cycle. First, it assembles context -- gathering its persona ("who am I"), its memory notes ("what do I know"), and the conversation history ("what happened before") into one coherent package. That entire package is sent to the language model. The model reads everything and decides what to do next: it might reply directly with text, or it might request an action -- for example, "run this shell command" or "read this file." If the model requests an action, the Gateway executes it locally on your machine, observes the result, and feeds that result back to the model. The model reads the new information and decides again: reply, or take another action. This loop repeats -- sometimes just once, sometimes a dozen times -- until the model is satisfied it has a complete answer, at which point it produces a final text reply that streams back to you. Like a chef reading a recipe step by step -- taste, adjust, taste again -- until the dish is done.
+
+```
+Message In
+    |
+    v
+[Assemble Context]
+    |
+    v
+[Send to LLM] ──> Reply? ──Yes──> Stream reply out
+    |
+    No
+    v
+[Execute Tool]
+    |
+    v
+[Observe Result] ──> back to [Send to LLM]
+```
+
+**For developers:** The event loop steps in a well-defined order: workspace resolution, model resolution, auth profile selection, session lock acquisition, system prompt assembly, then the LLM inference and tool execution loop, and finally session persistence. Streaming happens concurrently with this loop -- assistant text deltas, tool invocation events, and lifecycle events are all multiplexed over the same event stream so the caller sees partial progress in real time. Subagents (child agent runs spawned by the parent to handle subtasks) are tracked in a registry with announce/retry semantics and exponential backoff, ensuring that a failed subagent does not silently disappear but is retried or surfaced to the parent.
+
+## Scheduling System
+
+Mental model: **"one queue per conversation, one bouncer at the door"**
+
+Each conversation (session) has its own queue, and messages in that queue are processed strictly one at a time -- no cutting in line. If you send a message while the agent is still thinking about your previous one, the new message waits its turn. This strict ordering prevents the agent from trying to do two contradictory things at once in the same conversation -- imagine asking "delete that file" and "no wait, keep it" at the same time, both executing in parallel. The queue ensures those are handled sequentially, in order.
+
+The Gateway also enforces a global concurrency limit -- the "bouncer." Only a limited number of conversations can run simultaneously across all your channels. If you have messages arriving on WhatsApp, Telegram, and Slack all at once, the bouncer decides how many can enter the agent runtime at the same time. The rest wait in their respective queues. When you send several messages in quick succession before the agent finishes its current turn, they are batched together into a single delivery rather than creating separate turns, keeping things efficient.
+
+There are three queue behaviors that control what happens when a new message arrives while the agent is already working:
+
+- **Collect** (the default): gather all pending messages and deliver them as one combined turn. This is the normal behavior -- your messages accumulate and the agent sees them all at once when it is ready.
+- **Steer**: inject the new message into the currently-running turn -- like slipping a note under the door while someone is already working. The agent sees your new instruction mid-thought and can adjust course without finishing the old turn first.
+- **Followup**: wait patiently for the current turn to finish, then deliver the new message as the next turn. This is useful when you want to ensure the agent completes its current task before moving on.
+
+**For developers:** Session serialization uses file-based exclusive locks (POSIX `wx` create-exclusive mode) with PID tracking and 30-minute stale lock detection so that crashed processes do not permanently block a session. The lane abstraction provides two levels of concurrency control: per-session lanes (serial, ensuring one turn at a time per conversation) and a global lane (configurable parallelism across all sessions). Generation tokens prevent stale task completions from interfering after in-process restarts -- each generation of the agent runtime gets a unique token, and completions from a previous generation are discarded. The debounce system uses per-key buffers with configurable timeouts to coalesce rapid-fire messages before they reach the queue.
+
+## Memory Management
+
+Mental model: **"a notebook, a filing cabinet, and a librarian"**
+
+**The Notebook.** Every time the agent starts a conversation, it opens its notebook -- a set of plain Markdown files stored in your workspace. These files contain who the agent is (its persona and tone), how it should behave (operating instructions), what it knows about you (your profile and preferences), and what it has learned over time (accumulated memory notes). You can open these files yourself and read or edit them, just like a real notebook. If you correct the agent's understanding of something -- "I actually prefer concise answers" -- it updates its notes. Think of this as the agent's morning briefing before starting work: it reads through its notebook to remember everything before saying a word.
+
+**The Filing Cabinet.** Every conversation is filed away as a transcript on disk. As conversations accumulate, some grow long -- too long to fit in the model's context window, which is the maximum amount of text the language model can consider at once. When this happens, the agent performs a "memory flush": it re-reads its notebook, identifies anything important from the conversation that is not already saved, writes those insights to its memory notes, and then compresses the old transcript into a summary. The full transcript is archived but the active conversation window is trimmed to fit. This ensures nothing critical is lost when old conversations are compressed -- the important bits have already been transferred to the notebook.
+
+**The Librarian.** To recall information from weeks or months ago, the agent relies on a search system that indexes everything in your workspace using vector embeddings -- mathematical fingerprints of meaning. Unlike simple keyword search, this approach understands concepts. A query about "deployment steps" will find notes titled "setup instructions" even though the words differ, because the underlying meaning is similar. The search blends keyword matching (weighted at 30%) with semantic similarity (weighted at 70%) for the best results. This means the agent can draw on its entire history of notes and conversations, not just what fits in the current context window.
+
+**For developers:** Temporal decay applies exponential scoring reduction to older notes with a configurable half-life (default 30 days), so recent information naturally ranks higher in search results without manually curating relevance. MMR (Maximal Marginal Relevance) re-ranks results using Jaccard similarity to prevent redundant or near-duplicate snippets from dominating the top positions. Embedding providers include cloud options (OpenAI, Gemini, Voyage, Mistral) and a fully local option via node-llama-cpp for users who want no data leaving their machine. Storage uses SQLite with the sqlite-vec extension for efficient cosine similarity search over vector embeddings, keeping the entire index in a single portable database file.
