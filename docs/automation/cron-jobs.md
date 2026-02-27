@@ -273,7 +273,111 @@ Use these shapes when calling Gateway `cron.*` tools directly (agent tool calls 
 CLI flags accept human durations like `20m`, but tool calls should use an ISO 8601 string
 for `schedule.at` and milliseconds for `schedule.everyMs`.
 
-### cron.add params
+> **Important for agents**: When using the `cron` tool programmatically (not CLI), wrap the
+> job object in a `job` parameter. See [Agent tool call format](#agent-tool-call-format) below.
+
+### Required fields
+
+Every `cron.add` call requires these fields:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `name` | string | Human-readable job name |
+| `schedule` | object | When to run (see schedule kinds below) |
+| `schedule.kind` | string | `"at"`, `"every"`, or `"cron"` |
+| `sessionTarget` | string | `"main"` or `"isolated"` |
+| `payload` | object | What to run |
+| `payload.kind` | string | `"systemEvent"` (main) or `"agentTurn"` (isolated) |
+
+**Payload text field** (depends on `payload.kind`):
+- `systemEvent` → `payload.text` (required)
+- `agentTurn` → `payload.message` (required)
+
+### Schedule kinds
+
+| Kind | Required fields | Example |
+|------|-----------------|---------|
+| `at` | `schedule.at` (ISO 8601) | `{ "kind": "at", "at": "2026-02-01T16:00:00Z" }` |
+| `every` | `schedule.everyMs` (milliseconds) | `{ "kind": "every", "everyMs": 3600000 }` |
+| `cron` | `schedule.expr` (cron expression) | `{ "kind": "cron", "expr": "0 7 * * *", "tz": "America/Los_Angeles" }` |
+
+### Agent tool call format
+
+When calling the `cron` tool from an agent (not CLI), pass the job inside a `job` parameter:
+
+```
+cron action=add job={"name": "...", "schedule": {...}, ...}
+```
+
+**Example: One-shot reminder (main session)**
+
+```json
+{
+  "action": "add",
+  "job": {
+    "name": "Reminder",
+    "schedule": { "kind": "at", "at": "2026-02-01T16:00:00Z" },
+    "sessionTarget": "main",
+    "wakeMode": "now",
+    "payload": { "kind": "systemEvent", "text": "Reminder text" },
+    "deleteAfterRun": true
+  }
+}
+```
+
+**Example: Recurring isolated job with delivery**
+
+```json
+{
+  "action": "add",
+  "job": {
+    "name": "Morning brief",
+    "schedule": { "kind": "cron", "expr": "0 7 * * *", "tz": "America/Los_Angeles" },
+    "sessionTarget": "isolated",
+    "wakeMode": "next-heartbeat",
+    "payload": {
+      "kind": "agentTurn",
+      "message": "Summarize overnight updates."
+    },
+    "delivery": {
+      "mode": "announce",
+      "channel": "slack",
+      "to": "channel:C1234567890",
+      "bestEffort": true
+    }
+  }
+}
+```
+
+### Common mistakes
+
+These patterns will cause validation errors:
+
+```json
+// ❌ Missing job wrapper (agent tool calls)
+{ "name": "Test", "schedule": {...} }
+// ✅ Correct: wrap in job parameter
+{ "action": "add", "job": { "name": "Test", "schedule": {...} } }
+
+// ❌ Schedule as string instead of object
+{ "schedule": "0 7 * * *" }
+// ✅ Correct: schedule is an object with kind
+{ "schedule": { "kind": "cron", "expr": "0 7 * * *" } }
+
+// ❌ Wrong payload text field for agentTurn
+{ "payload": { "kind": "agentTurn", "text": "..." } }
+// ✅ Correct: agentTurn uses "message"
+{ "payload": { "kind": "agentTurn", "message": "..." } }
+
+// ❌ Missing sessionTarget
+{ "name": "Test", "schedule": {...}, "payload": {...} }
+// ✅ Correct: sessionTarget is required
+{ "name": "Test", "schedule": {...}, "sessionTarget": "isolated", "payload": {...} }
+```
+
+### cron.add params (raw job object)
+
+For reference, here are the raw job object shapes (without the `job` wrapper):
 
 One-shot, main session job (system event):
 
