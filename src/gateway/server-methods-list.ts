@@ -101,6 +101,12 @@ const BASE_METHODS = [
   "chat.history",
   "chat.abort",
   "chat.send",
+  // Marketplace P2P compute sharing
+  "marketplace.status",
+  "marketplace.opt-in",
+  "marketplace.opt-out",
+  "marketplace.earnings",
+  "marketplace.config",
 ];
 
 export function listGatewayMethods(): string[] {
@@ -127,4 +133,10 @@ export const GATEWAY_EVENTS = [
   "voicewake.changed",
   "exec.approval.requested",
   "exec.approval.resolved",
+  "marketplace.idle.status",
+  "marketplace.proxy.chunk",
+  "marketplace.proxy.done",
+  "marketplace.proxy.error",
+  "marketplace.seller.available",
+  "marketplace.seller.unavailable",
 ];

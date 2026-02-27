@@ -7,6 +7,7 @@ import { ensureBotCliOnPath } from "../infra/path-env.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { VERSION } from "../version.js";
 import { ensureNodeHostConfig, saveNodeHostConfig, type NodeHostGatewayConfig } from "./config.js";
+import { IdleDetector } from "./idle-detector.js";
 import {
   coerceNodeInvokePayload,
   handleInvoke,
@@ -90,6 +91,9 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
   const resolvedBrowser = resolveBrowserConfig(cfg.browser, cfg);
   const browserProxyEnabled =
     cfg.nodeHost?.browserProxy?.enabled !== false && resolvedBrowser.enabled;
+  const marketplaceEnabled =
+    config.marketplace?.enabled === true &&
+    Boolean(config.marketplace?.claudeApiKey || process.env.ANTHROPIC_API_KEY);
   const isRemoteMode = cfg.gateway?.mode === "remote";
   const token =
     process.env.BOT_GATEWAY_TOKEN?.trim() ||
@@ -132,13 +136,18 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     mode: GATEWAY_CLIENT_MODES.NODE,
     role: "node",
     scopes: [],
-    caps: ["system", ...(browserProxyEnabled ? ["browser"] : [])],
+    caps: [
+      "system",
+      ...(browserProxyEnabled ? ["browser"] : []),
+      ...(marketplaceEnabled ? ["marketplace"] : []),
+    ],
     commands: [
       "system.run",
       "system.which",
       "system.execApprovals.get",
       "system.execApprovals.set",
       ...(browserProxyEnabled ? ["browser.proxy"] : []),
+      ...(marketplaceEnabled ? ["marketplace.proxy"] : []),
     ],
     pathEnv,
     permissions: undefined,
@@ -189,5 +198,15 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
   setInterval(() => {}, 2_147_483_647);
 
   client.start();
+
+  if (marketplaceEnabled && config.marketplace) {
+    const idleDetector = new IdleDetector(client, config.marketplace);
+    idleDetector.start();
+    // eslint-disable-next-line no-console
+    console.log(
+      `  Marketplace: enabled (idle threshold: ${config.marketplace.idleThresholdSec ?? 300}s)`,
+    );
+  }
+
   await new Promise(() => {});
 }

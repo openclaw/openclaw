@@ -288,8 +288,9 @@ export type GatewayHttpConfig = {
  * - global: use the owner's account balance (default)
  * - dedicated: node has its own credit budget
  * - local: no cloud billing, node uses local API keys
+ * - shared: node participates in marketplace (buyer pays, seller earns)
  */
-export type NodeBillingMode = "global" | "dedicated" | "local";
+export type NodeBillingMode = "global" | "dedicated" | "local" | "shared";
 
 /** Per-node billing configuration. */
 export type NodeBillingConfig = {
@@ -379,4 +380,23 @@ export type GatewayConfig = {
   trustedProxies?: string[];
   /** Tool access restrictions for HTTP /tools/invoke endpoint. */
   tools?: GatewayToolsConfig;
+  /** P2P marketplace configuration for idle compute sharing. */
+  marketplace?: MarketplaceConfig;
+};
+
+/** Marketplace (P2P idle compute sharing) configuration. */
+export type MarketplaceConfig = {
+  /** Whether the marketplace is enabled on this gateway. Default: false. */
+  enabled?: boolean;
+  /** Platform fee percentage taken from each transaction (0-100). Default: 20. */
+  platformFeePct?: number;
+  /**
+   * Marketplace price as a fraction of Anthropic list price (0-1). Default: 0.6.
+   * e.g. 0.6 = buyer pays 60% of list price.
+   */
+  priceFraction?: number;
+  /** Minimum payout threshold in cents. Default: 1000 ($10). */
+  minPayoutCents?: number;
+  /** Bonus percentage for $AI token payouts. Default: 10. */
+  aiTokenBonusPct?: number;
 };

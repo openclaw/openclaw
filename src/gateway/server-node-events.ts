@@ -8,6 +8,7 @@ import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { normalizeMainKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
+import { marketplaceEventBus } from "./marketplace/event-bus.js";
 import {
   loadSessionEntry,
   pruneLegacyStoreKeys,
@@ -275,6 +276,57 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
 
       enqueueSystemEvent(text, { sessionKey, contextKey: runId ? `exec:${runId}` : "exec" });
       requestHeartbeatNow({ reason: "exec-event" });
+      return;
+    }
+    case "marketplace.idle.status": {
+      if (!evt.payloadJSON) {
+        return;
+      }
+      let payload: Record<string, unknown>;
+      try {
+        payload = JSON.parse(evt.payloadJSON) as Record<string, unknown>;
+      } catch {
+        return;
+      }
+      const status = typeof payload.status === "string" ? payload.status : "";
+      if (status !== "active" && status !== "idle" && status !== "sharing") {
+        return;
+      }
+      marketplaceEventBus.emitIdleStatus({
+        nodeId,
+        status,
+        maxConcurrent:
+          typeof payload.maxConcurrent === "number" ? payload.maxConcurrent : undefined,
+      });
+      return;
+    }
+    case "marketplace.proxy.chunk":
+    case "marketplace.proxy.done":
+    case "marketplace.proxy.error": {
+      if (!evt.payloadJSON) {
+        return;
+      }
+      let payload: Record<string, unknown>;
+      try {
+        payload = JSON.parse(evt.payloadJSON) as Record<string, unknown>;
+      } catch {
+        return;
+      }
+      const requestId = typeof payload.requestId === "string" ? payload.requestId : "";
+      if (!requestId) {
+        return;
+      }
+      const kindMap: Record<string, "chunk" | "done" | "error"> = {
+        "marketplace.proxy.chunk": "chunk",
+        "marketplace.proxy.done": "done",
+        "marketplace.proxy.error": "error",
+      };
+      marketplaceEventBus.emitProxy({
+        nodeId,
+        requestId,
+        kind: kindMap[evt.event],
+        payload,
+      });
       return;
     }
     default:

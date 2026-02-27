@@ -10,12 +10,28 @@ export type NodeHostGatewayConfig = {
   tlsFingerprint?: string;
 };
 
+/** Marketplace capacity-sharing opt-in configuration. */
+export type NodeHostMarketplaceConfig = {
+  /** Whether this node participates in the P2P marketplace. Default: false. */
+  enabled: boolean;
+  /** Claude API key for shared requests. Falls back to ANTHROPIC_API_KEY env. */
+  claudeApiKey?: string;
+  /** Seconds of inactivity before declaring idle. Default: 300 (5 min). */
+  idleThresholdSec?: number;
+  /** Maximum concurrent marketplace requests this node will handle. Default: 1. */
+  maxConcurrent?: number;
+  /** Payout preference. Default: "usd". */
+  payoutPreference?: "usd" | "ai_token";
+};
+
 export type NodeHostConfig = {
   version: 1;
   nodeId: string;
   token?: string;
   displayName?: string;
   gateway?: NodeHostGatewayConfig;
+  /** P2P marketplace configuration for idle compute sharing. */
+  marketplace?: NodeHostMarketplaceConfig;
 };
 
 const NODE_HOST_FILE = "node.json";
@@ -31,6 +47,7 @@ function normalizeConfig(config: Partial<NodeHostConfig> | null): NodeHostConfig
     token: config?.token,
     displayName: config?.displayName,
     gateway: config?.gateway,
+    marketplace: config?.marketplace,
   };
   if (config?.version === 1 && typeof config.nodeId === "string") {
     base.nodeId = config.nodeId.trim();

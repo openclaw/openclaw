@@ -19,4 +19,6 @@ export type ControlUiBootstrapConfig = {
   token?: string;
   /** Billing top-up URL. */
   billingUrl?: string;
+  /** Whether the P2P marketplace is enabled on this gateway. */
+  marketplaceEnabled?: boolean;
 };

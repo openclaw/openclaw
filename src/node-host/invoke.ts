@@ -32,7 +32,9 @@ import {
   type ExecHostRunResult,
 } from "../infra/exec-host.js";
 import { validateSystemRunCommandConsistency } from "../infra/system-run-command.js";
+import { loadNodeHostConfig } from "./config.js";
 import { runBrowserProxyCommand } from "./invoke-browser.js";
+import { handleMarketplaceProxy, type MarketplaceProxyRequest } from "./marketplace-proxy.js";
 
 const OUTPUT_CAP = 200_000;
 const OUTPUT_EVENT_TAIL = 20_000;
@@ -493,6 +495,33 @@ export async function handleInvoke(
       await sendInvokeResult(client, frame, { ok: true });
       // Open VNC tunnel in the background.
       void openVncTunnel(params.tunnelId, params.tunnelUrl);
+    } catch (err) {
+      await sendInvokeResult(client, frame, {
+        ok: false,
+        error: { code: "INVALID_REQUEST", message: String(err) },
+      });
+    }
+    return;
+  }
+
+  if (command === "marketplace.proxy") {
+    try {
+      const nodeConfig = await loadNodeHostConfig();
+      if (!nodeConfig?.marketplace?.enabled) {
+        await sendInvokeResult(client, frame, {
+          ok: false,
+          error: { code: "UNAVAILABLE", message: "marketplace not enabled on this node" },
+        });
+        return;
+      }
+      const params = decodeParams<MarketplaceProxyRequest>(frame.paramsJSON);
+      if (!params.requestId || !params.model || !params.messages) {
+        throw new Error("INVALID_REQUEST: requestId, model, and messages required");
+      }
+      // Respond immediately — proxy execution happens asynchronously via events.
+      await sendInvokeResult(client, frame, { ok: true });
+      // Execute proxy in background (chunks/done/error sent as node.event).
+      void handleMarketplaceProxy(params, nodeConfig.marketplace, client);
     } catch (err) {
       await sendInvokeResult(client, frame, {
         ok: false,

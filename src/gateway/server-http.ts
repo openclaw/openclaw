@@ -53,6 +53,7 @@ import {
 import { sendGatewayAuthFailure } from "./http-common.js";
 import { getBearerToken, getHeader } from "./http-utils.js";
 import { handleIamOAuthHttpRequest } from "./iam-oauth-http.js";
+import { handleMarketplaceHttpRequest, type MarketplaceHttpOptions } from "./marketplace-http.js";
 import { isPrivateOrLoopbackAddress, resolveGatewayClientIp } from "./net.js";
 import { handleOpenAiHttpRequest } from "./openai-http.js";
 import { handleOpenResponsesHttpRequest } from "./openresponses-http.js";
@@ -466,6 +467,8 @@ export function createGatewayHttpServer(opts: {
   /** VNC proxy for /vnc-viewer endpoint. */
   vncEnabled?: boolean;
   gatewayOrigin?: string;
+  /** P2P marketplace HTTP endpoint options. */
+  marketplace?: MarketplaceHttpOptions;
 }): HttpServer {
   const {
     canvasHost,
@@ -609,6 +612,11 @@ export function createGatewayHttpServer(opts: {
             iamConfig: resolvedAuth.iam,
           })
         ) {
+          return;
+        }
+      }
+      if (opts.marketplace) {
+        if (await handleMarketplaceHttpRequest(req, res, opts.marketplace)) {
           return;
         }
       }
