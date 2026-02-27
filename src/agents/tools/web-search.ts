@@ -964,7 +964,10 @@ async function runSearxngSearch(params: {
     published?: string;
   }>;
 }> {
-  const endpoint = new URL("/search", params.url);
+  // Build endpoint preserving any subpath the user may have configured
+  // (e.g. https://host/searxng/ → https://host/searxng/search).
+  const base = params.url.replace(/\/?$/, "/");
+  const endpoint = new URL("search", base);
   endpoint.searchParams.set("q", params.query);
   endpoint.searchParams.set("format", "json");
   endpoint.searchParams.set("categories", params.categories || DEFAULT_SEARXNG_CATEGORIES);
@@ -974,40 +977,42 @@ async function runSearxngSearch(params: {
     endpoint.searchParams.set("engines", params.engines.join(","));
   }
 
-  return withTrustedWebSearchEndpoint(
-    {
-      url: endpoint.toString(),
-      timeoutSeconds: params.timeoutSeconds,
-      init: {
-        method: "GET",
-        headers: {
-          Accept: "application/json",
-          "User-Agent": "OpenClaw/1.0 (web_search; +https://openclaw.ai)",
-        },
+  const { response: res, release } = await fetchWithSsrFGuard({
+    url: endpoint.toString(),
+    timeoutMs: params.timeoutSeconds * 1000,
+    policy: TRUSTED_NETWORK_SSRF_POLICY,
+    init: {
+      method: "GET",
+      headers: {
+        Accept: "application/json",
+        "User-Agent": "OpenClaw/1.0 (web_search; +https://openclaw.ai)",
       },
     },
-    async (res) => {
-      if (!res.ok) {
-        const detailResult = await readResponseText(res, { maxBytes: 16_000 });
-        throw new Error(`SearXNG error (${res.status}): ${detailResult.text || res.statusText}`);
-      }
+  });
 
-      const data = (await res.json()) as SearxngResponse;
-      const raw = Array.isArray(data.results) ? data.results : [];
-      const trimmed = raw.slice(0, params.count);
+  try {
+    if (!res.ok) {
+      const detailResult = await readResponseText(res, { maxBytes: 16_000 });
+      throw new Error(`SearXNG error (${res.status}): ${detailResult.text || res.statusText}`);
+    }
 
-      return {
-        results: trimmed.map((entry) => ({
-          title: entry.title ?? "",
-          url: entry.url ?? "",
-          description: entry.content ?? "",
-          engine: entry.engine,
-          category: entry.category,
-          published: entry.publishedDate,
-        })),
-      };
-    },
-  );
+    const data = (await res.json()) as SearxngResponse;
+    const raw = Array.isArray(data.results) ? data.results : [];
+    const trimmed = raw.slice(0, params.count);
+
+    return {
+      results: trimmed.map((entry) => ({
+        title: entry.title ?? "",
+        url: entry.url ?? "",
+        description: entry.content ?? "",
+        engine: entry.engine,
+        category: entry.category,
+        published: entry.publishedDate,
+      })),
+    };
+  } finally {
+    await release();
+  }
 }
 
 function resolveGeminiConfig(search?: WebSearchConfig): GeminiConfig {
@@ -1741,7 +1746,7 @@ async function runWebSearch(params: {
           : params.provider === "kimi"
             ? `${params.kimiBaseUrl ?? DEFAULT_KIMI_BASE_URL}:${params.kimiModel ?? DEFAULT_KIMI_MODEL}`
             : params.provider === "searxng"
-              ? `${params.searxngUrl ?? DEFAULT_SEARXNG_URL}:${params.searxngCategories || DEFAULT_SEARXNG_CATEGORIES}`
+              ? `${params.searxngUrl ?? DEFAULT_SEARXNG_URL}:${params.searxngCategories || DEFAULT_SEARXNG_CATEGORIES}:${params.searxngEngines?.join(",") || ""}:${params.searxngLanguage || DEFAULT_SEARXNG_LANGUAGE}:${params.searxngSafeSearch ?? 0}`
             : "";
   const cacheKey = normalizeCacheKey(
     params.provider === "brave" && effectiveBraveMode === "llm-context"
