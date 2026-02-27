@@ -1340,7 +1340,8 @@ async function runWebSearch(params: {
       init: {
         method: "GET",
         headers: {
-          Accept: "application/json",
+          // Prefer markdown for richer snippets; Brave falls back to JSON gracefully
+          Accept: "text/markdown, application/json",
           "X-Subscription-Token": params.apiKey,
         },
       },
