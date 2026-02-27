@@ -38,7 +38,7 @@ import { withTelegramApiErrorLogging } from "./api-logging.js";
 import {
   firstDefined,
   isSenderAllowed,
-  normalizeAllowFromWithStore,
+  normalizeDmAllowFromWithStore,
   resolveSenderAllowMatch,
 } from "./bot-access.js";
 import {
@@ -187,9 +187,9 @@ export const buildTelegramMessageContext = async ({
       : null;
   const sessionKey = threadKeys?.sessionKey ?? baseSessionKey;
   const mentionRegexes = buildMentionRegexes(cfg, route.agentId);
-  const effectiveDmAllow = normalizeAllowFromWithStore({ allowFrom, storeAllowFrom });
+  const effectiveDmAllow = normalizeDmAllowFromWithStore({ allowFrom, storeAllowFrom });
   const groupAllowOverride = firstDefined(topicConfig?.allowFrom, groupConfig?.allowFrom);
-  const effectiveGroupAllow = normalizeAllowFromWithStore({
+  const effectiveGroupAllow = normalizeDmAllowFromWithStore({
     allowFrom: groupAllowOverride ?? groupAllowFrom,
     storeAllowFrom,
   });
