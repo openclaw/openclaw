@@ -155,7 +155,7 @@ describe("resolveTelegramFetch", () => {
     expect(AgentCtor).toHaveBeenCalledWith({
       connect: {
         autoSelectFamily: true,
-        autoSelectFamilyAttemptTimeout: 300,
+        autoSelectFamilyAttemptTimeout: 5000,
       },
     });
   });
@@ -177,13 +177,13 @@ describe("resolveTelegramFetch", () => {
     expect(AgentCtor).toHaveBeenNthCalledWith(1, {
       connect: {
         autoSelectFamily: true,
-        autoSelectFamilyAttemptTimeout: 300,
+        autoSelectFamilyAttemptTimeout: 5000,
       },
     });
     expect(AgentCtor).toHaveBeenNthCalledWith(2, {
       connect: {
         autoSelectFamily: false,
-        autoSelectFamilyAttemptTimeout: 300,
+        autoSelectFamilyAttemptTimeout: 5000,
       },
     });
   });
