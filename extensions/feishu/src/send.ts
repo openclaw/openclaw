@@ -251,6 +251,66 @@ export function buildMarkdownCard(text: string): Record<string, unknown> {
   };
 }
 
+/** Header configuration for structured Feishu cards. */
+export type CardHeaderConfig = {
+  /** Header title text, e.g. "💻 Coder" */
+  title: string;
+  /** Feishu header color template (blue, green, red, orange, purple, grey, etc.). Defaults to "blue". */
+  template?: string;
+};
+
+/**
+ * Build a Feishu interactive card with optional header and note footer.
+ * When header/note are omitted, behaves identically to buildMarkdownCard.
+ */
+export function buildStructuredCard(
+  text: string,
+  options?: {
+    header?: CardHeaderConfig;
+    note?: string;
+  },
+): Record<string, unknown> {
+  const elements: Record<string, unknown>[] = [{ tag: "markdown", content: text }];
+  if (options?.note) {
+    elements.push({ tag: "hr" });
+    elements.push({ tag: "markdown", content: `<font color='grey'>${options.note}</font>` });
+  }
+  const card: Record<string, unknown> = {
+    schema: "2.0",
+    config: { wide_screen_mode: true },
+    body: { elements },
+  };
+  if (options?.header) {
+    card.header = {
+      title: { tag: "plain_text", content: options.header.title },
+      template: options.header.template ?? "blue",
+    };
+  }
+  return card;
+}
+
+/**
+ * Send a message as a structured card with optional header and note.
+ */
+export async function sendStructuredCardFeishu(params: {
+  cfg: ClawdbotConfig;
+  to: string;
+  text: string;
+  replyToMessageId?: string;
+  mentions?: MentionTarget[];
+  accountId?: string;
+  header?: CardHeaderConfig;
+  note?: string;
+}): Promise<FeishuSendResult> {
+  const { cfg, to, text, replyToMessageId, mentions, accountId, header, note } = params;
+  let cardText = text;
+  if (mentions && mentions.length > 0) {
+    cardText = buildMentionedCardContent(mentions, text);
+  }
+  const card = buildStructuredCard(cardText, { header, note });
+  return sendCardFeishu({ cfg, to, card, replyToMessageId, accountId });
+}
+
 /**
  * Send a message as a markdown card (interactive message).
  * This renders markdown properly in Feishu (code blocks, tables, bold/italic, etc.)
