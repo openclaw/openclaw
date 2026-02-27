@@ -155,6 +155,7 @@ function isPrivateNetworkUrl(url: string, policy?: SsrFPolicy): boolean {
   const hasRelaxedPolicy =
     policy.dangerouslyAllowPrivateNetwork === true ||
     policy.allowPrivateNetwork === true ||
+    policy.allowRfc2544BenchmarkRange === true ||
     (Array.isArray(policy.allowedHostnames) && policy.allowedHostnames.length > 0);
   if (!hasRelaxedPolicy) {
     return false;
