@@ -13,6 +13,7 @@ import {
 } from "../../infra/exec-approvals.js";
 import { buildNodeShellCommand } from "../../infra/node-shell.js";
 import { applyPathPrepend } from "../../infra/path-prepend.js";
+import { parsePreparedSystemRunPayload } from "../../infra/system-run-approval-context.js";
 import { defaultRuntime } from "../../runtime.js";
 import { parseEnvPairs, parseTimeoutMs } from "../nodes-run.js";
 import { getNodesTheme, runNodesCommand } from "./cli-utils.js";
@@ -95,6 +96,221 @@ async function resolveNodePlatform(opts: NodesRpcOpts, nodeId: string): Promise<
   }
 }
 
+function requirePreparedRunPayload(payload: unknown) {
+  const prepared = parsePreparedSystemRunPayload(payload);
+  if (!prepared) {
+    throw new Error("invalid system.run.prepare response");
+  }
+  return prepared;
+}
+
+function resolveNodesRunPolicy(opts: NodesRunOpts, execDefaults: ExecDefaults | undefined) {
+  const configuredSecurity = normalizeExecSecurity(execDefaults?.security) ?? "allowlist";
+  const requestedSecurity = normalizeExecSecurity(opts.security);
+  if (opts.security && !requestedSecurity) {
+    throw new Error("invalid --security (use deny|allowlist|full)");
+  }
+  const configuredAsk = normalizeExecAsk(execDefaults?.ask) ?? "on-miss";
+  const requestedAsk = normalizeExecAsk(opts.ask);
+  if (opts.ask && !requestedAsk) {
+    throw new Error("invalid --ask (use off|on-miss|always)");
+  }
+  return {
+    security: minSecurity(configuredSecurity, requestedSecurity ?? configuredSecurity),
+    ask: maxAsk(configuredAsk, requestedAsk ?? configuredAsk),
+  };
+}
+
+async function prepareNodesRunContext(params: {
+  opts: NodesRunOpts;
+  command: string[];
+  raw: string;
+  nodeId: string;
+  agentId: string | undefined;
+  execDefaults: ExecDefaults | undefined;
+}) {
+  const env = parseEnvPairs(params.opts.env);
+  const timeoutMs = parseTimeoutMs(params.opts.commandTimeout);
+  const invokeTimeout = parseTimeoutMs(params.opts.invokeTimeout);
+
+  let argv = Array.isArray(params.command) ? params.command : [];
+  let rawCommand: string | undefined;
+  if (params.raw) {
+    rawCommand = params.raw;
+    const platform = await resolveNodePlatform(params.opts, params.nodeId);
+    argv = buildNodeShellCommand(rawCommand, platform ?? undefined);
+  }
+
+  const nodeEnv = env ? { ...env } : undefined;
+  if (nodeEnv) {
+    applyPathPrepend(nodeEnv, params.execDefaults?.pathPrepend, { requireExisting: true });
+  }
+
+  const prepareResponse = (await callGatewayCli("node.invoke", params.opts, {
+    nodeId: params.nodeId,
+    command: "system.run.prepare",
+    params: {
+      command: argv,
+      rawCommand,
+      cwd: params.opts.cwd,
+      agentId: params.agentId,
+    },
+    idempotencyKey: `prepare-${randomIdempotencyKey()}`,
+  })) as { payload?: unknown } | null;
+
+  return {
+    prepared: requirePreparedRunPayload(prepareResponse?.payload),
+    nodeEnv,
+    timeoutMs,
+    invokeTimeout,
+  };
+}
+
+async function resolveNodeApprovals(params: {
+  opts: NodesRunOpts;
+  nodeId: string;
+  agentId: string | undefined;
+  security: ExecSecurity;
+  ask: ExecAsk;
+}) {
+  const approvalsSnapshot = (await callGatewayCli("exec.approvals.node.get", params.opts, {
+    nodeId: params.nodeId,
+  })) as {
+    file?: unknown;
+  } | null;
+  const approvalsFile =
+    approvalsSnapshot && typeof approvalsSnapshot === "object" ? approvalsSnapshot.file : undefined;
+  if (!approvalsFile || typeof approvalsFile !== "object") {
+    throw new Error("exec approvals unavailable");
+  }
+  const approvals = resolveExecApprovalsFromFile({
+    file: approvalsFile as ExecApprovalsFile,
+    agentId: params.agentId,
+    overrides: { security: params.security, ask: params.ask },
+  });
+  return {
+    approvals,
+    hostSecurity: minSecurity(params.security, approvals.agent.security),
+    hostAsk: maxAsk(params.ask, approvals.agent.ask),
+    askFallback: approvals.agent.askFallback,
+  };
+}
+
+async function maybeRequestNodesRunApproval(params: {
+  opts: NodesRunOpts;
+  nodeId: string;
+  agentId: string | undefined;
+  preparedCmdText: string;
+  approvalPlan: ReturnType<typeof requirePreparedRunPayload>["plan"];
+  hostSecurity: ExecSecurity;
+  hostAsk: ExecAsk;
+  askFallback: ExecSecurity;
+}) {
+  let approvedByAsk = false;
+  let approvalDecision: "allow-once" | "allow-always" | null = null;
+  let approvalId: string | null = null;
+  const requiresAsk = params.hostAsk === "always" || params.hostAsk === "on-miss";
+  if (!requiresAsk) {
+    return { approvedByAsk, approvalDecision, approvalId };
+  }
+
+  approvalId = crypto.randomUUID();
+  const approvalTimeoutMs = DEFAULT_EXEC_APPROVAL_TIMEOUT_MS;
+  // Keep client transport alive while the approver decides.
+  const transportTimeoutMs = Math.max(
+    parseTimeoutMs(params.opts.timeout) ?? 0,
+    approvalTimeoutMs + 10_000,
+  );
+  const decisionResult = (await callGatewayCli(
+    "exec.approval.request",
+    params.opts,
+    {
+      id: approvalId,
+      command: params.preparedCmdText,
+      commandArgv: params.approvalPlan.argv,
+      systemRunPlanV2: params.approvalPlan,
+      cwd: params.approvalPlan.cwd,
+      nodeId: params.nodeId,
+      host: "node",
+      security: params.hostSecurity,
+      ask: params.hostAsk,
+      agentId: params.approvalPlan.agentId ?? params.agentId,
+      resolvedPath: undefined,
+      sessionKey: params.approvalPlan.sessionKey ?? undefined,
+      timeoutMs: approvalTimeoutMs,
+    },
+    { transportTimeoutMs },
+  )) as { decision?: string } | null;
+  const decision =
+    decisionResult && typeof decisionResult === "object" ? (decisionResult.decision ?? null) : null;
+  if (decision === "deny") {
+    throw new Error("exec denied: user denied");
+  }
+  if (!decision) {
+    if (params.askFallback === "full") {
+      approvedByAsk = true;
+      approvalDecision = "allow-once";
+    } else if (params.askFallback !== "allowlist") {
+      throw new Error("exec denied: approval required (approval UI not available)");
+    }
+  }
+  if (decision === "allow-once") {
+    approvedByAsk = true;
+    approvalDecision = "allow-once";
+  }
+  if (decision === "allow-always") {
+    approvedByAsk = true;
+    approvalDecision = "allow-always";
+  }
+  return { approvedByAsk, approvalDecision, approvalId };
+}
+
+function buildSystemRunInvokeParams(params: {
+  nodeId: string;
+  approvalPlan: ReturnType<typeof requirePreparedRunPayload>["plan"];
+  nodeEnv: Record<string, string> | undefined;
+  timeoutMs: number | undefined;
+  invokeTimeout: number | undefined;
+  approvedByAsk: boolean;
+  approvalDecision: "allow-once" | "allow-always" | null;
+  approvalId: string | null;
+  idempotencyKey: string | undefined;
+  fallbackAgentId: string | undefined;
+  needsScreenRecording: boolean;
+}) {
+  const invokeParams: Record<string, unknown> = {
+    nodeId: params.nodeId,
+    command: "system.run",
+    params: {
+      command: params.approvalPlan.argv,
+      rawCommand: params.approvalPlan.rawCommand,
+      cwd: params.approvalPlan.cwd,
+      env: params.nodeEnv,
+      timeoutMs: params.timeoutMs,
+      needsScreenRecording: params.needsScreenRecording,
+    },
+    idempotencyKey: String(params.idempotencyKey ?? randomIdempotencyKey()),
+  };
+  if (params.approvalPlan.agentId ?? params.fallbackAgentId) {
+    (invokeParams.params as Record<string, unknown>).agentId =
+      params.approvalPlan.agentId ?? params.fallbackAgentId;
+  }
+  if (params.approvalPlan.sessionKey) {
+    (invokeParams.params as Record<string, unknown>).sessionKey = params.approvalPlan.sessionKey;
+  }
+  (invokeParams.params as Record<string, unknown>).approved = params.approvedByAsk;
+  if (params.approvalDecision) {
+    (invokeParams.params as Record<string, unknown>).approvalDecision = params.approvalDecision;
+  }
+  if (params.approvedByAsk && params.approvalId) {
+    (invokeParams.params as Record<string, unknown>).runId = params.approvalId;
+  }
+  if (params.invokeTimeout !== undefined) {
+    invokeParams.timeoutMs = params.invokeTimeout;
+  }
+  return invokeParams;
+}
+
 export function registerNodesInvokeCommands(nodes: Command) {
   nodesCallOpts(
     nodes
@@ -174,152 +390,49 @@ export function registerNodesInvokeCommands(nodes: Command) {
             throw new Error("node required (set --node or tools.exec.node)");
           }
           const nodeId = await resolveNodeId(opts, nodeQuery);
-
-          const env = parseEnvPairs(opts.env);
-          const timeoutMs = parseTimeoutMs(opts.commandTimeout);
-          const invokeTimeout = parseTimeoutMs(opts.invokeTimeout);
-
-          let argv = Array.isArray(command) ? command : [];
-          let rawCommand: string | undefined;
-          if (raw) {
-            rawCommand = raw;
-            const platform = await resolveNodePlatform(opts, nodeId);
-            argv = buildNodeShellCommand(rawCommand, platform ?? undefined);
-          }
-
-          const nodeEnv = env ? { ...env } : undefined;
-          if (nodeEnv) {
-            applyPathPrepend(nodeEnv, execDefaults?.pathPrepend, { requireExisting: true });
-          }
-
-          let approvedByAsk = false;
-          let approvalDecision: "allow-once" | "allow-always" | null = null;
-          const configuredSecurity = normalizeExecSecurity(execDefaults?.security) ?? "allowlist";
-          const requestedSecurity = normalizeExecSecurity(opts.security);
-          if (opts.security && !requestedSecurity) {
-            throw new Error("invalid --security (use deny|allowlist|full)");
-          }
-          const configuredAsk = normalizeExecAsk(execDefaults?.ask) ?? "on-miss";
-          const requestedAsk = normalizeExecAsk(opts.ask);
-          if (opts.ask && !requestedAsk) {
-            throw new Error("invalid --ask (use off|on-miss|always)");
-          }
-          const security = minSecurity(configuredSecurity, requestedSecurity ?? configuredSecurity);
-          const ask = maxAsk(configuredAsk, requestedAsk ?? configuredAsk);
-
-          const approvalsSnapshot = (await callGatewayCli("exec.approvals.node.get", opts, {
+          const preparedContext = await prepareNodesRunContext({
+            opts,
+            command,
+            raw,
             nodeId,
-          })) as {
-            file?: unknown;
-          } | null;
-          const approvalsFile =
-            approvalsSnapshot && typeof approvalsSnapshot === "object"
-              ? approvalsSnapshot.file
-              : undefined;
-          if (!approvalsFile || typeof approvalsFile !== "object") {
-            throw new Error("exec approvals unavailable");
-          }
-          const approvals = resolveExecApprovalsFromFile({
-            file: approvalsFile as ExecApprovalsFile,
             agentId,
-            overrides: { security, ask },
+            execDefaults,
           });
-          const hostSecurity = minSecurity(security, approvals.agent.security);
-          const hostAsk = maxAsk(ask, approvals.agent.ask);
-          const askFallback = approvals.agent.askFallback;
-
-          if (hostSecurity === "deny") {
+          const approvalPlan = preparedContext.prepared.plan;
+          const policy = resolveNodesRunPolicy(opts, execDefaults);
+          const approvals = await resolveNodeApprovals({
+            opts,
+            nodeId,
+            agentId,
+            security: policy.security,
+            ask: policy.ask,
+          });
+          if (approvals.hostSecurity === "deny") {
             throw new Error("exec denied: host=node security=deny");
           }
-
-          const requiresAsk = hostAsk === "always" || hostAsk === "on-miss";
-          let approvalId: string | null = null;
-          if (requiresAsk) {
-            approvalId = crypto.randomUUID();
-            const approvalTimeoutMs = DEFAULT_EXEC_APPROVAL_TIMEOUT_MS;
-            // The CLI transport timeout (opts.timeout) must be longer than the
-            // gateway-side approval wait so the connection stays alive while the
-            // user decides.  Without this override the default 35 s transport
-            // timeout races — and always loses — against the 120 s approval
-            // timeout, causing "gateway timeout after 35000ms" (#12098).
-            const transportTimeoutMs = Math.max(
-              parseTimeoutMs(opts.timeout) ?? 0,
-              approvalTimeoutMs + 10_000,
-            );
-            const decisionResult = (await callGatewayCli(
-              "exec.approval.request",
-              opts,
-              {
-                id: approvalId,
-                command: rawCommand ?? argv.join(" "),
-                commandArgv: argv,
-                cwd: opts.cwd,
-                nodeId,
-                host: "node",
-                security: hostSecurity,
-                ask: hostAsk,
-                agentId,
-                resolvedPath: undefined,
-                sessionKey: undefined,
-                timeoutMs: approvalTimeoutMs,
-              },
-              { transportTimeoutMs },
-            )) as { decision?: string } | null;
-            const decision =
-              decisionResult && typeof decisionResult === "object"
-                ? (decisionResult.decision ?? null)
-                : null;
-            if (decision === "deny") {
-              throw new Error("exec denied: user denied");
-            }
-            if (!decision) {
-              if (askFallback === "full") {
-                approvedByAsk = true;
-                approvalDecision = "allow-once";
-              } else if (askFallback === "allowlist") {
-                // defer allowlist enforcement to node host
-              } else {
-                throw new Error("exec denied: approval required (approval UI not available)");
-              }
-            }
-            if (decision === "allow-once") {
-              approvedByAsk = true;
-              approvalDecision = "allow-once";
-            }
-            if (decision === "allow-always") {
-              approvedByAsk = true;
-              approvalDecision = "allow-always";
-            }
-          }
-
-          const invokeParams: Record<string, unknown> = {
+          const approvalResult = await maybeRequestNodesRunApproval({
+            opts,
             nodeId,
-            command: "system.run",
-            params: {
-              command: argv,
-              cwd: opts.cwd,
-              env: nodeEnv,
-              timeoutMs,
-              needsScreenRecording: opts.needsScreenRecording === true,
-            },
-            idempotencyKey: String(opts.idempotencyKey ?? randomIdempotencyKey()),
-          };
-          if (agentId) {
-            (invokeParams.params as Record<string, unknown>).agentId = agentId;
-          }
-          if (rawCommand) {
-            (invokeParams.params as Record<string, unknown>).rawCommand = rawCommand;
-          }
-          (invokeParams.params as Record<string, unknown>).approved = approvedByAsk;
-          if (approvalDecision) {
-            (invokeParams.params as Record<string, unknown>).approvalDecision = approvalDecision;
-          }
-          if (approvedByAsk && approvalId) {
-            (invokeParams.params as Record<string, unknown>).runId = approvalId;
-          }
-          if (invokeTimeout !== undefined) {
-            invokeParams.timeoutMs = invokeTimeout;
-          }
+            agentId,
+            preparedCmdText: preparedContext.prepared.cmdText,
+            approvalPlan,
+            hostSecurity: approvals.hostSecurity,
+            hostAsk: approvals.hostAsk,
+            askFallback: approvals.askFallback,
+          });
+          const invokeParams = buildSystemRunInvokeParams({
+            nodeId,
+            approvalPlan,
+            nodeEnv: preparedContext.nodeEnv,
+            timeoutMs: preparedContext.timeoutMs,
+            invokeTimeout: preparedContext.invokeTimeout,
+            approvedByAsk: approvalResult.approvedByAsk,
+            approvalDecision: approvalResult.approvalDecision,
+            approvalId: approvalResult.approvalId,
+            idempotencyKey: opts.idempotencyKey,
+            fallbackAgentId: agentId,
+            needsScreenRecording: opts.needsScreenRecording === true,
+          });
 
           const result = await callGatewayCli("node.invoke", opts, invokeParams);
           if (opts.json) {

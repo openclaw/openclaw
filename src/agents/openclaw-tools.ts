@@ -118,6 +118,10 @@ export function createOpenClawTools(options?: {
     createAppControlTool(),
     createNodesTool({
       agentSessionKey: options?.agentSessionKey,
+      agentChannel: options?.agentChannel,
+      agentAccountId: options?.agentAccountId,
+      currentChannelId: options?.currentChannelId,
+      currentThreadTs: options?.currentThreadTs,
       config: options?.config,
     }),
     createCronTool({
