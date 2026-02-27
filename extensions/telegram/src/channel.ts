@@ -385,6 +385,7 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
         account.token,
         timeoutMs,
         account.config.proxy,
+        account.config.apiRoot,
       ),
     auditAccount: async ({ account, timeoutMs, probe, cfg }) => {
       const groups =
@@ -411,6 +412,7 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
         botId,
         groupIds,
         proxyUrl: account.config.proxy,
+        apiRoot: account.config.apiRoot,
         timeoutMs,
       });
       return { ...audit, unresolvedGroups, hasWildcardUnmentionedGroups };
@@ -476,6 +478,7 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
           token,
           2500,
           account.config.proxy,
+          account.config.apiRoot,
         );
         const username = probe.ok ? probe.bot?.username?.trim() : null;
         if (username) {
