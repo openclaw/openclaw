@@ -19,6 +19,20 @@ const TYPING_EMOJI = "Typing"; // Typing indicator emoji
  */
 const FEISHU_BACKOFF_CODES = new Set([99991403, 99991400]);
 
+/**
+ * Custom error class for Feishu backoff conditions detected from non-throwing
+ * SDK responses. Carries a numeric `.code` so that `isFeishuBackoffError()`
+ * recognises it when the error is caught downstream.
+ */
+export class FeishuBackoffError extends Error {
+  code: number;
+  constructor(code: number) {
+    super(`Feishu API backoff: code ${code}`);
+    this.name = "FeishuBackoffError";
+    this.code = code;
+  }
+}
+
 export type TypingIndicatorState = {
   messageId: string;
   reactionId: string | null;
@@ -109,7 +123,7 @@ export async function addTypingIndicator(params: {
       console.log(
         `[feishu] typing indicator response contains backoff code ${code}, stopping keepalive`,
       );
-      throw new Error(`Feishu API backoff: code ${code}`);
+      throw new FeishuBackoffError(code);
     }
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK response type
@@ -162,7 +176,7 @@ export async function removeTypingIndicator(params: {
       console.log(
         `[feishu] typing indicator removal response contains backoff code ${code}, stopping keepalive`,
       );
-      throw new Error(`Feishu API backoff: code ${code}`);
+      throw new FeishuBackoffError(code);
     }
   } catch (err) {
     if (isFeishuBackoffError(err)) {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isFeishuBackoffError, hasBackoffCodeInResponse } from "./typing.js";
+import { isFeishuBackoffError, hasBackoffCodeInResponse, FeishuBackoffError } from "./typing.js";
 
 describe("isFeishuBackoffError", () => {
   it("returns true for HTTP 429 (AxiosError shape)", () => {
@@ -86,5 +86,49 @@ describe("hasBackoffCodeInResponse", () => {
   it("returns false for response without code field", () => {
     const response = { data: { reaction_id: "r1" } };
     expect(hasBackoffCodeInResponse(response)).toBe(false);
+  });
+});
+
+describe("FeishuBackoffError", () => {
+  it("is detected by isFeishuBackoffError via .code property", () => {
+    const err = new FeishuBackoffError(99991403);
+    expect(isFeishuBackoffError(err)).toBe(true);
+  });
+
+  it("is detected for rate limit code 99991400", () => {
+    const err = new FeishuBackoffError(99991400);
+    expect(isFeishuBackoffError(err)).toBe(true);
+  });
+
+  it("has correct name and message", () => {
+    const err = new FeishuBackoffError(99991403);
+    expect(err.name).toBe("FeishuBackoffError");
+    expect(err.message).toBe("Feishu API backoff: code 99991403");
+    expect(err.code).toBe(99991403);
+  });
+
+  it("is an instance of Error", () => {
+    const err = new FeishuBackoffError(99991403);
+    expect(err instanceof Error).toBe(true);
+  });
+
+  it("survives catch-and-rethrow pattern", () => {
+    // Simulates the exact pattern in addTypingIndicator/removeTypingIndicator:
+    // thrown inside try, caught by catch, isFeishuBackoffError must match
+    let caught: unknown;
+    try {
+      try {
+        throw new FeishuBackoffError(99991403);
+      } catch (err) {
+        if (isFeishuBackoffError(err)) {
+          throw err; // re-thrown — this is the fix
+        }
+        // would be silently swallowed with plain Error
+        caught = "swallowed";
+      }
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(FeishuBackoffError);
   });
 });
