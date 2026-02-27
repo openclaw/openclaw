@@ -160,11 +160,24 @@ export function createExecApprovalHandlers(
         );
         return;
       }
+      // Truncate command in the broadcast payload to prevent large WebSocket frames
+      // from being silently dropped by the `dropIfSlow` backpressure mechanism.
+      // The full command remains in the manager for audit/forwarder use.
+      const MAX_BROADCAST_COMMAND_CHARS = 4096;
+      const broadcastCommand = record.request.command ?? "";
+      const broadcastRequest =
+        broadcastCommand.length > MAX_BROADCAST_COMMAND_CHARS
+          ? {
+              ...record.request,
+              command: broadcastCommand.slice(0, MAX_BROADCAST_COMMAND_CHARS),
+              commandTruncated: true,
+            }
+          : record.request;
       context.broadcast(
         "exec.approval.requested",
         {
           id: record.id,
-          request: record.request,
+          request: broadcastRequest,
           createdAtMs: record.createdAtMs,
           expiresAtMs: record.expiresAtMs,
         },
@@ -267,21 +280,28 @@ export function createExecApprovalHandlers(
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "invalid decision"));
         return;
       }
-      const snapshot = manager.getSnapshot(p.id);
+      // Support 8-char slugs shown in notifications (e.g. "/approve 7083ec31 allow-once").
+      // resolveIdByPrefix does an exact match first, then a prefix scan for unambiguous slugs.
+      const resolvedId = manager.resolveIdByPrefix(p.id);
+      if (!resolvedId) {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown approval id"));
+        return;
+      }
+      const snapshot = manager.getSnapshot(resolvedId);
       const resolvedBy = client?.connect?.client?.displayName ?? client?.connect?.client?.id;
-      const ok = manager.resolve(p.id, decision, resolvedBy ?? null);
+      const ok = manager.resolve(resolvedId, decision, resolvedBy ?? null);
       if (!ok) {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown approval id"));
         return;
       }
       context.broadcast(
         "exec.approval.resolved",
-        { id: p.id, decision, resolvedBy, ts: Date.now(), request: snapshot?.request },
+        { id: resolvedId, decision, resolvedBy, ts: Date.now(), request: snapshot?.request },
         { dropIfSlow: true },
       );
       void opts?.forwarder
         ?.handleResolved({
-          id: p.id,
+          id: resolvedId,
           decision,
           resolvedBy,
           ts: Date.now(),
