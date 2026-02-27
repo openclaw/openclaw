@@ -79,7 +79,7 @@ export function readSessionMessages(
 
 /**
  * Extract file paths from Read tool calls in agent messages.
- * Looks for tool_use blocks with name="read" and extracts path/file_path args.
+ * Supports both legacy `tool_use` blocks (`input`) and newer `toolCall` blocks (`arguments`).
  */
 export function extractReadPaths(messages: Array<{ role?: string; content?: unknown }>): string[] {
   const paths: string[] = [];
@@ -88,11 +88,34 @@ export function extractReadPaths(messages: Array<{ role?: string; content?: unkn
       continue;
     }
     for (const block of msg.content) {
-      if (block.type === "tool_use" && block.name === "read") {
-        const filePath = block.input?.file_path ?? block.input?.path;
-        if (typeof filePath === "string") {
-          paths.push(filePath);
-        }
+      if (!block || typeof block !== "object") {
+        continue;
+      }
+
+      const toolBlock = block as {
+        type?: unknown;
+        name?: unknown;
+        input?: { file_path?: unknown; path?: unknown };
+        arguments?: { file_path?: unknown; path?: unknown };
+      };
+
+      if (toolBlock.name !== "read") {
+        continue;
+      }
+
+      const isSupportedToolCallType =
+        toolBlock.type === "tool_use" || toolBlock.type === "toolCall";
+      if (!isSupportedToolCallType) {
+        continue;
+      }
+
+      const filePath =
+        toolBlock.input?.file_path ??
+        toolBlock.input?.path ??
+        toolBlock.arguments?.file_path ??
+        toolBlock.arguments?.path;
+      if (typeof filePath === "string") {
+        paths.push(filePath);
       }
     }
   }

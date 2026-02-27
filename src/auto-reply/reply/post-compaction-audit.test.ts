@@ -52,6 +52,65 @@ describe("extractReadPaths", () => {
     expect(paths).toEqual(["AGENTS.md"]);
   });
 
+  it("extracts file paths from toolCall blocks using arguments.file_path", () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            name: "read",
+            arguments: { file_path: "WORKFLOW_AUTO.md" },
+          },
+        ],
+      },
+    ];
+
+    const paths = extractReadPaths(messages);
+    expect(paths).toEqual(["WORKFLOW_AUTO.md"]);
+  });
+
+  it("extracts file paths from toolCall blocks using arguments.path", () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            name: "read",
+            arguments: { path: "memory/2026-02-16.md" },
+          },
+        ],
+      },
+    ];
+
+    const paths = extractReadPaths(messages);
+    expect(paths).toEqual(["memory/2026-02-16.md"]);
+  });
+
+  it("supports mixed tool_use and toolCall formats", () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool_use",
+            name: "read",
+            input: { file_path: "WORKFLOW_AUTO.md" },
+          },
+          {
+            type: "toolCall",
+            name: "read",
+            arguments: { path: "memory/2026-02-16.md" },
+          },
+        ],
+      },
+    ];
+
+    const paths = extractReadPaths(messages);
+    expect(paths).toEqual(["WORKFLOW_AUTO.md", "memory/2026-02-16.md"]);
+  });
+
   it("ignores non-assistant messages", () => {
     const messages = [
       {
