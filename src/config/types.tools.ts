@@ -296,6 +296,8 @@ export type AgentToolsConfig = {
   sandbox?: {
     tools?: {
       allow?: string[];
+      /** Additional allowlist entries merged into the sandbox allow list. */
+      alsoAllow?: string[];
       deny?: string[];
     };
   };
@@ -586,6 +588,8 @@ export type ToolsConfig = {
   sandbox?: {
     tools?: {
       allow?: string[];
+      /** Additional allowlist entries merged into the sandbox allow list. */
+      alsoAllow?: string[];
       deny?: string[];
     };
   };
