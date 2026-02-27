@@ -658,11 +658,15 @@ export async function startGatewayServer(
     void cron.start().catch((err) => logCron.error(`failed to start: ${String(err)}`));
   }
 
-  // Recover pending outbound deliveries from previous crash/restart.
+  // Migrate legacy file-queue entries into SQLite outbox and recover pending deliveries.
   if (!minimalTestGateway) {
     void (async () => {
-      const { recoverPendingDeliveries } = await import("../infra/outbound/delivery-queue.js");
+      const { importLegacyFileQueue, recoverPendingDeliveries } =
+        await import("../infra/outbound/delivery-queue.js");
       const { deliverOutboundPayloads } = await import("../infra/outbound/deliver.js");
+      await importLegacyFileQueue().catch((err) =>
+        log.warn(`Legacy queue import failed: ${String(err)}`),
+      );
       const logRecovery = log.child("delivery-recovery");
       await recoverPendingDeliveries({
         deliver: deliverOutboundPayloads,

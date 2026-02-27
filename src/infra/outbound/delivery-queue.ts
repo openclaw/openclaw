@@ -3,12 +3,13 @@ import path from "node:path";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveStateDir } from "../../config/paths.js";
+import { logVerbose } from "../../globals.js";
+import { getLifecycleDb, runLifecycleTransaction } from "../message-lifecycle/db.js";
 import { generateSecureUuid } from "../secure-random.js";
 import type { OutboundChannel } from "./targets.js";
 
-const QUEUE_DIRNAME = "delivery-queue";
-const FAILED_DIRNAME = "failed";
 const MAX_RETRIES = 5;
+export { MAX_RETRIES };
 
 /** Backoff delays in milliseconds indexed by retry count (1-based). */
 const BACKOFF_MS: readonly number[] = [
@@ -17,6 +18,11 @@ const BACKOFF_MS: readonly number[] = [
   120_000, // retry 3: 2m
   600_000, // retry 4: 10m
 ];
+
+/** Default expiry for stale queued messages. */
+const DEFAULT_OUTBOX_MAX_AGE_MS = 30 * 60_000;
+/** Terminal outbox rows older than this are pruned. */
+export const OUTBOX_PRUNE_AGE_MS = 48 * 60 * 60_000;
 
 type DeliveryMirrorPayload = {
   sessionKey: string;
@@ -29,11 +35,6 @@ type QueuedDeliveryPayload = {
   channel: Exclude<OutboundChannel, "none">;
   to: string;
   accountId?: string;
-  /**
-   * Original payloads before plugin hooks. On recovery, hooks re-run on these
-   * payloads — this is intentional since hooks are stateless transforms and
-   * should produce the same result on replay.
-   */
   payloads: ReplyPayload[];
   threadId?: string | number | null;
   replyToId?: string | null;
@@ -42,6 +43,8 @@ type QueuedDeliveryPayload = {
   silent?: boolean;
   mirror?: DeliveryMirrorPayload;
 };
+
+type QueuedDeliveryParams = QueuedDeliveryPayload;
 
 export interface QueuedDelivery extends QueuedDeliveryPayload {
   id: string;
@@ -58,35 +61,57 @@ export type RecoverySummary = {
   deferredBackoff: number;
 };
 
+export type DeliverFn = (
+  params: {
+    cfg: OpenClawConfig;
+  } & QueuedDeliveryParams & {
+      skipQueue?: boolean;
+    },
+) => Promise<unknown>;
+
+export interface RecoveryLogger {
+  info(msg: string): void;
+  warn(msg: string): void;
+  error(msg: string): void;
+}
+
 function resolveQueueDir(stateDir?: string): string {
   const base = stateDir ?? resolveStateDir();
-  return path.join(base, QUEUE_DIRNAME);
+  return path.join(base, "delivery-queue");
 }
 
-function resolveFailedDir(stateDir?: string): string {
-  return path.join(resolveQueueDir(stateDir), FAILED_DIRNAME);
+function resolveDeliveryMaxAgeMs(cfg: OpenClawConfig): number {
+  const configured = cfg.messages?.delivery?.maxAgeMs;
+  if (typeof configured !== "number" || !Number.isFinite(configured) || configured <= 0) {
+    return DEFAULT_OUTBOX_MAX_AGE_MS;
+  }
+  return Math.floor(configured);
 }
 
-/** Ensure the queue directory (and failed/ subdirectory) exist. */
+function resolveExpireAction(cfg: OpenClawConfig): "fail" | "deliver" {
+  const action = cfg.messages?.delivery?.expireAction;
+  return action === "deliver" ? "deliver" : "fail";
+}
+
 export async function ensureQueueDir(stateDir?: string): Promise<string> {
+  // Kept for backward compatibility with callers/tests that expect this helper.
+  // SQLite-backed queue does not require directory structure, but we retain the
+  // legacy queue path for one-time import support.
   const queueDir = resolveQueueDir(stateDir);
   await fs.promises.mkdir(queueDir, { recursive: true, mode: 0o700 });
-  await fs.promises.mkdir(resolveFailedDir(stateDir), { recursive: true, mode: 0o700 });
+  await fs.promises.mkdir(path.join(queueDir, "failed"), { recursive: true, mode: 0o700 });
   return queueDir;
 }
 
-/** Persist a delivery entry to disk before attempting send. Returns the entry ID. */
-type QueuedDeliveryParams = QueuedDeliveryPayload;
-
+/** Persist a delivery entry before attempting send. Returns the entry ID. */
 export async function enqueueDelivery(
   params: QueuedDeliveryParams,
   stateDir?: string,
 ): Promise<string> {
-  const queueDir = await ensureQueueDir(stateDir);
+  const db = getLifecycleDb(stateDir);
   const id = generateSecureUuid();
-  const entry: QueuedDelivery = {
-    id,
-    enqueuedAt: Date.now(),
+  const now = Date.now();
+  const payload = JSON.stringify({
     channel: params.channel,
     to: params.to,
     accountId: params.accountId,
@@ -97,106 +122,153 @@ export async function enqueueDelivery(
     gifPlayback: params.gifPlayback,
     silent: params.silent,
     mirror: params.mirror,
-    retryCount: 0,
-  };
-  const filePath = path.join(queueDir, `${id}.json`);
-  const tmp = `${filePath}.${process.pid}.tmp`;
-  const json = JSON.stringify(entry, null, 2);
-  await fs.promises.writeFile(tmp, json, { encoding: "utf-8", mode: 0o600 });
-  await fs.promises.rename(tmp, filePath);
+  });
+  db.prepare(
+    `INSERT INTO message_outbox
+       (id, turn_id, channel, account_id, target, payload, queued_at, status, attempt_count, next_attempt_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?)`,
+  ).run(id, null, params.channel, params.accountId ?? "", params.to, payload, now, now);
   return id;
 }
 
-/** Remove a successfully delivered entry from the queue. */
+/** Mark a delivery as successful. */
 export async function ackDelivery(id: string, stateDir?: string): Promise<void> {
-  const filePath = path.join(resolveQueueDir(stateDir), `${id}.json`);
+  const db = getLifecycleDb(stateDir);
   try {
-    await fs.promises.unlink(filePath);
+    db.prepare(
+      `UPDATE message_outbox
+         SET status='delivered', delivered_at=?, completed_at=?
+       WHERE id=?`,
+    ).run(Date.now(), Date.now(), id);
   } catch (err) {
-    const code =
-      err && typeof err === "object" && "code" in err
-        ? String((err as { code?: unknown }).code)
-        : null;
-    if (code !== "ENOENT") {
-      throw err;
-    }
-    // Already removed — no-op.
+    logVerbose(`delivery-queue: ackDelivery failed: ${String(err)}`);
   }
 }
 
-/** Update a queue entry after a failed delivery attempt. */
+/** Record a failed delivery attempt. */
 export async function failDelivery(id: string, error: string, stateDir?: string): Promise<void> {
-  const filePath = path.join(resolveQueueDir(stateDir), `${id}.json`);
-  const raw = await fs.promises.readFile(filePath, "utf-8");
-  const entry: QueuedDelivery = JSON.parse(raw);
-  entry.retryCount += 1;
-  entry.lastAttemptAt = Date.now();
-  entry.lastError = error;
-  const tmp = `${filePath}.${process.pid}.tmp`;
-  await fs.promises.writeFile(tmp, JSON.stringify(entry, null, 2), {
-    encoding: "utf-8",
-    mode: 0o600,
-  });
-  await fs.promises.rename(tmp, filePath);
-}
-
-/** Load all pending delivery entries from the queue directory. */
-export async function loadPendingDeliveries(stateDir?: string): Promise<QueuedDelivery[]> {
-  const queueDir = resolveQueueDir(stateDir);
-  let files: string[];
+  const db = getLifecycleDb(stateDir);
   try {
-    files = await fs.promises.readdir(queueDir);
+    const row = db.prepare(`SELECT attempt_count FROM message_outbox WHERE id=?`).get(id) as
+      | { attempt_count: number }
+      | undefined;
+    if (!row) {
+      return;
+    }
+    const now = Date.now();
+    if (isPermanentDeliveryError(error)) {
+      db.prepare(
+        `UPDATE message_outbox
+           SET status='failed_terminal',
+               error_class='permanent',
+               last_error=?,
+               completed_at=?,
+               terminal_reason=?
+         WHERE id=?`,
+      ).run(error, now, error, id);
+      return;
+    }
+    const nextCount = row.attempt_count + 1;
+    if (nextCount >= MAX_RETRIES) {
+      db.prepare(
+        `UPDATE message_outbox
+           SET status='failed_terminal',
+               error_class='terminal',
+               attempt_count=?,
+               last_error=?,
+               last_attempt_at=?,
+               completed_at=?,
+               terminal_reason=?
+         WHERE id=?`,
+      ).run(nextCount, error, now, now, error, id);
+      return;
+    }
+    db.prepare(
+      `UPDATE message_outbox
+         SET status='failed_retryable',
+             attempt_count=?,
+             last_error=?,
+             last_attempt_at=?,
+             next_attempt_at=?
+       WHERE id=?`,
+    ).run(nextCount, error, now, now + computeBackoffMs(nextCount), id);
   } catch (err) {
-    const code =
-      err && typeof err === "object" && "code" in err
-        ? String((err as { code?: unknown }).code)
-        : null;
-    if (code === "ENOENT") {
-      return [];
-    }
-    throw err;
+    logVerbose(`delivery-queue: failDelivery failed: ${String(err)}`);
   }
-  const entries: QueuedDelivery[] = [];
-  for (const file of files) {
-    if (!file.endsWith(".json")) {
-      continue;
-    }
-    const filePath = path.join(queueDir, file);
-    try {
-      const stat = await fs.promises.stat(filePath);
-      if (!stat.isFile()) {
-        continue;
-      }
-      const raw = await fs.promises.readFile(filePath, "utf-8");
-      const parsed = JSON.parse(raw) as QueuedDelivery;
-      const { entry, migrated } = normalizeLegacyQueuedDeliveryEntry(parsed);
-      if (migrated) {
-        const tmp = `${filePath}.${process.pid}.tmp`;
-        await fs.promises.writeFile(tmp, JSON.stringify(entry, null, 2), {
-          encoding: "utf-8",
-          mode: 0o600,
+}
+
+/** Load pending queue entries eligible for retry now. */
+export async function loadPendingDeliveries(stateDir?: string): Promise<QueuedDelivery[]> {
+  const db = getLifecycleDb(stateDir);
+  try {
+    const now = Date.now();
+    const rows = db
+      .prepare(
+        `SELECT id, payload, queued_at, attempt_count, last_attempt_at, last_error
+           FROM message_outbox
+          WHERE status IN ('queued', 'failed_retryable')
+            AND next_attempt_at <= ?
+          ORDER BY queued_at ASC`,
+      )
+      .all(now) as Array<{
+      id: string;
+      payload: string;
+      queued_at: number;
+      attempt_count: number;
+      last_attempt_at: number | null;
+      last_error: string | null;
+    }>;
+
+    const entries: QueuedDelivery[] = [];
+    for (const row of rows) {
+      try {
+        const parsed = JSON.parse(row.payload) as QueuedDeliveryPayload;
+        entries.push({
+          ...parsed,
+          id: row.id,
+          enqueuedAt: row.queued_at,
+          retryCount: row.attempt_count,
+          ...(row.last_attempt_at != null ? { lastAttemptAt: row.last_attempt_at } : {}),
+          ...(row.last_error ? { lastError: row.last_error } : {}),
         });
-        await fs.promises.rename(tmp, filePath);
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        db.prepare(
+          `UPDATE message_outbox
+             SET status='failed_terminal',
+                 error_class='terminal',
+                 last_error=?,
+                 terminal_reason=?,
+                 completed_at=?
+           WHERE id=?`,
+        ).run(`invalid payload: ${errMsg}`, `invalid payload: ${errMsg}`, Date.now(), row.id);
       }
-      entries.push(entry);
-    } catch {
-      // Skip malformed or inaccessible entries.
     }
+    return entries;
+  } catch (err) {
+    logVerbose(`delivery-queue: loadPendingDeliveries failed: ${String(err)}`);
+    return [];
   }
-  return entries;
 }
 
-/** Move a queue entry to the failed/ subdirectory. */
+/** Mark an entry as terminal failed. */
 export async function moveToFailed(id: string, stateDir?: string): Promise<void> {
-  const queueDir = resolveQueueDir(stateDir);
-  const failedDir = resolveFailedDir(stateDir);
-  await fs.promises.mkdir(failedDir, { recursive: true, mode: 0o700 });
-  const src = path.join(queueDir, `${id}.json`);
-  const dest = path.join(failedDir, `${id}.json`);
-  await fs.promises.rename(src, dest);
+  const db = getLifecycleDb(stateDir);
+  try {
+    db.prepare(
+      `UPDATE message_outbox
+         SET status='failed_terminal',
+             error_class='terminal',
+             terminal_reason=COALESCE(terminal_reason,'moved to failed'),
+             completed_at=?
+       WHERE id=?`,
+    ).run(Date.now(), id);
+  } catch (err) {
+    logVerbose(`delivery-queue: moveToFailed failed: ${String(err)}`);
+  }
 }
 
-/** Compute the backoff delay in ms for a given retry count. */
+/** Compute retry backoff in milliseconds. */
 export function computeBackoffMs(retryCount: number): number {
   if (retryCount <= 0) {
     return 0;
@@ -220,9 +292,7 @@ export function isEntryEligibleForRecoveryRetry(
     typeof entry.lastAttemptAt === "number" &&
     Number.isFinite(entry.lastAttemptAt) &&
     entry.lastAttemptAt > 0;
-  const baseAttemptAt = hasAttemptTimestamp
-    ? (entry.lastAttemptAt ?? entry.enqueuedAt)
-    : entry.enqueuedAt;
+  const baseAttemptAt = hasAttemptTimestamp ? entry.lastAttemptAt! : entry.enqueuedAt;
   const nextEligibleAt = baseAttemptAt + backoff;
   if (now >= nextEligibleAt) {
     return { eligible: true };
@@ -230,71 +300,116 @@ export function isEntryEligibleForRecoveryRetry(
   return { eligible: false, remainingBackoffMs: nextEligibleAt - now };
 }
 
-function normalizeLegacyQueuedDeliveryEntry(entry: QueuedDelivery): {
-  entry: QueuedDelivery;
-  migrated: boolean;
-} {
-  const hasAttemptTimestamp =
-    typeof entry.lastAttemptAt === "number" &&
-    Number.isFinite(entry.lastAttemptAt) &&
-    entry.lastAttemptAt > 0;
-  if (hasAttemptTimestamp || entry.retryCount <= 0) {
-    return { entry, migrated: false };
+/**
+ * Import legacy file queue entries into SQLite outbox.
+ * This is deterministic and idempotent for existing IDs.
+ */
+export async function importLegacyFileQueue(stateDir?: string): Promise<void> {
+  const queueDir = resolveQueueDir(stateDir);
+  const db = getLifecycleDb(stateDir);
+  let files: string[];
+  try {
+    files = fs.readdirSync(queueDir);
+  } catch {
+    return;
   }
-  const hasEnqueuedTimestamp =
-    typeof entry.enqueuedAt === "number" &&
-    Number.isFinite(entry.enqueuedAt) &&
-    entry.enqueuedAt > 0;
-  if (!hasEnqueuedTimestamp) {
-    return { entry, migrated: false };
+  for (const file of files) {
+    if (!file.endsWith(".json")) {
+      continue;
+    }
+    const filePath = path.join(queueDir, file);
+    try {
+      const stat = fs.statSync(filePath);
+      if (!stat.isFile()) {
+        continue;
+      }
+      const raw = fs.readFileSync(filePath, "utf-8");
+      const entry = JSON.parse(raw) as QueuedDelivery;
+      if (!entry.id || !entry.channel || !entry.to) {
+        continue;
+      }
+      const payload = JSON.stringify({
+        channel: entry.channel,
+        to: entry.to,
+        accountId: entry.accountId,
+        payloads: entry.payloads,
+        threadId: entry.threadId,
+        replyToId: entry.replyToId,
+        bestEffort: entry.bestEffort,
+        gifPlayback: entry.gifPlayback,
+        silent: entry.silent,
+        mirror: entry.mirror,
+      });
+      runLifecycleTransaction(db, () => {
+        db.prepare(
+          `INSERT OR IGNORE INTO message_outbox
+             (id, turn_id, channel, account_id, target, payload, queued_at, status,
+              attempt_count, next_attempt_at, last_error, last_attempt_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ).run(
+          entry.id,
+          null,
+          entry.channel,
+          entry.accountId ?? "",
+          entry.to,
+          payload,
+          entry.enqueuedAt ?? Date.now(),
+          "queued",
+          entry.retryCount ?? 0,
+          entry.lastAttemptAt ?? entry.enqueuedAt ?? Date.now(),
+          entry.lastError ?? null,
+          entry.lastAttemptAt ?? null,
+        );
+      });
+      fs.unlinkSync(filePath);
+    } catch (err) {
+      logVerbose(`delivery-queue: failed to import ${filePath}: ${String(err)}`);
+    }
   }
-  return {
-    entry: {
-      ...entry,
-      lastAttemptAt: entry.enqueuedAt,
-    },
-    migrated: true,
-  };
-}
-
-export type DeliverFn = (
-  params: {
-    cfg: OpenClawConfig;
-  } & QueuedDeliveryParams & {
-      skipQueue?: boolean;
-    },
-) => Promise<unknown>;
-
-export interface RecoveryLogger {
-  info(msg: string): void;
-  warn(msg: string): void;
-  error(msg: string): void;
 }
 
 /**
- * On gateway startup, scan the delivery queue and retry any pending entries.
- * Uses exponential backoff and moves entries that exceed MAX_RETRIES to failed/.
+ * Retry pending queue entries.
  */
 export async function recoverPendingDeliveries(opts: {
   deliver: DeliverFn;
   log: RecoveryLogger;
   cfg: OpenClawConfig;
   stateDir?: string;
-  /** Maximum wall-clock time for recovery in ms. Remaining entries are deferred to next restart. Default: 60 000. */
   maxRecoveryMs?: number;
 }): Promise<RecoverySummary> {
-  const pending = await loadPendingDeliveries(opts.stateDir);
-  if (pending.length === 0) {
-    return { recovered: 0, failed: 0, skippedMaxRetries: 0, deferredBackoff: 0 };
+  if (resolveExpireAction(opts.cfg) === "fail") {
+    const db = getLifecycleDb(opts.stateDir);
+    const staleCutoff = Date.now() - resolveDeliveryMaxAgeMs(opts.cfg);
+    try {
+      db.prepare(
+        `UPDATE message_outbox
+           SET status='expired',
+               error_class='terminal',
+               last_error='expired: queued_at too old',
+               terminal_reason='expired',
+               completed_at=?
+         WHERE status IN ('queued','failed_retryable')
+           AND queued_at < ?`,
+      ).run(Date.now(), staleCutoff);
+    } catch (err) {
+      logVerbose(`delivery-queue: expiry update failed: ${String(err)}`);
+    }
   }
 
-  // Process oldest first.
-  pending.sort((a, b) => a.enqueuedAt - b.enqueuedAt);
+  const pending = await loadPendingDeliveries(opts.stateDir);
 
+  if (pending.length === 0) {
+    return {
+      recovered: 0,
+      failed: 0,
+      skippedMaxRetries: 0,
+      deferredBackoff: 0,
+    };
+  }
   opts.log.info(`Found ${pending.length} pending delivery entries — starting recovery`);
 
   const deadline = Date.now() + (opts.maxRecoveryMs ?? 60_000);
-
   let recovered = 0;
   let failed = 0;
   let skippedMaxRetries = 0;
@@ -304,31 +419,19 @@ export async function recoverPendingDeliveries(opts: {
     const now = Date.now();
     if (now >= deadline) {
       const deferred = pending.length - recovered - failed - skippedMaxRetries - deferredBackoff;
-      opts.log.warn(`Recovery time budget exceeded — ${deferred} entries deferred to next restart`);
+      opts.log.warn(`Recovery time budget exceeded — ${deferred} entries deferred to next tick`);
       break;
     }
     if (entry.retryCount >= MAX_RETRIES) {
-      opts.log.warn(
-        `Delivery ${entry.id} exceeded max retries (${entry.retryCount}/${MAX_RETRIES}) — moving to failed/`,
-      );
-      try {
-        await moveToFailed(entry.id, opts.stateDir);
-      } catch (err) {
-        opts.log.error(`Failed to move entry ${entry.id} to failed/: ${String(err)}`);
-      }
+      await moveToFailed(entry.id, opts.stateDir);
       skippedMaxRetries += 1;
       continue;
     }
-
-    const retryEligibility = isEntryEligibleForRecoveryRetry(entry, now);
-    if (!retryEligibility.eligible) {
+    const eligibility = isEntryEligibleForRecoveryRetry(entry, now);
+    if (!eligibility.eligible) {
       deferredBackoff += 1;
-      opts.log.info(
-        `Delivery ${entry.id} not ready for retry yet — backoff ${retryEligibility.remainingBackoffMs}ms remaining`,
-      );
       continue;
     }
-
     try {
       await opts.deliver({
         cfg: opts.cfg,
@@ -342,40 +445,23 @@ export async function recoverPendingDeliveries(opts: {
         gifPlayback: entry.gifPlayback,
         silent: entry.silent,
         mirror: entry.mirror,
-        skipQueue: true, // Prevent re-enqueueing during recovery
+        skipQueue: true,
       });
       await ackDelivery(entry.id, opts.stateDir);
       recovered += 1;
-      opts.log.info(`Recovered delivery ${entry.id} to ${entry.channel}:${entry.to}`);
     } catch (err) {
-      const errMsg = err instanceof Error ? err.message : String(err);
-      if (isPermanentDeliveryError(errMsg)) {
-        opts.log.warn(`Delivery ${entry.id} hit permanent error — moving to failed/: ${errMsg}`);
-        try {
-          await moveToFailed(entry.id, opts.stateDir);
-        } catch (moveErr) {
-          opts.log.error(`Failed to move entry ${entry.id} to failed/: ${String(moveErr)}`);
-        }
-        failed += 1;
-        continue;
-      }
-      try {
-        await failDelivery(entry.id, errMsg, opts.stateDir);
-      } catch {
-        // Best-effort update.
+      const message = err instanceof Error ? err.message : String(err);
+      if (isPermanentDeliveryError(message)) {
+        await moveToFailed(entry.id, opts.stateDir);
+      } else {
+        await failDelivery(entry.id, message, opts.stateDir);
       }
       failed += 1;
-      opts.log.warn(`Retry failed for delivery ${entry.id}: ${errMsg}`);
     }
   }
 
-  opts.log.info(
-    `Delivery recovery complete: ${recovered} recovered, ${failed} failed, ${skippedMaxRetries} skipped (max retries), ${deferredBackoff} deferred (backoff)`,
-  );
   return { recovered, failed, skippedMaxRetries, deferredBackoff };
 }
-
-export { MAX_RETRIES };
 
 const PERMANENT_ERROR_PATTERNS: readonly RegExp[] = [
   /no conversation reference found/i,
@@ -390,4 +476,18 @@ const PERMANENT_ERROR_PATTERNS: readonly RegExp[] = [
 
 export function isPermanentDeliveryError(error: string): boolean {
   return PERMANENT_ERROR_PATTERNS.some((re) => re.test(error));
+}
+
+export function pruneOutbox(ageMs: number, stateDir?: string): void {
+  const db = getLifecycleDb(stateDir);
+  const cutoff = Date.now() - ageMs;
+  try {
+    db.prepare(
+      `DELETE FROM message_outbox
+        WHERE status IN ('delivered','failed_terminal','expired')
+          AND COALESCE(completed_at, delivered_at, queued_at) < ?`,
+    ).run(cutoff);
+  } catch (err) {
+    logVerbose(`delivery-queue: pruneOutbox failed: ${String(err)}`);
+  }
 }
