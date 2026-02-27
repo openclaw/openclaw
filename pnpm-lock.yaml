@@ -250,6 +250,9 @@ importers:
       '@discordjs/opus':
         specifier: ^0.10.0
         version: 0.10.0
+      '@rolldown/binding-darwin-arm64':
+        specifier: 1.0.0-rc.3
+        version: 1.0.0-rc.3
 
   extensions/acpx:
     dependencies:
@@ -260,6 +263,28 @@ importers:
   extensions/bluebubbles: {}
 
   extensions/copilot-proxy: {}
+
+  extensions/dejoy:
+    dependencies:
+      '@matrix-org/matrix-sdk-crypto-nodejs':
+        specifier: ^0.4.0
+        version: 0.4.0
+      '@vector-im/matrix-bot-sdk':
+        specifier: 0.8.0-element.3
+        version: 0.8.0-element.3(@cypress/request@3.0.10)
+      markdown-it:
+        specifier: 14.1.0
+        version: 14.1.0
+      music-metadata:
+        specifier: ^11.12.0
+        version: 11.12.1
+      zod:
+        specifier: ^4.3.6
+        version: 4.3.6
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
 
   extensions/diagnostics-otel:
     dependencies:
@@ -4418,6 +4443,10 @@ packages:
   make-dir@4.0.0:
     resolution: {integrity: sha512-hXdUTZYIVOt1Ex//jAQi+wTZZpUpwBj/0QsOzqegb3rGMMeJiSEu5xLHnYfBrRV4RH2+OCSOO95Is/7x1WJ4bw==}
     engines: {node: '>=10'}
+
+  markdown-it@14.1.0:
+    resolution: {integrity: sha512-a54IwgWPaeBCAAsv13YgmALOF1elABB08FxO9i+r4VFk5Vl4pKokRPeX8u5TCgSsPi6ec1otfLjdOpVcgbpshg==}
+    hasBin: true
 
   markdown-it@14.1.1:
     resolution: {integrity: sha512-BuU2qnTti9YKgK5N+IeMubp14ZUKUUw7yeJbkjtosvHiP0AZ5c8IAgEMk79D0eC8F23r4Ac/q8cAIFdm2FtyoA==}
@@ -10238,6 +10267,15 @@ snapshots:
   make-dir@4.0.0:
     dependencies:
       semver: 7.7.4
+
+  markdown-it@14.1.0:
+    dependencies:
+      argparse: 2.0.1
+      entities: 4.5.0
+      linkify-it: 5.0.0
+      mdurl: 2.0.0
+      punycode.js: 2.3.1
+      uc.micro: 2.1.0
 
   markdown-it@14.1.1:
     dependencies:

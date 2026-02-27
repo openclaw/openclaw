@@ -230,7 +230,8 @@
     "node-llama-cpp": "3.15.1"
   },
   "optionalDependencies": {
-    "@discordjs/opus": "^0.10.0"
+    "@discordjs/opus": "^0.10.0",
+    "@rolldown/binding-darwin-arm64": "1.0.0-rc.3"
   },
   "engines": {
     "node": ">=22.12.0"

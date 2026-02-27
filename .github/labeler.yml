@@ -41,6 +41,11 @@
       - any-glob-to-any-file:
           - "extensions/matrix/**"
           - "docs/channels/matrix.md"
+"channel: dejoy":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/dejoy/**"
+          - "docs/channels/dejoy.md"
 "channel: mattermost":
   - changed-files:
       - any-glob-to-any-file:

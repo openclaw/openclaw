@@ -1,0 +1,36 @@
+{
+  "name": "@openclaw/dejoy",
+  "version": "2026.2.6-3",
+  "description": "OpenClaw DeJoy channel plugin",
+  "type": "module",
+  "dependencies": {
+    "@matrix-org/matrix-sdk-crypto-nodejs": "^0.4.0",
+    "@vector-im/matrix-bot-sdk": "0.8.0-element.3",
+    "markdown-it": "14.1.0",
+    "music-metadata": "^11.12.0",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "channel": {
+      "id": "dejoy",
+      "label": "DeJoy",
+      "selectionLabel": "DeJoy (plugin)",
+      "docsPath": "/channels/dejoy",
+      "docsLabel": "dejoy",
+      "blurb": "open protocol; install the plugin to enable.",
+      "order": 70,
+      "quickstartAllowFrom": true
+    },
+    "install": {
+      "npmSpec": "@openclaw/dejoy",
+      "localPath": "extensions/dejoy",
+      "defaultChoice": "npm"
+    }
+  }
+}
