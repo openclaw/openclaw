@@ -1,8 +1,10 @@
-# How OpenClaw Works
+# How OpenClaw Works — A Technical Overview
+
+This document is structured in two layers. Part 1 (below) is a high-level overview suitable for anyone who wants to understand what OpenClaw does and how it fits together. Parts 2 through 6 go deeper: deployment and installation, features and capabilities, internal architecture, performance and reliability, and a comparison with alternatives.
 
 ## What is OpenClaw
 
-OpenClaw is a personal AI assistant that runs locally on your machine as a single background process called the Gateway. It connects to the messaging channels you already use -- WhatsApp, Telegram, Slack, Discord, Signal, iMessage, and others -- as well as companion apps on macOS, iOS, and Android. You message it like you would message a person: ask a question, give it a task, or have a conversation. Behind the scenes, it thinks using a large language model, takes action with tools on your computer, and replies through the same channel you wrote from. Because the Gateway runs on your own hardware, all of your data -- conversations, memory files, and tool output -- stays on your machine.
+OpenClaw is a personal AI assistant that runs locally on your machine as a single background process called the Gateway. It connects to the messaging channels you already use -- WhatsApp, Telegram, Slack, Discord, Signal, iMessage, Feishu, and others -- as well as companion apps on macOS, iOS, and Android. You message it like you would message a person: ask a question, give it a task, or have a conversation. Behind the scenes, it thinks using a large language model, takes action with tools on your computer, and replies through the same channel you wrote from. Because the Gateway runs on your own hardware, all of your data -- conversations, memory files, and tool output -- stays on your machine.
 
 ## The Agent Workflow
 
@@ -40,7 +42,7 @@ The second layer is **session history**. Each conversation is stored as a transc
 
 ## LLM-Driven Logic
 
-The agent runtime assembles a system prompt from your bootstrap files, workspace context, and conversation history, then sends it to the configured language model. The model decides what to do next: reply with text, call a tool, or both. When it calls a tool, the result is fed back into the model for continued reasoning, and the loop repeats until a final text reply is produced. OpenClaw supports multiple model providers -- including Anthropic, OpenAI, Google, and Mistral -- with automatic fallback if one provider returns an error. Thinking and reasoning depth can be adjusted per request.
+The agent runtime assembles a system prompt from your bootstrap files, workspace context, and conversation history, then sends it to the configured language model. The model decides what to do next: reply with text, call a tool, or both. When it calls a tool, the result is fed back into the model for continued reasoning, and the loop repeats until a final text reply is produced. OpenClaw supports multiple model providers -- including Anthropic, OpenAI, Google, Mistral, DeepSeek, and Qwen -- with automatic fallback if one provider returns an error. Thinking and reasoning depth can be adjusted per request.
 
 ## Local Computer Interaction
 
