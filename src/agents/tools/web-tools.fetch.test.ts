@@ -463,6 +463,63 @@ describe("web_fetch extraction fallbacks", () => {
     expect(message).toContain("Oops");
   });
 
+  it("discards CSS error responses and falls back to statusText", async () => {
+    const css = '@charset "UTF-8";.Modal-bg{background:#000000b3}body{margin:0}';
+    installMockFetch(
+      (input: RequestInfo | URL) =>
+        Promise.resolve(
+          errorHtmlResponse(css, 404, requestUrl(input), "text/css; charset=utf-8"),
+        ) as Promise<Response>,
+    );
+
+    const tool = createFetchTool({ firecrawl: { enabled: false } });
+    const message = await captureToolErrorMessage({
+      tool,
+      url: "https://example.com/style.css",
+    });
+
+    expect(message).toContain("Web fetch failed (404):");
+    // Should NOT contain raw CSS
+    expect(message).not.toContain("@charset");
+    expect(message).not.toContain(".Modal-bg");
+  });
+
+  it("discards image error responses via content-type", async () => {
+    const binary = "\x89PNG\r\n\x1a\nfake-image-bytes";
+    installMockFetch(
+      (input: RequestInfo | URL) =>
+        Promise.resolve(
+          errorHtmlResponse(binary, 404, requestUrl(input), "image/png"),
+        ) as Promise<Response>,
+    );
+
+    const tool = createFetchTool({ firecrawl: { enabled: false } });
+    const message = await captureToolErrorMessage({
+      tool,
+      url: "https://example.com/logo.png",
+    });
+
+    expect(message).toContain("Web fetch failed (404):");
+    expect(message).not.toContain("PNG");
+  });
+
+  it("detects CSS body when content-type header is missing", async () => {
+    const css = "@font-face { font-family: test; src: url(test.woff2); }";
+    installMockFetch(
+      (input: RequestInfo | URL) =>
+        Promise.resolve(errorHtmlResponse(css, 404, requestUrl(input), null)) as Promise<Response>,
+    );
+
+    const tool = createFetchTool({ firecrawl: { enabled: false } });
+    const message = await captureToolErrorMessage({
+      tool,
+      url: "https://example.com/fonts.css",
+    });
+
+    expect(message).toContain("Web fetch failed (404):");
+    expect(message).not.toContain("@font-face");
+  });
+
   it("wraps firecrawl error details", async () => {
     installMockFetch((input: RequestInfo | URL) => {
       const url = requestUrl(input);

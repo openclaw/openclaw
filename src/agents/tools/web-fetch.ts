@@ -209,6 +209,27 @@ function looksLikeHtml(value: string): boolean {
   return head.startsWith("<!doctype html") || head.startsWith("<html");
 }
 
+/** Content types that are never useful as error detail text. */
+function isNonTextualContentType(ct: string): boolean {
+  return (
+    ct.includes("text/css") ||
+    ct.includes("image/") ||
+    ct.includes("font/") ||
+    ct.includes("audio/") ||
+    ct.includes("video/") ||
+    ct.includes("application/octet-stream") ||
+    ct.includes("application/wasm") ||
+    ct.includes("application/pdf") ||
+    ct.includes("application/zip")
+  );
+}
+
+/** Body-sniff for CSS when content-type header is missing or generic. */
+function looksLikeCss(value: string): boolean {
+  const head = value.trimStart().slice(0, 256);
+  return /^(@charset|@import|@font-face|@media|@keyframes)\b/.test(head);
+}
+
 function formatWebFetchErrorDetail(params: {
   detail: string;
   contentType?: string | null;
@@ -218,9 +239,13 @@ function formatWebFetchErrorDetail(params: {
   if (!detail) {
     return "";
   }
+  const ct = contentType?.toLowerCase() ?? "";
+  // CSS, images, fonts, and other binary types are never useful as error details
+  if (isNonTextualContentType(ct) || looksLikeCss(detail)) {
+    return "";
+  }
   let text = detail;
-  const contentTypeLower = contentType?.toLowerCase();
-  if (contentTypeLower?.includes("text/html") || looksLikeHtml(detail)) {
+  if (ct.includes("text/html") || looksLikeHtml(detail)) {
     const rendered = htmlToMarkdown(detail);
     const withTitle = rendered.title ? `${rendered.title}\n${rendered.text}` : rendered.text;
     text = markdownToText(withTitle);
@@ -584,7 +609,10 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
         contentType: res.headers.get("content-type"),
         maxChars: DEFAULT_ERROR_MAX_CHARS,
       });
-      const wrappedDetail = wrapWebFetchContent(detail || res.statusText, DEFAULT_ERROR_MAX_CHARS);
+      const wrappedDetail = wrapWebFetchContent(
+        detail || res.statusText || "Error",
+        DEFAULT_ERROR_MAX_CHARS,
+      );
       throw new Error(`Web fetch failed (${res.status}): ${wrappedDetail.text}`);
     }
 
