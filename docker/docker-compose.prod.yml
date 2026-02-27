@@ -52,6 +52,9 @@ services:
       HOME: /home/node
       TERM: xterm-256color
       
+      # Timezone (override in .env; default UTC if unset)
+      TZ: ${TZ:-Asia/Bangkok}
+
       # Security: Disable shell env loading
       OPENCLAW_LOAD_SHELL_ENV: "0"
       
