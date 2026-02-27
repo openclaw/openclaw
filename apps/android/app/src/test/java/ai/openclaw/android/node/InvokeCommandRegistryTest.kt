@@ -22,6 +22,7 @@ class InvokeCommandRegistryTest {
 
     assertFalse(commands.contains(OpenClawCameraCommand.Snap.rawValue))
     assertFalse(commands.contains(OpenClawCameraCommand.Clip.rawValue))
+    assertFalse(commands.contains(OpenClawCameraCommand.List.rawValue))
     assertFalse(commands.contains(OpenClawLocationCommand.Get.rawValue))
     assertTrue(commands.contains(OpenClawDeviceCommand.Status.rawValue))
     assertTrue(commands.contains(OpenClawDeviceCommand.Info.rawValue))
@@ -44,6 +45,7 @@ class InvokeCommandRegistryTest {
 
     assertTrue(commands.contains(OpenClawCameraCommand.Snap.rawValue))
     assertTrue(commands.contains(OpenClawCameraCommand.Clip.rawValue))
+    assertTrue(commands.contains(OpenClawCameraCommand.List.rawValue))
     assertTrue(commands.contains(OpenClawLocationCommand.Get.rawValue))
     assertTrue(commands.contains(OpenClawDeviceCommand.Status.rawValue))
     assertTrue(commands.contains(OpenClawDeviceCommand.Info.rawValue))

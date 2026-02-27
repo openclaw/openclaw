@@ -32,6 +32,13 @@ class OpenClawProtocolConstantsTest {
   }
 
   @Test
+  fun cameraCommandsUseStableStrings() {
+    assertEquals("camera.list", OpenClawCameraCommand.List.rawValue)
+    assertEquals("camera.snap", OpenClawCameraCommand.Snap.rawValue)
+    assertEquals("camera.clip", OpenClawCameraCommand.Clip.rawValue)
+  }
+
+  @Test
   fun screenCommandsUseStableStrings() {
     assertEquals("screen.record", OpenClawScreenCommand.Record.rawValue)
   }
