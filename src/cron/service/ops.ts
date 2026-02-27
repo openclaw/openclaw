@@ -314,7 +314,7 @@ export async function update(state: CronServiceState, id: string, patch: CronJob
   });
 }
 
-export async function remove(state: CronServiceState, id: string) {
+export async function remove(state: CronServiceState, idOrName: string) {
   return await locked(state, async () => {
     warnIfDisabled(state, "remove");
     await ensureLoaded(state);
@@ -322,12 +322,33 @@ export async function remove(state: CronServiceState, id: string) {
     if (!state.store) {
       return { ok: false, removed: false } as const;
     }
-    state.store.jobs = state.store.jobs.filter((j) => j.id !== id);
+
+    // First try to find by exact ID match, then by name match
+    let jobIdToRemove: string | undefined;
+    const exactMatch = state.store.jobs.find((j) => j.id === idOrName);
+    if (exactMatch) {
+      jobIdToRemove = exactMatch.id;
+    } else {
+      // Try to find by name (case-insensitive)
+      const nameMatch = state.store.jobs.find(
+        (j) => j.name.toLowerCase() === idOrName.toLowerCase(),
+      );
+      if (nameMatch) {
+        jobIdToRemove = nameMatch.id;
+      }
+    }
+
+    if (!jobIdToRemove) {
+      // Job not found - return success=false to indicate nothing was removed
+      return { ok: true, removed: false, reason: "not-found" } as const;
+    }
+
+    state.store.jobs = state.store.jobs.filter((j) => j.id !== jobIdToRemove);
     const removed = (state.store.jobs.length ?? 0) !== before;
     await persist(state);
     armTimer(state);
     if (removed) {
-      emit(state, { jobId: id, action: "removed" });
+      emit(state, { jobId: jobIdToRemove, action: "removed" });
     }
     return { ok: true, removed } as const;
   });
