@@ -606,6 +606,120 @@ describe("QmdMemoryManager", () => {
     );
   });
 
+  it("resolves path+pattern conflict by removing the conflicting collection and retrying", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: true,
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [],
+        },
+      },
+    } as OpenClawConfig;
+
+    const removeCalls: string[] = [];
+    const addCalls: string[] = [];
+    // Simulate: qmd has "memory-root-other" occupying the same path+pattern as "memory-root-main".
+    // collection list returns nothing (simulating a fresh or unknown state) so ensureCollections
+    // tries to add the managed collection. The first add fails with a "Name: memory-root-other"
+    // conflict message; after resolveCollectionConflict removes the conflicting collection,
+    // the retry succeeds.
+    let conflictResolved = false;
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "collection" && args[1] === "list") {
+        const child = createMockChild({ autoClose: false });
+        emitAndClose(child, "stdout", JSON.stringify([]));
+        return child;
+      }
+      if (args[0] === "collection" && args[1] === "remove") {
+        const child = createMockChild({ autoClose: false });
+        removeCalls.push(args[2] ?? "");
+        conflictResolved = true;
+        queueMicrotask(() => child.closeWith(0));
+        return child;
+      }
+      if (args[0] === "collection" && args[1] === "add") {
+        const child = createMockChild({ autoClose: false });
+        const name = args[args.indexOf("--name") + 1] ?? "";
+        addCalls.push(name);
+        // First attempt for memory-root-main fails with conflict (another agent's collection)
+        if (name === "memory-root-main" && !conflictResolved) {
+          emitAndClose(
+            child,
+            "stderr",
+            "A collection already exists for this path and pattern:\n  Name: memory-root-other (qmd://memory-root-other/)\n  Pattern: MEMORY.md",
+            1,
+          );
+          return child;
+        }
+        queueMicrotask(() => child.closeWith(0));
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const { manager } = await createManager({ mode: "full" });
+    await manager.close();
+
+    // The conflicting collection should have been removed
+    expect(removeCalls).toContain("memory-root-other");
+    // And the desired collection should have been retried (appears twice in addCalls)
+    const memoryRootAdds = addCalls.filter((n) => n === "memory-root-main");
+    expect(memoryRootAdds.length).toBe(2);
+  });
+
+  it("skips conflict resolution when already-exists error names the same collection", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: true,
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [],
+        },
+      },
+    } as OpenClawConfig;
+
+    const removeCalls: string[] = [];
+    // Simulate: the "already exists" error names the same collection we're trying to add.
+    // This means the collection truly exists and we should skip without removing anything.
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "collection" && args[1] === "list") {
+        const child = createMockChild({ autoClose: false });
+        emitAndClose(child, "stdout", JSON.stringify([]));
+        return child;
+      }
+      if (args[0] === "collection" && args[1] === "remove") {
+        const child = createMockChild({ autoClose: false });
+        removeCalls.push(args[2] ?? "");
+        queueMicrotask(() => child.closeWith(0));
+        return child;
+      }
+      if (args[0] === "collection" && args[1] === "add") {
+        const child = createMockChild({ autoClose: false });
+        const name = args[args.indexOf("--name") + 1] ?? "";
+        // The error message names the same collection => true duplicate, not a conflict
+        emitAndClose(
+          child,
+          "stderr",
+          `A collection already exists for this path and pattern:\n  Name: ${name} (qmd://${name}/)\n  Pattern: MEMORY.md`,
+          1,
+        );
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const { manager } = await createManager({ mode: "full" });
+    await manager.close();
+
+    // No conflict resolution should have been attempted
+    expect(removeCalls).toEqual([]);
+  });
+
   it("times out qmd update during sync when configured", async () => {
     vi.useFakeTimers();
     cfg = {

@@ -335,6 +335,18 @@ export class QmdMemoryManager implements MemorySearchManager {
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         if (this.isCollectionAlreadyExistsError(message)) {
+          // Check whether the conflict is with the same collection name (safe to skip)
+          // or a different name occupying the same path+pattern (must resolve).
+          const conflicting = this.extractConflictingCollectionName(message);
+          if (conflicting && conflicting !== collection.name) {
+            try {
+              await this.resolveCollectionConflict(conflicting, collection);
+            } catch (resolveErr) {
+              log.warn(
+                `qmd collection conflict resolution failed for ${collection.name}: ${resolveErr instanceof Error ? resolveErr.message : String(resolveErr)}`,
+              );
+            }
+          }
           continue;
         }
         log.warn(`qmd collection add failed for ${collection.name}: ${message}`);
@@ -415,6 +427,40 @@ export class QmdMemoryManager implements MemorySearchManager {
   private isCollectionAlreadyExistsError(message: string): boolean {
     const lower = message.toLowerCase();
     return lower.includes("already exists") || lower.includes("exists");
+  }
+
+  /**
+   * Extract the conflicting collection name from a qmd "already exists" error.
+   * qmd emits messages like:
+   *   "A collection already exists for this path and pattern:\n  Name: foo-bar (...)"
+   * Returns the conflicting name, or null if we can't parse it.
+   */
+  private extractConflictingCollectionName(message: string): string | null {
+    const match = /Name:\s*(\S+)/i.exec(message);
+    return match?.[1]?.replace(/\s*\(.*$/, "") ?? null;
+  }
+
+  /**
+   * Handle a path+pattern conflict: another collection occupies the same slot
+   * under a different name. Remove the conflicting collection and retry the add.
+   */
+  private async resolveCollectionConflict(
+    conflictingName: string,
+    collection: ManagedCollection,
+  ): Promise<void> {
+    log.debug(
+      `qmd collection "${collection.name}" conflicts with existing "${conflictingName}" at same path+pattern; removing conflicting collection`,
+    );
+    try {
+      await this.removeCollection(conflictingName);
+    } catch (removeErr) {
+      const removeMessage = removeErr instanceof Error ? removeErr.message : String(removeErr);
+      if (!this.isCollectionMissingError(removeMessage)) {
+        log.warn(`qmd collection remove failed for ${conflictingName}: ${removeMessage}`);
+        return;
+      }
+    }
+    await this.addCollection(collection.path, collection.name, collection.pattern);
   }
 
   private isCollectionMissingError(message: string): boolean {
@@ -597,7 +643,19 @@ export class QmdMemoryManager implements MemorySearchManager {
         await this.addCollection(collection.path, collection.name, collection.pattern);
       } catch (addErr) {
         const addMessage = addErr instanceof Error ? addErr.message : String(addErr);
-        if (!this.isCollectionAlreadyExistsError(addMessage)) {
+        if (this.isCollectionAlreadyExistsError(addMessage)) {
+          // Path+pattern conflict with a differently-named collection; resolve it.
+          const conflicting = this.extractConflictingCollectionName(addMessage);
+          if (conflicting && conflicting !== collection.name) {
+            try {
+              await this.resolveCollectionConflict(conflicting, collection);
+            } catch (resolveErr) {
+              log.warn(
+                `qmd collection conflict resolution failed for ${collection.name}: ${resolveErr instanceof Error ? resolveErr.message : String(resolveErr)}`,
+              );
+            }
+          }
+        } else {
           log.warn(`qmd collection add failed for ${collection.name}: ${addMessage}`);
         }
       }
