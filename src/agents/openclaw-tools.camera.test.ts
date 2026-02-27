@@ -136,6 +136,17 @@ describe("nodes camera_snap", () => {
       deviceId: "cam-123",
     });
   });
+
+  it("rejects facing both when deviceId is provided", async () => {
+    await expect(
+      executeNodes({
+        action: "camera_snap",
+        node: NODE_ID,
+        facing: "both",
+        deviceId: "cam-123",
+      }),
+    ).rejects.toThrow(/facing=both is not allowed when deviceId is set/i);
+  });
 });
 
 describe("nodes notifications_list", () => {

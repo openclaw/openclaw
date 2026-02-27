@@ -284,6 +284,38 @@ describe("cli program (nodes media)", () => {
     );
   });
 
+  it("fails nodes camera snap when --facing both and --device-id are combined", async () => {
+    mockNodeGateway();
+
+    const program = new Command();
+    program.exitOverride();
+    registerNodesCli(program);
+    runtime.error.mockClear();
+
+    await expect(
+      program.parseAsync(
+        [
+          "nodes",
+          "camera",
+          "snap",
+          "--node",
+          "ios-node",
+          "--facing",
+          "both",
+          "--device-id",
+          "cam-123",
+        ],
+        { from: "user" },
+      ),
+    ).rejects.toThrow(/exit/i);
+
+    expect(
+      runtime.error.mock.calls.some(([msg]) =>
+        /facing=both is not allowed when --device-id is set/i.test(String(msg)),
+      ),
+    ).toBe(true);
+  });
+
   describe("URL-based payloads", () => {
     let originalFetch: typeof globalThis.fetch;
 
