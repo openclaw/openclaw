@@ -38,6 +38,7 @@ describe("loadModelCatalog", () => {
       __setModelCatalogImportForTest(
         async () =>
           ({
+            discoverAuthStorage: () => ({}),
             AuthStorage: class {},
             ModelRegistry: class {
               getAll() {
@@ -69,6 +70,7 @@ describe("loadModelCatalog", () => {
     __setModelCatalogImportForTest(
       async () =>
         ({
+          discoverAuthStorage: () => ({}),
           AuthStorage: class {},
           ModelRegistry: class {
             getAll() {
@@ -108,6 +110,7 @@ describe("loadModelCatalog", () => {
     __setModelCatalogImportForTest(
       async () =>
         ({
+          discoverAuthStorage: () => ({}),
           AuthStorage: class {},
           ModelRegistry: class {
             getAll() {
@@ -154,6 +157,7 @@ describe("loadModelCatalog", () => {
     __setModelCatalogImportForTest(
       async () =>
         ({
+          discoverAuthStorage: () => ({}),
           AuthStorage: class {},
           ModelRegistry: class {
             getAll() {
@@ -196,6 +200,7 @@ describe("loadModelCatalog", () => {
     __setModelCatalogImportForTest(
       async () =>
         ({
+          discoverAuthStorage: () => ({}),
           AuthStorage: class {},
           ModelRegistry: class {
             getAll() {

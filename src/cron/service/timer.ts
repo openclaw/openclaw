@@ -18,6 +18,9 @@ import {
 import { locked } from "./locked.js";
 import type { CronEvent, CronServiceState } from "./state.js";
 import { ensureLoaded, persist } from "./store.js";
+import { DEFAULT_JOB_TIMEOUT_MS, resolveCronJobTimeoutMs } from "./timeout-policy.js";
+
+export { DEFAULT_JOB_TIMEOUT_MS } from "./timeout-policy.js";
 
 const MAX_TIMER_DELAY_MS = 60_000;
 
@@ -30,31 +33,14 @@ const MAX_TIMER_DELAY_MS = 60_000;
  */
 const MIN_REFIRE_GAP_MS = 2_000;
 
-/**
- * Maximum wall-clock time for a single job execution. Acts as a safety net
- * on top of the per-provider / per-agent timeouts to prevent one stuck job
- * from wedging the entire cron lane.
- */
-export const DEFAULT_JOB_TIMEOUT_MS = 10 * 60_000; // 10 minutes
-
 type TimedCronRunOutcome = CronRunOutcome &
   CronRunTelemetry & {
     jobId: string;
     delivered?: boolean;
+    deliveryAttempted?: boolean;
     startedAt: number;
     endedAt: number;
   };
-
-function resolveCronJobTimeoutMs(job: CronJob): number | undefined {
-  const configuredTimeoutMs =
-    job.payload.kind === "agentTurn" && typeof job.payload.timeoutSeconds === "number"
-      ? Math.floor(job.payload.timeoutSeconds * 1_000)
-      : undefined;
-  if (configuredTimeoutMs === undefined) {
-    return DEFAULT_JOB_TIMEOUT_MS;
-  }
-  return configuredTimeoutMs <= 0 ? undefined : configuredTimeoutMs;
-}
 
 export async function executeJobCoreWithTimeout(
   state: CronServiceState,
@@ -606,7 +592,9 @@ export async function executeJobCore(
   state: CronServiceState,
   job: CronJob,
   abortSignal?: AbortSignal,
-): Promise<CronRunOutcome & CronRunTelemetry & { delivered?: boolean }> {
+): Promise<
+  CronRunOutcome & CronRunTelemetry & { delivered?: boolean; deliveryAttempted?: boolean }
+> {
   const resolveAbortError = () => ({
     status: "error" as const,
     error: timeoutErrorMessage(),
@@ -729,17 +717,22 @@ export async function executeJobCore(
     return { status: "error", error: timeoutErrorMessage() };
   }
 
-  // Post a short summary back to the main session — but only when the
-  // isolated run did NOT already deliver its output to the target channel.
-  // When `res.delivered` is true the announce flow (or direct outbound
-  // delivery) already sent the result, so posting the summary to main
-  // would wake the main agent and cause a duplicate message.
+  // Post a short summary back to the main session only when announce
+  // delivery was requested and we are confident no outbound delivery path
+  // ran. If delivery was attempted but final ack is uncertain, suppress the
+  // main summary to avoid duplicate user-facing sends.
   // See: https://github.com/openclaw/openclaw/issues/15692
   const summaryText = res.summary?.trim();
   const deliveryPlan = resolveCronDeliveryPlan(job);
   const suppressMainSummary =
     res.status === "error" && res.errorKind === "delivery-target" && deliveryPlan.requested;
-  if (summaryText && deliveryPlan.requested && !res.delivered && !suppressMainSummary) {
+  if (
+    summaryText &&
+    deliveryPlan.requested &&
+    !res.delivered &&
+    res.deliveryAttempted !== true &&
+    !suppressMainSummary
+  ) {
     const prefix = "Cron";
     const label =
       res.status === "error" ? `${prefix} (error): ${summaryText}` : `${prefix}: ${summaryText}`;
@@ -762,6 +755,7 @@ export async function executeJobCore(
     error: res.error,
     summary: res.summary,
     delivered: res.delivered,
+    deliveryAttempted: res.deliveryAttempted,
     sessionId: res.sessionId,
     sessionKey: res.sessionKey,
     model: res.model,

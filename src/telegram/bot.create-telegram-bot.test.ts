@@ -1416,6 +1416,30 @@ describe("createTelegramBot", () => {
       expect(replySpy.mock.calls.length, testCase.name).toBe(0);
     }
   });
+  it("blocks group sender not in groupAllowFrom even when sender is paired in DM store", async () => {
+    resetHarnessSpies();
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          groupPolicy: "allowlist",
+          groupAllowFrom: ["222222222"],
+          groups: { "*": { requireMention: false } },
+        },
+      },
+    });
+    readChannelAllowFromStore.mockResolvedValueOnce(["123456789"]);
+
+    await dispatchMessage({
+      message: {
+        chat: { id: -100123456789, type: "group", title: "Test Group" },
+        from: { id: 123456789, username: "testuser" },
+        text: "hello",
+        date: 1736380800,
+      },
+    });
+
+    expect(replySpy).not.toHaveBeenCalled();
+  });
   it("allows control commands with TG-prefixed groupAllowFrom entries", async () => {
     loadConfig.mockReturnValue({
       channels: {
