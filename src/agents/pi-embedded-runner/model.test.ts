@@ -171,6 +171,50 @@ describe("resolveModel", () => {
     expect(result.model?.id).toBe("missing-model");
   });
 
+  it("matches inline model ids case-insensitively before falling back to provider defaults", () => {
+    const cfg = {
+      models: {
+        providers: {
+          ollama: {
+            baseUrl: "http://127.0.0.1:11434/v1",
+            api: "openai-responses",
+            models: [
+              {
+                id: "nemotron-3-nano:30b",
+                name: "Nemotron",
+                reasoning: true,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 1048576,
+                maxTokens: 128000,
+              },
+              {
+                id: "glm-4.7-flash:q8_0",
+                name: "GLM-4.7-Flash",
+                reasoning: true,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 131072,
+                maxTokens: 16384,
+              },
+            ],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = resolveModel("ollama", "GLM-4.7-Flash:q8_0", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "ollama",
+      id: "glm-4.7-flash:q8_0",
+      contextWindow: 131072,
+      maxTokens: 16384,
+      api: "openai-responses",
+    });
+  });
+
   it("builds an openai-codex fallback for gpt-5.3-codex", () => {
     mockOpenAICodexTemplateModel();
 
