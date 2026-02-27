@@ -62,11 +62,19 @@ export function coerceFormValues(value: unknown, schema: JsonSchema): unknown {
       return coerceFormValues(value, variants[0]);
     }
 
-    // Try number/boolean coercion for string values
+    // Try number/boolean coercion for string values.
+    //
+    // Number coercion is skipped when one of the variants is already "string".
+    // This prevents large integer-like strings (e.g. Discord snowflake IDs such
+    // as "823475887319941131") from being silently converted to JavaScript numbers
+    // and losing precision beyond Number.MAX_SAFE_INTEGER.
+    // Boolean coercion ("true"/"false") is still applied even when a string
+    // variant exists, because boolean is a distinct type that users explicitly set.
     if (typeof value === "string") {
+      const hasStringVariant = variants.some((v) => schemaType(v) === "string");
       for (const variant of variants) {
         const variantType = schemaType(variant);
-        if (variantType === "number" || variantType === "integer") {
+        if (!hasStringVariant && (variantType === "number" || variantType === "integer")) {
           const coerced = coerceNumberString(value, variantType === "integer");
           if (coerced === undefined || typeof coerced === "number") {
             return coerced;

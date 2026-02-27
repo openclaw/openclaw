@@ -452,4 +452,24 @@ describe("coerceFormValues", () => {
     const coerced = coerceFormValues(form, schema) as Record<string, unknown>;
     expect(coerced.flag).toBe(true);
   });
+
+  it("preserves large integer-like string in anyOf[string, number] — Discord snowflake IDs must not lose precision", () => {
+    const discordIdSchema: JsonSchema = {
+      anyOf: [{ type: "string" }, { type: "number" }],
+    };
+    const schema: JsonSchema = {
+      type: "object",
+      properties: {
+        users: {
+          type: "array",
+          items: discordIdSchema,
+        },
+      },
+    };
+    // These snowflake IDs exceed Number.MAX_SAFE_INTEGER and must survive the round-trip as strings
+    const snowflakeIds = ["823475887319941131", "648702641379082240", "648871246523662342"];
+    const form = { users: snowflakeIds };
+    const coerced = coerceFormValues(form, schema) as Record<string, unknown>;
+    expect(coerced.users).toEqual(snowflakeIds);
+  });
 });
