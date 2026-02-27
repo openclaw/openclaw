@@ -560,6 +560,11 @@ class NodeRuntime(context: Context) {
   fun setOnboardingCompleted(value: Boolean) = prefs.setOnboardingCompleted(value)
   val lastDiscoveredStableId: StateFlow<String> = prefs.lastDiscoveredStableId
   val canvasDebugStatusEnabled: StateFlow<Boolean> = prefs.canvasDebugStatusEnabled
+  val backgroundBatteryHistoryEnabled: StateFlow<Boolean> = prefs.backgroundBatteryHistoryEnabled
+  val backgroundLocationHistoryEnabled: StateFlow<Boolean> = prefs.backgroundLocationHistoryEnabled
+  val telemetrySyncEnabled: StateFlow<Boolean> = prefs.telemetrySyncEnabled
+  val telemetrySamplingMode: StateFlow<TelemetrySamplingMode> = prefs.telemetrySamplingMode
+  val telemetryRetention: StateFlow<TelemetryRetention> = prefs.telemetryRetention
 
   private var didAutoConnect = false
 
@@ -700,6 +705,26 @@ class NodeRuntime(context: Context) {
 
   fun setCanvasDebugStatusEnabled(value: Boolean) {
     prefs.setCanvasDebugStatusEnabled(value)
+  }
+
+  fun setBackgroundBatteryHistoryEnabled(value: Boolean) {
+    prefs.setBackgroundBatteryHistoryEnabled(value)
+  }
+
+  fun setBackgroundLocationHistoryEnabled(value: Boolean) {
+    prefs.setBackgroundLocationHistoryEnabled(value)
+  }
+
+  fun setTelemetrySyncEnabled(value: Boolean) {
+    prefs.setTelemetrySyncEnabled(value)
+  }
+
+  fun setTelemetrySamplingMode(mode: TelemetrySamplingMode) {
+    prefs.setTelemetrySamplingMode(mode)
+  }
+
+  fun setTelemetryRetention(retention: TelemetryRetention) {
+    prefs.setTelemetryRetention(retention)
   }
 
   fun setVoiceScreenActive(active: Boolean) {

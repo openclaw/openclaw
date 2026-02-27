@@ -69,6 +69,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
   val gatewayToken: StateFlow<String> = runtime.gatewayToken
   val onboardingCompleted: StateFlow<Boolean> = runtime.onboardingCompleted
   val canvasDebugStatusEnabled: StateFlow<Boolean> = runtime.canvasDebugStatusEnabled
+  val backgroundBatteryHistoryEnabled: StateFlow<Boolean> = runtime.backgroundBatteryHistoryEnabled
+  val backgroundLocationHistoryEnabled: StateFlow<Boolean> = runtime.backgroundLocationHistoryEnabled
+  val telemetrySyncEnabled: StateFlow<Boolean> = runtime.telemetrySyncEnabled
+  val telemetrySamplingMode: StateFlow<TelemetrySamplingMode> = runtime.telemetrySamplingMode
+  val telemetryRetention: StateFlow<TelemetryRetention> = runtime.telemetryRetention
 
   val chatSessionKey: StateFlow<String> = runtime.chatSessionKey
   val chatSessionId: StateFlow<String?> = runtime.chatSessionId
@@ -137,6 +142,26 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
   fun setCanvasDebugStatusEnabled(value: Boolean) {
     runtime.setCanvasDebugStatusEnabled(value)
+  }
+
+  fun setBackgroundBatteryHistoryEnabled(value: Boolean) {
+    runtime.setBackgroundBatteryHistoryEnabled(value)
+  }
+
+  fun setBackgroundLocationHistoryEnabled(value: Boolean) {
+    runtime.setBackgroundLocationHistoryEnabled(value)
+  }
+
+  fun setTelemetrySyncEnabled(value: Boolean) {
+    runtime.setTelemetrySyncEnabled(value)
+  }
+
+  fun setTelemetrySamplingMode(mode: TelemetrySamplingMode) {
+    runtime.setTelemetrySamplingMode(mode)
+  }
+
+  fun setTelemetryRetention(retention: TelemetryRetention) {
+    runtime.setTelemetryRetention(retention)
   }
 
   fun setVoiceScreenActive(active: Boolean) {

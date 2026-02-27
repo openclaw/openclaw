@@ -69,6 +69,8 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import ai.openclaw.android.BuildConfig
 import ai.openclaw.android.LocationMode
 import ai.openclaw.android.MainViewModel
+import ai.openclaw.android.TelemetryRetention
+import ai.openclaw.android.TelemetrySamplingMode
 import ai.openclaw.android.node.DeviceNotificationListenerService
 
 @Composable
@@ -82,6 +84,11 @@ fun SettingsSheet(viewModel: MainViewModel) {
   val locationPreciseEnabled by viewModel.locationPreciseEnabled.collectAsState()
   val preventSleep by viewModel.preventSleep.collectAsState()
   val canvasDebugStatusEnabled by viewModel.canvasDebugStatusEnabled.collectAsState()
+  val backgroundBatteryHistoryEnabled by viewModel.backgroundBatteryHistoryEnabled.collectAsState()
+  val backgroundLocationHistoryEnabled by viewModel.backgroundLocationHistoryEnabled.collectAsState()
+  val telemetrySyncEnabled by viewModel.telemetrySyncEnabled.collectAsState()
+  val telemetrySamplingMode by viewModel.telemetrySamplingMode.collectAsState()
+  val telemetryRetention by viewModel.telemetryRetention.collectAsState()
 
   val listState = rememberLazyListState()
   val deviceModel =
@@ -865,6 +872,141 @@ fun SettingsSheet(viewModel: MainViewModel) {
         color = mobileTextSecondary,
       )
     }
+
+      item { HorizontalDivider(color = mobileBorder.copy(alpha = 0.78f)) }
+
+    // Telemetry
+      item {
+        Text(
+          "TELEMETRY",
+          style = mobileCaption1.copy(fontWeight = FontWeight.Bold, letterSpacing = 1.sp),
+          color = mobileAccent,
+        )
+      }
+    item {
+      ListItem(
+        modifier = settingsRowModifier(),
+        colors = listItemColors,
+        headlineContent = { Text("Background battery history", style = mobileHeadline) },
+        supportingContent = { Text("Collect battery level in background for local history.", style = mobileCallout) },
+        trailingContent = {
+          Switch(
+            checked = backgroundBatteryHistoryEnabled,
+            onCheckedChange = viewModel::setBackgroundBatteryHistoryEnabled,
+          )
+        },
+      )
+    }
+    item {
+      ListItem(
+        modifier = settingsRowModifier(),
+        colors = listItemColors,
+        headlineContent = { Text("Background location history", style = mobileHeadline) },
+        supportingContent = { Text("Collect location history in background (requires Location: Always).", style = mobileCallout) },
+        trailingContent = {
+          Switch(
+            checked = backgroundLocationHistoryEnabled,
+            onCheckedChange = viewModel::setBackgroundLocationHistoryEnabled,
+          )
+        },
+      )
+    }
+    item {
+      ListItem(
+        modifier = settingsRowModifier(),
+        colors = listItemColors,
+        headlineContent = { Text("Sync telemetry to gateway", style = mobileHeadline) },
+        supportingContent = { Text("If disabled, telemetry stays local on device.", style = mobileCallout) },
+        trailingContent = {
+          Switch(
+            checked = telemetrySyncEnabled,
+            onCheckedChange = viewModel::setTelemetrySyncEnabled,
+          )
+        },
+      )
+    }
+      item {
+        Column(modifier = settingsRowModifier(), verticalArrangement = Arrangement.spacedBy(0.dp)) {
+          ListItem(
+            modifier = Modifier.fillMaxWidth(),
+            colors = listItemColors,
+            headlineContent = { Text("Sampling: Low power", style = mobileHeadline) },
+            supportingContent = { Text("Best battery life; coarser updates.", style = mobileCallout) },
+            trailingContent = {
+              RadioButton(
+                selected = telemetrySamplingMode == TelemetrySamplingMode.LowPower,
+                onClick = { viewModel.setTelemetrySamplingMode(TelemetrySamplingMode.LowPower) },
+              )
+            },
+          )
+          HorizontalDivider(color = mobileBorder.copy(alpha = 0.78f))
+          ListItem(
+            modifier = Modifier.fillMaxWidth(),
+            colors = listItemColors,
+            headlineContent = { Text("Sampling: Balanced", style = mobileHeadline) },
+            supportingContent = { Text("Default mix of quality and battery use.", style = mobileCallout) },
+            trailingContent = {
+              RadioButton(
+                selected = telemetrySamplingMode == TelemetrySamplingMode.Balanced,
+                onClick = { viewModel.setTelemetrySamplingMode(TelemetrySamplingMode.Balanced) },
+              )
+            },
+          )
+          HorizontalDivider(color = mobileBorder.copy(alpha = 0.78f))
+          ListItem(
+            modifier = Modifier.fillMaxWidth(),
+            colors = listItemColors,
+            headlineContent = { Text("Sampling: High detail", style = mobileHeadline) },
+            supportingContent = { Text("More frequent updates; higher battery use.", style = mobileCallout) },
+            trailingContent = {
+              RadioButton(
+                selected = telemetrySamplingMode == TelemetrySamplingMode.HighDetail,
+                onClick = { viewModel.setTelemetrySamplingMode(TelemetrySamplingMode.HighDetail) },
+              )
+            },
+          )
+        }
+      }
+      item {
+        Column(modifier = settingsRowModifier(), verticalArrangement = Arrangement.spacedBy(0.dp)) {
+          ListItem(
+            modifier = Modifier.fillMaxWidth(),
+            colors = listItemColors,
+            headlineContent = { Text("Retention: 1 day", style = mobileHeadline) },
+            trailingContent = {
+              RadioButton(
+                selected = telemetryRetention == TelemetryRetention.OneDay,
+                onClick = { viewModel.setTelemetryRetention(TelemetryRetention.OneDay) },
+              )
+            },
+          )
+          HorizontalDivider(color = mobileBorder.copy(alpha = 0.78f))
+          ListItem(
+            modifier = Modifier.fillMaxWidth(),
+            colors = listItemColors,
+            headlineContent = { Text("Retention: 7 days", style = mobileHeadline) },
+            trailingContent = {
+              RadioButton(
+                selected = telemetryRetention == TelemetryRetention.SevenDays,
+                onClick = { viewModel.setTelemetryRetention(TelemetryRetention.SevenDays) },
+              )
+            },
+          )
+          HorizontalDivider(color = mobileBorder.copy(alpha = 0.78f))
+          ListItem(
+            modifier = Modifier.fillMaxWidth(),
+            colors = listItemColors,
+            headlineContent = { Text("Retention: 30 days", style = mobileHeadline) },
+            trailingContent = {
+              RadioButton(
+                selected = telemetryRetention == TelemetryRetention.ThirtyDays,
+                onClick = { viewModel.setTelemetryRetention(TelemetryRetention.ThirtyDays) },
+              )
+            },
+          )
+        }
+      }
+      item { Text("Telemetry collection service implementation is in progress.", style = mobileCallout, color = mobileTextSecondary) }
 
       item { HorizontalDivider(color = mobileBorder.copy(alpha = 0.78f)) }
 

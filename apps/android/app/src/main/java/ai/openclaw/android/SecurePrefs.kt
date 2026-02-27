@@ -102,6 +102,26 @@ class SecurePrefs(context: Context) {
   private val _speakerEnabled = MutableStateFlow(plainPrefs.getBoolean("voice.speakerEnabled", true))
   val speakerEnabled: StateFlow<Boolean> = _speakerEnabled
 
+  private val _backgroundBatteryHistoryEnabled =
+    MutableStateFlow(plainPrefs.getBoolean("telemetry.battery.enabled", false))
+  val backgroundBatteryHistoryEnabled: StateFlow<Boolean> = _backgroundBatteryHistoryEnabled
+
+  private val _backgroundLocationHistoryEnabled =
+    MutableStateFlow(plainPrefs.getBoolean("telemetry.location.enabled", false))
+  val backgroundLocationHistoryEnabled: StateFlow<Boolean> = _backgroundLocationHistoryEnabled
+
+  private val _telemetrySyncEnabled =
+    MutableStateFlow(plainPrefs.getBoolean("telemetry.sync.enabled", true))
+  val telemetrySyncEnabled: StateFlow<Boolean> = _telemetrySyncEnabled
+
+  private val _telemetrySamplingMode =
+    MutableStateFlow(TelemetrySamplingMode.fromRawValue(plainPrefs.getString("telemetry.sampling.mode", null)))
+  val telemetrySamplingMode: StateFlow<TelemetrySamplingMode> = _telemetrySamplingMode
+
+  private val _telemetryRetention =
+    MutableStateFlow(TelemetryRetention.fromRawValue(plainPrefs.getString("telemetry.retention", null)))
+  val telemetryRetention: StateFlow<TelemetryRetention> = _telemetryRetention
+
   fun setLastDiscoveredStableId(value: String) {
     val trimmed = value.trim()
     plainPrefs.edit { putString("gateway.lastDiscoveredStableID", trimmed) }
@@ -276,6 +296,31 @@ class SecurePrefs(context: Context) {
   fun setSpeakerEnabled(value: Boolean) {
     plainPrefs.edit { putBoolean("voice.speakerEnabled", value) }
     _speakerEnabled.value = value
+  }
+
+  fun setBackgroundBatteryHistoryEnabled(value: Boolean) {
+    plainPrefs.edit { putBoolean("telemetry.battery.enabled", value) }
+    _backgroundBatteryHistoryEnabled.value = value
+  }
+
+  fun setBackgroundLocationHistoryEnabled(value: Boolean) {
+    plainPrefs.edit { putBoolean("telemetry.location.enabled", value) }
+    _backgroundLocationHistoryEnabled.value = value
+  }
+
+  fun setTelemetrySyncEnabled(value: Boolean) {
+    plainPrefs.edit { putBoolean("telemetry.sync.enabled", value) }
+    _telemetrySyncEnabled.value = value
+  }
+
+  fun setTelemetrySamplingMode(mode: TelemetrySamplingMode) {
+    plainPrefs.edit { putString("telemetry.sampling.mode", mode.rawValue) }
+    _telemetrySamplingMode.value = mode
+  }
+
+  fun setTelemetryRetention(retention: TelemetryRetention) {
+    plainPrefs.edit { putString("telemetry.retention", retention.rawValue) }
+    _telemetryRetention.value = retention
   }
 
   private fun loadVoiceWakeMode(): VoiceWakeMode {
