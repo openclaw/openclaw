@@ -452,6 +452,50 @@ describe("doctor config flow", () => {
     expect(cfg.channels.discord.accounts.work.allowFrom).toEqual(["*"]);
   });
 
+  it('repairs dmPolicy="allowlist" by restoring allowFrom from pairing store on repair', async () => {
+    const result = await withTempHome(async (home) => {
+      const configDir = path.join(home, ".openclaw");
+      const credentialsDir = path.join(configDir, "credentials");
+      await fs.mkdir(credentialsDir, { recursive: true });
+      await fs.writeFile(
+        path.join(configDir, "openclaw.json"),
+        JSON.stringify(
+          {
+            channels: {
+              telegram: {
+                botToken: "fake-token",
+                dmPolicy: "allowlist",
+              },
+            },
+          },
+          null,
+          2,
+        ),
+        "utf-8",
+      );
+      await fs.writeFile(
+        path.join(credentialsDir, "telegram-allowFrom.json"),
+        JSON.stringify({ version: 1, allowFrom: ["12345"] }, null, 2),
+        "utf-8",
+      );
+      return await loadAndMaybeMigrateDoctorConfig({
+        options: { nonInteractive: true, repair: true },
+        confirm: async () => false,
+      });
+    });
+
+    const cfg = result.cfg as {
+      channels: {
+        telegram: {
+          dmPolicy: string;
+          allowFrom: string[];
+        };
+      };
+    };
+    expect(cfg.channels.telegram.dmPolicy).toBe("allowlist");
+    expect(cfg.channels.telegram.allowFrom).toEqual(["12345"]);
+  });
+
   it("migrates legacy toolsBySender keys to typed id entries on repair", async () => {
     const result = await runDoctorConfigWithInput({
       repair: true,

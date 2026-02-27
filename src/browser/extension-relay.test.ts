@@ -27,6 +27,22 @@ function waitForError(ws: WebSocket) {
   });
 }
 
+function waitForClose(ws: WebSocket, timeoutMs = RELAY_MESSAGE_TIMEOUT_MS) {
+  return new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error("timeout"));
+    }, timeoutMs);
+    ws.once("close", () => {
+      clearTimeout(timer);
+      resolve();
+    });
+    ws.once("error", (err) => {
+      clearTimeout(timer);
+      reject(err instanceof Error ? err : new Error(String(err)));
+    });
+  });
+}
+
 function relayAuthHeaders(url: string) {
   return getChromeExtensionRelayAuthHeaders(url);
 }
@@ -132,8 +148,14 @@ describe("chrome extension relay server", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
 
   beforeEach(() => {
-    envSnapshot = captureEnv(["OPENCLAW_GATEWAY_TOKEN"]);
+    envSnapshot = captureEnv([
+      "OPENCLAW_GATEWAY_TOKEN",
+      "OPENCLAW_EXTENSION_RELAY_RECONNECT_GRACE_MS",
+      "OPENCLAW_EXTENSION_RELAY_COMMAND_RECONNECT_WAIT_MS",
+    ]);
     process.env.OPENCLAW_GATEWAY_TOKEN = TEST_GATEWAY_TOKEN;
+    delete process.env.OPENCLAW_EXTENSION_RELAY_RECONNECT_GRACE_MS;
+    delete process.env.OPENCLAW_EXTENSION_RELAY_COMMAND_RECONNECT_WAIT_MS;
   });
 
   afterEach(async () => {
@@ -208,6 +230,84 @@ describe("chrome extension relay server", () => {
     expect(err.message).toContain("401");
   });
 
+  it("returns 400 for malformed percent-encoding in target action routes", async () => {
+    const port = await getFreePort();
+    cdpUrl = `http://127.0.0.1:${port}`;
+    await ensureChromeExtensionRelayServer({ cdpUrl });
+
+    const res = await fetch(`${cdpUrl}/json/activate/%E0%A4%A`, {
+      headers: relayAuthHeaders(cdpUrl),
+    });
+    expect(res.status).toBe(400);
+    expect(await res.text()).toContain("invalid targetId encoding");
+  });
+
+  it("deduplicates concurrent relay starts for the same requested port", async () => {
+    const port = await getFreePort();
+    cdpUrl = `http://127.0.0.1:${port}`;
+    const [first, second] = await Promise.all([
+      ensureChromeExtensionRelayServer({ cdpUrl }),
+      ensureChromeExtensionRelayServer({ cdpUrl }),
+    ]);
+    expect(first).toBe(second);
+    expect(first.port).toBe(port);
+  });
+
+  it("allows CORS preflight from chrome-extension origins", async () => {
+    const port = await getFreePort();
+    cdpUrl = `http://127.0.0.1:${port}`;
+    await ensureChromeExtensionRelayServer({ cdpUrl });
+
+    const origin = "chrome-extension://abcdefghijklmnop";
+    const res = await fetch(`${cdpUrl}/json/version`, {
+      method: "OPTIONS",
+      headers: {
+        Origin: origin,
+        "Access-Control-Request-Method": "GET",
+        "Access-Control-Request-Headers": "x-openclaw-relay-token",
+      },
+    });
+
+    expect(res.status).toBe(204);
+    expect(res.headers.get("access-control-allow-origin")).toBe(origin);
+    expect(res.headers.get("access-control-allow-headers") ?? "").toContain(
+      "x-openclaw-relay-token",
+    );
+  });
+
+  it("rejects CORS preflight from non-extension origins", async () => {
+    const port = await getFreePort();
+    cdpUrl = `http://127.0.0.1:${port}`;
+    await ensureChromeExtensionRelayServer({ cdpUrl });
+
+    const res = await fetch(`${cdpUrl}/json/version`, {
+      method: "OPTIONS",
+      headers: {
+        Origin: "https://example.com",
+        "Access-Control-Request-Method": "GET",
+      },
+    });
+
+    expect(res.status).toBe(403);
+  });
+
+  it("returns CORS headers on JSON responses for extension origins", async () => {
+    const port = await getFreePort();
+    cdpUrl = `http://127.0.0.1:${port}`;
+    await ensureChromeExtensionRelayServer({ cdpUrl });
+
+    const origin = "chrome-extension://abcdefghijklmnop";
+    const res = await fetch(`${cdpUrl}/json/version`, {
+      headers: {
+        Origin: origin,
+        ...relayAuthHeaders(cdpUrl),
+      },
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get("access-control-allow-origin")).toBe(origin);
+  });
+
   it("rejects extension websocket access without relay auth token", async () => {
     const port = await getFreePort();
     cdpUrl = `http://127.0.0.1:${port}`;
@@ -263,6 +363,97 @@ describe("chrome extension relay server", () => {
     ext2.close();
   });
 
+  it("keeps CDP clients alive across a brief extension reconnect", async () => {
+    const { port, ext: ext1 } = await startRelayWithExtension();
+    const cdp = new WebSocket(`ws://127.0.0.1:${port}/cdp`, {
+      headers: relayAuthHeaders(`ws://127.0.0.1:${port}/cdp`),
+    });
+    await waitForOpen(cdp);
+
+    let cdpClosed = false;
+    cdp.once("close", () => {
+      cdpClosed = true;
+    });
+
+    const ext1Closed = waitForClose(ext1, 2_000);
+    ext1.close();
+    await ext1Closed;
+
+    await new Promise((r) => setTimeout(r, 200));
+    const ext2 = new WebSocket(`ws://127.0.0.1:${port}/extension`, {
+      headers: relayAuthHeaders(`ws://127.0.0.1:${port}/extension`),
+    });
+    await waitForOpen(ext2);
+
+    await new Promise((r) => setTimeout(r, 200));
+    expect(cdpClosed).toBe(false);
+
+    cdp.close();
+    ext2.close();
+  });
+
+  it("waits briefly for extension reconnect before failing CDP commands", async () => {
+    const { port, ext: ext1 } = await startRelayWithExtension();
+    const cdp = new WebSocket(`ws://127.0.0.1:${port}/cdp`, {
+      headers: relayAuthHeaders(`ws://127.0.0.1:${port}/cdp`),
+    });
+    await waitForOpen(cdp);
+    const cdpQueue = createMessageQueue(cdp);
+
+    const ext1Closed = waitForClose(ext1, 2_000);
+    ext1.close();
+    await ext1Closed;
+
+    cdp.send(JSON.stringify({ id: 41, method: "Runtime.enable" }));
+    await new Promise((r) => setTimeout(r, 150));
+
+    const ext2 = new WebSocket(`ws://127.0.0.1:${port}/extension`, {
+      headers: relayAuthHeaders(`ws://127.0.0.1:${port}/extension`),
+    });
+    const ext2Queue = createMessageQueue(ext2);
+    await waitForOpen(ext2);
+
+    while (true) {
+      const msg = JSON.parse(await ext2Queue.next(4_000)) as {
+        id?: number;
+        method?: string;
+      };
+      if (msg.method === "ping") {
+        ext2.send(JSON.stringify({ method: "pong" }));
+        continue;
+      }
+      if (msg.method === "forwardCDPCommand" && typeof msg.id === "number") {
+        ext2.send(JSON.stringify({ id: msg.id, result: { ok: true } }));
+        break;
+      }
+    }
+
+    const response = JSON.parse(await cdpQueue.next(6_000)) as {
+      id?: number;
+      result?: { ok?: boolean };
+      error?: { message?: string };
+    };
+    expect(response.id).toBe(41);
+    expect(response.error).toBeUndefined();
+    expect(response.result?.ok).toBe(true);
+
+    cdp.close();
+    ext2.close();
+  });
+
+  it("closes CDP clients after reconnect grace when extension stays disconnected", async () => {
+    process.env.OPENCLAW_EXTENSION_RELAY_RECONNECT_GRACE_MS = "150";
+
+    const { port, ext } = await startRelayWithExtension();
+    const cdp = new WebSocket(`ws://127.0.0.1:${port}/cdp`, {
+      headers: relayAuthHeaders(`ws://127.0.0.1:${port}/cdp`),
+    });
+    await waitForOpen(cdp);
+
+    ext.close();
+    await waitForClose(cdp, 2_000);
+  });
+
   it("accepts extension websocket access with relay token query param", async () => {
     const port = await getFreePort();
     cdpUrl = `http://127.0.0.1:${port}`;
@@ -275,6 +466,19 @@ describe("chrome extension relay server", () => {
     );
     await waitForOpen(ext);
     ext.close();
+  });
+
+  it("accepts /json endpoints with relay token query param", async () => {
+    const port = await getFreePort();
+    cdpUrl = `http://127.0.0.1:${port}`;
+    await ensureChromeExtensionRelayServer({ cdpUrl });
+
+    const token = relayAuthHeaders(cdpUrl)["x-openclaw-relay-token"];
+    expect(token).toBeTruthy();
+    const versionRes = await fetch(
+      `${cdpUrl}/json/version?token=${encodeURIComponent(String(token))}`,
+    );
+    expect(versionRes.status).toBe(200);
   });
 
   it("accepts raw gateway token for relay auth compatibility", async () => {

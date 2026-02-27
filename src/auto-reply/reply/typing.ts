@@ -1,4 +1,5 @@
 import { createTypingKeepaliveLoop } from "../../channels/typing-lifecycle.js";
+import { createTypingStartGuard } from "../../channels/typing-start-guard.js";
 import { isSilentReplyPrefixText, isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
 
 export type TypingController = {
@@ -61,6 +62,10 @@ export function createTypingController(params: {
       clearTimeout(typingTtlTimer);
       typingTtlTimer = undefined;
     }
+    if (dispatchIdleTimer) {
+      clearTimeout(dispatchIdleTimer);
+      dispatchIdleTimer = undefined;
+    }
     typingLoop.stop();
     // Notify the channel to stop its typing indicator (e.g., on NO_REPLY).
     // This fires only once (sealed prevents re-entry).
@@ -95,15 +100,16 @@ export function createTypingController(params: {
 
   const isActive = () => active && !sealed;
 
+  const startGuard = createTypingStartGuard({
+    isSealed: () => sealed,
+    shouldBlock: () => runComplete,
+    rethrowOnError: true,
+  });
+
   const triggerTyping = async () => {
-    if (sealed) {
-      return;
-    }
-    // Late callbacks after a run completed should never restart typing.
-    if (runComplete) {
-      return;
-    }
-    await onReplyStart?.();
+    await startGuard.run(async () => {
+      await onReplyStart?.();
+    });
   };
 
   const typingLoop = createTypingKeepaliveLoop({
@@ -177,13 +183,28 @@ export function createTypingController(params: {
     await startTypingLoop();
   };
 
+  let dispatchIdleTimer: NodeJS.Timeout | undefined;
+  const DISPATCH_IDLE_GRACE_MS = 10_000;
+
   const markRunComplete = () => {
     runComplete = true;
     maybeStopOnIdle();
+    if (!sealed && !dispatchIdle) {
+      dispatchIdleTimer = setTimeout(() => {
+        if (!sealed && !dispatchIdle) {
+          log?.("typing: dispatch idle not received after run complete; forcing cleanup");
+          cleanup();
+        }
+      }, DISPATCH_IDLE_GRACE_MS);
+    }
   };
 
   const markDispatchIdle = () => {
     dispatchIdle = true;
+    if (dispatchIdleTimer) {
+      clearTimeout(dispatchIdleTimer);
+      dispatchIdleTimer = undefined;
+    }
     maybeStopOnIdle();
   };
 

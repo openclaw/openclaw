@@ -1,6 +1,4 @@
 import { randomUUID } from "node:crypto";
-import type { NodeEvent, NodeEventContext } from "./server-node-events-types.js";
-import { resolveSessionAgentId } from "../agents/agent-scope.js";
 import { normalizeChannelId } from "../channels/plugins/index.js";
 import { createOutboundSendDeps } from "../cli/outbound-send-deps.js";
 import { agentCommand } from "../commands/agent.js";
@@ -8,6 +6,7 @@ import { loadConfig } from "../config/config.js";
 import { updateSessionStore } from "../config/sessions.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { deliverOutboundPayloads } from "../infra/outbound/deliver.js";
+import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
 import { resolveOutboundTarget } from "../infra/outbound/targets.js";
 import { registerApnsToken } from "../infra/push-apns.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
@@ -15,6 +14,7 @@ import { normalizeMainKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import { parseMessageWithAttachments } from "./chat-attachments.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./server-methods/attachment-normalize.js";
+import type { NodeEvent, NodeEventContext } from "./server-node-events-types.js";
 import {
   loadSessionEntry,
   pruneLegacyStoreKeys,
@@ -232,13 +232,16 @@ async function sendReceiptAck(params: {
   if (!resolved.ok) {
     throw new Error(String(resolved.error));
   }
-  const agentId = resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg });
+  const session = buildOutboundSessionContext({
+    cfg: params.cfg,
+    sessionKey: params.sessionKey,
+  });
   await deliverOutboundPayloads({
     cfg: params.cfg,
     channel: params.channel,
     to: resolved.to,
     payloads: [{ text: params.text }],
-    agentId,
+    session,
     bestEffort: true,
     deps: createOutboundSendDeps(params.deps),
   });

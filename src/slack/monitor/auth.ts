@@ -1,4 +1,4 @@
-import { readChannelAllowFromStore } from "../../pairing/pairing-store.js";
+import { readStoreAllowFromForDmPolicy } from "../../security/dm-policy-shared.js";
 import {
   allowListMatches,
   normalizeAllowList,
@@ -8,9 +8,18 @@ import {
 import { resolveSlackChannelConfig } from "./channel-config.js";
 import { normalizeSlackChannelType, type SlackMonitorContext } from "./context.js";
 
-export async function resolveSlackEffectiveAllowFrom(ctx: SlackMonitorContext) {
-  const storeAllowFrom =
-    ctx.dmPolicy === "allowlist" ? [] : await readChannelAllowFromStore("slack").catch(() => []);
+export async function resolveSlackEffectiveAllowFrom(
+  ctx: SlackMonitorContext,
+  options?: { includePairingStore?: boolean },
+) {
+  const includePairingStore = options?.includePairingStore === true;
+  const storeAllowFrom = includePairingStore
+    ? await readStoreAllowFromForDmPolicy({
+        provider: "slack",
+        accountId: ctx.accountId,
+        dmPolicy: ctx.dmPolicy,
+      })
+    : [];
   const allowFrom = normalizeAllowList([...ctx.allowFrom, ...storeAllowFrom]);
   const allowFromLower = normalizeAllowListLower(allowFrom);
   return { allowFrom, allowFromLower };
@@ -95,15 +104,15 @@ export async function authorizeSlackSystemEventSender(params: {
     .catch(() => ({}));
   const senderName = senderInfo.name;
 
-  const resolveAllowFromLower = async () =>
-    (await resolveSlackEffectiveAllowFrom(params.ctx)).allowFromLower;
+  const resolveAllowFromLower = async (includePairingStore = false) =>
+    (await resolveSlackEffectiveAllowFrom(params.ctx, { includePairingStore })).allowFromLower;
 
   if (channelType === "im") {
     if (!params.ctx.dmEnabled || params.ctx.dmPolicy === "disabled") {
       return { allowed: false, reason: "dm-disabled", channelType, channelName };
     }
     if (params.ctx.dmPolicy !== "open") {
-      const allowFromLower = await resolveAllowFromLower();
+      const allowFromLower = await resolveAllowFromLower(true);
       const senderAllowListed = isSlackSenderAllowListed({
         allowListLower: allowFromLower,
         senderId,
@@ -122,7 +131,7 @@ export async function authorizeSlackSystemEventSender(params: {
   } else if (!channelId) {
     // No channel context. Apply allowFrom if configured so we fail closed
     // for privileged interactive events when owner allowlist is present.
-    const allowFromLower = await resolveAllowFromLower();
+    const allowFromLower = await resolveAllowFromLower(false);
     if (allowFromLower.length > 0) {
       const senderAllowListed = isSlackSenderAllowListed({
         allowListLower: allowFromLower,
