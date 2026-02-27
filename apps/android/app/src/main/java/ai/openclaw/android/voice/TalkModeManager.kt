@@ -250,6 +250,95 @@ private const val defaultTalkProvider = "elevenlabs"
   /** When true, play TTS for all final chat responses (even ones we didn't initiate). */
   @Volatile var ttsOnAllResponses = false
 
+  // Streaming TTS: active session keyed by runId
+  private var streamingTts: ElevenLabsStreamingTts? = null
+  private var streamingRunId: String? = null
+
+  private fun handleStreamingTts(runId: String, state: String, obj: JsonObject) {
+    when (state) {
+      "delta" -> {
+        val text = extractTextFromChatEventMessage(obj["message"])
+        if (text.isNullOrBlank()) return
+
+        // Start streaming session on first delta for this run
+        if (streamingRunId != runId) {
+          // New run — stop any previous stream
+          streamingTts?.stop()
+          streamingTts = null
+
+          val voiceId = currentVoiceId ?: defaultVoiceId
+          val apiKey = this.apiKey
+          if (voiceId == null || apiKey == null) {
+            Log.w(tag, "streaming TTS: missing voiceId or apiKey, falling back to non-streaming")
+            return
+          }
+
+          // Use flash model for streaming (v3 doesn't support WebSocket)
+          val modelId = currentModelId ?: defaultModelId ?: ""
+          val streamModel = if (ElevenLabsStreamingTts.supportsStreaming(modelId)) {
+            modelId
+          } else {
+            "eleven_flash_v2_5"
+          }
+
+          val tts = ElevenLabsStreamingTts(
+            scope = scope,
+            voiceId = voiceId,
+            apiKey = apiKey,
+            modelId = streamModel,
+            outputFormat = "pcm_24000",
+            sampleRate = 24000,
+          )
+          streamingTts = tts
+          streamingRunId = runId
+          _isSpeaking.value = true
+          _statusText.value = "Speaking…"
+          tts.start()
+        }
+
+        // Feed accumulated text to the stream
+        streamingTts?.sendText(text)
+      }
+      "final" -> {
+        if (streamingRunId == runId) {
+          // Send any remaining text from final event
+          val text = extractTextFromChatEventMessage(obj["message"])
+          if (!text.isNullOrBlank()) {
+            streamingTts?.sendText(text)
+          }
+          streamingTts?.finish()
+          streamingRunId = null
+          // Don't clear streamingTts yet — let it drain audio, cleanup is internal
+          scope.launch {
+            // Wait for playback to finish before resetting state
+            delay(500)
+            while (streamingTts?.isPlaying?.value == true) {
+              delay(200)
+            }
+            _isSpeaking.value = false
+            _statusText.value = "Ready"
+            streamingTts = null
+          }
+        } else {
+          // No streaming session for this run — fall back to non-streaming
+          val text = extractTextFromChatEventMessage(obj["message"])
+          if (!text.isNullOrBlank()) {
+            playTtsForText(text)
+          }
+        }
+      }
+      "error", "aborted" -> {
+        if (streamingRunId == runId) {
+          streamingTts?.stop()
+          streamingTts = null
+          streamingRunId = null
+          _isSpeaking.value = false
+          _statusText.value = "Ready"
+        }
+      }
+    }
+  }
+
   fun playTtsForText(text: String) {
     scope.launch {
       reloadConfig()
@@ -271,27 +360,14 @@ private const val defaultTalkProvider = "elevenlabs"
     val runId = obj["runId"].asStringOrNull() ?: return
     val state = obj["state"].asStringOrNull() ?: return
 
-    // If this is a response we initiated, handle normally
+    // If this is a response we initiated, handle normally below.
+    // Otherwise, if ttsOnAllResponses, stream TTS for delta/final events.
     val pending = pendingRunId
-    if (pending != null && runId != pending) {
-      // Not our run — but if ttsOnAllResponses, still play TTS for final
-      if (ttsOnAllResponses && state == "final") {
-        val text = extractTextFromChatEventMessage(obj["message"])
-        if (!text.isNullOrBlank()) {
-          playTtsForText(text)
-        }
+    if (pending == null || runId != pending) {
+      if (ttsOnAllResponses) {
+        handleStreamingTts(runId, state, obj)
       }
-      return
-    }
-    if (pending == null) {
-      // No pending run — play TTS for final if ttsOnAllResponses
-      if (ttsOnAllResponses && state == "final") {
-        val text = extractTextFromChatEventMessage(obj["message"])
-        if (!text.isNullOrBlank()) {
-          playTtsForText(text)
-        }
-      }
-      return
+      if (pending == null || runId != pending) return
     }
     Log.d(tag, "chat event arrived runId=$runId state=$state pendingRunId=$pendingRunId")
     val terminal =
