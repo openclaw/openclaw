@@ -1078,6 +1078,22 @@ describe("normalizeOutboundPayloadsForJson", () => {
     ]);
     expect(normalized).toEqual([]);
   });
+
+  it("does not suppress normal technical discussion messages", () => {
+    const normalized = normalizeOutboundPayloadsForJson([
+      {
+        text: "Can you explain how function_call works in the OpenAI API and when to use functions.search?",
+      },
+    ]);
+    expect(normalized).toEqual([
+      {
+        text: "Can you explain how function_call works in the OpenAI API and when to use functions.search?",
+        mediaUrl: null,
+        mediaUrls: undefined,
+        channelData: undefined,
+      },
+    ]);
+  });
 });
 
 describe("normalizeOutboundPayloads", () => {
@@ -1106,6 +1122,15 @@ describe("normalizeOutboundPayloads", () => {
       },
     ]);
     expect(normalized).toEqual([]);
+  });
+
+  it("does not suppress normal messages mentioning functions.* identifiers", () => {
+    const normalized = normalizeOutboundPayloads([
+      { text: "The functions.memory_search endpoint is unavailable right now." },
+    ]);
+    expect(normalized).toEqual([
+      { text: "The functions.memory_search endpoint is unavailable right now.", mediaUrls: [] },
+    ]);
   });
 });
 

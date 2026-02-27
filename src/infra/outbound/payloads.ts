@@ -18,17 +18,19 @@ export type OutboundPayloadJson = {
   channelData?: Record<string, unknown>;
 };
 
-const INTERNAL_TRACE_PATTERNS: ReadonlyArray<RegExp> = [
-  /\bassistant\s+to=functions\.[a-z0-9_]+\b/i,
-  /\bfunctions\.[a-z0-9_]+\b/i,
-  /\b(memory_search|tool_call|function_call)\b/i,
-];
+const INTERNAL_TRACE_ENVELOPE_PATTERNS = {
+  noReply: /(?:^|\n)\s*NO_REPLY\b/i,
+  assistantToFunctions: /(?:^|\n)[^\n]*\bassistant\s+to=functions\.[a-z0-9_]+\b/i,
+} as const;
 
 function isInternalTraceLeakText(text: string | undefined): boolean {
   if (!text) {
     return false;
   }
-  return INTERNAL_TRACE_PATTERNS.some((pattern) => pattern.test(text));
+  return (
+    INTERNAL_TRACE_ENVELOPE_PATTERNS.noReply.test(text) &&
+    INTERNAL_TRACE_ENVELOPE_PATTERNS.assistantToFunctions.test(text)
+  );
 }
 
 function mergeMediaUrls(...lists: Array<ReadonlyArray<string | undefined> | undefined>): string[] {
