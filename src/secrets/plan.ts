@@ -154,7 +154,7 @@ function hasMatchingPathShape(
       return true;
     }
     if (segments.length === 5 && segments[0] === "channels" && segments[1] === "discord" && segments[2] === "accounts" && segments[4] === "token") {
-      return true;
+      return candidate.accountId === undefined || candidate.accountId.trim().length === 0 || candidate.accountId === segments[3];
     }
     return false;
   }
@@ -163,7 +163,7 @@ function hasMatchingPathShape(
       return true;
     }
     if (segments.length === 5 && segments[0] === "channels" && segments[1] === "slack" && segments[2] === "accounts" && segments[4] === "botToken") {
-      return true;
+      return candidate.accountId === undefined || candidate.accountId.trim().length === 0 || candidate.accountId === segments[3];
     }
     return false;
   }
@@ -172,7 +172,7 @@ function hasMatchingPathShape(
       return true;
     }
     if (segments.length === 5 && segments[0] === "channels" && segments[1] === "bluebubbles" && segments[2] === "accounts" && segments[4] === "password") {
-      return true;
+      return candidate.accountId === undefined || candidate.accountId.trim().length === 0 || candidate.accountId === segments[3];
     }
     return false;
   }
@@ -192,20 +192,24 @@ function hasMatchingPathShape(
     return false;
   }
   if (candidate.type === "models.providers.headers") {
+    // Path shape: models.providers.<providerId>.headers.<headerName> (5 segments)
     return (
-      segments.length === 4 &&
+      segments.length === 5 &&
       segments[0] === "models" &&
       segments[1] === "providers" &&
-      segments[3] !== "" &&
+      segments[3] === "headers" &&
+      segments[4] !== "" &&
       (candidate.providerId === undefined || candidate.providerId.trim().length === 0 || candidate.providerId === segments[2])
     );
   }
   if (candidate.type === "plugins.entries.config") {
+    // Path shape: plugins.entries.<pluginId>.config.<key> (5 segments)
     return (
-      segments.length === 4 &&
+      segments.length === 5 &&
       segments[0] === "plugins" &&
       segments[1] === "entries" &&
-      segments[3] !== "" &&
+      segments[3] === "config" &&
+      segments[4] !== "" &&
       (candidate.providerId === undefined || candidate.providerId.trim().length === 0 || candidate.providerId === segments[2])
     );
   }

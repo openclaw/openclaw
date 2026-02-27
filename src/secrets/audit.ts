@@ -251,60 +251,6 @@ function collectConfigSecrets(params: {
         accounts?: Record<string, unknown>;
       }
     | undefined;
-  if (!googlechat) {
-    return;
-  }
-
-  const collectGoogleChatValue = (
-    value: unknown,
-    refValue: unknown,
-    pathLabel: string,
-    accountId?: string,
-  ) => {
-    const explicitRef = coerceSecretRef(refValue, defaults);
-    const inlineRef = explicitRef ? null : coerceSecretRef(value, defaults);
-    const ref = explicitRef ?? inlineRef;
-    if (ref) {
-      params.collector.refAssignments.push({
-        file: params.configPath,
-        path: pathLabel,
-        ref,
-        expected: "string-or-object",
-        provider: accountId ? "googlechat" : undefined,
-      });
-      return;
-    }
-    if (isNonEmptyString(value) || (isRecord(value) && Object.keys(value).length > 0)) {
-      addFinding(params.collector, {
-        code: "PLAINTEXT_FOUND",
-        severity: "warn",
-        file: params.configPath,
-        jsonPath: pathLabel,
-        message: "Google Chat serviceAccount is stored as plaintext.",
-      });
-    }
-  };
-
-  collectGoogleChatValue(
-    googlechat.serviceAccount,
-    googlechat.serviceAccountRef,
-    "channels.googlechat.serviceAccount",
-  );
-  if (!isRecord(googlechat.accounts)) {
-    return;
-  }
-  for (const [accountId, accountValue] of Object.entries(googlechat.accounts)) {
-    if (!isRecord(accountValue)) {
-      continue;
-    }
-    collectGoogleChatValue(
-      accountValue.serviceAccount,
-      accountValue.serviceAccountRef,
-      `channels.googlechat.accounts.${accountId}.serviceAccount`,
-      accountId,
-    );
-  }
-
   // Collect channel tokens (telegram, discord, slack, bluebubbles)
   const telegramConfig = params.config.channels?.telegram as
     | { botToken?: unknown; accounts?: Record<string, { botToken?: unknown }> }
@@ -671,6 +617,61 @@ function collectConfigSecrets(params: {
     }
   }
 }
+
+  if (!googlechat) {
+    return;
+  }
+
+  const collectGoogleChatValue = (
+    value: unknown,
+    refValue: unknown,
+    pathLabel: string,
+    accountId?: string,
+  ) => {
+    const explicitRef = coerceSecretRef(refValue, defaults);
+    const inlineRef = explicitRef ? null : coerceSecretRef(value, defaults);
+    const ref = explicitRef ?? inlineRef;
+    if (ref) {
+      params.collector.refAssignments.push({
+        file: params.configPath,
+        path: pathLabel,
+        ref,
+        expected: "string-or-object",
+        provider: accountId ? "googlechat" : undefined,
+      });
+      return;
+    }
+    if (isNonEmptyString(value) || (isRecord(value) && Object.keys(value).length > 0)) {
+      addFinding(params.collector, {
+        code: "PLAINTEXT_FOUND",
+        severity: "warn",
+        file: params.configPath,
+        jsonPath: pathLabel,
+        message: "Google Chat serviceAccount is stored as plaintext.",
+      });
+    }
+  };
+
+  collectGoogleChatValue(
+    googlechat.serviceAccount,
+    googlechat.serviceAccountRef,
+    "channels.googlechat.serviceAccount",
+  );
+  if (!isRecord(googlechat.accounts)) {
+    return;
+  }
+  for (const [accountId, accountValue] of Object.entries(googlechat.accounts)) {
+    if (!isRecord(accountValue)) {
+      continue;
+    }
+    collectGoogleChatValue(
+      accountValue.serviceAccount,
+      accountValue.serviceAccountRef,
+      `channels.googlechat.accounts.${accountId}.serviceAccount`,
+      accountId,
+    );
+  }
+
 
 function collectAuthStorePaths(config: OpenClawConfig, stateDir: string): string[] {
   const paths = new Set<string>();
