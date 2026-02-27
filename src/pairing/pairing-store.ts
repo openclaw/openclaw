@@ -248,11 +248,9 @@ function requestShouldTrackFailedAttempt(
   const entryAccountId = String(entry.meta?.accountId ?? "")
     .trim()
     .toLowerCase();
-  if (!normalizedAccountId) {
-    // Unscoped attempts should only affect unscoped requests.
-    return !entryAccountId;
-  }
-  return entryAccountId === normalizedAccountId;
+  const resolvedEntryAccountId = entryAccountId || DEFAULT_ACCOUNT_ID;
+  const resolvedAccountId = normalizedAccountId || DEFAULT_ACCOUNT_ID;
+  return resolvedEntryAccountId === resolvedAccountId;
 }
 
 function normalizeId(value: string | number): string {
