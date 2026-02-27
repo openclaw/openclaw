@@ -487,6 +487,17 @@ class NodeRuntime(context: Context) {
     }
 
     scope.launch {
+      // Reset ttsOnAllResponses after each response completes
+      scope.launch {
+        var wasSending = false
+        micCapture.isSending.collect { sending ->
+          if (wasSending && !sending && !prefs.talkEnabled.value) {
+            talkMode.ttsOnAllResponses = false
+          }
+          wasSending = sending
+        }
+      }
+
       prefs.talkEnabled.collect { enabled ->
         // MicCaptureManager handles STT + send to gateway.
         // TalkModeManager plays TTS on assistant responses.

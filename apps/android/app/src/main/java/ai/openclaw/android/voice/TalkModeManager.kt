@@ -291,6 +291,7 @@ private const val defaultTalkProvider = "elevenlabs"
       streamingTts = tts
       _isSpeaking.value = true
       _statusText.value = "Speaking…"
+      requestAudioFocusForTts()
       tts.start()
       Log.d(tag, "streaming TTS started for agent assistant text")
     }
