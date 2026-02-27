@@ -29,6 +29,8 @@ const TOOL_HELP_QUESTION_PATTERNS = [
   /\bhow (?:do|can) i\b/i,
   /\bcan you (?:explain|show|tell)\b/i,
   /\bshould i (?:run|use)\b/i,
+  /\b(?:explain|show|tell)(?: me)? (?:the )?command\b/i,
+  /^(?:explain|show|tell)(?: me)?\b/i,
 ] as const;
 
 const ACK_ONLY_PATTERNS = [
@@ -74,11 +76,6 @@ function isLikelyAckOnlyText(text: string): boolean {
 
 function isLikelyToolHelpQuestion(prompt: string): boolean {
   const trimmed = prompt.trim();
-  const hasQuestionShape =
-    trimmed.includes("?") || /\b(what|which|how|can|should)\b/i.test(trimmed);
-  if (!hasQuestionShape) {
-    return false;
-  }
   return TOOL_HELP_QUESTION_PATTERNS.some((pattern) => pattern.test(trimmed));
 }
 
@@ -132,6 +129,7 @@ export function shouldRetryToolRequiredToolless(params: {
   toolMetas: Array<{ toolName: string; meta?: string }>;
   didSendViaMessagingTool: boolean;
   hasClientToolCall: boolean;
+  disableTools: boolean;
   promptError: unknown;
   aborted: boolean;
   timedOut: boolean;
@@ -145,6 +143,7 @@ export function shouldRetryToolRequiredToolless(params: {
     params.aborted ||
     params.timedOut ||
     params.timedOutDuringCompaction ||
+    params.disableTools ||
     params.didSendViaMessagingTool ||
     params.hasClientToolCall ||
     params.toolMetas.length > 0

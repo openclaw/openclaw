@@ -686,6 +686,7 @@ export async function runEmbeddedPiAgent(
             toolMetas: attempt.toolMetas,
             didSendViaMessagingTool: attempt.didSendViaMessagingTool,
             hasClientToolCall: Boolean(attempt.clientToolCall),
+            disableTools: params.disableTools === true,
             promptError,
             aborted,
             timedOut,

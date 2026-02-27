@@ -14,6 +14,7 @@ describe("tool-required retry guard", () => {
       toolMetas: [],
       didSendViaMessagingTool: false,
       hasClientToolCall: false,
+      disableTools: false,
       promptError: null,
       aborted: false,
       timedOut: false,
@@ -32,6 +33,7 @@ describe("tool-required retry guard", () => {
       toolMetas: [{ toolName: "exec" }],
       didSendViaMessagingTool: false,
       hasClientToolCall: false,
+      disableTools: false,
       promptError: null,
       aborted: false,
       timedOut: false,
@@ -50,6 +52,7 @@ describe("tool-required retry guard", () => {
       toolMetas: [],
       didSendViaMessagingTool: false,
       hasClientToolCall: false,
+      disableTools: false,
       promptError: null,
       aborted: false,
       timedOut: false,
@@ -68,6 +71,7 @@ describe("tool-required retry guard", () => {
       toolMetas: [],
       didSendViaMessagingTool: false,
       hasClientToolCall: false,
+      disableTools: false,
       promptError: null,
       aborted: false,
       timedOut: false,
@@ -86,6 +90,7 @@ describe("tool-required retry guard", () => {
       toolMetas: [],
       didSendViaMessagingTool: false,
       hasClientToolCall: false,
+      disableTools: false,
       promptError: null,
       aborted: false,
       timedOut: false,
@@ -104,6 +109,7 @@ describe("tool-required retry guard", () => {
       toolMetas: [],
       didSendViaMessagingTool: false,
       hasClientToolCall: false,
+      disableTools: false,
       promptError: null,
       aborted: false,
       timedOut: false,
@@ -116,5 +122,43 @@ describe("tool-required retry guard", () => {
   it("adds explicit no-ack instruction", () => {
     const prompt = buildToolRequiredRetryPrompt("Fix failing tests.");
     expect(prompt).toContain("do not send an acknowledgement-only response");
+  });
+
+  it("does not classify imperative tool-help prompts as execution tasks", () => {
+    const shouldRetry = shouldRetryToolRequiredToolless({
+      provider: "openai-codex",
+      prompt: "Explain the command to inspect logs in this repo.",
+      assistantTexts: ["I'll explain which command to use and why."],
+      lastAssistant: { stopReason: "end_turn", content: [] } as never,
+      toolMetas: [],
+      didSendViaMessagingTool: false,
+      hasClientToolCall: false,
+      disableTools: false,
+      promptError: null,
+      aborted: false,
+      timedOut: false,
+      timedOutDuringCompaction: false,
+    });
+
+    expect(shouldRetry).toBe(false);
+  });
+
+  it("does not retry when tools are disabled for llm-only runs", () => {
+    const shouldRetry = shouldRetryToolRequiredToolless({
+      provider: "openai-codex",
+      prompt: "Run this test and inspect the logs.",
+      assistantTexts: ["Acknowledged. I'll run this now and report back."],
+      lastAssistant: { stopReason: "end_turn", content: [] } as never,
+      toolMetas: [],
+      didSendViaMessagingTool: false,
+      hasClientToolCall: false,
+      disableTools: true,
+      promptError: null,
+      aborted: false,
+      timedOut: false,
+      timedOutDuringCompaction: false,
+    });
+
+    expect(shouldRetry).toBe(false);
   });
 });
