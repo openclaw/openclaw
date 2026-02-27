@@ -1,5 +1,11 @@
 import { statSync } from "node:fs";
-import { loadWorkspaceBootstrapFiles, type WorkspaceBootstrapFile } from "./workspace.js";
+import path from "node:path";
+import {
+  DEFAULT_MEMORY_ALT_FILENAME,
+  DEFAULT_MEMORY_FILENAME,
+  loadWorkspaceBootstrapFiles,
+  type WorkspaceBootstrapFile,
+} from "./workspace.js";
 
 interface CachedSnapshot {
   files: WorkspaceBootstrapFile[];
@@ -11,8 +17,18 @@ const cache = new Map<string, CachedSnapshot>();
 
 const MISSING_SENTINEL = -1;
 
+/**
+ * Optional bootstrap files that `loadWorkspaceBootstrapFiles` only includes
+ * when they exist on disk. We watch their paths even when absent so that
+ * creating one mid-session invalidates the cache.
+ */
+const OPTIONAL_BOOTSTRAP_FILENAMES = [DEFAULT_MEMORY_FILENAME, DEFAULT_MEMORY_ALT_FILENAME];
+
 /** Capture mtimeMs for each bootstrap file (missing files use a sentinel). */
-function snapshotMtimes(files: WorkspaceBootstrapFile[]): Map<string, number> {
+function snapshotMtimes(
+  files: WorkspaceBootstrapFile[],
+  workspaceDir: string,
+): Map<string, number> {
   const m = new Map<string, number>();
   for (const f of files) {
     if (f.missing) {
@@ -23,6 +39,13 @@ function snapshotMtimes(files: WorkspaceBootstrapFile[]): Map<string, number> {
       } catch {
         m.set(f.path, MISSING_SENTINEL);
       }
+    }
+  }
+  // Seed optional files that may not be in the list yet.
+  for (const name of OPTIONAL_BOOTSTRAP_FILENAMES) {
+    const filePath = path.join(workspaceDir, name);
+    if (!m.has(filePath)) {
+      m.set(filePath, MISSING_SENTINEL);
     }
   }
   return m;
@@ -56,7 +79,7 @@ export async function getOrLoadBootstrapFiles(params: {
   }
 
   const files = await loadWorkspaceBootstrapFiles(params.workspaceDir);
-  cache.set(params.sessionKey, { files, mtimes: snapshotMtimes(files) });
+  cache.set(params.sessionKey, { files, mtimes: snapshotMtimes(files, params.workspaceDir) });
   return files;
 }
 

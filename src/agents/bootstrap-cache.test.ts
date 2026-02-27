@@ -9,9 +9,13 @@ import {
 } from "./bootstrap-cache.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
 
-vi.mock("./workspace.js", () => ({
-  loadWorkspaceBootstrapFiles: vi.fn(),
-}));
+vi.mock("./workspace.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./workspace.js")>();
+  return {
+    ...actual,
+    loadWorkspaceBootstrapFiles: vi.fn(),
+  };
+});
 
 import { loadWorkspaceBootstrapFiles } from "./workspace.js";
 
@@ -224,6 +228,47 @@ describe("mtime-based staleness detection", () => {
     // Second load — should detect creation and reload
     const r2 = await getOrLoadBootstrapFiles({ workspaceDir: tmpDir, sessionKey: "s1" });
     expect(r2[0]?.content).toBe("# Tools");
+    expect(mockLoad).toHaveBeenCalledTimes(2);
+  });
+
+  it("reloads when MEMORY.md is created after initial cache (optional file)", async () => {
+    const memoryPath = path.join(tmpDir, "MEMORY.md");
+    // Initial load returns no memory file (it didn't exist)
+    const v1: WorkspaceBootstrapFile[] = [
+      {
+        name: "USER.md" as WorkspaceBootstrapFile["name"],
+        path: tmpFile,
+        content: "# v1",
+        missing: false,
+      },
+    ];
+    const v2: WorkspaceBootstrapFile[] = [
+      {
+        name: "USER.md" as WorkspaceBootstrapFile["name"],
+        path: tmpFile,
+        content: "# v1",
+        missing: false,
+      },
+      {
+        name: "MEMORY.md" as WorkspaceBootstrapFile["name"],
+        path: memoryPath,
+        content: "# Memory",
+        missing: false,
+      },
+    ];
+    mockLoad.mockResolvedValueOnce(v1).mockResolvedValueOnce(v2);
+
+    // First load — MEMORY.md absent, not in file list but watched via sentinel
+    await getOrLoadBootstrapFiles({ workspaceDir: tmpDir, sessionKey: "s1" });
+    expect(mockLoad).toHaveBeenCalledTimes(1);
+
+    // Create MEMORY.md on disk
+    fs.writeFileSync(memoryPath, "# Memory");
+
+    // Second load — should detect creation of optional file and reload
+    const r2 = await getOrLoadBootstrapFiles({ workspaceDir: tmpDir, sessionKey: "s1" });
+    expect(r2).toHaveLength(2);
+    expect(r2[1]?.content).toBe("# Memory");
     expect(mockLoad).toHaveBeenCalledTimes(2);
   });
 });
