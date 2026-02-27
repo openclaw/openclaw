@@ -355,8 +355,8 @@ Core actions:
 - `notify` (macOS `system.notify`)
 - `run` (macOS `system.run`)
 - `camera_list`, `camera_snap`, `camera_clip`, `screen_record`
-- `location_get`, `notifications_list`
-- `device_status`, `device_info`
+- `location_get`, `notifications_list`, `notifications_action`
+- `device_status`, `device_info`, `device_permissions`, `device_health`
 
 Notes:
 
