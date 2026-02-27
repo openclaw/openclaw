@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "../../config/config.js";
 import { logVerbose } from "../../globals.js";
-import { normalizeAgentId } from "../../routing/session-key.js";
 import { isAcpSessionKey } from "../../sessions/session-key-utils.js";
+import { resolveAcpAgent } from "../agent-resolution.js";
 import {
   AcpRuntimeError,
   toAcpRuntimeError,
@@ -215,7 +215,11 @@ export class AcpSessionManager {
     if (!sessionKey) {
       throw new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "ACP session key is required.");
     }
-    const agent = normalizeAgentId(input.agent);
+    const agent = resolveAcpAgent(
+      input.agent,
+      input.cfg.acp?.defaultAgent,
+      input.cfg.agents?.list ?? [],
+    );
     await this.evictIdleRuntimeHandles({ cfg: input.cfg });
     return await this.withSessionActor(sessionKey, async () => {
       const backend = this.deps.requireRuntimeBackend(input.backendId || input.cfg.acp?.backend);
