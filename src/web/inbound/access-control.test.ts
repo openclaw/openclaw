@@ -158,3 +158,65 @@ describe("WhatsApp dmPolicy precedence", () => {
     expect(sendMessageMock).not.toHaveBeenCalled();
   });
 });
+
+describe("monitor groups bypass groupAllowFrom", () => {
+  it("allows messages from monitor groups even without groupAllowFrom", async () => {
+    setAccessControlTestConfig({
+      channels: {
+        whatsapp: {
+          groupPolicy: "allowlist",
+          allowFrom: ["+15550009999"],
+          groups: {
+            "120363000000000000@g.us": {
+              requireMention: "monitor",
+            },
+          },
+        },
+      },
+    });
+
+    const result = await checkInboundAccessControl({
+      accountId: "default",
+      from: "120363000000000000@g.us",
+      selfE164: "+15550009999",
+      senderE164: "+15551234567",
+      group: true,
+      pushName: "Stranger",
+      isFromMe: false,
+      sock: { sendMessage: sendMessageMock },
+      remoteJid: "120363000000000000@g.us",
+    });
+
+    expect(result.allowed).toBe(true);
+  });
+
+  it("still blocks non-monitor groups without groupAllowFrom", async () => {
+    setAccessControlTestConfig({
+      channels: {
+        whatsapp: {
+          groupPolicy: "allowlist",
+          allowFrom: ["+15550009999"],
+          groups: {
+            "120363000000000000@g.us": {
+              requireMention: true,
+            },
+          },
+        },
+      },
+    });
+
+    const result = await checkInboundAccessControl({
+      accountId: "default",
+      from: "120363000000000000@g.us",
+      selfE164: "+15550009999",
+      senderE164: "+15551234567",
+      group: true,
+      pushName: "Stranger",
+      isFromMe: false,
+      sock: { sendMessage: sendMessageMock },
+      remoteJid: "120363000000000000@g.us",
+    });
+
+    expect(result.allowed).toBe(false);
+  });
+});
