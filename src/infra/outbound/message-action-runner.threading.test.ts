@@ -167,6 +167,11 @@ describe("runMessageAction threading auto-injection", () => {
       target: "telegram:999",
       expectedThreadId: undefined,
     },
+    {
+      name: "skips auto-injection when target already encodes a topic",
+      target: "telegram:123:topic:789",
+      expectedThreadId: undefined,
+    },
   ] as const)("telegram auto-threading: $name", async (testCase) => {
     mockHandledSendAction();
 

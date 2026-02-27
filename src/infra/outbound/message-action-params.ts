@@ -68,6 +68,14 @@ export function resolveTelegramAutoThreadId(params: {
   if (parsedTo.chatId.toLowerCase() !== parsedChannel.chatId.toLowerCase()) {
     return undefined;
   }
+  // When the target already encodes a topic (e.g. `chat:topic:456`), skip
+  // auto-injection so the topic in `to` takes precedence.  Downstream
+  // `buildTelegramThreadReplyParams` prioritizes the injected threadId over
+  // the target's messageThreadId, which would misroute the message to the
+  // wrong topic if we blindly forwarded the context thread id here.
+  if (parsedTo.messageThreadId != null) {
+    return undefined;
+  }
   return context.currentThreadTs;
 }
 
