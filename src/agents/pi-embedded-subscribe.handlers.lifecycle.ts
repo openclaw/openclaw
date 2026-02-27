@@ -29,6 +29,13 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext) {
   const lastAssistant = ctx.state.lastAssistant;
   const isError = isAssistantMessage(lastAssistant) && lastAssistant.stopReason === "error";
 
+  // FIX #28632: Detect length-limited responses (output token limit exceeded).
+  // When stopReason is "length" or "max_tokens", the response was truncated,
+  // not completed normally. Session should not end but continue/retry instead.
+  const isLengthLimited =
+    isAssistantMessage(lastAssistant) &&
+    (lastAssistant.stopReason === "length" || lastAssistant.stopReason === "max_tokens");
+
   if (isError && lastAssistant) {
     const friendlyError = formatAssistantErrorText(lastAssistant, {
       cfg: ctx.params.config,
@@ -54,6 +61,40 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext) {
       data: {
         phase: "error",
         error: errorText,
+      },
+    });
+  } else if (isLengthLimited && lastAssistant) {
+    // FIX #28632: Handle output limit gracefully instead of silently freezing.
+    // Log the truncation, emit a truncated phase event, and notify user.
+    const outputTokens = (lastAssistant as Record<string, unknown>).usage &&
+      typeof (lastAssistant as Record<string, unknown>).usage === 'object'
+      ? ((lastAssistant as Record<string, unknown>).usage as Record<string, unknown>).output
+      : undefined;
+
+    ctx.log.warn(
+      `embedded run truncated at output limit: runId=${ctx.params.runId} ` +
+      `stopReason=${lastAssistant.stopReason} outputTokens=${outputTokens ?? "unknown"}`,
+    );
+
+    // Emit truncated lifecycle event (phase: "truncated" instead of "end" or "error")
+    emitAgentEvent({
+      runId: ctx.params.runId,
+      stream: "lifecycle",
+      data: {
+        phase: "truncated",
+        stopReason: lastAssistant.stopReason,
+        outputTokens,
+        message: "Response truncated at output limit. Session continues.",
+        endedAt: Date.now(),
+      },
+    });
+
+    // Send user notification about truncation
+    void ctx.params.onAgentEvent?.({
+      stream: "system",
+      data: {
+        type: "warning",
+        message: "Response was truncated due to output limit. Attempting to recover...",
       },
     });
   } else {
