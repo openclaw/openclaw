@@ -148,6 +148,37 @@ const makeAgentOverrideOnlyFallbackConfig = (agentId: string): OpenClawConfig =>
     },
   }) satisfies OpenClawConfig;
 
+const makeCodexConfig = (): OpenClawConfig =>
+  ({
+    agents: {
+      defaults: {
+        model: {
+          fallbacks: [],
+        },
+      },
+    },
+    models: {
+      providers: {
+        "openai-codex": {
+          api: "openai-codex-responses",
+          apiKey: "sk-codex-test",
+          baseUrl: "https://example.com/codex/responses",
+          models: [
+            {
+              id: "gpt-5.3-codex",
+              name: "gpt-5.3-codex",
+              reasoning: false,
+              input: ["text"],
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              contextWindow: 200_000,
+              maxTokens: 8192,
+            },
+          ],
+        },
+      },
+    },
+  }) satisfies OpenClawConfig;
+
 const writeAuthStore = async (
   agentDir: string,
   opts?: {
@@ -744,6 +775,106 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
       expect(typeof usageStats["openai:p1"]?.lastUsed).toBe("number");
       expect(typeof usageStats["openai:p3"]?.lastUsed).toBe("number");
       expect(usageStats["openai:p2"]?.cooldownUntil).toBe(now + 60 * 60 * 1000);
+    });
+  });
+
+  it("retries codex toolless acknowledgement turns and ends with premature_completion", async () => {
+    await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
+      runEmbeddedAttemptMock
+        .mockResolvedValueOnce(
+          makeAttempt({
+            assistantTexts: ["Acknowledged. I'll run this exactly as specified."],
+            lastAssistant: buildAssistant({
+              provider: "openai-codex",
+              model: "gpt-5.3-codex",
+              stopReason: "stop",
+              content: [
+                { type: "text", text: "Acknowledged. I'll run this exactly as specified." },
+              ],
+            }),
+          }),
+        )
+        .mockResolvedValueOnce(
+          makeAttempt({
+            assistantTexts: ["Understood. I'll do this now."],
+            lastAssistant: buildAssistant({
+              provider: "openai-codex",
+              model: "gpt-5.3-codex",
+              stopReason: "stop",
+              content: [{ type: "text", text: "Understood. I'll do this now." }],
+            }),
+          }),
+        )
+        .mockResolvedValueOnce(
+          makeAttempt({
+            assistantTexts: ["Got it. I'll proceed now."],
+            lastAssistant: buildAssistant({
+              provider: "openai-codex",
+              model: "gpt-5.3-codex",
+              stopReason: "stop",
+              content: [{ type: "text", text: "Got it. I'll proceed now." }],
+            }),
+          }),
+        );
+
+      const result = await runEmbeddedPiAgent({
+        sessionId: "session:test",
+        sessionKey: "agent:test:codex:toolless-retry",
+        sessionFile: path.join(workspaceDir, "session.jsonl"),
+        workspaceDir,
+        agentDir,
+        config: makeCodexConfig(),
+        prompt: "Run this test, inspect logs, and fix the file in this repo.",
+        provider: "openai-codex",
+        model: "gpt-5.3-codex",
+        authProfileIdSource: "auto",
+        timeoutMs: 5_000,
+        runId: "run:codex:toolless-retry",
+      });
+
+      expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(3);
+      const secondPrompt = (
+        runEmbeddedAttemptMock.mock.calls[1]?.[0] as { prompt?: string } | undefined
+      )?.prompt;
+      expect(secondPrompt).toContain("do not send an acknowledgement-only response");
+      expect(result.meta.error?.kind).toBe("premature_completion");
+      expect(result.payloads?.[0]?.isError).toBe(true);
+      expect(result.payloads?.[0]?.text).toContain("without running required tools");
+    });
+  });
+
+  it("does not retry codex tool-help questions that are conversational", async () => {
+    await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
+      runEmbeddedAttemptMock.mockResolvedValueOnce(
+        makeAttempt({
+          assistantTexts: ["I'll explain which command to run and why."],
+          lastAssistant: buildAssistant({
+            provider: "openai-codex",
+            model: "gpt-5.3-codex",
+            stopReason: "stop",
+            content: [{ type: "text", text: "I'll explain which command to run and why." }],
+          }),
+        }),
+      );
+
+      const result = await runEmbeddedPiAgent({
+        sessionId: "session:test",
+        sessionKey: "agent:test:codex:tool-help",
+        sessionFile: path.join(workspaceDir, "session.jsonl"),
+        workspaceDir,
+        agentDir,
+        config: makeCodexConfig(),
+        prompt: "What command should I run to inspect logs in this repo?",
+        provider: "openai-codex",
+        model: "gpt-5.3-codex",
+        authProfileIdSource: "auto",
+        timeoutMs: 5_000,
+        runId: "run:codex:tool-help",
+      });
+
+      expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(1);
+      expect(result.meta.error).toBeUndefined();
+      expect(result.payloads?.[0]?.text).toContain("command");
     });
   });
 });
