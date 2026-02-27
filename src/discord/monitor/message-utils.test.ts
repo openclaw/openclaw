@@ -139,6 +139,34 @@ describe("resolveForwardedMediaList", () => {
     );
   });
 
+  it("keeps forwarded attachment metadata when download fails", async () => {
+    const attachment = {
+      id: "att-fallback",
+      url: "https://cdn.discordapp.com/attachments/1/fallback.png",
+      filename: "fallback.png",
+      content_type: "image/png",
+    };
+    fetchRemoteMedia.mockRejectedValueOnce(new Error("blocked by ssrf guard"));
+
+    const result = await resolveForwardedMediaList(
+      asMessage({
+        rawData: {
+          message_snapshots: [{ message: { attachments: [attachment] } }],
+        },
+      }),
+      512,
+    );
+
+    expect(saveMediaBuffer).not.toHaveBeenCalled();
+    expect(result).toEqual([
+      {
+        path: attachment.url,
+        contentType: "image/png",
+        placeholder: "<media:image>",
+      },
+    ]);
+  });
+
   it("downloads forwarded stickers", async () => {
     const sticker = {
       id: "sticker-1",
@@ -278,6 +306,57 @@ describe("resolveMediaList", () => {
     expect(fetchRemoteMedia).toHaveBeenCalledWith(
       expect.objectContaining({ fetchImpl: proxyFetch }),
     );
+  });
+
+  it("keeps attachment metadata when download fails", async () => {
+    const attachment = {
+      id: "att-main-fallback",
+      url: "https://cdn.discordapp.com/attachments/1/main-fallback.png",
+      filename: "main-fallback.png",
+      content_type: "image/png",
+    };
+    fetchRemoteMedia.mockRejectedValueOnce(new Error("blocked by ssrf guard"));
+
+    const result = await resolveMediaList(
+      asMessage({
+        attachments: [attachment],
+      }),
+      512,
+    );
+
+    expect(saveMediaBuffer).not.toHaveBeenCalled();
+    expect(result).toEqual([
+      {
+        path: attachment.url,
+        contentType: "image/png",
+        placeholder: "<media:image>",
+      },
+    ]);
+  });
+
+  it("keeps sticker metadata when sticker download fails", async () => {
+    const sticker = {
+      id: "sticker-fallback",
+      name: "fallback",
+      format_type: StickerFormatType.PNG,
+    };
+    fetchRemoteMedia.mockRejectedValueOnce(new Error("blocked by ssrf guard"));
+
+    const result = await resolveMediaList(
+      asMessage({
+        stickers: [sticker],
+      }),
+      512,
+    );
+
+    expect(saveMediaBuffer).not.toHaveBeenCalled();
+    expect(result).toEqual([
+      {
+        path: "https://media.discordapp.net/stickers/sticker-fallback.png",
+        contentType: "image/png",
+        placeholder: "<media:sticker>",
+      },
+    ]);
   });
 });
 
