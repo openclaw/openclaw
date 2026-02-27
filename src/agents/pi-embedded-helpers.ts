@@ -64,3 +64,8 @@ export type { EmbeddedContextFile, FailoverReason } from "./pi-embedded-helpers/
 
 export type { ToolCallIdMode } from "./tool-call-id.js";
 export { isValidCloudCodeAssistToolId, sanitizeToolCallId } from "./tool-call-id.js";
+
+export {
+  assessLastAssistantMessage,
+  sanitizeThinkingForRecovery,
+} from "./pi-embedded-helpers/anthropic.js";
