@@ -286,6 +286,7 @@ async function createDoc(
   }
   const doc = res.data?.document;
   const docToken = doc?.document_id;
+  let ownerPermissionAdded = false;
 
   // Auto add owner permission if ownerOpenId is provided
   if (docToken && ownerOpenId) {
@@ -299,6 +300,7 @@ async function createDoc(
           perm: ownerPermType,
         },
       });
+      ownerPermissionAdded = true;
     } catch (err) {
       console.warn("Failed to add owner permission (non-critical):", err);
     }
@@ -308,11 +310,12 @@ async function createDoc(
     document_id: docToken,
     title: doc?.title,
     url: `https://feishu.cn/docx/${docToken}`,
-    ...(ownerOpenId && {
-      owner_permission_added: true,
-      owner_open_id: ownerOpenId,
-      owner_perm_type: ownerPermType,
-    }),
+    ...(ownerOpenId &&
+      ownerPermissionAdded && {
+        owner_permission_added: true,
+        owner_open_id: ownerOpenId,
+        owner_perm_type: ownerPermType,
+      }),
   };
 }
 
@@ -547,8 +550,8 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
                       client,
                       p.title,
                       p.folder_token,
-                      (p as any).owner_open_id,
-                      (p as any).owner_perm_type,
+                      p.owner_open_id,
+                      p.owner_perm_type,
                     ),
                   );
                 case "list_blocks":
