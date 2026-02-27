@@ -132,12 +132,12 @@ async function promptWebToolsConfig(
 ): Promise<OpenClawConfig> {
   const existingSearch = nextConfig.tools?.web?.search;
   const existingFetch = nextConfig.tools?.web?.fetch;
-  const hasSearchKey = Boolean(existingSearch?.apiKey);
+  const currentProvider = existingSearch?.provider || "brave";
 
   note(
     [
       "Web search lets your agent look things up online using the `web_search` tool.",
-      "It requires a Brave Search API key (you can store it in the config or set BRAVE_API_KEY in the Gateway environment).",
+      "Supports Brave Search, Perplexity Sonar, xAI Grok, and Tavily.",
       "Docs: https://docs.openclaw.ai/tools/web",
     ].join("\n"),
     "Web search",
@@ -145,8 +145,10 @@ async function promptWebToolsConfig(
 
   const enableSearch = guardCancel(
     await confirm({
-      message: "Enable web_search (Brave Search)?",
-      initialValue: existingSearch?.enabled ?? hasSearchKey,
+      message: "Enable web_search?",
+      initialValue:
+        existingSearch?.enabled ??
+        (Boolean(existingSearch?.apiKey) || Boolean(process.env.BRAVE_API_KEY)),
     }),
     runtime,
   );
@@ -157,27 +159,94 @@ async function promptWebToolsConfig(
   };
 
   if (enableSearch) {
-    const keyInput = guardCancel(
-      await text({
-        message: hasSearchKey
-          ? "Brave Search API key (leave blank to keep current or use BRAVE_API_KEY)"
-          : "Brave Search API key (paste it here; leave blank to use BRAVE_API_KEY)",
-        placeholder: hasSearchKey ? "Leave blank to keep current" : "BSA...",
+    const provider = guardCancel(
+      await select({
+        message: "Search provider",
+        options: [
+          { value: "brave", label: "Brave Search", hint: "Fast snippets & URLs" },
+          { value: "perplexity", label: "Perplexity", hint: "AI-synthesized answers" },
+          { value: "grok", label: "xAI Grok", hint: "AI-synthesized answers" },
+          { value: "tavily", label: "Tavily", hint: "Detailed search for AI agents" },
+        ],
+        initialValue: currentProvider,
       }),
       runtime,
     );
-    const key = String(keyInput ?? "").trim();
-    if (key) {
-      nextSearch = { ...nextSearch, apiKey: key };
-    } else if (!hasSearchKey) {
-      note(
-        [
-          "No key stored yet, so web_search will stay unavailable.",
-          "Store a key here or set BRAVE_API_KEY in the Gateway environment.",
-          "Docs: https://docs.openclaw.ai/tools/web",
-        ].join("\n"),
-        "Web search",
+
+    nextSearch.provider = provider;
+
+    if (provider === "brave") {
+      const hasKey = Boolean(existingSearch?.apiKey);
+      const keyInput = guardCancel(
+        await text({
+          message: hasKey
+            ? "Brave Search API key (leave blank to keep current or use BRAVE_API_KEY)"
+            : "Brave Search API key (paste it here; leave blank to use BRAVE_API_KEY)",
+          placeholder: hasKey ? "Leave blank to keep current" : "BSA...",
+        }),
+        runtime,
       );
+      const key = String(keyInput ?? "").trim();
+      if (key) {
+        nextSearch = { ...nextSearch, apiKey: key };
+      }
+    } else if (provider === "perplexity") {
+      const existingPerplexity = existingSearch?.perplexity;
+      const hasKey = Boolean(existingPerplexity?.apiKey);
+      const keyInput = guardCancel(
+        await text({
+          message: hasKey
+            ? "Perplexity API key (leave blank to keep current or use PERPLEXITY_API_KEY)"
+            : "Perplexity API key (paste it here; leave blank to use PERPLEXITY_API_KEY)",
+          placeholder: hasKey ? "Leave blank to keep current" : "pplx-...",
+        }),
+        runtime,
+      );
+      const key = String(keyInput ?? "").trim();
+      if (key) {
+        nextSearch = {
+          ...nextSearch,
+          perplexity: { ...existingPerplexity, apiKey: key },
+        };
+      }
+    } else if (provider === "grok") {
+      const existingGrok = existingSearch?.grok;
+      const hasKey = Boolean(existingGrok?.apiKey);
+      const keyInput = guardCancel(
+        await text({
+          message: hasKey
+            ? "xAI API key (leave blank to keep current or use XAI_API_KEY)"
+            : "xAI API key (paste it here; leave blank to use XAI_API_KEY)",
+          placeholder: hasKey ? "Leave blank to keep current" : "xai-...",
+        }),
+        runtime,
+      );
+      const key = String(keyInput ?? "").trim();
+      if (key) {
+        nextSearch = {
+          ...nextSearch,
+          grok: { ...existingGrok, apiKey: key },
+        };
+      }
+    } else if (provider === "tavily") {
+      const existingTavily = existingSearch?.tavily;
+      const hasKey = Boolean(existingTavily?.apiKey);
+      const keyInput = guardCancel(
+        await text({
+          message: hasKey
+            ? "Tavily API key (leave blank to keep current or use TAVILY_API_KEY)"
+            : "Tavily API key (paste it here; leave blank to use TAVILY_API_KEY)",
+          placeholder: hasKey ? "Leave blank to keep current" : "tvly-...",
+        }),
+        runtime,
+      );
+      const key = String(keyInput ?? "").trim();
+      if (key) {
+        nextSearch = {
+          ...nextSearch,
+          tavily: { ...existingTavily, apiKey: key },
+        };
+      }
     }
   }
 

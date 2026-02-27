@@ -432,29 +432,35 @@ export async function finalizeOnboardingWizard(
     );
   }
 
-  const webSearchKey = (nextConfig.tools?.web?.search?.apiKey ?? "").trim();
-  const webSearchEnv = (process.env.BRAVE_API_KEY ?? "").trim();
-  const hasWebSearchKey = Boolean(webSearchKey || webSearchEnv);
+  const searchCfg = nextConfig.tools?.web?.search;
+  const provider = searchCfg?.provider || "brave";
+
+  const hasSearchKey =
+    Boolean(searchCfg?.apiKey) ||
+    Boolean(process.env.BRAVE_API_KEY) ||
+    Boolean(searchCfg?.perplexity?.apiKey) ||
+    Boolean(process.env.PERPLEXITY_API_KEY) ||
+    Boolean(process.env.OPENROUTER_API_KEY) ||
+    Boolean(searchCfg?.grok?.apiKey) ||
+    Boolean(process.env.XAI_API_KEY) ||
+    Boolean(searchCfg?.tavily?.apiKey) ||
+    Boolean(process.env.TAVILY_API_KEY);
+
   await prompter.note(
-    hasWebSearchKey
+    hasSearchKey
       ? [
-          "Web search is enabled, so your agent can look things up online when needed.",
-          "",
-          webSearchKey
-            ? "API key: stored in config (tools.web.search.apiKey)."
-            : "API key: provided via BRAVE_API_KEY env var (Gateway environment).",
+          `Web search is enabled (provider: ${provider}), so your agent can look things up online when needed.`,
           "Docs: https://docs.openclaw.ai/tools/web",
         ].join("\n")
       : [
           "If you want your agent to be able to search the web, you’ll need an API key.",
           "",
-          "OpenClaw uses Brave Search for the `web_search` tool. Without a Brave Search API key, web search won’t work.",
+          "OpenClaw supports Brave Search, Perplexity, xAI Grok, and Tavily for the `web_search` tool.",
           "",
           "Set it up interactively:",
           `- Run: ${formatCliCommand("openclaw configure --section web")}`,
-          "- Enable web_search and paste your Brave Search API key",
+          "- Enable web_search and choose your provider and API key.",
           "",
-          "Alternative: set BRAVE_API_KEY in the Gateway environment (no config changes).",
           "Docs: https://docs.openclaw.ai/tools/web",
         ].join("\n"),
     "Web search (optional)",
