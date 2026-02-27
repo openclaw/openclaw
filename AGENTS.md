@@ -122,6 +122,13 @@
 - If `git branch -d/-D <branch>` is policy-blocked, delete the local ref directly: `git update-ref -d refs/heads/<branch>`.
 - Bulk PR close/reopen safety: if a close action would affect more than 5 PRs, first ask for explicit user confirmation with the exact PR count and target scope/query.
 - Fork rollup policy: keep `bugfixes/rollup` rebased on `upstream/main` as bugfix-only commits; use `sync/upstream-rollup` only as a disposable integration PR branch.
+- Fork rollup refresh process (durable/safe path):
+  1. `git fetch --prune origin upstream`, create backup ref from remote rollup (`backup/rollup-refresh-<timestamp>`), and record pre-refresh commits (`upstream/main..origin/bugfixes/rollup`).
+  2. Refresh in an isolated `git worktree` branch from `origin/bugfixes/rollup` (keep main worktree and local dirty files untouched).
+  3. `git rebase upstream/main`, resolve conflicts explicitly, and continue non-interactively once staged.
+  4. Validate refreshed branch with targeted tests + build, and compare commit intent with `git cherry -v upstream/main HEAD` + `git range-diff`.
+  5. Publish only with `git push --force-with-lease=refs/heads/bugfixes/rollup:<old-remote-sha>`.
+  6. Verify remote commit set, keep backup ref for rollback, and remove temporary worktree/refresh branch.
 
 ## GitHub Search (`gh`)
 
