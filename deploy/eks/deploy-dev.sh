@@ -280,6 +280,7 @@ jq '
   | del(.channels.slack.nativeStreaming)
   | .channels.slack.mode = "socket"
   | .gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback = true
+  | .logging.redactSensitive = "tools"
   | if (.channels.slack.streaming | type) == "string"
     then .channels.slack.streaming = true
     else .

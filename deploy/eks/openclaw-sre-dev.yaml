@@ -141,6 +141,8 @@ spec:
               value: /home/node/.openclaw/openclaw.json
             - name: OPENCLAW_STATE_DIR
               value: /home/node/.openclaw
+            - name: CLAWDBOT_SHOW_SECRETS
+              value: "0"
             - name: AWS_REGION
               value: eu-west-3
             - name: AWS_DEFAULT_REGION

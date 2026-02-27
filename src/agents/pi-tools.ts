@@ -40,6 +40,7 @@ import {
   wrapToolWorkspaceRootGuardWithOptions,
   wrapToolParamNormalization,
 } from "./pi-tools.read.js";
+import { wrapToolWithResultRedaction } from "./pi-tools.redact.js";
 import { cleanToolSchemaForGemini, normalizeToolParameters } from "./pi-tools.schema.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
 import type { SandboxContext } from "./sandbox.js";
@@ -543,9 +544,10 @@ export function createOpenClawCodingTools(options?: {
       loopDetection: resolveToolLoopDetectionConfig({ cfg: options?.config, agentId }),
     }),
   );
+  const withRedaction = withHooks.map((tool) => wrapToolWithResultRedaction(tool));
   const withAbort = options?.abortSignal
-    ? withHooks.map((tool) => wrapToolWithAbortSignal(tool, options.abortSignal))
-    : withHooks;
+    ? withRedaction.map((tool) => wrapToolWithAbortSignal(tool, options.abortSignal))
+    : withRedaction;
 
   // NOTE: Keep canonical (lowercase) tool names here.
   // pi-ai's Anthropic OAuth transport remaps tool names to Claude Code-style names
