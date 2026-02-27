@@ -50,6 +50,7 @@ This script:
 Optional env vars:
 
 - `OPENCLAW_DOCKER_APT_PACKAGES` — install extra apt packages during build
+- `OPENCLAW_INSTALL_BROWSER=1` — install Playwright Chromium during image build
 - `OPENCLAW_EXTRA_MOUNTS` — add extra host bind mounts
 - `OPENCLAW_HOME_VOLUME` — persist `/home/node` in a named volume
 
