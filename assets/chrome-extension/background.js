@@ -807,19 +807,21 @@ async function onDebuggerDetach(source, reason) {
       return
     }
 
-    if (!relayWs || relayWs.readyState !== WebSocket.OPEN) {
-      reattachPending.delete(tabId)
-      setBadge(tabId, 'error')
-      void chrome.action.setTitle({
-        tabId,
-        title: 'OpenClaw Browser Relay: relay disconnected during re-attach',
-      })
-      return
-    }
+    const relayUp = relayWs && relayWs.readyState === WebSocket.OPEN
 
     try {
-      await attachTab(tabId)
+      // When relay is down, still attach the debugger but skip sending the
+      // relay event. reannounceAttachedTabs() will notify the relay once it
+      // reconnects, so the tab stays tracked across transient relay drops.
+      await attachTab(tabId, { skipAttachedEvent: !relayUp })
       reattachPending.delete(tabId)
+      if (!relayUp) {
+        setBadge(tabId, 'connecting')
+        void chrome.action.setTitle({
+          tabId,
+          title: 'OpenClaw Browser Relay: attached, waiting for relay reconnect…',
+        })
+      }
       return
     } catch {
       // continue retries
