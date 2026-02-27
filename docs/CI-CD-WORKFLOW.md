@@ -378,9 +378,11 @@ Required for production:
 
 ## Change Log
 
-| Date | Commit | Changes | Tag |
-|------|--------|---------|-----|
-| 2026-02-27 | `ab08d4b` | WS-2.2 fixes: Gemini Flash primary, fallback chain, Brave Search, maxTokens 16384 | `fix-ws22-maxTokens` |
+| Date | Commit | Changes | Tag | Status |
+|------|--------|---------|-----|--------|
+| 2026-02-27 | `e8f5f37` | Naming conventions: aligned Git tag == image tag | `docs` | ✅ Merged |
+| 2026-02-27 | `cec2aac` | Config: wire Brave Search apiKey via env substitution | `config` | ✅ Deployed |
+| 2026-02-27 | `ab08d4b` | WS-2.2 fixes: Gemini Flash primary, fallback chain, Brave Search, maxTokens 16384 | `v2026.2.27-ws22` | ✅ Deployed |
 
 ---
 
