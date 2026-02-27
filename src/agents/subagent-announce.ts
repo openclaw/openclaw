@@ -809,6 +809,8 @@ async function sendSubagentAnnounceDirectly(params: {
       }
 
       if (shouldSendCompletionDirectly) {
+        // Forward threadId so Telegram forum topic announcements land in the
+        // originating thread rather than the General topic (#21162).
         const completionThreadId =
           completionDirectOrigin?.threadId != null && completionDirectOrigin.threadId !== ""
             ? String(completionDirectOrigin.threadId)
