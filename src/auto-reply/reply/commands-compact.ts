@@ -15,6 +15,7 @@ import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { formatContextUsageShort, formatTokenCount } from "../status.js";
 import type { CommandHandler } from "./commands-types.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
+import { routeReply } from "./route-reply.js";
 import { incrementCompactionCount } from "./session-updates.js";
 
 function extractCompactInstructions(params: {
@@ -67,6 +68,24 @@ export const handleCompactCommand: CommandHandler = async (params) => {
   if (isEmbeddedPiRunActive(sessionId)) {
     abortEmbeddedPiRun(sessionId);
     await waitForEmbeddedPiRunEnd(sessionId, 15_000);
+  }
+  // Send immediate feedback so the user knows compaction has started
+  // oxlint-disable-next-line typescript/no-explicit-any
+  const ackChannel = params.ctx.OriginatingChannel || (params.command.channel as any);
+  const ackTo = params.ctx.OriginatingTo || params.command.from || params.command.to;
+  if (ackChannel && ackTo) {
+    void routeReply({
+      payload: { text: "🗜️ Compacting… It may take a while." },
+      channel: ackChannel,
+      to: ackTo,
+      sessionKey: params.sessionKey,
+      accountId: params.ctx.AccountId,
+      threadId: params.ctx.MessageThreadId,
+      cfg: params.cfg,
+      mirror: false, // ack is UI-only; don't pollute session transcript before compaction
+    }).catch(() => {
+      logVerbose("compact-ack: failed to send immediate feedback");
+    });
   }
   const customInstructions = extractCompactInstructions({
     rawBody: params.ctx.CommandBody ?? params.ctx.RawBody ?? params.ctx.Body,
