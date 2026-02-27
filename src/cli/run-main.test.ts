@@ -85,6 +85,31 @@ describe("rewriteLegacyGatewayBinaryArgv", () => {
     const updateFlagArgv = ["node", "/usr/local/bin/openclaw-gateway", "--update", "--json"];
     expect(rewriteLegacyGatewayBinaryArgv(updateFlagArgv)).toBe(updateFlagArgv);
   });
+
+  it("keeps --update untouched when root flags appear before it", () => {
+    const withNoColor = ["node", "/usr/local/bin/openclaw-gateway", "--no-color", "--update"];
+    expect(rewriteLegacyGatewayBinaryArgv(withNoColor)).toBe(withNoColor);
+
+    const withLogLevel = [
+      "node",
+      "/usr/local/bin/openclaw-gateway",
+      "--log-level",
+      "debug",
+      "--update",
+    ];
+    expect(rewriteLegacyGatewayBinaryArgv(withLogLevel)).toBe(withLogLevel);
+  });
+
+  it("injects gateway after known root flags for normal gateway command paths", () => {
+    expect(
+      rewriteLegacyGatewayBinaryArgv([
+        "node",
+        "/usr/local/bin/openclaw-gateway",
+        "--no-color",
+        "discover",
+      ]),
+    ).toEqual(["node", "/usr/local/bin/openclaw-gateway", "--no-color", "gateway", "discover"]);
+  });
 });
 
 describe("syncProcessArgvForNormalizedArgs", () => {

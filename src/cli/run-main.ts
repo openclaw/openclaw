@@ -38,15 +38,47 @@ function isLegacyGatewayBinary(entryPath: string | undefined): boolean {
   );
 }
 
+const ROOT_BOOLEAN_FLAGS = new Set(["--dev", "--no-color"]);
+const ROOT_VALUE_FLAGS = new Set(["--profile", "--log-level"]);
+
+function resolveLegacyGatewayCommandToken(argv: string[]): {
+  commandToken: string | undefined;
+  commandIndex: number;
+} {
+  let index = 2;
+  while (index < argv.length) {
+    const token = argv[index];
+    if (!token) {
+      index += 1;
+      continue;
+    }
+    if (ROOT_BOOLEAN_FLAGS.has(token)) {
+      index += 1;
+      continue;
+    }
+    if (token.startsWith("--profile=") || token.startsWith("--log-level=")) {
+      index += 1;
+      continue;
+    }
+    if (ROOT_VALUE_FLAGS.has(token)) {
+      index += 2;
+      continue;
+    }
+    break;
+  }
+  return { commandToken: argv[index], commandIndex: index };
+}
+
 export function rewriteLegacyGatewayBinaryArgv(argv: string[]): string[] {
   if (!isLegacyGatewayBinary(argv[1])) {
     return argv;
   }
-  if (argv[2] === "gateway" || argv[2] === "update" || argv[2] === "--update") {
+  const { commandToken, commandIndex } = resolveLegacyGatewayCommandToken(argv);
+  if (commandToken === "gateway" || commandToken === "update" || commandToken === "--update") {
     return argv;
   }
   const next = [...argv];
-  next.splice(2, 0, "gateway");
+  next.splice(commandIndex, 0, "gateway");
   return next;
 }
 
