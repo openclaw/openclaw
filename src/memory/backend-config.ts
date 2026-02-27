@@ -396,17 +396,15 @@ export async function checkQmdBinaryAvailable(
     QMD_AVAILABILITY_CACHE.delete(cacheKey);
   }
 
-  const isWindows = process.platform === "win32";
-  const resolvedCommand = isWindows && !path.extname(command) ? `${command}.cmd` : command;
+  // Use the command as-is without forcing .cmd suffix on Windows
+  // This allows both .cmd wrappers and native .exe binaries to work
+  const resolvedCommand = command;
 
   try {
     // Try to run `qmd --version` to verify the binary works
-    // On Windows, .cmd files need shell: true to execute properly
-    const needsShell = isWindows && resolvedCommand.endsWith(".cmd");
     await execFileAsync(resolvedCommand, ["--version"], {
       timeout: timeoutMs,
       encoding: "utf8",
-      shell: needsShell,
     });
     const result = { available: true as const, path: resolvedCommand, timestamp: now };
     QMD_AVAILABILITY_CACHE.set(cacheKey, result);
@@ -440,7 +438,7 @@ export async function checkQmdBinaryAvailable(
       errorLower.includes(pattern.toLowerCase()),
     );
     // Also check if the command name appears in the error (common for "not found" errors)
-    const isCommandMentioned = error.includes(command) || error.includes(resolvedCommand);
+    const isCommandMentioned = error.includes(command);
     if (isNotFound || (isCommandMentioned && errorLower.includes("fail"))) {
       const result = {
         available: false as const,

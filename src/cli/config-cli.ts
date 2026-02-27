@@ -402,7 +402,12 @@ export function registerConfigCli(program: Command) {
         const result = validateConfigObjectWithPlugins(snapshot.config);
 
         if (opts.json) {
-          defaultRuntime.log(JSON.stringify(result, null, 2));
+          // Only return validation status/issues/warnings, not the full config payload
+          // to avoid leaking secrets (API keys, tokens, credentials) in CI logs
+          const safeResult = result.ok
+            ? { ok: true, warnings: result.warnings }
+            : { ok: false, issues: result.issues, warnings: result.warnings };
+          defaultRuntime.log(JSON.stringify(safeResult, null, 2));
           if (!result.ok) {
             defaultRuntime.exit(1);
           }

@@ -1,6 +1,9 @@
 export function getSystemLocale(): string {
-  // Check environment variable first
-  const envLocale = process.env.OPENCLAW_LOCALE || process.env.LANG || process.env.LC_ALL;
+  // Check environment variables in precedence order:
+  // 1. OPENCLAW_LOCALE (app-specific override)
+  // 2. LC_ALL (standard locale override with highest precedence)
+  // 3. LANG (default locale)
+  const envLocale = process.env.OPENCLAW_LOCALE || process.env.LC_ALL || process.env.LANG;
   if (envLocale) {
     const normalized = normalizeLocale(envLocale);
     if (normalized) {
