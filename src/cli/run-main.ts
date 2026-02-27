@@ -40,6 +40,16 @@ function isLegacyGatewayBinary(entryPath: string | undefined): boolean {
 
 const ROOT_BOOLEAN_FLAGS = new Set(["--dev", "--no-color"]);
 const ROOT_VALUE_FLAGS = new Set(["--profile", "--log-level"]);
+const LEGACY_GATEWAY_PASSTHROUGH_TOKENS = new Set([
+  "gateway",
+  "update",
+  "--update",
+  "-h",
+  "--help",
+  "-v",
+  "-V",
+  "--version",
+]);
 
 function resolveLegacyGatewayCommandToken(argv: string[]): {
   commandToken: string | undefined;
@@ -74,7 +84,7 @@ export function rewriteLegacyGatewayBinaryArgv(argv: string[]): string[] {
     return argv;
   }
   const { commandToken, commandIndex } = resolveLegacyGatewayCommandToken(argv);
-  if (commandToken === "gateway" || commandToken === "update" || commandToken === "--update") {
+  if (commandToken && LEGACY_GATEWAY_PASSTHROUGH_TOKENS.has(commandToken)) {
     return argv;
   }
   const next = [...argv];

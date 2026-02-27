@@ -100,6 +100,14 @@ describe("rewriteLegacyGatewayBinaryArgv", () => {
     expect(rewriteLegacyGatewayBinaryArgv(withLogLevel)).toBe(withLogLevel);
   });
 
+  it("keeps root version alias untouched for gateway binaries", () => {
+    const rootAlias = ["node", "/usr/local/bin/openclaw-gateway", "-v"];
+    expect(rewriteLegacyGatewayBinaryArgv(rootAlias)).toBe(rootAlias);
+
+    const withLogLevel = ["node", "/usr/local/bin/openclaw-gateway", "--log-level", "debug", "-v"];
+    expect(rewriteLegacyGatewayBinaryArgv(withLogLevel)).toBe(withLogLevel);
+  });
+
   it("injects gateway after known root flags for normal gateway command paths", () => {
     expect(
       rewriteLegacyGatewayBinaryArgv([
