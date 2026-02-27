@@ -15,6 +15,7 @@ import {
   enforceMemoryLoadPolicy,
   resolveMemoryLoadPolicy,
 } from "./memory-load-policy.js";
+import type { MemoryPolicyResult } from "./memory-load-policy.js";
 
 const MemorySearchSchema = Type.Object({
   query: Type.String(),
@@ -120,12 +121,13 @@ export function createMemorySearchTool(options: {
         );
 
         if (violationCode) {
-          return jsonResult({
+          const blockedResult: MemoryPolicyResult = {
             results: [],
             disabled: true,
             error: "memory search blocked by policy",
             policyVersion: policyRuntime.policy.version,
-          });
+          };
+          return jsonResult(blockedResult);
         }
 
         return jsonResult({
@@ -196,12 +198,15 @@ export function createMemoryGetTool(options: {
       );
 
       if (violationCode) {
-        return jsonResult({
-          path: relPath,
-          text: "",
+        const blockedResult: MemoryPolicyResult = {
           disabled: true,
           error: "memory read blocked by policy",
           policyVersion: policyRuntime.policy.version,
+        };
+        return jsonResult({
+          path: relPath,
+          text: "",
+          ...blockedResult,
         });
       }
 
@@ -218,7 +223,7 @@ export function createMemoryGetTool(options: {
           from: from ?? undefined,
           lines: lines ?? undefined,
         });
-        return jsonResult({ ...result, policyVersion: policyRuntime.policy.version });
+        return jsonResult(result);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         return jsonResult({ path: relPath, text: "", disabled: true, error: message });

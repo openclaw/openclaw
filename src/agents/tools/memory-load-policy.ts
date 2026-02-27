@@ -28,6 +28,13 @@ export type MemoryLoadDecision = {
   policyVersion: string;
 };
 
+export interface MemoryPolicyResult {
+  disabled?: boolean;
+  error?: string;
+  results?: unknown[];
+  policyVersion?: string;
+}
+
 export type MemoryTelemetryRecord = {
   ts: string;
   sessionKey?: string;

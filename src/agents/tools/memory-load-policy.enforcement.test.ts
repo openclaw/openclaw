@@ -6,6 +6,7 @@ import {
   resetMemoryToolMockState,
   setMemoryReadFileImpl,
 } from "../../../test/helpers/memory-tool-manager-mock.js";
+import type { MemoryPolicyResult } from "./memory-load-policy.js";
 import { resolveMemoryLoadPolicy } from "./memory-load-policy.js";
 import { createMemoryGetTool, createMemorySearchTool } from "./memory-tool.js";
 
@@ -29,6 +30,13 @@ function restoreEnv(snapshot: Record<string, string | undefined>) {
       process.env[k] = v;
     }
   }
+}
+
+function detailsAsPolicyResult(value: unknown): MemoryPolicyResult {
+  if (!value || typeof value !== "object") {
+    return {};
+  }
+  return value as MemoryPolicyResult;
 }
 
 describe("memory load policy structural enforcement", () => {
@@ -67,8 +75,9 @@ describe("memory load policy structural enforcement", () => {
       lines: 10,
     });
 
-    expect(result.details?.disabled).toBe(true);
-    expect(String(result.details?.error || "")).toContain("blocked by policy");
+    const details = detailsAsPolicyResult(result.details);
+    expect(details.disabled).toBe(true);
+    expect(String(details.error || "")).toContain("blocked by policy");
     expect(readSpy).not.toHaveBeenCalled();
   });
 
@@ -117,8 +126,9 @@ describe("memory load policy structural enforcement", () => {
       path: "memory/runbook.md",
     });
 
-    expect(result.details?.disabled).toBe(true);
-    expect(String(result.details?.error || "")).toContain("blocked by policy");
+    const details = detailsAsPolicyResult(result.details);
+    expect(details.disabled).toBe(true);
+    expect(String(details.error || "")).toContain("blocked by policy");
     expect(readSpy).not.toHaveBeenCalled();
   });
 
@@ -137,7 +147,8 @@ describe("memory load policy structural enforcement", () => {
       path: "MEMORY.md",
     });
 
-    expect(result.details?.disabled).not.toBe(true);
+    const details = detailsAsPolicyResult(result.details);
+    expect(details.disabled).not.toBe(true);
   });
 
   it("memory_search filters denied paths and emits telemetry", async () => {
@@ -197,9 +208,10 @@ describe("memory load policy structural enforcement", () => {
     }
 
     const result = await tool.execute("test-search", { query: "governance" });
-    const rows = Array.isArray(result.details?.results) ? result.details?.results : [];
+    const details = detailsAsPolicyResult(result.details);
+    const rows = Array.isArray(details.results) ? details.results : [];
     expect(rows.length).toBe(1);
-    expect(rows[0]?.path).toBe("memory/topics/governance.md");
+    expect((rows[0] as { path?: string } | undefined)?.path).toBe("memory/topics/governance.md");
   });
 
   it("rollback pointer flip test: flip policy pointer and restore", async () => {

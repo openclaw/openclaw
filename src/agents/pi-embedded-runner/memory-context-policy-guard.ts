@@ -27,9 +27,11 @@ function extractText(msg: AgentMessage): string {
 }
 
 function replaceText(msg: AgentMessage, text: string): AgentMessage {
-  const source = msg as Record<string, unknown>;
+  if (typeof msg !== "object" || msg === null) {
+    return msg;
+  }
   return {
-    ...source,
+    ...msg,
     content: [{ type: "text", text }],
   } as AgentMessage;
 }
