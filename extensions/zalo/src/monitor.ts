@@ -397,7 +397,8 @@ async function processMessageWithPipeline(params: {
     configuredAllowFrom: configAllowFrom,
     senderId,
     isSenderAllowed,
-    readAllowFromStore: () => core.channel.pairing.readAllowFromStore("zalo"),
+    readAllowFromStore: () =>
+      core.channel.pairing.readAllowFromStore({ channel: "zalo", accountId: account.accountId }),
     shouldComputeCommandAuthorized: (body, cfg) =>
       core.channel.commands.shouldComputeCommandAuthorized(body, cfg),
     resolveCommandAuthorizedFromAuthorizers: (params) =>
@@ -418,6 +419,7 @@ async function processMessageWithPipeline(params: {
           const { code, created } = await core.channel.pairing.upsertPairingRequest({
             channel: "zalo",
             id: senderId,
+            accountId: account.accountId,
             meta: { name: senderName ?? undefined },
           });
 

@@ -35,6 +35,7 @@ export const SERVICE_AUDIT_CODES = {
   gatewayPathMissingDirs: "gateway-path-missing-dirs",
   gatewayPathNonMinimal: "gateway-path-nonminimal",
   gatewayTokenMismatch: "gateway-token-mismatch",
+  gatewayTokenDrift: "gateway-token-drift",
   gatewayRuntimeBun: "gateway-runtime-bun",
   gatewayRuntimeNodeVersionManager: "gateway-runtime-node-version-manager",
   gatewayRuntimeNodeSystemMissing: "gateway-runtime-node-system-missing",
@@ -51,6 +52,36 @@ export function needsNodeRuntimeMigration(issues: ServiceConfigIssue[]): boolean
       issue.code === SERVICE_AUDIT_CODES.gatewayRuntimeBun ||
       issue.code === SERVICE_AUDIT_CODES.gatewayRuntimeNodeVersionManager,
   );
+}
+
+/**
+ * Compare the token currently active in the running service against the token
+ * stored in the config file. Returns a {@link ServiceConfigIssue} when they
+ * diverge, or `null` when no drift is detected.
+ */
+export function checkTokenDrift(params: {
+  serviceToken: string | undefined;
+  configToken: string | undefined;
+}): ServiceConfigIssue | null {
+  const service = params.serviceToken?.trim() || "";
+  const config = params.configToken?.trim() || "";
+
+  // No config token means nothing to drift from.
+  if (!config) {
+    return null;
+  }
+  // Both empty or identical — no drift.
+  if (service === config) {
+    return null;
+  }
+  return {
+    code: SERVICE_AUDIT_CODES.gatewayTokenDrift,
+    message: service
+      ? "Config gateway token differs from service token"
+      : "Config gateway token set but service token is missing",
+    detail: service ? "tokens differ" : "service token empty",
+    level: "recommended",
+  };
 }
 
 function hasGatewaySubcommand(programArguments?: string[]): boolean {

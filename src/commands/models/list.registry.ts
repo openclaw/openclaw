@@ -1,6 +1,7 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
 import type { AuthProfileStore } from "../../agents/auth-profiles.js";
-import type { ModelRegistry } from "../../agents/pi-model-discovery.js";
+import { type ModelRegistry as ModelRegistryClass } from "../../agents/pi-model-discovery.js";
+type ModelRegistry = InstanceType<typeof ModelRegistryClass>;
 import type { BotConfig } from "../../config/config.js";
 import type { ModelRow } from "./list.types.js";
 import { resolveBotAgentDir } from "../../agents/agent-paths.js";

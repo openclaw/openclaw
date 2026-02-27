@@ -1,5 +1,10 @@
 import type { BotConfig } from "../config/config.js";
+import type { DiscordActionConfig } from "../config/types.discord.js";
 import type { DiscordAccountConfig } from "../config/types.js";
+import {
+  createAccountActionGate,
+  type ActionGate,
+} from "../channels/plugins/account-action-gate.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 import { resolveDiscordToken } from "./token.js";
 
@@ -76,4 +81,17 @@ export function listEnabledDiscordAccounts(cfg: BotConfig): ResolvedDiscordAccou
   return listDiscordAccountIds(cfg)
     .map((accountId) => resolveDiscordAccount({ cfg, accountId }))
     .filter((account) => account.enabled);
+}
+
+/** Build an action gate for Discord that merges base + account action configs. */
+export function createDiscordActionGate(params: {
+  cfg: BotConfig;
+  accountId?: string | null;
+}): ActionGate<DiscordActionConfig> {
+  const baseActions = (params.cfg.channels?.discord as DiscordAccountConfig | undefined)?.actions;
+  const account = resolveDiscordAccount(params);
+  return createAccountActionGate({
+    baseActions,
+    accountActions: account.config.actions,
+  });
 }

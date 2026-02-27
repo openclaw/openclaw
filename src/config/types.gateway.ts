@@ -46,6 +46,22 @@ export type CanvasHostConfig = {
   liveReload?: boolean;
 };
 
+/** Per-provider configuration for Talk mode TTS backends. */
+export type TalkProviderConfig = {
+  /** Voice ID for this provider. */
+  voiceId?: string;
+  /** Optional voice name -> voice ID map. */
+  voiceAliases?: Record<string, string>;
+  /** Model ID for this provider. */
+  modelId?: string;
+  /** Output format (e.g. mp3_44100_128). */
+  outputFormat?: string;
+  /** API key for this provider. */
+  apiKey?: string;
+  /** Allow arbitrary provider-specific fields. */
+  [key: string]: unknown;
+};
+
 export type TalkConfig = {
   /** Default ElevenLabs voice ID for Talk mode. */
   voiceId?: string;
@@ -59,6 +75,10 @@ export type TalkConfig = {
   apiKey?: string;
   /** Stop speaking when user starts talking (default: true). */
   interruptOnSpeech?: boolean;
+  /** Active provider id (e.g. "elevenlabs"). */
+  provider?: string;
+  /** Per-provider TTS configuration keyed by provider id. */
+  providers?: Record<string, TalkProviderConfig>;
 };
 
 export type GatewayControlUiConfig = {
@@ -72,6 +92,10 @@ export type GatewayControlUiConfig = {
   allowedOrigins?: string[];
   /** Allow token-only auth over insecure HTTP (default: false). */
   allowInsecureAuth?: boolean;
+  /** Allow Host header as origin fallback when Origin header is absent (default: false). */
+  dangerouslyAllowHostHeaderOriginFallback?: boolean;
+  /** Disable device-based authentication (default: false). */
+  dangerouslyDisableDeviceAuth?: boolean;
 };
 
 export type GatewayAuthMode = "token" | "password" | "trusted-proxy" | "iam";

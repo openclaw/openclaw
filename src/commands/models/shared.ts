@@ -194,6 +194,15 @@ export function applyDefaultModelPrimaryUpdate(params: {
   };
 }
 
+export async function loadValidConfigOrThrow(): Promise<BotConfig> {
+  const snapshot = await readConfigFileSnapshot();
+  if (!snapshot.valid) {
+    const issues = snapshot.issues.map((issue) => `- ${issue.path}: ${issue.message}`).join("\n");
+    throw new Error(`Invalid config at ${snapshot.path}\n${issues}`);
+  }
+  return snapshot.config;
+}
+
 export { modelKey };
 export { DEFAULT_MODEL, DEFAULT_PROVIDER };
 

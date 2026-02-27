@@ -211,6 +211,86 @@ export async function acquireSessionWriteLock(params: {
   throw new Error(`session file locked (timeout ${timeoutMs}ms): ${owner} ${lockPath}`);
 }
 
+export type SessionLockInspection = {
+  lockPath: string;
+  pid: number | null;
+  pidAlive: boolean;
+  ageMs: number | null;
+  stale: boolean;
+  staleReasons: string[];
+  removed: boolean;
+};
+
+export function resolveSessionLockMaxHoldFromTimeout(timeoutMs: number): number {
+  return Math.max(timeoutMs * 2, 60_000);
+}
+
+export async function cleanStaleLockFiles(params: {
+  sessionsDir: string;
+  staleMs: number;
+  nowMs?: number;
+  removeStale?: boolean;
+}): Promise<{ locks: SessionLockInspection[]; cleaned: SessionLockInspection[] }> {
+  const nowMs = params.nowMs ?? Date.now();
+  const locks: SessionLockInspection[] = [];
+  const cleaned: SessionLockInspection[] = [];
+
+  let entries: string[];
+  try {
+    entries = await fs.readdir(params.sessionsDir);
+  } catch {
+    return { locks, cleaned };
+  }
+
+  const lockFiles = entries.filter((entry) => entry.endsWith(".lock"));
+  for (const lockFile of lockFiles) {
+    const lockPath = path.join(params.sessionsDir, lockFile);
+    const payload = await readLockPayload(lockPath);
+    const pid = payload?.pid ?? null;
+    const pidAlive = pid !== null ? isPidAlive(pid) : false;
+    const createdAt = payload?.createdAt ? Date.parse(payload.createdAt) : NaN;
+    const ageMs = Number.isFinite(createdAt) ? nowMs - createdAt : null;
+
+    const staleReasons: string[] = [];
+    if (pid !== null && !pidAlive) {
+      staleReasons.push("pid-dead");
+    }
+    if (ageMs !== null && ageMs > params.staleMs) {
+      staleReasons.push("age-exceeded");
+    }
+    if (pid === null) {
+      staleReasons.push("no-pid");
+    }
+    const stale = staleReasons.length > 0;
+
+    let removed = false;
+    if (stale && params.removeStale) {
+      try {
+        await fs.rm(lockPath, { force: true });
+        removed = true;
+      } catch {
+        // Best effort.
+      }
+    }
+
+    const inspection: SessionLockInspection = {
+      lockPath,
+      pid,
+      pidAlive,
+      ageMs,
+      stale,
+      staleReasons,
+      removed,
+    };
+    locks.push(inspection);
+    if (removed) {
+      cleaned.push(inspection);
+    }
+  }
+
+  return { locks, cleaned };
+}
+
 export const __testing = {
   cleanupSignals: [...CLEANUP_SIGNALS],
   handleTerminationSignal,

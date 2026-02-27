@@ -247,6 +247,7 @@ const plugin = {
 function createExperienceTool(_api: BotPluginApi): AnyAgentTool {
   return {
     name: "grpo_experiences",
+    label: "GRPO Experiences",
     description:
       "Manage the GRPO experience library (semantic memory for training-free improvement). " +
       "Backed by zoo-gym's SemanticMemoryManager with embedding-based retrieval. " +
@@ -286,7 +287,7 @@ function createExperienceTool(_api: BotPluginApi): AnyAgentTool {
       },
       required: ["action"],
     },
-    async execute(params: any) {
+    async execute(_toolCallId: string, params: any) {
       const action = params.action as string;
       const config = DEFAULT_CONFIG;
 
@@ -330,6 +331,7 @@ function createExperienceTool(_api: BotPluginApi): AnyAgentTool {
 function createGRPOCompletionTool(_api: BotPluginApi): AnyAgentTool {
   return {
     name: "grpo_completion",
+    label: "GRPO Completion",
     description:
       "Run a GRPO-enhanced LLM completion (multi-rollout + reward + best response). " +
       "Uses zoo-gym's SemanticExtractor pipeline: G rollouts → reward scoring → " +
@@ -355,7 +357,7 @@ function createGRPOCompletionTool(_api: BotPluginApi): AnyAgentTool {
       },
       required: ["prompt"],
     },
-    async execute(params: any) {
+    async execute(_toolCallId: string, params: any) {
       const config = DEFAULT_CONFIG;
 
       try {
@@ -426,6 +428,7 @@ function createGRPOCompletionTool(_api: BotPluginApi): AnyAgentTool {
 function createDSOTool(_api: BotPluginApi): AnyAgentTool {
   return {
     name: "dso_network",
+    label: "DSO Network",
     description:
       "Manage DSO (Decentralized Semantic Optimization, ZIP-001/400) for federated " +
       "experience sharing. Compresses experiences with BitDelta (ZIP-007, 10× compression) " +
@@ -448,7 +451,7 @@ function createDSOTool(_api: BotPluginApi): AnyAgentTool {
       },
       required: ["action"],
     },
-    async execute(params: any) {
+    async execute(_toolCallId: string, params: any) {
       const config = DEFAULT_CONFIG;
 
       if (!config.dsoEnabled) {

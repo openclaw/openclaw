@@ -60,13 +60,22 @@ export type NodeInfo = {
   displayName?: string;
   platform?: string;
   version?: string;
+  coreVersion?: string;
+  uiVersion?: string;
+  deviceFamily?: string;
+  modelIdentifier?: string;
   caps: string[];
   commands: string[];
   connectedAtMs: number;
   remoteIp?: string;
+  pathEnv?: string;
+  permissions?: Record<string, boolean>;
   connected: boolean;
   local: boolean;
   podId?: string;
+  billingMode?: NodeBillingMode;
+  dedicatedBudgetCents?: number;
+  dedicatedSpentCents?: number;
 };
 
 export class NodeRegistry {
@@ -228,12 +237,21 @@ export class NodeRegistry {
         displayName: n.displayName,
         platform: n.platform,
         version: n.version,
+        coreVersion: n.coreVersion,
+        uiVersion: n.uiVersion,
+        deviceFamily: n.deviceFamily,
+        modelIdentifier: n.modelIdentifier,
         caps: n.caps,
         commands: n.commands,
         connectedAtMs: n.connectedAtMs,
         remoteIp: n.remoteIp,
+        pathEnv: n.pathEnv,
+        permissions: n.permissions,
         connected: true,
         local: true,
+        billingMode: n.billingMode,
+        dedicatedBudgetCents: n.dedicatedBudgetCents,
+        dedicatedSpentCents: n.dedicatedSpentCents,
       }));
     }
 
@@ -250,13 +268,22 @@ export class NodeRegistry {
         displayName: n.displayName,
         platform: n.platform,
         version: n.version,
+        coreVersion: n.coreVersion,
+        uiVersion: n.uiVersion,
+        deviceFamily: n.deviceFamily,
+        modelIdentifier: n.modelIdentifier,
         caps: n.caps,
         commands: n.commands,
         connectedAtMs: n.connectedAtMs,
         remoteIp: n.remoteIp,
+        pathEnv: n.pathEnv,
+        permissions: n.permissions,
         connected: true,
         local: true,
         podId: this.sync.podId,
+        billingMode: n.billingMode,
+        dedicatedBudgetCents: n.dedicatedBudgetCents,
+        dedicatedSpentCents: n.dedicatedSpentCents,
       });
     }
 

@@ -70,7 +70,7 @@ export async function probeTwitch(
       });
 
       // Failure: disconnected (e.g., auth failed)
-      disconnectListener = client?.onDisconnect((_manually, reason) => {
+      disconnectListener = client?.onDisconnect((_manually: boolean, reason?: Error) => {
         cleanup();
         reject(reason || new Error("Disconnected"));
       });

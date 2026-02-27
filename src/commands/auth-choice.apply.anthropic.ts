@@ -83,8 +83,7 @@ export async function applyAuthChoiceAnthropic(
       normalize: normalizeApiKeyInput,
       validate: validateApiKeyInput,
       prompter: params.prompter,
-      setCredential: async (apiKey, mode) =>
-        setAnthropicApiKey(apiKey, params.agentDir, { secretInputMode: mode }),
+      setCredential: async (apiKey, _mode) => setAnthropicApiKey(apiKey, params.agentDir),
     });
     nextConfig = applyAuthProfileConfig(nextConfig, {
       profileId: "anthropic:default",

@@ -219,7 +219,7 @@ export function registerSkillsCli(program: Command) {
         const dirName = extractDirName(url);
         const targetDir = path.join(HANZO_SKILLS_DIR, dirName);
 
-        defaultRuntime.log(`\n${theme.bold("Adding skills from:")} ${url}`);
+        defaultRuntime.log(`\n${theme.heading("Adding skills from:")} ${url}`);
         defaultRuntime.log(`${theme.muted("Clone URL:")} ${cloneUrl}`);
         defaultRuntime.log(`${theme.muted("Canonical:")} ${targetDir}\n`);
 
@@ -229,7 +229,7 @@ export function registerSkillsCli(program: Command) {
         // Check if target already exists
         if (fs.existsSync(targetDir)) {
           if (opts.force) {
-            defaultRuntime.log(`${theme.warning("Removing existing directory...")}`);
+            defaultRuntime.log(`${theme.warn("Removing existing directory...")}`);
             await unlinkFromAgents(dirName);
             await fs.promises.rm(targetDir, { recursive: true, force: true });
           } else {
@@ -248,7 +248,7 @@ export function registerSkillsCli(program: Command) {
                 );
               }
               defaultRuntime.log(
-                `\n${theme.muted("Tip:")} Run ${theme.bold("bot skills list")} to see all available skills.\n`,
+                `\n${theme.muted("Tip:")} Run ${theme.heading("bot skills list")} to see all available skills.\n`,
               );
               return;
             } catch {
@@ -289,7 +289,7 @@ export function registerSkillsCli(program: Command) {
           `\n${theme.muted("All agents (Claude Code, Cursor, Codex, Hanzo Bot, Hanzo Bot) now see these skills.")}`,
         );
         defaultRuntime.log(
-          `${theme.muted("Tip:")} Run ${theme.bold("bot skills list")} to see all available skills.\n`,
+          `${theme.muted("Tip:")} Run ${theme.heading("bot skills list")} to see all available skills.\n`,
         );
       } catch (err) {
         defaultRuntime.error(String(err));

@@ -450,3 +450,112 @@ export type { ProcessedLineMessage } from "../line/markdown-to-line.js";
 
 // Media utilities
 export { loadWebMedia, type WebMediaResult } from "../web/media.js";
+
+// Plugin types
+export type { PluginLogger, BotPluginConfigSchema } from "../plugins/types.js";
+
+// ACP Runtime
+export type {
+  AcpRuntime,
+  AcpRuntimeCapabilities,
+  AcpRuntimeControl,
+  AcpRuntimeDoctorReport,
+  AcpRuntimeEnsureInput,
+  AcpRuntimeEvent,
+  AcpRuntimeHandle,
+  AcpRuntimePromptMode,
+  AcpRuntimeSessionMode,
+  AcpRuntimeStatus,
+  AcpRuntimeTurnInput,
+} from "../acp/runtime/types.js";
+export { AcpRuntimeError, type AcpRuntimeErrorCode } from "../acp/runtime/errors.js";
+export { registerAcpRuntimeBackend, unregisterAcpRuntimeBackend } from "../acp/runtime/registry.js";
+
+// Runtime group policy
+export {
+  resolveRuntimeGroupPolicy,
+  resolveOpenProviderRuntimeGroupPolicy,
+  resolveAllowlistProviderRuntimeGroupPolicy,
+  resolveDefaultGroupPolicy,
+  warnMissingProviderGroupPolicyFallbackOnce,
+  GROUP_POLICY_BLOCKED_LABEL,
+} from "../config/runtime-group-policy.js";
+export type {
+  RuntimeGroupPolicyResolution,
+  RuntimeGroupPolicyParams,
+  ResolveProviderRuntimeGroupPolicyParams,
+  GroupPolicyDefaultsConfig,
+} from "../config/runtime-group-policy.js";
+
+// Status helpers (additional exports)
+export {
+  buildTokenChannelStatusSummary,
+  buildBaseAccountStatusSnapshot,
+} from "./status-helpers.js";
+
+// Group access
+export {
+  evaluateSenderGroupAccess,
+  type SenderGroupAccessDecision,
+  type SenderGroupAccessReason,
+} from "./group-access.js";
+
+// Allow-from helpers
+export { isNormalizedSenderAllowed } from "./allow-from.js";
+
+// Scoped pairing access
+export { createScopedPairingAccess } from "./pairing-access.js";
+
+// Security DM policy shared
+export {
+  resolveEffectiveAllowFromLists,
+  DM_GROUP_ACCESS_REASON,
+  readStoreAllowFromForDmPolicy,
+  resolveDmGroupAccessWithLists,
+} from "../security/dm-policy-shared.js";
+
+// Dangerous name matching
+export { isDangerousNameMatchingEnabled } from "../config/dangerous-name-matching.js";
+
+// Pairing challenge
+export { issuePairingChallenge } from "../pairing/pairing-challenge.js";
+
+// Onboarding helpers (additional)
+export { mergeAllowFromEntries } from "../channels/plugins/onboarding/helpers.js";
+
+// Fetch auth
+export { fetchWithBearerAuthScopeFallback } from "./fetch-auth.js";
+
+// Media payload
+export { buildMediaPayload } from "../channels/plugins/media-payload.js";
+
+// SSRF policy
+export {
+  buildHostnameAllowlistPolicyFromSuffixAllowlist,
+  isHttpsUrlAllowedByHostnameSuffixAllowlist,
+  normalizeHostnameSuffixAllowlist,
+} from "./ssrf-policy.js";
+
+// Persistent dedupe
+export { createPersistentDedupe } from "./persistent-dedupe.js";
+export type { PersistentDedupe, PersistentDedupeOptions } from "./persistent-dedupe.js";
+
+// Config schema (additional)
+export { ReplyRuntimeConfigSchemaShape } from "../config/zod-schema.core.js";
+
+// Webhook targets (additional)
+export { resolveSingleWebhookTarget } from "./webhook-targets.js";
+
+// WhatsApp shared
+export { normalizeWhatsAppAllowFromEntries } from "../channels/plugins/normalize/whatsapp.js";
+export {
+  resolveWhatsAppGroupIntroHint,
+  resolveWhatsAppMentionStripPatterns,
+} from "../channels/plugins/whatsapp-shared.js";
+
+// Discord thread bindings
+export {
+  autoBindSpawnedDiscordSubagent,
+  listThreadBindingsBySessionKey,
+  unbindThreadBindingsBySessionKey,
+} from "../discord/monitor/thread-bindings.lifecycle.js";

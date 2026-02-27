@@ -69,7 +69,10 @@ export function normalizeMediaAttachments(ctx: MsgContext): MediaAttachment[] {
   return normalizeAttachments(ctx);
 }
 
-export function createMediaAttachmentCache(attachments: MediaAttachment[]): MediaAttachmentCache {
+export function createMediaAttachmentCache(
+  attachments: MediaAttachment[],
+  _options?: { localPathRoots?: string[] },
+): MediaAttachmentCache {
   return new MediaAttachmentCache(attachments);
 }
 

@@ -90,6 +90,9 @@ export function applyMinimaxConfig(cfg: BotConfig): BotConfig {
 
 export function applyMinimaxHostedConfig(cfg: BotConfig, params?: { baseUrl?: string }): BotConfig {
   const next = applyMinimaxHostedProviderConfig(cfg, params);
+  const existingModel = next.agents?.defaults?.model;
+  const modelBase =
+    typeof existingModel === "object" && existingModel !== null ? existingModel : {};
   return {
     ...next,
     agents: {
@@ -97,7 +100,7 @@ export function applyMinimaxHostedConfig(cfg: BotConfig, params?: { baseUrl?: st
       defaults: {
         ...next.agents?.defaults,
         model: {
-          ...next.agents?.defaults?.model,
+          ...modelBase,
           primary: MINIMAX_HOSTED_MODEL_REF,
         },
       },

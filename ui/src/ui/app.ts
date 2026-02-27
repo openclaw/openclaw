@@ -3,6 +3,7 @@ import { customElement, state } from "lit/decorators.js";
 import type { ControlUiBootstrapIamConfig } from "../../../src/gateway/control-ui-contract.js";
 import type { EventLogEntry } from "./app-events.ts";
 import type { AppViewState } from "./app-view-state.ts";
+import type { CronFieldErrors } from "./controllers/cron.ts";
 import type { DevicePairingList } from "./controllers/devices.ts";
 import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./controllers/exec-approvals.ts";
@@ -16,8 +17,15 @@ import type {
   AgentIdentityResult,
   ConfigSnapshot,
   ConfigUiHints,
+  CronDeliveryStatus,
   CronJob,
+  CronJobsEnabledFilter,
+  CronJobsSortBy,
   CronRunLogEntry,
+  CronRunScope,
+  CronRunsStatusFilter,
+  CronRunsStatusValue,
+  CronSortDir,
   CronStatus,
   HealthSnapshot,
   LogEntry,
@@ -240,6 +248,10 @@ export class BotApp extends LitElement {
   @state() agentSkillsReport: SkillStatusReport | null = null;
   @state() agentSkillsAgentId: string | null = null;
 
+  @state() toolsCatalogLoading = false;
+  @state() toolsCatalogError: string | null = null;
+  @state() toolsCatalogResult: import("./types.js").ToolsCatalogResult | null = null;
+
   @state() sessionsLoading = false;
   @state() sessionsResult: SessionsListResult | null = null;
   @state() sessionsError: string | null = null;
@@ -308,12 +320,34 @@ export class BotApp extends LitElement {
   @state() marketplaceError: string | null = null;
 
   @state() cronLoading = false;
+  @state() cronJobsLoadingMore = false;
   @state() cronJobs: CronJob[] = [];
+  @state() cronJobsTotal = 0;
+  @state() cronJobsHasMore = false;
+  @state() cronJobsNextOffset: number | null = null;
+  @state() cronJobsLimit = 50;
+  @state() cronJobsQuery = "";
+  @state() cronJobsEnabledFilter: CronJobsEnabledFilter = "all";
+  @state() cronJobsSortBy: CronJobsSortBy = "nextRunAtMs";
+  @state() cronJobsSortDir: CronSortDir = "asc";
   @state() cronStatus: CronStatus | null = null;
   @state() cronError: string | null = null;
   @state() cronForm: CronFormState = { ...DEFAULT_CRON_FORM };
+  @state() cronFieldErrors: CronFieldErrors = {};
+  @state() cronEditingJobId: string | null = null;
   @state() cronRunsJobId: string | null = null;
+  @state() cronRunsLoadingMore = false;
   @state() cronRuns: CronRunLogEntry[] = [];
+  @state() cronRunsTotal = 0;
+  @state() cronRunsHasMore = false;
+  @state() cronRunsNextOffset: number | null = null;
+  @state() cronRunsLimit = 50;
+  @state() cronRunsScope: CronRunScope = "job";
+  @state() cronRunsStatuses: CronRunsStatusValue[] = [];
+  @state() cronRunsDeliveryStatuses: CronDeliveryStatus[] = [];
+  @state() cronRunsStatusFilter: CronRunsStatusFilter = "all";
+  @state() cronRunsQuery = "";
+  @state() cronRunsSortDir: CronSortDir = "desc";
   @state() cronBusy = false;
 
   @state() skillsLoading = false;

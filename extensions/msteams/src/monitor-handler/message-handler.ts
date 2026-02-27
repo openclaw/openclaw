@@ -125,7 +125,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     const senderName = from.name ?? from.id;
     const senderId = from.aadObjectId ?? from.id;
     const storedAllowFrom = await core.channel.pairing
-      .readAllowFromStore("msteams")
+      .readAllowFromStore({ channel: "msteams", accountId: "default" })
       .catch(() => []);
     const useAccessGroups = cfg.commands?.useAccessGroups !== false;
 
@@ -154,6 +154,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
             const request = await core.channel.pairing.upsertPairingRequest({
               channel: "msteams",
               id: senderId,
+              accountId: "default",
               meta: { name: senderName },
             });
             if (request) {

@@ -132,7 +132,15 @@ export async function importProfileFromRelays(
             },
           ] as unknown as Parameters<typeof pool.subscribeMany>[1],
           {
-            onevent(event) {
+            onevent(event: {
+              id: string;
+              kind: number;
+              content: string;
+              created_at: number;
+              pubkey: string;
+              tags: string[][];
+              sig: string;
+            }) {
               events.push({ event, relay });
             },
             oneose() {

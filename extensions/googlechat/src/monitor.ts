@@ -491,7 +491,9 @@ async function processMessageWithPipeline(params: {
   const shouldComputeAuth = core.channel.commands.shouldComputeCommandAuthorized(rawBody, config);
   const storeAllowFrom =
     !isGroup && (dmPolicy !== "open" || shouldComputeAuth)
-      ? await core.channel.pairing.readAllowFromStore("googlechat").catch(() => [])
+      ? await core.channel.pairing
+          .readAllowFromStore({ channel: "googlechat", accountId: account.accountId })
+          .catch(() => [])
       : [];
   const effectiveAllowFrom = [...configAllowFrom, ...storeAllowFrom];
   warnDeprecatedUsersEmailEntries(core, runtime, effectiveAllowFrom);
@@ -546,6 +548,7 @@ async function processMessageWithPipeline(params: {
           const { code, created } = await core.channel.pairing.upsertPairingRequest({
             channel: "googlechat",
             id: senderId,
+            accountId: account.accountId,
             meta: { name: senderName || undefined, email: senderEmail },
           });
           if (created) {

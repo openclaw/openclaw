@@ -308,6 +308,22 @@ export async function resolveModelsCommandReply(params: {
   return payload;
 }
 
+/**
+ * Build a short header string for the model listing (used by Telegram callback handlers).
+ * Returns a one-liner like "Models (openai) — 12 available [current: gpt-4]".
+ */
+export function formatModelsAvailableHeader(params: {
+  provider: string;
+  total: number;
+  cfg?: BotConfig;
+  agentDir?: string;
+  sessionEntry?: { provider?: string; model?: string } | null;
+}): string {
+  const currentModel = params.sessionEntry?.model;
+  const currentSuffix = currentModel ? ` [current: ${currentModel}]` : "";
+  return `Models (${params.provider}) — ${params.total} available${currentSuffix}`;
+}
+
 export const handleModelsCommand: CommandHandler = async (params, allowTextCommands) => {
   if (!allowTextCommands) {
     return null;

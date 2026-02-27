@@ -24,6 +24,7 @@ import {
   type ExecAllowlistEntry,
   type ExecCommandSegment,
   type ExecSecurity,
+  type SkillBinTrustEntry,
 } from "../infra/exec-approvals.js";
 import {
   requestExecHostViaSocket,
@@ -116,7 +117,7 @@ export type NodeInvokeRequestPayload = {
 };
 
 export type SkillBinsProvider = {
-  current(force?: boolean): Promise<Set<string>>;
+  current(force?: boolean): Promise<SkillBinTrustEntry[]>;
 };
 
 function resolveExecSecurity(value?: string): ExecSecurity {
@@ -590,7 +591,7 @@ export async function handleInvoke(
   const runId = params.runId?.trim() || crypto.randomUUID();
   const env = sanitizeEnv(params.env ?? undefined);
   const safeBins = resolveSafeBins(agentExec?.safeBins ?? cfg.tools?.exec?.safeBins);
-  const bins = autoAllowSkills ? await skillBins.current() : new Set<string>();
+  const bins = autoAllowSkills ? await skillBins.current() : [];
   let analysisOk = false;
   let allowlistMatches: ExecAllowlistEntry[] = [];
   let allowlistSatisfied = false;

@@ -216,7 +216,7 @@ export async function buildStatusReply(params: {
     agent: {
       ...agentDefaults,
       model: {
-        ...agentDefaults.model,
+        ...(typeof agentDefaults.model === "object" ? agentDefaults.model : undefined),
         primary: `${provider}/${model}`,
       },
       contextTokens,

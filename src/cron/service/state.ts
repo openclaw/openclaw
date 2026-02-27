@@ -13,6 +13,18 @@ export type CronEvent = {
   sessionId?: string;
   sessionKey?: string;
   nextRunAtMs?: number;
+  /** Whether delivery was completed by the isolated run. */
+  delivered?: boolean;
+  /** Last delivery attempt status. */
+  deliveryStatus?: string;
+  /** Last delivery attempt error. */
+  deliveryError?: string;
+  /** Model used during the run. */
+  model?: string;
+  /** Provider used during the run. */
+  provider?: string;
+  /** Token usage from the run. */
+  usage?: unknown;
 };
 
 export type Logger = {

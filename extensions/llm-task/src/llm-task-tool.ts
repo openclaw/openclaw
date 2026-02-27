@@ -96,7 +96,8 @@ export function createLlmTaskTool(api: BotPluginApi) {
 
       const pluginCfg = (api.pluginConfig ?? {}) as PluginCfg;
 
-      const primary = api.config?.agents?.defaults?.model?.primary;
+      const modelCfg = api.config?.agents?.defaults?.model;
+      const primary = typeof modelCfg === "string" ? modelCfg : modelCfg?.primary;
       const primaryProvider = typeof primary === "string" ? primary.split("/")[0] : undefined;
       const primaryModel =
         typeof primary === "string" ? primary.split("/").slice(1).join("/") : undefined;

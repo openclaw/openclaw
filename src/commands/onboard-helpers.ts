@@ -31,8 +31,11 @@ export function guardCancel<T>(value: T | symbol, runtime: RuntimeEnv): T {
   if (isCancel(value)) {
     cancel(stylePromptTitle("Setup cancelled.") ?? "Setup cancelled.");
     runtime.exit(0);
+    // runtime.exit does not return (calls process.exit), but TypeScript cannot
+    // infer never from the void return type. Cast to satisfy the return type.
+    return undefined as T;
   }
-  return value;
+  return value as T;
 }
 
 export function summarizeExistingConfig(config: BotConfig): string {

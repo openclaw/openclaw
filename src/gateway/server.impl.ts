@@ -344,7 +344,7 @@ export async function startGatewayServer(
       nodeRegistry.setSync(sync);
       log.info(`KV node sync enabled (pod=${sync.podId})`);
     } catch (err) {
-      log.warn("KV node sync failed to init:", (err as Error).message);
+      log.warn(`KV node sync failed to init: ${(err as Error).message}`);
     }
   }
 

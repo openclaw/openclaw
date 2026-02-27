@@ -80,8 +80,6 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount> = {
       ),
     formatAllowFrom: ({ allowFrom }) =>
       allowFrom.map((entry) => String(entry).trim()).filter(Boolean),
-    resolveDefaultTo: ({ cfg, accountId }) =>
-      resolveIMessageAccount({ cfg, accountId }).config.defaultTo?.trim() || undefined,
   },
   security: {
     resolveDmPolicy: ({ cfg, accountId, account }) => {

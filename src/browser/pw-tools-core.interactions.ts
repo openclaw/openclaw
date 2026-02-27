@@ -1,6 +1,6 @@
 import type { BrowserFormField } from "./client-actions-core.js";
 import { DEFAULT_FILL_FIELD_TYPE } from "./form-fields.js";
-import { DEFAULT_UPLOAD_DIR, resolveStrictExistingPathsWithinRoot } from "./paths.js";
+import { DEFAULT_UPLOAD_DIR, resolvePathsWithinRoot } from "./paths.js";
 import {
   ensurePageState,
   forceDisconnectPlaywrightForTarget,
@@ -628,7 +628,7 @@ export async function setInputFilesViaPlaywright(opts: {
   }
 
   const locator = inputRef ? refLocator(page, inputRef) : page.locator(element).first();
-  const uploadPathsResult = await resolveStrictExistingPathsWithinRoot({
+  const uploadPathsResult = resolvePathsWithinRoot({
     rootDir: DEFAULT_UPLOAD_DIR,
     requestedPaths: opts.paths,
     scopeLabel: `uploads directory (${DEFAULT_UPLOAD_DIR})`,

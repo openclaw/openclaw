@@ -89,7 +89,13 @@ export function resolveSessionDisplayModel(
   >,
   defaults: SessionDisplayDefaults,
 ): string {
-  const resolved = resolveSessionModelRef(cfg, row, parseAgentSessionKey(row.key)?.agentId);
+  // resolveSessionModelRef accepts SessionEntry but only reads model-related
+  // fields; cast the display row to satisfy the parameter constraint.
+  const resolved = resolveSessionModelRef(
+    cfg,
+    row as unknown as SessionEntry,
+    parseAgentSessionKey(row.key)?.agentId,
+  );
   return resolved.model ?? defaults.model;
 }
 

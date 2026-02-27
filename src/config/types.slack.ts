@@ -104,6 +104,11 @@ export type SlackAccountConfig = {
   userTokenReadOnly?: boolean;
   /** Allow bot-authored messages to trigger replies (default: false). */
   allowBots?: boolean;
+  /**
+   * Break-glass override: allow mutable identity matching (names/tags/slugs) in allowlists.
+   * Default behavior is ID-only matching.
+   */
+  dangerouslyAllowNameMatching?: boolean;
   /** Default mention requirement for channel messages (default: true). */
   requireMention?: boolean;
   /**
@@ -125,6 +130,18 @@ export type SlackAccountConfig = {
   blockStreaming?: boolean;
   /** Merge streamed block replies before sending. */
   blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
+  /**
+   * Unified streaming mode:
+   * - "off": disable all streaming previews
+   * - "partial": edit a single preview message (default)
+   * - "block": stream in chunked preview updates
+   * - "progress": status_final preview (show spinner then final reply)
+   *
+   * Legacy boolean values are still accepted: false = disable native streaming.
+   */
+  streaming?: "off" | "partial" | "block" | "progress" | boolean;
+  /** Enable or disable native Slack streaming (chat.update edits). Default: true. */
+  nativeStreaming?: boolean;
   /** Slack stream preview mode (replace|status_final|append). Default: replace. */
   streamMode?: SlackStreamMode;
   mediaMaxMb?: number;

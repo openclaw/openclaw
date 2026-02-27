@@ -2,12 +2,15 @@ import type { NormalizedUsage } from "../../agents/usage.js";
 import type { ChannelId, ChannelThreadingToolContext } from "../../channels/plugins/types.js";
 import type { BotConfig } from "../../config/config.js";
 import type { TemplateContext } from "../templating.js";
+import type { ReasoningLevel, ThinkLevel, VerboseLevel } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
 import type { FollowupRun } from "./queue.js";
+import { resolveAgentModelFallbacksOverride } from "../../agents/agent-scope.js";
 import { getChannelDock } from "../../channels/dock.js";
 import { normalizeAnyChannelId, normalizeChannelId } from "../../channels/registry.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { estimateUsageCost, formatTokenCount, formatUsd } from "../../utils/usage-format.js";
+import { resolveOriginMessageProvider, resolveOriginMessageTo } from "./origin-routing.js";
 
 const BUN_FETCH_SOCKET_ERROR_RE = /socket connection was closed unexpectedly/i;
 
@@ -134,3 +137,172 @@ export const appendUsageLine = (payloads: ReplyPayload[], line: string): ReplyPa
 
 export const resolveEnforceFinalTag = (run: FollowupRun["run"], provider: string) =>
   Boolean(run.enforceFinalTag || isReasoningTagProvider(provider));
+
+/**
+ * Scope auth profile to a specific provider. Clears the profile if the run's
+ * primary provider doesn't match the target (fallback) provider.
+ */
+export function resolveProviderScopedAuthProfile(params: {
+  provider: string;
+  primaryProvider: string;
+  authProfileId?: string;
+  authProfileIdSource?: "auto" | "user";
+}): { authProfileId?: string; authProfileIdSource?: "auto" | "user" } {
+  if (params.provider !== params.primaryProvider) {
+    return { authProfileId: undefined, authProfileIdSource: undefined };
+  }
+  return {
+    authProfileId: params.authProfileId,
+    authProfileIdSource: params.authProfileIdSource,
+  };
+}
+
+/**
+ * Resolve auth profile for a run, scoping by provider.
+ */
+export function resolveRunAuthProfile(
+  run: FollowupRun["run"],
+  provider: string,
+): { authProfileId?: string; authProfileIdSource?: "auto" | "user" } {
+  return resolveProviderScopedAuthProfile({
+    provider,
+    primaryProvider: run.provider,
+    authProfileId: run.authProfileId,
+    authProfileIdSource: run.authProfileIdSource,
+  });
+}
+
+/**
+ * Build model fallback parameters from a run context.
+ */
+export function resolveModelFallbackOptions(run: FollowupRun["run"]): {
+  cfg: BotConfig | undefined;
+  provider: string;
+  model: string;
+  agentDir?: string;
+  fallbacksOverride?: string[];
+} {
+  return {
+    cfg: run.config,
+    provider: run.provider,
+    model: run.model,
+    agentDir: run.agentDir,
+    fallbacksOverride: resolveAgentModelFallbacksOverride(run.config, run.agentId ?? ""),
+  };
+}
+
+/**
+ * Build the base embedded run parameters (fields shared across CLI and embedded Pi agent).
+ */
+export function buildEmbeddedRunBaseParams(params: {
+  run: FollowupRun["run"];
+  provider: string;
+  model: string;
+  runId: string;
+  authProfile: { authProfileId?: string; authProfileIdSource?: "auto" | "user" };
+}): {
+  sessionFile: string;
+  workspaceDir: string;
+  agentDir?: string;
+  config?: BotConfig;
+  skillsSnapshot?: FollowupRun["run"]["skillsSnapshot"];
+  ownerNumbers?: string[];
+  enforceFinalTag: boolean;
+  provider: string;
+  model: string;
+  authProfileId?: string;
+  authProfileIdSource?: "auto" | "user";
+  thinkLevel?: ThinkLevel;
+  verboseLevel?: VerboseLevel;
+  reasoningLevel?: ReasoningLevel;
+  execOverrides?: FollowupRun["run"]["execOverrides"];
+  bashElevated?: FollowupRun["run"]["bashElevated"];
+  timeoutMs: number;
+  runId: string;
+} {
+  const { run, provider, model, runId, authProfile } = params;
+  return {
+    sessionFile: run.sessionFile,
+    workspaceDir: run.workspaceDir,
+    agentDir: run.agentDir,
+    config: run.config,
+    skillsSnapshot: run.skillsSnapshot,
+    ownerNumbers: run.ownerNumbers,
+    enforceFinalTag: resolveEnforceFinalTag(run, provider),
+    provider,
+    model,
+    authProfileId: authProfile.authProfileId,
+    authProfileIdSource: authProfile.authProfileIdSource,
+    thinkLevel: run.thinkLevel,
+    verboseLevel: run.verboseLevel,
+    reasoningLevel: run.reasoningLevel,
+    execOverrides: run.execOverrides,
+    bashElevated: run.bashElevated,
+    timeoutMs: run.timeoutMs,
+    runId,
+  };
+}
+
+/**
+ * Build embedded agent contexts: auth profile, embedded session context, and sender context.
+ */
+export function buildEmbeddedRunContexts(params: {
+  run: FollowupRun["run"];
+  sessionCtx: Partial<TemplateContext>;
+  hasRepliedRef: { value: boolean } | undefined;
+  provider: string;
+}): {
+  authProfile: { authProfileId?: string; authProfileIdSource?: "auto" | "user" };
+  embeddedContext: {
+    sessionId: string;
+    sessionKey?: string;
+    agentId?: string;
+    messageProvider?: string;
+    agentAccountId?: string;
+    messageTo?: string;
+    messageThreadId?: string | number;
+  };
+  senderContext: {
+    senderId?: string;
+    senderName?: string;
+    senderUsername?: string;
+    senderE164?: string;
+  };
+} {
+  const { run, sessionCtx, provider } = params;
+  const authProfile = resolveProviderScopedAuthProfile({
+    provider,
+    primaryProvider: run.provider,
+    authProfileId: run.authProfileId,
+    authProfileIdSource: run.authProfileIdSource,
+  });
+  const messageProvider = resolveOriginMessageProvider({
+    originatingChannel: sessionCtx.OriginatingChannel,
+    provider: sessionCtx.Provider,
+  });
+  const messageTo = resolveOriginMessageTo({
+    originatingTo: sessionCtx.OriginatingTo,
+    to: sessionCtx.To,
+  });
+  return {
+    authProfile,
+    embeddedContext: {
+      sessionId: run.sessionId,
+      sessionKey: run.sessionKey,
+      agentId: run.agentId,
+      messageProvider,
+      agentAccountId: run.agentAccountId,
+      messageTo,
+      messageThreadId:
+        sessionCtx.MessageThreadId != null
+          ? String(sessionCtx.MessageThreadId).trim() || undefined
+          : undefined,
+    },
+    senderContext: {
+      senderId: sessionCtx.SenderId?.trim() || undefined,
+      senderName: sessionCtx.SenderName?.trim() || undefined,
+      senderUsername: sessionCtx.SenderUsername?.trim() || undefined,
+      senderE164: sessionCtx.SenderE164?.trim() || undefined,
+    },
+  };
+}

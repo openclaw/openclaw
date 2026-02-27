@@ -269,3 +269,22 @@ export async function tryWriteCompletionCache(root: string, jsonMode: boolean): 
     defaultRuntime.log(theme.warn(`Completion cache update failed${detail}.`));
   }
 }
+
+/**
+ * Parse an optional timeout string (seconds) into milliseconds.
+ * Returns `null` and prints an error if the value is invalid.
+ */
+export function parseTimeoutMsOrExit(raw: string | undefined): number | null {
+  if (raw === undefined || raw === "") {
+    return null;
+  }
+  const seconds = Number(raw);
+  if (!Number.isFinite(seconds) || seconds <= 0) {
+    defaultRuntime.error(
+      theme.error(`Invalid timeout: "${raw}" (expected a positive number of seconds)`),
+    );
+    defaultRuntime.exit(1);
+    return null;
+  }
+  return Math.round(seconds * 1000);
+}

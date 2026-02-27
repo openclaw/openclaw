@@ -11,17 +11,44 @@ export type ExecHost = "sandbox" | "gateway" | "node";
 export type ExecSecurity = "deny" | "allowlist" | "full";
 export type ExecAsk = "off" | "on-miss" | "always";
 
+export type SystemRunApprovalBindingV1 = {
+  version: 1;
+  argv: string[];
+  cwd: string | null;
+  agentId: string | null;
+  sessionKey: string | null;
+  envHash: string | null;
+};
+
+export type SystemRunApprovalPlanV2 = {
+  version: 2;
+  argv: string[];
+  cwd: string | null;
+  rawCommand: string | null;
+  agentId: string | null;
+  sessionKey: string | null;
+};
+
 export type ExecApprovalRequest = {
   id: string;
   request: {
     command: string;
+    commandArgv?: string[];
+    envKeys?: string[];
+    systemRunBindingV1?: unknown;
+    systemRunPlanV2?: unknown;
     cwd?: string | null;
+    nodeId?: string | null;
     host?: string | null;
     security?: string | null;
     ask?: string | null;
     agentId?: string | null;
     resolvedPath?: string | null;
     sessionKey?: string | null;
+    turnSourceChannel?: string | null;
+    turnSourceTo?: string | null;
+    turnSourceAccountId?: string | null;
+    turnSourceThreadId?: string | number | null;
   };
   createdAtMs: number;
   expiresAtMs: number;

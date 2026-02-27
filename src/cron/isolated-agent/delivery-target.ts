@@ -13,6 +13,21 @@ import {
   resolveSessionDeliveryTarget,
 } from "../../infra/outbound/targets.js";
 
+/**
+ * Result of resolving a cron delivery target.
+ * When `ok` is `true` the `to` field is a non-empty string and `error` is
+ * absent. When `ok` is `false` an `error` is present.
+ */
+export type DeliveryTargetResolution = {
+  ok: boolean;
+  channel: Exclude<OutboundChannel, "none">;
+  to?: string;
+  accountId?: string;
+  threadId?: string | number;
+  mode: "explicit" | "implicit";
+  error?: Error;
+};
+
 export async function resolveDeliveryTarget(
   cfg: BotConfig,
   agentId: string,
@@ -20,14 +35,7 @@ export async function resolveDeliveryTarget(
     channel?: "last" | ChannelId;
     to?: string;
   },
-): Promise<{
-  channel: Exclude<OutboundChannel, "none">;
-  to?: string;
-  accountId?: string;
-  threadId?: string | number;
-  mode: "explicit" | "implicit";
-  error?: Error;
-}> {
+): Promise<DeliveryTargetResolution> {
   const requestedChannel = typeof jobPayload.channel === "string" ? jobPayload.channel : "last";
   const explicitTo = typeof jobPayload.to === "string" ? jobPayload.to : undefined;
   const allowMismatchedLastTo = requestedChannel === "last";
@@ -81,11 +89,12 @@ export async function resolveDeliveryTarget(
 
   if (!toCandidate) {
     return {
+      ok: false,
       channel,
-      to: undefined,
       accountId: resolved.accountId,
       threadId,
       mode,
+      error: new Error("delivery target missing"),
     };
   }
 
@@ -96,12 +105,22 @@ export async function resolveDeliveryTarget(
     accountId: resolved.accountId,
     mode,
   });
+  if (!docked.ok) {
+    return {
+      ok: false,
+      channel,
+      accountId: resolved.accountId,
+      threadId,
+      mode,
+      error: docked.error,
+    };
+  }
   return {
+    ok: true,
     channel,
-    to: docked.ok ? docked.to : undefined,
+    to: docked.to,
     accountId: resolved.accountId,
     threadId,
     mode,
-    error: docked.ok ? undefined : docked.error,
   };
 }

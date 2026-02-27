@@ -48,6 +48,25 @@ export function normalizeProviderId(provider: string): string {
   return normalized;
 }
 
+/**
+ * Find the original key in a record whose normalized provider id matches the given key.
+ * Returns undefined when no match is found.
+ */
+export function findNormalizedProviderKey(
+  record: Record<string, unknown>,
+  normalizedKey: string,
+): string | undefined {
+  if (normalizedKey in record) {
+    return normalizedKey;
+  }
+  for (const key of Object.keys(record)) {
+    if (normalizeProviderId(key) === normalizedKey) {
+      return key;
+    }
+  }
+  return undefined;
+}
+
 export function isCliProvider(provider: string, cfg?: BotConfig): boolean {
   const normalized = normalizeProviderId(provider);
   if (normalized === "claude-cli") {
@@ -270,6 +289,25 @@ export function resolveDefaultModelForAgent(params: {
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
   });
+}
+
+/**
+ * Resolve the model selection string for a subagent spawn.
+ * Returns a "provider/model" string or undefined when falling back to defaults.
+ */
+export function resolveSubagentSpawnModelSelection(params: {
+  cfg: BotConfig;
+  agentId?: string;
+  modelOverride?: string;
+}): string | undefined {
+  if (params.modelOverride?.trim()) {
+    return params.modelOverride.trim();
+  }
+  const ref = resolveDefaultModelForAgent({
+    cfg: params.cfg,
+    agentId: params.agentId,
+  });
+  return modelKey(ref.provider, ref.model);
 }
 
 export function buildAllowedModelSet(params: {

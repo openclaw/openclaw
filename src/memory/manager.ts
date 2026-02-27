@@ -47,8 +47,8 @@ export class MemoryIndexManager implements MemorySearchManager {
   private readonly workspaceDir: string;
   private readonly settings: ResolvedMemorySearchConfig;
   private provider: EmbeddingProvider;
-  private readonly requestedProvider: "openai" | "local" | "gemini" | "voyage" | "auto";
-  private fallbackFrom?: "openai" | "local" | "gemini" | "voyage";
+  private readonly requestedProvider: "openai" | "local" | "gemini" | "voyage" | "mistral" | "auto";
+  private fallbackFrom?: "openai" | "local" | "gemini" | "voyage" | "mistral";
   private fallbackReason?: string;
   private openAi?: OpenAiEmbeddingClient;
   private gemini?: GeminiEmbeddingClient;
@@ -157,6 +157,7 @@ export class MemoryIndexManager implements MemorySearchManager {
     this.openAi = params.providerResult.openAi;
     this.gemini = params.providerResult.gemini;
     this.voyage = params.providerResult.voyage;
+    this.mistral = params.providerResult.mistral;
     this.sources = new Set(params.settings.sources);
     this.db = this.openDatabase();
     this.providerKey = this.computeProviderKey();
@@ -239,7 +240,7 @@ export class MemoryIndexManager implements MemorySearchManager {
       return vectorResults.filter((entry) => entry.score >= minScore).slice(0, maxResults);
     }
 
-    const merged = this.mergeHybridResults({
+    const merged = await this.mergeHybridResults({
       vector: vectorResults,
       keyword: keywordResults,
       vectorWeight: hybrid.vectorWeight,
@@ -293,13 +294,13 @@ export class MemoryIndexManager implements MemorySearchManager {
     return results.map((entry) => entry as MemorySearchResult & { id: string; textScore: number });
   }
 
-  private mergeHybridResults(params: {
+  private async mergeHybridResults(params: {
     vector: Array<MemorySearchResult & { id: string }>;
     keyword: Array<MemorySearchResult & { id: string; textScore: number }>;
     vectorWeight: number;
     textWeight: number;
-  }): MemorySearchResult[] {
-    const merged = mergeHybridResults({
+  }): Promise<MemorySearchResult[]> {
+    const merged = await mergeHybridResults({
       vector: params.vector.map((r) => ({
         id: r.id,
         path: r.path,

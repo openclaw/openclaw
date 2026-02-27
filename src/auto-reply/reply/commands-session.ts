@@ -260,6 +260,157 @@ export const handleUsageCommand: CommandHandler = async (params, allowTextComman
   };
 };
 
+/**
+ * Handle `/session` subcommands.
+ * Currently supports `/session ttl <duration|off>` for Discord thread-bound sessions.
+ */
+export const handleSessionCommand: CommandHandler = async (params, allowTextCommands) => {
+  if (!allowTextCommands) {
+    return null;
+  }
+  const normalized = params.command.commandBodyNormalized;
+  if (normalized !== "/session" && !normalized.startsWith("/session ")) {
+    return null;
+  }
+  if (!params.command.isAuthorizedSender) {
+    logVerbose(
+      `Ignoring /session from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
+    );
+    return { shouldContinue: false };
+  }
+
+  const args = normalized.slice("/session".length).trim();
+  if (!args.startsWith("ttl")) {
+    return {
+      shouldContinue: false,
+      reply: { text: "⚙️ Usage: /session ttl <duration|off>" },
+    };
+  }
+
+  const ttlArgs = args.slice("ttl".length).trim();
+
+  // Only available for Discord thread-bound sessions
+  const provider = params.ctx.Provider?.trim().toLowerCase();
+  if (provider !== "discord") {
+    return {
+      shouldContinue: false,
+      reply: {
+        text: "⚙️ Session TTL is currently available for Discord thread-bound sessions only.",
+      },
+    };
+  }
+
+  // Lazy-import to avoid circular dependencies at module evaluation time
+  const { getThreadBindingManager, setThreadBindingTtlBySessionKey } =
+    await import("../../discord/monitor/thread-bindings.js");
+  const { formatThreadBindingTtlLabel } = await import("../../discord/monitor/thread-bindings.js");
+
+  const accountId = params.ctx.AccountId?.trim() || "default";
+  const threadId =
+    params.ctx.MessageThreadId != null ? String(params.ctx.MessageThreadId).trim() : undefined;
+  if (!threadId) {
+    return {
+      shouldContinue: false,
+      reply: { text: "⚙️ Session TTL requires a thread-bound session." },
+    };
+  }
+
+  const manager = getThreadBindingManager(accountId);
+  const binding = manager?.getByThreadId(threadId);
+  if (!binding) {
+    return {
+      shouldContinue: false,
+      reply: { text: "⚙️ No active thread binding found for this session." },
+    };
+  }
+
+  const targetSessionKey = binding.targetSessionKey;
+
+  // Show current TTL when no value is provided
+  if (!ttlArgs) {
+    if (binding.expiresAt && binding.expiresAt > 0) {
+      const remaining = binding.expiresAt - Date.now();
+      const label = remaining > 0 ? formatThreadBindingTtlLabel(remaining) : "expired";
+      const expiresIso = new Date(binding.expiresAt).toISOString();
+      return {
+        shouldContinue: false,
+        reply: { text: `⚙️ Session TTL active (${label}, expires ${expiresIso}).` },
+      };
+    }
+    return {
+      shouldContinue: false,
+      reply: { text: "⚙️ Session TTL is not set." },
+    };
+  }
+
+  // Enforce owner-only TTL updates
+  const boundBy = (binding as { boundBy?: string }).boundBy;
+  const senderId = params.command.senderId?.trim();
+  if (boundBy && senderId && boundBy !== senderId) {
+    return {
+      shouldContinue: false,
+      reply: { text: "⚙️ Only the session owner can change the TTL." },
+    };
+  }
+
+  // Parse and apply TTL
+  if (ttlArgs === "off" || ttlArgs === "0" || ttlArgs === "disable") {
+    const updated = setThreadBindingTtlBySessionKey({
+      targetSessionKey,
+      accountId,
+      ttlMs: 0,
+    });
+    if (updated.length === 0) {
+      return {
+        shouldContinue: false,
+        reply: { text: "⚙️ No bindings found for this session." },
+      };
+    }
+    return {
+      shouldContinue: false,
+      reply: { text: "⚙️ Session TTL disabled." },
+    };
+  }
+
+  let ttlMs: number;
+  try {
+    const { parseDurationMs } = await import("../../cli/parse-duration.js");
+    ttlMs = parseDurationMs(ttlArgs, { defaultUnit: "h" });
+  } catch {
+    return {
+      shouldContinue: false,
+      reply: { text: "⚙️ Invalid duration. Use e.g. 2h, 30m, 1h30m." },
+    };
+  }
+
+  if (ttlMs <= 0) {
+    return {
+      shouldContinue: false,
+      reply: { text: "⚙️ Duration must be positive. Use /session ttl off to disable." },
+    };
+  }
+
+  const updated = setThreadBindingTtlBySessionKey({
+    targetSessionKey,
+    accountId,
+    ttlMs,
+  });
+  if (updated.length === 0) {
+    return {
+      shouldContinue: false,
+      reply: { text: "⚙️ No bindings found for this session." },
+    };
+  }
+
+  const label = formatThreadBindingTtlLabel(ttlMs);
+  const expiresAt = updated[0]?.expiresAt;
+  const expiresIso = expiresAt ? new Date(expiresAt).toISOString() : "unknown";
+  return {
+    shouldContinue: false,
+    reply: { text: `⚙️ Session TTL set to ${label} (expires ${expiresIso}).` },
+  };
+};
+
 export const handleRestartCommand: CommandHandler = async (params, allowTextCommands) => {
   if (!allowTextCommands) {
     return null;

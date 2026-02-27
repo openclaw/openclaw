@@ -243,6 +243,115 @@ function calculateAuthProfileBillingDisableMsWithConfig(params: {
   return Math.min(maxMs, raw);
 }
 
+/**
+ * Reason priority for breaking ties when multiple failure reasons have the
+ * same count. Lower index = higher priority.
+ */
+const REASON_PRIORITY: readonly AuthProfileFailureReason[] = [
+  "billing",
+  "auth_permanent",
+  "auth",
+  "model_not_found",
+  "format",
+  "timeout",
+  "rate_limit",
+  "unknown",
+];
+
+/**
+ * Determine why all given profiles are currently unavailable.
+ * Returns the most significant failure reason across all active cooldown/disabled
+ * windows, or `null` if at least one profile is available (no active window).
+ */
+export function resolveProfilesUnavailableReason(params: {
+  store: AuthProfileStore;
+  profileIds: string[];
+  now?: number;
+}): AuthProfileFailureReason | null {
+  const { store, profileIds } = params;
+  const now = params.now ?? Date.now();
+
+  // Aggregate failure reasons across all profiles that are currently unavailable.
+  const aggregatedCounts: Partial<Record<AuthProfileFailureReason, number>> = {};
+  let allUnavailable = true;
+
+  for (const id of profileIds) {
+    const stats = store.usageStats?.[id];
+    if (!stats) {
+      // No stats means the profile has never failed, so it's available.
+      allUnavailable = false;
+      continue;
+    }
+
+    const unusableUntil = resolveProfileUnusableUntil(stats);
+    if (!unusableUntil || now >= unusableUntil) {
+      allUnavailable = false;
+      continue;
+    }
+
+    // Profile is actively unavailable. Check for disabled reason first.
+    if (
+      stats.disabledUntil != null &&
+      Number.isFinite(stats.disabledUntil) &&
+      now < stats.disabledUntil &&
+      stats.disabledReason
+    ) {
+      aggregatedCounts[stats.disabledReason] = (aggregatedCounts[stats.disabledReason] ?? 0) + 1;
+    }
+
+    // Also aggregate from failureCounts (excluding rate_limit for priority ranking).
+    if (stats.failureCounts) {
+      for (const [reason, count] of Object.entries(stats.failureCounts)) {
+        if (typeof count === "number" && count > 0) {
+          const key = reason as AuthProfileFailureReason;
+          aggregatedCounts[key] = (aggregatedCounts[key] ?? 0) + count;
+        }
+      }
+    }
+
+    // If profile has cooldown but no failure counts or disabled reason, treat as rate_limit.
+    if (
+      stats.cooldownUntil != null &&
+      Number.isFinite(stats.cooldownUntil) &&
+      now < stats.cooldownUntil &&
+      !stats.disabledReason &&
+      (!stats.failureCounts || Object.keys(stats.failureCounts).length === 0)
+    ) {
+      aggregatedCounts.rate_limit = (aggregatedCounts.rate_limit ?? 0) + 1;
+    }
+  }
+
+  if (!allUnavailable) {
+    return null;
+  }
+
+  if (profileIds.length === 0) {
+    return null;
+  }
+
+  // Pick the dominant reason: highest count wins; ties broken by REASON_PRIORITY.
+  let bestReason: AuthProfileFailureReason | null = null;
+  let bestCount = 0;
+  let bestPriority = REASON_PRIORITY.length;
+
+  for (const [reason, count] of Object.entries(aggregatedCounts)) {
+    if (typeof count !== "number" || count <= 0) {
+      continue;
+    }
+    // Exclude rate_limit from the "highest non-rl count" logic; it's the fallback.
+    const key = reason as AuthProfileFailureReason;
+    const priority = REASON_PRIORITY.indexOf(key);
+    const effectivePriority = priority >= 0 ? priority : REASON_PRIORITY.length;
+    if (count > bestCount || (count === bestCount && effectivePriority < bestPriority)) {
+      bestReason = key;
+      bestCount = count;
+      bestPriority = effectivePriority;
+    }
+  }
+
+  return bestReason ?? "rate_limit";
+}
+
 export function resolveProfileUnusableUntilForDisplay(
   store: AuthProfileStore,
   profileId: string,

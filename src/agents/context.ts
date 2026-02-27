@@ -101,6 +101,60 @@ const loadPromise = (async () => {
   // Keep lookup best-effort.
 });
 
+// Anthropic 1M extended context window (opus/sonnet models only).
+export const ANTHROPIC_CONTEXT_1M_TOKENS = 1_000_000;
+
+// Anthropic model id prefixes eligible for the context1m param.
+const ANTHROPIC_CONTEXT_1M_ELIGIBLE_PREFIXES = [
+  "claude-opus-",
+  "claude-opus-4",
+  "claude-sonnet-",
+  "claude-sonnet-4",
+];
+
+function isAnthropicContext1mEligible(modelId: string): boolean {
+  const lower = modelId.toLowerCase();
+  return ANTHROPIC_CONTEXT_1M_ELIGIBLE_PREFIXES.some(
+    (prefix) => lower === prefix || lower.startsWith(prefix),
+  );
+}
+
+type BotConfigLike = {
+  agents?: {
+    defaults?: {
+      models?: Record<string, { params?: { context1m?: boolean } } | undefined>;
+    };
+  };
+};
+
+/**
+ * Resolve effective context tokens for a given model, accounting for the
+ * Anthropic `context1m` param, an explicit override, and a fallback default.
+ */
+export function resolveContextTokensForModel(params: {
+  cfg?: BotConfigLike;
+  provider: string;
+  model: string | null;
+  contextTokensOverride?: number;
+  fallbackContextTokens?: number;
+}): number | undefined {
+  // Explicit per-session/per-model override takes first priority.
+  if (typeof params.contextTokensOverride === "number" && params.contextTokensOverride > 0) {
+    return params.contextTokensOverride;
+  }
+
+  // Check for Anthropic context1m param.
+  if (params.provider === "anthropic" && params.model) {
+    const modelKey = `${params.provider}/${params.model}`;
+    const modelEntry = params.cfg?.agents?.defaults?.models?.[modelKey];
+    if (modelEntry?.params?.context1m && isAnthropicContext1mEligible(params.model)) {
+      return ANTHROPIC_CONTEXT_1M_TOKENS;
+    }
+  }
+
+  return params.fallbackContextTokens;
+}
+
 export function lookupContextTokens(modelId?: string): number | undefined {
   if (!modelId) {
     return undefined;

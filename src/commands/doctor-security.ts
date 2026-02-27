@@ -81,12 +81,17 @@ export async function noteSecurityWarnings(cfg: BotConfig) {
     allowFromPath: string;
     approveHint: string;
     normalizeEntry?: (raw: string) => string;
+    accountId?: string;
   }) => {
     const dmPolicy = params.dmPolicy;
     const policyPath = params.policyPath ?? `${params.allowFromPath}policy`;
     const configAllowFrom = (params.allowFrom ?? []).map((v) => String(v).trim());
     const hasWildcard = configAllowFrom.includes("*");
-    const storeAllowFrom = await readChannelAllowFromStore(params.provider).catch(() => []);
+    const storeAllowFrom = await readChannelAllowFromStore(
+      params.provider,
+      process.env,
+      params.accountId ?? "",
+    ).catch(() => []);
     const normalizedCfg = configAllowFrom
       .filter((v) => v !== "*")
       .map((v) => (params.normalizeEntry ? params.normalizeEntry(v) : v))
@@ -167,6 +172,7 @@ export async function noteSecurityWarnings(cfg: BotConfig) {
         allowFromPath: dmPolicy.allowFromPath,
         approveHint: dmPolicy.approveHint,
         normalizeEntry: dmPolicy.normalizeEntry,
+        accountId: defaultAccountId,
       });
     }
     if (plugin.security.collectWarnings) {

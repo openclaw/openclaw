@@ -63,6 +63,12 @@ export function registerDiscordSubagentHooks(api: BotPluginApi) {
           "Discord thread-bound subagent spawns are disabled for this account (set channels.discord.threadBindings.spawnSubagentSessions=true to enable).",
       };
     }
+    if (!event.childSessionKey || !event.agentId) {
+      return {
+        status: "error" as const,
+        error: "Missing childSessionKey or agentId for thread binding.",
+      };
+    }
     try {
       const binding = await autoBindSpawnedDiscordSubagent({
         accountId: event.requester?.accountId,
@@ -91,10 +97,13 @@ export function registerDiscordSubagentHooks(api: BotPluginApi) {
   });
 
   api.on("subagent_ended", (event) => {
+    if (!event.targetSessionKey) {
+      return;
+    }
     unbindThreadBindingsBySessionKey({
       targetSessionKey: event.targetSessionKey,
       accountId: event.accountId,
-      targetKind: event.targetKind,
+      targetKind: event.targetKind as "subagent" | "acp" | undefined,
       reason: event.reason,
       sendFarewell: event.sendFarewell,
     });
@@ -102,6 +111,9 @@ export function registerDiscordSubagentHooks(api: BotPluginApi) {
 
   api.on("subagent_delivery_target", (event) => {
     if (!event.expectsCompletionMessage) {
+      return;
+    }
+    if (!event.childSessionKey) {
       return;
     }
     const requesterChannel = event.requesterOrigin?.channel?.trim().toLowerCase();

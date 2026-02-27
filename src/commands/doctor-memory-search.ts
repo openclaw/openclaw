@@ -68,7 +68,7 @@ export async function noteMemorySearchHealth(cfg: BotConfig): Promise<void> {
   if (hasLocalEmbeddings(resolved.local)) {
     return;
   }
-  for (const provider of ["openai", "gemini", "voyage"] as const) {
+  for (const provider of ["openai", "gemini", "voyage", "mistral"] as const) {
     if (hasRemoteApiKey || (await hasApiKeyForProvider(provider, cfg, agentDir))) {
       return;
     }
@@ -111,7 +111,7 @@ function hasLocalEmbeddings(local: { modelPath?: string }): boolean {
 }
 
 async function hasApiKeyForProvider(
-  provider: "openai" | "gemini" | "voyage",
+  provider: "openai" | "gemini" | "voyage" | "mistral",
   cfg: BotConfig,
   agentDir: string,
 ): Promise<boolean> {
@@ -133,6 +133,8 @@ function providerEnvVar(provider: string): string {
       return "GEMINI_API_KEY";
     case "voyage":
       return "VOYAGE_API_KEY";
+    case "mistral":
+      return "MISTRAL_API_KEY";
     default:
       return `${provider.toUpperCase()}_API_KEY`;
   }

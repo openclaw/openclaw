@@ -62,7 +62,7 @@ async function resolveCustomProviderApiKey(
 ): Promise<string | undefined> {
   const entry = resolveProviderConfig(cfg, provider);
   return await resolveSecretReferenceValue({
-    value: entry?.apiKey,
+    value: normalizeOptionalSecretInput(entry?.apiKey),
     cfg,
   });
 }

@@ -127,6 +127,12 @@ export function scheduleGatewayUpdateCheck(params: {
 // The check populates this when a newer version is detected.
 // ---------------------------------------------------------------------------
 
+/** Shape of the update-available payload surfaced to the UI. */
+export type UpdateAvailable = {
+  version: string;
+  currentVersion?: string;
+};
+
 let _updateAvailable: string | null = null;
 
 /** Get the latest known update version (or null if up-to-date). */

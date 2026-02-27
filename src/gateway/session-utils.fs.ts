@@ -197,6 +197,48 @@ export function archiveSessionTranscripts(opts: {
   return archived;
 }
 
+/**
+ * Cleans up archived session transcripts older than a given age.
+ * Scans the given directories for `.reset.*` and `.deleted.*` archive files
+ * and removes those whose mtime is older than `olderThanMs`.
+ */
+export async function cleanupArchivedSessionTranscripts(opts: {
+  directories: string[];
+  olderThanMs?: number;
+  reason?: "reset" | "deleted";
+}): Promise<void> {
+  const olderThanMs = opts.olderThanMs ?? 7 * 24 * 60 * 60 * 1000;
+  const now = Date.now();
+  const reasonSuffix = opts.reason ? `.${opts.reason}.` : null;
+
+  for (const dir of opts.directories) {
+    let entries: string[];
+    try {
+      entries = fs.readdirSync(dir);
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      const isArchive = entry.includes(".reset.") || entry.includes(".deleted.");
+      if (!isArchive) {
+        continue;
+      }
+      if (reasonSuffix && !entry.includes(reasonSuffix)) {
+        continue;
+      }
+      const filePath = path.join(dir, entry);
+      try {
+        const stat = fs.statSync(filePath);
+        if (now - stat.mtimeMs > olderThanMs) {
+          fs.unlinkSync(filePath);
+        }
+      } catch {
+        // Best-effort cleanup.
+      }
+    }
+  }
+}
+
 function jsonUtf8Bytes(value: unknown): number {
   try {
     return Buffer.byteLength(JSON.stringify(value), "utf8");

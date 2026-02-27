@@ -101,14 +101,38 @@ function addModel(models: ModelRef[], raw: unknown, source: string) {
   models.push({ id, source });
 }
 
+function extractModelPrimary(model: unknown): string | undefined {
+  if (typeof model === "string") {
+    return model;
+  }
+  if (model && typeof model === "object") {
+    return (model as { primary?: string }).primary;
+  }
+  return undefined;
+}
+
+function extractModelFallbacks(model: unknown): string[] {
+  if (model && typeof model === "object") {
+    const fallbacks = (model as { fallbacks?: unknown[] }).fallbacks;
+    return Array.isArray(fallbacks)
+      ? fallbacks.filter((v): v is string => typeof v === "string")
+      : [];
+  }
+  return [];
+}
+
 function collectModels(cfg: BotConfig): ModelRef[] {
   const out: ModelRef[] = [];
-  addModel(out, cfg.agents?.defaults?.model?.primary, "agents.defaults.model.primary");
-  for (const f of cfg.agents?.defaults?.model?.fallbacks ?? []) {
+  addModel(out, extractModelPrimary(cfg.agents?.defaults?.model), "agents.defaults.model.primary");
+  for (const f of extractModelFallbacks(cfg.agents?.defaults?.model)) {
     addModel(out, f, "agents.defaults.model.fallbacks");
   }
-  addModel(out, cfg.agents?.defaults?.imageModel?.primary, "agents.defaults.imageModel.primary");
-  for (const f of cfg.agents?.defaults?.imageModel?.fallbacks ?? []) {
+  addModel(
+    out,
+    extractModelPrimary(cfg.agents?.defaults?.imageModel),
+    "agents.defaults.imageModel.primary",
+  );
+  for (const f of extractModelFallbacks(cfg.agents?.defaults?.imageModel)) {
     addModel(out, f, "agents.defaults.imageModel.fallbacks");
   }
 
@@ -631,16 +655,36 @@ export function collectSandboxDangerousConfigFindings(cfg: BotConfig): SecurityA
         });
         continue;
       }
-      const verb = blocked.kind === "covers" ? "covers" : "targets";
-      findings.push({
-        checkId: "sandbox.dangerous_bind_mount",
-        severity: "critical",
-        title: "Dangerous bind mount in sandbox config",
-        detail:
-          `${source}.binds contains "${bind}" which ${verb} blocked path "${blocked.blockedPath}". ` +
-          "This can expose host system directories or the Docker socket to sandbox containers.",
-        remediation: `Remove "${bind}" from ${source}.binds. Use project-specific paths instead.`,
-      });
+      if (blocked.kind === "targets" || blocked.kind === "covers") {
+        const verb = blocked.kind === "covers" ? "covers" : "targets";
+        findings.push({
+          checkId: "sandbox.dangerous_bind_mount",
+          severity: "critical",
+          title: "Dangerous bind mount in sandbox config",
+          detail:
+            `${source}.binds contains "${bind}" which ${verb} blocked path "${blocked.blockedPath}". ` +
+            "This can expose host system directories or the Docker socket to sandbox containers.",
+          remediation: `Remove "${bind}" from ${source}.binds. Use project-specific paths instead.`,
+        });
+      } else if (blocked.kind === "outside_allowed_roots") {
+        findings.push({
+          checkId: "sandbox.bind_mount_outside_allowed_roots",
+          severity: "warn",
+          title: "Sandbox bind mount source is outside allowed roots",
+          detail:
+            `${source}.binds contains "${bind}" with source path "${blocked.sourcePath}" ` +
+            `which is outside the allowed roots: ${blocked.allowedRoots.join(", ")}.`,
+          remediation: `Move the bind source inside an allowed root or add the path to the allowed roots list.`,
+        });
+      } else if (blocked.kind === "reserved_target") {
+        findings.push({
+          checkId: "sandbox.bind_mount_reserved_target",
+          severity: "critical",
+          title: "Sandbox bind mount targets a reserved path",
+          detail: `${source}.binds contains "${bind}" which targets reserved path "${blocked.reservedPath}".`,
+          remediation: `Remove "${bind}" from ${source}.binds. Choose a non-reserved container target path.`,
+        });
+      }
     }
 
     const network = typeof docker.network === "string" ? docker.network : undefined;
@@ -966,6 +1010,129 @@ export function collectExposureMatrixFindings(cfg: BotConfig): SecurityAuditFind
       remediation: `Set groupPolicy="allowlist" and keep elevated allowlists extremely tight.`,
     });
   }
+
+  return findings;
+}
+
+export function collectGatewayHttpNoAuthFindings(cfg: BotConfig): SecurityAuditFinding[] {
+  const findings: SecurityAuditFinding[] = [];
+  const chatCompletionsEnabled = cfg.gateway?.http?.endpoints?.chatCompletions?.enabled === true;
+  const responsesEnabled = cfg.gateway?.http?.endpoints?.responses?.enabled === true;
+  if (!chatCompletionsEnabled && !responsesEnabled) {
+    return findings;
+  }
+
+  const auth = resolveGatewayAuth({
+    authConfig: cfg.gateway?.auth,
+    tailscaleMode: cfg.gateway?.tailscale?.mode ?? "off",
+  });
+  const hasToken = Boolean(auth.token);
+  const hasPassword = Boolean(auth.password);
+  if (hasToken || hasPassword) {
+    return findings;
+  }
+
+  const enabledEndpoints = [
+    chatCompletionsEnabled ? "/v1/chat/completions" : null,
+    responsesEnabled ? "/v1/responses" : null,
+  ].filter((entry): entry is string => Boolean(entry));
+
+  findings.push({
+    checkId: "gateway.http.no_auth",
+    severity: "critical",
+    title: "Gateway HTTP API endpoints enabled without authentication",
+    detail:
+      `${enabledEndpoints.join(", ")} are enabled but no gateway auth token or password is set. ` +
+      "Anyone who can reach the gateway port can invoke the API.",
+    remediation:
+      "Set gateway.auth.token or gateway.auth.password to require authentication for HTTP API access.",
+  });
+
+  return findings;
+}
+
+export function collectLikelyMultiUserSetupFindings(cfg: BotConfig): SecurityAuditFinding[] {
+  const findings: SecurityAuditFinding[] = [];
+  const dmScope = cfg.session?.dmScope ?? "main";
+  if (dmScope !== "main") {
+    return findings;
+  }
+
+  const channels = cfg.channels ?? {};
+  let openPolicyCount = 0;
+  let wildcardAllowCount = 0;
+
+  const checkAllowFrom = (allowFrom?: Array<string | number> | null): void => {
+    if (!Array.isArray(allowFrom)) {
+      return;
+    }
+    const normalized = allowFrom.map((v) => String(v).trim()).filter(Boolean);
+    if (normalized.includes("*")) {
+      wildcardAllowCount += 1;
+    }
+  };
+
+  const checkDmPolicy = (dmPolicy?: string): void => {
+    if (dmPolicy === "open") {
+      openPolicyCount += 1;
+    }
+  };
+
+  checkDmPolicy(channels.telegram?.dmPolicy);
+  checkAllowFrom(channels.telegram?.allowFrom);
+  checkDmPolicy(channels.discord?.dmPolicy);
+  checkAllowFrom(channels.discord?.allowFrom);
+  checkDmPolicy(channels.slack?.dmPolicy);
+  checkAllowFrom(channels.slack?.allowFrom);
+  checkDmPolicy(channels.imessage?.dmPolicy);
+  checkAllowFrom(channels.imessage?.allowFrom);
+
+  const isLikelyMultiUser = openPolicyCount >= 2 || wildcardAllowCount >= 2;
+  if (!isLikelyMultiUser) {
+    return findings;
+  }
+
+  findings.push({
+    checkId: "session.likely_multi_user",
+    severity: "warn",
+    title: "Config looks like a multi-user setup without per-user sessions",
+    detail:
+      `Found ${openPolicyCount} channel(s) with dmPolicy="open" and ${wildcardAllowCount} channel(s) with wildcard allowFrom. ` +
+      `session.dmScope="${dmScope}" means all DM users share a single conversation context.`,
+    remediation:
+      'Set session.dmScope="per-user" so each DM sender gets their own session, or narrow allowFrom to a single trusted user.',
+  });
+
+  return findings;
+}
+
+export function collectNodeDangerousAllowCommandFindings(cfg: BotConfig): SecurityAuditFinding[] {
+  const findings: SecurityAuditFinding[] = [];
+  const allowCommands = cfg.gateway?.nodes?.allowCommands;
+  if (!Array.isArray(allowCommands) || allowCommands.length === 0) {
+    return findings;
+  }
+
+  const dangerousPatterns = new Set(["*", "system.*", "system.run"]);
+  const dangerous = allowCommands
+    .map(normalizeNodeCommand)
+    .filter(Boolean)
+    .filter((cmd) => dangerousPatterns.has(cmd));
+
+  if (dangerous.length === 0) {
+    return findings;
+  }
+
+  findings.push({
+    checkId: "gateway.nodes.dangerous_allow_commands",
+    severity: "critical",
+    title: "Node allowCommands contains dangerous entries",
+    detail:
+      `gateway.nodes.allowCommands includes: ${dangerous.join(", ")}. ` +
+      "These entries allow arbitrary command execution from any connected node.",
+    remediation:
+      "Remove wildcard and system.run from allowCommands. Use specific command names and rely on exec security policies for system.run access.",
+  });
 
   return findings;
 }

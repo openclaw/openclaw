@@ -203,8 +203,9 @@ export async function runEmbeddedPiAgent(
       let provider = (params.provider ?? DEFAULT_PROVIDER).trim() || DEFAULT_PROVIDER;
       let modelId = (params.model ?? DEFAULT_MODEL).trim() || DEFAULT_MODEL;
       const agentDir = params.agentDir ?? resolveBotAgentDir();
+      const agentModelCfg = params.config?.agents?.defaults?.model;
       const fallbackConfigured =
-        (params.config?.agents?.defaults?.model?.fallbacks?.length ?? 0) > 0;
+        (typeof agentModelCfg === "object" ? (agentModelCfg?.fallbacks?.length ?? 0) : 0) > 0;
       await ensureBotModelsJson(params.config, agentDir);
 
       // Run before_agent_start hooks early so plugins can override the model

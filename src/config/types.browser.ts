@@ -44,4 +44,11 @@ export type BrowserConfig = {
    * Example: ["--window-size=1920,1080", "--disable-infobars"]
    */
   extraArgs?: string[];
+  /** SSRF policy for browser navigation and network requests. */
+  ssrfPolicy?: {
+    allowPrivateNetwork?: boolean;
+    dangerouslyAllowPrivateNetwork?: boolean;
+    allowedHostnames?: string[];
+    hostnameAllowlist?: string[];
+  };
 };

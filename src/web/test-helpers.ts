@@ -89,13 +89,11 @@ export const baileys = await import("@whiskeysockets/baileys");
 export function resetBaileysMocks() {
   const recreated = createMockBaileys();
   (globalThis as Record<PropertyKey, unknown>)[Symbol.for("bot:lastSocket")] = recreated.lastSocket;
-  // @ts-expect-error
   baileys.makeWASocket = vi.fn(recreated.mod.makeWASocket);
-  // @ts-expect-error
+  // @ts-expect-error - readonly property override for test mock
   baileys.useMultiFileAuthState = vi.fn(recreated.mod.useMultiFileAuthState);
-  // @ts-expect-error
+  // @ts-expect-error - readonly property override for test mock
   baileys.fetchLatestBaileysVersion = vi.fn(recreated.mod.fetchLatestBaileysVersion);
-  // @ts-expect-error
   baileys.makeCacheableSignalKeyStore = vi.fn(recreated.mod.makeCacheableSignalKeyStore);
 }
 

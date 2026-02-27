@@ -464,7 +464,11 @@ async function ensureDmComponentAuthorized(params: {
     return true;
   }
 
-  const storeAllowFrom = await readChannelAllowFromStore("discord").catch(() => []);
+  const storeAllowFrom = await readChannelAllowFromStore(
+    "discord",
+    process.env,
+    ctx.accountId,
+  ).catch(() => []);
   const effectiveAllowFrom = [...(ctx.allowFrom ?? []), ...storeAllowFrom];
   const allowList = normalizeDiscordAllowList(effectiveAllowFrom, ["discord:", "user:", "pk:"]);
   const allowMatch = allowList
@@ -485,6 +489,7 @@ async function ensureDmComponentAuthorized(params: {
     const { code, created } = await upsertChannelPairingRequest({
       channel: "discord",
       id: user.id,
+      accountId: ctx.accountId,
       meta: {
         tag: formatDiscordUserTag(user),
         name: user.username,

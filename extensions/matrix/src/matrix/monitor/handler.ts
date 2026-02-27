@@ -219,7 +219,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
 
       const senderName = await getMemberDisplayName(roomId, senderId);
       const storeAllowFrom = await core.channel.pairing
-        .readAllowFromStore("matrix")
+        .readAllowFromStore({ channel: "matrix", accountId: accountId ?? "default" })
         .catch(() => []);
       const effectiveAllowFrom = normalizeMatrixAllowList([...allowFrom, ...storeAllowFrom]);
       const groupAllowFrom = cfg.channels?.matrix?.groupAllowFrom ?? [];
@@ -241,6 +241,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
               const { code, created } = await core.channel.pairing.upsertPairingRequest({
                 channel: "matrix",
                 id: senderId,
+                accountId: accountId ?? "default",
                 meta: { name: senderName },
               });
               if (created) {

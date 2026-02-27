@@ -88,19 +88,19 @@ export async function createMatrixClient(params: {
   if (client.crypto) {
     const originalUpdateSyncData = client.crypto.updateSyncData.bind(client.crypto);
     client.crypto.updateSyncData = async (
-      toDeviceMessages,
-      otkCounts,
-      unusedFallbackKeyAlgs,
-      changedDeviceLists,
-      leftDeviceLists,
+      toDeviceMessages: unknown[],
+      otkCounts: Record<string, number>,
+      unusedFallbackKeyAlgs: string[],
+      changedDeviceLists: string[],
+      leftDeviceLists: string[],
     ) => {
       const safeChanged = sanitizeUserIdList(changedDeviceLists, "changed device list");
       const safeLeft = sanitizeUserIdList(leftDeviceLists, "left device list");
       try {
         return await originalUpdateSyncData(
-          toDeviceMessages,
+          toDeviceMessages as never,
           otkCounts,
-          unusedFallbackKeyAlgs,
+          unusedFallbackKeyAlgs as never,
           safeChanged,
           safeLeft,
         );

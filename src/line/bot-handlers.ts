@@ -17,7 +17,7 @@ import {
   readChannelAllowFromStore,
   upsertChannelPairingRequest,
 } from "../pairing/pairing-store.js";
-import { firstDefined, isSenderAllowed, normalizeAllowFromWithStore } from "./bot-access.js";
+import { firstDefined, isSenderAllowed, normalizeDmAllowFromWithStore } from "./bot-access.js";
 import {
   getLineSourceInfo,
   buildLineMessageContext,
@@ -64,6 +64,7 @@ async function sendLinePairingReply(params: {
   const { code, created } = await upsertChannelPairingRequest({
     channel: "line",
     id: senderId,
+    accountId: context.account.accountId,
   });
   if (!created) {
     return;
@@ -110,8 +111,12 @@ async function shouldProcessLineEvent(
   const { userId, groupId, roomId, isGroup } = getLineSourceInfo(event.source);
   const senderId = userId ?? "";
 
-  const storeAllowFrom = await readChannelAllowFromStore("line").catch(() => []);
-  const effectiveDmAllow = normalizeAllowFromWithStore({
+  const storeAllowFrom = await readChannelAllowFromStore(
+    "line",
+    process.env,
+    account.accountId,
+  ).catch(() => []);
+  const effectiveDmAllow = normalizeDmAllowFromWithStore({
     allowFrom: account.config.allowFrom,
     storeAllowFrom,
   });
@@ -125,7 +130,7 @@ async function shouldProcessLineEvent(
     account.config.groupAllowFrom,
     fallbackGroupAllowFrom,
   );
-  const effectiveGroupAllow = normalizeAllowFromWithStore({
+  const effectiveGroupAllow = normalizeDmAllowFromWithStore({
     allowFrom: groupAllowFrom,
     storeAllowFrom,
   });

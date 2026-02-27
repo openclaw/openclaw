@@ -442,3 +442,57 @@ export async function sendVoiceMessageDiscord(
     }
   }
 }
+
+type WebhookSendOpts = {
+  webhookId: string;
+  webhookToken: string;
+  accountId?: string;
+  threadId?: string;
+  replyTo?: string;
+  username?: string;
+  avatarUrl?: string;
+};
+
+/**
+ * Send a message through a Discord webhook. Used for thread-bound agent
+ * messages that should appear under a custom persona (username + avatar).
+ */
+export async function sendWebhookMessageDiscord(
+  text: string,
+  opts: WebhookSendOpts,
+): Promise<DiscordSendResult> {
+  const params = new URLSearchParams({ wait: "true" });
+  if (opts.threadId) {
+    params.set("thread_id", opts.threadId);
+  }
+  const url = `https://discord.com/api/v10/webhooks/${opts.webhookId}/${opts.webhookToken}?${params.toString()}`;
+  const body: Record<string, unknown> = { content: text };
+  if (opts.username) {
+    body.username = opts.username;
+  }
+  if (opts.avatarUrl) {
+    body.avatar_url = opts.avatarUrl;
+  }
+  if (opts.replyTo) {
+    body.message_reference = { message_id: opts.replyTo };
+  }
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => "unknown");
+    throw new Error(`Discord webhook send failed (${response.status}): ${errorText}`);
+  }
+  const result = (await response.json()) as { id?: string; channel_id?: string };
+  const messageId = typeof result.id === "string" ? result.id : "unknown";
+  const channelId =
+    typeof result.channel_id === "string" ? result.channel_id : (opts.threadId ?? "");
+  recordChannelActivity({
+    channel: "discord",
+    accountId: opts.accountId ?? "default",
+    direction: "outbound",
+  });
+  return { messageId, channelId };
+}

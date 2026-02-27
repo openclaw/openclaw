@@ -27,6 +27,7 @@ export type MSTeamsMessageHandlerDeps = {
   cfg: BotConfig;
   runtime: RuntimeEnv;
   appId: string;
+  accountId?: string;
   adapter: MSTeamsAdapter;
   tokenProvider: MSTeamsAccessTokenProvider;
   textLimit: number;

@@ -8,7 +8,7 @@
  * Trigger is DETERMINISTIC (telemetry counts), not LLM-judged.
  */
 import type { BotPluginApi } from "bot/plugin-sdk";
-import { recordInvocation, getAggregateStats } from "./telemetry.js";
+import { recordInvocation, getAggregateStats, type ToolInvocation } from "./telemetry.js";
 
 interface FrictionPattern {
   tool_id: string;
@@ -54,7 +54,9 @@ export function createFrictionDetector(api: BotPluginApi) {
         timestamp_ms: Date.now(),
         duration_ms: durationMs,
         success,
-        failure_mode: event.error ? categorizeFailure(event.error) : undefined,
+        failure_mode: event.error
+          ? (categorizeFailure(event.error) as ToolInvocation["failure_mode"])
+          : undefined,
         retries: 0,
         user_corrected: false,
         context: { channel: "agent" },

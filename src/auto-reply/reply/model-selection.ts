@@ -1,4 +1,5 @@
 import type { BotConfig } from "../../config/config.js";
+import type { ReasoningLevel } from "../thinking.js";
 import type { ThinkLevel } from "./directives.js";
 import { clearSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
 import { lookupContextTokens } from "../../agents/context.js";
@@ -32,6 +33,7 @@ type ModelSelectionState = {
   allowedModelCatalog: ModelCatalog;
   resetModelOverride: boolean;
   resolveDefaultThinkingLevel: () => Promise<ThinkLevel>;
+  resolveDefaultReasoningLevel: () => Promise<ReasoningLevel>;
   needsModelCatalog: boolean;
 };
 
@@ -397,6 +399,23 @@ export async function createModelSelectionState(params: {
     return defaultThinkingLevel;
   };
 
+  let defaultReasoningLevel: ReasoningLevel | undefined;
+  const resolveDefaultReasoningLevel = async (): Promise<ReasoningLevel> => {
+    if (defaultReasoningLevel) {
+      return defaultReasoningLevel;
+    }
+    let catalogForReasoning = modelCatalog ?? allowedModelCatalog;
+    if (!catalogForReasoning || catalogForReasoning.length === 0) {
+      modelCatalog = await loadModelCatalog({ config: cfg });
+      catalogForReasoning = modelCatalog;
+    }
+    const candidate = catalogForReasoning.find(
+      (entry) => entry.provider === provider && entry.id === model,
+    );
+    defaultReasoningLevel = candidate?.reasoning ? "on" : "off";
+    return defaultReasoningLevel;
+  };
+
   return {
     provider,
     model,
@@ -404,6 +423,7 @@ export async function createModelSelectionState(params: {
     allowedModelCatalog,
     resetModelOverride,
     resolveDefaultThinkingLevel,
+    resolveDefaultReasoningLevel,
     needsModelCatalog,
   };
 }

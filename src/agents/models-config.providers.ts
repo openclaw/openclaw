@@ -361,8 +361,9 @@ export function normalizeProviders(params: {
     let normalizedProvider = provider;
 
     // Fix common misconfig: apiKey set to "${ENV_VAR}" instead of "ENV_VAR".
+    // Only applies to plain-string apiKey values (not SecretRef objects).
     if (
-      normalizedProvider.apiKey &&
+      typeof normalizedProvider.apiKey === "string" &&
       normalizeApiKeyConfig(normalizedProvider.apiKey) !== normalizedProvider.apiKey
     ) {
       mutated = true;
@@ -376,7 +377,9 @@ export function normalizeProviders(params: {
     // Fill it from the environment or auth profiles when possible.
     const hasModels =
       Array.isArray(normalizedProvider.models) && normalizedProvider.models.length > 0;
-    if (hasModels && !normalizedProvider.apiKey?.trim()) {
+    const apiKeyStr =
+      typeof normalizedProvider.apiKey === "string" ? normalizedProvider.apiKey : undefined;
+    if (hasModels && !apiKeyStr?.trim()) {
       const authMode =
         normalizedProvider.auth ?? (normalizedKey === "amazon-bedrock" ? "aws-sdk" : undefined);
       if (authMode === "aws-sdk") {

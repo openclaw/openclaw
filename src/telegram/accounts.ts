@@ -1,5 +1,10 @@
 import type { BotConfig } from "../config/config.js";
 import type { TelegramAccountConfig } from "../config/types.js";
+import type { TelegramActionConfig } from "../config/types.telegram.js";
+import {
+  createAccountActionGate,
+  type ActionGate,
+} from "../channels/plugins/account-action-gate.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { listBoundAccountIds, resolveDefaultAgentBoundAccountId } from "../routing/bindings.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
@@ -136,4 +141,17 @@ export function listEnabledTelegramAccounts(cfg: BotConfig): ResolvedTelegramAcc
   return listTelegramAccountIds(cfg)
     .map((accountId) => resolveTelegramAccount({ cfg, accountId }))
     .filter((account) => account.enabled);
+}
+
+/** Build an action gate for Telegram that merges base + account action configs. */
+export function createTelegramActionGate(params: {
+  cfg: BotConfig;
+  accountId?: string | null;
+}): ActionGate<TelegramActionConfig> {
+  const baseActions = (params.cfg.channels?.telegram as TelegramAccountConfig | undefined)?.actions;
+  const account = resolveTelegramAccount(params);
+  return createAccountActionGate({
+    baseActions,
+    accountActions: account.config.actions,
+  });
 }

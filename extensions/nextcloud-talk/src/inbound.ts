@@ -93,7 +93,9 @@ export async function handleNextcloudTalkInbound(params: {
 
   const configAllowFrom = normalizeNextcloudTalkAllowlist(account.config.allowFrom);
   const configGroupAllowFrom = normalizeNextcloudTalkAllowlist(account.config.groupAllowFrom);
-  const storeAllowFrom = await core.channel.pairing.readAllowFromStore(CHANNEL_ID).catch(() => []);
+  const storeAllowFrom = await core.channel.pairing
+    .readAllowFromStore({ channel: CHANNEL_ID, accountId: account.accountId })
+    .catch(() => []);
   const storeAllowList = normalizeNextcloudTalkAllowlist(storeAllowFrom);
 
   const roomMatch = resolveNextcloudTalkRoomMatch({
@@ -168,6 +170,7 @@ export async function handleNextcloudTalkInbound(params: {
           const { code, created } = await core.channel.pairing.upsertPairingRequest({
             channel: CHANNEL_ID,
             id: senderId,
+            accountId: account.accountId,
             meta: { name: senderName || undefined },
           });
           if (created) {

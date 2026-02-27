@@ -1,7 +1,10 @@
+import fs from "node:fs";
+import path from "node:path";
 import { resolveBrowserConfig } from "../browser/config.js";
 import { loadConfig } from "../config/config.js";
 import { GatewayClient } from "../gateway/client.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
+import { type SkillBinTrustEntry } from "../infra/exec-approvals.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
 import { ensureBotCliOnPath } from "../infra/path-env.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
@@ -28,8 +31,31 @@ type NodeHostRunOptions = {
 
 const DEFAULT_NODE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 
+function resolveSkillBinPath(name: string): string | null {
+  if (name.includes("/") || name.includes("\\")) {
+    return null;
+  }
+  const extensions =
+    process.platform === "win32"
+      ? (process.env.PATHEXT ?? process.env.PathExt ?? ".EXE;.CMD;.BAT;.COM")
+          .split(";")
+          .map((ext) => ext.toLowerCase())
+      : [""];
+  const pathEnv = process.env.PATH ?? "";
+  const dirs = pathEnv.split(path.delimiter).filter(Boolean);
+  for (const dir of dirs) {
+    for (const ext of extensions) {
+      const candidate = path.join(dir, name + ext);
+      if (fs.existsSync(candidate)) {
+        return candidate;
+      }
+    }
+  }
+  return null;
+}
+
 class SkillBinsCache implements SkillBinsProvider {
-  private bins = new Set<string>();
+  private bins: SkillBinTrustEntry[] = [];
   private lastRefresh = 0;
   private readonly ttlMs = 90_000;
   private readonly fetch: () => Promise<string[]>;
@@ -38,7 +64,7 @@ class SkillBinsCache implements SkillBinsProvider {
     this.fetch = fetch;
   }
 
-  async current(force = false): Promise<Set<string>> {
+  async current(force = false): Promise<SkillBinTrustEntry[]> {
     if (force || Date.now() - this.lastRefresh > this.ttlMs) {
       await this.refresh();
     }
@@ -47,12 +73,19 @@ class SkillBinsCache implements SkillBinsProvider {
 
   private async refresh() {
     try {
-      const bins = await this.fetch();
-      this.bins = new Set(bins);
+      const names = await this.fetch();
+      const entries: SkillBinTrustEntry[] = [];
+      for (const name of names) {
+        const resolvedPath = resolveSkillBinPath(name);
+        if (resolvedPath) {
+          entries.push({ name, resolvedPath });
+        }
+      }
+      this.bins = entries;
       this.lastRefresh = Date.now();
     } catch {
       if (!this.lastRefresh) {
-        this.bins = new Set();
+        this.bins = [];
       }
     }
   }

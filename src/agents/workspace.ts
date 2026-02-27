@@ -544,3 +544,79 @@ export async function loadExtraBootstrapFiles(
   }
   return result;
 }
+
+export type BootstrapFileDiagnostic = {
+  path: string;
+  reason: string;
+};
+
+/**
+ * Like {@link loadExtraBootstrapFiles} but returns per-candidate diagnostics
+ * explaining why each skipped file was excluded.
+ */
+export async function loadExtraBootstrapFilesWithDiagnostics(
+  dir: string,
+  extraPatterns: string[],
+): Promise<{ files: WorkspaceBootstrapFile[]; diagnostics: BootstrapFileDiagnostic[] }> {
+  if (!extraPatterns.length) {
+    return { files: [], diagnostics: [] };
+  }
+  const resolvedDir = resolveUserPath(dir);
+  let realResolvedDir = resolvedDir;
+  try {
+    realResolvedDir = await fs.realpath(resolvedDir);
+  } catch {
+    // Keep lexical root if realpath fails.
+  }
+
+  const resolvedPaths = new Set<string>();
+  for (const pattern of extraPatterns) {
+    if (pattern.includes("*") || pattern.includes("?") || pattern.includes("{")) {
+      try {
+        const matches = fs.glob(pattern, { cwd: resolvedDir });
+        for await (const m of matches) {
+          resolvedPaths.add(m);
+        }
+      } catch {
+        resolvedPaths.add(pattern);
+      }
+    } else {
+      resolvedPaths.add(pattern);
+    }
+  }
+
+  const files: WorkspaceBootstrapFile[] = [];
+  const diagnostics: BootstrapFileDiagnostic[] = [];
+  for (const relPath of resolvedPaths) {
+    const filePath = path.resolve(resolvedDir, relPath);
+    if (!filePath.startsWith(resolvedDir + path.sep) && filePath !== resolvedDir) {
+      diagnostics.push({ path: relPath, reason: "path-traversal" });
+      continue;
+    }
+    try {
+      const realFilePath = await fs.realpath(filePath);
+      if (
+        !realFilePath.startsWith(realResolvedDir + path.sep) &&
+        realFilePath !== realResolvedDir
+      ) {
+        diagnostics.push({ path: relPath, reason: "symlink-escape" });
+        continue;
+      }
+      const baseName = path.basename(relPath);
+      if (!VALID_BOOTSTRAP_NAMES.has(baseName)) {
+        diagnostics.push({ path: relPath, reason: "invalid-name" });
+        continue;
+      }
+      const content = await fs.readFile(realFilePath, "utf-8");
+      files.push({
+        name: baseName as WorkspaceBootstrapFileName,
+        path: filePath,
+        content,
+        missing: false,
+      });
+    } catch {
+      diagnostics.push({ path: relPath, reason: "not-found" });
+    }
+  }
+  return { files, diagnostics };
+}

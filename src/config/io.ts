@@ -1128,3 +1128,27 @@ export async function writeConfigFile(
     envSnapshotForRestore: sameConfigPath ? options.envSnapshotForRestore : undefined,
   });
 }
+
+// ---------------------------------------------------------------------------
+// Runtime config snapshot – used by secrets runtime to override loadConfig()
+// ---------------------------------------------------------------------------
+
+let _runtimeConfigSnapshot: BotConfig | null = null;
+let _runtimeSourceConfigSnapshot: BotConfig | null = null;
+
+export function setRuntimeConfigSnapshot(resolved: BotConfig, source: BotConfig): void {
+  _runtimeConfigSnapshot = resolved;
+  _runtimeSourceConfigSnapshot = source;
+}
+
+export function getRuntimeConfigSnapshot(): { resolved: BotConfig; source: BotConfig } | null {
+  if (!_runtimeConfigSnapshot || !_runtimeSourceConfigSnapshot) {
+    return null;
+  }
+  return { resolved: _runtimeConfigSnapshot, source: _runtimeSourceConfigSnapshot };
+}
+
+export function clearRuntimeConfigSnapshot(): void {
+  _runtimeConfigSnapshot = null;
+  _runtimeSourceConfigSnapshot = null;
+}

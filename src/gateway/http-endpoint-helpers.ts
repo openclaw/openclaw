@@ -12,7 +12,6 @@ export async function handleGatewayPostJsonEndpoint(
     auth: ResolvedGatewayAuth;
     maxBodyBytes: number;
     trustedProxies?: string[];
-    allowRealIpFallback?: boolean;
     rateLimiter?: AuthRateLimiter;
   },
 ): Promise<false | { body: unknown; authResult?: GatewayAuthResult } | undefined> {
@@ -31,7 +30,6 @@ export async function handleGatewayPostJsonEndpoint(
     res,
     auth: opts.auth,
     trustedProxies: opts.trustedProxies,
-    allowRealIpFallback: opts.allowRealIpFallback,
     rateLimiter: opts.rateLimiter,
   });
   if (!authResult) {

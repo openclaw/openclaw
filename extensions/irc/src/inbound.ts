@@ -89,7 +89,9 @@ export async function handleIrcInbound(params: {
 
   const configAllowFrom = normalizeIrcAllowlist(account.config.allowFrom);
   const configGroupAllowFrom = normalizeIrcAllowlist(account.config.groupAllowFrom);
-  const storeAllowFrom = await core.channel.pairing.readAllowFromStore(CHANNEL_ID).catch(() => []);
+  const storeAllowFrom = await core.channel.pairing
+    .readAllowFromStore({ channel: CHANNEL_ID, accountId: account.accountId })
+    .catch(() => []);
   const storeAllowList = normalizeIrcAllowlist(storeAllowFrom);
 
   const groupMatch = resolveIrcGroupMatch({
@@ -162,6 +164,7 @@ export async function handleIrcInbound(params: {
           const { code, created } = await core.channel.pairing.upsertPairingRequest({
             channel: CHANNEL_ID,
             id: senderDisplay.toLowerCase(),
+            accountId: account.accountId,
             meta: { name: message.senderNick || undefined },
           });
           if (created) {

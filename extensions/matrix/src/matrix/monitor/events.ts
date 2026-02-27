@@ -16,7 +16,7 @@ function createSelfUserIdResolver(client: Pick<MatrixClient, "getUserId">) {
     if (!selfUserIdLookup) {
       selfUserIdLookup = client
         .getUserId()
-        .then((userId) => {
+        .then((userId: string) => {
           selfUserId = userId;
           return userId;
         })

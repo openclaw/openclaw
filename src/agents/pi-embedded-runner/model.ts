@@ -10,8 +10,8 @@ import { normalizeProviderId } from "../model-selection.js";
 import {
   discoverAuthStorage,
   discoverModels,
-  type AuthStorage,
-  type ModelRegistry,
+  AuthStorage,
+  ModelRegistry,
 } from "../pi-model-discovery.js";
 
 type InlineModelEntry = ModelDefinitionConfig & { provider: string; baseUrl?: string };
@@ -48,8 +48,8 @@ export function resolveModel(
 ): {
   model?: Model<Api>;
   error?: string;
-  authStorage: AuthStorage;
-  modelRegistry: ModelRegistry;
+  authStorage: InstanceType<typeof AuthStorage>;
+  modelRegistry: InstanceType<typeof ModelRegistry>;
 } {
   const resolvedAgentDir = agentDir ?? resolveBotAgentDir();
   const authStorage = discoverAuthStorage(resolvedAgentDir);

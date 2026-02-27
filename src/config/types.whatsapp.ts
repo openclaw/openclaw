@@ -101,6 +101,8 @@ export type WhatsAppConfig = {
   debounceMs?: number;
   /** Heartbeat visibility settings for this channel. */
   heartbeat?: ChannelHeartbeatVisibilityConfig;
+  /** Default outbound target (E.164 phone number). */
+  defaultTo?: string;
 };
 
 export type WhatsAppAccountConfig = {
@@ -149,4 +151,6 @@ export type WhatsAppAccountConfig = {
   debounceMs?: number;
   /** Heartbeat visibility settings for this account. */
   heartbeat?: ChannelHeartbeatVisibilityConfig;
+  /** Default outbound target (E.164 phone number). */
+  defaultTo?: string;
 };

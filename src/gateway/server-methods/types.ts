@@ -19,6 +19,8 @@ type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 export type GatewayClient = {
   connect: ConnectParams;
   connId?: string;
+  /** Resolved client IP address (set during WS connection setup). */
+  clientIp?: string;
   /** Resolved tenant context (multi-tenant IAM mode). */
   tenant?: TenantContext;
 };
@@ -37,6 +39,8 @@ export type GatewayRequestContext = {
   cron: CronService;
   cronStorePath: string;
   execApprovalManager?: ExecApprovalManager;
+  /** Check if any operator-scope clients are available for exec approval UX. */
+  hasExecApprovalClients?: () => boolean;
   loadGatewayModelCatalog: () => Promise<ModelCatalogEntry[]>;
   getHealthCache: () => HealthSummary | null;
   refreshHealthSnapshot: (opts?: { probe?: boolean }) => Promise<HealthSummary>;

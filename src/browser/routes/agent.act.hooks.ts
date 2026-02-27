@@ -1,7 +1,7 @@
 import type { BrowserRouteContext } from "../server-context.js";
 import type { BrowserRouteRegistrar } from "./types.js";
 import { readBody, resolveTargetIdFromBody, withPlaywrightRouteContext } from "./agent.shared.js";
-import { DEFAULT_UPLOAD_DIR, resolveExistingPathsWithinRoot } from "./path-output.js";
+import { DEFAULT_UPLOAD_DIR, resolvePathsWithinRoot } from "./path-output.js";
 import { jsonError, toBoolean, toNumber, toStringArray, toStringOrEmpty } from "./utils.js";
 
 export function registerBrowserAgentActHookRoutes(
@@ -27,7 +27,7 @@ export function registerBrowserAgentActHookRoutes(
       targetId,
       feature: "file chooser hook",
       run: async ({ cdpUrl, tab, pw }) => {
-        const uploadPathsResult = await resolveExistingPathsWithinRoot({
+        const uploadPathsResult = resolvePathsWithinRoot({
           rootDir: DEFAULT_UPLOAD_DIR,
           requestedPaths: paths,
           scopeLabel: `uploads directory (${DEFAULT_UPLOAD_DIR})`,

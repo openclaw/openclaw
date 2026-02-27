@@ -106,6 +106,8 @@ export type RunCronAgentTurnResult = {
   /** Last non-empty agent text output (not truncated). */
   outputText?: string;
   error?: string;
+  /** Categorises the error kind for cron delivery diagnostics. */
+  errorKind?: string;
   sessionId?: string;
   sessionKey?: string;
   /**
@@ -116,6 +118,8 @@ export type RunCronAgentTurnResult = {
    * messages.  See: https://github.com/hanzoai/bot/issues/15692
    */
   delivered?: boolean;
+  /** Whether an outbound delivery attempt was made. */
+  deliveryAttempted?: boolean;
 };
 
 export async function runCronIsolatedAgentTurn(params: {

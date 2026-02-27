@@ -86,6 +86,41 @@ export function applyAccountNameToChannelSection(params: {
   } as BotConfig;
 }
 
+/**
+ * When switching from a single-account (base-level) channel config to a
+ * multi-account layout, move the base-level channel section into the "default"
+ * account key under `accounts`. This ensures the existing config is preserved
+ * once account-scoped keys are introduced.
+ */
+export function moveSingleAccountChannelSectionToDefaultAccount(params: {
+  cfg: BotConfig;
+  channelKey: string;
+}): BotConfig {
+  const channels = params.cfg.channels as Record<string, unknown> | undefined;
+  const base = channels?.[params.channelKey] as ChannelSectionBase | undefined;
+  // If the channel section already has an accounts map, no migration needed.
+  if (base?.accounts && Object.keys(base.accounts).length > 0) {
+    return params.cfg;
+  }
+  if (!base) {
+    return params.cfg;
+  }
+  // Extract everything except "accounts" from the base section into the
+  // default account entry.
+  const { accounts: _ignored, ...rest } = base as Record<string, unknown>;
+  return {
+    ...params.cfg,
+    channels: {
+      ...params.cfg.channels,
+      [params.channelKey]: {
+        accounts: {
+          [DEFAULT_ACCOUNT_ID]: rest,
+        },
+      },
+    },
+  } as BotConfig;
+}
+
 export function migrateBaseNameToDefaultAccount(params: {
   cfg: BotConfig;
   channelKey: string;

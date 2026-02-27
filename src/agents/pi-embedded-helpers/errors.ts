@@ -432,7 +432,7 @@ export function formatRawAssistantErrorForUi(raw?: string): string {
 
 export function formatAssistantErrorText(
   msg: AssistantMessage,
-  opts?: { cfg?: BotConfig; sessionKey?: string; provider?: string },
+  opts?: { cfg?: BotConfig; sessionKey?: string; provider?: string; model?: string },
 ): string | undefined {
   // Also format errors if errorMessage is present, even if stopReason isn't "error"
   const raw = (msg.errorMessage ?? "").trim();
@@ -810,4 +810,38 @@ export function isFailoverAssistantError(msg: AssistantMessage | undefined): boo
     return false;
   }
   return isFailoverErrorMessage(msg.errorMessage ?? "");
+}
+
+const AUTH_PERMANENT_PATTERNS: readonly ErrorPattern[] = [
+  /invalid[_ ]?api[_ ]?key\b/,
+  /api[_ ]?key[_ ]?(?:revoked|deactivated|deleted)\b/,
+  /key[_ ]has[_ ]been[_ ](?:disabled|revoked)\b/,
+  /account[_ ]has[_ ]been[_ ]deactivated\b/,
+  /could[_ ]not[_ ]authenticate[_ ]api[_ ]key\b/,
+  /could[_ ]not[_ ]validate[_ ]credentials\b/,
+  /api_key_revoked\b/,
+  /api_key_deleted\b/,
+];
+
+/** Returns true for permanent auth failures (revoked/deleted/deactivated credentials). */
+export function isAuthPermanentErrorMessage(raw: string): boolean {
+  return matchesErrorPatterns(raw, AUTH_PERMANENT_PATTERNS);
+}
+
+/** Returns true when the error indicates that the requested model was not found. */
+export function isModelNotFoundErrorMessage(raw: string): boolean {
+  const msg = raw.trim();
+  if (!msg) {
+    return false;
+  }
+  if (/\b404\b/.test(msg) && /not[_-]?found/i.test(msg)) {
+    return true;
+  }
+  if (/not_found_error/i.test(msg)) {
+    return true;
+  }
+  if (/model:\s*[a-z0-9._-]+/i.test(msg) && /not[_-]?found/i.test(msg)) {
+    return true;
+  }
+  return false;
 }

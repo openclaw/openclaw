@@ -671,6 +671,18 @@ export class TwilioProvider implements VoiceCallProvider {
     // Twilio's <Gather> automatically stops on speech end
     // No explicit action needed
   }
+
+  /**
+   * Return pre-generated greeting audio buffer, if available.
+   * Used for instant greeting playback on inbound calls to avoid TTS latency.
+   * Returns null when no cached greeting has been pre-generated.
+   */
+  getCachedGreetingAudio(): Buffer | null {
+    return this.cachedGreetingAudio;
+  }
+
+  /** Pre-generated greeting audio for inbound calls. */
+  private cachedGreetingAudio: Buffer | null = null;
 }
 
 // -----------------------------------------------------------------------------

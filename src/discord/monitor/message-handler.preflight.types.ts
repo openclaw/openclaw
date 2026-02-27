@@ -77,6 +77,12 @@ export type DiscordMessagePreflightContext = {
   canDetectMention: boolean;
 
   historyEntry?: HistoryEntry;
+
+  threadBinding?: import("../../infra/outbound/session-binding-service.js").SessionBindingRecord;
+  boundSessionKey?: string;
+  boundAgentId?: string;
+  threadBindings?: import("./reply-delivery.js").DiscordThreadBindingLookup;
+  discordRestFetch?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 };
 
 export type DiscordMessagePreflightParams = {
@@ -100,4 +106,6 @@ export type DiscordMessagePreflightParams = {
   groupPolicy: DiscordMessagePreflightContext["groupPolicy"];
   data: DiscordMessageEvent;
   client: Client;
+  threadBindings?: import("./reply-delivery.js").DiscordThreadBindingLookup;
+  discordRestFetch?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 };

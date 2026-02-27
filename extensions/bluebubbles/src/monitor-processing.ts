@@ -176,7 +176,7 @@ export async function processMessage(
   const configAllowFrom = (account.config.allowFrom ?? []).map((entry) => String(entry));
   const configGroupAllowFrom = (account.config.groupAllowFrom ?? []).map((entry) => String(entry));
   const storeAllowFrom = await core.channel.pairing
-    .readAllowFromStore("bluebubbles")
+    .readAllowFromStore({ channel: "bluebubbles", accountId: account.accountId })
     .catch(() => []);
   const effectiveAllowFrom = [...configAllowFrom, ...storeAllowFrom]
     .map((entry) => String(entry).trim())
@@ -265,6 +265,7 @@ export async function processMessage(
           const { code, created } = await core.channel.pairing.upsertPairingRequest({
             channel: "bluebubbles",
             id: message.senderId,
+            accountId: account.accountId,
             meta: { name: message.senderName },
           });
           runtime.log?.(
@@ -924,7 +925,7 @@ export async function processReaction(
   const configAllowFrom = (account.config.allowFrom ?? []).map((entry) => String(entry));
   const configGroupAllowFrom = (account.config.groupAllowFrom ?? []).map((entry) => String(entry));
   const storeAllowFrom = await core.channel.pairing
-    .readAllowFromStore("bluebubbles")
+    .readAllowFromStore({ channel: "bluebubbles", accountId: account.accountId })
     .catch(() => []);
   const effectiveAllowFrom = [...configAllowFrom, ...storeAllowFrom]
     .map((entry) => String(entry).trim())

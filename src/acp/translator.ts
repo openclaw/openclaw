@@ -56,6 +56,10 @@ type PendingPrompt = {
 
 type AcpGatewayAgentOptions = AcpServerOptions & {
   sessionStore?: AcpSessionStore;
+  sessionCreateRateLimit?: {
+    maxRequests?: number;
+    windowMs?: number;
+  };
 };
 
 const SESSION_CREATE_RATE_LIMIT_DEFAULT_MAX_REQUESTS = 120;

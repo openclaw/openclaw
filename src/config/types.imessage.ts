@@ -73,6 +73,12 @@ export type IMessageAccountConfig = {
   heartbeat?: ChannelHeartbeatVisibilityConfig;
   /** Outbound response prefix override for this channel/account. */
   responsePrefix?: string;
+  /** Default outbound target (phone number or handle). */
+  defaultTo?: string;
+  /** Local filesystem roots where iMessage attachments reside. */
+  attachmentRoots?: string[];
+  /** Remote filesystem roots for SCP-based attachment transfer. */
+  remoteAttachmentRoots?: string[];
 };
 
 export type IMessageConfig = {

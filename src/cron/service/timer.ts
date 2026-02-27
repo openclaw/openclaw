@@ -44,12 +44,13 @@ function errorBackoffMs(consecutiveErrors: number): number {
  * Handles consecutive error tracking, exponential backoff, one-shot disable,
  * and nextRunAtMs computation. Returns `true` if the job should be deleted.
  */
-function applyJobResult(
+export function applyJobResult(
   state: CronServiceState,
   job: CronJob,
   result: {
     status: "ok" | "error" | "skipped";
     error?: string;
+    delivered?: boolean;
     startedAt: number;
     endedAt: number;
   },
@@ -589,6 +590,28 @@ function emitJobFinished(
     durationMs: job.state.lastDurationMs,
     nextRunAtMs: job.state.nextRunAtMs,
   });
+}
+
+/**
+ * Execute a cron job's core logic with a timeout wrapper.
+ * Returns a superset of the {@link executeJobCore} result that includes
+ * delivery and telemetry fields used by `ops.ts`.
+ */
+export async function executeJobCoreWithTimeout(
+  state: CronServiceState,
+  job: CronJob,
+): Promise<{
+  status: "ok" | "error" | "skipped";
+  error?: string;
+  summary?: string;
+  sessionId?: string;
+  sessionKey?: string;
+  delivered?: boolean;
+  model?: string;
+  provider?: string;
+  usage?: unknown;
+}> {
+  return executeJobCore(state, job);
 }
 
 export function wake(

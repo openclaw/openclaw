@@ -45,6 +45,7 @@ export function createMaintenanceTool(api: BotPluginApi): AnyAgentTool {
 
   return {
     name: "self_improvement_maintenance",
+    label: "Self Improvement Maintenance",
     description:
       "Run a maintenance pass analyzing recent session telemetry and reflections. " +
       "Produces prioritized proposals for improving tool reliability, adding new tools, " +
@@ -72,7 +73,7 @@ export function createMaintenanceTool(api: BotPluginApi): AnyAgentTool {
       },
       required: ["action"],
     },
-    async execute(params: any) {
+    async execute(_toolCallId: string, params: any) {
       const action = params.action as string;
 
       switch (action) {

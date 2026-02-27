@@ -26,9 +26,7 @@ export async function withMediaFixture(
   await fs.writeFile(tmpPath, params.fileContents);
   const ctx = { MediaPath: tmpPath, MediaType: params.mediaType };
   const media = normalizeMediaAttachments(ctx);
-  const cache = createMediaAttachmentCache(media, {
-    localPathRoots: [path.dirname(tmpPath)],
-  });
+  const cache = createMediaAttachmentCache(media);
 
   try {
     await withEnvAsync({ PATH: "" }, async () => {

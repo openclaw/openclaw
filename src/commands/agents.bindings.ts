@@ -42,6 +42,7 @@ export function applyAgentBindings(
 ): {
   config: BotConfig;
   added: AgentBinding[];
+  updated: AgentBinding[];
   skipped: AgentBinding[];
   conflicts: Array<{ binding: AgentBinding; existingAgentId: string }>;
 } {
@@ -55,6 +56,7 @@ export function applyAgentBindings(
   }
 
   const added: AgentBinding[] = [];
+  const updated: AgentBinding[] = [];
   const skipped: AgentBinding[] = [];
   const conflicts: Array<{ binding: AgentBinding; existingAgentId: string }> = [];
 
@@ -75,7 +77,7 @@ export function applyAgentBindings(
   }
 
   if (added.length === 0) {
-    return { config: cfg, added, skipped, conflicts };
+    return { config: cfg, added, updated, skipped, conflicts };
   }
 
   return {
@@ -84,6 +86,7 @@ export function applyAgentBindings(
       bindings: [...existing, ...added],
     },
     added,
+    updated,
     skipped,
     conflicts,
   };
@@ -119,6 +122,63 @@ export function buildChannelBindings(params: {
     bindings.push({ agentId, match });
   }
   return bindings;
+}
+
+export function removeAgentBindings(
+  cfg: BotConfig,
+  bindings: AgentBinding[],
+): {
+  config: BotConfig;
+  removed: AgentBinding[];
+  missing: AgentBinding[];
+  conflicts: Array<{ binding: AgentBinding; existingAgentId: string }>;
+} {
+  const existing = cfg.bindings ?? [];
+  const existingMatchMap = new Map<string, { binding: AgentBinding; index: number }>();
+  for (let i = 0; i < existing.length; i++) {
+    const binding = existing[i];
+    const key = bindingMatchKey(binding.match);
+    if (!existingMatchMap.has(key)) {
+      existingMatchMap.set(key, { binding, index: i });
+    }
+  }
+
+  const removed: AgentBinding[] = [];
+  const missing: AgentBinding[] = [];
+  const conflicts: Array<{ binding: AgentBinding; existingAgentId: string }> = [];
+  const indicesToRemove = new Set<number>();
+
+  for (const binding of bindings) {
+    const agentId = normalizeAgentId(binding.agentId);
+    const key = bindingMatchKey(binding.match);
+    const entry = existingMatchMap.get(key);
+    if (!entry) {
+      missing.push(binding);
+      continue;
+    }
+    const existingAgentId = normalizeAgentId(entry.binding.agentId);
+    if (existingAgentId !== agentId) {
+      conflicts.push({ binding, existingAgentId });
+      continue;
+    }
+    removed.push(entry.binding);
+    indicesToRemove.add(entry.index);
+  }
+
+  if (removed.length === 0) {
+    return { config: cfg, removed, missing, conflicts };
+  }
+
+  const kept = existing.filter((_, i) => !indicesToRemove.has(i));
+  return {
+    config: {
+      ...cfg,
+      bindings: kept.length > 0 ? kept : undefined,
+    },
+    removed,
+    missing,
+    conflicts,
+  };
 }
 
 export function parseBindingSpecs(params: {

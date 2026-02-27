@@ -500,13 +500,14 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
         }
         onEose?.(relays.join(", "));
       },
-      onclose: (reason) => {
+      onclose: (reason: string | string[]) => {
         // Handle subscription close
         for (const relay of relays) {
           metrics.emit("relay.message.closed", 1, { relay });
           options.onDisconnect?.(relay);
         }
-        onError?.(new Error(`Subscription closed: ${reason.join(", ")}`), "subscription");
+        const reasonStr = Array.isArray(reason) ? reason.join(", ") : String(reason);
+        onError?.(new Error(`Subscription closed: ${reasonStr}`), "subscription");
       },
     },
   );

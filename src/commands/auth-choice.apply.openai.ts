@@ -62,8 +62,7 @@ export async function applyAuthChoiceOpenAI(
       normalize: normalizeApiKeyInput,
       validate: validateApiKeyInput,
       prompter: params.prompter,
-      setCredential: async (apiKey, mode) =>
-        setOpenaiApiKey(apiKey, params.agentDir, { secretInputMode: mode }),
+      setCredential: async (apiKey, _mode) => setOpenaiApiKey(apiKey, params.agentDir),
     });
     nextConfig = applyAuthProfileConfig(nextConfig, {
       profileId: "openai:default",
@@ -94,9 +93,10 @@ export async function applyAuthChoiceOpenAI(
       return { config: nextConfig, agentModelOverride };
     }
     if (creds) {
-      const profileId = await writeOAuthCredentials("openai-codex", creds, params.agentDir, {
-        syncSiblingAgents: true,
-      });
+      await writeOAuthCredentials("openai-codex", creds, params.agentDir);
+      const email =
+        typeof creds.email === "string" && creds.email.trim() ? creds.email.trim() : "default";
+      const profileId = `openai-codex:${email}`;
       nextConfig = applyAuthProfileConfig(nextConfig, {
         profileId,
         provider: "openai-codex",

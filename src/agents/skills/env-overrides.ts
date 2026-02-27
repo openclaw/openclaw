@@ -1,5 +1,6 @@
 import type { BotConfig } from "../../config/config.js";
 import type { SkillEntry, SkillSnapshot } from "./types.js";
+import { normalizeOptionalSecretInput } from "../../utils/normalize-secret-input.js";
 import { resolveSkillConfig } from "./config.js";
 import { resolveSkillKey } from "./frontmatter.js";
 
@@ -22,9 +23,10 @@ function applySkillConfigEnvOverrides(params: {
     }
   }
 
-  if (primaryEnv && skillConfig.apiKey && !process.env[primaryEnv]) {
+  const apiKeyStr = normalizeOptionalSecretInput(skillConfig.apiKey);
+  if (primaryEnv && apiKeyStr && !process.env[primaryEnv]) {
     updates.push({ key: primaryEnv, prev: process.env[primaryEnv] });
-    process.env[primaryEnv] = skillConfig.apiKey;
+    process.env[primaryEnv] = apiKeyStr;
   }
 }
 

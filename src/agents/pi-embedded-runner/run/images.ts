@@ -1,3 +1,4 @@
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { ImageContent } from "@mariozechner/pi-ai";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -285,6 +286,8 @@ export async function detectAndLoadPromptImages(params: {
   workspaceDir: string;
   model: { input?: string[] };
   existingImages?: ImageContent[];
+  /** Conversation history messages to scan for image references. */
+  historyMessages?: AgentMessage[];
   maxBytes?: number;
   maxDimensionPx?: number;
   workspaceOnly?: boolean;
@@ -295,7 +298,11 @@ export async function detectAndLoadPromptImages(params: {
   detectedRefs: DetectedImageRef[];
   loadedCount: number;
   skippedCount: number;
+  /** Images detected in conversation history, keyed by message index. */
+  historyImagesByIndex: Map<number, ImageContent[]>;
 }> {
+  const emptyHistory = new Map<number, ImageContent[]>();
+
   // If model doesn't support images, return empty results
   if (!modelSupportsImages(params.model)) {
     return {
@@ -303,7 +310,52 @@ export async function detectAndLoadPromptImages(params: {
       detectedRefs: [],
       loadedCount: 0,
       skippedCount: 0,
+      historyImagesByIndex: emptyHistory,
     };
+  }
+
+  // Scan conversation history for image references
+  const historyImagesByIndex = new Map<number, ImageContent[]>();
+  if (params.historyMessages) {
+    for (let i = 0; i < params.historyMessages.length; i++) {
+      const msg = params.historyMessages[i];
+      if (!msg || msg.role !== "user") {
+        continue;
+      }
+      const text =
+        typeof msg.content === "string"
+          ? msg.content
+          : Array.isArray(msg.content)
+            ? msg.content
+                .filter(
+                  (c): c is { type: "text"; text: string } =>
+                    c != null && typeof c === "object" && c.type === "text",
+                )
+                .map((c) => c.text)
+                .join("\n")
+            : "";
+      if (!text) {
+        continue;
+      }
+      const refs = detectImageReferences(text);
+      if (refs.length === 0) {
+        continue;
+      }
+      const loaded: ImageContent[] = [];
+      for (const ref of refs) {
+        const image = await loadImageFromRef(ref, params.workspaceDir, {
+          maxBytes: params.maxBytes,
+          workspaceOnly: params.workspaceOnly,
+          sandbox: params.sandbox,
+        });
+        if (image) {
+          loaded.push(image);
+        }
+      }
+      if (loaded.length > 0) {
+        historyImagesByIndex.set(i, loaded);
+      }
+    }
   }
 
   // Detect images from current prompt
@@ -315,6 +367,7 @@ export async function detectAndLoadPromptImages(params: {
       detectedRefs: [],
       loadedCount: 0,
       skippedCount: 0,
+      historyImagesByIndex,
     };
   }
 
@@ -354,5 +407,6 @@ export async function detectAndLoadPromptImages(params: {
     detectedRefs: allRefs,
     loadedCount,
     skippedCount,
+    historyImagesByIndex,
   };
 }

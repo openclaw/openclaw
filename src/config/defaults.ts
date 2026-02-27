@@ -411,7 +411,9 @@ export function applyContextPruningDefaults(cfg: BotConfig): BotConfig {
       modelsMutated = true;
     }
 
-    const primary = resolvePrimaryModelRef(defaults.model?.primary ?? undefined);
+    const modelConfig = defaults.model;
+    const primaryRaw = typeof modelConfig === "string" ? modelConfig : modelConfig?.primary;
+    const primary = resolvePrimaryModelRef(primaryRaw ?? undefined);
     if (primary) {
       const parsedPrimary = parseModelRef(primary, "anthropic");
       if (parsedPrimary?.provider === "anthropic") {

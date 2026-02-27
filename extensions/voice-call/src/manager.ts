@@ -43,6 +43,7 @@ export class CallManager {
   private providerCallIdMap = new Map<string, CallId>();
   private processedEventIds = new Set<string>();
   private rejectedProviderCallIds = new Set<string>();
+  private activeTurnCalls = new Set<CallId>();
   private provider: VoiceCallProvider | null = null;
   private config: VoiceCallConfig;
   private storePath: string;
@@ -137,6 +138,7 @@ export class CallManager {
       config: this.config,
       storePath: this.storePath,
       webhookUrl: this.webhookUrl,
+      activeTurnCalls: this.activeTurnCalls,
       transcriptWaiters: this.transcriptWaiters,
       maxDurationTimers: this.maxDurationTimers,
       onCallAnswered: (call) => {

@@ -281,7 +281,6 @@ export function attachGatewayWsConnectionHandler(params: {
       connectNonce,
       resolvedAuth,
       rateLimiter,
-      browserRateLimiter,
       gatewayMethods,
       events,
       extraHandlers,

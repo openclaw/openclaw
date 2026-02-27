@@ -42,8 +42,7 @@ export async function applyAuthChoiceHuggingface(
     normalize: normalizeApiKeyInput,
     validate: validateApiKeyInput,
     prompter: params.prompter,
-    setCredential: async (apiKey, mode) =>
-      setHuggingfaceApiKey(apiKey, params.agentDir, { secretInputMode: mode }),
+    setCredential: async (apiKey, _mode) => setHuggingfaceApiKey(apiKey, params.agentDir),
     noteMessage: [
       "Hugging Face Inference Providers offer OpenAI-compatible chat completions.",
       "Create a token at: https://huggingface.co/settings/tokens (fine-grained, 'Make calls to Inference Providers').",

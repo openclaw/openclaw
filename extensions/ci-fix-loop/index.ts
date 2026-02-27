@@ -1,5 +1,10 @@
 import type { BotPluginApi, BotPluginService, BotPluginServiceContext } from "bot/plugin-sdk";
-import { emptyPluginConfigSchema, emitDiagnosticEvent, onDiagnosticEvent } from "bot/plugin-sdk";
+import {
+  emptyPluginConfigSchema,
+  emitDiagnosticEvent,
+  onDiagnosticEvent,
+  jsonResult,
+} from "bot/plugin-sdk";
 import { spawnSync } from "node:child_process";
 import { timingSafeEqual } from "node:crypto";
 import { readFileSync, writeFileSync, mkdirSync, existsSync, unlinkSync } from "node:fs";
@@ -767,6 +772,7 @@ const plugin = {
     // ── Tool: ci_fix_status — query active fix loops ─────────────────
     api.registerTool({
       name: "ci_fix_status",
+      label: "CI Fix Status",
       description: "Check the status of active CI fix loops and recent history.",
       parameters: {
         type: "object" as const,
@@ -779,7 +785,7 @@ const plugin = {
         },
         required: ["action"],
       },
-      async execute(params: { action: string }) {
+      async execute(_toolCallId: string, params: { action: string }) {
         if (params.action === "active") {
           const active = Array.from(state.activeLoops.values()).map((r) => ({
             runId: r.runId,
@@ -790,36 +796,33 @@ const plugin = {
             status: r.status,
             elapsedMin: ((Date.now() - r.startedAt) / 60_000).toFixed(1),
           }));
-          return JSON.stringify({ activeLoops: active }, null, 2);
+          return jsonResult({ activeLoops: active });
         }
 
         if (params.action === "history") {
           const history = loadHistory().slice(-10);
-          return JSON.stringify({ recentHistory: history }, null, 2);
+          return jsonResult({ recentHistory: history });
         }
 
         if (params.action === "budget") {
           resetDailySpendIfNeeded(state);
-          return JSON.stringify(
-            {
-              dailySpend: state.dailySpendUsd.toFixed(2),
-              dailyLimit: config.maxBudgetPerDayUsd.toFixed(2),
-              perLoopLimit: config.maxBudgetPerLoopUsd.toFixed(2),
-              circuitBreakerActive: state.circuitBreakerUntil > Date.now(),
-              consecutiveFailures: state.consecutiveFailures,
-            },
-            null,
-            2,
-          );
+          return jsonResult({
+            dailySpend: state.dailySpendUsd.toFixed(2),
+            dailyLimit: config.maxBudgetPerDayUsd.toFixed(2),
+            perLoopLimit: config.maxBudgetPerLoopUsd.toFixed(2),
+            circuitBreakerActive: state.circuitBreakerUntil > Date.now(),
+            consecutiveFailures: state.consecutiveFailures,
+          });
         }
 
-        return JSON.stringify({ error: `Unknown action: ${params.action}` });
+        return jsonResult({ error: `Unknown action: ${params.action}` });
       },
     });
 
     // ── Tool: ci_classify_error — test the error classifier ──────────
     api.registerTool({
       name: "ci_classify_error",
+      label: "CI Classify Error",
       description:
         "Classify CI error logs into a category (lint, typecheck, test, build, ssr, unknown).",
       parameters: {
@@ -836,17 +839,18 @@ const plugin = {
         },
         required: ["logs"],
       },
-      async execute(params: { logs: string; failed_jobs?: string }) {
+      async execute(_toolCallId: string, params: { logs: string; failed_jobs?: string }) {
         const jobs = params.failed_jobs?.split(",").map((j) => j.trim()) ?? [];
         const category = classifyError(params.logs, jobs);
         const model = config.modelStrategy[category];
-        return JSON.stringify({ category, recommendedModel: model });
+        return jsonResult({ category, recommendedModel: model });
       },
     });
 
     // ── Tool: ci_budget_check — check budget constraints ─────────────
     api.registerTool({
       name: "ci_budget_check",
+      label: "CI Budget Check",
       description:
         "Check if a CI fix loop would be allowed under current budget and circuit breaker constraints.",
       parameters: {
@@ -854,10 +858,10 @@ const plugin = {
         properties: {},
         required: [],
       },
-      async execute() {
+      async execute(_toolCallId: string) {
         resetDailySpendIfNeeded(state);
         const result = checkBudget(state, config);
-        return JSON.stringify({
+        return jsonResult({
           allowed: result.allowed,
           reason: result.reason ?? "Budget available",
           dailySpend: state.dailySpendUsd.toFixed(2),

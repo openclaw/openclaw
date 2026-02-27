@@ -25,12 +25,22 @@ import {
   removeConfigFormValue,
 } from "./controllers/config.ts";
 import {
+  cancelCronEdit,
+  hasCronFormErrors,
   loadCronRuns,
-  toggleCronJob,
-  runCronJob,
-  removeCronJob,
-  addCronJob,
+  loadMoreCronJobs,
+  loadMoreCronRuns,
   normalizeCronFormState,
+  toggleCronJob,
+  reloadCronJobs,
+  removeCronJob,
+  runCronJob,
+  addCronJob,
+  startCronClone,
+  startCronEdit,
+  updateCronJobsFilter,
+  updateCronRunsFilter,
+  validateCronForm,
 } from "./controllers/cron.ts";
 import { loadDebug, callDebugMethod } from "./controllers/debug.ts";
 import {
@@ -351,11 +361,21 @@ export function renderApp(state: AppViewState) {
             ? renderCron({
                 basePath: state.basePath,
                 loading: state.cronLoading,
+                jobsLoadingMore: state.cronJobsLoadingMore,
                 status: state.cronStatus,
                 jobs: state.cronJobs,
+                jobsTotal: state.cronJobsTotal,
+                jobsHasMore: state.cronJobsHasMore,
+                jobsQuery: state.cronJobsQuery,
+                jobsEnabledFilter: state.cronJobsEnabledFilter,
+                jobsSortBy: state.cronJobsSortBy,
+                jobsSortDir: state.cronJobsSortDir,
                 error: state.cronError,
                 busy: state.cronBusy,
                 form: state.cronForm,
+                fieldErrors: state.cronFieldErrors,
+                canSubmit: !hasCronFormErrors(validateCronForm(state.cronForm)),
+                editingJobId: state.cronEditingJobId,
                 channels: state.channelsSnapshot?.channelMeta?.length
                   ? state.channelsSnapshot.channelMeta.map((entry) => entry.id)
                   : (state.channelsSnapshot?.channelOrder ?? []),
@@ -363,14 +383,46 @@ export function renderApp(state: AppViewState) {
                 channelMeta: state.channelsSnapshot?.channelMeta ?? [],
                 runsJobId: state.cronRunsJobId,
                 runs: state.cronRuns,
-                onFormChange: (patch) =>
-                  (state.cronForm = normalizeCronFormState({ ...state.cronForm, ...patch })),
+                runsTotal: state.cronRunsTotal,
+                runsHasMore: state.cronRunsHasMore,
+                runsLoadingMore: state.cronRunsLoadingMore,
+                runsScope: state.cronRunsScope,
+                runsStatuses: state.cronRunsStatuses,
+                runsDeliveryStatuses: state.cronRunsDeliveryStatuses,
+                runsStatusFilter: state.cronRunsStatusFilter,
+                runsQuery: state.cronRunsQuery,
+                runsSortDir: state.cronRunsSortDir,
+                agentSuggestions: state.agentsList?.agents?.map((entry) => entry.id) ?? [],
+                modelSuggestions: state.cronModelSuggestions ?? [],
+                thinkingSuggestions: ["none", "low", "medium", "high"],
+                timezoneSuggestions: [
+                  Intl.DateTimeFormat().resolvedOptions().timeZone,
+                  "UTC",
+                ].filter((v, i, a) => a.indexOf(v) === i),
+                deliveryToSuggestions: [],
+                onFormChange: (patch) => {
+                  state.cronForm = normalizeCronFormState({ ...state.cronForm, ...patch });
+                  state.cronFieldErrors = validateCronForm(state.cronForm);
+                },
                 onRefresh: () => state.loadCron(),
                 onAdd: () => addCronJob(state),
+                onEdit: (job) => startCronEdit(state, job),
+                onClone: (job) => startCronClone(state, job),
+                onCancelEdit: () => cancelCronEdit(state),
                 onToggle: (job, enabled) => toggleCronJob(state, job, enabled),
                 onRun: (job) => runCronJob(state, job),
                 onRemove: (job) => removeCronJob(state, job),
                 onLoadRuns: (jobId) => loadCronRuns(state, jobId),
+                onLoadMoreJobs: () => loadMoreCronJobs(state),
+                onJobsFiltersChange: (patch) => {
+                  updateCronJobsFilter(state, patch);
+                  void reloadCronJobs(state);
+                },
+                onLoadMoreRuns: () => loadMoreCronRuns(state),
+                onRunsFiltersChange: (patch) => {
+                  updateCronRunsFilter(state, patch);
+                  void loadCronRuns(state, state.cronRunsJobId);
+                },
               })
             : nothing
         }
@@ -420,6 +472,9 @@ export function renderApp(state: AppViewState) {
                 agentSkillsReport: state.agentSkillsReport,
                 agentSkillsError: state.agentSkillsError,
                 agentSkillsAgentId: state.agentSkillsAgentId,
+                toolsCatalogLoading: state.toolsCatalogLoading,
+                toolsCatalogError: state.toolsCatalogError,
+                toolsCatalogResult: state.toolsCatalogResult,
                 skillsFilter: state.skillsFilter,
                 onRefresh: async () => {
                   await loadAgents(state);

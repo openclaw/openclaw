@@ -28,14 +28,18 @@ import {
   VENICE_DEFAULT_MODEL_REF,
   VENICE_MODEL_CATALOG,
 } from "../agents/venice-models.js";
+import { KILOCODE_BASE_URL } from "../providers/kilocode-shared.js";
 import {
   HUGGINGFACE_DEFAULT_MODEL_REF,
+  KILOCODE_DEFAULT_MODEL_REF,
+  MISTRAL_DEFAULT_MODEL_REF,
   OPENROUTER_DEFAULT_MODEL_REF,
   TOGETHER_DEFAULT_MODEL_REF,
   XIAOMI_DEFAULT_MODEL_REF,
   ZAI_DEFAULT_MODEL_REF,
   XAI_DEFAULT_MODEL_REF,
 } from "./onboard-auth.credentials.js";
+export { KILOCODE_BASE_URL } from "../providers/kilocode-shared.js";
 export {
   applyCloudflareAiGatewayConfig,
   applyCloudflareAiGatewayProviderConfig,
@@ -56,9 +60,14 @@ import {
   applyProviderConfigWithModelCatalog,
 } from "./onboard-auth.config-shared.js";
 import {
+  buildKilocodeModelDefinition,
+  buildMistralModelDefinition,
   buildZaiModelDefinition,
   buildMoonshotModelDefinition,
   buildXaiModelDefinition,
+  KILOCODE_DEFAULT_MODEL_ID,
+  MISTRAL_BASE_URL,
+  MISTRAL_DEFAULT_MODEL_ID,
   QIANFAN_BASE_URL,
   QIANFAN_DEFAULT_MODEL_REF,
   KIMI_CODING_MODEL_REF,
@@ -480,4 +489,52 @@ export function applyQianfanProviderConfig(cfg: BotConfig): BotConfig {
 export function applyQianfanConfig(cfg: BotConfig): BotConfig {
   const next = applyQianfanProviderConfig(cfg);
   return applyAgentDefaultModelPrimary(next, QIANFAN_DEFAULT_MODEL_REF);
+}
+
+export function applyMistralProviderConfig(cfg: BotConfig): BotConfig {
+  const models = { ...cfg.agents?.defaults?.models };
+  models[MISTRAL_DEFAULT_MODEL_REF] = {
+    ...models[MISTRAL_DEFAULT_MODEL_REF],
+    alias: models[MISTRAL_DEFAULT_MODEL_REF]?.alias ?? "Mistral",
+  };
+
+  const defaultModel = buildMistralModelDefinition();
+
+  return applyProviderConfigWithDefaultModel(cfg, {
+    agentModels: models,
+    providerId: "mistral",
+    api: "openai-completions",
+    baseUrl: MISTRAL_BASE_URL,
+    defaultModel,
+    defaultModelId: MISTRAL_DEFAULT_MODEL_ID,
+  });
+}
+
+export function applyMistralConfig(cfg: BotConfig): BotConfig {
+  const next = applyMistralProviderConfig(cfg);
+  return applyAgentDefaultModelPrimary(next, MISTRAL_DEFAULT_MODEL_REF);
+}
+
+export function applyKilocodeProviderConfig(cfg: BotConfig): BotConfig {
+  const models = { ...cfg.agents?.defaults?.models };
+  models[KILOCODE_DEFAULT_MODEL_REF] = {
+    ...models[KILOCODE_DEFAULT_MODEL_REF],
+    alias: models[KILOCODE_DEFAULT_MODEL_REF]?.alias ?? "Kilocode",
+  };
+
+  const defaultModel = buildKilocodeModelDefinition();
+
+  return applyProviderConfigWithDefaultModel(cfg, {
+    agentModels: models,
+    providerId: "kilocode",
+    api: "openai-completions",
+    baseUrl: KILOCODE_BASE_URL,
+    defaultModel,
+    defaultModelId: KILOCODE_DEFAULT_MODEL_ID,
+  });
+}
+
+export function applyKilocodeConfig(cfg: BotConfig): BotConfig {
+  const next = applyKilocodeProviderConfig(cfg);
+  return applyAgentDefaultModelPrimary(next, KILOCODE_DEFAULT_MODEL_REF);
 }

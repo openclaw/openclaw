@@ -173,12 +173,13 @@ export function createExecApprovalHandlers(
       let forwardedToTargets = false;
       if (opts?.forwarder) {
         try {
-          forwardedToTargets = await opts.forwarder.handleRequested({
+          await opts.forwarder.handleRequested({
             id: record.id,
             request: record.request,
             createdAtMs: record.createdAtMs,
             expiresAtMs: record.expiresAtMs,
           });
+          forwardedToTargets = true;
         } catch (err) {
           context.logGateway?.error?.(`exec approvals: forward request failed: ${String(err)}`);
         }
@@ -285,7 +286,6 @@ export function createExecApprovalHandlers(
           decision,
           resolvedBy,
           ts: Date.now(),
-          request: snapshot?.request,
         })
         .catch((err) => {
           context.logGateway?.error?.(`exec approvals: forward resolve failed: ${String(err)}`);

@@ -1,4 +1,5 @@
 import type { CliDeps } from "../cli/deps.js";
+import type { CronDeliveryStatus, CronUsageSummary } from "../cron/types.js";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { loadConfig } from "../config/config.js";
 import {
@@ -168,36 +169,30 @@ export function buildGatewayCronService(params: {
       const sessionKey = resolveCronSessionKey({
         runtimeConfig,
         agentId,
-        requestedSessionKey: opts?.sessionKey,
       });
       enqueueSystemEvent(text, { sessionKey, contextKey: opts?.contextKey });
     },
     requestHeartbeatNow: (opts) => {
-      const { agentId, sessionKey } = resolveCronWakeTarget(opts);
       requestHeartbeatNow({
         reason: opts?.reason,
-        agentId,
-        sessionKey,
       });
     },
     runHeartbeatOnce: async (opts) => {
-      const { runtimeConfig, agentId, sessionKey } = resolveCronWakeTarget(opts);
+      const runtimeConfig = loadConfig();
       return await runHeartbeatOnce({
         cfg: runtimeConfig,
         reason: opts?.reason,
-        agentId,
-        sessionKey,
+        agentId: opts?.agentId,
         deps: { ...params.deps, runtime: defaultRuntime },
       });
     },
-    runIsolatedAgentJob: async ({ job, message, abortSignal }) => {
+    runIsolatedAgentJob: async ({ job, message }) => {
       const { agentId, cfg: runtimeConfig } = resolveCronAgent(job.agentId);
       return await runCronIsolatedAgentTurn({
         cfg: runtimeConfig,
         deps: params.deps,
         job,
         message,
-        abortSignal,
         agentId,
         sessionKey: `cron:${job.id}`,
         lane: "cron",
@@ -304,7 +299,7 @@ export function buildGatewayCronService(params: {
             error: evt.error,
             summary: evt.summary,
             delivered: evt.delivered,
-            deliveryStatus: evt.deliveryStatus,
+            deliveryStatus: evt.deliveryStatus as CronDeliveryStatus | undefined,
             deliveryError: evt.deliveryError,
             sessionId: evt.sessionId,
             sessionKey: evt.sessionKey,
@@ -313,7 +308,7 @@ export function buildGatewayCronService(params: {
             nextRunAtMs: evt.nextRunAtMs,
             model: evt.model,
             provider: evt.provider,
-            usage: evt.usage,
+            usage: evt.usage as CronUsageSummary | undefined,
           },
           runLogPrune,
         ).catch((err) => {

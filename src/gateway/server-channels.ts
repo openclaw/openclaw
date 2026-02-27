@@ -58,6 +58,10 @@ export type ChannelManager = {
   startChannel: (channel: ChannelId, accountId?: string) => Promise<void>;
   stopChannel: (channel: ChannelId, accountId?: string) => Promise<void>;
   markChannelLoggedOut: (channelId: ChannelId, cleared: boolean, accountId?: string) => void;
+  /** Check if a channel account was manually stopped (prevents auto-restart). */
+  isManuallyStopped: (channelId: ChannelId, accountId: string) => boolean;
+  /** Reset the restart attempt counter for a channel account. */
+  resetRestartAttempts: (channelId: ChannelId, accountId: string) => void;
 };
 
 // Channel docking: lifecycle hooks (`plugin.gateway`) flow through this manager.
@@ -65,6 +69,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
   const { loadConfig, channelLogs, channelRuntimeEnvs } = opts;
 
   const channelStores = new Map<ChannelId, ChannelRuntimeStore>();
+  const manuallyStopped = new Set<string>();
 
   const getStore = (channelId: ChannelId): ChannelRuntimeStore => {
     const existing = channelStores.get(channelId);
@@ -302,11 +307,33 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     return { channels, channelAccounts };
   };
 
+  const isManuallyStopped = (channelId: ChannelId, accountId: string): boolean => {
+    return manuallyStopped.has(`${channelId}:${accountId}`);
+  };
+
+  const resetRestartAttempts = (channelId: ChannelId, accountId: string): void => {
+    manuallyStopped.delete(`${channelId}:${accountId}`);
+    const current = getRuntime(channelId, accountId);
+    if (typeof current.reconnectAttempts === "number") {
+      setRuntime(channelId, accountId, { ...current, reconnectAttempts: 0 });
+    }
+  };
+
+  // Wrap stopChannel to track manual stops.
+  const stopChannelWithTracking = async (channelId: ChannelId, accountId?: string) => {
+    if (accountId) {
+      manuallyStopped.add(`${channelId}:${accountId}`);
+    }
+    await stopChannel(channelId, accountId);
+  };
+
   return {
     getRuntimeSnapshot,
     startChannels,
     startChannel,
-    stopChannel,
+    stopChannel: stopChannelWithTracking,
     markChannelLoggedOut,
+    isManuallyStopped,
+    resetRestartAttempts,
   };
 }

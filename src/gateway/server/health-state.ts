@@ -6,6 +6,7 @@ import { resolveMainSessionKey } from "../../config/sessions.js";
 import { listSystemPresence } from "../../infra/system-presence.js";
 import { getUpdateAvailable } from "../../infra/update-startup.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
+import { VERSION } from "../../version.js";
 import { resolveGatewayAuth } from "../auth.js";
 
 let presenceVersion = 1;
@@ -23,7 +24,10 @@ export function buildGatewaySnapshot(): Snapshot {
   const presence = listSystemPresence();
   const uptimeMs = Math.round(process.uptime() * 1000);
   const auth = resolveGatewayAuth({ authConfig: cfg.gateway?.auth, env: process.env });
-  const updateAvailable = getUpdateAvailable() ?? undefined;
+  const latestVersion = getUpdateAvailable();
+  const updateAvailable = latestVersion
+    ? { currentVersion: VERSION, latestVersion, channel: "latest" }
+    : undefined;
   // Health is async; caller should await getHealthSnapshot and replace later if needed.
   const emptyHealth: unknown = {};
   return {

@@ -723,7 +723,6 @@ async function saveSessionStoreUnlocked(
           storePath,
           sessionFile,
           reason: "deleted",
-          restrictToStoreDir: true,
         });
         for (const archivedPath of archived) {
           archivedDirs.add(path.dirname(archivedPath));

@@ -125,6 +125,7 @@ export async function ensureSandboxBrowser(params: {
       headless: params.cfg.browser.headless,
       enableNoVnc: params.cfg.browser.enableNoVnc,
     },
+    securityEpoch: "1",
     workspaceAccess: params.cfg.workspaceAccess,
     workspaceDir: params.workspaceDir,
     agentWorkspaceDir: params.agentWorkspaceDir,

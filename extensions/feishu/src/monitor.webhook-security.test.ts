@@ -1,4 +1,4 @@
-import type { ClawdbotConfig } from "bot/plugin-sdk";
+import type { BotConfig } from "bot/plugin-sdk";
 import type { AddressInfo } from "node:net";
 import { createServer } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -56,7 +56,7 @@ function buildConfig(params: {
   path: string;
   port: number;
   verificationToken?: string;
-}): ClawdbotConfig {
+}): BotConfig {
   return {
     channels: {
       feishu: {
@@ -75,7 +75,7 @@ function buildConfig(params: {
         },
       },
     },
-  } as ClawdbotConfig;
+  } as BotConfig;
 }
 
 async function withRunningWebhookMonitor(

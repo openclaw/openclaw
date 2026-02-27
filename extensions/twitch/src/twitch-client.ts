@@ -38,24 +38,24 @@ export class TwitchClientManager {
           expiresIn: account.expiresIn ?? null,
           obtainmentTimestamp: account.obtainmentTimestamp ?? Date.now(),
         })
-        .then((userId) => {
+        .then((userId: string) => {
           this.logger.info(
             `Added user ${userId} to RefreshingAuthProvider for ${account.username}`,
           );
         })
-        .catch((err) => {
+        .catch((err: unknown) => {
           this.logger.error(
             `Failed to add user to RefreshingAuthProvider: ${err instanceof Error ? err.message : String(err)}`,
           );
         });
 
-      authProvider.onRefresh((userId, token) => {
+      authProvider.onRefresh((userId: string, token: { expiresIn?: number | null }) => {
         this.logger.info(
           `Access token refreshed for user ${userId} (expires in ${token.expiresIn ? `${token.expiresIn}s` : "unknown"})`,
         );
       });
 
-      authProvider.onRefreshFailure((userId, error) => {
+      authProvider.onRefreshFailure((userId: string, error: Error) => {
         this.logger.error(`Failed to refresh access token for user ${userId}: ${error.message}`);
       });
 
@@ -116,7 +116,7 @@ export class TwitchClientManager {
       logger: {
         minLevel: LogLevel.WARNING,
         custom: {
-          log: (level, message) => {
+          log: (level: number, message: string) => {
             switch (level) {
               case LogLevel.CRITICAL:
                 this.logger.error(message);
@@ -159,32 +159,52 @@ export class TwitchClientManager {
     const key = this.getAccountKey(account);
 
     // Handle incoming messages
-    client.onMessage((channelName, _user, messageText, msg) => {
-      const handler = this.messageHandlers.get(key);
-      if (handler) {
-        const normalizedChannel = channelName.startsWith("#") ? channelName.slice(1) : channelName;
-        const from = `twitch:${msg.userInfo.userName}`;
-        const preview = messageText.slice(0, 100).replace(/\n/g, "\\n");
-        this.logger.debug?.(
-          `twitch inbound: channel=${normalizedChannel} from=${from} len=${messageText.length} preview="${preview}"`,
-        );
+    client.onMessage(
+      (
+        channelName: string,
+        _user: string,
+        messageText: string,
+        msg: {
+          userInfo: {
+            userName: string;
+            displayName: string;
+            userId: string;
+            isMod: boolean;
+            isBroadcaster: boolean;
+            isVip: boolean;
+            isSubscriber: boolean;
+          };
+          id: string;
+        },
+      ) => {
+        const handler = this.messageHandlers.get(key);
+        if (handler) {
+          const normalizedChannel = channelName.startsWith("#")
+            ? channelName.slice(1)
+            : channelName;
+          const from = `twitch:${msg.userInfo.userName}`;
+          const preview = messageText.slice(0, 100).replace(/\n/g, "\\n");
+          this.logger.debug?.(
+            `twitch inbound: channel=${normalizedChannel} from=${from} len=${messageText.length} preview="${preview}"`,
+          );
 
-        handler({
-          username: msg.userInfo.userName,
-          displayName: msg.userInfo.displayName,
-          userId: msg.userInfo.userId,
-          message: messageText,
-          channel: normalizedChannel,
-          id: msg.id,
-          timestamp: new Date(),
-          isMod: msg.userInfo.isMod,
-          isOwner: msg.userInfo.isBroadcaster,
-          isVip: msg.userInfo.isVip,
-          isSub: msg.userInfo.isSubscriber,
-          chatType: "group",
-        });
-      }
-    });
+          handler({
+            username: msg.userInfo.userName,
+            displayName: msg.userInfo.displayName,
+            userId: msg.userInfo.userId,
+            message: messageText,
+            channel: normalizedChannel,
+            id: msg.id,
+            timestamp: new Date(),
+            isMod: msg.userInfo.isMod,
+            isOwner: msg.userInfo.isBroadcaster,
+            isVip: msg.userInfo.isVip,
+            isSub: msg.userInfo.isSubscriber,
+            chatType: "group",
+          });
+        }
+      },
+    );
 
     this.logger.info(`Set up handlers for ${key}`);
   }

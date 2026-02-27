@@ -73,6 +73,38 @@ export function isAnthropicRateLimitError(message: string): boolean {
   return false;
 }
 
+/**
+ * Collect all configured API keys for a given provider from environment variables.
+ * Falls back to the provider-specific `<PROVIDER>_API_KEY` env var naming convention.
+ */
+export function collectProviderApiKeys(provider: string): string[] {
+  const normalized = provider.trim().toLowerCase();
+  if (normalized === "anthropic") {
+    return collectAnthropicApiKeys();
+  }
+  const envPrefix = `${normalized.toUpperCase().replace(/-/g, "_")}_API_KEY`;
+  const keys: string[] = [];
+  for (const [name, value] of Object.entries(process.env)) {
+    if (!name.startsWith(envPrefix)) {
+      continue;
+    }
+    const trimmed = value?.trim();
+    if (!trimmed) {
+      continue;
+    }
+    keys.push(trimmed);
+  }
+  return keys;
+}
+
+/**
+ * Detect whether an error message indicates an API key rate-limit event.
+ * Works for any provider (checks common rate-limit patterns).
+ */
+export function isApiKeyRateLimitError(message: string): boolean {
+  return isAnthropicRateLimitError(message);
+}
+
 export function isAnthropicBillingError(message: string): boolean {
   const lower = message.toLowerCase();
   if (lower.includes("credit balance")) {

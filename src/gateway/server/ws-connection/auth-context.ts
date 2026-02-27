@@ -6,8 +6,7 @@ import {
   type RateLimitCheckResult,
 } from "../../auth-rate-limit.js";
 import {
-  authorizeHttpGatewayConnect,
-  authorizeWsControlUiGatewayConnect,
+  authorizeGatewayConnect,
   type GatewayAuthResult,
   type ResolvedGatewayAuth,
 } from "../../auth.js";
@@ -88,12 +87,11 @@ export async function resolveConnectAuthState(params: {
     params.hasDeviceIdentity ? resolveDeviceTokenCandidate(params.connectAuth) : {};
   const hasDeviceTokenCandidate = Boolean(deviceTokenCandidate);
 
-  let authResult: GatewayAuthResult = await authorizeWsControlUiGatewayConnect({
+  let authResult: GatewayAuthResult = await authorizeGatewayConnect({
     auth: params.resolvedAuth,
     connectAuth: sharedConnectAuth,
     req: params.req,
     trustedProxies: params.trustedProxies,
-    allowRealIpFallback: params.allowRealIpFallback,
     rateLimiter: hasDeviceTokenCandidate ? undefined : params.rateLimiter,
     clientIp: params.clientIp,
     rateLimitScope: AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
@@ -123,12 +121,11 @@ export async function resolveConnectAuthState(params: {
 
   const sharedAuthResult =
     sharedConnectAuth &&
-    (await authorizeHttpGatewayConnect({
+    (await authorizeGatewayConnect({
       auth: { ...params.resolvedAuth, allowTailscale: false },
       connectAuth: sharedConnectAuth,
       req: params.req,
       trustedProxies: params.trustedProxies,
-      allowRealIpFallback: params.allowRealIpFallback,
       // Shared-auth probe only; rate-limit side effects are handled in the
       // primary auth flow (or deferred for device-token candidates).
       rateLimitScope: AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,

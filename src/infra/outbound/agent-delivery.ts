@@ -80,10 +80,6 @@ export function resolveAgentDeliveryPlan(params: {
     requestedChannel: requestedChannel === INTERNAL_MESSAGE_CHANNEL ? "last" : requestedChannel,
     explicitTo,
     explicitThreadId: params.explicitThreadId,
-    turnSourceChannel,
-    turnSourceTo,
-    turnSourceAccountId,
-    turnSourceThreadId,
   });
 
   const resolvedChannel = (() => {

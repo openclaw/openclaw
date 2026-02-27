@@ -503,6 +503,7 @@ export async function connectReq(
     }
     const identity = loadOrCreateDeviceIdentity();
     const signedAtMs = Date.now();
+    const nonce = opts?.device?.nonce ?? "";
     const payload = buildDeviceAuthPayload({
       deviceId: identity.deviceId,
       clientId: client.id,
@@ -511,6 +512,7 @@ export async function connectReq(
       scopes: requestedScopes,
       signedAtMs,
       token: token ?? null,
+      nonce,
     });
     return {
       id: identity.deviceId,

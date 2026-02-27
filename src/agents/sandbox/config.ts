@@ -113,6 +113,7 @@ export function resolveSandboxBrowserConfig(params: {
       agentBrowser?.containerPrefix ??
       globalBrowser?.containerPrefix ??
       DEFAULT_SANDBOX_BROWSER_PREFIX,
+    network: agentBrowser?.network ?? globalBrowser?.network ?? "bridge",
     cdpPort: agentBrowser?.cdpPort ?? globalBrowser?.cdpPort ?? DEFAULT_SANDBOX_BROWSER_CDP_PORT,
     vncPort: agentBrowser?.vncPort ?? globalBrowser?.vncPort ?? DEFAULT_SANDBOX_BROWSER_VNC_PORT,
     noVncPort:

@@ -1,4 +1,5 @@
 import type { BrowserConfig, BrowserProfileConfig, BotConfig } from "../config/config.js";
+import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { resolveGatewayPort } from "../config/paths.js";
 import {
   deriveDefaultBrowserCdpPortRange,
@@ -32,6 +33,7 @@ export type ResolvedBrowserConfig = {
   defaultProfile: string;
   profiles: Record<string, BrowserProfileConfig>;
   extraArgs: string[];
+  ssrfPolicy?: SsrFPolicy;
 };
 
 export type ResolvedBrowserProfile = {
@@ -218,6 +220,7 @@ export function resolveBrowserConfig(
     defaultProfile,
     profiles,
     extraArgs,
+    ssrfPolicy: cfg?.ssrfPolicy,
   };
 }
 

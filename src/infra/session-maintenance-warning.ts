@@ -107,7 +107,6 @@ export async function deliverSessionMaintenanceWarning(params: WarningParams): P
       accountId: target.accountId,
       threadId: target.threadId,
       payloads: [{ text }],
-      session: outboundSession,
     });
   } catch (err) {
     log.warn(`Failed to deliver session maintenance warning: ${String(err)}`);

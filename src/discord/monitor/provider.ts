@@ -26,6 +26,7 @@ import {
   resolveNativeSkillsEnabled,
 } from "../../config/commands.js";
 import { loadConfig } from "../../config/config.js";
+import { isDangerousNameMatchingEnabled } from "../../config/dangerous-name-matching.js";
 import { danger, logVerbose, shouldLogVerbose, warn } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createDiscordRetryRunner } from "../../infra/retry-policy.js";
@@ -211,7 +212,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   const dmEnabled = dmConfig?.enabled ?? true;
   const dmPolicy = discordCfg.dmPolicy ?? dmConfig?.policy ?? "pairing";
   const groupDmEnabled = dmConfig?.groupEnabled ?? false;
-  const groupDmChannels = dmConfig?.groupChannels;
+  const groupDmChannels = dmConfig?.groupChannels ?? [];
   const nativeEnabled = resolveNativeCommandsEnabled({
     providerId: "discord",
     providerSetting: discordCfg.commands?.native,
@@ -557,6 +558,13 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       accountId: account.accountId,
       runtime,
       botUserId,
+      dmEnabled,
+      groupDmEnabled,
+      groupDmChannels,
+      dmPolicy,
+      allowFrom: allowFrom ?? [],
+      groupPolicy,
+      allowNameMatching: isDangerousNameMatchingEnabled(discordCfg),
       guildEntries,
       logger,
     }),
@@ -568,6 +576,13 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       accountId: account.accountId,
       runtime,
       botUserId,
+      dmEnabled,
+      groupDmEnabled,
+      groupDmChannels,
+      dmPolicy,
+      allowFrom: allowFrom ?? [],
+      groupPolicy,
+      allowNameMatching: isDangerousNameMatchingEnabled(discordCfg),
       guildEntries,
       logger,
     }),

@@ -721,6 +721,43 @@ export async function collectPluginsCodeSafetyFindings(params: {
   return findings;
 }
 
+export async function collectSandboxBrowserHashLabelFindings(params: {
+  cfg: BotConfig;
+}): Promise<SecurityAuditFinding[]> {
+  const findings: SecurityAuditFinding[] = [];
+  const sandboxConfig = resolveSandboxConfigForAgent(params.cfg, undefined);
+  if (sandboxConfig.mode === "off") {
+    return findings;
+  }
+
+  const docker = sandboxConfig.docker;
+  if (!docker || typeof docker !== "object") {
+    return findings;
+  }
+
+  const image = typeof docker.image === "string" ? docker.image.trim() : "";
+  if (!image) {
+    return findings;
+  }
+
+  const browserEnabled = sandboxConfig.browser?.enabled !== false;
+  if (!browserEnabled) {
+    return findings;
+  }
+
+  findings.push({
+    checkId: "sandbox.browser_hash_label_check",
+    severity: "info",
+    title: "Sandbox browser containers use config hash labels",
+    detail:
+      "Browser sandbox containers embed a bot.configHash label at creation time. " +
+      "When config changes, containers with stale hashes are recreated on next session start. " +
+      "Run `bot sandbox recreate` to force-refresh all containers.",
+  });
+
+  return findings;
+}
+
 export async function collectInstalledSkillsCodeSafetyFindings(params: {
   cfg: BotConfig;
   stateDir: string;

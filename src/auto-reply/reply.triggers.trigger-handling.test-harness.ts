@@ -118,6 +118,14 @@ export async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise
   );
 }
 
+export function requireSessionStorePath(cfg: BotConfig): string {
+  const storePath = cfg.session?.store;
+  if (!storePath) {
+    throw new Error("session.store is required in test config");
+  }
+  return storePath;
+}
+
 export function makeCfg(home: string): BotConfig {
   return {
     agents: {

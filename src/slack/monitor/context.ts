@@ -73,6 +73,8 @@ export type SlackMonitorContext = {
   defaultRequireMention: boolean;
   channelsConfig?: SlackChannelConfigEntries;
   groupPolicy: GroupPolicy;
+  /** Break-glass override: allow mutable name matching in allowlists. */
+  allowNameMatching: boolean;
   useAccessGroups: boolean;
   reactionMode: SlackReactionNotificationMode;
   reactionAllowlist: Array<string | number>;
@@ -134,6 +136,7 @@ export function createSlackMonitorContext(params: {
   defaultRequireMention?: boolean;
   channelsConfig?: SlackMonitorContext["channelsConfig"];
   groupPolicy: SlackMonitorContext["groupPolicy"];
+  allowNameMatching: boolean;
   useAccessGroups: boolean;
   reactionMode: SlackReactionNotificationMode;
   reactionAllowlist: Array<string | number>;
@@ -396,6 +399,7 @@ export function createSlackMonitorContext(params: {
     defaultRequireMention,
     channelsConfig: params.channelsConfig,
     groupPolicy: params.groupPolicy,
+    allowNameMatching: params.allowNameMatching,
     useAccessGroups: params.useAccessGroups,
     reactionMode: params.reactionMode,
     reactionAllowlist: params.reactionAllowlist,

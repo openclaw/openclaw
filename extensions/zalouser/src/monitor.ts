@@ -205,7 +205,11 @@ async function processMessage(
     configuredAllowFrom: configAllowFrom,
     senderId,
     isSenderAllowed,
-    readAllowFromStore: () => core.channel.pairing.readAllowFromStore("zalouser"),
+    readAllowFromStore: () =>
+      core.channel.pairing.readAllowFromStore({
+        channel: "zalouser",
+        accountId: account.accountId,
+      }),
     shouldComputeCommandAuthorized: (body, cfg) =>
       core.channel.commands.shouldComputeCommandAuthorized(body, cfg),
     resolveCommandAuthorizedFromAuthorizers: (params) =>
@@ -226,6 +230,7 @@ async function processMessage(
           const { code, created } = await core.channel.pairing.upsertPairingRequest({
             channel: "zalouser",
             id: senderId,
+            accountId: account.accountId,
             meta: { name: senderName || undefined },
           });
 

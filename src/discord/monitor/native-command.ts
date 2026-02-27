@@ -614,7 +614,11 @@ async function dispatchDiscordCommandInteraction(params: {
       return;
     }
     if (dmPolicy !== "open") {
-      const storeAllowFrom = await readChannelAllowFromStore("discord").catch(() => []);
+      const storeAllowFrom = await readChannelAllowFromStore(
+        "discord",
+        process.env,
+        accountId,
+      ).catch(() => []);
       const effectiveAllowFrom = [
         ...(discordConfig?.allowFrom ?? discordConfig?.dm?.allowFrom ?? []),
         ...storeAllowFrom,
@@ -633,6 +637,7 @@ async function dispatchDiscordCommandInteraction(params: {
           const { code, created } = await upsertChannelPairingRequest({
             channel: "discord",
             id: user.id,
+            accountId,
             meta: {
               tag: sender.tag,
               name: sender.name,

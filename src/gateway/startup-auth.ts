@@ -59,9 +59,11 @@ function resolveGatewayAuthFromConfig(params: {
     params.cfg.gateway?.tailscale,
     params.tailscaleOverride,
   );
+  const mergedAuthConfig = params.authOverride
+    ? mergeGatewayAuthConfig(params.cfg.gateway?.auth, params.authOverride)
+    : params.cfg.gateway?.auth;
   return resolveGatewayAuth({
-    authConfig: params.cfg.gateway?.auth,
-    authOverride: params.authOverride,
+    authConfig: mergedAuthConfig,
     env: params.env,
     tailscaleMode: tailscaleConfig.mode ?? "off",
   });
@@ -70,6 +72,7 @@ function resolveGatewayAuthFromConfig(params: {
 function shouldPersistGeneratedToken(params: {
   persistRequested: boolean;
   resolvedAuth: ResolvedGatewayAuth;
+  hasModeOverride?: boolean;
 }): boolean {
   if (!params.persistRequested) {
     return false;
@@ -77,7 +80,7 @@ function shouldPersistGeneratedToken(params: {
 
   // Keep CLI/runtime mode overrides ephemeral: startup should not silently
   // mutate durable auth policy when mode was chosen by an override flag.
-  if (params.resolvedAuth.modeSource === "override") {
+  if (params.hasModeOverride) {
     return false;
   }
 
@@ -124,6 +127,7 @@ export async function ensureGatewayStartupAuth(params: {
   const persist = shouldPersistGeneratedToken({
     persistRequested,
     resolvedAuth: resolved,
+    hasModeOverride: params.authOverride?.mode !== undefined,
   });
   if (persist) {
     await writeConfigFile(nextCfg);

@@ -119,8 +119,8 @@ class MemoryDB {
     const results = await this.table!.vectorSearch(vector).limit(limit).toArray();
 
     // LanceDB uses L2 distance by default; convert to similarity score
-    const mapped = results.map((row) => {
-      const distance = row._distance ?? 0;
+    const mapped = results.map((row: Record<string, unknown>) => {
+      const distance = typeof row._distance === "number" ? row._distance : 0;
       // Use inverse for a 0-1 range: sim = 1 / (1 + d)
       const score = 1 / (1 + distance);
       return {
@@ -136,7 +136,7 @@ class MemoryDB {
       };
     });
 
-    return mapped.filter((r) => r.score >= minScore);
+    return mapped.filter((r: { score: number }) => r.score >= minScore);
   }
 
   async delete(id: string): Promise<boolean> {
