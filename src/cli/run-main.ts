@@ -31,6 +31,7 @@ function isLegacyGatewayBinary(entryPath: string | undefined): boolean {
   const base = path.basename(entryPath).toLowerCase();
   return (
     base === "openclaw-gateway" ||
+    base === "openclaw-gateway.mjs" ||
     base === "openclaw-gateway.cmd" ||
     base === "openclaw-gateway.ps1" ||
     base === "openclaw-gateway.exe"

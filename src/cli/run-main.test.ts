@@ -58,6 +58,12 @@ describe("rewriteLegacyGatewayBinaryArgv", () => {
     ).toEqual(["node", "/usr/local/bin/openclaw-gateway", "gateway", "--port", "18789"]);
   });
 
+  it("rewrites legacy gateway wrapper invocations launched through node", () => {
+    expect(
+      rewriteLegacyGatewayBinaryArgv(["node", "/usr/local/bin/openclaw-gateway.mjs", "run"]),
+    ).toEqual(["node", "/usr/local/bin/openclaw-gateway.mjs", "gateway", "run"]);
+  });
+
   it("keeps modern argv untouched", () => {
     const argv = ["node", "/usr/local/bin/openclaw", "gateway", "status"];
     expect(rewriteLegacyGatewayBinaryArgv(argv)).toBe(argv);

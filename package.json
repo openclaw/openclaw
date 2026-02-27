@@ -15,7 +15,7 @@
   },
   "bin": {
     "openclaw": "openclaw.mjs",
-    "openclaw-gateway": "openclaw.mjs"
+    "openclaw-gateway": "openclaw-gateway.mjs"
   },
   "directories": {
     "doc": "docs",
@@ -24,6 +24,7 @@
   "files": [
     "CHANGELOG.md",
     "LICENSE",
+    "openclaw-gateway.mjs",
     "openclaw.mjs",
     "README-header.png",
     "README.md",
