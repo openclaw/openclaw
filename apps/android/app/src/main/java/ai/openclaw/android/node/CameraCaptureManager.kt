@@ -300,7 +300,10 @@ class CameraCaptureManager(private val context: Context) {
     readPrimitive(params, "quality")?.contentOrNull?.toDoubleOrNull()
 
   private fun parseMaxWidth(params: JsonObject?): Int? =
-    readPrimitive(params, "maxWidth")?.contentOrNull?.toIntOrNull()
+    readPrimitive(params, "maxWidth")
+      ?.contentOrNull
+      ?.toIntOrNull()
+      ?.takeIf { it > 0 }
 
   private fun parseDurationMs(params: JsonObject?): Int? =
     readPrimitive(params, "durationMs")?.contentOrNull?.toIntOrNull()
