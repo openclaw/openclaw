@@ -2,7 +2,12 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
-import { SafeOpenError, openFileWithinRoot, readLocalFileSafely } from "./fs-safe.js";
+import {
+  SafeOpenError,
+  openFileWithinRoot,
+  readLocalFileSafely,
+  writeFileWithinRoot,
+} from "./fs-safe.js";
 
 const tempDirs = createTrackedTempDirs();
 
@@ -79,6 +84,83 @@ describe("fs-safe", () => {
         relativePath: "link.txt",
       }),
     ).rejects.toMatchObject({ code: "invalid-path" });
+  });
+
+  it.runIf(process.platform !== "win32")("blocks hardlink aliases under root", async () => {
+    const root = await tempDirs.make("openclaw-fs-safe-root-");
+    const outside = await tempDirs.make("openclaw-fs-safe-outside-");
+    const outsideFile = path.join(outside, "outside.txt");
+    const hardlinkPath = path.join(root, "link.txt");
+    await fs.writeFile(outsideFile, "outside");
+    try {
+      try {
+        await fs.link(outsideFile, hardlinkPath);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === "EXDEV") {
+          return;
+        }
+        throw err;
+      }
+      await expect(
+        openFileWithinRoot({
+          rootDir: root,
+          relativePath: "link.txt",
+        }),
+      ).rejects.toMatchObject({ code: "invalid-path" });
+    } finally {
+      await fs.rm(hardlinkPath, { force: true });
+      await fs.rm(outsideFile, { force: true });
+    }
+  });
+
+  it("writes a file within root safely", async () => {
+    const root = await tempDirs.make("openclaw-fs-safe-root-");
+    await writeFileWithinRoot({
+      rootDir: root,
+      relativePath: "nested/out.txt",
+      data: "hello",
+    });
+    await expect(fs.readFile(path.join(root, "nested", "out.txt"), "utf8")).resolves.toBe("hello");
+  });
+
+  it("rejects write traversal outside root", async () => {
+    const root = await tempDirs.make("openclaw-fs-safe-root-");
+    await expect(
+      writeFileWithinRoot({
+        rootDir: root,
+        relativePath: "../escape.txt",
+        data: "x",
+      }),
+    ).rejects.toMatchObject({ code: "invalid-path" });
+  });
+
+  it.runIf(process.platform !== "win32")("rejects writing through hardlink aliases", async () => {
+    const root = await tempDirs.make("openclaw-fs-safe-root-");
+    const outside = await tempDirs.make("openclaw-fs-safe-outside-");
+    const outsideFile = path.join(outside, "outside.txt");
+    const hardlinkPath = path.join(root, "alias.txt");
+    await fs.writeFile(outsideFile, "outside");
+    try {
+      try {
+        await fs.link(outsideFile, hardlinkPath);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === "EXDEV") {
+          return;
+        }
+        throw err;
+      }
+      await expect(
+        writeFileWithinRoot({
+          rootDir: root,
+          relativePath: "alias.txt",
+          data: "pwned",
+        }),
+      ).rejects.toMatchObject({ code: "invalid-path" });
+      await expect(fs.readFile(outsideFile, "utf8")).resolves.toBe("outside");
+    } finally {
+      await fs.rm(hardlinkPath, { force: true });
+      await fs.rm(outsideFile, { force: true });
+    }
   });
 
   it("returns not-found for missing files", async () => {

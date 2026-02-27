@@ -63,7 +63,7 @@ describe("sendMessage", () => {
 
     expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
       expect.objectContaining({
-        agentId: "work",
+        session: expect.objectContaining({ agentId: "work" }),
         channel: "telegram",
         to: "123456",
       }),

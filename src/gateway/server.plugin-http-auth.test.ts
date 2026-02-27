@@ -3,6 +3,7 @@ import { describe, expect, test, vi } from "vitest";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import type { HooksConfigResolved } from "./hooks.js";
+import { canonicalizePathVariant } from "./security-path.js";
 import { createGatewayHttpServer, createHooksRequestHandler } from "./server-http.js";
 import { withTempConfig } from "./test-temp-config.js";
 
@@ -84,6 +85,99 @@ function createHooksConfig(): HooksConfigResolved {
       allowedSessionKeyPrefixes: undefined,
     },
   };
+}
+
+function canonicalizePluginPath(pathname: string): string {
+  return canonicalizePathVariant(pathname);
+}
+
+type RouteVariant = {
+  label: string;
+  path: string;
+};
+
+const CANONICAL_UNAUTH_VARIANTS: RouteVariant[] = [
+  { label: "case-variant", path: "/API/channels/nostr/default/profile" },
+  { label: "encoded-slash", path: "/api/channels%2Fnostr%2Fdefault%2Fprofile" },
+  { label: "encoded-segment", path: "/api/%63hannels/nostr/default/profile" },
+  { label: "dot-traversal-encoded-slash", path: "/api/foo/..%2fchannels/nostr/default/profile" },
+  {
+    label: "dot-traversal-encoded-dotdot-slash",
+    path: "/api/foo/%2e%2e%2fchannels/nostr/default/profile",
+  },
+  {
+    label: "dot-traversal-double-encoded",
+    path: "/api/foo/%252e%252e%252fchannels/nostr/default/profile",
+  },
+  { label: "duplicate-slashes", path: "/api/channels//nostr/default/profile" },
+  { label: "trailing-slash", path: "/api/channels/nostr/default/profile/" },
+  { label: "malformed-short-percent", path: "/api/channels%2" },
+  { label: "malformed-double-slash-short-percent", path: "/api//channels%2" },
+];
+
+const CANONICAL_AUTH_VARIANTS: RouteVariant[] = [
+  { label: "auth-case-variant", path: "/API/channels/nostr/default/profile" },
+  { label: "auth-encoded-segment", path: "/api/%63hannels/nostr/default/profile" },
+  { label: "auth-duplicate-trailing-slash", path: "/api/channels//nostr/default/profile/" },
+  {
+    label: "auth-dot-traversal-encoded-slash",
+    path: "/api/foo/..%2fchannels/nostr/default/profile",
+  },
+  {
+    label: "auth-dot-traversal-double-encoded",
+    path: "/api/foo/%252e%252e%252fchannels/nostr/default/profile",
+  },
+];
+
+function buildChannelPathFuzzCorpus(): RouteVariant[] {
+  const variants = [
+    "/api/channels/nostr/default/profile",
+    "/API/channels/nostr/default/profile",
+    "/api/foo/..%2fchannels/nostr/default/profile",
+    "/api/foo/%2e%2e%2fchannels/nostr/default/profile",
+    "/api/foo/%252e%252e%252fchannels/nostr/default/profile",
+    "/api/channels//nostr/default/profile/",
+    "/api/channels%2Fnostr%2Fdefault%2Fprofile",
+    "/api/channels%252Fnostr%252Fdefault%252Fprofile",
+    "/api//channels/nostr/default/profile",
+    "/api/channels%2",
+    "/api/channels%zz",
+    "/api//channels%2",
+    "/api//channels%zz",
+  ];
+  return variants.map((path) => ({ label: `fuzz:${path}`, path }));
+}
+
+async function expectUnauthorizedVariants(params: {
+  server: ReturnType<typeof createGatewayHttpServer>;
+  variants: RouteVariant[];
+}) {
+  for (const variant of params.variants) {
+    const response = createResponse();
+    await dispatchRequest(params.server, createRequest({ path: variant.path }), response.res);
+    expect(response.res.statusCode, variant.label).toBe(401);
+    expect(response.getBody(), variant.label).toContain("Unauthorized");
+  }
+}
+
+async function expectAuthorizedVariants(params: {
+  server: ReturnType<typeof createGatewayHttpServer>;
+  variants: RouteVariant[];
+  authorization: string;
+}) {
+  for (const variant of params.variants) {
+    const response = createResponse();
+    await dispatchRequest(
+      params.server,
+      createRequest({
+        path: variant.path,
+        authorization: params.authorization,
+      }),
+      response.res,
+    );
+    expect(response.res.statusCode, variant.label).toBe(200);
+    expect(response.getBody(), variant.label).toContain('"route":"channel-canonicalized"');
+  }
 }
 
 describe("gateway plugin HTTP auth boundary", () => {
@@ -238,6 +332,103 @@ describe("gateway plugin HTTP auth boundary", () => {
         expect(unauthenticatedPublic.getBody()).toContain('"route":"public"');
 
         expect(handlePluginRequest).toHaveBeenCalledTimes(2);
+      },
+    });
+  });
+
+  test("requires gateway auth for canonicalized /api/channels variants", async () => {
+    const resolvedAuth: ResolvedGatewayAuth = {
+      mode: "token",
+      token: "test-token",
+      password: undefined,
+      allowTailscale: false,
+    };
+
+    await withTempConfig({
+      cfg: { gateway: { trustedProxies: [] } },
+      prefix: "openclaw-plugin-http-auth-canonicalized-test-",
+      run: async () => {
+        const handlePluginRequest = vi.fn(async (req: IncomingMessage, res: ServerResponse) => {
+          const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
+          const canonicalPath = canonicalizePluginPath(pathname);
+          if (canonicalPath === "/api/channels/nostr/default/profile") {
+            res.statusCode = 200;
+            res.setHeader("Content-Type", "application/json; charset=utf-8");
+            res.end(JSON.stringify({ ok: true, route: "channel-canonicalized" }));
+            return true;
+          }
+          return false;
+        });
+
+        const server = createGatewayHttpServer({
+          canvasHost: null,
+          clients: new Set(),
+          controlUiEnabled: false,
+          controlUiBasePath: "/__control__",
+          openAiChatCompletionsEnabled: false,
+          openResponsesEnabled: false,
+          handleHooksRequest: async () => false,
+          handlePluginRequest,
+          resolvedAuth,
+        });
+
+        await expectUnauthorizedVariants({ server, variants: CANONICAL_UNAUTH_VARIANTS });
+        expect(handlePluginRequest).not.toHaveBeenCalled();
+
+        await expectAuthorizedVariants({
+          server,
+          variants: CANONICAL_AUTH_VARIANTS,
+          authorization: "Bearer test-token",
+        });
+        expect(handlePluginRequest).toHaveBeenCalledTimes(CANONICAL_AUTH_VARIANTS.length);
+      },
+    });
+  });
+
+  test("rejects unauthenticated plugin-channel fuzz corpus variants", async () => {
+    const resolvedAuth: ResolvedGatewayAuth = {
+      mode: "token",
+      token: "test-token",
+      password: undefined,
+      allowTailscale: false,
+    };
+
+    await withTempConfig({
+      cfg: { gateway: { trustedProxies: [] } },
+      prefix: "openclaw-plugin-http-auth-fuzz-corpus-test-",
+      run: async () => {
+        const handlePluginRequest = vi.fn(async (req: IncomingMessage, res: ServerResponse) => {
+          const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
+          const canonicalPath = canonicalizePluginPath(pathname);
+          if (canonicalPath === "/api/channels/nostr/default/profile") {
+            res.statusCode = 200;
+            res.setHeader("Content-Type", "application/json; charset=utf-8");
+            res.end(JSON.stringify({ ok: true, route: "channel-canonicalized" }));
+            return true;
+          }
+          return false;
+        });
+
+        const server = createGatewayHttpServer({
+          canvasHost: null,
+          clients: new Set(),
+          controlUiEnabled: false,
+          controlUiBasePath: "/__control__",
+          openAiChatCompletionsEnabled: false,
+          openResponsesEnabled: false,
+          handleHooksRequest: async () => false,
+          handlePluginRequest,
+          resolvedAuth,
+        });
+
+        for (const variant of buildChannelPathFuzzCorpus()) {
+          const response = createResponse();
+          await dispatchRequest(server, createRequest({ path: variant.path }), response.res);
+          expect(response.res.statusCode, variant.label).not.toBe(200);
+          expect(response.getBody(), variant.label).not.toContain(
+            '"route":"channel-canonicalized"',
+          );
+        }
       },
     });
   });

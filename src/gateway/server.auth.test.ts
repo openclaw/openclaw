@@ -1,3 +1,5 @@
+import os from "node:os";
+import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -267,19 +269,24 @@ async function startRateLimitedTokenServerWithPairedDeviceToken() {
   } as any;
 
   const { server, ws, port, prevToken } = await startServerWithClient();
+  const deviceIdentityPath = path.join(
+    os.tmpdir(),
+    `openclaw-auth-rate-limit-${Date.now()}-${Math.random().toString(36).slice(2)}.json`,
+  );
   try {
-    const initial = await connectReq(ws, { token: "secret" });
+    const initial = await connectReq(ws, { token: "secret", deviceIdentityPath });
     if (!initial.ok) {
       await approvePendingPairingIfNeeded();
     }
 
-    const identity = loadOrCreateDeviceIdentity();
+    const identity = loadOrCreateDeviceIdentity(deviceIdentityPath);
     const paired = await getPairedDevice(identity.deviceId);
     const deviceToken = paired?.tokens?.operator?.token;
+    expect(paired?.deviceId).toBe(identity.deviceId);
     expect(deviceToken).toBeDefined();
 
     ws.close();
-    return { server, port, prevToken, deviceToken: String(deviceToken ?? "") };
+    return { server, port, prevToken, deviceToken: String(deviceToken ?? ""), deviceIdentityPath };
   } catch (err) {
     ws.close();
     await server.close();
@@ -291,20 +298,31 @@ async function startRateLimitedTokenServerWithPairedDeviceToken() {
 async function ensurePairedDeviceTokenForCurrentIdentity(ws: WebSocket): Promise<{
   identity: { deviceId: string };
   deviceToken: string;
+  deviceIdentityPath: string;
 }> {
   const { loadOrCreateDeviceIdentity } = await import("../infra/device-identity.js");
   const { getPairedDevice } = await import("../infra/device-pairing.js");
 
-  const res = await connectReq(ws, { token: "secret" });
+  const deviceIdentityPath = path.join(
+    os.tmpdir(),
+    `openclaw-auth-device-${Date.now()}-${Math.random().toString(36).slice(2)}.json`,
+  );
+
+  const res = await connectReq(ws, { token: "secret", deviceIdentityPath });
   if (!res.ok) {
     await approvePendingPairingIfNeeded();
   }
 
-  const identity = loadOrCreateDeviceIdentity();
+  const identity = loadOrCreateDeviceIdentity(deviceIdentityPath);
   const paired = await getPairedDevice(identity.deviceId);
   const deviceToken = paired?.tokens?.operator?.token;
+  expect(paired?.deviceId).toBe(identity.deviceId);
   expect(deviceToken).toBeDefined();
-  return { identity: { deviceId: identity.deviceId }, deviceToken: String(deviceToken ?? "") };
+  return {
+    identity: { deviceId: identity.deviceId },
+    deviceToken: String(deviceToken ?? ""),
+    deviceIdentityPath,
+  };
 }
 
 describe("gateway server auth/connect", () => {
@@ -328,7 +346,7 @@ describe("gateway server auth/connect", () => {
       try {
         const ws = await openWs(port);
         const handshakeTimeoutMs = getHandshakeTimeoutMs();
-        const closed = await waitForWsClose(ws, handshakeTimeoutMs + 60);
+        const closed = await waitForWsClose(ws, handshakeTimeoutMs + 500);
         expect(closed).toBe(true);
       } finally {
         if (prevHandshakeTimeout === undefined) {
@@ -398,13 +416,14 @@ describe("gateway server auth/connect", () => {
         opts: Parameters<typeof connectReq>[1];
         expectConnectOk: boolean;
         expectConnectError?: string;
+        expectStatusOk?: boolean;
         expectStatusError?: string;
       }> = [
         {
-          name: "operator + valid shared token => connected with zero scopes",
+          name: "operator + valid shared token => connected with preserved scopes",
           opts: { role: "operator", token, device: null },
           expectConnectOk: true,
-          expectStatusError: "missing scope",
+          expectStatusOk: true,
         },
         {
           name: "node + valid shared token => rejected without device",
@@ -431,12 +450,14 @@ describe("gateway server auth/connect", () => {
             );
             continue;
           }
-          if (scenario.expectStatusError) {
+          if (scenario.expectStatusOk !== undefined) {
             const status = await rpcReq(ws, "status");
-            expect(status.ok, scenario.name).toBe(false);
-            expect(status.error?.message ?? "", scenario.name).toContain(
-              scenario.expectStatusError,
-            );
+            expect(status.ok, scenario.name).toBe(scenario.expectStatusOk);
+            if (!scenario.expectStatusOk && scenario.expectStatusError) {
+              expect(status.error?.message ?? "", scenario.name).toContain(
+                scenario.expectStatusError,
+              );
+            }
           }
         } finally {
           ws.close();
@@ -793,8 +814,7 @@ describe("gateway server auth/connect", () => {
       const res = await connectReq(ws, { token: "secret", device: null });
       expect(res.ok).toBe(true);
       const status = await rpcReq(ws, "status");
-      expect(status.ok).toBe(false);
-      expect(status.error?.message).toContain("missing scope");
+      expect(status.ok).toBe(true);
       const health = await rpcReq(ws, "health");
       expect(health.ok).toBe(true);
       ws.close();
@@ -878,8 +898,7 @@ describe("gateway server auth/connect", () => {
         }
         if (tc.expectStatusChecks) {
           const status = await rpcReq(ws, "status");
-          expect(status.ok).toBe(false);
-          expect(status.error?.message ?? "").toContain("missing scope");
+          expect(status.ok).toBe(true);
           const health = await rpcReq(ws, "health");
           expect(health.ok).toBe(true);
         }
@@ -905,8 +924,7 @@ describe("gateway server auth/connect", () => {
     });
     expect(res.ok).toBe(true);
     const status = await rpcReq(ws, "status");
-    expect(status.ok).toBe(false);
-    expect(status.error?.message ?? "").toContain("missing scope");
+    expect(status.ok).toBe(true);
     const health = await rpcReq(ws, "health");
     expect(health.ok).toBe(true);
     ws.close();
@@ -928,8 +946,7 @@ describe("gateway server auth/connect", () => {
       });
       expect(res.ok).toBe(true);
       const status = await rpcReq(ws, "status");
-      expect(status.ok).toBe(false);
-      expect(status.error?.message ?? "").toContain("missing scope");
+      expect(status.ok).toBe(true);
       const health = await rpcReq(ws, "health");
       expect(health.ok).toBe(true);
       ws.close();
@@ -1042,7 +1059,7 @@ describe("gateway server auth/connect", () => {
 
   test("device token auth matrix", async () => {
     const { server, ws, port, prevToken } = await startServerWithClient("secret");
-    const { deviceToken } = await ensurePairedDeviceTokenForCurrentIdentity(ws);
+    const { deviceToken, deviceIdentityPath } = await ensurePairedDeviceTokenForCurrentIdentity(ws);
     ws.close();
 
     const scenarios: Array<{
@@ -1109,7 +1126,10 @@ describe("gateway server auth/connect", () => {
       for (const scenario of scenarios) {
         const ws2 = await openWs(port);
         try {
-          const res = await connectReq(ws2, scenario.opts);
+          const res = await connectReq(ws2, {
+            ...scenario.opts,
+            deviceIdentityPath,
+          });
           scenario.assert(res);
         } finally {
           ws2.close();
@@ -1122,7 +1142,7 @@ describe("gateway server auth/connect", () => {
   });
 
   test("keeps shared-secret lockout separate from device-token auth", async () => {
-    const { server, port, prevToken, deviceToken } =
+    const { server, port, prevToken, deviceToken, deviceIdentityPath } =
       await startRateLimitedTokenServerWithPairedDeviceToken();
     try {
       const wsBadShared = await openWs(port);
@@ -1137,7 +1157,7 @@ describe("gateway server auth/connect", () => {
       wsSharedLocked.close();
 
       const wsDevice = await openWs(port);
-      const deviceOk = await connectReq(wsDevice, { token: deviceToken });
+      const deviceOk = await connectReq(wsDevice, { token: deviceToken, deviceIdentityPath });
       expect(deviceOk.ok).toBe(true);
       wsDevice.close();
     } finally {
@@ -1147,16 +1167,16 @@ describe("gateway server auth/connect", () => {
   });
 
   test("keeps device-token lockout separate from shared-secret auth", async () => {
-    const { server, port, prevToken, deviceToken } =
+    const { server, port, prevToken, deviceToken, deviceIdentityPath } =
       await startRateLimitedTokenServerWithPairedDeviceToken();
     try {
       const wsBadDevice = await openWs(port);
-      const badDevice = await connectReq(wsBadDevice, { token: "wrong" });
+      const badDevice = await connectReq(wsBadDevice, { token: "wrong", deviceIdentityPath });
       expect(badDevice.ok).toBe(false);
       wsBadDevice.close();
 
       const wsDeviceLocked = await openWs(port);
-      const deviceLocked = await connectReq(wsDeviceLocked, { token: "wrong" });
+      const deviceLocked = await connectReq(wsDeviceLocked, { token: "wrong", deviceIdentityPath });
       expect(deviceLocked.ok).toBe(false);
       expect(deviceLocked.error?.message ?? "").toContain("retry later");
       wsDeviceLocked.close();
@@ -1167,7 +1187,10 @@ describe("gateway server auth/connect", () => {
       wsShared.close();
 
       const wsDeviceReal = await openWs(port);
-      const deviceStillLocked = await connectReq(wsDeviceReal, { token: deviceToken });
+      const deviceStillLocked = await connectReq(wsDeviceReal, {
+        token: deviceToken,
+        deviceIdentityPath,
+      });
       expect(deviceStillLocked.ok).toBe(false);
       expect(deviceStillLocked.error?.message ?? "").toContain("retry later");
       wsDeviceReal.close();
@@ -1686,14 +1709,15 @@ describe("gateway server auth/connect", () => {
   test("rejects revoked device token", async () => {
     const { revokeDeviceToken } = await import("../infra/device-pairing.js");
     const { server, ws, port, prevToken } = await startServerWithClient("secret");
-    const { identity, deviceToken } = await ensurePairedDeviceTokenForCurrentIdentity(ws);
+    const { identity, deviceToken, deviceIdentityPath } =
+      await ensurePairedDeviceTokenForCurrentIdentity(ws);
 
     await revokeDeviceToken({ deviceId: identity.deviceId, role: "operator" });
 
     ws.close();
 
     const ws2 = await openWs(port);
-    const res2 = await connectReq(ws2, { token: deviceToken });
+    const res2 = await connectReq(ws2, { token: deviceToken, deviceIdentityPath });
     expect(res2.ok).toBe(false);
 
     ws2.close();

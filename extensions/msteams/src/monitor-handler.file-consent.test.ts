@@ -148,18 +148,24 @@ describe("msteams file consent invoke authz", () => {
 
     await handler.run?.(context);
 
-    expect(fileConsentMockState.uploadToConsentUrl).toHaveBeenCalledTimes(1);
+    // invokeResponse should be sent immediately
+    expect(sendActivity).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "invokeResponse",
+      }),
+    );
+
+    // Wait for async upload to complete
+    await vi.waitFor(() => {
+      expect(fileConsentMockState.uploadToConsentUrl).toHaveBeenCalledTimes(1);
+    });
+
     expect(fileConsentMockState.uploadToConsentUrl).toHaveBeenCalledWith(
       expect.objectContaining({
         url: "https://upload.example.com/put",
       }),
     );
     expect(getPendingUpload(uploadId)).toBeUndefined();
-    expect(sendActivity).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: "invokeResponse",
-      }),
-    );
   });
 
   it("rejects cross-conversation accept invoke and keeps pending upload", async () => {
@@ -179,16 +185,22 @@ describe("msteams file consent invoke authz", () => {
 
     await handler.run?.(context);
 
-    expect(fileConsentMockState.uploadToConsentUrl).not.toHaveBeenCalled();
-    expect(getPendingUpload(uploadId)).toBeDefined();
-    expect(sendActivity).toHaveBeenCalledWith(
-      "The file upload request has expired. Please try sending the file again.",
-    );
+    // invokeResponse should be sent immediately
     expect(sendActivity).toHaveBeenCalledWith(
       expect.objectContaining({
         type: "invokeResponse",
       }),
     );
+
+    // Wait for async handler to complete
+    await vi.waitFor(() => {
+      expect(sendActivity).toHaveBeenCalledWith(
+        "The file upload request has expired. Please try sending the file again.",
+      );
+    });
+
+    expect(fileConsentMockState.uploadToConsentUrl).not.toHaveBeenCalled();
+    expect(getPendingUpload(uploadId)).toBeDefined();
   });
 
   it("ignores cross-conversation decline invoke and keeps pending upload", async () => {
@@ -208,13 +220,15 @@ describe("msteams file consent invoke authz", () => {
 
     await handler.run?.(context);
 
-    expect(fileConsentMockState.uploadToConsentUrl).not.toHaveBeenCalled();
-    expect(getPendingUpload(uploadId)).toBeDefined();
-    expect(sendActivity).toHaveBeenCalledTimes(1);
+    // invokeResponse should be sent immediately
     expect(sendActivity).toHaveBeenCalledWith(
       expect.objectContaining({
         type: "invokeResponse",
       }),
     );
+
+    expect(fileConsentMockState.uploadToConsentUrl).not.toHaveBeenCalled();
+    expect(getPendingUpload(uploadId)).toBeDefined();
+    expect(sendActivity).toHaveBeenCalledTimes(1);
   });
 });

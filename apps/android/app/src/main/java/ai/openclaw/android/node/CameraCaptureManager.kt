@@ -30,6 +30,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.util.concurrent.Executor
@@ -80,9 +84,10 @@ class CameraCaptureManager(private val context: Context) {
     withContext(Dispatchers.Main) {
       ensureCameraPermission()
       val owner = lifecycleOwner ?: throw IllegalStateException("UNAVAILABLE: camera not ready")
-      val facing = parseFacing(paramsJson) ?: "front"
-      val quality = (parseQuality(paramsJson) ?: 0.95).coerceIn(0.1, 1.0)
-      val maxWidth = parseMaxWidth(paramsJson) ?: 1600
+      val params = parseParamsObject(paramsJson)
+      val facing = parseFacing(params) ?: "front"
+      val quality = (parseQuality(params) ?: 0.95).coerceIn(0.1, 1.0)
+      val maxWidth = parseMaxWidth(params) ?: 1600
 
       val provider = context.cameraProvider()
       val capture = ImageCapture.Builder().build()
@@ -145,9 +150,10 @@ class CameraCaptureManager(private val context: Context) {
     withContext(Dispatchers.Main) {
       ensureCameraPermission()
       val owner = lifecycleOwner ?: throw IllegalStateException("UNAVAILABLE: camera not ready")
-      val facing = parseFacing(paramsJson) ?: "front"
-      val durationMs = (parseDurationMs(paramsJson) ?: 3_000).coerceIn(200, 60_000)
-      val includeAudio = parseIncludeAudio(paramsJson) ?: true
+      val params = parseParamsObject(paramsJson)
+      val facing = parseFacing(params) ?: "front"
+      val durationMs = (parseDurationMs(params) ?: 3_000).coerceIn(200, 60_000)
+      val includeAudio = parseIncludeAudio(params) ?: true
       if (includeAudio) ensureMicPermission()
 
       android.util.Log.w("CameraCaptureManager", "clip: start facing=$facing duration=$durationMs audio=$includeAudio")
@@ -270,46 +276,45 @@ class CameraCaptureManager(private val context: Context) {
     return rotated
   }
 
-  private fun parseFacing(paramsJson: String?): String? =
-    when {
-      paramsJson?.contains("\"front\"") == true -> "front"
-      paramsJson?.contains("\"back\"") == true -> "back"
-      else -> null
+  private fun parseParamsObject(paramsJson: String?): JsonObject? {
+    if (paramsJson.isNullOrBlank()) return null
+    return try {
+      Json.parseToJsonElement(paramsJson).asObjectOrNull()
+    } catch (_: Throwable) {
+      null
     }
+  }
 
-  private fun parseQuality(paramsJson: String?): Double? =
-    parseNumber(paramsJson, key = "quality")?.toDoubleOrNull()
+  private fun readPrimitive(params: JsonObject?, key: String): JsonPrimitive? =
+    params?.get(key) as? JsonPrimitive
 
-  private fun parseMaxWidth(paramsJson: String?): Int? =
-    parseNumber(paramsJson, key = "maxWidth")?.toIntOrNull()
-
-  private fun parseDurationMs(paramsJson: String?): Int? =
-    parseNumber(paramsJson, key = "durationMs")?.toIntOrNull()
-
-  private fun parseIncludeAudio(paramsJson: String?): Boolean? {
-    val raw = paramsJson ?: return null
-    val key = "\"includeAudio\""
-    val idx = raw.indexOf(key)
-    if (idx < 0) return null
-    val colon = raw.indexOf(':', idx + key.length)
-    if (colon < 0) return null
-    val tail = raw.substring(colon + 1).trimStart()
-    return when {
-      tail.startsWith("true") -> true
-      tail.startsWith("false") -> false
+  private fun parseFacing(params: JsonObject?): String? {
+    val value = readPrimitive(params, "facing")?.contentOrNull?.trim()?.lowercase() ?: return null
+    return when (value) {
+      "front", "back" -> value
       else -> null
     }
   }
 
-  private fun parseNumber(paramsJson: String?, key: String): String? {
-    val raw = paramsJson ?: return null
-    val needle = "\"$key\""
-    val idx = raw.indexOf(needle)
-    if (idx < 0) return null
-    val colon = raw.indexOf(':', idx + needle.length)
-    if (colon < 0) return null
-    val tail = raw.substring(colon + 1).trimStart()
-    return tail.takeWhile { it.isDigit() || it == '.' }
+  private fun parseQuality(params: JsonObject?): Double? =
+    readPrimitive(params, "quality")?.contentOrNull?.toDoubleOrNull()
+
+  private fun parseMaxWidth(params: JsonObject?): Int? =
+    readPrimitive(params, "maxWidth")
+      ?.contentOrNull
+      ?.toIntOrNull()
+      ?.takeIf { it > 0 }
+
+  private fun parseDurationMs(params: JsonObject?): Int? =
+    readPrimitive(params, "durationMs")?.contentOrNull?.toIntOrNull()
+
+  private fun parseIncludeAudio(params: JsonObject?): Boolean? {
+    val value = readPrimitive(params, "includeAudio")?.contentOrNull?.trim()?.lowercase()
+    return when (value) {
+      "true" -> true
+      "false" -> false
+      else -> null
+    }
   }
 
   private fun Context.mainExecutor(): Executor = ContextCompat.getMainExecutor(this)
