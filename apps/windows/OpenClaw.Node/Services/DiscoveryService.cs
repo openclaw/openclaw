@@ -385,9 +385,15 @@ namespace OpenClaw.Node.Services
 
         public void Dispose()
         {
-            _loopCts?.Cancel();
-            UnsubscribeNetworkChangeEvents();
-            _loopCts?.Dispose();
+            try
+            {
+                StopAsync().GetAwaiter().GetResult();
+            }
+            catch (Exception ex)
+            {
+                OnLog?.Invoke($"[DISCOVERY] dispose stop error: {ex.Message}");
+            }
+
             _announceGate.Dispose();
             _transport.Dispose();
         }
