@@ -95,6 +95,106 @@ describe("runCliAgent with process supervisor", () => {
     expect(input.scopeKey).toContain("thread-123");
   });
 
+  it("returns prompt token snapshot metadata when CLI usage is available", async () => {
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 30,
+        stdout: JSON.stringify({
+          message: "ok",
+          session_id: "claude-session-1",
+          usage: {
+            input_tokens: 120,
+            output_tokens: 40,
+            cache_read_input_tokens: 30,
+            cache_write_input_tokens: 10,
+            total_tokens: 200,
+          },
+        }),
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+
+    const result = await runCliAgent({
+      sessionId: "s-usage",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp",
+      prompt: "hi",
+      provider: "claude-cli",
+      model: "opus-4.6",
+      timeoutMs: 1_000,
+      runId: "run-usage",
+    });
+
+    expect(result.payloads?.[0]?.text).toBe("ok");
+    expect(result.meta.agentMeta?.sessionId).toBe("claude-session-1");
+    expect(result.meta.agentMeta?.usage).toEqual({
+      input: 120,
+      output: 40,
+      cacheRead: 30,
+      cacheWrite: 10,
+      total: 200,
+    });
+    expect(result.meta.agentMeta?.lastCallUsage).toEqual({
+      input: 120,
+      output: 40,
+      cacheRead: 30,
+      cacheWrite: 10,
+      total: 200,
+    });
+    expect(result.meta.agentMeta?.promptTokens).toBe(160);
+  });
+
+  it("persists user and assistant messages to the session transcript", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-transcript-"));
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 40,
+        stdout: "ok",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+
+    try {
+      await runCliAgent({
+        sessionId: "s-transcript",
+        sessionFile,
+        workspaceDir: "/tmp",
+        prompt: "hello from cli",
+        provider: "codex-cli",
+        model: "gpt-5.2-codex",
+        timeoutMs: 1_000,
+        runId: "run-transcript",
+      });
+
+      const lines = (await fs.readFile(sessionFile, "utf-8"))
+        .split(/\r?\n/)
+        .filter(Boolean)
+        .map(
+          (line) =>
+            JSON.parse(line) as { type?: string; message?: { role?: string; content?: unknown } },
+        );
+      expect(lines[0]?.type).toBe("session");
+
+      const messages = lines.filter((line) => line.type === "message").map((line) => line.message);
+      expect(messages.map((message) => message?.role)).toEqual(["user", "assistant"]);
+      expect(messages[0]?.content).toEqual([{ type: "text", text: "hello from cli" }]);
+      expect(messages[1]?.content).toEqual([{ type: "text", text: "ok" }]);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("fails with timeout when no-output watchdog trips", async () => {
     supervisorSpawnMock.mockResolvedValueOnce(
       createManagedRun({
