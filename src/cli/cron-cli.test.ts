@@ -505,16 +505,34 @@ describe("cron cli", () => {
     await expectCronEditWithScheduleLookupExit({ kind: "every", everyMs: 60_000 }, ["--exact"]);
   });
 
-  it("uses 10 minute timeout on cron run by default", async () => {
+  it("uses 30 second timeout on cron run by default", async () => {
     await runCronCommand(["cron", "run", "job-1"]);
 
     const runCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.run");
     expect(runCall).toBeDefined();
     const opts = runCall?.[1] as { timeout?: string };
-    expect(opts?.timeout).toBe("600000");
+    expect(opts?.timeout).toBe("30000");
     const params = runCall?.[2] as { id?: string; mode?: string };
     expect(params?.id).toBe("job-1");
     expect(params?.mode).toBe("force");
+  });
+
+  it("respects explicit --timeout 30000 on cron run", async () => {
+    await runCronCommand(["cron", "run", "job-1", "--timeout", "30000"]);
+
+    const runCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.run");
+    expect(runCall).toBeDefined();
+    const opts = runCall?.[1] as { timeout?: string };
+    expect(opts?.timeout).toBe("30000");
+  });
+
+  it("respects explicit --timeout 600000 on cron run", async () => {
+    await runCronCommand(["cron", "run", "job-1", "--timeout", "600000"]);
+
+    const runCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.run");
+    expect(runCall).toBeDefined();
+    const opts = runCall?.[1] as { timeout?: string };
+    expect(opts?.timeout).toBe("600000");
   });
 
   it("uses --due mode when passed to cron run", async () => {

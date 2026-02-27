@@ -95,14 +95,10 @@ export function registerCronSimpleCommands(cron: Command) {
       .option("--due", "Run only when due (default behavior in older versions)", false)
       .action(async (id, opts) => {
         try {
-          const res = await callGatewayFromCli(
-            "cron.run",
-            { ...opts, timeout: opts.timeout === "30000" ? "600000" : opts.timeout },
-            {
-              id,
-              mode: opts.due ? "due" : "force",
-            },
-          );
+          const res = await callGatewayFromCli("cron.run", opts, {
+            id,
+            mode: opts.due ? "due" : "force",
+          });
           defaultRuntime.log(JSON.stringify(res, null, 2));
         } catch (err) {
           defaultRuntime.error(danger(String(err)));
