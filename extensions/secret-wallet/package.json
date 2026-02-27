@@ -1,8 +1,10 @@
 {
-  "name": "@baekho-lim/openclaw-secret-wallet",
+  "name": "@baekho-lim/secret-wallet",
   "version": "0.2.0",
   "description": "OpenClaw plugin for secret-wallet with selective inject and gated write tools",
   "files": [
+    "index.ts",
+    "src",
     "dist",
     "openclaw.plugin.json",
     "SKILL.md",
@@ -13,7 +15,7 @@
   "scripts": {
     "build": "npm run clean && tsc -p tsconfig.json",
     "clean": "rm -rf dist",
-    "pack:smoke": "TMPDIR=$(mktemp -d) && npm pack --pack-destination \"$TMPDIR\" >/dev/null && TAR=$(ls -1 \"$TMPDIR\"/*.tgz | head -1) && tar -tzf \"$TAR\" | grep -q '^package/dist/index.js$'",
+    "pack:smoke": "TMPDIR=$(mktemp -d) && npm pack --pack-destination \"$TMPDIR\" >/dev/null && TAR=$(ls -1 \"$TMPDIR\"/*.tgz | head -1) && tar -tzf \"$TAR\" | grep -q '^package/index.ts$' && tar -tzf \"$TAR\" | grep -q '^package/src/tools.ts$' && tar -tzf \"$TAR\" | grep -q '^package/openclaw.plugin.json$'",
     "prepack": "npm run build",
     "test": "vitest run -c vitest.config.ts"
   },

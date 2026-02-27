@@ -10,7 +10,7 @@ OpenClaw plugin for the `secret-wallet` CLI with safer default behavior:
 ## Install
 
 ```bash
-openclaw plugins install @baekho-lim/openclaw-secret-wallet
+openclaw plugins install @baekho-lim/secret-wallet
 ```
 
 ## Required binary
@@ -69,10 +69,16 @@ secret-wallet inject --only OPENAI_KEY --only DB_URL -- node server.js
 ## Local development
 
 ```bash
-pnpm --filter @baekho-lim/openclaw-secret-wallet build
-pnpm --filter @baekho-lim/openclaw-secret-wallet test
-pnpm --filter @baekho-lim/openclaw-secret-wallet pack:smoke
+pnpm --filter @baekho-lim/secret-wallet build
+pnpm --filter @baekho-lim/secret-wallet test
+pnpm --filter @baekho-lim/secret-wallet pack:smoke
 ```
+
+## Packaging note
+
+The npm package includes `index.ts` and `src/*` so plugin discovery can load the declared
+`openclaw.extensions` entry (`./index.ts`) directly from installed packages.
+Prebuilt `dist/*` is still included for standalone packaging workflows.
 
 ## Contribution note (OpenClaw repository)
 
