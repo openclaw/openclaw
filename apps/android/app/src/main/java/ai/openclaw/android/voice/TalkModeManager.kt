@@ -252,7 +252,6 @@ private const val defaultTalkProvider = "elevenlabs"
 
   // Streaming TTS: active session keyed by runId
   private var streamingTts: ElevenLabsStreamingTts? = null
-  private var streamingRunId: String? = null
 
   /** Handle agent stream events — only speak assistant text, not tool calls or thinking. */
   private fun handleAgentStreamEvent(payloadJson: String?) {

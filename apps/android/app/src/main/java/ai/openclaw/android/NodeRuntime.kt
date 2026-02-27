@@ -604,7 +604,6 @@ class NodeRuntime(context: Context) {
   }
 
   fun setVoiceScreenActive(active: Boolean) {
-    android.util.Log.d("NodeRuntime", "setVoiceScreenActive active=$active")
     if (!active) {
       // User left voice screen — stop mic and TTS
       talkMode.ttsOnAllResponses = false
