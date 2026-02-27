@@ -279,3 +279,15 @@ export function resolveAgentDir(cfg: OpenClawConfig, agentId: string) {
   const root = resolveStateDir(process.env);
   return path.join(root, "agents", id, "agent");
 }
+
+/**
+ * Returns the resolved agentDir path **only** when the agent has an explicit
+ * `agentDir` value in its config entry.  Returns `undefined` when the agent
+ * relies on the default state-directory fallback, so callers can distinguish
+ * intentional per-agent overrides from accidental file presence.
+ */
+export function resolveExplicitAgentDir(cfg: OpenClawConfig, agentId: string): string | undefined {
+  const id = normalizeAgentId(agentId);
+  const configured = resolveAgentConfig(cfg, id)?.agentDir?.trim();
+  return configured ? resolveUserPath(configured) : undefined;
+}
