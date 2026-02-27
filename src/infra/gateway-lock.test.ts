@@ -7,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveConfigPath, resolveGatewayLockDir, resolveStateDir } from "../config/paths.js";
+import * as pidAliveModule from "../shared/pid-alive.js";
 import { acquireGatewayLock, GatewayLockError, type GatewayLockOptions } from "./gateway-lock.js";
 
 let fixtureRoot = "";
@@ -83,10 +84,11 @@ function createLockPayload(params: { configPath: string; startTime: number; crea
   };
 }
 
-function mockProcStatRead(params: { onProcRead: () => string }) {
+function mockProcStatRead(params: { onProcRead: () => string; pid?: number }) {
   const readFileSync = fsSync.readFileSync;
+  const targetPid = params.pid ?? process.pid;
   return vi.spyOn(fsSync, "readFileSync").mockImplementation((filePath, encoding) => {
-    if (filePath === `/proc/${process.pid}/stat`) {
+    if (filePath === `/proc/${targetPid}/stat`) {
       return params.onProcRead();
     }
     return readFileSync(filePath as never, encoding as never) as never;
@@ -284,6 +286,91 @@ describe("gateway lock", () => {
       env: { ...env, VITEST: "1" },
     });
     expect(lock).toBeNull();
+  });
+
+  it("retries unknown status before treating lock as stale", async () => {
+    vi.useRealTimers();
+    const env = await makeEnv();
+    const fakePid = 999998;
+    const { lockPath, configPath } = resolveLockPath(env);
+    const payload = createLockPayload({
+      configPath,
+      startTime: 111,
+      createdAt: new Date(Date.now() - 60_000).toISOString(),
+    });
+    payload.pid = fakePid;
+    await fs.writeFile(lockPath, JSON.stringify(payload), "utf8");
+
+    const aliveSpy = vi.spyOn(pidAliveModule, "isPidAlive").mockImplementation((pid) => {
+      if (pid === fakePid) {
+        return true;
+      }
+      return pidAliveModule.isPidAlive(pid);
+    });
+
+    let readCount = 0;
+    const spy = mockProcStatRead({
+      pid: fakePid,
+      onProcRead: () => {
+        readCount++;
+        if (readCount <= 2) {
+          throw new Error("EACCES");
+        }
+        return makeProcStat(fakePid, 111);
+      },
+    });
+
+    // Should NOT steal the lock because retries resolve to "alive"
+    const pending = acquireForTest(env, {
+      timeoutMs: 5000,
+      pollIntervalMs: 5,
+      staleMs: 1000,
+      platform: "linux",
+    });
+    await expect(pending).rejects.toBeInstanceOf(GatewayLockError);
+
+    spy.mockRestore();
+    aliveSpy.mockRestore();
+  });
+
+  it("treats unknown status as alive even when lock is stale", async () => {
+    vi.useRealTimers();
+    const env = await makeEnv();
+    const fakePid = 999999;
+    const { lockPath, configPath } = resolveLockPath(env);
+    const payload = createLockPayload({
+      configPath,
+      startTime: 111,
+      createdAt: new Date(Date.now() - 60_000).toISOString(), // very stale
+    });
+    payload.pid = fakePid;
+    await fs.writeFile(lockPath, JSON.stringify(payload), "utf8");
+
+    // All /proc reads fail → status stays "unknown" after retries
+    const procSpy = mockProcStatRead({
+      pid: fakePid,
+      onProcRead: () => {
+        throw new Error("EACCES");
+      },
+    });
+    const aliveSpy = vi.spyOn(pidAliveModule, "isPidAlive").mockImplementation((pid) => {
+      if (pid === fakePid) {
+        return true;
+      }
+      return pidAliveModule.isPidAlive(pid);
+    });
+
+    // Should NOT steal the lock — "unknown" is treated as "alive"
+    const pending = acquireForTest(env, {
+      timeoutMs: 2000,
+      pollIntervalMs: 5,
+      staleMs: 1000,
+      platform: "linux",
+    });
+    await expect(pending).rejects.toBeInstanceOf(GatewayLockError);
+
+    procSpy.mockRestore();
+    aliveSpy.mockRestore();
   });
 
   it("wraps unexpected fs errors as GatewayLockError", async () => {
