@@ -1,5 +1,6 @@
 import type { Message, ReactionTypeEmoji } from "@grammyjs/types";
 import { resolveAgentDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { getTgccSupervisorClient } from "../agents/tgcc-supervisor/index.js";
 import { hasControlCommand } from "../auto-reply/command-detection.js";
 import {
   createInboundDebouncer,
@@ -1231,6 +1232,27 @@ export const registerTelegramHandlers = ({
           return;
         }
 
+        return;
+      }
+
+      // TGCC permission request callback (tgcc_perm:{a|d}:{agentId}:{requestId})
+      const permMatch = data.match(/^tgcc_perm:([ad]):([^:]+):(.+)$/);
+      if (permMatch) {
+        const [, decisionCode, permAgentId, permRequestId] = permMatch;
+        const decision = decisionCode === "a" ? "allow" : "deny";
+        const tgccClient = getTgccSupervisorClient();
+        if (tgccClient && permAgentId && permRequestId) {
+          try {
+            await tgccClient.respondToPermission(permAgentId, permRequestId, decision);
+            const label = decision === "allow" ? "✅ Allowed" : "❌ Denied";
+            await editCallbackMessage(
+              `${label} — <b>${permAgentId}</b> permission for tool request`,
+              { parse_mode: "HTML", reply_markup: { inline_keyboard: [] } },
+            );
+          } catch (permErr) {
+            runtime.error?.(danger(`tgcc_perm callback failed: ${String(permErr)}`));
+          }
+        }
         return;
       }
 

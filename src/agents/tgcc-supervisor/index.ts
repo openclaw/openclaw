@@ -16,12 +16,15 @@ import {
 } from "../subagent-registry.js";
 import { runSubagentAnnounceFlow } from "../subagent-announce.js";
 import type { SubagentRunRecord } from "../subagent-registry.types.js";
+import { resolveTelegramAccount } from "../../telegram/accounts.js";
+import { sendMessageTelegram } from "../../telegram/send.js";
 import {
   TgccSupervisorClient,
   type TgccResultEvent,
   type TgccProcessExitEvent,
   type TgccSessionTakeoverEvent,
   type TgccApiErrorEvent,
+  type TgccPermissionRequestEvent,
   type TgccSupervisorClientConfig,
   type TgccAgentStatus,
   type TgccStatusResult,
@@ -282,6 +285,9 @@ function attachEventHandlers(c: TgccSupervisorClient): void {
 
   // Phase 3: reverse notify
   c.on("tgcc:reverse_notify", handleReverseNotify);
+
+  // Permission requests from CC processes
+  c.on("tgcc:permission_request", handlePermissionRequest);
 }
 
 /** Find the active subagent run for a TGCC agent. Keyed by agentId only. */
@@ -543,6 +549,95 @@ async function injectObservabilityMessage(
 // ---------------------------------------------------------------------------
 // Phase 3: Reverse notify handler
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Permission request handler — deliver to agent session AND send TG buttons
+// ---------------------------------------------------------------------------
+
+// Max bytes for Telegram callback_data is 64. With prefix `tgcc_perm:a:` (12 chars),
+// separator `:` (1 char), and UUID (36 chars), the agentId budget is 15 chars.
+const TGCC_PERM_AGENT_ID_MAX = 15;
+
+function buildPermCallbackData(decision: "a" | "d", agentId: string, requestId: string): string {
+  const safeId = agentId.length > TGCC_PERM_AGENT_ID_MAX
+    ? agentId.slice(0, TGCC_PERM_AGENT_ID_MAX)
+    : agentId;
+  return `tgcc_perm:${decision}:${safeId}:${requestId}`;
+}
+
+function handlePermissionRequest(event: TgccPermissionRequestEvent): void {
+  const { agentId, toolName, requestId, description } = event;
+  log.info(`permission_request: agent=${agentId} tool=${toolName} requestId=${requestId}`);
+
+  // a) Wake the requester agent so it can auto-approve based on its own rules.
+  //    Include requestId and agentId so the agent can call respondToPermission.
+  const systemMsg =
+    `[subagent:${agentId}] 🔒 Permission request: ${toolName} — ${description}` +
+    ` [permissionRequestId=${requestId}]`;
+
+  const run = findTgccRun(agentId);
+  if (run) {
+    void callGateway({
+      method: "agent",
+      params: {
+        sessionKey: run.requesterSessionKey,
+        idempotencyKey: crypto.randomUUID(),
+        message: `[System Event] ${systemMsg}`,
+        deliver: true,
+      },
+      timeoutMs: 10_000,
+    }).catch((err: unknown) => {
+      log.warn(`permission_request session inject failed: ${err instanceof Error ? err.message : String(err)}`);
+    });
+  } else {
+    // No tracked run — deliver to main session
+    const cfg = loadConfig();
+    const mainKey = cfg.session?.mainKey ?? "agent:main:main";
+    void callGateway({
+      method: "agent",
+      params: {
+        sessionKey: mainKey,
+        idempotencyKey: crypto.randomUUID(),
+        message: `[System Event] ${systemMsg}`,
+        deliver: true,
+      },
+      timeoutMs: 10_000,
+    }).catch((err: unknown) => {
+      log.warn(`permission_request main session inject failed: ${err instanceof Error ? err.message : String(err)}`);
+    });
+  }
+
+  // b) Send Telegram message with Allow / Deny inline buttons as a user-facing fallback.
+  const cfg = loadConfig();
+  let tgDefaultTo: string | undefined;
+  try {
+    const tgVal = resolveTelegramAccount({ cfg }).config.defaultTo;
+    tgDefaultTo = tgVal != null ? String(tgVal) : undefined;
+  } catch {
+    // Telegram may not be configured — skip button message
+  }
+
+  if (!tgDefaultTo) {
+    log.info(`permission_request: no telegram defaultTo configured, skipping button message`);
+    return;
+  }
+
+  const tgText =
+    `🔒 <b>${agentId}</b> needs permission: <b>${toolName}</b>\n${description}`;
+  const buttons = [
+    [
+      { text: "✅ Allow", callback_data: buildPermCallbackData("a", agentId, requestId) },
+      { text: "❌ Deny",  callback_data: buildPermCallbackData("d", agentId, requestId) },
+    ],
+  ];
+
+  void sendMessageTelegram(tgDefaultTo, tgText, {
+    textMode: "html",
+    buttons,
+  }).catch((err: unknown) => {
+    log.warn(`permission_request telegram message failed: ${err instanceof Error ? err.message : String(err)}`);
+  });
+}
 
 function handleReverseNotify(event: { target: string; message: string }): void {
   const { target, message } = event;

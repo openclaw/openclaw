@@ -95,6 +95,13 @@ export interface TgccApiErrorEvent {
   message: string;
 }
 
+export interface TgccPermissionRequestEvent {
+  agentId: string;
+  toolName: string;
+  requestId: string;
+  description: string;
+}
+
 // ---------------------------------------------------------------------------
 // Configuration
 // ---------------------------------------------------------------------------
@@ -224,6 +231,15 @@ export class TgccSupervisorClient extends EventEmitter {
   /** Unsubscribe from an agent's CC process events. */
   async unsubscribe(agentId: string): Promise<unknown> {
     return this.sendCommand("unsubscribe", { agentId });
+  }
+
+  /** Respond to a permission request from a CC process. */
+  async respondToPermission(
+    agentId: string,
+    permissionRequestId: string,
+    decision: "allow" | "deny",
+  ): Promise<unknown> {
+    return this.sendCommand("permission_response", { agentId, permissionRequestId, decision });
   }
 
   // ── Phase 2: Ephemeral agent management ──────────────────────────────
@@ -485,6 +501,15 @@ export class TgccSupervisorClient extends EventEmitter {
           sessionId: msg.sessionId,
           message: msg.message,
         } as TgccApiErrorEvent);
+        break;
+
+      case "permission_request":
+        this.emit("tgcc:permission_request", {
+          agentId: msg.agentId,
+          toolName: msg.toolName,
+          requestId: msg.requestId,
+          description: msg.description,
+        } as TgccPermissionRequestEvent);
         break;
 
       case "registered":
