@@ -11,11 +11,17 @@ import compactionSafeguardExtension, { __testing } from "./compaction-safeguard.
 const {
   collectToolFailures,
   formatToolFailuresSection,
+  capCompactionSummary,
+  capCompactionSummaryPreservingSuffix,
+  formatFileOperations,
   computeAdaptiveChunkRatio,
   isOversizedForSummary,
   BASE_CHUNK_RATIO,
   MIN_CHUNK_RATIO,
   SAFETY_MARGIN,
+  MAX_COMPACTION_SUMMARY_CHARS,
+  MAX_FILE_OPS_SECTION_CHARS,
+  SUMMARY_TRUNCATED_MARKER,
 } = __testing;
 
 function stubSessionManager(): ExtensionContext["sessionManager"] {
@@ -187,6 +193,48 @@ describe("compaction-safeguard tool failures", () => {
     const failures = collectToolFailures(messages);
     const section = formatToolFailuresSection(failures);
     expect(section).toBe("");
+  });
+});
+
+describe("compaction-safeguard summary budgets", () => {
+  it("caps file operations summary and reports omitted entries", () => {
+    const readFiles = Array.from(
+      { length: 200 },
+      (_, i) => `docs/very/long/path/${i}-read-file.md`,
+    );
+    const modifiedFiles = Array.from(
+      { length: 200 },
+      (_, i) => `src/features/${i}/nested/component/file-${i}.ts`,
+    );
+
+    const section = formatFileOperations(readFiles, modifiedFiles);
+
+    expect(section).toContain("<read-files>");
+    expect(section).toContain("<modified-files>");
+    expect(section).toContain("...and ");
+    expect(section.length).toBeLessThanOrEqual(MAX_FILE_OPS_SECTION_CHARS);
+  });
+
+  it("caps final compaction summary with a truncation marker", () => {
+    const oversized = "x".repeat(MAX_COMPACTION_SUMMARY_CHARS + 500);
+    const capped = capCompactionSummary(oversized);
+
+    expect(capped.length).toBeLessThanOrEqual(MAX_COMPACTION_SUMMARY_CHARS);
+    expect(capped).toContain(SUMMARY_TRUNCATED_MARKER.trim());
+    expect(capped.endsWith(SUMMARY_TRUNCATED_MARKER)).toBe(true);
+  });
+
+  it("preserves workspace critical rules suffix when capping", () => {
+    const suffix =
+      "\n\n<workspace-critical-rules>\n## Session Startup\nRead AGENTS.md\n</workspace-critical-rules>";
+    const body = "x".repeat(MAX_COMPACTION_SUMMARY_CHARS);
+
+    const capped = capCompactionSummaryPreservingSuffix(body, suffix);
+
+    expect(capped.length).toBeLessThanOrEqual(MAX_COMPACTION_SUMMARY_CHARS);
+    expect(capped).toContain("<workspace-critical-rules>");
+    expect(capped).toContain("## Session Startup");
+    expect(capped.endsWith(suffix)).toBe(true);
   });
 });
 
