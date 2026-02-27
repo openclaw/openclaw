@@ -1,5 +1,5 @@
 import type { startGatewayServer } from "../../gateway/server.js";
-import { acquireGatewayLock } from "../../infra/gateway-lock.js";
+import { acquireGatewayLock, type GatewayLockTelemetryEvent } from "../../infra/gateway-lock.js";
 import { restartGatewayProcessWithFreshPid } from "../../infra/process-respawn.js";
 import {
   consumeGatewaySigusr1RestartAuthorization,
@@ -25,7 +25,54 @@ export async function runGatewayLoop(params: {
   runtime: typeof defaultRuntime;
   lockPort?: number;
 }) {
-  let lock = await acquireGatewayLock({ port: params.lockPort });
+  const formatOwner = (pid?: number) => (pid ? `pid=${pid}` : "pid=unknown");
+  const onLockTelemetry = (event: GatewayLockTelemetryEvent) => {
+    switch (event.event) {
+      case "acquire-skipped": {
+        const reason =
+          event.reason === "multi-gateway-override"
+            ? "OPENCLAW_ALLOW_MULTI_GATEWAY=1"
+            : "test environment";
+        gatewayLog.info(`singleton lock: skipped (${reason})`);
+        return;
+      }
+      case "acquire-start": {
+        const port = event.port != null ? `, port=${event.port}` : "";
+        gatewayLog.info(
+          `singleton lock: acquiring (${event.lockPath}, timeout=${event.timeoutMs}ms, stale=${event.staleMs}ms${port})`,
+        );
+        return;
+      }
+      case "acquire-contention":
+        gatewayLog.warn(
+          `singleton lock: waiting (status=${event.ownerStatus}, ${formatOwner(
+            event.ownerPid,
+          )}, waited=${event.waitedMs}ms)`,
+        );
+        return;
+      case "stale-lock-recovered":
+        gatewayLog.warn(
+          `singleton lock: removed stale lock (${event.reason}, status=${event.ownerStatus}, ${formatOwner(
+            event.ownerPid,
+          )}, waited=${event.waitedMs}ms)`,
+        );
+        return;
+      case "acquire-success":
+        gatewayLog.info(
+          `singleton lock: acquired (${event.lockPath}, waited=${event.waitedMs}ms, attempts=${event.attempts}, staleRecoveries=${event.staleRecoveries})`,
+        );
+        return;
+      case "acquire-timeout":
+        gatewayLog.error(
+          `singleton lock: timeout after ${event.timeoutMs}ms (${formatOwner(
+            event.ownerPid,
+          )}, attempts=${event.attempts})`,
+        );
+        return;
+    }
+  };
+
+  let lock = await acquireGatewayLock({ port: params.lockPort, onTelemetry: onLockTelemetry });
   let server: Awaited<ReturnType<typeof startGatewayServer>> | null = null;
   let shuttingDown = false;
   let restartResolver: (() => void) | null = null;
@@ -49,7 +96,7 @@ export async function runGatewayLoop(params: {
   };
   const reacquireLockForInProcessRestart = async (): Promise<boolean> => {
     try {
-      lock = await acquireGatewayLock({ port: params.lockPort });
+      lock = await acquireGatewayLock({ port: params.lockPort, onTelemetry: onLockTelemetry });
       return true;
     } catch (err) {
       gatewayLog.error(`failed to reacquire gateway lock for in-process restart: ${String(err)}`);
