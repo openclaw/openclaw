@@ -90,7 +90,10 @@ export class Embeddings {
       if (!apiKey) {
         throw new Error("API key required for OpenAI embeddings");
       }
-      this.client = new OpenAI({ apiKey });
+      this.client = new OpenAI({
+        apiKey,
+        ...(this.baseUrl ? { baseURL: this.baseUrl } : {}),
+      });
     }
   }
 
@@ -253,6 +256,7 @@ export class Embeddings {
     const response = await this.client.embeddings.create({
       model: this.model,
       input: text,
+      dimensions: this.expectedDimensions,
     });
     return response.data[0].embedding;
   }
@@ -264,6 +268,7 @@ export class Embeddings {
     const response = await this.client.embeddings.create({
       model: this.model,
       input: texts,
+      dimensions: this.expectedDimensions,
     });
     // Sort by index to ensure correct order
     return [...response.data].sort((a, b) => a.index - b.index).map((d) => d.embedding);

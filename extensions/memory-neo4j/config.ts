@@ -90,6 +90,8 @@ export const EMBEDDING_DIMENSIONS: Record<string, number> = {
   "mxbai-embed-large-2k:latest": 1024,
   "nomic-embed-text": 768,
   "all-minilm": 384,
+  // Qwen3 embedding (MRL: supports 32-4096, we use 1536 for compatibility)
+  "qwen3-embedding": 1536,
 };
 
 // Default dimension for unknown models (Ollama models vary)
@@ -129,6 +131,8 @@ export const EMBEDDING_CONTEXT_LENGTHS: Record<string, number> = {
   "mxbai-embed-large-8k": 8192,
   "nomic-embed-text": 8192,
   "all-minilm": 256,
+  // Qwen3 embedding
+  "qwen3-embedding": 8192,
 };
 
 /** Conservative default for unknown models. */
