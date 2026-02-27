@@ -82,7 +82,8 @@ jobs:
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
           VPS_USER: ${{ secrets.VPS_USER }}
-          SSH_KEY:  ~/.ssh/id_ed25519_hostinger
+          # SSH_KEY intentionally omitted: deploy.sh defaults to $HOME/.ssh/id_ed25519_hostinger
+          # (tilde is not variable-expanded in GitHub Actions env values)
           IMAGE_TAG: ${{ steps.tag.outputs.tag }}
           APP_DIR: /docker/openclaw-sgnl
         run: |
