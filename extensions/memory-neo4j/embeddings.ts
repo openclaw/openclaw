@@ -8,7 +8,7 @@
 import { createHash } from "node:crypto";
 import OpenAI from "openai";
 import type { EmbeddingProvider } from "./config.js";
-import { contextLengthForModel } from "./config.js";
+import { contextLengthForModel, vectorDimsForModel } from "./config.js";
 import type { Logger } from "./schema.js";
 
 /**
@@ -67,6 +67,7 @@ export class Embeddings {
   private readonly baseUrl: string;
   private readonly logger: Logger | undefined;
   private readonly contextLength: number;
+  private readonly expectedDimensions: number;
   private readonly cache = new EmbeddingCache(200);
 
   constructor(
@@ -83,6 +84,7 @@ export class Embeddings {
     );
     this.logger = logger;
     this.contextLength = contextLengthForModel(model);
+    this.expectedDimensions = vectorDimsForModel(model);
 
     if (provider === "openai") {
       if (!apiKey) {
@@ -119,6 +121,21 @@ export class Embeddings {
   }
 
   /**
+   * Validate that an embedding has the expected dimensions for the configured model.
+   * Throws if the dimension count doesn't match, preventing silent index corruption.
+   */
+  private validateDimensions(embedding: number[], context?: string): void {
+    if (embedding.length !== this.expectedDimensions) {
+      const msg =
+        `memory-neo4j: embedding dimension mismatch — got ${embedding.length}, ` +
+        `expected ${this.expectedDimensions} for model ${this.model}` +
+        (context ? ` (${context})` : "");
+      this.logger?.error?.(msg);
+      throw new Error(msg);
+    }
+  }
+
+  /**
    * Generate an embedding vector for a single text.
    * Results are cached to avoid redundant API calls.
    */
@@ -135,6 +152,7 @@ export class Embeddings {
     const embedding =
       this.provider === "ollama" ? await this.embedOllama(input) : await this.embedOpenAI(input);
 
+    this.validateDimensions(embedding);
     this.cache.set(input, embedding);
     return embedding;
   }
@@ -178,13 +196,14 @@ export class Embeddings {
       computed = await this.embedBatchOpenAI(uncachedTexts);
     }
 
-    // Merge computed results back and populate cache
+    // Merge computed results back, validate dimensions, and populate cache
     for (let i = 0; i < uncachedIndices.length; i++) {
       const embedding = computed[i];
-      results[uncachedIndices[i]] = embedding;
       if (embedding.length > 0) {
+        this.validateDimensions(embedding, `batch index ${uncachedIndices[i]}`);
         this.cache.set(uncachedTexts[i], embedding);
       }
+      results[uncachedIndices[i]] = embedding;
     }
 
     return results as number[][];
