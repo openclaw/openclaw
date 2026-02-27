@@ -1,4 +1,5 @@
 import type { Command } from "commander";
+import { agentUiCommand } from "../../commands/agent-ui.js";
 import { agentCliCommand } from "../../commands/agent-via-gateway.js";
 import {
   agentsAddCommand,
@@ -79,6 +80,58 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/agent", "docs.openclaw.ai/cli/age
       const deps = createDefaultDeps();
       await runCommandWithRuntime(defaultRuntime, async () => {
         await agentCliCommand(opts, defaultRuntime, deps);
+      });
+    });
+
+  program
+    .command("agent-ui")
+    .description("Launch an external CLI agent UI (Codex/Claude/OpenCode/etc.)")
+    .option("--command <bin>", "Executable to launch (e.g. codex, claude, opencode)")
+    .option("--arg <value>", "Argument passed to the external CLI (repeatable)", collectOption, [])
+    .option(
+      "--provider <id>",
+      "CLI backend provider id from agents.defaults.cliBackends (used when --command is omitted)",
+    )
+    .option("--model <provider/model>", "Infer provider from model ref when --provider is omitted")
+    .option("--cwd <dir>", "Working directory for the external UI (default: current directory)")
+    .option("--agent <id>", "Agent id used to resolve OpenClaw workspace and memory files")
+    .option("--no-bridge-memory", "Do not write/update AGENTS.md memory bridge in target cwd")
+    .option("--dry-run", "Show resolved launch plan without executing")
+    .option("--json", "Output launch plan as JSON")
+    .addHelpText(
+      "after",
+      () =>
+        `
+${theme.heading("Examples:")}
+${formatHelpExamples([
+  ["openclaw agent-ui --command codex", "Launch Codex UI in the current directory."],
+  [
+    "openclaw agent-ui --provider claude-cli --cwd ~/code/my-repo",
+    "Launch configured Claude backend in a project directory.",
+  ],
+  [
+    "openclaw agent-ui --command opencode --agent ops --dry-run --json",
+    "Preview launch plan + memory bridge for a specific OpenClaw agent.",
+  ],
+])}
+`,
+    )
+    .action(async (opts) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await agentUiCommand(
+          {
+            command: opts.command as string | undefined,
+            arg: Array.isArray(opts.arg) ? (opts.arg as string[]) : undefined,
+            provider: opts.provider as string | undefined,
+            model: opts.model as string | undefined,
+            cwd: opts.cwd as string | undefined,
+            agent: opts.agent as string | undefined,
+            noBridgeMemory: opts.bridgeMemory === false,
+            dryRun: Boolean(opts.dryRun),
+            json: Boolean(opts.json),
+          },
+          defaultRuntime,
+        );
       });
     });
 
