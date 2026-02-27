@@ -105,11 +105,12 @@ function shouldRemoveCompletionProfileLine(line: string): boolean {
   if (line.trim() === COMPLETION_PROFILE_HEADER) {
     return true;
   }
-  return line.includes("openclaw completion") || line.includes("/completions/openclaw.");
+  const normalizedLine = line.replaceAll("\\", "/");
+  return line.includes("openclaw completion") || normalizedLine.includes("/completions/openclaw.");
 }
 
 async function cleanupShellCompletionTraces(runtime: RuntimeEnv, dryRun?: boolean) {
-  const home = resolveHomeDir() ?? os.homedir();
+  const home = os.homedir();
   const profilePaths = [
     path.join(home, ".zshrc"),
     path.join(home, ".bashrc"),

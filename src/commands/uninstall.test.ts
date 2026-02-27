@@ -29,6 +29,14 @@ const mocks = vi.hoisted(() => ({
     killed: false,
     termination: "exit" as const,
   })),
+  readFile: vi.fn<(profilePath: string, encoding: string) => Promise<string>>(async () => {
+    throw new Error("ENOENT");
+  }),
+  writeFile: vi.fn<(profilePath: string, content: string, encoding: string) => Promise<void>>(
+    async () => {},
+  ),
+  homedir: vi.fn(() => "/actual/home"),
+  resolveHomeDir: vi.fn(() => "/override/home"),
 }));
 
 vi.mock("@clack/prompts", () => ({
@@ -65,6 +73,23 @@ vi.mock("../process/exec.js", () => ({
   runCommandWithTimeout: mocks.runCommandWithTimeout,
 }));
 
+vi.mock("node:fs/promises", () => ({
+  default: {
+    readFile: mocks.readFile,
+    writeFile: mocks.writeFile,
+  },
+}));
+
+vi.mock("node:os", () => ({
+  default: {
+    homedir: mocks.homedir,
+  },
+}));
+
+vi.mock("../utils.js", () => ({
+  resolveHomeDir: mocks.resolveHomeDir,
+}));
+
 import { uninstallCommand } from "./uninstall.js";
 
 function createRuntime() {
@@ -78,6 +103,9 @@ function createRuntime() {
 describe("uninstallCommand", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.readFile.mockImplementation(async () => {
+      throw new Error("ENOENT");
+    });
   });
 
   it("requires explicit scope in non-interactive mode", async () => {
@@ -120,5 +148,25 @@ describe("uninstallCommand", () => {
     expect(mocks.runCommandWithTimeout).toHaveBeenCalledWith(["npm", "rm", "-g", "openclaw"], {
       timeoutMs: 120_000,
     });
+  });
+
+  it("cleans completion traces with real home and windows-style completion paths", async () => {
+    const runtime = createRuntime();
+    mocks.readFile.mockImplementation(async (profilePath: string) => {
+      if (profilePath === "/actual/home/.zshrc") {
+        return '# keep\n. "$HOME\\completions\\openclaw.ps1"\n';
+      }
+      throw new Error("ENOENT");
+    });
+
+    await uninstallCommand(runtime, {
+      zap: true,
+      nonInteractive: true,
+      yes: true,
+    });
+
+    expect(mocks.readFile).toHaveBeenCalledWith("/actual/home/.zshrc", "utf-8");
+    expect(mocks.readFile).not.toHaveBeenCalledWith("/override/home/.zshrc", "utf-8");
+    expect(mocks.writeFile).toHaveBeenCalledWith("/actual/home/.zshrc", "# keep\n", "utf-8");
   });
 });
