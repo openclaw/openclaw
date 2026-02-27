@@ -983,9 +983,7 @@ async function withSessionStoreLock<T>(
   // Otherwise, a contended lock can never be considered reclaimable before we time out.
   const staleMsRaw = opts.staleMs ?? defaultStaleMs;
   const staleMs =
-    timeoutMs > 0 && Number.isFinite(timeoutMs)
-      ? Math.min(staleMsRaw, timeoutMs)
-      : staleMsRaw;
+    timeoutMs > 0 && Number.isFinite(timeoutMs) ? Math.min(staleMsRaw, timeoutMs) : staleMsRaw;
 
   // `pollIntervalMs` is retained for API compatibility with older lock options.
   void opts.pollIntervalMs;

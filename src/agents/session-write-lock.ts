@@ -495,9 +495,7 @@ export async function acquireSessionWriteLock(params: {
       const expDelayMs = Math.min(1000, baseDelayMs * 2 ** Math.min(10, attempt - 1));
       const jitter = 0.5 + Math.random(); // [0.5, 1.5)
       const delayMsRaw = expDelayMs * jitter;
-      const delayMs = Number.isFinite(remainingMs)
-        ? Math.min(remainingMs, delayMsRaw)
-        : delayMsRaw;
+      const delayMs = Number.isFinite(remainingMs) ? Math.min(remainingMs, delayMsRaw) : delayMsRaw;
       await new Promise((r) => setTimeout(r, delayMs));
     }
   }

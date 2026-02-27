@@ -2,10 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import {
-  clearSessionStoreCacheForTest,
-  withSessionStoreLockForTest,
-} from "./store.js";
+import { clearSessionStoreCacheForTest, withSessionStoreLockForTest } from "./store.js";
 
 describe("withSessionStoreLock", () => {
   it("defaults staleMs to <= timeoutMs so contended live locks can be reclaimed before timing out", async () => {
@@ -30,14 +27,10 @@ describe("withSessionStoreLock", () => {
       );
 
       await expect(
-        withSessionStoreLockForTest(
-          storePath,
-          async () => "ok",
-          {
-            timeoutMs: 100,
-            // Important: do NOT provide staleMs; this test asserts the default.
-          },
-        ),
+        withSessionStoreLockForTest(storePath, async () => "ok", {
+          timeoutMs: 100,
+          // Important: do NOT provide staleMs; this test asserts the default.
+        }),
       ).resolves.toBe("ok");
     } finally {
       clearSessionStoreCacheForTest();
