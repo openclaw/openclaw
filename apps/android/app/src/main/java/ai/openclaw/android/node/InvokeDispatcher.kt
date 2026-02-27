@@ -155,7 +155,8 @@ class InvokeDispatcher(
         code = "A2UI_HOST_NOT_CONFIGURED",
         message = "A2UI_HOST_NOT_CONFIGURED: gateway did not advertise canvas host",
       )
-    if (!a2uiHandler.ensureA2uiReady(a2uiUrl)) {
+    val readyOnFirstCheck = a2uiHandler.ensureA2uiReady(a2uiUrl)
+    if (!readyOnFirstCheck) {
       if (!refreshNodeCanvasCapability()) {
         return GatewaySession.InvokeResult.error(
           code = "A2UI_HOST_UNAVAILABLE",
@@ -167,12 +168,12 @@ class InvokeDispatcher(
           code = "A2UI_HOST_NOT_CONFIGURED",
           message = "A2UI_HOST_NOT_CONFIGURED: gateway did not advertise canvas host",
         )
-    }
-    if (!a2uiHandler.ensureA2uiReady(a2uiUrl)) {
-      return GatewaySession.InvokeResult.error(
-        code = "A2UI_HOST_UNAVAILABLE",
-        message = "A2UI_HOST_UNAVAILABLE: A2UI host not reachable",
-      )
+      if (!a2uiHandler.ensureA2uiReady(a2uiUrl)) {
+        return GatewaySession.InvokeResult.error(
+          code = "A2UI_HOST_UNAVAILABLE",
+          message = "A2UI_HOST_UNAVAILABLE: A2UI host not reachable",
+        )
+      }
     }
     return block()
   }
