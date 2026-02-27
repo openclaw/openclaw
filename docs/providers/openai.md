@@ -95,7 +95,28 @@ compaction payload hints:
 By default, `compact_threshold` is `70%` of model `contextWindow` (or `80000`
 when unavailable).
 
-You can override per model:
+### Enable server-side compaction explicitly
+
+Use this when you want to force `context_management` injection on compatible
+Responses models (for example Azure OpenAI Responses):
+
+```json5
+{
+  agents: {
+    defaults: {
+      models: {
+        "azure-openai-responses/gpt-4o": {
+          params: {
+            responsesServerCompaction: true,
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+### Enable with a custom threshold
 
 ```json5
 {
@@ -114,7 +135,27 @@ You can override per model:
 }
 ```
 
-Set `responsesServerCompaction: false` to disable this injection for a model.
+### Disable server-side compaction
+
+```json5
+{
+  agents: {
+    defaults: {
+      models: {
+        "openai/gpt-5": {
+          params: {
+            responsesServerCompaction: false,
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+`responsesServerCompaction` only controls `context_management` injection.
+Direct OpenAI Responses models still force `store: true` unless compat sets
+`supportsStore: false`.
 
 ## Notes
 

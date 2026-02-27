@@ -8,6 +8,7 @@ vi.mock("../../auto-reply/commands-registry.js", () => {
   const reportExternalCommand = { key: "reportexternal", nativeName: "reportexternal" };
   const reportLongCommand = { key: "reportlong", nativeName: "reportlong" };
   const unsafeConfirmCommand = { key: "unsafeconfirm", nativeName: "unsafeconfirm" };
+  const statusAliasCommand = { key: "status", nativeName: "status" };
   const periodArg = { name: "period", description: "period" };
   const baseReportPeriodChoices = [
     { value: "day", label: "day" },
@@ -73,6 +74,9 @@ vi.mock("../../auto-reply/commands-registry.js", () => {
       if (normalized === "unsafeconfirm") {
         return unsafeConfirmCommand;
       }
+      if (normalized === "agentstatus") {
+        return statusAliasCommand;
+      }
       return undefined;
     },
     listNativeCommandSpecsForConfig: () => [
@@ -110,6 +114,12 @@ vi.mock("../../auto-reply/commands-registry.js", () => {
         name: "unsafeconfirm",
         description: "UnsafeConfirm",
         acceptsArgs: true,
+        args: [],
+      },
+      {
+        name: "agentstatus",
+        description: "Status",
+        acceptsArgs: false,
         args: [],
       },
     ],
@@ -394,6 +404,7 @@ describe("Slack native command argument menus", () => {
   let reportExternalHandler: (args: unknown) => Promise<void>;
   let reportLongHandler: (args: unknown) => Promise<void>;
   let unsafeConfirmHandler: (args: unknown) => Promise<void>;
+  let agentStatusHandler: (args: unknown) => Promise<void>;
   let argMenuHandler: (args: unknown) => Promise<void>;
   let argMenuOptionsHandler: (args: unknown) => Promise<void>;
 
@@ -406,6 +417,7 @@ describe("Slack native command argument menus", () => {
     reportExternalHandler = requireHandler(harness.commands, "/reportexternal", "/reportexternal");
     reportLongHandler = requireHandler(harness.commands, "/reportlong", "/reportlong");
     unsafeConfirmHandler = requireHandler(harness.commands, "/unsafeconfirm", "/unsafeconfirm");
+    agentStatusHandler = requireHandler(harness.commands, "/agentstatus", "/agentstatus");
     argMenuHandler = requireHandler(harness.actions, "openclaw_cmdarg", "arg-menu action");
     argMenuOptionsHandler = requireHandler(harness.options, "openclaw_cmdarg", "arg-menu options");
   });
@@ -472,6 +484,11 @@ describe("Slack native command argument menus", () => {
     expect(dispatchMock).toHaveBeenCalledTimes(1);
     const call = dispatchMock.mock.calls[0]?.[0] as { ctx?: { Body?: string } };
     expect(call.ctx?.Body).toBe("/usage tokens");
+  });
+
+  it("maps /agentstatus to /status when dispatching", async () => {
+    await runCommandHandler(agentStatusHandler);
+    expectSingleDispatchedSlashBody("/status");
   });
 
   it("dispatches the command when a static_select option is chosen", async () => {
