@@ -19,6 +19,7 @@ import { PerformancePage } from "@/pages/PerformancePage";
 import { ProjectsPage } from "@/pages/ProjectsPage";
 import { SuppliersPage } from "@/pages/SuppliersPage";
 import { SupplyChainPage } from "@/pages/SupplyChainPage";
+import { TasksPage } from "@/pages/TasksPage";
 import { TimelinePage } from "@/pages/TimelinePage";
 import { WorkflowEditorPage } from "@/pages/WorkflowEditorPage";
 import { WorkflowsPage } from "@/pages/WorkflowsPage";
@@ -130,6 +131,11 @@ const onboardingRoute = createRoute({
   path: "/onboarding",
   component: OnboardingPage,
 });
+const tasksRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/tasks",
+  component: TasksPage,
+});
 const decisionsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/decisions",
@@ -180,6 +186,7 @@ const routeTree = rootRoute.addChildren([
   complianceRoute,
   marketingRoute,
   analyticsRoute,
+  tasksRoute,
   onboardingRoute,
   decisionsRoute,
   goalsRoute,

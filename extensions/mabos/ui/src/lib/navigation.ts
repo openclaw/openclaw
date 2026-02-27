@@ -13,11 +13,11 @@ import {
   ShieldCheck,
   Megaphone,
   LineChart,
-  Rocket,
   Bell,
   Target,
   GitBranch,
   Network,
+  ClipboardList,
 } from "lucide-react";
 
 export type NavItem = {
@@ -39,12 +39,14 @@ export const navSections: NavSection[] = [
       { icon: BarChart3, label: "Performance", path: "/performance" },
       { icon: Bell, label: "Decisions", path: "/decisions" },
       { icon: Target, label: "Goals", path: "/goals" },
+      { icon: LineChart, label: "Analytics", path: "/analytics" },
     ],
   },
   {
     title: "Process",
     items: [
       { icon: FolderKanban, label: "Projects", path: "/projects" },
+      { icon: ClipboardList, label: "Tasks", path: "/tasks" },
       { icon: Calendar, label: "Timeline", path: "/timeline" },
       { icon: GitBranch, label: "Workflows", path: "/workflows" },
     ],
@@ -57,12 +59,18 @@ export const navSections: NavSection[] = [
     ],
   },
   {
-    title: "Resources",
+    title: "Commerce",
+    items: [
+      { icon: ShoppingCart, label: "E-Commerce", path: "/ecommerce" },
+      { icon: Users, label: "Customers", path: "/customers" },
+      { icon: Megaphone, label: "Marketing", path: "/marketing" },
+      { icon: DollarSign, label: "Accounting", path: "/accounting" },
+    ],
+  },
+  {
+    title: "Operations",
     items: [
       { icon: Package, label: "Inventory", path: "/inventory" },
-      { icon: DollarSign, label: "Accounting", path: "/accounting" },
-      { icon: Users, label: "Customers", path: "/customers" },
-      { icon: ShoppingCart, label: "E-Commerce", path: "/ecommerce" },
       { icon: Building2, label: "Suppliers", path: "/suppliers" },
       { icon: Truck, label: "Supply Chain", path: "/supply-chain" },
     ],
@@ -72,9 +80,6 @@ export const navSections: NavSection[] = [
     items: [
       { icon: Scale, label: "Legal", path: "/legal" },
       { icon: ShieldCheck, label: "Compliance", path: "/compliance" },
-      { icon: Megaphone, label: "Marketing", path: "/marketing" },
-      { icon: LineChart, label: "Analytics", path: "/analytics" },
-      { icon: Rocket, label: "Onboarding", path: "/onboarding" },
     ],
   },
 ];

@@ -1,5 +1,14 @@
-import { Link, useRouterState } from "@tanstack/react-router";
-import { Cpu, ChevronsRight, ChevronsLeft, ChevronDown, Palette } from "lucide-react";
+import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
+import {
+  Cpu,
+  ChevronsRight,
+  ChevronsLeft,
+  ChevronDown,
+  ChevronUp,
+  Palette,
+  Plus,
+} from "lucide-react";
+import { useState, useRef, useEffect } from "react";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { usePanels } from "@/contexts/PanelContext";
 import { navSections } from "@/lib/navigation";
@@ -9,6 +18,21 @@ export function Sidebar() {
   const { sidebarMode, toggleSidebar } = usePanels();
   const routerState = useRouterState();
   const currentPath = routerState.location.pathname;
+  const navigate = useNavigate();
+  const [switcherOpen, setSwitcherOpen] = useState(false);
+  const switcherRef = useRef<HTMLDivElement>(null);
+
+  // Close switcher on click outside
+  useEffect(() => {
+    if (!switcherOpen) return;
+    function handleClick(e: MouseEvent) {
+      if (switcherRef.current && !switcherRef.current.contains(e.target as Node)) {
+        setSwitcherOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [switcherOpen]);
 
   const basepath = "/mabos/dashboard";
   const relativePath = currentPath.startsWith(basepath)
@@ -51,12 +75,40 @@ export function Sidebar() {
 
       {/* Business Switcher (expanded only) */}
       {!collapsed && (
-        <div className="px-4 mb-6">
-          <button className="flex items-center gap-3 px-3 py-2 w-full rounded-lg bg-[var(--bg-tertiary)] border border-[var(--border-mabos)] hover:border-[var(--border-hover)] transition-colors text-sm">
+        <div className="px-4 mb-6 relative" ref={switcherRef}>
+          <button
+            onClick={() => setSwitcherOpen(!switcherOpen)}
+            className="flex items-center gap-3 px-3 py-2 w-full rounded-lg bg-[var(--bg-tertiary)] border border-[var(--border-mabos)] hover:border-[var(--border-hover)] transition-colors text-sm"
+          >
             <Palette className="w-4 h-4 text-[var(--accent-purple)]" />
             <span className="flex-1 text-left text-[var(--text-primary)]">VividWalls</span>
-            <ChevronDown className="w-4 h-4 text-[var(--text-muted)]" />
+            {switcherOpen ? (
+              <ChevronUp className="w-4 h-4 text-[var(--text-muted)]" />
+            ) : (
+              <ChevronDown className="w-4 h-4 text-[var(--text-muted)]" />
+            )}
           </button>
+          {switcherOpen && (
+            <div className="absolute left-4 right-4 mt-1 rounded-lg bg-[var(--bg-tertiary)] border border-[var(--border-mabos)] shadow-lg z-50 overflow-hidden">
+              <div className="px-3 py-2 text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)] border-b border-[var(--border-mabos)]">
+                Businesses
+              </div>
+              <div className="flex items-center gap-3 px-3 py-2 text-sm text-[var(--accent-green)] bg-[color-mix(in_srgb,var(--accent-green)_8%,transparent)]">
+                <Palette className="w-4 h-4 text-[var(--accent-purple)]" />
+                <span>VividWalls</span>
+              </div>
+              <button
+                onClick={() => {
+                  setSwitcherOpen(false);
+                  navigate({ to: "/onboarding" });
+                }}
+                className="flex items-center gap-3 px-3 py-2 w-full text-sm text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] transition-colors border-t border-[var(--border-mabos)]"
+              >
+                <Plus className="w-4 h-4" />
+                <span>New Business</span>
+              </button>
+            </div>
+          )}
         </div>
       )}
 
