@@ -28,6 +28,8 @@ export type SubscribeEmbeddedPiSessionParams = {
   onPartialReply?: (payload: { text?: string; mediaUrls?: string[] }) => void | Promise<void>;
   onAssistantMessageStart?: () => void | Promise<void>;
   onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => void | Promise<void>;
+  /** Suppress assistant text deltas on global/callback agent events (for post-guard streaming). */
+  suppressAssistantAgentEvents?: boolean;
   enforceFinalTag?: boolean;
   config?: OpenClawConfig;
   sessionKey?: string;

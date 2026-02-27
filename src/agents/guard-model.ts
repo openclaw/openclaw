@@ -74,6 +74,7 @@ const OPENAI_COMPATIBLE_GUARD_APIS = new Set<ModelApi>([
   "openai-responses",
   "openai-codex-responses",
 ]);
+const RESPONSES_GUARD_APIS = new Set<ModelApi>(["openai-responses", "openai-codex-responses"]);
 const NON_OPENAI_COMPATIBLE_GUARD_PROVIDERS = new Set([
   "anthropic",
   "google",
@@ -89,6 +90,8 @@ export type GuardModelCompatibility = {
   api?: string;
   reason?: string;
 };
+
+type GuardEndpointKind = "chat-completions" | "responses";
 
 function resolveGuardModelCompatibility(params: {
   provider: string;
@@ -109,6 +112,7 @@ function resolveGuardModelCompatibility(params: {
     providerCfg && typeof providerCfg === "object" && "api" in providerCfg
       ? (providerCfg as { api?: string }).api
       : undefined;
+  let configuredCompatibleApi: ModelApi | undefined;
   if (configuredApi && !OPENAI_COMPATIBLE_GUARD_APIS.has(configuredApi as ModelApi)) {
     return {
       compatible: false,
@@ -116,12 +120,15 @@ function resolveGuardModelCompatibility(params: {
       reason: `provider API "${configuredApi}" is not OpenAI-compatible`,
     };
   }
+  if (configuredApi) {
+    configuredCompatibleApi = configuredApi as ModelApi;
+  }
 
   const resolved = resolveModel(params.provider, params.modelId, params.agentDir, params.cfg);
   if (!resolved.model) {
     // Unknown custom providers can still be OpenAI-compatible.
     // If we cannot positively identify a non-compatible API, allow the model ref.
-    return { compatible: true };
+    return { compatible: true, api: configuredCompatibleApi };
   }
 
   const api = resolved.model.api;
@@ -134,6 +141,85 @@ function resolveGuardModelCompatibility(params: {
   }
 
   return { compatible: true, api };
+}
+
+function resolveGuardEndpointKind(params: {
+  provider: string;
+  modelId: string;
+  cfg?: OpenClawConfig;
+  agentDir?: string;
+}): GuardEndpointKind {
+  const compatibility = resolveGuardModelCompatibility(params);
+  const api = compatibility.api as ModelApi | undefined;
+  if (api && RESPONSES_GUARD_APIS.has(api)) {
+    return "responses";
+  }
+  return "chat-completions";
+}
+
+function resolveGuardEndpointUrl(baseUrl: string, endpointKind: GuardEndpointKind): string {
+  const normalizedBase = baseUrl.trim().replace(/\/+$/, "");
+  if (endpointKind === "responses") {
+    return normalizedBase.endsWith("/responses") ? normalizedBase : `${normalizedBase}/responses`;
+  }
+  return normalizedBase.endsWith("/chat/completions")
+    ? normalizedBase
+    : `${normalizedBase}/chat/completions`;
+}
+
+function extractGuardReplyText(json: unknown, endpointKind: GuardEndpointKind): string | undefined {
+  if (!json || typeof json !== "object") {
+    return undefined;
+  }
+
+  if (endpointKind === "chat-completions") {
+    const choices = (json as { choices?: Array<{ message?: { content?: string } }> }).choices;
+    const replyText = choices?.[0]?.message?.content;
+    return typeof replyText === "string" ? replyText.trim() : undefined;
+  }
+
+  const responseJson = json as {
+    output_text?: unknown;
+    output?: unknown;
+  };
+  if (typeof responseJson.output_text === "string" && responseJson.output_text.trim()) {
+    return responseJson.output_text.trim();
+  }
+
+  const output = Array.isArray(responseJson.output) ? responseJson.output : [];
+  const parts: string[] = [];
+  for (const item of output) {
+    if (!item || typeof item !== "object") {
+      continue;
+    }
+    const itemRecord = item as { type?: unknown; text?: unknown; content?: unknown };
+    const itemType = typeof itemRecord.type === "string" ? itemRecord.type : "";
+
+    if (itemType === "output_text" && typeof itemRecord.text === "string" && itemRecord.text) {
+      parts.push(itemRecord.text);
+      continue;
+    }
+
+    if (itemType !== "message" || !Array.isArray(itemRecord.content)) {
+      continue;
+    }
+    for (const contentPart of itemRecord.content) {
+      if (!contentPart || typeof contentPart !== "object") {
+        continue;
+      }
+      const outputTextPart = contentPart as { type?: unknown; text?: unknown };
+      if (
+        outputTextPart.type === "output_text" &&
+        typeof outputTextPart.text === "string" &&
+        outputTextPart.text
+      ) {
+        parts.push(outputTextPart.text);
+      }
+    }
+  }
+
+  const joined = parts.join("\n").trim();
+  return joined || undefined;
 }
 
 // ─── Config resolution ──────────────────────────────────────────────────────
@@ -302,17 +388,35 @@ export async function evaluateGuard(
     log.warn(`guard model input truncated from ${content.length} to ${guardInput.content.length}`);
   }
 
-  const url = `${baseUrl}/chat/completions`;
-
-  const body = JSON.stringify({
-    model: config.modelId,
-    messages: [
-      { role: "system", content: GUARD_SYSTEM_PROMPT },
-      { role: "user", content: `Evaluate this assistant reply:\n\n${guardInput.content}` },
-    ],
-    max_tokens: 200,
-    temperature: 0,
+  const endpointKind = resolveGuardEndpointKind({
+    provider: config.provider,
+    modelId: config.modelId,
+    cfg: params?.cfg,
+    agentDir: params?.agentDir,
   });
+  const url = resolveGuardEndpointUrl(baseUrl, endpointKind);
+  const body =
+    endpointKind === "responses"
+      ? JSON.stringify({
+          model: config.modelId,
+          input: [
+            { role: "system", content: GUARD_SYSTEM_PROMPT },
+            { role: "user", content: `Evaluate this assistant reply:\n\n${guardInput.content}` },
+          ],
+          max_output_tokens: 200,
+          temperature: 0,
+          // Preserve Codex/OpenAI responses compatibility and avoid retention by default.
+          store: false,
+        })
+      : JSON.stringify({
+          model: config.modelId,
+          messages: [
+            { role: "system", content: GUARD_SYSTEM_PROMPT },
+            { role: "user", content: `Evaluate this assistant reply:\n\n${guardInput.content}` },
+          ],
+          max_tokens: 200,
+          temperature: 0,
+        });
 
   try {
     const controller = new AbortController();
@@ -337,11 +441,8 @@ export async function evaluateGuard(
         };
       }
 
-      const json = (await response.json()) as {
-        choices?: Array<{ message?: { content?: string } }>;
-      };
-
-      const replyText = json.choices?.[0]?.message?.content?.trim();
+      const json = (await response.json()) as unknown;
+      const replyText = extractGuardReplyText(json, endpointKind);
       if (!replyText) {
         log.warn("guard model returned empty response");
         return {

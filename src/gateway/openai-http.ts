@@ -1,8 +1,10 @@
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { resolveGuardModelConfig } from "../agents/guard-model.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { agentCommandFromIngress } from "../commands/agent.js";
 import type { ImageContent } from "../commands/agent/types.js";
+import { loadConfig } from "../config/config.js";
 import type { GatewayHttpChatCompletionsConfig } from "../config/types.gateway.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
 import { logWarn } from "../logger.js";
@@ -409,6 +411,14 @@ function resolveAgentResponseText(result: unknown): string {
   return content || "No response from OpenClaw.";
 }
 
+function shouldSuppressAssistantStreamingForGuard(): boolean {
+  try {
+    return Boolean(resolveGuardModelConfig(loadConfig()));
+  } catch {
+    return false;
+  }
+}
+
 export async function handleOpenAiHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,
@@ -471,6 +481,7 @@ export async function handleOpenAiHttpRequest(
 
   const runId = `chatcmpl_${randomUUID()}`;
   const deps = createDefaultDeps();
+  const suppressAssistantStreamingForGuard = shouldSuppressAssistantStreamingForGuard();
   const commandInput = buildAgentCommandInput({
     prompt: {
       message: prompt.message,
@@ -526,6 +537,9 @@ export async function handleOpenAiHttpRequest(
     }
 
     if (evt.stream === "assistant") {
+      if (suppressAssistantStreamingForGuard) {
+        return;
+      }
       const content = resolveAssistantStreamDeltaText(evt) ?? "";
       if (!content) {
         return;
@@ -549,6 +563,9 @@ export async function handleOpenAiHttpRequest(
     if (evt.stream === "lifecycle") {
       const phase = evt.data?.phase;
       if (phase === "end" || phase === "error") {
+        if (!sawAssistantDelta) {
+          return;
+        }
         closed = true;
         unsubscribe();
         writeDone(res);

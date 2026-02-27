@@ -8,10 +8,12 @@
 
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { resolveGuardModelConfig } from "../agents/guard-model.js";
 import type { ClientToolDefinition } from "../agents/pi-embedded-runner/run/params.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { agentCommandFromIngress } from "../commands/agent.js";
 import type { ImageContent } from "../commands/agent/types.js";
+import { loadConfig } from "../config/config.js";
 import type { GatewayHttpResponsesConfig } from "../config/types.gateway.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
 import { logWarn } from "../logger.js";
@@ -236,6 +238,14 @@ function createAssistantOutputItem(params: {
     content: [{ type: "output_text", text: params.text }],
     status: params.status,
   };
+}
+
+function shouldSuppressAssistantStreamingForGuard(): boolean {
+  try {
+    return Boolean(resolveGuardModelConfig(loadConfig()));
+  } catch {
+    return false;
+  }
 }
 
 async function runResponsesAgentCommand(params: {
@@ -471,6 +481,7 @@ export async function handleOpenResponsesHttpRequest(
   const responseId = `resp_${randomUUID()}`;
   const outputItemId = `msg_${randomUUID()}`;
   const deps = createDefaultDeps();
+  const suppressAssistantStreamingForGuard = shouldSuppressAssistantStreamingForGuard();
   const streamParams =
     typeof payload.max_output_tokens === "number"
       ? { maxTokens: payload.max_output_tokens }
@@ -670,6 +681,9 @@ export async function handleOpenResponsesHttpRequest(
     }
 
     if (evt.stream === "assistant") {
+      if (suppressAssistantStreamingForGuard) {
+        return;
+      }
       const content = resolveAssistantStreamDeltaText(evt);
       if (!content) {
         return;
@@ -690,10 +704,17 @@ export async function handleOpenResponsesHttpRequest(
 
     if (evt.stream === "lifecycle") {
       const phase = evt.data?.phase;
-      if (phase === "end" || phase === "error") {
+      if (phase === "error") {
         const finalText = accumulatedText || "No response from OpenClaw.";
-        const finalStatus = phase === "error" ? "failed" : "completed";
-        requestFinalize(finalStatus, finalText);
+        requestFinalize("failed", finalText);
+        return;
+      }
+      if (phase === "end") {
+        if (!sawAssistantDelta) {
+          return;
+        }
+        const finalText = accumulatedText || "No response from OpenClaw.";
+        requestFinalize("completed", finalText);
       }
     }
   });

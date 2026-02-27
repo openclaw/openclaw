@@ -15,6 +15,7 @@ const TEST_RUNTIME_CONFIG: OpenClawConfig = {
     providers: {
       [TEST_PROVIDER]: {
         baseUrl: "https://guard.example/v1",
+        api: "openai-completions",
         apiKey: "test-key",
         models: [],
       },
@@ -40,8 +41,27 @@ function jsonGuardReply(content: string): Response {
   );
 }
 
+function jsonResponsesGuardReply(content: string): Response {
+  return new Response(
+    JSON.stringify({
+      output: [
+        {
+          type: "message",
+          content: [{ type: "output_text", text: content }],
+        },
+      ],
+    }),
+    {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    },
+  );
+}
+
 function parseJsonRequestBody(init: RequestInit | undefined): {
   messages?: Array<{ role?: string; content?: string }>;
+  input?: Array<{ role?: string; content?: string }>;
+  store?: unknown;
 } {
   const body = init?.body;
   if (typeof body !== "string") {
@@ -49,6 +69,8 @@ function parseJsonRequestBody(init: RequestInit | undefined): {
   }
   return JSON.parse(body) as {
     messages?: Array<{ role?: string; content?: string }>;
+    input?: Array<{ role?: string; content?: string }>;
+    store?: unknown;
   };
 }
 
@@ -491,6 +513,64 @@ describe("guard-model", () => {
 
       expect(res.safe).toBe(true);
       expect(res.inputTruncated).toBe(true);
+    });
+
+    it("uses /responses endpoint + input payload for responses-compatible guard APIs", async () => {
+      const cfg: OpenClawConfig = {
+        models: {
+          providers: {
+            [TEST_PROVIDER]: {
+              baseUrl: "https://guard.example/v1",
+              api: "openai-responses",
+              apiKey: "test-key",
+              models: [],
+            },
+          },
+        },
+      };
+
+      vi.spyOn(globalThis, "fetch").mockImplementationOnce(async (url, init) => {
+        const requestUrl = typeof url === "string" ? url : url instanceof URL ? url.href : url.url;
+        expect(requestUrl).toBe("https://guard.example/v1/responses");
+        const request = parseJsonRequestBody(init);
+        expect(Array.isArray(request.input)).toBe(true);
+        expect(request.messages).toBeUndefined();
+        expect(request.store).toBe(false);
+        return jsonResponsesGuardReply('{"safe":false,"reason":"policy"}');
+      });
+
+      const res = await evaluateGuard("reply text", BASE_GUARD_CONFIG, { cfg });
+      expect(res.safe).toBe(false);
+      expect(res.reason).toBe("policy");
+      expect(res.source).toBe("classification");
+    });
+
+    it("uses baseUrl directly when it already points to responses endpoint", async () => {
+      const cfg: OpenClawConfig = {
+        models: {
+          providers: {
+            [TEST_PROVIDER]: {
+              baseUrl: "https://chatgpt.com/backend-api/codex/responses",
+              api: "openai-codex-responses",
+              apiKey: "test-key",
+              models: [],
+            },
+          },
+        },
+      };
+
+      vi.spyOn(globalThis, "fetch").mockImplementationOnce(async (url) => {
+        const requestUrl = typeof url === "string" ? url : url instanceof URL ? url.href : url.url;
+        expect(requestUrl).toBe("https://chatgpt.com/backend-api/codex/responses");
+        return new Response(JSON.stringify({ output_text: '{"safe":true}' }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      });
+
+      const res = await evaluateGuard("reply text", BASE_GUARD_CONFIG, { cfg });
+      expect(res.safe).toBe(true);
+      expect(res.source).toBe("classification");
     });
   });
 });

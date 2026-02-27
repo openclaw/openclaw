@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { HISTORY_CONTEXT_MARKER } from "../auto-reply/reply/history.js";
 import { CURRENT_MESSAGE_MARKER } from "../auto-reply/reply/mentions.js";
@@ -56,6 +58,15 @@ async function postChatCompletions(port: number, body: unknown, headers?: Record
     body: JSON.stringify(body),
   });
   return res;
+}
+
+async function writeGatewayConfig(config: Record<string, unknown>) {
+  const configPath = process.env.OPENCLAW_CONFIG_PATH;
+  if (!configPath) {
+    throw new Error("OPENCLAW_CONFIG_PATH is required for gateway config tests");
+  }
+  await fs.mkdir(path.dirname(configPath), { recursive: true });
+  await fs.writeFile(configPath, JSON.stringify(config, null, 2), "utf-8");
 }
 
 async function expectChatCompletionsDisabled(
@@ -759,6 +770,48 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         expect((stopChoice?.delta as Record<string, unknown> | undefined)?.content).toBe(
           "Error: internal error",
         );
+      }
+
+      {
+        try {
+          await writeGatewayConfig({
+            agents: {
+              defaults: {
+                guardModel: "openai/gpt-4o-mini",
+              },
+            },
+          });
+
+          agentCommand.mockClear();
+          agentCommand.mockImplementationOnce((async (opts: unknown) =>
+            buildAssistantDeltaResult({
+              opts,
+              emit: emitAgentEvent,
+              deltas: ["unsafe ", "delta"],
+              text: "guarded final",
+            })) as never);
+
+          const guardedRes = await postChatCompletions(port, {
+            stream: true,
+            model: "openclaw",
+            messages: [{ role: "user", content: "hi" }],
+          });
+          expect(guardedRes.status).toBe(200);
+
+          const guardedText = await guardedRes.text();
+          const guardedData = parseSseDataLines(guardedText);
+          const guardedChunks = guardedData
+            .filter((d) => d !== "[DONE]")
+            .map((d) => JSON.parse(d) as Record<string, unknown>);
+          const guardedContent = guardedChunks
+            .flatMap((c) => (c.choices as Array<Record<string, unknown>> | undefined) ?? [])
+            .map((choice) => (choice.delta as Record<string, unknown> | undefined)?.content)
+            .filter((v): v is string => typeof v === "string")
+            .join("");
+          expect(guardedContent).toBe("guarded final");
+        } finally {
+          await writeGatewayConfig({});
+        }
       }
     } finally {
       // shared server

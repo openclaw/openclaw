@@ -213,23 +213,25 @@ export function handleMessageUpdate(
     ctx.state.lastStreamedAssistantCleaned = cleanedText;
 
     if (shouldEmit) {
-      emitAgentEvent({
-        runId: ctx.params.runId,
-        stream: "assistant",
-        data: {
-          text: cleanedText,
-          delta: deltaText,
-          mediaUrls: hasMedia ? mediaUrls : undefined,
-        },
-      });
-      void ctx.params.onAgentEvent?.({
-        stream: "assistant",
-        data: {
-          text: cleanedText,
-          delta: deltaText,
-          mediaUrls: hasMedia ? mediaUrls : undefined,
-        },
-      });
+      if (ctx.state.shouldEmitAssistantAgentEvents) {
+        emitAgentEvent({
+          runId: ctx.params.runId,
+          stream: "assistant",
+          data: {
+            text: cleanedText,
+            delta: deltaText,
+            mediaUrls: hasMedia ? mediaUrls : undefined,
+          },
+        });
+        void ctx.params.onAgentEvent?.({
+          stream: "assistant",
+          data: {
+            text: cleanedText,
+            delta: deltaText,
+            mediaUrls: hasMedia ? mediaUrls : undefined,
+          },
+        });
+      }
       ctx.state.emittedAssistantUpdate = true;
       if (ctx.params.onPartialReply && ctx.state.shouldEmitPartialReplies) {
         void ctx.params.onPartialReply({
@@ -301,23 +303,25 @@ export function handleMessageEnd(
   }
 
   if (!ctx.state.emittedAssistantUpdate && (cleanedText || hasMedia)) {
-    emitAgentEvent({
-      runId: ctx.params.runId,
-      stream: "assistant",
-      data: {
-        text: cleanedText,
-        delta: cleanedText,
-        mediaUrls: hasMedia ? mediaUrls : undefined,
-      },
-    });
-    void ctx.params.onAgentEvent?.({
-      stream: "assistant",
-      data: {
-        text: cleanedText,
-        delta: cleanedText,
-        mediaUrls: hasMedia ? mediaUrls : undefined,
-      },
-    });
+    if (ctx.state.shouldEmitAssistantAgentEvents) {
+      emitAgentEvent({
+        runId: ctx.params.runId,
+        stream: "assistant",
+        data: {
+          text: cleanedText,
+          delta: cleanedText,
+          mediaUrls: hasMedia ? mediaUrls : undefined,
+        },
+      });
+      void ctx.params.onAgentEvent?.({
+        stream: "assistant",
+        data: {
+          text: cleanedText,
+          delta: cleanedText,
+          mediaUrls: hasMedia ? mediaUrls : undefined,
+        },
+      });
+    }
     ctx.state.emittedAssistantUpdate = true;
   }
 

@@ -823,11 +823,13 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
         onReasoningStream?: unknown;
         onBlockReply?: unknown;
         onBlockReplyFlush?: unknown;
+        suppressAssistantAgentEvents?: unknown;
       };
       expect(firstCall.onPartialReply).toBeUndefined();
       expect(firstCall.onReasoningStream).toBeUndefined();
       expect(firstCall.onBlockReply).toBeUndefined();
       expect(firstCall.onBlockReplyFlush).toBeUndefined();
+      expect(firstCall.suppressAssistantAgentEvents).toBe(true);
     });
   });
 
