@@ -1,4 +1,4 @@
-# Production Docker Compose for OpenClaw
+﻿# Production Docker Compose for OpenClaw
 # Hostinger VPS deployment with security hardening
 #
 # Usage:
@@ -32,9 +32,9 @@ services:
     
     # Ports: Bind to localhost only (127.0.0.1) for security
     # External access via Nginx reverse proxy on ports 80/443 with SSL
-    # Backend app port 50392 MUST NOT be exposed to external network
+    # Backend app port 18789 MUST NOT be exposed to external network
     ports:
-      - "127.0.0.1:${OPENCLAW_GATEWAY_PORT:-50392}:50392"
+      - "127.0.0.1:${OPENCLAW_GATEWAY_PORT:-18789}:18789"
     
     # Environment variables (DO NOT commit secrets here - use .env file)
     environment:
@@ -93,7 +93,7 @@ services:
     
     # Health check (matches Dockerfile HEALTHCHECK)
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:50392/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:18789/health"]
       interval: 30s
       timeout: 10s
       start_period: 40s

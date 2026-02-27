@@ -1,4 +1,4 @@
-# Implementation Summary: Production-Ready OpenClaw Deployment
+﻿# Implementation Summary: Production-Ready OpenClaw Deployment
 ## Secure Docker Container + CI/CD Pipeline + Hostinger VPS Setup
 
 **Date Completed:** February 23, 2026  
@@ -52,8 +52,8 @@ Production Environment: Hostinger VPS (Ubuntu 24.04 LTS)
 │
 ├─ Network Layer
 │  ├─ Firewall: Hostinger Cloud Firewall + UFW (disabled)
-│  ├─ Rules: ACCEPT 80/443/22, DROP 50392, DROP all others
-│  └─ Protection: Backend port 50392 NOT exposed to internet
+│  ├─ Rules: ACCEPT 80/443/22, DROP 18789, DROP all others
+│  └─ Protection: Backend port 18789 NOT exposed to internet
 │
 ├─ HTTPS/SSL Layer
 │  ├─ Reverse Proxy: Nginx (ports 80/443)
@@ -63,12 +63,12 @@ Production Environment: Hostinger VPS (Ubuntu 24.04 LTS)
 │
 ├─ Application Layer
 │  ├─ Docker Container: openclaw-sgnl-openclaw-1
-│  ├─ Port: 127.0.0.1:50392:50392 (localhost-only binding)
+│  ├─ Port: 127.0.0.1:18789:18789 (localhost-only binding)
 │  ├─ Security: Non-root user, read-only FS, cap_drop ALL
 │  └─ Health Check: /health endpoint (30s interval)
 │
 └─ Container Configuration
-   ├─ Image: ghcr.io/hostinger/hvps-openclaw:latest
+   ├─ Image: piboonsak/openclaw:latest
    ├─ CPU: 2 cores (limit), 0.5 cores (reservation)
    ├─ Memory: 2GB (limit), 512MB (reservation)
    ├─ Restart: always
@@ -78,9 +78,9 @@ Production Environment: Hostinger VPS (Ubuntu 24.04 LTS)
 #### Configuration Files Updated for Production
 
 **Container Configuration:**
-- ✅ `docker/Dockerfile.prod` — Port updated to 50392, healthcheck aligned
-- ✅ `docker/docker-compose.prod.yml` — Container name: `openclaw-sgnl-openclaw-1`, port `127.0.0.1:50392:50392`
-- ✅ `config/openclaw.prod.json5` — Gateway port: 50392, security policies configured
+- ✅ `docker/Dockerfile.prod` — Port updated to 18789, healthcheck aligned
+- ✅ `docker/docker-compose.prod.yml` — Container name: `openclaw-sgnl-openclaw-1`, port `127.0.0.1:18789:18789`
+- ✅ `config/openclaw.prod.json5` — Gateway port: 18789, security policies configured
 
 **Documentation:**
 - ✅ `docs/prepare_infra_openclaw_Hostinger.md` — Complete 14-phase infrastructure setup guide
@@ -99,9 +99,9 @@ Production Environment: Hostinger VPS (Ubuntu 24.04 LTS)
 - ✅ Health checks: HTTP 200 /health every 30s
 
 **Network Security:**
-- ✅ Backend port (50392) bound to 127.0.0.1 only (NOT 0.0.0.0)
+- ✅ Backend port (18789) bound to 127.0.0.1 only (NOT 0.0.0.0)
 - ✅ Nginx reverse proxy on public-facing ports (80/443)
-- ✅ Hostinger Cloud Firewall drops port 50392 from external
+- ✅ Hostinger Cloud Firewall drops port 18789 from external
 - ✅ HTTPS/SSL termination at Nginx layer
 - ✅ HTTP redirects to HTTPS (HSTS headers)
 
@@ -121,7 +121,7 @@ Production Environment: Hostinger VPS (Ubuntu 24.04 LTS)
 - ✅ Rule 1: ACCEPT TCP 80 (HTTP redirect)
 - ✅ Rule 2: ACCEPT TCP 443 (HTTPS/WebSocket)
 - ✅ Rule 3: ACCEPT TCP 22 (SSH admin)
-- ✅ Rule 4: DROP TCP 50392 (backend isolation)
+- ✅ Rule 4: DROP TCP 18789 (backend isolation)
 - ✅ Rule 5: DROP ALL other traffic (default deny)
 
 #### Issues Encountered and Resolved
@@ -131,8 +131,8 @@ Production Environment: Hostinger VPS (Ubuntu 24.04 LTS)
    - Timeline: 15-30 minutes typical, up to 48 hours worst case
    - Verification: https://dnschecker.org
 
-2. **Port Security (50392 exposure prevention)**
-   - ✅ Resolved: Docker binding changed to 127.0.0.1:50392:50392
+2. **Port Security (18789 exposure prevention)**
+   - ✅ Resolved: Docker binding changed to 127.0.0.1:18789:18789
    - Security: Port NOT accessible from external network
    - Firewall: Explicit DROP rule in Hostinger Cloud Firewall
 
@@ -142,7 +142,7 @@ Production Environment: Hostinger VPS (Ubuntu 24.04 LTS)
    - Protocol: HTTP/1.1 101 Switching Protocols confirmed
 
 4. **Container Port Mapping**
-   - ✅ Resolved: Updated from 18789 → 50392 across all files
+   - ✅ Resolved: Standardized on 18789 across all files
    - Files Updated: Dockerfile, docker-compose, config, documentation
    - Consistency: All port references aligned with infrastructure spec
 
@@ -160,7 +160,7 @@ Production Environment: Hostinger VPS (Ubuntu 24.04 LTS)
 3. Deploy via Hostinger Docker Manager:
    - Image: piboonsak/openclaw:latest
    - Container name: openclaw-sgnl-openclaw-1
-   - Port: 127.0.0.1:50392:50392
+   - Port: 127.0.0.1:18789:18789
    - Env vars: OPENCLAW_GATEWAY_TOKEN, ANTHROPIC_API_KEY, NODE_ENV=production
    - Volumes: /data/openclaw/state, /data/openclaw/workspace
 4. Firewall configuration (complete)
@@ -187,7 +187,7 @@ Production Environment: Hostinger VPS (Ubuntu 24.04 LTS)
 - **Runtime stage:** Minimal Node.js 22 Bookworm Slim, production dependencies only
 - **Security:** Non-root user (openclaw:1000), read-only filesystem compatible, no secrets
 - **Health check:** HTTP endpoint on `/health`
-- **Entrypoint:** `node openclaw.mjs gateway --allow-unconfigured --bind lan --port 50392`
+- **Entrypoint:** `node openclaw.mjs gateway --allow-unconfigured --bind lan --port 18789`
 
 **Build command:**
 ```bash
@@ -203,7 +203,7 @@ docker build -f docker/Dockerfile.prod -t piboonsak/openclaw:latest .
 **Purpose:** Production orchestration with complete security configuration.
 
 **Key Features:**
-- **Service:** openclaw-gateway on port 50392
+- **Service:** openclaw-gateway on port 18789
 - **Security opts:** read_only: true, no-new-privileges, cap_drop: ALL
 - **Resource limits:** 2 CPUs, 2GB memory, 200 PIDs
 - **Volumes:** Named volumes (openclaw-state, openclaw-workspace), tmpfs for /tmp
@@ -275,7 +275,7 @@ docker-compose -f docker-compose.prod.yml up -d
 
 **Gateway:**
 - Bind: LAN (0.0.0.0)
-- Port: 50392
+- Port: 18789
 - Auth: Token via environment variable
 - Dangerous node commands denied: camera.snap, screen.record, contacts.add, etc.
 
@@ -489,8 +489,8 @@ Image:        piboonsak/openclaw:latest
 
 **Port Mapping:**
 ```
-External: 50392
-Internal: 50392
+External: 18789
+Internal: 18789
 Protocol: TCP
 ```
 
@@ -527,7 +527,7 @@ Memory Limit:    2GB
 CPU Limit:       2 cores
 Restart Policy:  always
 Health Check:    Enabled
-  - Endpoint:    http://localhost:50392/health
+  - Endpoint:    http://localhost:18789/health
   - Interval:    30s
   - Timeout:     10s
   - Retries:     3
@@ -548,7 +548,7 @@ In Docker Manager:
 - Click service → **Logs** tab
 - Look for:
   ```
-  Gateway started on port 50392
+  Gateway started on port 18789
   Model providers initialized: anthropic
   Health endpoint available at /health
   ```
@@ -599,11 +599,11 @@ docker run --rm -it \
   -e OPENCLAW_GATEWAY_TOKEN="8b7c3329e9a1b6d4f0c5e2a98d7b1f4c6e8a2d5b9f3c7e1a4d6b8f0c3e5a7b2d" \
   -e ANTHROPIC_API_KEY="sk-ant-api03-..." \
   -e NODE_ENV="production" \
-  -p 127.0.0.1:50392:50392 \
+  -p 127.0.0.1:18789:18789 \
   piboonsak/openclaw:latest
 
 # Test health endpoint
-curl http://localhost:50392/health
+curl http://localhost:18789/health
 ```
 
 ### Deploy with docker-compose (Alternative to Hostinger UI)
@@ -657,7 +657,7 @@ After deployment, verify all security measures are in place:
 ### Network Security
 - [ ] HTTPS enabled with valid Let's Encrypt certificate
 - [ ] Gateway requires token authentication
-- [ ] Port 50392 is properly forwarded
+- [ ] Port 18789 is properly forwarded
 - [ ] No unnecessary ports are exposed
 
 ### Application Security
@@ -701,7 +701,7 @@ After deployment, verify all security measures are in place:
 **Resolution:**
 1. Check Docker Manager → Logs for error details
 2. Verify all required env vars are set
-3. Ensure no other service uses port 50392
+3. Ensure no other service uses port 18789
 
 ### Issue: Can't access https://openclaw.yahwan.biz/
 
@@ -719,7 +719,7 @@ nslookup openclaw.yahwan.biz
 curl -I https://openclaw.yahwan.biz/
 
 # Check port (via SSH on VPS)
-ss -ltnp | grep 50392
+ss -ltnp | grep 18789
 ```
 
 ### Issue: AI model returns errors
@@ -801,15 +801,15 @@ Use this checklist to track your deployment progress:
 
 ### Infrastructure Setup (February 23, 2026)
 - [x] Complete infrastructure documentation created
-- [x] Production Dockerfile created with port 50392
+- [x] Production Dockerfile created with port 18789
 - [x] Production docker-compose.yml configured
 - [x] Container name set to: openclaw-sgnl-openclaw-1
-- [x] Port binding: 127.0.0.1:50392:50392 (localhost-only)
+- [x] Port binding: 127.0.0.1:18789:18789 (localhost-only)
 - [x] All security options configured (non-root, read-only, cap_drop)
-- [x] Health check aligned to port 50392
+- [x] Health check aligned to port 18789
 - [x] Config files synchronized to production values
 - [x] Nginx reverse proxy architecture documented
-- [x] Firewall rules documented (ACCEPT 80/443/22, DROP 50392, DROP others)
+- [x] Firewall rules documented (ACCEPT 80/443/22, DROP 18789, DROP others)
 - [x] DNS migration plan: Squarespace → Hostinger
 - [x] SSL/TLS setup: Let's Encrypt + Certbot
 - [x] WebSocket support verified in Nginx config
@@ -855,7 +855,7 @@ Use this checklist to track your deployment progress:
 - [ ] Documentation reviewed and updated
 
 **Progress:** 13/48 items completed (Infrastructure Complete ✅ | Deployment Pending ⏳)
-
+ 
 ---
 
 **Status:** ✅ Infrastructure Ready | ⏳ Awaiting Docker Hub Push and Hostinger Deployment  

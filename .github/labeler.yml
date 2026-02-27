@@ -172,6 +172,7 @@
           - "docker-compose.yml"
           - "docker-setup.sh"
           - ".dockerignore"
+          - "docker/**"
           - "scripts/**/*docker*"
           - "scripts/**/Dockerfile*"
           - "scripts/sandbox-*.sh"

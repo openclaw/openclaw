@@ -1,4 +1,4 @@
-# OpenClaw Gateway Infrastructure Setup — Production Grade
+﻿# OpenClaw Gateway Infrastructure Setup — Production Grade
 ## Hostinger VPS Deployment with DNS Migration, Docker, Nginx Reverse Proxy, SSL/TLS, and Firewall Hardening
 
 **Document Version:** 1.0  
@@ -70,13 +70,13 @@ Nginx Reverse Proxy (Listening: 0.0.0.0:443 / 0.0.0.0:80)
    │ └─ Headers: Upgrade, Connection (WebSocket)
    │
    ▼
-Localhost Internal (127.0.0.1:50392)
-   │ └─ Firewall blocks external access to port 50392
+Localhost Internal (127.0.0.1:18789)
+   │ └─ Firewall blocks external access to port 18789
    │
    ▼
-Docker Container (ghcr.io/hostinger/hvps-openclaw:latest)
+Docker Container (piboonsak/openclaw:latest)
    └─ Container Name: openclaw-sgnl-openclaw-1
-   └─ App Port: 50392 (internal, HTTP only)
+   └─ App Port: 18789 (internal, HTTP only)
 ```
 
 ### Key Infrastructure Details
@@ -88,8 +88,8 @@ Docker Container (ghcr.io/hostinger/hvps-openclaw:latest)
 | **Public IPv4** | 76.13.210.250 | External IP (OpenClaw.yahwan.biz) |
 | **OS** | Ubuntu 24.04 LTS | Long-term support |
 | **SSH User** | root | Administrative access |
-| **Docker Image** | ghcr.io/hostinger/hvps-openclaw:latest | Container registry |
-| **Container Port** | 50392 | Internal (NOT exposed externally) |
+| **Docker Image** | piboonsak/openclaw:latest | Container registry |
+| **Container Port** | 18789 | Internal (NOT exposed externally) |
 | **Reverse Proxy** | Nginx | HTTP/HTTPS termination |
 | **SSL Provider** | Let's Encrypt | Free, auto-renewable certificates |
 | **Firewall** | Hostinger Cloud Firewall | Network perimeter security |
@@ -110,7 +110,7 @@ Docker Container (ghcr.io/hostinger/hvps-openclaw:latest)
 - DNS must resolve before Certbot can validate domain ownership
 - Docker provides container isolation before exposing via Nginx
 - Nginx acts as HTTPS terminator, protecting Docker app
-- Firewall rules restrict backend port access (port 50392 must NOT be public)
+- Firewall rules restrict backend port access (port 18789 must NOT be public)
 
 ---
 
@@ -400,13 +400,13 @@ docker run hello-world
 **Pull the latest OpenClaw image:**
 
 ```bash
-docker pull ghcr.io/hostinger/hvps-openclaw:latest
+docker pull piboonsak/openclaw:latest
 
 # Expected output:
-# latest: Pulling from hostinger/hvps-openclaw
+# latest: Pulling from piboonsak/openclaw
 # [Download progress...]
 # Digest: sha256:... (verify hash matches release notes)
-# Status: Downloaded newer image for ghcr.io/hostinger/hvps-openclaw:latest
+# Status: Downloaded newer image for piboonsak/openclaw:latest
 ```
 
 **Run the container (with port mapping to internal loopback):**
@@ -415,14 +415,14 @@ docker pull ghcr.io/hostinger/hvps-openclaw:latest
 docker run -d \
     --name openclaw-sgnl-openclaw-1 \
     --restart=always \
-    -p 127.0.0.1:50392:50392 \
-    ghcr.io/hostinger/hvps-openclaw:latest
+    -p 127.0.0.1:18789:18789 \
+    piboonsak/openclaw:latest
 
 # Expected output:
 # Container ID: [long hash]
 ```
 
-**⚠️ CRITICAL:** Port mapping is `127.0.0.1:50392:50392` — this binds ONLY to localhost, not to external interfaces. External access will be via Nginx on ports 80/443 only.
+**⚠️ CRITICAL:** Port mapping is `127.0.0.1:18789:18789` — this binds ONLY to localhost, not to external interfaces. External access will be via Nginx on ports 80/443 only.
 
 ### 3.3 Verify Container Is Running
 
@@ -431,7 +431,7 @@ docker ps --format "table {{.Names}}\t{{.Image}}\t{{.Ports}}"
 
 # Expected output:
 # NAMES                          IMAGE                                   PORTS
-# openclaw-sgnl-openclaw-1       ghcr.io/hostinger/hvps-openclaw:latest 127.0.0.1:50392->50392/tcp
+# openclaw-sgnl-openclaw-1       piboonsak/openclaw:latest 127.0.0.1:18789->18789/tcp
 ```
 
 **Check container logs:**
@@ -445,11 +445,11 @@ docker logs openclaw-sgnl-openclaw-1 --tail 20
 **Test local connectivity:**
 
 ```bash
-curl -s http://127.0.0.1:50392/health | jq .
+curl -s http://127.0.0.1:18789/health | jq .
 # Expected: JSON response with status: "ok"
 
 # Or without jq:
-curl -v http://127.0.0.1:50392/health
+curl -v http://127.0.0.1:18789/health
 # Expected: HTTP/1.1 200 OK
 ```
 
@@ -458,12 +458,12 @@ curl -v http://127.0.0.1:50392/health
 **Verify port is NOT listening on external interfaces:**
 
 ```bash
-ss -tlnp | grep 50392
+ss -tlnp | grep 18789
 
 # Expected output (localhost ONLY):
-# LISTEN 0 128 127.0.0.1:50392 0.0.0.0:* users:(("docker-proxy",pid=XXXX,fd=4))
+# LISTEN 0 128 127.0.0.1:18789 0.0.0.0:* users:(("docker-proxy",pid=XXXX,fd=4))
 
-# If output shows 0.0.0.0:50392, the container is exposed to the internet — SECURITY RISK!
+# If output shows 0.0.0.0:18789, the container is exposed to the internet — SECURITY RISK!
 ```
 
 ---
@@ -501,8 +501,8 @@ server {
 
     # Reverse Proxy to Local Docker Container
     location / {
-        # Pass requests to localhost:50392 (Docker container)
-        proxy_pass http://127.0.0.1:50392;
+        # Pass requests to localhost:18789 (Docker container)
+        proxy_pass http://127.0.0.1:18789;
         proxy_buffering off;
 
         # Standard proxy headers (HTTP)
@@ -527,7 +527,7 @@ server {
 
     # Health check endpoint (for monitoring)
     location /health {
-        proxy_pass http://127.0.0.1:50392/health;
+        proxy_pass http://127.0.0.1:18789/health;
         proxy_set_header Host $host;
         access_log off;
     }
@@ -756,12 +756,12 @@ Source:    Any (0.0.0.0/0)  [Optional: limit to office IP for production]
 Direction: Inbound
 ```
 
-#### Rule 4: DENY Docker Port (port 50392)
+#### Rule 4: DENY Docker Port (port 18789)
 
 ```
 Action:    DROP
 Protocol:  TCP
-Port:      50392
+Port:      18789
 Source:    Any (0.0.0.0/0)
 Direction: Inbound
 ```
@@ -787,7 +787,7 @@ Rule #  Action  Protocol  Port    Source  Direction
 1       ACCEPT  TCP       80      Any     Inbound
 2       ACCEPT  TCP       443     Any     Inbound
 3       ACCEPT  TCP       22      Any     Inbound
-4       DROP    TCP       50392   Any     Inbound
+4       DROP    TCP       18789   Any     Inbound
 5       DROP    ANY       ANY     Any     Inbound
 ```
 
@@ -916,8 +916,8 @@ curl -s https://openclaw.yahwan.biz/health | jq '.status'
 **From external machine (not VPS):**
 
 ```bash
-# Try to connect directly to port 50392 (should be refused)
-timeout 5 bash -c '</dev/tcp/76.13.210.250/50392' 2>&1 | grep -i "refused\|timeout"
+# Try to connect directly to port 18789 (should be refused)
+timeout 5 bash -c '</dev/tcp/76.13.210.250/18789' 2>&1 | grep -i "refused\|timeout"
 
 # Expected: "Connection refused" or timeout (indicating firewall DROP)
 # (If you see connection accepted, firewall rule failed — SECURITY ISSUE)
@@ -927,7 +927,7 @@ timeout 5 bash -c '</dev/tcp/76.13.210.250/50392' 2>&1 | grep -i "refused\|timeo
 
 ```bash
 # This SHOULD work (internal access)
-curl -s http://127.0.0.1:50392/health | jq .
+curl -s http://127.0.0.1:18789/health | jq .
 
 # Expected: Health status JSON
 ```
@@ -1000,7 +1000,7 @@ The server encountered a temporary error and could not complete your request.
 **Root Cause:**
 - Nginx reverse proxy misconfiguration (missing WebSocket headers)
 - Docker container not listening on configured port
-- Firewall blocking localhost:50392 access
+- Firewall blocking localhost:18789 access
 - Container port mapping incorrect (e.g., bound to 0.0.0.0 instead of 127.0.0.1)
 
 **Resolution Steps:**
@@ -1021,14 +1021,14 @@ docker logs openclaw-sgnl-openclaw-1 | tail -50
 **Step 2: Test local connectivity to Docker**
 
 ```bash
-# From VPS, test internal:50392
-curl -v http://127.0.0.1:50392/
+# From VPS, test internal:18789
+curl -v http://127.0.0.1:18789/
 
 # Expected:
 # HTTP/1.1 200 OK
 # (or appropriate response from application)
 
-# If connection refused or timeout, container app not responding on port 50392
+# If connection refused or timeout, container app not responding on port 18789
 ```
 
 **Step 3: Verify port mapping is correct**
@@ -1036,10 +1036,10 @@ curl -v http://127.0.0.1:50392/
 ```bash
 docker port openclaw-sgnl-openclaw-1
 # Expected output:
-# 50392/tcp -> 127.0.0.1:50392
+# 18789/tcp -> 127.0.0.1:18789
 
 # If output shows:
-# 50392/tcp -> 0.0.0.0:50392
+# 18789/tcp -> 0.0.0.0:18789
 # Then container is exposed to internet — SECURITY ISSUE (must be 127.0.0.1)
 ```
 
@@ -1120,7 +1120,7 @@ proxy_connect_timeout 604800;  # 7 days for persistent connections
 ```nginx
 # Full location block for WebSocket support:
 location / {
-    proxy_pass http://127.0.0.1:50392;
+    proxy_pass http://127.0.0.1:18789;
     proxy_buffering off;
 
     proxy_set_header Host $host;
@@ -1247,23 +1247,23 @@ curl -I https://openclaw.yahwan.biz/
 
 ---
 
-### Issue 5: Backend Port 50392 Publicly Accessible (SECURITY ISSUE)
+### Issue 5: Backend Port 18789 Publicly Accessible (SECURITY ISSUE)
 
 **Symptoms:**
 ```
 # From external machine:
-curl http://76.13.210.250:50392/health
+curl http://76.13.210.250:18789/health
 # Expected: Connection refused
 # Actual: Get 200 OK (SECURITY ISSUE)
 
 # Or port scan shows port open:
-nmap 76.13.210.250 | grep 50392
-# 50392/tcp open
+nmap 76.13.210.250 | grep 18789
+# 18789/tcp open
 ```
 
 **Root Cause:**
-- Docker container port mapped to `0.0.0.0:50392` instead of `127.0.0.1:50392`
-- Firewall rule for port 50392 is ACCEPT instead of DROP
+- Docker container port mapped to `0.0.0.0:18789` instead of `127.0.0.1:18789`
+- Firewall rule for port 18789 is ACCEPT instead of DROP
 - Container ran with `--network host` flag
 
 **Critical Security Impact:**
@@ -1285,7 +1285,7 @@ docker rm openclaw-sgnl-openclaw-1
 
 ```bash
 # Should get connection refused
-curl http://76.13.210.250:50392/health 2>&1 | grep -i "refused\|timeout"
+curl http://76.13.210.250:18789/health 2>&1 | grep -i "refused\|timeout"
 ```
 
 **Step 3: Redeploy with correct port mapping**
@@ -1294,26 +1294,26 @@ curl http://76.13.210.250:50392/health 2>&1 | grep -i "refused\|timeout"
 docker run -d \
     --name openclaw-sgnl-openclaw-1 \
     --restart=always \
-    -p 127.0.0.1:50392:50392 \
-    ghcr.io/hostinger/hvps-openclaw:latest
+    -p 127.0.0.1:18789:18789 \
+    piboonsak/openclaw:latest
     # ^^^ CRITICAL: 127.0.0.1 not 0.0.0.0
 ```
 
 **Step 4: Verify port is internal only**
 
 ```bash
-ss -tlnp | grep 50392
-# Expected: 127.0.0.1:50392 (listen address), NOT 0.0.0.0:50392
+ss -tlnp | grep 18789
+# Expected: 127.0.0.1:18789 (listen address), NOT 0.0.0.0:18789
 
 docker port openclaw-sgnl-openclaw-1
-# Expected: 50392/tcp -> 127.0.0.1:50392
+# Expected: 18789/tcp -> 127.0.0.1:18789
 ```
 
 **Step 5: Test external access is blocked**
 
 ```bash
 # From external machine (not VPS):
-timeout 5 bash -c '</dev/tcp/76.13.210.250/50392' 2>&1 | tail -5
+timeout 5 bash -c '</dev/tcp/76.13.210.250/18789' 2>&1 | tail -5
 # Expected: "Connection refused" or timeout
 # Error is desired here
 ```
@@ -1324,7 +1324,7 @@ In Hostinger hPanel Firewall, confirm:
 
 ```
 Rule #  Action  Protocol  Port    Source  Direction
-4       DROP    TCP       50392   Any     Inbound
+4       DROP    TCP       18789   Any     Inbound
 ```
 
 ---
@@ -1352,11 +1352,11 @@ Use this checklist to verify all infrastructure components are correctly deploye
 
 ### Docker Deployment
 - [ ] Docker daemon running: `systemctl status docker`
-- [ ] OpenClaw image pulled: `docker images | grep hvps-openclaw`
+- [ ] OpenClaw image pulled: `docker images | grep piboonsak/openclaw`
 - [ ] Container running: `docker ps | grep openclaw-sgnl-openclaw-1`
-- [ ] Container port binding correct: `docker port openclaw-sgnl-openclaw-1` shows 127.0.0.1:50392
-- [ ] Local connectivity works: `curl -s http://127.0.0.1:50392/health | jq .`
-- [ ] Backend port NOT public: `ss -tlnp | grep 50392` shows 127.0.0.1 only
+- [ ] Container port binding correct: `docker port openclaw-sgnl-openclaw-1` shows 127.0.0.1:18789
+- [ ] Local connectivity works: `curl -s http://127.0.0.1:18789/health | jq .`
+- [ ] Backend port NOT public: `ss -tlnp | grep 18789` shows 127.0.0.1 only
 
 ### Nginx Reverse Proxy
 - [ ] Nginx installed: `nginx -v`
@@ -1384,7 +1384,7 @@ Use this checklist to verify all infrastructure components are correctly deploye
 - [ ] Rule 1 (Allow HTTP 80): Configured and enabled
 - [ ] Rule 2 (Allow HTTPS 443): Configured and enabled
 - [ ] Rule 3 (Allow SSH 22): Configured and enabled
-- [ ] Rule 4 (Drop port 50392): Configured and enabled (CRITICAL)
+- [ ] Rule 4 (Drop port 18789): Configured and enabled (CRITICAL)
 - [ ] Rule 5 (Default Deny): Configured and enabled
 - [ ] UFW disabled: `ufw status` shows "inactive"
 
@@ -1397,7 +1397,7 @@ Use this checklist to verify all infrastructure components are correctly deploye
 - [ ] TLS 1.2+: `echo | openssl s_client ... | grep Protocol` shows TLSv1.2+
 
 ### Security Verification
-- [ ] Backend port blocked: `timeout 5 bash -c '</dev/tcp/76.13.210.250/50392'` returns error
+- [ ] Backend port blocked: `timeout 5 bash -c '</dev/tcp/76.13.210.250/18789'` returns error
 - [ ] Only ports 22, 80, 443 accessible externally
 - [ ] Nginx logs show no 502 errors: `grep -c "502 Bad Gateway" /var/log/nginx/access.log` returns 0
 - [ ] Container logs show no startup errors: `docker logs openclaw-sgnl-openclaw-1 | grep -i error` empty
@@ -1435,7 +1435,7 @@ Use this checklist to verify all infrastructure components are correctly deploye
 │  ACCEPT: TCP 80 (HTTP to HTTPS redirect)                │
 │  ACCEPT: TCP 443 (HTTPS, OpenClaw Gateway)              │
 │  ACCEPT: TCP 22 (SSH, admin access)                     │
-│  DROP:   TCP 50392 (backend port, NOT public)           │
+│  DROP:   TCP 18789 (backend port, NOT public)           │
 │  DROP:   ALL OTHER (default deny)                       │
 │                                                           │
 └──────────────────────────────────────────────────────────┘
@@ -1450,7 +1450,7 @@ Use this checklist to verify all infrastructure components are correctly deploye
 │  │                                                     │  │
 │  │  - HTTPS Termination (SSL/TLS)                     │  │
 │  │  - Let's Encrypt Certificate (auto-renewed)        │  │
-│  │  - Reverse proxy to localhost:50392                │  │
+│  │  - Reverse proxy to localhost:18789                │  │
 │  │  - WebSocket upgrade headers (Upgrade, Connection) │  │
 │  │  - Security headers (HSTS, X-Frame-Options, etc.)  │  │
 │  │  - HTTP → HTTPS redirect                           │  │
@@ -1458,25 +1458,25 @@ Use this checklist to verify all infrastructure components are correctly deploye
 │  │  ServerName: openclaw.yahwan.biz                   │  │
 │  └───────────────────┬────────────────────────────────┘  │
 │                      │                                    │
-│                      │ (localhost:50392, internal only)   │
+│                      │ (localhost:18789, internal only)   │
 │                      ▼                                    │
 │  ┌────────────────────────────────────────────────────┐  │
 │  │  Docker Container Runtime (docker-ce)              │  │
 │  │                                                     │  │
 │  │  Container: openclaw-sgnl-openclaw-1               │  │
-│  │  Image: ghcr.io/hostinger/hvps-openclaw:latest    │  │
-│  │  Port Mapping: 127.0.0.1:50392 → :50392           │  │
+│  │  Image: piboonsak/openclaw:latest    │  │
+│  │  Port Mapping: 127.0.0.1:18789 → :18789           │  │
 │  │  Restart Policy: always                             │  │
 │  │                                                     │  │
 │  │  ┌──────────────────────────────────────────────┐  │  │
 │  │  │  OpenClaw Gateway Application                │  │  │
-│  │  │  - WebSocket server (:50392/ws)              │  │  │
-│  │  │  - Health check (:50392/health)              │  │  │
+│  │  │  - WebSocket server (:18789/ws)              │  │  │
+│  │  │  - Health check (:18789/health)              │  │  │
 │  │  │  - Message routing                           │  │  │
 │  │  │  - Session management                        │  │  │
 │  │  │  - Multi-channel integration (WhatsApp, etc.)│  │  │
 │  │  │                                              │  │  │
-│  │  │  ⚠️ CRITICAL: Port 50392 NOT exposed         │  │  │
+│  │  │  ⚠️ CRITICAL: Port 18789 NOT exposed         │  │  │
 │  │  │              to external network             │  │  │
 │  │  └──────────────────────────────────────────────┘  │  │
 │  │                                                     │  │
@@ -1492,8 +1492,8 @@ Connection Flow (HTTPS):
 3. TCP Handshake: 76.13.210.250:443
 4. Firewall: ACCEPT (rule #2)
 5. Nginx: TLS handshake, certificate validation
-6. Nginx Proxy: Forward to 127.0.0.1:50392
-7. Docker: Receive request on :50392
+6. Nginx Proxy: Forward to 127.0.0.1:18789
+7. Docker: Receive request on :18789
 8. App: Process request
 9. Response flow: Reverse of above
 ```
@@ -1545,7 +1545,7 @@ DNS Query Resolution:
 │                  (Internet clients / public)                          │
 │                                                                       │
 │  HTTP/HTTPS Traffic                  Attack Vectors Blocked:         │
-│  ├─ Browser clients                  ├─ Direct port 50392 access ✅   │
+│  ├─ Browser clients                  ├─ Direct port 18789 access ✅   │
 │  ├─ Mobile apps                      ├─ SSH brute force (outside 22) ✅
 │  ├─ Third-party integrations         ├─ Port scanning (firewall drops) ✅
 │  └─ Monitoring bots                  └─ UDP/other protocols ✅        │
@@ -1558,7 +1558,7 @@ DNS Query Resolution:
                     │                    │
                     │ Rules:             │
                     │ ✅ Allow: 80,443,22│
-                    │ ❌ Drop: 50392     │
+                    │ ❌ Drop: 18789     │
                     │ ❌ Drop: All other │
                     └─────────┬──────────┘
                               │
@@ -1578,7 +1578,7 @@ DNS Query Resolution:
                     │ (localhost bridge) │
                     │                    │
                     │ Isolation:         │
-                    │ ✅ Port 50392 local│
+                    │ ✅ Port 18789 local│
                     │ ✅ Not exposed ext │
                     │ ✅ Container user  │
                     │ ✅ Resource limits │
@@ -1601,7 +1601,7 @@ DNS Query Resolution:
 │                                                                       │
 │  SSH Command Execution (port 22)     Local Debugging:                │
 │  ├─ Nginx config management          ├─ docker exec (local) ✅       │
-│  ├─ Docker container management      ├─ curl localhost:50392 ✅      │
+│  ├─ Docker container management      ├─ curl localhost:18789 ✅      │
 │  ├─ Certbot certificate renewal      ├─ docker logs (local) ✅       │
 │  ├─ Log review and analysis          └─ System monitoring ✅         │
 │  └─ Emergency troubleshooting                                        │
@@ -1634,7 +1634,7 @@ Problem: https://openclaw.yahwan.biz returns error
 ├─ Error: "502 Bad Gateway"
 │  └─ Nginx → Docker Connection Issue
 │     ├─ Check: docker ps shows openclaw container running
-│     ├─ Check: curl http://127.0.0.1:50392/health works (local)
+│     ├─ Check: curl http://127.0.0.1:18789/health works (local)
 │     ├─ Check: Nginx config syntax (nginx -t)
 │     ├─ Check: Nginx logs (tail -30 /var/log/nginx/error.log)
 │     └─ Action: Fix config, restart nginx, verify container
@@ -1683,9 +1683,9 @@ tail -50 /var/log/nginx/access.log
 nginx -T | grep -A10 "server_name openclaw"
 
 # Port and Network
-ss -tlnp | grep -E ':(80|443|50392|22)'
+ss -tlnp | grep -E ':(80|443|18789|22)'
 netstat -tunlp | grep LISTEN
-netstat -an | grep 127.0.0.1:50392
+netstat -an | grep 127.0.0.1:18789
 
 # SSL Certificate
 certbot certificates
@@ -1694,8 +1694,8 @@ openssl s_client -connect openclaw.yahwan.biz:443 -showcerts < /dev/null
 
 # Firewall
 ufw status
-curl -v http://127.0.0.1:50392/health  # Should work (local)
-timeout 5 bash -c '</dev/tcp/76.13.210.250/50392' 2>&1  # Should FAIL from external
+curl -v http://127.0.0.1:18789/health  # Should work (local)
+timeout 5 bash -c '</dev/tcp/76.13.210.250/18789' 2>&1  # Should FAIL from external
 ```
 
 ---
@@ -1803,7 +1803,7 @@ tar -czf "$BACKUP_DIR/nginx-config-$(date +%Y%m%d-%H%M%S).tar.gz" \
   /etc/letsencrypt/
 
 # Docker image
-docker save ghcr.io/hostinger/hvps-openclaw:latest | gzip > \
+docker save piboonsak/openclaw:latest | gzip > \
   "$BACKUP_DIR/openclaw-image-$(date +%Y%m%d-%H%M%S).tar.gz"
 
 # Keep only last 7 days
@@ -1871,7 +1871,7 @@ lrwxrwxrwx root root fullchain.pem -> ../../archive/openclaw.yahwan.biz/fullchai
 | 443 | TCP | HTTPS | ACCEPT | ✅ | Primary app access |
 | 3000 | TCP | Node.js | N/A | No | Not used |
 | 8080 | TCP | Alt HTTP | N/A | No | Not used |
-| 50392 | TCP | App | DROP | ❌ | Backend (localhost only) |
+| 18789 | TCP | App | DROP | ❌ | Backend (localhost only) |
 | Others | ANY | - | DROP | ❌ | Default deny all |
 
 ---
@@ -1914,7 +1914,7 @@ Docker Compose:      v2.x.x+ (apt)
 Certbot:             2.x.x+ (apt)
 OpenSSL:             3.x.x (default in Ubuntu 24.04)
 Node.js:             18.x+ (in container image)
-OpenClaw:            2026.2.22 (ghcr.io/hostinger/hvps-openclaw:latest)
+OpenClaw:            2026.2.22 (piboonsak/openclaw:latest)
 ```
 
 **Update information:**
@@ -1982,9 +1982,9 @@ openssl x509 -in /etc/letsencrypt/live/openclaw.yahwan.biz/fullchain.pem -noout 
 certbot renew --dry-run
 
 # Firewall/Network
-ss -tlnp | grep -E ':(80|443|50392|22)'
+ss -tlnp | grep -E ':(80|443|18789|22)'
 ufw status
-timeout 5 bash -c '</dev/tcp/76.13.210.250/50392' 2>&1
+timeout 5 bash -c '</dev/tcp/76.13.210.250/18789' 2>&1
 
 # System
 df -h

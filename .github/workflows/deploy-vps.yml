@@ -1,0 +1,112 @@
+name: Deploy to Hostinger VPS
+
+# Runs AFTER docker-build-push.yml pushes the image to Docker Hub.
+# Triggers:
+#   - Completion of the "Build and Push Docker Image" workflow on main
+#   - Manual trigger (workflow_dispatch)
+#
+# Required GitHub Secrets (Settings → Secrets → Actions):
+#   VPS_SSH_KEY          Private key for srv1414058.hstgr.cloud
+#                        (contents of C:\Users\..\.ssh\id_ed25519_hostinger)
+#   VPS_HOST             srv1414058.hstgr.cloud   (or 76.13.210.250)
+#   VPS_USER             root
+#   DOCKER_USERNAME      piboonsak  (already set for docker-build-push)
+#   DOCKER_TOKEN         Docker Hub PAT (already set for docker-build-push)
+
+on:
+  workflow_run:
+    workflows: ["Build and Push Docker Image"]
+    types: [completed]
+    branches: [main]
+
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Docker image tag to deploy (default: latest)"
+        required: false
+        default: "latest"
+
+concurrency:
+  group: deploy-vps-${{ github.ref }}
+  cancel-in-progress: false   # never cancel an in-flight deploy
+
+jobs:
+  deploy:
+    name: Deploy piboonsak/openclaw to VPS
+    runs-on: ubuntu-latest
+
+    # Only deploy when the build workflow succeeded (skip on failure/cancel)
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── Resolve image tag ──────────────────────────────────────────────────
+      - name: Set image tag
+        id: tag
+        run: |
+          TAG="${{ github.event.inputs.image_tag || 'latest' }}"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "Deploying image: piboonsak/openclaw:${TAG}"
+
+      # ── Write SSH key to disk (ephemeral runner) ───────────────────────────
+      - name: Configure SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/id_ed25519_hostinger
+          chmod 600 ~/.ssh/id_ed25519_hostinger
+          # Pre-approve host key to avoid interactive prompt
+          ssh-keyscan -H "${{ secrets.VPS_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
+
+      # ── Copy the production nginx config to VPS (idempotent) ──────────────
+      - name: Sync Nginx config to VPS
+        run: |
+          scp -i ~/.ssh/id_ed25519_hostinger \
+              -o StrictHostKeyChecking=no \
+              docker/nginx/openclaw.conf \
+              "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}:/opt/openclaw/nginx-openclaw.conf"
+
+      # ── Copy docker-compose.prod.yml to VPS (idempotent) ──────────────────
+      - name: Sync docker-compose to VPS
+        run: |
+          scp -i ~/.ssh/id_ed25519_hostinger \
+              -o StrictHostKeyChecking=no \
+              docker/docker-compose.prod.yml \
+              "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}:/opt/openclaw/docker-compose.prod.yml"
+
+      # ── Run deploy.sh on VPS ───────────────────────────────────────────────
+      - name: Deploy container
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          SSH_KEY:  ~/.ssh/id_ed25519_hostinger
+          IMAGE_TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          bash docker/deploy.sh "$IMAGE_TAG"
+
+      # ── Verify HTTPS endpoint is reachable (external check) ───────────────
+      - name: Verify HTTPS health endpoint
+        run: |
+          echo "Checking https://openclaw.yahwan.biz/health ..."
+          for i in 1 2 3 4 5; do
+            HTTP=$(curl -o /dev/null -sw "%{http_code}" --max-time 15 \
+                     https://openclaw.yahwan.biz/health 2>/dev/null || echo "000")
+            if [[ "$HTTP" == "200" ]]; then
+              echo "✓ Health check passed (HTTP $HTTP)"
+              exit 0
+            fi
+            echo "  attempt $i/5: HTTP $HTTP — retrying in 10s"
+            sleep 10
+          done
+          echo "WARNING: Health check did not return 200 (last HTTP: $HTTP)"
+          echo "Check container logs on VPS:"
+          echo "  ssh root@${{ secrets.VPS_HOST }} 'docker logs openclaw-sgnl-openclaw-1 --tail 50'"
+          exit 1
+
+      # ── Cleanup ───────────────────────────────────────────────────────────
+      - name: Remove SSH key
+        if: always()
+        run: rm -f ~/.ssh/id_ed25519_hostinger

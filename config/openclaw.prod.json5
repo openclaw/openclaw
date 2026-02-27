@@ -1,4 +1,4 @@
-// OpenClaw Production Configuration Template
+﻿// OpenClaw Production Configuration Template
 // Secure defaults for Hostinger VPS deployment
 //
 // Location: Copy to ~/.openclaw/openclaw.json on your server
@@ -12,7 +12,7 @@
   gateway: {
     // Bind to all interfaces inside container (Nginx reverse proxy handles external access)
     bind: "lan",
-    port: 50392,
+    port: 18789,
 
     // Authentication (set via env var OPENCLAW_GATEWAY_TOKEN)
     auth: {

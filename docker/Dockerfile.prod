@@ -1,4 +1,4 @@
-# Production Dockerfile for OpenClaw
+﻿# Production Dockerfile for OpenClaw
 # Multi-stage build with security hardening
 # Optimized for Hostinger VPS deployment
 
@@ -74,12 +74,12 @@ ENV NODE_ENV=production \
 USER openclaw
 
 # Expose gateway port
-EXPOSE 50392
+EXPOSE 18789
 
 # Health check endpoint
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-    CMD curl -f http://localhost:50392/health || exit 1
+    CMD curl -f http://localhost:18789/health || exit 1
 
 # Start gateway with secure defaults
 # Bind to 0.0.0.0 inside container (Hostinger/Docker will handle external access)
-CMD ["node", "openclaw.mjs", "gateway", "--allow-unconfigured", "--bind", "lan", "--port", "50392"]
+CMD ["node", "openclaw.mjs", "gateway", "--allow-unconfigured", "--bind", "lan", "--port", "18789"]
