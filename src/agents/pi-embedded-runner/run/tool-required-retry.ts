@@ -30,7 +30,8 @@ const TOOL_HELP_QUESTION_PATTERNS = [
   /\bcan you (?:explain|show|tell)\b/i,
   /\bshould i (?:run|use)\b/i,
   /\b(?:explain|show|tell)(?: me)? (?:the )?command\b/i,
-  /^(?:explain|show|tell)(?: me)?\b/i,
+  /^(?:explain|show|tell)(?: me)? (?:how|what|which|why|where)\b/i,
+  /^(?:explain|show|tell)(?: me)? (?:the )?(?:command|steps?|way)\b/i,
 ] as const;
 
 const ACK_ONLY_PATTERNS = [

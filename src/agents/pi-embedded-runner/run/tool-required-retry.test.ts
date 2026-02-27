@@ -161,4 +161,23 @@ describe("tool-required retry guard", () => {
 
     expect(shouldRetry).toBe(false);
   });
+
+  it("does retry execution prompts that start with 'show me'", () => {
+    const shouldRetry = shouldRetryToolRequiredToolless({
+      provider: "openai-codex",
+      prompt: "Show me the failing tests in this repo and fix the file.",
+      assistantTexts: ["Acknowledged. I'll do that now."],
+      lastAssistant: { stopReason: "end_turn", content: [] } as never,
+      toolMetas: [],
+      didSendViaMessagingTool: false,
+      hasClientToolCall: false,
+      disableTools: false,
+      promptError: null,
+      aborted: false,
+      timedOut: false,
+      timedOutDuringCompaction: false,
+    });
+
+    expect(shouldRetry).toBe(true);
+  });
 });
