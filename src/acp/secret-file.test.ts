@@ -18,6 +18,3 @@ describe("readSecretFromFile", () => {
   });
 
   it("returns trimmed secret from file", () => {
-    // This would require mocking fs, skipping for now
-  });
-});
