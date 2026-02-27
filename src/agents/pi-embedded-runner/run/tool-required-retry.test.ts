@@ -41,6 +41,25 @@ describe("tool-required retry guard", () => {
     expect(shouldRetry).toBe(false);
   });
 
+  it("does not retry when tools are explicitly disabled", () => {
+    const shouldRetry = shouldRetryToolRequiredToolless({
+      provider: "openai-codex",
+      disableTools: true,
+      prompt: "Run this test and fix the file.",
+      assistantTexts: ["Acknowledged. I'll do that."],
+      lastAssistant: { stopReason: "end_turn", content: [] } as never,
+      toolMetas: [],
+      didSendViaMessagingTool: false,
+      hasClientToolCall: false,
+      promptError: null,
+      aborted: false,
+      timedOut: false,
+      timedOutDuringCompaction: false,
+    });
+
+    expect(shouldRetry).toBe(false);
+  });
+
   it("does not retry for normal non-tool replies", () => {
     const shouldRetry = shouldRetryToolRequiredToolless({
       provider: "openai-codex",

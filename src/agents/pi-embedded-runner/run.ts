@@ -680,6 +680,7 @@ export async function runEmbeddedPiAgent(
               : undefined;
           const shouldRetryToolRequired = shouldRetryToolRequiredToolless({
             provider,
+            disableTools: params.disableTools,
             prompt: params.prompt,
             assistantTexts: attempt.assistantTexts,
             lastAssistant,

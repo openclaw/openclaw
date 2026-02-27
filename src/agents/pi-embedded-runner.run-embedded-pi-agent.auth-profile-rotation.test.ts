@@ -877,4 +877,40 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
       expect(result.payloads?.[0]?.text).toContain("command");
     });
   });
+
+  it("does not retry codex toolless acknowledgements when tools are disabled", async () => {
+    await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
+      runEmbeddedAttemptMock.mockResolvedValueOnce(
+        makeAttempt({
+          assistantTexts: ["Acknowledged. I'll run this exactly as specified."],
+          lastAssistant: buildAssistant({
+            provider: "openai-codex",
+            model: "gpt-5.3-codex",
+            stopReason: "stop",
+            content: [{ type: "text", text: "Acknowledged. I'll run this exactly as specified." }],
+          }),
+        }),
+      );
+
+      const result = await runEmbeddedPiAgent({
+        sessionId: "session:test",
+        sessionKey: "agent:test:codex:toolless-disabled-tools",
+        sessionFile: path.join(workspaceDir, "session.jsonl"),
+        workspaceDir,
+        agentDir,
+        config: makeCodexConfig(),
+        prompt: "Run this test, inspect logs, and fix the file in this repo.",
+        provider: "openai-codex",
+        model: "gpt-5.3-codex",
+        authProfileIdSource: "auto",
+        disableTools: true,
+        timeoutMs: 5_000,
+        runId: "run:codex:toolless-disabled-tools",
+      });
+
+      expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(1);
+      expect(result.meta.error).toBeUndefined();
+      expect(result.payloads?.[0]?.isError).not.toBe(true);
+    });
+  });
 });

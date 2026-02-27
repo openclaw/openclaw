@@ -126,6 +126,7 @@ export function buildToolRequiredRetryPrompt(prompt: string): string {
 
 export function shouldRetryToolRequiredToolless(params: {
   provider: string;
+  disableTools?: boolean;
   prompt: string;
   assistantTexts: string[];
   lastAssistant?: AssistantMessage;
@@ -138,6 +139,9 @@ export function shouldRetryToolRequiredToolless(params: {
   timedOutDuringCompaction: boolean;
 }): boolean {
   if (params.provider !== "openai-codex") {
+    return false;
+  }
+  if (params.disableTools === true) {
     return false;
   }
   if (
