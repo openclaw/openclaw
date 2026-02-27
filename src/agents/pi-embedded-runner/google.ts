@@ -22,6 +22,7 @@ import {
   stripToolResultDetails,
   sanitizeToolUseResultPairing,
 } from "../session-transcript-repair.js";
+import { extractToolCallsFromAssistant } from "../tool-call-id.js";
 import type { TranscriptPolicy } from "../transcript-policy.js";
 import { resolveTranscriptPolicy } from "../transcript-policy.js";
 import { log } from "./logger.js";
@@ -159,6 +160,53 @@ function stripStaleAssistantUsageBeforeLatestCompaction(messages: AgentMessage[]
     out[i] = rest as unknown as AgentMessage;
     touched = true;
   }
+  return touched ? out : messages;
+}
+
+function sanitizeOpenAIToolResults(messages: AgentMessage[]): AgentMessage[] {
+  let touched = false;
+  const retainedToolCallIds = new Set<string>();
+  const out: AgentMessage[] = [];
+
+  for (const msg of messages) {
+    if (!msg || typeof msg !== "object") {
+      out.push(msg);
+      continue;
+    }
+
+    if (msg.role === "assistant") {
+      for (const call of extractToolCallsFromAssistant(msg)) {
+        retainedToolCallIds.add(call.id);
+      }
+      out.push(msg);
+      continue;
+    }
+
+    if (msg.role !== "toolResult") {
+      out.push(msg);
+      continue;
+    }
+
+    const toolResult = msg as Extract<AgentMessage, { role: "toolResult" }> & {
+      toolName?: unknown;
+      toolCallId?: unknown;
+    };
+    const toolName = typeof toolResult.toolName === "string" ? toolResult.toolName.trim() : "";
+    if (!toolName) {
+      touched = true;
+      continue;
+    }
+
+    const toolCallId =
+      typeof toolResult.toolCallId === "string" ? toolResult.toolCallId.trim() : "";
+    if (!toolCallId || !retainedToolCallIds.has(toolCallId)) {
+      touched = true;
+      continue;
+    }
+
+    out.push(msg);
+  }
+
   return touched ? out : messages;
 }
 
@@ -416,6 +464,9 @@ export async function sanitizeSessionHistory(params: {
 
   const isOpenAIResponsesApi =
     params.modelApi === "openai-responses" || params.modelApi === "openai-codex-responses";
+  const sanitizedOpenAIToolResults = isOpenAIResponsesApi
+    ? sanitizeOpenAIToolResults(sanitizedCompactionUsage)
+    : sanitizedCompactionUsage;
   const hasSnapshot = Boolean(params.provider || params.modelApi || params.modelId);
   const priorSnapshot = hasSnapshot ? readLastModelSnapshot(params.sessionManager) : null;
   const modelChanged = priorSnapshot
@@ -427,8 +478,8 @@ export async function sanitizeSessionHistory(params: {
       })
     : false;
   const sanitizedOpenAI = isOpenAIResponsesApi
-    ? downgradeOpenAIReasoningBlocks(sanitizedCompactionUsage)
-    : sanitizedCompactionUsage;
+    ? downgradeOpenAIReasoningBlocks(sanitizedOpenAIToolResults)
+    : sanitizedOpenAIToolResults;
 
   if (hasSnapshot && (!priorSnapshot || modelChanged)) {
     appendModelSnapshot(params.sessionManager, {

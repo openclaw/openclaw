@@ -318,6 +318,87 @@ describe("sanitizeSessionHistory", () => {
     expect(result[0]?.role).toBe("assistant");
   });
 
+  it("drops openai tool results with blank or missing toolName", async () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "",
+        content: [{ type: "text", text: "blank name" }],
+      } as unknown as AgentMessage,
+      {
+        role: "toolResult",
+        toolCallId: "call_1",
+        content: [{ type: "text", text: "missing name" }],
+      } as unknown as AgentMessage,
+      {
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "read",
+        content: [{ type: "text", text: "valid result" }],
+      } as unknown as AgentMessage,
+    ] as unknown as AgentMessage[];
+
+    const result = await sanitizeSessionHistory({
+      messages,
+      modelApi: "openai-responses",
+      provider: "openai",
+      sessionManager: mockSessionManager,
+      sessionId: TEST_SESSION_ID,
+    });
+
+    expect(result.map((msg) => msg.role)).toEqual(["assistant", "toolResult"]);
+    const toolResult = result[1] as { toolName?: string };
+    expect(toolResult.toolName).toBe("read");
+  });
+
+  it("drops openai tool results whose toolCallId has no prior retained assistant tool call", async () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_dropped", name: "read" }],
+      },
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_ok", name: "read", arguments: {} }],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_dropped",
+        toolName: "read",
+        content: [{ type: "text", text: "from dropped call" }],
+      } as unknown as AgentMessage,
+      {
+        role: "toolResult",
+        toolCallId: "call_orphan",
+        toolName: "read",
+        content: [{ type: "text", text: "orphan" }],
+      } as unknown as AgentMessage,
+      {
+        role: "toolResult",
+        toolCallId: "call_ok",
+        toolName: "read",
+        content: [{ type: "text", text: "valid" }],
+      } as unknown as AgentMessage,
+    ] as unknown as AgentMessage[];
+
+    const result = await sanitizeSessionHistory({
+      messages,
+      modelApi: "openai-responses",
+      provider: "openai",
+      sessionManager: mockSessionManager,
+      sessionId: TEST_SESSION_ID,
+    });
+
+    expect(result.map((msg) => msg.role)).toEqual(["assistant", "toolResult"]);
+    const toolResult = result[1] as { toolCallId?: string };
+    expect(toolResult.toolCallId).toBe("call_ok");
+  });
+
   it("drops malformed tool calls missing input or arguments", async () => {
     const messages = [
       {
