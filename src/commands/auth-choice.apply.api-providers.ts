@@ -25,6 +25,8 @@ import {
   applyKilocodeProviderConfig,
   applyQianfanConfig,
   applyQianfanProviderConfig,
+  applyVivgridConfig,
+  applyVivgridProviderConfig,
   applyKimiCodeConfig,
   applyKimiCodeProviderConfig,
   applyLitellmConfig,
@@ -53,6 +55,7 @@ import {
   KILOCODE_DEFAULT_MODEL_REF,
   LITELLM_DEFAULT_MODEL_REF,
   QIANFAN_DEFAULT_MODEL_REF,
+  VIVGRID_DEFAULT_MODEL_REF,
   KIMI_CODING_MODEL_REF,
   MOONSHOT_DEFAULT_MODEL_REF,
   MISTRAL_DEFAULT_MODEL_REF,
@@ -63,6 +66,7 @@ import {
   XIAOMI_DEFAULT_MODEL_REF,
   setCloudflareAiGatewayConfig,
   setQianfanApiKey,
+  setVivgridApiKey,
   setGeminiApiKey,
   setKilocodeApiKey,
   setLitellmApiKey,
@@ -101,6 +105,7 @@ const API_KEY_TOKEN_PROVIDER_AUTH_CHOICE: Record<string, AuthChoice> = {
   opencode: "opencode-zen",
   kilocode: "kilocode-api-key",
   qianfan: "qianfan-api-key",
+  vivgrid: "vivgrid-api-key",
 };
 
 const ZAI_AUTH_CHOICE_ENDPOINT: Partial<
@@ -283,6 +288,18 @@ const SIMPLE_API_KEY_PROVIDER_FLOWS: Partial<Record<AuthChoice, SimpleApiKeyProv
       "API key format: bce-v3/ALTAK-...",
     ].join("\n"),
     noteTitle: "QIANFAN",
+  },
+  "vivgrid-api-key": {
+    provider: "vivgrid",
+    profileId: "vivgrid:default",
+    expectedProviders: ["vivgrid"],
+    envLabel: "VIVGRID_API_KEY",
+    promptMessage: "Enter Vivgrid API key",
+    setCredential: setVivgridApiKey,
+    defaultModel: VIVGRID_DEFAULT_MODEL_REF,
+    applyDefaultConfig: applyVivgridConfig,
+    applyProviderConfig: applyVivgridProviderConfig,
+    noteDefault: VIVGRID_DEFAULT_MODEL_REF,
   },
   "kilocode-api-key": {
     provider: "kilocode",

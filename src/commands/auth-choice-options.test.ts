@@ -36,6 +36,7 @@ describe("buildAuthChoiceOptions", () => {
       "synthetic-api-key",
       "chutes",
       "qwen-portal",
+      "vivgrid-api-key",
       "xai-api-key",
       "mistral-api-key",
       "volcengine-api-key",
