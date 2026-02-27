@@ -33,7 +33,8 @@ ENV OPENCLAW_PREFER_PNPM=1
 RUN pnpm ui:build
 
 # Remove devDependencies after build
-RUN pnpm install --frozen-lockfile --prod
+# CI=true suppresses pnpm's TTY check when pruning node_modules in non-interactive builds
+RUN CI=true pnpm install --frozen-lockfile --prod
 
 # Stage 2: Production runtime image
 FROM node:22-bookworm-slim@sha256:dd9d21971ec4395903fa6143c2b9267d048ae01ca6d3ea96f16cb30df6187d94
