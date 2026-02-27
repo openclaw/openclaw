@@ -377,13 +377,22 @@ export function registerNodesInvokeCommands(nodes: Command) {
           const cfg = loadConfig();
           const agentId = opts.agent?.trim() || resolveDefaultAgentId(cfg);
           const execDefaults = resolveExecDefaults(cfg, agentId);
-          const raw = typeof opts.raw === "string" ? opts.raw.trim() : "";
-          if (raw && Array.isArray(command) && command.length > 0) {
+          const explicitRaw = typeof opts.raw === "string" ? opts.raw.trim() : "";
+          if (explicitRaw && Array.isArray(command) && command.length > 0) {
             throw new Error("use --raw or argv, not both");
           }
-          if (!raw && (!Array.isArray(command) || command.length === 0)) {
+          if (!explicitRaw && (!Array.isArray(command) || command.length === 0)) {
             throw new Error("command required");
           }
+
+          // When positional args are provided without --raw, join them into a
+          // raw shell command so the node wraps execution in a login shell
+          // (sh -lc / cmd.exe /c). This preserves the pre-2026.2.21 behavior
+          // where output was returned by default without requiring --raw.
+          const raw =
+            explicitRaw || (Array.isArray(command) && command.length > 0)
+              ? explicitRaw || command.join(" ")
+              : "";
 
           const nodeQuery = String(opts.node ?? "").trim() || execDefaults?.node?.trim() || "";
           if (!nodeQuery) {
