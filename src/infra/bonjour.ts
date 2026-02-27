@@ -96,8 +96,22 @@ export async function startGatewayBonjourAdvertiser(
   // which briefly flashes a cmd.exe console window. Passing explicit interface
   // names makes ciao use its `restrictedInterfaces` path, which skips the
   // ARP-based discovery entirely and avoids the console flash.
-  const responderOpts: Parameters<typeof getResponder>[0] =
-    process.platform === "win32" ? { interface: Object.keys(os.networkInterfaces()) } : undefined;
+  // We only restrict to interfaces that are currently routable (non-internal).
+  // If no routable interfaces exist yet (e.g. during boot/resume when only
+  // loopback is up), we fall back to unrestricted mode so ciao can dynamically
+  // discover interfaces as they appear via its 15s polling loop.
+  let responderOpts: Parameters<typeof getResponder>[0];
+  if (process.platform === "win32") {
+    const ifaces = os.networkInterfaces();
+    const routable = Object.entries(ifaces).filter(
+      ([, addrs]) => addrs != null && addrs.some((a) => !a.internal),
+    );
+    if (routable.length > 0) {
+      responderOpts = { interface: routable.map(([name]) => name) };
+    }
+    // When routable is empty, responderOpts stays undefined -- ciao will use
+    // unrestricted mode and pick up interfaces dynamically as they come online.
+  }
   const responder = getResponder(responderOpts);
 
   // mDNS service instance names are single DNS labels; dots in hostnames (like
