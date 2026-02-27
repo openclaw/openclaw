@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import type { Skill } from "@mariozechner/pi-coding-agent";
+import type { MessagingToolSend } from "../../agents/pi-embedded-runner.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { ChannelId } from "../../channels/plugins/types.js";
 import type { DeliveryContext } from "../../utils/delivery-context.js";
@@ -80,12 +81,7 @@ export type SessionEntry = {
   /** Recently sent message-tool media urls for short-window cross-run dedupe. */
   lastMessagingToolSentMediaUrls?: string[];
   /** Recently sent message-tool routing targets for short-window cross-run dedupe. */
-  lastMessagingToolSentTargets?: Array<{
-    tool?: string;
-    provider?: string;
-    to?: string;
-    accountId?: string;
-  }>;
+  lastMessagingToolSentTargets?: MessagingToolSend[];
   sessionId: string;
   updatedAt: number;
   sessionFile?: string;

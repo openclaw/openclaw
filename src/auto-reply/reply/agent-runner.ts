@@ -432,34 +432,35 @@ export async function runReplyAgent(params: {
     const sentTexts = runResult.messagingToolSentTexts ?? [];
     const sentMediaUrls = runResult.messagingToolSentMediaUrls ?? [];
     const sentTargets = runResult.messagingToolSentTargets ?? [];
-    if (activeSessionEntry) {
+    const sessionDedupeEntry = activeSessionEntry;
+    if (sessionDedupeEntry) {
       const now = Date.now();
       if (sentTexts.length || sentMediaUrls.length || sentTargets.length) {
-        activeSessionEntry.lastMessagingToolSentAt = now;
-        activeSessionEntry.lastMessagingToolSentTexts = sentTexts;
-        activeSessionEntry.lastMessagingToolSentMediaUrls = sentMediaUrls;
-        activeSessionEntry.lastMessagingToolSentTargets = sentTargets;
+        sessionDedupeEntry.lastMessagingToolSentAt = now;
+        sessionDedupeEntry.lastMessagingToolSentTexts = sentTexts;
+        sessionDedupeEntry.lastMessagingToolSentMediaUrls = sentMediaUrls;
+        sessionDedupeEntry.lastMessagingToolSentTargets = sentTargets;
       } else if (
-        typeof activeSessionEntry.lastMessagingToolSentAt === "number" &&
-        now - activeSessionEntry.lastMessagingToolSentAt > RECENT_MESSAGING_TOOL_DEDUPE_WINDOW_MS
+        typeof sessionDedupeEntry.lastMessagingToolSentAt === "number" &&
+        now - sessionDedupeEntry.lastMessagingToolSentAt > RECENT_MESSAGING_TOOL_DEDUPE_WINDOW_MS
       ) {
-        delete activeSessionEntry.lastMessagingToolSentAt;
-        delete activeSessionEntry.lastMessagingToolSentTexts;
-        delete activeSessionEntry.lastMessagingToolSentMediaUrls;
-        delete activeSessionEntry.lastMessagingToolSentTargets;
+        delete sessionDedupeEntry.lastMessagingToolSentAt;
+        delete sessionDedupeEntry.lastMessagingToolSentTexts;
+        delete sessionDedupeEntry.lastMessagingToolSentMediaUrls;
+        delete sessionDedupeEntry.lastMessagingToolSentTargets;
       }
       if (sessionKey && activeSessionStore) {
-        activeSessionStore[sessionKey] = activeSessionEntry;
+        activeSessionStore[sessionKey] = sessionDedupeEntry;
       }
       if (sessionKey && storePath) {
         await updateSessionStoreEntry({
           storePath,
           sessionKey,
           update: async () => ({
-            lastMessagingToolSentAt: activeSessionEntry.lastMessagingToolSentAt,
-            lastMessagingToolSentTexts: activeSessionEntry.lastMessagingToolSentTexts,
-            lastMessagingToolSentMediaUrls: activeSessionEntry.lastMessagingToolSentMediaUrls,
-            lastMessagingToolSentTargets: activeSessionEntry.lastMessagingToolSentTargets,
+            lastMessagingToolSentAt: sessionDedupeEntry.lastMessagingToolSentAt,
+            lastMessagingToolSentTexts: sessionDedupeEntry.lastMessagingToolSentTexts,
+            lastMessagingToolSentMediaUrls: sessionDedupeEntry.lastMessagingToolSentMediaUrls,
+            lastMessagingToolSentTargets: sessionDedupeEntry.lastMessagingToolSentTargets,
           }),
         });
       }
