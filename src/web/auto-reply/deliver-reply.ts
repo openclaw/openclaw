@@ -138,16 +138,19 @@ export async function deliverWebReply(params: {
           "media:image",
         );
       } else if (media.kind === "audio") {
+        // WhatsApp audio messages don't support captions; send audio then text separately
         await sendWithRetry(
           () =>
             msg.sendMedia({
               audio: media.buffer,
               ptt: true,
               mimetype: media.contentType,
-              caption,
             }),
           "media:audio",
         );
+        if (caption) {
+          await sendWithRetry(() => msg.reply(caption), "text");
+        }
       } else if (media.kind === "video") {
         await sendWithRetry(
           () =>
