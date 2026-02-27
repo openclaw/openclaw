@@ -151,7 +151,7 @@ async function createAudioCtx(params?: {
 }): Promise<MsgContext> {
   const mediaPath = await createTempMediaFile({
     fileName: params?.fileName ?? "note.ogg",
-    content: params?.content ?? Buffer.from([0, 255, 0, 1, 2, 3, 4, 5, 6, 7, 8]),
+    content: params?.content ?? Buffer.alloc(2048, 0xab),
   });
   return {
     Body: params?.body ?? "<media:audio>",
@@ -167,7 +167,7 @@ async function setupAudioAutoDetectCase(stdout: string): Promise<{
   const ctx = await createAudioCtx({
     fileName: "sample.wav",
     mediaType: "audio/wav",
-    content: "audio",
+    content: Buffer.alloc(2048, 0xab),
   });
   const cfg: OpenClawConfig = { tools: { media: { audio: {} } } };
   const execModule = await import("../process/exec.js");
@@ -221,7 +221,7 @@ describe("applyMediaUnderstanding", () => {
     mockedResolveApiKey.mockClear();
     mockedFetchRemoteMedia.mockClear();
     mockedFetchRemoteMedia.mockResolvedValue({
-      buffer: Buffer.from([0, 255, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]),
+      buffer: Buffer.alloc(2048, 0xab),
       contentType: "audio/ogg",
       fileName: "note.ogg",
     });
@@ -258,7 +258,7 @@ describe("applyMediaUnderstanding", () => {
     const ctx = await createAudioCtx({
       fileName: "data.mp3",
       mediaType: "audio/mpeg",
-      content: '"a","b"\n"1","2"',
+      content: `"a","b"\n"1","2"\n${"x".repeat(2048)}`,
     });
     const result = await applyMediaUnderstanding({
       ctx,
@@ -331,7 +331,6 @@ describe("applyMediaUnderstanding", () => {
   });
 
   it("skips URL-only audio when remote file is too small", async () => {
-    const { applyMediaUnderstanding } = await loadApply();
     // Override the default mock to return a tiny buffer (below MIN_AUDIO_FILE_BYTES)
     mockedFetchRemoteMedia.mockResolvedValueOnce({
       buffer: Buffer.alloc(100),
@@ -516,7 +515,7 @@ describe("applyMediaUnderstanding", () => {
     const ctx = await createAudioCtx({
       fileName: "sample.wav",
       mediaType: "audio/wav",
-      content: "audio",
+      content: Buffer.alloc(2048, 0xab),
     });
     const cfg: OpenClawConfig = { tools: { media: { audio: {} } } };
 
@@ -632,7 +631,7 @@ describe("applyMediaUnderstanding", () => {
   it("uses active model when enabled and models are missing", async () => {
     const audioPath = await createTempMediaFile({
       fileName: "fallback.ogg",
-      content: Buffer.from([0, 255, 0, 1, 2, 3, 4, 5, 6]),
+      content: Buffer.alloc(2048, 0xab),
     });
 
     const ctx: MsgContext = {
@@ -668,7 +667,7 @@ describe("applyMediaUnderstanding", () => {
 
   it("handles multiple audio attachments when attachment mode is all", async () => {
     const dir = await createTempMediaDir();
-    const audioBytes = Buffer.from([200, 201, 202, 203, 204, 205, 206, 207, 208]);
+    const audioBytes = Buffer.alloc(2048, 0xab);
     const audioPathA = path.join(dir, "note-a.ogg");
     const audioPathB = path.join(dir, "note-b.ogg");
     await fs.writeFile(audioPathA, audioBytes);
@@ -715,7 +714,7 @@ describe("applyMediaUnderstanding", () => {
     const audioPath = path.join(dir, "note.ogg");
     const videoPath = path.join(dir, "clip.mp4");
     await fs.writeFile(imagePath, "image-bytes");
-    await fs.writeFile(audioPath, Buffer.from([200, 201, 202, 203, 204, 205, 206, 207, 208]));
+    await fs.writeFile(audioPath, Buffer.alloc(2048, 0xab));
     await fs.writeFile(videoPath, "video-bytes");
 
     const ctx: MsgContext = {

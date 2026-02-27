@@ -49,7 +49,7 @@ export async function withAudioFixture(
       filePrefix,
       extension: "wav",
       mediaType: "audio/wav",
-      fileContents: Buffer.from("RIFF"),
+      fileContents: Buffer.alloc(2048, 0x52),
     },
     run,
   );
