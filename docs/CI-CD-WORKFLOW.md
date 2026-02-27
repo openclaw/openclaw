@@ -327,6 +327,49 @@ git commit -m "docs: update release notes for v2026.2.27"
 git push origin main
 ```
 
+### 9. Feedback & Documentation Review (Quality Gate)
+
+**Purpose:** Continuously improve this CI/CD workflow based on real execution experience.
+
+**Required Question (Ask after every pipeline run):**
+
+> "Please summarize what you did when following this CI-CD workflow:
+> 1. **What actually worked smoothly?** (which steps need no changes)
+> 2. **What was unclear** when reading the document? (confusing wording, missing context, outdated paths)
+> 3. **What needs to be added/fixed** in this document for the next deployment run to go even more smoothly?
+> 4. **Specific improvements:** update CI-CD-WORKFLOW.md with exact details/corrections you discovered"
+
+**Gate Condition (Repeating Policy):**
+
+Repeat this step after every CI/CD pipeline execution until all of the following are true:
+- ✅ Steps 1-8 complete without needing SSH workarounds
+- ✅ No confusion about file paths or command syntax
+- ✅ No "unknown" errors that aren't documented
+- ✅ Document accurately reflects actual VPS setup
+- ✅ Next developer can follow this doc end-to-end without questions
+
+**When improvements are found:**
+
+```bash
+# Edit this file with discovered clarifications
+nano docs/CI-CD-WORKFLOW.md
+
+# Commit improvements
+git add docs/CI-CD-WORKFLOW.md
+git commit -m "docs: improve CI-CD clarity from [reason discovered]"
+git push origin main
+```
+
+**Example improvements that were made from feedback:**
+
+- Clarified `/docker/openclaw-sgnl/` (not `/root/openclaw-deployment`) ✅
+- Fixed `docker compose` v2 syntax (not `docker-compose`) ✅
+- Added skip instructions for non-Linux developers (Steps 3-4) ✅
+- Added "Known Issues" for LINE channel warnings ✅
+- Added Step 5a for Git tag creation timing ✅
+
+**Expected outcome:** After 2-3 full deployments using this gate, document becomes solid and repeatable.
+
 ---
 
 ## Emergency Procedures
