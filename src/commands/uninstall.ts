@@ -106,7 +106,10 @@ function shouldRemoveCompletionProfileLine(line: string): boolean {
     return true;
   }
   const normalizedLine = line.replaceAll("\\", "/");
-  return line.includes("openclaw completion") || normalizedLine.includes("/completions/openclaw.");
+  return (
+    normalizedLine.includes("openclaw completion") ||
+    normalizedLine.includes("/completions/openclaw.")
+  );
 }
 
 async function cleanupShellCompletionTraces(runtime: RuntimeEnv, dryRun?: boolean) {
