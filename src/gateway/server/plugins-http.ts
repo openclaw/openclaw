@@ -9,6 +9,14 @@ export type PluginHttpRequestHandler = (
   res: ServerResponse,
 ) => Promise<boolean>;
 
+export function isRegisteredPluginHttpRoutePath(
+  registry: PluginRegistry,
+  pathname: string,
+): boolean {
+  const routes = registry.httpRoutes ?? [];
+  return routes.some((entry) => entry.path === pathname);
+}
+
 export function createGatewayPluginRequestHandler(params: {
   registry: PluginRegistry;
   log: SubsystemLogger;
