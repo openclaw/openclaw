@@ -1,9 +1,11 @@
+import type { Message } from "grammy/types";
 import { describe, expect, it } from "vitest";
 import {
   buildTelegramThreadParams,
   buildTypingThreadParams,
   describeReplyTarget,
   expandTextLinks,
+  hasBotMention,
   normalizeForwardedContext,
   resolveTelegramForumThreadId,
 } from "./helpers.js";
@@ -328,6 +330,42 @@ describe("describeReplyTarget", () => {
     expect(result?.forwardedFrom?.fromType).toBe("user");
     expect(result?.forwardedFrom?.fromId).toBe("123");
     expect(result?.forwardedFrom?.date).toBe(700);
+  });
+});
+
+function makeMsg(text: string, entities?: Message["entities"]): Message {
+  return { message_id: 1, date: 0, chat: { id: 1, type: "group" }, text, entities } as Message;
+}
+
+describe("hasBotMention", () => {
+  it("matches exact mention at end of text", () => {
+    expect(hasBotMention(makeMsg("hello @gaian"), "gaian")).toBe(true);
+  });
+
+  it("matches mention followed by punctuation", () => {
+    expect(hasBotMention(makeMsg("@gaian, what's up?"), "gaian")).toBe(true);
+  });
+
+  it("matches mention followed by space", () => {
+    expect(hasBotMention(makeMsg("@gaian how are you"), "gaian")).toBe(true);
+  });
+
+  it("does not match substring of a longer username", () => {
+    expect(hasBotMention(makeMsg("@gaianchat_bot hello"), "gaian")).toBe(false);
+  });
+
+  it("does not match when mention is a prefix of another word", () => {
+    expect(hasBotMention(makeMsg("@gaianbot do something"), "gaian")).toBe(false);
+  });
+
+  it("matches via exact entity even when text check would fail", () => {
+    const msg = makeMsg("hello @gaian world", [{ type: "mention", offset: 6, length: 6 }]);
+    expect(hasBotMention(msg, "gaian")).toBe(true);
+  });
+
+  it("does not match entity with different username", () => {
+    const msg = makeMsg("@gaianchat_bot", [{ type: "mention", offset: 0, length: 14 }]);
+    expect(hasBotMention(msg, "gaian")).toBe(false);
   });
 });
 
