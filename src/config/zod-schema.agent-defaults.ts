@@ -52,9 +52,7 @@ export const AgentDefaultsSchema = z
      *   reducing token usage by ~93% over long conversations.
      *   The agent can still use the `read` tool to access workspace files as needed.
      */
-    contextInjection: z
-      .union([z.literal("always"), z.literal("first-message-only")])
-      .optional(),
+    contextInjection: z.union([z.literal("always"), z.literal("first-message-only")]).optional(),
     userTimezone: z.string().optional(),
     timeFormat: z.union([z.literal("auto"), z.literal("12"), z.literal("24")]).optional(),
     envelopeTimezone: z.string().optional(),
