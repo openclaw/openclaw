@@ -3,7 +3,14 @@ import type { Locale, TranslationMap } from "./types.ts";
 
 type Subscriber = (locale: Locale) => void;
 
-export const SUPPORTED_LOCALES: ReadonlyArray<Locale> = ["en", "zh-CN", "zh-TW", "pt-BR", "de"];
+export const SUPPORTED_LOCALES: ReadonlyArray<Locale> = [
+  "en",
+  "zh-CN",
+  "zh-TW",
+  "pt-BR",
+  "de",
+  "fr",
+];
 
 export function isSupportedLocale(value: string | null | undefined): value is Locale {
   return value !== null && value !== undefined && SUPPORTED_LOCALES.includes(value as Locale);
