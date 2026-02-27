@@ -459,6 +459,7 @@ describe("Agent-specific sandbox config", () => {
     const context = await resolveContext(cfg, "agent:main:thread:123", "/tmp/test-seatbelt");
     expect(context).toBeDefined();
     expect(context?.backend).toBe("seatbelt");
+    expect(context?.fsBridge).toBeDefined();
     expect(context?.seatbelt?.profile).toBe("demo-open");
     expect(context?.seatbelt?.profilePath).toContain("demo-open.sb");
     expect(context?.seatbelt?.params.CUSTOM_FLAG).toBe("enabled");

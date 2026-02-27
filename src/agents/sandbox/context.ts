@@ -14,6 +14,7 @@ import { ensureSandboxContainer } from "./docker.js";
 import { createSandboxFsBridge } from "./fs-bridge.js";
 import { maybePruneSandboxes } from "./prune.js";
 import { resolveSandboxRuntimeStatus } from "./runtime-status.js";
+import { createSeatbeltFsBridge } from "./seatbelt-fs-bridge.js";
 import { resolveSandboxScopeKey, resolveSandboxWorkspaceDir } from "./shared.js";
 import type {
   SandboxContext,
@@ -178,7 +179,7 @@ export async function resolveSandboxContext(params: {
   });
 
   if (cfg.backend === "seatbelt") {
-    return {
+    const sandboxContext: SandboxContext = {
       enabled: true,
       backend: "seatbelt",
       sessionKey: rawSessionKey,
@@ -192,6 +193,10 @@ export async function resolveSandboxContext(params: {
       tools: cfg.tools,
       browserAllowHostControl: cfg.browser.allowHostControl,
     };
+
+    sandboxContext.fsBridge = createSeatbeltFsBridge({ sandbox: sandboxContext });
+
+    return sandboxContext;
   }
 
   const docker = await resolveSandboxDockerUser({
