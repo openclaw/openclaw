@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Iris Dashboard — Tarefas</title>
+  <link rel="stylesheet" href="/iris-dashboard/styles.css" />
+  <!-- __IRIS_DASHBOARD_CONFIG__ -->
+</head>
+<body>
+  <div id="app">
+    <header class="header">
+      <div class="header-title">
+        <span class="dot"></span>
+        Iris Dashboard
+      </div>
+      <div class="status-bar">
+        <span class="status-dot" title="Status da conexão"></span>
+        <span id="status-label">Conectando...</span>
+      </div>
+      <div class="header-actions">
+        <button class="btn-icon" id="theme-toggle" title="Alternar tema" aria-label="Alternar tema"></button>
+        <button class="btn btn-primary" id="btn-new" title="Nova tarefa (N)">+ Nova Tarefa</button>
+      </div>
+    </header>
+
+    <main class="main">
+      <!-- Filters -->
+      <div class="filters" role="search" aria-label="Filtros de tarefas">
+        <input
+          class="filter-input"
+          id="filter-search"
+          type="search"
+          placeholder="Buscar tarefas..."
+          aria-label="Buscar"
+        />
+        <input
+          class="filter-input"
+          id="filter-pessoa"
+          type="text"
+          placeholder="Pessoa..."
+          aria-label="Filtrar por pessoa"
+          style="min-width:120px"
+        />
+        <select class="filter-select" id="filter-status" aria-label="Status">
+          <option value="">Todos os status</option>
+          <option value="pendente">Pendente</option>
+          <option value="em_andamento">Em andamento</option>
+          <option value="concluido">Concluído</option>
+          <option value="cancelado">Cancelado</option>
+        </select>
+        <select class="filter-select" id="filter-categoria" aria-label="Categoria">
+          <option value="">Todas as categorias</option>
+          <option value="urgente">Urgente</option>
+          <option value="follow_up">Follow-up</option>
+          <option value="proximo">Próximo</option>
+          <option value="backlog">Backlog</option>
+          <option value="outros">Outros</option>
+        </select>
+        <select class="filter-select" id="filter-sort" aria-label="Ordenar por">
+          <option value="criado_em:desc">Mais recentes</option>
+          <option value="criado_em:asc">Mais antigos</option>
+          <option value="prioridade:asc">Prioridade (↑)</option>
+          <option value="prioridade:desc">Prioridade (↓)</option>
+          <option value="atualizado_em:desc">Atualizado</option>
+          <option value="vencimento_em:asc">Vencimento</option>
+        </select>
+        <label style="display:flex;align-items:center;gap:0.375rem;font-size:13px;color:var(--muted-foreground);cursor:pointer">
+          <input type="checkbox" id="filter-deleted" style="accent-color:var(--accent)" />
+          Incluir deletadas
+        </label>
+      </div>
+
+      <!-- Task grid -->
+      <div class="tasks-grid" id="tasks-container" aria-live="polite" aria-label="Lista de tarefas">
+        <!-- Tasks rendered by app.js -->
+      </div>
+
+      <!-- Pagination -->
+      <div class="pagination" id="pagination" aria-label="Paginação"></div>
+    </main>
+  </div>
+
+  <!-- Modal root -->
+  <div id="modal-root"></div>
+
+  <!-- Toast container -->
+  <div class="toast-container" id="toast-container" aria-live="polite" aria-atomic="true"></div>
+
+  <script type="module" src="/iris-dashboard/app.js"></script>
+</body>
+</html>
