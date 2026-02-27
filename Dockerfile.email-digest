@@ -1,0 +1,51 @@
+# Email Intelligence Digest — Docker image
+# Extends the base OpenClaw image with gog (Google Workspace CLI) for Gmail + Calendar access.
+#
+# Build:
+#   docker build -t openclaw:local .
+#   docker build -f Dockerfile.email-digest -t openclaw:email-digest .
+#
+# Or use the setup script:
+#   ./scripts/email-digest-setup.sh
+
+FROM openclaw:local
+
+# Switch to root to install system packages
+USER root
+
+# Install Homebrew dependencies (Linuxbrew requires build tools)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      build-essential \
+      curl \
+      file \
+      git \
+      procps \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Homebrew for Linux (installs to /home/linuxbrew)
+# NONINTERACTIVE=1 skips the post-install prompts
+RUN NONINTERACTIVE=1 bash -c \
+      "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+
+# Install gog (Google Workspace CLI) via Homebrew
+# Then symlink the binary to /usr/local/bin so it's on PATH for all users
+RUN /home/linuxbrew/.linuxbrew/bin/brew install steipete/tap/gogcli \
+    && ln -sf /home/linuxbrew/.linuxbrew/bin/gog /usr/local/bin/gog
+
+# Also install jq for safe JSON building in the digest skill
+RUN apt-get update && apt-get install -y --no-install-recommends jq \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Add Linuxbrew to PATH for the node user's shell sessions
+RUN echo 'eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"' \
+      >> /home/node/.bashrc \
+    && echo 'eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"' \
+      >> /home/node/.profile
+
+# Back to non-root runtime user
+USER node
+
+# Verify gog is accessible
+RUN gog --version

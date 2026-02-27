@@ -37,6 +37,7 @@ import {
   handleControlUiHttpRequest,
   type ControlUiRootState,
 } from "./control-ui.js";
+import { handleDigestDashboardRequest } from "./digest-dashboard.js";
 import { applyHookMappings } from "./hooks-mapping.js";
 import {
   extractHookToken,
@@ -614,6 +615,10 @@ export function createGatewayHttpServer(opts: {
         ) {
           return;
         }
+      }
+
+      if (handleDigestDashboardRequest(req, res)) {
+        return;
       }
 
       res.statusCode = 404;
