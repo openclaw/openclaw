@@ -1,6 +1,8 @@
+import { lookup } from "node:dns/promises";
 import {
   buildHostnameAllowlistPolicyFromSuffixAllowlist,
   isHttpsUrlAllowedByHostnameSuffixAllowlist,
+  isPrivateIpAddress,
   normalizeHostnameSuffixAllowlist,
 } from "openclaw/plugin-sdk";
 import type { SsrFPolicy } from "openclaw/plugin-sdk";
@@ -268,6 +270,10 @@ export function isUrlAllowed(url: string, allowlist: string[]): boolean {
   return isHttpsUrlAllowedByHostnameSuffixAllowlist(url, allowlist);
 }
 
+export function resolveMediaSsrfPolicy(allowHosts: string[]): SsrFPolicy | undefined {
+  return buildHostnameAllowlistPolicyFromSuffixAllowlist(allowHosts);
+}
+
 /**
  * Returns true if the given IPv4 or IPv6 address is in a private, loopback,
  * or link-local range that must never be reached from media downloads.
@@ -304,11 +310,11 @@ const MAX_SAFE_REDIRECTS = 5;
 
 /**
  * Fetch a URL with redirect: "manual", validating each redirect target
- * against the hostname allowlist and DNS-resolved IP (anti-SSRF).
+ * against the hostname allowlist and optional DNS-resolved IP (anti-SSRF).
  *
  * This prevents:
  * - Auto-following redirects to non-allowlisted hosts
- * - DNS rebinding attacks where an allowlisted domain resolves to a private IP
+ * - DNS rebinding attacks when a lookup function is provided
  */
 export async function safeFetch(params: {
   url: string;
@@ -326,12 +332,17 @@ export async function safeFetch(params: {
   );
   let currentUrl = params.url;
 
-  // Validate the initial URL's resolved IP
-  try {
-    const initialHost = new URL(currentUrl).hostname;
-    await resolveAndValidateIP(initialHost, resolveFn);
-  } catch {
+  if (!isUrlAllowed(currentUrl, params.allowHosts)) {
     throw new Error(`Initial download URL blocked: ${currentUrl}`);
+  }
+
+  if (resolveFn) {
+    try {
+      const initialHost = new URL(currentUrl).hostname;
+      await resolveAndValidateIP(initialHost, resolveFn);
+    } catch {
+      throw new Error(`Initial download URL blocked: ${currentUrl}`);
+    }
   }
 
   for (let i = 0; i <= MAX_SAFE_REDIRECTS; i++) {
@@ -369,8 +380,10 @@ export async function safeFetch(params: {
     }
 
     // Validate redirect target's resolved IP
-    const redirectHost = new URL(redirectUrl).hostname;
-    await resolveAndValidateIP(redirectHost, resolveFn);
+    if (resolveFn) {
+      const redirectHost = new URL(redirectUrl).hostname;
+      await resolveAndValidateIP(redirectHost, resolveFn);
+    }
 
     currentUrl = redirectUrl;
   }
