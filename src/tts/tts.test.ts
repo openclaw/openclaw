@@ -455,6 +455,32 @@ describe("tts", () => {
     });
   });
 
+  describe("resolveTtsConfig voiceNoteLoop", () => {
+    it("defaults to disabled when not set", () => {
+      const cfg = { messages: { tts: {} } } as OpenClawConfig;
+      expect(resolveTtsConfig(cfg).voiceNoteLoop).toBe("disabled");
+    });
+
+    it("resolves enabled when configured", () => {
+      const cfg = {
+        messages: { tts: { voiceNoteLoop: "enabled" } },
+      } as OpenClawConfig;
+      expect(resolveTtsConfig(cfg).voiceNoteLoop).toBe("enabled");
+    });
+
+    it("resolves both when configured", () => {
+      const cfg = {
+        messages: { tts: { voiceNoteLoop: "both" } },
+      } as OpenClawConfig;
+      expect(resolveTtsConfig(cfg).voiceNoteLoop).toBe("both");
+    });
+
+    it("defaults to disabled when tts config is absent", () => {
+      const cfg = {} as OpenClawConfig;
+      expect(resolveTtsConfig(cfg).voiceNoteLoop).toBe("disabled");
+    });
+  });
+
   describe("getTtsProvider", () => {
     const baseCfg: OpenClawConfig = {
       agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },

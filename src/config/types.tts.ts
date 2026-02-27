@@ -1,5 +1,7 @@
 import type { SecretInput } from "./types.secrets.js";
 
+export type VoiceNoteLoopMode = "disabled" | "enabled" | "both";
+
 export type TtsProvider = "elevenlabs" | "openai" | "edge";
 
 export type TtsMode = "final" | "all";
@@ -78,6 +80,13 @@ export type TtsConfig = {
   };
   /** Optional path for local TTS user preferences JSON. */
   prefsPath?: string;
+  /**
+   * Voice note conversation loop mode.
+   * - "disabled" (default): agent replies with text; TTS auto-mode still applies normally.
+   * - "enabled": inbound voice note → reply with voice note only (text suppressed).
+   * - "both": inbound voice note → reply with voice note AND text.
+   */
+  voiceNoteLoop?: VoiceNoteLoopMode;
   /** Hard cap for text sent to TTS (chars). */
   maxTextLength?: number;
   /** API request timeout (ms). */
