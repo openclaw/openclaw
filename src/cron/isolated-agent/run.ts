@@ -13,6 +13,7 @@ import { resolveCronStyleNow } from "../../agents/current-time.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import { loadModelCatalog } from "../../agents/model-catalog.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
+import { describeFailoverError } from "../../agents/failover-error.js";
 import {
   getModelRefStatus,
   isCliProvider,
@@ -86,6 +87,22 @@ export type RunCronAgentTurnResult = {
   deliveryAttempted?: boolean;
 } & CronRunOutcome &
   CronRunTelemetry;
+
+const CRON_KNOWN_GOOD_MODEL =
+  process.env.OPENCLAW_CRON_FALLBACK_MODEL?.trim() || "sonnet";
+
+function resolveCronModelFallbacks(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  requestedModel: string;
+}): string[] {
+  const configured = resolveAgentModelFallbacksOverride(params.cfg, params.agentId) ?? [];
+  const requested = params.requestedModel.trim();
+  const candidates = [...configured, CRON_KNOWN_GOOD_MODEL]
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0 && entry !== requested);
+  return Array.from(new Set(candidates));
+}
 
 export async function runCronIsolatedAgentTurn(params: {
   cfg: OpenClawConfig;
@@ -422,7 +439,19 @@ export async function runCronIsolatedAgentTurn(params: {
       provider,
       model,
       agentDir,
-      fallbacksOverride: resolveAgentModelFallbacksOverride(params.cfg, agentId),
+      fallbacksOverride: resolveCronModelFallbacks({
+        cfg: params.cfg,
+        agentId,
+        requestedModel: model,
+      }),
+      onError: ({ provider: failedProvider, model: failedModel, error, attempt, total }) => {
+        const described = describeFailoverError(error);
+        if (described.reason === "model_not_found" && attempt < total) {
+          logWarn(
+            `cron: model-not-found for ${failedProvider}/${failedModel}; auto-fallback continuing (${attempt}/${total})`,
+          );
+        }
+      },
       run: (providerOverride, modelOverride) => {
         if (abortSignal?.aborted) {
           throw new Error(abortReason());

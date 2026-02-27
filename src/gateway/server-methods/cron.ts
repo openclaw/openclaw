@@ -1,3 +1,6 @@
+import { resolveConfiguredModelRef, resolveAllowedModelRef } from "../../agents/model-selection.js";
+import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
+import { loadConfig } from "../../config/config.js";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normalize.js";
 import {
   readCronRunLogEntriesPage,
@@ -19,7 +22,36 @@ import {
   validateCronUpdateParams,
   validateWakeParams,
 } from "../protocol/index.js";
-import type { GatewayRequestHandlers } from "./types.js";
+import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
+
+async function validateCronAgentTurnModelOverride(params: {
+  context: GatewayRequestContext;
+  modelRaw: string;
+}): Promise<string | undefined> {
+  const modelInput = params.modelRaw.trim();
+  if (!modelInput) {
+    return "invalid cron payload.model: empty";
+  }
+
+  const cfg = loadConfig();
+  const configured = resolveConfiguredModelRef({
+    cfg,
+    defaultProvider: DEFAULT_PROVIDER,
+    defaultModel: DEFAULT_MODEL,
+  });
+  const catalog = await params.context.loadGatewayModelCatalog();
+  const resolved = resolveAllowedModelRef({
+    cfg,
+    catalog,
+    raw: modelInput,
+    defaultProvider: configured.provider,
+    defaultModel: configured.model,
+  });
+  if ("error" in resolved) {
+    return `invalid cron payload.model '${modelInput}': ${resolved.error}`;
+  }
+  return undefined;
+}
 
 export const cronHandlers: GatewayRequestHandlers = {
   wake: ({ params, respond, context }) => {
@@ -102,6 +134,19 @@ export const cronHandlers: GatewayRequestHandlers = {
       return;
     }
     const jobCreate = normalized as unknown as CronJobCreate;
+    if (jobCreate.sessionTarget === "isolated" && jobCreate.payload.kind === "agentTurn") {
+      const modelRaw = jobCreate.payload.model;
+      if (typeof modelRaw === "string") {
+        const modelValidationError = await validateCronAgentTurnModelOverride({
+          context,
+          modelRaw,
+        });
+        if (modelValidationError) {
+          respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, modelValidationError));
+          return;
+        }
+      }
+    }
     const timestampValidation = validateScheduleTimestamp(jobCreate.schedule);
     if (!timestampValidation.ok) {
       respond(
@@ -146,6 +191,16 @@ export const cronHandlers: GatewayRequestHandlers = {
       return;
     }
     const patch = p.patch as unknown as CronJobPatch;
+    if (patch.payload?.kind === "agentTurn" && typeof patch.payload.model === "string") {
+      const modelValidationError = await validateCronAgentTurnModelOverride({
+        context,
+        modelRaw: patch.payload.model,
+      });
+      if (modelValidationError) {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, modelValidationError));
+        return;
+      }
+    }
     if (patch.schedule) {
       const timestampValidation = validateScheduleTimestamp(patch.schedule);
       if (!timestampValidation.ok) {
