@@ -86,6 +86,8 @@ function createChatAbortContext(overrides: Record<string, unknown> = {}): {
   chatRunBuffers: Map<string, string>;
   chatDeltaSentAt: Map<string, number>;
   chatAbortedRuns: Map<string, number>;
+  chatPriorSegments: Map<string, string>;
+  chatRawBuffers: Map<string, string>;
   removeChatRun: ReturnType<typeof vi.fn>;
   agentRunSeq: Map<string, number>;
   broadcast: ReturnType<typeof vi.fn>;
@@ -98,6 +100,8 @@ function createChatAbortContext(overrides: Record<string, unknown> = {}): {
     chatRunBuffers: new Map(),
     chatDeltaSentAt: new Map(),
     chatAbortedRuns: new Map<string, number>(),
+    chatPriorSegments: new Map<string, string>(),
+    chatRawBuffers: new Map<string, string>(),
     removeChatRun: vi
       .fn()
       .mockImplementation((run: string) => ({ sessionKey: "main", clientRunId: run })),

@@ -147,8 +147,12 @@ export type ChatRunState = {
   abortedRuns: Map<string, number>;
   /** Text from prior assistant messages within the same run, accumulated at message boundaries. */
   priorSegments: Map<string, string>;
-  /** High-water mark of buffer length per run, used to detect message boundaries. */
-  bufferHighWater: Map<string, number>;
+  /**
+   * Last raw (pre-strip) text seen per run — used for message-boundary detection.
+   * A new assistant message is detected when the new raw text is non-empty and
+   * does not start with the previous raw text.
+   */
+  rawBuffers: Map<string, string>;
   clear: () => void;
 };
 
@@ -158,7 +162,7 @@ export function createChatRunState(): ChatRunState {
   const deltaSentAt = new Map<string, number>();
   const abortedRuns = new Map<string, number>();
   const priorSegments = new Map<string, string>();
-  const bufferHighWater = new Map<string, number>();
+  const rawBuffers = new Map<string, string>();
 
   const clear = () => {
     registry.clear();
@@ -166,7 +170,7 @@ export function createChatRunState(): ChatRunState {
     deltaSentAt.clear();
     abortedRuns.clear();
     priorSegments.clear();
-    bufferHighWater.clear();
+    rawBuffers.clear();
   };
 
   return {
@@ -175,7 +179,7 @@ export function createChatRunState(): ChatRunState {
     deltaSentAt,
     abortedRuns,
     priorSegments,
-    bufferHighWater,
+    rawBuffers,
     clear,
   };
 }
@@ -306,29 +310,20 @@ export function createAgentEventHandler({
     // Snapshot the current buffer as a prior segment so text from earlier
     // messages is preserved (#28180).
     //
-    // Two complementary signals detect boundaries:
-    // 1. Content discontinuity: the incoming text does not start with the
-    //    existing buffer. The agent guarantees monotonically growing text
-    //    within a single message (non-growing deltas are silently dropped in
-    //    pi-embedded-subscribe.handlers.messages.ts), and server-side
-    //    directive stripping is idempotent on already-stripped agent output.
-    //    So any content discontinuity is a real message boundary.
-    // 2. Length shrink: the incoming text is shorter than the high-water mark.
-    //    Catches the rare edge case where post-tool text happens to share a
-    //    prefix with the pre-tool text.
+    // Boundary detection uses the *raw* (pre-strip) text and checks whether
+    // the incoming text starts with the previous raw text (continuation) or
+    // not (new message). This is more reliable than a length high-water mark
+    // because a new short message could still be longer than the previous one.
+    // The agent guarantees monotonically growing raw text within a single
+    // message, so any non-prefix raw text is a real boundary.
     const existing = chatRunState.buffers.get(clientRunId);
-    const highWater = chatRunState.bufferHighWater.get(clientRunId) ?? 0;
-    const isBoundary =
-      existing != null &&
-      ((!cleaned.startsWith(existing) && existing.length > 0) ||
-        (highWater > 0 && cleaned.length < highWater));
+    const lastRaw = chatRunState.rawBuffers.get(clientRunId);
+    const isBoundary = existing && lastRaw !== undefined && !text.startsWith(lastRaw);
     if (isBoundary) {
       const prior = chatRunState.priorSegments.get(clientRunId);
       chatRunState.priorSegments.set(clientRunId, prior ? `${prior}\n\n${existing}` : existing);
-      chatRunState.bufferHighWater.set(clientRunId, cleaned.length);
-    } else {
-      chatRunState.bufferHighWater.set(clientRunId, Math.max(highWater, cleaned.length));
     }
+    chatRunState.rawBuffers.set(clientRunId, text);
     chatRunState.buffers.set(clientRunId, cleaned);
     if (shouldHideHeartbeatChatOutput(clientRunId, sourceRunId)) {
       return;
@@ -381,7 +376,7 @@ export function createAgentEventHandler({
     chatRunState.buffers.delete(clientRunId);
     chatRunState.deltaSentAt.delete(clientRunId);
     chatRunState.priorSegments.delete(clientRunId);
-    chatRunState.bufferHighWater.delete(clientRunId);
+    chatRunState.rawBuffers.delete(clientRunId);
     if (jobState === "done") {
       const payload = {
         runId: clientRunId,
@@ -531,7 +526,7 @@ export function createAgentEventHandler({
         chatRunState.buffers.delete(clientRunId);
         chatRunState.deltaSentAt.delete(clientRunId);
         chatRunState.priorSegments.delete(clientRunId);
-        chatRunState.bufferHighWater.delete(clientRunId);
+        chatRunState.rawBuffers.delete(clientRunId);
         if (chatLink) {
           chatRunState.registry.remove(evt.runId, clientRunId, sessionKey);
         }

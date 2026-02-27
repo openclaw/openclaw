@@ -36,6 +36,8 @@ function createOps(params: {
     chatRunBuffers: new Map(buffer !== undefined ? [[runId, buffer]] : []),
     chatDeltaSentAt: new Map([[runId, Date.now()]]),
     chatAbortedRuns: new Map(),
+    chatPriorSegments: new Map(),
+    chatRawBuffers: new Map(),
     removeChatRun,
     agentRunSeq: new Map(),
     broadcast,
@@ -135,6 +137,46 @@ describe("abortChatRunById", () => {
       expect.objectContaining({
         role: "assistant",
         content: [{ type: "text", text: "streamed text" }],
+      }),
+    );
+  });
+
+  it("combines priorSegments with current buffer in abort partial", () => {
+    const runId = "run-1";
+    const sessionKey = "main";
+    const entry = createActiveEntry(sessionKey);
+    const ops = createOps({ runId, entry, buffer: "second message" });
+    ops.chatPriorSegments.set(runId, "first message");
+
+    const result = abortChatRunById(ops, { runId, sessionKey });
+
+    expect(result).toEqual({ aborted: true });
+    const payload = ops.broadcast.mock.calls[0]?.[1] as Record<string, unknown>;
+    expect(payload.message).toEqual(
+      expect.objectContaining({
+        role: "assistant",
+        content: [{ type: "text", text: "first message\n\nsecond message" }],
+      }),
+    );
+    // cleanup
+    expect(ops.chatPriorSegments.has(runId)).toBe(false);
+    expect(ops.chatRawBuffers.has(runId)).toBe(false);
+  });
+
+  it("uses only priorSegments when current buffer is empty", () => {
+    const runId = "run-1";
+    const sessionKey = "main";
+    const entry = createActiveEntry(sessionKey);
+    const ops = createOps({ runId, entry, buffer: "" });
+    ops.chatPriorSegments.set(runId, "pre-tool text");
+
+    abortChatRunById(ops, { runId, sessionKey });
+
+    const payload = ops.broadcast.mock.calls[0]?.[1] as Record<string, unknown>;
+    expect(payload.message).toEqual(
+      expect.objectContaining({
+        role: "assistant",
+        content: [{ type: "text", text: "pre-tool text" }],
       }),
     );
   });

@@ -32,6 +32,8 @@ export type ChatAbortOps = {
   chatRunBuffers: Map<string, string>;
   chatDeltaSentAt: Map<string, number>;
   chatAbortedRuns: Map<string, number>;
+  chatPriorSegments: Map<string, string>;
+  chatRawBuffers: Map<string, string>;
   removeChatRun: (
     sessionId: string,
     clientRunId: string,
@@ -87,13 +89,18 @@ export function abortChatRunById(
     return { aborted: false };
   }
 
-  const bufferedText = ops.chatRunBuffers.get(runId);
-  const partialText = bufferedText && bufferedText.trim() ? bufferedText : undefined;
+  const currentBuffer = ops.chatRunBuffers.get(runId) ?? "";
+  const prior = ops.chatPriorSegments.get(runId);
+  const fullBuffer =
+    prior && currentBuffer ? `${prior}\n\n${currentBuffer}` : (prior ?? currentBuffer);
+  const partialText = fullBuffer && fullBuffer.trim() ? fullBuffer : undefined;
   ops.chatAbortedRuns.set(runId, Date.now());
   active.controller.abort();
   ops.chatAbortControllers.delete(runId);
   ops.chatRunBuffers.delete(runId);
   ops.chatDeltaSentAt.delete(runId);
+  ops.chatPriorSegments.delete(runId);
+  ops.chatRawBuffers.delete(runId);
   const removed = ops.removeChatRun(runId, runId, sessionKey);
   broadcastChatAborted(ops, { runId, sessionKey, stopReason, partialText });
   ops.agentRunSeq.delete(runId);
