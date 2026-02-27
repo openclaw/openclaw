@@ -253,7 +253,7 @@ Now create some channels on your Discord server and start chatting. Your agent c
 
 ## Recommended: Multi-agent progress and clean replies
 
-When running multiple agents in a Discord server, the default streaming modes can create visual noise — partial message previews keep updating mid-stream across agents. A better pattern is to use **block streaming** with **verbose output** so users see real-time progress (tool calls, file reads, searches) while the final answer arrives as one clean, complete message.
+When running multiple agents in a Discord server, the default streaming modes can create visual noise — partial message previews keep updating mid-stream across agents. A better pattern is to use **block streaming** with **verbose output** so users see real-time progress (tool calls, file reads, searches) while the final answer is delivered as clean, complete blocks without token-by-token flickering.
 
 ```json5
 {
@@ -273,11 +273,11 @@ When running multiple agents in a Discord server, the default streaming modes ca
 
 Why this works well:
 
-- **`blockStreaming: true`** delivers the final answer as a single message instead of streaming token-by-token previews.
-- **`blockStreamingBreak: "text_end"`** flushes output at natural text boundaries (paragraph breaks), so long answers still arrive progressively rather than all at once.
+- **`blockStreaming: true`** suppresses token-by-token preview streaming and instead delivers reply text in discrete blocks.
+- **`blockStreamingBreak: "text_end"`** flushes output at natural text boundaries (paragraph breaks), so long answers arrive as multiple clean messages progressively rather than all at once. Each block is a complete, readable chunk. For single-flush delivery (one message at the very end), use `"message_end"` instead.
 - **`verboseDefault: "on"`** shows tool call progress in real time (searching, reading files, running code) so the channel never feels idle while agents work.
 
-The result: users see live status updates while agents think and act, then get clean final replies without the flicker of partial streaming. This is especially effective when multiple agents share a server, since each agent's progress is clearly visible without overlapping partial message edits.
+The result: users see live status updates while agents think and act, then get clean final replies in well-formed blocks without the flicker of partial streaming. This is especially effective when multiple agents share a server, since each agent's progress is clearly visible without overlapping partial message edits.
 
 See [Streaming and Chunking](/concepts/streaming) for details on block streaming behavior and tuning options.
 
