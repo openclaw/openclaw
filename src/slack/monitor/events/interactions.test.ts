@@ -924,6 +924,7 @@ describe("registerSlackInteractionEvents", () => {
             sessionKey: "agent:main:slack:channel:C777",
             channelId: "C777",
             channelType: "channel",
+            userId: "U701",
           }),
           state: { values: {} },
         },
@@ -989,7 +990,7 @@ describe("registerSlackInteractionEvents", () => {
     expect(enqueueSystemEventMock).not.toHaveBeenCalled();
   });
 
-  it("falls back to default modal routing for invalid private metadata", async () => {
+  it("falls back to default modal routing when private metadata omits routing keys", async () => {
     enqueueSystemEventMock.mockReset();
     const { ctx, getViewHandler, resolveSessionKey } = createContext();
     registerSlackInteractionEvents({ ctx: ctx as never });
@@ -1004,7 +1005,7 @@ describe("registerSlackInteractionEvents", () => {
         view: {
           id: "V702",
           callback_id: "openclaw:deploy_form",
-          private_metadata: "{bad-json",
+          private_metadata: JSON.stringify({ userId: "U702", note: "no routing keys" }),
           state: { values: {} },
         },
       },
