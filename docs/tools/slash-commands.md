@@ -219,3 +219,4 @@ Notes:
   - Telegram: `telegram:slash:<userId>` (targets the chat session via `CommandTargetSessionKey`)
 - **`/stop`** targets the active chat session so it can abort the current run.
 - **Slack:** `channels.slack.slashCommand` is still supported for a single `/openclaw`-style command. If you enable `commands.native`, you must create one Slack slash command per built-in command (same names as `/help`). Command argument menus for Slack are delivered as ephemeral Block Kit buttons.
+  - Slack native exception: register `/agentstatus` (not `/status`) because Slack reserves `/status`. Text `/status` still works in Slack messages.
