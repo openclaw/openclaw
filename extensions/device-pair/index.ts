@@ -1,6 +1,12 @@
 import os from "node:os";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
-import { approveDevicePairing, listDevicePairing } from "openclaw/plugin-sdk";
+import {
+  approveDevicePairing,
+  listDevicePairing,
+  resolveGatewayBindUrl,
+  runPluginCommandWithTimeout,
+  resolveTailnetHostWithRunner,
+} from "openclaw/plugin-sdk";
 import qrcode from "qrcode-terminal";
 
 function renderQrAscii(data: string): Promise<string> {
@@ -166,54 +172,13 @@ function pickTailnetIPv4(): string | null {
   return pickMatchingIPv4(isTailnetIPv4);
 }
 
-async function resolveTailnetHost(api: OpenClawPluginApi): Promise<string | null> {
-  const candidates = ["tailscale", "/Applications/Tailscale.app/Contents/MacOS/Tailscale"];
-  for (const candidate of candidates) {
-    try {
-      const result = await api.runtime.system.runCommandWithTimeout(
-        [candidate, "status", "--json"],
-        {
-          timeoutMs: 5000,
-        },
-      );
-      if (result.code !== 0) {
-        continue;
-      }
-      const raw = result.stdout.trim();
-      if (!raw) {
-        continue;
-      }
-      const parsed = parsePossiblyNoisyJsonObject(raw);
-      const self =
-        typeof parsed.Self === "object" && parsed.Self !== null
-          ? (parsed.Self as Record<string, unknown>)
-          : undefined;
-      const dns = typeof self?.DNSName === "string" ? self.DNSName : undefined;
-      if (dns && dns.length > 0) {
-        return dns.replace(/\.$/, "");
-      }
-      const ips = Array.isArray(self?.TailscaleIPs) ? (self?.TailscaleIPs as string[]) : [];
-      if (ips.length > 0) {
-        return ips[0] ?? null;
-      }
-    } catch {
-      continue;
-    }
-  }
-  return null;
-}
-
-function parsePossiblyNoisyJsonObject(raw: string): Record<string, unknown> {
-  const start = raw.indexOf("{");
-  const end = raw.lastIndexOf("}");
-  if (start === -1 || end <= start) {
-    return {};
-  }
-  try {
-    return JSON.parse(raw.slice(start, end + 1)) as Record<string, unknown>;
-  } catch {
-    return {};
-  }
+async function resolveTailnetHost(): Promise<string | null> {
+  return await resolveTailnetHostWithRunner((argv, opts) =>
+    runPluginCommandWithTimeout({
+      argv,
+      timeoutMs: opts.timeoutMs,
+    }),
+  );
 }
 
 function resolveAuth(cfg: OpenClawPluginApi["config"]): ResolveAuthResult {
@@ -283,7 +248,7 @@ async function resolveGatewayUrl(api: OpenClawPluginApi): Promise<ResolveUrlResu
 
   const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
   if (tailscaleMode === "serve" || tailscaleMode === "funnel") {
-    const host = await resolveTailnetHost(api);
+    const host = await resolveTailnetHost();
     if (!host) {
       return { error: "Tailscale Serve is enabled, but MagicDNS could not be resolved." };
     }
@@ -298,29 +263,16 @@ async function resolveGatewayUrl(api: OpenClawPluginApi): Promise<ResolveUrlResu
     }
   }
 
-  const bind = cfg.gateway?.bind ?? "loopback";
-  if (bind === "custom") {
-    const host = cfg.gateway?.customBindHost?.trim();
-    if (host) {
-      return { url: `${scheme}://${host}:${port}`, source: "gateway.bind=custom" };
-    }
-    return { error: "gateway.bind=custom requires gateway.customBindHost." };
-  }
-
-  if (bind === "tailnet") {
-    const host = pickTailnetIPv4();
-    if (host) {
-      return { url: `${scheme}://${host}:${port}`, source: "gateway.bind=tailnet" };
-    }
-    return { error: "gateway.bind=tailnet set, but no tailnet IP was found." };
-  }
-
-  if (bind === "lan") {
-    const host = pickLanIPv4();
-    if (host) {
-      return { url: `${scheme}://${host}:${port}`, source: "gateway.bind=lan" };
-    }
-    return { error: "gateway.bind=lan set, but no private LAN IP was found." };
+  const bindResult = resolveGatewayBindUrl({
+    bind: cfg.gateway?.bind,
+    customBindHost: cfg.gateway?.customBindHost,
+    scheme,
+    port,
+    pickTailnetHost: pickTailnetIPv4,
+    pickLanHost: pickLanIPv4,
+  });
+  if (bindResult) {
+    return bindResult;
   }
 
   return {

@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { startWebLoginWithQr, waitForWebLogin } from "./login-qr.js";
+import { createWaSocket, logoutWeb, waitForWaConnection } from "./session.js";
 
 vi.mock("./session.js", () => {
   const createWaSocket = vi.fn(
@@ -35,8 +37,6 @@ vi.mock("./qr-image.js", () => ({
   renderQrPngBase64: vi.fn(async () => "base64"),
 }));
 
-const { startWebLoginWithQr, waitForWebLogin } = await import("./login-qr.js");
-const { createWaSocket, waitForWaConnection, logoutWeb } = await import("./session.js");
 const createWaSocketMock = vi.mocked(createWaSocket);
 const waitForWaConnectionMock = vi.mocked(waitForWaConnection);
 const logoutWebMock = vi.mocked(logoutWeb);

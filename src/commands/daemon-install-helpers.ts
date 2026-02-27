@@ -1,17 +1,15 @@
 import { formatCliCommand } from "../cli/command-format.js";
-import { collectConfigEnvVars } from "../config/env-vars.js";
+import { collectConfigServiceEnvVars } from "../config/env-vars.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { resolveGatewayLaunchAgentLabel } from "../daemon/constants.js";
 import { resolveGatewayProgramArguments } from "../daemon/program-args.js";
-import {
-  renderSystemNodeWarning,
-  resolvePreferredNodePath,
-  resolveSystemNodeInfo,
-} from "../daemon/runtime-paths.js";
+import { resolvePreferredNodePath } from "../daemon/runtime-paths.js";
 import { buildServiceEnvironment } from "../daemon/service-env.js";
+import {
+  emitNodeRuntimeWarning,
+  type DaemonInstallWarnFn,
+} from "./daemon-install-runtime-warning.js";
 import type { GatewayDaemonRuntime } from "./daemon-runtime.js";
-
-type WarnFn = (message: string, title?: string) => void;
 
 export type GatewayInstallPlan = {
   programArguments: string[];
@@ -32,7 +30,7 @@ export async function buildGatewayInstallPlan(params: {
   token?: string;
   devMode?: boolean;
   nodePath?: string;
-  warn?: WarnFn;
+  warn?: DaemonInstallWarnFn;
   /** Full config to extract env vars from (env vars + inline env keys). */
   config?: OpenClawConfig;
 }): Promise<GatewayInstallPlan> {
@@ -49,13 +47,13 @@ export async function buildGatewayInstallPlan(params: {
     runtime: params.runtime,
     nodePath,
   });
-  if (params.runtime === "node") {
-    const systemNode = await resolveSystemNodeInfo({ env: params.env });
-    const warning = renderSystemNodeWarning(systemNode, programArguments[0]);
-    if (warning) {
-      params.warn?.(warning, "Gateway runtime");
-    }
-  }
+  await emitNodeRuntimeWarning({
+    env: params.env,
+    runtime: params.runtime,
+    nodeProgram: programArguments[0],
+    warn: params.warn,
+    title: "Gateway runtime",
+  });
   const serviceEnvironment = buildServiceEnvironment({
     env: params.env,
     port: params.port,
@@ -69,7 +67,7 @@ export async function buildGatewayInstallPlan(params: {
   // Merge config env vars into the service environment (vars + inline env keys).
   // Config env vars are added first so service-specific vars take precedence.
   const environment: Record<string, string | undefined> = {
-    ...collectConfigEnvVars(params.config),
+    ...collectConfigServiceEnvVars(params.config),
   };
   Object.assign(environment, serviceEnvironment);
 

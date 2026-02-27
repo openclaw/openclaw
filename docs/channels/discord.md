@@ -258,6 +258,29 @@ Now create some channels on your Discord server and start chatting. Your agent c
 - Group DMs are ignored by default (`channels.discord.dm.groupEnabled=false`).
 - Native slash commands run in isolated command sessions (`agent:<agentId>:discord:slash:<userId>`), while still carrying `CommandTargetSessionKey` to the routed conversation session.
 
+## Forum channels
+
+Discord forum and media channels only accept thread posts. OpenClaw supports two ways to create them:
+
+- Send a message to the forum parent (`channel:<forumId>`) to auto-create a thread. The thread title uses the first non-empty line of your message.
+- Use `openclaw message thread create` to create a thread directly. Do not pass `--message-id` for forum channels.
+
+Example: send to forum parent to create a thread
+
+```bash
+openclaw message send --channel discord --target channel:<forumId> \
+  --message "Topic title\nBody of the post"
+```
+
+Example: create a forum thread explicitly
+
+```bash
+openclaw message thread create --channel discord --target channel:<forumId> \
+  --thread-name "Topic title" --message "Body of the post"
+```
+
+Forum parents do not accept Discord components. If you need components, send to the thread itself (`channel:<threadId>`).
+
 ## Interactive components
 
 OpenClaw supports Discord components v2 containers for agent messages. Use the message tool with a `components` payload. Interaction results are routed back to the agent as normal inbound messages and follow the existing Discord `replyToMode` settings.
@@ -271,6 +294,8 @@ Supported blocks:
 By default, components are single use. Set `components.reusable=true` to allow buttons, selects, and forms to be used multiple times until they expire.
 
 To restrict who can click a button, set `allowedUsers` on that button (Discord user IDs, tags, or `*`). When configured, unmatched users receive an ephemeral denial.
+
+The `/model` and `/models` slash commands open an interactive model picker with provider and model dropdowns plus a Submit step. The picker reply is ephemeral and only the invoking user can use it.
 
 File attachments:
 
@@ -351,6 +376,12 @@ Example:
 
     If DM policy is not open, unknown users are blocked (or prompted for pairing in `pairing` mode).
 
+    Multi-account precedence:
+
+    - `channels.discord.accounts.default.allowFrom` applies only to the `default` account.
+    - Named accounts inherit `channels.discord.allowFrom` when their own `allowFrom` is unset.
+    - Named accounts do not inherit `channels.discord.accounts.default.allowFrom`.
+
     DM target format for delivery:
 
     - `user:<id>`
@@ -372,7 +403,9 @@ Example:
     `allowlist` behavior:
 
     - guild must match `channels.discord.guilds` (`id` preferred, slug accepted)
-    - optional sender allowlists: `users` (IDs or names) and `roles` (role IDs only); if either is configured, senders are allowed when they match `users` OR `roles`
+    - optional sender allowlists: `users` (stable IDs recommended) and `roles` (role IDs only); if either is configured, senders are allowed when they match `users` OR `roles`
+    - direct name/tag matching is disabled by default; enable `channels.discord.dangerouslyAllowNameMatching: true` only as break-glass compatibility mode
+    - names/tags are supported for `users`, but IDs are safer; `openclaw security audit` warns when name/tag entries are used
     - if a guild has `channels` configured, non-listed channels are denied
     - if a guild has no `channels` block, all channels in that allowlisted guild are allowed
 
@@ -399,7 +432,7 @@ Example:
 }
 ```
 
-    If you only set `DISCORD_BOT_TOKEN` and do not create a `channels.discord` block, runtime fallback is `groupPolicy="open"` (with a warning in logs).
+    If you only set `DISCORD_BOT_TOKEN` and do not create a `channels.discord` block, runtime fallback is `groupPolicy="allowlist"` (with a warning in logs), even if `channels.defaults.groupPolicy` is `open`.
 
   </Tab>
 
@@ -509,6 +542,10 @@ Use `bindings[].match.roles` to route Discord guild members to different agents 
 
 See [Slash commands](/tools/slash-commands) for command catalog and behavior.
 
+Default slash command settings:
+
+- `ephemeral: true`
+
 ## Feature details
 
 <AccordionGroup>
@@ -527,6 +564,51 @@ See [Slash commands](/tools/slash-commands) for command catalog and behavior.
     Note: `off` disables implicit reply threading. Explicit `[[reply_to_*]]` tags are still honored.
 
     Message IDs are surfaced in context/history so agents can target specific messages.
+
+  </Accordion>
+
+  <Accordion title="Live stream preview">
+    OpenClaw can stream draft replies by sending a temporary message and editing it as text arrives.
+
+    - `channels.discord.streaming` controls preview streaming (`off` | `partial` | `block` | `progress`, default: `off`).
+    - `progress` is accepted for cross-channel consistency and maps to `partial` on Discord.
+    - `channels.discord.streamMode` is a legacy alias and is auto-migrated.
+    - `partial` edits a single preview message as tokens arrive.
+    - `block` emits draft-sized chunks (use `draftChunk` to tune size and breakpoints).
+
+    Example:
+
+```json5
+{
+  channels: {
+    discord: {
+      streaming: "partial",
+    },
+  },
+}
+```
+
+    `block` mode chunking defaults (clamped to `channels.discord.textChunkLimit`):
+
+```json5
+{
+  channels: {
+    discord: {
+      streaming: "block",
+      draftChunk: {
+        minChars: 200,
+        maxChars: 800,
+        breakPreference: "paragraph",
+      },
+    },
+  },
+}
+```
+
+    Preview streaming is text-only; media replies fall back to normal delivery.
+
+    Note: preview streaming is separate from block streaming. When block streaming is explicitly
+    enabled for Discord, OpenClaw skips the preview stream to avoid double streaming.
 
   </Accordion>
 
@@ -549,6 +631,53 @@ See [Slash commands](/tools/slash-commands) for command catalog and behavior.
     - thread config inherits parent channel config unless a thread-specific entry exists
 
     Channel topics are injected as **untrusted** context (not as system prompt).
+
+  </Accordion>
+
+  <Accordion title="Thread-bound sessions for subagents">
+    Discord can bind a thread to a session target so follow-up messages in that thread keep routing to the same session (including subagent sessions).
+
+    Commands:
+
+    - `/focus <target>` bind current/new thread to a subagent/session target
+    - `/unfocus` remove current thread binding
+    - `/agents` show active runs and binding state
+    - `/session idle <duration|off>` inspect/update inactivity auto-unfocus for focused bindings
+    - `/session max-age <duration|off>` inspect/update hard max age for focused bindings
+
+    Config:
+
+```json5
+{
+  session: {
+    threadBindings: {
+      enabled: true,
+      idleHours: 24,
+      maxAgeHours: 0,
+    },
+  },
+  channels: {
+    discord: {
+      threadBindings: {
+        enabled: true,
+        idleHours: 24,
+        maxAgeHours: 0,
+        spawnSubagentSessions: false, // opt-in
+      },
+    },
+  },
+}
+```
+
+    Notes:
+
+    - `session.threadBindings.*` sets global defaults.
+    - `channels.discord.threadBindings.*` overrides Discord behavior.
+    - `spawnSubagentSessions` must be true to auto-create/bind threads for `sessions_spawn({ thread: true })`.
+    - `spawnAcpSessions` must be true to auto-create/bind threads for ACP (`/acp spawn ... --thread ...` or `sessions_spawn({ runtime: "acp", thread: true })`).
+    - If thread bindings are disabled for an account, `/focus` and related thread binding operations are unavailable.
+
+    See [Sub-agents](/tools/subagents), [ACP Agents](/tools/acp-agents), and [Configuration Reference](/gateway/configuration-reference).
 
   </Accordion>
 
@@ -650,7 +779,7 @@ See [Slash commands](/tools/slash-commands) for command catalog and behavior.
     Notes:
 
     - allowlists can use `pk:<memberId>`
-    - member display names are matched by name/slug
+    - member display names are matched by name/slug only when `channels.discord.dangerouslyAllowNameMatching: true`
     - lookups use original message ID and are time-window constrained
     - if lookup fails, proxied messages are treated as bot messages and dropped unless `allowBots=true`
 
@@ -774,6 +903,53 @@ Example:
 }
 ```
 
+## Voice channels
+
+OpenClaw can join Discord voice channels for realtime, continuous conversations. This is separate from voice message attachments.
+
+Requirements:
+
+- Enable native commands (`commands.native` or `channels.discord.commands.native`).
+- Configure `channels.discord.voice`.
+- The bot needs Connect + Speak permissions in the target voice channel.
+
+Use the Discord-only native command `/vc join|leave|status` to control sessions. The command uses the account default agent and follows the same allowlist and group policy rules as other Discord commands.
+
+Auto-join example:
+
+```json5
+{
+  channels: {
+    discord: {
+      voice: {
+        enabled: true,
+        autoJoin: [
+          {
+            guildId: "123456789012345678",
+            channelId: "234567890123456789",
+          },
+        ],
+        daveEncryption: true,
+        decryptionFailureTolerance: 24,
+        tts: {
+          provider: "openai",
+          openai: { voice: "alloy" },
+        },
+      },
+    },
+  },
+}
+```
+
+Notes:
+
+- `voice.tts` overrides `messages.tts` for voice playback only.
+- Voice is enabled by default; set `channels.discord.voice.enabled=false` to disable it.
+- `voice.daveEncryption` and `voice.decryptionFailureTolerance` pass through to `@discordjs/voice` join options.
+- `@discordjs/voice` defaults are `daveEncryption=true` and `decryptionFailureTolerance=24` if unset.
+- OpenClaw also watches receive decrypt failures and auto-recovers by leaving/rejoining the voice channel after repeated failures in a short window.
+- If receive logs repeatedly show `DecryptionFailed(UnencryptedWhenPassthroughDisabled)`, this may be the upstream `@discordjs/voice` receive bug tracked in [discord.js #11419](https://github.com/discordjs/discord.js/issues/11419).
+
 ## Voice messages
 
 Discord voice messages show a waveform preview and require OGG/Opus audio plus metadata. OpenClaw generates the waveform automatically, but it needs `ffmpeg` and `ffprobe` available on the gateway host to inspect and convert audio files.
@@ -848,6 +1024,18 @@ openclaw logs --follow
     If you set `channels.discord.allowBots=true`, use strict mention and allowlist rules to avoid loop behavior.
 
   </Accordion>
+
+  <Accordion title="Voice STT drops with DecryptionFailed(...)">
+
+    - keep OpenClaw current (`openclaw update`) so the Discord voice receive recovery logic is present
+    - confirm `channels.discord.voice.daveEncryption=true` (default)
+    - start from `channels.discord.voice.decryptionFailureTolerance=24` (upstream default) and tune only if needed
+    - watch logs for:
+      - `discord voice: DAVE decrypt failures detected`
+      - `discord voice: repeated decrypt failures; attempting rejoin`
+    - if failures continue after automatic rejoin, collect logs and compare against [discord.js #11419](https://github.com/discordjs/discord.js/issues/11419)
+
+  </Accordion>
 </AccordionGroup>
 
 ## Configuration reference pointers
@@ -860,9 +1048,10 @@ High-signal Discord fields:
 
 - startup/auth: `enabled`, `token`, `accounts.*`, `allowBots`
 - policy: `groupPolicy`, `dm.*`, `guilds.*`, `guilds.*.channels.*`
-- command: `commands.native`, `commands.useAccessGroups`, `configWrites`
+- command: `commands.native`, `commands.useAccessGroups`, `configWrites`, `slashCommand.*`
 - reply/history: `replyToMode`, `historyLimit`, `dmHistoryLimit`, `dms.*.historyLimit`
 - delivery: `textChunkLimit`, `chunkMode`, `maxLinesPerMessage`
+- streaming: `streaming` (legacy alias: `streamMode`), `draftChunk`, `blockStreaming`, `blockStreamingCoalesce`
 - media/retry: `mediaMaxMb`, `retry`
 - actions: `actions.*`
 - presence: `activity`, `status`, `activityType`, `activityUrl`

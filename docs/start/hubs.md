@@ -73,7 +73,6 @@ Use these hubs to discover every page, including deep dives and reference docs t
 - [Model providers hub](/providers/models)
 - [WhatsApp](/channels/whatsapp)
 - [Telegram](/channels/telegram)
-- [Telegram (grammY notes)](/channels/grammy)
 - [Slack](/channels/slack)
 - [Discord](/channels/discord)
 - [Mattermost](/channels/mattermost) (plugin)
@@ -181,8 +180,6 @@ Use these hubs to discover every page, including deep dives and reference docs t
 ## Experiments (exploratory)
 
 - [Onboarding config protocol](/experiments/onboarding-config-protocol)
-- [Cron hardening notes](/experiments/plans/cron-add-hardening)
-- [Group policy hardening notes](/experiments/plans/group-policy-hardening)
 - [Research: memory](/experiments/research/memory)
 - [Model config exploration](/experiments/proposals/model-config)
 

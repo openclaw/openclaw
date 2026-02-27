@@ -6,6 +6,8 @@ OPENCLAW_DEVELOPMENT_TEAM = P5Z8X89DJL
 
 OPENCLAW_APP_BUNDLE_ID = ai.openclaw.ios.test.mariano
 OPENCLAW_SHARE_BUNDLE_ID = ai.openclaw.ios.test.mariano.share
+OPENCLAW_WATCH_APP_BUNDLE_ID = ai.openclaw.ios.test.mariano.watchkitapp
+OPENCLAW_WATCH_EXTENSION_BUNDLE_ID = ai.openclaw.ios.test.mariano.watchkitapp.extension
 
 // Leave empty with automatic signing.
 OPENCLAW_APP_PROFILE =

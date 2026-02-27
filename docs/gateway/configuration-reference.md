@@ -1,6 +1,10 @@
 ---
 title: "Configuration Reference"
 description: "Complete field-by-field reference for ~/.openclaw/openclaw.json"
+summary: "Complete reference for every OpenClaw config key, defaults, and channel settings"
+read_when:
+  - You need exact field-level config semantics or defaults
+  - You are validating channel, model, gateway, or tool config blocks
 ---
 
 # Configuration Reference
@@ -35,8 +39,55 @@ All channels support DM policies and group policies:
 <Note>
 `channels.defaults.groupPolicy` sets the default when a provider's `groupPolicy` is unset.
 Pairing codes expire after 1 hour. Pending DM pairing requests are capped at **3 per channel**.
-Slack/Discord have a special fallback: if their provider section is missing entirely, runtime group policy can resolve to `open` (with a startup warning).
+If a provider block is missing entirely (`channels.<provider>` absent), runtime group policy falls back to `allowlist` (fail-closed) with a startup warning.
 </Note>
+
+### Channel model overrides
+
+Use `channels.modelByChannel` to pin specific channel IDs to a model. Values accept `provider/model` or configured model aliases. The channel mapping applies when a session does not already have a model override (for example, set via `/model`).
+
+```json5
+{
+  channels: {
+    modelByChannel: {
+      discord: {
+        "123456789012345678": "anthropic/claude-opus-4-6",
+      },
+      slack: {
+        C1234567890: "openai/gpt-4.1",
+      },
+      telegram: {
+        "-1001234567890": "openai/gpt-4.1-mini",
+        "-1001234567890:topic:99": "anthropic/claude-sonnet-4-6",
+      },
+    },
+  },
+}
+```
+
+### Channel defaults and heartbeat
+
+Use `channels.defaults` for shared group-policy and heartbeat behavior across providers:
+
+```json5
+{
+  channels: {
+    defaults: {
+      groupPolicy: "allowlist", // open | allowlist | disabled
+      heartbeat: {
+        showOk: false,
+        showAlerts: true,
+        useIndicator: true,
+      },
+    },
+  },
+}
+```
+
+- `channels.defaults.groupPolicy`: fallback group policy when a provider-level `groupPolicy` is unset.
+- `channels.defaults.heartbeat.showOk`: include healthy channel statuses in heartbeat output.
+- `channels.defaults.heartbeat.showAlerts`: include degraded/error statuses in heartbeat output.
+- `channels.defaults.heartbeat.useIndicator`: render compact indicator-style heartbeat output.
 
 ### WhatsApp
 
@@ -128,12 +179,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
       historyLimit: 50,
       replyToMode: "first", // off | first | all
       linkPreview: true,
-      streamMode: "partial", // off | partial | block
-      draftChunk: {
-        minChars: 200,
-        maxChars: 800,
-        breakPreference: "paragraph", // paragraph | newline | sentence
-      },
+      streaming: "partial", // off | partial | block | progress (default: off)
       actions: { reactions: true, sendMessage: true },
       reactionNotifications: "own", // off | own | all
       mediaMaxMb: 5,
@@ -143,7 +189,10 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
         maxDelayMs: 30000,
         jitter: 0.1,
       },
-      network: { autoSelectFamily: false },
+      network: {
+        autoSelectFamily: true,
+        dnsResultOrder: "ipv4first",
+      },
       proxy: "socks5://localhost:9050",
       webhookUrl: "https://example.com/telegram-webhook",
       webhookSecret: "secret",
@@ -187,7 +236,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
       },
       replyToMode: "off", // off | first | all
       dmPolicy: "pairing",
-      allowFrom: ["1234567890", "steipete"],
+      allowFrom: ["1234567890", "123456789012345678"],
       dm: { enabled: true, groupEnabled: false, groupChannels: ["openclaw-dm"] },
       guilds: {
         "123456789012345678": {
@@ -210,10 +259,32 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
       historyLimit: 20,
       textChunkLimit: 2000,
       chunkMode: "length", // length | newline
+      streaming: "off", // off | partial | block | progress (progress maps to partial on Discord)
       maxLinesPerMessage: 17,
       ui: {
         components: {
           accentColor: "#5865F2",
+        },
+      },
+      threadBindings: {
+        enabled: true,
+        idleHours: 24,
+        maxAgeHours: 0,
+        spawnSubagentSessions: false, // opt-in for sessions_spawn({ thread: true })
+      },
+      voice: {
+        enabled: true,
+        autoJoin: [
+          {
+            guildId: "123456789012345678",
+            channelId: "234567890123456789",
+          },
+        ],
+        daveEncryption: true,
+        decryptionFailureTolerance: 24,
+        tts: {
+          provider: "openai",
+          openai: { voice: "alloy" },
         },
       },
       retry: {
@@ -232,7 +303,17 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 - Guild slugs are lowercase with spaces replaced by `-`; channel keys use the slugged name (no `#`). Prefer guild IDs.
 - Bot-authored messages are ignored by default. `allowBots: true` enables them (own messages still filtered).
 - `maxLinesPerMessage` (default 17) splits tall messages even when under 2000 chars.
+- `channels.discord.threadBindings` controls Discord thread-bound routing:
+  - `enabled`: Discord override for thread-bound session features (`/focus`, `/unfocus`, `/agents`, `/session idle`, `/session max-age`, and bound delivery/routing)
+  - `idleHours`: Discord override for inactivity auto-unfocus in hours (`0` disables)
+  - `maxAgeHours`: Discord override for hard max age in hours (`0` disables)
+  - `spawnSubagentSessions`: opt-in switch for `sessions_spawn({ thread: true })` auto thread creation/binding
 - `channels.discord.ui.components.accentColor` sets the accent color for Discord components v2 containers.
+- `channels.discord.voice` enables Discord voice channel conversations and optional auto-join + TTS overrides.
+- `channels.discord.voice.daveEncryption` and `channels.discord.voice.decryptionFailureTolerance` pass through to `@discordjs/voice` DAVE options (`true` and `24` by default).
+- OpenClaw additionally attempts voice receive recovery by leaving/rejoining a voice session after repeated decrypt failures.
+- `channels.discord.streaming` is the canonical stream mode key. Legacy `streamMode` and boolean `streaming` values are auto-migrated.
+- `channels.discord.dangerouslyAllowNameMatching` re-enables mutable name/tag matching (break-glass compatibility mode).
 
 **Reaction notification modes:** `off` (none), `own` (bot's messages, default), `all` (all messages), `allowlist` (from `guilds.<id>.users` on all messages).
 
@@ -266,8 +347,10 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 ```
 
 - Service account JSON: inline (`serviceAccount`) or file-based (`serviceAccountFile`).
+- Service account SecretRef is also supported (`serviceAccountRef`).
 - Env fallbacks: `GOOGLE_CHAT_SERVICE_ACCOUNT` or `GOOGLE_CHAT_SERVICE_ACCOUNT_FILE`.
-- Use `spaces/<spaceId>` or `users/<userId|email>` for delivery targets.
+- Use `spaces/<spaceId>` or `users/<userId>` for delivery targets.
+- `channels.googlechat.dangerouslyAllowNameMatching` re-enables mutable email principal matching (break-glass compatibility mode).
 
 ### Slack
 
@@ -316,6 +399,8 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
       },
       textChunkLimit: 4000,
       chunkMode: "length",
+      streaming: "partial", // off | partial | block | progress (preview mode)
+      nativeStreaming: true, // use Slack native streaming API when streaming=partial
       mediaMaxMb: 20,
     },
   },
@@ -325,6 +410,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 - **Socket mode** requires both `botToken` and `appToken` (`SLACK_BOT_TOKEN` + `SLACK_APP_TOKEN` for default account env fallback).
 - **HTTP mode** requires `botToken` plus `signingSecret` (at root or per-account).
 - `configWrites: false` blocks Slack-initiated config writes.
+- `channels.slack.streaming` is the canonical stream mode key. Legacy `streamMode` and boolean `streaming` values are auto-migrated.
 - Use `user:<id>` (DM) or `channel:<id>` for delivery targets.
 
 **Reaction notification modes:** `off`, `own` (default), `all`, `allowlist` (from `reactionAllowlist`).
@@ -362,12 +448,20 @@ Mattermost ships as a plugin: `openclaw plugins install @openclaw/mattermost`.
 
 Chat modes: `oncall` (respond on @-mention, default), `onmessage` (every message), `onchar` (messages starting with trigger prefix).
 
+- `channels.mattermost.configWrites`: allow or deny Mattermost-initiated config writes.
+- `channels.mattermost.requireMention`: require `@mention` before replying in channels.
+
 ### Signal
 
 ```json5
 {
   channels: {
     signal: {
+      enabled: true,
+      account: "+15555550123", // optional account binding
+      dmPolicy: "pairing",
+      allowFrom: ["+15551234567", "uuid:123e4567-e89b-12d3-a456-426614174000"],
+      configWrites: true,
       reactionNotifications: "own", // off | own | all | allowlist
       reactionAllowlist: ["+15551234567", "uuid:123e4567-e89b-12d3-a456-426614174000"],
       historyLimit: 50,
@@ -377,6 +471,29 @@ Chat modes: `oncall` (respond on @-mention, default), `onmessage` (every message
 ```
 
 **Reaction notification modes:** `off`, `own` (default), `all`, `allowlist` (from `reactionAllowlist`).
+
+- `channels.signal.account`: pin channel startup to a specific Signal account identity.
+- `channels.signal.configWrites`: allow or deny Signal-initiated config writes.
+
+### BlueBubbles
+
+BlueBubbles is the recommended iMessage path (plugin-backed, configured under `channels.bluebubbles`).
+
+```json5
+{
+  channels: {
+    bluebubbles: {
+      enabled: true,
+      dmPolicy: "pairing",
+      // serverUrl, password, webhookPath, group controls, and advanced actions:
+      // see /channels/bluebubbles
+    },
+  },
+}
+```
+
+- Core key paths covered here: `channels.bluebubbles`, `channels.bluebubbles.dmPolicy`.
+- Full BlueBubbles channel configuration is documented in [BlueBubbles](/channels/bluebubbles).
 
 ### iMessage
 
@@ -394,6 +511,8 @@ OpenClaw spawns `imsg rpc` (JSON-RPC over stdio). No daemon or port required.
       allowFrom: ["+15555550123", "user@example.com", "chat_id:123"],
       historyLimit: 50,
       includeAttachments: false,
+      attachmentRoots: ["/Users/*/Library/Messages/Attachments"],
+      remoteAttachmentRoots: ["/Users/*/Library/Messages/Attachments"],
       mediaMaxMb: 16,
       service: "auto",
       region: "US",
@@ -404,7 +523,10 @@ OpenClaw spawns `imsg rpc` (JSON-RPC over stdio). No daemon or port required.
 
 - Requires Full Disk Access to the Messages DB.
 - Prefer `chat_id:<id>` targets. Use `imsg chats --limit 20` to list chats.
-- `cliPath` can point to an SSH wrapper; set `remoteHost` for SCP attachment fetching.
+- `cliPath` can point to an SSH wrapper; set `remoteHost` (`host` or `user@host`) for SCP attachment fetching.
+- `attachmentRoots` and `remoteAttachmentRoots` restrict inbound attachment paths (default: `/Users/*/Library/Messages/Attachments`).
+- SCP uses strict host-key checking, so ensure the relay host key already exists in `~/.ssh/known_hosts`.
+- `channels.imessage.configWrites`: allow or deny iMessage-initiated config writes.
 
 <Accordion title="iMessage SSH wrapper example">
 
@@ -414,6 +536,52 @@ exec ssh -T gateway-host imsg "$@"
 ```
 
 </Accordion>
+
+### Microsoft Teams
+
+Microsoft Teams is extension-backed and configured under `channels.msteams`.
+
+```json5
+{
+  channels: {
+    msteams: {
+      enabled: true,
+      configWrites: true,
+      // appId, appPassword, tenantId, webhook, team/channel policies:
+      // see /channels/msteams
+    },
+  },
+}
+```
+
+- Core key paths covered here: `channels.msteams`, `channels.msteams.configWrites`.
+- Full Teams config (credentials, webhook, DM/group policy, per-team/per-channel overrides) is documented in [Microsoft Teams](/channels/msteams).
+
+### IRC
+
+IRC is extension-backed and configured under `channels.irc`.
+
+```json5
+{
+  channels: {
+    irc: {
+      enabled: true,
+      dmPolicy: "pairing",
+      configWrites: true,
+      nickserv: {
+        enabled: true,
+        service: "NickServ",
+        password: "${IRC_NICKSERV_PASSWORD}",
+        register: false,
+        registerEmail: "bot@example.com",
+      },
+    },
+  },
+}
+```
+
+- Core key paths covered here: `channels.irc`, `channels.irc.dmPolicy`, `channels.irc.configWrites`, `channels.irc.nickserv.*`.
+- Full IRC channel configuration (host/port/TLS/channels/allowlists/mention gating) is documented in [IRC](/channels/irc).
 
 ### Multi-account (all channels)
 
@@ -442,6 +610,14 @@ Run multiple accounts per channel (each with its own `accountId`):
 - Env tokens only apply to the **default** account.
 - Base channel settings apply to all accounts unless overridden per account.
 - Use `bindings[].match.accountId` to route each account to a different agent.
+- If you add a non-default account via `openclaw channels add` (or channel onboarding) while still on a single-account top-level channel config, OpenClaw moves account-scoped top-level single-account values into `channels.<channel>.accounts.default` first so the original account keeps working.
+- Existing channel-only bindings (no `accountId`) keep matching the default account; account-scoped bindings remain optional.
+- `openclaw doctor --fix` also repairs mixed shapes by moving account-scoped top-level single-account values into `accounts.default` when named accounts exist but `default` is missing.
+
+### Other extension channels
+
+Many extension channels are configured as `channels.<id>` and documented in their dedicated channel pages (for example Feishu, Matrix, LINE, Nostr, Zalo, Nextcloud Talk, Synology Chat, and Twitch).
+See the full channel index: [Channels](/channels).
 
 ### Group chat mention gating
 
@@ -661,9 +837,16 @@ Time format in system prompt. Default: `auto` (OS preference).
 }
 ```
 
+- `model`: accepts either a string (`"provider/model"`) or an object (`{ primary, fallbacks }`).
+  - String form sets only the primary model.
+  - Object form sets primary plus ordered failover models.
+- `imageModel`: accepts either a string (`"provider/model"`) or an object (`{ primary, fallbacks }`).
+  - Used by the `image` tool path as its vision-model config.
+  - Also used as fallback routing when the selected/default model cannot accept image input.
 - `model.primary`: format `provider/model` (e.g. `anthropic/claude-opus-4-6`). If you omit the provider, OpenClaw assumes `anthropic` (deprecated).
-- `models`: the configured model catalog and allowlist for `/model`. Each entry can include `alias` (shortcut) and `params` (provider-specific: `temperature`, `maxTokens`).
-- `imageModel`: only used if the primary model lacks image input.
+- `models`: the configured model catalog and allowlist for `/model`. Each entry can include `alias` (shortcut) and `params` (provider-specific, for example `temperature`, `maxTokens`, `cacheRetention`, `context1m`).
+- `params` merge precedence (config): `agents.defaults.models["provider/model"].params` is the base, then `agents.list[].params` (matching agent id) overrides by key.
+- Config writers that mutate these fields (for example `/models set`, `/models set-image`, and fallback add/remove commands) save canonical object form and preserve existing fallback lists when possible.
 - `maxConcurrent`: max parallel agent runs across sessions (each session still serialized). Default: 1.
 
 **Built-in alias shorthands** (only apply when the model is in `agents.defaults.models`):
@@ -730,7 +913,8 @@ Periodic heartbeat runs.
         includeReasoning: false,
         session: "main",
         to: "+15555550123",
-        target: "last", // last | whatsapp | telegram | discord | ... | none
+        directPolicy: "allow", // allow (default) | block
+        target: "none", // default: none | options: last | whatsapp | telegram | discord | ...
         prompt: "Read HEARTBEAT.md if it exists...",
         ackMaxChars: 300,
         suppressToolErrorWarnings: false,
@@ -742,6 +926,7 @@ Periodic heartbeat runs.
 
 - `every`: duration string (ms/s/m/h). Default: `30m`.
 - `suppressToolErrorWarnings`: when true, suppresses tool error warning payloads during heartbeat runs.
+- `directPolicy`: direct/DM delivery policy. `allow` (default) permits direct-target delivery. `block` suppresses direct-target delivery and emits `reason=dm-blocked`.
 - Per-agent: set `agents.list[].heartbeat`. When any agent defines `heartbeat`, **only those agents** run heartbeats.
 - Heartbeats run full agent turns — shorter intervals burn more tokens.
 
@@ -754,6 +939,8 @@ Periodic heartbeat runs.
       compaction: {
         mode: "safeguard", // default | safeguard
         reserveTokensFloor: 24000,
+        identifierPolicy: "strict", // strict | off | custom
+        identifierInstructions: "Preserve deployment IDs, ticket IDs, and host:port pairs exactly.", // used when identifierPolicy=custom
         memoryFlush: {
           enabled: true,
           softThresholdTokens: 6000,
@@ -767,6 +954,8 @@ Periodic heartbeat runs.
 ```
 
 - `mode`: `default` or `safeguard` (chunked summarization for long histories). See [Compaction](/concepts/compaction).
+- `identifierPolicy`: `strict` (default), `off`, or `custom`. `strict` prepends built-in opaque identifier retention guidance during compaction summarization.
+- `identifierInstructions`: optional custom identifier-preservation text used when `identifierPolicy=custom`.
 - `memoryFlush`: silent agentic turn before auto-compaction to store durable memories. Skipped when workspace is read-only.
 
 ### `agents.defaults.contextPruning`
@@ -894,7 +1083,9 @@ Optional **Docker sandboxing** for the embedded agent. See [Sandboxing](/gateway
         browser: {
           enabled: false,
           image: "openclaw-sandbox-browser:bookworm-slim",
+          network: "openclaw-sandbox-browser",
           cdpPort: 9222,
+          cdpSourceRange: "172.21.0.1/32",
           vncPort: 5900,
           noVncPort: 6080,
           headless: false,
@@ -949,15 +1140,20 @@ Optional **Docker sandboxing** for the embedded agent. See [Sandboxing](/gateway
 
 **`setupCommand`** runs once after container creation (via `sh -lc`). Needs network egress, writable root, root user.
 
-**Containers default to `network: "none"`** — set to `"bridge"` if the agent needs outbound access.
+**Containers default to `network: "none"`** — set to `"bridge"` (or a custom bridge network) if the agent needs outbound access.
+`"host"` is blocked. `"container:<id>"` is blocked by default unless you explicitly set
+`sandbox.docker.dangerouslyAllowContainerNamespaceJoin: true` (break-glass).
 
 **Inbound attachments** are staged into `media/inbound/*` in the active workspace.
 
 **`docker.binds`** mounts additional host directories; global and per-agent binds are merged.
 
 **Sandboxed browser** (`sandbox.browser.enabled`): Chromium + CDP in a container. noVNC URL injected into system prompt. Does not require `browser.enabled` in main config.
+noVNC observer access uses VNC auth by default and OpenClaw emits a short-lived token URL (instead of exposing the password in the shared URL).
 
 - `allowHostControl: false` (default) blocks sandboxed sessions from targeting the host browser.
+- `network` defaults to `openclaw-sandbox-browser` (dedicated bridge network). Set to `bridge` only when you explicitly want global bridge connectivity.
+- `cdpSourceRange` optionally restricts CDP ingress at the container edge to a CIDR range (for example `172.21.0.1/32`).
 - `sandbox.browser.binds` mounts additional host directories into the sandbox browser container only. When set (including `[]`), it replaces `docker.binds` for the browser container.
 
 </Accordion>
@@ -982,6 +1178,7 @@ scripts/sandbox-browser-setup.sh   # optional browser image
         workspace: "~/.openclaw/workspace",
         agentDir: "~/.openclaw/agents/main/agent",
         model: "anthropic/claude-opus-4-6", // or { primary, fallbacks }
+        params: { cacheRetention: "none" }, // overrides matching defaults.models params by key
         identity: {
           name: "Samantha",
           theme: "helpful sloth",
@@ -1006,6 +1203,7 @@ scripts/sandbox-browser-setup.sh   # optional browser image
 - `id`: stable agent id (required).
 - `default`: when multiple are set, first wins (warning logged). If none set, first list entry is default.
 - `model`: string form overrides `primary` only; object form `{ primary, fallbacks }` overrides both (`[]` disables global fallbacks). Cron jobs that only override `primary` still inherit default fallbacks unless you set `fallbacks: []`.
+- `params`: per-agent stream params merged over the selected model entry in `agents.defaults.models`. Use this for agent-specific overrides like `cacheRetention`, `temperature`, or `maxTokens` without duplicating the whole model catalog.
 - `identity.avatar`: workspace-relative path, `http(s)` URL, or `data:` URI.
 - `identity` derives defaults: `ackReaction` from `emoji`, `mentionPatterns` from `name`/`emoji`.
 - `subagents.allowAgents`: allowlist of agent ids for `sessions_spawn` (`["*"]` = any; default: same agent only).
@@ -1170,11 +1368,20 @@ See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for preceden
     },
     resetTriggers: ["/new", "/reset"],
     store: "~/.openclaw/agents/{agentId}/sessions/sessions.json",
+    parentForkMaxTokens: 100000, // skip parent-thread fork above this token count (0 disables)
     maintenance: {
       mode: "warn", // warn | enforce
       pruneAfter: "30d",
       maxEntries: 500,
       rotateBytes: "10mb",
+      resetArchiveRetention: "30d", // duration or false
+      maxDiskBytes: "500mb", // optional hard budget
+      highWaterBytes: "400mb", // optional cleanup target
+    },
+    threadBindings: {
+      enabled: true,
+      idleHours: 24, // default inactivity auto-unfocus in hours (`0` disables)
+      maxAgeHours: 0, // default hard max age in hours (`0` disables)
     },
     mainKey: "main", // legacy (runtime always uses "main")
     agentToAgent: { maxPingPongTurns: 5 },
@@ -1196,9 +1403,23 @@ See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for preceden
 - **`identityLinks`**: map canonical ids to provider-prefixed peers for cross-channel session sharing.
 - **`reset`**: primary reset policy. `daily` resets at `atHour` local time; `idle` resets after `idleMinutes`. When both configured, whichever expires first wins.
 - **`resetByType`**: per-type overrides (`direct`, `group`, `thread`). Legacy `dm` accepted as alias for `direct`.
+- **`parentForkMaxTokens`**: max parent-session `totalTokens` allowed when creating a forked thread session (default `100000`).
+  - If parent `totalTokens` is above this value, OpenClaw starts a fresh thread session instead of inheriting parent transcript history.
+  - Set `0` to disable this guard and always allow parent forking.
 - **`mainKey`**: legacy field. Runtime now always uses `"main"` for the main direct-chat bucket.
 - **`sendPolicy`**: match by `channel`, `chatType` (`direct|group|channel`, with legacy `dm` alias), `keyPrefix`, or `rawKeyPrefix`. First deny wins.
-- **`maintenance`**: `warn` warns the active session on eviction; `enforce` applies pruning and rotation.
+- **`maintenance`**: session-store cleanup + retention controls.
+  - `mode`: `warn` emits warnings only; `enforce` applies cleanup.
+  - `pruneAfter`: age cutoff for stale entries (default `30d`).
+  - `maxEntries`: maximum number of entries in `sessions.json` (default `500`).
+  - `rotateBytes`: rotate `sessions.json` when it exceeds this size (default `10mb`).
+  - `resetArchiveRetention`: retention for `*.reset.<timestamp>` transcript archives. Defaults to `pruneAfter`; set `false` to disable.
+  - `maxDiskBytes`: optional sessions-directory disk budget. In `warn` mode it logs warnings; in `enforce` mode it removes oldest artifacts/sessions first.
+  - `highWaterBytes`: optional target after budget cleanup. Defaults to `80%` of `maxDiskBytes`.
+- **`threadBindings`**: global defaults for thread-bound session features.
+  - `enabled`: master default switch (providers can override; Discord uses `channels.discord.threadBindings.enabled`)
+  - `idleHours`: default inactivity auto-unfocus in hours (`0` disables; providers can override)
+  - `maxAgeHours`: default hard max age in hours (`0` disables; providers can override)
 
 </Accordion>
 
@@ -1306,6 +1527,7 @@ Batches rapid text-only messages from the same sender into a single agent turn. 
 
 - `auto` controls auto-TTS. `/tts off|always|inbound|tagged` overrides per session.
 - `summaryModel` overrides `agents.defaults.model.primary` for auto-summary.
+- `modelOverrides` is enabled by default; `modelOverrides.allowProvider` defaults to `false` (opt-in).
 - API keys fall back to `ELEVENLABS_API_KEY`/`XI_API_KEY` and `OPENAI_API_KEY`.
 
 ---
@@ -1401,7 +1623,7 @@ Controls elevated (host) exec access:
       enabled: true,
       allowFrom: {
         whatsapp: ["+15555550123"],
-        discord: ["steipete", "1234567890123"],
+        discord: ["1234567890123", "987654321098765432"],
       },
     },
   },
@@ -1592,6 +1814,7 @@ Notes:
       subagents: {
         model: "minimax/MiniMax-M2.1",
         maxConcurrent: 1,
+        runTimeoutSeconds: 900,
         archiveAfterMinutes: 60,
       },
     },
@@ -1600,6 +1823,7 @@ Notes:
 ```
 
 - `model`: default model for spawned sub-agents. If omitted, sub-agents inherit the caller's model.
+- `runTimeoutSeconds`: default timeout (seconds) for `sessions_spawn` when the tool call omits `runTimeoutSeconds`. `0` means no timeout.
 - Per-subagent tool policy: `tools.subagents.tools.allow` / `tools.subagents.tools.deny`.
 
 ---
@@ -1636,6 +1860,29 @@ OpenClaw uses the pi-coding-agent model catalog. Add custom providers via `model
 
 - Use `authHeader: true` + `headers` for custom auth needs.
 - Override agent config root with `OPENCLAW_AGENT_DIR` (or `PI_CODING_AGENT_DIR`).
+- Merge precedence for matching provider IDs:
+  - Non-empty agent `models.json` `apiKey`/`baseUrl` win.
+  - Empty or missing agent `apiKey`/`baseUrl` fall back to `models.providers` in config.
+  - Use `models.mode: "replace"` when you want config to fully rewrite `models.json`.
+
+### Provider field details
+
+- `models.mode`: provider catalog behavior (`merge` or `replace`).
+- `models.providers`: custom provider map keyed by provider id.
+- `models.providers.*.api`: request adapter (`openai-completions`, `openai-responses`, `anthropic-messages`, `google-generative-ai`, etc).
+- `models.providers.*.apiKey`: provider credential (prefer SecretRef/env substitution).
+- `models.providers.*.auth`: auth strategy (`api-key`, `token`, `oauth`, `aws-sdk`).
+- `models.providers.*.authHeader`: force credential transport in the `Authorization` header when required.
+- `models.providers.*.baseUrl`: upstream API base URL.
+- `models.providers.*.headers`: extra static headers for proxy/tenant routing.
+- `models.providers.*.models`: explicit provider model catalog entries.
+- `models.bedrockDiscovery`: Bedrock auto-discovery settings root.
+- `models.bedrockDiscovery.enabled`: turn discovery polling on/off.
+- `models.bedrockDiscovery.region`: AWS region for discovery.
+- `models.bedrockDiscovery.providerFilter`: optional provider-id filter for targeted discovery.
+- `models.bedrockDiscovery.refreshInterval`: polling interval for discovery refresh.
+- `models.bedrockDiscovery.defaultContextWindow`: fallback context window for discovered models.
+- `models.bedrockDiscovery.defaultMaxTokens`: fallback max output tokens for discovered models.
 
 ### Provider examples
 
@@ -1874,7 +2121,7 @@ See [Local Models](/gateway/local-models). TL;DR: run MiniMax M2.1 via LM Studio
     },
     entries: {
       "nano-banana-pro": {
-        apiKey: "GEMINI_KEY_HERE",
+        apiKey: { source: "env", provider: "default", id: "GEMINI_API_KEY" }, // or plaintext string
         env: { GEMINI_API_KEY: "GEMINI_KEY_HERE" },
       },
       peekaboo: { enabled: true },
@@ -1886,7 +2133,7 @@ See [Local Models](/gateway/local-models). TL;DR: run MiniMax M2.1 via LM Studio
 
 - `allowBundled`: optional allowlist for bundled skills only (managed/workspace skills unaffected).
 - `entries.<skillKey>.enabled: false` disables a skill even if bundled/installed.
-- `entries.<skillKey>.apiKey`: convenience for skills declaring a primary env var.
+- `entries.<skillKey>.apiKey`: convenience for skills declaring a primary env var (plaintext string or SecretRef object).
 
 ---
 
@@ -1914,6 +2161,13 @@ See [Local Models](/gateway/local-models). TL;DR: run MiniMax M2.1 via LM Studio
 - Loaded from `~/.openclaw/extensions`, `<workspace>/.openclaw/extensions`, plus `plugins.load.paths`.
 - **Config changes require a gateway restart.**
 - `allow`: optional allowlist (only listed plugins load). `deny` wins.
+- `plugins.entries.<id>.apiKey`: plugin-level API key convenience field (when supported by the plugin).
+- `plugins.entries.<id>.env`: plugin-scoped env var map.
+- `plugins.entries.<id>.config`: plugin-defined config object (validated by plugin schema).
+- `plugins.slots.memory`: pick the active memory plugin id, or `"none"` to disable memory plugins.
+- `plugins.installs`: CLI-managed install metadata used by `openclaw plugins update`.
+  - Includes `source`, `spec`, `sourcePath`, `installPath`, `version`, `resolvedName`, `resolvedVersion`, `resolvedSpec`, `integrity`, `shasum`, `resolvedAt`, `installedAt`.
+  - Treat `plugins.installs.*` as managed state; prefer CLI commands over manual edits.
 
 See [Plugins](/tools/plugin).
 
@@ -1927,6 +2181,12 @@ See [Plugins](/tools/plugin).
     enabled: true,
     evaluateEnabled: true,
     defaultProfile: "chrome",
+    ssrfPolicy: {
+      dangerouslyAllowPrivateNetwork: true, // default trusted-network mode
+      // allowPrivateNetwork: true, // legacy alias
+      // hostnameAllowlist: ["*.example.com", "example.com"],
+      // allowedHostnames: ["localhost"],
+    },
     profiles: {
       openclaw: { cdpPort: 18800, color: "#FF4500" },
       work: { cdpPort: 18801, color: "#0066CC" },
@@ -1942,6 +2202,10 @@ See [Plugins](/tools/plugin).
 ```
 
 - `evaluateEnabled: false` disables `act:evaluate` and `wait --fn`.
+- `ssrfPolicy.dangerouslyAllowPrivateNetwork` defaults to `true` when unset (trusted-network model).
+- Set `ssrfPolicy.dangerouslyAllowPrivateNetwork: false` for strict public-only browser navigation.
+- `ssrfPolicy.allowPrivateNetwork` remains supported as a legacy alias.
+- In strict mode, use `ssrfPolicy.hostnameAllowlist` and `ssrfPolicy.allowedHostnames` for explicit exceptions.
 - Remote profiles are attach-only (start/stop/reset disabled).
 - Auto-detect order: default browser if Chromium-based → Chrome → Brave → Edge → Chromium → Chrome Canary.
 - Control service: loopback only (port derived from `gateway.port`, default `18791`).
@@ -1976,7 +2240,7 @@ See [Plugins](/tools/plugin).
     port: 18789,
     bind: "loopback",
     auth: {
-      mode: "token", // token | password | trusted-proxy
+      mode: "token", // none | token | password | trusted-proxy
       token: "your-token",
       // password: "your-password", // or OPENCLAW_GATEWAY_PASSWORD
       // trustedProxy: { userHeader: "x-forwarded-user" }, // for mode=trusted-proxy; see /gateway/trusted-proxy-auth
@@ -1996,6 +2260,8 @@ See [Plugins](/tools/plugin).
       enabled: true,
       basePath: "/openclaw",
       // root: "dist/control-ui",
+      // allowedOrigins: ["https://control.example.com"], // required for non-loopback Control UI
+      // dangerouslyAllowHostHeaderOriginFallback: false, // dangerous Host-header origin fallback mode
       // allowInsecureAuth: false,
       // dangerouslyDisableDeviceAuth: false,
     },
@@ -2006,6 +2272,8 @@ See [Plugins](/tools/plugin).
       // password: "your-password",
     },
     trustedProxies: ["10.0.0.1"],
+    // Optional. Default false.
+    allowRealIpFallback: false,
     tools: {
       // Additional /tools/invoke HTTP denies
       deny: ["browser"],
@@ -2022,14 +2290,20 @@ See [Plugins](/tools/plugin).
 - `port`: single multiplexed port for WS + HTTP. Precedence: `--port` > `OPENCLAW_GATEWAY_PORT` > `gateway.port` > `18789`.
 - `bind`: `auto`, `loopback` (default), `lan` (`0.0.0.0`), `tailnet` (Tailscale IP only), or `custom`.
 - **Auth**: required by default. Non-loopback binds require a shared token/password. Onboarding wizard generates a token by default.
-- `auth.mode: "trusted-proxy"`: delegate auth to an identity-aware reverse proxy and trust identity headers from `gateway.trustedProxies` (see [Trusted Proxy Auth](/gateway/trusted-proxy-auth)).
-- `auth.allowTailscale`: when `true`, Tailscale Serve identity headers satisfy auth (verified via `tailscale whois`). Defaults to `true` when `tailscale.mode = "serve"`.
-- `auth.rateLimit`: optional failed-auth limiter. Applies per client IP and per auth scope (shared-secret and device-token are tracked independently). Blocked attempts return `429` + `Retry-After`.
-  - `auth.rateLimit.exemptLoopback` defaults to `true`; set `false` when you intentionally want localhost traffic rate-limited too (for test setups or strict proxy deployments).
+- `gateway.auth.mode: "none"`: explicit no-auth mode. Use only for trusted local loopback setups; this is intentionally not offered by onboarding prompts.
+- `gateway.auth.mode: "trusted-proxy"`: delegate auth to an identity-aware reverse proxy and trust identity headers from `gateway.trustedProxies` (see [Trusted Proxy Auth](/gateway/trusted-proxy-auth)).
+- `gateway.auth.allowTailscale`: when `true`, Tailscale Serve identity headers can satisfy Control UI/WebSocket auth (verified via `tailscale whois`); HTTP API endpoints still require token/password auth. This tokenless flow assumes the gateway host is trusted. Defaults to `true` when `tailscale.mode = "serve"`.
+- `gateway.auth.rateLimit`: optional failed-auth limiter. Applies per client IP and per auth scope (shared-secret and device-token are tracked independently). Blocked attempts return `429` + `Retry-After`.
+  - `gateway.auth.rateLimit.exemptLoopback` defaults to `true`; set `false` when you intentionally want localhost traffic rate-limited too (for test setups or strict proxy deployments).
+- Browser-origin WS auth attempts are always throttled with loopback exemption disabled (defense-in-depth against browser-based localhost brute force).
 - `tailscale.mode`: `serve` (tailnet only, loopback bind) or `funnel` (public, requires auth).
+- `controlUi.allowedOrigins`: explicit browser-origin allowlist for Gateway WebSocket connects. Required when browser clients are expected from non-loopback origins.
+- `controlUi.dangerouslyAllowHostHeaderOriginFallback`: dangerous mode that enables Host-header origin fallback for deployments that intentionally rely on Host-header origin policy.
 - `remote.transport`: `ssh` (default) or `direct` (ws/wss). For `direct`, `remote.url` must be `ws://` or `wss://`.
-- `gateway.remote.token` is for remote CLI calls only; does not enable local gateway auth.
+- `gateway.remote.token` / `.password` are remote-client credential fields. They do not configure gateway auth by themselves.
+- Local gateway call paths can use `gateway.remote.*` as fallback when `gateway.auth.*` is unset.
 - `trustedProxies`: reverse proxy IPs that terminate TLS. Only list proxies you control.
+- `allowRealIpFallback`: when `true`, the gateway accepts `X-Real-IP` if `X-Forwarded-For` is missing. Default `false` for fail-closed behavior.
 - `gateway.tools.deny`: extra tool names blocked for HTTP `POST /tools/invoke` (extends default deny list).
 - `gateway.tools.allow`: remove tool names from the default HTTP deny list.
 
@@ -2043,6 +2317,8 @@ See [Plugins](/tools/plugin).
   - `gateway.http.endpoints.responses.maxUrlParts`
   - `gateway.http.endpoints.responses.files.urlAllowlist`
   - `gateway.http.endpoints.responses.images.urlAllowlist`
+- Optional response hardening header:
+  - `gateway.http.securityHeaders.strictTransportSecurity` (set only for HTTPS origins you control; see [Trusted Proxy Auth](/gateway/trusted-proxy-auth#tls-termination-and-hsts))
 
 ### Multi-instance isolation
 
@@ -2164,7 +2440,8 @@ Auth: `Authorization: Bearer <token>` or `x-openclaw-token: <token>`.
   - `http://<gateway-host>:<gateway.port>/__openclaw__/a2ui/`
 - Local-only: keep `gateway.bind: "loopback"` (default).
 - Non-loopback binds: canvas routes require Gateway auth (token/password/trusted-proxy), same as other Gateway HTTP surfaces.
-- Node WebViews typically don't send auth headers; after a node is paired and connected, the Gateway allows a private-IP fallback so the node can load canvas/A2UI without leaking secrets into URLs.
+- Node WebViews typically don't send auth headers; after a node is paired and connected, the Gateway advertises node-scoped capability URLs for canvas/A2UI access.
+- Capability URLs are bound to the active node WS session and expire quickly. IP-based fallback is not used.
 - Injects live-reload client into served HTML.
 - Auto-creates starter `index.html` when empty.
 - Also serves A2UI at `/__openclaw__/a2ui/`.
@@ -2250,6 +2527,73 @@ Reference env vars in any config string with `${VAR_NAME}`:
 
 ---
 
+## Secrets
+
+Secret refs are additive: plaintext values still work.
+
+### `SecretRef`
+
+Use one object shape:
+
+```json5
+{ source: "env" | "file" | "exec", provider: "default", id: "..." }
+```
+
+Validation:
+
+- `provider` pattern: `^[a-z][a-z0-9_-]{0,63}$`
+- `source: "env"` id pattern: `^[A-Z][A-Z0-9_]{0,127}$`
+- `source: "file"` id: absolute JSON pointer (for example `"/providers/openai/apiKey"`)
+- `source: "exec"` id pattern: `^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$`
+
+### Supported fields in config
+
+- `models.providers.<provider>.apiKey`
+- `skills.entries.<skillKey>.apiKey`
+- `channels.googlechat.serviceAccount`
+- `channels.googlechat.serviceAccountRef`
+- `channels.googlechat.accounts.<accountId>.serviceAccount`
+- `channels.googlechat.accounts.<accountId>.serviceAccountRef`
+
+### Secret providers config
+
+```json5
+{
+  secrets: {
+    providers: {
+      default: { source: "env" }, // optional explicit env provider
+      filemain: {
+        source: "file",
+        path: "~/.openclaw/secrets.json",
+        mode: "json",
+        timeoutMs: 5000,
+      },
+      vault: {
+        source: "exec",
+        command: "/usr/local/bin/openclaw-vault-resolver",
+        passEnv: ["PATH", "VAULT_ADDR"],
+      },
+    },
+    defaults: {
+      env: "default",
+      file: "filemain",
+      exec: "vault",
+    },
+  },
+}
+```
+
+Notes:
+
+- `file` provider supports `mode: "json"` and `mode: "singleValue"` (`id` must be `"value"` in singleValue mode).
+- `exec` provider requires an absolute `command` path and uses protocol payloads on stdin/stdout.
+- By default, symlink command paths are rejected. Set `allowSymlinkCommand: true` to allow symlink paths while validating the resolved target path.
+- If `trustedDirs` is configured, the trusted-dir check applies to the resolved target path.
+- `exec` child environment is minimal by default; pass required variables explicitly with `passEnv`.
+- Secret refs are resolved at activation time into an in-memory snapshot, then request paths read the snapshot only.
+
+---
+
 ## Auth storage
 
 ```json5
@@ -2267,8 +2611,11 @@ Reference env vars in any config string with `${VAR_NAME}`:
 ```
 
 - Per-agent auth profiles stored at `<agentDir>/auth-profiles.json`.
+- Auth profiles support value-level refs (`keyRef` for `api_key`, `tokenRef` for `token`).
+- Static runtime credentials come from in-memory resolved snapshots; legacy static `auth.json` entries are scrubbed when discovered.
 - Legacy OAuth imports from `~/.openclaw/credentials/oauth.json`.
 - See [OAuth](/concepts/oauth).
+- Secrets runtime behavior and `audit/configure/apply` tooling: [Secrets Management](/gateway/secrets).
 
 ---
 
@@ -2373,11 +2720,17 @@ Current builds no longer include the TCP bridge. Nodes connect over the Gateway 
     webhook: "https://example.invalid/legacy", // deprecated fallback for stored notify:true jobs
     webhookToken: "replace-with-dedicated-token", // optional bearer token for outbound webhook auth
     sessionRetention: "24h", // duration string or false
+    runLog: {
+      maxBytes: "2mb", // default 2_000_000 bytes
+      keepLines: 2000, // default 2000
+    },
   },
 }
 ```
 
-- `sessionRetention`: how long to keep completed cron sessions before pruning. Default: `24h`.
+- `sessionRetention`: how long to keep completed isolated cron run sessions before pruning from `sessions.json`. Also controls cleanup of archived deleted cron transcripts. Default: `24h`; set `false` to disable.
+- `runLog.maxBytes`: max size per run log file (`cron/runs/<jobId>.jsonl`) before pruning. Default: `2_000_000` bytes.
+- `runLog.keepLines`: newest lines retained when run-log pruning is triggered. Default: `2000`.
 - `webhookToken`: bearer token used for cron webhook POST delivery (`delivery.mode = "webhook"`), if omitted no auth header is sent.
 - `webhook`: deprecated legacy fallback webhook URL (http/https) used only for stored jobs that still have `notify: true`.
 
@@ -2387,7 +2740,7 @@ See [Cron Jobs](/automation/cron-jobs).
 
 ## Media model template variables
 
-Template placeholders expanded in `tools.media.*.models[].args`:
+Template placeholders expanded in `tools.media.models[].args`:
 
 | Variable           | Description                                       |
 | ------------------ | ------------------------------------------------- |

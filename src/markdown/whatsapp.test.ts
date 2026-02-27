@@ -2,55 +2,32 @@ import { describe, expect, it } from "vitest";
 import { markdownToWhatsApp } from "./whatsapp.js";
 
 describe("markdownToWhatsApp", () => {
-  it("converts **bold** to *bold*", () => {
-    expect(markdownToWhatsApp("**SOD Blast:**")).toBe("*SOD Blast:*");
-  });
-
-  it("converts __bold__ to *bold*", () => {
-    expect(markdownToWhatsApp("__important__")).toBe("*important*");
-  });
-
-  it("converts ~~strikethrough~~ to ~strikethrough~", () => {
-    expect(markdownToWhatsApp("~~deleted~~")).toBe("~deleted~");
-  });
-
-  it("leaves single *italic* unchanged (already WhatsApp bold)", () => {
-    expect(markdownToWhatsApp("*text*")).toBe("*text*");
-  });
-
-  it("leaves _italic_ unchanged (already WhatsApp italic)", () => {
-    expect(markdownToWhatsApp("_text_")).toBe("_text_");
+  it("handles common markdown-to-whatsapp conversions", () => {
+    const cases = [
+      ["converts **bold** to *bold*", "**SOD Blast:**", "*SOD Blast:*"],
+      ["converts __bold__ to *bold*", "__important__", "*important*"],
+      ["converts ~~strikethrough~~ to ~strikethrough~", "~~deleted~~", "~deleted~"],
+      ["leaves single *italic* unchanged (already WhatsApp bold)", "*text*", "*text*"],
+      ["leaves _italic_ unchanged (already WhatsApp italic)", "_text_", "_text_"],
+      ["preserves inline code", "Use `**not bold**` here", "Use `**not bold**` here"],
+      [
+        "handles mixed formatting",
+        "**bold** and ~~strike~~ and _italic_",
+        "*bold* and ~strike~ and _italic_",
+      ],
+      ["handles multiple bold segments", "**one** then **two**", "*one* then *two*"],
+      ["returns empty string for empty input", "", ""],
+      ["returns plain text unchanged", "no formatting here", "no formatting here"],
+      ["handles bold inside a sentence", "This is **very** important", "This is *very* important"],
+    ] as const;
+    for (const [name, input, expected] of cases) {
+      expect(markdownToWhatsApp(input), name).toBe(expected);
+    }
   });
 
   it("preserves fenced code blocks", () => {
     const input = "```\nconst x = **bold**;\n```";
     expect(markdownToWhatsApp(input)).toBe(input);
-  });
-
-  it("preserves inline code", () => {
-    expect(markdownToWhatsApp("Use `**not bold**` here")).toBe("Use `**not bold**` here");
-  });
-
-  it("handles mixed formatting", () => {
-    expect(markdownToWhatsApp("**bold** and ~~strike~~ and _italic_")).toBe(
-      "*bold* and ~strike~ and _italic_",
-    );
-  });
-
-  it("handles multiple bold segments", () => {
-    expect(markdownToWhatsApp("**one** then **two**")).toBe("*one* then *two*");
-  });
-
-  it("returns empty string for empty input", () => {
-    expect(markdownToWhatsApp("")).toBe("");
-  });
-
-  it("returns plain text unchanged", () => {
-    expect(markdownToWhatsApp("no formatting here")).toBe("no formatting here");
-  });
-
-  it("handles bold inside a sentence", () => {
-    expect(markdownToWhatsApp("This is **very** important")).toBe("This is *very* important");
   });
 
   it("preserves code block with formatting inside", () => {

@@ -28,6 +28,19 @@ The default workspace layout uses two memory layers:
 These files live under the workspace (`agents.defaults.workspace`, default
 `~/.openclaw/workspace`). See [Agent workspace](/concepts/agent-workspace) for the full layout.
 
+## Memory tools
+
+OpenClaw exposes two agent-facing tools for these Markdown files:
+
+- `memory_search` — semantic recall over indexed snippets.
+- `memory_get` — targeted read of a specific Markdown file/line range.
+
+`memory_get` now **degrades gracefully when a file doesn't exist** (for example,
+today's daily log before the first write). Both the builtin manager and the QMD
+backend return `{ text: "", path }` instead of throwing `ENOENT`, so agents can
+handle "nothing recorded yet" and continue their workflow without wrapping the
+tool call in try/catch logic.
+
 ## When to write memory
 
 - Decisions, preferences, and durable facts go to `MEMORY.md`.
@@ -92,7 +105,8 @@ Defaults:
   2. `openai` if an OpenAI key can be resolved.
   3. `gemini` if a Gemini key can be resolved.
   4. `voyage` if a Voyage key can be resolved.
-  5. Otherwise memory search stays disabled until configured.
+  5. `mistral` if a Mistral key can be resolved.
+  6. Otherwise memory search stays disabled until configured.
 - Local mode uses node-llama-cpp and may require `pnpm approve-builds`.
 - Uses sqlite-vec (when available) to accelerate vector search inside SQLite.
 
@@ -101,7 +115,9 @@ resolves keys from auth profiles, `models.providers.*.apiKey`, or environment
 variables. Codex OAuth only covers chat/completions and does **not** satisfy
 embeddings for memory search. For Gemini, use `GEMINI_API_KEY` or
 `models.providers.google.apiKey`. For Voyage, use `VOYAGE_API_KEY` or
-`models.providers.voyage.apiKey`. When using a custom OpenAI-compatible endpoint,
+`models.providers.voyage.apiKey`. For Mistral, use `MISTRAL_API_KEY` or
+`models.providers.mistral.apiKey`.
+When using a custom OpenAI-compatible endpoint,
 set `memorySearch.remote.apiKey` (and optional `memorySearch.remote.headers`).
 
 ### QMD backend (experimental)
@@ -315,7 +331,7 @@ If you don't want to set an API key, use `memorySearch.provider = "local"` or se
 
 Fallbacks:
 
-- `memorySearch.fallback` can be `openai`, `gemini`, `local`, or `none`.
+- `memorySearch.fallback` can be `openai`, `gemini`, `voyage`, `mistral`, `local`, or `none`.
 - The fallback provider is only used when the primary embedding provider fails.
 
 Batch indexing (OpenAI + Gemini + Voyage):

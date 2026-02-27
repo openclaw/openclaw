@@ -67,7 +67,7 @@ async function startAndRunCheck(
   const monitor = startDefaultMonitor(manager, overrides);
   const startupGraceMs = overrides.startupGraceMs ?? 0;
   const checkIntervalMs = overrides.checkIntervalMs ?? DEFAULT_CHECK_INTERVAL_MS;
-  await vi.advanceTimersByTimeAsync(startupGraceMs + checkIntervalMs + 500);
+  await vi.advanceTimersByTimeAsync(startupGraceMs + checkIntervalMs + 1);
   return monitor;
 }
 
@@ -91,7 +91,7 @@ describe("channel-health-monitor", () => {
   it("does not run before the grace period", async () => {
     const manager = createMockChannelManager();
     const monitor = startDefaultMonitor(manager, { startupGraceMs: 60_000 });
-    await vi.advanceTimersByTimeAsync(10_000);
+    await vi.advanceTimersByTimeAsync(5_001);
     expect(manager.getRuntimeSnapshot).not.toHaveBeenCalled();
     monitor.stop();
   });
@@ -244,11 +244,9 @@ describe("channel-health-monitor", () => {
       cooldownCycles: 1,
       maxRestartsPerHour: 3,
     });
-    await vi.advanceTimersByTimeAsync(1_500);
-    await vi.advanceTimersByTimeAsync(2_000);
-    await vi.advanceTimersByTimeAsync(2_000);
+    await vi.advanceTimersByTimeAsync(5_001);
     expect(manager.startChannel).toHaveBeenCalledTimes(3);
-    await vi.advanceTimersByTimeAsync(2_000);
+    await vi.advanceTimersByTimeAsync(1_001);
     expect(manager.startChannel).toHaveBeenCalledTimes(3);
     monitor.stop();
   });
@@ -284,7 +282,7 @@ describe("channel-health-monitor", () => {
     const manager = createMockChannelManager();
     const monitor = startDefaultMonitor(manager);
     monitor.stop();
-    await vi.advanceTimersByTimeAsync(10_000);
+    await vi.advanceTimersByTimeAsync(5_001);
     expect(manager.getRuntimeSnapshot).not.toHaveBeenCalled();
   });
 
@@ -293,7 +291,7 @@ describe("channel-health-monitor", () => {
     const abort = new AbortController();
     const monitor = startDefaultMonitor(manager, { abortSignal: abort.signal });
     abort.abort();
-    await vi.advanceTimersByTimeAsync(10_000);
+    await vi.advanceTimersByTimeAsync(5_001);
     expect(manager.getRuntimeSnapshot).not.toHaveBeenCalled();
     monitor.stop();
   });

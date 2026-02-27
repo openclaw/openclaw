@@ -62,6 +62,20 @@ describe("commands registry", () => {
     expect(nativeDisabled.find((spec) => spec.name === "debug")).toBeFalsy();
   });
 
+  it("does not enable restricted commands from inherited flags", () => {
+    const inheritedCommands = Object.create({
+      config: true,
+      debug: true,
+      bash: true,
+    }) as Record<string, unknown>;
+    const commands = listChatCommandsForConfig({
+      commands: inheritedCommands as never,
+    });
+    expect(commands.find((spec) => spec.key === "config")).toBeFalsy();
+    expect(commands.find((spec) => spec.key === "debug")).toBeFalsy();
+    expect(commands.find((spec) => spec.key === "bash")).toBeFalsy();
+  });
+
   it("appends skill commands when provided", () => {
     const skillCommands = [
       {
@@ -93,6 +107,58 @@ describe("commands registry", () => {
     expect(native.find((spec) => spec.name === "voice")).toBeTruthy();
     expect(findCommandByNativeName("voice", "discord")?.key).toBe("tts");
     expect(findCommandByNativeName("tts", "discord")).toBeUndefined();
+  });
+
+  it("renames status to agentstatus for slack", () => {
+    const native = listNativeCommandSpecsForConfig(
+      { commands: { native: true } },
+      { provider: "slack" },
+    );
+    expect(native.find((spec) => spec.name === "agentstatus")).toBeTruthy();
+    expect(native.find((spec) => spec.name === "status")).toBeFalsy();
+    expect(findCommandByNativeName("agentstatus", "slack")?.key).toBe("status");
+    expect(findCommandByNativeName("status", "slack")).toBeUndefined();
+  });
+
+  it("keeps discord native command specs within slash-command limits", () => {
+    const native = listNativeCommandSpecsForConfig(
+      { commands: { native: true } },
+      { provider: "discord" },
+    );
+    for (const spec of native) {
+      expect(spec.name).toMatch(/^[a-z0-9_-]{1,32}$/);
+      expect(spec.description.length).toBeGreaterThan(0);
+      expect(spec.description.length).toBeLessThanOrEqual(100);
+      for (const arg of spec.args ?? []) {
+        expect(arg.name).toMatch(/^[a-z0-9_-]{1,32}$/);
+        expect(arg.description.length).toBeGreaterThan(0);
+        expect(arg.description.length).toBeLessThanOrEqual(100);
+      }
+    }
+  });
+
+  it("keeps ACP native action choices aligned with implemented handlers", () => {
+    const acp = listChatCommands().find((command) => command.key === "acp");
+    expect(acp).toBeTruthy();
+    const actionArg = acp?.args?.find((arg) => arg.name === "action");
+    expect(actionArg?.choices).toEqual([
+      "spawn",
+      "cancel",
+      "steer",
+      "close",
+      "sessions",
+      "status",
+      "set-mode",
+      "set",
+      "cwd",
+      "permissions",
+      "timeout",
+      "model",
+      "reset-options",
+      "doctor",
+      "install",
+      "help",
+    ]);
   });
 
   it("detects known text commands", () => {

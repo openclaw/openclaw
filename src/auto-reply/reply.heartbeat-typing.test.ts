@@ -4,21 +4,10 @@ import { createTempHomeHarness, makeReplyConfig } from "./reply.test-harness.js"
 
 const runEmbeddedPiAgentMock = vi.fn();
 
-vi.mock("../agents/model-fallback.js", () => ({
-  runWithModelFallback: async ({
-    provider,
-    model,
-    run,
-  }: {
-    provider: string;
-    model: string;
-    run: (provider: string, model: string) => Promise<unknown>;
-  }) => ({
-    result: await run(provider, model),
-    provider,
-    model,
-  }),
-}));
+vi.mock(
+  "../agents/model-fallback.js",
+  async () => await import("../test-utils/model-fallback.mock.js"),
+);
 
 vi.mock("../agents/pi-embedded.js", () => ({
   abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
@@ -49,43 +38,34 @@ afterEach(() => {
 });
 
 describe("getReplyFromConfig typing (heartbeat)", () => {
+  async function runReplyFlow(isHeartbeat: boolean): Promise<ReturnType<typeof vi.fn>> {
+    const onReplyStart = vi.fn();
+    await withTempHome(async (home) => {
+      runEmbeddedPiAgentMock.mockResolvedValueOnce({
+        payloads: [{ text: "ok" }],
+        meta: {},
+      });
+
+      await getReplyFromConfig(
+        { Body: "hi", From: "+1000", To: "+2000", Provider: "whatsapp" },
+        { onReplyStart, isHeartbeat },
+        makeReplyConfig(home) as unknown as OpenClawConfig,
+      );
+    });
+    return onReplyStart;
+  }
+
   beforeEach(() => {
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
   });
 
   it("starts typing for normal runs", async () => {
-    await withTempHome(async (home) => {
-      runEmbeddedPiAgentMock.mockResolvedValueOnce({
-        payloads: [{ text: "ok" }],
-        meta: {},
-      });
-      const onReplyStart = vi.fn();
-
-      await getReplyFromConfig(
-        { Body: "hi", From: "+1000", To: "+2000", Provider: "whatsapp" },
-        { onReplyStart, isHeartbeat: false },
-        makeReplyConfig(home) as unknown as OpenClawConfig,
-      );
-
-      expect(onReplyStart).toHaveBeenCalled();
-    });
+    const onReplyStart = await runReplyFlow(false);
+    expect(onReplyStart).toHaveBeenCalled();
   });
 
   it("does not start typing for heartbeat runs", async () => {
-    await withTempHome(async (home) => {
-      runEmbeddedPiAgentMock.mockResolvedValueOnce({
-        payloads: [{ text: "ok" }],
-        meta: {},
-      });
-      const onReplyStart = vi.fn();
-
-      await getReplyFromConfig(
-        { Body: "hi", From: "+1000", To: "+2000", Provider: "whatsapp" },
-        { onReplyStart, isHeartbeat: true },
-        makeReplyConfig(home) as unknown as OpenClawConfig,
-      );
-
-      expect(onReplyStart).not.toHaveBeenCalled();
-    });
+    const onReplyStart = await runReplyFlow(true);
+    expect(onReplyStart).not.toHaveBeenCalled();
   });
 });

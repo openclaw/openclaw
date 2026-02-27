@@ -182,6 +182,11 @@ When validation fails:
     {
       session: {
         dmScope: "per-channel-peer",  // recommended for multi-user
+        threadBindings: {
+          enabled: true,
+          idleHours: 24,
+          maxAgeHours: 0,
+        },
         reset: {
           mode: "daily",
           atHour: 4,
@@ -192,6 +197,7 @@ When validation fails:
     ```
 
     - `dmScope`: `main` (shared) | `per-peer` | `per-channel-peer` | `per-account-channel-peer`
+    - `threadBindings`: global defaults for thread-bound session routing (Discord supports `/focus`, `/unfocus`, `/agents`, `/session idle`, and `/session max-age`).
     - See [Session Management](/concepts/session) for scoping, identity links, and send policy.
     - See [full reference](/gateway/configuration-reference#session) for all fields.
 
@@ -235,6 +241,7 @@ When validation fails:
 
     - `every`: duration string (`30m`, `2h`). Set `0m` to disable.
     - `target`: `last` | `whatsapp` | `telegram` | `discord` | `none`
+    - `directPolicy`: `allow` (default) or `block` for DM-style heartbeat targets
     - See [Heartbeat](/gateway/heartbeat) for the full guide.
 
   </Accordion>
@@ -246,11 +253,17 @@ When validation fails:
         enabled: true,
         maxConcurrentRuns: 2,
         sessionRetention: "24h",
+        runLog: {
+          maxBytes: "2mb",
+          keepLines: 2000,
+        },
       },
     }
     ```
 
-    See [Cron jobs](/automation/cron-jobs) for the feature overview and CLI examples.
+    - `sessionRetention`: prune completed isolated run sessions from `sessions.json` (default `24h`; set `false` to disable).
+    - `runLog`: prune `cron/runs/<jobId>.jsonl` by size and retained lines.
+    - See [Cron jobs](/automation/cron-jobs) for feature overview and CLI examples.
 
   </Accordion>
 
@@ -370,6 +383,10 @@ Most fields hot-apply without downtime. In `hybrid` mode, restart-required chang
 
 ## Config RPC (programmatic updates)
 
+<Note>
+Control-plane write RPCs (`config.apply`, `config.patch`, `update.run`) are rate-limited to **3 requests per 60 seconds** per `deviceId+clientIp`. When limited, the RPC returns `UNAVAILABLE` with `retryAfterMs`.
+</Note>
+
 <AccordionGroup>
   <Accordion title="config.apply (full replace)">
     Validates + writes the full config and restarts the Gateway in one step.
@@ -385,6 +402,8 @@ Most fields hot-apply without downtime. In `hybrid` mode, restart-required chang
     - `sessionKey` (optional) — session key for the post-restart wake-up ping
     - `note` (optional) — note for the restart sentinel
     - `restartDelayMs` (optional) — delay before restart (default 2000)
+
+    Restart requests are coalesced while one is already pending/in-flight, and a 30-second cooldown applies between restart cycles.
 
     ```bash
     openclaw gateway call config.get --params '{}'  # capture payload.hash
@@ -409,6 +428,8 @@ Most fields hot-apply without downtime. In `hybrid` mode, restart-required chang
     - `raw` (string) — JSON5 with just the keys to change
     - `baseHash` (required) — config hash from `config.get`
     - `sessionKey`, `note`, `restartDelayMs` — same as `config.apply`
+
+    Restart behavior matches `config.apply`: coalesced pending restarts plus a 30-second cooldown between restart cycles.
 
     ```bash
     openclaw gateway call config.patch --params '{
@@ -470,6 +491,42 @@ Rules:
 - Works inside `$include` files
 - Inline substitution: `"${BASE}/v1"` → `"https://api.example.com/v1"`
 
+</Accordion>
+
+<Accordion title="Secret refs (env, file, exec)">
+  For fields that support SecretRef objects, you can use:
+
+```json5
+{
+  models: {
+    providers: {
+      openai: { apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" } },
+    },
+  },
+  skills: {
+    entries: {
+      "nano-banana-pro": {
+        apiKey: {
+          source: "file",
+          provider: "filemain",
+          id: "/skills/entries/nano-banana-pro/apiKey",
+        },
+      },
+    },
+  },
+  channels: {
+    googlechat: {
+      serviceAccountRef: {
+        source: "exec",
+        provider: "vault",
+        id: "channels/googlechat/serviceAccount",
+      },
+    },
+  },
+}
+```
+
+SecretRef details (including `secrets.providers` for `env`/`file`/`exec`) are in [Secrets Management](/gateway/secrets).
 </Accordion>
 
 See [Environment](/help/environment) for full precedence and sources.

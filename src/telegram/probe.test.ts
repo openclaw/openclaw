@@ -1,13 +1,18 @@
-import { type Mock, describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+import { type Mock, describe, expect, it, vi } from "vitest";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
 import { probeTelegram } from "./probe.js";
 
 describe("probeTelegram retry logic", () => {
   const token = "test-token";
   const timeoutMs = 5000;
-  let fetchMock: Mock;
 
-  function mockGetMeSuccess() {
+  const installFetchMock = (): Mock => {
+    const fetchMock = vi.fn();
+    global.fetch = withFetchPreconnect(fetchMock);
+    return fetchMock;
+  };
+
+  function mockGetMeSuccess(fetchMock: Mock) {
     fetchMock.mockResolvedValueOnce({
       ok: true,
       json: vi.fn().mockResolvedValue({
@@ -17,17 +22,17 @@ describe("probeTelegram retry logic", () => {
     });
   }
 
-  function mockGetWebhookInfoSuccess() {
+  function mockGetWebhookInfoSuccess(fetchMock: Mock) {
     fetchMock.mockResolvedValueOnce({
       ok: true,
       json: vi.fn().mockResolvedValue({ ok: true, result: { url: "" } }),
     });
   }
 
-  async function expectSuccessfulProbe(expectedCalls: number, retryCount = 0) {
+  async function expectSuccessfulProbe(fetchMock: Mock, expectedCalls: number, retryCount = 0) {
     const probePromise = probeTelegram(token, timeoutMs);
-    for (let i = 0; i < retryCount; i += 1) {
-      await vi.advanceTimersByTimeAsync(1000);
+    if (retryCount > 0) {
+      await vi.advanceTimersByTimeAsync(retryCount * 1000);
     }
 
     const result = await probePromise;
@@ -36,61 +41,62 @@ describe("probeTelegram retry logic", () => {
     expect(result.bot?.username).toBe("test_bot");
   }
 
-  beforeEach(() => {
+  it.each([
+    {
+      errors: [],
+      expectedCalls: 2,
+      retryCount: 0,
+    },
+    {
+      errors: ["Network timeout"],
+      expectedCalls: 3,
+      retryCount: 1,
+    },
+    {
+      errors: ["Network error 1", "Network error 2"],
+      expectedCalls: 4,
+      retryCount: 2,
+    },
+  ])("succeeds after retry pattern %#", async ({ errors, expectedCalls, retryCount }) => {
+    const fetchMock = installFetchMock();
     vi.useFakeTimers();
-    fetchMock = vi.fn();
-    global.fetch = withFetchPreconnect(fetchMock);
-  });
+    try {
+      for (const message of errors) {
+        fetchMock.mockRejectedValueOnce(new Error(message));
+      }
 
-  afterEach(() => {
-    vi.useRealTimers();
-    vi.restoreAllMocks();
-  });
-
-  it("should succeed if the first attempt succeeds", async () => {
-    mockGetMeSuccess();
-    mockGetWebhookInfoSuccess();
-    await expectSuccessfulProbe(2);
-  });
-
-  it("should retry and succeed if first attempt fails but second succeeds", async () => {
-    // 1st attempt: Network error
-    fetchMock.mockRejectedValueOnce(new Error("Network timeout"));
-
-    mockGetMeSuccess();
-    mockGetWebhookInfoSuccess();
-    await expectSuccessfulProbe(3, 1);
-  });
-
-  it("should retry twice and succeed on the third attempt", async () => {
-    // 1st attempt: Network error
-    fetchMock.mockRejectedValueOnce(new Error("Network error 1"));
-    // 2nd attempt: Network error
-    fetchMock.mockRejectedValueOnce(new Error("Network error 2"));
-
-    mockGetMeSuccess();
-    mockGetWebhookInfoSuccess();
-    await expectSuccessfulProbe(4, 2);
+      mockGetMeSuccess(fetchMock);
+      mockGetWebhookInfoSuccess(fetchMock);
+      await expectSuccessfulProbe(fetchMock, expectedCalls, retryCount);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("should fail after 3 unsuccessful attempts", async () => {
+    const fetchMock = installFetchMock();
+    vi.useFakeTimers();
     const errorMsg = "Final network error";
-    fetchMock.mockRejectedValue(new Error(errorMsg));
+    try {
+      fetchMock.mockRejectedValue(new Error(errorMsg));
 
-    const probePromise = probeTelegram(token, timeoutMs);
+      const probePromise = probeTelegram(token, timeoutMs);
 
-    // Fast-forward for all retries
-    await vi.advanceTimersByTimeAsync(1000);
-    await vi.advanceTimersByTimeAsync(1000);
+      // Fast-forward for all retries
+      await vi.advanceTimersByTimeAsync(2000);
 
-    const result = await probePromise;
+      const result = await probePromise;
 
-    expect(result.ok).toBe(false);
-    expect(result.error).toBe(errorMsg);
-    expect(fetchMock).toHaveBeenCalledTimes(3); // 3 attempts at getMe
+      expect(result.ok).toBe(false);
+      expect(result.error).toBe(errorMsg);
+      expect(fetchMock).toHaveBeenCalledTimes(3); // 3 attempts at getMe
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("should NOT retry if getMe returns a 401 Unauthorized", async () => {
+    const fetchMock = installFetchMock();
     const mockResponse = {
       ok: false,
       status: 401,

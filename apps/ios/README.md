@@ -1,73 +1,141 @@
-# OpenClaw (iOS)
+# OpenClaw iOS (Super Alpha)
 
-This is an **alpha** iOS app that connects to an OpenClaw Gateway as a `role: node`.
+NO TEST FLIGHT AVAILABLE AT THIS POINT
 
-Expect rough edges:
+This iPhone app is super-alpha and internal-use only. It connects to an OpenClaw Gateway as a `role: node`.
 
-- UI and onboarding are changing quickly.
-- Background behavior is not stable yet (foreground app is the supported mode right now).
-- Permissions are opt-in and the app should be treated as sensitive while we harden it.
+## Distribution Status
 
-## What It Does
+NO TEST FLIGHT AVAILABLE AT THIS POINT
 
-- Connects to a Gateway over `ws://` / `wss://`
-- Pairs a new device (approved from your bot)
-- Exposes phone services as node commands (camera, location, photos, calendar, reminders, etc; gated by iOS permissions)
-- Provides Talk + Chat surfaces (alpha)
+- Current distribution: local/manual deploy from source via Xcode.
+- App Store flow is not part of the current internal development path.
 
-## Pairing (Recommended Flow)
+## Super-Alpha Disclaimer
 
-If your Gateway has the `device-pair` plugin installed:
+- Breaking changes are expected.
+- UI and onboarding flows can change without migration guarantees.
+- Foreground use is the only reliable mode right now.
+- Treat this build as sensitive while permissions and background behavior are still being hardened.
 
-1. In Telegram, message your bot: `/pair`
-2. Copy the **setup code** message
-3. On iOS: OpenClaw → Settings → Gateway → paste setup code → Connect
-4. Back in Telegram: `/pair approve`
+## Exact Xcode Manual Deploy Flow
 
-## Build And Run
-
-Prereqs:
-
-- Xcode (current stable)
-- `pnpm`
-- `xcodegen`
-
-From the repo root:
+1. Prereqs:
+   - Xcode 16+
+   - `pnpm`
+   - `xcodegen`
+   - Apple Development signing set up in Xcode
+2. From repo root:
 
 ```bash
 pnpm install
+./scripts/ios-configure-signing.sh
+cd apps/ios
+xcodegen generate
+open OpenClaw.xcodeproj
+```
+
+3. In Xcode:
+   - Scheme: `OpenClaw`
+   - Destination: connected iPhone (recommended for real behavior)
+   - Build configuration: `Debug`
+   - Run (`Product` -> `Run`)
+4. If signing fails on a personal team:
+   - Use unique local bundle IDs via `apps/ios/LocalSigning.xcconfig`.
+   - Start from `apps/ios/LocalSigning.xcconfig.example`.
+
+Shortcut command (same flow + open project):
+
+```bash
 pnpm ios:open
 ```
 
-`pnpm ios:open` now runs `scripts/ios-configure-signing.sh` before `xcodegen`:
+## APNs Expectations For Local/Manual Builds
 
-- If `IOS_DEVELOPMENT_TEAM` is set, it uses that team.
-- Otherwise it prefers the canonical OpenClaw team (`Y5PE65HELJ`) when that team exists locally.
-- If not present, it picks the first non-personal team from your Xcode account (falls back to personal team if needed).
-- It writes the selected team to `apps/ios/.local-signing.xcconfig` (local-only, gitignored).
+- The app calls `registerForRemoteNotifications()` at launch.
+- `apps/ios/Sources/OpenClaw.entitlements` sets `aps-environment` to `development`.
+- APNs token registration to gateway happens only after gateway connection (`push.apns.register`).
+- Your selected team/profile must support Push Notifications for the app bundle ID you are signing.
+- If push capability or provisioning is wrong, APNs registration fails at runtime (check Xcode logs for `APNs registration failed`).
+- Debug builds register as APNs sandbox; Release builds use production.
 
-Then in Xcode:
+## What Works Now (Concrete)
 
-1. Select the `OpenClaw` scheme
-2. Select a simulator or a connected device
-3. Run
+- Pairing via setup code flow (`/pair` then `/pair approve` in Telegram).
+- Gateway connection via discovery or manual host/port with TLS fingerprint trust prompt.
+- Chat + Talk surfaces through the operator gateway session.
+- iPhone node commands in foreground: camera snap/clip, canvas present/navigate/eval/snapshot, screen record, location, contacts, calendar, reminders, photos, motion, local notifications.
+- Share extension deep-link forwarding into the connected gateway session.
 
-If you're using a personal Apple Development team, you may still need to change the bundle identifier in Xcode to a unique value so signing succeeds.
+## Location Automation Use Case (Testing)
 
-## Build From CLI
+Use this for automation signals ("I moved", "I arrived", "I left"), not as a keep-awake mechanism.
 
-```bash
-pnpm ios:build
-```
+- Product intent:
+  - movement-aware automations driven by iOS location events
+  - example: arrival/exit geofence, significant movement, visit detection
+- Non-goal:
+  - continuous GPS polling just to keep the app alive
 
-## Tests
+Test path to include in QA runs:
 
-```bash
-cd apps/ios
-xcodegen generate
-xcodebuild test -project OpenClaw.xcodeproj -scheme OpenClaw -destination "platform=iOS Simulator,name=iPhone 17"
-```
+1. Enable location permission in app:
+   - set `Always` permission
+   - verify background location capability is enabled in the build profile
+2. Background the app and trigger movement:
+   - walk/drive enough for a significant location update, or cross a configured geofence
+3. Validate gateway side effects:
+   - node reconnect/wake if needed
+   - expected location/movement event arrives at gateway
+   - automation trigger executes once (no duplicate storm)
+4. Validate resource impact:
+   - no sustained high thermal state
+   - no excessive background battery drain over a short observation window
 
-## Shared Code
+Pass criteria:
 
-- `apps/shared/OpenClawKit` contains the shared transport/types used by the iOS app.
+- movement events are delivered reliably enough for automation UX
+- no location-driven reconnect spam loops
+- app remains stable after repeated background/foreground transitions
+
+## Known Issues / Limitations / Problems
+
+- Foreground-first: iOS can suspend sockets in background; reconnect recovery is still being tuned.
+- Background command limits are strict: `canvas.*`, `camera.*`, `screen.*`, and `talk.*` are blocked when backgrounded.
+- Background location requires `Always` location permission.
+- Pairing/auth errors intentionally pause reconnect loops until a human fixes auth/pairing state.
+- Voice Wake and Talk contend for the same microphone; Talk suppresses wake capture while active.
+- APNs reliability depends on local signing/provisioning/topic alignment.
+- Expect rough UX edges and occasional reconnect churn during active development.
+
+## Current In-Progress Workstream
+
+Automatic wake/reconnect hardening:
+
+- improve wake/resume behavior across scene transitions
+- reduce dead-socket states after background -> foreground
+- tighten node/operator session reconnect coordination
+- reduce manual recovery steps after transient network failures
+
+## Debugging Checklist
+
+1. Confirm build/signing baseline:
+   - regenerate project (`xcodegen generate`)
+   - verify selected team + bundle IDs
+2. In app `Settings -> Gateway`:
+   - confirm status text, server, and remote address
+   - verify whether status shows pairing/auth gating
+3. If pairing is required:
+   - run `/pair approve` from Telegram, then reconnect
+4. If discovery is flaky:
+   - enable `Discovery Debug Logs`
+   - inspect `Settings -> Gateway -> Discovery Logs`
+5. If network path is unclear:
+   - switch to manual host/port + TLS in Gateway Advanced settings
+6. In Xcode console, filter for subsystem/category signals:
+   - `ai.openclaw.ios`
+   - `GatewayDiag`
+   - `APNs registration failed`
+7. Validate background expectations:
+   - repro in foreground first
+   - then test background transitions and confirm reconnect on return

@@ -1,12 +1,14 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { TextContent } from "@mariozechner/pi-ai";
 import type { SessionManager } from "@mariozechner/pi-coding-agent";
 import type {
   PluginHookBeforeMessageWriteEvent,
   PluginHookBeforeMessageWriteResult,
 } from "../plugins/types.js";
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
-import { HARD_MAX_TOOL_RESULT_CHARS } from "./pi-embedded-runner/tool-result-truncation.js";
+import {
+  HARD_MAX_TOOL_RESULT_CHARS,
+  truncateToolResultMessage,
+} from "./pi-embedded-runner/tool-result-truncation.js";
 import { makeMissingToolResult, sanitizeToolCallInputs } from "./session-transcript-repair.js";
 import { extractToolCallsFromAssistant, extractToolResultId } from "./tool-call-id.js";
 
@@ -20,60 +22,13 @@ const GUARD_TRUNCATION_SUFFIX =
  * truncated text blocks otherwise.
  */
 function capToolResultSize(msg: AgentMessage): AgentMessage {
-  const role = (msg as { role?: string }).role;
-  if (role !== "toolResult") {
+  if ((msg as { role?: string }).role !== "toolResult") {
     return msg;
   }
-  const content = (msg as { content?: unknown }).content;
-  if (!Array.isArray(content)) {
-    return msg;
-  }
-
-  // Calculate total text size
-  let totalTextChars = 0;
-  for (const block of content) {
-    if (block && typeof block === "object" && (block as { type?: string }).type === "text") {
-      const text = (block as TextContent).text;
-      if (typeof text === "string") {
-        totalTextChars += text.length;
-      }
-    }
-  }
-
-  if (totalTextChars <= HARD_MAX_TOOL_RESULT_CHARS) {
-    return msg;
-  }
-
-  // Truncate proportionally
-  const newContent = content.map((block: unknown) => {
-    if (!block || typeof block !== "object" || (block as { type?: string }).type !== "text") {
-      return block;
-    }
-    const textBlock = block as TextContent;
-    if (typeof textBlock.text !== "string") {
-      return block;
-    }
-    const blockShare = textBlock.text.length / totalTextChars;
-    const blockBudget = Math.max(
-      2_000,
-      Math.floor(HARD_MAX_TOOL_RESULT_CHARS * blockShare) - GUARD_TRUNCATION_SUFFIX.length,
-    );
-    if (textBlock.text.length <= blockBudget) {
-      return block;
-    }
-    // Try to cut at a newline boundary
-    let cutPoint = blockBudget;
-    const lastNewline = textBlock.text.lastIndexOf("\n", blockBudget);
-    if (lastNewline > blockBudget * 0.8) {
-      cutPoint = lastNewline;
-    }
-    return {
-      ...textBlock,
-      text: textBlock.text.slice(0, cutPoint) + GUARD_TRUNCATION_SUFFIX,
-    };
+  return truncateToolResultMessage(msg, HARD_MAX_TOOL_RESULT_CHARS, {
+    suffix: GUARD_TRUNCATION_SUFFIX,
+    minKeepChars: 2_000,
   });
-
-  return { ...msg, content: newContent } as AgentMessage;
 }
 
 export function installSessionToolResultGuard(
@@ -96,6 +51,11 @@ export function installSessionToolResultGuard(
      * Defaults to true.
      */
     allowSyntheticToolResults?: boolean;
+    /**
+     * Optional set/list of tool names accepted for assistant toolCall/toolUse blocks.
+     * When set, tool calls with unknown names are dropped before persistence.
+     */
+    allowedToolNames?: Iterable<string>;
     /**
      * Synchronous hook invoked before any message is written to the session JSONL.
      * If the hook returns { block: true }, the message is silently dropped.
@@ -171,7 +131,9 @@ export function installSessionToolResultGuard(
     let nextMessage = message;
     const role = (message as { role?: unknown }).role;
     if (role === "assistant") {
-      const sanitized = sanitizeToolCallInputs([message]);
+      const sanitized = sanitizeToolCallInputs([message], {
+        allowedToolNames: opts?.allowedToolNames,
+      });
       if (sanitized.length === 0) {
         if (allowSyntheticToolResults && pending.size > 0) {
           flushPendingToolResults();
@@ -204,8 +166,15 @@ export function installSessionToolResultGuard(
       return originalAppend(persisted as never);
     }
 
+    // Skip tool call extraction for aborted/errored assistant messages.
+    // When stopReason is "error" or "aborted", the tool_use blocks may be incomplete
+    // and should not have synthetic tool_results created. Creating synthetic results
+    // for incomplete tool calls causes API 400 errors:
+    // "unexpected tool_use_id found in tool_result blocks"
+    // This matches the behavior in repairToolUseResultPairing (session-transcript-repair.ts)
+    const stopReason = (nextMessage as { stopReason?: string }).stopReason;
     const toolCalls =
-      nextRole === "assistant"
+      nextRole === "assistant" && stopReason !== "aborted" && stopReason !== "error"
         ? extractToolCallsFromAssistant(nextMessage as Extract<AgentMessage, { role: "assistant" }>)
         : [];
 

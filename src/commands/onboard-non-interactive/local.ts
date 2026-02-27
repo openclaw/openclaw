@@ -4,7 +4,6 @@ import { resolveGatewayPort, writeConfigFile } from "../../config/config.js";
 import { logConfigUpdated } from "../../config/logging.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { DEFAULT_GATEWAY_DAEMON_RUNTIME } from "../daemon-runtime.js";
-import { healthCommand } from "../health.js";
 import { applyOnboardingLocalWorkspaceConfig } from "../onboard-config.js";
 import {
   applyWizardMetadata,
@@ -15,8 +14,6 @@ import {
 } from "../onboard-helpers.js";
 import type { OnboardOptions } from "../onboard-types.js";
 import { inferAuthChoiceFromFlags } from "./local/auth-choice-inference.js";
-import { applyNonInteractiveAuthChoice } from "./local/auth-choice.js";
-import { installGatewayDaemonNonInteractive } from "./local/daemon-install.js";
 import { applyNonInteractiveGatewayConfig } from "./local/gateway-config.js";
 import { logNonInteractiveOnboardingJson } from "./local/output.js";
 import { applyNonInteractiveSkillsConfig } from "./local/skills-config.js";
@@ -51,17 +48,20 @@ export async function runNonInteractiveOnboardingLocal(params: {
     return;
   }
   const authChoice = opts.authChoice ?? inferredAuthChoice.choice ?? "skip";
-  const nextConfigAfterAuth = await applyNonInteractiveAuthChoice({
-    nextConfig,
-    authChoice,
-    opts,
-    runtime,
-    baseConfig,
-  });
-  if (!nextConfigAfterAuth) {
-    return;
+  if (authChoice !== "skip") {
+    const { applyNonInteractiveAuthChoice } = await import("./local/auth-choice.js");
+    const nextConfigAfterAuth = await applyNonInteractiveAuthChoice({
+      nextConfig,
+      authChoice,
+      opts,
+      runtime,
+      baseConfig,
+    });
+    if (!nextConfigAfterAuth) {
+      return;
+    }
+    nextConfig = nextConfigAfterAuth;
   }
-  nextConfig = nextConfigAfterAuth;
 
   const gatewayBasePort = resolveGatewayPort(baseConfig);
   const gatewayResult = applyNonInteractiveGatewayConfig({
@@ -85,16 +85,20 @@ export async function runNonInteractiveOnboardingLocal(params: {
     skipBootstrap: Boolean(nextConfig.agents?.defaults?.skipBootstrap),
   });
 
-  await installGatewayDaemonNonInteractive({
-    nextConfig,
-    opts,
-    runtime,
-    port: gatewayResult.port,
-    gatewayToken: gatewayResult.gatewayToken,
-  });
+  if (opts.installDaemon) {
+    const { installGatewayDaemonNonInteractive } = await import("./local/daemon-install.js");
+    await installGatewayDaemonNonInteractive({
+      nextConfig,
+      opts,
+      runtime,
+      port: gatewayResult.port,
+      gatewayToken: gatewayResult.gatewayToken,
+    });
+  }
 
   const daemonRuntimeRaw = opts.daemonRuntime ?? DEFAULT_GATEWAY_DAEMON_RUNTIME;
   if (!opts.skipHealth) {
+    const { healthCommand } = await import("../health.js");
     const links = resolveControlUiLinks({
       bind: gatewayResult.bind as "auto" | "lan" | "loopback" | "custom" | "tailnet",
       port: gatewayResult.port,

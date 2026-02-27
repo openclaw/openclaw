@@ -4,6 +4,8 @@ import {
   createDefaultChannelRuntimeState,
   DEFAULT_ACCOUNT_ID,
   PAIRING_APPROVED_MESSAGE,
+  resolveAllowlistProviderRuntimeGroupPolicy,
+  resolveDefaultGroupPolicy,
 } from "openclaw/plugin-sdk";
 import {
   resolveFeishuAccount,
@@ -89,6 +91,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
         },
         connectionMode: { type: "string", enum: ["websocket", "webhook"] },
         webhookPath: { type: "string" },
+        webhookHost: { type: "string" },
         webhookPort: { type: "integer", minimum: 1 },
         dmPolicy: { type: "string", enum: ["open", "pairing", "allowlist"] },
         allowFrom: { type: "array", items: { oneOf: [{ type: "string" }, { type: "number" }] } },
@@ -118,6 +121,9 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
               verificationToken: { type: "string" },
               domain: { type: "string", enum: ["feishu", "lark"] },
               connectionMode: { type: "string", enum: ["websocket", "webhook"] },
+              webhookHost: { type: "string" },
+              webhookPath: { type: "string" },
+              webhookPort: { type: "integer", minimum: 1 },
             },
           },
         },
@@ -220,10 +226,12 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
     collectWarnings: ({ cfg, accountId }) => {
       const account = resolveFeishuAccount({ cfg, accountId });
       const feishuCfg = account.config;
-      const defaultGroupPolicy = (
-        cfg.channels as Record<string, { groupPolicy?: string }> | undefined
-      )?.defaults?.groupPolicy;
-      const groupPolicy = feishuCfg?.groupPolicy ?? defaultGroupPolicy ?? "allowlist";
+      const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
+      const { groupPolicy } = resolveAllowlistProviderRuntimeGroupPolicy({
+        providerConfigPresent: cfg.channels?.feishu !== undefined,
+        groupPolicy: feishuCfg?.groupPolicy,
+        defaultGroupPolicy,
+      });
       if (groupPolicy !== "open") return [];
       return [
         `- Feishu[${account.accountId}] groups: groupPolicy="open" allows any member to trigger (mention-gated). Set channels.feishu.groupPolicy="allowlist" + channels.feishu.groupAllowFrom to restrict senders.`,

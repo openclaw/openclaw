@@ -1,14 +1,14 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { OpenClawConfig, MarkdownTableMode } from "openclaw/plugin-sdk";
+import type { MarkdownTableMode, OpenClawConfig, OutboundReplyPayload } from "openclaw/plugin-sdk";
 import {
+  createScopedPairingAccess,
   createReplyPrefixOptions,
-  readJsonBodyWithLimit,
-  registerWebhookTarget,
-  rejectNonPostWebhookRequest,
   resolveSenderCommandAuthorization,
+  resolveOutboundMediaUrls,
+  resolveDefaultGroupPolicy,
+  sendMediaWithLeadingCaption,
   resolveWebhookPath,
-  resolveWebhookTargets,
-  requestBodyErrorToText,
+  warnMissingProviderGroupPolicyFallbackOnce,
 } from "openclaw/plugin-sdk";
 import type { ResolvedZaloAccount } from "./accounts.js";
 import {
@@ -22,6 +22,16 @@ import {
   type ZaloMessage,
   type ZaloUpdate,
 } from "./api.js";
+import {
+  evaluateZaloGroupAccess,
+  isZaloSenderAllowed,
+  resolveZaloRuntimeGroupPolicy,
+} from "./group-access.js";
+import {
+  handleZaloWebhookRequest as handleZaloWebhookRequestInternal,
+  registerZaloWebhookTarget as registerZaloWebhookTargetInternal,
+  type ZaloWebhookTarget,
+} from "./monitor.webhook.js";
 import { resolveZaloProxyFetch } from "./proxy.js";
 import { getZaloRuntime } from "./runtime.js";
 
@@ -59,112 +69,27 @@ function logVerbose(core: ZaloCoreRuntime, runtime: ZaloRuntimeEnv, message: str
   }
 }
 
-function isSenderAllowed(senderId: string, allowFrom: string[]): boolean {
-  if (allowFrom.includes("*")) {
-    return true;
-  }
-  const normalizedSenderId = senderId.toLowerCase();
-  return allowFrom.some((entry) => {
-    const normalized = entry.toLowerCase().replace(/^(zalo|zl):/i, "");
-    return normalized === normalizedSenderId;
-  });
-}
-
-type WebhookTarget = {
-  token: string;
-  account: ResolvedZaloAccount;
-  config: OpenClawConfig;
-  runtime: ZaloRuntimeEnv;
-  core: ZaloCoreRuntime;
-  secret: string;
-  path: string;
-  mediaMaxMb: number;
-  statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
-  fetcher?: ZaloFetch;
-};
-
-const webhookTargets = new Map<string, WebhookTarget[]>();
-
-export function registerZaloWebhookTarget(target: WebhookTarget): () => void {
-  return registerWebhookTarget(webhookTargets, target).unregister;
+export function registerZaloWebhookTarget(target: ZaloWebhookTarget): () => void {
+  return registerZaloWebhookTargetInternal(target);
 }
 
 export async function handleZaloWebhookRequest(
   req: IncomingMessage,
   res: ServerResponse,
 ): Promise<boolean> {
-  const resolved = resolveWebhookTargets(req, webhookTargets);
-  if (!resolved) {
-    return false;
-  }
-  const { targets } = resolved;
-
-  if (rejectNonPostWebhookRequest(req, res)) {
-    return true;
-  }
-
-  const headerToken = String(req.headers["x-bot-api-secret-token"] ?? "");
-  const matching = targets.filter((entry) => entry.secret === headerToken);
-  if (matching.length === 0) {
-    res.statusCode = 401;
-    res.end("unauthorized");
-    return true;
-  }
-  if (matching.length > 1) {
-    res.statusCode = 401;
-    res.end("ambiguous webhook target");
-    return true;
-  }
-  const target = matching[0];
-
-  const body = await readJsonBodyWithLimit(req, {
-    maxBytes: 1024 * 1024,
-    timeoutMs: 30_000,
-    emptyObjectOnEmpty: false,
-  });
-  if (!body.ok) {
-    res.statusCode =
-      body.code === "PAYLOAD_TOO_LARGE" ? 413 : body.code === "REQUEST_BODY_TIMEOUT" ? 408 : 400;
-    res.end(
-      body.code === "REQUEST_BODY_TIMEOUT"
-        ? requestBodyErrorToText("REQUEST_BODY_TIMEOUT")
-        : body.error,
+  return handleZaloWebhookRequestInternal(req, res, async ({ update, target }) => {
+    await processUpdate(
+      update,
+      target.token,
+      target.account,
+      target.config,
+      target.runtime,
+      target.core as ZaloCoreRuntime,
+      target.mediaMaxMb,
+      target.statusSink,
+      target.fetcher,
     );
-    return true;
-  }
-
-  // Zalo sends updates directly as { event_name, message, ... }, not wrapped in { ok, result }
-  const raw = body.value;
-  const record = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : null;
-  const update: ZaloUpdate | undefined =
-    record && record.ok === true && record.result
-      ? (record.result as ZaloUpdate)
-      : ((record as ZaloUpdate | null) ?? undefined);
-
-  if (!update?.event_name) {
-    res.statusCode = 400;
-    res.end("invalid payload");
-    return true;
-  }
-
-  target.statusSink?.({ lastInboundAt: Date.now() });
-  processUpdate(
-    update,
-    target.token,
-    target.account,
-    target.config,
-    target.runtime,
-    target.core,
-    target.mediaMaxMb,
-    target.statusSink,
-    target.fetcher,
-  ).catch((err) => {
-    target.runtime.error?.(`[${target.account.accountId}] Zalo webhook failed: ${String(err)}`);
   });
-
-  res.statusCode = 200;
-  res.end("ok");
-  return true;
 }
 
 function startPollingLoop(params: {
@@ -324,7 +249,7 @@ async function handleImageMessage(
   if (photo) {
     try {
       const maxBytes = mediaMaxMb * 1024 * 1024;
-      const fetched = await core.channel.media.fetchRemoteMedia({ url: photo });
+      const fetched = await core.channel.media.fetchRemoteMedia({ url: photo, maxBytes });
       const saved = await core.channel.media.saveMediaBuffer(
         fetched.buffer,
         fetched.contentType,
@@ -379,6 +304,11 @@ async function processMessageWithPipeline(params: {
     statusSink,
     fetcher,
   } = params;
+  const pairing = createScopedPairingAccess({
+    core,
+    channel: "zalo",
+    accountId: account.accountId,
+  });
   const { from, chat, message_id, date } = message;
 
   const isGroup = chat.chat_type === "GROUP";
@@ -388,6 +318,42 @@ async function processMessageWithPipeline(params: {
 
   const dmPolicy = account.config.dmPolicy ?? "pairing";
   const configAllowFrom = (account.config.allowFrom ?? []).map((v) => String(v));
+  const configuredGroupAllowFrom = (account.config.groupAllowFrom ?? []).map((v) => String(v));
+  const groupAllowFrom =
+    configuredGroupAllowFrom.length > 0 ? configuredGroupAllowFrom : configAllowFrom;
+  const defaultGroupPolicy = resolveDefaultGroupPolicy(config);
+  const groupAccess = isGroup
+    ? evaluateZaloGroupAccess({
+        providerConfigPresent: config.channels?.zalo !== undefined,
+        configuredGroupPolicy: account.config.groupPolicy,
+        defaultGroupPolicy,
+        groupAllowFrom,
+        senderId,
+      })
+    : undefined;
+  if (groupAccess) {
+    warnMissingProviderGroupPolicyFallbackOnce({
+      providerMissingFallbackApplied: groupAccess.providerMissingFallbackApplied,
+      providerKey: "zalo",
+      accountId: account.accountId,
+      log: (message) => logVerbose(core, runtime, message),
+    });
+    if (!groupAccess.allowed) {
+      if (groupAccess.reason === "disabled") {
+        logVerbose(core, runtime, `zalo: drop group ${chatId} (groupPolicy=disabled)`);
+      } else if (groupAccess.reason === "empty_allowlist") {
+        logVerbose(
+          core,
+          runtime,
+          `zalo: drop group ${chatId} (groupPolicy=allowlist, no groupAllowFrom)`,
+        );
+      } else if (groupAccess.reason === "sender_not_allowlisted") {
+        logVerbose(core, runtime, `zalo: drop group sender ${senderId} (groupPolicy=allowlist)`);
+      }
+      return;
+    }
+  }
+
   const rawBody = text?.trim() || (mediaPath ? "<media:image>" : "");
   const { senderAllowedForCommands, commandAuthorized } = await resolveSenderCommandAuthorization({
     cfg: config,
@@ -395,9 +361,10 @@ async function processMessageWithPipeline(params: {
     isGroup,
     dmPolicy,
     configuredAllowFrom: configAllowFrom,
+    configuredGroupAllowFrom: groupAllowFrom,
     senderId,
-    isSenderAllowed,
-    readAllowFromStore: () => core.channel.pairing.readAllowFromStore("zalo"),
+    isSenderAllowed: isZaloSenderAllowed,
+    readAllowFromStore: pairing.readAllowFromStore,
     shouldComputeCommandAuthorized: (body, cfg) =>
       core.channel.commands.shouldComputeCommandAuthorized(body, cfg),
     resolveCommandAuthorizedFromAuthorizers: (params) =>
@@ -415,8 +382,7 @@ async function processMessageWithPipeline(params: {
 
       if (!allowed) {
         if (dmPolicy === "pairing") {
-          const { code, created } = await core.channel.pairing.upsertPairingRequest({
-            channel: "zalo",
+          const { code, created } = await pairing.upsertPairingRequest({
             id: senderId,
             meta: { name: senderName ?? undefined },
           });
@@ -569,7 +535,7 @@ async function processMessageWithPipeline(params: {
 }
 
 async function deliverZaloReply(params: {
-  payload: { text?: string; mediaUrls?: string[]; mediaUrl?: string };
+  payload: OutboundReplyPayload;
   token: string;
   chatId: string;
   runtime: ZaloRuntimeEnv;
@@ -584,24 +550,18 @@ async function deliverZaloReply(params: {
   const tableMode = params.tableMode ?? "code";
   const text = core.channel.text.convertMarkdownTables(payload.text ?? "", tableMode);
 
-  const mediaList = payload.mediaUrls?.length
-    ? payload.mediaUrls
-    : payload.mediaUrl
-      ? [payload.mediaUrl]
-      : [];
-
-  if (mediaList.length > 0) {
-    let first = true;
-    for (const mediaUrl of mediaList) {
-      const caption = first ? text : undefined;
-      first = false;
-      try {
-        await sendPhoto(token, { chat_id: chatId, photo: mediaUrl, caption }, fetcher);
-        statusSink?.({ lastOutboundAt: Date.now() });
-      } catch (err) {
-        runtime.error?.(`Zalo photo send failed: ${String(err)}`);
-      }
-    }
+  const sentMedia = await sendMediaWithLeadingCaption({
+    mediaUrls: resolveOutboundMediaUrls(payload),
+    caption: text,
+    send: async ({ mediaUrl, caption }) => {
+      await sendPhoto(token, { chat_id: chatId, photo: mediaUrl, caption }, fetcher);
+      statusSink?.({ lastOutboundAt: Date.now() });
+    },
+    onError: (error) => {
+      runtime.error?.(`Zalo photo send failed: ${String(error)}`);
+    },
+  });
+  if (sentMedia) {
     return;
   }
 
@@ -710,3 +670,8 @@ export async function monitorZaloProvider(options: ZaloMonitorOptions): Promise<
 
   return { stop };
 }
+
+export const __testing = {
+  evaluateZaloGroupAccess,
+  resolveZaloRuntimeGroupPolicy,
+};

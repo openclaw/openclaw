@@ -6,6 +6,7 @@ import {
   DEFAULT_AI_SNAPSHOT_EFFICIENT_MAX_CHARS,
   DEFAULT_AI_SNAPSHOT_MAX_CHARS,
 } from "../constants.js";
+import { withBrowserNavigationPolicy } from "../navigation-guard.js";
 import {
   DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES,
   DEFAULT_BROWSER_SCREENSHOT_MAX_SIDE,
@@ -18,82 +19,91 @@ import {
   readBody,
   requirePwAi,
   resolveProfileContext,
+  withPlaywrightRouteContext,
+  withRouteTabContext,
 } from "./agent.shared.js";
-import type { BrowserRouteRegistrar } from "./types.js";
+import type { BrowserResponse, BrowserRouteRegistrar } from "./types.js";
 import { jsonError, toBoolean, toNumber, toStringOrEmpty } from "./utils.js";
+
+async function saveBrowserMediaResponse(params: {
+  res: BrowserResponse;
+  buffer: Buffer;
+  contentType: string;
+  maxBytes: number;
+  targetId: string;
+  url: string;
+}) {
+  await ensureMediaDir();
+  const saved = await saveMediaBuffer(
+    params.buffer,
+    params.contentType,
+    "browser",
+    params.maxBytes,
+  );
+  params.res.json({
+    ok: true,
+    path: path.resolve(saved.path),
+    targetId: params.targetId,
+    url: params.url,
+  });
+}
 
 export function registerBrowserAgentSnapshotRoutes(
   app: BrowserRouteRegistrar,
   ctx: BrowserRouteContext,
 ) {
   app.post("/navigate", async (req, res) => {
-    const profileCtx = resolveProfileContext(req, res, ctx);
-    if (!profileCtx) {
-      return;
-    }
     const body = readBody(req);
     const url = toStringOrEmpty(body.url);
     const targetId = toStringOrEmpty(body.targetId) || undefined;
     if (!url) {
       return jsonError(res, 400, "url is required");
     }
-    try {
-      const tab = await profileCtx.ensureTabAvailable(targetId);
-      const pw = await requirePwAi(res, "navigate");
-      if (!pw) {
-        return;
-      }
-      const result = await pw.navigateViaPlaywright({
-        cdpUrl: profileCtx.profile.cdpUrl,
-        targetId: tab.targetId,
-        url,
-      });
-      res.json({ ok: true, targetId: tab.targetId, ...result });
-    } catch (err) {
-      handleRouteError(ctx, res, err);
-    }
+    await withPlaywrightRouteContext({
+      req,
+      res,
+      ctx,
+      targetId,
+      feature: "navigate",
+      run: async ({ cdpUrl, tab, pw }) => {
+        const result = await pw.navigateViaPlaywright({
+          cdpUrl,
+          targetId: tab.targetId,
+          url,
+          ...withBrowserNavigationPolicy(ctx.state().resolved.ssrfPolicy),
+        });
+        res.json({ ok: true, targetId: tab.targetId, ...result });
+      },
+    });
   });
 
   app.post("/pdf", async (req, res) => {
-    const profileCtx = resolveProfileContext(req, res, ctx);
-    if (!profileCtx) {
-      return;
-    }
     const body = readBody(req);
     const targetId = toStringOrEmpty(body.targetId) || undefined;
-    try {
-      const tab = await profileCtx.ensureTabAvailable(targetId);
-      const pw = await requirePwAi(res, "pdf");
-      if (!pw) {
-        return;
-      }
-      const pdf = await pw.pdfViaPlaywright({
-        cdpUrl: profileCtx.profile.cdpUrl,
-        targetId: tab.targetId,
-      });
-      await ensureMediaDir();
-      const saved = await saveMediaBuffer(
-        pdf.buffer,
-        "application/pdf",
-        "browser",
-        pdf.buffer.byteLength,
-      );
-      res.json({
-        ok: true,
-        path: path.resolve(saved.path),
-        targetId: tab.targetId,
-        url: tab.url,
-      });
-    } catch (err) {
-      handleRouteError(ctx, res, err);
-    }
+    await withPlaywrightRouteContext({
+      req,
+      res,
+      ctx,
+      targetId,
+      feature: "pdf",
+      run: async ({ cdpUrl, tab, pw }) => {
+        const pdf = await pw.pdfViaPlaywright({
+          cdpUrl,
+          targetId: tab.targetId,
+        });
+        await saveBrowserMediaResponse({
+          res,
+          buffer: pdf.buffer,
+          contentType: "application/pdf",
+          maxBytes: pdf.buffer.byteLength,
+          targetId: tab.targetId,
+          url: tab.url,
+        });
+      },
+    });
   });
 
   app.post("/screenshot", async (req, res) => {
-    const profileCtx = resolveProfileContext(req, res, ctx);
-    if (!profileCtx) {
-      return;
-    }
     const body = readBody(req);
     const targetId = toStringOrEmpty(body.targetId) || undefined;
     const fullPage = toBoolean(body.fullPage) ?? false;
@@ -105,54 +115,55 @@ export function registerBrowserAgentSnapshotRoutes(
       return jsonError(res, 400, "fullPage is not supported for element screenshots");
     }
 
-    try {
-      const tab = await profileCtx.ensureTabAvailable(targetId);
-      let buffer: Buffer;
-      const shouldUsePlaywright =
-        profileCtx.profile.driver === "extension" || !tab.wsUrl || Boolean(ref) || Boolean(element);
-      if (shouldUsePlaywright) {
-        const pw = await requirePwAi(res, "screenshot");
-        if (!pw) {
-          return;
+    await withRouteTabContext({
+      req,
+      res,
+      ctx,
+      targetId,
+      run: async ({ profileCtx, tab, cdpUrl }) => {
+        let buffer: Buffer;
+        const shouldUsePlaywright =
+          profileCtx.profile.driver === "extension" ||
+          !tab.wsUrl ||
+          Boolean(ref) ||
+          Boolean(element);
+        if (shouldUsePlaywright) {
+          const pw = await requirePwAi(res, "screenshot");
+          if (!pw) {
+            return;
+          }
+          const snap = await pw.takeScreenshotViaPlaywright({
+            cdpUrl,
+            targetId: tab.targetId,
+            ref,
+            element,
+            fullPage,
+            type,
+          });
+          buffer = snap.buffer;
+        } else {
+          buffer = await captureScreenshot({
+            wsUrl: tab.wsUrl ?? "",
+            fullPage,
+            format: type,
+            quality: type === "jpeg" ? 85 : undefined,
+          });
         }
-        const snap = await pw.takeScreenshotViaPlaywright({
-          cdpUrl: profileCtx.profile.cdpUrl,
-          targetId: tab.targetId,
-          ref,
-          element,
-          fullPage,
-          type,
-        });
-        buffer = snap.buffer;
-      } else {
-        buffer = await captureScreenshot({
-          wsUrl: tab.wsUrl ?? "",
-          fullPage,
-          format: type,
-          quality: type === "jpeg" ? 85 : undefined,
-        });
-      }
 
-      const normalized = await normalizeBrowserScreenshot(buffer, {
-        maxSide: DEFAULT_BROWSER_SCREENSHOT_MAX_SIDE,
-        maxBytes: DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES,
-      });
-      await ensureMediaDir();
-      const saved = await saveMediaBuffer(
-        normalized.buffer,
-        normalized.contentType ?? `image/${type}`,
-        "browser",
-        DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES,
-      );
-      res.json({
-        ok: true,
-        path: path.resolve(saved.path),
-        targetId: tab.targetId,
-        url: tab.url,
-      });
-    } catch (err) {
-      handleRouteError(ctx, res, err);
-    }
+        const normalized = await normalizeBrowserScreenshot(buffer, {
+          maxSide: DEFAULT_BROWSER_SCREENSHOT_MAX_SIDE,
+          maxBytes: DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES,
+        });
+        await saveBrowserMediaResponse({
+          res,
+          buffer: normalized.buffer,
+          contentType: normalized.contentType ?? `image/${type}`,
+          maxBytes: DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES,
+          targetId: tab.targetId,
+          url: tab.url,
+        });
+      },
+    });
   });
 
   app.get("/snapshot", async (req, res) => {
@@ -187,13 +198,16 @@ export function registerBrowserAgentSnapshotRoutes(
     const compactRaw = toBoolean(req.query.compact);
     const depthRaw = toNumber(req.query.depth);
     const refsModeRaw = toStringOrEmpty(req.query.refs).trim();
-    const refsMode = refsModeRaw === "aria" ? "aria" : refsModeRaw === "role" ? "role" : undefined;
+    const refsMode: "aria" | "role" | undefined =
+      refsModeRaw === "aria" ? "aria" : refsModeRaw === "role" ? "role" : undefined;
     const interactive = interactiveRaw ?? (mode === "efficient" ? true : undefined);
     const compact = compactRaw ?? (mode === "efficient" ? true : undefined);
     const depth =
       depthRaw ?? (mode === "efficient" ? DEFAULT_AI_SNAPSHOT_EFFICIENT_DEPTH : undefined);
     const selector = toStringOrEmpty(req.query.selector);
     const frameSelector = toStringOrEmpty(req.query.frame);
+    const selectorValue = selector.trim() || undefined;
+    const frameSelectorValue = frameSelector.trim() || undefined;
 
     try {
       const tab = await profileCtx.ensureTabAvailable(targetId || undefined);
@@ -211,22 +225,23 @@ export function registerBrowserAgentSnapshotRoutes(
           interactive === true ||
           compact === true ||
           depth !== undefined ||
-          Boolean(selector.trim()) ||
-          Boolean(frameSelector.trim());
+          Boolean(selectorValue) ||
+          Boolean(frameSelectorValue);
+        const roleSnapshotArgs = {
+          cdpUrl: profileCtx.profile.cdpUrl,
+          targetId: tab.targetId,
+          selector: selectorValue,
+          frameSelector: frameSelectorValue,
+          refsMode,
+          options: {
+            interactive: interactive ?? undefined,
+            compact: compact ?? undefined,
+            maxDepth: depth ?? undefined,
+          },
+        };
 
         const snap = wantsRoleSnapshot
-          ? await pw.snapshotRoleViaPlaywright({
-              cdpUrl: profileCtx.profile.cdpUrl,
-              targetId: tab.targetId,
-              selector: selector.trim() || undefined,
-              frameSelector: frameSelector.trim() || undefined,
-              refsMode,
-              options: {
-                interactive: interactive ?? undefined,
-                compact: compact ?? undefined,
-                maxDepth: depth ?? undefined,
-              },
-            })
+          ? await pw.snapshotRoleViaPlaywright(roleSnapshotArgs)
           : await pw
               .snapshotAiViaPlaywright({
                 cdpUrl: profileCtx.profile.cdpUrl,
@@ -236,18 +251,7 @@ export function registerBrowserAgentSnapshotRoutes(
               .catch(async (err) => {
                 // Public-API fallback when Playwright's private _snapshotForAI is missing.
                 if (String(err).toLowerCase().includes("_snapshotforai")) {
-                  return await pw.snapshotRoleViaPlaywright({
-                    cdpUrl: profileCtx.profile.cdpUrl,
-                    targetId: tab.targetId,
-                    selector: selector.trim() || undefined,
-                    frameSelector: frameSelector.trim() || undefined,
-                    refsMode,
-                    options: {
-                      interactive: interactive ?? undefined,
-                      compact: compact ?? undefined,
-                      maxDepth: depth ?? undefined,
-                    },
-                  });
+                  return await pw.snapshotRoleViaPlaywright(roleSnapshotArgs);
                 }
                 throw err;
               });

@@ -34,6 +34,11 @@ import {
   SkillsInstallParamsSchema,
   SkillsStatusParamsSchema,
   SkillsUpdateParamsSchema,
+  ToolCatalogEntrySchema,
+  ToolCatalogGroupSchema,
+  ToolCatalogProfileSchema,
+  ToolsCatalogParamsSchema,
+  ToolsCatalogResultSchema,
 } from "./agents-models-skills.js";
 import {
   ChannelsLogoutParamsSchema,
@@ -118,6 +123,7 @@ import {
   NodePairVerifyParamsSchema,
   NodeRenameParamsSchema,
 } from "./nodes.js";
+import { PushTestParamsSchema, PushTestResultSchema } from "./push.js";
 import {
   SessionsCompactParamsSchema,
   SessionsDeleteParamsSchema,
@@ -171,6 +177,8 @@ export const ProtocolSchemas: Record<string, TSchema> = {
   NodeInvokeResultParams: NodeInvokeResultParamsSchema,
   NodeEventParams: NodeEventParamsSchema,
   NodeInvokeRequestEvent: NodeInvokeRequestEventSchema,
+  PushTestParams: PushTestParamsSchema,
+  PushTestResult: PushTestResultSchema,
   SessionsListParams: SessionsListParamsSchema,
   SessionsPreviewParams: SessionsPreviewParamsSchema,
   SessionsResolveParams: SessionsResolveParamsSchema,
@@ -221,6 +229,11 @@ export const ProtocolSchemas: Record<string, TSchema> = {
   ModelsListParams: ModelsListParamsSchema,
   ModelsListResult: ModelsListResultSchema,
   SkillsStatusParams: SkillsStatusParamsSchema,
+  ToolsCatalogParams: ToolsCatalogParamsSchema,
+  ToolCatalogProfile: ToolCatalogProfileSchema,
+  ToolCatalogEntry: ToolCatalogEntrySchema,
+  ToolCatalogGroup: ToolCatalogGroupSchema,
+  ToolsCatalogResult: ToolsCatalogResultSchema,
   SkillsBinsParams: SkillsBinsParamsSchema,
   SkillsBinsResult: SkillsBinsResultSchema,
   SkillsInstallParams: SkillsInstallParamsSchema,

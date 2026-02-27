@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   applyAppendOnlyStreamUpdate,
   buildStatusFinalPreviewText,
+  resolveSlackStreamingConfig,
   resolveSlackStreamMode,
 } from "./stream-mode.js";
 
@@ -16,6 +17,48 @@ describe("resolveSlackStreamMode", () => {
     expect(resolveSlackStreamMode("replace")).toBe("replace");
     expect(resolveSlackStreamMode("status_final")).toBe("status_final");
     expect(resolveSlackStreamMode("append")).toBe("append");
+  });
+});
+
+describe("resolveSlackStreamingConfig", () => {
+  it("defaults to partial mode with native streaming enabled", () => {
+    expect(resolveSlackStreamingConfig({})).toEqual({
+      mode: "partial",
+      nativeStreaming: true,
+      draftMode: "replace",
+    });
+  });
+
+  it("maps legacy streamMode values to unified streaming modes", () => {
+    expect(resolveSlackStreamingConfig({ streamMode: "append" })).toMatchObject({
+      mode: "block",
+      draftMode: "append",
+    });
+    expect(resolveSlackStreamingConfig({ streamMode: "status_final" })).toMatchObject({
+      mode: "progress",
+      draftMode: "status_final",
+    });
+  });
+
+  it("moves legacy streaming boolean to native streaming toggle", () => {
+    expect(resolveSlackStreamingConfig({ streaming: false })).toEqual({
+      mode: "partial",
+      nativeStreaming: false,
+      draftMode: "replace",
+    });
+  });
+
+  it("accepts unified enum values directly", () => {
+    expect(resolveSlackStreamingConfig({ streaming: "off" })).toEqual({
+      mode: "off",
+      nativeStreaming: true,
+      draftMode: "replace",
+    });
+    expect(resolveSlackStreamingConfig({ streaming: "progress" })).toEqual({
+      mode: "progress",
+      nativeStreaming: true,
+      draftMode: "status_final",
+    });
   });
 });
 
