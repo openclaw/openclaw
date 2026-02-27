@@ -346,6 +346,20 @@ async function connectBrowser(cdpUrl: string): Promise<ConnectedBrowser> {
         cached = connected;
         browser.on("disconnected", onDisconnected);
         observeBrowser(browser);
+
+        // Enable browser-level download behavior via CDP.
+        // When Playwright connects via connectOverCDP, downloads are not accepted by default.
+        // Without this, any download triggered during navigation or click is silently discarded.
+        try {
+          const cdpSession = await browser.newBrowserCDPSession();
+          await cdpSession.send("Browser.setDownloadBehavior", {
+            behavior: "allow",
+            eventsEnabled: true,
+          });
+        } catch {
+          // Best-effort: some CDP endpoints (e.g. extension relay) stub this as a no-op.
+        }
+
         return connected;
       } catch (err) {
         lastErr = err;

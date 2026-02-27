@@ -165,7 +165,7 @@ export async function navigateViaPlaywright(opts: {
   url: string;
   timeoutMs?: number;
   ssrfPolicy?: SsrFPolicy;
-}): Promise<{ url: string }> {
+}): Promise<{ url: string; download?: { triggered: true; navigateUrl: string } }> {
   const url = String(opts.url ?? "").trim();
   if (!url) {
     throw new Error("url is required");
@@ -176,9 +176,19 @@ export async function navigateViaPlaywright(opts: {
   });
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
-  await page.goto(url, {
-    timeout: Math.max(1000, Math.min(120_000, opts.timeoutMs ?? 20_000)),
-  });
+  try {
+    await page.goto(url, {
+      timeout: Math.max(1000, Math.min(120_000, opts.timeoutMs ?? 20_000)),
+    });
+  } catch (err) {
+    // When the URL triggers a file download (Content-Disposition: attachment), Playwright
+    // throws "Download is starting" because the page never reaches the "load" state.
+    // The download itself is handled by the browser's download manager, so this is not an error.
+    if (String(err).includes("Download is starting")) {
+      return { url: page.url(), download: { triggered: true, navigateUrl: url } };
+    }
+    throw err;
+  }
   const finalUrl = page.url();
   await assertBrowserNavigationResultAllowed({
     url: finalUrl,
