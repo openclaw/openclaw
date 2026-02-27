@@ -185,12 +185,6 @@ private const val defaultTalkProvider = "elevenlabs"
     }
   }
 
-  fun setElevenLabsConfig(apiKey: String?, voiceId: String?) {
-    this.apiKey = apiKey?.trim()?.takeIf { it.isNotEmpty() }
-    Log.d(tag, "setElevenLabsConfig voiceId=$voiceId")
-    this.defaultVoiceId = voiceId?.trim()?.takeIf { it.isNotEmpty() }
-  }
-
   suspend fun ensureChatSubscribed() {
     reloadConfig()
     subscribeChatIfNeeded(session = session, sessionKey = mainSessionKey.ifBlank { "main" })
@@ -342,9 +336,6 @@ private const val defaultTalkProvider = "elevenlabs"
   }
 
   fun handleGatewayEvent(event: String, payloadJson: String?) {
-    if (ttsOnAllResponses) {
-      Log.d(tag, "gateway event: $event")
-    }
     if (event == "agent" && ttsOnAllResponses) {
       handleAgentStreamEvent(payloadJson)
       return
