@@ -1276,6 +1276,7 @@ public struct SessionsUsageParams: Codable, Sendable {
     public let utcoffset: String?
     public let limit: Int?
     public let includecontextweight: Bool?
+    public let includearchived: Bool?
 
     public init(
         key: String?,
@@ -1284,7 +1285,8 @@ public struct SessionsUsageParams: Codable, Sendable {
         mode: AnyCodable?,
         utcoffset: String?,
         limit: Int?,
-        includecontextweight: Bool?)
+        includecontextweight: Bool?,
+        includearchived: Bool?)
     {
         self.key = key
         self.startdate = startdate
@@ -1293,6 +1295,7 @@ public struct SessionsUsageParams: Codable, Sendable {
         self.utcoffset = utcoffset
         self.limit = limit
         self.includecontextweight = includecontextweight
+        self.includearchived = includearchived
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -1303,6 +1306,7 @@ public struct SessionsUsageParams: Codable, Sendable {
         case utcoffset = "utcOffset"
         case limit
         case includecontextweight = "includeContextWeight"
+        case includearchived = "includeArchived"
     }
 }
 
