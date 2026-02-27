@@ -261,17 +261,23 @@ export async function saveMediaSource(
   const baseId = crypto.randomUUID();
   if (looksLikeUrl(source)) {
     const tempDest = path.join(dir, `${baseId}.tmp`);
-    const { headerMime, sniffBuffer, size } = await downloadToFile(source, tempDest, headers);
-    const mime = await detectMime({
-      buffer: sniffBuffer,
-      headerMime,
-      filePath: source,
-    });
-    const ext = extensionForMime(mime) ?? path.extname(new URL(source).pathname);
-    const id = ext ? `${baseId}${ext}` : baseId;
-    const finalDest = path.join(dir, id);
-    await fs.rename(tempDest, finalDest);
-    return { id, path: finalDest, size, contentType: mime };
+    try {
+      const { headerMime, sniffBuffer, size } = await downloadToFile(source, tempDest, headers);
+      const mime = await detectMime({
+        buffer: sniffBuffer,
+        headerMime,
+        filePath: source,
+      });
+      const ext = extensionForMime(mime) ?? path.extname(new URL(source).pathname);
+      const id = ext ? `${baseId}${ext}` : baseId;
+      const finalDest = path.join(dir, id);
+      await fs.rename(tempDest, finalDest);
+      return { id, path: finalDest, size, contentType: mime };
+    } catch (err) {
+      // Best-effort cleanup so failed URL saves do not leave stale temp files behind.
+      await fs.rm(tempDest, { force: true }).catch(() => {});
+      throw err;
+    }
   }
   // local path
   try {
