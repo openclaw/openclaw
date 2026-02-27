@@ -9,7 +9,10 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.put
 
 internal const val CAMERA_CLIP_MAX_RAW_BYTES: Long = 18L * 1024L * 1024L
 
@@ -24,6 +27,33 @@ class CameraHandler(
   private val triggerCameraFlash: () -> Unit,
   private val invokeErrorFromThrowable: (err: Throwable) -> Pair<String, String>,
 ) {
+  suspend fun handleList(_paramsJson: String?): GatewaySession.InvokeResult {
+    return try {
+      val devices = camera.listDevices()
+      val payload =
+        buildJsonObject {
+          put(
+            "devices",
+            buildJsonArray {
+              devices.forEach { device ->
+                add(
+                  buildJsonObject {
+                    put("id", JsonPrimitive(device.id))
+                    put("name", JsonPrimitive(device.name))
+                    put("position", JsonPrimitive(device.position))
+                    put("deviceType", JsonPrimitive(device.deviceType))
+                  },
+                )
+              }
+            },
+          )
+        }.toString()
+      GatewaySession.InvokeResult.ok(payload)
+    } catch (err: Throwable) {
+      val (code, message) = invokeErrorFromThrowable(err)
+      GatewaySession.InvokeResult.error(code = code, message = message)
+    }
+  }
 
   suspend fun handleSnap(paramsJson: String?): GatewaySession.InvokeResult {
     val logFile = if (BuildConfig.DEBUG) java.io.File(appContext.cacheDir, "camera_debug.log") else null
