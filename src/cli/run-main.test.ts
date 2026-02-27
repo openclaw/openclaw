@@ -62,6 +62,9 @@ describe("rewriteLegacyGatewayBinaryArgv", () => {
     expect(
       rewriteLegacyGatewayBinaryArgv(["node", "/usr/local/bin/openclaw-gateway.mjs", "run"]),
     ).toEqual(["node", "/usr/local/bin/openclaw-gateway.mjs", "gateway", "run"]);
+    expect(rewriteLegacyGatewayBinaryArgv(["node", "/usr/local/bin/openclaw-gateway.mjs"])).toEqual(
+      ["node", "/usr/local/bin/openclaw-gateway.mjs", "gateway"],
+    );
   });
 
   it("keeps modern argv untouched", () => {

@@ -1,9 +1,5 @@
 #!/usr/bin/env node
 
-// Dedicated gateway entrypoint for shim launchers where invocation name
-// is not preserved in process.argv.
-if (process.argv[2] !== "gateway") {
-  process.argv.splice(2, 0, "gateway");
-}
-
+// Keep this wrapper side-effect free. The gateway subcommand rewrite happens in
+// run-main after entry-level profile parsing.
 await import("./openclaw.mjs");
