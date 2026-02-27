@@ -18,6 +18,7 @@ const {
   resolveKimiModel,
   resolveKimiBaseUrl,
   extractKimiCitations,
+  resolveSearxngBaseUrl,
 } = __testing;
 
 describe("web_search perplexity baseUrl defaults", () => {
@@ -320,5 +321,28 @@ describe("extractKimiCitations", () => {
         ],
       }).toSorted(),
     ).toEqual(["https://example.com/a", "https://example.com/b", "https://example.com/c"]);
+  });
+});
+
+describe("web_search searxng config", () => {
+  it("defaults to localhost:8888 when no config", () => {
+    expect(resolveSearxngBaseUrl(undefined)).toBe("http://127.0.0.1:8888");
+    expect(resolveSearxngBaseUrl({})).toBe("http://127.0.0.1:8888");
+  });
+
+  it("uses explicit baseUrl", () => {
+    expect(resolveSearxngBaseUrl({ baseUrl: "http://searxng.local:9090" })).toBe(
+      "http://searxng.local:9090",
+    );
+  });
+
+  it("trims whitespace from baseUrl", () => {
+    expect(resolveSearxngBaseUrl({ baseUrl: "  http://searxng.local:9090  " })).toBe(
+      "http://searxng.local:9090",
+    );
+  });
+
+  it("falls back to default for empty string", () => {
+    expect(resolveSearxngBaseUrl({ baseUrl: "" })).toBe("http://127.0.0.1:8888");
   });
 });
