@@ -117,7 +117,7 @@ updates:
   - package-ecosystem: docker
     directory: /
     schedule:
-      interval: daily
+      interval: weekly
     cooldown:
       default-days: 2
     groups:
