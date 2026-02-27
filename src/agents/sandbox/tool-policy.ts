@@ -38,8 +38,10 @@ export function resolveSandboxToolPolicyForAgent(
 ): SandboxToolPolicyResolved {
   const agentConfig = cfg && agentId ? resolveAgentConfig(cfg, agentId) : undefined;
   const agentAllow = agentConfig?.tools?.sandbox?.tools?.allow;
+  const agentAlsoAllow = agentConfig?.tools?.sandbox?.tools?.alsoAllow;
   const agentDeny = agentConfig?.tools?.sandbox?.tools?.deny;
   const globalAllow = cfg?.tools?.sandbox?.tools?.allow;
+  const globalAlsoAllow = cfg?.tools?.sandbox?.tools?.alsoAllow;
   const globalDeny = cfg?.tools?.sandbox?.tools?.deny;
 
   const allowSource = Array.isArray(agentAllow)
@@ -77,11 +79,21 @@ export function resolveSandboxToolPolicyForAgent(
     : Array.isArray(globalDeny)
       ? globalDeny
       : [...DEFAULT_TOOL_DENY];
-  const allow = Array.isArray(agentAllow)
+  const baseAllow = Array.isArray(agentAllow)
     ? agentAllow
     : Array.isArray(globalAllow)
       ? globalAllow
       : [...DEFAULT_TOOL_ALLOW];
+  // alsoAllow extends the base allow list (agent-level takes precedence over global).
+  const effectiveAlsoAllow = Array.isArray(agentAlsoAllow)
+    ? agentAlsoAllow
+    : Array.isArray(globalAlsoAllow)
+      ? globalAlsoAllow
+      : undefined;
+  const allow =
+    Array.isArray(effectiveAlsoAllow) && effectiveAlsoAllow.length > 0
+      ? Array.from(new Set([...baseAllow, ...effectiveAlsoAllow]))
+      : baseAllow;
 
   const expandedDeny = expandToolGroups(deny);
   let expandedAllow = expandToolGroups(allow);
