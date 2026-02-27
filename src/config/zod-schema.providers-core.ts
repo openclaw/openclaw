@@ -152,6 +152,13 @@ function normalizeSlackStreamingConfig(value: {
 export const TelegramAccountSchemaBase = z
   .object({
     name: z.string().optional(),
+    apiRoot: z
+      .string()
+      .url()
+      .optional()
+      .describe(
+        "Custom Telegram Bot API server root URL (e.g. http://localhost:8081). Default: https://api.telegram.org",
+      ),
     capabilities: TelegramCapabilitiesSchema.optional(),
     markdown: MarkdownConfigSchema,
     enabled: z.boolean().optional(),

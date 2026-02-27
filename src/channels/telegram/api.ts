@@ -1,9 +1,12 @@
+const DEFAULT_API_ROOT = "https://api.telegram.org";
+
 export async function fetchTelegramChatId(params: {
   token: string;
   chatId: string;
   signal?: AbortSignal;
+  apiRoot?: string;
 }): Promise<string | null> {
-  const url = `https://api.telegram.org/bot${params.token}/getChat?chat_id=${encodeURIComponent(params.chatId)}`;
+  const url = `${params.apiRoot ?? DEFAULT_API_ROOT}/bot${params.token}/getChat?chat_id=${encodeURIComponent(params.chatId)}`;
   try {
     const res = await fetch(url, params.signal ? { signal: params.signal } : undefined);
     if (!res.ok) {

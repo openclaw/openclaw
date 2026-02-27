@@ -53,6 +53,14 @@ export type TelegramCustomCommand = {
 export type TelegramAccountConfig = {
   /** Optional display name for this account (used in CLI/UI lists). */
   name?: string;
+  /**
+   * Custom Telegram Bot API server root URL.
+   * Use this to point at a self-hosted Local Bot API Server
+   * (https://core.telegram.org/bots/api#using-a-local-bot-api-server)
+   * which removes upload/download size limits.
+   * Default: "https://api.telegram.org"
+   */
+  apiRoot?: string;
   /** Optional provider capability tags used for agent/runtime guidance. */
   capabilities?: TelegramCapabilitiesConfig;
   /** Markdown formatting overrides (tables). */

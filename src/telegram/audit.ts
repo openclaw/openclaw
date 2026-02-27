@@ -64,6 +64,7 @@ export type AuditTelegramGroupMembershipParams = {
   botId: number;
   groupIds: string[];
   proxyUrl?: string;
+  apiRoot?: string;
   timeoutMs: number;
 };
 

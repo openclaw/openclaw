@@ -17,7 +17,7 @@ export async function auditTelegramGroupMembershipImpl(
   params: AuditTelegramGroupMembershipParams,
 ): Promise<TelegramGroupMembershipAuditData> {
   const fetcher = params.proxyUrl ? makeProxyFetch(params.proxyUrl) : fetch;
-  const base = `${TELEGRAM_API_BASE}/bot${params.token}`;
+  const base = `${params.apiRoot ?? TELEGRAM_API_BASE}/bot${params.token}`;
   const groups: TelegramGroupMembershipAuditEntry[] = [];
 
   for (const chatId of params.groupIds) {
