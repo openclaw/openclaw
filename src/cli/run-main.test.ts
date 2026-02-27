@@ -77,6 +77,14 @@ describe("rewriteLegacyGatewayBinaryArgv", () => {
     const argv = ["node", "/usr/local/bin/openclaw-gateway", "gateway", "status"];
     expect(rewriteLegacyGatewayBinaryArgv(argv)).toBe(argv);
   });
+
+  it("keeps root update invocations untouched for gateway binaries", () => {
+    const updateArgv = ["node", "/usr/local/bin/openclaw-gateway", "update", "--yes"];
+    expect(rewriteLegacyGatewayBinaryArgv(updateArgv)).toBe(updateArgv);
+
+    const updateFlagArgv = ["node", "/usr/local/bin/openclaw-gateway", "--update", "--json"];
+    expect(rewriteLegacyGatewayBinaryArgv(updateFlagArgv)).toBe(updateFlagArgv);
+  });
 });
 
 describe("syncProcessArgvForNormalizedArgs", () => {

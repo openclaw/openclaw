@@ -42,7 +42,7 @@ export function rewriteLegacyGatewayBinaryArgv(argv: string[]): string[] {
   if (!isLegacyGatewayBinary(argv[1])) {
     return argv;
   }
-  if (argv[2] === "gateway") {
+  if (argv[2] === "gateway" || argv[2] === "update" || argv[2] === "--update") {
     return argv;
   }
   const next = [...argv];
