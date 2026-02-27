@@ -1308,9 +1308,12 @@ function detectEmptyAllowlistPolicy(cfg: OpenClawConfig): string[] {
       undefined;
 
     if (groupPolicy === "allowlist") {
-      const groupAllowFrom =
+      const rawGroupAllowFrom =
         (account.groupAllowFrom as Array<string | number> | undefined) ??
         (parent?.groupAllowFrom as Array<string | number> | undefined);
+      // Match runtime semantics: resolveGroupAllowFromSources treats
+      // empty arrays as unset and falls back to allowFrom.
+      const groupAllowFrom = hasAllowFromEntries(rawGroupAllowFrom) ? rawGroupAllowFrom : undefined;
       const effectiveGroupAllowFrom = groupAllowFrom ?? effectiveAllowFrom;
 
       if (!hasAllowFromEntries(effectiveGroupAllowFrom)) {
