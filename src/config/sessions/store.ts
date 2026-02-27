@@ -172,6 +172,11 @@ export function clearSessionStoreCacheForTest(): void {
   SESSION_STORE_CACHE.clear();
   for (const queue of LOCK_QUEUES.values()) {
     for (const task of queue.pending) {
+      task.done = true;
+      if (task.timer) {
+        clearTimeout(task.timer);
+        task.timer = undefined;
+      }
       task.reject(new Error("session store queue cleared for test"));
     }
   }
@@ -890,6 +895,10 @@ type SessionStoreLockTask = {
   reject: (reason: unknown) => void;
   timeoutMs?: number;
   staleMs: number;
+  enqueuedAt: number;
+  started: boolean;
+  done: boolean;
+  timer?: NodeJS.Timeout;
 };
 
 type SessionStoreLockQueue = {
@@ -925,11 +934,30 @@ async function drainSessionStoreLockQueue(storePath: string): Promise<void> {
       if (!task) {
         continue;
       }
+      if (task.done) {
+        continue;
+      }
 
-      const remainingTimeoutMs = task.timeoutMs ?? Number.POSITIVE_INFINITY;
+      // Timeout accounting includes time spent waiting in the in-process queue.
+      // Otherwise callers can hang for unbounded time under contention even when
+      // providing a small timeout.
+      const elapsedMs = Date.now() - task.enqueuedAt;
+      const remainingTimeoutMs =
+        task.timeoutMs == null ? Number.POSITIVE_INFINITY : task.timeoutMs - elapsedMs;
       if (task.timeoutMs != null && remainingTimeoutMs <= 0) {
+        task.done = true;
+        if (task.timer) {
+          clearTimeout(task.timer);
+          task.timer = undefined;
+        }
         task.reject(lockTimeoutError(storePath));
         continue;
+      }
+
+      task.started = true;
+      if (task.timer) {
+        clearTimeout(task.timer);
+        task.timer = undefined;
       }
 
       let lock: { release: () => Promise<void> } | undefined;
@@ -949,6 +977,7 @@ async function drainSessionStoreLockQueue(storePath: string): Promise<void> {
       } finally {
         await lock?.release().catch(() => undefined);
       }
+      task.done = true;
       if (hasFailure) {
         task.reject(failed);
         continue;
@@ -992,7 +1021,29 @@ async function withSessionStoreLock<T>(
       reject,
       timeoutMs: hasTimeout ? timeoutMs : undefined,
       staleMs,
+      enqueuedAt: Date.now(),
+      started: false,
+      done: false,
     };
+
+    if (hasTimeout) {
+      task.timer = setTimeout(() => {
+        // If we haven't started yet, remove from the pending queue and reject.
+        if (task.done || task.started) {
+          return;
+        }
+        task.done = true;
+        const idx = queue.pending.indexOf(task);
+        if (idx >= 0) {
+          queue.pending.splice(idx, 1);
+        }
+        reject(lockTimeoutError(storePath));
+        if (!queue.running && queue.pending.length === 0) {
+          LOCK_QUEUES.delete(storePath);
+        }
+      }, timeoutMs);
+      task.timer.unref?.();
+    }
 
     queue.pending.push(task);
     void drainSessionStoreLockQueue(storePath);

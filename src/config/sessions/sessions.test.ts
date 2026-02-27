@@ -9,6 +9,7 @@ import {
   mergeSessionEntry,
   resolveAndPersistSessionFile,
   updateSessionStore,
+  withSessionStoreLockForTest,
 } from "../sessions.js";
 import type { SessionConfig } from "../types.base.js";
 import {
@@ -215,6 +216,32 @@ describe("session store lock (Promise chain mutex)", () => {
 
     const store = loadSessionStore(storePath);
     expect(store[key]?.modelOverride).toBe("recovered");
+  });
+
+  it("enforces timeout while waiting in the in-process queue", { timeout: 10_000 }, async () => {
+    const { storePath } = await makeTmpStore({
+      "agent:main:timeout": { sessionId: "s1", updatedAt: 100 },
+    });
+
+    const slow = withSessionStoreLockForTest(
+      storePath,
+      async () => {
+        await new Promise((r) => setTimeout(r, 200));
+        return "slow";
+      },
+      { timeoutMs: 1000 },
+    );
+
+    const startedAt = Date.now();
+    const fast = withSessionStoreLockForTest(storePath, async () => "fast", { timeoutMs: 50 });
+    const fastExpectation = expect(fast).rejects.toThrow(/timeout waiting for session store lock/);
+
+    await fastExpectation;
+    const elapsedMs = Date.now() - startedAt;
+    expect(elapsedMs).toBeGreaterThanOrEqual(40);
+    expect(elapsedMs).toBeLessThan(500);
+
+    await expect(slow).resolves.toBe("slow");
   });
 
   it("clears stale runtime provider when model is patched without provider", () => {
