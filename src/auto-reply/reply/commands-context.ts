@@ -20,6 +20,10 @@ export function buildCommandContext(params: {
     cfg,
     commandAuthorized: params.commandAuthorized,
   });
+  // DEBUG: trace owner resolution for cron/gateway/whatsapp_login fix
+  console.log(
+    `[OwnerDebug] senderId=${ctx.SenderId} ownerAllowFrom=${JSON.stringify(cfg.commands?.ownerAllowFrom)} ctxOwnerAllowFrom=${JSON.stringify(ctx.OwnerAllowFrom)} → senderIsOwner=${auth.senderIsOwner} ownerList=${JSON.stringify(auth.ownerList)}`,
+  );
   const surface = (ctx.Surface ?? ctx.Provider ?? "").trim().toLowerCase();
   const channel = (ctx.Provider ?? surface).trim().toLowerCase();
   const abortKey = sessionKey ?? (auth.from || undefined) ?? (auth.to || undefined);
