@@ -719,11 +719,15 @@ export async function runEmbeddedAttempt(
         // Each line is a JSON record; count lines with "role":"user" as real messages
         let count = 0;
         for (const line of content.split("\n")) {
-          if (!line.trim()) continue;
+          if (!line.trim()) {
+            continue;
+          }
           // Fast substring check before full parse
           if (line.includes('"role":"user"') || line.includes('"role": "user"')) {
             count++;
-            if (count > 0) return true;
+            if (count > 0) {
+              return true;
+            }
           }
         }
         return false;
