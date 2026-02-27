@@ -21,6 +21,14 @@ export const FeishuDocSchema = Type.Union([
     action: Type.Literal("create"),
     title: Type.String({ description: "Document title" }),
     folder_token: Type.Optional(Type.String({ description: "Target folder token (optional)" })),
+    owner_open_id: Type.Optional(
+      Type.String({ description: "Open ID of the user to grant ownership permission" }),
+    ),
+    owner_perm_type: Type.Optional(
+      Type.Union([Type.Literal("view"), Type.Literal("edit"), Type.Literal("full_access")], {
+        description: "Permission type (default: full_access)",
+      }),
+    ),
   }),
   Type.Object({
     action: Type.Literal("list_blocks"),
