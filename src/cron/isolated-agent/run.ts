@@ -569,18 +569,23 @@ export async function runCronIsolatedAgentTurn(params: {
   const embeddedRunError = hasErrorPayload
     ? (lastErrorPayloadText ?? "cron isolated run returned an error payload")
     : undefined;
-  const resolveRunOutcome = (params?: { delivered?: boolean; deliveryAttempted?: boolean }) =>
-    withRunSession({
-      status: hasErrorPayload ? "error" : "ok",
-      ...(hasErrorPayload
-        ? { error: embeddedRunError ?? "cron isolated run returned an error payload" }
-        : {}),
+  // When delivery succeeded, a tool-error payload during the agent turn is not
+  // a run failure — the cron job's purpose (deliver a message) was achieved.
+  function resolveRunOutcome(params?: {
+    delivered?: boolean;
+    deliveryAttempted?: boolean;
+  }): RunCronAgentTurnResult {
+    const isError = hasErrorPayload && !params?.delivered;
+    return withRunSession({
+      status: isError ? "error" : "ok",
+      error: isError ? embeddedRunError : undefined,
       summary,
       outputText,
       delivered: params?.delivered,
       deliveryAttempted: params?.deliveryAttempted,
       ...telemetry,
     });
+  }
 
   // Skip delivery for heartbeat-only responses (HEARTBEAT_OK with no real content).
   const ackMaxChars = resolveHeartbeatAckMaxChars(agentCfg);
