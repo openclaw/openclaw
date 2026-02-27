@@ -871,7 +871,7 @@ export async function updateSessionStore<T>(
 ): Promise<T> {
   return await withSessionStoreLock(storePath, async () => {
     // Always re-read inside the lock to avoid clobbering concurrent writers.
-    const store = loadSessionStore(storePath, { skipCache: true });
+    const store = loadSessionStore(storePath);
     const result = await mutator(store);
     await saveSessionStoreUnlocked(storePath, store, opts);
     return result;
@@ -978,7 +978,15 @@ async function withSessionStoreLock<T>(
     );
   }
   const timeoutMs = opts.timeoutMs ?? 10_000;
-  const staleMs = opts.staleMs ?? 30_000;
+  const defaultStaleMs = 30_000;
+  // Ensure the default stale threshold never exceeds the timeout.
+  // Otherwise, a contended lock can never be considered reclaimable before we time out.
+  const staleMsRaw = opts.staleMs ?? defaultStaleMs;
+  const staleMs =
+    timeoutMs > 0 && Number.isFinite(timeoutMs)
+      ? Math.min(staleMsRaw, timeoutMs)
+      : staleMsRaw;
+
   // `pollIntervalMs` is retained for API compatibility with older lock options.
   void opts.pollIntervalMs;
 

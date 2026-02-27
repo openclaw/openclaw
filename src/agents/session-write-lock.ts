@@ -486,8 +486,19 @@ export async function acquireSessionWriteLock(params: {
         continue;
       }
 
-      const delay = Math.min(1000, 50 * attempt);
-      await new Promise((r) => setTimeout(r, delay));
+      // Exponential backoff + jitter to reduce lock-file hot contention under load.
+      const remainingMs =
+        timeoutMs === Number.POSITIVE_INFINITY
+          ? Number.POSITIVE_INFINITY
+          : Math.max(0, timeoutMs - (Date.now() - startedAt));
+      const baseDelayMs = 25;
+      const expDelayMs = Math.min(1000, baseDelayMs * 2 ** Math.min(10, attempt - 1));
+      const jitter = 0.5 + Math.random(); // [0.5, 1.5)
+      const delayMsRaw = expDelayMs * jitter;
+      const delayMs = Number.isFinite(remainingMs)
+        ? Math.min(remainingMs, delayMsRaw)
+        : delayMsRaw;
+      await new Promise((r) => setTimeout(r, delayMs));
     }
   }
 
