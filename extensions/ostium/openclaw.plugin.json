@@ -1,0 +1,44 @@
+{
+  "id": "ostium",
+  "name": "Ostium",
+  "description": "Ostium SDK tool bridge for read and write actions on Arbitrum.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "allowWrites": {
+        "type": "boolean",
+        "description": "Enable write actions like open/close/update trade."
+      },
+      "defaultNetwork": {
+        "type": "string",
+        "enum": ["mainnet", "testnet"],
+        "description": "Default Ostium network when tool input omits network."
+      },
+      "pythonBin": {
+        "type": "string",
+        "description": "Python executable used to run the Ostium bridge script."
+      },
+      "runnerPath": {
+        "type": "string",
+        "description": "Optional absolute path override for the Python runner script."
+      },
+      "timeoutMs": {
+        "type": "number",
+        "description": "Timeout for each Ostium runner invocation."
+      },
+      "rpcUrlEnvVar": {
+        "type": "string",
+        "description": "Environment variable name for the RPC URL."
+      },
+      "privateKeyEnvVar": {
+        "type": "string",
+        "description": "Environment variable name for the wallet private key."
+      },
+      "useDelegation": {
+        "type": "boolean",
+        "description": "Enable delegatedAction behavior in the SDK."
+      }
+    }
+  }
+}
