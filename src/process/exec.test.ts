@@ -56,6 +56,51 @@ describe("runCommandWithTimeout", () => {
     expect(result.code).not.toBe(0);
   });
 
+  it("resets no output timer when command keeps emitting output", async () => {
+    const result = await runCommandWithTimeout(
+      [
+        process.execPath,
+        "-e",
+        [
+          'process.stdout.write(".");',
+          "let count = 0;",
+          'const ticker = setInterval(() => { process.stdout.write(".");',
+          "count += 1;",
+          "if (count === 6) {",
+          "clearInterval(ticker);",
+          "process.exit(0);",
+          "}",
+          "}, 200);",
+        ].join(" "),
+      ],
+      {
+        timeoutMs: 7_000,
+        // Keep a generous idle budget; CI event-loop stalls can exceed 450ms.
+        noOutputTimeoutMs: 900,
+      },
+    );
+
+    expect(result.signal).toBeNull();
+    expect(result.code ?? 0).toBe(0);
+    expect(result.termination).toBe("exit");
+    expect(result.noOutputTimedOut).toBe(false);
+    expect(result.stdout.length).toBeGreaterThanOrEqual(7);
+  });
+
+  it("does not throw when child closes stdin early (EPIPE)", async () => {
+    const result = await runCommandWithTimeout(
+      [process.execPath, "-e", "process.stdin.destroy(); process.exit(0)"],
+      {
+        timeoutMs: 5_000,
+        input: "some data that will trigger EPIPE",
+      },
+    );
+
+    expect(result.code).toBe(0);
+    expect(result.termination).toBe("exit");
+  });
+
+
   it("reports global timeout termination when overall timeout elapses", async () => {
     const result = await runCommandWithTimeout(
       [process.execPath, "-e", "setTimeout(() => {}, 10)"],

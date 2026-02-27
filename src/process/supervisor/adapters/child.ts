@@ -69,6 +69,9 @@ export async function createChildAdapter(params: {
 
   const child = spawned.child as ChildProcessWithoutNullStreams;
   if (child.stdin) {
+    child.stdin.on("error", () => {
+      // Ignore stdin errors (EPIPE when child closes stdin early)
+    });
     if (params.input !== undefined) {
       child.stdin.write(params.input);
       child.stdin.end();

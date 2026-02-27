@@ -286,6 +286,9 @@ export async function runCommandWithTimeout(
     armNoOutputTimer();
 
     if (hasInput && child.stdin) {
+      child.stdin.on("error", () => {
+        // Ignore stdin errors (EPIPE when child closes stdin early)
+      });
       child.stdin.write(input ?? "");
       child.stdin.end();
     }
