@@ -184,7 +184,7 @@ describe("/subagents spawn command", () => {
   });
   it("returns forbidden for unauthorized cross-agent spawn", async () => {
     spawnSubagentDirectMock.mockResolvedValue(
-      forbiddenResult("agentId is not allowed for sessions_spawn (allowed: alpha)"),
+      forbiddenResult('agentId "beta" is not allowed for sessions_spawn from agent "main". Configure agents.main.subagents.allowAgents in config.yaml to allow cross-agent spawns. Use ["*"] to allow all agents or list specific agent IDs. Currently allowed: alpha'),
     );
     const params = buildCommandTestParams("/subagents spawn beta do the thing", baseCfg);
     const result = await handleSubagentsCommand(params, true);
