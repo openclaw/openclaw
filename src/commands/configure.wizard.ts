@@ -137,7 +137,7 @@ async function promptWebToolsConfig(
   note(
     [
       "Web search lets your agent look things up online using the `web_search` tool.",
-      "Supports Brave Search, Perplexity Sonar, xAI Grok, and Tavily.",
+      "Supports Brave Search, Perplexity Sonar, xAI Grok, Tavily, and SearXNG.",
       "Docs: https://docs.openclaw.ai/tools/web",
     ].join("\n"),
     "Web search",
@@ -167,6 +167,7 @@ async function promptWebToolsConfig(
           { value: "perplexity", label: "Perplexity", hint: "AI-synthesized answers" },
           { value: "grok", label: "xAI Grok", hint: "AI-synthesized answers" },
           { value: "tavily", label: "Tavily", hint: "Detailed search for AI agents" },
+          { value: "searxng", label: "SearXNG", hint: "Free unlimited search (self-hosted)" },
         ],
         initialValue: currentProvider,
       }),
@@ -245,6 +246,23 @@ async function promptWebToolsConfig(
         nextSearch = {
           ...nextSearch,
           tavily: { ...existingTavily, apiKey: key },
+        };
+      }
+    } else if (provider === "searxng") {
+      const existingSearxng = existingSearch?.searxng;
+      const baseUrlInput = guardCancel(
+        await text({
+          message: "SearXNG base URL",
+          initialValue: existingSearxng?.baseUrl || "http://localhost:8080",
+          placeholder: "http://localhost:8080",
+        }),
+        runtime,
+      );
+      const baseUrl = String(baseUrlInput ?? "").trim();
+      if (baseUrl) {
+        nextSearch = {
+          ...nextSearch,
+          searxng: { ...existingSearxng, baseUrl },
         };
       }
     }

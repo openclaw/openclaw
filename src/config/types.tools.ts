@@ -398,8 +398,8 @@ export type ToolsConfig = {
     search?: {
       /** Enable web search tool (default: true when API key is present). */
       enabled?: boolean;
-      /** Search provider ("brave", "perplexity", "grok", or "tavily"). */
-      provider?: "brave" | "perplexity" | "grok" | "tavily";
+      /** Search provider ("brave", "perplexity", "grok", "tavily", or "searxng"). */
+      provider?: "brave" | "perplexity" | "grok" | "tavily" | "searxng";
       /** Brave Search API key (optional; defaults to BRAVE_API_KEY env var). */
       apiKey?: string;
       /** Default search results count (1-10). */
@@ -430,6 +430,11 @@ export type ToolsConfig = {
       tavily?: {
         /** API key for Tavily (defaults to TAVILY_API_KEY env var). */
         apiKey?: string;
+      };
+      /** SearXNG-specific configuration (used when provider="searxng"). */
+      searxng?: {
+        /** Base URL for SearXNG instance (e.g. "http://localhost:8080"). */
+        baseUrl?: string;
       };
     };
     fetch?: {
