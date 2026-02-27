@@ -75,6 +75,37 @@ export async function runDiscordGatewayLifecycle(params: {
   };
   gatewayEmitter?.on("debug", onGatewayDebug);
 
+  // Periodic health watchdog: detect stuck gateway connections.
+  // Carbon's GatewayPlugin can get stuck when isConnecting stays true
+  // after a failed resume (code 1006) or when the WebSocket creation
+  // silently hangs without emitting open/close/error events.
+  const HEALTH_CHECK_INTERVAL_MS = 60_000;
+  const MAX_DISCONNECTED_MS = 90_000;
+  let lastConnectedAt = Date.now();
+  const healthCheckId = gateway
+    ? setInterval(() => {
+        if (params.abortSignal?.aborted) {
+          return;
+        }
+        if (gateway.isConnected) {
+          lastConnectedAt = Date.now();
+          return;
+        }
+        const disconnectedMs = Date.now() - lastConnectedAt;
+        if (disconnectedMs < MAX_DISCONNECTED_MS) {
+          return;
+        }
+        params.runtime.log?.(
+          danger(
+            `discord health watchdog: disconnected for ${Math.round(disconnectedMs / 1000)}s, forcing reconnect`,
+          ),
+        );
+        gateway.disconnect();
+        gateway.connect(false);
+        lastConnectedAt = Date.now();
+      }, HEALTH_CHECK_INTERVAL_MS)
+    : undefined;
+
   let sawDisallowedIntents = false;
   const logGatewayError = (err: unknown) => {
     if (params.isDisallowedIntentsError(err)) {
@@ -139,6 +170,9 @@ export async function runDiscordGatewayLifecycle(params: {
     stopGatewayLogging();
     if (helloTimeoutId) {
       clearTimeout(helloTimeoutId);
+    }
+    if (healthCheckId) {
+      clearInterval(healthCheckId);
     }
     gatewayEmitter?.removeListener("debug", onGatewayDebug);
     params.abortSignal?.removeEventListener("abort", onAbort);
