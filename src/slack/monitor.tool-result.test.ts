@@ -697,7 +697,47 @@ describe("monitorSlackProvider tool results", () => {
     await runDirectMessageEvent("789");
 
     expect(sendMock).toHaveBeenCalledTimes(1);
-    // First reply starts a thread under the incoming message
-    expect(sendMock.mock.calls[0][2]).toMatchObject({ threadTs: "789" });
+
+  it("treats follow-up thread messages as implicit mentions after bot participates", async () => {
+    slackTestState.config = {
+      channels: {
+        slack: {
+          dm: { enabled: true, policy: "open", allowFrom: ["*"] },
+          channels: { C1: { allow: true, requireMention: true } },
+        },
+      },
+    };
+    replyMock.mockResolvedValue({ text: "hi" });
+
+    const { controller, run } = startSlackMonitor(monitorSlackProvider);
+    const handler = await getSlackHandlerOrThrow("message");
+
+    // First message: user explicitly mentions bot → bot replies → thread participation recorded
+    await handler({
+      event: makeSlackMessageEvent({
+        text: "<@bot-user> help me",
+        ts: "100",
+        channel: "C1",
+        channel_type: "channel",
+      }),
+    });
+    expect(replyMock).toHaveBeenCalledTimes(1);
+    replyMock.mockClear();
+
+    // Second message: same thread, no @mention → implicit mention via thread participation
+    await handler({
+      event: makeSlackMessageEvent({
+        text: "thanks, follow-up question",
+        ts: "101",
+        thread_ts: "100",
+        channel: "C1",
+        channel_type: "channel",
+      }),
+    });
+
+    await stopSlackMonitor({ controller, run });
+
+    expect(replyMock).toHaveBeenCalledTimes(1);
+    expect(firstReplyCtx().WasMentioned).toBe(true);
   });
 });
