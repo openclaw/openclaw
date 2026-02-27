@@ -462,6 +462,46 @@ describe("runGatewayUpdate", () => {
     ]);
   });
 
+  it("returns error when both primary and --omit=optional fallback fail", async () => {
+    const nodeModules = path.join(tempDir, "node_modules");
+    const pkgRoot = path.join(nodeModules, "openclaw");
+    await seedGlobalPackageRoot(pkgRoot);
+
+    const runCommand = async (argv: string[]) => {
+      const key = argv.join(" ");
+      if (key === `git -C ${pkgRoot} rev-parse --show-toplevel`) {
+        return { stdout: "", stderr: "not a git repository", code: 128 };
+      }
+      if (key === "npm root -g") {
+        return { stdout: nodeModules, stderr: "", code: 0 };
+      }
+      if (key === "pnpm root -g") {
+        return { stdout: "", stderr: "", code: 1 };
+      }
+      if (key === "npm i -g openclaw@latest --no-fund --no-audit --loglevel=error") {
+        return { stdout: "", stderr: "node-gyp failed", code: 1 };
+      }
+      if (
+        key === "npm i -g openclaw@latest --omit=optional --no-fund --no-audit --loglevel=error"
+      ) {
+        return { stdout: "", stderr: "permission denied", code: 1 };
+      }
+      return { stdout: "", stderr: "", code: 0 };
+    };
+
+    const result = await runWithCommand(runCommand, { cwd: pkgRoot });
+
+    expect(result.status).toBe("error");
+    expect(result.mode).toBe("npm");
+    expect(result.steps).toHaveLength(2);
+    expect(result.steps.map((s) => s.name)).toEqual([
+      "global update",
+      "global update (omit optional)",
+    ]);
+    expect(result.steps[0]?.exitCode).toBe(1);
+    expect(result.steps[1]?.exitCode).toBe(1);
+  });
+
   it("updates global bun installs when detected", async () => {
     const bunInstall = path.join(tempDir, "bun-install");
     await withEnvAsync({ BUN_INSTALL: bunInstall }, async () => {
