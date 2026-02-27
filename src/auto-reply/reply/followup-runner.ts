@@ -281,10 +281,9 @@ export function createFollowupRunner(params: {
         ...(runResult.messagingToolSentMediaUrls ?? []),
         ...(recentWindowActive ? (sessionEntry?.lastMessagingToolSentMediaUrls ?? []) : []),
       ];
-      const sentTargets = [
-        ...(runResult.messagingToolSentTargets ?? []),
-        ...(recentWindowActive ? (sessionEntry?.lastMessagingToolSentTargets ?? []) : []),
-      ];
+      // Keep target-based suppression scoped to the current run only.
+      // Session-level dedupe state is used for text/media duplicate filtering.
+      const sentTargets = runResult.messagingToolSentTargets ?? [];
 
       const dedupedPayloads = filterMessagingToolDuplicates({
         payloads: replyTaggedPayloads,

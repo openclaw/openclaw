@@ -453,16 +453,24 @@ export async function runReplyAgent(params: {
         activeSessionStore[sessionKey] = sessionDedupeEntry;
       }
       if (sessionKey && storePath) {
-        await updateSessionStoreEntry({
-          storePath,
-          sessionKey,
-          update: async () => ({
-            lastMessagingToolSentAt: sessionDedupeEntry.lastMessagingToolSentAt,
-            lastMessagingToolSentTexts: sessionDedupeEntry.lastMessagingToolSentTexts,
-            lastMessagingToolSentMediaUrls: sessionDedupeEntry.lastMessagingToolSentMediaUrls,
-            lastMessagingToolSentTargets: sessionDedupeEntry.lastMessagingToolSentTargets,
-          }),
-        });
+        try {
+          await updateSessionStoreEntry({
+            storePath,
+            sessionKey,
+            update: async () => ({
+              lastMessagingToolSentAt: sessionDedupeEntry.lastMessagingToolSentAt,
+              lastMessagingToolSentTexts: sessionDedupeEntry.lastMessagingToolSentTexts,
+              lastMessagingToolSentMediaUrls: sessionDedupeEntry.lastMessagingToolSentMediaUrls,
+              lastMessagingToolSentTargets: sessionDedupeEntry.lastMessagingToolSentTargets,
+            }),
+          });
+        } catch (error) {
+          logger.warning(
+            "Failed to persist messaging-tool dedupe state for session {}: {}",
+            sessionKey,
+            error,
+          );
+        }
       }
     }
 
