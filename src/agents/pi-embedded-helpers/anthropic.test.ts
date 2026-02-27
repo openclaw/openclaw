@@ -58,7 +58,7 @@ describe("sanitizeThinkingForRecovery", () => {
     expect(result.prefill).toBe(true);
   });
 
-  it("marks prefill when thinking is signed but text is partial (crash mid-text)", () => {
+  it("treats partial text as valid when thinking is signed (non-empty text block)", () => {
     const messages: AgentMessage[] = [
       { role: "user", content: "hello" } as AgentMessage,
       {
