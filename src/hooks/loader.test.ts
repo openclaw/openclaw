@@ -348,4 +348,80 @@ describe("loader", () => {
       expect(getRegisteredEventKeys()).not.toContain("command:new");
     });
   });
+
+  describe("hot-reload safety", () => {
+    it("should not duplicate file-based handlers when called twice", async () => {
+      const hookDir = path.join(tmpDir, "hooks", "test-dedup");
+      await fs.mkdir(hookDir, { recursive: true });
+      await fs.writeFile(
+        path.join(hookDir, "HOOK.md"),
+        [
+          "---",
+          "name: test-dedup",
+          "description: dedup test",
+          'metadata: {"openclaw":{"events":["command:new"]}}',
+          "---",
+          "",
+          "# Dedup Hook",
+        ].join("\n"),
+      );
+      await fs.writeFile(
+        path.join(hookDir, "handler.js"),
+        "export default async function(event) { event.messages.push('dedup-test'); }",
+      );
+
+      const cfg = createEnabledHooksConfig();
+
+      // Load twice (simulates hot-reload)
+      await loadInternalHooks(cfg, tmpDir);
+      await loadInternalHooks(cfg, tmpDir);
+
+      // Trigger and verify handler only fires once
+      const event = createInternalHookEvent("command", "new", "test-session", {});
+      await triggerInternalHook(event);
+      const dedupMessages = event.messages.filter((m) => m === "dedup-test");
+      expect(dedupMessages).toHaveLength(1);
+    });
+
+    it("should preserve plugin-registered hooks across reload", async () => {
+      const { registerInternalHook } = await import("./internal-hooks.js");
+
+      // Simulate a plugin hook registered via api.registerHook()
+      const pluginHandler = async (event: { messages: string[] }) => {
+        event.messages.push("plugin-hook");
+      };
+      registerInternalHook("command:new", pluginHandler);
+
+      // Set up a file-based hook
+      const hookDir = path.join(tmpDir, "hooks", "test-preserve");
+      await fs.mkdir(hookDir, { recursive: true });
+      await fs.writeFile(
+        path.join(hookDir, "HOOK.md"),
+        [
+          "---",
+          "name: test-preserve",
+          "description: preserve test",
+          'metadata: {"openclaw":{"events":["command:new"]}}',
+          "---",
+          "",
+          "# Preserve Hook",
+        ].join("\n"),
+      );
+      await fs.writeFile(
+        path.join(hookDir, "handler.js"),
+        "export default async function(event) { event.messages.push('file-hook'); }",
+      );
+
+      const cfg = createEnabledHooksConfig();
+
+      // Load file-based hooks (simulates startGatewaySidecars)
+      await loadInternalHooks(cfg, tmpDir);
+
+      // Trigger and verify both hooks fire
+      const event = createInternalHookEvent("command", "new", "test-session", {});
+      await triggerInternalHook(event);
+      expect(event.messages).toContain("plugin-hook");
+      expect(event.messages).toContain("file-hook");
+    });
+  });
 });

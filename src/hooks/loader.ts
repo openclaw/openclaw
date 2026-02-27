@@ -14,11 +14,14 @@ import { resolveHookConfig } from "./config.js";
 import { shouldIncludeHook } from "./config.js";
 import { buildImportUrl } from "./import-url.js";
 import type { InternalHookHandler } from "./internal-hooks.js";
-import { registerInternalHook } from "./internal-hooks.js";
+import { registerInternalHook, unregisterInternalHook } from "./internal-hooks.js";
 import { resolveFunctionModuleExport } from "./module-loader.js";
 import { loadWorkspaceHookEntries } from "./workspace.js";
 
 const log = createSubsystemLogger("hooks:loader");
+
+// Tracks file-based handlers for cleanup on hot-reload.
+const fileRegisteredHandlers: Array<{ event: string; handler: InternalHookHandler }> = [];
 
 /**
  * Load and register all hook handlers
@@ -51,6 +54,12 @@ export async function loadInternalHooks(
   if (!cfg.hooks?.internal?.enabled) {
     return 0;
   }
+
+  // Clean up handlers from a previous call (hot-reload).
+  for (const { event, handler } of fileRegisteredHandlers) {
+    unregisterInternalHook(event, handler);
+  }
+  fileRegisteredHandlers.length = 0;
 
   let loadedCount = 0;
 
@@ -114,6 +123,7 @@ export async function loadInternalHooks(
 
         for (const event of events) {
           registerInternalHook(event, handler);
+          fileRegisteredHandlers.push({ event, handler });
         }
 
         log.info(
@@ -186,6 +196,7 @@ export async function loadInternalHooks(
       }
 
       registerInternalHook(handlerConfig.event, handler);
+      fileRegisteredHandlers.push({ event: handlerConfig.event, handler });
       log.info(
         `Registered hook (legacy): ${handlerConfig.event} -> ${modulePath}${exportName !== "default" ? `#${exportName}` : ""}`,
       );
