@@ -905,10 +905,15 @@ def check_error_escalation(state):
         return 0
 
     state["last_error_check"] = now_ts()
+    # 인프라 실패(timeout/cooldown 등)를 제외한 실질적 에러만 카운팅
+    infra_exclude = " AND ".join(
+        "detail NOT LIKE '%{}%'".format(p) for p in _INFRA_FAIL_PATTERNS
+    )
     rows = ops_db_query(
         "SELECT count(*) as cnt FROM ops_agent_events "
         "WHERE event_type='error' "
-        "AND created_at > datetime('now','localtime','-1 hour')"
+        "AND created_at > datetime('now','localtime','-1 hour') "
+        "AND {}".format(infra_exclude)
     )
     if not rows or rows[0].get("cnt", 0) < 3:
         return 0
@@ -2194,17 +2199,22 @@ def _update_circuit_breakers(state):
                 sig, agent, info["count"], title[:50]))
 
     # 4. Send Telegram alerts for newly tripped breakers
+    #    (인프라 실패 — timeout/cooldown 등 — 는 텔레그램 DM 스킵, 로그만 기록)
     for key, sig, agent, info in tripped_this_cycle:
-        msg = (
-            "<b>[Circuit Breaker TRIPPED]</b>\n"
-            "Pattern: <code>{}</code>\n"
-            "Agent: {}\n"
-            "Failures: {} in 1h window\n"
-            "Last: {}\n"
-            "Action: blocking retries + new tasks for 24h".format(
-                sig, agent, info["count"], info["last_title"][:60])
-        )
-        _cb_send_telegram_dm(msg)
+        is_infra = any(p in sig.lower() for p in _INFRA_FAIL_PATTERNS)
+        if is_infra:
+            log("BUS_CB: infra-fail sig='{}' agent={} — Telegram DM suppressed".format(sig, agent))
+        else:
+            msg = (
+                "<b>[Circuit Breaker TRIPPED]</b>\n"
+                "Pattern: <code>{}</code>\n"
+                "Agent: {}\n"
+                "Failures: {} in 1h window\n"
+                "Last: {}\n"
+                "Action: blocking retries + new tasks for 24h".format(
+                    sig, agent, info["count"], info["last_title"][:60])
+            )
+            _cb_send_telegram_dm(msg)
         bus_write("harry", "alert", "[BUS-CB] {} tripped for agent={} ({} fails)".format(
             sig, agent, info["count"]))
 
