@@ -448,7 +448,13 @@ export async function processMessage(params: {
           `Failed sending web ${label} to ${params.msg.from ?? conversationId}: ${formatError(err)}`,
         );
       },
-      onReplyStart: params.msg.sendComposing,
+      onReplyStart: isOutboundSuppressed({
+        cfg: params.cfg,
+        channel: "whatsapp",
+        accountId: params.route.accountId,
+      })
+        ? undefined
+        : params.msg.sendComposing,
     },
     replyOptions: {
       // WhatsApp delivery intentionally suppresses non-final payloads.

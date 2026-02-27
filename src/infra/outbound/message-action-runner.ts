@@ -50,6 +50,23 @@ import { isOutboundSuppressed } from "./suppress-outbound.js";
 import { resolveChannelTarget, type ResolvedMessagingTarget } from "./target-resolver.js";
 import { extractToolPayload } from "./tool-payload.js";
 
+const SUPPRESS_EXEMPT_ACTIONS: ReadonlySet<string> = new Set([
+  "search",
+  "reactions",
+  "read",
+  "member-info",
+  "role-info",
+  "emoji-list",
+  "channel-info",
+  "channel-list",
+  "list-pins",
+  "permissions",
+  "thread-list",
+  "voice-status",
+  "event-list",
+  "sticker-search",
+]);
+
 export type MessageActionRunnerGateway = {
   url?: string;
   token?: string;
@@ -769,8 +786,14 @@ export async function runMessageAction(
 
   const gateway = resolveGateway(input);
 
-  // Block all outbound actions (send, poll, plugin) when suppressOutbound is active.
-  if (!dryRun && isOutboundSuppressed({ cfg, channel, accountId })) {
+  // Block outbound-write actions when suppressOutbound is active.
+  // Read-only queries (search, list, info) are exempt so inbound/operational
+  // workflows continue to work in listen-only mode.
+  if (
+    !dryRun &&
+    !SUPPRESS_EXEMPT_ACTIONS.has(action) &&
+    isOutboundSuppressed({ cfg, channel, accountId })
+  ) {
     throw new Error(`Outbound suppressed for channel ${channel} (listen-only mode)`);
   }
 

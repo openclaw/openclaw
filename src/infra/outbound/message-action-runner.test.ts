@@ -1129,4 +1129,26 @@ describe("suppressOutbound blocks agent tool actions", () => {
     });
     expect(result.kind).toBe("send");
   });
+
+  it("allows read-only actions (search) past suppress guard", async () => {
+    const err = await runMessageAction({
+      cfg: suppressed,
+      action: "search",
+      params: { channel: "slack", query: "hello" },
+      dryRun: false,
+    }).catch((e: Error) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).not.toMatch(/outbound suppressed/i);
+  });
+
+  it("allows read-only actions (channel-list) past suppress guard", async () => {
+    const err = await runMessageAction({
+      cfg: suppressed,
+      action: "channel-list",
+      params: { channel: "slack" },
+      dryRun: false,
+    }).catch((e: Error) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).not.toMatch(/outbound suppressed/i);
+  });
 });
