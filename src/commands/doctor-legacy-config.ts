@@ -334,6 +334,9 @@ export function normalizeCompatibilityConfigValues(cfg: OpenClawConfig): {
         const value = rawChannel[key];
         defaultAccount[key] = value && typeof value === "object" ? structuredClone(value) : value;
       }
+      if (Object.keys(defaultAccount).length === 0) {
+        continue;
+      }
       const nextChannel: Record<string, unknown> = {
         ...rawChannel,
       };
