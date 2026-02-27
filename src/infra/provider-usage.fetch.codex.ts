@@ -65,6 +65,7 @@ export async function fetchCodexUsage(
   if (data.rate_limit?.secondary_window) {
     const sw = data.rate_limit.secondary_window;
     const windowHours = Math.round((sw.limit_window_seconds || 86400) / 3600);
+    // Map window duration to a human-readable bucket label
     const label = windowHours >= 168 ? "Week" : windowHours >= 24 ? "Day" : `${windowHours}h`;
     windows.push({
       label,
