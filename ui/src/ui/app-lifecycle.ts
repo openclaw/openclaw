@@ -16,6 +16,7 @@ import {
   syncTabWithLocation,
   syncThemeWithSettings,
 } from "./app-settings.ts";
+import { DEFAULT_ASSISTANT_NAME } from "./assistant-identity.ts";
 import { loadControlUiBootstrapConfig } from "./controllers/control-ui-bootstrap.ts";
 import type { Tab } from "./navigation.ts";
 
@@ -40,9 +41,24 @@ type LifecycleHost = {
   topbarObserver: ResizeObserver | null;
 };
 
+const BASE_TITLE = "OpenClaw Control";
+
+/** Update the browser tab title to reflect the active agent name. */
+export function syncDocumentTitle(assistantName: string) {
+  if (typeof document === "undefined") {
+    return;
+  }
+  // Show "OpenClaw Control" when no custom agent name, otherwise "OpenClaw — AgentName".
+  if (!assistantName || assistantName === DEFAULT_ASSISTANT_NAME) {
+    document.title = BASE_TITLE;
+    return;
+  }
+  document.title = `OpenClaw \u2014 ${assistantName}`;
+}
+
 export function handleConnected(host: LifecycleHost) {
   host.basePath = inferBasePath();
-  void loadControlUiBootstrapConfig(host);
+  void loadControlUiBootstrapConfig(host).then(() => syncDocumentTitle(host.assistantName));
   applySettingsFromUrl(host as unknown as Parameters<typeof applySettingsFromUrl>[0]);
   syncTabWithLocation(host as unknown as Parameters<typeof syncTabWithLocation>[0], true);
   syncThemeWithSettings(host as unknown as Parameters<typeof syncThemeWithSettings>[0]);
@@ -76,6 +92,9 @@ export function handleDisconnected(host: LifecycleHost) {
 }
 
 export function handleUpdated(host: LifecycleHost, changed: Map<PropertyKey, unknown>) {
+  if (changed.has("assistantName")) {
+    syncDocumentTitle(host.assistantName);
+  }
   if (host.tab === "chat" && host.chatManualRefreshInFlight) {
     return;
   }
