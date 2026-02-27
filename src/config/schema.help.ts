@@ -153,6 +153,28 @@ export const FIELD_HELP: Record<string, string> = {
     "Use this legacy ElevenLabs API key for Talk mode only during migration, and keep secrets in env-backed storage. Prefer talk.providers.elevenlabs.apiKey (fallback: ELEVENLABS_API_KEY).",
   "talk.interruptOnSpeech":
     "If true (default), stop assistant speech when the user starts speaking in Talk mode. Keep enabled for conversational turn-taking.",
+  acp: "ACP runtime controls for enabling dispatch, selecting backends, constraining allowed agent targets, and tuning streamed turn projection behavior.",
+  "acp.enabled":
+    "Global ACP feature gate. Keep disabled unless ACP runtime + policy are configured.",
+  "acp.dispatch.enabled":
+    "Independent dispatch gate for ACP session turns. Disable to keep ACP commands available while blocking ACP turn execution.",
+  "acp.backend":
+    "Default ACP runtime backend id (for example: acpx). Must match a registered ACP runtime plugin backend.",
+  "acp.defaultAgent":
+    "Fallback ACP target agent id used when ACP spawns do not specify an explicit target.",
+  "acp.allowedAgents":
+    "Allowlist of ACP target agent ids permitted for ACP runtime sessions. Empty means no additional allowlist restriction.",
+  "acp.maxConcurrentSessions":
+    "Maximum concurrently active ACP sessions across this gateway process.",
+  "acp.stream": "ACP streaming projection controls for chunk sizing and coalescer flush timing.",
+  "acp.stream.coalesceIdleMs":
+    "Coalescer idle flush window in milliseconds for ACP streamed text before block replies are emitted.",
+  "acp.stream.maxChunkChars":
+    "Maximum chunk size for ACP streamed block projection before splitting into multiple block replies.",
+  "acp.runtime.ttlMinutes":
+    "Idle runtime TTL in minutes for ACP session workers before eligible cleanup.",
+  "acp.runtime.installCommand":
+    "Optional operator install/setup command shown by `/acp install` and `/acp doctor` when ACP backend wiring is missing.",
   "agents.list.*.skills":
     "Optional allowlist of skills for this agent (omit = all skills; empty = no skills).",
   "agents.list[].skills":
@@ -608,7 +630,7 @@ export const FIELD_HELP: Record<string, string> = {
   models:
     "Model catalog root for provider definitions, merge/replace behavior, and optional Bedrock discovery integration. Keep provider definitions explicit and validated before relying on production failover paths.",
   "models.mode":
-    'Controls provider catalog behavior: "merge" keeps built-ins and overlays your custom providers, while "replace" uses only your configured providers. Keep "merge" unless you intentionally want a strict custom list.',
+    'Controls provider catalog behavior: "merge" keeps built-ins and overlays your custom providers, while "replace" uses only your configured providers. In "merge", matching provider IDs preserve non-empty agent models.json apiKey/baseUrl values and fall back to config when agent values are empty or missing.',
   "models.providers":
     "Provider map keyed by provider ID containing connection/auth settings and concrete model definitions. Use stable provider keys so references from agents and tooling remain portable across environments.",
   "models.providers.*.baseUrl":
@@ -908,6 +930,10 @@ export const FIELD_HELP: Record<string, string> = {
     "User-prompt template used for the pre-compaction memory flush turn when generating memory candidates. Use this only when you need custom extraction instructions beyond the default memory flush behavior.",
   "agents.defaults.compaction.memoryFlush.systemPrompt":
     "System-prompt override for the pre-compaction memory flush turn to control extraction style and safety constraints. Use carefully so custom instructions do not reduce memory quality or leak sensitive context.",
+  "agents.defaults.embeddedPi":
+    "Embedded Pi runner hardening controls for how workspace-local Pi settings are trusted and applied in OpenClaw sessions.",
+  "agents.defaults.embeddedPi.projectSettingsPolicy":
+    'How embedded Pi handles workspace-local `.pi/config/settings.json`: "sanitize" (default) strips shellPath/shellCommandPrefix, "ignore" disables project settings entirely, and "trusted" applies project settings as-is.',
   "agents.defaults.humanDelay.mode": 'Delay style for block replies ("off", "natural", "custom").',
   "agents.defaults.humanDelay.minMs": "Minimum delay in ms for custom humanDelay (default: 800).",
   "agents.defaults.humanDelay.maxMs": "Maximum delay in ms for custom humanDelay (default: 2500).",
@@ -1364,6 +1390,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Auto-unfocus TTL in hours for Discord thread-bound sessions (/focus and spawned thread sessions). Set 0 to disable (default: 24). Overrides session.threadBindings.ttlHours when set.",
   "channels.discord.threadBindings.spawnSubagentSessions":
     "Allow subagent spawns with thread=true to auto-create and bind Discord threads (default: false; opt-in). Set true to enable thread-bound subagent spawns for this account/channel.",
+  "channels.discord.threadBindings.spawnAcpSessions":
+    "Allow /acp spawn to auto-create and bind Discord threads for ACP sessions (default: false; opt-in). Set true to enable thread-bound ACP spawns for this account/channel.",
   "channels.discord.ui.components.accentColor":
     "Accent color for Discord component containers (hex). Set per account via channels.discord.accounts.<id>.ui.components.accentColor.",
   "channels.discord.voice.enabled":

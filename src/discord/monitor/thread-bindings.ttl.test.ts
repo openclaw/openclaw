@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../config/config.js";
 
 const hoisted = vi.hoisted(() => {
   const sendMessageDiscord = vi.fn(async (_to: string, _text: string, _opts?: unknown) => ({}));
@@ -22,6 +23,7 @@ const hoisted = vi.hoisted(() => {
     },
   }));
   const createThreadDiscord = vi.fn(async (..._args: unknown[]) => ({ id: "thread-created" }));
+  const readAcpSessionEntry = vi.fn();
   return {
     sendMessageDiscord,
     sendWebhookMessageDiscord,
@@ -29,6 +31,7 @@ const hoisted = vi.hoisted(() => {
     restPost,
     createDiscordRestClient,
     createThreadDiscord,
+    readAcpSessionEntry,
   };
 });
 
@@ -45,10 +48,15 @@ vi.mock("../send.messages.js", () => ({
   createThreadDiscord: hoisted.createThreadDiscord,
 }));
 
+vi.mock("../../acp/runtime/session-meta.js", () => ({
+  readAcpSessionEntry: hoisted.readAcpSessionEntry,
+}));
+
 const {
   __testing,
   autoBindSpawnedDiscordSubagent,
   createThreadBindingManager,
+  reconcileAcpThreadBindingsOnStartup,
   resolveThreadBindingIntroText,
   setThreadBindingTtlBySessionKey,
   unbindThreadBindingsBySessionKey,
@@ -63,6 +71,7 @@ describe("thread binding ttl", () => {
     hoisted.restPost.mockClear();
     hoisted.createDiscordRestClient.mockClear();
     hoisted.createThreadDiscord.mockClear();
+    hoisted.readAcpSessionEntry.mockReset().mockReturnValue(null);
     vi.useRealTimers();
   });
 
@@ -95,6 +104,16 @@ describe("thread binding ttl", () => {
       sessionTtlMs: 24 * 60 * 60 * 1000,
     });
     expect(intro).toContain("auto-unfocus in 24h");
+  });
+
+  it("includes cwd near the top of intro text", () => {
+    const intro = resolveThreadBindingIntroText({
+      agentId: "codex",
+      sessionTtlMs: 24 * 60 * 60 * 1000,
+      sessionCwd: "/home/bob/clawd",
+      sessionDetails: ["session ids: pending (available after the first reply)"],
+    });
+    expect(intro).toContain("\ncwd: /home/bob/clawd\nsession ids: pending");
   });
 
   it("auto-unfocuses expired bindings and sends a ttl-expired message", async () => {
@@ -477,6 +496,119 @@ describe("thread binding ttl", () => {
     expect(removedA).toHaveLength(1);
     expect(a.getByThreadId("thread-1")).toBeUndefined();
     expect(b.getByThreadId("thread-1")?.targetSessionKey).toBe("agent:main:subagent:b");
+  });
+
+  it("removes stale ACP bindings during startup reconciliation", async () => {
+    const manager = createThreadBindingManager({
+      accountId: "default",
+      persist: false,
+      enableSweeper: false,
+      sessionTtlMs: 24 * 60 * 60 * 1000,
+    });
+
+    await manager.bindTarget({
+      threadId: "thread-acp-healthy",
+      channelId: "parent-1",
+      targetKind: "acp",
+      targetSessionKey: "agent:codex:acp:healthy",
+      agentId: "codex",
+      webhookId: "wh-1",
+      webhookToken: "tok-1",
+    });
+    await manager.bindTarget({
+      threadId: "thread-acp-stale",
+      channelId: "parent-1",
+      targetKind: "acp",
+      targetSessionKey: "agent:codex:acp:stale",
+      agentId: "codex",
+      webhookId: "wh-1",
+      webhookToken: "tok-1",
+    });
+    await manager.bindTarget({
+      threadId: "thread-subagent",
+      channelId: "parent-1",
+      targetKind: "subagent",
+      targetSessionKey: "agent:main:subagent:child",
+      agentId: "main",
+      webhookId: "wh-1",
+      webhookToken: "tok-1",
+    });
+
+    hoisted.readAcpSessionEntry.mockImplementation((paramsUnknown: unknown) => {
+      const sessionKey = (paramsUnknown as { sessionKey?: string }).sessionKey ?? "";
+      if (sessionKey === "agent:codex:acp:healthy") {
+        return {
+          sessionKey,
+          storeSessionKey: sessionKey,
+          acp: {
+            backend: "acpx",
+            agent: "codex",
+            runtimeSessionName: "runtime:healthy",
+            mode: "persistent",
+            state: "idle",
+            lastActivityAt: Date.now(),
+          },
+        };
+      }
+      return {
+        sessionKey,
+        storeSessionKey: sessionKey,
+        acp: undefined,
+      };
+    });
+
+    const result = reconcileAcpThreadBindingsOnStartup({
+      cfg: {} as OpenClawConfig,
+      accountId: "default",
+    });
+
+    expect(result.checked).toBe(2);
+    expect(result.removed).toBe(1);
+    expect(result.staleSessionKeys).toContain("agent:codex:acp:stale");
+    expect(manager.getByThreadId("thread-acp-healthy")).toBeDefined();
+    expect(manager.getByThreadId("thread-acp-stale")).toBeUndefined();
+    expect(manager.getByThreadId("thread-subagent")).toBeDefined();
+    expect(hoisted.sendMessageDiscord).not.toHaveBeenCalled();
+    expect(hoisted.sendWebhookMessageDiscord).not.toHaveBeenCalled();
+  });
+
+  it("keeps ACP bindings when session store reads fail during startup reconciliation", async () => {
+    const manager = createThreadBindingManager({
+      accountId: "default",
+      persist: false,
+      enableSweeper: false,
+      sessionTtlMs: 24 * 60 * 60 * 1000,
+    });
+
+    await manager.bindTarget({
+      threadId: "thread-acp-uncertain",
+      channelId: "parent-1",
+      targetKind: "acp",
+      targetSessionKey: "agent:codex:acp:uncertain",
+      agentId: "codex",
+      webhookId: "wh-1",
+      webhookToken: "tok-1",
+    });
+
+    hoisted.readAcpSessionEntry.mockReturnValue({
+      sessionKey: "agent:codex:acp:uncertain",
+      storeSessionKey: "agent:codex:acp:uncertain",
+      cfg: {} as OpenClawConfig,
+      storePath: "/tmp/mock-sessions.json",
+      storeReadFailed: true,
+      entry: undefined,
+      acp: undefined,
+    });
+
+    const result = reconcileAcpThreadBindingsOnStartup({
+      cfg: {} as OpenClawConfig,
+      accountId: "default",
+    });
+
+    expect(result.checked).toBe(1);
+    expect(result.removed).toBe(0);
+    expect(result.staleSessionKeys).toEqual([]);
+    expect(manager.getByThreadId("thread-acp-uncertain")).toBeDefined();
   });
 
   it("persists unbinds even when no manager is active", () => {

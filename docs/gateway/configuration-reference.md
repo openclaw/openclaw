@@ -65,6 +65,30 @@ Use `channels.modelByChannel` to pin specific channel IDs to a model. Values acc
 }
 ```
 
+### Channel defaults and heartbeat
+
+Use `channels.defaults` for shared group-policy and heartbeat behavior across providers:
+
+```json5
+{
+  channels: {
+    defaults: {
+      groupPolicy: "allowlist", // open | allowlist | disabled
+      heartbeat: {
+        showOk: false,
+        showAlerts: true,
+        useIndicator: true,
+      },
+    },
+  },
+}
+```
+
+- `channels.defaults.groupPolicy`: fallback group policy when a provider-level `groupPolicy` is unset.
+- `channels.defaults.heartbeat.showOk`: include healthy channel statuses in heartbeat output.
+- `channels.defaults.heartbeat.showAlerts`: include degraded/error statuses in heartbeat output.
+- `channels.defaults.heartbeat.useIndicator`: render compact indicator-style heartbeat output.
+
 ### WhatsApp
 
 WhatsApp runs through the gateway's web channel (Baileys Web). It starts automatically when a linked session exists.
@@ -321,6 +345,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 ```
 
 - Service account JSON: inline (`serviceAccount`) or file-based (`serviceAccountFile`).
+- Service account SecretRef is also supported (`serviceAccountRef`).
 - Env fallbacks: `GOOGLE_CHAT_SERVICE_ACCOUNT` or `GOOGLE_CHAT_SERVICE_ACCOUNT_FILE`.
 - Use `spaces/<spaceId>` or `users/<userId>` for delivery targets.
 - `channels.googlechat.dangerouslyAllowNameMatching` re-enables mutable email principal matching (break-glass compatibility mode).
@@ -421,12 +446,20 @@ Mattermost ships as a plugin: `openclaw plugins install @openclaw/mattermost`.
 
 Chat modes: `oncall` (respond on @-mention, default), `onmessage` (every message), `onchar` (messages starting with trigger prefix).
 
+- `channels.mattermost.configWrites`: allow or deny Mattermost-initiated config writes.
+- `channels.mattermost.requireMention`: require `@mention` before replying in channels.
+
 ### Signal
 
 ```json5
 {
   channels: {
     signal: {
+      enabled: true,
+      account: "+15555550123", // optional account binding
+      dmPolicy: "pairing",
+      allowFrom: ["+15551234567", "uuid:123e4567-e89b-12d3-a456-426614174000"],
+      configWrites: true,
       reactionNotifications: "own", // off | own | all | allowlist
       reactionAllowlist: ["+15551234567", "uuid:123e4567-e89b-12d3-a456-426614174000"],
       historyLimit: 50,
@@ -436,6 +469,29 @@ Chat modes: `oncall` (respond on @-mention, default), `onmessage` (every message
 ```
 
 **Reaction notification modes:** `off`, `own` (default), `all`, `allowlist` (from `reactionAllowlist`).
+
+- `channels.signal.account`: pin channel startup to a specific Signal account identity.
+- `channels.signal.configWrites`: allow or deny Signal-initiated config writes.
+
+### BlueBubbles
+
+BlueBubbles is the recommended iMessage path (plugin-backed, configured under `channels.bluebubbles`).
+
+```json5
+{
+  channels: {
+    bluebubbles: {
+      enabled: true,
+      dmPolicy: "pairing",
+      // serverUrl, password, webhookPath, group controls, and advanced actions:
+      // see /channels/bluebubbles
+    },
+  },
+}
+```
+
+- Core key paths covered here: `channels.bluebubbles`, `channels.bluebubbles.dmPolicy`.
+- Full BlueBubbles channel configuration is documented in [BlueBubbles](/channels/bluebubbles).
 
 ### iMessage
 
@@ -468,6 +524,7 @@ OpenClaw spawns `imsg rpc` (JSON-RPC over stdio). No daemon or port required.
 - `cliPath` can point to an SSH wrapper; set `remoteHost` (`host` or `user@host`) for SCP attachment fetching.
 - `attachmentRoots` and `remoteAttachmentRoots` restrict inbound attachment paths (default: `/Users/*/Library/Messages/Attachments`).
 - SCP uses strict host-key checking, so ensure the relay host key already exists in `~/.ssh/known_hosts`.
+- `channels.imessage.configWrites`: allow or deny iMessage-initiated config writes.
 
 <Accordion title="iMessage SSH wrapper example">
 
@@ -477,6 +534,52 @@ exec ssh -T gateway-host imsg "$@"
 ```
 
 </Accordion>
+
+### Microsoft Teams
+
+Microsoft Teams is extension-backed and configured under `channels.msteams`.
+
+```json5
+{
+  channels: {
+    msteams: {
+      enabled: true,
+      configWrites: true,
+      // appId, appPassword, tenantId, webhook, team/channel policies:
+      // see /channels/msteams
+    },
+  },
+}
+```
+
+- Core key paths covered here: `channels.msteams`, `channels.msteams.configWrites`.
+- Full Teams config (credentials, webhook, DM/group policy, per-team/per-channel overrides) is documented in [Microsoft Teams](/channels/msteams).
+
+### IRC
+
+IRC is extension-backed and configured under `channels.irc`.
+
+```json5
+{
+  channels: {
+    irc: {
+      enabled: true,
+      dmPolicy: "pairing",
+      configWrites: true,
+      nickserv: {
+        enabled: true,
+        service: "NickServ",
+        password: "${IRC_NICKSERV_PASSWORD}",
+        register: false,
+        registerEmail: "bot@example.com",
+      },
+    },
+  },
+}
+```
+
+- Core key paths covered here: `channels.irc`, `channels.irc.dmPolicy`, `channels.irc.configWrites`, `channels.irc.nickserv.*`.
+- Full IRC channel configuration (host/port/TLS/channels/allowlists/mention gating) is documented in [IRC](/channels/irc).
 
 ### Multi-account (all channels)
 
@@ -505,6 +608,14 @@ Run multiple accounts per channel (each with its own `accountId`):
 - Env tokens only apply to the **default** account.
 - Base channel settings apply to all accounts unless overridden per account.
 - Use `bindings[].match.accountId` to route each account to a different agent.
+- If you add a non-default account via `openclaw channels add` (or channel onboarding) while still on a single-account top-level channel config, OpenClaw moves account-scoped top-level single-account values into `channels.<channel>.accounts.default` first so the original account keeps working.
+- Existing channel-only bindings (no `accountId`) keep matching the default account; account-scoped bindings remain optional.
+- `openclaw doctor --fix` also repairs mixed shapes by moving account-scoped top-level single-account values into `accounts.default` when named accounts exist but `default` is missing.
+
+### Other extension channels
+
+Many extension channels are configured as `channels.<id>` and documented in their dedicated channel pages (for example Feishu, Matrix, LINE, Nostr, Zalo, Nextcloud Talk, Synology Chat, and Twitch).
+See the full channel index: [Channels](/channels).
 
 ### Group chat mention gating
 
@@ -1741,6 +1852,29 @@ OpenClaw uses the pi-coding-agent model catalog. Add custom providers via `model
 
 - Use `authHeader: true` + `headers` for custom auth needs.
 - Override agent config root with `OPENCLAW_AGENT_DIR` (or `PI_CODING_AGENT_DIR`).
+- Merge precedence for matching provider IDs:
+  - Non-empty agent `models.json` `apiKey`/`baseUrl` win.
+  - Empty or missing agent `apiKey`/`baseUrl` fall back to `models.providers` in config.
+  - Use `models.mode: "replace"` when you want config to fully rewrite `models.json`.
+
+### Provider field details
+
+- `models.mode`: provider catalog behavior (`merge` or `replace`).
+- `models.providers`: custom provider map keyed by provider id.
+- `models.providers.*.api`: request adapter (`openai-completions`, `openai-responses`, `anthropic-messages`, `google-generative-ai`, etc).
+- `models.providers.*.apiKey`: provider credential (prefer SecretRef/env substitution).
+- `models.providers.*.auth`: auth strategy (`api-key`, `token`, `oauth`, `aws-sdk`).
+- `models.providers.*.authHeader`: force credential transport in the `Authorization` header when required.
+- `models.providers.*.baseUrl`: upstream API base URL.
+- `models.providers.*.headers`: extra static headers for proxy/tenant routing.
+- `models.providers.*.models`: explicit provider model catalog entries.
+- `models.bedrockDiscovery`: Bedrock auto-discovery settings root.
+- `models.bedrockDiscovery.enabled`: turn discovery polling on/off.
+- `models.bedrockDiscovery.region`: AWS region for discovery.
+- `models.bedrockDiscovery.providerFilter`: optional provider-id filter for targeted discovery.
+- `models.bedrockDiscovery.refreshInterval`: polling interval for discovery refresh.
+- `models.bedrockDiscovery.defaultContextWindow`: fallback context window for discovered models.
+- `models.bedrockDiscovery.defaultMaxTokens`: fallback max output tokens for discovered models.
 
 ### Provider examples
 
@@ -1979,7 +2113,7 @@ See [Local Models](/gateway/local-models). TL;DR: run MiniMax M2.1 via LM Studio
     },
     entries: {
       "nano-banana-pro": {
-        apiKey: "GEMINI_KEY_HERE",
+        apiKey: { source: "env", provider: "default", id: "GEMINI_API_KEY" }, // or plaintext string
         env: { GEMINI_API_KEY: "GEMINI_KEY_HERE" },
       },
       peekaboo: { enabled: true },
@@ -1991,7 +2125,7 @@ See [Local Models](/gateway/local-models). TL;DR: run MiniMax M2.1 via LM Studio
 
 - `allowBundled`: optional allowlist for bundled skills only (managed/workspace skills unaffected).
 - `entries.<skillKey>.enabled: false` disables a skill even if bundled/installed.
-- `entries.<skillKey>.apiKey`: convenience for skills declaring a primary env var.
+- `entries.<skillKey>.apiKey`: convenience for skills declaring a primary env var (plaintext string or SecretRef object).
 
 ---
 
@@ -2019,6 +2153,13 @@ See [Local Models](/gateway/local-models). TL;DR: run MiniMax M2.1 via LM Studio
 - Loaded from `~/.openclaw/extensions`, `<workspace>/.openclaw/extensions`, plus `plugins.load.paths`.
 - **Config changes require a gateway restart.**
 - `allow`: optional allowlist (only listed plugins load). `deny` wins.
+- `plugins.entries.<id>.apiKey`: plugin-level API key convenience field (when supported by the plugin).
+- `plugins.entries.<id>.env`: plugin-scoped env var map.
+- `plugins.entries.<id>.config`: plugin-defined config object (validated by plugin schema).
+- `plugins.slots.memory`: pick the active memory plugin id, or `"none"` to disable memory plugins.
+- `plugins.installs`: CLI-managed install metadata used by `openclaw plugins update`.
+  - Includes `source`, `spec`, `sourcePath`, `installPath`, `version`, `resolvedName`, `resolvedVersion`, `resolvedSpec`, `integrity`, `shasum`, `resolvedAt`, `installedAt`.
+  - Treat `plugins.installs.*` as managed state; prefer CLI commands over manual edits.
 
 See [Plugins](/tools/plugin).
 
@@ -2141,17 +2282,18 @@ See [Plugins](/tools/plugin).
 - `port`: single multiplexed port for WS + HTTP. Precedence: `--port` > `OPENCLAW_GATEWAY_PORT` > `gateway.port` > `18789`.
 - `bind`: `auto`, `loopback` (default), `lan` (`0.0.0.0`), `tailnet` (Tailscale IP only), or `custom`.
 - **Auth**: required by default. Non-loopback binds require a shared token/password. Onboarding wizard generates a token by default.
-- `auth.mode: "none"`: explicit no-auth mode. Use only for trusted local loopback setups; this is intentionally not offered by onboarding prompts.
-- `auth.mode: "trusted-proxy"`: delegate auth to an identity-aware reverse proxy and trust identity headers from `gateway.trustedProxies` (see [Trusted Proxy Auth](/gateway/trusted-proxy-auth)).
-- `auth.allowTailscale`: when `true`, Tailscale Serve identity headers can satisfy Control UI/WebSocket auth (verified via `tailscale whois`); HTTP API endpoints still require token/password auth. This tokenless flow assumes the gateway host is trusted. Defaults to `true` when `tailscale.mode = "serve"`.
-- `auth.rateLimit`: optional failed-auth limiter. Applies per client IP and per auth scope (shared-secret and device-token are tracked independently). Blocked attempts return `429` + `Retry-After`.
-  - `auth.rateLimit.exemptLoopback` defaults to `true`; set `false` when you intentionally want localhost traffic rate-limited too (for test setups or strict proxy deployments).
+- `gateway.auth.mode: "none"`: explicit no-auth mode. Use only for trusted local loopback setups; this is intentionally not offered by onboarding prompts.
+- `gateway.auth.mode: "trusted-proxy"`: delegate auth to an identity-aware reverse proxy and trust identity headers from `gateway.trustedProxies` (see [Trusted Proxy Auth](/gateway/trusted-proxy-auth)).
+- `gateway.auth.allowTailscale`: when `true`, Tailscale Serve identity headers can satisfy Control UI/WebSocket auth (verified via `tailscale whois`); HTTP API endpoints still require token/password auth. This tokenless flow assumes the gateway host is trusted. Defaults to `true` when `tailscale.mode = "serve"`.
+- `gateway.auth.rateLimit`: optional failed-auth limiter. Applies per client IP and per auth scope (shared-secret and device-token are tracked independently). Blocked attempts return `429` + `Retry-After`.
+  - `gateway.auth.rateLimit.exemptLoopback` defaults to `true`; set `false` when you intentionally want localhost traffic rate-limited too (for test setups or strict proxy deployments).
 - Browser-origin WS auth attempts are always throttled with loopback exemption disabled (defense-in-depth against browser-based localhost brute force).
 - `tailscale.mode`: `serve` (tailnet only, loopback bind) or `funnel` (public, requires auth).
 - `controlUi.allowedOrigins`: explicit browser-origin allowlist for Gateway WebSocket connects. Required when browser clients are expected from non-loopback origins.
 - `controlUi.dangerouslyAllowHostHeaderOriginFallback`: dangerous mode that enables Host-header origin fallback for deployments that intentionally rely on Host-header origin policy.
 - `remote.transport`: `ssh` (default) or `direct` (ws/wss). For `direct`, `remote.url` must be `ws://` or `wss://`.
-- `gateway.remote.token` is for remote CLI calls only; does not enable local gateway auth.
+- `gateway.remote.token` / `.password` are remote-client credential fields. They do not configure gateway auth by themselves.
+- Local gateway call paths can use `gateway.remote.*` as fallback when `gateway.auth.*` is unset.
 - `trustedProxies`: reverse proxy IPs that terminate TLS. Only list proxies you control.
 - `allowRealIpFallback`: when `true`, the gateway accepts `X-Real-IP` if `X-Forwarded-For` is missing. Default `false` for fail-closed behavior.
 - `gateway.tools.deny`: extra tool names blocked for HTTP `POST /tools/invoke` (extends default deny list).
@@ -2377,6 +2519,73 @@ Reference env vars in any config string with `${VAR_NAME}`:
 
 ---
 
+## Secrets
+
+Secret refs are additive: plaintext values still work.
+
+### `SecretRef`
+
+Use one object shape:
+
+```json5
+{ source: "env" | "file" | "exec", provider: "default", id: "..." }
+```
+
+Validation:
+
+- `provider` pattern: `^[a-z][a-z0-9_-]{0,63}$`
+- `source: "env"` id pattern: `^[A-Z][A-Z0-9_]{0,127}$`
+- `source: "file"` id: absolute JSON pointer (for example `"/providers/openai/apiKey"`)
+- `source: "exec"` id pattern: `^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$`
+
+### Supported fields in config
+
+- `models.providers.<provider>.apiKey`
+- `skills.entries.<skillKey>.apiKey`
+- `channels.googlechat.serviceAccount`
+- `channels.googlechat.serviceAccountRef`
+- `channels.googlechat.accounts.<accountId>.serviceAccount`
+- `channels.googlechat.accounts.<accountId>.serviceAccountRef`
+
+### Secret providers config
+
+```json5
+{
+  secrets: {
+    providers: {
+      default: { source: "env" }, // optional explicit env provider
+      filemain: {
+        source: "file",
+        path: "~/.openclaw/secrets.json",
+        mode: "json",
+        timeoutMs: 5000,
+      },
+      vault: {
+        source: "exec",
+        command: "/usr/local/bin/openclaw-vault-resolver",
+        passEnv: ["PATH", "VAULT_ADDR"],
+      },
+    },
+    defaults: {
+      env: "default",
+      file: "filemain",
+      exec: "vault",
+    },
+  },
+}
+```
+
+Notes:
+
+- `file` provider supports `mode: "json"` and `mode: "singleValue"` (`id` must be `"value"` in singleValue mode).
+- `exec` provider requires an absolute `command` path and uses protocol payloads on stdin/stdout.
+- By default, symlink command paths are rejected. Set `allowSymlinkCommand: true` to allow symlink paths while validating the resolved target path.
+- If `trustedDirs` is configured, the trusted-dir check applies to the resolved target path.
+- `exec` child environment is minimal by default; pass required variables explicitly with `passEnv`.
+- Secret refs are resolved at activation time into an in-memory snapshot, then request paths read the snapshot only.
+
+---
+
 ## Auth storage
 
 ```json5
@@ -2394,8 +2603,11 @@ Reference env vars in any config string with `${VAR_NAME}`:
 ```
 
 - Per-agent auth profiles stored at `<agentDir>/auth-profiles.json`.
+- Auth profiles support value-level refs (`keyRef` for `api_key`, `tokenRef` for `token`).
+- Static runtime credentials come from in-memory resolved snapshots; legacy static `auth.json` entries are scrubbed when discovered.
 - Legacy OAuth imports from `~/.openclaw/credentials/oauth.json`.
 - See [OAuth](/concepts/oauth).
+- Secrets runtime behavior and `audit/configure/apply` tooling: [Secrets Management](/gateway/secrets).
 
 ---
 
@@ -2520,7 +2732,7 @@ See [Cron Jobs](/automation/cron-jobs).
 
 ## Media model template variables
 
-Template placeholders expanded in `tools.media.*.models[].args`:
+Template placeholders expanded in `tools.media.models[].args`:
 
 | Variable           | Description                                       |
 | ------------------ | ------------------------------------------------- |

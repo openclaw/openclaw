@@ -44,6 +44,10 @@ export type ProcessGatewayAllowlistParams = {
   safeBinProfiles: Readonly<Record<string, SafeBinProfile>>;
   agentId?: string;
   sessionKey?: string;
+  turnSourceChannel?: string;
+  turnSourceTo?: string;
+  turnSourceAccountId?: string;
+  turnSourceThreadId?: string | number;
   scopeKey?: string;
   warnings: string[];
   notifySessionKey?: string;
@@ -159,6 +163,10 @@ export async function processGatewayAllowlist(
         agentId: params.agentId,
         resolvedPath,
         sessionKey: params.sessionKey,
+        turnSourceChannel: params.turnSourceChannel,
+        turnSourceTo: params.turnSourceTo,
+        turnSourceAccountId: params.turnSourceAccountId,
+        turnSourceThreadId: params.turnSourceThreadId,
       });
       expiresAtMs = registration.expiresAtMs;
       preResolvedDecision = registration.finalDecision;

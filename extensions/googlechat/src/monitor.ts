@@ -2,6 +2,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import {
   GROUP_POLICY_BLOCKED_LABEL,
+  createScopedPairingAccess,
   createReplyPrefixOptions,
   readJsonBodyWithLimit,
   registerWebhookTarget,
@@ -15,6 +16,7 @@ import {
   warnMissingProviderGroupPolicyFallbackOnce,
   requestBodyErrorToText,
   resolveMentionGatingWithBypass,
+  resolveDmGroupAccessWithLists,
 } from "openclaw/plugin-sdk";
 import { type ResolvedGoogleChatAccount } from "./accounts.js";
 import {
@@ -395,6 +397,11 @@ async function processMessageWithPipeline(params: {
   mediaMaxMb: number;
 }): Promise<void> {
   const { event, account, config, runtime, core, statusSink, mediaMaxMb } = params;
+  const pairing = createScopedPairingAccess({
+    core,
+    channel: "googlechat",
+    accountId: account.accountId,
+  });
   const space = event.space;
   const message = event.message;
   if (!space || !message) {
@@ -503,14 +510,33 @@ async function processMessageWithPipeline(params: {
 
   const dmPolicy = account.config.dm?.policy ?? "pairing";
   const configAllowFrom = (account.config.dm?.allowFrom ?? []).map((v) => String(v));
+  const normalizedGroupUsers = groupUsers.map((v) => String(v));
+  const senderGroupPolicy =
+    groupPolicy === "disabled"
+      ? "disabled"
+      : normalizedGroupUsers.length > 0
+        ? "allowlist"
+        : "open";
   const shouldComputeAuth = core.channel.commands.shouldComputeCommandAuthorized(rawBody, config);
   const storeAllowFrom =
     !isGroup && dmPolicy !== "allowlist" && (dmPolicy !== "open" || shouldComputeAuth)
-      ? await core.channel.pairing.readAllowFromStore("googlechat").catch(() => [])
+      ? await pairing.readAllowFromStore().catch(() => [])
       : [];
-  const effectiveAllowFrom = [...configAllowFrom, ...storeAllowFrom];
+  const access = resolveDmGroupAccessWithLists({
+    isGroup,
+    dmPolicy,
+    groupPolicy: senderGroupPolicy,
+    allowFrom: configAllowFrom,
+    groupAllowFrom: normalizedGroupUsers,
+    storeAllowFrom,
+    groupAllowFromFallbackToAllowFrom: false,
+    isSenderAllowed: (allowFrom) =>
+      isSenderAllowed(senderId, senderEmail, allowFrom, allowNameMatching),
+  });
+  const effectiveAllowFrom = access.effectiveAllowFrom;
+  const effectiveGroupAllowFrom = access.effectiveGroupAllowFrom;
   warnDeprecatedUsersEmailEntries(core, runtime, effectiveAllowFrom);
-  const commandAllowFrom = isGroup ? groupUsers.map((v) => String(v)) : effectiveAllowFrom;
+  const commandAllowFrom = isGroup ? effectiveGroupAllowFrom : effectiveAllowFrom;
   const useAccessGroups = config.commands?.useAccessGroups !== false;
   const senderAllowedForCommands = isSenderAllowed(
     senderId,
@@ -553,47 +579,52 @@ async function processMessageWithPipeline(params: {
     }
   }
 
+  if (isGroup && access.decision !== "allow") {
+    logVerbose(
+      core,
+      runtime,
+      `drop group message (sender policy blocked, reason=${access.reason}, space=${spaceId})`,
+    );
+    return;
+  }
+
   if (!isGroup) {
-    if (dmPolicy === "disabled" || account.config.dm?.enabled === false) {
+    if (account.config.dm?.enabled === false) {
       logVerbose(core, runtime, `Blocked Google Chat DM from ${senderId} (dmPolicy=disabled)`);
       return;
     }
 
-    if (dmPolicy !== "open") {
-      const allowed = senderAllowedForCommands;
-      if (!allowed) {
-        if (dmPolicy === "pairing") {
-          const { code, created } = await core.channel.pairing.upsertPairingRequest({
-            channel: "googlechat",
-            id: senderId,
-            meta: { name: senderName || undefined, email: senderEmail },
-          });
-          if (created) {
-            logVerbose(core, runtime, `googlechat pairing request sender=${senderId}`);
-            try {
-              await sendGoogleChatMessage({
-                account,
-                space: spaceId,
-                text: core.channel.pairing.buildPairingReply({
-                  channel: "googlechat",
-                  idLine: `Your Google Chat user id: ${senderId}`,
-                  code,
-                }),
-              });
-              statusSink?.({ lastOutboundAt: Date.now() });
-            } catch (err) {
-              logVerbose(core, runtime, `pairing reply failed for ${senderId}: ${String(err)}`);
-            }
+    if (access.decision !== "allow") {
+      if (access.decision === "pairing") {
+        const { code, created } = await pairing.upsertPairingRequest({
+          id: senderId,
+          meta: { name: senderName || undefined, email: senderEmail },
+        });
+        if (created) {
+          logVerbose(core, runtime, `googlechat pairing request sender=${senderId}`);
+          try {
+            await sendGoogleChatMessage({
+              account,
+              space: spaceId,
+              text: core.channel.pairing.buildPairingReply({
+                channel: "googlechat",
+                idLine: `Your Google Chat user id: ${senderId}`,
+                code,
+              }),
+            });
+            statusSink?.({ lastOutboundAt: Date.now() });
+          } catch (err) {
+            logVerbose(core, runtime, `pairing reply failed for ${senderId}: ${String(err)}`);
           }
-        } else {
-          logVerbose(
-            core,
-            runtime,
-            `Blocked unauthorized Google Chat sender ${senderId} (dmPolicy=${dmPolicy})`,
-          );
         }
-        return;
+      } else {
+        logVerbose(
+          core,
+          runtime,
+          `Blocked unauthorized Google Chat sender ${senderId} (dmPolicy=${dmPolicy})`,
+        );
       }
+      return;
     }
   }
 

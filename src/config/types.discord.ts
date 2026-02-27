@@ -163,6 +163,11 @@ export type DiscordThreadBindingsConfig = {
    * threads for subagent sessions. Default: false (opt-in).
    */
   spawnSubagentSessions?: boolean;
+  /**
+   * Allow `/acp spawn` to auto-create + bind Discord threads for ACP
+   * sessions. Default: false (opt-in).
+   */
+  spawnAcpSessions?: boolean;
 };
 
 export type DiscordSlashCommandConfig = {

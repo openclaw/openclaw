@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { createExecApprovalForwarder } from "./exec-approval-forwarder.js";
@@ -40,14 +43,17 @@ function createForwarder(params: {
   resolveSessionTarget?: () => { channel: string; to: string } | null;
 }) {
   const deliver = params.deliver ?? vi.fn().mockResolvedValue([]);
-  const forwarder = createExecApprovalForwarder({
+  const deps: NonNullable<Parameters<typeof createExecApprovalForwarder>[0]> = {
     getConfig: () => params.cfg,
     deliver: deliver as unknown as NonNullable<
       NonNullable<Parameters<typeof createExecApprovalForwarder>[0]>["deliver"]
     >,
     nowMs: () => 1000,
-    resolveSessionTarget: params.resolveSessionTarget ?? (() => null),
-  });
+  };
+  if (params.resolveSessionTarget !== undefined) {
+    deps.resolveSessionTarget = params.resolveSessionTarget;
+  }
+  const forwarder = createExecApprovalForwarder(deps);
   return { deliver, forwarder };
 }
 
@@ -210,6 +216,58 @@ describe("exec approval forwarder", () => {
       expectedAccepted: false,
       expectedDeliveryCount: 0,
     });
+  });
+
+  it("prefers turn-source routing over stale session last route", async () => {
+    vi.useFakeTimers();
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-exec-approval-forwarder-test-"));
+    try {
+      const storePath = path.join(tmpDir, "sessions.json");
+      fs.writeFileSync(
+        storePath,
+        JSON.stringify({
+          "agent:main:main": {
+            updatedAt: 1,
+            channel: "slack",
+            to: "U1",
+            lastChannel: "slack",
+            lastTo: "U1",
+          },
+        }),
+        "utf-8",
+      );
+
+      const cfg = {
+        session: { store: storePath },
+        approvals: { exec: { enabled: true, mode: "session" } },
+      } as OpenClawConfig;
+
+      const { deliver, forwarder } = createForwarder({ cfg });
+      await expect(
+        forwarder.handleRequested({
+          ...baseRequest,
+          request: {
+            ...baseRequest.request,
+            turnSourceChannel: "whatsapp",
+            turnSourceTo: "+15555550123",
+            turnSourceAccountId: "work",
+            turnSourceThreadId: "1739201675.123",
+          },
+        }),
+      ).resolves.toBe(true);
+
+      expect(deliver).toHaveBeenCalledTimes(1);
+      expect(deliver).toHaveBeenCalledWith(
+        expect.objectContaining({
+          channel: "whatsapp",
+          to: "+15555550123",
+          accountId: "work",
+          threadId: "1739201675.123",
+        }),
+      );
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
   });
 
   it("can forward resolved notices without pending cache when request payload is present", async () => {
