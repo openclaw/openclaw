@@ -355,10 +355,13 @@ export async function runEmbeddedAttempt(
   let restoreSkillEnv: (() => void) | undefined;
   process.chdir(effectiveWorkspace);
   try {
+    const isSandbox = sandbox?.enabled && sandbox.workspaceAccess !== "rw";
     const shouldLoadSkillEntries = !params.skillsSnapshot || !params.skillsSnapshot.resolvedSkills;
     const skillEntries = shouldLoadSkillEntries
       ? loadWorkspaceSkillEntries(effectiveWorkspace)
-      : [];
+      : isSandbox
+        ? loadWorkspaceSkillEntries(effectiveWorkspace)
+        : [];
     restoreSkillEnv = params.skillsSnapshot
       ? applySkillEnvOverridesFromSnapshot({
           snapshot: params.skillsSnapshot,
@@ -371,9 +374,10 @@ export async function runEmbeddedAttempt(
 
     const skillsPrompt = resolveSkillsPromptForRun({
       skillsSnapshot: params.skillsSnapshot,
-      entries: shouldLoadSkillEntries ? skillEntries : undefined,
+      entries: skillEntries.length > 0 ? skillEntries : undefined,
       config: params.config,
       workspaceDir: effectiveWorkspace,
+      originalWorkspaceDir: isSandbox ? resolvedWorkspace : undefined,
     });
 
     const sessionLabel = params.sessionKey ?? params.sessionId;
