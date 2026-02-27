@@ -387,6 +387,37 @@ describe("messaging tool media URL tracking", () => {
     expect(ctx.state.messagingToolSentMediaUrls).toContain("/tmp/screenshot.png");
   });
 
+  it("does not track non-messaging tool media when shouldEmitToolOutput is true (verbose=full)", async () => {
+    const { ctx } = createTestContext();
+    // Simulate verbose=full mode where tool output is fenced and MEDIA: directives
+    // are skipped by splitMediaFromOutput, so media is never actually delivered.
+    ctx.shouldEmitToolOutput = () => true;
+
+    const startEvt: ToolExecutionStartEvent = {
+      type: "tool_execution_start",
+      toolName: "tts",
+      toolCallId: "tool-tts-verbose",
+      args: { text: "Hello world" },
+    };
+    await handleToolExecutionStart(ctx, startEvt);
+
+    const endEvt: ToolExecutionEndEvent = {
+      type: "tool_execution_end",
+      toolName: "tts",
+      toolCallId: "tool-tts-verbose",
+      isError: false,
+      result: {
+        content: [{ type: "text", text: "[[audio_as_voice]]\nMEDIA:/tmp/tts-audio.ogg" }],
+        details: { audioPath: "/tmp/tts-audio.ogg", provider: "openai" },
+      },
+    };
+    await handleToolExecutionEnd(ctx, endEvt);
+
+    // Media should NOT be tracked because in verbose mode the output is wrapped
+    // in fenced blocks where MEDIA: directives are skipped.
+    expect(ctx.state.messagingToolSentMediaUrls).toHaveLength(0);
+  });
+
   it("discards pending media URL on tool error", async () => {
     const { ctx } = createTestContext();
 
