@@ -46,51 +46,14 @@ describe("models-config secret redaction", () => {
     });
   });
 
-  it("preserves env var name that exists in process.env", async () => {
-    const prev = process.env.CUSTOM_PROXY_API_KEY;
-    process.env.CUSTOM_PROXY_API_KEY = "real-secret-value";
-    try {
-      await withTempHome(async () => {
-        const cfg: OpenClawConfig = {
-          models: {
-            providers: {
-              "custom-proxy": {
-                baseUrl: "http://localhost:4000/v1",
-                apiKey: "CUSTOM_PROXY_API_KEY",
-                api: "openai-completions",
-                models: [MODEL_ENTRY],
-              },
-            },
-          },
-        };
-
-        await ensureOpenClawModelsJson(cfg);
-
-        const parsed = await readGeneratedModelsJson<{
-          providers: Record<string, { apiKey?: string }>;
-        }>();
-        expect(parsed.providers["custom-proxy"]).toBeDefined();
-        expect(parsed.providers["custom-proxy"].apiKey).toBe("CUSTOM_PROXY_API_KEY");
-      });
-    } finally {
-      if (prev === undefined) {
-        delete process.env.CUSTOM_PROXY_API_KEY;
-      } else {
-        process.env.CUSTOM_PROXY_API_KEY = prev;
-      }
-    }
-  });
-
-  it("redacts uppercase token NOT in process.env", async () => {
-    const key = "ZZZZ_FAKE_PROXY_TOKEN_XYZ";
-    delete process.env[key];
+  it("preserves env var name references (uppercase pattern)", async () => {
     await withTempHome(async () => {
       const cfg: OpenClawConfig = {
         models: {
           providers: {
             "custom-proxy": {
               baseUrl: "http://localhost:4000/v1",
-              apiKey: key,
+              apiKey: "CUSTOM_PROXY_API_KEY",
               api: "openai-completions",
               models: [MODEL_ENTRY],
             },
@@ -104,7 +67,7 @@ describe("models-config secret redaction", () => {
         providers: Record<string, { apiKey?: string }>;
       }>();
       expect(parsed.providers["custom-proxy"]).toBeDefined();
-      expect(parsed.providers["custom-proxy"].apiKey).toBe("REDACTED");
+      expect(parsed.providers["custom-proxy"].apiKey).toBe("CUSTOM_PROXY_API_KEY");
     });
   });
 });

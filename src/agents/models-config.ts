@@ -111,16 +111,6 @@ async function readJson(pathname: string): Promise<unknown> {
 }
 
 /**
- * Check whether a value is an environment variable *reference* (safe to persist).
- * A value is treated as a reference only when it both matches the naming pattern
- * AND actually exists in the current process environment.  This avoids leaking
- * all-uppercase API keys that happen to pass the regex (e.g. custom proxy tokens).
- */
-function isEnvVarReference(value: string): boolean {
-  return ENV_VAR_NAME_RE.test(value) && value in process.env;
-}
-
-/**
  * ENV_VAR_NAME_RE matches strings that look like environment variable names
  * (e.g. "OPENAI_API_KEY"). These are safe to persist in models.json because
  * they are *references*, not the secret value itself.
@@ -145,7 +135,7 @@ function redactApiKeysForPersistence(
       continue;
     }
     const apiKey = (entry as Record<string, unknown>).apiKey;
-    if (typeof apiKey === "string" && apiKey.trim() && !isEnvVarReference(apiKey.trim())) {
+    if (typeof apiKey === "string" && apiKey.trim() && !ENV_VAR_NAME_RE.test(apiKey.trim())) {
       // This apiKey is a resolved secret (not an env var name) — replace with
       // a placeholder so that ModelRegistry still sees an apiKey field (required
       // for provider registration) while the actual value stays out of disk.
