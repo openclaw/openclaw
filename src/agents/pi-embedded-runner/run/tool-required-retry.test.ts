@@ -180,4 +180,42 @@ describe("tool-required retry guard", () => {
 
     expect(shouldRetry).toBe(true);
   });
+
+  it("does retry execution prompts that start with 'can you show me'", () => {
+    const shouldRetry = shouldRetryToolRequiredToolless({
+      provider: "openai-codex",
+      prompt: "Can you show me the failing tests in this repo and fix the file?",
+      assistantTexts: ["Acknowledged. I'll do that now."],
+      lastAssistant: { stopReason: "end_turn", content: [] } as never,
+      toolMetas: [],
+      didSendViaMessagingTool: false,
+      hasClientToolCall: false,
+      disableTools: false,
+      promptError: null,
+      aborted: false,
+      timedOut: false,
+      timedOutDuringCompaction: false,
+    });
+
+    expect(shouldRetry).toBe(true);
+  });
+
+  it("does not classify 'how to' guidance questions as execution tasks", () => {
+    const shouldRetry = shouldRetryToolRequiredToolless({
+      provider: "openai-codex",
+      prompt: "How to run tests in this repo?",
+      assistantTexts: ["I'll explain how to run tests."],
+      lastAssistant: { stopReason: "end_turn", content: [] } as never,
+      toolMetas: [],
+      didSendViaMessagingTool: false,
+      hasClientToolCall: false,
+      disableTools: false,
+      promptError: null,
+      aborted: false,
+      timedOut: false,
+      timedOutDuringCompaction: false,
+    });
+
+    expect(shouldRetry).toBe(false);
+  });
 });
