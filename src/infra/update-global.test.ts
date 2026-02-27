@@ -41,6 +41,21 @@ describe("checkPackageOwnership", () => {
     expect(result.foreignFiles).toEqual([]);
   });
 
+  it("detects foreign-owned node_modules directory itself", async () => {
+    const pkgRoot = path.join(tempDir, "case-nm-foreign");
+    await fs.mkdir(pkgRoot, { recursive: true });
+    await fs.writeFile(path.join(pkgRoot, "package.json"), "{}", "utf-8");
+    await fs.mkdir(path.join(pkgRoot, "node_modules", "dep"), { recursive: true });
+    await fs.writeFile(path.join(pkgRoot, "node_modules", "dep", "index.js"), "", "utf-8");
+
+    // Use uid=99999 so everything appears foreign-owned
+    const result = await checkPackageOwnership(pkgRoot, { uid: 99999 });
+    expect(result.ok).toBe(false);
+    // node_modules dir itself should appear in foreignFiles
+    const nmEntry = result.foreignFiles.find((f) => f.endsWith("/node_modules"));
+    expect(nmEntry).toBeDefined();
+  });
+
   it("returns ok when uid is negative (Windows/unavailable)", async () => {
     const pkgRoot = path.join(tempDir, "case-win");
     await fs.mkdir(pkgRoot, { recursive: true });

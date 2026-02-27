@@ -15,11 +15,13 @@ const VERSION_MANAGER_MARKERS = [
   "/nvs/",
 ];
 
-// Matches Homebrew Cellar paths like /opt/homebrew/Cellar/node/25.5.0/bin/node
-// or /home/linuxbrew/.linuxbrew/Cellar/node/25.5.0/bin/node. These versioned
-// paths break when Homebrew upgrades Node because the old Cellar directory is
-// removed. We detect this pattern and resolve to the stable symlink instead.
-const HOMEBREW_CELLAR_RE = /^(.+)\/Cellar\/node\/[^/]+\/bin\/node$/;
+// Matches Homebrew Cellar paths like /opt/homebrew/Cellar/node/25.5.0/bin/node,
+// /home/linuxbrew/.linuxbrew/Cellar/node/25.5.0/bin/node, or keg-only installs
+// like /opt/homebrew/Cellar/node@22/22.15.0/bin/node. These versioned paths
+// break when Homebrew upgrades Node because the old Cellar directory is removed.
+// We detect this pattern and resolve to the stable symlink instead.
+// Group 1 = prefix (e.g. /opt/homebrew), group 2 = formula name (e.g. "node" or "node@22").
+const HOMEBREW_CELLAR_RE = /^(.+)\/Cellar\/(node(?:@\d+)?)\/[^/]+\/bin\/node$/;
 
 function getPathModule(platform: NodeJS.Platform) {
   return platform === "win32" ? path.win32 : path.posix;
@@ -173,7 +175,10 @@ export async function resolveStableHomebrewNodePath(
     return null;
   }
   const prefix = match[1]; // e.g. /opt/homebrew
-  const stablePath = `${prefix}/bin/node`;
+  const formula = match[2]; // e.g. "node" or "node@22"
+  // Keg-only formulae (node@22) use opt/<formula>/bin/node; the main
+  // "node" formula uses the top-level bin/node symlink.
+  const stablePath = formula === "node" ? `${prefix}/bin/node` : `${prefix}/opt/${formula}/bin/node`;
   try {
     // Verify the symlink resolves to the same binary.
     const stableReal = await realpathImpl(stablePath);

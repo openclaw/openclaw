@@ -179,6 +179,26 @@ describe("resolvePreferredNodePath", () => {
     expect(result).toBe(linuxbrewStable);
   });
 
+  it("resolves keg-only node@22 Cellar path to opt symlink (macOS)", async () => {
+    mockNodePathPresent(darwinNode);
+
+    const cellarPath = "/opt/homebrew/Cellar/node@22/22.15.0/bin/node";
+    const stablePath = "/opt/homebrew/opt/node@22/bin/node";
+    const execFile = vi.fn().mockResolvedValue({ stdout: "22.15.0\n", stderr: "" });
+    const realpath = vi.fn().mockResolvedValue(cellarPath);
+
+    const result = await resolvePreferredNodePath({
+      env: {},
+      runtime: "node",
+      platform: "darwin",
+      execFile,
+      execPath: cellarPath,
+      realpath,
+    });
+
+    expect(result).toBe(stablePath);
+  });
+
   it("keeps Cellar path when stable symlink points elsewhere", async () => {
     const cellarPath = "/opt/homebrew/Cellar/node/25.5.0/bin/node";
     const differentCellar = "/opt/homebrew/Cellar/node/25.6.0/bin/node";
@@ -255,6 +275,35 @@ describe("resolveStableHomebrewNodePath", () => {
     const realpath = vi.fn().mockImplementation(async (p: string) => {
       if (p === "/opt/homebrew/bin/node") {
         throw new Error("ENOENT");
+      }
+      return p;
+    });
+
+    const result = await resolveStableHomebrewNodePath(cellarPath, realpath);
+    expect(result).toBeNull();
+  });
+
+  it("returns opt/<formula>/bin/node for keg-only node@22 install", async () => {
+    const cellarPath = "/opt/homebrew/Cellar/node@22/22.15.0/bin/node";
+    const realpath = vi.fn().mockResolvedValue(cellarPath);
+
+    const result = await resolveStableHomebrewNodePath(cellarPath, realpath);
+    expect(result).toBe("/opt/homebrew/opt/node@22/bin/node");
+  });
+
+  it("returns opt/<formula>/bin/node for Linuxbrew keg-only node@20", async () => {
+    const cellarPath = "/home/linuxbrew/.linuxbrew/Cellar/node@20/20.18.0/bin/node";
+    const realpath = vi.fn().mockResolvedValue(cellarPath);
+
+    const result = await resolveStableHomebrewNodePath(cellarPath, realpath);
+    expect(result).toBe("/home/linuxbrew/.linuxbrew/opt/node@20/bin/node");
+  });
+
+  it("returns null for keg-only install when stable symlink diverges", async () => {
+    const cellarPath = "/opt/homebrew/Cellar/node@22/22.15.0/bin/node";
+    const realpath = vi.fn().mockImplementation(async (p: string) => {
+      if (p === "/opt/homebrew/opt/node@22/bin/node") {
+        return "/opt/homebrew/Cellar/node@22/22.16.0/bin/node";
       }
       return p;
     });

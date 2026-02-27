@@ -194,14 +194,15 @@ export async function checkPackageOwnership(
       if (foreignFiles.length >= MAX_FOREIGN_FILES) {
         return;
       }
-      if (entry === "node_modules") {
-        continue;
-      }
       const full = path.join(dir, entry);
       try {
         const stat = await fs.lstat(full);
         if (stat.uid !== currentUid) {
           foreignFiles.push(full);
+          continue;
+        }
+        // Skip recursing into node_modules but still check its ownership above.
+        if (entry === "node_modules") {
           continue;
         }
         if (stat.isDirectory()) {
