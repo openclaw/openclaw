@@ -46,7 +46,9 @@ function parseContentDispositionFileName(header?: string | null): string | undef
   const starMatch = /filename\*\s*=\s*([^;]+)/i.exec(header);
   if (starMatch?.[1]) {
     const cleaned = stripQuotes(starMatch[1].trim());
-    const encoded = cleaned.split("''").slice(1).join("''") || cleaned;
+    // RFC 5987: charset'language'encoded_value (single quotes as delimiters)
+    const parts = cleaned.split("'");
+    const encoded = parts.length >= 3 ? parts.slice(2).join("'") : cleaned;
     try {
       return path.basename(decodeURIComponent(encoded));
     } catch {
