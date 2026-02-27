@@ -112,6 +112,48 @@ Injects pre-encrypted Key Vault storage keys into `CRP.WFHost.exe.config`.
 powershell -File "C:\...\skills\crp\scripts\inject-storage-keys.ps1"
 ```
 
+## Kusto (Azure Data Explorer / Jarvis)
+
+Run via `agency mcp kusto` — **no source code needed**, `agency` handles auth + npx invocation.
+
+### Usage
+
+```powershell
+# Requires PATH refresh first
+$env:Path = [System.Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [System.Environment]::GetEnvironmentVariable('Path','User')
+
+# Start Kusto MCP server against a CRP cluster
+agency mcp kusto --service-uri https://<cluster>.kusto.windows.net --database <db>
+```
+
+Auth is automatic via `DefaultAzureCredential` → your `az login` session.
+
+### Available Tools (from `azure-kusto-mcp` v0.0.14)
+
+| Tool                   | Description                                                             |
+| ---------------------- | ----------------------------------------------------------------------- |
+| `execute_query`        | Run a read-only KQL query                                               |
+| `execute_command`      | Run a Kusto management command (`.show`, `.create`, etc.) — destructive |
+| `list_databases`       | List all databases in cluster                                           |
+| `list_tables`          | List all tables in a database                                           |
+| `get_entities_schema`  | Schema for all tables/views/functions in a database                     |
+| `get_table_schema`     | CSL schema for a specific table                                         |
+| `get_function_schema`  | Schema + parameters for a stored function                               |
+| `sample_table_data`    | Random N rows from a table                                              |
+| `sample_function_data` | Random N rows from a function call result                               |
+
+### How it works internally
+
+- Python package `azure-kusto-mcp`, run via `uvx` by `agency`
+- `azure.kusto.data.KustoClient` + `KustoConnectionStringBuilder.with_azure_token_credential`
+- `DefaultAzureCredential(exclude_shared_token_cache_credential=True)` — uses az CLI token
+- Readonly queries: sets `request_readonly=True` on `ClientRequestProperties`
+- Destructive tools: `execute_command`, `ingest_inline_into_table`, `ingest_csv_file_to_table`
+
+### CRP-Relevant Clusters
+
+Find cluster URIs from Jarvis (https://jarvis-west.dc.ad.msft.net) or ask Lead Saia to look up via Copilot.
+
 ## Key Learnings
 
 - **Three-dot diff (`origin/master...branch`)** = ADO PR diff. Two-dot includes stacked commits from merged branches — use three-dot always.
