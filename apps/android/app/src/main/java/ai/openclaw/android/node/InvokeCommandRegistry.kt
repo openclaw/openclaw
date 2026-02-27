@@ -63,6 +63,11 @@ object InvokeCommandRegistry {
         requiresForeground = true,
       ),
       InvokeCommandSpec(
+        name = OpenClawCameraCommand.List.rawValue,
+        requiresForeground = true,
+        availability = InvokeCommandAvailability.CameraEnabled,
+      ),
+      InvokeCommandSpec(
         name = OpenClawCameraCommand.Snap.rawValue,
         requiresForeground = true,
         availability = InvokeCommandAvailability.CameraEnabled,
