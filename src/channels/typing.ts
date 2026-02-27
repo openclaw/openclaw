@@ -77,7 +77,8 @@ export function createTypingCallbacks(params: CreateTypingCallbacksParams): Typi
     keepaliveLoop.stop();
     clearTtlTimer();
     await fireStart();
-    if (startGuard.isTripped()) {
+    // Check closed again after async operation - fireStop may have been called during await
+    if (closed || startGuard.isTripped()) {
       return;
     }
     keepaliveLoop.start();
