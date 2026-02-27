@@ -1,4 +1,6 @@
 import { spawnSync } from "node:child_process";
+import os from "node:os";
+import path from "node:path";
 import {
   resolveGatewayLaunchAgentLabel,
   resolveGatewaySystemdServiceName,
@@ -335,7 +337,8 @@ export function triggerOpenClawRestart(): RestartAttempt {
     process.env.OPENCLAW_LAUNCHD_LABEL ||
     resolveGatewayLaunchAgentLabel(process.env.OPENCLAW_PROFILE);
   const uid = typeof process.getuid === "function" ? process.getuid() : undefined;
-  const target = uid !== undefined ? `gui/${uid}/${label}` : label;
+  const domain = uid !== undefined ? `gui/${uid}` : "gui/501";
+  const target = `${domain}/${label}`;
   const args = ["kickstart", "-k", target];
   tried.push(`launchctl ${args.join(" ")}`);
   const res = spawnSync("launchctl", args, {
@@ -345,10 +348,38 @@ export function triggerOpenClawRestart(): RestartAttempt {
   if (!res.error && res.status === 0) {
     return { ok: true, method: "launchctl", tried };
   }
+
+  // kickstart fails when the service was previously booted out (deregistered from launchd).
+  // Fall back to bootstrap (re-register from plist) + kickstart.
+  const home = os.homedir();
+  const plistPath = path.join(home, "Library", "LaunchAgents", `${label}.plist`);
+  const bootstrapArgs = ["bootstrap", domain, plistPath];
+  tried.push(`launchctl ${bootstrapArgs.join(" ")}`);
+  const boot = spawnSync("launchctl", bootstrapArgs, {
+    encoding: "utf8",
+    timeout: SPAWN_TIMEOUT_MS,
+  });
+  if (boot.error || (boot.status !== 0 && boot.status !== null)) {
+    return {
+      ok: false,
+      method: "launchctl",
+      detail: formatSpawnDetail(boot),
+      tried,
+    };
+  }
+  const retryArgs = ["kickstart", "-k", target];
+  tried.push(`launchctl ${retryArgs.join(" ")}`);
+  const retry = spawnSync("launchctl", retryArgs, {
+    encoding: "utf8",
+    timeout: SPAWN_TIMEOUT_MS,
+  });
+  if (!retry.error && retry.status === 0) {
+    return { ok: true, method: "launchctl", tried };
+  }
   return {
     ok: false,
     method: "launchctl",
-    detail: formatSpawnDetail(res),
+    detail: formatSpawnDetail(retry),
     tried,
   };
 }
