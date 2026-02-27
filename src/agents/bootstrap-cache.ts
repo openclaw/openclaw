@@ -9,15 +9,19 @@ interface CachedSnapshot {
 
 const cache = new Map<string, CachedSnapshot>();
 
-/** Capture mtimeMs for each non-missing bootstrap file. */
+const MISSING_SENTINEL = -1;
+
+/** Capture mtimeMs for each bootstrap file (missing files use a sentinel). */
 function snapshotMtimes(files: WorkspaceBootstrapFile[]): Map<string, number> {
   const m = new Map<string, number>();
   for (const f of files) {
-    if (!f.missing) {
+    if (f.missing) {
+      m.set(f.path, MISSING_SENTINEL);
+    } else {
       try {
         m.set(f.path, statSync(f.path).mtimeMs);
       } catch {
-        // file may have been deleted since load — skip
+        m.set(f.path, MISSING_SENTINEL);
       }
     }
   }
@@ -28,12 +32,15 @@ function snapshotMtimes(files: WorkspaceBootstrapFile[]): Map<string, number> {
 function isStale(snap: CachedSnapshot): boolean {
   for (const [filePath, cachedMtime] of snap.mtimes) {
     try {
-      if (statSync(filePath).mtimeMs !== cachedMtime) {
+      const currentMtime = statSync(filePath).mtimeMs;
+      if (cachedMtime === MISSING_SENTINEL || currentMtime !== cachedMtime) {
         return true;
       }
     } catch {
-      // file deleted → stale
-      return true;
+      // file doesn't exist on disk — stale only if it was present before
+      if (cachedMtime !== MISSING_SENTINEL) {
+        return true;
+      }
     }
   }
   return false;

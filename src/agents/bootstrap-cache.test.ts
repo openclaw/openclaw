@@ -197,4 +197,33 @@ describe("mtime-based staleness detection", () => {
     // File unchanged — should only load once
     expect(mockLoad).toHaveBeenCalledTimes(1);
   });
+
+  it("reloads when a previously missing file is created", async () => {
+    const missingPath = path.join(tmpDir, "TOOLS.md");
+    const v1: WorkspaceBootstrapFile[] = [
+      { name: "TOOLS.md" as WorkspaceBootstrapFile["name"], path: missingPath, missing: true },
+    ];
+    const v2: WorkspaceBootstrapFile[] = [
+      {
+        name: "TOOLS.md" as WorkspaceBootstrapFile["name"],
+        path: missingPath,
+        content: "# Tools",
+        missing: false,
+      },
+    ];
+    mockLoad.mockResolvedValueOnce(v1).mockResolvedValueOnce(v2);
+
+    // First load — file missing, cached as missing
+    const r1 = await getOrLoadBootstrapFiles({ workspaceDir: tmpDir, sessionKey: "s1" });
+    expect(r1[0]?.missing).toBe(true);
+    expect(mockLoad).toHaveBeenCalledTimes(1);
+
+    // Create the file on disk
+    fs.writeFileSync(missingPath, "# Tools");
+
+    // Second load — should detect creation and reload
+    const r2 = await getOrLoadBootstrapFiles({ workspaceDir: tmpDir, sessionKey: "s1" });
+    expect(r2[0]?.content).toBe("# Tools");
+    expect(mockLoad).toHaveBeenCalledTimes(2);
+  });
 });
