@@ -3,8 +3,6 @@ package ai.openclaw.android.node
 import android.content.Context
 import ai.openclaw.android.CameraHudKind
 import ai.openclaw.android.BuildConfig
-import ai.openclaw.android.SecurePrefs
-import ai.openclaw.android.gateway.GatewayEndpoint
 import ai.openclaw.android.gateway.GatewaySession
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -12,27 +10,15 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
-import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.RequestBody.Companion.asRequestBody
 
-internal fun parseCameraClipUploadUrl(responseBody: String): String? {
-  if (responseBody.isBlank()) return null
-  val root =
-    try {
-      Json.parseToJsonElement(responseBody).asObjectOrNull()
-    } catch (_: Throwable) {
-      return null
-    } ?: return null
-  val urlPrimitive = root["url"] as? JsonPrimitive ?: return null
-  if (!urlPrimitive.isString) return null
-  return urlPrimitive.contentOrNull?.trim()?.ifEmpty { null }
-}
+internal const val CAMERA_CLIP_MAX_RAW_BYTES: Long = 18L * 1024L * 1024L
+
+internal fun isCameraClipWithinPayloadLimit(rawBytes: Long): Boolean =
+  rawBytes in 0L..CAMERA_CLIP_MAX_RAW_BYTES
 
 class CameraHandler(
   private val appContext: Context,
   private val camera: CameraCaptureManager,
-  private val prefs: SecurePrefs,
-  private val connectedEndpoint: () -> GatewayEndpoint?,
   private val externalAudioCaptureActive: MutableStateFlow<Boolean>,
   private val showCameraHud: (message: String, kind: CameraHudKind, autoHideMs: Long?) -> Unit,
   private val triggerCameraFlash: () -> Unit,
@@ -105,60 +91,28 @@ class CameraHandler(
           showCameraHud(message, CameraHudKind.Error, 2400)
           return GatewaySession.InvokeResult.error(code = code, message = message)
         }
-      // Upload file via HTTP instead of base64 through WebSocket
-      clipLog("uploading via HTTP...")
-      val uploadUrl = try {
-        withContext(Dispatchers.IO) {
-          val ep = connectedEndpoint()
-          val gatewayHost = if (ep != null) {
-            val isHttps = ep.tlsEnabled || ep.port == 443
-            if (!isHttps) {
-              clipLog("refusing to upload over plain HTTP — bearer token would be exposed; falling back to base64")
-              throw Exception("HTTPS required for upload (bearer token protection)")
-            }
-            if (ep.port == 443) "https://${ep.host}" else "https://${ep.host}:${ep.port}"
-          } else {
-            clipLog("error: no gateway endpoint connected, cannot upload")
-            throw Exception("no gateway endpoint connected")
-          }
-          val token = prefs.loadGatewayToken() ?: ""
-          val client = okhttp3.OkHttpClient.Builder()
-            .connectTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
-            .writeTimeout(120, java.util.concurrent.TimeUnit.SECONDS)
-            .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
-            .build()
-          val body = filePayload.file.asRequestBody("video/mp4".toMediaType())
-          val req = okhttp3.Request.Builder()
-            .url("$gatewayHost/upload/clip.mp4")
-            .put(body)
-            .header("Authorization", "Bearer $token")
-            .build()
-          clipLog("uploading ${filePayload.file.length()} bytes to $gatewayHost/upload/clip.mp4")
-          val resp = client.newCall(req).execute()
-          val respBody = resp.body?.string() ?: ""
-          clipLog("upload response: ${resp.code} $respBody")
-          filePayload.file.delete()
-          if (!resp.isSuccessful) throw Exception("upload failed: HTTP ${resp.code}")
-          parseCameraClipUploadUrl(respBody) ?: throw Exception("no url in response: $respBody")
-        }
-      } catch (err: Throwable) {
-        clipLog("upload failed: ${err.message}, falling back to base64")
-        // Fallback to base64 if upload fails
-        val bytes = withContext(Dispatchers.IO) {
-          val b = filePayload.file.readBytes()
-          filePayload.file.delete()
-          b
-        }
-        val base64 = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
-        showCameraHud("Clip captured", CameraHudKind.Success, 1800)
-        return GatewaySession.InvokeResult.ok(
-          """{"format":"mp4","base64":"$base64","durationMs":${filePayload.durationMs},"hasAudio":${filePayload.hasAudio}}"""
+      val rawBytes = filePayload.file.length()
+      if (!isCameraClipWithinPayloadLimit(rawBytes)) {
+        clipLog("payload too large: bytes=$rawBytes max=$CAMERA_CLIP_MAX_RAW_BYTES")
+        withContext(Dispatchers.IO) { filePayload.file.delete() }
+        showCameraHud("Clip too large", CameraHudKind.Error, 2400)
+        return GatewaySession.InvokeResult.error(
+          code = "PAYLOAD_TOO_LARGE",
+          message =
+            "PAYLOAD_TOO_LARGE: camera clip is $rawBytes bytes; max is $CAMERA_CLIP_MAX_RAW_BYTES bytes. Reduce durationMs and retry.",
         )
       }
-      clipLog("returning URL result: $uploadUrl")
+
+      val bytes = withContext(Dispatchers.IO) {
+        val b = filePayload.file.readBytes()
+        filePayload.file.delete()
+        b
+      }
+      val base64 = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
+      clipLog("returning base64 payload")
       showCameraHud("Clip captured", CameraHudKind.Success, 1800)
       return GatewaySession.InvokeResult.ok(
-        """{"format":"mp4","url":"$uploadUrl","durationMs":${filePayload.durationMs},"hasAudio":${filePayload.hasAudio}}"""
+        """{"format":"mp4","base64":"$base64","durationMs":${filePayload.durationMs},"hasAudio":${filePayload.hasAudio}}"""
       )
     } catch (err: Throwable) {
       clipLog("outer error: ${err::class.java.simpleName}: ${err.message}")
