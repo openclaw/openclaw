@@ -24,10 +24,12 @@ import androidx.core.content.ContextCompat
 import ai.openclaw.android.gateway.GatewaySession
 import ai.openclaw.android.isCanonicalMainSessionKey
 import ai.openclaw.android.normalizeMainKey
+import android.os.Build
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.UUID
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -165,6 +167,9 @@ private const val defaultTalkProvider = "elevenlabs"
   private var streamingSource: StreamingMediaDataSource? = null
   private var pcmTrack: AudioTrack? = null
   @Volatile private var pcmStopRequested = false
+  @Volatile private var finalizeInFlight = false
+  @Volatile private var stopSpeakingRequested = false
+  private var listenWatchdogJob: Job? = null
   private var systemTts: TextToSpeech? = null
   private var systemTtsPending: CompletableDeferred<Unit>? = null
   private var systemTtsPendingId: String? = null
@@ -176,7 +181,7 @@ private const val defaultTalkProvider = "elevenlabs"
       AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> {
         if (_isSpeaking.value) {
           Log.d(tag, "audio focus lost; stopping TTS")
-          stopSpeaking(resetInterrupt = true, markIntentionalStop = false)
+          stopSpeaking(resetInterrupt = true)
         }
       }
       else -> { /* regained or duck — ignore */ }
@@ -221,7 +226,7 @@ private const val defaultTalkProvider = "elevenlabs"
         val startedAt = System.currentTimeMillis().toDouble() / 1000.0
         val prompt = buildPrompt(command)
         val runId = sendChat(prompt, session)
-        val ok = waitForChatFinal(runId, timeoutMs = waitForFinalTimeoutMs())
+        val ok = waitForChatFinal(runId)
         val assistant = consumeRunText(runId)
           ?: waitForAssistantText(session, startedAt, if (ok) 12_000 else 25_000)
         if (!assistant.isNullOrBlank()) {
@@ -1040,6 +1045,15 @@ private const val defaultTalkProvider = "elevenlabs"
     systemTtsPending = null
     systemTtsPendingId = null
     _isSpeaking.value = false
+  }
+
+  private fun shouldAllowSpeechInterrupt(): Boolean {
+    return !finalizeInFlight && !stopSpeakingRequested
+  }
+
+  private fun clearListenWatchdog() {
+    listenWatchdogJob?.cancel()
+    listenWatchdogJob = null
   }
 
   private fun isIntentionalSpeechStop(err: Throwable): Boolean {
