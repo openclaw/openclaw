@@ -311,6 +311,7 @@ export function buildEmbeddedRunPayloads(params: {
         replyItems.push({
           text: warningText,
           isError: true,
+          replyToCurrent: false,
         });
       }
     }
