@@ -1,4 +1,5 @@
 import type { BrowserFormField } from "./client-actions-core.js";
+import { InvalidBrowserFormFieldValueError } from "./errors.js";
 
 export const DEFAULT_FILL_FIELD_TYPE = "text";
 
@@ -15,7 +16,9 @@ export function normalizeBrowserFormFieldType(value: unknown): string {
 
 export function normalizeBrowserFormFieldValue(value: unknown): BrowserFormFieldValue | undefined {
   if (value !== null && typeof value === "object") {
-    throw new Error("Browser form field value must be a string, number, or boolean");
+    throw new InvalidBrowserFormFieldValueError(
+      "Browser form field value must be a string, number, or boolean",
+    );
   }
   return typeof value === "string" || typeof value === "number" || typeof value === "boolean"
     ? value
