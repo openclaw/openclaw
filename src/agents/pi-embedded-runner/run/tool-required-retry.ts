@@ -24,8 +24,9 @@ const TOOL_REQUIRED_PROMPT_MARKERS = [
 ] as const;
 
 const TOOL_HELP_QUESTION_PATTERNS = [
-  /\bwhat command\b/i,
-  /\bwhich command\b/i,
+  /^\s*what command\b/i,
+  /^\s*which command\b/i,
+  /\b(?:what|which) command (?:should|can) i\b/i,
   /\bhow (?:do|can) i\b/i,
   /\bhow (?:do|can) we\b/i,
   /\bcan you (?:explain|show|tell)(?: me)? (?:how|what|which|why|where)\b/i,
@@ -45,7 +46,7 @@ const ACK_ONLY_PATTERNS = [
 ] as const;
 
 const RESULT_LIKE_PATTERNS = [
-  /\b(done|completed|finished|here(?:'|’)s|result|found)\b/i,
+  /\b(done|completed|finished|here(?:'|’)s)\b/i,
   /```/,
   /\n\s*[-*]\s+/,
 ] as const;
