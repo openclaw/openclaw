@@ -1,12 +1,8 @@
-import { execFile } from "node:child_process";
 import path from "node:path";
-import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { checkQmdBinaryAvailable, resolveMemoryBackendConfig } from "./backend-config.js";
-
-const execFileAsync = promisify(execFile);
 
 describe("resolveMemoryBackendConfig", () => {
   it("defaults to builtin backend when config missing", () => {
@@ -176,7 +172,8 @@ describe("checkQmdBinaryAvailable", () => {
     // Use a command that will hang (sleep on unix, timeout on windows)
     const slowCommand = process.platform === "win32" ? "timeout" : "sleep";
     const startTime = Date.now();
-    const result = await checkQmdBinaryAvailable(slowCommand, 100);
+    // Just verify the function returns within reasonable time
+    await checkQmdBinaryAvailable(slowCommand, 100);
     const elapsed = Date.now() - startTime;
     // Should timeout quickly (within 500ms)
     expect(elapsed).toBeLessThan(500);
