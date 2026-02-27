@@ -33,6 +33,8 @@ import { readSessionUpdatedAt, resolveStorePath } from "../config/sessions.js";
 import type { DmPolicy, TelegramGroupConfig, TelegramTopicConfig } from "../config/types.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { recordChannelActivity } from "../infra/channel-activity.js";
+import { buildPairingReply } from "../pairing/pairing-messages.js";
+import { upsertChannelPairingRequest } from "../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
 import { maybeOverrideRouteByKeywords } from "../routing/route-keyword-override.js";
 import { resolveThreadSessionKeys } from "../routing/session-key.js";
@@ -40,7 +42,7 @@ import { withTelegramApiErrorLogging } from "./api-logging.js";
 import {
   firstDefined,
   isSenderAllowed,
-  normalizeAllowFromWithStore,
+  normalizeDmAllowFromWithStore,
   resolveSenderAllowMatch,
 } from "./bot-access.js";
 import {
@@ -101,6 +103,7 @@ type ResolveGroupRequireMention = (chatId: string | number) => boolean;
 export type BuildTelegramMessageContextParams = {
   primaryCtx: TelegramContext;
   allMedia: TelegramMediaRef[];
+  replyMedia?: TelegramMediaRef[];
   storeAllowFrom: string[];
   options?: TelegramMessageContextOptions;
   bot: Bot;
@@ -116,6 +119,8 @@ export type BuildTelegramMessageContextParams = {
   resolveGroupActivation: ResolveGroupActivation;
   resolveGroupRequireMention: ResolveGroupRequireMention;
   resolveTelegramGroupConfig: ResolveTelegramGroupConfig;
+  /** Global (per-account) handler for sendChatAction 401 backoff (#27092). */
+  sendChatActionHandler: import("./sendchataction-401-backoff.js").TelegramSendChatActionHandler;
 };
 
 async function resolveStickerVisionSupport(params: {
@@ -141,6 +146,7 @@ async function resolveStickerVisionSupport(params: {
 export const buildTelegramMessageContext = async ({
   primaryCtx,
   allMedia,
+  replyMedia = [],
   storeAllowFrom,
   options,
   bot,
@@ -156,6 +162,7 @@ export const buildTelegramMessageContext = async ({
   resolveGroupActivation,
   resolveGroupRequireMention,
   resolveTelegramGroupConfig,
+  sendChatActionHandler,
 }: BuildTelegramMessageContextParams) => {
   const msg = primaryCtx.message;
   recordChannelActivity({
@@ -205,9 +212,9 @@ export const buildTelegramMessageContext = async ({
       : null;
   const sessionKey = threadKeys?.sessionKey ?? baseSessionKey;
   const mentionRegexes = buildMentionRegexes(cfg, route.agentId);
-  const effectiveDmAllow = normalizeAllowFromWithStore({ allowFrom, storeAllowFrom, dmPolicy });
+  const effectiveDmAllow = normalizeDmAllowFromWithStore({ allowFrom, storeAllowFrom, dmPolicy });
   const groupAllowOverride = firstDefined(topicConfig?.allowFrom, groupConfig?.allowFrom);
-  const effectiveGroupAllow = normalizeAllowFromWithStore({
+  const effectiveGroupAllow = normalizeDmAllowFromWithStore({
     allowFrom: groupAllowOverride ?? groupAllowFrom,
     storeAllowFrom,
     dmPolicy,
@@ -259,7 +266,12 @@ export const buildTelegramMessageContext = async ({
   const sendTyping = async () => {
     await withTelegramApiErrorLogging({
       operation: "sendChatAction",
-      fn: () => bot.api.sendChatAction(chatId, "typing", buildTypingThreadParams(replyThreadId)),
+      fn: () =>
+        sendChatActionHandler.sendChatAction(
+          chatId,
+          "typing",
+          buildTypingThreadParams(replyThreadId),
+        ),
     });
   };
 
@@ -268,7 +280,11 @@ export const buildTelegramMessageContext = async ({
       await withTelegramApiErrorLogging({
         operation: "sendChatAction",
         fn: () =>
-          bot.api.sendChatAction(chatId, "record_voice", buildTypingThreadParams(replyThreadId)),
+          sendChatActionHandler.sendChatAction(
+            chatId,
+            "record_voice",
+            buildTypingThreadParams(replyThreadId),
+          ),
       });
     } catch (err) {
       logVerbose(`telegram record_voice cue failed for chat ${chatId}: ${String(err)}`);
@@ -696,6 +712,8 @@ export const buildTelegramMessageContext = async ({
     topicConfig,
   });
   const commandBody = normalizeCommandBody(rawBody, { botUsername });
+  const currentMediaForContext = stickerCacheHit ? [] : allMedia;
+  const contextMedia = [...currentMediaForContext, ...replyMedia];
   const inboundHistory =
     isGroup && historyKey && historyLimit > 0
       ? (groupHistories.get(historyKey) ?? []).map((entry) => ({
@@ -750,25 +768,25 @@ export const buildTelegramMessageContext = async ({
     Timestamp: msg.date ? msg.date * 1000 : undefined,
     WasMentioned: isGroup ? effectiveWasMentioned : undefined,
     // Filter out cached stickers from media - their description is already in the message body
-    MediaPath: stickerCacheHit ? undefined : allMedia[0]?.path,
-    MediaType: stickerCacheHit ? undefined : allMedia[0]?.contentType,
-    MediaUrl: stickerCacheHit ? undefined : allMedia[0]?.path,
+    MediaPath: stickerCacheHit ? undefined : contextMedia[0]?.path,
+    MediaType: stickerCacheHit ? undefined : contextMedia[0]?.contentType,
+    MediaUrl: stickerCacheHit ? undefined : contextMedia[0]?.path,
     MediaPaths: stickerCacheHit
       ? undefined
-      : allMedia.length > 0
-        ? allMedia.map((m) => m.path)
+      : contextMedia.length > 0
+        ? contextMedia.map((m) => m.path)
         : undefined,
     MediaUrls: stickerCacheHit
       ? undefined
-      : allMedia.length > 0
-        ? allMedia.map((m) => m.path)
+      : contextMedia.length > 0
+        ? contextMedia.map((m) => m.path)
         : undefined,
     MediaTypes: stickerCacheHit
       ? undefined
-      : allMedia.length > 0
-        ? (allMedia.map((m) => m.contentType).filter(Boolean) as string[])
+      : contextMedia.length > 0
+        ? (contextMedia.map((m) => m.contentType).filter(Boolean) as string[])
         : undefined,
-    Sticker: allMedia[0]?.stickerMetadata,
+    Sticker: contextMedia[0]?.stickerMetadata,
     ...(locationData ? toLocationContext(locationData) : undefined),
     CommandAuthorized: commandAuthorized,
     // For groups: use resolved forum topic id; for DMs: use raw messageThreadId
