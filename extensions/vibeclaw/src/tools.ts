@@ -3,9 +3,14 @@
  * Agent tools for searching, installing, and managing skills via Vibe Index.
  */
 
+import {
+  installSkillFromGitHub,
+  listInstalledSkills,
+  uninstallSkill,
+  getInstalledSkillMeta,
+} from "./skill-installer.js";
 import { VibeIndexClient } from "./vibe-index-client.js";
 import type { VibeResource } from "./vibe-index-client.js";
-import { installSkillFromGitHub, listInstalledSkills, uninstallSkill, getInstalledSkillMeta } from "./skill-installer.js";
 
 export interface VibeClawConfig {
   searchOnly: boolean;
@@ -25,9 +30,7 @@ function checkSecurity(skill: VibeResource): string | null {
       `⛔ BLOCKED: "${skill.name}" failed Vibe Index security scan.\n\n` +
       `  Severity: ${sev}\n` +
       `  Findings: ${count} issue(s) detected\n` +
-      (skill.security_flags?.length
-        ? `  Flags: ${skill.security_flags.join(", ")}\n`
-        : "") +
+      (skill.security_flags?.length ? `  Flags: ${skill.security_flags.join(", ")}\n` : "") +
       `\nThis skill has known security issues and cannot be installed.\n` +
       `See https://vibeindex.ai for details.`
     );
@@ -37,9 +40,7 @@ function checkSecurity(skill: VibeResource): string | null {
   if (skill.security_score !== null && skill.security_score >= 25) {
     return (
       `⛔ BLOCKED: "${skill.name}" has a high security risk score (${skill.security_score}).\n\n` +
-      (skill.security_flags?.length
-        ? `  Flags: ${skill.security_flags.join(", ")}\n`
-        : "") +
+      (skill.security_flags?.length ? `  Flags: ${skill.security_flags.join(", ")}\n` : "") +
       `\nThis skill has been flagged by Vibe Index security scanning and cannot be installed.\n` +
       `See https://vibeindex.ai for details.`
     );
@@ -57,7 +58,7 @@ function checkAllowlist(skill: VibeResource, allowedPublishers: string[] | null)
   if (!owner) {
     return `⛔ BLOCKED: "${skill.name}" has no GitHub owner. Cannot verify publisher.`;
   }
-  const allowed = allowedPublishers.map(p => p.toLowerCase());
+  const allowed = allowedPublishers.map((p) => p.toLowerCase());
   if (!allowed.includes(owner.toLowerCase())) {
     return (
       `⛔ BLOCKED: "${skill.name}" is published by "${owner}", which is not in your allowlist.\n\n` +
@@ -121,7 +122,8 @@ export function createSearchTool(client: VibeIndexClient) {
       properties: {
         query: {
           type: "string",
-          description: "Search query describing the capability needed (e.g., 'email', 'github pr', 'weather', 'pdf reader')",
+          description:
+            "Search query describing the capability needed (e.g., 'email', 'github pr', 'weather', 'pdf reader')",
         },
         type: {
           type: "string",
@@ -206,7 +208,8 @@ export function createInstallTool(client: VibeIndexClient, config: VibeClawConfi
 
         if (!skill.github_owner || !skill.github_repo) {
           return {
-            content: `Found "${skill.name}" but it has no GitHub repository. Cannot install automatically.\n` +
+            content:
+              `Found "${skill.name}" but it has no GitHub repository. Cannot install automatically.\n` +
               (skill.github_url ? `Manual link: ${skill.github_url}` : ""),
           };
         }
@@ -237,7 +240,8 @@ export function createInstallTool(client: VibeIndexClient, config: VibeClawConfi
 
         if (result.alreadyInstalled) {
           return {
-            content: `"${skill.name}" is already installed at ${result.installPath}.\n` +
+            content:
+              `"${skill.name}" is already installed at ${result.installPath}.\n` +
               `Use force: true to reinstall.\n` +
               `The skill is available in your next agent session.`,
           };
@@ -301,7 +305,8 @@ export function createTrendingTool(client: VibeIndexClient) {
           return { content: "No trending data available right now." };
         }
 
-        const periodLabel = args.period === "day" ? "today" : args.period === "month" ? "this month" : "this week";
+        const periodLabel =
+          args.period === "day" ? "today" : args.period === "month" ? "this month" : "this week";
         let output = `Trending ${args.type ?? "resources"} ${periodLabel} on Vibe Index:\n\n`;
 
         for (let i = 0; i < result.data.length; i++) {
@@ -364,7 +369,9 @@ export function createManageTool() {
         }
         const removed = await uninstallSkill(args.skillName);
         if (removed) {
-          return { content: `✓ Uninstalled "${args.skillName}". It will be removed on next session.` };
+          return {
+            content: `✓ Uninstalled "${args.skillName}". It will be removed on next session.`,
+          };
         }
         return { content: `"${args.skillName}" was not found or was not installed via VibeClaw.` };
       }
@@ -403,7 +410,11 @@ export function createAuditTool(client: VibeIndexClient) {
           const searchResult = await client.search(name, { type: "skill", limit: 1 });
 
           if (!searchResult.success || searchResult.data.length === 0) {
-            results.push({ name, status: "⚠️", detail: "Not found in Vibe Index (may have been removed)" });
+            results.push({
+              name,
+              status: "⚠️",
+              detail: "Not found in Vibe Index (may have been removed)",
+            });
             continue;
           }
 
@@ -414,21 +425,26 @@ export function createAuditTool(client: VibeIndexClient) {
             results.push({
               name,
               status: "⛔ FLAGGED",
-              detail: `Security issue detected since installation.\n` +
-                (skill.security_flags?.length ? `      Flags: ${skill.security_flags.join(", ")}\n` : "") +
+              detail:
+                `Security issue detected since installation.\n` +
+                (skill.security_flags?.length
+                  ? `      Flags: ${skill.security_flags.join(", ")}\n`
+                  : "") +
                 `      Score: ${skill.security_score ?? "N/A"}\n` +
                 `      Action: Run vibeclaw_manage uninstall "${name}" to remove.`,
             });
           } else {
             const badge = formatSecurityBadge(skill);
-            const installedAt = meta?.installedAt ? ` (installed ${meta.installedAt.split("T")[0]})` : "";
+            const installedAt = meta?.installedAt
+              ? ` (installed ${meta.installedAt.split("T")[0]})`
+              : "";
             results.push({ name, status: "✓", detail: `${badge}${installedAt}` });
           }
         }
 
-        const flagged = results.filter(r => r.status.includes("FLAGGED"));
-        const safe = results.filter(r => r.status === "✓");
-        const unknown = results.filter(r => r.status === "⚠️");
+        const flagged = results.filter((r) => r.status.includes("FLAGGED"));
+        const safe = results.filter((r) => r.status === "✓");
+        const unknown = results.filter((r) => r.status === "⚠️");
 
         let output = `VibeClaw Security Audit — ${skills.length} skill(s) checked\n\n`;
 

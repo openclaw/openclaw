@@ -5,12 +5,13 @@
  */
 
 import { promises as fs } from "node:fs";
-import path from "node:path";
 import os from "node:os";
+import path from "node:path";
 
-const CONFIG_DIR = process.env.OPENCLAW_STATE_DIR
-  ?? process.env.CLAWDBOT_STATE_DIR
-  ?? path.join(os.homedir(), ".openclaw");
+const CONFIG_DIR =
+  process.env.OPENCLAW_STATE_DIR ??
+  process.env.CLAWDBOT_STATE_DIR ??
+  path.join(os.homedir(), ".openclaw");
 
 const SKILLS_DIR = path.join(CONFIG_DIR, "skills");
 
@@ -68,7 +69,11 @@ async function downloadSkillMd(
       if (response.ok) {
         const content = await response.text();
         // Validate it looks like a SKILL.md: must have YAML frontmatter (--- delimited) with a name field
-        if (content.startsWith("---") && content.indexOf("---", 3) > 3 && content.includes("name:")) {
+        if (
+          content.startsWith("---") &&
+          content.indexOf("---", 3) > 3 &&
+          content.includes("name:")
+        ) {
           return { content, url };
         }
       }
@@ -149,11 +154,7 @@ export async function installSkillFromGitHub(
     sourceUrl: result.url,
     skillName,
   };
-  await fs.writeFile(
-    path.join(skillDir, ".vibeclaw.json"),
-    JSON.stringify(meta, null, 2),
-    "utf-8",
-  );
+  await fs.writeFile(path.join(skillDir, ".vibeclaw.json"), JSON.stringify(meta, null, 2), "utf-8");
 
   return {
     success: true,

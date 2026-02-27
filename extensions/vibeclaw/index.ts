@@ -9,7 +9,6 @@
 
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { emptyPluginConfigSchema } from "openclaw/plugin-sdk";
-import { VibeIndexClient } from "./src/vibe-index-client.js";
 import {
   createSearchTool,
   createInstallTool,
@@ -18,6 +17,7 @@ import {
   createAuditTool,
 } from "./src/tools.js";
 import type { VibeClawConfig } from "./src/tools.js";
+import { VibeIndexClient } from "./src/vibe-index-client.js";
 
 const vibeClawPlugin = {
   id: "vibeclaw",
@@ -32,7 +32,7 @@ const vibeClawPlugin = {
     if (!apiKey) {
       api.logger.warn(
         "VibeClaw: no API key configured. Set plugins.entries.vibeclaw.config.apiKey " +
-        "to a Vibe Index API key (vibe_live_*). Get one at https://vibeindex.ai/developer",
+          "to a Vibe Index API key (vibe_live_*). Get one at https://vibeindex.ai/developer",
       );
       return;
     }

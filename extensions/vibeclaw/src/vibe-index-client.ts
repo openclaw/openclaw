@@ -86,11 +86,14 @@ export class VibeIndexClient {
   /**
    * Search for resources by keyword
    */
-  async search(query: string, opts?: {
-    type?: string;
-    limit?: number;
-    offset?: number;
-  }): Promise<VibeSearchResult> {
+  async search(
+    query: string,
+    opts?: {
+      type?: string;
+      limit?: number;
+      offset?: number;
+    },
+  ): Promise<VibeSearchResult> {
     return this.fetch<VibeSearchResult>("/search", {
       q: query,
       type: opts?.type ?? "",
