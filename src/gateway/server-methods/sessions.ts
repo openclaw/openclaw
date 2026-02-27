@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
+import { getAcpSessionManager } from "../../acp/control-plane/manager.js";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { clearBootstrapSnapshot } from "../../agents/bootstrap-cache.js";
 import { abortEmbeddedPiRun, waitForEmbeddedPiRunEnd } from "../../agents/pi-embedded.js";
@@ -14,6 +15,7 @@ import {
   updateSessionStore,
 } from "../../config/sessions.js";
 import { unbindThreadBindingsBySessionKey } from "../../discord/monitor/thread-bindings.js";
+import { logVerbose } from "../../globals.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import {
@@ -202,6 +204,82 @@ async function ensureSessionRuntimeCleanup(params: {
   );
 }
 
+const ACP_RUNTIME_CLEANUP_TIMEOUT_MS = 15_000;
+
+async function runAcpCleanupStep(params: {
+  op: () => Promise<void>;
+}): Promise<{ status: "ok" } | { status: "timeout" } | { status: "error"; error: unknown }> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeoutPromise = new Promise<{ status: "timeout" }>((resolve) => {
+    timer = setTimeout(() => resolve({ status: "timeout" }), ACP_RUNTIME_CLEANUP_TIMEOUT_MS);
+  });
+  const opPromise = params
+    .op()
+    .then(() => ({ status: "ok" as const }))
+    .catch((error: unknown) => ({ status: "error" as const, error }));
+  const outcome = await Promise.race([opPromise, timeoutPromise]);
+  if (timer) {
+    clearTimeout(timer);
+  }
+  return outcome;
+}
+
+async function closeAcpRuntimeForSession(params: {
+  cfg: ReturnType<typeof loadConfig>;
+  sessionKey: string;
+  entry?: SessionEntry;
+  reason: "session-reset" | "session-delete";
+}) {
+  if (!params.entry?.acp) {
+    return undefined;
+  }
+  const acpManager = getAcpSessionManager();
+  const cancelOutcome = await runAcpCleanupStep({
+    op: async () => {
+      await acpManager.cancelSession({
+        cfg: params.cfg,
+        sessionKey: params.sessionKey,
+        reason: params.reason,
+      });
+    },
+  });
+  if (cancelOutcome.status === "timeout") {
+    return errorShape(
+      ErrorCodes.UNAVAILABLE,
+      `Session ${params.sessionKey} is still active; try again in a moment.`,
+    );
+  }
+  if (cancelOutcome.status === "error") {
+    logVerbose(
+      `sessions.${params.reason}: ACP cancel failed for ${params.sessionKey}: ${String(cancelOutcome.error)}`,
+    );
+  }
+
+  const closeOutcome = await runAcpCleanupStep({
+    op: async () => {
+      await acpManager.closeSession({
+        cfg: params.cfg,
+        sessionKey: params.sessionKey,
+        reason: params.reason,
+        requireAcpSession: false,
+        allowBackendUnavailable: true,
+      });
+    },
+  });
+  if (closeOutcome.status === "timeout") {
+    return errorShape(
+      ErrorCodes.UNAVAILABLE,
+      `Session ${params.sessionKey} is still active; try again in a moment.`,
+    );
+  }
+  if (closeOutcome.status === "error") {
+    logVerbose(
+      `sessions.${params.reason}: ACP runtime close failed for ${params.sessionKey}: ${String(closeOutcome.error)}`,
+    );
+  }
+  return undefined;
+}
+
 export const sessionsHandlers: GatewayRequestHandlers = {
   "sessions.list": ({ params, respond }) => {
     if (!assertValidParams(params, validateSessionsListParams, "sessions.list", respond)) {
@@ -348,7 +426,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     }
 
     const { cfg, target, storePath } = resolveGatewaySessionTargetFromKey(key);
-    const { entry } = loadSessionEntry(key);
+    const { entry, legacyKey, canonicalKey } = loadSessionEntry(key);
     const hadExistingEntry = Boolean(entry);
     const commandReason = p.reason === "new" ? "new" : "reset";
     const hookEvent = createInternalHookEvent(
@@ -367,6 +445,16 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const cleanupError = await ensureSessionRuntimeCleanup({ cfg, key, target, sessionId });
     if (cleanupError) {
       respond(false, undefined, cleanupError);
+      return;
+    }
+    const acpCleanupError = await closeAcpRuntimeForSession({
+      cfg,
+      sessionKey: legacyKey ?? canonicalKey ?? target.canonicalKey ?? key,
+      entry,
+      reason: "session-reset",
+    });
+    if (acpCleanupError) {
+      respond(false, undefined, acpCleanupError);
       return;
     }
     let oldSessionId: string | undefined;
@@ -446,11 +534,21 @@ export const sessionsHandlers: GatewayRequestHandlers = {
 
     const deleteTranscript = typeof p.deleteTranscript === "boolean" ? p.deleteTranscript : true;
 
-    const { entry } = loadSessionEntry(key);
+    const { entry, legacyKey, canonicalKey } = loadSessionEntry(key);
     const sessionId = entry?.sessionId;
     const cleanupError = await ensureSessionRuntimeCleanup({ cfg, key, target, sessionId });
     if (cleanupError) {
       respond(false, undefined, cleanupError);
+      return;
+    }
+    const acpCleanupError = await closeAcpRuntimeForSession({
+      cfg,
+      sessionKey: legacyKey ?? canonicalKey ?? target.canonicalKey ?? key,
+      entry,
+      reason: "session-delete",
+    });
+    if (acpCleanupError) {
+      respond(false, undefined, acpCleanupError);
       return;
     }
     const deleted = await updateSessionStore(storePath, (store) => {

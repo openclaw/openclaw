@@ -195,6 +195,26 @@ describe("resolveSandboxedMediaSource", () => {
     });
   });
 
+  it("rejects sandbox symlink escapes when the outside leaf does not exist yet", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    await withSandboxRoot(async (sandboxDir) => {
+      const outsideDir = await fs.mkdtemp(
+        path.join(process.cwd(), "sandbox-media-outside-missing-"),
+      );
+      const linkDir = path.join(sandboxDir, "escape-link");
+      await fs.symlink(outsideDir, linkDir);
+      try {
+        const missingOutsidePath = path.join(linkDir, "new-file.txt");
+        await expectSandboxRejection(missingOutsidePath, sandboxDir, /symlink|sandbox/i);
+      } finally {
+        await fs.rm(linkDir, { force: true });
+        await fs.rm(outsideDir, { recursive: true, force: true });
+      }
+    });
+  });
+
   it("rejects hardlinked OpenClaw tmp paths to outside files", async () => {
     if (process.platform === "win32") {
       return;

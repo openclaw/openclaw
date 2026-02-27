@@ -7,6 +7,7 @@ enum class OpenClawCapability(val rawValue: String) {
   Sms("sms"),
   VoiceWake("voiceWake"),
   Location("location"),
+  Device("device"),
 }
 
 enum class OpenClawCanvasCommand(val rawValue: String) {
@@ -34,6 +35,7 @@ enum class OpenClawCanvasA2UICommand(val rawValue: String) {
 }
 
 enum class OpenClawCameraCommand(val rawValue: String) {
+  List("camera.list"),
   Snap("camera.snap"),
   Clip("camera.clip"),
   ;
@@ -67,5 +69,27 @@ enum class OpenClawLocationCommand(val rawValue: String) {
 
   companion object {
     const val NamespacePrefix: String = "location."
+  }
+}
+
+enum class OpenClawDeviceCommand(val rawValue: String) {
+  Status("device.status"),
+  Info("device.info"),
+  Permissions("device.permissions"),
+  Health("device.health"),
+  ;
+
+  companion object {
+    const val NamespacePrefix: String = "device."
+  }
+}
+
+enum class OpenClawNotificationsCommand(val rawValue: String) {
+  List("notifications.list"),
+  Actions("notifications.actions"),
+  ;
+
+  companion object {
+    const val NamespacePrefix: String = "notifications."
   }
 }

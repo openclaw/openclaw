@@ -304,6 +304,30 @@ describe("model-selection", () => {
         ref: { provider: "anthropic", model: "claude-sonnet-4-6" },
       });
     });
+
+    it("strips trailing auth profile suffix before allowlist matching", () => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            models: {
+              "openai/@cf/openai/gpt-oss-20b": {},
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      const result = resolveAllowedModelRef({
+        cfg,
+        catalog: [],
+        raw: "openai/@cf/openai/gpt-oss-20b@cf:default",
+        defaultProvider: "anthropic",
+      });
+
+      expect(result).toEqual({
+        key: "openai/@cf/openai/gpt-oss-20b",
+        ref: { provider: "openai", model: "@cf/openai/gpt-oss-20b" },
+      });
+    });
   });
 
   describe("resolveModelRefFromString", () => {
@@ -331,6 +355,78 @@ describe("model-selection", () => {
         defaultProvider: "anthropic",
       });
       expect(resolved?.ref).toEqual({ provider: "openai", model: "gpt-4" });
+    });
+
+    it("strips trailing profile suffix for simple model refs", () => {
+      const resolved = resolveModelRefFromString({
+        raw: "gpt-5@myprofile",
+        defaultProvider: "openai",
+      });
+      expect(resolved?.ref).toEqual({ provider: "openai", model: "gpt-5" });
+    });
+
+    it("strips trailing profile suffix for provider/model refs", () => {
+      const resolved = resolveModelRefFromString({
+        raw: "google/gemini-flash-latest@google:bevfresh",
+        defaultProvider: "anthropic",
+      });
+      expect(resolved?.ref).toEqual({
+        provider: "google",
+        model: "gemini-flash-latest",
+      });
+    });
+
+    it("preserves Cloudflare @cf model segments", () => {
+      const resolved = resolveModelRefFromString({
+        raw: "openai/@cf/openai/gpt-oss-20b",
+        defaultProvider: "anthropic",
+      });
+      expect(resolved?.ref).toEqual({
+        provider: "openai",
+        model: "@cf/openai/gpt-oss-20b",
+      });
+    });
+
+    it("preserves OpenRouter @preset model segments", () => {
+      const resolved = resolveModelRefFromString({
+        raw: "openrouter/@preset/kimi-2-5",
+        defaultProvider: "anthropic",
+      });
+      expect(resolved?.ref).toEqual({
+        provider: "openrouter",
+        model: "@preset/kimi-2-5",
+      });
+    });
+
+    it("splits trailing profile suffix after OpenRouter preset paths", () => {
+      const resolved = resolveModelRefFromString({
+        raw: "openrouter/@preset/kimi-2-5@work",
+        defaultProvider: "anthropic",
+      });
+      expect(resolved?.ref).toEqual({
+        provider: "openrouter",
+        model: "@preset/kimi-2-5",
+      });
+    });
+
+    it("strips profile suffix before alias resolution", () => {
+      const index = {
+        byAlias: new Map([
+          ["kimi", { alias: "kimi", ref: { provider: "nvidia", model: "moonshotai/kimi-k2.5" } }],
+        ]),
+        byKey: new Map(),
+      };
+
+      const resolved = resolveModelRefFromString({
+        raw: "kimi@nvidia:default",
+        defaultProvider: "openai",
+        aliasIndex: index,
+      });
+      expect(resolved?.ref).toEqual({
+        provider: "nvidia",
+        model: "moonshotai/kimi-k2.5",
+      });
+      expect(resolved?.alias).toBe("kimi");
     });
   });
 

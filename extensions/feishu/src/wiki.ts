@@ -1,8 +1,7 @@
 import type * as Lark from "@larksuiteoapi/node-sdk";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { listEnabledFeishuAccounts } from "./accounts.js";
-import { createFeishuClient } from "./client.js";
-import { resolveToolsConfig } from "./tools-config.js";
+import { createFeishuToolClient, resolveAnyEnabledFeishuToolsConfig } from "./tool-account.js";
 import { FeishuWikiSchema, type FeishuWikiParams } from "./wiki-schema.js";
 
 // ============ Helpers ============
@@ -168,62 +167,68 @@ export function registerFeishuWikiTools(api: OpenClawPluginApi) {
     return;
   }
 
-  const firstAccount = accounts[0];
-  const toolsCfg = resolveToolsConfig(firstAccount.config.tools);
+  const toolsCfg = resolveAnyEnabledFeishuToolsConfig(accounts);
   if (!toolsCfg.wiki) {
     api.logger.debug?.("feishu_wiki: wiki tool disabled in config");
     return;
   }
 
-  const getClient = () => createFeishuClient(firstAccount);
+  type FeishuWikiExecuteParams = FeishuWikiParams & { accountId?: string };
 
   api.registerTool(
-    {
-      name: "feishu_wiki",
-      label: "Feishu Wiki",
-      description:
-        "Feishu knowledge base operations. Actions: spaces, nodes, get, create, move, rename",
-      parameters: FeishuWikiSchema,
-      async execute(_toolCallId, params) {
-        const p = params as FeishuWikiParams;
-        try {
-          const client = getClient();
-          switch (p.action) {
-            case "spaces":
-              return json(await listSpaces(client));
-            case "nodes":
-              return json(await listNodes(client, p.space_id, p.parent_node_token));
-            case "get":
-              return json(await getNode(client, p.token));
-            case "search":
-              return json({
-                error:
-                  "Search is not available. Use feishu_wiki with action: 'nodes' to browse or action: 'get' to lookup by token.",
-              });
-            case "create":
-              return json(
-                await createNode(client, p.space_id, p.title, p.obj_type, p.parent_node_token),
-              );
-            case "move":
-              return json(
-                await moveNode(
-                  client,
-                  p.space_id,
-                  p.node_token,
-                  p.target_space_id,
-                  p.target_parent_token,
-                ),
-              );
-            case "rename":
-              return json(await renameNode(client, p.space_id, p.node_token, p.title));
-            default:
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any -- exhaustive check fallback
-              return json({ error: `Unknown action: ${(p as any).action}` });
+    (ctx) => {
+      const defaultAccountId = ctx.agentAccountId;
+      return {
+        name: "feishu_wiki",
+        label: "Feishu Wiki",
+        description:
+          "Feishu knowledge base operations. Actions: spaces, nodes, get, create, move, rename",
+        parameters: FeishuWikiSchema,
+        async execute(_toolCallId, params) {
+          const p = params as FeishuWikiExecuteParams;
+          try {
+            const client = createFeishuToolClient({
+              api,
+              executeParams: p,
+              defaultAccountId,
+            });
+            switch (p.action) {
+              case "spaces":
+                return json(await listSpaces(client));
+              case "nodes":
+                return json(await listNodes(client, p.space_id, p.parent_node_token));
+              case "get":
+                return json(await getNode(client, p.token));
+              case "search":
+                return json({
+                  error:
+                    "Search is not available. Use feishu_wiki with action: 'nodes' to browse or action: 'get' to lookup by token.",
+                });
+              case "create":
+                return json(
+                  await createNode(client, p.space_id, p.title, p.obj_type, p.parent_node_token),
+                );
+              case "move":
+                return json(
+                  await moveNode(
+                    client,
+                    p.space_id,
+                    p.node_token,
+                    p.target_space_id,
+                    p.target_parent_token,
+                  ),
+                );
+              case "rename":
+                return json(await renameNode(client, p.space_id, p.node_token, p.title));
+              default:
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any -- exhaustive check fallback
+                return json({ error: `Unknown action: ${(p as any).action}` });
+            }
+          } catch (err) {
+            return json({ error: err instanceof Error ? err.message : String(err) });
           }
-        } catch (err) {
-          return json({ error: err instanceof Error ? err.message : String(err) });
-        }
-      },
+        },
+      };
     },
     { name: "feishu_wiki" },
   );
