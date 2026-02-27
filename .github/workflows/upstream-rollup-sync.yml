@@ -134,6 +134,7 @@ jobs:
         if: steps.diverge.outputs.ahead != '0'
         run: |
           set -euo pipefail
+          repo="${GITHUB_REPOSITORY}"
           title="chore(sync): replay rollup fixes on upstream/${UPSTREAM_REF}"
           body_file="$(mktemp)"
           cat > "$body_file" <<EOF
@@ -148,22 +149,24 @@ jobs:
           Please review conflict-sensitive areas before merge.
           EOF
 
-          pr_number="$(gh pr list --base "${BASE_BRANCH}" --head "${SYNC_BRANCH}" --state open --json number --jq '.[0].number // empty')"
+          pr_number="$(gh pr list -R "${repo}" --base "${BASE_BRANCH}" --head "${SYNC_BRANCH}" --state open --json number --jq '.[0].number // empty')"
           if [ -z "$pr_number" ]; then
             gh pr create \
+              -R "${repo}" \
               --base "${BASE_BRANCH}" \
               --head "${SYNC_BRANCH}" \
               --title "$title" \
               --body-file "$body_file"
           else
-            gh pr edit "$pr_number" --title "$title" --body-file "$body_file"
+            gh pr edit -R "${repo}" "$pr_number" --title "$title" --body-file "$body_file"
           fi
 
       - name: Close stale sync PR when no divergence
         if: steps.diverge.outputs.ahead == '0'
         run: |
           set -euo pipefail
-          pr_number="$(gh pr list --base "${BASE_BRANCH}" --head "${SYNC_BRANCH}" --state open --json number --jq '.[0].number // empty')"
+          repo="${GITHUB_REPOSITORY}"
+          pr_number="$(gh pr list -R "${repo}" --base "${BASE_BRANCH}" --head "${SYNC_BRANCH}" --state open --json number --jq '.[0].number // empty')"
           if [ -n "$pr_number" ]; then
-            gh pr close "$pr_number" --comment "Closing: upstream sync produced no new divergence."
+            gh pr close -R "${repo}" "$pr_number" --comment "Closing: upstream sync produced no new divergence."
           fi
