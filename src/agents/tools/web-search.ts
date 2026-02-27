@@ -21,7 +21,7 @@ import {
   writeCache,
 } from "./web-shared.js";
 
-const SEARCH_PROVIDERS = ["brave", "perplexity", "grok", "gemini", "kimi"] as const;
+const SEARCH_PROVIDERS = ["brave", "perplexity", "grok", "gemini", "kimi", "openai"] as const;
 const DEFAULT_SEARCH_COUNT = 5;
 const MAX_SEARCH_COUNT = 10;
 
@@ -30,6 +30,8 @@ const PERPLEXITY_SEARCH_ENDPOINT = "https://api.perplexity.ai/search";
 
 const XAI_API_ENDPOINT = "https://api.x.ai/v1/responses";
 const DEFAULT_GROK_MODEL = "grok-4-1-fast";
+const DEFAULT_OPENAI_SEARCH_MODEL = "gpt-5.2";
+const OPENAI_WEB_SEARCH_TOOL_TYPE = "web_search_preview";
 const DEFAULT_KIMI_BASE_URL = "https://api.moonshot.ai/v1";
 const DEFAULT_KIMI_MODEL = "moonshot-v1-128k";
 const KIMI_WEB_SEARCH_TOOL = {
@@ -203,6 +205,12 @@ type KimiConfig = {
   apiKey?: string;
   baseUrl?: string;
   model?: string;
+};
+
+type OpenAISearchConfig = {
+  apiKey?: string;
+  model?: string;
+  baseUrl?: string;
 };
 
 type GrokSearchResponse = {
@@ -415,6 +423,14 @@ function missingSearchKeyPayload(provider: (typeof SEARCH_PROVIDERS)[number]) {
       docs: "https://docs.openclaw.ai/tools/web",
     };
   }
+  if (provider === "openai") {
+    return {
+      error: "missing_openai_api_key",
+      message:
+        "web_search (openai) needs an API key. Set OPENAI_API_KEY in the Gateway environment, or configure tools.web.search.openai.apiKey.",
+      docs: "https://docs.openclaw.ai/tools/web",
+    };
+  }
   return {
     error: "missing_brave_api_key",
     message: `web_search needs a Brave Search API key. Run \`${formatCliCommand("openclaw configure --section web")}\` to store it, or set BRAVE_API_KEY in the Gateway environment.`,
@@ -441,6 +457,9 @@ function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDE
   }
   if (raw === "brave") {
     return "brave";
+  }
+  if (raw === "openai") {
+    return "openai";
   }
 
   // Auto-detect provider from available API keys (priority order)
@@ -484,6 +503,14 @@ function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDE
         'web_search: no provider configured, auto-detected "grok" from available API keys',
       );
       return "grok";
+    }
+    // 6. OpenAI (last: OPENAI_API_KEY is commonly set for chat; avoid hijacking)
+    const openaiSearchConfig = resolveOpenAISearchConfig(search);
+    if (resolveOpenAISearchApiKey(openaiSearchConfig)) {
+      logVerbose(
+        'web_search: no provider configured, auto-detected "openai" from available API keys',
+      );
+      return "openai";
     }
   }
 
@@ -612,6 +639,40 @@ function resolveGeminiModel(gemini?: GeminiConfig): string {
   const fromConfig =
     gemini && "model" in gemini && typeof gemini.model === "string" ? gemini.model.trim() : "";
   return fromConfig || DEFAULT_GEMINI_MODEL;
+}
+
+function resolveOpenAISearchConfig(search?: WebSearchConfig): OpenAISearchConfig {
+  if (!search || typeof search !== "object") {
+    return {};
+  }
+  const openai = "openai" in search ? search.openai : undefined;
+  if (!openai || typeof openai !== "object") {
+    return {};
+  }
+  return openai as OpenAISearchConfig;
+}
+
+function resolveOpenAISearchApiKey(config?: OpenAISearchConfig): string | undefined {
+  const fromConfig = normalizeApiKey(config?.apiKey);
+  if (fromConfig) {
+    return fromConfig;
+  }
+  const fromEnv = normalizeApiKey(process.env.OPENAI_API_KEY);
+  return fromEnv || undefined;
+}
+
+function resolveOpenAISearchModel(config?: OpenAISearchConfig): string {
+  const fromConfig =
+    config && "model" in config && typeof config.model === "string" ? config.model.trim() : "";
+  return fromConfig || DEFAULT_OPENAI_SEARCH_MODEL;
+}
+
+function resolveOpenAISearchBaseUrl(config?: OpenAISearchConfig): string {
+  const fromConfig =
+    config && "baseUrl" in config && typeof config.baseUrl === "string"
+      ? config.baseUrl.trim()
+      : "";
+  return fromConfig || "https://api.openai.com";
 }
 
 async function withTrustedWebSearchEndpoint<T>(
@@ -998,6 +1059,48 @@ async function runGrokSearch(params: {
   );
 }
 
+async function runOpenAISearch(params: {
+  query: string;
+  apiKey: string;
+  model: string;
+  baseUrl: string;
+  timeoutSeconds: number;
+}): Promise<{ content: string; citations: string[] }> {
+  const endpoint = `${params.baseUrl.trim().replace(/\/$/, "")}/v1/responses`;
+  const body = {
+    model: params.model,
+    input: [{ role: "user", content: params.query }],
+    tools: [{ type: OPENAI_WEB_SEARCH_TOOL_TYPE }],
+  };
+
+  return withTrustedWebSearchEndpoint(
+    {
+      url: endpoint,
+      timeoutSeconds: params.timeoutSeconds,
+      init: {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${params.apiKey}`,
+        },
+        body: JSON.stringify(body),
+      },
+    },
+    async (res) => {
+      if (!res.ok) {
+        return await throwWebSearchApiError(res, "OpenAI");
+      }
+      // OpenAI Responses API format is identical to xAI's
+      const data = (await res.json()) as GrokSearchResponse;
+      const { text, annotationCitations } = extractGrokContent(data);
+      return {
+        content: text ?? "No response",
+        citations: (data.citations ?? []).length > 0 ? data.citations! : annotationCitations,
+      };
+    },
+  );
+}
+
 function extractKimiMessageText(message: KimiMessage | undefined): string | undefined {
   const content = message?.content?.trim();
   if (content) {
@@ -1171,6 +1274,8 @@ async function runWebSearch(params: {
   geminiModel?: string;
   kimiBaseUrl?: string;
   kimiModel?: string;
+  openaiModel?: string;
+  openaiBaseUrl?: string;
 }): Promise<Record<string, unknown>> {
   const providerSpecificKey =
     params.provider === "grok"
@@ -1179,7 +1284,9 @@ async function runWebSearch(params: {
         ? (params.geminiModel ?? DEFAULT_GEMINI_MODEL)
         : params.provider === "kimi"
           ? `${params.kimiBaseUrl ?? DEFAULT_KIMI_BASE_URL}:${params.kimiModel ?? DEFAULT_KIMI_MODEL}`
-          : "";
+          : params.provider === "openai"
+            ? `${params.openaiBaseUrl ?? "https://api.openai.com"}:${params.openaiModel ?? DEFAULT_OPENAI_SEARCH_MODEL}`
+            : "";
   const cacheKey = normalizeCacheKey(
     `${params.provider}:${params.query}:${params.count}:${params.country || "default"}:${params.search_lang || params.language || "default"}:${params.ui_lang || "default"}:${params.freshness || "default"}:${params.dateAfter || "default"}:${params.dateBefore || "default"}:${params.searchDomainFilter?.join(",") || "default"}:${params.maxTokens || "default"}:${params.maxTokensPerPage || "default"}:${providerSpecificKey}`,
   );
@@ -1304,6 +1411,33 @@ async function runWebSearch(params: {
     return payload;
   }
 
+  if (params.provider === "openai") {
+    const { content, citations } = await runOpenAISearch({
+      query: params.query,
+      apiKey: params.apiKey,
+      model: params.openaiModel ?? DEFAULT_OPENAI_SEARCH_MODEL,
+      baseUrl: params.openaiBaseUrl ?? "https://api.openai.com",
+      timeoutSeconds: params.timeoutSeconds,
+    });
+
+    const payload = {
+      query: params.query,
+      provider: params.provider,
+      model: params.openaiModel ?? DEFAULT_OPENAI_SEARCH_MODEL,
+      tookMs: Date.now() - start,
+      externalContent: {
+        untrusted: true,
+        source: "web_search",
+        provider: params.provider,
+        wrapped: true,
+      },
+      content: wrapWebContent(content),
+      citations,
+    };
+    writeCache(SEARCH_CACHE, cacheKey, payload, params.cacheTtlMs);
+    return payload;
+  }
+
   if (params.provider !== "brave") {
     throw new Error("Unsupported web search provider.");
   }
@@ -1401,6 +1535,7 @@ export function createWebSearchTool(options?: {
   const grokConfig = resolveGrokConfig(search);
   const geminiConfig = resolveGeminiConfig(search);
   const kimiConfig = resolveKimiConfig(search);
+  const openaiSearchConfig = resolveOpenAISearchConfig(search);
 
   const description =
     provider === "perplexity"
@@ -1411,7 +1546,9 @@ export function createWebSearchTool(options?: {
           ? "Search the web using Kimi by Moonshot. Returns AI-synthesized answers with citations from native $web_search."
           : provider === "gemini"
             ? "Search the web using Gemini with Google Search grounding. Returns AI-synthesized answers with citations from Google Search."
-            : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.";
+            : provider === "openai"
+              ? "Search the web using OpenAI's web_search_preview tool. Returns AI-synthesized answers with citations from real-time web search."
+              : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.";
 
   return {
     label: "Web Search",
@@ -1430,7 +1567,9 @@ export function createWebSearchTool(options?: {
               ? resolveKimiApiKey(kimiConfig)
               : provider === "gemini"
                 ? resolveGeminiApiKey(geminiConfig)
-                : resolveSearchApiKey(search);
+                : provider === "openai"
+                  ? resolveOpenAISearchApiKey(openaiSearchConfig)
+                  : resolveSearchApiKey(search);
 
       if (!apiKey) {
         return jsonResult(missingSearchKeyPayload(provider));
@@ -1596,6 +1735,8 @@ export function createWebSearchTool(options?: {
         geminiModel: resolveGeminiModel(geminiConfig),
         kimiBaseUrl: resolveKimiBaseUrl(kimiConfig),
         kimiModel: resolveKimiModel(kimiConfig),
+        openaiModel: resolveOpenAISearchModel(openaiSearchConfig),
+        openaiBaseUrl: resolveOpenAISearchBaseUrl(openaiSearchConfig),
       });
       return jsonResult(result);
     },
@@ -1620,4 +1761,7 @@ export const __testing = {
   resolveKimiBaseUrl,
   extractKimiCitations,
   resolveRedirectUrl: resolveCitationRedirectUrl,
+  resolveOpenAISearchApiKey,
+  resolveOpenAISearchModel,
+  resolveOpenAISearchBaseUrl,
 } as const;

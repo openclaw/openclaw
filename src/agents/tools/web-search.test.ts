@@ -15,6 +15,9 @@ const {
   resolveKimiModel,
   resolveKimiBaseUrl,
   extractKimiCitations,
+  resolveOpenAISearchApiKey,
+  resolveOpenAISearchModel,
+  resolveOpenAISearchBaseUrl,
 } = __testing;
 
 describe("web_search brave language param normalization", () => {
@@ -269,5 +272,44 @@ describe("extractKimiCitations", () => {
         ],
       }).toSorted(),
     ).toEqual(["https://example.com/a", "https://example.com/b", "https://example.com/c"]);
+  });
+});
+
+describe("web_search openai config resolution", () => {
+  it("uses config apiKey when provided", () => {
+    expect(resolveOpenAISearchApiKey({ apiKey: "sk-openai-test" })).toBe("sk-openai-test");
+  });
+
+  it("falls back to OPENAI_API_KEY env var", () => {
+    withEnv({ OPENAI_API_KEY: "sk-from-env" }, () => {
+      expect(resolveOpenAISearchApiKey({})).toBe("sk-from-env");
+    });
+  });
+
+  it("returns undefined when no API key is available", () => {
+    withEnv({ OPENAI_API_KEY: undefined }, () => {
+      expect(resolveOpenAISearchApiKey({})).toBeUndefined();
+      expect(resolveOpenAISearchApiKey(undefined)).toBeUndefined();
+    });
+  });
+
+  it("uses default model when not specified", () => {
+    expect(resolveOpenAISearchModel({})).toBe("gpt-5.2");
+    expect(resolveOpenAISearchModel(undefined)).toBe("gpt-5.2");
+  });
+
+  it("uses config model when provided", () => {
+    expect(resolveOpenAISearchModel({ model: "gpt-4o" })).toBe("gpt-4o");
+  });
+
+  it("uses default baseUrl when not specified", () => {
+    expect(resolveOpenAISearchBaseUrl({})).toBe("https://api.openai.com");
+    expect(resolveOpenAISearchBaseUrl(undefined)).toBe("https://api.openai.com");
+  });
+
+  it("uses config baseUrl when provided", () => {
+    expect(resolveOpenAISearchBaseUrl({ baseUrl: "https://my-proxy.example.com" })).toBe(
+      "https://my-proxy.example.com",
+    );
   });
 });
