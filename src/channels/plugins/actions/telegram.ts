@@ -61,6 +61,19 @@ function readTelegramMessageIdParam(params: Record<string, unknown>): number {
   return messageId;
 }
 
+function readTelegramPinDisableNotification(params: Record<string, unknown>): boolean | undefined {
+  if (typeof params.disableNotification === "boolean") {
+    return params.disableNotification;
+  }
+  if (typeof params.disable_notification === "boolean") {
+    return params.disable_notification;
+  }
+  if (typeof params.silent === "boolean") {
+    return params.silent;
+  }
+  return undefined;
+}
+
 export const telegramMessageActions: ChannelMessageActionAdapter = {
   listActions: ({ cfg }) => {
     const accounts = listTokenSourcedAccounts(listEnabledTelegramAccounts(cfg));
@@ -76,7 +89,7 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
     );
     const isEnabled = (key: keyof TelegramActionConfig, defaultValue = true) =>
       gate(key, defaultValue);
-    const actions = new Set<ChannelMessageActionName>(["send"]);
+    const actions = new Set<ChannelMessageActionName>(["send", "pin", "unpin"]);
     if (isEnabled("reactions")) {
       actions.add("react");
     }
@@ -146,6 +159,38 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
       return await handleTelegramAction(
         {
           action: "deleteMessage",
+          chatId,
+          messageId,
+          accountId: accountId ?? undefined,
+        },
+        cfg,
+        { mediaLocalRoots },
+      );
+    }
+
+    if (action === "pin") {
+      const chatId = readTelegramChatIdParam(params);
+      const messageId = readTelegramMessageIdParam(params);
+      const disableNotification = readTelegramPinDisableNotification(params);
+      return await handleTelegramAction(
+        {
+          action: "pinMessage",
+          chatId,
+          messageId,
+          disableNotification,
+          accountId: accountId ?? undefined,
+        },
+        cfg,
+        { mediaLocalRoots },
+      );
+    }
+
+    if (action === "unpin") {
+      const chatId = readTelegramChatIdParam(params);
+      const messageId = readTelegramMessageIdParam(params);
+      return await handleTelegramAction(
+        {
+          action: "unpinMessage",
           chatId,
           messageId,
           accountId: accountId ?? undefined,

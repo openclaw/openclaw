@@ -3,6 +3,7 @@ import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
 } from "../config/model-input.js";
+import { type BackoffPolicy, computeBackoff, sleepWithAbort } from "../infra/backoff.js";
 import {
   ensureAuthProfileStore,
   getSoonestCooldownExpiry,
@@ -40,6 +41,14 @@ type FallbackAttempt = {
   reason?: FailoverReason;
   status?: number;
   code?: string;
+};
+
+// Backoff applied between fallback candidates when consecutive rate-limit (429) errors occur.
+const RATE_LIMIT_BACKOFF: BackoffPolicy = {
+  initialMs: 1000,
+  maxMs: 8000,
+  factor: 2,
+  jitter: 0.5,
 };
 
 /**
@@ -383,6 +392,7 @@ export async function runWithModelFallback<T>(params: {
   agentDir?: string;
   /** Optional explicit fallbacks list; when provided (even empty), replaces agents.defaults.model.fallbacks. */
   fallbacksOverride?: string[];
+  abortSignal?: AbortSignal;
   run: (provider: string, model: string) => Promise<T>;
   onError?: ModelFallbackErrorHandler;
 }): Promise<ModelFallbackRunResult<T>> {
@@ -397,6 +407,7 @@ export async function runWithModelFallback<T>(params: {
     : null;
   const attempts: FallbackAttempt[] = [];
   let lastError: unknown;
+  let consecutiveRateLimits = 0;
 
   const hasFallbackCandidates = candidates.length > 1;
 
@@ -495,6 +506,19 @@ export async function runWithModelFallback<T>(params: {
         attempt: i + 1,
         total: candidates.length,
       });
+
+      // Back off before trying the next candidate when we hit rate limits,
+      // so we don't instantly exhaust all fallbacks in a shared quota pool.
+      if (isKnownFailover && normalized.reason === "rate_limit" && i < candidates.length - 1) {
+        if (params.abortSignal?.aborted) {
+          throw params.abortSignal.reason ?? new Error("aborted");
+        }
+        consecutiveRateLimits += 1;
+        const delayMs = computeBackoff(RATE_LIMIT_BACKOFF, consecutiveRateLimits);
+        await sleepWithAbort(delayMs, params.abortSignal);
+      } else {
+        consecutiveRateLimits = 0;
+      }
     }
   }
 
