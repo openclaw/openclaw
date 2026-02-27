@@ -83,3 +83,41 @@ Ten skills are running on a Mac mini M4 with 32 GB RAM:
 ### Capabilities in Action
 
 From any connected messaging channel, a user can write Feishu documents, coordinate meetings, automate macOS applications through Peekaboo, manage email, browse the web, and delegate coding tasks — all via natural language. The Gateway routes each request to the appropriate skill, executes tool calls locally, and streams the result back through the same channel the user wrote from.
+
+---
+
+## 4. Performance Results
+
+### Test Environment
+
+All measurements were collected on a Mac mini M4 (Apple Silicon) with 32 GB RAM on standard home broadband. The cloud model was Claude Sonnet 4.6 via the Anthropic API through the OpenClaw Gateway. The local model was qwen3:8b (8B parameters) on Ollama, called directly through its local API.
+
+### Simple Q&A
+
+A factual question requiring no tools — pure language model reasoning (explain the three laws of thermodynamics, each in one sentence):
+
+| Metric | Cloud (Claude Sonnet) | Local (qwen3:8b) |
+|--------|----------------------|-------------------|
+| Response time | ~9 seconds | ~57 seconds |
+| Quality | Excellent (5/5) — accurate, concise, bonus context | Good (4/5) — accurate, slightly verbose |
+| Tokens generated | ~150 | ~949 (includes internal reasoning) |
+
+The cloud model returned a polished answer in under ten seconds and included the zeroth law unprompted. The local model was accurate but took roughly 6x longer, spending most tokens on internal chain-of-thought reasoning.
+
+### File Operations
+
+Reading a 20-line file, adding line numbers, and writing it back — exercises tool calling (read + write) in addition to reasoning:
+
+| Metric | Cloud (Claude Sonnet) | Local (qwen3:8b) |
+|--------|----------------------|-------------------|
+| Total time | ~12.5 seconds | ~60-70 seconds (estimated) |
+| Tool calls | 2 (read + write) | Expected similar |
+| Accuracy | Perfect | Not tested end-to-end |
+
+The cloud model completed the operation in 12.5 seconds with two tool calls and a perfect result. The local estimate is extrapolated from the 6x speed ratio observed in Q&A.
+
+### Analysis
+
+Cloud models deliver roughly 6x faster responses with more polished output. For tasks requiring speed, complex reasoning, or multi-step tool chains, cloud is the clear choice — 9 seconds for factual Q&A and 12.5 seconds for file operations feel conversational.
+
+Local models win on privacy (no data leaves your machine), offline availability, and cost (free after hardware investment). The practical sweet spot is hybrid mode: route demanding tasks to cloud, handle routine queries locally. OpenClaw makes this seamless — configure your preferred model order once, and the Gateway routes automatically.
