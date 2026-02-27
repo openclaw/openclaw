@@ -391,6 +391,17 @@ export async function startGatewayServer(
         coreGatewayHandlers,
         baseMethods,
       });
+
+  // ── IBEL: Register default tool execution guards ─────────────────────────
+  {
+    const { ensureGlobalGuardPipeline } = await import("../security/guard-pipeline.js");
+    const { TaintRiskGuard, CapabilityAllowlistGuard } =
+      await import("../security/tool-execution-guard.js");
+    const pipeline = ensureGlobalGuardPipeline();
+    pipeline.register(TaintRiskGuard);
+    pipeline.register(CapabilityAllowlistGuard);
+  }
+
   const channelLogs = Object.fromEntries(
     listChannelPlugins().map((plugin) => [plugin.id, logChannels.child(plugin.id)]),
   ) as Record<ChannelId, ReturnType<typeof createSubsystemLogger>>;

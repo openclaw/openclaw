@@ -132,6 +132,56 @@ export async function runBeforeToolCallHook(args: {
     recordToolCall(sessionState, toolName, params, args.toolCallId, args.ctx.loopDetection);
   }
 
+  // ── IBEL Guard Pipeline ────────────────────────────────────────────────────
+  // Runs before plugin hooks. Guards can block, reprompt, or escalate to HITL.
+  // When no pipeline is initialized (no guards registered), this is a no-op.
+  try {
+    const { getGlobalGuardPipeline } = await import("../security/guard-pipeline.js");
+    const guardPipeline = getGlobalGuardPipeline();
+    if (guardPipeline) {
+      const { getToolMetadata } = await import("../security/tool-risk-registry.js");
+      const { buildExecutionContext } = await import("../security/execution-context.js");
+
+      const normalizedArgs = isPlainObject(params) ? (params as Record<string, unknown>) : {};
+
+      const toolMeta = getToolMetadata(toolName);
+      const context = buildExecutionContext({
+        agentId: args.ctx?.agentId,
+        sessionKey: args.ctx?.sessionKey,
+      });
+
+      const guardResult = await guardPipeline.validate(
+        { toolName, arguments: normalizedArgs, toolCallId: args.toolCallId },
+        context,
+        toolMeta,
+      );
+
+      if (guardResult.action === "block") {
+        return { blocked: true, reason: guardResult.reason };
+      }
+
+      if (guardResult.action === "reprompt") {
+        return { blocked: true, reason: `[REPROMPT] ${guardResult.agentInstruction}` };
+      }
+
+      if (guardResult.action === "escalate") {
+        const { handleEscalation } = await import("../security/hitl-escalation.js");
+        const { ExecApprovalManager } = await import("../gateway/exec-approval-manager.js");
+        // Use a dedicated approval manager instance for IBEL escalations.
+        const approvalManager = new ExecApprovalManager();
+        const escalationResult = await handleEscalation(guardResult, approvalManager, {
+          agentId: args.ctx?.agentId,
+          sessionKey: args.ctx?.sessionKey,
+        });
+        if (!escalationResult.approved) {
+          return { blocked: true, reason: escalationResult.reason };
+        }
+      }
+    }
+  } catch (err) {
+    log.warn(`IBEL guard pipeline failed: tool=${toolName} error=${String(err)}`);
+  }
+
   const hookRunner = getGlobalHookRunner();
   if (!hookRunner?.hasHooks("before_tool_call")) {
     return { blocked: false, params: args.params };

@@ -7,6 +7,10 @@ import { sanitizeToolResultImages } from "../tool-images.js";
 // oxlint-disable-next-line typescript/no-explicit-any
 export type AnyAgentTool = AgentTool<any, unknown> & {
   ownerOnly?: boolean;
+  /** IBEL: intrinsic tool risk level. Optional — falls back to registry defaults. */
+  riskLevel?: "low" | "medium" | "high" | "critical";
+  /** IBEL: plain-English summary for HITL approval UIs. */
+  humanReadableSummary?: string;
 };
 
 export type StringParamOptions = {
