@@ -575,6 +575,45 @@ describe("exec notifyOnExit", () => {
   it.each<NotifyNoopCase>(NOOP_NOTIFY_CASES)("$label", runNotifyNoopCase);
 });
 
+describe("exec cmd alias", () => {
+  useCapturedEnv([...SHELL_ENV_KEYS], applyDefaultShellEnv);
+
+  it("accepts cmd as alias for command", async () => {
+    const result = await executeExecTool(execTool, {
+      cmd: COMMAND_ECHO_HELLO,
+    } as ExecToolArgs);
+    const text = readNormalizedTextContent(result.content);
+    expect(text).toContain("hello");
+  });
+
+  it("prefers command over cmd when both are provided", async () => {
+    const result = await executeExecTool(execTool, {
+      command: COMMAND_ECHO_HELLO,
+      cmd: shellEcho(OUTPUT_NOPE),
+    } as ExecToolArgs);
+    const text = readNormalizedTextContent(result.content);
+    expect(text).toContain("hello");
+    expect(text).not.toContain(OUTPUT_NOPE);
+  });
+
+  it("rejects when neither command nor cmd is provided", async () => {
+    await expect(executeExecTool(execTool, {} as ExecToolArgs)).rejects.toThrow(
+      /Missing required parameter.*command/,
+    );
+  });
+
+  it("exposes cmd in the exec tool schema", () => {
+    const schema = execTool.parameters as {
+      properties?: Record<string, unknown>;
+      required?: string[];
+    };
+    expect(schema.properties?.cmd).toBeDefined();
+    expect(schema.properties?.command).toBeDefined();
+    // command should not be required (alias makes it optional at schema level)
+    expect(schema.required ?? []).not.toContain("command");
+  });
+});
+
 describe("exec PATH handling", () => {
   useCapturedEnv([...PATH_SHELL_ENV_KEYS], applyDefaultShellEnv);
 
