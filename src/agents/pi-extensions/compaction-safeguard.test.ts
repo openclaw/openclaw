@@ -559,6 +559,68 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(section).not.toContain("[non-text content]");
   });
 
+  it("caps preserved tail when user turns are below preserve target", () => {
+    const messages: AgentMessage[] = [
+      { role: "user", content: "single user prompt", timestamp: 1 },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "assistant-1" }],
+        timestamp: 2,
+      } as unknown as AgentMessage,
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "assistant-2" }],
+        timestamp: 3,
+      } as unknown as AgentMessage,
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "assistant-3" }],
+        timestamp: 4,
+      } as unknown as AgentMessage,
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "assistant-4" }],
+        timestamp: 5,
+      } as unknown as AgentMessage,
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "assistant-5" }],
+        timestamp: 6,
+      } as unknown as AgentMessage,
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "assistant-6" }],
+        timestamp: 7,
+      } as unknown as AgentMessage,
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "assistant-7" }],
+        timestamp: 8,
+      } as unknown as AgentMessage,
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "assistant-8" }],
+        timestamp: 9,
+      } as unknown as AgentMessage,
+    ];
+
+    const split = splitPreservedRecentTurns({
+      messages,
+      recentTurnsPreserve: 3,
+    });
+
+    // preserve target is 3 turns -> fallback should cap at 6 role messages
+    expect(split.preservedMessages).toHaveLength(6);
+    expect(
+      split.preservedMessages.some(
+        (msg) =>
+          msg.role === "user" && (msg as { content?: unknown }).content === "single user prompt",
+      ),
+    ).toBe(true);
+    expect(formatPreservedTurnsSection(split.preservedMessages)).toContain("assistant-8");
+    expect(formatPreservedTurnsSection(split.preservedMessages)).not.toContain("assistant-2");
+  });
+
   it("clamps preserve count into a safe range", () => {
     expect(resolveRecentTurnsPreserve(undefined)).toBe(3);
     expect(resolveRecentTurnsPreserve(-1)).toBe(0);

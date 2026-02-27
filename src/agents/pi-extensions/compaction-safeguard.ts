@@ -228,26 +228,6 @@ function formatNonTextPlaceholder(content: unknown): string | null {
   return `[non-text content: ${parts.join(", ")}]`;
 }
 
-function findPreservedStartIndexByTurnBoundary(
-  messages: AgentMessage[],
-  preserveTurns: number,
-): number {
-  let seenUsers = 0;
-  let earliestSelectedUserIndex = -1;
-  for (let i = messages.length - 1; i >= 0; i -= 1) {
-    const role = (messages[i] as { role?: unknown }).role;
-    if (role !== "user") {
-      continue;
-    }
-    seenUsers += 1;
-    earliestSelectedUserIndex = i;
-    if (seenUsers >= preserveTurns) {
-      return i;
-    }
-  }
-  return earliestSelectedUserIndex;
-}
-
 function splitPreservedRecentTurns(params: {
   messages: AgentMessage[];
   recentTurnsPreserve: number;
@@ -259,22 +239,42 @@ function splitPreservedRecentTurns(params: {
   if (preserveTurns <= 0) {
     return { summarizableMessages: params.messages, preservedMessages: [] };
   }
-  const boundaryStartIndex = findPreservedStartIndexByTurnBoundary(params.messages, preserveTurns);
+  const conversationIndexes: number[] = [];
+  const userIndexes: number[] = [];
+  for (let i = 0; i < params.messages.length; i += 1) {
+    const role = (params.messages[i] as { role?: unknown }).role;
+    if (role === "user" || role === "assistant") {
+      conversationIndexes.push(i);
+      if (role === "user") {
+        userIndexes.push(i);
+      }
+    }
+  }
+  if (conversationIndexes.length === 0) {
+    return { summarizableMessages: params.messages, preservedMessages: [] };
+  }
+
   const preservedIndexSet = new Set<number>();
-  if (boundaryStartIndex >= 0) {
-    for (let i = boundaryStartIndex; i < params.messages.length; i += 1) {
-      const role = (params.messages[i] as { role?: unknown }).role;
-      if (role === "user" || role === "assistant") {
-        preservedIndexSet.add(i);
+  if (userIndexes.length >= preserveTurns) {
+    const boundaryStartIndex = userIndexes[userIndexes.length - preserveTurns] ?? -1;
+    if (boundaryStartIndex >= 0) {
+      for (const index of conversationIndexes) {
+        if (index >= boundaryStartIndex) {
+          preservedIndexSet.add(index);
+        }
       }
     }
   } else {
     const fallbackMessageCount = preserveTurns * 2;
-    for (let i = params.messages.length - 1; i >= 0; i -= 1) {
-      const role = (params.messages[i] as { role?: unknown }).role;
-      if (role === "user" || role === "assistant") {
-        preservedIndexSet.add(i);
+    for (const userIndex of userIndexes) {
+      preservedIndexSet.add(userIndex);
+    }
+    for (let i = conversationIndexes.length - 1; i >= 0; i -= 1) {
+      const index = conversationIndexes[i];
+      if (index === undefined) {
+        continue;
       }
+      preservedIndexSet.add(index);
       if (preservedIndexSet.size >= fallbackMessageCount) {
         break;
       }
