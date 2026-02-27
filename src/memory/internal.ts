@@ -17,6 +17,10 @@ export type MemoryChunk = {
   startLine: number;
   endLine: number;
   text: string;
+  /** Optional text used for embedding computation (e.g. with injected section title).
+   *  When present, embedding + hash are derived from this instead of text.
+   *  text remains the verbatim source slice for citations/snippets. */
+  embedText?: string;
   hash: string;
 };
 
@@ -248,16 +252,20 @@ export function chunkMarkdownBySection(content: string): MemoryChunk[] {
   // Generate chunks (sub-splitting large sections)
   const chunks: MemoryChunk[] = [];
 
-  const pushChunk = (chunkLines: string[], startLineNo: number): void => {
-    const text = chunkLines.join("\n").trim();
+  const pushChunk = (rawLines: string[], startLineNo: number, titlePrefix?: string): void => {
+    const text = rawLines.join("\n").trim();
     if (!text) {
       return;
     }
+    // embedText includes the section title for better retrieval; text is the verbatim slice for citations
+    const embedText = titlePrefix ? (titlePrefix + "\n" + text).trim() : undefined;
+    const hashSource = embedText ?? text;
     chunks.push({
       startLine: startLineNo,
-      endLine: startLineNo + chunkLines.length - 1,
+      endLine: startLineNo + rawLines.length - 1,
       text,
-      hash: hashText(text),
+      embedText,
+      hash: hashText(hashSource),
     });
   };
 
@@ -282,9 +290,8 @@ export function chunkMarkdownBySection(content: string): MemoryChunk[] {
           }
         }
         const subLines = sectionLines.slice(subStart, subEnd);
-        // Inject section title into continuation sub-chunks
-        const chunkLines = subStart > 0 && title ? [title, ...subLines] : subLines;
-        pushChunk(chunkLines, section.startIdx + subStart + 1);
+        // For continuation sub-chunks, inject section title into embedText (not text)
+        pushChunk(subLines, section.startIdx + subStart + 1, subStart > 0 ? title : undefined);
         subStart = subEnd;
       }
     }

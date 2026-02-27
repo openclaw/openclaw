@@ -252,15 +252,19 @@ describe("chunkMarkdown — section strategy", () => {
     expect(chunks.some((c) => c.text.includes("Section Two"))).toBe(true);
   });
 
-  it("injects section title into sub-chunks of large sections", () => {
+  it("injects section title into embedText of sub-chunks, not text", () => {
     const bigLines = Array.from({ length: 90 }, (_, i) => `line content ${i}`);
     const content = ["## Big Section", ...bigLines].join("\n");
 
     const chunks = chunkMarkdown(content, { tokens: 400, overlap: 0, strategy: "section" });
     expect(chunks.length).toBeGreaterThan(1);
-    // All continuation sub-chunks should start with the section title
+    // First chunk includes the heading naturally in text (no embedText needed)
+    expect(chunks[0].text).toContain("## Big Section");
+    expect(chunks[0].embedText).toBeUndefined();
+    // Continuation sub-chunks: text is the raw slice, embedText has the title
     for (let i = 1; i < chunks.length; i++) {
-      expect(chunks[i].text).toContain("## Big Section");
+      expect(chunks[i].text).not.toContain("## Big Section");
+      expect(chunks[i].embedText).toContain("## Big Section");
     }
   });
 
