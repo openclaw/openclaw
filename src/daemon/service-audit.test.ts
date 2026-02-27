@@ -1,3 +1,5 @@
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   auditGatewayServiceConfig,
@@ -84,8 +86,10 @@ describe("auditGatewayServiceConfig", () => {
   });
 
   it("does not flag gateway-command-missing when launcher matches installed command", async () => {
-    const home = process.env.HOME ?? "/tmp";
-    const launcherPath = `${home}/.openclaw/scripts/gateway-launcher.sh`;
+    // Use os.homedir() + path.join to match what resolveLauncherConfigPath produces
+    // (avoids forward-slash vs backslash mismatches on Windows).
+    const home = os.homedir();
+    const launcherPath = path.join(home, ".openclaw", "scripts", "gateway-launcher.sh");
     const audit = await auditGatewayServiceConfig({
       env: { HOME: home },
       platform: "darwin",

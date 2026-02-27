@@ -294,7 +294,8 @@ describe("buildGatewayInstallPlan — launcher config", () => {
       });
 
       expect(plan.programArguments).toHaveLength(1);
-      expect(plan.programArguments[0]).not.toContain("~");
+      // Verify tilde expansion happened (don't check for *any* ~, Windows 8.3 short names like RUNNER~1 contain ~).
+      expect(plan.programArguments[0]).not.toMatch(/^~[/\\]/);
       expect(plan.programArguments[0]).toBe(homeLauncher);
     } finally {
       fs.rmSync(homeSubdir, { recursive: true, force: true });
