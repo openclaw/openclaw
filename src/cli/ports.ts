@@ -165,11 +165,15 @@ export function listPortListeners(port: number): PortProcess[] {
       const results: PortProcess[] = [];
       for (const line of lines) {
         const parts = line.trim().split(/\s+/);
-        if (parts.length >= 5 && parts[3] === "LISTENING" && parts[1].endsWith(`:${port}`)) {
-          const pid = Number.parseInt(parts[4], 10);
-          if (!Number.isNaN(pid) && pid > 0) {
-            if (!results.some(p => p.pid === pid)) {
-              results.push({ pid });
+        if (parts.length >= 5 && parts[3] === "LISTENING") {
+          const localAddress = parts[1];
+          const addressPort = localAddress.split(":").pop();
+          if (addressPort === String(port)) {
+            const pid = Number.parseInt(parts[4], 10);
+            if (!Number.isNaN(pid) && pid > 0) {
+              if (!results.some((p) => p.pid === pid)) {
+                results.push({ pid });
+              }
             }
           }
         }
