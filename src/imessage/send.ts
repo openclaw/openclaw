@@ -2,8 +2,7 @@ import { loadConfig } from "../config/config.js";
 import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
 import { convertMarkdownTables } from "../markdown/tables.js";
 import { mediaKindFromMime } from "../media/constants.js";
-import { saveMediaBuffer } from "../media/store.js";
-import { loadWebMedia } from "../web/media.js";
+import { resolveOutboundAttachmentFromUrl } from "../media/outbound-attachment.js";
 import { resolveIMessageAccount, type ResolvedIMessageAccount } from "./accounts.js";
 import { createIMessageRpcClient, type IMessageRpcClient } from "./client.js";
 import { formatIMessageChatTarget, type IMessageService, parseIMessageTarget } from "./targets.js";
@@ -14,7 +13,9 @@ export type IMessageSendOpts = {
   service?: IMessageService;
   region?: string;
   accountId?: string;
+  replyToId?: string;
   mediaUrl?: string;
+  mediaLocalRoots?: readonly string[];
   maxBytes?: number;
   timeoutMs?: number;
   chatId?: number;
@@ -24,6 +25,7 @@ export type IMessageSendOpts = {
   resolveAttachmentImpl?: (
     mediaUrl: string,
     maxBytes: number,
+    options?: { localRoots?: readonly string[] },
   ) => Promise<{ path: string; contentType?: string }>;
   createClient?: (params: { cliPath: string; dbPath?: string }) => Promise<IMessageRpcClient>;
 };
@@ -31,6 +33,51 @@ export type IMessageSendOpts = {
 export type IMessageSendResult = {
   messageId: string;
 };
+
+const LEADING_REPLY_TAG_RE = /^\s*\[\[\s*reply_to\s*:\s*([^\]\n]+)\s*\]\]\s*/i;
+const MAX_REPLY_TO_ID_LENGTH = 256;
+
+function stripUnsafeReplyTagChars(value: string): string {
+  let next = "";
+  for (const ch of value) {
+    const code = ch.charCodeAt(0);
+    if ((code >= 0 && code <= 31) || code === 127 || ch === "[" || ch === "]") {
+      continue;
+    }
+    next += ch;
+  }
+  return next;
+}
+
+function sanitizeReplyToId(rawReplyToId?: string): string | undefined {
+  const trimmed = rawReplyToId?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const sanitized = stripUnsafeReplyTagChars(trimmed).trim();
+  if (!sanitized) {
+    return undefined;
+  }
+  if (sanitized.length > MAX_REPLY_TO_ID_LENGTH) {
+    return sanitized.slice(0, MAX_REPLY_TO_ID_LENGTH);
+  }
+  return sanitized;
+}
+
+function prependReplyTagIfNeeded(message: string, replyToId?: string): string {
+  const resolvedReplyToId = sanitizeReplyToId(replyToId);
+  if (!resolvedReplyToId) {
+    return message;
+  }
+  const replyTag = `[[reply_to:${resolvedReplyToId}]]`;
+  const existingLeadingTag = message.match(LEADING_REPLY_TAG_RE);
+  if (existingLeadingTag) {
+    const remainder = message.slice(existingLeadingTag[0].length).trimStart();
+    return remainder ? `${replyTag} ${remainder}` : replyTag;
+  }
+  const trimmedMessage = message.trimStart();
+  return trimmedMessage ? `${replyTag} ${trimmedMessage}` : replyTag;
+}
 
 function resolveMessageId(result: Record<string, unknown> | null | undefined): string | null {
   if (!result) {
@@ -44,20 +91,6 @@ function resolveMessageId(result: Record<string, unknown> | null | undefined): s
     (typeof result.message_id === "number" ? String(result.message_id) : null) ||
     (typeof result.id === "number" ? String(result.id) : null);
   return raw ? String(raw).trim() : null;
-}
-
-async function resolveAttachment(
-  mediaUrl: string,
-  maxBytes: number,
-): Promise<{ path: string; contentType?: string }> {
-  const media = await loadWebMedia(mediaUrl, maxBytes);
-  const saved = await saveMediaBuffer(
-    media.buffer,
-    media.contentType ?? undefined,
-    "outbound",
-    maxBytes,
-  );
-  return { path: saved.path, contentType: saved.contentType };
 }
 
 export async function sendMessageIMessage(
@@ -90,8 +123,10 @@ export async function sendMessageIMessage(
   let filePath: string | undefined;
 
   if (opts.mediaUrl?.trim()) {
-    const resolveAttachmentFn = opts.resolveAttachmentImpl ?? resolveAttachment;
-    const resolved = await resolveAttachmentFn(opts.mediaUrl.trim(), maxBytes);
+    const resolveAttachmentFn = opts.resolveAttachmentImpl ?? resolveOutboundAttachmentFromUrl;
+    const resolved = await resolveAttachmentFn(opts.mediaUrl.trim(), maxBytes, {
+      localRoots: opts.mediaLocalRoots,
+    });
     filePath = resolved.path;
     if (!message.trim()) {
       const kind = mediaKindFromMime(resolved.contentType ?? undefined);
@@ -112,6 +147,7 @@ export async function sendMessageIMessage(
     });
     message = convertMarkdownTables(message, tableMode);
   }
+  message = prependReplyTagIfNeeded(message, opts.replyToId);
 
   const params: Record<string, unknown> = {
     text: message,

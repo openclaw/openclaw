@@ -1,23 +1,8 @@
-import type { ResolvedGatewayAuth } from "../../auth.js";
 import { isGatewayCliClient, isWebchatClient } from "../../../utils/message-channel.js";
+import type { ResolvedGatewayAuth } from "../../auth.js";
 import { GATEWAY_CLIENT_IDS } from "../../protocol/client-info.js";
 
-export type AuthProvidedKind = "token" | "password" | "none";
-
-export function resolveHostName(hostHeader?: string): string {
-  const host = (hostHeader ?? "").trim().toLowerCase();
-  if (!host) {
-    return "";
-  }
-  if (host.startsWith("[")) {
-    const end = host.indexOf("]");
-    if (end !== -1) {
-      return host.slice(1, end);
-    }
-  }
-  const [name] = host.split(":");
-  return name ?? "";
-}
+export type AuthProvidedKind = "token" | "device-token" | "password" | "none";
 
 export function formatGatewayAuthFailureMessage(params: {
   authMode: ResolvedGatewayAuth["mode"];
@@ -71,6 +56,9 @@ export function formatGatewayAuthFailureMessage(params: {
 
   if (authMode === "token" && authProvided === "none") {
     return `unauthorized: gateway token missing (${tokenHint})`;
+  }
+  if (authMode === "token" && authProvided === "device-token") {
+    return "unauthorized: device token rejected (pair/repair this device, or provide gateway token)";
   }
   if (authMode === "password" && authProvided === "none") {
     return `unauthorized: gateway password missing (${passwordHint})`;

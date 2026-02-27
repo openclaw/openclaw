@@ -44,6 +44,16 @@ function readVersionFromJsonCandidates(
   }
 }
 
+function firstNonEmpty(...values: Array<string | undefined>): string | undefined {
+  for (const value of values) {
+    const trimmed = value?.trim();
+    if (trimmed) {
+      return trimmed;
+    }
+  }
+  return undefined;
+}
+
 export function readVersionFromPackageJsonForModuleUrl(moduleUrl: string): string | null {
   return readVersionFromJsonCandidates(moduleUrl, PACKAGE_JSON_CANDIDATES, {
     requirePackageName: true,
@@ -58,6 +68,23 @@ export function resolveVersionFromModuleUrl(moduleUrl: string): string | null {
   return (
     readVersionFromPackageJsonForModuleUrl(moduleUrl) ||
     readVersionFromBuildInfoForModuleUrl(moduleUrl)
+  );
+}
+
+export type RuntimeVersionEnv = {
+  [key: string]: string | undefined;
+};
+
+export function resolveRuntimeServiceVersion(
+  env: RuntimeVersionEnv = process.env as RuntimeVersionEnv,
+  fallback = "dev",
+): string {
+  return (
+    firstNonEmpty(
+      env["OPENCLAW_VERSION"],
+      env["OPENCLAW_SERVICE_VERSION"],
+      env["npm_package_version"],
+    ) ?? fallback
   );
 }
 

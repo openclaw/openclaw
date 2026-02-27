@@ -2,7 +2,19 @@ import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import readline from "node:readline";
+import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { resolveStateDir } from "../config/paths.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+import { isFileMissingError, statRegularFile } from "./fs-utils.js";
+import { deriveQmdScopeChannel, deriveQmdScopeChatType, isQmdScopeAllowed } from "./qmd-scope.js";
+import {
+  listSessionFilesForAgent,
+  buildSessionEntry,
+  type SessionFileEntry,
+} from "./session-files.js";
+import { requireNodeSqlite } from "./sqlite.js";
 import type {
   MemoryEmbeddingProbeResult,
   MemoryProviderStatus,
@@ -11,25 +23,95 @@ import type {
   MemorySource,
   MemorySyncProgressUpdate,
 } from "./types.js";
-import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
-import { resolveStateDir } from "../config/paths.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
-import { deriveQmdScopeChannel, deriveQmdScopeChatType, isQmdScopeAllowed } from "./qmd-scope.js";
-import {
-  listSessionFilesForAgent,
-  buildSessionEntry,
-  type SessionFileEntry,
-} from "./session-files.js";
-import { requireNodeSqlite } from "./sqlite.js";
 
 type SqliteDatabase = import("node:sqlite").DatabaseSync;
-import type { ResolvedMemoryBackendConfig, ResolvedQmdConfig } from "./backend-config.js";
-import { parseQmdQueryJson } from "./qmd-query-parser.js";
+import type {
+  ResolvedMemoryBackendConfig,
+  ResolvedQmdConfig,
+  ResolvedQmdMcporterConfig,
+} from "./backend-config.js";
+import { parseQmdQueryJson, type QmdQueryResult } from "./qmd-query-parser.js";
+import { extractKeywords } from "./query-expansion.js";
 
 const log = createSubsystemLogger("memory");
 
 const SNIPPET_HEADER_RE = /@@\s*-([0-9]+),([0-9]+)/;
 const SEARCH_PENDING_UPDATE_WAIT_MS = 500;
+const MAX_QMD_OUTPUT_CHARS = 200_000;
+const NUL_MARKER_RE = /(?:\^@|\\0|\\x00|\\u0000|null\s*byte|nul\s*byte)/i;
+const QMD_EMBED_BACKOFF_BASE_MS = 60_000;
+const QMD_EMBED_BACKOFF_MAX_MS = 60 * 60 * 1000;
+const HAN_SCRIPT_RE = /[\u3400-\u9fff]/u;
+const QMD_BM25_HAN_KEYWORD_LIMIT = 12;
+
+let qmdEmbedQueueTail: Promise<void> = Promise.resolve();
+
+function resolveWindowsCommandShim(command: string): string {
+  if (process.platform !== "win32") {
+    return command;
+  }
+  const trimmed = command.trim();
+  if (!trimmed) {
+    return command;
+  }
+  const ext = path.extname(trimmed).toLowerCase();
+  if (ext === ".cmd" || ext === ".exe" || ext === ".bat") {
+    return command;
+  }
+  const base = path.basename(trimmed).toLowerCase();
+  if (base === "qmd" || base === "mcporter") {
+    return `${trimmed}.cmd`;
+  }
+  return command;
+}
+
+function hasHanScript(value: string): boolean {
+  return HAN_SCRIPT_RE.test(value);
+}
+
+function normalizeHanBm25Query(query: string): string {
+  const trimmed = query.trim();
+  if (!trimmed || !hasHanScript(trimmed)) {
+    return trimmed;
+  }
+  const keywords = extractKeywords(trimmed);
+  const normalizedKeywords: string[] = [];
+  const seen = new Set<string>();
+  for (const keyword of keywords) {
+    const token = keyword.trim();
+    if (!token || seen.has(token)) {
+      continue;
+    }
+    const includesHan = hasHanScript(token);
+    // Han unigrams are usually too broad for BM25 and can drown signal.
+    if (includesHan && Array.from(token).length < 2) {
+      continue;
+    }
+    if (!includesHan && token.length < 2) {
+      continue;
+    }
+    seen.add(token);
+    normalizedKeywords.push(token);
+    if (normalizedKeywords.length >= QMD_BM25_HAN_KEYWORD_LIMIT) {
+      break;
+    }
+  }
+  return normalizedKeywords.length > 0 ? normalizedKeywords.join(" ") : trimmed;
+}
+
+async function runWithQmdEmbedLock<T>(task: () => Promise<T>): Promise<T> {
+  const previous = qmdEmbedQueueTail;
+  let release: (() => void) | undefined;
+  qmdEmbedQueueTail = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await previous.catch(() => undefined);
+  try {
+    return await task();
+  } finally {
+    release?.();
+  }
+}
 
 type CollectionRoot = {
   path: string;
@@ -42,18 +124,33 @@ type SessionExporterConfig = {
   collectionName: string;
 };
 
+type ListedCollection = {
+  path?: string;
+  pattern?: string;
+};
+
+type ManagedCollection = {
+  name: string;
+  path: string;
+  pattern: string;
+  kind: "memory" | "custom" | "sessions";
+};
+
+type QmdManagerMode = "full" | "status";
+
 export class QmdMemoryManager implements MemorySearchManager {
   static async create(params: {
     cfg: OpenClawConfig;
     agentId: string;
     resolved: ResolvedMemoryBackendConfig;
+    mode?: QmdManagerMode;
   }): Promise<QmdMemoryManager | null> {
     const resolved = params.resolved.qmd;
     if (!resolved) {
       return null;
     }
     const manager = new QmdMemoryManager({ cfg: params.cfg, agentId: params.agentId, resolved });
-    await manager.initialize();
+    await manager.initialize(params.mode ?? "full");
     return manager;
   }
 
@@ -74,6 +171,15 @@ export class QmdMemoryManager implements MemorySearchManager {
     string,
     { rel: string; abs: string; source: MemorySource }
   >();
+  private readonly exportedSessionState = new Map<
+    string,
+    {
+      hash: string;
+      mtimeMs: number;
+      target: string;
+    }
+  >();
+  private readonly maxQmdOutputChars = MAX_QMD_OUTPUT_CHARS;
   private readonly sessionExporter: SessionExporterConfig | null;
   private updateTimer: NodeJS.Timeout | null = null;
   private pendingUpdate: Promise<void> | null = null;
@@ -83,6 +189,9 @@ export class QmdMemoryManager implements MemorySearchManager {
   private db: SqliteDatabase | null = null;
   private lastUpdateAt: number | null = null;
   private lastEmbedAt: number | null = null;
+  private embedBackoffUntil: number | null = null;
+  private embedFailureCount = 0;
+  private attemptedNullByteCollectionRepair = false;
 
   private constructor(params: {
     cfg: OpenClawConfig;
@@ -132,10 +241,18 @@ export class QmdMemoryManager implements MemorySearchManager {
     }
   }
 
-  private async initialize(): Promise<void> {
+  private async initialize(mode: QmdManagerMode): Promise<void> {
+    this.bootstrapCollections();
+    if (mode === "status") {
+      return;
+    }
+
     await fs.mkdir(this.xdgConfigHome, { recursive: true });
     await fs.mkdir(this.xdgCacheHome, { recursive: true });
     await fs.mkdir(path.dirname(this.indexPath), { recursive: true });
+    if (this.sessionExporter) {
+      await fs.mkdir(this.sessionExporter.dir, { recursive: true });
+    }
 
     // QMD stores its ML models under $XDG_CACHE_HOME/qmd/models/.  Because we
     // override XDG_CACHE_HOME to isolate the index per-agent, qmd would not
@@ -145,7 +262,6 @@ export class QmdMemoryManager implements MemorySearchManager {
     // isolated while models are shared.
     await this.symlinkSharedModels();
 
-    this.bootstrapCollections();
     await this.ensureCollections();
 
     if (this.qmd.update.onBoot) {
@@ -183,59 +299,310 @@ export class QmdMemoryManager implements MemorySearchManager {
     // QMD collections are persisted inside the index database and must be created
     // via the CLI. Prefer listing existing collections when supported, otherwise
     // fall back to best-effort idempotent `qmd collection add`.
-    const existing = new Set<string>();
+    const existing = new Map<string, ListedCollection>();
     try {
       const result = await this.runQmd(["collection", "list", "--json"], {
         timeoutMs: this.qmd.update.commandTimeoutMs,
       });
-      const parsed = JSON.parse(result.stdout) as unknown;
-      if (Array.isArray(parsed)) {
-        for (const entry of parsed) {
-          if (typeof entry === "string") {
-            existing.add(entry);
-          } else if (entry && typeof entry === "object") {
-            const name = (entry as { name?: unknown }).name;
-            if (typeof name === "string") {
-              existing.add(name);
-            }
-          }
-        }
+      const parsed = this.parseListedCollections(result.stdout);
+      for (const [name, details] of parsed) {
+        existing.set(name, details);
       }
     } catch {
       // ignore; older qmd versions might not support list --json.
     }
 
+    await this.migrateLegacyUnscopedCollections(existing);
+
     for (const collection of this.qmd.collections) {
-      if (existing.has(collection.name)) {
+      const listed = existing.get(collection.name);
+      if (listed && !this.shouldRebindCollection(collection, listed)) {
         continue;
       }
+      if (listed) {
+        try {
+          await this.removeCollection(collection.name);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          if (!this.isCollectionMissingError(message)) {
+            log.warn(`qmd collection remove failed for ${collection.name}: ${message}`);
+          }
+        }
+      }
       try {
-        await this.runQmd(
-          [
-            "collection",
-            "add",
-            collection.path,
-            "--name",
-            collection.name,
-            "--mask",
-            collection.pattern,
-          ],
-          {
-            timeoutMs: this.qmd.update.commandTimeoutMs,
-          },
-        );
+        await this.ensureCollectionPath(collection);
+        await this.addCollection(collection.path, collection.name, collection.pattern);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        // Idempotency: qmd exits non-zero if the collection name already exists.
-        if (message.toLowerCase().includes("already exists")) {
-          continue;
-        }
-        if (message.toLowerCase().includes("exists")) {
+        if (this.isCollectionAlreadyExistsError(message)) {
           continue;
         }
         log.warn(`qmd collection add failed for ${collection.name}: ${message}`);
       }
     }
+  }
+
+  private async migrateLegacyUnscopedCollections(
+    existing: Map<string, ListedCollection>,
+  ): Promise<void> {
+    for (const collection of this.qmd.collections) {
+      if (existing.has(collection.name)) {
+        continue;
+      }
+      const legacyName = this.deriveLegacyCollectionName(collection.name);
+      if (!legacyName) {
+        continue;
+      }
+      const listedLegacy = existing.get(legacyName);
+      if (!listedLegacy) {
+        continue;
+      }
+      if (!this.canMigrateLegacyCollection(collection, listedLegacy)) {
+        log.debug(
+          `qmd legacy collection migration skipped for ${legacyName} (path/pattern mismatch)`,
+        );
+        continue;
+      }
+      try {
+        await this.removeCollection(legacyName);
+        existing.delete(legacyName);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        if (!this.isCollectionMissingError(message)) {
+          log.warn(`qmd collection remove failed for ${legacyName}: ${message}`);
+        }
+      }
+    }
+  }
+
+  private deriveLegacyCollectionName(scopedName: string): string | null {
+    const agentSuffix = `-${this.sanitizeCollectionNameSegment(this.agentId)}`;
+    if (!scopedName.endsWith(agentSuffix)) {
+      return null;
+    }
+    const legacyName = scopedName.slice(0, -agentSuffix.length).trim();
+    return legacyName || null;
+  }
+
+  private canMigrateLegacyCollection(
+    collection: ManagedCollection,
+    listedLegacy: ListedCollection,
+  ): boolean {
+    if (listedLegacy.path && !this.pathsMatch(listedLegacy.path, collection.path)) {
+      return false;
+    }
+    if (typeof listedLegacy.pattern === "string" && listedLegacy.pattern !== collection.pattern) {
+      return false;
+    }
+    return true;
+  }
+
+  private async ensureCollectionPath(collection: {
+    path: string;
+    pattern: string;
+    kind: "memory" | "custom" | "sessions";
+  }): Promise<void> {
+    if (!this.isDirectoryGlobPattern(collection.pattern)) {
+      return;
+    }
+    await fs.mkdir(collection.path, { recursive: true });
+  }
+
+  private isDirectoryGlobPattern(pattern: string): boolean {
+    return pattern.includes("*") || pattern.includes("?") || pattern.includes("[");
+  }
+
+  private isCollectionAlreadyExistsError(message: string): boolean {
+    const lower = message.toLowerCase();
+    return lower.includes("already exists") || lower.includes("exists");
+  }
+
+  private isCollectionMissingError(message: string): boolean {
+    const lower = message.toLowerCase();
+    return (
+      lower.includes("not found") || lower.includes("does not exist") || lower.includes("missing")
+    );
+  }
+
+  private isMissingCollectionSearchError(err: unknown): boolean {
+    const message = err instanceof Error ? err.message : String(err);
+    return this.isCollectionMissingError(message) && message.toLowerCase().includes("collection");
+  }
+
+  private async tryRepairMissingCollectionSearch(err: unknown): Promise<boolean> {
+    if (!this.isMissingCollectionSearchError(err)) {
+      return false;
+    }
+    log.warn(
+      "qmd search failed because a managed collection is missing; repairing collections and retrying once",
+    );
+    await this.ensureCollections();
+    return true;
+  }
+
+  private async addCollection(pathArg: string, name: string, pattern: string): Promise<void> {
+    await this.runQmd(["collection", "add", pathArg, "--name", name, "--mask", pattern], {
+      timeoutMs: this.qmd.update.commandTimeoutMs,
+    });
+  }
+
+  private async removeCollection(name: string): Promise<void> {
+    await this.runQmd(["collection", "remove", name], {
+      timeoutMs: this.qmd.update.commandTimeoutMs,
+    });
+  }
+
+  private parseListedCollections(output: string): Map<string, ListedCollection> {
+    const listed = new Map<string, ListedCollection>();
+    const trimmed = output.trim();
+    if (!trimmed) {
+      return listed;
+    }
+    try {
+      const parsed = JSON.parse(trimmed) as unknown;
+      if (Array.isArray(parsed)) {
+        for (const entry of parsed) {
+          if (typeof entry === "string") {
+            listed.set(entry, {});
+            continue;
+          }
+          if (!entry || typeof entry !== "object") {
+            continue;
+          }
+          const name = (entry as { name?: unknown }).name;
+          if (typeof name !== "string") {
+            continue;
+          }
+          const listedPath = (entry as { path?: unknown }).path;
+          const listedPattern = (entry as { pattern?: unknown; mask?: unknown }).pattern;
+          const listedMask = (entry as { mask?: unknown }).mask;
+          listed.set(name, {
+            path: typeof listedPath === "string" ? listedPath : undefined,
+            pattern:
+              typeof listedPattern === "string"
+                ? listedPattern
+                : typeof listedMask === "string"
+                  ? listedMask
+                  : undefined,
+          });
+        }
+        return listed;
+      }
+    } catch {
+      // Some qmd builds ignore `--json` and still print table output.
+    }
+
+    let currentName: string | null = null;
+    for (const rawLine of output.split(/\r?\n/)) {
+      const line = rawLine.trimEnd();
+      if (!line.trim()) {
+        currentName = null;
+        continue;
+      }
+      const collectionLine = /^\s*([a-z0-9._-]+)\s+\(qmd:\/\/[^)]+\)\s*$/i.exec(line);
+      if (collectionLine) {
+        currentName = collectionLine[1];
+        if (!listed.has(currentName)) {
+          listed.set(currentName, {});
+        }
+        continue;
+      }
+      if (/^\s*collections\b/i.test(line)) {
+        continue;
+      }
+      const bareNameLine = /^\s*([a-z0-9._-]+)\s*$/i.exec(line);
+      if (bareNameLine && !line.includes(":")) {
+        currentName = bareNameLine[1];
+        if (!listed.has(currentName)) {
+          listed.set(currentName, {});
+        }
+        continue;
+      }
+      if (!currentName) {
+        continue;
+      }
+      const patternLine = /^\s*(?:pattern|mask)\s*:\s*(.+?)\s*$/i.exec(line);
+      if (patternLine) {
+        const existing = listed.get(currentName) ?? {};
+        existing.pattern = patternLine[1].trim();
+        listed.set(currentName, existing);
+        continue;
+      }
+      const pathLine = /^\s*path\s*:\s*(.+?)\s*$/i.exec(line);
+      if (pathLine) {
+        const existing = listed.get(currentName) ?? {};
+        existing.path = pathLine[1].trim();
+        listed.set(currentName, existing);
+      }
+    }
+    return listed;
+  }
+
+  private shouldRebindCollection(collection: ManagedCollection, listed: ListedCollection): boolean {
+    if (!listed.path) {
+      // Older qmd versions may only return names from `collection list --json`.
+      // Rebind managed collections so stale path bindings cannot survive upgrades.
+      return true;
+    }
+    if (!this.pathsMatch(listed.path, collection.path)) {
+      return true;
+    }
+    if (typeof listed.pattern === "string" && listed.pattern !== collection.pattern) {
+      return true;
+    }
+    return false;
+  }
+
+  private pathsMatch(left: string, right: string): boolean {
+    const normalize = (value: string): string => {
+      const resolved = path.isAbsolute(value)
+        ? path.resolve(value)
+        : path.resolve(this.workspaceDir, value);
+      const normalized = path.normalize(resolved);
+      return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+    };
+    return normalize(left) === normalize(right);
+  }
+
+  private shouldRepairNullByteCollectionError(err: unknown): boolean {
+    const message = err instanceof Error ? err.message : String(err);
+    const lower = message.toLowerCase();
+    return (
+      (lower.includes("enotdir") || lower.includes("not a directory")) &&
+      NUL_MARKER_RE.test(message)
+    );
+  }
+
+  private async tryRepairNullByteCollections(err: unknown, reason: string): Promise<boolean> {
+    if (this.attemptedNullByteCollectionRepair) {
+      return false;
+    }
+    if (!this.shouldRepairNullByteCollectionError(err)) {
+      return false;
+    }
+    this.attemptedNullByteCollectionRepair = true;
+    log.warn(
+      `qmd update failed with suspected null-byte collection metadata (${reason}); rebuilding managed collections and retrying once`,
+    );
+    for (const collection of this.qmd.collections) {
+      try {
+        await this.removeCollection(collection.name);
+      } catch (removeErr) {
+        const removeMessage = removeErr instanceof Error ? removeErr.message : String(removeErr);
+        if (!this.isCollectionMissingError(removeMessage)) {
+          log.warn(`qmd collection remove failed for ${collection.name}: ${removeMessage}`);
+        }
+      }
+      try {
+        await this.addCollection(collection.path, collection.name, collection.pattern);
+      } catch (addErr) {
+        const addMessage = addErr instanceof Error ? addErr.message : String(addErr);
+        if (!this.isCollectionAlreadyExistsError(addMessage)) {
+          log.warn(`qmd collection add failed for ${collection.name}: ${addMessage}`);
+        }
+      }
+    }
+    return true;
   }
 
   async search(
@@ -255,48 +622,106 @@ export class QmdMemoryManager implements MemorySearchManager {
       this.qmd.limits.maxResults,
       opts?.maxResults ?? this.qmd.limits.maxResults,
     );
-    const collectionFilterArgs = this.buildCollectionFilterArgs();
-    if (collectionFilterArgs.length === 0) {
+    const collectionNames = this.listManagedCollectionNames();
+    if (collectionNames.length === 0) {
       log.warn("qmd query skipped: no managed collections configured");
       return [];
     }
     const qmdSearchCommand = this.qmd.searchMode;
-    const args = this.buildSearchArgs(qmdSearchCommand, trimmed, limit);
-    if (qmdSearchCommand === "query") {
-      args.push(...collectionFilterArgs);
-    }
-    let stdout: string;
-    let stderr: string;
-    try {
-      const result = await this.runQmd(args, { timeoutMs: this.qmd.limits.timeoutMs });
-      stdout = result.stdout;
-      stderr = result.stderr;
-    } catch (err) {
-      if (qmdSearchCommand !== "query" && this.isUnsupportedQmdOptionError(err)) {
-        log.warn(
-          `qmd ${qmdSearchCommand} does not support configured flags; retrying search with qmd query`,
-        );
-        try {
-          const fallbackArgs = this.buildSearchArgs("query", trimmed, limit);
-          fallbackArgs.push(...collectionFilterArgs);
-          const fallback = await this.runQmd(fallbackArgs, {
+    const mcporterEnabled = this.qmd.mcporter.enabled;
+    const runSearchAttempt = async (
+      allowMissingCollectionRepair: boolean,
+    ): Promise<QmdQueryResult[]> => {
+      try {
+        if (mcporterEnabled) {
+          const tool: "search" | "vector_search" | "deep_search" =
+            qmdSearchCommand === "search"
+              ? "search"
+              : qmdSearchCommand === "vsearch"
+                ? "vector_search"
+                : "deep_search";
+          const minScore = opts?.minScore ?? 0;
+          if (collectionNames.length > 1) {
+            return await this.runMcporterAcrossCollections({
+              tool,
+              query: trimmed,
+              limit,
+              minScore,
+              collectionNames,
+            });
+          }
+          return await this.runQmdSearchViaMcporter({
+            mcporter: this.qmd.mcporter,
+            tool,
+            query: trimmed,
+            limit,
+            minScore,
+            collection: collectionNames[0],
             timeoutMs: this.qmd.limits.timeoutMs,
           });
-          stdout = fallback.stdout;
-          stderr = fallback.stderr;
-        } catch (fallbackErr) {
-          log.warn(`qmd query fallback failed: ${String(fallbackErr)}`);
-          throw fallbackErr instanceof Error ? fallbackErr : new Error(String(fallbackErr));
         }
-      } else {
-        log.warn(`qmd ${qmdSearchCommand} failed: ${String(err)}`);
+        if (collectionNames.length > 1) {
+          return await this.runQueryAcrossCollections(
+            trimmed,
+            limit,
+            collectionNames,
+            qmdSearchCommand,
+          );
+        }
+        const args = this.buildSearchArgs(qmdSearchCommand, trimmed, limit);
+        args.push(...this.buildCollectionFilterArgs(collectionNames));
+        // Always scope to managed collections (default + custom). Even for `search`/`vsearch`,
+        // pass collection filters; if a given QMD build rejects these flags, we fall back to `query`.
+        const result = await this.runQmd(args, { timeoutMs: this.qmd.limits.timeoutMs });
+        return parseQmdQueryJson(result.stdout, result.stderr);
+      } catch (err) {
+        if (allowMissingCollectionRepair && this.isMissingCollectionSearchError(err)) {
+          throw err;
+        }
+        if (
+          !mcporterEnabled &&
+          qmdSearchCommand !== "query" &&
+          this.isUnsupportedQmdOptionError(err)
+        ) {
+          log.warn(
+            `qmd ${qmdSearchCommand} does not support configured flags; retrying search with qmd query`,
+          );
+          try {
+            if (collectionNames.length > 1) {
+              return await this.runQueryAcrossCollections(trimmed, limit, collectionNames, "query");
+            }
+            const fallbackArgs = this.buildSearchArgs("query", trimmed, limit);
+            fallbackArgs.push(...this.buildCollectionFilterArgs(collectionNames));
+            const fallback = await this.runQmd(fallbackArgs, {
+              timeoutMs: this.qmd.limits.timeoutMs,
+            });
+            return parseQmdQueryJson(fallback.stdout, fallback.stderr);
+          } catch (fallbackErr) {
+            log.warn(`qmd query fallback failed: ${String(fallbackErr)}`);
+            throw fallbackErr instanceof Error ? fallbackErr : new Error(String(fallbackErr));
+          }
+        }
+        const label = mcporterEnabled ? "mcporter/qmd" : `qmd ${qmdSearchCommand}`;
+        log.warn(`${label} failed: ${String(err)}`);
         throw err instanceof Error ? err : new Error(String(err));
       }
+    };
+
+    let parsed: QmdQueryResult[];
+    try {
+      parsed = await runSearchAttempt(true);
+    } catch (err) {
+      if (!(await this.tryRepairMissingCollectionSearch(err))) {
+        throw err instanceof Error ? err : new Error(String(err));
+      }
+      parsed = await runSearchAttempt(false);
     }
-    const parsed = parseQmdQueryJson(stdout, stderr);
     const results: MemorySearchResult[] = [];
     for (const entry of parsed) {
-      const doc = await this.resolveDocLocation(entry.docid);
+      const doc = await this.resolveDocLocation(entry.docid, {
+        preferredCollection: entry.collection,
+        preferredFile: entry.file,
+      });
       if (!doc) {
         continue;
       }
@@ -316,7 +741,7 @@ export class QmdMemoryManager implements MemorySearchManager {
         source: doc.source,
       });
     }
-    return this.clampResultsByInjectedChars(results.slice(0, limit));
+    return this.clampResultsByInjectedChars(this.diversifyResultsBySource(results, limit));
   }
 
   async sync(params?: {
@@ -346,15 +771,25 @@ export class QmdMemoryManager implements MemorySearchManager {
     if (!absPath.endsWith(".md")) {
       throw new Error("path required");
     }
-    const stat = await fs.lstat(absPath);
-    if (stat.isSymbolicLink() || !stat.isFile()) {
-      throw new Error("path required");
+    const statResult = await statRegularFile(absPath);
+    if (statResult.missing) {
+      return { text: "", path: relPath };
     }
-    const content = await fs.readFile(absPath, "utf-8");
+    if (params.from !== undefined || params.lines !== undefined) {
+      const partial = await this.readPartialText(absPath, params.from, params.lines);
+      if (partial.missing) {
+        return { text: "", path: relPath };
+      }
+      return { text: partial.text, path: relPath };
+    }
+    const full = await this.readFullText(absPath);
+    if (full.missing) {
+      return { text: "", path: relPath };
+    }
     if (!params.from && !params.lines) {
-      return { text: content, path: relPath };
+      return { text: full.text, path: relPath };
     }
-    const lines = content.split("\n");
+    const lines = full.text.split("\n");
     const start = Math.max(1, params.from ?? 1);
     const count = Math.max(1, params.lines ?? lines.length);
     const slice = lines.slice(start - 1, start - 1 + count);
@@ -447,18 +882,17 @@ export class QmdMemoryManager implements MemorySearchManager {
       if (this.sessionExporter) {
         await this.exportSessions();
       }
-      await this.runQmd(["update"], { timeoutMs: this.qmd.update.updateTimeoutMs });
-      const embedIntervalMs = this.qmd.update.embedIntervalMs;
-      const shouldEmbed =
-        Boolean(force) ||
-        this.lastEmbedAt === null ||
-        (embedIntervalMs > 0 && Date.now() - this.lastEmbedAt > embedIntervalMs);
-      if (shouldEmbed) {
+      await this.runQmdUpdateWithRetry(reason);
+      if (this.shouldRunEmbed(force)) {
         try {
-          await this.runQmd(["embed"], { timeoutMs: this.qmd.update.embedTimeoutMs });
+          await runWithQmdEmbedLock(async () => {
+            await this.runQmd(["embed"], { timeoutMs: this.qmd.update.embedTimeoutMs });
+          });
           this.lastEmbedAt = Date.now();
+          this.embedBackoffUntil = null;
+          this.embedFailureCount = 0;
         } catch (err) {
-          log.warn(`qmd embed failed (${reason}): ${String(err)}`);
+          this.noteEmbedFailure(reason, err);
         }
       }
       this.lastUpdateAt = Date.now();
@@ -468,6 +902,74 @@ export class QmdMemoryManager implements MemorySearchManager {
       this.pendingUpdate = null;
     });
     await this.pendingUpdate;
+  }
+
+  private async runQmdUpdateWithRetry(reason: string): Promise<void> {
+    const isBootRun = reason === "boot" || reason.startsWith("boot:");
+    const maxAttempts = isBootRun ? 3 : 1;
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      try {
+        await this.runQmdUpdateOnce(reason);
+        return;
+      } catch (err) {
+        if (attempt >= maxAttempts || !this.isRetryableUpdateError(err)) {
+          throw err;
+        }
+        const delayMs = 500 * 2 ** (attempt - 1);
+        log.warn(
+          `qmd update retry ${attempt}/${maxAttempts - 1} after failure (${reason}): ${String(err)}`,
+        );
+        await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+      }
+    }
+  }
+
+  private async runQmdUpdateOnce(reason: string): Promise<void> {
+    try {
+      await this.runQmd(["update"], { timeoutMs: this.qmd.update.updateTimeoutMs });
+    } catch (err) {
+      if (!(await this.tryRepairNullByteCollections(err, reason))) {
+        throw err;
+      }
+      await this.runQmd(["update"], { timeoutMs: this.qmd.update.updateTimeoutMs });
+    }
+  }
+
+  private isRetryableUpdateError(err: unknown): boolean {
+    if (this.isSqliteBusyError(err)) {
+      return true;
+    }
+    const message = err instanceof Error ? err.message : String(err);
+    const normalized = message.toLowerCase();
+    return normalized.includes("timed out");
+  }
+
+  private shouldRunEmbed(force?: boolean): boolean {
+    if (this.qmd.searchMode === "search") {
+      return false;
+    }
+    const now = Date.now();
+    if (this.embedBackoffUntil !== null && now < this.embedBackoffUntil) {
+      return false;
+    }
+    const embedIntervalMs = this.qmd.update.embedIntervalMs;
+    return (
+      Boolean(force) ||
+      this.lastEmbedAt === null ||
+      (embedIntervalMs > 0 && now - this.lastEmbedAt > embedIntervalMs)
+    );
+  }
+
+  private noteEmbedFailure(reason: string, err: unknown): void {
+    this.embedFailureCount += 1;
+    const delayMs = Math.min(
+      QMD_EMBED_BACKOFF_MAX_MS,
+      QMD_EMBED_BACKOFF_BASE_MS * 2 ** Math.max(0, this.embedFailureCount - 1),
+    );
+    this.embedBackoffUntil = Date.now() + delayMs;
+    log.warn(
+      `qmd embed failed (${reason}): ${String(err)}; backing off for ${Math.ceil(delayMs / 1000)}s`,
+    );
   }
 
   private enqueueForcedUpdate(reason: string): Promise<void> {
@@ -555,12 +1057,14 @@ export class QmdMemoryManager implements MemorySearchManager {
     opts?: { timeoutMs?: number },
   ): Promise<{ stdout: string; stderr: string }> {
     return await new Promise((resolve, reject) => {
-      const child = spawn(this.qmd.command, args, {
+      const child = spawn(resolveWindowsCommandShim(this.qmd.command), args, {
         env: this.env,
         cwd: this.workspaceDir,
       });
       let stdout = "";
       let stderr = "";
+      let stdoutTruncated = false;
+      let stderrTruncated = false;
       const timer = opts?.timeoutMs
         ? setTimeout(() => {
             child.kill("SIGKILL");
@@ -568,10 +1072,14 @@ export class QmdMemoryManager implements MemorySearchManager {
           }, opts.timeoutMs)
         : null;
       child.stdout.on("data", (data) => {
-        stdout += data.toString();
+        const next = appendOutputWithCap(stdout, data.toString("utf8"), this.maxQmdOutputChars);
+        stdout = next.text;
+        stdoutTruncated = stdoutTruncated || next.truncated;
       });
       child.stderr.on("data", (data) => {
-        stderr += data.toString();
+        const next = appendOutputWithCap(stderr, data.toString("utf8"), this.maxQmdOutputChars);
+        stderr = next.text;
+        stderrTruncated = stderrTruncated || next.truncated;
       });
       child.on("error", (err) => {
         if (timer) {
@@ -583,6 +1091,14 @@ export class QmdMemoryManager implements MemorySearchManager {
         if (timer) {
           clearTimeout(timer);
         }
+        if (stdoutTruncated || stderrTruncated) {
+          reject(
+            new Error(
+              `qmd ${args.join(" ")} produced too much output (limit ${this.maxQmdOutputChars} chars)`,
+            ),
+          );
+          return;
+        }
         if (code === 0) {
           resolve({ stdout, stderr });
         } else {
@@ -590,6 +1106,224 @@ export class QmdMemoryManager implements MemorySearchManager {
         }
       });
     });
+  }
+
+  private async ensureMcporterDaemonStarted(mcporter: ResolvedQmdMcporterConfig): Promise<void> {
+    if (!mcporter.enabled) {
+      return;
+    }
+    if (!mcporter.startDaemon) {
+      type McporterWarnGlobal = typeof globalThis & {
+        __openclawMcporterColdStartWarned?: boolean;
+      };
+      const g: McporterWarnGlobal = globalThis;
+      if (!g.__openclawMcporterColdStartWarned) {
+        g.__openclawMcporterColdStartWarned = true;
+        log.warn(
+          "mcporter qmd bridge enabled but startDaemon=false; each query may cold-start QMD MCP. Consider setting memory.qmd.mcporter.startDaemon=true to keep it warm.",
+        );
+      }
+      return;
+    }
+    type McporterGlobal = typeof globalThis & {
+      __openclawMcporterDaemonStart?: Promise<void>;
+    };
+    const g: McporterGlobal = globalThis;
+    if (!g.__openclawMcporterDaemonStart) {
+      g.__openclawMcporterDaemonStart = (async () => {
+        try {
+          await this.runMcporter(["daemon", "start"], { timeoutMs: 10_000 });
+        } catch (err) {
+          log.warn(`mcporter daemon start failed: ${String(err)}`);
+          // Allow future searches to retry daemon start on transient failures.
+          delete g.__openclawMcporterDaemonStart;
+        }
+      })();
+    }
+    await g.__openclawMcporterDaemonStart;
+  }
+
+  private async runMcporter(
+    args: string[],
+    opts?: { timeoutMs?: number },
+  ): Promise<{ stdout: string; stderr: string }> {
+    return await new Promise((resolve, reject) => {
+      const child = spawn(resolveWindowsCommandShim("mcporter"), args, {
+        // Keep mcporter and direct qmd commands on the same agent-scoped XDG state.
+        env: this.env,
+        cwd: this.workspaceDir,
+      });
+      let stdout = "";
+      let stderr = "";
+      let stdoutTruncated = false;
+      let stderrTruncated = false;
+      const timer = opts?.timeoutMs
+        ? setTimeout(() => {
+            child.kill("SIGKILL");
+            reject(new Error(`mcporter ${args.join(" ")} timed out after ${opts.timeoutMs}ms`));
+          }, opts.timeoutMs)
+        : null;
+      child.stdout.on("data", (data) => {
+        const next = appendOutputWithCap(stdout, data.toString("utf8"), this.maxQmdOutputChars);
+        stdout = next.text;
+        stdoutTruncated = stdoutTruncated || next.truncated;
+      });
+      child.stderr.on("data", (data) => {
+        const next = appendOutputWithCap(stderr, data.toString("utf8"), this.maxQmdOutputChars);
+        stderr = next.text;
+        stderrTruncated = stderrTruncated || next.truncated;
+      });
+      child.on("error", (err) => {
+        if (timer) {
+          clearTimeout(timer);
+        }
+        reject(err);
+      });
+      child.on("close", (code) => {
+        if (timer) {
+          clearTimeout(timer);
+        }
+        if (stdoutTruncated || stderrTruncated) {
+          reject(
+            new Error(
+              `mcporter ${args.join(" ")} produced too much output (limit ${this.maxQmdOutputChars} chars)`,
+            ),
+          );
+          return;
+        }
+        if (code === 0) {
+          resolve({ stdout, stderr });
+        } else {
+          reject(
+            new Error(`mcporter ${args.join(" ")} failed (code ${code}): ${stderr || stdout}`),
+          );
+        }
+      });
+    });
+  }
+
+  private async runQmdSearchViaMcporter(params: {
+    mcporter: ResolvedQmdMcporterConfig;
+    tool: "search" | "vector_search" | "deep_search";
+    query: string;
+    limit: number;
+    minScore: number;
+    collection?: string;
+    timeoutMs: number;
+  }): Promise<QmdQueryResult[]> {
+    await this.ensureMcporterDaemonStarted(params.mcporter);
+
+    const selector = `${params.mcporter.serverName}.${params.tool}`;
+    const callArgs: Record<string, unknown> = {
+      query: params.query,
+      limit: params.limit,
+      minScore: params.minScore,
+    };
+    if (params.collection) {
+      callArgs.collection = params.collection;
+    }
+
+    const result = await this.runMcporter(
+      [
+        "call",
+        selector,
+        "--args",
+        JSON.stringify(callArgs),
+        "--output",
+        "json",
+        "--timeout",
+        String(Math.max(0, params.timeoutMs)),
+      ],
+      { timeoutMs: Math.max(params.timeoutMs + 2_000, 5_000) },
+    );
+
+    const parsedUnknown: unknown = JSON.parse(result.stdout);
+    const isRecord = (value: unknown): value is Record<string, unknown> =>
+      typeof value === "object" && value !== null && !Array.isArray(value);
+
+    const structured =
+      isRecord(parsedUnknown) && isRecord(parsedUnknown.structuredContent)
+        ? parsedUnknown.structuredContent
+        : parsedUnknown;
+
+    const results: unknown[] =
+      isRecord(structured) && Array.isArray(structured.results)
+        ? (structured.results as unknown[])
+        : Array.isArray(structured)
+          ? structured
+          : [];
+
+    const out: QmdQueryResult[] = [];
+    for (const item of results) {
+      if (!isRecord(item)) {
+        continue;
+      }
+      const docidRaw = item.docid;
+      const docid = typeof docidRaw === "string" ? docidRaw.replace(/^#/, "").trim() : "";
+      if (!docid) {
+        continue;
+      }
+      const scoreRaw = item.score;
+      const score = typeof scoreRaw === "number" ? scoreRaw : Number(scoreRaw);
+      const snippet = typeof item.snippet === "string" ? item.snippet : "";
+      out.push({ docid, score: Number.isFinite(score) ? score : 0, snippet });
+    }
+    return out;
+  }
+
+  private async readPartialText(
+    absPath: string,
+    from?: number,
+    lines?: number,
+  ): Promise<{ missing: true } | { missing: false; text: string }> {
+    const start = Math.max(1, from ?? 1);
+    const count = Math.max(1, lines ?? Number.POSITIVE_INFINITY);
+    let handle;
+    try {
+      handle = await fs.open(absPath);
+    } catch (err) {
+      if (isFileMissingError(err)) {
+        return { missing: true };
+      }
+      throw err;
+    }
+    const stream = handle.createReadStream({ encoding: "utf-8" });
+    const rl = readline.createInterface({
+      input: stream,
+      crlfDelay: Infinity,
+    });
+    const selected: string[] = [];
+    let index = 0;
+    try {
+      for await (const line of rl) {
+        index += 1;
+        if (index < start) {
+          continue;
+        }
+        if (selected.length >= count) {
+          break;
+        }
+        selected.push(line);
+      }
+    } finally {
+      rl.close();
+      await handle.close();
+    }
+    return { missing: false, text: selected.slice(0, count).join("\n") };
+  }
+
+  private async readFullText(
+    absPath: string,
+  ): Promise<{ missing: true } | { missing: false; text: string }> {
+    try {
+      const text = await fs.readFile(absPath, "utf-8");
+      return { missing: false, text };
+    } catch (err) {
+      if (isFileMissingError(err)) {
+        return { missing: true };
+      }
+      throw err;
+    }
   }
 
   private ensureDb(): SqliteDatabase {
@@ -611,6 +1345,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     await fs.mkdir(exportDir, { recursive: true });
     const files = await listSessionFilesForAgent(this.agentId);
     const keep = new Set<string>();
+    const tracked = new Set<string>();
     const cutoff = this.sessionExporter.retentionMs
       ? Date.now() - this.sessionExporter.retentionMs
       : null;
@@ -623,7 +1358,16 @@ export class QmdMemoryManager implements MemorySearchManager {
         continue;
       }
       const target = path.join(exportDir, `${path.basename(sessionFile, ".jsonl")}.md`);
-      await fs.writeFile(target, this.renderSessionMarkdown(entry), "utf-8");
+      tracked.add(sessionFile);
+      const state = this.exportedSessionState.get(sessionFile);
+      if (!state || state.hash !== entry.hash || state.mtimeMs !== entry.mtimeMs) {
+        await fs.writeFile(target, this.renderSessionMarkdown(entry), "utf-8");
+      }
+      this.exportedSessionState.set(sessionFile, {
+        hash: entry.hash,
+        mtimeMs: entry.mtimeMs,
+        target,
+      });
       keep.add(target);
     }
     const exported = await fs.readdir(exportDir).catch(() => []);
@@ -636,6 +1380,11 @@ export class QmdMemoryManager implements MemorySearchManager {
         await fs.rm(full, { force: true });
       }
     }
+    for (const [sessionFile, state] of this.exportedSessionState) {
+      if (!tracked.has(sessionFile) || !state.target.startsWith(exportDir + path.sep)) {
+        this.exportedSessionState.delete(sessionFile);
+      }
+    }
   }
 
   private renderSessionMarkdown(entry: SessionFileEntry): string {
@@ -646,20 +1395,28 @@ export class QmdMemoryManager implements MemorySearchManager {
 
   private pickSessionCollectionName(): string {
     const existing = new Set(this.qmd.collections.map((collection) => collection.name));
-    if (!existing.has("sessions")) {
-      return "sessions";
+    const base = `sessions-${this.sanitizeCollectionNameSegment(this.agentId)}`;
+    if (!existing.has(base)) {
+      return base;
     }
     let counter = 2;
-    let candidate = `sessions-${counter}`;
+    let candidate = `${base}-${counter}`;
     while (existing.has(candidate)) {
       counter += 1;
-      candidate = `sessions-${counter}`;
+      candidate = `${base}-${counter}`;
     }
     return candidate;
   }
 
+  private sanitizeCollectionNameSegment(input: string): string {
+    const lower = input.toLowerCase().replace(/[^a-z0-9-]+/g, "-");
+    const trimmed = lower.replace(/^-+|-+$/g, "");
+    return trimmed || "agent";
+  }
+
   private async resolveDocLocation(
     docid?: string,
+    hints?: { preferredCollection?: string; preferredFile?: string },
   ): Promise<{ rel: string; abs: string; source: MemorySource } | null> {
     if (!docid) {
       return null;
@@ -668,16 +1425,22 @@ export class QmdMemoryManager implements MemorySearchManager {
     if (!normalized) {
       return null;
     }
-    const cached = this.docPathCache.get(normalized);
+    const cacheKey = `${hints?.preferredCollection ?? "*"}:${normalized}`;
+    const cached = this.docPathCache.get(cacheKey);
     if (cached) {
       return cached;
     }
     const db = this.ensureDb();
-    let row: { collection: string; path: string } | undefined;
+    let rows: Array<{ collection: string; path: string }> = [];
     try {
-      row = db
-        .prepare("SELECT collection, path FROM documents WHERE hash LIKE ? AND active = 1 LIMIT 1")
-        .get(`${normalized}%`) as { collection: string; path: string } | undefined;
+      rows = db
+        .prepare("SELECT collection, path FROM documents WHERE hash = ? AND active = 1")
+        .all(normalized) as Array<{ collection: string; path: string }>;
+      if (rows.length === 0) {
+        rows = db
+          .prepare("SELECT collection, path FROM documents WHERE hash LIKE ? AND active = 1")
+          .all(`${normalized}%`) as Array<{ collection: string; path: string }>;
+      }
     } catch (err) {
       if (this.isSqliteBusyError(err)) {
         log.debug(`qmd index is busy while resolving doc path: ${String(err)}`);
@@ -685,15 +1448,52 @@ export class QmdMemoryManager implements MemorySearchManager {
       }
       throw err;
     }
-    if (!row) {
+    if (rows.length === 0) {
       return null;
     }
-    const location = this.toDocLocation(row.collection, row.path);
+    const location = this.pickDocLocation(rows, hints);
     if (!location) {
       return null;
     }
-    this.docPathCache.set(normalized, location);
+    this.docPathCache.set(cacheKey, location);
     return location;
+  }
+
+  private pickDocLocation(
+    rows: Array<{ collection: string; path: string }>,
+    hints?: { preferredCollection?: string; preferredFile?: string },
+  ): { rel: string; abs: string; source: MemorySource } | null {
+    if (hints?.preferredCollection) {
+      for (const row of rows) {
+        if (row.collection !== hints.preferredCollection) {
+          continue;
+        }
+        const location = this.toDocLocation(row.collection, row.path);
+        if (location) {
+          return location;
+        }
+      }
+    }
+    if (hints?.preferredFile) {
+      const preferred = path.normalize(hints.preferredFile);
+      for (const row of rows) {
+        const rowPath = path.normalize(row.path);
+        if (rowPath !== preferred && !rowPath.endsWith(path.sep + preferred)) {
+          continue;
+        }
+        const location = this.toDocLocation(row.collection, row.path);
+        if (location) {
+          return location;
+        }
+      }
+    }
+    for (const row of rows) {
+      const location = this.toDocLocation(row.collection, row.path);
+      if (location) {
+        return location;
+      }
+    }
+    return null;
   }
 
   private extractSnippetLines(snippet: string): { startLine: number; endLine: number } {
@@ -883,6 +1683,52 @@ export class QmdMemoryManager implements MemorySearchManager {
     return clamped;
   }
 
+  private diversifyResultsBySource(
+    results: MemorySearchResult[],
+    limit: number,
+  ): MemorySearchResult[] {
+    const target = Math.max(0, limit);
+    if (target <= 0) {
+      return [];
+    }
+    if (results.length <= 1) {
+      return results.slice(0, target);
+    }
+    const bySource = new Map<MemorySource, MemorySearchResult[]>();
+    for (const entry of results) {
+      const list = bySource.get(entry.source) ?? [];
+      list.push(entry);
+      bySource.set(entry.source, list);
+    }
+    const hasSessions = bySource.has("sessions");
+    const hasMemory = bySource.has("memory");
+    if (!hasSessions || !hasMemory) {
+      return results.slice(0, target);
+    }
+    const sourceOrder = Array.from(bySource.entries())
+      .toSorted((a, b) => (b[1][0]?.score ?? 0) - (a[1][0]?.score ?? 0))
+      .map(([source]) => source);
+    const diversified: MemorySearchResult[] = [];
+    while (diversified.length < target) {
+      let emitted = false;
+      for (const source of sourceOrder) {
+        const next = bySource.get(source)?.shift();
+        if (!next) {
+          continue;
+        }
+        diversified.push(next);
+        emitted = true;
+        if (diversified.length >= target) {
+          break;
+        }
+      }
+      if (!emitted) {
+        break;
+      }
+    }
+    return diversified;
+  }
+
   private shouldSkipUpdate(force?: boolean): boolean {
     if (force) {
       return false;
@@ -931,11 +1777,100 @@ export class QmdMemoryManager implements MemorySearchManager {
     ]);
   }
 
-  private buildCollectionFilterArgs(): string[] {
-    const names = this.qmd.collections.map((collection) => collection.name).filter(Boolean);
-    if (names.length === 0) {
+  private async runQueryAcrossCollections(
+    query: string,
+    limit: number,
+    collectionNames: string[],
+    command: "query" | "search" | "vsearch",
+  ): Promise<QmdQueryResult[]> {
+    log.debug(
+      `qmd ${command} multi-collection workaround active (${collectionNames.length} collections)`,
+    );
+    const bestByDocId = new Map<string, QmdQueryResult>();
+    for (const collectionName of collectionNames) {
+      const args = this.buildSearchArgs(command, query, limit);
+      args.push("-c", collectionName);
+      const result = await this.runQmd(args, { timeoutMs: this.qmd.limits.timeoutMs });
+      const parsed = parseQmdQueryJson(result.stdout, result.stderr);
+      for (const entry of parsed) {
+        const normalizedDocId =
+          typeof entry.docid === "string" && entry.docid.trim().length > 0
+            ? entry.docid
+            : undefined;
+        if (!normalizedDocId) {
+          continue;
+        }
+        const withCollection = {
+          ...entry,
+          docid: normalizedDocId,
+          collection: entry.collection ?? collectionName,
+        } satisfies QmdQueryResult;
+        const prev = bestByDocId.get(normalizedDocId);
+        const prevScore = typeof prev?.score === "number" ? prev.score : Number.NEGATIVE_INFINITY;
+        const nextScore =
+          typeof withCollection.score === "number"
+            ? withCollection.score
+            : Number.NEGATIVE_INFINITY;
+        if (!prev || nextScore > prevScore) {
+          bestByDocId.set(normalizedDocId, withCollection);
+        }
+      }
+    }
+    return [...bestByDocId.values()].toSorted((a, b) => (b.score ?? 0) - (a.score ?? 0));
+  }
+
+  private async runMcporterAcrossCollections(params: {
+    tool: "search" | "vector_search" | "deep_search";
+    query: string;
+    limit: number;
+    minScore: number;
+    collectionNames: string[];
+  }): Promise<QmdQueryResult[]> {
+    const bestByDocId = new Map<string, QmdQueryResult>();
+    for (const collectionName of params.collectionNames) {
+      const parsed = await this.runQmdSearchViaMcporter({
+        mcporter: this.qmd.mcporter,
+        tool: params.tool,
+        query: params.query,
+        limit: params.limit,
+        minScore: params.minScore,
+        collection: collectionName,
+        timeoutMs: this.qmd.limits.timeoutMs,
+      });
+      for (const entry of parsed) {
+        if (typeof entry.docid !== "string" || !entry.docid.trim()) {
+          continue;
+        }
+        const prev = bestByDocId.get(entry.docid);
+        const prevScore = typeof prev?.score === "number" ? prev.score : Number.NEGATIVE_INFINITY;
+        const nextScore = typeof entry.score === "number" ? entry.score : Number.NEGATIVE_INFINITY;
+        if (!prev || nextScore > prevScore) {
+          bestByDocId.set(entry.docid, entry);
+        }
+      }
+    }
+    return [...bestByDocId.values()].toSorted((a, b) => (b.score ?? 0) - (a.score ?? 0));
+  }
+
+  private listManagedCollectionNames(): string[] {
+    const seen = new Set<string>();
+    const names: string[] = [];
+    for (const collection of this.qmd.collections) {
+      const name = collection.name?.trim();
+      if (!name || seen.has(name)) {
+        continue;
+      }
+      seen.add(name);
+      names.push(name);
+    }
+    return names;
+  }
+
+  private buildCollectionFilterArgs(collectionNames: string[]): string[] {
+    if (collectionNames.length === 0) {
       return [];
     }
+    const names = collectionNames.filter(Boolean);
     return names.flatMap((name) => ["-c", name]);
   }
 
@@ -944,9 +1879,22 @@ export class QmdMemoryManager implements MemorySearchManager {
     query: string,
     limit: number,
   ): string[] {
+    const normalizedQuery = command === "search" ? normalizeHanBm25Query(query) : query;
     if (command === "query") {
-      return ["query", query, "--json", "-n", String(limit)];
+      return ["query", normalizedQuery, "--json", "-n", String(limit)];
     }
-    return [command, query, "--json"];
+    return [command, normalizedQuery, "--json", "-n", String(limit)];
   }
+}
+
+function appendOutputWithCap(
+  current: string,
+  chunk: string,
+  maxChars: number,
+): { text: string; truncated: boolean } {
+  const appended = current + chunk;
+  if (appended.length <= maxChars) {
+    return { text: appended, truncated: false };
+  }
+  return { text: appended.slice(-maxChars), truncated: true };
 }

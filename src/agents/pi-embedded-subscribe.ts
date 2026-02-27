@@ -1,14 +1,10 @@
-import type { InlineCodeState } from "../markdown/code-spans.js";
-import type {
-  EmbeddedPiSubscribeContext,
-  EmbeddedPiSubscribeState,
-} from "./pi-embedded-subscribe.handlers.types.js";
-import type { SubscribeEmbeddedPiSessionParams } from "./pi-embedded-subscribe.types.js";
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
 import { createStreamingDirectiveAccumulator } from "../auto-reply/reply/streaming-directives.js";
 import { formatToolAggregate } from "../auto-reply/tool-meta.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import type { InlineCodeState } from "../markdown/code-spans.js";
 import { buildCodeSpanIndex, createInlineCodeState } from "../markdown/code-spans.js";
 import { EmbeddedBlockChunker } from "./pi-embedded-block-chunker.js";
 import {
@@ -16,6 +12,12 @@ import {
   normalizeTextForComparison,
 } from "./pi-embedded-helpers.js";
 import { createEmbeddedPiSessionEventHandler } from "./pi-embedded-subscribe.handlers.js";
+import type {
+  EmbeddedPiSubscribeContext,
+  EmbeddedPiSubscribeState,
+} from "./pi-embedded-subscribe.handlers.types.js";
+import { filterToolResultMediaUrls } from "./pi-embedded-subscribe.tools.js";
+import type { SubscribeEmbeddedPiSessionParams } from "./pi-embedded-subscribe.types.js";
 import { formatReasoningMessage, stripDowngradedToolCallText } from "./pi-embedded-utils.js";
 import { hasNonzeroUsage, normalizeUsage, type UsageLike } from "./usage.js";
 
@@ -54,6 +56,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     emittedAssistantUpdate: false,
     lastStreamedReasoning: undefined,
     lastBlockReplyText: undefined,
+    reasoningStreamOpen: false,
     assistantMessageIndex: 0,
     lastAssistantTextMessageIndex: -1,
     lastAssistantTextNormalized: undefined,
@@ -64,12 +67,17 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     compactionInFlight: false,
     pendingCompactionRetry: 0,
     compactionRetryResolve: undefined,
+    compactionRetryReject: undefined,
     compactionRetryPromise: null,
+    unsubscribed: false,
     messagingToolSentTexts: [],
     messagingToolSentTextsNormalized: [],
     messagingToolSentTargets: [],
+    messagingToolSentMediaUrls: [],
     pendingMessagingTexts: new Map(),
     pendingMessagingTargets: new Map(),
+    successfulCronAdds: 0,
+    pendingMessagingMediaUrls: new Map(),
   };
   const usageTotals = {
     input: 0,
@@ -87,6 +95,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
   const messagingToolSentTexts = state.messagingToolSentTexts;
   const messagingToolSentTextsNormalized = state.messagingToolSentTextsNormalized;
   const messagingToolSentTargets = state.messagingToolSentTargets;
+  const messagingToolSentMediaUrls = state.messagingToolSentMediaUrls;
   const pendingMessagingTexts = state.pendingMessagingTexts;
   const pendingMessagingTargets = state.pendingMessagingTargets;
   const replyDirectiveAccumulator = createStreamingDirectiveAccumulator();
@@ -110,6 +119,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     state.lastBlockReplyText = undefined;
     state.lastStreamedReasoning = undefined;
     state.lastReasoningSent = undefined;
+    state.reasoningStreamOpen = false;
     state.suppressBlockChunks = false;
     state.assistantMessageIndex += 1;
     state.lastAssistantTextMessageIndex = -1;
@@ -188,6 +198,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
   // These tools can send messages via sendMessage/threadReply actions (or sessions_send with message).
   const MAX_MESSAGING_SENT_TEXTS = 200;
   const MAX_MESSAGING_SENT_TARGETS = 200;
+  const MAX_MESSAGING_SENT_MEDIA_URLS = 200;
   const trimMessagingToolSent = () => {
     if (messagingToolSentTexts.length > MAX_MESSAGING_SENT_TEXTS) {
       const overflow = messagingToolSentTexts.length - MAX_MESSAGING_SENT_TEXTS;
@@ -198,12 +209,23 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       const overflow = messagingToolSentTargets.length - MAX_MESSAGING_SENT_TARGETS;
       messagingToolSentTargets.splice(0, overflow);
     }
+    if (messagingToolSentMediaUrls.length > MAX_MESSAGING_SENT_MEDIA_URLS) {
+      const overflow = messagingToolSentMediaUrls.length - MAX_MESSAGING_SENT_MEDIA_URLS;
+      messagingToolSentMediaUrls.splice(0, overflow);
+    }
   };
 
   const ensureCompactionPromise = () => {
     if (!state.compactionRetryPromise) {
-      state.compactionRetryPromise = new Promise((resolve) => {
+      // Create a single promise that resolves when ALL pending compactions complete
+      // (tracked by pendingCompactionRetry counter, decremented in resolveCompactionRetry)
+      state.compactionRetryPromise = new Promise((resolve, reject) => {
         state.compactionRetryResolve = resolve;
+        state.compactionRetryReject = reject;
+      });
+      // Prevent unhandled rejection if rejected after all consumers have resolved
+      state.compactionRetryPromise.catch((err) => {
+        log.debug(`compaction promise rejected (no waiter): ${String(err)}`);
       });
     }
   };
@@ -221,6 +243,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     if (state.pendingCompactionRetry === 0 && !state.compactionInFlight) {
       state.compactionRetryResolve?.();
       state.compactionRetryResolve = undefined;
+      state.compactionRetryReject = undefined;
       state.compactionRetryPromise = null;
     }
   };
@@ -229,6 +252,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     if (state.pendingCompactionRetry === 0 && !state.compactionInFlight) {
       state.compactionRetryResolve?.();
       state.compactionRetryResolve = undefined;
+      state.compactionRetryReject = undefined;
       state.compactionRetryPromise = null;
     }
   };
@@ -293,46 +317,39 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     }
     return `\`\`\`txt\n${trimmed}\n\`\`\``;
   };
-  const emitToolSummary = (toolName?: string, meta?: string) => {
+  const emitToolResultMessage = (toolName: string | undefined, message: string) => {
     if (!params.onToolResult) {
       return;
     }
-    const agg = formatToolAggregate(toolName, meta ? [meta] : undefined, {
-      markdown: useMarkdown,
-    });
-    const { text: cleanedText, mediaUrls } = parseReplyDirectives(agg);
-    if (!cleanedText && (!mediaUrls || mediaUrls.length === 0)) {
+    const { text: cleanedText, mediaUrls } = parseReplyDirectives(message);
+    const filteredMediaUrls = filterToolResultMediaUrls(toolName, mediaUrls ?? []);
+    if (!cleanedText && filteredMediaUrls.length === 0) {
       return;
     }
     try {
       void params.onToolResult({
         text: cleanedText,
-        mediaUrls: mediaUrls?.length ? mediaUrls : undefined,
+        mediaUrls: filteredMediaUrls.length ? filteredMediaUrls : undefined,
       });
     } catch {
       // ignore tool result delivery failures
     }
   };
+  const emitToolSummary = (toolName?: string, meta?: string) => {
+    const agg = formatToolAggregate(toolName, meta ? [meta] : undefined, {
+      markdown: useMarkdown,
+    });
+    emitToolResultMessage(toolName, agg);
+  };
   const emitToolOutput = (toolName?: string, meta?: string, output?: string) => {
-    if (!params.onToolResult || !output) {
+    if (!output) {
       return;
     }
     const agg = formatToolAggregate(toolName, meta ? [meta] : undefined, {
       markdown: useMarkdown,
     });
     const message = `${agg}\n${formatToolOutputBlock(output)}`;
-    const { text: cleanedText, mediaUrls } = parseReplyDirectives(message);
-    if (!cleanedText && (!mediaUrls || mediaUrls.length === 0)) {
-      return;
-    }
-    try {
-      void params.onToolResult({
-        text: cleanedText,
-        mediaUrls: mediaUrls?.length ? mediaUrls : undefined,
-      });
-    } catch {
-      // ignore tool result delivery failures
-    }
+    emitToolResultMessage(toolName, message);
   };
 
   const stripBlockTags = (
@@ -564,9 +581,18 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     messagingToolSentTexts.length = 0;
     messagingToolSentTextsNormalized.length = 0;
     messagingToolSentTargets.length = 0;
+    messagingToolSentMediaUrls.length = 0;
     pendingMessagingTexts.clear();
     pendingMessagingTargets.clear();
+    state.successfulCronAdds = 0;
+    state.pendingMessagingMediaUrls.clear();
     resetAssistantMessageState(0);
+  };
+
+  const noteLastAssistant = (msg: AgentMessage) => {
+    if (msg?.role === "assistant") {
+      state.lastAssistant = msg;
+    }
   };
 
   const ctx: EmbeddedPiSubscribeContext = {
@@ -576,6 +602,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     blockChunking,
     blockChunker,
     hookRunner: params.hookRunner,
+    noteLastAssistant,
     shouldEmitToolResult,
     shouldEmitToolOutput,
     emitToolSummary,
@@ -600,15 +627,51 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     getCompactionCount: () => compactionCount,
   };
 
-  const unsubscribe = params.session.subscribe(createEmbeddedPiSessionEventHandler(ctx));
+  const sessionUnsubscribe = params.session.subscribe(createEmbeddedPiSessionEventHandler(ctx));
+
+  const unsubscribe = () => {
+    if (state.unsubscribed) {
+      return;
+    }
+    // Mark as unsubscribed FIRST to prevent waitForCompactionRetry from creating
+    // new un-resolvable promises during teardown.
+    state.unsubscribed = true;
+    // Reject pending compaction wait to unblock awaiting code.
+    // Don't resolve, as that would incorrectly signal "compaction complete" when it's still in-flight.
+    if (state.compactionRetryPromise) {
+      log.debug(`unsubscribe: rejecting compaction wait runId=${params.runId}`);
+      const reject = state.compactionRetryReject;
+      state.compactionRetryResolve = undefined;
+      state.compactionRetryReject = undefined;
+      state.compactionRetryPromise = null;
+      // Reject with AbortError so it's caught by isAbortError() check in cleanup paths
+      const abortErr = new Error("Unsubscribed during compaction");
+      abortErr.name = "AbortError";
+      reject?.(abortErr);
+    }
+    // Cancel any in-flight compaction to prevent resource leaks when unsubscribing.
+    // Only abort if compaction is actually running to avoid unnecessary work.
+    if (params.session.isCompacting) {
+      log.debug(`unsubscribe: aborting in-flight compaction runId=${params.runId}`);
+      try {
+        params.session.abortCompaction();
+      } catch (err) {
+        log.warn(`unsubscribe: compaction abort failed runId=${params.runId} err=${String(err)}`);
+      }
+    }
+    sessionUnsubscribe();
+  };
 
   return {
     assistantTexts,
     toolMetas,
     unsubscribe,
     isCompacting: () => state.compactionInFlight || state.pendingCompactionRetry > 0,
+    isCompactionInFlight: () => state.compactionInFlight,
     getMessagingToolSentTexts: () => messagingToolSentTexts.slice(),
+    getMessagingToolSentMediaUrls: () => messagingToolSentMediaUrls.slice(),
     getMessagingToolSentTargets: () => messagingToolSentTargets.slice(),
+    getSuccessfulCronAdds: () => state.successfulCronAdds,
     // Returns true if any messaging tool successfully sent a message.
     // Used to suppress agent's confirmation text (e.g., "Respondi no Telegram!")
     // which is generated AFTER the tool sends the actual answer.
@@ -617,15 +680,27 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     getUsageTotals,
     getCompactionCount: () => compactionCount,
     waitForCompactionRetry: () => {
+      // Reject after unsubscribe so callers treat it as cancellation, not success
+      if (state.unsubscribed) {
+        const err = new Error("Unsubscribed during compaction wait");
+        err.name = "AbortError";
+        return Promise.reject(err);
+      }
       if (state.compactionInFlight || state.pendingCompactionRetry > 0) {
         ensureCompactionPromise();
         return state.compactionRetryPromise ?? Promise.resolve();
       }
-      return new Promise<void>((resolve) => {
+      return new Promise<void>((resolve, reject) => {
         queueMicrotask(() => {
+          if (state.unsubscribed) {
+            const err = new Error("Unsubscribed during compaction wait");
+            err.name = "AbortError";
+            reject(err);
+            return;
+          }
           if (state.compactionInFlight || state.pendingCompactionRetry > 0) {
             ensureCompactionPromise();
-            void (state.compactionRetryPromise ?? Promise.resolve()).then(resolve);
+            void (state.compactionRetryPromise ?? Promise.resolve()).then(resolve, reject);
           } else {
             resolve();
           }

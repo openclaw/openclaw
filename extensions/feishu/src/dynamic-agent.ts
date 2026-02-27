@@ -1,7 +1,7 @@
-import type { OpenClawConfig, PluginRuntime } from "openclaw/plugin-sdk";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type { OpenClawConfig, PluginRuntime } from "openclaw/plugin-sdk";
 import type { DynamicAgentCreationConfig } from "./types.js";
 
 export type MaybeCreateDynamicAgentResult = {

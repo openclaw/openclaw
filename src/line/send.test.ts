@@ -1,95 +1,228 @@
-import { describe, expect, it } from "vitest";
-import {
-  createFlexMessage,
-  createQuickReplyItems,
-  createTextMessageWithQuickReplies,
-} from "./send.js";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-describe("createFlexMessage", () => {
-  it("creates a flex message with alt text and contents", () => {
-    const contents = {
-      type: "bubble" as const,
-      body: {
-        type: "box" as const,
-        layout: "vertical" as const,
-        contents: [],
-      },
+const {
+  pushMessageMock,
+  replyMessageMock,
+  showLoadingAnimationMock,
+  getProfileMock,
+  MessagingApiClientMock,
+  loadConfigMock,
+  resolveLineAccountMock,
+  resolveLineChannelAccessTokenMock,
+  recordChannelActivityMock,
+  logVerboseMock,
+} = vi.hoisted(() => {
+  const pushMessageMock = vi.fn();
+  const replyMessageMock = vi.fn();
+  const showLoadingAnimationMock = vi.fn();
+  const getProfileMock = vi.fn();
+  const MessagingApiClientMock = vi.fn(function () {
+    return {
+      pushMessage: pushMessageMock,
+      replyMessage: replyMessageMock,
+      showLoadingAnimation: showLoadingAnimationMock,
+      getProfile: getProfileMock,
     };
-
-    const message = createFlexMessage("Alt text for flex", contents);
-
-    expect(message.type).toBe("flex");
-    expect(message.altText).toBe("Alt text for flex");
-    expect(message.contents).toBe(contents);
   });
+  const loadConfigMock = vi.fn(() => ({}));
+  const resolveLineAccountMock = vi.fn(() => ({ accountId: "default" }));
+  const resolveLineChannelAccessTokenMock = vi.fn(() => "line-token");
+  const recordChannelActivityMock = vi.fn();
+  const logVerboseMock = vi.fn();
+  return {
+    pushMessageMock,
+    replyMessageMock,
+    showLoadingAnimationMock,
+    getProfileMock,
+    MessagingApiClientMock,
+    loadConfigMock,
+    resolveLineAccountMock,
+    resolveLineChannelAccessTokenMock,
+    recordChannelActivityMock,
+    logVerboseMock,
+  };
 });
 
-describe("createQuickReplyItems", () => {
-  it("creates quick reply items from labels", () => {
-    const quickReply = createQuickReplyItems(["Option 1", "Option 2", "Option 3"]);
+vi.mock("@line/bot-sdk", () => ({
+  messagingApi: { MessagingApiClient: MessagingApiClientMock },
+}));
 
-    expect(quickReply.items).toHaveLength(3);
-    expect(quickReply.items[0].type).toBe("action");
-    expect((quickReply.items[0].action as { label: string }).label).toBe("Option 1");
-    expect((quickReply.items[0].action as { text: string }).text).toBe("Option 1");
+vi.mock("../config/config.js", () => ({
+  loadConfig: loadConfigMock,
+}));
+
+vi.mock("./accounts.js", () => ({
+  resolveLineAccount: resolveLineAccountMock,
+}));
+
+vi.mock("./channel-access-token.js", () => ({
+  resolveLineChannelAccessToken: resolveLineChannelAccessTokenMock,
+}));
+
+vi.mock("../infra/channel-activity.js", () => ({
+  recordChannelActivity: recordChannelActivityMock,
+}));
+
+vi.mock("../globals.js", () => ({
+  logVerbose: logVerboseMock,
+}));
+
+let sendModule: typeof import("./send.js");
+
+describe("LINE send helpers", () => {
+  beforeAll(async () => {
+    sendModule = await import("./send.js");
   });
 
-  it("limits items to 13 (LINE maximum)", () => {
-    const labels = Array.from({ length: 20 }, (_, i) => `Option ${i + 1}`);
-    const quickReply = createQuickReplyItems(labels);
+  beforeEach(() => {
+    pushMessageMock.mockReset();
+    replyMessageMock.mockReset();
+    showLoadingAnimationMock.mockReset();
+    getProfileMock.mockReset();
+    MessagingApiClientMock.mockClear();
+    loadConfigMock.mockReset();
+    resolveLineAccountMock.mockReset();
+    resolveLineChannelAccessTokenMock.mockReset();
+    recordChannelActivityMock.mockReset();
+    logVerboseMock.mockReset();
+
+    loadConfigMock.mockReturnValue({});
+    resolveLineAccountMock.mockReturnValue({ accountId: "default" });
+    resolveLineChannelAccessTokenMock.mockReturnValue("line-token");
+    pushMessageMock.mockResolvedValue({});
+    replyMessageMock.mockResolvedValue({});
+    showLoadingAnimationMock.mockResolvedValue({});
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("limits quick reply items to 13", () => {
+    const labels = Array.from({ length: 20 }, (_, index) => `Option ${index + 1}`);
+    const quickReply = sendModule.createQuickReplyItems(labels);
 
     expect(quickReply.items).toHaveLength(13);
   });
 
-  it("truncates labels to 20 characters", () => {
-    const quickReply = createQuickReplyItems([
-      "This is a very long option label that exceeds the limit",
-    ]);
+  it("pushes images via normalized LINE target", async () => {
+    const result = await sendModule.pushImageMessage(
+      "line:user:U123",
+      "https://example.com/original.jpg",
+      undefined,
+      { verbose: true },
+    );
 
-    expect((quickReply.items[0].action as { label: string }).label).toBe("This is a very long ");
-    // Text is not truncated
-    expect((quickReply.items[0].action as { text: string }).text).toBe(
-      "This is a very long option label that exceeds the limit",
+    expect(pushMessageMock).toHaveBeenCalledWith({
+      to: "U123",
+      messages: [
+        {
+          type: "image",
+          originalContentUrl: "https://example.com/original.jpg",
+          previewImageUrl: "https://example.com/original.jpg",
+        },
+      ],
+    });
+    expect(recordChannelActivityMock).toHaveBeenCalledWith({
+      channel: "line",
+      accountId: "default",
+      direction: "outbound",
+    });
+    expect(logVerboseMock).toHaveBeenCalledWith("line: pushed image to U123");
+    expect(result).toEqual({ messageId: "push", chatId: "U123" });
+  });
+
+  it("replies when reply token is provided", async () => {
+    const result = await sendModule.sendMessageLine("line:group:C1", "Hello", {
+      replyToken: "reply-token",
+      mediaUrl: "https://example.com/media.jpg",
+      verbose: true,
+    });
+
+    expect(replyMessageMock).toHaveBeenCalledTimes(1);
+    expect(pushMessageMock).not.toHaveBeenCalled();
+    expect(replyMessageMock).toHaveBeenCalledWith({
+      replyToken: "reply-token",
+      messages: [
+        {
+          type: "image",
+          originalContentUrl: "https://example.com/media.jpg",
+          previewImageUrl: "https://example.com/media.jpg",
+        },
+        {
+          type: "text",
+          text: "Hello",
+        },
+      ],
+    });
+    expect(logVerboseMock).toHaveBeenCalledWith("line: replied to C1");
+    expect(result).toEqual({ messageId: "reply", chatId: "C1" });
+  });
+
+  it("throws when push messages are empty", async () => {
+    await expect(sendModule.pushMessagesLine("U123", [])).rejects.toThrow(
+      "Message must be non-empty for LINE sends",
     );
   });
 
-  it("creates message actions for each item", () => {
-    const quickReply = createQuickReplyItems(["A", "B"]);
+  it("logs HTTP body when push fails", async () => {
+    const err = new Error("LINE push failed") as Error & {
+      status: number;
+      statusText: string;
+      body: string;
+    };
+    err.status = 400;
+    err.statusText = "Bad Request";
+    err.body = "invalid flex payload";
+    pushMessageMock.mockRejectedValueOnce(err);
 
-    expect((quickReply.items[0].action as { type: string }).type).toBe("message");
-    expect((quickReply.items[1].action as { type: string }).type).toBe("message");
-  });
-});
+    await expect(
+      sendModule.pushMessagesLine("U999", [{ type: "text", text: "hello" }]),
+    ).rejects.toThrow("LINE push failed");
 
-describe("createTextMessageWithQuickReplies", () => {
-  it("creates a text message with quick replies attached", () => {
-    const message = createTextMessageWithQuickReplies("Choose an option:", ["Yes", "No"]);
-
-    expect(message.type).toBe("text");
-    expect(message.text).toBe("Choose an option:");
-    expect(message.quickReply).toBeDefined();
-    expect(message.quickReply.items).toHaveLength(2);
-  });
-
-  it("preserves text content", () => {
-    const longText =
-      "This is a longer message that asks the user to select from multiple options below.";
-    const message = createTextMessageWithQuickReplies(longText, ["A", "B", "C"]);
-
-    expect(message.text).toBe(longText);
+    expect(logVerboseMock).toHaveBeenCalledWith(
+      "line: push message failed (400 Bad Request): invalid flex payload",
+    );
   });
 
-  it("handles empty quick replies array", () => {
-    const message = createTextMessageWithQuickReplies("No options", []);
+  it("caches profile results by default", async () => {
+    getProfileMock.mockResolvedValue({
+      displayName: "Peter",
+      pictureUrl: "https://example.com/peter.jpg",
+    });
 
-    expect(message.quickReply.items).toHaveLength(0);
+    const first = await sendModule.getUserProfile("U-cache");
+    const second = await sendModule.getUserProfile("U-cache");
+
+    expect(first).toEqual({
+      displayName: "Peter",
+      pictureUrl: "https://example.com/peter.jpg",
+    });
+    expect(second).toEqual(first);
+    expect(getProfileMock).toHaveBeenCalledTimes(1);
   });
 
-  it("quick replies use label as both label and text", () => {
-    const message = createTextMessageWithQuickReplies("Pick one:", ["Apple", "Banana"]);
+  it("continues when loading animation is unsupported", async () => {
+    showLoadingAnimationMock.mockRejectedValueOnce(new Error("unsupported"));
 
-    const firstAction = message.quickReply.items[0].action as { label: string; text: string };
-    expect(firstAction.label).toBe("Apple");
-    expect(firstAction.text).toBe("Apple");
+    await expect(sendModule.showLoadingAnimation("line:room:R1")).resolves.toBeUndefined();
+
+    expect(logVerboseMock).toHaveBeenCalledWith(
+      expect.stringContaining("line: loading animation failed (non-fatal)"),
+    );
+  });
+
+  it("pushes quick-reply text and caps to 13 buttons", async () => {
+    await sendModule.pushTextMessageWithQuickReplies(
+      "U-quick",
+      "Pick one",
+      Array.from({ length: 20 }, (_, index) => `Choice ${index + 1}`),
+    );
+
+    expect(pushMessageMock).toHaveBeenCalledTimes(1);
+    const firstCall = pushMessageMock.mock.calls[0] as [
+      { messages: Array<{ quickReply?: { items: unknown[] } }> },
+    ];
+    expect(firstCall[0].messages[0].quickReply?.items).toHaveLength(13);
   });
 });

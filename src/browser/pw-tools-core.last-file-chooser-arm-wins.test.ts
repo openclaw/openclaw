@@ -1,51 +1,27 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import crypto from "node:crypto";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { describe, expect, it, vi } from "vitest";
+import { DEFAULT_UPLOAD_DIR } from "./paths.js";
+import {
+  installPwToolsCoreTestHooks,
+  setPwToolsCoreCurrentPage,
+} from "./pw-tools-core.test-harness.js";
 
-let currentPage: Record<string, unknown> | null = null;
-let currentRefLocator: Record<string, unknown> | null = null;
-let pageState: {
-  console: unknown[];
-  armIdUpload: number;
-  armIdDialog: number;
-  armIdDownload: number;
-};
-
-const sessionMocks = vi.hoisted(() => ({
-  getPageForTargetId: vi.fn(async () => {
-    if (!currentPage) {
-      throw new Error("missing page");
-    }
-    return currentPage;
-  }),
-  ensurePageState: vi.fn(() => pageState),
-  restoreRoleRefsForTarget: vi.fn(() => {}),
-  refLocator: vi.fn(() => {
-    if (!currentRefLocator) {
-      throw new Error("missing locator");
-    }
-    return currentRefLocator;
-  }),
-  rememberRoleRefsForTarget: vi.fn(() => {}),
-}));
-
-vi.mock("./pw-session.js", () => sessionMocks);
+installPwToolsCoreTestHooks();
 const mod = await import("./pw-tools-core.js");
 
 describe("pw-tools-core", () => {
-  beforeEach(() => {
-    currentPage = null;
-    currentRefLocator = null;
-    pageState = {
-      console: [],
-      armIdUpload: 0,
-      armIdDialog: 0,
-      armIdDownload: 0,
-    };
-    for (const fn of Object.values(sessionMocks)) {
-      fn.mockClear();
-    }
-  });
-
   it("last file-chooser arm wins", async () => {
+    const firstPath = path.join(DEFAULT_UPLOAD_DIR, `vitest-arm-1-${crypto.randomUUID()}.txt`);
+    const secondPath = path.join(DEFAULT_UPLOAD_DIR, `vitest-arm-2-${crypto.randomUUID()}.txt`);
+    await fs.mkdir(DEFAULT_UPLOAD_DIR, { recursive: true });
+    await Promise.all([
+      fs.writeFile(firstPath, "1", "utf8"),
+      fs.writeFile(secondPath, "2", "utf8"),
+    ]);
+    const secondCanonicalPath = await fs.realpath(secondPath);
+
     let resolve1: ((value: unknown) => void) | null = null;
     let resolve2: ((value: unknown) => void) | null = null;
 
@@ -67,35 +43,44 @@ describe("pw-tools-core", () => {
           }),
       );
 
-    currentPage = {
+    setPwToolsCoreCurrentPage({
       waitForEvent,
       keyboard: { press: vi.fn(async () => {}) },
-    };
-
-    await mod.armFileUploadViaPlaywright({
-      cdpUrl: "http://127.0.0.1:18792",
-      paths: ["/tmp/1"],
-    });
-    await mod.armFileUploadViaPlaywright({
-      cdpUrl: "http://127.0.0.1:18792",
-      paths: ["/tmp/2"],
     });
 
-    resolve1?.(fc1);
-    resolve2?.(fc2);
-    await Promise.resolve();
+    try {
+      await mod.armFileUploadViaPlaywright({
+        cdpUrl: "http://127.0.0.1:18792",
+        paths: [firstPath],
+      });
+      await mod.armFileUploadViaPlaywright({
+        cdpUrl: "http://127.0.0.1:18792",
+        paths: [secondPath],
+      });
 
-    expect(fc1.setFiles).not.toHaveBeenCalled();
-    expect(fc2.setFiles).toHaveBeenCalledWith(["/tmp/2"]);
+      if (!resolve1 || !resolve2) {
+        throw new Error("file chooser handlers were not registered");
+      }
+      (resolve1 as (value: unknown) => void)(fc1);
+      (resolve2 as (value: unknown) => void)(fc2);
+      await Promise.resolve();
+
+      expect(fc1.setFiles).not.toHaveBeenCalled();
+      await vi.waitFor(() => {
+        expect(fc2.setFiles).toHaveBeenCalledWith([secondCanonicalPath]);
+      });
+    } finally {
+      await Promise.all([fs.rm(firstPath, { force: true }), fs.rm(secondPath, { force: true })]);
+    }
   });
   it("arms the next dialog and accepts/dismisses (default timeout)", async () => {
     const accept = vi.fn(async () => {});
     const dismiss = vi.fn(async () => {});
     const dialog = { accept, dismiss };
     const waitForEvent = vi.fn(async () => dialog);
-    currentPage = {
+    setPwToolsCoreCurrentPage({
       waitForEvent,
-    };
+    });
 
     await mod.armDialogViaPlaywright({
       cdpUrl: "http://127.0.0.1:18792",
@@ -129,7 +114,7 @@ describe("pw-tools-core", () => {
     const waitForFunction = vi.fn(async () => {});
     const waitForTimeout = vi.fn(async () => {});
 
-    currentPage = {
+    const page = {
       locator: vi.fn(() => ({
         first: () => ({ waitFor: waitForSelector }),
       })),
@@ -139,6 +124,7 @@ describe("pw-tools-core", () => {
       waitForTimeout,
       getByText: vi.fn(() => ({ first: () => ({ waitFor: vi.fn() }) })),
     };
+    setPwToolsCoreCurrentPage(page);
 
     await mod.waitForViaPlaywright({
       cdpUrl: "http://127.0.0.1:18792",
@@ -151,7 +137,7 @@ describe("pw-tools-core", () => {
     });
 
     expect(waitForTimeout).toHaveBeenCalledWith(50);
-    expect(currentPage.locator as ReturnType<typeof vi.fn>).toHaveBeenCalledWith("#main");
+    expect(page.locator as ReturnType<typeof vi.fn>).toHaveBeenCalledWith("#main");
     expect(waitForSelector).toHaveBeenCalledWith({
       state: "visible",
       timeout: 1234,

@@ -23,7 +23,7 @@ export const usageStylesPart2 = `
   .usage-error-sub {
     grid-column: 1 / -1;
     font-size: 11px;
-    color: var(--text-muted);
+    color: var(--muted);
   }
   .usage-badges {
     display: flex;
@@ -54,7 +54,7 @@ export const usageStylesPart2 = `
     font-size: 12px;
   }
   .usage-meta-item span {
-    color: var(--text-muted);
+    color: var(--muted);
     font-size: 11px;
   }
   .usage-insights-grid {
@@ -76,7 +76,7 @@ export const usageStylesPart2 = `
   }
   .usage-insight-subtitle {
     font-size: 11px;
-    color: var(--text-muted);
+    color: var(--muted);
     margin-top: 6px;
   }
   /* ===== CHART TOGGLE ===== */
@@ -92,7 +92,7 @@ export const usageStylesPart2 = `
     font-size: 13px;
     background: transparent;
     border: none;
-    color: var(--text-muted);
+    color: var(--muted);
     cursor: pointer;
     transition: all 0.15s;
   }
@@ -170,7 +170,7 @@ export const usageStylesPart2 = `
     position: absolute;
     bottom: -28px;
     font-size: 10px;
-    color: var(--text-muted);
+    color: var(--muted);
     white-space: nowrap;
     text-align: center;
     transform: rotate(-35deg);
@@ -182,7 +182,7 @@ export const usageStylesPart2 = `
     left: 50%;
     transform: translateX(-50%);
     font-size: 10px;
-    color: var(--text-muted);
+    color: var(--muted);
     white-space: nowrap;
   }
   .daily-bar-tooltip {
@@ -253,7 +253,7 @@ export const usageStylesPart2 = `
   .cost-breakdown-total {
     margin-top: 10px;
     font-size: 12px;
-    color: var(--text-muted);
+    color: var(--muted);
   }
   .legend-item {
     display: flex;
@@ -296,7 +296,7 @@ export const usageStylesPart2 = `
   .cost-breakdown-note {
     margin-top: 10px;
     font-size: 11px;
-    color: var(--text-muted);
+    color: var(--muted);
     line-height: 1.4;
   }
 
@@ -344,7 +344,7 @@ export const usageStylesPart2 = `
   }
   .session-bar-meta {
     font-size: 10px;
-    color: var(--text-muted);
+    color: var(--muted);
     font-weight: 400;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -369,7 +369,7 @@ export const usageStylesPart2 = `
     text-align: right;
     font-size: 12px;
     font-family: var(--font-mono);
-    color: var(--text-muted);
+    color: var(--muted);
   }
   .session-bar-actions {
     display: inline-flex;
@@ -385,7 +385,7 @@ export const usageStylesPart2 = `
     background: var(--bg-secondary);
     font-size: 11px;
     font-weight: 600;
-    color: var(--text-muted);
+    color: var(--muted);
     cursor: pointer;
     transition: background 0.15s, border-color 0.15s, color 0.15s;
   }
@@ -428,7 +428,7 @@ export const usageStylesPart2 = `
   }
   .timeseries-svg .axis-label {
     font-size: 10px;
-    fill: var(--text-muted);
+    fill: var(--muted);
   }
   .timeseries-svg .ts-area {
     fill: #ff4d4d;
@@ -460,7 +460,7 @@ export const usageStylesPart2 = `
   .timeseries-summary {
     margin-top: 12px;
     font-size: 13px;
-    color: var(--text-muted);
+    color: var(--muted);
     display: flex;
     flex-wrap: wrap;
     gap: 8px;
@@ -468,7 +468,7 @@ export const usageStylesPart2 = `
   .timeseries-loading {
     padding: 24px;
     text-align: center;
-    color: var(--text-muted);
+    color: var(--muted);
   }
 
   /* ===== SESSION LOGS ===== */
@@ -491,7 +491,7 @@ export const usageStylesPart2 = `
   .session-logs-loading {
     padding: 24px;
     text-align: center;
-    color: var(--text-muted);
+    color: var(--muted);
   }
   .session-logs-list {
     max-height: 400px;
@@ -519,7 +519,7 @@ export const usageStylesPart2 = `
     gap: 8px;
     align-items: center;
     font-size: 11px;
-    color: var(--text-muted);
+    color: var(--muted);
     flex-wrap: wrap;
   }
   .session-log-role {
@@ -536,7 +536,7 @@ export const usageStylesPart2 = `
     color: var(--accent);
   }
   .session-log-entry.assistant .session-log-role {
-    color: var(--text-muted);
+    color: var(--muted);
   }
   .session-log-content {
     font-size: 13px;
@@ -567,7 +567,7 @@ export const usageStylesPart2 = `
   }
   .context-weight-desc {
     font-size: 12px;
-    color: var(--text-muted);
+    color: var(--muted);
     margin: 0 0 12px 0;
   }
   .context-stacked-bar {
@@ -603,7 +603,7 @@ export const usageStylesPart2 = `
     margin-top: 10px;
     font-size: 12px;
     font-weight: 600;
-    color: var(--text-muted);
+    color: var(--muted);
   }
   .context-details {
     margin-top: 12px;
@@ -632,7 +632,7 @@ export const usageStylesPart2 = `
     padding: 8px 14px;
     font-size: 11px;
     text-transform: uppercase;
-    color: var(--text-muted);
+    color: var(--muted);
     background: var(--bg-secondary);
     border-bottom: 1px solid var(--border);
   }
@@ -651,7 +651,7 @@ export const usageStylesPart2 = `
     color: var(--text);
   }
   .context-list-item .muted {
-    color: var(--text-muted);
+    color: var(--muted);
     font-family: var(--font-mono);
   }
 
@@ -662,7 +662,7 @@ export const usageStylesPart2 = `
     background: var(--bg-secondary);
     border-radius: 8px;
     font-size: 13px;
-    color: var(--text-muted);
+    color: var(--muted);
     line-height: 1.5;
   }
 

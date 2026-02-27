@@ -1,6 +1,6 @@
 import type { GuardedFetchResult } from "../../infra/net/fetch-guard.js";
-import type { LookupFn, SsrFPolicy } from "../../infra/net/ssrf.js";
 import { fetchWithSsrFGuard } from "../../infra/net/fetch-guard.js";
+import type { LookupFn, SsrFPolicy } from "../../infra/net/ssrf.js";
 export { fetchWithTimeout } from "../../utils/fetch-timeout.js";
 
 const MAX_ERROR_CHARS = 300;
@@ -32,6 +32,27 @@ export async function fetchWithTimeoutGuarded(
   });
 }
 
+export async function postTranscriptionRequest(params: {
+  url: string;
+  headers: Headers;
+  body: BodyInit;
+  timeoutMs: number;
+  fetchFn: typeof fetch;
+  allowPrivateNetwork?: boolean;
+}) {
+  return fetchWithTimeoutGuarded(
+    params.url,
+    {
+      method: "POST",
+      headers: params.headers,
+      body: params.body,
+    },
+    params.timeoutMs,
+    params.fetchFn,
+    params.allowPrivateNetwork ? { ssrfPolicy: { allowPrivateNetwork: true } } : undefined,
+  );
+}
+
 export async function readErrorResponse(res: Response): Promise<string | undefined> {
   try {
     const text = await res.text();
@@ -46,4 +67,24 @@ export async function readErrorResponse(res: Response): Promise<string | undefin
   } catch {
     return undefined;
   }
+}
+
+export async function assertOkOrThrowHttpError(res: Response, label: string): Promise<void> {
+  if (res.ok) {
+    return;
+  }
+  const detail = await readErrorResponse(res);
+  const suffix = detail ? `: ${detail}` : "";
+  throw new Error(`${label} (HTTP ${res.status})${suffix}`);
+}
+
+export function requireTranscriptionText(
+  value: string | undefined,
+  missingMessage: string,
+): string {
+  const text = value?.trim();
+  if (!text) {
+    throw new Error(missingMessage);
+  }
+  return text;
 }

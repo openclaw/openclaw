@@ -1,6 +1,9 @@
 import { type OpenClawConfig, loadConfig } from "../config/config.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveOpenClawAgentDir } from "./agent-paths.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
+
+const log = createSubsystemLogger("model-catalog");
 
 export type ModelCatalogEntry = {
   id: string;
@@ -30,6 +33,7 @@ let importPiSdk = defaultImportPiSdk;
 const CODEX_PROVIDER = "openai-codex";
 const OPENAI_CODEX_GPT53_MODEL_ID = "gpt-5.3-codex";
 const OPENAI_CODEX_GPT53_SPARK_MODEL_ID = "gpt-5.3-codex-spark";
+const NON_PI_NATIVE_MODEL_PROVIDERS = new Set(["kilocode"]);
 
 function applyOpenAICodexSparkFallback(models: ModelCatalogEntry[]): void {
   const hasSpark = models.some(
@@ -54,6 +58,89 @@ function applyOpenAICodexSparkFallback(models: ModelCatalogEntry[]): void {
     id: OPENAI_CODEX_GPT53_SPARK_MODEL_ID,
     name: OPENAI_CODEX_GPT53_SPARK_MODEL_ID,
   });
+}
+
+function normalizeConfiguredModelInput(input: unknown): Array<"text" | "image"> | undefined {
+  if (!Array.isArray(input)) {
+    return undefined;
+  }
+  const normalized = input.filter(
+    (item): item is "text" | "image" => item === "text" || item === "image",
+  );
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function readConfiguredOptInProviderModels(config: OpenClawConfig): ModelCatalogEntry[] {
+  const providers = config.models?.providers;
+  if (!providers || typeof providers !== "object") {
+    return [];
+  }
+
+  const out: ModelCatalogEntry[] = [];
+  for (const [providerRaw, providerValue] of Object.entries(providers)) {
+    const provider = providerRaw.toLowerCase().trim();
+    if (!NON_PI_NATIVE_MODEL_PROVIDERS.has(provider)) {
+      continue;
+    }
+    if (!providerValue || typeof providerValue !== "object") {
+      continue;
+    }
+
+    const configuredModels = (providerValue as { models?: unknown }).models;
+    if (!Array.isArray(configuredModels)) {
+      continue;
+    }
+
+    for (const configuredModel of configuredModels) {
+      if (!configuredModel || typeof configuredModel !== "object") {
+        continue;
+      }
+      const idRaw = (configuredModel as { id?: unknown }).id;
+      if (typeof idRaw !== "string") {
+        continue;
+      }
+      const id = idRaw.trim();
+      if (!id) {
+        continue;
+      }
+      const rawName = (configuredModel as { name?: unknown }).name;
+      const name = (typeof rawName === "string" ? rawName : id).trim() || id;
+      const contextWindowRaw = (configuredModel as { contextWindow?: unknown }).contextWindow;
+      const contextWindow =
+        typeof contextWindowRaw === "number" && contextWindowRaw > 0 ? contextWindowRaw : undefined;
+      const reasoningRaw = (configuredModel as { reasoning?: unknown }).reasoning;
+      const reasoning = typeof reasoningRaw === "boolean" ? reasoningRaw : undefined;
+      const input = normalizeConfiguredModelInput((configuredModel as { input?: unknown }).input);
+      out.push({ id, name, provider, contextWindow, reasoning, input });
+    }
+  }
+
+  return out;
+}
+
+function mergeConfiguredOptInProviderModels(params: {
+  config: OpenClawConfig;
+  models: ModelCatalogEntry[];
+}): void {
+  const configured = readConfiguredOptInProviderModels(params.config);
+  if (configured.length === 0) {
+    return;
+  }
+
+  const seen = new Set(
+    params.models.map(
+      (entry) => `${entry.provider.toLowerCase().trim()}::${entry.id.toLowerCase().trim()}`,
+    ),
+  );
+
+  for (const entry of configured) {
+    const key = `${entry.provider.toLowerCase().trim()}::${entry.id.toLowerCase().trim()}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    params.models.push(entry);
+    seen.add(key);
+  }
 }
 
 export function resetModelCatalogCacheForTest() {
@@ -91,9 +178,6 @@ export async function loadModelCatalog(params?: {
     try {
       const cfg = params?.config ?? loadConfig();
       await ensureOpenClawModelsJson(cfg);
-      await (
-        await import("./pi-auth-json.js")
-      ).ensurePiAuthJsonFromAuthProfiles(resolveOpenClawAgentDir());
       // IMPORTANT: keep the dynamic import *inside* the try/catch.
       // If this fails once (e.g. during a pnpm install that temporarily swaps node_modules),
       // we must not poison the cache with a rejected promise (otherwise all channel handlers
@@ -101,12 +185,17 @@ export async function loadModelCatalog(params?: {
       const piSdk = await importPiSdk();
       const agentDir = resolveOpenClawAgentDir();
       const { join } = await import("node:path");
-      const authStorage = new piSdk.AuthStorage(join(agentDir, "auth.json"));
-      const registry = new piSdk.ModelRegistry(authStorage, join(agentDir, "models.json")) as
-        | {
-            getAll: () => Array<DiscoveredModel>;
-          }
-        | Array<DiscoveredModel>;
+      const authStorage = piSdk.discoverAuthStorage(agentDir);
+      const registry = new (piSdk.ModelRegistry as unknown as {
+        new (
+          authStorage: unknown,
+          modelsFile: string,
+        ):
+          | Array<DiscoveredModel>
+          | {
+              getAll: () => Array<DiscoveredModel>;
+            };
+      })(authStorage, join(agentDir, "models.json"));
       const entries = Array.isArray(registry) ? registry : registry.getAll();
       for (const entry of entries) {
         const id = String(entry?.id ?? "").trim();
@@ -126,6 +215,7 @@ export async function loadModelCatalog(params?: {
         const input = Array.isArray(entry?.input) ? entry.input : undefined;
         models.push({ id, name, provider, contextWindow, reasoning, input });
       }
+      mergeConfiguredOptInProviderModels({ config: cfg, models });
       applyOpenAICodexSparkFallback(models);
 
       if (models.length === 0) {
@@ -137,7 +227,7 @@ export async function loadModelCatalog(params?: {
     } catch (error) {
       if (!hasLoggedModelCatalogError) {
         hasLoggedModelCatalogError = true;
-        console.warn(`[model-catalog] Failed to load model catalog: ${String(error)}`);
+        log.warn(`Failed to load model catalog: ${String(error)}`);
       }
       // Don't poison the cache on transient dependency/filesystem issues.
       modelCatalogPromise = null;

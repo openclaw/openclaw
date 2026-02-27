@@ -1,13 +1,13 @@
 import type { WebhookRequestBody } from "@line/bot-sdk";
 import type { Request, Response, NextFunction } from "express";
 import type { OpenClawConfig } from "../config/config.js";
-import type { RuntimeEnv } from "../runtime.js";
-import type { LineInboundContext } from "./bot-message-context.js";
-import type { ResolvedLineAccount } from "./types.js";
 import { loadConfig } from "../config/config.js";
 import { logVerbose } from "../globals.js";
+import { createNonExitingRuntime, type RuntimeEnv } from "../runtime.js";
 import { resolveLineAccount } from "./accounts.js";
 import { handleLineWebhookEvents } from "./bot-handlers.js";
+import type { LineInboundContext } from "./bot-message-context.js";
+import type { ResolvedLineAccount } from "./types.js";
 import { startLineWebhook } from "./webhook.js";
 
 export interface LineBotOptions {
@@ -26,13 +26,7 @@ export interface LineBot {
 }
 
 export function createLineBot(opts: LineBotOptions): LineBot {
-  const runtime: RuntimeEnv = opts.runtime ?? {
-    log: console.log,
-    error: console.error,
-    exit: (code: number): never => {
-      throw new Error(`exit ${code}`);
-    },
-  };
+  const runtime: RuntimeEnv = opts.runtime ?? createNonExitingRuntime();
 
   const cfg = opts.config ?? loadConfig();
   const account = resolveLineAccount({

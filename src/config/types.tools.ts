@@ -1,4 +1,5 @@
 import type { ChatType } from "../channels/chat-type.js";
+import type { SafeBinProfileFixture } from "../infra/exec-safe-bin-policy.js";
 import type { AgentElevatedAllowFromConfig, SessionSendPolicyAction } from "./types.base.js";
 
 export type MediaUnderstandingScopeMatch = {
@@ -28,7 +29,22 @@ export type MediaUnderstandingAttachmentsConfig = {
   prefer?: "first" | "last" | "path" | "url";
 };
 
-export type MediaUnderstandingModelConfig = {
+type MediaProviderRequestConfig = {
+  /** Optional provider-specific query params (merged into requests). */
+  providerOptions?: Record<string, Record<string, string | number | boolean>>;
+  /** @deprecated Use providerOptions.deepgram instead. */
+  deepgram?: {
+    detectLanguage?: boolean;
+    punctuate?: boolean;
+    smartFormat?: boolean;
+  };
+  /** Optional base URL override for provider requests. */
+  baseUrl?: string;
+  /** Optional headers merged into provider requests. */
+  headers?: Record<string, string>;
+};
+
+export type MediaUnderstandingModelConfig = MediaProviderRequestConfig & {
   /** provider API id (e.g. openai, google). */
   provider?: string;
   /** Model id for provider-based understanding. */
@@ -51,25 +67,13 @@ export type MediaUnderstandingModelConfig = {
   timeoutSeconds?: number;
   /** Optional language hint for audio transcription. */
   language?: string;
-  /** Optional provider-specific query params (merged into requests). */
-  providerOptions?: Record<string, Record<string, string | number | boolean>>;
-  /** @deprecated Use providerOptions.deepgram instead. */
-  deepgram?: {
-    detectLanguage?: boolean;
-    punctuate?: boolean;
-    smartFormat?: boolean;
-  };
-  /** Optional base URL override for provider requests. */
-  baseUrl?: string;
-  /** Optional headers merged into provider requests. */
-  headers?: Record<string, string>;
   /** Auth profile id to use for this provider. */
   profile?: string;
   /** Preferred profile id if multiple are available. */
   preferredProfile?: string;
 };
 
-export type MediaUnderstandingConfig = {
+export type MediaUnderstandingConfig = MediaProviderRequestConfig & {
   /** Enable media understanding when models are configured. */
   enabled?: boolean;
   /** Optional scope gating for understanding. */
@@ -84,18 +88,6 @@ export type MediaUnderstandingConfig = {
   timeoutSeconds?: number;
   /** Default language hint (audio). */
   language?: string;
-  /** Optional provider-specific query params (merged into requests). */
-  providerOptions?: Record<string, Record<string, string | number | boolean>>;
-  /** @deprecated Use providerOptions.deepgram instead. */
-  deepgram?: {
-    detectLanguage?: boolean;
-    punctuate?: boolean;
-    smartFormat?: boolean;
-  };
-  /** Optional base URL override for provider requests. */
-  baseUrl?: string;
-  /** Optional headers merged into provider requests. */
-  headers?: Record<string, string>;
   /** Attachment selection policy. */
   attachments?: MediaUnderstandingAttachmentsConfig;
   /** Ordered model list (fallbacks in order). */
@@ -138,6 +130,32 @@ export type MediaToolsConfig = {
 
 export type ToolProfileId = "minimal" | "coding" | "messaging" | "full";
 
+export type ToolLoopDetectionDetectorConfig = {
+  /** Enable warning/blocking for repeated identical calls to the same tool/params. */
+  genericRepeat?: boolean;
+  /** Enable warning/blocking for known no-progress polling loops. */
+  knownPollNoProgress?: boolean;
+  /** Enable warning/blocking for no-progress ping-pong alternating patterns. */
+  pingPong?: boolean;
+};
+
+export type ToolLoopDetectionConfig = {
+  /** Enable tool-loop protection (default: false). */
+  enabled?: boolean;
+  /** Maximum tool call history entries retained for loop detection (default: 30). */
+  historySize?: number;
+  /** Warning threshold before a warning-only loop classification (default: 10). */
+  warningThreshold?: number;
+  /** Critical threshold for blocking repetitive loops (default: 20). */
+  criticalThreshold?: number;
+  /** Global no-progress breaker threshold (default: 30). */
+  globalCircuitBreakerThreshold?: number;
+  /** Detector toggles. */
+  detectors?: ToolLoopDetectionDetectorConfig;
+};
+
+export type SessionsToolsVisibility = "self" | "tree" | "agent" | "all";
+
 export type ToolPolicyConfig = {
   allow?: string[];
   /**
@@ -158,6 +176,42 @@ export type GroupToolPolicyConfig = {
   deny?: string[];
 };
 
+export const TOOLS_BY_SENDER_KEY_TYPES = ["id", "e164", "username", "name"] as const;
+export type ToolsBySenderKeyType = (typeof TOOLS_BY_SENDER_KEY_TYPES)[number];
+
+export function parseToolsBySenderTypedKey(
+  rawKey: string,
+): { type: ToolsBySenderKeyType; value: string } | undefined {
+  const trimmed = rawKey.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const lowered = trimmed.toLowerCase();
+  for (const type of TOOLS_BY_SENDER_KEY_TYPES) {
+    const prefix = `${type}:`;
+    if (!lowered.startsWith(prefix)) {
+      continue;
+    }
+    return {
+      type,
+      value: trimmed.slice(prefix.length),
+    };
+  }
+  return undefined;
+}
+
+/**
+ * Per-sender overrides.
+ *
+ * Prefer explicit key prefixes:
+ * - id:<senderId>
+ * - e164:<phone>
+ * - username:<handle>
+ * - name:<display-name>
+ * - * (wildcard)
+ *
+ * Legacy unprefixed keys are supported for backward compatibility and are matched as senderId only.
+ */
 export type GroupToolPolicyBySenderConfig = Record<string, GroupToolPolicyConfig>;
 
 export type ExecToolConfig = {
@@ -173,6 +227,10 @@ export type ExecToolConfig = {
   pathPrepend?: string[];
   /** Safe stdin-only binaries that can run without allowlist entries. */
   safeBins?: string[];
+  /** Extra explicit directories trusted for safeBins path checks (never derived from PATH). */
+  safeBinTrustedDirs?: string[];
+  /** Optional custom safe-bin profiles for entries in tools.exec.safeBins. */
+  safeBinProfiles?: Record<string, SafeBinProfileFixture>;
   /** Default time (ms) before an exec command auto-backgrounds. */
   backgroundMs?: number;
   /** Default timeout (seconds) before auto-killing exec commands. */
@@ -183,16 +241,34 @@ export type ExecToolConfig = {
   cleanupMs?: number;
   /** Emit a system event and heartbeat when a backgrounded exec exits. */
   notifyOnExit?: boolean;
+  /**
+   * Also emit success exit notifications when a backgrounded exec has no output.
+   * Default false to reduce context noise.
+   */
+  notifyOnExitEmptySuccess?: boolean;
   /** apply_patch subtool configuration (experimental). */
   applyPatch?: {
     /** Enable apply_patch for OpenAI models (default: false). */
     enabled?: boolean;
+    /**
+     * Restrict apply_patch paths to the workspace directory.
+     * Default: true (safer; does not affect read/write/edit).
+     */
+    workspaceOnly?: boolean;
     /**
      * Optional allowlist of model ids that can use apply_patch.
      * Accepts either raw ids (e.g. "gpt-5.2") or full ids (e.g. "openai/gpt-5.2").
      */
     allowModels?: string[];
   };
+};
+
+export type FsToolsConfig = {
+  /**
+   * Restrict filesystem tools (read/write/edit/apply_patch) to the agent workspace directory.
+   * Default: false (unrestricted, matches legacy behavior).
+   */
+  workspaceOnly?: boolean;
 };
 
 export type AgentToolsConfig = {
@@ -213,6 +289,10 @@ export type AgentToolsConfig = {
   };
   /** Exec tool defaults for this agent. */
   exec?: ExecToolConfig;
+  /** Filesystem tool path guards. */
+  fs?: FsToolsConfig;
+  /** Runtime loop detection for repetitive/ stuck tool-call patterns. */
+  loopDetection?: ToolLoopDetectionConfig;
   sandbox?: {
     tools?: {
       allow?: string[];
@@ -234,7 +314,7 @@ export type MemorySearchConfig = {
     sessionMemory?: boolean;
   };
   /** Embedding provider mode. */
-  provider?: "openai" | "gemini" | "local" | "voyage";
+  provider?: "openai" | "gemini" | "local" | "voyage" | "mistral";
   remote?: {
     baseUrl?: string;
     apiKey?: string;
@@ -253,7 +333,7 @@ export type MemorySearchConfig = {
     };
   };
   /** Fallback behavior when embeddings fail. */
-  fallback?: "openai" | "gemini" | "local" | "voyage" | "none";
+  fallback?: "openai" | "gemini" | "local" | "voyage" | "mistral" | "none";
   /** Embedding model id (remote) or alias (local). */
   model?: string;
   /** Local embedding settings (node-llama-cpp). */
@@ -312,6 +392,20 @@ export type MemorySearchConfig = {
       textWeight?: number;
       /** Multiplier for candidate pool size (default: 4). */
       candidateMultiplier?: number;
+      /** Optional MMR re-ranking for result diversity. */
+      mmr?: {
+        /** Enable MMR re-ranking (default: false). */
+        enabled?: boolean;
+        /** Lambda: 0 = max diversity, 1 = max relevance (default: 0.7). */
+        lambda?: number;
+      };
+      /** Optional temporal decay to boost recency in hybrid scoring. */
+      temporalDecay?: {
+        /** Enable temporal decay (default: false). */
+        enabled?: boolean;
+        /** Half-life in days for exponential decay (default: 30). */
+        halfLifeDays?: number;
+      };
     };
   };
   /** Index cache behavior. */
@@ -336,8 +430,8 @@ export type ToolsConfig = {
     search?: {
       /** Enable web search tool (default: true when API key is present). */
       enabled?: boolean;
-      /** Search provider ("brave", "perplexity", or "grok"). */
-      provider?: "brave" | "perplexity" | "grok";
+      /** Search provider ("brave", "perplexity", "grok", "gemini", or "kimi"). */
+      provider?: "brave" | "perplexity" | "grok" | "gemini" | "kimi";
       /** Brave Search API key (optional; defaults to BRAVE_API_KEY env var). */
       apiKey?: string;
       /** Default search results count (1-10). */
@@ -363,6 +457,22 @@ export type ToolsConfig = {
         model?: string;
         /** Include inline citations in response text as markdown links (default: false). */
         inlineCitations?: boolean;
+      };
+      /** Gemini-specific configuration (used when provider="gemini"). */
+      gemini?: {
+        /** Gemini API key (defaults to GEMINI_API_KEY env var). */
+        apiKey?: string;
+        /** Model to use for grounded search (defaults to "gemini-2.5-flash"). */
+        model?: string;
+      };
+      /** Kimi-specific configuration (used when provider="kimi"). */
+      kimi?: {
+        /** Moonshot/Kimi API key (defaults to KIMI_API_KEY or MOONSHOT_API_KEY env var). */
+        apiKey?: string;
+        /** Base URL for API requests (defaults to "https://api.moonshot.ai/v1"). */
+        baseUrl?: string;
+        /** Model to use (defaults to "moonshot-v1-128k"). */
+        model?: string;
       };
     };
     fetch?: {
@@ -433,6 +543,21 @@ export type ToolsConfig = {
     /** Allowlist of agent ids or patterns (implementation-defined). */
     allow?: string[];
   };
+  /**
+   * Session tool visibility controls which sessions can be targeted by session tools
+   * (sessions_list, sessions_history, sessions_send).
+   *
+   * Default: "tree" (current session + spawned subagent sessions).
+   */
+  sessions?: {
+    /**
+     * - "self": only the current session
+     * - "tree": current session + sessions spawned by this session (default)
+     * - "agent": any session belonging to the current agent id (can include other users)
+     * - "all": any session (cross-agent still requires tools.agentToAgent)
+     */
+    visibility?: SessionsToolsVisibility;
+  };
   /** Elevated exec permissions for the host machine. */
   elevated?: {
     /** Enable or disable elevated mode (default: true). */
@@ -442,12 +567,18 @@ export type ToolsConfig = {
   };
   /** Exec tool defaults. */
   exec?: ExecToolConfig;
+  /** Filesystem tool path guards. */
+  fs?: FsToolsConfig;
+  /** Runtime loop detection for repetitive/ stuck tool-call patterns. */
+  loopDetection?: ToolLoopDetectionConfig;
   /** Sub-agent tool policy defaults (deny wins). */
   subagents?: {
     /** Default model selection for spawned sub-agents (string or {primary,fallbacks}). */
     model?: string | { primary?: string; fallbacks?: string[] };
     tools?: {
       allow?: string[];
+      /** Additional allowlist entries merged into allow and/or default sub-agent denylist. */
+      alsoAllow?: string[];
       deny?: string[];
     };
   };

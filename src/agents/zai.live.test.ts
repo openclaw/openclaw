@@ -7,48 +7,34 @@ const LIVE = isTruthyEnvValue(process.env.ZAI_LIVE_TEST) || isTruthyEnvValue(pro
 
 const describeLive = LIVE && ZAI_KEY ? describe : describe.skip;
 
+async function expectModelReturnsAssistantText(modelId: "glm-4.7" | "glm-4.7-flashx") {
+  const model = getModel("zai", modelId as "glm-4.7");
+  const res = await completeSimple(
+    model,
+    {
+      messages: [
+        {
+          role: "user",
+          content: "Reply with the word ok.",
+          timestamp: Date.now(),
+        },
+      ],
+    },
+    { apiKey: ZAI_KEY, maxTokens: 64 },
+  );
+  const text = res.content
+    .filter((block) => block.type === "text")
+    .map((block) => block.text.trim())
+    .join(" ");
+  expect(text.length).toBeGreaterThan(0);
+}
+
 describeLive("zai live", () => {
   it("returns assistant text", async () => {
-    const model = getModel("zai", "glm-4.7");
-    const res = await completeSimple(
-      model,
-      {
-        messages: [
-          {
-            role: "user",
-            content: "Reply with the word ok.",
-            timestamp: Date.now(),
-          },
-        ],
-      },
-      { apiKey: ZAI_KEY, maxTokens: 64 },
-    );
-    const text = res.content
-      .filter((block) => block.type === "text")
-      .map((block) => block.text.trim())
-      .join(" ");
-    expect(text.length).toBeGreaterThan(0);
+    await expectModelReturnsAssistantText("glm-4.7");
   }, 20000);
 
   it("glm-4.7-flashx returns assistant text", async () => {
-    const model = getModel("zai", "glm-4.7-flashx" as "glm-4.7");
-    const res = await completeSimple(
-      model,
-      {
-        messages: [
-          {
-            role: "user",
-            content: "Reply with the word ok.",
-            timestamp: Date.now(),
-          },
-        ],
-      },
-      { apiKey: ZAI_KEY, maxTokens: 64 },
-    );
-    const text = res.content
-      .filter((block) => block.type === "text")
-      .map((block) => block.text.trim())
-      .join(" ");
-    expect(text.length).toBeGreaterThan(0);
+    await expectModelReturnsAssistantText("glm-4.7-flashx");
   }, 20000);
 });

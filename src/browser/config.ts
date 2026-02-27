@@ -6,6 +6,7 @@ import {
   DEFAULT_BROWSER_CONTROL_PORT,
 } from "../config/port-defaults.js";
 import { isLoopbackHost } from "../gateway/net.js";
+import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import {
   DEFAULT_OPENCLAW_BROWSER_COLOR,
   DEFAULT_OPENCLAW_BROWSER_ENABLED,
@@ -31,6 +32,8 @@ export type ResolvedBrowserConfig = {
   attachOnly: boolean;
   defaultProfile: string;
   profiles: Record<string, BrowserProfileConfig>;
+  ssrfPolicy?: SsrFPolicy;
+  extraArgs: string[];
 };
 
 export type ResolvedBrowserProfile = {
@@ -58,6 +61,45 @@ function normalizeHexColor(raw: string | undefined) {
 function normalizeTimeoutMs(raw: number | undefined, fallback: number) {
   const value = typeof raw === "number" && Number.isFinite(raw) ? Math.floor(raw) : fallback;
   return value < 0 ? fallback : value;
+}
+
+function normalizeStringList(raw: string[] | undefined): string[] | undefined {
+  if (!Array.isArray(raw) || raw.length === 0) {
+    return undefined;
+  }
+  const values = raw
+    .map((value) => value.trim())
+    .filter((value): value is string => value.length > 0);
+  return values.length > 0 ? values : undefined;
+}
+
+function resolveBrowserSsrFPolicy(cfg: BrowserConfig | undefined): SsrFPolicy | undefined {
+  const allowPrivateNetwork = cfg?.ssrfPolicy?.allowPrivateNetwork;
+  const dangerouslyAllowPrivateNetwork = cfg?.ssrfPolicy?.dangerouslyAllowPrivateNetwork;
+  const allowedHostnames = normalizeStringList(cfg?.ssrfPolicy?.allowedHostnames);
+  const hostnameAllowlist = normalizeStringList(cfg?.ssrfPolicy?.hostnameAllowlist);
+  const hasExplicitPrivateSetting =
+    allowPrivateNetwork !== undefined || dangerouslyAllowPrivateNetwork !== undefined;
+  // Browser defaults to trusted-network mode unless explicitly disabled by policy.
+  const resolvedAllowPrivateNetwork =
+    dangerouslyAllowPrivateNetwork === true ||
+    allowPrivateNetwork === true ||
+    !hasExplicitPrivateSetting;
+
+  if (
+    !resolvedAllowPrivateNetwork &&
+    !hasExplicitPrivateSetting &&
+    !allowedHostnames &&
+    !hostnameAllowlist
+  ) {
+    return undefined;
+  }
+
+  return {
+    ...(resolvedAllowPrivateNetwork ? { dangerouslyAllowPrivateNetwork: true } : {}),
+    ...(allowedHostnames ? { allowedHostnames } : {}),
+    ...(hostnameAllowlist ? { hostnameAllowlist } : {}),
+  };
 }
 
 export function parseHttpUrl(raw: string, label: string) {
@@ -196,6 +238,11 @@ export function resolveBrowserConfig(
       ? DEFAULT_BROWSER_DEFAULT_PROFILE_NAME
       : DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME);
 
+  const extraArgs = Array.isArray(cfg?.extraArgs)
+    ? cfg.extraArgs.filter((a): a is string => typeof a === "string" && a.trim().length > 0)
+    : [];
+  const ssrfPolicy = resolveBrowserSsrFPolicy(cfg);
+
   return {
     enabled,
     evaluateEnabled,
@@ -212,6 +259,8 @@ export function resolveBrowserConfig(
     attachOnly,
     defaultProfile,
     profiles,
+    ssrfPolicy,
+    extraArgs,
   };
 }
 

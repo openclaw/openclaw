@@ -116,6 +116,43 @@ describe("finalizeInboundContext", () => {
     finalizeInboundContext(ctx, { forceBodyForCommands: true });
     expect(ctx.BodyForCommands).toBe("say hi");
   });
+
+  it("fills MediaType/MediaTypes defaults only when media exists", () => {
+    const withMedia: MsgContext = {
+      Body: "hi",
+      MediaPath: "/tmp/file.bin",
+    };
+    const outWithMedia = finalizeInboundContext(withMedia);
+    expect(outWithMedia.MediaType).toBe("application/octet-stream");
+    expect(outWithMedia.MediaTypes).toEqual(["application/octet-stream"]);
+
+    const withoutMedia: MsgContext = { Body: "hi" };
+    const outWithoutMedia = finalizeInboundContext(withoutMedia);
+    expect(outWithoutMedia.MediaType).toBeUndefined();
+    expect(outWithoutMedia.MediaTypes).toBeUndefined();
+  });
+
+  it("pads MediaTypes to match MediaPaths/MediaUrls length", () => {
+    const ctx: MsgContext = {
+      Body: "hi",
+      MediaPaths: ["/tmp/a", "/tmp/b"],
+      MediaTypes: ["image/png"],
+    };
+    const out = finalizeInboundContext(ctx);
+    expect(out.MediaType).toBe("image/png");
+    expect(out.MediaTypes).toEqual(["image/png", "application/octet-stream"]);
+  });
+
+  it("derives MediaType from MediaTypes when missing", () => {
+    const ctx: MsgContext = {
+      Body: "hi",
+      MediaPath: "/tmp/a",
+      MediaTypes: ["image/jpeg"],
+    };
+    const out = finalizeInboundContext(ctx);
+    expect(out.MediaType).toBe("image/jpeg");
+    expect(out.MediaTypes).toEqual(["image/jpeg"]);
+  });
 });
 
 describe("inbound dedupe", () => {
@@ -216,6 +253,29 @@ describe("createInboundDebouncer", () => {
     await debouncer.enqueue({ key: "a", id: "2", debounce: false });
 
     expect(calls).toEqual([["1"], ["2"]]);
+
+    vi.useRealTimers();
+  });
+
+  it("supports per-item debounce windows when default debounce is disabled", async () => {
+    vi.useFakeTimers();
+    const calls: Array<string[]> = [];
+
+    const debouncer = createInboundDebouncer<{ key: string; id: string; windowMs: number }>({
+      debounceMs: 0,
+      buildKey: (item) => item.key,
+      resolveDebounceMs: (item) => item.windowMs,
+      onFlush: async (items) => {
+        calls.push(items.map((entry) => entry.id));
+      },
+    });
+
+    await debouncer.enqueue({ key: "forward", id: "1", windowMs: 30 });
+    await debouncer.enqueue({ key: "forward", id: "2", windowMs: 30 });
+
+    expect(calls).toEqual([]);
+    await vi.advanceTimersByTimeAsync(30);
+    expect(calls).toEqual([["1", "2"]]);
 
     vi.useRealTimers();
   });
@@ -333,6 +393,7 @@ describe("resolveGroupRequireMention", () => {
       GroupSpace: "145",
     };
     const groupResolution: GroupKeyResolution = {
+      key: "discord:group:123",
       channel: "discord",
       id: "123",
       chatType: "group",
@@ -357,6 +418,7 @@ describe("resolveGroupRequireMention", () => {
       GroupSubject: "#general",
     };
     const groupResolution: GroupKeyResolution = {
+      key: "slack:group:C123",
       channel: "slack",
       id: "C123",
       chatType: "group",

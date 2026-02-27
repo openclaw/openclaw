@@ -1,19 +1,23 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import {
+  GROUP_POLICY_BLOCKED_LABEL,
+  createScopedPairingAccess,
   createReplyPrefixOptions,
   readJsonBodyWithLimit,
+  registerWebhookTarget,
+  rejectNonPostWebhookRequest,
+  isDangerousNameMatchingEnabled,
+  resolveAllowlistProviderRuntimeGroupPolicy,
+  resolveDefaultGroupPolicy,
+  resolveSingleWebhookTargetAsync,
+  resolveWebhookPath,
+  resolveWebhookTargets,
+  warnMissingProviderGroupPolicyFallbackOnce,
   requestBodyErrorToText,
   resolveMentionGatingWithBypass,
+  resolveDmGroupAccessWithLists,
 } from "openclaw/plugin-sdk";
-import type {
-  GoogleChatAnnotation,
-  GoogleChatAttachment,
-  GoogleChatEvent,
-  GoogleChatSpace,
-  GoogleChatMessage,
-  GoogleChatUser,
-} from "./types.js";
 import { type ResolvedGoogleChatAccount } from "./accounts.js";
 import {
   downloadGoogleChatMedia,
@@ -23,6 +27,14 @@ import {
 } from "./api.js";
 import { verifyGoogleChatRequest, type GoogleChatAudienceType } from "./auth.js";
 import { getGoogleChatRuntime } from "./runtime.js";
+import type {
+  GoogleChatAnnotation,
+  GoogleChatAttachment,
+  GoogleChatEvent,
+  GoogleChatSpace,
+  GoogleChatMessage,
+  GoogleChatUser,
+} from "./types.js";
 
 export type GoogleChatRuntimeEnv = {
   log?: (message: string) => void;
@@ -61,48 +73,33 @@ function logVerbose(core: GoogleChatCoreRuntime, runtime: GoogleChatRuntimeEnv, 
   }
 }
 
-function normalizeWebhookPath(raw: string): string {
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return "/";
+const warnedDeprecatedUsersEmailAllowFrom = new Set<string>();
+function warnDeprecatedUsersEmailEntries(
+  core: GoogleChatCoreRuntime,
+  runtime: GoogleChatRuntimeEnv,
+  entries: string[],
+) {
+  const deprecated = entries.map((v) => String(v).trim()).filter((v) => /^users\/.+@.+/i.test(v));
+  if (deprecated.length === 0) {
+    return;
   }
-  const withSlash = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
-  if (withSlash.length > 1 && withSlash.endsWith("/")) {
-    return withSlash.slice(0, -1);
+  const key = deprecated
+    .map((v) => v.toLowerCase())
+    .sort()
+    .join(",");
+  if (warnedDeprecatedUsersEmailAllowFrom.has(key)) {
+    return;
   }
-  return withSlash;
-}
-
-function resolveWebhookPath(webhookPath?: string, webhookUrl?: string): string | null {
-  const trimmedPath = webhookPath?.trim();
-  if (trimmedPath) {
-    return normalizeWebhookPath(trimmedPath);
-  }
-  if (webhookUrl?.trim()) {
-    try {
-      const parsed = new URL(webhookUrl);
-      return normalizeWebhookPath(parsed.pathname || "/");
-    } catch {
-      return null;
-    }
-  }
-  return "/googlechat";
+  warnedDeprecatedUsersEmailAllowFrom.add(key);
+  logVerbose(
+    core,
+    runtime,
+    `Deprecated allowFrom entry detected: "users/<email>" is no longer treated as an email allowlist. Use raw email (alice@example.com) or immutable user id (users/<id>). entries=${deprecated.join(", ")}`,
+  );
 }
 
 export function registerGoogleChatWebhookTarget(target: WebhookTarget): () => void {
-  const key = normalizeWebhookPath(target.path);
-  const normalizedTarget = { ...target, path: key };
-  const existing = webhookTargets.get(key) ?? [];
-  const next = [...existing, normalizedTarget];
-  webhookTargets.set(key, next);
-  return () => {
-    const updated = (webhookTargets.get(key) ?? []).filter((entry) => entry !== normalizedTarget);
-    if (updated.length > 0) {
-      webhookTargets.set(key, updated);
-    } else {
-      webhookTargets.delete(key);
-    }
-  };
+  return registerWebhookTarget(webhookTargets, target).unregister;
 }
 
 function normalizeAudienceType(value?: string | null): GoogleChatAudienceType | undefined {
@@ -124,17 +121,13 @@ export async function handleGoogleChatWebhookRequest(
   req: IncomingMessage,
   res: ServerResponse,
 ): Promise<boolean> {
-  const url = new URL(req.url ?? "/", "http://localhost");
-  const path = normalizeWebhookPath(url.pathname);
-  const targets = webhookTargets.get(path);
-  if (!targets || targets.length === 0) {
+  const resolved = resolveWebhookTargets(req, webhookTargets);
+  if (!resolved) {
     return false;
   }
+  const { targets } = resolved;
 
-  if (req.method !== "POST") {
-    res.statusCode = 405;
-    res.setHeader("Allow", "POST");
-    res.end("Method Not Allowed");
+  if (rejectNonPostWebhookRequest(req, res)) {
     return true;
   }
 
@@ -223,8 +216,7 @@ export async function handleGoogleChatWebhookRequest(
     ? authHeaderNow.slice("bearer ".length)
     : bearer;
 
-  let selected: WebhookTarget | undefined;
-  for (const target of targets) {
+  const matchedTarget = await resolveSingleWebhookTargetAsync(targets, async (target) => {
     const audienceType = target.audienceType;
     const audience = target.audience;
     const verification = await verifyGoogleChatRequest({
@@ -232,18 +224,22 @@ export async function handleGoogleChatWebhookRequest(
       audienceType,
       audience,
     });
-    if (verification.ok) {
-      selected = target;
-      break;
-    }
-  }
+    return verification.ok;
+  });
 
-  if (!selected) {
+  if (matchedTarget.kind === "none") {
     res.statusCode = 401;
     res.end("unauthorized");
     return true;
   }
 
+  if (matchedTarget.kind === "ambiguous") {
+    res.statusCode = 401;
+    res.end("ambiguous webhook target");
+    return true;
+  }
+
+  const selected = matchedTarget.target;
   selected.statusSink?.({ lastInboundAt: Date.now() });
   processGoogleChatEvent(event, selected).catch((err) => {
     selected?.runtime.error?.(
@@ -285,10 +281,16 @@ function normalizeUserId(raw?: string | null): string {
   return trimmed.replace(/^users\//i, "").toLowerCase();
 }
 
+function isEmailLike(value: string): boolean {
+  // Keep this intentionally loose; allowlists are user-provided config.
+  return value.includes("@");
+}
+
 export function isSenderAllowed(
   senderId: string,
   senderEmail: string | undefined,
   allowFrom: string[],
+  allowNameMatching = false,
 ) {
   if (allowFrom.includes("*")) {
     return true;
@@ -300,22 +302,19 @@ export function isSenderAllowed(
     if (!normalized) {
       return false;
     }
-    if (normalized === normalizedSenderId) {
-      return true;
+
+    // Accept `googlechat:<id>` but treat `users/...` as an *ID* only (deprecated `users/<email>`).
+    const withoutPrefix = normalized.replace(/^(googlechat|google-chat|gchat):/i, "");
+    if (withoutPrefix.startsWith("users/")) {
+      return normalizeUserId(withoutPrefix) === normalizedSenderId;
     }
-    if (normalizedEmail && normalized === normalizedEmail) {
-      return true;
+
+    // Raw email allowlist entries are a break-glass override.
+    if (allowNameMatching && normalizedEmail && isEmailLike(withoutPrefix)) {
+      return withoutPrefix === normalizedEmail;
     }
-    if (normalizedEmail && normalized.replace(/^users\//i, "") === normalizedEmail) {
-      return true;
-    }
-    if (normalized.replace(/^users\//i, "") === normalizedSenderId) {
-      return true;
-    }
-    if (normalized.replace(/^(googlechat|google-chat|gchat):/i, "") === normalizedSenderId) {
-      return true;
-    }
-    return false;
+
+    return withoutPrefix.replace(/^users\//i, "") === normalizedSenderId;
   });
 }
 
@@ -398,6 +397,11 @@ async function processMessageWithPipeline(params: {
   mediaMaxMb: number;
 }): Promise<void> {
   const { event, account, config, runtime, core, statusSink, mediaMaxMb } = params;
+  const pairing = createScopedPairingAccess({
+    core,
+    channel: "googlechat",
+    accountId: account.accountId,
+  });
   const space = event.space;
   const message = event.message;
   if (!space || !message) {
@@ -414,6 +418,7 @@ async function processMessageWithPipeline(params: {
   const senderId = sender?.name ?? "";
   const senderName = sender?.displayName ?? "";
   const senderEmail = sender?.email ?? undefined;
+  const allowNameMatching = isDangerousNameMatchingEnabled(account.config);
 
   const allowBots = account.config.allowBots === true;
   if (!allowBots) {
@@ -435,8 +440,20 @@ async function processMessageWithPipeline(params: {
     return;
   }
 
-  const defaultGroupPolicy = config.channels?.defaults?.groupPolicy;
-  const groupPolicy = account.config.groupPolicy ?? defaultGroupPolicy ?? "allowlist";
+  const defaultGroupPolicy = resolveDefaultGroupPolicy(config);
+  const { groupPolicy, providerMissingFallbackApplied } =
+    resolveAllowlistProviderRuntimeGroupPolicy({
+      providerConfigPresent: config.channels?.googlechat !== undefined,
+      groupPolicy: account.config.groupPolicy,
+      defaultGroupPolicy,
+    });
+  warnMissingProviderGroupPolicyFallbackOnce({
+    providerMissingFallbackApplied,
+    providerKey: "googlechat",
+    accountId: account.accountId,
+    blockedLabel: GROUP_POLICY_BLOCKED_LABEL.space,
+    log: (message) => logVerbose(core, runtime, message),
+  });
   const groupConfigResolved = resolveGroupConfig({
     groupId: spaceId,
     groupName: space.displayName ?? null,
@@ -473,10 +490,16 @@ async function processMessageWithPipeline(params: {
     }
 
     if (groupUsers.length > 0) {
+      warnDeprecatedUsersEmailEntries(
+        core,
+        runtime,
+        groupUsers.map((v) => String(v)),
+      );
       const ok = isSenderAllowed(
         senderId,
         senderEmail,
         groupUsers.map((v) => String(v)),
+        allowNameMatching,
       );
       if (!ok) {
         logVerbose(core, runtime, `drop group message (sender not allowed, ${senderId})`);
@@ -487,15 +510,40 @@ async function processMessageWithPipeline(params: {
 
   const dmPolicy = account.config.dm?.policy ?? "pairing";
   const configAllowFrom = (account.config.dm?.allowFrom ?? []).map((v) => String(v));
+  const normalizedGroupUsers = groupUsers.map((v) => String(v));
+  const senderGroupPolicy =
+    groupPolicy === "disabled"
+      ? "disabled"
+      : normalizedGroupUsers.length > 0
+        ? "allowlist"
+        : "open";
   const shouldComputeAuth = core.channel.commands.shouldComputeCommandAuthorized(rawBody, config);
   const storeAllowFrom =
-    !isGroup && (dmPolicy !== "open" || shouldComputeAuth)
-      ? await core.channel.pairing.readAllowFromStore("googlechat").catch(() => [])
+    !isGroup && dmPolicy !== "allowlist" && (dmPolicy !== "open" || shouldComputeAuth)
+      ? await pairing.readAllowFromStore().catch(() => [])
       : [];
-  const effectiveAllowFrom = [...configAllowFrom, ...storeAllowFrom];
-  const commandAllowFrom = isGroup ? groupUsers.map((v) => String(v)) : effectiveAllowFrom;
+  const access = resolveDmGroupAccessWithLists({
+    isGroup,
+    dmPolicy,
+    groupPolicy: senderGroupPolicy,
+    allowFrom: configAllowFrom,
+    groupAllowFrom: normalizedGroupUsers,
+    storeAllowFrom,
+    groupAllowFromFallbackToAllowFrom: false,
+    isSenderAllowed: (allowFrom) =>
+      isSenderAllowed(senderId, senderEmail, allowFrom, allowNameMatching),
+  });
+  const effectiveAllowFrom = access.effectiveAllowFrom;
+  const effectiveGroupAllowFrom = access.effectiveGroupAllowFrom;
+  warnDeprecatedUsersEmailEntries(core, runtime, effectiveAllowFrom);
+  const commandAllowFrom = isGroup ? effectiveGroupAllowFrom : effectiveAllowFrom;
   const useAccessGroups = config.commands?.useAccessGroups !== false;
-  const senderAllowedForCommands = isSenderAllowed(senderId, senderEmail, commandAllowFrom);
+  const senderAllowedForCommands = isSenderAllowed(
+    senderId,
+    senderEmail,
+    commandAllowFrom,
+    allowNameMatching,
+  );
   const commandAuthorized = shouldComputeAuth
     ? core.channel.commands.resolveCommandAuthorizedFromAuthorizers({
         useAccessGroups,
@@ -531,47 +579,52 @@ async function processMessageWithPipeline(params: {
     }
   }
 
+  if (isGroup && access.decision !== "allow") {
+    logVerbose(
+      core,
+      runtime,
+      `drop group message (sender policy blocked, reason=${access.reason}, space=${spaceId})`,
+    );
+    return;
+  }
+
   if (!isGroup) {
-    if (dmPolicy === "disabled" || account.config.dm?.enabled === false) {
+    if (account.config.dm?.enabled === false) {
       logVerbose(core, runtime, `Blocked Google Chat DM from ${senderId} (dmPolicy=disabled)`);
       return;
     }
 
-    if (dmPolicy !== "open") {
-      const allowed = senderAllowedForCommands;
-      if (!allowed) {
-        if (dmPolicy === "pairing") {
-          const { code, created } = await core.channel.pairing.upsertPairingRequest({
-            channel: "googlechat",
-            id: senderId,
-            meta: { name: senderName || undefined, email: senderEmail },
-          });
-          if (created) {
-            logVerbose(core, runtime, `googlechat pairing request sender=${senderId}`);
-            try {
-              await sendGoogleChatMessage({
-                account,
-                space: spaceId,
-                text: core.channel.pairing.buildPairingReply({
-                  channel: "googlechat",
-                  idLine: `Your Google Chat user id: ${senderId}`,
-                  code,
-                }),
-              });
-              statusSink?.({ lastOutboundAt: Date.now() });
-            } catch (err) {
-              logVerbose(core, runtime, `pairing reply failed for ${senderId}: ${String(err)}`);
-            }
+    if (access.decision !== "allow") {
+      if (access.decision === "pairing") {
+        const { code, created } = await pairing.upsertPairingRequest({
+          id: senderId,
+          meta: { name: senderName || undefined, email: senderEmail },
+        });
+        if (created) {
+          logVerbose(core, runtime, `googlechat pairing request sender=${senderId}`);
+          try {
+            await sendGoogleChatMessage({
+              account,
+              space: spaceId,
+              text: core.channel.pairing.buildPairingReply({
+                channel: "googlechat",
+                idLine: `Your Google Chat user id: ${senderId}`,
+                code,
+              }),
+            });
+            statusSink?.({ lastOutboundAt: Date.now() });
+          } catch (err) {
+            logVerbose(core, runtime, `pairing reply failed for ${senderId}: ${String(err)}`);
           }
-        } else {
-          logVerbose(
-            core,
-            runtime,
-            `Blocked unauthorized Google Chat sender ${senderId} (dmPolicy=${dmPolicy})`,
-          );
         }
-        return;
+      } else {
+        logVerbose(
+          core,
+          runtime,
+          `Blocked unauthorized Google Chat sender ${senderId} (dmPolicy=${dmPolicy})`,
+        );
       }
+      return;
     }
   }
 
@@ -891,7 +944,11 @@ async function uploadAttachmentForReply(params: {
 
 export function monitorGoogleChatProvider(options: GoogleChatMonitorOptions): () => void {
   const core = getGoogleChatRuntime();
-  const webhookPath = resolveWebhookPath(options.webhookPath, options.webhookUrl);
+  const webhookPath = resolveWebhookPath({
+    webhookPath: options.webhookPath,
+    webhookUrl: options.webhookUrl,
+    defaultPath: "/googlechat",
+  });
   if (!webhookPath) {
     options.runtime.error?.(`[${options.account.accountId}] invalid webhook path`);
     return () => {};
@@ -926,8 +983,11 @@ export function resolveGoogleChatWebhookPath(params: {
   account: ResolvedGoogleChatAccount;
 }): string {
   return (
-    resolveWebhookPath(params.account.config.webhookPath, params.account.config.webhookUrl) ??
-    "/googlechat"
+    resolveWebhookPath({
+      webhookPath: params.account.config.webhookPath,
+      webhookUrl: params.account.config.webhookUrl,
+      defaultPath: "/googlechat",
+    }) ?? "/googlechat"
   );
 }
 

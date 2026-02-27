@@ -1,10 +1,37 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import { __test__ } from "./schema.hints.js";
+import { __test__, isSensitiveConfigPath } from "./schema.hints.js";
 import { OpenClawSchema } from "./zod-schema.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 
 const { mapSensitivePaths } = __test__;
+
+describe("isSensitiveConfigPath", () => {
+  it("matches whitelist suffixes case-insensitively", () => {
+    const whitelistedPaths = [
+      "maxTokens",
+      "maxOutputTokens",
+      "maxInputTokens",
+      "maxCompletionTokens",
+      "contextTokens",
+      "totalTokens",
+      "tokenCount",
+      "tokenLimit",
+      "tokenBudget",
+      "channels.irc.nickserv.passwordFile",
+    ];
+    for (const path of whitelistedPaths) {
+      expect(isSensitiveConfigPath(path)).toBe(false);
+      expect(isSensitiveConfigPath(path.toUpperCase())).toBe(false);
+    }
+  });
+
+  it("keeps true sensitive keys redacted", () => {
+    expect(isSensitiveConfigPath("channels.slack.token")).toBe(true);
+    expect(isSensitiveConfigPath("models.providers.openai.apiKey")).toBe(true);
+    expect(isSensitiveConfigPath("channels.irc.nickserv.password")).toBe(true);
+  });
+});
 
 describe("mapSensitivePaths", () => {
   it("should detect sensitive fields nested inside all structural Zod types", () => {
@@ -71,6 +98,30 @@ describe("mapSensitivePaths", () => {
     expect(result["merged.nested"]?.sensitive).toBe(undefined);
   });
 
+  it("maps sensitive fields nested under object catchall schemas", () => {
+    const schema = z.object({
+      custom: z.object({}).catchall(
+        z.object({
+          apiKey: z.string().register(sensitive),
+          label: z.string(),
+        }),
+      ),
+    });
+
+    const result = mapSensitivePaths(schema, "", {});
+    expect(result["custom.*.apiKey"]?.sensitive).toBe(true);
+    expect(result["custom.*.label"]?.sensitive).toBe(undefined);
+  });
+
+  it("does not mark plain catchall values sensitive by default", () => {
+    const schema = z.object({
+      env: z.object({}).catchall(z.string()),
+    });
+
+    const result = mapSensitivePaths(schema, "", {});
+    expect(result["env.*"]?.sensitive).toBe(undefined);
+  });
+
   it("main schema yields correct hints (samples)", () => {
     const schema = OpenClawSchema.toJSONSchema({
       target: "draft-07",
@@ -82,6 +133,7 @@ describe("mapSensitivePaths", () => {
     expect(hints["agents.defaults.memorySearch.remote.apiKey"]?.sensitive).toBe(true);
     expect(hints["agents.list[].memorySearch.remote.apiKey"]?.sensitive).toBe(true);
     expect(hints["channels.discord.accounts.*.token"]?.sensitive).toBe(true);
+    expect(hints["channels.googlechat.serviceAccount"]?.sensitive).toBe(true);
     expect(hints["gateway.auth.token"]?.sensitive).toBe(true);
     expect(hints["skills.entries.*.apiKey"]?.sensitive).toBe(true);
   });

@@ -1,14 +1,10 @@
 import type { MatrixClient } from "@vector-im/matrix-bot-sdk";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk";
-import type { CoreConfig } from "../../types.js";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { getMatrixRuntime } from "../../runtime.js";
+import type { CoreConfig } from "../../types.js";
 import { getActiveMatrixClient, getAnyActiveMatrixClient } from "../active-client.js";
-import {
-  createMatrixClient,
-  isBunRuntime,
-  resolveMatrixAuth,
-  resolveSharedMatrixClient,
-} from "../client.js";
+import { createPreparedMatrixClient } from "../client-bootstrap.js";
+import { isBunRuntime, resolveMatrixAuth, resolveSharedMatrixClient } from "../client.js";
 
 const getCore = () => getMatrixRuntime();
 
@@ -92,25 +88,10 @@ export async function resolveMatrixClient(opts: {
     return { client, stopOnDone: false };
   }
   const auth = await resolveMatrixAuth({ accountId });
-  const client = await createMatrixClient({
-    homeserver: auth.homeserver,
-    userId: auth.userId,
-    accessToken: auth.accessToken,
-    encryption: auth.encryption,
-    localTimeoutMs: opts.timeoutMs,
+  const client = await createPreparedMatrixClient({
+    auth,
+    timeoutMs: opts.timeoutMs,
     accountId,
   });
-  if (auth.encryption && client.crypto) {
-    try {
-      const joinedRooms = await client.getJoinedRooms();
-      await (client.crypto as { prepare: (rooms?: string[]) => Promise<void> }).prepare(
-        joinedRooms,
-      );
-    } catch {
-      // Ignore crypto prep failures for one-off sends; normal sync will retry.
-    }
-  }
-  // @vector-im/matrix-bot-sdk uses start() instead of startClient()
-  await client.start();
   return { client, stopOnDone: true };
 }

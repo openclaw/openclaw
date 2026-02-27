@@ -75,7 +75,7 @@ export type HooksGmailConfig = {
 export type InternalHookHandlerConfig = {
   /** Event key to listen for (e.g., 'command:new', 'session:start') */
   event: string;
-  /** Path to handler module (absolute or relative to cwd) */
+  /** Path to handler module (workspace-relative) */
   module: string;
   /** Export name from module (default: 'default') */
   export?: string;
@@ -87,13 +87,7 @@ export type HookConfig = {
   [key: string]: unknown;
 };
 
-export type HookInstallRecord = {
-  source: "npm" | "archive" | "path";
-  spec?: string;
-  sourcePath?: string;
-  installPath?: string;
-  version?: string;
-  installedAt?: string;
+export type HookInstallRecord = InstallRecordBase & {
   hooks?: string[];
 };
 
@@ -145,3 +139,4 @@ export type HooksConfig = {
   /** Internal agent event hooks */
   internal?: InternalHooksConfig;
 };
+import type { InstallRecordBase } from "./types.installs.js";

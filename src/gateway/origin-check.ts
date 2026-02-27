@@ -1,25 +1,6 @@
-import { isLoopbackHost } from "./net.js";
+import { isLoopbackHost, normalizeHostHeader, resolveHostName } from "./net.js";
 
 type OriginCheckResult = { ok: true } | { ok: false; reason: string };
-
-function normalizeHostHeader(hostHeader?: string): string {
-  return (hostHeader ?? "").trim().toLowerCase();
-}
-
-function resolveHostName(hostHeader?: string): string {
-  const host = normalizeHostHeader(hostHeader);
-  if (!host) {
-    return "";
-  }
-  if (host.startsWith("[")) {
-    const end = host.indexOf("]");
-    if (end !== -1) {
-      return host.slice(1, end);
-    }
-  }
-  const [name] = host.split(":");
-  return name ?? "";
-}
 
 function parseOrigin(
   originRaw?: string,
@@ -44,6 +25,7 @@ export function checkBrowserOrigin(params: {
   requestHost?: string;
   origin?: string;
   allowedOrigins?: string[];
+  allowHostHeaderOriginFallback?: boolean;
 }): OriginCheckResult {
   const parsedOrigin = parseOrigin(params.origin);
   if (!parsedOrigin) {
@@ -58,7 +40,11 @@ export function checkBrowserOrigin(params: {
   }
 
   const requestHost = normalizeHostHeader(params.requestHost);
-  if (requestHost && parsedOrigin.host === requestHost) {
+  if (
+    params.allowHostHeaderOriginFallback === true &&
+    requestHost &&
+    parsedOrigin.host === requestHost
+  ) {
     return { ok: true };
   }
 

@@ -1,3 +1,4 @@
+import path from "node:path";
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 import type { SessionSystemPromptReport } from "../config/sessions/types.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
@@ -38,17 +39,35 @@ function parseSkillBlocks(skillsPrompt: string): Array<{ name: string; blockChar
 function buildInjectedWorkspaceFiles(params: {
   bootstrapFiles: WorkspaceBootstrapFile[];
   injectedFiles: EmbeddedContextFile[];
-  bootstrapMaxChars: number;
 }): SessionSystemPromptReport["injectedWorkspaceFiles"] {
-  const injectedByName = new Map(params.injectedFiles.map((f) => [f.path, f.content]));
+  const injectedByPath = new Map<string, string>();
+  const injectedByBaseName = new Map<string, string>();
+  for (const file of params.injectedFiles) {
+    const pathValue = typeof file.path === "string" ? file.path.trim() : "";
+    if (!pathValue) {
+      continue;
+    }
+    if (!injectedByPath.has(pathValue)) {
+      injectedByPath.set(pathValue, file.content);
+    }
+    const normalizedPath = pathValue.replace(/\\/g, "/");
+    const baseName = path.posix.basename(normalizedPath);
+    if (!injectedByBaseName.has(baseName)) {
+      injectedByBaseName.set(baseName, file.content);
+    }
+  }
   return params.bootstrapFiles.map((file) => {
+    const pathValue = typeof file.path === "string" ? file.path.trim() : "";
     const rawChars = file.missing ? 0 : (file.content ?? "").trimEnd().length;
-    const injected = injectedByName.get(file.name);
+    const injected =
+      (pathValue ? injectedByPath.get(pathValue) : undefined) ??
+      injectedByPath.get(file.name) ??
+      injectedByBaseName.get(file.name);
     const injectedChars = injected ? injected.length : 0;
-    const truncated = !file.missing && rawChars > params.bootstrapMaxChars;
+    const truncated = !file.missing && injectedChars < rawChars;
     return {
       name: file.name,
-      path: file.path,
+      path: pathValue || file.name,
       missing: file.missing,
       rawChars,
       injectedChars,
@@ -107,6 +126,7 @@ export function buildSystemPromptReport(params: {
   model?: string;
   workspaceDir?: string;
   bootstrapMaxChars: number;
+  bootstrapTotalMaxChars?: number;
   sandbox?: SessionSystemPromptReport["sandbox"];
   systemPrompt: string;
   bootstrapFiles: WorkspaceBootstrapFile[];
@@ -136,6 +156,7 @@ export function buildSystemPromptReport(params: {
     model: params.model,
     workspaceDir: params.workspaceDir,
     bootstrapMaxChars: params.bootstrapMaxChars,
+    bootstrapTotalMaxChars: params.bootstrapTotalMaxChars,
     sandbox: params.sandbox,
     systemPrompt: {
       chars: systemPrompt.length,
@@ -145,7 +166,6 @@ export function buildSystemPromptReport(params: {
     injectedWorkspaceFiles: buildInjectedWorkspaceFiles({
       bootstrapFiles: params.bootstrapFiles,
       injectedFiles: params.injectedFiles,
-      bootstrapMaxChars: params.bootstrapMaxChars,
     }),
     skills: {
       promptChars: params.skillsPrompt.length,

@@ -1,6 +1,5 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
-import type { OpenClawConfig } from "../../config/config.js";
 import { resolveOpenClawAgentDir } from "../../agents/agent-paths.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
@@ -12,9 +11,14 @@ import {
 import { describeFailoverError } from "../../agents/failover-error.js";
 import { getCustomProviderApiKey, resolveEnvApiKey } from "../../agents/model-auth.js";
 import { loadModelCatalog } from "../../agents/model-catalog.js";
-import { normalizeProviderId, parseModelRef } from "../../agents/model-selection.js";
+import {
+  findNormalizedProviderValue,
+  normalizeProviderId,
+  parseModelRef,
+} from "../../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import {
   resolveSessionTranscriptPath,
   resolveSessionTranscriptsDirForAgent,
@@ -78,11 +82,13 @@ export type AuthProbeOptions = {
   maxTokens: number;
 };
 
-const toStatus = (reason?: string | null): AuthProbeStatus => {
+export function mapFailoverReasonToProbeStatus(reason?: string | null): AuthProbeStatus {
   if (!reason) {
     return "unknown";
   }
-  if (reason === "auth") {
+  if (reason === "auth" || reason === "auth_permanent") {
+    // Keep probe output backward-compatible: permanent auth failures still
+    // surface in the auth bucket instead of showing as unknown.
     return "auth";
   }
   if (reason === "rate_limit") {
@@ -98,7 +104,7 @@ const toStatus = (reason?: string | null): AuthProbeStatus => {
     return "format";
   }
   return "unknown";
-};
+}
 
 function buildCandidateMap(modelCandidates: string[]): Map<string, string[]> {
   const map = new Map<string, string[]>();
@@ -164,23 +170,10 @@ function buildProbeTargets(params: {
 
       const profileIds = listProfilesForProvider(store, providerKey);
       const explicitOrder = (() => {
-        const order = store.order;
-        if (order) {
-          for (const [key, value] of Object.entries(order)) {
-            if (normalizeProviderId(key) === providerKey) {
-              return value;
-            }
-          }
-        }
-        const cfgOrder = cfg?.auth?.order;
-        if (cfgOrder) {
-          for (const [key, value] of Object.entries(cfgOrder)) {
-            if (normalizeProviderId(key) === providerKey) {
-              return value;
-            }
-          }
-        }
-        return undefined;
+        return (
+          findNormalizedProviderValue(store.order, providerKey) ??
+          findNormalizedProviderValue(cfg?.auth?.order, providerKey)
+        );
       })();
       const allowedProfiles =
         explicitOrder && explicitOrder.length > 0
@@ -355,7 +348,7 @@ async function probeTarget(params: {
       label: target.label,
       source: target.source,
       mode: target.mode,
-      status: toStatus(described.reason),
+      status: mapFailoverReasonToProbeStatus(described.reason),
       error: redactSecrets(described.message),
       latencyMs: Date.now() - start,
     };

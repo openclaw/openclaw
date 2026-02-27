@@ -122,7 +122,7 @@ actor VoicePushToTalk {
     private var recognitionTask: SFSpeechRecognitionTask?
     private var tapInstalled = false
 
-    // Session token used to drop stale callbacks when a new capture starts.
+    /// Session token used to drop stale callbacks when a new capture starts.
     private var sessionID = UUID()
 
     private var committed: String = ""
@@ -243,6 +243,14 @@ actor VoicePushToTalk {
             self.audioEngine = AVAudioEngine()
         }
         guard let audioEngine = self.audioEngine else { return }
+
+        guard AudioInputDeviceObserver.hasUsableDefaultInputDevice() else {
+            self.audioEngine = nil
+            throw NSError(
+                domain: "VoicePushToTalk",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "No usable audio input device available"])
+        }
 
         let input = audioEngine.inputNode
         let format = input.outputFormat(forBus: 0)

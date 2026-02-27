@@ -22,6 +22,10 @@ and process access when the model does something dumb.
 - Optional sandboxed browser (`agents.defaults.sandbox.browser`).
   - By default, the sandbox browser auto-starts (ensures CDP is reachable) when the browser tool needs it.
     Configure via `agents.defaults.sandbox.browser.autoStart` and `agents.defaults.sandbox.browser.autoStartTimeoutMs`.
+  - By default, sandbox browser containers use a dedicated Docker network (`openclaw-sandbox-browser`) instead of the global `bridge` network.
+    Configure with `agents.defaults.sandbox.browser.network`.
+  - Optional `agents.defaults.sandbox.browser.cdpSourceRange` restricts container-edge CDP ingress with a CIDR allowlist (for example `172.21.0.1/32`).
+  - noVNC observer access is password-protected by default; OpenClaw emits a short-lived token URL that resolves to the observer session.
   - `agents.defaults.sandbox.browser.allowHostControl` lets sandboxed sessions target the host browser explicitly.
   - Optional allowlists gate `target: "custom"`: `allowedControlUrls`, `allowedControlHosts`, `allowedControlPorts`.
 
@@ -71,7 +75,12 @@ Format: `host:container:mode` (e.g., `"/home/user/source:/source:rw"`).
 
 Global and per-agent binds are **merged** (not replaced). Under `scope: "shared"`, per-agent binds are ignored.
 
-Example (read-only source + docker socket):
+`agents.defaults.sandbox.browser.binds` mounts additional host directories into the **sandbox browser** container only.
+
+- When set (including `[]`), it replaces `agents.defaults.sandbox.docker.binds` for the browser container.
+- When omitted, the browser container falls back to `agents.defaults.sandbox.docker.binds` (backwards compatible).
+
+Example (read-only source + an extra data directory):
 
 ```json5
 {
@@ -79,7 +88,7 @@ Example (read-only source + docker socket):
     defaults: {
       sandbox: {
         docker: {
-          binds: ["/home/user/source:/source:ro", "/var/run/docker.sock:/var/run/docker.sock"],
+          binds: ["/home/user/source:/source:ro", "/var/data/myapp:/data:ro"],
         },
       },
     },
@@ -100,7 +109,8 @@ Example (read-only source + docker socket):
 Security notes:
 
 - Binds bypass the sandbox filesystem: they expose host paths with whatever mode you set (`:ro` or `:rw`).
-- Sensitive mounts (e.g., `docker.sock`, secrets, SSH keys) should be `:ro` unless absolutely required.
+- OpenClaw blocks dangerous bind sources (for example: `docker.sock`, `/etc`, `/proc`, `/sys`, `/dev`, and parent mounts that would expose them).
+- Sensitive mounts (secrets, SSH keys, service credentials) should be `:ro` unless absolutely required.
 - Combine with `workspaceAccess: "ro"` if you only need read access to the workspace; bind modes stay independent.
 - See [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated) for how binds interact with tool policy and elevated exec.
 
@@ -128,6 +138,12 @@ scripts/sandbox-browser-setup.sh
 By default, sandbox containers run with **no network**.
 Override with `agents.defaults.sandbox.docker.network`.
 
+Security defaults:
+
+- `network: "host"` is blocked.
+- `network: "container:<id>"` is blocked by default (namespace join bypass risk).
+- Break-glass override: `agents.defaults.sandbox.docker.dangerouslyAllowContainerNamespaceJoin: true`.
+
 Docker installs and the containerized gateway live here:
 [Docker](/install/docker)
 
@@ -144,6 +160,7 @@ Paths:
 Common pitfalls:
 
 - Default `docker.network` is `"none"` (no egress), so package installs will fail.
+- `docker.network: "container:<id>"` requires `dangerouslyAllowContainerNamespaceJoin: true` and is break-glass only.
 - `readOnlyRoot: true` prevents writes; set `readOnlyRoot: false` or bake a custom image.
 - `user` must be root for package installs (omit `user` or set `user: "0:0"`).
 - Sandbox exec does **not** inherit host `process.env`. Use

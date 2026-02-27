@@ -15,10 +15,10 @@
 	<key>CFBundleName</key>
 	<string>$(PRODUCT_NAME)</string>
 	<key>CFBundlePackageType</key>
-		<string>BNDL</string>
-		<key>CFBundleShortVersionString</key>
-		<string>2026.2.13</string>
-		<key>CFBundleVersion</key>
-		<string>20260213</string>
-	</dict>
-</plist>
+			<string>BNDL</string>
+			<key>CFBundleShortVersionString</key>
+			<string>2026.2.27</string>
+			<key>CFBundleVersion</key>
+			<string>20260227</string>
+		</dict>
+	</plist>

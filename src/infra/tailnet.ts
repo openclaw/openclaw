@@ -1,31 +1,24 @@
 import os from "node:os";
+import { isIpInCidr } from "../shared/net/ip.js";
 
 export type TailnetAddresses = {
   ipv4: string[];
   ipv6: string[];
 };
 
-function isTailnetIPv4(address: string): boolean {
-  const parts = address.split(".");
-  if (parts.length !== 4) {
-    return false;
-  }
-  const octets = parts.map((p) => Number.parseInt(p, 10));
-  if (octets.some((n) => !Number.isFinite(n) || n < 0 || n > 255)) {
-    return false;
-  }
+const TAILNET_IPV4_CIDR = "100.64.0.0/10";
+const TAILNET_IPV6_CIDR = "fd7a:115c:a1e0::/48";
 
+export function isTailnetIPv4(address: string): boolean {
   // Tailscale IPv4 range: 100.64.0.0/10
   // https://tailscale.com/kb/1015/100.x-addresses
-  const [a, b] = octets;
-  return a === 100 && b >= 64 && b <= 127;
+  return isIpInCidr(address, TAILNET_IPV4_CIDR);
 }
 
 function isTailnetIPv6(address: string): boolean {
   // Tailscale IPv6 ULA prefix: fd7a:115c:a1e0::/48
   // (stable across tailnets; nodes get per-device suffixes)
-  const normalized = address.trim().toLowerCase();
-  return normalized.startsWith("fd7a:115c:a1e0:");
+  return isIpInCidr(address, TAILNET_IPV6_CIDR);
 }
 
 export function listTailnetAddresses(): TailnetAddresses {

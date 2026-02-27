@@ -1,328 +1,202 @@
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
-import {
-  resolveControlUiDistIndexHealth,
-  resolveControlUiDistIndexPath,
-  resolveControlUiDistIndexPathForRoot,
-  resolveControlUiRepoRoot,
-  resolveControlUiRootOverrideSync,
-  resolveControlUiRootSync,
-} from "./control-ui-assets.js";
-import { resolveOpenClawPackageRoot } from "./openclaw-root.js";
+import { pathToFileURL } from "node:url";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-/** Try to create a symlink; returns false if the OS denies it (Windows CI without Developer Mode). */
-async function trySymlink(target: string, linkPath: string): Promise<boolean> {
-  try {
-    await fs.symlink(target, linkPath);
-    return true;
-  } catch {
-    return false;
-  }
+type FakeFsEntry = { kind: "file"; content: string } | { kind: "dir" };
+
+const state = vi.hoisted(() => ({
+  entries: new Map<string, FakeFsEntry>(),
+  realpaths: new Map<string, string>(),
+}));
+
+const abs = (p: string) => path.resolve(p);
+
+function setFile(p: string, content = "") {
+  state.entries.set(abs(p), { kind: "file", content });
 }
 
-async function canonicalPath(p: string): Promise<string> {
-  try {
-    return await fs.realpath(p);
-  } catch {
-    return path.resolve(p);
-  }
+function setDir(p: string) {
+  state.entries.set(abs(p), { kind: "dir" });
 }
 
-describe("control UI assets helpers", () => {
-  it("resolves repo root from src argv1", async () => {
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ui-"));
-    try {
-      await fs.mkdir(path.join(tmp, "ui"), { recursive: true });
-      await fs.writeFile(path.join(tmp, "ui", "vite.config.ts"), "export {};\n");
-      await fs.writeFile(path.join(tmp, "package.json"), "{}\n");
-      await fs.mkdir(path.join(tmp, "src"), { recursive: true });
-      await fs.writeFile(path.join(tmp, "src", "index.ts"), "export {};\n");
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  const pathMod = await import("node:path");
+  const absInMock = (p: string) => pathMod.resolve(p);
+  const fixturesRoot = `${absInMock("fixtures")}${pathMod.sep}`;
+  const isFixturePath = (p: string) => {
+    const resolved = absInMock(p);
+    return resolved === fixturesRoot.slice(0, -1) || resolved.startsWith(fixturesRoot);
+  };
+  const readFixtureEntry = (p: string) => state.entries.get(absInMock(p));
 
-      expect(resolveControlUiRepoRoot(path.join(tmp, "src", "index.ts"))).toBe(tmp);
-    } finally {
-      await fs.rm(tmp, { recursive: true, force: true });
-    }
+  const wrapped = {
+    ...actual,
+    existsSync: (p: string) =>
+      isFixturePath(p) ? state.entries.has(absInMock(p)) : actual.existsSync(p),
+    readFileSync: (p: string, encoding?: unknown) => {
+      if (!isFixturePath(p)) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        return actual.readFileSync(p as any, encoding as any) as unknown;
+      }
+      const entry = readFixtureEntry(p);
+      if (entry?.kind === "file") {
+        return entry.content;
+      }
+      throw new Error(`ENOENT: no such file, open '${p}'`);
+    },
+    statSync: (p: string) => {
+      if (!isFixturePath(p)) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        return actual.statSync(p as any) as unknown;
+      }
+      const entry = readFixtureEntry(p);
+      if (entry?.kind === "file") {
+        return { isFile: () => true, isDirectory: () => false };
+      }
+      if (entry?.kind === "dir") {
+        return { isFile: () => false, isDirectory: () => true };
+      }
+      throw new Error(`ENOENT: no such file or directory, stat '${p}'`);
+    },
+    realpathSync: (p: string) =>
+      isFixturePath(p)
+        ? (state.realpaths.get(absInMock(p)) ?? absInMock(p))
+        : actual.realpathSync(p),
+  };
+
+  return { ...wrapped, default: wrapped };
+});
+
+vi.mock("./openclaw-root.js", () => ({
+  resolveOpenClawPackageRoot: vi.fn(async () => null),
+  resolveOpenClawPackageRootSync: vi.fn(() => null),
+}));
+
+let resolveControlUiRepoRoot: typeof import("./control-ui-assets.js").resolveControlUiRepoRoot;
+let resolveControlUiDistIndexPath: typeof import("./control-ui-assets.js").resolveControlUiDistIndexPath;
+let resolveControlUiDistIndexHealth: typeof import("./control-ui-assets.js").resolveControlUiDistIndexHealth;
+let resolveControlUiRootOverrideSync: typeof import("./control-ui-assets.js").resolveControlUiRootOverrideSync;
+let resolveControlUiRootSync: typeof import("./control-ui-assets.js").resolveControlUiRootSync;
+let openclawRoot: typeof import("./openclaw-root.js");
+
+describe("control UI assets helpers (fs-mocked)", () => {
+  beforeAll(async () => {
+    ({
+      resolveControlUiRepoRoot,
+      resolveControlUiDistIndexPath,
+      resolveControlUiDistIndexHealth,
+      resolveControlUiRootOverrideSync,
+      resolveControlUiRootSync,
+    } = await import("./control-ui-assets.js"));
+    openclawRoot = await import("./openclaw-root.js");
   });
 
-  it("resolves repo root from dist argv1", async () => {
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ui-"));
-    try {
-      await fs.mkdir(path.join(tmp, "ui"), { recursive: true });
-      await fs.writeFile(path.join(tmp, "ui", "vite.config.ts"), "export {};\n");
-      await fs.writeFile(path.join(tmp, "package.json"), "{}\n");
-      await fs.mkdir(path.join(tmp, "dist"), { recursive: true });
-      await fs.writeFile(path.join(tmp, "dist", "index.js"), "export {};\n");
+  beforeEach(() => {
+    state.entries.clear();
+    state.realpaths.clear();
+    vi.clearAllMocks();
+  });
 
-      expect(resolveControlUiRepoRoot(path.join(tmp, "dist", "index.js"))).toBe(tmp);
-    } finally {
-      await fs.rm(tmp, { recursive: true, force: true });
-    }
+  it("resolves repo root from src argv1", () => {
+    const root = abs("fixtures/ui-src");
+    setFile(path.join(root, "ui", "vite.config.ts"), "export {};\n");
+
+    const argv1 = path.join(root, "src", "index.ts");
+    expect(resolveControlUiRepoRoot(argv1)).toBe(root);
+  });
+
+  it("resolves repo root by traversing up (dist argv1)", () => {
+    const root = abs("fixtures/ui-dist");
+    setFile(path.join(root, "package.json"), "{}\n");
+    setFile(path.join(root, "ui", "vite.config.ts"), "export {};\n");
+
+    const argv1 = path.join(root, "dist", "index.js");
+    expect(resolveControlUiRepoRoot(argv1)).toBe(root);
   });
 
   it("resolves dist control-ui index path for dist argv1", async () => {
-    const argv1 = path.resolve("/tmp", "pkg", "dist", "index.js");
+    const argv1 = abs(path.join("fixtures", "pkg", "dist", "index.js"));
     const distDir = path.dirname(argv1);
-    expect(await resolveControlUiDistIndexPath(argv1)).toBe(
+    await expect(resolveControlUiDistIndexPath(argv1)).resolves.toBe(
       path.join(distDir, "control-ui", "index.html"),
     );
   });
 
-  it("resolves control-ui root for dist bundle argv1", async () => {
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ui-"));
-    try {
-      await fs.mkdir(path.join(tmp, "dist", "control-ui"), { recursive: true });
-      await fs.writeFile(path.join(tmp, "dist", "bundle.js"), "export {};\n");
-      await fs.writeFile(path.join(tmp, "dist", "control-ui", "index.html"), "<html></html>\n");
+  it("uses resolveOpenClawPackageRoot when available", async () => {
+    const pkgRoot = abs("fixtures/openclaw");
+    (
+      openclawRoot.resolveOpenClawPackageRoot as unknown as ReturnType<typeof vi.fn>
+    ).mockResolvedValueOnce(pkgRoot);
 
-      expect(resolveControlUiRootSync({ argv1: path.join(tmp, "dist", "bundle.js") })).toBe(
-        path.join(tmp, "dist", "control-ui"),
-      );
-    } finally {
-      await fs.rm(tmp, { recursive: true, force: true });
-    }
+    await expect(resolveControlUiDistIndexPath(abs("fixtures/bin/openclaw"))).resolves.toBe(
+      path.join(pkgRoot, "dist", "control-ui", "index.html"),
+    );
   });
 
-  it("resolves control-ui root for dist/gateway bundle argv1", async () => {
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ui-"));
-    try {
-      await fs.writeFile(path.join(tmp, "package.json"), JSON.stringify({ name: "openclaw" }));
-      await fs.mkdir(path.join(tmp, "dist", "gateway"), { recursive: true });
-      await fs.mkdir(path.join(tmp, "dist", "control-ui"), { recursive: true });
-      await fs.writeFile(path.join(tmp, "dist", "gateway", "control-ui.js"), "export {};\n");
-      await fs.writeFile(path.join(tmp, "dist", "control-ui", "index.html"), "<html></html>\n");
+  it("falls back to package.json name matching when root resolution fails", async () => {
+    const root = abs("fixtures/fallback");
+    setFile(path.join(root, "package.json"), JSON.stringify({ name: "openclaw" }));
+    setFile(path.join(root, "dist", "control-ui", "index.html"), "<html></html>\n");
 
-      expect(
-        resolveControlUiRootSync({ argv1: path.join(tmp, "dist", "gateway", "control-ui.js") }),
-      ).toBe(path.join(tmp, "dist", "control-ui"));
-    } finally {
-      await fs.rm(tmp, { recursive: true, force: true });
-    }
+    await expect(resolveControlUiDistIndexPath(path.join(root, "openclaw.mjs"))).resolves.toBe(
+      path.join(root, "dist", "control-ui", "index.html"),
+    );
   });
 
-  it("resolves control-ui root from override directory or index.html", async () => {
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ui-"));
-    try {
-      const uiDir = path.join(tmp, "dist", "control-ui");
-      await fs.mkdir(uiDir, { recursive: true });
-      await fs.writeFile(path.join(uiDir, "index.html"), "<html></html>\n");
+  it("returns null when fallback package name does not match", async () => {
+    const root = abs("fixtures/not-openclaw");
+    setFile(path.join(root, "package.json"), JSON.stringify({ name: "malicious-pkg" }));
+    setFile(path.join(root, "dist", "control-ui", "index.html"), "<html></html>\n");
 
-      expect(resolveControlUiRootOverrideSync(uiDir)).toBe(uiDir);
-      expect(resolveControlUiRootOverrideSync(path.join(uiDir, "index.html"))).toBe(uiDir);
-      expect(resolveControlUiRootOverrideSync(path.join(uiDir, "missing.html"))).toBeNull();
-    } finally {
-      await fs.rm(tmp, { recursive: true, force: true });
-    }
+    await expect(resolveControlUiDistIndexPath(path.join(root, "index.mjs"))).resolves.toBeNull();
   });
 
-  it("resolves dist control-ui index path from package root argv1", async () => {
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ui-"));
-    try {
-      await fs.writeFile(path.join(tmp, "package.json"), JSON.stringify({ name: "openclaw" }));
-      await fs.writeFile(path.join(tmp, "openclaw.mjs"), "export {};\n");
-      await fs.mkdir(path.join(tmp, "dist", "control-ui"), { recursive: true });
-      await fs.writeFile(path.join(tmp, "dist", "control-ui", "index.html"), "<html></html>\n");
+  it("reports health for missing + existing dist assets", async () => {
+    const root = abs("fixtures/health");
+    const indexPath = path.join(root, "dist", "control-ui", "index.html");
 
-      expect(await resolveControlUiDistIndexPath(path.join(tmp, "openclaw.mjs"))).toBe(
-        path.join(tmp, "dist", "control-ui", "index.html"),
-      );
-    } finally {
-      await fs.rm(tmp, { recursive: true, force: true });
-    }
+    await expect(resolveControlUiDistIndexHealth({ root })).resolves.toEqual({
+      indexPath,
+      exists: false,
+    });
+
+    setFile(indexPath, "<html></html>\n");
+    await expect(resolveControlUiDistIndexHealth({ root })).resolves.toEqual({
+      indexPath,
+      exists: true,
+    });
   });
 
-  it("resolves control-ui root for package entrypoint argv1", async () => {
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ui-"));
-    try {
-      await fs.writeFile(path.join(tmp, "package.json"), JSON.stringify({ name: "openclaw" }));
-      await fs.writeFile(path.join(tmp, "openclaw.mjs"), "export {};\n");
-      await fs.mkdir(path.join(tmp, "dist", "control-ui"), { recursive: true });
-      await fs.writeFile(path.join(tmp, "dist", "control-ui", "index.html"), "<html></html>\n");
+  it("resolves control-ui root from override file or directory", () => {
+    const root = abs("fixtures/override");
+    const uiDir = path.join(root, "dist", "control-ui");
+    const indexPath = path.join(uiDir, "index.html");
 
-      expect(resolveControlUiRootSync({ argv1: path.join(tmp, "openclaw.mjs") })).toBe(
-        path.join(tmp, "dist", "control-ui"),
-      );
-    } finally {
-      await fs.rm(tmp, { recursive: true, force: true });
-    }
+    setDir(uiDir);
+    setFile(indexPath, "<html></html>\n");
+
+    expect(resolveControlUiRootOverrideSync(uiDir)).toBe(uiDir);
+    expect(resolveControlUiRootOverrideSync(indexPath)).toBe(uiDir);
+    expect(resolveControlUiRootOverrideSync(path.join(uiDir, "missing.html"))).toBeNull();
   });
 
-  it("resolves dist control-ui index path from .bin argv1", async () => {
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ui-"));
-    try {
-      const binDir = path.join(tmp, "node_modules", ".bin");
-      const pkgRoot = path.join(tmp, "node_modules", "openclaw");
-      await fs.mkdir(binDir, { recursive: true });
-      await fs.mkdir(path.join(pkgRoot, "dist", "control-ui"), { recursive: true });
-      await fs.writeFile(path.join(binDir, "openclaw"), "#!/usr/bin/env node\n");
-      await fs.writeFile(path.join(pkgRoot, "package.json"), JSON.stringify({ name: "openclaw" }));
-      await fs.writeFile(path.join(pkgRoot, "dist", "control-ui", "index.html"), "<html></html>\n");
+  it("resolves control-ui root for dist bundle argv1 and moduleUrl candidates", async () => {
+    const pkgRoot = abs("fixtures/openclaw-bundle");
+    (
+      openclawRoot.resolveOpenClawPackageRootSync as unknown as ReturnType<typeof vi.fn>
+    ).mockReturnValueOnce(pkgRoot);
 
-      expect(await resolveControlUiDistIndexPath(path.join(binDir, "openclaw"))).toBe(
-        path.join(pkgRoot, "dist", "control-ui", "index.html"),
-      );
-    } finally {
-      await fs.rm(tmp, { recursive: true, force: true });
-    }
-  });
+    const uiDir = path.join(pkgRoot, "dist", "control-ui");
+    setFile(path.join(uiDir, "index.html"), "<html></html>\n");
 
-  it("resolves via fallback when package root resolution fails but package name matches", async () => {
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ui-"));
-    try {
-      // Package named "openclaw" but resolveOpenClawPackageRoot failed for other reasons
-      await fs.writeFile(path.join(tmp, "package.json"), JSON.stringify({ name: "openclaw" }));
-      await fs.writeFile(path.join(tmp, "openclaw.mjs"), "export {};\n");
-      await fs.mkdir(path.join(tmp, "dist", "control-ui"), { recursive: true });
-      await fs.writeFile(path.join(tmp, "dist", "control-ui", "index.html"), "<html></html>\n");
+    // argv1Dir candidate: <argv1Dir>/control-ui
+    expect(resolveControlUiRootSync({ argv1: path.join(pkgRoot, "dist", "bundle.js") })).toBe(
+      uiDir,
+    );
 
-      expect(await resolveControlUiDistIndexPath(path.join(tmp, "openclaw.mjs"))).toBe(
-        path.join(tmp, "dist", "control-ui", "index.html"),
-      );
-    } finally {
-      await fs.rm(tmp, { recursive: true, force: true });
-    }
-  });
-
-  it("returns null when package name does not match openclaw", async () => {
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ui-"));
-    try {
-      // Package with different name should not be resolved
-      await fs.writeFile(path.join(tmp, "package.json"), JSON.stringify({ name: "malicious-pkg" }));
-      await fs.writeFile(path.join(tmp, "index.mjs"), "export {};\n");
-      await fs.mkdir(path.join(tmp, "dist", "control-ui"), { recursive: true });
-      await fs.writeFile(path.join(tmp, "dist", "control-ui", "index.html"), "<html></html>\n");
-
-      expect(await resolveControlUiDistIndexPath(path.join(tmp, "index.mjs"))).toBeNull();
-    } finally {
-      await fs.rm(tmp, { recursive: true, force: true });
-    }
-  });
-
-  it("returns null when no control-ui assets exist", async () => {
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ui-"));
-    try {
-      // Just a package.json, no dist/control-ui
-      await fs.writeFile(path.join(tmp, "package.json"), JSON.stringify({ name: "some-pkg" }));
-      await fs.writeFile(path.join(tmp, "index.mjs"), "export {};\n");
-
-      expect(await resolveControlUiDistIndexPath(path.join(tmp, "index.mjs"))).toBeNull();
-    } finally {
-      await fs.rm(tmp, { recursive: true, force: true });
-    }
-  });
-
-  it("reports health for existing control-ui assets at a known root", async () => {
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ui-"));
-    try {
-      const indexPath = resolveControlUiDistIndexPathForRoot(tmp);
-      await fs.mkdir(path.dirname(indexPath), { recursive: true });
-      await fs.writeFile(indexPath, "<html></html>\n");
-
-      await expect(resolveControlUiDistIndexHealth({ root: tmp })).resolves.toEqual({
-        indexPath,
-        exists: true,
-      });
-    } finally {
-      await fs.rm(tmp, { recursive: true, force: true });
-    }
-  });
-
-  it("reports health for missing control-ui assets at a known root", async () => {
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ui-"));
-    try {
-      const indexPath = resolveControlUiDistIndexPathForRoot(tmp);
-      await expect(resolveControlUiDistIndexHealth({ root: tmp })).resolves.toEqual({
-        indexPath,
-        exists: false,
-      });
-    } finally {
-      await fs.rm(tmp, { recursive: true, force: true });
-    }
-  });
-
-  it("resolves control-ui root when argv1 is a symlink (nvm scenario)", async () => {
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ui-"));
-    try {
-      const realPkg = path.join(tmp, "real-pkg");
-      const bin = path.join(tmp, "bin");
-      await fs.mkdir(realPkg, { recursive: true });
-      await fs.mkdir(bin, { recursive: true });
-      await fs.writeFile(path.join(realPkg, "package.json"), JSON.stringify({ name: "openclaw" }));
-      await fs.writeFile(path.join(realPkg, "openclaw.mjs"), "export {};\n");
-      await fs.mkdir(path.join(realPkg, "dist", "control-ui"), { recursive: true });
-      await fs.writeFile(path.join(realPkg, "dist", "control-ui", "index.html"), "<html></html>\n");
-      const ok = await trySymlink(
-        path.join("..", "real-pkg", "openclaw.mjs"),
-        path.join(bin, "openclaw"),
-      );
-      if (!ok) {
-        return; // symlinks not supported (Windows CI)
-      }
-
-      const resolvedRoot = resolveControlUiRootSync({ argv1: path.join(bin, "openclaw") });
-      expect(resolvedRoot).not.toBeNull();
-      expect(await canonicalPath(resolvedRoot ?? "")).toBe(
-        await canonicalPath(path.join(realPkg, "dist", "control-ui")),
-      );
-    } finally {
-      await fs.rm(tmp, { recursive: true, force: true });
-    }
-  });
-
-  it("resolves package root via symlinked argv1", async () => {
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ui-"));
-    try {
-      const realPkg = path.join(tmp, "real-pkg");
-      const bin = path.join(tmp, "bin");
-      await fs.mkdir(realPkg, { recursive: true });
-      await fs.mkdir(bin, { recursive: true });
-      await fs.writeFile(path.join(realPkg, "package.json"), JSON.stringify({ name: "openclaw" }));
-      await fs.writeFile(path.join(realPkg, "openclaw.mjs"), "export {};\n");
-      await fs.mkdir(path.join(realPkg, "dist", "control-ui"), { recursive: true });
-      await fs.writeFile(path.join(realPkg, "dist", "control-ui", "index.html"), "<html></html>\n");
-      const ok = await trySymlink(
-        path.join("..", "real-pkg", "openclaw.mjs"),
-        path.join(bin, "openclaw"),
-      );
-      if (!ok) {
-        return; // symlinks not supported (Windows CI)
-      }
-
-      const packageRoot = await resolveOpenClawPackageRoot({ argv1: path.join(bin, "openclaw") });
-      expect(packageRoot).not.toBeNull();
-      expect(await canonicalPath(packageRoot ?? "")).toBe(await canonicalPath(realPkg));
-    } finally {
-      await fs.rm(tmp, { recursive: true, force: true });
-    }
-  });
-
-  it("resolves dist index path via symlinked argv1 (async)", async () => {
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ui-"));
-    try {
-      const realPkg = path.join(tmp, "real-pkg");
-      const bin = path.join(tmp, "bin");
-      await fs.mkdir(realPkg, { recursive: true });
-      await fs.mkdir(bin, { recursive: true });
-      await fs.writeFile(path.join(realPkg, "package.json"), JSON.stringify({ name: "openclaw" }));
-      await fs.writeFile(path.join(realPkg, "openclaw.mjs"), "export {};\n");
-      await fs.mkdir(path.join(realPkg, "dist", "control-ui"), { recursive: true });
-      await fs.writeFile(path.join(realPkg, "dist", "control-ui", "index.html"), "<html></html>\n");
-      const ok = await trySymlink(
-        path.join("..", "real-pkg", "openclaw.mjs"),
-        path.join(bin, "openclaw"),
-      );
-      if (!ok) {
-        return; // symlinks not supported (Windows CI)
-      }
-
-      const indexPath = await resolveControlUiDistIndexPath(path.join(bin, "openclaw"));
-      expect(indexPath).not.toBeNull();
-      expect(await canonicalPath(indexPath ?? "")).toBe(
-        await canonicalPath(path.join(realPkg, "dist", "control-ui", "index.html")),
-      );
-    } finally {
-      await fs.rm(tmp, { recursive: true, force: true });
-    }
+    // moduleUrl candidate: <moduleDir>/control-ui
+    const moduleUrl = pathToFileURL(path.join(pkgRoot, "dist", "bundle.js")).toString();
+    expect(resolveControlUiRootSync({ moduleUrl })).toBe(uiDir);
   });
 });

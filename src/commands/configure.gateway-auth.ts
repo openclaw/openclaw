@@ -1,7 +1,7 @@
+import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
 import type { OpenClawConfig, GatewayAuthConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
-import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
 import { promptAuthChoiceGrouped } from "./auth-choice-prompt.js";
 import { applyAuthChoice, resolvePreferredProviderForAuthChoice } from "./auth-choice.js";
 import {
@@ -14,7 +14,7 @@ import {
 import { promptCustomApiConfig } from "./onboard-custom.js";
 import { randomToken } from "./onboard-helpers.js";
 
-type GatewayAuthChoice = "token" | "password";
+type GatewayAuthChoice = "token" | "password" | "trusted-proxy";
 
 /** Reject undefined, empty, and common JS string-coercion artifacts for token auth. */
 function sanitizeTokenValue(value: string | undefined): string | undefined {
@@ -29,6 +29,7 @@ function sanitizeTokenValue(value: string | undefined): string | undefined {
 }
 
 const ANTHROPIC_OAUTH_MODEL_KEYS = [
+  "anthropic/claude-sonnet-4-6",
   "anthropic/claude-opus-4-6",
   "anthropic/claude-opus-4-5",
   "anthropic/claude-sonnet-4-5",
@@ -40,6 +41,11 @@ export function buildGatewayAuthConfig(params: {
   mode: GatewayAuthChoice;
   token?: string;
   password?: string;
+  trustedProxy?: {
+    userHeader: string;
+    requiredHeaders?: string[];
+    allowUsers?: string[];
+  };
 }): GatewayAuthConfig | undefined {
   const allowTailscale = params.existing?.allowTailscale;
   const base: GatewayAuthConfig = {};
@@ -52,8 +58,17 @@ export function buildGatewayAuthConfig(params: {
     const token = sanitizeTokenValue(params.token) ?? randomToken();
     return { ...base, mode: "token", token };
   }
-  const password = params.password?.trim();
-  return { ...base, mode: "password", ...(password && { password }) };
+  if (params.mode === "password") {
+    const password = params.password?.trim();
+    return { ...base, mode: "password", ...(password && { password }) };
+  }
+  if (params.mode === "trusted-proxy") {
+    if (!params.trustedProxy) {
+      throw new Error("trustedProxy config is required when mode is trusted-proxy");
+    }
+    return { ...base, mode: "trusted-proxy", trustedProxy: params.trustedProxy };
+  }
+  return base;
 }
 
 export async function promptAuthConfig(
@@ -106,7 +121,7 @@ export async function promptAuthConfig(
       config: next,
       prompter,
       allowedKeys: anthropicOAuth ? ANTHROPIC_OAUTH_MODEL_KEYS : undefined,
-      initialSelections: anthropicOAuth ? ["anthropic/claude-opus-4-6"] : undefined,
+      initialSelections: anthropicOAuth ? ["anthropic/claude-sonnet-4-6"] : undefined,
       message: anthropicOAuth ? "Anthropic OAuth models" : undefined,
     });
     if (allowlistSelection.models) {

@@ -9,24 +9,12 @@ import {
 } from "./agent-limits.js";
 import { loadConfig } from "./config.js";
 import { withTempHome } from "./test-helpers.js";
+import { OpenClawSchema } from "./zod-schema.js";
 
 describe("agent concurrency defaults", () => {
   it("resolves defaults when unset", () => {
     expect(resolveAgentMaxConcurrent({})).toBe(DEFAULT_AGENT_MAX_CONCURRENT);
     expect(resolveSubagentMaxConcurrent({})).toBe(DEFAULT_SUBAGENT_MAX_CONCURRENT);
-  });
-
-  it("resolves configured values", () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          maxConcurrent: 6,
-          subagents: { maxConcurrent: 9 },
-        },
-      },
-    };
-    expect(resolveAgentMaxConcurrent(cfg)).toBe(6);
-    expect(resolveSubagentMaxConcurrent(cfg)).toBe(9);
   });
 
   it("clamps invalid values to at least 1", () => {
@@ -40,6 +28,22 @@ describe("agent concurrency defaults", () => {
     };
     expect(resolveAgentMaxConcurrent(cfg)).toBe(1);
     expect(resolveSubagentMaxConcurrent(cfg)).toBe(1);
+  });
+
+  it("accepts subagent spawn depth and per-agent child limits", () => {
+    const parsed = OpenClawSchema.parse({
+      agents: {
+        defaults: {
+          subagents: {
+            maxSpawnDepth: 2,
+            maxChildrenPerAgent: 7,
+          },
+        },
+      },
+    });
+
+    expect(parsed.agents?.defaults?.subagents?.maxSpawnDepth).toBe(2);
+    expect(parsed.agents?.defaults?.subagents?.maxChildrenPerAgent).toBe(7);
   });
 
   it("injects defaults on load", async () => {

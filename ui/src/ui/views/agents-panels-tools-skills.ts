@@ -1,6 +1,6 @@
 import { html, nothing } from "lit";
-import type { SkillStatusEntry, SkillStatusReport } from "../types.ts";
-import { normalizeToolName } from "../../../../src/agents/tool-policy.js";
+import { normalizeToolName } from "../../../../src/agents/tool-policy-shared.js";
+import type { SkillStatusEntry, SkillStatusReport, ToolsCatalogResult } from "../types.ts";
 import {
   isAllowedByPolicy,
   matchesList,
@@ -9,6 +9,13 @@ import {
   resolveToolProfile,
   TOOL_SECTIONS,
 } from "./agents-utils.ts";
+import type { SkillGroup } from "./skills-grouping.ts";
+import { groupSkills } from "./skills-grouping.ts";
+import {
+  computeSkillMissing,
+  computeSkillReasons,
+  renderSkillStatusChips,
+} from "./skills-shared.ts";
 
 export function renderAgentTools(params: {
   agentId: string;
@@ -16,6 +23,9 @@ export function renderAgentTools(params: {
   configLoading: boolean;
   configSaving: boolean;
   configDirty: boolean;
+  toolsCatalogLoading: boolean;
+  toolsCatalogError: string | null;
+  toolsCatalogResult: ToolsCatalogResult | null;
   onProfileChange: (agentId: string, profile: string | null, clearAllow: boolean) => void;
   onOverridesChange: (agentId: string, alsoAllow: string[], deny: string[]) => void;
   onConfigReload: () => void;
@@ -43,7 +53,17 @@ export function renderAgentTools(params: {
   const basePolicy = hasAgentAllow
     ? { allow: agentTools.allow ?? [], deny: agentTools.deny ?? [] }
     : (resolveToolProfile(profile) ?? undefined);
-  const toolIds = TOOL_SECTIONS.flatMap((section) => section.tools.map((tool) => tool.id));
+  const sections =
+    params.toolsCatalogResult?.groups?.length &&
+    params.toolsCatalogResult.agentId === params.agentId
+      ? params.toolsCatalogResult.groups
+      : TOOL_SECTIONS;
+  const profileOptions =
+    params.toolsCatalogResult?.profiles?.length &&
+    params.toolsCatalogResult.agentId === params.agentId
+      ? params.toolsCatalogResult.profiles
+      : PROFILE_OPTIONS;
+  const toolIds = sections.flatMap((section) => section.tools.map((tool) => tool.id));
 
   const resolveAllowed = (toolId: string) => {
     const baseAllowed = isAllowedByPolicy(toolId, basePolicy);
@@ -133,6 +153,15 @@ export function renderAgentTools(params: {
       </div>
 
       ${
+        params.toolsCatalogError
+          ? html`
+              <div class="callout warn" style="margin-top: 12px">
+                Could not load runtime tool catalog. Showing fallback list.
+              </div>
+            `
+          : nothing
+      }
+      ${
         !params.configForm
           ? html`
               <div class="callout info" style="margin-top: 12px">
@@ -184,7 +213,7 @@ export function renderAgentTools(params: {
       <div class="agent-tools-presets" style="margin-top: 16px;">
         <div class="label">Quick Presets</div>
         <div class="agent-tools-buttons">
-          ${PROFILE_OPTIONS.map(
+          ${profileOptions.map(
             (option) => html`
               <button
                 class="btn btn--sm ${profile === option.id ? "active" : ""}"
@@ -206,18 +235,49 @@ export function renderAgentTools(params: {
       </div>
 
       <div class="agent-tools-grid" style="margin-top: 20px;">
-        ${TOOL_SECTIONS.map(
+        ${sections.map(
           (section) =>
             html`
               <div class="agent-tools-section">
-                <div class="agent-tools-header">${section.label}</div>
+                <div class="agent-tools-header">
+                  ${section.label}
+                  ${
+                    "source" in section && section.source === "plugin"
+                      ? html`
+                          <span class="mono" style="margin-left: 6px">plugin</span>
+                        `
+                      : nothing
+                  }
+                </div>
                 <div class="agent-tools-list">
                   ${section.tools.map((tool) => {
                     const { allowed } = resolveAllowed(tool.id);
+                    const catalogTool = tool as {
+                      source?: "core" | "plugin";
+                      pluginId?: string;
+                      optional?: boolean;
+                    };
+                    const source =
+                      catalogTool.source === "plugin"
+                        ? catalogTool.pluginId
+                          ? `plugin:${catalogTool.pluginId}`
+                          : "plugin"
+                        : "core";
+                    const isOptional = catalogTool.optional === true;
                     return html`
                       <div class="agent-tool-row">
                         <div>
-                          <div class="agent-tool-title mono">${tool.label}</div>
+                          <div class="agent-tool-title mono">
+                            ${tool.label}
+                            <span class="mono" style="margin-left: 8px; opacity: 0.8;">${source}</span>
+                            ${
+                              isOptional
+                                ? html`
+                                    <span class="mono" style="margin-left: 6px; opacity: 0.8">optional</span>
+                                  `
+                                : nothing
+                            }
+                          </div>
                           <div class="agent-tool-sub">${tool.description}</div>
                         </div>
                         <label class="cfg-toggle">
@@ -238,47 +298,15 @@ export function renderAgentTools(params: {
             `,
         )}
       </div>
+      ${
+        params.toolsCatalogLoading
+          ? html`
+              <div class="card-sub" style="margin-top: 10px">Refreshing tool catalog…</div>
+            `
+          : nothing
+      }
     </section>
   `;
-}
-
-type SkillGroup = {
-  id: string;
-  label: string;
-  skills: SkillStatusEntry[];
-};
-
-const SKILL_SOURCE_GROUPS: Array<{ id: string; label: string; sources: string[] }> = [
-  { id: "workspace", label: "Workspace Skills", sources: ["openclaw-workspace"] },
-  { id: "built-in", label: "Built-in Skills", sources: ["openclaw-bundled"] },
-  { id: "installed", label: "Installed Skills", sources: ["openclaw-managed"] },
-  { id: "extra", label: "Extra Skills", sources: ["openclaw-extra"] },
-];
-
-function groupSkills(skills: SkillStatusEntry[]): SkillGroup[] {
-  const groups = new Map<string, SkillGroup>();
-  for (const def of SKILL_SOURCE_GROUPS) {
-    groups.set(def.id, { id: def.id, label: def.label, skills: [] });
-  }
-  const builtInGroup = SKILL_SOURCE_GROUPS.find((group) => group.id === "built-in");
-  const other: SkillGroup = { id: "other", label: "Other Skills", skills: [] };
-  for (const skill of skills) {
-    const match = skill.bundled
-      ? builtInGroup
-      : SKILL_SOURCE_GROUPS.find((group) => group.sources.includes(skill.source));
-    if (match) {
-      groups.get(match.id)?.skills.push(skill);
-    } else {
-      other.skills.push(skill);
-    }
-  }
-  const ordered = SKILL_SOURCE_GROUPS.map((group) => groups.get(group.id)).filter(
-    (group): group is SkillGroup => Boolean(group && group.skills.length > 0),
-  );
-  if (other.skills.length > 0) {
-    ordered.push(other);
-  }
-  return ordered;
 }
 
 export function renderAgentSkills(params: {
@@ -473,37 +501,14 @@ function renderAgentSkillRow(
   },
 ) {
   const enabled = params.usingAllowlist ? params.allowSet.has(skill.name) : true;
-  const missing = [
-    ...skill.missing.bins.map((b) => `bin:${b}`),
-    ...skill.missing.env.map((e) => `env:${e}`),
-    ...skill.missing.config.map((c) => `config:${c}`),
-    ...skill.missing.os.map((o) => `os:${o}`),
-  ];
-  const reasons: string[] = [];
-  if (skill.disabled) {
-    reasons.push("disabled");
-  }
-  if (skill.blockedByAllowlist) {
-    reasons.push("blocked by allowlist");
-  }
+  const missing = computeSkillMissing(skill);
+  const reasons = computeSkillReasons(skill);
   return html`
     <div class="list-item agent-skill-row">
       <div class="list-main">
         <div class="list-title">${skill.emoji ? `${skill.emoji} ` : ""}${skill.name}</div>
         <div class="list-sub">${skill.description}</div>
-        <div class="chip-row" style="margin-top: 6px;">
-          <span class="chip">${skill.source}</span>
-          <span class="chip ${skill.eligible ? "chip-ok" : "chip-warn"}">
-            ${skill.eligible ? "eligible" : "blocked"}
-          </span>
-          ${
-            skill.disabled
-              ? html`
-                  <span class="chip chip-warn">disabled</span>
-                `
-              : nothing
-          }
-        </div>
+        ${renderSkillStatusChips({ skill })}
         ${
           missing.length > 0
             ? html`<div class="muted" style="margin-top: 6px;">Missing: ${missing.join(", ")}</div>`

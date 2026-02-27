@@ -1,36 +1,33 @@
 import path from "node:path";
-import type { OpenClawConfig, ConfigValidationIssue } from "./types.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { CHANNEL_IDS, normalizeChatChannelId } from "../channels/registry.js";
 import {
   normalizePluginsConfig,
-  resolveEnableState,
+  resolveEffectiveEnableState,
   resolveMemorySlotDecision,
 } from "../plugins/config-state.js";
 import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { validateJsonSchemaValue } from "../plugins/schema-validator.js";
+import {
+  hasAvatarUriScheme,
+  isAvatarDataUrl,
+  isAvatarHttpUrl,
+  isPathWithinRoot,
+  isWindowsAbsolutePath,
+} from "../shared/avatar-policy.js";
 import { isRecord } from "../utils.js";
 import { findDuplicateAgentDirs, formatDuplicateAgentDirError } from "./agent-dirs.js";
 import { applyAgentDefaults, applyModelDefaults, applySessionDefaults } from "./defaults.js";
 import { findLegacyConfigIssues } from "./legacy.js";
+import type { OpenClawConfig, ConfigValidationIssue } from "./types.js";
 import { OpenClawSchema } from "./zod-schema.js";
 
-const AVATAR_SCHEME_RE = /^[a-z][a-z0-9+.-]*:/i;
-const AVATAR_DATA_RE = /^data:/i;
-const AVATAR_HTTP_RE = /^https?:\/\//i;
-const WINDOWS_ABS_RE = /^[a-zA-Z]:[\\/]/;
+const LEGACY_REMOVED_PLUGIN_IDS = new Set(["google-antigravity-auth"]);
 
 function isWorkspaceAvatarPath(value: string, workspaceDir: string): boolean {
   const workspaceRoot = path.resolve(workspaceDir);
   const resolved = path.resolve(workspaceRoot, value);
-  const relative = path.relative(workspaceRoot, resolved);
-  if (relative === "") {
-    return true;
-  }
-  if (relative.startsWith("..")) {
-    return false;
-  }
-  return !path.isAbsolute(relative);
+  return isPathWithinRoot(workspaceRoot, resolved);
 }
 
 function validateIdentityAvatar(config: OpenClawConfig): ConfigValidationIssue[] {
@@ -51,7 +48,7 @@ function validateIdentityAvatar(config: OpenClawConfig): ConfigValidationIssue[]
     if (!avatar) {
       continue;
     }
-    if (AVATAR_DATA_RE.test(avatar) || AVATAR_HTTP_RE.test(avatar)) {
+    if (isAvatarDataUrl(avatar) || isAvatarHttpUrl(avatar)) {
       continue;
     }
     if (avatar.startsWith("~")) {
@@ -61,8 +58,8 @@ function validateIdentityAvatar(config: OpenClawConfig): ConfigValidationIssue[]
       });
       continue;
     }
-    const hasScheme = AVATAR_SCHEME_RE.test(avatar);
-    if (hasScheme && !WINDOWS_ABS_RE.test(avatar)) {
+    const hasScheme = hasAvatarUriScheme(avatar);
+    if (hasScheme && !isWindowsAbsolutePath(avatar)) {
       issues.push({
         path: `agents.list.${index}.identity.avatar`,
         message: "identity.avatar must be a workspace-relative path, http(s) URL, or data URI.",
@@ -195,89 +192,63 @@ function validateConfigObjectWithPluginsBase(
   const config = base.config;
   const issues: ConfigValidationIssue[] = [];
   const warnings: ConfigValidationIssue[] = [];
-  const pluginsConfig = config.plugins;
-  const normalizedPlugins = normalizePluginsConfig(pluginsConfig);
+  const hasExplicitPluginsConfig =
+    isRecord(raw) && Object.prototype.hasOwnProperty.call(raw, "plugins");
 
-  const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
-  const registry = loadPluginManifestRegistry({
-    config,
-    workspaceDir: workspaceDir ?? undefined,
-  });
+  type RegistryInfo = {
+    registry: ReturnType<typeof loadPluginManifestRegistry>;
+    knownIds: Set<string>;
+    normalizedPlugins: ReturnType<typeof normalizePluginsConfig>;
+  };
 
-  const knownIds = new Set(registry.plugins.map((record) => record.id));
+  let registryInfo: RegistryInfo | null = null;
 
-  for (const diag of registry.diagnostics) {
-    let path = diag.pluginId ? `plugins.entries.${diag.pluginId}` : "plugins";
-    if (!diag.pluginId && diag.message.includes("plugin path not found")) {
-      path = "plugins.load.paths";
+  const ensureRegistry = (): RegistryInfo => {
+    if (registryInfo) {
+      return registryInfo;
     }
-    const pluginLabel = diag.pluginId ? `plugin ${diag.pluginId}` : "plugin";
-    const message = `${pluginLabel}: ${diag.message}`;
-    if (diag.level === "error") {
-      issues.push({ path, message });
-    } else {
-      warnings.push({ path, message });
-    }
-  }
 
-  const entries = pluginsConfig?.entries;
-  if (entries && isRecord(entries)) {
-    for (const pluginId of Object.keys(entries)) {
-      if (!knownIds.has(pluginId)) {
-        issues.push({
-          path: `plugins.entries.${pluginId}`,
-          message: `plugin not found: ${pluginId}`,
-        });
+    const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
+    const registry = loadPluginManifestRegistry({
+      config,
+      workspaceDir: workspaceDir ?? undefined,
+    });
+    const knownIds = new Set(registry.plugins.map((record) => record.id));
+    const normalizedPlugins = normalizePluginsConfig(config.plugins);
+
+    for (const diag of registry.diagnostics) {
+      let path = diag.pluginId ? `plugins.entries.${diag.pluginId}` : "plugins";
+      if (!diag.pluginId && diag.message.includes("plugin path not found")) {
+        path = "plugins.load.paths";
+      }
+      const pluginLabel = diag.pluginId ? `plugin ${diag.pluginId}` : "plugin";
+      const message = `${pluginLabel}: ${diag.message}`;
+      if (diag.level === "error") {
+        issues.push({ path, message });
+      } else {
+        warnings.push({ path, message });
       }
     }
-  }
 
-  const allow = pluginsConfig?.allow ?? [];
-  for (const pluginId of allow) {
-    if (typeof pluginId !== "string" || !pluginId.trim()) {
-      continue;
-    }
-    if (!knownIds.has(pluginId)) {
-      issues.push({
-        path: "plugins.allow",
-        message: `plugin not found: ${pluginId}`,
-      });
-    }
-  }
+    registryInfo = { registry, knownIds, normalizedPlugins };
+    return registryInfo;
+  };
 
-  const deny = pluginsConfig?.deny ?? [];
-  for (const pluginId of deny) {
-    if (typeof pluginId !== "string" || !pluginId.trim()) {
-      continue;
-    }
-    if (!knownIds.has(pluginId)) {
-      issues.push({
-        path: "plugins.deny",
-        message: `plugin not found: ${pluginId}`,
-      });
-    }
-  }
-
-  const memorySlot = normalizedPlugins.slots.memory;
-  if (typeof memorySlot === "string" && memorySlot.trim() && !knownIds.has(memorySlot)) {
-    issues.push({
-      path: "plugins.slots.memory",
-      message: `plugin not found: ${memorySlot}`,
-    });
-  }
-
-  const allowedChannels = new Set<string>(["defaults", ...CHANNEL_IDS]);
-  for (const record of registry.plugins) {
-    for (const channelId of record.channels) {
-      allowedChannels.add(channelId);
-    }
-  }
+  const allowedChannels = new Set<string>(["defaults", "modelByChannel", ...CHANNEL_IDS]);
 
   if (config.channels && isRecord(config.channels)) {
     for (const key of Object.keys(config.channels)) {
       const trimmed = key.trim();
       if (!trimmed) {
         continue;
+      }
+      if (!allowedChannels.has(trimmed)) {
+        const { registry } = ensureRegistry();
+        for (const record of registry.plugins) {
+          for (const channelId of record.channels) {
+            allowedChannels.add(channelId);
+          }
+        }
       }
       if (!allowedChannels.has(trimmed)) {
         issues.push({
@@ -291,14 +262,6 @@ function validateConfigObjectWithPluginsBase(
   const heartbeatChannelIds = new Set<string>();
   for (const channelId of CHANNEL_IDS) {
     heartbeatChannelIds.add(channelId.toLowerCase());
-  }
-  for (const record of registry.plugins) {
-    for (const channelId of record.channels) {
-      const trimmed = channelId.trim();
-      if (trimmed) {
-        heartbeatChannelIds.add(trimmed.toLowerCase());
-      }
-    }
   }
 
   const validateHeartbeatTarget = (target: string | undefined, path: string) => {
@@ -317,6 +280,17 @@ function validateConfigObjectWithPluginsBase(
     if (normalizeChatChannelId(trimmed)) {
       return;
     }
+    if (!heartbeatChannelIds.has(normalized)) {
+      const { registry } = ensureRegistry();
+      for (const record of registry.plugins) {
+        for (const channelId of record.channels) {
+          const pluginChannel = channelId.trim();
+          if (pluginChannel) {
+            heartbeatChannelIds.add(pluginChannel.toLowerCase());
+          }
+        }
+      }
+    }
     if (heartbeatChannelIds.has(normalized)) {
       return;
     }
@@ -333,6 +307,76 @@ function validateConfigObjectWithPluginsBase(
     }
   }
 
+  if (!hasExplicitPluginsConfig) {
+    if (issues.length > 0) {
+      return { ok: false, issues, warnings };
+    }
+    return { ok: true, config, warnings };
+  }
+
+  const { registry, knownIds, normalizedPlugins } = ensureRegistry();
+  const pushMissingPluginIssue = (
+    path: string,
+    pluginId: string,
+    opts?: { warnOnly?: boolean },
+  ) => {
+    if (LEGACY_REMOVED_PLUGIN_IDS.has(pluginId)) {
+      warnings.push({
+        path,
+        message: `plugin removed: ${pluginId} (stale config entry ignored; remove it from plugins config)`,
+      });
+      return;
+    }
+    if (opts?.warnOnly) {
+      warnings.push({
+        path,
+        message: `plugin not found: ${pluginId} (stale config entry ignored; remove it from plugins config)`,
+      });
+      return;
+    }
+    issues.push({
+      path,
+      message: `plugin not found: ${pluginId}`,
+    });
+  };
+
+  const pluginsConfig = config.plugins;
+
+  const entries = pluginsConfig?.entries;
+  if (entries && isRecord(entries)) {
+    for (const pluginId of Object.keys(entries)) {
+      if (!knownIds.has(pluginId)) {
+        // Keep gateway startup resilient when plugins are removed/renamed across upgrades.
+        pushMissingPluginIssue(`plugins.entries.${pluginId}`, pluginId, { warnOnly: true });
+      }
+    }
+  }
+
+  const allow = pluginsConfig?.allow ?? [];
+  for (const pluginId of allow) {
+    if (typeof pluginId !== "string" || !pluginId.trim()) {
+      continue;
+    }
+    if (!knownIds.has(pluginId)) {
+      pushMissingPluginIssue("plugins.allow", pluginId);
+    }
+  }
+
+  const deny = pluginsConfig?.deny ?? [];
+  for (const pluginId of deny) {
+    if (typeof pluginId !== "string" || !pluginId.trim()) {
+      continue;
+    }
+    if (!knownIds.has(pluginId)) {
+      pushMissingPluginIssue("plugins.deny", pluginId);
+    }
+  }
+
+  const memorySlot = normalizedPlugins.slots.memory;
+  if (typeof memorySlot === "string" && memorySlot.trim() && !knownIds.has(memorySlot)) {
+    pushMissingPluginIssue("plugins.slots.memory", memorySlot);
+  }
+
   let selectedMemoryPluginId: string | null = null;
   const seenPlugins = new Set<string>();
   for (const record of registry.plugins) {
@@ -344,7 +388,12 @@ function validateConfigObjectWithPluginsBase(
     const entry = normalizedPlugins.entries[pluginId];
     const entryHasConfig = Boolean(entry?.config);
 
-    const enableState = resolveEnableState(pluginId, record.origin, normalizedPlugins);
+    const enableState = resolveEffectiveEnableState({
+      id: pluginId,
+      origin: record.origin,
+      config: normalizedPlugins,
+      rootConfig: config,
+    });
     let enabled = enableState.enabled;
     let reason = enableState.reason;
 

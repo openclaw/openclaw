@@ -1,12 +1,7 @@
 import { fetchDiscord } from "./api.js";
+import { listGuilds, type DiscordGuildSummary } from "./guilds.js";
 import { normalizeDiscordSlug } from "./monitor/allow-list.js";
 import { normalizeDiscordToken } from "./token.js";
-
-type DiscordGuildSummary = {
-  id: string;
-  name: string;
-  slug: string;
-};
 
 type DiscordUser = {
   id: string;
@@ -61,24 +56,6 @@ function parseDiscordUserInput(raw: string): {
   return { userName: trimmed.replace(/^@/, "") };
 }
 
-async function listGuilds(token: string, fetcher: typeof fetch): Promise<DiscordGuildSummary[]> {
-  const raw = await fetchDiscord<Array<{ id?: string; name?: string }>>(
-    "/users/@me/guilds",
-    token,
-    fetcher,
-  );
-  return raw
-    .filter(
-      (guild): guild is { id: string; name: string } =>
-        typeof guild.id === "string" && typeof guild.name === "string",
-    )
-    .map((guild) => ({
-      id: guild.id,
-      name: guild.name,
-      slug: normalizeDiscordSlug(guild.name),
-    }));
-}
-
 function scoreDiscordMember(member: DiscordMember, query: string): number {
   const q = query.toLowerCase();
   const user = member.user;
@@ -111,7 +88,18 @@ export async function resolveDiscordUserAllowlist(params: {
     }));
   }
   const fetcher = params.fetcher ?? fetch;
-  const guilds = await listGuilds(token, fetcher);
+
+  // Lazy-load guilds: only fetch when an entry actually needs username search.
+  // This prevents listGuilds() failures (permissions, network) from blocking
+  // resolution of plain user-id entries that don't need guild data at all.
+  let guilds: DiscordGuildSummary[] | null = null;
+  const getGuilds = async (): Promise<DiscordGuildSummary[]> => {
+    if (!guilds) {
+      guilds = await listGuilds(token, fetcher);
+    }
+    return guilds;
+  };
+
   const results: DiscordUserResolution[] = [];
 
   for (const input of params.entries) {
@@ -132,11 +120,12 @@ export async function resolveDiscordUserAllowlist(params: {
     }
 
     const guildName = parsed.guildName?.trim();
+    const allGuilds = await getGuilds();
     const guildList = parsed.guildId
-      ? guilds.filter((g) => g.id === parsed.guildId)
+      ? allGuilds.filter((g) => g.id === parsed.guildId)
       : guildName
-        ? guilds.filter((g) => g.slug === normalizeDiscordSlug(guildName))
-        : guilds;
+        ? allGuilds.filter((g) => g.slug === normalizeDiscordSlug(guildName))
+        : allGuilds;
 
     let best: { member: DiscordMember; guild: DiscordGuildSummary; score: number } | null = null;
     let matches = 0;

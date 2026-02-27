@@ -16,6 +16,7 @@ import {
   sendSlackMessage,
   unpinSlackMessage,
 } from "../../slack/actions.js";
+import { parseSlackBlocksInput } from "../../slack/blocks-input.js";
 import { parseSlackTarget, resolveSlackChannelId } from "../../slack/targets.js";
 import { withNormalizedTimestamp } from "../date-time.js";
 import {
@@ -82,6 +83,10 @@ function resolveThreadTsFromContext(
     return context.currentThreadTs;
   }
   return undefined;
+}
+
+function readSlackBlocksParam(params: Record<string, unknown>) {
+  return parseSlackBlocksInput(params.blocks);
 }
 
 export async function handleSlackAction(
@@ -174,17 +179,25 @@ export async function handleSlackAction(
     switch (action) {
       case "sendMessage": {
         const to = readStringParam(params, "to", { required: true });
-        const content = readStringParam(params, "content", { required: true });
+        const content = readStringParam(params, "content", { allowEmpty: true });
         const mediaUrl = readStringParam(params, "mediaUrl");
+        const blocks = readSlackBlocksParam(params);
+        if (!content && !mediaUrl && !blocks) {
+          throw new Error("Slack sendMessage requires content, blocks, or mediaUrl.");
+        }
+        if (mediaUrl && blocks) {
+          throw new Error("Slack sendMessage does not support blocks with mediaUrl.");
+        }
         const threadTs = resolveThreadTsFromContext(
           readStringParam(params, "threadTs"),
           to,
           context,
         );
-        const result = await sendSlackMessage(to, content, {
+        const result = await sendSlackMessage(to, content ?? "", {
           ...writeOpts,
           mediaUrl: mediaUrl ?? undefined,
           threadTs: threadTs ?? undefined,
+          blocks,
         });
 
         // Keep "first" mode consistent even when the agent explicitly provided
@@ -204,13 +217,18 @@ export async function handleSlackAction(
         const messageId = readStringParam(params, "messageId", {
           required: true,
         });
-        const content = readStringParam(params, "content", {
-          required: true,
-        });
+        const content = readStringParam(params, "content", { allowEmpty: true });
+        const blocks = readSlackBlocksParam(params);
+        if (!content && !blocks) {
+          throw new Error("Slack editMessage requires content or blocks.");
+        }
         if (writeOpts) {
-          await editSlackMessage(channelId, messageId, content, writeOpts);
+          await editSlackMessage(channelId, messageId, content ?? "", {
+            ...writeOpts,
+            blocks,
+          });
         } else {
-          await editSlackMessage(channelId, messageId, content);
+          await editSlackMessage(channelId, messageId, content ?? "", { blocks });
         }
         return jsonResult({ ok: true });
       }

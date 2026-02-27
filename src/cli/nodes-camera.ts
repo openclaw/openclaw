@@ -1,8 +1,13 @@
-import { randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import { resolveCliName } from "./cli-name.js";
+import {
+  asBoolean,
+  asNumber,
+  asRecord,
+  asString,
+  resolveTempPathParts,
+} from "./nodes-media-utils.js";
 
 const MAX_CAMERA_URL_DOWNLOAD_BYTES = 250 * 1024 * 1024;
 
@@ -23,22 +28,6 @@ export type CameraClipPayload = {
   durationMs: number;
   hasAudio: boolean;
 };
-
-function asRecord(value: unknown): Record<string, unknown> {
-  return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
-}
-
-function asString(value: unknown): string | undefined {
-  return typeof value === "string" ? value : undefined;
-}
-
-function asNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
-function asBoolean(value: unknown): boolean | undefined {
-  return typeof value === "boolean" ? value : undefined;
-}
 
 export function parseCameraSnapPayload(value: unknown): CameraSnapPayload {
   const obj = asRecord(value);
@@ -73,10 +62,12 @@ export function cameraTempPath(opts: {
   tmpDir?: string;
   id?: string;
 }) {
-  const tmpDir = opts.tmpDir ?? os.tmpdir();
-  const id = opts.id ?? randomUUID();
+  const { tmpDir, id, ext } = resolveTempPathParts({
+    tmpDir: opts.tmpDir,
+    id: opts.id,
+    ext: opts.ext,
+  });
   const facingPart = opts.facing ? `-${opts.facing}` : "";
-  const ext = opts.ext.startsWith(".") ? opts.ext : `.${opts.ext}`;
   const cliName = resolveCliName();
   return path.join(tmpDir, `${cliName}-camera-${opts.kind}${facingPart}-${id}${ext}`);
 }
@@ -148,4 +139,27 @@ export async function writeBase64ToFile(filePath: string, base64: string) {
   const buf = Buffer.from(base64, "base64");
   await fs.writeFile(filePath, buf);
   return { path: filePath, bytes: buf.length };
+}
+
+export async function writeCameraClipPayloadToFile(params: {
+  payload: CameraClipPayload;
+  facing: CameraFacing;
+  tmpDir?: string;
+  id?: string;
+}): Promise<string> {
+  const filePath = cameraTempPath({
+    kind: "clip",
+    facing: params.facing,
+    ext: params.payload.format,
+    tmpDir: params.tmpDir,
+    id: params.id,
+  });
+  if (params.payload.url) {
+    await writeUrlToFile(filePath, params.payload.url);
+  } else if (params.payload.base64) {
+    await writeBase64ToFile(filePath, params.payload.base64);
+  } else {
+    throw new Error("invalid camera.clip payload");
+  }
+  return filePath;
 }

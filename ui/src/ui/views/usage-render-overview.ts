@@ -649,6 +649,38 @@ function renderSessionsCard(
     0,
   );
 
+  const renderSessionBarRow = (s: UsageSessionEntry, isSelected: boolean) => {
+    const value = getSessionValue(s);
+    const displayLabel = formatSessionListLabel(s);
+    const meta = buildSessionMeta(s);
+    return html`
+      <div
+        class="session-bar-row ${isSelected ? "selected" : ""}"
+        @click=${(e: MouseEvent) => onSelectSession(s.key, e.shiftKey)}
+        title="${s.key}"
+      >
+        <div class="session-bar-label">
+          <div class="session-bar-title">${displayLabel}</div>
+          ${meta.length > 0 ? html`<div class="session-bar-meta">${meta.join(" · ")}</div>` : nothing}
+        </div>
+        <div class="session-bar-track" style="display: none;"></div>
+        <div class="session-bar-actions">
+          <button
+            class="session-copy-btn"
+            title="Copy session name"
+            @click=${(e: MouseEvent) => {
+              e.stopPropagation();
+              void copySessionName(s);
+            }}
+          >
+            Copy
+          </button>
+          <div class="session-bar-value">${isTokenMode ? formatTokens(value) : formatCost(value)}</div>
+        </div>
+      </div>
+    `;
+  };
+
   const selectedSet = new Set(selectedSessions);
   const selectedEntries = sortedWithDir.filter((s) => selectedSet.has(s.key));
   const selectedCount = selectedEntries.length;
@@ -720,83 +752,22 @@ function renderSessionsCard(
                 <div class="muted" style="padding: 20px; text-align: center">No recent sessions</div>
               `
             : html`
-                <div class="session-bars" style="max-height: 220px; margin-top: 6px;">
-                  ${recentEntries.map((s) => {
-                    const value = getSessionValue(s);
-                    const isSelected = selectedSet.has(s.key);
-                    const displayLabel = formatSessionListLabel(s);
-                    const meta = buildSessionMeta(s);
-                    return html`
-                      <div
-                        class="session-bar-row ${isSelected ? "selected" : ""}"
-                        @click=${(e: MouseEvent) => onSelectSession(s.key, e.shiftKey)}
-                        title="${s.key}"
-                      >
-                        <div class="session-bar-label">
-                          <div class="session-bar-title">${displayLabel}</div>
-                          ${meta.length > 0 ? html`<div class="session-bar-meta">${meta.join(" · ")}</div>` : nothing}
-                        </div>
-                        <div class="session-bar-track" style="display: none;"></div>
-                        <div class="session-bar-actions">
-                          <button
-                            class="session-copy-btn"
-                            title="Copy session name"
-                            @click=${(e: MouseEvent) => {
-                              e.stopPropagation();
-                              void copySessionName(s);
-                            }}
-                          >
-                            Copy
-                          </button>
-                          <div class="session-bar-value">${isTokenMode ? formatTokens(value) : formatCost(value)}</div>
-                        </div>
-                      </div>
-                    `;
-                  })}
-                </div>
-              `
+	                <div class="session-bars" style="max-height: 220px; margin-top: 6px;">
+	                  ${recentEntries.map((s) => renderSessionBarRow(s, selectedSet.has(s.key)))}
+	                </div>
+	              `
           : sessions.length === 0
             ? html`
                 <div class="muted" style="padding: 20px; text-align: center">No sessions in range</div>
               `
             : html`
-                <div class="session-bars">
-                  ${sortedWithDir.slice(0, 50).map((s) => {
-                    const value = getSessionValue(s);
-                    const isSelected = selectedSessions.includes(s.key);
-                    const displayLabel = formatSessionListLabel(s);
-                    const meta = buildSessionMeta(s);
-
-                    return html`
-                      <div
-                        class="session-bar-row ${isSelected ? "selected" : ""}"
-                        @click=${(e: MouseEvent) => onSelectSession(s.key, e.shiftKey)}
-                        title="${s.key}"
-                      >
-                        <div class="session-bar-label">
-                          <div class="session-bar-title">${displayLabel}</div>
-                          ${meta.length > 0 ? html`<div class="session-bar-meta">${meta.join(" · ")}</div>` : nothing}
-                        </div>
-                        <div class="session-bar-track" style="display: none;"></div>
-                        <div class="session-bar-actions">
-                          <button
-                            class="session-copy-btn"
-                            title="Copy session name"
-                            @click=${(e: MouseEvent) => {
-                              e.stopPropagation();
-                              void copySessionName(s);
-                            }}
-                          >
-                            Copy
-                          </button>
-                          <div class="session-bar-value">${isTokenMode ? formatTokens(value) : formatCost(value)}</div>
-                        </div>
-                      </div>
-                    `;
-                  })}
-                  ${sessions.length > 50 ? html`<div class="muted" style="padding: 8px; text-align: center; font-size: 11px;">+${sessions.length - 50} more</div>` : nothing}
-                </div>
-              `
+	                <div class="session-bars">
+	                  ${sortedWithDir
+                      .slice(0, 50)
+                      .map((s) => renderSessionBarRow(s, selectedSet.has(s.key)))}
+	                  ${sessions.length > 50 ? html`<div class="muted" style="padding: 8px; text-align: center; font-size: 11px;">+${sessions.length - 50} more</div>` : nothing}
+	                </div>
+	              `
       }
       ${
         selectedCount > 1
@@ -804,37 +775,7 @@ function renderSessionsCard(
               <div style="margin-top: 10px;">
                 <div class="sessions-card-count">Selected (${selectedCount})</div>
                 <div class="session-bars" style="max-height: 160px; margin-top: 6px;">
-                  ${selectedEntries.map((s) => {
-                    const value = getSessionValue(s);
-                    const displayLabel = formatSessionListLabel(s);
-                    const meta = buildSessionMeta(s);
-                    return html`
-                      <div
-                        class="session-bar-row selected"
-                        @click=${(e: MouseEvent) => onSelectSession(s.key, e.shiftKey)}
-                        title="${s.key}"
-                      >
-                        <div class="session-bar-label">
-                          <div class="session-bar-title">${displayLabel}</div>
-                          ${meta.length > 0 ? html`<div class="session-bar-meta">${meta.join(" · ")}</div>` : nothing}
-                        </div>
-                  <div class="session-bar-track" style="display: none;"></div>
-                        <div class="session-bar-actions">
-                          <button
-                            class="session-copy-btn"
-                            title="Copy session name"
-                            @click=${(e: MouseEvent) => {
-                              e.stopPropagation();
-                              void copySessionName(s);
-                            }}
-                          >
-                            Copy
-                          </button>
-                          <div class="session-bar-value">${isTokenMode ? formatTokens(value) : formatCost(value)}</div>
-                        </div>
-                      </div>
-                    `;
-                  })}
+                  ${selectedEntries.map((s) => renderSessionBarRow(s, true))}
                 </div>
               </div>
             `

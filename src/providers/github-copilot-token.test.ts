@@ -10,8 +10,8 @@ describe("github-copilot token", () => {
   const cachePath = "/tmp/openclaw-state/credentials/github-copilot.token.json";
 
   beforeEach(() => {
-    loadJsonFile.mockReset();
-    saveJsonFile.mockReset();
+    loadJsonFile.mockClear();
+    saveJsonFile.mockClear();
   });
 
   it("derives baseUrl from token", async () => {
