@@ -136,11 +136,52 @@ export function extractGeminiCliCredentials(): { clientId: string; clientSecret:
   return null;
 }
 
+/**
+ * On Windows, npm/pnpm/yarn create `.cmd` wrappers that reference the actual
+ * JS entry point.  `realpathSync` on a `.cmd` just returns itself (not a
+ * symlink), so the standard `dirname(dirname(resolvedPath))` heuristic fails.
+ * Parse the `.cmd` content to extract the real script path when possible.
+ */
+function resolveScriptPathFromCmd(cmdPath: string): string | null {
+  try {
+    const content = readFileSync(cmdPath, "utf8");
+    // npm .cmd wrappers contain lines like:
+    //   "%~dp0\node_modules\@google\gemini-cli\dist\index.js"
+    // or with an explicit node path:
+    //   "%~dp0\node.exe"  "%~dp0\node_modules\...\index.js"
+    const matches = content.match(/"%~dp0\\([^"]+\.js)"/g);
+    if (!matches) {
+      return null;
+    }
+    // Pick the last .js reference (the script, not node.exe path)
+    const last = matches[matches.length - 1];
+    const relative = last.replace(/^"%~dp0\\/, "").replace(/"$/, "");
+    const resolved = join(dirname(cmdPath), relative);
+    if (existsSync(resolved)) {
+      return resolved;
+    }
+  } catch {
+    // ignore read/parse errors
+  }
+  return null;
+}
+
 function resolveGeminiCliDirs(geminiPath: string, resolvedPath: string): string[] {
   const binDir = dirname(geminiPath);
+
+  // On Windows, npm/pnpm/yarn create .cmd wrappers; try to resolve the actual
+  // script path so that dirname-based heuristics point to the right package root.
+  let effectiveResolved = resolvedPath;
+  if (/\.(cmd|bat)$/i.test(geminiPath)) {
+    const scriptPath = resolveScriptPathFromCmd(geminiPath);
+    if (scriptPath) {
+      effectiveResolved = scriptPath;
+    }
+  }
+
   const candidates = [
-    dirname(dirname(resolvedPath)),
-    join(dirname(resolvedPath), "node_modules", "@google", "gemini-cli"),
+    dirname(dirname(effectiveResolved)),
+    join(dirname(effectiveResolved), "node_modules", "@google", "gemini-cli"),
     join(binDir, "node_modules", "@google", "gemini-cli"),
     join(dirname(binDir), "node_modules", "@google", "gemini-cli"),
     join(dirname(binDir), "lib", "node_modules", "@google", "gemini-cli"),

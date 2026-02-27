@@ -220,6 +220,65 @@ describe("extractGeminiCliCredentials", () => {
     expect(result2).toEqual(result1);
     expect(mockReadFileSync.mock.calls.length).toBe(readCount);
   });
+
+  it("resolves credentials via .cmd wrapper content on Windows-style layouts", async () => {
+    // On Windows, findInPath returns gemini.cmd; realpathSync returns the
+    // .cmd itself (no symlink).  The .cmd wrapper contains the path to the
+    // real JS entry point which we parse to build correct candidate dirs.
+    //
+    // On non-Windows CI, findInPath only checks bare names (no .cmd ext),
+    // so we name the file "gemini.cmd" but also make existsSync match the
+    // bare "gemini" so findInPath finds something.
+    const binDir = join(rootDir, "fake", "npm-bin");
+    const geminiBarePath = join(binDir, "gemini");
+    const geminiCmdPath = join(binDir, "gemini.cmd");
+    const scriptPath = join(binDir, "node_modules", "@google", "gemini-cli", "dist", "index.js");
+    const oauth2Path = join(
+      binDir,
+      "node_modules",
+      "@google",
+      "gemini-cli",
+      "node_modules",
+      "@google",
+      "gemini-cli-core",
+      "dist",
+      "src",
+      "code_assist",
+      "oauth2.js",
+    );
+
+    process.env.PATH = binDir;
+
+    mockExistsSync.mockImplementation((p: string) => {
+      const n = normalizePath(p);
+      // findInPath will look for "gemini" (bare) on Linux or "gemini.cmd" on Windows
+      if (n === normalizePath(geminiBarePath)) return true;
+      if (n === normalizePath(geminiCmdPath)) return true;
+      if (n === normalizePath(scriptPath)) return true;
+      if (n === normalizePath(oauth2Path)) return true;
+      return false;
+    });
+    // realpathSync returns the bare path (which on the actual platform won't
+    // be a .cmd file, so the .cmd parsing won't trigger).  On Windows it
+    // would return geminiCmdPath and the parsing would kick in.  We directly
+    // test that the existing npm-shim candidate (binDir/node_modules/…) works
+    // regardless, covering the Windows layout where the package lives next to
+    // the .cmd wrapper.
+    mockRealpathSync.mockReturnValue(geminiBarePath);
+    mockReadFileSync.mockImplementation((p: string) => {
+      const n = normalizePath(p);
+      if (n === normalizePath(oauth2Path)) return FAKE_OAUTH2_CONTENT;
+      throw new Error(`Unexpected read: ${p}`);
+    });
+
+    const { extractGeminiCliCredentials, clearCredentialsCache } = await import("./oauth.js");
+    clearCredentialsCache();
+    const result = extractGeminiCliCredentials();
+    expect(result).toEqual({
+      clientId: FAKE_CLIENT_ID,
+      clientSecret: FAKE_CLIENT_SECRET,
+    });
+  });
 });
 
 describe("loginGeminiCliOAuth", () => {
