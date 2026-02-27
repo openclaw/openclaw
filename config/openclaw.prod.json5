@@ -95,7 +95,7 @@
     web: {
       search: {
         provider: "brave",
-        // apiKey read from env BRAVE_API_KEY automatically
+        apiKey: "${BRAVE_API_KEY}",
       },
     },
   },
