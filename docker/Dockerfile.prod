@@ -46,32 +46,31 @@ RUN apt-get update && \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
 
-# Create non-root user and app directory
-RUN groupadd -r -g 1000 openclaw && \
-    useradd -r -u 1000 -g openclaw openclaw
+# Note: node:22-bookworm-slim already ships a 'node' user at UID/GID 1000.
+# No need to create a separate user; we reuse 'node' throughout.
 
 WORKDIR /app
 
 # Copy built artifacts from builder stage
-COPY --from=builder --chown=openclaw:openclaw /app/dist ./dist
-COPY --from=builder --chown=openclaw:openclaw /app/node_modules ./node_modules
-COPY --from=builder --chown=openclaw:openclaw /app/package.json ./package.json
-COPY --from=builder --chown=openclaw:openclaw /app/openclaw.mjs ./openclaw.mjs
-COPY --from=builder --chown=openclaw:openclaw /app/ui/dist ./ui/dist
-COPY --from=builder --chown=openclaw:openclaw /app/skills ./skills
-COPY --from=builder --chown=openclaw:openclaw /app/extensions ./extensions
+COPY --from=builder --chown=node:node /app/dist ./dist
+COPY --from=builder --chown=node:node /app/node_modules ./node_modules
+COPY --from=builder --chown=node:node /app/package.json ./package.json
+COPY --from=builder --chown=node:node /app/openclaw.mjs ./openclaw.mjs
+COPY --from=builder --chown=node:node /app/ui/dist ./ui/dist
+COPY --from=builder --chown=node:node /app/skills ./skills
+COPY --from=builder --chown=node:node /app/extensions ./extensions
 
 # Create directories for runtime data with correct permissions
 RUN mkdir -p /data/openclaw/state /data/openclaw/workspace /tmp/openclaw && \
-    chown -R openclaw:openclaw /data/openclaw /tmp/openclaw
+    chown -R node:node /data/openclaw /tmp/openclaw
 
 # Set production environment
 ENV NODE_ENV=production \
     HOME=/home/node \
     PATH="/app/node_modules/.bin:${PATH}"
 
-# Security: Switch to non-root user
-USER openclaw
+# Security: Switch to non-root user (node, UID 1000)
+USER node
 
 # Expose gateway port
 EXPOSE 18789
