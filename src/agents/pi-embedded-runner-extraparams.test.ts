@@ -870,8 +870,15 @@ describe("applyExtraParamsToAgent", () => {
         api: "openai-responses",
         provider: "azure-openai-responses",
         id: "gpt-4o",
+        name: "gpt-4o",
         baseUrl: "https://example.openai.azure.com/openai/v1",
-        compat: { supportsStore: false },
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128_000,
+        maxTokens: 4096,
+        // pi-ai currently types OpenAIResponsesCompat as an empty interface.
+        compat: { supportsStore: false } as unknown as Model<"openai-responses">["compat"],
       } as Model<"openai-responses">,
     });
     expect(payload.store).toBe(false);
