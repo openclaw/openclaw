@@ -451,6 +451,12 @@ export class SessionRiskMonitor {
       score: session?.totalScore,
     });
 
+    // Include full risk-factor summary so subscribers don't need to re-query (CQ-7).
+    const topFactors = session?.factors
+      .slice()
+      .toSorted((a, b) => b.score - a.score)
+      .slice(0, 5)
+      .map((f) => ({ name: f.name, score: f.score }));
     emitSecurityEvent({
       type: "session_anomaly",
       severity: "critical",
@@ -461,6 +467,7 @@ export class SessionRiskMonitor {
       details: {
         score: session?.totalScore ?? 0,
         factorCount: session?.factors.length ?? 0,
+        topFactors: topFactors ?? [],
       },
       remediation: "Investigate session activity; use releaseSession() to restore after review",
     });

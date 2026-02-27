@@ -2,7 +2,7 @@
  * Session Monitoring Tests
  */
 
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { resetSecurityEventsManager } from "./security-events.js";
 import { SessionRiskMonitor, resetSessionRiskMonitor, RISK_FACTORS } from "./session-monitoring.js";
 
@@ -18,6 +18,11 @@ describe("SessionRiskMonitor", () => {
       sessionExpiryMs: 60 * 60 * 1000,
       decayPerMinute: 1,
     });
+  });
+
+  afterEach(() => {
+    resetSessionRiskMonitor();
+    resetSecurityEventsManager();
   });
 
   describe("constructor", () => {
@@ -306,6 +311,51 @@ describe("SessionRiskMonitor", () => {
     it("does not isolate a different session", () => {
       monitor.isolateSession("session-bad");
       expect(monitor.isSessionIsolated("session-good")).toBe(false);
+    });
+  });
+
+  describe("session map cap (TC-7 — H-03 regression guard)", () => {
+    it("evicts oldest low-risk session when maxSessions is reached", () => {
+      const cap = 5;
+      const m = new SessionRiskMonitor({ enabled: true, threshold: 70, maxSessions: cap });
+
+      // Fill to cap — all low-risk (score < 70)
+      for (let i = 0; i < cap; i++) {
+        m.addRiskFactor(`session-${i}`, "TOOL_ABUSE"); // 10 pts each
+      }
+      expect(m.getStats().totalSessions).toBe(cap);
+
+      // One more session should trigger eviction
+      m.addRiskFactor("session-overflow", "TOOL_ABUSE");
+      expect(m.getStats().totalSessions).toBe(cap);
+      // The newest session should be tracked
+      expect(m.getSession("session-overflow")).not.toBeNull();
+    });
+
+    it("evicts oldest high-risk session when all sessions are high-risk", () => {
+      const cap = 3;
+      const m = new SessionRiskMonitor({ enabled: true, threshold: 10, maxSessions: cap });
+
+      // All sessions exceed threshold → all high-risk
+      for (let i = 0; i < cap; i++) {
+        m.addRiskFactor(`hi-risk-${i}`, "PRIVILEGE_COMMAND"); // 25 pts > threshold 10
+      }
+      expect(m.getStats().totalSessions).toBe(cap);
+
+      // Overflow: no low-risk sessions to evict → evicts oldest overall
+      m.addRiskFactor("hi-risk-overflow", "PRIVILEGE_COMMAND");
+      expect(m.getStats().totalSessions).toBe(cap);
+    });
+
+    it("does not evict below cap", () => {
+      const cap = 100;
+      const m = new SessionRiskMonitor({ enabled: true, threshold: 70, maxSessions: cap });
+
+      for (let i = 0; i < 50; i++) {
+        m.addRiskFactor(`sess-${i}`, "TOOL_ABUSE");
+      }
+      // 50 < 100 — no eviction
+      expect(m.getStats().totalSessions).toBe(50);
     });
   });
 });

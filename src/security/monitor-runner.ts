@@ -6,6 +6,7 @@
  */
 
 import { parseDurationMs } from "../cli/parse-duration.js";
+import type { OpenClawConfig } from "../config/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   emitSecurityEvent,
@@ -503,7 +504,9 @@ export function createCredentialRotationScanModule(): ScanModule {
  * Create a scan module that runs the full security audit.
  * Note: This module requires a config object to be passed at runtime.
  */
-export function createSecurityAuditScanModule(getConfig: () => Promise<unknown>): ScanModule {
+export function createSecurityAuditScanModule(
+  getConfig: () => Promise<OpenClawConfig>,
+): ScanModule {
   return {
     name: "security-audit",
     scan: async () => {
@@ -512,9 +515,8 @@ export function createSecurityAuditScanModule(getConfig: () => Promise<unknown>)
       try {
         const { runSecurityAudit } = await import("./audit.js");
         const config = await getConfig();
-        // Cast config since we can't import OpenClawConfig without circular deps
         const result = await runSecurityAudit({
-          config: config as Parameters<typeof runSecurityAudit>[0]["config"],
+          config,
           deep: false,
         });
 
@@ -591,7 +593,7 @@ export function createEnvCredentialScanModule(): ScanModule {
  */
 export function registerBuiltinModules(
   runner: MonitorRunner,
-  getConfig?: () => Promise<unknown>,
+  getConfig?: () => Promise<OpenClawConfig>,
 ): void {
   runner.registerModule(createCredentialAuditScanModule());
   runner.registerModule(createCredentialRotationScanModule());

@@ -363,7 +363,10 @@ export class SecurityEventsManager {
   subscribeAlerts(listener: SecurityEventListener): () => void {
     const wrapper = (event: SecurityEvent) => {
       if (this.shouldAlert(event)) {
-        void listener(event);
+        // Catch and log async listener errors so they never swallow silently.
+        Promise.resolve(listener(event)).catch((err: unknown) => {
+          log.warn("security alert listener error", { err });
+        });
       }
     };
     this.emitter.on("event", wrapper);
