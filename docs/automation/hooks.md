@@ -254,7 +254,7 @@ Triggered when the gateway starts:
 
 - **`gateway:startup`**: After channels start and hooks are loaded
 
-## Bundled Hooks
+## Bundled Hook Reference
 
 ### `daily-memory`
 
