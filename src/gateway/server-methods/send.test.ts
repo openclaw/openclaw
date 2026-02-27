@@ -14,6 +14,11 @@ const mocks = vi.hoisted(() => ({
   sendPoll: vi.fn(async () => ({ messageId: "poll-1" })),
   getChannelPlugin: vi.fn(),
   loadOpenClawPlugins: vi.fn(),
+  isOutboundSuppressed: vi.fn(() => false),
+}));
+
+vi.mock("../../infra/outbound/suppress-outbound.js", () => ({
+  isOutboundSuppressed: mocks.isOutboundSuppressed,
 }));
 
 vi.mock("../../config/config.js", async () => {
@@ -565,5 +570,59 @@ describe("gateway send mirroring", () => {
       undefined,
       expect.objectContaining({ channel: "telegram" }),
     );
+  });
+});
+
+describe("gateway poll suppressOutbound", () => {
+  let registrySeq = 0;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    registrySeq += 1;
+    setActivePluginRegistry(createTestRegistry([]), `suppress-poll-${registrySeq}`);
+    mocks.resolveOutboundTarget.mockReturnValue({ ok: true, to: "resolved" });
+    mocks.resolveMessageChannelSelection.mockResolvedValue({
+      channel: "slack",
+      configured: ["slack"],
+    });
+    mocks.sendPoll.mockResolvedValue({ messageId: "poll-1" });
+    mocks.getChannelPlugin.mockReturnValue({ outbound: { sendPoll: mocks.sendPoll } });
+    mocks.isOutboundSuppressed.mockReturnValue(false);
+  });
+
+  it("blocks poll when suppressOutbound is active", async () => {
+    mocks.isOutboundSuppressed.mockReturnValue(true);
+
+    const { respond } = await runPoll({
+      to: "x",
+      question: "Q?",
+      options: ["A", "B"],
+      channel: "slack",
+      idempotencyKey: "idem-suppress-poll",
+    });
+
+    expect(mocks.sendPoll).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: expect.stringContaining("Outbound suppressed"),
+      }),
+    );
+  });
+
+  it("allows poll when suppressOutbound is inactive", async () => {
+    const { respond } = await runPoll({
+      to: "x",
+      question: "Q?",
+      options: ["A", "B"],
+      channel: "slack",
+      idempotencyKey: "idem-allow-poll",
+    });
+
+    expect(mocks.sendPoll).toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(true, expect.any(Object), undefined, {
+      channel: "slack",
+    });
   });
 });

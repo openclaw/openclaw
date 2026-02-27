@@ -13,6 +13,7 @@ import { normalizeReplyPayloadsForDelivery } from "../../infra/outbound/payloads
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
 import { resolveOutboundTarget } from "../../infra/outbound/targets.js";
 import { normalizePollInput } from "../../polls.js";
+import { isOutboundSuppressed } from "../../infra/outbound/suppress-outbound.js";
 import {
   ErrorCodes,
   errorShape,
@@ -399,6 +400,21 @@ export const sendHandlers: GatewayRequestHandlers = {
       typeof request.accountId === "string" && request.accountId.trim().length
         ? request.accountId.trim()
         : undefined;
+
+    // Listen-only mode: block poll sends when suppressOutbound is active.
+    if (isOutboundSuppressed({ cfg, channel, accountId })) {
+      console.warn(`[suppressOutbound] Blocked poll → ${channel}/${to}`);
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `Outbound suppressed for channel ${channel} (listen-only mode)`,
+        ),
+      );
+      return;
+    }
+
     try {
       const plugin = resolveOutboundChannelPlugin({ channel, cfg });
       const outbound = plugin?.outbound;

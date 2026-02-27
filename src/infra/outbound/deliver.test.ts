@@ -916,6 +916,79 @@ describe("deliverOutboundPayloads", () => {
   });
 });
 
+describe("suppressOutbound", () => {
+  let registrySeq = 0;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    registrySeq += 1;
+    setActivePluginRegistry(defaultRegistry, `suppress-test-${registrySeq}`);
+  });
+
+  it("returns empty array and skips delivery when suppressOutbound is true", async () => {
+    const sendWhatsApp = vi.fn();
+    const cfg: OpenClawConfig = {
+      channels: { whatsapp: { suppressOutbound: true } },
+    };
+
+    const results = await deliverOutboundPayloads({
+      cfg,
+      channel: "whatsapp",
+      to: "+1555",
+      payloads: [{ text: "hello" }],
+      deps: { sendWhatsApp },
+    });
+
+    expect(results).toEqual([]);
+    expect(sendWhatsApp).not.toHaveBeenCalled();
+    expect(queueMocks.enqueueDelivery).not.toHaveBeenCalled();
+  });
+
+  it("delivers normally when suppressOutbound is false", async () => {
+    const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "m1", toJid: "jid" });
+    const cfg: OpenClawConfig = {
+      channels: { whatsapp: { suppressOutbound: false } },
+    };
+
+    const results = await deliverOutboundPayloads({
+      cfg,
+      channel: "whatsapp",
+      to: "+1555",
+      payloads: [{ text: "hello" }],
+      deps: { sendWhatsApp },
+    });
+
+    expect(results.length).toBeGreaterThan(0);
+    expect(sendWhatsApp).toHaveBeenCalled();
+  });
+
+  it("respects account-level override suppressing outbound", async () => {
+    const sendWhatsApp = vi.fn();
+    const cfg: OpenClawConfig = {
+      channels: {
+        whatsapp: {
+          suppressOutbound: false,
+          accounts: {
+            work: { suppressOutbound: true },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const results = await deliverOutboundPayloads({
+      cfg,
+      channel: "whatsapp",
+      to: "+1555",
+      accountId: "work",
+      payloads: [{ text: "hello" }],
+      deps: { sendWhatsApp },
+    });
+
+    expect(results).toEqual([]);
+    expect(sendWhatsApp).not.toHaveBeenCalled();
+  });
+});
+
 const emptyRegistry = createTestRegistry([]);
 const defaultRegistry = createTestRegistry([
   {

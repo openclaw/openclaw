@@ -19,16 +19,18 @@ export type InboundAccessControlResult = {
   shouldMarkRead: boolean;
   isSelfChat: boolean;
   resolvedAccountId: string;
+  /** When true, inbound is allowed but outbound replies should be suppressed (listen-only group policy). */
+  listenOnly?: boolean;
 };
 
 const PAIRING_REPLY_HISTORY_GRACE_MS = 30_000;
 
 function resolveWhatsAppRuntimeGroupPolicy(params: {
   providerConfigPresent: boolean;
-  groupPolicy?: "open" | "allowlist" | "disabled";
-  defaultGroupPolicy?: "open" | "allowlist" | "disabled";
+  groupPolicy?: "open" | "allowlist" | "disabled" | "listen-only";
+  defaultGroupPolicy?: "open" | "allowlist" | "disabled" | "listen-only";
 }): {
-  groupPolicy: "open" | "allowlist" | "disabled";
+  groupPolicy: "open" | "allowlist" | "disabled" | "listen-only";
   providerMissingFallbackApplied: boolean;
 } {
   return resolveOpenProviderRuntimeGroupPolicy({
@@ -217,6 +219,7 @@ export async function checkInboundAccessControl(params: {
     shouldMarkRead: true,
     isSelfChat,
     resolvedAccountId: account.accountId,
+    listenOnly: params.group && groupPolicy === "listen-only" ? true : undefined,
   };
 }
 

@@ -235,6 +235,7 @@ export const TelegramAccountSchemaBase = z
     linkPreview: z.boolean().optional(),
     responsePrefix: z.string().optional(),
     ackReaction: z.string().optional(),
+    suppressOutbound: z.boolean().optional(),
   })
   .strict();
 
@@ -522,6 +523,7 @@ export const DiscordAccountSchema = z
       })
       .strict()
       .optional(),
+    suppressOutbound: z.boolean().optional(),
   })
   .strict()
   .superRefine((value, ctx) => {
@@ -695,6 +697,7 @@ export const GoogleChatAccountSchema = z
     dm: GoogleChatDmSchema.optional(),
     typingIndicator: z.enum(["none", "message", "reaction"]).optional(),
     responsePrefix: z.string().optional(),
+    suppressOutbound: z.boolean().optional(),
   })
   .strict();
 
@@ -811,6 +814,7 @@ export const SlackAccountSchema = z
     heartbeat: ChannelHeartbeatVisibilitySchema,
     responsePrefix: z.string().optional(),
     ackReaction: z.string().optional(),
+    suppressOutbound: z.boolean().optional(),
   })
   .strict()
   .superRefine((value) => {
@@ -931,6 +935,7 @@ export const SignalAccountSchemaBase = z
     reactionLevel: z.enum(["off", "ack", "minimal", "extensive"]).optional(),
     heartbeat: ChannelHeartbeatVisibilitySchema,
     responsePrefix: z.string().optional(),
+    suppressOutbound: z.boolean().optional(),
   })
   .strict();
 
@@ -1044,6 +1049,7 @@ export const IrcAccountSchemaBase = z
     mediaMaxMb: z.number().positive().optional(),
     heartbeat: ChannelHeartbeatVisibilitySchema,
     responsePrefix: z.string().optional(),
+    suppressOutbound: z.boolean().optional(),
   })
   .strict();
 
@@ -1171,6 +1177,7 @@ export const IMessageAccountSchemaBase = z
       .optional(),
     heartbeat: ChannelHeartbeatVisibilitySchema,
     responsePrefix: z.string().optional(),
+    suppressOutbound: z.boolean().optional(),
   })
   .strict();
 
@@ -1282,6 +1289,7 @@ export const BlueBubblesAccountSchemaBase = z
     groups: z.record(z.string(), BlueBubblesGroupConfigSchema.optional()).optional(),
     heartbeat: ChannelHeartbeatVisibilitySchema,
     responsePrefix: z.string().optional(),
+    suppressOutbound: z.boolean().optional(),
   })
   .strict();
 
@@ -1398,6 +1406,7 @@ export const MSTeamsConfigSchema = z
     sharePointSiteId: z.string().optional(),
     heartbeat: ChannelHeartbeatVisibilitySchema,
     responsePrefix: z.string().optional(),
+    suppressOutbound: z.boolean().optional(),
   })
   .strict()
   .superRefine((value, ctx) => {

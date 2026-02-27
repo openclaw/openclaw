@@ -47,4 +47,11 @@ export type CommonChannelMessagingConfig = {
   responsePrefix?: string;
   /** Max outbound media size in MB. */
   mediaMaxMb?: number;
+  /**
+   * Suppress all outbound messages for this channel/account (listen-only mode).
+   * Inbound messages are still received and processed normally; only outbound
+   * delivery is blocked at the transport layer. Suppressed sends are logged
+   * for debugging. Default: false.
+   */
+  suppressOutbound?: boolean;
 };

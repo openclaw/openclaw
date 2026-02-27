@@ -42,6 +42,7 @@ import type { NormalizedOutboundPayload } from "./payloads.js";
 import { normalizeReplyPayloadsForDelivery } from "./payloads.js";
 import { isPlainTextSurface, sanitizeForPlainText } from "./sanitize-text.js";
 import type { OutboundSessionContext } from "./session-context.js";
+import { isOutboundSuppressed } from "./suppress-outbound.js";
 import type { OutboundChannel } from "./targets.js";
 
 export type { NormalizedOutboundPayload } from "./payloads.js";
@@ -450,6 +451,15 @@ export async function deliverOutboundPayloads(
   params: DeliverOutboundPayloadsParams,
 ): Promise<OutboundDeliveryResult[]> {
   const { channel, to, payloads } = params;
+
+  // Listen-only mode: suppress all outbound when configured.
+  if (isOutboundSuppressed({ cfg: params.cfg, channel, accountId: params.accountId })) {
+    console.warn(
+      `[suppressOutbound] Blocked ${payloads.length} outbound payload(s) → ${channel}/${to}` +
+        (params.accountId ? ` (account: ${params.accountId})` : ""),
+    );
+    return [];
+  }
 
   // Write-ahead delivery queue: persist before sending, remove after success.
   const queueId = params.skipQueue

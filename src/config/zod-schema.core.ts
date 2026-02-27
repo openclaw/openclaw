@@ -310,7 +310,7 @@ export const TypingModeSchema = z.union([
 // Used with .default("allowlist").optional() pattern:
 //   - .optional() allows field omission in input config
 //   - .default("allowlist") ensures runtime always resolves to "allowlist" if not provided
-export const GroupPolicySchema = z.enum(["open", "disabled", "allowlist"]);
+export const GroupPolicySchema = z.enum(["open", "disabled", "allowlist", "listen-only"]);
 
 export const DmPolicySchema = z.enum(["pairing", "allowlist", "open", "disabled"]);
 
@@ -332,6 +332,7 @@ export const ReplyRuntimeConfigSchemaShape = {
   blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
   responsePrefix: z.string().optional(),
   mediaMaxMb: z.number().positive().optional(),
+  suppressOutbound: z.boolean().optional(),
 };
 
 export const BlockStreamingChunkSchema = z
