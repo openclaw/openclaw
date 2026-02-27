@@ -1,12 +1,14 @@
-import { afterEach, describe, expect, it } from "vitest";
-import { setConsoleSubsystemFilter } from "./console.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { routeLogsToStderr, setConsoleSubsystemFilter } from "./console.js";
 import { resetLogger, setLoggerOverride } from "./logger.js";
+import { loggingState } from "./state.js";
 import { createSubsystemLogger } from "./subsystem.js";
 
 afterEach(() => {
   setConsoleSubsystemFilter(null);
   setLoggerOverride(null);
   resetLogger();
+  loggingState.forceConsoleToStderr = false;
 });
 
 describe("createSubsystemLogger().isEnabled", () => {
@@ -52,5 +54,47 @@ describe("createSubsystemLogger().isEnabled", () => {
 
     expect(log.isEnabled("info", "file")).toBe(true);
     expect(log.isEnabled("info")).toBe(true);
+  });
+});
+
+describe("forceConsoleToStderr", () => {
+  it("routes all subsystem log levels to stderr when forceConsoleToStderr is set", () => {
+    setLoggerOverride({ level: "silent", consoleLevel: "debug" });
+    const log = createSubsystemLogger("plugins");
+
+    const stderrChunks: string[] = [];
+    const stdoutChunks: string[] = [];
+    const stderrSpy = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation((chunk: string | Uint8Array) => {
+        stderrChunks.push(String(chunk));
+        return true;
+      });
+    const stdoutSpy = vi
+      .spyOn(process.stdout, "write")
+      .mockImplementation((chunk: string | Uint8Array) => {
+        stdoutChunks.push(String(chunk));
+        return true;
+      });
+
+    try {
+      routeLogsToStderr();
+      log.info("info message");
+      log.warn("warn message");
+      log.error("error message");
+      log.debug("debug message");
+    } finally {
+      stderrSpy.mockRestore();
+      stdoutSpy.mockRestore();
+    }
+
+    // All messages must appear on stderr, none on stdout
+    expect(stdoutChunks.join("")).toBe("");
+    expect(stderrChunks.length).toBeGreaterThan(0);
+    const stderrAll = stderrChunks.join("");
+    expect(stderrAll).toContain("info message");
+    expect(stderrAll).toContain("warn message");
+    expect(stderrAll).toContain("error message");
+    expect(stderrAll).toContain("debug message");
   });
 });

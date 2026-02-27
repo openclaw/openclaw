@@ -240,8 +240,19 @@ function writeConsoleLine(level: LogLevel, line: string) {
     process.platform === "win32" && process.env.GITHUB_ACTIONS === "true"
       ? line.replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]/g, "?").replace(/[\uD800-\uDFFF]/g, "?")
       : line;
+  // When forceConsoleToStderr is active (e.g. during `openclaw completion`),
+  // write directly to process.stderr so stdout stays clean for machine-
+  // consumed output like shell completion scripts.
+  if (loggingState.forceConsoleToStderr) {
+    try {
+      process.stderr.write(`${sanitized}\n`);
+    } catch {
+      // swallow EPIPE / EIO
+    }
+    return;
+  }
   const sink = loggingState.rawConsole ?? console;
-  if (loggingState.forceConsoleToStderr || level === "error" || level === "fatal") {
+  if (level === "error" || level === "fatal") {
     (sink.error ?? console.error)(sanitized);
   } else if (level === "warn") {
     (sink.warn ?? console.warn)(sanitized);
