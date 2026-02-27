@@ -251,7 +251,10 @@ describe("GatewayClient close handling", () => {
     );
 
     expect(clearDeviceAuthTokenMock).toHaveBeenCalledWith({ deviceId: "dev-1", role: "operator" });
-    expect(clearDevicePairingMock).toHaveBeenCalledWith("dev-1");
+    expect(clearDevicePairingMock).not.toHaveBeenCalled();
+    expect(logDebugMock).toHaveBeenCalledWith(
+      expect.stringContaining("preserving paired device entry"),
+    );
     expect(onClose).toHaveBeenCalledWith(
       1008,
       "unauthorized: DEVICE token mismatch (rotate/reissue device token)",
@@ -275,24 +278,6 @@ describe("GatewayClient close handling", () => {
       expect.stringContaining("failed clearing stale device-auth token"),
     );
     expect(clearDevicePairingMock).not.toHaveBeenCalled();
-    expect(onClose).toHaveBeenCalledWith(1008, "unauthorized: device token mismatch");
-    client.stop();
-  });
-
-  it("does not break close flow when pairing clear rejects", async () => {
-    clearDevicePairingMock.mockRejectedValue(new Error("pairing store unavailable"));
-    const onClose = vi.fn();
-    const client = createClientWithIdentity("dev-3", onClose);
-
-    client.start();
-    expect(() => {
-      getLatestWs().emitClose(1008, "unauthorized: device token mismatch");
-    }).not.toThrow();
-
-    await Promise.resolve();
-    expect(logDebugMock).toHaveBeenCalledWith(
-      expect.stringContaining("failed clearing stale device pairing"),
-    );
     expect(onClose).toHaveBeenCalledWith(1008, "unauthorized: device token mismatch");
     client.stop();
   });
