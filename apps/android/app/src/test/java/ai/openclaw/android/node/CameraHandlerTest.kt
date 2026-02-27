@@ -1,31 +1,25 @@
 package ai.openclaw.android.node
 
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNull
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class CameraHandlerTest {
   @Test
-  fun parseCameraClipUploadUrl_returnsUrlForValidPayload() {
-    val actual = parseCameraClipUploadUrl("""{"url":"https://example.com/upload/clip.mp4"}""")
-
-    assertEquals("https://example.com/upload/clip.mp4", actual)
+  fun isCameraClipWithinPayloadLimit_allowsZeroAndLimit() {
+    assertTrue(isCameraClipWithinPayloadLimit(0L))
+    assertTrue(isCameraClipWithinPayloadLimit(CAMERA_CLIP_MAX_RAW_BYTES))
   }
 
   @Test
-  fun parseCameraClipUploadUrl_trimsUrlWhitespace() {
-    val actual = parseCameraClipUploadUrl("""{"url":"  https://example.com/u.mp4  "}""")
-
-    assertEquals("https://example.com/u.mp4", actual)
+  fun isCameraClipWithinPayloadLimit_rejectsNegativeAndTooLarge() {
+    assertFalse(isCameraClipWithinPayloadLimit(-1L))
+    assertFalse(isCameraClipWithinPayloadLimit(CAMERA_CLIP_MAX_RAW_BYTES + 1L))
   }
 
   @Test
-  fun parseCameraClipUploadUrl_returnsNullForMalformedPayloads() {
-    assertNull(parseCameraClipUploadUrl(""))
-    assertNull(parseCameraClipUploadUrl("not-json"))
-    assertNull(parseCameraClipUploadUrl("""{"ok":true}"""))
-    assertNull(parseCameraClipUploadUrl("""{"url":123}"""))
-    assertNull(parseCameraClipUploadUrl("""{"url":"   "}"""))
+  fun cameraClipMaxRawBytes_matchesExpectedBudget() {
+    assertEquals(18L * 1024L * 1024L, CAMERA_CLIP_MAX_RAW_BYTES)
   }
 }
-
