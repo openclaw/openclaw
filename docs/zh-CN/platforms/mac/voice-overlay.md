@@ -44,7 +44,7 @@ x-i18n:
    - 按键说话：无延迟；唤醒词：可选自动发送延迟。
    - 按键说话结束后对唤醒运行时施加短暂冷却，防止唤醒词立即重新触发。
 5. **日志**
-   - Coordinator 在子系统 `bot.molt`、分类 `voicewake.overlay` 和 `voicewake.chime` 下输出 `.info` 级别日志。
+   - Coordinator 在子系统 `ai.openclaw`、分类 `voicewake.overlay` 和 `voicewake.chime` 下输出 `.info` 级别日志。
    - 关键事件：`session_started`、`adopted_by_push_to_talk`、`partial`、`finalized`、`send`、`dismiss`、`cancel`、`cooldown`。
 
 ### 调试清单
@@ -52,7 +52,7 @@ x-i18n:
 - 复现浮层粘滞问题时流式查看日志：
 
   ```bash
-  sudo log stream --predicate 'subsystem == "bot.molt" AND category CONTAINS "voicewake"' --level info --style compact
+  sudo log stream --predicate 'subsystem == "ai.openclaw" AND category CONTAINS "voicewake"' --level info --style compact
   ```
 
 - 验证只有一个活跃会话令牌；过时回调应被 coordinator 丢弃。

@@ -627,7 +627,7 @@ curl -fsSL https://openclaw.ai/install.sh | bash
 **修复 1：重置 TCC 缓存**
 
 ```bash
-tccutil reset All bot.molt.mac.debug
+tccutil reset All ai.openclaw.mac.debug
 ```
 
 **修复 2：强制使用新的 Bundle ID**
@@ -643,7 +643,7 @@ tccutil reset All bot.molt.mac.debug
 ```bash
 openclaw gateway status
 openclaw gateway stop
-# 或：launchctl bootout gui/$UID/bot.molt.gateway（用 bot.molt.<profile> 替换；旧版 com.openclaw.* 仍然有效）
+# 或：launchctl bootout gui/$UID/ai.openclaw.gateway（用 ai.openclaw.<profile> 替换；旧版 com.openclaw.* 仍然有效）
 ```
 
 **修复 2：端口被占用（查找监听器）**

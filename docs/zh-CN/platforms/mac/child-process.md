@@ -24,8 +24,8 @@ Gateway 网关；如果无法访问，它会通过外部 `openclaw` CLI（无嵌
 
 ## 默认行为（launchd）
 
-- 应用安装标记为 `bot.molt.gateway` 的按用户 LaunchAgent
-  （使用 `--profile`/`OPENCLAW_PROFILE` 时为 `bot.molt.<profile>`；支持旧版 `com.openclaw.*`）。
+- 应用安装标记为 `ai.openclaw.gateway` 的按用户 LaunchAgent
+  （使用 `--profile`/`OPENCLAW_PROFILE` 时为 `ai.openclaw.<profile>`；支持旧版 `com.openclaw.*`）。
 - 当启用本地模式时，应用确保 LaunchAgent 已加载，并
   在需要时启动 Gateway 网关。
 - 日志写入 launchd Gateway 网关日志路径（在调试设置中可见）。
@@ -33,11 +33,11 @@ Gateway 网关；如果无法访问，它会通过外部 `openclaw` CLI（无嵌
 常用命令：
 
 ```bash
-launchctl kickstart -k gui/$UID/bot.molt.gateway
-launchctl bootout gui/$UID/bot.molt.gateway
+launchctl kickstart -k gui/$UID/ai.openclaw.gateway
+launchctl bootout gui/$UID/ai.openclaw.gateway
 ```
 
-运行命名配置文件时，将标签替换为 `bot.molt.<profile>`。
+运行命名配置文件时，将标签替换为 `ai.openclaw.<profile>`。
 
 ## 未签名的开发构建
 

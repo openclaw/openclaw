@@ -90,7 +90,7 @@ open /path/to/OpenClaw.app
 
 ### 创建 PLIST 文件
 
-将此保存为 `~/Library/LaunchAgents/bot.molt.ssh-tunnel.plist`：
+将此保存为 `~/Library/LaunchAgents/ai.openclaw.ssh-tunnel.plist`：
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
@@ -98,7 +98,7 @@ open /path/to/OpenClaw.app
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>bot.molt.ssh-tunnel</string>
+    <string>ai.openclaw.ssh-tunnel</string>
     <key>ProgramArguments</key>
     <array>
         <string>/usr/bin/ssh</string>
@@ -116,7 +116,7 @@ open /path/to/OpenClaw.app
 ### 加载 Launch Agent
 
 ```bash
-launchctl bootstrap gui/$UID ~/Library/LaunchAgents/bot.molt.ssh-tunnel.plist
+launchctl bootstrap gui/$UID ~/Library/LaunchAgents/ai.openclaw.ssh-tunnel.plist
 ```
 
 隧道现在将：
@@ -141,13 +141,13 @@ lsof -i :18789
 **重启隧道：**
 
 ```bash
-launchctl kickstart -k gui/$UID/bot.molt.ssh-tunnel
+launchctl kickstart -k gui/$UID/ai.openclaw.ssh-tunnel
 ```
 
 **停止隧道：**
 
 ```bash
-launchctl bootout gui/$UID/bot.molt.ssh-tunnel
+launchctl bootout gui/$UID/ai.openclaw.ssh-tunnel
 ```
 
 ---

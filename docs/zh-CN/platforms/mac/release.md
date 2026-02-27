@@ -40,7 +40,7 @@ x-i18n:
 ```bash
 # 从仓库根目录运行；设置发布 ID 以启用 Sparkle 订阅源。
 # APP_BUILD 必须为纯数字且单调递增，以便 Sparkle 正确比较。
-BUNDLE_ID=bot.molt.mac \
+BUNDLE_ID=ai.openclaw.mac \
 APP_VERSION=2026.1.27-beta.1 \
 APP_BUILD="$(git rev-list --count HEAD)" \
 BUILD_CONFIG=release \
@@ -58,7 +58,7 @@ scripts/create-dmg.sh dist/OpenClaw.app dist/OpenClaw-2026.1.27-beta.1.dmg
 #   xcrun notarytool store-credentials "openclaw-notary" \
 #     --apple-id "<apple-id>" --team-id "<team-id>" --password "<app-specific-password>"
 NOTARIZE=1 NOTARYTOOL_PROFILE=openclaw-notary \
-BUNDLE_ID=bot.molt.mac \
+BUNDLE_ID=ai.openclaw.mac \
 APP_VERSION=2026.1.27-beta.1 \
 APP_BUILD="$(git rev-list --count HEAD)" \
 BUILD_CONFIG=release \

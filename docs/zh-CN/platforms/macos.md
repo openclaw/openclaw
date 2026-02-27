@@ -36,14 +36,14 @@ macOS 应用是 OpenClaw 的**菜单栏配套应用**。它拥有权限，在本
 
 ## Launchd 控制
 
-应用管理一个标记为 `bot.molt.gateway` 的每用户 LaunchAgent（使用 `--profile`/`OPENCLAW_PROFILE` 时为 `bot.molt.<profile>`；旧版 `com.openclaw.*` 仍会卸载）。
+应用管理一个标记为 `ai.openclaw.gateway` 的每用户 LaunchAgent（使用 `--profile`/`OPENCLAW_PROFILE` 时为 `ai.openclaw.<profile>`；旧版 `com.openclaw.*` 仍会卸载）。
 
 ```bash
-launchctl kickstart -k gui/$UID/bot.molt.gateway
-launchctl bootout gui/$UID/bot.molt.gateway
+launchctl kickstart -k gui/$UID/ai.openclaw.gateway
+launchctl bootout gui/$UID/ai.openclaw.gateway
 ```
 
-运行命名配置文件时，将标签替换为 `bot.molt.<profile>`。
+运行命名配置文件时，将标签替换为 `ai.openclaw.<profile>`。
 
 如果 LaunchAgent 未安装，从应用中启用它或运行 `openclaw gateway install`。
 

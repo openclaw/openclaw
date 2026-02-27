@@ -38,8 +38,8 @@ macOS 权限授予是脆弱的。TCC 将权限授予与应用的代码签名、B
 重置示例（根据需要替换 Bundle ID）：
 
 ```bash
-sudo tccutil reset Accessibility bot.molt.mac
-sudo tccutil reset ScreenCapture bot.molt.mac
+sudo tccutil reset Accessibility ai.openclaw.mac
+sudo tccutil reset ScreenCapture ai.openclaw.mac
 sudo tccutil reset AppleEvents
 ```
 
