@@ -8,6 +8,7 @@
  */
 
 import type { OpenClawConfig } from "../../config/config.js";
+import { resolveAccountEntry } from "../../routing/account-lookup.js";
 
 type ProviderConfig = {
   suppressOutbound?: boolean;
@@ -30,7 +31,10 @@ export function isOutboundSuppressed(params: {
 
   // Account-level override takes precedence.
   if (params.accountId) {
-    const accountSuppressed = providerConfig.accounts?.[params.accountId]?.suppressOutbound;
+    const accountSuppressed = resolveAccountEntry(
+      providerConfig.accounts,
+      params.accountId,
+    )?.suppressOutbound;
     if (typeof accountSuppressed === "boolean") {
       return accountSuppressed;
     }

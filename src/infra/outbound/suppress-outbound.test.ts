@@ -101,4 +101,21 @@ describe("isOutboundSuppressed", () => {
 
     expect(isOutboundSuppressed({ cfg, channel: "whatsapp", accountId: null })).toBe(true);
   });
+
+  it("resolves account-level override case-insensitively", () => {
+    const cfg = {
+      channels: {
+        whatsapp: {
+          suppressOutbound: false,
+          accounts: {
+            Work: { suppressOutbound: true },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(isOutboundSuppressed({ cfg, channel: "whatsapp", accountId: "work" })).toBe(true);
+    expect(isOutboundSuppressed({ cfg, channel: "whatsapp", accountId: "WORK" })).toBe(true);
+    expect(isOutboundSuppressed({ cfg, channel: "whatsapp", accountId: "Work" })).toBe(true);
+  });
 });
