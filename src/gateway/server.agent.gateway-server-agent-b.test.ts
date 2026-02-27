@@ -289,7 +289,7 @@ describe("gateway server agent", () => {
     const call = (calls.at(-1)?.[0] ?? {}) as Record<string, unknown>;
     expect(call.message).toBe(BARE_SESSION_RESET_PROMPT);
     expect(call.message).toBeTypeOf("string");
-    expect(call.message).toContain("Execute your Session Startup sequence now");
+    expect(call.message).toContain("Execute your Session Startup sequence for any non-bootstrap files");
     expect(typeof call.sessionId).toBe("string");
     expect(call.sessionId).not.toBe("sess-main-before-reset");
   });
