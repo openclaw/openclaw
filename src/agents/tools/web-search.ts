@@ -22,7 +22,7 @@ import {
   writeCache,
 } from "./web-shared.js";
 
-const SEARCH_PROVIDERS = ["brave", "gemini", "grok", "kimi", "perplexity"] as const;
+const SEARCH_PROVIDERS = ["brave", "gemini", "grok", "kimi", "perplexity", "searxng"] as const;
 const DEFAULT_SEARCH_COUNT = 5;
 const MAX_SEARCH_COUNT = 10;
 
@@ -333,6 +333,30 @@ type KimiConfig = {
   model?: string;
 };
 
+type SearxngConfig = {
+  url?: string;
+  engines?: string[];
+  categories?: string;
+  language?: string;
+  safeSearch?: 0 | 1 | 2;
+};
+
+type SearxngResult = {
+  title?: string;
+  url?: string;
+  content?: string;
+  engine?: string;
+  score?: number;
+  category?: string;
+  publishedDate?: string;
+};
+
+type SearxngResponse = {
+  query?: string;
+  results?: SearxngResult[];
+  number_of_results?: number;
+};
+
 type GrokSearchResponse = {
   output?: Array<{
     type?: string;
@@ -593,6 +617,14 @@ function missingSearchKeyPayload(provider: (typeof SEARCH_PROVIDERS)[number]) {
       docs: "https://docs.openclaw.ai/tools/web",
     };
   }
+  if (provider === "searxng") {
+    return {
+      error: "searxng_unreachable",
+      message:
+        "web_search (searxng) could not reach the configured SearXNG instance. Ensure it is running and set tools.web.search.searxng.url in your config.",
+      docs: "https://docs.openclaw.ai/tools/web#searxng",
+    };
+  }
   return {
     error: "missing_perplexity_api_key",
     message:
@@ -620,6 +652,9 @@ function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDE
   }
   if (raw === "perplexity") {
     return "perplexity";
+  }
+  if (raw === "searxng") {
+    return "searxng";
   }
 
   // Auto-detect provider from available API keys (alphabetical order)
@@ -887,6 +922,92 @@ function resolveKimiBaseUrl(kimi?: KimiConfig): string {
   const fromConfig =
     kimi && "baseUrl" in kimi && typeof kimi.baseUrl === "string" ? kimi.baseUrl.trim() : "";
   return fromConfig || DEFAULT_KIMI_BASE_URL;
+}
+
+function resolveSearxngConfig(search?: WebSearchConfig): SearxngConfig {
+  if (!search || typeof search !== "object") {
+    return {};
+  }
+  const searxng = "searxng" in search ? search.searxng : undefined;
+  if (!searxng || typeof searxng !== "object") {
+    return {};
+  }
+  return searxng as SearxngConfig;
+}
+
+const DEFAULT_SEARXNG_URL = "http://localhost:8080";
+const DEFAULT_SEARXNG_CATEGORIES = "general";
+const DEFAULT_SEARXNG_LANGUAGE = "en";
+
+function resolveSearxngUrl(searxng?: SearxngConfig): string {
+  const fromConfig =
+    searxng && "url" in searxng && typeof searxng.url === "string" ? searxng.url.trim() : "";
+  return fromConfig || DEFAULT_SEARXNG_URL;
+}
+
+async function runSearxngSearch(params: {
+  query: string;
+  count: number;
+  url: string;
+  engines?: string[];
+  categories?: string;
+  language?: string;
+  safeSearch?: number;
+  timeoutSeconds: number;
+}): Promise<{
+  results: Array<{
+    title: string;
+    url: string;
+    description: string;
+    engine?: string;
+    category?: string;
+    published?: string;
+  }>;
+}> {
+  const endpoint = new URL("/search", params.url);
+  endpoint.searchParams.set("q", params.query);
+  endpoint.searchParams.set("format", "json");
+  endpoint.searchParams.set("categories", params.categories || DEFAULT_SEARXNG_CATEGORIES);
+  endpoint.searchParams.set("language", params.language || DEFAULT_SEARXNG_LANGUAGE);
+  endpoint.searchParams.set("safesearch", String(params.safeSearch ?? 0));
+  if (params.engines && params.engines.length > 0) {
+    endpoint.searchParams.set("engines", params.engines.join(","));
+  }
+
+  return withTrustedWebSearchEndpoint(
+    {
+      url: endpoint.toString(),
+      timeoutSeconds: params.timeoutSeconds,
+      init: {
+        method: "GET",
+        headers: {
+          Accept: "application/json",
+          "User-Agent": "OpenClaw/1.0 (web_search; +https://openclaw.ai)",
+        },
+      },
+    },
+    async (res) => {
+      if (!res.ok) {
+        const detailResult = await readResponseText(res, { maxBytes: 16_000 });
+        throw new Error(`SearXNG error (${res.status}): ${detailResult.text || res.statusText}`);
+      }
+
+      const data = (await res.json()) as SearxngResponse;
+      const raw = Array.isArray(data.results) ? data.results : [];
+      const trimmed = raw.slice(0, params.count);
+
+      return {
+        results: trimmed.map((entry) => ({
+          title: entry.title ?? "",
+          url: entry.url ?? "",
+          description: entry.content ?? "",
+          engine: entry.engine,
+          category: entry.category,
+          published: entry.publishedDate,
+        })),
+      };
+    },
+  );
 }
 
 function resolveGeminiConfig(search?: WebSearchConfig): GeminiConfig {
@@ -1603,6 +1724,11 @@ async function runWebSearch(params: {
   kimiBaseUrl?: string;
   kimiModel?: string;
   braveMode?: "web" | "llm-context";
+  searxngUrl?: string;
+  searxngEngines?: string[];
+  searxngCategories?: string;
+  searxngLanguage?: string;
+  searxngSafeSearch?: number;
 }): Promise<Record<string, unknown>> {
   const effectiveBraveMode = params.braveMode ?? "web";
   const providerSpecificKey =
@@ -1614,6 +1740,8 @@ async function runWebSearch(params: {
           ? (params.geminiModel ?? DEFAULT_GEMINI_MODEL)
           : params.provider === "kimi"
             ? `${params.kimiBaseUrl ?? DEFAULT_KIMI_BASE_URL}:${params.kimiModel ?? DEFAULT_KIMI_MODEL}`
+            : params.provider === "searxng"
+              ? `${params.searxngUrl ?? DEFAULT_SEARXNG_URL}:${params.searxngCategories || DEFAULT_SEARXNG_CATEGORIES}`
             : "";
   const cacheKey = normalizeCacheKey(
     params.provider === "brave" && effectiveBraveMode === "llm-context"
@@ -1769,6 +1897,42 @@ async function runWebSearch(params: {
     return payload;
   }
 
+  if (params.provider === "searxng") {
+    const { results } = await runSearxngSearch({
+      query: params.query,
+      count: params.count,
+      url: params.searxngUrl ?? DEFAULT_SEARXNG_URL,
+      engines: params.searxngEngines,
+      categories: params.searxngCategories,
+      language: params.searxngLanguage,
+      safeSearch: params.searxngSafeSearch,
+      timeoutSeconds: params.timeoutSeconds,
+    });
+
+    const payload = {
+      query: params.query,
+      provider: params.provider,
+      count: results.length,
+      tookMs: Date.now() - start,
+      externalContent: {
+        untrusted: true,
+        source: "web_search",
+        provider: params.provider,
+        wrapped: true,
+      },
+      results: results.map((r) => ({
+        title: r.title ? wrapWebContent(r.title, "web_search") : "",
+        url: r.url,
+        description: r.description ? wrapWebContent(r.description, "web_search") : "",
+        engine: r.engine,
+        category: r.category,
+        published: r.published,
+      })),
+    };
+    writeCache(SEARCH_CACHE, cacheKey, payload, params.cacheTtlMs);
+    return payload;
+  }
+
   if (params.provider !== "brave") {
     throw new Error("Unsupported web search provider.");
   }
@@ -1911,6 +2075,7 @@ export function createWebSearchTool(options?: {
   const kimiConfig = resolveKimiConfig(search);
   const braveConfig = resolveBraveConfig(search);
   const braveMode = resolveBraveMode(braveConfig);
+  const searxngConfig = resolveSearxngConfig(search);
 
   const description =
     provider === "perplexity"
@@ -1923,8 +2088,10 @@ export function createWebSearchTool(options?: {
           ? "Search the web using Kimi by Moonshot. Returns AI-synthesized answers with citations from native $web_search."
           : provider === "gemini"
             ? "Search the web using Gemini with Google Search grounding. Returns AI-synthesized answers with citations from Google Search."
-            : braveMode === "llm-context"
-              ? "Search the web using Brave Search LLM Context API. Returns pre-extracted page content (text chunks, tables, code blocks) optimized for LLM grounding."
+            : provider === "searxng"
+              ? "Search the web using a self-hosted SearXNG metasearch engine. Aggregates results across multiple engines (Google, Bing, DuckDuckGo, and more) with no API key required. Supports category filtering (general, images, news, videos, files, social media) and engine selection."
+              : braveMode === "llm-context"
+                ? "Search the web using Brave Search LLM Context API. Returns pre-extracted page content (text chunks, tables, code blocks) optimized for LLM grounding."
               : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.";
 
   return {
@@ -1951,7 +2118,7 @@ export function createWebSearchTool(options?: {
                 ? resolveGeminiApiKey(geminiConfig)
                 : resolveSearchApiKey(search);
 
-      if (!apiKey) {
+      if (!apiKey && provider !== "searxng") {
         return jsonResult(missingSearchKeyPayload(provider));
       }
 
@@ -2163,7 +2330,7 @@ export function createWebSearchTool(options?: {
       const result = await runWebSearch({
         query,
         count: resolveSearchCount(count, DEFAULT_SEARCH_COUNT),
-        apiKey,
+        apiKey: apiKey ?? "",
         timeoutSeconds: resolveTimeoutSeconds(search?.timeoutSeconds, DEFAULT_TIMEOUT_SECONDS),
         cacheTtlMs: resolveCacheTtlMs(search?.cacheTtlMinutes, DEFAULT_CACHE_TTL_MINUTES),
         provider,
@@ -2186,6 +2353,11 @@ export function createWebSearchTool(options?: {
         kimiBaseUrl: resolveKimiBaseUrl(kimiConfig),
         kimiModel: resolveKimiModel(kimiConfig),
         braveMode,
+        searxngUrl: resolveSearxngUrl(searxngConfig),
+        searxngEngines: searxngConfig.engines,
+        searxngCategories: searxngConfig.categories,
+        searxngLanguage: searxngConfig.language,
+        searxngSafeSearch: searxngConfig.safeSearch,
       });
       return jsonResult(result);
     },

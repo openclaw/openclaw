@@ -374,6 +374,10 @@ Docs: https://docs.openclaw.ai
 
 - **BREAKING:** Gateway auth now requires explicit `gateway.auth.mode` when both `gateway.auth.token` and `gateway.auth.password` are configured (including SecretRefs). Set `gateway.auth.mode` to `token` or `password` before upgrade to avoid startup/pairing/TUI failures. (#35094) Thanks @joshavant.
 
+### Changes
+
+- Web Search/SearXNG: add `searxng` as a first-class `web_search` provider. Point OpenClaw at any self-hosted SearXNG instance for no-API-key, multi-engine aggregated search with support for category filtering (`general`, `images`, `news`, `videos`, `files`, `social media`), engine selection, language, and safe-search controls. Configure via `tools.web.search.provider: "searxng"` and `tools.web.search.searxng.url`.
+
 ### Fixes
 
 - Models/MiniMax: stop advertising removed `MiniMax-M2.5-Lightning` in built-in provider catalogs, onboarding metadata, and docs; keep the supported fast-tier model as `MiniMax-M2.5-highspeed`.
