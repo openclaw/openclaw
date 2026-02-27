@@ -341,6 +341,22 @@ export const FIELD_HELP: Record<string, string> = {
     "Loosens strict browser auth checks for Control UI when you must run a non-standard setup. Keep this off unless you trust your network and proxy path, because impersonation risk is higher.",
   "gateway.controlUi.dangerouslyDisableDeviceAuth":
     "Disables Control UI device identity checks and relies on token/password only. Use only for short-lived debugging on trusted networks, then turn it off immediately.",
+  "gateway.controlUi.csp":
+    "Optional Control UI Content Security Policy overrides. Use the per-directive `*SrcExtra` arrays to append safe source tokens/origins while keeping strict defaults.",
+  "gateway.controlUi.csp.scriptSrcExtra":
+    "Extra `script-src` sources to allow (for example https://cdn.example.com). Values are validated and appended to the strict default policy.",
+  "gateway.controlUi.csp.styleSrcExtra":
+    "Extra `style-src` sources to allow (for example https://fonts.googleapis.com). Values are validated and appended to defaults.",
+  "gateway.controlUi.csp.imgSrcExtra":
+    "Extra `img-src` sources to allow (for example https://cdn.example.com). Values are validated and appended to defaults.",
+  "gateway.controlUi.csp.fontSrcExtra":
+    "Extra `font-src` sources to allow (for example https://fonts.gstatic.com). Values are validated and appended to defaults.",
+  "gateway.controlUi.csp.connectSrcExtra":
+    "Extra `connect-src` sources to allow (for example https://api.example.com or wss://ws.example.com). Values are validated and appended to defaults.",
+  "gateway.controlUi.csp.styleSrcElemExtra":
+    'Extra `style-src-elem` sources for <link rel="stylesheet"> and @import. Values are validated and appended to defaults.',
+  "gateway.controlUi.csp.workerSrcExtra":
+    "Extra `worker-src` sources for workers, service workers, and shared workers. Values are validated and appended to defaults.",
   "gateway.http.endpoints.chatCompletions.enabled":
     "Enable the OpenAI-compatible `POST /v1/chat/completions` endpoint (default: false).",
   "gateway.reload.mode":

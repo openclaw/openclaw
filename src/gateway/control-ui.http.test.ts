@@ -123,6 +123,40 @@ describe("handleControlUiHttpRequest", () => {
     });
   });
 
+  it("applies configured Control UI CSP source extensions", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const { res, setHeader } = makeMockHttpResponse();
+        const handled = handleControlUiHttpRequest(
+          { url: "/", method: "GET" } as IncomingMessage,
+          res,
+          {
+            root: { kind: "resolved", path: tmp },
+            config: {
+              gateway: {
+                controlUi: {
+                  csp: {
+                    imgSrcExtra: ["https://cdn.example.com"],
+                    fontSrcExtra: ["https://fonts.gstatic.com"],
+                    styleSrcElemExtra: ["https://fonts.googleapis.com"],
+                    workerSrcExtra: ["https://worker.example.com"],
+                  },
+                },
+              },
+            },
+          },
+        );
+        expect(handled).toBe(true);
+        const csp = setHeader.mock.calls.find((call) => call[0] === "Content-Security-Policy")?.[1];
+        expect(typeof csp).toBe("string");
+        expect(String(csp)).toContain("img-src 'self' data: https: https://cdn.example.com");
+        expect(String(csp)).toContain("font-src 'self' https://fonts.gstatic.com");
+        expect(String(csp)).toContain("style-src-elem 'self' https://fonts.googleapis.com");
+        expect(String(csp)).toContain("worker-src 'self' blob: https://worker.example.com");
+      },
+    });
+  });
+
   it("does not inject inline scripts into index.html", async () => {
     const html = "<html><head></head><body>Hello</body></html>\n";
     await withControlUiRoot({

@@ -84,6 +84,9 @@ const FIELD_PLACEHOLDERS: Record<string, string> = {
   "gateway.controlUi.basePath": "/openclaw",
   "gateway.controlUi.root": "dist/control-ui",
   "gateway.controlUi.allowedOrigins": "https://control.example.com",
+  "gateway.controlUi.csp.imgSrcExtra": "https://cdn.example.com",
+  "gateway.controlUi.csp.styleSrcElemExtra": "https://fonts.googleapis.com",
+  "gateway.controlUi.csp.workerSrcExtra": "https://worker.example.com",
   "channels.mattermost.baseUrl": "https://chat.example.com",
   "agents.list[].identity.avatar": "avatars/openclaw.png",
 };
