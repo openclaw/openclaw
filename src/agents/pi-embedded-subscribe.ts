@@ -689,13 +689,16 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     state.activeToolName = undefined;
     state.activeToolCallId = undefined;
     state.activeToolStartTime = undefined;
-    state.toolStartData.clear();
-    // Clear all tool tracking state to prevent memory leaks
+    // Do NOT clear toolStartData here - late tool_execution_end events still need
+    // startData.args to correctly detect messaging send actions and cron.add calls
+    // (isMessagingToolSendAction / isCronAddAction read from startArgs). Individual
+    // entries are deleted in the handleToolExecutionEnd finally block.
+    // Clear all tool lookup tracking state to prevent memory leaks
     state.toolMetaById.clear();
     state.toolSummaryById.clear();
-    state.pendingMessagingTexts.clear();
-    state.pendingMessagingTargets.clear();
-    state.pendingMessagingMediaUrls.clear();
+    // Do NOT clear pendingMessagingTexts/Targets/MediaUrls here - they are needed for
+    // late tool_execution_end events that may arrive after unsubscribe. Those handlers
+    // will commit the pending data if present, or clean up if maps are empty.
     // Preserve messagingToolSent* state until attempt result is built (run/attempt.ts reads these after unsubscribe)
     // Cancel any in-flight compaction to prevent resource leaks when unsubscribing.
     // Only abort if compaction is actually running to avoid unnecessary work.

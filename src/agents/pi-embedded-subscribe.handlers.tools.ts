@@ -314,48 +314,54 @@ export async function handleToolExecutionEnd(
   const runId = ctx.params.runId;
   const isError = Boolean(evt.isError);
   const result = evt.result;
+  const wasUnsubscribedAtStart = ctx.state.unsubscribed;
+  // Capture wasTracked here before any state can be cleared (e.g. by a concurrent unsubscribe
+  // firing during an await in the try body). Consistent with wasUnsubscribedAtStart snapshot.
+  const wasTracked = ctx.state.toolStartData.has(toolCallId);
 
   try {
-    // Early return if run was already unsubscribed (aborted).
-    // This is a race condition where the tool event fired after unsubscribe was called
-    // (e.g., timeout during tool execution). We skip the normal cleanup logic which may
-    // access already-cleared maps or attempt to emit events to a closed subscription.
-    // State clearing happens in finally block to ensure it runs in all cases.
-    if (ctx.state.unsubscribed) {
-      ctx.log.debug(`tool_execution_end skipped (unsubscribed): tool=${toolName}`);
-      return;
-    }
+    // Process late tool-end events even after unsubscribe. The tool may have completed
+    // and sent a message before/while unsubscribe was happening. We must commit pending
+    // messaging data to maintain accurate didSendViaMessagingTool state and prevent
+    // downstream duplicate sends. Skip event emission to avoid closed subscriptions.
 
     const isToolError = isError || isToolResultError(result);
     const sanitizedResult = sanitizeToolResult(result);
     const callSummary = ctx.state.toolMetaById.get(toolCallId);
     const meta = callSummary?.meta;
-    ctx.state.toolMetas.push({ toolName, meta });
+    // Always clean up per-toolCallId lookup maps regardless of unsubscribed state.
     ctx.state.toolMetaById.delete(toolCallId);
     ctx.state.toolSummaryById.delete(toolCallId);
-    if (isToolError) {
-      const errorMessage = extractToolErrorMessage(sanitizedResult);
-      ctx.state.lastToolError = {
-        toolName,
-        meta,
-        error: errorMessage,
-        mutatingAction: callSummary?.mutatingAction,
-        actionFingerprint: callSummary?.actionFingerprint,
-      };
-    } else if (ctx.state.lastToolError) {
-      // Keep unresolved mutating failures until the same action succeeds.
-      if (ctx.state.lastToolError.mutatingAction) {
-        if (
-          isSameToolMutationAction(ctx.state.lastToolError, {
-            toolName,
-            meta,
-            actionFingerprint: callSummary?.actionFingerprint,
-          })
-        ) {
+    // Only update attempt-result state for live (non-late) events. Late events
+    // (wasUnsubscribedAtStart=true) must not mutate toolMetas or lastToolError because
+    // the attempt result builder reads those after unsubscribe and any post-unsubscribe
+    // mutation would corrupt the result with stale or phantom data.
+    if (!wasUnsubscribedAtStart) {
+      ctx.state.toolMetas.push({ toolName, meta });
+      if (isToolError) {
+        const errorMessage = extractToolErrorMessage(sanitizedResult);
+        ctx.state.lastToolError = {
+          toolName,
+          meta,
+          error: errorMessage,
+          mutatingAction: callSummary?.mutatingAction,
+          actionFingerprint: callSummary?.actionFingerprint,
+        };
+      } else if (ctx.state.lastToolError) {
+        // Keep unresolved mutating failures until the same action succeeds.
+        if (ctx.state.lastToolError.mutatingAction) {
+          if (
+            isSameToolMutationAction(ctx.state.lastToolError, {
+              toolName,
+              meta,
+              actionFingerprint: callSummary?.actionFingerprint,
+            })
+          ) {
+            ctx.state.lastToolError = undefined;
+          }
+        } else {
           ctx.state.lastToolError = undefined;
         }
-      } else {
-        ctx.state.lastToolError = undefined;
       }
     }
 
@@ -405,102 +411,113 @@ export async function handleToolExecutionEnd(
       }
     }
 
-    // Track committed reminders only when cron.add completed successfully.
-    if (!isToolError && toolName === "cron" && isCronAddAction(startData?.args)) {
+    // Track committed reminders only when cron.add completed successfully (live events only).
+    if (
+      !wasUnsubscribedAtStart &&
+      !isToolError &&
+      toolName === "cron" &&
+      isCronAddAction(startData?.args)
+    ) {
       ctx.state.successfulCronAdds += 1;
     }
 
-    emitAgentEvent({
-      runId: ctx.params.runId,
-      stream: "tool",
-      data: {
-        phase: "result",
-        name: toolName,
-        toolCallId,
-        meta,
-        isError: isToolError,
-        result: sanitizedResult,
-      },
-    });
-    void ctx.params.onAgentEvent?.({
-      stream: "tool",
-      data: {
-        phase: "result",
-        name: toolName,
-        toolCallId,
-        meta,
-        isError: isToolError,
-      },
-    });
-
-    ctx.log.debug(
-      `embedded run tool end: runId=${ctx.params.runId} tool=${toolName} toolCallId=${toolCallId}`,
-    );
-
-    if (ctx.params.onToolResult && ctx.shouldEmitToolOutput()) {
-      const outputText = extractToolResultText(sanitizedResult);
-      if (outputText) {
-        ctx.emitToolOutput(toolName, meta, outputText);
-      }
+    // Skip event emission if unsubscribed to avoid closed subscriptions,
+    // but still commit pending messaging data above for accurate delivery tracking.
+    if (!wasUnsubscribedAtStart) {
+      emitAgentEvent({
+        runId: ctx.params.runId,
+        stream: "tool",
+        data: {
+          phase: "result",
+          name: toolName,
+          toolCallId,
+          meta,
+          isError: isToolError,
+          result: sanitizedResult,
+        },
+      });
+      void ctx.params.onAgentEvent?.({
+        stream: "tool",
+        data: {
+          phase: "result",
+          name: toolName,
+          toolCallId,
+          meta,
+          isError: isToolError,
+        },
+      });
     }
 
-    // Deliver media from tool results when the verbose emitToolOutput path is off.
-    // When shouldEmitToolOutput() is true, emitToolOutput already delivers media
-    // via parseReplyDirectives (MEDIA: text extraction), so skip to avoid duplicates.
-    if (ctx.params.onToolResult && !isToolError && !ctx.shouldEmitToolOutput()) {
-      const mediaPaths = filterToolResultMediaUrls(toolName, extractToolResultMediaPaths(result));
-      if (mediaPaths.length > 0) {
-        try {
-          void ctx.params.onToolResult({ mediaUrls: mediaPaths });
-        } catch {
-          // ignore delivery failures
+    ctx.log.debug(
+      `embedded run tool end${wasUnsubscribedAtStart ? " (late/post-unsubscribe)" : ""}: runId=${ctx.params.runId} tool=${toolName} toolCallId=${toolCallId}`,
+    );
+
+    // Skip onToolResult callbacks if unsubscribed to avoid closed subscriptions.
+    if (!wasUnsubscribedAtStart && ctx.params.onToolResult) {
+      if (ctx.shouldEmitToolOutput()) {
+        const outputText = extractToolResultText(sanitizedResult);
+        if (outputText) {
+          ctx.emitToolOutput(toolName, meta, outputText);
+        }
+      }
+
+      // Deliver media from tool results when the verbose emitToolOutput path is off.
+      // When shouldEmitToolOutput() is true, emitToolOutput already delivers media
+      // via parseReplyDirectives (MEDIA: text extraction), so skip to avoid duplicates.
+      if (!isToolError && !ctx.shouldEmitToolOutput()) {
+        const mediaPaths = filterToolResultMediaUrls(toolName, extractToolResultMediaPaths(result));
+        if (mediaPaths.length > 0) {
+          try {
+            void ctx.params.onToolResult({ mediaUrls: mediaPaths });
+          } catch {
+            // ignore delivery failures
+          }
         }
       }
     }
 
-    // Run after_tool_call plugin hook (fire-and-forget).
-    const hookRunnerAfter = ctx.hookRunner ?? getGlobalHookRunner();
-    if (hookRunnerAfter?.hasHooks("after_tool_call")) {
-      const durationMs =
-        startData?.startTime != null ? Date.now() - startData.startTime : undefined;
-      const hookEvent: PluginHookAfterToolCallEvent = {
-        toolName,
-        params: afterToolCallArgs,
-        runId,
-        toolCallId,
-        result: sanitizedResult,
-        error: isToolError ? extractToolErrorMessage(sanitizedResult) : undefined,
-        durationMs,
-      };
-      void hookRunnerAfter
-        .runAfterToolCall(hookEvent, {
+    // Run after_tool_call plugin hook (fire-and-forget) only if not unsubscribed.
+    if (!wasUnsubscribedAtStart) {
+      const hookRunnerAfter = ctx.hookRunner ?? getGlobalHookRunner();
+      if (hookRunnerAfter?.hasHooks("after_tool_call")) {
+        const durationMs =
+          startData?.startTime != null ? Date.now() - startData.startTime : undefined;
+        const hookEvent: PluginHookAfterToolCallEvent = {
           toolName,
-          agentId: ctx.params.agentId,
-          sessionKey: ctx.params.sessionKey,
-          sessionId: ctx.params.sessionId,
+          params: afterToolCallArgs,
           runId,
           toolCallId,
-        })
-        .catch((err) => {
-          ctx.log.warn(`after_tool_call hook failed: tool=${toolName} error=${String(err)}`);
-        });
+          result: sanitizedResult,
+          error: isToolError ? extractToolErrorMessage(sanitizedResult) : undefined,
+          durationMs,
+        };
+        void hookRunnerAfter
+          .runAfterToolCall(hookEvent, {
+            toolName,
+            agentId: ctx.params.agentId,
+            sessionKey: ctx.params.sessionKey,
+            sessionId: ctx.params.sessionId,
+            runId,
+            toolCallId,
+          })
+          .catch((err) => {
+            ctx.log.warn(`after_tool_call hook failed: tool=${toolName} error=${String(err)}`);
+          });
+      }
     }
   } finally {
     // Skip all state updates if unsubscribed to prevent interfering with
     // concurrent tools or stale state after subscription cleanup.
-    if (!ctx.state.unsubscribed) {
-      // Only decrement if this tool was actually tracked (i.e., handleToolExecutionStart
-      // got past unsubscribe checks and incremented the count). Check toolStartData presence
-      // BEFORE deleting it.
-      const wasTracked = ctx.state.toolStartData.has(toolCallId);
-      if (wasTracked) {
-        ctx.state.toolExecutionCount = Math.max(0, ctx.state.toolExecutionCount - 1);
-        ctx.state.toolExecutionInFlight = ctx.state.toolExecutionCount > 0;
-      }
+    // Use entry-time snapshots (wasUnsubscribedAtStart, wasTracked) rather than live state
+    // so that a concurrent unsubscribe() firing during an await in the try body cannot
+    // cause the counter decrement to be skipped for a tool that was legitimately tracked.
+    if (!wasUnsubscribedAtStart && wasTracked) {
+      ctx.state.toolExecutionCount = Math.max(0, ctx.state.toolExecutionCount - 1);
+      ctx.state.toolExecutionInFlight = ctx.state.toolExecutionCount > 0;
 
-      // Only clear snapshot state if it still points to THIS tool AND we tracked it.
+      // Only clear snapshot state if it still points to THIS tool.
       // For concurrent tools, activeToolName/CallId/StartTime track only the most recent.
-      if (wasTracked && ctx.state.activeToolCallId === toolCallId) {
+      if (ctx.state.activeToolCallId === toolCallId) {
         ctx.state.activeToolName = undefined;
         ctx.state.activeToolCallId = undefined;
         ctx.state.activeToolStartTime = undefined;
