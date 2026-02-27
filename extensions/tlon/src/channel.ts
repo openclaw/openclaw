@@ -39,7 +39,7 @@ async function createHttpPokeApi(params: {
   const ssrfPolicy = ssrfPolicyFromAllowPrivateNetwork(params.allowPrivateNetwork);
   const cookie = await authenticate(params.url, params.code, { ssrfPolicy });
   const channelId = `${Math.floor(Date.now() / 1000)}-${crypto.randomUUID()}`;
-  const channelUrl = `${params.url}/~/channel/${channelId}`;
+  const channelPath = `/~/channel/${channelId}`;
   const shipName = params.ship.replace(/^~/, "");
 
   return {
@@ -54,21 +54,32 @@ async function createHttpPokeApi(params: {
         json: pokeParams.json,
       };
 
-      const response = await fetch(channelUrl, {
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-          Cookie: cookie.split(";")[0],
+      // Use urbitFetch for consistent SSRF protection (DNS pinning + redirect handling)
+      const { response, release } = await urbitFetch({
+        baseUrl: params.url,
+        path: channelPath,
+        init: {
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/json",
+            Cookie: cookie.split(";")[0],
+          },
+          body: JSON.stringify([pokeData]),
         },
-        body: JSON.stringify([pokeData]),
+        ssrfPolicy,
+        auditContext: "tlon-poke",
       });
 
-      if (!response.ok && response.status !== 204) {
-        const errorText = await response.text();
-        throw new Error(`Poke failed: ${response.status} - ${errorText}`);
-      }
+      try {
+        if (!response.ok && response.status !== 204) {
+          const errorText = await response.text();
+          throw new Error(`Poke failed: ${response.status} - ${errorText}`);
+        }
 
-      return pokeId;
+        return pokeId;
+      } finally {
+        await release();
+      }
     },
     delete: async () => {
       // No-op for HTTP-only client

@@ -5,8 +5,8 @@ import { homedir } from "node:os";
 import * as path from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk";
 import { getDefaultSsrFPolicy } from "../urbit/context.js";
-import { urbitFetch } from "../urbit/fetch.js";
 
 // Default to OpenClaw workspace media directory
 const DEFAULT_MEDIA_DIR = path.join(homedir(), ".openclaw", "workspace", "media", "inbound");
@@ -65,42 +65,46 @@ export async function downloadMedia(
     await mkdir(mediaDir, { recursive: true });
 
     // Fetch with SSRF protection
-    const { response } = await urbitFetch({
-      baseUrl: url,
-      path: "",
+    // Use fetchWithSsrFGuard directly (not urbitFetch) to preserve the full URL path
+    const { response, release } = await fetchWithSsrFGuard({
+      url,
       init: { method: "GET" },
-      ssrfPolicy: getDefaultSsrFPolicy(),
+      policy: getDefaultSsrFPolicy(),
       auditContext: "tlon-media-download",
     });
 
-    if (!response.ok) {
-      console.error(`[tlon-media] Failed to fetch ${url}: ${response.status}`);
-      return null;
+    try {
+      if (!response.ok) {
+        console.error(`[tlon-media] Failed to fetch ${url}: ${response.status}`);
+        return null;
+      }
+
+      // Determine content type and extension
+      const contentType = response.headers.get("content-type") || "application/octet-stream";
+      const ext = getExtensionFromContentType(contentType) || getExtensionFromUrl(url) || "bin";
+
+      // Generate unique filename
+      const filename = `${randomUUID()}.${ext}`;
+      const localPath = path.join(mediaDir, filename);
+
+      // Stream to file
+      const body = response.body;
+      if (!body) {
+        console.error(`[tlon-media] No response body for ${url}`);
+        return null;
+      }
+
+      const writeStream = createWriteStream(localPath);
+      await pipeline(Readable.fromWeb(body as any), writeStream);
+
+      return {
+        localPath,
+        contentType,
+        originalUrl: url,
+      };
+    } finally {
+      await release();
     }
-
-    // Determine content type and extension
-    const contentType = response.headers.get("content-type") || "application/octet-stream";
-    const ext = getExtensionFromContentType(contentType) || getExtensionFromUrl(url) || "bin";
-
-    // Generate unique filename
-    const filename = `${randomUUID()}.${ext}`;
-    const localPath = path.join(mediaDir, filename);
-
-    // Stream to file
-    const body = response.body;
-    if (!body) {
-      console.error(`[tlon-media] No response body for ${url}`);
-      return null;
-    }
-
-    const writeStream = createWriteStream(localPath);
-    await pipeline(Readable.fromWeb(body as any), writeStream);
-
-    return {
-      localPath,
-      contentType,
-      originalUrl: url,
-    };
   } catch (error: any) {
     console.error(`[tlon-media] Error downloading ${url}: ${error?.message ?? String(error)}`);
     return null;
