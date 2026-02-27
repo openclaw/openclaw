@@ -352,4 +352,94 @@ describe("chunkMarkdown — section strategy", () => {
     expect(chunks[0].text).toContain("## Real Section");
     expect(chunks[0].text).toContain("## This heading is inside a code fence");
   });
+  it("does not regress on long unstructured content without headings", () => {
+    // No ## headings at all — simulates raw logs, plain notes, etc.
+    // Section strategy treats this as a single section, then sub-splits if needed
+    const lines = Array.from({ length: 200 }, (_, i) => `Unstructured log entry ${i}: some data here`);
+    const content = lines.join("\n");
+    const sectionChunks = chunkMarkdown(content, { tokens: 400, overlap: 0, strategy: "section" });
+    // All content must be captured (no data loss)
+    const allText = sectionChunks.map((c) => c.text).join("\n");
+    expect(allText).toContain("Unstructured log entry 0");
+    expect(allText).toContain("Unstructured log entry 199");
+    // Line numbers should be valid
+    for (const chunk of sectionChunks) {
+      expect(chunk.startLine).toBeGreaterThanOrEqual(1);
+      expect(chunk.endLine).toBeGreaterThanOrEqual(chunk.startLine);
+    }
+  });
+  it("handles mixed content: some sections with headings, trailing unstructured", () => {
+    const makeLines = (n: number, prefix: string): string[] =>
+      Array.from({ length: n }, (_, i) => `${prefix} line ${i + 1}`);
+
+    const content = [
+      "## Structured Part",
+      "",
+      ...makeLines(8, "Organized"),
+      "",
+      "## Another Section",
+      "",
+      ...makeLines(6, "Also organized"),
+      "",
+      // Trailing content with no heading — like appended raw notes
+      ...makeLines(10, "Loose trailing note"),
+    ].join("\n");
+
+    const chunks = chunkMarkdown(content, { tokens: 400, overlap: 0, strategy: "section" });
+    // Should produce at least 2 chunks; trailing content merges with last section
+    expect(chunks.length).toBeGreaterThanOrEqual(2);
+    // The trailing notes should be captured somewhere
+    const allText = chunks.map((c) => c.text).join("\n");
+    expect(allText).toContain("Loose trailing note");
+  });
+
+  it("handles content with only # h1 and ### h3 headings (no ## boundaries)", () => {
+    const content = [
+      "# Top Level Title",
+      "",
+      "Introductory paragraph with some context.",
+      "Second line of intro.",
+      "",
+      "### Sub-detail One",
+      "",
+      "Detail content one.",
+      "Detail content two.",
+      "Detail content three.",
+      "Detail content four.",
+      "Detail content five.",
+      "",
+      "### Sub-detail Two",
+      "",
+      "More detail content.",
+    ].join("\n");
+
+    const chunks = chunkMarkdown(content, { tokens: 400, overlap: 0, strategy: "section" });
+    // No ## headings → single chunk (falls back, doesn't split on # or ###)
+    expect(chunks.length).toBe(1);
+    expect(chunks[0].text).toContain("# Top Level Title");
+    expect(chunks[0].text).toContain("### Sub-detail Two");
+  });
+
+  it("handles sparse headings in a long document", () => {
+    const makeLines = (n: number, prefix: string): string[] =>
+      Array.from({ length: n }, (_, i) => `${prefix} line ${i + 1}`);
+
+    const content = [
+      ...makeLines(20, "Preamble"),  // No heading before first section
+      "",
+      "## Only Section",
+      "",
+      ...makeLines(20, "Section body"),
+      "",
+      ...makeLines(20, "Epilogue without heading"),
+    ].join("\n");
+
+    const chunks = chunkMarkdown(content, { tokens: 400, overlap: 0, strategy: "section" });
+    // Preamble (no heading) becomes its own chunk, section is another
+    expect(chunks.length).toBeGreaterThanOrEqual(1);
+    const allText = chunks.map((c) => c.text).join("\n");
+    expect(allText).toContain("Preamble");
+    expect(allText).toContain("## Only Section");
+    expect(allText).toContain("Epilogue without heading");
+  });
 });
