@@ -392,7 +392,10 @@ describe("gateway send mirroring", () => {
 
     expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
       expect.objectContaining({
-        agentId: "work",
+        session: expect.objectContaining({
+          agentId: "work",
+          key: "agent:work:slack:channel:resolved",
+        }),
         mirror: expect.objectContaining({
           sessionKey: "agent:work:slack:channel:resolved",
           agentId: "work",
@@ -414,7 +417,10 @@ describe("gateway send mirroring", () => {
 
     expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
       expect.objectContaining({
-        agentId: "work",
+        session: expect.objectContaining({
+          agentId: "work",
+          key: "agent:work:slack:channel:c1",
+        }),
         mirror: expect.objectContaining({
           sessionKey: "agent:work:slack:channel:c1",
           agentId: "work",
@@ -437,7 +443,10 @@ describe("gateway send mirroring", () => {
 
     expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
       expect.objectContaining({
-        agentId: "work",
+        session: expect.objectContaining({
+          agentId: "work",
+          key: "agent:main:slack:channel:c1",
+        }),
         mirror: expect.objectContaining({
           sessionKey: "agent:main:slack:channel:c1",
           agentId: "work",
@@ -460,7 +469,10 @@ describe("gateway send mirroring", () => {
 
     expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
       expect.objectContaining({
-        agentId: "work",
+        session: expect.objectContaining({
+          agentId: "work",
+          key: "agent:work:slack:channel:c1",
+        }),
         mirror: expect.objectContaining({
           sessionKey: "agent:work:slack:channel:c1",
           agentId: "work",

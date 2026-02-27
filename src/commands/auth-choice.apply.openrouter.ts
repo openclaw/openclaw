@@ -1,11 +1,10 @@
 import { ensureAuthProfileStore, resolveAuthProfileOrder } from "../agents/auth-profiles.js";
-import { resolveEnvApiKey } from "../agents/model-auth.js";
+import { normalizeApiKeyInput, validateApiKeyInput } from "./auth-choice.api-key.js";
 import {
-  formatApiKeyPreview,
-  normalizeApiKeyInput,
-  validateApiKeyInput,
-} from "./auth-choice.api-key.js";
-import { createAuthChoiceAgentModelNoter } from "./auth-choice.apply-helpers.js";
+  createAuthChoiceAgentModelNoter,
+  ensureApiKeyFromOptionEnvOrPrompt,
+  normalizeSecretInputModeInput,
+} from "./auth-choice.apply-helpers.js";
 import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
 import { applyDefaultModelChoice } from "./auth-choice.default-model.js";
 import {
@@ -22,6 +21,7 @@ export async function applyAuthChoiceOpenRouter(
   let nextConfig = params.config;
   let agentModelOverride: string | undefined;
   const noteAgentModel = createAuthChoiceAgentModelNoter(params);
+  const requestedSecretInputMode = normalizeSecretInputModeInput(params.opts?.secretInputMode);
 
   const store = ensureAuthProfileStore(params.agentDir, { allowKeychainPrompt: false });
   const profileOrder = resolveAuthProfileOrder({
@@ -43,30 +43,28 @@ export async function applyAuthChoiceOpenRouter(
   }
 
   if (!hasCredential && params.opts?.token && params.opts?.tokenProvider === "openrouter") {
-    await setOpenrouterApiKey(normalizeApiKeyInput(params.opts.token), params.agentDir);
+    await setOpenrouterApiKey(normalizeApiKeyInput(params.opts.token), params.agentDir, {
+      secretInputMode: requestedSecretInputMode,
+    });
     hasCredential = true;
   }
 
   if (!hasCredential) {
-    const envKey = resolveEnvApiKey("openrouter");
-    if (envKey) {
-      const useExisting = await params.prompter.confirm({
-        message: `Use existing OPENROUTER_API_KEY (${envKey.source}, ${formatApiKeyPreview(envKey.apiKey)})?`,
-        initialValue: true,
-      });
-      if (useExisting) {
-        await setOpenrouterApiKey(envKey.apiKey, params.agentDir);
-        hasCredential = true;
-      }
-    }
-  }
-
-  if (!hasCredential) {
-    const key = await params.prompter.text({
-      message: "Enter OpenRouter API key",
+    await ensureApiKeyFromOptionEnvOrPrompt({
+      token: params.opts?.token,
+      tokenProvider: params.opts?.tokenProvider,
+      secretInputMode: requestedSecretInputMode,
+      config: nextConfig,
+      expectedProviders: ["openrouter"],
+      provider: "openrouter",
+      envLabel: "OPENROUTER_API_KEY",
+      promptMessage: "Enter OpenRouter API key",
+      normalize: normalizeApiKeyInput,
       validate: validateApiKeyInput,
+      prompter: params.prompter,
+      setCredential: async (apiKey, mode) =>
+        setOpenrouterApiKey(apiKey, params.agentDir, { secretInputMode: mode }),
     });
-    await setOpenrouterApiKey(normalizeApiKeyInput(String(key ?? "")), params.agentDir);
     hasCredential = true;
   }
 
