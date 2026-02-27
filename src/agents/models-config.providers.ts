@@ -263,7 +263,7 @@ async function discoverOllamaModels(baseUrl?: string): Promise<ModelDefinitionCo
     }
     const data = (await response.json()) as OllamaTagsResponse;
     if (!data.models || data.models.length === 0) {
-      log.warn("No Ollama models found on local instance");
+      log.debug("No Ollama models found on local instance");
       return [];
     }
     return data.models.map((model) => {
@@ -479,10 +479,22 @@ export function normalizeGoogleModelId(id: string): string {
   return id;
 }
 
-function normalizeGoogleProvider(provider: ProviderConfig): ProviderConfig {
+const ANTIGRAVITY_BARE_PRO_IDS = new Set(["gemini-3-pro", "gemini-3.1-pro", "gemini-3-1-pro"]);
+
+export function normalizeAntigravityModelId(id: string): string {
+  if (ANTIGRAVITY_BARE_PRO_IDS.has(id)) {
+    return `${id}-low`;
+  }
+  return id;
+}
+
+function normalizeProviderModels(
+  provider: ProviderConfig,
+  normalizeId: (id: string) => string,
+): ProviderConfig {
   let mutated = false;
   const models = provider.models.map((model) => {
-    const nextId = normalizeGoogleModelId(model.id);
+    const nextId = normalizeId(model.id);
     if (nextId === model.id) {
       return model;
     }
@@ -490,6 +502,14 @@ function normalizeGoogleProvider(provider: ProviderConfig): ProviderConfig {
     return { ...model, id: nextId };
   });
   return mutated ? { ...provider, models } : provider;
+}
+
+function normalizeGoogleProvider(provider: ProviderConfig): ProviderConfig {
+  return normalizeProviderModels(provider, normalizeGoogleModelId);
+}
+
+function normalizeAntigravityProvider(provider: ProviderConfig): ProviderConfig {
+  return normalizeProviderModels(provider, normalizeAntigravityModelId);
 }
 
 export function normalizeProviders(params: {
@@ -558,6 +578,14 @@ export function normalizeProviders(params: {
       normalizedProvider = googleNormalized;
     }
 
+    if (normalizedKey === "google-antigravity") {
+      const antigravityNormalized = normalizeAntigravityProvider(normalizedProvider);
+      if (antigravityNormalized !== normalizedProvider) {
+        mutated = true;
+      }
+      normalizedProvider = antigravityNormalized;
+    }
+
     next[key] = normalizedProvider;
   }
 
@@ -568,6 +596,7 @@ function buildMinimaxProvider(): ProviderConfig {
   return {
     baseUrl: MINIMAX_PORTAL_BASE_URL,
     api: "anthropic-messages",
+    authHeader: true,
     models: [
       buildMinimaxTextModel({
         id: MINIMAX_DEFAULT_MODEL_ID,
@@ -603,6 +632,7 @@ function buildMinimaxPortalProvider(): ProviderConfig {
   return {
     baseUrl: MINIMAX_PORTAL_BASE_URL,
     api: "anthropic-messages",
+    authHeader: true,
     models: [
       buildMinimaxTextModel({
         id: MINIMAX_DEFAULT_MODEL_ID,

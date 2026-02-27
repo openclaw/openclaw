@@ -3,6 +3,7 @@ package ai.openclaw.android.node
 import ai.openclaw.android.protocol.OpenClawCanvasA2UICommand
 import ai.openclaw.android.protocol.OpenClawCanvasCommand
 import ai.openclaw.android.protocol.OpenClawCameraCommand
+import ai.openclaw.android.protocol.OpenClawDeviceCommand
 import ai.openclaw.android.protocol.OpenClawLocationCommand
 import ai.openclaw.android.protocol.OpenClawNotificationsCommand
 import ai.openclaw.android.protocol.OpenClawScreenCommand
@@ -62,6 +63,11 @@ object InvokeCommandRegistry {
         requiresForeground = true,
       ),
       InvokeCommandSpec(
+        name = OpenClawCameraCommand.List.rawValue,
+        requiresForeground = true,
+        availability = InvokeCommandAvailability.CameraEnabled,
+      ),
+      InvokeCommandSpec(
         name = OpenClawCameraCommand.Snap.rawValue,
         requiresForeground = true,
         availability = InvokeCommandAvailability.CameraEnabled,
@@ -76,7 +82,22 @@ object InvokeCommandRegistry {
         availability = InvokeCommandAvailability.LocationEnabled,
       ),
       InvokeCommandSpec(
+        name = OpenClawDeviceCommand.Status.rawValue,
+      ),
+      InvokeCommandSpec(
+        name = OpenClawDeviceCommand.Info.rawValue,
+      ),
+      InvokeCommandSpec(
+        name = OpenClawDeviceCommand.Permissions.rawValue,
+      ),
+      InvokeCommandSpec(
+        name = OpenClawDeviceCommand.Health.rawValue,
+      ),
+      InvokeCommandSpec(
         name = OpenClawNotificationsCommand.List.rawValue,
+      ),
+      InvokeCommandSpec(
+        name = OpenClawNotificationsCommand.Actions.rawValue,
       ),
       InvokeCommandSpec(
         name = OpenClawSmsCommand.Send.rawValue,

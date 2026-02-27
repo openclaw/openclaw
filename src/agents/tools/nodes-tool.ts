@@ -42,14 +42,28 @@ const NODES_TOOL_ACTIONS = [
   "screen_record",
   "location_get",
   "notifications_list",
+  "notifications_action",
+  "device_status",
+  "device_info",
+  "device_permissions",
+  "device_health",
   "run",
   "invoke",
 ] as const;
 
 const NOTIFY_PRIORITIES = ["passive", "active", "timeSensitive"] as const;
 const NOTIFY_DELIVERIES = ["system", "overlay", "auto"] as const;
+const NOTIFICATIONS_ACTIONS = ["open", "dismiss", "reply"] as const;
 const CAMERA_FACING = ["front", "back", "both"] as const;
 const LOCATION_ACCURACY = ["coarse", "balanced", "precise"] as const;
+const NODE_READ_ACTION_COMMANDS = {
+  camera_list: "camera.list",
+  notifications_list: "notifications.list",
+  device_status: "device.status",
+  device_info: "device.info",
+  device_permissions: "device.permissions",
+  device_health: "device.health",
+} as const;
 type GatewayCallOptions = ReturnType<typeof readGatewayCallOptions>;
 
 async function invokeNodeCommandPayload(params: {
@@ -115,6 +129,10 @@ const NodesToolSchema = Type.Object({
   maxAgeMs: Type.Optional(Type.Number()),
   locationTimeoutMs: Type.Optional(Type.Number()),
   desiredAccuracy: optionalStringEnum(LOCATION_ACCURACY),
+  // notifications_action
+  notificationAction: optionalStringEnum(NOTIFICATIONS_ACTIONS),
+  notificationKey: Type.Optional(Type.String()),
+  notificationReplyText: Type.Optional(Type.String()),
   // run
   command: Type.Optional(Type.Array(Type.String())),
   cwd: Type.Optional(Type.String()),
@@ -238,6 +256,9 @@ export function createNodesTool(options?: {
               typeof params.deviceId === "string" && params.deviceId.trim()
                 ? params.deviceId.trim()
                 : undefined;
+            if (deviceId && facings.length > 1) {
+              throw new Error("facing=both is not allowed when deviceId is set");
+            }
 
             const content: AgentToolResult<unknown>["content"] = [];
             const details: Array<Record<string, unknown>> = [];
@@ -297,12 +318,53 @@ export function createNodesTool(options?: {
             const result: AgentToolResult<unknown> = { content, details };
             return await sanitizeToolResultImages(result, "nodes:camera_snap", imageSanitization);
           }
-          case "camera_list": {
+          case "camera_list":
+          case "notifications_list":
+          case "device_status":
+          case "device_info":
+          case "device_permissions":
+          case "device_health": {
             const node = readStringParam(params, "node", { required: true });
+            const command = NODE_READ_ACTION_COMMANDS[action];
             const payloadRaw = await invokeNodeCommandPayload({
               gatewayOpts,
               node,
-              command: "camera.list",
+              command,
+            });
+            const payload =
+              payloadRaw && typeof payloadRaw === "object" && payloadRaw !== null ? payloadRaw : {};
+            return jsonResult(payload);
+          }
+          case "notifications_action": {
+            const node = readStringParam(params, "node", { required: true });
+            const notificationKey = readStringParam(params, "notificationKey", { required: true });
+            const notificationAction =
+              typeof params.notificationAction === "string"
+                ? params.notificationAction.trim().toLowerCase()
+                : "";
+            if (
+              notificationAction !== "open" &&
+              notificationAction !== "dismiss" &&
+              notificationAction !== "reply"
+            ) {
+              throw new Error("notificationAction must be open|dismiss|reply");
+            }
+            const notificationReplyText =
+              typeof params.notificationReplyText === "string"
+                ? params.notificationReplyText.trim()
+                : undefined;
+            if (notificationAction === "reply" && !notificationReplyText) {
+              throw new Error("notificationReplyText required when notificationAction=reply");
+            }
+            const payloadRaw = await invokeNodeCommandPayload({
+              gatewayOpts,
+              node,
+              command: "notifications.actions",
+              commandParams: {
+                key: notificationKey,
+                action: notificationAction,
+                replyText: notificationReplyText,
+              },
             });
             const payload =
               payloadRaw && typeof payloadRaw === "object" && payloadRaw !== null ? payloadRaw : {};
@@ -427,15 +489,6 @@ export function createNodesTool(options?: {
                 desiredAccuracy,
                 timeoutMs: locationTimeoutMs,
               },
-            });
-            return jsonResult(payload);
-          }
-          case "notifications_list": {
-            const node = readStringParam(params, "node", { required: true });
-            const payload = await invokeNodeCommandPayload({
-              gatewayOpts,
-              node,
-              command: "notifications.list",
             });
             return jsonResult(payload);
           }
