@@ -7,6 +7,9 @@ import type {
 // Grace period to keep resolved entries for late awaitDecision calls
 const RESOLVED_ENTRY_GRACE_MS = 15_000;
 
+// Maximum number of pending approval requests to prevent unbounded growth
+const MAX_PENDING_APPROVALS = 1000;
+
 export type ExecApprovalRequestPayload = InfraExecApprovalRequestPayload;
 
 export type ExecApprovalRecord = {
@@ -57,6 +60,9 @@ export class ExecApprovalManager {
    */
   register(record: ExecApprovalRecord, timeoutMs: number): Promise<ExecApprovalDecision | null> {
     const existing = this.pending.get(record.id);
+    if (!existing && this.pending.size >= MAX_PENDING_APPROVALS) {
+      throw new Error(`Too many pending approval requests (limit: ${MAX_PENDING_APPROVALS})`);
+    }
     if (existing) {
       // Idempotent: return existing promise if still pending
       if (existing.record.resolvedAtMs === undefined) {

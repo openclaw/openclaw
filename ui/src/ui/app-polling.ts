@@ -15,7 +15,11 @@ export function startNodesPolling(host: PollingHost) {
     return;
   }
   host.nodesPollInterval = window.setInterval(
-    () => void loadNodes(host as unknown as OpenClawApp, { quiet: true }),
+    () => {
+      if (document.visibilityState === 'visible') {
+        void loadNodes(host as unknown as OpenClawApp, { quiet: true });
+      }
+    },
     5000,
   );
 }
@@ -33,6 +37,9 @@ export function startLogsPolling(host: PollingHost) {
     return;
   }
   host.logsPollInterval = window.setInterval(() => {
+    if (document.visibilityState !== 'visible') {
+      return;
+    }
     if (host.tab !== "logs") {
       return;
     }
@@ -53,6 +60,9 @@ export function startDebugPolling(host: PollingHost) {
     return;
   }
   host.debugPollInterval = window.setInterval(() => {
+    if (document.visibilityState !== 'visible') {
+      return;
+    }
     if (host.tab !== "debug") {
       return;
     }
