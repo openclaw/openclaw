@@ -19,8 +19,10 @@ import {
 } from "./update-channels.js";
 import { compareSemverStrings } from "./update-check.js";
 import {
+  checkPackageOwnership,
   cleanupGlobalRenameDirs,
   detectGlobalInstallManagerForRoot,
+  formatOwnershipError,
   globalInstallArgs,
   globalInstallFallbackArgs,
 } from "./update-global.js";
@@ -869,6 +871,23 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
   const globalManager = await detectGlobalInstallManagerForRoot(runCommand, pkgRoot, timeoutMs);
   if (globalManager) {
     const packageName = (await readPackageName(pkgRoot)) ?? DEFAULT_PACKAGE_NAME;
+
+    // Pre-flight: abort if files are owned by another user (e.g. root from a
+    // previous `sudo npm install`). Without this check npm silently fails with
+    // EACCES and can leave the package directory in a half-moved state.
+    const ownership = await checkPackageOwnership(pkgRoot);
+    if (!ownership.ok) {
+      return {
+        status: "error",
+        mode: globalManager,
+        root: pkgRoot,
+        reason: formatOwnershipError(pkgRoot, ownership),
+        before: { version: beforeVersion },
+        steps: [],
+        durationMs: Date.now() - startedAt,
+      };
+    }
+
     await cleanupGlobalRenameDirs({
       globalRoot: path.dirname(pkgRoot),
       packageName,
