@@ -870,9 +870,15 @@ describe("applyExtraParamsToAgent", () => {
         api: "openai-responses",
         provider: "azure-openai-responses",
         id: "gpt-4o",
+        name: "gpt-4o",
         baseUrl: "https://example.openai.azure.com/openai/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128_000,
+        maxTokens: 16_384,
         compat: { supportsStore: false },
-      } as Model<"openai-responses">,
+      } as Model<"openai-responses"> & { compat?: { supportsStore?: boolean } },
     });
     expect(payload.store).toBe(false);
   });
