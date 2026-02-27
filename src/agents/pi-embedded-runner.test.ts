@@ -244,7 +244,7 @@ describe("runEmbeddedPiAgent", () => {
 
   it(
     "appends new user + assistant after existing transcript entries",
-    { timeout: 90_000 },
+    { timeout: 20_000 },
     async () => {
       const sessionFile = nextSessionFile();
       const sessionKey = nextSessionKey();

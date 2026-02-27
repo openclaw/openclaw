@@ -18,7 +18,9 @@ import {
 } from "../../cli/nodes-screen.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { formatExecCommand } from "../../infra/system-run-command.js";
 import { imageMimeFromFormat } from "../../media/mime.js";
+import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { resolveImageSanitizationLimits } from "../image-sanitization.js";
 import { optionalStringEnum, stringEnum } from "../schema/typebox.js";
@@ -39,14 +41,46 @@ const NODES_TOOL_ACTIONS = [
   "camera_clip",
   "screen_record",
   "location_get",
+  "notifications_list",
+  "notifications_action",
+  "device_status",
+  "device_info",
+  "device_permissions",
+  "device_health",
   "run",
   "invoke",
 ] as const;
 
 const NOTIFY_PRIORITIES = ["passive", "active", "timeSensitive"] as const;
 const NOTIFY_DELIVERIES = ["system", "overlay", "auto"] as const;
+const NOTIFICATIONS_ACTIONS = ["open", "dismiss", "reply"] as const;
 const CAMERA_FACING = ["front", "back", "both"] as const;
 const LOCATION_ACCURACY = ["coarse", "balanced", "precise"] as const;
+const NODE_READ_ACTION_COMMANDS = {
+  camera_list: "camera.list",
+  notifications_list: "notifications.list",
+  device_status: "device.status",
+  device_info: "device.info",
+  device_permissions: "device.permissions",
+  device_health: "device.health",
+} as const;
+type GatewayCallOptions = ReturnType<typeof readGatewayCallOptions>;
+
+async function invokeNodeCommandPayload(params: {
+  gatewayOpts: GatewayCallOptions;
+  node: string;
+  command: string;
+  commandParams?: Record<string, unknown>;
+}): Promise<unknown> {
+  const nodeId = await resolveNodeId(params.gatewayOpts, params.node);
+  const raw = await callGatewayTool<{ payload: unknown }>("node.invoke", params.gatewayOpts, {
+    nodeId,
+    command: params.command,
+    params: params.commandParams ?? {},
+    idempotencyKey: crypto.randomUUID(),
+  });
+  return raw?.payload ?? {};
+}
 
 function isPairingRequiredMessage(message: string): boolean {
   const lower = message.toLowerCase();
@@ -95,6 +129,10 @@ const NodesToolSchema = Type.Object({
   maxAgeMs: Type.Optional(Type.Number()),
   locationTimeoutMs: Type.Optional(Type.Number()),
   desiredAccuracy: optionalStringEnum(LOCATION_ACCURACY),
+  // notifications_action
+  notificationAction: optionalStringEnum(NOTIFICATIONS_ACTIONS),
+  notificationKey: Type.Optional(Type.String()),
+  notificationReplyText: Type.Optional(Type.String()),
   // run
   command: Type.Optional(Type.Array(Type.String())),
   cwd: Type.Optional(Type.String()),
@@ -109,9 +147,17 @@ const NodesToolSchema = Type.Object({
 
 export function createNodesTool(options?: {
   agentSessionKey?: string;
+  agentChannel?: GatewayMessageChannel;
+  agentAccountId?: string;
+  currentChannelId?: string;
+  currentThreadTs?: string | number;
   config?: OpenClawConfig;
 }): AnyAgentTool {
   const sessionKey = options?.agentSessionKey?.trim() || undefined;
+  const turnSourceChannel = options?.agentChannel?.trim() || undefined;
+  const turnSourceTo = options?.currentChannelId?.trim() || undefined;
+  const turnSourceAccountId = options?.agentAccountId?.trim() || undefined;
+  const turnSourceThreadId = options?.currentThreadTs;
   const agentId = resolveSessionAgentId({
     sessionKey: options?.agentSessionKey,
     config: options?.config,
@@ -121,7 +167,7 @@ export function createNodesTool(options?: {
     label: "Nodes",
     name: "nodes",
     description:
-      "Discover and control paired nodes (status/describe/pairing/notify/camera/screen/location/run/invoke).",
+      "Discover and control paired nodes (status/describe/pairing/notify/camera/screen/location/notifications/run/invoke).",
     parameters: NodesToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -185,7 +231,7 @@ export function createNodesTool(options?: {
             const node = readStringParam(params, "node", { required: true });
             const nodeId = await resolveNodeId(gatewayOpts, node);
             const facingRaw =
-              typeof params.facing === "string" ? params.facing.toLowerCase() : "both";
+              typeof params.facing === "string" ? params.facing.toLowerCase() : "front";
             const facings: CameraFacing[] =
               facingRaw === "both"
                 ? ["front", "back"]
@@ -197,11 +243,11 @@ export function createNodesTool(options?: {
             const maxWidth =
               typeof params.maxWidth === "number" && Number.isFinite(params.maxWidth)
                 ? params.maxWidth
-                : undefined;
+                : 1600;
             const quality =
               typeof params.quality === "number" && Number.isFinite(params.quality)
                 ? params.quality
-                : undefined;
+                : 0.95;
             const delayMs =
               typeof params.delayMs === "number" && Number.isFinite(params.delayMs)
                 ? params.delayMs
@@ -210,6 +256,9 @@ export function createNodesTool(options?: {
               typeof params.deviceId === "string" && params.deviceId.trim()
                 ? params.deviceId.trim()
                 : undefined;
+            if (deviceId && facings.length > 1) {
+              throw new Error("facing=both is not allowed when deviceId is set");
+            }
 
             const content: AgentToolResult<unknown>["content"] = [];
             const details: Array<Record<string, unknown>> = [];
@@ -269,17 +318,56 @@ export function createNodesTool(options?: {
             const result: AgentToolResult<unknown> = { content, details };
             return await sanitizeToolResultImages(result, "nodes:camera_snap", imageSanitization);
           }
-          case "camera_list": {
+          case "camera_list":
+          case "notifications_list":
+          case "device_status":
+          case "device_info":
+          case "device_permissions":
+          case "device_health": {
             const node = readStringParam(params, "node", { required: true });
-            const nodeId = await resolveNodeId(gatewayOpts, node);
-            const raw = await callGatewayTool<{ payload: unknown }>("node.invoke", gatewayOpts, {
-              nodeId,
-              command: "camera.list",
-              params: {},
-              idempotencyKey: crypto.randomUUID(),
+            const command = NODE_READ_ACTION_COMMANDS[action];
+            const payloadRaw = await invokeNodeCommandPayload({
+              gatewayOpts,
+              node,
+              command,
             });
             const payload =
-              raw && typeof raw.payload === "object" && raw.payload !== null ? raw.payload : {};
+              payloadRaw && typeof payloadRaw === "object" && payloadRaw !== null ? payloadRaw : {};
+            return jsonResult(payload);
+          }
+          case "notifications_action": {
+            const node = readStringParam(params, "node", { required: true });
+            const notificationKey = readStringParam(params, "notificationKey", { required: true });
+            const notificationAction =
+              typeof params.notificationAction === "string"
+                ? params.notificationAction.trim().toLowerCase()
+                : "";
+            if (
+              notificationAction !== "open" &&
+              notificationAction !== "dismiss" &&
+              notificationAction !== "reply"
+            ) {
+              throw new Error("notificationAction must be open|dismiss|reply");
+            }
+            const notificationReplyText =
+              typeof params.notificationReplyText === "string"
+                ? params.notificationReplyText.trim()
+                : undefined;
+            if (notificationAction === "reply" && !notificationReplyText) {
+              throw new Error("notificationReplyText required when notificationAction=reply");
+            }
+            const payloadRaw = await invokeNodeCommandPayload({
+              gatewayOpts,
+              node,
+              command: "notifications.actions",
+              commandParams: {
+                key: notificationKey,
+                action: notificationAction,
+                replyText: notificationReplyText,
+              },
+            });
+            const payload =
+              payloadRaw && typeof payloadRaw === "object" && payloadRaw !== null ? payloadRaw : {};
             return jsonResult(payload);
           }
           case "camera_clip": {
@@ -377,7 +465,6 @@ export function createNodesTool(options?: {
           }
           case "location_get": {
             const node = readStringParam(params, "node", { required: true });
-            const nodeId = await resolveNodeId(gatewayOpts, node);
             const maxAgeMs =
               typeof params.maxAgeMs === "number" && Number.isFinite(params.maxAgeMs)
                 ? params.maxAgeMs
@@ -393,17 +480,17 @@ export function createNodesTool(options?: {
               Number.isFinite(params.locationTimeoutMs)
                 ? params.locationTimeoutMs
                 : undefined;
-            const raw = await callGatewayTool<{ payload: unknown }>("node.invoke", gatewayOpts, {
-              nodeId,
+            const payload = await invokeNodeCommandPayload({
+              gatewayOpts,
+              node,
               command: "location.get",
-              params: {
+              commandParams: {
                 maxAgeMs,
                 desiredAccuracy,
                 timeoutMs: locationTimeoutMs,
               },
-              idempotencyKey: crypto.randomUUID(),
             });
-            return jsonResult(raw?.payload ?? {});
+            return jsonResult(payload);
           }
           case "run": {
             const node = readStringParam(params, "node", { required: true });
@@ -473,7 +560,7 @@ export function createNodesTool(options?: {
             // Node requires approval – create a pending approval request on
             // the gateway and wait for the user to approve/deny via the UI.
             const APPROVAL_TIMEOUT_MS = 120_000;
-            const cmdText = command.join(" ");
+            const cmdText = formatExecCommand(command);
             const approvalId = crypto.randomUUID();
             const approvalResult = await callGatewayTool(
               "exec.approval.request",
@@ -481,10 +568,16 @@ export function createNodesTool(options?: {
               {
                 id: approvalId,
                 command: cmdText,
+                commandArgv: command,
                 cwd,
+                nodeId,
                 host: "node",
                 agentId,
                 sessionKey,
+                turnSourceChannel,
+                turnSourceTo,
+                turnSourceAccountId,
+                turnSourceThreadId,
                 timeoutMs: APPROVAL_TIMEOUT_MS,
               },
             );

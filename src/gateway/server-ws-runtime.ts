@@ -16,6 +16,8 @@ export function attachGatewayWsHandlers(params: {
   resolvedAuth: ResolvedGatewayAuth;
   /** Optional rate limiter for auth brute-force protection. */
   rateLimiter?: AuthRateLimiter;
+  /** Browser-origin fallback limiter (loopback is never exempt). */
+  browserRateLimiter?: AuthRateLimiter;
   gatewayMethods: string[];
   events: string[];
   logGateway: ReturnType<typeof createSubsystemLogger>;
@@ -41,6 +43,7 @@ export function attachGatewayWsHandlers(params: {
     canvasHostServerPort: params.canvasHostServerPort,
     resolvedAuth: params.resolvedAuth,
     rateLimiter: params.rateLimiter,
+    browserRateLimiter: params.browserRateLimiter,
     gatewayMethods: params.gatewayMethods,
     events: params.events,
     logGateway: params.logGateway,

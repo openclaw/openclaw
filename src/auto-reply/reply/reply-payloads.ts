@@ -68,6 +68,10 @@ export function isRenderablePayload(payload: ReplyPayload): boolean {
   );
 }
 
+export function shouldSuppressReasoningPayload(payload: ReplyPayload): boolean {
+  return payload.isReasoning === true;
+}
+
 export function applyReplyThreading(params: {
   payloads: ReplyPayload[];
   replyToMode: ReplyToMode;

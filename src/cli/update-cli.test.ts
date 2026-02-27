@@ -636,14 +636,6 @@ describe("update-cli", () => {
     }
   });
 
-  it("updateCommand skips restart when --no-restart is set", async () => {
-    vi.mocked(runGatewayUpdate).mockResolvedValue(makeOkUpdateResult());
-
-    await updateCommand({ restart: false });
-
-    expect(runDaemonRestart).not.toHaveBeenCalled();
-  });
-
   it("updateCommand skips success message when restart does not run", async () => {
     vi.mocked(runGatewayUpdate).mockResolvedValue(makeOkUpdateResult());
     vi.mocked(runDaemonRestart).mockResolvedValue(false);

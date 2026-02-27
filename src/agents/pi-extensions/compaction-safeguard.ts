@@ -151,6 +151,10 @@ function formatToolFailuresSection(failures: ToolFailure[]): string {
   return `\n\n## Tool Failures\n${lines.join("\n")}`;
 }
 
+function isRealConversationMessage(message: AgentMessage): boolean {
+  return message.role === "user" || message.role === "assistant" || message.role === "toolResult";
+}
+
 function computeFileLists(fileOps: FileOperations): {
   readFiles: string[];
   modifiedFiles: string[];
@@ -212,6 +216,12 @@ async function readWorkspaceContextForSummary(): Promise<string> {
 export default function compactionSafeguardExtension(api: ExtensionAPI): void {
   api.on("session_before_compact", async (event, ctx) => {
     const { preparation, customInstructions, signal } = event;
+    if (!preparation.messagesToSummarize.some(isRealConversationMessage)) {
+      log.warn(
+        "Compaction safeguard: cancelling compaction with no real conversation messages to summarize.",
+      );
+      return { cancel: true };
+    }
     const { readFiles, modifiedFiles } = computeFileLists(preparation.fileOps);
     const fileOpsSummary = formatFileOperations(readFiles, modifiedFiles);
     const toolFailures = collectToolFailures([
@@ -224,6 +234,10 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
     // Fall back to runtime.model which is explicitly passed when building extension paths.
     // Additionally, prefer a dedicated summarization model if configured.
     const runtime = getCompactionSafeguardRuntime(ctx.sessionManager);
+    const summarizationInstructions = {
+      identifierPolicy: runtime?.identifierPolicy,
+      identifierInstructions: runtime?.identifierInstructions,
+    };
     let model = ctx.model ?? runtime?.model;
     let usedDedicatedModel = false;
 
@@ -340,6 +354,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
                   maxChunkTokens: droppedMaxChunkTokens,
                   contextWindow: contextWindowTokens,
                   customInstructions,
+                  summarizationInstructions,
                   previousSummary: preparation.previousSummary,
                 });
               } catch (droppedError) {
@@ -378,6 +393,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         maxChunkTokens,
         contextWindow: contextWindowTokens,
         customInstructions,
+        summarizationInstructions,
         previousSummary: effectivePreviousSummary,
       });
 
@@ -392,6 +408,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
           maxChunkTokens,
           contextWindow: contextWindowTokens,
           customInstructions: TURN_PREFIX_INSTRUCTIONS,
+          summarizationInstructions,
           previousSummary: undefined,
         });
         summary = `${historySummary}\n\n---\n\n**Turn Context (split turn):**\n\n${prefixSummary}`;

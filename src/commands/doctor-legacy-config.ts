@@ -1,3 +1,4 @@
+import { shouldMoveSingleAccountChannelKey } from "../channels/plugins/setup-helpers.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   resolveDiscordPreviewStreamMode,
@@ -5,8 +6,9 @@ import {
   resolveSlackStreamingMode,
   resolveTelegramPreviewStreamMode,
 } from "../config/discord-preview-streaming.js";
+import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 
-export function normalizeLegacyConfigValues(cfg: OpenClawConfig): {
+export function normalizeCompatibilityConfigValues(cfg: OpenClawConfig): {
   config: OpenClawConfig;
   changes: string[];
 } {
@@ -289,9 +291,125 @@ export function normalizeLegacyConfigValues(cfg: OpenClawConfig): {
     }
   };
 
+  const seedMissingDefaultAccountsFromSingleAccountBase = () => {
+    const channels = next.channels as Record<string, unknown> | undefined;
+    if (!channels) {
+      return;
+    }
+
+    let channelsChanged = false;
+    const nextChannels = { ...channels };
+    for (const [channelId, rawChannel] of Object.entries(channels)) {
+      if (!isRecord(rawChannel)) {
+        continue;
+      }
+      const rawAccounts = rawChannel.accounts;
+      if (!isRecord(rawAccounts)) {
+        continue;
+      }
+      const accountKeys = Object.keys(rawAccounts);
+      if (accountKeys.length === 0) {
+        continue;
+      }
+      const hasDefault = accountKeys.some((key) => key.trim().toLowerCase() === DEFAULT_ACCOUNT_ID);
+      if (hasDefault) {
+        continue;
+      }
+
+      const keysToMove = Object.entries(rawChannel)
+        .filter(
+          ([key, value]) =>
+            key !== "accounts" &&
+            key !== "enabled" &&
+            value !== undefined &&
+            shouldMoveSingleAccountChannelKey({ channelKey: channelId, key }),
+        )
+        .map(([key]) => key);
+      if (keysToMove.length === 0) {
+        continue;
+      }
+
+      const defaultAccount: Record<string, unknown> = {};
+      for (const key of keysToMove) {
+        const value = rawChannel[key];
+        defaultAccount[key] = value && typeof value === "object" ? structuredClone(value) : value;
+      }
+      const nextChannel: Record<string, unknown> = {
+        ...rawChannel,
+      };
+      for (const key of keysToMove) {
+        delete nextChannel[key];
+      }
+      nextChannel.accounts = {
+        ...rawAccounts,
+        [DEFAULT_ACCOUNT_ID]: defaultAccount,
+      };
+
+      nextChannels[channelId] = nextChannel;
+      channelsChanged = true;
+      changes.push(
+        `Moved channels.${channelId} single-account top-level values into channels.${channelId}.accounts.default.`,
+      );
+    }
+
+    if (!channelsChanged) {
+      return;
+    }
+    next = {
+      ...next,
+      channels: nextChannels as OpenClawConfig["channels"],
+    };
+  };
+
   normalizeProvider("telegram");
   normalizeProvider("slack");
   normalizeProvider("discord");
+  seedMissingDefaultAccountsFromSingleAccountBase();
+
+  const normalizeBrowserSsrFPolicyAlias = () => {
+    const rawBrowser = next.browser;
+    if (!isRecord(rawBrowser)) {
+      return;
+    }
+    const rawSsrFPolicy = rawBrowser.ssrfPolicy;
+    if (!isRecord(rawSsrFPolicy) || !("allowPrivateNetwork" in rawSsrFPolicy)) {
+      return;
+    }
+
+    const legacyAllowPrivateNetwork = rawSsrFPolicy.allowPrivateNetwork;
+    const currentDangerousAllowPrivateNetwork = rawSsrFPolicy.dangerouslyAllowPrivateNetwork;
+
+    let resolvedDangerousAllowPrivateNetwork: unknown = currentDangerousAllowPrivateNetwork;
+    if (
+      typeof legacyAllowPrivateNetwork === "boolean" ||
+      typeof currentDangerousAllowPrivateNetwork === "boolean"
+    ) {
+      // Preserve runtime behavior while collapsing to the canonical key.
+      resolvedDangerousAllowPrivateNetwork =
+        legacyAllowPrivateNetwork === true || currentDangerousAllowPrivateNetwork === true;
+    } else if (currentDangerousAllowPrivateNetwork === undefined) {
+      resolvedDangerousAllowPrivateNetwork = legacyAllowPrivateNetwork;
+    }
+
+    const nextSsrFPolicy: Record<string, unknown> = { ...rawSsrFPolicy };
+    delete nextSsrFPolicy.allowPrivateNetwork;
+    if (resolvedDangerousAllowPrivateNetwork !== undefined) {
+      nextSsrFPolicy.dangerouslyAllowPrivateNetwork = resolvedDangerousAllowPrivateNetwork;
+    }
+
+    const migratedBrowser = { ...next.browser } as Record<string, unknown>;
+    migratedBrowser.ssrfPolicy = nextSsrFPolicy;
+
+    next = {
+      ...next,
+      browser: migratedBrowser as OpenClawConfig["browser"],
+    };
+    changes.push(
+      `Moved browser.ssrfPolicy.allowPrivateNetwork → browser.ssrfPolicy.dangerouslyAllowPrivateNetwork (${String(resolvedDangerousAllowPrivateNetwork)}).`,
+    );
+  };
+
+  normalizeBrowserSsrFPolicyAlias();
 
   const legacyAckReaction = cfg.messages?.ackReaction?.trim();
   const hasWhatsAppConfig = cfg.channels?.whatsapp !== undefined;

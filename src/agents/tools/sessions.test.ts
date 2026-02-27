@@ -204,6 +204,47 @@ describe("sessions_send gating", () => {
     callGatewayMock.mockClear();
   });
 
+  it("returns an error when neither sessionKey nor label is provided", async () => {
+    const tool = createSessionsSendTool({
+      agentSessionKey: "agent:main:main",
+      agentChannel: "whatsapp",
+    });
+
+    const result = await tool.execute("call-missing-target", {
+      message: "hi",
+      timeoutSeconds: 5,
+    });
+
+    expect(result.details).toMatchObject({
+      status: "error",
+      error: "Either sessionKey or label is required",
+    });
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
+  it("returns an error when label resolution fails", async () => {
+    callGatewayMock.mockRejectedValueOnce(new Error("No session found with label: nope"));
+    const tool = createSessionsSendTool({
+      agentSessionKey: "agent:main:main",
+      agentChannel: "whatsapp",
+    });
+
+    const result = await tool.execute("call-missing-label", {
+      label: "nope",
+      message: "hello",
+      timeoutSeconds: 5,
+    });
+
+    expect(result.details).toMatchObject({
+      status: "error",
+    });
+    expect((result.details as { error?: string } | undefined)?.error ?? "").toContain(
+      "No session found with label",
+    );
+    expect(callGatewayMock).toHaveBeenCalledTimes(1);
+    expect(callGatewayMock.mock.calls[0]?.[0]).toMatchObject({ method: "sessions.resolve" });
+  });
+
   it("blocks cross-agent sends when tools.agentToAgent.enabled is false", async () => {
     const tool = createSessionsSendTool({
       agentSessionKey: "agent:main:main",

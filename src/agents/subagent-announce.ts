@@ -1,5 +1,5 @@
 import { resolveQueueSettings } from "../auto-reply/reply/queue.js";
-import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../config/agent-limits.js";
 import { loadConfig } from "../config/config.js";
 import {
@@ -21,7 +21,7 @@ import {
   mergeDeliveryContext,
   normalizeDeliveryContext,
 } from "../utils/delivery-context.js";
-import { isDeliverableMessageChannel } from "../utils/message-channel.js";
+import { isDeliverableMessageChannel, isInternalMessageChannel } from "../utils/message-channel.js";
 import {
   buildAnnounceIdFromChildRun,
   buildAnnounceIdempotencyKey,
@@ -32,29 +32,29 @@ import {
   queueEmbeddedPiMessage,
   waitForEmbeddedPiRunEnd,
 } from "./pi-embedded.js";
+import {
+  runSubagentAnnounceDispatch,
+  type SubagentAnnounceDeliveryResult,
+} from "./subagent-announce-dispatch.js";
 import { type AnnounceQueueItem, enqueueAnnounce } from "./subagent-announce-queue.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import type { SpawnSubagentMode } from "./subagent-spawn.js";
 import { readLatestAssistantReply } from "./tools/agent-step.js";
 import { sanitizeTextContent, extractAssistantText } from "./tools/sessions-helpers.js";
+import { isAnnounceSkip } from "./tools/sessions-send-helpers.js";
 
 const FAST_TEST_MODE = process.env.OPENCLAW_TEST_FAST === "1";
 const FAST_TEST_RETRY_INTERVAL_MS = 8;
 const FAST_TEST_REPLY_CHANGE_WAIT_MS = 20;
 const DEFAULT_SUBAGENT_ANNOUNCE_TIMEOUT_MS = 60_000;
 const MAX_TIMER_SAFE_TIMEOUT_MS = 2_147_000_000;
+const DIRECT_ANNOUNCE_TRANSIENT_RETRY_DELAYS_MS = FAST_TEST_MODE
+  ? ([8, 16, 32] as const)
+  : ([5_000, 10_000, 20_000] as const);
 
 type ToolResultMessage = {
   role?: unknown;
   content?: unknown;
-};
-
-type SubagentDeliveryPath = "queued" | "steered" | "direct" | "none";
-
-type SubagentAnnounceDeliveryResult = {
-  delivered: boolean;
-  path: SubagentDeliveryPath;
-  error?: string;
 };
 
 function resolveSubagentAnnounceTimeoutMs(cfg: ReturnType<typeof loadConfig>): number {
@@ -72,6 +72,9 @@ function buildCompletionDeliveryMessage(params: {
   outcome?: SubagentRunOutcome;
 }): string {
   const findingsText = params.findings.trim();
+  if (isAnnounceSkip(findingsText)) {
+    return "";
+  }
   const hasFindings = findingsText.length > 0 && findingsText !== "(no output)";
   const header = (() => {
     if (params.outcome?.status === "error") {
@@ -108,6 +111,92 @@ function summarizeDeliveryError(error: unknown): string {
     return JSON.stringify(error);
   } catch {
     return "error";
+  }
+}
+
+const TRANSIENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS: readonly RegExp[] = [
+  /\berrorcode=unavailable\b/i,
+  /\bstatus\s*[:=]\s*"?unavailable\b/i,
+  /\bUNAVAILABLE\b/,
+  /no active .* listener/i,
+  /gateway not connected/i,
+  /gateway closed \(1006/i,
+  /gateway timeout/i,
+  /\b(econnreset|econnrefused|etimedout|enotfound|ehostunreach|network error)\b/i,
+];
+
+const PERMANENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS: readonly RegExp[] = [
+  /unsupported channel/i,
+  /unknown channel/i,
+  /chat not found/i,
+  /user not found/i,
+  /bot was blocked by the user/i,
+  /forbidden: bot was kicked/i,
+  /recipient is not a valid/i,
+  /outbound not configured for channel/i,
+];
+
+function isTransientAnnounceDeliveryError(error: unknown): boolean {
+  const message = summarizeDeliveryError(error);
+  if (!message) {
+    return false;
+  }
+  if (PERMANENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS.some((re) => re.test(message))) {
+    return false;
+  }
+  return TRANSIENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS.some((re) => re.test(message));
+}
+
+async function waitForAnnounceRetryDelay(ms: number, signal?: AbortSignal): Promise<void> {
+  if (ms <= 0) {
+    return;
+  }
+  if (!signal) {
+    await new Promise<void>((resolve) => setTimeout(resolve, ms));
+    return;
+  }
+  if (signal.aborted) {
+    return;
+  }
+  await new Promise<void>((resolve) => {
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+async function runAnnounceDeliveryWithRetry<T>(params: {
+  operation: string;
+  signal?: AbortSignal;
+  run: () => Promise<T>;
+}): Promise<T> {
+  let retryIndex = 0;
+  for (;;) {
+    if (params.signal?.aborted) {
+      throw new Error("announce delivery aborted");
+    }
+    try {
+      return await params.run();
+    } catch (err) {
+      const delayMs = DIRECT_ANNOUNCE_TRANSIENT_RETRY_DELAYS_MS[retryIndex];
+      if (delayMs == null || !isTransientAnnounceDeliveryError(err) || params.signal?.aborted) {
+        throw err;
+      }
+      const nextAttempt = retryIndex + 2;
+      const maxAttempts = DIRECT_ANNOUNCE_TRANSIENT_RETRY_DELAYS_MS.length + 1;
+      defaultRuntime.log(
+        `[warn] Subagent announce ${params.operation} transient failure, retrying ${nextAttempt}/${maxAttempts} in ${Math.round(delayMs / 1000)}s: ${summarizeDeliveryError(err)}`,
+      );
+      retryIndex += 1;
+      await waitForAnnounceRetryDelay(delayMs, params.signal);
+    }
   }
 }
 
@@ -350,9 +439,12 @@ function resolveAnnounceOrigin(
 ): DeliveryContext | undefined {
   const normalizedRequester = normalizeDeliveryContext(requesterOrigin);
   const normalizedEntry = deliveryContextFromSession(entry);
-  if (normalizedRequester?.channel && !isDeliverableMessageChannel(normalizedRequester.channel)) {
-    // Ignore internal/non-deliverable channel hints (for example webchat)
-    // so a valid persisted route can still be used for outbound delivery.
+  if (normalizedRequester?.channel && isInternalMessageChannel(normalizedRequester.channel)) {
+    // Ignore internal channel hints (webchat) so a valid persisted route
+    // can still be used for outbound delivery. Non-standard channels that
+    // are not in the deliverable list should NOT be stripped here — doing
+    // so causes the session entry's stale lastChannel (often WhatsApp) to
+    // override the actual requester origin, leading to delivery failures.
     return mergeDeliveryContext(
       {
         accountId: normalizedRequester.accountId,
@@ -609,27 +701,6 @@ async function maybeQueueSubagentAnnounce(params: {
   return "none";
 }
 
-function queueOutcomeToDeliveryResult(
-  outcome: "steered" | "queued" | "none",
-): SubagentAnnounceDeliveryResult {
-  if (outcome === "steered") {
-    return {
-      delivered: true,
-      path: "steered",
-    };
-  }
-  if (outcome === "queued") {
-    return {
-      delivered: true,
-      path: "queued",
-    };
-  }
-  return {
-    delivered: false,
-    path: "none",
-  };
-}
-
 async function sendSubagentAnnounceDirectly(params: {
   targetRequesterSessionKey: string;
   triggerMessage: string;
@@ -709,18 +780,23 @@ async function sendSubagentAnnounceDirectly(params: {
             path: "none",
           };
         }
-        await callGateway({
-          method: "send",
-          params: {
-            channel: completionChannel,
-            to: completionTo,
-            accountId: completionDirectOrigin?.accountId,
-            threadId: completionThreadId,
-            sessionKey: canonicalRequesterSessionKey,
-            message: params.completionMessage,
-            idempotencyKey: params.directIdempotencyKey,
-          },
-          timeoutMs: announceTimeoutMs,
+        await runAnnounceDeliveryWithRetry({
+          operation: "completion direct send",
+          signal: params.signal,
+          run: async () =>
+            await callGateway({
+              method: "send",
+              params: {
+                channel: completionChannel,
+                to: completionTo,
+                accountId: completionDirectOrigin?.accountId,
+                threadId: completionThreadId,
+                sessionKey: canonicalRequesterSessionKey,
+                message: params.completionMessage,
+                idempotencyKey: params.directIdempotencyKey,
+              },
+              timeoutMs: announceTimeoutMs,
+            }),
         });
 
         return {
@@ -731,6 +807,16 @@ async function sendSubagentAnnounceDirectly(params: {
     }
 
     const directOrigin = normalizeDeliveryContext(params.directOrigin);
+    const directChannelRaw =
+      typeof directOrigin?.channel === "string" ? directOrigin.channel.trim() : "";
+    const directChannel =
+      directChannelRaw && isDeliverableMessageChannel(directChannelRaw) ? directChannelRaw : "";
+    const directTo = typeof directOrigin?.to === "string" ? directOrigin.to.trim() : "";
+    const hasDeliverableDirectTarget =
+      !params.requesterIsSubagent && Boolean(directChannel) && Boolean(directTo);
+    const shouldDeliverExternally =
+      !params.requesterIsSubagent &&
+      (!params.expectsCompletionMessage || hasDeliverableDirectTarget);
     const threadId =
       directOrigin?.threadId != null && directOrigin.threadId !== ""
         ? String(directOrigin.threadId)
@@ -741,21 +827,26 @@ async function sendSubagentAnnounceDirectly(params: {
         path: "none",
       };
     }
-    await callGateway({
-      method: "agent",
-      params: {
-        sessionKey: canonicalRequesterSessionKey,
-        message: params.triggerMessage,
-        deliver: !params.requesterIsSubagent,
-        bestEffortDeliver: params.bestEffortDeliver,
-        channel: params.requesterIsSubagent ? undefined : directOrigin?.channel,
-        accountId: params.requesterIsSubagent ? undefined : directOrigin?.accountId,
-        to: params.requesterIsSubagent ? undefined : directOrigin?.to,
-        threadId: params.requesterIsSubagent ? undefined : threadId,
-        idempotencyKey: params.directIdempotencyKey,
-      },
-      expectFinal: true,
-      timeoutMs: announceTimeoutMs,
+    await runAnnounceDeliveryWithRetry({
+      operation: "direct announce agent call",
+      signal: params.signal,
+      run: async () =>
+        await callGateway({
+          method: "agent",
+          params: {
+            sessionKey: canonicalRequesterSessionKey,
+            message: params.triggerMessage,
+            deliver: shouldDeliverExternally,
+            bestEffortDeliver: params.bestEffortDeliver,
+            channel: shouldDeliverExternally ? directChannel : undefined,
+            accountId: shouldDeliverExternally ? directOrigin?.accountId : undefined,
+            to: shouldDeliverExternally ? directTo : undefined,
+            threadId: shouldDeliverExternally ? threadId : undefined,
+            idempotencyKey: params.directIdempotencyKey,
+          },
+          expectFinal: true,
+          timeoutMs: announceTimeoutMs,
+        }),
     });
 
     return {
@@ -789,64 +880,34 @@ async function deliverSubagentAnnouncement(params: {
   directIdempotencyKey: string;
   signal?: AbortSignal;
 }): Promise<SubagentAnnounceDeliveryResult> {
-  if (params.signal?.aborted) {
-    return {
-      delivered: false,
-      path: "none",
-    };
-  }
-  // Non-completion mode mirrors historical behavior: try queued/steered delivery first,
-  // then (only if not queued) attempt direct delivery.
-  if (!params.expectsCompletionMessage) {
-    const queueOutcome = await maybeQueueSubagentAnnounce({
-      requesterSessionKey: params.requesterSessionKey,
-      announceId: params.announceId,
-      triggerMessage: params.triggerMessage,
-      summaryLine: params.summaryLine,
-      requesterOrigin: params.requesterOrigin,
-      signal: params.signal,
-    });
-    const queued = queueOutcomeToDeliveryResult(queueOutcome);
-    if (queued.delivered) {
-      return queued;
-    }
-  }
-
-  // Completion-mode uses direct send first so manual spawns can return immediately
-  // in the common ready-to-deliver case.
-  const direct = await sendSubagentAnnounceDirectly({
-    targetRequesterSessionKey: params.targetRequesterSessionKey,
-    triggerMessage: params.triggerMessage,
-    completionMessage: params.completionMessage,
-    directIdempotencyKey: params.directIdempotencyKey,
-    completionDirectOrigin: params.completionDirectOrigin,
-    completionRouteMode: params.completionRouteMode,
-    spawnMode: params.spawnMode,
-    directOrigin: params.directOrigin,
-    requesterIsSubagent: params.requesterIsSubagent,
+  return await runSubagentAnnounceDispatch({
     expectsCompletionMessage: params.expectsCompletionMessage,
     signal: params.signal,
-    bestEffortDeliver: params.bestEffortDeliver,
+    queue: async () =>
+      await maybeQueueSubagentAnnounce({
+        requesterSessionKey: params.requesterSessionKey,
+        announceId: params.announceId,
+        triggerMessage: params.triggerMessage,
+        summaryLine: params.summaryLine,
+        requesterOrigin: params.requesterOrigin,
+        signal: params.signal,
+      }),
+    direct: async () =>
+      await sendSubagentAnnounceDirectly({
+        targetRequesterSessionKey: params.targetRequesterSessionKey,
+        triggerMessage: params.triggerMessage,
+        completionMessage: params.completionMessage,
+        directIdempotencyKey: params.directIdempotencyKey,
+        completionDirectOrigin: params.completionDirectOrigin,
+        completionRouteMode: params.completionRouteMode,
+        spawnMode: params.spawnMode,
+        directOrigin: params.directOrigin,
+        requesterIsSubagent: params.requesterIsSubagent,
+        expectsCompletionMessage: params.expectsCompletionMessage,
+        signal: params.signal,
+        bestEffortDeliver: params.bestEffortDeliver,
+      }),
   });
-  if (direct.delivered || !params.expectsCompletionMessage) {
-    return direct;
-  }
-
-  // If completion path failed direct delivery, try queueing as a fallback so the
-  // report can still be delivered once the requester session is idle.
-  const queueOutcome = await maybeQueueSubagentAnnounce({
-    requesterSessionKey: params.requesterSessionKey,
-    announceId: params.announceId,
-    triggerMessage: params.triggerMessage,
-    summaryLine: params.summaryLine,
-    requesterOrigin: params.requesterOrigin,
-    signal: params.signal,
-  });
-  if (queueOutcome === "steered" || queueOutcome === "queued") {
-    return queueOutcomeToDeliveryResult(queueOutcome);
-  }
-
-  return direct;
 }
 
 function loadSessionEntryByKey(sessionKey: string) {
@@ -863,6 +924,8 @@ export function buildSubagentSystemPrompt(params: {
   childSessionKey: string;
   label?: string;
   task?: string;
+  /** Whether ACP-specific routing guidance should be included. Defaults to true. */
+  acpEnabled?: boolean;
   /** Depth of the child being spawned (1 = sub-agent, 2 = sub-sub-agent). */
   childDepth?: number;
   /** Config value: max allowed spawn depth. */
@@ -877,6 +940,7 @@ export function buildSubagentSystemPrompt(params: {
     typeof params.maxSpawnDepth === "number"
       ? params.maxSpawnDepth
       : DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH;
+  const acpEnabled = params.acpEnabled !== false;
   const canSpawn = childDepth < maxSpawnDepth;
   const parentLabel = childDepth >= 2 ? "parent orchestrator" : "main agent";
 
@@ -922,6 +986,17 @@ export function buildSubagentSystemPrompt(params: {
       "Default workflow: spawn work, continue orchestrating, and wait for auto-announced completions.",
       "Do NOT repeatedly poll `subagents list` in a loop unless you are actively debugging or intervening.",
       "Coordinate their work and synthesize results before reporting back.",
+      ...(acpEnabled
+        ? [
+            'For ACP harness sessions (codex/claudecode/gemini), use `sessions_spawn` with `runtime: "acp"` (set `agentId` unless `acp.defaultAgent` is configured).',
+            '`agents_list` and `subagents` apply to OpenClaw sub-agents (`runtime: "subagent"`); ACP harness ids are controlled by `acp.allowedAgents`.',
+            "Do not ask users to run slash commands or CLI when `sessions_spawn` can do it directly.",
+            "Do not use `exec` (`openclaw ...`, `acpx ...`) to spawn ACP sessions.",
+            'Use `subagents` only for OpenClaw subagents (`runtime: "subagent"`).',
+            "Subagent results auto-announce back to you; ACP sessions continue in their bound thread.",
+            "Avoid polling loops; spawn, orchestrate, and synthesize results.",
+          ]
+        : []),
       "",
     );
   } else if (childDepth >= 2) {
@@ -1081,6 +1156,13 @@ export async function runSubagentAnnounceFlow(params: {
       // Avoid announcing "(no output)" while the child run is still producing output.
       shouldDeleteChildSession = false;
       return false;
+    }
+
+    if (isAnnounceSkip(reply)) {
+      return true;
+    }
+    if (isSilentReplyText(reply, SILENT_REPLY_TOKEN)) {
+      return true;
     }
 
     if (!outcome) {

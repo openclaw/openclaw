@@ -4,7 +4,12 @@ import { parseDurationMs } from "../cli/parse-duration.js";
 import { ToolsSchema } from "./zod-schema.agent-runtime.js";
 import { AgentsSchema, AudioSchema, BindingsSchema, BroadcastSchema } from "./zod-schema.agents.js";
 import { ApprovalsSchema } from "./zod-schema.approvals.js";
-import { HexColorSchema, ModelsConfigSchema } from "./zod-schema.core.js";
+import {
+  HexColorSchema,
+  ModelsConfigSchema,
+  SecretInputSchema,
+  SecretsConfigSchema,
+} from "./zod-schema.core.js";
 import { HookMappingSchema, HooksGmailSchema, InternalHooksSchema } from "./zod-schema.hooks.js";
 import { InstallRecordShape } from "./zod-schema.installs.js";
 import { ChannelsSchema } from "./zod-schema.providers.js";
@@ -129,7 +134,21 @@ export const OpenClawSchema = z
     meta: z
       .object({
         lastTouchedVersion: z.string().optional(),
-        lastTouchedAt: z.string().optional(),
+        // Accept any string unchanged (backwards-compatible) and coerce numeric Unix
+        // timestamps to ISO strings (agent file edits may write Date.now()).
+        lastTouchedAt: z
+          .union([
+            z.string(),
+            z.number().transform((n, ctx) => {
+              const d = new Date(n);
+              if (Number.isNaN(d.getTime())) {
+                ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Invalid timestamp" });
+                return z.NEVER;
+              }
+              return d.toISOString();
+            }),
+          ])
+          .optional(),
       })
       .strict()
       .optional(),
@@ -235,6 +254,7 @@ export const OpenClawSchema = z
         ssrfPolicy: z
           .object({
             allowPrivateNetwork: z.boolean().optional(),
+            dangerouslyAllowPrivateNetwork: z.boolean().optional(),
             allowedHostnames: z.array(z.string()).optional(),
             hostnameAllowlist: z.array(z.string()).optional(),
           })
@@ -274,6 +294,7 @@ export const OpenClawSchema = z
       })
       .strict()
       .optional(),
+    secrets: SecretsConfigSchema,
     auth: z
       .object({
         profiles: z
@@ -295,6 +316,36 @@ export const OpenClawSchema = z
             billingBackoffHoursByProvider: z.record(z.string(), z.number().positive()).optional(),
             billingMaxHours: z.number().positive().optional(),
             failureWindowHours: z.number().positive().optional(),
+          })
+          .strict()
+          .optional(),
+      })
+      .strict()
+      .optional(),
+    acp: z
+      .object({
+        enabled: z.boolean().optional(),
+        dispatch: z
+          .object({
+            enabled: z.boolean().optional(),
+          })
+          .strict()
+          .optional(),
+        backend: z.string().optional(),
+        defaultAgent: z.string().optional(),
+        allowedAgents: z.array(z.string()).optional(),
+        maxConcurrentSessions: z.number().int().positive().optional(),
+        stream: z
+          .object({
+            coalesceIdleMs: z.number().int().nonnegative().optional(),
+            maxChunkChars: z.number().int().positive().optional(),
+          })
+          .strict()
+          .optional(),
+        runtime: z
+          .object({
+            ttlMinutes: z.number().int().positive().optional(),
+            installCommand: z.string().optional(),
           })
           .strict()
           .optional(),
@@ -424,6 +475,21 @@ export const OpenClawSchema = z
       .optional(),
     talk: z
       .object({
+        provider: z.string().optional(),
+        providers: z
+          .record(
+            z.string(),
+            z
+              .object({
+                voiceId: z.string().optional(),
+                voiceAliases: z.record(z.string(), z.string()).optional(),
+                modelId: z.string().optional(),
+                outputFormat: z.string().optional(),
+                apiKey: z.string().optional().register(sensitive),
+              })
+              .catchall(z.unknown()),
+          )
+          .optional(),
         voiceId: z.string().optional(),
         voiceAliases: z.record(z.string(), z.string()).optional(),
         modelId: z.string().optional(),
@@ -453,6 +519,7 @@ export const OpenClawSchema = z
             basePath: z.string().optional(),
             root: z.string().optional(),
             allowedOrigins: z.array(z.string()).optional(),
+            dangerouslyAllowHostHeaderOriginFallback: z.boolean().optional(),
             allowInsecureAuth: z.boolean().optional(),
             dangerouslyDisableDeviceAuth: z.boolean().optional(),
           })
@@ -660,7 +727,7 @@ export const OpenClawSchema = z
             z
               .object({
                 enabled: z.boolean().optional(),
-                apiKey: z.string().optional().register(sensitive),
+                apiKey: SecretInputSchema.optional().register(sensitive),
                 env: z.record(z.string(), z.string()).optional(),
                 config: z.record(z.string(), z.unknown()).optional(),
               })

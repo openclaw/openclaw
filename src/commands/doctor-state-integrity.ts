@@ -16,6 +16,7 @@ import {
   resolveStorePath,
 } from "../config/sessions.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
+import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import { note } from "../terminal/note.js";
 import { shortenHomePath } from "../utils.js";
 
@@ -165,6 +166,15 @@ function hasPairingPolicy(value: unknown): boolean {
   return false;
 }
 
+function isSlashRoutingSessionKey(sessionKey: string): boolean {
+  const raw = sessionKey.trim().toLowerCase();
+  if (!raw) {
+    return false;
+  }
+  const scoped = parseAgentSessionKey(raw)?.rest ?? raw;
+  return /^[^:]+:slash:[^:]+(?:$|:)/.test(scoped);
+}
+
 function shouldRequireOAuthDir(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
   if (env.OPENCLAW_OAUTH_DIR?.trim()) {
     return true;
@@ -261,8 +271,15 @@ export async function noteStateIntegrity(
   }
   if (stateDirExists && process.platform !== "win32") {
     try {
-      const stat = fs.statSync(stateDir);
-      if ((stat.mode & 0o077) !== 0) {
+      const dirLstat = fs.lstatSync(stateDir);
+      const isDirSymlink = dirLstat.isSymbolicLink();
+      // For symlinks, check the resolved target permissions instead of the
+      // symlink itself (which always reports 777). Skip the warning only when
+      // the target lives in a known immutable store (e.g. /nix/store/).
+      const stat = isDirSymlink ? fs.statSync(stateDir) : dirLstat;
+      const resolvedDir = isDirSymlink ? fs.realpathSync(stateDir) : stateDir;
+      const isImmutableStore = resolvedDir.startsWith("/nix/store/");
+      if (!isImmutableStore && (stat.mode & 0o077) !== 0) {
         warnings.push(
           `- State directory permissions are too open (${displayStateDir}). Recommend chmod 700.`,
         );
@@ -282,10 +299,14 @@ export async function noteStateIntegrity(
 
   if (configPath && existsFile(configPath) && process.platform !== "win32") {
     try {
-      const linkStat = fs.lstatSync(configPath);
-      const stat = fs.statSync(configPath);
-      const isSymlink = linkStat.isSymbolicLink();
-      if (!isSymlink && (stat.mode & 0o077) !== 0) {
+      const configLstat = fs.lstatSync(configPath);
+      const isSymlink = configLstat.isSymbolicLink();
+      // For symlinks, check the resolved target permissions. Skip the warning
+      // only when the target lives in an immutable store (e.g. /nix/store/).
+      const stat = isSymlink ? fs.statSync(configPath) : configLstat;
+      const resolvedConfig = isSymlink ? fs.realpathSync(configPath) : configPath;
+      const isImmutableConfig = resolvedConfig.startsWith("/nix/store/");
+      if (!isImmutableConfig && (stat.mode & 0o077) !== 0) {
         warnings.push(
           `- Config file is group/world readable (${displayConfigPath ?? configPath}). Recommend chmod 600.`,
         );
@@ -402,7 +423,8 @@ export async function noteStateIntegrity(
         return bUpdated - aUpdated;
       })
       .slice(0, 5);
-    const missing = recent.filter(([, entry]) => {
+    const recentTranscriptCandidates = recent.filter(([key]) => !isSlashRoutingSessionKey(key));
+    const missing = recentTranscriptCandidates.filter(([, entry]) => {
       const sessionId = entry.sessionId;
       if (!sessionId) {
         return false;
@@ -413,9 +435,10 @@ export async function noteStateIntegrity(
     if (missing.length > 0) {
       warnings.push(
         [
-          `- ${missing.length}/${recent.length} recent sessions are missing transcripts.`,
+          `- ${missing.length}/${recentTranscriptCandidates.length} recent sessions are missing transcripts.`,
           `  Verify sessions in store: ${formatCliCommand(`openclaw sessions --store "${absoluteStorePath}"`)}`,
           `  Preview cleanup impact: ${formatCliCommand(`openclaw sessions cleanup --store "${absoluteStorePath}" --dry-run`)}`,
+          `  Prune missing entries: ${formatCliCommand(`openclaw sessions cleanup --store "${absoluteStorePath}" --enforce --fix-missing`)}`,
         ].join("\n"),
       );
     }

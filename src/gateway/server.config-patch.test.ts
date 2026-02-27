@@ -14,6 +14,7 @@ import {
 installGatewayTestHooks({ scope: "suite" });
 
 let startedServer: Awaited<ReturnType<typeof startServerWithClient>> | null = null;
+let sharedTempRoot: string;
 
 function requireWs(): Awaited<ReturnType<typeof startServerWithClient>>["ws"] {
   if (!startedServer) {
@@ -23,6 +24,7 @@ function requireWs(): Awaited<ReturnType<typeof startServerWithClient>>["ws"] {
 }
 
 beforeAll(async () => {
+  sharedTempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-config-"));
   startedServer = await startServerWithClient(undefined, { controlUiEnabled: true });
   await connectOk(requireWs());
 });
@@ -34,7 +36,15 @@ afterAll(async () => {
   startedServer.ws.close();
   await startedServer.server.close();
   startedServer = null;
+  await fs.rm(sharedTempRoot, { recursive: true, force: true });
 });
+
+async function resetTempDir(name: string): Promise<string> {
+  const dir = path.join(sharedTempRoot, name);
+  await fs.rm(dir, { recursive: true, force: true });
+  await fs.mkdir(dir, { recursive: true });
+  return dir;
+}
 
 describe("gateway config methods", () => {
   it("rejects config.patch when raw is not an object", async () => {
@@ -48,7 +58,7 @@ describe("gateway config methods", () => {
 
 describe("gateway server sessions", () => {
   it("filters sessions by agentId", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-agents-"));
+    const dir = await resetTempDir("agents");
     testState.sessionConfig = {
       store: path.join(dir, "{agentId}", "sessions.json"),
     };
@@ -109,7 +119,7 @@ describe("gateway server sessions", () => {
   });
 
   it("resolves and patches main alias to default agent main key", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-"));
+    const dir = await resetTempDir("main-alias");
     const storePath = path.join(dir, "sessions.json");
     testState.sessionStorePath = storePath;
     testState.agentsConfig = { list: [{ id: "ops", default: true }] };

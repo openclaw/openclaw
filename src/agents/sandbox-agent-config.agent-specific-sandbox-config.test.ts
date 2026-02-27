@@ -50,8 +50,9 @@ vi.mock("./skills.js", async (importOriginal) => {
   };
 });
 
-let resolveSandboxContext: typeof import("./sandbox.js").resolveSandboxContext;
-let resolveSandboxConfigForAgent: typeof import("./sandbox.js").resolveSandboxConfigForAgent;
+let resolveSandboxContext: typeof import("./sandbox/context.js").resolveSandboxContext;
+let resolveSandboxConfigForAgent: typeof import("./sandbox/config.js").resolveSandboxConfigForAgent;
+let resolveSandboxRuntimeStatus: typeof import("./sandbox/runtime-status.js").resolveSandboxRuntimeStatus;
 
 async function resolveContext(config: OpenClawConfig, sessionKey: string, workspaceDir: string) {
   return resolveSandboxContext({
@@ -119,7 +120,14 @@ function createWorkSetupCommandConfig(scope: "agent" | "shared"): OpenClawConfig
 
 describe("Agent-specific sandbox config", () => {
   beforeAll(async () => {
-    ({ resolveSandboxConfigForAgent, resolveSandboxContext } = await import("./sandbox.js"));
+    const [configModule, contextModule, runtimeModule] = await Promise.all([
+      import("./sandbox/config.js"),
+      import("./sandbox/context.js"),
+      import("./sandbox/runtime-status.js"),
+    ]);
+    ({ resolveSandboxConfigForAgent } = configModule);
+    ({ resolveSandboxContext } = contextModule);
+    ({ resolveSandboxRuntimeStatus } = runtimeModule);
   });
 
   beforeEach(() => {
@@ -156,7 +164,7 @@ describe("Agent-specific sandbox config", () => {
     expect(context?.workspaceDir).toContain(path.resolve("/tmp/isolated-sandboxes"));
   });
 
-  it("should prefer agent config over global for multiple agents", async () => {
+  it("should prefer agent config over global for multiple agents", () => {
     const cfg: OpenClawConfig = {
       agents: {
         defaults: {
@@ -185,23 +193,22 @@ describe("Agent-specific sandbox config", () => {
       },
     };
 
-    const mainContext = await resolveContext(
+    const mainRuntime = resolveSandboxRuntimeStatus({
       cfg,
-      "agent:main:telegram:group:789",
-      "/tmp/test-main",
-    );
-    expect(mainContext).toBeNull();
+      sessionKey: "agent:main:telegram:group:789",
+    });
+    expect(mainRuntime.mode).toBe("off");
+    expect(mainRuntime.sandboxed).toBe(false);
 
-    const familyContext = await resolveContext(
+    const familyRuntime = resolveSandboxRuntimeStatus({
       cfg,
-      "agent:family:whatsapp:group:123",
-      "/tmp/test-family",
-    );
-    expect(familyContext).toBeDefined();
-    expect(familyContext?.enabled).toBe(true);
+      sessionKey: "agent:family:whatsapp:group:123",
+    });
+    expect(familyRuntime.mode).toBe("all");
+    expect(familyRuntime.sandboxed).toBe(true);
   });
 
-  it("should prefer agent-specific sandbox tool policy", async () => {
+  it("should prefer agent-specific sandbox tool policy", () => {
     const cfg = createRestrictedAgentSandboxConfig({
       agentTools: {
         sandbox: {
@@ -217,16 +224,14 @@ describe("Agent-specific sandbox config", () => {
       },
     });
 
-    const context = await resolveContext(cfg, "agent:restricted:main", "/tmp/test-restricted");
-
-    expect(context).toBeDefined();
-    expect(context?.tools).toEqual({
+    const sandbox = resolveSandboxConfigForAgent(cfg, "restricted");
+    expect(sandbox.tools).toEqual({
       allow: ["read", "write", "image"],
       deny: ["edit"],
     });
   });
 
-  it("should use global sandbox config when no agent-specific config exists", async () => {
+  it("should use global sandbox config when no agent-specific config exists", () => {
     const cfg: OpenClawConfig = {
       agents: {
         defaults: {
@@ -244,10 +249,8 @@ describe("Agent-specific sandbox config", () => {
       },
     };
 
-    const context = await resolveContext(cfg, "agent:main:main", "/tmp/test");
-
-    expect(context).toBeDefined();
-    expect(context?.enabled).toBe(true);
+    const sandbox = resolveSandboxConfigForAgent(cfg, "main");
+    expect(sandbox.mode).toBe("all");
   });
 
   it("should resolve setupCommand overrides based on sandbox scope", async () => {
@@ -274,7 +277,7 @@ describe("Agent-specific sandbox config", () => {
     }
   });
 
-  it("should allow agent-specific docker settings beyond setupCommand", async () => {
+  it("should allow agent-specific docker settings beyond setupCommand", () => {
     const cfg: OpenClawConfig = {
       agents: {
         defaults: {
@@ -304,14 +307,12 @@ describe("Agent-specific sandbox config", () => {
       },
     };
 
-    const context = await resolveContext(cfg, "agent:work:main", "/tmp/test-work");
-
-    expect(context).toBeDefined();
-    expect(context?.docker.image).toBe("work-image");
-    expect(context?.docker.network).toBe("bridge");
+    const sandbox = resolveSandboxConfigForAgent(cfg, "work");
+    expect(sandbox.docker.image).toBe("work-image");
+    expect(sandbox.docker.network).toBe("bridge");
   });
 
-  it("should honor agent-specific sandbox mode overrides", async () => {
+  it("should honor agent-specific sandbox mode overrides", () => {
     for (const scenario of [
       {
         cfg: {
@@ -334,9 +335,9 @@ describe("Agent-specific sandbox config", () => {
           },
         } satisfies OpenClawConfig,
         sessionKey: "agent:main:main",
-        workspaceDir: "/tmp/test",
-        assert: (context: Awaited<ReturnType<typeof resolveContext>>) => {
-          expect(context).toBeNull();
+        assert: (runtime: ReturnType<typeof resolveSandboxRuntimeStatus>) => {
+          expect(runtime.mode).toBe("off");
+          expect(runtime.sandboxed).toBe(false);
         },
       },
       {
@@ -360,23 +361,21 @@ describe("Agent-specific sandbox config", () => {
           },
         } satisfies OpenClawConfig,
         sessionKey: "agent:family:whatsapp:group:123",
-        workspaceDir: "/tmp/test-family",
-        assert: (context: Awaited<ReturnType<typeof resolveContext>>) => {
-          expect(context).toBeDefined();
-          expect(context?.enabled).toBe(true);
+        assert: (runtime: ReturnType<typeof resolveSandboxRuntimeStatus>) => {
+          expect(runtime.mode).toBe("all");
+          expect(runtime.sandboxed).toBe(true);
         },
       },
     ]) {
-      const context = await resolveContext(
-        scenario.cfg,
-        scenario.sessionKey,
-        scenario.workspaceDir,
-      );
-      scenario.assert(context);
+      const runtime = resolveSandboxRuntimeStatus({
+        cfg: scenario.cfg,
+        sessionKey: scenario.sessionKey,
+      });
+      scenario.assert(runtime);
     }
   });
 
-  it("should use agent-specific scope", async () => {
+  it("should use agent-specific scope", () => {
     const cfg: OpenClawConfig = {
       agents: {
         defaults: {
@@ -398,10 +397,8 @@ describe("Agent-specific sandbox config", () => {
       },
     };
 
-    const context = await resolveContext(cfg, "agent:work:slack:channel:456", "/tmp/test-work");
-
-    expect(context).toBeDefined();
-    expect(context?.containerName).toContain("agent-work");
+    const sandbox = resolveSandboxConfigForAgent(cfg, "work");
+    expect(sandbox.scope).toBe("agent");
   });
 
   it("enforces required allowlist tools in default and explicit sandbox configs", async () => {

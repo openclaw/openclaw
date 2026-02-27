@@ -30,7 +30,7 @@ describe("doctor command", () => {
     const stateNote = note.mock.calls.find((call) => call[1] === "State integrity");
     expect(stateNote).toBeTruthy();
     expect(String(stateNote?.[0])).toContain("CRITICAL");
-  }, 30_000);
+  });
 
   it("warns about opencode provider overrides", async () => {
     mockDoctorConfigSnapshot({

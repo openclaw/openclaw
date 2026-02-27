@@ -12,6 +12,7 @@ import {
 } from "discord-api-types/v10";
 import { resolveCommandAuthorizedFromAuthorizers } from "../../channels/command-gating.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { isDangerousNameMatchingEnabled } from "../../config/dangerous-name-matching.js";
 import type { DiscordAccountConfig } from "../../config/types.js";
 import {
   allowListMatches,
@@ -156,6 +157,7 @@ async function authorizeVoiceCommand(
     guildInfo,
     memberRoleIds,
     sender,
+    allowNameMatching: isDangerousNameMatchingEnabled(params.discordConfig),
   });
 
   const ownerAllowList = normalizeDiscordAllowList(
@@ -163,11 +165,15 @@ async function authorizeVoiceCommand(
     ["discord:", "user:", "pk:"],
   );
   const ownerOk = ownerAllowList
-    ? allowListMatches(ownerAllowList, {
-        id: sender.id,
-        name: sender.name,
-        tag: sender.tag,
-      })
+    ? allowListMatches(
+        ownerAllowList,
+        {
+          id: sender.id,
+          name: sender.name,
+          tag: sender.tag,
+        },
+        { allowNameMatching: isDangerousNameMatchingEnabled(params.discordConfig) },
+      )
     : false;
 
   const authorizers = params.useAccessGroups
