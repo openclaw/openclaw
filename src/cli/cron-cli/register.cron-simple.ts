@@ -219,10 +219,12 @@ Run without --dry-run to clean up stale jobs.`,
 
           // Clean up stale jobs by disabling then re-enabling to reset runningAtMs
           let cleaned = 0;
-          for (const job of staleJobs) {
-            try {
-              const wasEnabled = job.enabled !== false;
+          const failedJobs: Array<{ id?: string; name?: string; error: string }> = [];
 
+          for (const job of staleJobs) {
+            const wasEnabled = job.enabled !== false;
+
+            try {
               // First disable to reset runningAtMs
               await callGatewayFromCli("cron.update", opts, {
                 id: job.id,
@@ -231,15 +233,40 @@ Run without --dry-run to clean up stale jobs.`,
 
               // Then re-enable if it was originally enabled
               if (wasEnabled) {
-                await callGatewayFromCli("cron.update", opts, {
-                  id: job.id,
-                  patch: { enabled: true },
-                });
+                try {
+                  await callGatewayFromCli("cron.update", opts, {
+                    id: job.id,
+                    patch: { enabled: true },
+                  });
+                } catch (enableErr) {
+                  // Re-enable failed - job is now disabled but should be enabled
+                  const errorMsg = enableErr instanceof Error ? enableErr.message : String(enableErr);
+                  failedJobs.push({
+                    id: job.id,
+                    name: job.name,
+                    error: `Failed to re-enable job after cleanup: ${errorMsg}`,
+                  });
+                  continue; // Don't count as cleaned
+                }
               }
 
               cleaned++;
-            } catch {
-              // Ignore errors for individual jobs
+            } catch (err) {
+              const errorMsg = err instanceof Error ? err.message : String(err);
+              failedJobs.push({
+                id: job.id,
+                name: job.name,
+                error: errorMsg,
+              });
+            }
+          }
+
+          // Report any failures
+          if (failedJobs.length > 0) {
+            const failedIds = failedJobs.map((j) => j.id || "unknown").join(", ");
+            defaultRuntime.warn(`⚠️  Failed to clean up ${failedJobs.length} job(s): ${failedIds}`);
+            for (const failed of failedJobs) {
+              defaultRuntime.warn(`  - ${failed.id}${failed.name ? ` (${failed.name})` : ""}: ${failed.error}`);
             }
           }
 
