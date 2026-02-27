@@ -165,6 +165,8 @@ export function registerCli(api: OpenClawPluginApi, deps: CliDeps): void {
             } catch (err) {
               console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
               process.exitCode = 1;
+            } finally {
+              await db.close();
             }
           },
         );
@@ -197,6 +199,8 @@ export function registerCli(api: OpenClawPluginApi, deps: CliDeps): void {
           } catch (err) {
             console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
             process.exitCode = 1;
+          } finally {
+            await db.close();
           }
         });
 
@@ -273,6 +277,8 @@ export function registerCli(api: OpenClawPluginApi, deps: CliDeps): void {
           } catch (err) {
             console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
             process.exitCode = 1;
+          } finally {
+            await db.close();
           }
         });
 
@@ -509,6 +515,8 @@ export function registerCli(api: OpenClawPluginApi, deps: CliDeps): void {
                 `\n❌ Sleep cycle failed: ${err instanceof Error ? err.message : String(err)}`,
               );
               process.exitCode = 1;
+            } finally {
+              await db.close();
             }
           },
         );
@@ -557,6 +565,8 @@ export function registerCli(api: OpenClawPluginApi, deps: CliDeps): void {
               `\n❌ Reindex failed: ${err instanceof Error ? err.message : String(err)}`,
             );
             process.exitCode = 1;
+          } finally {
+            await db.close();
           }
         });
 
@@ -628,6 +638,8 @@ export function registerCli(api: OpenClawPluginApi, deps: CliDeps): void {
           } catch (err) {
             console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
             process.exitCode = 1;
+          } finally {
+            await db.close();
           }
         });
       memory
@@ -814,6 +826,8 @@ export function registerCli(api: OpenClawPluginApi, deps: CliDeps): void {
           } catch (err) {
             console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
             process.exitCode = 1;
+          } finally {
+            await db.close();
           }
         });
     },
