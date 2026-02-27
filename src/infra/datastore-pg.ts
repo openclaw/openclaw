@@ -91,8 +91,6 @@ export class PostgresDatastore implements Datastore {
 
   async write(key: string, data: unknown): Promise<void> {
     const dbKey = normalizeKey(key);
-    // Update cache first so sync reads see the latest data immediately
-    cache.set(dbKey, structuredClone(data));
     const pool = await ensurePool();
     await pool.query(
       `insert into ${KV_TABLE} (key, data, updated_at)
@@ -100,6 +98,9 @@ export class PostgresDatastore implements Datastore {
        on conflict (key) do update set data = excluded.data, updated_at = excluded.updated_at`,
       [dbKey, data],
     );
+    // Update cache only after the DB write succeeds so a failed query
+    // never leaves stale optimistic data in the in-memory cache.
+    cache.set(dbKey, structuredClone(data));
   }
 
   async writeWithBackup(key: string, data: unknown): Promise<void> {
