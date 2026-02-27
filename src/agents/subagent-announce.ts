@@ -70,12 +70,17 @@ function buildCompletionDeliveryMessage(params: {
   subagentName: string;
   spawnMode?: SpawnSubagentMode;
   outcome?: SubagentRunOutcome;
+  announceType?: SubagentAnnounceType;
 }): string {
   const findingsText = params.findings.trim();
   if (isAnnounceSkip(findingsText)) {
     return "";
   }
   const hasFindings = findingsText.length > 0 && findingsText !== "(no output)";
+  // Cron completions are standalone messages — skip the subagent status header.
+  if (params.announceType === "cron job") {
+    return hasFindings ? findingsText : "";
+  }
   const header = (() => {
     if (params.outcome?.status === "error") {
       return params.spawnMode === "session"
@@ -1278,6 +1283,7 @@ export async function runSubagentAnnounceFlow(params: {
       subagentName,
       spawnMode: params.spawnMode,
       outcome,
+      announceType,
     });
     const internalSummaryMessage = [
       `[System Message] [sessionId: ${announceSessionId}] A ${announceType} "${taskLabel}" just ${statusLabel}.`,
