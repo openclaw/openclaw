@@ -265,6 +265,16 @@
   align-items: stretch;
   gap: 12px;
   flex: 1;
+  padding: 4px;
+  margin: -4px;
+  border: 2px dashed transparent;
+  border-radius: 12px;
+  transition: background 150ms ease-out, border-color 150ms ease-out;
+}
+
+.chat-compose__row.drag-over {
+  border-color: var(--accent, #4f46e5);
+  background: var(--accent-subtle, rgba(79, 70, 229, 0.05));
 }
 
 :root[data-theme="light"] .chat-compose {

@@ -162,7 +162,7 @@ function generateAttachmentId(): string {
   return `att-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 }
 
-function handlePaste(e: ClipboardEvent, props: ChatProps) {
+async function handlePaste(e: ClipboardEvent, props: ChatProps) {
   const items = e.clipboardData?.items;
   if (!items || !props.onAttachmentsChange) {
     return;
@@ -182,24 +182,99 @@ function handlePaste(e: ClipboardEvent, props: ChatProps) {
 
   e.preventDefault();
 
-  for (const item of imageItems) {
-    const file = item.getAsFile();
-    if (!file) {
-      continue;
-    }
+  const newAttachments: ChatAttachment[] = await Promise.all(
+    imageItems.map(
+      (item) =>
+        new Promise<ChatAttachment>((resolve, reject) => {
+          const file = item.getAsFile();
+          if (!file) {
+            reject(new Error("No file"));
+            return;
+          }
+          const reader = new FileReader();
+          reader.addEventListener("load", () => {
+            resolve({
+              id: generateAttachmentId(),
+              dataUrl: reader.result as string,
+              mimeType: file.type,
+            });
+          });
+          reader.addEventListener("error", () => reject(new Error("Failed to read file")));
+          reader.readAsDataURL(file);
+        }),
+    ),
+  );
 
-    const reader = new FileReader();
-    reader.addEventListener("load", () => {
-      const dataUrl = reader.result as string;
-      const newAttachment: ChatAttachment = {
-        id: generateAttachmentId(),
-        dataUrl,
-        mimeType: file.type,
-      };
-      const current = props.attachments ?? [];
-      props.onAttachmentsChange?.([...current, newAttachment]);
-    });
-    reader.readAsDataURL(file);
+  const current = props.attachments ?? [];
+  props.onAttachmentsChange([...current, ...newAttachments]);
+}
+
+async function handleDrop(e: DragEvent, props: ChatProps) {
+  e.preventDefault();
+  const target = e.currentTarget as HTMLElement;
+  if (target) {
+    target.classList.remove("drag-over");
+  }
+
+  const files = e.dataTransfer?.files;
+  if (!files || files.length === 0 || !props.onAttachmentsChange) {
+    return;
+  }
+
+  const imageFiles: File[] = [];
+  const MAX_SIZE = 5 * 1024 * 1024; // 5MB limit
+  for (let i = 0; i < files.length; i++) {
+    const file = files[i];
+    if (file.type.startsWith("image/")) {
+      if (file.size > MAX_SIZE) {
+        alert(`File ${file.name} is too large (max 5MB)`);
+        continue;
+      }
+      imageFiles.push(file);
+    } else {
+      alert(`File ${file.name} is not a supported image type`);
+    }
+  }
+
+  if (imageFiles.length === 0) {
+    return;
+  }
+
+  const newAttachments: ChatAttachment[] = await Promise.all(
+    imageFiles.map(
+      (file) =>
+        new Promise<ChatAttachment>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.addEventListener("load", () => {
+            resolve({
+              id: generateAttachmentId(),
+              dataUrl: reader.result as string,
+              mimeType: file.type,
+            });
+          });
+          reader.addEventListener("error", () => reject(new Error("Failed to read file")));
+          reader.readAsDataURL(file);
+        }),
+    ),
+  );
+
+  const current = props.attachments ?? [];
+  props.onAttachmentsChange([...current, ...newAttachments]);
+}
+
+function handleDragOver(e: DragEvent) {
+  e.preventDefault();
+  const target = e.currentTarget as HTMLElement;
+  if (target) {
+    target.classList.add("drag-over");
+  }
+}
+
+function handleDragLeave(e: DragEvent) {
+  e.preventDefault();
+  const target = e.currentTarget as HTMLElement;
+  if (target) {
+    target.classList.remove("drag-over");
   }
 }
 
@@ -422,7 +497,11 @@ export function renderChat(props: ChatProps) {
 
       <div class="chat-compose">
         ${renderAttachmentPreview(props)}
-        <div class="chat-compose__row">
+        <div class="chat-compose__row"
+          @dragover=${handleDragOver}
+          @dragleave=${handleDragLeave}
+          @drop=${(e: DragEvent) => handleDrop(e, props)}
+        >
           <label class="field chat-compose__field">
             <span>Message</span>
             <textarea
