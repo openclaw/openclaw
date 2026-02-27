@@ -141,6 +141,7 @@ class NodeRuntime(context: Context) {
     locationEnabled = { locationMode.value != LocationMode.Off },
     smsAvailable = { sms.canSendSms() },
     debugBuild = { BuildConfig.DEBUG },
+    refreshNodeCanvasCapability = { nodeSession.refreshNodeCanvasCapability() },
     onCanvasA2uiPush = {
       _canvasA2uiHydrated.value = true
       _canvasRehydratePending.value = false
