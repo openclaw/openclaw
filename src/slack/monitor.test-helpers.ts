@@ -58,6 +58,15 @@ export const getSlackHandlers = () =>
 
 export const getSlackClient = () => (globalThis as { __slackClient?: SlackClient }).__slackClient;
 
+type MockAppInstance = {
+  start: ReturnType<typeof vi.fn>;
+  stop: ReturnType<typeof vi.fn>;
+  __triggerError: (err?: Error) => void;
+};
+
+export const getSlackAppInstances = () =>
+  (globalThis as { __slackAppInstances?: MockAppInstance[] }).__slackAppInstances ?? [];
+
 export const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 export async function waitForSlackEvent(name: string) {
@@ -146,6 +155,7 @@ export function resetSlackTestState(config: Record<string, unknown> = defaultSla
     created: true,
   });
   getSlackHandlers()?.clear();
+  getSlackAppInstances().length = 0;
 }
 
 vi.mock("../config/config.js", async (importOriginal) => {
@@ -215,13 +225,25 @@ vi.mock("@slack/bolt", () => {
     },
   };
   (globalThis as { __slackClient?: typeof client }).__slackClient = client;
+  const appInstances: App[] = [];
+  (globalThis as { __slackAppInstances?: App[] }).__slackAppInstances = appInstances;
   class App {
     client = client;
+    private errorHandler?: (error: Error) => Promise<void>;
+    constructor() {
+      appInstances.push(this);
+    }
     event(name: string, handler: SlackHandler) {
       handlers.set(name, handler);
     }
     command() {
       /* no-op */
+    }
+    error(handler: (error: Error) => Promise<void>) {
+      this.errorHandler = handler;
+    }
+    __triggerError(err?: Error) {
+      return this.errorHandler?.(err ?? new Error("socket disconnected"));
     }
     start = vi.fn().mockResolvedValue(undefined);
     stop = vi.fn().mockResolvedValue(undefined);

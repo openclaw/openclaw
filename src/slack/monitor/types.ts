@@ -1,6 +1,12 @@
 import type { OpenClawConfig, SlackSlashCommandConfig } from "../../config/config.js";
+import type { BackoffPolicy } from "../../infra/backoff.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import type { SlackFile, SlackMessageEvent } from "../types.js";
+
+export type SlackMonitorTuning = {
+  sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
+  reconnect?: Partial<BackoffPolicy & { maxAttempts: number }>;
+};
 
 export type MonitorSlackOpts = {
   botToken?: string;
@@ -12,6 +18,7 @@ export type MonitorSlackOpts = {
   abortSignal?: AbortSignal;
   mediaMaxMb?: number;
   slashCommand?: SlackSlashCommandConfig;
+  tuning?: SlackMonitorTuning;
 };
 
 export type SlackReactionEvent = {
