@@ -423,6 +423,11 @@ export async function runEmbeddedAttempt(
           disableMessageTool: params.disableMessageTool,
         });
     const tools = sanitizeToolsForGoogle({ tools: toolsRaw, provider: params.provider });
+    // DEBUG: trace cron tool availability
+    const hasCron = tools.some((t: { name: string }) => t.name === "cron");
+    console.log(
+      `[ToolDebug] senderIsOwner=${params.senderIsOwner} agentId=${sessionAgentId} hasCron=${hasCron} toolCount=${tools.length} toolNames=${tools.map((t: { name: string }) => t.name).join(",")}`,
+    );
     const allowedToolNames = collectAllowedToolNames({
       tools,
       clientTools: params.clientTools,
