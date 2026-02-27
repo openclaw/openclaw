@@ -340,7 +340,7 @@ enum GatewaySettingsStore {
 }
 
 enum GatewayDiagnostics {
-    private static let logger = Logger(subsystem: "ai.bot.ios", category: "GatewayDiag")
+    private static let logger = Logger(subsystem: "ai.hanzo.ios", category: "GatewayDiag")
     private static let queue = DispatchQueue(label: "ai.bot.gateway.diagnostics")
     private static let maxLogBytes: Int64 = 512 * 1024
     private static let keepLogBytes: Int64 = 256 * 1024

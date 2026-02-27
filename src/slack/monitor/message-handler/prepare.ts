@@ -1,7 +1,3 @@
-import type { FinalizedMsgContext } from "../../../auto-reply/templating.js";
-import type { ResolvedSlackAccount } from "../../accounts.js";
-import type { SlackMessageEvent } from "../../types.js";
-import type { PreparedSlackMessage } from "./types.js";
 import { resolveAckReaction } from "../../../agents/identity.js";
 import { hasControlCommand } from "../../../auto-reply/command-detection.js";
 import { shouldHandleTextCommands } from "../../../auto-reply/commands-registry.js";
@@ -18,11 +14,11 @@ import {
   buildMentionRegexes,
   matchesMentionWithExplicit,
 } from "../../../auto-reply/reply/mentions.js";
+import type { FinalizedMsgContext } from "../../../auto-reply/templating.js";
 import {
   shouldAckReaction as shouldAckReactionGate,
   type AckReactionScope,
 } from "../../../channels/ack-reactions.js";
-import { formatAllowlistMatchMeta } from "../../../channels/allowlist-match.js";
 import { resolveControlCommandGate } from "../../../channels/command-gating.js";
 import { resolveConversationLabel } from "../../../channels/conversation-label.js";
 import { logInboundDrop } from "../../../channels/logging.js";
@@ -31,24 +27,28 @@ import { recordInboundSession } from "../../../channels/session.js";
 import { readSessionUpdatedAt, resolveStorePath } from "../../../config/sessions.js";
 import { logVerbose, shouldLogVerbose } from "../../../globals.js";
 import { enqueueSystemEvent } from "../../../infra/system-events.js";
-import { buildPairingReply } from "../../../pairing/pairing-messages.js";
-import { upsertChannelPairingRequest } from "../../../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../../../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../../../routing/session-key.js";
+import type { ResolvedSlackAccount } from "../../accounts.js";
 import { reactSlackMessage } from "../../actions.js";
 import { sendMessageSlack } from "../../send.js";
 import { resolveSlackThreadContext } from "../../threading.js";
+import type { SlackMessageEvent } from "../../types.js";
 import { resolveSlackAllowListMatch, resolveSlackUserAllowed } from "../allow-list.js";
 import { resolveSlackEffectiveAllowFrom } from "../auth.js";
 import { resolveSlackChannelConfig } from "../channel-config.js";
 import { stripSlackMentionsForCommandDetection } from "../commands.js";
 import { normalizeSlackChannelType, type SlackMonitorContext } from "../context.js";
+import { authorizeSlackDirectMessage } from "../dm-auth.js";
 import {
+  resolveSlackAttachmentContent,
+  MAX_SLACK_MEDIA_FILES,
   resolveSlackMedia,
   resolveSlackThreadHistory,
   resolveSlackThreadStarter,
 } from "../media.js";
 import { resolveSlackRoomContextHints } from "../room-context.js";
+import type { PreparedSlackMessage } from "./types.js";
 
 export async function prepareSlackMessage(params: {
   ctx: SlackMonitorContext;
@@ -125,7 +125,9 @@ export async function prepareSlackMessage(params: {
     return null;
   }
 
-  const { allowFromLower } = await resolveSlackEffectiveAllowFrom(ctx);
+  const { allowFromLower } = await resolveSlackEffectiveAllowFrom(ctx, {
+    includePairingStore: isDirectMessage,
+  });
 
   if (isDirectMessage) {
     const directUserId = message.user;
@@ -133,56 +135,31 @@ export async function prepareSlackMessage(params: {
       logVerbose("slack: drop dm message (missing user id)");
       return null;
     }
-    if (!ctx.dmEnabled || ctx.dmPolicy === "disabled") {
-      logVerbose("slack: drop dm (dms disabled)");
+    const allowed = await authorizeSlackDirectMessage({
+      ctx,
+      accountId: account.accountId,
+      senderId: directUserId,
+      allowFromLower,
+      resolveSenderName: ctx.resolveUserName,
+      sendPairingReply: async (text) => {
+        await sendMessageSlack(message.channel, text, {
+          token: ctx.botToken,
+          client: ctx.app.client,
+          accountId: account.accountId,
+        });
+      },
+      onDisabled: () => {
+        logVerbose("slack: drop dm (dms disabled)");
+      },
+      onUnauthorized: ({ allowMatchMeta }) => {
+        logVerbose(
+          `Blocked unauthorized slack sender ${message.user} (dmPolicy=${ctx.dmPolicy}, ${allowMatchMeta})`,
+        );
+      },
+      log: logVerbose,
+    });
+    if (!allowed) {
       return null;
-    }
-    if (ctx.dmPolicy !== "open") {
-      const allowMatch = resolveSlackAllowListMatch({
-        allowList: allowFromLower,
-        id: directUserId,
-      });
-      const allowMatchMeta = formatAllowlistMatchMeta(allowMatch);
-      if (!allowMatch.allowed) {
-        if (ctx.dmPolicy === "pairing") {
-          const sender = await ctx.resolveUserName(directUserId);
-          const senderName = sender?.name ?? undefined;
-          const { code, created } = await upsertChannelPairingRequest({
-            channel: "slack",
-            id: directUserId,
-            meta: { name: senderName },
-          });
-          if (created) {
-            logVerbose(
-              `slack pairing request sender=${directUserId} name=${
-                senderName ?? "unknown"
-              } (${allowMatchMeta})`,
-            );
-            try {
-              await sendMessageSlack(
-                message.channel,
-                buildPairingReply({
-                  channel: "slack",
-                  idLine: `Your Slack user id: ${directUserId}`,
-                  code,
-                }),
-                {
-                  token: ctx.botToken,
-                  client: ctx.app.client,
-                  accountId: account.accountId,
-                },
-              );
-            } catch (err) {
-              logVerbose(`slack pairing reply failed for ${message.user}: ${String(err)}`);
-            }
-          }
-        } else {
-          logVerbose(
-            `Blocked unauthorized slack sender ${message.user} (dmPolicy=${ctx.dmPolicy}, ${allowMatchMeta})`,
-          );
-        }
-        return null;
-      }
     }
   }
 
@@ -243,6 +220,7 @@ export async function prepareSlackMessage(params: {
         allowList: channelConfig?.users,
         userId: senderId,
         userName: senderName,
+        allowNameMatching: ctx.allowNameMatching,
       })
     : true;
   if (isRoom && !channelUserAuthorized) {
@@ -262,6 +240,7 @@ export async function prepareSlackMessage(params: {
     allowList: allowFromLower,
     id: senderId,
     name: senderName,
+    allowNameMatching: ctx.allowNameMatching,
   }).allowed;
   const channelUsersAllowlistConfigured =
     isRoom && Array.isArray(channelConfig?.users) && channelConfig.users.length > 0;
@@ -271,6 +250,7 @@ export async function prepareSlackMessage(params: {
           allowList: channelConfig?.users,
           userId: senderId,
           userName: senderName,
+          allowNameMatching: ctx.allowNameMatching,
         })
       : false;
   const commandGate = resolveControlCommandGate({
@@ -342,8 +322,38 @@ export async function prepareSlackMessage(params: {
     token: ctx.botToken,
     maxBytes: ctx.mediaMaxBytes,
   });
-  const mediaPlaceholder = media ? media.map((m) => m.placeholder).join(" ") : undefined;
-  const rawBody = (message.text ?? "").trim() || mediaPlaceholder || "";
+
+  // Resolve forwarded message content (text + media) from Slack attachments
+  const attachmentContent = await resolveSlackAttachmentContent({
+    attachments: message.attachments,
+    token: ctx.botToken,
+    maxBytes: ctx.mediaMaxBytes,
+  });
+
+  // Merge forwarded media into the message's media array
+  const mergedMedia = [...(media ?? []), ...(attachmentContent?.media ?? [])];
+  const effectiveDirectMedia = mergedMedia.length > 0 ? mergedMedia : null;
+
+  const mediaPlaceholder = effectiveDirectMedia
+    ? effectiveDirectMedia.map((m) => m.placeholder).join(" ")
+    : undefined;
+
+  // When files were attached but all downloads failed, create a fallback
+  // placeholder so the message is still delivered to the agent instead of
+  // being silently dropped (#25064).
+  const fileOnlyFallback =
+    !mediaPlaceholder && (message.files?.length ?? 0) > 0
+      ? message
+          .files!.slice(0, MAX_SLACK_MEDIA_FILES)
+          .map((f) => f.name?.trim() || "file")
+          .join(", ")
+      : undefined;
+  const fileOnlyPlaceholder = fileOnlyFallback ? `[Slack file: ${fileOnlyFallback}]` : undefined;
+
+  const rawBody =
+    [(message.text ?? "").trim(), attachmentContent?.text, mediaPlaceholder, fileOnlyPlaceholder]
+      .filter(Boolean)
+      .join("\n") || "";
   if (!rawBody) {
     return null;
   }
@@ -478,7 +488,7 @@ export async function prepareSlackMessage(params: {
       const snippet = starter.text.replace(/\s+/g, " ").slice(0, 80);
       threadLabel = `Slack thread ${roomLabel}${snippet ? `: ${snippet}` : ""}`;
       // If current message has no files but thread starter does, fetch starter's files
-      if (!media && starter.files && starter.files.length > 0) {
+      if (!effectiveDirectMedia && starter.files && starter.files.length > 0) {
         threadStarterMedia = await resolveSlackMedia({
           files: starter.files,
           token: ctx.botToken,
@@ -503,7 +513,7 @@ export async function prepareSlackMessage(params: {
       storePath,
       sessionKey, // Thread-specific session key
     });
-    if (threadInitialHistoryLimit > 0 && !threadSessionPreviousTimestamp) {
+    if (threadInitialHistoryLimit > 0) {
       const threadHistory = await resolveSlackThreadHistory({
         channelId: message.channel,
         threadTs,
@@ -554,8 +564,8 @@ export async function prepareSlackMessage(params: {
     }
   }
 
-  // Use thread starter media if current message has none
-  const effectiveMedia = media ?? threadStarterMedia;
+  // Use direct media (including forwarded attachment media) if available, else thread starter media
+  const effectiveMedia = effectiveDirectMedia ?? threadStarterMedia;
   const firstMedia = effectiveMedia?.[0];
 
   const inboundHistory =
@@ -624,6 +634,7 @@ export async function prepareSlackMessage(params: {
           channel: "slack",
           to: `user:${message.user}`,
           accountId: route.accountId,
+          threadId: threadContext.messageThreadId,
         }
       : undefined,
     onRecordError: (err) => {

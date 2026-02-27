@@ -1,12 +1,27 @@
-import type { TUI } from "@mariozechner/pi-tui";
-import type { ChatLog } from "./components/chat-log.js";
-import type { AgentEvent, ChatEvent, TuiStateAccess } from "./tui-types.js";
 import { asString, extractTextFromMessage, isCommandMessage } from "./tui-formatters.js";
 import { TuiStreamAssembler } from "./tui-stream-assembler.js";
+import type { AgentEvent, ChatEvent, TuiStateAccess } from "./tui-types.js";
+
+type EventHandlerChatLog = {
+  startTool: (toolCallId: string, toolName: string, args: unknown) => void;
+  updateToolResult: (
+    toolCallId: string,
+    result: unknown,
+    options?: { partial?: boolean; isError?: boolean },
+  ) => void;
+  addSystem: (text: string) => void;
+  updateAssistant: (text: string, runId: string) => void;
+  finalizeAssistant: (text: string, runId: string) => void;
+  dropAssistant: (runId: string) => void;
+};
+
+type EventHandlerTui = {
+  requestRender: () => void;
+};
 
 type EventHandlerContext = {
-  chatLog: ChatLog;
-  tui: TUI;
+  chatLog: EventHandlerChatLog;
+  tui: EventHandlerTui;
   state: TuiStateAccess;
   setActivityStatus: (text: string) => void;
   refreshSessionInfo?: () => Promise<void>;
@@ -85,6 +100,33 @@ export function createEventHandlers(context: EventHandlerContext) {
     }
   };
 
+  const finalizeRun = (params: {
+    runId: string;
+    wasActiveRun: boolean;
+    status: "idle" | "error";
+  }) => {
+    noteFinalizedRun(params.runId);
+    clearActiveRunIfMatch(params.runId);
+    if (params.wasActiveRun) {
+      setActivityStatus(params.status);
+    }
+    void refreshSessionInfo?.();
+  };
+
+  const terminateRun = (params: {
+    runId: string;
+    wasActiveRun: boolean;
+    status: "aborted" | "error";
+  }) => {
+    streamAssembler.drop(params.runId);
+    sessionRuns.delete(params.runId);
+    clearActiveRunIfMatch(params.runId);
+    if (params.wasActiveRun) {
+      setActivityStatus(params.status);
+    }
+    void refreshSessionInfo?.();
+  };
+
   const hasConcurrentActiveRun = (runId: string) => {
     const activeRunId = state.activeChatRunId;
     if (!activeRunId || activeRunId === runId) {
@@ -138,12 +180,7 @@ export function createEventHandlers(context: EventHandlerContext) {
       if (!evt.message) {
         maybeRefreshHistoryForRun(evt.runId);
         chatLog.dropAssistant(evt.runId);
-        noteFinalizedRun(evt.runId);
-        clearActiveRunIfMatch(evt.runId);
-        if (wasActiveRun) {
-          setActivityStatus("idle");
-        }
-        void refreshSessionInfo?.();
+        finalizeRun({ runId: evt.runId, wasActiveRun, status: "idle" });
         tui.requestRender();
         return;
       }
@@ -153,13 +190,7 @@ export function createEventHandlers(context: EventHandlerContext) {
         if (text) {
           chatLog.addSystem(text);
         }
-        streamAssembler.drop(evt.runId);
-        noteFinalizedRun(evt.runId);
-        clearActiveRunIfMatch(evt.runId);
-        if (wasActiveRun) {
-          setActivityStatus("idle");
-        }
-        void refreshSessionInfo?.();
+        finalizeRun({ runId: evt.runId, wasActiveRun, status: "idle" });
         tui.requestRender();
         return;
       }
@@ -179,36 +210,22 @@ export function createEventHandlers(context: EventHandlerContext) {
       } else {
         chatLog.finalizeAssistant(finalText, evt.runId);
       }
-      noteFinalizedRun(evt.runId);
-      clearActiveRunIfMatch(evt.runId);
-      if (wasActiveRun) {
-        setActivityStatus(stopReason === "error" ? "error" : "idle");
-      }
-      // Refresh session info to update token counts in footer
-      void refreshSessionInfo?.();
+      finalizeRun({
+        runId: evt.runId,
+        wasActiveRun,
+        status: stopReason === "error" ? "error" : "idle",
+      });
     }
     if (evt.state === "aborted") {
       const wasActiveRun = state.activeChatRunId === evt.runId;
       chatLog.addSystem("run aborted");
-      streamAssembler.drop(evt.runId);
-      sessionRuns.delete(evt.runId);
-      clearActiveRunIfMatch(evt.runId);
-      if (wasActiveRun) {
-        setActivityStatus("aborted");
-      }
-      void refreshSessionInfo?.();
+      terminateRun({ runId: evt.runId, wasActiveRun, status: "aborted" });
       maybeRefreshHistoryForRun(evt.runId);
     }
     if (evt.state === "error") {
       const wasActiveRun = state.activeChatRunId === evt.runId;
       chatLog.addSystem(`run error: ${evt.errorMessage ?? "unknown"}`);
-      streamAssembler.drop(evt.runId);
-      sessionRuns.delete(evt.runId);
-      clearActiveRunIfMatch(evt.runId);
-      if (wasActiveRun) {
-        setActivityStatus("error");
-      }
-      void refreshSessionInfo?.();
+      terminateRun({ runId: evt.runId, wasActiveRun, status: "error" });
       maybeRefreshHistoryForRun(evt.runId);
     }
     tui.requestRender();

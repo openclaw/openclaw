@@ -1,5 +1,3 @@
-import fs from "node:fs/promises";
-import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { CronService } from "./service.js";
 import {
@@ -7,6 +5,7 @@ import {
   createCronStoreHarness,
   createNoopLogger,
   installCronTestHooks,
+  writeCronStoreSnapshot,
 } from "./service.test-harness.js";
 
 const noopLogger = createNoopLogger();
@@ -14,6 +13,34 @@ const { makeStorePath } = createCronStoreHarness();
 installCronTestHooks({ logger: noopLogger });
 
 describe("CronService interval/cron jobs fire on time", () => {
+  const runLateTimerAndLoadJob = async ({
+    cron,
+    finished,
+    jobId,
+    firstDueAt,
+  }: {
+    cron: CronService;
+    finished: { waitForOk: (id: string) => Promise<unknown> };
+    jobId: string;
+    firstDueAt: number;
+  }) => {
+    vi.setSystemTime(new Date(firstDueAt + 5));
+    await vi.runOnlyPendingTimersAsync();
+    await finished.waitForOk(jobId);
+    const jobs = await cron.list({ includeDisabled: true });
+    return jobs.find((current) => current.id === jobId);
+  };
+
+  const expectMainSystemEvent = (
+    enqueueSystemEvent: ReturnType<typeof vi.fn>,
+    expectedText: string,
+  ) => {
+    expect(enqueueSystemEvent).toHaveBeenCalledWith(
+      expectedText,
+      expect.objectContaining({ agentId: undefined }),
+    );
+  };
+
   it("fires an every-type main job when the timer fires a few ms late", async () => {
     const store = await makeStorePath();
     const { cron, enqueueSystemEvent, finished } = createStartedCronServiceWithFinishedBarrier({
@@ -34,18 +61,13 @@ describe("CronService interval/cron jobs fire on time", () => {
     const firstDueAt = job.state.nextRunAtMs!;
     expect(firstDueAt).toBe(Date.parse("2025-12-13T00:00:00.000Z") + 10_000);
 
-    // Simulate setTimeout firing 5ms late (the race condition).
-    vi.setSystemTime(new Date(firstDueAt + 5));
-    await vi.runOnlyPendingTimersAsync();
-
-    await finished.waitForOk(job.id);
-    const jobs = await cron.list({ includeDisabled: true });
-    const updated = jobs.find((current) => current.id === job.id);
-
-    expect(enqueueSystemEvent).toHaveBeenCalledWith(
-      "tick",
-      expect.objectContaining({ agentId: undefined }),
-    );
+    const updated = await runLateTimerAndLoadJob({
+      cron,
+      finished,
+      jobId: job.id,
+      firstDueAt,
+    });
+    expectMainSystemEvent(enqueueSystemEvent, "tick");
     expect(updated?.state.lastStatus).toBe("ok");
     // nextRunAtMs must advance by at least one full interval past the due time.
     expect(updated?.state.nextRunAtMs).toBeGreaterThanOrEqual(firstDueAt + 10_000);
@@ -76,18 +98,13 @@ describe("CronService interval/cron jobs fire on time", () => {
 
     const firstDueAt = job.state.nextRunAtMs!;
 
-    // Simulate setTimeout firing 5ms late.
-    vi.setSystemTime(new Date(firstDueAt + 5));
-    await vi.runOnlyPendingTimersAsync();
-
-    await finished.waitForOk(job.id);
-    const jobs = await cron.list({ includeDisabled: true });
-    const updated = jobs.find((current) => current.id === job.id);
-
-    expect(enqueueSystemEvent).toHaveBeenCalledWith(
-      "cron-tick",
-      expect.objectContaining({ agentId: undefined }),
-    );
+    const updated = await runLateTimerAndLoadJob({
+      cron,
+      finished,
+      jobId: job.id,
+      firstDueAt,
+    });
+    expectMainSystemEvent(enqueueSystemEvent, "cron-tick");
     expect(updated?.state.lastStatus).toBe("ok");
     // nextRunAtMs should be the next whole-minute boundary (60s later).
     expect(updated?.state.nextRunAtMs).toBe(firstDueAt + 60_000);
@@ -102,44 +119,35 @@ describe("CronService interval/cron jobs fire on time", () => {
     const requestHeartbeatNow = vi.fn();
     const nowMs = Date.parse("2025-12-13T00:00:00.000Z");
 
-    await fs.mkdir(path.dirname(store.storePath), { recursive: true });
-    await fs.writeFile(
-      store.storePath,
-      JSON.stringify(
+    await writeCronStoreSnapshot({
+      storePath: store.storePath,
+      jobs: [
         {
-          version: 1,
-          jobs: [
-            {
-              id: "legacy-every",
-              name: "legacy every",
-              enabled: true,
-              createdAtMs: nowMs,
-              updatedAtMs: nowMs,
-              schedule: { kind: "every", everyMs: 120_000 },
-              sessionTarget: "main",
-              wakeMode: "now",
-              payload: { kind: "systemEvent", text: "sf-tick" },
-              state: { nextRunAtMs: nowMs + 120_000 },
-            },
-            {
-              id: "minute-cron",
-              name: "minute cron",
-              enabled: true,
-              createdAtMs: nowMs,
-              updatedAtMs: nowMs,
-              schedule: { kind: "cron", expr: "* * * * *", tz: "UTC" },
-              sessionTarget: "main",
-              wakeMode: "now",
-              payload: { kind: "systemEvent", text: "minute-tick" },
-              state: { nextRunAtMs: nowMs + 60_000 },
-            },
-          ],
+          id: "legacy-every",
+          name: "legacy every",
+          enabled: true,
+          createdAtMs: nowMs,
+          updatedAtMs: nowMs,
+          schedule: { kind: "every", everyMs: 120_000 },
+          sessionTarget: "main",
+          wakeMode: "now",
+          payload: { kind: "systemEvent", text: "sf-tick" },
+          state: { nextRunAtMs: nowMs + 120_000 },
         },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+        {
+          id: "minute-cron",
+          name: "minute cron",
+          enabled: true,
+          createdAtMs: nowMs,
+          updatedAtMs: nowMs,
+          schedule: { kind: "cron", expr: "* * * * *", tz: "UTC" },
+          sessionTarget: "main",
+          wakeMode: "now",
+          payload: { kind: "systemEvent", text: "minute-tick" },
+          state: { nextRunAtMs: nowMs + 60_000 },
+        },
+      ],
+    });
 
     const cron = new CronService({
       storePath: store.storePath,
@@ -147,7 +155,7 @@ describe("CronService interval/cron jobs fire on time", () => {
       log: noopLogger,
       enqueueSystemEvent,
       requestHeartbeatNow,
-      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" })),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     });
 
     await cron.start();

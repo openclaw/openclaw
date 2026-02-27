@@ -1,5 +1,5 @@
-import type { CallManagerContext } from "./context.js";
 import { TerminalStates, type CallId } from "../types.js";
+import type { CallManagerContext } from "./context.js";
 import { persistCallRecord } from "./store.js";
 
 type TimerContext = Pick<
@@ -77,18 +77,28 @@ export function resolveTranscriptWaiter(
   ctx: TranscriptWaiterContext,
   callId: CallId,
   transcript: string,
-): void {
+  turnToken?: string,
+): boolean {
   const waiter = ctx.transcriptWaiters.get(callId);
   if (!waiter) {
-    return;
+    return false;
+  }
+  if (waiter.turnToken && waiter.turnToken !== turnToken) {
+    return false;
   }
   clearTranscriptWaiter(ctx, callId);
   waiter.resolve(transcript);
+  return true;
 }
 
-export function waitForFinalTranscript(ctx: TimerContext, callId: CallId): Promise<string> {
-  // Only allow one in-flight waiter per call.
-  rejectTranscriptWaiter(ctx, callId, "Transcript waiter replaced");
+export function waitForFinalTranscript(
+  ctx: TimerContext,
+  callId: CallId,
+  turnToken?: string,
+): Promise<string> {
+  if (ctx.transcriptWaiters.has(callId)) {
+    return Promise.reject(new Error("Already waiting for transcript"));
+  }
 
   const timeoutMs = ctx.config.transcriptTimeoutMs;
   return new Promise((resolve, reject) => {
@@ -97,6 +107,6 @@ export function waitForFinalTranscript(ctx: TimerContext, callId: CallId): Promi
       reject(new Error(`Timed out waiting for transcript after ${timeoutMs}ms`));
     }, timeoutMs);
 
-    ctx.transcriptWaiters.set(callId, { resolve, reject, timeout });
+    ctx.transcriptWaiters.set(callId, { resolve, reject, timeout, turnToken });
   });
 }

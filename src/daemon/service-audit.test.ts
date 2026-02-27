@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { auditGatewayServiceConfig, SERVICE_AUDIT_CODES } from "./service-audit.js";
+import {
+  auditGatewayServiceConfig,
+  checkTokenDrift,
+  SERVICE_AUDIT_CODES,
+} from "./service-audit.js";
 import { buildMinimalServicePath } from "./service-env.js";
 
 describe("auditGatewayServiceConfig", () => {
@@ -95,5 +99,41 @@ describe("auditGatewayServiceConfig", () => {
     expect(
       audit.issues.some((issue) => issue.code === SERVICE_AUDIT_CODES.gatewayTokenMismatch),
     ).toBe(false);
+  });
+});
+
+describe("checkTokenDrift", () => {
+  it("returns null when both tokens are undefined", () => {
+    const result = checkTokenDrift({ serviceToken: undefined, configToken: undefined });
+    expect(result).toBeNull();
+  });
+
+  it("returns null when both tokens are empty strings", () => {
+    const result = checkTokenDrift({ serviceToken: "", configToken: "" });
+    expect(result).toBeNull();
+  });
+
+  it("returns null when tokens match", () => {
+    const result = checkTokenDrift({ serviceToken: "same-token", configToken: "same-token" });
+    expect(result).toBeNull();
+  });
+
+  it("detects drift when config has token but service has different token", () => {
+    const result = checkTokenDrift({ serviceToken: "old-token", configToken: "new-token" });
+    expect(result).not.toBeNull();
+    expect(result?.code).toBe(SERVICE_AUDIT_CODES.gatewayTokenDrift);
+    expect(result?.message).toContain("differs from service token");
+  });
+
+  it("detects drift when config has token but service has no token", () => {
+    const result = checkTokenDrift({ serviceToken: undefined, configToken: "new-token" });
+    expect(result).not.toBeNull();
+    expect(result?.code).toBe(SERVICE_AUDIT_CODES.gatewayTokenDrift);
+  });
+
+  it("returns null when service has token but config does not", () => {
+    // This is not really drift - service will work, just config is incomplete
+    const result = checkTokenDrift({ serviceToken: "service-token", configToken: undefined });
+    expect(result).toBeNull();
   });
 });

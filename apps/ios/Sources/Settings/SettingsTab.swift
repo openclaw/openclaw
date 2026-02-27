@@ -51,7 +51,7 @@ struct SettingsTab: View {
     @State private var showResetOnboardingAlert: Bool = false
     @State private var suppressCredentialPersist: Bool = false
 
-    private let gatewayLogger = Logger(subsystem: "ai.bot.ios", category: "GatewaySettings")
+    private let gatewayLogger = Logger(subsystem: "ai.hanzo.ios", category: "GatewaySettings")
 
     var body: some View {
         NavigationStack {

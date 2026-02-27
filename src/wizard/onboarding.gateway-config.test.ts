@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
+import { createWizardPrompter as buildWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import type { RuntimeEnv } from "../runtime.js";
-import type { WizardPrompter } from "./prompts.js";
+import type { WizardPrompter, WizardSelectParams } from "./prompts.js";
 
 const mocks = vi.hoisted(() => ({
   randomToken: vi.fn(),
@@ -24,17 +25,14 @@ describe("configureGatewayForOnboarding", () => {
   function createPrompter(params: { selectQueue: string[]; textQueue: Array<string | undefined> }) {
     const selectQueue = [...params.selectQueue];
     const textQueue = [...params.textQueue];
+    const select = vi.fn(
+      async (_params: WizardSelectParams<unknown>) => selectQueue.shift() as unknown,
+    ) as unknown as WizardPrompter["select"];
 
-    return {
-      intro: vi.fn(async () => {}),
-      outro: vi.fn(async () => {}),
-      note: vi.fn(async () => {}),
-      select: vi.fn(async () => selectQueue.shift() as string),
-      multiselect: vi.fn(async () => []),
+    return buildWizardPrompter({
+      select,
       text: vi.fn(async () => textQueue.shift() as string),
-      confirm: vi.fn(async () => false),
-      progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
-    } satisfies WizardPrompter;
+    });
   }
 
   function createRuntime(): RuntimeEnv {
@@ -42,6 +40,20 @@ describe("configureGatewayForOnboarding", () => {
       log: vi.fn(),
       error: vi.fn(),
       exit: vi.fn(),
+    };
+  }
+
+  function createQuickstartGateway(authMode: "token" | "password") {
+    return {
+      hasExisting: false,
+      port: 18789,
+      bind: "loopback" as const,
+      authMode,
+      tailscaleMode: "off" as const,
+      token: undefined,
+      password: undefined,
+      customBindHost: undefined,
+      tailscaleResetOnExit: false,
     };
   }
 
@@ -59,17 +71,7 @@ describe("configureGatewayForOnboarding", () => {
       baseConfig: {},
       nextConfig: {},
       localPort: 18789,
-      quickstartGateway: {
-        hasExisting: false,
-        port: 18789,
-        bind: "loopback",
-        authMode: "token",
-        tailscaleMode: "off",
-        token: undefined,
-        password: undefined,
-        customBindHost: undefined,
-        tailscaleResetOnExit: false,
-      },
+      quickstartGateway: createQuickstartGateway("token"),
       prompter,
       runtime,
     });
@@ -99,17 +101,7 @@ describe("configureGatewayForOnboarding", () => {
       baseConfig: {},
       nextConfig: {},
       localPort: 18789,
-      quickstartGateway: {
-        hasExisting: false,
-        port: 18789,
-        bind: "loopback",
-        authMode: "password",
-        tailscaleMode: "off",
-        token: undefined,
-        password: undefined,
-        customBindHost: undefined,
-        tailscaleResetOnExit: false,
-      },
+      quickstartGateway: createQuickstartGateway("password"),
       prompter,
       runtime,
     });
@@ -118,5 +110,30 @@ describe("configureGatewayForOnboarding", () => {
     expect(authConfig?.mode).toBe("password");
     expect(authConfig?.password).toBe("");
     expect(authConfig?.password).not.toBe("undefined");
+  });
+
+  it("seeds control UI allowed origins for non-loopback binds", async () => {
+    mocks.randomToken.mockReturnValue("generated-token");
+
+    const prompter = createPrompter({
+      selectQueue: ["lan", "token", "off"],
+      textQueue: ["18789", undefined],
+    });
+    const runtime = createRuntime();
+
+    const result = await configureGatewayForOnboarding({
+      flow: "advanced",
+      baseConfig: {},
+      nextConfig: {},
+      localPort: 18789,
+      quickstartGateway: createQuickstartGateway("token"),
+      prompter,
+      runtime,
+    });
+
+    expect(result.nextConfig.gateway?.controlUi?.allowedOrigins).toEqual([
+      "http://localhost:18789",
+      "http://127.0.0.1:18789",
+    ]);
   });
 });

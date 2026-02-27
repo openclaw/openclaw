@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { captureFullEnv } from "../test-utils/env.js";
+import { SUPERVISOR_HINT_ENV_VARS } from "./supervisor-markers.js";
 
 const spawnMock = vi.hoisted(() => vi.fn());
 
@@ -17,15 +18,13 @@ afterEach(() => {
   envSnapshot.restore();
   process.argv = [...originalArgv];
   process.execArgv = [...originalExecArgv];
-  spawnMock.mockReset();
+  spawnMock.mockClear();
 });
 
 function clearSupervisorHints() {
-  delete process.env.LAUNCH_JOB_LABEL;
-  delete process.env.LAUNCH_JOB_NAME;
-  delete process.env.INVOCATION_ID;
-  delete process.env.SYSTEMD_EXEC_PID;
-  delete process.env.JOURNAL_STREAM;
+  for (const key of SUPERVISOR_HINT_ENV_VARS) {
+    delete process.env[key];
+  }
 }
 
 describe("restartGatewayProcessWithFreshPid", () => {
@@ -61,6 +60,30 @@ describe("restartGatewayProcessWithFreshPid", () => {
         stdio: "inherit",
       }),
     );
+  });
+
+  it("returns supervised when BOT_LAUNCHD_LABEL is set (stock launchd plist)", () => {
+    clearSupervisorHints();
+    process.env.BOT_LAUNCHD_LABEL = "ai.bot.gateway";
+    const result = restartGatewayProcessWithFreshPid();
+    expect(result.mode).toBe("supervised");
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it("returns supervised when BOT_SYSTEMD_UNIT is set", () => {
+    clearSupervisorHints();
+    process.env.BOT_SYSTEMD_UNIT = "hanzo-bot-gateway.service";
+    const result = restartGatewayProcessWithFreshPid();
+    expect(result.mode).toBe("supervised");
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it("returns supervised when BOT_SERVICE_MARKER is set", () => {
+    clearSupervisorHints();
+    process.env.BOT_SERVICE_MARKER = "gateway";
+    const result = restartGatewayProcessWithFreshPid();
+    expect(result.mode).toBe("supervised");
+    expect(spawnMock).not.toHaveBeenCalled();
   });
 
   it("returns failed when spawn throws", () => {

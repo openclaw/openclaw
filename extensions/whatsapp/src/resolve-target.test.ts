@@ -71,8 +71,10 @@ vi.mock("bot/plugin-sdk", () => ({
   readStringParam: vi.fn(),
   resolveDefaultWhatsAppAccountId: vi.fn(),
   resolveWhatsAppAccount: vi.fn(),
+  resolveWhatsAppGroupIntroHint: vi.fn(),
   resolveWhatsAppGroupRequireMention: vi.fn(),
   resolveWhatsAppGroupToolPolicy: vi.fn(),
+  resolveWhatsAppMentionStripPatterns: vi.fn(() => []),
   applyAccountNameToChannelSection: vi.fn(),
 }));
 
@@ -101,6 +103,9 @@ describe("whatsapp resolveTarget", () => {
     });
 
     expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw result.error;
+    }
     expect(result.to).toBe("5511999999999@s.whatsapp.net");
   });
 
@@ -112,6 +117,9 @@ describe("whatsapp resolveTarget", () => {
     });
 
     expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw result.error;
+    }
     expect(result.to).toBe("5511999999999@s.whatsapp.net");
   });
 
@@ -123,6 +131,9 @@ describe("whatsapp resolveTarget", () => {
     });
 
     expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw result.error;
+    }
     expect(result.to).toBe("5511999999999@s.whatsapp.net");
   });
 
@@ -134,6 +145,9 @@ describe("whatsapp resolveTarget", () => {
     });
 
     expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw result.error;
+    }
     expect(result.to).toBe("120363123456789@g.us");
   });
 
@@ -145,6 +159,9 @@ describe("whatsapp resolveTarget", () => {
     });
 
     expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error("expected resolution to fail");
+    }
     expect(result.error).toBeDefined();
   });
 

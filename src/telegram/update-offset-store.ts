@@ -4,11 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 
-const STORE_VERSION = 1;
+const STORE_VERSION = 2;
 
 type TelegramUpdateOffsetState = {
   version: number;
   lastUpdateId: number | null;
+  botId: string | null;
 };
 
 function normalizeAccountId(accountId?: string) {
@@ -28,16 +29,43 @@ function resolveTelegramUpdateOffsetPath(
   return path.join(stateDir, "telegram", `update-offset-${normalized}.json`);
 }
 
+function extractBotIdFromToken(token?: string): string | null {
+  const trimmed = token?.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const [rawBotId] = trimmed.split(":", 1);
+  if (!rawBotId || !/^\d+$/.test(rawBotId)) {
+    return null;
+  }
+  return rawBotId;
+}
+
 function safeParseState(raw: string): TelegramUpdateOffsetState | null {
   try {
-    const parsed = JSON.parse(raw) as TelegramUpdateOffsetState;
-    if (parsed?.version !== STORE_VERSION) {
+    const parsed = JSON.parse(raw) as {
+      version?: number;
+      lastUpdateId?: number | null;
+      botId?: string | null;
+    };
+    if (parsed?.version !== STORE_VERSION && parsed?.version !== 1) {
       return null;
     }
     if (parsed.lastUpdateId !== null && typeof parsed.lastUpdateId !== "number") {
       return null;
     }
-    return parsed;
+    if (
+      parsed.version === STORE_VERSION &&
+      parsed.botId !== null &&
+      typeof parsed.botId !== "string"
+    ) {
+      return null;
+    }
+    return {
+      version: STORE_VERSION,
+      lastUpdateId: parsed.lastUpdateId ?? null,
+      botId: parsed.version === STORE_VERSION ? (parsed.botId ?? null) : null,
+    };
   } catch {
     return null;
   }
@@ -45,12 +73,20 @@ function safeParseState(raw: string): TelegramUpdateOffsetState | null {
 
 export async function readTelegramUpdateOffset(params: {
   accountId?: string;
+  botToken?: string;
   env?: NodeJS.ProcessEnv;
 }): Promise<number | null> {
   const filePath = resolveTelegramUpdateOffsetPath(params.accountId, params.env);
   try {
     const raw = await fs.readFile(filePath, "utf-8");
     const parsed = safeParseState(raw);
+    const expectedBotId = extractBotIdFromToken(params.botToken);
+    if (expectedBotId && parsed?.botId && parsed.botId !== expectedBotId) {
+      return null;
+    }
+    if (expectedBotId && parsed?.botId === null) {
+      return null;
+    }
     return parsed?.lastUpdateId ?? null;
   } catch (err) {
     const code = (err as { code?: string }).code;
@@ -64,6 +100,7 @@ export async function readTelegramUpdateOffset(params: {
 export async function writeTelegramUpdateOffset(params: {
   accountId?: string;
   updateId: number;
+  botToken?: string;
   env?: NodeJS.ProcessEnv;
 }): Promise<void> {
   const filePath = resolveTelegramUpdateOffsetPath(params.accountId, params.env);
@@ -73,10 +110,27 @@ export async function writeTelegramUpdateOffset(params: {
   const payload: TelegramUpdateOffsetState = {
     version: STORE_VERSION,
     lastUpdateId: params.updateId,
+    botId: extractBotIdFromToken(params.botToken),
   };
   await fs.writeFile(tmp, `${JSON.stringify(payload, null, 2)}\n`, {
     encoding: "utf-8",
   });
   await fs.chmod(tmp, 0o600);
   await fs.rename(tmp, filePath);
+}
+
+export async function deleteTelegramUpdateOffset(params: {
+  accountId?: string;
+  env?: NodeJS.ProcessEnv;
+}): Promise<void> {
+  const filePath = resolveTelegramUpdateOffsetPath(params.accountId, params.env);
+  try {
+    await fs.unlink(filePath);
+  } catch (err) {
+    const code = (err as { code?: string }).code;
+    if (code === "ENOENT") {
+      return;
+    }
+    throw err;
+  }
 }

@@ -23,12 +23,12 @@ const HANZO_SKILLS_DIR = path.join(os.homedir(), ".hanzo", "skills");
 /**
  * Agent directories that should receive symlinks from ~/.hanzo/skills/.
  * Each installed skill directory gets symlinked into every agent's global
- * skills folder so Claude Code, Cursor, Codex, Openclaw, and Hanzo Bot
+ * skills folder so Claude Code, Cursor, Codex, Hanzo Bot, and Hanzo Bot
  * all see the same skills from one canonical location.
  */
 const AGENT_SKILL_DIRS = [
   path.join(os.homedir(), ".claude", "skills"), // Claude Code
-  path.join(os.homedir(), ".agents", "skills"), // Codex / Openclaw / generic
+  path.join(os.homedir(), ".agents", "skills"), // Codex / Hanzo Bot / generic
   path.join(os.homedir(), ".cursor", "skills"), // Cursor
   path.join(os.homedir(), ".hanzo", "bot", "skills"), // Hanzo Bot legacy
 ];
@@ -286,7 +286,7 @@ export function registerSkillsCli(program: Command) {
           }
         }
         defaultRuntime.log(
-          `\n${theme.muted("All agents (Claude Code, Cursor, Codex, Openclaw, Hanzo Bot) now see these skills.")}`,
+          `\n${theme.muted("All agents (Claude Code, Cursor, Codex, Hanzo Bot, Hanzo Bot) now see these skills.")}`,
         );
         defaultRuntime.log(
           `${theme.muted("Tip:")} Run ${theme.bold("bot skills list")} to see all available skills.\n`,

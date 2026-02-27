@@ -1,12 +1,12 @@
-import type { loadConfig } from "../../../config/config.js";
-import type { MentionConfig } from "../mentions.js";
-import type { WebInboundMsg } from "../types.js";
 import { hasControlCommand } from "../../../auto-reply/command-detection.js";
 import { parseActivationCommand } from "../../../auto-reply/group-activation.js";
 import { recordPendingHistoryEntryIfEnabled } from "../../../auto-reply/reply/history.js";
 import { resolveMentionGating } from "../../../channels/mention-gating.js";
+import type { loadConfig } from "../../../config/config.js";
 import { normalizeE164 } from "../../../utils.js";
+import type { MentionConfig } from "../mentions.js";
 import { buildMentionConfig, debugMention, resolveOwnerList } from "../mentions.js";
+import type { WebInboundMsg } from "../types.js";
 import { stripMentionsForCommand } from "./commands.js";
 import { resolveGroupActivationFor, resolveGroupPolicyFor } from "./group-activation.js";
 import { noteGroupMember } from "./group-members.js";
@@ -17,6 +17,22 @@ export type GroupHistoryEntry = {
   timestamp?: number;
   id?: string;
   senderJid?: string;
+};
+
+type ApplyGroupGatingParams = {
+  cfg: ReturnType<typeof loadConfig>;
+  msg: WebInboundMsg;
+  conversationId: string;
+  groupHistoryKey: string;
+  agentId: string;
+  sessionKey: string;
+  baseMentionConfig: MentionConfig;
+  authDir?: string;
+  groupHistories: Map<string, GroupHistoryEntry[]>;
+  groupHistoryLimit: number;
+  groupMemberNames: Map<string, Map<string, string>>;
+  logVerbose: (msg: string) => void;
+  replyLogger: { debug: (obj: unknown, msg: string) => void };
 };
 
 function isOwnerSender(baseMentionConfig: MentionConfig, msg: WebInboundMsg) {
@@ -52,21 +68,18 @@ function recordPendingGroupHistoryEntry(params: {
   });
 }
 
-export function applyGroupGating(params: {
-  cfg: ReturnType<typeof loadConfig>;
-  msg: WebInboundMsg;
-  conversationId: string;
-  groupHistoryKey: string;
-  agentId: string;
-  sessionKey: string;
-  baseMentionConfig: MentionConfig;
-  authDir?: string;
-  groupHistories: Map<string, GroupHistoryEntry[]>;
-  groupHistoryLimit: number;
-  groupMemberNames: Map<string, Map<string, string>>;
-  logVerbose: (msg: string) => void;
-  replyLogger: { debug: (obj: unknown, msg: string) => void };
-}) {
+function skipGroupMessageAndStoreHistory(params: ApplyGroupGatingParams, verboseMessage: string) {
+  params.logVerbose(verboseMessage);
+  recordPendingGroupHistoryEntry({
+    msg: params.msg,
+    groupHistories: params.groupHistories,
+    groupHistoryKey: params.groupHistoryKey,
+    groupHistoryLimit: params.groupHistoryLimit,
+  });
+  return { shouldProcess: false } as const;
+}
+
+export function applyGroupGating(params: ApplyGroupGatingParams) {
   const groupPolicy = resolveGroupPolicyFor(params.cfg, params.conversationId);
   if (groupPolicy.allowlistEnabled && !groupPolicy.allowed) {
     params.logVerbose(`Skipping group message ${params.conversationId} (not in allowlist)`);
@@ -91,14 +104,10 @@ export function applyGroupGating(params: {
   const shouldBypassMention = owner && hasControlCommand(commandBody, params.cfg);
 
   if (activationCommand.hasCommand && !owner) {
-    params.logVerbose(`Ignoring /activation from non-owner in group ${params.conversationId}`);
-    recordPendingGroupHistoryEntry({
-      msg: params.msg,
-      groupHistories: params.groupHistories,
-      groupHistoryKey: params.groupHistoryKey,
-      groupHistoryLimit: params.groupHistoryLimit,
-    });
-    return { shouldProcess: false };
+    return skipGroupMessageAndStoreHistory(
+      params,
+      `Ignoring /activation from non-owner in group ${params.conversationId}`,
+    );
   }
 
   const mentionDebug = debugMention(params.msg, mentionConfig, params.authDir);
@@ -137,16 +146,10 @@ export function applyGroupGating(params: {
   });
   params.msg.wasMentioned = mentionGate.effectiveWasMentioned;
   if (!shouldBypassMention && requireMention && mentionGate.shouldSkip) {
-    params.logVerbose(
+    return skipGroupMessageAndStoreHistory(
+      params,
       `Group message stored for context (no mention detected) in ${params.conversationId}: ${params.msg.body}`,
     );
-    recordPendingGroupHistoryEntry({
-      msg: params.msg,
-      groupHistories: params.groupHistories,
-      groupHistoryKey: params.groupHistoryKey,
-      groupHistoryLimit: params.groupHistoryLimit,
-    });
-    return { shouldProcess: false };
   }
 
   return { shouldProcess: true };

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
 import type { SessionState } from "../logging/diagnostic-session-state.js";
 import {
   CRITICAL_THRESHOLD,
@@ -20,6 +21,13 @@ function createState(): SessionState {
   };
 }
 
+const enabledLoopDetectionConfig: ToolLoopDetectionConfig = { enabled: true };
+
+const shortHistoryLoopConfig: ToolLoopDetectionConfig = {
+  enabled: true,
+  historySize: 4,
+};
+
 function recordSuccessfulCall(
   state: SessionState,
   toolName: string,
@@ -35,6 +43,80 @@ function recordSuccessfulCall(
     toolCallId,
     result,
   });
+}
+
+function recordRepeatedSuccessfulCalls(params: {
+  state: SessionState;
+  toolName: string;
+  toolParams: unknown;
+  result: unknown;
+  count: number;
+  startIndex?: number;
+}) {
+  const startIndex = params.startIndex ?? 0;
+  for (let i = 0; i < params.count; i += 1) {
+    recordSuccessfulCall(
+      params.state,
+      params.toolName,
+      params.toolParams,
+      params.result,
+      startIndex + i,
+    );
+  }
+}
+
+function createNoProgressPollFixture(sessionId: string) {
+  return {
+    params: { action: "poll", sessionId },
+    result: {
+      content: [{ type: "text", text: "(no new output)\n\nProcess still running." }],
+      details: { status: "running", aggregated: "steady" },
+    },
+  };
+}
+
+function recordSuccessfulPingPongCalls(params: {
+  state: SessionState;
+  readParams: { path: string };
+  listParams: { dir: string };
+  count: number;
+  textAtIndex: (toolName: "read" | "list", index: number) => string;
+}) {
+  for (let i = 0; i < params.count; i += 1) {
+    if (i % 2 === 0) {
+      recordSuccessfulCall(
+        params.state,
+        "read",
+        params.readParams,
+        { content: [{ type: "text", text: params.textAtIndex("read", i) }], details: { ok: true } },
+        i,
+      );
+    } else {
+      recordSuccessfulCall(
+        params.state,
+        "list",
+        params.listParams,
+        { content: [{ type: "text", text: params.textAtIndex("list", i) }], details: { ok: true } },
+        i,
+      );
+    }
+  }
+}
+
+function expectPingPongLoop(
+  loopResult: ReturnType<typeof detectToolCallLoop>,
+  expected: { level: "warning" | "critical"; count: number; expectCriticalText?: boolean },
+) {
+  expect(loopResult.stuck).toBe(true);
+  if (!loopResult.stuck) {
+    return;
+  }
+  expect(loopResult.level).toBe(expected.level);
+  expect(loopResult.detector).toBe("ping_pong");
+  expect(loopResult.count).toBe(expected.count);
+  if (expected.expectCriticalText) {
+    expect(loopResult.message).toContain("CRITICAL");
+  }
 }
 
 describe("tool-loop-detection", () => {
@@ -111,9 +193,31 @@ describe("tool-loop-detection", () => {
       expect(timestamp).toBeGreaterThanOrEqual(before);
       expect(timestamp).toBeLessThanOrEqual(after);
     });
+
+    it("respects configured historySize", () => {
+      const state = createState();
+
+      for (let i = 0; i < 10; i += 1) {
+        recordToolCall(state, "tool", { iteration: i }, `call-${i}`, shortHistoryLoopConfig);
+      }
+
+      expect(state.toolCallHistory).toHaveLength(4);
+      expect(state.toolCallHistory?.[0]?.argsHash).toBe(hashToolCall("tool", { iteration: 6 }));
+    });
   });
 
   describe("detectToolCallLoop", () => {
+    it("is disabled by default", () => {
+      const state = createState();
+
+      for (let i = 0; i < 20; i += 1) {
+        recordToolCall(state, "read", { path: "/same.txt" }, `default-${i}`);
+      }
+
+      const loopResult = detectToolCallLoop(state, "read", { path: "/same.txt" });
+      expect(loopResult.stuck).toBe(false);
+    });
+
     it("does not flag unique tool calls", () => {
       const state = createState();
 
@@ -121,7 +225,12 @@ describe("tool-loop-detection", () => {
         recordToolCall(state, "read", { path: `/file${i}.txt` }, `call-${i}`);
       }
 
-      const result = detectToolCallLoop(state, "read", { path: "/new-file.txt" });
+      const result = detectToolCallLoop(
+        state,
+        "read",
+        { path: "/new-file.txt" },
+        enabledLoopDetectionConfig,
+      );
       expect(result.stuck).toBe(false);
     });
 
@@ -131,7 +240,12 @@ describe("tool-loop-detection", () => {
         recordToolCall(state, "read", { path: "/same.txt" }, `warn-${i}`);
       }
 
-      const result = detectToolCallLoop(state, "read", { path: "/same.txt" });
+      const result = detectToolCallLoop(
+        state,
+        "read",
+        { path: "/same.txt" },
+        enabledLoopDetectionConfig,
+      );
 
       expect(result.stuck).toBe(true);
       if (result.stuck) {
@@ -155,26 +269,92 @@ describe("tool-loop-detection", () => {
         recordSuccessfulCall(state, "read", params, result, i);
       }
 
-      const loopResult = detectToolCallLoop(state, "read", params);
+      const loopResult = detectToolCallLoop(state, "read", params, enabledLoopDetectionConfig);
       expect(loopResult.stuck).toBe(true);
       if (loopResult.stuck) {
         expect(loopResult.level).toBe("warning");
       }
     });
 
-    it("warns for known polling no-progress loops", () => {
+    it("applies custom thresholds when detection is enabled", () => {
       const state = createState();
-      const params = { action: "poll", sessionId: "sess-1" };
-      const result = {
-        content: [{ type: "text", text: "(no new output)\n\nProcess still running." }],
-        details: { status: "running", aggregated: "steady" },
+      const { params, result } = createNoProgressPollFixture("sess-custom");
+      const config: ToolLoopDetectionConfig = {
+        enabled: true,
+        warningThreshold: 2,
+        criticalThreshold: 4,
+        detectors: {
+          genericRepeat: false,
+          knownPollNoProgress: true,
+          pingPong: false,
+        },
       };
 
-      for (let i = 0; i < WARNING_THRESHOLD; i += 1) {
-        recordSuccessfulCall(state, "process", params, result, i);
+      recordRepeatedSuccessfulCalls({
+        state,
+        toolName: "process",
+        toolParams: params,
+        result,
+        count: 2,
+      });
+      const warningResult = detectToolCallLoop(state, "process", params, config);
+      expect(warningResult.stuck).toBe(true);
+      if (warningResult.stuck) {
+        expect(warningResult.level).toBe("warning");
       }
 
-      const loopResult = detectToolCallLoop(state, "process", params);
+      recordRepeatedSuccessfulCalls({
+        state,
+        toolName: "process",
+        toolParams: params,
+        result,
+        count: 2,
+        startIndex: 2,
+      });
+      const criticalResult = detectToolCallLoop(state, "process", params, config);
+      expect(criticalResult.stuck).toBe(true);
+      if (criticalResult.stuck) {
+        expect(criticalResult.level).toBe("critical");
+        expect(criticalResult.detector).toBe("known_poll_no_progress");
+      }
+    });
+
+    it("can disable specific detectors", () => {
+      const state = createState();
+      const { params, result } = createNoProgressPollFixture("sess-no-detectors");
+      const config: ToolLoopDetectionConfig = {
+        enabled: true,
+        detectors: {
+          genericRepeat: false,
+          knownPollNoProgress: false,
+          pingPong: false,
+        },
+      };
+
+      recordRepeatedSuccessfulCalls({
+        state,
+        toolName: "process",
+        toolParams: params,
+        result,
+        count: CRITICAL_THRESHOLD,
+      });
+
+      const loopResult = detectToolCallLoop(state, "process", params, config);
+      expect(loopResult.stuck).toBe(false);
+    });
+
+    it("warns for known polling no-progress loops", () => {
+      const state = createState();
+      const { params, result } = createNoProgressPollFixture("sess-1");
+      recordRepeatedSuccessfulCalls({
+        state,
+        toolName: "process",
+        toolParams: params,
+        result,
+        count: WARNING_THRESHOLD,
+      });
+
+      const loopResult = detectToolCallLoop(state, "process", params, enabledLoopDetectionConfig);
       expect(loopResult.stuck).toBe(true);
       if (loopResult.stuck) {
         expect(loopResult.level).toBe("warning");
@@ -185,17 +365,16 @@ describe("tool-loop-detection", () => {
 
     it("blocks known polling no-progress loops at critical threshold", () => {
       const state = createState();
-      const params = { action: "poll", sessionId: "sess-1" };
-      const result = {
-        content: [{ type: "text", text: "(no new output)\n\nProcess still running." }],
-        details: { status: "running", aggregated: "steady" },
-      };
+      const { params, result } = createNoProgressPollFixture("sess-1");
+      recordRepeatedSuccessfulCalls({
+        state,
+        toolName: "process",
+        toolParams: params,
+        result,
+        count: CRITICAL_THRESHOLD,
+      });
 
-      for (let i = 0; i < CRITICAL_THRESHOLD; i += 1) {
-        recordSuccessfulCall(state, "process", params, result, i);
-      }
-
-      const loopResult = detectToolCallLoop(state, "process", params);
+      const loopResult = detectToolCallLoop(state, "process", params, enabledLoopDetectionConfig);
       expect(loopResult.stuck).toBe(true);
       if (loopResult.stuck) {
         expect(loopResult.level).toBe("critical");
@@ -216,7 +395,7 @@ describe("tool-loop-detection", () => {
         recordSuccessfulCall(state, "process", params, result, i);
       }
 
-      const loopResult = detectToolCallLoop(state, "process", params);
+      const loopResult = detectToolCallLoop(state, "process", params, enabledLoopDetectionConfig);
       expect(loopResult.stuck).toBe(false);
     });
 
@@ -232,7 +411,7 @@ describe("tool-loop-detection", () => {
         recordSuccessfulCall(state, "read", params, result, i);
       }
 
-      const loopResult = detectToolCallLoop(state, "read", params);
+      const loopResult = detectToolCallLoop(state, "read", params, enabledLoopDetectionConfig);
       expect(loopResult.stuck).toBe(true);
       if (loopResult.stuck) {
         expect(loopResult.level).toBe("critical");
@@ -254,12 +433,9 @@ describe("tool-loop-detection", () => {
         }
       }
 
-      const loopResult = detectToolCallLoop(state, "list", listParams);
-      expect(loopResult.stuck).toBe(true);
+      const loopResult = detectToolCallLoop(state, "list", listParams, enabledLoopDetectionConfig);
+      expectPingPongLoop(loopResult, { level: "warning", count: WARNING_THRESHOLD });
       if (loopResult.stuck) {
-        expect(loopResult.level).toBe("warning");
-        expect(loopResult.detector).toBe("ping_pong");
-        expect(loopResult.count).toBe(WARNING_THRESHOLD);
         expect(loopResult.message).toContain("ping-pong loop");
       }
     });
@@ -269,33 +445,21 @@ describe("tool-loop-detection", () => {
       const readParams = { path: "/a.txt" };
       const listParams = { dir: "/workspace" };
 
-      for (let i = 0; i < CRITICAL_THRESHOLD - 1; i += 1) {
-        if (i % 2 === 0) {
-          recordSuccessfulCall(
-            state,
-            "read",
-            readParams,
-            { content: [{ type: "text", text: "read stable" }], details: { ok: true } },
-            i,
-          );
-        } else {
-          recordSuccessfulCall(
-            state,
-            "list",
-            listParams,
-            { content: [{ type: "text", text: "list stable" }], details: { ok: true } },
-            i,
-          );
-        }
-      }
+      recordSuccessfulPingPongCalls({
+        state,
+        readParams,
+        listParams,
+        count: CRITICAL_THRESHOLD - 1,
+        textAtIndex: (toolName) => (toolName === "read" ? "read stable" : "list stable"),
+      });
 
-      const loopResult = detectToolCallLoop(state, "list", listParams);
-      expect(loopResult.stuck).toBe(true);
+      const loopResult = detectToolCallLoop(state, "list", listParams, enabledLoopDetectionConfig);
+      expectPingPongLoop(loopResult, {
+        level: "critical",
+        count: CRITICAL_THRESHOLD,
+        expectCriticalText: true,
+      });
       if (loopResult.stuck) {
-        expect(loopResult.level).toBe("critical");
-        expect(loopResult.detector).toBe("ping_pong");
-        expect(loopResult.count).toBe(CRITICAL_THRESHOLD);
-        expect(loopResult.message).toContain("CRITICAL");
         expect(loopResult.message).toContain("ping-pong loop");
       }
     });
@@ -305,33 +469,16 @@ describe("tool-loop-detection", () => {
       const readParams = { path: "/a.txt" };
       const listParams = { dir: "/workspace" };
 
-      for (let i = 0; i < CRITICAL_THRESHOLD - 1; i += 1) {
-        if (i % 2 === 0) {
-          recordSuccessfulCall(
-            state,
-            "read",
-            readParams,
-            { content: [{ type: "text", text: `read ${i}` }], details: { ok: true } },
-            i,
-          );
-        } else {
-          recordSuccessfulCall(
-            state,
-            "list",
-            listParams,
-            { content: [{ type: "text", text: `list ${i}` }], details: { ok: true } },
-            i,
-          );
-        }
-      }
+      recordSuccessfulPingPongCalls({
+        state,
+        readParams,
+        listParams,
+        count: CRITICAL_THRESHOLD - 1,
+        textAtIndex: (toolName, index) => `${toolName} ${index}`,
+      });
 
-      const loopResult = detectToolCallLoop(state, "list", listParams);
-      expect(loopResult.stuck).toBe(true);
-      if (loopResult.stuck) {
-        expect(loopResult.level).toBe("warning");
-        expect(loopResult.detector).toBe("ping_pong");
-        expect(loopResult.count).toBe(CRITICAL_THRESHOLD);
-      }
+      const loopResult = detectToolCallLoop(state, "list", listParams, enabledLoopDetectionConfig);
+      expectPingPongLoop(loopResult, { level: "warning", count: CRITICAL_THRESHOLD });
     });
 
     it("does not flag ping-pong when alternation is broken", () => {
@@ -341,7 +488,12 @@ describe("tool-loop-detection", () => {
       recordToolCall(state, "read", { path: "/a.txt" }, "a2");
       recordToolCall(state, "write", { path: "/tmp/out.txt" }, "c1"); // breaks alternation
 
-      const loopResult = detectToolCallLoop(state, "list", { dir: "/workspace" });
+      const loopResult = detectToolCallLoop(
+        state,
+        "list",
+        { dir: "/workspace" },
+        enabledLoopDetectionConfig,
+      );
       expect(loopResult.stuck).toBe(false);
     });
 
@@ -368,7 +520,7 @@ describe("tool-loop-detection", () => {
     it("handles empty history", () => {
       const state = createState();
 
-      const result = detectToolCallLoop(state, "tool", { arg: 1 });
+      const result = detectToolCallLoop(state, "tool", { arg: 1 }, enabledLoopDetectionConfig);
       expect(result.stuck).toBe(false);
     });
   });

@@ -93,6 +93,8 @@ describe("memory index", () => {
   function createCfg(params: {
     storePath: string;
     extraPaths?: string[];
+    sources?: Array<"memory" | "sessions">;
+    sessionMemory?: boolean;
     model?: string;
     vectorEnabled?: boolean;
     cacheEnabled?: boolean;
@@ -115,6 +117,8 @@ describe("memory index", () => {
             },
             cache: params.cacheEnabled ? { enabled: true } : undefined,
             extraPaths: params.extraPaths,
+            sources: params.sources,
+            experimental: { sessionMemory: params.sessionMemory ?? false },
           },
         },
         list: [{ id: "main", default: true }],
@@ -195,19 +199,101 @@ describe("memory index", () => {
     await statusOnly.manager.close?.();
   });
 
+  it("reindexes sessions when source config adds sessions to an existing index", async () => {
+    const indexSourceChangePath = path.join(
+      workspaceDir,
+      `index-source-change-${Date.now()}.sqlite`,
+    );
+    const stateDir = path.join(fixtureRoot, `state-source-change-${Date.now()}`);
+    const sessionDir = path.join(stateDir, "agents", "main", "sessions");
+    await fs.mkdir(sessionDir, { recursive: true });
+    await fs.writeFile(
+      path.join(sessionDir, "session-source-change.jsonl"),
+      [
+        JSON.stringify({
+          type: "message",
+          message: {
+            role: "user",
+            content: [{ type: "text", text: "session change test user line" }],
+          },
+        }),
+        JSON.stringify({
+          type: "message",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "session change test assistant line" }],
+          },
+        }),
+      ].join("\n") + "\n",
+    );
+
+    const previousStateDir = process.env.BOT_STATE_DIR;
+    process.env.BOT_STATE_DIR = stateDir;
+
+    const firstCfg = createCfg({
+      storePath: indexSourceChangePath,
+      sources: ["memory"],
+      sessionMemory: false,
+    });
+    const secondCfg = createCfg({
+      storePath: indexSourceChangePath,
+      sources: ["memory", "sessions"],
+      sessionMemory: true,
+    });
+
+    try {
+      const first = await getMemorySearchManager({ cfg: firstCfg, agentId: "main" });
+      expect(first.manager).not.toBeNull();
+      if (!first.manager) {
+        throw new Error("manager missing");
+      }
+      await first.manager.sync?.({ reason: "test" });
+      const firstStatus = first.manager.status();
+      expect(
+        firstStatus.sourceCounts?.find((entry) => entry.source === "sessions")?.files ?? 0,
+      ).toBe(0);
+      await first.manager.close?.();
+
+      const second = await getMemorySearchManager({ cfg: secondCfg, agentId: "main" });
+      expect(second.manager).not.toBeNull();
+      if (!second.manager) {
+        throw new Error("manager missing");
+      }
+      await second.manager.sync?.({ reason: "test" });
+      const secondStatus = second.manager.status();
+      expect(secondStatus.sourceCounts?.find((entry) => entry.source === "sessions")?.files).toBe(
+        1,
+      );
+      expect(
+        secondStatus.sourceCounts?.find((entry) => entry.source === "sessions")?.chunks ?? 0,
+      ).toBeGreaterThan(0);
+      await second.manager.close?.();
+    } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.BOT_STATE_DIR;
+      } else {
+        process.env.BOT_STATE_DIR = previousStateDir;
+      }
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("reindexes when the embedding model changes", async () => {
     const indexModelPath = path.join(workspaceDir, `index-model-change-${Date.now()}.sqlite`);
     const base = createCfg({ storePath: indexModelPath });
+    const baseAgents = base.agents!;
+    const baseDefaults = baseAgents.defaults!;
+    const baseMemorySearch = baseDefaults.memorySearch!;
 
     const first = await getMemorySearchManager({
       cfg: {
         ...base,
         agents: {
-          ...base.agents,
+          ...baseAgents,
           defaults: {
-            ...base.agents.defaults,
+            ...baseDefaults,
             memorySearch: {
-              ...base.agents.defaults.memorySearch,
+              ...baseMemorySearch,
               model: "mock-embed-v1",
             },
           },
@@ -219,19 +305,19 @@ describe("memory index", () => {
     if (!first.manager) {
       throw new Error("manager missing");
     }
-    await first.manager.sync({ reason: "test" });
+    await first.manager.sync?.({ reason: "test" });
     const callsAfterFirstSync = embedBatchCalls;
-    await first.manager.close();
+    await first.manager.close?.();
 
     const second = await getMemorySearchManager({
       cfg: {
         ...base,
         agents: {
-          ...base.agents,
+          ...baseAgents,
           defaults: {
-            ...base.agents.defaults,
+            ...baseDefaults,
             memorySearch: {
-              ...base.agents.defaults.memorySearch,
+              ...baseMemorySearch,
               model: "mock-embed-v2",
             },
           },
@@ -243,11 +329,11 @@ describe("memory index", () => {
     if (!second.manager) {
       throw new Error("manager missing");
     }
-    await second.manager.sync({ reason: "test" });
+    await second.manager.sync?.({ reason: "test" });
     expect(embedBatchCalls).toBeGreaterThan(callsAfterFirstSync);
     const status = second.manager.status();
     expect(status.files).toBeGreaterThan(0);
-    await second.manager.close();
+    await second.manager.close?.();
   });
 
   it("reuses cached embeddings on forced reindex", async () => {

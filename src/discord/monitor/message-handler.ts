@@ -1,15 +1,20 @@
 import type { Client } from "@buape/carbon";
-import type { DiscordMessageEvent, DiscordMessageHandler } from "./listeners.js";
-import type { DiscordMessagePreflightParams } from "./message-handler.preflight.types.js";
 import { hasControlCommand } from "../../auto-reply/command-detection.js";
 import {
   createInboundDebouncer,
   resolveInboundDebounceMs,
 } from "../../auto-reply/inbound-debounce.js";
+import { resolveOpenProviderRuntimeGroupPolicy } from "../../config/runtime-group-policy.js";
 import { danger } from "../../globals.js";
+import type { DiscordMessageEvent, DiscordMessageHandler } from "./listeners.js";
 import { preflightDiscordMessage } from "./message-handler.preflight.js";
+import type { DiscordMessagePreflightParams } from "./message-handler.preflight.types.js";
 import { processDiscordMessage } from "./message-handler.process.js";
-import { resolveDiscordMessageChannelId, resolveDiscordMessageText } from "./message-utils.js";
+import {
+  hasDiscordMessageStickers,
+  resolveDiscordMessageChannelId,
+  resolveDiscordMessageText,
+} from "./message-utils.js";
 
 type DiscordMessageHandlerParams = Omit<
   DiscordMessagePreflightParams,
@@ -19,7 +24,11 @@ type DiscordMessageHandlerParams = Omit<
 export function createDiscordMessageHandler(
   params: DiscordMessageHandlerParams,
 ): DiscordMessageHandler {
-  const groupPolicy = params.discordConfig?.groupPolicy ?? "open";
+  const { groupPolicy } = resolveOpenProviderRuntimeGroupPolicy({
+    providerConfigPresent: params.cfg.channels?.discord !== undefined,
+    groupPolicy: params.discordConfig?.groupPolicy,
+    defaultGroupPolicy: params.cfg.channels?.defaults?.groupPolicy,
+  });
   const ackReactionScope = params.cfg.messages?.ackReactionScope ?? "group-mentions";
   const debounceMs = resolveInboundDebounceMs({ cfg: params.cfg, channel: "discord" });
 
@@ -46,6 +55,9 @@ export function createDiscordMessageHandler(
         return false;
       }
       if (message.attachments && message.attachments.length > 0) {
+        return false;
+      }
+      if (hasDiscordMessageStickers(message)) {
         return false;
       }
       const baseText = resolveDiscordMessageText(message, { includeForwarded: false });

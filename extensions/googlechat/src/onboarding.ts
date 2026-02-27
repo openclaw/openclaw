@@ -2,6 +2,7 @@ import type { BotConfig, DmPolicy } from "bot/plugin-sdk";
 import {
   addWildcardAllowFrom,
   formatDocsLink,
+  mergeAllowFromEntries,
   promptAccountId,
   type ChannelOnboardingAdapter,
   type ChannelOnboardingDmPolicy,
@@ -61,7 +62,7 @@ async function promptAllowFrom(params: {
     validate: (value) => (String(value ?? "").trim() ? undefined : "Required"),
   });
   const parts = parseAllowFromInput(String(entry));
-  const unique = [...new Set(parts)];
+  const unique = mergeAllowFromEntries(undefined, parts);
   return {
     ...params.cfg,
     channels: {

@@ -13,6 +13,18 @@ describe("cron schedule", () => {
     expect(next).toBe(Date.parse("2025-12-17T17:00:00.000Z"));
   });
 
+  it("throws a clear error when cron expr is missing at runtime", () => {
+    const nowMs = Date.parse("2025-12-13T00:00:00.000Z");
+    expect(() =>
+      computeNextRunAtMs(
+        {
+          kind: "cron",
+        } as unknown as { kind: "cron"; expr: string; tz?: string },
+        nowMs,
+      ),
+    ).toThrow("invalid cron schedule: expr is required");
+  });
+
   it("computes next run for every schedule", () => {
     const anchor = Date.parse("2025-12-13T00:00:00.000Z");
     const now = anchor + 10_000;
@@ -65,6 +77,24 @@ describe("cron schedule", () => {
     it("returns today when nowMs is before the match", () => {
       const next = computeNextRunAtMs(dailyNoon, noonMs - 500);
       expect(next).toBe(noonMs);
+    });
+
+    it("advances to next day when job completes within same second it fired (#17821)", () => {
+      // Regression test for #17821: cron jobs that fire and complete within
+      // the same second (e.g., fire at 12:00:00.014, complete at 12:00:00.021)
+      // were getting nextRunAtMs set to the same second, causing a spin loop.
+      //
+      // Simulating: job scheduled for 12:00:00, fires at .014, completes at .021
+      const completedAtMs = noonMs + 21; // 12:00:00.021
+      const next = computeNextRunAtMs(dailyNoon, completedAtMs);
+      expect(next).toBe(noonMs + 86_400_000); // must be next day, NOT noonMs
+    });
+
+    it("advances to next day when job completes just before second boundary (#17821)", () => {
+      // Edge case: job completes at .999, still within the firing second
+      const completedAtMs = noonMs + 999; // 12:00:00.999
+      const next = computeNextRunAtMs(dailyNoon, completedAtMs);
+      expect(next).toBe(noonMs + 86_400_000); // next day
     });
   });
 });

@@ -61,6 +61,13 @@ export const SnapshotSchema = Type.Object(
         Type.Literal("iam"),
       ]),
     ),
+    updateAvailable: Type.Optional(
+      Type.Object({
+        currentVersion: NonEmptyString,
+        latestVersion: NonEmptyString,
+        channel: NonEmptyString,
+      }),
+    ),
   },
   { additionalProperties: false },
 );

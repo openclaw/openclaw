@@ -1,8 +1,8 @@
 import type { RequestClient } from "@buape/carbon";
 import type { APIChannel, APIGuild, APIGuildMember, APIRole } from "discord-api-types/v10";
 import { ChannelType, PermissionFlagsBits, Routes } from "discord-api-types/v10";
-import type { DiscordPermissionsSummary, DiscordReactOpts } from "./send.types.js";
 import { resolveDiscordRest } from "./client.js";
+import type { DiscordPermissionsSummary, DiscordReactOpts } from "./send.types.js";
 
 const PERMISSION_ENTRIES = Object.entries(PermissionFlagsBits).filter(
   ([, value]) => typeof value === "bigint",
@@ -34,6 +34,10 @@ function hasAdministrator(bitfield: bigint) {
   return (bitfield & ADMINISTRATOR_BIT) === ADMINISTRATOR_BIT;
 }
 
+function hasPermissionBit(bitfield: bigint, permission: bigint) {
+  return (bitfield & permission) === permission;
+}
+
 export function isThreadChannelType(channelType?: number) {
   return (
     channelType === ChannelType.GuildNewsThread ||
@@ -49,6 +53,103 @@ async function fetchBotUserId(rest: RequestClient) {
   }
   return me.id;
 }
+
+/**
+ * Fetch guild-level permissions for a user. This does not include channel-specific overwrites.
+ */
+export async function fetchMemberGuildPermissionsDiscord(
+  guildId: string,
+  userId: string,
+  opts: DiscordReactOpts = {},
+): Promise<bigint | null> {
+  const rest = resolveDiscordRest(opts);
+  try {
+    const [guild, member] = await Promise.all([
+      rest.get(Routes.guild(guildId)) as Promise<APIGuild>,
+      rest.get(Routes.guildMember(guildId, userId)) as Promise<APIGuildMember>,
+    ]);
+    const rolesById = new Map<string, APIRole>((guild.roles ?? []).map((role) => [role.id, role]));
+    const everyoneRole = rolesById.get(guildId);
+    let permissions = 0n;
+    if (everyoneRole?.permissions) {
+      permissions = addPermissionBits(permissions, everyoneRole.permissions);
+    }
+    for (const roleId of member.roles ?? []) {
+      const role = rolesById.get(roleId);
+      if (role?.permissions) {
+        permissions = addPermissionBits(permissions, role.permissions);
+      }
+    }
+    return permissions;
+  } catch {
+    // Not a guild member, guild not found, or API failure.
+    return null;
+  }
+}
+
+/**
+ * Returns true when the user has ADMINISTRATOR or required permission bits
+ * matching the provided predicate.
+ */
+async function hasGuildPermissionsDiscord(
+  guildId: string,
+  userId: string,
+  requiredPermissions: bigint[],
+  check: (permissions: bigint, requiredPermissions: bigint[]) => boolean,
+  opts: DiscordReactOpts = {},
+): Promise<boolean> {
+  const permissions = await fetchMemberGuildPermissionsDiscord(guildId, userId, opts);
+  if (permissions === null) {
+    return false;
+  }
+  if (hasAdministrator(permissions)) {
+    return true;
+  }
+  return check(permissions, requiredPermissions);
+}
+
+/**
+ * Returns true when the user has ADMINISTRATOR or any required permission bit.
+ */
+export async function hasAnyGuildPermissionDiscord(
+  guildId: string,
+  userId: string,
+  requiredPermissions: bigint[],
+  opts: DiscordReactOpts = {},
+): Promise<boolean> {
+  return await hasGuildPermissionsDiscord(
+    guildId,
+    userId,
+    requiredPermissions,
+    (permissions, required) =>
+      required.some((permission) => hasPermissionBit(permissions, permission)),
+    opts,
+  );
+}
+
+/**
+ * Returns true when the user has ADMINISTRATOR or all required permission bits.
+ */
+export async function hasAllGuildPermissionsDiscord(
+  guildId: string,
+  userId: string,
+  requiredPermissions: bigint[],
+  opts: DiscordReactOpts = {},
+): Promise<boolean> {
+  return await hasGuildPermissionsDiscord(
+    guildId,
+    userId,
+    requiredPermissions,
+    (permissions, required) =>
+      required.every((permission) => hasPermissionBit(permissions, permission)),
+    opts,
+  );
+}
+
+/**
+ * @deprecated Prefer hasAnyGuildPermissionDiscord or hasAllGuildPermissionsDiscord for clarity.
+ */
+export const hasGuildPermissionDiscord = hasAnyGuildPermissionDiscord;
 
 export async function fetchChannelPermissionsDiscord(
   channelId: string,

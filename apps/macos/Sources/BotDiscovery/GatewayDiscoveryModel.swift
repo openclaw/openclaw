@@ -116,7 +116,7 @@ public final class GatewayDiscoveryModel {
             }
 
             self.browsers[domain] = browser
-            browser.start(queue: DispatchQueue(label: "ai.bot.macos.gateway-discovery.\(domain)"))
+            browser.start(queue: DispatchQueue(label: "ai.hanzo.macos.gateway-discovery.\(domain)"))
         }
 
         self.scheduleWideAreaFallback()
