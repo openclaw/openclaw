@@ -11,7 +11,7 @@ title: "Ollama"
 Ollama is a local LLM runtime that makes it easy to run open-source models on your machine. OpenClaw integrates with Ollama's native API (`/api/chat`), supporting streaming and tool calling, and can **auto-discover tool-capable models** when you opt in with `OLLAMA_API_KEY` (or an auth profile) and do not define an explicit `models.providers.ollama` entry.
 
 <Warning>
-**Remote Ollama users**: Do not use the `/v1` OpenAI-compatible URL (`http://host:11434/v1`) with OpenClaw. This breaks tool calling and models may output raw tool JSON as plain text. Use the native Ollama API URL instead: `baseUrl: "http://host:11434"` (no `/v1`).
+**Do not use `/v1` URLs or `api: "openai-responses"` / `api: "openai-completions"` with Ollama.** These OpenAI-compatible endpoints silently break tool calling -- the model outputs raw JSON instead of structured tool calls, which leaks into chat as plain text. Always use `api: "ollama"` (the default) and omit `/v1` from `baseUrl`. See [Legacy OpenAI-Compatible Mode](#legacy-openai-compatible-mode) if you have a specific reason to use the OpenAI-compatible endpoint.
 </Warning>
 
 ## Quick start
@@ -146,7 +146,11 @@ If Ollama is running on a different host or port (explicit config disables auto-
 ```
 
 <Warning>
+<<<<<<< HEAD
 Do not add `/v1` to the URL. The `/v1` path uses OpenAI-compatible mode, where tool calling is not reliable. Use the base Ollama URL without a path suffix.
+=======
+Do not append `/v1` to the `baseUrl`. The native Ollama API uses `/api/chat` (handled automatically by OpenClaw). Adding `/v1` forces the OpenAI-compatible endpoint, which breaks tool calling.
+>>>>>>> 6e47600c1 (docs(ollama): warn that /v1 and openai-responses/openai-completions break tool calling)
 </Warning>
 
 ### Model selection
@@ -187,7 +191,11 @@ OpenClaw's Ollama integration uses the **native Ollama API** (`/api/chat`) by de
 #### Legacy OpenAI-Compatible Mode
 
 <Warning>
+<<<<<<< HEAD
 **Tool calling is not reliable in OpenAI-compatible mode.** Use this mode only if you need OpenAI format for a proxy and do not depend on native tool calling behavior.
+=======
+**This mode breaks tool calling.** Ollama's `/v1` OpenAI-compatible endpoint does not return structured `tool_calls`. Instead, models output tool call JSON as plain text, which OpenClaw passes through as a chat message. Only use this mode if you are behind a proxy that exclusively supports the OpenAI format **and** you do not need tool calling.
+>>>>>>> 6e47600c1 (docs(ollama): warn that /v1 and openai-responses/openai-completions break tool calling)
 </Warning>
 
 If you need to use the OpenAI-compatible endpoint instead (e.g., behind a proxy that only supports OpenAI format), set `api: "openai-completions"` explicitly:
@@ -208,6 +216,7 @@ If you need to use the OpenAI-compatible endpoint instead (e.g., behind a proxy 
 }
 ```
 
+<<<<<<< HEAD
 This mode may not support streaming + tool calling simultaneously. You may need to disable streaming with `params: { streaming: false }` in model config.
 
 When `api: "openai-completions"` is used with Ollama, OpenClaw injects `options.num_ctx` by default so Ollama does not silently fall back to a 4096 context window. If your proxy/upstream rejects unknown `options` fields, disable this behavior:
@@ -227,6 +236,9 @@ When `api: "openai-completions"` is used with Ollama, OpenClaw injects `options.
   }
 }
 ```
+=======
+Note: The OpenAI-compatible endpoint does not support tool calling via structured `tool_calls` responses. You may also need to disable streaming with `params: { streaming: false }` in model config.
+>>>>>>> 6e47600c1 (docs(ollama): warn that /v1 and openai-responses/openai-completions break tool calling)
 
 ### Context windows
 
@@ -261,6 +273,27 @@ To add models:
 ollama list  # See what's installed
 ollama pull gpt-oss:20b  # Pull a tool-capable model
 ollama pull llama3.3     # Or another model
+```
+
+### Tool calls appear as raw JSON in chat
+
+If the model outputs tool call JSON as plain text instead of actually calling tools, your provider is likely configured with `api: "openai-responses"`, `api: "openai-completions"`, or a `baseUrl` ending in `/v1`. These settings route requests through Ollama's OpenAI-compatible endpoint, which does not return structured tool calls.
+
+**Fix:** Switch to the native Ollama API by removing `/v1` from `baseUrl` and setting `api: "ollama"` (or omitting `api` entirely, since `"ollama"` is the default):
+
+```json5
+{
+  models: {
+    providers: {
+      ollama: {
+        // Use the base Ollama URL without /v1
+        baseUrl: "http://ollama-host:11434",
+        // api: "ollama" is the default -- no need to set it
+        apiKey: "ollama-local",
+      },
+    },
+  },
+}
 ```
 
 ### Connection refused
