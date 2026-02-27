@@ -309,11 +309,12 @@ async function discoverOllamaModels(
         } satisfies ModelDefinitionConfig;
       }),
     );
-    return discovered
-      .filter((result): result is PromiseFulfilledResult<ModelDefinitionConfig> => {
-        return result.status === "fulfilled";
-      })
-      .map((result) => result.value);
+    return discovered.flatMap((result) => {
+      if (result.status !== "fulfilled") {
+        return [];
+      }
+      return [result.value];
+    });
   } catch (error) {
     if (!opts?.quiet) {
       log.warn(`Failed to discover Ollama models: ${String(error)}`);
