@@ -106,7 +106,6 @@ async function writeFileIfMissing(filePath: string, content: string) {
 }
 
 function buildBridgeBlock(params: {
-  workspaceDir: string;
   workspaceAgentsPath: string;
   memoryDir: string;
   memoryFile: string;
@@ -126,30 +125,43 @@ function buildBridgeBlock(params: {
   ].join("\n");
 }
 
-export async function ensureAgentUiMemoryBridge(params: {
+export function resolveAgentUiMemoryBridgePaths(params: {
   targetDir: string;
   workspaceDir: string;
 }) {
   const targetDir = resolveUserPath(params.targetDir);
   const workspaceDir = resolveUserPath(params.workspaceDir);
 
-  await fs.mkdir(targetDir, { recursive: true });
-
   const workspaceAgentsPath = path.join(workspaceDir, "AGENTS.md");
   const memoryDir = path.join(workspaceDir, "memory");
   const memoryFile = path.join(workspaceDir, "MEMORY.md");
+  const targetAgentsPath = path.join(targetDir, "AGENTS.md");
+
+  return {
+    targetAgentsPath,
+    workspaceAgentsPath,
+    memoryDir,
+    memoryFile,
+  };
+}
+
+export async function ensureAgentUiMemoryBridge(params: {
+  targetDir: string;
+  workspaceDir: string;
+}) {
+  const { targetAgentsPath, workspaceAgentsPath, memoryDir, memoryFile } =
+    resolveAgentUiMemoryBridgePaths(params);
+
+  await fs.mkdir(path.dirname(targetAgentsPath), { recursive: true });
 
   await fs.mkdir(memoryDir, { recursive: true });
   await writeFileIfMissing(memoryFile, DEFAULT_MEMORY_TEMPLATE);
 
   const bridgeBlock = buildBridgeBlock({
-    workspaceDir,
     workspaceAgentsPath,
     memoryDir,
     memoryFile,
   });
-
-  const targetAgentsPath = path.join(targetDir, "AGENTS.md");
 
   let current = "";
   try {
@@ -212,7 +224,9 @@ export async function agentUiCommand(opts: AgentUiCommandOpts, runtime: RuntimeE
 
   const agentId = trimOrUndefined(opts.agent) ?? resolveDefaultAgentId(cfg);
   const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
-  await ensureAgentWorkspace({ dir: workspaceDir, ensureBootstrapFiles: true });
+  if (!opts.dryRun) {
+    await ensureAgentWorkspace({ dir: workspaceDir, ensureBootstrapFiles: true });
+  }
 
   const launchCwd = resolveUserPath(trimOrUndefined(opts.cwd) ?? process.cwd());
 
@@ -230,7 +244,9 @@ export async function agentUiCommand(opts: AgentUiCommandOpts, runtime: RuntimeE
 
   const bridgeEnabled = opts.noBridgeMemory !== true;
   const bridge = bridgeEnabled
-    ? await ensureAgentUiMemoryBridge({ targetDir: launchCwd, workspaceDir })
+    ? opts.dryRun
+      ? resolveAgentUiMemoryBridgePaths({ targetDir: launchCwd, workspaceDir })
+      : await ensureAgentUiMemoryBridge({ targetDir: launchCwd, workspaceDir })
     : null;
 
   const payload = {
