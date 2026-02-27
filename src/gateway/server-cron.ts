@@ -23,6 +23,7 @@ import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { SsrFBlockedError } from "../infra/net/ssrf.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { getChildLogger } from "../logging.js";
+import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { normalizeAgentId, toAgentStoreSessionKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 
@@ -207,9 +208,32 @@ export function buildGatewayCronService(params: {
     onEvent: (evt) => {
       params.broadcast("cron", evt, { dropIfSlow: true });
       if (evt.action === "finished") {
+        const job = cron.getJob(evt.jobId);
+
+        // Dispatch cron_execution hook for plugins
+        const hookRunner = getGlobalHookRunner();
+        if (hookRunner?.hasHooks("cron_execution")) {
+          const success = evt.status === "completed" && !evt.error;
+          hookRunner
+            .runVoidHook("cron_execution", {
+              jobId: evt.jobId,
+              cronName: job?.name ?? evt.jobId,
+              success,
+              durationMs: evt.durationMs,
+              status: evt.status,
+              error: evt.error,
+              sessionId: evt.sessionId,
+            }, {})
+            .catch((err) => {
+              cronLogger.warn(
+                { jobId: evt.jobId, error: String(err) },
+                "cron_execution hook failed"
+              );
+            });
+        }
+
         const webhookToken = params.cfg.cron?.webhookToken?.trim();
         const legacyWebhook = params.cfg.cron?.webhook?.trim();
-        const job = cron.getJob(evt.jobId);
         const legacyNotify = (job as { notify?: unknown } | undefined)?.notify === true;
         const webhookTarget = resolveCronWebhookTarget({
           delivery:
