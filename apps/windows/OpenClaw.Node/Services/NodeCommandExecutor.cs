@@ -177,6 +177,11 @@ namespace OpenClaw.Node.Services
                     var args = new System.Collections.Generic.List<string>();
                     foreach (var part in commandEl.EnumerateArray())
                     {
+                        if (part.ValueKind != JsonValueKind.String)
+                        {
+                            return Invalid(request.Id, "system.run params.command array entries must be strings");
+                        }
+
                         var value = part.GetString() ?? string.Empty;
                         if (first)
                         {
@@ -328,12 +333,18 @@ namespace OpenClaw.Node.Services
                 return Invalid(request.Id, "screen.capture params.mode must be one of: deliver, file, data");
             }
 
-            var screenIndex = root != null && root.Value.TryGetProperty("screenIndex", out var sIdx) && sIdx.ValueKind == JsonValueKind.Number
-                ? sIdx.GetInt32()
-                : 0;
-            if (screenIndex < 0)
+            var screenIndex = 0;
+            if (root != null && root.Value.TryGetProperty("screenIndex", out var sIdx) && sIdx.ValueKind == JsonValueKind.Number)
             {
-                return Invalid(request.Id, "screen.capture params.screenIndex must be >= 0");
+                if (!sIdx.TryGetInt32(out screenIndex))
+                {
+                    return Invalid(request.Id, "screen.capture params.screenIndex must be a 32-bit integer");
+                }
+
+                if (screenIndex < 0)
+                {
+                    return Invalid(request.Id, "screen.capture params.screenIndex must be >= 0");
+                }
             }
 
             var format = root != null && root.Value.TryGetProperty("format", out var fmt) && fmt.ValueKind == JsonValueKind.String
@@ -366,15 +377,25 @@ namespace OpenClaw.Node.Services
             var to = root != null && root.Value.TryGetProperty("to", out var toVal) && toVal.ValueKind == JsonValueKind.String
                 ? (toVal.GetString() ?? string.Empty).Trim()
                 : string.Empty;
-            var maxWidth = root != null && root.Value.TryGetProperty("maxWidth", out var mw) && mw.ValueKind == JsonValueKind.Number
-                ? mw.GetInt32()
-                : 1600;
+            var maxWidth = 1600;
+            if (root != null && root.Value.TryGetProperty("maxWidth", out var mw) && mw.ValueKind == JsonValueKind.Number)
+            {
+                if (!mw.TryGetInt32(out maxWidth))
+                {
+                    return Invalid(request.Id, "screen.capture params.maxWidth must be a 32-bit integer");
+                }
+            }
             var quality = root != null && root.Value.TryGetProperty("quality", out var qualityEl) && qualityEl.ValueKind == JsonValueKind.Number
                 ? qualityEl.GetDouble()
                 : 0.85;
-            var maxInlineBytes = root != null && root.Value.TryGetProperty("maxInlineBytes", out var maxInlineEl) && maxInlineEl.ValueKind == JsonValueKind.Number
-                ? maxInlineEl.GetInt32()
-                : 1_500_000;
+            var maxInlineBytes = 1_500_000;
+            if (root != null && root.Value.TryGetProperty("maxInlineBytes", out var maxInlineEl) && maxInlineEl.ValueKind == JsonValueKind.Number)
+            {
+                if (!maxInlineEl.TryGetInt32(out maxInlineBytes))
+                {
+                    return Invalid(request.Id, "screen.capture params.maxInlineBytes must be a 32-bit integer");
+                }
+            }
 
             if (maxWidth <= 0)
             {
@@ -791,22 +812,32 @@ namespace OpenClaw.Node.Services
                 return Invalid(request.Id, "screen.record params.lowLatency must be a boolean");
             }
 
-            var durationMs = root != null && root.Value.TryGetProperty("durationMs", out var d) && d.ValueKind == JsonValueKind.Number
-                ? d.GetInt32()
-                : 10000;
-
-            if (durationMs <= 0)
+            var durationMs = 10000;
+            if (root != null && root.Value.TryGetProperty("durationMs", out var d) && d.ValueKind == JsonValueKind.Number)
             {
-                return Invalid(request.Id, "screen.record params.durationMs must be > 0");
+                if (!d.TryGetInt32(out durationMs))
+                {
+                    return Invalid(request.Id, "screen.record params.durationMs must be a 32-bit integer");
+                }
+
+                if (durationMs <= 0)
+                {
+                    return Invalid(request.Id, "screen.record params.durationMs must be > 0");
+                }
             }
 
-            var fps = root != null && root.Value.TryGetProperty("fps", out var f) && f.ValueKind == JsonValueKind.Number
-                ? f.GetInt32()
-                : 10;
-
-            if (fps <= 0)
+            var fps = 10;
+            if (root != null && root.Value.TryGetProperty("fps", out var f) && f.ValueKind == JsonValueKind.Number)
             {
-                return Invalid(request.Id, "screen.record params.fps must be > 0");
+                if (!f.TryGetInt32(out fps))
+                {
+                    return Invalid(request.Id, "screen.record params.fps must be a 32-bit integer");
+                }
+
+                if (fps <= 0)
+                {
+                    return Invalid(request.Id, "screen.record params.fps must be > 0");
+                }
             }
 
             var includeAudio = root != null && root.Value.TryGetProperty("includeAudio", out var a) &&
@@ -814,13 +845,18 @@ namespace OpenClaw.Node.Services
                 ? a.GetBoolean()
                 : true;
 
-            var screenIndex = root != null && root.Value.TryGetProperty("screenIndex", out var sIdx) && sIdx.ValueKind == JsonValueKind.Number
-                ? sIdx.GetInt32()
-                : 0;
-
-            if (screenIndex < 0)
+            var screenIndex = 0;
+            if (root != null && root.Value.TryGetProperty("screenIndex", out var sIdx) && sIdx.ValueKind == JsonValueKind.Number)
             {
-                return Invalid(request.Id, "screen.record params.screenIndex must be >= 0");
+                if (!sIdx.TryGetInt32(out screenIndex))
+                {
+                    return Invalid(request.Id, "screen.record params.screenIndex must be a 32-bit integer");
+                }
+
+                if (screenIndex < 0)
+                {
+                    return Invalid(request.Id, "screen.record params.screenIndex must be >= 0");
+                }
             }
 
             var captureApi = root != null && root.Value.TryGetProperty("captureApi", out var api) && api.ValueKind == JsonValueKind.String
@@ -1340,7 +1376,11 @@ namespace OpenClaw.Node.Services
                 return Invalid(request.Id, "input.scroll requires numeric params.deltaY");
             }
 
-            var deltaY = deltaEl.GetInt32();
+            if (!deltaEl.TryGetInt32(out var deltaY))
+            {
+                return Invalid(request.Id, "input.scroll params.deltaY must be a 32-bit integer");
+            }
+
             if (deltaY == 0)
             {
                 return Invalid(request.Id, "input.scroll params.deltaY must be non-zero");
@@ -1356,7 +1396,12 @@ namespace OpenClaw.Node.Services
                     return Invalid(request.Id, "input.scroll params.x must be numeric when provided");
                 }
 
-                x = xEl.GetInt32();
+                if (!xEl.TryGetInt32(out var parsedX))
+                {
+                    return Invalid(request.Id, "input.scroll params.x must be a 32-bit integer when provided");
+                }
+
+                x = parsedX;
             }
 
             if (root.Value.TryGetProperty("y", out var yEl))
@@ -1366,7 +1411,12 @@ namespace OpenClaw.Node.Services
                     return Invalid(request.Id, "input.scroll params.y must be numeric when provided");
                 }
 
-                y = yEl.GetInt32();
+                if (!yEl.TryGetInt32(out var parsedY))
+                {
+                    return Invalid(request.Id, "input.scroll params.y must be a 32-bit integer when provided");
+                }
+
+                y = parsedY;
             }
 
             if (x.HasValue ^ y.HasValue)
@@ -1444,8 +1494,10 @@ namespace OpenClaw.Node.Services
                 return Invalid(request.Id, "input.click.relative requires numeric params.offsetY");
             }
 
-            var offsetX = oxEl.GetInt32();
-            var offsetY = oyEl.GetInt32();
+            if (!oxEl.TryGetInt32(out var offsetX) || !oyEl.TryGetInt32(out var offsetY))
+            {
+                return Invalid(request.Id, "input.click.relative params.offsetX and params.offsetY must be 32-bit integers");
+            }
             var button = root.Value.TryGetProperty("button", out var bEl) && bEl.ValueKind == JsonValueKind.String
                 ? (bEl.GetString() ?? "primary")
                 : "primary";
@@ -1771,9 +1823,15 @@ namespace OpenClaw.Node.Services
                 ? cEl.GetString()
                 : null;
 
-            timeoutMs = root.TryGetProperty("timeoutMs", out var tmEl) && tmEl.ValueKind == JsonValueKind.Number
-                ? tmEl.GetInt32()
-                : 1500;
+            timeoutMs = 1500;
+            if (root.TryGetProperty("timeoutMs", out var tmEl) && tmEl.ValueKind == JsonValueKind.Number)
+            {
+                if (!tmEl.TryGetInt32(out timeoutMs))
+                {
+                    invalid = Invalid(requestId, "ui.* params.timeoutMs must be a 32-bit integer");
+                    return false;
+                }
+            }
 
             if ((!handle.HasValue || handle.Value == 0) && string.IsNullOrWhiteSpace(titleContains))
             {
