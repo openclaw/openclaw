@@ -361,6 +361,8 @@ const TARGET_KEYS = [
   "agents.defaults.compaction.keepRecentTokens",
   "agents.defaults.compaction.reserveTokensFloor",
   "agents.defaults.compaction.maxHistoryShare",
+  "agents.defaults.compaction.identifierPolicy",
+  "agents.defaults.compaction.identifierInstructions",
   "agents.defaults.compaction.memoryFlush",
   "agents.defaults.compaction.memoryFlush.enabled",
   "agents.defaults.compaction.memoryFlush.softThresholdTokens",
@@ -415,6 +417,7 @@ const ENUM_EXPECTATIONS: Record<string, string[]> = {
   "logging.redactSensitive": ['"off"', '"tools"'],
   "update.channel": ['"stable"', '"beta"', '"dev"'],
   "agents.defaults.compaction.mode": ['"default"', '"safeguard"'],
+  "agents.defaults.compaction.identifierPolicy": ['"strict"', '"off"', '"custom"'],
 };
 
 const TOOLS_HOOKS_TARGET_KEYS = [
@@ -776,6 +779,11 @@ describe("config help copy quality", () => {
 
     const historyShare = FIELD_HELP["agents.defaults.compaction.maxHistoryShare"];
     expect(/0\\.1-0\\.9|fraction|share/i.test(historyShare)).toBe(true);
+
+    const identifierPolicy = FIELD_HELP["agents.defaults.compaction.identifierPolicy"];
+    expect(identifierPolicy.includes('"strict"')).toBe(true);
+    expect(identifierPolicy.includes('"off"')).toBe(true);
+    expect(identifierPolicy.includes('"custom"')).toBe(true);
 
     const flush = FIELD_HELP["agents.defaults.compaction.memoryFlush.enabled"];
     expect(/pre-compaction|memory flush|token/i.test(flush)).toBe(true);
