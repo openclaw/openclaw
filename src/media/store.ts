@@ -141,7 +141,7 @@ async function downloadToFile(
     try {
       parsedUrl = new URL(url);
     } catch {
-      reject(new Error("Invalid URL"));
+      reject(new Error(`Invalid URL: ${url}`));
       return;
     }
     if (!["http:", "https:"].includes(parsedUrl.protocol)) {
@@ -164,7 +164,7 @@ async function downloadToFile(
             return;
           }
           if (!res.statusCode || res.statusCode >= 400) {
-            reject(new Error(`HTTP ${res.statusCode ?? "?"} downloading media`));
+            reject(new Error(`HTTP ${res.statusCode ?? "?"} downloading media from ${url}`));
             return;
           }
           let total = 0;
