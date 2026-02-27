@@ -530,6 +530,22 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(section).toContain("- Assistant: [non-text content: toolCall]");
   });
 
+  it("keeps non-text placeholders for mixed-content preserved messages", () => {
+    const section = formatPreservedTurnsSection([
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "caption text" },
+          { type: "image", data: "abc", mimeType: "image/png" },
+        ],
+        timestamp: 1,
+      } as unknown as AgentMessage,
+    ]);
+
+    expect(section).toContain("- User: caption text");
+    expect(section).toContain("[non-text content: image]");
+  });
+
   it("clamps preserve count into a safe range", () => {
     expect(resolveRecentTurnsPreserve(undefined)).toBe(3);
     expect(resolveRecentTurnsPreserve(-1)).toBe(0);

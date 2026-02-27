@@ -201,6 +201,9 @@ function formatNonTextPlaceholder(content: unknown): string | null {
   if (content === null || content === undefined) {
     return null;
   }
+  if (typeof content === "string") {
+    return null;
+  }
   if (!Array.isArray(content)) {
     return "[non-text content]";
   }
@@ -355,7 +358,8 @@ function formatPreservedTurnsSection(messages: AgentMessage[]): string {
       const nonTextPlaceholder = formatNonTextPlaceholder(
         (message as { content?: unknown }).content,
       );
-      const rendered = text || nonTextPlaceholder;
+      const rendered =
+        text && nonTextPlaceholder ? `${text}\n${nonTextPlaceholder}` : text || nonTextPlaceholder;
       if (!rendered) {
         return null;
       }
