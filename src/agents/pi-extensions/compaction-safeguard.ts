@@ -201,6 +201,35 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       );
       return { cancel: true };
     }
+
+    // GUARD: Prevent double-compaction when cache-ttl entry breaks prepareCompaction() guard.
+    // See: https://github.com/openclaw/openclaw/issues/28491
+    // The external dependency's prepareCompaction() only checks if the LAST entry is compaction.
+    // When appendCacheTtlTimestamp() inserts a custom entry after compaction, this guard fails
+    // and triggers a second wasteful compaction on tiny context.
+    const MIN_COMPACTION_TOKENS = 10_000;
+    const tokensBefore =
+      typeof preparation.tokensBefore === "number" && Number.isFinite(preparation.tokensBefore)
+        ? preparation.tokensBefore
+        : undefined;
+    if (tokensBefore !== undefined && tokensBefore < MIN_COMPACTION_TOKENS) {
+      log.warn(
+        `Compaction safeguard: cancelling compaction with insufficient tokens (${tokensBefore} < ${MIN_COMPACTION_TOKENS})`,
+      );
+      return { cancel: true };
+    }
+
+    // Additional guard: check recent entries for compaction (defense in depth)
+    const entries = ctx.sessionManager.getEntries();
+    const recentEntries = entries.slice(-5);
+    const hasRecentCompaction = recentEntries.some((e) => e.type === "compaction");
+    if (hasRecentCompaction && tokensBefore !== undefined && tokensBefore < 50_000) {
+      log.warn(
+        `Compaction safeguard: recent compaction detected with moderate context (${tokensBefore} tokens); preventing double-compaction`,
+      );
+      return { cancel: true };
+    }
+
     const { readFiles, modifiedFiles } = computeFileLists(preparation.fileOps);
     const fileOpsSummary = formatFileOperations(readFiles, modifiedFiles);
     const toolFailures = collectToolFailures([

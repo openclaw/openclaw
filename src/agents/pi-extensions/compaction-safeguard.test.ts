@@ -376,7 +376,7 @@ describe("compaction-safeguard extension model fallback", () => {
     const compactionHandler = createCompactionHandler();
     const mockEvent = createCompactionEvent({
       messageText: "test message",
-      tokensBefore: 1000,
+      tokensBefore: 150_000,
     });
 
     const getApiKeyMock = vi.fn().mockResolvedValue(null);
@@ -469,7 +469,7 @@ describe("compaction-safeguard double-compaction guard", () => {
     const compactionHandler = createCompactionHandler();
     const mockEvent = createCompactionEvent({
       messageText: "real message",
-      tokensBefore: 1500,
+      tokensBefore: 150_000,
     });
     const getApiKeyMock = vi.fn().mockResolvedValue(null);
     const mockContext = createCompactionContext({
@@ -481,6 +481,99 @@ describe("compaction-safeguard double-compaction guard", () => {
       cancel?: boolean;
     };
     expect(result).toEqual({ cancel: true });
+    expect(getApiKeyMock).toHaveBeenCalled();
+  });
+
+  it("cancels compaction when tokensBefore is below minimum threshold (issue #28491)", async () => {
+    // This guards against double-compaction when cache-ttl entry breaks prepareCompaction() guard
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, { model });
+
+    const compactionHandler = createCompactionHandler();
+    const mockEvent = createCompactionEvent({
+      messageText: "real message",
+      tokensBefore: 5000, // Below MIN_COMPACTION_TOKENS (10_000)
+    });
+    const getApiKeyMock = vi.fn().mockResolvedValue("sk-test");
+    const mockContext = createCompactionContext({
+      sessionManager,
+      getApiKeyMock,
+    });
+
+    const result = (await compactionHandler(mockEvent, mockContext)) as {
+      cancel?: boolean;
+    };
+    expect(result).toEqual({ cancel: true });
+    // Should cancel before calling getApiKey
+    expect(getApiKeyMock).not.toHaveBeenCalled();
+  });
+
+  it("cancels compaction when recent compaction exists with moderate context (issue #28491)", async () => {
+    // Defense in depth: check recent entries for compaction
+    const mockEntries = [
+      { type: "message", id: "e1", parentId: null, timestamp: "2024-01-01T00:00:00Z" },
+      {
+        type: "compaction",
+        id: "e2",
+        parentId: "e1",
+        timestamp: "2024-01-01T00:01:00Z",
+        summary: "test",
+        firstKeptEntryId: "e1",
+        tokensBefore: 180000,
+      },
+      {
+        type: "custom",
+        id: "e3",
+        parentId: "e2",
+        timestamp: "2024-01-01T00:01:01Z",
+        customType: "openclaw.cache-ttl",
+      },
+      { type: "message", id: "e4", parentId: "e3", timestamp: "2024-01-01T00:02:00Z" },
+    ] as unknown as import("@mariozechner/pi-coding-agent").SessionEntry[];
+    const sessionManager = {
+      ...stubSessionManager(),
+      getEntries: () => mockEntries,
+    };
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, { model });
+
+    const compactionHandler = createCompactionHandler();
+    const mockEvent = createCompactionEvent({
+      messageText: "real message",
+      tokensBefore: 30000, // Below 50_000 threshold with recent compaction
+    });
+    const getApiKeyMock = vi.fn().mockResolvedValue("sk-test");
+    const mockContext = createCompactionContext({
+      sessionManager,
+      getApiKeyMock,
+    });
+
+    const result = (await compactionHandler(mockEvent, mockContext)) as {
+      cancel?: boolean;
+    };
+    expect(result).toEqual({ cancel: true });
+    expect(getApiKeyMock).not.toHaveBeenCalled();
+  });
+
+  it("allows compaction when tokensBefore is sufficient and no recent compaction", async () => {
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, { model });
+
+    const compactionHandler = createCompactionHandler();
+    const mockEvent = createCompactionEvent({
+      messageText: "real message",
+      tokensBefore: 150_000, // Well above thresholds
+    });
+    const getApiKeyMock = vi.fn().mockResolvedValue(null); // Will cancel due to no API key
+    const mockContext = createCompactionContext({
+      sessionManager,
+      getApiKeyMock,
+    });
+
+    await compactionHandler(mockEvent, mockContext);
+    // Should proceed past token checks and reach API key check
     expect(getApiKeyMock).toHaveBeenCalled();
   });
 });
