@@ -83,6 +83,39 @@ OpenClaw uses `pi-ai` for model streaming. For `openai-codex/*` models you can s
 }
 ```
 
+### OpenAI Responses server-side compaction
+
+For direct OpenAI Responses models (`openai/*` using `api: "openai-responses"` with
+`baseUrl` on `api.openai.com`), OpenClaw now auto-enables OpenAI server-side
+compaction payload hints:
+
+- Forces `store: true` (unless model compat sets `supportsStore: false`)
+- Injects `context_management: [{ type: "compaction", compact_threshold: ... }]`
+
+By default, `compact_threshold` is `70%` of model `contextWindow` (or `80000`
+when unavailable).
+
+You can override per model:
+
+```json5
+{
+  agents: {
+    defaults: {
+      models: {
+        "openai/gpt-5": {
+          params: {
+            responsesServerCompaction: true,
+            responsesCompactThreshold: 120000,
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+Set `responsesServerCompaction: false` to disable this injection for a model.
+
 ## Notes
 
 - Model refs always use `provider/model` (see [/concepts/models](/concepts/models)).
