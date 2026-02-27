@@ -94,6 +94,9 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
     if (isEnabled("createForumTopic")) {
       actions.add("topic-create");
     }
+    if (isEnabled("sendPoll")) {
+      actions.add("poll");
+    }
     return Array.from(actions);
   },
   supportsButtons: ({ cfg }) => {
@@ -223,6 +226,40 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
           name,
           iconColor: iconColor ?? undefined,
           iconCustomEmojiId: iconCustomEmojiId ?? undefined,
+          accountId: accountId ?? undefined,
+        },
+        cfg,
+        { mediaLocalRoots },
+      );
+    }
+
+    if (action === "poll") {
+      const to =
+        readStringParam(params, "to") ?? readStringParam(params, "target", { required: true });
+      const question = readStringParam(params, "pollQuestion", { required: true });
+      const options = readStringArrayParam(params, "pollOption", { required: true }) ?? [];
+      const allowMultiselect = typeof params.pollMulti === "boolean" ? params.pollMulti : false;
+      const maxSelections = allowMultiselect ? Math.max(2, options.length) : 1;
+      const durationSeconds = readNumberParam(params, "pollDurationSeconds", { integer: true });
+      const isAnonymous =
+        typeof params.pollAnonymous === "boolean" && params.pollAnonymous
+          ? true
+          : typeof params.pollPublic === "boolean" && params.pollPublic
+            ? false
+            : undefined;
+      const silent = typeof params.silent === "boolean" ? params.silent : undefined;
+      const messageThreadId = readNumberParam(params, "threadId", { integer: true });
+      return await handleTelegramAction(
+        {
+          action: "sendPoll",
+          to,
+          question,
+          options,
+          maxSelections,
+          durationSeconds: durationSeconds ?? undefined,
+          isAnonymous,
+          silent,
+          messageThreadId: messageThreadId ?? undefined,
           accountId: accountId ?? undefined,
         },
         cfg,
