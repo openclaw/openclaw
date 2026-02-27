@@ -207,7 +207,14 @@ export async function packNpmSpecToArchive(params: {
     },
   );
   if (res.code !== 0) {
-    return { ok: false, error: `npm pack failed: ${res.stderr.trim() || res.stdout.trim()}` };
+    const raw = res.stderr.trim() || res.stdout.trim();
+    if (/E404|is not in this registry/i.test(raw)) {
+      return {
+        ok: false,
+        error: `Package not found on npm: ${params.spec}. See https://docs.openclaw.ai/tools/plugin for installable plugins.`,
+      };
+    }
+    return { ok: false, error: `npm pack failed: ${raw}` };
   }
 
   const parsedJson = parseNpmPackJsonOutput(res.stdout || "");
