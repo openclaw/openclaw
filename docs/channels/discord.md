@@ -726,8 +726,27 @@ Default slash command settings:
 
   </Accordion>
 
-  <Accordion title="Gateway proxy">
-    Route Discord gateway WebSocket traffic and startup REST lookups (application ID + allowlist resolution) through an HTTP(S) proxy with `channels.discord.proxy`.
+  <Accordion title="Proxy support">
+    Route all Discord traffic (gateway WebSocket, REST API calls, and startup lookups) through a proxy with `channels.discord.proxy`.
+
+    Supported proxy protocols:
+
+    - HTTP: `http://proxy.example:8080`
+    - HTTPS: `https://proxy.example:443`
+
+    Proxy authentication is supported via the URL format:
+
+```json5
+{
+  channels: {
+    discord: {
+      proxy: "http://user:password@proxy.example:8080",
+    },
+  },
+}
+```
+
+    Basic configuration without authentication:
 
 ```json5
 {
@@ -747,13 +766,18 @@ Default slash command settings:
     discord: {
       accounts: {
         primary: {
-          proxy: "http://proxy.example:8080",
+          proxy: "http://user:pass@proxy.example:8080",
         },
       },
     },
   },
 }
 ```
+
+    Notes:
+
+    - Invalid proxy URLs will throw an error at startup
+    - Only HTTP and HTTPS protocols are supported
 
   </Accordion>
 
