@@ -236,7 +236,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
   // would otherwise be blocked by SSRF protection. Since the user has
   // explicitly configured this host, we allow media downloads from it.
   const baseHostname = new URL(client.baseUrl).hostname;
-  const mediaSsrfPolicy = { hostnameAllowlist: [baseHostname] };
+  const mediaSsrfPolicy = { allowedHostnames: [baseHostname] };
 
   const resolveMattermostMedia = async (
     fileIds?: string[] | null,
