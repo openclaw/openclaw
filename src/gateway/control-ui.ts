@@ -297,6 +297,10 @@ export function handleControlUiHttpRequest(
       respondNotFound(res);
       return true;
     }
+    // No basePath and not a /ui path — let other handlers (webhooks, etc.) handle it
+    if (req.method !== "GET" && req.method !== "HEAD") {
+      return false;
+    }
   }
 
   if (basePath) {

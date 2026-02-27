@@ -342,15 +342,27 @@ describe("handleControlUiHttpRequest", () => {
     });
   });
 
-  it("does not intercept POST to non-control-UI paths (webhook passthrough)", async () => {
+  it("does not intercept POST to non-control-UI paths with basePath (webhook passthrough)", async () => {
     await withControlUiRoot({
       fn: async (tmp) => {
-        // With basePath: POST to a webhook path outside the UI prefix should pass through
         const { handled } = runControlUiRequest({
-          url: "/line/fulla",
+          url: "/line/webhook",
           method: "POST",
           rootPath: tmp,
           basePath: "/openclaw",
+        });
+        expect(handled).toBe(false);
+      },
+    });
+  });
+
+  it("does not intercept POST to non-control-UI paths without basePath (webhook passthrough)", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const { handled } = runControlUiRequest({
+          url: "/line/webhook",
+          method: "POST",
+          rootPath: tmp,
         });
         expect(handled).toBe(false);
       },
