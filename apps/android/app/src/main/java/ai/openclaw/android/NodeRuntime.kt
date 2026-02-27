@@ -65,8 +65,6 @@ class NodeRuntime(context: Context) {
   private val cameraHandler: CameraHandler = CameraHandler(
     appContext = appContext,
     camera = camera,
-    prefs = prefs,
-    connectedEndpoint = { connectedEndpoint },
     externalAudioCaptureActive = externalAudioCaptureActive,
     showCameraHud = ::showCameraHud,
     triggerCameraFlash = ::triggerCameraFlash,
@@ -143,6 +141,7 @@ class NodeRuntime(context: Context) {
     locationEnabled = { locationMode.value != LocationMode.Off },
     smsAvailable = { sms.canSendSms() },
     debugBuild = { BuildConfig.DEBUG },
+    refreshNodeCanvasCapability = { nodeSession.refreshNodeCanvasCapability() },
     onCanvasA2uiPush = {
       _canvasA2uiHydrated.value = true
       _canvasRehydratePending.value = false

@@ -1,8 +1,11 @@
 package ai.openclaw.android.node
 
+import android.Manifest
+import android.app.ActivityManager
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.PackageManager
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.os.BatteryManager
@@ -11,6 +14,7 @@ import android.os.Environment
 import android.os.PowerManager
 import android.os.StatFs
 import android.os.SystemClock
+import androidx.core.content.ContextCompat
 import ai.openclaw.android.BuildConfig
 import ai.openclaw.android.gateway.GatewaySession
 import java.util.Locale
@@ -22,6 +26,13 @@ import kotlinx.serialization.json.put
 class DeviceHandler(
   private val appContext: Context,
 ) {
+  private data class BatterySnapshot(
+    val status: Int,
+    val plugged: Int,
+    val levelFraction: Double?,
+    val temperatureC: Double?,
+  )
+
   fun handleDeviceStatus(_paramsJson: String?): GatewaySession.InvokeResult {
     return GatewaySession.InvokeResult.ok(statusPayloadJson())
   }
@@ -30,12 +41,16 @@ class DeviceHandler(
     return GatewaySession.InvokeResult.ok(infoPayloadJson())
   }
 
+  fun handleDevicePermissions(_paramsJson: String?): GatewaySession.InvokeResult {
+    return GatewaySession.InvokeResult.ok(permissionsPayloadJson())
+  }
+
+  fun handleDeviceHealth(_paramsJson: String?): GatewaySession.InvokeResult {
+    return GatewaySession.InvokeResult.ok(healthPayloadJson())
+  }
+
   private fun statusPayloadJson(): String {
-    val batteryIntent = appContext.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
-    val batteryStatus =
-      batteryIntent?.getIntExtra(BatteryManager.EXTRA_STATUS, BatteryManager.BATTERY_STATUS_UNKNOWN)
-        ?: BatteryManager.BATTERY_STATUS_UNKNOWN
-    val batteryLevel = batteryLevelFraction(batteryIntent)
+    val battery = readBatterySnapshot()
     val powerManager = appContext.getSystemService(PowerManager::class.java)
     val storage = StatFs(Environment.getDataDirectory().absolutePath)
     val totalBytes = storage.totalBytes
@@ -50,8 +65,8 @@ class DeviceHandler(
       put(
         "battery",
         buildJsonObject {
-          batteryLevel?.let { put("level", JsonPrimitive(it)) }
-          put("state", JsonPrimitive(mapBatteryState(batteryStatus)))
+          battery.levelFraction?.let { put("level", JsonPrimitive(it)) }
+          put("state", JsonPrimitive(mapBatteryState(battery.status)))
           put("lowPowerModeEnabled", JsonPrimitive(powerManager?.isPowerSaveMode == true))
         },
       )
@@ -112,6 +127,151 @@ class DeviceHandler(
     }.toString()
   }
 
+  private fun permissionsPayloadJson(): String {
+    val canSendSms = appContext.packageManager.hasSystemFeature(PackageManager.FEATURE_TELEPHONY)
+    val notificationAccess = DeviceNotificationListenerService.isAccessEnabled(appContext)
+    return buildJsonObject {
+      put(
+        "permissions",
+        buildJsonObject {
+          put(
+            "camera",
+            permissionStateJson(
+              granted = hasPermission(Manifest.permission.CAMERA),
+              promptableWhenDenied = true,
+            ),
+          )
+          put(
+            "microphone",
+            permissionStateJson(
+              granted = hasPermission(Manifest.permission.RECORD_AUDIO),
+              promptableWhenDenied = true,
+            ),
+          )
+          put(
+            "location",
+            permissionStateJson(
+              granted =
+                hasPermission(Manifest.permission.ACCESS_FINE_LOCATION) ||
+                  hasPermission(Manifest.permission.ACCESS_COARSE_LOCATION),
+              promptableWhenDenied = true,
+            ),
+          )
+          put(
+            "backgroundLocation",
+            permissionStateJson(
+              granted = hasPermission(Manifest.permission.ACCESS_BACKGROUND_LOCATION),
+              promptableWhenDenied = true,
+            ),
+          )
+          put(
+            "sms",
+            permissionStateJson(
+              granted = hasPermission(Manifest.permission.SEND_SMS) && canSendSms,
+              promptableWhenDenied = canSendSms,
+            ),
+          )
+          put(
+            "notificationListener",
+            permissionStateJson(
+              granted = notificationAccess,
+              promptableWhenDenied = true,
+            ),
+          )
+          // Screen capture on Android is interactive per-capture consent, not a sticky app permission.
+          put(
+            "screenCapture",
+            permissionStateJson(
+              granted = false,
+              promptableWhenDenied = true,
+            ),
+          )
+        },
+      )
+    }.toString()
+  }
+
+  private fun healthPayloadJson(): String {
+    val battery = readBatterySnapshot()
+    val batteryManager = appContext.getSystemService(BatteryManager::class.java)
+    val currentNowUa = batteryManager?.getLongProperty(BatteryManager.BATTERY_PROPERTY_CURRENT_NOW)
+    val currentNowMa =
+      if (currentNowUa == null || currentNowUa == Long.MIN_VALUE) {
+        null
+      } else {
+        currentNowUa.toDouble() / 1_000.0
+      }
+
+    val powerManager = appContext.getSystemService(PowerManager::class.java)
+    val activityManager = appContext.getSystemService(ActivityManager::class.java)
+    val memoryInfo = ActivityManager.MemoryInfo()
+    activityManager?.getMemoryInfo(memoryInfo)
+    val totalRamBytes = memoryInfo.totalMem.coerceAtLeast(0L)
+    val availableRamBytes = memoryInfo.availMem.coerceAtLeast(0L)
+    val usedRamBytes = (totalRamBytes - availableRamBytes).coerceAtLeast(0L)
+    val lowMemory = memoryInfo.lowMemory
+    val memoryPressure = mapMemoryPressure(totalRamBytes, availableRamBytes, lowMemory)
+
+    return buildJsonObject {
+      put(
+        "memory",
+        buildJsonObject {
+          put("pressure", JsonPrimitive(memoryPressure))
+          put("totalRamBytes", JsonPrimitive(totalRamBytes))
+          put("availableRamBytes", JsonPrimitive(availableRamBytes))
+          put("usedRamBytes", JsonPrimitive(usedRamBytes))
+          put("thresholdBytes", JsonPrimitive(memoryInfo.threshold.coerceAtLeast(0L)))
+          put("lowMemory", JsonPrimitive(lowMemory))
+        },
+      )
+      put(
+        "battery",
+        buildJsonObject {
+          put("state", JsonPrimitive(mapBatteryState(battery.status)))
+          put("chargingType", JsonPrimitive(mapChargingType(battery.plugged)))
+          battery.temperatureC?.let { put("temperatureC", JsonPrimitive(it)) }
+          currentNowMa?.let { put("currentMa", JsonPrimitive(it)) }
+        },
+      )
+      put(
+        "power",
+        buildJsonObject {
+          put("dozeModeEnabled", JsonPrimitive(powerManager?.isDeviceIdleMode == true))
+          put("lowPowerModeEnabled", JsonPrimitive(powerManager?.isPowerSaveMode == true))
+        },
+      )
+      put(
+        "system",
+        buildJsonObject {
+          Build.VERSION.SECURITY_PATCH
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+            ?.let { put("securityPatchLevel", JsonPrimitive(it)) }
+        },
+      )
+    }.toString()
+  }
+
+  private fun readBatterySnapshot(): BatterySnapshot {
+    val intent = appContext.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+    val status =
+      intent?.getIntExtra(BatteryManager.EXTRA_STATUS, BatteryManager.BATTERY_STATUS_UNKNOWN)
+        ?: BatteryManager.BATTERY_STATUS_UNKNOWN
+    val plugged = intent?.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) ?: 0
+    val temperatureC =
+      intent
+        ?.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, Int.MIN_VALUE)
+        ?.takeIf { it != Int.MIN_VALUE }
+        ?.toDouble()
+        ?.div(10.0)
+    return BatterySnapshot(
+      status = status,
+      plugged = plugged,
+      levelFraction = batteryLevelFraction(intent),
+      temperatureC = temperatureC,
+    )
+  }
+
   private fun batteryLevelFraction(intent: Intent?): Double? {
     val rawLevel = intent?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
     val rawScale = intent?.getIntExtra(BatteryManager.EXTRA_SCALE, -1) ?: -1
@@ -125,6 +285,16 @@ class DeviceHandler(
       BatteryManager.BATTERY_STATUS_FULL -> "full"
       BatteryManager.BATTERY_STATUS_DISCHARGING, BatteryManager.BATTERY_STATUS_NOT_CHARGING -> "unplugged"
       else -> "unknown"
+    }
+  }
+
+  private fun mapChargingType(plugged: Int): String {
+    return when (plugged) {
+      BatteryManager.BATTERY_PLUGGED_AC -> "ac"
+      BatteryManager.BATTERY_PLUGGED_USB -> "usb"
+      BatteryManager.BATTERY_PLUGGED_WIRELESS -> "wireless"
+      BatteryManager.BATTERY_PLUGGED_DOCK -> "dock"
+      else -> "none"
     }
   }
 
@@ -147,6 +317,30 @@ class DeviceHandler(
       caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) -> "satisfied"
       caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) -> "requiresConnection"
       else -> "unsatisfied"
+    }
+  }
+
+  private fun permissionStateJson(granted: Boolean, promptableWhenDenied: Boolean) =
+    buildJsonObject {
+      put("status", JsonPrimitive(if (granted) "granted" else "denied"))
+      put("promptable", JsonPrimitive(!granted && promptableWhenDenied))
+    }
+
+  private fun hasPermission(permission: String): Boolean {
+    return (
+      ContextCompat.checkSelfPermission(appContext, permission) == PackageManager.PERMISSION_GRANTED
+      )
+  }
+
+  private fun mapMemoryPressure(totalBytes: Long, availableBytes: Long, lowMemory: Boolean): String {
+    if (totalBytes <= 0L) return if (lowMemory) "critical" else "unknown"
+    if (lowMemory) return "critical"
+    val freeRatio = availableBytes.toDouble() / totalBytes.toDouble()
+    return when {
+      freeRatio <= 0.05 -> "critical"
+      freeRatio <= 0.15 -> "high"
+      freeRatio <= 0.30 -> "moderate"
+      else -> "normal"
     }
   }
 

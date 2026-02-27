@@ -308,7 +308,7 @@
 </ul>
 <p><a href="https://github.com/openclaw/openclaw/blob/main/CHANGELOG.md">View full changelog</a></p>
 ]]></description>
-            <enclosure url="https://github.com/openclaw/openclaw/releases/download/v2026.2.26-beta.1/OpenClaw-2026.2.26.zip" length="12796628" type="application/octet-stream" sparkle:edSignature="qqVJfkQS9Q4LCTlGtOyXzORWZWWnOkWyiJ6DVX27oPF8aeUlUyfHrmb51sFiNjSuCJC2xmJW1Mi1CAHl/I1pCw=="/>
+            <enclosure url="https://github.com/openclaw/openclaw/releases/download/v2026.2.26/OpenClaw-2026.2.26.zip" length="12796628" type="application/octet-stream" sparkle:edSignature="qqVJfkQS9Q4LCTlGtOyXzORWZWWnOkWyiJ6DVX27oPF8aeUlUyfHrmb51sFiNjSuCJC2xmJW1Mi1CAHl/I1pCw=="/>
         </item>
     </channel>
 </rss>
