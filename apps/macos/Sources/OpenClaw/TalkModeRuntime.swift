@@ -608,7 +608,7 @@ actor TalkModeRuntime {
         }
 
         let baseUrl = self.openaiBaseUrl ?? Self.defaultOpenAIBaseUrl
-        let model = self.openaiModel ?? Self.defaultOpenAIModel
+        let model = input.directive?.modelId ?? self.openaiModel ?? Self.defaultOpenAIModel
         let voice = self.openaiVoice ?? Self.defaultOpenAIVoice
 
         guard let url = URL(string: "\(baseUrl.absoluteString)/audio/speech") else {
