@@ -17,6 +17,7 @@ export type FeishuMessageInfo = {
   content: string;
   contentType: string;
   createTime?: number;
+  rootId?: string;
 };
 
 /**
@@ -55,6 +56,7 @@ export async function getMessageFeishu(params: {
             sender_type?: string;
           };
           create_time?: string;
+          root_id?: string;
         }>;
       };
     };
@@ -91,6 +93,7 @@ export async function getMessageFeishu(params: {
       content,
       contentType: item.msg_type ?? "text",
       createTime: item.create_time ? parseInt(item.create_time, 10) : undefined,
+      rootId: item.root_id || undefined,
     };
   } catch {
     return null;

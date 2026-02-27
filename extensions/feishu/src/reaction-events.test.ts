@@ -445,4 +445,86 @@ describe("handleFeishuReactionEvent", () => {
 
     expect(mockEnqueueSystemEvent).toHaveBeenCalledTimes(1);
   });
+
+  it("skips event when user_id is missing (deleted event edge case)", async () => {
+    const runtime = createRuntimeEnv();
+    await handleFeishuReactionEvent({
+      cfg: makeBaseCfg(),
+      event: { message_id: "om_test_msg", reaction_type: { emoji_type: "THUMBSUP" } },
+      action: "removed",
+      runtime,
+    });
+
+    // Should not throw — handles missing user_id gracefully
+    expect(mockEnqueueSystemEvent).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips event when message_id or emoji is missing", async () => {
+    const runtime = createRuntimeEnv();
+    await handleFeishuReactionEvent({
+      cfg: makeBaseCfg(),
+      event: { reaction_type: { emoji_type: "THUMBSUP" } },
+      action: "added",
+      runtime,
+    });
+    expect(mockTryRecordMessagePersistent).not.toHaveBeenCalled();
+
+    await handleFeishuReactionEvent({
+      cfg: makeBaseCfg(),
+      event: { message_id: "om_test_msg" },
+      action: "added",
+      runtime,
+    });
+    expect(mockTryRecordMessagePersistent).not.toHaveBeenCalled();
+  });
+
+  it("routes topic reactions to topic-scoped peer when topicSessionMode is enabled", async () => {
+    mockGetMessageFeishu.mockResolvedValue({
+      messageId: "om_topic_msg",
+      chatId: "oc_test_chat",
+      chatType: "group",
+      content: "topic message",
+      contentType: "text",
+      rootId: "om_root_123",
+    });
+
+    const cfg = makeBaseCfg({
+      channels: {
+        feishu: {
+          groupPolicy: "open",
+          topicSessionMode: "enabled",
+        },
+      },
+    } as Partial<ClawdbotConfig>);
+
+    await handleFeishuReactionEvent({
+      cfg,
+      event: makeReactionEvent(),
+      action: "added",
+      runtime: createRuntimeEnv(),
+    });
+
+    expect(mockResolveAgentRoute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        peer: { kind: "group", id: "oc_test_chat:topic:om_root_123" },
+        parentPeer: { kind: "group", id: "oc_test_chat" },
+      }),
+    );
+  });
+
+  it("routes non-topic reactions without parentPeer", async () => {
+    await handleFeishuReactionEvent({
+      cfg: makeBaseCfg(),
+      event: makeReactionEvent(),
+      action: "added",
+      runtime: createRuntimeEnv(),
+    });
+
+    expect(mockResolveAgentRoute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        peer: { kind: "group", id: "oc_test_chat" },
+        parentPeer: null,
+      }),
+    );
+  });
 });

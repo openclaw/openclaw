@@ -22,12 +22,12 @@ import type { FeishuConfig } from "./types.js";
  * @see https://open.feishu.cn/document/uAjLw4CM/ukTMukTMukTM/reference/im-v1/message-reaction/events/created
  */
 export type FeishuReactionEvent = {
-  message_id: string;
-  reaction_type: {
+  message_id?: string;
+  reaction_type?: {
     emoji_type: string;
   };
-  operator_type: string;
-  user_id: {
+  operator_type?: string;
+  user_id?: {
     open_id?: string;
     user_id?: string;
     union_id?: string;
@@ -37,7 +37,17 @@ export type FeishuReactionEvent = {
 
 // In-memory cache for message info lookups (avoids repeated API calls for the same message).
 const MESSAGE_CACHE_TTL_MS = 5 * 60 * 1000;
-const messageInfoCache = new Map<string, { info: FeishuMessageInfo | null; expireAt: number }>();
+const MESSAGE_CACHE_EVICT_INTERVAL_MS = 60 * 1000;
+const messageInfoCache = new Map<string, { info: FeishuMessageInfo; expireAt: number }>();
+let lastEvictMs = 0;
+
+function evictExpiredCacheEntries(now: number): void {
+  if (now - lastEvictMs < MESSAGE_CACHE_EVICT_INTERVAL_MS) return;
+  lastEvictMs = now;
+  for (const [key, entry] of messageInfoCache) {
+    if (entry.expireAt <= now) messageInfoCache.delete(key);
+  }
+}
 
 async function getCachedMessageInfo(params: {
   cfg: ClawdbotConfig;
@@ -46,6 +56,7 @@ async function getCachedMessageInfo(params: {
 }): Promise<FeishuMessageInfo | null> {
   const cacheKey = `${params.accountId ?? "default"}:${params.messageId}`;
   const now = Date.now();
+  evictExpiredCacheEntries(now);
   const cached = messageInfoCache.get(cacheKey);
   if (cached && cached.expireAt > now) {
     return cached.info;
@@ -74,12 +85,17 @@ export async function handleFeishuReactionEvent(params: {
   const log = runtime?.log ?? console.log;
   const error = runtime?.error ?? console.error;
 
-  const userOpenId = event.user_id.open_id ?? "";
-  const emoji = event.reaction_type.emoji_type;
-  const messageId = event.message_id;
+  const userOpenId = event.user_id?.open_id ?? "";
+  const emoji = event.reaction_type?.emoji_type ?? "";
+  const messageId = event.message_id ?? "";
+
+  if (!messageId || !emoji) {
+    log(`feishu[${account.accountId}]: reaction event missing message_id or emoji, skipping`);
+    return;
+  }
 
   // 1. Filter bot's own reactions (typing indicator, etc.)
-  if (event.operator_type === "app" || (botOpenId && userOpenId === botOpenId)) {
+  if (event.operator_type === "app" || (botOpenId && userOpenId && userOpenId === botOpenId)) {
     return;
   }
 
@@ -145,7 +161,7 @@ export async function handleFeishuReactionEvent(params: {
       const senderAllowed = resolveFeishuAllowlistMatch({
         allowFrom: senderAllowFrom,
         senderId: userOpenId,
-        senderIds: [event.user_id.user_id],
+        senderIds: [event.user_id?.user_id],
       }).allowed;
       if (!senderAllowed) {
         log(
@@ -170,7 +186,7 @@ export async function handleFeishuReactionEvent(params: {
       const dmAllowed = resolveFeishuAllowlistMatch({
         allowFrom: effectiveDmAllowFrom,
         senderId: userOpenId,
-        senderIds: [event.user_id.user_id],
+        senderIds: [event.user_id?.user_id],
       }).allowed;
       if (!dmAllowed) {
         log(
@@ -181,13 +197,24 @@ export async function handleFeishuReactionEvent(params: {
     }
   }
 
-  // 5. Resolve agent route.
-  const peerId = isGroup ? chatId : userOpenId;
+  // 5. Resolve agent route (with topic session support).
+  let peerId = isGroup ? chatId : userOpenId;
+  let parentPeer: { kind: "group"; id: string } | null = null;
+  if (isGroup && msgInfo.rootId) {
+    const groupConfig = resolveFeishuGroupConfig({ cfg: feishuCfg, groupId: chatId });
+    const topicSessionMode =
+      groupConfig?.topicSessionMode ?? feishuCfg?.topicSessionMode ?? "disabled";
+    if (topicSessionMode === "enabled") {
+      parentPeer = { kind: "group", id: chatId };
+      peerId = `${chatId}:topic:${msgInfo.rootId}`;
+    }
+  }
   const route = core.channel.routing.resolveAgentRoute({
     cfg,
     channel: "feishu",
     accountId: account.accountId,
     peer: { kind: isGroup ? "group" : "direct", id: peerId },
+    parentPeer,
   });
 
   // 6. Enqueue system event and dispatch to agent so it can decide whether to reply.
@@ -257,4 +284,5 @@ export async function handleFeishuReactionEvent(params: {
 /** Exported for testing only. */
 export function _resetMessageInfoCacheForTest() {
   messageInfoCache.clear();
+  lastEvictMs = 0;
 }
