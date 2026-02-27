@@ -299,6 +299,48 @@ describe("gateway server hooks", () => {
     });
   });
 
+  test("normalizes duplicate target-agent prefixes before isolated dispatch", async () => {
+    testState.hooksConfig = {
+      enabled: true,
+      token: "hook-secret",
+      allowRequestSessionKey: true,
+      allowedSessionKeyPrefixes: ["hook:", "agent:"],
+    };
+    testState.agentsConfig = {
+      list: [{ id: "main", default: true }, { id: "hooks" }],
+    };
+    await withGatewayServer(async ({ port }) => {
+      cronIsolatedRun.mockClear();
+      cronIsolatedRun.mockResolvedValueOnce({
+        status: "ok",
+        summary: "done",
+      });
+
+      const resAgent = await fetch(`http://127.0.0.1:${port}/hooks/agent`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer hook-secret",
+        },
+        body: JSON.stringify({
+          message: "Do it",
+          name: "Email",
+          agentId: "hooks",
+          sessionKey: "agent:hooks:slack:channel:c123",
+        }),
+      });
+      expect(resAgent.status).toBe(202);
+      await waitForSystemEvent();
+
+      const routedCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as
+        | { sessionKey?: string; job?: { agentId?: string } }
+        | undefined;
+      expect(routedCall?.job?.agentId).toBe("hooks");
+      expect(routedCall?.sessionKey).toBe("slack:channel:c123");
+      drainSystemEvents(resolveMainKey());
+    });
+  });
+
   test("enforces hooks.allowedAgentIds for explicit agent routing", async () => {
     testState.hooksConfig = {
       enabled: true,

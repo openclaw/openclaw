@@ -158,6 +158,16 @@ export type AgentDefaultsConfig = {
   contextPruning?: AgentContextPruningConfig;
   /** Compaction tuning and pre-compaction memory flush behavior. */
   compaction?: AgentCompactionConfig;
+  /** Embedded Pi runner hardening and compatibility controls. */
+  embeddedPi?: {
+    /**
+     * How embedded Pi should trust workspace-local `.pi/config/settings.json`.
+     * - sanitize (default): apply project settings except shellPath/shellCommandPrefix
+     * - ignore: ignore project settings entirely
+     * - trusted: trust project settings as-is
+     */
+    projectSettingsPolicy?: "trusted" | "sanitize" | "ignore";
+  };
   /** Vector memory search configuration (per-agent overrides supported). */
   memorySearch?: MemorySearchConfig;
   /** Default thinking level when no /think directive is present. */
@@ -213,6 +223,8 @@ export type AgentDefaultsConfig = {
     session?: string;
     /** Delivery target ("last", "none", or a channel id). */
     target?: "last" | "none" | ChannelId;
+    /** Direct/DM delivery policy. Default: "allow". */
+    directPolicy?: "allow" | "block";
     /** Optional delivery override (E.164 for WhatsApp, chat id for Telegram). Supports :topic:NNN suffix for Telegram topics. */
     to?: string;
     /** Optional account id for multi-account channels. */

@@ -91,10 +91,15 @@ export type SessionThreadBindingsConfig = {
    */
   enabled?: boolean;
   /**
-   * Auto-unfocus TTL for thread-bound sessions (hours).
-   * Set to 0 to disable. Default: 24.
+   * Inactivity window for thread-bound sessions (hours).
+   * Session auto-unfocuses after this amount of idle time. Set to 0 to disable. Default: 24.
    */
-  ttlHours?: number;
+  idleHours?: number;
+  /**
+   * Optional hard max age for thread-bound sessions (hours).
+   * Session auto-unfocuses once this age is reached even if active. Set to 0 to disable. Default: 0.
+   */
+  maxAgeHours?: number;
 };
 
 export type SessionConfig = {
@@ -112,6 +117,12 @@ export type SessionConfig = {
   store?: string;
   typingIntervalSeconds?: number;
   typingMode?: TypingMode;
+  /**
+   * Max parent transcript token count allowed for thread/session forking.
+   * If parent totalTokens is above this value, OpenClaw skips parent fork and
+   * starts a fresh thread session instead. Set to 0 to disable this guard.
+   */
+  parentForkMaxTokens?: number;
   mainKey?: string;
   sendPolicy?: SessionSendPolicyConfig;
   agentToAgent?: {

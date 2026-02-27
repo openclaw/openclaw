@@ -14,6 +14,8 @@ import type {
 } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
+import { buildChannelAccountBindings } from "../../routing/bindings.js";
+import { normalizeAgentId } from "../../routing/session-key.js";
 import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
@@ -753,7 +755,14 @@ export async function runMessageAction(
   }
 
   const channel = await resolveChannel(cfg, params);
-  const accountId = readStringParam(params, "accountId") ?? input.defaultAccountId;
+  let accountId = readStringParam(params, "accountId") ?? input.defaultAccountId;
+  if (!accountId && resolvedAgentId) {
+    const byAgent = buildChannelAccountBindings(cfg).get(channel);
+    const boundAccountIds = byAgent?.get(normalizeAgentId(resolvedAgentId));
+    if (boundAccountIds && boundAccountIds.length > 0) {
+      accountId = boundAccountIds[0];
+    }
+  }
   if (accountId) {
     params.accountId = accountId;
   }

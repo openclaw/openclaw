@@ -8,6 +8,7 @@ import {
   applyAgentConfig,
   buildAgentSummaries,
   pruneAgentConfig,
+  removeAgentBindings,
 } from "./agents.js";
 
 describe("agents helpers", () => {
@@ -109,6 +110,114 @@ describe("agents helpers", () => {
     expect(result.skipped).toHaveLength(1);
     expect(result.conflicts).toHaveLength(1);
     expect(result.config.bindings).toHaveLength(2);
+  });
+
+  it("applyAgentBindings upgrades channel-only binding to account-specific binding for same agent", () => {
+    const cfg: OpenClawConfig = {
+      bindings: [
+        {
+          agentId: "main",
+          match: { channel: "telegram" },
+        },
+      ],
+    };
+
+    const result = applyAgentBindings(cfg, [
+      {
+        agentId: "main",
+        match: { channel: "telegram", accountId: "work" },
+      },
+    ]);
+
+    expect(result.added).toHaveLength(0);
+    expect(result.updated).toHaveLength(1);
+    expect(result.conflicts).toHaveLength(0);
+    expect(result.config.bindings).toEqual([
+      {
+        agentId: "main",
+        match: { channel: "telegram", accountId: "work" },
+      },
+    ]);
+  });
+
+  it("applyAgentBindings treats role-based bindings as distinct routes", () => {
+    const cfg: OpenClawConfig = {
+      bindings: [
+        {
+          agentId: "main",
+          match: {
+            channel: "discord",
+            accountId: "guild-a",
+            guildId: "123",
+            roles: ["111", "222"],
+          },
+        },
+      ],
+    };
+
+    const result = applyAgentBindings(cfg, [
+      {
+        agentId: "work",
+        match: {
+          channel: "discord",
+          accountId: "guild-a",
+          guildId: "123",
+        },
+      },
+    ]);
+
+    expect(result.added).toHaveLength(1);
+    expect(result.conflicts).toHaveLength(0);
+    expect(result.config.bindings).toHaveLength(2);
+  });
+
+  it("removeAgentBindings does not remove role-based bindings when removing channel-level routes", () => {
+    const cfg: OpenClawConfig = {
+      bindings: [
+        {
+          agentId: "main",
+          match: {
+            channel: "discord",
+            accountId: "guild-a",
+            guildId: "123",
+            roles: ["111", "222"],
+          },
+        },
+        {
+          agentId: "main",
+          match: {
+            channel: "discord",
+            accountId: "guild-a",
+            guildId: "123",
+          },
+        },
+      ],
+    };
+
+    const result = removeAgentBindings(cfg, [
+      {
+        agentId: "main",
+        match: {
+          channel: "discord",
+          accountId: "guild-a",
+          guildId: "123",
+        },
+      },
+    ]);
+
+    expect(result.removed).toHaveLength(1);
+    expect(result.conflicts).toHaveLength(0);
+    expect(result.config.bindings).toEqual([
+      {
+        agentId: "main",
+        match: {
+          channel: "discord",
+          accountId: "guild-a",
+          guildId: "123",
+          roles: ["111", "222"],
+        },
+      },
+    ]);
   });
 
   it("pruneAgentConfig removes agent, bindings, and allowlist entries", () => {
