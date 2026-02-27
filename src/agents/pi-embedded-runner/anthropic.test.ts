@@ -8,60 +8,52 @@ describe("wrapAnthropicStreamWithRecovery", () => {
     );
     let callCount = 0;
 
-    // An inner generator that always throws
-    async function* failingStream(): AsyncGenerator {
+    // Mock stream function that returns a rejecting promise
+    const failingStreamFn = () => {
       callCount++;
-      yield; // satisfy require-yield
-      throw error;
-    }
+      return Promise.reject(error);
+    };
 
-    const wrapper = wrapAnthropicStreamWithRecovery(failingStream, { id: "test-session" });
-    const generator = (wrapper as (...args: unknown[]) => AsyncIterable<unknown>)(
-      {},
-      { messages: [] },
-      {},
+    const sessionMeta = { id: "test-session" };
+    const wrapper = wrapAnthropicStreamWithRecovery(
+      failingStreamFn as unknown as Parameters<typeof wrapAnthropicStreamWithRecovery>[0],
+      sessionMeta,
     );
 
     let caughtError: unknown;
     try {
-      for await (const _chunk of generator) {
-        // do nothing
-      }
+      await wrapper({} as never, { messages: [] } as never, {} as never);
     } catch (e) {
       caughtError = e;
     }
 
     expect(caughtError).toBe(error);
-    expect(callCount).toBe(2);
+    expect(callCount).toBe(2); // First call + one retry
   });
 
   it("callWithThinkingRecovery does not retry non-thinking errors", async () => {
     const error = new Error("rate limit exceeded");
     let callCount = 0;
 
-    async function* failingStream(): AsyncGenerator {
+    const failingStreamFn = () => {
       callCount++;
-      yield; // satisfy require-yield
-      throw error;
-    }
+      return Promise.reject(error);
+    };
 
-    const wrapper = wrapAnthropicStreamWithRecovery(failingStream, { id: "test-session" });
-    const generator = (wrapper as (...args: unknown[]) => AsyncIterable<unknown>)(
-      {},
-      { messages: [] },
-      {},
+    const sessionMeta = { id: "test-session" };
+    const wrapper = wrapAnthropicStreamWithRecovery(
+      failingStreamFn as unknown as Parameters<typeof wrapAnthropicStreamWithRecovery>[0],
+      sessionMeta,
     );
 
     let caughtError: unknown;
     try {
-      for await (const _chunk of generator) {
-        // consume
-      }
+      await wrapper({} as never, { messages: [] } as never, {} as never);
     } catch (e) {
       caughtError = e;
     }
 
     expect(caughtError).toBe(error);
-    expect(callCount).toBe(1);
+    expect(callCount).toBe(1); // No retry for non-thinking errors
   });
 });

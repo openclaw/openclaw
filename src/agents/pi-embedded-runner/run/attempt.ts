@@ -864,7 +864,9 @@ export async function runEmbeddedAttempt(
         if (params.provider === "anthropic") {
           const originalMessageCount = activeSession.messages.length;
           const { messages, prefill } = sanitizeThinkingForRecovery(activeSession.messages);
-          activeSession.messages = messages;
+          if (messages !== activeSession.messages) {
+            activeSession.agent.replaceMessages(messages);
+          }
           if (messages.length !== originalMessageCount) {
             log.warn(
               `[session-recovery] Dropped last assistant message with incomplete thinking: sessionId=${params.sessionId}`,
