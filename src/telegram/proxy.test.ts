@@ -64,12 +64,22 @@ describe("resolveProxyUrl", () => {
   });
 
   it("returns undefined when no proxy is configured", () => {
+    vi.stubEnv("HTTPS_PROXY", "");
+    vi.stubEnv("HTTP_PROXY", "");
+    vi.stubEnv("https_proxy", "");
+    vi.stubEnv("http_proxy", "");
     expect(resolveProxyUrl(undefined)).toBeUndefined();
+    vi.unstubAllEnvs();
   });
 
   it("returns undefined when config proxy is empty string", () => {
+    vi.stubEnv("HTTPS_PROXY", "");
+    vi.stubEnv("HTTP_PROXY", "");
+    vi.stubEnv("https_proxy", "");
+    vi.stubEnv("http_proxy", "");
     expect(resolveProxyUrl("")).toBeUndefined();
     expect(resolveProxyUrl("   ")).toBeUndefined();
+    vi.unstubAllEnvs();
   });
 });
 
