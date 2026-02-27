@@ -90,6 +90,8 @@ type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
 const DEVICE_SIGNATURE_SKEW_MS = 2 * 60 * 1000;
 const BROWSER_ORIGIN_LOOPBACK_RATE_LIMIT_IP = "198.18.0.1";
+const NONCE_PROXY_HINT =
+  "proxy/tunnel may strip connect.challenge; use SSH tunnel or gateway.auth.mode=trusted-proxy";
 
 type HandshakeBrowserSecurityContext = {
   hasBrowserOriginHeader: boolean;
@@ -619,6 +621,12 @@ export function attachGatewayWsMessageHandler(params: {
         }
         if (device) {
           const rejectDeviceAuthInvalid = (reason: string, message: string) => {
+            const proxyHint =
+              (reason === "device-nonce-missing" || reason === "device-nonce-mismatch") &&
+              (hasProxyHeaders || !hostIsLocalish)
+                ? NONCE_PROXY_HINT
+                : undefined;
+            const responseMessage = proxyHint ? `${message} (${proxyHint})` : message;
             setHandshakeState("failed");
             setCloseCause("device-auth-invalid", {
               reason,
@@ -629,14 +637,15 @@ export function attachGatewayWsMessageHandler(params: {
               type: "res",
               id: frame.id,
               ok: false,
-              error: errorShape(ErrorCodes.INVALID_REQUEST, message, {
+              error: errorShape(ErrorCodes.INVALID_REQUEST, responseMessage, {
                 details: {
                   code: resolveDeviceAuthConnectErrorDetailCode(reason),
                   reason,
+                  ...(proxyHint ? { hint: proxyHint } : {}),
                 },
               }),
             });
-            close(1008, message);
+            close(1008, truncateCloseReason(responseMessage));
           };
           const derivedId = deriveDeviceIdFromPublicKey(device.publicKey);
           if (!derivedId || derivedId !== device.id) {

@@ -131,6 +131,29 @@ Common signatures:
 - `refusing to bind gateway ... without auth` → non-loopback bind without token/password.
 - `another gateway instance is already listening` / `EADDRINUSE` → port conflict.
 
+### PM2 + NVM ghost crash
+
+If `openclaw gateway` works in foreground but PM2 restarts fail instantly with no logs,
+PM2 likely started without your shell init and lost Node/NPM paths from NVM.
+
+Use a wrapper script that sources your shell environment:
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+source ~/.bashrc
+export PATH="$HOME/.nvm/versions/node/v22.22.0/bin:$PATH"
+exec openclaw gateway
+```
+
+Then run PM2 with that wrapper (or set an absolute interpreter path in ecosystem config).
+
+For external dashboard access, prefer SSH local forwarding over cloud web proxies:
+
+```bash
+ssh -N -L 18789:127.0.0.1:18789 <user>@<host>
+```
+
 Related:
 
 - [/gateway/background-process](/gateway/background-process)

@@ -5,8 +5,10 @@ import { captureEnv } from "../test-utils/env.js";
 let envSnapshot: ReturnType<typeof captureEnv>;
 
 beforeAll(() => {
-  envSnapshot = captureEnv(["OPENCLAW_PROFILE"]);
+  envSnapshot = captureEnv(["OPENCLAW_PROFILE", "OPENCLAW_GATEWAY_PORT", "CLAWDBOT_GATEWAY_PORT"]);
   process.env.OPENCLAW_PROFILE = "isolated";
+  delete process.env.OPENCLAW_GATEWAY_PORT;
+  delete process.env.CLAWDBOT_GATEWAY_PORT;
 });
 
 afterAll(() => {
@@ -564,6 +566,202 @@ describe("statusCommand", () => {
     await statusCommand({}, runtime as never);
     const joined = runtimeLogMock.mock.calls.map((c: unknown[]) => String(c[0])).join("\n");
     expect(joined).toContain("devices approve req-close-456");
+  });
+
+  it("uses wss default port for nonce guidance when non-loopback URL omits port", async () => {
+    mocks.probeGateway.mockResolvedValueOnce({
+      ok: false,
+      url: "wss://forward.example.com",
+      connectLatencyMs: null,
+      error: "connect failed: device nonce required",
+      close: { code: 1008, reason: "connect failed" },
+      health: null,
+      status: null,
+      presence: null,
+      configSnapshot: null,
+    });
+
+    runtimeLogMock.mockClear();
+    await statusCommand({}, runtime as never);
+    const joined = runtimeLogMock.mock.calls.map((c: unknown[]) => String(c[0])).join("\n");
+    expect(joined).toContain("Gateway device nonce handshake failed.");
+    expect(joined).toContain("cloud proxy/WSS forwarder");
+    expect(joined).toContain("ssh -L 443:127.0.0.1:443 <user>@<host>");
+    expect(joined).toContain("http://127.0.0.1:443");
+    expect(joined).toContain("trusted-proxy");
+  });
+
+  it("uses ws default port for nonce guidance when non-loopback URL omits port", async () => {
+    mocks.probeGateway.mockResolvedValueOnce({
+      ok: false,
+      url: "ws://forward.example.com",
+      connectLatencyMs: null,
+      error: "connect failed: device nonce required",
+      close: { code: 1008, reason: "connect failed" },
+      health: null,
+      status: null,
+      presence: null,
+      configSnapshot: null,
+    });
+
+    runtimeLogMock.mockClear();
+    await statusCommand({}, runtime as never);
+    const joined = runtimeLogMock.mock.calls.map((c: unknown[]) => String(c[0])).join("\n");
+    expect(joined).toContain("ssh -L 80:127.0.0.1:80 <user>@<host>");
+    expect(joined).toContain("http://127.0.0.1:80");
+  });
+
+  it("uses probe URL port for nonce guidance when listener port is not configured", async () => {
+    mocks.probeGateway.mockResolvedValueOnce({
+      ok: false,
+      url: "wss://forward.example.com:24444",
+      connectLatencyMs: null,
+      error: "connect failed: device nonce required",
+      close: { code: 1008, reason: "connect failed" },
+      health: null,
+      status: null,
+      presence: null,
+      configSnapshot: null,
+    });
+
+    runtimeLogMock.mockClear();
+    await statusCommand({}, runtime as never);
+    const joined = runtimeLogMock.mock.calls.map((c: unknown[]) => String(c[0])).join("\n");
+    expect(joined).toContain("ssh -L 24444:127.0.0.1:24444 <user>@<host>");
+    expect(joined).toContain("http://127.0.0.1:24444");
+  });
+
+  it("uses configured listener port for nonce guidance when probe URL is non-loopback", async () => {
+    const previousGatewayPort = process.env.OPENCLAW_GATEWAY_PORT;
+    process.env.OPENCLAW_GATEWAY_PORT = "18789";
+    try {
+      mocks.probeGateway.mockResolvedValueOnce({
+        ok: false,
+        url: "wss://forward.example.com:24444",
+        connectLatencyMs: null,
+        error: "connect failed: device nonce required",
+        close: { code: 1008, reason: "connect failed" },
+        health: null,
+        status: null,
+        presence: null,
+        configSnapshot: null,
+      });
+
+      runtimeLogMock.mockClear();
+      await statusCommand({}, runtime as never);
+      const joined = runtimeLogMock.mock.calls.map((c: unknown[]) => String(c[0])).join("\n");
+      expect(joined).toContain("ssh -L 18789:127.0.0.1:18789 <user>@<host>");
+      expect(joined).toContain("http://127.0.0.1:18789");
+    } finally {
+      if (previousGatewayPort === undefined) {
+        delete process.env.OPENCLAW_GATEWAY_PORT;
+      } else {
+        process.env.OPENCLAW_GATEWAY_PORT = previousGatewayPort;
+      }
+    }
+  });
+
+  it("uses loopback probe URL port in nonce guidance when URL is direct gateway", async () => {
+    mocks.probeGateway.mockResolvedValueOnce({
+      ok: false,
+      url: "ws://127.0.0.1:24444",
+      connectLatencyMs: null,
+      error: "connect failed: device nonce required",
+      close: { code: 1008, reason: "connect failed" },
+      health: null,
+      status: null,
+      presence: null,
+      configSnapshot: null,
+    });
+
+    runtimeLogMock.mockClear();
+    await statusCommand({}, runtime as never);
+    const joined = runtimeLogMock.mock.calls.map((c: unknown[]) => String(c[0])).join("\n");
+    expect(joined).toContain("ssh -L 24444:127.0.0.1:24444 <user>@<host>");
+    expect(joined).toContain("http://127.0.0.1:24444");
+  });
+
+  it("treats other IPv4 loopback probe URLs as direct gateway endpoints", async () => {
+    const previousGatewayPort = process.env.OPENCLAW_GATEWAY_PORT;
+    process.env.OPENCLAW_GATEWAY_PORT = "18789";
+    try {
+      mocks.probeGateway.mockResolvedValueOnce({
+        ok: false,
+        url: "ws://127.0.0.2:24444",
+        connectLatencyMs: null,
+        error: "connect failed: device nonce required",
+        close: { code: 1008, reason: "connect failed" },
+        health: null,
+        status: null,
+        presence: null,
+        configSnapshot: null,
+      });
+
+      runtimeLogMock.mockClear();
+      await statusCommand({}, runtime as never);
+      const joined = runtimeLogMock.mock.calls.map((c: unknown[]) => String(c[0])).join("\n");
+      expect(joined).toContain("ssh -L 24444:127.0.0.1:24444 <user>@<host>");
+      expect(joined).toContain("http://127.0.0.1:24444");
+      expect(joined).not.toContain("Use a local SSH tunnel instead of a provider web proxy.");
+    } finally {
+      if (previousGatewayPort === undefined) {
+        delete process.env.OPENCLAW_GATEWAY_PORT;
+      } else {
+        process.env.OPENCLAW_GATEWAY_PORT = previousGatewayPort;
+      }
+    }
+  });
+
+  it("treats bracketed IPv6 loopback probe URLs as direct gateway endpoints", async () => {
+    mocks.probeGateway.mockResolvedValueOnce({
+      ok: false,
+      url: "ws://[::1]:24444",
+      connectLatencyMs: null,
+      error: "connect failed: device nonce required",
+      close: { code: 1008, reason: "connect failed" },
+      health: null,
+      status: null,
+      presence: null,
+      configSnapshot: null,
+    });
+
+    runtimeLogMock.mockClear();
+    await statusCommand({}, runtime as never);
+    const joined = runtimeLogMock.mock.calls.map((c: unknown[]) => String(c[0])).join("\n");
+    expect(joined).toContain("ssh -L 24444:127.0.0.1:24444 <user>@<host>");
+    expect(joined).toContain("http://127.0.0.1:24444");
+    expect(joined).not.toContain("Use a local SSH tunnel instead of a provider web proxy.");
+  });
+
+  it("treats IPv4-mapped IPv6 loopback probe URLs as direct gateway endpoints", async () => {
+    const previousGatewayPort = process.env.OPENCLAW_GATEWAY_PORT;
+    process.env.OPENCLAW_GATEWAY_PORT = "18789";
+    try {
+      mocks.probeGateway.mockResolvedValueOnce({
+        ok: false,
+        url: "ws://[::ffff:127.0.0.1]:24444",
+        connectLatencyMs: null,
+        error: "connect failed: device nonce required",
+        close: { code: 1008, reason: "connect failed" },
+        health: null,
+        status: null,
+        presence: null,
+        configSnapshot: null,
+      });
+
+      runtimeLogMock.mockClear();
+      await statusCommand({}, runtime as never);
+      const joined = runtimeLogMock.mock.calls.map((c: unknown[]) => String(c[0])).join("\n");
+      expect(joined).toContain("ssh -L 24444:127.0.0.1:24444 <user>@<host>");
+      expect(joined).toContain("http://127.0.0.1:24444");
+      expect(joined).not.toContain("Use a local SSH tunnel instead of a provider web proxy.");
+    } finally {
+      if (previousGatewayPort === undefined) {
+        delete process.env.OPENCLAW_GATEWAY_PORT;
+      } else {
+        process.env.OPENCLAW_GATEWAY_PORT = previousGatewayPort;
+      }
+    }
   });
 
   it("includes sessions across agents in JSON output", async () => {

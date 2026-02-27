@@ -57,4 +57,37 @@ describe("loadGatewayPlugins", () => {
     );
     expect(log.warn).not.toHaveBeenCalled();
   });
+
+  test("adds actionable hint for missing plugin dependencies", () => {
+    const diagnostics: PluginDiagnostic[] = [
+      {
+        level: "error",
+        pluginId: "feishu",
+        source: "/tmp/feishu/index.ts",
+        message: "failed to load plugin: Error: Cannot find module '@larksuiteoapi/node-sdk'",
+      },
+    ];
+    loadOpenClawPlugins.mockReturnValue(createRegistry(diagnostics));
+
+    const log = {
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+      debug: vi.fn(),
+    };
+
+    loadGatewayPlugins({
+      cfg: {},
+      workspaceDir: "/tmp",
+      log,
+      coreGatewayHandlers: {},
+      baseMethods: [],
+    });
+
+    expect(log.error).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'Hint: Missing dependency "@larksuiteoapi/node-sdk". If this plugin was installed from npm, run "openclaw plugins update feishu".',
+      ),
+    );
+  });
 });

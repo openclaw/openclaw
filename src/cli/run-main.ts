@@ -1,3 +1,4 @@
+import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { loadDotEnv } from "../infra/dotenv.js";
@@ -21,6 +22,86 @@ export function rewriteUpdateFlagArgv(argv: string[]): string[] {
   const next = [...argv];
   next.splice(index, 1, "update");
   return next;
+}
+
+function isLegacyGatewayBinary(entryPath: string | undefined): boolean {
+  if (!entryPath) {
+    return false;
+  }
+  const base = path.basename(entryPath).toLowerCase();
+  return (
+    base === "openclaw-gateway" ||
+    base === "openclaw-gateway.mjs" ||
+    base === "openclaw-gateway.cmd" ||
+    base === "openclaw-gateway.ps1" ||
+    base === "openclaw-gateway.exe"
+  );
+}
+
+const ROOT_BOOLEAN_FLAGS = new Set(["--dev", "--no-color"]);
+const ROOT_VALUE_FLAGS = new Set(["--profile", "--log-level"]);
+const LEGACY_GATEWAY_PASSTHROUGH_TOKENS = new Set([
+  "gateway",
+  "update",
+  "--update",
+  "-h",
+  "--help",
+  "-v",
+  "-V",
+  "--version",
+]);
+
+function resolveLegacyGatewayCommandToken(argv: string[]): {
+  commandToken: string | undefined;
+  commandIndex: number;
+} {
+  let index = 2;
+  while (index < argv.length) {
+    const token = argv[index];
+    if (!token) {
+      index += 1;
+      continue;
+    }
+    if (ROOT_BOOLEAN_FLAGS.has(token)) {
+      index += 1;
+      continue;
+    }
+    if (token.startsWith("--profile=") || token.startsWith("--log-level=")) {
+      index += 1;
+      continue;
+    }
+    if (ROOT_VALUE_FLAGS.has(token)) {
+      index += 2;
+      continue;
+    }
+    break;
+  }
+  return { commandToken: argv[index], commandIndex: index };
+}
+
+export function rewriteLegacyGatewayBinaryArgv(argv: string[]): string[] {
+  if (!isLegacyGatewayBinary(argv[1])) {
+    return argv;
+  }
+  const { commandToken, commandIndex } = resolveLegacyGatewayCommandToken(argv);
+  if (commandToken && LEGACY_GATEWAY_PASSTHROUGH_TOKENS.has(commandToken)) {
+    return argv;
+  }
+  const next = [...argv];
+  next.splice(commandIndex, 0, "gateway");
+  return next;
+}
+
+export function syncProcessArgvForNormalizedArgs(params: {
+  sourceArgv: string[];
+  normalizedArgv: string[];
+  currentArgv?: string[];
+}): string[] {
+  const currentArgv = params.currentArgv ?? process.argv;
+  if (params.sourceArgv !== currentArgv) {
+    return currentArgv;
+  }
+  return params.normalizedArgv;
 }
 
 export function shouldRegisterPrimarySubcommand(argv: string[]): boolean {
@@ -62,7 +143,8 @@ export function shouldEnsureCliPath(argv: string[]): boolean {
 }
 
 export async function runCli(argv: string[] = process.argv) {
-  const normalizedArgv = normalizeWindowsArgv(argv);
+  const normalizedArgv = rewriteLegacyGatewayBinaryArgv(normalizeWindowsArgv(argv));
+  process.argv = syncProcessArgvForNormalizedArgs({ sourceArgv: argv, normalizedArgv });
   loadDotEnv({ quiet: true });
   normalizeEnv();
   if (shouldEnsureCliPath(normalizedArgv)) {

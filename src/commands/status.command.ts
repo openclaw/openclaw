@@ -2,6 +2,7 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { withProgress } from "../cli/progress.js";
 import { resolveGatewayPort } from "../config/config.js";
 import { buildGatewayConnectionDetails, callGateway } from "../gateway/call.js";
+import { isLoopbackHost } from "../gateway/net.js";
 import { info } from "../globals.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import type { HeartbeatEventPayload } from "../infra/heartbeat-events.js";
@@ -62,6 +63,108 @@ function resolvePairingRecoveryContext(params: {
   const requestId =
     requestIdMatch && requestIdMatch[1] ? sanitizeRequestId(requestIdMatch[1]) : null;
   return { requestId: requestId || null };
+}
+
+function isLoopbackWsUrl(url?: string | null): boolean {
+  if (!url) {
+    return false;
+  }
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "ws:" && parsed.protocol !== "wss:") {
+      return false;
+    }
+    return isLoopbackHost(parsed.hostname);
+  } catch {
+    return false;
+  }
+}
+
+function resolveNonceRecoveryContext(params: {
+  error?: string | null;
+  closeReason?: string | null;
+  gatewayUrl?: string | null;
+  fallbackPort: number;
+  listenerPortConfigured: boolean;
+}): {
+  loopbackUrl: boolean;
+  tunnelPort: number;
+} | null {
+  const resolveTunnelPort = (): number => {
+    const raw = params.gatewayUrl;
+    if (!raw) {
+      return params.fallbackPort;
+    }
+    try {
+      const parsed = new URL(raw);
+      if (parsed.protocol !== "ws:" && parsed.protocol !== "wss:") {
+        return params.fallbackPort;
+      }
+
+      const loopback = isLoopbackWsUrl(raw);
+      let parsedPort: number | null = null;
+      if (parsed.port) {
+        const numeric = Number.parseInt(parsed.port, 10);
+        if (Number.isFinite(numeric) && numeric > 0 && numeric <= 65_535) {
+          parsedPort = numeric;
+        }
+      }
+
+      if (loopback) {
+        return parsedPort ?? params.fallbackPort;
+      }
+      // For non-loopback URLs, prefer explicit listener settings; otherwise use
+      // the probed URL port when available. If URL omits the port, use the
+      // scheme default because that's the only concrete remote listener hint.
+      if (params.listenerPortConfigured) {
+        return params.fallbackPort;
+      }
+      if (parsedPort !== null) {
+        return parsedPort;
+      }
+      return parsed.protocol === "wss:" ? 443 : 80;
+    } catch {
+      // Use configured fallback below.
+    }
+    return params.fallbackPort;
+  };
+
+  const source = [params.error, params.closeReason]
+    .filter((part) => typeof part === "string" && part.trim().length > 0)
+    .join(" ")
+    .toLowerCase();
+  if (!source) {
+    return null;
+  }
+  const hasNonceHandshakeFailure =
+    source.includes("device nonce required") ||
+    source.includes("device nonce mismatch") ||
+    source.includes("connect challenge missing nonce");
+  if (!hasNonceHandshakeFailure) {
+    return null;
+  }
+  return {
+    loopbackUrl: isLoopbackWsUrl(params.gatewayUrl),
+    tunnelPort: resolveTunnelPort(),
+  };
+}
+
+function resolveExplicitGatewayPort(
+  cfg: { gateway?: { port?: number } } | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): number | null {
+  const envRaw = env.OPENCLAW_GATEWAY_PORT?.trim() || env.CLAWDBOT_GATEWAY_PORT?.trim();
+  if (envRaw) {
+    const parsed = Number.parseInt(envRaw, 10);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return parsed;
+    }
+  }
+  const configPort = cfg?.gateway?.port;
+  if (typeof configPort === "number" && Number.isFinite(configPort) && configPort > 0) {
+    return configPort;
+  }
+  return null;
 }
 
 export async function statusCommand(
@@ -216,13 +319,16 @@ export async function statusCommand(
 
   const tableWidth = Math.max(60, (process.stdout.columns ?? 120) - 1);
 
+  const explicitGatewayPort = resolveExplicitGatewayPort(cfg);
+  const configuredGatewayPort = explicitGatewayPort ?? resolveGatewayPort(cfg);
+
   const dashboard = (() => {
     const controlUiEnabled = cfg.gateway?.controlUi?.enabled ?? true;
     if (!controlUiEnabled) {
       return "disabled";
     }
     const links = resolveControlUiLinks({
-      port: resolveGatewayPort(cfg),
+      port: configuredGatewayPort,
       bind: cfg.gateway?.bind,
       customBindHost: cfg.gateway?.customBindHost,
       basePath: cfg.gateway?.controlUi?.basePath,
@@ -260,6 +366,13 @@ export async function statusCommand(
   const pairingRecovery = resolvePairingRecoveryContext({
     error: gatewayProbe?.error ?? null,
     closeReason: gatewayProbe?.close?.reason ?? null,
+  });
+  const nonceRecovery = resolveNonceRecoveryContext({
+    error: gatewayProbe?.error ?? null,
+    closeReason: gatewayProbe?.close?.reason ?? null,
+    gatewayUrl: gatewayProbe?.url ?? gatewayConnection.url,
+    fallbackPort: configuredGatewayPort,
+    listenerPortConfigured: explicitGatewayPort !== null,
   });
 
   const agentsValue = (() => {
@@ -442,6 +555,30 @@ export async function statusCommand(
     }
     runtime.log(theme.muted(`Fallback: ${formatCliCommand("openclaw devices approve --latest")}`));
     runtime.log(theme.muted(`Inspect: ${formatCliCommand("openclaw devices list")}`));
+  }
+
+  if (nonceRecovery) {
+    runtime.log("");
+    runtime.log(theme.warn("Gateway device nonce handshake failed."));
+    runtime.log(
+      theme.muted(
+        "If this dashboard is behind a cloud proxy/WSS forwarder, it may strip handshake data.",
+      ),
+    );
+    if (!nonceRecovery.loopbackUrl) {
+      runtime.log(theme.muted("Use a local SSH tunnel instead of a provider web proxy."));
+    }
+    runtime.log(
+      theme.muted(
+        `Tunnel: ssh -L ${nonceRecovery.tunnelPort}:127.0.0.1:${nonceRecovery.tunnelPort} <user>@<host>`,
+      ),
+    );
+    runtime.log(theme.muted(`Then open: http://127.0.0.1:${nonceRecovery.tunnelPort}`));
+    runtime.log(
+      theme.muted(
+        "If you must stay behind a reverse proxy, configure gateway auth mode as trusted-proxy.",
+      ),
+    );
   }
 
   runtime.log("");

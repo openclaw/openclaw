@@ -258,6 +258,7 @@ async function sendRawConnectReq(
       details?: {
         code?: string;
         reason?: string;
+        hint?: string;
       };
     };
   }>(ws, isConnectResMessage(params.id));
@@ -646,6 +647,30 @@ describe("gateway server auth/connect", () => {
         ConnectErrorDetailCodes.DEVICE_AUTH_NONCE_REQUIRED,
       );
       expect(connectRes.error?.details?.reason).toBe("device-nonce-missing");
+      await new Promise<void>((resolve) => ws.once("close", () => resolve()));
+    });
+
+    test("includes reverse proxy hint for nonce errors on non-local host", async () => {
+      const ws = await openWs(port, { host: "forward.example.com" });
+      const token = resolveGatewayTokenOrEnv();
+      const nonce = await readConnectChallengeNonce(ws);
+      const { device } = await createSignedDevice({
+        token,
+        scopes: ["operator.admin"],
+        clientId: TEST_OPERATOR_CLIENT.id,
+        clientMode: TEST_OPERATOR_CLIENT.mode,
+        nonce,
+      });
+
+      const connectRes = await sendRawConnectReq(ws, {
+        id: "c-blank-nonce-proxy",
+        token,
+        device: { ...device, nonce: "   " },
+      });
+      expect(connectRes.ok).toBe(false);
+      expect(connectRes.error?.message ?? "").toContain("device nonce required");
+      expect(connectRes.error?.message ?? "").toContain("proxy/tunnel may strip connect.challenge");
+      expect(connectRes.error?.details?.hint).toContain("SSH tunnel");
       await new Promise<void>((resolve) => ws.once("close", () => resolve()));
     });
 

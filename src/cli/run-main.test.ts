@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  rewriteLegacyGatewayBinaryArgv,
   rewriteUpdateFlagArgv,
+  syncProcessArgvForNormalizedArgs,
   shouldEnsureCliPath,
   shouldRegisterPrimarySubcommand,
   shouldSkipPluginCommandRegistration,
@@ -37,6 +39,111 @@ describe("rewriteUpdateFlagArgv", () => {
       "update",
       "--json",
     ]);
+  });
+});
+
+describe("rewriteLegacyGatewayBinaryArgv", () => {
+  it("rewrites legacy openclaw-gateway invocations to the gateway command path", () => {
+    expect(rewriteLegacyGatewayBinaryArgv(["node", "/usr/local/bin/openclaw-gateway"])).toEqual([
+      "node",
+      "/usr/local/bin/openclaw-gateway",
+      "gateway",
+    ]);
+    expect(
+      rewriteLegacyGatewayBinaryArgv([
+        "node",
+        "/usr/local/bin/openclaw-gateway",
+        "--port",
+        "18789",
+      ]),
+    ).toEqual(["node", "/usr/local/bin/openclaw-gateway", "gateway", "--port", "18789"]);
+  });
+
+  it("rewrites legacy gateway wrapper invocations launched through node", () => {
+    expect(
+      rewriteLegacyGatewayBinaryArgv(["node", "/usr/local/bin/openclaw-gateway.mjs", "run"]),
+    ).toEqual(["node", "/usr/local/bin/openclaw-gateway.mjs", "gateway", "run"]);
+    expect(rewriteLegacyGatewayBinaryArgv(["node", "/usr/local/bin/openclaw-gateway.mjs"])).toEqual(
+      ["node", "/usr/local/bin/openclaw-gateway.mjs", "gateway"],
+    );
+  });
+
+  it("keeps modern argv untouched", () => {
+    const argv = ["node", "/usr/local/bin/openclaw", "gateway", "status"];
+    expect(rewriteLegacyGatewayBinaryArgv(argv)).toBe(argv);
+  });
+
+  it("avoids double-prefixing when gateway is already present", () => {
+    const argv = ["node", "/usr/local/bin/openclaw-gateway", "gateway", "status"];
+    expect(rewriteLegacyGatewayBinaryArgv(argv)).toBe(argv);
+  });
+
+  it("keeps root update invocations untouched for gateway binaries", () => {
+    const updateArgv = ["node", "/usr/local/bin/openclaw-gateway", "update", "--yes"];
+    expect(rewriteLegacyGatewayBinaryArgv(updateArgv)).toBe(updateArgv);
+
+    const updateFlagArgv = ["node", "/usr/local/bin/openclaw-gateway", "--update", "--json"];
+    expect(rewriteLegacyGatewayBinaryArgv(updateFlagArgv)).toBe(updateFlagArgv);
+  });
+
+  it("keeps --update untouched when root flags appear before it", () => {
+    const withNoColor = ["node", "/usr/local/bin/openclaw-gateway", "--no-color", "--update"];
+    expect(rewriteLegacyGatewayBinaryArgv(withNoColor)).toBe(withNoColor);
+
+    const withLogLevel = [
+      "node",
+      "/usr/local/bin/openclaw-gateway",
+      "--log-level",
+      "debug",
+      "--update",
+    ];
+    expect(rewriteLegacyGatewayBinaryArgv(withLogLevel)).toBe(withLogLevel);
+  });
+
+  it("keeps root version alias untouched for gateway binaries", () => {
+    const rootAlias = ["node", "/usr/local/bin/openclaw-gateway", "-v"];
+    expect(rewriteLegacyGatewayBinaryArgv(rootAlias)).toBe(rootAlias);
+
+    const withLogLevel = ["node", "/usr/local/bin/openclaw-gateway", "--log-level", "debug", "-v"];
+    expect(rewriteLegacyGatewayBinaryArgv(withLogLevel)).toBe(withLogLevel);
+  });
+
+  it("injects gateway after known root flags for normal gateway command paths", () => {
+    expect(
+      rewriteLegacyGatewayBinaryArgv([
+        "node",
+        "/usr/local/bin/openclaw-gateway",
+        "--no-color",
+        "discover",
+      ]),
+    ).toEqual(["node", "/usr/local/bin/openclaw-gateway", "--no-color", "gateway", "discover"]);
+  });
+});
+
+describe("syncProcessArgvForNormalizedArgs", () => {
+  it("syncs global argv when normalization started from process.argv", () => {
+    const current = ["node", "/usr/local/bin/openclaw-gateway", "discover"];
+    const normalized = rewriteLegacyGatewayBinaryArgv(current);
+    expect(
+      syncProcessArgvForNormalizedArgs({
+        sourceArgv: current,
+        normalizedArgv: normalized,
+        currentArgv: current,
+      }),
+    ).toEqual(["node", "/usr/local/bin/openclaw-gateway", "gateway", "discover"]);
+  });
+
+  it("leaves process argv untouched when runCli receives a custom argv input", () => {
+    const source = ["node", "/usr/local/bin/openclaw-gateway", "discover"];
+    const current = ["node", "/usr/local/bin/openclaw", "status"];
+    const normalized = rewriteLegacyGatewayBinaryArgv(source);
+    expect(
+      syncProcessArgvForNormalizedArgs({
+        sourceArgv: source,
+        normalizedArgv: normalized,
+        currentArgv: current,
+      }),
+    ).toBe(current);
   });
 });
 

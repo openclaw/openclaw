@@ -68,6 +68,20 @@ describe("infra parsing", () => {
       ).toBe(true);
     });
 
+    it("returns true for dist/entry.js when launched via openclaw-gateway.mjs wrapper", () => {
+      expect(
+        isMainModule({
+          currentFile: "/repo/dist/entry.js",
+          argv: ["node", "/repo/openclaw-gateway.mjs"],
+          cwd: "/repo",
+          env: {},
+          wrapperEntryPairs: [
+            { wrapperBasename: "openclaw-gateway.mjs", entryBasename: "entry.js" },
+          ],
+        }),
+      ).toBe(true);
+    });
+
     it("returns false for wrapper launches when wrapper pair is not configured", () => {
       expect(
         isMainModule({

@@ -92,3 +92,20 @@ Enable it:
 ```
 systemctl --user enable --now openclaw-gateway[-<profile>].service
 ```
+
+## PM2 with NVM
+
+When PM2 manages OpenClaw on NVM-based hosts, PM2 may not load your shell init
+on restart. That can drop `PATH` entries and cause instant process exits.
+
+Use a wrapper script that sources your shell env before launching:
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+source ~/.bashrc
+export PATH="$HOME/.nvm/versions/node/v22.22.0/bin:$PATH"
+exec openclaw gateway
+```
+
+Start PM2 with this wrapper (or set an absolute Node interpreter path in PM2).
