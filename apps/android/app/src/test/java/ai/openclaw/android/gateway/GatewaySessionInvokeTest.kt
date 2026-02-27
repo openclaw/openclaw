@@ -439,4 +439,128 @@ class GatewaySessionInvokeTest {
       server.shutdown()
     }
   }
+
+  @Test
+  fun refreshNodeCanvasCapability_sendsObjectParamsAndUpdatesScopedUrl() = runBlocking {
+    val json = Json { ignoreUnknownKeys = true }
+    val connected = CompletableDeferred<Unit>()
+    val refreshRequestParams = CompletableDeferred<String?>()
+    val lastDisconnect = AtomicReference("")
+    val server =
+      MockWebServer().apply {
+        dispatcher =
+          object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse {
+              return MockResponse().withWebSocketUpgrade(
+                object : WebSocketListener() {
+                  override fun onOpen(webSocket: WebSocket, response: Response) {
+                    webSocket.send(
+                      """{"type":"event","event":"connect.challenge","payload":{"nonce":"android-test-nonce"}}""",
+                    )
+                  }
+
+                  override fun onMessage(webSocket: WebSocket, text: String) {
+                    val frame = json.parseToJsonElement(text).jsonObject
+                    if (frame["type"]?.jsonPrimitive?.content != "req") return
+                    val id = frame["id"]?.jsonPrimitive?.content ?: return
+                    val method = frame["method"]?.jsonPrimitive?.content ?: return
+                    when (method) {
+                      "connect" -> {
+                        webSocket.send(
+                          """{"type":"res","id":"$id","ok":true,"payload":{"canvasHostUrl":"http://127.0.0.1/__openclaw__/cap/old-cap","snapshot":{"sessionDefaults":{"mainSessionKey":"main"}}}}""",
+                        )
+                      }
+                      "node.canvas.capability.refresh" -> {
+                        if (!refreshRequestParams.isCompleted) {
+                          refreshRequestParams.complete(frame["params"]?.toString())
+                        }
+                        webSocket.send(
+                          """{"type":"res","id":"$id","ok":true,"payload":{"canvasCapability":"new-cap"}}""",
+                        )
+                        webSocket.close(1000, "done")
+                      }
+                    }
+                  }
+                },
+              )
+            }
+          }
+        start()
+      }
+
+    val app = RuntimeEnvironment.getApplication()
+    val sessionJob = SupervisorJob()
+    val deviceAuthStore = InMemoryDeviceAuthStore()
+    val session =
+      GatewaySession(
+        scope = CoroutineScope(sessionJob + Dispatchers.Default),
+        identityStore = DeviceIdentityStore(app),
+        deviceAuthStore = deviceAuthStore,
+        onConnected = { _, _, _ ->
+          if (!connected.isCompleted) connected.complete(Unit)
+        },
+        onDisconnected = { message ->
+          lastDisconnect.set(message)
+        },
+        onEvent = { _, _ -> },
+        onInvoke = { GatewaySession.InvokeResult.ok("""{"handled":true}""") },
+      )
+
+    try {
+      session.connect(
+        endpoint =
+          GatewayEndpoint(
+            stableId = "manual|127.0.0.1|${server.port}",
+            name = "test",
+            host = "127.0.0.1",
+            port = server.port,
+            tlsEnabled = false,
+          ),
+        token = "test-token",
+        password = null,
+        options =
+          GatewayConnectOptions(
+            role = "node",
+            scopes = listOf("node:invoke"),
+            caps = emptyList(),
+            commands = emptyList(),
+            permissions = emptyMap(),
+            client =
+              GatewayClientInfo(
+                id = "openclaw-android-test",
+                displayName = "Android Test",
+                version = "1.0.0-test",
+                platform = "android",
+                mode = "node",
+                instanceId = "android-test-instance",
+                deviceFamily = "android",
+                modelIdentifier = "test",
+              ),
+          ),
+        tls = null,
+      )
+
+      val connectedWithinTimeout = withTimeoutOrNull(8_000) {
+        connected.await()
+        true
+      } == true
+      if (!connectedWithinTimeout) {
+        throw AssertionError("never connected; lastDisconnect=${lastDisconnect.get()}; requests=${server.requestCount}")
+      }
+
+      val refreshed = session.refreshNodeCanvasCapability(timeoutMs = 8_000)
+      val refreshParamsJson = withTimeout(8_000) { refreshRequestParams.await() }
+
+      assertEquals(true, refreshed)
+      assertEquals("{}", refreshParamsJson)
+      assertEquals(
+        "http://127.0.0.1:${server.port}/__openclaw__/cap/new-cap",
+        session.currentCanvasHostUrl(),
+      )
+    } finally {
+      session.disconnect()
+      sessionJob.cancelAndJoin()
+      server.shutdown()
+    }
+  }
 }
