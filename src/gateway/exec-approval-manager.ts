@@ -36,6 +36,7 @@ type PendingEntry = {
 
 export class ExecApprovalManager {
   private pending = new Map<string, PendingEntry>();
+  private activeCount = 0;
 
   create(
     request: ExecApprovalRequestPayload,
@@ -60,7 +61,7 @@ export class ExecApprovalManager {
    */
   register(record: ExecApprovalRecord, timeoutMs: number): Promise<ExecApprovalDecision | null> {
     const existing = this.pending.get(record.id);
-    if (!existing && this.pending.size >= MAX_PENDING_APPROVALS) {
+    if (!existing && this.activeCount >= MAX_PENDING_APPROVALS) {
       throw new Error(`Too many pending approval requests (limit: ${MAX_PENDING_APPROVALS})`);
     }
     if (existing) {
@@ -89,6 +90,7 @@ export class ExecApprovalManager {
       this.expire(record.id);
     }, timeoutMs);
     this.pending.set(record.id, entry);
+    this.activeCount++;
     return promise;
   }
 
@@ -115,6 +117,7 @@ export class ExecApprovalManager {
     pending.record.resolvedAtMs = Date.now();
     pending.record.decision = decision;
     pending.record.resolvedBy = resolvedBy ?? null;
+    this.activeCount--;
     // Resolve the promise first, then delete after a grace period.
     // This allows in-flight awaitDecision calls to find the resolved entry.
     pending.resolve(decision);
@@ -139,6 +142,7 @@ export class ExecApprovalManager {
     pending.record.resolvedAtMs = Date.now();
     pending.record.decision = undefined;
     pending.record.resolvedBy = resolvedBy ?? null;
+    this.activeCount--;
     pending.resolve(null);
     setTimeout(() => {
       if (this.pending.get(recordId) === pending) {
