@@ -9,6 +9,7 @@ const {
   enableTailscaleServe,
   disableTailscaleServe,
   ensureFunnel,
+  checkTailscaledService,
 } = tailscale;
 const tailscaleBin = expect.stringMatching(/tailscale$/i);
 
@@ -216,5 +217,50 @@ describe("tailscale helpers", () => {
     await expect(enableTailscaleServe(3000, exec as never)).rejects.toBe(originalError);
 
     expect(exec).toHaveBeenCalledTimes(2);
+  });
+
+  describe("checkTailscaledService", () => {
+    it("returns running: true when tailscale status succeeds", async () => {
+      const exec = vi.fn().mockResolvedValue({ stdout: "running" });
+      const result = await checkTailscaledService(exec as never);
+      expect(result.running).toBe(true);
+      expect(result.error).toBeUndefined();
+      expect(exec).toHaveBeenCalledWith(
+        tailscaleBin,
+        ["status"],
+        expect.objectContaining({ timeoutMs: 3000 }),
+      );
+    });
+
+    it("returns running: false when service is not running", async () => {
+      const exec = vi.fn().mockRejectedValue(new Error("tailscaled is not running"));
+      const result = await checkTailscaledService(exec as never);
+      expect(result.running).toBe(false);
+      expect(result.error).toBe("tailscaled service is not running");
+    });
+
+    it("returns running: false on connection refused error", async () => {
+      const exec = vi.fn().mockRejectedValue(new Error("connection refused"));
+      const result = await checkTailscaledService(exec as never);
+      expect(result.running).toBe(false);
+      expect(result.error).toBe("tailscaled service is not running");
+    });
+
+    it("returns running: false with original error for other failures", async () => {
+      const exec = vi.fn().mockRejectedValue(new Error("command not found"));
+      const result = await checkTailscaledService(exec as never);
+      expect(result.running).toBe(false);
+      expect(result.error).toBe("command not found");
+    });
+
+    it("respects custom timeout option", async () => {
+      const exec = vi.fn().mockResolvedValue({ stdout: "" });
+      await checkTailscaledService(exec as never, { timeoutMs: 5000 });
+      expect(exec).toHaveBeenCalledWith(
+        tailscaleBin,
+        ["status"],
+        expect.objectContaining({ timeoutMs: 5000 }),
+      );
+    });
   });
 });
