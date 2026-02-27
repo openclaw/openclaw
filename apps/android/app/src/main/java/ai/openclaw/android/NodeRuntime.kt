@@ -20,6 +20,7 @@ import ai.openclaw.android.gateway.probeGatewayTlsFingerprint
 import ai.openclaw.android.node.*
 import ai.openclaw.android.protocol.OpenClawCanvasA2UIAction
 import ai.openclaw.android.voice.MicCaptureManager
+import ai.openclaw.android.voice.TalkModeManager
 import ai.openclaw.android.voice.VoiceConversationEntry
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -325,11 +326,31 @@ class NodeRuntime(context: Context) {
   val micIsSending: StateFlow<Boolean>
     get() = micCapture.isSending
 
+  private val talkMode: TalkModeManager by lazy {
+    TalkModeManager(
+      context = appContext,
+      scope = scope,
+      session = operatorSession,
+      supportsChatSubscribe = true,
+      isConnected = { operatorConnected },
+    )
+  }
+
+  val talkStatusText: StateFlow<String>
+    get() = talkMode.statusText
+
+  val talkIsListening: StateFlow<Boolean>
+    get() = talkMode.isListening
+
+  val talkIsSpeaking: StateFlow<Boolean>
+    get() = talkMode.isSpeaking
+
   private fun applyMainSessionKey(candidate: String?) {
     val trimmed = normalizeMainKey(candidate) ?: return
     if (isCanonicalMainSessionKey(_mainSessionKey.value)) return
     if (_mainSessionKey.value == trimmed) return
     _mainSessionKey.value = trimmed
+    talkMode.setMainSessionKey(trimmed)
     chat.applyMainSessionKey(trimmed)
   }
 
@@ -468,6 +489,7 @@ class NodeRuntime(context: Context) {
     scope.launch {
       prefs.talkEnabled.collect { enabled ->
         micCapture.setMicEnabled(enabled)
+        talkMode.setEnabled(enabled)
         externalAudioCaptureActive.value = enabled
       }
     }
@@ -762,6 +784,7 @@ class NodeRuntime(context: Context) {
 
   private fun handleGatewayEvent(event: String, payloadJson: String?) {
     micCapture.handleGatewayEvent(event, payloadJson)
+    talkMode.handleGatewayEvent(event, payloadJson)
     chat.handleGatewayEvent(event, payloadJson)
   }
 

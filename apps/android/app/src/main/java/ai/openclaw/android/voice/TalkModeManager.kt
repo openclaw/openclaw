@@ -319,6 +319,8 @@ private const val defaultTalkProvider = "elevenlabs"
 
   private fun stop() {
     stopRequested = true
+    finalizeInFlight = false
+    stopSpeakingRequested = false
     listeningMode = false
     restartJob?.cancel()
     restartJob = null
@@ -434,7 +436,15 @@ private const val defaultTalkProvider = "elevenlabs"
     val lastHeard = lastHeardAtMs ?: return
     val elapsed = SystemClock.elapsedRealtime() - lastHeard
     if (elapsed < silenceWindowMs) return
-    scope.launch { finalizeTranscript(transcript) }
+    if (finalizeInFlight) return
+    finalizeInFlight = true
+    scope.launch {
+      try {
+        finalizeTranscript(transcript)
+      } finally {
+        finalizeInFlight = false
+      }
+    }
   }
 
   private suspend fun finalizeTranscript(transcript: String) {
@@ -1024,6 +1034,7 @@ private const val defaultTalkProvider = "elevenlabs"
   }
 
   private fun stopSpeaking(resetInterrupt: Boolean = true) {
+    stopSpeakingRequested = true
     pcmStopRequested = true
     if (!_isSpeaking.value) {
       cleanupPlayer()
