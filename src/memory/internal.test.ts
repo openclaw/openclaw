@@ -324,4 +324,28 @@ describe("chunkMarkdown — section strategy", () => {
     const chunks = chunkMarkdown("", { tokens: 400, overlap: 0, strategy: "section" });
     expect(chunks).toEqual([]);
   });
+
+  it("ignores ## headings inside code fences", () => {
+    const content = [
+      "## Real Section",
+      "",
+      "Some real content here.",
+      "More content.",
+      "Even more content.",
+      "Line five.",
+      "Line six.",
+      "",
+      "Example code:",
+      "```markdown",
+      "## This heading is inside a code fence",
+      "### And this one too",
+      "```",
+    ].join("\n");
+
+    const chunks = chunkMarkdown(content, { tokens: 400, overlap: 0, strategy: "section" });
+    // Should be a single chunk — the ## inside the fence is NOT a boundary
+    expect(chunks.length).toBe(1);
+    expect(chunks[0].text).toContain("## Real Section");
+    expect(chunks[0].text).toContain("## This heading is inside a code fence");
+  });
 });

@@ -195,10 +195,15 @@ export function chunkMarkdownBySection(content: string): MemoryChunk[] {
   const MIN_SECTION_LINES = 5;
   const MAX_SECTION_LINES = 80;
 
-  // Find ## heading boundaries (0-based line indices)
+  // Find ## heading boundaries (0-based line indices), ignoring headings inside code fences
   const headingIndices: number[] = [];
+  let insideCodeFence = false;
   for (let i = 0; i < lines.length; i++) {
-    if (/^##\s/.test(lines[i] ?? "")) {
+    const line = lines[i] ?? "";
+    if (line.startsWith("```")) {
+      insideCodeFence = !insideCodeFence;
+    }
+    if (!insideCodeFence && /^##\s/.test(line)) {
       headingIndices.push(i);
     }
   }
