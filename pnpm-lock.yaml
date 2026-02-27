@@ -414,6 +414,9 @@ importers:
       ws:
         specifier: ^8.0.0
         version: 8.19.0
+      zod:
+        specifier: '*'
+        version: 4.3.6
     devDependencies:
       '@types/ws':
         specifier: ^8.0.0
