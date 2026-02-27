@@ -118,6 +118,8 @@ const baseParams = () => ({
   mediaMaxBytes: 1,
   threadHistoryScope: "thread" as const,
   threadInheritParent: false,
+  stickyRouting: false,
+  stickyThreadTracker: null,
   removeAckAfterReply: false,
 });
 
