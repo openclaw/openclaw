@@ -156,7 +156,8 @@ async function downloadToFile(
           if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400) {
             const location = res.headers.location;
             if (!location || maxRedirects <= 0) {
-              reject(new Error(`Redirect loop or missing Location header`));
+              const reason = !location ? "missing Location header" : "too many redirects";
+              reject(new Error(`${reason} while downloading ${url}`));
               return;
             }
             const redirectUrl = new URL(location, url).href;
