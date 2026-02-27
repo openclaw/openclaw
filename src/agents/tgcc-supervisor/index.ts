@@ -4,6 +4,7 @@
  * Started on gateway startup, stopped on shutdown.
  */
 
+import crypto from "node:crypto";
 import { execSync } from "node:child_process";
 import { loadConfig } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
@@ -488,12 +489,29 @@ function handleObservabilityEvent(event: Record<string, unknown>): void {
   log.info(`observability: ${message}`);
 
   const run = findTgccRun(agentId);
-  if (!run) {
-    log.info(`no subagent run for tgcc:${agentId}, skipping injection`);
+  if (run) {
+    void injectObservabilityMessage(run, message);
     return;
   }
 
-  void injectObservabilityMessage(run, message);
+  // No tracked subagent run — persistent agent not spawned by OpenClaw.
+  // Deliver to main session. Only wake agent for cc_message (explicit notify_parent).
+  const eventName = String(event.event ?? "");
+  const shouldWake = eventName === "cc_message";
+  const cfg = loadConfig();
+  const mainKey = cfg.session?.mainKey ?? "agent:main:main";
+  void callGateway({
+    method: "agent",
+    params: {
+      sessionKey: mainKey,
+      idempotencyKey: crypto.randomUUID(),
+      message: `[System Event] ${message}`,
+      deliver: shouldWake,
+    },
+    timeoutMs: 10_000,
+  }).catch((err: unknown) => {
+    log.warn(`observability fallback to main failed: ${err instanceof Error ? err.message : String(err)}`);
+  });
 }
 
 /**
@@ -511,7 +529,7 @@ async function injectObservabilityMessage(
         sessionKey: run.requesterSessionKey,
         message: `[System Event] ${message}`,
         deliver: false,
-        channel: "internal",
+        
       },
       timeoutMs: 10_000,
     });
@@ -541,9 +559,10 @@ function handleReverseNotify(event: { target: string; message: string }): void {
     method: "agent",
     params: {
       sessionKey,
+      idempotencyKey: crypto.randomUUID(),
       message: `[TGCC Notification] ${message}`,
-      deliver: false,
-      channel: "internal",
+      deliver: true,
+      
     },
     timeoutMs: 10_000,
   }).catch((err: unknown) => {
