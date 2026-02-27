@@ -963,13 +963,19 @@ namespace OpenClaw.Node.Services
                 }
             }
 
-            var maxWidth = root != null && root.Value.TryGetProperty("maxWidth", out var w) && w.ValueKind == JsonValueKind.Number
-                ? w.GetInt32()
-                : (int?)null;
-
-            if (maxWidth.HasValue && maxWidth.Value <= 0)
+            int? maxWidth = null;
+            if (root != null && root.Value.TryGetProperty("maxWidth", out var w) && w.ValueKind == JsonValueKind.Number)
             {
-                return Invalid(request.Id, "camera.snap params.maxWidth must be > 0");
+                if (!w.TryGetInt32(out var parsedMaxWidth))
+                {
+                    return Invalid(request.Id, "camera.snap params.maxWidth must be a 32-bit integer");
+                }
+
+                maxWidth = parsedMaxWidth;
+                if (maxWidth.Value <= 0)
+                {
+                    return Invalid(request.Id, "camera.snap params.maxWidth must be > 0");
+                }
             }
 
             var quality = root != null && root.Value.TryGetProperty("quality", out var q) && q.ValueKind == JsonValueKind.Number
@@ -981,9 +987,20 @@ namespace OpenClaw.Node.Services
                 return Invalid(request.Id, "camera.snap params.quality must be between 0 and 1");
             }
 
-            var delayMs = root != null && root.Value.TryGetProperty("delayMs", out var d) && d.ValueKind == JsonValueKind.Number
-                ? d.GetInt32()
-                : (int?)null;
+            int? delayMs = null;
+            if (root != null && root.Value.TryGetProperty("delayMs", out var d) && d.ValueKind == JsonValueKind.Number)
+            {
+                if (!d.TryGetInt32(out var parsedDelayMs))
+                {
+                    return Invalid(request.Id, "camera.snap params.delayMs must be a 32-bit integer");
+                }
+
+                delayMs = parsedDelayMs;
+                if (delayMs.Value < 0)
+                {
+                    return Invalid(request.Id, "camera.snap params.delayMs must be >= 0");
+                }
+            }
 
             var deviceId = root != null && root.Value.TryGetProperty("deviceId", out var id) && id.ValueKind == JsonValueKind.String
                 ? id.GetString()
@@ -1073,9 +1090,16 @@ namespace OpenClaw.Node.Services
         private async Task<BridgeInvokeResponse> HandleWindowFocusAsync(BridgeInvokeRequest request)
         {
             var root = ParseParams(request.ParamsJSON);
-            var handle = root != null && root.Value.TryGetProperty("handle", out var h) && h.ValueKind == JsonValueKind.Number
-                ? h.GetInt64()
-                : (long?)null;
+            long? handle = null;
+            if (root != null && root.Value.TryGetProperty("handle", out var h) && h.ValueKind == JsonValueKind.Number)
+            {
+                if (!h.TryGetInt64(out var parsedHandle))
+                {
+                    return Invalid(request.Id, "window.focus params.handle must be a 64-bit integer");
+                }
+
+                handle = parsedHandle;
+            }
             var titleContains = root != null && root.Value.TryGetProperty("titleContains", out var t) && t.ValueKind == JsonValueKind.String
                 ? t.GetString()
                 : null;
@@ -1128,9 +1152,16 @@ namespace OpenClaw.Node.Services
         private async Task<BridgeInvokeResponse> HandleWindowRectAsync(BridgeInvokeRequest request)
         {
             var root = ParseParams(request.ParamsJSON);
-            var handle = root != null && root.Value.TryGetProperty("handle", out var h) && h.ValueKind == JsonValueKind.Number
-                ? h.GetInt64()
-                : (long?)null;
+            long? handle = null;
+            if (root != null && root.Value.TryGetProperty("handle", out var h) && h.ValueKind == JsonValueKind.Number)
+            {
+                if (!h.TryGetInt64(out var parsedHandle))
+                {
+                    return Invalid(request.Id, "window.rect params.handle must be a 64-bit integer");
+                }
+
+                handle = parsedHandle;
+            }
             var titleContains = root != null && root.Value.TryGetProperty("titleContains", out var t) && t.ValueKind == JsonValueKind.String
                 ? t.GetString()
                 : null;
