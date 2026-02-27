@@ -23,6 +23,14 @@ const TOOL_REQUIRED_PROMPT_MARKERS = [
   "logs",
 ] as const;
 
+const TOOL_HELP_QUESTION_PATTERNS = [
+  /\bwhat command\b/i,
+  /\bwhich command\b/i,
+  /\bhow (?:do|can) i\b/i,
+  /\bcan you (?:explain|show|tell)\b/i,
+  /\bshould i (?:run|use)\b/i,
+] as const;
+
 const ACK_ONLY_PATTERNS = [
   /\b(i['’]?ll|i will|let me|going to)\b/i,
   /\b(acknowledged|understood|got it|on it|working on it|i can do that)\b/i,
@@ -64,6 +72,50 @@ function isLikelyAckOnlyText(text: string): boolean {
   return ACK_ONLY_PATTERNS.some((pattern) => pattern.test(trimmed));
 }
 
+function isLikelyToolHelpQuestion(prompt: string): boolean {
+  const trimmed = prompt.trim();
+  const hasQuestionShape =
+    trimmed.includes("?") || /\b(what|which|how|can|should)\b/i.test(trimmed);
+  if (!hasQuestionShape) {
+    return false;
+  }
+  return TOOL_HELP_QUESTION_PATTERNS.some((pattern) => pattern.test(trimmed));
+}
+
+function extractLatestAssistantText(params: {
+  assistantTexts: string[];
+  lastAssistant?: AssistantMessage;
+}): string {
+  const lastChunk = [...params.assistantTexts]
+    .toReversed()
+    .find((text) => typeof text === "string" && text.trim().length > 0);
+  if (lastChunk) {
+    return lastChunk;
+  }
+
+  const content = params.lastAssistant?.content;
+  if (!Array.isArray(content)) {
+    return "";
+  }
+
+  const textBlocks: string[] = [];
+  for (const block of content) {
+    if (
+      typeof block === "object" &&
+      block !== null &&
+      "type" in block &&
+      block.type === "text" &&
+      "text" in block &&
+      typeof block.text === "string" &&
+      block.text.trim().length > 0
+    ) {
+      textBlocks.push(block.text);
+    }
+  }
+
+  return textBlocks.at(-1) ?? "";
+}
+
 export function buildToolRequiredRetryPrompt(prompt: string): string {
   return (
     `${prompt}\n\n` +
@@ -103,22 +155,19 @@ export function shouldRetryToolRequiredToolless(params: {
   if (!hasToolRequiredPromptMarkers(params.prompt)) {
     return false;
   }
+  if (isLikelyToolHelpQuestion(params.prompt)) {
+    return false;
+  }
 
   const stopReason = params.lastAssistant?.stopReason;
   if (stopReason === "error" || stopReason === "toolUse") {
     return false;
   }
 
-  const primaryText =
-    params.assistantTexts.find((text) => text.trim().length > 0) ??
-    (typeof params.lastAssistant?.content?.[0] === "object" &&
-    params.lastAssistant.content[0] &&
-    "type" in params.lastAssistant.content[0] &&
-    params.lastAssistant.content[0].type === "text" &&
-    "text" in params.lastAssistant.content[0] &&
-    typeof params.lastAssistant.content[0].text === "string"
-      ? params.lastAssistant.content[0].text
-      : "");
+  const primaryText = extractLatestAssistantText({
+    assistantTexts: params.assistantTexts,
+    lastAssistant: params.lastAssistant,
+  });
 
   if (!primaryText) {
     return false;
