@@ -8,6 +8,7 @@ permissions:
   contents: write
   pull-requests: write
   issues: write
+  id-token: write
 
 jobs:
   resolve:
@@ -39,8 +40,7 @@ jobs:
             - Create a PR targeting main when done, marked ready-for-review
             - Do NOT auto-merge anything
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
-          timeout_minutes: 15
-          model: claude-sonnet-4-5-20250929
+          claude_args: "--model claude-sonnet-4-5-20250929"
 
       - name: Comment on success
         if: success()
