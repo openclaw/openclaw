@@ -144,6 +144,42 @@ function parseNpmPackJsonOutput(
   return null;
 }
 
+function parsePackedArchiveFromStdout(stdout: string): string | undefined {
+  const lines = stdout
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const line = lines[index];
+    const match = line?.match(/([^\s"']+\.tgz)/);
+    if (match?.[1]) {
+      return match[1];
+    }
+  }
+  return undefined;
+}
+
+async function findPackedArchiveInDir(cwd: string): Promise<string | undefined> {
+  const entries = await fs.readdir(cwd, { withFileTypes: true }).catch(() => []);
+  const archives = entries.filter((entry) => entry.isFile() && entry.name.endsWith(".tgz"));
+  if (archives.length === 0) {
+    return undefined;
+  }
+  if (archives.length === 1) {
+    return archives[0]?.name;
+  }
+
+  const sortedByMtime = await Promise.all(
+    archives.map(async (entry) => ({
+      name: entry.name,
+      mtimeMs: (await fs.stat(path.join(cwd, entry.name))).mtimeMs,
+    })),
+  );
+  sortedByMtime.sort((a, b) => b.mtimeMs - a.mtimeMs);
+  return sortedByMtime[0]?.name;
+}
+
 export async function packNpmSpecToArchive(params: {
   spec: string;
   timeoutMs: number;
@@ -176,20 +212,26 @@ export async function packNpmSpecToArchive(params: {
 
   const parsedJson = parseNpmPackJsonOutput(res.stdout || "");
 
-  const packed =
-    parsedJson?.filename ??
-    (res.stdout || "")
-      .split("\n")
-      .map((line) => line.trim())
-      .filter(Boolean)
-      .pop();
+  let packed = parsedJson?.filename ?? parsePackedArchiveFromStdout(res.stdout || "");
+  if (!packed) {
+    packed = await findPackedArchiveInDir(params.cwd);
+  }
   if (!packed) {
     return { ok: false, error: "npm pack produced no archive" };
   }
 
+  let archivePath = path.isAbsolute(packed) ? packed : path.join(params.cwd, packed);
+  if (!(await fileExists(archivePath))) {
+    const fallbackPacked = await findPackedArchiveInDir(params.cwd);
+    if (!fallbackPacked) {
+      return { ok: false, error: "npm pack produced no archive" };
+    }
+    archivePath = path.join(params.cwd, fallbackPacked);
+  }
+
   return {
     ok: true,
-    archivePath: path.join(params.cwd, packed),
+    archivePath,
     metadata: parsedJson?.metadata ?? {},
   };
 }
