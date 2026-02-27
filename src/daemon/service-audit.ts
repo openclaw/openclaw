@@ -205,11 +205,13 @@ function auditGatewayCommand(programArguments: string[] | undefined, issues: Ser
   }
 }
 
-/** Resolve a launcher config value to an absolute path (mirrors daemon-install-helpers). */
+/** Resolve a launcher config value to an absolute path (mirrors daemon-install-helpers).
+ *  Does NOT call path.resolve — relative paths are rejected at install time,
+ *  so this avoids cwd-dependent resolution during audit. */
 function resolveLauncherConfigPath(raw: string): string {
   const expanded =
     raw.startsWith("~/") || raw.startsWith("~\\") ? path.join(os.homedir(), raw.slice(2)) : raw;
-  return path.resolve(expanded);
+  return expanded;
 }
 
 function auditLauncherCommand(

@@ -108,7 +108,10 @@ export function gatewayInstallErrorHint(platform = process.platform): string {
 function resolveLauncherPath(raw: string): string {
   const expanded =
     raw.startsWith("~/") || raw.startsWith("~\\") ? path.join(os.homedir(), raw.slice(2)) : raw;
-  return path.resolve(expanded);
+  if (!path.isAbsolute(expanded)) {
+    throw new Error(`gateway.service.launcher: path must be absolute or start with ~/: ${raw}`);
+  }
+  return expanded;
 }
 
 /** Validate that the launcher script exists and is executable. Throws on failure. */

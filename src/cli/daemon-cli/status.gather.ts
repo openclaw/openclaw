@@ -147,7 +147,7 @@ export async function gatherDaemonStatus(
   const configAudit = await auditGatewayServiceConfig({
     env: process.env,
     command,
-    launcher: cliCfg.gateway?.service?.launcher,
+    launcher: daemonCfg.gateway?.service?.launcher ?? cliCfg.gateway?.service?.launcher,
   });
 
   const cliConfigSummary: ConfigSummary = {

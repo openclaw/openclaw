@@ -320,6 +320,25 @@ describe("buildGatewayInstallPlan — launcher config", () => {
     ).rejects.toThrow("script not found");
   });
 
+  it("throws when launcher path is relative", async () => {
+    mockNodeGatewayPlanFixture();
+
+    await expect(
+      buildGatewayInstallPlan({
+        env: {},
+        port: 3000,
+        runtime: "node",
+        config: {
+          gateway: {
+            service: {
+              launcher: "scripts/gateway-launcher.sh",
+            },
+          },
+        },
+      }),
+    ).rejects.toThrow("path must be absolute or start with ~/");
+  });
+
   it("throws when launcher script is not executable", async () => {
     const nonExecPath = path.join(tmpDir, "not-executable.sh");
     fs.writeFileSync(nonExecPath, "#!/bin/sh\n", { mode: 0o644 });
