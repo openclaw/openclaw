@@ -81,6 +81,18 @@ function hasInboundMedia(msg: Message): boolean {
   );
 }
 
+function resolveInboundMediaFileId(msg: Message): string | undefined {
+  return (
+    msg.sticker?.file_id ??
+    msg.photo?.[msg.photo.length - 1]?.file_id ??
+    msg.video?.file_id ??
+    msg.video_note?.file_id ??
+    msg.document?.file_id ??
+    msg.audio?.file_id ??
+    msg.voice?.file_id
+  );
+}
+
 export const registerTelegramHandlers = ({
   cfg,
   accountId,
@@ -131,6 +143,7 @@ export const registerTelegramHandlers = ({
     ctx: TelegramContext;
     msg: Message;
     allMedia: TelegramMediaRef[];
+    replyMedia: TelegramMediaRef[];
     storeAllowFrom: string[];
     debounceKey: string | null;
     debounceLane: TelegramDebounceLane;
@@ -198,7 +211,13 @@ export const registerTelegramHandlers = ({
         return;
       }
       if (entries.length === 1) {
-        await processMessage(last.ctx, last.allMedia, last.storeAllowFrom);
+        await processMessage(
+          last.ctx,
+          last.allMedia,
+          last.storeAllowFrom,
+          undefined,
+          last.replyMedia,
+        );
         return;
       }
       const combinedText = entries
@@ -206,7 +225,8 @@ export const registerTelegramHandlers = ({
         .filter(Boolean)
         .join("\n");
       const combinedMedia = entries.flatMap((entry) => entry.allMedia);
-      if (!combinedText.trim() && combinedMedia.length === 0) {
+      const combinedReplyMedia = entries.flatMap((entry) => entry.replyMedia);
+      if (!combinedText.trim() && combinedMedia.length === 0 && combinedReplyMedia.length === 0) {
         return;
       }
       const first = entries[0];
@@ -222,6 +242,7 @@ export const registerTelegramHandlers = ({
         combinedMedia,
         first.storeAllowFrom,
         messageIdOverride ? { messageIdOverride } : undefined,
+        combinedReplyMedia,
       );
     },
     onError: (err) => {
@@ -336,7 +357,8 @@ export const registerTelegramHandlers = ({
       }
 
       const storeAllowFrom = await loadStoreAllowFrom();
-      await processMessage(primaryEntry.ctx, allMedia, storeAllowFrom);
+      const replyMedia = await resolveReplyMediaForMessage(primaryEntry.ctx, primaryEntry.msg);
+      await processMessage(primaryEntry.ctx, allMedia, storeAllowFrom, undefined, replyMedia);
     } catch (err) {
       runtime.error?.(danger(`media group handler failed: ${String(err)}`));
     }
@@ -397,6 +419,45 @@ export const registerTelegramHandlers = ({
 
   const loadStoreAllowFrom = async () =>
     readChannelAllowFromStore("telegram", process.env, accountId).catch(() => []);
+
+  const resolveReplyMediaForMessage = async (
+    ctx: TelegramContext,
+    msg: Message,
+  ): Promise<TelegramMediaRef[]> => {
+    const replyMessage = msg.reply_to_message;
+    if (!replyMessage || !hasInboundMedia(replyMessage)) {
+      return [];
+    }
+    const replyFileId = resolveInboundMediaFileId(replyMessage);
+    if (!replyFileId) {
+      return [];
+    }
+    try {
+      const media = await resolveMedia(
+        {
+          message: replyMessage,
+          me: ctx.me,
+          getFile: async () => await bot.api.getFile(replyFileId),
+        },
+        mediaMaxBytes,
+        opts.token,
+        opts.proxyFetch,
+      );
+      if (!media) {
+        return [];
+      }
+      return [
+        {
+          path: media.path,
+          contentType: media.contentType,
+          stickerMetadata: media.stickerMetadata,
+        },
+      ];
+    } catch (err) {
+      logger.warn({ chatId: msg.chat.id, error: String(err) }, "reply media fetch failed");
+      return [];
+    }
+  };
 
   const isAllowlistAuthorized = (
     allow: NormalizedAllowFrom,
@@ -907,6 +968,7 @@ export const registerTelegramHandlers = ({
           },
         ]
       : [];
+    const replyMedia = await resolveReplyMediaForMessage(ctx, msg);
     const senderId = msg.from?.id ? String(msg.from.id) : "";
     const conversationKey =
       resolvedThreadId != null ? `${chatId}:topic:${resolvedThreadId}` : String(chatId);
@@ -918,6 +980,7 @@ export const registerTelegramHandlers = ({
       ctx,
       msg,
       allMedia,
+      replyMedia,
       storeAllowFrom,
       debounceKey,
       debounceLane,

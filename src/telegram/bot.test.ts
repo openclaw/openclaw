@@ -11,6 +11,7 @@ import {
   commandSpy,
   editMessageTextSpy,
   enqueueSystemEventSpy,
+  getFileSpy,
   getLoadConfigMock,
   getReadChannelAllowFromStoreMock,
   getOnHandler,
@@ -402,6 +403,52 @@ describe("createTelegramBot", () => {
     expect(payload.ReplyToId).toBe("9001");
     expect(payload.ReplyToBody).toBe("summarize this");
     expect(payload.ReplyToSender).toBe("Ada");
+  });
+
+  it("includes replied image media in inbound context for text replies", async () => {
+    onSpy.mockClear();
+    replySpy.mockClear();
+    getFileSpy.mockClear();
+
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(
+      async () =>
+        new Response(new Uint8Array([0x89, 0x50, 0x4e, 0x47]), {
+          status: 200,
+          headers: { "content-type": "image/png" },
+        }),
+    );
+    try {
+      createTelegramBot({ token: "tok" });
+      const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+      await handler({
+        message: {
+          chat: { id: 7, type: "private" },
+          text: "what is in this image?",
+          date: 1736380800,
+          reply_to_message: {
+            message_id: 9001,
+            photo: [{ file_id: "reply-photo-1" }],
+            from: { first_name: "Ada" },
+          },
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({}),
+      });
+
+      expect(replySpy).toHaveBeenCalledTimes(1);
+      const payload = replySpy.mock.calls[0][0] as {
+        MediaPath?: string;
+        MediaPaths?: string[];
+        ReplyToBody?: string;
+      };
+      expect(payload.ReplyToBody).toBe("<media:image>");
+      expect(payload.MediaPaths).toHaveLength(1);
+      expect(payload.MediaPath).toBe(payload.MediaPaths?.[0]);
+      expect(getFileSpy).toHaveBeenCalledWith("reply-photo-1");
+    } finally {
+      fetchSpy.mockRestore();
+    }
   });
 
   it("handles quote-only replies without reply metadata", async () => {
