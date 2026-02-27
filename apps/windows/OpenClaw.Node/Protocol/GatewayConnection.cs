@@ -37,6 +37,8 @@ namespace OpenClaw.Node.Protocol
 
         private readonly ConcurrentDictionary<string, Func<RequestFrame, Task<object?>>> _methodHandlers = new();
         private readonly SemaphoreSlim _sendLock = new(1, 1);
+        private CancellationTokenSource? _activeReceiveCts;
+        private int _activeReceiveGeneration;
 
         private static readonly JsonSerializerOptions JsonOptions = new JsonSerializerOptions
         {
@@ -111,6 +113,28 @@ namespace OpenClaw.Node.Protocol
         {
             _connected = false;
 
+            var receiveCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            var receiveToken = receiveCts.Token;
+            var receiveGeneration = Interlocked.Increment(ref _activeReceiveGeneration);
+
+            CancellationTokenSource? previousReceiveCts;
+            await _sendLock.WaitAsync(CancellationToken.None);
+            try
+            {
+                previousReceiveCts = _activeReceiveCts;
+                _activeReceiveCts = receiveCts;
+            }
+            finally
+            {
+                _sendLock.Release();
+            }
+
+            if (previousReceiveCts != null)
+            {
+                try { previousReceiveCts.Cancel(); } catch { }
+                previousReceiveCts.Dispose();
+            }
+
             var socket = new ClientWebSocket();
             socket.Options.SetRequestHeader("Authorization", $"Bearer {_token}");
             _webSocket = socket;
@@ -118,7 +142,7 @@ namespace OpenClaw.Node.Protocol
             OnLog?.Invoke($"[Gateway] Connecting to {_serverUri}...");
             try
             {
-                await socket.ConnectAsync(_serverUri, cancellationToken);
+                await socket.ConnectAsync(_serverUri, receiveToken);
             }
             catch (Exception ex)
             {
@@ -135,13 +159,13 @@ namespace OpenClaw.Node.Protocol
             try
             {
                 var buffer = new byte[16384];
-                while (socket.State == WebSocketState.Open && !cancellationToken.IsCancellationRequested)
+                while (socket.State == WebSocketState.Open && !receiveToken.IsCancellationRequested)
                 {
                     using var ms = new System.IO.MemoryStream();
                     WebSocketReceiveResult result;
                     do
                     {
-                        result = await socket.ReceiveAsync(new ArraySegment<byte>(buffer), cancellationToken);
+                        result = await socket.ReceiveAsync(new ArraySegment<byte>(buffer), receiveToken);
                         if (result.MessageType == WebSocketMessageType.Close) break;
                         ms.Write(buffer, 0, result.Count);
                     } while (!result.EndOfMessage);
@@ -161,13 +185,32 @@ namespace OpenClaw.Node.Protocol
                     }
 
                     var message = Encoding.UTF8.GetString(ms.ToArray());
-                    _ = Task.Run(() => ProcessMessageAsync(message, cancellationToken), cancellationToken);
+                    _ = Task.Run(() => ProcessMessageAsync(message, receiveGeneration, receiveToken), receiveToken);
                 }
             }
             catch
             {
                 await CleanupSocketAfterFailedAttemptAsync(socket);
                 throw;
+            }
+            finally
+            {
+                receiveCts.Cancel();
+
+                await _sendLock.WaitAsync(CancellationToken.None);
+                try
+                {
+                    if (ReferenceEquals(_activeReceiveCts, receiveCts))
+                    {
+                        _activeReceiveCts = null;
+                    }
+                }
+                finally
+                {
+                    _sendLock.Release();
+                }
+
+                receiveCts.Dispose();
             }
         }
 
@@ -215,8 +258,13 @@ namespace OpenClaw.Node.Protocol
             }
         }
 
-        private async Task ProcessMessageAsync(string json, CancellationToken cancellationToken)
+        private async Task ProcessMessageAsync(string json, int receiveGeneration, CancellationToken cancellationToken)
         {
+            if (receiveGeneration != Volatile.Read(ref _activeReceiveGeneration) || cancellationToken.IsCancellationRequested)
+            {
+                return;
+            }
+
             try
             {
                 using var doc = JsonDocument.Parse(json);
@@ -525,15 +573,25 @@ namespace OpenClaw.Node.Protocol
             _connected = false;
 
             ClientWebSocket? socket;
+            CancellationTokenSource? receiveCts;
             await _sendLock.WaitAsync(CancellationToken.None);
             try
             {
                 socket = _webSocket;
                 _webSocket = null;
+                receiveCts = _activeReceiveCts;
+                _activeReceiveCts = null;
+                Interlocked.Increment(ref _activeReceiveGeneration);
             }
             finally
             {
                 _sendLock.Release();
+            }
+
+            if (receiveCts != null)
+            {
+                try { receiveCts.Cancel(); } catch { }
+                receiveCts.Dispose();
             }
 
             if (socket != null)
@@ -558,15 +616,25 @@ namespace OpenClaw.Node.Protocol
             _cts.Cancel();
 
             ClientWebSocket? socket = null;
+            CancellationTokenSource? receiveCts = null;
             _sendLock.Wait();
             try
             {
                 socket = _webSocket;
                 _webSocket = null;
+                receiveCts = _activeReceiveCts;
+                _activeReceiveCts = null;
+                Interlocked.Increment(ref _activeReceiveGeneration);
             }
             finally
             {
                 _sendLock.Release();
+            }
+
+            if (receiveCts != null)
+            {
+                try { receiveCts.Cancel(); } catch { }
+                receiveCts.Dispose();
             }
 
             socket?.Dispose();
