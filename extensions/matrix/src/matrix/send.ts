@@ -50,7 +50,9 @@ export async function sendMessageMatrix(
   });
   try {
     const roomId = await resolveMatrixRoomId(client, to);
-    return await enqueueSend(roomId, async () => {
+    const account = opts.accountId ?? "(default)";
+    console.log(`[matrix:send] account=${account} room=${roomId} len=${trimmedMessage.length}`);
+    const result = await enqueueSend(roomId, async () => {
       const cfg = getCore().config.loadConfig();
       const tableMode = getCore().channel.text.resolveMarkdownTableMode({
         cfg,
@@ -148,7 +150,14 @@ export async function sendMessageMatrix(
         messageId: lastMessageId || "unknown",
         roomId,
       };
+    }).catch((err: unknown) => {
+      console.error(
+        `[matrix:send:fail] account=${account} room=${roomId} error=${err instanceof Error ? err.message : String(err)}`,
+      );
+      throw err;
     });
+    console.log(`[matrix:send:ok] account=${account} room=${roomId} eventId=${result.messageId}`);
+    return result;
   } finally {
     if (stopOnDone) {
       client.stop();
@@ -239,13 +248,14 @@ export async function reactMatrixMessage(
   roomId: string,
   messageId: string,
   emoji: string,
-  client?: MatrixClient,
+  opts: { client?: MatrixClient; accountId?: string } = {},
 ): Promise<void> {
   if (!emoji.trim()) {
     throw new Error("Matrix reaction requires an emoji");
   }
   const { client: resolved, stopOnDone } = await resolveMatrixClient({
-    client,
+    client: opts.client,
+    accountId: opts.accountId,
   });
   try {
     const resolvedRoom = await resolveMatrixRoomId(resolved, roomId);

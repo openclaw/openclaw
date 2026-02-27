@@ -50,6 +50,7 @@ export async function handleMatrixAction(
     }
     const roomId = readRoomId(params);
     const messageId = readStringParam(params, "messageId", { required: true });
+    const accountId = readStringParam(params, "accountId");
     if (action === "react") {
       const { emoji, remove, isEmpty } = readReactionParams(params, {
         removeErrorMessage: "Emoji is required to remove a Matrix reaction.",
@@ -57,13 +58,16 @@ export async function handleMatrixAction(
       if (remove || isEmpty) {
         const result = await removeMatrixReactions(roomId, messageId, {
           emoji: remove ? emoji : undefined,
+          accountId: accountId ?? undefined,
         });
         return jsonResult({ ok: true, removed: result.removed });
       }
-      await reactMatrixMessage(roomId, messageId, emoji);
+      await reactMatrixMessage(roomId, messageId, emoji, { accountId: accountId ?? undefined });
       return jsonResult({ ok: true, added: emoji });
     }
-    const reactions = await listMatrixReactions(roomId, messageId);
+    const reactions = await listMatrixReactions(roomId, messageId, {
+      accountId: accountId ?? undefined,
+    });
     return jsonResult({ ok: true, reactions });
   }
 
@@ -82,28 +86,38 @@ export async function handleMatrixAction(
         const replyToId =
           readStringParam(params, "replyToId") ?? readStringParam(params, "replyTo");
         const threadId = readStringParam(params, "threadId");
+        const accountId = readStringParam(params, "accountId");
         const result = await sendMatrixMessage(to, content, {
           mediaUrl: mediaUrl ?? undefined,
           replyToId: replyToId ?? undefined,
           threadId: threadId ?? undefined,
+          accountId: accountId ?? undefined,
         });
         return jsonResult({ ok: true, result });
       }
       case "editMessage": {
+        const accountId = readStringParam(params, "accountId");
         const roomId = readRoomId(params);
         const messageId = readStringParam(params, "messageId", { required: true });
         const content = readStringParam(params, "content", { required: true });
-        const result = await editMatrixMessage(roomId, messageId, content);
+        const result = await editMatrixMessage(roomId, messageId, content, {
+          accountId: accountId ?? undefined,
+        });
         return jsonResult({ ok: true, result });
       }
       case "deleteMessage": {
+        const accountId = readStringParam(params, "accountId");
         const roomId = readRoomId(params);
         const messageId = readStringParam(params, "messageId", { required: true });
         const reason = readStringParam(params, "reason");
-        await deleteMatrixMessage(roomId, messageId, { reason: reason ?? undefined });
+        await deleteMatrixMessage(roomId, messageId, {
+          reason: reason ?? undefined,
+          accountId: accountId ?? undefined,
+        });
         return jsonResult({ ok: true, deleted: true });
       }
       case "readMessages": {
+        const accountId = readStringParam(params, "accountId");
         const roomId = readRoomId(params);
         const limit = readNumberParam(params, "limit", { integer: true });
         const before = readStringParam(params, "before");
@@ -112,6 +126,7 @@ export async function handleMatrixAction(
           limit: limit ?? undefined,
           before: before ?? undefined,
           after: after ?? undefined,
+          accountId: accountId ?? undefined,
         });
         return jsonResult({ ok: true, ...result });
       }
@@ -125,17 +140,22 @@ export async function handleMatrixAction(
       throw new Error("Matrix pins are disabled.");
     }
     const roomId = readRoomId(params);
+    const accountId = readStringParam(params, "accountId");
     if (action === "pinMessage") {
       const messageId = readStringParam(params, "messageId", { required: true });
-      const result = await pinMatrixMessage(roomId, messageId);
+      const result = await pinMatrixMessage(roomId, messageId, {
+        accountId: accountId ?? undefined,
+      });
       return jsonResult({ ok: true, pinned: result.pinned });
     }
     if (action === "unpinMessage") {
       const messageId = readStringParam(params, "messageId", { required: true });
-      const result = await unpinMatrixMessage(roomId, messageId);
+      const result = await unpinMatrixMessage(roomId, messageId, {
+        accountId: accountId ?? undefined,
+      });
       return jsonResult({ ok: true, pinned: result.pinned });
     }
-    const result = await listMatrixPins(roomId);
+    const result = await listMatrixPins(roomId, { accountId: accountId ?? undefined });
     return jsonResult({ ok: true, pinned: result.pinned, events: result.events });
   }
 
