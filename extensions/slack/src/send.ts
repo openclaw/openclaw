@@ -62,30 +62,50 @@ function hasCustomIdentity(identity?: SlackSendIdentity): boolean {
   return Boolean(identity?.username || identity?.iconUrl || identity?.iconEmoji);
 }
 
-function isSlackCustomizeScopeError(err: unknown): boolean {
-  if (!(err instanceof Error)) {
-    return false;
-  }
-  const maybeData = err as Error & {
-    data?: {
-      error?: string;
-      needed?: string;
-      response_metadata?: { scopes?: string[]; acceptedScopes?: string[] };
-    };
+type SlackWebApiError = Error & {
+  code?: string;
+  data?: {
+    error?: string;
+    needed?: string;
+    response_metadata?: { scopes?: string[]; acceptedScopes?: string[] };
   };
+};
+
+function getSlackMissingScopeDetails(err: unknown): {
+  error?: string;
+  needed?: string;
+  scopes?: string[];
+} | null {
+  if (!(err instanceof Error)) {
+    return null;
+  }
+  const maybeData = err as SlackWebApiError;
   const code = maybeData.data?.error?.toLowerCase();
   if (code !== "missing_scope") {
-    return false;
+    return null;
   }
-  const needed = maybeData.data?.needed?.toLowerCase();
-  if (needed?.includes("chat:write.customize")) {
-    return true;
-  }
+  const needed = maybeData.data?.needed;
   const scopes = [
     ...(maybeData.data?.response_metadata?.scopes ?? []),
     ...(maybeData.data?.response_metadata?.acceptedScopes ?? []),
-  ].map((scope) => scope.toLowerCase());
-  return scopes.includes("chat:write.customize");
+  ].filter(Boolean);
+  return {
+    error: maybeData.data?.error,
+    needed,
+    scopes: scopes.length ? scopes : undefined,
+  };
+}
+
+function isSlackCustomizeScopeError(err: unknown): boolean {
+  const details = getSlackMissingScopeDetails(err);
+  if (!details) {
+    return false;
+  }
+  const needed = details.needed?.toLowerCase();
+  if (needed?.includes("chat:write.customize")) {
+    return true;
+  }
+  return (details.scopes ?? []).map((s) => s.toLowerCase()).includes("chat:write.customize");
 }
 
 async function postSlackMessageBestEffort(params: {
@@ -273,12 +293,26 @@ async function uploadSlackFile(params: {
   }
 
   // Complete the upload and share to channel/thread
-  const completeResp = await params.client.files.completeUploadExternal({
-    files: [{ id: uploadUrlResp.file_id, title: fileName ?? "upload" }],
-    channel_id: params.channelId,
-    ...(params.caption ? { initial_comment: params.caption } : {}),
-    ...(params.threadTs ? { thread_ts: params.threadTs } : {}),
-  });
+  let completeResp;
+  try {
+    completeResp = await params.client.files.completeUploadExternal({
+      files: [{ id: uploadUrlResp.file_id, title: fileName ?? "upload" }],
+      channel_id: params.channelId,
+      ...(params.caption ? { initial_comment: params.caption } : {}),
+      ...(params.threadTs ? { thread_ts: params.threadTs } : {}),
+    });
+  } catch (err) {
+    const details = getSlackMissingScopeDetails(err);
+    if (details) {
+      throw new Error(
+        `Slack API error missing_scope (method=files.completeUploadExternal needed=${
+          details.needed ?? "unknown"
+        }, scopes=${details.scopes?.join(",") ?? "unknown"})`,
+        { cause: err },
+      );
+    }
+    throw err;
+  }
   if (!completeResp.ok) {
     throw new Error(`Failed to complete upload: ${completeResp.error ?? "unknown error"}`);
   }
@@ -313,10 +347,27 @@ export async function sendMessageSlack(
   });
   const client = opts.client ?? createSlackWebClient(token);
   const recipient = parseRecipient(to);
-  const { channelId } = await resolveChannelId(client, recipient, {
-    accountId: account.accountId,
-    token,
-  });
+
+  let channelId: string;
+  try {
+    ({ channelId } = await resolveChannelId(client, recipient, {
+      accountId: account.accountId,
+      token,
+    }));
+  } catch (err) {
+    const details = getSlackMissingScopeDetails(err);
+    if (details) {
+      // This error often surfaces as a bare `missing_scope` without telling the operator which
+      // scope Slack wanted. Include it in the thrown error so it lands in gateway logs.
+      throw new Error(
+        `Slack API error missing_scope (needed=${details.needed ?? "unknown"}, scopes=${
+          details.scopes?.join(",") ?? "unknown"
+        })`,
+        { cause: err },
+      );
+    }
+    throw err;
+  }
   if (blocks) {
     if (opts.mediaUrl) {
       throw new Error("Slack send does not support blocks with mediaUrl");
