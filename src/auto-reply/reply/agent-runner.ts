@@ -692,22 +692,26 @@ export async function runReplyAgent(params: {
       finalPayloads = appendUsageLine(finalPayloads, responseUsageLine);
     }
 
-    // Post-compaction read audit (Layer 3) — skipped when compaction.auditReads is false
-    if (sessionKey && compactionAuditReads && pendingPostCompactionAudits.get(sessionKey)) {
-      pendingPostCompactionAudits.delete(sessionKey); // Delete FIRST — one-shot only
-      try {
-        const sessionFile = activeSessionEntry?.sessionFile;
-        if (sessionFile) {
-          const messages = readSessionMessages(sessionFile);
-          const readPaths = extractReadPaths(messages);
-          const workspaceDir = process.cwd();
-          const audit = auditPostCompactionReads(readPaths, workspaceDir);
-          if (!audit.passed) {
-            enqueueSystemEvent(formatAuditWarning(audit.missingPatterns), { sessionKey });
+    // Post-compaction read audit (Layer 3)
+    // Always clear the pending flag to avoid stale map entries; only run the
+    // actual audit when compaction.auditReads is enabled.
+    if (sessionKey && pendingPostCompactionAudits.get(sessionKey)) {
+      pendingPostCompactionAudits.delete(sessionKey);
+      if (compactionAuditReads) {
+        try {
+          const sessionFile = activeSessionEntry?.sessionFile;
+          if (sessionFile) {
+            const messages = readSessionMessages(sessionFile);
+            const readPaths = extractReadPaths(messages);
+            const workspaceDir = process.cwd();
+            const audit = auditPostCompactionReads(readPaths, workspaceDir);
+            if (!audit.passed) {
+              enqueueSystemEvent(formatAuditWarning(audit.missingPatterns), { sessionKey });
+            }
           }
+        } catch {
+          // Silent failure — audit is best-effort
         }
-      } catch {
-        // Silent failure — audit is best-effort
       }
     }
 
