@@ -6,8 +6,13 @@ import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig, writeConfigFile } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { resolveArchiveKind } from "../infra/archive.js";
+import { resolveBundledExtensionDir } from "../plugins/bundled-dir.js";
 import { findBundledPluginByNpmSpec } from "../plugins/bundled-sources.js";
 import { enablePluginInConfig } from "../plugins/enable.js";
+import {
+  ensureExtensionDepsAsync,
+  hasMissingDependenciesSync,
+} from "../plugins/ensure-extension-deps.js";
 import { installPluginFromNpmSpec, installPluginFromPath } from "../plugins/install.js";
 import { recordPluginInstall } from "../plugins/installs.js";
 import { clearPluginManifestRegistryCache } from "../plugins/manifest-registry.js";
@@ -24,6 +29,7 @@ import { theme } from "../terminal/theme.js";
 import { resolveUserPath, shortenHomeInString, shortenHomePath } from "../utils.js";
 import { resolvePinnedNpmInstallRecordForCli } from "./npm-resolution.js";
 import { setPluginEnabledInConfig } from "./plugins-config.js";
+import { withProgress } from "./progress.js";
 import { promptYesNo } from "./prompt.js";
 
 export type PluginsListOptions = {
@@ -357,6 +363,22 @@ export function registerPluginsCli(program: Command) {
       await writeConfigFile(next);
       logSlotWarnings(slotResult.warnings);
       if (enableResult.enabled) {
+        // Async dep install for bundled extensions with missing dependencies.
+        const bundledExtDir = resolveBundledExtensionDir(id);
+        if (bundledExtDir && hasMissingDependenciesSync(bundledExtDir)) {
+          const result = await withProgress(
+            { label: `Installing ${id} dependencies…`, indeterminate: true },
+            () => ensureExtensionDepsAsync({ packageDir: bundledExtDir, pluginId: id }),
+          );
+          if (!result.ok) {
+            defaultRuntime.log(
+              theme.warn(
+                `Could not install dependencies for "${id}": ${result.error}\n` +
+                  `Dependencies will be installed on next gateway start.`,
+              ),
+            );
+          }
+        }
         defaultRuntime.log(`Enabled plugin "${id}". Restart the gateway to apply.`);
         return;
       }

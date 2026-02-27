@@ -16,6 +16,7 @@ import {
   type NormalizedPluginsConfig,
 } from "./config-state.js";
 import { discoverOpenClawPlugins } from "./discovery.js";
+import { ensureExtensionDepsSync } from "./ensure-extension-deps.js";
 import { initializeGlobalHookRunner } from "./hook-runner-global.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import { isPathInside, safeStatSync } from "./path-safety.js";
@@ -550,6 +551,30 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     }
     const safeSource = opened.path;
     fs.closeSync(opened.fd);
+
+    // Lazy-install bundled extension dependencies.
+    // Bundled extensions ship without node_modules/; install deps before jiti load.
+    if (candidate.origin === "bundled") {
+      const installResult = ensureExtensionDepsSync({
+        packageDir: candidate.rootDir,
+        pluginId,
+        logger,
+      });
+      if (!installResult.ok) {
+        recordPluginError({
+          logger,
+          registry,
+          record,
+          seenIds,
+          pluginId,
+          origin: candidate.origin,
+          error: installResult.error,
+          logPrefix: `[plugins] ${record.id} `,
+          diagnosticMessagePrefix: "dependency install failed: ",
+        });
+        continue;
+      }
+    }
 
     let mod: OpenClawPluginModule | null = null;
     try {

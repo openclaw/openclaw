@@ -4,6 +4,7 @@ import {
   extractAssistantText,
   formatReasoningMessage,
   stripDowngradedToolCallText,
+  stripToolXmlBlocks,
 } from "./pi-embedded-utils.js";
 
 function makeAssistantMessage(
@@ -546,6 +547,97 @@ describe("stripDowngradedToolCallText", () => {
     for (const testCase of cases) {
       expect(stripDowngradedToolCallText(testCase.text), testCase.name).toBe(testCase.expected);
     }
+  });
+});
+
+describe("stripToolXmlBlocks", () => {
+  it("strips tool_call spanning two chunks", () => {
+    const state = { toolXmlDepth: 0 };
+    // Chunk 1: open tag without close — content should be dropped.
+    const chunk1 = stripToolXmlBlocks('Hello <tool_call>{"name": "bash", ', state);
+    expect(chunk1).toBe("Hello ");
+    expect(state.toolXmlDepth).toBe(1);
+
+    // Chunk 2: close tag — trailing text after close should appear.
+    const chunk2 = stripToolXmlBlocks('"args": {"cmd": "ls"}}</tool_call> Done.', state);
+    expect(chunk2).toBe(" Done.");
+    expect(state.toolXmlDepth).toBe(0);
+  });
+
+  it("strips nested antml_function_calls/antml_invoke across chunks", () => {
+    const state = { toolXmlDepth: 0 };
+    // Chunk 1: outer open + inner open (depth goes to 2).
+    const chunk1 = stripToolXmlBlocks(
+      "Before <antml_function_calls><antml_invoke name='test'>",
+      state,
+    );
+    expect(chunk1).toBe("Before ");
+    expect(state.toolXmlDepth).toBe(2);
+
+    // Chunk 2: inner content — still inside, everything dropped.
+    const chunk2 = stripToolXmlBlocks("param value", state);
+    expect(chunk2).toBe("");
+    expect(state.toolXmlDepth).toBe(2);
+
+    // Chunk 3: close inner + close outer.
+    const chunk3 = stripToolXmlBlocks("</antml_invoke></antml_function_calls> After", state);
+    expect(chunk3).toBe(" After");
+    expect(state.toolXmlDepth).toBe(0);
+  });
+
+  it("preserves tool XML inside code spans", () => {
+    const state = { toolXmlDepth: 0 };
+    const text = "Use `<tool_call>` to invoke tools.";
+    // Simulate a code span covering positions 4..17 (the backtick-delimited range).
+    const codeStart = text.indexOf("<tool_call>");
+    const result = stripToolXmlBlocks(text, state, (idx) => idx === codeStart);
+    expect(result).toBe(text);
+    expect(state.toolXmlDepth).toBe(0);
+  });
+
+  it("depth counter resets after all close tags — subsequent text not suppressed", () => {
+    const state = { toolXmlDepth: 0 };
+    // Open + close in same chunk; then new text arrives in next chunk.
+    const chunk1 = stripToolXmlBlocks("A <tool_call>hidden</tool_call> B", state);
+    expect(chunk1).toBe("A  B");
+    expect(state.toolXmlDepth).toBe(0);
+
+    // Next chunk: plain text, no suppression.
+    const chunk2 = stripToolXmlBlocks("More text here.", state);
+    expect(chunk2).toBe("More text here.");
+    expect(state.toolXmlDepth).toBe(0);
+  });
+
+  it("handles close tag without matching open (depth stays at 0)", () => {
+    const state = { toolXmlDepth: 0 };
+    const result = stripToolXmlBlocks("text </tool_result> more", state);
+    expect(result).toBe("text  more");
+    expect(state.toolXmlDepth).toBe(0);
+  });
+
+  it("fast-path returns text unchanged when no markers and depth is 0", () => {
+    const state = { toolXmlDepth: 0 };
+    const text = "This is plain text with no XML markers.";
+    const result = stripToolXmlBlocks(text, state);
+    expect(result).toBe(text);
+    expect(state.toolXmlDepth).toBe(0);
+  });
+
+  it("strips tool_result blocks", () => {
+    const state = { toolXmlDepth: 0 };
+    const result = stripToolXmlBlocks("Before <tool_result>some output</tool_result> After", state);
+    expect(result).toBe("Before  After");
+    expect(state.toolXmlDepth).toBe(0);
+  });
+
+  it("strips antml tags case-insensitively", () => {
+    const state = { toolXmlDepth: 0 };
+    const result = stripToolXmlBlocks(
+      "A <ANTML_FUNCTION_CALLS><ANTML_INVOKE>x</ANTML_INVOKE></ANTML_FUNCTION_CALLS> B",
+      state,
+    );
+    expect(result).toBe("A  B");
+    expect(state.toolXmlDepth).toBe(0);
   });
 });
 
