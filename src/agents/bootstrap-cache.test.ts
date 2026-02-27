@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearAllBootstrapSnapshots,
@@ -96,5 +99,102 @@ describe("clearBootstrapSnapshot", () => {
     // sk2 should still be cached.
     await getOrLoadBootstrapFiles({ workspaceDir: "/ws", sessionKey: "sk2" });
     expect(mockLoad).toHaveBeenCalledTimes(2); // sk1 x1, sk2 x1
+  });
+});
+
+describe("mtime-based staleness detection", () => {
+  let tmpDir: string;
+  let tmpFile: string;
+
+  beforeEach(() => {
+    clearAllBootstrapSnapshots();
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "bootstrap-cache-test-"));
+    tmpFile = path.join(tmpDir, "USER.md");
+    fs.writeFileSync(tmpFile, "# v1");
+  });
+
+  afterEach(() => {
+    clearAllBootstrapSnapshots();
+    vi.clearAllMocks();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("reloads when a cached file's mtime changes", async () => {
+    const v1: WorkspaceBootstrapFile[] = [
+      {
+        name: "USER.md" as WorkspaceBootstrapFile["name"],
+        path: tmpFile,
+        content: "# v1",
+        missing: false,
+      },
+    ];
+    const v2: WorkspaceBootstrapFile[] = [
+      {
+        name: "USER.md" as WorkspaceBootstrapFile["name"],
+        path: tmpFile,
+        content: "# v2",
+        missing: false,
+      },
+    ];
+    mockLoad.mockResolvedValueOnce(v1).mockResolvedValueOnce(v2);
+
+    // First load — caches v1
+    const r1 = await getOrLoadBootstrapFiles({ workspaceDir: tmpDir, sessionKey: "s1" });
+    expect(r1[0]?.content).toBe("# v1");
+    expect(mockLoad).toHaveBeenCalledTimes(1);
+
+    // Modify file on disk (bumps mtime)
+    const futureTime = new Date(Date.now() + 2000);
+    fs.writeFileSync(tmpFile, "# v2");
+    fs.utimesSync(tmpFile, futureTime, futureTime);
+
+    // Second load — stale mtime detected, reloads
+    const r2 = await getOrLoadBootstrapFiles({ workspaceDir: tmpDir, sessionKey: "s1" });
+    expect(r2[0]?.content).toBe("# v2");
+    expect(mockLoad).toHaveBeenCalledTimes(2);
+  });
+
+  it("reloads when a cached file is deleted", async () => {
+    const v1: WorkspaceBootstrapFile[] = [
+      {
+        name: "USER.md" as WorkspaceBootstrapFile["name"],
+        path: tmpFile,
+        content: "# v1",
+        missing: false,
+      },
+    ];
+    const v2: WorkspaceBootstrapFile[] = [
+      { name: "USER.md" as WorkspaceBootstrapFile["name"], path: tmpFile, missing: true },
+    ];
+    mockLoad.mockResolvedValueOnce(v1).mockResolvedValueOnce(v2);
+
+    await getOrLoadBootstrapFiles({ workspaceDir: tmpDir, sessionKey: "s1" });
+    expect(mockLoad).toHaveBeenCalledTimes(1);
+
+    // Delete the file
+    fs.unlinkSync(tmpFile);
+
+    // Should detect deletion and reload
+    await getOrLoadBootstrapFiles({ workspaceDir: tmpDir, sessionKey: "s1" });
+    expect(mockLoad).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not reload when file is unchanged", async () => {
+    const v1: WorkspaceBootstrapFile[] = [
+      {
+        name: "USER.md" as WorkspaceBootstrapFile["name"],
+        path: tmpFile,
+        content: "# v1",
+        missing: false,
+      },
+    ];
+    mockLoad.mockResolvedValue(v1);
+
+    await getOrLoadBootstrapFiles({ workspaceDir: tmpDir, sessionKey: "s1" });
+    await getOrLoadBootstrapFiles({ workspaceDir: tmpDir, sessionKey: "s1" });
+    await getOrLoadBootstrapFiles({ workspaceDir: tmpDir, sessionKey: "s1" });
+
+    // File unchanged — should only load once
+    expect(mockLoad).toHaveBeenCalledTimes(1);
   });
 });
