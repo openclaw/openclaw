@@ -527,9 +527,9 @@ async function injectObservabilityMessage(
       method: "agent",
       params: {
         sessionKey: run.requesterSessionKey,
+        idempotencyKey: crypto.randomUUID(),
         message: `[System Event] ${message}`,
         deliver: false,
-        
       },
       timeoutMs: 10_000,
     });
