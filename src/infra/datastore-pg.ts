@@ -1,9 +1,24 @@
+import crypto from "node:crypto";
 import type { Pool, PoolClient } from "pg";
 import type { Datastore } from "./datastore.js";
 import { applyStateDbMigrations } from "./state-db-migrations.js";
 import { getStateDbPool } from "./state-db.js";
 
 const KV_TABLE = "openclaw_kv";
+
+/**
+ * Derive a stable int64 advisory-lock ID from an arbitrary string key.
+ * Uses the first 8 bytes of a SHA-256 hash read as a signed BigInt,
+ * then clamps to the safe JS integer range for the pg driver.
+ */
+function advisoryLockId(key: string): string {
+  const hash = crypto.createHash("sha256").update(key).digest();
+  // Read as signed 64-bit big-endian, then clamp to Number.MAX_SAFE_INTEGER
+  // so the pg driver can send it as a numeric parameter.
+  const big = hash.readBigInt64BE(0);
+  const clamped = big % BigInt(Number.MAX_SAFE_INTEGER);
+  return clamped.toString();
+}
 
 // In-memory write-through cache so that `read()` can be synchronous.
 const cache = new Map<string, unknown>();
@@ -99,12 +114,17 @@ export class PostgresDatastore implements Datastore {
     const dbKey = normalizeKey(key);
 
     await withTransaction(pool, async (client) => {
-      const locked = await client.query<{ data: T }>(
-        `select data from ${KV_TABLE} where key = $1 for update`,
-        [dbKey],
-      );
+      // Acquire a transaction-scoped advisory lock so that concurrent callers
+      // serialize even when the row does not exist yet.  SELECT ... FOR UPDATE
+      // only locks existing rows; without this, two concurrent first-time
+      // writers would both read null and race on the upsert.
+      await client.query("select pg_advisory_xact_lock($1::bigint)", [advisoryLockId(dbKey)]);
 
-      const current: T | null = locked.rows[0]?.data ?? null;
+      const row = await client.query<{ data: T }>(`select data from ${KV_TABLE} where key = $1`, [
+        dbKey,
+      ]);
+
+      const current: T | null = row.rows[0]?.data ?? null;
       const { changed, result } = updater(current);
 
       if (changed) {

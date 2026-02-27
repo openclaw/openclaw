@@ -307,7 +307,7 @@ describe("PostgresDatastore", () => {
     expect(ds.read("/home/user/.openclaw/state/del.json")).toBeNull();
   });
 
-  it("updateWithLock() uses SELECT FOR UPDATE inside a transaction", async () => {
+  it("updateWithLock() acquires advisory lock and reads inside a transaction", async () => {
     const ds = new PostgresDatastore();
 
     await ds.updateWithLock<{ count: number }>(
@@ -321,11 +321,9 @@ describe("PostgresDatastore", () => {
     const queryTexts = queries.map((q) => q.text.trim());
     expect(queryTexts).toContain("begin");
     expect(queryTexts).toContain("commit");
-    expect(
-      queryTexts.some(
-        (t) => t.includes("select data from openclaw_kv") && t.includes("for update"),
-      ),
-    ).toBe(true);
+    // Advisory lock acquired before the read — serializes even for missing rows
+    expect(queryTexts.some((t) => t.includes("pg_advisory_xact_lock"))).toBe(true);
+    expect(queryTexts.some((t) => t.includes("select data from openclaw_kv"))).toBe(true);
     expect(queryTexts.some((t) => t.includes("insert into openclaw_kv"))).toBe(true);
   });
 
