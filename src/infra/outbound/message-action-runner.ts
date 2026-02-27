@@ -790,6 +790,48 @@ export async function runMessageAction(
     params.accountId = accountId;
   }
   const dryRun = Boolean(input.dryRun ?? readBooleanParam(params, "dryRun"));
+
+  // Resolve target before hydration so allowlist + cross-context checks run
+  // before expensive media downloads / attachment processing.
+  const resolvedTarget = await resolveActionTarget({
+    cfg,
+    channel,
+    action,
+    args: params,
+    accountId,
+  });
+
+  enforceCrossContextPolicy({
+    channel,
+    action,
+    args: params,
+    toolContext: input.toolContext,
+    cfg,
+  });
+
+  // Enforce outbound allowlist: reject sends to targets not in the configured
+  // allowFrom list for the channel.  Uses the resolved `to` from params
+  // (already written by resolveActionTarget / applyTargetToParams above).
+  // Fall back to `channelId` for actions that use it as the target field
+  // (e.g. thread-reply).  When a guarded action has no resolvable target at
+  // all, reject explicitly rather than silently bypassing the allowlist.
+  const outboundTo =
+    (typeof params.to === "string" ? params.to.trim() : "") ||
+    (typeof params.channelId === "string" ? params.channelId.trim() : "");
+  if (outboundTo) {
+    enforceOutboundAllowlist({
+      cfg,
+      channel,
+      action,
+      to: outboundTo,
+      accountId,
+    });
+  } else if (ALLOWLIST_GUARDED_ACTIONS.has(action)) {
+    throw new Error(
+      `Action "${action}" on ${channel} requires a target for allowlist enforcement, but none was provided.`,
+    );
+  }
+
   const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, resolvedAgentId);
   const mediaPolicy = resolveAttachmentMediaPolicy({
     sandboxRoot: input.sandboxRoot,
@@ -810,36 +852,6 @@ export async function runMessageAction(
     dryRun,
     mediaPolicy,
   });
-
-  const resolvedTarget = await resolveActionTarget({
-    cfg,
-    channel,
-    action,
-    args: params,
-    accountId,
-  });
-
-  enforceCrossContextPolicy({
-    channel,
-    action,
-    args: params,
-    toolContext: input.toolContext,
-    cfg,
-  });
-
-  // Enforce outbound allowlist: reject sends to targets not in the configured
-  // allowFrom list for the channel.  Uses the resolved `to` from params
-  // (already written by resolveActionTarget / applyTargetToParams above).
-  const outboundTo = typeof params.to === "string" ? params.to.trim() : "";
-  if (outboundTo) {
-    enforceOutboundAllowlist({
-      cfg,
-      channel,
-      action,
-      to: outboundTo,
-      accountId,
-    });
-  }
 
   const gateway = resolveGateway(input);
 

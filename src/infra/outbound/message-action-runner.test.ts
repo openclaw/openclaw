@@ -1265,4 +1265,21 @@ describe("runMessageAction outbound allowlist enforcement", () => {
       }),
     ).rejects.toThrow(/allowFrom/);
   });
+
+  it("rejects guarded action when target is empty (no silent bypass)", async () => {
+    // Sending with an empty target on a guarded action must not silently
+    // skip the allowlist — it should throw a clear error.
+    await expect(
+      runMessageAction({
+        cfg: restrictedConfig,
+        action: "send",
+        params: {
+          channel: "whatsapp",
+          message: "hello",
+          // no target / to / channelId
+        },
+        dryRun: true,
+      }),
+    ).rejects.toThrow(/requires a target/);
+  });
 });
