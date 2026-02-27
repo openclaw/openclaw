@@ -591,6 +591,7 @@ describe("extractAssistantText strips Anthropic tool XML", () => {
           text: `Let me check that.\n\n<tool_call>\n{"name": "memory_search", "arguments": {"query": "test"}}\n</tool_call>`,
         },
       ],
+      timestamp: Date.now(),
     });
     expect(extractAssistantText(msg)).toBe("Let me check that.");
   });
