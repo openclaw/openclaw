@@ -1,4 +1,4 @@
-FROM debian:bookworm-slim
+FROM debian:bookworm-slim@sha256:98f4b71de414932439ac6ac690d7060df1f27161073c5036a7553723881bffbe
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -22,6 +22,10 @@ RUN apt-get update \
 
 COPY scripts/sandbox-browser-entrypoint.sh /usr/local/bin/openclaw-sandbox-browser
 RUN chmod +x /usr/local/bin/openclaw-sandbox-browser
+
+RUN useradd --create-home --shell /bin/bash sandbox
+USER sandbox
+WORKDIR /home/sandbox
 
 EXPOSE 9222 5900 6080
 

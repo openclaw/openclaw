@@ -24,26 +24,40 @@ const bluebubblesGroupConfigSchema = z.object({
   tools: ToolPolicySchema,
 });
 
-const bluebubblesAccountSchema = z.object({
-  name: z.string().optional(),
-  enabled: z.boolean().optional(),
-  markdown: MarkdownConfigSchema,
-  serverUrl: z.string().optional(),
-  password: z.string().optional(),
-  webhookPath: z.string().optional(),
-  dmPolicy: z.enum(["pairing", "allowlist", "open", "disabled"]).optional(),
-  allowFrom: z.array(allowFromEntry).optional(),
-  groupAllowFrom: z.array(allowFromEntry).optional(),
-  groupPolicy: z.enum(["open", "disabled", "allowlist"]).optional(),
-  historyLimit: z.number().int().min(0).optional(),
-  dmHistoryLimit: z.number().int().min(0).optional(),
-  textChunkLimit: z.number().int().positive().optional(),
-  chunkMode: z.enum(["length", "newline"]).optional(),
-  mediaMaxMb: z.number().int().positive().optional(),
-  sendReadReceipts: z.boolean().optional(),
-  blockStreaming: z.boolean().optional(),
-  groups: z.object({}).catchall(bluebubblesGroupConfigSchema).optional(),
-});
+const bluebubblesAccountSchema = z
+  .object({
+    name: z.string().optional(),
+    enabled: z.boolean().optional(),
+    markdown: MarkdownConfigSchema,
+    serverUrl: z.string().optional(),
+    password: z.string().optional(),
+    webhookPath: z.string().optional(),
+    dmPolicy: z.enum(["pairing", "allowlist", "open", "disabled"]).optional(),
+    allowFrom: z.array(allowFromEntry).optional(),
+    groupAllowFrom: z.array(allowFromEntry).optional(),
+    groupPolicy: z.enum(["open", "disabled", "allowlist"]).optional(),
+    historyLimit: z.number().int().min(0).optional(),
+    dmHistoryLimit: z.number().int().min(0).optional(),
+    textChunkLimit: z.number().int().positive().optional(),
+    chunkMode: z.enum(["length", "newline"]).optional(),
+    mediaMaxMb: z.number().int().positive().optional(),
+    mediaLocalRoots: z.array(z.string()).optional(),
+    sendReadReceipts: z.boolean().optional(),
+    allowPrivateNetwork: z.boolean().optional(),
+    blockStreaming: z.boolean().optional(),
+    groups: z.object({}).catchall(bluebubblesGroupConfigSchema).optional(),
+  })
+  .superRefine((value, ctx) => {
+    const serverUrl = value.serverUrl?.trim() ?? "";
+    const password = value.password?.trim() ?? "";
+    if (serverUrl && !password) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["password"],
+        message: "password is required when serverUrl is configured",
+      });
+    }
+  });
 
 export const BlueBubblesConfigSchema = bluebubblesAccountSchema.extend({
   accounts: z.object({}).catchall(bluebubblesAccountSchema).optional(),

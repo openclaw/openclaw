@@ -15,6 +15,10 @@ export type UsageLike = {
   completion_tokens?: number;
   cache_read_input_tokens?: number;
   cache_creation_input_tokens?: number;
+  // Moonshot/Kimi uses cached_tokens for cache read count (explicit caching API).
+  cached_tokens?: number;
+  // Kimi K2 uses prompt_tokens_details.cached_tokens for automatic prefix caching.
+  prompt_tokens_details?: { cached_tokens?: number };
   // Some agents/logs emit alternate naming.
   totalTokens?: number;
   total_tokens?: number;
@@ -29,6 +33,38 @@ export type NormalizedUsage = {
   cacheWrite?: number;
   total?: number;
 };
+
+export type AssistantUsageSnapshot = {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  totalTokens: number;
+  cost: {
+    input: number;
+    output: number;
+    cacheRead: number;
+    cacheWrite: number;
+    total: number;
+  };
+};
+
+export function makeZeroUsageSnapshot(): AssistantUsageSnapshot {
+  return {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: 0,
+    cost: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      total: 0,
+    },
+  };
+}
 
 const asFiniteNumber = (value: unknown): number | undefined => {
   if (typeof value !== "number") {
@@ -64,7 +100,13 @@ export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefi
       raw.completionTokens ??
       raw.completion_tokens,
   );
-  const cacheRead = asFiniteNumber(raw.cacheRead ?? raw.cache_read ?? raw.cache_read_input_tokens);
+  const cacheRead = asFiniteNumber(
+    raw.cacheRead ??
+      raw.cache_read ??
+      raw.cache_read_input_tokens ??
+      raw.cached_tokens ??
+      raw.prompt_tokens_details?.cached_tokens,
+  );
   const cacheWrite = asFiniteNumber(
     raw.cacheWrite ?? raw.cache_write ?? raw.cache_creation_input_tokens,
   );
@@ -112,25 +154,32 @@ export function deriveSessionTotalTokens(params: {
     cacheWrite?: number;
   };
   contextTokens?: number;
+  promptTokens?: number;
 }): number | undefined {
+  const promptOverride = params.promptTokens;
+  const hasPromptOverride =
+    typeof promptOverride === "number" && Number.isFinite(promptOverride) && promptOverride > 0;
   const usage = params.usage;
-  if (!usage) {
+  if (!usage && !hasPromptOverride) {
     return undefined;
   }
-  const input = usage.input ?? 0;
-  const promptTokens = derivePromptTokens({
-    input: usage.input,
-    cacheRead: usage.cacheRead,
-    cacheWrite: usage.cacheWrite,
-  });
-  let total = promptTokens ?? usage.total ?? input;
+  const input = usage?.input ?? 0;
+  const promptTokens = hasPromptOverride
+    ? promptOverride
+    : derivePromptTokens({
+        input: usage?.input,
+        cacheRead: usage?.cacheRead,
+        cacheWrite: usage?.cacheWrite,
+      });
+  let total = promptTokens ?? usage?.total ?? input;
   if (!(total > 0)) {
     return undefined;
   }
 
-  const contextTokens = params.contextTokens;
-  if (typeof contextTokens === "number" && Number.isFinite(contextTokens) && contextTokens > 0) {
-    total = Math.min(total, contextTokens);
-  }
+  // NOTE: Do NOT clamp total to contextTokens here. The stored totalTokens
+  // should reflect the actual token count (or best estimate). Clamping causes
+  // /status to display contextTokens/contextTokens (100%) when the accumulated
+  // input exceeds the context window, hiding the real usage. The display layer
+  // (formatTokens in status.ts) already caps the percentage at 999%.
   return total;
 }

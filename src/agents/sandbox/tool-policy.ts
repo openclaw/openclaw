@@ -1,71 +1,35 @@
 import type { OpenClawConfig } from "../../config/config.js";
+import { resolveAgentConfig } from "../agent-scope.js";
+import { compileGlobPatterns, matchesAnyGlobPattern } from "../glob-pattern.js";
+import { expandToolGroups } from "../tool-policy.js";
+import { DEFAULT_TOOL_ALLOW, DEFAULT_TOOL_DENY } from "./constants.js";
 import type {
   SandboxToolPolicy,
   SandboxToolPolicyResolved,
   SandboxToolPolicySource,
 } from "./types.js";
-import { resolveAgentConfig } from "../agent-scope.js";
-import { expandToolGroups } from "../tool-policy.js";
-import { DEFAULT_TOOL_ALLOW, DEFAULT_TOOL_DENY } from "./constants.js";
 
-type CompiledPattern =
-  | { kind: "all" }
-  | { kind: "exact"; value: string }
-  | { kind: "regex"; value: RegExp };
-
-function compilePattern(pattern: string): CompiledPattern {
-  const normalized = pattern.trim().toLowerCase();
-  if (!normalized) {
-    return { kind: "exact", value: "" };
-  }
-  if (normalized === "*") {
-    return { kind: "all" };
-  }
-  if (!normalized.includes("*")) {
-    return { kind: "exact", value: normalized };
-  }
-  const escaped = normalized.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return {
-    kind: "regex",
-    value: new RegExp(`^${escaped.replaceAll("\\*", ".*")}$`),
-  };
-}
-
-function compilePatterns(patterns?: string[]): CompiledPattern[] {
-  if (!Array.isArray(patterns)) {
-    return [];
-  }
-  return expandToolGroups(patterns)
-    .map(compilePattern)
-    .filter((pattern) => pattern.kind !== "exact" || pattern.value);
-}
-
-function matchesAny(name: string, patterns: CompiledPattern[]): boolean {
-  for (const pattern of patterns) {
-    if (pattern.kind === "all") {
-      return true;
-    }
-    if (pattern.kind === "exact" && name === pattern.value) {
-      return true;
-    }
-    if (pattern.kind === "regex" && pattern.value.test(name)) {
-      return true;
-    }
-  }
-  return false;
+function normalizeGlob(value: string) {
+  return value.trim().toLowerCase();
 }
 
 export function isToolAllowed(policy: SandboxToolPolicy, name: string) {
-  const normalized = name.trim().toLowerCase();
-  const deny = compilePatterns(policy.deny);
-  if (matchesAny(normalized, deny)) {
+  const normalized = normalizeGlob(name);
+  const deny = compileGlobPatterns({
+    raw: expandToolGroups(policy.deny ?? []),
+    normalize: normalizeGlob,
+  });
+  if (matchesAnyGlobPattern(normalized, deny)) {
     return false;
   }
-  const allow = compilePatterns(policy.allow);
+  const allow = compileGlobPatterns({
+    raw: expandToolGroups(policy.allow ?? []),
+    normalize: normalizeGlob,
+  });
   if (allow.length === 0) {
     return true;
   }
-  return matchesAny(normalized, allow);
+  return matchesAnyGlobPattern(normalized, allow);
 }
 
 export function resolveSandboxToolPolicyForAgent(
@@ -125,6 +89,9 @@ export function resolveSandboxToolPolicyForAgent(
   // `image` is essential for multimodal workflows; always include it in sandboxed
   // sessions unless explicitly denied.
   if (
+    // Empty allowlist means "allow all" for `isToolAllowed`, so don't inject a
+    // single tool that would accidentally turn it into an explicit allowlist.
+    expandedAllow.length > 0 &&
     !expandedDeny.map((v) => v.toLowerCase()).includes("image") &&
     !expandedAllow.map((v) => v.toLowerCase()).includes("image")
   ) {

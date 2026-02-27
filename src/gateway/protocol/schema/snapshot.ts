@@ -52,6 +52,21 @@ export const SnapshotSchema = Type.Object(
     configPath: Type.Optional(NonEmptyString),
     stateDir: Type.Optional(NonEmptyString),
     sessionDefaults: Type.Optional(SessionDefaultsSchema),
+    authMode: Type.Optional(
+      Type.Union([
+        Type.Literal("none"),
+        Type.Literal("token"),
+        Type.Literal("password"),
+        Type.Literal("trusted-proxy"),
+      ]),
+    ),
+    updateAvailable: Type.Optional(
+      Type.Object({
+        currentVersion: NonEmptyString,
+        latestVersion: NonEmptyString,
+        channel: NonEmptyString,
+      }),
+    ),
   },
   { additionalProperties: false },
 );

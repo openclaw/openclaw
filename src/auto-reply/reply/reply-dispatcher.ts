@@ -1,9 +1,11 @@
+import type { TypingCallbacks } from "../../channels/typing.js";
 import type { HumanDelayConfig } from "../../config/types.js";
+import { sleep } from "../../utils.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import { registerDispatcher } from "./dispatcher-registry.js";
+import { normalizeReplyPayload, type NormalizeReplySkipReason } from "./normalize-reply.js";
 import type { ResponsePrefixContext } from "./response-prefix-template.js";
 import type { TypingController } from "./typing.js";
-import { sleep } from "../../utils.js";
-import { normalizeReplyPayload, type NormalizeReplySkipReason } from "./normalize-reply.js";
 
 export type ReplyDispatchKind = "tool" | "block" | "final";
 
@@ -56,6 +58,7 @@ export type ReplyDispatcherOptions = {
 };
 
 export type ReplyDispatcherWithTypingOptions = Omit<ReplyDispatcherOptions, "onIdle"> & {
+  typingCallbacks?: TypingCallbacks;
   onReplyStart?: () => Promise<void> | void;
   onIdle?: () => void;
   /** Called when the typing controller is cleaned up (e.g., on NO_REPLY). */
@@ -74,6 +77,7 @@ export type ReplyDispatcher = {
   sendFinalReply: (payload: ReplyPayload) => boolean;
   waitForIdle: () => Promise<void>;
   getQueuedCounts: () => Record<ReplyDispatchKind, number>;
+  markComplete: () => void;
 };
 
 type NormalizeReplyPayloadInternalOptions = Pick<
@@ -101,7 +105,10 @@ function normalizeReplyPayloadInternal(
 export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDispatcher {
   let sendChain: Promise<void> = Promise.resolve();
   // Track in-flight deliveries so we can emit a reliable "idle" signal.
-  let pending = 0;
+  // Start with pending=1 as a "reservation" to prevent premature gateway restart.
+  // This is decremented when markComplete() is called to signal no more replies will come.
+  let pending = 1;
+  let completeCalled = false;
   // Track whether we've sent a block reply (for human delay - skip delay on first block).
   let sentFirstBlock = false;
   // Serialize outbound replies to preserve tool/block/final order.
@@ -110,6 +117,12 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
     block: 0,
     final: 0,
   };
+
+  // Register this dispatcher globally for gateway restart coordination.
+  const { unregister } = registerDispatcher({
+    pending: () => pending,
+    waitForIdle: () => sendChain,
+  });
 
   const enqueue = (kind: ReplyDispatchKind, payload: ReplyPayload) => {
     const normalized = normalizeReplyPayloadInternal(payload, {
@@ -140,6 +153,8 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
             await sleep(delayMs);
           }
         }
+        // Safe: deliver is called inside an async .then() callback, so even a synchronous
+        // throw becomes a rejection that flows through .catch()/.finally(), ensuring cleanup.
         await options.deliver(normalized, { kind });
       })
       .catch((err) => {
@@ -147,11 +162,40 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
       })
       .finally(() => {
         pending -= 1;
+        // Clear reservation if:
+        // 1. pending is now 1 (just the reservation left)
+        // 2. markComplete has been called
+        // 3. No more replies will be enqueued
+        if (pending === 1 && completeCalled) {
+          pending -= 1; // Clear the reservation
+        }
         if (pending === 0) {
+          // Unregister from global tracking when idle.
+          unregister();
           options.onIdle?.();
         }
       });
     return true;
+  };
+
+  const markComplete = () => {
+    if (completeCalled) {
+      return;
+    }
+    completeCalled = true;
+    // If no replies were enqueued (pending is still 1 = just the reservation),
+    // schedule clearing the reservation after current microtasks complete.
+    // This gives any in-flight enqueue() calls a chance to increment pending.
+    void Promise.resolve().then(() => {
+      if (pending === 1 && completeCalled) {
+        // Still just the reservation, no replies were enqueued
+        pending -= 1;
+        if (pending === 0) {
+          unregister();
+          options.onIdle?.();
+        }
+      }
+    });
   };
 
   return {
@@ -160,34 +204,38 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
     sendFinalReply: (payload) => enqueue("final", payload),
     waitForIdle: () => sendChain,
     getQueuedCounts: () => ({ ...queuedCounts }),
+    markComplete,
   };
 }
 
 export function createReplyDispatcherWithTyping(
   options: ReplyDispatcherWithTypingOptions,
 ): ReplyDispatcherWithTypingResult {
-  const { onReplyStart, onIdle, onCleanup, ...dispatcherOptions } = options;
+  const { typingCallbacks, onReplyStart, onIdle, onCleanup, ...dispatcherOptions } = options;
+  const resolvedOnReplyStart = onReplyStart ?? typingCallbacks?.onReplyStart;
+  const resolvedOnIdle = onIdle ?? typingCallbacks?.onIdle;
+  const resolvedOnCleanup = onCleanup ?? typingCallbacks?.onCleanup;
   let typingController: TypingController | undefined;
   const dispatcher = createReplyDispatcher({
     ...dispatcherOptions,
     onIdle: () => {
       typingController?.markDispatchIdle();
-      onIdle?.();
+      resolvedOnIdle?.();
     },
   });
 
   return {
     dispatcher,
     replyOptions: {
-      onReplyStart,
-      onTypingCleanup: onCleanup,
+      onReplyStart: resolvedOnReplyStart,
+      onTypingCleanup: resolvedOnCleanup,
       onTypingController: (typing) => {
         typingController = typing;
       },
     },
     markDispatchIdle: () => {
       typingController?.markDispatchIdle();
-      onIdle?.();
+      resolvedOnIdle?.();
     },
   };
 }

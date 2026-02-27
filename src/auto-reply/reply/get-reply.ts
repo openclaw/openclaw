@@ -1,5 +1,3 @@
-import type { MsgContext } from "../templating.js";
-import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
@@ -9,12 +7,16 @@ import {
 import { resolveModelRefFromString } from "../../agents/model-selection.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../../agents/workspace.js";
+import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import { type OpenClawConfig, loadConfig } from "../../config/config.js";
 import { applyLinkUnderstanding } from "../../link-understanding/apply.js";
 import { applyMediaUnderstanding } from "../../media-understanding/apply.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
+import type { MsgContext } from "../templating.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
+import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import { emitResetCommandHooks, type ResetCommandAction } from "./commands-core.js";
 import { resolveDefaultModel } from "./directive-handling.js";
 import { resolveReplyDirectives } from "./get-reply-directives.js";
 import { handleInlineActions } from "./get-reply-inline-actions.js";
@@ -78,8 +80,12 @@ export async function getReplyFromConfig(
   });
   let provider = defaultProvider;
   let model = defaultModel;
+  let hasResolvedHeartbeatModelOverride = false;
   if (opts?.isHeartbeat) {
-    const heartbeatRaw = agentCfg?.heartbeat?.model?.trim() ?? "";
+    // Prefer the resolved per-agent heartbeat model passed from the heartbeat runner,
+    // fall back to the global defaults heartbeat model for backward compatibility.
+    const heartbeatRaw =
+      opts.heartbeatModelOverride?.trim() ?? agentCfg?.heartbeat?.model?.trim() ?? "";
     const heartbeatRef = heartbeatRaw
       ? resolveModelRefFromString({
           raw: heartbeatRaw,
@@ -90,6 +96,7 @@ export async function getReplyFromConfig(
     if (heartbeatRef) {
       provider = heartbeatRef.ref.provider;
       model = heartbeatRef.ref.model;
+      hasResolvedHeartbeatModelOverride = true;
     }
   }
 
@@ -100,7 +107,7 @@ export async function getReplyFromConfig(
   });
   const workspaceDir = workspace.dir;
   const agentDir = resolveAgentDir(cfg, agentId);
-  const timeoutMs = resolveAgentTimeoutMs({ cfg });
+  const timeoutMs = resolveAgentTimeoutMs({ cfg, overrideSeconds: opts?.timeoutOverrideSeconds });
   const configuredTypingSeconds =
     agentCfg?.typingIntervalSeconds ?? sessionCfg?.typingIntervalSeconds;
   const typingIntervalSeconds =
@@ -174,6 +181,36 @@ export async function getReplyFromConfig(
     aliasIndex,
   });
 
+  const channelModelOverride = resolveChannelModelOverride({
+    cfg,
+    channel:
+      groupResolution?.channel ??
+      sessionEntry.channel ??
+      sessionEntry.origin?.provider ??
+      (typeof finalized.OriginatingChannel === "string"
+        ? finalized.OriginatingChannel
+        : undefined) ??
+      finalized.Provider,
+    groupId: groupResolution?.id ?? sessionEntry.groupId,
+    groupChannel: sessionEntry.groupChannel ?? sessionCtx.GroupChannel ?? finalized.GroupChannel,
+    groupSubject: sessionEntry.subject ?? sessionCtx.GroupSubject ?? finalized.GroupSubject,
+    parentSessionKey: sessionCtx.ParentSessionKey,
+  });
+  const hasSessionModelOverride = Boolean(
+    sessionEntry.modelOverride?.trim() || sessionEntry.providerOverride?.trim(),
+  );
+  if (!hasResolvedHeartbeatModelOverride && !hasSessionModelOverride && channelModelOverride) {
+    const resolved = resolveModelRefFromString({
+      raw: channelModelOverride.model,
+      defaultProvider,
+      aliasIndex,
+    });
+    if (resolved) {
+      provider = resolved.ref.provider;
+      model = resolved.ref.model;
+    }
+  }
+
   const directiveResult = await resolveReplyDirectives({
     ctx: finalized,
     cfg,
@@ -196,6 +233,7 @@ export async function getReplyFromConfig(
     aliasIndex,
     provider,
     model,
+    hasResolvedHeartbeatModelOverride,
     typing,
     opts: resolvedOpts,
     skillFilter: mergedSkillFilter,
@@ -234,6 +272,27 @@ export async function getReplyFromConfig(
   } = directiveResult.result;
   provider = resolvedProvider;
   model = resolvedModel;
+
+  const maybeEmitMissingResetHooks = async () => {
+    if (!resetTriggered || !command.isAuthorizedSender || command.resetHookTriggered) {
+      return;
+    }
+    const resetMatch = command.commandBodyNormalized.match(/^\/(new|reset)(?:\s|$)/);
+    if (!resetMatch) {
+      return;
+    }
+    const action: ResetCommandAction = resetMatch[1] === "reset" ? "reset" : "new";
+    await emitResetCommandHooks({
+      action,
+      ctx,
+      cfg,
+      command,
+      sessionKey,
+      sessionEntry,
+      previousSessionEntry,
+      workspaceDir,
+    });
+  };
 
   const inlineActionResult = await handleInlineActions({
     ctx,
@@ -274,8 +333,10 @@ export async function getReplyFromConfig(
     skillFilter: mergedSkillFilter,
   });
   if (inlineActionResult.kind === "reply") {
+    await maybeEmitMissingResetHooks();
     return inlineActionResult.reply;
   }
+  await maybeEmitMissingResetHooks();
   directives = inlineActionResult.directives;
   abortedLastRun = inlineActionResult.abortedLastRun ?? abortedLastRun;
 

@@ -1,10 +1,12 @@
-import type { Dispatcher } from "undici";
+import { EnvHttpProxyAgent, type Dispatcher } from "undici";
+import { logWarn } from "../../logger.js";
+import { bindAbortRelay } from "../../utils/fetch-timeout.js";
 import {
   closeDispatcher,
   createPinnedDispatcher,
-  resolvePinnedHostname,
   resolvePinnedHostnameWithPolicy,
   type LookupFn,
+  SsrFBlockedError,
   type SsrFPolicy,
 } from "./ssrf.js";
 
@@ -20,6 +22,8 @@ export type GuardedFetchOptions = {
   policy?: SsrFPolicy;
   lookupFn?: LookupFn;
   pinDns?: boolean;
+  proxy?: "env";
+  auditContext?: string;
 };
 
 export type GuardedFetchResult = {
@@ -29,9 +33,44 @@ export type GuardedFetchResult = {
 };
 
 const DEFAULT_MAX_REDIRECTS = 3;
+const ENV_PROXY_KEYS = [
+  "HTTP_PROXY",
+  "HTTPS_PROXY",
+  "ALL_PROXY",
+  "http_proxy",
+  "https_proxy",
+  "all_proxy",
+] as const;
+const CROSS_ORIGIN_REDIRECT_SENSITIVE_HEADERS = [
+  "authorization",
+  "proxy-authorization",
+  "cookie",
+  "cookie2",
+];
+
+function hasEnvProxyConfigured(): boolean {
+  for (const key of ENV_PROXY_KEYS) {
+    const value = process.env[key];
+    if (typeof value === "string" && value.trim()) {
+      return true;
+    }
+  }
+  return false;
+}
 
 function isRedirectStatus(status: number): boolean {
   return status === 301 || status === 302 || status === 303 || status === 307 || status === 308;
+}
+
+function stripSensitiveHeadersForCrossOriginRedirect(init?: RequestInit): RequestInit | undefined {
+  if (!init?.headers) {
+    return init;
+  }
+  const headers = new Headers(init.headers);
+  for (const header of CROSS_ORIGIN_REDIRECT_SENSITIVE_HEADERS) {
+    headers.delete(header);
+  }
+  return { ...init, headers };
 }
 
 function buildAbortSignal(params: { timeoutMs?: number; signal?: AbortSignal }): {
@@ -48,8 +87,8 @@ function buildAbortSignal(params: { timeoutMs?: number; signal?: AbortSignal }):
   }
 
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-  const onAbort = () => controller.abort();
+  const timeoutId = setTimeout(controller.abort.bind(controller), timeoutMs);
+  const onAbort = bindAbortRelay(controller);
   if (signal) {
     if (signal.aborted) {
       controller.abort();
@@ -96,6 +135,7 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
 
   const visited = new Set<string>();
   let currentUrl = params.url;
+  let currentInit = params.init ? { ...params.init } : undefined;
   let redirectCount = 0;
 
   while (true) {
@@ -113,21 +153,18 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
 
     let dispatcher: Dispatcher | null = null;
     try {
-      const usePolicy = Boolean(
-        params.policy?.allowPrivateNetwork || params.policy?.allowedHostnames?.length,
-      );
-      const pinned = usePolicy
-        ? await resolvePinnedHostnameWithPolicy(parsedUrl.hostname, {
-            lookupFn: params.lookupFn,
-            policy: params.policy,
-          })
-        : await resolvePinnedHostname(parsedUrl.hostname, params.lookupFn);
-      if (params.pinDns !== false) {
+      const pinned = await resolvePinnedHostnameWithPolicy(parsedUrl.hostname, {
+        lookupFn: params.lookupFn,
+        policy: params.policy,
+      });
+      if (params.proxy === "env" && hasEnvProxyConfigured()) {
+        dispatcher = new EnvHttpProxyAgent();
+      } else if (params.pinDns !== false) {
         dispatcher = createPinnedDispatcher(pinned);
       }
 
       const init: RequestInit & { dispatcher?: Dispatcher } = {
-        ...(params.init ? { ...params.init } : {}),
+        ...(currentInit ? { ...currentInit } : {}),
         redirect: "manual",
         ...(dispatcher ? { dispatcher } : {}),
         ...(signal ? { signal } : {}),
@@ -146,10 +183,14 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
           await release(dispatcher);
           throw new Error(`Too many redirects (limit: ${maxRedirects})`);
         }
-        const nextUrl = new URL(location, parsedUrl).toString();
+        const nextParsedUrl = new URL(location, parsedUrl);
+        const nextUrl = nextParsedUrl.toString();
         if (visited.has(nextUrl)) {
           await release(dispatcher);
           throw new Error("Redirect loop detected");
+        }
+        if (nextParsedUrl.origin !== parsedUrl.origin) {
+          currentInit = stripSensitiveHeadersForCrossOriginRedirect(currentInit);
         }
         visited.add(nextUrl);
         void response.body?.cancel();
@@ -164,6 +205,12 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
         release: async () => release(dispatcher),
       };
     } catch (err) {
+      if (err instanceof SsrFBlockedError) {
+        const context = params.auditContext ?? "url-fetch";
+        logWarn(
+          `security: blocked URL fetch (${context}) target=${parsedUrl.origin}${parsedUrl.pathname} reason=${err.message}`,
+        );
+      }
       await release(dispatcher);
       throw err;
     }

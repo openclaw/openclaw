@@ -1,42 +1,6 @@
 import type { SubagentRunRecord } from "../../agents/subagent-registry.js";
 import { truncateUtf16Safe } from "../../utils.js";
 
-export function formatDurationShort(valueMs?: number) {
-  if (!valueMs || !Number.isFinite(valueMs) || valueMs <= 0) {
-    return "n/a";
-  }
-  const totalSeconds = Math.round(valueMs / 1000);
-  const hours = Math.floor(totalSeconds / 3600);
-  const minutes = Math.floor((totalSeconds % 3600) / 60);
-  const seconds = totalSeconds % 60;
-  if (hours > 0) {
-    return `${hours}h${minutes}m`;
-  }
-  if (minutes > 0) {
-    return `${minutes}m${seconds}s`;
-  }
-  return `${seconds}s`;
-}
-
-export function formatAgeShort(valueMs?: number) {
-  if (!valueMs || !Number.isFinite(valueMs) || valueMs <= 0) {
-    return "n/a";
-  }
-  const minutes = Math.round(valueMs / 60_000);
-  if (minutes < 1) {
-    return "just now";
-  }
-  if (minutes < 60) {
-    return `${minutes}m ago`;
-  }
-  const hours = Math.round(minutes / 60);
-  if (hours < 48) {
-    return `${hours}h ago`;
-  }
-  const days = Math.round(hours / 24);
-  return `${days}d ago`;
-}
-
 export function resolveSubagentLabel(entry: SubagentRunRecord, fallback = "subagent") {
   const raw = entry.label?.trim() || entry.task?.trim() || "";
   return raw || fallback;
@@ -65,4 +29,77 @@ export function sortSubagentRuns(runs: SubagentRunRecord[]) {
     const bTime = b.startedAt ?? b.createdAt ?? 0;
     return bTime - aTime;
   });
+}
+
+export type SubagentTargetResolution = {
+  entry?: SubagentRunRecord;
+  error?: string;
+};
+
+export function resolveSubagentTargetFromRuns(params: {
+  runs: SubagentRunRecord[];
+  token: string | undefined;
+  recentWindowMinutes: number;
+  label: (entry: SubagentRunRecord) => string;
+  errors: {
+    missingTarget: string;
+    invalidIndex: (value: string) => string;
+    unknownSession: (value: string) => string;
+    ambiguousLabel: (value: string) => string;
+    ambiguousLabelPrefix: (value: string) => string;
+    ambiguousRunIdPrefix: (value: string) => string;
+    unknownTarget: (value: string) => string;
+  };
+}): SubagentTargetResolution {
+  const trimmed = params.token?.trim();
+  if (!trimmed) {
+    return { error: params.errors.missingTarget };
+  }
+  const sorted = sortSubagentRuns(params.runs);
+  if (trimmed === "last") {
+    return { entry: sorted[0] };
+  }
+  const recentCutoff = Date.now() - params.recentWindowMinutes * 60_000;
+  const numericOrder = [
+    ...sorted.filter((entry) => !entry.endedAt),
+    ...sorted.filter((entry) => !!entry.endedAt && (entry.endedAt ?? 0) >= recentCutoff),
+  ];
+  if (/^\d+$/.test(trimmed)) {
+    const idx = Number.parseInt(trimmed, 10);
+    if (!Number.isFinite(idx) || idx <= 0 || idx > numericOrder.length) {
+      return { error: params.errors.invalidIndex(trimmed) };
+    }
+    return { entry: numericOrder[idx - 1] };
+  }
+  if (trimmed.includes(":")) {
+    const bySessionKey = sorted.find((entry) => entry.childSessionKey === trimmed);
+    return bySessionKey
+      ? { entry: bySessionKey }
+      : { error: params.errors.unknownSession(trimmed) };
+  }
+  const lowered = trimmed.toLowerCase();
+  const byExactLabel = sorted.filter((entry) => params.label(entry).toLowerCase() === lowered);
+  if (byExactLabel.length === 1) {
+    return { entry: byExactLabel[0] };
+  }
+  if (byExactLabel.length > 1) {
+    return { error: params.errors.ambiguousLabel(trimmed) };
+  }
+  const byLabelPrefix = sorted.filter((entry) =>
+    params.label(entry).toLowerCase().startsWith(lowered),
+  );
+  if (byLabelPrefix.length === 1) {
+    return { entry: byLabelPrefix[0] };
+  }
+  if (byLabelPrefix.length > 1) {
+    return { error: params.errors.ambiguousLabelPrefix(trimmed) };
+  }
+  const byRunIdPrefix = sorted.filter((entry) => entry.runId.startsWith(trimmed));
+  if (byRunIdPrefix.length === 1) {
+    return { entry: byRunIdPrefix[0] };
+  }
+  if (byRunIdPrefix.length > 1) {
+    return { error: params.errors.ambiguousRunIdPrefix(trimmed) };
+  }
+  return { error: params.errors.unknownTarget(trimmed) };
 }

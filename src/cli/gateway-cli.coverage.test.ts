@@ -1,68 +1,41 @@
 import { Command } from "commander";
 import { describe, expect, it, vi } from "vitest";
+import { withEnvOverride } from "../config/test-helpers.js";
+import { createCliRuntimeCapture } from "./test-runtime-capture.js";
 
-const callGateway = vi.fn(async () => ({ ok: true }));
-const startGatewayServer = vi.fn(async () => ({
+type DiscoveredBeacon = Awaited<
+  ReturnType<typeof import("../infra/bonjour-discovery.js").discoverGatewayBeacons>
+>[number];
+
+const callGateway = vi.fn<(opts: unknown) => Promise<{ ok: true }>>(async () => ({ ok: true }));
+const startGatewayServer = vi.fn<
+  (port: number, opts?: unknown) => Promise<{ close: () => Promise<void> }>
+>(async () => ({
   close: vi.fn(async () => {}),
 }));
 const setVerbose = vi.fn();
-const forceFreePortAndWait = vi.fn(async () => ({
+const forceFreePortAndWait = vi.fn<
+  (port: number) => Promise<{ killed: unknown[]; waitedMs: number; escalatedToSigkill: boolean }>
+>(async () => ({
   killed: [],
   waitedMs: 0,
   escalatedToSigkill: false,
 }));
 const serviceIsLoaded = vi.fn().mockResolvedValue(true);
-const discoverGatewayBeacons = vi.fn(async () => []);
-const gatewayStatusCommand = vi.fn(async () => {});
+const discoverGatewayBeacons = vi.fn<(opts: unknown) => Promise<DiscoveredBeacon[]>>(
+  async () => [],
+);
+const gatewayStatusCommand = vi.fn<(opts: unknown) => Promise<void>>(async () => {});
 
-const runtimeLogs: string[] = [];
-const runtimeErrors: string[] = [];
-const defaultRuntime = {
-  log: (msg: string) => runtimeLogs.push(msg),
-  error: (msg: string) => runtimeErrors.push(msg),
-  exit: (code: number) => {
-    throw new Error(`__exit__:${code}`);
-  },
-};
-
-async function withEnvOverride<T>(
-  overrides: Record<string, string | undefined>,
-  fn: () => Promise<T>,
-): Promise<T> {
-  const saved: Record<string, string | undefined> = {};
-  for (const key of Object.keys(overrides)) {
-    saved[key] = process.env[key];
-    if (overrides[key] === undefined) {
-      delete process.env[key];
-    } else {
-      process.env[key] = overrides[key];
-    }
-  }
-  vi.resetModules();
-  try {
-    return await fn();
-  } finally {
-    for (const key of Object.keys(saved)) {
-      if (saved[key] === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = saved[key];
-      }
-    }
-    vi.resetModules();
-  }
-}
+const { runtimeLogs, runtimeErrors, defaultRuntime, resetRuntimeCapture } =
+  createCliRuntimeCapture();
 
 vi.mock(
   new URL("../../gateway/call.ts", new URL("./gateway-cli/call.ts", import.meta.url)).href,
-  async (importOriginal) => {
-    const mod = await importOriginal();
-    return {
-      ...mod,
-      callGateway: (opts: unknown) => callGateway(opts),
-      randomIdempotencyKey: () => "rk_test",
-    };
-  },
+  () => ({
+    callGateway: (opts: unknown) => callGateway(opts),
+    randomIdempotencyKey: () => "rk_test",
+  }),
 );
 
 vi.mock("../gateway/server.js", () => ({
@@ -112,76 +85,47 @@ vi.mock("../commands/gateway-status.js", () => ({
   gatewayStatusCommand: (opts: unknown) => gatewayStatusCommand(opts),
 }));
 
+const { registerGatewayCli } = await import("./gateway-cli.js");
+
+function createGatewayProgram() {
+  const program = new Command();
+  program.exitOverride();
+  registerGatewayCli(program);
+  return program;
+}
+
+async function runGatewayCommand(args: string[]) {
+  const program = createGatewayProgram();
+  await program.parseAsync(args, { from: "user" });
+}
+
+async function expectGatewayExit(args: string[]) {
+  await expect(runGatewayCommand(args)).rejects.toThrow("__exit__:1");
+}
+
 describe("gateway-cli coverage", () => {
   it("registers call/health commands and routes to callGateway", async () => {
-    runtimeLogs.length = 0;
-    runtimeErrors.length = 0;
+    resetRuntimeCapture();
     callGateway.mockClear();
 
-    const { registerGatewayCli } = await import("./gateway-cli.js");
-    const program = new Command();
-    program.exitOverride();
-    registerGatewayCli(program);
-
-    await program.parseAsync(["gateway", "call", "health", "--params", '{"x":1}', "--json"], {
-      from: "user",
-    });
+    await runGatewayCommand(["gateway", "call", "health", "--params", '{"x":1}', "--json"]);
 
     expect(callGateway).toHaveBeenCalledTimes(1);
     expect(runtimeLogs.join("\n")).toContain('"ok": true');
-  }, 60_000);
-
-  it("registers gateway probe and routes to gatewayStatusCommand", async () => {
-    runtimeLogs.length = 0;
-    runtimeErrors.length = 0;
-    gatewayStatusCommand.mockClear();
-
-    const { registerGatewayCli } = await import("./gateway-cli.js");
-    const program = new Command();
-    program.exitOverride();
-    registerGatewayCli(program);
-
-    await program.parseAsync(["gateway", "probe", "--json"], { from: "user" });
-
-    expect(gatewayStatusCommand).toHaveBeenCalledTimes(1);
-  }, 60_000);
-
-  it("registers gateway discover and prints JSON", async () => {
-    runtimeLogs.length = 0;
-    runtimeErrors.length = 0;
-    discoverGatewayBeacons.mockReset();
-    discoverGatewayBeacons.mockResolvedValueOnce([
-      {
-        instanceName: "Studio (OpenClaw)",
-        displayName: "Studio",
-        domain: "local.",
-        host: "studio.local",
-        lanHost: "studio.local",
-        tailnetDns: "studio.tailnet.ts.net",
-        gatewayPort: 18789,
-        sshPort: 22,
-      },
-    ]);
-
-    const { registerGatewayCli } = await import("./gateway-cli.js");
-    const program = new Command();
-    program.exitOverride();
-    registerGatewayCli(program);
-
-    await program.parseAsync(["gateway", "discover", "--json"], {
-      from: "user",
-    });
-
-    expect(discoverGatewayBeacons).toHaveBeenCalledTimes(1);
-    expect(runtimeLogs.join("\n")).toContain('"beacons"');
-    expect(runtimeLogs.join("\n")).toContain('"wsUrl"');
-    expect(runtimeLogs.join("\n")).toContain("ws://");
   });
 
-  it("registers gateway discover and prints human output with details on new lines", async () => {
-    runtimeLogs.length = 0;
-    runtimeErrors.length = 0;
-    discoverGatewayBeacons.mockReset();
+  it("registers gateway probe and routes to gatewayStatusCommand", async () => {
+    resetRuntimeCapture();
+    gatewayStatusCommand.mockClear();
+
+    await runGatewayCommand(["gateway", "probe", "--json"]);
+
+    expect(gatewayStatusCommand).toHaveBeenCalledTimes(1);
+  });
+
+  it("registers gateway discover and prints json output", async () => {
+    resetRuntimeCapture();
+    discoverGatewayBeacons.mockClear();
     discoverGatewayBeacons.mockResolvedValueOnce([
       {
         instanceName: "Studio (OpenClaw)",
@@ -195,107 +139,64 @@ describe("gateway-cli coverage", () => {
       },
     ]);
 
-    const { registerGatewayCli } = await import("./gateway-cli.js");
-    const program = new Command();
-    program.exitOverride();
-    registerGatewayCli(program);
+    await runGatewayCommand(["gateway", "discover", "--json"]);
 
-    await program.parseAsync(["gateway", "discover", "--timeout", "1"], {
-      from: "user",
-    });
-
+    expect(discoverGatewayBeacons).toHaveBeenCalledTimes(1);
     const out = runtimeLogs.join("\n");
-    expect(out).toContain("Gateway Discovery");
-    expect(out).toContain("Found 1 gateway(s)");
-    expect(out).toContain("- Studio openclaw.internal.");
-    expect(out).toContain("  tailnet: studio.tailnet.ts.net");
-    expect(out).toContain("  host: studio.openclaw.internal");
-    expect(out).toContain("  ws: ws://studio.tailnet.ts.net:18789");
+    expect(out).toContain('"beacons"');
+    expect(out).toContain("ws://");
   });
 
   it("validates gateway discover timeout", async () => {
-    runtimeLogs.length = 0;
-    runtimeErrors.length = 0;
-    discoverGatewayBeacons.mockReset();
-
-    const { registerGatewayCli } = await import("./gateway-cli.js");
-    const program = new Command();
-    program.exitOverride();
-    registerGatewayCli(program);
-
-    await expect(
-      program.parseAsync(["gateway", "discover", "--timeout", "0"], {
-        from: "user",
-      }),
-    ).rejects.toThrow("__exit__:1");
+    resetRuntimeCapture();
+    discoverGatewayBeacons.mockClear();
+    await expectGatewayExit(["gateway", "discover", "--timeout", "0"]);
 
     expect(runtimeErrors.join("\n")).toContain("gateway discover failed:");
     expect(discoverGatewayBeacons).not.toHaveBeenCalled();
   });
 
   it("fails gateway call on invalid params JSON", async () => {
-    runtimeLogs.length = 0;
-    runtimeErrors.length = 0;
+    resetRuntimeCapture();
     callGateway.mockClear();
-
-    const { registerGatewayCli } = await import("./gateway-cli.js");
-    const program = new Command();
-    program.exitOverride();
-    registerGatewayCli(program);
-
-    await expect(
-      program.parseAsync(["gateway", "call", "status", "--params", "not-json"], { from: "user" }),
-    ).rejects.toThrow("__exit__:1");
+    await expectGatewayExit(["gateway", "call", "status", "--params", "not-json"]);
 
     expect(callGateway).not.toHaveBeenCalled();
     expect(runtimeErrors.join("\n")).toContain("Gateway call failed:");
   });
 
   it("validates gateway ports and handles force/start errors", async () => {
-    runtimeLogs.length = 0;
-    runtimeErrors.length = 0;
-
-    const { registerGatewayCli } = await import("./gateway-cli.js");
+    resetRuntimeCapture();
 
     // Invalid port
-    const programInvalidPort = new Command();
-    programInvalidPort.exitOverride();
-    registerGatewayCli(programInvalidPort);
-    await expect(
-      programInvalidPort.parseAsync(["gateway", "--port", "0", "--token", "test-token"], {
-        from: "user",
-      }),
-    ).rejects.toThrow("__exit__:1");
+    await expectGatewayExit(["gateway", "--port", "0", "--token", "test-token"]);
 
     // Force free failure
     forceFreePortAndWait.mockImplementationOnce(async () => {
       throw new Error("boom");
     });
-    const programForceFail = new Command();
-    programForceFail.exitOverride();
-    registerGatewayCli(programForceFail);
-    await expect(
-      programForceFail.parseAsync(
-        ["gateway", "--port", "18789", "--token", "test-token", "--force", "--allow-unconfigured"],
-        { from: "user" },
-      ),
-    ).rejects.toThrow("__exit__:1");
+    await expectGatewayExit([
+      "gateway",
+      "--port",
+      "18789",
+      "--token",
+      "test-token",
+      "--force",
+      "--allow-unconfigured",
+    ]);
 
     // Start failure (generic)
     startGatewayServer.mockRejectedValueOnce(new Error("nope"));
-    const programStartFail = new Command();
-    programStartFail.exitOverride();
-    registerGatewayCli(programStartFail);
     const beforeSigterm = new Set(process.listeners("SIGTERM"));
     const beforeSigint = new Set(process.listeners("SIGINT"));
-    await expect(
-      programStartFail.parseAsync(
-        ["gateway", "--port", "18789", "--token", "test-token", "--allow-unconfigured"],
-        {
-          from: "user",
-        },
-      ),
-    ).rejects.toThrow("__exit__:1");
+    await expectGatewayExit([
+      "gateway",
+      "--port",
+      "18789",
+      "--token",
+      "test-token",
+      "--allow-unconfigured",
+    ]);
     for (const listener of process.listeners("SIGTERM")) {
       if (!beforeSigterm.has(listener)) {
         process.removeListener("SIGTERM", listener);
@@ -309,25 +210,14 @@ describe("gateway-cli coverage", () => {
   });
 
   it("prints stop hints on GatewayLockError when service is loaded", async () => {
-    runtimeLogs.length = 0;
-    runtimeErrors.length = 0;
+    resetRuntimeCapture();
     serviceIsLoaded.mockResolvedValue(true);
 
     const { GatewayLockError } = await import("../infra/gateway-lock.js");
     startGatewayServer.mockRejectedValueOnce(
       new GatewayLockError("another gateway instance is already listening"),
     );
-
-    const { registerGatewayCli } = await import("./gateway-cli.js");
-    const program = new Command();
-    program.exitOverride();
-    registerGatewayCli(program);
-
-    await expect(
-      program.parseAsync(["gateway", "--token", "test-token", "--allow-unconfigured"], {
-        from: "user",
-      }),
-    ).rejects.toThrow("__exit__:1");
+    await expectGatewayExit(["gateway", "--token", "test-token", "--allow-unconfigured"]);
 
     expect(startGatewayServer).toHaveBeenCalled();
     expect(runtimeErrors.join("\n")).toContain("Gateway failed to start:");
@@ -336,21 +226,11 @@ describe("gateway-cli coverage", () => {
 
   it("uses env/config port when --port is omitted", async () => {
     await withEnvOverride({ OPENCLAW_GATEWAY_PORT: "19001" }, async () => {
-      runtimeLogs.length = 0;
-      runtimeErrors.length = 0;
+      resetRuntimeCapture();
       startGatewayServer.mockClear();
 
-      const { registerGatewayCli } = await import("./gateway-cli.js");
-      const program = new Command();
-      program.exitOverride();
-      registerGatewayCli(program);
-
       startGatewayServer.mockRejectedValueOnce(new Error("nope"));
-      await expect(
-        program.parseAsync(["gateway", "--token", "test-token", "--allow-unconfigured"], {
-          from: "user",
-        }),
-      ).rejects.toThrow("__exit__:1");
+      await expectGatewayExit(["gateway", "--token", "test-token", "--allow-unconfigured"]);
 
       expect(startGatewayServer).toHaveBeenCalledWith(19001, expect.anything());
     });

@@ -7,29 +7,11 @@ import type {
   StickerMessage,
   LocationMessage,
 } from "@line/bot-sdk";
+import type { BaseProbeResult } from "../channels/plugins/types.js";
 
 export type LineTokenSource = "config" | "env" | "file" | "none";
 
-export interface LineConfig {
-  enabled?: boolean;
-  channelAccessToken?: string;
-  channelSecret?: string;
-  tokenFile?: string;
-  secretFile?: string;
-  name?: string;
-  allowFrom?: Array<string | number>;
-  groupAllowFrom?: Array<string | number>;
-  dmPolicy?: "open" | "allowlist" | "pairing" | "disabled";
-  groupPolicy?: "open" | "allowlist" | "disabled";
-  /** Outbound response prefix override for this channel/account. */
-  responsePrefix?: string;
-  mediaMaxMb?: number;
-  webhookPath?: string;
-  accounts?: Record<string, LineAccountConfig>;
-  groups?: Record<string, LineGroupConfig>;
-}
-
-export interface LineAccountConfig {
+interface LineAccountBaseConfig {
   enabled?: boolean;
   channelAccessToken?: string;
   channelSecret?: string;
@@ -46,6 +28,13 @@ export interface LineAccountConfig {
   webhookPath?: string;
   groups?: Record<string, LineGroupConfig>;
 }
+
+export interface LineConfig extends LineAccountBaseConfig {
+  /** Per-account overrides keyed by account id. */
+  accounts?: Record<string, LineAccountConfig>;
+}
+
+export interface LineAccountConfig extends LineAccountBaseConfig {}
 
 export interface LineGroupConfig {
   enabled?: boolean;
@@ -86,16 +75,14 @@ export interface LineSendResult {
   chatId: string;
 }
 
-export interface LineProbeResult {
-  ok: boolean;
+export type LineProbeResult = BaseProbeResult<string> & {
   bot?: {
     displayName?: string;
     userId?: string;
     basicId?: string;
     pictureUrl?: string;
   };
-  error?: string;
-}
+};
 
 export type LineFlexMessagePayload = {
   altText: string;

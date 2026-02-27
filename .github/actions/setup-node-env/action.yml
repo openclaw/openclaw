@@ -1,0 +1,98 @@
+name: Setup Node environment
+description: >
+  Initialize submodules with retry, install Node 22, pnpm, optionally Bun,
+  and run pnpm install. Requires actions/checkout to run first.
+inputs:
+  node-version:
+    description: Node.js version to install.
+    required: false
+    default: "22.x"
+  pnpm-version:
+    description: pnpm version for corepack.
+    required: false
+    default: "10.23.0"
+  install-bun:
+    description: Whether to install Bun alongside Node.
+    required: false
+    default: "true"
+  frozen-lockfile:
+    description: Whether to use --frozen-lockfile for install.
+    required: false
+    default: "true"
+runs:
+  using: composite
+  steps:
+    - name: Checkout submodules (retry)
+      shell: bash
+      run: |
+        set -euo pipefail
+        git submodule sync --recursive
+        for attempt in 1 2 3 4 5; do
+          if git -c protocol.version=2 submodule update --init --force --depth=1 --recursive; then
+            exit 0
+          fi
+          echo "Submodule update failed (attempt $attempt/5). Retrying…"
+          sleep $((attempt * 10))
+        done
+        exit 1
+
+    - name: Setup Node.js
+      uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      with:
+        node-version: ${{ inputs.node-version }}
+        check-latest: true
+
+    - name: Setup pnpm + cache store
+      uses: ./.github/actions/setup-pnpm-store-cache
+      with:
+        pnpm-version: ${{ inputs.pnpm-version }}
+        cache-key-suffix: "node22"
+
+    - name: Setup Bun
+      if: inputs.install-bun == 'true'
+      uses: oven-sh/setup-bun@v2
+      with:
+        bun-version: "1.3.9+cf6cdbbba"
+
+    - name: Runtime versions
+      shell: bash
+      run: |
+        node -v
+        npm -v
+        pnpm -v
+        if command -v bun &>/dev/null; then bun -v; fi
+
+    - name: Capture node path
+      shell: bash
+      run: echo "NODE_BIN=$(dirname "$(node -p "process.execPath")")" >> "$GITHUB_ENV"
+
+    - name: Install dependencies
+      shell: bash
+      env:
+        CI: "true"
+        FROZEN_LOCKFILE: ${{ inputs.frozen-lockfile }}
+      run: |
+        set -euo pipefail
+        export PATH="$NODE_BIN:$PATH"
+        which node
+        node -v
+        pnpm -v
+        case "$FROZEN_LOCKFILE" in
+          true) LOCKFILE_FLAG="--frozen-lockfile" ;;
+          false) LOCKFILE_FLAG="" ;;
+          *)
+            echo "::error::Invalid frozen-lockfile input: '$FROZEN_LOCKFILE' (expected true or false)"
+            exit 2
+            ;;
+        esac
+
+        install_args=(
+          install
+          --ignore-scripts=false
+          --config.engine-strict=false
+          --config.enable-pre-post-scripts=true
+        )
+        if [ -n "$LOCKFILE_FLAG" ]; then
+          install_args+=("$LOCKFILE_FLAG")
+        fi
+        pnpm "${install_args[@]}" || pnpm "${install_args[@]}"

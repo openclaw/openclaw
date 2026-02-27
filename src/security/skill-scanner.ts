@@ -1,5 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { hasErrnoCode } from "../infra/errors.js";
+import { isPathInside } from "./scan-paths.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -50,16 +52,6 @@ const DEFAULT_MAX_FILE_BYTES = 1024 * 1024;
 
 export function isScannable(filePath: string): boolean {
   return SCANNABLE_EXTENSIONS.has(path.extname(filePath).toLowerCase());
-}
-
-function isErrno(err: unknown, code: string): boolean {
-  if (!err || typeof err !== "object") {
-    return false;
-  }
-  if (!("code" in err)) {
-    return false;
-  }
-  return (err as { code?: unknown }).code === code;
 }
 
 // ---------------------------------------------------------------------------
@@ -261,13 +253,6 @@ function normalizeScanOptions(opts?: SkillScanOptions): Required<SkillScanOption
   };
 }
 
-function isPathInside(basePath: string, candidatePath: string): boolean {
-  const base = path.resolve(basePath);
-  const candidate = path.resolve(candidatePath);
-  const rel = path.relative(base, candidate);
-  return rel === "" || (!rel.startsWith(`..${path.sep}`) && rel !== ".." && !path.isAbsolute(rel));
-}
-
 async function walkDirWithLimit(dirPath: string, maxFiles: number): Promise<string[]> {
   const files: string[] = [];
   const stack: string[] = [dirPath];
@@ -327,7 +312,7 @@ async function resolveForcedFiles(params: {
     try {
       st = await fs.stat(includePath);
     } catch (err) {
-      if (isErrno(err, "ENOENT")) {
+      if (hasErrnoCode(err, "ENOENT")) {
         continue;
       }
       throw err;
@@ -374,7 +359,7 @@ async function readScannableSource(filePath: string, maxFileBytes: number): Prom
   try {
     st = await fs.stat(filePath);
   } catch (err) {
-    if (isErrno(err, "ENOENT")) {
+    if (hasErrnoCode(err, "ENOENT")) {
       return null;
     }
     throw err;
@@ -385,7 +370,7 @@ async function readScannableSource(filePath: string, maxFileBytes: number): Prom
   try {
     return await fs.readFile(filePath, "utf-8");
   } catch (err) {
-    if (isErrno(err, "ENOENT")) {
+    if (hasErrnoCode(err, "ENOENT")) {
       return null;
     }
     throw err;

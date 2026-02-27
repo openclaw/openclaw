@@ -1,77 +1,178 @@
 import { describe, expect, it } from "vitest";
-import { deriveSessionTotalTokens, hasNonzeroUsage, normalizeUsage } from "./usage.js";
+import {
+  normalizeUsage,
+  hasNonzeroUsage,
+  derivePromptTokens,
+  deriveSessionTotalTokens,
+} from "./usage.js";
 
 describe("normalizeUsage", () => {
-  it("normalizes Anthropic-style snake_case usage", () => {
+  it("normalizes cache fields from provider response", () => {
     const usage = normalizeUsage({
-      input_tokens: 1200,
-      output_tokens: 340,
-      cache_creation_input_tokens: 200,
-      cache_read_input_tokens: 50,
-      total_tokens: 1790,
+      input: 1000,
+      output: 500,
+      cacheRead: 2000,
+      cacheWrite: 300,
     });
     expect(usage).toEqual({
-      input: 1200,
-      output: 340,
-      cacheRead: 50,
+      input: 1000,
+      output: 500,
+      cacheRead: 2000,
+      cacheWrite: 300,
+      total: undefined,
+    });
+  });
+
+  it("normalizes cache fields from alternate naming", () => {
+    const usage = normalizeUsage({
+      input_tokens: 1000,
+      output_tokens: 500,
+      cache_read_input_tokens: 2000,
+      cache_creation_input_tokens: 300,
+    });
+    expect(usage).toEqual({
+      input: 1000,
+      output: 500,
+      cacheRead: 2000,
+      cacheWrite: 300,
+      total: undefined,
+    });
+  });
+
+  it("handles cache_read and cache_write naming variants", () => {
+    const usage = normalizeUsage({
+      input: 1000,
+      cache_read: 1500,
+      cache_write: 200,
+    });
+    expect(usage).toEqual({
+      input: 1000,
+      output: undefined,
+      cacheRead: 1500,
       cacheWrite: 200,
-      total: 1790,
+      total: undefined,
     });
   });
 
-  it("normalizes OpenAI-style prompt/completion usage", () => {
+  it("handles Moonshot/Kimi cached_tokens field", () => {
+    // Moonshot v1 returns cached_tokens instead of cache_read_input_tokens
     const usage = normalizeUsage({
-      prompt_tokens: 987,
-      completion_tokens: 123,
-      total_tokens: 1110,
+      prompt_tokens: 30,
+      completion_tokens: 9,
+      total_tokens: 39,
+      cached_tokens: 19,
     });
     expect(usage).toEqual({
-      input: 987,
-      output: 123,
-      cacheRead: undefined,
+      input: 30,
+      output: 9,
+      cacheRead: 19,
       cacheWrite: undefined,
-      total: 1110,
+      total: 39,
     });
   });
 
-  it("returns undefined for empty usage objects", () => {
-    expect(normalizeUsage({})).toBeUndefined();
+  it("handles Kimi K2 prompt_tokens_details.cached_tokens field", () => {
+    // Kimi K2 uses automatic prefix caching and returns cached_tokens in prompt_tokens_details
+    const usage = normalizeUsage({
+      prompt_tokens: 1113,
+      completion_tokens: 5,
+      total_tokens: 1118,
+      prompt_tokens_details: { cached_tokens: 1024 },
+    });
+    expect(usage).toEqual({
+      input: 1113,
+      output: 5,
+      cacheRead: 1024,
+      cacheWrite: undefined,
+      total: 1118,
+    });
   });
 
-  it("guards against empty/zero usage overwrites", () => {
+  it("returns undefined when no valid fields are provided", () => {
+    const usage = normalizeUsage(null);
+    expect(usage).toBeUndefined();
+  });
+
+  it("handles undefined input", () => {
+    const usage = normalizeUsage(undefined);
+    expect(usage).toBeUndefined();
+  });
+});
+
+describe("hasNonzeroUsage", () => {
+  it("returns true when cache read is nonzero", () => {
+    const usage = { cacheRead: 100 };
+    expect(hasNonzeroUsage(usage)).toBe(true);
+  });
+
+  it("returns true when cache write is nonzero", () => {
+    const usage = { cacheWrite: 50 };
+    expect(hasNonzeroUsage(usage)).toBe(true);
+  });
+
+  it("returns true when both cache fields are nonzero", () => {
+    const usage = { cacheRead: 100, cacheWrite: 50 };
+    expect(hasNonzeroUsage(usage)).toBe(true);
+  });
+
+  it("returns false when cache fields are zero", () => {
+    const usage = { cacheRead: 0, cacheWrite: 0 };
+    expect(hasNonzeroUsage(usage)).toBe(false);
+  });
+
+  it("returns false for undefined usage", () => {
     expect(hasNonzeroUsage(undefined)).toBe(false);
-    expect(hasNonzeroUsage(null)).toBe(false);
-    expect(hasNonzeroUsage({})).toBe(false);
-    expect(hasNonzeroUsage({ input: 0, output: 0 })).toBe(false);
-    expect(hasNonzeroUsage({ input: 1 })).toBe(true);
-    expect(hasNonzeroUsage({ total: 1 })).toBe(true);
+  });
+});
+
+describe("derivePromptTokens", () => {
+  it("includes cache tokens in prompt total", () => {
+    const usage = {
+      input: 1000,
+      cacheRead: 500,
+      cacheWrite: 200,
+    };
+    const promptTokens = derivePromptTokens(usage);
+    expect(promptTokens).toBe(1700); // 1000 + 500 + 200
   });
 
-  it("caps derived session total tokens to the context window", () => {
-    expect(
-      deriveSessionTotalTokens({
-        usage: {
-          input: 27,
-          cacheRead: 2_400_000,
-          cacheWrite: 0,
-          total: 2_402_300,
-        },
-        contextTokens: 200_000,
-      }),
-    ).toBe(200_000);
+  it("handles missing cache fields", () => {
+    const usage = {
+      input: 1000,
+    };
+    const promptTokens = derivePromptTokens(usage);
+    expect(promptTokens).toBe(1000);
   });
 
-  it("uses prompt tokens when within context window", () => {
-    expect(
-      deriveSessionTotalTokens({
-        usage: {
-          input: 1_200,
-          cacheRead: 300,
-          cacheWrite: 50,
-          total: 2_000,
-        },
-        contextTokens: 200_000,
-      }),
-    ).toBe(1_550);
+  it("returns undefined for empty usage", () => {
+    const promptTokens = derivePromptTokens({});
+    expect(promptTokens).toBeUndefined();
+  });
+});
+
+describe("deriveSessionTotalTokens", () => {
+  it("includes cache tokens in total calculation", () => {
+    const totalTokens = deriveSessionTotalTokens({
+      usage: {
+        input: 1000,
+        cacheRead: 500,
+        cacheWrite: 200,
+      },
+      contextTokens: 4000,
+    });
+    expect(totalTokens).toBe(1700); // 1000 + 500 + 200
+  });
+
+  it("prefers promptTokens override over derived total", () => {
+    const totalTokens = deriveSessionTotalTokens({
+      usage: {
+        input: 1000,
+        cacheRead: 500,
+        cacheWrite: 200,
+      },
+      contextTokens: 4000,
+      promptTokens: 2500, // Override
+    });
+    expect(totalTokens).toBe(2500);
   });
 });

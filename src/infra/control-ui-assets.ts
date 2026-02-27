@@ -20,11 +20,15 @@ export async function resolveControlUiDistIndexHealth(
   opts: {
     root?: string;
     argv1?: string;
+    moduleUrl?: string;
   } = {},
 ): Promise<ControlUiDistIndexHealth> {
   const indexPath = opts.root
     ? resolveControlUiDistIndexPathForRoot(opts.root)
-    : await resolveControlUiDistIndexPath(opts.argv1 ?? process.argv[1]);
+    : await resolveControlUiDistIndexPath({
+        argv1: opts.argv1 ?? process.argv[1],
+        moduleUrl: opts.moduleUrl,
+      });
   return {
     indexPath,
     exists: Boolean(indexPath && fs.existsSync(indexPath)),
@@ -66,8 +70,11 @@ export function resolveControlUiRepoRoot(
 }
 
 export async function resolveControlUiDistIndexPath(
-  argv1: string | undefined = process.argv[1],
+  argv1OrOpts?: string | { argv1?: string; moduleUrl?: string },
 ): Promise<string | null> {
+  const argv1 =
+    typeof argv1OrOpts === "string" ? argv1OrOpts : (argv1OrOpts?.argv1 ?? process.argv[1]);
+  const moduleUrl = typeof argv1OrOpts === "object" ? argv1OrOpts?.moduleUrl : undefined;
   if (!argv1) {
     return null;
   }
@@ -79,7 +86,7 @@ export async function resolveControlUiDistIndexPath(
     return path.join(distDir, "control-ui", "index.html");
   }
 
-  const packageRoot = await resolveOpenClawPackageRoot({ argv1: normalized });
+  const packageRoot = await resolveOpenClawPackageRoot({ argv1: normalized, moduleUrl });
   if (packageRoot) {
     return path.join(packageRoot, "dist", "control-ui", "index.html");
   }
@@ -90,15 +97,18 @@ export async function resolveControlUiDistIndexPath(
   for (let i = 0; i < 8; i++) {
     const pkgJsonPath = path.join(dir, "package.json");
     const indexPath = path.join(dir, "dist", "control-ui", "index.html");
-    if (fs.existsSync(pkgJsonPath) && fs.existsSync(indexPath)) {
+    if (fs.existsSync(pkgJsonPath)) {
       try {
         const raw = fs.readFileSync(pkgJsonPath, "utf-8");
         const parsed = JSON.parse(raw) as { name?: unknown };
         if (parsed.name === "openclaw") {
-          return indexPath;
+          return fs.existsSync(indexPath) ? indexPath : null;
         }
+        // Stop at the first package boundary to avoid resolving through unrelated ancestors.
+        return null;
       } catch {
-        // Invalid package.json, continue searching
+        // Invalid package.json at package boundary; abort fallback resolution.
+        return null;
       }
     }
     const parent = path.dirname(dir);

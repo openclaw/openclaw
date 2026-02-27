@@ -1,132 +1,123 @@
-import "./test-helpers.js";
 import crypto from "node:crypto";
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import sharp from "sharp";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import * as ssrf from "../infra/net/ssrf.js";
-
-const TEST_NET_IP = "203.0.113.10";
-
-vi.mock("../agents/pi-embedded.js", () => ({
-  abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
-  isEmbeddedPiRunActive: vi.fn().mockReturnValue(false),
-  isEmbeddedPiRunStreaming: vi.fn().mockReturnValue(false),
-  runEmbeddedPiAgent: vi.fn(),
-  queueEmbeddedPiMessage: vi.fn().mockReturnValue(false),
-  resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
-}));
-
-import { resetInboundDedupe } from "../auto-reply/reply/inbound-dedupe.js";
-import { resetLogger, setLoggerOverride } from "../logging.js";
+import { describe, expect, it, vi } from "vitest";
 import { monitorWebChannel } from "./auto-reply.js";
-import { resetBaileysMocks, resetLoadConfigMock, setLoadConfigMock } from "./test-helpers.js";
+import {
+  createMockWebListener,
+  installWebAutoReplyTestHomeHooks,
+  installWebAutoReplyUnitTestHooks,
+  resetLoadConfigMock,
+  setLoadConfigMock,
+} from "./auto-reply.test-harness.js";
+import type { WebInboundMessage } from "./inbound.js";
 
-let previousHome: string | undefined;
-let tempHome: string | undefined;
-
-const rmDirWithRetries = async (dir: string): Promise<void> => {
-  // Some tests can leave async session-store writes in-flight; recursive deletion can race and throw ENOTEMPTY.
-  for (let attempt = 0; attempt < 10; attempt += 1) {
-    try {
-      await fs.rm(dir, { recursive: true, force: true });
-      return;
-    } catch (err) {
-      const code =
-        err && typeof err === "object" && "code" in err
-          ? String((err as { code?: unknown }).code)
-          : null;
-      if (code === "ENOTEMPTY" || code === "EBUSY" || code === "EPERM") {
-        await new Promise((resolve) => setTimeout(resolve, 25));
-        continue;
-      }
-      throw err;
-    }
-  }
-
-  await fs.rm(dir, { recursive: true, force: true });
-};
-
-beforeEach(async () => {
-  resetInboundDedupe();
-  previousHome = process.env.HOME;
-  tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-web-home-"));
-  process.env.HOME = tempHome;
-});
-
-afterEach(async () => {
-  process.env.HOME = previousHome;
-  if (tempHome) {
-    await rmDirWithRetries(tempHome);
-    tempHome = undefined;
-  }
-});
-
-const _makeSessionStore = async (
-  entries: Record<string, unknown> = {},
-): Promise<{ storePath: string; cleanup: () => Promise<void> }> => {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-"));
-  const storePath = path.join(dir, "sessions.json");
-  await fs.writeFile(storePath, JSON.stringify(entries));
-  const cleanup = async () => {
-    // Session store writes can be in-flight when the test finishes (e.g. updateLastRoute
-    // after a message flush). `fs.rm({ recursive })` can race and throw ENOTEMPTY.
-    for (let attempt = 0; attempt < 10; attempt += 1) {
-      try {
-        await fs.rm(dir, { recursive: true, force: true });
-        return;
-      } catch (err) {
-        const code =
-          err && typeof err === "object" && "code" in err
-            ? String((err as { code?: unknown }).code)
-            : null;
-        if (code === "ENOTEMPTY" || code === "EBUSY" || code === "EPERM") {
-          await new Promise((resolve) => setTimeout(resolve, 25));
-          continue;
-        }
-        throw err;
-      }
-    }
-
-    await fs.rm(dir, { recursive: true, force: true });
-  };
-  return {
-    storePath,
-    cleanup,
-  };
-};
+installWebAutoReplyTestHomeHooks();
 
 describe("web auto-reply", () => {
-  let resolvePinnedHostnameSpy: ReturnType<typeof vi.spyOn>;
+  installWebAutoReplyUnitTestHooks({ pinDns: true });
+  type ListenerFactory = NonNullable<Parameters<typeof monitorWebChannel>[1]>;
+  const SMALL_MEDIA_CAP_MB = 0.1;
+  const SMALL_MEDIA_CAP_BYTES = Math.floor(SMALL_MEDIA_CAP_MB * 1024 * 1024);
 
-  beforeEach(() => {
-    vi.clearAllMocks();
-    resetBaileysMocks();
-    resetLoadConfigMock();
-    resolvePinnedHostnameSpy = vi
-      .spyOn(ssrf, "resolvePinnedHostname")
-      .mockImplementation(async (hostname) => {
-        // SSRF guard pins DNS; stub resolution to avoid live lookups in unit tests.
-        const normalized = hostname.trim().toLowerCase().replace(/\.$/, "");
-        const addresses = [TEST_NET_IP];
-        return {
-          hostname: normalized,
-          addresses,
-          lookup: ssrf.createPinnedLookup({ hostname: normalized, addresses }),
-        };
+  async function setupSingleInboundMessage(params: {
+    resolverValue: { text: string; mediaUrl: string };
+    sendMedia: ReturnType<typeof vi.fn>;
+    reply?: ReturnType<typeof vi.fn>;
+  }) {
+    const reply = params.reply ?? vi.fn().mockResolvedValue(undefined);
+    const sendComposing = vi.fn(async () => undefined);
+    const resolver = vi.fn().mockResolvedValue(params.resolverValue);
+
+    let capturedOnMessage: ((msg: WebInboundMessage) => Promise<void>) | undefined;
+    const listenerFactory: ListenerFactory = async ({ onMessage }) => {
+      capturedOnMessage = onMessage;
+      return createMockWebListener();
+    };
+
+    await monitorWebChannel(false, listenerFactory, false, resolver);
+    expect(capturedOnMessage).toBeDefined();
+
+    return {
+      reply,
+      dispatch: async (
+        id = "msg1",
+        overrides?: Partial<
+          Pick<WebInboundMessage, "from" | "conversationId" | "to" | "accountId" | "chatId">
+        >,
+      ) => {
+        await capturedOnMessage?.({
+          body: "hello",
+          from: "+1",
+          conversationId: "+1",
+          to: "+2",
+          accountId: "default",
+          chatType: "direct",
+          chatId: "+1",
+          ...overrides,
+          id,
+          sendComposing,
+          reply,
+          sendMedia: params.sendMedia,
+        } as WebInboundMessage);
+      },
+    };
+  }
+
+  function getSingleImagePayload(sendMedia: ReturnType<typeof vi.fn>) {
+    expect(sendMedia).toHaveBeenCalledTimes(1);
+    return sendMedia.mock.calls[0][0] as {
+      image: Buffer;
+      caption?: string;
+      mimetype?: string;
+    };
+  }
+
+  async function withMediaCap<T>(mediaMaxMb: number, run: () => Promise<T>): Promise<T> {
+    setLoadConfigMock(() => ({ agents: { defaults: { mediaMaxMb } } }));
+    try {
+      return await run();
+    } finally {
+      resetLoadConfigMock();
+    }
+  }
+
+  function mockFetchMediaBuffer(buffer: Buffer, mime: string) {
+    return vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      body: true,
+      arrayBuffer: async () =>
+        buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength),
+      headers: { get: () => mime },
+      status: 200,
+    } as unknown as Response);
+  }
+
+  async function expectCompressedImageWithinCap(params: {
+    mediaUrl: string;
+    mime: string;
+    image: Buffer;
+    messageId: string;
+    mediaMaxMb?: number;
+  }) {
+    await withMediaCap(params.mediaMaxMb ?? 1, async () => {
+      const sendMedia = vi.fn();
+      const { reply, dispatch } = await setupSingleInboundMessage({
+        resolverValue: { text: "hi", mediaUrl: params.mediaUrl },
+        sendMedia,
       });
-  });
+      const fetchMock = mockFetchMediaBuffer(params.image, params.mime);
 
-  afterEach(() => {
-    resolvePinnedHostnameSpy?.mockRestore();
-    resolvePinnedHostnameSpy = undefined;
-    resetLogger();
-    setLoggerOverride(null);
-    vi.useRealTimers();
-  });
+      await dispatch(params.messageId);
 
-  it("compresses common formats to jpeg under the cap", { timeout: 45_000 }, async () => {
+      const payload = getSingleImagePayload(sendMedia);
+      expect(payload.image.length).toBeLessThanOrEqual((params.mediaMaxMb ?? 1) * 1024 * 1024);
+      expect(payload.mimetype).toBe("image/jpeg");
+      expect(reply).not.toHaveBeenCalled();
+      fetchMock.mockRestore();
+    });
+  }
+
+  it("compresses common formats to jpeg under the cap", async () => {
     const formats = [
       {
         name: "png",
@@ -145,7 +136,8 @@ describe("web auto-reply", () => {
           sharp(buf, {
             raw: { width: opts.width, height: opts.height, channels: 3 },
           })
-            .jpeg({ quality: 90 })
+            // Keep source > cap with fewer pixels so the test runs faster.
+            .jpeg({ quality: 100, chromaSubsampling: "4:4:4" })
             .toBuffer(),
       },
       {
@@ -160,152 +152,95 @@ describe("web auto-reply", () => {
       },
     ] as const;
 
-    for (const fmt of formats) {
-      // Force a small cap to ensure compression is exercised for every format.
-      setLoadConfigMock(() => ({ agents: { defaults: { mediaMaxMb: 1 } } }));
+    const width = 320;
+    const height = 320;
+    const sharedRaw = crypto.randomBytes(width * height * 3);
+
+    const renderedFormats = await Promise.all(
+      formats.map(async (fmt) => ({
+        ...fmt,
+        image: await fmt.make(sharedRaw, { width, height }),
+      })),
+    );
+
+    await withMediaCap(SMALL_MEDIA_CAP_MB, async () => {
       const sendMedia = vi.fn();
-      const reply = vi.fn().mockResolvedValue(undefined);
-      const sendComposing = vi.fn();
-      const resolver = vi.fn().mockResolvedValue({
-        text: "hi",
-        mediaUrl: `https://example.com/big.${fmt.name}`,
-      });
-
-      let capturedOnMessage:
-        | ((msg: import("./inbound.js").WebInboundMessage) => Promise<void>)
-        | undefined;
-      const listenerFactory = async (opts: {
-        onMessage: (msg: import("./inbound.js").WebInboundMessage) => Promise<void>;
-      }) => {
-        capturedOnMessage = opts.onMessage;
-        return { close: vi.fn() };
-      };
-
-      const width = 1200;
-      const height = 1200;
-      const raw = crypto.randomBytes(width * height * 3);
-      const big = await fmt.make(raw, { width, height });
-      expect(big.length).toBeGreaterThan(1 * 1024 * 1024);
-
-      const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
-        ok: true,
-        body: true,
-        arrayBuffer: async () => big.buffer.slice(big.byteOffset, big.byteOffset + big.byteLength),
-        headers: { get: () => fmt.mime },
-        status: 200,
-      } as Response);
-
-      await monitorWebChannel(false, listenerFactory, false, resolver);
-      expect(capturedOnMessage).toBeDefined();
-
-      await capturedOnMessage?.({
-        body: "hello",
-        from: "+1",
-        to: "+2",
-        id: `msg-${fmt.name}`,
-        sendComposing,
-        reply,
+      const { reply, dispatch } = await setupSingleInboundMessage({
+        resolverValue: {
+          text: "hi",
+          mediaUrl: "https://example.com/big.image",
+        },
         sendMedia,
       });
+      let fetchIndex = 0;
 
-      expect(sendMedia).toHaveBeenCalledTimes(1);
-      const payload = sendMedia.mock.calls[0][0] as {
-        image: Buffer;
-        mimetype?: string;
-      };
-      expect(payload.image.length).toBeLessThanOrEqual(1 * 1024 * 1024);
-      expect(payload.mimetype).toBe("image/jpeg");
-      expect(reply).not.toHaveBeenCalled();
+      const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+        const matched =
+          renderedFormats[Math.min(fetchIndex, renderedFormats.length - 1)] ?? renderedFormats[0];
+        fetchIndex += 1;
+        const { image, mime } = matched;
+        return {
+          ok: true,
+          body: true,
+          arrayBuffer: async () =>
+            image.buffer.slice(image.byteOffset, image.byteOffset + image.byteLength),
+          headers: { get: () => mime },
+          status: 200,
+        } as unknown as Response;
+      });
 
-      fetchMock.mockRestore();
-      resetLoadConfigMock();
-    }
+      try {
+        for (const [index, fmt] of renderedFormats.entries()) {
+          expect(fmt.image.length).toBeGreaterThan(SMALL_MEDIA_CAP_BYTES);
+          const beforeCalls = sendMedia.mock.calls.length;
+          await dispatch(`msg-${fmt.name}-${index}`, {
+            from: `+1${index}`,
+            conversationId: `conv-${index}`,
+            chatId: `conv-${index}`,
+          });
+          expect(sendMedia).toHaveBeenCalledTimes(beforeCalls + 1);
+          const payload = sendMedia.mock.calls[beforeCalls]?.[0] as {
+            image: Buffer;
+            caption?: string;
+            mimetype?: string;
+          };
+          expect(payload.image.length).toBeLessThanOrEqual(SMALL_MEDIA_CAP_BYTES);
+          expect(payload.mimetype).toBe("image/jpeg");
+        }
+        expect(sendMedia).toHaveBeenCalledTimes(renderedFormats.length);
+        expect(reply).not.toHaveBeenCalled();
+      } finally {
+        fetchMock.mockRestore();
+      }
+    });
   });
 
   it("honors mediaMaxMb from config", async () => {
-    setLoadConfigMock(() => ({ agents: { defaults: { mediaMaxMb: 1 } } }));
-    const sendMedia = vi.fn();
-    const reply = vi.fn().mockResolvedValue(undefined);
-    const sendComposing = vi.fn();
-    const resolver = vi.fn().mockResolvedValue({
-      text: "hi",
-      mediaUrl: "https://example.com/big.png",
-    });
-
-    let capturedOnMessage:
-      | ((msg: import("./inbound.js").WebInboundMessage) => Promise<void>)
-      | undefined;
-    const listenerFactory = async (opts: {
-      onMessage: (msg: import("./inbound.js").WebInboundMessage) => Promise<void>;
-    }) => {
-      capturedOnMessage = opts.onMessage;
-      return { close: vi.fn() };
-    };
-
     const bigPng = await sharp({
       create: {
-        width: 2600,
-        height: 2600,
+        width: 256,
+        height: 256,
         channels: 3,
         background: { r: 0, g: 0, b: 255 },
       },
     })
       .png({ compressionLevel: 0 })
       .toBuffer();
-    expect(bigPng.length).toBeGreaterThan(1 * 1024 * 1024);
-
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
-      ok: true,
-      body: true,
-      arrayBuffer: async () =>
-        bigPng.buffer.slice(bigPng.byteOffset, bigPng.byteOffset + bigPng.byteLength),
-      headers: { get: () => "image/png" },
-      status: 200,
-    } as Response);
-
-    await monitorWebChannel(false, listenerFactory, false, resolver);
-    expect(capturedOnMessage).toBeDefined();
-
-    await capturedOnMessage?.({
-      body: "hello",
-      from: "+1",
-      to: "+2",
-      id: "msg1",
-      sendComposing,
-      reply,
-      sendMedia,
+    expect(bigPng.length).toBeGreaterThan(SMALL_MEDIA_CAP_BYTES);
+    await expectCompressedImageWithinCap({
+      mediaUrl: "https://example.com/big.png",
+      mime: "image/png",
+      image: bigPng,
+      messageId: "msg1",
+      mediaMaxMb: SMALL_MEDIA_CAP_MB,
     });
-
-    expect(sendMedia).toHaveBeenCalledTimes(1);
-    const payload = sendMedia.mock.calls[0][0] as {
-      image: Buffer;
-      caption?: string;
-      mimetype?: string;
-    };
-    expect(payload.image.length).toBeLessThanOrEqual(1 * 1024 * 1024);
-    expect(payload.mimetype).toBe("image/jpeg");
-    expect(reply).not.toHaveBeenCalled();
-
-    fetchMock.mockRestore();
   });
   it("falls back to text when media is unsupported", async () => {
     const sendMedia = vi.fn();
-    const reply = vi.fn().mockResolvedValue(undefined);
-    const sendComposing = vi.fn();
-    const resolver = vi.fn().mockResolvedValue({
-      text: "hi",
-      mediaUrl: "https://example.com/file.pdf",
+    const { reply, dispatch } = await setupSingleInboundMessage({
+      resolverValue: { text: "hi", mediaUrl: "https://example.com/file.pdf" },
+      sendMedia,
     });
-
-    let capturedOnMessage:
-      | ((msg: import("./inbound.js").WebInboundMessage) => Promise<void>)
-      | undefined;
-    const listenerFactory = async (opts: {
-      onMessage: (msg: import("./inbound.js").WebInboundMessage) => Promise<void>;
-    }) => {
-      capturedOnMessage = opts.onMessage;
-      return { close: vi.fn() };
-    };
 
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
       ok: true,
@@ -313,20 +248,9 @@ describe("web auto-reply", () => {
       arrayBuffer: async () => Buffer.from("%PDF-1.4").buffer,
       headers: { get: () => "application/pdf" },
       status: 200,
-    } as Response);
+    } as unknown as Response);
 
-    await monitorWebChannel(false, listenerFactory, false, resolver);
-    expect(capturedOnMessage).toBeDefined();
-
-    await capturedOnMessage?.({
-      body: "hello",
-      from: "+1",
-      to: "+2",
-      id: "msg-pdf",
-      sendComposing,
-      reply,
-      sendMedia,
-    });
+    await dispatch("msg-pdf");
 
     expect(sendMedia).toHaveBeenCalledTimes(1);
     const payload = sendMedia.mock.calls[0][0] as {
@@ -337,6 +261,111 @@ describe("web auto-reply", () => {
     expect(payload.document).toBeInstanceOf(Buffer);
     expect(payload.fileName).toBe("file.pdf");
     expect(payload.caption).toBe("hi");
+    expect(reply).not.toHaveBeenCalled();
+
+    fetchMock.mockRestore();
+  });
+
+  it("falls back to text when media send fails", async () => {
+    const sendMedia = vi.fn().mockRejectedValue(new Error("boom"));
+    const { reply, dispatch } = await setupSingleInboundMessage({
+      resolverValue: {
+        text: "hi",
+        mediaUrl: "https://example.com/img.png",
+      },
+      sendMedia,
+    });
+
+    const smallPng = await sharp({
+      create: {
+        width: 64,
+        height: 64,
+        channels: 3,
+        background: { r: 0, g: 255, b: 0 },
+      },
+    })
+      .png()
+      .toBuffer();
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      body: true,
+      arrayBuffer: async () =>
+        smallPng.buffer.slice(smallPng.byteOffset, smallPng.byteOffset + smallPng.byteLength),
+      headers: { get: () => "image/png" },
+      status: 200,
+    } as unknown as Response);
+
+    await dispatch("msg1");
+
+    expect(sendMedia).toHaveBeenCalledTimes(1);
+    const fallback = reply.mock.calls[0]?.[0] as string;
+    expect(fallback).toContain("hi");
+    expect(fallback).toContain("Media failed");
+    fetchMock.mockRestore();
+  });
+  it("returns a warning when remote media fetch 404s", async () => {
+    const sendMedia = vi.fn();
+    const { reply, dispatch } = await setupSingleInboundMessage({
+      resolverValue: {
+        text: "caption",
+        mediaUrl: "https://example.com/missing.jpg",
+      },
+      sendMedia,
+    });
+
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: false,
+      status: 404,
+      body: null,
+      arrayBuffer: async () => new ArrayBuffer(0),
+      headers: { get: () => "text/plain" },
+    } as unknown as Response);
+
+    await dispatch("msg1");
+
+    expect(sendMedia).not.toHaveBeenCalled();
+    const fallback = reply.mock.calls[0]?.[0] as string;
+    expect(fallback).toContain("caption");
+    expect(fallback).toContain("Media failed");
+    expect(fallback).toContain("404");
+
+    fetchMock.mockRestore();
+  });
+  it("sends media with a caption when delivery succeeds", async () => {
+    const sendMedia = vi.fn().mockResolvedValue(undefined);
+    const { reply, dispatch } = await setupSingleInboundMessage({
+      resolverValue: {
+        text: "hi",
+        mediaUrl: "https://example.com/img.png",
+      },
+      sendMedia,
+    });
+
+    const png = await sharp({
+      create: {
+        width: 64,
+        height: 64,
+        channels: 3,
+        background: { r: 0, g: 0, b: 255 },
+      },
+    })
+      .png()
+      .toBuffer();
+
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      body: true,
+      arrayBuffer: async () => png.buffer.slice(png.byteOffset, png.byteOffset + png.byteLength),
+      headers: { get: () => "image/png" },
+      status: 200,
+    } as unknown as Response);
+
+    await dispatch("msg1");
+
+    const payload = getSingleImagePayload(sendMedia);
+    expect(payload.caption).toBe("hi");
+    expect(payload.image.length).toBeGreaterThan(0);
+    // Should not fall back to separate text reply because caption is used.
     expect(reply).not.toHaveBeenCalled();
 
     fetchMock.mockRestore();

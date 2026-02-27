@@ -1,8 +1,22 @@
 import { createInterface } from "node:readline";
 import { Readable } from "node:stream";
+import { extractBatchErrorMessage, formatUnavailableBatchError } from "./batch-error-utils.js";
+import { postJsonWithRetry } from "./batch-http.js";
+import { applyEmbeddingBatchOutputLine } from "./batch-output.js";
+import {
+  EMBEDDING_BATCH_ENDPOINT,
+  type EmbeddingBatchStatus,
+  type ProviderBatchOutputLine,
+} from "./batch-provider-common.js";
+import {
+  buildEmbeddingBatchGroupOptions,
+  runEmbeddingBatchGroups,
+  type EmbeddingBatchExecutionParams,
+} from "./batch-runner.js";
+import { uploadBatchJsonlFile } from "./batch-upload.js";
+import { buildBatchHeaders, normalizeBatchBaseUrl } from "./batch-utils.js";
 import type { VoyageEmbeddingClient } from "./embeddings-voyage.js";
-import { retryAsync } from "../infra/retry.js";
-import { hashText, runWithConcurrency } from "./internal.js";
+import { withRemoteHttpResponse } from "./remote-http.js";
 
 /**
  * Voyage Batch API Input Line format.
@@ -15,145 +29,66 @@ export type VoyageBatchRequest = {
   };
 };
 
-export type VoyageBatchStatus = {
-  id?: string;
-  status?: string;
-  output_file_id?: string | null;
-  error_file_id?: string | null;
-};
+export type VoyageBatchStatus = EmbeddingBatchStatus;
+export type VoyageBatchOutputLine = ProviderBatchOutputLine;
 
-export type VoyageBatchOutputLine = {
-  custom_id?: string;
-  response?: {
-    status_code?: number;
-    body?: {
-      data?: Array<{ embedding?: number[]; index?: number }>;
-      error?: { message?: string };
-    };
-  };
-  error?: { message?: string };
-};
-
-export const VOYAGE_BATCH_ENDPOINT = "/v1/embeddings";
+export const VOYAGE_BATCH_ENDPOINT = EMBEDDING_BATCH_ENDPOINT;
 const VOYAGE_BATCH_COMPLETION_WINDOW = "12h";
 const VOYAGE_BATCH_MAX_REQUESTS = 50000;
-
-function getVoyageBaseUrl(client: VoyageEmbeddingClient): string {
-  return client.baseUrl?.replace(/\/$/, "") ?? "";
-}
-
-function getVoyageHeaders(
-  client: VoyageEmbeddingClient,
-  params: { json: boolean },
-): Record<string, string> {
-  const headers = client.headers ? { ...client.headers } : {};
-  if (params.json) {
-    if (!headers["Content-Type"] && !headers["content-type"]) {
-      headers["Content-Type"] = "application/json";
-    }
-  } else {
-    delete headers["Content-Type"];
-    delete headers["content-type"];
-  }
-  return headers;
-}
-
-function splitVoyageBatchRequests(requests: VoyageBatchRequest[]): VoyageBatchRequest[][] {
-  if (requests.length <= VOYAGE_BATCH_MAX_REQUESTS) return [requests];
-  const groups: VoyageBatchRequest[][] = [];
-  for (let i = 0; i < requests.length; i += VOYAGE_BATCH_MAX_REQUESTS) {
-    groups.push(requests.slice(i, i + VOYAGE_BATCH_MAX_REQUESTS));
-  }
-  return groups;
-}
 
 async function submitVoyageBatch(params: {
   client: VoyageEmbeddingClient;
   requests: VoyageBatchRequest[];
   agentId: string;
 }): Promise<VoyageBatchStatus> {
-  const baseUrl = getVoyageBaseUrl(params.client);
-  const jsonl = params.requests.map((request) => JSON.stringify(request)).join("\n");
-  const form = new FormData();
-  form.append("purpose", "batch");
-  form.append(
-    "file",
-    new Blob([jsonl], { type: "application/jsonl" }),
-    `memory-embeddings.${hashText(String(Date.now()))}.jsonl`,
-  );
-
-  // 1. Upload file using Voyage Files API
-  const fileRes = await fetch(`${baseUrl}/files`, {
-    method: "POST",
-    headers: getVoyageHeaders(params.client, { json: false }),
-    body: form,
+  const baseUrl = normalizeBatchBaseUrl(params.client);
+  const inputFileId = await uploadBatchJsonlFile({
+    client: params.client,
+    requests: params.requests,
+    errorPrefix: "voyage batch file upload failed",
   });
-  if (!fileRes.ok) {
-    const text = await fileRes.text();
-    throw new Error(`voyage batch file upload failed: ${fileRes.status} ${text}`);
-  }
-  const filePayload = (await fileRes.json()) as { id?: string };
-  if (!filePayload.id) {
-    throw new Error("voyage batch file upload failed: missing file id");
-  }
 
   // 2. Create batch job using Voyage Batches API
-  const batchRes = await retryAsync(
-    async () => {
-      const res = await fetch(`${baseUrl}/batches`, {
-        method: "POST",
-        headers: getVoyageHeaders(params.client, { json: true }),
-        body: JSON.stringify({
-          input_file_id: filePayload.id,
-          endpoint: VOYAGE_BATCH_ENDPOINT,
-          completion_window: VOYAGE_BATCH_COMPLETION_WINDOW,
-          request_params: {
-            model: params.client.model,
-            input_type: "document",
-          },
-          metadata: {
-            source: "clawdbot-memory",
-            agent: params.agentId,
-          },
-        }),
-      });
-      if (!res.ok) {
-        const text = await res.text();
-        const err = new Error(`voyage batch create failed: ${res.status} ${text}`) as Error & {
-          status?: number;
-        };
-        err.status = res.status;
-        throw err;
-      }
-      return res;
-    },
-    {
-      attempts: 3,
-      minDelayMs: 300,
-      maxDelayMs: 2000,
-      jitter: 0.2,
-      shouldRetry: (err) => {
-        const status = (err as { status?: number }).status;
-        return status === 429 || (typeof status === "number" && status >= 500);
+  return await postJsonWithRetry<VoyageBatchStatus>({
+    url: `${baseUrl}/batches`,
+    headers: buildBatchHeaders(params.client, { json: true }),
+    ssrfPolicy: params.client.ssrfPolicy,
+    body: {
+      input_file_id: inputFileId,
+      endpoint: VOYAGE_BATCH_ENDPOINT,
+      completion_window: VOYAGE_BATCH_COMPLETION_WINDOW,
+      request_params: {
+        model: params.client.model,
+        input_type: "document",
+      },
+      metadata: {
+        source: "clawdbot-memory",
+        agent: params.agentId,
       },
     },
-  );
-  return (await batchRes.json()) as VoyageBatchStatus;
+    errorPrefix: "voyage batch create failed",
+  });
 }
 
 async function fetchVoyageBatchStatus(params: {
   client: VoyageEmbeddingClient;
   batchId: string;
 }): Promise<VoyageBatchStatus> {
-  const baseUrl = getVoyageBaseUrl(params.client);
-  const res = await fetch(`${baseUrl}/batches/${params.batchId}`, {
-    headers: getVoyageHeaders(params.client, { json: true }),
+  const baseUrl = normalizeBatchBaseUrl(params.client);
+  return await withRemoteHttpResponse({
+    url: `${baseUrl}/batches/${params.batchId}`,
+    ssrfPolicy: params.client.ssrfPolicy,
+    init: {
+      headers: buildBatchHeaders(params.client, { json: true }),
+    },
+    onResponse: async (res) => {
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(`voyage batch status failed: ${res.status} ${text}`);
+      }
+      return (await res.json()) as VoyageBatchStatus;
+    },
   });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`voyage batch status failed: ${res.status} ${text}`);
-  }
-  return (await res.json()) as VoyageBatchStatus;
 }
 
 async function readVoyageBatchError(params: {
@@ -161,31 +96,32 @@ async function readVoyageBatchError(params: {
   errorFileId: string;
 }): Promise<string | undefined> {
   try {
-    const baseUrl = getVoyageBaseUrl(params.client);
-    const res = await fetch(`${baseUrl}/files/${params.errorFileId}/content`, {
-      headers: getVoyageHeaders(params.client, { json: true }),
+    const baseUrl = normalizeBatchBaseUrl(params.client);
+    return await withRemoteHttpResponse({
+      url: `${baseUrl}/files/${params.errorFileId}/content`,
+      ssrfPolicy: params.client.ssrfPolicy,
+      init: {
+        headers: buildBatchHeaders(params.client, { json: true }),
+      },
+      onResponse: async (res) => {
+        if (!res.ok) {
+          const text = await res.text();
+          throw new Error(`voyage batch error file content failed: ${res.status} ${text}`);
+        }
+        const text = await res.text();
+        if (!text.trim()) {
+          return undefined;
+        }
+        const lines = text
+          .split("\n")
+          .map((line) => line.trim())
+          .filter(Boolean)
+          .map((line) => JSON.parse(line) as VoyageBatchOutputLine);
+        return extractBatchErrorMessage(lines);
+      },
     });
-    if (!res.ok) {
-      const text = await res.text();
-      throw new Error(`voyage batch error file content failed: ${res.status} ${text}`);
-    }
-    const text = await res.text();
-    if (!text.trim()) return undefined;
-    const lines = text
-      .split("\n")
-      .map((line) => line.trim())
-      .filter(Boolean)
-      .map((line) => JSON.parse(line) as VoyageBatchOutputLine);
-    const first = lines.find((line) => line.error?.message || line.response?.body?.error);
-    const message =
-      first?.error?.message ??
-      (typeof first?.response?.body?.error?.message === "string"
-        ? first?.response?.body?.error?.message
-        : undefined);
-    return message;
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    return message ? `error file unavailable: ${message}` : undefined;
+    return formatUnavailableBatchError(err);
   }
 }
 
@@ -236,128 +172,105 @@ async function waitForVoyageBatch(params: {
   }
 }
 
-export async function runVoyageEmbeddingBatches(params: {
-  client: VoyageEmbeddingClient;
-  agentId: string;
-  requests: VoyageBatchRequest[];
-  wait: boolean;
-  pollIntervalMs: number;
-  timeoutMs: number;
-  concurrency: number;
-  debug?: (message: string, data?: Record<string, unknown>) => void;
-}): Promise<Map<string, number[]>> {
-  if (params.requests.length === 0) return new Map();
-  const groups = splitVoyageBatchRequests(params.requests);
-  const byCustomId = new Map<string, number[]>();
+export async function runVoyageEmbeddingBatches(
+  params: {
+    client: VoyageEmbeddingClient;
+    agentId: string;
+    requests: VoyageBatchRequest[];
+  } & EmbeddingBatchExecutionParams,
+): Promise<Map<string, number[]>> {
+  return await runEmbeddingBatchGroups({
+    ...buildEmbeddingBatchGroupOptions(params, {
+      maxRequests: VOYAGE_BATCH_MAX_REQUESTS,
+      debugLabel: "memory embeddings: voyage batch submit",
+    }),
+    runGroup: async ({ group, groupIndex, groups, byCustomId }) => {
+      const batchInfo = await submitVoyageBatch({
+        client: params.client,
+        requests: group,
+        agentId: params.agentId,
+      });
+      if (!batchInfo.id) {
+        throw new Error("voyage batch create failed: missing batch id");
+      }
 
-  const tasks = groups.map((group, groupIndex) => async () => {
-    const batchInfo = await submitVoyageBatch({
-      client: params.client,
-      requests: group,
-      agentId: params.agentId,
-    });
-    if (!batchInfo.id) {
-      throw new Error("voyage batch create failed: missing batch id");
-    }
-
-    params.debug?.("memory embeddings: voyage batch created", {
-      batchId: batchInfo.id,
-      status: batchInfo.status,
-      group: groupIndex + 1,
-      groups: groups.length,
-      requests: group.length,
-    });
-
-    if (!params.wait && batchInfo.status !== "completed") {
-      throw new Error(
-        `voyage batch ${batchInfo.id} submitted; enable remote.batch.wait to await completion`,
-      );
-    }
-
-    const completed =
-      batchInfo.status === "completed"
-        ? {
-            outputFileId: batchInfo.output_file_id ?? "",
-            errorFileId: batchInfo.error_file_id ?? undefined,
-          }
-        : await waitForVoyageBatch({
-            client: params.client,
-            batchId: batchInfo.id,
-            wait: params.wait,
-            pollIntervalMs: params.pollIntervalMs,
-            timeoutMs: params.timeoutMs,
-            debug: params.debug,
-            initial: batchInfo,
-          });
-    if (!completed.outputFileId) {
-      throw new Error(`voyage batch ${batchInfo.id} completed without output file`);
-    }
-
-    const baseUrl = getVoyageBaseUrl(params.client);
-    const contentRes = await fetch(`${baseUrl}/files/${completed.outputFileId}/content`, {
-      headers: getVoyageHeaders(params.client, { json: true }),
-    });
-    if (!contentRes.ok) {
-      const text = await contentRes.text();
-      throw new Error(`voyage batch file content failed: ${contentRes.status} ${text}`);
-    }
-
-    const errors: string[] = [];
-    const remaining = new Set(group.map((request) => request.custom_id));
-
-    if (contentRes.body) {
-      const reader = createInterface({
-        input: Readable.fromWeb(contentRes.body as any),
-        terminal: false,
+      params.debug?.("memory embeddings: voyage batch created", {
+        batchId: batchInfo.id,
+        status: batchInfo.status,
+        group: groupIndex + 1,
+        groups,
+        requests: group.length,
       });
 
-      for await (const rawLine of reader) {
-        if (!rawLine.trim()) continue;
-        const line = JSON.parse(rawLine) as VoyageBatchOutputLine;
-        const customId = line.custom_id;
-        if (!customId) continue;
-        remaining.delete(customId);
-        if (line.error?.message) {
-          errors.push(`${customId}: ${line.error.message}`);
-          continue;
-        }
-        const response = line.response;
-        const statusCode = response?.status_code ?? 0;
-        if (statusCode >= 400) {
-          const message =
-            response?.body?.error?.message ??
-            (typeof response?.body === "string" ? response.body : undefined) ??
-            "unknown error";
-          errors.push(`${customId}: ${message}`);
-          continue;
-        }
-        const data = response?.body?.data ?? [];
-        const embedding = data[0]?.embedding ?? [];
-        if (embedding.length === 0) {
-          errors.push(`${customId}: empty embedding`);
-          continue;
-        }
-        byCustomId.set(customId, embedding);
+      if (!params.wait && batchInfo.status !== "completed") {
+        throw new Error(
+          `voyage batch ${batchInfo.id} submitted; enable remote.batch.wait to await completion`,
+        );
       }
-    }
 
-    if (errors.length > 0) {
-      throw new Error(`voyage batch ${batchInfo.id} failed: ${errors.join("; ")}`);
-    }
-    if (remaining.size > 0) {
-      throw new Error(`voyage batch ${batchInfo.id} missing ${remaining.size} embedding responses`);
-    }
+      const completed =
+        batchInfo.status === "completed"
+          ? {
+              outputFileId: batchInfo.output_file_id ?? "",
+              errorFileId: batchInfo.error_file_id ?? undefined,
+            }
+          : await waitForVoyageBatch({
+              client: params.client,
+              batchId: batchInfo.id,
+              wait: params.wait,
+              pollIntervalMs: params.pollIntervalMs,
+              timeoutMs: params.timeoutMs,
+              debug: params.debug,
+              initial: batchInfo,
+            });
+      if (!completed.outputFileId) {
+        throw new Error(`voyage batch ${batchInfo.id} completed without output file`);
+      }
+
+      const baseUrl = normalizeBatchBaseUrl(params.client);
+      const errors: string[] = [];
+      const remaining = new Set(group.map((request) => request.custom_id));
+
+      await withRemoteHttpResponse({
+        url: `${baseUrl}/files/${completed.outputFileId}/content`,
+        ssrfPolicy: params.client.ssrfPolicy,
+        init: {
+          headers: buildBatchHeaders(params.client, { json: true }),
+        },
+        onResponse: async (contentRes) => {
+          if (!contentRes.ok) {
+            const text = await contentRes.text();
+            throw new Error(`voyage batch file content failed: ${contentRes.status} ${text}`);
+          }
+
+          if (!contentRes.body) {
+            return;
+          }
+          const reader = createInterface({
+            input: Readable.fromWeb(
+              contentRes.body as unknown as import("stream/web").ReadableStream,
+            ),
+            terminal: false,
+          });
+
+          for await (const rawLine of reader) {
+            if (!rawLine.trim()) {
+              continue;
+            }
+            const line = JSON.parse(rawLine) as VoyageBatchOutputLine;
+            applyEmbeddingBatchOutputLine({ line, remaining, errors, byCustomId });
+          }
+        },
+      });
+
+      if (errors.length > 0) {
+        throw new Error(`voyage batch ${batchInfo.id} failed: ${errors.join("; ")}`);
+      }
+      if (remaining.size > 0) {
+        throw new Error(
+          `voyage batch ${batchInfo.id} missing ${remaining.size} embedding responses`,
+        );
+      }
+    },
   });
-
-  params.debug?.("memory embeddings: voyage batch submit", {
-    requests: params.requests.length,
-    groups: groups.length,
-    wait: params.wait,
-    concurrency: params.concurrency,
-    pollIntervalMs: params.pollIntervalMs,
-    timeoutMs: params.timeoutMs,
-  });
-
-  await runWithConcurrency(tasks, params.concurrency);
-  return byCustomId;
 }

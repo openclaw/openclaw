@@ -1,9 +1,10 @@
 import { messagingApi } from "@line/bot-sdk";
-import type { LineSendResult } from "./types.js";
 import { loadConfig } from "../config/config.js";
 import { logVerbose } from "../globals.js";
 import { recordChannelActivity } from "../infra/channel-activity.js";
 import { resolveLineAccount } from "./accounts.js";
+import { resolveLineChannelAccessToken } from "./channel-access-token.js";
+import type { LineSendResult } from "./types.js";
 
 // Use the messaging API types directly
 type Message = messagingApi.Message;
@@ -31,19 +32,16 @@ interface LineSendOpts {
   replyToken?: string;
 }
 
-function resolveToken(
-  explicit: string | undefined,
-  params: { accountId: string; channelAccessToken: string },
-): string {
-  if (explicit?.trim()) {
-    return explicit.trim();
-  }
-  if (!params.channelAccessToken) {
-    throw new Error(
-      `LINE channel access token missing for account "${params.accountId}" (set channels.line.channelAccessToken or LINE_CHANNEL_ACCESS_TOKEN).`,
-    );
-  }
-  return params.channelAccessToken.trim();
+type LineClientOpts = Pick<LineSendOpts, "channelAccessToken" | "accountId">;
+type LinePushOpts = Pick<LineSendOpts, "channelAccessToken" | "accountId" | "verbose">;
+
+interface LinePushBehavior {
+  errorContext?: string;
+  verboseMessage?: (chatId: string, messageCount: number) => string;
+}
+
+interface LineReplyBehavior {
+  verboseMessage?: (messageCount: number) => string;
 }
 
 function normalizeTarget(to: string): string {
@@ -64,6 +62,35 @@ function normalizeTarget(to: string): string {
   }
 
   return normalized;
+}
+
+function createLineMessagingClient(opts: LineClientOpts): {
+  account: ReturnType<typeof resolveLineAccount>;
+  client: messagingApi.MessagingApiClient;
+} {
+  const cfg = loadConfig();
+  const account = resolveLineAccount({
+    cfg,
+    accountId: opts.accountId,
+  });
+  const token = resolveLineChannelAccessToken(opts.channelAccessToken, account);
+  const client = new messagingApi.MessagingApiClient({
+    channelAccessToken: token,
+  });
+  return { account, client };
+}
+
+function createLinePushContext(
+  to: string,
+  opts: LineClientOpts,
+): {
+  account: ReturnType<typeof resolveLineAccount>;
+  client: messagingApi.MessagingApiClient;
+  chatId: string;
+} {
+  const { account, client } = createLineMessagingClient(opts);
+  const chatId = normalizeTarget(to);
+  return { account, client, chatId };
 }
 
 function createTextMessage(text: string): TextMessage {
@@ -111,22 +138,84 @@ function logLineHttpError(err: unknown, context: string): void {
   }
 }
 
+function recordLineOutboundActivity(accountId: string): void {
+  recordChannelActivity({
+    channel: "line",
+    accountId,
+    direction: "outbound",
+  });
+}
+
+async function pushLineMessages(
+  to: string,
+  messages: Message[],
+  opts: LinePushOpts = {},
+  behavior: LinePushBehavior = {},
+): Promise<LineSendResult> {
+  if (messages.length === 0) {
+    throw new Error("Message must be non-empty for LINE sends");
+  }
+
+  const { account, client, chatId } = createLinePushContext(to, opts);
+  const pushRequest = client.pushMessage({
+    to: chatId,
+    messages,
+  });
+
+  if (behavior.errorContext) {
+    const errorContext = behavior.errorContext;
+    await pushRequest.catch((err) => {
+      logLineHttpError(err, errorContext);
+      throw err;
+    });
+  } else {
+    await pushRequest;
+  }
+
+  recordLineOutboundActivity(account.accountId);
+
+  if (opts.verbose) {
+    const logMessage =
+      behavior.verboseMessage?.(chatId, messages.length) ??
+      `line: pushed ${messages.length} messages to ${chatId}`;
+    logVerbose(logMessage);
+  }
+
+  return {
+    messageId: "push",
+    chatId,
+  };
+}
+
+async function replyLineMessages(
+  replyToken: string,
+  messages: Message[],
+  opts: LinePushOpts = {},
+  behavior: LineReplyBehavior = {},
+): Promise<void> {
+  const { account, client } = createLineMessagingClient(opts);
+
+  await client.replyMessage({
+    replyToken,
+    messages,
+  });
+
+  recordLineOutboundActivity(account.accountId);
+
+  if (opts.verbose) {
+    logVerbose(
+      behavior.verboseMessage?.(messages.length) ??
+        `line: replied with ${messages.length} messages`,
+    );
+  }
+}
+
 export async function sendMessageLine(
   to: string,
   text: string,
   opts: LineSendOpts = {},
 ): Promise<LineSendResult> {
-  const cfg = loadConfig();
-  const account = resolveLineAccount({
-    cfg,
-    accountId: opts.accountId,
-  });
-  const token = resolveToken(opts.channelAccessToken, account);
   const chatId = normalizeTarget(to);
-
-  const client = new messagingApi.MessagingApiClient({
-    channelAccessToken: token,
-  });
 
   const messages: Message[] = [];
 
@@ -146,20 +235,9 @@ export async function sendMessageLine(
 
   // Use reply if we have a reply token, otherwise push
   if (opts.replyToken) {
-    await client.replyMessage({
-      replyToken: opts.replyToken,
-      messages,
+    await replyLineMessages(opts.replyToken, messages, opts, {
+      verboseMessage: () => `line: replied to ${chatId}`,
     });
-
-    recordChannelActivity({
-      channel: "line",
-      accountId: account.accountId,
-      direction: "outbound",
-    });
-
-    if (opts.verbose) {
-      logVerbose(`line: replied to ${chatId}`);
-    }
 
     return {
       messageId: "reply",
@@ -168,25 +246,9 @@ export async function sendMessageLine(
   }
 
   // Push message (for proactive messaging)
-  await client.pushMessage({
-    to: chatId,
-    messages,
+  return pushLineMessages(chatId, messages, opts, {
+    verboseMessage: (resolvedChatId) => `line: pushed message to ${resolvedChatId}`,
   });
-
-  recordChannelActivity({
-    channel: "line",
-    accountId: account.accountId,
-    direction: "outbound",
-  });
-
-  if (opts.verbose) {
-    logVerbose(`line: pushed message to ${chatId}`);
-  }
-
-  return {
-    messageId: "push",
-    chatId,
-  };
 }
 
 export async function pushMessageLine(
@@ -201,80 +263,19 @@ export async function pushMessageLine(
 export async function replyMessageLine(
   replyToken: string,
   messages: Message[],
-  opts: { channelAccessToken?: string; accountId?: string; verbose?: boolean } = {},
+  opts: LinePushOpts = {},
 ): Promise<void> {
-  const cfg = loadConfig();
-  const account = resolveLineAccount({
-    cfg,
-    accountId: opts.accountId,
-  });
-  const token = resolveToken(opts.channelAccessToken, account);
-
-  const client = new messagingApi.MessagingApiClient({
-    channelAccessToken: token,
-  });
-
-  await client.replyMessage({
-    replyToken,
-    messages,
-  });
-
-  recordChannelActivity({
-    channel: "line",
-    accountId: account.accountId,
-    direction: "outbound",
-  });
-
-  if (opts.verbose) {
-    logVerbose(`line: replied with ${messages.length} messages`);
-  }
+  await replyLineMessages(replyToken, messages, opts);
 }
 
 export async function pushMessagesLine(
   to: string,
   messages: Message[],
-  opts: { channelAccessToken?: string; accountId?: string; verbose?: boolean } = {},
+  opts: LinePushOpts = {},
 ): Promise<LineSendResult> {
-  if (messages.length === 0) {
-    throw new Error("Message must be non-empty for LINE sends");
-  }
-
-  const cfg = loadConfig();
-  const account = resolveLineAccount({
-    cfg,
-    accountId: opts.accountId,
+  return pushLineMessages(to, messages, opts, {
+    errorContext: "push message",
   });
-  const token = resolveToken(opts.channelAccessToken, account);
-  const chatId = normalizeTarget(to);
-
-  const client = new messagingApi.MessagingApiClient({
-    channelAccessToken: token,
-  });
-
-  await client
-    .pushMessage({
-      to: chatId,
-      messages,
-    })
-    .catch((err) => {
-      logLineHttpError(err, "push message");
-      throw err;
-    });
-
-  recordChannelActivity({
-    channel: "line",
-    accountId: account.accountId,
-    direction: "outbound",
-  });
-
-  if (opts.verbose) {
-    logVerbose(`line: pushed ${messages.length} messages to ${chatId}`);
-  }
-
-  return {
-    messageId: "push",
-    chatId,
-  };
 }
 
 export function createFlexMessage(
@@ -295,41 +296,11 @@ export async function pushImageMessage(
   to: string,
   originalContentUrl: string,
   previewImageUrl?: string,
-  opts: { channelAccessToken?: string; accountId?: string; verbose?: boolean } = {},
+  opts: LinePushOpts = {},
 ): Promise<LineSendResult> {
-  const cfg = loadConfig();
-  const account = resolveLineAccount({
-    cfg,
-    accountId: opts.accountId,
+  return pushLineMessages(to, [createImageMessage(originalContentUrl, previewImageUrl)], opts, {
+    verboseMessage: (chatId) => `line: pushed image to ${chatId}`,
   });
-  const token = resolveToken(opts.channelAccessToken, account);
-  const chatId = normalizeTarget(to);
-
-  const client = new messagingApi.MessagingApiClient({
-    channelAccessToken: token,
-  });
-
-  const imageMessage = createImageMessage(originalContentUrl, previewImageUrl);
-
-  await client.pushMessage({
-    to: chatId,
-    messages: [imageMessage],
-  });
-
-  recordChannelActivity({
-    channel: "line",
-    accountId: account.accountId,
-    direction: "outbound",
-  });
-
-  if (opts.verbose) {
-    logVerbose(`line: pushed image to ${chatId}`);
-  }
-
-  return {
-    messageId: "push",
-    chatId,
-  };
 }
 
 /**
@@ -343,41 +314,11 @@ export async function pushLocationMessage(
     latitude: number;
     longitude: number;
   },
-  opts: { channelAccessToken?: string; accountId?: string; verbose?: boolean } = {},
+  opts: LinePushOpts = {},
 ): Promise<LineSendResult> {
-  const cfg = loadConfig();
-  const account = resolveLineAccount({
-    cfg,
-    accountId: opts.accountId,
+  return pushLineMessages(to, [createLocationMessage(location)], opts, {
+    verboseMessage: (chatId) => `line: pushed location to ${chatId}`,
   });
-  const token = resolveToken(opts.channelAccessToken, account);
-  const chatId = normalizeTarget(to);
-
-  const client = new messagingApi.MessagingApiClient({
-    channelAccessToken: token,
-  });
-
-  const locationMessage = createLocationMessage(location);
-
-  await client.pushMessage({
-    to: chatId,
-    messages: [locationMessage],
-  });
-
-  recordChannelActivity({
-    channel: "line",
-    accountId: account.accountId,
-    direction: "outbound",
-  });
-
-  if (opts.verbose) {
-    logVerbose(`line: pushed location to ${chatId}`);
-  }
-
-  return {
-    messageId: "push",
-    chatId,
-  };
 }
 
 /**
@@ -387,50 +328,18 @@ export async function pushFlexMessage(
   to: string,
   altText: string,
   contents: FlexContainer,
-  opts: { channelAccessToken?: string; accountId?: string; verbose?: boolean } = {},
+  opts: LinePushOpts = {},
 ): Promise<LineSendResult> {
-  const cfg = loadConfig();
-  const account = resolveLineAccount({
-    cfg,
-    accountId: opts.accountId,
-  });
-  const token = resolveToken(opts.channelAccessToken, account);
-  const chatId = normalizeTarget(to);
-
-  const client = new messagingApi.MessagingApiClient({
-    channelAccessToken: token,
-  });
-
   const flexMessage: FlexMessage = {
     type: "flex",
     altText: altText.slice(0, 400), // LINE limit
     contents,
   };
 
-  await client
-    .pushMessage({
-      to: chatId,
-      messages: [flexMessage],
-    })
-    .catch((err) => {
-      logLineHttpError(err, "push flex message");
-      throw err;
-    });
-
-  recordChannelActivity({
-    channel: "line",
-    accountId: account.accountId,
-    direction: "outbound",
+  return pushLineMessages(to, [flexMessage], opts, {
+    errorContext: "push flex message",
+    verboseMessage: (chatId) => `line: pushed flex message to ${chatId}`,
   });
-
-  if (opts.verbose) {
-    logVerbose(`line: pushed flex message to ${chatId}`);
-  }
-
-  return {
-    messageId: "push",
-    chatId,
-  };
 }
 
 /**
@@ -439,39 +348,11 @@ export async function pushFlexMessage(
 export async function pushTemplateMessage(
   to: string,
   template: TemplateMessage,
-  opts: { channelAccessToken?: string; accountId?: string; verbose?: boolean } = {},
+  opts: LinePushOpts = {},
 ): Promise<LineSendResult> {
-  const cfg = loadConfig();
-  const account = resolveLineAccount({
-    cfg,
-    accountId: opts.accountId,
+  return pushLineMessages(to, [template], opts, {
+    verboseMessage: (chatId) => `line: pushed template message to ${chatId}`,
   });
-  const token = resolveToken(opts.channelAccessToken, account);
-  const chatId = normalizeTarget(to);
-
-  const client = new messagingApi.MessagingApiClient({
-    channelAccessToken: token,
-  });
-
-  await client.pushMessage({
-    to: chatId,
-    messages: [template],
-  });
-
-  recordChannelActivity({
-    channel: "line",
-    accountId: account.accountId,
-    direction: "outbound",
-  });
-
-  if (opts.verbose) {
-    logVerbose(`line: pushed template message to ${chatId}`);
-  }
-
-  return {
-    messageId: "push",
-    chatId,
-  };
 }
 
 /**
@@ -481,41 +362,13 @@ export async function pushTextMessageWithQuickReplies(
   to: string,
   text: string,
   quickReplyLabels: string[],
-  opts: { channelAccessToken?: string; accountId?: string; verbose?: boolean } = {},
+  opts: LinePushOpts = {},
 ): Promise<LineSendResult> {
-  const cfg = loadConfig();
-  const account = resolveLineAccount({
-    cfg,
-    accountId: opts.accountId,
-  });
-  const token = resolveToken(opts.channelAccessToken, account);
-  const chatId = normalizeTarget(to);
-
-  const client = new messagingApi.MessagingApiClient({
-    channelAccessToken: token,
-  });
-
   const message = createTextMessageWithQuickReplies(text, quickReplyLabels);
 
-  await client.pushMessage({
-    to: chatId,
-    messages: [message],
+  return pushLineMessages(to, [message], opts, {
+    verboseMessage: (chatId) => `line: pushed message with quick replies to ${chatId}`,
   });
-
-  recordChannelActivity({
-    channel: "line",
-    accountId: account.accountId,
-    direction: "outbound",
-  });
-
-  if (opts.verbose) {
-    logVerbose(`line: pushed message with quick replies to ${chatId}`);
-  }
-
-  return {
-    messageId: "push",
-    chatId,
-  };
 }
 
 /**
@@ -554,16 +407,7 @@ export async function showLoadingAnimation(
   chatId: string,
   opts: { channelAccessToken?: string; accountId?: string; loadingSeconds?: number } = {},
 ): Promise<void> {
-  const cfg = loadConfig();
-  const account = resolveLineAccount({
-    cfg,
-    accountId: opts.accountId,
-  });
-  const token = resolveToken(opts.channelAccessToken, account);
-
-  const client = new messagingApi.MessagingApiClient({
-    channelAccessToken: token,
-  });
+  const { client } = createLineMessagingClient(opts);
 
   try {
     await client.showLoadingAnimation({
@@ -594,16 +438,7 @@ export async function getUserProfile(
     }
   }
 
-  const cfg = loadConfig();
-  const account = resolveLineAccount({
-    cfg,
-    accountId: opts.accountId,
-  });
-  const token = resolveToken(opts.channelAccessToken, account);
-
-  const client = new messagingApi.MessagingApiClient({
-    channelAccessToken: token,
-  });
+  const { client } = createLineMessagingClient(opts);
 
   try {
     const profile = await client.getProfile(userId);

@@ -5,7 +5,7 @@ import {
   type RestartSentinelPayload,
   summarizeRestartSentinel,
 } from "../../infra/restart-sentinel.js";
-import { formatAge, redactSecrets } from "./format.js";
+import { formatTimeAgo, redactSecrets } from "./format.js";
 import { readFileTailLines, summarizeLogTail } from "./gateway.js";
 
 type ConfigIssueLike = { path: string; message: string };
@@ -106,7 +106,7 @@ export async function appendStatusAllDiagnosis(params: {
   if (params.sentinel?.payload) {
     emitCheck("Restart sentinel present", "warn");
     lines.push(
-      `  ${muted(`${summarizeRestartSentinel(params.sentinel.payload)} · ${formatAge(Date.now() - params.sentinel.payload.ts)}`)}`,
+      `  ${muted(`${summarizeRestartSentinel(params.sentinel.payload)} · ${formatTimeAgo(Date.now() - params.sentinel.payload.ts)}`)}`,
     );
   } else {
     emitCheck("Restart sentinel: none", "ok");

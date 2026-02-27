@@ -1,13 +1,14 @@
 import { html, nothing } from "lit";
-import type { AppViewState } from "./app-view-state.ts";
-import type { UsageState } from "./controllers/usage.ts";
 import { parseAgentSessionKey } from "../../../src/routing/session-key.js";
+import { t } from "../i18n/index.ts";
 import { refreshChatAvatar } from "./app-chat.ts";
+import { renderUsageTab } from "./app-render-usage-tab.ts";
 import { renderChatControls, renderTab, renderThemeToggle } from "./app-render.helpers.ts";
+import type { AppViewState } from "./app-view-state.ts";
 import { loadAgentFileContent, loadAgentFiles, saveAgentFile } from "./controllers/agent-files.ts";
 import { loadAgentIdentities, loadAgentIdentity } from "./controllers/agent-identity.ts";
 import { loadAgentSkills } from "./controllers/agent-skills.ts";
-import { loadAgents } from "./controllers/agents.ts";
+import { loadAgents, loadToolsCatalog } from "./controllers/agents.ts";
 import { loadChannels } from "./controllers/channels.ts";
 import { loadChatHistory } from "./controllers/chat.ts";
 import {
@@ -20,10 +21,21 @@ import {
 } from "./controllers/config.ts";
 import {
   loadCronRuns,
+  loadMoreCronJobs,
+  loadMoreCronRuns,
+  reloadCronJobs,
   toggleCronJob,
   runCronJob,
   removeCronJob,
   addCronJob,
+  startCronEdit,
+  startCronClone,
+  cancelCronEdit,
+  validateCronForm,
+  hasCronFormErrors,
+  normalizeCronFormState,
+  updateCronJobsFilter,
+  updateCronRunsFilter,
 } from "./controllers/cron.ts";
 import { loadDebug, callDebugMethod } from "./controllers/debug.ts";
 import {
@@ -42,7 +54,7 @@ import {
 import { loadLogs } from "./controllers/logs.ts";
 import { loadNodes } from "./controllers/nodes.ts";
 import { loadPresence } from "./controllers/presence.ts";
-import { deleteSession, loadSessions, patchSession } from "./controllers/sessions.ts";
+import { deleteSessionAndRefresh, loadSessions, patchSession } from "./controllers/sessions.ts";
 import {
   installSkill,
   loadSkills,
@@ -50,18 +62,9 @@ import {
   updateSkillEdit,
   updateSkillEnabled,
 } from "./controllers/skills.ts";
-import { loadUsage, loadSessionTimeSeries, loadSessionLogs } from "./controllers/usage.ts";
+import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "./external-link.ts";
 import { icons } from "./icons.ts";
 import { normalizeBasePath, TAB_GROUPS, subtitleForTab, titleForTab } from "./navigation.ts";
-
-// Module-scope debounce for usage date changes (avoids type-unsafe hacks on state object)
-let usageDateDebounceTimeout: number | null = null;
-const debouncedLoadUsage = (state: UsageState) => {
-  if (usageDateDebounceTimeout) {
-    clearTimeout(usageDateDebounceTimeout);
-  }
-  usageDateDebounceTimeout = window.setTimeout(() => void loadUsage(state), 400);
-};
 import { renderAgents } from "./views/agents.ts";
 import { renderChannels } from "./views/channels.ts";
 import { renderChat } from "./views/chat.ts";
@@ -76,10 +79,46 @@ import { renderNodes } from "./views/nodes.ts";
 import { renderOverview } from "./views/overview.ts";
 import { renderSessions } from "./views/sessions.ts";
 import { renderSkills } from "./views/skills.ts";
-import { renderUsage } from "./views/usage.ts";
 
 const AVATAR_DATA_RE = /^data:/i;
 const AVATAR_HTTP_RE = /^https?:\/\//i;
+const CRON_THINKING_SUGGESTIONS = ["off", "minimal", "low", "medium", "high"];
+const CRON_TIMEZONE_SUGGESTIONS = [
+  "UTC",
+  "America/Los_Angeles",
+  "America/Denver",
+  "America/Chicago",
+  "America/New_York",
+  "Europe/London",
+  "Europe/Berlin",
+  "Asia/Tokyo",
+];
+
+function isHttpUrl(value: string): boolean {
+  return /^https?:\/\//i.test(value.trim());
+}
+
+function normalizeSuggestionValue(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function uniquePreserveOrder(values: string[]): string[] {
+  const seen = new Set<string>();
+  const output: string[] = [];
+  for (const value of values) {
+    const normalized = value.trim();
+    if (!normalized) {
+      continue;
+    }
+    const key = normalized.toLowerCase();
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    output.push(normalized);
+  }
+  return output;
+}
 
 function resolveAssistantAvatarUrl(state: AppViewState): string | undefined {
   const list = state.agentsList?.agents ?? [];
@@ -98,10 +137,20 @@ function resolveAssistantAvatarUrl(state: AppViewState): string | undefined {
 }
 
 export function renderApp(state: AppViewState) {
+  const openClawVersion =
+    (typeof state.hello?.server?.version === "string" && state.hello.server.version.trim()) ||
+    state.updateAvailable?.currentVersion ||
+    t("common.na");
+  const availableUpdate =
+    state.updateAvailable &&
+    state.updateAvailable.latestVersion !== state.updateAvailable.currentVersion
+      ? state.updateAvailable
+      : null;
+  const versionStatusClass = availableUpdate ? "warn" : "ok";
   const presenceCount = state.presenceEntries.length;
   const sessionsCount = state.sessionsResult?.count ?? null;
   const cronNext = state.cronStatus?.nextWakeAtMs ?? null;
-  const chatDisabledReason = state.connected ? null : "Disconnected from gateway.";
+  const chatDisabledReason = state.connected ? null : t("chat.disconnected");
   const isChat = state.tab === "chat";
   const chatFocus = isChat && (state.settings.chatFocusMode || state.onboarding);
   const showThinking = state.onboarding ? false : state.settings.chatShowThinking;
@@ -115,6 +164,56 @@ export function renderApp(state: AppViewState) {
     state.agentsList?.defaultId ??
     state.agentsList?.agents?.[0]?.id ??
     null;
+  const cronAgentSuggestions = Array.from(
+    new Set(
+      [
+        ...(state.agentsList?.agents?.map((entry) => entry.id.trim()) ?? []),
+        ...state.cronJobs
+          .map((job) => (typeof job.agentId === "string" ? job.agentId.trim() : ""))
+          .filter(Boolean),
+      ].filter(Boolean),
+    ),
+  ).toSorted((a, b) => a.localeCompare(b));
+  const cronModelSuggestions = Array.from(
+    new Set(
+      [
+        ...state.cronModelSuggestions,
+        ...state.cronJobs
+          .map((job) => {
+            if (job.payload.kind !== "agentTurn" || typeof job.payload.model !== "string") {
+              return "";
+            }
+            return job.payload.model.trim();
+          })
+          .filter(Boolean),
+      ].filter(Boolean),
+    ),
+  ).toSorted((a, b) => a.localeCompare(b));
+  const selectedDeliveryChannel =
+    state.cronForm.deliveryChannel && state.cronForm.deliveryChannel.trim()
+      ? state.cronForm.deliveryChannel.trim()
+      : "last";
+  const jobToSuggestions = state.cronJobs
+    .map((job) => normalizeSuggestionValue(job.delivery?.to))
+    .filter(Boolean);
+  const accountToSuggestions = (
+    selectedDeliveryChannel === "last"
+      ? Object.values(state.channelsSnapshot?.channelAccounts ?? {}).flat()
+      : (state.channelsSnapshot?.channelAccounts?.[selectedDeliveryChannel] ?? [])
+  )
+    .flatMap((account) => [
+      normalizeSuggestionValue(account.accountId),
+      normalizeSuggestionValue(account.name),
+    ])
+    .filter(Boolean);
+  const rawDeliveryToSuggestions = uniquePreserveOrder([
+    ...jobToSuggestions,
+    ...accountToSuggestions,
+  ]);
+  const deliveryToSuggestions =
+    state.cronForm.deliveryMode === "webhook"
+      ? rawDeliveryToSuggestions.filter((value) => isHttpUrl(value))
+      : rawDeliveryToSuggestions;
 
   return html`
     <div class="shell ${isChat ? "shell--chat" : ""} ${chatFocus ? "shell--chat-focus" : ""} ${state.settings.navCollapsed ? "shell--nav-collapsed" : ""} ${state.onboarding ? "shell--onboarding" : ""}">
@@ -127,8 +226,8 @@ export function renderApp(state: AppViewState) {
                 ...state.settings,
                 navCollapsed: !state.settings.navCollapsed,
               })}
-            title="${state.settings.navCollapsed ? "Expand sidebar" : "Collapse sidebar"}"
-            aria-label="${state.settings.navCollapsed ? "Expand sidebar" : "Collapse sidebar"}"
+            title="${state.settings.navCollapsed ? t("nav.expand") : t("nav.collapse")}"
+            aria-label="${state.settings.navCollapsed ? t("nav.expand") : t("nav.collapse")}"
           >
             <span class="nav-collapse-toggle__icon">${icons.menu}</span>
           </button>
@@ -144,9 +243,14 @@ export function renderApp(state: AppViewState) {
         </div>
         <div class="topbar-status">
           <div class="pill">
+            <span class="statusDot ${versionStatusClass}"></span>
+            <span>${t("common.version")}</span>
+            <span class="mono">${openClawVersion}</span>
+          </div>
+          <div class="pill">
             <span class="statusDot ${state.connected ? "ok" : ""}"></span>
-            <span>Health</span>
-            <span class="mono">${state.connected ? "OK" : "Offline"}</span>
+            <span>${t("common.health")}</span>
+            <span class="mono">${state.connected ? t("common.ok") : t("common.offline")}</span>
           </div>
           ${renderThemeToggle(state)}
         </div>
@@ -169,7 +273,7 @@ export function renderApp(state: AppViewState) {
                 }}
                 aria-expanded=${!isGroupCollapsed}
               >
-                <span class="nav-label__text">${group.label}</span>
+                <span class="nav-label__text">${t(`nav.${group.label}`)}</span>
                 <span class="nav-label__chevron">${isGroupCollapsed ? "+" : "−"}</span>
               </button>
               <div class="nav-group__items">
@@ -180,23 +284,36 @@ export function renderApp(state: AppViewState) {
         })}
         <div class="nav-group nav-group--links">
           <div class="nav-label nav-label--static">
-            <span class="nav-label__text">Resources</span>
+            <span class="nav-label__text">${t("common.resources")}</span>
           </div>
           <div class="nav-group__items">
             <a
               class="nav-item nav-item--external"
               href="https://docs.openclaw.ai"
-              target="_blank"
-              rel="noreferrer"
-              title="Docs (opens in new tab)"
+              target=${EXTERNAL_LINK_TARGET}
+              rel=${buildExternalLinkRel()}
+              title="${t("common.docs")} (opens in new tab)"
             >
               <span class="nav-item__icon" aria-hidden="true">${icons.book}</span>
-              <span class="nav-item__text">Docs</span>
+              <span class="nav-item__text">${t("common.docs")}</span>
             </a>
           </div>
         </div>
       </aside>
       <main class="content ${isChat ? "content--chat" : ""}">
+        ${
+          availableUpdate
+            ? html`<div class="update-banner callout danger" role="alert">
+              <strong>Update available:</strong> v${availableUpdate.latestVersion}
+              (running v${availableUpdate.currentVersion}).
+              <button
+                class="btn btn--sm update-banner__btn"
+                ?disabled=${state.updateRunning || !state.connected}
+                @click=${() => runUpdate(state)}
+              >${state.updateRunning ? "Updating…" : "Update now"}</button>
+            </div>`
+            : nothing
+        }
         <section class="content-header">
           <div>
             ${state.tab === "usage" ? nothing : html`<div class="page-title">${titleForTab(state.tab)}</div>`}
@@ -216,6 +333,7 @@ export function renderApp(state: AppViewState) {
                 settings: state.settings,
                 password: state.password,
                 lastError: state.lastError,
+                lastErrorCode: state.lastErrorCode,
                 presenceCount,
                 sessionsCount,
                 cronEnabled: state.cronStatus?.enabled ?? null,
@@ -310,284 +428,33 @@ export function renderApp(state: AppViewState) {
                 },
                 onRefresh: () => loadSessions(state),
                 onPatch: (key, patch) => patchSession(state, key, patch),
-                onDelete: (key) => deleteSession(state, key),
+                onDelete: (key) => deleteSessionAndRefresh(state, key),
               })
             : nothing
         }
 
-        ${
-          state.tab === "usage"
-            ? renderUsage({
-                loading: state.usageLoading,
-                error: state.usageError,
-                startDate: state.usageStartDate,
-                endDate: state.usageEndDate,
-                sessions: state.usageResult?.sessions ?? [],
-                sessionsLimitReached: (state.usageResult?.sessions?.length ?? 0) >= 1000,
-                totals: state.usageResult?.totals ?? null,
-                aggregates: state.usageResult?.aggregates ?? null,
-                costDaily: state.usageCostSummary?.daily ?? [],
-                selectedSessions: state.usageSelectedSessions,
-                selectedDays: state.usageSelectedDays,
-                selectedHours: state.usageSelectedHours,
-                chartMode: state.usageChartMode,
-                dailyChartMode: state.usageDailyChartMode,
-                timeSeriesMode: state.usageTimeSeriesMode,
-                timeSeriesBreakdownMode: state.usageTimeSeriesBreakdownMode,
-                timeSeries: state.usageTimeSeries,
-                timeSeriesLoading: state.usageTimeSeriesLoading,
-                sessionLogs: state.usageSessionLogs,
-                sessionLogsLoading: state.usageSessionLogsLoading,
-                sessionLogsExpanded: state.usageSessionLogsExpanded,
-                logFilterRoles: state.usageLogFilterRoles,
-                logFilterTools: state.usageLogFilterTools,
-                logFilterHasTools: state.usageLogFilterHasTools,
-                logFilterQuery: state.usageLogFilterQuery,
-                query: state.usageQuery,
-                queryDraft: state.usageQueryDraft,
-                sessionSort: state.usageSessionSort,
-                sessionSortDir: state.usageSessionSortDir,
-                recentSessions: state.usageRecentSessions,
-                sessionsTab: state.usageSessionsTab,
-                visibleColumns:
-                  state.usageVisibleColumns as import("./views/usage.ts").UsageColumnId[],
-                timeZone: state.usageTimeZone,
-                contextExpanded: state.usageContextExpanded,
-                headerPinned: state.usageHeaderPinned,
-                onStartDateChange: (date) => {
-                  state.usageStartDate = date;
-                  state.usageSelectedDays = [];
-                  state.usageSelectedHours = [];
-                  state.usageSelectedSessions = [];
-                  debouncedLoadUsage(state);
-                },
-                onEndDateChange: (date) => {
-                  state.usageEndDate = date;
-                  state.usageSelectedDays = [];
-                  state.usageSelectedHours = [];
-                  state.usageSelectedSessions = [];
-                  debouncedLoadUsage(state);
-                },
-                onRefresh: () => loadUsage(state),
-                onTimeZoneChange: (zone) => {
-                  state.usageTimeZone = zone;
-                },
-                onToggleContextExpanded: () => {
-                  state.usageContextExpanded = !state.usageContextExpanded;
-                },
-                onToggleSessionLogsExpanded: () => {
-                  state.usageSessionLogsExpanded = !state.usageSessionLogsExpanded;
-                },
-                onLogFilterRolesChange: (next) => {
-                  state.usageLogFilterRoles = next;
-                },
-                onLogFilterToolsChange: (next) => {
-                  state.usageLogFilterTools = next;
-                },
-                onLogFilterHasToolsChange: (next) => {
-                  state.usageLogFilterHasTools = next;
-                },
-                onLogFilterQueryChange: (next) => {
-                  state.usageLogFilterQuery = next;
-                },
-                onLogFilterClear: () => {
-                  state.usageLogFilterRoles = [];
-                  state.usageLogFilterTools = [];
-                  state.usageLogFilterHasTools = false;
-                  state.usageLogFilterQuery = "";
-                },
-                onToggleHeaderPinned: () => {
-                  state.usageHeaderPinned = !state.usageHeaderPinned;
-                },
-                onSelectHour: (hour, shiftKey) => {
-                  if (shiftKey && state.usageSelectedHours.length > 0) {
-                    const allHours = Array.from({ length: 24 }, (_, i) => i);
-                    const lastSelected =
-                      state.usageSelectedHours[state.usageSelectedHours.length - 1];
-                    const lastIdx = allHours.indexOf(lastSelected);
-                    const thisIdx = allHours.indexOf(hour);
-                    if (lastIdx !== -1 && thisIdx !== -1) {
-                      const [start, end] =
-                        lastIdx < thisIdx ? [lastIdx, thisIdx] : [thisIdx, lastIdx];
-                      const range = allHours.slice(start, end + 1);
-                      state.usageSelectedHours = [
-                        ...new Set([...state.usageSelectedHours, ...range]),
-                      ];
-                    }
-                  } else {
-                    if (state.usageSelectedHours.includes(hour)) {
-                      state.usageSelectedHours = state.usageSelectedHours.filter((h) => h !== hour);
-                    } else {
-                      state.usageSelectedHours = [...state.usageSelectedHours, hour];
-                    }
-                  }
-                },
-                onQueryDraftChange: (query) => {
-                  state.usageQueryDraft = query;
-                  if (state.usageQueryDebounceTimer) {
-                    window.clearTimeout(state.usageQueryDebounceTimer);
-                  }
-                  state.usageQueryDebounceTimer = window.setTimeout(() => {
-                    state.usageQuery = state.usageQueryDraft;
-                    state.usageQueryDebounceTimer = null;
-                  }, 250);
-                },
-                onApplyQuery: () => {
-                  if (state.usageQueryDebounceTimer) {
-                    window.clearTimeout(state.usageQueryDebounceTimer);
-                    state.usageQueryDebounceTimer = null;
-                  }
-                  state.usageQuery = state.usageQueryDraft;
-                },
-                onClearQuery: () => {
-                  if (state.usageQueryDebounceTimer) {
-                    window.clearTimeout(state.usageQueryDebounceTimer);
-                    state.usageQueryDebounceTimer = null;
-                  }
-                  state.usageQueryDraft = "";
-                  state.usageQuery = "";
-                },
-                onSessionSortChange: (sort) => {
-                  state.usageSessionSort = sort;
-                },
-                onSessionSortDirChange: (dir) => {
-                  state.usageSessionSortDir = dir;
-                },
-                onSessionsTabChange: (tab) => {
-                  state.usageSessionsTab = tab;
-                },
-                onToggleColumn: (column) => {
-                  if (state.usageVisibleColumns.includes(column)) {
-                    state.usageVisibleColumns = state.usageVisibleColumns.filter(
-                      (entry) => entry !== column,
-                    );
-                  } else {
-                    state.usageVisibleColumns = [...state.usageVisibleColumns, column];
-                  }
-                },
-                onSelectSession: (key, shiftKey) => {
-                  state.usageTimeSeries = null;
-                  state.usageSessionLogs = null;
-                  state.usageRecentSessions = [
-                    key,
-                    ...state.usageRecentSessions.filter((entry) => entry !== key),
-                  ].slice(0, 8);
-
-                  if (shiftKey && state.usageSelectedSessions.length > 0) {
-                    // Shift-click: select range from last selected to this session
-                    // Sort sessions same way as displayed (by tokens or cost descending)
-                    const isTokenMode = state.usageChartMode === "tokens";
-                    const sortedSessions = [...(state.usageResult?.sessions ?? [])].toSorted(
-                      (a, b) => {
-                        const valA = isTokenMode
-                          ? (a.usage?.totalTokens ?? 0)
-                          : (a.usage?.totalCost ?? 0);
-                        const valB = isTokenMode
-                          ? (b.usage?.totalTokens ?? 0)
-                          : (b.usage?.totalCost ?? 0);
-                        return valB - valA;
-                      },
-                    );
-                    const allKeys = sortedSessions.map((s) => s.key);
-                    const lastSelected =
-                      state.usageSelectedSessions[state.usageSelectedSessions.length - 1];
-                    const lastIdx = allKeys.indexOf(lastSelected);
-                    const thisIdx = allKeys.indexOf(key);
-                    if (lastIdx !== -1 && thisIdx !== -1) {
-                      const [start, end] =
-                        lastIdx < thisIdx ? [lastIdx, thisIdx] : [thisIdx, lastIdx];
-                      const range = allKeys.slice(start, end + 1);
-                      const newSelection = [...new Set([...state.usageSelectedSessions, ...range])];
-                      state.usageSelectedSessions = newSelection;
-                    }
-                  } else {
-                    // Regular click: focus a single session (so details always open).
-                    // Click the focused session again to clear selection.
-                    if (
-                      state.usageSelectedSessions.length === 1 &&
-                      state.usageSelectedSessions[0] === key
-                    ) {
-                      state.usageSelectedSessions = [];
-                    } else {
-                      state.usageSelectedSessions = [key];
-                    }
-                  }
-
-                  // Load timeseries/logs only if exactly one session selected
-                  if (state.usageSelectedSessions.length === 1) {
-                    void loadSessionTimeSeries(state, state.usageSelectedSessions[0]);
-                    void loadSessionLogs(state, state.usageSelectedSessions[0]);
-                  }
-                },
-                onSelectDay: (day, shiftKey) => {
-                  if (shiftKey && state.usageSelectedDays.length > 0) {
-                    // Shift-click: select range from last selected to this day
-                    const allDays = (state.usageCostSummary?.daily ?? []).map((d) => d.date);
-                    const lastSelected =
-                      state.usageSelectedDays[state.usageSelectedDays.length - 1];
-                    const lastIdx = allDays.indexOf(lastSelected);
-                    const thisIdx = allDays.indexOf(day);
-                    if (lastIdx !== -1 && thisIdx !== -1) {
-                      const [start, end] =
-                        lastIdx < thisIdx ? [lastIdx, thisIdx] : [thisIdx, lastIdx];
-                      const range = allDays.slice(start, end + 1);
-                      // Merge with existing selection
-                      const newSelection = [...new Set([...state.usageSelectedDays, ...range])];
-                      state.usageSelectedDays = newSelection;
-                    }
-                  } else {
-                    // Regular click: toggle single day
-                    if (state.usageSelectedDays.includes(day)) {
-                      state.usageSelectedDays = state.usageSelectedDays.filter((d) => d !== day);
-                    } else {
-                      state.usageSelectedDays = [day];
-                    }
-                  }
-                },
-                onChartModeChange: (mode) => {
-                  state.usageChartMode = mode;
-                },
-                onDailyChartModeChange: (mode) => {
-                  state.usageDailyChartMode = mode;
-                },
-                onTimeSeriesModeChange: (mode) => {
-                  state.usageTimeSeriesMode = mode;
-                },
-                onTimeSeriesBreakdownChange: (mode) => {
-                  state.usageTimeSeriesBreakdownMode = mode;
-                },
-                onClearDays: () => {
-                  state.usageSelectedDays = [];
-                },
-                onClearHours: () => {
-                  state.usageSelectedHours = [];
-                },
-                onClearSessions: () => {
-                  state.usageSelectedSessions = [];
-                  state.usageTimeSeries = null;
-                  state.usageSessionLogs = null;
-                },
-                onClearFilters: () => {
-                  state.usageSelectedDays = [];
-                  state.usageSelectedHours = [];
-                  state.usageSelectedSessions = [];
-                  state.usageTimeSeries = null;
-                  state.usageSessionLogs = null;
-                },
-              })
-            : nothing
-        }
+        ${renderUsageTab(state)}
 
         ${
           state.tab === "cron"
             ? renderCron({
                 basePath: state.basePath,
                 loading: state.cronLoading,
+                jobsLoadingMore: state.cronJobsLoadingMore,
                 status: state.cronStatus,
                 jobs: state.cronJobs,
+                jobsTotal: state.cronJobsTotal,
+                jobsHasMore: state.cronJobsHasMore,
+                jobsQuery: state.cronJobsQuery,
+                jobsEnabledFilter: state.cronJobsEnabledFilter,
+                jobsSortBy: state.cronJobsSortBy,
+                jobsSortDir: state.cronJobsSortDir,
                 error: state.cronError,
                 busy: state.cronBusy,
                 form: state.cronForm,
+                fieldErrors: state.cronFieldErrors,
+                canSubmit: !hasCronFormErrors(state.cronFieldErrors),
+                editingJobId: state.cronEditingJobId,
                 channels: state.channelsSnapshot?.channelMeta?.length
                   ? state.channelsSnapshot.channelMeta.map((entry) => entry.id)
                   : (state.channelsSnapshot?.channelOrder ?? []),
@@ -595,13 +462,50 @@ export function renderApp(state: AppViewState) {
                 channelMeta: state.channelsSnapshot?.channelMeta ?? [],
                 runsJobId: state.cronRunsJobId,
                 runs: state.cronRuns,
-                onFormChange: (patch) => (state.cronForm = { ...state.cronForm, ...patch }),
+                runsTotal: state.cronRunsTotal,
+                runsHasMore: state.cronRunsHasMore,
+                runsLoadingMore: state.cronRunsLoadingMore,
+                runsScope: state.cronRunsScope,
+                runsStatuses: state.cronRunsStatuses,
+                runsDeliveryStatuses: state.cronRunsDeliveryStatuses,
+                runsStatusFilter: state.cronRunsStatusFilter,
+                runsQuery: state.cronRunsQuery,
+                runsSortDir: state.cronRunsSortDir,
+                agentSuggestions: cronAgentSuggestions,
+                modelSuggestions: cronModelSuggestions,
+                thinkingSuggestions: CRON_THINKING_SUGGESTIONS,
+                timezoneSuggestions: CRON_TIMEZONE_SUGGESTIONS,
+                deliveryToSuggestions,
+                onFormChange: (patch) => {
+                  state.cronForm = normalizeCronFormState({ ...state.cronForm, ...patch });
+                  state.cronFieldErrors = validateCronForm(state.cronForm);
+                },
                 onRefresh: () => state.loadCron(),
                 onAdd: () => addCronJob(state),
+                onEdit: (job) => startCronEdit(state, job),
+                onClone: (job) => startCronClone(state, job),
+                onCancelEdit: () => cancelCronEdit(state),
                 onToggle: (job, enabled) => toggleCronJob(state, job, enabled),
                 onRun: (job) => runCronJob(state, job),
                 onRemove: (job) => removeCronJob(state, job),
-                onLoadRuns: (jobId) => loadCronRuns(state, jobId),
+                onLoadRuns: async (jobId) => {
+                  updateCronRunsFilter(state, { cronRunsScope: "job" });
+                  await loadCronRuns(state, jobId);
+                },
+                onLoadMoreJobs: () => loadMoreCronJobs(state),
+                onJobsFiltersChange: async (patch) => {
+                  updateCronJobsFilter(state, patch);
+                  await reloadCronJobs(state);
+                },
+                onLoadMoreRuns: () => loadMoreCronRuns(state),
+                onRunsFiltersChange: async (patch) => {
+                  updateCronRunsFilter(state, patch);
+                  if (state.cronRunsScope === "all") {
+                    await loadCronRuns(state, null);
+                    return;
+                  }
+                  await loadCronRuns(state, state.cronRunsJobId);
+                },
               })
             : nothing
         }
@@ -640,9 +544,18 @@ export function renderApp(state: AppViewState) {
                 agentSkillsReport: state.agentSkillsReport,
                 agentSkillsError: state.agentSkillsError,
                 agentSkillsAgentId: state.agentSkillsAgentId,
+                toolsCatalogLoading: state.toolsCatalogLoading,
+                toolsCatalogError: state.toolsCatalogError,
+                toolsCatalogResult: state.toolsCatalogResult,
                 skillsFilter: state.skillsFilter,
                 onRefresh: async () => {
                   await loadAgents(state);
+                  const nextSelected =
+                    state.agentsSelectedId ??
+                    state.agentsList?.defaultId ??
+                    state.agentsList?.agents?.[0]?.id ??
+                    null;
+                  await loadToolsCatalog(state, nextSelected);
                   const agentIds = state.agentsList?.agents?.map((entry) => entry.id) ?? [];
                   if (agentIds.length > 0) {
                     void loadAgentIdentities(state, agentIds);
@@ -663,6 +576,9 @@ export function renderApp(state: AppViewState) {
                   state.agentSkillsError = null;
                   state.agentSkillsAgentId = null;
                   void loadAgentIdentity(state, agentId);
+                  if (state.agentsPanel === "tools") {
+                    void loadToolsCatalog(state, agentId);
+                  }
                   if (state.agentsPanel === "files") {
                     void loadAgentFiles(state, agentId);
                   }
@@ -681,6 +597,9 @@ export function renderApp(state: AppViewState) {
                       state.agentFileDrafts = {};
                       void loadAgentFiles(state, resolvedAgentId);
                     }
+                  }
+                  if (panel === "tools") {
+                    void loadToolsCatalog(state, resolvedAgentId);
                   }
                   if (panel === "skills") {
                     if (resolvedAgentId) {
@@ -1080,6 +999,7 @@ export function renderApp(state: AppViewState) {
                 loading: state.chatLoading,
                 sending: state.chatSending,
                 compactionStatus: state.compactionStatus,
+                fallbackStatus: state.fallbackStatus,
                 assistantAvatarUrl: chatAvatarUrl,
                 messages: state.chatMessages,
                 toolMessages: state.chatToolMessages,

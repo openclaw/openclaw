@@ -58,7 +58,7 @@ function buildMattermostApiUrl(baseUrl: string, path: string): string {
   return `${normalized}/api/v4${suffix}`;
 }
 
-async function readMattermostError(res: Response): Promise<string> {
+export async function readMattermostError(res: Response): Promise<string> {
   const contentType = res.headers.get("content-type") ?? "";
   if (contentType.includes("application/json")) {
     const data = (await res.json()) as { message?: string } | undefined;
@@ -97,7 +97,17 @@ export function createMattermostClient(params: {
         `Mattermost API ${res.status} ${res.statusText}: ${detail || "unknown error"}`,
       );
     }
-    return (await res.json()) as T;
+
+    if (res.status === 204) {
+      return undefined as T;
+    }
+
+    const contentType = res.headers.get("content-type") ?? "";
+    if (contentType.includes("application/json")) {
+      return (await res.json()) as T;
+    }
+
+    return (await res.text()) as T;
   };
 
   return { baseUrl, apiBaseUrl, token, request };

@@ -1,4 +1,3 @@
-import type { CommandHandler } from "./commands-types.js";
 import { logVerbose } from "../../globals.js";
 import { listSkillCommandsForAgents } from "../skill-commands.js";
 import {
@@ -7,7 +6,9 @@ import {
   buildHelpMessage,
 } from "../status.js";
 import { buildContextReply } from "./commands-context-report.js";
+import { buildExportSessionReply } from "./commands-export-session.js";
 import { buildStatusReply } from "./commands-status.js";
+import type { CommandHandler } from "./commands-types.js";
 
 export const handleHelpCommand: CommandHandler = async (params, allowTextCommands) => {
   if (!allowTextCommands) {
@@ -135,6 +136,7 @@ export const handleStatusCommand: CommandHandler = async (params, allowTextComma
     command: params.command,
     sessionEntry: params.sessionEntry,
     sessionKey: params.sessionKey,
+    parentSessionKey: params.ctx.ParentSessionKey,
     sessionScope: params.sessionScope,
     provider: params.provider,
     model: params.model,
@@ -166,6 +168,28 @@ export const handleContextCommand: CommandHandler = async (params, allowTextComm
     return { shouldContinue: false };
   }
   return { shouldContinue: false, reply: await buildContextReply(params) };
+};
+
+export const handleExportSessionCommand: CommandHandler = async (params, allowTextCommands) => {
+  if (!allowTextCommands) {
+    return null;
+  }
+  const normalized = params.command.commandBodyNormalized;
+  if (
+    normalized !== "/export-session" &&
+    !normalized.startsWith("/export-session ") &&
+    normalized !== "/export" &&
+    !normalized.startsWith("/export ")
+  ) {
+    return null;
+  }
+  if (!params.command.isAuthorizedSender) {
+    logVerbose(
+      `Ignoring /export-session from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
+    );
+    return { shouldContinue: false };
+  }
+  return { shouldContinue: false, reply: await buildExportSessionReply(params) };
 };
 
 export const handleWhoamiCommand: CommandHandler = async (params, allowTextCommands) => {

@@ -56,6 +56,66 @@ openclaw models auth login --provider openai-codex
 }
 ```
 
+### Codex transport default
+
+OpenClaw uses `pi-ai` for model streaming. For `openai-codex/*` models you can set
+`agents.defaults.models.<provider/model>.params.transport` to select transport:
+
+- Default is `"auto"` (WebSocket-first, then SSE fallback).
+- `"sse"`: force SSE
+- `"websocket"`: force WebSocket
+- `"auto"`: try WebSocket, then fall back to SSE
+
+```json5
+{
+  agents: {
+    defaults: {
+      model: { primary: "openai-codex/gpt-5.3-codex" },
+      models: {
+        "openai-codex/gpt-5.3-codex": {
+          params: {
+            transport: "auto",
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+### OpenAI Responses server-side compaction
+
+For direct OpenAI Responses models (`openai/*` using `api: "openai-responses"` with
+`baseUrl` on `api.openai.com`), OpenClaw now auto-enables OpenAI server-side
+compaction payload hints:
+
+- Forces `store: true` (unless model compat sets `supportsStore: false`)
+- Injects `context_management: [{ type: "compaction", compact_threshold: ... }]`
+
+By default, `compact_threshold` is `70%` of model `contextWindow` (or `80000`
+when unavailable).
+
+You can override per model:
+
+```json5
+{
+  agents: {
+    defaults: {
+      models: {
+        "openai/gpt-5": {
+          params: {
+            responsesServerCompaction: true,
+            responsesCompactThreshold: 120000,
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+Set `responsesServerCompaction: false` to disable this injection for a model.
+
 ## Notes
 
 - Model refs always use `provider/model` (see [/concepts/models](/concepts/models)).

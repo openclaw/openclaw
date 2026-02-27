@@ -42,20 +42,39 @@ describe("resolveGatewayDevMode", () => {
   });
 });
 
+function mockNodeGatewayPlanFixture(
+  params: {
+    workingDirectory?: string;
+    version?: string;
+    supported?: boolean;
+    warning?: string;
+    serviceEnvironment?: Record<string, string>;
+  } = {},
+) {
+  const {
+    workingDirectory = "/Users/me",
+    version = "22.0.0",
+    supported = true,
+    warning,
+    serviceEnvironment = { OPENCLAW_PORT: "3000" },
+  } = params;
+  mocks.resolvePreferredNodePath.mockResolvedValue("/opt/node");
+  mocks.resolveGatewayProgramArguments.mockResolvedValue({
+    programArguments: ["node", "gateway"],
+    workingDirectory,
+  });
+  mocks.resolveSystemNodeInfo.mockResolvedValue({
+    path: "/opt/node",
+    version,
+    supported,
+  });
+  mocks.renderSystemNodeWarning.mockReturnValue(warning);
+  mocks.buildServiceEnvironment.mockReturnValue(serviceEnvironment);
+}
+
 describe("buildGatewayInstallPlan", () => {
   it("uses provided nodePath and returns plan", async () => {
-    mocks.resolvePreferredNodePath.mockResolvedValue("/opt/node");
-    mocks.resolveGatewayProgramArguments.mockResolvedValue({
-      programArguments: ["node", "gateway"],
-      workingDirectory: "/Users/me",
-    });
-    mocks.resolveSystemNodeInfo.mockResolvedValue({
-      path: "/opt/node",
-      version: "22.0.0",
-      supported: true,
-    });
-    mocks.renderSystemNodeWarning.mockReturnValue(undefined);
-    mocks.buildServiceEnvironment.mockReturnValue({ OPENCLAW_PORT: "3000" });
+    mockNodeGatewayPlanFixture();
 
     const plan = await buildGatewayInstallPlan({
       env: {},
@@ -72,18 +91,13 @@ describe("buildGatewayInstallPlan", () => {
 
   it("emits warnings when renderSystemNodeWarning returns one", async () => {
     const warn = vi.fn();
-    mocks.resolvePreferredNodePath.mockResolvedValue("/opt/node");
-    mocks.resolveGatewayProgramArguments.mockResolvedValue({
-      programArguments: ["node", "gateway"],
+    mockNodeGatewayPlanFixture({
       workingDirectory: undefined,
-    });
-    mocks.resolveSystemNodeInfo.mockResolvedValue({
-      path: "/opt/node",
       version: "18.0.0",
       supported: false,
+      warning: "Node too old",
+      serviceEnvironment: {},
     });
-    mocks.renderSystemNodeWarning.mockReturnValue("Node too old");
-    mocks.buildServiceEnvironment.mockReturnValue({});
 
     await buildGatewayInstallPlan({
       env: {},
@@ -97,19 +111,11 @@ describe("buildGatewayInstallPlan", () => {
   });
 
   it("merges config env vars into the environment", async () => {
-    mocks.resolvePreferredNodePath.mockResolvedValue("/opt/node");
-    mocks.resolveGatewayProgramArguments.mockResolvedValue({
-      programArguments: ["node", "gateway"],
-      workingDirectory: "/Users/me",
-    });
-    mocks.resolveSystemNodeInfo.mockResolvedValue({
-      path: "/opt/node",
-      version: "22.0.0",
-      supported: true,
-    });
-    mocks.buildServiceEnvironment.mockReturnValue({
-      OPENCLAW_PORT: "3000",
-      HOME: "/Users/me",
+    mockNodeGatewayPlanFixture({
+      serviceEnvironment: {
+        OPENCLAW_PORT: "3000",
+        HOME: "/Users/me",
+      },
     });
 
     const plan = await buildGatewayInstallPlan({
@@ -134,18 +140,33 @@ describe("buildGatewayInstallPlan", () => {
     expect(plan.environment.HOME).toBe("/Users/me");
   });
 
+  it("drops dangerous config env vars before service merge", async () => {
+    mockNodeGatewayPlanFixture({
+      serviceEnvironment: {
+        OPENCLAW_PORT: "3000",
+      },
+    });
+
+    const plan = await buildGatewayInstallPlan({
+      env: {},
+      port: 3000,
+      runtime: "node",
+      config: {
+        env: {
+          vars: {
+            NODE_OPTIONS: "--require /tmp/evil.js",
+            SAFE_KEY: "safe-value",
+          },
+        },
+      },
+    });
+
+    expect(plan.environment.NODE_OPTIONS).toBeUndefined();
+    expect(plan.environment.SAFE_KEY).toBe("safe-value");
+  });
+
   it("does not include empty config env values", async () => {
-    mocks.resolvePreferredNodePath.mockResolvedValue("/opt/node");
-    mocks.resolveGatewayProgramArguments.mockResolvedValue({
-      programArguments: ["node", "gateway"],
-      workingDirectory: "/Users/me",
-    });
-    mocks.resolveSystemNodeInfo.mockResolvedValue({
-      path: "/opt/node",
-      version: "22.0.0",
-      supported: true,
-    });
-    mocks.buildServiceEnvironment.mockReturnValue({ OPENCLAW_PORT: "3000" });
+    mockNodeGatewayPlanFixture();
 
     const plan = await buildGatewayInstallPlan({
       env: {},
@@ -166,17 +187,7 @@ describe("buildGatewayInstallPlan", () => {
   });
 
   it("drops whitespace-only config env values", async () => {
-    mocks.resolvePreferredNodePath.mockResolvedValue("/opt/node");
-    mocks.resolveGatewayProgramArguments.mockResolvedValue({
-      programArguments: ["node", "gateway"],
-      workingDirectory: "/Users/me",
-    });
-    mocks.resolveSystemNodeInfo.mockResolvedValue({
-      path: "/opt/node",
-      version: "22.0.0",
-      supported: true,
-    });
-    mocks.buildServiceEnvironment.mockReturnValue({});
+    mockNodeGatewayPlanFixture({ serviceEnvironment: {} });
 
     const plan = await buildGatewayInstallPlan({
       env: {},
@@ -197,19 +208,11 @@ describe("buildGatewayInstallPlan", () => {
   });
 
   it("keeps service env values over config env vars", async () => {
-    mocks.resolvePreferredNodePath.mockResolvedValue("/opt/node");
-    mocks.resolveGatewayProgramArguments.mockResolvedValue({
-      programArguments: ["node", "gateway"],
-      workingDirectory: "/Users/me",
-    });
-    mocks.resolveSystemNodeInfo.mockResolvedValue({
-      path: "/opt/node",
-      version: "22.0.0",
-      supported: true,
-    });
-    mocks.buildServiceEnvironment.mockReturnValue({
-      HOME: "/Users/service",
-      OPENCLAW_PORT: "3000",
+    mockNodeGatewayPlanFixture({
+      serviceEnvironment: {
+        HOME: "/Users/service",
+        OPENCLAW_PORT: "3000",
+      },
     });
 
     const plan = await buildGatewayInstallPlan({

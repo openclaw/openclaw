@@ -146,7 +146,7 @@ export async function generateVoiceResponse(
 
     const text = texts.join(" ") || null;
 
-    if (!text && result.meta.aborted) {
+    if (!text && result.meta?.aborted) {
       return { text: null, error: "Response generation was aborted" };
     }
 

@@ -19,8 +19,8 @@ x-i18n:
 
 ## 选择提供商
 
-- **Railway**（一键 + 浏览器设置）：[Railway](/railway)
-- **Northflank**（一键 + 浏览器设置）：[Northflank](/northflank)
+- **Railway**（一键 + 浏览器设置）：[Railway](/install/railway)
+- **Northflank**（一键 + 浏览器设置）：[Northflank](/install/northflank)
 - **Oracle Cloud（永久免费）**：[Oracle](/platforms/oracle) — $0/月（永久免费，ARM；容量/注册可能不太稳定）
 - **Fly.io**：[Fly.io](/install/fly)
 - **Hetzner（Docker）**：[Hetzner](/install/hetzner)

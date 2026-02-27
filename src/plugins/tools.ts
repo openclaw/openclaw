@@ -1,8 +1,10 @@
-import type { AnyAgentTool } from "../agents/tools/common.js";
-import type { OpenClawPluginToolContext } from "./types.js";
 import { normalizeToolName } from "../agents/tool-policy.js";
+import type { AnyAgentTool } from "../agents/tools/common.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { applyTestPluginDefaults, normalizePluginsConfig } from "./config-state.js";
 import { loadOpenClawPlugins } from "./loader.js";
+import { createPluginLoaderLogger } from "./logger.js";
+import type { OpenClawPluginToolContext } from "./types.js";
 
 const log = createSubsystemLogger("plugins");
 
@@ -44,16 +46,20 @@ export function resolvePluginTools(params: {
   context: OpenClawPluginToolContext;
   existingToolNames?: Set<string>;
   toolAllowlist?: string[];
+  suppressNameConflicts?: boolean;
 }): AnyAgentTool[] {
+  // Fast path: when plugins are effectively disabled, avoid discovery/jiti entirely.
+  // This matters a lot for unit tests and for tool construction hot paths.
+  const effectiveConfig = applyTestPluginDefaults(params.context.config ?? {}, process.env);
+  const normalized = normalizePluginsConfig(effectiveConfig.plugins);
+  if (!normalized.enabled) {
+    return [];
+  }
+
   const registry = loadOpenClawPlugins({
-    config: params.context.config,
+    config: effectiveConfig,
     workspaceDir: params.context.workspaceDir,
-    logger: {
-      info: (msg) => log.info(msg),
-      warn: (msg) => log.warn(msg),
-      error: (msg) => log.error(msg),
-      debug: (msg) => log.debug(msg),
-    },
+    logger: createPluginLoaderLogger(log),
   });
 
   const tools: AnyAgentTool[] = [];
@@ -69,13 +75,15 @@ export function resolvePluginTools(params: {
     const pluginIdKey = normalizeToolName(entry.pluginId);
     if (existingNormalized.has(pluginIdKey)) {
       const message = `plugin id conflicts with core tool name (${entry.pluginId})`;
-      log.error(message);
-      registry.diagnostics.push({
-        level: "error",
-        pluginId: entry.pluginId,
-        source: entry.source,
-        message,
-      });
+      if (!params.suppressNameConflicts) {
+        log.error(message);
+        registry.diagnostics.push({
+          level: "error",
+          pluginId: entry.pluginId,
+          source: entry.source,
+          message,
+        });
+      }
       blockedPlugins.add(entry.pluginId);
       continue;
     }
@@ -106,13 +114,15 @@ export function resolvePluginTools(params: {
     for (const tool of list) {
       if (nameSet.has(tool.name) || existing.has(tool.name)) {
         const message = `plugin tool name conflict (${entry.pluginId}): ${tool.name}`;
-        log.error(message);
-        registry.diagnostics.push({
-          level: "error",
-          pluginId: entry.pluginId,
-          source: entry.source,
-          message,
-        });
+        if (!params.suppressNameConflicts) {
+          log.error(message);
+          registry.diagnostics.push({
+            level: "error",
+            pluginId: entry.pluginId,
+            source: entry.source,
+            message,
+          });
+        }
         continue;
       }
       nameSet.add(tool.name);

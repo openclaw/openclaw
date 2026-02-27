@@ -1,10 +1,15 @@
 import crypto from "node:crypto";
-import type { OpenClawConfig } from "../../config/config.js";
 import { resolveUserTimezone } from "../../agents/date-time.js";
 import { buildWorkspaceSkillSnapshot } from "../../agents/skills.js";
 import { ensureSkillsWatcher, getSkillsSnapshotVersion } from "../../agents/skills/refresh.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { type SessionEntry, updateSessionStore } from "../../config/sessions.js";
 import { buildChannelSummary } from "../../infra/channel-summary.js";
+import {
+  resolveTimezone,
+  formatUtcTimestamp,
+  formatZonedTimestamp,
+} from "../../infra/format-time/format-datetime.ts";
 import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
 import { drainSystemEventEntries } from "../../infra/system-events.js";
 
@@ -39,15 +44,6 @@ export async function prependSystemEvents(params: {
     return trimmed;
   };
 
-  const resolveExplicitTimezone = (value: string): string | undefined => {
-    try {
-      new Intl.DateTimeFormat("en-US", { timeZone: value }).format(new Date());
-      return value;
-    } catch {
-      return undefined;
-    }
-  };
-
   const resolveSystemEventTimezone = (cfg: OpenClawConfig) => {
     const raw = cfg.agents?.defaults?.envelopeTimezone?.trim();
     if (!raw) {
@@ -66,47 +62,8 @@ export async function prependSystemEvents(params: {
         timeZone: resolveUserTimezone(cfg.agents?.defaults?.userTimezone),
       };
     }
-    const explicit = resolveExplicitTimezone(raw);
+    const explicit = resolveTimezone(raw);
     return explicit ? { mode: "iana" as const, timeZone: explicit } : { mode: "local" as const };
-  };
-
-  const formatUtcTimestamp = (date: Date): string => {
-    const yyyy = String(date.getUTCFullYear()).padStart(4, "0");
-    const mm = String(date.getUTCMonth() + 1).padStart(2, "0");
-    const dd = String(date.getUTCDate()).padStart(2, "0");
-    const hh = String(date.getUTCHours()).padStart(2, "0");
-    const min = String(date.getUTCMinutes()).padStart(2, "0");
-    const sec = String(date.getUTCSeconds()).padStart(2, "0");
-    return `${yyyy}-${mm}-${dd}T${hh}:${min}:${sec}Z`;
-  };
-
-  const formatZonedTimestamp = (date: Date, timeZone?: string): string | undefined => {
-    const parts = new Intl.DateTimeFormat("en-US", {
-      timeZone,
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-      hourCycle: "h23",
-      timeZoneName: "short",
-    }).formatToParts(date);
-    const pick = (type: string) => parts.find((part) => part.type === type)?.value;
-    const yyyy = pick("year");
-    const mm = pick("month");
-    const dd = pick("day");
-    const hh = pick("hour");
-    const min = pick("minute");
-    const sec = pick("second");
-    const tz = [...parts]
-      .toReversed()
-      .find((part) => part.type === "timeZoneName")
-      ?.value?.trim();
-    if (!yyyy || !mm || !dd || !hh || !min || !sec) {
-      return undefined;
-    }
-    return `${yyyy}-${mm}-${dd} ${hh}:${min}:${sec}${tz ? ` ${tz}` : ""}`;
   };
 
   const formatSystemEventTimestamp = (ts: number, cfg: OpenClawConfig) => {
@@ -116,12 +73,15 @@ export async function prependSystemEvents(params: {
     }
     const zone = resolveSystemEventTimezone(cfg);
     if (zone.mode === "utc") {
-      return formatUtcTimestamp(date);
+      return formatUtcTimestamp(date, { displaySeconds: true });
     }
     if (zone.mode === "local") {
-      return formatZonedTimestamp(date) ?? "unknown-time";
+      return formatZonedTimestamp(date, { displaySeconds: true }) ?? "unknown-time";
     }
-    return formatZonedTimestamp(date, zone.timeZone) ?? "unknown-time";
+    return (
+      formatZonedTimestamp(date, { timeZone: zone.timeZone, displaySeconds: true }) ??
+      "unknown-time"
+    );
   };
 
   const systemLines: string[] = [];
@@ -167,6 +127,16 @@ export async function ensureSkillSnapshot(params: {
   skillsSnapshot?: SessionEntry["skillsSnapshot"];
   systemSent: boolean;
 }> {
+  if (process.env.OPENCLAW_TEST_FAST === "1") {
+    // In fast unit-test runs we skip filesystem scanning, watchers, and session-store writes.
+    // Dedicated skills tests cover snapshot generation behavior.
+    return {
+      sessionEntry: params.sessionEntry,
+      skillsSnapshot: params.sessionEntry?.skillsSnapshot,
+      systemSent: params.sessionEntry?.systemSent ?? false,
+    };
+  }
+
   const {
     sessionEntry,
     sessionStore,
@@ -295,9 +265,12 @@ export async function incrementCompactionCount(params: {
   // If tokensAfter is provided, update the cached token counts to reflect post-compaction state
   if (tokensAfter != null && tokensAfter > 0) {
     updates.totalTokens = tokensAfter;
+    updates.totalTokensFresh = true;
     // Clear input/output breakdown since we only have the total estimate after compaction
     updates.inputTokens = undefined;
     updates.outputTokens = undefined;
+    updates.cacheRead = undefined;
+    updates.cacheWrite = undefined;
   }
   sessionStore[sessionKey] = {
     ...entry,
