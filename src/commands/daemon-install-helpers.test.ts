@@ -1,4 +1,7 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   resolvePreferredNodePath: vi.fn(),
@@ -231,6 +234,165 @@ describe("buildGatewayInstallPlan", () => {
 
     expect(plan.environment.HOME).toBe("/Users/service");
     expect(plan.environment.OPENCLAW_PORT).toBe("3000");
+  });
+});
+
+describe("buildGatewayInstallPlan — launcher config", () => {
+  let tmpDir: string;
+  let launcherPath: string;
+
+  beforeAll(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-launcher-test-"));
+    launcherPath = path.join(tmpDir, "gateway-launcher.sh");
+    fs.writeFileSync(launcherPath, "#!/bin/sh\nexec node gateway", { mode: 0o755 });
+  });
+
+  afterAll(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("uses custom launcher script as sole program argument when config.gateway.service.launcher is set", async () => {
+    mockNodeGatewayPlanFixture();
+
+    const plan = await buildGatewayInstallPlan({
+      env: {},
+      port: 3000,
+      runtime: "node",
+      config: {
+        gateway: {
+          service: {
+            launcher: launcherPath,
+          },
+        },
+      },
+    });
+
+    expect(plan.programArguments).toEqual([launcherPath]);
+  });
+
+  it("expands ~ in launcher path to home directory", async () => {
+    // Create executable script in the real home directory temp location.
+    const homeSubdir = path.join(os.homedir(), ".openclaw-test-launcher");
+    const homeLauncher = path.join(homeSubdir, "launcher.sh");
+    fs.mkdirSync(homeSubdir, { recursive: true });
+    fs.writeFileSync(homeLauncher, "#!/bin/sh\nexec node gateway", { mode: 0o755 });
+
+    try {
+      mockNodeGatewayPlanFixture();
+
+      const plan = await buildGatewayInstallPlan({
+        env: {},
+        port: 3000,
+        runtime: "node",
+        config: {
+          gateway: {
+            service: {
+              launcher: "~/.openclaw-test-launcher/launcher.sh",
+            },
+          },
+        },
+      });
+
+      expect(plan.programArguments).toHaveLength(1);
+      expect(plan.programArguments[0]).not.toContain("~");
+      expect(plan.programArguments[0]).toBe(homeLauncher);
+    } finally {
+      fs.rmSync(homeSubdir, { recursive: true, force: true });
+    }
+  });
+
+  it("throws when launcher script does not exist", async () => {
+    mockNodeGatewayPlanFixture();
+
+    await expect(
+      buildGatewayInstallPlan({
+        env: {},
+        port: 3000,
+        runtime: "node",
+        config: {
+          gateway: {
+            service: {
+              launcher: "/nonexistent/path/launcher.sh",
+            },
+          },
+        },
+      }),
+    ).rejects.toThrow("script not found");
+  });
+
+  it("throws when launcher script is not executable", async () => {
+    const nonExecPath = path.join(tmpDir, "not-executable.sh");
+    fs.writeFileSync(nonExecPath, "#!/bin/sh\n", { mode: 0o644 });
+    mockNodeGatewayPlanFixture();
+
+    await expect(
+      buildGatewayInstallPlan({
+        env: {},
+        port: 3000,
+        runtime: "node",
+        config: {
+          gateway: {
+            service: {
+              launcher: nonExecPath,
+            },
+          },
+        },
+      }),
+    ).rejects.toThrow("not executable");
+  });
+
+  it("uses default program arguments when no launcher is configured", async () => {
+    mockNodeGatewayPlanFixture();
+
+    const plan = await buildGatewayInstallPlan({
+      env: {},
+      port: 3000,
+      runtime: "node",
+    });
+
+    expect(plan.programArguments).toEqual(["node", "gateway"]);
+  });
+
+  it("passes entryPath to buildServiceEnvironment when program args contain a script file before gateway", async () => {
+    mocks.resolvePreferredNodePath.mockResolvedValue("/opt/node");
+    mocks.resolveGatewayProgramArguments.mockResolvedValue({
+      programArguments: ["/opt/node", "/Users/me/openclaw/dist/entry.js", "gateway"],
+      workingDirectory: "/Users/me",
+    });
+    mocks.buildServiceEnvironment.mockReturnValue({ OPENCLAW_PORT: "3000" });
+
+    await buildGatewayInstallPlan({
+      env: {},
+      port: 3000,
+      runtime: "node",
+    });
+
+    expect(mocks.buildServiceEnvironment).toHaveBeenCalledWith(
+      expect.objectContaining({
+        entryPath: "/Users/me/openclaw/dist/entry.js",
+      }),
+    );
+  });
+
+  it("does not set entryPath when the arg before gateway is a binary, not a script", async () => {
+    mocks.resolvePreferredNodePath.mockResolvedValue("/opt/bun");
+    mocks.resolveGatewayProgramArguments.mockResolvedValue({
+      programArguments: ["/opt/homebrew/bin/bun", "gateway"],
+      workingDirectory: "/Users/me",
+    });
+    mocks.buildServiceEnvironment.mockReturnValue({ OPENCLAW_PORT: "3000" });
+
+    await buildGatewayInstallPlan({
+      env: {},
+      port: 3000,
+      runtime: "bun",
+    });
+
+    expect(mocks.buildServiceEnvironment).toHaveBeenCalledWith(
+      expect.objectContaining({
+        entryPath: undefined,
+      }),
+    );
   });
 });
 

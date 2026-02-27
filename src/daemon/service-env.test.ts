@@ -354,6 +354,23 @@ describe("buildServiceEnvironment", () => {
     });
     expect(env.NODE_EXTRA_CA_CERTS).toBe("/custom/certs/ca.pem");
   });
+
+  it("sets OPENCLAW_ENTRY when entryPath is provided", () => {
+    const env = buildServiceEnvironment({
+      env: { HOME: "/home/user" },
+      port: 18789,
+      entryPath: "/Users/me/openclaw/dist/entry.js",
+    });
+    expect(env.OPENCLAW_ENTRY).toBe("/Users/me/openclaw/dist/entry.js");
+  });
+
+  it("leaves OPENCLAW_ENTRY undefined when entryPath is not provided", () => {
+    const env = buildServiceEnvironment({
+      env: { HOME: "/home/user" },
+      port: 18789,
+    });
+    expect(env.OPENCLAW_ENTRY).toBeUndefined();
+  });
 });
 
 describe("buildNodeServiceEnvironment", () => {

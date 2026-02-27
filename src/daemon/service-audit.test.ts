@@ -83,6 +83,55 @@ describe("auditGatewayServiceConfig", () => {
     ).toBe(true);
   });
 
+  it("does not flag gateway-command-missing when launcher matches installed command", async () => {
+    const home = process.env.HOME ?? "/tmp";
+    const launcherPath = `${home}/.openclaw/scripts/gateway-launcher.sh`;
+    const audit = await auditGatewayServiceConfig({
+      env: { HOME: home },
+      platform: "darwin",
+      launcher: "~/.openclaw/scripts/gateway-launcher.sh",
+      command: {
+        programArguments: [launcherPath],
+        environment: { PATH: "/usr/bin:/bin" },
+      },
+    });
+    expect(
+      audit.issues.some((issue) => issue.code === SERVICE_AUDIT_CODES.gatewayCommandMissing),
+    ).toBe(false);
+    expect(
+      audit.issues.some((issue) => issue.code === SERVICE_AUDIT_CODES.gatewayLauncherMismatch),
+    ).toBe(false);
+  });
+
+  it("flags launcher mismatch when installed command differs from configured launcher", async () => {
+    const audit = await auditGatewayServiceConfig({
+      env: { HOME: "/tmp" },
+      platform: "darwin",
+      launcher: "~/.openclaw/scripts/gateway-launcher.sh",
+      command: {
+        programArguments: ["/some/other/script.sh"],
+        environment: { PATH: "/usr/bin:/bin" },
+      },
+    });
+    expect(
+      audit.issues.some((issue) => issue.code === SERVICE_AUDIT_CODES.gatewayLauncherMismatch),
+    ).toBe(true);
+  });
+
+  it("flags gateway-command-missing when no launcher and no gateway subcommand", async () => {
+    const audit = await auditGatewayServiceConfig({
+      env: { HOME: "/tmp" },
+      platform: "darwin",
+      command: {
+        programArguments: ["/Users/me/.openclaw/scripts/gateway-launcher.sh"],
+        environment: { PATH: "/usr/bin:/bin" },
+      },
+    });
+    expect(
+      audit.issues.some((issue) => issue.code === SERVICE_AUDIT_CODES.gatewayCommandMissing),
+    ).toBe(true);
+  });
+
   it("does not flag gateway token mismatch when service token matches config token", async () => {
     const audit = await auditGatewayServiceConfig({
       env: { HOME: "/tmp" },

@@ -104,9 +104,10 @@ export function gatewayInstallErrorHint(platform = process.platform): string {
     : `Tip: rerun \`${formatCliCommand("openclaw gateway install")}\` after fixing the error.`;
 }
 
-/** Resolve a launcher path, expanding leading `~` to the user's home directory. */
+/** Resolve a launcher path, expanding leading `~/` or `~\` to the user's home directory. */
 function resolveLauncherPath(raw: string): string {
-  const expanded = raw.startsWith("~/") ? path.join(os.homedir(), raw.slice(2)) : raw;
+  const expanded =
+    raw.startsWith("~/") || raw.startsWith("~\\") ? path.join(os.homedir(), raw.slice(2)) : raw;
   return path.resolve(expanded);
 }
 
