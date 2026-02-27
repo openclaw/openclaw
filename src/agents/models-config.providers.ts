@@ -236,7 +236,10 @@ export function resolveOllamaApiBase(configuredBaseUrl?: string): string {
   return trimmed.replace(/\/v1$/i, "");
 }
 
-async function discoverOllamaModels(baseUrl?: string): Promise<ModelDefinitionConfig[]> {
+async function discoverOllamaModels(
+  baseUrl?: string,
+  opts?: { quiet?: boolean },
+): Promise<ModelDefinitionConfig[]> {
   // Skip Ollama discovery in test environments
   if (process.env.VITEST || process.env.NODE_ENV === "test") {
     return [];
@@ -247,7 +250,9 @@ async function discoverOllamaModels(baseUrl?: string): Promise<ModelDefinitionCo
       signal: AbortSignal.timeout(5000),
     });
     if (!response.ok) {
-      log.warn(`Failed to discover Ollama models: ${response.status}`);
+      if (!opts?.quiet) {
+        log.warn(`Failed to discover Ollama models: ${response.status}`);
+      }
       return [];
     }
     const data = (await response.json()) as OllamaTagsResponse;
@@ -270,7 +275,9 @@ async function discoverOllamaModels(baseUrl?: string): Promise<ModelDefinitionCo
       };
     });
   } catch (error) {
-    log.warn(`Failed to discover Ollama models: ${String(error)}`);
+    if (!opts?.quiet) {
+      log.warn(`Failed to discover Ollama models: ${String(error)}`);
+    }
     return [];
   }
 }
@@ -690,8 +697,11 @@ async function buildVeniceProvider(): Promise<ProviderConfig> {
   };
 }
 
-async function buildOllamaProvider(configuredBaseUrl?: string): Promise<ProviderConfig> {
-  const models = await discoverOllamaModels(configuredBaseUrl);
+async function buildOllamaProvider(
+  configuredBaseUrl?: string,
+  opts?: { quiet?: boolean },
+): Promise<ProviderConfig> {
+  const models = await discoverOllamaModels(configuredBaseUrl, opts);
   return {
     baseUrl: resolveOllamaApiBase(configuredBaseUrl),
     api: "ollama",
@@ -959,15 +969,24 @@ export async function resolveImplicitProviders(params: {
     break;
   }
 
-  // Ollama provider - only add if explicitly configured.
+  // Ollama provider - auto-discover if running locally, or add if explicitly configured.
   // Use the user's configured baseUrl (from explicit providers) for model
   // discovery so that remote / non-default Ollama instances are reachable.
   const ollamaKey =
     resolveEnvApiKeyVarName("ollama") ??
     resolveApiKeyFromProfiles({ provider: "ollama", store: authStore });
-  if (ollamaKey) {
-    const ollamaBaseUrl = params.explicitProviders?.ollama?.baseUrl;
-    providers.ollama = { ...(await buildOllamaProvider(ollamaBaseUrl)), apiKey: ollamaKey };
+  const ollamaBaseUrl = params.explicitProviders?.ollama?.baseUrl;
+  const hasExplicitOllamaConfig = Boolean(params.explicitProviders?.ollama);
+  // Only suppress warnings for implicit local probing when user has not
+  // explicitly configured Ollama.
+  const ollamaProvider = await buildOllamaProvider(ollamaBaseUrl, {
+    quiet: !ollamaKey && !hasExplicitOllamaConfig,
+  });
+  if (ollamaProvider.models.length > 0 || ollamaKey) {
+    providers.ollama = {
+      ...ollamaProvider,
+      apiKey: ollamaKey ?? "ollama-local",
+    };
   }
 
   // vLLM provider - OpenAI-compatible local server (opt-in via env/profile).
