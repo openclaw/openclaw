@@ -302,6 +302,20 @@ export type DiscordAccountConfig = {
   activityType?: 0 | 1 | 2 | 3 | 4 | 5;
   /** Streaming URL (Twitch/YouTube). Required when activityType=1. */
   activityUrl?: string;
+  /**
+   * Carbon EventQueue configuration. Controls how Discord gateway events are processed.
+   * The most important option is `listenerTimeout` which defaults to 30s in Carbon --
+   * too short for LLM calls with extended thinking. Set a higher value (e.g. 120000)
+   * to prevent the event queue from killing long-running message handlers.
+   */
+  eventQueue?: {
+    /** Max time (ms) a single listener can run before being killed. Default: 120000. */
+    listenerTimeout?: number;
+    /** Max events queued before backpressure is applied. Default: 10000. */
+    maxQueueSize?: number;
+    /** Max concurrent event processing operations. Default: 50. */
+    maxConcurrency?: number;
+  };
 };
 
 export type DiscordConfig = {

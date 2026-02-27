@@ -517,6 +517,12 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     if (voiceEnabled) {
       clientPlugins.push(new VoicePlugin());
     }
+    // Pass eventQueue config to Carbon so the listener timeout can be tuned.
+    // Default listenerTimeout is 120s (Carbon defaults to 30s which is too short for LLM calls).
+    const eventQueueOpts = {
+      listenerTimeout: 120_000,
+      ...discordCfg.eventQueue,
+    };
     const client = new Client(
       {
         baseUrl: "http://localhost",
@@ -525,6 +531,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
         publicKey: "a",
         token,
         autoDeploy: false,
+        eventQueue: eventQueueOpts,
       },
       {
         commands,
