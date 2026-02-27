@@ -41,11 +41,10 @@ export function registerCronSimpleCommands(cron: Command) {
       .description("Remove a cron job")
       .argument("<id>", "Job id")
       .option("--json", "Output JSON", false)
-      .option("--force", "Force removal even if job is running", false)
       .action(async (id, opts) => {
         try {
           // Try to remove directly first - cron.remove will fail if job doesn't exist
-          const res = await callGatewayFromCli("cron.remove", opts, { id, force: opts.force });
+          const res = await callGatewayFromCli("cron.remove", opts, { id });
           const removed = res?.removed === true;
 
           if (opts.json) {
@@ -64,7 +63,7 @@ export function registerCronSimpleCommands(cron: Command) {
               ? JSON.stringify({ ok: false, error: t("error.cron.jobNotFound", { id }), id }, null, 2)
               : `❌ ${t("error.cron.jobNotFound", { id })}`;
             defaultRuntime.log(errorMsg);
-          } else if (errorMessage.includes("running") && !opts.force) {
+          } else if (errorMessage.includes("running")) {
             const errorMsg = opts.json
               ? JSON.stringify({ ok: false, error: t("error.cron.jobRunning"), id }, null, 2)
               : `⚠️  ${t("error.cron.jobRunning")}`;

@@ -19,10 +19,15 @@ import { splitShellArgs } from "../utils/shell-argv.js";
 const execFileAsync = promisify(execFile);
 
 // Cache for QMD binary availability checks to avoid repeated subprocess calls
+// Uses TTL to allow recovery after QMD is installed or PATH is fixed
 const QMD_AVAILABILITY_CACHE = new Map<
   string,
-  { available: true; path: string } | { available: false; error: string }
+  | { available: true; path: string; timestamp: number }
+  | { available: false; error: string; timestamp: number }
 >();
+
+// Cache TTL: 5 minutes for "not found" results to allow recovery
+const QMD_CACHE_TTL_MS = 5 * 60 * 1000;
 
 export type ResolvedMemoryBackendConfig = {
   backend: MemoryBackend;
@@ -368,17 +373,25 @@ export function resolveMemoryBackendConfig(params: {
  * Returns the resolved command path if available, null otherwise.
  * Results are cached to avoid repeated subprocess calls.
  * Transient failures (timeouts) are not cached to allow retry.
+ * "Not found" results are cached with TTL to allow recovery after installation.
  */
 export async function checkQmdBinaryAvailable(
   command = "qmd",
   timeoutMs = 5000,
 ): Promise<{ available: true; path: string } | { available: false; error: string; transient?: boolean }> {
   const cacheKey = `${command}:${timeoutMs}`;
+  const now = Date.now();
 
-  // Check cache first
+  // Check cache first, with TTL validation
   const cached = QMD_AVAILABILITY_CACHE.get(cacheKey);
   if (cached) {
-    return cached;
+    const age = now - cached.timestamp;
+    // Cache hit: return if fresh (success is cached indefinitely, failures have TTL)
+    if (cached.available || age < QMD_CACHE_TTL_MS) {
+      return cached;
+    }
+    // Cache expired for failure - remove and re-check
+    QMD_AVAILABILITY_CACHE.delete(cacheKey);
   }
 
   const isWindows = process.platform === "win32";
@@ -393,7 +406,7 @@ export async function checkQmdBinaryAvailable(
       encoding: "utf8",
       shell: needsShell,
     });
-    const result = { available: true as const, path: resolvedCommand };
+    const result = { available: true as const, path: resolvedCommand, timestamp: now };
     QMD_AVAILABILITY_CACHE.set(cacheKey, result);
     return result;
   } catch (err) {
@@ -428,15 +441,17 @@ export async function checkQmdBinaryAvailable(
       const result = {
         available: false as const,
         error: `QMD binary "${command}" not found on PATH. Please install QMD or check your configuration.`,
+        timestamp: now,
       };
       QMD_AVAILABILITY_CACHE.set(cacheKey, result);
       return result;
     }
 
-    // Other failures (e.g., returned non-zero) - cache as unavailable
+    // Other failures (e.g., returned non-zero) - cache as unavailable with TTL
     const result = {
       available: false as const,
       error: `QMD binary check failed: ${error}`,
+      timestamp: now,
     };
     QMD_AVAILABILITY_CACHE.set(cacheKey, result);
     return result;
