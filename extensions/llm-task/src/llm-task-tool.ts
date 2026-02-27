@@ -25,6 +25,7 @@ async function loadRunEmbeddedPiAgent(): Promise<RunEmbeddedPiAgentFn> {
   }
 
   // Bundled install (built): use extensionAPI which exports runEmbeddedPiAgent
+  // @ts-expect-error dist/ only exists after build; this path is correct for bundled installs
   const mod = await import("../../../dist/extensionAPI.js");
   if (typeof mod.runEmbeddedPiAgent !== "function") {
     throw new Error("Internal error: runEmbeddedPiAgent not available");
