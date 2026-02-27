@@ -11,6 +11,7 @@ import {
   registerInternalHook,
   triggerInternalHook,
   unregisterInternalHook,
+  type AgentBootstrapHookContext,
   type GatewayStartupHookContext,
   type MessageReceivedHookContext,
   type MessageSentHookContext,
