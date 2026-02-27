@@ -9,6 +9,61 @@ vi.mock("./probe.js", () => ({
 
 import { feishuPlugin } from "./channel.js";
 
+describe("feishuPlugin.config.resolveAllowFrom", () => {
+  const makeCfg = (allowFrom?: unknown) =>
+    ({
+      channels: {
+        feishu: {
+          enabled: true,
+          accounts: {
+            test: { appId: "cli_test", appSecret: "secret", allowFrom },
+          },
+        },
+      },
+    }) as OpenClawConfig;
+
+  it("returns [\"*\"] when allowFrom is the string \"*\"", () => {
+    const result = feishuPlugin.config.resolveAllowFrom!({
+      cfg: makeCfg("*"),
+      accountId: "test",
+    });
+    expect(result).toEqual(["*"]);
+  });
+
+  it("returns mapped strings when allowFrom is an array", () => {
+    const result = feishuPlugin.config.resolveAllowFrom!({
+      cfg: makeCfg(["ou_abc", "ou_def"]),
+      accountId: "test",
+    });
+    expect(result).toEqual(["ou_abc", "ou_def"]);
+  });
+
+  it("returns empty array when allowFrom is undefined", () => {
+    const result = feishuPlugin.config.resolveAllowFrom!({
+      cfg: makeCfg(undefined),
+      accountId: "test",
+    });
+    expect(result).toEqual([]);
+  });
+
+  it("returns empty array when allowFrom is a non-wildcard string", () => {
+    const result = feishuPlugin.config.resolveAllowFrom!({
+      cfg: makeCfg("ou_single"),
+      accountId: "test",
+    });
+    expect(result).toEqual([]);
+  });
+});
+
+describe("feishuPlugin.config.formatAllowFrom", () => {
+  it("trims, lowercases, and filters empty entries", () => {
+    const result = feishuPlugin.config.formatAllowFrom!({
+      allowFrom: ["  OU_ABC  ", "", "ou_DEF"],
+    });
+    expect(result).toEqual(["ou_abc", "ou_def"]);
+  });
+});
+
 describe("feishuPlugin.status.probeAccount", () => {
   it("uses current account credentials for multi-account config", async () => {
     const cfg = {
