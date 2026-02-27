@@ -121,7 +121,7 @@ describe("probeFeishu", () => {
     expect(requestFn).toHaveBeenCalledTimes(2);
   });
 
-  it("caches per appId independently", async () => {
+  it("caches per account independently", async () => {
     const requestFn = setupClient({
       code: 0,
       bot: { bot_name: "Bot1", open_id: "ou_1" },
@@ -134,8 +134,42 @@ describe("probeFeishu", () => {
     await probeFeishu({ appId: "cli_bbb", appSecret: "s2" });
     expect(requestFn).toHaveBeenCalledTimes(2);
 
-    // Same appId as first call should return cached
+    // Same appId + appSecret as first call should return cached
     await probeFeishu({ appId: "cli_aaa", appSecret: "s1" });
+    expect(requestFn).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not share cache between accounts with same appId but different appSecret", async () => {
+    const requestFn = setupClient({
+      code: 0,
+      bot: { bot_name: "Bot1", open_id: "ou_1" },
+    });
+
+    // First account with appId + secret A
+    await probeFeishu({ appId: "cli_shared", appSecret: "secret_aaa" });
+    expect(requestFn).toHaveBeenCalledTimes(1);
+
+    // Second account with same appId but different secret (e.g. after rotation)
+    // must NOT reuse the cached result
+    await probeFeishu({ appId: "cli_shared", appSecret: "secret_bbb" });
+    expect(requestFn).toHaveBeenCalledTimes(2);
+  });
+
+  it("uses accountId for cache key when available", async () => {
+    const requestFn = setupClient({
+      code: 0,
+      bot: { bot_name: "Bot1", open_id: "ou_1" },
+    });
+
+    // Two accounts with same appId+appSecret but different accountIds are cached separately
+    await probeFeishu({ accountId: "acct-1", appId: "cli_123", appSecret: "secret" });
+    expect(requestFn).toHaveBeenCalledTimes(1);
+
+    await probeFeishu({ accountId: "acct-2", appId: "cli_123", appSecret: "secret" });
+    expect(requestFn).toHaveBeenCalledTimes(2);
+
+    // Same accountId should return cached
+    await probeFeishu({ accountId: "acct-1", appId: "cli_123", appSecret: "secret" });
     expect(requestFn).toHaveBeenCalledTimes(2);
   });
 

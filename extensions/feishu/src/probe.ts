@@ -17,8 +17,11 @@ export async function probeFeishu(creds?: FeishuClientCredentials): Promise<Feis
     };
   }
 
-  // Return cached result if still valid
-  const cacheKey = creds.appId;
+  // Return cached result if still valid.
+  // Use accountId when available; otherwise include appSecret prefix so two
+  // accounts sharing the same appId (e.g. after secret rotation) don't
+  // pollute each other's cache entry.
+  const cacheKey = creds.accountId ?? `${creds.appId}:${creds.appSecret.slice(0, 8)}`;
   const cached = probeCache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) {
     return cached.result;
