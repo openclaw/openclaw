@@ -173,6 +173,43 @@ class GatewaySession(
     throw IllegalStateException("${err?.code ?: "UNAVAILABLE"}: ${err?.message ?: "request failed"}")
   }
 
+  suspend fun refreshNodeCanvasCapability(timeoutMs: Long = 8_000): Boolean {
+    val conn = currentConnection ?: return false
+    val response =
+      try {
+        conn.request("node.canvas.capability.refresh", params = null, timeoutMs = timeoutMs)
+      } catch (err: Throwable) {
+        Log.w("OpenClawGateway", "node.canvas.capability.refresh failed: ${err.message ?: err::class.java.simpleName}")
+        return false
+      }
+    if (!response.ok) {
+      val err = response.error
+      Log.w(
+        "OpenClawGateway",
+        "node.canvas.capability.refresh rejected: ${err?.code ?: "UNAVAILABLE"}: ${err?.message ?: "request failed"}",
+      )
+      return false
+    }
+    val payloadObj = response.payloadJson?.let(::parseJsonOrNull)?.asObjectOrNull()
+    val refreshedCapability = payloadObj?.get("canvasCapability").asStringOrNull()?.trim().orEmpty()
+    if (refreshedCapability.isEmpty()) {
+      Log.w("OpenClawGateway", "node.canvas.capability.refresh missing canvasCapability")
+      return false
+    }
+    val scopedCanvasHostUrl = canvasHostUrl?.trim().orEmpty()
+    if (scopedCanvasHostUrl.isEmpty()) {
+      Log.w("OpenClawGateway", "node.canvas.capability.refresh missing local canvasHostUrl")
+      return false
+    }
+    val refreshedUrl = replaceCanvasCapabilityInScopedHostUrl(scopedCanvasHostUrl, refreshedCapability)
+    if (refreshedUrl == null) {
+      Log.w("OpenClawGateway", "node.canvas.capability.refresh unable to rewrite scoped canvas URL")
+      return false
+    }
+    canvasHostUrl = refreshedUrl
+    return true
+  }
+
   private data class RpcResponse(val id: String, val ok: Boolean, val payloadJson: String?, val error: ErrorShape?)
 
   private inner class Connection(
@@ -695,6 +732,19 @@ private fun parseJsonOrNull(payload: String): JsonElement? {
   } catch (_: Throwable) {
     null
   }
+}
+
+private fun replaceCanvasCapabilityInScopedHostUrl(
+  scopedUrl: String,
+  capability: String,
+): String? {
+  val marker = "/__openclaw__/cap/"
+  val markerStart = scopedUrl.indexOf(marker)
+  if (markerStart < 0) return null
+  val capabilityStart = markerStart + marker.length
+  val capabilityEnd = scopedUrl.indexOf("/", capabilityStart)
+  if (capabilityEnd <= capabilityStart) return null
+  return scopedUrl.substring(0, capabilityStart) + capability + scopedUrl.substring(capabilityEnd)
 }
 
 internal fun resolveInvokeResultAckTimeoutMs(invokeTimeoutMs: Long?): Long {
