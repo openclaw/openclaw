@@ -65,6 +65,10 @@ export class ReplyChainEnforcer {
 
       const sessionKey = evt.sessionKey;
       if (!sessionKey) {
+        this.logger.debug?.("raw-listener: no sessionKey", {
+          runId: evt.runId?.slice(0, 8),
+          stream: evt.stream,
+        });
         return;
       }
 
@@ -76,6 +80,19 @@ export class ReplyChainEnforcer {
         } else {
           this.runBuffers.set(evt.runId, { sessionKey, text: evt.data.text });
         }
+        return;
+      }
+
+      // Handle explicit signoff events (emitted when parseReplyDirectives strips
+      // a silent reply token like NO_REPLY or HEARTBEAT_OK)
+      if (evt.stream === "signoff" && evt.data?.token) {
+        this.logger.info("DISARM (signoff event received)", {
+          key: sessionKey,
+          token: evt.data.token,
+        });
+        this.rawSignOffSessions.add(sessionKey);
+        this.setState(sessionKey, "disarmed", "Agent sign-off (signoff event)");
+        this.runBuffers.delete(evt.runId);
         return;
       }
 
@@ -121,9 +138,10 @@ export class ReplyChainEnforcer {
             trimmed === "HEARTBEAT_OK" ||
             SIGN_OFF_TOKENS.includes(trimmed);
           if (isSignOff) {
-            this.logger.info("DISARM (sign-off detected in raw stream)", {
+            this.logger.info("DISARM (sign-off prefix match in raw stream — fallback)", {
               key: buf.sessionKey,
-              textTail: trimmed.slice(-30),
+              buffer: trimmed.slice(-30),
+              len: trimmed.length,
             });
             this.rawSignOffSessions.add(buf.sessionKey);
             this.setState(buf.sessionKey, "disarmed", "Agent sign-off (raw stream)");
