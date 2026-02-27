@@ -351,7 +351,8 @@ export function triggerOpenClawRestart(): RestartAttempt {
 
   // kickstart fails when the service was previously booted out (deregistered from launchd).
   // Fall back to bootstrap (re-register from plist) + kickstart.
-  const home = os.homedir();
+  // Use env HOME to match how launchd.ts resolves the plist install path.
+  const home = process.env.HOME?.trim() || os.homedir();
   const plistPath = path.join(home, "Library", "LaunchAgents", `${label}.plist`);
   const bootstrapArgs = ["bootstrap", domain, plistPath];
   tried.push(`launchctl ${bootstrapArgs.join(" ")}`);
