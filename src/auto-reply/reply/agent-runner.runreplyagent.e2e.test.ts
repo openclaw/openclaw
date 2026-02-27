@@ -78,6 +78,7 @@ vi.mock("../../agents/cli-runner.js", () => ({
 
 vi.mock("./queue.js", () => ({
   enqueueFollowupRun: vi.fn(),
+  getFollowupQueueDepth: vi.fn(() => 0),
   scheduleFollowupDrain: vi.fn(),
 }));
 
