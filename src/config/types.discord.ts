@@ -252,6 +252,8 @@ export type DiscordAccountConfig = {
   actions?: DiscordActionConfig;
   /** Control reply threading when reply tags are present (off|first|all). */
   replyToMode?: ReplyToMode;
+  /** Milliseconds before a Discord listener is considered slow (default: 30000). */
+  slowListenerThresholdMs?: number;
   /**
    * Alias for dm.policy (prefer this so it inherits cleanly via base->account shallow merge).
    * Legacy key: channels.discord.dm.policy.

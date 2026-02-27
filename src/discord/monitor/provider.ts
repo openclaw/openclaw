@@ -591,7 +591,11 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       discordRestFetch,
     });
 
-    registerDiscordListener(client.listeners, new DiscordMessageListener(messageHandler, logger));
+    const slowListenerThresholdMs = discordCfg.slowListenerThresholdMs;
+    registerDiscordListener(
+      client.listeners,
+      new DiscordMessageListener(messageHandler, logger, slowListenerThresholdMs),
+    );
     registerDiscordListener(
       client.listeners,
       new DiscordReactionListener({
@@ -608,6 +612,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
         allowNameMatching: isDangerousNameMatchingEnabled(discordCfg),
         guildEntries,
         logger,
+        slowListenerThresholdMs,
       }),
     );
     registerDiscordListener(
@@ -626,6 +631,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
         allowNameMatching: isDangerousNameMatchingEnabled(discordCfg),
         guildEntries,
         logger,
+        slowListenerThresholdMs,
       }),
     );
 

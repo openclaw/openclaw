@@ -54,9 +54,10 @@ type DiscordReactionListenerParams = {
   allowNameMatching: boolean;
   guildEntries?: Record<string, import("./allow-list.js").DiscordGuildEntryResolved>;
   logger: Logger;
+  slowListenerThresholdMs?: number;
 };
 
-const DISCORD_SLOW_LISTENER_THRESHOLD_MS = 30_000;
+const DISCORD_SLOW_LISTENER_THRESHOLD_MS_DEFAULT = 30_000;
 const discordEventQueueLog = createSubsystemLogger("discord/event-queue");
 
 function logSlowDiscordListener(params: {
@@ -64,8 +65,12 @@ function logSlowDiscordListener(params: {
   listener: string;
   event: string;
   durationMs: number;
+  slowListenerThresholdMs?: number;
 }) {
-  if (params.durationMs < DISCORD_SLOW_LISTENER_THRESHOLD_MS) {
+  if (
+    params.durationMs <
+    (params.slowListenerThresholdMs ?? DISCORD_SLOW_LISTENER_THRESHOLD_MS_DEFAULT)
+  ) {
     return;
   }
   const duration = formatDurationSeconds(params.durationMs, {
@@ -89,6 +94,7 @@ async function runDiscordListenerWithSlowLog(params: {
   event: string;
   run: () => Promise<void>;
   onError?: (err: unknown) => void;
+  slowListenerThresholdMs?: number;
 }) {
   const startedAt = Date.now();
   try {
@@ -105,6 +111,7 @@ async function runDiscordListenerWithSlowLog(params: {
       listener: params.listener,
       event: params.event,
       durationMs: Date.now() - startedAt,
+      slowListenerThresholdMs: params.slowListenerThresholdMs,
     });
   }
 }
@@ -121,6 +128,7 @@ export class DiscordMessageListener extends MessageCreateListener {
   constructor(
     private handler: DiscordMessageHandler,
     private logger?: Logger,
+    private slowListenerThresholdMs?: number,
   ) {
     super();
   }
@@ -135,6 +143,7 @@ export class DiscordMessageListener extends MessageCreateListener {
         const logger = this.logger ?? discordEventQueueLog;
         logger.error(danger(`discord handler failed: ${String(err)}`));
       },
+      slowListenerThresholdMs: this.slowListenerThresholdMs,
     });
   }
 }
@@ -185,6 +194,7 @@ async function runDiscordReactionHandler(params: {
     logger: params.handlerParams.logger,
     listener: params.listener,
     event: params.event,
+    slowListenerThresholdMs: params.handlerParams.slowListenerThresholdMs,
     run: () =>
       handleDiscordReactionEvent({
         data: params.data,
