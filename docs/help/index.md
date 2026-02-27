@@ -15,6 +15,7 @@ If you want a quick “get unstuck” flow, start here:
 - **Gateway issues:** [Gateway troubleshooting](/gateway/troubleshooting)
 - **Logs:** [Logging](/logging) and [Gateway logging](/gateway/logging)
 - **Repairs:** [Doctor](/gateway/doctor)
+- **RAG / agent debugging:** [RAG and Agent Debugging Checklist](/help/rag-debugging)
 
 If you’re looking for conceptual questions (not “something broke”):
 
