@@ -17,6 +17,9 @@ OpenClaw includes Vivgrid as a built-in provider.
 - Default model ref: `vivgrid/auto`
 - Default API mode: `openai-completions`
 
+Built-in Vivgrid fallback catalog keeps only `vivgrid/auto` for maximum compatibility.
+Responses-only or Claude models are populated from dynamic discovery and mapped with model-level `api`.
+
 ## Quick start
 
 ```bash
@@ -36,7 +39,47 @@ This sets `agents.defaults.model.primary` to `vivgrid/auto`.
 
 ## API mode
 
-OpenClaw uses `openai-completions` for Vivgrid by default. If you need Responses API routing, set `api` to `openai-responses`:
+OpenClaw uses provider-level default `openai-completions`, and also supports model-level API override.
+Use this pattern when some models (for example codex-style models) require Responses API while others still use Completions API.
+
+## Dynamic model discovery
+
+OpenClaw attempts to discover Vivgrid models dynamically from `GET /v1/models` when Vivgrid is enabled.
+
+- On success, discovered models are used as the provider catalog.
+- On failure or empty result, OpenClaw falls back to built-in default (`auto`).
+- Vivgrid `/models` currently returns model ids only in most environments.
+- OpenClaw maps model-level API primarily by model id naming rules:
+  - ids containing `codex` -> `openai-responses`
+  - ids containing `claude` -> `anthropic-messages`
+  - others -> provider default (`openai-completions`)
+- If Vivgrid later returns capability metadata, OpenClaw also uses it as an additional signal.
+
+```json5
+{
+  models: {
+    providers: {
+      vivgrid: {
+        api: "openai-completions",
+        baseUrl: "https://api.vivgrid.com/v1",
+        models: [
+          { id: "auto", name: "Vivgrid Auto", reasoning: true, input: ["text"] },
+          { id: "gpt-codex", name: "gpt-codex", api: "openai-responses", reasoning: true },
+        ],
+      },
+    },
+  },
+  agents: {
+    defaults: {
+      model: {
+        primary: "vivgrid/gpt-codex",
+      },
+    },
+  },
+}
+```
+
+If all your Vivgrid models should use Responses API, set provider-level `api` directly:
 
 ```json5
 {

@@ -150,7 +150,8 @@ What you set:
 
     Sets `agents.defaults.model` to `vivgrid/auto` by default and configures `models.providers.vivgrid.api` as `openai-completions`.
 
-    If you prefer Responses API behavior, set `models.providers.vivgrid.api` to `openai-responses`.
+    You can keep provider default as Completions and override specific models to Responses with model-level `api`.
+    For agent-type projects, fallback catalog keeps only `vivgrid/auto`; codex/claude models are populated from dynamic discovery.
 
     More detail: [Vivgrid](/providers/vivgrid).
 
