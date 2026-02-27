@@ -26,6 +26,7 @@ import type {
   PluginHookGatewayContext,
   PluginHookGatewayStartEvent,
   PluginHookGatewayStopEvent,
+  PluginHookCronExecutionEvent,
   PluginHookMessageContext,
   PluginHookMessageReceivedEvent,
   PluginHookMessageSendingEvent,
@@ -695,6 +696,17 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     return runVoidHook("gateway_stop", event, ctx);
   }
 
+  /**
+   * Run cron_execution hook.
+   * Runs in parallel (fire-and-forget).
+   */
+  async function runCronExecution(
+    event: PluginHookCronExecutionEvent,
+    ctx: PluginHookGatewayContext,
+  ): Promise<void> {
+    return runVoidHook("cron_execution", event, ctx);
+  }
+
   // =========================================================================
   // Utility
   // =========================================================================
@@ -744,6 +756,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     // Gateway hooks
     runGatewayStart,
     runGatewayStop,
+    runCronExecution,
     // Utility
     hasHooks,
     getHookCount,

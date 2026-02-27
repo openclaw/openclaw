@@ -213,21 +213,24 @@ export function buildGatewayCronService(params: {
         // Dispatch cron_execution hook for plugins
         const hookRunner = getGlobalHookRunner();
         if (hookRunner?.hasHooks("cron_execution")) {
-          const success = evt.status === "completed" && !evt.error;
+          const success = evt.status === "ok" && !evt.error;
           hookRunner
-            .runVoidHook("cron_execution", {
-              jobId: evt.jobId,
-              cronName: job?.name ?? evt.jobId,
-              success,
-              durationMs: evt.durationMs,
-              status: evt.status,
-              error: evt.error,
-              sessionId: evt.sessionId,
-            }, {})
-            .catch((err) => {
+            .runCronExecution(
+              {
+                jobId: evt.jobId,
+                cronName: job?.name ?? evt.jobId,
+                success,
+                durationMs: evt.durationMs,
+                status: evt.status,
+                error: evt.error,
+                sessionId: evt.sessionId,
+              },
+              {},
+            )
+            .catch((err: unknown) => {
               cronLogger.warn(
                 { jobId: evt.jobId, error: String(err) },
-                "cron_execution hook failed"
+                "cron_execution hook failed",
               );
             });
         }
