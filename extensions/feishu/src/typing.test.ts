@@ -36,11 +36,11 @@ describe("isFeishuBackoffError", () => {
     expect(isFeishuBackoffError(new Error("network timeout"))).toBe(false);
   });
 
-  it("returns false for null", () => {
+  it("returns undefined for null", () => {
     expect(isFeishuBackoffError(null)).toBe(false);
   });
 
-  it("returns false for undefined", () => {
+  it("returns undefined for undefined", () => {
     expect(isFeishuBackoffError(undefined)).toBe(false);
   });
 
@@ -55,35 +55,35 @@ describe("isFeishuBackoffError", () => {
 });
 
 describe("getBackoffCodeFromResponse", () => {
-  it("returns true for response with quota exceeded code", () => {
+  it("returns backoff code for response with quota exceeded code", () => {
     const response = { code: 99991403, msg: "quota exceeded", data: null };
     expect(getBackoffCodeFromResponse(response)).toBe(response.code);
   });
 
-  it("returns true for response with rate limit code", () => {
+  it("returns backoff code for response with rate limit code", () => {
     const response = { code: 99991400, msg: "rate limit", data: null };
     expect(getBackoffCodeFromResponse(response)).toBe(response.code);
   });
 
-  it("returns false for successful response (code 0)", () => {
+  it("returns undefined for successful response (code 0)", () => {
     const response = { code: 0, msg: "success", data: { reaction_id: "r1" } };
     expect(getBackoffCodeFromResponse(response)).toBeUndefined();
   });
 
-  it("returns false for other error codes", () => {
+  it("returns undefined for other error codes", () => {
     const response = { code: 99991401, msg: "other error", data: null };
     expect(getBackoffCodeFromResponse(response)).toBeUndefined();
   });
 
-  it("returns false for null", () => {
+  it("returns undefined for null", () => {
     expect(getBackoffCodeFromResponse(null)).toBeUndefined();
   });
 
-  it("returns false for undefined", () => {
+  it("returns undefined for undefined", () => {
     expect(getBackoffCodeFromResponse(undefined)).toBeUndefined();
   });
 
-  it("returns false for response without code field", () => {
+  it("returns undefined for response without code field", () => {
     const response = { data: { reaction_id: "r1" } };
     expect(getBackoffCodeFromResponse(response)).toBeUndefined();
   });
