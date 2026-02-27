@@ -243,7 +243,7 @@ describe("gateway plugin HTTP auth boundary", () => {
     });
   });
 
-  test("requires gateway auth for /api/channels/* plugin routes and allows authenticated pass-through", async () => {
+  test("requires gateway auth for all plugin routes and allows authenticated pass-through", async () => {
     const resolvedAuth: ResolvedGatewayAuth = {
       mode: "token",
       token: "test-token",
@@ -328,10 +328,10 @@ describe("gateway plugin HTTP auth boundary", () => {
           createRequest({ path: "/plugin/public" }),
           unauthenticatedPublic.res,
         );
-        expect(unauthenticatedPublic.res.statusCode).toBe(200);
-        expect(unauthenticatedPublic.getBody()).toContain('"route":"public"');
+        expect(unauthenticatedPublic.res.statusCode).toBe(401);
+        expect(unauthenticatedPublic.getBody()).toContain("Unauthorized");
 
-        expect(handlePluginRequest).toHaveBeenCalledTimes(2);
+        expect(handlePluginRequest).toHaveBeenCalledTimes(1);
       },
     });
   });

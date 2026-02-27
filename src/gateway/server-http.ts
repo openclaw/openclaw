@@ -60,7 +60,6 @@ import { getBearerToken } from "./http-utils.js";
 import { handleOpenAiHttpRequest } from "./openai-http.js";
 import { handleOpenResponsesHttpRequest } from "./openresponses-http.js";
 import { GATEWAY_CLIENT_MODES, normalizeGatewayClientMode } from "./protocol/client-info.js";
-import { isProtectedPluginRoutePath } from "./security-path.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { handleToolsInvokeHttpRequest } from "./tools-invoke-http.js";
 
@@ -172,7 +171,6 @@ async function authorizeCanvasRequest(params: {
 }
 
 async function enforcePluginRouteGatewayAuth(params: {
-  requestPath: string;
   req: IncomingMessage;
   res: ServerResponse;
   auth: ResolvedGatewayAuth;
@@ -180,9 +178,6 @@ async function enforcePluginRouteGatewayAuth(params: {
   allowRealIpFallback: boolean;
   rateLimiter?: AuthRateLimiter;
 }): Promise<boolean> {
-  if (!isProtectedPluginRoutePath(params.requestPath)) {
-    return true;
-  }
   const token = getBearerToken(params.req);
   const authResult = await authorizeHttpGatewayConnect({
     auth: params.auth,
@@ -532,7 +527,6 @@ export function createGatewayHttpServer(opts: {
         // Non-protected plugin routes remain plugin-owned and must enforce
         // their own auth when exposing sensitive functionality.
         const pluginAuthOk = await enforcePluginRouteGatewayAuth({
-          requestPath,
           req,
           res,
           auth: resolvedAuth,
