@@ -148,6 +148,8 @@ import {
   NodePairListParamsSchema,
   type NodePairRejectParams,
   NodePairRejectParamsSchema,
+  type NodePairRemoveParams,
+  NodePairRemoveParamsSchema,
   type NodePairRequestParams,
   NodePairRequestParamsSchema,
   type NodePairVerifyParams,
@@ -268,6 +270,9 @@ export const validateNodePairApproveParams = ajv.compile<NodePairApproveParams>(
 );
 export const validateNodePairRejectParams = ajv.compile<NodePairRejectParams>(
   NodePairRejectParamsSchema,
+);
+export const validateNodePairRemoveParams = ajv.compile<NodePairRemoveParams>(
+  NodePairRemoveParamsSchema,
 );
 export const validateNodePairVerifyParams = ajv.compile<NodePairVerifyParams>(
   NodePairVerifyParamsSchema,
@@ -438,6 +443,7 @@ export {
   NodePairListParamsSchema,
   NodePairApproveParamsSchema,
   NodePairRejectParamsSchema,
+  NodePairRemoveParamsSchema,
   NodePairVerifyParamsSchema,
   NodeListParamsSchema,
   NodeInvokeParamsSchema,
@@ -580,6 +586,7 @@ export type {
   SkillsInstallParams,
   SkillsUpdateParams,
   NodePairRejectParams,
+  NodePairRemoveParams,
   NodePairVerifyParams,
   NodeListParams,
   NodeInvokeParams,

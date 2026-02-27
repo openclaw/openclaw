@@ -71,6 +71,46 @@ export function registerNodesPairingCommands(nodes: Command) {
 
   nodesCallOpts(
     nodes
+      .command("unpair")
+      .description("Remove a paired node (prune orphaned or stale entries)")
+      .requiredOption("--node <idOrNameOrIp>", "Node id, name, or IP")
+      .action(async (opts: NodesRpcOpts) => {
+        await runNodesCommand("unpair", async () => {
+          const raw = String(opts.node ?? "").trim();
+          if (!raw) {
+            defaultRuntime.error("--node required");
+            defaultRuntime.exit(1);
+            return;
+          }
+          // Orphaned nodes may not appear in node.list, so fall back to the
+          // raw value when the node is simply not found. Re-throw ambiguity
+          // and transport/auth errors so the user gets actionable feedback.
+          let nodeId: string;
+          try {
+            nodeId = await resolveNodeId(opts, raw);
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            if (msg.startsWith("unknown node:")) {
+              nodeId = raw;
+            } else {
+              throw err;
+            }
+          }
+          const result = await callGatewayCli("node.pair.remove", opts, {
+            nodeId,
+          });
+          if (opts.json) {
+            defaultRuntime.log(JSON.stringify(result, null, 2));
+            return;
+          }
+          const { ok } = getNodesTheme();
+          defaultRuntime.log(ok(`node unpaired: ${nodeId}`));
+        });
+      }),
+  );
+
+  nodesCallOpts(
+    nodes
       .command("rename")
       .description("Rename a paired node (display name override)")
       .requiredOption("--node <idOrNameOrIp>", "Node id, name, or IP")

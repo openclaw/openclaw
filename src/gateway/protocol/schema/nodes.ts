@@ -31,6 +31,11 @@ export const NodePairRejectParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const NodePairRemoveParamsSchema = Type.Object(
+  { nodeId: NonEmptyString },
+  { additionalProperties: false },
+);
+
 export const NodePairVerifyParamsSchema = Type.Object(
   { nodeId: NonEmptyString, token: NonEmptyString },
   { additionalProperties: false },

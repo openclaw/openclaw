@@ -61,6 +61,7 @@ const BASE_METHODS = [
   "node.pair.list",
   "node.pair.approve",
   "node.pair.reject",
+  "node.pair.remove",
   "node.pair.verify",
   "device.pair.list",
   "device.pair.approve",

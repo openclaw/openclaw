@@ -5,6 +5,7 @@ import { describe, expect, test } from "vitest";
 import {
   approveNodePairing,
   getPairedNode,
+  removePairedNode,
   requestNodePairing,
   verifyNodeToken,
 } from "./node-pairing.js";
@@ -78,5 +79,20 @@ describe("node pairing tokens", () => {
     await expect(verifyNodeToken("node-1", multibyteToken, baseDir)).resolves.toEqual({
       ok: false,
     });
+  });
+
+  test("removePairedNode removes an existing paired node", async () => {
+    const baseDir = await mkdtemp(join(tmpdir(), "openclaw-node-pairing-"));
+    await setupPairedNode(baseDir);
+    const removed = await removePairedNode("node-1", baseDir);
+    expect(removed).toEqual({ nodeId: "node-1" });
+    const after = await getPairedNode("node-1", baseDir);
+    expect(after).toBeNull();
+  });
+
+  test("removePairedNode returns null for unknown nodeId", async () => {
+    const baseDir = await mkdtemp(join(tmpdir(), "openclaw-node-pairing-"));
+    const removed = await removePairedNode("nonexistent", baseDir);
+    expect(removed).toBeNull();
   });
 });
