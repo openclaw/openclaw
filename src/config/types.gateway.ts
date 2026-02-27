@@ -388,6 +388,8 @@ export type GatewayConfig = {
 export type MarketplaceConfig = {
   /** Whether the marketplace is enabled on this gateway. Default: false. */
   enabled?: boolean;
+  /** When true, marketplace returns "coming soon" instead of processing requests. */
+  comingSoon?: boolean;
   /** Platform fee percentage taken from each transaction (0-100). Default: 20. */
   platformFeePct?: number;
   /**

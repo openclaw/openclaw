@@ -24,7 +24,13 @@ import { marketplaceEventBus, type MarketplaceProxyEvent } from "./marketplace/e
 import { resolveTenantContext } from "./tenant-context.js";
 
 const MARKETPLACE_PATH = "/v1/marketplace/completions";
+const MARKETPLACE_STATUS_PATH = "/v1/marketplace/status";
 const PROXY_TIMEOUT_MS = 120_000;
+
+/** When true, marketplace returns "coming soon" instead of processing requests. */
+function isComingSoonMode(config: MarketplaceConfig): boolean {
+  return config.comingSoon === true;
+}
 
 export type MarketplaceHttpOptions = {
   auth: ResolvedGatewayAuth;
@@ -45,6 +51,27 @@ export async function handleMarketplaceHttpRequest(
   res: ServerResponse,
   opts: MarketplaceHttpOptions,
 ): Promise<boolean> {
+  const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
+
+  // GET /v1/marketplace/status — public status endpoint (no auth required).
+  if (url.pathname === MARKETPLACE_STATUS_PATH && req.method === "GET") {
+    const comingSoon = isComingSoonMode(opts.marketplaceConfig);
+    sendJson(res, 200, {
+      marketplace: {
+        status: comingSoon ? "coming_soon" : "live",
+        requestAccess: comingSoon ? "https://market.hanzo.bot/waitlist" : undefined,
+        onChain: true,
+        chain: { id: 36963, name: "Hanzo" },
+        features: [
+          "P2P compute sharing — earn from idle Claude capacity",
+          "On-chain settlement via $AI token",
+          "10% bonus for $AI token payouts",
+        ],
+      },
+    });
+    return true;
+  }
+
   // Use the shared endpoint helper for path matching, auth, and JSON parsing.
   const handled = await handleGatewayPostJsonEndpoint(req, res, {
     pathname: MARKETPLACE_PATH,
@@ -57,6 +84,18 @@ export async function handleMarketplaceHttpRequest(
     return false;
   }
   if (!handled) {
+    return true;
+  }
+
+  // Gate: marketplace coming soon mode — return waitlist info instead of processing.
+  if (isComingSoonMode(opts.marketplaceConfig)) {
+    sendJson(res, 503, {
+      error: {
+        message: "P2P Compute Marketplace is coming soon. Request early access at market.hanzo.bot",
+        type: "marketplace_coming_soon",
+      },
+      requestAccess: "https://market.hanzo.bot/waitlist",
+    });
     return true;
   }
 

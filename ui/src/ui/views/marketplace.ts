@@ -10,9 +10,73 @@ export type MarketplaceProps = {
 
 export function renderMarketplace(props: MarketplaceProps) {
   return html`
+    ${renderComingSoon()}
     ${renderMarketplaceOverview(props)}
     ${props.status?.enabled ? renderPricing(props.status) : nothing}
     ${props.status?.enabled ? renderSellers(props) : nothing}
+  `;
+}
+
+function renderComingSoon() {
+  return html`
+    <section class="card" style="text-align: center; padding: 32px">
+      <div style="font-size: 28px; font-weight: 800; margin-bottom: 8px">P2P Compute Marketplace</div>
+      <div class="muted" style="font-size: 15px; max-width: 480px; margin: 0 auto 24px">
+        Share idle Claude capacity and earn $AI tokens. Buyers get cheaper API access, sellers monetize
+        unused compute. All settlement on-chain.
+      </div>
+      <div style="display: flex; gap: 12px; justify-content: center; flex-wrap: wrap">
+        <a
+          href="https://market.hanzo.bot/waitlist"
+          target="_blank"
+          rel="noopener"
+          class="btn"
+          style="
+            background: var(--ok);
+            color: #000;
+            font-weight: 700;
+            padding: 10px 24px;
+            border-radius: var(--radius-md);
+            text-decoration: none;
+            font-size: 14px;
+          "
+        >
+          Request Early Access
+        </a>
+        <a
+          href="https://market.hanzo.bot"
+          target="_blank"
+          rel="noopener"
+          class="btn"
+          style="
+            padding: 10px 24px;
+            border-radius: var(--radius-md);
+            text-decoration: none;
+            font-size: 14px;
+          "
+        >
+          Learn More
+        </a>
+      </div>
+      <div style="margin-top: 24px; display: flex; gap: 24px; justify-content: center; flex-wrap: wrap">
+        <div style="text-align: center">
+          <div style="font-size: 18px; font-weight: 700">40%</div>
+          <div class="muted" style="font-size: 11px">Buyer Savings</div>
+        </div>
+        <div style="text-align: center">
+          <div style="font-size: 18px; font-weight: 700">40%</div>
+          <div class="muted" style="font-size: 11px">Seller Earnings</div>
+        </div>
+        <div style="text-align: center">
+          <div style="font-size: 18px; font-weight: 700">10%</div>
+          <div class="muted" style="font-size: 11px">$AI Token Bonus</div>
+        </div>
+        <div style="text-align: center">
+          <div style="font-size: 18px; font-weight: 700">On-Chain</div>
+          <div class="muted" style="font-size: 11px">Settlement</div>
+        </div>
+      </div>
+    </section>
   `;
 }
 
