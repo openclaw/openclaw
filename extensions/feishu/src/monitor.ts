@@ -27,9 +27,11 @@ const FEISHU_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
 const FEISHU_WEBHOOK_BODY_TIMEOUT_MS = 30_000;
 const FEISHU_WEBHOOK_RATE_LIMIT_WINDOW_MS = 60_000;
 const FEISHU_WEBHOOK_RATE_LIMIT_MAX_REQUESTS = 120;
+const FEISHU_WEBHOOK_RATE_LIMIT_MAX_TRACKED_KEYS = 4_096;
 const FEISHU_WEBHOOK_COUNTER_LOG_EVERY = 25;
 const feishuWebhookRateLimits = new Map<string, { count: number; windowStartMs: number }>();
 const feishuWebhookStatusCounters = new Map<string, number>();
+let lastWebhookRateLimitCleanupMs = 0;
 
 function isJsonContentType(value: string | string[] | undefined): boolean {
   const first = Array.isArray(value) ? value[0] : value;
@@ -40,10 +42,47 @@ function isJsonContentType(value: string | string[] | undefined): boolean {
   return mediaType === "application/json" || Boolean(mediaType?.endsWith("+json"));
 }
 
-function isWebhookRateLimited(key: string, nowMs: number): boolean {
+function trimWebhookRateLimitState(): void {
+  while (feishuWebhookRateLimits.size > FEISHU_WEBHOOK_RATE_LIMIT_MAX_TRACKED_KEYS) {
+    const oldestKey = feishuWebhookRateLimits.keys().next().value;
+    if (typeof oldestKey !== "string") {
+      break;
+    }
+    feishuWebhookRateLimits.delete(oldestKey);
+  }
+}
+
+function maybePruneWebhookRateLimitState(nowMs: number): void {
+  if (
+    feishuWebhookRateLimits.size === 0 ||
+    nowMs - lastWebhookRateLimitCleanupMs < FEISHU_WEBHOOK_RATE_LIMIT_WINDOW_MS
+  ) {
+    return;
+  }
+  lastWebhookRateLimitCleanupMs = nowMs;
+  for (const [key, state] of feishuWebhookRateLimits) {
+    if (nowMs - state.windowStartMs >= FEISHU_WEBHOOK_RATE_LIMIT_WINDOW_MS) {
+      feishuWebhookRateLimits.delete(key);
+    }
+  }
+}
+
+export function clearFeishuWebhookRateLimitStateForTest(): void {
+  feishuWebhookRateLimits.clear();
+  lastWebhookRateLimitCleanupMs = 0;
+}
+
+export function getFeishuWebhookRateLimitStateSizeForTest(): number {
+  return feishuWebhookRateLimits.size;
+}
+
+export function isWebhookRateLimitedForTest(key: string, nowMs: number): boolean {
+  maybePruneWebhookRateLimitState(nowMs);
+
   const state = feishuWebhookRateLimits.get(key);
   if (!state || nowMs - state.windowStartMs >= FEISHU_WEBHOOK_RATE_LIMIT_WINDOW_MS) {
     feishuWebhookRateLimits.set(key, { count: 1, windowStartMs: nowMs });
+    trimWebhookRateLimitState();
     return false;
   }
 
@@ -52,6 +91,10 @@ function isWebhookRateLimited(key: string, nowMs: number): boolean {
     return true;
   }
   return false;
+}
+
+function isWebhookRateLimited(key: string, nowMs: number): boolean {
+  return isWebhookRateLimitedForTest(key, nowMs);
 }
 
 function recordWebhookStatus(
