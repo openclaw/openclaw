@@ -45,14 +45,18 @@ function hasAuthForProvider(
   provider: string,
   cfg: OpenClawConfig,
   store: ReturnType<typeof ensureAuthProfileStore>,
-) {
-  if (listProfilesForProvider(store, provider).length > 0) {
+): boolean {
+  // Map plan providers to their base providers for auth lookup
+  // e.g., "volcengine-plan" -> "volcengine", "byteplus-plan" -> "byteplus"
+  const authProvider = provider.replace(/-plan$/, "");
+
+  if (listProfilesForProvider(store, authProvider).length > 0) {
     return true;
   }
-  if (resolveEnvApiKey(provider)) {
+  if (resolveEnvApiKey(authProvider)) {
     return true;
   }
-  if (getCustomProviderApiKey(cfg, provider)) {
+  if (getCustomProviderApiKey(cfg, authProvider)) {
     return true;
   }
   return false;
@@ -178,6 +182,7 @@ export async function promptDefaultModel(
   params: PromptDefaultModelParams,
 ): Promise<PromptDefaultModelResult> {
   const cfg = params.config;
+  const agentDir = params.agentDir;
   const allowKeep = params.allowKeep ?? true;
   const includeManual = params.includeManual ?? true;
   const includeVllm = params.includeVllm ?? false;
@@ -187,6 +192,9 @@ export async function promptDefaultModel(
     ? normalizeProviderId(preferredProviderRaw)
     : undefined;
   const configuredRaw = resolveConfiguredModelRaw(cfg);
+
+  // Create auth checker early to avoid duplicate creation and enable reuse
+  const hasAuth = createProviderAuthChecker({ cfg, agentDir });
 
   const resolved = resolveConfiguredModelRef({
     cfg,
@@ -211,12 +219,19 @@ export async function promptDefaultModel(
   });
   let models = catalog;
   if (!ignoreAllowlist) {
-    const { allowedCatalog } = buildAllowedModelSet({
+    const { allowAny, allowedCatalog } = buildAllowedModelSet({
       cfg,
       catalog,
       defaultProvider: DEFAULT_PROVIDER,
     });
-    models = allowedCatalog.length > 0 ? allowedCatalog : catalog;
+    if (allowAny) {
+      // When no allowlist is configured, filter to show only models from
+      // providers that have authentication configured. This prevents showing
+      // unavailable models in the TUI picker.
+      models = catalog.filter((entry) => hasAuth(entry.provider));
+    } else if (allowedCatalog.length > 0) {
+      models = allowedCatalog;
+    }
   }
 
   if (models.length === 0) {
@@ -268,9 +283,6 @@ export async function promptDefaultModel(
       models = models.filter((entry) => !isAnthropicLegacyModel(entry));
     }
   }
-
-  const agentDir = params.agentDir;
-  const hasAuth = createProviderAuthChecker({ cfg, agentDir });
 
   const options: WizardSelectOption[] = [];
   if (allowKeep) {

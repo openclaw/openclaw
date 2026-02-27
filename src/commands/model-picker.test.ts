@@ -19,7 +19,9 @@ const ensureAuthProfileStore = vi.hoisted(() =>
     profiles: {},
   })),
 );
-const listProfilesForProvider = vi.hoisted(() => vi.fn(() => []));
+const listProfilesForProvider = vi.hoisted(() =>
+  vi.fn((_store: unknown, _provider: string) => [] as string[]),
+);
 const upsertAuthProfile = vi.hoisted(() => vi.fn());
 const upsertAuthProfileWithLock = vi.hoisted(() => vi.fn(async () => {}));
 vi.mock("../agents/auth-profiles.js", () => ({
@@ -247,5 +249,107 @@ describe("applyModelFallbacksFromSelection", () => {
       primary: "anthropic/claude-opus-4-5",
       fallbacks: ["openai/gpt-5.2"],
     });
+  });
+});
+
+describe("promptDefaultModel auth filtering", () => {
+  it("filters models to only show providers with auth when no allowlist is configured", async () => {
+    // Mock catalog with models from multiple providers
+    loadModelCatalog.mockResolvedValue([
+      {
+        provider: "anthropic",
+        id: "claude-opus-4-5",
+        name: "Claude Opus 4.5",
+      },
+      {
+        provider: "openai",
+        id: "gpt-5.2",
+        name: "GPT-5.2",
+      },
+      {
+        provider: "google",
+        id: "gemini-2.0",
+        name: "Gemini 2.0",
+      },
+    ]);
+
+    // Mock auth: only anthropic has profiles
+    listProfilesForProvider.mockImplementation((_store: unknown, provider: string) => {
+      return provider === "anthropic" ? ["anthropic:default"] : [];
+    });
+    resolveEnvApiKey.mockReturnValue(undefined);
+    getCustomProviderApiKey.mockReturnValue(undefined);
+
+    const select = vi.fn(async (params) => {
+      return params.options[0]?.value ?? "";
+    });
+    const prompter = makePrompter({ select });
+
+    // Config with no allowlist configured
+    const config = { agents: { defaults: {} } } as OpenClawConfig;
+
+    await promptDefaultModel({
+      config,
+      prompter,
+      allowKeep: false,
+      includeManual: false,
+      agentDir: "/tmp/test-agent",
+      // ignoreAllowlist defaults to false
+    });
+
+    const options = select.mock.calls[0]?.[0]?.options ?? [];
+    const modelValues = options.map((opt: { value: string }) => opt.value);
+
+    // Should only show anthropic models since that's the only provider with auth
+    expect(modelValues).toContain("anthropic/claude-opus-4-5");
+    expect(modelValues).not.toContain("openai/gpt-5.2");
+    expect(modelValues).not.toContain("google/gemini-2.0");
+  });
+
+  it("shows all models from allowed providers when allowlist is configured", async () => {
+    loadModelCatalog.mockResolvedValue([
+      {
+        provider: "anthropic",
+        id: "claude-opus-4-5",
+        name: "Claude Opus 4.5",
+      },
+      {
+        provider: "openai",
+        id: "gpt-5.2",
+        name: "GPT-5.2",
+      },
+    ]);
+
+    const select = vi.fn(async (params) => {
+      return params.options[0]?.value ?? "";
+    });
+    const prompter = makePrompter({ select });
+
+    // Config with allowlist
+    const config = {
+      agents: {
+        defaults: {
+          models: {
+            "anthropic/claude-opus-4-5": {},
+            "openai/gpt-5.2": {},
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    await promptDefaultModel({
+      config,
+      prompter,
+      allowKeep: false,
+      includeManual: false,
+      agentDir: "/tmp/test-agent",
+    });
+
+    const options = select.mock.calls[0]?.[0]?.options ?? [];
+    const modelValues = options.map((opt: { value: string }) => opt.value);
+
+    // Should show both models since they're in the allowlist
+    expect(modelValues).toContain("anthropic/claude-opus-4-5");
+    expect(modelValues).toContain("openai/gpt-5.2");
   });
 });
