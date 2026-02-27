@@ -53,6 +53,13 @@ import {
   buildTogetherModelDefinition,
 } from "./together-models.js";
 import { discoverVeniceModels, VENICE_BASE_URL } from "./venice-models.js";
+import { buildVivgridProviderWithDiscovery } from "./vivgrid-models.js";
+
+export {
+  buildVivgridProvider,
+  VIVGRID_BASE_URL,
+  VIVGRID_DEFAULT_MODEL_ID,
+} from "./vivgrid-models.js";
 
 type ModelsConfig = NonNullable<OpenClawConfig["models"]>;
 export type ProviderConfig = NonNullable<ModelsConfig["providers"]>[string];
@@ -160,17 +167,6 @@ const OPENROUTER_DEFAULT_MODEL_ID = "auto";
 const OPENROUTER_DEFAULT_CONTEXT_WINDOW = 200000;
 const OPENROUTER_DEFAULT_MAX_TOKENS = 8192;
 const OPENROUTER_DEFAULT_COST = {
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-};
-
-export const VIVGRID_BASE_URL = "https://api.vivgrid.com/v1";
-export const VIVGRID_DEFAULT_MODEL_ID = "auto";
-const VIVGRID_DEFAULT_CONTEXT_WINDOW = 262144;
-const VIVGRID_DEFAULT_MAX_TOKENS = 32768;
-const VIVGRID_DEFAULT_COST = {
   input: 0,
   output: 0,
   cacheRead: 0,
@@ -839,24 +835,6 @@ function buildOpenrouterProvider(): ProviderConfig {
   };
 }
 
-export function buildVivgridProvider(): ProviderConfig {
-  return {
-    baseUrl: VIVGRID_BASE_URL,
-    api: "openai-completions",
-    models: [
-      {
-        id: VIVGRID_DEFAULT_MODEL_ID,
-        name: "Vivgrid Auto",
-        reasoning: true,
-        input: ["text", "image"],
-        cost: VIVGRID_DEFAULT_COST,
-        contextWindow: VIVGRID_DEFAULT_CONTEXT_WINDOW,
-        maxTokens: VIVGRID_DEFAULT_MAX_TOKENS,
-      },
-    ],
-  };
-}
-
 async function buildVllmProvider(params?: {
   baseUrl?: string;
   apiKey?: string;
@@ -1165,11 +1143,20 @@ export async function resolveImplicitProviders(params: {
     providers.kilocode = { ...buildKilocodeProvider(), apiKey: kilocodeKey };
   }
 
-  const vivgridKey =
-    resolveEnvApiKeyVarName("vivgrid") ??
-    resolveApiKeyFromProfiles({ provider: "vivgrid", store: authStore });
+  const vivgridEnvVar = resolveEnvApiKeyVarName("vivgrid");
+  const vivgridProfileKey = resolveApiKeyFromProfiles({ provider: "vivgrid", store: authStore });
+  const vivgridKey = vivgridEnvVar ?? vivgridProfileKey;
   if (vivgridKey) {
-    providers.vivgrid = { ...buildVivgridProvider(), apiKey: vivgridKey };
+    const vivgridDiscoveryKey = vivgridEnvVar
+      ? (process.env[vivgridEnvVar]?.trim() ?? "")
+      : (vivgridProfileKey ?? "");
+    providers.vivgrid = {
+      ...(await buildVivgridProviderWithDiscovery({
+        baseUrl: params.explicitProviders?.vivgrid?.baseUrl,
+        apiKey: vivgridDiscoveryKey || undefined,
+      })),
+      apiKey: vivgridKey,
+    };
   }
 
   return providers;
