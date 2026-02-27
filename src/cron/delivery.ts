@@ -1,5 +1,14 @@
+import type { CliDeps } from "../cli/deps.js";
 import type { CronFailureDestinationConfig } from "../config/types.cron.js";
 import type { CronDeliveryMode, CronJob, CronMessageChannel } from "./types.js";
+import { loadConfig } from "../config/config.js";
+import { resolveDeliveryTarget } from "./isolated-agent/delivery-target.js";
+import { deliverOutboundPayloads } from "../infra/outbound/deliver.js";
+import { resolveAgentOutboundIdentity } from "../infra/outbound/identity.js";
+import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
+import { createOutboundSendDeps } from "../cli/outbound-send-deps.js";
+import { getChildLogger } from "../logging.js";
+import { formatErrorMessage } from "../infra/errors.js";
 
 export type CronDeliveryPlan = {
   mode: CronDeliveryMode;
@@ -146,4 +155,68 @@ export function resolveFailureDestination(
     to,
     accountId,
   };
+}
+
+const FAILURE_NOTIFICATION_TIMEOUT_MS = 30_000;
+const cronDeliveryLogger = getChildLogger({ subsystem: "cron-delivery" });
+
+export async function sendFailureNotificationAnnounce(
+  deps: CliDeps,
+  agentId: string,
+  target: { channel?: string; to?: string; accountId?: string },
+  message: string,
+): Promise<void> {
+  const cfg = loadConfig();
+  const resolvedTarget = await resolveDeliveryTarget(cfg, agentId, {
+    channel: target.channel as "last" | undefined,
+    to: target.to,
+    accountId: target.accountId,
+  });
+
+  if (!resolvedTarget.ok) {
+    cronDeliveryLogger.warn(
+      { error: resolvedTarget.error.message },
+      "cron: failed to resolve failure destination target",
+    );
+    return;
+  }
+
+  const identity = resolveAgentOutboundIdentity(cfg, agentId);
+  const session = buildOutboundSessionContext({
+    cfg,
+    agentId,
+    sessionKey: "cron:failure",
+  });
+
+  const abortController = new AbortController();
+  const timeout = setTimeout(() => {
+    abortController.abort();
+  }, FAILURE_NOTIFICATION_TIMEOUT_MS);
+
+  try {
+    await deliverOutboundPayloads({
+      cfg,
+      channel: resolvedTarget.channel,
+      to: resolvedTarget.to,
+      accountId: resolvedTarget.accountId,
+      threadId: resolvedTarget.threadId,
+      payloads: [{ text: message }],
+      session,
+      identity,
+      bestEffort: true,
+      deps: createOutboundSendDeps(deps),
+      abortSignal: abortController.signal,
+    });
+  } catch (err) {
+    cronDeliveryLogger.warn(
+      {
+        err: formatErrorMessage(err),
+        channel: resolvedTarget.channel,
+        to: resolvedTarget.to,
+      },
+      "cron: failure destination announce failed",
+    );
+  } finally {
+    clearTimeout(timeout);
+  }
 }

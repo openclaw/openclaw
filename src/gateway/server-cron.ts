@@ -1,6 +1,5 @@
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { CliDeps } from "../cli/deps.js";
-import { createOutboundSendDeps } from "../cli/outbound-send-deps.js";
 import { loadConfig } from "../config/config.js";
 import {
   canonicalizeMainSessionAlias,
@@ -8,9 +7,8 @@ import {
   resolveAgentMainSessionKey,
 } from "../config/sessions.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
-import { resolveFailureDestination } from "../cron/delivery.js";
+import { resolveFailureDestination, sendFailureNotificationAnnounce } from "../cron/delivery.js";
 import { runCronIsolatedAgentTurn } from "../cron/isolated-agent.js";
-import { resolveDeliveryTarget } from "../cron/isolated-agent/delivery-target.js";
 import {
   appendCronRunLog,
   resolveCronRunLogPath,
@@ -24,9 +22,6 @@ import { runHeartbeatOnce } from "../infra/heartbeat-runner.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { SsrFBlockedError } from "../infra/net/ssrf.js";
-import { deliverOutboundPayloads } from "../infra/outbound/deliver.js";
-import { resolveAgentOutboundIdentity } from "../infra/outbound/identity.js";
-import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { getChildLogger } from "../logging.js";
 import { normalizeAgentId, toAgentStoreSessionKey } from "../routing/session-key.js";
@@ -388,70 +383,17 @@ export function buildGatewayCronService(params: {
                   })();
                 }
               } else if (failureDest.mode === "announce") {
-                void (async () => {
-                  const { agentId } = resolveCronAgent(job.agentId);
-                  const runtimeConfigWithDefaults = loadConfig();
-                  const resolvedFailureTarget = await resolveDeliveryTarget(
-                    runtimeConfigWithDefaults,
-                    agentId,
-                    {
-                      channel: failureDest.channel,
-                      to: failureDest.to,
-                      accountId: failureDest.accountId,
-                    },
-                  );
-                  if (resolvedFailureTarget.ok) {
-                    const identity = resolveAgentOutboundIdentity(
-                      runtimeConfigWithDefaults,
-                      agentId,
-                    );
-                    const failureSession = buildOutboundSessionContext({
-                      cfg: runtimeConfigWithDefaults,
-                      agentId,
-                      sessionKey: `cron:${job.id}`,
-                    });
-                    const abortController = new AbortController();
-                    const timeout = setTimeout(() => {
-                      abortController.abort();
-                    }, CRON_WEBHOOK_TIMEOUT_MS);
-
-                    try {
-                      await deliverOutboundPayloads({
-                        cfg: runtimeConfigWithDefaults,
-                        channel: resolvedFailureTarget.channel,
-                        to: resolvedFailureTarget.to,
-                        accountId: resolvedFailureTarget.accountId,
-                        threadId: resolvedFailureTarget.threadId,
-                        payloads: [{ text: `[Cron Failure] ${failureMessage}` }],
-                        session: failureSession,
-                        identity,
-                        bestEffort: true,
-                        deps: createOutboundSendDeps(params.deps),
-                        abortSignal: abortController.signal,
-                      });
-                    } catch (err) {
-                      cronLogger.warn(
-                        {
-                          err: formatErrorMessage(err),
-                          jobId: evt.jobId,
-                          channel: resolvedFailureTarget.channel,
-                          to: resolvedFailureTarget.to,
-                        },
-                        "cron: failure destination announce failed",
-                      );
-                    } finally {
-                      clearTimeout(timeout);
-                    }
-                  } else {
-                    cronLogger.warn(
-                      {
-                        jobId: evt.jobId,
-                        error: resolvedFailureTarget.error.message,
-                      },
-                      "cron: failed to resolve failure destination target",
-                    );
-                  }
-                })();
+                const { agentId } = resolveCronAgent(job.agentId);
+                void sendFailureNotificationAnnounce(
+                  params.deps,
+                  agentId,
+                  {
+                    channel: failureDest.channel,
+                    to: failureDest.to,
+                    accountId: failureDest.accountId,
+                  },
+                  `[Cron Failure] ${failureMessage}`,
+                );
               }
             }
           }
