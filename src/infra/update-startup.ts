@@ -121,3 +121,20 @@ export function scheduleGatewayUpdateCheck(params: {
 }): void {
   void runGatewayUpdateCheck(params).catch(() => {});
 }
+
+// ---------------------------------------------------------------------------
+// Update availability state — consumed by health-state.ts for gateway snapshot.
+// The check populates this when a newer version is detected.
+// ---------------------------------------------------------------------------
+
+let _updateAvailable: string | null = null;
+
+/** Get the latest known update version (or null if up-to-date). */
+export function getUpdateAvailable(): string | null {
+  return _updateAvailable;
+}
+
+/** Set the update-available version (called internally after update check). */
+export function setUpdateAvailable(version: string | null): void {
+  _updateAvailable = version;
+}
