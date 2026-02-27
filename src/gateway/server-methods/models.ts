@@ -1,5 +1,5 @@
 import { DEFAULT_PROVIDER } from "../../agents/defaults.js";
-import { buildAllowedModelSet } from "../../agents/model-selection.js";
+import { buildAllowedModelSet, normalizeProviderId } from "../../agents/model-selection.js";
 import { loadConfig } from "../../config/config.js";
 import {
   ErrorCodes,
@@ -27,7 +27,7 @@ export const modelsHandlers: GatewayRequestHandlers = {
       const cfg = loadConfig();
       const configuredProviders = new Set(
         Object.keys(cfg.models?.providers ?? {})
-          .map((provider) => provider.trim().toLowerCase())
+          .map((provider) => normalizeProviderId(provider.trim()))
           .filter(Boolean),
       );
       const { allowAny, allowedCatalog } = buildAllowedModelSet({
@@ -37,7 +37,9 @@ export const modelsHandlers: GatewayRequestHandlers = {
       });
       const hasConfiguredProviders = configuredProviders.size > 0;
       const providerScopedCatalog = hasConfiguredProviders
-        ? catalog.filter((entry) => configuredProviders.has(entry.provider.trim().toLowerCase()))
+        ? catalog.filter((entry) =>
+            configuredProviders.has(normalizeProviderId(entry.provider.trim())),
+          )
         : catalog;
       const models = allowAny
         ? providerScopedCatalog.length > 0
