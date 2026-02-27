@@ -3,6 +3,7 @@
  */
 
 import type { Client } from "@larksuiteoapi/node-sdk";
+import { fetchWithSsrFGuard } from "../../../src/plugin-sdk/index.js";
 import type { FeishuDomain } from "./types.js";
 
 type Credentials = { appId: string; appSecret: string; domain?: FeishuDomain };
@@ -98,19 +99,24 @@ export class FeishuStreamingSession {
     };
 
     // Create card entity
-    const createRes = await fetch(`${apiBase}/cardkit/v1/cards`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${await getToken(this.creds)}`,
-        "Content-Type": "application/json",
+    const { response: createRes, release: releaseCreate } = await fetchWithSsrFGuard({
+      url: `${apiBase}/cardkit/v1/cards`,
+      init: {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${await getToken(this.creds)}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ type: "card_json", data: JSON.stringify(cardJson) }),
       },
-      body: JSON.stringify({ type: "card_json", data: JSON.stringify(cardJson) }),
+      auditContext: "feishu.streaming-card.create",
     });
     const createData = (await createRes.json()) as {
       code: number;
       msg: string;
       data?: { card_id: string };
     };
+    await releaseCreate();
     if (createData.code !== 0 || !createData.data?.card_id) {
       throw new Error(`Create card failed: ${createData.msg}`);
     }
@@ -140,18 +146,26 @@ export class FeishuStreamingSession {
     }
     const apiBase = resolveApiBase(this.creds.domain);
     this.state.sequence += 1;
-    await fetch(`${apiBase}/cardkit/v1/cards/${this.state.cardId}/elements/content/content`, {
-      method: "PUT",
-      headers: {
-        Authorization: `Bearer ${await getToken(this.creds)}`,
-        "Content-Type": "application/json",
+    const { release } = await fetchWithSsrFGuard({
+      url: `${apiBase}/cardkit/v1/cards/${this.state.cardId}/elements/content/content`,
+      init: {
+        method: "PUT",
+        headers: {
+          Authorization: `Bearer ${await getToken(this.creds)}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          content: text,
+          sequence: this.state.sequence,
+          uuid: `s_${this.state.cardId}_${this.state.sequence}`,
+        }),
       },
-      body: JSON.stringify({
-        content: text,
-        sequence: this.state.sequence,
-        uuid: `s_${this.state.cardId}_${this.state.sequence}`,
-      }),
-    }).catch((error) => onError?.(error));
+      auditContext: "feishu.streaming-card.update",
+    }).catch((error) => {
+      onError?.(error);
+      return { release: async () => {} };
+    });
+    await release();
   }
 
   async update(text: string): Promise<void> {
@@ -196,20 +210,28 @@ export class FeishuStreamingSession {
 
     // Close streaming mode
     this.state.sequence += 1;
-    await fetch(`${apiBase}/cardkit/v1/cards/${this.state.cardId}/settings`, {
-      method: "PATCH",
-      headers: {
-        Authorization: `Bearer ${await getToken(this.creds)}`,
-        "Content-Type": "application/json; charset=utf-8",
-      },
-      body: JSON.stringify({
-        settings: JSON.stringify({
-          config: { streaming_mode: false, summary: { content: truncateSummary(text) } },
+    const { release } = await fetchWithSsrFGuard({
+      url: `${apiBase}/cardkit/v1/cards/${this.state.cardId}/settings`,
+      init: {
+        method: "PATCH",
+        headers: {
+          Authorization: `Bearer ${await getToken(this.creds)}`,
+          "Content-Type": "application/json; charset=utf-8",
+        },
+        body: JSON.stringify({
+          settings: JSON.stringify({
+            config: { streaming_mode: false, summary: { content: truncateSummary(text) } },
+          }),
+          sequence: this.state.sequence,
+          uuid: `c_${this.state.cardId}_${this.state.sequence}`,
         }),
-        sequence: this.state.sequence,
-        uuid: `c_${this.state.cardId}_${this.state.sequence}`,
-      }),
-    }).catch((e) => this.log?.(`Close failed: ${String(e)}`));
+      },
+      auditContext: "feishu.streaming-card.close",
+    }).catch((e) => {
+      this.log?.(`Close failed: ${String(e)}`);
+      return { release: async () => {} };
+    });
+    await release();
 
     this.log?.(`Closed streaming: cardId=${this.state.cardId}`);
   }
