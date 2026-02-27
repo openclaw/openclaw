@@ -34,6 +34,7 @@ import { createDiscordRetryRunner } from "../../infra/retry-policy.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { createNonExitingRuntime, type RuntimeEnv } from "../../runtime.js";
 import { resolveDiscordAccount } from "../accounts.js";
+import { ProxiedRequestClient } from "../client.js";
 import { fetchDiscordApplicationId } from "../probe.js";
 import { normalizeDiscordToken } from "../token.js";
 import { createDiscordVoiceCommand } from "../voice/command.js";
@@ -475,6 +476,30 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       },
       clientPlugins,
     );
+    // Replace the default REST client with proxied version if proxy is configured
+    const proxyUrl = discordCfg.proxy?.trim();
+    if (proxyUrl) {
+      const proxyLogger = createSubsystemLogger("discord/proxy");
+      // Allowed proxy protocols (whitelist) - undici ProxyAgent only supports HTTP/HTTPS
+      const allowedProtocols = ["https:", "http:"];
+      try {
+        // Validate proxy URL format
+        const parsedUrl = new URL(proxyUrl);
+        // Validate protocol whitelist
+        if (!allowedProtocols.includes(parsedUrl.protocol)) {
+          throw new Error(
+            `Invalid proxy protocol "${parsedUrl.protocol}". Allowed protocols: ${allowedProtocols.join(", ")}`,
+          );
+        }
+        client.rest = new ProxiedRequestClient(token, proxyUrl);
+      } catch (err) {
+        const proxyError = err instanceof Error ? err : new Error(String(err));
+        proxyLogger.error(
+          `Failed to create proxied Discord client for account "${account.accountId}": ${proxyError.message}. Falling back to direct connection.`,
+        );
+        // Keep the default (non-proxied) client.rest
+      }
+    }
     const earlyGatewayErrorGuard = attachEarlyGatewayErrorGuard(client);
     releaseEarlyGatewayErrorGuard = earlyGatewayErrorGuard.release;
 
