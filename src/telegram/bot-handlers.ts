@@ -81,6 +81,12 @@ function hasInboundMedia(msg: Message): boolean {
   );
 }
 
+function hasReplyTargetMedia(msg: Message): boolean {
+  const externalReply = (msg as Message & { external_reply?: Message }).external_reply;
+  const replyTarget = msg.reply_to_message ?? externalReply;
+  return Boolean(replyTarget && hasInboundMedia(replyTarget));
+}
+
 function resolveInboundMediaFileId(msg: Message): string | undefined {
   return (
     msg.sticker?.file_id ??
@@ -1357,7 +1363,7 @@ export const registerTelegramHandlers = ({
         return;
       }
 
-      if (!event.isGroup && hasInboundMedia(event.msg)) {
+      if (!event.isGroup && (hasInboundMedia(event.msg) || hasReplyTargetMedia(event.msg))) {
         const dmAuthorized = await enforceTelegramDmAccess({
           isGroup: event.isGroup,
           dmPolicy,

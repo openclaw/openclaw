@@ -451,6 +451,45 @@ describe("createTelegramBot", () => {
     }
   });
 
+  it("does not fetch reply media for unauthorized DM replies", async () => {
+    onSpy.mockClear();
+    replySpy.mockClear();
+    getFileSpy.mockClear();
+    sendMessageSpy.mockClear();
+    readChannelAllowFromStore.mockResolvedValue([]);
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          dmPolicy: "pairing",
+          allowFrom: [],
+        },
+      },
+    });
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+    await handler({
+      message: {
+        chat: { id: 7, type: "private" },
+        text: "hey",
+        date: 1736380800,
+        from: { id: 999, first_name: "Eve" },
+        reply_to_message: {
+          message_id: 9001,
+          photo: [{ file_id: "reply-photo-1" }],
+          from: { first_name: "Ada" },
+        },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({}),
+    });
+
+    expect(getFileSpy).not.toHaveBeenCalled();
+    expect(replySpy).not.toHaveBeenCalled();
+    expect(sendMessageSpy).toHaveBeenCalledTimes(1);
+  });
+
   it("defers reply media download until debounce flush", async () => {
     const DEBOUNCE_MS = 4321;
     onSpy.mockClear();
