@@ -9,8 +9,24 @@ import ai.openclaw.android.gateway.GatewaySession
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.asRequestBody
+
+internal fun parseCameraClipUploadUrl(responseBody: String): String? {
+  if (responseBody.isBlank()) return null
+  val root =
+    try {
+      Json.parseToJsonElement(responseBody).asObjectOrNull()
+    } catch (_: Throwable) {
+      return null
+    } ?: return null
+  val urlPrimitive = root["url"] as? JsonPrimitive ?: return null
+  if (!urlPrimitive.isString) return null
+  return urlPrimitive.contentOrNull?.trim()?.ifEmpty { null }
+}
 
 class CameraHandler(
   private val appContext: Context,
@@ -69,7 +85,7 @@ class CameraHandler(
       clipLogFile?.appendText("[CLIP $ts] $msg\n")
       android.util.Log.w("openclaw", "camera.clip: $msg")
     }
-    val includeAudio = paramsJson?.contains("\"includeAudio\":true") != false
+    val includeAudio = parseIncludeAudio(paramsJson) ?: true
     if (includeAudio) externalAudioCaptureActive.value = true
     try {
       clipLogFile?.writeText("") // clear
@@ -123,9 +139,7 @@ class CameraHandler(
           clipLog("upload response: ${resp.code} $respBody")
           filePayload.file.delete()
           if (!resp.isSuccessful) throw Exception("upload failed: HTTP ${resp.code}")
-          // Parse URL from response
-          val urlMatch = Regex("\"url\":\"([^\"]+)\"").find(respBody)
-          urlMatch?.groupValues?.get(1) ?: throw Exception("no url in response: $respBody")
+          parseCameraClipUploadUrl(respBody) ?: throw Exception("no url in response: $respBody")
         }
       } catch (err: Throwable) {
         clipLog("upload failed: ${err.message}, falling back to base64")
@@ -152,6 +166,26 @@ class CameraHandler(
       return GatewaySession.InvokeResult.error(code = "UNAVAILABLE", message = err.message ?: "camera clip failed")
     } finally {
       if (includeAudio) externalAudioCaptureActive.value = false
+    }
+  }
+
+  private fun parseIncludeAudio(paramsJson: String?): Boolean? {
+    if (paramsJson.isNullOrBlank()) return null
+    val root =
+      try {
+        Json.parseToJsonElement(paramsJson).asObjectOrNull()
+      } catch (_: Throwable) {
+        null
+      } ?: return null
+    val value =
+      (root["includeAudio"] as? JsonPrimitive)
+        ?.contentOrNull
+        ?.trim()
+        ?.lowercase()
+    return when (value) {
+      "true" -> true
+      "false" -> false
+      else -> null
     }
   }
 }
