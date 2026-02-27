@@ -306,4 +306,64 @@ describe("channel-health-monitor", () => {
     expect(manager.stopChannel).not.toHaveBeenCalled();
     monitor.stop();
   });
+
+  it("restarts channel with stale inbound activity", async () => {
+    const staleInboundMs = 15 * 60_000;
+    const now = Date.now();
+    vi.setSystemTime(now);
+    const manager = createSnapshotManager({
+      telegram: {
+        default: {
+          running: true,
+          connected: true,
+          enabled: true,
+          configured: true,
+          lastInboundAt: now - staleInboundMs - 1_000,
+        },
+      },
+    });
+    const monitor = await startAndRunCheck(manager, { staleInboundMs });
+    expect(manager.stopChannel).toHaveBeenCalledWith("telegram", "default");
+    expect(manager.startChannel).toHaveBeenCalledWith("telegram", "default");
+    monitor.stop();
+  });
+
+  it("does not restart channel with recent inbound activity", async () => {
+    const staleInboundMs = 15 * 60_000;
+    const now = Date.now();
+    vi.setSystemTime(now);
+    const manager = createSnapshotManager({
+      telegram: {
+        default: {
+          running: true,
+          connected: true,
+          enabled: true,
+          configured: true,
+          lastInboundAt: now - 5 * 60_000,
+        },
+      },
+    });
+    const monitor = await startAndRunCheck(manager, { staleInboundMs });
+    expect(manager.stopChannel).not.toHaveBeenCalled();
+    monitor.stop();
+  });
+
+  it("does not trigger stale check when lastInboundAt is null", async () => {
+    const now = Date.now();
+    vi.setSystemTime(now);
+    const manager = createSnapshotManager({
+      telegram: {
+        default: {
+          running: true,
+          connected: true,
+          enabled: true,
+          configured: true,
+          lastInboundAt: null,
+        },
+      },
+    });
+    const monitor = await startAndRunCheck(manager, { staleInboundMs: 15 * 60_000 });
+    expect(manager.stopChannel).not.toHaveBeenCalled();
+    monitor.stop();
+  });
 });

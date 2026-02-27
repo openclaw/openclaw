@@ -8,6 +8,7 @@ const DEFAULT_CHECK_INTERVAL_MS = 5 * 60_000;
 const DEFAULT_STARTUP_GRACE_MS = 60_000;
 const DEFAULT_COOLDOWN_CYCLES = 2;
 const DEFAULT_MAX_RESTARTS_PER_HOUR = 3;
+const DEFAULT_STALE_INBOUND_MS = 15 * 60_000;
 const ONE_HOUR_MS = 60 * 60_000;
 
 export type ChannelHealthMonitorDeps = {
@@ -16,6 +17,7 @@ export type ChannelHealthMonitorDeps = {
   startupGraceMs?: number;
   cooldownCycles?: number;
   maxRestartsPerHour?: number;
+  staleInboundMs?: number;
   abortSignal?: AbortSignal;
 };
 
@@ -32,12 +34,16 @@ function isManagedAccount(snapshot: { enabled?: boolean; configured?: boolean })
   return snapshot.enabled !== false && snapshot.configured !== false;
 }
 
-function isChannelHealthy(snapshot: {
-  running?: boolean;
-  connected?: boolean;
-  enabled?: boolean;
-  configured?: boolean;
-}): boolean {
+function isChannelHealthy(
+  snapshot: {
+    running?: boolean;
+    connected?: boolean;
+    enabled?: boolean;
+    configured?: boolean;
+    lastInboundAt?: number | null;
+  },
+  opts?: { staleInboundMs?: number; nowMs?: number },
+): boolean {
   if (!isManagedAccount(snapshot)) {
     return true;
   }
@@ -46,6 +52,16 @@ function isChannelHealthy(snapshot: {
   }
   if (snapshot.connected === false) {
     return false;
+  }
+  // Detect zombie polling: channel appears running but no inbound activity
+  // for an extended period.  Only trigger when lastInboundAt is set (skip
+  // channels that have never received a message).
+  if (snapshot.lastInboundAt != null) {
+    const staleMs = opts?.staleInboundMs ?? DEFAULT_STALE_INBOUND_MS;
+    const now = opts?.nowMs ?? Date.now();
+    if (now - snapshot.lastInboundAt > staleMs) {
+      return false;
+    }
   }
   return true;
 }
@@ -57,6 +73,7 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
     startupGraceMs = DEFAULT_STARTUP_GRACE_MS,
     cooldownCycles = DEFAULT_COOLDOWN_CYCLES,
     maxRestartsPerHour = DEFAULT_MAX_RESTARTS_PER_HOUR,
+    staleInboundMs = DEFAULT_STALE_INBOUND_MS,
     abortSignal,
   } = deps;
 
@@ -101,7 +118,7 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
           if (channelManager.isManuallyStopped(channelId as ChannelId, accountId)) {
             continue;
           }
-          if (isChannelHealthy(status)) {
+          if (isChannelHealthy(status, { staleInboundMs, nowMs: now })) {
             continue;
           }
 
@@ -123,11 +140,19 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
             continue;
           }
 
+          const isStaleInbound =
+            status.running &&
+            status.connected !== false &&
+            status.lastInboundAt != null &&
+            now - status.lastInboundAt > staleInboundMs;
+
           const reason = !status.running
             ? status.reconnectAttempts && status.reconnectAttempts >= 10
               ? "gave-up"
               : "stopped"
-            : "stuck";
+            : isStaleInbound
+              ? "stale"
+              : "stuck";
 
           log.info?.(`[${channelId}:${accountId}] health-monitor: restarting (reason: ${reason})`);
 
