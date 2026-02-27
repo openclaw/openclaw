@@ -7,7 +7,7 @@
  * with a ready-to-use install command.
  */
 
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
+import type { OpenClawPluginApi, AnyAgentTool } from "openclaw/plugin-sdk";
 import { emptyPluginConfigSchema } from "openclaw/plugin-sdk";
 import {
   createSearchTool,
@@ -52,13 +52,14 @@ const vibeClawPlugin = {
     ];
 
     api.registerTool(
-      () => [
-        createSearchTool(client),
-        createInstallTool(client, config),
-        createTrendingTool(client),
-        createManageTool(),
-        createAuditTool(client),
-      ],
+      (_ctx) =>
+        [
+          createSearchTool(client),
+          createInstallTool(client, config),
+          createTrendingTool(client),
+          createManageTool(),
+          createAuditTool(client),
+        ] as unknown as AnyAgentTool[],
       { names: toolNames },
     );
 
