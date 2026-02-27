@@ -35,10 +35,15 @@ const RESULT_LIKE_PATTERNS = [
 ] as const;
 
 function hasToolRequiredPromptMarkers(prompt: string): boolean {
-  const normalized = prompt.toLowerCase();
+  const tokens = new Set(
+    prompt
+      .toLowerCase()
+      .split(/[^a-z0-9]+/g)
+      .filter((token) => token.length > 0),
+  );
   let markerCount = 0;
   for (const marker of TOOL_REQUIRED_PROMPT_MARKERS) {
-    if (normalized.includes(marker)) {
+    if (tokens.has(marker)) {
       markerCount += 1;
       if (markerCount >= 2) {
         return true;
