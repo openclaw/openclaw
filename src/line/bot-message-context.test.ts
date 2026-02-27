@@ -75,6 +75,7 @@ describe("buildLineMessageContext", () => {
       allMedia: [],
       cfg,
       account,
+      commandAuthorized: true,
     });
     expect(context).not.toBeNull();
     if (!context) {
@@ -92,6 +93,7 @@ describe("buildLineMessageContext", () => {
       event,
       cfg,
       account,
+      commandAuthorized: true,
     });
 
     expect(context?.ctxPayload.OriginatingTo).toBe("line:group:group-2");
@@ -105,9 +107,51 @@ describe("buildLineMessageContext", () => {
       event,
       cfg,
       account,
+      commandAuthorized: true,
     });
 
     expect(context?.ctxPayload.OriginatingTo).toBe("line:room:room-1");
     expect(context?.ctxPayload.To).toBe("line:room:room-1");
+  });
+
+  it("sets CommandAuthorized=true when authorized", async () => {
+    const event = createMessageEvent({ type: "user", userId: "user-auth" });
+
+    const context = await buildLineMessageContext({
+      event,
+      allMedia: [],
+      cfg,
+      account,
+      commandAuthorized: true,
+    });
+
+    expect(context?.ctxPayload.CommandAuthorized).toBe(true);
+  });
+
+  it("sets CommandAuthorized=false when not authorized", async () => {
+    const event = createMessageEvent({ type: "user", userId: "user-noauth" });
+
+    const context = await buildLineMessageContext({
+      event,
+      allMedia: [],
+      cfg,
+      account,
+      commandAuthorized: false,
+    });
+
+    expect(context?.ctxPayload.CommandAuthorized).toBe(false);
+  });
+
+  it("sets CommandAuthorized on postback context", async () => {
+    const event = createPostbackEvent({ type: "user", userId: "user-pb" });
+
+    const context = await buildLinePostbackContext({
+      event,
+      cfg,
+      account,
+      commandAuthorized: true,
+    });
+
+    expect(context?.ctxPayload.CommandAuthorized).toBe(true);
   });
 });
