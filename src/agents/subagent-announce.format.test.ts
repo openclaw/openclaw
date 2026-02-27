@@ -435,6 +435,23 @@ describe("subagent announce formatting", () => {
     expect(sessionsDeleteSpy).toHaveBeenCalledTimes(1);
   });
 
+  it("suppresses completion delivery when subagent reply is NO_REPLY", async () => {
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-direct-completion-no-reply",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      requesterOrigin: { channel: "slack", to: "channel:C123", accountId: "acct-1" },
+      ...defaultOutcomeAnnounce,
+      expectsCompletionMessage: true,
+      roundOneReply: " NO_REPLY ",
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(sendSpy).not.toHaveBeenCalled();
+    expect(agentSpy).not.toHaveBeenCalled();
+  });
+
   it("retries completion direct send on transient channel-unavailable errors", async () => {
     sendSpy
       .mockRejectedValueOnce(new Error("Error: No active WhatsApp Web listener (account: default)"))
