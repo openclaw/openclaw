@@ -18,6 +18,7 @@ import { extractTextFromChatContent } from "../shared/chat-content.js";
 import {
   type DeliveryContext,
   deliveryContextFromSession,
+  deliveryContextKey,
   mergeDeliveryContext,
   normalizeDeliveryContext,
 } from "../utils/delivery-context.js";
@@ -447,10 +448,7 @@ function resolveAnnounceOrigin(
   const normalizedEntry = deliveryContextFromSession(entry);
   if (normalizedRequester?.channel && isInternalMessageChannel(normalizedRequester.channel)) {
     // Ignore internal channel hints (webchat) so a valid persisted route
-    // can still be used for outbound delivery. Non-standard channels that
-    // are not in the deliverable list should NOT be stripped here — doing
-    // so causes the session entry's stale lastChannel (often WhatsApp) to
-    // override the actual requester origin, leading to delivery failures.
+    // can still be used for outbound delivery.
     return mergeDeliveryContext(
       {
         accountId: normalizedRequester.accountId,
@@ -459,19 +457,20 @@ function resolveAnnounceOrigin(
       normalizedEntry,
     );
   }
-  // requesterOrigin (captured at spawn time) reflects the channel the user is
-  // actually on and must take priority over the session entry, which may carry
-  // stale lastChannel / lastTo values from a previous channel interaction.
-  const entryForMerge =
-    normalizedRequester?.to &&
-    normalizedRequester.threadId == null &&
-    normalizedEntry?.threadId != null
-      ? (() => {
-          const { threadId: _ignore, ...rest } = normalizedEntry;
-          return rest;
-        })()
-      : normalizedEntry;
-  return mergeDeliveryContext(normalizedRequester, entryForMerge);
+
+  // requesterOrigin (captured at spawn time) is authoritative for outbound routing.
+  // Only merge fallback fields from session entry when both contexts point to the
+  // same concrete delivery target to avoid cross-chat contamination under concurrency.
+  if (normalizedRequester) {
+    const requesterKey = deliveryContextKey(normalizedRequester);
+    const entryKey = deliveryContextKey(normalizedEntry);
+    if (requesterKey && entryKey && requesterKey === entryKey) {
+      return mergeDeliveryContext(normalizedRequester, normalizedEntry);
+    }
+    return normalizedRequester;
+  }
+
+  return normalizedEntry;
 }
 
 async function resolveSubagentCompletionOrigin(params: {
