@@ -26,7 +26,7 @@ concurrency:
 
 jobs:
   sync:
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       UPSTREAM_REPO: openclaw/openclaw

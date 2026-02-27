@@ -18,7 +18,7 @@ concurrency:
 
 jobs:
   check:
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     env:
       UPSTREAM_REPO: openclaw/openclaw
       UPSTREAM_REMOTE: upstream
