@@ -496,6 +496,13 @@ describe("classifyFailoverReason", () => {
     ).toBeNull();
     expect(classifyFailoverReason("image exceeds 5 MB maximum")).toBeNull();
   });
+  it("does not treat path fragments containing 'tpm' as rate_limit", () => {
+    expect(
+      classifyFailoverReason(
+        'No API key found for provider "openai". Auth store: /var/folders/qr/m3v0xxg57h54pkx4d5tpml4c0000gn/T/openclaw-agent-BNnH3S/auth-profiles.json.',
+      ),
+    ).toBe("auth");
+  });
   it("classifies OpenAI usage limit errors as rate_limit", () => {
     expect(classifyFailoverReason("You have hit your ChatGPT usage limit (plus plan)")).toBe(
       "rate_limit",

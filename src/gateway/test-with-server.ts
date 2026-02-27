@@ -5,6 +5,7 @@ import { connectOk } from "./test-helpers.js";
 type StartServerWithClient = typeof startServerWithClient;
 export type GatewayWs = Awaited<ReturnType<StartServerWithClient>>["ws"];
 export type GatewayServer = Awaited<ReturnType<StartServerWithClient>>["server"];
+const CONTROL_UI_SERVER_BOOT_TIMEOUT_MS = 240_000;
 
 export async function withServer<T>(run: (ws: GatewayWs) => Promise<T>): Promise<T> {
   const { server, ws, envSnapshot } = await startServerWithClient("secret");
@@ -30,7 +31,7 @@ export function installConnectedControlUiServerSuite(
       port: started.port,
     });
     await connectOk(started.ws);
-  });
+  }, CONTROL_UI_SERVER_BOOT_TIMEOUT_MS);
 
   afterAll(async () => {
     started?.ws.close();

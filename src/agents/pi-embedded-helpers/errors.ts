@@ -622,7 +622,7 @@ const ERROR_PATTERNS = {
     "quota exceeded",
     "resource_exhausted",
     "usage limit",
-    "tpm",
+    /\btpm\b/,
     "tokens per minute",
   ],
   overloaded: [
