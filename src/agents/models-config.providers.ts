@@ -677,6 +677,15 @@ function buildQwenPortalProvider(): ProviderConfig {
     api: "openai-completions",
     models: [
       {
+        id: "qwen3.5-plus",
+        name: "Qwen 3.5 Plus",
+        reasoning: true,
+        input: ["text"],
+        cost: QWEN_PORTAL_DEFAULT_COST,
+        contextWindow: QWEN_PORTAL_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: QWEN_PORTAL_DEFAULT_MAX_TOKENS,
+      },
+      {
         id: "coder-model",
         name: "Qwen Coder",
         reasoning: false,
