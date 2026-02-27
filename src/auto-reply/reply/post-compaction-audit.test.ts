@@ -104,6 +104,99 @@ describe("extractReadPaths", () => {
     const paths = extractReadPaths(messages);
     expect(paths).toEqual([]);
   });
+
+  it("extracts paths from Pi JSONL toolCall format (arguments.path)", () => {
+    // Pi embedded runner logs tool calls as { type: "toolCall", arguments: { path } }
+    const messages = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call_abc123",
+            name: "read",
+            arguments: { path: "/home/user/.openclaw/workspace/WORKFLOW_AUTO.md" },
+          },
+        ],
+      },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call_def456",
+            name: "read",
+            arguments: { path: "/home/user/.openclaw/workspace/memory/2026-02-27.md" },
+          },
+        ],
+      },
+    ];
+
+    const paths = extractReadPaths(messages);
+    expect(paths).toEqual([
+      "/home/user/.openclaw/workspace/WORKFLOW_AUTO.md",
+      "/home/user/.openclaw/workspace/memory/2026-02-27.md",
+    ]);
+  });
+
+  it("extracts paths from Pi JSONL toolCall format (arguments.file_path)", () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            name: "read",
+            arguments: { file_path: "WORKFLOW_AUTO.md" },
+          },
+        ],
+      },
+    ];
+
+    const paths = extractReadPaths(messages);
+    expect(paths).toEqual(["WORKFLOW_AUTO.md"]);
+  });
+
+  it("handles mixed Anthropic tool_use and Pi toolCall blocks in same message", () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool_use",
+            name: "read",
+            input: { file_path: "WORKFLOW_AUTO.md" },
+          },
+          {
+            type: "toolCall",
+            name: "read",
+            arguments: { path: "memory/2026-02-27.md" },
+          },
+        ],
+      },
+    ];
+
+    const paths = extractReadPaths(messages);
+    expect(paths).toEqual(["WORKFLOW_AUTO.md", "memory/2026-02-27.md"]);
+  });
+
+  it("ignores toolCall blocks for non-read tools", () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            name: "write",
+            arguments: { path: "WORKFLOW_AUTO.md", content: "..." },
+          },
+        ],
+      },
+    ];
+
+    const paths = extractReadPaths(messages);
+    expect(paths).toEqual([]);
+  });
 });
 
 describe("auditPostCompactionReads", () => {

@@ -79,7 +79,10 @@ export function readSessionMessages(
 
 /**
  * Extract file paths from Read tool calls in agent messages.
- * Looks for tool_use blocks with name="read" and extracts path/file_path args.
+ *
+ * Supports two block formats:
+ * - Anthropic format: `{ type: "tool_use", name: "read", input: { path | file_path } }`
+ * - Pi/OpenClaw JSONL format: `{ type: "toolCall", name: "read", arguments: { path | file_path } }`
  */
 export function extractReadPaths(messages: Array<{ role?: string; content?: unknown }>): string[] {
   const paths: string[] = [];
@@ -88,11 +91,16 @@ export function extractReadPaths(messages: Array<{ role?: string; content?: unkn
       continue;
     }
     for (const block of msg.content) {
-      if (block.type === "tool_use" && block.name === "read") {
-        const filePath = block.input?.file_path ?? block.input?.path;
-        if (typeof filePath === "string") {
-          paths.push(filePath);
-        }
+      const isReadTool =
+        (block.type === "tool_use" || block.type === "toolCall") && block.name === "read";
+      if (!isReadTool) {
+        continue;
+      }
+      // Anthropic format uses `input`, Pi JSONL format uses `arguments`
+      const args = block.input ?? block.arguments;
+      const filePath = args?.file_path ?? args?.path;
+      if (typeof filePath === "string") {
+        paths.push(filePath);
       }
     }
   }
