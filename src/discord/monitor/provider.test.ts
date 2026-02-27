@@ -18,8 +18,6 @@ const {
   resolveDiscordAllowlistConfigMock,
   resolveNativeCommandsEnabledMock,
   resolveNativeSkillsEnabledMock,
-  resolveThreadBindingSessionTtlMsMock,
-  resolveThreadBindingsEnabledMock,
 } = vi.hoisted(() => {
   const createdBindingManagers: Array<{ stop: ReturnType<typeof vi.fn> }> = [];
   return {
@@ -63,8 +61,6 @@ const {
     })),
     resolveNativeCommandsEnabledMock: vi.fn(() => true),
     resolveNativeSkillsEnabledMock: vi.fn(() => false),
-    resolveThreadBindingSessionTtlMsMock: vi.fn(() => undefined),
-    resolveThreadBindingsEnabledMock: vi.fn(() => true),
   };
 });
 
@@ -235,8 +231,6 @@ vi.mock("./thread-bindings.js", () => ({
   createNoopThreadBindingManager: createNoopThreadBindingManagerMock,
   createThreadBindingManager: createThreadBindingManagerMock,
   reconcileAcpThreadBindingsOnStartup: reconcileAcpThreadBindingsOnStartupMock,
-  resolveThreadBindingSessionTtlMs: resolveThreadBindingSessionTtlMsMock,
-  resolveThreadBindingsEnabled: resolveThreadBindingsEnabledMock,
 }));
 
 describe("monitorDiscordProvider", () => {
@@ -283,8 +277,6 @@ describe("monitorDiscordProvider", () => {
     });
     resolveNativeCommandsEnabledMock.mockClear().mockReturnValue(true);
     resolveNativeSkillsEnabledMock.mockClear().mockReturnValue(false);
-    resolveThreadBindingSessionTtlMsMock.mockClear().mockReturnValue(undefined);
-    resolveThreadBindingsEnabledMock.mockClear().mockReturnValue(true);
   });
 
   it("stops thread bindings when startup fails before lifecycle begins", async () => {
