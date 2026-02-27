@@ -584,6 +584,13 @@ describe("isProfileInCooldownForModel", () => {
     expect(isProfileInCooldownForModel(store, "anthropic:default", "claude-opus-4-6")).toBe(true);
   });
 
+  it("returns true for model checks when legacy global cooldown is active", () => {
+    const store = makeStore({
+      "anthropic:default": { cooldownUntil: Date.now() + 60_000 },
+    });
+    expect(isProfileInCooldownForModel(store, "anthropic:default", "claude-opus-4-6")).toBe(true);
+  });
+
   it("returns false for a different model when only one model is in cooldown", () => {
     const store = makeStore({
       "anthropic:default": {

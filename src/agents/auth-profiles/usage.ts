@@ -164,6 +164,16 @@ export function isProfileInCooldownForModel(
     return true;
   }
 
+  // Legacy/non-model cooldown still blocks this profile for all models.
+  if (
+    typeof stats.cooldownUntil === "number" &&
+    Number.isFinite(stats.cooldownUntil) &&
+    stats.cooldownUntil > 0 &&
+    Date.now() < stats.cooldownUntil
+  ) {
+    return true;
+  }
+
   return false;
 }
 
