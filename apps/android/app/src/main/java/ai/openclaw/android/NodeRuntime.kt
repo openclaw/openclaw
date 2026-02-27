@@ -65,8 +65,6 @@ class NodeRuntime(context: Context) {
   private val cameraHandler: CameraHandler = CameraHandler(
     appContext = appContext,
     camera = camera,
-    prefs = prefs,
-    connectedEndpoint = { connectedEndpoint },
     externalAudioCaptureActive = externalAudioCaptureActive,
     showCameraHud = ::showCameraHud,
     triggerCameraFlash = ::triggerCameraFlash,
