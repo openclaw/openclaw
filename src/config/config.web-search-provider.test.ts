@@ -9,7 +9,7 @@ vi.mock("../runtime.js", () => ({
 const { __testing } = await import("../agents/tools/web-search.js");
 const { resolveSearchProvider } = __testing;
 
-describe("web search provider config", () => {
+describe("web search provider config — built-in providers", () => {
   it("accepts perplexity provider and config", () => {
     const res = validateConfigObject(
       buildWebSearchProviderConfig({
@@ -49,6 +49,48 @@ describe("web search provider config", () => {
     );
 
     expect(res.ok).toBe(true);
+  });
+
+  for (const provider of ["brave", "grok", "kimi"]) {
+    it(`accepts built-in provider "${provider}"`, () => {
+      const res = validateConfigObject(buildWebSearchProviderConfig({ provider }));
+      expect(res.ok).toBe(true);
+    });
+  }
+});
+
+describe("web search provider config — plugin providers", () => {
+  it("accepts serpapi as a plugin provider name", () => {
+    const res = validateConfigObject(buildWebSearchProviderConfig({ provider: "serpapi" }));
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts arbitrary plugin provider names", () => {
+    const res = validateConfigObject(
+      buildWebSearchProviderConfig({ provider: "my-custom-search" }),
+    );
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts another custom provider name", () => {
+    const res = validateConfigObject(buildWebSearchProviderConfig({ provider: "tavily" }));
+    expect(res.ok).toBe(true);
+  });
+});
+
+describe("resolveSearchProvider — custom provider passthrough", () => {
+  it("returns custom provider names as-is (lowercase)", () => {
+    const config = { provider: "SerpApi" } as unknown as Parameters<
+      typeof resolveSearchProvider
+    >[0];
+    expect(resolveSearchProvider(config)).toBe("serpapi");
+  });
+
+  it("returns arbitrary plugin names as-is (lowercase)", () => {
+    const config = { provider: "My-Custom-Search" } as unknown as Parameters<
+      typeof resolveSearchProvider
+    >[0];
+    expect(resolveSearchProvider(config)).toBe("my-custom-search");
   });
 });
 

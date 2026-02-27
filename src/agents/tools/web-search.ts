@@ -6,6 +6,7 @@ import { wrapWebContent } from "../../security/external-content.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readNumberParam, readStringParam } from "./common.js";
+import { getSearchProvider } from "./search-providers.js";
 import {
   WEB_TOOLS_TRUSTED_NETWORK_SSRF_POLICY,
   withWebToolsNetworkGuard,
@@ -22,7 +23,8 @@ import {
   writeCache,
 } from "./web-shared.js";
 
-const SEARCH_PROVIDERS = ["brave", "perplexity", "grok", "gemini", "kimi"] as const;
+/** Built-in search providers (for reference). Auto-detect and plugin dispatch use these names. */
+const _SEARCH_PROVIDERS = ["brave", "perplexity", "grok", "gemini", "kimi"] as const;
 const DEFAULT_SEARCH_COUNT = 5;
 const MAX_SEARCH_COUNT = 10;
 
@@ -79,6 +81,12 @@ const WebSearchSchema = Type.Object({
     Type.String({
       description:
         "Filter results by discovery time. Brave supports 'pd', 'pw', 'pm', 'py', and date range 'YYYY-MM-DDtoYYYY-MM-DD'. Perplexity supports 'pd', 'pw', 'pm', and 'py'.",
+    }),
+  ),
+  engine: Type.Optional(
+    Type.String({
+      description:
+        "Search engine/vertical for plugin providers (e.g. SerpApi). Values: 'google' (default), 'news', 'scholar', 'images', 'shopping', 'maps', 'jobs', 'finance', 'patents', 'youtube', 'bing', 'baidu', 'yandex'.",
     }),
   ),
 });
@@ -293,7 +301,7 @@ function resolveSearchApiKey(search?: WebSearchConfig): string | undefined {
   return fromConfig || fromEnv || undefined;
 }
 
-function missingSearchKeyPayload(provider: (typeof SEARCH_PROVIDERS)[number]) {
+function missingSearchKeyPayload(provider: string) {
   if (provider === "perplexity") {
     return {
       error: "missing_perplexity_api_key",
@@ -333,29 +341,19 @@ function missingSearchKeyPayload(provider: (typeof SEARCH_PROVIDERS)[number]) {
   };
 }
 
-function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDERS)[number] {
+function resolveSearchProvider(search?: WebSearchConfig): string {
   const raw =
     search && "provider" in search && typeof search.provider === "string"
       ? search.provider.trim().toLowerCase()
       : "";
-  if (raw === "perplexity") {
-    return "perplexity";
-  }
-  if (raw === "grok") {
-    return "grok";
-  }
-  if (raw === "gemini") {
-    return "gemini";
-  }
-  if (raw === "kimi") {
-    return "kimi";
-  }
-  if (raw === "brave") {
-    return "brave";
+
+  // Explicit provider configured — return as-is (supports built-in + plugin providers)
+  if (raw) {
+    return raw;
   }
 
   // Auto-detect provider from available API keys (priority order)
-  if (raw === "") {
+  {
     // 1. Brave
     if (resolveSearchApiKey(search)) {
       logVerbose(
@@ -1141,7 +1139,7 @@ async function runWebSearch(params: {
   apiKey: string;
   timeoutSeconds: number;
   cacheTtlMs: number;
-  provider: (typeof SEARCH_PROVIDERS)[number];
+  provider: string;
   country?: string;
   search_lang?: string;
   ui_lang?: string;
@@ -1387,6 +1385,35 @@ export function createWebSearchTool(options?: {
     description,
     parameters: WebSearchSchema,
     execute: async (_toolCallId, args) => {
+      // Check for plugin-registered search provider first
+      const pluginProvider = getSearchProvider(provider);
+      if (pluginProvider) {
+        const params = args as Record<string, unknown>;
+        const query = readStringParam(params, "query", { required: true });
+        const count =
+          readNumberParam(params, "count", { integer: true }) ?? search?.maxResults ?? undefined;
+        const pluginConfig =
+          options?.config?.plugins?.entries?.[pluginProvider.pluginId ?? provider]?.config;
+        const result = await pluginProvider.search(
+          {
+            query,
+            count: resolveSearchCount(count, DEFAULT_SEARCH_COUNT),
+            country: readStringParam(params, "country"),
+            search_lang: readStringParam(params, "search_lang"),
+            ui_lang: readStringParam(params, "ui_lang"),
+            freshness: readStringParam(params, "freshness"),
+            engine: readStringParam(params, "engine"),
+          },
+          {
+            config: options?.config ?? ({} as OpenClawConfig),
+            timeoutSeconds: resolveTimeoutSeconds(search?.timeoutSeconds, DEFAULT_TIMEOUT_SECONDS),
+            cacheTtlMs: resolveCacheTtlMs(search?.cacheTtlMinutes, DEFAULT_CACHE_TTL_MINUTES),
+            pluginConfig,
+          },
+        );
+        return jsonResult(result);
+      }
+
       const perplexityAuth =
         provider === "perplexity" ? resolvePerplexityApiKey(perplexityConfig) : undefined;
       const apiKey =

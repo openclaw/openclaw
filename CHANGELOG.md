@@ -2,6 +2,12 @@
 
 Docs: https://docs.openclaw.ai
 
+## Unreleased
+
+### Changes
+
+- Web search provider config is now extensible: `tools.web.search.provider` accepts any string so plugin-registered search providers (e.g. SerpApi) work without hardcoded schema changes.
+
 ## 2026.2.26
 
 ### Changes

@@ -1,0 +1,20 @@
+{
+  "id": "serpapi-search",
+  "description": "SerpApi search provider with vertical search routing (News, Scholar, Images, Shopping, Maps, etc.)",
+  "entry": "./index.ts",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "apiKey": {
+        "type": "string",
+        "description": "SerpApi API key"
+      },
+      "defaultEngine": {
+        "type": "string",
+        "description": "Default search engine (google, bing, baidu, yandex, etc.)",
+        "default": "google"
+      }
+    }
+  }
+}

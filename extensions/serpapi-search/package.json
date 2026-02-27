@@ -1,0 +1,17 @@
+{
+  "name": "@openclaw/plugin-serpapi-search",
+  "version": "1.0.0",
+  "description": "SerpApi search provider plugin with vertical search support (Google, News, Scholar, Images, Shopping, Maps, etc.)",
+  "keywords": [
+    "google",
+    "openclaw",
+    "plugin",
+    "search",
+    "serpapi",
+    "vertical-search"
+  ],
+  "license": "MIT",
+  "author": "OpenClaw Contributors",
+  "type": "module",
+  "main": "index.ts"
+}
