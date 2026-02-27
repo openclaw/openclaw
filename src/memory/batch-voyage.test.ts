@@ -1,5 +1,6 @@
 import { ReadableStream } from "node:stream/web";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { mockPinnedHostnameResolution } from "../test-helpers/ssrf.js";
 import type { VoyageBatchOutputLine, VoyageBatchRequest } from "./batch-voyage.js";
 import type { VoyageEmbeddingClient } from "./embeddings-voyage.js";
 
@@ -11,6 +12,10 @@ vi.mock("../infra/retry.js", () => ({
 
 describe("runVoyageEmbeddingBatches", () => {
   let runVoyageEmbeddingBatches: typeof import("./batch-voyage.js").runVoyageEmbeddingBatches;
+
+  beforeEach(() => {
+    mockPinnedHostnameResolution();
+  });
 
   beforeAll(async () => {
     ({ runVoyageEmbeddingBatches } = await import("./batch-voyage.js"));

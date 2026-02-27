@@ -4,6 +4,7 @@ import { type FetchMock, withFetchPreconnect } from "../../test-utils/fetch-mock
 
 const lookupMock = vi.fn();
 const resolvePinnedHostname = ssrf.resolvePinnedHostname;
+const resolvePinnedHostnameWithPolicy = ssrf.resolvePinnedHostnameWithPolicy;
 
 function makeHeaders(map: Record<string, string>): { get: (key: string) => string | null } {
   return {
@@ -69,6 +70,9 @@ describe("web_fetch SSRF protection", () => {
   beforeEach(() => {
     vi.spyOn(ssrf, "resolvePinnedHostname").mockImplementation((hostname) =>
       resolvePinnedHostname(hostname, lookupMock),
+    );
+    vi.spyOn(ssrf, "resolvePinnedHostnameWithPolicy").mockImplementation((hostname, params) =>
+      resolvePinnedHostnameWithPolicy(hostname, { ...params, lookupFn: lookupMock }),
     );
   });
 
