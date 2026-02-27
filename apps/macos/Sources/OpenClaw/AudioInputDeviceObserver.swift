@@ -53,6 +53,15 @@ final class AudioInputDeviceObserver {
         return output
     }
 
+    /// Returns true when the system default input device exists and is alive with input channels.
+    /// Use this preflight before accessing `AVAudioEngine.inputNode` to avoid SIGABRT on Macs
+    /// without a built-in microphone (Mac mini, Mac Pro, Mac Studio) or when an external mic
+    /// is disconnected.
+    static func hasUsableDefaultInputDevice() -> Bool {
+        guard let uid = self.defaultInputDeviceUID() else { return false }
+        return self.aliveInputDeviceUIDs().contains(uid)
+    }
+
     static func defaultInputDeviceSummary() -> String {
         let systemObject = AudioObjectID(kAudioObjectSystemObject)
         var address = AudioObjectPropertyAddress(

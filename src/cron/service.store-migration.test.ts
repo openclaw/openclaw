@@ -2,16 +2,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { CronService } from "./service.js";
-import {
-  createCronStoreHarness,
-  createNoopLogger,
-  installCronTestHooks,
-} from "./service.test-harness.js";
+import { setupCronServiceSuite } from "./service.test-harness.js";
 
-const noopLogger = createNoopLogger();
-const { makeStorePath } = createCronStoreHarness({ prefix: "openclaw-cron-" });
-installCronTestHooks({
-  logger: noopLogger,
+const { logger: noopLogger, makeStorePath } = setupCronServiceSuite({
+  prefix: "openclaw-cron-",
   baseTimeIso: "2026-02-06T17:00:00.000Z",
 });
 

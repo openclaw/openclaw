@@ -40,6 +40,11 @@ describe("argv helpers", () => {
       expected: true,
     },
     {
+      name: "root -v alias with log-level",
+      argv: ["node", "openclaw", "--log-level", "debug", "-v"],
+      expected: true,
+    },
+    {
       name: "subcommand -v should not be treated as version",
       argv: ["node", "openclaw", "acp", "-v"],
       expected: false,
@@ -198,6 +203,18 @@ describe("argv helpers", () => {
       {
         rawArgs: ["/usr/bin/node-22.2.0", "openclaw", "status"],
         expected: ["/usr/bin/node-22.2.0", "openclaw", "status"],
+      },
+      {
+        rawArgs: ["node24", "openclaw", "status"],
+        expected: ["node24", "openclaw", "status"],
+      },
+      {
+        rawArgs: ["/usr/bin/node24", "openclaw", "status"],
+        expected: ["/usr/bin/node24", "openclaw", "status"],
+      },
+      {
+        rawArgs: ["node24.exe", "openclaw", "status"],
+        expected: ["node24.exe", "openclaw", "status"],
       },
       {
         rawArgs: ["nodejs", "openclaw", "status"],

@@ -306,7 +306,7 @@ export function createStatusReactionController(params: {
     scheduleEmoji(emoji);
   }
 
-  function setDone(): Promise<void> {
+  function finishWithEmoji(emoji: string): Promise<void> {
     if (!enabled) {
       return Promise.resolve();
     }
@@ -316,24 +316,17 @@ export function createStatusReactionController(params: {
 
     // Directly enqueue to ensure we return the updated promise
     return enqueue(async () => {
-      await applyEmoji(emojis.done);
+      await applyEmoji(emoji);
       pendingEmoji = "";
     });
   }
 
+  function setDone(): Promise<void> {
+    return finishWithEmoji(emojis.done);
+  }
+
   function setError(): Promise<void> {
-    if (!enabled) {
-      return Promise.resolve();
-    }
-
-    finished = true;
-    clearAllTimers();
-
-    // Directly enqueue to ensure we return the updated promise
-    return enqueue(async () => {
-      await applyEmoji(emojis.error);
-      pendingEmoji = "";
-    });
+    return finishWithEmoji(emojis.error);
   }
 
   async function clear(): Promise<void> {

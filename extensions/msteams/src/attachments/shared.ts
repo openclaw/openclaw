@@ -1,3 +1,9 @@
+import {
+  buildHostnameAllowlistPolicyFromSuffixAllowlist,
+  isHttpsUrlAllowedByHostnameSuffixAllowlist,
+  normalizeHostnameSuffixAllowlist,
+} from "openclaw/plugin-sdk";
+import type { SsrFPolicy } from "openclaw/plugin-sdk";
 import type { MSTeamsAttachmentLike } from "./types.js";
 
 type InlineImageCandidate =
@@ -61,6 +67,19 @@ export const GRAPH_ROOT = "https://graph.microsoft.com/v1.0";
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+export function resolveRequestUrl(input: RequestInfo | URL): string {
+  if (typeof input === "string") {
+    return input;
+  }
+  if (input instanceof URL) {
+    return input.toString();
+  }
+  if (typeof input === "object" && input && "url" in input && typeof input.url === "string") {
+    return input.url;
+  }
+  return String(input);
 }
 
 export function normalizeContentType(value: unknown): string | undefined {
@@ -237,55 +256,18 @@ export function safeHostForUrl(url: string): string {
   }
 }
 
-function normalizeAllowHost(value: string): string {
-  const trimmed = value.trim().toLowerCase();
-  if (!trimmed) {
-    return "";
-  }
-  if (trimmed === "*") {
-    return "*";
-  }
-  return trimmed.replace(/^\*\.?/, "");
-}
-
 export function resolveAllowedHosts(input?: string[]): string[] {
-  if (!Array.isArray(input) || input.length === 0) {
-    return DEFAULT_MEDIA_HOST_ALLOWLIST.slice();
-  }
-  const normalized = input.map(normalizeAllowHost).filter(Boolean);
-  if (normalized.includes("*")) {
-    return ["*"];
-  }
-  return normalized;
+  return normalizeHostnameSuffixAllowlist(input, DEFAULT_MEDIA_HOST_ALLOWLIST);
 }
 
 export function resolveAuthAllowedHosts(input?: string[]): string[] {
-  if (!Array.isArray(input) || input.length === 0) {
-    return DEFAULT_MEDIA_AUTH_HOST_ALLOWLIST.slice();
-  }
-  const normalized = input.map(normalizeAllowHost).filter(Boolean);
-  if (normalized.includes("*")) {
-    return ["*"];
-  }
-  return normalized;
-}
-
-function isHostAllowed(host: string, allowlist: string[]): boolean {
-  if (allowlist.includes("*")) {
-    return true;
-  }
-  const normalized = host.toLowerCase();
-  return allowlist.some((entry) => normalized === entry || normalized.endsWith(`.${entry}`));
+  return normalizeHostnameSuffixAllowlist(input, DEFAULT_MEDIA_AUTH_HOST_ALLOWLIST);
 }
 
 export function isUrlAllowed(url: string, allowlist: string[]): boolean {
-  try {
-    const parsed = new URL(url);
-    if (parsed.protocol !== "https:") {
-      return false;
-    }
-    return isHostAllowed(parsed.hostname, allowlist);
-  } catch {
-    return false;
-  }
+  return isHttpsUrlAllowedByHostnameSuffixAllowlist(url, allowlist);
+}
+
+export function resolveMediaSsrfPolicy(allowHosts: string[]): SsrFPolicy | undefined {
+  return buildHostnameAllowlistPolicyFromSuffixAllowlist(allowHosts);
 }

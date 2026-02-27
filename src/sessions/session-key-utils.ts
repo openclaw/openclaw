@@ -3,10 +3,16 @@ export type ParsedAgentSessionKey = {
   rest: string;
 };
 
+export type SessionKeyChatType = "direct" | "group" | "channel" | "unknown";
+
+/**
+ * Parse agent-scoped session keys in a canonical, case-insensitive way.
+ * Returned values are normalized to lowercase for stable comparisons/routing.
+ */
 export function parseAgentSessionKey(
   sessionKey: string | undefined | null,
 ): ParsedAgentSessionKey | null {
-  const raw = (sessionKey ?? "").trim();
+  const raw = (sessionKey ?? "").trim().toLowerCase();
   if (!raw) {
     return null;
   }
@@ -23,6 +29,33 @@ export function parseAgentSessionKey(
     return null;
   }
   return { agentId, rest };
+}
+
+/**
+ * Best-effort chat-type extraction from session keys across canonical and legacy formats.
+ */
+export function deriveSessionChatType(sessionKey: string | undefined | null): SessionKeyChatType {
+  const raw = (sessionKey ?? "").trim().toLowerCase();
+  if (!raw) {
+    return "unknown";
+  }
+  const scoped = parseAgentSessionKey(raw)?.rest ?? raw;
+  const tokens = new Set(scoped.split(":").filter(Boolean));
+  if (tokens.has("group")) {
+    return "group";
+  }
+  if (tokens.has("channel")) {
+    return "channel";
+  }
+  if (tokens.has("direct") || tokens.has("dm")) {
+    return "direct";
+  }
+  // Legacy Discord keys can be shaped like:
+  // discord:<accountId>:guild-<guildId>:channel-<channelId>
+  if (/^discord:(?:[^:]+:)?guild-[^:]+:channel-[^:]+$/.test(scoped)) {
+    return "channel";
+  }
+  return "unknown";
 }
 
 export function isCronRunSessionKey(sessionKey: string | undefined | null): boolean {

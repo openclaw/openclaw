@@ -1,3 +1,5 @@
+import { randomBytes } from "node:crypto";
+
 /**
  * Security utilities for handling untrusted external content.
  *
@@ -43,9 +45,23 @@ export function detectSuspiciousPatterns(content: string): string[] {
 /**
  * Unique boundary markers for external content.
  * Using XML-style tags that are unlikely to appear in legitimate content.
+ * Each wrapper gets a unique random ID to prevent spoofing attacks where
+ * malicious content injects fake boundary markers.
  */
-const EXTERNAL_CONTENT_START = "<<<EXTERNAL_UNTRUSTED_CONTENT>>>";
-const EXTERNAL_CONTENT_END = "<<<END_EXTERNAL_UNTRUSTED_CONTENT>>>";
+const EXTERNAL_CONTENT_START_NAME = "EXTERNAL_UNTRUSTED_CONTENT";
+const EXTERNAL_CONTENT_END_NAME = "END_EXTERNAL_UNTRUSTED_CONTENT";
+
+function createExternalContentMarkerId(): string {
+  return randomBytes(8).toString("hex");
+}
+
+function createExternalContentStartMarker(id: string): string {
+  return `<<<${EXTERNAL_CONTENT_START_NAME} id="${id}">>>`;
+}
+
+function createExternalContentEndMarker(id: string): string {
+  return `<<<${EXTERNAL_CONTENT_END_NAME} id="${id}">>>`;
+}
 
 /**
  * Security warning prepended to external content.
@@ -130,9 +146,16 @@ function replaceMarkers(content: string): string {
     return content;
   }
   const replacements: Array<{ start: number; end: number; value: string }> = [];
+  // Match markers with or without id attribute (handles both legacy and spoofed markers)
   const patterns: Array<{ regex: RegExp; value: string }> = [
-    { regex: /<<<EXTERNAL_UNTRUSTED_CONTENT>>>/gi, value: "[[MARKER_SANITIZED]]" },
-    { regex: /<<<END_EXTERNAL_UNTRUSTED_CONTENT>>>/gi, value: "[[END_MARKER_SANITIZED]]" },
+    {
+      regex: /<<<EXTERNAL_UNTRUSTED_CONTENT(?:\s+id="[^"]{1,128}")?\s*>>>/gi,
+      value: "[[MARKER_SANITIZED]]",
+    },
+    {
+      regex: /<<<END_EXTERNAL_UNTRUSTED_CONTENT(?:\s+id="[^"]{1,128}")?\s*>>>/gi,
+      value: "[[END_MARKER_SANITIZED]]",
+    },
   ];
 
   for (const pattern of patterns) {
@@ -209,14 +232,15 @@ export function wrapExternalContent(content: string, options: WrapExternalConten
 
   const metadata = metadataLines.join("\n");
   const warningBlock = includeWarning ? `${EXTERNAL_CONTENT_WARNING}\n\n` : "";
+  const markerId = createExternalContentMarkerId();
 
   return [
     warningBlock,
-    EXTERNAL_CONTENT_START,
+    createExternalContentStartMarker(markerId),
     metadata,
     "---",
     sanitized,
-    EXTERNAL_CONTENT_END,
+    createExternalContentEndMarker(markerId),
   ].join("\n");
 }
 
@@ -262,10 +286,11 @@ export function buildSafeExternalPrompt(params: {
  * Checks if a session key indicates an external hook source.
  */
 export function isExternalHookSession(sessionKey: string): boolean {
+  const normalized = sessionKey.trim().toLowerCase();
   return (
-    sessionKey.startsWith("hook:gmail:") ||
-    sessionKey.startsWith("hook:webhook:") ||
-    sessionKey.startsWith("hook:") // Generic hook prefix
+    normalized.startsWith("hook:gmail:") ||
+    normalized.startsWith("hook:webhook:") ||
+    normalized.startsWith("hook:") // Generic hook prefix
   );
 }
 
@@ -273,13 +298,14 @@ export function isExternalHookSession(sessionKey: string): boolean {
  * Extracts the hook type from a session key.
  */
 export function getHookType(sessionKey: string): ExternalContentSource {
-  if (sessionKey.startsWith("hook:gmail:")) {
+  const normalized = sessionKey.trim().toLowerCase();
+  if (normalized.startsWith("hook:gmail:")) {
     return "email";
   }
-  if (sessionKey.startsWith("hook:webhook:")) {
+  if (normalized.startsWith("hook:webhook:")) {
     return "webhook";
   }
-  if (sessionKey.startsWith("hook:")) {
+  if (normalized.startsWith("hook:")) {
     return "webhook";
   }
   return "unknown";

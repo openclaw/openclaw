@@ -1,5 +1,6 @@
 import {
   applyAccountNameToChannelSection,
+  buildBaseAccountStatusSnapshot,
   buildBaseChannelStatusSummary,
   buildChannelConfigSchema,
   collectStatusIssuesFromLastError,
@@ -17,6 +18,8 @@ import {
   PAIRING_APPROVED_MESSAGE,
   resolveChannelMediaMaxBytes,
   resolveDefaultSignalAccountId,
+  resolveAllowlistProviderRuntimeGroupPolicy,
+  resolveDefaultGroupPolicy,
   resolveSignalAccount,
   setAccountEnabledInConfigSection,
   signalOnboardingAdapter,
@@ -123,8 +126,12 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
       };
     },
     collectWarnings: ({ account, cfg }) => {
-      const defaultGroupPolicy = cfg.channels?.defaults?.groupPolicy;
-      const groupPolicy = account.config.groupPolicy ?? defaultGroupPolicy ?? "allowlist";
+      const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
+      const { groupPolicy } = resolveAllowlistProviderRuntimeGroupPolicy({
+        providerConfigPresent: cfg.channels?.signal !== undefined,
+        groupPolicy: account.config.groupPolicy,
+        defaultGroupPolicy,
+      });
       if (groupPolicy !== "open") {
         return [];
       }
@@ -267,18 +274,8 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
       return await getSignalRuntime().channel.signal.probeSignal(baseUrl, timeoutMs);
     },
     buildAccountSnapshot: ({ account, runtime, probe }) => ({
-      accountId: account.accountId,
-      name: account.name,
-      enabled: account.enabled,
-      configured: account.configured,
+      ...buildBaseAccountStatusSnapshot({ account, runtime, probe }),
       baseUrl: account.baseUrl,
-      running: runtime?.running ?? false,
-      lastStartAt: runtime?.lastStartAt ?? null,
-      lastStopAt: runtime?.lastStopAt ?? null,
-      lastError: runtime?.lastError ?? null,
-      probe,
-      lastInboundAt: runtime?.lastInboundAt ?? null,
-      lastOutboundAt: runtime?.lastOutboundAt ?? null,
     }),
   },
   gateway: {

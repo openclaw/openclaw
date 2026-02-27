@@ -3,6 +3,7 @@ import OpenClawKit
 import OpenClawProtocol
 import Observation
 import os
+import Security
 import SwiftUI
 import UIKit
 import UserNotifications
@@ -37,9 +38,23 @@ private final class NotificationInvokeLatch<T: Sendable>: @unchecked Sendable {
         cont?.resume(returning: response)
     }
 }
+
+private enum IOSDeepLinkAgentPolicy {
+    static let maxMessageChars = 20000
+    static let maxUnkeyedConfirmChars = 240
+}
+
 @MainActor
 @Observable
+// swiftlint:disable type_body_length file_length
 final class NodeAppModel {
+    struct AgentDeepLinkPrompt: Identifiable, Equatable {
+        let id: String
+        let messagePreview: String
+        let urlPreview: String
+        let request: AgentDeepLink
+    }
+
     private let deepLinkLogger = Logger(subsystem: "ai.openclaw.ios", category: "DeepLink")
     private let pushWakeLogger = Logger(subsystem: "ai.openclaw.ios", category: "PushWake")
     private let locationWakeLogger = Logger(subsystem: "ai.openclaw.ios", category: "LocationWake")
@@ -74,6 +89,8 @@ final class NodeAppModel {
     var gatewayAgents: [AgentSummary] = []
     var lastShareEventText: String = "No share events yet."
     var openChatRequestID: Int = 0
+    private(set) var pendingAgentDeepLinkPrompt: AgentDeepLinkPrompt?
+    private var lastAgentDeepLinkPromptAt: Date = .distantPast
 
     // Primary "node" connection: used for device capabilities and node.invoke requests.
     private let nodeGateway = GatewayNodeSession()
@@ -398,8 +415,10 @@ final class NodeAppModel {
         }
         let wasSuppressed = self.backgroundReconnectSuppressed
         self.backgroundReconnectSuppressed = false
-        self.pushWakeLogger.info(
-            "Background reconnect lease reason=\(reason, privacy: .public) seconds=\(leaseSeconds, privacy: .public) wasSuppressed=\(wasSuppressed, privacy: .public)")
+        let leaseLogMessage =
+            "Background reconnect lease reason=\(reason) "
+            + "seconds=\(leaseSeconds) wasSuppressed=\(wasSuppressed)"
+        self.pushWakeLogger.info("\(leaseLogMessage, privacy: .public)")
     }
 
     private func suppressBackgroundReconnect(reason: String, disconnectIfNeeded: Bool) {
@@ -409,8 +428,10 @@ final class NodeAppModel {
         self.backgroundReconnectLeaseUntil = nil
         self.backgroundReconnectSuppressed = true
         guard changed else { return }
-        self.pushWakeLogger.info(
-            "Background reconnect suppressed reason=\(reason, privacy: .public) disconnect=\(disconnectIfNeeded, privacy: .public)")
+        let suppressLogMessage =
+            "Background reconnect suppressed reason=\(reason) "
+            + "disconnect=\(disconnectIfNeeded)"
+        self.pushWakeLogger.info("\(suppressLogMessage, privacy: .public)")
         guard disconnectIfNeeded else { return }
         Task { [weak self] in
             guard let self else { return }
@@ -485,38 +506,20 @@ final class NodeAppModel {
         }
     }
 
-    private func applyMainSessionKey(_ key: String?) {
-        let trimmed = (key ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        let current = self.mainSessionBaseKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed == current { return }
-        self.mainSessionBaseKey = trimmed
-        self.talkMode.updateMainSessionKey(self.mainSessionKey)
-    }
-
     var seamColor: Color {
         Self.color(fromHex: self.seamColorHex) ?? Self.defaultSeamColor
     }
 
     private static let defaultSeamColor = Color(red: 79 / 255.0, green: 122 / 255.0, blue: 154 / 255.0)
     private static let apnsDeviceTokenUserDefaultsKey = "push.apns.deviceTokenHex"
+    private static let deepLinkKeyUserDefaultsKey = "deeplink.agent.key"
+    private static let canvasUnattendedDeepLinkKey: String = NodeAppModel.generateDeepLinkKey()
     private static var apnsEnvironment: String {
 #if DEBUG
         "sandbox"
 #else
         "production"
 #endif
-    }
-
-    private static func color(fromHex raw: String?) -> Color? {
-        let trimmed = (raw ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
-        let hex = trimmed.hasPrefix("#") ? String(trimmed.dropFirst()) : trimmed
-        guard hex.count == 6, let value = Int(hex, radix: 16) else { return nil }
-        let r = Double((value >> 16) & 0xFF) / 255.0
-        let g = Double((value >> 8) & 0xFF) / 255.0
-        let b = Double(value & 0xFF) / 255.0
-        return Color(red: r, green: g, blue: b)
     }
 
     private func refreshBrandingFromGateway() async {
@@ -609,7 +612,7 @@ final class NodeAppModel {
         self.voiceWakeSyncTask = Task { [weak self] in
             guard let self else { return }
 
-            if !(await self.isGatewayHealthMonitorDisabled()) {
+            if !self.isGatewayHealthMonitorDisabled() {
                 await self.refreshWakeWordsFromGateway()
             }
 
@@ -664,9 +667,13 @@ final class NodeAppModel {
         self.gatewayHealthMonitor.start(
             check: { [weak self] in
                 guard let self else { return false }
-                if await self.isGatewayHealthMonitorDisabled() { return true }
+                if await MainActor.run(body: { self.isGatewayHealthMonitorDisabled() }) { return true }
                 do {
-                    let data = try await self.operatorGateway.request(method: "health", paramsJSON: nil, timeoutSeconds: 6)
+                    let data = try await self.operatorGateway.request(
+                        method: "health",
+                        paramsJSON: nil,
+                        timeoutSeconds: 6
+                    )
                     guard let decoded = try? JSONDecoder().decode(OpenClawGatewayHealthOK.self, from: data) else {
                         return false
                     }
@@ -697,117 +704,6 @@ final class NodeAppModel {
 
     private func stopGatewayHealthMonitor() {
         self.gatewayHealthMonitor.stop()
-    }
-
-    private func refreshWakeWordsFromGateway() async {
-        do {
-            let data = try await self.operatorGateway.request(method: "voicewake.get", paramsJSON: "{}", timeoutSeconds: 8)
-            guard let triggers = VoiceWakePreferences.decodeGatewayTriggers(from: data) else { return }
-            VoiceWakePreferences.saveTriggerWords(triggers)
-        } catch {
-            if let gatewayError = error as? GatewayResponseError {
-                let lower = gatewayError.message.lowercased()
-                if lower.contains("unauthorized role") || lower.contains("missing scope") {
-                    await self.setGatewayHealthMonitorDisabled(true)
-                    return
-                }
-            }
-            // Best-effort only.
-        }
-    }
-
-    private func isGatewayHealthMonitorDisabled() -> Bool {
-        self.gatewayHealthMonitorDisabled
-    }
-
-    private func setGatewayHealthMonitorDisabled(_ disabled: Bool) {
-        self.gatewayHealthMonitorDisabled = disabled
-    }
-
-    func sendVoiceTranscript(text: String, sessionKey: String?) async throws {
-        if await !self.isGatewayConnected() {
-            throw NSError(domain: "Gateway", code: 10, userInfo: [
-                NSLocalizedDescriptionKey: "Gateway not connected",
-            ])
-        }
-        struct Payload: Codable {
-            var text: String
-            var sessionKey: String?
-        }
-        let payload = Payload(text: text, sessionKey: sessionKey)
-        let data = try JSONEncoder().encode(payload)
-        guard let json = String(bytes: data, encoding: .utf8) else {
-            throw NSError(domain: "NodeAppModel", code: 1, userInfo: [
-                NSLocalizedDescriptionKey: "Failed to encode voice transcript payload as UTF-8",
-            ])
-        }
-        await self.nodeGateway.sendEvent(event: "voice.transcript", payloadJSON: json)
-    }
-
-    func handleDeepLink(url: URL) async {
-        guard let route = DeepLinkParser.parse(url) else { return }
-
-        switch route {
-        case let .agent(link):
-            await self.handleAgentDeepLink(link, originalURL: url)
-        case .gateway:
-            break
-        }
-    }
-
-    private func handleAgentDeepLink(_ link: AgentDeepLink, originalURL: URL) async {
-        let message = link.message.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !message.isEmpty else { return }
-        self.deepLinkLogger.info(
-            "agent deep link received messageChars=\(message.count) url=\(originalURL.absoluteString, privacy: .public)"
-        )
-
-        if message.count > 20000 {
-            self.screen.errorText = "Deep link too large (message exceeds 20,000 characters)."
-            self.recordShareEvent("Rejected: message too large (\(message.count) chars).")
-            return
-        }
-
-        guard await self.isGatewayConnected() else {
-            self.screen.errorText = "Gateway not connected (cannot forward deep link)."
-            self.recordShareEvent("Failed: gateway not connected.")
-            self.deepLinkLogger.error("agent deep link rejected: gateway not connected")
-            return
-        }
-
-        do {
-            try await self.sendAgentRequest(link: link)
-            self.screen.errorText = nil
-            self.recordShareEvent("Sent to gateway (\(message.count) chars).")
-            self.deepLinkLogger.info("agent deep link forwarded to gateway")
-            self.openChatRequestID &+= 1
-        } catch {
-            self.screen.errorText = "Agent request failed: \(error.localizedDescription)"
-            self.recordShareEvent("Failed: \(error.localizedDescription)")
-            self.deepLinkLogger.error("agent deep link send failed: \(error.localizedDescription, privacy: .public)")
-        }
-    }
-
-    private func sendAgentRequest(link: AgentDeepLink) async throws {
-        if link.message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            throw NSError(domain: "DeepLink", code: 1, userInfo: [
-                NSLocalizedDescriptionKey: "invalid agent message",
-            ])
-        }
-
-        // iOS gateway forwards to the gateway; no local auth prompts here.
-        // (Key-based unattended auth is handled on macOS for openclaw:// links.)
-        let data = try JSONEncoder().encode(link)
-        guard let json = String(bytes: data, encoding: .utf8) else {
-            throw NSError(domain: "NodeAppModel", code: 2, userInfo: [
-                NSLocalizedDescriptionKey: "Failed to encode agent request payload as UTF-8",
-            ])
-        }
-        await self.nodeGateway.sendEvent(event: "agent.request", payloadJSON: json)
-    }
-
-    private func isGatewayConnected() async -> Bool {
-        self.gatewayConnected
     }
 
     private func handleInvoke(_ req: BridgeInvokeRequest) async -> BridgeInvokeResponse {
@@ -1603,8 +1499,9 @@ private extension NodeAppModel {
             return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
         case OpenClawWatchCommand.notify.rawValue:
             let params = try Self.decodeParams(OpenClawWatchNotifyParams.self, from: req.paramsJSON)
-            let title = params.title.trimmingCharacters(in: .whitespacesAndNewlines)
-            let body = params.body.trimmingCharacters(in: .whitespacesAndNewlines)
+            let normalizedParams = Self.normalizeWatchNotifyParams(params)
+            let title = normalizedParams.title
+            let body = normalizedParams.body
             if title.isEmpty && body.isEmpty {
                 return BridgeInvokeResponse(
                     id: req.id,
@@ -1616,13 +1513,13 @@ private extension NodeAppModel {
             do {
                 let result = try await self.watchMessagingService.sendNotification(
                     id: req.id,
-                    params: params)
+                    params: normalizedParams)
                 if result.queuedForDelivery || !result.deliveredImmediately {
                     let invokeID = req.id
                     Task { @MainActor in
                         await WatchPromptNotificationBridge.scheduleMirroredWatchPromptNotificationIfNeeded(
                             invokeID: invokeID,
-                            params: params,
+                            params: normalizedParams,
                             sendResult: result)
                     }
                 }
@@ -1877,7 +1774,10 @@ private extension NodeAppModel {
                     try? await Task.sleep(nanoseconds: 1_000_000_000)
                     continue
                 }
-                if self.shouldPauseReconnectLoopInBackground(source: "operator_loop") { try? await Task.sleep(nanoseconds: 2_000_000_000); continue }
+                if self.shouldPauseReconnectLoopInBackground(source: "operator_loop") {
+                    try? await Task.sleep(nanoseconds: 2_000_000_000)
+                    continue
+                }
                 if await self.isOperatorConnected() {
                     try? await Task.sleep(nanoseconds: 1_000_000_000)
                     continue
@@ -1904,6 +1804,7 @@ private extension NodeAppModel {
                             }
                             GatewayDiagnostics.log(
                                 "operator gateway connected host=\(url.host ?? "?") scheme=\(url.scheme ?? "?")")
+                            await self.talkMode.reloadConfig()
                             await self.refreshBrandingFromGateway()
                             await self.refreshAgentsFromGateway()
                             await self.refreshShareRouteFromGateway()
@@ -1941,6 +1842,8 @@ private extension NodeAppModel {
         }
     }
 
+    // Legacy reconnect state machine; follow-up refactor needed to split into helpers.
+    // swiftlint:disable:next function_body_length
     func startNodeGatewayLoop(
         url: URL,
         stableID: String,
@@ -1965,7 +1868,10 @@ private extension NodeAppModel {
                     try? await Task.sleep(nanoseconds: 1_000_000_000)
                     continue
                 }
-                if self.shouldPauseReconnectLoopInBackground(source: "node_loop") { try? await Task.sleep(nanoseconds: 2_000_000_000); continue }
+                if self.shouldPauseReconnectLoopInBackground(source: "node_loop") {
+                    try? await Task.sleep(nanoseconds: 2_000_000_000)
+                    continue
+                }
                 if await self.isGatewayConnected() {
                     try? await Task.sleep(nanoseconds: 1_000_000_000)
                     continue
@@ -2009,7 +1915,10 @@ private extension NodeAppModel {
                                     sessionKey: relayData.sessionKey,
                                     deliveryChannel: relayData.deliveryChannel,
                                     deliveryTo: relayData.deliveryTo))
-                            GatewayDiagnostics.log("gateway connected host=\(url.host ?? "?") scheme=\(url.scheme ?? "?")")
+                            GatewayDiagnostics.log(
+                                "gateway connected host=\(url.host ?? "?") "
+                                    + "scheme=\(url.scheme ?? "?")"
+                            )
                             if let addr = await self.nodeGateway.currentRemoteAddress() {
                                 await MainActor.run { self.gatewayRemoteAddress = addr }
                             }
@@ -2104,9 +2013,11 @@ private extension NodeAppModel {
                             self.gatewayPairingRequestId = requestId
                             if let requestId, !requestId.isEmpty {
                                 self.gatewayStatusText =
-                                    "Pairing required (requestId: \(requestId)). Approve on gateway and return to OpenClaw."
+                                    "Pairing required (requestId: \(requestId)). "
+                                        + "Approve on gateway and return to OpenClaw."
                             } else {
-                                self.gatewayStatusText = "Pairing required. Approve on gateway and return to OpenClaw."
+                                self.gatewayStatusText =
+                                    "Pairing required. Approve on gateway and return to OpenClaw."
                             }
                         }
                         // Hard stop the underlying WebSocket watchdog reconnects so the UI stays stable and
@@ -2324,12 +2235,16 @@ extension NodeAppModel {
             key: event.replyId)
         do {
             try await self.sendAgentRequest(link: link)
-            self.watchReplyLogger.info(
-                "watch reply forwarded replyId=\(event.replyId, privacy: .public) action=\(event.actionId, privacy: .public)")
+            let forwardedMessage =
+                "watch reply forwarded replyId=\(event.replyId) "
+                + "action=\(event.actionId)"
+            self.watchReplyLogger.info("\(forwardedMessage, privacy: .public)")
             self.openChatRequestID &+= 1
         } catch {
-            self.watchReplyLogger.error(
-                "watch reply forwarding failed replyId=\(event.replyId, privacy: .public) error=\(error.localizedDescription, privacy: .public)")
+            let failedMessage =
+                "watch reply forwarding failed replyId=\(event.replyId) "
+                + "error=\(error.localizedDescription)"
+            self.watchReplyLogger.error("\(failedMessage, privacy: .public)")
             self.queuedWatchReplies.insert(event, at: 0)
         }
     }
@@ -2363,21 +2278,37 @@ extension NodeAppModel {
             return false
         }
         let pushKind = Self.openclawPushKind(userInfo)
-        self.pushWakeLogger.info(
-            "Silent push received wakeId=\(wakeId, privacy: .public) kind=\(pushKind, privacy: .public) backgrounded=\(self.isBackgrounded, privacy: .public) autoReconnect=\(self.gatewayAutoReconnectEnabled, privacy: .public)")
+        let receivedMessage =
+            "Silent push received wakeId=\(wakeId) "
+            + "kind=\(pushKind) "
+            + "backgrounded=\(self.isBackgrounded) "
+            + "autoReconnect=\(self.gatewayAutoReconnectEnabled)"
+        self.pushWakeLogger.info("\(receivedMessage, privacy: .public)")
         let result = await self.reconnectGatewaySessionsForSilentPushIfNeeded(wakeId: wakeId)
-        self.pushWakeLogger.info(
-            "Silent push outcome wakeId=\(wakeId, privacy: .public) applied=\(result.applied, privacy: .public) reason=\(result.reason, privacy: .public) durationMs=\(result.durationMs, privacy: .public)")
+        let outcomeMessage =
+            "Silent push outcome wakeId=\(wakeId) "
+            + "applied=\(result.applied) "
+            + "reason=\(result.reason) "
+            + "durationMs=\(result.durationMs)"
+        self.pushWakeLogger.info("\(outcomeMessage, privacy: .public)")
         return result.applied
     }
 
     func handleBackgroundRefreshWake(trigger: String = "bg_app_refresh") async -> Bool {
         let wakeId = Self.makePushWakeAttemptID()
-        self.pushWakeLogger.info(
-            "Background refresh wake received wakeId=\(wakeId, privacy: .public) trigger=\(trigger, privacy: .public) backgrounded=\(self.isBackgrounded, privacy: .public) autoReconnect=\(self.gatewayAutoReconnectEnabled, privacy: .public)")
+        let receivedMessage =
+            "Background refresh wake received wakeId=\(wakeId) "
+            + "trigger=\(trigger) "
+            + "backgrounded=\(self.isBackgrounded) "
+            + "autoReconnect=\(self.gatewayAutoReconnectEnabled)"
+        self.pushWakeLogger.info("\(receivedMessage, privacy: .public)")
         let result = await self.reconnectGatewaySessionsForSilentPushIfNeeded(wakeId: wakeId)
-        self.pushWakeLogger.info(
-            "Background refresh wake outcome wakeId=\(wakeId, privacy: .public) applied=\(result.applied, privacy: .public) reason=\(result.reason, privacy: .public) durationMs=\(result.durationMs, privacy: .public)")
+        let outcomeMessage =
+            "Background refresh wake outcome wakeId=\(wakeId) "
+            + "applied=\(result.applied) "
+            + "reason=\(result.reason) "
+            + "durationMs=\(result.durationMs)"
+        self.pushWakeLogger.info("\(outcomeMessage, privacy: .public)")
         return result.applied
     }
 
@@ -2394,17 +2325,26 @@ extension NodeAppModel {
         if let last = self.lastSignificantLocationWakeAt,
            now.timeIntervalSince(last) < throttleWindowSeconds
         {
-            self.locationWakeLogger.info(
-                "Location wake throttled wakeId=\(wakeId, privacy: .public) elapsedSec=\(now.timeIntervalSince(last), privacy: .public)")
+            let throttledMessage =
+                "Location wake throttled wakeId=\(wakeId) "
+                + "elapsedSec=\(now.timeIntervalSince(last))"
+            self.locationWakeLogger.info("\(throttledMessage, privacy: .public)")
             return
         }
         self.lastSignificantLocationWakeAt = now
 
-        self.locationWakeLogger.info(
-            "Location wake begin wakeId=\(wakeId, privacy: .public) backgrounded=\(self.isBackgrounded, privacy: .public) autoReconnect=\(self.gatewayAutoReconnectEnabled, privacy: .public)")
+        let beginMessage =
+            "Location wake begin wakeId=\(wakeId) "
+            + "backgrounded=\(self.isBackgrounded) "
+            + "autoReconnect=\(self.gatewayAutoReconnectEnabled)"
+        self.locationWakeLogger.info("\(beginMessage, privacy: .public)")
         let result = await self.reconnectGatewaySessionsForSilentPushIfNeeded(wakeId: wakeId)
-        self.locationWakeLogger.info(
-            "Location wake trigger wakeId=\(wakeId, privacy: .public) applied=\(result.applied, privacy: .public) reason=\(result.reason, privacy: .public) durationMs=\(result.durationMs, privacy: .public)")
+        let triggerMessage =
+            "Location wake trigger wakeId=\(wakeId) "
+            + "applied=\(result.applied) "
+            + "reason=\(result.reason) "
+            + "durationMs=\(result.durationMs)"
+        self.locationWakeLogger.info("\(triggerMessage, privacy: .public)")
 
         guard result.applied else { return }
         let connected = await self.waitForGatewayConnection(timeoutMs: 5000, pollMs: 250)
@@ -2560,6 +2500,234 @@ extension NodeAppModel {
 }
 
 extension NodeAppModel {
+    private func refreshWakeWordsFromGateway() async {
+        do {
+            let data = try await self.operatorGateway.request(
+                method: "voicewake.get",
+                paramsJSON: "{}",
+                timeoutSeconds: 8
+            )
+            guard let triggers = VoiceWakePreferences.decodeGatewayTriggers(from: data) else { return }
+            VoiceWakePreferences.saveTriggerWords(triggers)
+        } catch {
+            if let gatewayError = error as? GatewayResponseError {
+                let lower = gatewayError.message.lowercased()
+                if lower.contains("unauthorized role") || lower.contains("missing scope") {
+                    self.setGatewayHealthMonitorDisabled(true)
+                    return
+                }
+            }
+            // Best-effort only.
+        }
+    }
+
+    private func isGatewayHealthMonitorDisabled() -> Bool {
+        self.gatewayHealthMonitorDisabled
+    }
+
+    private func setGatewayHealthMonitorDisabled(_ disabled: Bool) {
+        self.gatewayHealthMonitorDisabled = disabled
+    }
+
+    func sendVoiceTranscript(text: String, sessionKey: String?) async throws {
+        if await !self.isGatewayConnected() {
+            throw NSError(domain: "Gateway", code: 10, userInfo: [
+                NSLocalizedDescriptionKey: "Gateway not connected",
+            ])
+        }
+        struct Payload: Codable {
+            var text: String
+            var sessionKey: String?
+        }
+        let payload = Payload(text: text, sessionKey: sessionKey)
+        let data = try JSONEncoder().encode(payload)
+        guard let json = String(bytes: data, encoding: .utf8) else {
+            throw NSError(domain: "NodeAppModel", code: 1, userInfo: [
+                NSLocalizedDescriptionKey: "Failed to encode voice transcript payload as UTF-8",
+            ])
+        }
+        await self.nodeGateway.sendEvent(event: "voice.transcript", payloadJSON: json)
+    }
+
+    func handleDeepLink(url: URL) async {
+        guard let route = DeepLinkParser.parse(url) else { return }
+
+        switch route {
+        case let .agent(link):
+            await self.handleAgentDeepLink(link, originalURL: url)
+        case .gateway:
+            break
+        }
+    }
+
+    private func handleAgentDeepLink(_ link: AgentDeepLink, originalURL: URL) async {
+        let message = link.message.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !message.isEmpty else { return }
+        self.deepLinkLogger.info(
+            "agent deep link received messageChars=\(message.count) url=\(originalURL.absoluteString, privacy: .public)"
+        )
+
+        if message.count > IOSDeepLinkAgentPolicy.maxMessageChars {
+            self.screen.errorText = "Deep link too large (message exceeds "
+                + "\(IOSDeepLinkAgentPolicy.maxMessageChars) characters)."
+            self.recordShareEvent("Rejected: message too large (\(message.count) chars).")
+            return
+        }
+
+        guard await self.isGatewayConnected() else {
+            self.screen.errorText = "Gateway not connected (cannot forward deep link)."
+            self.recordShareEvent("Failed: gateway not connected.")
+            self.deepLinkLogger.error("agent deep link rejected: gateway not connected")
+            return
+        }
+
+        let allowUnattended = self.isUnattendedDeepLinkAllowed(link.key)
+        if !allowUnattended {
+            if message.count > IOSDeepLinkAgentPolicy.maxUnkeyedConfirmChars {
+                self.screen.errorText = "Deep link blocked (message too long without key)."
+                self.recordShareEvent(
+                    "Rejected: deep link over \(IOSDeepLinkAgentPolicy.maxUnkeyedConfirmChars) chars without key.")
+                self.deepLinkLogger.error(
+                    "agent deep link rejected: unkeyed message too long chars=\(message.count, privacy: .public)")
+                return
+            }
+            if Date().timeIntervalSince(self.lastAgentDeepLinkPromptAt) < 1.0 {
+                self.deepLinkLogger.debug("agent deep link prompt throttled")
+                return
+            }
+            self.lastAgentDeepLinkPromptAt = Date()
+
+            let urlText = originalURL.absoluteString
+            let prompt = AgentDeepLinkPrompt(
+                id: UUID().uuidString,
+                messagePreview: message,
+                urlPreview: urlText.count > 500 ? "\(urlText.prefix(500))…" : urlText,
+                request: self.effectiveAgentDeepLinkForPrompt(link))
+            self.pendingAgentDeepLinkPrompt = prompt
+            self.recordShareEvent("Awaiting local confirmation (\(message.count) chars).")
+            self.deepLinkLogger.info("agent deep link requires local confirmation")
+            return
+        }
+
+        await self.submitAgentDeepLink(link, messageCharCount: message.count)
+    }
+
+    private func sendAgentRequest(link: AgentDeepLink) async throws {
+        if link.message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            throw NSError(domain: "DeepLink", code: 1, userInfo: [
+                NSLocalizedDescriptionKey: "invalid agent message",
+            ])
+        }
+
+        let data = try JSONEncoder().encode(link)
+        guard let json = String(bytes: data, encoding: .utf8) else {
+            throw NSError(domain: "NodeAppModel", code: 2, userInfo: [
+                NSLocalizedDescriptionKey: "Failed to encode agent request payload as UTF-8",
+            ])
+        }
+        await self.nodeGateway.sendEvent(event: "agent.request", payloadJSON: json)
+    }
+
+    private func isGatewayConnected() async -> Bool {
+        self.gatewayConnected
+    }
+
+    private func applyMainSessionKey(_ key: String?) {
+        let trimmed = (key ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        let current = self.mainSessionBaseKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed == current { return }
+        self.mainSessionBaseKey = trimmed
+        self.talkMode.updateMainSessionKey(self.mainSessionKey)
+    }
+
+    private static func color(fromHex raw: String?) -> Color? {
+        let trimmed = (raw ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let hex = trimmed.hasPrefix("#") ? String(trimmed.dropFirst()) : trimmed
+        guard hex.count == 6, let value = Int(hex, radix: 16) else { return nil }
+        let r = Double((value >> 16) & 0xFF) / 255.0
+        let g = Double((value >> 8) & 0xFF) / 255.0
+        let b = Double(value & 0xFF) / 255.0
+        return Color(red: r, green: g, blue: b)
+    }
+
+    func approvePendingAgentDeepLinkPrompt() async {
+        guard let prompt = self.pendingAgentDeepLinkPrompt else { return }
+        self.pendingAgentDeepLinkPrompt = nil
+        guard await self.isGatewayConnected() else {
+            self.screen.errorText = "Gateway not connected (cannot forward deep link)."
+            self.recordShareEvent("Failed: gateway not connected.")
+            self.deepLinkLogger.error("agent deep link approval failed: gateway not connected")
+            return
+        }
+        await self.submitAgentDeepLink(prompt.request, messageCharCount: prompt.messagePreview.count)
+    }
+
+    func declinePendingAgentDeepLinkPrompt() {
+        guard self.pendingAgentDeepLinkPrompt != nil else { return }
+        self.pendingAgentDeepLinkPrompt = nil
+        self.screen.errorText = "Deep link cancelled."
+        self.recordShareEvent("Cancelled: deep link confirmation declined.")
+        self.deepLinkLogger.info("agent deep link cancelled by local user")
+    }
+
+    private func submitAgentDeepLink(_ link: AgentDeepLink, messageCharCount: Int) async {
+        do {
+            try await self.sendAgentRequest(link: link)
+            self.screen.errorText = nil
+            self.recordShareEvent("Sent to gateway (\(messageCharCount) chars).")
+            self.deepLinkLogger.info("agent deep link forwarded to gateway")
+            self.openChatRequestID &+= 1
+        } catch {
+            self.screen.errorText = "Agent request failed: \(error.localizedDescription)"
+            self.recordShareEvent("Failed: \(error.localizedDescription)")
+            self.deepLinkLogger.error("agent deep link send failed: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    private func effectiveAgentDeepLinkForPrompt(_ link: AgentDeepLink) -> AgentDeepLink {
+        // Without a trusted key, strip delivery/routing knobs to reduce exfiltration risk.
+        AgentDeepLink(
+            message: link.message,
+            sessionKey: link.sessionKey,
+            thinking: link.thinking,
+            deliver: false,
+            to: nil,
+            channel: nil,
+            timeoutSeconds: link.timeoutSeconds,
+            key: link.key)
+    }
+
+    private func isUnattendedDeepLinkAllowed(_ key: String?) -> Bool {
+        let normalizedKey = key?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !normalizedKey.isEmpty else { return false }
+        return normalizedKey == Self.canvasUnattendedDeepLinkKey || normalizedKey == Self.expectedDeepLinkKey()
+    }
+
+    private static func expectedDeepLinkKey() -> String {
+        let defaults = UserDefaults.standard
+        if let key = defaults.string(forKey: self.deepLinkKeyUserDefaultsKey), !key.isEmpty {
+            return key
+        }
+        let key = self.generateDeepLinkKey()
+        defaults.set(key, forKey: self.deepLinkKeyUserDefaultsKey)
+        return key
+    }
+
+    private static func generateDeepLinkKey() -> String {
+        var bytes = [UInt8](repeating: 0, count: 32)
+        _ = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
+        let data = Data(bytes)
+        return data
+            .base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+    }
+}
+
+extension NodeAppModel {
     func _bridgeConsumeMirroredWatchReply(_ event: WatchQuickReplyEvent) async {
         await self.handleWatchQuickReply(event)
     }
@@ -2606,5 +2774,14 @@ extension NodeAppModel {
     func _test_queuedWatchReplyCount() -> Int {
         self.queuedWatchReplies.count
     }
+
+    func _test_setGatewayConnected(_ connected: Bool) {
+        self.gatewayConnected = connected
+    }
+
+    static func _test_currentDeepLinkKey() -> String {
+        self.expectedDeepLinkKey()
+    }
 }
 #endif
+// swiftlint:enable type_body_length file_length

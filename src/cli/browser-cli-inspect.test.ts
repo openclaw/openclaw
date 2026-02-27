@@ -65,15 +65,19 @@ type SnapshotDefaultsCase = {
 };
 
 describe("browser cli snapshot defaults", () => {
-  const runSnapshot = async (args: string[]) => {
+  const runBrowserInspect = async (args: string[], withJson = false) => {
     const program = new Command();
     const browser = program.command("browser").option("--json", "JSON output", false);
     registerBrowserInspectCommands(browser, () => ({}));
-    await program.parseAsync(["browser", "snapshot", ...args], { from: "user" });
+    await program.parseAsync(withJson ? ["browser", "--json", ...args] : ["browser", ...args], {
+      from: "user",
+    });
 
     const [, params] = sharedMocks.callBrowserRequest.mock.calls.at(-1) ?? [];
     return params as { path?: string; query?: Record<string, unknown> } | undefined;
   };
+
+  const runSnapshot = async (args: string[]) => await runBrowserInspect(["snapshot", ...args]);
 
   beforeAll(async () => {
     ({ registerBrowserInspectCommands } = await import("./browser-cli-inspect.js"));
@@ -120,5 +124,30 @@ describe("browser cli snapshot defaults", () => {
         mode: expectMode,
       });
     }
+  });
+
+  it("does not set mode when config defaults are absent", async () => {
+    configMocks.loadConfig.mockReturnValue({ browser: {} });
+    const params = await runSnapshot([]);
+    expect((params?.query as { mode?: unknown } | undefined)?.mode).toBeUndefined();
+  });
+
+  it("applies explicit efficient mode without config defaults", async () => {
+    configMocks.loadConfig.mockReturnValue({ browser: {} });
+    const params = await runSnapshot(["--efficient"]);
+    expect(params?.query).toMatchObject({
+      format: "ai",
+      mode: "efficient",
+    });
+  });
+
+  it("sends screenshot request with trimmed target id and jpeg type", async () => {
+    const params = await runBrowserInspect(["screenshot", " tab-1 ", "--type", "jpeg"], true);
+    expect(params?.path).toBe("/screenshot");
+    expect((params as { body?: Record<string, unknown> } | undefined)?.body).toMatchObject({
+      targetId: "tab-1",
+      type: "jpeg",
+      fullPage: false,
+    });
   });
 });

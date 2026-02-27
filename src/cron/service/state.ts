@@ -1,6 +1,7 @@
 import type { CronConfig } from "../../config/types.cron.js";
 import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
 import type {
+  CronDeliveryStatus,
   CronJob,
   CronJobCreate,
   CronJobPatch,
@@ -18,6 +19,9 @@ export type CronEvent = {
   status?: CronRunStatus;
   error?: string;
   summary?: string;
+  delivered?: boolean;
+  deliveryStatus?: CronDeliveryStatus;
+  deliveryError?: string;
   sessionId?: string;
   sessionKey?: string;
   nextRunAtMs?: number;
@@ -61,7 +65,11 @@ export type CronServiceDeps = {
   wakeNowHeartbeatBusyMaxWaitMs?: number;
   /** WakeMode=now: delay between runHeartbeatOnce retries while busy. */
   wakeNowHeartbeatBusyRetryDelayMs?: number;
-  runIsolatedAgentJob: (params: { job: CronJob; message: string }) => Promise<
+  runIsolatedAgentJob: (params: {
+    job: CronJob;
+    message: string;
+    abortSignal?: AbortSignal;
+  }) => Promise<
     {
       summary?: string;
       /** Last non-empty agent text output (not truncated). */
@@ -72,6 +80,11 @@ export type CronServiceDeps = {
        * https://github.com/openclaw/openclaw/issues/15692
        */
       delivered?: boolean;
+      /**
+       * `true` when announce/direct delivery was attempted for this run, even
+       * if the final per-message ack status is uncertain.
+       */
+      deliveryAttempted?: boolean;
     } & CronRunOutcome &
       CronRunTelemetry
   >;

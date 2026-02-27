@@ -29,8 +29,35 @@ private func withUserDefaults<T>(_ updates: [String: Any?], _ body: () throws ->
     return try body()
 }
 
+private func makeAgentDeepLinkURL(
+    message: String,
+    deliver: Bool = false,
+    to: String? = nil,
+    channel: String? = nil,
+    key: String? = nil) -> URL
+{
+    var components = URLComponents()
+    components.scheme = "openclaw"
+    components.host = "agent"
+    var queryItems: [URLQueryItem] = [URLQueryItem(name: "message", value: message)]
+    if deliver {
+        queryItems.append(URLQueryItem(name: "deliver", value: "1"))
+    }
+    if let to {
+        queryItems.append(URLQueryItem(name: "to", value: to))
+    }
+    if let channel {
+        queryItems.append(URLQueryItem(name: "channel", value: channel))
+    }
+    if let key {
+        queryItems.append(URLQueryItem(name: "key", value: key))
+    }
+    components.queryItems = queryItems
+    return components.url!
+}
+
 @MainActor
-private final class MockWatchMessagingService: WatchMessagingServicing, @unchecked Sendable {
+private final class MockWatchMessagingService: @preconcurrency WatchMessagingServicing, @unchecked Sendable {
     var currentStatus = WatchMessagingStatus(
         supported: true,
         paired: true,
@@ -275,6 +302,79 @@ private final class MockWatchMessagingService: WatchMessagingServicing, @uncheck
         #expect(watchService.lastSent == nil)
     }
 
+    @Test @MainActor func handleInvokeWatchNotifyAddsDefaultActionsForPrompt() async throws {
+        let watchService = MockWatchMessagingService()
+        let appModel = NodeAppModel(watchMessagingService: watchService)
+        let params = OpenClawWatchNotifyParams(
+            title: "Task",
+            body: "Action needed",
+            priority: .passive,
+            promptId: "prompt-123")
+        let paramsData = try JSONEncoder().encode(params)
+        let paramsJSON = String(decoding: paramsData, as: UTF8.self)
+        let req = BridgeInvokeRequest(
+            id: "watch-notify-default-actions",
+            command: OpenClawWatchCommand.notify.rawValue,
+            paramsJSON: paramsJSON)
+
+        let res = await appModel._test_handleInvoke(req)
+        #expect(res.ok == true)
+        #expect(watchService.lastSent?.params.risk == .low)
+        let actionIDs = watchService.lastSent?.params.actions?.map(\.id)
+        #expect(actionIDs == ["done", "snooze_10m", "open_phone", "escalate"])
+    }
+
+    @Test @MainActor func handleInvokeWatchNotifyAddsApprovalDefaults() async throws {
+        let watchService = MockWatchMessagingService()
+        let appModel = NodeAppModel(watchMessagingService: watchService)
+        let params = OpenClawWatchNotifyParams(
+            title: "Approval",
+            body: "Allow command?",
+            promptId: "prompt-approval",
+            kind: "approval")
+        let paramsData = try JSONEncoder().encode(params)
+        let paramsJSON = String(decoding: paramsData, as: UTF8.self)
+        let req = BridgeInvokeRequest(
+            id: "watch-notify-approval-defaults",
+            command: OpenClawWatchCommand.notify.rawValue,
+            paramsJSON: paramsJSON)
+
+        let res = await appModel._test_handleInvoke(req)
+        #expect(res.ok == true)
+        let actionIDs = watchService.lastSent?.params.actions?.map(\.id)
+        #expect(actionIDs == ["approve", "decline", "open_phone", "escalate"])
+        #expect(watchService.lastSent?.params.actions?[1].style == "destructive")
+    }
+
+    @Test @MainActor func handleInvokeWatchNotifyDerivesPriorityFromRiskAndCapsActions() async throws {
+        let watchService = MockWatchMessagingService()
+        let appModel = NodeAppModel(watchMessagingService: watchService)
+        let params = OpenClawWatchNotifyParams(
+            title: "Urgent",
+            body: "Check now",
+            risk: .high,
+            actions: [
+                OpenClawWatchAction(id: "a1", label: "A1"),
+                OpenClawWatchAction(id: "a2", label: "A2"),
+                OpenClawWatchAction(id: "a3", label: "A3"),
+                OpenClawWatchAction(id: "a4", label: "A4"),
+                OpenClawWatchAction(id: "a5", label: "A5"),
+            ])
+        let paramsData = try JSONEncoder().encode(params)
+        let paramsJSON = String(decoding: paramsData, as: UTF8.self)
+        let req = BridgeInvokeRequest(
+            id: "watch-notify-derive-priority",
+            command: OpenClawWatchCommand.notify.rawValue,
+            paramsJSON: paramsJSON)
+
+        let res = await appModel._test_handleInvoke(req)
+        #expect(res.ok == true)
+        #expect(watchService.lastSent?.params.priority == .timeSensitive)
+        #expect(watchService.lastSent?.params.risk == .high)
+        let actionIDs = watchService.lastSent?.params.actions?.map(\.id)
+        #expect(actionIDs == ["a1", "a2", "a3", "a4"])
+    }
+
     @Test @MainActor func handleInvokeWatchNotifyReturnsUnavailableOnDeliveryFailure() async throws {
         let watchService = MockWatchMessagingService()
         watchService.sendError = NSError(
@@ -325,6 +425,58 @@ private final class MockWatchMessagingService: WatchMessagingServicing, @uncheck
         let url = URL(string: "openclaw://agent?message=\(msg)")!
         await appModel.handleDeepLink(url: url)
         #expect(appModel.screen.errorText?.contains("Deep link too large") == true)
+    }
+
+    @Test @MainActor func handleDeepLinkRequiresConfirmationWhenConnectedAndUnkeyed() async {
+        let appModel = NodeAppModel()
+        appModel._test_setGatewayConnected(true)
+        let url = makeAgentDeepLinkURL(message: "hello from deep link")
+
+        await appModel.handleDeepLink(url: url)
+        #expect(appModel.pendingAgentDeepLinkPrompt != nil)
+        #expect(appModel.openChatRequestID == 0)
+
+        await appModel.approvePendingAgentDeepLinkPrompt()
+        #expect(appModel.pendingAgentDeepLinkPrompt == nil)
+        #expect(appModel.openChatRequestID == 1)
+    }
+
+    @Test @MainActor func handleDeepLinkStripsDeliveryFieldsWhenUnkeyed() async throws {
+        let appModel = NodeAppModel()
+        appModel._test_setGatewayConnected(true)
+        let url = makeAgentDeepLinkURL(
+            message: "route this",
+            deliver: true,
+            to: "123456",
+            channel: "telegram")
+
+        await appModel.handleDeepLink(url: url)
+        let prompt = try #require(appModel.pendingAgentDeepLinkPrompt)
+        #expect(prompt.request.deliver == false)
+        #expect(prompt.request.to == nil)
+        #expect(prompt.request.channel == nil)
+    }
+
+    @Test @MainActor func handleDeepLinkRejectsLongUnkeyedMessageWhenConnected() async {
+        let appModel = NodeAppModel()
+        appModel._test_setGatewayConnected(true)
+        let message = String(repeating: "x", count: 241)
+        let url = makeAgentDeepLinkURL(message: message)
+
+        await appModel.handleDeepLink(url: url)
+        #expect(appModel.pendingAgentDeepLinkPrompt == nil)
+        #expect(appModel.screen.errorText?.contains("blocked") == true)
+    }
+
+    @Test @MainActor func handleDeepLinkBypassesPromptWithValidKey() async {
+        let appModel = NodeAppModel()
+        appModel._test_setGatewayConnected(true)
+        let key = NodeAppModel._test_currentDeepLinkKey()
+        let url = makeAgentDeepLinkURL(message: "trusted request", key: key)
+
+        await appModel.handleDeepLink(url: url)
+        #expect(appModel.pendingAgentDeepLinkPrompt == nil)
+        #expect(appModel.openChatRequestID == 1)
     }
 
     @Test @MainActor func sendVoiceTranscriptThrowsWhenGatewayOffline() async {

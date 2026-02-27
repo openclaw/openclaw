@@ -2,6 +2,28 @@ import { describe, expect, it } from "vitest";
 import { FeishuConfigSchema } from "./config-schema.js";
 
 describe("FeishuConfigSchema webhook validation", () => {
+  it("applies top-level defaults", () => {
+    const result = FeishuConfigSchema.parse({});
+    expect(result.domain).toBe("feishu");
+    expect(result.connectionMode).toBe("websocket");
+    expect(result.webhookPath).toBe("/feishu/events");
+    expect(result.dmPolicy).toBe("pairing");
+    expect(result.groupPolicy).toBe("allowlist");
+    expect(result.requireMention).toBe(true);
+  });
+
+  it("does not force top-level policy defaults into account config", () => {
+    const result = FeishuConfigSchema.parse({
+      accounts: {
+        main: {},
+      },
+    });
+
+    expect(result.accounts?.main?.dmPolicy).toBeUndefined();
+    expect(result.accounts?.main?.groupPolicy).toBeUndefined();
+    expect(result.accounts?.main?.requireMention).toBeUndefined();
+  });
+
   it("rejects top-level webhook mode without verificationToken", () => {
     const result = FeishuConfigSchema.safeParse({
       connectionMode: "webhook",
