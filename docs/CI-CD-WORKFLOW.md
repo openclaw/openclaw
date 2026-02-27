@@ -66,8 +66,10 @@ git push origin main
 
 ### 3. Build Docker Image
 
+**For Linux/CI-CD (build locally or in GitHub Actions):**
+
 ```bash
-# Build with aligned tag (Git tag == Image tag)
+# Build with aligned tag (Git tag == image tag)
 docker build -t piboonsak/openclaw:latest -f Dockerfile .
 docker build -t piboonsak/openclaw:v2026.2.27-ws22 -f Dockerfile .
 
@@ -79,12 +81,25 @@ docker run --rm -it \
   openclaw --version
 ```
 
+**For Windows/Mac without Docker:
+
+Skip this step. Your code changes are on GitHub. Production build either:
+- Runs automatically in GitHub Actions CI/CD pipeline (future setup)
+- Or manually on a Linux machine by DevOps
+
+The VPS will pull the latest published image from Docker Hub:
+```bash
+docker pull piboonsak/openclaw:latest
+```
+
 **Tag naming conventions:**
 - `latest` - Current production release
 - `vYYYY.M.D` - Release tag (Git tag + image tag)
 - `vYYYY.M.D-<fix>` - Hotfix tag (Git tag + image tag)
 
 ### 4. Push Image to Docker Hub
+
+**For Linux/CI-CD only:**
 
 ```bash
 # Login to Docker Hub (if not already logged in)
@@ -100,21 +115,22 @@ docker push piboonsak/openclaw:latest
 - Confirm both tags are present
 - Check image size matches local build
 
-### 5. Deploy to VPS via Git Runner
+**For non-Linux developers:**
+- This step runs in GitHub Actions (future) or manually by DevOps
+- Your job is done after pushing code to GitHub (Step 2)
 
-**Option A: Manual deployment via SSH (one-time setup)**
+### 5. Deploy to VPS via SSH
+
+**Manual deployment to production:**
 
 ```bash
 # SSH into VPS
 ssh -i "C:\Users\HP Probook 440 G8\.ssh\id_ed25519_hostinger" root@76.13.210.250
 
-# Navigate to deployment directory
-cd /root/openclaw-deployment
+# Navigate to deployment directory (CORRECT PATH)
+cd /docker/openclaw-sgnl
 
-# Pull latest changes
-git pull origin main
-
-# Update environment variables in Hostinger UI:
+# Verify environment variables in Hostinger UI are set:
 # - OPENROUTER_API_KEY
 # - BRAVE_API_KEY (for web search)
 # - BRAVE_API_SEARCH_KEY
@@ -122,18 +138,39 @@ git pull origin main
 # - LINE_CHANNEL_SECRET
 # - LINE_CHANNEL_ACCESS_TOKEN
 
-# Pull new image
+# Pull new image from Docker Hub
 docker pull piboonsak/openclaw:latest
 
-# Restart containers with new image
-docker-compose -f docker/docker-compose.prod.yml down
-docker-compose -f docker/docker-compose.prod.yml up -d
+# Restart containers with new image (use docker compose v2 syntax)
+docker compose down
+docker compose up -d
 
 # Exit SSH
 exit
 ```
 
-**Option B: Automated deployment (recommended - future setup)**
+**Note:** The VPS deployment directory is NOT a git clone. Code changes (from Step 2) don't automatically sync. Configuration is managed through:
+- Hostinger UI (environment variables)
+- Docker image tags in `docker-compose.yml`
+
+### 5a. Create Release Git Tag
+
+**After Step 5 deployment succeeds and regression tests pass:**
+
+```bash
+# Create Git tag matching image tag (aligned versioning)
+git tag v2026.2.27-ws22
+
+# Push tag to GitHub
+git push origin v2026.2.27-ws22
+```
+
+**Verify on GitHub:**
+- https://github.com/Piboonsak/openclaw_github/releases
+- New tag should appear with commit details
+- Use semantic versioning: `vYYYY.M.D-<fix>` (e.g., `v2026.2.27-ws22`)
+
+**Future: Automated deployment (recommended)**
 
 ```bash
 # Setup GitHub Actions workflow (TODO)
@@ -156,7 +193,7 @@ exit
 ssh -i "C:\Users\HP Probook 440 G8\.ssh\id_ed25519_hostinger" root@76.13.210.250 \
   "docker ps --filter name=openclaw-sgnl-openclaw-1 --format '{{.Status}}'"
 
-# Expected: "Up X seconds (healthy)"
+# Expected: "Up X+ minutes (healthy)"
 ```
 
 **B. Gateway probe:**
@@ -165,8 +202,21 @@ ssh -i "C:\Users\HP Probook 440 G8\.ssh\id_ed25519_hostinger" root@76.13.210.250
 ssh -i "C:\Users\HP Probook 440 G8\.ssh\id_ed25519_hostinger" root@76.13.210.250 \
   "docker exec openclaw-sgnl-openclaw-1 openclaw channels status --probe"
 
-# Expected: All channels show "ok" or "enabled"
+# Expected output includes:
+# - "Gateway reachable"
+# - "LINE default: enabled, configured, running, mode:webhook, token:config, works"
 ```
+
+**Known Issue - Ignore LINE warnings:**
+You may see warnings like:
+```
+- line default: LINE channel access token not configured
+- line default: LINE channel secret not configured
+```
+Ignore these if:
+- "Gateway reachable" is present
+- channels show "works" status
+- `openclaw config get channels.line` returns the full token/secret values (they exist)
 
 **C. Config verification:**
 
