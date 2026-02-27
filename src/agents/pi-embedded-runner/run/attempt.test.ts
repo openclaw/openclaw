@@ -1,9 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import {
+  isOllamaCompatProvider,
   resolveAttemptFsWorkspaceOnly,
   resolvePromptBuildHookResult,
   resolvePromptModeForSession,
+  wrapOllamaCompatNumCtx,
   wrapStreamFnTrimToolCallNames,
 } from "./attempt.js";
 
@@ -172,5 +174,57 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     expect(finalToolCall.name).toBe("browser");
     expect(result).toBe(finalMessage);
     expect(baseFn).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("isOllamaCompatProvider", () => {
+  it("detects native ollama provider id", () => {
+    expect(
+      isOllamaCompatProvider({
+        provider: "ollama",
+        api: "openai-completions",
+        baseUrl: "https://example.com/v1",
+      }),
+    ).toBe(true);
+  });
+
+  it("detects localhost Ollama OpenAI-compatible endpoint", () => {
+    expect(
+      isOllamaCompatProvider({
+        provider: "custom",
+        api: "openai-completions",
+        baseUrl: "http://127.0.0.1:11434/v1",
+      }),
+    ).toBe(true);
+  });
+
+  it("does not misclassify non-local OpenAI-compatible providers", () => {
+    expect(
+      isOllamaCompatProvider({
+        provider: "custom",
+        api: "openai-completions",
+        baseUrl: "https://api.openrouter.ai/v1",
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("wrapOllamaCompatNumCtx", () => {
+  it("injects num_ctx and preserves downstream onPayload hooks", () => {
+    let payloadSeen: Record<string, unknown> | undefined;
+    const baseFn = vi.fn((_model, _context, options) => {
+      const payload: Record<string, unknown> = { options: { temperature: 0.1 } };
+      options?.onPayload?.(payload);
+      payloadSeen = payload;
+      return {} as never;
+    });
+    const downstream = vi.fn();
+
+    const wrapped = wrapOllamaCompatNumCtx(baseFn as never, 202752);
+    void wrapped({} as never, {} as never, { onPayload: downstream } as never);
+
+    expect(baseFn).toHaveBeenCalledTimes(1);
+    expect((payloadSeen?.options as Record<string, unknown> | undefined)?.num_ctx).toBe(202752);
+    expect(downstream).toHaveBeenCalledTimes(1);
   });
 });
