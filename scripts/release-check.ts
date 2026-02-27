@@ -164,6 +164,59 @@ function checkAppcastSparkleVersions() {
     console.error("release-check: appcast sparkle version validation failed:");
     for (const error of errors) {
       console.error(`  - ${error}`);
+
+// Critical functions that channel extension plugins import from openclaw/plugin-sdk.
+// If any are missing from the compiled output, plugins crash at runtime (#27569).
+const requiredPluginSdkExports = [
+  "isDangerousNameMatchingEnabled",
+  "createAccountListHelpers",
+  "buildAgentMediaPayload",
+  "createReplyPrefixOptions",
+  "createTypingCallbacks",
+  "logInboundDrop",
+  "logTypingFailure",
+  "resolveControlCommandGate",
+  "resolveDmGroupAccessWithLists",
+  "resolveAllowlistProviderRuntimeGroupPolicy",
+  "resolveDefaultGroupPolicy",
+  "resolveChannelMediaMaxBytes",
+  "emptyPluginConfigSchema",
+  "normalizePluginHttpPath",
+  "registerPluginHttpRoute",
+  "DEFAULT_ACCOUNT_ID",
+  "DEFAULT_GROUP_HISTORY_LIMIT",
+];
+
+function checkPluginSdkExports() {
+  const distPath = resolve("dist", "plugin-sdk", "index.js");
+  let content: string;
+  try {
+    content = readFileSync(distPath, "utf8");
+  } catch {
+    console.error("release-check: dist/plugin-sdk/index.js not found (build missing?).");
+    process.exit(1);
+    return;
+  }
+
+  const exportMatch = content.match(/export\s*\{([^}]+)\}\s*;?\s*$/);
+  if (!exportMatch) {
+    console.error("release-check: could not find export statement in dist/plugin-sdk/index.js.");
+    process.exit(1);
+    return;
+  }
+
+  const exportedNames = new Set(
+    exportMatch[1].split(",").map((s) => {
+      const parts = s.trim().split(/\s+as\s+/);
+      return (parts[parts.length - 1] || "").trim();
+    }),
+  );
+
+  const missingExports = requiredPluginSdkExports.filter((name) => !exportedNames.has(name));
+  if (missingExports.length > 0) {
+    console.error("release-check: missing critical plugin-sdk exports (#27569):");
+    for (const name of missingExports) {
+      console.error(`  - ${name}`);
     }
     process.exit(1);
   }
@@ -172,6 +225,7 @@ function checkAppcastSparkleVersions() {
 function main() {
   checkPluginVersions();
   checkAppcastSparkleVersions();
+  checkPluginSdkExports();
 
   const results = runPackDry();
   const files = results.flatMap((entry) => entry.files ?? []);
