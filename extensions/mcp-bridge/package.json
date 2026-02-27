@@ -1,0 +1,21 @@
+{
+  "name": "@openclaw/mcp-bridge",
+  "version": "2026.2.27",
+  "description": "OpenClaw MCP bridge plugin – expose any MCP server's tools to the agent",
+  "type": "module",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.27.1",
+    "@sinclair/typebox": "0.34.48",
+    "zod": "^4.3.6"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "install": {
+      "npmSpec": "@openclaw/mcp-bridge",
+      "localPath": "extensions/mcp-bridge",
+      "defaultChoice": "npm"
+    }
+  }
+}
