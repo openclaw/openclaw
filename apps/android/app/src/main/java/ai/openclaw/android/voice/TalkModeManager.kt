@@ -61,9 +61,6 @@ class TalkModeManager(
     private const val defaultOutputFormatFallback = "pcm_24000"
 private const val defaultTalkProvider = "elevenlabs"
     private const val silenceWindowMs = 500L
-    private const val listenWatchdogMs = 12_000L
-    private const val chatFinalWaitWithSubscribeMs = 45_000L
-    private const val chatFinalWaitWithoutSubscribeMs = 6_000L
     private const val maxCachedRunCompletions = 128
 
     internal data class TalkProviderConfigSelection(
@@ -434,7 +431,15 @@ private const val defaultTalkProvider = "elevenlabs"
     val lastHeard = lastHeardAtMs ?: return
     val elapsed = SystemClock.elapsedRealtime() - lastHeard
     if (elapsed < silenceWindowMs) return
-    scope.launch { finalizeTranscript(transcript) }
+    if (finalizeInFlight) return
+    finalizeInFlight = true
+    scope.launch {
+      try {
+        finalizeTranscript(transcript)
+      } finally {
+        finalizeInFlight = false
+      }
+    }
   }
 
   private suspend fun finalizeTranscript(transcript: String) {
