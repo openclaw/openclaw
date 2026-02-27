@@ -2,6 +2,8 @@ import type { ChannelType, Client, Message } from "@buape/carbon";
 import { StickerFormatType, type APIAttachment, type APIStickerItem } from "discord-api-types/v10";
 import { buildMediaPayload } from "../../channels/plugins/media-payload.js";
 import { logVerbose } from "../../globals.js";
+import { type SsrFPolicy } from "../../infra/net/ssrf.js";
+import { logWarn } from "../../logger.js";
 import { fetchRemoteMedia, type FetchLike } from "../../media/fetch.js";
 import { saveMediaBuffer } from "../../media/store.js";
 
@@ -46,6 +48,15 @@ type DiscordMessageSnapshot = {
 };
 
 const DISCORD_CHANNEL_INFO_CACHE_TTL_MS = 5 * 60 * 1000;
+
+/**
+ * SSRF policy that allows Discord CDN hostnames so that inbound attachment
+ * downloads succeed in VPN/proxy environments where cdn.discordapp.com and
+ * media.discordapp.net resolve to private/reserved IP ranges (e.g. 198.18.x.x).
+ */
+const DISCORD_CDN_SSRF_POLICY: SsrFPolicy = {
+  hostnameAllowlist: ["cdn.discordapp.com", "media.discordapp.net"],
+};
 const DISCORD_CHANNEL_INFO_NEGATIVE_CACHE_TTL_MS = 30 * 1000;
 const DISCORD_CHANNEL_INFO_CACHE = new Map<
   string,
@@ -228,6 +239,7 @@ async function appendResolvedMediaFromAttachments(params: {
         filePathHint: attachment.filename ?? attachment.url,
         maxBytes: params.maxBytes,
         fetchImpl: params.fetchImpl,
+        ssrfPolicy: DISCORD_CDN_SSRF_POLICY,
       });
       const saved = await saveMediaBuffer(
         fetched.buffer,
@@ -242,7 +254,7 @@ async function appendResolvedMediaFromAttachments(params: {
       });
     } catch (err) {
       const id = attachment.id ?? attachment.url;
-      logVerbose(`${params.errorPrefix} ${id}: ${String(err)}`);
+      logWarn(`${params.errorPrefix} ${id}: ${String(err)}`);
     }
   }
 }
@@ -320,6 +332,7 @@ async function appendResolvedMediaFromStickers(params: {
           filePathHint: candidate.fileName,
           maxBytes: params.maxBytes,
           fetchImpl: params.fetchImpl,
+          ssrfPolicy: DISCORD_CDN_SSRF_POLICY,
         });
         const saved = await saveMediaBuffer(
           fetched.buffer,
