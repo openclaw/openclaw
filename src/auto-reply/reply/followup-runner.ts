@@ -32,6 +32,8 @@ import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-r
 import { createTypingSignaler } from "./typing-mode.js";
 import type { TypingController } from "./typing.js";
 
+const RECENT_MESSAGING_TOOL_DEDUPE_WINDOW_MS = 2 * 60 * 1000;
+
 export function createFollowupRunner(params: {
   opts?: GetReplyOptions;
   typing: TypingController;
@@ -267,20 +269,37 @@ export function createFollowupRunner(params: {
         replyToChannel,
       });
 
+      const now = Date.now();
+      const recentWindowActive =
+        typeof sessionEntry?.lastMessagingToolSentAt === "number" &&
+        now - sessionEntry.lastMessagingToolSentAt <= RECENT_MESSAGING_TOOL_DEDUPE_WINDOW_MS;
+      const sentTexts = [
+        ...(runResult.messagingToolSentTexts ?? []),
+        ...(recentWindowActive ? (sessionEntry?.lastMessagingToolSentTexts ?? []) : []),
+      ];
+      const sentMediaUrls = [
+        ...(runResult.messagingToolSentMediaUrls ?? []),
+        ...(recentWindowActive ? (sessionEntry?.lastMessagingToolSentMediaUrls ?? []) : []),
+      ];
+      const sentTargets = [
+        ...(runResult.messagingToolSentTargets ?? []),
+        ...(recentWindowActive ? (sessionEntry?.lastMessagingToolSentTargets ?? []) : []),
+      ];
+
       const dedupedPayloads = filterMessagingToolDuplicates({
         payloads: replyTaggedPayloads,
-        sentTexts: runResult.messagingToolSentTexts ?? [],
+        sentTexts,
       });
       const mediaFilteredPayloads = filterMessagingToolMediaDuplicates({
         payloads: dedupedPayloads,
-        sentMediaUrls: runResult.messagingToolSentMediaUrls ?? [],
+        sentMediaUrls,
       });
       const suppressMessagingToolReplies = shouldSuppressMessagingToolReplies({
         messageProvider: resolveOriginMessageProvider({
           originatingChannel: queued.originatingChannel,
           provider: queued.run.messageProvider,
         }),
-        messagingToolSentTargets: runResult.messagingToolSentTargets,
+        messagingToolSentTargets: sentTargets,
         originatingTo: resolveOriginMessageTo({
           originatingTo: queued.originatingTo,
         }),

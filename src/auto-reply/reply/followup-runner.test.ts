@@ -286,6 +286,32 @@ describe("createFollowupRunner messaging tool dedupe", () => {
     expect(onBlockReply).not.toHaveBeenCalled();
   });
 
+  it("suppresses replies using recent session-level messaging-tool dedupe state", async () => {
+    const onBlockReply = vi.fn(async () => {});
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      lastMessagingToolSentAt: Date.now(),
+      lastMessagingToolSentTexts: ["hello world!"],
+    };
+    const sessionStore: Record<string, SessionEntry> = { main: sessionEntry };
+
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "hello world!" }],
+      meta: {},
+    });
+
+    const runner = createMessagingDedupeRunner(onBlockReply, {
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+    });
+
+    await runner(baseQueuedRun());
+
+    expect(onBlockReply).not.toHaveBeenCalled();
+  });
+
   it("drops media URL from payload when messaging tool already sent it", async () => {
     const { onBlockReply } = await runMessagingCase({
       agentResult: {

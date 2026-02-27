@@ -427,6 +427,42 @@ export async function runReplyAgent(params: {
 
     const payloadArray = runResult.payloads ?? [];
 
+    const sentTexts = runResult.messagingToolSentTexts ?? [];
+    const sentMediaUrls = runResult.messagingToolSentMediaUrls ?? [];
+    const sentTargets = runResult.messagingToolSentTargets ?? [];
+    if (activeSessionEntry) {
+      const now = Date.now();
+      if (sentTexts.length || sentMediaUrls.length || sentTargets.length) {
+        activeSessionEntry.lastMessagingToolSentAt = now;
+        activeSessionEntry.lastMessagingToolSentTexts = sentTexts;
+        activeSessionEntry.lastMessagingToolSentMediaUrls = sentMediaUrls;
+        activeSessionEntry.lastMessagingToolSentTargets = sentTargets;
+      } else if (
+        typeof activeSessionEntry.lastMessagingToolSentAt === "number" &&
+        now - activeSessionEntry.lastMessagingToolSentAt > RECENT_MESSAGING_TOOL_DEDUPE_WINDOW_MS
+      ) {
+        delete activeSessionEntry.lastMessagingToolSentAt;
+        delete activeSessionEntry.lastMessagingToolSentTexts;
+        delete activeSessionEntry.lastMessagingToolSentMediaUrls;
+        delete activeSessionEntry.lastMessagingToolSentTargets;
+      }
+      if (sessionKey && activeSessionStore) {
+        activeSessionStore[sessionKey] = activeSessionEntry;
+      }
+      if (sessionKey && storePath) {
+        await updateSessionStoreEntry({
+          storePath,
+          sessionKey,
+          update: async () => ({
+            lastMessagingToolSentAt: activeSessionEntry.lastMessagingToolSentAt,
+            lastMessagingToolSentTexts: activeSessionEntry.lastMessagingToolSentTexts,
+            lastMessagingToolSentMediaUrls: activeSessionEntry.lastMessagingToolSentMediaUrls,
+            lastMessagingToolSentTargets: activeSessionEntry.lastMessagingToolSentTargets,
+          }),
+        });
+      }
+    }
+
     if (blockReplyPipeline) {
       await blockReplyPipeline.flush({ force: true });
       blockReplyPipeline.stop();

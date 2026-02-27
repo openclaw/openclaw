@@ -73,6 +73,19 @@ export type SessionEntry = {
   lastHeartbeatText?: string;
   /** Timestamp (ms) when lastHeartbeatText was delivered. */
   lastHeartbeatSentAt?: number;
+  /** Timestamp (ms) for the most recent message-tool send fingerprint (cross-run dedupe). */
+  lastMessagingToolSentAt?: number;
+  /** Recently sent message-tool text payloads for short-window cross-run dedupe. */
+  lastMessagingToolSentTexts?: string[];
+  /** Recently sent message-tool media urls for short-window cross-run dedupe. */
+  lastMessagingToolSentMediaUrls?: string[];
+  /** Recently sent message-tool routing targets for short-window cross-run dedupe. */
+  lastMessagingToolSentTargets?: Array<{
+    tool?: string;
+    provider?: string;
+    to?: string;
+    accountId?: string;
+  }>;
   sessionId: string;
   updatedAt: number;
   sessionFile?: string;
