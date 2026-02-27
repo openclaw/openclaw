@@ -17,6 +17,7 @@ on:
     - cron: "17 6 * * *"
 
 permissions:
+  actions: write
   contents: write
   pull-requests: write
 
@@ -129,6 +130,14 @@ jobs:
         run: |
           set -euo pipefail
           git push origin "HEAD:${SYNC_BRANCH}" --force-with-lease
+
+      - name: Trigger PR validation workflows
+        if: steps.diverge.outputs.ahead != '0'
+        run: |
+          set -euo pipefail
+          gh workflow run ci.yml --ref "${SYNC_BRANCH}"
+          gh workflow run install-smoke.yml --ref "${SYNC_BRANCH}"
+          gh workflow run workflow-sanity.yml --ref "${SYNC_BRANCH}"
 
       - name: Open or update sync PR
         if: steps.diverge.outputs.ahead != '0'
