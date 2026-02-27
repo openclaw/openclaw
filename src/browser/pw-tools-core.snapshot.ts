@@ -185,7 +185,12 @@ export async function navigateViaPlaywright(opts: {
     // throws "Download is starting" because the page never reaches the "load" state.
     // The download itself is handled by the browser's download manager, so this is not an error.
     if (String(err).includes("Download is starting")) {
-      return { url: page.url(), download: { triggered: true, navigateUrl: url } };
+      const finalUrl = page.url();
+      await assertBrowserNavigationResultAllowed({
+        url: finalUrl,
+        ...withBrowserNavigationPolicy(opts.ssrfPolicy),
+      });
+      return { url: finalUrl, download: { triggered: true, navigateUrl: url } };
     }
     throw err;
   }

@@ -356,6 +356,7 @@ async function connectBrowser(cdpUrl: string): Promise<ConnectedBrowser> {
             behavior: "allow",
             eventsEnabled: true,
           });
+          await cdpSession.detach().catch(() => {});
         } catch {
           // Best-effort: some CDP endpoints (e.g. extension relay) stub this as a no-op.
         }
