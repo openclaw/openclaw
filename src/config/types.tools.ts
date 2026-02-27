@@ -435,6 +435,8 @@ export type ToolsConfig = {
       searxng?: {
         /** Base URL for SearXNG instance (e.g. "http://localhost:8080"). */
         baseUrl?: string;
+        /** Optional API key/token for SearXNG instance. */
+        apiKey?: string;
       };
     };
     fetch?: {

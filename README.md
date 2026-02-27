@@ -326,6 +326,56 @@ Minimal `~/.openclaw/openclaw.json` (model + defaults):
 
 [Full configuration reference (all keys + examples).](https://docs.openclaw.ai/gateway/configuration)
 
+### Web Search
+
+OpenClaw supports multiple web search providers via the `web_search` tool. You can configure them in `~/.openclaw/openclaw.json` or using environment variables.
+
+#### Tavily
+
+[Tavily](https://tavily.com/) is a search engine optimized for AI agents.
+
+1.  **Environment Variable:** Set `TAVILY_API_KEY` in your environment.
+2.  **Configuration:** Update `~/.openclaw/openclaw.json`:
+    ```json
+    {
+      "tools": {
+        "web": {
+          "search": {
+            "provider": "tavily",
+            "tavily": {
+              "apiKey": "your-tavily-api-key"
+            }
+          }
+        }
+      }
+    }
+    ```
+
+#### SearXNG (Self-hosted)
+
+[SearXNG](https://github.com/searxng/searxng) is a free, privacy-respecting metasearch engine you can host yourself.
+
+1.  **Self-hosting with Docker:**
+    ```bash
+    docker run -d -p 8080:8080 searxng/searxng
+    ```
+2.  **Environment Variable:** (Optional) Set `SEARXNG_API_KEY` if your instance requires authentication.
+3.  **Configuration:** Update `~/.openclaw/openclaw.json`:
+    ```json
+    {
+      "tools": {
+        "web": {
+          "search": {
+            "provider": "searxng",
+            "searxng": {
+              "baseUrl": "http://localhost:8080"
+            }
+          }
+        }
+      }
+    }
+    ```
+
 ## Security model (important)
 
 - **Default:** tools run on the host for the **main** session, so the agent has full access when it’s just you.

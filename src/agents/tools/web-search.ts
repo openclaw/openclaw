@@ -153,6 +153,7 @@ type TavilySearchResponse = {
 
 type SearXNGConfig = {
   baseUrl?: string;
+  apiKey?: string;
 };
 
 type SearXNGSearchResult = {
@@ -451,6 +452,15 @@ function resolveSearXNGConfig(search?: WebSearchConfig): SearXNGConfig {
   return searxng as SearXNGConfig;
 }
 
+function resolveSearXNGApiKey(searxng?: SearXNGConfig): string | undefined {
+  const fromConfig = normalizeApiKey(searxng?.apiKey);
+  if (fromConfig) {
+    return fromConfig;
+  }
+  const fromEnv = normalizeApiKey(process.env.SEARXNG_API_KEY);
+  return fromEnv || undefined;
+}
+
 function resolveSearXNGBaseUrl(searxng?: SearXNGConfig): string | undefined {
   return searxng?.baseUrl?.trim() || undefined;
 }
@@ -670,6 +680,7 @@ async function runTavilySearch(params: {
 async function runSearXNGSearch(params: {
   query: string;
   baseUrl: string;
+  apiKey?: string;
   timeoutSeconds: number;
   count: number;
 }): Promise<SearXNGSearchResponse> {
@@ -677,8 +688,16 @@ async function runSearXNGSearch(params: {
   url.searchParams.set("q", params.query);
   url.searchParams.set("format", "json");
 
+  const headers: Record<string, string> = {
+    Accept: "application/json",
+  };
+  if (params.apiKey) {
+    headers["Authorization"] = `Bearer ${params.apiKey}`;
+  }
+
   const res = await fetch(url.toString(), {
     method: "GET",
+    headers,
     signal: withTimeout(undefined, params.timeoutSeconds * 1000),
   });
 
@@ -829,6 +848,7 @@ async function runWebSearch(params: {
     const data = await runSearXNGSearch({
       query: params.query,
       baseUrl: params.searxngBaseUrl,
+      apiKey: params.apiKey,
       timeoutSeconds: params.timeoutSeconds,
       count: params.count,
     });
@@ -964,6 +984,8 @@ export function createWebSearchTool(options?: {
     execute: async (_toolCallId, args) => {
       const perplexityAuth =
         provider === "perplexity" ? resolvePerplexityApiKey(perplexityConfig) : undefined;
+      const searxngConfig = provider === "searxng" ? resolveSearXNGConfig(search) : undefined;
+      const searxngAuth = provider === "searxng" ? resolveSearXNGApiKey(searxngConfig) : undefined;
       const apiKey =
         provider === "perplexity"
           ? perplexityAuth?.apiKey
@@ -971,13 +993,14 @@ export function createWebSearchTool(options?: {
             ? resolveGrokApiKey(grokConfig)
             : provider === "tavily"
               ? resolveTavilyApiKey(resolveTavilyConfig(search))
-              : resolveSearchApiKey(search);
+              : provider === "searxng"
+                ? searxngAuth
+                : resolveSearchApiKey(search);
 
       if (!apiKey && provider !== "searxng") {
         return jsonResult(missingSearchKeyPayload(provider));
       }
 
-      const searxngConfig = provider === "searxng" ? resolveSearXNGConfig(search) : undefined;
       const searxngBaseUrl = resolveSearXNGBaseUrl(searxngConfig);
 
       if (provider === "searxng" && !searxngBaseUrl) {
