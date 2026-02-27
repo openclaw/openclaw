@@ -85,6 +85,8 @@ export const BrowserToolSchema = Type.Object({
   target: optionalStringEnum(BROWSER_TARGETS),
   node: Type.Optional(Type.String()),
   profile: Type.Optional(Type.String()),
+  // URL parameter: supports both "url" and "targetUrl" for compatibility
+  url: Type.Optional(Type.String()),
   targetUrl: Type.Optional(Type.String()),
   targetId: Type.Optional(Type.String()),
   limit: Type.Optional(Type.Number()),
