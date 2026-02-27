@@ -435,6 +435,23 @@ describe("subagent announce formatting", () => {
     expect(sessionsDeleteSpy).toHaveBeenCalledTimes(1);
   });
 
+  it("suppresses completion delivery when subagent reply is NO_REPLY", async () => {
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-direct-completion-no-reply",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      requesterOrigin: { channel: "slack", to: "channel:C123", accountId: "acct-1" },
+      ...defaultOutcomeAnnounce,
+      expectsCompletionMessage: true,
+      roundOneReply: " NO_REPLY ",
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(sendSpy).not.toHaveBeenCalled();
+    expect(agentSpy).not.toHaveBeenCalled();
+  });
+
   it("retries completion direct send on transient channel-unavailable errors", async () => {
     sendSpy
       .mockRejectedValueOnce(new Error("Error: No active WhatsApp Web listener (account: default)"))
@@ -823,6 +840,47 @@ describe("subagent announce formatting", () => {
       expect(call?.params?.to).toBe("channel:12345");
       expect(call?.params?.threadId).toBe(testCase.expectedThreadId);
     }
+  });
+
+  it("routes manual completion direct-send for telegram forum topics", async () => {
+    sendSpy.mockClear();
+    agentSpy.mockClear();
+    sessionStore = {
+      "agent:main:subagent:test": {
+        sessionId: "child-session-telegram-topic",
+      },
+      "agent:main:main": {
+        sessionId: "requester-session-telegram-topic",
+        lastChannel: "telegram",
+        lastTo: "123:topic:999",
+        lastThreadId: 999,
+      },
+    };
+    chatHistoryMock.mockResolvedValueOnce({
+      messages: [{ role: "assistant", content: [{ type: "text", text: "done" }] }],
+    });
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-direct-telegram-topic",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      requesterOrigin: {
+        channel: "telegram",
+        to: "123",
+        threadId: 42,
+      },
+      ...defaultOutcomeAnnounce,
+      expectsCompletionMessage: true,
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(sendSpy).toHaveBeenCalledTimes(1);
+    expect(agentSpy).not.toHaveBeenCalled();
+    const call = sendSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
+    expect(call?.params?.channel).toBe("telegram");
+    expect(call?.params?.to).toBe("123");
+    expect(call?.params?.threadId).toBe("42");
   });
 
   it("uses hook-provided thread target across requester thread variants", async () => {
