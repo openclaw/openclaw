@@ -354,7 +354,21 @@ Common signatures:
 
 If the service config and runtime still disagree after checks, reinstall service metadata from the same profile/state directory:
 
+<Warning>
+`--force` regenerates `gateway.cmd` from scratch and recreates the system service
+(launchd/systemd/NSSM). Any custom content in `gateway.cmd` (idempotency guards,
+environment setup, wrapper logic) will be silently overwritten. Back up `gateway.cmd`
+before running this command.
+
+**Windows:** If you switched from NSSM to Task Scheduler (or another auto-start
+method), `--force` creates a new NSSM service, which can conflict with your existing
+setup. Remove or disable the NSSM service after reinstalling if you use a different
+auto-start mechanism.
+</Warning>
+
 ```bash
+# back up your gateway.cmd first if you have customized it
+cp "$(openclaw gateway status --json | jq -r .gatewayCmd)" gateway.cmd.bak
 openclaw gateway install --force
 openclaw gateway restart
 ```
