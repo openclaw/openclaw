@@ -114,7 +114,11 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
   }): Promise<void> {
     const target = this.resolveResolvedPath(params);
     this.ensureWriteAccess(target, "write files");
-    await this.assertPathSafety(target, { action: "write files", requireWritable: true });
+    await this.assertPathSafety(target, {
+      action: "write files",
+      requireWritable: true,
+      allowMissingTarget: params.mkdir !== false,
+    });
     const buffer = Buffer.isBuffer(params.data)
       ? params.data
       : Buffer.from(params.data, params.encoding ?? "utf8");
@@ -132,7 +136,11 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
   async mkdirp(params: { filePath: string; cwd?: string; signal?: AbortSignal }): Promise<void> {
     const target = this.resolveResolvedPath(params);
     this.ensureWriteAccess(target, "create directories");
-    await this.assertPathSafety(target, { action: "create directories", requireWritable: true });
+    await this.assertPathSafety(target, {
+      action: "create directories",
+      requireWritable: true,
+      allowMissingTarget: true,
+    });
     await this.runCommand('set -eu; mkdir -p -- "$1"', {
       args: [target.containerPath],
       signal: params.signal,
@@ -181,6 +189,7 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
     await this.assertPathSafety(to, {
       action: "rename files",
       requireWritable: true,
+      allowMissingTarget: true,
     });
     await this.runCommand(
       'set -eu; dir=$(dirname -- "$2"); if [ "$dir" != "." ]; then mkdir -p -- "$dir"; fi; mv -- "$1" "$2"',
