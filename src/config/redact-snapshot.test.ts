@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   REDACTED_SENTINEL,
   redactConfigSnapshot,
+  rejectPlaceholderSecrets,
   restoreRedactedValues as restoreRedactedValues_orig,
 } from "./redact-snapshot.js";
 import { __test__ } from "./schema.hints.js";
@@ -1093,6 +1094,166 @@ describe("restoreRedactedValues", () => {
     const result = restoreRedactedValues(incoming, original, hints) as typeof incoming;
     expect(result.channels.slack.accounts[0].botToken).toBe("original-token-first-account");
     expect(result.channels.slack.accounts[1].botToken).toBe("user-provided-new-token-value");
+  });
+});
+
+describe("rejectPlaceholderSecrets", () => {
+  // Helper: wrap a placeholder value at a known-sensitive path (ends in "token")
+  function configWithSensitiveValue(value: string) {
+    return { channels: { slack: { botToken: value } } };
+  }
+
+  describe("pattern matching", () => {
+    const placeholders = [
+      ["__OPENCLAW_REDACTED__", "redaction sentinel"],
+      ["REDACTED", "bare REDACTED"],
+      ["xoxb-REDACTED", "Slack-prefixed REDACTED"],
+      ["xapp-REDACTED", "xapp-prefixed REDACTED"],
+      ["REPLACE_ME", "bare REPLACE_ME"],
+      ["xoxb-REPLACE_ME", "Slack-prefixed REPLACE_ME"],
+      ["your-token", "your-token placeholder"],
+      ["your-password", "your-password placeholder"],
+      ["your-api-key", "your-api-key placeholder"],
+      ["paste-your-key", "paste-your-key placeholder"],
+      ["paste-your-token", "paste-your-token placeholder"],
+      ["sk-xxx", "sk-xxx dummy key"],
+      ["sk-xxxx", "sk-xxxx dummy key"],
+      ["<token>", "angle-bracket placeholder"],
+      ["<api-key>", "angle-bracket api-key placeholder"],
+      ["TODO", "TODO sentinel"],
+      ["CHANGEME", "CHANGEME sentinel"],
+      ["FIXME", "FIXME sentinel"],
+      ["test-token", "test-prefixed placeholder"],
+      ["example-password", "example-prefixed placeholder"],
+    ] as const;
+
+    for (const [value, label] of placeholders) {
+      it(`rejects placeholder: ${label} (${value})`, () => {
+        const result = rejectPlaceholderSecrets(configWithSensitiveValue(value));
+        expect(result.ok).toBe(false);
+        expect(result.humanReadableMessage).toContain("channels.slack.botToken");
+      });
+    }
+  });
+
+  describe("false positive checks", () => {
+    const realValues = [
+      ["sk-proj-abcdef1234567890", "real OpenAI key"],
+      ["xoxb-1234567890123-1234567890123-AbCdEf", "real Slack token"],
+      ["your-workspace", "non-secret your- suffix"],
+      ["my-actual-password-123", "real password value"],
+      ["ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", "real GitHub token"],
+    ] as const;
+
+    for (const [value, label] of realValues) {
+      it(`allows real value: ${label} (${value})`, () => {
+        const result = rejectPlaceholderSecrets(configWithSensitiveValue(value));
+        expect(result.ok).toBe(true);
+      });
+    }
+  });
+
+  describe("findPlaceholderSecretPath traversal", () => {
+    it("returns correct path for top-level sensitive key with placeholder", () => {
+      const result = rejectPlaceholderSecrets({ token: "REDACTED" });
+      expect(result.ok).toBe(false);
+      expect(result.humanReadableMessage).toContain('"token"');
+    });
+
+    it("returns correct path for nested sensitive key", () => {
+      const result = rejectPlaceholderSecrets({
+        channels: { slack: { botToken: "REDACTED" } },
+      });
+      expect(result.ok).toBe(false);
+      expect(result.humanReadableMessage).toContain("channels.slack.botToken");
+    });
+
+    it("returns correct path for array items at sensitive paths", () => {
+      // "token[]" matches isSensitivePath because "token" ends with "token"
+      const result = rejectPlaceholderSecrets({
+        token: ["REDACTED"],
+      });
+      expect(result.ok).toBe(false);
+      expect(result.humanReadableMessage).toContain("token[]");
+    });
+
+    it("returns null for non-sensitive paths", () => {
+      // "displayName" doesn't match any sensitive pattern
+      const result = rejectPlaceholderSecrets({
+        channels: { slack: { displayName: "your-bot" } },
+      });
+      expect(result.ok).toBe(true);
+    });
+
+    it("respects sensitive:false hints override", () => {
+      const hints: ConfigUiHints = {
+        "channels.slack.botToken": { sensitive: false },
+      };
+      // Even though "botToken" would match the sensitive pattern,
+      // the hint says it's not sensitive
+      const result = rejectPlaceholderSecrets(
+        { channels: { slack: { botToken: "REDACTED" } } },
+        hints,
+      );
+      expect(result.ok).toBe(true);
+    });
+  });
+
+  describe("integration", () => {
+    it("returns { ok: true } for clean config", () => {
+      const result = rejectPlaceholderSecrets({
+        gateway: { auth: { token: "real-production-token-value" } },
+        channels: { slack: { botToken: "xoxb-real-slack-token-1234" } },
+        models: { providers: { openai: { apiKey: "sk-proj-real-key-here" } } },
+      });
+      expect(result.ok).toBe(true);
+    });
+
+    it("returns { ok: false } with humanReadableMessage containing offending path", () => {
+      const result = rejectPlaceholderSecrets({
+        channels: { slack: { botToken: "xoxb-REPLACE_ME" } },
+      });
+      expect(result.ok).toBe(false);
+      expect(result.humanReadableMessage).toBeDefined();
+      expect(result.humanReadableMessage).toContain("channels.slack.botToken");
+    });
+
+    it("works with ConfigUiHints marking custom paths as sensitive", () => {
+      const hints: ConfigUiHints = {
+        "custom.mySecret": { sensitive: true },
+      };
+      const result = rejectPlaceholderSecrets({ custom: { mySecret: "CHANGEME" } }, hints);
+      expect(result.ok).toBe(false);
+      expect(result.humanReadableMessage).toContain("custom.mySecret");
+    });
+
+    it("works without ConfigUiHints", () => {
+      const result = rejectPlaceholderSecrets({
+        gateway: { auth: { password: "FIXME" } },
+      });
+      expect(result.ok).toBe(false);
+    });
+
+    it("handles empty strings at sensitive paths", () => {
+      const result = rejectPlaceholderSecrets({
+        channels: { slack: { botToken: "" } },
+      });
+      expect(result.ok).toBe(true);
+    });
+
+    it("handles null values at sensitive paths", () => {
+      const result = rejectPlaceholderSecrets({
+        channels: { slack: { botToken: null } },
+      });
+      expect(result.ok).toBe(true);
+    });
+
+    it("handles numeric values at sensitive paths", () => {
+      const result = rejectPlaceholderSecrets({
+        channels: { slack: { botToken: 12345 } },
+      });
+      expect(result.ok).toBe(true);
+    });
   });
 });
 
