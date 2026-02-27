@@ -234,4 +234,63 @@ describe("before_tool_call hook integration for client tools", () => {
       extra: true,
     });
   });
+
+  it("blocks client tool execution when the run abort signal is already aborted", async () => {
+    const onClientToolCall = vi.fn();
+    const abortController = new AbortController();
+    abortController.abort();
+    const [tool] = toClientToolDefinitions(
+      [
+        {
+          type: "function",
+          function: {
+            name: "client_tool",
+            description: "Client tool",
+            parameters: { type: "object", properties: { value: { type: "string" } } },
+          },
+        },
+      ],
+      onClientToolCall,
+      { agentId: "main", sessionKey: "main" },
+      { abortSignal: abortController.signal },
+    );
+    const extensionContext = {} as Parameters<typeof tool.execute>[4];
+
+    await expect(
+      tool.execute("client-call-aborted", { value: "ok" }, undefined, undefined, extensionContext),
+    ).rejects.toMatchObject({ name: "AbortError" });
+    expect(onClientToolCall).not.toHaveBeenCalled();
+  });
+
+  it("blocks client tool execution when per-call signal is aborted", async () => {
+    const onClientToolCall = vi.fn();
+    const [tool] = toClientToolDefinitions(
+      [
+        {
+          type: "function",
+          function: {
+            name: "client_tool",
+            description: "Client tool",
+            parameters: { type: "object", properties: { value: { type: "string" } } },
+          },
+        },
+      ],
+      onClientToolCall,
+      { agentId: "main", sessionKey: "main" },
+    );
+    const extensionContext = {} as Parameters<typeof tool.execute>[4];
+    const callAbortController = new AbortController();
+    callAbortController.abort();
+
+    await expect(
+      tool.execute(
+        "client-call-aborted-per-call",
+        { value: "ok" },
+        callAbortController.signal,
+        undefined,
+        extensionContext,
+      ),
+    ).rejects.toMatchObject({ name: "AbortError" });
+    expect(onClientToolCall).not.toHaveBeenCalled();
+  });
 });

@@ -97,4 +97,32 @@ describe("pi tool definition adapter", () => {
     expect(result.content[0]).toMatchObject({ type: "text" });
     expect((result.content[0] as { text?: string }).text).toContain('"count"');
   });
+
+  it("throws AbortError before executing when signal is already aborted", async () => {
+    let executed = false;
+    const execute = async () => {
+      executed = true;
+      return { content: [], details: { ok: true } };
+    };
+    const tool = {
+      name: "read",
+      label: "Read",
+      description: "reads",
+      parameters: Type.Object({}),
+      execute,
+    } satisfies AgentTool;
+
+    const defs = toToolDefinitions([tool]);
+    const def = defs[0];
+    if (!def) {
+      throw new Error("missing tool definition");
+    }
+    const abortController = new AbortController();
+    abortController.abort();
+
+    await expect(
+      def.execute("call-aborted", {}, abortController.signal, undefined, extensionContext),
+    ).rejects.toMatchObject({ name: "AbortError" });
+    expect(executed).toBe(false);
+  });
 });

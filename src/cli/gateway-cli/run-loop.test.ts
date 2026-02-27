@@ -10,12 +10,11 @@ const isGatewaySigusr1RestartExternallyAllowed = vi.fn(() => false);
 const markGatewaySigusr1RestartHandled = vi.fn();
 const getActiveTaskCount = vi.fn(() => 0);
 const markGatewayDraining = vi.fn();
-const waitForActiveTasks = vi.fn(async (_timeoutMs: number) => ({ drained: true }));
 const resetAllLanes = vi.fn();
 const restartGatewayProcessWithFreshPid = vi.fn<
   () => { mode: "spawned" | "supervised" | "disabled" | "failed"; pid?: number; detail?: string }
 >(() => ({ mode: "disabled" }));
-const DRAIN_TIMEOUT_LOG = "drain timeout reached; proceeding with restart";
+const FORCE_RESTART_LOG = "forcing restart with 2 active task(s); cancelling in-flight runs";
 const gatewayLog = {
   info: vi.fn(),
   warn: vi.fn(),
@@ -39,7 +38,6 @@ vi.mock("../../infra/process-respawn.js", () => ({
 vi.mock("../../process/command-queue.js", () => ({
   getActiveTaskCount: () => getActiveTaskCount(),
   markGatewayDraining: () => markGatewayDraining(),
-  waitForActiveTasks: (timeoutMs: number) => waitForActiveTasks(timeoutMs),
   resetAllLanes: () => resetAllLanes(),
 }));
 
@@ -158,12 +156,11 @@ describe("runGatewayLoop", () => {
     });
   });
 
-  it("restarts after SIGUSR1 even when drain times out, and resets lanes for the new iteration", async () => {
+  it("restarts after SIGUSR1 and resets lanes for the new iteration", async () => {
     vi.clearAllMocks();
 
     await withIsolatedSignals(async () => {
       getActiveTaskCount.mockReturnValueOnce(2).mockReturnValueOnce(0);
-      waitForActiveTasks.mockResolvedValueOnce({ drained: false });
 
       type StartServer = () => Promise<{
         close: (opts: { reason: string; restartExpectedMs: number | null }) => Promise<void>;
@@ -214,9 +211,8 @@ describe("runGatewayLoop", () => {
       expect(start).toHaveBeenCalledTimes(2);
       await new Promise<void>((resolve) => setImmediate(resolve));
 
-      expect(waitForActiveTasks).toHaveBeenCalledWith(30_000);
       expect(markGatewayDraining).toHaveBeenCalledTimes(1);
-      expect(gatewayLog.warn).toHaveBeenCalledWith(DRAIN_TIMEOUT_LOG);
+      expect(gatewayLog.warn).toHaveBeenCalledWith(FORCE_RESTART_LOG);
       expect(closeFirst).toHaveBeenCalledWith({
         reason: "gateway restarting",
         restartExpectedMs: 1500,

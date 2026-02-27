@@ -11,7 +11,6 @@ import {
   getActiveTaskCount,
   markGatewayDraining,
   resetAllLanes,
-  waitForActiveTasks,
 } from "../../process/command-queue.js";
 import { createRestartIterationHook } from "../../process/restart-recovery.js";
 import type { defaultRuntime } from "../../runtime.js";
@@ -88,7 +87,7 @@ export async function runGatewayLoop(params: {
     exitProcess(0);
   };
 
-  const DRAIN_TIMEOUT_MS = 30_000;
+  const FORCED_RESTART_TIMEOUT_MS = 30_000;
   const SHUTDOWN_TIMEOUT_MS = 5_000;
 
   const request = (action: GatewayRunSignalAction, signal: string) => {
@@ -100,8 +99,9 @@ export async function runGatewayLoop(params: {
     const isRestart = action === "restart";
     gatewayLog.info(`received ${signal}; ${isRestart ? "restarting" : "shutting down"}`);
 
-    // Allow extra time for draining active turns on restart.
-    const forceExitMs = isRestart ? DRAIN_TIMEOUT_MS + SHUTDOWN_TIMEOUT_MS : SHUTDOWN_TIMEOUT_MS;
+    // Allow extra time for forced cancellation on restart.
+    const forceExitMs =
+      isRestart ? FORCED_RESTART_TIMEOUT_MS + SHUTDOWN_TIMEOUT_MS : SHUTDOWN_TIMEOUT_MS;
     const forceExitTimer = setTimeout(() => {
       gatewayLog.error("shutdown timed out; exiting without full cleanup");
       exitProcess(0);
@@ -109,23 +109,14 @@ export async function runGatewayLoop(params: {
 
     void (async () => {
       try {
-        // On restart, wait for in-flight agent turns to finish before
-        // tearing down the server so buffered messages are delivered.
         if (isRestart) {
-          // Reject new enqueues immediately during the drain window so
-          // sessions get an explicit restart error instead of silent task loss.
+          // Reject new enqueues immediately and force active runs to cancel in close().
           markGatewayDraining();
           const activeTasks = getActiveTaskCount();
           if (activeTasks > 0) {
-            gatewayLog.info(
-              `draining ${activeTasks} active task(s) before restart (timeout ${DRAIN_TIMEOUT_MS}ms)`,
+            gatewayLog.warn(
+              `forcing restart with ${activeTasks} active task(s); cancelling in-flight runs`,
             );
-            const { drained } = await waitForActiveTasks(DRAIN_TIMEOUT_MS);
-            if (drained) {
-              gatewayLog.info("all active tasks drained");
-            } else {
-              gatewayLog.warn("drain timeout reached; proceeding with restart");
-            }
           }
         }
 

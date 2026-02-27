@@ -368,6 +368,7 @@ export function scheduleGatewaySigusr1Restart(opts?: {
   delayMs?: number;
   reason?: string;
   audit?: RestartAuditInfo;
+  force?: boolean;
 }): ScheduledRestart {
   const delayMsRaw =
     typeof opts?.delayMs === "number" && Number.isFinite(opts.delayMs)
@@ -378,6 +379,7 @@ export function scheduleGatewaySigusr1Restart(opts?: {
     typeof opts?.reason === "string" && opts.reason.trim()
       ? opts.reason.trim().slice(0, 200)
       : undefined;
+  const force = opts?.force === true;
   const mode = process.listenerCount("SIGUSR1") > 0 ? "emit" : "signal";
   const nowMs = Date.now();
   const cooldownMsApplied = Math.max(0, lastRestartEmittedAt + RESTART_COOLDOWN_MS - nowMs);
@@ -432,7 +434,7 @@ export function scheduleGatewaySigusr1Restart(opts?: {
       pendingRestartDueAt = 0;
       pendingRestartReason = undefined;
       const pendingCheck = preRestartCheck;
-      if (!pendingCheck) {
+      if (force || !pendingCheck) {
         emitGatewayRestart();
         return;
       }

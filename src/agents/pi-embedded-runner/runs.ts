@@ -48,6 +48,19 @@ export function abortEmbeddedPiRun(sessionId: string): boolean {
   return true;
 }
 
+export function abortAllEmbeddedPiRuns(): number {
+  if (ACTIVE_EMBEDDED_RUNS.size === 0) {
+    return 0;
+  }
+  let aborted = 0;
+  for (const [sessionId, handle] of ACTIVE_EMBEDDED_RUNS) {
+    diag.debug(`aborting run: sessionId=${sessionId} reason=gateway_shutdown`);
+    handle.abort();
+    aborted += 1;
+  }
+  return aborted;
+}
+
 export function isEmbeddedPiRunActive(sessionId: string): boolean {
   const active = ACTIVE_EMBEDDED_RUNS.has(sessionId);
   if (active) {
