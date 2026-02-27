@@ -101,6 +101,7 @@ type ResolveGroupRequireMention = (chatId: string | number) => boolean;
 export type BuildTelegramMessageContextParams = {
   primaryCtx: TelegramContext;
   allMedia: TelegramMediaRef[];
+  replyMedia?: TelegramMediaRef[];
   storeAllowFrom: string[];
   options?: TelegramMessageContextOptions;
   bot: Bot;
@@ -143,6 +144,7 @@ async function resolveStickerVisionSupport(params: {
 export const buildTelegramMessageContext = async ({
   primaryCtx,
   allMedia,
+  replyMedia = [],
   storeAllowFrom,
   options,
   bot,
@@ -640,6 +642,8 @@ export const buildTelegramMessageContext = async ({
           timestamp: entry.timestamp,
         }))
       : undefined;
+  const currentMediaForContext = stickerCacheHit ? [] : allMedia;
+  const contextMedia = [...currentMediaForContext, ...replyMedia];
   const ctxPayload = finalizeInboundContext({
     Body: combinedBody,
     // Agent prompt should be the raw user text only; metadata/context is provided via system prompt.
@@ -685,26 +689,18 @@ export const buildTelegramMessageContext = async ({
     ForwardedDate: forwardOrigin?.date ? forwardOrigin.date * 1000 : undefined,
     Timestamp: msg.date ? msg.date * 1000 : undefined,
     WasMentioned: isGroup ? effectiveWasMentioned : undefined,
-    // Filter out cached stickers from media - their description is already in the message body
-    MediaPath: stickerCacheHit ? undefined : allMedia[0]?.path,
-    MediaType: stickerCacheHit ? undefined : allMedia[0]?.contentType,
-    MediaUrl: stickerCacheHit ? undefined : allMedia[0]?.path,
-    MediaPaths: stickerCacheHit
-      ? undefined
-      : allMedia.length > 0
-        ? allMedia.map((m) => m.path)
-        : undefined,
-    MediaUrls: stickerCacheHit
-      ? undefined
-      : allMedia.length > 0
-        ? allMedia.map((m) => m.path)
-        : undefined,
-    MediaTypes: stickerCacheHit
-      ? undefined
-      : allMedia.length > 0
-        ? (allMedia.map((m) => m.contentType).filter(Boolean) as string[])
+    // Filter out cached stickers from current-message media; reply media is still valid context.
+    MediaPath: contextMedia.length > 0 ? contextMedia[0]?.path : undefined,
+    MediaType: contextMedia.length > 0 ? contextMedia[0]?.contentType : undefined,
+    MediaUrl: contextMedia.length > 0 ? contextMedia[0]?.path : undefined,
+    MediaPaths: contextMedia.length > 0 ? contextMedia.map((m) => m.path) : undefined,
+    MediaUrls: contextMedia.length > 0 ? contextMedia.map((m) => m.path) : undefined,
+    MediaTypes:
+      contextMedia.length > 0
+        ? (contextMedia.map((m) => m.contentType).filter(Boolean) as string[])
         : undefined,
     Sticker: allMedia[0]?.stickerMetadata,
+    StickerMediaIncluded: allMedia[0]?.stickerMetadata ? !stickerCacheHit : undefined,
     ...(locationData ? toLocationContext(locationData) : undefined),
     CommandAuthorized: commandAuthorized,
     // For groups: use resolved forum topic id; for DMs: use raw messageThreadId

@@ -81,6 +81,24 @@ function hasInboundMedia(msg: Message): boolean {
   );
 }
 
+function hasReplyTargetMedia(msg: Message): boolean {
+  const externalReply = (msg as Message & { external_reply?: Message }).external_reply;
+  const replyTarget = msg.reply_to_message ?? externalReply;
+  return Boolean(replyTarget && hasInboundMedia(replyTarget));
+}
+
+function resolveInboundMediaFileId(msg: Message): string | undefined {
+  return (
+    msg.sticker?.file_id ??
+    msg.photo?.[msg.photo.length - 1]?.file_id ??
+    msg.video?.file_id ??
+    msg.video_note?.file_id ??
+    msg.document?.file_id ??
+    msg.audio?.file_id ??
+    msg.voice?.file_id
+  );
+}
+
 export const registerTelegramHandlers = ({
   cfg,
   accountId,
@@ -198,7 +216,8 @@ export const registerTelegramHandlers = ({
         return;
       }
       if (entries.length === 1) {
-        await processMessage(last.ctx, last.allMedia, last.storeAllowFrom);
+        const replyMedia = await resolveReplyMediaForMessage(last.ctx, last.msg);
+        await processMessage(last.ctx, last.allMedia, last.storeAllowFrom, undefined, replyMedia);
         return;
       }
       const combinedText = entries
@@ -217,11 +236,14 @@ export const registerTelegramHandlers = ({
         date: last.msg.date ?? first.msg.date,
       });
       const messageIdOverride = last.msg.message_id ? String(last.msg.message_id) : undefined;
+      const syntheticCtx = buildSyntheticContext(baseCtx, syntheticMessage);
+      const replyMedia = await resolveReplyMediaForMessage(baseCtx, syntheticMessage);
       await processMessage(
-        buildSyntheticContext(baseCtx, syntheticMessage),
+        syntheticCtx,
         combinedMedia,
         first.storeAllowFrom,
         messageIdOverride ? { messageIdOverride } : undefined,
+        replyMedia,
       );
     },
     onError: (err) => {
@@ -336,7 +358,8 @@ export const registerTelegramHandlers = ({
       }
 
       const storeAllowFrom = await loadStoreAllowFrom();
-      await processMessage(primaryEntry.ctx, allMedia, storeAllowFrom);
+      const replyMedia = await resolveReplyMediaForMessage(primaryEntry.ctx, primaryEntry.msg);
+      await processMessage(primaryEntry.ctx, allMedia, storeAllowFrom, undefined, replyMedia);
     } catch (err) {
       runtime.error?.(danger(`media group handler failed: ${String(err)}`));
     }
@@ -397,6 +420,45 @@ export const registerTelegramHandlers = ({
 
   const loadStoreAllowFrom = async () =>
     readChannelAllowFromStore("telegram", process.env, accountId).catch(() => []);
+
+  const resolveReplyMediaForMessage = async (
+    ctx: TelegramContext,
+    msg: Message,
+  ): Promise<TelegramMediaRef[]> => {
+    const replyMessage = msg.reply_to_message;
+    if (!replyMessage || !hasInboundMedia(replyMessage)) {
+      return [];
+    }
+    const replyFileId = resolveInboundMediaFileId(replyMessage);
+    if (!replyFileId) {
+      return [];
+    }
+    try {
+      const media = await resolveMedia(
+        {
+          message: replyMessage,
+          me: ctx.me,
+          getFile: async () => await bot.api.getFile(replyFileId),
+        },
+        mediaMaxBytes,
+        opts.token,
+        opts.proxyFetch,
+      );
+      if (!media) {
+        return [];
+      }
+      return [
+        {
+          path: media.path,
+          contentType: media.contentType,
+          stickerMetadata: media.stickerMetadata,
+        },
+      ];
+    } catch (err) {
+      logger.warn({ chatId: msg.chat.id, error: String(err) }, "reply media fetch failed");
+      return [];
+    }
+  };
 
   const isAllowlistAuthorized = (
     allow: NormalizedAllowFrom,
@@ -1301,7 +1363,7 @@ export const registerTelegramHandlers = ({
         return;
       }
 
-      if (!event.isGroup && hasInboundMedia(event.msg)) {
+      if (!event.isGroup && (hasInboundMedia(event.msg) || hasReplyTargetMedia(event.msg))) {
         const dmAuthorized = await enforceTelegramDmAccess({
           isGroup: event.isGroup,
           dmPolicy,
