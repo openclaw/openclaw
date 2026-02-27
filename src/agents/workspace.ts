@@ -349,7 +349,13 @@ export async function ensureAgentWorkspace(params?: {
   const statePath = resolveWorkspaceStatePath(dir);
 
   const isBrandNewWorkspace = await (async () => {
-    const paths = [agentsPath, soulPath, toolsPath, identityPath, userPath, heartbeatPath];
+    const templatePaths = [agentsPath, soulPath, toolsPath, identityPath, userPath, heartbeatPath];
+    const userContentPaths = [
+      path.join(dir, "memory"),
+      path.join(dir, DEFAULT_MEMORY_FILENAME),
+      path.join(dir, ".git"),
+    ];
+    const paths = [...templatePaths, ...userContentPaths];
     const existing = await Promise.all(
       paths.map(async (p) => {
         try {
@@ -394,14 +400,31 @@ export async function ensureAgentWorkspace(params?: {
   }
 
   if (!state.bootstrapSeededAt && !state.onboardingCompletedAt && !bootstrapExists) {
-    // Legacy migration path: if USER/IDENTITY diverged from templates, treat onboarding as complete
-    // and avoid recreating BOOTSTRAP for already-onboarded workspaces.
+    // Legacy migration path: if USER/IDENTITY diverged from templates, or if user-content
+    // indicators exist, treat onboarding as complete and avoid recreating BOOTSTRAP for
+    // already-onboarded workspaces.
     const [identityContent, userContent] = await Promise.all([
       fs.readFile(identityPath, "utf-8"),
       fs.readFile(userPath, "utf-8"),
     ]);
+    const hasUserContent = await (async () => {
+      const indicators = [
+        path.join(dir, "memory"),
+        path.join(dir, DEFAULT_MEMORY_FILENAME),
+        path.join(dir, ".git"),
+      ];
+      for (const indicator of indicators) {
+        try {
+          await fs.access(indicator);
+          return true;
+        } catch {
+          // continue
+        }
+      }
+      return false;
+    })();
     const legacyOnboardingCompleted =
-      identityContent !== identityTemplate || userContent !== userTemplate;
+      identityContent !== identityTemplate || userContent !== userTemplate || hasUserContent;
     if (legacyOnboardingCompleted) {
       markState({ onboardingCompletedAt: nowIso() });
     } else {

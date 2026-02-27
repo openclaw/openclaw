@@ -1,13 +1,11 @@
 import fs from "node:fs/promises";
 import os from "node:os";
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { ImageContent } from "@mariozechner/pi-ai";
+import type { AgentMessage, StreamFn } from "@mariozechner/pi-agent-core";
 import { streamSimple } from "@mariozechner/pi-ai";
 import {
   createAgentSession,
   DefaultResourceLoader,
   SessionManager,
-  SettingsManager,
 } from "@mariozechner/pi-coding-agent";
 import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
@@ -53,7 +51,7 @@ import {
   validateGeminiTurns,
 } from "../../pi-embedded-helpers.js";
 import { subscribeEmbeddedPiSession } from "../../pi-embedded-subscribe.js";
-import { applyPiCompactionSettingsFromConfig } from "../../pi-settings.js";
+import { createPreparedEmbeddedPiSettingsManager } from "../../pi-project-settings.js";
 import { toClientToolDefinitions } from "../../pi-tool-definition-adapter.js";
 import { createOpenClawCodingTools, resolveToolLoopDetectionConfig } from "../../pi-tools.js";
 import { resolveSandboxContext } from "../../sandbox.js";
@@ -113,6 +111,7 @@ import {
   selectCompactionTimeoutSnapshot,
   shouldFlagCompactionTimeout,
 } from "./compaction-timeout.js";
+import { pruneProcessedHistoryImages } from "./history-image-prune.js";
 import { detectAndLoadPromptImages } from "./images.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 
@@ -128,52 +127,76 @@ type PromptBuildHookRunner = {
   ) => Promise<PluginHookBeforeAgentStartResult | undefined>;
 };
 
-export function injectHistoryImagesIntoMessages(
-  messages: AgentMessage[],
-  historyImagesByIndex: Map<number, ImageContent[]>,
-): boolean {
-  if (historyImagesByIndex.size === 0) {
-    return false;
+function trimWhitespaceFromToolCallNamesInMessage(message: unknown): void {
+  if (!message || typeof message !== "object") {
+    return;
   }
-  let didMutate = false;
-
-  for (const [msgIndex, images] of historyImagesByIndex) {
-    // Bounds check: ensure index is valid before accessing
-    if (msgIndex < 0 || msgIndex >= messages.length) {
+  const content = (message as { content?: unknown }).content;
+  if (!Array.isArray(content)) {
+    return;
+  }
+  for (const block of content) {
+    if (!block || typeof block !== "object") {
       continue;
     }
-    const msg = messages[msgIndex];
-    if (msg && msg.role === "user") {
-      // Convert string content to array format if needed
-      if (typeof msg.content === "string") {
-        msg.content = [{ type: "text", text: msg.content }];
-        didMutate = true;
-      }
-      if (Array.isArray(msg.content)) {
-        // Check for existing image content to avoid duplicates across turns
-        const existingImageData = new Set(
-          msg.content
-            .filter(
-              (c): c is ImageContent =>
-                c != null &&
-                typeof c === "object" &&
-                c.type === "image" &&
-                typeof c.data === "string",
-            )
-            .map((c) => c.data),
-        );
-        for (const img of images) {
-          // Only add if this image isn't already in the message
-          if (!existingImageData.has(img.data)) {
-            msg.content.push(img);
-            didMutate = true;
-          }
-        }
-      }
+    const typedBlock = block as { type?: unknown; name?: unknown };
+    if (typedBlock.type !== "toolCall" || typeof typedBlock.name !== "string") {
+      continue;
+    }
+    const trimmed = typedBlock.name.trim();
+    if (trimmed !== typedBlock.name) {
+      typedBlock.name = trimmed;
     }
   }
+}
 
-  return didMutate;
+function wrapStreamTrimToolCallNames(
+  stream: ReturnType<typeof streamSimple>,
+): ReturnType<typeof streamSimple> {
+  const originalResult = stream.result.bind(stream);
+  stream.result = async () => {
+    const message = await originalResult();
+    trimWhitespaceFromToolCallNamesInMessage(message);
+    return message;
+  };
+
+  const originalAsyncIterator = stream[Symbol.asyncIterator].bind(stream);
+  (stream as { [Symbol.asyncIterator]: typeof originalAsyncIterator })[Symbol.asyncIterator] =
+    function () {
+      const iterator = originalAsyncIterator();
+      return {
+        async next() {
+          const result = await iterator.next();
+          if (!result.done && result.value && typeof result.value === "object") {
+            const event = result.value as {
+              partial?: unknown;
+              message?: unknown;
+            };
+            trimWhitespaceFromToolCallNamesInMessage(event.partial);
+            trimWhitespaceFromToolCallNamesInMessage(event.message);
+          }
+          return result;
+        },
+        async return(value?: unknown) {
+          return iterator.return?.(value) ?? { done: true as const, value: undefined };
+        },
+        async throw(error?: unknown) {
+          return iterator.throw?.(error) ?? { done: true as const, value: undefined };
+        },
+      };
+    };
+
+  return stream;
+}
+
+export function wrapStreamFnTrimToolCallNames(baseFn: StreamFn): StreamFn {
+  return (model, context, options) => {
+    const maybeStream = baseFn(model, context, options);
+    if (maybeStream && typeof maybeStream === "object" && "then" in maybeStream) {
+      return Promise.resolve(maybeStream).then((stream) => wrapStreamTrimToolCallNames(stream));
+    }
+    return wrapStreamTrimToolCallNames(maybeStream);
+  };
 }
 
 export async function resolvePromptBuildHookResult(params: {
@@ -627,9 +650,9 @@ export async function runEmbeddedAttempt(
         cwd: effectiveWorkspace,
       });
 
-      const settingsManager = SettingsManager.create(effectiveWorkspace, agentDir);
-      applyPiCompactionSettingsFromConfig({
-        settingsManager,
+      const settingsManager = createPreparedEmbeddedPiSettingsManager({
+        cwd: effectiveWorkspace,
+        agentDir,
         cfg: params.config,
       });
 
@@ -817,6 +840,11 @@ export async function runEmbeddedAttempt(
           return inner(model, nextContext as typeof context, options);
         };
       }
+
+      // Some models emit tool names with surrounding whitespace (e.g. " read ").
+      // pi-agent-core dispatches tool calls with exact string matching, so normalize
+      // names on the live response stream before tool execution.
+      activeSession.agent.streamFn = wrapStreamFnTrimToolCallNames(activeSession.agent.streamFn);
 
       if (anthropicPayloadLogger) {
         activeSession.agent.streamFn = anthropicPayloadLogger.wrapStreamFn(
@@ -1092,16 +1120,20 @@ export async function runEmbeddedAttempt(
         }
 
         try {
+          // Idempotent cleanup for legacy sessions with persisted image payloads.
+          // Called each run; only mutates already-answered user turns that still carry image blocks.
+          const didPruneImages = pruneProcessedHistoryImages(activeSession.messages);
+          if (didPruneImages) {
+            activeSession.agent.replaceMessages(activeSession.messages);
+          }
+
           // Detect and load images referenced in the prompt for vision-capable models.
-          // This eliminates the need for an explicit "view" tool call by injecting
-          // images directly into the prompt when the model supports it.
-          // Also scans conversation history to enable follow-up questions about earlier images.
+          // Images are prompt-local only (pi-like behavior).
           const imageResult = await detectAndLoadPromptImages({
             prompt: effectivePrompt,
             workspaceDir: effectiveWorkspace,
             model: params.model,
             existingImages: params.images,
-            historyMessages: activeSession.messages,
             maxBytes: MAX_IMAGE_BYTES,
             maxDimensionPx: resolveImageSanitizationLimits(params.config).maxDimensionPx,
             workspaceOnly: effectiveFsWorkspaceOnly,
@@ -1112,21 +1144,10 @@ export async function runEmbeddedAttempt(
                 : undefined,
           });
 
-          // Inject history images into their original message positions.
-          // This ensures the model sees images in context (e.g., "compare to the first image").
-          const didMutate = injectHistoryImagesIntoMessages(
-            activeSession.messages,
-            imageResult.historyImagesByIndex,
-          );
-          if (didMutate) {
-            // Persist message mutations (e.g., injected history images) so we don't re-scan/reload.
-            activeSession.agent.replaceMessages(activeSession.messages);
-          }
-
           cacheTrace?.recordStage("prompt:images", {
             prompt: effectivePrompt,
             messages: activeSession.messages,
-            note: `images: prompt=${imageResult.images.length} history=${imageResult.historyImagesByIndex.size}`,
+            note: `images: prompt=${imageResult.images.length}`,
           });
 
           // Diagnostic: log context sizes before prompt to help debug early overflow errors.
@@ -1143,7 +1164,6 @@ export async function runEmbeddedAttempt(
                 `historyImageBlocks=${sessionSummary.totalImageBlocks} ` +
                 `systemPromptChars=${systemLen} promptChars=${promptLen} ` +
                 `promptImages=${imageResult.images.length} ` +
-                `historyImageMessages=${imageResult.historyImagesByIndex.size} ` +
                 `provider=${params.provider}/${params.modelId} sessionFile=${params.sessionFile}`,
             );
           }
@@ -1218,13 +1238,15 @@ export async function runEmbeddedAttempt(
           }
         }
 
+        const compactionOccurredThisAttempt = getCompactionCount() > 0;
+
         // Append cache-TTL timestamp AFTER prompt + compaction retry completes.
         // Previously this was before the prompt, which caused a custom entry to be
         // inserted between compaction and the next prompt — breaking the
         // prepareCompaction() guard that checks the last entry type, leading to
         // double-compaction. See: https://github.com/openclaw/openclaw/issues/9282
         // Skip when timed out during compaction — session state may be inconsistent.
-        if (!timedOutDuringCompaction) {
+        if (!timedOutDuringCompaction && !compactionOccurredThisAttempt) {
           const shouldTrackCacheTtl =
             params.config?.agents?.defaults?.contextPruning?.mode === "cache-ttl" &&
             isCacheTtlEligibleProvider(params.provider, params.modelId);
@@ -1256,7 +1278,7 @@ export async function runEmbeddedAttempt(
         messagesSnapshot = snapshotSelection.messagesSnapshot;
         sessionIdUsed = snapshotSelection.sessionIdUsed;
 
-        if (promptError && promptErrorSource === "prompt") {
+        if (promptError && promptErrorSource === "prompt" && !compactionOccurredThisAttempt) {
           try {
             sessionManager.appendCustomEntry("openclaw:prompt-error", {
               timestamp: Date.now(),

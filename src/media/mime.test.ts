@@ -60,6 +60,13 @@ describe("mime detection", () => {
     });
     expect(mime).toBe("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
   });
+
+  it("uses extension mapping for JavaScript assets", async () => {
+    const mime = await detectMime({
+      filePath: "/tmp/a2ui.bundle.js",
+    });
+    expect(mime).toBe("text/javascript");
+  });
 });
 
 describe("extensionForMime", () => {

@@ -175,6 +175,9 @@ function buildRequestMessage(request: ExecApprovalRequest, nowMs: number) {
   if (request.request.nodeId) {
     lines.push(`Node: ${request.request.nodeId}`);
   }
+  if (Array.isArray(request.request.envKeys) && request.request.envKeys.length > 0) {
+    lines.push(`Env overrides: ${request.request.envKeys.join(", ")}`);
+  }
   if (request.request.host) {
     lines.push(`Host: ${request.request.host}`);
   }
