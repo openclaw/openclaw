@@ -3,25 +3,6 @@ $RepoRoot = (Resolve-Path "$PSScriptRoot\..").Path
 $ScriptPath = Join-Path $RepoRoot "scripts\start-all-in-one.bat"
 $DesktopPath = [System.IO.Path]::Combine($env:USERPROFILE, "Desktop")
 
-$ClawdbotShortcuts = @(
-    "Clawdbot-Launcher.lnk",
-    "Clawdbot All-in-One Launcher.lnk",
-    "Clawdbot.lnk",
-    "OpenClaw.lnk",
-    "HakuaAvatar.lnk",
-    "SBV2-TTS.lnk"
-)
-
-$removed = 0
-foreach ($shortcut in $ClawdbotShortcuts) {
-    $path = Join-Path $DesktopPath $shortcut
-    if (Test-Path $path) {
-        Remove-Item $path -Force
-        Write-Host "Removed: $shortcut" -ForegroundColor Gray
-        $removed++
-    }
-}
-
 $ShortcutPath = Join-Path $DesktopPath "Clawdbot-Launcher.lnk"
 $Shortcut = $WshShell.CreateShortcut($ShortcutPath)
 $Shortcut.TargetPath = "C:\Windows\System32\cmd.exe"
