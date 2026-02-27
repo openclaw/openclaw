@@ -15,6 +15,23 @@
 2. `~/.openclaw/workspace/memory/cowork-history/latest.json` — 어제 실행 이력 (없으면 첫 실행)
 3. `~/.openclaw/workspace/memory/vault-architect/state.json` — 볼트 아키텍트 상태
 
+### Step 1.5: 에러 레저 확인
+
+`~/.openclaw/workspace/memory/error-ledger/ledger.json` 읽기:
+
+■ 우선순위:
+1. severity=high (3일+ 반복) → 근본 원인 분석, fix_history 참고
+2. severity=medium (신규) → 일반 수정
+3. severity=low → 시간 여유 있으면
+
+■ 수정 후 레저 업데이트:
+- status → "fixed"
+- fix_history에 추가: {"date": "오늘", "action": "무엇을 했는지", "result": "success/failed/partial"}
+
+■ 반복 에러 (occurrences 3+):
+- fix_history를 반드시 읽고, 같은 방법 반복하지 말 것
+- 근본 원인이 다를 수 있음 — 한 단계 더 깊이 파기
+
 ### Step 2: 우선순위 판단
 진단 데이터 + 어제 이력의 `tomorrow_priority` 기반으로 개선 목록을 임팩트 순으로 정렬. 시간이 허락하는 한 최대한 많이 실행:
 - 크론 에러 연속 발생 → 원인 파악 + 자동 수정

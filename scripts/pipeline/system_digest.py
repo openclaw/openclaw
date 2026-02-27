@@ -12,11 +12,12 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -25,6 +26,7 @@ WORKSPACE = Path(os.path.expanduser("~/.openclaw/workspace"))
 CRON_FILE = Path(os.path.expanduser("~/.openclaw/cron/jobs.json"))
 VAULT = Path(os.path.expanduser("~/knowledge"))
 DIGEST_FILE = WORKSPACE / "memory" / "system-digest" / "latest.json"
+LEDGER_FILE = WORKSPACE / "memory" / "error-ledger" / "ledger.json"
 
 
 def _read_json(path: Path) -> dict | list | None:
@@ -199,6 +201,171 @@ def collect_vault_quality() -> dict:
         return {"error": str(e)}
 
 
+def update_error_ledger(digest: dict) -> None:
+    """digest의 에러를 ledger.json에 누적."""
+    today = datetime.now().strftime("%Y-%m-%d")
+
+    # 기존 레저 로드
+    ledger = _read_json(LEDGER_FILE) or {"updated_at": None, "errors": []}
+    existing = {e["id"]: e for e in ledger.get("errors", [])}
+
+    # digest에서 현재 에러 ID 수집
+    seen_ids: set[str] = set()
+
+    # 1) 크론 에러
+    cron = digest.get("cron", {})
+    for err in cron.get("with_errors", []):
+        eid = f"cron__{err['id']}"
+        seen_ids.add(eid)
+        if eid in existing:
+            entry = existing[eid]
+            if entry.get("last_seen") != today:
+                entry["occurrences"] = entry.get("occurrences", 1) + 1
+                entry["last_seen"] = today
+            entry["detail"] = f"consecutiveErrors: {err['consecutive_errors']}"
+            if entry.get("status") in ("resolved", "fixed"):
+                entry["status"] = "open"
+        else:
+            existing[eid] = {
+                "id": eid,
+                "source": "cron",
+                "title": f"{err['id']} 크론 실패",
+                "detail": f"consecutiveErrors: {err['consecutive_errors']}",
+                "severity": "medium",
+                "first_seen": today,
+                "last_seen": today,
+                "occurrences": 1,
+                "status": "open",
+                "fix_history": [],
+            }
+
+    # 2) 로그 에러
+    recent_errors = digest.get("recent_errors", {})
+    for log_name, lines in recent_errors.items():
+        for line in lines:
+            err_hash = hashlib.md5(line.encode()).hexdigest()[:8]
+            eid = f"log__{log_name}__{err_hash}"
+            seen_ids.add(eid)
+            if eid in existing:
+                entry = existing[eid]
+                if entry.get("last_seen") != today:
+                    entry["occurrences"] = entry.get("occurrences", 1) + 1
+                    entry["last_seen"] = today
+                if entry.get("status") in ("resolved", "fixed"):
+                    entry["status"] = "open"
+            else:
+                # 로그 라인에서 간결한 제목 추출
+                title_part = line.strip()[-80:] if len(line.strip()) > 80 else line.strip()
+                existing[eid] = {
+                    "id": eid,
+                    "source": "log",
+                    "title": f"{log_name}: {title_part}",
+                    "detail": line.strip(),
+                    "severity": "low",
+                    "first_seen": today,
+                    "last_seen": today,
+                    "occurrences": 1,
+                    "status": "open",
+                    "fix_history": [],
+                }
+
+    # 3) 테스트 실패
+    tests = digest.get("tests", {})
+    for test_name in tests.get("last_failed", []):
+        simplified = test_name.replace("::", "__").replace("/", "_").replace(" ", "_")[:60]
+        eid = f"test__{simplified}"
+        seen_ids.add(eid)
+        if eid in existing:
+            entry = existing[eid]
+            if entry.get("last_seen") != today:
+                entry["occurrences"] = entry.get("occurrences", 1) + 1
+                entry["last_seen"] = today
+            if entry.get("status") in ("resolved", "fixed"):
+                entry["status"] = "open"
+        else:
+            existing[eid] = {
+                "id": eid,
+                "source": "test",
+                "title": f"테스트 실패: {test_name}",
+                "detail": test_name,
+                "severity": "medium",
+                "first_seen": today,
+                "last_seen": today,
+                "occurrences": 1,
+                "status": "open",
+                "fix_history": [],
+            }
+
+    # 자동 규칙 적용
+    cutoff_resolved = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
+    cutoff_auto_resolve = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
+
+    to_delete = []
+    for eid, entry in existing.items():
+        # 3회+ → severity high 승격
+        if entry.get("occurrences", 1) >= 3 and entry.get("severity") != "high":
+            entry["severity"] = "high"
+
+        # 7일 미출현 open → resolved
+        if (entry.get("status") == "open"
+                and eid not in seen_ids
+                and entry.get("last_seen", today) < cutoff_auto_resolve):
+            entry["status"] = "resolved"
+
+        # 30일+ resolved/fixed → 삭제
+        if entry.get("status") in ("resolved", "fixed"):
+            if entry.get("last_seen", today) < cutoff_resolved:
+                to_delete.append(eid)
+
+    for eid in to_delete:
+        del existing[eid]
+
+    # severity 기준 정렬: high > medium > low
+    severity_order = {"high": 0, "medium": 1, "low": 2}
+    sorted_errors = sorted(
+        existing.values(),
+        key=lambda e: (severity_order.get(e.get("severity", "low"), 3), -e.get("occurrences", 1)),
+    )
+
+    ledger = {
+        "updated_at": datetime.now().isoformat(),
+        "errors": sorted_errors,
+    }
+
+    LEDGER_FILE.parent.mkdir(parents=True, exist_ok=True)
+    LEDGER_FILE.write_text(
+        json.dumps(ledger, ensure_ascii=False, indent=2), encoding="utf-8",
+    )
+
+
+def _summarize_ledger() -> dict:
+    """레저 요약 — digest에 포함."""
+    ledger = _read_json(LEDGER_FILE)
+    if not ledger:
+        return {"total_open": 0, "high_severity": 0, "recurring_3plus": 0, "top_errors": []}
+
+    errors = ledger.get("errors", [])
+    open_errors = [e for e in errors if e.get("status") == "open"]
+    high = [e for e in open_errors if e.get("severity") == "high"]
+    recurring = [e for e in open_errors if e.get("occurrences", 1) >= 3]
+
+    top = []
+    for e in open_errors[:5]:
+        top.append({
+            "id": e["id"],
+            "title": e.get("title", ""),
+            "occurrences": e.get("occurrences", 1),
+            "severity": e.get("severity", "low"),
+        })
+
+    return {
+        "total_open": len(open_errors),
+        "high_severity": len(high),
+        "recurring_3plus": len(recurring),
+        "top_errors": top,
+    }
+
+
 def build_digest() -> dict:
     return {
         "generated_at": datetime.now().isoformat(),
@@ -208,6 +375,7 @@ def build_digest() -> dict:
         "pipelines": collect_pipeline_states(),
         "recent_errors": collect_recent_logs(),
         "tests": collect_test_status(),
+        "error_ledger_summary": _summarize_ledger(),
         "action_hints": _generate_hints(),
     }
 
@@ -275,6 +443,15 @@ def _generate_hints() -> list[str]:
     if errors:
         hints.append(f"최근 로그 에러: {', '.join(errors.keys())}")
 
+    # 레저 기반 힌트
+    ledger_summary = _summarize_ledger()
+    recurring = ledger_summary.get("recurring_3plus", 0)
+    if recurring > 0:
+        hints.append(f"반복 에러 {recurring}건 (3일+) — 근본 원인 분석 필요")
+    high_sev = ledger_summary.get("high_severity", 0)
+    if high_sev > 0:
+        hints.append(f"심각 에러 {high_sev}건 — 우선 처리")
+
     return hints
 
 
@@ -284,6 +461,9 @@ def main():
     args = parser.parse_args()
 
     digest = build_digest()
+
+    # 에러 레저 누적
+    update_error_ledger(digest)
 
     # 파일로도 저장
     DIGEST_FILE.parent.mkdir(parents=True, exist_ok=True)
