@@ -414,12 +414,22 @@ function parseAgentComponentData(data: ComponentData): {
   if (!data || typeof data !== "object") {
     return null;
   }
+
+  // Carbon parses "key:componentId=xxx" into { componentId: "xxx" }
+  // Components v2 / other builders may use { cid: "xxx" } (e.g. occomp:cid=xxx).
+  const raw =
+    ("cid" in data
+      ? (data as Record<string, unknown>).cid
+      : (data as Record<string, unknown>).componentId) ??
+    (data as Record<string, unknown>).componentId;
+
   const componentId =
-    typeof data.componentId === "string"
-      ? decodeURIComponent(data.componentId)
-      : typeof data.componentId === "number"
-        ? String(data.componentId)
+    typeof raw === "string"
+      ? decodeURIComponent(raw)
+      : typeof raw === "number"
+        ? String(raw)
         : null;
+
   if (!componentId) {
     return null;
   }
