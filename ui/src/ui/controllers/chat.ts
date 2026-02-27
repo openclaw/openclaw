@@ -68,7 +68,9 @@ export async function loadChatHistory(state: ChatState) {
     state.chatMessages = messages.filter((message) => !isAssistantSilentReply(message));
     state.chatThinkingLevel = res.thinkingLevel ?? null;
   } catch (err) {
-    state.lastError = String(err);
+    const error = String(err);
+    state.lastError = error;
+    console.error("[chat] loadChatHistory failed:", err);
   } finally {
     state.chatLoading = false;
   }
@@ -210,6 +212,7 @@ export async function sendChatMessage(
     state.chatStream = null;
     state.chatStreamStartedAt = null;
     state.lastError = error;
+    console.error("[chat] sendChatMessage failed:", err);
     state.chatMessages = [
       ...state.chatMessages,
       {
@@ -237,6 +240,7 @@ export async function abortChatRun(state: ChatState): Promise<boolean> {
     return true;
   } catch (err) {
     state.lastError = String(err);
+    console.error("[chat] abortChatRun failed:", err);
     return false;
   }
 }
@@ -309,10 +313,21 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     state.chatRunId = null;
     state.chatStreamStartedAt = null;
   } else if (payload.state === "error") {
+    const errorText = payload.errorMessage ?? "chat error";
     state.chatStream = null;
     state.chatRunId = null;
     state.chatStreamStartedAt = null;
-    state.lastError = payload.errorMessage ?? "chat error";
+    state.lastError = errorText;
+    console.error("[chat] chat error event:", errorText);
+    // Surface the error inline so the user sees feedback in the chat thread
+    state.chatMessages = [
+      ...state.chatMessages,
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Error: " + errorText }],
+        timestamp: Date.now(),
+      },
+    ];
   }
   return payload.state;
 }

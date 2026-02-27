@@ -341,6 +341,61 @@ describe("handleChatEvent", () => {
     });
   });
 
+  it("surfaces error event as inline chat message and sets lastError", () => {
+    const existingMessage = {
+      role: "user",
+      content: [{ type: "text", text: "Hello" }],
+      timestamp: 1,
+    };
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "Partial...",
+      chatStreamStartedAt: 100,
+      chatMessages: [existingMessage],
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "error",
+      errorMessage: "model timeout",
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("error");
+    expect(state.chatRunId).toBe(null);
+    expect(state.chatStream).toBe(null);
+    expect(state.chatStreamStartedAt).toBe(null);
+    expect(state.lastError).toBe("model timeout");
+    // Error should appear as an inline message in the chat thread
+    expect(state.chatMessages).toHaveLength(2);
+    expect(state.chatMessages[1]).toMatchObject({
+      role: "assistant",
+      content: [{ type: "text", text: "Error: model timeout" }],
+    });
+  });
+
+  it("uses default error text when errorMessage is missing", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "",
+      chatStreamStartedAt: 100,
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "error",
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("error");
+    expect(state.lastError).toBe("chat error");
+    expect(state.chatMessages).toHaveLength(1);
+    expect(state.chatMessages[0]).toMatchObject({
+      role: "assistant",
+      content: [{ type: "text", text: "Error: chat error" }],
+    });
+  });
+
   it("processes aborted from own run without message and empty stream", () => {
     const existingMessage = {
       role: "user",
