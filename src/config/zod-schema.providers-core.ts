@@ -517,6 +517,14 @@ export const DiscordAccountSchema = z
       .union([z.literal(0), z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5)])
       .optional(),
     activityUrl: z.string().url().optional(),
+    eventQueue: z
+      .object({
+        listenerTimeout: z.number().int().positive().optional(),
+        maxQueueSize: z.number().int().positive().optional(),
+        maxConcurrency: z.number().int().positive().optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .superRefine((value, ctx) => {
