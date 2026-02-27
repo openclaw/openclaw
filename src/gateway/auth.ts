@@ -247,7 +247,8 @@ export function resolveGatewayAuth(params: {
     configToken: authConfig.token,
     configPassword: authConfig.password,
     env,
-    includeLegacyEnv: false,
+    // Support legacy env vars used by older deploy scripts (moltbot/clawdbot)
+    includeLegacyEnv: true,
     tokenPrecedence: "config-first",
     passwordPrecedence: "config-first",
   });
@@ -273,7 +274,6 @@ export function resolveGatewayAuth(params: {
     mode = "token";
     modeSource = "default";
   }
-
   const allowTailscale =
     authConfig.allowTailscale ??
     (params.tailscaleMode === "serve" && mode !== "password" && mode !== "trusted-proxy");

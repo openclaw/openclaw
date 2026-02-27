@@ -281,8 +281,16 @@ export async function runOnboardingWizard(
   const localUrl = `ws://127.0.0.1:${localPort}`;
   const localProbe = await onboardHelpers.probeGatewayReachable({
     url: localUrl,
-    token: baseConfig.gateway?.auth?.token ?? process.env.OPENCLAW_GATEWAY_TOKEN,
-    password: baseConfig.gateway?.auth?.password ?? process.env.OPENCLAW_GATEWAY_PASSWORD,
+    token:
+      baseConfig.gateway?.auth?.token ??
+      process.env.OPENCLAW_GATEWAY_TOKEN ??
+      process.env.MOLTBOT_GATEWAY_TOKEN ??
+      process.env.CLAWDBOT_GATEWAY_TOKEN,
+    password:
+      baseConfig.gateway?.auth?.password ??
+      process.env.OPENCLAW_GATEWAY_PASSWORD ??
+      process.env.MOLTBOT_GATEWAY_PASSWORD ??
+      process.env.CLAWDBOT_GATEWAY_PASSWORD,
   });
   const remoteUrl = baseConfig.gateway?.remote?.url?.trim() ?? "";
   const remoteProbe = remoteUrl

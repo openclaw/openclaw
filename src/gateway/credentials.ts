@@ -43,7 +43,10 @@ function readGatewayTokenEnv(
   if (!includeLegacyEnv) {
     return undefined;
   }
-  return trimToUndefined(env.CLAWDBOT_GATEWAY_TOKEN);
+  return firstDefined([
+    trimToUndefined(env.MOLTBOT_GATEWAY_TOKEN),
+    trimToUndefined(env.CLAWDBOT_GATEWAY_TOKEN),
+  ]);
 }
 
 function readGatewayPasswordEnv(
@@ -57,7 +60,10 @@ function readGatewayPasswordEnv(
   if (!includeLegacyEnv) {
     return undefined;
   }
-  return trimToUndefined(env.CLAWDBOT_GATEWAY_PASSWORD);
+  return firstDefined([
+    trimToUndefined(env.MOLTBOT_GATEWAY_PASSWORD),
+    trimToUndefined(env.CLAWDBOT_GATEWAY_PASSWORD),
+  ]);
 }
 
 export function resolveGatewayCredentialsFromValues(params: {
