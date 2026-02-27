@@ -1,0 +1,30 @@
+; OpenClaw seatbelt demo profile: demo-restricted
+; Intent: lock-down example. This profile is intentionally restrictive and likely
+; requires customization for real workloads.
+
+(version 1)
+(import "system.sb")
+(deny default)
+
+(param "PROJECT_DIR")
+(param "WORKSPACE_DIR")
+(param "STATE_DIR")
+(param "AGENT_ID")
+(param "SEATBELT_PROFILE_DIR")
+(param "WORKSPACE_ACCESS")
+(param "TMPDIR")
+
+; Restricted execution model.
+(allow process-exec)
+(deny network*)
+
+; Always allow reads in project workspace.
+(allow file-read* (subpath (param "PROJECT_DIR")))
+
+; WORKSPACE_ACCESS controls write permission at the profile layer.
+(if (string=? (param "WORKSPACE_ACCESS") "rw")
+  (allow file-write* (subpath (param "PROJECT_DIR")))
+  (deny file-write* (subpath (param "PROJECT_DIR"))))
+
+; Keep runtime temp writable.
+(allow file-read* file-write* (subpath (param "TMPDIR")))

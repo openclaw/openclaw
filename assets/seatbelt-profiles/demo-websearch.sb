@@ -1,0 +1,25 @@
+; OpenClaw seatbelt demo profile: demo-websearch
+; Intent: network-centric profile with minimal local data access.
+; Customize for production use.
+
+(version 1)
+(import "system.sb")
+
+(param "PROJECT_DIR")
+(param "WORKSPACE_DIR")
+(param "STATE_DIR")
+(param "AGENT_ID")
+(param "SEATBELT_PROFILE_DIR")
+(param "WORKSPACE_ACCESS")
+(param "TMPDIR")
+
+(allow process-exec)
+(allow network*)
+
+; Explicitly deny project/state data access for web-search style runs.
+(deny file-read* file-write* (subpath (param "PROJECT_DIR")))
+(deny file-read* file-write* (subpath (param "WORKSPACE_DIR")))
+(deny file-read* file-write* (subpath (param "STATE_DIR")))
+
+; Allow temp files for transient runtime needs.
+(allow file-read* file-write* (subpath (param "TMPDIR")))

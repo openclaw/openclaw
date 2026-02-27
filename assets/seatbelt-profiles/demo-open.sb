@@ -1,0 +1,32 @@
+; OpenClaw seatbelt demo profile: demo-open
+; Intent: developer-friendly baseline with network/process access and broad workspace access.
+; Customize for production use.
+
+(version 1)
+(import "system.sb")
+
+(param "PROJECT_DIR")
+(param "WORKSPACE_DIR")
+(param "STATE_DIR")
+(param "AGENT_ID")
+(param "SEATBELT_PROFILE_DIR")
+(param "WORKSPACE_ACCESS")
+(param "TMPDIR")
+
+; Permit command execution and networking for normal tooling workflows.
+(allow process-exec)
+(allow network*)
+
+; Allow workspace + temp access.
+(allow file-read* file-write* (subpath (param "PROJECT_DIR")))
+(allow file-read* file-write* (subpath (param "WORKSPACE_DIR")))
+(allow file-read* file-write* (subpath (param "TMPDIR")))
+
+; Protect installed seatbelt profiles from runtime mutation.
+(deny file-write* (subpath (param "SEATBELT_PROFILE_DIR")))
+
+; Keep session history isolation generic: block broad cross-agent reads,
+; then explicitly allow this agent's own sessions.
+(deny file-read* (subpath (string-append (param "STATE_DIR") "/agents")))
+(allow file-read*
+  (subpath (string-append (param "STATE_DIR") "/agents/" (param "AGENT_ID") "/sessions")))

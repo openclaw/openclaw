@@ -15,6 +15,7 @@ import { createSandboxFsBridge } from "./fs-bridge.js";
 import { maybePruneSandboxes } from "./prune.js";
 import { resolveSandboxRuntimeStatus } from "./runtime-status.js";
 import { createSeatbeltFsBridge } from "./seatbelt-fs-bridge.js";
+import { ensureSeatbeltDemoProfiles } from "./seatbelt-profiles.js";
 import { resolveSandboxScopeKey, resolveSandboxWorkspaceDir } from "./shared.js";
 import type {
   SandboxContext,
@@ -112,12 +113,12 @@ function resolveSandboxSession(params: { config?: OpenClawConfig; sessionKey?: s
   return { rawSessionKey, runtime, cfg };
 }
 
-function resolveSeatbeltContextConfig(params: {
+async function resolveSeatbeltContextConfig(params: {
   cfg: ReturnType<typeof resolveSandboxConfigForAgent>;
   workspaceDir: string;
   agentWorkspaceDir: string;
   agentId: string;
-}): SandboxSeatbeltContext | undefined {
+}): Promise<SandboxSeatbeltContext | undefined> {
   if (params.cfg.backend !== "seatbelt") {
     return undefined;
   }
@@ -127,6 +128,10 @@ function resolveSeatbeltContextConfig(params: {
   }
   const profile = rawProfile.endsWith(".sb") ? rawProfile.slice(0, -3) : rawProfile;
   const profileFile = `${profile}.sb`;
+
+  await ensureSeatbeltDemoProfiles({
+    profileDir: params.cfg.seatbelt.profileDir,
+  });
 
   const defaults = {
     PROJECT_DIR: params.workspaceDir,
@@ -171,7 +176,7 @@ export async function resolveSandboxContext(params: {
     workspaceDir: params.workspaceDir,
   });
 
-  const seatbelt = resolveSeatbeltContextConfig({
+  const seatbelt = await resolveSeatbeltContextConfig({
     cfg,
     workspaceDir,
     agentWorkspaceDir,
