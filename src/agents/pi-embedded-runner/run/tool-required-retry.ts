@@ -5,6 +5,7 @@ export const TOOLLESS_ACK_MAX_RETRIES = 2;
 const TOOL_REQUIRED_PROMPT_MARKERS = [
   "run",
   "test",
+  "tests",
   "fix",
   "edit",
   "update",
@@ -16,10 +17,15 @@ const TOOL_REQUIRED_PROMPT_MARKERS = [
   "implement",
   "commit",
   "file",
+  "files",
   "repo",
+  "repos",
   "workspace",
+  "workspaces",
   "command",
+  "commands",
   "terminal",
+  "terminals",
   "logs",
 ] as const;
 
@@ -35,7 +41,6 @@ const TOOL_HELP_QUESTION_PATTERNS = [
   /\bcould you (?:explain|show|tell)(?: me)? (?:the )?(?:command|steps?|way)\b/i,
   /^\s*how to\b/i,
   /\bshould i (?:run|use)\b/i,
-  /\b(?:explain|show|tell)(?: me)? (?:the )?command\b/i,
   /^(?:explain|show|tell)(?: me)? (?:how|what|which|why|where)\b/i,
   /^(?:explain|show|tell)(?: me)? (?:the )?(?:command|steps?|way)\b/i,
 ] as const;

@@ -351,4 +351,42 @@ describe("tool-required retry guard", () => {
 
     expect(shouldRetry).toBe(true);
   });
+
+  it("does not classify mixed execution prompts containing 'show command output' as help-only", () => {
+    const shouldRetry = shouldRetryToolRequiredToolless({
+      provider: "openai-codex",
+      prompt: "Run tests in this repo and show command output for failures.",
+      assistantTexts: ["Acknowledged. I'll do that now."],
+      lastAssistant: { stopReason: "end_turn", content: [] } as never,
+      toolMetas: [],
+      didSendViaMessagingTool: false,
+      hasClientToolCall: false,
+      disableTools: false,
+      promptError: null,
+      aborted: false,
+      timedOut: false,
+      timedOutDuringCompaction: false,
+    });
+
+    expect(shouldRetry).toBe(true);
+  });
+
+  it("counts plural tool markers like tests/files as tool-required", () => {
+    const shouldRetry = shouldRetryToolRequiredToolless({
+      provider: "openai-codex",
+      prompt: "Fix tests and edit files.",
+      assistantTexts: ["Acknowledged. I'll do that now."],
+      lastAssistant: { stopReason: "end_turn", content: [] } as never,
+      toolMetas: [],
+      didSendViaMessagingTool: false,
+      hasClientToolCall: false,
+      disableTools: false,
+      promptError: null,
+      aborted: false,
+      timedOut: false,
+      timedOutDuringCompaction: false,
+    });
+
+    expect(shouldRetry).toBe(true);
+  });
 });
