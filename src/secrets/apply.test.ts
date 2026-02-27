@@ -5,6 +5,21 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { runSecretsApply } from "./apply.js";
 import type { SecretsApplyPlan } from "./plan.js";
 
+function stripVolatileConfigMeta(input: string): Record<string, unknown> {
+  const parsed = JSON.parse(input) as Record<string, unknown>;
+  const meta =
+    parsed.meta && typeof parsed.meta === "object" && !Array.isArray(parsed.meta)
+      ? { ...(parsed.meta as Record<string, unknown>) }
+      : undefined;
+  if (meta && "lastTouchedAt" in meta) {
+    delete meta.lastTouchedAt;
+  }
+  if (meta) {
+    parsed.meta = meta;
+  }
+  return parsed;
+}
+
 describe("secrets apply", () => {
   let rootDir = "";
   let stateDir = "";
@@ -180,7 +195,10 @@ describe("secrets apply", () => {
 
     const second = await runSecretsApply({ plan, env, write: true });
     expect(second.mode).toBe("write");
-    await expect(fs.readFile(configPath, "utf8")).resolves.toBe(configAfterFirst);
+    const configAfterSecond = await fs.readFile(configPath, "utf8");
+    expect(stripVolatileConfigMeta(configAfterSecond)).toEqual(
+      stripVolatileConfigMeta(configAfterFirst),
+    );
     await expect(fs.readFile(authStorePath, "utf8")).resolves.toBe(authStoreAfterFirst);
     await expect(fs.readFile(authJsonPath, "utf8")).resolves.toBe(authJsonAfterFirst);
     await expect(fs.readFile(envPath, "utf8")).resolves.toBe(envAfterFirst);

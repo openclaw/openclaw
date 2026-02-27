@@ -1,7 +1,9 @@
 import {
+  DEFAULT_ACCOUNT_ID,
   buildPendingHistoryContextFromMap,
   clearHistoryEntriesIfEnabled,
   DEFAULT_GROUP_HISTORY_LIMIT,
+  createScopedPairingAccess,
   logInboundDrop,
   recordPendingHistoryEntryIfEnabled,
   resolveControlCommandGate,
@@ -11,6 +13,7 @@ import {
   resolveMentionGating,
   formatAllowlistMatchMeta,
   resolveEffectiveAllowFromLists,
+  resolveDmGroupAccessWithLists,
   type HistoryEntry,
 } from "openclaw/plugin-sdk";
 import {
@@ -56,6 +59,11 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     log,
   } = deps;
   const core = getMSTeamsRuntime();
+  const pairing = createScopedPairingAccess({
+    core,
+    channel: "msteams",
+    accountId: DEFAULT_ACCOUNT_ID,
+  });
   const logVerboseMessage = (message: string) => {
     if (core.logging.shouldLogVerbose()) {
       log.debug?.(message);
@@ -131,8 +139,9 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     const dmPolicy = msteamsCfg?.dmPolicy ?? "pairing";
     const storedAllowFrom = await readStoreAllowFromForDmPolicy({
       provider: "msteams",
+      accountId: pairing.accountId,
       dmPolicy,
-      readStore: (provider) => core.channel.pairing.readAllowFromStore(provider),
+      readStore: pairing.readStoreForDmPolicy,
     });
     const useAccessGroups = cfg.commands?.useAccessGroups !== false;
 
@@ -146,53 +155,13 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       storeAllowFrom: storedAllowFrom,
       dmPolicy,
     });
-    const effectiveDmAllowFrom = resolvedAllowFromLists.effectiveAllowFrom;
-    if (isDirectMessage && msteamsCfg) {
-      if (dmPolicy === "disabled") {
-        log.debug?.("dropping dm (dms disabled)");
-        return;
-      }
-
-      if (dmPolicy !== "open") {
-        const allowNameMatching = isDangerousNameMatchingEnabled(msteamsCfg);
-        const allowMatch = resolveMSTeamsAllowlistMatch({
-          allowFrom: effectiveDmAllowFrom,
-          senderId,
-          senderName,
-          allowNameMatching,
-        });
-
-        if (!allowMatch.allowed) {
-          if (dmPolicy === "pairing") {
-            const request = await core.channel.pairing.upsertPairingRequest({
-              channel: "msteams",
-              id: senderId,
-              meta: { name: senderName },
-            });
-            if (request) {
-              log.info("msteams pairing request created", {
-                sender: senderId,
-                label: senderName,
-              });
-            }
-          }
-          log.debug?.("dropping dm (not allowlisted)", {
-            sender: senderId,
-            label: senderName,
-            allowlistMatch: formatAllowlistMatchMeta(allowMatch),
-          });
-          return;
-        }
-      }
-    }
 
     const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
     const groupPolicy =
       !isDirectMessage && msteamsCfg
         ? (msteamsCfg.groupPolicy ?? defaultGroupPolicy ?? "allowlist")
         : "disabled";
-    const effectiveGroupAllowFrom =
-      !isDirectMessage && msteamsCfg ? resolvedAllowFromLists.effectiveGroupAllowFrom : [];
+    const effectiveGroupAllowFrom = resolvedAllowFromLists.effectiveGroupAllowFrom;
     const teamId = activity.channelData?.team?.id;
     const teamName = activity.channelData?.team?.name;
     const channelName = activity.channelData?.channel?.name;
@@ -203,6 +172,60 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       conversationId,
       channelName,
     });
+    const senderGroupPolicy =
+      groupPolicy === "disabled"
+        ? "disabled"
+        : effectiveGroupAllowFrom.length > 0
+          ? "allowlist"
+          : "open";
+    const access = resolveDmGroupAccessWithLists({
+      isGroup: !isDirectMessage,
+      dmPolicy,
+      groupPolicy: senderGroupPolicy,
+      allowFrom: configuredDmAllowFrom,
+      groupAllowFrom,
+      storeAllowFrom: storedAllowFrom,
+      groupAllowFromFallbackToAllowFrom: false,
+      isSenderAllowed: (allowFrom) =>
+        resolveMSTeamsAllowlistMatch({
+          allowFrom,
+          senderId,
+          senderName,
+          allowNameMatching: isDangerousNameMatchingEnabled(msteamsCfg),
+        }).allowed,
+    });
+    const effectiveDmAllowFrom = access.effectiveAllowFrom;
+
+    if (isDirectMessage && msteamsCfg && access.decision !== "allow") {
+      if (access.reason === "dmPolicy=disabled") {
+        log.debug?.("dropping dm (dms disabled)");
+        return;
+      }
+      const allowMatch = resolveMSTeamsAllowlistMatch({
+        allowFrom: effectiveDmAllowFrom,
+        senderId,
+        senderName,
+        allowNameMatching: isDangerousNameMatchingEnabled(msteamsCfg),
+      });
+      if (access.decision === "pairing") {
+        const request = await pairing.upsertPairingRequest({
+          id: senderId,
+          meta: { name: senderName },
+        });
+        if (request) {
+          log.info("msteams pairing request created", {
+            sender: senderId,
+            label: senderName,
+          });
+        }
+      }
+      log.debug?.("dropping dm (not allowlisted)", {
+        sender: senderId,
+        label: senderName,
+        allowlistMatch: formatAllowlistMatchMeta(allowMatch),
+      });
+      return;
+    }
 
     if (!isDirectMessage && msteamsCfg) {
       if (groupPolicy === "disabled") {
@@ -229,13 +252,12 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
           });
           return;
         }
-        if (effectiveGroupAllowFrom.length > 0) {
-          const allowNameMatching = isDangerousNameMatchingEnabled(msteamsCfg);
+        if (effectiveGroupAllowFrom.length > 0 && access.decision !== "allow") {
           const allowMatch = resolveMSTeamsAllowlistMatch({
             allowFrom: effectiveGroupAllowFrom,
             senderId,
             senderName,
-            allowNameMatching,
+            allowNameMatching: isDangerousNameMatchingEnabled(msteamsCfg),
           });
           if (!allowMatch.allowed) {
             log.debug?.("dropping group message (not in groupAllowFrom)", {
