@@ -39,3 +39,19 @@ export function resolveBundledPluginsDir(): string | undefined {
 
   return undefined;
 }
+
+/**
+ * Resolve the on-disk directory for a bundled extension by plugin id.
+ * Returns undefined if the extension is not found in the bundled plugins dir.
+ */
+export function resolveBundledExtensionDir(pluginId: string): string | undefined {
+  const root = resolveBundledPluginsDir();
+  if (!root) {
+    return undefined;
+  }
+  const dir = path.join(root, pluginId);
+  if (fs.existsSync(path.join(dir, "package.json"))) {
+    return dir;
+  }
+  return undefined;
+}
