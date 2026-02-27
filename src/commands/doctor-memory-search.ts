@@ -4,7 +4,7 @@ import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import { resolveApiKeyForProvider } from "../agents/model-auth.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveMemoryBackendConfig } from "../memory/backend-config.js";
+import { checkQmdBinaryAvailable, resolveMemoryBackendConfig } from "../memory/backend-config.js";
 import { note } from "../terminal/note.js";
 import { resolveUserPath } from "../utils.js";
 
@@ -33,9 +33,27 @@ export async function noteMemorySearchHealth(
   }
 
   // QMD backend handles embeddings internally (e.g. embeddinggemma) — no
-  // separate embedding provider is needed. Skip the provider check entirely.
+  // separate embedding provider is needed. But we should check if qmd binary is available.
   const backendConfig = resolveMemoryBackendConfig({ cfg, agentId });
   if (backendConfig.backend === "qmd") {
+    const qmdCommand = backendConfig.qmd?.command ?? "qmd";
+    const checkResult = await checkQmdBinaryAvailable(qmdCommand);
+    if (!checkResult.available) {
+      note(
+        [
+          `Memory backend is set to "qmd" but the QMD binary was not found.`,
+          `Error: ${checkResult.error}`,
+          "",
+          "Fix (pick one):",
+          `- Install QMD: https://github.com/openclaw/qmd#installation`,
+          `- Check your memory.qmd.command configuration`,
+          `- Switch to builtin backend: ${formatCliCommand("openclaw config set memory.backend builtin")}`,
+          "",
+          `Verify: ${formatCliCommand("openclaw memory status --deep")}`,
+        ].join("\n"),
+        "Memory search",
+      );
+    }
     return;
   }
 
