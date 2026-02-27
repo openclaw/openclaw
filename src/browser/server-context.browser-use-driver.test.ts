@@ -44,6 +44,7 @@ describe("browser server-context browser-use driver", () => {
         headless: false,
         noSandbox: false,
         attachOnly: false,
+        extraArgs: [],
         defaultProfile: "browser-use",
         profiles: {
           "browser-use": {
