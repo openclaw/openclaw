@@ -611,6 +611,7 @@ function mergeCronDelivery(
     to: existing?.to,
     accountId: existing?.accountId,
     bestEffort: existing?.bestEffort,
+    failureDestination: existing?.failureDestination,
   };
 
   if (typeof patch.mode === "string") {
@@ -630,6 +631,9 @@ function mergeCronDelivery(
   }
   if (typeof patch.bestEffort === "boolean") {
     next.bestEffort = patch.bestEffort;
+  }
+  if ("failureDestination" in patch && patch.failureDestination !== undefined) {
+    next.failureDestination = patch.failureDestination;
   }
 
   return next;
