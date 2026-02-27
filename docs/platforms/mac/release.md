@@ -27,8 +27,8 @@ This app now ships Sparkle auto-updates. Release builds must be Developer ID–s
 Notes:
 
 - `APP_BUILD` maps to `CFBundleVersion`/`sparkle:version`; keep it numeric + monotonic (no `-beta`), or Sparkle compares it as equal.
-- Defaults to the current architecture (`$(uname -m)`). For release/universal builds, set `BUILD_ARCHS="arm64 x86_64"` (or `BUILD_ARCHS=all`).
-- Use `scripts/package-mac-dist.sh` for release artifacts (zip + DMG + notarization). Use `scripts/package-mac-app.sh` for local/dev packaging.
+- Uses universal binary by default (`arm64 x86_64`). Override with `BUILD_ARCHS="arm64"` if needed.
+- Use `scripts/package-mac-dist.sh` for release builds. It creates universal binaries, zip, DMG, and handles notarization.
 
 ```bash
 # From repo root; set release IDs so Sparkle feed is enabled.
@@ -38,7 +38,7 @@ APP_VERSION=2026.2.27 \
 APP_BUILD="$(git rev-list --count HEAD)" \
 BUILD_CONFIG=release \
 SIGN_IDENTITY="Developer ID Application: <Developer Name> (<TEAMID>)" \
-scripts/package-mac-app.sh
+scripts/package-mac-dist.sh
 
 # Zip for distribution (includes resource forks for Sparkle delta support)
 ditto -c -k --sequesterRsrc --keepParent dist/OpenClaw.app dist/OpenClaw-2026.2.27.zip
