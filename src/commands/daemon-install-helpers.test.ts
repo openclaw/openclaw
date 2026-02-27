@@ -339,26 +339,30 @@ describe("buildGatewayInstallPlan — launcher config", () => {
     ).rejects.toThrow("path must be absolute or start with ~/");
   });
 
-  it("throws when launcher script is not executable", async () => {
-    const nonExecPath = path.join(tmpDir, "not-executable.sh");
-    fs.writeFileSync(nonExecPath, "#!/bin/sh\n", { mode: 0o644 });
-    mockNodeGatewayPlanFixture();
+  // Windows does not enforce Unix-style executable permissions; fs.accessSync(X_OK) is a no-op.
+  it.skipIf(process.platform === "win32")(
+    "throws when launcher script is not executable",
+    async () => {
+      const nonExecPath = path.join(tmpDir, "not-executable.sh");
+      fs.writeFileSync(nonExecPath, "#!/bin/sh\n", { mode: 0o644 });
+      mockNodeGatewayPlanFixture();
 
-    await expect(
-      buildGatewayInstallPlan({
-        env: {},
-        port: 3000,
-        runtime: "node",
-        config: {
-          gateway: {
-            service: {
-              launcher: nonExecPath,
+      await expect(
+        buildGatewayInstallPlan({
+          env: {},
+          port: 3000,
+          runtime: "node",
+          config: {
+            gateway: {
+              service: {
+                launcher: nonExecPath,
+              },
             },
           },
-        },
-      }),
-    ).rejects.toThrow("not executable");
-  });
+        }),
+      ).rejects.toThrow("not executable");
+    },
+  );
 
   it("uses default program arguments when no launcher is configured", async () => {
     mockNodeGatewayPlanFixture();
