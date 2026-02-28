@@ -1863,6 +1863,7 @@ OpenClaw uses the pi-coding-agent model catalog. Add custom providers via `model
 - Merge precedence for matching provider IDs:
   - Non-empty agent `models.json` `apiKey`/`baseUrl` win.
   - Empty or missing agent `apiKey`/`baseUrl` fall back to `models.providers` in config.
+  - Matching model `contextWindow`/`maxTokens` use the higher value between explicit config and implicit catalog values.
   - Use `models.mode: "replace"` when you want config to fully rewrite `models.json`.
 
 ### Provider field details
@@ -1872,6 +1873,7 @@ OpenClaw uses the pi-coding-agent model catalog. Add custom providers via `model
 - `models.providers.*.api`: request adapter (`openai-completions`, `openai-responses`, `anthropic-messages`, `google-generative-ai`, etc).
 - `models.providers.*.apiKey`: provider credential (prefer SecretRef/env substitution).
 - `models.providers.*.auth`: auth strategy (`api-key`, `token`, `oauth`, `aws-sdk`).
+- `models.providers.*.injectNumCtxForOpenAICompat`: for Ollama + `openai-completions`, inject `options.num_ctx` into requests (default: `true`).
 - `models.providers.*.authHeader`: force credential transport in the `Authorization` header when required.
 - `models.providers.*.baseUrl`: upstream API base URL.
 - `models.providers.*.headers`: extra static headers for proxy/tenant routing.
