@@ -6,7 +6,7 @@ import {
   resolveAuthStorePathForDisplay,
   resolveProfileUnusableUntilForDisplay,
 } from "../../agents/auth-profiles.js";
-import { getCustomProviderApiKey, resolveEnvApiKey } from "../../agents/model-auth.js";
+import { getCustomProviderApiKey, resolveAwsSdkEnvVarName, resolveEnvApiKey } from "../../agents/model-auth.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { shortenHomePath } from "../../utils.js";
 import { maskApiKey } from "./list.format.js";
@@ -91,6 +91,7 @@ export function resolveProviderAuthOverview(params: {
 
   const envKey = resolveEnvApiKey(provider);
   const customKey = getCustomProviderApiKey(cfg, provider);
+  const awsSdkEnvVar = provider === "amazon-bedrock" ? resolveAwsSdkEnvVarName() : undefined;
 
   const effective: ProviderAuthOverview["effective"] = (() => {
     if (profiles.length > 0) {
@@ -109,6 +110,9 @@ export function resolveProviderAuthOverview(params: {
     }
     if (customKey) {
       return { kind: "models.json", detail: maskApiKey(customKey) };
+    }
+    if (awsSdkEnvVar) {
+      return { kind: "env", detail: `aws-sdk (${awsSdkEnvVar})` };
     }
     return { kind: "missing", detail: "missing" };
   })();
@@ -133,7 +137,14 @@ export function resolveProviderAuthOverview(params: {
             source: envKey.source,
           },
         }
-      : {}),
+      : awsSdkEnvVar
+        ? {
+            env: {
+              value: `aws-sdk (${awsSdkEnvVar})`,
+              source: `env: ${awsSdkEnvVar}`,
+            },
+          }
+        : {}),
     ...(customKey
       ? {
           modelsJson: {
