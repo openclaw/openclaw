@@ -484,6 +484,82 @@ describe("createFollowupRunner typing cleanup", () => {
   });
 });
 
+describe("createFollowupRunner abort/timeout retry", () => {
+  it("throws when run is aborted with no payloads so drain keeps the item", async () => {
+    const typing = createMockTypingController();
+    const onBlockReply = vi.fn(async () => {});
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: { aborted: true, durationMs: 600_000 },
+    });
+
+    const runner = createFollowupRunner({
+      opts: { onBlockReply },
+      typing,
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-5",
+    });
+
+    await expect(runner(baseQueuedRun())).rejects.toThrow("followup run aborted without payloads");
+    expect(onBlockReply).not.toHaveBeenCalled();
+    // Typing cleanup should still happen via the finally block.
+    expect(typing.markRunComplete).toHaveBeenCalled();
+    expect(typing.markDispatchIdle).toHaveBeenCalled();
+  });
+
+  it("throws when run is aborted with undefined payloads", async () => {
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      meta: { aborted: true, durationMs: 600_000 },
+    });
+
+    const runner = createFollowupRunner({
+      opts: { onBlockReply: vi.fn(async () => {}) },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-5",
+    });
+
+    await expect(runner(baseQueuedRun())).rejects.toThrow("followup run aborted without payloads");
+  });
+
+  it("does not throw when aborted but payloads were produced", async () => {
+    const onBlockReply = vi.fn(async () => {});
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "partial result" }],
+      meta: { aborted: true, durationMs: 600_000 },
+    });
+
+    const runner = createFollowupRunner({
+      opts: { onBlockReply },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-5",
+    });
+
+    await runner(baseQueuedRun());
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not throw on empty payloads when run was NOT aborted", async () => {
+    const onBlockReply = vi.fn(async () => {});
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: { durationMs: 1_000 },
+    });
+
+    const runner = createFollowupRunner({
+      opts: { onBlockReply },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-5",
+    });
+
+    // Should resolve normally (no throw), just no payloads delivered.
+    await runner(baseQueuedRun());
+    expect(onBlockReply).not.toHaveBeenCalled();
+  });
+});
+
 describe("createFollowupRunner agentDir forwarding", () => {
   it("passes queued run agentDir to runEmbeddedPiAgent", async () => {
     runEmbeddedPiAgentMock.mockClear();

@@ -235,6 +235,17 @@ export function createFollowupRunner(params: {
       }
 
       const payloadArray = runResult.payloads ?? [];
+
+      // When the run was aborted/timed-out and produced no payloads, throw so
+      // drainNextQueueItem keeps the item in the queue for retry.
+      if (runResult.meta.aborted && payloadArray.length === 0) {
+        const sk = queued.run.sessionKey ?? "unknown";
+        defaultRuntime.error?.(
+          `Followup run aborted with no payloads (session=${sk}); keeping in queue for retry`,
+        );
+        throw new Error("followup run aborted without payloads");
+      }
+
       if (payloadArray.length === 0) {
         return;
       }
