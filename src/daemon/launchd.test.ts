@@ -199,7 +199,7 @@ describe("launchd install", () => {
     expect(plist).toContain("<true/>");
     expect(plist).not.toContain("<key>SuccessfulExit</key>");
     expect(plist).toContain("<key>ThrottleInterval</key>");
-    expect(plist).toContain("<integer>60</integer>");
+    expect(plist).toContain("<integer>10</integer>");
   });
 
   it("restarts LaunchAgent with bootout-bootstrap-kickstart order", async () => {
