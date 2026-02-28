@@ -90,7 +90,7 @@ export function buildInboundUserContextPrefix(ctx: TemplateContext): string {
   const timestampStr = formatConversationTimestamp(ctx.Timestamp);
 
   const conversationInfo = {
-    message_id: messageId,
+    message_id: isDirect ? undefined : messageId,
     message_id_full: isDirect
       ? undefined
       : messageIdFull && messageIdFull !== messageId

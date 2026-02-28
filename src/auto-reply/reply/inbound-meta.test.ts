@@ -143,27 +143,17 @@ describe("buildInboundUserContextPrefix", () => {
     expect(text).toBe("");
   });
 
-  it("includes message_id for direct chats", () => {
+  it("hides message_id for direct chats (empty-input guard preserved)", () => {
     const text = buildInboundUserContextPrefix({
       ChatType: "direct",
       MessageSid: "short-id",
       MessageSidFull: "provider-full-id",
     } as TemplateContext);
 
-    const conversationInfo = parseConversationInfoPayload(text);
-    expect(conversationInfo["message_id"]).toBe("short-id");
-    expect(conversationInfo["message_id_full"]).toBeUndefined();
-  });
-
-  it("includes message_id for direct chats when MessageSidFull is absent", () => {
-    const text = buildInboundUserContextPrefix({
-      ChatType: "direct",
-      MessageSid: "42",
-    } as TemplateContext);
-
-    const conversationInfo = parseConversationInfoPayload(text);
-    expect(conversationInfo["message_id"]).toBe("42");
-    expect(conversationInfo["message_id_full"]).toBeUndefined();
+    // message_id must NOT appear in user-role context for DMs —
+    // it lives in the trusted inbound_meta system block instead,
+    // so blank-body messages don't bypass the empty-input guard.
+    expect(text).toBe("");
   });
 
   it("returns empty string for direct chats with no MessageSid", () => {
@@ -183,7 +173,7 @@ describe("buildInboundUserContextPrefix", () => {
     expect(text).toBe("");
   });
 
-  it("suppresses reply_to_id and sender_id for direct chats while keeping message_id", () => {
+  it("suppresses all identity fields for direct chats", () => {
     const text = buildInboundUserContextPrefix({
       ChatType: "direct",
       MessageSid: "dm-msg-1",
@@ -192,11 +182,7 @@ describe("buildInboundUserContextPrefix", () => {
       ConversationLabel: "John Doe",
     } as TemplateContext);
 
-    const conversationInfo = parseConversationInfoPayload(text);
-    expect(conversationInfo["message_id"]).toBe("dm-msg-1");
-    expect(conversationInfo["reply_to_id"]).toBeUndefined();
-    expect(conversationInfo["sender_id"]).toBeUndefined();
-    expect(conversationInfo["conversation_label"]).toBeUndefined();
+    expect(text).toBe("");
   });
 
   it("does not treat group chats as direct based on sender id", () => {
