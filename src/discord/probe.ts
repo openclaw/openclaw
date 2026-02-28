@@ -165,11 +165,44 @@ export async function probeDiscord(
   }
 }
 
+/**
+ * Extract the application (bot user) ID from a Discord bot token by
+ * base64-decoding the first segment.  Discord tokens have the format:
+ *   base64(user_id) . timestamp . hmac
+ * The decoded first segment is the numeric snowflake ID as a plain string,
+ * so we keep it as a string to avoid precision loss for IDs that exceed
+ * Number.MAX_SAFE_INTEGER.
+ */
+export function parseApplicationIdFromToken(token: string): string | undefined {
+  const normalized = normalizeDiscordToken(token);
+  if (!normalized) {
+    return undefined;
+  }
+  const firstDot = normalized.indexOf(".");
+  if (firstDot <= 0) {
+    return undefined;
+  }
+  try {
+    const decoded = Buffer.from(normalized.slice(0, firstDot), "base64").toString("utf-8");
+    if (/^\d+$/.test(decoded)) {
+      return decoded;
+    }
+    return undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export async function fetchDiscordApplicationId(
   token: string,
   timeoutMs: number,
   fetcher: typeof fetch = fetch,
 ): Promise<string | undefined> {
   const json = await fetchDiscordApplicationMe(token, timeoutMs, fetcher);
-  return json?.id ?? undefined;
+  if (json?.id) {
+    return json.id;
+  }
+  // Fallback: extract the application ID directly from the token to handle
+  // cases where the API call fails (timeout, network error, etc.).
+  return parseApplicationIdFromToken(token);
 }
