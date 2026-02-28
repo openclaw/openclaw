@@ -3,7 +3,8 @@ import { createAccountListHelpers } from "../channels/plugins/account-helpers.js
 import type { OpenClawConfig } from "../config/config.js";
 import type { DiscordAccountConfig, DiscordActionConfig } from "../config/types.js";
 import { resolveAccountEntry } from "../routing/account-lookup.js";
-import { normalizeAccountId } from "../routing/session-key.js";
+import { listBoundAccountIds } from "../routing/bindings.js";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 import { resolveDiscordToken } from "./token.js";
 
 export type ResolvedDiscordAccount = {
@@ -15,8 +16,25 @@ export type ResolvedDiscordAccount = {
   config: DiscordAccountConfig;
 };
 
-const { listAccountIds, resolveDefaultAccountId } = createAccountListHelpers("discord");
-export const listDiscordAccountIds = listAccountIds;
+const { listConfiguredAccountIds, resolveDefaultAccountId } = createAccountListHelpers("discord");
+
+export function listDiscordAccountIds(cfg: OpenClawConfig): string[] {
+  const ids = Array.from(
+    new Set([...listConfiguredAccountIds(cfg), ...listBoundAccountIds(cfg, "discord")]),
+  );
+  if (ids.length === 0) {
+    return [DEFAULT_ACCOUNT_ID];
+  }
+  // Ensure the default account is present when a top-level discord token exists
+  if (!ids.includes(DEFAULT_ACCOUNT_ID)) {
+    const { token } = resolveDiscordToken(cfg, {});
+    if (token) {
+      ids.push(DEFAULT_ACCOUNT_ID);
+    }
+  }
+  return ids.toSorted((a, b) => a.localeCompare(b));
+}
+
 export const resolveDefaultDiscordAccountId = resolveDefaultAccountId;
 
 function resolveAccountConfig(
