@@ -24,6 +24,9 @@ import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.sqrt
 
+private const val ACCELEROMETER_SAMPLE_TARGET = 20
+private const val ACCELEROMETER_SAMPLE_TIMEOUT_MS = 6_000L
+
 internal data class MotionActivityRequest(
   val startISO: String?,
   val endISO: String?,
@@ -57,7 +60,11 @@ internal data class PedometerRecord(
 )
 
 internal interface MotionDataSource {
-  fun isAvailable(context: Context): Boolean
+  fun isActivityAvailable(context: Context): Boolean
+
+  fun isPedometerAvailable(context: Context): Boolean
+
+  fun isAvailable(context: Context): Boolean = isActivityAvailable(context) || isPedometerAvailable(context)
 
   fun hasPermission(context: Context): Boolean
 
@@ -67,11 +74,14 @@ internal interface MotionDataSource {
 }
 
 private object SystemMotionDataSource : MotionDataSource {
-  override fun isAvailable(context: Context): Boolean {
+  override fun isActivityAvailable(context: Context): Boolean {
     val sensorManager = context.getSystemService(SensorManager::class.java)
-    val hasAccelerometer = sensorManager?.getDefaultSensor(Sensor.TYPE_ACCELEROMETER) != null
-    val hasStepCounter = sensorManager?.getDefaultSensor(Sensor.TYPE_STEP_COUNTER) != null
-    return hasAccelerometer || hasStepCounter
+    return sensorManager?.getDefaultSensor(Sensor.TYPE_ACCELEROMETER) != null
+  }
+
+  override fun isPedometerAvailable(context: Context): Boolean {
+    val sensorManager = context.getSystemService(SensorManager::class.java)
+    return sensorManager?.getDefaultSensor(Sensor.TYPE_STEP_COUNTER) != null
   }
 
   override fun hasPermission(context: Context): Boolean {
@@ -169,7 +179,7 @@ private object SystemMotionDataSource : MotionDataSource {
     sensor: Sensor,
   ): AccelerometerSample? {
     val sample =
-      withTimeoutOrNull(2200L) {
+      withTimeoutOrNull(ACCELEROMETER_SAMPLE_TIMEOUT_MS) {
         suspendCancellableCoroutine<AccelerometerSample?> { cont ->
           var count = 0
           var sumDelta = 0.0
@@ -187,7 +197,7 @@ private object SystemMotionDataSource : MotionDataSource {
                   ).toDouble()
                 sumDelta += abs(magnitude - SensorManager.GRAVITY_EARTH.toDouble())
                 count += 1
-                if (count >= 20 && !resumed) {
+                if (count >= ACCELEROMETER_SAMPLE_TARGET && !resumed) {
                   resumed = true
                   sensorManager.unregisterListener(this)
                   cont.resume(
@@ -317,6 +327,10 @@ class MotionHandler private constructor(
   }
 
   fun isAvailable(): Boolean = dataSource.isAvailable(appContext)
+
+  fun isActivityAvailable(): Boolean = dataSource.isActivityAvailable(appContext)
+
+  fun isPedometerAvailable(): Boolean = dataSource.isPedometerAvailable(appContext)
 
   private fun parseActivityRequest(paramsJson: String?): MotionActivityRequest? {
     if (paramsJson.isNullOrBlank()) {
