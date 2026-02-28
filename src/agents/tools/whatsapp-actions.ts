@@ -2,6 +2,7 @@ import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { OpenClawConfig } from "../../config/config.js";
 import { sendReactionWhatsApp } from "../../web/outbound.js";
 import { createActionGate, jsonResult, readReactionParams, readStringParam } from "./common.js";
+import { handleWhatsAppListGroups } from "./whatsapp-groups.js";
 import { resolveAuthorizedWhatsAppOutboundTarget } from "./whatsapp-target-auth.js";
 
 export async function handleWhatsAppAction(
@@ -10,6 +11,10 @@ export async function handleWhatsAppAction(
 ): Promise<AgentToolResult<unknown>> {
   const action = readStringParam(params, "action", { required: true });
   const isActionEnabled = createActionGate(cfg.channels?.whatsapp?.actions);
+
+  if (action === "listGroups") {
+    return await handleWhatsAppListGroups(params, cfg);
+  }
 
   if (action === "react") {
     if (!isActionEnabled("reactions")) {
