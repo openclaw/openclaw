@@ -59,7 +59,6 @@ const ABORT_TRIGGERS = new Set([
   "stopp",
   "pare",
   // Turkish (tr)
-  "dur",
   "iptal",
   // Korean (ko)
   "멈춰",

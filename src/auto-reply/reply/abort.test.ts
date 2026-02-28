@@ -176,7 +176,6 @@ describe("abort detection", () => {
       "stopp",
       "pare",
       // Turkish (tr)
-      "dur",
       "iptal",
       // Korean (ko)
       "멈춰",
@@ -209,7 +208,6 @@ describe("abort detection", () => {
     expect(isAbortRequestText("stopp")).toBe(true);
     expect(isAbortRequestText("pare")).toBe(true);
     expect(isAbortRequestText(" توقف ")).toBe(true);
-    expect(isAbortRequestText("dur")).toBe(true);
     expect(isAbortRequestText("iptal")).toBe(true);
     expect(isAbortRequestText("멈춰")).toBe(true);
     expect(isAbortRequestText("fermati")).toBe(true);
