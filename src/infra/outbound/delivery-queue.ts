@@ -545,7 +545,13 @@ export async function recoverPendingDeliveries(opts: {
         turnId: entry.turnId,
         skipQueue: true,
       });
-      await ackDelivery(entry.id, opts.stateDir);
+      // Delivery succeeded — ack failure is bookkeeping, not a delivery failure.
+      // Don't let a transient SQLITE_BUSY on ack cause failDelivery on a sent message.
+      try {
+        await ackDelivery(entry.id, opts.stateDir);
+      } catch (ackErr) {
+        opts.log.warn(`delivery ${entry.id}: ack failed after successful send: ${String(ackErr)}`);
+      }
       recovered += 1;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);

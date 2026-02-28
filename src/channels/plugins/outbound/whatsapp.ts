@@ -6,7 +6,6 @@ import type { ChannelOutboundAdapter } from "../types.js";
 
 export const whatsappOutbound: ChannelOutboundAdapter = {
   deliveryMode: "gateway",
-  outboundContract: "v2",
   chunker: chunkText,
   chunkerMode: "text",
   textChunkLimit: 4000,

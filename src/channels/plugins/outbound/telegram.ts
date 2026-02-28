@@ -38,7 +38,6 @@ function resolveTelegramSendContext(params: {
 
 export const telegramOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
-  outboundContract: "v2",
   chunker: markdownToTelegramHtmlChunks,
   chunkerMode: "markdown",
   textChunkLimit: 4000,
