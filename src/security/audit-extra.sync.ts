@@ -1234,7 +1234,7 @@ export function collectExposureMatrixFindings(cfg: OpenClawConfig): SecurityAudi
       detail:
         `Found groupPolicy="open" at:\n${openGroups.map((p) => `- ${p}`).join("\n")}\n` +
         "With tools.elevated enabled, a prompt injection in those rooms can become a high-impact incident.",
-      remediation: `Set groupPolicy="allowlist" and keep elevated allowlists extremely tight.`,
+      remediation: `Set groupPolicy="allowlist" or "members" and keep elevated allowlists extremely tight.`,
     });
   }
 
