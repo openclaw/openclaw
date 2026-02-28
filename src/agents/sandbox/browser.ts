@@ -96,9 +96,10 @@ function buildSandboxBrowserResolvedConfig(params: {
   };
 }
 
-async function ensureSandboxBrowserImage(image: string) {
+async function ensureSandboxBrowserImage(image: string, abortSignal?: AbortSignal) {
   const result = await execDocker(["image", "inspect", image], {
     allowFailure: true,
+    signal: abortSignal,
   });
   if (result.code === 0) {
     return;
@@ -110,7 +111,7 @@ async function ensureSandboxBrowserImage(image: string) {
 
 async function ensureDockerNetwork(
   network: string,
-  opts?: { allowContainerNamespaceJoin?: boolean },
+  opts?: { allowContainerNamespaceJoin?: boolean; abortSignal?: AbortSignal },
 ) {
   validateNetworkMode(network, {
     allowContainerNamespaceJoin: opts?.allowContainerNamespaceJoin === true,
@@ -119,11 +120,16 @@ async function ensureDockerNetwork(
   if (!normalized || normalized === "bridge" || normalized === "none") {
     return;
   }
-  const inspect = await execDocker(["network", "inspect", network], { allowFailure: true });
+  const inspect = await execDocker(["network", "inspect", network], {
+    allowFailure: true,
+    signal: opts?.abortSignal,
+  });
   if (inspect.code === 0) {
     return;
   }
-  await execDocker(["network", "create", "--driver", "bridge", network]);
+  await execDocker(["network", "create", "--driver", "bridge", network], {
+    signal: opts?.abortSignal,
+  });
 }
 
 export async function ensureSandboxBrowser(params: {
@@ -133,6 +139,7 @@ export async function ensureSandboxBrowser(params: {
   cfg: SandboxConfig;
   evaluateEnabled?: boolean;
   bridgeAuth?: { token?: string; password?: string };
+  abortSignal?: AbortSignal;
 }): Promise<SandboxBrowserContext | null> {
   if (!params.cfg.browser.enabled) {
     return null;
@@ -207,7 +214,10 @@ export async function ensureSandboxBrowser(params: {
           `Sandbox browser config changed for ${containerName} (recently used). Recreate to apply: ${hint}`,
         );
       } else {
-        await execDocker(["rm", "-f", containerName], { allowFailure: true });
+        await execDocker(["rm", "-f", containerName], {
+          allowFailure: true,
+          signal: params.abortSignal,
+        });
         hasContainer = false;
         running = false;
       }
@@ -220,8 +230,9 @@ export async function ensureSandboxBrowser(params: {
     }
     await ensureDockerNetwork(browserDockerCfg.network, {
       allowContainerNamespaceJoin: browserDockerCfg.dangerouslyAllowContainerNamespaceJoin === true,
+      abortSignal: params.abortSignal,
     });
-    await ensureSandboxBrowserImage(browserImage);
+    await ensureSandboxBrowserImage(browserImage, params.abortSignal);
     const args = buildSandboxCreateArgs({
       name: containerName,
       cfg: browserDockerCfg,
@@ -266,10 +277,10 @@ export async function ensureSandboxBrowser(params: {
       args.push("-e", `${NOVNC_PASSWORD_ENV_KEY}=${noVncPassword}`);
     }
     args.push(browserImage);
-    await execDocker(args);
-    await execDocker(["start", containerName]);
+    await execDocker(args, { signal: params.abortSignal });
+    await execDocker(["start", containerName], { signal: params.abortSignal });
   } else if (!running) {
-    await execDocker(["start", containerName]);
+    await execDocker(["start", containerName], { signal: params.abortSignal });
   }
 
   const mappedCdp = await readDockerPort(containerName, params.cfg.browser.cdpPort);
