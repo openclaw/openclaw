@@ -259,13 +259,19 @@ export function resolveDiscordGroupRequireMention(params: GroupMentionParams): b
 }
 
 export function resolveGoogleChatGroupRequireMention(params: GroupMentionParams): boolean {
-  return resolveChannelRequireMention(params, "googlechat");
+  // For Google Chat, the space ID (e.g., "spaces/XXX") is in groupSpace,
+  // but groupId might also be set. Use groupSpace as fallback when groupId is not available.
+  const effectiveGroupId = params.groupId ?? params.groupSpace;
+  return resolveChannelRequireMention({ ...params, groupId: effectiveGroupId }, "googlechat");
 }
 
 export function resolveGoogleChatGroupToolPolicy(
   params: GroupMentionParams,
 ): GroupToolPolicyConfig | undefined {
-  return resolveChannelToolPolicyForSender(params, "googlechat");
+  // For Google Chat, the space ID (e.g., "spaces/XXX") is in groupSpace,
+  // but groupId might also be set. Use groupSpace as fallback when groupId is not available.
+  const effectiveGroupId = params.groupId ?? params.groupSpace;
+  return resolveChannelToolPolicyForSender({ ...params, groupId: effectiveGroupId }, "googlechat");
 }
 
 export function resolveSlackGroupRequireMention(params: GroupMentionParams): boolean {
