@@ -247,11 +247,98 @@ describe("filterBootstrapFilesForSession", () => {
 
   it("filters to allowlist for subagent sessions", () => {
     const result = filterBootstrapFilesForSession(mockFiles, "agent:default:subagent:task-1");
-    expectSubagentAllowedBootstrapNames(result);
+    const names = result.map((f) => f.name);
+    expect(names).toContain("AGENTS.md");
+    expect(names).toContain("TOOLS.md");
+    expect(names).not.toContain("SOUL.md");
+    expect(names).not.toContain("IDENTITY.md");
+    expect(names).not.toContain("USER.md");
+    expect(names).not.toContain("HEARTBEAT.md");
+    expect(names).not.toContain("BOOTSTRAP.md");
+    expect(names).not.toContain("MEMORY.md");
   });
 
   it("filters to allowlist for cron sessions", () => {
     const result = filterBootstrapFilesForSession(mockFiles, "agent:default:cron:daily-check");
-    expectSubagentAllowedBootstrapNames(result);
+    const names = result.map((f) => f.name);
+    expect(names).toContain("AGENTS.md");
+    expect(names).toContain("TOOLS.md");
+    expect(names).not.toContain("SOUL.md");
+    expect(names).not.toContain("IDENTITY.md");
+    expect(names).not.toContain("USER.md");
+    expect(names).not.toContain("HEARTBEAT.md");
+    expect(names).not.toContain("BOOTSTRAP.md");
+    expect(names).not.toContain("MEMORY.md");
+  });
+});
+
+describe("filterBootstrapFilesForSession — e2e integration", () => {
+  it("subagent session with real workspace files only receives AGENTS.md and TOOLS.md", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-subagent-filter-");
+
+    // Write sensitive files that should NOT leak to sub-agents
+    const sensitiveFiles = {
+      "SOUL.md": "# My persona\nI am the main agent with secrets.",
+      "IDENTITY.md": "# Identity\nName: Secret Agent\nEmail: secret@example.com",
+      "USER.md": "# User\nName: John Doe\nSSN: 123-45-6789",
+      "HEARTBEAT.md": "Check emails every hour",
+      "BOOTSTRAP.md": "# First run instructions",
+      "MEMORY.md": "# Long-term memory\nUser's private notes here",
+    };
+
+    for (const [name, content] of Object.entries(sensitiveFiles)) {
+      await fs.writeFile(path.join(workspaceDir, name), content);
+    }
+
+    // Write files that SHOULD be available to sub-agents
+    await fs.writeFile(
+      path.join(workspaceDir, "AGENTS.md"),
+      "# Agent Instructions\nYou are a helpful assistant.",
+    );
+    await fs.writeFile(
+      path.join(workspaceDir, "TOOLS.md"),
+      "# Tools\nUse web_search for research.",
+    );
+
+    // Load all files as the system would
+    const allFiles = await loadWorkspaceBootstrapFiles(workspaceDir);
+
+    // Filter for a subagent session
+    const subagentKey = "agent:default:subagent:test-task-123";
+    const filtered = filterBootstrapFilesForSession(allFiles, subagentKey);
+    const names = filtered.map((f) => f.name);
+
+    // Only AGENTS.md and TOOLS.md should pass through
+    expect(names).toEqual(expect.arrayContaining(["AGENTS.md", "TOOLS.md"]));
+    expect(filtered).toHaveLength(2);
+
+    // Verify no sensitive content leaked
+    const allContent = filtered.map((f) => f.content).join("\n");
+    expect(allContent).not.toContain("Secret Agent");
+    expect(allContent).not.toContain("123-45-6789");
+    expect(allContent).not.toContain("persona");
+    expect(allContent).toContain("helpful assistant");
+    expect(allContent).toContain("web_search");
+  });
+
+  it("main session still receives all workspace files", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-main-filter-");
+
+    await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "agents");
+    await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "soul");
+    await fs.writeFile(path.join(workspaceDir, "TOOLS.md"), "tools");
+    await fs.writeFile(path.join(workspaceDir, "IDENTITY.md"), "identity");
+    await fs.writeFile(path.join(workspaceDir, "USER.md"), "user");
+
+    const allFiles = await loadWorkspaceBootstrapFiles(workspaceDir);
+    const mainKey = "agent:default:chat:main";
+    const filtered = filterBootstrapFilesForSession(allFiles, mainKey);
+    const names = filtered.map((f) => f.name);
+
+    expect(names).toContain("AGENTS.md");
+    expect(names).toContain("SOUL.md");
+    expect(names).toContain("TOOLS.md");
+    expect(names).toContain("IDENTITY.md");
+    expect(names).toContain("USER.md");
   });
 });
