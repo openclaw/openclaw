@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { isSilentReplyText } from "../../auto-reply/tokens.js";
 import { callGateway } from "../../gateway/call.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -47,7 +48,9 @@ export async function runSessionsSendA2AFlow(params: {
         latestReply = primaryReply;
       }
     }
-    if (!latestReply) {
+    // If the target replied with NO_REPLY (or nothing), there is nothing to
+    // route back to the requester — skip the ping-pong loop entirely.
+    if (!latestReply || isSilentReplyText(latestReply)) {
       return;
     }
 
@@ -88,7 +91,9 @@ export async function runSessionsSendA2AFlow(params: {
             nextSessionKey === params.requesterSessionKey ? params.requesterChannel : targetChannel,
           sourceTool: "sessions_send",
         });
-        if (!replyText || isReplySkip(replyText)) {
+        // Break the ping-pong chain on explicit REPLY_SKIP, NO_REPLY, or an
+        // empty reply — any of these signal the session wants to stay silent.
+        if (!replyText || isReplySkip(replyText) || isSilentReplyText(replyText)) {
           break;
         }
         latestReply = replyText;
