@@ -197,29 +197,6 @@ export async function startGatewayServer(
   port = 18789,
   opts: GatewayServerOptions = {},
 ): Promise<GatewayServer> {
-  // Fail fast: check port availability before any heavy initialization (~340MB).
-  // Without this, a port conflict + systemd Restart=always creates an infinite
-  // crash loop that can exhaust system resources and kill the host VM.
-  await new Promise<void>((resolve, reject) => {
-    const probe = net.createServer();
-    probe.once("error", (err: NodeJS.ErrnoException) => {
-      if (err.code === "EADDRINUSE") {
-        reject(
-          new GatewayLockError(
-            `another gateway instance is already listening on ws://127.0.0.1:${port}`,
-            err,
-          ),
-        );
-      } else {
-        reject(err);
-      }
-    });
-    probe.once("listening", () => {
-      probe.close(() => resolve());
-    });
-    probe.listen(port, "127.0.0.1");
-  });
-
   const minimalTestGateway =
     process.env.VITEST === "1" && process.env.OPENCLAW_TEST_MINIMAL_GATEWAY === "1";
 
@@ -451,6 +428,30 @@ export async function startGatewayServer(
   } = runtimeConfig;
   let hooksConfig = runtimeConfig.hooksConfig;
   const canvasHostEnabled = runtimeConfig.canvasHostEnabled;
+
+  // Fail fast: check port availability before heavy runtime state initialization.
+  // Without this, a port conflict + systemd Restart=always creates an infinite
+  // crash loop that can exhaust system resources and kill the host VM.
+  // Uses the resolved bindHost so the probe matches the actual bind address.
+  await new Promise<void>((resolve, reject) => {
+    const probe = net.createServer();
+    probe.once("error", (err: NodeJS.ErrnoException) => {
+      if (err.code === "EADDRINUSE") {
+        reject(
+          new GatewayLockError(
+            `another gateway instance is already listening on ws://${bindHost}:${port}`,
+            err,
+          ),
+        );
+      } else {
+        reject(err);
+      }
+    });
+    probe.once("listening", () => {
+      probe.close(() => resolve());
+    });
+    probe.listen(port, bindHost);
+  });
 
   // Create auth rate limiters used by connect/auth flows.
   const rateLimitConfig = cfgAtStart.gateway?.auth?.rateLimit;
