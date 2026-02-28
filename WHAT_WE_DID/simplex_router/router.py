@@ -39,7 +39,8 @@ SEARXNG_URL = "http://127.0.0.1:8888/search"
 
 # Anthropic API — direct, no Copilot, no OpenAI
 ANTHROPIC_API = "https://api.anthropic.com/v1/messages"
-ANTHROPIC_TOKEN = "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"
+ANTHROPIC_TOKEN = os.environ.get("ANTHROPIC_API_KEY", "")
+assert ANTHROPIC_TOKEN, "ANTHROPIC_API_KEY environment variable required"
 
 # Alexandre's SimpleX member IDs (skip these)
 ALEXANDRE_MEMBER_IDS = {1, 3}

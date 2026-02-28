@@ -264,7 +264,20 @@ export function startSimplexBus(options: SimplexBusOptions): SimplexBusHandle {
       if (parsed.corrId && pendingCommands.has(parsed.corrId)) {
         const pending = pendingCommands.get(parsed.corrId);
         pendingCommands.delete(parsed.corrId);
-        pending?.resolve(parsed);
+        // Reject if the response contains an error
+        if (
+          parsed.resp?.type === "chatCmdError" ||
+          parsed.resp?.type === "chatError" ||
+          parsed.resp?.chatError
+        ) {
+          pending?.reject(
+            new Error(
+              `SimpleX command error: ${JSON.stringify(parsed.resp?.chatError ?? parsed.resp)}`,
+            ),
+          );
+        } else {
+          pending?.resolve(parsed);
+        }
         return;
       }
 
