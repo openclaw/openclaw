@@ -347,7 +347,7 @@ describe("resolveNodeCommandAllowlist", () => {
     expect(allow.has("notifications.actions")).toBe(true);
     expect(allow.has("device.permissions")).toBe(true);
     expect(allow.has("device.health")).toBe(true);
-    expect(allow.has("system.notify")).toBe(false);
+    expect(allow.has("system.notify")).toBe(true);
   });
 
   it("can explicitly allow dangerous commands via allowCommands", () => {

@@ -49,6 +49,31 @@ describe("resolveReactionSyntheticEvent", () => {
     expect(result).toBeNull();
   });
 
+  it("drops reactions when reactionNotifications is off", async () => {
+    const event = makeReactionEvent();
+    const result = await resolveReactionSyntheticEvent({
+      cfg: {
+        channels: {
+          feishu: {
+            reactionNotifications: "off",
+          },
+        },
+      } as ClawdbotConfig,
+      accountId: "default",
+      event,
+      botOpenId: "ou_bot",
+      fetchMessage: async () => ({
+        messageId: "om_msg1",
+        chatId: "oc_group",
+        senderOpenId: "ou_bot",
+        senderType: "app",
+        content: "hello",
+        contentType: "text",
+      }),
+    });
+    expect(result).toBeNull();
+  });
+
   it("filters reactions on non-bot messages", async () => {
     const event = makeReactionEvent();
     const result = await resolveReactionSyntheticEvent({
@@ -66,6 +91,32 @@ describe("resolveReactionSyntheticEvent", () => {
       }),
     });
     expect(result).toBeNull();
+  });
+
+  it("allows non-bot reactions when reactionNotifications is all", async () => {
+    const event = makeReactionEvent();
+    const result = await resolveReactionSyntheticEvent({
+      cfg: {
+        channels: {
+          feishu: {
+            reactionNotifications: "all",
+          },
+        },
+      } as ClawdbotConfig,
+      accountId: "default",
+      event,
+      botOpenId: "ou_bot",
+      fetchMessage: async () => ({
+        messageId: "om_msg1",
+        chatId: "oc_group",
+        senderOpenId: "ou_other",
+        senderType: "user",
+        content: "hello",
+        contentType: "text",
+      }),
+      uuid: () => "fixed-uuid",
+    });
+    expect(result?.message.message_id).toBe("om_msg1:reaction:THUMBSUP:fixed-uuid");
   });
 
   it("drops unverified reactions when sender verification times out", async () => {
