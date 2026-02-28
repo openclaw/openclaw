@@ -22,6 +22,17 @@ type CacheEntry = {
 
 const cache = new Map<string, CacheEntry>();
 
+// Periodic eviction sweep: remove stale entries so the cache stays bounded
+// on long-lived gateways. unref() ensures this timer doesn't keep the process alive.
+const evictionTimer = setInterval(() => {
+  const now = Date.now();
+  for (const [key, entry] of cache.entries()) {
+    if (now - entry.timestamp >= TTL_MS) {
+      cache.delete(key);
+    }
+  }
+}, TTL_MS).unref();
+
 /**
  * Build a cache key that includes both the chat ID and a hash of the
  * allowFrom entries. This avoids collisions when two Telegram accounts
@@ -29,7 +40,10 @@ const cache = new Map<string, CacheEntry>();
  */
 function getChatKey(chatId: number | string, allowFrom: NormalizedAllowFrom): string {
   const sorted = allowFrom.entries.toSorted();
-  const hash = createHash("sha256").update(sorted.join(",")).digest("hex").slice(0, 12);
+  // Include hasWildcard in the payload so that two allowFrom values sharing
+  // the same entries but differing on wildcard state produce distinct keys.
+  const payload = `${allowFrom.hasWildcard ? "1" : "0"}:${sorted.join(",")}`;
+  const hash = createHash("sha256").update(payload).digest("hex").slice(0, 12);
   return `${chatId}:${hash}`;
 }
 
@@ -138,8 +152,9 @@ export function invalidateGroupMembership(chatId: number | string): void {
 }
 
 /**
- * Clear all cached entries (for testing).
+ * Clear all cached entries and stop the eviction timer (for testing).
  */
 export function clearGroupMembershipCache(): void {
   cache.clear();
+  clearInterval(evictionTimer);
 }
