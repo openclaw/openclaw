@@ -51,4 +51,36 @@ describe("checkBrowserOrigin", () => {
     });
     expect(result.ok).toBe(false);
   });
+
+  it("accepts all origins when wildcard * is in allowedOrigins", () => {
+    const result1 = checkBrowserOrigin({
+      requestHost: "gateway.example.com:18789",
+      origin: "https://control.example.com",
+      allowedOrigins: ["*"],
+    });
+    expect(result1.ok).toBe(true);
+
+    const result2 = checkBrowserOrigin({
+      requestHost: "gateway.example.com:18789",
+      origin: "http://192.168.1.100:18789",
+      allowedOrigins: ["*"],
+    });
+    expect(result2.ok).toBe(true);
+
+    const result3 = checkBrowserOrigin({
+      requestHost: "gateway.example.com:18789",
+      origin: "https://any-origin.example.com:8080",
+      allowedOrigins: ["*"],
+    });
+    expect(result3.ok).toBe(true);
+  });
+
+  it("accepts wildcard * even when mixed with specific origins", () => {
+    const result = checkBrowserOrigin({
+      requestHost: "gateway.example.com:18789",
+      origin: "https://other.example.com",
+      allowedOrigins: ["https://control.example.com", "*", "https://another.example.com"],
+    });
+    expect(result.ok).toBe(true);
+  });
 });
