@@ -391,6 +391,25 @@ Example:
 
     Bare numeric IDs are ambiguous and rejected unless an explicit user/channel target kind is provided.
 
+    **Role-based allowFrom (guild context only):**
+
+    `allowFrom` entries can use the `role:` prefix to grant access by Discord role. In guild channels, a member is allowed if they hold any matching role:
+
+    ```json5
+    {
+      channels: {
+        discord: {
+          allowFrom: [
+            "user:987654321098765432",  // specific user
+            "role:111111111111111111",   // anyone with this role
+          ],
+        },
+      },
+    }
+    ```
+
+    Role matching uses OR logic: a member is allowed if they match **any** user entry OR hold **any** listed role. In DMs, `role:` entries are ignored (Discord roles only exist in guilds).
+
   </Tab>
 
   <Tab title="Guild policy">
@@ -459,21 +478,31 @@ Example:
   </Tab>
 </Tabs>
 
-### Role-based agent routing
+### Role-based configuration
 
-Use `bindings[].match.roles` to route Discord guild members to different agents by role ID. Role-based bindings accept role IDs only and are evaluated after peer or parent-peer bindings and before guild-only bindings. If a binding also sets other match fields (for example `peer` + `guildId` + `roles`), all configured fields must match.
+Discord roles are the standard way to manage groups of users. OpenClaw supports role-based access control and routing so you can configure entire groups at once instead of individual user IDs.
+
+<Note>
+  Role IDs are Discord Snowflake strings (17-19 digit numbers). To find a role ID, enable Developer Mode in Discord settings, then right-click the role and select **Copy Role ID**.
+</Note>
+
+#### Role-based agent routing
+
+Use `bindings[].match.roles` to route Discord guild members to different agents by role ID. Role-based bindings are evaluated after peer or parent-peer bindings and before guild-only bindings. If a binding also sets other match fields (for example `peer` + `guildId` + `roles`), all configured fields must match.
 
 ```json5
 {
   bindings: [
+    // Premium users get routed to a more capable agent
     {
       agentId: "opus",
       match: {
         channel: "discord",
         guildId: "123456789012345678",
-        roles: ["111111111111111111"],
+        roles: ["111111111111111111"], // "Premium" role
       },
     },
+    // Everyone else in this guild gets a default agent
     {
       agentId: "sonnet",
       match: {
@@ -482,6 +511,72 @@ Use `bindings[].match.roles` to route Discord guild members to different agents 
       },
     },
   ],
+}
+```
+
+Role matching uses OR logic: a member matches if they hold **any** of the listed roles. Bindings are evaluated in order; the first match wins.
+
+#### Role-based owner access (allowFrom)
+
+The `allowFrom` list controls who can run control commands (model switching, config changes, etc.). Use the `role:` prefix to grant owner access to everyone with a specific role:
+
+```json5
+{
+  channels: {
+    discord: {
+      allowFrom: [
+        "user:987654321098765432", // a specific user
+        "role:222222222222222222", // anyone with "Moderator" role
+        "role:333333333333333333", // anyone with "Admin" role
+      ],
+    },
+  },
+}
+```
+
+In guild channels, a member is allowed if they match **any** user entry OR hold **any** listed role (OR logic). In DMs, `role:` entries are ignored because Discord roles only exist in guilds.
+
+#### Common patterns
+
+**Moderator access:** Let all moderators manage OpenClaw without listing each user individually:
+
+```json5
+{
+  channels: {
+    discord: {
+      allowFrom: ["role:MOD_ROLE_ID"],
+    },
+  },
+}
+```
+
+**Premium routing:** Route premium users to a more capable model while everyone else uses a default:
+
+```json5
+{
+  bindings: [
+    {
+      agentId: "premium-agent",
+      match: { channel: "discord", guildId: "GUILD_ID", roles: ["PREMIUM_ROLE_ID"] },
+    },
+    { agentId: "default-agent", match: { channel: "discord", guildId: "GUILD_ID" } },
+  ],
+}
+```
+
+**Combined user and role allowlists:** Mix individual users and roles in the same list:
+
+```json5
+{
+  channels: {
+    discord: {
+      allowFrom: [
+        "user:OWNER_USER_ID", // server owner
+        "role:ADMIN_ROLE_ID", // all admins
+        "role:MOD_ROLE_ID", // all moderators
+      ],
+    },
+  },
 }
 ```
 
