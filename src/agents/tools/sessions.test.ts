@@ -1,4 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveSessionFilePath } from "../../config/sessions.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { extractAssistantText, sanitizeTextContent } from "./sessions-helpers.js";
 
@@ -196,6 +197,23 @@ describe("sessions_list gating", () => {
       count: 1,
       sessions: [{ key: "agent:main:main" }],
     });
+  });
+
+  it("resolves transcriptPath from agent sessions dir when gateway path is not canonical", async () => {
+    callGatewayMock.mockResolvedValueOnce({
+      path: "/tmp/openclaw/workspace/sessions.json",
+      sessions: [{ key: "agent:main:main", kind: "direct", sessionId: "sess-tool-list-1" }],
+    });
+
+    const tool = createSessionsListTool({ agentSessionKey: "agent:main:main" });
+    const result = await tool.execute("call-path", {});
+    const rows = (result.details as { sessions?: Array<{ transcriptPath?: string }> } | undefined)
+      ?.sessions;
+    const transcriptPath = rows?.[0]?.transcriptPath;
+
+    expect(transcriptPath).toBe(
+      resolveSessionFilePath("sess-tool-list-1", undefined, { agentId: "main" }),
+    );
   });
 });
 

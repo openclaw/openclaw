@@ -515,6 +515,104 @@ describe("secret ref resolver", () => {
     ).rejects.toThrow('File provider "filemain" timed out');
   });
 
+  it("defaults noOutputTimeoutMs to timeoutMs when not explicitly configured", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    // Script sleeps for 80ms with no output then writes the value.
+    // With the old hardcoded noOutputTimeoutMs=2000 this would pass
+    // trivially; the test verifies the fallback is timeoutMs (not a
+    // smaller hardcoded default) by setting timeoutMs high (200ms)
+    // and confirming the command succeeds despite the initial silence.
+    const root = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-secrets-resolve-exec-noout-default-"),
+    );
+    cleanupRoots.push(root);
+    const scriptPath = path.join(root, "slow-resolver.mjs");
+    await writeSecureFile(
+      scriptPath,
+      [
+        "#!/usr/bin/env node",
+        "import fs from 'node:fs';",
+        "const req = JSON.parse(fs.readFileSync(0, 'utf8'));",
+        "setTimeout(() => {",
+        "  const values = Object.fromEntries((req.ids ?? []).map((id) => [id, `v:${id}`]));",
+        "  process.stdout.write(JSON.stringify({ protocolVersion: 1, values }));",
+        "}, 80);",
+      ].join("\n"),
+      0o700,
+    );
+
+    const value = await resolveSecretRefString(
+      { source: "exec", provider: "slowexec", id: "my-key" },
+      {
+        config: {
+          secrets: {
+            providers: {
+              slowexec: {
+                source: "exec",
+                command: scriptPath,
+                passEnv: ["PATH"],
+                timeoutMs: 200,
+                // noOutputTimeoutMs intentionally omitted — should
+                // fall back to timeoutMs (200) not the old 2000 default
+              },
+            },
+          },
+        },
+      },
+    );
+    expect(value).toBe("v:my-key");
+  });
+
+  it("kills exec provider when noOutputTimeoutMs fires before any output", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    // Script sleeps for 300ms before writing output.  With
+    // noOutputTimeoutMs defaulting to timeoutMs (50ms here), the
+    // command should be killed before it ever writes.
+    const root = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-secrets-resolve-exec-noout-kill-"),
+    );
+    cleanupRoots.push(root);
+    const scriptPath = path.join(root, "very-slow-resolver.mjs");
+    await writeSecureFile(
+      scriptPath,
+      [
+        "#!/usr/bin/env node",
+        "import fs from 'node:fs';",
+        "const req = JSON.parse(fs.readFileSync(0, 'utf8'));",
+        "setTimeout(() => {",
+        "  const values = Object.fromEntries((req.ids ?? []).map((id) => [id, `v:${id}`]));",
+        "  process.stdout.write(JSON.stringify({ protocolVersion: 1, values }));",
+        "}, 300);",
+      ].join("\n"),
+      0o700,
+    );
+
+    await expect(
+      resolveSecretRefString(
+        { source: "exec", provider: "tinyexec", id: "my-key" },
+        {
+          config: {
+            secrets: {
+              providers: {
+                tinyexec: {
+                  source: "exec",
+                  command: scriptPath,
+                  passEnv: ["PATH"],
+                  timeoutMs: 50,
+                  // noOutputTimeoutMs inherits 50ms from timeoutMs
+                },
+              },
+            },
+          },
+        },
+      ),
+    ).rejects.toThrow("produced no output");
+  });
+
   it("rejects misconfigured provider source mismatches", async () => {
     await expect(
       resolveSecretRefValue(

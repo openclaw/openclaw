@@ -1,4 +1,3 @@
-import path from "node:path";
 import { Type } from "@sinclair/typebox";
 import { loadConfig } from "../../config/config.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
@@ -84,7 +83,6 @@ export function createSessionsListTool(opts?: {
       });
 
       const sessions = Array.isArray(list?.sessions) ? list.sessions : [];
-      const storePath = typeof list?.path === "string" ? list.path : undefined;
       const a2aPolicy = createAgentToAgentPolicy(cfg);
       const visibilityGuard = await createSessionVisibilityGuard({
         action: "list",
@@ -154,14 +152,13 @@ export function createSessionsListTool(opts?: {
         const sessionFileRaw = (entry as { sessionFile?: unknown }).sessionFile;
         const sessionFile = typeof sessionFileRaw === "string" ? sessionFileRaw : undefined;
         let transcriptPath: string | undefined;
-        if (sessionId && storePath) {
+        if (sessionId) {
           try {
             transcriptPath = resolveSessionFilePath(
               sessionId,
               sessionFile ? { sessionFile } : undefined,
               {
                 agentId: resolveAgentIdFromSessionKey(key),
-                sessionsDir: path.dirname(storePath),
               },
             );
           } catch {
