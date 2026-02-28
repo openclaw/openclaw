@@ -168,8 +168,33 @@ export async function handleToolExecutionStart(
     await ctx.params.onBlockReplyFlush();
   }
 
+  // Populate pending messaging maps BEFORE the check-2 exit point so that a late
+  // tool_execution_end event (arriving after unsubscribe) can still commit them.
+  // The end handler reads from these maps regardless of unsubscribed state.
+  if (isMessagingTool(toolName)) {
+    const argsRecord = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
+    const isMessagingSend = isMessagingToolSendAction(toolName, argsRecord);
+    if (isMessagingSend) {
+      const sendTarget = extractMessagingToolSend(toolName, argsRecord);
+      if (sendTarget) {
+        ctx.state.pendingMessagingTargets.set(toolCallId, sendTarget);
+      }
+      // Field names vary by tool: Discord/Slack use "content", sessions_send uses "message"
+      const text = (argsRecord.content as string) ?? (argsRecord.message as string);
+      if (text && typeof text === "string") {
+        ctx.state.pendingMessagingTexts.set(toolCallId, text);
+        ctx.log.debug(`Tracking pending messaging text: tool=${toolName} len=${text.length}`);
+      }
+      const mediaUrls = collectMessagingMediaUrlsFromRecord(argsRecord);
+      if (mediaUrls.length > 0) {
+        ctx.state.pendingMessagingMediaUrls.set(toolCallId, mediaUrls);
+      }
+    }
+  }
+
   // Check unsubscribed again after async operations (flushBlockReplyBuffer) to prevent
   // race where timeout/unsubscribe happens during those operations, which would leave state dirty.
+  // Pending messaging maps are already populated above so a late tool_execution_end can commit them.
   if (ctx.state.unsubscribed) {
     ctx.log.debug(`tool_execution_start skipped (unsubscribed after flush): tool=${toolName}`);
     return;
@@ -222,29 +247,6 @@ export async function handleToolExecutionStart(
   ) {
     ctx.state.toolSummaryById.add(toolCallId);
     ctx.emitToolSummary(toolName, meta);
-  }
-
-  // Track messaging tool sends (pending until confirmed in tool_execution_end).
-  if (isMessagingTool(toolName)) {
-    const argsRecord = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
-    const isMessagingSend = isMessagingToolSendAction(toolName, argsRecord);
-    if (isMessagingSend) {
-      const sendTarget = extractMessagingToolSend(toolName, argsRecord);
-      if (sendTarget) {
-        ctx.state.pendingMessagingTargets.set(toolCallId, sendTarget);
-      }
-      // Field names vary by tool: Discord/Slack use "content", sessions_send uses "message"
-      const text = (argsRecord.content as string) ?? (argsRecord.message as string);
-      if (text && typeof text === "string") {
-        ctx.state.pendingMessagingTexts.set(toolCallId, text);
-        ctx.log.debug(`Tracking pending messaging text: tool=${toolName} len=${text.length}`);
-      }
-      // Track media URLs from messaging tool args (pending until tool_execution_end).
-      const mediaUrls = collectMessagingMediaUrlsFromRecord(argsRecord);
-      if (mediaUrls.length > 0) {
-        ctx.state.pendingMessagingMediaUrls.set(toolCallId, mediaUrls);
-      }
-    }
   }
 
   // Final check after all async operations to prevent dirty state on late unsubscribe.

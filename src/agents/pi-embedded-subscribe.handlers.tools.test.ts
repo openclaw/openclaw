@@ -443,3 +443,47 @@ describe("handleToolExecutionEnd late event after unsubscribe", () => {
     expect(ctx.state.lastToolError).toBeUndefined();
   });
 });
+
+describe("handleToolExecutionStart pending state on post-flush unsubscribe", () => {
+  it("preserves pending messaging maps when unsubscribed fires during onBlockReplyFlush", async () => {
+    const { ctx, onBlockReplyFlush } = createTestContext();
+
+    let releaseFlush: (() => void) | undefined;
+    onBlockReplyFlush.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseFlush = resolve;
+        }),
+    );
+
+    const pending = handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "message",
+      toolCallId: "tool-check2",
+      args: { action: "send", to: "channel:456", content: "check2 text" },
+    } as never);
+
+    // Let the function reach the awaited flush.
+    await Promise.resolve();
+
+    // Simulate unsubscribe firing while flush is still pending.
+    ctx.state.unsubscribed = true;
+    releaseFlush?.();
+    await pending;
+
+    // Pending maps must be populated so a late tool_execution_end can commit them.
+    expect(ctx.state.pendingMessagingTexts.get("tool-check2")).toBe("check2 text");
+
+    // Confirm the late end handler commits to messagingToolSentTexts.
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "message",
+      toolCallId: "tool-check2",
+      isError: false,
+      result: { ok: true },
+    } as never);
+
+    expect(ctx.state.messagingToolSentTexts).toContain("check2 text");
+    expect(ctx.state.pendingMessagingTexts.has("tool-check2")).toBe(false);
+  });
+});
