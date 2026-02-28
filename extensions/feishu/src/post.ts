@@ -158,7 +158,12 @@ function renderElement(element: unknown, imageKeys: string[], mentionedOpenIds: 
       return "\n";
     case "hr":
       return "\n\n---\n\n";
+    case "code": {
+      const code = toStringOrEmpty(element.text) || toStringOrEmpty(element.content);
+      return code ? wrapInlineCode(code) : "";
+    }
     case "code_block":
+    case "pre":
       return renderCodeBlockElement(element);
     default:
       return escapeMarkdownText(toStringOrEmpty(element.text));
@@ -215,7 +220,7 @@ export function parsePostContent(content: string): PostParseResult {
     const parsed = JSON.parse(content);
     const payload = resolvePostPayload(parsed);
     if (!payload) {
-      return { textContent: FALLBACK_POST_TEXT, imageKeys: [] };
+      return { textContent: FALLBACK_POST_TEXT, imageKeys: [], mentionedOpenIds: [] };
     }
 
     const imageKeys: string[] = [];
