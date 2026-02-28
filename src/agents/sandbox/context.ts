@@ -124,31 +124,60 @@ export async function resolveSandboxContext(params: {
 
   // Wrap sandbox initialization in a timeout to prevent a hung Docker daemon
   // from blocking the entire message processing pipeline indefinitely.
+  // An AbortController is used to signal cooperative cancellation into
+  // resolveSandboxContextInner so that in-flight await points stop new work
+  // when the timeout fires, preventing zombie Docker child processes.
   // The timer is cleared via .finally() so it cannot keep the event loop alive
   // after initialization succeeds. timer.unref() allows the process to exit
   // cleanly if the event loop is otherwise idle.
+  const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeoutPromise = new Promise<never>((_, reject) => {
     timer = setTimeout(() => {
       const msg = `Sandbox initialization timed out after ${SANDBOX_INIT_TIMEOUT_MS / 1000}s (Docker may be unresponsive)`;
       defaultRuntime.error?.(msg);
+      // Abort the inner work so pending await points exit early.
+      controller.abort(new Error(msg));
       reject(new Error(msg));
     }, SANDBOX_INIT_TIMEOUT_MS);
     timer.unref?.();
   });
 
-  return Promise.race([resolveSandboxContextInner(resolved, params), timeoutPromise]).finally(() =>
-    clearTimeout(timer),
-  );
+  return Promise.race([
+    resolveSandboxContextInner(resolved, params, controller.signal),
+    timeoutPromise,
+  ]).finally(() => {
+    clearTimeout(timer);
+    // Abort on the success path too so the controller is always cleaned up
+    // and any lingering listeners attached to the signal are released.
+    if (!controller.signal.aborted) {
+      controller.abort();
+    }
+  });
 }
 
 async function resolveSandboxContextInner(
   resolved: NonNullable<ReturnType<typeof resolveSandboxSession>>,
   params: { config?: OpenClawConfig; workspaceDir?: string },
+  abortSignal?: AbortSignal,
 ): Promise<SandboxContext> {
   const { rawSessionKey, cfg } = resolved;
 
+  // Check abort before each major async step to provide cooperative
+  // cancellation and prevent zombie Docker child processes on timeout.
+  if (abortSignal?.aborted) {
+    throw abortSignal.reason instanceof Error
+      ? abortSignal.reason
+      : new Error("Sandbox init aborted");
+  }
+
   await maybePruneSandboxes(cfg);
+
+  if (abortSignal?.aborted) {
+    throw abortSignal.reason instanceof Error
+      ? abortSignal.reason
+      : new Error("Sandbox init aborted");
+  }
 
   const { agentWorkspaceDir, scopeKey, workspaceDir } = await ensureSandboxWorkspaceLayout({
     cfg,
@@ -163,12 +192,24 @@ async function resolveSandboxContextInner(
   });
   const resolvedCfg = docker === cfg.docker ? cfg : { ...cfg, docker };
 
+  if (abortSignal?.aborted) {
+    throw abortSignal.reason instanceof Error
+      ? abortSignal.reason
+      : new Error("Sandbox init aborted");
+  }
+
   const containerName = await ensureSandboxContainer({
     sessionKey: rawSessionKey,
     workspaceDir,
     agentWorkspaceDir,
     cfg: resolvedCfg,
   });
+
+  if (abortSignal?.aborted) {
+    throw abortSignal.reason instanceof Error
+      ? abortSignal.reason
+      : new Error("Sandbox init aborted");
+  }
 
   const evaluateEnabled =
     params.config?.browser?.evaluateEnabled ?? DEFAULT_BROWSER_EVALUATE_ENABLED;
