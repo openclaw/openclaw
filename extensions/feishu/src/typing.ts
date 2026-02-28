@@ -1,6 +1,7 @@
-import type { ClawdbotConfig } from "openclaw/plugin-sdk";
+import type { ClawdbotConfig, RuntimeEnv } from "openclaw/plugin-sdk";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
+import { getFeishuRuntime } from "./runtime.js";
 
 // Feishu emoji types for typing indicator
 // See: https://open.feishu.cn/document/server-docs/im-v1/message-reaction/emojis-introduce
@@ -103,8 +104,9 @@ export async function addTypingIndicator(params: {
   cfg: ClawdbotConfig;
   messageId: string;
   accountId?: string;
+  runtime?: RuntimeEnv;
 }): Promise<TypingIndicatorState> {
-  const { cfg, messageId, accountId } = params;
+  const { cfg, messageId, accountId, runtime } = params;
   const account = resolveFeishuAccount({ cfg, accountId });
   if (!account.configured) {
     return { messageId, reactionId: null };
@@ -124,9 +126,11 @@ export async function addTypingIndicator(params: {
     // instead of throwing. Detect backoff codes and throw to trip the breaker.
     const backoffCode = getBackoffCodeFromResponse(response);
     if (backoffCode !== undefined) {
-      console.log(
-        `[feishu] typing indicator response contains backoff code ${backoffCode}, stopping keepalive`,
-      );
+      if (getFeishuRuntime().logging.shouldLogVerbose()) {
+        runtime?.log?.(
+          `[feishu] typing indicator response contains backoff code ${backoffCode}, stopping keepalive`,
+        );
+      }
       throw new FeishuBackoffError(backoffCode);
     }
 
@@ -135,11 +139,15 @@ export async function addTypingIndicator(params: {
     return { messageId, reactionId };
   } catch (err) {
     if (isFeishuBackoffError(err)) {
-      console.log(`[feishu] typing indicator hit rate-limit/quota, stopping keepalive`);
+      if (getFeishuRuntime().logging.shouldLogVerbose()) {
+        runtime?.log?.("[feishu] typing indicator hit rate-limit/quota, stopping keepalive");
+      }
       throw err;
     }
     // Silently fail for other non-critical errors (e.g. message deleted, permission issues)
-    console.log(`[feishu] failed to add typing indicator: ${err}`);
+    if (getFeishuRuntime().logging.shouldLogVerbose()) {
+      runtime?.log?.(`[feishu] failed to add typing indicator: ${String(err)}`);
+    }
     return { messageId, reactionId: null };
   }
 }
@@ -153,8 +161,9 @@ export async function removeTypingIndicator(params: {
   cfg: ClawdbotConfig;
   state: TypingIndicatorState;
   accountId?: string;
+  runtime?: RuntimeEnv;
 }): Promise<void> {
-  const { cfg, state, accountId } = params;
+  const { cfg, state, accountId, runtime } = params;
   if (!state.reactionId) {
     return;
   }
@@ -177,17 +186,25 @@ export async function removeTypingIndicator(params: {
     // Check for backoff codes in non-throwing SDK responses
     const backoffCode = getBackoffCodeFromResponse(result);
     if (backoffCode !== undefined) {
-      console.log(
-        `[feishu] typing indicator removal response contains backoff code ${backoffCode}, stopping keepalive`,
-      );
+      if (getFeishuRuntime().logging.shouldLogVerbose()) {
+        runtime?.log?.(
+          `[feishu] typing indicator removal response contains backoff code ${backoffCode}, stopping keepalive`,
+        );
+      }
       throw new FeishuBackoffError(backoffCode);
     }
   } catch (err) {
     if (isFeishuBackoffError(err)) {
-      console.log(`[feishu] typing indicator removal hit rate-limit/quota, stopping keepalive`);
+      if (getFeishuRuntime().logging.shouldLogVerbose()) {
+        runtime?.log?.(
+          "[feishu] typing indicator removal hit rate-limit/quota, stopping keepalive",
+        );
+      }
       throw err;
     }
     // Silently fail for other non-critical errors
-    console.log(`[feishu] failed to remove typing indicator: ${err}`);
+    if (getFeishuRuntime().logging.shouldLogVerbose()) {
+      runtime?.log?.(`[feishu] failed to remove typing indicator: ${String(err)}`);
+    }
   }
 }
