@@ -774,6 +774,7 @@ const stimmVoicePlugin = {
                 if (ok) purgeClaimsForRoom(room);
                 return ok;
               },
+              listRoomParticipants: (room: string) => rt.lk.listRoomParticipants(room),
               listSessions: () =>
                 rt.lk.listSessions().map((s) => ({
                   roomName: s.roomName,
@@ -1216,6 +1217,26 @@ export class LiveKitRuntime {
       // Room may already be gone.
     }
     return true;
+  }
+
+  /**
+   * Lists participants in the room with their identity and kind.
+   * kind values: 0=STANDARD (human), 1=INGRESS, 2=EGRESS, 3=SIP, 4=AGENT
+   * Returns an empty array when the room is gone or on error.
+   */
+  async listRoomParticipants(
+    roomName: string,
+  ): Promise<Array<{ identity: string; kind: number; state: number }>> {
+    try {
+      const participants = await this.roomService.listParticipants(roomName);
+      return participants.map((p) => ({
+        identity: p.identity,
+        kind: p.kind as number,
+        state: p.state as number,
+      }));
+    } catch {
+      return [];
+    }
   }
 
   getSession(roomName: string): VoiceSessionInternal | undefined {

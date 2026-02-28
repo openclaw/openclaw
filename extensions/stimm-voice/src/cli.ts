@@ -22,6 +22,13 @@ type RoomManager = {
   createSession: (opts: { roomName?: string; originChannel: string }) => Promise<VoiceSession>;
   endSession: (room: string) => Promise<boolean>;
   listSessions: () => VoiceSession[];
+  /**
+   * Lists participants in the room. kind: 0=STANDARD(human), 4=AGENT.
+   * Returns [] when the room is gone or on error.
+   */
+  listRoomParticipants?: (
+    room: string,
+  ) => Promise<Array<{ identity: string; kind: number; state: number }>>;
 };
 
 type SupervisorObsEvent = {
@@ -272,6 +279,41 @@ export function registerStimmVoiceCli(deps: VoiceCliDeps): void {
         };
         process.once("SIGINT", () => void cleanup());
         process.once("SIGTERM", () => void cleanup());
+
+        // Auto-exit when the last human participant disconnects.
+        // The claim is consumed on first connect so reconnection is impossible
+        // — there is no point keeping the process (and cloudflared tunnel) alive.
+        // We use a consecutive-empty-poll counter so the check works even if the
+        // participant connected and disconnected between two poll ticks.
+        if (rt.roomManager.listRoomParticipants) {
+          const POLL_MS = 15_000;
+          // Two consecutive polls with no human (kind=0 STANDARD) participants
+          // before auto-closing, to avoid false-positives on transient blips.
+          const EMPTY_THRESHOLD = 2;
+          let emptyCount = 0;
+          const poller = setInterval(() => {
+            void rt.roomManager.listRoomParticipants!(session.roomName).then((parts) => {
+              // kind: 0=STANDARD(human), 1=INGRESS, 2=EGRESS, 3=SIP, 4=AGENT
+              // Exclude the stimm supervisor participant (kind=0 but not a real user).
+              const hasHuman = parts.some(
+                (p) => p.kind === 0 && !p.identity.startsWith("stimm-supervisor-"),
+              );
+              if (hasHuman) {
+                emptyCount = 0;
+              } else {
+                emptyCount++;
+                if (emptyCount >= EMPTY_THRESHOLD) {
+                  clearInterval(poller);
+                  logger.info(`[stimm-voice] Room empty — auto-closing session.`);
+                  void cleanup();
+                }
+              }
+            });
+          }, POLL_MS);
+        } else {
+          // listRoomParticipants not available (e.g. in tests) — skip auto-close.
+        }
+
         await keepAlive;
       }
     });
