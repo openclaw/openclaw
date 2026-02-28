@@ -246,6 +246,9 @@ function logToFile(
   if (level === "silent") {
     return;
   }
+  if (!isFileLogLevelEnabled(level)) {
+    return;
+  }
   const safeLevel = level;
   const method = (fileLogger as unknown as Record<string, unknown>)[safeLevel] as
     | ((...args: unknown[]) => void)
