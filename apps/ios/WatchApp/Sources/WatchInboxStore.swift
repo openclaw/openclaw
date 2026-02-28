@@ -2,6 +2,7 @@ import Foundation
 import Observation
 import UserNotifications
 import WatchKit
+import WidgetKit
 
 struct WatchPromptAction: Codable, Sendable, Equatable, Identifiable {
     var id: String
@@ -155,6 +156,7 @@ struct WatchNotifyMessage: Sendable {
             replyStatusAt: self.replyStatusAt)
         guard let data = try? JSONEncoder().encode(state) else { return }
         self.defaults.set(data, forKey: Self.persistedStateKey)
+        WidgetCenter.shared.reloadAllTimelines()
     }
 
     private func deliveryKey(messageID: String?, title: String, body: String, sentAtMs: Int?) -> String {
