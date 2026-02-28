@@ -355,20 +355,22 @@ Common signatures:
 If the service config and runtime still disagree after checks, reinstall service metadata from the same profile/state directory:
 
 <Warning>
-`--force` regenerates `gateway.cmd` from scratch and recreates the system service
-(launchd/systemd/Task Scheduler). Any custom content in `gateway.cmd` (idempotency guards,
-environment setup, wrapper logic) will be silently overwritten. Back up `gateway.cmd`
-before running this command.
+`--force` recreates the system service (launchd on macOS, systemd on Linux, Task Scheduler
+on Windows).
 
-**Windows:** If you switched from Task Scheduler to another auto-start
-method, `--force` creates a new Scheduled Task, which can conflict with your existing
-setup. Remove or disable the Scheduled Task after reinstalling if you use a different
-auto-start mechanism.
+**Windows only:** `--force` also regenerates `gateway.cmd` from scratch. Any custom content
+in `gateway.cmd` (idempotency guards, environment setup, wrapper logic) will be silently
+overwritten. Back up `gateway.cmd` before running this command. If you switched from Task
+Scheduler to another auto-start method, `--force` creates a new Scheduled Task, which can
+conflict with your existing setup. Remove or disable the Scheduled Task after reinstalling
+if you use a different auto-start mechanism.
 </Warning>
 
 ```bash
-# back up your gateway.cmd first if you have customized it
+# Windows: back up gateway.cmd first if you have customized it
+# (gateway.cmd only exists on Windows Task Scheduler installs)
 cp ~/.openclaw/gateway.cmd gateway.cmd.bak
+
 openclaw gateway install --force
 openclaw gateway restart
 ```
