@@ -1,5 +1,4 @@
 import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
-import type { TSchema } from "@sinclair/typebox";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { PollInput } from "../../polls.js";
@@ -12,7 +11,7 @@ export type ChannelId = ChatChannelId | (string & {});
 
 export type ChannelOutboundTargetMode = "explicit" | "implicit" | "heartbeat";
 
-export type ChannelAgentTool = AgentTool<TSchema, unknown> & {
+export type ChannelAgentTool = AgentTool & {
   ownerOnly?: boolean;
 };
 

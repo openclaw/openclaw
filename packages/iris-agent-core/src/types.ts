@@ -94,7 +94,7 @@ export interface AgentTool<
   cacheable?: boolean;
   execute: (
     toolCallId: string,
-    params: unknown,
+    params: TParameters,
     signal?: AbortSignal,
     onUpdate?: AgentToolUpdateCallback<TDetails>,
   ) => Promise<AgentToolResult<TDetails>>;

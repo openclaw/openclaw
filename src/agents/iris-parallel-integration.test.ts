@@ -5,7 +5,7 @@
  * multiple tool calls concurrently.  We mock streamSimple so no real
  * LLM call is made.
  */
-import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
+import type { AgentTool, AgentToolResult, StreamFn } from "@mariozechner/pi-agent-core";
 import { Agent } from "@mariozechner/pi-agent-core";
 import type { TextContent } from "@mariozechner/pi-ai";
 import { createAssistantMessageEventStream, getModel } from "@mariozechner/pi-ai";
@@ -117,7 +117,7 @@ describe("IrisAgent parallel tool execution (integration)", () => {
     const timings: Record<string, { start: number; end: number }> = {};
 
     // Three tools, each taking TOOL_DELAY_MS
-    const tools: AgentTool[] = ["tool_a", "tool_b", "tool_c"].map((name) => ({
+    const tools = ["tool_a", "tool_b", "tool_c"].map((name) => ({
       type: "function" as const,
       name,
       label: name,
@@ -137,7 +137,7 @@ describe("IrisAgent parallel tool execution (integration)", () => {
     agent = new Agent({
       initialState: {
         model: FAKE_MODEL,
-        tools,
+        tools: tools as unknown as AgentTool[],
         systemPrompt: "",
         messages: [],
         isStreaming: false,
@@ -147,7 +147,7 @@ describe("IrisAgent parallel tool execution (integration)", () => {
       streamFn: buildParallelStreamFn({
         ids: ["id_a", "id_b", "id_c"],
         toolNames: ["tool_a", "tool_b", "tool_c"],
-      }),
+      }) as unknown as StreamFn,
     });
 
     const wallStart = Date.now();
@@ -175,7 +175,7 @@ describe("IrisAgent parallel tool execution (integration)", () => {
     const TOOL_DELAY_MS = 50;
     const events: string[] = [];
 
-    const tools: AgentTool[] = ["x", "y", "z"].map((name) => ({
+    const tools = ["x", "y", "z"].map((name) => ({
       type: "function" as const,
       name,
       label: name,
@@ -193,7 +193,7 @@ describe("IrisAgent parallel tool execution (integration)", () => {
     agent = new Agent({
       initialState: {
         model: FAKE_MODEL,
-        tools,
+        tools: tools as unknown as AgentTool[],
         systemPrompt: "",
         messages: [],
         isStreaming: false,
@@ -203,7 +203,7 @@ describe("IrisAgent parallel tool execution (integration)", () => {
       streamFn: buildParallelStreamFn({
         ids: ["idx", "idy", "idz"],
         toolNames: ["x", "y", "z"],
-      }),
+      }) as unknown as StreamFn,
     });
 
     agent.subscribe((evt) => {

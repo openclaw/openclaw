@@ -206,7 +206,7 @@ export function shouldInjectOllamaCompatNumCtx(params: {
 }
 
 export function wrapOllamaCompatNumCtx(baseFn: StreamFn | undefined, numCtx: number): StreamFn {
-  const streamFn = baseFn ?? streamSimple;
+  const streamFn = baseFn ?? (streamSimple as unknown as StreamFn);
   return (model, context, options) =>
     streamFn(model, context, {
       ...options,
@@ -868,7 +868,7 @@ export async function runEmbeddedAttempt(
         activeSession.agent.streamFn = createOllamaStreamFn(ollamaBaseUrl);
       } else {
         // Force a stable streamFn reference so vitest can reliably mock @mariozechner/pi-ai.
-        activeSession.agent.streamFn = streamSimple;
+        activeSession.agent.streamFn = streamSimple as unknown as StreamFn;
       }
 
       // Ollama with OpenAI-compatible API needs num_ctx in payload.options.
