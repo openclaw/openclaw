@@ -12,6 +12,7 @@ import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { createIMessageTestPlugin } from "../../test-utils/imessage-test-plugin.js";
 import { loadWebMedia } from "../../web/media.js";
+import { resolvePreferredOpenClawTmpDir } from "../tmp-openclaw-dir.js";
 import { runMessageAction } from "./message-action-runner.js";
 
 vi.mock("../../web/media.js", async () => {
@@ -77,6 +78,32 @@ const runDrySend = (params: {
     ...params,
     action: "send",
   });
+
+async function expectSandboxMediaRewrite(params: {
+  sandboxDir: string;
+  media?: string;
+  message?: string;
+  expectedRelativePath: string;
+}) {
+  const result = await runDrySend({
+    cfg: slackConfig,
+    actionParams: {
+      channel: "slack",
+      target: "#C12345678",
+      ...(params.media ? { media: params.media } : {}),
+      ...(params.message ? { message: params.message } : {}),
+    },
+    sandboxRoot: params.sandboxDir,
+  });
+
+  expect(result.kind).toBe("send");
+  if (result.kind !== "send") {
+    throw new Error("expected send result");
+  }
+  expect(result.sendResult?.mediaUrl).toBe(
+    path.join(params.sandboxDir, params.expectedRelativePath),
+  );
+}
 
 function createAlwaysConfiguredPluginConfig(account: Record<string, unknown> = { enabled: true }) {
   return {
@@ -328,7 +355,7 @@ describe("runMessageAction context isolation", () => {
         cfg: slackConfig,
         actionParams: {
           channel: "telegram",
-          target: "telegram:@ops",
+          target: "@opsbot",
           message: "hi",
         },
         toolContext: { currentChannelId: "C12345678", currentChannelProvider: "slack" },
@@ -361,43 +388,51 @@ describe("runMessageAction context isolation", () => {
     ).rejects.toThrow(/Cross-context messaging denied/);
   });
 
-  it("aborts send when abortSignal is already aborted", async () => {
+  it.each([
+    {
+      name: "send",
+      run: (abortSignal: AbortSignal) =>
+        runDrySend({
+          cfg: slackConfig,
+          actionParams: {
+            channel: "slack",
+            target: "#C12345678",
+            message: "hi",
+          },
+          abortSignal,
+        }),
+    },
+    {
+      name: "broadcast",
+      run: (abortSignal: AbortSignal) =>
+        runDryAction({
+          cfg: slackConfig,
+          action: "broadcast",
+          actionParams: {
+            targets: ["channel:C12345678"],
+            channel: "slack",
+            message: "hi",
+          },
+          abortSignal,
+        }),
+    },
+  ])("aborts $name when abortSignal is already aborted", async ({ run }) => {
     const controller = new AbortController();
     controller.abort();
-
-    await expect(
-      runDrySend({
-        cfg: slackConfig,
-        actionParams: {
-          channel: "slack",
-          target: "#C12345678",
-          message: "hi",
-        },
-        abortSignal: controller.signal,
-      }),
-    ).rejects.toMatchObject({ name: "AbortError" });
-  });
-
-  it("aborts broadcast when abortSignal is already aborted", async () => {
-    const controller = new AbortController();
-    controller.abort();
-
-    await expect(
-      runDryAction({
-        cfg: slackConfig,
-        action: "broadcast",
-        actionParams: {
-          targets: ["channel:C12345678"],
-          channel: "slack",
-          message: "hi",
-        },
-        abortSignal: controller.signal,
-      }),
-    ).rejects.toMatchObject({ name: "AbortError" });
+    await expect(run(controller.signal)).rejects.toMatchObject({ name: "AbortError" });
   });
 });
 
 describe("runMessageAction sendAttachment hydration", () => {
+  const cfg = {
+    channels: {
+      bluebubbles: {
+        enabled: true,
+        serverUrl: "http://localhost:1234",
+        password: "test-password",
+      },
+    },
+  } as OpenClawConfig;
   const attachmentPlugin: ChannelPlugin = {
     id: "bluebubbles",
     meta: {
@@ -407,15 +442,15 @@ describe("runMessageAction sendAttachment hydration", () => {
       docsPath: "/channels/bluebubbles",
       blurb: "BlueBubbles test plugin.",
     },
-    capabilities: { chatTypes: ["direct"], media: true },
+    capabilities: { chatTypes: ["direct", "group"], media: true },
     config: {
       listAccountIds: () => ["default"],
       resolveAccount: () => ({ enabled: true }),
       isConfigured: () => true,
     },
     actions: {
-      listActions: () => ["sendAttachment"],
-      supportsAction: ({ action }) => action === "sendAttachment",
+      listActions: () => ["sendAttachment", "setGroupIcon"],
+      supportsAction: ({ action }) => action === "sendAttachment" || action === "setGroupIcon",
       handleAction: async ({ params }) =>
         jsonResult({
           ok: true,
@@ -450,17 +485,46 @@ describe("runMessageAction sendAttachment hydration", () => {
     vi.clearAllMocks();
   });
 
-  it("hydrates buffer and filename from media for sendAttachment", async () => {
-    const cfg = {
-      channels: {
-        bluebubbles: {
-          enabled: true,
-          serverUrl: "http://localhost:1234",
-          password: "test-password",
-        },
-      },
-    } as OpenClawConfig;
+  async function restoreRealMediaLoader() {
+    const actual = await vi.importActual<typeof import("../../web/media.js")>("../../web/media.js");
+    vi.mocked(loadWebMedia).mockImplementation(actual.loadWebMedia);
+  }
 
+  async function expectRejectsLocalAbsolutePathWithoutSandbox(params: {
+    action: "sendAttachment" | "setGroupIcon";
+    target: string;
+    message?: string;
+    tempPrefix: string;
+  }) {
+    await restoreRealMediaLoader();
+
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), params.tempPrefix));
+    try {
+      const outsidePath = path.join(tempDir, "secret.txt");
+      await fs.writeFile(outsidePath, "secret", "utf8");
+
+      const actionParams: Record<string, unknown> = {
+        channel: "bluebubbles",
+        target: params.target,
+        media: outsidePath,
+      };
+      if (params.message) {
+        actionParams.message = params.message;
+      }
+
+      await expect(
+        runMessageAction({
+          cfg,
+          action: params.action,
+          params: actionParams,
+        }),
+      ).rejects.toThrow(/allowed directory|path-not-allowed/i);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  }
+
+  it("hydrates buffer and filename from media for sendAttachment", async () => {
     const result = await runMessageAction({
       cfg,
       action: "sendAttachment",
@@ -482,18 +546,18 @@ describe("runMessageAction sendAttachment hydration", () => {
     expect((result.payload as { buffer?: string }).buffer).toBe(
       Buffer.from("hello").toString("base64"),
     );
+    const call = vi.mocked(loadWebMedia).mock.calls[0];
+    expect(call?.[1]).toEqual(
+      expect.objectContaining({
+        localRoots: expect.any(Array),
+      }),
+    );
+    expect((call?.[1] as { sandboxValidated?: boolean } | undefined)?.sandboxValidated).not.toBe(
+      true,
+    );
   });
 
   it("rewrites sandboxed media paths for sendAttachment", async () => {
-    const cfg = {
-      channels: {
-        bluebubbles: {
-          enabled: true,
-          serverUrl: "http://localhost:1234",
-          password: "test-password",
-        },
-      },
-    } as OpenClawConfig;
     await withSandbox(async (sandboxDir) => {
       await runMessageAction({
         cfg,
@@ -509,6 +573,28 @@ describe("runMessageAction sendAttachment hydration", () => {
 
       const call = vi.mocked(loadWebMedia).mock.calls[0];
       expect(call?.[0]).toBe(path.join(sandboxDir, "data", "pic.png"));
+      expect(call?.[1]).toEqual(
+        expect.objectContaining({
+          sandboxValidated: true,
+        }),
+      );
+    });
+  });
+
+  it("rejects local absolute path for sendAttachment when sandboxRoot is missing", async () => {
+    await expectRejectsLocalAbsolutePathWithoutSandbox({
+      action: "sendAttachment",
+      target: "+15551234567",
+      message: "caption",
+      tempPrefix: "msg-attachment-",
+    });
+  });
+
+  it("rejects local absolute path for setGroupIcon when sandboxRoot is missing", async () => {
+    await expectRejectsLocalAbsolutePathWithoutSandbox({
+      action: "setGroupIcon",
+      target: "group:123",
+      tempPrefix: "msg-group-icon-",
     });
   });
 });
@@ -567,43 +653,79 @@ describe("runMessageAction sandboxed media validation", () => {
 
   it("rewrites sandbox-relative media paths", async () => {
     await withSandbox(async (sandboxDir) => {
-      const result = await runDrySend({
-        cfg: slackConfig,
-        actionParams: {
-          channel: "slack",
-          target: "#C12345678",
-          media: "./data/file.txt",
-          message: "",
-        },
-        sandboxRoot: sandboxDir,
+      await expectSandboxMediaRewrite({
+        sandboxDir,
+        media: "./data/file.txt",
+        message: "",
+        expectedRelativePath: path.join("data", "file.txt"),
       });
+    });
+  });
 
-      expect(result.kind).toBe("send");
-      if (result.kind !== "send") {
-        throw new Error("expected send result");
-      }
-      expect(result.sendResult?.mediaUrl).toBe(path.join(sandboxDir, "data", "file.txt"));
+  it("rewrites /workspace media paths to host sandbox root", async () => {
+    await withSandbox(async (sandboxDir) => {
+      await expectSandboxMediaRewrite({
+        sandboxDir,
+        media: "/workspace/data/file.txt",
+        message: "",
+        expectedRelativePath: path.join("data", "file.txt"),
+      });
     });
   });
 
   it("rewrites MEDIA directives under sandbox", async () => {
     await withSandbox(async (sandboxDir) => {
-      const result = await runDrySend({
+      await expectSandboxMediaRewrite({
+        sandboxDir,
+        message: "Hello\nMEDIA: ./data/note.ogg",
+        expectedRelativePath: path.join("data", "note.ogg"),
+      });
+    });
+  });
+
+  it("allows media paths under preferred OpenClaw tmp root", async () => {
+    const tmpRoot = resolvePreferredOpenClawTmpDir();
+    await fs.mkdir(tmpRoot, { recursive: true });
+    const sandboxDir = await fs.mkdtemp(path.join(os.tmpdir(), "msg-sandbox-"));
+    try {
+      const tmpFile = path.join(tmpRoot, "test-media-image.png");
+      const result = await runMessageAction({
         cfg: slackConfig,
-        actionParams: {
+        action: "send",
+        params: {
           channel: "slack",
           target: "#C12345678",
-          message: "Hello\nMEDIA: ./data/note.ogg",
+          media: tmpFile,
+          message: "",
         },
         sandboxRoot: sandboxDir,
+        dryRun: true,
       });
 
       expect(result.kind).toBe("send");
       if (result.kind !== "send") {
         throw new Error("expected send result");
       }
-      expect(result.sendResult?.mediaUrl).toBe(path.join(sandboxDir, "data", "note.ogg"));
-    });
+      // runMessageAction normalizes media paths through platform resolution.
+      expect(result.sendResult?.mediaUrl).toBe(path.resolve(tmpFile));
+      const hostTmpOutsideOpenClaw = path.join(os.tmpdir(), "outside-openclaw", "test-media.png");
+      await expect(
+        runMessageAction({
+          cfg: slackConfig,
+          action: "send",
+          params: {
+            channel: "slack",
+            target: "#C12345678",
+            media: hostTmpOutsideOpenClaw,
+            message: "",
+          },
+          sandboxRoot: sandboxDir,
+          dryRun: true,
+        }),
+      ).rejects.toThrow(/sandbox/i);
+    } finally {
+      await fs.rm(sandboxDir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -898,5 +1020,33 @@ describe("runMessageAction accountId defaults", () => {
     }
     expect(ctx.accountId).toBe("ops");
     expect(ctx.params.accountId).toBe("ops");
+  });
+
+  it("falls back to the agent's bound account when accountId is omitted", async () => {
+    await runMessageAction({
+      cfg: {
+        bindings: [{ agentId: "agent-b", match: { channel: "discord", accountId: "account-b" } }],
+      } as OpenClawConfig,
+      action: "send",
+      params: {
+        channel: "discord",
+        target: "channel:123",
+        message: "hi",
+      },
+      agentId: "agent-b",
+    });
+
+    expect(handleAction).toHaveBeenCalled();
+    const ctx = (handleAction.mock.calls as unknown as Array<[unknown]>)[0]?.[0] as
+      | {
+          accountId?: string | null;
+          params: Record<string, unknown>;
+        }
+      | undefined;
+    if (!ctx) {
+      throw new Error("expected action context");
+    }
+    expect(ctx.accountId).toBe("account-b");
+    expect(ctx.params.accountId).toBe("account-b");
   });
 });

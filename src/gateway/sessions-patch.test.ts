@@ -87,6 +87,38 @@ describe("gateway sessions patch", () => {
     expect(res.entry.thinkingLevel).toBeUndefined();
   });
 
+  test("persists reasoningLevel=off (does not clear)", async () => {
+    const store: Record<string, SessionEntry> = {};
+    const res = await applySessionsPatchToStore({
+      cfg: {} as OpenClawConfig,
+      store,
+      storeKey: "agent:main:main",
+      patch: { key: "agent:main:main", reasoningLevel: "off" },
+    });
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      return;
+    }
+    expect(res.entry.reasoningLevel).toBe("off");
+  });
+
+  test("clears reasoningLevel when patch sets null", async () => {
+    const store: Record<string, SessionEntry> = {
+      "agent:main:main": { reasoningLevel: "stream" } as SessionEntry,
+    };
+    const res = await applySessionsPatchToStore({
+      cfg: {} as OpenClawConfig,
+      store,
+      storeKey: "agent:main:main",
+      patch: { key: "agent:main:main", reasoningLevel: null },
+    });
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      return;
+    }
+    expect(res.entry.reasoningLevel).toBeUndefined();
+  });
+
   test("persists elevatedLevel=off (does not clear)", async () => {
     const store: Record<string, SessionEntry> = {};
     const res = await applySessionsPatchToStore({
@@ -177,6 +209,70 @@ describe("gateway sessions patch", () => {
     expect(res.entry.authProfileOverride).toBeUndefined();
     expect(res.entry.authProfileOverrideSource).toBeUndefined();
     expect(res.entry.authProfileOverrideCompactionCount).toBeUndefined();
+  });
+
+  test("accepts explicit allowlisted provider/model refs from sessions.patch", async () => {
+    const store: Record<string, SessionEntry> = {};
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.2" },
+          models: {
+            "anthropic/claude-sonnet-4-6": { alias: "sonnet" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const res = await applySessionsPatchToStore({
+      cfg,
+      store,
+      storeKey: "agent:main:main",
+      patch: { key: "agent:main:main", model: "anthropic/claude-sonnet-4-6" },
+      loadGatewayModelCatalog: async () => [
+        { provider: "anthropic", id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6" },
+        { provider: "anthropic", id: "claude-sonnet-4-5", name: "Claude Sonnet 4.5" },
+      ],
+    });
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      return;
+    }
+    expect(res.entry.providerOverride).toBe("anthropic");
+    expect(res.entry.modelOverride).toBe("claude-sonnet-4-6");
+  });
+
+  test("accepts explicit allowlisted refs absent from bundled catalog", async () => {
+    const store: Record<string, SessionEntry> = {};
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.2" },
+          models: {
+            "anthropic/claude-sonnet-4-6": { alias: "sonnet" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const res = await applySessionsPatchToStore({
+      cfg,
+      store,
+      storeKey: "agent:main:main",
+      patch: { key: "agent:main:main", model: "anthropic/claude-sonnet-4-6" },
+      loadGatewayModelCatalog: async () => [
+        { provider: "anthropic", id: "claude-sonnet-4-5", name: "Claude Sonnet 4.5" },
+        { provider: "openai", id: "gpt-5.2", name: "GPT-5.2" },
+      ],
+    });
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      return;
+    }
+    expect(res.entry.providerOverride).toBe("anthropic");
+    expect(res.entry.modelOverride).toBe("claude-sonnet-4-6");
   });
 
   test("sets spawnDepth for subagent sessions", async () => {

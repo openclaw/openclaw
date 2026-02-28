@@ -50,6 +50,16 @@ vi.mock("../imessage/send.js", () => {
 });
 
 describe("createDefaultDeps", () => {
+  function expectUnusedModulesNotLoaded(exclude: keyof typeof moduleLoads): void {
+    const keys = Object.keys(moduleLoads) as Array<keyof typeof moduleLoads>;
+    for (const key of keys) {
+      if (key === exclude) {
+        continue;
+      }
+      expect(moduleLoads[key]).not.toHaveBeenCalled();
+    }
+  }
+
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -71,11 +81,7 @@ describe("createDefaultDeps", () => {
 
     expect(moduleLoads.telegram).toHaveBeenCalledTimes(1);
     expect(sendFns.telegram).toHaveBeenCalledTimes(1);
-    expect(moduleLoads.whatsapp).not.toHaveBeenCalled();
-    expect(moduleLoads.discord).not.toHaveBeenCalled();
-    expect(moduleLoads.slack).not.toHaveBeenCalled();
-    expect(moduleLoads.signal).not.toHaveBeenCalled();
-    expect(moduleLoads.imessage).not.toHaveBeenCalled();
+    expectUnusedModulesNotLoaded("telegram");
   });
 
   it("reuses module cache after first dynamic import", async () => {

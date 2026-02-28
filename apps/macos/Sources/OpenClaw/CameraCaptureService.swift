@@ -357,8 +357,8 @@ private final class PhotoCaptureDelegate: NSObject, AVCapturePhotoCaptureDelegat
     func photoOutput(
         _ output: AVCapturePhotoOutput,
         didFinishProcessingPhoto photo: AVCapturePhoto,
-        error: Error?
-    ) {
+        error: Error?)
+    {
         guard !self.didResume, let cont else { return }
         self.didResume = true
         self.cont = nil
@@ -380,8 +380,8 @@ private final class PhotoCaptureDelegate: NSObject, AVCapturePhotoCaptureDelegat
     func photoOutput(
         _ output: AVCapturePhotoOutput,
         didFinishCaptureFor resolvedSettings: AVCaptureResolvedPhotoSettings,
-        error: Error?
-    ) {
+        error: Error?)
+    {
         guard let error else { return }
         guard !self.didResume, let cont else { return }
         self.didResume = true

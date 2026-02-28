@@ -1,4 +1,8 @@
-import { classifyFailoverReason, type FailoverReason } from "./pi-embedded-helpers.js";
+import {
+  classifyFailoverReason,
+  isAuthPermanentErrorMessage,
+  type FailoverReason,
+} from "./pi-embedded-helpers.js";
 
 const TIMEOUT_HINT_RE =
   /timeout|timed out|deadline exceeded|context deadline exceeded|stop reason:\s*abort|reason:\s*abort|unhandled stop reason:\s*abort/i;
@@ -47,10 +51,14 @@ export function resolveFailoverStatus(reason: FailoverReason): number | undefine
       return 429;
     case "auth":
       return 401;
+    case "auth_permanent":
+      return 403;
     case "timeout":
       return 408;
     case "format":
       return 400;
+    case "model_not_found":
+      return 404;
     default:
       return undefined;
   }
@@ -156,12 +164,16 @@ export function resolveFailoverReasonFromError(err: unknown): FailoverReason | n
     return "rate_limit";
   }
   if (status === 401 || status === 403) {
+    const msg = getErrorMessage(err);
+    if (msg && isAuthPermanentErrorMessage(msg)) {
+      return "auth_permanent";
+    }
     return "auth";
   }
   if (status === 408) {
     return "timeout";
   }
-  if (status === 503) {
+  if (status === 502 || status === 503 || status === 504) {
     return "timeout";
   }
   if (status === 400) {

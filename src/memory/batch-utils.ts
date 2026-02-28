@@ -1,6 +1,9 @@
+import type { SsrFPolicy } from "../infra/net/ssrf.js";
+
 export type BatchHttpClientConfig = {
   baseUrl?: string;
   headers?: Record<string, string>;
+  ssrfPolicy?: SsrFPolicy;
 };
 
 export function normalizeBatchBaseUrl(client: BatchHttpClientConfig): string {

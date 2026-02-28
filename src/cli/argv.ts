@@ -1,9 +1,16 @@
+import { isBunRuntime, isNodeRuntime } from "../daemon/runtime-binary.js";
+
 const HELP_FLAGS = new Set(["-h", "--help"]);
-const VERSION_FLAGS = new Set(["-v", "-V", "--version"]);
+const VERSION_FLAGS = new Set(["-V", "--version"]);
+const ROOT_VERSION_ALIAS_FLAG = "-v";
+const ROOT_BOOLEAN_FLAGS = new Set(["--dev", "--no-color"]);
+const ROOT_VALUE_FLAGS = new Set(["--profile", "--log-level"]);
 const FLAG_TERMINATOR = "--";
 
 export function hasHelpOrVersion(argv: string[]): boolean {
-  return argv.some((arg) => HELP_FLAGS.has(arg) || VERSION_FLAGS.has(arg));
+  return (
+    argv.some((arg) => HELP_FLAGS.has(arg) || VERSION_FLAGS.has(arg)) || hasRootVersionAlias(argv)
+  );
 }
 
 function isValueToken(arg: string | undefined): boolean {
@@ -38,6 +45,42 @@ export function hasFlag(argv: string[], name: string): boolean {
     }
   }
   return false;
+}
+
+export function hasRootVersionAlias(argv: string[]): boolean {
+  const args = argv.slice(2);
+  let hasAlias = false;
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i];
+    if (!arg) {
+      continue;
+    }
+    if (arg === FLAG_TERMINATOR) {
+      break;
+    }
+    if (arg === ROOT_VERSION_ALIAS_FLAG) {
+      hasAlias = true;
+      continue;
+    }
+    if (ROOT_BOOLEAN_FLAGS.has(arg)) {
+      continue;
+    }
+    if (arg.startsWith("--profile=")) {
+      continue;
+    }
+    if (ROOT_VALUE_FLAGS.has(arg)) {
+      const next = args[i + 1];
+      if (isValueToken(next)) {
+        i += 1;
+      }
+      continue;
+    }
+    if (arg.startsWith("-")) {
+      continue;
+    }
+    return false;
+  }
+  return hasAlias;
 }
 
 export function getFlagValue(argv: string[], name: string): string | null | undefined {
@@ -122,29 +165,13 @@ export function buildParseArgv(params: {
       : baseArgv[0]?.endsWith("openclaw")
         ? baseArgv.slice(1)
         : baseArgv;
-  const executable = (normalizedArgv[0]?.split(/[/\\]/).pop() ?? "").toLowerCase();
   const looksLikeNode =
-    normalizedArgv.length >= 2 && (isNodeExecutable(executable) || isBunExecutable(executable));
+    normalizedArgv.length >= 2 &&
+    (isNodeRuntime(normalizedArgv[0] ?? "") || isBunRuntime(normalizedArgv[0] ?? ""));
   if (looksLikeNode) {
     return normalizedArgv;
   }
   return ["node", programName || "openclaw", ...normalizedArgv];
-}
-
-const nodeExecutablePattern = /^node-\d+(?:\.\d+)*(?:\.exe)?$/;
-
-function isNodeExecutable(executable: string): boolean {
-  return (
-    executable === "node" ||
-    executable === "node.exe" ||
-    executable === "nodejs" ||
-    executable === "nodejs.exe" ||
-    nodeExecutablePattern.test(executable)
-  );
-}
-
-function isBunExecutable(executable: string): boolean {
-  return executable === "bun" || executable === "bun.exe";
 }
 
 export function shouldMigrateStateFromPath(path: string[]): boolean {

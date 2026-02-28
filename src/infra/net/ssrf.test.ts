@@ -1,9 +1,23 @@
 import { describe, expect, it } from "vitest";
+import { blockedIpv6MulticastLiterals } from "../../shared/net/ip-test-fixtures.js";
 import { normalizeFingerprint } from "../tls/fingerprint.js";
 import { isBlockedHostnameOrIp, isPrivateIpAddress } from "./ssrf.js";
 
 const privateIpCases = [
+  "198.18.0.1",
+  "198.19.255.254",
+  "198.51.100.42",
+  "203.0.113.10",
+  "192.0.0.8",
+  "192.0.2.1",
+  "192.88.99.1",
+  "224.0.0.1",
+  "239.255.255.255",
+  "240.0.0.1",
+  "255.255.255.255",
   "::ffff:127.0.0.1",
+  "::ffff:198.18.0.1",
+  "64:ff9b::198.51.100.42",
   "0:0:0:0:0:ffff:7f00:1",
   "0000:0000:0000:0000:0000:ffff:7f00:0001",
   "::127.0.0.1",
@@ -19,17 +33,26 @@ const privateIpCases = [
   "2002:a9fe:a9fe::",
   "2001:0000:0:0:0:0:80ff:fefe",
   "2001:0000:0:0:0:0:3f57:fefe",
+  "2002:c612:0001::",
   "::",
   "::1",
   "fe80::1%lo0",
   "fd00::1",
   "fec0::1",
+  ...blockedIpv6MulticastLiterals,
   "2001:db8:1234::5efe:127.0.0.1",
   "2001:db8:1234:1:200:5efe:7f00:1",
 ];
 
 const publicIpCases = [
   "93.184.216.34",
+  "198.17.255.255",
+  "198.20.0.1",
+  "198.51.99.1",
+  "198.51.101.1",
+  "203.0.112.1",
+  "203.0.114.1",
+  "223.255.255.255",
   "2606:4700:4700::1111",
   "2001:db8::1",
   "64:ff9b::8.8.8.8",
@@ -59,27 +82,23 @@ const unsupportedLegacyIpv4Cases = [
 const nonIpHostnameCases = ["example.com", "abc.123.example", "1password.com", "0x.example.com"];
 
 describe("ssrf ip classification", () => {
-  it.each(privateIpCases)("classifies %s as private", (address) => {
-    expect(isPrivateIpAddress(address)).toBe(true);
-  });
-
-  it.each(publicIpCases)("classifies %s as public", (address) => {
-    expect(isPrivateIpAddress(address)).toBe(false);
-  });
-
-  it.each(malformedIpv6Cases)("fails closed for malformed IPv6 %s", (address) => {
-    expect(isPrivateIpAddress(address)).toBe(true);
-  });
-
-  it.each(unsupportedLegacyIpv4Cases)(
-    "fails closed for unsupported legacy IPv4 literal %s",
-    (address) => {
+  it("classifies blocked ip literals as private", () => {
+    const blockedCases = [...privateIpCases, ...malformedIpv6Cases, ...unsupportedLegacyIpv4Cases];
+    for (const address of blockedCases) {
       expect(isPrivateIpAddress(address)).toBe(true);
-    },
-  );
+    }
+  });
 
-  it.each(nonIpHostnameCases)("does not treat hostname %s as an IP literal", (hostname) => {
-    expect(isPrivateIpAddress(hostname)).toBe(false);
+  it("classifies public ip literals as non-private", () => {
+    for (const address of publicIpCases) {
+      expect(isPrivateIpAddress(address)).toBe(false);
+    }
+  });
+
+  it("does not treat hostnames as ip literals", () => {
+    for (const hostname of nonIpHostnameCases) {
+      expect(isPrivateIpAddress(hostname)).toBe(false);
+    }
   });
 });
 
@@ -100,6 +119,19 @@ describe("isBlockedHostnameOrIp", () => {
   it("blocks private transition addresses via shared IP classifier", () => {
     expect(isBlockedHostnameOrIp("2001:db8:1234::5efe:127.0.0.1")).toBe(true);
     expect(isBlockedHostnameOrIp("2001:db8::1")).toBe(false);
+  });
+
+  it("blocks IPv4 special-use ranges but allows adjacent public ranges", () => {
+    expect(isBlockedHostnameOrIp("198.18.0.1")).toBe(true);
+    expect(isBlockedHostnameOrIp("198.20.0.1")).toBe(false);
+  });
+
+  it("supports opt-in policy to allow RFC2544 benchmark range", () => {
+    const policy = { allowRfc2544BenchmarkRange: true };
+    expect(isBlockedHostnameOrIp("198.18.0.1")).toBe(true);
+    expect(isBlockedHostnameOrIp("198.18.0.1", policy)).toBe(false);
+    expect(isBlockedHostnameOrIp("::ffff:198.18.0.1", policy)).toBe(false);
+    expect(isBlockedHostnameOrIp("198.51.100.1", policy)).toBe(true);
   });
 
   it("blocks legacy IPv4 literal representations", () => {

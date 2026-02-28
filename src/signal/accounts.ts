@@ -1,6 +1,7 @@
 import { createAccountListHelpers } from "../channels/plugins/account-helpers.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SignalAccountConfig } from "../config/types.js";
+import { resolveAccountEntry } from "../routing/account-lookup.js";
 import { normalizeAccountId } from "../routing/session-key.js";
 
 export type ResolvedSignalAccount = {
@@ -20,11 +21,7 @@ function resolveAccountConfig(
   cfg: OpenClawConfig,
   accountId: string,
 ): SignalAccountConfig | undefined {
-  const accounts = cfg.channels?.signal?.accounts;
-  if (!accounts || typeof accounts !== "object") {
-    return undefined;
-  }
-  return accounts[accountId] as SignalAccountConfig | undefined;
+  return resolveAccountEntry(cfg.channels?.signal?.accounts, accountId);
 }
 
 function mergeSignalAccountConfig(cfg: OpenClawConfig, accountId: string): SignalAccountConfig {

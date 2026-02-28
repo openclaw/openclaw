@@ -77,6 +77,18 @@ openclaw browser create-profile \
   --color "#00AA00"
 ```
 
+### Custom Gateway ports
+
+If you're using a custom gateway port, the extension relay port is automatically derived:
+
+**Extension Relay Port = Gateway Port + 3**
+
+Example: if `gateway.port: 19001`, then:
+
+- Extension relay port: `19004` (gateway + 3)
+
+Configure the extension to use the derived relay port in the extension Options page.
+
 ## Attach / detach (toolbar button)
 
 - Open the tab you want OpenClaw to control.

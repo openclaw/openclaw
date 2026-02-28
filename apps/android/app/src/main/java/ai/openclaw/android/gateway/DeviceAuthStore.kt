@@ -2,13 +2,18 @@ package ai.openclaw.android.gateway
 
 import ai.openclaw.android.SecurePrefs
 
-class DeviceAuthStore(private val prefs: SecurePrefs) {
-  fun loadToken(deviceId: String, role: String): String? {
+interface DeviceAuthTokenStore {
+  fun loadToken(deviceId: String, role: String): String?
+  fun saveToken(deviceId: String, role: String, token: String)
+}
+
+class DeviceAuthStore(private val prefs: SecurePrefs) : DeviceAuthTokenStore {
+  override fun loadToken(deviceId: String, role: String): String? {
     val key = tokenKey(deviceId, role)
     return prefs.getString(key)?.trim()?.takeIf { it.isNotEmpty() }
   }
 
-  fun saveToken(deviceId: String, role: String, token: String) {
+  override fun saveToken(deviceId: String, role: String, token: String) {
     val key = tokenKey(deviceId, role)
     prefs.putString(key, token.trim())
   }
