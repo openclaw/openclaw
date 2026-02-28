@@ -130,6 +130,38 @@ describe("legacy config detection", () => {
     ).toBeUndefined();
   });
 
+  it("drops empty legacy discord allowlist aliases without migrating to allowFrom", async () => {
+    const res = migrateLegacyConfig({
+      channels: {
+        discord: {
+          allowlist: [],
+          accounts: {
+            ops: { allowlist: [] },
+          },
+        },
+      },
+    });
+
+    expect(res.changes).toContain("Removed channels.discord.allowlist.");
+    expect(res.changes).toContain("Removed channels.discord.accounts.ops.allowlist.");
+    expect(res.config?.channels?.discord?.allowFrom).toBeUndefined();
+    expect(res.config?.channels?.discord?.accounts?.ops?.allowFrom).toBeUndefined();
+    expect(
+      (
+        res.config?.channels?.discord as
+          | { allowlist?: unknown; groupAllowFrom?: unknown }
+          | undefined
+      )?.allowlist,
+    ).toBeUndefined();
+    expect(
+      (
+        res.config?.channels?.discord?.accounts?.ops as
+          | { allowlist?: unknown; groupAllowFrom?: unknown }
+          | undefined
+      )?.allowlist,
+    ).toBeUndefined();
+  });
+
   it("migrates legacy agents.list routing entries", async () => {
     const res = migrateLegacyConfig({
       agents: {
