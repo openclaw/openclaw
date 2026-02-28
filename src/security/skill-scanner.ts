@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { hasErrnoCode } from "../infra/errors.js";
+import { isMarkdownScannable, scanMarkdownSource } from "./skill-markdown-scanner.js";
 import { isPathInside } from "./scan-paths.js";
 
 // ---------------------------------------------------------------------------
@@ -51,6 +52,9 @@ const DEFAULT_MAX_SCAN_FILES = 500;
 const DEFAULT_MAX_FILE_BYTES = 1024 * 1024;
 
 export function isScannable(filePath: string): boolean {
+  if (isMarkdownScannable(filePath)) {
+    return true;
+  }
   return SCANNABLE_EXTENSIONS.has(path.extname(filePath).toLowerCase());
 }
 
@@ -390,8 +394,13 @@ export async function scanDirectory(
     if (source == null) {
       continue;
     }
-    const findings = scanSource(source, file);
-    allFindings.push(...findings);
+    if (isMarkdownScannable(file)) {
+      const mdFindings = scanMarkdownSource(source, file);
+      allFindings.push(...mdFindings);
+    } else {
+      const findings = scanSource(source, file);
+      allFindings.push(...findings);
+    }
   }
 
   return allFindings;
@@ -412,8 +421,13 @@ export async function scanDirectoryWithSummary(
       continue;
     }
     scannedFiles += 1;
-    const findings = scanSource(source, file);
-    allFindings.push(...findings);
+    if (isMarkdownScannable(file)) {
+      const mdFindings = scanMarkdownSource(source, file);
+      allFindings.push(...mdFindings);
+    } else {
+      const findings = scanSource(source, file);
+      allFindings.push(...findings);
+    }
   }
 
   return {
@@ -424,3 +438,4 @@ export async function scanDirectoryWithSummary(
     findings: allFindings,
   };
 }
+
