@@ -16,6 +16,7 @@ Docs: https://docs.openclaw.ai
 - Feishu/Reactions: add inbound `im.message.reaction.created_v1` handling, route verified reactions through synthetic inbound turns, and harden verification with timeout + fail-closed filtering so non-bot or unverified reactions are dropped. (#16716) Thanks @schumilin.
 - Feishu/Chat tooling: add `feishu_chat` tool actions for chat info and member queries, with configurable enablement under `channels.feishu.tools.chat`. (#14674)
 - Memory/LanceDB: support custom OpenAI `baseUrl` and embedding dimensions for LanceDB memory. (#17874) Thanks @rish2jain and @vincentkoc.
+- Telegram/Throttler: add `channels.telegram.throttle` config to control the grammY API throttler — set `enabled: false` to disable it entirely (fixes ~54s group message delays when block streaming exhausts the group reservoir), or tune `group` params (`reservoir`, `reservoirRefreshAmount`, `reservoirRefreshInterval`, `minTime`, `maxConcurrent`) to match your workload. (#29822)
 
 ### Fixes
 

@@ -61,9 +61,46 @@ describe("createTelegramBot", () => {
 
   // groupPolicy tests
 
-  it("installs grammY throttler", () => {
+  it("installs grammY throttler with empty opts by default", () => {
     createTelegramBot({ token: "tok" });
     expect(throttlerSpy).toHaveBeenCalledTimes(1);
+    expect(throttlerSpy).toHaveBeenCalledWith({});
+    expect(useSpy).toHaveBeenCalledWith("throttler");
+  });
+  it("skips throttler when throttle.enabled is false", () => {
+    loadConfig.mockReturnValue({
+      channels: { telegram: { dmPolicy: "open", allowFrom: ["*"], throttle: { enabled: false } } },
+    });
+    createTelegramBot({ token: "tok" });
+    expect(throttlerSpy).not.toHaveBeenCalled();
+    expect(useSpy).not.toHaveBeenCalledWith("throttler");
+  });
+  it("passes custom group config to throttler when throttle.group is set", () => {
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          throttle: {
+            group: {
+              reservoir: 1,
+              reservoirRefreshAmount: 1,
+              reservoirRefreshInterval: 3000,
+            },
+          },
+        },
+      },
+    });
+    createTelegramBot({ token: "tok" });
+    expect(throttlerSpy).toHaveBeenCalledWith({
+      group: {
+        maxConcurrent: 1,
+        minTime: 1000,
+        reservoir: 1,
+        reservoirRefreshAmount: 1,
+        reservoirRefreshInterval: 3000,
+      },
+    });
     expect(useSpy).toHaveBeenCalledWith("throttler");
   });
   it("uses wrapped fetch when global fetch is available", () => {

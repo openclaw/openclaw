@@ -22,6 +22,30 @@ export type TelegramActionConfig = {
   createForumTopic?: boolean;
 };
 
+export type TelegramThrottleGroupConfig = {
+  /** Reservoir size (max burst of group messages). Default: 20. */
+  reservoir?: number;
+  /** Messages to add per refresh interval. Default: 20. */
+  reservoirRefreshAmount?: number;
+  /** Reservoir refresh interval in ms. Default: 60000. */
+  reservoirRefreshInterval?: number;
+  /** Minimum time between group API calls in ms. Default: 1000. */
+  minTime?: number;
+  /** Max concurrent group API calls. Default: 1. */
+  maxConcurrent?: number;
+};
+
+export type TelegramThrottleConfig = {
+  /**
+   * Set to false to disable the API throttler entirely.
+   * Useful when block streaming causes group message delays (~54s) from
+   * reservoir exhaustion. Default: true.
+   */
+  enabled?: boolean;
+  /** Group chat (negative chat_id) throttler overrides. */
+  group?: TelegramThrottleGroupConfig;
+};
+
 export type TelegramNetworkConfig = {
   /** Override Node's autoSelectFamily behavior (true = enable, false = disable). */
   autoSelectFamily?: boolean;
@@ -152,6 +176,14 @@ export type TelegramAccountConfig = {
    * - "extensive": agent can react liberally when appropriate
    */
   reactionLevel?: "off" | "ack" | "minimal" | "extensive";
+  /**
+   * API throttler configuration.
+   *
+   * Set `enabled: false` to disable the throttler entirely (e.g. to avoid
+   * ~54s group message delays when block streaming exhausts the group reservoir).
+   * Customize `group` params to tune the per-group rate limit bucket.
+   */
+  throttle?: TelegramThrottleConfig;
   /** Heartbeat visibility settings for this channel. */
   heartbeat?: ChannelHeartbeatVisibilityConfig;
   /** Controls whether link previews are shown in outbound messages. Default: true. */

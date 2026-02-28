@@ -182,7 +182,7 @@ vi.mock("@grammyjs/runner", () => ({
 export const throttlerSpy: AnyMock = vi.fn(() => "throttler");
 
 vi.mock("@grammyjs/transformer-throttler", () => ({
-  apiThrottler: () => throttlerSpy(),
+  apiThrottler: (opts?: unknown) => throttlerSpy(opts),
 }));
 
 export const replySpy: MockFn<
@@ -319,5 +319,6 @@ beforeEach(() => {
   middlewareUseSpy.mockReset();
   sequentializeSpy.mockReset();
   botCtorSpy.mockReset();
+  throttlerSpy.mockClear();
   sequentializeKey = undefined;
 });

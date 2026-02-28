@@ -142,7 +142,24 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       : undefined;
 
   const bot = new Bot(opts.token, client ? { client } : undefined);
-  bot.api.config.use(apiThrottler());
+  // Allow disabling or customizing the throttler via config (e.g. to fix
+  // ~54s group delays when block streaming exhausts the group reservoir).
+  const throttleCfg = telegramCfg.throttle;
+  if (throttleCfg?.enabled !== false) {
+    const groupOverride = throttleCfg?.group;
+    const throttlerOpts = groupOverride
+      ? {
+          group: {
+            maxConcurrent: groupOverride.maxConcurrent ?? 1,
+            minTime: groupOverride.minTime ?? 1000,
+            reservoir: groupOverride.reservoir ?? 20,
+            reservoirRefreshAmount: groupOverride.reservoirRefreshAmount ?? 20,
+            reservoirRefreshInterval: groupOverride.reservoirRefreshInterval ?? 60000,
+          },
+        }
+      : {};
+    bot.api.config.use(apiThrottler(throttlerOpts));
+  }
   // Catch all errors from bot middleware to prevent unhandled rejections
   bot.catch((err) => {
     runtime.error?.(danger(`telegram bot error: ${formatUncaughtError(err)}`));
