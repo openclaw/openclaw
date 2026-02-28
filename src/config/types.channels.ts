@@ -18,10 +18,23 @@ export type ChannelHeartbeatVisibilityConfig = {
   useIndicator?: boolean;
 };
 
+/**
+ * Response mode when an unpaired (unauthorized) user sends a message.
+ * - "silent": Do not respond (default, recommended for security)
+ * - "code-only": Respond with pairing code only (no platform branding)
+ * - "branded": Respond with full OpenClaw branding and pairing instructions
+ */
+export type UnpairedResponseMode = "silent" | "code-only" | "branded";
+
 export type ChannelDefaultsConfig = {
   groupPolicy?: GroupPolicy;
   /** Default heartbeat visibility for all channels. */
   heartbeat?: ChannelHeartbeatVisibilityConfig;
+  /**
+   * Response behavior when an unpaired (unauthorized) user sends a message.
+   * @default "silent"
+   */
+  unpairedResponse?: UnpairedResponseMode;
 };
 
 export type ChannelModelByChannelConfig = Record<string, Record<string, string>>;
