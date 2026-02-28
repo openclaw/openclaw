@@ -272,7 +272,7 @@ describe("filterBootstrapFilesForSession", () => {
   });
 });
 
-describe("filterBootstrapFilesForSession — e2e integration", () => {
+describe("filterBootstrapFilesForSession — integration", () => {
   it("subagent session with real workspace files only receives AGENTS.md and TOOLS.md", async () => {
     const workspaceDir = await makeTempWorkspace("openclaw-subagent-filter-");
 
