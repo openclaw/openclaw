@@ -122,7 +122,6 @@ function buildDiffOptions(options: DiffRenderOptions): DiffViewerOptions {
         flex: 0 0 auto;
         color: inherit;
         fill: currentColor;
-        stroke: currentColor;
         pointer-events: none;
       }
     `,
