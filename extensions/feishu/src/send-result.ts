@@ -15,6 +15,14 @@ export function assertFeishuMessageApiSuccess(
   }
 }
 
+export function rethrowWithFeishuErrorDetail(err: unknown, prefix: string): never {
+  const data = (err as any)?.response?.data;
+  if (data && typeof data.msg === "string") {
+    throw new Error(`${prefix}: ${data.msg}`, { cause: err });
+  }
+  throw err;
+}
+
 export function toFeishuSendResult(
   response: FeishuMessageApiResponse,
   chatId: string,

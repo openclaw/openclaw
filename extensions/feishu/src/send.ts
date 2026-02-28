@@ -10,7 +10,11 @@ import {
 } from "./mention.js";
 import { parsePostContent } from "./post.js";
 import { getFeishuRuntime } from "./runtime.js";
-import { assertFeishuMessageApiSuccess, toFeishuSendResult } from "./send-result.js";
+import {
+  assertFeishuMessageApiSuccess,
+  rethrowWithFeishuErrorDetail,
+  toFeishuSendResult,
+} from "./send-result.js";
 import { resolveFeishuSendTarget } from "./send-target.js";
 import type { FeishuSendResult } from "./types.js";
 
@@ -298,14 +302,19 @@ export async function sendMessageFeishu(
   const { content, msgType } = buildFeishuPostMessagePayload({ messageText });
 
   if (replyToMessageId) {
-    const response = await client.im.message.reply({
-      path: { message_id: replyToMessageId },
-      data: {
-        content,
-        msg_type: msgType,
-        ...(replyInThread ? { reply_in_thread: true } : {}),
-      },
-    });
+    let response;
+    try {
+      response = await client.im.message.reply({
+        path: { message_id: replyToMessageId },
+        data: {
+          content,
+          msg_type: msgType,
+          ...(replyInThread ? { reply_in_thread: true } : {}),
+        },
+      });
+    } catch (err) {
+      rethrowWithFeishuErrorDetail(err, "Feishu reply failed");
+    }
     if (shouldFallbackFromReplyTarget(response)) {
       const fallback = await client.im.message.create({
         params: { receive_id_type: receiveIdType },
@@ -316,7 +325,10 @@ export async function sendMessageFeishu(
         },
       });
       assertFeishuMessageApiSuccess(fallback, "Feishu send failed");
-      return toFeishuSendResult(fallback, receiveId);
+      return {
+        ...toFeishuSendResult(fallback, receiveId),
+        ...(mentionMeta ? { meta: mentionMeta } : {}),
+      };
     }
     assertFeishuMessageApiSuccess(response, "Feishu reply failed");
     return {
@@ -325,14 +337,19 @@ export async function sendMessageFeishu(
     };
   }
 
-  const response = await client.im.message.create({
-    params: { receive_id_type: receiveIdType },
-    data: {
-      receive_id: receiveId,
-      content,
-      msg_type: msgType,
-    },
-  });
+  let response;
+  try {
+    response = await client.im.message.create({
+      params: { receive_id_type: receiveIdType },
+      data: {
+        receive_id: receiveId,
+        content,
+        msg_type: msgType,
+      },
+    });
+  } catch (err) {
+    rethrowWithFeishuErrorDetail(err, "Feishu send failed");
+  }
   assertFeishuMessageApiSuccess(response, "Feishu send failed");
   return {
     ...toFeishuSendResult(response, receiveId),
@@ -358,14 +375,19 @@ export async function sendCardFeishu(params: SendFeishuCardParams): Promise<Feis
   const content = JSON.stringify(card);
 
   if (replyToMessageId) {
-    const response = await client.im.message.reply({
-      path: { message_id: replyToMessageId },
-      data: {
-        content,
-        msg_type: "interactive",
-        ...(replyInThread ? { reply_in_thread: true } : {}),
-      },
-    });
+    let response;
+    try {
+      response = await client.im.message.reply({
+        path: { message_id: replyToMessageId },
+        data: {
+          content,
+          msg_type: "interactive",
+          ...(replyInThread ? { reply_in_thread: true } : {}),
+        },
+      });
+    } catch (err) {
+      rethrowWithFeishuErrorDetail(err, "Feishu card reply failed");
+    }
     if (shouldFallbackFromReplyTarget(response)) {
       const fallback = await client.im.message.create({
         params: { receive_id_type: receiveIdType },
@@ -376,7 +398,10 @@ export async function sendCardFeishu(params: SendFeishuCardParams): Promise<Feis
         },
       });
       assertFeishuMessageApiSuccess(fallback, "Feishu card send failed");
-      return toFeishuSendResult(fallback, receiveId);
+      return {
+        ...toFeishuSendResult(fallback, receiveId),
+        ...(mentionMeta ? { meta: mentionMeta } : {}),
+      };
     }
     assertFeishuMessageApiSuccess(response, "Feishu card reply failed");
     return {
@@ -385,14 +410,19 @@ export async function sendCardFeishu(params: SendFeishuCardParams): Promise<Feis
     };
   }
 
-  const response = await client.im.message.create({
-    params: { receive_id_type: receiveIdType },
-    data: {
-      receive_id: receiveId,
-      content,
-      msg_type: "interactive",
-    },
-  });
+  let response;
+  try {
+    response = await client.im.message.create({
+      params: { receive_id_type: receiveIdType },
+      data: {
+        receive_id: receiveId,
+        content,
+        msg_type: "interactive",
+      },
+    });
+  } catch (err) {
+    rethrowWithFeishuErrorDetail(err, "Feishu card send failed");
+  }
   assertFeishuMessageApiSuccess(response, "Feishu card send failed");
   return {
     ...toFeishuSendResult(response, receiveId),
@@ -415,10 +445,15 @@ export async function updateCardFeishu(params: {
   const client = createFeishuClient(account);
   const content = JSON.stringify(normalizeCardMentionTags(card));
 
-  const response = await client.im.message.patch({
-    path: { message_id: messageId },
-    data: { content },
-  });
+  let response;
+  try {
+    response = await client.im.message.patch({
+      path: { message_id: messageId },
+      data: { content },
+    });
+  } catch (err) {
+    rethrowWithFeishuErrorDetail(err, "Feishu card update failed");
+  }
 
   if (response.code !== 0) {
     throw new Error(`Feishu card update failed: ${response.msg || `code ${response.code}`}`);
@@ -501,13 +536,18 @@ export async function editMessageFeishu(params: {
 
   const { content, msgType } = buildFeishuPostMessagePayload({ messageText });
 
-  const response = await client.im.message.update({
-    path: { message_id: messageId },
-    data: {
-      msg_type: msgType,
-      content,
-    },
-  });
+  let response;
+  try {
+    response = await client.im.message.update({
+      path: { message_id: messageId },
+      data: {
+        msg_type: msgType,
+        content,
+      },
+    });
+  } catch (err) {
+    rethrowWithFeishuErrorDetail(err, "Feishu message edit failed");
+  }
 
   if (response.code !== 0) {
     throw new Error(`Feishu message edit failed: ${response.msg || `code ${response.code}`}`);
