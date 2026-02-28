@@ -618,9 +618,11 @@ class NodeRuntime(context: Context) {
     if (!active) {
       // User left voice screen — stop mic and TTS
       talkMode.ttsOnAllResponses = false
-      talkMode.stopTts()
-      micCapture.setMicEnabled(false)
-      prefs.setTalkEnabled(false)
+      if (talkMode.isSpeaking.value || prefs.talkEnabled.value) {
+        talkMode.stopTts()
+        micCapture.setMicEnabled(false)
+        prefs.setTalkEnabled(false)
+      }
     }
     // Don't re-enable on active=true; mic toggle drives that
   }

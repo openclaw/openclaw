@@ -244,6 +244,7 @@ private const val defaultTalkProvider = "elevenlabs"
   // Streaming TTS: active session keyed by runId
   private var streamingTts: ElevenLabsStreamingTts? = null
   private var ttsSessionToken = 0  // Incremented on each new session; guards stale finishStreamingTts coroutines
+  @Volatile private var activeTtsRunId: String? = null  // Set on each new agent run; cleared by stopTts to block stale deltas
 
   /** Handle agent stream events — only speak assistant text, not tool calls or thinking. */
   private fun handleAgentStreamEvent(payloadJson: String?) {
@@ -254,9 +255,14 @@ private const val defaultTalkProvider = "elevenlabs"
 
     val stream = payload["stream"]?.asStringOrNull() ?: return
     if (stream != "assistant") return  // Only speak assistant text
+    val runId = payload["runId"]?.asStringOrNull()
     val data = payload["data"]?.asObjectOrNull() ?: return
     val text = data["text"]?.asStringOrNull()?.trim() ?: return
     if (text.isEmpty()) return
+
+    // Set active run on first delta; block deltas from old runs (post barge-in)
+    if (activeTtsRunId == null) activeTtsRunId = runId
+    if (runId != null && runId != activeTtsRunId) return  // Stale run — user already barged in
 
     // Start streaming session if not already active
     if (streamingTts == null) {
@@ -1155,6 +1161,7 @@ private const val defaultTalkProvider = "elevenlabs"
 
   /** Stop any active TTS immediately — call when user taps mic to barge in. */
   fun stopTts() {
+    activeTtsRunId = null  // Clear so stale agent deltas are ignored post barge-in
     streamingTts?.stop()
     streamingTts = null
     abandonAudioFocus()
