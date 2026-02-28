@@ -14,12 +14,7 @@ export function makeProxyFetch(proxyUrl: string): typeof fetch {
   return fetcher;
 }
 
-const ENV_PROXY_KEYS = [
-  "HTTPS_PROXY",
-  "HTTP_PROXY",
-  "https_proxy",
-  "http_proxy",
-] as const;
+const ENV_PROXY_KEYS = ["HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy"] as const;
 
 function getEnvProxy(): string | undefined {
   for (const key of ENV_PROXY_KEYS) {
