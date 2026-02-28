@@ -146,6 +146,8 @@ class TalkModeManager(
   private var pendingRunId: String? = null
   private var pendingFinal: CompletableDeferred<Boolean>? = null
   private var chatSubscribedSessionKey: String? = null
+  private var configLoaded = false
+  @Volatile private var playbackEnabled = true
 
   private var player: MediaPlayer? = null
   private var streamingSource: StreamingMediaDataSource? = null
@@ -194,8 +196,21 @@ class TalkModeManager(
     }
   }
 
-  suspend fun speakAssistantReply(text: String) {
+  fun setPlaybackEnabled(enabled: Boolean) {
+    playbackEnabled = enabled
+    if (!enabled) {
+      stopSpeaking()
+    }
+  }
+
+  suspend fun refreshConfig() {
     reloadConfig()
+  }
+
+  suspend fun speakAssistantReply(text: String) {
+    if (!playbackEnabled) return
+    ensureConfigLoaded()
+    if (!playbackEnabled) return
     playAssistant(text)
   }
 
@@ -347,7 +362,7 @@ class TalkModeManager(
     lastTranscript = ""
     lastHeardAtMs = null
 
-    reloadConfig()
+    ensureConfigLoaded()
     val prompt = buildPrompt(transcript)
     if (!isConnected()) {
       _statusText.value = "Gateway not connected"
@@ -855,6 +870,12 @@ class TalkModeManager(
     return true
   }
 
+  private suspend fun ensureConfigLoaded() {
+    if (!configLoaded) {
+      reloadConfig()
+    }
+  }
+
   private suspend fun reloadConfig() {
     val envVoice = System.getenv("ELEVENLABS_VOICE_ID")?.trim()
     val sagVoice = System.getenv("SAG_VOICE_ID")?.trim()
@@ -907,6 +928,7 @@ class TalkModeManager(
       } else if (selection?.normalizedPayload == true) {
         Log.d(tag, "talk config provider=elevenlabs")
       }
+      configLoaded = true
     } catch (_: Throwable) {
       defaultVoiceId = envVoice?.takeIf { it.isNotEmpty() } ?: sagVoice?.takeIf { it.isNotEmpty() }
       defaultModelId = defaultModelIdFallback
@@ -914,6 +936,7 @@ class TalkModeManager(
       apiKey = envKey?.takeIf { it.isNotEmpty() }
       voiceAliases = emptyMap()
       defaultOutputFormat = defaultOutputFormatFallback
+      configLoaded = true
     }
   }
 
