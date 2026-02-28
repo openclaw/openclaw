@@ -336,6 +336,7 @@ private const val defaultTalkProvider = "elevenlabs"
     val token = ttsSessionToken
     streamingTts = null  // Clear immediately so a new session isn't clobbered
     activeTtsRunId = null  // Allow next response to start fresh
+    Log.d(tag, "finishStreamingTts: draining, token=$token")
     tts.finish()
     scope.launch {
       delay(500)
@@ -377,6 +378,7 @@ private const val defaultTalkProvider = "elevenlabs"
     val pending = pendingRunId
     if (pending == null || runId != pending) {
       if (ttsOnAllResponses && state in listOf("final", "error", "aborted")) {
+        activeTtsRunId = null  // Allow next response to start fresh
         if (streamingTts != null) {
           finishStreamingTts()
         } else if (state == "final") {
