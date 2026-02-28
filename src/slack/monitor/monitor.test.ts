@@ -231,6 +231,47 @@ describe("isChannelAllowed with groupPolicy and channelsConfig", () => {
   });
 });
 
+describe("isChannelAllowed reflects ctx.channelsConfig mutations", () => {
+  it("picks up channelsConfig updates made after context creation", () => {
+    // Simulates the provider.ts pattern: create ctx, then later set
+    // ctx.channelsConfig = nextChannels after async allowlist resolution.
+    const ctx = createSlackMonitorContext({
+      ...baseParams(),
+      groupPolicy: "allowlist",
+      channelsConfig: { C_ORIGINAL: { requireMention: true } },
+    });
+
+    // Before mutation: C_ORIGINAL is allowed, C_RESOLVED is not
+    expect(ctx.isChannelAllowed({ channelId: "C_ORIGINAL", channelType: "channel" })).toBe(true);
+    expect(ctx.isChannelAllowed({ channelId: "C_RESOLVED", channelType: "channel" })).toBe(false);
+
+    // Mutate channelsConfig like provider.ts does after resolution
+    ctx.channelsConfig = {
+      ...ctx.channelsConfig,
+      C_RESOLVED: { requireMention: false },
+    };
+
+    // After mutation: both should now be allowed
+    expect(ctx.isChannelAllowed({ channelId: "C_ORIGINAL", channelType: "channel" })).toBe(true);
+    expect(ctx.isChannelAllowed({ channelId: "C_RESOLVED", channelType: "channel" })).toBe(true);
+  });
+
+  it("handles channelsConfig set from undefined to a value", () => {
+    const ctx = createSlackMonitorContext({
+      ...baseParams(),
+      groupPolicy: "allowlist",
+      channelsConfig: undefined,
+    });
+
+    // No allowlist configured — allowlist policy with no entries blocks all rooms
+    expect(ctx.isChannelAllowed({ channelId: "C_ANY", channelType: "channel" })).toBe(false);
+
+    // After async resolution sets channelsConfig
+    ctx.channelsConfig = { C_ANY: { requireMention: true } };
+    expect(ctx.isChannelAllowed({ channelId: "C_ANY", channelType: "channel" })).toBe(true);
+  });
+});
+
 describe("resolveSlackThreadStarter cache", () => {
   afterEach(() => {
     resetSlackThreadStarterCacheForTest();

@@ -290,77 +290,6 @@ export function createSlackMonitorContext(params: {
     }
   };
 
-  const isChannelAllowed = (p: {
-    channelId?: string;
-    channelName?: string;
-    channelType?: SlackMessageEvent["channel_type"];
-  }) => {
-    const channelType = normalizeSlackChannelType(p.channelType, p.channelId);
-    const isDirectMessage = channelType === "im";
-    const isGroupDm = channelType === "mpim";
-    const isRoom = channelType === "channel" || channelType === "group";
-
-    if (isDirectMessage && !params.dmEnabled) {
-      return false;
-    }
-    if (isGroupDm && !params.groupDmEnabled) {
-      return false;
-    }
-
-    if (isGroupDm && groupDmChannels.length > 0) {
-      const allowList = normalizeAllowListLower(groupDmChannels);
-      const candidates = [
-        p.channelId,
-        p.channelName ? `#${p.channelName}` : undefined,
-        p.channelName,
-        p.channelName ? normalizeSlackSlug(p.channelName) : undefined,
-      ]
-        .filter((value): value is string => Boolean(value))
-        .map((value) => value.toLowerCase());
-      const permitted =
-        allowList.includes("*") || candidates.some((candidate) => allowList.includes(candidate));
-      if (!permitted) {
-        return false;
-      }
-    }
-
-    if (isRoom && p.channelId) {
-      const channelConfig = resolveSlackChannelConfig({
-        channelId: p.channelId,
-        channelName: p.channelName,
-        channels: params.channelsConfig,
-        defaultRequireMention,
-      });
-      const channelMatchMeta = formatAllowlistMatchMeta(channelConfig);
-      const channelAllowed = channelConfig?.allowed !== false;
-      const channelAllowlistConfigured =
-        Boolean(params.channelsConfig) && Object.keys(params.channelsConfig ?? {}).length > 0;
-      if (
-        !isSlackChannelAllowedByPolicy({
-          groupPolicy: params.groupPolicy,
-          channelAllowlistConfigured,
-          channelAllowed,
-        })
-      ) {
-        logVerbose(
-          `slack: drop channel ${p.channelId} (groupPolicy=${params.groupPolicy}, ${channelMatchMeta})`,
-        );
-        return false;
-      }
-      // When groupPolicy is "open", only block channels that are EXPLICITLY denied
-      // (i.e., have a matching config entry with allow:false). Channels not in the
-      // config (matchSource undefined) should be allowed under open policy.
-      const hasExplicitConfig = Boolean(channelConfig?.matchSource);
-      if (!channelAllowed && (params.groupPolicy !== "open" || hasExplicitConfig)) {
-        logVerbose(`slack: drop channel ${p.channelId} (${channelMatchMeta})`);
-        return false;
-      }
-      logVerbose(`slack: allow channel ${p.channelId} (${channelMatchMeta})`);
-    }
-
-    return true;
-  };
-
   const shouldDropMismatchedSlackEvent = (body: unknown) => {
     if (!body || typeof body !== "object") {
       return false;
@@ -382,7 +311,7 @@ export function createSlackMonitorContext(params: {
     return false;
   };
 
-  return {
+  const ctx: SlackMonitorContext = {
     cfg: params.cfg,
     accountId: params.accountId,
     botToken: params.botToken,
@@ -419,9 +348,81 @@ export function createSlackMonitorContext(params: {
     markMessageSeen,
     shouldDropMismatchedSlackEvent,
     resolveSlackSystemEventSessionKey,
-    isChannelAllowed,
+    // Assigned below so the closure captures `ctx` (not `params`) for channelsConfig.
+    // This lets provider.ts update ctx.channelsConfig after async allowlist resolution
+    // and have all isChannelAllowed callers see the latest value.
+    isChannelAllowed: null!,
     resolveChannelName,
     resolveUserName,
     setSlackThreadStatus,
   };
+
+  ctx.isChannelAllowed = (p) => {
+    const channelType = normalizeSlackChannelType(p.channelType, p.channelId);
+    const isDirectMessage = channelType === "im";
+    const isGroupDm = channelType === "mpim";
+    const isRoom = channelType === "channel" || channelType === "group";
+
+    if (isDirectMessage && !params.dmEnabled) {
+      return false;
+    }
+    if (isGroupDm && !params.groupDmEnabled) {
+      return false;
+    }
+
+    if (isGroupDm && groupDmChannels.length > 0) {
+      const allowList = normalizeAllowListLower(groupDmChannels);
+      const candidates = [
+        p.channelId,
+        p.channelName ? `#${p.channelName}` : undefined,
+        p.channelName,
+        p.channelName ? normalizeSlackSlug(p.channelName) : undefined,
+      ]
+        .filter((value): value is string => Boolean(value))
+        .map((value) => value.toLowerCase());
+      const permitted =
+        allowList.includes("*") || candidates.some((candidate) => allowList.includes(candidate));
+      if (!permitted) {
+        return false;
+      }
+    }
+
+    if (isRoom && p.channelId) {
+      const channelConfig = resolveSlackChannelConfig({
+        channelId: p.channelId,
+        channelName: p.channelName,
+        channels: ctx.channelsConfig,
+        defaultRequireMention,
+      });
+      const channelMatchMeta = formatAllowlistMatchMeta(channelConfig);
+      const channelAllowed = channelConfig?.allowed !== false;
+      const channelAllowlistConfigured =
+        Boolean(ctx.channelsConfig) && Object.keys(ctx.channelsConfig ?? {}).length > 0;
+      if (
+        !isSlackChannelAllowedByPolicy({
+          groupPolicy: params.groupPolicy,
+          channelAllowlistConfigured,
+          channelAllowed,
+        })
+      ) {
+        logVerbose(
+          `slack: drop channel ${p.channelId} (groupPolicy=${params.groupPolicy}, ${channelMatchMeta})`,
+        );
+        return false;
+      }
+      // When groupPolicy is "open", only block channels that are EXPLICITLY denied
+      // (i.e., have a matching config entry with allow:false). Channels not in the
+      // config (matchSource undefined) should be allowed under open policy.
+      const hasExplicitConfig = Boolean(channelConfig?.matchSource);
+      if (!channelAllowed && (params.groupPolicy !== "open" || hasExplicitConfig)) {
+        logVerbose(`slack: drop channel ${p.channelId} (${channelMatchMeta})`);
+        return false;
+      }
+      logVerbose(`slack: allow channel ${p.channelId} (${channelMatchMeta})`);
+    }
+
+    return true;
+  };
+
+  return ctx;
 }
