@@ -485,7 +485,7 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       }
 
       enqueueSystemEvent(summary, { sessionKey, contextKey: `notification:${key}` });
-      requestHeartbeatNow({ reason: "notifications-event" });
+      requestHeartbeatNow({ reason: "notifications-event", sessionKey });
       return;
     }
     case "chat.subscribe": {

@@ -137,6 +137,9 @@ class DeviceNotificationListenerService : NotificationListenerService() {
     super.onNotificationPosted(sbn)
     val entry = sbn?.toEntry() ?: return
     DeviceNotificationStore.upsert(entry)
+    if (entry.packageName == packageName) {
+      return
+    }
     emitNotificationsChanged(
       buildJsonObject {
         put("change", JsonPrimitive("posted"))
@@ -162,6 +165,9 @@ class DeviceNotificationListenerService : NotificationListenerService() {
       return
     }
     DeviceNotificationStore.remove(key)
+    if (removed.packageName == packageName) {
+      return
+    }
     emitNotificationsChanged(
       buildJsonObject {
         put("change", JsonPrimitive("removed"))
