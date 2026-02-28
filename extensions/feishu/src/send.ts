@@ -96,6 +96,8 @@ export type SendFeishuMessageParams = {
   to: string;
   text: string;
   replyToMessageId?: string;
+  /** When true, reply creates a Feishu topic thread instead of an inline reply */
+  replyInThread?: boolean;
   /** Mention target users */
   mentions?: MentionTarget[];
   /** Account ID (optional, uses default if not specified) */
@@ -127,7 +129,7 @@ function buildFeishuPostMessagePayload(params: { messageText: string }): {
 export async function sendMessageFeishu(
   params: SendFeishuMessageParams,
 ): Promise<FeishuSendResult> {
-  const { cfg, to, text, replyToMessageId, mentions, accountId } = params;
+  const { cfg, to, text, replyToMessageId, replyInThread, mentions, accountId } = params;
   const { client, receiveId, receiveIdType } = resolveFeishuSendTarget({ cfg, to, accountId });
   const tableMode = getFeishuRuntime().channel.text.resolveMarkdownTableMode({
     cfg,
@@ -149,6 +151,7 @@ export async function sendMessageFeishu(
       data: {
         content,
         msg_type: msgType,
+        ...(replyInThread ? { reply_in_thread: true } : {}),
       },
     });
     assertFeishuMessageApiSuccess(response, "Feishu reply failed");
@@ -172,11 +175,13 @@ export type SendFeishuCardParams = {
   to: string;
   card: Record<string, unknown>;
   replyToMessageId?: string;
+  /** When true, reply creates a Feishu topic thread instead of an inline reply */
+  replyInThread?: boolean;
   accountId?: string;
 };
 
 export async function sendCardFeishu(params: SendFeishuCardParams): Promise<FeishuSendResult> {
-  const { cfg, to, card, replyToMessageId, accountId } = params;
+  const { cfg, to, card, replyToMessageId, replyInThread, accountId } = params;
   const { client, receiveId, receiveIdType } = resolveFeishuSendTarget({ cfg, to, accountId });
   const content = JSON.stringify(card);
 
@@ -186,6 +191,7 @@ export async function sendCardFeishu(params: SendFeishuCardParams): Promise<Feis
       data: {
         content,
         msg_type: "interactive",
+        ...(replyInThread ? { reply_in_thread: true } : {}),
       },
     });
     assertFeishuMessageApiSuccess(response, "Feishu card reply failed");
@@ -260,18 +266,19 @@ export async function sendMarkdownCardFeishu(params: {
   to: string;
   text: string;
   replyToMessageId?: string;
+  /** When true, reply creates a Feishu topic thread instead of an inline reply */
+  replyInThread?: boolean;
   /** Mention target users */
   mentions?: MentionTarget[];
   accountId?: string;
 }): Promise<FeishuSendResult> {
-  const { cfg, to, text, replyToMessageId, mentions, accountId } = params;
-  // Build message content (with @mention support)
+  const { cfg, to, text, replyToMessageId, replyInThread, mentions, accountId } = params;
   let cardText = text;
   if (mentions && mentions.length > 0) {
     cardText = buildMentionedCardContent(mentions, text);
   }
   const card = buildMarkdownCard(cardText);
-  return sendCardFeishu({ cfg, to, card, replyToMessageId, accountId });
+  return sendCardFeishu({ cfg, to, card, replyToMessageId, replyInThread, accountId });
 }
 
 /**
