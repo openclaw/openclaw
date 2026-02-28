@@ -161,17 +161,32 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
 
     logger.attachTransport((logObj: LogObj) => {
       try {
-        const level = (logObj.level as LogLevel) ?? "info";
-        const subsystem = typeof logObj.subsystem === "string" ? logObj.subsystem : "openclaw";
-        const message = typeof logObj.message === "string" ? logObj.message : "";
-        const meta = logObj.meta as Record<string, unknown> | undefined;
+        const meta = logObj._meta as Record<string, unknown> | undefined;
+        const level = (meta?.logLevelName as LogLevel) ?? "info";
+        const nameMeta =
+          typeof meta?.name === "string" ? (JSON.parse(meta.name) as Record<string, unknown>) : {};
+        const subsystem = typeof nameMeta.subsystem === "string" ? nameMeta.subsystem : "openclaw";
+
+        // Extract message from numeric keys like parse-log-line.ts does
+        const parts: string[] = [];
+        for (const key of Object.keys(logObj)) {
+          if (!/^\d+$/.test(key)) {
+            continue;
+          }
+          const item = logObj[key];
+          if (typeof item === "string") {
+            parts.push(item);
+          } else if (item != null) {
+            parts.push(JSON.stringify(item));
+          }
+        }
+        const message = parts.join(" ");
 
         const formattedLine = formatConsoleLine({
           level,
           subsystem,
           message,
           style: "compact",
-          meta,
         });
         const payload = `${formattedLine}\n`;
         const payloadBytes = Buffer.byteLength(payload, "utf8");
