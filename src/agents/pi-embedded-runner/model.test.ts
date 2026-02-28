@@ -171,6 +171,38 @@ describe("resolveModel", () => {
     expect(result.model?.id).toBe("missing-model");
   });
 
+  it("resolves qwen-portal/coder-model via built-in provider fallback when registry is unavailable", () => {
+    const result = resolveModel("qwen-portal", "coder-model", "/tmp/agent");
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "qwen-portal",
+      id: "coder-model",
+      name: "Qwen Coder",
+      api: "openai-completions",
+      baseUrl: "https://portal.qwen.ai/v1",
+      input: ["text"],
+      contextWindow: 128000,
+      maxTokens: 8192,
+    });
+  });
+
+  it("resolves qwen-portal/vision-model via built-in provider fallback when registry is unavailable", () => {
+    const result = resolveModel("qwen-portal", "vision-model", "/tmp/agent");
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "qwen-portal",
+      id: "vision-model",
+      name: "Qwen Vision",
+      api: "openai-completions",
+      baseUrl: "https://portal.qwen.ai/v1",
+      input: ["text", "image"],
+      contextWindow: 128000,
+      maxTokens: 8192,
+    });
+  });
+
   it("prefers matching configured model metadata for fallback token limits", () => {
     const cfg = {
       models: {

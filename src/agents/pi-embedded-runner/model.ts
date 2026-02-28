@@ -39,6 +39,66 @@ export function buildInlineProviderModels(
   });
 }
 
+type BuiltInFallbackModel = {
+  provider: string;
+  modelId: string;
+  name: string;
+  api: ModelDefinitionConfig["api"];
+  baseUrl: string;
+  reasoning: boolean;
+  input: Array<"text" | "image">;
+  contextWindow: number;
+  maxTokens: number;
+};
+
+const BUILT_IN_PROVIDER_FALLBACK_MODELS: BuiltInFallbackModel[] = [
+  {
+    provider: "qwen-portal",
+    modelId: "coder-model",
+    name: "Qwen Coder",
+    api: "openai-completions",
+    baseUrl: "https://portal.qwen.ai/v1",
+    reasoning: false,
+    input: ["text"],
+    contextWindow: 128000,
+    maxTokens: 8192,
+  },
+  {
+    provider: "qwen-portal",
+    modelId: "vision-model",
+    name: "Qwen Vision",
+    api: "openai-completions",
+    baseUrl: "https://portal.qwen.ai/v1",
+    reasoning: false,
+    input: ["text", "image"],
+    contextWindow: 128000,
+    maxTokens: 8192,
+  },
+];
+
+function resolveBuiltInProviderFallback(provider: string, modelId: string): Model<Api> | null {
+  const normalizedProvider = normalizeProviderId(provider);
+  const definition = BUILT_IN_PROVIDER_FALLBACK_MODELS.find(
+    (entry) =>
+      normalizeProviderId(entry.provider) === normalizedProvider && entry.modelId === modelId,
+  );
+  if (!definition) {
+    return null;
+  }
+  return normalizeModelCompat({
+    id: definition.modelId,
+    name: definition.name,
+    api: definition.api,
+    provider,
+    baseUrl: definition.baseUrl,
+    reasoning: definition.reasoning,
+    input: definition.input,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: definition.contextWindow,
+    maxTokens: definition.maxTokens,
+  } as Model<Api>);
+}
+
 export function resolveModel(
   provider: string,
   modelId: string,
@@ -94,6 +154,16 @@ export function resolveModel(
       } as Model<Api>);
       return { model: fallbackModel, authStorage, modelRegistry };
     }
+
+    const builtInProviderFallback = resolveBuiltInProviderFallback(provider, modelId);
+    if (builtInProviderFallback) {
+      return {
+        model: builtInProviderFallback,
+        authStorage,
+        modelRegistry,
+      };
+    }
+
     const providerCfg = providers[provider];
     if (providerCfg || modelId.startsWith("mock-")) {
       const configuredModel = providerCfg?.models?.find((candidate) => candidate.id === modelId);
