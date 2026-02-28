@@ -1,34 +1,152 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MAX_RECORDING_DURATION_MS } from "./nodes-tool.js";
 
-/** Mirror the clamping logic used by screen_record / camera_clip handlers. */
-function clampDuration(raw: number): number {
-  return Math.max(1_000, Math.min(raw, MAX_RECORDING_DURATION_MS));
+// ── mocks (hoisted) ────────────────────────────────────────────────
+const gatewayMocks = vi.hoisted(() => ({
+  callGatewayTool: vi.fn(),
+  readGatewayCallOptions: vi.fn(() => ({})),
+}));
+vi.mock("./gateway.js", () => ({
+  callGatewayTool: (...args: unknown[]) => gatewayMocks.callGatewayTool(...args),
+  readGatewayCallOptions: (...args: unknown[]) => gatewayMocks.readGatewayCallOptions(...args),
+}));
+
+const nodeMocks = vi.hoisted(() => ({
+  resolveNodeId: vi.fn(async () => "node-1"),
+}));
+vi.mock("./nodes-utils.js", async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, resolveNodeId: (...args: unknown[]) => nodeMocks.resolveNodeId(...args) };
+});
+
+const screenMocks = vi.hoisted(() => ({
+  writeScreenRecordToFile: vi.fn(async () => ({ path: "/tmp/screen.mp4" })),
+  parseScreenRecordPayload: vi.fn(() => ({
+    base64: "",
+    durationMs: 10_000,
+    fps: 10,
+    screenIndex: 0,
+    hasAudio: true,
+    format: "mp4",
+  })),
+  screenRecordTempPath: vi.fn(() => "/tmp/screen.mp4"),
+}));
+vi.mock("../../cli/nodes-screen.js", () => ({
+  parseScreenRecordPayload: (...args: unknown[]) => screenMocks.parseScreenRecordPayload(...args),
+  writeScreenRecordToFile: (...args: unknown[]) => screenMocks.writeScreenRecordToFile(...args),
+  screenRecordTempPath: (...args: unknown[]) => screenMocks.screenRecordTempPath(...args),
+}));
+
+const cameraMocks = vi.hoisted(() => ({
+  writeCameraClipPayloadToFile: vi.fn(async () => "/tmp/clip.mp4"),
+  parseCameraClipPayload: vi.fn(() => ({
+    base64: "",
+    durationMs: 3_000,
+    hasAudio: true,
+    format: "mp4",
+  })),
+}));
+vi.mock("../../cli/nodes-camera.js", async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    parseCameraClipPayload: (...args: unknown[]) => cameraMocks.parseCameraClipPayload(...args),
+    writeCameraClipPayloadToFile: (...args: unknown[]) =>
+      cameraMocks.writeCameraClipPayloadToFile(...args),
+  };
+});
+
+import { createNodesTool } from "./nodes-tool.js";
+
+// ── helpers ────────────────────────────────────────────────────────
+
+function makeTool() {
+  return createNodesTool({ agentSessionKey: "agent:test:main", config: {} as never });
 }
 
-describe("screen_record / camera_clip duration clamping", () => {
-  it("exports MAX_RECORDING_DURATION_MS as 5 minutes", () => {
+/** Extract the `durationMs` sent to the gateway `node.invoke` call. */
+function invokedDurationMs(): number {
+  // callGatewayTool is called as: callGatewayTool("node.invoke", opts, { ..., params: { durationMs, ... } })
+  const calls = gatewayMocks.callGatewayTool.mock.calls as unknown[][];
+  const invokeCall = calls.find((c) => c[0] === "node.invoke");
+  expect(invokeCall).toBeDefined();
+  const body = invokeCall![2] as { params: { durationMs: number } };
+  return body.params.durationMs;
+}
+
+// ── tests ──────────────────────────────────────────────────────────
+
+beforeEach(() => {
+  gatewayMocks.callGatewayTool.mockReset();
+  nodeMocks.resolveNodeId.mockReset().mockResolvedValue("node-1");
+  screenMocks.writeScreenRecordToFile.mockReset().mockResolvedValue({ path: "/tmp/screen.mp4" });
+  screenMocks.parseScreenRecordPayload.mockReset().mockReturnValue({
+    base64: "",
+    durationMs: 10_000,
+    fps: 10,
+    screenIndex: 0,
+    hasAudio: true,
+    format: "mp4",
+  });
+  cameraMocks.writeCameraClipPayloadToFile.mockReset().mockResolvedValue("/tmp/clip.mp4");
+  cameraMocks.parseCameraClipPayload.mockReset().mockReturnValue({
+    base64: "",
+    durationMs: 3_000,
+    hasAudio: true,
+    format: "mp4",
+  });
+  // Default: node.invoke returns a payload
+  gatewayMocks.callGatewayTool.mockResolvedValue({ payload: {} });
+});
+
+describe("MAX_RECORDING_DURATION_MS constant", () => {
+  it("equals 5 minutes", () => {
     expect(MAX_RECORDING_DURATION_MS).toBe(300_000);
   });
+});
 
-  it("clamps excessively large durations to the maximum", () => {
-    expect(clampDuration(86_400_000)).toBe(MAX_RECORDING_DURATION_MS); // 24 hours
-    expect(clampDuration(3_600_000)).toBe(MAX_RECORDING_DURATION_MS); // 1 hour
-    expect(clampDuration(600_000)).toBe(MAX_RECORDING_DURATION_MS); // 10 minutes
+describe("screen_record duration clamping (production path)", () => {
+  it("clamps excessively large durationMs to MAX_RECORDING_DURATION_MS", async () => {
+    const tool = makeTool();
+    await tool.execute("c1", { action: "screen_record", node: "my-node", durationMs: 86_400_000 });
+    expect(invokedDurationMs()).toBe(MAX_RECORDING_DURATION_MS);
   });
 
-  it("clamps sub-second values to the 1s floor", () => {
-    expect(clampDuration(0)).toBe(1_000);
-    expect(clampDuration(-1)).toBe(1_000);
-    expect(clampDuration(500)).toBe(1_000);
-    expect(clampDuration(999)).toBe(1_000);
+  it("clamps sub-second durationMs to 1 000 ms floor", async () => {
+    const tool = makeTool();
+    await tool.execute("c2", { action: "screen_record", node: "my-node", durationMs: 200 });
+    expect(invokedDurationMs()).toBe(1_000);
   });
 
-  it("passes through valid durations unchanged", () => {
-    expect(clampDuration(1_000)).toBe(1_000); // exactly 1s
-    expect(clampDuration(10_000)).toBe(10_000); // default screen_record
-    expect(clampDuration(3_000)).toBe(3_000); // default camera_clip
-    expect(clampDuration(60_000)).toBe(60_000); // 1 minute
-    expect(clampDuration(300_000)).toBe(300_000); // exactly max
+  it("passes through a valid durationMs unchanged", async () => {
+    const tool = makeTool();
+    await tool.execute("c3", { action: "screen_record", node: "my-node", durationMs: 60_000 });
+    expect(invokedDurationMs()).toBe(60_000);
+  });
+
+  it("clamps duration string that exceeds the max", async () => {
+    const tool = makeTool();
+    await tool.execute("c4", { action: "screen_record", node: "my-node", duration: "1h" });
+    expect(invokedDurationMs()).toBe(MAX_RECORDING_DURATION_MS);
+  });
+});
+
+describe("camera_clip duration clamping (production path)", () => {
+  it("clamps excessively large durationMs to MAX_RECORDING_DURATION_MS", async () => {
+    const tool = makeTool();
+    await tool.execute("c5", { action: "camera_clip", node: "my-node", durationMs: 600_000 });
+    expect(invokedDurationMs()).toBe(MAX_RECORDING_DURATION_MS);
+  });
+
+  it("clamps sub-second durationMs to 1 000 ms floor", async () => {
+    const tool = makeTool();
+    await tool.execute("c6", { action: "camera_clip", node: "my-node", durationMs: 0 });
+    expect(invokedDurationMs()).toBe(1_000);
+  });
+
+  it("passes through a valid durationMs unchanged", async () => {
+    const tool = makeTool();
+    await tool.execute("c7", { action: "camera_clip", node: "my-node", durationMs: 30_000 });
+    expect(invokedDurationMs()).toBe(30_000);
   });
 });
