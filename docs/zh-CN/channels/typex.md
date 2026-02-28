@@ -55,7 +55,7 @@ openclaw channels add
 ## 能力
 
 - 私聊：支持
-- 媒体发送：支持
+- 媒体发送：暂不支持
 - Reactions：不支持
 - Threads：不支持
 - Polls：不支持
@@ -63,5 +63,5 @@ openclaw channels add
 ## 说明
 
 - 入站消息通过 TypeX API 轮询获取。
-- 偏移量 `pos` 保存在 `channels.typex.accounts.<accountId>.pos`。
+- 偏移量 `pos` 保存在 state 文件（`~/.openclaw/typex/`）中。
 - 默认目标提示为 `chat_id`。

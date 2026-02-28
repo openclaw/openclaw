@@ -14,14 +14,12 @@ export async function sendMessageTypeX(
   content: string | { text?: string },
   opts: TypeXSendOpts = {},
 ) {
-  let msgType = opts.msgType || TypeXMessageEnum.text;
+  const msgType = opts.msgType || TypeXMessageEnum.text;
   let finalContent: string | object = content;
 
-  // Send the main message
-  try {
-    const res = await client.sendMessage(finalContent, msgType);
-    return res;
-  } catch (err) {
-    throw err;
+  if (opts.mediaUrl) {
+    throw new Error("TypeX media sending is not supported yet.");
   }
+
+  return await client.sendMessage(finalContent, msgType);
 }

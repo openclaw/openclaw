@@ -22,7 +22,7 @@ export const typexPlugin = {
   onboarding: typexOnboardingAdapter,
   capabilities: {
     chatTypes: ["direct"],
-    media: true,
+    media: false,
     reactions: false,
     threads: false,
     polls: false,
@@ -63,6 +63,10 @@ export const typexPlugin = {
       };
     },
     defaultAccountId: (cfg) => {
+      const configuredDefault = cfg.channels?.["typex"]?.defaultAccount?.trim();
+      if (configuredDefault) {
+        return configuredDefault;
+      }
       const accs = cfg.channels?.["typex"]?.accounts || {};
       const first = Object.keys(accs)[0];
       return first || DEFAULT_ACCOUNT_ID;

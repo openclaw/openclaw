@@ -57,7 +57,7 @@ openclaw channels add
 ## Capabilities
 
 - Direct messages: supported
-- Media send: supported
+- Media send: not supported yet
 - Reactions: not supported
 - Threads: not supported
 - Polls: not supported
@@ -65,5 +65,5 @@ openclaw channels add
 ## Notes
 
 - Inbound messages are polled from TypeX API.
-- Message offset (`pos`) is stored in `channels.typex.accounts.<accountId>.pos`.
+- Message offset (`pos`) is stored in state files under `~/.openclaw/typex/`.
 - Default target hint is `chat_id`.

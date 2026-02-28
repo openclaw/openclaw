@@ -24,7 +24,7 @@ export const typexOutbound: ChannelOutboundAdapter = {
   sendText: async ({ to, text, accountId, cfg }: any) => {
     const token = resolveToken(cfg, accountId);
     const client = getTypeXClient(accountId ?? undefined, { token, skipConfigCheck: true });
-    const result = await sendMessageTypeX(client, { text });
+    const result = await sendMessageTypeX(client, text ?? "");
     return {
       channel: "typex",
       messageId: result?.message_id || "unknown",
@@ -33,9 +33,12 @@ export const typexOutbound: ChannelOutboundAdapter = {
   },
 
   sendMedia: async ({ to, text, mediaUrl, accountId, cfg }: any) => {
+    if (mediaUrl) {
+      throw new Error("TypeX media sending is not supported yet.");
+    }
     const token = resolveToken(cfg, accountId);
     const client = getTypeXClient(accountId ?? undefined, { token, skipConfigCheck: true });
-    const result = await sendMessageTypeX(client, { text: text || "" }, { mediaUrl });
+    const result = await sendMessageTypeX(client, text ?? "");
     return {
       channel: "typex",
       messageId: result?.message_id || "unknown",
