@@ -36,6 +36,8 @@ function getEnvProxy(): string | undefined {
  */
 export function makeEnvProxyFetch(): typeof fetch | undefined {
   const envProxy = getEnvProxy();
-  if (!envProxy) return undefined;
+  if (!envProxy) {
+    return undefined;
+  }
   return makeProxyFetch(envProxy);
 }
