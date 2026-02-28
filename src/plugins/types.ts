@@ -486,6 +486,8 @@ export type PluginHookMessageSentEvent = {
   to: string;
   content: string;
   success: boolean;
+  messageId?: string;
+  metadata?: Record<string, unknown>;
   error?: string;
 };
 
