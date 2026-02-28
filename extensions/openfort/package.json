@@ -5,7 +5,7 @@
   "type": "module",
   "main": "index.ts",
   "dependencies": {
-    "@openfort/openfort-node": "^0.9.1",
+    "@openfort/openfort-node": "^0.9.2",
     "@sinclair/typebox": "^0.34.29",
     "viem": "^2.21.54"
   },

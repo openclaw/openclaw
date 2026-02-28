@@ -422,8 +422,8 @@ importers:
   extensions/openfort:
     dependencies:
       '@openfort/openfort-node':
-        specifier: ^0.9.1
-        version: 0.9.1(typescript@5.9.3)
+        specifier: ^0.9.2
+        version: 0.9.2(typescript@5.9.3)
       '@sinclair/typebox':
         specifier: 0.34.48
         version: 0.34.48
@@ -1866,11 +1866,11 @@ packages:
     resolution: {integrity: sha512-da6KbdNCV5sr1/txD896V+6W0iamFWrvVl8cHkBSPT+YlvmT3DwXa4jxZnQc+gnuTEqSWbBeoSZYTayXH9wXcw==}
     engines: {node: '>= 20'}
 
-  '@openfort/openfort-node@0.9.1':
-    resolution: {integrity: sha512-Wm/HBCPy2sjmXUrnbgOY9d8xfRNTFcMuw0lo8GiNApw6fSOtKiyOCdBR9Gt4WlQzhmheus8d7HdAJTsqZWUAYg==}
+  '@openfort/openfort-node@0.9.2':
+    resolution: {integrity: sha512-yUQjQ6tOMzISMspP+K+hPZvBIsUOoGBEvnmROMjJgF0dKe2R40Uq1BlAnjnuVhb0qdTeDi+VffCdxrGuR4PhNg==}
 
-  '@openfort/shield-js@0.1.34':
-    resolution: {integrity: sha512-bJxQc0zk0VPxk7CWSE5NZp5Bv8nYnStwG5GKXrS2A6hxEt0vf4BMu9db4IUiHxmgGaFWrdAnbSCSZ5AU1gwyew==}
+  '@openfort/shield-js@0.1.35':
+    resolution: {integrity: sha512-S/v73xRnbgv5i47IRJ7cPWOnJ1bUTOJN+048Y8mJ+ya+iRJUXKTTqePaWApvfrVHHcKA+li8QGyDsRRDefLLVQ==}
 
   '@opentelemetry/api-logs@0.212.0':
     resolution: {integrity: sha512-TEEVrLbNROUkYY51sBJGk7lO/OLjuepch8+hmpM6ffMJQ2z/KVCjdHuCFX6fJj8OkJP2zckPjrJzQtXU3IAsFg==}
@@ -3103,8 +3103,8 @@ packages:
   '@types/node@24.10.14':
     resolution: {integrity: sha512-OowOUbD1lBCOFIPOZ8xnMIhgqA4sCutMiYOmPHL1PTLt5+y1XA+g2+yC9OOyz8p+deMZqPZLxfMjYIfrKsPeFg==}
 
-  '@types/node@25.3.1':
-    resolution: {integrity: sha512-hj9YIJimBCipHVfHKRMnvmHg+wfhKc0o4mTtXh9pKBjC8TLJzz0nzGmLi5UJsYAUgSvXFHgb0V2oY10DUFtImw==}
+  '@types/node@25.3.2':
+    resolution: {integrity: sha512-RpV6r/ij22zRRdyBPcxDeKAzH43phWVKEjL2iksqo1Vz3CuBUrgmPpPhALKiRfU7OMCmeeO9vECBMsV0hMTG8Q==}
 
   '@types/node@25.3.3':
     resolution: {integrity: sha512-DpzbrH7wIcBaJibpKo9nnSQL0MTRdnWttGyE5haGwK86xgMOkFLp7vEyfQPGLOJh5wNYiJ3V9PmUMDhV9u8kkQ==}
@@ -3461,11 +3461,11 @@ packages:
     peerDependencies:
       axios: 0.x || 1.x
 
-  axios@1.12.2:
-    resolution: {integrity: sha512-vMJzPewAlRyOgxV2dU0Cuz2O8zzzx9VYtbJOaBgXFeLc4IV/Eg50n4LowmehOOR61S8ZMpc2K5Sa7g6A4jfkUw==}
-
   axios@1.13.5:
     resolution: {integrity: sha512-cz4ur7Vb0xS4/KUN0tPWe44eqxrIu31me+fbang3ijiNscE129POzipJJA6zniq2C/Z6sJCjMimjS8Lc/GAs8Q==}
+
+  axios@1.13.6:
+    resolution: {integrity: sha512-ChTCHMouEe2kn713WHbQGcuYrr6fXTBiu460OTwWrWob16g1bXn4vtz07Ope7ewMozJAnEquLk5lWQWtBig9DQ==}
 
   b4a@1.8.0:
     resolution: {integrity: sha512-qRuSmNSkGQaHwNbM7J78Wwy+ghLEYF1zNrSeMxj4Kgw6y33O3mXcQ6Ie9fRvfU/YnxWkOchPXbaLb73TkIsfdg==}
@@ -8069,13 +8069,13 @@ snapshots:
       '@octokit/request-error': 7.1.0
       '@octokit/webhooks-methods': 6.0.0
 
-  '@openfort/openfort-node@0.9.1(typescript@5.9.3)':
+  '@openfort/openfort-node@0.9.2(typescript@5.9.3)':
     dependencies:
-      '@openfort/shield-js': 0.1.34
-      '@types/node': 25.3.1
+      '@openfort/shield-js': 0.1.35
+      '@types/node': 25.3.2
       '@types/node-fetch': 2.6.13
-      axios: 1.13.5
-      axios-retry: 4.5.0(axios@1.13.5)
+      axios: 1.13.6
+      axios-retry: 4.5.0(axios@1.13.6)
       bs58: 6.0.0
       jose: 5.10.0
       node-fetch: 2.7.0
@@ -8088,10 +8088,10 @@ snapshots:
       - typescript
       - utf-8-validate
 
-  '@openfort/shield-js@0.1.34':
+  '@openfort/shield-js@0.1.35':
     dependencies:
-      axios: 1.12.2
-      axios-retry: 4.5.0(axios@1.12.2)
+      axios: 1.13.6
+      axios-retry: 4.5.0(axios@1.13.6)
     transitivePeerDependencies:
       - debug
 
@@ -9358,7 +9358,7 @@ snapshots:
     dependencies:
       undici-types: 7.16.0
 
-  '@types/node@25.3.1':
+  '@types/node@25.3.2':
     dependencies:
       undici-types: 7.18.2
 
@@ -9787,17 +9787,12 @@ snapshots:
 
   aws4@1.13.2: {}
 
-  axios-retry@4.5.0(axios@1.12.2):
+  axios-retry@4.5.0(axios@1.13.6):
     dependencies:
-      axios: 1.12.2
+      axios: 1.13.6
       is-retry-allowed: 2.2.0
 
-  axios-retry@4.5.0(axios@1.13.5):
-    dependencies:
-      axios: 1.13.5
-      is-retry-allowed: 2.2.0
-
-  axios@1.12.2:
+  axios@1.13.5:
     dependencies:
       follow-redirects: 1.15.11
       form-data: 2.5.4
@@ -9805,7 +9800,7 @@ snapshots:
     transitivePeerDependencies:
       - debug
 
-  axios@1.13.5:
+  axios@1.13.6:
     dependencies:
       follow-redirects: 1.15.11
       form-data: 2.5.4
