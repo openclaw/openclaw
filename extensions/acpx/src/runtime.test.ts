@@ -23,6 +23,13 @@ const writeLog = (entry) => {
   if (!logPath) return;
   fs.appendFileSync(logPath, JSON.stringify(entry) + "\n");
 };
+const emitJson = (payload) => process.stdout.write(JSON.stringify(payload) + "\n");
+const emitUpdate = (sessionId, update) =>
+  emitJson({
+    jsonrpc: "2.0",
+    method: "session/update",
+    params: { sessionId, update },
+  });
 
 if (args.includes("--version")) {
   process.stdout.write("mock-acpx ${ACPX_PINNED_VERSION}\\n");
@@ -61,33 +68,33 @@ const setValue = command === "set" ? String(args[commandIndex + 2] || "") : "";
 
 if (command === "sessions" && args[commandIndex + 1] === "ensure") {
   writeLog({ kind: "ensure", agent, args, sessionName: ensureName });
-  process.stdout.write(JSON.stringify({
-    type: "session_ensured",
+  emitJson({
+    action: "session_ensured",
     acpxRecordId: "rec-" + ensureName,
     acpxSessionId: "sid-" + ensureName,
     agentSessionId: "inner-" + ensureName,
     name: ensureName,
     created: true,
-  }) + "\n");
+  });
   process.exit(0);
 }
 
 if (command === "cancel") {
   writeLog({ kind: "cancel", agent, args, sessionName: sessionFromOption });
-  process.stdout.write(JSON.stringify({
+  emitJson({
     acpxSessionId: "sid-" + sessionFromOption,
     cancelled: true,
-  }) + "\n");
+  });
   process.exit(0);
 }
 
 if (command === "set-mode") {
   writeLog({ kind: "set-mode", agent, args, sessionName: sessionFromOption, mode: setModeValue });
-  process.stdout.write(JSON.stringify({
-    type: "mode_set",
+  emitJson({
+    action: "mode_set",
     acpxSessionId: "sid-" + sessionFromOption,
     mode: setModeValue,
-  }) + "\n");
+  });
   process.exit(0);
 }
 
@@ -100,148 +107,167 @@ if (command === "set") {
     key: setKey,
     value: setValue,
   });
-  process.stdout.write(JSON.stringify({
-    type: "config_set",
+  emitJson({
+    action: "config_set",
     acpxSessionId: "sid-" + sessionFromOption,
     key: setKey,
     value: setValue,
-  }) + "\n");
+  });
   process.exit(0);
 }
 
 if (command === "status") {
   writeLog({ kind: "status", agent, args, sessionName: sessionFromOption });
-  process.stdout.write(JSON.stringify({
+  emitJson({
     acpxRecordId: sessionFromOption ? "rec-" + sessionFromOption : null,
     acpxSessionId: sessionFromOption ? "sid-" + sessionFromOption : null,
     agentSessionId: sessionFromOption ? "inner-" + sessionFromOption : null,
     status: sessionFromOption ? "alive" : "no-session",
     pid: 4242,
     uptime: 120,
-  }) + "\n");
+  });
   process.exit(0);
 }
 
 if (command === "sessions" && args[commandIndex + 1] === "close") {
   writeLog({ kind: "close", agent, args, sessionName: closeName });
-  process.stdout.write(JSON.stringify({
-    type: "session_closed",
+  emitJson({
+    action: "session_closed",
     acpxRecordId: "rec-" + closeName,
     acpxSessionId: "sid-" + closeName,
     name: closeName,
-  }) + "\n");
+  });
   process.exit(0);
 }
 
 if (command === "prompt") {
   const stdinText = fs.readFileSync(0, "utf8");
   writeLog({ kind: "prompt", agent, args, sessionName: sessionFromOption, stdinText });
-  const acpxSessionId = "sid-" + sessionFromOption;
+  const requestId = "req-1";
+
+  emitJson({
+    jsonrpc: "2.0",
+    id: 0,
+    method: "session/load",
+    params: {
+      sessionId: sessionFromOption,
+      cwd: process.cwd(),
+      mcpServers: [],
+    },
+  });
+  emitJson({
+    jsonrpc: "2.0",
+    id: 0,
+    error: {
+      code: -32002,
+      message: "Resource not found",
+    },
+  });
+
+  emitJson({
+    jsonrpc: "2.0",
+    id: requestId,
+    method: "session/prompt",
+    params: {
+      sessionId: sessionFromOption,
+      prompt: [
+        {
+          type: "text",
+          text: stdinText.trim(),
+        },
+      ],
+    },
+  });
 
   if (stdinText.includes("trigger-error")) {
-    process.stdout.write(JSON.stringify({
-      eventVersion: 1,
-      acpxSessionId,
-      requestId: "req-1",
-      seq: 0,
-      stream: "prompt",
-      type: "error",
-      code: "RUNTIME",
-      message: "mock failure",
-    }) + "\n");
+    emitJson({
+      jsonrpc: "2.0",
+      id: requestId,
+      error: {
+        code: -32000,
+        message: "mock failure",
+      },
+    });
     process.exit(1);
   }
 
   if (stdinText.includes("split-spacing")) {
-    process.stdout.write(JSON.stringify({
-      eventVersion: 1,
-      acpxSessionId,
-      requestId: "req-1",
-      seq: 0,
-      stream: "prompt",
-      type: "text",
-      content: "alpha",
-    }) + "\n");
-    process.stdout.write(JSON.stringify({
-      eventVersion: 1,
-      acpxSessionId,
-      requestId: "req-1",
-      seq: 1,
-      stream: "prompt",
-      type: "text",
-      content: " beta",
-    }) + "\n");
-    process.stdout.write(JSON.stringify({
-      eventVersion: 1,
-      acpxSessionId,
-      requestId: "req-1",
-      seq: 2,
-      stream: "prompt",
-      type: "text",
-      content: " gamma",
-    }) + "\n");
-    process.stdout.write(JSON.stringify({
-      eventVersion: 1,
-      acpxSessionId,
-      requestId: "req-1",
-      seq: 3,
-      stream: "prompt",
-      type: "done",
-      stopReason: "end_turn",
-    }) + "\n");
+    emitUpdate(sessionFromOption, {
+      sessionUpdate: "agent_message_chunk",
+      content: { type: "text", text: "alpha" },
+    });
+    emitUpdate(sessionFromOption, {
+      sessionUpdate: "agent_message_chunk",
+      content: { type: "text", text: " beta" },
+    });
+    emitUpdate(sessionFromOption, {
+      sessionUpdate: "agent_message_chunk",
+      content: { type: "text", text: " gamma" },
+    });
+    emitJson({
+      jsonrpc: "2.0",
+      id: requestId,
+      result: {
+        stopReason: "end_turn",
+      },
+    });
     process.exit(0);
   }
 
-  process.stdout.write(JSON.stringify({
-    eventVersion: 1,
-    acpxSessionId,
-    requestId: "req-1",
-    seq: 0,
-    stream: "prompt",
-    type: "thought",
-    content: "thinking",
-  }) + "\n");
-  process.stdout.write(JSON.stringify({
-    eventVersion: 1,
-    acpxSessionId,
-    requestId: "req-1",
-    seq: 1,
-    stream: "prompt",
-    type: "tool_call",
+  if (stdinText.includes("double-done")) {
+    emitUpdate(sessionFromOption, {
+      sessionUpdate: "agent_message_chunk",
+      content: { type: "text", text: "ok" },
+    });
+    emitJson({
+      jsonrpc: "2.0",
+      id: requestId,
+      result: {
+        stopReason: "end_turn",
+      },
+    });
+    emitJson({
+      jsonrpc: "2.0",
+      id: requestId,
+      result: {
+        stopReason: "end_turn",
+      },
+    });
+    process.exit(0);
+  }
+
+  emitUpdate(sessionFromOption, {
+    sessionUpdate: "agent_thought_chunk",
+    content: { type: "text", text: "thinking" },
+  });
+  emitUpdate(sessionFromOption, {
+    sessionUpdate: "tool_call",
+    toolCallId: "tool-1",
     title: "run-tests",
     status: "in_progress",
-  }) + "\n");
-  process.stdout.write(JSON.stringify({
-    eventVersion: 1,
-    acpxSessionId,
-    requestId: "req-1",
-    seq: 2,
-    stream: "prompt",
-    type: "text",
-    content: "echo:" + stdinText.trim(),
-  }) + "\n");
-  process.stdout.write(JSON.stringify({
-    eventVersion: 1,
-    acpxSessionId,
-    requestId: "req-1",
-    seq: 3,
-    stream: "prompt",
-    type: "done",
-    stopReason: "end_turn",
-  }) + "\n");
+    kind: "command",
+  });
+  emitUpdate(sessionFromOption, {
+    sessionUpdate: "agent_message_chunk",
+    content: { type: "text", text: "echo:" + stdinText.trim() },
+  });
+  emitJson({
+    jsonrpc: "2.0",
+    id: requestId,
+    result: {
+      stopReason: "end_turn",
+    },
+  });
   process.exit(0);
 }
 
 writeLog({ kind: "unknown", args });
-process.stdout.write(JSON.stringify({
-  eventVersion: 1,
-  acpxSessionId: "unknown",
-  seq: 0,
-  stream: "control",
-  type: "error",
-  code: "USAGE",
-  message: "unknown command",
-}) + "\n");
+emitJson({
+  error: {
+    code: "USAGE",
+    message: "unknown command",
+  },
+});
 process.exit(2);
 `;
 
@@ -444,6 +470,28 @@ describe("AcpxRuntime", () => {
     expect(textDeltas.join("")).toBe("alpha beta gamma");
   });
 
+  it("emits done once when ACP stream repeats stop reason responses", async () => {
+    const { runtime } = await createMockRuntime();
+    const handle = await runtime.ensureSession({
+      sessionKey: "agent:codex:acp:double-done",
+      agent: "codex",
+      mode: "persistent",
+    });
+
+    const events = [];
+    for await (const event of runtime.runTurn({
+      handle,
+      text: "double-done",
+      mode: "prompt",
+      requestId: "req-double-done",
+    })) {
+      events.push(event);
+    }
+
+    const doneCount = events.filter((event) => event.type === "done").length;
+    expect(doneCount).toBe(1);
+  });
+
   it("maps acpx error events into ACP runtime error events", async () => {
     const { runtime } = await createMockRuntime();
     const handle = await runtime.ensureSession({
@@ -465,7 +513,7 @@ describe("AcpxRuntime", () => {
     expect(events).toContainEqual({
       type: "error",
       message: "mock failure",
-      code: "RUNTIME",
+      code: "-32000",
       retryable: undefined,
     });
   });
