@@ -29,6 +29,7 @@ import {
   resolveFeishuAllowlistMatch,
   isFeishuGroupAllowed,
 } from "./policy.js";
+import { parsePostContent } from "./post.js";
 import { createFeishuReplyDispatcher } from "./reply-dispatcher.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { getMessageFeishu, sendMessageFeishu } from "./send.js";
@@ -192,15 +193,16 @@ export type FeishuBotAddedEvent = {
 };
 
 function parseMessageContent(content: string, messageType: string): string {
+  if (messageType === "post") {
+    // Extract text content from rich text post
+    const { textContent } = parsePostContent(content);
+    return textContent;
+  }
+
   try {
     const parsed = JSON.parse(content);
     if (messageType === "text") {
       return parsed.text || "";
-    }
-    if (messageType === "post") {
-      // Extract text content from rich text post
-      const { textContent } = parsePostContent(content);
-      return textContent;
     }
     if (messageType === "share_chat") {
       // Preserve available summary text for merged/forwarded chat messages.
@@ -395,82 +397,6 @@ function parseMediaKeys(
     }
   } catch {
     return {};
-  }
-}
-
-/**
- * Parse post (rich text) content and extract embedded image keys.
- * Post structure: { title?: string, content: [[{ tag, text?, image_key?, ... }]] }
- */
-function parsePostContent(content: string): {
-  textContent: string;
-  imageKeys: string[];
-  mentionedOpenIds: string[];
-} {
-  try {
-    const parsed = JSON.parse(content);
-    const title = parsed.title || "";
-    const contentBlocks = parsed.content || [];
-    let textContent = title ? `${title}\n\n` : "";
-    const imageKeys: string[] = [];
-    const mentionedOpenIds: string[] = [];
-
-    for (const paragraph of contentBlocks) {
-      if (Array.isArray(paragraph)) {
-        for (const element of paragraph) {
-          if (element.tag === "text") {
-            textContent += element.text || "";
-          } else if (element.tag === "a") {
-            // Link: show text or href
-            textContent += element.text || element.href || "";
-          } else if (element.tag === "at") {
-            // Mention: @username
-            textContent += `@${element.user_name || element.user_id || ""}`;
-            if (element.user_id) {
-              mentionedOpenIds.push(element.user_id);
-            }
-          } else if (element.tag === "img" && element.image_key) {
-            // Embedded image
-            const imageKey = normalizeFeishuExternalKey(element.image_key);
-            if (imageKey) {
-              imageKeys.push(imageKey);
-            }
-          } else if (element.tag === "code") {
-            // Inline code
-            const code =
-              typeof element.text === "string"
-                ? element.text
-                : typeof element.content === "string"
-                  ? element.content
-                  : "";
-            if (code) {
-              textContent += `\`${code}\``;
-            }
-          } else if (element.tag === "code_block" || element.tag === "pre") {
-            // Multiline code block
-            const lang = typeof element.language === "string" ? element.language : "";
-            const code =
-              typeof element.text === "string"
-                ? element.text
-                : typeof element.content === "string"
-                  ? element.content
-                  : "";
-            if (code) {
-              textContent += `\n\`\`\`${lang}\n${code}\n\`\`\`\n`;
-            }
-          }
-        }
-        textContent += "\n";
-      }
-    }
-
-    return {
-      textContent: textContent.trim() || "[Rich text message]",
-      imageKeys,
-      mentionedOpenIds,
-    };
-  } catch {
-    return { textContent: "[Rich text message]", imageKeys: [], mentionedOpenIds: [] };
   }
 }
 
