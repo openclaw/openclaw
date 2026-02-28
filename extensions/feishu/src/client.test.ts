@@ -77,6 +77,11 @@ describe("createFeishuWSClient proxy handling", () => {
   });
 
   it("uses proxy env precedence: https_proxy first, then HTTPS_PROXY, then http_proxy/HTTP_PROXY", () => {
+    // Skip on Windows: env vars are case-insensitive, so we can't test precedence between case variants
+    if (process.platform === "win32") {
+      return;
+    }
+
     process.env.https_proxy = "http://lower-https:8001";
     process.env.HTTPS_PROXY = "http://upper-https:8002";
     process.env.http_proxy = "http://lower-http:8003";
