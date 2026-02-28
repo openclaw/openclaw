@@ -120,3 +120,4 @@ dist/protocol.schema.json
 
 # Synthing
 **/.stfolder/
+apps/android/.kotlin/
