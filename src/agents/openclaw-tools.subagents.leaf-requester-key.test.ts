@@ -23,7 +23,7 @@ import { createSubagentsTool } from "./tools/subagents-tool.js";
  */
 
 const MAIN_KEY = "agent:main:main";
-const SDR_KEY = "agent:main:subagent:sdr";
+const WORKER_KEY = "agent:main:subagent:worker";
 const SIBLING_KEY = "agent:main:subagent:sibling";
 
 describe("subagents tool: leaf subagent uses own session key as requesterSessionKey", () => {
@@ -36,12 +36,12 @@ describe("subagents tool: leaf subagent uses own session key as requesterSession
       os.tmpdir(),
       `openclaw-subagents-leaf-${Date.now()}-${Math.random().toString(16).slice(2)}.json`,
     );
-    // SDR is a leaf subagent (depth 1 = default maxSpawnDepth 1), spawnedBy main
+    // worker is a leaf subagent (depth 1 = default maxSpawnDepth 1), spawnedBy main
     fs.writeFileSync(
       storePath,
       JSON.stringify({
-        [SDR_KEY]: {
-          sessionId: "sdr-session",
+        [WORKER_KEY]: {
+          sessionId: "worker-session",
           updatedAt: Date.now(),
           spawnedBy: MAIN_KEY,
         },
@@ -58,20 +58,20 @@ describe("subagents tool: leaf subagent uses own session key as requesterSession
   });
 
   it("list: requesterSessionKey is the leaf's own key, not its parent's", async () => {
-    const tool = createSubagentsTool({ agentSessionKey: SDR_KEY });
+    const tool = createSubagentsTool({ agentSessionKey: WORKER_KEY });
     const result = await tool.execute("call-list", { action: "list" });
 
     expect(result.details).toMatchObject({
       status: "ok",
-      // Must be SDR's own key — NOT MAIN_KEY via spawnedBy
-      requesterSessionKey: SDR_KEY,
-      callerSessionKey: SDR_KEY,
+      // Must be worker's own key — NOT MAIN_KEY via spawnedBy
+      requesterSessionKey: WORKER_KEY,
+      callerSessionKey: WORKER_KEY,
       callerIsSubagent: true,
     });
   });
 
   it("list: leaf sees no runs (it has no children), not parent's runs", async () => {
-    // Register a run under MAIN — SDR must not see it
+    // Register a run under MAIN — worker must not see it
     addSubagentRunForTests({
       runId: "parent-run",
       childSessionKey: SIBLING_KEY,
@@ -83,7 +83,7 @@ describe("subagents tool: leaf subagent uses own session key as requesterSession
       startedAt: Date.now(),
     });
 
-    const tool = createSubagentsTool({ agentSessionKey: SDR_KEY });
+    const tool = createSubagentsTool({ agentSessionKey: WORKER_KEY });
     const result = await tool.execute("call-list-isolation", { action: "list" });
 
     expect(result.details).toMatchObject({
@@ -95,7 +95,7 @@ describe("subagents tool: leaf subagent uses own session key as requesterSession
   });
 
   it("orchestrator subagent (depth < maxSpawnDepth) still uses its own key and sees its children", async () => {
-    // Raise the depth limit so SDR is now an orchestrator
+    // Raise the depth limit so worker is now an orchestrator
     setSubagentsConfigOverride({
       session: {
         mainKey: "main",
@@ -106,24 +106,24 @@ describe("subagents tool: leaf subagent uses own session key as requesterSession
     });
 
     addSubagentRunForTests({
-      runId: "ghostwriter-run",
-      childSessionKey: "agent:main:subagent:ghostwriter",
-      requesterSessionKey: SDR_KEY,
-      requesterDisplayKey: "sdr",
-      task: "rewrite message",
+      runId: "child-run",
+      childSessionKey: "agent:main:subagent:child",
+      requesterSessionKey: WORKER_KEY,
+      requesterDisplayKey: "worker",
+      task: "process item",
       cleanup: "keep",
       createdAt: Date.now(),
       startedAt: Date.now(),
     });
 
-    const tool = createSubagentsTool({ agentSessionKey: SDR_KEY });
+    const tool = createSubagentsTool({ agentSessionKey: WORKER_KEY });
     const result = await tool.execute("call-list-orchestrator", { action: "list" });
 
     expect(result.details).toMatchObject({
       status: "ok",
-      requesterSessionKey: SDR_KEY,
+      requesterSessionKey: WORKER_KEY,
       total: 1,
-      active: expect.arrayContaining([expect.objectContaining({ runId: "ghostwriter-run" })]),
+      active: expect.arrayContaining([expect.objectContaining({ runId: "child-run" })]),
     });
   });
 });
