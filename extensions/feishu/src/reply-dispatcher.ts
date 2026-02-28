@@ -7,6 +7,7 @@ import {
   type RuntimeEnv,
 } from "openclaw/plugin-sdk";
 import { resolveFeishuAccount } from "./accounts.js";
+import { registerStreamAppender, unregisterStreamAppender } from "./active-streams.js";
 import { createFeishuClient } from "./client.js";
 import { sendMediaFeishu } from "./media.js";
 import type { MentionTarget } from "./mention.js";
@@ -27,6 +28,8 @@ export type CreateFeishuReplyDispatcherParams = {
   agentId: string;
   runtime: RuntimeEnv;
   chatId: string;
+  /** Normalized outbound target (e.g. `ou_xxx` for P2P). Used as alias key for stream lookup. */
+  outboundTo?: string;
   replyToMessageId?: string;
   /** When true, preserve typing indicator on reply target but send messages without reply metadata */
   skipReplyToInMessages?: boolean;
@@ -42,6 +45,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     cfg,
     agentId,
     chatId,
+    outboundTo,
     replyToMessageId,
     skipReplyToInMessages,
     replyInThread,
@@ -129,6 +133,17 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           replyInThread,
           rootId,
         });
+        registerStreamAppender(
+          chatId,
+          (content) => {
+            streamText += content;
+            partialUpdateQueue = partialUpdateQueue.then(async () => {
+              if (streamingStartPromise) await streamingStartPromise;
+              if (streaming?.isActive()) await streaming.update(streamText);
+            });
+          },
+          outboundTo ? [outboundTo] : undefined,
+        );
       } catch (error) {
         params.runtime.error?.(`feishu: streaming start failed: ${String(error)}`);
         streaming = null;
@@ -137,6 +152,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   };
 
   const closeStreaming = async () => {
+    unregisterStreamAppender(chatId);
     if (streamingStartPromise) {
       await streamingStartPromise;
     }

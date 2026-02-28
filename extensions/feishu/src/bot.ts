@@ -33,6 +33,7 @@ import { parsePostContent } from "./post.js";
 import { createFeishuReplyDispatcher } from "./reply-dispatcher.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { getMessageFeishu, sendMessageFeishu } from "./send.js";
+import { normalizeFeishuTarget } from "./targets.js";
 import type { FeishuMessageContext, FeishuMediaInfo, ResolvedFeishuAccount } from "./types.js";
 import type { DynamicAgentCreationConfig } from "./types.js";
 
@@ -1112,11 +1113,13 @@ export async function handleFeishuMessage(params: {
       ...mediaPayload,
     });
 
+    const outboundTo = normalizeFeishuTarget(feishuTo) ?? undefined;
     const { dispatcher, replyOptions, markDispatchIdle } = createFeishuReplyDispatcher({
       cfg,
       agentId: route.agentId,
       runtime: runtime as RuntimeEnv,
       chatId: ctx.chatId,
+      outboundTo,
       replyToMessageId: ctx.messageId,
       skipReplyToInMessages: !isGroup,
       replyInThread,
