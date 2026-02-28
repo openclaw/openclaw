@@ -521,6 +521,9 @@ async function discoverProject(accessToken: string): Promise<string> {
       loadStatus = undefined;
       break;
     } catch (err) {
+      // A transport error (timeout, network failure, etc.) is not a 400 response.
+      // Clear loadStatus so we don't misfire the 400→free-tier fallback below.
+      loadStatus = undefined;
       loadError = err instanceof Error ? err : new Error("loadCodeAssist failed", { cause: err });
     }
   }
