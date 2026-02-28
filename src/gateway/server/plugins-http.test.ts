@@ -116,4 +116,20 @@ describe("plugin HTTP registry helpers", () => {
     expect(isRegisteredPluginHttpRoutePath(registry, "/demo")).toBe(true);
     expect(isRegisteredPluginHttpRoutePath(registry, "/missing")).toBe(false);
   });
+
+  it("matches canonicalized variants of registered route paths", () => {
+    const registry = createTestRegistry({
+      httpRoutes: [
+        {
+          pluginId: "route",
+          path: "/api/demo",
+          handler: () => {},
+          source: "route",
+        },
+      ],
+    });
+    expect(isRegisteredPluginHttpRoutePath(registry, "/api//demo")).toBe(true);
+    expect(isRegisteredPluginHttpRoutePath(registry, "/API/demo")).toBe(true);
+    expect(isRegisteredPluginHttpRoutePath(registry, "/api/%2564emo")).toBe(true);
+  });
 });

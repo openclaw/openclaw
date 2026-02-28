@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { PluginRegistry } from "../../plugins/registry.js";
+import { canonicalizePathVariant } from "../security-path.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
@@ -16,8 +17,9 @@ export function isRegisteredPluginHttpRoutePath(
   registry: PluginRegistry,
   pathname: string,
 ): boolean {
+  const canonicalPath = canonicalizePathVariant(pathname);
   const routes = registry.httpRoutes ?? [];
-  return routes.some((entry) => entry.path === pathname);
+  return routes.some((entry) => canonicalizePathVariant(entry.path) === canonicalPath);
 }
 
 export function createGatewayPluginRequestHandler(params: {
