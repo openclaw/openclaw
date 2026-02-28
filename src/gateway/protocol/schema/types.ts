@@ -16,6 +16,11 @@ import type {
   AgentsFilesListResultSchema,
   AgentsFilesSetParamsSchema,
   AgentsFilesSetResultSchema,
+  AgentsFilesTreeParamsSchema,
+  AgentsFilesTreeResultSchema,
+  AgentsFilesReadParamsSchema,
+  AgentsFilesReadResultSchema,
+  AgentsWorkspaceEntrySchema,
   AgentsListParamsSchema,
   AgentsListResultSchema,
   ModelChoiceSchema,
@@ -185,6 +190,11 @@ export type AgentsFilesGetParams = Static<typeof AgentsFilesGetParamsSchema>;
 export type AgentsFilesGetResult = Static<typeof AgentsFilesGetResultSchema>;
 export type AgentsFilesSetParams = Static<typeof AgentsFilesSetParamsSchema>;
 export type AgentsFilesSetResult = Static<typeof AgentsFilesSetResultSchema>;
+export type AgentsFilesTreeParams = Static<typeof AgentsFilesTreeParamsSchema>;
+export type AgentsFilesTreeResult = Static<typeof AgentsFilesTreeResultSchema>;
+export type AgentsFilesReadParams = Static<typeof AgentsFilesReadParamsSchema>;
+export type AgentsFilesReadResult = Static<typeof AgentsFilesReadResultSchema>;
+export type AgentsWorkspaceEntry = Static<typeof AgentsWorkspaceEntrySchema>;
 export type AgentsListParams = Static<typeof AgentsListParamsSchema>;
 export type AgentsListResult = Static<typeof AgentsListResultSchema>;
 export type ModelChoice = Static<typeof ModelChoiceSchema>;
