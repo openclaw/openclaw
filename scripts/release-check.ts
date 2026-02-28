@@ -3,6 +3,7 @@
 import { execSync } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { sparkleBuildFloorsFromShortVersion, type SparkleBuildFloors } from "./sparkle-build.ts";
 
 type PackFile = { path: string };
 type PackResult = { files?: PackFile[] };
@@ -15,6 +16,7 @@ const requiredPathGroups = [
   "dist/build-info.json",
 ];
 const forbiddenPrefixes = ["dist/OpenClaw.app/"];
+const appcastPath = resolve("appcast.xml");
 
 type PackageJson = {
   name?: string;
@@ -87,8 +89,78 @@ function checkPluginVersions() {
   }
 }
 
+function extractTag(item: string, tag: string): string | null {
+  const escapedTag = tag.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const regex = new RegExp(`<${escapedTag}>([^<]+)</${escapedTag}>`);
+  return regex.exec(item)?.[1]?.trim() ?? null;
+}
+
+function checkAppcastSparkleVersions() {
+  const xml = readFileSync(appcastPath, "utf8");
+  const itemMatches = [...xml.matchAll(/<item>([\s\S]*?)<\/item>/g)];
+  const errors: string[] = [];
+  const calverItems: Array<{ title: string; sparkleBuild: number; floors: SparkleBuildFloors }> =
+    [];
+
+  if (itemMatches.length === 0) {
+    errors.push("appcast.xml contains no <item> entries.");
+  }
+
+  for (const [, item] of itemMatches) {
+    const title = extractTag(item, "title") ?? "unknown";
+    const shortVersion = extractTag(item, "sparkle:shortVersionString");
+    const sparkleVersion = extractTag(item, "sparkle:version");
+
+    if (!sparkleVersion) {
+      errors.push(`appcast item '${title}' is missing sparkle:version.`);
+      continue;
+    }
+    if (!/^[0-9]+$/.test(sparkleVersion)) {
+      errors.push(`appcast item '${title}' has non-numeric sparkle:version '${sparkleVersion}'.`);
+      continue;
+    }
+
+    if (!shortVersion) {
+      continue;
+    }
+    const floors = sparkleBuildFloorsFromShortVersion(shortVersion);
+    if (floors === null) {
+      continue;
+    }
+
+    calverItems.push({ title, sparkleBuild: Number(sparkleVersion), floors });
+  }
+
+  const adoptionDateKey = calverItems
+    .filter((item) => item.sparkleBuild >= 1_000_000_000)
+    .map((item) => item.floors.dateKey)
+    .toSorted((a, b) => a - b)[0];
+
+  for (const item of calverItems) {
+    const expectLaneFloor =
+      item.sparkleBuild >= 1_000_000_000 ||
+      (typeof adoptionDateKey === "number" && item.floors.dateKey >= adoptionDateKey);
+    const floor = expectLaneFloor ? item.floors.laneFloor : item.floors.legacyFloor;
+    if (item.sparkleBuild < floor) {
+      const floorLabel = expectLaneFloor ? "lane floor" : "legacy floor";
+      errors.push(
+        `appcast item '${item.title}' has sparkle:version ${item.sparkleBuild} below ${floorLabel} ${floor}.`,
+      );
+    }
+  }
+
+  if (errors.length > 0) {
+    console.error("release-check: appcast sparkle version validation failed:");
+    for (const error of errors) {
+      console.error(`  - ${error}`);
+    }
+    process.exit(1);
+  }
+}
+
 function main() {
   checkPluginVersions();
+  checkAppcastSparkleVersions();
 
   const results = runPackDry();
   const files = results.flatMap((entry) => entry.files ?? []);
