@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { NormalizedAllowFrom } from "./bot-access.js";
 import {
   clearGroupMembershipCache,
+  getMembershipCacheSize,
   invalidateGroupMembership,
   verifyGroupMembership,
 } from "./group-membership-cache.js";
@@ -209,8 +210,14 @@ describe("group-membership-cache", () => {
   });
 
   describe("eviction sweep", () => {
+    const TTL_MS = 5 * 60 * 1000;
+
     beforeEach(() => {
       vi.useFakeTimers();
+      // Reset the cache and eviction timer AFTER installing fake timers so that
+      // the interval created by clearGroupMembershipCache() is under fake timer
+      // control. The module-level timer started at import time is a real timer.
+      clearGroupMembershipCache();
     });
 
     afterEach(() => {
@@ -218,25 +225,46 @@ describe("group-membership-cache", () => {
       clearGroupMembershipCache();
     });
 
-    it("evicts expired entries after TTL elapses", async () => {
+    it("sweep removes stale entries from the Map independently of the TTL read-check", async () => {
       const api = makeApi({
         memberCount: 2,
         members: { 111: "member", 999: "member" },
       });
       const allowFrom = makeAllowFrom(["111"]);
 
-      // Populate the cache
-      const r1 = await verifyGroupMembership({ chatId: -100800, api, botId: 999, allowFrom });
-      expect(r1.trusted).toBe(true);
-      expect((api.getChatMemberCount as ReturnType<typeof vi.fn>).mock.calls.length).toBe(1);
+      // Populate the cache; entry should be present immediately.
+      await verifyGroupMembership({ chatId: -100800, api, botId: 999, allowFrom });
+      expect(getMembershipCacheSize()).toBe(1);
 
-      // Advance time past TTL to trigger the eviction sweep
-      const TTL_MS = 5 * 60 * 1000;
+      // Advance time past TTL to fire the eviction interval.
       vi.advanceTimersByTime(TTL_MS + 1);
 
-      // After eviction, a new lookup must call the API again
-      const r2 = await verifyGroupMembership({ chatId: -100800, api, botId: 999, allowFrom });
+      // The sweep should have deleted the entry without any verifyGroupMembership call.
+      expect(getMembershipCacheSize()).toBe(0);
+    });
+
+    it("forces an API re-call after sweep evicts the entry (even if read-path TTL would still pass)", async () => {
+      const api = makeApi({
+        memberCount: 2,
+        members: { 111: "member", 999: "member" },
+      });
+      const allowFrom = makeAllowFrom(["111"]);
+
+      // Populate the cache and confirm one API call.
+      await verifyGroupMembership({ chatId: -100801, api, botId: 999, allowFrom });
+      expect((api.getChatMemberCount as ReturnType<typeof vi.fn>).mock.calls.length).toBe(1);
+
+      // Fire the sweep interval (entry is now evicted).
+      vi.advanceTimersByTime(TTL_MS + 1);
+      expect(getMembershipCacheSize()).toBe(0);
+
+      // Reset fake clock to a point BEFORE the TTL would expire so the TTL
+      // read-check alone would return a cache-hit if the entry were still present.
+      // Because the sweep already deleted it, the API must be called again.
+      vi.setSystemTime(Date.now() - (TTL_MS - 1000));
+      const r2 = await verifyGroupMembership({ chatId: -100801, api, botId: 999, allowFrom });
       expect(r2.trusted).toBe(true);
+      // API called a second time — proves the sweep (not TTL read-check) evicted the entry.
       expect((api.getChatMemberCount as ReturnType<typeof vi.fn>).mock.calls.length).toBe(2);
     });
   });
