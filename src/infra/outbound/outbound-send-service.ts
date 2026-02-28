@@ -4,8 +4,8 @@ import type { ChannelId, ChannelThreadingToolContext } from "../../channels/plug
 import type { OpenClawConfig } from "../../config/config.js";
 import { appendAssistantMessageToSessionTranscript } from "../../config/sessions.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
-import { getGlobalHookRunner } from "../../hooks/runtime-hooks.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { GatewayClientMode, GatewayClientName } from "../../utils/message-channel.js";
 import { throwIfAborted } from "./abort.js";
 import type { OutboundSendDeps } from "./deliver.js";

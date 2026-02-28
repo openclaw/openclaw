@@ -36,7 +36,7 @@ vi.mock("../../hooks/internal-hooks.js", () => ({
   createInternalHookEvent: mocks.createInternalHookEvent,
 }));
 
-vi.mock("../../hooks/runtime-hooks.js", () => ({
+vi.mock("../../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: () => ({
     hasHooks: mocks.hasHooks,
     runMessageSent: mocks.runMessageSent,
