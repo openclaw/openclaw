@@ -222,13 +222,11 @@ function parseMessageContent(content: string, messageType: string): string {
  * Parse merge_forward message content and fetch sub-messages.
  * Returns formatted text content of all sub-messages.
  */
-async function parseMergeForwardContent(params: {
-  cfg: ClawdbotConfig;
+function parseMergeForwardContent(params: {
   content: string;
-  accountId?: string;
   log?: (...args: any[]) => void;
-}): Promise<string> {
-  const { cfg, content, accountId, log } = params;
+}): string {
+  const { content, log } = params;
   const maxMessages = 50;
 
   // For merge_forward, the API returns all sub-messages in items array
@@ -713,7 +711,9 @@ export async function handleFeishuMessage(params: {
 
   // Handle merge_forward messages: fetch full message via API then expand sub-messages
   if (event.message.message_type === "merge_forward") {
-    log(`feishu[${account.accountId}]: processing merge_forward message, fetching full content via API`);
+    log(
+      `feishu[${account.accountId}]: processing merge_forward message, fetching full content via API`,
+    );
     try {
       // Websocket event doesn't include sub-messages, need to fetch via API
       // The API returns all sub-messages in the items array
@@ -723,11 +723,11 @@ export async function handleFeishuMessage(params: {
       })) as { code?: number; data?: { items?: unknown[] } };
 
       if (response.code === 0 && response.data?.items && response.data.items.length > 0) {
-        log(`feishu[${account.accountId}]: merge_forward API returned ${response.data.items.length} items`);
-        const expandedContent = await parseMergeForwardContent({
-          cfg,
+        log(
+          `feishu[${account.accountId}]: merge_forward API returned ${response.data.items.length} items`,
+        );
+        const expandedContent = parseMergeForwardContent({
           content: JSON.stringify(response.data.items),
-          accountId: account.accountId,
           log,
         });
         ctx = { ...ctx, content: expandedContent };
