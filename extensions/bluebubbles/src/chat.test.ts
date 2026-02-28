@@ -1,6 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
 import "./test-mocks.js";
-import { markBlueBubblesChatRead, sendBlueBubblesTyping, setGroupIconBlueBubbles } from "./chat.js";
+import {
+  addBlueBubblesParticipant,
+  editBlueBubblesMessage,
+  leaveBlueBubblesChat,
+  markBlueBubblesChatRead,
+  removeBlueBubblesParticipant,
+  renameBlueBubblesChat,
+  sendBlueBubblesTyping,
+  setGroupIconBlueBubbles,
+  unsendBlueBubblesMessage,
+} from "./chat.js";
 import { getCachedBlueBubblesPrivateApiStatus } from "./probe.js";
 import { installBlueBubblesFetchTestHooks } from "./test-harness.js";
 
@@ -12,30 +22,59 @@ installBlueBubblesFetchTestHooks({
 });
 
 describe("chat", () => {
+  function mockOkTextResponse() {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      text: () => Promise.resolve(""),
+    });
+  }
+
+  async function expectCalledUrlIncludesPassword(params: {
+    password: string;
+    invoke: () => Promise<void>;
+  }) {
+    mockOkTextResponse();
+    await params.invoke();
+    const calledUrl = mockFetch.mock.calls[0][0] as string;
+    expect(calledUrl).toContain(`password=${params.password}`);
+  }
+
+  async function expectCalledUrlUsesConfigCredentials(params: {
+    serverHost: string;
+    password: string;
+    invoke: (cfg: {
+      channels: { bluebubbles: { serverUrl: string; password: string } };
+    }) => Promise<void>;
+  }) {
+    mockOkTextResponse();
+    await params.invoke({
+      channels: {
+        bluebubbles: {
+          serverUrl: `http://${params.serverHost}`,
+          password: params.password,
+        },
+      },
+    });
+    const calledUrl = mockFetch.mock.calls[0][0] as string;
+    expect(calledUrl).toContain(params.serverHost);
+    expect(calledUrl).toContain(`password=${params.password}`);
+  }
+
   describe("markBlueBubblesChatRead", () => {
-    it("does nothing when chatGuid is empty", async () => {
-      await markBlueBubblesChatRead("", {
-        serverUrl: "http://localhost:1234",
-        password: "test",
-      });
+    it("does nothing when chatGuid is empty or whitespace", async () => {
+      for (const chatGuid of ["", "   "]) {
+        await markBlueBubblesChatRead(chatGuid, {
+          serverUrl: "http://localhost:1234",
+          password: "test",
+        });
+      }
       expect(mockFetch).not.toHaveBeenCalled();
     });
 
-    it("does nothing when chatGuid is whitespace", async () => {
-      await markBlueBubblesChatRead("   ", {
-        serverUrl: "http://localhost:1234",
-        password: "test",
-      });
-      expect(mockFetch).not.toHaveBeenCalled();
-    });
-
-    it("throws when serverUrl is missing", async () => {
+    it("throws when required credentials are missing", async () => {
       await expect(markBlueBubblesChatRead("chat-guid", {})).rejects.toThrow(
         "serverUrl is required",
       );
-    });
-
-    it("throws when password is missing", async () => {
       await expect(
         markBlueBubblesChatRead("chat-guid", {
           serverUrl: "http://localhost:1234",
@@ -72,18 +111,14 @@ describe("chat", () => {
     });
 
     it("includes password in URL query", async () => {
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        text: () => Promise.resolve(""),
-      });
-
-      await markBlueBubblesChatRead("chat-123", {
-        serverUrl: "http://localhost:1234",
+      await expectCalledUrlIncludesPassword({
         password: "my-secret",
+        invoke: () =>
+          markBlueBubblesChatRead("chat-123", {
+            serverUrl: "http://localhost:1234",
+            password: "my-secret",
+          }),
       });
-
-      const calledUrl = mockFetch.mock.calls[0][0] as string;
-      expect(calledUrl).toContain("password=my-secret");
     });
 
     it("throws on non-ok response", async () => {
@@ -118,74 +153,37 @@ describe("chat", () => {
     });
 
     it("resolves credentials from config", async () => {
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        text: () => Promise.resolve(""),
+      await expectCalledUrlUsesConfigCredentials({
+        serverHost: "config-server:9999",
+        password: "config-pass",
+        invoke: (cfg) =>
+          markBlueBubblesChatRead("chat-123", {
+            cfg,
+          }),
       });
-
-      await markBlueBubblesChatRead("chat-123", {
-        cfg: {
-          channels: {
-            bluebubbles: {
-              serverUrl: "http://config-server:9999",
-              password: "config-pass",
-            },
-          },
-        },
-      });
-
-      const calledUrl = mockFetch.mock.calls[0][0] as string;
-      expect(calledUrl).toContain("config-server:9999");
-      expect(calledUrl).toContain("password=config-pass");
     });
   });
 
   describe("sendBlueBubblesTyping", () => {
-    it("does nothing when chatGuid is empty", async () => {
-      await sendBlueBubblesTyping("", true, {
-        serverUrl: "http://localhost:1234",
-        password: "test",
-      });
+    it("does nothing when chatGuid is empty or whitespace", async () => {
+      for (const chatGuid of ["", "   "]) {
+        await sendBlueBubblesTyping(chatGuid, true, {
+          serverUrl: "http://localhost:1234",
+          password: "test",
+        });
+      }
       expect(mockFetch).not.toHaveBeenCalled();
     });
 
-    it("does nothing when chatGuid is whitespace", async () => {
-      await sendBlueBubblesTyping("   ", false, {
-        serverUrl: "http://localhost:1234",
-        password: "test",
-      });
-      expect(mockFetch).not.toHaveBeenCalled();
-    });
-
-    it("throws when serverUrl is missing", async () => {
+    it("throws when required credentials are missing", async () => {
       await expect(sendBlueBubblesTyping("chat-guid", true, {})).rejects.toThrow(
         "serverUrl is required",
       );
-    });
-
-    it("throws when password is missing", async () => {
       await expect(
         sendBlueBubblesTyping("chat-guid", true, {
           serverUrl: "http://localhost:1234",
         }),
       ).rejects.toThrow("password is required");
-    });
-
-    it("sends typing start with POST method", async () => {
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        text: () => Promise.resolve(""),
-      });
-
-      await sendBlueBubblesTyping("iMessage;-;+15551234567", true, {
-        serverUrl: "http://localhost:1234",
-        password: "test",
-      });
-
-      expect(mockFetch).toHaveBeenCalledWith(
-        expect.stringContaining("/api/v1/chat/iMessage%3B-%3B%2B15551234567/typing"),
-        expect.objectContaining({ method: "POST" }),
-      );
     });
 
     it("does not send typing when private API is disabled", async () => {
@@ -199,21 +197,35 @@ describe("chat", () => {
       expect(mockFetch).not.toHaveBeenCalled();
     });
 
-    it("sends typing stop with DELETE method", async () => {
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        text: () => Promise.resolve(""),
-      });
+    it("uses POST for start and DELETE for stop", async () => {
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          text: () => Promise.resolve(""),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          text: () => Promise.resolve(""),
+        });
 
+      await sendBlueBubblesTyping("iMessage;-;+15551234567", true, {
+        serverUrl: "http://localhost:1234",
+        password: "test",
+      });
       await sendBlueBubblesTyping("iMessage;-;+15551234567", false, {
         serverUrl: "http://localhost:1234",
         password: "test",
       });
 
-      expect(mockFetch).toHaveBeenCalledWith(
-        expect.stringContaining("/api/v1/chat/iMessage%3B-%3B%2B15551234567/typing"),
-        expect.objectContaining({ method: "DELETE" }),
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+      expect(mockFetch.mock.calls[0][0]).toContain(
+        "/api/v1/chat/iMessage%3B-%3B%2B15551234567/typing",
       );
+      expect(mockFetch.mock.calls[0][1].method).toBe("POST");
+      expect(mockFetch.mock.calls[1][0]).toContain(
+        "/api/v1/chat/iMessage%3B-%3B%2B15551234567/typing",
+      );
+      expect(mockFetch.mock.calls[1][1].method).toBe("DELETE");
     });
 
     it("includes password in URL query", async () => {
@@ -297,8 +309,139 @@ describe("chat", () => {
       expect(calledUrl).toContain("typing-server:8888");
       expect(calledUrl).toContain("password=typing-pass");
     });
+  });
 
-    it("can start and stop typing in sequence", async () => {
+  describe("editBlueBubblesMessage", () => {
+    it("throws when required args are missing", async () => {
+      await expect(editBlueBubblesMessage("", "updated", {})).rejects.toThrow("messageGuid");
+      await expect(editBlueBubblesMessage("message-guid", "   ", {})).rejects.toThrow("newText");
+    });
+
+    it("sends edit request with default payload values", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        text: () => Promise.resolve(""),
+      });
+
+      await editBlueBubblesMessage(" message-guid ", " updated text ", {
+        serverUrl: "http://localhost:1234",
+        password: "test-password",
+      });
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        expect.stringContaining("/api/v1/message/message-guid/edit"),
+        expect.objectContaining({
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+      const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+      expect(body).toEqual({
+        editedMessage: "updated text",
+        backwardsCompatibilityMessage: "Edited to: updated text",
+        partIndex: 0,
+      });
+    });
+
+    it("supports custom part index and backwards compatibility message", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        text: () => Promise.resolve(""),
+      });
+
+      await editBlueBubblesMessage("message-guid", "new text", {
+        serverUrl: "http://localhost:1234",
+        password: "test-password",
+        partIndex: 3,
+        backwardsCompatMessage: "custom-backwards-message",
+      });
+
+      const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+      expect(body.partIndex).toBe(3);
+      expect(body.backwardsCompatibilityMessage).toBe("custom-backwards-message");
+    });
+
+    it("throws on non-ok response", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 422,
+        text: () => Promise.resolve("Unprocessable"),
+      });
+
+      await expect(
+        editBlueBubblesMessage("message-guid", "new text", {
+          serverUrl: "http://localhost:1234",
+          password: "test-password",
+        }),
+      ).rejects.toThrow("edit failed (422): Unprocessable");
+    });
+  });
+
+  describe("unsendBlueBubblesMessage", () => {
+    it("throws when messageGuid is missing", async () => {
+      await expect(unsendBlueBubblesMessage("", {})).rejects.toThrow("messageGuid");
+    });
+
+    it("sends unsend request with default part index", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        text: () => Promise.resolve(""),
+      });
+
+      await unsendBlueBubblesMessage(" msg-123 ", {
+        serverUrl: "http://localhost:1234",
+        password: "test-password",
+      });
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        expect.stringContaining("/api/v1/message/msg-123/unsend"),
+        expect.objectContaining({
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+      const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+      expect(body.partIndex).toBe(0);
+    });
+
+    it("uses custom part index", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        text: () => Promise.resolve(""),
+      });
+
+      await unsendBlueBubblesMessage("msg-123", {
+        serverUrl: "http://localhost:1234",
+        password: "test-password",
+        partIndex: 2,
+      });
+
+      const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+      expect(body.partIndex).toBe(2);
+    });
+  });
+
+  describe("group chat mutation actions", () => {
+    it("renames chat", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        text: () => Promise.resolve(""),
+      });
+
+      await renameBlueBubblesChat(" chat-guid ", "New Group Name", {
+        serverUrl: "http://localhost:1234",
+        password: "test-password",
+      });
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        expect.stringContaining("/api/v1/chat/chat-guid"),
+        expect.objectContaining({ method: "PUT" }),
+      );
+      const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+      expect(body.displayName).toBe("New Group Name");
+    });
+
+    it("adds and removes participant using matching endpoint", async () => {
       mockFetch
         .mockResolvedValueOnce({
           ok: true,
@@ -309,18 +452,44 @@ describe("chat", () => {
           text: () => Promise.resolve(""),
         });
 
-      await sendBlueBubblesTyping("chat-123", true, {
+      await addBlueBubblesParticipant("chat-guid", "+15551234567", {
         serverUrl: "http://localhost:1234",
-        password: "test",
+        password: "test-password",
       });
-      await sendBlueBubblesTyping("chat-123", false, {
+      await removeBlueBubblesParticipant("chat-guid", "+15551234567", {
         serverUrl: "http://localhost:1234",
-        password: "test",
+        password: "test-password",
       });
 
       expect(mockFetch).toHaveBeenCalledTimes(2);
+      expect(mockFetch.mock.calls[0][0]).toContain("/api/v1/chat/chat-guid/participant");
       expect(mockFetch.mock.calls[0][1].method).toBe("POST");
+      expect(mockFetch.mock.calls[1][0]).toContain("/api/v1/chat/chat-guid/participant");
       expect(mockFetch.mock.calls[1][1].method).toBe("DELETE");
+
+      const addBody = JSON.parse(mockFetch.mock.calls[0][1].body);
+      const removeBody = JSON.parse(mockFetch.mock.calls[1][1].body);
+      expect(addBody.address).toBe("+15551234567");
+      expect(removeBody.address).toBe("+15551234567");
+    });
+
+    it("leaves chat without JSON body", async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        text: () => Promise.resolve(""),
+      });
+
+      await leaveBlueBubblesChat("chat-guid", {
+        serverUrl: "http://localhost:1234",
+        password: "test-password",
+      });
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        expect.stringContaining("/api/v1/chat/chat-guid/leave"),
+        expect.objectContaining({ method: "POST" }),
+      );
+      expect(mockFetch.mock.calls[0][1].body).toBeUndefined();
+      expect(mockFetch.mock.calls[0][1].headers).toBeUndefined();
     });
   });
 
@@ -343,13 +512,10 @@ describe("chat", () => {
       ).rejects.toThrow("image buffer");
     });
 
-    it("throws when serverUrl is missing", async () => {
+    it("throws when required credentials are missing", async () => {
       await expect(
         setGroupIconBlueBubbles("chat-guid", new Uint8Array([1, 2, 3]), "icon.png", {}),
       ).rejects.toThrow("serverUrl is required");
-    });
-
-    it("throws when password is missing", async () => {
       await expect(
         setGroupIconBlueBubbles("chat-guid", new Uint8Array([1, 2, 3]), "icon.png", {
           serverUrl: "http://localhost:1234",
@@ -393,18 +559,14 @@ describe("chat", () => {
     });
 
     it("includes password in URL query", async () => {
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        text: () => Promise.resolve(""),
-      });
-
-      await setGroupIconBlueBubbles("chat-123", new Uint8Array([1, 2, 3]), "icon.png", {
-        serverUrl: "http://localhost:1234",
+      await expectCalledUrlIncludesPassword({
         password: "my-secret",
+        invoke: () =>
+          setGroupIconBlueBubbles("chat-123", new Uint8Array([1, 2, 3]), "icon.png", {
+            serverUrl: "http://localhost:1234",
+            password: "my-secret",
+          }),
       });
-
-      const calledUrl = mockFetch.mock.calls[0][0] as string;
-      expect(calledUrl).toContain("password=my-secret");
     });
 
     it("throws on non-ok response", async () => {
@@ -439,25 +601,14 @@ describe("chat", () => {
     });
 
     it("resolves credentials from config", async () => {
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        text: () => Promise.resolve(""),
+      await expectCalledUrlUsesConfigCredentials({
+        serverHost: "config-server:9999",
+        password: "config-pass",
+        invoke: (cfg) =>
+          setGroupIconBlueBubbles("chat-123", new Uint8Array([1]), "icon.png", {
+            cfg,
+          }),
       });
-
-      await setGroupIconBlueBubbles("chat-123", new Uint8Array([1]), "icon.png", {
-        cfg: {
-          channels: {
-            bluebubbles: {
-              serverUrl: "http://config-server:9999",
-              password: "config-pass",
-            },
-          },
-        },
-      });
-
-      const calledUrl = mockFetch.mock.calls[0][0] as string;
-      expect(calledUrl).toContain("config-server:9999");
-      expect(calledUrl).toContain("password=config-pass");
     });
 
     it("includes filename in multipart body", async () => {

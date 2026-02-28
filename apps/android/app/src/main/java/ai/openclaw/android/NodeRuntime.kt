@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.SystemClock
+import android.util.Log
 import androidx.core.content.ContextCompat
 import ai.openclaw.android.chat.ChatController
 import ai.openclaw.android.chat.ChatMessage
@@ -18,8 +19,9 @@ import ai.openclaw.android.gateway.GatewaySession
 import ai.openclaw.android.gateway.probeGatewayTlsFingerprint
 import ai.openclaw.android.node.*
 import ai.openclaw.android.protocol.OpenClawCanvasA2UIAction
+import ai.openclaw.android.voice.MicCaptureManager
 import ai.openclaw.android.voice.TalkModeManager
-import ai.openclaw.android.voice.VoiceWakeManager
+import ai.openclaw.android.voice.VoiceConversationEntry
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -36,6 +38,7 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import java.util.UUID
 import java.util.concurrent.atomic.AtomicLong
 
 class NodeRuntime(context: Context) {
@@ -53,40 +56,6 @@ class NodeRuntime(context: Context) {
 
   private val externalAudioCaptureActive = MutableStateFlow(false)
 
-  private val voiceWake: VoiceWakeManager by lazy {
-    VoiceWakeManager(
-      context = appContext,
-      scope = scope,
-      onCommand = { command ->
-        nodeSession.sendNodeEvent(
-          event = "agent.request",
-          payloadJson =
-            buildJsonObject {
-              put("message", JsonPrimitive(command))
-              put("sessionKey", JsonPrimitive(resolveMainSessionKey()))
-              put("thinking", JsonPrimitive(chatThinkingLevel.value))
-              put("deliver", JsonPrimitive(false))
-            }.toString(),
-        )
-      },
-    )
-  }
-
-  val voiceWakeIsListening: StateFlow<Boolean>
-    get() = voiceWake.isListening
-
-  val voiceWakeStatusText: StateFlow<String>
-    get() = voiceWake.statusText
-
-  val talkStatusText: StateFlow<String>
-    get() = talkMode.statusText
-
-  val talkIsListening: StateFlow<Boolean>
-    get() = talkMode.isListening
-
-  val talkIsSpeaking: StateFlow<Boolean>
-    get() = talkMode.isSpeaking
-
   private val discovery = GatewayDiscovery(appContext, scope = scope)
   val gateways: StateFlow<List<GatewayEndpoint>> = discovery.gateways
   val discoveryStatusText: StateFlow<String> = discovery.statusText
@@ -97,8 +66,6 @@ class NodeRuntime(context: Context) {
   private val cameraHandler: CameraHandler = CameraHandler(
     appContext = appContext,
     camera = camera,
-    prefs = prefs,
-    connectedEndpoint = { connectedEndpoint },
     externalAudioCaptureActive = externalAudioCaptureActive,
     showCameraHud = ::showCameraHud,
     triggerCameraFlash = ::triggerCameraFlash,
@@ -124,6 +91,34 @@ class NodeRuntime(context: Context) {
     locationPreciseEnabled = { locationPreciseEnabled.value },
   )
 
+  private val deviceHandler: DeviceHandler = DeviceHandler(
+    appContext = appContext,
+  )
+
+  private val notificationsHandler: NotificationsHandler = NotificationsHandler(
+    appContext = appContext,
+  )
+
+  private val systemHandler: SystemHandler = SystemHandler(
+    appContext = appContext,
+  )
+
+  private val photosHandler: PhotosHandler = PhotosHandler(
+    appContext = appContext,
+  )
+
+  private val contactsHandler: ContactsHandler = ContactsHandler(
+    appContext = appContext,
+  )
+
+  private val calendarHandler: CalendarHandler = CalendarHandler(
+    appContext = appContext,
+  )
+
+  private val motionHandler: MotionHandler = MotionHandler(
+    appContext = appContext,
+  )
+
   private val screenHandler: ScreenHandler = ScreenHandler(
     screenRecorder = screenRecorder,
     setScreenRecordActive = { _screenRecordActive.value = it },
@@ -145,7 +140,9 @@ class NodeRuntime(context: Context) {
     prefs = prefs,
     cameraEnabled = { cameraEnabled.value },
     locationMode = { locationMode.value },
-    voiceWakeMode = { voiceWakeMode.value },
+    voiceWakeMode = { VoiceWakeMode.Off },
+    motionActivityAvailable = { motionHandler.isActivityAvailable() },
+    motionPedometerAvailable = { motionHandler.isPedometerAvailable() },
     smsAvailable = { sms.canSendSms() },
     hasRecordAudioPermission = { hasRecordAudioPermission() },
     manualTls = { manualTls.value },
@@ -155,6 +152,13 @@ class NodeRuntime(context: Context) {
     canvas = canvas,
     cameraHandler = cameraHandler,
     locationHandler = locationHandler,
+    deviceHandler = deviceHandler,
+    notificationsHandler = notificationsHandler,
+    systemHandler = systemHandler,
+    photosHandler = photosHandler,
+    contactsHandler = contactsHandler,
+    calendarHandler = calendarHandler,
+    motionHandler = motionHandler,
     screenHandler = screenHandler,
     smsHandler = smsHandlerImpl,
     a2uiHandler = a2uiHandler,
@@ -163,9 +167,18 @@ class NodeRuntime(context: Context) {
     isForeground = { _isForeground.value },
     cameraEnabled = { cameraEnabled.value },
     locationEnabled = { locationMode.value != LocationMode.Off },
+    smsAvailable = { sms.canSendSms() },
+    debugBuild = { BuildConfig.DEBUG },
+    refreshNodeCanvasCapability = { nodeSession.refreshNodeCanvasCapability() },
+    onCanvasA2uiPush = {
+      _canvasA2uiHydrated.value = true
+      _canvasRehydratePending.value = false
+      _canvasRehydrateErrorText.value = null
+    },
+    onCanvasA2uiReset = { _canvasA2uiHydrated.value = false },
+    motionActivityAvailable = { motionHandler.isActivityAvailable() },
+    motionPedometerAvailable = { motionHandler.isPedometerAvailable() },
   )
-
-  private lateinit var gatewayEventHandler: GatewayEventHandler
 
   data class GatewayTrustPrompt(
     val endpoint: GatewayEndpoint,
@@ -174,6 +187,8 @@ class NodeRuntime(context: Context) {
 
   private val _isConnected = MutableStateFlow(false)
   val isConnected: StateFlow<Boolean> = _isConnected.asStateFlow()
+  private val _nodeConnected = MutableStateFlow(false)
+  val nodeConnected: StateFlow<Boolean> = _nodeConnected.asStateFlow()
 
   private val _statusText = MutableStateFlow("Offline")
   val statusText: StateFlow<String> = _statusText.asStateFlow()
@@ -194,6 +209,13 @@ class NodeRuntime(context: Context) {
   private val _screenRecordActive = MutableStateFlow(false)
   val screenRecordActive: StateFlow<Boolean> = _screenRecordActive.asStateFlow()
 
+  private val _canvasA2uiHydrated = MutableStateFlow(false)
+  val canvasA2uiHydrated: StateFlow<Boolean> = _canvasA2uiHydrated.asStateFlow()
+  private val _canvasRehydratePending = MutableStateFlow(false)
+  val canvasRehydratePending: StateFlow<Boolean> = _canvasRehydratePending.asStateFlow()
+  private val _canvasRehydrateErrorText = MutableStateFlow<String?>(null)
+  val canvasRehydrateErrorText: StateFlow<String?> = _canvasRehydrateErrorText.asStateFlow()
+
   private val _serverName = MutableStateFlow<String?>(null)
   val serverName: StateFlow<String?> = _serverName.asStateFlow()
 
@@ -207,8 +229,9 @@ class NodeRuntime(context: Context) {
   val isForeground: StateFlow<Boolean> = _isForeground.asStateFlow()
 
   private var lastAutoA2uiUrl: String? = null
+  private var didAutoRequestCanvasRehydrate = false
+  private val canvasRehydrateSeq = AtomicLong(0)
   private var operatorConnected = false
-  private var nodeConnected = false
   private var operatorStatusText: String = "Offline"
   private var nodeStatusText: String = "Offline"
 
@@ -225,8 +248,13 @@ class NodeRuntime(context: Context) {
         _seamColorArgb.value = DEFAULT_SEAM_COLOR_ARGB
         applyMainSessionKey(mainSessionKey)
         updateStatus()
-        scope.launch { refreshBrandingFromGateway() }
-        scope.launch { gatewayEventHandler.refreshWakeWordsFromGateway() }
+        micCapture.onGatewayConnectionChanged(true)
+        scope.launch {
+          refreshBrandingFromGateway()
+          if (voiceReplySpeakerLazy.isInitialized()) {
+            voiceReplySpeaker.refreshConfig()
+          }
+        }
       },
       onDisconnected = { message ->
         operatorConnected = false
@@ -237,11 +265,10 @@ class NodeRuntime(context: Context) {
         if (!isCanonicalMainSessionKey(_mainSessionKey.value)) {
           _mainSessionKey.value = "main"
         }
-        val mainKey = resolveMainSessionKey()
-        talkMode.setMainSessionKey(mainKey)
-        chat.applyMainSessionKey(mainKey)
+        chat.applyMainSessionKey(resolveMainSessionKey())
         chat.onDisconnected(message)
         updateStatus()
+        micCapture.onGatewayConnectionChanged(false)
       },
       onEvent = { event, payloadJson ->
         handleGatewayEvent(event, payloadJson)
@@ -254,14 +281,22 @@ class NodeRuntime(context: Context) {
       identityStore = identityStore,
       deviceAuthStore = deviceAuthStore,
       onConnected = { _, _, _ ->
-        nodeConnected = true
+        _nodeConnected.value = true
         nodeStatusText = "Connected"
+        didAutoRequestCanvasRehydrate = false
+        _canvasA2uiHydrated.value = false
+        _canvasRehydratePending.value = false
+        _canvasRehydrateErrorText.value = null
         updateStatus()
         maybeNavigateToA2uiOnConnect()
       },
       onDisconnected = { message ->
-        nodeConnected = false
+        _nodeConnected.value = false
         nodeStatusText = message
+        didAutoRequestCanvasRehydrate = false
+        _canvasA2uiHydrated.value = false
+        _canvasRehydratePending.value = false
+        _canvasRehydrateErrorText.value = null
         updateStatus()
         showLocalCanvasOnDisconnect()
       },
@@ -274,6 +309,14 @@ class NodeRuntime(context: Context) {
       },
     )
 
+  init {
+    DeviceNotificationListenerService.setNodeEventSink { event, payloadJson ->
+      scope.launch {
+        nodeSession.sendNodeEvent(event = event, payloadJson = payloadJson)
+      }
+    }
+  }
+
   private val chat: ChatController =
     ChatController(
       scope = scope,
@@ -281,34 +324,93 @@ class NodeRuntime(context: Context) {
       json = json,
       supportsChatSubscribe = false,
     )
-  private val talkMode: TalkModeManager by lazy {
+  private val voiceReplySpeakerLazy: Lazy<TalkModeManager> = lazy {
+    // Reuse the existing TalkMode speech engine (ElevenLabs + deterministic system-TTS fallback)
+    // without enabling the legacy talk capture loop.
     TalkModeManager(
       context = appContext,
       scope = scope,
       session = operatorSession,
       supportsChatSubscribe = false,
       isConnected = { operatorConnected },
+    ).also { speaker ->
+      speaker.setPlaybackEnabled(prefs.speakerEnabled.value)
+    }
+  }
+  private val voiceReplySpeaker: TalkModeManager
+    get() = voiceReplySpeakerLazy.value
+
+  private val micCapture: MicCaptureManager by lazy {
+    MicCaptureManager(
+      context = appContext,
+      scope = scope,
+      sendToGateway = { message ->
+        val idempotencyKey = UUID.randomUUID().toString()
+        val params =
+          buildJsonObject {
+            put("sessionKey", JsonPrimitive(resolveMainSessionKey()))
+            put("message", JsonPrimitive(message))
+            put("thinking", JsonPrimitive(chatThinkingLevel.value))
+            put("timeoutMs", JsonPrimitive(30_000))
+            put("idempotencyKey", JsonPrimitive(idempotencyKey))
+          }
+        val response = operatorSession.request("chat.send", params.toString())
+        parseChatSendRunId(response) ?: idempotencyKey
+      },
+      speakAssistantReply = { text ->
+        voiceReplySpeaker.speakAssistantReply(text)
+      },
     )
   }
+
+  val micStatusText: StateFlow<String>
+    get() = micCapture.statusText
+
+  val micLiveTranscript: StateFlow<String?>
+    get() = micCapture.liveTranscript
+
+  val micIsListening: StateFlow<Boolean>
+    get() = micCapture.isListening
+
+  val micEnabled: StateFlow<Boolean>
+    get() = micCapture.micEnabled
+
+  val micQueuedMessages: StateFlow<List<String>>
+    get() = micCapture.queuedMessages
+
+  val micConversation: StateFlow<List<VoiceConversationEntry>>
+    get() = micCapture.conversation
+
+  val micInputLevel: StateFlow<Float>
+    get() = micCapture.inputLevel
+
+  val micIsSending: StateFlow<Boolean>
+    get() = micCapture.isSending
 
   private fun applyMainSessionKey(candidate: String?) {
     val trimmed = normalizeMainKey(candidate) ?: return
     if (isCanonicalMainSessionKey(_mainSessionKey.value)) return
     if (_mainSessionKey.value == trimmed) return
     _mainSessionKey.value = trimmed
-    talkMode.setMainSessionKey(trimmed)
     chat.applyMainSessionKey(trimmed)
   }
 
   private fun updateStatus() {
     _isConnected.value = operatorConnected
+    val operator = operatorStatusText.trim()
+    val node = nodeStatusText.trim()
     _statusText.value =
       when {
-        operatorConnected && nodeConnected -> "Connected"
-        operatorConnected && !nodeConnected -> "Connected (node offline)"
-        !operatorConnected && nodeConnected -> "Connected (operator offline)"
-        operatorStatusText.isNotBlank() && operatorStatusText != "Offline" -> operatorStatusText
-        else -> nodeStatusText
+        operatorConnected && _nodeConnected.value -> "Connected"
+        operatorConnected && !_nodeConnected.value -> "Connected (node offline)"
+        !operatorConnected && _nodeConnected.value ->
+          if (operator.isNotEmpty() && operator != "Offline") {
+            "Connected (operator: $operator)"
+          } else {
+            "Connected (operator offline)"
+          }
+        operator.isNotBlank() && operator != "Offline" -> operator
+        else -> node
       }
   }
 
@@ -328,7 +430,61 @@ class NodeRuntime(context: Context) {
 
   private fun showLocalCanvasOnDisconnect() {
     lastAutoA2uiUrl = null
+    _canvasA2uiHydrated.value = false
+    _canvasRehydratePending.value = false
+    _canvasRehydrateErrorText.value = null
     canvas.navigate("")
+  }
+
+  fun requestCanvasRehydrate(source: String = "manual", force: Boolean = true) {
+    scope.launch {
+      if (!_nodeConnected.value) {
+        _canvasRehydratePending.value = false
+        _canvasRehydrateErrorText.value = "Node offline. Reconnect and retry."
+        return@launch
+      }
+      if (!force && didAutoRequestCanvasRehydrate) return@launch
+      didAutoRequestCanvasRehydrate = true
+      val requestId = canvasRehydrateSeq.incrementAndGet()
+      _canvasRehydratePending.value = true
+      _canvasRehydrateErrorText.value = null
+
+      val sessionKey = resolveMainSessionKey()
+      val prompt =
+        "Restore canvas now for session=$sessionKey source=$source. " +
+          "If existing A2UI state exists, replay it immediately. " +
+          "If not, create and render a compact mobile-friendly dashboard in Canvas."
+      val sent =
+        nodeSession.sendNodeEvent(
+          event = "agent.request",
+          payloadJson =
+            buildJsonObject {
+              put("message", JsonPrimitive(prompt))
+              put("sessionKey", JsonPrimitive(sessionKey))
+              put("thinking", JsonPrimitive("low"))
+              put("deliver", JsonPrimitive(false))
+            }.toString(),
+        )
+      if (!sent) {
+        if (!force) {
+          didAutoRequestCanvasRehydrate = false
+        }
+        if (canvasRehydrateSeq.get() == requestId) {
+          _canvasRehydratePending.value = false
+          _canvasRehydrateErrorText.value = "Failed to request restore. Tap to retry."
+        }
+        Log.w("OpenClawCanvas", "canvas rehydrate request failed ($source): transport unavailable")
+        return@launch
+      }
+      scope.launch {
+        delay(20_000)
+        if (canvasRehydrateSeq.get() != requestId) return@launch
+        if (!_canvasRehydratePending.value) return@launch
+        if (_canvasA2uiHydrated.value) return@launch
+        _canvasRehydratePending.value = false
+        _canvasRehydrateErrorText.value = "No canvas update yet. Tap to retry."
+      }
+    }
   }
 
   val instanceId: StateFlow<String> = prefs.instanceId
@@ -337,15 +493,15 @@ class NodeRuntime(context: Context) {
   val locationMode: StateFlow<LocationMode> = prefs.locationMode
   val locationPreciseEnabled: StateFlow<Boolean> = prefs.locationPreciseEnabled
   val preventSleep: StateFlow<Boolean> = prefs.preventSleep
-  val wakeWords: StateFlow<List<String>> = prefs.wakeWords
-  val voiceWakeMode: StateFlow<VoiceWakeMode> = prefs.voiceWakeMode
-  val talkEnabled: StateFlow<Boolean> = prefs.talkEnabled
   val manualEnabled: StateFlow<Boolean> = prefs.manualEnabled
   val manualHost: StateFlow<String> = prefs.manualHost
   val manualPort: StateFlow<Int> = prefs.manualPort
   val manualTls: StateFlow<Boolean> = prefs.manualTls
   val gatewayToken: StateFlow<String> = prefs.gatewayToken
+  val onboardingCompleted: StateFlow<Boolean> = prefs.onboardingCompleted
   fun setGatewayToken(value: String) = prefs.setGatewayToken(value)
+  fun setGatewayPassword(value: String) = prefs.setGatewayPassword(value)
+  fun setOnboardingCompleted(value: Boolean) = prefs.setOnboardingCompleted(value)
   val lastDiscoveredStableId: StateFlow<String> = prefs.lastDiscoveredStableId
   val canvasDebugStatusEnabled: StateFlow<Boolean> = prefs.canvasDebugStatusEnabled
 
@@ -363,50 +519,17 @@ class NodeRuntime(context: Context) {
   val pendingRunCount: StateFlow<Int> = chat.pendingRunCount
 
   init {
-    gatewayEventHandler = GatewayEventHandler(
-      scope = scope,
-      prefs = prefs,
-      json = json,
-      operatorSession = operatorSession,
-      isConnected = { _isConnected.value },
-    )
-
-    scope.launch {
-      combine(
-        voiceWakeMode,
-        isForeground,
-        externalAudioCaptureActive,
-        wakeWords,
-      ) { mode, foreground, externalAudio, words ->
-        Quad(mode, foreground, externalAudio, words)
-      }.distinctUntilChanged()
-        .collect { (mode, foreground, externalAudio, words) ->
-          voiceWake.setTriggerWords(words)
-
-          val shouldListen =
-            when (mode) {
-              VoiceWakeMode.Off -> false
-              VoiceWakeMode.Foreground -> foreground
-              VoiceWakeMode.Always -> true
-            } && !externalAudio
-
-          if (!shouldListen) {
-            voiceWake.stop(statusText = if (mode == VoiceWakeMode.Off) "Off" else "Paused")
-            return@collect
-          }
-
-          if (!hasRecordAudioPermission()) {
-            voiceWake.stop(statusText = "Microphone permission required")
-            return@collect
-          }
-
-          voiceWake.start()
-        }
+    if (prefs.voiceWakeMode.value != VoiceWakeMode.Off) {
+      prefs.setVoiceWakeMode(VoiceWakeMode.Off)
     }
 
     scope.launch {
-      talkEnabled.collect { enabled ->
-        talkMode.setEnabled(enabled)
+      prefs.loadGatewayToken()
+    }
+
+    scope.launch {
+      prefs.talkEnabled.collect { enabled ->
+        micCapture.setMicEnabled(enabled)
         externalAudioCaptureActive.value = enabled
       }
     }
@@ -514,25 +637,30 @@ class NodeRuntime(context: Context) {
     prefs.setCanvasDebugStatusEnabled(value)
   }
 
-  fun setWakeWords(words: List<String>) {
-    prefs.setWakeWords(words)
-    gatewayEventHandler.scheduleWakeWordsSyncIfNeeded()
-  }
-
-  fun resetWakeWordsDefaults() {
-    setWakeWords(SecurePrefs.defaultWakeWords)
-  }
-
-  fun setVoiceWakeMode(mode: VoiceWakeMode) {
-    prefs.setVoiceWakeMode(mode)
-  }
-
-  fun setTalkEnabled(value: Boolean) {
+  fun setMicEnabled(value: Boolean) {
     prefs.setTalkEnabled(value)
+    micCapture.setMicEnabled(value)
+    externalAudioCaptureActive.value = value
+  }
+
+  val speakerEnabled: StateFlow<Boolean>
+    get() = prefs.speakerEnabled
+
+  fun setSpeakerEnabled(value: Boolean) {
+    prefs.setSpeakerEnabled(value)
+    if (voiceReplySpeakerLazy.isInitialized()) {
+      voiceReplySpeaker.setPlaybackEnabled(value)
+    }
   }
 
   fun refreshGatewayConnection() {
-    val endpoint = connectedEndpoint ?: return
+    val endpoint =
+      connectedEndpoint ?: run {
+        _statusText.value = "Failed: no cached gateway endpoint"
+        return
+      }
+    operatorStatusText = "Connecting…"
+    updateStatus()
     val token = prefs.loadGatewayToken()
     val password = prefs.loadGatewayPassword()
     val tls = connectionManager.resolveTlsParams(endpoint)
@@ -639,10 +767,10 @@ class NodeRuntime(context: Context) {
           contextJson = contextJson,
         )
 
-      val connected = nodeConnected
+      val connected = _nodeConnected.value
       var error: String? = null
       if (connected) {
-        try {
+        val sent =
           nodeSession.sendNodeEvent(
             event = "agent.request",
             payloadJson =
@@ -654,8 +782,8 @@ class NodeRuntime(context: Context) {
                 put("key", JsonPrimitive(actionId))
               }.toString(),
           )
-        } catch (e: Throwable) {
-          error = e.message ?: "send failed"
+        if (!sent) {
+          error = "send failed"
         }
       } else {
         error = "gateway not connected"
@@ -705,13 +833,17 @@ class NodeRuntime(context: Context) {
   }
 
   private fun handleGatewayEvent(event: String, payloadJson: String?) {
-    if (event == "voicewake.changed") {
-      gatewayEventHandler.handleVoiceWakeChangedEvent(payloadJson)
-      return
-    }
-
-    talkMode.handleGatewayEvent(event, payloadJson)
+    micCapture.handleGatewayEvent(event, payloadJson)
     chat.handleGatewayEvent(event, payloadJson)
+  }
+
+  private fun parseChatSendRunId(response: String): String? {
+    return try {
+      val root = json.parseToJsonElement(response).asObjectOrNull() ?: return null
+      root["runId"].asStringOrNull()
+    } catch (_: Throwable) {
+      null
+    }
   }
 
   private suspend fun refreshBrandingFromGateway() {

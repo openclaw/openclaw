@@ -1,21 +1,25 @@
+import type { SsrFPolicy } from "../infra/net/ssrf.js";
+import { postJson } from "./post-json.js";
+
 export async function fetchRemoteEmbeddingVectors(params: {
   url: string;
   headers: Record<string, string>;
+  ssrfPolicy?: SsrFPolicy;
   body: unknown;
   errorPrefix: string;
 }): Promise<number[][]> {
-  const res = await fetch(params.url, {
-    method: "POST",
+  return await postJson({
+    url: params.url,
     headers: params.headers,
-    body: JSON.stringify(params.body),
+    ssrfPolicy: params.ssrfPolicy,
+    body: params.body,
+    errorPrefix: params.errorPrefix,
+    parse: (payload) => {
+      const typedPayload = payload as {
+        data?: Array<{ embedding?: number[] }>;
+      };
+      const data = typedPayload.data ?? [];
+      return data.map((entry) => entry.embedding ?? []);
+    },
   });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`${params.errorPrefix}: ${res.status} ${text}`);
-  }
-  const payload = (await res.json()) as {
-    data?: Array<{ embedding?: number[] }>;
-  };
-  const data = payload.data ?? [];
-  return data.map((entry) => entry.embedding ?? []);
 }

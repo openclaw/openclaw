@@ -1,38 +1,14 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-import { captureEnv } from "../test-utils/env.js";
+import { createTempHomeEnv } from "../test-utils/temp-home.js";
 
 export async function withTempHome<T>(
   prefix: string,
   fn: (home: string) => Promise<T>,
 ): Promise<T> {
-  const home = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
-  await fs.mkdir(path.join(home, ".openclaw"), { recursive: true });
-
-  const snapshot = captureEnv([
-    "HOME",
-    "USERPROFILE",
-    "HOMEDRIVE",
-    "HOMEPATH",
-    "OPENCLAW_STATE_DIR",
-  ]);
-  process.env.HOME = home;
-  process.env.USERPROFILE = home;
-  process.env.OPENCLAW_STATE_DIR = path.join(home, ".openclaw");
-
-  if (process.platform === "win32") {
-    const match = home.match(/^([A-Za-z]:)(.*)$/);
-    if (match) {
-      process.env.HOMEDRIVE = match[1];
-      process.env.HOMEPATH = match[2] || "\\";
-    }
-  }
+  const tempHome = await createTempHomeEnv(prefix);
 
   try {
-    return await fn(home);
+    return await fn(tempHome.home);
   } finally {
-    snapshot.restore();
-    await fs.rm(home, { recursive: true, force: true });
+    await tempHome.restore();
   }
 }

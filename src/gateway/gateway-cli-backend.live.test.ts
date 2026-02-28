@@ -11,6 +11,7 @@ import { GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { GatewayClient } from "./client.js";
 import { renderCatNoncePngBase64 } from "./live-image-probe.js";
 import { startGatewayServer } from "./server.js";
+import { extractPayloadText } from "./test-helpers.agent-results.js";
 
 const LIVE = isTruthyEnvValue(process.env.LIVE) || isTruthyEnvValue(process.env.OPENCLAW_LIVE_TEST);
 const CLI_LIVE = isTruthyEnvValue(process.env.OPENCLAW_LIVE_CLI_BACKEND);
@@ -75,15 +76,6 @@ function editDistance(a: string, b: string): number {
   }
 
   return prev[bLen] ?? Number.POSITIVE_INFINITY;
-}
-
-function extractPayloadText(result: unknown): string {
-  const record = result as Record<string, unknown>;
-  const payloads = Array.isArray(record.payloads) ? record.payloads : [];
-  const texts = payloads
-    .map((p) => (p && typeof p === "object" ? (p as Record<string, unknown>).text : undefined))
-    .filter((t): t is string => typeof t === "string" && t.trim().length > 0);
-  return texts.join("\n").trim();
 }
 
 function parseJsonStringArray(name: string, raw?: string): string[] | undefined {

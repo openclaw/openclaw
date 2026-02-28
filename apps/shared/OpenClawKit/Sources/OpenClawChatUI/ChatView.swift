@@ -1,4 +1,7 @@
 import SwiftUI
+#if canImport(UIKit)
+import UIKit
+#endif
 
 @MainActor
 public struct OpenClawChatView: View {
@@ -105,6 +108,9 @@ public struct OpenClawChatView: View {
                 .padding(.top, Layout.messageListPaddingTop)
                 .padding(.horizontal, Layout.messageListPaddingHorizontal)
             }
+            #if !os(macOS)
+            .scrollDismissesKeyboard(.interactively)
+            #endif
             // Keep the scroll pinned to the bottom for new messages.
             .scrollPosition(id: self.$scrollPosition, anchor: .bottom)
             .onChange(of: self.scrollPosition) { _, position in
@@ -123,6 +129,10 @@ public struct OpenClawChatView: View {
         // Ensure the message list claims vertical space on the first layout pass.
         .frame(maxHeight: .infinity, alignment: .top)
         .layoutPriority(1)
+        .simultaneousGesture(
+            TapGesture().onEnded {
+                self.dismissKeyboardIfNeeded()
+            })
         .onChange(of: self.viewModel.isLoading) { _, isLoading in
             guard !isLoading, !self.hasPerformedInitialScroll else { return }
             self.scrollPosition = self.scrollerBottomID
@@ -405,6 +415,16 @@ public struct OpenClawChatView: View {
             return content.text
         }
         return parts.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func dismissKeyboardIfNeeded() {
+        #if canImport(UIKit)
+        UIApplication.shared.sendAction(
+            #selector(UIResponder.resignFirstResponder),
+            to: nil,
+            from: nil,
+            for: nil)
+        #endif
     }
 }
 
