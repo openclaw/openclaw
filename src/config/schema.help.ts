@@ -1288,7 +1288,9 @@ export const FIELD_HELP: Record<string, string> = {
   "channels.defaults":
     "Default channel behavior applied across providers when provider-specific settings are not set. Use this to enforce consistent baseline policy before per-provider tuning.",
   "channels.defaults.groupPolicy":
-    'Default group policy across channels: "open", "disabled", or "allowlist". Keep "allowlist" for safer production setups unless broad group participation is intentional.',
+    'Default group policy across channels: "open", "disabled", "allowlist", or "members" (Telegram only; normalized to "open" on other channels). Keep "allowlist" for safer production setups unless broad group participation is intentional.',
+  "channels.defaults.groupAllowFrom":
+    "Default trusted sender list applied to group messages across channels when no per-channel groupAllowFrom is set. Use numeric Telegram user IDs, phone numbers, or usernames depending on the channel. Per-channel groupAllowFrom always takes precedence.",
   "channels.defaults.heartbeat":
     "Default heartbeat visibility settings for status messages emitted by providers/channels. Tune this globally to reduce noisy healthy-state updates while keeping alerts visible.",
   "channels.defaults.heartbeat.showOk":

@@ -649,6 +649,7 @@ export const FIELD_LABELS: Record<string, string> = {
   channels: "Channels",
   "channels.defaults": "Channel Defaults",
   "channels.defaults.groupPolicy": "Default Group Policy",
+  "channels.defaults.groupAllowFrom": "Default Group Allow List",
   "channels.defaults.heartbeat": "Default Heartbeat Visibility",
   "channels.defaults.heartbeat.showOk": "Heartbeat Show OK",
   "channels.defaults.heartbeat.showAlerts": "Heartbeat Show Alerts",
