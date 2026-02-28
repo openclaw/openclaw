@@ -36,7 +36,6 @@ const allowedRawFetchCallsites = new Set([
   "extensions/googlechat/src/api.ts:188",
   "extensions/googlechat/src/auth.ts:82",
   "extensions/matrix/src/directory-live.ts:41",
-  "extensions/matrix/src/matrix/client/config.ts:171",
   "extensions/mattermost/src/mattermost/client.ts:211",
   "extensions/mattermost/src/mattermost/monitor.ts:230",
   "extensions/mattermost/src/mattermost/probe.ts:27",

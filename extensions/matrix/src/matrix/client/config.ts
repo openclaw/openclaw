@@ -6,8 +6,6 @@ import {
   normalizeSecretInputString,
 } from "../../secret-input.js";
 import type { CoreConfig } from "../../types.js";
-import { loadMatrixSdk } from "../sdk-runtime.js";
-import { ensureMatrixSdkLoggingConfigured } from "./logging.js";
 import type { MatrixAuth, MatrixResolvedConfig } from "./types.js";
 
 function clean(value: unknown, path: string): string {
@@ -134,22 +132,39 @@ export async function resolveMatrixAuth(params?: {
   if (resolved.accessToken) {
     let userId = resolved.userId;
     if (!userId) {
-      // Fetch userId from access token via whoami
-      ensureMatrixSdkLoggingConfigured();
-      const { MatrixClient } = loadMatrixSdk();
-      const tempClient = new MatrixClient(resolved.homeserver, resolved.accessToken);
-      const whoami = await tempClient.getUserId();
-      userId = whoami;
-      // Save the credentials with the fetched userId
-      saveMatrixCredentials(
-        {
-          homeserver: resolved.homeserver,
-          userId,
-          accessToken: resolved.accessToken,
-        },
-        env,
-        accountId,
-      );
+      // Fetch userId + deviceId from whoami endpoint
+      const { response: whoamiResponse, release: releaseWhoami } = await fetchWithSsrFGuard({
+        url: `${resolved.homeserver}/_matrix/client/v3/account/whoami`,
+        init: { headers: { Authorization: `Bearer ${resolved.accessToken}` } },
+        auditContext: "matrix.whoami",
+      });
+      try {
+        if (!whoamiResponse.ok) {
+          const errorText = await whoamiResponse.text();
+          throw new Error(`Matrix whoami failed: ${errorText}`);
+        }
+        const whoami = (await whoamiResponse.json()) as {
+          user_id?: string;
+          device_id?: string;
+        };
+        userId = whoami.user_id ?? "";
+        if (!userId) {
+          throw new Error("Matrix whoami did not return a user_id");
+        }
+        // Save credentials including deviceId so E2EE survives restarts
+        saveMatrixCredentials(
+          {
+            homeserver: resolved.homeserver,
+            userId,
+            accessToken: resolved.accessToken,
+            ...(whoami.device_id ? { deviceId: whoami.device_id } : {}),
+          },
+          env,
+          accountId,
+        );
+      } finally {
+        await releaseWhoami();
+      }
     } else if (cachedCredentials && cachedCredentials.accessToken === resolved.accessToken) {
       touchMatrixCredentials(env, accountId);
     }
