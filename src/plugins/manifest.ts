@@ -42,12 +42,16 @@ export function resolvePluginManifestPath(rootDir: string): string {
   return path.join(rootDir, PLUGIN_MANIFEST_FILENAME);
 }
 
-export function loadPluginManifest(rootDir: string): PluginManifestLoadResult {
+export function loadPluginManifest(
+  rootDir: string,
+  options?: { rejectHardlinks?: boolean },
+): PluginManifestLoadResult {
   const manifestPath = resolvePluginManifestPath(rootDir);
   const opened = openBoundaryFileSync({
     absolutePath: manifestPath,
     rootPath: rootDir,
     boundaryLabel: "plugin root",
+    rejectHardlinks: options?.rejectHardlinks,
   });
   if (!opened.ok) {
     if (opened.reason === "path") {

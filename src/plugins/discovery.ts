@@ -223,12 +223,16 @@ function shouldIgnoreScannedDirectory(dirName: string): boolean {
   return false;
 }
 
-function readPackageManifest(dir: string): PackageManifest | null {
+function readPackageManifest(
+  dir: string,
+  options?: { rejectHardlinks?: boolean },
+): PackageManifest | null {
   const manifestPath = path.join(dir, "package.json");
   const opened = openBoundaryFileSync({
     absolutePath: manifestPath,
     rootPath: dir,
     boundaryLabel: "plugin package directory",
+    rejectHardlinks: options?.rejectHardlinks,
   });
   if (!opened.ok) {
     return null;
@@ -324,12 +328,14 @@ function resolvePackageEntrySource(params: {
   entryPath: string;
   sourceLabel: string;
   diagnostics: PluginDiagnostic[];
+  rejectHardlinks?: boolean;
 }): string | null {
   const source = path.resolve(params.packageDir, params.entryPath);
   const opened = openBoundaryFileSync({
     absolutePath: source,
     rootPath: params.packageDir,
     boundaryLabel: "plugin package directory",
+    rejectHardlinks: params.rejectHardlinks,
   });
   if (!opened.ok) {
     params.diagnostics.push({
@@ -393,7 +399,10 @@ function discoverInDirectory(params: {
       continue;
     }
 
-    const manifest = readPackageManifest(fullPath);
+    // Bundled plugins may be hardlinked by pnpm's content-addressable store;
+    // skip hardlink rejection so pnpm global installs work.
+    const rejectHardlinks = params.origin !== "bundled" ? undefined : false;
+    const manifest = readPackageManifest(fullPath, { rejectHardlinks });
     const extensions = manifest ? resolvePackageExtensions(manifest) : [];
 
     if (extensions.length > 0) {
@@ -403,6 +412,7 @@ function discoverInDirectory(params: {
           entryPath: extPath,
           sourceLabel: fullPath,
           diagnostics: params.diagnostics,
+          rejectHardlinks,
         });
         if (!resolved) {
           continue;
