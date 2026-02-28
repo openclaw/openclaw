@@ -1,0 +1,29 @@
+{
+  "name": "@openclaw/wecom",
+  "version": "0.1.0",
+  "private": true,
+  "description": "WeCom (企业微信) channel plugin for OpenClaw",
+  "type": "module",
+  "exports": {
+    ".": "./index.ts"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "channel": {
+      "id": "wecom",
+      "label": "WeCom",
+      "selectionLabel": "WeCom (企业微信)",
+      "docsPath": "/channels/wecom",
+      "docsLabel": "wecom",
+      "blurb": "企业微信 enterprise messaging with webhook support.",
+      "order": 36,
+      "quickstartAllowFrom": true
+    },
+    "install": {
+      "localPath": "extensions/wecom",
+      "defaultChoice": "local"
+    }
+  }
+}
