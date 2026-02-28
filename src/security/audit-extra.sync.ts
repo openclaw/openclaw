@@ -54,16 +54,18 @@ function summarizeGroupPolicy(cfg: OpenClawConfig): {
   let open = 0;
   let allowlist = 0;
   let other = 0;
-  for (const value of Object.values(channels)) {
+  for (const [channelKey, value] of Object.entries(channels)) {
     if (!value || typeof value !== "object") {
       continue;
     }
     const section = value as Record<string, unknown>;
     const policy = section.groupPolicy;
-    // "members" normalizes to "open" for non-Telegram channels; count both in the open bucket.
-    if (policy === "open" || policy === "members") {
+    // "members" normalizes to "open" for non-Telegram channels, but Telegram "members" is a
+    // stricter membership-verification mode and must NOT be counted as open.
+    const isTelegram = channelKey === "telegram";
+    if (policy === "open" || (policy === "members" && !isTelegram)) {
       open += 1;
-    } else if (policy === "allowlist") {
+    } else if (policy === "allowlist" || (policy === "members" && isTelegram)) {
       allowlist += 1;
     } else {
       other += 1;
@@ -321,8 +323,10 @@ function listGroupPolicyOpen(cfg: OpenClawConfig): string[] {
       continue;
     }
     const section = value as Record<string, unknown>;
+    const isTelegram = channelId === "telegram";
     // "members" normalizes to "open" for non-Telegram channels; flag both as open-access.
-    if (section.groupPolicy === "open" || section.groupPolicy === "members") {
+    // Telegram "members" is restrictive membership-verification, not open access.
+    if (section.groupPolicy === "open" || (section.groupPolicy === "members" && !isTelegram)) {
       out.push(`channels.${channelId}.groupPolicy`);
     }
     const accounts = section.accounts;
@@ -332,7 +336,7 @@ function listGroupPolicyOpen(cfg: OpenClawConfig): string[] {
           continue;
         }
         const acc = accountVal as Record<string, unknown>;
-        if (acc.groupPolicy === "open" || acc.groupPolicy === "members") {
+        if (acc.groupPolicy === "open" || (acc.groupPolicy === "members" && !isTelegram)) {
           out.push(`channels.${channelId}.accounts.${accountId}.groupPolicy`);
         }
       }
@@ -356,10 +360,15 @@ function listPotentialMultiUserSignals(cfg: OpenClawConfig): string[] {
     return [];
   }
 
-  const inspectSection = (section: Record<string, unknown>, basePath: string) => {
+  const inspectSection = (
+    section: Record<string, unknown>,
+    basePath: string,
+    isTelegram: boolean,
+  ) => {
     const groupPolicy = typeof section.groupPolicy === "string" ? section.groupPolicy : null;
     // "members" normalizes to "open" for non-Telegram channels; treat as effectively open.
-    const isEffectivelyOpen = groupPolicy === "open" || groupPolicy === "members";
+    // Telegram "members" is stricter membership-verification and must NOT be counted as open.
+    const isEffectivelyOpen = groupPolicy === "open" || (groupPolicy === "members" && !isTelegram);
     if (isEffectivelyOpen) {
       out.add(`${basePath}.groupPolicy="open"`);
     } else if (groupPolicy === "allowlist" && hasConfiguredGroupTargets(section)) {
@@ -399,8 +408,9 @@ function listPotentialMultiUserSignals(cfg: OpenClawConfig): string[] {
     if (!value || typeof value !== "object") {
       continue;
     }
+    const isTelegram = channelId === "telegram";
     const section = value as Record<string, unknown>;
-    inspectSection(section, `channels.${channelId}`);
+    inspectSection(section, `channels.${channelId}`, isTelegram);
     const accounts = section.accounts;
     if (!accounts || typeof accounts !== "object") {
       continue;
@@ -412,6 +422,7 @@ function listPotentialMultiUserSignals(cfg: OpenClawConfig): string[] {
       inspectSection(
         accountValue as Record<string, unknown>,
         `channels.${channelId}.accounts.${accountId}`,
+        isTelegram,
       );
     }
   }
