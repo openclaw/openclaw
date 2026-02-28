@@ -37,7 +37,6 @@ type NormalizedAttachment = {
 };
 
 const WEBCHAT_UPLOAD_RETENTION_MS = 24 * 60 * 60 * 1000;
-const WEBCHAT_UPLOAD_MAX_FILES = 500;
 
 function normalizeMime(mime?: string): string | undefined {
   if (!mime) {
@@ -140,25 +139,8 @@ async function prunePersistedWebchatUploads(uploadDir: string, keepPath: string)
       }),
     );
 
-    const fresh = files
-      .filter((entry) => entry.mtimeMs >= cutoff || entry.fullPath === keepPath)
-      .toSorted((a, b) => b.mtimeMs - a.mtimeMs);
-
-    if (fresh.length <= WEBCHAT_UPLOAD_MAX_FILES) {
-      return;
-    }
-
-    let toDelete = fresh.length - WEBCHAT_UPLOAD_MAX_FILES;
-    for (const entry of fresh.toReversed()) {
-      if (toDelete <= 0) {
-        break;
-      }
-      if (entry.fullPath === keepPath) {
-        continue;
-      }
-      await fs.unlink(entry.fullPath).catch(() => {});
-      toDelete -= 1;
-    }
+    // Keep non-stale uploads untouched; removing by count can race with in-flight runs
+    // that still reference older persisted media paths.
   } catch {
     // Best-effort retention cleanup; upload persistence should still succeed.
   }

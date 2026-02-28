@@ -198,6 +198,38 @@ describe("parseMessageWithAttachments", () => {
       await fs.rm(uploadDir, { recursive: true, force: true });
     }
   });
+
+  it("does not prune fresh uploads by count", async () => {
+    const uploadDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-webchat-upload-count-"));
+    try {
+      const existingPath = path.join(uploadDir, "fresh-existing.png");
+      await fs.writeFile(existingPath, Buffer.from(PNG_1x1, "base64"), { mode: 0o600 });
+
+      for (let i = 0; i < 550; i += 1) {
+        await fs.writeFile(path.join(uploadDir, `fresh-${i}.png`), Buffer.from(PNG_1x1, "base64"), {
+          mode: 0o600,
+        });
+      }
+
+      const parsed = await parseMessageWithAttachments(
+        "see this",
+        [
+          {
+            type: "image",
+            mimeType: "image/png",
+            fileName: "dot.png",
+            content: `data:image/png;base64,${PNG_1x1}`,
+          },
+        ],
+        { log: { warn: () => {} }, persistImagesToDisk: true, uploadDir },
+      );
+
+      expect(parsed.mediaPaths).toHaveLength(1);
+      await expect(fs.stat(existingPath)).resolves.toBeTruthy();
+    } finally {
+      await fs.rm(uploadDir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("shared attachment validation", () => {
