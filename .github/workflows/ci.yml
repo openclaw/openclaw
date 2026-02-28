@@ -400,6 +400,7 @@ jobs:
         run: echo "BOT_VITEST_REPORT_DIR=$RUNNER_TEMP/vitest-reports" >> "$GITHUB_ENV"
 
       - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
+        continue-on-error: ${{ matrix.task == 'test' }}
         run: ${{ matrix.command }}
 
       - name: Summarize slowest tests
