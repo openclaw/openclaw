@@ -11,56 +11,69 @@ import {
 } from "./mmr.js";
 
 describe("tokenize", () => {
-  it("extracts alphanumeric tokens and lowercases", () => {
-    const result = tokenize("Hello World 123");
-    expect(result).toEqual(new Set(["hello", "world", "123"]));
-  });
+  it("normalizes, filters, and deduplicates token sets", () => {
+    const cases = [
+      {
+        name: "alphanumeric lowercase",
+        input: "Hello World 123",
+        expected: ["hello", "world", "123"],
+      },
+      { name: "empty string", input: "", expected: [] },
+      { name: "special chars only", input: "!@#$%^&*()", expected: [] },
+      {
+        name: "underscores",
+        input: "hello_world test_case",
+        expected: ["hello_world", "test_case"],
+      },
+      {
+        name: "dedupe repeated tokens",
+        input: "hello hello world world",
+        expected: ["hello", "world"],
+      },
+    ] as const;
 
-  it("handles empty string", () => {
-    expect(tokenize("")).toEqual(new Set());
-  });
-
-  it("handles special characters only", () => {
-    expect(tokenize("!@#$%^&*()")).toEqual(new Set());
-  });
-
-  it("handles underscores in tokens", () => {
-    const result = tokenize("hello_world test_case");
-    expect(result).toEqual(new Set(["hello_world", "test_case"]));
-  });
-
-  it("deduplicates repeated tokens", () => {
-    const result = tokenize("hello hello world world");
-    expect(result).toEqual(new Set(["hello", "world"]));
+    for (const testCase of cases) {
+      expect(tokenize(testCase.input), testCase.name).toEqual(new Set(testCase.expected));
+    }
   });
 });
 
 describe("jaccardSimilarity", () => {
-  it("returns 1 for identical sets", () => {
-    const set = new Set(["a", "b", "c"]);
-    expect(jaccardSimilarity(set, set)).toBe(1);
-  });
+  it("computes expected scores for overlap edge cases", () => {
+    const cases = [
+      {
+        name: "identical sets",
+        left: new Set(["a", "b", "c"]),
+        right: new Set(["a", "b", "c"]),
+        expected: 1,
+      },
+      { name: "disjoint sets", left: new Set(["a", "b"]), right: new Set(["c", "d"]), expected: 0 },
+      { name: "two empty sets", left: new Set<string>(), right: new Set<string>(), expected: 1 },
+      {
+        name: "left non-empty right empty",
+        left: new Set(["a"]),
+        right: new Set<string>(),
+        expected: 0,
+      },
+      {
+        name: "left empty right non-empty",
+        left: new Set<string>(),
+        right: new Set(["a"]),
+        expected: 0,
+      },
+      {
+        name: "partial overlap",
+        left: new Set(["a", "b", "c"]),
+        right: new Set(["b", "c", "d"]),
+        expected: 0.5,
+      },
+    ] as const;
 
-  it("returns 0 for disjoint sets", () => {
-    const setA = new Set(["a", "b"]);
-    const setB = new Set(["c", "d"]);
-    expect(jaccardSimilarity(setA, setB)).toBe(0);
-  });
-
-  it("returns 1 for two empty sets", () => {
-    expect(jaccardSimilarity(new Set(), new Set())).toBe(1);
-  });
-
-  it("returns 0 when one set is empty", () => {
-    expect(jaccardSimilarity(new Set(["a"]), new Set())).toBe(0);
-    expect(jaccardSimilarity(new Set(), new Set(["a"]))).toBe(0);
-  });
-
-  it("computes correct similarity for partial overlap", () => {
-    const setA = new Set(["a", "b", "c"]);
-    const setB = new Set(["b", "c", "d"]);
-    // Intersection: {b, c} = 2, Union: {a, b, c, d} = 4
-    expect(jaccardSimilarity(setA, setB)).toBe(0.5);
+    for (const testCase of cases) {
+      expect(jaccardSimilarity(testCase.left, testCase.right), testCase.name).toBe(
+        testCase.expected,
+      );
+    }
   });
 
   it("is symmetric", () => {
@@ -71,40 +84,47 @@ describe("jaccardSimilarity", () => {
 });
 
 describe("textSimilarity", () => {
-  it("returns 1 for identical text", () => {
-    expect(textSimilarity("hello world", "hello world")).toBe(1);
-  });
+  it("computes expected text-level similarity cases", () => {
+    const cases = [
+      { name: "identical", left: "hello world", right: "hello world", expected: 1 },
+      { name: "same words reordered", left: "hello world", right: "world hello", expected: 1 },
+      { name: "different text", left: "hello world", right: "foo bar", expected: 0 },
+      { name: "case insensitive", left: "Hello World", right: "hello world", expected: 1 },
+    ] as const;
 
-  it("returns 1 for same words different order", () => {
-    expect(textSimilarity("hello world", "world hello")).toBe(1);
-  });
-
-  it("returns 0 for completely different text", () => {
-    expect(textSimilarity("hello world", "foo bar")).toBe(0);
-  });
-
-  it("handles case insensitivity", () => {
-    expect(textSimilarity("Hello World", "hello world")).toBe(1);
+    for (const testCase of cases) {
+      expect(textSimilarity(testCase.left, testCase.right), testCase.name).toBe(testCase.expected);
+    }
   });
 });
 
 describe("computeMMRScore", () => {
-  it("returns pure relevance when lambda=1", () => {
-    expect(computeMMRScore(0.8, 0.5, 1)).toBe(0.8);
-  });
+  it("balances relevance and diversity across lambda settings", () => {
+    const cases = [
+      {
+        name: "lambda=1 relevance only",
+        relevance: 0.8,
+        similarity: 0.5,
+        lambda: 1,
+        expected: 0.8,
+      },
+      {
+        name: "lambda=0 diversity only",
+        relevance: 0.8,
+        similarity: 0.5,
+        lambda: 0,
+        expected: -0.5,
+      },
+      { name: "lambda=0.5 mixed", relevance: 0.8, similarity: 0.6, lambda: 0.5, expected: 0.1 },
+      { name: "default lambda math", relevance: 1.0, similarity: 0.5, lambda: 0.7, expected: 0.55 },
+    ] as const;
 
-  it("returns negative similarity when lambda=0", () => {
-    expect(computeMMRScore(0.8, 0.5, 0)).toBe(-0.5);
-  });
-
-  it("balances relevance and diversity at lambda=0.5", () => {
-    // 0.5 * 0.8 - 0.5 * 0.6 = 0.4 - 0.3 = 0.1
-    expect(computeMMRScore(0.8, 0.6, 0.5)).toBeCloseTo(0.1);
-  });
-
-  it("computes correctly with default lambda=0.7", () => {
-    // 0.7 * 1.0 - 0.3 * 0.5 = 0.7 - 0.15 = 0.55
-    expect(computeMMRScore(1.0, 0.5, 0.7)).toBeCloseTo(0.55);
+    for (const testCase of cases) {
+      expect(
+        computeMMRScore(testCase.relevance, testCase.similarity, testCase.lambda),
+        testCase.name,
+      ).toBeCloseTo(testCase.expected);
+    }
   });
 });
 

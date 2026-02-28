@@ -106,6 +106,7 @@ export async function handleDirectiveOnly(
     allowedModelCatalog,
     resetModelOverride,
     surface: params.surface,
+    sessionEntry,
   });
   if (modelInfo) {
     return modelInfo;
@@ -291,7 +292,8 @@ export async function handleDirectiveOnly(
   }
   if (directives.hasReasoningDirective && directives.reasoningLevel) {
     if (directives.reasoningLevel === "off") {
-      delete sessionEntry.reasoningLevel;
+      // Persist explicit off so it overrides model-capability defaults.
+      sessionEntry.reasoningLevel = "off";
     } else {
       sessionEntry.reasoningLevel = directives.reasoningLevel;
     }

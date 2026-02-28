@@ -23,6 +23,8 @@ enum WatchMessagingError: LocalizedError {
 final class WatchMessagingService: NSObject, WatchMessagingServicing, @unchecked Sendable {
     private static let logger = Logger(subsystem: "ai.openclaw", category: "watch.messaging")
     private let session: WCSession?
+    private let replyHandlerLock = NSLock()
+    private var replyHandler: (@Sendable (WatchQuickReplyEvent) -> Void)?
 
     override init() {
         if WCSession.isSupported() {
@@ -67,11 +69,15 @@ final class WatchMessagingService: NSObject, WatchMessagingServicing, @unchecked
         return Self.status(for: session)
     }
 
+    func setReplyHandler(_ handler: (@Sendable (WatchQuickReplyEvent) -> Void)?) {
+        self.replyHandlerLock.lock()
+        self.replyHandler = handler
+        self.replyHandlerLock.unlock()
+    }
+
     func sendNotification(
         id: String,
-        title: String,
-        body: String,
-        priority: OpenClawNotificationPriority?) async throws -> WatchNotificationSendResult
+        params: OpenClawWatchNotifyParams) async throws -> WatchNotificationSendResult
     {
         await self.ensureActivated()
         guard let session = self.session else {
@@ -82,14 +88,44 @@ final class WatchMessagingService: NSObject, WatchMessagingServicing, @unchecked
         guard snapshot.paired else { throw WatchMessagingError.notPaired }
         guard snapshot.appInstalled else { throw WatchMessagingError.watchAppNotInstalled }
 
-        let payload: [String: Any] = [
+        var payload: [String: Any] = [
             "type": "watch.notify",
             "id": id,
-            "title": title,
-            "body": body,
-            "priority": priority?.rawValue ?? OpenClawNotificationPriority.active.rawValue,
+            "title": params.title,
+            "body": params.body,
+            "priority": params.priority?.rawValue ?? OpenClawNotificationPriority.active.rawValue,
             "sentAtMs": Int(Date().timeIntervalSince1970 * 1000),
         ]
+        if let promptId = Self.nonEmpty(params.promptId) {
+            payload["promptId"] = promptId
+        }
+        if let sessionKey = Self.nonEmpty(params.sessionKey) {
+            payload["sessionKey"] = sessionKey
+        }
+        if let kind = Self.nonEmpty(params.kind) {
+            payload["kind"] = kind
+        }
+        if let details = Self.nonEmpty(params.details) {
+            payload["details"] = details
+        }
+        if let expiresAtMs = params.expiresAtMs {
+            payload["expiresAtMs"] = expiresAtMs
+        }
+        if let risk = params.risk {
+            payload["risk"] = risk.rawValue
+        }
+        if let actions = params.actions, !actions.isEmpty {
+            payload["actions"] = actions.map { action in
+                var encoded: [String: Any] = [
+                    "id": action.id,
+                    "label": action.label,
+                ]
+                if let style = Self.nonEmpty(action.style) {
+                    encoded["style"] = style
+                }
+                return encoded
+            }
+        }
 
         if snapshot.reachable {
             do {
@@ -112,12 +148,57 @@ final class WatchMessagingService: NSObject, WatchMessagingServicing, @unchecked
 
     private func sendReachableMessage(_ payload: [String: Any], with session: WCSession) async throws {
         try await withCheckedThrowingContinuation { continuation in
-            session.sendMessage(payload, replyHandler: { _ in
-                continuation.resume()
-            }, errorHandler: { error in
-                continuation.resume(throwing: error)
-            })
+            session.sendMessage(
+                payload,
+                replyHandler: { _ in
+                    continuation.resume()
+                },
+                errorHandler: { error in
+                    continuation.resume(throwing: error)
+                }
+            )
         }
+    }
+
+    private func emitReply(_ event: WatchQuickReplyEvent) {
+        let handler: ((WatchQuickReplyEvent) -> Void)?
+        self.replyHandlerLock.lock()
+        handler = self.replyHandler
+        self.replyHandlerLock.unlock()
+        handler?(event)
+    }
+
+    private static func nonEmpty(_ value: String?) -> String? {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private static func parseQuickReplyPayload(
+        _ payload: [String: Any],
+        transport: String) -> WatchQuickReplyEvent?
+    {
+        guard (payload["type"] as? String) == "watch.reply" else {
+            return nil
+        }
+        guard let actionId = nonEmpty(payload["actionId"] as? String) else {
+            return nil
+        }
+        let promptId = nonEmpty(payload["promptId"] as? String) ?? "unknown"
+        let replyId = nonEmpty(payload["replyId"] as? String) ?? UUID().uuidString
+        let actionLabel = nonEmpty(payload["actionLabel"] as? String)
+        let sessionKey = nonEmpty(payload["sessionKey"] as? String)
+        let note = nonEmpty(payload["note"] as? String)
+        let sentAtMs = (payload["sentAtMs"] as? Int) ?? (payload["sentAtMs"] as? NSNumber)?.intValue
+
+        return WatchQuickReplyEvent(
+            replyId: replyId,
+            promptId: promptId,
+            actionId: actionId,
+            actionLabel: actionLabel,
+            sessionKey: sessionKey,
+            note: note,
+            sentAtMs: sentAtMs,
+            transport: transport)
     }
 
     private func ensureActivated() async {
@@ -170,6 +251,33 @@ extension WatchMessagingService: WCSessionDelegate {
 
     func sessionDidDeactivate(_ session: WCSession) {
         session.activate()
+    }
+
+    func session(_: WCSession, didReceiveMessage message: [String: Any]) {
+        guard let event = Self.parseQuickReplyPayload(message, transport: "sendMessage") else {
+            return
+        }
+        self.emitReply(event)
+    }
+
+    func session(
+        _: WCSession,
+        didReceiveMessage message: [String: Any],
+        replyHandler: @escaping ([String: Any]) -> Void)
+    {
+        guard let event = Self.parseQuickReplyPayload(message, transport: "sendMessage") else {
+            replyHandler(["ok": false, "error": "unsupported_payload"])
+            return
+        }
+        replyHandler(["ok": true])
+        self.emitReply(event)
+    }
+
+    func session(_: WCSession, didReceiveUserInfo userInfo: [String: Any]) {
+        guard let event = Self.parseQuickReplyPayload(userInfo, transport: "transferUserInfo") else {
+            return
+        }
+        self.emitReply(event)
     }
 
     func sessionReachabilityDidChange(_ session: WCSession) {}

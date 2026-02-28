@@ -328,6 +328,12 @@
   animation: none;
 }
 
+.statusDot.warn {
+  background: var(--warn);
+  box-shadow: 0 0 8px rgba(245, 158, 11, 0.5);
+  animation: none;
+}
+
 /* ===========================================
    Buttons - Tactile with personality
    =========================================== */
@@ -526,6 +532,441 @@
   grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
 }
 
+/* ===========================================
+   Cron Form
+   =========================================== */
+
+.cron-summary-strip {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px 18px;
+  padding: 14px 16px;
+}
+
+.cron-summary-strip__left {
+  display: grid;
+  gap: 8px 14px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.cron-summary-item {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  padding: 10px 12px;
+  min-height: 62px;
+  display: grid;
+  gap: 6px;
+}
+
+.cron-summary-item--wide {
+  grid-column: span 1;
+}
+
+.cron-summary-label {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.cron-summary-value {
+  color: var(--text-strong);
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.3;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.cron-summary-strip__actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  min-width: 0;
+}
+
+.cron-workspace {
+  margin-top: 16px;
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(340px, 0.8fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.cron-workspace-main {
+  display: grid;
+  gap: 16px;
+}
+
+.cron-workspace-form {
+  position: sticky;
+  top: 74px;
+}
+
+.cron-form {
+  margin-top: 16px;
+  display: grid;
+  gap: 14px;
+}
+
+.cron-form-section {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 14px;
+  background: var(--bg-elevated);
+  display: grid;
+  gap: 12px;
+}
+
+.cron-form-section__title {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--text-strong);
+}
+
+.cron-form-section__sub {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.cron-form-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px 16px;
+}
+
+.cron-help {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+  margin-top: 2px;
+}
+
+.cron-error {
+  color: var(--danger-color);
+}
+
+.cron-required-legend {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.cron-required-marker {
+  color: var(--danger-color);
+  font-weight: 700;
+  margin-left: 3px;
+}
+
+.cron-required-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.field input[aria-invalid="true"],
+.field textarea[aria-invalid="true"],
+.field select[aria-invalid="true"] {
+  border-color: var(--danger);
+  box-shadow:
+    inset 0 1px 0 var(--card-highlight),
+    0 0 0 1px rgba(239, 68, 68, 0.2);
+}
+
+.cron-form-status {
+  margin-top: 4px;
+  border: 1px solid var(--danger-subtle);
+  background: var(--danger-subtle);
+  border-radius: var(--radius-md);
+  padding: 10px 12px;
+}
+
+.cron-form-status__title {
+  color: var(--text-strong);
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+.cron-form-status__list {
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 6px;
+}
+
+.cron-form-status__link {
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1.4;
+  padding: 0;
+  text-align: left;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.cron-form-status__link:hover {
+  color: var(--text-strong);
+}
+
+.cron-span-2 {
+  grid-column: 1 / -1;
+}
+
+.cron-checkbox {
+  align-items: center;
+  grid-template-columns: 16px minmax(0, 1fr);
+  column-gap: 10px;
+}
+
+.cron-checkbox input[type="checkbox"] {
+  margin: 2px 0 0;
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+}
+
+.cron-checkbox .field-checkbox__label {
+  color: var(--text-strong);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.cron-checkbox .cron-help {
+  grid-column: 2;
+}
+
+.cron-checkbox-inline {
+  align-content: start;
+  align-items: start;
+  padding-top: 28px;
+}
+
+.cron-advanced {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 12px;
+  background: var(--bg-elevated);
+  display: grid;
+  gap: 10px;
+}
+
+.cron-advanced__summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.cron-stagger-group {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 180px;
+  gap: 14px 16px;
+  align-items: start;
+}
+
+.cron-form-actions {
+  margin-top: 14px;
+  justify-content: flex-start;
+  align-items: center;
+  gap: 10px 14px;
+  flex-wrap: wrap;
+}
+
+.cron-submit-reason {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.cron-filter-search {
+  flex: 1 1 320px;
+  min-width: 280px;
+}
+
+.cron-workspace .filters .field {
+  min-width: 160px;
+}
+
+.cron-run-filters {
+  margin-top: 12px;
+  display: grid;
+  gap: 12px;
+}
+
+.cron-run-filters__row {
+  display: grid;
+  gap: 12px;
+}
+
+.cron-run-filters__row--primary {
+  grid-template-columns: minmax(160px, 220px) minmax(240px, 1fr) minmax(160px, 220px);
+}
+
+.cron-run-filters__row--secondary {
+  grid-template-columns: repeat(2, minmax(220px, 1fr));
+}
+
+.cron-run-filter-search {
+  min-width: 0;
+}
+
+.cron-filter-dropdown {
+  min-width: 0;
+}
+
+.cron-filter-dropdown__details {
+  position: relative;
+}
+
+.cron-filter-dropdown__details > summary {
+  list-style: none;
+}
+
+.cron-filter-dropdown__details > summary::-webkit-details-marker {
+  display: none;
+}
+
+.cron-filter-dropdown__trigger {
+  width: 100%;
+  justify-content: space-between;
+  text-align: left;
+}
+
+.cron-filter-dropdown__panel {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 8px);
+  left: 0;
+  width: min(360px, calc(100vw - 48px));
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  padding: 10px;
+  display: grid;
+  gap: 10px;
+  box-shadow: var(--shadow-card);
+}
+
+.cron-filter-dropdown__list {
+  display: grid;
+  gap: 6px;
+}
+
+.cron-filter-dropdown__option {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  color: var(--text);
+  font-size: 13px;
+}
+
+.cron-filter-dropdown__option input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.cron-run-entry {
+  align-items: start;
+}
+
+.cron-run-entry__meta {
+  text-align: right;
+  min-width: 220px;
+}
+
+.cron-run-entry__summary {
+  white-space: pre-wrap;
+  line-height: 1.45;
+}
+
+@media (max-width: 1100px) {
+  .cron-summary-strip {
+    flex-direction: column;
+  }
+
+  .cron-summary-strip__left {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: 100%;
+  }
+
+  .cron-summary-strip__actions {
+    width: 100%;
+    justify-content: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .cron-workspace {
+    grid-template-columns: 1fr;
+  }
+
+  .cron-workspace-form {
+    position: static;
+    order: -1;
+  }
+
+  .cron-form-grid {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+
+  .cron-span-2 {
+    grid-column: auto;
+  }
+
+  .cron-checkbox-inline {
+    padding-top: 0;
+  }
+
+  .cron-stagger-group {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+
+  .cron-filter-search {
+    min-width: 0;
+    flex: 1 1 100%;
+  }
+
+  .cron-run-filters__row--primary,
+  .cron-run-filters__row--secondary {
+    grid-template-columns: 1fr;
+  }
+
+  .cron-filter-dropdown__panel {
+    width: 100%;
+    max-width: none;
+    position: static;
+    margin-top: 8px;
+  }
+
+  .cron-run-entry__meta {
+    min-width: 0;
+    text-align: left;
+  }
+}
+
 :root[data-theme="light"] .field input,
 :root[data-theme="light"] .field textarea,
 :root[data-theme="light"] .field select {
@@ -540,6 +981,12 @@
 
 :root[data-theme="light"] .btn:hover {
   background: var(--bg-hover);
+}
+
+:root[data-theme="light"] .btn.active {
+  border-color: var(--accent);
+  background: var(--accent-subtle);
+  color: var(--accent);
 }
 
 :root[data-theme="light"] .btn.primary {
@@ -631,6 +1078,16 @@
 }
 
 .compaction-indicator--complete {
+  color: var(--ok);
+  border-color: rgba(34, 197, 94, 0.35);
+}
+
+.compaction-indicator--fallback {
+  color: #d97706;
+  border-color: rgba(217, 119, 6, 0.35);
+}
+
+.compaction-indicator--fallback-cleared {
   color: var(--ok);
   border-color: rgba(34, 197, 94, 0.35);
 }

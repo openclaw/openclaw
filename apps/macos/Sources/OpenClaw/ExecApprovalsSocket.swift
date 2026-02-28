@@ -38,7 +38,7 @@ private struct ExecHostSocketRequest: Codable {
     var requestJson: String
 }
 
-private struct ExecHostRequest: Codable {
+struct ExecHostRequest: Codable {
     var command: [String]
     var rawCommand: String?
     var cwd: String?
@@ -59,7 +59,7 @@ private struct ExecHostRunResult: Codable {
     var error: String?
 }
 
-private struct ExecHostError: Codable {
+struct ExecHostError: Codable, Error {
     var code: String
     var message: String
     var reason: String?
@@ -350,68 +350,31 @@ enum ExecApprovalsPromptPresenter {
 
 @MainActor
 private enum ExecHostExecutor {
-    private struct ExecApprovalContext {
-        let command: [String]
-        let displayCommand: String
-        let trimmedAgent: String?
-        let approvals: ExecApprovalsResolved
-        let security: ExecSecurity
-        let ask: ExecAsk
-        let autoAllowSkills: Bool
-        let env: [String: String]?
-        let resolution: ExecCommandResolution?
-        let allowlistMatch: ExecAllowlistEntry?
-        let skillAllow: Bool
-    }
-
-    private static let blockedEnvKeys: Set<String> = [
-        "PATH",
-        "NODE_OPTIONS",
-        "PYTHONHOME",
-        "PYTHONPATH",
-        "PERL5LIB",
-        "PERL5OPT",
-        "RUBYOPT",
-    ]
-
-    private static let blockedEnvPrefixes: [String] = [
-        "DYLD_",
-        "LD_",
-    ]
+    private typealias ExecApprovalContext = ExecApprovalEvaluation
 
     static func handle(_ request: ExecHostRequest) async -> ExecHostResponse {
-        let command = request.command.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-        guard !command.isEmpty else {
-            return self.errorResponse(
-                code: "INVALID_REQUEST",
-                message: "command required",
-                reason: "invalid")
+        let validatedRequest: ExecHostValidatedRequest
+        switch ExecHostRequestEvaluator.validateRequest(request) {
+        case let .success(request):
+            validatedRequest = request
+        case let .failure(error):
+            return self.errorResponse(error)
         }
 
-        let context = await self.buildContext(request: request, command: command)
-        if context.security == .deny {
-            return self.errorResponse(
-                code: "UNAVAILABLE",
-                message: "SYSTEM_RUN_DISABLED: security=deny",
-                reason: "security=deny")
-        }
+        let context = await self.buildContext(
+            request: request,
+            command: validatedRequest.command,
+            rawCommand: validatedRequest.displayCommand)
 
-        let approvalDecision = request.approvalDecision
-        if approvalDecision == .deny {
-            return self.errorResponse(
-                code: "UNAVAILABLE",
-                message: "SYSTEM_RUN_DENIED: user denied",
-                reason: "user-denied")
-        }
-
-        var approvedByAsk = approvalDecision != nil
-        if ExecApprovalHelpers.requiresAsk(
-            ask: context.ask,
-            security: context.security,
-            allowlistMatch: context.allowlistMatch,
-            skillAllow: context.skillAllow),
-            approvalDecision == nil
+        switch ExecHostRequestEvaluator.evaluate(
+            context: context,
+            approvalDecision: request.approvalDecision)
         {
+        case let .deny(error):
+            return self.errorResponse(error)
+        case .allow:
+            break
+        case .requiresPrompt:
             let decision = ExecApprovalsPromptPresenter.prompt(
                 ExecApprovalPromptRequest(
                     command: context.displayCommand,
@@ -419,43 +382,54 @@ private enum ExecHostExecutor {
                     host: "node",
                     security: context.security.rawValue,
                     ask: context.ask.rawValue,
-                    agentId: context.trimmedAgent,
+                    agentId: context.agentId,
                     resolvedPath: context.resolution?.resolvedPath,
                     sessionKey: request.sessionKey))
 
+            let followupDecision: ExecApprovalDecision
             switch decision {
             case .deny:
-                return self.errorResponse(
-                    code: "UNAVAILABLE",
-                    message: "SYSTEM_RUN_DENIED: user denied",
-                    reason: "user-denied")
+                followupDecision = .deny
             case .allowAlways:
-                approvedByAsk = true
+                followupDecision = .allowAlways
                 self.persistAllowlistEntry(decision: decision, context: context)
             case .allowOnce:
-                approvedByAsk = true
+                followupDecision = .allowOnce
+            }
+
+            switch ExecHostRequestEvaluator.evaluate(
+                context: context,
+                approvalDecision: followupDecision)
+            {
+            case let .deny(error):
+                return self.errorResponse(error)
+            case .allow:
+                break
+            case .requiresPrompt:
+                return self.errorResponse(
+                    code: "INVALID_REQUEST",
+                    message: "unexpected approval state",
+                    reason: "invalid")
             }
         }
 
-        self.persistAllowlistEntry(decision: approvalDecision, context: context)
+        self.persistAllowlistEntry(decision: request.approvalDecision, context: context)
 
-        if context.security == .allowlist,
-           context.allowlistMatch == nil,
-           !context.skillAllow,
-           !approvedByAsk
-        {
-            return self.errorResponse(
-                code: "UNAVAILABLE",
-                message: "SYSTEM_RUN_DENIED: allowlist miss",
-                reason: "allowlist-miss")
-        }
-
-        if let match = context.allowlistMatch {
-            ExecApprovalsStore.recordAllowlistUse(
-                agentId: context.trimmedAgent,
-                pattern: match.pattern,
-                command: context.displayCommand,
-                resolvedPath: context.resolution?.resolvedPath)
+        if context.allowlistSatisfied {
+            var seenPatterns = Set<String>()
+            for (idx, match) in context.allowlistMatches.enumerated() {
+                if !seenPatterns.insert(match.pattern).inserted {
+                    continue
+                }
+                let resolvedPath = idx < context.allowlistResolutions.count
+                    ? context.allowlistResolutions[idx].resolvedPath
+                    : nil
+                ExecApprovalsStore.recordAllowlistUse(
+                    agentId: context.agentId,
+                    pattern: match.pattern,
+                    command: context.displayCommand,
+                    resolvedPath: resolvedPath)
+            }
         }
 
         if let errorResponse = await self.ensureScreenRecordingAccess(request.needsScreenRecording) {
@@ -463,50 +437,23 @@ private enum ExecHostExecutor {
         }
 
         return await self.runCommand(
-            command: command,
+            command: validatedRequest.command,
             cwd: request.cwd,
             env: context.env,
             timeoutMs: request.timeoutMs)
     }
 
-    private static func buildContext(request: ExecHostRequest, command: [String]) async -> ExecApprovalContext {
-        let displayCommand = ExecCommandFormatter.displayString(
-            for: command,
-            rawCommand: request.rawCommand)
-        let agentId = request.agentId?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let trimmedAgent = (agentId?.isEmpty == false) ? agentId : nil
-        let approvals = ExecApprovalsStore.resolve(agentId: trimmedAgent)
-        let security = approvals.agent.security
-        let ask = approvals.agent.ask
-        let autoAllowSkills = approvals.agent.autoAllowSkills
-        let env = self.sanitizedEnv(request.env)
-        let resolution = ExecCommandResolution.resolve(
+    private static func buildContext(
+        request: ExecHostRequest,
+        command: [String],
+        rawCommand: String?) async -> ExecApprovalContext
+    {
+        await ExecApprovalEvaluator.evaluate(
             command: command,
-            rawCommand: request.rawCommand,
+            rawCommand: rawCommand,
             cwd: request.cwd,
-            env: env)
-        let allowlistMatch = security == .allowlist
-            ? ExecAllowlistMatcher.match(entries: approvals.allowlist, resolution: resolution)
-            : nil
-        let skillAllow: Bool
-        if autoAllowSkills, let name = resolution?.executableName {
-            let bins = await SkillBinsCache.shared.currentBins()
-            skillAllow = bins.contains(name)
-        } else {
-            skillAllow = false
-        }
-        return ExecApprovalContext(
-            command: command,
-            displayCommand: displayCommand,
-            trimmedAgent: trimmedAgent,
-            approvals: approvals,
-            security: security,
-            ask: ask,
-            autoAllowSkills: autoAllowSkills,
-            env: env,
-            resolution: resolution,
-            allowlistMatch: allowlistMatch,
-            skillAllow: skillAllow)
+            envOverrides: request.env,
+            agentId: request.agentId)
     }
 
     private static func persistAllowlistEntry(
@@ -514,13 +461,18 @@ private enum ExecHostExecutor {
         context: ExecApprovalContext)
     {
         guard decision == .allowAlways, context.security == .allowlist else { return }
-        guard let pattern = ExecApprovalHelpers.allowlistPattern(
-            command: context.command,
-            resolution: context.resolution)
-        else {
-            return
+        var seenPatterns = Set<String>()
+        for candidate in context.allowlistResolutions {
+            guard let pattern = ExecApprovalHelpers.allowlistPattern(
+                command: context.command,
+                resolution: candidate)
+            else {
+                continue
+            }
+            if seenPatterns.insert(pattern).inserted {
+                ExecApprovalsStore.addAllowlistEntry(agentId: context.agentId, pattern: pattern)
+            }
         }
-        ExecApprovalsStore.addAllowlistEntry(agentId: context.trimmedAgent, pattern: pattern)
     }
 
     private static func ensureScreenRecordingAccess(_ needsScreenRecording: Bool?) async -> ExecHostResponse? {
@@ -559,6 +511,17 @@ private enum ExecHostExecutor {
     }
 
     private static func errorResponse(
+        _ error: ExecHostError) -> ExecHostResponse
+    {
+        ExecHostResponse(
+            type: "response",
+            id: UUID().uuidString,
+            ok: false,
+            payload: nil,
+            error: error)
+    }
+
+    private static func errorResponse(
         code: String,
         message: String,
         reason: String?) -> ExecHostResponse
@@ -578,20 +541,6 @@ private enum ExecHostExecutor {
             ok: true,
             payload: payload,
             error: nil)
-    }
-
-    private static func sanitizedEnv(_ overrides: [String: String]?) -> [String: String]? {
-        guard let overrides else { return nil }
-        var merged = ProcessInfo.processInfo.environment
-        for (rawKey, value) in overrides {
-            let key = rawKey.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !key.isEmpty else { continue }
-            let upper = key.uppercased()
-            if self.blockedEnvKeys.contains(upper) { continue }
-            if self.blockedEnvPrefixes.contains(where: { upper.hasPrefix($0) }) { continue }
-            merged[key] = value
-        }
-        return merged
     }
 }
 

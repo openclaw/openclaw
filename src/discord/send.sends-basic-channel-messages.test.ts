@@ -48,6 +48,18 @@ describe("sendMessageDiscord", () => {
     };
   }
 
+  function setupForumSend(secondResponse: { id: string; channel_id: string }) {
+    const { rest, postMock, getMock } = makeDiscordRest();
+    getMock.mockResolvedValueOnce({ type: ChannelType.GuildForum });
+    postMock
+      .mockResolvedValueOnce({
+        id: "thread1",
+        message: { id: "starter1", channel_id: "thread1" },
+      })
+      .mockResolvedValueOnce(secondResponse);
+    return { rest, postMock };
+  }
+
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -97,14 +109,7 @@ describe("sendMessageDiscord", () => {
   });
 
   it("posts media as a follow-up message in forum channels", async () => {
-    const { rest, postMock, getMock } = makeDiscordRest();
-    getMock.mockResolvedValueOnce({ type: ChannelType.GuildForum });
-    postMock
-      .mockResolvedValueOnce({
-        id: "thread1",
-        message: { id: "starter1", channel_id: "thread1" },
-      })
-      .mockResolvedValueOnce({ id: "media1", channel_id: "thread1" });
+    const { rest, postMock } = setupForumSend({ id: "media1", channel_id: "thread1" });
     const res = await sendMessageDiscord("channel:forum1", "Topic", {
       rest,
       token: "t",
@@ -133,14 +138,7 @@ describe("sendMessageDiscord", () => {
   });
 
   it("chunks long forum posts into follow-up messages", async () => {
-    const { rest, postMock, getMock } = makeDiscordRest();
-    getMock.mockResolvedValueOnce({ type: ChannelType.GuildForum });
-    postMock
-      .mockResolvedValueOnce({
-        id: "thread1",
-        message: { id: "starter1", channel_id: "thread1" },
-      })
-      .mockResolvedValueOnce({ id: "msg2", channel_id: "thread1" });
+    const { rest, postMock } = setupForumSend({ id: "msg2", channel_id: "thread1" });
     const longText = "a".repeat(2001);
     await sendMessageDiscord("channel:forum1", longText, {
       rest,

@@ -4,6 +4,7 @@ import { BARE_SESSION_RESET_PROMPT } from "../../auto-reply/reply/session-reset-
 import { agentCommand } from "../../commands/agent.js";
 import { loadConfig } from "../../config/config.js";
 import {
+  mergeSessionEntry,
   resolveAgentIdFromSessionKey,
   resolveExplicitAgentSessionKey,
   resolveAgentMainSessionKey,
@@ -15,6 +16,7 @@ import {
   resolveAgentDeliveryPlan,
   resolveAgentOutboundTarget,
 } from "../../infra/outbound/agent-delivery.js";
+import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
 import { classifySessionKeyShape, normalizeAgentId } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeInputProvenance, type InputProvenance } from "../../sessions/input-provenance.js";
@@ -191,6 +193,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       extraSystemPrompt?: string;
       idempotencyKey: string;
       timeout?: number;
+      bestEffortDeliver?: boolean;
       label?: string;
       spawnedBy?: string;
       inputProvenance?: InputProvenance;
@@ -215,8 +218,10 @@ export const agentHandlers: GatewayRequestHandlers = {
       return;
     }
     const normalizedAttachments = normalizeRpcAttachmentsToChatAttachments(request.attachments);
+    const requestedBestEffortDeliver =
+      typeof request.bestEffortDeliver === "boolean" ? request.bestEffortDeliver : undefined;
 
-    let message = request.message.trim();
+    let message = (request.message ?? "").trim();
     let images: Array<{ type: "image"; data: string; mimeType: string }> = [];
     if (normalizedAttachments.length > 0) {
       try {
@@ -309,7 +314,7 @@ export const agentHandlers: GatewayRequestHandlers = {
     }
     let resolvedSessionId = request.sessionId?.trim() || undefined;
     let sessionEntry: SessionEntry | undefined;
-    let bestEffortDeliver = false;
+    let bestEffortDeliver = requestedBestEffortDeliver ?? false;
     let cfgForAgent: ReturnType<typeof loadConfig> | undefined;
     let resolvedSessionKey = requestedSessionKey;
     let skipTimestampInjection = false;
@@ -381,7 +386,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       resolvedGroupChannel = resolvedGroupChannel || inheritedGroup?.groupChannel;
       resolvedGroupSpace = resolvedGroupSpace || inheritedGroup?.groupSpace;
       const deliveryFields = normalizeSessionDeliveryFields(entry);
-      const nextEntry: SessionEntry = {
+      const nextEntryPatch: SessionEntry = {
         sessionId,
         updatedAt: now,
         thinkingLevel: entry?.thinkingLevel,
@@ -406,7 +411,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         cliSessionIds: entry?.cliSessionIds,
         claudeCliSessionId: entry?.claudeCliSessionId,
       };
-      sessionEntry = nextEntry;
+      sessionEntry = mergeSessionEntry(entry, nextEntryPatch);
       const sendPolicy = resolveSendPolicy({
         cfg,
         entry,
@@ -428,7 +433,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       const agentId = resolveAgentIdFromSessionKey(canonicalSessionKey);
       const mainSessionKey = resolveAgentMainSessionKey({ cfg, agentId });
       if (storePath) {
-        await updateSessionStore(storePath, (store) => {
+        const persisted = await updateSessionStore(storePath, (store) => {
           const target = resolveGatewaySessionStoreTarget({
             cfg,
             key: requestedSessionKey,
@@ -439,15 +444,20 @@ export const agentHandlers: GatewayRequestHandlers = {
             canonicalKey: target.canonicalKey,
             candidates: target.storeKeys,
           });
-          store[canonicalSessionKey] = nextEntry;
+          const merged = mergeSessionEntry(store[canonicalSessionKey], nextEntryPatch);
+          store[canonicalSessionKey] = merged;
+          return merged;
         });
+        sessionEntry = persisted;
       }
       if (canonicalSessionKey === mainSessionKey || canonicalSessionKey === "global") {
         context.addChatRun(idem, {
           sessionKey: canonicalSessionKey,
           clientRunId: idem,
         });
-        bestEffortDeliver = true;
+        if (requestedBestEffortDeliver === undefined) {
+          bestEffortDeliver = true;
+        }
       }
       registerAgentRunContext(idem, { sessionKey: canonicalSessionKey });
     }
@@ -481,6 +491,16 @@ export const agentHandlers: GatewayRequestHandlers = {
       typeof request.threadId === "string" && request.threadId.trim()
         ? request.threadId.trim()
         : undefined;
+    const turnSourceChannel =
+      typeof request.channel === "string" && request.channel.trim()
+        ? request.channel.trim()
+        : undefined;
+    const turnSourceTo =
+      typeof request.to === "string" && request.to.trim() ? request.to.trim() : undefined;
+    const turnSourceAccountId =
+      typeof request.accountId === "string" && request.accountId.trim()
+        ? request.accountId.trim()
+        : undefined;
     const deliveryPlan = resolveAgentDeliveryPlan({
       sessionEntry,
       requestedChannel: request.replyChannel ?? request.channel,
@@ -488,25 +508,71 @@ export const agentHandlers: GatewayRequestHandlers = {
       explicitThreadId,
       accountId: request.replyAccountId ?? request.accountId,
       wantsDelivery,
+      turnSourceChannel,
+      turnSourceTo,
+      turnSourceAccountId,
+      turnSourceThreadId: explicitThreadId,
     });
 
-    const resolvedChannel = deliveryPlan.resolvedChannel;
-    const deliveryTargetMode = deliveryPlan.deliveryTargetMode;
-    const resolvedAccountId = deliveryPlan.resolvedAccountId;
+    let resolvedChannel = deliveryPlan.resolvedChannel;
+    let deliveryTargetMode = deliveryPlan.deliveryTargetMode;
+    let resolvedAccountId = deliveryPlan.resolvedAccountId;
     let resolvedTo = deliveryPlan.resolvedTo;
+    let effectivePlan = deliveryPlan;
+
+    if (wantsDelivery && resolvedChannel === INTERNAL_MESSAGE_CHANNEL) {
+      const cfgResolved = cfgForAgent ?? cfg;
+      try {
+        const selection = await resolveMessageChannelSelection({ cfg: cfgResolved });
+        resolvedChannel = selection.channel;
+        deliveryTargetMode = deliveryTargetMode ?? "implicit";
+        effectivePlan = {
+          ...deliveryPlan,
+          resolvedChannel,
+          deliveryTargetMode,
+          resolvedAccountId,
+        };
+      } catch (err) {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, String(err)));
+        return;
+      }
+    }
 
     if (!resolvedTo && isDeliverableMessageChannel(resolvedChannel)) {
       const cfgResolved = cfgForAgent ?? cfg;
       const fallback = resolveAgentOutboundTarget({
         cfg: cfgResolved,
-        plan: deliveryPlan,
-        targetMode: "implicit",
+        plan: effectivePlan,
+        targetMode: deliveryTargetMode ?? "implicit",
         validateExplicitTarget: false,
       });
       if (fallback.resolvedTarget?.ok) {
         resolvedTo = fallback.resolvedTo;
       }
     }
+
+    if (wantsDelivery && resolvedChannel === INTERNAL_MESSAGE_CHANNEL) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "delivery channel is required: pass --channel/--reply-channel or use a main session with a previous channel",
+        ),
+      );
+      return;
+    }
+
+    const normalizedTurnSource = normalizeMessageChannel(turnSourceChannel);
+    const turnSourceMessageChannel =
+      normalizedTurnSource && isGatewayMessageChannel(normalizedTurnSource)
+        ? normalizedTurnSource
+        : undefined;
+    const originMessageChannel =
+      turnSourceMessageChannel ??
+      (client?.connect && isWebchatConnect(client.connect)
+        ? INTERNAL_MESSAGE_CHANNEL
+        : resolvedChannel);
 
     const deliver = request.deliver === true && resolvedChannel !== INTERNAL_MESSAGE_CHANNEL;
 
@@ -539,7 +605,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         accountId: resolvedAccountId,
         threadId: resolvedThreadId,
         runContext: {
-          messageChannel: resolvedChannel,
+          messageChannel: originMessageChannel,
           accountId: resolvedAccountId,
           groupId: resolvedGroupId,
           groupChannel: resolvedGroupChannel,
@@ -552,7 +618,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         spawnedBy: spawnedByValue,
         timeout: request.timeout?.toString(),
         bestEffortDeliver,
-        messageChannel: resolvedChannel,
+        messageChannel: originMessageChannel,
         runId,
         lane: request.lane,
         extraSystemPrompt: request.extraSystemPrompt,
@@ -663,7 +729,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       return;
     }
     const p = params;
-    const runId = p.runId.trim();
+    const runId = (p.runId ?? "").trim();
     const timeoutMs =
       typeof p.timeoutMs === "number" && Number.isFinite(p.timeoutMs)
         ? Math.max(0, Math.floor(p.timeoutMs))

@@ -3,6 +3,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
+import { isFileMissingError } from "./fs-utils.js";
 
 export type MemoryFileEntry = {
   path: string;
@@ -151,9 +152,25 @@ export function hashText(value: string): string {
 export async function buildFileEntry(
   absPath: string,
   workspaceDir: string,
-): Promise<MemoryFileEntry> {
-  const stat = await fs.stat(absPath);
-  const content = await fs.readFile(absPath, "utf-8");
+): Promise<MemoryFileEntry | null> {
+  let stat;
+  try {
+    stat = await fs.stat(absPath);
+  } catch (err) {
+    if (isFileMissingError(err)) {
+      return null;
+    }
+    throw err;
+  }
+  let content: string;
+  try {
+    content = await fs.readFile(absPath, "utf-8");
+  } catch (err) {
+    if (isFileMissingError(err)) {
+      return null;
+    }
+    throw err;
+  }
   const hash = hashText(content);
   return {
     path: path.relative(workspaceDir, absPath).replace(/\\/g, "/"),
