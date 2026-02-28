@@ -41,4 +41,12 @@ export function logGatewayStartup(params: {
       "Run `openclaw security audit`.";
     params.log.warn(warning);
   }
+
+  if (params.cfg.gateway?.controlUi?.dangerouslyDisableDeviceAuth === true) {
+    params.log.warn(
+      "gateway.controlUi.dangerouslyDisableDeviceAuth is deprecated. " +
+        'Migrate to per-origin tokenOnlyAuth in allowedOrigins: { origin: "https://example.com", tokenOnlyAuth: true }. ' +
+        "See docs/migration/token-only-auth.md for details.",
+    );
+  }
 }

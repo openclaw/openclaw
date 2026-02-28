@@ -20,12 +20,17 @@ describe("gateway startup log", () => {
       isNixMode: false,
     });
 
-    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledTimes(2);
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("dangerous config flags enabled"));
     expect(warn).toHaveBeenCalledWith(
       expect.stringContaining("gateway.controlUi.dangerouslyDisableDeviceAuth=true"),
     );
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("openclaw security audit"));
+    // Dedicated deprecation warning
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("dangerouslyDisableDeviceAuth is deprecated"),
+    );
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("per-origin tokenOnlyAuth"));
   });
 
   it("does not warn when dangerous config flags are disabled", () => {
