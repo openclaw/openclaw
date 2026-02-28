@@ -246,7 +246,16 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
                 preserveRestartAttempts: true,
                 preserveManualStop: true,
               });
-            } catch {
+            } catch (err) {
+              if (abort.signal.aborted || manuallyStopped.has(rKey)) {
+                log.debug?.(
+                  `[${id}] auto-restart aborted (attempt ${attempt}/${MAX_RESTART_ATTEMPTS}): ${formatErrorMessage(err)}`,
+                );
+                return;
+              }
+              log.warn?.(
+                `[${id}] auto-restart failed (attempt ${attempt}/${MAX_RESTART_ATTEMPTS}): ${formatErrorMessage(err)}`,
+              );
               // abort or startup failure — next crash will retry
             }
           })
