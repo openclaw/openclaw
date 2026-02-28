@@ -83,6 +83,8 @@ export type CliBackendConfig = {
   systemPromptMode?: "append" | "replace";
   /** When to send system prompt. */
   systemPromptWhen?: "first" | "always" | "never";
+  /** Flag used to pass system prompt when resuming (e.g. --append-system-prompt). */
+  resumeSystemPromptArg?: string;
   /** Flag used to pass image paths. */
   imageArg?: string;
   /** How to pass multiple images. */

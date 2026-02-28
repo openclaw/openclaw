@@ -504,7 +504,6 @@ export function buildCliArgs(params: {
   backend: CliBackendConfig;
   baseArgs: string[];
   modelId: string;
-  sessionId?: string;
   systemPrompt?: string | null;
   imagePaths?: string[];
   promptArg?: string;
@@ -516,15 +515,6 @@ export function buildCliArgs(params: {
   }
   if (!params.useResume && params.systemPrompt && params.backend.systemPromptArg) {
     args.push(params.backend.systemPromptArg, params.systemPrompt);
-  }
-  if (!params.useResume && params.sessionId) {
-    if (params.backend.sessionArgs && params.backend.sessionArgs.length > 0) {
-      for (const entry of params.backend.sessionArgs) {
-        args.push(entry.replaceAll("{sessionId}", params.sessionId));
-      }
-    } else if (params.backend.sessionArg) {
-      args.push(params.backend.sessionArg, params.sessionId);
-    }
   }
   if (params.imagePaths && params.imagePaths.length > 0) {
     const mode = params.backend.imageMode ?? "repeat";

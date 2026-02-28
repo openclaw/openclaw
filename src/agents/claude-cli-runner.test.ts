@@ -37,9 +37,9 @@ describe("runClaudeCliAgent", () => {
     runCommandWithTimeoutMock.mockReset();
   });
 
-  it("starts a new session with --session-id when none is provided", async () => {
+  it("runs stateless (no --session-id or --resume)", async () => {
     runCommandWithTimeoutMock.mockResolvedValueOnce({
-      stdout: JSON.stringify({ message: "ok", session_id: "sid-1" }),
+      stdout: JSON.stringify({ message: "ok" }),
       stderr: "",
       code: 0,
       signal: null,
@@ -59,35 +59,10 @@ describe("runClaudeCliAgent", () => {
     expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(1);
     const argv = runCommandWithTimeoutMock.mock.calls[0]?.[0] as string[];
     expect(argv).toContain("claude");
-    expect(argv).toContain("--session-id");
     expect(argv).toContain("hi");
-  });
-
-  it("uses --resume when a claude session id is provided", async () => {
-    runCommandWithTimeoutMock.mockResolvedValueOnce({
-      stdout: JSON.stringify({ message: "ok", session_id: "sid-2" }),
-      stderr: "",
-      code: 0,
-      signal: null,
-      killed: false,
-    });
-
-    await runClaudeCliAgent({
-      sessionId: "openclaw-session",
-      sessionFile: "/tmp/session.jsonl",
-      workspaceDir: "/tmp",
-      prompt: "hi",
-      model: "opus",
-      timeoutMs: 1_000,
-      runId: "run-2",
-      claudeSessionId: "c9d7b831-1c31-4d22-80b9-1e50ca207d4b",
-    });
-
-    expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(1);
-    const argv = runCommandWithTimeoutMock.mock.calls[0]?.[0] as string[];
-    expect(argv).toContain("--resume");
-    expect(argv).toContain("c9d7b831-1c31-4d22-80b9-1e50ca207d4b");
-    expect(argv).toContain("hi");
+    // Stateless: no session management args
+    expect(argv).not.toContain("--session-id");
+    expect(argv).not.toContain("--resume");
   });
 
   it("serializes concurrent claude-cli runs", async () => {

@@ -7,7 +7,6 @@ import type { TypingController } from "./typing.js";
 import { lookupContextTokens } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveModelAuthMode } from "../../agents/model-auth.js";
-import { isCliProvider } from "../../agents/model-selection.js";
 import { queueEmbeddedPiMessage } from "../../agents/pi-embedded.js";
 import { hasNonzeroUsage } from "../../agents/usage.js";
 import {
@@ -378,9 +377,6 @@ export async function runReplyAgent(params: {
     const modelUsed = runResult.meta.agentMeta?.model ?? fallbackModel ?? defaultModel;
     const providerUsed =
       runResult.meta.agentMeta?.provider ?? fallbackProvider ?? followupRun.run.provider;
-    const cliSessionId = isCliProvider(providerUsed, cfg)
-      ? runResult.meta.agentMeta?.sessionId?.trim()
-      : undefined;
     const contextTokensUsed =
       agentCfgContextTokens ??
       lookupContextTokens(modelUsed) ??
@@ -395,7 +391,6 @@ export async function runReplyAgent(params: {
       providerUsed,
       contextTokensUsed,
       systemPromptReport: runResult.meta.systemPromptReport,
-      cliSessionId,
     });
 
     // Drain any late tool/block deliveries before deciding there's "nothing to send".

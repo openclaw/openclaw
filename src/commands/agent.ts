@@ -10,7 +10,6 @@ import {
 import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
 import { clearSessionAuthProfileOverride } from "../agents/auth-profiles/session-override.js";
 import { runCliAgent } from "../agents/cli-runner.js";
-import { getCliSessionId } from "../agents/cli-session.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import { runWithModelFallback } from "../agents/model-fallback.js";
@@ -394,7 +393,6 @@ export async function agentCommand(
         fallbacksOverride: resolveAgentModelFallbacksOverride(cfg, sessionAgentId),
         run: (providerOverride, modelOverride) => {
           if (isCliProvider(providerOverride, cfg)) {
-            const cliSessionId = getCliSessionId(sessionEntry, providerOverride);
             return runCliAgent({
               sessionId,
               sessionKey,
@@ -408,7 +406,6 @@ export async function agentCommand(
               timeoutMs,
               runId,
               extraSystemPrompt: opts.extraSystemPrompt,
-              cliSessionId,
               images: opts.images,
               streamParams: opts.streamParams,
             });

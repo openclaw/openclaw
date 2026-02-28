@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import type { CanvasHostServer } from "../canvas-host/server.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
@@ -18,6 +19,7 @@ import {
   readConfigFileSnapshot,
   writeConfigFile,
 } from "../config/config.js";
+import { STATE_DIR } from "../config/paths.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { clearAgentRunContext, onAgentEvent } from "../infra/agent-events.js";
 import {
@@ -203,6 +205,22 @@ export async function startGatewayServer(
     throw new Error(
       `Invalid config at ${configSnapshot.path}.\n${issues}\nRun "${formatCliCommand("openclaw doctor")}" to repair, then retry.`,
     );
+  }
+
+  // Ensure a minimal Claude Code config dir exists so CLI backends
+  // launched with CLAUDE_CONFIG_DIR don't pick up user hooks/settings
+  // that inject developer-oriented CLAUDE.md content.
+  try {
+    const claudeConfigDir = path.join(STATE_DIR, ".claude-config");
+    await fs.mkdir(claudeConfigDir, { recursive: true });
+    const settingsPath = path.join(claudeConfigDir, "settings.json");
+    await fs.writeFile(settingsPath, "{}\n", { flag: "wx" });
+  } catch (err) {
+    // EEXIST is expected on subsequent starts; other errors are
+    // non-fatal (the CLI will still work, just with user hooks).
+    if ((err as NodeJS.ErrnoException).code !== "EEXIST") {
+      log.warn(`failed to ensure CLI config directory: ${String(err)}`);
+    }
   }
 
   const autoEnable = applyPluginAutoEnable({ config: configSnapshot.config, env: process.env });

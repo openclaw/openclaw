@@ -10,7 +10,6 @@ import {
   resolveDefaultAgentId,
 } from "../../agents/agent-scope.js";
 import { runCliAgent } from "../../agents/cli-runner.js";
-import { getCliSessionId, setCliSessionId } from "../../agents/cli-session.js";
 import { lookupContextTokens } from "../../agents/context.js";
 import {
   formatUserTime,
@@ -352,7 +351,6 @@ export async function runCronIsolatedAgentTurn(params: {
       fallbacksOverride: resolveAgentModelFallbacksOverride(params.cfg, agentId),
       run: (providerOverride, modelOverride) => {
         if (isCliProvider(providerOverride, cfgWithAgentDefaults)) {
-          const cliSessionId = getCliSessionId(cronSession.sessionEntry, providerOverride);
           return runCliAgent({
             sessionId: cronSession.sessionEntry.sessionId,
             sessionKey: agentSessionKey,
@@ -365,7 +363,6 @@ export async function runCronIsolatedAgentTurn(params: {
             thinkLevel,
             timeoutMs,
             runId: cronSession.sessionEntry.sessionId,
-            cliSessionId,
           });
         }
         return runEmbeddedPiAgent({
@@ -410,12 +407,6 @@ export async function runCronIsolatedAgentTurn(params: {
     cronSession.sessionEntry.modelProvider = providerUsed;
     cronSession.sessionEntry.model = modelUsed;
     cronSession.sessionEntry.contextTokens = contextTokens;
-    if (isCliProvider(providerUsed, cfgWithAgentDefaults)) {
-      const cliSessionId = runResult.meta.agentMeta?.sessionId?.trim();
-      if (cliSessionId) {
-        setCliSessionId(cronSession.sessionEntry, providerUsed, cliSessionId);
-      }
-    }
     if (hasNonzeroUsage(usage)) {
       const input = usage.input ?? 0;
       const output = usage.output ?? 0;

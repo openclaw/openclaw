@@ -19,14 +19,12 @@ import {
   appendImagePathsToPrompt,
   buildCliArgs,
   buildSystemPrompt,
-  cleanupResumeProcesses,
   cleanupSuspendedCliProcesses,
   enqueueCliRun,
   normalizeCliModel,
   parseCliJson,
   parseCliJsonl,
   resolvePromptInput,
-  resolveSessionIdToSend,
   resolveSystemPromptUsage,
   writeCliImages,
 } from "./cli-runner/helpers.js";
@@ -114,12 +112,13 @@ export async function runCliAgent(params: {
   extraSystemPrompt?: string;
   streamParams?: import("../commands/agent/types.js").AgentStreamParams;
   ownerNumbers?: string[];
-  cliSessionId?: string;
   images?: ImageContent[];
   /** Callback for tool execution status (enables streaming mode). */
   onToolStatus?: CliToolStatusCallback;
   /** Called with non-terminal streaming events for status tracking. */
   onStreamEvent?: (event: AgentStreamEvent) => void;
+  /** Reasoning display level ("off" suppresses thinking events). */
+  reasoningLevel?: "off" | "on" | "stream";
 }): Promise<EmbeddedPiRunResult> {
   const started = Date.now();
   const resolvedWorkspace = resolveUserPath(params.workspaceDir);
@@ -180,24 +179,11 @@ export async function runCliAgent(params: {
     agentId: sessionAgentId,
   });
 
-  const { sessionId: cliSessionIdToSend, isNew } = resolveSessionIdToSend({
-    backend,
-    cliSessionId: params.cliSessionId,
-  });
-  const useResume = Boolean(
-    params.cliSessionId &&
-    cliSessionIdToSend &&
-    backend.resumeArgs &&
-    backend.resumeArgs.length > 0,
-  );
-  const sessionIdSent = cliSessionIdToSend
-    ? useResume || Boolean(backend.sessionArg) || Boolean(backend.sessionArgs?.length)
-      ? cliSessionIdToSend
-      : undefined
-    : undefined;
+  // Stateless: every invocation is fresh (no session resume).
+  // System prompt is always injected so the CLI behaves like the API.
   const systemPromptArg = resolveSystemPromptUsage({
     backend,
-    isNewSession: isNew,
+    isNewSession: true,
     systemPrompt,
   });
 
@@ -218,19 +204,14 @@ export async function runCliAgent(params: {
     prompt,
   });
   const stdinPayload = stdin ?? "";
-  const baseArgs = useResume ? (backend.resumeArgs ?? backend.args ?? []) : (backend.args ?? []);
-  const resolvedArgs = useResume
-    ? baseArgs.map((entry) => entry.replaceAll("{sessionId}", cliSessionIdToSend ?? ""))
-    : baseArgs;
   const args = buildCliArgs({
     backend,
-    baseArgs: resolvedArgs,
+    baseArgs: backend.args ?? [],
     modelId: normalizedModel,
-    sessionId: cliSessionIdToSend,
     systemPrompt: systemPromptArg,
     imagePaths,
     promptArg: argsPrompt,
-    useResume,
+    useResume: false,
   });
 
   // When streaming is enabled:
@@ -273,17 +254,17 @@ export async function runCliAgent(params: {
   const serialize = backend.serialize ?? true;
   const queueKey = serialize ? backendResolved.id : `${backendResolved.id}:${params.runId}`;
 
-  // In non-streaming mode (tools disabled), use an ephemeral CWD to
-  // prevent the CLI backend from loading project-level auto-memory
-  // based on the workspace directory. Streaming mode keeps the
-  // workspace CWD since native tools need it for file operations.
+  // Always use an ephemeral CWD to prevent the CLI backend from
+  // loading project-level context (.claude/, CLAUDE.md, auto-memory)
+  // based on the workspace directory. This strips all Claude Code
+  // project awareness so it behaves like a plain API call. Native
+  // tools (Read, Bash, Glob) work with absolute paths and don't
+  // depend on CWD.
   let ephemeralRun: { dir: string; cleanup: () => Promise<void> } | undefined;
-  if (!useStreaming) {
-    try {
-      ephemeralRun = await createEphemeralRunDir(params.sessionId);
-    } catch {
-      log.warn("failed to create ephemeral run directory, using workspace CWD");
-    }
+  try {
+    ephemeralRun = await createEphemeralRunDir(params.sessionId);
+  } catch {
+    log.warn("failed to create ephemeral run directory, using workspace CWD");
   }
 
   // Schedule old run directory cleanup (best-effort, non-blocking)
@@ -339,11 +320,8 @@ export async function runCliAgent(params: {
         return next;
       })();
 
-      // Cleanup suspended processes that have accumulated (regardless of sessionId)
+      // Cleanup suspended processes that have accumulated
       await cleanupSuspendedCliProcesses(backend);
-      if (useResume && cliSessionIdToSend) {
-        await cleanupResumeProcesses(backend, cliSessionIdToSend);
-      }
 
       // Use streaming execution when tool status or stream event callbacks are provided
       if (useStreaming) {
@@ -352,7 +330,7 @@ export async function runCliAgent(params: {
         const streamResult = await runStreamingCli({
           command: backend.command,
           args: streamArgs,
-          cwd: workspaceDir,
+          cwd: ephemeralRun?.dir ?? workspaceDir,
           env,
           timeoutMs: params.timeoutMs,
           onEvent: (event) => {
@@ -367,8 +345,18 @@ export async function runCliAgent(params: {
                 });
               }
             }
-            // Forward non-terminal events to stream event callback for status tracking.
-            if (params.onStreamEvent && event.type !== "result" && event.type !== "error") {
+            // Forward non-terminal events to stream event callback for
+            // status tracking. Suppress thinking events unless reasoning
+            // display is enabled (/reasoning on|stream), mirroring the
+            // pi-embedded-runner's default reasoningMode:"off" behavior.
+            const suppressThinking =
+              event.type === "thinking" && (params.reasoningLevel ?? "off") === "off";
+            if (
+              params.onStreamEvent &&
+              event.type !== "result" &&
+              event.type !== "error" &&
+              !suppressThinking
+            ) {
               if (event.type === "tool_result") {
                 const toolName = toolNameById.get(event.toolCallId) ?? "";
                 toolNameById.delete(event.toolCallId);
@@ -439,7 +427,7 @@ export async function runCliAgent(params: {
         });
       }
 
-      const outputMode = useResume ? (backend.resumeOutput ?? backend.output) : backend.output;
+      const outputMode = backend.output;
 
       if (outputMode === "text") {
         return { text: stdout, sessionId: undefined };
@@ -461,7 +449,7 @@ export async function runCliAgent(params: {
       meta: {
         durationMs: Date.now() - started,
         agentMeta: {
-          sessionId: output.sessionId ?? sessionIdSent ?? params.sessionId ?? "",
+          sessionId: params.sessionId ?? "",
           provider: params.provider,
           model: modelId,
           usage: output.usage,
@@ -508,7 +496,6 @@ export async function runClaudeCliAgent(params: {
   runId: string;
   extraSystemPrompt?: string;
   ownerNumbers?: string[];
-  claudeSessionId?: string;
   images?: ImageContent[];
   /** Callback for tool execution status (enables streaming mode). */
   onToolStatus?: CliToolStatusCallback;
@@ -529,7 +516,6 @@ export async function runClaudeCliAgent(params: {
     runId: params.runId,
     extraSystemPrompt: params.extraSystemPrompt,
     ownerNumbers: params.ownerNumbers,
-    cliSessionId: params.claudeSessionId,
     images: params.images,
     onToolStatus: params.onToolStatus,
     onStreamEvent: params.onStreamEvent,

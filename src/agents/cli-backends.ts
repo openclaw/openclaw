@@ -1,3 +1,5 @@
+import os from "node:os";
+import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
 import type { CliBackendConfig } from "../config/types.js";
 import { normalizeProviderId } from "./model-selection.js";
@@ -30,27 +32,20 @@ const CLAUDE_MODEL_ALIASES: Record<string, string> = {
 const DEFAULT_CLAUDE_BACKEND: CliBackendConfig = {
   command: "claude",
   args: ["-p", "--output-format", "json", "--dangerously-skip-permissions", "--tools", ""],
-  resumeArgs: [
-    "-p",
-    "--output-format",
-    "json",
-    "--dangerously-skip-permissions",
-    "--resume",
-    "{sessionId}",
-    "--tools",
-    "",
-  ],
   output: "json",
   input: "arg",
   modelArg: "--model",
   modelAliases: CLAUDE_MODEL_ALIASES,
-  sessionArg: "--session-id",
-  sessionMode: "always",
-  sessionIdFields: ["session_id", "sessionId", "conversation_id", "conversationId"],
+  // Stateless: no sessions, no resume. Each invocation is fresh,
+  // mirroring the API path where OpenClaw owns conversation state.
+  sessionMode: "none",
   systemPromptArg: "--system-prompt",
   systemPromptMode: "replace",
-  systemPromptWhen: "first",
-  clearEnv: ["ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY_OLD"],
+  systemPromptWhen: "always",
+  clearEnv: ["ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY_OLD", "CLAUDECODE"],
+  env: {
+    CLAUDE_CONFIG_DIR: path.join(os.homedir(), ".openclaw", ".claude-config"),
+  },
   serialize: true,
 };
 
