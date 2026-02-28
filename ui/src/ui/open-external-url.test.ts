@@ -35,6 +35,20 @@ describe("resolveSafeExternalUrl", () => {
     ).toBe("data:image/png;base64,iVBORw0KGgo=");
   });
 
+  it("allows mailto URLs", () => {
+    expect(resolveSafeExternalUrl("mailto:test@example.com", baseHref)).toBe(
+      "mailto:test@example.com",
+    );
+  });
+
+  it("allows tel URLs", () => {
+    expect(resolveSafeExternalUrl("tel:+1234567890", baseHref)).toBe("tel:+1234567890");
+  });
+
+  it("allows sms URLs", () => {
+    expect(resolveSafeExternalUrl("sms:+1234567890", baseHref)).toBe("sms:+1234567890");
+  });
+
   it("rejects non-image data URLs", () => {
     expect(
       resolveSafeExternalUrl("data:text/html,<script>alert(1)</script>", baseHref, {

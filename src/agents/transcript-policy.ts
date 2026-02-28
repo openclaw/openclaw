@@ -97,8 +97,10 @@ export function resolveTranscriptPolicy(params: {
 
   // GitHub Copilot's Claude endpoints can reject persisted `thinking` blocks with
   // non-binary/non-base64 signatures (e.g. thinkingSignature: "reasoning_text").
+  // Google Gemini and local Ollama models also reject native Anthropic thinking blocks.
   // Drop these blocks at send-time to keep sessions usable.
-  const dropThinkingBlocks = isCopilotClaude;
+  const isOllama = provider === "ollama" || params.modelApi === "ollama";
+  const dropThinkingBlocks = isCopilotClaude || isGoogle || isOllama;
 
   const needsNonImageSanitize = isGoogle || isAnthropic || isMistral || isOpenRouterGemini;
 

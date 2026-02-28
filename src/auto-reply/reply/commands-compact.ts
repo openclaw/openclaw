@@ -11,6 +11,7 @@ import {
   resolveSessionFilePathOptions,
 } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
+import { requestHeartbeatNow } from "../../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { formatContextUsageShort, formatTokenCount } from "../status.js";
 import type { CommandHandler } from "./commands-types.js";
@@ -140,5 +141,12 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     ? `${compactLabel}: ${reason} • ${contextSummary}`
     : `${compactLabel} • ${contextSummary}`;
   enqueueSystemEvent(line, { sessionKey: params.sessionKey });
+  if (result.ok && result.compacted) {
+    requestHeartbeatNow({
+      reason: "compaction",
+      sessionKey: params.sessionKey,
+      coalesceMs: 500,
+    });
+  }
   return { shouldContinue: false, reply: { text: `⚙️ ${line}` } };
 };

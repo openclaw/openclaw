@@ -1,5 +1,5 @@
 const DATA_URL_PREFIX = "data:";
-const ALLOWED_EXTERNAL_PROTOCOLS = new Set(["http:", "https:", "blob:"]);
+const ALLOWED_EXTERNAL_PROTOCOLS = new Set(["http:", "https:", "blob:", "mailto:", "tel:", "sms:"]);
 const BLOCKED_DATA_IMAGE_MIME_TYPES = new Set(["image/svg+xml"]);
 
 function isAllowedDataImageUrl(url: string): boolean {

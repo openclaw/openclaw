@@ -149,7 +149,7 @@
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "0.14.1",
-    "@aws-sdk/client-bedrock": "^3.998.0",
+    "@aws-sdk/client-bedrock": "^3.1000.0",
     "@buape/carbon": "0.0.0-beta-20260216184201",
     "@clack/prompts": "^1.0.1",
     "@discordjs/voice": "^0.19.0",
@@ -209,7 +209,7 @@
     "@lit/context": "^1.1.6",
     "@types/express": "^5.0.6",
     "@types/markdown-it": "^14.1.2",
-    "@types/node": "^25.3.1",
+    "@types/node": "^25.3.2",
     "@types/qrcode-terminal": "^0.12.2",
     "@types/ws": "^8.18.1",
     "@typescript/native-preview": "7.0.0-dev.20260225.1",

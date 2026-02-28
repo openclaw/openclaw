@@ -371,7 +371,7 @@ export async function processMessage(params: {
     cfg: params.cfg,
     accountId: params.route.accountId,
   });
-  const { queuedFinal } = await dispatchReplyWithBufferedBlockDispatcher({
+  const { queuedFinal, counts } = await dispatchReplyWithBufferedBlockDispatcher({
     ctx: ctxPayload,
     cfg: params.cfg,
     replyResolver: params.replyResolver,
@@ -443,7 +443,8 @@ export async function processMessage(params: {
     },
   });
 
-  if (!queuedFinal) {
+  const anyReplyDelivered = queuedFinal || (counts.block ?? 0) > 0 || (counts.final ?? 0) > 0;
+  if (!anyReplyDelivered) {
     if (shouldClearGroupHistory) {
       params.groupHistories.set(params.groupHistoryKey, []);
     }

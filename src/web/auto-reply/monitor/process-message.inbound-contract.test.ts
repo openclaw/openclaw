@@ -66,7 +66,7 @@ vi.mock("../../../auto-reply/reply/provider-dispatcher.js", () => ({
   dispatchReplyWithBufferedBlockDispatcher: vi.fn(async (params: any) => {
     capturedDispatchParams = params;
     capturedCtx = params.ctx;
-    return { queuedFinal: false };
+    return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
   }),
 }));
 
