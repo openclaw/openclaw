@@ -6,9 +6,9 @@
  */
 
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
-import { OpenfortClient } from "./src/client.js";
-import { createTools } from "./src/tools.js";
-import type { OpenfortConfig } from "./src/types.js";
+import { OpenfortClient } from "./src/client.ts";
+import { createTools } from "./src/tools.ts";
+import type { OpenfortConfig } from "./src/types.ts";
 
 export default function register(api: OpenClawPluginApi) {
   const config = api.pluginConfig as OpenfortConfig | undefined;

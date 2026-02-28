@@ -6,18 +6,33 @@ import {
   type WalletClient,
   type PublicClient,
   type Chain,
+  type Hex,
 } from "viem";
 import { toAccount, type Account } from "viem/accounts";
 import { base, baseSepolia } from "viem/chains";
-import type { OpenfortConfig, AccountInfo } from "./types.js";
-import { openfortAddressToViem } from "./utils.js";
+import { hashAuthorization } from "viem/utils";
+import { CALIBUR_IMPLEMENTATION, USDC_ADDRESSES } from "./constants.ts";
+import type {
+  OpenfortBackendAccount,
+  OpenfortContract,
+  OpenfortPolicy,
+  OpenfortFeeSponsorship,
+  OpenfortTransactionIntent,
+} from "./openfort-types.ts";
+import { extractListData } from "./openfort-types.ts";
+import type { OpenfortConfig, AccountInfo } from "./types.ts";
+import { openfortAddressToViem } from "./utils.ts";
 
 export class OpenfortClient {
   private openfort: Openfort;
   private config: OpenfortConfig;
-  private cachedAccount: any = null;
-  private cachedWalletClient: WalletClient<any, Chain, Account> | null = null;
-  public publicClient: PublicClient<any, Chain>;
+  private cachedAccount: OpenfortBackendAccount | null = null;
+  private cachedWalletClient: WalletClient | null = null;
+  private cachedPolicy: OpenfortPolicy | null = null;
+  private cachedFeeSponsorship: OpenfortFeeSponsorship | null = null;
+  private accountCreationPromise: Promise<OpenfortBackendAccount> | null = null;
+  public publicClient: PublicClient;
+  public chain: Chain;
 
   constructor(config: OpenfortConfig) {
     this.config = config;
@@ -25,63 +40,312 @@ export class OpenfortClient {
       walletSecret: config.walletSecret,
     });
 
-    const chain = config.network === "base" ? base : baseSepolia;
-    this.publicClient = createPublicClient({ chain, transport: http() }) as PublicClient<
-      any,
-      Chain
-    >;
+    // Validate network
+    const network = config.network || "base-sepolia";
+    if (network !== "base" && network !== "base-sepolia") {
+      throw new Error(
+        `Unsupported network: ${network}. Only 'base' and 'base-sepolia' are supported.`,
+      );
+    }
+
+    this.chain = network === "base" ? base : baseSepolia;
+    this.publicClient = createPublicClient({
+      chain: this.chain,
+      transport: http(),
+    });
   }
 
-  async getOrCreateAccount(): Promise<any> {
+  async getOrCreateAccount(): Promise<OpenfortBackendAccount> {
     if (this.cachedAccount) return this.cachedAccount;
 
-    const result = await this.openfort.accounts.evm.backend.list({ limit: 1 });
-    const accounts = (result as any).data || (result as any).accounts || [];
-    this.cachedAccount = accounts[0] || (await this.openfort.accounts.evm.backend.create());
+    // Prevent race condition: serialize account creation
+    if (this.accountCreationPromise) {
+      return await this.accountCreationPromise;
+    }
 
+    this.accountCreationPromise = (async () => {
+      try {
+        const result = await this.openfort.accounts.evm.backend.list({ limit: 1 });
+        const accounts = extractListData<OpenfortBackendAccount>(result);
+
+        if (accounts.length > 0) {
+          this.cachedAccount = accounts[0];
+        } else {
+          const newAccount = await this.openfort.accounts.evm.backend.create();
+          this.cachedAccount = newAccount as unknown as OpenfortBackendAccount;
+        }
+
+        return this.cachedAccount;
+      } finally {
+        this.accountCreationPromise = null;
+      }
+    })();
+
+    return await this.accountCreationPromise;
+  }
+
+  async ensureDelegatedAccount(): Promise<OpenfortBackendAccount> {
+    const account = await this.getOrCreateAccount();
+
+    // Check if already delegated
+    if (account.delegatedAccount) {
+      return account;
+    }
+
+    // Upgrade to EIP-7702 delegated account
+    const chainId = this.chain.id;
+    const updated = await this.openfort.accounts.evm.backend.update({
+      id: account.id,
+      accountType: "Delegated Account",
+      chainType: "EVM",
+      chainId,
+      implementationType: "Calibur",
+    });
+
+    // Re-fetch the account to get the signing methods
+    const refreshedAccount = await this.openfort.accounts.evm.backend.get({ id: account.id });
+    this.cachedAccount = refreshedAccount as unknown as OpenfortBackendAccount;
     return this.cachedAccount;
   }
 
-  async getWalletClient(): Promise<WalletClient<any, Chain, Account>> {
+  async getWalletClient(): Promise<WalletClient> {
     if (this.cachedWalletClient) return this.cachedWalletClient;
 
     const account = await this.getOrCreateAccount();
-    const chain = this.config.network === "base" ? base : baseSepolia;
 
     const viemAccount = toAccount({
       address: openfortAddressToViem(account.address),
-      sign: async ({ hash }: { hash: `0x${string}` }) => {
-        const sig = await account.sign({ hash: hash as string });
-        return sig as `0x${string}`;
+      async sign({ hash }: { hash: Hex }) {
+        const sig = await account.sign({ hash });
+        return sig as Hex;
       },
-      signMessage: async ({ message }: any) => {
-        const msg = typeof message === "string" ? message : message.raw;
+      async signMessage({ message }) {
+        const msg = typeof message === "string" ? message : (message as { raw: string }).raw;
         const sig = await account.signMessage({ message: msg });
-        return sig as `0x${string}`;
+        return sig as Hex;
       },
-      signTransaction: async (tx: any) => {
+      async signTransaction(tx) {
         const sig = await account.signTransaction(tx);
-        return sig as `0x${string}`;
+        return sig as Hex;
       },
-      signTypedData: async (typedData: any) => {
+      async signTypedData(typedData) {
         const sig = await account.signTypedData(typedData);
-        return sig as `0x${string}`;
+        return sig as Hex;
       },
     });
 
     this.cachedWalletClient = createWalletClient({
       account: viemAccount,
-      chain,
+      chain: this.chain,
       transport: http(),
     });
 
     return this.cachedWalletClient;
   }
 
+  async getOrCreatePolicy(): Promise<OpenfortPolicy> {
+    if (this.cachedPolicy) return this.cachedPolicy;
+
+    // Try to find existing sponsorship policy
+    const policiesResult = await this.openfort.policies.list({ limit: 100 });
+    const policies = extractListData<OpenfortPolicy>(policiesResult);
+
+    const existingPolicy = policies.find((p) =>
+      p.rules?.some((r) => r.operation === "sponsorEvmTransaction"),
+    );
+
+    if (existingPolicy) {
+      this.cachedPolicy = existingPolicy;
+      return this.cachedPolicy;
+    }
+
+    // Create new sponsorship policy
+    const chainId = this.chain.id;
+    const newPolicy = await this.openfort.policies.create({
+      scope: "project",
+      description: `Sponsor all transactions on ${this.chain.name}`,
+      rules: [
+        {
+          action: "accept" as const,
+          operation: "sponsorEvmTransaction",
+          criteria: [
+            {
+              type: "evmNetwork",
+              operator: "in",
+              chainIds: [chainId],
+            },
+          ],
+        },
+      ],
+    });
+
+    this.cachedPolicy = newPolicy as unknown as OpenfortPolicy;
+    return this.cachedPolicy;
+  }
+
+  async getOrCreateUSDCContract(): Promise<string> {
+    // Try to find existing USDC contract for this network
+    const contractsResult = await this.openfort.contracts.list({ limit: 100 });
+    const contracts = extractListData<OpenfortContract>(contractsResult);
+
+    const network = this.config.network || "base-sepolia";
+    const usdcAddress = USDC_ADDRESSES[network];
+
+    const existingContract = contracts.find(
+      (c) => c.address?.toLowerCase() === usdcAddress.toLowerCase() && c.chainId === this.chain.id,
+    );
+
+    if (existingContract) {
+      return existingContract.id;
+    }
+
+    // Create new USDC contract
+    const newContract = await this.openfort.contracts.create({
+      name: `USDC - ${this.chain.name}`,
+      address: usdcAddress,
+      chainId: this.chain.id,
+    });
+
+    return (newContract as unknown as OpenfortContract).id;
+  }
+
+  async getOrCreateFeeSponsorship(): Promise<OpenfortFeeSponsorship | null> {
+    // Always enable fee sponsorship by default
+    const enableSponsorship = this.config.enableFeeSponsorship !== false;
+
+    if (!enableSponsorship) {
+      return null;
+    }
+
+    if (this.cachedFeeSponsorship) return this.cachedFeeSponsorship;
+
+    // Get or create USDC contract ID
+    let usdcContractId = this.config.usdcContractId;
+    if (!usdcContractId) {
+      usdcContractId = await this.getOrCreateUSDCContract();
+    }
+
+    // Get or create policy first
+    const policy = await this.getOrCreatePolicy();
+
+    // Try to find existing fee sponsorship
+    const sponsorshipsResult = await this.openfort.feeSponsorship.list({ limit: 100 });
+    const sponsorships = extractListData<OpenfortFeeSponsorship>(sponsorshipsResult);
+
+    const existingSponsorship = sponsorships.find((s) => s.policyId === policy.id && s.enabled);
+
+    if (existingSponsorship) {
+      this.cachedFeeSponsorship = existingSponsorship;
+      return this.cachedFeeSponsorship;
+    }
+
+    // Create new fee sponsorship with dynamic USDC pricing
+    const newSponsorship = await this.openfort.feeSponsorship.create({
+      name: `Dynamic USDC gas payment - ${this.chain.name}`,
+      strategy: {
+        sponsorSchema: "charge_custom_tokens" as const,
+        tokenContract: usdcContractId,
+        // Omit tokenContractAmount for dynamic pricing
+      },
+      policyId: policy.id,
+    });
+
+    this.cachedFeeSponsorship = newSponsorship as unknown as OpenfortFeeSponsorship;
+    return this.cachedFeeSponsorship;
+  }
+
+  async sendTransactionIntent(params: {
+    contractAddress: string;
+    functionName: string;
+    functionArgs: unknown[];
+  }): Promise<OpenfortTransactionIntent> {
+    const delegatedAccount = await this.ensureDelegatedAccount();
+    const eoaAccount = await this.getOrCreateAccount();
+
+    // Check if EIP-7702 authorization is needed
+    const code = await this.publicClient.getBytecode({
+      address: openfortAddressToViem(eoaAccount.address),
+    });
+    const needsAuth = !code;
+
+    let authSignature: string | undefined;
+
+    if (needsAuth) {
+      // Create and sign EIP-7702 authorization
+      // IMPORTANT: Must use viem's hashAuthorization() utility.
+      // Manual hashing with keccak256(0x05 || rlp(...)) will produce
+      // a different hash because EIP-7702 has specific encoding rules.
+      const eoaNonce = await this.publicClient.getTransactionCount({
+        address: openfortAddressToViem(eoaAccount.address),
+      });
+
+      const authHash = hashAuthorization({
+        contractAddress: CALIBUR_IMPLEMENTATION,
+        chainId: this.chain.id,
+        nonce: eoaNonce,
+      });
+
+      authSignature = await eoaAccount.sign({ hash: authHash });
+    }
+
+    // Create transaction intent
+    const intentParams: {
+      account: string;
+      chainId: number;
+      optimistic: boolean;
+      interactions: Array<{
+        contract: string;
+        functionName: string;
+        functionArgs: unknown[];
+      }>;
+      signedAuthorization?: string;
+    } = {
+      account: delegatedAccount.delegatedAccount!.id,
+      chainId: this.chain.id,
+      optimistic: false,
+      interactions: [
+        {
+          contract: params.contractAddress,
+          functionName: params.functionName,
+          functionArgs: params.functionArgs,
+        },
+      ],
+    };
+
+    if (needsAuth && authSignature) {
+      intentParams.signedAuthorization = authSignature;
+    }
+
+    let intent = await this.openfort.transactionIntents.create(intentParams);
+
+    // Sign the user operation if required
+    const typedIntent = intent as unknown as OpenfortTransactionIntent;
+    if (typedIntent.nextAction?.type === "sign_with_wallet") {
+      const signableHash = typedIntent.nextAction.payload?.signableHash;
+      if (signableHash) {
+        const txSignature = await eoaAccount.sign({ hash: signableHash });
+
+        intent = await this.openfort.transactionIntents.signature(typedIntent.id, {
+          signature: txSignature,
+        });
+      }
+    }
+
+    return intent as unknown as OpenfortTransactionIntent;
+  }
+
+  async waitForTransactionReceipt(txHash: Hex, timeout = 60000) {
+    return await this.publicClient.waitForTransactionReceipt({
+      hash: txHash,
+      timeout,
+    });
+  }
+
   async listAccounts(limit: number = 10): Promise<AccountInfo[]> {
     const result = await this.openfort.accounts.evm.backend.list({ limit });
-    const accounts = (result as any).data || (result as any).accounts || [];
-    return accounts.map((acc: any) => ({
+    const accounts = extractListData<OpenfortBackendAccount>(result);
+
+    return accounts.map((acc) => ({
       id: acc.id,
       address: openfortAddressToViem(acc.address),
       custody: acc.custody,
@@ -92,5 +356,8 @@ export class OpenfortClient {
   cleanup() {
     this.cachedAccount = null;
     this.cachedWalletClient = null;
+    this.cachedPolicy = null;
+    this.cachedFeeSponsorship = null;
+    this.accountCreationPromise = null;
   }
 }

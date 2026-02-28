@@ -14,9 +14,18 @@
       },
       "network": {
         "type": "string",
-        "enum": ["base", "base-sepolia", "solana"],
+        "enum": ["base", "base-sepolia"],
         "default": "base-sepolia",
-        "description": "Network to use for wallet operations"
+        "description": "Network to use for wallet operations (EVM only)"
+      },
+      "usdcContractId": {
+        "type": "string",
+        "description": "Optional: Openfort USDC contract ID from dashboard (con_...) - auto-created if not provided"
+      },
+      "enableFeeSponsorship": {
+        "type": "boolean",
+        "default": true,
+        "description": "Enable fee sponsorship with USDC gas payment (default: true)"
       }
     },
     "required": ["secretKey", "walletSecret"]
