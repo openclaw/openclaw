@@ -143,12 +143,12 @@ function createPluginHandler(
     return null;
   }
   const outbound = normalized.adapter;
-  if (!outbound.sendText || !outbound.sendMedia) {
+  const hasSendTextMedia = outbound.sendText && outbound.sendMedia;
+  const hasSendFinal = Boolean(outbound.sendFinal);
+  if (!hasSendTextMedia && !hasSendFinal) {
     return null;
   }
   const baseCtx = createChannelOutboundContextBase(params);
-  const sendText = outbound.sendText;
-  const sendMedia = outbound.sendMedia;
   const chunker = outbound.chunker ?? null;
   const chunkerMode = outbound.chunkerMode;
   const resolveCtx = (overrides?: {
@@ -159,30 +159,56 @@ function createPluginHandler(
     replyToId: overrides?.replyToId ?? baseCtx.replyToId,
     threadId: overrides?.threadId ?? baseCtx.threadId,
   });
+  const sendText = hasSendTextMedia
+    ? (text: string, overrides?: { replyToId?: string | null; threadId?: string | number | null }) =>
+        outbound.sendText!({
+          ...resolveCtx(overrides),
+          text,
+        })
+    : (text: string, overrides?: { replyToId?: string | null; threadId?: string | number | null }) =>
+        outbound.sendFinal!({
+          ...resolveCtx(overrides),
+          text,
+          mediaUrl: undefined,
+          payload: { text, mediaUrls: [] },
+        });
+  const sendMedia = hasSendTextMedia
+    ? (
+        caption: string,
+        mediaUrl: string,
+        overrides?: { replyToId?: string | null; threadId?: string | number | null },
+      ) =>
+        outbound.sendMedia!({
+          ...resolveCtx(overrides),
+          text: caption,
+          mediaUrl,
+        })
+    : (
+        caption: string,
+        mediaUrl: string,
+        overrides?: { replyToId?: string | null; threadId?: string | number | null },
+      ) =>
+        outbound.sendFinal!({
+          ...resolveCtx(overrides),
+          text: caption,
+          mediaUrl,
+          payload: { text: caption, mediaUrl, mediaUrls: [mediaUrl] },
+        });
   return {
     chunker,
     chunkerMode,
     textChunkLimit: outbound.textChunkLimit,
     sendPayload: outbound.sendFinal
       ? async (payload, overrides) =>
-          outbound.sendFinal({
+          outbound.sendFinal!({
             ...resolveCtx(overrides),
             text: payload.text ?? "",
             mediaUrl: payload.mediaUrl,
             payload,
           })
       : undefined,
-    sendText: async (text, overrides) =>
-      sendText({
-        ...resolveCtx(overrides),
-        text,
-      }),
-    sendMedia: async (caption, mediaUrl, overrides) =>
-      sendMedia({
-        ...resolveCtx(overrides),
-        text: caption,
-        mediaUrl,
-      }),
+    sendText: async (text, overrides) => sendText(text, overrides),
+    sendMedia: async (caption, mediaUrl, overrides) => sendMedia(caption, mediaUrl, overrides),
   };
 }
 

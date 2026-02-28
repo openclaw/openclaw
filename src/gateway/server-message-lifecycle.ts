@@ -35,14 +35,16 @@ export async function startMessageLifecycleWorkers(
 ): Promise<LifecycleWorkerHandle> {
   const outboxLog = childLogger(params.log, "outbox-worker");
 
+  // Record startup time before any long startup work. The outbox worker uses this to skip
+  // entries enqueued after startup (those are being delivered on the direct path and must
+  // not be double-delivered). Only entries older than this timestamp are crash survivors.
+  // Must be taken before importLegacyFileQueue so entries enqueued during import are not
+  // misclassified as pre-start crash survivors and retried in the same cycle.
+  const startupCutoff = Date.now();
+
   await importLegacyFileQueue(params.stateDir).catch((err) => {
     params.log.warn(`message-lifecycle: legacy queue import failed: ${String(err)}`);
   });
-
-  // Record startup time before starting workers. The outbox worker uses this to skip entries
-  // enqueued after startup (those are being delivered on the direct path and must not be
-  // double-delivered). Only entries older than this timestamp are crash survivors.
-  const startupCutoff = Date.now();
 
   const outboxIntervalMs = Math.max(250, Math.floor(params.outboxIntervalMs ?? 1000));
 
