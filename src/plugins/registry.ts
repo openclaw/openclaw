@@ -331,16 +331,22 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         };
 
     record.hookNames.push(name);
+
+    const hookSystemEnabled = config?.hooks?.internal?.enabled === true;
+    const shouldRegister = hookSystemEnabled && opts?.register !== false;
+
     registry.hooks.push({
       pluginId: record.id,
       entry: hookEntry,
       events: normalizedEvents,
       source: record.source,
-      handler,
+      // Only store handler when it was actually registered — hooks with
+      // register:false are metadata-only and must not become active after
+      // clearInternalHooks() re-registration.
+      handler: shouldRegister ? handler : undefined,
     });
 
-    const hookSystemEnabled = config?.hooks?.internal?.enabled === true;
-    if (!hookSystemEnabled || opts?.register === false) {
+    if (!shouldRegister) {
       return;
     }
 
