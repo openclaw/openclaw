@@ -12,7 +12,7 @@ export type ChannelId = ChatChannelId | (string & {});
 
 export type ChannelOutboundTargetMode = "explicit" | "implicit" | "heartbeat";
 
-export type ChannelAgentTool = AgentTool<TSchema, unknown> & {
+export type ChannelAgentTool = AgentTool & {
   ownerOnly?: boolean;
 };
 

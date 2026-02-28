@@ -351,7 +351,7 @@ async function executeToolCallsParallel(
   const results: AgentMessage[] = [];
   for (let i = 0; i < toolCalls.length; i++) {
     const toolCall = toolCalls[i];
-    const outcome = settled[i] as PromiseSettledResult<AgentToolResult<unknown>>;
+    const outcome = settled[i];
     const isError = outcome.status === "rejected";
     const result: AgentToolResult<unknown> = isError
       ? {
