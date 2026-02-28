@@ -23,6 +23,7 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockedGlobalHookRunner.hasHooks.mockImplementation(() => false);
+    mockedPickFallbackThinkingLevel.mockReturnValue(null);
   });
 
   it("passes precomputed legacy before_agent_start result into the attempt", async () => {
@@ -130,6 +131,59 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(32);
     expect(mockedCompactDirect).not.toHaveBeenCalled();
     expect(result.meta.error?.kind).toBe("retry_limit");
+    expect(result.payloads?.[0]?.isError).toBe(true);
+  });
+
+  it("recovers stale claude-sdk resume once by forcing a fresh session retry", async () => {
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          promptError: new Error(
+            "claude_sdk_stale_resume_session: resume failed because session not found",
+          ),
+        }),
+      )
+      .mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+
+    const result = await runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      provider: "claude-pro",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(mockedRunEmbeddedAttempt).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        forceFreshClaudeSession: true,
+      }),
+    );
+    expect(result.meta.error).toBeUndefined();
+  });
+
+  it("returns explicit stale-resume error when fresh-session retry still fails", async () => {
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          promptError: new Error(
+            "claude_sdk_stale_resume_session: resume failed because session not found",
+          ),
+        }),
+      )
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          promptError: new Error(
+            "claude_sdk_stale_resume_session: resume failed because session not found",
+          ),
+        }),
+      );
+
+    const result = await runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      provider: "claude-pro",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(result.meta.error?.kind).toBe("claude_sdk_stale_resume");
     expect(result.payloads?.[0]?.isError).toBe(true);
   });
 });

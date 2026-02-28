@@ -2333,6 +2333,25 @@ OpenClaw uses provider-prefixed IDs like:
 - `anthropic:<email>` for OAuth identities
 - custom IDs you choose (e.g. `anthropic:work`)
 
+### Provider id vs auth profile id
+
+They solve different problems:
+
+- Provider ID: model/runtime routing target (for example `anthropic`, `zai`, `minimax`, `custom`)
+- Auth profile ID: concrete credential record to use (for example `anthropic:work`, `zai:team-a`, `custom-bridge:work`)
+
+The auth profile must exist in `~/.openclaw/agents/<agentId>/agent/auth-profiles.json`.
+Config examples are in [/gateway/configuration-reference#agentsdefaultsclaudesdk](/gateway/configuration-reference#agentsdefaultsclaudesdk).
+
+### How does Claude SDK failover work
+
+OpenClaw failover for Claude SDK uses staged fallback:
+
+1. Rotate auth profiles for the active system-keychain provider (`claude-pro` / `claude-max`).
+2. If no auth profiles remain (all cooling down or expired), switch runtime to Pi for the turn and continue normal model/provider fallback.
+
+This is why a session can start on Claude SDK and continue on Pi runtime when the Claude subscription auth is unavailable.
+
 ### Can I control which auth profile is tried first
 
 Yes. Config supports optional metadata for profiles and an ordering per provider (`auth.order.<provider>`). This does **not** store secrets; it maps IDs to provider/mode and sets rotation order.

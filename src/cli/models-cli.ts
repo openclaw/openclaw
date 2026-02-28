@@ -10,6 +10,7 @@ import {
   modelsAuthOrderGetCommand,
   modelsAuthOrderSetCommand,
   modelsAuthPasteTokenCommand,
+  modelsAuthSetupClaudeProCommand,
   modelsAuthSetupTokenCommand,
   modelsFallbacksAddCommand,
   modelsFallbacksClearCommand,
@@ -296,7 +297,7 @@ export function registerModelsCli(program: Command) {
 
   auth
     .command("add")
-    .description("Interactive auth helper (setup-token or paste token)")
+    .description("Interactive auth helper (Claude keychain, setup-token, or paste token)")
     .action(async () => {
       await runModelsCommand(async () => {
         await modelsAuthAddCommand({}, defaultRuntime);
@@ -316,6 +317,25 @@ export function registerModelsCli(program: Command) {
             provider: opts.provider as string | undefined,
             method: opts.method as string | undefined,
             setDefault: Boolean(opts.setDefault),
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  auth
+    .command("setup-claude-pro")
+    .description("Create a Claude Code system-keychain auth profile")
+    .option("--provider <name>", "Provider id (default: claude-pro; supports claude-max)")
+    .option("--profile-id <id>", "Auth profile id (default: <provider>:system-keychain)")
+    .option("--yes", "Skip confirmation when interactive", false)
+    .action(async (opts) => {
+      await runModelsCommand(async () => {
+        await modelsAuthSetupClaudeProCommand(
+          {
+            provider: opts.provider as string | undefined,
+            profileId: opts.profileId as string | undefined,
+            yes: Boolean(opts.yes),
           },
           defaultRuntime,
         );

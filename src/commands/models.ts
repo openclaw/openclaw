@@ -8,6 +8,7 @@ export {
   modelsAuthAddCommand,
   modelsAuthLoginCommand,
   modelsAuthPasteTokenCommand,
+  modelsAuthSetupClaudeProCommand,
   modelsAuthSetupTokenCommand,
 } from "./models/auth.js";
 export {

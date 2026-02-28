@@ -7,6 +7,7 @@ import type {
   TypingMode,
 } from "./types.base.js";
 import type { MemorySearchConfig } from "./types.tools.js";
+import type { ClaudeSdkConfig } from "./zod-schema.agent-runtime.js";
 
 export type AgentModelEntryConfig = {
   alias?: string;
@@ -266,6 +267,8 @@ export type AgentDefaultsConfig = {
   };
   /** Optional sandbox settings for non-main sessions. */
   sandbox?: AgentSandboxConfig;
+  /** Claude SDK runtime config applied as defaults for all agents. */
+  claudeSdk?: ClaudeSdkConfig;
 };
 
 export type AgentCompactionMode = "default" | "safeguard";

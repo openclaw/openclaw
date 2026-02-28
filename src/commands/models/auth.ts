@@ -6,6 +6,7 @@ import {
 } from "../../agents/agent-scope.js";
 import { upsertAuthProfile } from "../../agents/auth-profiles.js";
 import type { AuthProfileCredential } from "../../agents/auth-profiles/types.js";
+import { SYSTEM_KEYCHAIN_PROVIDERS } from "../../agents/model-auth.js";
 import { normalizeProviderId } from "../../agents/model-selection.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { formatCliCommand } from "../../cli/command-format.js";
@@ -48,7 +49,7 @@ const select = <T>(params: Parameters<typeof clackSelect<T>>[0]) =>
     ),
   });
 
-type TokenProvider = "anthropic";
+type TokenProvider = "anthropic" | "claude-pro" | "claude-max";
 
 function resolveTokenProvider(raw?: string): TokenProvider | "custom" | null {
   const trimmed = raw?.trim();
@@ -59,11 +60,21 @@ function resolveTokenProvider(raw?: string): TokenProvider | "custom" | null {
   if (normalized === "anthropic") {
     return "anthropic";
   }
+  if (normalized === "claude-pro") {
+    return "claude-pro";
+  }
+  if (normalized === "claude-max") {
+    return "claude-max";
+  }
   return "custom";
 }
 
 function resolveDefaultTokenProfileId(provider: string): string {
   return `${normalizeProviderId(provider)}:manual`;
+}
+
+function resolveDefaultKeychainProfileId(provider: "claude-pro" | "claude-max"): string {
+  return `${provider}:system-keychain`;
 }
 
 export async function modelsAuthSetupTokenCommand(
@@ -159,11 +170,53 @@ export async function modelsAuthPasteTokenCommand(
   runtime.log(`Auth profile: ${profileId} (${provider}/token)`);
 }
 
+export async function modelsAuthSetupClaudeProCommand(
+  opts: { provider?: string; profileId?: string; yes?: boolean },
+  runtime: RuntimeEnv,
+) {
+  const provider = resolveTokenProvider(opts.provider ?? "claude-pro");
+  if (provider !== "claude-pro" && provider !== "claude-max") {
+    throw new Error("Only --provider claude-pro or claude-max is supported for setup-claude-pro.");
+  }
+
+  const profileId = opts.profileId?.trim() || resolveDefaultKeychainProfileId(provider);
+  const requiresPrompt = process.stdin.isTTY && !opts.yes;
+  if (requiresPrompt) {
+    const proceed = await confirm({
+      message: `Configure Claude Code keychain auth for ${provider}?`,
+      initialValue: true,
+    });
+    if (!proceed) {
+      return;
+    }
+  }
+
+  upsertAuthProfile({
+    profileId,
+    credential: {
+      type: "token",
+      provider,
+      token: "system-keychain",
+    },
+  });
+
+  await updateConfig((cfg) => applyAuthProfileConfig(cfg, { profileId, provider, mode: "token" }));
+
+  logConfigUpdated(runtime);
+  runtime.log(`Auth profile: ${profileId} (${provider}/system-keychain)`);
+}
+
 export async function modelsAuthAddCommand(_opts: Record<string, never>, runtime: RuntimeEnv) {
   const provider = (await select({
-    message: "Token provider",
+    message: "Auth provider",
     options: [
       { value: "anthropic", label: "anthropic" },
+      {
+        value: "claude-pro",
+        label: "claude-pro",
+        hint: "Claude Code keychain runtime (recommended)",
+      },
+      { value: "claude-max", label: "claude-max", hint: "Claude Code keychain runtime" },
       { value: "custom", label: "custom (type provider id)" },
     ],
   })) as TokenProvider | "custom";
@@ -181,8 +234,17 @@ export async function modelsAuthAddCommand(_opts: Record<string, never>, runtime
       : provider;
 
   const method = (await select({
-    message: "Token method",
+    message: "Auth method",
     options: [
+      ...(SYSTEM_KEYCHAIN_PROVIDERS.has(providerId)
+        ? [
+            {
+              value: "setup-claude-pro",
+              label: "Configure Claude Code w/Keychain",
+              hint: `Create ${providerId}:system-keychain for runtime failover + cooldown tracking`,
+            },
+          ]
+        : []),
       ...(providerId === "anthropic"
         ? [
             {
@@ -194,7 +256,12 @@ export async function modelsAuthAddCommand(_opts: Record<string, never>, runtime
         : []),
       { value: "paste", label: "paste token" },
     ],
-  })) as "setup-token" | "paste";
+  })) as "setup-claude-pro" | "setup-token" | "paste";
+
+  if (method === "setup-claude-pro") {
+    await modelsAuthSetupClaudeProCommand({ provider: providerId }, runtime);
+    return;
+  }
 
   if (method === "setup-token") {
     await modelsAuthSetupTokenCommand({ provider: providerId }, runtime);

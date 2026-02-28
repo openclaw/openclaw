@@ -29,6 +29,22 @@ Credential types:
 
 - `type: "api_key"` → `{ provider, key }`
 - `type: "oauth"` → `{ provider, access, refresh, expires, email? }` (+ `projectId`/`enterpriseUrl` for some providers)
+- `type: "token"` → provider tokens (including synthetic `system-keychain` markers for Claude Code runtime providers)
+
+## Claude Code keychain providers
+
+For `claude-pro` and `claude-max`, OpenClaw uses Claude Code system-keychain
+auth and routes turns to Claude SDK runtime first.
+
+- Synthetic profile IDs use `<provider>:system-keychain`.
+- You can pre-create these profiles during onboarding:
+
+```bash
+openclaw models auth setup-claude-pro
+```
+
+- If keychain auth cannot be resolved for a turn, OpenClaw retries that turn on
+  Pi runtime, then continues normal profile/model failover rules.
 
 ## Profile IDs
 

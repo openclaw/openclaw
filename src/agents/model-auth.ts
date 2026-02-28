@@ -20,6 +20,12 @@ import { normalizeProviderId } from "./model-selection.js";
 
 export { ensureAuthProfileStore, resolveAuthProfileOrder } from "./auth-profiles.js";
 
+/**
+ * Providers that authenticate via implicit system keychain (e.g. ~/.claude/ OAuth)
+ * and bypass the conventional API-key / profile auth flow entirely.
+ */
+export const SYSTEM_KEYCHAIN_PROVIDERS = new Set(["claude-pro", "claude-max"]);
+
 const AWS_BEARER_ENV = "AWS_BEARER_TOKEN_BEDROCK";
 const AWS_ACCESS_KEY_ENV = "AWS_ACCESS_KEY_ID";
 const AWS_SECRET_KEY_ENV = "AWS_SECRET_ACCESS_KEY";
@@ -129,7 +135,7 @@ export type ResolvedProviderAuth = {
   apiKey?: string;
   profileId?: string;
   source: string;
-  mode: "api-key" | "oauth" | "token" | "aws-sdk";
+  mode: "api-key" | "oauth" | "token" | "aws-sdk" | "system-keychain";
 };
 
 export async function resolveApiKeyForProvider(params: {
@@ -141,6 +147,17 @@ export async function resolveApiKeyForProvider(params: {
   agentDir?: string;
 }): Promise<ResolvedProviderAuth> {
   const { provider, cfg, profileId, preferredProfile } = params;
+
+  // System-keychain providers use implicit auth (e.g. ~/.claude/ OAuth) and
+  // never go through the conventional API-key / profile resolution flow.
+  if (SYSTEM_KEYCHAIN_PROVIDERS.has(provider)) {
+    return {
+      apiKey: undefined,
+      mode: "system-keychain" as const,
+      source: "Claude Subscription (system keychain)",
+    };
+  }
+
   const store = params.store ?? ensureAuthProfileStore(params.agentDir);
 
   if (profileId) {
@@ -233,7 +250,14 @@ export async function resolveApiKeyForProvider(params: {
 }
 
 export type EnvApiKeyResult = { apiKey: string; source: string };
-export type ModelAuthMode = "api-key" | "oauth" | "token" | "mixed" | "aws-sdk" | "unknown";
+export type ModelAuthMode =
+  | "api-key"
+  | "oauth"
+  | "token"
+  | "mixed"
+  | "aws-sdk"
+  | "system-keychain"
+  | "unknown";
 
 export function resolveEnvApiKey(provider: string): EnvApiKeyResult | null {
   const normalized = normalizeProviderId(provider);
@@ -339,6 +363,11 @@ export function resolveModelAuthMode(
   const resolved = provider?.trim();
   if (!resolved) {
     return undefined;
+  }
+
+  // System-keychain providers use implicit auth (e.g. Mac OS Keychain for Claude Subscription)
+  if (SYSTEM_KEYCHAIN_PROVIDERS.has(resolved)) {
+    return "system-keychain";
   }
 
   const authOverride = resolveProviderAuthOverride(cfg, resolved);

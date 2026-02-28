@@ -178,7 +178,7 @@ openclaw [--dev] [--profile <name>] <command>
     fallbacks list|add|remove|clear
     image-fallbacks list|add|remove|clear
     scan
-    auth add|setup-token|paste-token
+    auth add|setup-claude-pro|setup-token|paste-token
     auth order get|set|clear
   sandbox
     list
@@ -833,6 +833,13 @@ openclaw models auth setup-token --provider anthropic
 openclaw models status
 ```
 
+Claude Code keychain auth (`claude-pro` by default):
+
+```bash
+openclaw models auth setup-claude-pro
+openclaw models status
+```
+
 ### `models` (root)
 
 `openclaw models` is an alias for `models status`.
@@ -920,11 +927,12 @@ Options:
 - `--set-image`
 - `--json`
 
-### `models auth add|setup-token|paste-token`
+### `models auth add|setup-claude-pro|setup-token|paste-token`
 
 Options:
 
 - `add`: interactive auth helper
+- `setup-claude-pro`: `--provider <claude-pro|claude-max>` (default `claude-pro`), `--profile-id <id>`, `--yes`
 - `setup-token`: `--provider <name>` (default `anthropic`), `--yes`
 - `paste-token`: `--provider <name>`, `--profile-id <id>`, `--expires-in <duration>`
 

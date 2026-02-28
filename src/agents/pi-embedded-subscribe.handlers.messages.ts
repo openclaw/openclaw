@@ -100,11 +100,13 @@ export function handleMessageUpdate(
     const thinkingDelta = typeof assistantRecord?.delta === "string" ? assistantRecord.delta : "";
     const thinkingContent =
       typeof assistantRecord?.content === "string" ? assistantRecord.content : "";
+    // NOTE: ctx.params.session.sessionId is the OpenClaw session ID (consistent
+    // across runtimes), not the Claude SDK server-side session_id.
     appendRawStream({
       ts: Date.now(),
       event: "assistant_thinking_stream",
       runId: ctx.params.runId,
-      sessionId: (ctx.params.session as { id?: string }).id,
+      sessionId: ctx.params.session.sessionId,
       evtType,
       delta: thinkingDelta,
       content: thinkingContent,
@@ -134,7 +136,7 @@ export function handleMessageUpdate(
     ts: Date.now(),
     event: "assistant_text_stream",
     runId: ctx.params.runId,
-    sessionId: (ctx.params.session as { id?: string }).id,
+    sessionId: ctx.params.session.sessionId,
     evtType,
     delta,
     content,
@@ -268,7 +270,7 @@ export function handleMessageEnd(
     ts: Date.now(),
     event: "assistant_message_end",
     runId: ctx.params.runId,
-    sessionId: (ctx.params.session as { id?: string }).id,
+    sessionId: ctx.params.session.sessionId,
     rawText,
     rawThinking: extractAssistantThinking(assistantMessage),
   });

@@ -1,9 +1,11 @@
 import "./run.overflow-compaction.mocks.shared.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { getApiKeyForModel } from "../model-auth.js";
 import { runEmbeddedPiAgent } from "./run.js";
 import { runEmbeddedAttempt } from "./run/attempt.js";
 
 const mockedRunEmbeddedAttempt = vi.mocked(runEmbeddedAttempt);
+const mockedGetApiKeyForModel = vi.mocked(getApiKeyForModel);
 
 describe("runEmbeddedPiAgent usage reporting", () => {
   beforeEach(() => {
@@ -57,5 +59,94 @@ describe("runEmbeddedPiAgent usage reporting", () => {
     // Check if total matches the last turn's total (200)
     // If the bug exists, it will likely be 350
     expect(usage?.total).toBe(200);
+  });
+
+  it("uses claude-sdk runtime when provider is system-keychain", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce({
+      aborted: false,
+      promptError: null,
+      timedOut: false,
+      sessionIdUsed: "test-session",
+      assistantTexts: ["Response 1"],
+      lastAssistant: {
+        usage: { input: 10, output: 5, total: 15 },
+        stopReason: "end_turn",
+      },
+      attemptUsage: { input: 10, output: 5, total: 15 },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any);
+    mockedGetApiKeyForModel.mockResolvedValueOnce({
+      apiKey: undefined,
+      profileId: "claude-pro:system-keychain",
+      source: "Claude Pro (system keychain)",
+      mode: "system-keychain",
+    } as never);
+
+    await runEmbeddedPiAgent({
+      sessionId: "test-session",
+      sessionKey: "test-key",
+      sessionFile: "/tmp/session.json",
+      workspaceDir: "/tmp/workspace",
+      prompt: "hello",
+      timeoutMs: 30000,
+      runId: "run-2",
+      provider: "claude-pro",
+      config: {
+        agents: {
+          defaults: {
+            claudeSdk: {},
+          },
+        },
+      },
+    });
+
+    const firstAttemptCall = mockedRunEmbeddedAttempt.mock.calls[0]?.[0];
+    expect(firstAttemptCall?.runtimeOverride).toBe("claude-sdk");
+  });
+
+  it("falls back runtime to pi before attempt when claude-sdk auth is unavailable", async () => {
+    mockedGetApiKeyForModel
+      .mockRejectedValueOnce(new Error("claude-pro keychain expired"))
+      .mockResolvedValueOnce({
+        apiKey: "sk-pi-fallback",
+        profileId: "pi-profile",
+        source: "test",
+        mode: "api-key",
+      });
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce({
+      aborted: false,
+      promptError: null,
+      timedOut: false,
+      sessionIdUsed: "test-session",
+      assistantTexts: ["Response 1"],
+      lastAssistant: {
+        usage: { input: 10, output: 5, total: 15 },
+        stopReason: "end_turn",
+      },
+      attemptUsage: { input: 10, output: 5, total: 15 },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any);
+
+    await runEmbeddedPiAgent({
+      sessionId: "test-session",
+      sessionKey: "test-key",
+      sessionFile: "/tmp/session.json",
+      workspaceDir: "/tmp/workspace",
+      prompt: "hello",
+      timeoutMs: 30000,
+      runId: "run-3",
+      provider: "claude-pro",
+      config: {
+        agents: {
+          defaults: {
+            claudeSdk: {},
+          },
+        },
+      },
+    });
+
+    const firstAttemptCall = mockedRunEmbeddedAttempt.mock.calls[0]?.[0];
+    expect(firstAttemptCall?.runtimeOverride).toBe("pi");
+    expect(firstAttemptCall?.resolvedProviderAuth?.apiKey).toBe("sk-pi-fallback");
   });
 });

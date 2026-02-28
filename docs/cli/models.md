@@ -65,6 +65,7 @@ openclaw models fallbacks list
 
 ```bash
 openclaw models auth add
+openclaw models auth setup-claude-pro
 openclaw models auth login --provider <id>
 openclaw models auth setup-token
 openclaw models auth paste-token
@@ -75,5 +76,6 @@ openclaw models auth paste-token
 
 Notes:
 
+- `setup-claude-pro` creates a synthetic Claude Code keychain profile (`<provider>:system-keychain`) for `claude-pro`/`claude-max` and defaults to `claude-pro`.
 - `setup-token` prompts for a setup-token value (generate it with `claude setup-token` on any machine).
 - `paste-token` accepts a token string generated elsewhere or from automation.
