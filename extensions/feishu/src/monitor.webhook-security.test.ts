@@ -84,6 +84,27 @@ function buildConfig(params: {
   } as ClawdbotConfig;
 }
 
+function buildMultiAccountWebsocketConfig(accountIds: string[]): ClawdbotConfig {
+  return {
+    channels: {
+      feishu: {
+        enabled: true,
+        accounts: Object.fromEntries(
+          accountIds.map((accountId) => [
+            accountId,
+            {
+              enabled: true,
+              appId: `cli_${accountId}`,
+              appSecret: `secret_${accountId}`,
+              connectionMode: "websocket",
+            },
+          ]),
+        ),
+      },
+    },
+  } as ClawdbotConfig;
+}
+
 async function withRunningWebhookMonitor(
   params: {
     accountId: string;
@@ -205,5 +226,41 @@ describe("Feishu webhook security hardening", () => {
 
     isWebhookRateLimitedForTest("/feishu-rate-limit-stale:fresh", now + 60_001);
     expect(getFeishuWebhookRateLimitStateSizeForTest()).toBe(1);
+  });
+
+  it("starts account probes sequentially to avoid startup bursts", async () => {
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const started: string[] = [];
+    let releaseProbes!: () => void;
+    const probesReleased = new Promise<void>((resolve) => {
+      releaseProbes = () => resolve();
+    });
+    probeFeishuMock.mockImplementation(async (account: { accountId: string }) => {
+      started.push(account.accountId);
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await probesReleased;
+      inFlight -= 1;
+      return { ok: true, botOpenId: `bot_${account.accountId}` };
+    });
+
+    const abortController = new AbortController();
+    const monitorPromise = monitorFeishuProvider({
+      config: buildMultiAccountWebsocketConfig(["alpha", "beta", "gamma"]),
+      abortSignal: abortController.signal,
+    });
+
+    try {
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(started).toEqual(["alpha"]);
+      expect(maxInFlight).toBe(1);
+    } finally {
+      releaseProbes();
+      abortController.abort();
+      await monitorPromise;
+    }
   });
 });
