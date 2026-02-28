@@ -105,6 +105,193 @@ describe("feishu_doc image fetch hardening", () => {
     scopeListMock.mockResolvedValue({ code: 0, data: { scopes: [] } });
   });
 
+  it("inserts blocks sequentially to preserve document order", async () => {
+    const blocks = [
+      { block_type: 3, block_id: "h1" },
+      { block_type: 2, block_id: "t1" },
+      { block_type: 3, block_id: "h2" },
+    ];
+    convertMock.mockResolvedValue({
+      code: 0,
+      data: {
+        blocks,
+        first_level_block_ids: ["h1", "t1", "h2"],
+      },
+    });
+
+    blockListMock.mockResolvedValue({ code: 0, data: { items: [] } });
+
+    // Each call returns the single block that was passed in
+    blockChildrenCreateMock
+      .mockResolvedValueOnce({ code: 0, data: { children: [{ block_type: 3, block_id: "h1" }] } })
+      .mockResolvedValueOnce({ code: 0, data: { children: [{ block_type: 2, block_id: "t1" }] } })
+      .mockResolvedValueOnce({ code: 0, data: { children: [{ block_type: 3, block_id: "h2" }] } });
+
+    const registerTool = vi.fn();
+    registerFeishuDocTools({
+      config: {
+        channels: {
+          feishu: { appId: "app_id", appSecret: "app_secret" },
+        },
+      } as any,
+      logger: { debug: vi.fn(), info: vi.fn() } as any,
+      registerTool,
+    } as any);
+
+    const feishuDocTool = registerTool.mock.calls
+      .map((call) => call[0])
+      .map((tool) => (typeof tool === "function" ? tool({}) : tool))
+      .find((tool) => tool.name === "feishu_doc");
+    expect(feishuDocTool).toBeDefined();
+
+    const result = await feishuDocTool.execute("tool-call", {
+      action: "append",
+      doc_token: "doc_1",
+      content: "plain text body",
+    });
+
+    // Verify sequential insertion: one call per block
+    expect(blockChildrenCreateMock).toHaveBeenCalledTimes(3);
+
+    // Verify each call received exactly one block in the correct order
+    const calls = blockChildrenCreateMock.mock.calls;
+    expect(calls[0][0].data.children).toHaveLength(1);
+    expect(calls[0][0].data.children[0].block_id).toBe("h1");
+    expect(calls[1][0].data.children[0].block_id).toBe("t1");
+    expect(calls[2][0].data.children[0].block_id).toBe("h2");
+
+    expect(result.details.blocks_added).toBe(3);
+  });
+
+  it("falls back to size-based convert chunking for long no-heading markdown", async () => {
+    let successChunkCount = 0;
+    convertMock.mockImplementation(async ({ data }) => {
+      const content = data.content as string;
+      if (content.length > 280) {
+        return { code: 999, msg: "content too large" };
+      }
+      successChunkCount++;
+      const blockId = `b_${successChunkCount}`;
+      return {
+        code: 0,
+        data: {
+          blocks: [{ block_type: 2, block_id: blockId }],
+          first_level_block_ids: [blockId],
+        },
+      };
+    });
+
+    blockChildrenCreateMock.mockImplementation(async ({ data }) => ({
+      code: 0,
+      data: { children: data.children },
+    }));
+
+    const registerTool = vi.fn();
+    registerFeishuDocTools({
+      config: {
+        channels: {
+          feishu: { appId: "app_id", appSecret: "app_secret" },
+        },
+      } as any,
+      logger: { debug: vi.fn(), info: vi.fn() } as any,
+      registerTool,
+    } as any);
+
+    const feishuDocTool = registerTool.mock.calls
+      .map((call) => call[0])
+      .map((tool) => (typeof tool === "function" ? tool({}) : tool))
+      .find((tool) => tool.name === "feishu_doc");
+    expect(feishuDocTool).toBeDefined();
+
+    const longMarkdown = Array.from(
+      { length: 120 },
+      (_, i) => `line ${i} with enough content to trigger fallback chunking`,
+    ).join("\n");
+
+    const result = await feishuDocTool.execute("tool-call", {
+      action: "append",
+      doc_token: "doc_1",
+      content: longMarkdown,
+    });
+
+    expect(convertMock.mock.calls.length).toBeGreaterThan(1);
+    expect(successChunkCount).toBeGreaterThan(1);
+    expect(result.details.blocks_added).toBe(successChunkCount);
+  });
+
+  it("keeps fenced code blocks balanced when size fallback split is needed", async () => {
+    const convertedChunks: string[] = [];
+    let successChunkCount = 0;
+    let failFirstConvert = true;
+    convertMock.mockImplementation(async ({ data }) => {
+      const content = data.content as string;
+      convertedChunks.push(content);
+      if (failFirstConvert) {
+        failFirstConvert = false;
+        return { code: 999, msg: "content too large" };
+      }
+      successChunkCount++;
+      const blockId = `c_${successChunkCount}`;
+      return {
+        code: 0,
+        data: {
+          blocks: [{ block_type: 2, block_id: blockId }],
+          first_level_block_ids: [blockId],
+        },
+      };
+    });
+
+    blockChildrenCreateMock.mockImplementation(async ({ data }) => ({
+      code: 0,
+      data: { children: data.children },
+    }));
+
+    const registerTool = vi.fn();
+    registerFeishuDocTools({
+      config: {
+        channels: {
+          feishu: { appId: "app_id", appSecret: "app_secret" },
+        },
+      } as any,
+      logger: { debug: vi.fn(), info: vi.fn() } as any,
+      registerTool,
+    } as any);
+
+    const feishuDocTool = registerTool.mock.calls
+      .map((call) => call[0])
+      .map((tool) => (typeof tool === "function" ? tool({}) : tool))
+      .find((tool) => tool.name === "feishu_doc");
+    expect(feishuDocTool).toBeDefined();
+
+    const fencedMarkdown = [
+      "## Section",
+      "```ts",
+      "const alpha = 1;",
+      "const beta = 2;",
+      "const gamma = alpha + beta;",
+      "console.log(gamma);",
+      "```",
+      "",
+      "Tail paragraph one with enough text to exceed API limits when combined. ".repeat(8),
+      "Tail paragraph two with enough text to exceed API limits when combined. ".repeat(8),
+      "Tail paragraph three with enough text to exceed API limits when combined. ".repeat(8),
+    ].join("\n");
+
+    const result = await feishuDocTool.execute("tool-call", {
+      action: "append",
+      doc_token: "doc_1",
+      content: fencedMarkdown,
+    });
+
+    expect(convertMock.mock.calls.length).toBeGreaterThan(1);
+    expect(successChunkCount).toBeGreaterThan(1);
+    for (const chunk of convertedChunks) {
+      const fenceCount = chunk.match(/```/g)?.length ?? 0;
+      expect(fenceCount % 2).toBe(0);
+    }
+    expect(result.details.blocks_added).toBe(successChunkCount);
+  });
+
   it("skips image upload when markdown image URL is blocked", async () => {
     const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     fetchRemoteMediaMock.mockRejectedValueOnce(
