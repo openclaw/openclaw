@@ -1,4 +1,3 @@
-import type { ModelAliasIndex } from "../../agents/model-selection.js";
 import type { ModelsProviderData } from "../../auto-reply/reply/commands-models.js";
 
 export function createModelsProviderData(
