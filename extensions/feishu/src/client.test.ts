@@ -77,8 +77,10 @@ describe("createFeishuWSClient proxy handling", () => {
   });
 
   it("prefers HTTPS proxy vars over HTTP proxy vars across runtimes", () => {
-    process.env.https_proxy = "http://lower-https:8001";
-    process.env.HTTPS_PROXY = "http://upper-https:8002";
+    // Windows env keys are case-insensitive, so keep both https keys aligned.
+    const httpsProxy = "http://https-proxy:8001";
+    process.env.https_proxy = httpsProxy;
+    process.env.HTTPS_PROXY = httpsProxy;
     process.env.http_proxy = "http://lower-http:8003";
     process.env.HTTP_PROXY = "http://upper-http:8004";
 
