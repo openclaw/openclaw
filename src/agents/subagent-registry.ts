@@ -689,6 +689,21 @@ async function finalizeSubagentCleanup(
     const completionReason = resolveCleanupCompletionReason(entry);
     await emitCompletionEndedHookIfNeeded(entry, completionReason);
     logAnnounceGiveUp(entry, deferredDecision.reason);
+    // Notify the parent session that the sub-agent's results were lost.
+    const taskLabel = entry.label || entry.task || entry.runId;
+    try {
+      await callGateway({
+        method: "agent",
+        params: {
+          message: `[System Message] Subagent "${taskLabel}" — results lost (announcement delivery failed)`,
+          sessionKey: entry.requesterSessionKey,
+          deliver: false,
+        },
+        timeoutMs: 10_000,
+      });
+    } catch {
+      // Best-effort — if this also fails, at least the log line exists.
+    }
     completeCleanupBookkeeping({
       runId,
       entry,
@@ -1003,8 +1018,29 @@ async function waitForSubagentCompletion(runId: string, waitTimeoutMs: number) {
       accountId: entry.requesterOrigin?.accountId,
       triggerCleanup: true,
     });
-  } catch {
-    // ignore
+  } catch (error) {
+    defaultRuntime.log(
+      `[warn] waitForSubagentCompletion failed for run ${runId}: ${String(error)}`,
+    );
+    // Recover: mark the run as errored so it doesn't become a zombie.
+    const entry = subagentRuns.get(runId);
+    if (entry && !entry.endedAt) {
+      entry.endedAt = Date.now();
+      entry.outcome = { status: "error", error: `Wait failed: ${String(error)}` };
+      persistSubagentRuns();
+      try {
+        await completeSubagentRun({
+          runId,
+          endedAt: entry.endedAt,
+          outcome: entry.outcome,
+          reason: SUBAGENT_ENDED_REASON_ERROR,
+          sendFarewell: true,
+          triggerCleanup: true,
+        });
+      } catch {
+        // Last resort: at least the run is marked ended via endedAt above.
+      }
+    }
   }
 }
 
