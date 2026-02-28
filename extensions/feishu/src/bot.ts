@@ -1160,6 +1160,7 @@ export async function handleFeishuMessage(params: {
       runtime: runtime as RuntimeEnv,
       chatId: ctx.chatId,
       replyToMessageId: ctx.messageId,
+      skipReplyToInMessages: !isGroup,
       replyInThread,
       rootId: ctx.rootId,
       mentionTargets: ctx.mentionTargets,
