@@ -6,6 +6,7 @@ import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
+  DEFAULT_RESET_TRIGGER,
   DEFAULT_RESET_TRIGGERS,
   deriveSessionMetaPatch,
   evaluateSessionFreshness,
@@ -183,7 +184,7 @@ export async function initSessionState(params: {
     config: cfg,
   });
   const groupResolution = resolveGroupSessionKey(sessionCtxForState) ?? undefined;
-  const resetTriggers = sessionCfg?.resetTriggers?.length
+  const configuredResetTriggers = sessionCfg?.resetTriggers?.length
     ? sessionCfg.resetTriggers
     : DEFAULT_RESET_TRIGGERS;
   const parentForkMaxTokens = resolveParentForkMaxTokens(cfg);
@@ -197,7 +198,7 @@ export async function initSessionState(params: {
   const sessionStore: Record<string, SessionEntry> = loadSessionStore(storePath, {
     skipCache: true,
   });
-  let sessionKey: string | undefined;
+  const sessionKey = resolveSessionKey(sessionScope, sessionCtxForState, mainKey);
   let sessionEntry: SessionEntry;
 
   let sessionId: string | undefined;
@@ -218,6 +219,32 @@ export async function initSessionState(params: {
   const normalizedChatType = normalizeChatType(ctx.ChatType);
   const isGroup =
     normalizedChatType != null && normalizedChatType !== "direct" ? true : Boolean(groupResolution);
+  const now = Date.now();
+  const isThread = resolveThreadFlag({
+    sessionKey,
+    messageThreadId: ctx.MessageThreadId,
+    threadLabel: ctx.ThreadLabel,
+    threadStarterBody: ctx.ThreadStarterBody,
+    parentSessionKey: ctx.ParentSessionKey,
+  });
+  const resetType = resolveSessionResetType({ sessionKey, isGroup, isThread });
+  const channelReset = resolveChannelResetConfig({
+    sessionCfg,
+    channel:
+      groupResolution?.channel ??
+      (ctx.OriginatingChannel as string | undefined) ??
+      ctx.Surface ??
+      ctx.Provider,
+  });
+  const resetPolicy = resolveSessionResetPolicy({
+    sessionCfg,
+    resetType,
+    resetOverride: channelReset,
+  });
+  // In off mode, only /new is allowed to rotate session state manually.
+  const resetTriggers =
+    resetPolicy.mode === "off" ? [DEFAULT_RESET_TRIGGER] : configuredResetTriggers;
+
   // Prefer CommandBody/RawBody (clean message) for command detection; fall back
   // to Body which may contain structural context (history, sender labels).
   const commandSource = ctx.BodyForCommands ?? ctx.CommandBody ?? ctx.RawBody ?? ctx.Body ?? "";
@@ -272,31 +299,8 @@ export async function initSessionState(params: {
     }
   }
 
-  sessionKey = resolveSessionKey(sessionScope, sessionCtxForState, mainKey);
   const entry = sessionStore[sessionKey];
   const previousSessionEntry = resetTriggered && entry ? { ...entry } : undefined;
-  const now = Date.now();
-  const isThread = resolveThreadFlag({
-    sessionKey,
-    messageThreadId: ctx.MessageThreadId,
-    threadLabel: ctx.ThreadLabel,
-    threadStarterBody: ctx.ThreadStarterBody,
-    parentSessionKey: ctx.ParentSessionKey,
-  });
-  const resetType = resolveSessionResetType({ sessionKey, isGroup, isThread });
-  const channelReset = resolveChannelResetConfig({
-    sessionCfg,
-    channel:
-      groupResolution?.channel ??
-      (ctx.OriginatingChannel as string | undefined) ??
-      ctx.Surface ??
-      ctx.Provider,
-  });
-  const resetPolicy = resolveSessionResetPolicy({
-    sessionCfg,
-    resetType,
-    resetOverride: channelReset,
-  });
   const freshEntry = entry
     ? evaluateSessionFreshness({ updatedAt: entry.updatedAt, now, policy: resetPolicy }).fresh
     : false;
