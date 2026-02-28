@@ -148,11 +148,17 @@ def read_jsonl(path: Path) -> list[dict[str, Any]]:
         return []
     out: list[dict[str, Any]] = []
     with path.open("r", encoding="utf-8", errors="replace") as f:
-        for line in f:
+        for line_no, line in enumerate(f, start=1):
             line = line.strip()
             if not line:
                 continue
-            out.append(json.loads(line))
+            try:
+                parsed = json.loads(line)
+            except json.JSONDecodeError:
+                # Keep run-cycle resilient to occasional truncated/corrupted log lines.
+                continue
+            if isinstance(parsed, dict):
+                out.append(parsed)
     return out
 
 
@@ -218,15 +224,58 @@ def load_prompt_composition() -> dict[str, Any]:
     return data
 
 
+def extract_prompt_placeholders(source_prompt: str, placeholders_decl: str = "") -> list[str]:
+    tokens: list[str] = []
+    for m in re.finditer(r"\[[^\[\]\n]+?\]|\{[^{}\n]+?\}", source_prompt or ""):
+        token = m.group(0)
+        # Markdown label-like pattern such as "[문제]: ..." is not a variable placeholder.
+        if token.startswith("["):
+            tail = (source_prompt or "")[m.end() :]
+            if re.match(r"^\s*:", tail):
+                continue
+        tokens.append(token)
+    seen: set[str] = set()
+    placeholders: list[str] = []
+    for token in tokens:
+        if token not in seen:
+            seen.add(token)
+            placeholders.append(token)
+    if not placeholders and placeholders_decl:
+        raw = [x.strip() for x in placeholders_decl.split(",") if x.strip()]
+        for token in raw:
+            if token not in seen:
+                seen.add(token)
+                placeholders.append(token)
+    return placeholders
+
+
 def parse_ai_prompts_markdown(text: str) -> list[dict[str, Any]]:
     entries: list[dict[str, Any]] = []
+
+    def _append_entry(title: str, source_prompt: str, purpose: str, placeholders_decl: str = "") -> None:
+        idx = len(entries) + 1
+        entries.append(
+            {
+                "index": idx,
+                "id": f"prompt-{idx:02d}",
+                "title": title.strip(),
+                "purpose": (purpose or "").strip(),
+                "placeholders": extract_prompt_placeholders(source_prompt, placeholders_decl),
+                "source_prompt": (source_prompt or "").strip(),
+            }
+        )
+
+    existing_titles: set[str] = set()
+
     pattern = re.compile(r"^##\s+(\d+)\.\s+(.+?)\n(.*?)(?=^##\s+\d+\.\s+|\Z)", re.M | re.S)
     for m in pattern.finditer(text):
-        idx = int(m.group(1))
         title = m.group(2).strip()
+        existing_titles.add(title)
         body = m.group(3)
 
-        prompt_match = re.search(r'Prompt \(원문\):\s*\n"(.*?)"\s*(?:\n|$)', body, re.S)
+        prompt_match = re.search(r"Prompt \(원문\):\s*\n```(?:[a-zA-Z0-9_-]+)?\n(.*?)\n```", body, re.S)
+        if not prompt_match:
+            prompt_match = re.search(r'Prompt \(원문\):\s*\n"(.*?)"\s*(?:\n|$)', body, re.S)
         if not prompt_match:
             prompt_match = re.search(r'Prompt \(원문\):\s*"(.*?)"\s*(?:\n|$)', body, re.S)
         source_prompt = prompt_match.group(1).strip() if prompt_match else ""
@@ -239,28 +288,30 @@ def parse_ai_prompts_markdown(text: str) -> list[dict[str, Any]]:
         if placeholders_match:
             placeholders_decl = placeholders_match.group(1).strip()
 
-        ph_tokens = re.findall(r"\[[^\[\]\n]+?\]", source_prompt)
-        seen: set[str] = set()
-        placeholders: list[str] = []
-        for token in ph_tokens:
-            if token not in seen:
-                seen.add(token)
-                placeholders.append(token)
+        _append_entry(title=title, source_prompt=source_prompt, purpose=purpose, placeholders_decl=placeholders_decl)
 
-        if not placeholders and placeholders_decl:
-            raw = [x.strip() for x in placeholders_decl.split(",") if x.strip()]
-            placeholders.extend(raw)
+    # New format fallback:
+    # ## 프롬프트 템플릿
+    # ### <제목>
+    # ```
+    # ...
+    # ```
+    section = re.search(r"^##\s+프롬프트\s*템플릿\s*$\n(.*?)(?=^##\s+|\Z)", text, re.M | re.S)
+    if section:
+        body = section.group(1)
+        h3_blocks = re.compile(r"^###\s+(.+?)\n(.*?)(?=^###\s+|\Z)", re.M | re.S)
+        for m in h3_blocks.finditer(body):
+            title = m.group(1).strip()
+            if title in existing_titles:
+                continue
+            block = m.group(2)
+            code_match = re.search(r"```(?:[a-zA-Z0-9_-]+)?\n(.*?)\n```", block, re.S)
+            source_prompt = code_match.group(1).strip() if code_match else ""
+            if not source_prompt:
+                continue
+            _append_entry(title=title, source_prompt=source_prompt, purpose=f"{title} 실행 템플릿")
+            existing_titles.add(title)
 
-        entries.append(
-            {
-                "index": idx,
-                "id": f"prompt-{idx:02d}",
-                "title": title,
-                "purpose": purpose,
-                "placeholders": placeholders,
-                "source_prompt": source_prompt,
-            }
-        )
     return entries
 
 
@@ -328,7 +379,7 @@ def bootstrap(args: argparse.Namespace) -> None:
     ensure_dir(KNOWLEDGE_ROOT / "100 지식" / "130 구조노트")
     ensure_dir(KNOWLEDGE_ROOT / "200 활동" / "210 프로젝트")
     ensure_dir(KNOWLEDGE_ROOT / "200 활동" / "220 영역")
-    ensure_dir(KNOWLEDGE_ROOT / "300 운영")
+    ensure_dir(KNOWLEDGE_ROOT / "800 운영")
     ensure_dir(SYSTEM_ROOT / "910 온톨로지")
     ensure_dir(ONTOLOGY_QUEUE_DIR)
     ensure_dir(SYSTEM_ROOT)
@@ -1087,15 +1138,34 @@ def build_map(args: argparse.Namespace) -> None:
 
 
 def run_json_command(command: list[str]) -> dict[str, Any]:
+    """Run a subprocess command expected to return JSON.
+
+    Returns a dict with keys:
+    - status: "ok" or "error"
+    - returncode: int
+    - stdout: full stdout (trimmed)
+    - stderr: full stderr (trimmed)
+    - json: parsed JSON if available
+    """
     proc = subprocess.run(command, capture_output=True, text=True, check=False)
+    out = (proc.stdout or "").strip()
+    err = (proc.stderr or "").strip()
     if proc.returncode != 0:
-        raise SystemExit(
-            f"command failed: {' '.join(command)}\nstdout={proc.stdout}\nstderr={proc.stderr}"
-        )
-    out = proc.stdout.strip()
+        return {
+            "status": "error",
+            "returncode": proc.returncode,
+            "stdout": out,
+            "stderr": err,
+            "command": command,
+        }
     if not out:
-        return {"status": "ok", "raw": ""}
-    return json.loads(out)
+        return {"status": "ok", "returncode": 0, "stdout": "", "stderr": "", "json": None}
+    try:
+        parsed = json.loads(out)
+    except Exception:
+        # Return raw output when JSON parsing fails
+        return {"status": "ok", "returncode": 0, "stdout": out, "stderr": err, "json": None}
+    return {"status": "ok", "returncode": 0, "stdout": out, "stderr": err, "json": parsed}
 
 
 def mcp_frame(payload: dict[str, Any]) -> bytes:
@@ -1299,6 +1369,14 @@ def build_status_payload() -> dict[str, Any]:
     queue_lines = len(read_jsonl(LINK_QUEUE_PATH))
     processed = int(cursor.get("processed_lines", 0))
     pending = max(queue_lines - processed, 0)
+    prompt_parsed_count = 0
+    prompt_parse_error = ""
+    if AI_PROMPTS_MD_PATH.exists():
+        try:
+            source_text = AI_PROMPTS_MD_PATH.read_text(encoding="utf-8")
+            prompt_parsed_count = len(parse_ai_prompts_markdown(source_text))
+        except Exception as exc:  # noqa: BLE001
+            prompt_parse_error = str(exc)
 
     return {
         "status": "ok",
@@ -1323,6 +1401,9 @@ def build_status_payload() -> dict[str, Any]:
             "composition_config_exists": PROMPT_COMPOSITION_PATH.exists(),
             "packs_count": len(list(PROMPT_PACK_DIR.glob("prompt-pack-*.json"))),
             "latest_pack_exists": (PROMPT_PACK_DIR / "latest.json").exists(),
+            "source_parsed_count": prompt_parsed_count,
+            "source_parse_ok": prompt_parsed_count > 0 and not prompt_parse_error,
+            "source_parse_error": prompt_parse_error or None,
         },
         "maps": {
             "domains": sorted([p.name for p in (KNOWLEDGE_ROOT / "100 지식" / "130 구조노트").glob("*") if p.is_dir()]),
@@ -1395,8 +1476,9 @@ def export_obsidian(args: argparse.Namespace) -> None:
     bus = load_bus_overview()
 
     ensure_dir(OBSIDIAN_SYSTEM_DIR)
-    mcp_total = int(mcp_payload.get("servers_total", 0))
-    mcp_ok = int(mcp_payload.get("servers_healthy", 0))
+    mcp_data = mcp_payload.get("json") if isinstance(mcp_payload.get("json"), dict) else mcp_payload
+    mcp_total = int(mcp_data.get("servers_total", 0))
+    mcp_ok = int(mcp_data.get("servers_healthy", 0))
     cmd_counts = bus.get("command_counts", {})
 
     lines: list[str] = []
@@ -1513,6 +1595,16 @@ def run_cycle(args: argparse.Namespace) -> None:
     bootstrap(args)
     domain = args.domain.strip().lower()
     me = Path(__file__).resolve()
+
+    # Defensive checks: ensure the script file exists and is readable when
+    # this function is invoked by launchd/launchctl or other wrappers.
+    if not me.exists():
+        print(json.dumps({"status": "error", "action": "run-cycle", "reason": "script_not_found", "path": str(me)}, ensure_ascii=False))
+        return
+    if not os.access(me, os.R_OK):
+        print(json.dumps({"status": "error", "action": "run-cycle", "reason": "script_not_readable", "path": str(me)}, ensure_ascii=False))
+        return
+
     base = [sys.executable, str(me)]
 
     zk_autofill_result: dict[str, Any] | None = None
@@ -1520,27 +1612,72 @@ def run_cycle(args: argparse.Namespace) -> None:
         gap_tags = _extract_zk_gap_tags_from_bus(limit_lines=3000)
         zk_autofill_result = _auto_create_zk_skeletons(gap_tags, commit=True)
 
-    results = {
-        "mcp_check": run_json_command(base + ["mcp-check"]),
-        "build_prompt_pack": run_json_command(base + ["build-prompt-pack"]),
-        "import_prompt_notes": run_json_command(base + ["import-prompt-notes", "--domain", domain]),
-        "build_map": run_json_command(base + ["build-map", "--domain", domain]),
-        "sync_ontology": run_json_command(base + ["sync-ontology"]),
-        "refresh_status_snapshot": run_json_command(base + ["refresh-status-snapshot"]),
-        "export_obsidian": run_json_command(base + ["export-obsidian"]),
-        "status": run_json_command(base + ["status"]),
+    results: dict[str, Any] = {}
+    commands = {
+        "mcp_check": base + ["mcp-check"],
+        "build_prompt_pack": base + ["build-prompt-pack"],
+        "import_prompt_notes": base + ["import-prompt-notes", "--domain", domain],
+        "build_map": base + ["build-map", "--domain", domain],
+        "sync_ontology": base + ["sync-ontology"],
+        "refresh_status_snapshot": base + ["refresh-status-snapshot"],
+        "export_obsidian": base + ["export-obsidian"],
+        "status": base + ["status"],
     }
+
+    # NOTE (patch): We assume run_json_command is deterministic and returns a serializable dict.
+    # - Rationale: called from launchd/agent; must not raise uncaught exceptions because a single
+    #   failure should not abort the entire run-cycle. Tests mock run_json_command to simulate
+    #   both success and failure paths (see tests/test_run_cycle.py).
+    # - Core assumption: the command list is small and each item is independent; failures are
+    #   recorded per-key in results and do not stop further commands.
+    for key, cmd in commands.items():
+        try:
+            results[key] = run_json_command(cmd)
+        except Exception as e:
+            # Record structured error payload so external callers can parse which step failed.
+            # Keep exception string short to avoid leaking stack traces in normal ops.
+            results[key] = {"status": "error", "exception": str(e), "command": cmd}
+
     if zk_autofill_result is not None:
         results["auto_zk_skeletons"] = zk_autofill_result
 
+    def _step_ok(item: Any) -> bool:
+        if not isinstance(item, dict):
+            return False
+        if str(item.get("status", "")) != "ok":
+            return False
+        rc = item.get("returncode")
+        if rc is not None:
+            try:
+                return int(rc) == 0
+            except Exception:
+                return False
+        return True
+
+    critical_steps = (
+        "mcp_check",
+        "build_prompt_pack",
+        "import_prompt_notes",
+        "build_map",
+        "sync_ontology",
+        "refresh_status_snapshot",
+        "export_obsidian",
+        "status",
+    )
+    failed_steps = [name for name in critical_steps if not _step_ok(results.get(name))]
+    overall_status = "ok" if not failed_steps else "error"
+
     payload = {
-        "status": "ok",
+        "status": overall_status,
         "action": "run-cycle",
         "domain": domain,
         "executed_at": now_iso(),
         "results": results,
+        "failed_steps": failed_steps,
     }
     print(json.dumps(payload, ensure_ascii=False, indent=2))
+    if overall_status != "ok":
+        raise SystemExit(1)
 
 
 def install_launchagent(args: argparse.Namespace) -> None:

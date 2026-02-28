@@ -5,7 +5,7 @@ vault_architect.py — 볼트 v3 자율 구조 개선 파이프라인
 5 Phase 자동화:
   Phase 1: 진단 (vault_flow_health 재사용)
   Phase 2: 카테고리 분류 (210 원자노트 → 220/225/230/235)
-  Phase 3: 지식 합성 (200 정리 → 300 지식화)
+  Phase 3: 지식 성숙 (200 정리 인플레이스 maturity 업그레이드)
   Phase 4: 고아 연결 (고아 노트 → MOC)
   Phase 5: MOC 통합 (레거시 MOC → 활성 MOC)
 
@@ -40,7 +40,7 @@ from shared.llm import llm_chat_direct, DIRECT_PREMIUM_CHAIN
 from shared.log import make_logger
 from shared.vault_paths import (
     VAULT, NOTES, ATOMIC_NOTES, STRUCTURE,
-    CAT_COMPANY, CAT_MARKET, CAT_INDUSTRY, CAT_PROG,
+    CAT_COMPANY, CAT_MARKET, CAT_INDUSTRY, CAT_PROG, CAT_INSIGHT,
     VAULT_CATEGORY_DIRS, _V3_MAP,
     OPS, REPORTS, REPORTS_ARCHIVE, PLAYBOOK,
     RESOURCES, RESOURCES_REF, RESOURCES_TOOLKIT, RESOURCES_LEARNING,
@@ -58,25 +58,17 @@ LOG_FILE = WORKSPACE / "logs" / "vault_architect.log"
 BOT_TOKEN = "8554125313:AAGC5Zzb9nCbPYgmOVqs3pVn-qzIA2oOtkI"
 DM_CHAT_ID = "492860021"
 
-# 300 지식화 경로 (vault_paths에는 아직 미등록 — 이 파이프라인이 관리)
-KNOWLEDGE_DIR = VAULT / "300 지식화"
-KNOWLEDGE_SUBDIRS = {
-    "기업": KNOWLEDGE_DIR / "310 기업 프로필",
-    "시장": KNOWLEDGE_DIR / "320 시장 분석",
-    "산업분석": KNOWLEDGE_DIR / "330 산업 지식",
-    "프로그래밍": KNOWLEDGE_DIR / "340 기술 지식",
-}
-
 # 카테고리 → 200 하위 폴더 매핑
 CATEGORY_FOLDER_MAP = {
     "기업": CAT_COMPANY,
     "시장": CAT_MARKET,
     "산업분석": CAT_INDUSTRY,
     "프로그래밍": CAT_PROG,
+    "인사이트": CAT_INSIGHT,
 }
 
 # MOC 디렉토리
-MOC_DIR = STRUCTURE  # 400 연결
+MOC_DIR = STRUCTURE  # 300 연결
 LEGACY_MOC_DIR = MOC_DIR / "459 MOC 통합" / "159.1 레거시 MOC"
 
 _WIKILINK_RE = re.compile(r"\[\[([^\]|]+)(?:\|[^\]]+)?\]\]")
@@ -160,7 +152,7 @@ def phase_diagnose() -> DiagnosisResult:
     orphan_count, orphan_total, orphan_names = detect_orphan_notes(VAULT)
     stale_mocs = check_moc_freshness(VAULT)
     uncategorized = count_uncategorized_notes()
-    knowledge_count = _count_dir_md(KNOWLEDGE_DIR)
+    knowledge_count = 0  # 300 제거됨 — 인플레이스 성숙 모델
     return DiagnosisResult(
         counts=counts, bottleneck=bottleneck,
         orphan_count=orphan_count, orphan_total=orphan_total,
@@ -277,15 +269,11 @@ def _compute_synthesis_score(meta: dict, body: str) -> int:
     return min(score, 100)
 
 
-def _get_knowledge_subdir(meta: dict) -> Path:
-    category = meta.get("category", "")
-    return KNOWLEDGE_SUBDIRS.get(category, KNOWLEDGE_DIR)
-
-
 def phase_synthesize(batch_size: int, dry_run: bool, state: dict) -> PhaseStats:
+    """200 정리 노트 인플레이스 maturity 업그레이드. 폴더 이동 없음."""
     stats = PhaseStats()
 
-    scan_dirs = [ATOMIC_NOTES, CAT_COMPANY, CAT_MARKET, CAT_INDUSTRY, CAT_PROG]
+    scan_dirs = [ATOMIC_NOTES, CAT_COMPANY, CAT_MARKET, CAT_INDUSTRY, CAT_PROG, CAT_INSIGHT]
     candidates: list[Path] = []
     for d in scan_dirs:
         if d.exists():
@@ -327,10 +315,8 @@ def phase_synthesize(batch_size: int, dry_run: bool, state: dict) -> PhaseStats:
         if not promote:
             continue
 
-        dest_dir = _get_knowledge_subdir(meta)
-
         if dry_run:
-            log(f"  [DRY] 승격: {filepath.name} -> {dest_dir.name} (score={score})")
+            log(f"  [DRY] 성숙: {filepath.name} (score={score})")
             stats.synthesized += 1
             processed += 1
             continue
@@ -339,14 +325,10 @@ def phase_synthesize(batch_size: int, dry_run: bool, state: dict) -> PhaseStats:
         meta["synthesized_at"] = datetime.now().strftime("%Y-%m-%d")
         meta["synthesized_by"] = "vault_architect"
         write_note(filepath, meta, body)
-
-        moved = _safe_move(filepath, dest_dir)
-        if moved:
-            log(f"  승격: {filepath.name} -> {dest_dir.name} (score={score})")
-            stats.synthesized += 1
-            record_action(state, "synthesized", filepath.stem,
-                          {"to": dest_dir.name, "score": score})
-            processed += 1
+        log(f"  성숙: {filepath.name} (score={score})")
+        stats.synthesized += 1
+        record_action(state, "synthesized", filepath.stem, {"score": score})
+        processed += 1
 
     return stats
 
@@ -569,7 +551,7 @@ def phase_nurture(batch_size: int, dry_run: bool, state: dict) -> PhaseStats:
     stats = PhaseStats()
     classification = load_classification()
 
-    scan_dirs = [ATOMIC_NOTES, NOTES, CAT_COMPANY, CAT_MARKET, CAT_INDUSTRY, CAT_PROG]
+    scan_dirs = [ATOMIC_NOTES, NOTES, CAT_COMPANY, CAT_MARKET, CAT_INDUSTRY, CAT_PROG, CAT_INSIGHT]
     candidates: list[Path] = []
     for d in scan_dirs:
         if d and d.exists():
@@ -669,7 +651,6 @@ def phase_correct(batch_size: int, dry_run: bool, state: dict) -> PhaseStats:
     # 이동 대상 디렉토리 매핑
     suggestion_dirs = {
         "200": NOTES,
-        "300": VAULT / "300 지식화",
     }
 
     processed = 0
@@ -873,9 +854,6 @@ def format_report(diag: DiagnosisResult, stats: PhaseStats) -> str:
         cnt = diag.counts.get(stage, 0)
         lines.append(f"  {stage_nums[stage]} {stage}: {cnt}")
 
-    k_warn = " !!" if diag.knowledge_count == 0 else ""
-    lines.append(f"  300 지식화: {diag.knowledge_count}{k_warn}")
-
     if diag.orphan_total > 0:
         ratio = diag.orphan_count / diag.orphan_total
         lines.append(f"  고아: {diag.orphan_count}/{diag.orphan_total} ({ratio:.1%})")
@@ -895,7 +873,7 @@ def format_report(diag: DiagnosisResult, stats: PhaseStats) -> str:
             detail = ", ".join(f"->{k}:{v}" for k, v in stats.categorized_detail.items())
             lines.append(f"  v 분류: {stats.categorized}건 ({detail})")
         if stats.synthesized > 0:
-            lines.append(f"  v 승격: {stats.synthesized}건 (->300)")
+            lines.append(f"  v 성숙: {stats.synthesized}건 (evergreen)")
         if stats.connected > 0:
             lines.append(f"  v 연결: {stats.connected}건 (->MOC)")
         if stats.consolidated > 0:
@@ -986,7 +964,7 @@ def main():
         log("Phase 1: 진단")
         diag = phase_diagnose()
         log(f"  단계별: {diag.counts}")
-        log(f"  300 지식화: {diag.knowledge_count}건")
+        log(f"  성숙 모델: 인플레이스 (300 제거됨)")
         log(f"  고아: {diag.orphan_count}/{diag.orphan_total}")
         log(f"  MOC 갱신 필요: {len(diag.stale_mocs)}개")
         log(f"  미분류 원자노트: {diag.uncategorized}건")

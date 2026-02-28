@@ -27,6 +27,7 @@ CRON_FILE = Path(os.path.expanduser("~/.openclaw/cron/jobs.json"))
 VAULT = Path(os.path.expanduser("~/knowledge"))
 DIGEST_FILE = WORKSPACE / "memory" / "system-digest" / "latest.json"
 LEDGER_FILE = WORKSPACE / "memory" / "error-ledger" / "ledger.json"
+VAULT_REPORT_FILE = VAULT / "800 운영" / "840 리포트" / "시스템-대시보드.md"
 
 
 def _read_json(path: Path) -> dict | list | None:
@@ -55,9 +56,9 @@ def collect_vault_status() -> dict:
         "225 시장": VAULT / "200 정리" / "225 시장",
         "230 산업분석": VAULT / "200 정리" / "230 산업분석",
         "235 프로그래밍": VAULT / "200 정리" / "235 프로그래밍",
-        "300 지식화": VAULT / "300 지식화",
-        "400 연결": VAULT / "400 연결",
-        "500 판단": VAULT / "500 판단",
+
+        "300 연결": VAULT / "300 연결",
+        "400 판단": VAULT / "400 판단",
         "600 리소스": VAULT / "600 리소스",
         "700 활동": VAULT / "700 활동",
         "800 운영": VAULT / "800 운영",
@@ -296,6 +297,13 @@ def update_error_ledger(digest: dict) -> None:
                 "fix_history": [],
             }
 
+    # 인과 추적: 오늘 cowork 실행 후 새 에러에 마킹
+    cowork_today = _cowork_ran_today()
+    if cowork_today:
+        for eid, entry in existing.items():
+            if entry.get("first_seen") == today and "introduced_after" not in entry:
+                entry["introduced_after"] = "cowork"
+
     # 자동 규칙 적용
     cutoff_resolved = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
     cutoff_auto_resolve = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
@@ -366,6 +374,57 @@ def _summarize_ledger() -> dict:
     }
 
 
+def compare_digests(before_path: Path, after_path: Path) -> dict:
+    """두 스냅샷 비교. 새 에러/품질 하락 감지."""
+    before = _read_json(before_path) or {}
+    after = _read_json(after_path) or {}
+    result = {
+        "new_cron_errors": [],
+        "new_log_errors": [],
+        "new_test_failures": [],
+        "quality_drops": [],
+    }
+
+    # 크론: 새로 등장한 에러
+    before_cron = {e["id"] for e in before.get("cron", {}).get("with_errors", [])}
+    for err in after.get("cron", {}).get("with_errors", []):
+        if err["id"] not in before_cron:
+            result["new_cron_errors"].append(err)
+
+    # 로그: 새로 등장한 에러 소스
+    before_logs = set(before.get("recent_errors", {}).keys())
+    for key in after.get("recent_errors", {}):
+        if key not in before_logs:
+            result["new_log_errors"].append(key)
+
+    # 테스트: 새로 실패한 테스트
+    before_tests = set(before.get("tests", {}).get("last_failed", []))
+    for t in after.get("tests", {}).get("last_failed", []):
+        if t not in before_tests:
+            result["new_test_failures"].append(t)
+
+    # 품질: 5점 이상 하락
+    before_scores = before.get("vault_quality", {}).get("scores", {})
+    for stage, score in after.get("vault_quality", {}).get("scores", {}).items():
+        prev = before_scores.get(stage, score)
+        if score < prev - 5:
+            result["quality_drops"].append(
+                {"stage": stage, "before": prev, "after": score}
+            )
+
+    result["has_regressions"] = any(
+        result[k] for k in result if k != "has_regressions"
+    )
+    return result
+
+
+def _cowork_ran_today() -> bool:
+    """오늘 cowork이 실행됐는지 확인."""
+    today = datetime.now().strftime("%Y-%m-%d")
+    history = _read_json(WORKSPACE / "memory" / "cowork-history" / "latest.json")
+    return bool(history and history.get("date") == today)
+
+
 def build_digest() -> dict:
     return {
         "generated_at": datetime.now().isoformat(),
@@ -385,15 +444,15 @@ def _generate_hints() -> list[str]:
     hints = []
     vault = collect_vault_status()
 
-    if vault.get("300 지식화", 0) == 0:
-        hints.append("[지식화] 품질 위험 (0/100) — 즉시 승격 필요")
+
+
     if vault.get("210 원자노트", 0) > 100:
         hints.append(f"미분류 원자노트 {vault['210 원자노트']}건 — 카테고리 분류 필요")
 
-    judge = vault.get("500 판단", 0)
+    judge = vault.get("400 판단", 0)
     notes = vault.get("200 정리", 0)
     if judge > notes:
-        hints.append(f"역깔때기: 500 판단({judge}) > 200 정리({notes}) — 교정 필요")
+        hints.append(f"역깔때기: 400 판단({judge}) > 200 정리({notes}) — 교정 필요")
 
     # 품질 기반 힌트
     quality = collect_vault_quality()
@@ -455,10 +514,109 @@ def _generate_hints() -> list[str]:
     return hints
 
 
+def generate_vault_report(digest: dict) -> None:
+    """볼트 800 운영/840 리포트/시스템-대시보드.md 생성."""
+    now = datetime.now()
+    lines = [
+        "# 시스템 대시보드",
+        "",
+        f"> 자동 갱신: {now.strftime('%Y-%m-%d %H:%M')} | system_digest.py",
+        "",
+    ]
+
+    # 크론 상태
+    cron = digest.get("cron", {})
+    lines.append("## 크론 상태")
+    lines.append("")
+    lines.append(f"- 전체: {cron.get('total', '?')}개 | 활성: {cron.get('enabled', '?')}개")
+    cron_errors = cron.get("with_errors", [])
+    if cron_errors:
+        lines.append(f"- 에러: {len(cron_errors)}건")
+        for e in cron_errors[:5]:
+            lines.append(f"  - {e.get('name', e.get('id', '?'))}: {e.get('consecutive_errors', '?')}회 연속")
+    else:
+        lines.append("- 에러: 없음")
+    lines.append("")
+
+    # 볼트 현황
+    vault = digest.get("vault", {})
+    lines.append("## 볼트 현황")
+    lines.append("")
+    lines.append("| 단계 | 노트 수 |")
+    lines.append("|------|---------|")
+    for stage, count in vault.items():
+        lines.append(f"| {stage} | {count} |")
+    lines.append("")
+
+    # 품질 점수
+    quality = digest.get("vault_quality", {})
+    scores = quality.get("scores", {})
+    if scores:
+        lines.append("## 품질 점수")
+        lines.append("")
+        lines.append("| 단계 | 점수 |")
+        lines.append("|------|------|")
+        for stage, score in scores.items():
+            indicator = "🟢" if score >= 70 else "🟡" if score >= 40 else "🔴"
+            lines.append(f"| {stage} | {indicator} {score}/100 |")
+        lines.append("")
+
+    misplaced = quality.get("misplaced", 0)
+    if misplaced > 0:
+        lines.append(f"- 교차 교정 대상: {misplaced}건")
+        lines.append("")
+
+    # 에러 레저 요약
+    ledger = digest.get("error_ledger_summary", {})
+    total_open = ledger.get("total_open", 0)
+    if total_open > 0:
+        lines.append("## 에러 현황")
+        lines.append("")
+        lines.append(f"- 미해결: {total_open}건 | 심각: {ledger.get('high_severity', 0)}건 | 반복(3일+): {ledger.get('recurring_3plus', 0)}건")
+        top_errors = ledger.get("top_errors", [])
+        for e in top_errors[:3]:
+            lines.append(f"  - [{e.get('severity', '?')}] {e.get('title', '?')} ({e.get('occurrences', 1)}회)")
+        lines.append("")
+
+    # 힌트
+    hints = digest.get("action_hints", [])
+    if hints:
+        lines.append("## 주요 조치 사항")
+        lines.append("")
+        for h in hints[:5]:
+            lines.append(f"- {h}")
+        lines.append("")
+
+    VAULT_REPORT_FILE.parent.mkdir(parents=True, exist_ok=True)
+    VAULT_REPORT_FILE.write_text("\n".join(lines), encoding="utf-8")
+
+
 def main():
     parser = argparse.ArgumentParser(description="시스템 진단 집계")
     parser.add_argument("--pretty", action="store_true")
+    parser.add_argument("--vault-report", action="store_true",
+                        help="볼트 800 운영/840 리포트/시스템-대시보드.md 생성")
+    parser.add_argument("--snapshot", metavar="FILE",
+                        help="지정 경로에 스냅샷 저장 (latest.json도 동시 갱신)")
+    parser.add_argument("--compare", metavar="FILE",
+                        help="이전 스냅샷과 비교. 회귀 감지 시 exit 1")
     args = parser.parse_args()
+
+    # --compare 모드: 비교만 하고 종료
+    if args.compare:
+        digest = build_digest()
+        update_error_ledger(digest)
+        DIGEST_FILE.parent.mkdir(parents=True, exist_ok=True)
+        DIGEST_FILE.write_text(
+            json.dumps(digest, ensure_ascii=False, indent=2), encoding="utf-8",
+        )
+        result = compare_digests(Path(args.compare), DIGEST_FILE)
+        if result["has_regressions"]:
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            sys.exit(1)
+        else:
+            print("No regressions detected.")
+            sys.exit(0)
 
     digest = build_digest()
 
@@ -470,6 +628,18 @@ def main():
     DIGEST_FILE.write_text(
         json.dumps(digest, ensure_ascii=False, indent=2), encoding="utf-8",
     )
+
+    # --snapshot: 추가 경로에도 저장
+    if args.snapshot:
+        snap_path = Path(args.snapshot)
+        snap_path.parent.mkdir(parents=True, exist_ok=True)
+        snap_path.write_text(
+            json.dumps(digest, ensure_ascii=False, indent=2), encoding="utf-8",
+        )
+
+    # --vault-report: 볼트에 마크다운 대시보드 생성
+    if args.vault_report:
+        generate_vault_report(digest)
 
     if args.pretty:
         print(json.dumps(digest, ensure_ascii=False, indent=2))

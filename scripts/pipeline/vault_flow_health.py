@@ -44,13 +44,13 @@ COUNT_STAGES = ["캡처", "정리", "연결", "판단", "리소스", "활동", "
 
 # 단계 번호 매핑 (출력용)
 STAGE_NUMBERS = {
-    "캡처": "100", "정리": "200", "연결": "400",
-    "판단": "500", "리소스": "600", "활동": "700", "운영": "800", "시스템": "900",
+    "캡처": "100", "정리": "200", "연결": "300",
+    "판단": "400", "리소스": "600", "활동": "700", "운영": "800", "시스템": "900",
 }
 
 # 단계별 품질 점수 한글 라벨
 STAGE_QUALITY_LABELS = {
-    "캡처": "캡처", "정리": "정리", "지식화": "지식화", "연결": "연결",
+    "캡처": "캡처", "정리": "정리", "연결": "연결",
     "판단": "판단", "리소스": "리소스", "활동": "활동", "운영": "운영", "시스템": "시스템",
 }
 
@@ -105,7 +105,7 @@ def detect_funnel_health(counts: dict[str, int]) -> tuple[bool, str]:
 def detect_bottleneck(
     counts: dict[str, int], v3_map: dict[str, Path] | None = None
 ) -> str | None:
-    """병목 단계 감지. 500 판단 > 200 정리 이면 500 내부 최대 하위폴더 표시."""
+    """병목 단계 감지. 400 판단 > 200 정리 이면 400 내부 최대 하위폴더 표시."""
     if v3_map is None:
         v3_map = DEFAULT_V3_MAP
     c_judge = counts.get("판단", 0)
@@ -115,7 +115,7 @@ def detect_bottleneck(
 
     judge_path = v3_map.get("판단")
     if not judge_path or not judge_path.exists():
-        return f"500 판단 비대 ({c_judge}건)"
+        return f"400 판단 비대 ({c_judge}건)"
 
     subdir_counts: dict[str, int] = {}
     for item in judge_path.iterdir():
@@ -130,8 +130,8 @@ def detect_bottleneck(
 
     if subdir_counts:
         largest = max(subdir_counts, key=subdir_counts.get)  # type: ignore[arg-type]
-        return f"500 판단 비대 ({largest} {subdir_counts[largest]}건)"
-    return f"500 판단 비대 ({c_judge}건)"
+        return f"400 판단 비대 ({largest} {subdir_counts[largest]}건)"
+    return f"400 판단 비대 ({c_judge}건)"
 
 
 def count_inbox_stale(days: int = 7, inbox: Path | None = None) -> int:
@@ -241,7 +241,7 @@ def check_moc_freshness(
     if vault_root is None:
         vault_root = VAULT
 
-    connect_dir = vault_root / "400 연결"
+    connect_dir = vault_root / "300 연결"
     if not connect_dir.exists():
         return []
 
@@ -307,8 +307,6 @@ def check_moc_freshness(
 
 
 # ── 9단계 품질 점수 ──────────────────────────────────────────────
-
-KNOWLEDGE_DIR = VAULT / "300 지식화"
 
 
 def _count_dir_md(d: Path) -> int:
@@ -460,18 +458,8 @@ def compute_stage_quality(
         "completeness_ratio": round(comp_ratio, 2),
     }
 
-    # 300 지식화 — 존재 자체
-    k_dir = vault_root / "300 지식화"
-    k_count = _count_dir_md(k_dir)
-    active_subdirs = sum(
-        1 for d in (k_dir.iterdir() if k_dir.exists() else [])
-        if d.is_dir() and _count_dir_md(d) > 0
-    )
-    score_300 = min(100, k_count * 5 + active_subdirs * 10)
-    results["지식화"] = {"score": score_300, "count": k_count, "active_subdirs": active_subdirs}
-
-    # 400 연결 — MOC 건강
-    connect_dir = vault_root / "400 연결"
+    # 300 연결 — MOC 건강
+    connect_dir = vault_root / "300 연결"
     moc_count = 0
     if connect_dir.exists():
         for f in connect_dir.rglob("*.md"):
@@ -486,8 +474,8 @@ def compute_stage_quality(
         "stale_mocs": len(stale_mocs),
     }
 
-    # 500 판단 — 순도
-    judge_dir = vault_root / "500 판단"
+    # 400 판단 — 순도
+    judge_dir = vault_root / "400 판단"
     ev_ratio = _evidence_ratio(judge_dir)
     sd_ratio = _seedling_ratio(judge_dir)
     score_500 = round(ev_ratio * 50 + (1 - sd_ratio) * 30 + 20)
@@ -562,8 +550,8 @@ def detect_misplaced_notes(
         vault_root = VAULT
     misplaced: list[dict] = []
 
-    # 500 판단 → seedling/capture → 200
-    judge_dir = vault_root / "500 판단"
+    # 400 판단 → seedling/capture → 200
+    judge_dir = vault_root / "400 판단"
     if judge_dir.exists():
         for f in judge_dir.rglob("*.md"):
             if len(misplaced) >= limit:
@@ -575,47 +563,12 @@ def detect_misplaced_notes(
             zk = meta.get("zk_type", "")
             if mat == "seedling" or zk in ("fleeting", "capture"):
                 misplaced.append({
-                    "note": f.stem, "current": "500", "suggested": "200",
+                    "note": f.stem, "current": "400", "suggested": "200",
                     "reason": f"미성숙 혼입 (maturity={mat}, zk_type={zk})",
                 })
 
-    # 200 정리 → evergreen+links≥5 → 300
-    notes_dir = vault_root / "200 정리"
-    if notes_dir.exists():
-        for f in notes_dir.rglob("*.md"):
-            if len(misplaced) >= limit:
-                break
-            if _is_excluded(f, notes_dir):
-                continue
-            meta, body = parse_frontmatter(f)
-            mat = meta.get("maturity", "")
-            links = len(_WIKILINK_RE.findall(body))
-            if mat == "evergreen" and links >= 5:
-                misplaced.append({
-                    "note": f.stem, "current": "200", "suggested": "300",
-                    "reason": f"이미 성숙 (evergreen, links={links})",
-                })
-
-    # 300 지식화 → 미성숙(tags=0, body<3줄) → 200
-    k_dir = vault_root / "300 지식화"
-    if k_dir.exists():
-        for f in k_dir.rglob("*.md"):
-            if len(misplaced) >= limit:
-                break
-            if _is_excluded(f, k_dir):
-                continue
-            meta, body = parse_frontmatter(f)
-            tags = meta.get("tags", [])
-            tag_count = len(tags) if isinstance(tags, list) else 0
-            body_lines = [l for l in body.strip().split("\n") if l.strip()]
-            if tag_count == 0 and len(body_lines) < 3:
-                misplaced.append({
-                    "note": f.stem, "current": "300", "suggested": "200",
-                    "reason": f"아직 미성숙 (tags={tag_count}, body={len(body_lines)}줄)",
-                })
-
-    # 400 연결 → MOC가 아닌데 들어와있음 → 300/200
-    connect_dir = vault_root / "400 연결"
+    # 300 연결 → MOC가 아닌데 들어와있음 → 200
+    connect_dir = vault_root / "300 연결"
     if connect_dir.exists():
         for f in connect_dir.rglob("*.md"):
             if len(misplaced) >= limit:
@@ -628,11 +581,11 @@ def detect_misplaced_notes(
             if meta.get("zk_type") == "structure":
                 continue
             misplaced.append({
-                "note": f.stem, "current": "400", "suggested": "200",
-                "reason": "MOC/구조노트가 아닌데 400 연결에 위치",
+                "note": f.stem, "current": "300", "suggested": "200",
+                "reason": "MOC/구조노트가 아닌데 300 연결에 위치",
             })
 
-    # 800 운영 → 지식 노트 혼입 → 200/300
+    # 800 운영 → 지식 노트 혼입 → 200
     ops_dir = vault_root / "800 운영"
     if ops_dir.exists():
         for f in ops_dir.rglob("*.md"):
@@ -904,7 +857,7 @@ def format_report(
     if stage_quality:
         lines.append("")
         lines.append("<b>단계별 품질:</b>")
-        quality_stages = ["캡처", "정리", "지식화", "연결", "판단", "리소스", "활동", "운영", "시스템"]
+        quality_stages = ["캡처", "정리", "연결", "판단", "리소스", "활동", "운영", "시스템"]
         for qs in quality_stages:
             info = stage_quality.get(qs)
             if info is None:
@@ -915,8 +868,6 @@ def format_report(
             if qs == "정리" and info.get("classified_ratio", 1.0) < 0.5:
                 uncls = round((1 - info["classified_ratio"]) * counts.get("정리", 0))
                 detail = f" (미분류 {uncls}건)"
-            elif qs == "지식화" and info.get("count", 0) == 0:
-                detail = " (비어있음)"
             elif qs == "판단" and info.get("seedling_ratio", 0) > 0.2:
                 detail = f" (seedling {info['seedling_ratio']:.0%})"
             elif qs == "리소스" and info.get("linked_ratio", 1.0) < 0.5:

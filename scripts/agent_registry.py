@@ -7,6 +7,7 @@ agent_registry.py — 5-Agent Single Source of Truth
 
 에이전트 추가/삭제 시 이 파일만 수정하면 전체 시스템에 반영된다.
 """
+from shared.llm import DEFAULT_MODEL_CHAIN
 
 # ============================================================
 # 에이전트 목록 (순서 유지)
@@ -18,14 +19,7 @@ AGENT_NAMES = ["ron", "codex", "cowork", "guardian", "data-analyst"]
 # 모델 라우팅 (agent_queue_worker.py에서 사용)
 # ============================================================
 
-AGENT_MODEL_MAP = {
-    # gpt-5-mini: Copilot 무제한. claude-sonnet-4-6/gpt-5.2-codex: 한도 있음 → 기본 모델로 사용 금지
-    "ron": ["github-copilot/gpt-5-mini", "qwen3:8b"],
-    "codex": ["github-copilot/gpt-5-mini", "qwen3:8b"],
-    "cowork": ["github-copilot/gpt-5-mini", "qwen3:8b"],
-    "guardian": ["github-copilot/gpt-5-mini", "qwen3:8b"],
-    "data-analyst": ["github-copilot/gpt-5-mini", "qwen3:8b"],
-}
+AGENT_MODEL_MAP = {name: list(DEFAULT_MODEL_CHAIN) for name in AGENT_NAMES}
 
 # ============================================================
 # 표시 이름 (weekly_kpi_review.py, 대시보드 등에서 사용)
@@ -87,6 +81,10 @@ AGENT_ROLE_PROMPTS = {
         "크론 결과에서 enabled=True인 항목이 실제로 수집 중인 파이프라인이다.\n"
         "메모리 폴더 결과에서 최근 수정 시각이 학습이 실제 일어난 시각이다.\n"
         "조회 결과를 토대로 답할 것. 결과 없이 추측 금지.\n\n"
+        "## 볼트 번호 체계(v3)\n"
+        "- 사용자 설명/분류 시 논리 번호를 우선 사용: 100 캡처, 200 정리, 300 연결, 400 판단, 700 활동, 800 운영, 900 시스템.\n"
+        "- 물리 폴더도 v3 번호와 일치: 100 캡처, 200 정리, 300 연결, 400 판단, 700 활동, 800 운영, 900 시스템.\n"
+        "- 호환 심링크 유지: 100 지식→100 캡처, 200 활동→700 활동 (1개월 후 삭제).\n\n"
         "## 시장 지표 참조\n"
         "memory/market-indicators/YYYY-MM-DD.json에 매일 시장 지표 데이터가 수집됨.\n"
         "인사이트 생성 시 최신 지표 이상치(anomalies)가 있으면 반드시 인사이트에 반영하라.\n"
@@ -185,7 +183,7 @@ AGENT_ROLE_PROMPTS = {
         "## 역할\n"
         "- ETF 포트폴리오 가중치 분석 (9개 ETF, weight_delta 추적)\n"
         "- 섹터별 conviction score 크로스체크, 이상 변동 감지\n"
-        "- 주식 JSONL 데이터 분석 (03-Portfolio/etf_data/)\n"
+        "- 주식 JSONL 데이터 분석 (990 루트폴더/990.1 비넘버 디렉터리/03-Portfolio/etf_data/)\n"
         "- 제텔카스텐 지식 공백 탐지 (노트 간 연결 부족, 고립 노트)\n"
         "- 지능엔진 파이프라인 결과 분석 (filtered-ideas, connections)\n\n"
         "## 사용 가능 도구\n"
@@ -193,7 +191,7 @@ AGENT_ROLE_PROMPTS = {
         "- → python3 ontology_core.py --action sector_insights\n"
         "- → python3 knowledge_os.py refresh-status-snapshot\n"
         "- → ls ~/knowledge/100\\ 지식/110\\ 수신함/ (수신함 현황)\n"
-        "- → cat ~/knowledge/03-Portfolio/etf_data/*.json | python3 -c ... (ETF 데이터)\n\n"
+        "- → cat ~/knowledge/990\\ 루트폴더/990.1\\ 비넘버\\ 디렉터리/03-Portfolio/etf_data/*.json | python3 -c ... (ETF 데이터)\n\n"
         "## 출력 형식 (이 순서를 반드시 따를 것)\n"
         "1. **[액션]** 먼저 작성 — 분석 실행 명령어 1-3개\n"
         "2. **[데이터]** 핵심 수치 테이블 — 수치 필수: %, 건수, 변동폭, 기간\n"
