@@ -45,6 +45,11 @@ Use this format when adding entries:
 
 ## Listed plugins
 
+- **AOMS Memory** — AOMS HTTP memory backend with 4-tier cortex architecture (episodic, semantic, procedural, working). Provides semantic search, weight tuning, and persistent memory across sessions.
+  npm: `openclaw-memory-aoms`
+  repo: `https://github.com/dhawalc/openclaw-memory-aoms`
+  install: `openclaw plugins install openclaw-memory-aoms`
+
 - **WeChat** — Connect OpenClaw to WeChat personal accounts via WeChatPadPro (iPad protocol). Supports text, image, and file exchange with keyword-triggered conversations.
   npm: `@icesword760/openclaw-wechat`
   repo: `https://github.com/icesword0760/openclaw-wechat`
