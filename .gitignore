@@ -82,6 +82,8 @@ apps/ios/*.mobileprovision
 docs/.local/
 IDENTITY.md
 USER.md
+AGENTS.local.md
+**/AGENTS.local.md
 .tgz
 .idea
 
