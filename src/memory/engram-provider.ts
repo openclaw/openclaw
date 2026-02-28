@@ -63,11 +63,16 @@ export class EngramProvider implements MemorySearchManager {
       return [];
     }
 
-    return observations.map((obs): MemorySearchResult => {
-      // Normalize rank (engram returns negative FTS rank; higher = better)
-      // We invert and normalize to [0, 1] as a best-effort score.
-      const rawRank = typeof obs.rank === "number" ? obs.rank : 0;
-      const score = rawRank <= 0 ? Math.min(1, Math.abs(rawRank) / 1_000_000) : 0;
+    // SQLite FTS5 rank is negative; more negative = better match.
+    // Normalize relative to the best result so scores land in [0, 1].
+    const maxAbsRank = observations.reduce(
+      (max, obs) => Math.max(max, Math.abs(typeof obs.rank === "number" ? obs.rank : 0)),
+      0,
+    );
+
+    const results = observations.map((obs): MemorySearchResult => {
+      const absRank = Math.abs(typeof obs.rank === "number" ? obs.rank : 0);
+      const score = maxAbsRank > 0 ? absRank / maxAbsRank : 1;
 
       const snippet = `**${obs.title}**: ${obs.content}`;
       return {
@@ -80,6 +85,12 @@ export class EngramProvider implements MemorySearchManager {
         citation: obs.title,
       };
     });
+
+    const minScore = opts?.minScore;
+    if (typeof minScore === "number" && minScore > 0) {
+      return results.filter((r) => r.score >= minScore);
+    }
+    return results;
   }
 
   async readFile(params: {
