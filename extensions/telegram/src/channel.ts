@@ -320,6 +320,25 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
     chunkerMode: "markdown",
     textChunkLimit: 4000,
     pollMaxOptions: 10,
+    sendPayload: async (ctx) => {
+      const urls = ctx.payload.mediaUrls?.length
+        ? ctx.payload.mediaUrls
+        : ctx.payload.mediaUrl
+          ? [ctx.payload.mediaUrl]
+          : [];
+      if (urls.length > 0) {
+        let lastResult;
+        for (let i = 0; i < urls.length; i++) {
+          lastResult = await telegramPlugin.outbound!.sendMedia!({
+            ...ctx,
+            text: i === 0 ? (ctx.payload.text ?? "") : "",
+            mediaUrl: urls[i],
+          });
+        }
+        return lastResult!;
+      }
+      return telegramPlugin.outbound!.sendText!({ ...ctx });
+    },
     sendText: async ({ cfg, to, text, accountId, deps, replyToId, threadId, silent }) => {
       const send = deps?.sendTelegram ?? getTelegramRuntime().channel.telegram.sendMessageTelegram;
       const replyToMessageId = parseTelegramReplyToMessageId(replyToId);

@@ -231,6 +231,25 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount> = {
     chunker: (text, limit) => getIMessageRuntime().channel.text.chunkText(text, limit),
     chunkerMode: "text",
     textChunkLimit: 4000,
+    sendPayload: async (ctx) => {
+      const urls = ctx.payload.mediaUrls?.length
+        ? ctx.payload.mediaUrls
+        : ctx.payload.mediaUrl
+          ? [ctx.payload.mediaUrl]
+          : [];
+      if (urls.length > 0) {
+        let lastResult;
+        for (let i = 0; i < urls.length; i++) {
+          lastResult = await imessagePlugin.outbound!.sendMedia!({
+            ...ctx,
+            text: i === 0 ? (ctx.payload.text ?? "") : "",
+            mediaUrl: urls[i],
+          });
+        }
+        return lastResult!;
+      }
+      return imessagePlugin.outbound!.sendText!({ ...ctx });
+    },
     sendText: async ({ cfg, to, text, accountId, deps, replyToId }) => {
       const result = await sendIMessageOutbound({
         cfg,

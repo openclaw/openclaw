@@ -313,6 +313,25 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount> = {
       }
       return { ok: true, to: trimmed };
     },
+    sendPayload: async (ctx) => {
+      const urls = ctx.payload.mediaUrls?.length
+        ? ctx.payload.mediaUrls
+        : ctx.payload.mediaUrl
+          ? [ctx.payload.mediaUrl]
+          : [];
+      if (urls.length > 0) {
+        let lastResult;
+        for (let i = 0; i < urls.length; i++) {
+          lastResult = await bluebubblesPlugin.outbound!.sendMedia!({
+            ...ctx,
+            text: i === 0 ? (ctx.payload.text ?? "") : "",
+            mediaUrl: urls[i],
+          });
+        }
+        return lastResult!;
+      }
+      return bluebubblesPlugin.outbound!.sendText!({ ...ctx });
+    },
     sendText: async ({ cfg, to, text, accountId, replyToId }) => {
       const rawReplyToId = typeof replyToId === "string" ? replyToId.trim() : "";
       // Resolve short ID (e.g., "5") to full UUID

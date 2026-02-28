@@ -286,6 +286,25 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
     pollMaxOptions: 12,
     resolveTarget: ({ to, allowFrom, mode }) =>
       resolveWhatsAppOutboundTarget({ to, allowFrom, mode }),
+    sendPayload: async (ctx) => {
+      const urls = ctx.payload.mediaUrls?.length
+        ? ctx.payload.mediaUrls
+        : ctx.payload.mediaUrl
+          ? [ctx.payload.mediaUrl]
+          : [];
+      if (urls.length > 0) {
+        let lastResult;
+        for (let i = 0; i < urls.length; i++) {
+          lastResult = await whatsappPlugin.outbound!.sendMedia!({
+            ...ctx,
+            text: i === 0 ? (ctx.payload.text ?? "") : "",
+            mediaUrl: urls[i],
+          });
+        }
+        return lastResult!;
+      }
+      return whatsappPlugin.outbound!.sendText!({ ...ctx });
+    },
     sendText: async ({ cfg, to, text, accountId, deps, gifPlayback }) => {
       const send = deps?.sendWhatsApp ?? getWhatsAppRuntime().channel.whatsapp.sendMessageWhatsApp;
       const result = await send(to, text, {

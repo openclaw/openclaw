@@ -263,6 +263,25 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
     chunker: (text, limit) => getSignalRuntime().channel.text.chunkText(text, limit),
     chunkerMode: "text",
     textChunkLimit: 4000,
+    sendPayload: async (ctx) => {
+      const urls = ctx.payload.mediaUrls?.length
+        ? ctx.payload.mediaUrls
+        : ctx.payload.mediaUrl
+          ? [ctx.payload.mediaUrl]
+          : [];
+      if (urls.length > 0) {
+        let lastResult;
+        for (let i = 0; i < urls.length; i++) {
+          lastResult = await signalPlugin.outbound!.sendMedia!({
+            ...ctx,
+            text: i === 0 ? (ctx.payload.text ?? "") : "",
+            mediaUrl: urls[i],
+          });
+        }
+        return lastResult!;
+      }
+      return signalPlugin.outbound!.sendText!({ ...ctx });
+    },
     sendText: async ({ cfg, to, text, accountId, deps }) => {
       const result = await sendSignalOutbound({
         cfg,
