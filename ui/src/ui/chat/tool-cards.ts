@@ -48,75 +48,71 @@ export function extractToolCards(message: unknown): ToolCard[] {
   return cards;
 }
 
-export function renderToolCardSidebar(card: ToolCard, onOpenSidebar?: (content: string) => void) {
+export function renderToolCardSidebar(
+  card: ToolCard,
+  onOpenSidebar?: (content: string, skipLatex?: boolean) => void,
+) {
   const display = resolveToolDisplay({ name: card.name, args: card.args });
   const detail = formatToolDetail(display);
   const hasText = Boolean(card.text?.trim());
-
   const canClick = Boolean(onOpenSidebar);
-  const handleClick = canClick
-    ? () => {
+
+  /** Open sidebar — does NOT toggle the <details> expand/collapse */
+  const handleViewClick = canClick
+    ? (e: Event) => {
+        e.stopPropagation();
+        e.preventDefault();
         if (hasText) {
-          onOpenSidebar!(formatToolOutputForSidebar(card.text!));
+          onOpenSidebar!(formatToolOutputForSidebar(card.text!), true);
           return;
         }
-        const info = `## ${display.label}\n\n${
-          detail ? `**Command:** \`${detail}\`\n\n` : ""
-        }*No output — tool completed successfully.*`;
+        const info =
+          `## ${display.label}\n\n` +
+          (detail ? `**Command:** \`${detail}\`\n\n` : "") +
+          `*No output — tool completed successfully.*`;
         onOpenSidebar!(info);
       }
     : undefined;
 
   const isShort = hasText && (card.text?.length ?? 0) <= TOOL_INLINE_THRESHOLD;
-  const showCollapsed = hasText && !isShort;
+  const showPreview = hasText && !isShort;
   const showInline = hasText && isShort;
   const isEmpty = !hasText;
 
   return html`
-    <div
-      class="chat-tool-card ${canClick ? "chat-tool-card--clickable" : ""}"
-      @click=${handleClick}
-      role=${canClick ? "button" : nothing}
-      tabindex=${canClick ? "0" : nothing}
-      @keydown=${
-        canClick
-          ? (e: KeyboardEvent) => {
-              if (e.key !== "Enter" && e.key !== " ") {
-                return;
-              }
-              e.preventDefault();
-              handleClick?.();
-            }
-          : nothing
-      }
-    >
-      <div class="chat-tool-card__header">
-        <div class="chat-tool-card__title">
-          <span class="chat-tool-card__icon">${icons[display.icon]}</span>
-          <span>${display.label}</span>
-        </div>
+    <details class="chat-tool-card">
+      <summary class="chat-tool-card__summary">
+        <span class="chat-tool-card__chevron" aria-hidden="true">▶</span>
+        <span class="chat-tool-card__icon">${icons[display.icon]}</span>
+        <span class="chat-tool-card__label">${display.label}</span>
+        ${detail ? html`<span class="chat-tool-card__detail-inline">${detail}</span>` : nothing}
         ${
           canClick
-            ? html`<span class="chat-tool-card__action">${hasText ? "View" : ""} ${icons.check}</span>`
+            ? html`
+                <button
+                  class="chat-tool-card__view-btn"
+                  title="View full output in sidebar"
+                  @click=${handleViewClick}
+                >
+                  ${hasText ? "View" : ""}${icons.check}
+                </button>
+              `
+            : html`<span class="chat-tool-card__check">${icons.check}</span>`
+        }
+      </summary>
+      <div class="chat-tool-card__body">
+        ${detail ? html`<div class="chat-tool-card__detail mono">${detail}</div>` : nothing}
+        ${
+          isEmpty
+            ? html`
+                <div class="chat-tool-card__status-text muted">Completed — no output</div>
+              `
             : nothing
         }
-        ${isEmpty && !canClick ? html`<span class="chat-tool-card__status">${icons.check}</span>` : nothing}
+        ${showPreview ? html`<div class="chat-tool-card__preview mono">${getTruncatedPreview(card.text!)}</div>` : nothing}
+        ${showInline ? html`<div class="chat-tool-card__inline mono">${card.text}</div>` : nothing}
       </div>
-      ${detail ? html`<div class="chat-tool-card__detail">${detail}</div>` : nothing}
-      ${
-        isEmpty
-          ? html`
-              <div class="chat-tool-card__status-text muted">Completed</div>
-            `
-          : nothing
-      }
-      ${
-        showCollapsed
-          ? html`<div class="chat-tool-card__preview mono">${getTruncatedPreview(card.text!)}</div>`
-          : nothing
-      }
-      ${showInline ? html`<div class="chat-tool-card__inline mono">${card.text}</div>` : nothing}
-    </div>
+    </details>
   `;
 }
 

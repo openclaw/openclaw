@@ -3,3 +3,4 @@
 @import "./styles/layout.mobile.css";
 @import "./styles/components.css";
 @import "./styles/config.css";
+@import "katex/dist/katex.min.css";
