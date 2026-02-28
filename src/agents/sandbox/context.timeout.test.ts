@@ -30,6 +30,7 @@ vi.mock("../skills.js", () => ({
 // This ensures vi.useFakeTimers() will intercept the setTimeout call that
 // resolveSandboxContext makes inside its execution (not import-time).
 import { resolveSandboxContext } from "./context.js";
+import { maybePruneSandboxes } from "./prune.js";
 
 const cfg: OpenClawConfig = {
   agents: {
@@ -42,6 +43,7 @@ const cfg: OpenClawConfig = {
 afterEach(() => {
   vi.useRealTimers();
   vi.clearAllMocks();
+  vi.unstubAllGlobals();
 });
 
 describe("resolveSandboxContext – timeout guard", () => {
@@ -63,5 +65,53 @@ describe("resolveSandboxContext – timeout guard", () => {
 
     // After the race settles, the timer must be cleared.
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("aborts the AbortController signal when the timeout fires", async () => {
+    // Use vi.stubGlobal to intercept AbortController instantiation so we can
+    // capture the signal that resolveSandboxContext threads into the inner work.
+    let capturedSignal: AbortSignal | undefined;
+    const RealAbortController = globalThis.AbortController;
+    vi.stubGlobal(
+      "AbortController",
+      class extends RealAbortController {
+        constructor() {
+          super();
+          // Only capture the first instance — that's the one created inside
+          // resolveSandboxContext for the timeout race.
+          if (!capturedSignal) {
+            capturedSignal = this.signal;
+          }
+        }
+      },
+    );
+
+    vi.useFakeTimers();
+
+    const promise = resolveSandboxContext({
+      config: cfg,
+      sessionKey: "agent:worker:abort-test",
+      workspaceDir: "/tmp/openclaw-abort-test",
+    });
+
+    // Register rejection handler before advancing time to avoid unhandled rejections.
+    const assertion = expect(promise).rejects.toThrow(/timed out after 60s/i);
+
+    // The signal must be captured and not yet aborted before the timeout fires.
+    expect(capturedSignal).toBeDefined();
+    expect(capturedSignal?.aborted).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(60_001);
+    await assertion;
+
+    // After the timeout fires, the AbortController must have been aborted.
+    // This is the mechanism that gives cooperative cancellation to
+    // resolveSandboxContextInner: each `if (abortSignal?.aborted)` guard
+    // at await boundaries will throw rather than start new Docker work.
+    expect(capturedSignal?.aborted).toBe(true);
+
+    // Confirm the inner work did start (prune was called) so we know the
+    // abort check matters for future await boundaries.
+    expect(maybePruneSandboxes).toHaveBeenCalledTimes(1);
   });
 });
