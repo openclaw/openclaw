@@ -35,6 +35,11 @@ const STARTUP_LOOKBACK_SEC = 120; // tolerate relay lag / clock skew
 const MAX_PERSISTED_EVENT_IDS = 5000;
 const STATE_PERSIST_DEBOUNCE_MS = 5000; // Debounce state writes
 
+// Subscription reconnect configuration
+const RECONNECT_BASE_MS = 2000; // initial backoff
+const RECONNECT_MAX_MS = 60000; // max backoff cap
+const RECONNECT_JITTER_MS = 1000; // random jitter added to backoff
+
 // Circuit breaker configuration
 const CIRCUIT_BREAKER_THRESHOLD = 5; // failures before opening
 const CIRCUIT_BREAKER_RESET_MS = 30000; // 30 seconds before half-open
@@ -488,28 +493,70 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
     }
   }
 
-  const sub = pool.subscribeMany(
-    relays,
-    [{ kinds: [4], "#p": [pk], since }] as unknown as Parameters<typeof pool.subscribeMany>[1],
-    {
-      onevent: handleEvent,
-      oneose: () => {
-        // EOSE handler - called when all stored events have been received
-        for (const relay of relays) {
-          metrics.emit("relay.message.eose", 1, { relay });
-        }
-        onEose?.(relays.join(", "));
+  // Auto-reconnect state
+  let closed = false;
+  let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+  let reconnectAttempts = 0;
+  let currentSub: ReturnType<typeof pool.subscribeMany> | undefined;
+
+  function subscribe(): void {
+    // On reconnect, use lastProcessedAt with lookback so we catch recent messages
+    // but still dedup via the seen tracker
+    const reconnectSince =
+      reconnectAttempts === 0
+        ? since
+        : Math.max(0, lastProcessedAt - STARTUP_LOOKBACK_SEC);
+
+    currentSub = pool.subscribeMany(
+      relays,
+      { kinds: [4], "#p": [pk], since: reconnectSince } as unknown as Parameters<
+        typeof pool.subscribeMany
+      >[1],
+      {
+        onevent: handleEvent,
+        oneose: () => {
+          // EOSE = subscription is healthy; reset backoff
+          reconnectAttempts = 0;
+          for (const relay of relays) {
+            metrics.emit("relay.message.eose", 1, { relay });
+          }
+          onEose?.(relays.join(", "));
+        },
+        onclose: (reason) => {
+          for (const relay of relays) {
+            metrics.emit("relay.message.closed", 1, { relay });
+            options.onDisconnect?.(relay);
+          }
+          const reasonStr = Array.isArray(reason) ? reason.join(", ") : String(reason ?? "unknown");
+          onError?.(new Error(`Subscription closed: ${reasonStr}`), "subscription");
+
+          // Auto-reconnect unless intentionally closed
+          if (!closed) {
+            const backoff = Math.min(
+              RECONNECT_BASE_MS * 2 ** reconnectAttempts,
+              RECONNECT_MAX_MS,
+            );
+            const jitter = Math.floor(Math.random() * RECONNECT_JITTER_MS);
+            const delay = backoff + jitter;
+            reconnectAttempts++;
+            onError?.(
+              new Error(`Reconnecting in ${delay}ms (attempt ${reconnectAttempts})`),
+              "subscription.reconnect",
+            );
+            metrics.emit("relay.reconnect.scheduled", delay);
+            reconnectTimer = setTimeout(() => {
+              if (!closed) {
+                subscribe();
+              }
+            }, delay);
+          }
+        },
       },
-      onclose: (reason) => {
-        // Handle subscription close
-        for (const relay of relays) {
-          metrics.emit("relay.message.closed", 1, { relay });
-          options.onDisconnect?.(relay);
-        }
-        onError?.(new Error(`Subscription closed: ${reason.join(", ")}`), "subscription");
-      },
-    },
-  );
+    );
+  }
+
+  // Start initial subscription
+  subscribe();
 
   // Public sendDm function
   const sendDm = async (toPubkey: string, text: string): Promise<void> => {
@@ -567,7 +614,11 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
 
   return {
     close: () => {
-      sub.close();
+      closed = true;
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+      }
+      currentSub?.close();
       seen.stop();
       // Flush pending state write synchronously on close
       if (pendingWrite) {
