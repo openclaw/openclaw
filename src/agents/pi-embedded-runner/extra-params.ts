@@ -442,10 +442,21 @@ type PayloadMessage = {
   content?: unknown;
 };
 
+type PayloadTool = {
+  name?: string;
+  description?: string;
+  input_schema?: unknown;
+  cache_control?: { type: string };
+};
+
 /**
- * Inject cache_control into the system message for OpenRouter Anthropic models.
+ * Inject cache_control into the system message and tools for OpenRouter Anthropic models.
  * OpenRouter passes through Anthropic's cache_control field — caching the system
- * prompt avoids re-processing it on every request.
+ * prompt and tool definitions avoids re-processing them on every request.
+ *
+ * For tools, we inject cache_control on the last tool only. This creates a single
+ * cache breakpoint that covers all tool definitions, following Anthropic's
+ * recommendation for optimal caching behavior.
  */
 function createOpenRouterSystemCacheWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
@@ -462,7 +473,10 @@ function createOpenRouterSystemCacheWrapper(baseStreamFn: StreamFn | undefined):
     return underlying(model, context, {
       ...options,
       onPayload: (payload) => {
-        const messages = (payload as Record<string, unknown>)?.messages;
+        const payloadObj = payload as Record<string, unknown>;
+
+        // Inject cache_control into system messages
+        const messages = payloadObj?.messages;
         if (Array.isArray(messages)) {
           for (const msg of messages as PayloadMessage[]) {
             if (msg.role !== "system" && msg.role !== "developer") {
@@ -480,6 +494,17 @@ function createOpenRouterSystemCacheWrapper(baseStreamFn: StreamFn | undefined):
             }
           }
         }
+
+        // Inject cache_control into the last tool definition
+        // This creates a single cache breakpoint covering all tools
+        const tools = payloadObj?.tools;
+        if (Array.isArray(tools) && tools.length > 0) {
+          const lastTool = tools[tools.length - 1] as PayloadTool;
+          if (lastTool && typeof lastTool === "object") {
+            lastTool.cache_control = { type: "ephemeral" };
+          }
+        }
+
         originalOnPayload?.(payload);
       },
     });
