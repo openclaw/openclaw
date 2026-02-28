@@ -84,7 +84,10 @@ function normalizeElevenLabsVoiceApiBase(baseUrl: string): string {
   return baseUrl.trim().replace(/\/+$/, "");
 }
 
-async function fetchElevenLabsVoices(apiKey: string, baseUrl: string): Promise<ElevenLabsVoiceEntry[]> {
+async function fetchElevenLabsVoices(
+  apiKey: string,
+  baseUrl: string,
+): Promise<ElevenLabsVoiceEntry[]> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 10_000);
   try {
@@ -112,7 +115,10 @@ async function fetchElevenLabsVoices(apiKey: string, baseUrl: string): Promise<E
   }
 }
 
-function resolveVoiceByName(voices: ElevenLabsVoiceEntry[], query: string):
+function resolveVoiceByName(
+  voices: ElevenLabsVoiceEntry[],
+  query: string,
+):
   | { kind: "matched"; voice: ElevenLabsVoiceEntry }
   | { kind: "not_found" }
   | { kind: "ambiguous"; candidates: ElevenLabsVoiceEntry[] } {
@@ -324,7 +330,7 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
           reply: {
             text:
               `⚠️ Multiple ElevenLabs voices match "${requestedRaw}". Please use voiceId.\n` +
-              `${preview}`,
+              preview,
           },
         };
       }
@@ -410,9 +416,7 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
     const maxLength = getTtsMaxLength(prefsPath);
     const summarize = isSummarizationEnabled(prefsPath);
     const elevenlabsVoiceId = getTtsElevenLabsVoiceId(config, prefsPath);
-    const elevenlabsVoiceSource = getTtsElevenLabsVoiceOverride(prefsPath)
-      ? "override"
-      : "config";
+    const elevenlabsVoiceSource = getTtsElevenLabsVoiceOverride(prefsPath) ? "override" : "config";
     const last = getLastTtsAttempt();
     const lines = [
       "📊 TTS status",

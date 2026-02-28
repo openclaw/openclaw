@@ -1487,7 +1487,9 @@ describe("handleCommands /tts", () => {
 
       const statusParams = buildParams("/tts status", cfg);
       const statusResult = await handleCommands(statusParams);
-      expect(statusResult.reply?.text).toContain("ElevenLabs voice: 21m00Tcm4TlvDq8ikWAM (override)");
+      expect(statusResult.reply?.text).toContain(
+        "ElevenLabs voice: 21m00Tcm4TlvDq8ikWAM (override)",
+      );
     } finally {
       globalThis.fetch = originalFetch;
     }
