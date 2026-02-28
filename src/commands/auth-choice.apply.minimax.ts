@@ -86,21 +86,22 @@ export async function applyAuthChoiceMiniMax(
     return { config: nextConfig, agentModelOverride };
   };
   if (params.authChoice === "minimax-portal") {
-    // Let user choose between Global/CN endpoints
-    const endpoint = await params.prompter.select({
-      message: "Select MiniMax endpoint",
-      options: [
-        { value: "oauth", label: "Global", hint: "OAuth for international users" },
-        { value: "oauth-cn", label: "CN", hint: "OAuth for users in China" },
-      ],
-    });
-
     return await applyAuthChoicePluginProvider(params, {
       authChoice: "minimax-portal",
       pluginId: "minimax-portal-auth",
       providerId: "minimax-portal",
-      methodId: endpoint,
-      label: "MiniMax",
+      methodId: "oauth",
+      label: "MiniMax (Global)",
+    });
+  }
+
+  if (params.authChoice === "minimax-portal-cn") {
+    return await applyAuthChoicePluginProvider(params, {
+      authChoice: "minimax-portal-cn",
+      pluginId: "minimax-portal-auth",
+      providerId: "minimax-portal-cn",
+      methodId: "oauth",
+      label: "MiniMax (CN)",
     });
   }
 

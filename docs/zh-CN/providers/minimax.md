@@ -47,13 +47,13 @@ MiniMax 强调 M2.1 的以下改进：
 ```bash
 openclaw plugins enable minimax-portal-auth  # 如果已加载则跳过
 openclaw gateway restart  # 如果 Gateway 网关已在运行则重启
+
+# 国际用户（api.minimax.io）
 openclaw onboard --auth-choice minimax-portal
+
+# 中国用户（api.minimaxi.com）
+openclaw onboard --auth-choice minimax-portal-cn
 ```
-
-系统会提示你选择端点：
-
-- **Global** - 国际用户（`api.minimax.io`）
-- **CN** - 中国用户（`api.minimaxi.com`）
 
 详情参见 [MiniMax OAuth 插件 README](https://github.com/openclaw/openclaw/tree/main/extensions/minimax-portal-auth)。
 

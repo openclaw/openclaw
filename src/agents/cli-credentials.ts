@@ -69,7 +69,7 @@ export type QwenCliCredential = {
 
 export type MiniMaxCliCredential = {
   type: "oauth";
-  provider: "minimax-portal";
+  provider: "minimax-portal" | "minimax-portal-cn";
   access: string;
   refresh: string;
   expires: number;

@@ -58,6 +58,7 @@ type ModelsConfig = NonNullable<OpenClawConfig["models"]>;
 export type ProviderConfig = NonNullable<ModelsConfig["providers"]>[string];
 
 const MINIMAX_PORTAL_BASE_URL = "https://api.minimax.io/anthropic";
+const MINIMAX_PORTAL_CN_BASE_URL = "https://api.minimaxi.com/anthropic";
 const MINIMAX_DEFAULT_MODEL_ID = "MiniMax-M2.1";
 const MINIMAX_DEFAULT_VISION_MODEL_ID = "MiniMax-VL-01";
 const MINIMAX_DEFAULT_CONTEXT_WINDOW = 200000;
@@ -616,6 +617,26 @@ function buildMinimaxPortalProvider(): ProviderConfig {
   };
 }
 
+function buildMinimaxPortalCnProvider(): ProviderConfig {
+  return {
+    baseUrl: MINIMAX_PORTAL_CN_BASE_URL,
+    api: "anthropic-messages",
+    authHeader: true,
+    models: [
+      buildMinimaxTextModel({
+        id: MINIMAX_DEFAULT_MODEL_ID,
+        name: "MiniMax M2.1",
+        reasoning: false,
+      }),
+      buildMinimaxTextModel({
+        id: "MiniMax-M2.5",
+        name: "MiniMax M2.5",
+        reasoning: true,
+      }),
+    ],
+  };
+}
+
 function buildMoonshotProvider(): ProviderConfig {
   return {
     baseUrl: MOONSHOT_BASE_URL,
@@ -921,6 +942,14 @@ export async function resolveImplicitProviders(params: {
   if (minimaxOauthProfile.length > 0) {
     providers["minimax-portal"] = {
       ...buildMinimaxPortalProvider(),
+      apiKey: MINIMAX_OAUTH_PLACEHOLDER,
+    };
+  }
+
+  const minimaxOauthCnProfile = listProfilesForProvider(authStore, "minimax-portal-cn");
+  if (minimaxOauthCnProfile.length > 0) {
+    providers["minimax-portal-cn"] = {
+      ...buildMinimaxPortalCnProvider(),
       apiKey: MINIMAX_OAUTH_PLACEHOLDER,
     };
   }
