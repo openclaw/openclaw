@@ -23,6 +23,7 @@ import {
   modelsScanCommand,
   modelsSetCommand,
   modelsSetImageCommand,
+  modelsSetupCommand,
   modelsStatusCommand,
 } from "../commands/models.js";
 import { defaultRuntime } from "../runtime.js";
@@ -272,6 +273,17 @@ export function registerModelsCli(program: Command) {
     .action(async (opts) => {
       await runModelsCommand(async () => {
         await modelsScanCommand(opts, defaultRuntime);
+      });
+    });
+
+  models
+    .command("setup")
+    .description(
+      "Interactive wizard to configure your model profile (simple / resilient / commercial)",
+    )
+    .action(async () => {
+      await runModelsCommand(async () => {
+        await modelsSetupCommand(defaultRuntime);
       });
     });
 

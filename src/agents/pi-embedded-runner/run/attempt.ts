@@ -58,7 +58,10 @@ import { resolveSandboxContext } from "../../sandbox.js";
 import { resolveSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
 import { repairSessionFileIfNeeded } from "../../session-file-repair.js";
 import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
-import { sanitizeToolUseResultPairing } from "../../session-transcript-repair.js";
+import {
+  sanitizeToolCallIdsForModel,
+  sanitizeToolUseResultPairing,
+} from "../../session-transcript-repair.js";
 import {
   acquireSessionWriteLock,
   resolveSessionLockMaxHoldFromTimeout,
@@ -1000,9 +1003,16 @@ export async function runEmbeddedAttempt(
         const limited = transcriptPolicy.repairToolUseResultPairing
           ? sanitizeToolUseResultPairing(truncated)
           : truncated;
-        cacheTrace?.recordStage("session:limited", { messages: limited });
-        if (limited.length > 0) {
-          activeSession.agent.replaceMessages(limited);
+        // When resuming a session that was started with a different provider,
+        // persisted tool call IDs may use an incompatible format (e.g. Kimi UUID
+        // in an Anthropic session). Rewrite them to match the current provider
+        // before replaying the history (Bug #1 fix, Issues #7107 #8240).
+        const idFixed = params.provider
+          ? sanitizeToolCallIdsForModel(limited, params.provider).messages
+          : limited;
+        cacheTrace?.recordStage("session:limited", { messages: idFixed });
+        if (idFixed.length > 0) {
+          activeSession.agent.replaceMessages(idFixed);
         }
       } catch (err) {
         await flushPendingToolResultsAfterIdle({
