@@ -19,6 +19,27 @@ export function resolveCronStorePath(storePath?: string) {
   return DEFAULT_CRON_STORE_PATH;
 }
 
+function assertValidCronJobIds(jobs: unknown[], storePath: string, phase: "load" | "save") {
+  const seen = new Set<string>();
+  for (let i = 0; i < jobs.length; i += 1) {
+    const raw = jobs[i];
+    const record =
+      raw && typeof raw === "object" && !Array.isArray(raw)
+        ? (raw as Record<string, unknown>)
+        : null;
+    const id = typeof record?.id === "string" ? record.id.trim() : "";
+    if (!id) {
+      throw new Error(
+        `Invalid cron store at ${storePath}: job index ${i} is missing a non-empty id (${phase})`,
+      );
+    }
+    if (seen.has(id)) {
+      throw new Error(`Invalid cron store at ${storePath}: duplicate job id "${id}" (${phase})`);
+    }
+    seen.add(id);
+  }
+}
+
 export async function loadCronStore(storePath: string): Promise<CronStoreFile> {
   try {
     const raw = await fs.promises.readFile(storePath, "utf-8");
@@ -35,6 +56,7 @@ export async function loadCronStore(storePath: string): Promise<CronStoreFile> {
         ? (parsed as Record<string, unknown>)
         : {};
     const jobs = Array.isArray(parsedRecord.jobs) ? (parsedRecord.jobs as never[]) : [];
+    assertValidCronJobIds(jobs, storePath, "load");
     return {
       version: 1,
       jobs: jobs.filter(Boolean) as never as CronStoreFile["jobs"],
@@ -48,6 +70,7 @@ export async function loadCronStore(storePath: string): Promise<CronStoreFile> {
 }
 
 export async function saveCronStore(storePath: string, store: CronStoreFile) {
+  assertValidCronJobIds(store.jobs as unknown[], storePath, "save");
   await fs.promises.mkdir(path.dirname(storePath), { recursive: true });
   const { randomBytes } = await import("node:crypto");
   const tmp = `${storePath}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`;

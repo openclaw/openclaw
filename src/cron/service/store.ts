@@ -1,4 +1,3 @@
-import crypto from "node:crypto";
 import fs from "node:fs";
 import {
   buildDeliveryFromLegacyPayload,
@@ -242,21 +241,7 @@ export async function ensureLoaded(
   const loaded = await loadCronStore(state.deps.storePath);
   const jobs = (loaded.jobs ?? []) as unknown as Array<Record<string, unknown>>;
   let mutated = false;
-  const seenJobIds = new Set<string>();
   for (const raw of jobs) {
-    const rawId = typeof raw.id === "string" ? raw.id.trim() : "";
-    if (!rawId || seenJobIds.has(rawId)) {
-      raw.id = crypto.randomUUID();
-      seenJobIds.add(raw.id);
-      mutated = true;
-    } else {
-      if (raw.id !== rawId) {
-        raw.id = rawId;
-        mutated = true;
-      }
-      seenJobIds.add(rawId);
-    }
-
     const state = raw.state;
     if (!state || typeof state !== "object" || Array.isArray(state)) {
       raw.state = {};
