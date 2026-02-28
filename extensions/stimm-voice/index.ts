@@ -388,8 +388,14 @@ const stimmVoicePlugin = {
         return stored;
       }
 
-      // Claim not found in store — either never issued by this process or
-      // already purged by purgeClaimsForRoom (session ended). Reject.
+      // Claim not found in local store — may have been created by a sibling
+      // process (e.g. CLI voice:start). Accept if the signature is valid, the
+      // claim is not expired, and this gateway process has not explicitly
+      // consumed or purged it via consumedClaims.
+      if (!consumedClaims.has(parsed.claimId)) {
+        consumedClaims.set(parsed.claimId, parsed.expiresAt);
+        return parsed;
+      }
       return null;
     };
 
@@ -414,8 +420,14 @@ const stimmVoicePlugin = {
     // Remove all pending and used claims associated with a room so that stale
     // share links cannot be redeemed after a session is intentionally ended.
     const purgeClaimsForRoom = (roomName: string): void => {
+      const now = Date.now();
       for (const [id, claim] of claimStore.entries()) {
-        if (claim.roomName === roomName) claimStore.delete(id);
+        if (claim.roomName === roomName) {
+          // Mark in consumedClaims so the stateless fallback in verifyAndConsumeClaim
+          // also rejects this claim after the session is ended.
+          consumedClaims.set(id, Math.max(claim.expiresAt, now + 60_000));
+          claimStore.delete(id);
+        }
       }
     };
 
