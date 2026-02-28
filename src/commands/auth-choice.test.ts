@@ -413,7 +413,7 @@ describe("applyAuthChoice", () => {
         expectedModelPrefix: "litellm/",
       },
       {
-        tokenProvider: " VivGrid ",
+        tokenProvider: " Vivgrid ",
         token: "sk-vivgrid-token-provider-test",
         profileId: "vivgrid:default",
         provider: "vivgrid",
