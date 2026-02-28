@@ -925,21 +925,21 @@ describe("suppressOutbound", () => {
     setActivePluginRegistry(defaultRegistry, `suppress-test-${registrySeq}`);
   });
 
-  it("returns empty array and skips delivery when suppressOutbound is true", async () => {
+  it("throws and skips delivery when suppressOutbound is true", async () => {
     const sendWhatsApp = vi.fn();
     const cfg: OpenClawConfig = {
       channels: { whatsapp: { suppressOutbound: true } },
     };
 
-    const results = await deliverOutboundPayloads({
-      cfg,
-      channel: "whatsapp",
-      to: "+1555",
-      payloads: [{ text: "hello" }],
-      deps: { sendWhatsApp },
-    });
-
-    expect(results).toEqual([]);
+    await expect(
+      deliverOutboundPayloads({
+        cfg,
+        channel: "whatsapp",
+        to: "+1555",
+        payloads: [{ text: "hello" }],
+        deps: { sendWhatsApp },
+      }),
+    ).rejects.toThrow(/suppressOutbound/);
     expect(sendWhatsApp).not.toHaveBeenCalled();
     expect(queueMocks.enqueueDelivery).not.toHaveBeenCalled();
   });
@@ -975,16 +975,16 @@ describe("suppressOutbound", () => {
       },
     } as OpenClawConfig;
 
-    const results = await deliverOutboundPayloads({
-      cfg,
-      channel: "whatsapp",
-      to: "+1555",
-      accountId: "work",
-      payloads: [{ text: "hello" }],
-      deps: { sendWhatsApp },
-    });
-
-    expect(results).toEqual([]);
+    await expect(
+      deliverOutboundPayloads({
+        cfg,
+        channel: "whatsapp",
+        to: "+1555",
+        accountId: "work",
+        payloads: [{ text: "hello" }],
+        deps: { sendWhatsApp },
+      }),
+    ).rejects.toThrow(/suppressOutbound/);
     expect(sendWhatsApp).not.toHaveBeenCalled();
   });
 });

@@ -453,11 +453,11 @@ export async function deliverOutboundPayloads(
   const { channel, to, payloads } = params;
 
   if (isOutboundSuppressed({ cfg: params.cfg, channel, accountId: params.accountId })) {
-    console.warn(
+    const detail =
       `[suppressOutbound] Blocked ${payloads.length} outbound payload(s) → ${channel}/${to}` +
-        (params.accountId ? ` (account: ${params.accountId})` : ""),
-    );
-    return [];
+      (params.accountId ? ` (account: ${params.accountId})` : "");
+    console.warn(detail);
+    throw new Error(detail);
   }
 
   // Write-ahead delivery queue: persist before sending, remove after success.
