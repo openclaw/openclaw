@@ -698,26 +698,6 @@ export async function waitForSystemEvent(timeoutMs = 2000) {
 }
 
 /**
- * Reads the connect challenge nonce from a WebSocket that already has
- * `trackConnectChallengeNonce` installed. Returns the cached nonce if
- * already captured, otherwise waits for the `connect.challenge` event.
- */
-export async function readConnectChallengeNonce(ws: WebSocket): Promise<string> {
-  const cached = getTrackedConnectChallengeNonce(ws);
-  if (cached) {
-    return cached;
-  }
-  const challenge = await onceMessage<{
-    type?: string;
-    event?: string;
-    payload?: Record<string, unknown> | null;
-  }>(ws, (o) => o.type === "event" && o.event === "connect.challenge");
-  const nonce = (challenge.payload as { nonce?: unknown } | undefined)?.nonce;
-  expect(typeof nonce).toBe("string");
-  return String(nonce);
-}
-
-/**
  * Convenience wrapper: starts a gateway server + connected client and
  * immediately performs `connectOk`. Returns the same shape as
  * `startServerWithClient` plus the resolved port.

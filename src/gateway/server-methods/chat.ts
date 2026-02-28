@@ -39,7 +39,6 @@ import {
   readSessionMessages,
   truncateOversizedMessages,
   resolveSessionModelRef,
-  truncateOversizedMessages,
 } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
 import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
