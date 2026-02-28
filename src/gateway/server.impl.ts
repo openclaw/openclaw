@@ -209,11 +209,12 @@ export async function startGatewayServer(
       if (!bindMode) {
         try {
           const snap = await readConfigFileSnapshot();
-          if (snap.valid) {
-            bindMode = snap.config.gateway?.bind;
-            if (bindMode === "custom" && snap.config.gateway?.customBindHost) {
-              preflightHost = snap.config.gateway.customBindHost;
-            }
+          // Read bind mode even from invalid snapshots — the gateway.bind
+          // field is a literal string unaffected by ${ENV} substitution, so
+          // it is usable even when other config values failed validation.
+          bindMode = snap.config.gateway?.bind;
+          if (bindMode === "custom" && snap.config.gateway?.customBindHost) {
+            preflightHost = snap.config.gateway.customBindHost;
           }
         } catch {
           // Config unreadable — fall back to loopback probe.
