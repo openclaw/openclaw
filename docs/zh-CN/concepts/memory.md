@@ -8,7 +8,7 @@ x-i18n:
   generated_at: "2026-02-03T07:47:38Z"
   model: claude-opus-4-5
   provider: pi
-  source_hash: f3a7f5d9f61f9742eb3a8adbc3ccaddeadb7e48ceccdfb595327d6d1f55cd00e
+  source_hash: b31753d59496ceec64e4fd3554fff5ad3c698915caf15729f278399385c40f4d
   source_path: concepts/memory.md
   workflow: 15
 ---
