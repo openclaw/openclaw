@@ -1106,6 +1106,17 @@ const CRON_BOOTSTRAP_ALLOWLIST = new Set([
   DEFAULT_USER_FILENAME,
 ]);
 
+const STANDARD_BOOTSTRAP_ALLOWLIST = new Set([
+  DEFAULT_AGENTS_FILENAME,
+  DEFAULT_TOOLS_FILENAME,
+  DEFAULT_SOUL_FILENAME,
+  DEFAULT_IDENTITY_FILENAME,
+  DEFAULT_USER_FILENAME,
+  DEFAULT_HEARTBEAT_FILENAME,
+  DEFAULT_BOOTSTRAP_FILENAME,
+  DEFAULT_MEMORY_FILENAME,
+]);
+
 /**
  * Resolve the effective bootstrap tier for a session.
  *
@@ -1132,15 +1143,18 @@ export function filterBootstrapFilesForSession(
   tierOverride?: BootstrapTier,
 ): WorkspaceBootstrapFile[] {
   const tier = resolveBootstrapTier(sessionKey, tierOverride);
-  if (tier !== "minimal") {
-    // "standard" and "full" both include all loaded files.
-    // "full" additionally loads extra bootstrap patterns — handled by the caller.
-    return files;
+  if (tier === "minimal") {
+    if (sessionKey && isCronSessionKey(sessionKey)) {
+      return files.filter((file) => CRON_BOOTSTRAP_ALLOWLIST.has(file.name));
+    }
+    return files.filter((file) => SUBAGENT_BOOTSTRAP_ALLOWLIST.has(file.name));
   }
-  if (sessionKey && isCronSessionKey(sessionKey)) {
-    return files.filter((file) => CRON_BOOTSTRAP_ALLOWLIST.has(file.name));
+  if (tier === "standard") {
+    // Standard includes only recognized bootstrap files, excluding extra patterns.
+    return files.filter((file) => STANDARD_BOOTSTRAP_ALLOWLIST.has(file.name));
   }
-  return files.filter((file) => SUBAGENT_BOOTSTRAP_ALLOWLIST.has(file.name));
+  // "full" includes all loaded files, including extra bootstrap patterns.
+  return files;
 }
 
 function hasGlobPattern(pattern: string): boolean {
