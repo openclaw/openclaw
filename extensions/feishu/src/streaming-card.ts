@@ -3,7 +3,7 @@
  */
 
 import type { Client } from "@larksuiteoapi/node-sdk";
-import { fetchWithSsrFGuard } from "../../../src/plugin-sdk/index.js";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk";
 import type { FeishuDomain } from "./types.js";
 
 type Credentials = { appId: string; appSecret: string; domain?: FeishuDomain };
@@ -38,21 +38,24 @@ async function getToken(creds: Credentials): Promise<string> {
     },
     auditContext: "feishu.streaming-card.token",
   });
-  const data = (await tokenRes.json()) as {
-    code: number;
-    msg: string;
-    tenant_access_token?: string;
-    expire?: number;
-  };
-  await release();
-  if (data.code !== 0 || !data.tenant_access_token) {
-    throw new Error(`Token error: ${data.msg}`);
+  try {
+    const data = (await tokenRes.json()) as {
+      code: number;
+      msg: string;
+      tenant_access_token?: string;
+      expire?: number;
+    };
+    if (data.code !== 0 || !data.tenant_access_token) {
+      throw new Error(`Token error: ${data.msg}`);
+    }
+    tokenCache.set(key, {
+      token: data.tenant_access_token,
+      expiresAt: Date.now() + (data.expire ?? 7200) * 1000,
+    });
+    return data.tenant_access_token;
+  } finally {
+    await release();
   }
-  tokenCache.set(key, {
-    token: data.tenant_access_token,
-    expiresAt: Date.now() + (data.expire ?? 7200) * 1000,
-  });
-  return data.tenant_access_token;
 }
 
 function truncateSummary(text: string, max = 50): string {
@@ -116,12 +119,20 @@ export class FeishuStreamingSession {
       },
       auditContext: "feishu.streaming-card.create",
     });
-    const createData = (await createRes.json()) as {
+    let createData: {
       code: number;
       msg: string;
       data?: { card_id: string };
     };
-    await releaseCreate();
+    try {
+      createData = (await createRes.json()) as {
+        code: number;
+        msg: string;
+        data?: { card_id: string };
+      };
+    } finally {
+      await releaseCreate();
+    }
     if (createData.code !== 0 || !createData.data?.card_id) {
       throw new Error(`Create card failed: ${createData.msg}`);
     }
