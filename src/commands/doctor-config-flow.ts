@@ -1844,12 +1844,14 @@ export function collectFallbackProviderWarnings(cfg: OpenClawConfig): FallbackPr
   }
 
   // Check agents.defaults.imageModel fallbacks.
+  // Runtime image failover (resolveImageFallbackCandidates) always uses DEFAULT_PROVIDER
+  // for providerless entries, not the text model's provider.
   const defaultImageFallbacks = resolveAgentModelFallbackValues(cfg.agents?.defaults?.imageModel);
   for (let i = 0; i < defaultImageFallbacks.length; i++) {
     checkFallback(
       `agents.defaults.imageModel.fallbacks[${i}]`,
       defaultImageFallbacks[i],
-      effectiveDefaultProvider,
+      DEFAULT_PROVIDER,
     );
   }
 
@@ -1864,8 +1866,9 @@ export function collectFallbackProviderWarnings(cfg: OpenClawConfig): FallbackPr
   }
 
   // Check per-agent fallbacks.
-  // Each agent may override the primary model, so derive its effective default
-  // provider from its own model primary (falling back to the global default).
+  // Runtime (resolveFallbackCandidates) always derives the default provider from
+  // the GLOBAL configured primary model, not the per-agent primary. Use the global
+  // effectiveDefaultProvider so validation matches runtime behavior.
   const agentList = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
   for (const agent of agentList) {
     if (!agent || typeof agent !== "object") {
@@ -1873,28 +1876,12 @@ export function collectFallbackProviderWarnings(cfg: OpenClawConfig): FallbackPr
     }
     const agentId = typeof agent.id === "string" ? agent.id : "?";
 
-    // Derive per-agent default provider: if the agent specifies a model with an
-    // explicit provider prefix, use that; otherwise fall back to the global default.
-    const agentModelPrimary = (() => {
-      const raw =
-        typeof agent.model === "string"
-          ? agent.model.trim()
-          : agent.model && typeof agent.model === "object"
-            ? (agent.model.primary ?? "").trim()
-            : "";
-      if (!raw) {
-        return null;
-      }
-      return parseModelRef(raw, effectiveDefaultProvider);
-    })();
-    const agentDefaultProvider = agentModelPrimary?.provider ?? effectiveDefaultProvider;
-
     const agentFallbacks = resolveAgentModelFallbackValues(agent.model);
     for (let i = 0; i < agentFallbacks.length; i++) {
       checkFallback(
         `agents.list[${agentId}].model.fallbacks[${i}]`,
         agentFallbacks[i],
-        agentDefaultProvider,
+        effectiveDefaultProvider,
       );
     }
     const subagentModelFallbacks = resolveAgentModelFallbackValues(agent.subagents?.model);
@@ -1902,7 +1889,7 @@ export function collectFallbackProviderWarnings(cfg: OpenClawConfig): FallbackPr
       checkFallback(
         `agents.list[${agentId}].subagents.model.fallbacks[${i}]`,
         subagentModelFallbacks[i],
-        agentDefaultProvider,
+        effectiveDefaultProvider,
       );
     }
   }

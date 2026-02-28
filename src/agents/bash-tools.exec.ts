@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
+import type { TSchema } from "@sinclair/typebox";
 import { type ExecHost, maxAsk, minSecurity } from "../infra/exec-approvals.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import {
@@ -155,10 +156,7 @@ async function validateScriptFileForShellBleed(params: {
   }
 }
 
-export function createExecTool(
-  defaults?: ExecToolDefaults,
-  // oxlint-disable-next-line typescript/no-explicit-any
-): AgentTool<any, ExecToolDetails> {
+export function createExecTool(defaults?: ExecToolDefaults): AgentTool<TSchema, ExecToolDetails> {
   const defaultBackgroundMs = clampWithDefault(
     defaults?.backgroundMs ?? readEnvInt("PI_BASH_YIELD_MS"),
     10_000,
@@ -609,8 +607,7 @@ export function createExecTool(
     },
   };
 
-  // oxlint-disable-next-line typescript/no-explicit-any
-  return patchToolSchemaForClaudeCompatibility(baseTool) as AgentTool<any, ExecToolDetails>;
+  return patchToolSchemaForClaudeCompatibility(baseTool) as AgentTool<TSchema, ExecToolDetails>;
 }
 
 export const execTool = createExecTool();
