@@ -123,21 +123,40 @@ async function resolveUserIdByUsername(params: {
  * If the value doesn't match this pattern, treat it as a channel name
  * that needs to be resolved via the API.
  */
-function isMattermostId(value: string): boolean {
+/** @internal Exported for testing. */
+export function isMattermostId(value: string): boolean {
   return /^[a-z0-9]{26}$/i.test(value);
 }
 
-const channelNameCache = new Map<string, string>();
+/** TTL-bounded cache for resolved channel name → ID mappings. */
+const CHANNEL_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+const CHANNEL_CACHE_MAX_SIZE = 200;
+const channelNameCache = new Map<string, { id: string; expiresAt: number }>();
+
+/** Strip leading '#' or '~' and lowercase for consistent cache keys. */
+function normalizeChannelName(raw: string): string {
+  return raw.replace(/^[#~]/, "").toLowerCase();
+}
 
 async function resolveChannelNameToId(params: {
   channelName: string;
   baseUrl: string;
   token: string;
 }): Promise<string> {
-  const key = `${cacheKey(params.baseUrl, params.token)}::channel::${params.channelName.toLowerCase()}`;
+  const normalized = normalizeChannelName(params.channelName);
+  const key = `${cacheKey(params.baseUrl, params.token)}::channel::${normalized}`;
   const cached = channelNameCache.get(key);
-  if (cached) {
-    return cached;
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.id;
+  }
+  // Evict expired or enforce max size
+  if (channelNameCache.size >= CHANNEL_CACHE_MAX_SIZE) {
+    const now = Date.now();
+    for (const [k, v] of channelNameCache) {
+      if (v.expiresAt <= now || channelNameCache.size >= CHANNEL_CACHE_MAX_SIZE) {
+        channelNameCache.delete(k);
+      }
+    }
   }
   const client = createMattermostClient({ baseUrl: params.baseUrl, botToken: params.token });
   const teams = await fetchMattermostMyTeams(client);
@@ -146,13 +165,11 @@ async function resolveChannelNameToId(params: {
       `Cannot resolve channel name "${params.channelName}": bot is not a member of any team`,
     );
   }
-  // Strip leading '#' or '~' if present (common Mattermost channel prefixes)
-  const name = params.channelName.replace(/^[#~]/, "");
   for (const team of teams) {
     try {
-      const channel = await fetchMattermostChannelByName(client, team.id, name);
+      const channel = await fetchMattermostChannelByName(client, team.id, normalized);
       if (channel?.id) {
-        channelNameCache.set(key, channel.id);
+        channelNameCache.set(key, { id: channel.id, expiresAt: Date.now() + CHANNEL_CACHE_TTL_MS });
         return channel.id;
       }
     } catch {

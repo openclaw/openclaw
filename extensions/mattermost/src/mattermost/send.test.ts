@@ -8,16 +8,7 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
  * `createMattermostPost` to send `channel_id: "finance"` → 403.
  */
 
-// ---------------------------------------------------------------------------
-// 1. Unit tests for parseMattermostTarget & isMattermostId (exported helpers)
-// ---------------------------------------------------------------------------
-
-// We re-implement the helpers here because they are module-private.
-// If they are later exported, replace with direct imports.
-
-function isMattermostId(value: string): boolean {
-  return /^[a-z0-9]{26}$/i.test(value);
-}
+import { isMattermostId } from "./send.js";
 
 describe("isMattermostId", () => {
   it("accepts a valid 26-char alphanumeric Mattermost ID", () => {
