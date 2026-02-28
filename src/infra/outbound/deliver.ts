@@ -200,11 +200,16 @@ function createPluginHandler(
           mediaUrl,
           payload: { text: caption, mediaUrl, mediaUrls: [mediaUrl] },
         });
-  // Only enable sendPayload for native v2 adapters. Inferred sendFinal (from
-  // v1 sendText/sendMedia) doesn't handle multi-media fan-out or text chunking,
-  // so letting it take the sendPayload fast path would drop attachments and skip
-  // chunking for channelData payloads.
+  // Enable sendPayload for native v2 adapters and v1 adapters that implement
+  // sendPayload directly (e.g. LINE). Inferred sendFinal (from v1
+  // sendText/sendMedia) doesn't handle multi-media fan-out or text chunking,
+  // so we block that path to avoid dropping attachments or skipping chunking.
   const isNativeV2 = normalized.contract === "v2";
+  // v1 adapters that expose sendPayload natively (before normalization) should
+  // still use the fast path — the spread in normalizeChannelOutboundAdapter
+  // preserves the original sendPayload on the normalized adapter.
+  const hasNativeSendPayload =
+    normalized.contract === "v1" && typeof outbound.sendPayload === "function";
   return {
     chunker,
     chunkerMode,
@@ -218,7 +223,15 @@ function createPluginHandler(
               mediaUrl: payload.mediaUrl,
               payload,
             })
-        : undefined,
+        : hasNativeSendPayload
+          ? async (payload, overrides) =>
+              outbound.sendPayload!({
+                ...resolveCtx(overrides),
+                text: payload.text ?? "",
+                mediaUrl: payload.mediaUrl,
+                payload,
+              })
+          : undefined,
     sendText: async (text, overrides) => sendText(text, overrides),
     sendMedia: async (caption, mediaUrl, overrides) => sendMedia(caption, mediaUrl, overrides),
   };
