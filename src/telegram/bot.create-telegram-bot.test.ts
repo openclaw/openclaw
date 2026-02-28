@@ -2129,9 +2129,7 @@ describe("createTelegramBot", () => {
     replySpy.mockClear();
     const fetchSpy = vi
       .spyOn(globalThis, "fetch")
-      .mockImplementation(async () =>
-        Promise.reject(new Error("Media exceeds 5MB limit")),
-      );
+      .mockImplementation(async () => Promise.reject(new Error("Media exceeds 5MB limit")));
 
     try {
       createTelegramBot({ token: "tok" });
