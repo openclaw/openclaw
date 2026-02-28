@@ -10,6 +10,7 @@ vi.mock("./discovery.js", () => ({
 
 vi.mock("./manifest.js", () => ({
   loadPluginManifest: (...args: unknown[]) => loadPluginManifestMock(...args),
+  shouldRejectHardlinkedPluginFiles: (origin: string) => origin !== "bundled",
 }));
 
 describe("bundled plugin sources", () => {
@@ -66,6 +67,12 @@ describe("bundled plugin sources", () => {
     const map = resolveBundledPluginSources({});
 
     expect(Array.from(map.keys())).toEqual(["feishu", "msteams"]);
+    expect(loadPluginManifestMock).toHaveBeenCalledWith("/app/extensions/feishu", {
+      rejectHardlinks: false,
+    });
+    expect(loadPluginManifestMock).toHaveBeenCalledWith("/app/extensions/msteams", {
+      rejectHardlinks: false,
+    });
     expect(map.get("feishu")).toEqual({
       pluginId: "feishu",
       localPath: "/app/extensions/feishu",

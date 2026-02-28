@@ -1,5 +1,5 @@
 import { discoverOpenClawPlugins } from "./discovery.js";
-import { loadPluginManifest } from "./manifest.js";
+import { loadPluginManifest, shouldRejectHardlinkedPluginFiles } from "./manifest.js";
 
 export type BundledPluginSource = {
   pluginId: string;
@@ -17,7 +17,9 @@ export function resolveBundledPluginSources(params: {
     if (candidate.origin !== "bundled") {
       continue;
     }
-    const manifest = loadPluginManifest(candidate.rootDir);
+    const manifest = loadPluginManifest(candidate.rootDir, {
+      rejectHardlinks: shouldRejectHardlinkedPluginFiles(candidate.origin),
+    });
     if (!manifest.ok) {
       continue;
     }

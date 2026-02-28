@@ -204,6 +204,56 @@ describe("loadOpenClawPlugins", () => {
     expectTelegramLoaded(registry);
   });
 
+  it("loads bundled plugins when manifest and entry files are hardlinked", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const bundledDir = makeTempDir();
+    const pluginDir = path.join(bundledDir, "hardlinked-bundled");
+    const storeDir = makeTempDir();
+    const linkedManifest = path.join(pluginDir, "openclaw.plugin.json");
+    const linkedEntry = path.join(pluginDir, "index.js");
+    const outsideManifest = path.join(storeDir, "openclaw.plugin.json");
+    const outsideEntry = path.join(storeDir, "index.js");
+
+    fs.mkdirSync(pluginDir, { recursive: true });
+    fs.writeFileSync(
+      outsideManifest,
+      JSON.stringify({ id: "hardlinked-bundled", configSchema: EMPTY_PLUGIN_SCHEMA }, null, 2),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      outsideEntry,
+      'export default { id: "hardlinked-bundled", register() {} };',
+      "utf-8",
+    );
+    try {
+      fs.linkSync(outsideManifest, linkedManifest);
+      fs.linkSync(outsideEntry, linkedEntry);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "EXDEV") {
+        return;
+      }
+      throw err;
+    }
+
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: {
+        plugins: {
+          allow: ["hardlinked-bundled"],
+          entries: {
+            "hardlinked-bundled": { enabled: true },
+          },
+        },
+      },
+    });
+
+    const record = registry.plugins.find((entry) => entry.id === "hardlinked-bundled");
+    expect(record?.status).toBe("loaded");
+  });
+
   it("loads bundled channel plugins when channels.<id>.enabled=true", () => {
     setupBundledTelegramPlugin();
 

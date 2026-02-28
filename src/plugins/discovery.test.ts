@@ -26,6 +26,18 @@ async function withStateDir<T>(stateDir: string, fn: () => Promise<T>) {
   );
 }
 
+async function withBundledDir<T>(bundledDir: string, fn: () => Promise<T>) {
+  const stateDir = makeTempDir();
+  return await withEnvAsync(
+    {
+      OPENCLAW_STATE_DIR: stateDir,
+      CLAWDBOT_STATE_DIR: undefined,
+      OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,
+    },
+    fn,
+  );
+}
+
 afterEach(() => {
   for (const dir of tempDirs.splice(0)) {
     try {
@@ -121,6 +133,51 @@ describe("discoverOpenClawPlugins", () => {
     const ids = candidates.map((c) => c.idHint);
     expect(ids).toContain("pack/one");
     expect(ids).toContain("pack/two");
+  });
+
+  it("accepts hardlinked package manifests and entries for bundled plugins", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const bundledDir = makeTempDir();
+    const packageDir = path.join(bundledDir, "hardlink-pack");
+    const outsideDir = makeTempDir();
+    const outsideManifest = path.join(outsideDir, "package.json");
+    const outsideEntry = path.join(outsideDir, "entry.ts");
+    const linkedManifest = path.join(packageDir, "package.json");
+    const linkedEntry = path.join(packageDir, "entry.ts");
+
+    fs.mkdirSync(packageDir, { recursive: true });
+    fs.writeFileSync(
+      outsideManifest,
+      JSON.stringify({
+        name: "@openclaw/hardlink-pack",
+        openclaw: { extensions: ["./entry.ts"] },
+      }),
+      "utf-8",
+    );
+    fs.writeFileSync(outsideEntry, "export default function bundledHardlinkPack() {}", "utf-8");
+    try {
+      fs.linkSync(outsideManifest, linkedManifest);
+      fs.linkSync(outsideEntry, linkedEntry);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "EXDEV") {
+        return;
+      }
+      throw err;
+    }
+
+    const { candidates, diagnostics } = await withBundledDir(bundledDir, async () => {
+      return discoverOpenClawPlugins({});
+    });
+
+    const bundledIds = candidates
+      .filter((candidate) => candidate.origin === "bundled")
+      .map((candidate) => candidate.idHint);
+    expect(bundledIds).toContain("hardlink-pack");
+    expect(diagnostics.some((entry) => entry.message.includes("escapes package directory"))).toBe(
+      false,
+    );
   });
 
   it("derives unscoped ids for scoped packages", async () => {

@@ -3,7 +3,11 @@ import type { OpenClawConfig } from "../config/config.js";
 import { resolveUserPath } from "../utils.js";
 import { normalizePluginsConfig, type NormalizedPluginsConfig } from "./config-state.js";
 import { discoverOpenClawPlugins, type PluginCandidate } from "./discovery.js";
-import { loadPluginManifest, type PluginManifest } from "./manifest.js";
+import {
+  loadPluginManifest,
+  shouldRejectHardlinkedPluginFiles,
+  type PluginManifest,
+} from "./manifest.js";
 import { safeRealpathSync } from "./path-safety.js";
 import type { PluginConfigUiHint, PluginDiagnostic, PluginKind, PluginOrigin } from "./types.js";
 
@@ -167,7 +171,9 @@ export function loadPluginManifestRegistry(params: {
   const realpathCache = new Map<string, string>();
 
   for (const candidate of candidates) {
-    const manifestRes = loadPluginManifest(candidate.rootDir);
+    const manifestRes = loadPluginManifest(candidate.rootDir, {
+      rejectHardlinks: shouldRejectHardlinkedPluginFiles(candidate.origin),
+    });
     if (!manifestRes.ok) {
       diagnostics.push({
         level: "error",
