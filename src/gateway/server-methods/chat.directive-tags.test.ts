@@ -723,4 +723,75 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       }),
     );
   });
+
+  it("returns in_flight when another request starts while attachments are still parsing", async () => {
+    createTranscriptFixture("openclaw-chat-send-attachments-race-");
+    mockState.finalText = "ok";
+    const context = createChatContext();
+
+    const respondFirst = vi.fn();
+    const respondSecond = vi.fn();
+    attachmentParseState.firstCallGate = new Promise<void>((resolve) => {
+      attachmentParseState.releaseFirstCall = resolve;
+    });
+
+    const firstCall = chatHandlers["chat.send"]({
+      params: {
+        sessionKey: "main",
+        message: "hello",
+        idempotencyKey: "idem-attachments-race",
+        attachments: [
+          {
+            type: "image",
+            mimeType: "image/png",
+            fileName: "dot.png",
+            content: "data:image/png;base64,AAAA",
+          },
+        ],
+      },
+      respond: respondFirst as never,
+      req: {} as never,
+      client: null as never,
+      isWebchatConnect: () => false,
+      context: context as GatewayRequestContext,
+    });
+
+    await vi.waitFor(() => {
+      expect(attachmentParseState.calls).toBe(1);
+    }, FAST_WAIT_OPTS);
+
+    await chatHandlers["chat.send"]({
+      params: {
+        sessionKey: "main",
+        message: "hello",
+        idempotencyKey: "idem-attachments-race",
+        attachments: [
+          {
+            type: "image",
+            mimeType: "image/png",
+            fileName: "dot.png",
+            content: "data:image/png;base64,AAAA",
+          },
+        ],
+      },
+      respond: respondSecond as never,
+      req: {} as never,
+      client: null as never,
+      isWebchatConnect: () => false,
+      context: context as GatewayRequestContext,
+    });
+
+    attachmentParseState.releaseFirstCall?.();
+    await firstCall;
+
+    const firstPayload = respondFirst.mock.calls.at(-1)?.[1] as
+      | { status?: string }
+      | undefined;
+    const secondPayload = respondSecond.mock.calls.at(-1)?.[1] as
+      | { status?: string }
+      | undefined;
+
+    expect(firstPayload?.status).toBe("in_flight");
+    expect(secondPayload?.status).toBe("started");
+  });
 });

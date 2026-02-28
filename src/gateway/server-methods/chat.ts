@@ -849,6 +849,17 @@ export const chatHandlers: GatewayRequestHandlers = {
       }
     }
 
+    // Re-check in-flight runs after attachment parsing, which can include I/O and widen
+    // the race window for concurrent requests sharing the same idempotencyKey.
+    const activeAfterParse = context.chatAbortControllers.get(clientRunId);
+    if (activeAfterParse) {
+      respond(true, { runId: clientRunId, status: "in_flight" as const }, undefined, {
+        cached: true,
+        runId: clientRunId,
+      });
+      return;
+    }
+
     try {
       const abortController = new AbortController();
       context.chatAbortControllers.set(clientRunId, {
