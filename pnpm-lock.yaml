@@ -317,6 +317,9 @@ importers:
       '@sinclair/typebox':
         specifier: 0.34.48
         version: 0.34.48
+      https-proxy-agent:
+        specifier: ^7.0.6
+        version: 7.0.6
       zod:
         specifier: ^4.3.6
         version: 4.3.6
