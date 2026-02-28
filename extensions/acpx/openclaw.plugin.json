@@ -1,0 +1,55 @@
+{
+  "id": "acpx",
+  "name": "ACPX Runtime",
+  "description": "ACP runtime backend powered by a pinned plugin-local acpx CLI.",
+  "skills": ["./skills"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "cwd": {
+        "type": "string"
+      },
+      "permissionMode": {
+        "type": "string",
+        "enum": ["approve-all", "approve-reads", "deny-all"]
+      },
+      "nonInteractivePermissions": {
+        "type": "string",
+        "enum": ["deny", "fail"]
+      },
+      "timeoutSeconds": {
+        "type": "number",
+        "minimum": 0.001
+      },
+      "queueOwnerTtlSeconds": {
+        "type": "number",
+        "minimum": 0
+      }
+    }
+  },
+  "uiHints": {
+    "cwd": {
+      "label": "Default Working Directory",
+      "help": "Default cwd for ACP session operations when not set per session."
+    },
+    "permissionMode": {
+      "label": "Permission Mode",
+      "help": "Default acpx permission policy for runtime prompts."
+    },
+    "nonInteractivePermissions": {
+      "label": "Non-Interactive Permission Policy",
+      "help": "acpx policy when interactive permission prompts are unavailable."
+    },
+    "timeoutSeconds": {
+      "label": "Prompt Timeout Seconds",
+      "help": "Optional acpx timeout for each runtime turn.",
+      "advanced": true
+    },
+    "queueOwnerTtlSeconds": {
+      "label": "Queue Owner TTL Seconds",
+      "help": "Idle queue-owner TTL for acpx prompt turns. Keep this short in OpenClaw to avoid delayed completion after each turn.",
+      "advanced": true
+    }
+  }
+}

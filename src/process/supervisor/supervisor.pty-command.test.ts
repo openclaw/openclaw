@@ -40,7 +40,7 @@ describe("process supervisor PTY command contract", () => {
   });
 
   beforeEach(() => {
-    createPtyAdapterMock.mockReset();
+    createPtyAdapterMock.mockClear();
   });
 
   it("passes PTY command verbatim to shell args", async () => {

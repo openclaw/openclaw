@@ -52,6 +52,7 @@ vi.mock("./session-utils.js", () => ({
 import type { CliDeps } from "../cli/deps.js";
 import { agentCommand } from "../commands/agent.js";
 import type { HealthSummary } from "../commands/health.js";
+import { loadConfig } from "../config/config.js";
 import { updateSessionStore } from "../config/sessions.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
@@ -61,6 +62,7 @@ import { loadSessionEntry } from "./session-utils.js";
 
 const enqueueSystemEventMock = vi.mocked(enqueueSystemEvent);
 const requestHeartbeatNowMock = vi.mocked(requestHeartbeatNow);
+const loadConfigMock = vi.mocked(loadConfig);
 const agentCommandMock = vi.mocked(agentCommand);
 const updateSessionStoreMock = vi.mocked(updateSessionStore);
 const loadSessionEntryMock = vi.mocked(loadSessionEntry);
@@ -90,8 +92,8 @@ function buildCtx(): NodeEventContext {
 
 describe("node exec events", () => {
   beforeEach(() => {
-    enqueueSystemEventMock.mockReset();
-    requestHeartbeatNowMock.mockReset();
+    enqueueSystemEventMock.mockClear();
+    requestHeartbeatNowMock.mockClear();
   });
 
   it("enqueues exec.started events", async () => {
@@ -185,12 +187,71 @@ describe("node exec events", () => {
     );
     expect(requestHeartbeatNowMock).toHaveBeenCalledWith({ reason: "exec-event" });
   });
+
+  it("suppresses exec.started when notifyOnExit is false", async () => {
+    loadConfigMock.mockReturnValueOnce({
+      session: { mainKey: "agent:main:main" },
+      tools: { exec: { notifyOnExit: false } },
+    } as ReturnType<typeof loadConfig>);
+    const ctx = buildCtx();
+    await handleNodeEvent(ctx, "node-1", {
+      event: "exec.started",
+      payloadJSON: JSON.stringify({
+        sessionKey: "agent:main:main",
+        runId: "run-silent-1",
+        command: "ls -la",
+      }),
+    });
+
+    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+    expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
+  });
+
+  it("suppresses exec.finished when notifyOnExit is false", async () => {
+    loadConfigMock.mockReturnValueOnce({
+      session: { mainKey: "agent:main:main" },
+      tools: { exec: { notifyOnExit: false } },
+    } as ReturnType<typeof loadConfig>);
+    const ctx = buildCtx();
+    await handleNodeEvent(ctx, "node-2", {
+      event: "exec.finished",
+      payloadJSON: JSON.stringify({
+        runId: "run-silent-2",
+        exitCode: 0,
+        timedOut: false,
+        output: "some output",
+      }),
+    });
+
+    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+    expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
+  });
+
+  it("suppresses exec.denied when notifyOnExit is false", async () => {
+    loadConfigMock.mockReturnValueOnce({
+      session: { mainKey: "agent:main:main" },
+      tools: { exec: { notifyOnExit: false } },
+    } as ReturnType<typeof loadConfig>);
+    const ctx = buildCtx();
+    await handleNodeEvent(ctx, "node-3", {
+      event: "exec.denied",
+      payloadJSON: JSON.stringify({
+        sessionKey: "agent:demo:main",
+        runId: "run-silent-3",
+        command: "rm -rf /",
+        reason: "allowlist-miss",
+      }),
+    });
+
+    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+    expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
+  });
 });
 
 describe("voice transcript events", () => {
   beforeEach(() => {
-    agentCommandMock.mockReset();
-    updateSessionStoreMock.mockReset();
+    agentCommandMock.mockClear();
+    updateSessionStoreMock.mockClear();
     agentCommandMock.mockResolvedValue({ status: "ok" } as never);
     updateSessionStoreMock.mockImplementation(async (_storePath, update) => {
       update({});
@@ -292,9 +353,9 @@ describe("voice transcript events", () => {
 
 describe("agent request events", () => {
   beforeEach(() => {
-    agentCommandMock.mockReset();
-    updateSessionStoreMock.mockReset();
-    loadSessionEntryMock.mockReset();
+    agentCommandMock.mockClear();
+    updateSessionStoreMock.mockClear();
+    loadSessionEntryMock.mockClear();
     agentCommandMock.mockResolvedValue({ status: "ok" } as never);
     updateSessionStoreMock.mockImplementation(async (_storePath, update) => {
       update({});

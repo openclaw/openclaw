@@ -3,6 +3,7 @@ summary: "Sub-agents: spawning isolated agent runs that announce results back to
 read_when:
   - You want background/parallel work via the agent
   - You are changing sessions_spawn or sub-agent tool policy
+  - You are implementing or troubleshooting thread-bound subagent sessions
 title: "Sub-Agents"
 ---
 
@@ -22,6 +23,16 @@ Use `/subagents` to inspect or control sub-agent runs for the **current session*
 - `/subagents steer <id|#> <message>`
 - `/subagents spawn <agentId> <task> [--model <model>] [--thinking <level>]`
 
+Thread binding controls:
+
+These commands work on channels that support persistent thread bindings. See **Thread supporting channels** below.
+
+- `/focus <subagent-label|session-key|session-id|session-label>`
+- `/unfocus`
+- `/agents`
+- `/session idle <duration|off>`
+- `/session max-age <duration|off>`
+
 `/subagents info` shows run metadata (status, timestamps, session id, transcript path, cleanup).
 
 ### Spawn behavior
@@ -40,6 +51,8 @@ Use `/subagents` to inspect or control sub-agent runs for the **current session*
   - compact runtime/token stats
 - `--model` and `--thinking` override defaults for that specific run.
 - Use `info`/`log` to inspect details and output after completion.
+- `/subagents spawn` is one-shot mode (`mode: "run"`). For persistent thread-bound sessions, use `sessions_spawn` with `thread: true` and `mode: "session"`.
+- For ACP harness sessions (Codex, Claude Code, Gemini CLI), use `sessions_spawn` with `runtime: "acp"` and see [ACP Agents](/tools/acp-agents).
 
 Primary goals:
 
@@ -60,6 +73,7 @@ Use `sessions_spawn`:
 - Then runs an announce step and posts the announce reply to the requester chat channel
 - Default model: inherits the caller unless you set `agents.defaults.subagents.model` (or per-agent `agents.list[].subagents.model`); an explicit `sessions_spawn.model` still wins.
 - Default thinking: inherits the caller unless you set `agents.defaults.subagents.thinking` (or per-agent `agents.list[].subagents.thinking`); an explicit `sessions_spawn.thinking` still wins.
+- Default run timeout: if `sessions_spawn.runTimeoutSeconds` is omitted, OpenClaw uses `agents.defaults.subagents.runTimeoutSeconds` when set; otherwise it falls back to `0` (no timeout).
 
 Tool params:
 
@@ -68,8 +82,43 @@ Tool params:
 - `agentId?` (optional; spawn under another agent id if allowed)
 - `model?` (optional; overrides the sub-agent model; invalid values are skipped and the sub-agent runs on the default model with a warning in the tool result)
 - `thinking?` (optional; overrides thinking level for the sub-agent run)
-- `runTimeoutSeconds?` (default `0`; when set, the sub-agent run is aborted after N seconds)
+- `runTimeoutSeconds?` (defaults to `agents.defaults.subagents.runTimeoutSeconds` when set, otherwise `0`; when set, the sub-agent run is aborted after N seconds)
+- `thread?` (default `false`; when `true`, requests channel thread binding for this sub-agent session)
+- `mode?` (`run|session`)
+  - default is `run`
+  - if `thread: true` and `mode` omitted, default becomes `session`
+  - `mode: "session"` requires `thread: true`
 - `cleanup?` (`delete|keep`, default `keep`)
+
+## Thread-bound sessions
+
+When thread bindings are enabled for a channel, a sub-agent can stay bound to a thread so follow-up user messages in that thread keep routing to the same sub-agent session.
+
+### Thread supporting channels
+
+- Discord (currently the only supported channel): supports persistent thread-bound subagent sessions (`sessions_spawn` with `thread: true`), manual thread controls (`/focus`, `/unfocus`, `/agents`, `/session idle`, `/session max-age`), and adapter keys `channels.discord.threadBindings.enabled`, `channels.discord.threadBindings.idleHours`, `channels.discord.threadBindings.maxAgeHours`, and `channels.discord.threadBindings.spawnSubagentSessions`.
+
+Quick flow:
+
+1. Spawn with `sessions_spawn` using `thread: true` (and optionally `mode: "session"`).
+2. OpenClaw creates or binds a thread to that session target in the active channel.
+3. Replies and follow-up messages in that thread route to the bound session.
+4. Use `/session idle` to inspect/update inactivity auto-unfocus and `/session max-age` to control the hard cap.
+5. Use `/unfocus` to detach manually.
+
+Manual controls:
+
+- `/focus <target>` binds the current thread (or creates one) to a sub-agent/session target.
+- `/unfocus` removes the binding for the current bound thread.
+- `/agents` lists active runs and binding state (`thread:<id>` or `unbound`).
+- `/session idle` and `/session max-age` only work for focused bound threads.
+
+Config switches:
+
+- Global default: `session.threadBindings.enabled`, `session.threadBindings.idleHours`, `session.threadBindings.maxAgeHours`
+- Channel override and spawn auto-bind keys are adapter-specific. See **Thread supporting channels** above.
+
+See [Configuration Reference](/gateway/configuration-reference) and [Slash commands](/tools/slash-commands) for current adapter details.
 
 Allowlist:
 
@@ -102,6 +151,7 @@ By default, sub-agents cannot spawn their own sub-agents (`maxSpawnDepth: 1`). Y
         maxSpawnDepth: 2, // allow sub-agents to spawn children (default: 1)
         maxChildrenPerAgent: 5, // max active children per agent session (default: 5)
         maxConcurrent: 8, // global concurrency lane cap (default: 8)
+        runTimeoutSeconds: 900, // default timeout for sessions_spawn when omitted (0 = no timeout)
       },
     },
   },
@@ -161,7 +211,7 @@ Sub-agents report back via an announce step:
 - The announce step runs inside the sub-agent session (not the requester session).
 - If the sub-agent replies exactly `ANNOUNCE_SKIP`, nothing is posted.
 - Otherwise the announce reply is posted to the requester chat channel via a follow-up `agent` call (`deliver=true`).
-- Announce replies preserve thread/topic routing when available (Slack threads, Telegram topics, Matrix threads).
+- Announce replies preserve thread/topic routing when available on channel adapters.
 - Announce messages are normalized to a stable template:
   - `Status:` derived from the run outcome (`success`, `error`, `timeout`, or `unknown`).
   - `Result:` the summary content from the announce step (or `(not available)` if missing).

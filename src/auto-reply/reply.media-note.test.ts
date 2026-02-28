@@ -19,7 +19,7 @@ function makeResult(text: string) {
 async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
   return withTempHomeBase(
     async (home) => {
-      vi.mocked(runEmbeddedPiAgent).mockReset();
+      vi.mocked(runEmbeddedPiAgent).mockClear();
       return await fn(home);
     },
     {

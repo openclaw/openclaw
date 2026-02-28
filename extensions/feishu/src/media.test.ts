@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { resolvePreferredOpenClawTmpDir } from "../../../src/infra/tmp-openclaw-dir.js";
 
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
 const resolveFeishuAccountMock = vi.hoisted(() => vi.fn());
@@ -37,6 +37,16 @@ vi.mock("./runtime.js", () => ({
 }));
 
 import { downloadImageFeishu, downloadMessageResourceFeishu, sendMediaFeishu } from "./media.js";
+
+function expectPathIsolatedToTmpRoot(pathValue: string, key: string): void {
+  expect(pathValue).not.toContain(key);
+  expect(pathValue).not.toContain("..");
+
+  const tmpRoot = path.resolve(resolvePreferredOpenClawTmpDir());
+  const resolved = path.resolve(pathValue);
+  const rel = path.relative(tmpRoot, resolved);
+  expect(rel === ".." || rel.startsWith(`..${path.sep}`)).toBe(false);
+}
 
 describe("sendMediaFeishu msg_type routing", () => {
   beforeEach(() => {
@@ -119,7 +129,7 @@ describe("sendMediaFeishu msg_type routing", () => {
     );
   });
 
-  it("uses msg_type=media for opus", async () => {
+  it("uses msg_type=audio for opus", async () => {
     await sendMediaFeishu({
       cfg: {} as any,
       to: "user:ou_target",
@@ -135,7 +145,7 @@ describe("sendMediaFeishu msg_type routing", () => {
 
     expect(messageCreateMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        data: expect.objectContaining({ msg_type: "media" }),
+        data: expect.objectContaining({ msg_type: "audio" }),
       }),
     );
   });
@@ -180,6 +190,64 @@ describe("sendMediaFeishu msg_type routing", () => {
     expect(messageCreateMock).not.toHaveBeenCalled();
   });
 
+  it("passes reply_in_thread when replyInThread is true", async () => {
+    await sendMediaFeishu({
+      cfg: {} as any,
+      to: "user:ou_target",
+      mediaBuffer: Buffer.from("video"),
+      fileName: "reply.mp4",
+      replyToMessageId: "om_parent",
+      replyInThread: true,
+    });
+
+    expect(messageReplyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: { message_id: "om_parent" },
+        data: expect.objectContaining({ msg_type: "media", reply_in_thread: true }),
+      }),
+    );
+  });
+
+  it("omits reply_in_thread when replyInThread is false", async () => {
+    await sendMediaFeishu({
+      cfg: {} as any,
+      to: "user:ou_target",
+      mediaBuffer: Buffer.from("video"),
+      fileName: "reply.mp4",
+      replyToMessageId: "om_parent",
+      replyInThread: false,
+    });
+
+    const callData = messageReplyMock.mock.calls[0][0].data;
+    expect(callData).not.toHaveProperty("reply_in_thread");
+  });
+
+  it("passes mediaLocalRoots as localRoots to loadWebMedia for local paths (#27884)", async () => {
+    loadWebMediaMock.mockResolvedValue({
+      buffer: Buffer.from("local-file"),
+      fileName: "doc.pdf",
+      kind: "document",
+      contentType: "application/pdf",
+    });
+
+    const roots = ["/allowed/workspace", "/tmp/openclaw"];
+    await sendMediaFeishu({
+      cfg: {} as any,
+      to: "user:ou_target",
+      mediaUrl: "/allowed/workspace/file.pdf",
+      mediaLocalRoots: roots,
+    });
+
+    expect(loadWebMediaMock).toHaveBeenCalledWith(
+      "/allowed/workspace/file.pdf",
+      expect.objectContaining({
+        maxBytes: expect.any(Number),
+        optimizeImages: false,
+        localRoots: roots,
+      }),
+    );
+  });
+
   it("fails closed when media URL fetch is blocked", async () => {
     loadWebMediaMock.mockRejectedValueOnce(
       new Error("Blocked: resolves to private/internal IP address"),
@@ -217,13 +285,7 @@ describe("sendMediaFeishu msg_type routing", () => {
 
     expect(result.buffer).toEqual(Buffer.from("image-data"));
     expect(capturedPath).toBeDefined();
-    expect(capturedPath).not.toContain(imageKey);
-    expect(capturedPath).not.toContain("..");
-
-    const tmpRoot = path.resolve(os.tmpdir());
-    const resolved = path.resolve(capturedPath as string);
-    const rel = path.relative(tmpRoot, resolved);
-    expect(rel === ".." || rel.startsWith(`..${path.sep}`)).toBe(false);
+    expectPathIsolatedToTmpRoot(capturedPath as string, imageKey);
   });
 
   it("uses isolated temp paths for message resource downloads", async () => {
@@ -246,13 +308,7 @@ describe("sendMediaFeishu msg_type routing", () => {
 
     expect(result.buffer).toEqual(Buffer.from("resource-data"));
     expect(capturedPath).toBeDefined();
-    expect(capturedPath).not.toContain(fileKey);
-    expect(capturedPath).not.toContain("..");
-
-    const tmpRoot = path.resolve(os.tmpdir());
-    const resolved = path.resolve(capturedPath as string);
-    const rel = path.relative(tmpRoot, resolved);
-    expect(rel === ".." || rel.startsWith(`..${path.sep}`)).toBe(false);
+    expectPathIsolatedToTmpRoot(capturedPath as string, fileKey);
   });
 
   it("rejects invalid image keys before calling feishu api", async () => {

@@ -73,7 +73,7 @@ async function uploadChunked(
 
 /**
  * Upload a file to the user's OneDrive root folder.
- * For files >4MB, this automatically uses a resumable upload session.
+ * For larger files, this uses the simple upload endpoint (up to 4MB).
  */
 export async function uploadToOneDrive(params: {
   buffer: Buffer;
