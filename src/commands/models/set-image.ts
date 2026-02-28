@@ -10,6 +10,10 @@ export async function modelsSetImageCommand(modelRaw: string, runtime: RuntimeEn
 
   logConfigUpdated(runtime);
   runtime.log(
-    `Image model: ${resolveAgentModelPrimaryValue(updated.agents?.defaults?.imageModel) ?? modelRaw}`,
+    `Image model: ${
+      resolveAgentModelPrimaryValue(updated.agents?.defaults?.imageModel) ??
+      resolveAgentModelPrimaryValue(updated.global?.imageModel) ??
+      modelRaw
+    }`,
   );
 }
