@@ -2,37 +2,13 @@ name: easyrunner
 services:
   openclaw-gateway:
     image: localhost/openclaw:latest
-    # Inline command creates minimal config on first run then starts the gateway.
     # Uses `command:` (maps to quadlet Exec=) instead of `entrypoint:` (maps to quadlet Entrypoint=,
     # which is only supported in Podman 5.0+). This allows the upstream Dockerfile to be used unmodified.
-    command:
-      - /bin/sh
-      - -c
-      - |
-        set -e
-        STATE_DIR="${OPENCLAW_STATE_DIR:-/home/node/.openclaw}"
-        CONFIG_FILE="$STATE_DIR/openclaw.json"
-        mkdir -p "$STATE_DIR"
-        if [ ! -f "$CONFIG_FILE" ]; then
-          echo "Creating initial config at $CONFIG_FILE"
-          cat > "$CONFIG_FILE" << 'EOF'
-        {
-          "gateway": {
-            "mode": "local",
-            "trustedProxies": ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"],
-            "controlUi": {
-              "dangerouslyDisableDeviceAuth": true
-            }
-          },
-          "plugins": {
-            "slots": {
-              "memory": "none"
-            }
-          }
-        }
-        EOF
-        fi
-        exec node openclaw.mjs gateway --allow-unconfigured --bind lan --port 18789
+    # NOTE: Use a plain string (not a YAML list) — easyrunner's quadlet converter JSON-encodes YAML lists
+    # and places the raw `["/bin/sh", "-c", ...]` string in Exec=, which systemd/podman treats literally.
+    # --allow-unconfigured: allows startup without gateway.mode=local config (handles fresh volumes).
+    # The gateway creates a default config on first run when --allow-unconfigured is set.
+    command: "node openclaw.mjs gateway --allow-unconfigured --bind lan --port 18789"
     environment:
       - NODE_ENV=production
       - HOME=/home/node
