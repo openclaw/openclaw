@@ -9,6 +9,22 @@ struct WatchMessageCard: View {
 
     @State private var appeared = false
 
+    private var accessibilityDescription: String {
+        var parts: [String] = []
+        if let risk, !risk.isEmpty {
+            parts.append("\(risk) risk")
+        }
+        parts.append(title)
+        parts.append(body)
+        if let details, !details.isEmpty {
+            parts.append(details)
+        }
+        if isExpired {
+            parts.append("Expired")
+        }
+        return parts.joined(separator: ", ")
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: WatchDesignTokens.spacingSM) {
             if let risk, !risk.isEmpty {
@@ -39,6 +55,8 @@ struct WatchMessageCard: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(WatchDesignTokens.spacingMD)
         .background(.fill.quaternary, in: RoundedRectangle(cornerRadius: 12))
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(accessibilityDescription)
         .opacity(appeared ? 1 : 0)
         .scaleEffect(appeared ? 1 : 0.95)
         .onAppear {

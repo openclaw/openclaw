@@ -65,12 +65,14 @@ struct WatchHomeView: View {
             Text(status)
                 .font(WatchDesignTokens.fontCaption)
                 .foregroundStyle(.secondary)
+                .accessibilityAddTraits(.updatesFrequently)
         }
 
         if let updatedAt = store.updatedAt {
             Text("Updated \(updatedAt.formatted(date: .omitted, time: .shortened))")
                 .font(WatchDesignTokens.fontCaption)
                 .foregroundStyle(.tertiary)
+                .accessibilityLabel("Last updated at \(updatedAt.formatted(date: .omitted, time: .shortened))")
         }
     }
 

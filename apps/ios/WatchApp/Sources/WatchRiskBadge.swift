@@ -43,6 +43,7 @@ struct WatchRiskBadge: View {
         .padding(.vertical, WatchDesignTokens.spacingXS)
         .clipShape(Capsule())
         .modifier(RiskGlassModifier(tint: tintColor))
+        .accessibilityElement(children: .combine)
         .accessibilityLabel(label)
     }
 }
