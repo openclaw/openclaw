@@ -2,8 +2,13 @@ package ai.openclaw.android.ui
 
 import android.Manifest
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.hardware.Sensor
+import android.hardware.SensorManager
+import android.net.Uri
 import android.os.Build
+import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
@@ -77,6 +82,7 @@ import androidx.core.content.ContextCompat
 import ai.openclaw.android.LocationMode
 import ai.openclaw.android.MainViewModel
 import ai.openclaw.android.R
+import ai.openclaw.android.node.DeviceNotificationListenerService
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
 
@@ -205,51 +211,133 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
   var attemptedConnect by rememberSaveable { mutableStateOf(false) }
 
   var enableDiscovery by rememberSaveable { mutableStateOf(true) }
+  var enableLocation by rememberSaveable { mutableStateOf(false) }
   var enableNotifications by rememberSaveable { mutableStateOf(true) }
+  var enableNotificationListener by rememberSaveable { mutableStateOf(false) }
+  var enableAppUpdates by rememberSaveable { mutableStateOf(false) }
   var enableMicrophone by rememberSaveable { mutableStateOf(false) }
   var enableCamera by rememberSaveable { mutableStateOf(false) }
+  var enablePhotos by rememberSaveable { mutableStateOf(false) }
+  var enableContacts by rememberSaveable { mutableStateOf(false) }
+  var enableCalendar by rememberSaveable { mutableStateOf(false) }
+  var enableMotion by rememberSaveable { mutableStateOf(false) }
   var enableSms by rememberSaveable { mutableStateOf(false) }
 
   val smsAvailable =
     remember(context) {
       context.packageManager?.hasSystemFeature(PackageManager.FEATURE_TELEPHONY) == true
     }
+  val motionAvailable =
+    remember(context) {
+      hasMotionCapabilities(context)
+    }
+  val motionPermissionRequired = Build.VERSION.SDK_INT >= 29
+  val photosPermission =
+    if (Build.VERSION.SDK_INT >= 33) {
+      Manifest.permission.READ_MEDIA_IMAGES
+    } else {
+      Manifest.permission.READ_EXTERNAL_STORAGE
+    }
 
   val selectedPermissions =
     remember(
       context,
       enableDiscovery,
+      enableLocation,
       enableNotifications,
       enableMicrophone,
       enableCamera,
+      enablePhotos,
+      enableContacts,
+      enableCalendar,
+      enableMotion,
       enableSms,
       smsAvailable,
+      motionAvailable,
+      motionPermissionRequired,
+      photosPermission,
     ) {
       val requested = mutableListOf<String>()
       if (enableDiscovery) {
         requested += if (Build.VERSION.SDK_INT >= 33) Manifest.permission.NEARBY_WIFI_DEVICES else Manifest.permission.ACCESS_FINE_LOCATION
       }
+      if (enableLocation) {
+        requested += Manifest.permission.ACCESS_FINE_LOCATION
+        requested += Manifest.permission.ACCESS_COARSE_LOCATION
+      }
       if (enableNotifications && Build.VERSION.SDK_INT >= 33) requested += Manifest.permission.POST_NOTIFICATIONS
       if (enableMicrophone) requested += Manifest.permission.RECORD_AUDIO
       if (enableCamera) requested += Manifest.permission.CAMERA
+      if (enablePhotos) requested += photosPermission
+      if (enableContacts) {
+        requested += Manifest.permission.READ_CONTACTS
+        requested += Manifest.permission.WRITE_CONTACTS
+      }
+      if (enableCalendar) {
+        requested += Manifest.permission.READ_CALENDAR
+        requested += Manifest.permission.WRITE_CALENDAR
+      }
+      if (enableMotion && motionAvailable && motionPermissionRequired) {
+        requested += Manifest.permission.ACTIVITY_RECOGNITION
+      }
       if (enableSms && smsAvailable) requested += Manifest.permission.SEND_SMS
-      requested.filterNot { isPermissionGranted(context, it) }
+      requested
+        .distinct()
+        .filterNot { isPermissionGranted(context, it) }
     }
 
   val enabledPermissionSummary =
-    remember(enableDiscovery, enableNotifications, enableMicrophone, enableCamera, enableSms, smsAvailable) {
+    remember(
+      enableDiscovery,
+      enableLocation,
+      enableNotifications,
+      enableNotificationListener,
+      enableAppUpdates,
+      enableMicrophone,
+      enableCamera,
+      enablePhotos,
+      enableContacts,
+      enableCalendar,
+      enableMotion,
+      enableSms,
+      smsAvailable,
+      motionAvailable,
+    ) {
       val enabled = mutableListOf<String>()
       if (enableDiscovery) enabled += "Gateway discovery"
-      if (Build.VERSION.SDK_INT >= 33 && enableNotifications) enabled += "Notifications"
+      if (enableLocation) enabled += "Location"
+      if (enableNotifications) enabled += "Notifications"
+      if (enableNotificationListener) enabled += "Notification listener"
+      if (enableAppUpdates) enabled += "App updates"
       if (enableMicrophone) enabled += "Microphone"
       if (enableCamera) enabled += "Camera"
+      if (enablePhotos) enabled += "Photos"
+      if (enableContacts) enabled += "Contacts"
+      if (enableCalendar) enabled += "Calendar"
+      if (enableMotion && motionAvailable) enabled += "Motion"
       if (smsAvailable && enableSms) enabled += "SMS"
       if (enabled.isEmpty()) "None selected" else enabled.joinToString(", ")
     }
 
+  val proceedFromPermissions: () -> Unit = proceed@{
+    var openedSpecialSetup = false
+    if (enableNotificationListener && !isNotificationListenerEnabled(context)) {
+      openNotificationListenerSettings(context)
+      openedSpecialSetup = true
+    }
+    if (enableAppUpdates && !canInstallUnknownApps(context)) {
+      openUnknownAppSourcesSettings(context)
+      openedSpecialSetup = true
+    }
+    if (openedSpecialSetup) {
+      return@proceed
+    }
+    step = OnboardingStep.FinalCheck
+  }
+
   val permissionLauncher =
     rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
-      step = OnboardingStep.FinalCheck
+      proceedFromPermissions()
     }
 
   val qrScanLauncher =
@@ -382,16 +470,32 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
           OnboardingStep.Permissions ->
             PermissionsStep(
               enableDiscovery = enableDiscovery,
+              enableLocation = enableLocation,
               enableNotifications = enableNotifications,
+              enableNotificationListener = enableNotificationListener,
+              enableAppUpdates = enableAppUpdates,
               enableMicrophone = enableMicrophone,
               enableCamera = enableCamera,
+              enablePhotos = enablePhotos,
+              enableContacts = enableContacts,
+              enableCalendar = enableCalendar,
+              enableMotion = enableMotion,
+              motionAvailable = motionAvailable,
+              motionPermissionRequired = motionPermissionRequired,
               enableSms = enableSms,
               smsAvailable = smsAvailable,
               context = context,
               onDiscoveryChange = { enableDiscovery = it },
+              onLocationChange = { enableLocation = it },
               onNotificationsChange = { enableNotifications = it },
+              onNotificationListenerChange = { enableNotificationListener = it },
+              onAppUpdatesChange = { enableAppUpdates = it },
               onMicrophoneChange = { enableMicrophone = it },
               onCameraChange = { enableCamera = it },
+              onPhotosChange = { enablePhotos = it },
+              onContactsChange = { enableContacts = it },
+              onCalendarChange = { enableCalendar = it },
+              onMotionChange = { enableMotion = it },
               onSmsChange = { enableSms = it },
             )
           OnboardingStep.FinalCheck ->
@@ -504,9 +608,9 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
             Button(
               onClick = {
                 viewModel.setCameraEnabled(enableCamera)
-                viewModel.setLocationMode(if (enableDiscovery) LocationMode.WhileUsing else LocationMode.Off)
+                viewModel.setLocationMode(if (enableLocation) LocationMode.WhileUsing else LocationMode.Off)
                 if (selectedPermissions.isEmpty()) {
-                  step = OnboardingStep.FinalCheck
+                  proceedFromPermissions()
                 } else {
                   permissionLauncher.launch(selectedPermissions.toTypedArray())
                 }
@@ -1014,19 +1118,61 @@ private fun InlineDivider() {
 @Composable
 private fun PermissionsStep(
   enableDiscovery: Boolean,
+  enableLocation: Boolean,
   enableNotifications: Boolean,
+  enableNotificationListener: Boolean,
+  enableAppUpdates: Boolean,
   enableMicrophone: Boolean,
   enableCamera: Boolean,
+  enablePhotos: Boolean,
+  enableContacts: Boolean,
+  enableCalendar: Boolean,
+  enableMotion: Boolean,
+  motionAvailable: Boolean,
+  motionPermissionRequired: Boolean,
   enableSms: Boolean,
   smsAvailable: Boolean,
   context: Context,
   onDiscoveryChange: (Boolean) -> Unit,
+  onLocationChange: (Boolean) -> Unit,
   onNotificationsChange: (Boolean) -> Unit,
+  onNotificationListenerChange: (Boolean) -> Unit,
+  onAppUpdatesChange: (Boolean) -> Unit,
   onMicrophoneChange: (Boolean) -> Unit,
   onCameraChange: (Boolean) -> Unit,
+  onPhotosChange: (Boolean) -> Unit,
+  onContactsChange: (Boolean) -> Unit,
+  onCalendarChange: (Boolean) -> Unit,
+  onMotionChange: (Boolean) -> Unit,
   onSmsChange: (Boolean) -> Unit,
 ) {
   val discoveryPermission = if (Build.VERSION.SDK_INT >= 33) Manifest.permission.NEARBY_WIFI_DEVICES else Manifest.permission.ACCESS_FINE_LOCATION
+  val locationGranted =
+    isPermissionGranted(context, Manifest.permission.ACCESS_FINE_LOCATION) ||
+      isPermissionGranted(context, Manifest.permission.ACCESS_COARSE_LOCATION)
+  val photosPermission =
+    if (Build.VERSION.SDK_INT >= 33) {
+      Manifest.permission.READ_MEDIA_IMAGES
+    } else {
+      Manifest.permission.READ_EXTERNAL_STORAGE
+    }
+  val contactsGranted =
+    isPermissionGranted(context, Manifest.permission.READ_CONTACTS) &&
+      isPermissionGranted(context, Manifest.permission.WRITE_CONTACTS)
+  val calendarGranted =
+    isPermissionGranted(context, Manifest.permission.READ_CALENDAR) &&
+      isPermissionGranted(context, Manifest.permission.WRITE_CALENDAR)
+  val motionGranted =
+    if (!motionAvailable) {
+      false
+    } else if (!motionPermissionRequired) {
+      true
+    } else {
+      isPermissionGranted(context, Manifest.permission.ACTIVITY_RECOGNITION)
+    }
+  val notificationListenerGranted = isNotificationListenerEnabled(context)
+  val appUpdatesGranted = canInstallUnknownApps(context)
+
   StepShell(title = "Permissions") {
     Text(
       "Enable only what you need now. You can change everything later in Settings.",
@@ -1041,16 +1187,40 @@ private fun PermissionsStep(
       onCheckedChange = onDiscoveryChange,
     )
     InlineDivider()
+    PermissionToggleRow(
+      title = "Location",
+      subtitle = "location.get (while app is open unless set to Always later)",
+      checked = enableLocation,
+      granted = locationGranted,
+      onCheckedChange = onLocationChange,
+    )
+    InlineDivider()
     if (Build.VERSION.SDK_INT >= 33) {
       PermissionToggleRow(
         title = "Notifications",
-        subtitle = "Foreground service + alerts",
+        subtitle = "system.notify and foreground alerts",
         checked = enableNotifications,
         granted = isPermissionGranted(context, Manifest.permission.POST_NOTIFICATIONS),
         onCheckedChange = onNotificationsChange,
       )
       InlineDivider()
     }
+    PermissionToggleRow(
+      title = "Notification listener",
+      subtitle = "notifications.list and notifications.actions (opens Android Settings)",
+      checked = enableNotificationListener,
+      granted = notificationListenerGranted,
+      onCheckedChange = onNotificationListenerChange,
+    )
+    InlineDivider()
+    PermissionToggleRow(
+      title = "App updates",
+      subtitle = "app.update install confirmation (opens Android Settings)",
+      checked = enableAppUpdates,
+      granted = appUpdatesGranted,
+      onCheckedChange = onAppUpdatesChange,
+    )
+    InlineDivider()
     PermissionToggleRow(
       title = "Microphone",
       subtitle = "Voice tab transcription",
@@ -1065,6 +1235,40 @@ private fun PermissionsStep(
       checked = enableCamera,
       granted = isPermissionGranted(context, Manifest.permission.CAMERA),
       onCheckedChange = onCameraChange,
+    )
+    InlineDivider()
+    PermissionToggleRow(
+      title = "Photos",
+      subtitle = "photos.latest",
+      checked = enablePhotos,
+      granted = isPermissionGranted(context, photosPermission),
+      onCheckedChange = onPhotosChange,
+    )
+    InlineDivider()
+    PermissionToggleRow(
+      title = "Contacts",
+      subtitle = "contacts.search and contacts.add",
+      checked = enableContacts,
+      granted = contactsGranted,
+      onCheckedChange = onContactsChange,
+    )
+    InlineDivider()
+    PermissionToggleRow(
+      title = "Calendar",
+      subtitle = "calendar.events and calendar.add",
+      checked = enableCalendar,
+      granted = calendarGranted,
+      onCheckedChange = onCalendarChange,
+    )
+    InlineDivider()
+    PermissionToggleRow(
+      title = "Motion",
+      subtitle = "motion.activity and motion.pedometer",
+      checked = enableMotion,
+      granted = motionGranted,
+      onCheckedChange = onMotionChange,
+      enabled = motionAvailable,
+      statusOverride = if (!motionAvailable) "Unavailable on this device" else null,
     )
     if (smsAvailable) {
       InlineDivider()
@@ -1086,6 +1290,8 @@ private fun PermissionToggleRow(
   subtitle: String,
   checked: Boolean,
   granted: Boolean,
+  enabled: Boolean = true,
+  statusOverride: String? = null,
   onCheckedChange: (Boolean) -> Unit,
 ) {
   Row(
@@ -1097,7 +1303,7 @@ private fun PermissionToggleRow(
       Text(title, style = onboardingHeadlineStyle, color = onboardingText)
       Text(subtitle, style = onboardingCalloutStyle.copy(lineHeight = 18.sp), color = onboardingTextSecondary)
       Text(
-        if (granted) "Granted" else "Not granted",
+        statusOverride ?: if (granted) "Granted" else "Not granted",
         style = onboardingCaption1Style,
         color = if (granted) onboardingSuccess else onboardingTextSecondary,
       )
@@ -1105,6 +1311,7 @@ private fun PermissionToggleRow(
     Switch(
       checked = checked,
       onCheckedChange = onCheckedChange,
+      enabled = enabled,
       colors =
         SwitchDefaults.colors(
           checkedTrackColor = onboardingAccent,
@@ -1206,4 +1413,51 @@ private fun Bullet(text: String) {
 
 private fun isPermissionGranted(context: Context, permission: String): Boolean {
   return ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
+}
+
+private fun isNotificationListenerEnabled(context: Context): Boolean {
+  return DeviceNotificationListenerService.isAccessEnabled(context)
+}
+
+private fun canInstallUnknownApps(context: Context): Boolean {
+  if (Build.VERSION.SDK_INT < 26) return true
+  return context.packageManager.canRequestPackageInstalls()
+}
+
+private fun openNotificationListenerSettings(context: Context) {
+  val intent = Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+  runCatching {
+    context.startActivity(intent)
+  }.getOrElse {
+    openAppSettings(context)
+  }
+}
+
+private fun openUnknownAppSourcesSettings(context: Context) {
+  if (Build.VERSION.SDK_INT < 26) return
+  val intent =
+    Intent(
+      Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+      Uri.parse("package:${context.packageName}"),
+    ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+  runCatching {
+    context.startActivity(intent)
+  }.getOrElse {
+    openAppSettings(context)
+  }
+}
+
+private fun openAppSettings(context: Context) {
+  val intent =
+    Intent(
+      Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+      Uri.fromParts("package", context.packageName, null),
+    ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+  context.startActivity(intent)
+}
+
+private fun hasMotionCapabilities(context: Context): Boolean {
+  val sensorManager = context.getSystemService(SensorManager::class.java) ?: return false
+  return sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER) != null ||
+    sensorManager.getDefaultSensor(Sensor.TYPE_STEP_COUNTER) != null
 }

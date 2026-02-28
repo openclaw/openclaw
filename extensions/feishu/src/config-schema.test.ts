@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { FeishuConfigSchema } from "./config-schema.js";
+import { FeishuConfigSchema, FeishuGroupSchema } from "./config-schema.js";
 
 describe("FeishuConfigSchema webhook validation", () => {
   it("applies top-level defaults", () => {
@@ -84,5 +84,57 @@ describe("FeishuConfigSchema webhook validation", () => {
     });
 
     expect(result.success).toBe(true);
+  });
+});
+
+describe("FeishuConfigSchema replyInThread", () => {
+  it("accepts replyInThread at top level", () => {
+    const result = FeishuConfigSchema.parse({ replyInThread: "enabled" });
+    expect(result.replyInThread).toBe("enabled");
+  });
+
+  it("defaults replyInThread to undefined when not set", () => {
+    const result = FeishuConfigSchema.parse({});
+    expect(result.replyInThread).toBeUndefined();
+  });
+
+  it("rejects invalid replyInThread value", () => {
+    const result = FeishuConfigSchema.safeParse({ replyInThread: "always" });
+    expect(result.success).toBe(false);
+  });
+
+  it("accepts replyInThread in group config", () => {
+    const result = FeishuGroupSchema.parse({ replyInThread: "enabled" });
+    expect(result.replyInThread).toBe("enabled");
+  });
+
+  it("accepts replyInThread in account config", () => {
+    const result = FeishuConfigSchema.parse({
+      accounts: {
+        main: { replyInThread: "enabled" },
+      },
+    });
+    expect(result.accounts?.main?.replyInThread).toBe("enabled");
+  });
+});
+
+describe("FeishuConfigSchema optimization flags", () => {
+  it("defaults top-level typingIndicator and resolveSenderNames to true", () => {
+    const result = FeishuConfigSchema.parse({});
+    expect(result.typingIndicator).toBe(true);
+    expect(result.resolveSenderNames).toBe(true);
+  });
+
+  it("accepts account-level optimization flags", () => {
+    const result = FeishuConfigSchema.parse({
+      accounts: {
+        main: {
+          typingIndicator: false,
+          resolveSenderNames: false,
+        },
+      },
+    });
+    expect(result.accounts?.main?.typingIndicator).toBe(false);
+    expect(result.accounts?.main?.resolveSenderNames).toBe(false);
   });
 });
