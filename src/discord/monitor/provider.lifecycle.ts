@@ -57,13 +57,6 @@ export async function runDiscordGatewayLifecycle(params: {
   const onGatewayDebug = (msg: unknown) => {
     const message = String(msg);
 
-    // Reset stall counter when gateway successfully receives HELLO
-    // (indicated by a successful resume or identify completing).
-    if (message.includes("Received HELLO") || message.includes("Session resumed")) {
-      consecutiveStalls = 0;
-      return;
-    }
-
     if (!message.includes("WebSocket connection opened")) {
       return;
     }
@@ -71,7 +64,10 @@ export async function runDiscordGatewayLifecycle(params: {
       clearTimeout(helloTimeoutId);
     }
     helloTimeoutId = setTimeout(() => {
-      if (!gateway?.isConnected) {
+      if (gateway?.isConnected) {
+        // HELLO was received and the gateway is healthy — reset the counter.
+        consecutiveStalls = 0;
+      } else {
         consecutiveStalls++;
         if (consecutiveStalls >= MAX_CONSECUTIVE_STALLS) {
           params.runtime.log?.(
@@ -79,8 +75,10 @@ export async function runDiscordGatewayLifecycle(params: {
               `connection stalled: ${consecutiveStalls} consecutive stalls without HELLO — clearing session to force fresh IDENTIFY`,
             ),
           );
-          // Invalidate session state so the next connect() sends a fresh
-          // IDENTIFY instead of trying to resume a dead session.
+          // Invalidate the protected session state so the next connect()
+          // sends a fresh IDENTIFY instead of resuming a dead session.
+          // GatewayPlugin.state is protected with no public invalidation
+          // method — this cast is pinned to @buape/carbon@1.x internals.
           const state = (
             gateway as unknown as {
               state?: { sessionId?: string | null; resumeGatewayUrl?: string | null };

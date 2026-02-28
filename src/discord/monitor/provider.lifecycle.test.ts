@@ -323,58 +323,34 @@ describe("discord gateway circuit breaker", () => {
     await lifecyclePromise;
   });
 
-  it("resets stall counter when HELLO is received", async () => {
+  it("resets stall counter when gateway connects before timeout", async () => {
     const { runDiscordGatewayLifecycle } = await import("./provider.lifecycle.js");
-    const { emitter, gatewayState, abort, lifecycleParams } = createCircuitBreakerHarness();
+    const harness = createCircuitBreakerHarness();
+    const { emitter, gatewayState, abort, lifecycleParams } = harness;
 
     const lifecyclePromise = runDiscordGatewayLifecycle(lifecycleParams);
 
-    // Simulate 3 stalls
+    // Simulate 3 stalls (gateway stays disconnected)
     for (let i = 0; i < 3; i++) {
       emitter.emit("debug", "WebSocket connection opened");
       await vi.advanceTimersByTimeAsync(30001);
     }
 
-    // Then a successful HELLO
-    emitter.emit("debug", "Received HELLO from gateway");
+    // Next WS open — this time HELLO arrives (gateway becomes connected)
+    emitter.emit("debug", "WebSocket connection opened");
+    harness.gateway.isConnected = true;
+    await vi.advanceTimersByTimeAsync(30001);
 
-    // Then 3 more stalls — should NOT trigger circuit breaker (counter was reset)
+    // Counter should be reset. 3 more stalls should NOT trigger the breaker.
+    harness.gateway.isConnected = false;
     for (let i = 0; i < 3; i++) {
       emitter.emit("debug", "WebSocket connection opened");
       await vi.advanceTimersByTimeAsync(30001);
     }
 
-    // Session state should NOT be cleared (only 3 stalls since reset, not 5)
+    // Only 3 stalls since reset — session state should still be intact
     expect(gatewayState.sessionId).toBe("test-session");
     expect(gatewayState.resumeGatewayUrl).toBe("wss://test.discord.gg");
-
-    abort.abort();
-    await lifecyclePromise;
-  });
-
-  it("resets stall counter on session resume", async () => {
-    const { runDiscordGatewayLifecycle } = await import("./provider.lifecycle.js");
-    const { emitter, gatewayState, abort, lifecycleParams } = createCircuitBreakerHarness();
-
-    const lifecyclePromise = runDiscordGatewayLifecycle(lifecycleParams);
-
-    // 4 stalls
-    for (let i = 0; i < 4; i++) {
-      emitter.emit("debug", "WebSocket connection opened");
-      await vi.advanceTimersByTimeAsync(30001);
-    }
-
-    // Session resumed
-    emitter.emit("debug", "Session resumed successfully");
-
-    // 4 more stalls — still under threshold
-    for (let i = 0; i < 4; i++) {
-      emitter.emit("debug", "WebSocket connection opened");
-      await vi.advanceTimersByTimeAsync(30001);
-    }
-
-    // Session state should still be intact
-    expect(gatewayState.sessionId).toBe("test-session");
 
     abort.abort();
     await lifecyclePromise;
@@ -408,7 +384,7 @@ describe("discord gateway circuit breaker", () => {
 
     const lifecyclePromise = runDiscordGatewayLifecycle(lifecycleParams);
 
-    // Mark gateway as connected — HELLO timeout should be a no-op
+    // Mark gateway as connected — timeout should reset the counter, not stall
     harness.gateway.isConnected = true;
 
     for (let i = 0; i < 10; i++) {
@@ -418,6 +394,16 @@ describe("discord gateway circuit breaker", () => {
 
     // Gateway is connected, so disconnect should never be called
     expect(disconnectMock).toHaveBeenCalledTimes(0);
+    expect(gatewayState.sessionId).toBe("test-session");
+
+    // Even after going disconnected again, counter was reset by successful
+    // connections — 4 stalls should not trigger the breaker
+    harness.gateway.isConnected = false;
+    for (let i = 0; i < 4; i++) {
+      emitter.emit("debug", "WebSocket connection opened");
+      await vi.advanceTimersByTimeAsync(30001);
+    }
+
     expect(gatewayState.sessionId).toBe("test-session");
 
     abort.abort();
