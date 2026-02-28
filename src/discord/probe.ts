@@ -5,6 +5,19 @@ import { normalizeDiscordToken } from "./token.js";
 
 const DISCORD_API_BASE = "https://discord.com/api/v10";
 
+function normalizeDiscordId(id: unknown): string | undefined {
+  if (id === undefined || id === null) {
+    return undefined;
+  }
+  if (typeof id === "string") {
+    return id;
+  }
+  if (typeof id === "number") {
+    return String(id);
+  }
+  return undefined;
+}
+
 export type DiscordProbe = BaseProbeResult & {
   status?: number | null;
   elapsedMs: number;
@@ -52,7 +65,11 @@ async function fetchDiscordApplicationMe(
     if (!res.ok) {
       return undefined;
     }
-    return (await res.json()) as { id?: string; flags?: number };
+    const json = (await res.json()) as { id?: string | number; flags?: number };
+    return {
+      id: normalizeDiscordId(json.id),
+      flags: json.flags,
+    };
   } catch {
     return undefined;
   }
