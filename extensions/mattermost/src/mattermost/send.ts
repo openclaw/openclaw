@@ -5,7 +5,9 @@ import {
   createMattermostClient,
   createMattermostDirectChannel,
   createMattermostPost,
+  fetchMattermostChannelByName,
   fetchMattermostMe,
+  fetchMattermostMyTeams,
   fetchMattermostUserByUsername,
   normalizeMattermostBaseUrl,
   uploadMattermostFile,
@@ -116,13 +118,67 @@ async function resolveUserIdByUsername(params: {
   return user.id;
 }
 
+/**
+ * Mattermost channel IDs are 26-character alphanumeric strings.
+ * If the value doesn't match this pattern, treat it as a channel name
+ * that needs to be resolved via the API.
+ */
+function isMattermostId(value: string): boolean {
+  return /^[a-z0-9]{26}$/i.test(value);
+}
+
+const channelNameCache = new Map<string, string>();
+
+async function resolveChannelNameToId(params: {
+  channelName: string;
+  baseUrl: string;
+  token: string;
+}): Promise<string> {
+  const key = `${cacheKey(params.baseUrl, params.token)}::channel::${params.channelName.toLowerCase()}`;
+  const cached = channelNameCache.get(key);
+  if (cached) {
+    return cached;
+  }
+  const client = createMattermostClient({ baseUrl: params.baseUrl, botToken: params.token });
+  const teams = await fetchMattermostMyTeams(client);
+  if (teams.length === 0) {
+    throw new Error(
+      `Cannot resolve channel name "${params.channelName}": bot is not a member of any team`,
+    );
+  }
+  // Strip leading '#' or '~' if present (common Mattermost channel prefixes)
+  const name = params.channelName.replace(/^[#~]/, "");
+  for (const team of teams) {
+    try {
+      const channel = await fetchMattermostChannelByName(client, team.id, name);
+      if (channel?.id) {
+        channelNameCache.set(key, channel.id);
+        return channel.id;
+      }
+    } catch {
+      // Channel not found on this team, try next
+    }
+  }
+  throw new Error(
+    `Cannot resolve channel name "${params.channelName}": channel not found in any of the bot's teams`,
+  );
+}
+
 async function resolveTargetChannelId(params: {
   target: MattermostTarget;
   baseUrl: string;
   token: string;
 }): Promise<string> {
   if (params.target.kind === "channel") {
-    return params.target.id;
+    if (isMattermostId(params.target.id)) {
+      return params.target.id;
+    }
+    // Channel name provided instead of ID — resolve via API
+    return resolveChannelNameToId({
+      channelName: params.target.id,
+      baseUrl: params.baseUrl,
+      token: params.token,
+    });
   }
   const userId = params.target.id
     ? params.target.id

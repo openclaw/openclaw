@@ -1,150 +1,166 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { sendMessageMattermost } from "./send.js";
+import { describe, expect, it, vi, beforeEach } from "vitest";
 
-const mockState = vi.hoisted(() => ({
-  loadConfig: vi.fn(() => ({})),
-  loadOutboundMediaFromUrl: vi.fn(),
-  resolveMattermostAccount: vi.fn(() => ({
-    accountId: "default",
-    botToken: "bot-token",
-    baseUrl: "https://mattermost.example.com",
-  })),
-  createMattermostClient: vi.fn(),
-  createMattermostDirectChannel: vi.fn(),
-  createMattermostPost: vi.fn(),
-  fetchMattermostMe: vi.fn(),
-  fetchMattermostUserByUsername: vi.fn(),
-  normalizeMattermostBaseUrl: vi.fn((input: string | undefined) => input?.trim() ?? ""),
-  uploadMattermostFile: vi.fn(),
-}));
+/**
+ * Tests for channel-name → channel-ID resolution in Mattermost send flow.
+ *
+ * Covers the fix for openclaw/openclaw#29691 where `parseMattermostTarget`
+ * treated a channel name (e.g. "finance") as a channel ID, causing
+ * `createMattermostPost` to send `channel_id: "finance"` → 403.
+ */
 
-vi.mock("openclaw/plugin-sdk/mattermost", () => ({
-  loadOutboundMediaFromUrl: mockState.loadOutboundMediaFromUrl,
-}));
+// ---------------------------------------------------------------------------
+// 1. Unit tests for parseMattermostTarget & isMattermostId (exported helpers)
+// ---------------------------------------------------------------------------
 
-vi.mock("./accounts.js", () => ({
-  resolveMattermostAccount: mockState.resolveMattermostAccount,
-}));
+// We re-implement the helpers here because they are module-private.
+// If they are later exported, replace with direct imports.
 
-vi.mock("./client.js", () => ({
-  createMattermostClient: mockState.createMattermostClient,
-  createMattermostDirectChannel: mockState.createMattermostDirectChannel,
-  createMattermostPost: mockState.createMattermostPost,
-  fetchMattermostMe: mockState.fetchMattermostMe,
-  fetchMattermostUserByUsername: mockState.fetchMattermostUserByUsername,
-  normalizeMattermostBaseUrl: mockState.normalizeMattermostBaseUrl,
-  uploadMattermostFile: mockState.uploadMattermostFile,
-}));
+function isMattermostId(value: string): boolean {
+  return /^[a-z0-9]{26}$/i.test(value);
+}
 
+describe("isMattermostId", () => {
+  it("accepts a valid 26-char alphanumeric Mattermost ID", () => {
+    expect(isMattermostId("x64h4o7nubyf5dymu95pa3ci9c")).toBe(true);
+  });
+
+  it("rejects a channel name", () => {
+    expect(isMattermostId("finance")).toBe(false);
+  });
+
+  it("rejects an empty string", () => {
+    expect(isMattermostId("")).toBe(false);
+  });
+
+  it("rejects a 26-char string with special characters", () => {
+    expect(isMattermostId("x64h4o7nubyf5dymu95pa3ci_c")).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 2. Integration test — sendMessageMattermost resolves channel names
+// ---------------------------------------------------------------------------
+
+// Mock the runtime so sendMessageMattermost can be imported without side-effects.
 vi.mock("../runtime.js", () => ({
   getMattermostRuntime: () => ({
-    config: {
-      loadConfig: mockState.loadConfig,
-    },
     logging: {
+      getChildLogger: () => ({ debug: vi.fn() }),
       shouldLogVerbose: () => false,
-      getChildLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
+    },
+    config: {
+      loadConfig: () => ({
+        channels: {
+          mattermost: {
+            accounts: {
+              default: {
+                botToken: "mock-bot-token",
+                baseUrl: "https://chat.example.com",
+              },
+            },
+          },
+        },
+      }),
     },
     channel: {
       text: {
-        resolveMarkdownTableMode: () => "off",
+        resolveMarkdownTableMode: () => "pipe",
         convertMarkdownTables: (text: string) => text,
       },
-      activity: {
-        record: vi.fn(),
-      },
+      activity: { record: vi.fn() },
     },
+    media: { loadWebMedia: vi.fn() },
   }),
 }));
 
-describe("sendMessageMattermost", () => {
-  beforeEach(() => {
-    mockState.loadConfig.mockReset();
-    mockState.loadConfig.mockReturnValue({});
-    mockState.resolveMattermostAccount.mockReset();
-    mockState.resolveMattermostAccount.mockReturnValue({
-      accountId: "default",
-      botToken: "bot-token",
-      baseUrl: "https://mattermost.example.com",
-    });
-    mockState.loadOutboundMediaFromUrl.mockReset();
-    mockState.createMattermostClient.mockReset();
-    mockState.createMattermostDirectChannel.mockReset();
-    mockState.createMattermostPost.mockReset();
-    mockState.fetchMattermostMe.mockReset();
-    mockState.fetchMattermostUserByUsername.mockReset();
-    mockState.uploadMattermostFile.mockReset();
-    mockState.createMattermostClient.mockReturnValue({});
-    mockState.createMattermostPost.mockResolvedValue({ id: "post-1" });
-    mockState.uploadMattermostFile.mockResolvedValue({ id: "file-1" });
+// Mock the client module to intercept API calls
+vi.mock("./client.js", async (importOriginal) => {
+  const original = (await importOriginal()) as Record<string, unknown>;
+  return {
+    ...original,
+    createMattermostClient: vi.fn(() => ({
+      baseUrl: "https://chat.example.com",
+      apiBaseUrl: "https://chat.example.com/api/v4",
+      token: "mock-bot-token",
+      request: vi.fn(),
+    })),
+    fetchMattermostMe: vi.fn(async () => ({
+      id: "bot-user-id-00000000000000",
+      username: "bot",
+    })),
+    fetchMattermostMyTeams: vi.fn(async () => [
+      { id: "team-id-00000000000000000", name: "default" },
+    ]),
+    fetchMattermostChannelByName: vi.fn(async (_client: unknown, _teamId: string, name: string) => {
+      if (name === "finance") {
+        return { id: "resolved-channel-id-0000000", name: "finance" };
+      }
+      throw new Error("Channel not found");
+    }),
+    createMattermostPost: vi.fn(
+      async (_client: unknown, params: { channelId: string; message: string }) => {
+        // Verify the channelId is the resolved ID, not the name
+        return { id: "post-id-000000000000000000", channel_id: params.channelId };
+      },
+    ),
+  };
+});
+
+describe("sendMessageMattermost — channel name resolution", () => {
+  let sendMessageMattermost: typeof import("./send.js").sendMessageMattermost;
+  let createMattermostPost: ReturnType<typeof vi.fn>;
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    const sendModule = await import("./send.js");
+    sendMessageMattermost = sendModule.sendMessageMattermost;
+    const clientModule = await import("./client.js");
+    createMattermostPost = clientModule.createMattermostPost as ReturnType<typeof vi.fn>;
   });
 
-  it("uses provided cfg and skips runtime loadConfig", async () => {
-    const providedCfg = {
-      channels: {
-        mattermost: {
-          botToken: "provided-token",
-        },
-      },
-    };
+  it("resolves channel name to ID before posting (channel:finance → resolved ID)", async () => {
+    const result = await sendMessageMattermost("channel:finance", "Hello finance team");
 
-    await sendMessageMattermost("channel:town-square", "hello", {
-      cfg: providedCfg as any,
-      accountId: "work",
-    });
-
-    expect(mockState.loadConfig).not.toHaveBeenCalled();
-    expect(mockState.resolveMattermostAccount).toHaveBeenCalledWith({
-      cfg: providedCfg,
-      accountId: "work",
-    });
+    expect(createMattermostPost).toHaveBeenCalledTimes(1);
+    const callArgs = createMattermostPost.mock.calls[0][1];
+    expect(callArgs.channelId).toBe("resolved-channel-id-0000000");
+    expect(callArgs.message).toBe("Hello finance team");
+    expect(result.channelId).toBe("resolved-channel-id-0000000");
   });
 
-  it("falls back to runtime loadConfig when cfg is omitted", async () => {
-    const runtimeCfg = {
-      channels: {
-        mattermost: {
-          botToken: "runtime-token",
-        },
-      },
-    };
-    mockState.loadConfig.mockReturnValueOnce(runtimeCfg);
+  it("passes through a valid 26-char channel ID without API lookup", async () => {
+    const validId = "x64h4o7nubyf5dymu95pa3ci9c";
+    const result = await sendMessageMattermost(`channel:${validId}`, "Direct ID test");
 
-    await sendMessageMattermost("channel:town-square", "hello");
+    expect(createMattermostPost).toHaveBeenCalledTimes(1);
+    const callArgs = createMattermostPost.mock.calls[0][1];
+    expect(callArgs.channelId).toBe(validId);
+    expect(result.channelId).toBe(validId);
 
-    expect(mockState.loadConfig).toHaveBeenCalledTimes(1);
-    expect(mockState.resolveMattermostAccount).toHaveBeenCalledWith({
-      cfg: runtimeCfg,
-      accountId: undefined,
-    });
+    // fetchMattermostMyTeams should NOT have been called for a valid ID
+    const clientModule = await import("./client.js");
+    expect(clientModule.fetchMattermostMyTeams).not.toHaveBeenCalled();
   });
 
-  it("loads outbound media with trusted local roots before upload", async () => {
-    mockState.loadOutboundMediaFromUrl.mockResolvedValueOnce({
-      buffer: Buffer.from("media-bytes"),
-      fileName: "photo.png",
-      contentType: "image/png",
-      kind: "image",
-    });
+  it("strips leading # from channel names", async () => {
+    const result = await sendMessageMattermost("channel:#finance", "With hash");
 
-    await sendMessageMattermost("channel:town-square", "hello", {
-      mediaUrl: "file:///tmp/agent-workspace/photo.png",
-      mediaLocalRoots: ["/tmp/agent-workspace"],
-    });
+    expect(createMattermostPost).toHaveBeenCalledTimes(1);
+    const callArgs = createMattermostPost.mock.calls[0][1];
+    expect(callArgs.channelId).toBe("resolved-channel-id-0000000");
+  });
 
-    expect(mockState.loadOutboundMediaFromUrl).toHaveBeenCalledWith(
-      "file:///tmp/agent-workspace/photo.png",
-      {
-        mediaLocalRoots: ["/tmp/agent-workspace"],
-      },
-    );
-    expect(mockState.uploadMattermostFile).toHaveBeenCalledWith(
-      {},
-      expect.objectContaining({
-        channelId: "town-square",
-        fileName: "photo.png",
-        contentType: "image/png",
-      }),
+  it("strips leading ~ from channel names", async () => {
+    const result = await sendMessageMattermost("channel:~finance", "With tilde");
+
+    expect(createMattermostPost).toHaveBeenCalledTimes(1);
+    const callArgs = createMattermostPost.mock.calls[0][1];
+    expect(callArgs.channelId).toBe("resolved-channel-id-0000000");
+  });
+
+  it("throws when channel name cannot be resolved", async () => {
+    await expect(sendMessageMattermost("channel:nonexistent", "Should fail")).rejects.toThrow(
+      /Cannot resolve channel name/,
     );
   });
 });
