@@ -28,7 +28,24 @@ MAX_AGE_MIN=15 ./contrib/heartbeat-runtime-safety/freshness.sh
 ./contrib/heartbeat-runtime-safety/test.sh
 ```
 
+## Acceptance Criteria (Phase 1)
+
+A phase-1 extraction is considered successful when:
+
+1. Scripts execute without workspace-specific path assumptions.
+2. `preflight.sh`, `guard.sh`, and `freshness.sh` emit deterministic markdown artifacts.
+3. Freshness threshold is configurable via `MAX_AGE_MIN`.
+4. `test.sh` validates basic invocation flow for all phase-1 scripts.
+
+## Integration Plan (Contrib → Core)
+
+1. Maintainers confirm final target paths and naming conventions.
+2. Port scripts from `contrib/heartbeat-runtime-safety/` into approved core automation paths.
+3. Wire into existing heartbeat cadence entry points.
+4. Add CI checks for runtime-safety script smoke tests.
+5. Remove contrib staging copy once core integration is complete.
+
 ## Notes
 
 - This is intentionally scoped to a minimal phase-1 contribution.
-- Follow-up work can relocate these scripts into final core paths once maintainers confirm preferred structure.
+- Follow-up work relocates these scripts into final core paths after maintainer approval.
