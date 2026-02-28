@@ -72,4 +72,15 @@ metadata:
     const content = "# No frontmatter";
     expect(parseFrontmatterBlock(content)).toEqual({});
   });
+
+  it("handles colon in unquoted description", () => {
+    const content = `---
+name: test
+description: Test: colon in description
+---
+`;
+    const result = parseFrontmatterBlock(content);
+    expect(result.name).toBe("test");
+    expect(result.description).toBe("Test: colon in description");
+  });
 });
