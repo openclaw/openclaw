@@ -246,6 +246,7 @@ export class Neo4jMemoryClient {
             source: $source, extractionStatus: $extractionStatus,
             agentId: $agentId, sessionKey: $sessionKey,
             createdAt: $createdAt, updatedAt: $updatedAt,
+            originalCreatedAt: $originalCreatedAt,
             retrievalCount: $retrievalCount, lastRetrievedAt: $lastRetrievedAt,
             extractionRetries: $extractionRetries${taskIdClause}
           })
@@ -255,6 +256,7 @@ export class Neo4jMemoryClient {
             sessionKey: input.sessionKey ?? null,
             taskId: input.taskId ?? null,
             createdAt: now,
+            originalCreatedAt: now,
             updatedAt: now,
             retrievalCount: 0,
             lastRetrievedAt: null,
@@ -1370,6 +1372,16 @@ export class Neo4jMemoryClient {
             { toDelete, survivorId },
           );
 
+          // Preserve the oldest originalCreatedAt on the survivor
+          // so temporal staleness can track the true age of the information
+          await tx.run(
+            `MATCH (m:Memory) WHERE m.id IN $allIds
+             WITH min(COALESCE(m.originalCreatedAt, m.createdAt)) AS oldest
+             MATCH (survivor:Memory {id: $survivorId})
+             SET survivor.originalCreatedAt = oldest`,
+            { allIds: memoryIds, survivorId },
+          );
+
           // Delete the duplicate memories
           await tx.run(
             `UNWIND $toDelete AS deadId
@@ -2188,15 +2200,20 @@ export class Neo4jMemoryClient {
     const session = this.driver!.session();
     try {
       const agentFilter = agentId ? "AND m.agentId = $agentId" : "";
+      // Use originalCreatedAt (true information age) with createdAt as fallback
+      // Expanded regex to catch more temporal patterns:
+      //   - "Feb 13", "Mar 20" (abbreviated month + day without ordinal)
+      //   - "February 13", "March 20-25" (full month + day/range)
+      //   - Original patterns: HH:MM, AM/PM, tomorrow/today, ordinal+month, ISO dates, etc.
       const result = await session.run(
         `MATCH (m:Memory)
          WHERE m.category <> 'core'
-           AND m.createdAt IS NOT NULL
-           AND duration.between(datetime(m.createdAt), datetime()).days >= $minAgeDays
-           AND (m.text =~ '(?i).*\\b(\\d{1,2}[:/]\\d{2}|\\d{1,2}\\s*(am|pm)|tomorrow|today|tonight|this morning|this afternoon|this evening|yesterday|last night|next week|\\d{1,2}(st|nd|rd|th)?\\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)|\\d{4}-\\d{2}-\\d{2}|\\d{1,2}/\\d{1,2}/\\d{2,4}|at \\d+%|progress|downloading|in progress|pending|waiting for)\\b.*')
+           AND COALESCE(m.originalCreatedAt, m.createdAt) IS NOT NULL
+           AND duration.between(datetime(COALESCE(m.originalCreatedAt, m.createdAt)), datetime()).days >= $minAgeDays
+           AND (m.text =~ '(?i).*(\\d{1,2}[:/]\\d{2}|\\d{1,2}\\s*(am|pm)|tomorrow|today|tonight|this morning|this afternoon|this evening|yesterday|last night|next week|\\d{1,2}(st|nd|rd|th)?\\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)|(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|january|february|march|april|june|july|august|september|october|november|december)\\s+\\d{1,2}|\\d{4}-\\d{2}-\\d{2}|\\d{1,2}/\\d{1,2}/\\d{2,4}|at \\d+%|progress|downloading|in progress|pending|waiting for).*')
            ${agentFilter}
          RETURN m.id AS id, m.text AS text
-         ORDER BY m.createdAt ASC
+         ORDER BY COALESCE(m.originalCreatedAt, m.createdAt) ASC
          LIMIT 200`,
         { minAgeDays: neo4j.int(minAgeDays), agentId },
       );
