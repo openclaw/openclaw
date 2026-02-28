@@ -1064,6 +1064,32 @@ describe("subagent announce formatting", () => {
     expect(params.accountId).toBe("kev");
   });
 
+  it("does not report cron announce as delivered when it was only queued", async () => {
+    embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(true);
+    embeddedRunMock.isEmbeddedPiRunStreaming.mockReturnValue(false);
+    sessionStore = {
+      "agent:main:main": {
+        sessionId: "session-cron-queued",
+        lastChannel: "telegram",
+        lastTo: "123",
+        queueMode: "collect",
+        queueDebounceMs: 0,
+      },
+    };
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-cron-queued",
+      requesterSessionKey: "main",
+      requesterDisplayKey: "main",
+      announceType: "cron job",
+      ...defaultOutcomeAnnounce,
+    });
+
+    expect(didAnnounce).toBe(false);
+    expect(agentSpy).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps queued idempotency unique for same-ms distinct child runs", async () => {
     embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(true);
     embeddedRunMock.isEmbeddedPiRunStreaming.mockReturnValue(false);
