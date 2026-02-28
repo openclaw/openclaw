@@ -20,6 +20,15 @@ describe("account id normalization", () => {
     expect(normalizeAccountId(" Prod/US East ")).toBe("prod-us-east");
   });
 
+  it("rejects prototype-pollution key vectors", () => {
+    expect(normalizeAccountId("__proto__")).toBe(DEFAULT_ACCOUNT_ID);
+    expect(normalizeAccountId("constructor")).toBe(DEFAULT_ACCOUNT_ID);
+    expect(normalizeAccountId("prototype")).toBe(DEFAULT_ACCOUNT_ID);
+    expect(normalizeOptionalAccountId("__proto__")).toBeUndefined();
+    expect(normalizeOptionalAccountId("constructor")).toBeUndefined();
+    expect(normalizeOptionalAccountId("prototype")).toBeUndefined();
+  });
+
   it("preserves optional semantics without forcing default", () => {
     expect(normalizeOptionalAccountId(undefined)).toBeUndefined();
     expect(normalizeOptionalAccountId("   ")).toBeUndefined();

@@ -10,6 +10,8 @@ import {
   runServiceUninstall,
 } from "./lifecycle-core.js";
 import {
+  DEFAULT_RESTART_HEALTH_ATTEMPTS,
+  DEFAULT_RESTART_HEALTH_DELAY_MS,
   renderRestartDiagnostics,
   terminateStaleGatewayPids,
   waitForGatewayHealthyRestart,
@@ -17,8 +19,8 @@ import {
 import { parsePortFromArgs, renderGatewayServiceStartHints } from "./shared.js";
 import type { DaemonLifecycleOptions } from "./types.js";
 
-const POST_RESTART_HEALTH_ATTEMPTS = 8;
-const POST_RESTART_HEALTH_DELAY_MS = 450;
+const POST_RESTART_HEALTH_ATTEMPTS = DEFAULT_RESTART_HEALTH_ATTEMPTS;
+const POST_RESTART_HEALTH_DELAY_MS = DEFAULT_RESTART_HEALTH_DELAY_MS;
 
 async function resolveGatewayRestartPort() {
   const service = resolveGatewayService();
@@ -71,6 +73,8 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
   const restartPort = await resolveGatewayRestartPort().catch(() =>
     resolveGatewayPort(loadConfig(), process.env),
   );
+  const restartWaitMs = POST_RESTART_HEALTH_ATTEMPTS * POST_RESTART_HEALTH_DELAY_MS;
+  const restartWaitSeconds = Math.round(restartWaitMs / 1000);
 
   return await runServiceRestart({
     serviceNoun: "Gateway",
@@ -109,17 +113,29 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
       }
 
       const diagnostics = renderRestartDiagnostics(health);
+      const timeoutLine = `Timed out after ${restartWaitSeconds}s waiting for gateway port ${restartPort} to become healthy.`;
+      const runningNoPortLine =
+        health.runtime.status === "running" && health.portUsage.status === "free"
+          ? `Gateway process is running but port ${restartPort} is still free (startup hang/crash loop or very slow VM startup).`
+          : null;
       if (!json) {
-        defaultRuntime.log(theme.warn("Gateway did not become healthy after restart."));
+        defaultRuntime.log(theme.warn(timeoutLine));
+        if (runningNoPortLine) {
+          defaultRuntime.log(theme.warn(runningNoPortLine));
+        }
         for (const line of diagnostics) {
           defaultRuntime.log(theme.muted(line));
         }
       } else {
+        warnings.push(timeoutLine);
+        if (runningNoPortLine) {
+          warnings.push(runningNoPortLine);
+        }
         warnings.push(...diagnostics);
       }
 
-      fail("Gateway restart failed health checks.", [
-        formatCliCommand("openclaw gateway status --probe --deep"),
+      fail(`Gateway restart timed out after ${restartWaitSeconds}s waiting for health checks.`, [
+        formatCliCommand("openclaw gateway status --deep"),
         formatCliCommand("openclaw doctor"),
       ]);
     },

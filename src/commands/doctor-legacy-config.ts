@@ -1,3 +1,4 @@
+import { shouldMoveSingleAccountChannelKey } from "../channels/plugins/setup-helpers.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   resolveDiscordPreviewStreamMode,
@@ -5,8 +6,9 @@ import {
   resolveSlackStreamingMode,
   resolveTelegramPreviewStreamMode,
 } from "../config/discord-preview-streaming.js";
+import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 
-export function normalizeLegacyConfigValues(cfg: OpenClawConfig): {
+export function normalizeCompatibilityConfigValues(cfg: OpenClawConfig): {
   config: OpenClawConfig;
   changes: string[];
 } {
@@ -97,54 +99,15 @@ export function normalizeLegacyConfigValues(cfg: OpenClawConfig): {
     return { entry: updated, changed };
   };
 
-  const normalizeTelegramStreamingAliases = (params: {
+  const normalizePreviewStreamingAliases = (params: {
     entry: Record<string, unknown>;
     pathPrefix: string;
+    resolveStreaming: (entry: Record<string, unknown>) => string;
   }): { entry: Record<string, unknown>; changed: boolean } => {
     let updated = params.entry;
     const hadLegacyStreamMode = updated.streamMode !== undefined;
     const beforeStreaming = updated.streaming;
-    const resolved = resolveTelegramPreviewStreamMode(updated);
-    const shouldNormalize =
-      hadLegacyStreamMode ||
-      typeof beforeStreaming === "boolean" ||
-      (typeof beforeStreaming === "string" && beforeStreaming !== resolved);
-    if (!shouldNormalize) {
-      return { entry: updated, changed: false };
-    }
-
-    let changed = false;
-    if (beforeStreaming !== resolved) {
-      updated = { ...updated, streaming: resolved };
-      changed = true;
-    }
-    if (hadLegacyStreamMode) {
-      const { streamMode: _ignored, ...rest } = updated;
-      updated = rest;
-      changed = true;
-      changes.push(
-        `Moved ${params.pathPrefix}.streamMode → ${params.pathPrefix}.streaming (${resolved}).`,
-      );
-    }
-    if (typeof beforeStreaming === "boolean") {
-      changes.push(`Normalized ${params.pathPrefix}.streaming boolean → enum (${resolved}).`);
-    } else if (typeof beforeStreaming === "string" && beforeStreaming !== resolved) {
-      changes.push(
-        `Normalized ${params.pathPrefix}.streaming (${beforeStreaming}) → (${resolved}).`,
-      );
-    }
-
-    return { entry: updated, changed };
-  };
-
-  const normalizeDiscordStreamingAliases = (params: {
-    entry: Record<string, unknown>;
-    pathPrefix: string;
-  }): { entry: Record<string, unknown>; changed: boolean } => {
-    let updated = params.entry;
-    const hadLegacyStreamMode = updated.streamMode !== undefined;
-    const beforeStreaming = updated.streaming;
-    const resolved = resolveDiscordPreviewStreamMode(updated);
+    const resolved = params.resolveStreaming(updated);
     const shouldNormalize =
       hadLegacyStreamMode ||
       typeof beforeStreaming === "boolean" ||
@@ -229,6 +192,31 @@ export function normalizeLegacyConfigValues(cfg: OpenClawConfig): {
     return { entry: updated, changed };
   };
 
+  const normalizeStreamingAliasesForProvider = (params: {
+    provider: "telegram" | "slack" | "discord";
+    entry: Record<string, unknown>;
+    pathPrefix: string;
+  }): { entry: Record<string, unknown>; changed: boolean } => {
+    if (params.provider === "telegram") {
+      return normalizePreviewStreamingAliases({
+        entry: params.entry,
+        pathPrefix: params.pathPrefix,
+        resolveStreaming: resolveTelegramPreviewStreamMode,
+      });
+    }
+    if (params.provider === "discord") {
+      return normalizePreviewStreamingAliases({
+        entry: params.entry,
+        pathPrefix: params.pathPrefix,
+        resolveStreaming: resolveDiscordPreviewStreamMode,
+      });
+    }
+    return normalizeSlackStreamingAliases({
+      entry: params.entry,
+      pathPrefix: params.pathPrefix,
+    });
+  };
+
   const normalizeProvider = (provider: "telegram" | "slack" | "discord") => {
     const channels = next.channels as Record<string, unknown> | undefined;
     const rawEntry = channels?.[provider];
@@ -247,28 +235,13 @@ export function normalizeLegacyConfigValues(cfg: OpenClawConfig): {
       updated = base.entry;
       changed = base.changed;
     }
-    if (provider === "telegram") {
-      const streaming = normalizeTelegramStreamingAliases({
-        entry: updated,
-        pathPrefix: `channels.${provider}`,
-      });
-      updated = streaming.entry;
-      changed = changed || streaming.changed;
-    } else if (provider === "discord") {
-      const streaming = normalizeDiscordStreamingAliases({
-        entry: updated,
-        pathPrefix: `channels.${provider}`,
-      });
-      updated = streaming.entry;
-      changed = changed || streaming.changed;
-    } else if (provider === "slack") {
-      const streaming = normalizeSlackStreamingAliases({
-        entry: updated,
-        pathPrefix: `channels.${provider}`,
-      });
-      updated = streaming.entry;
-      changed = changed || streaming.changed;
-    }
+    const providerStreaming = normalizeStreamingAliasesForProvider({
+      provider,
+      entry: updated,
+      pathPrefix: `channels.${provider}`,
+    });
+    updated = providerStreaming.entry;
+    changed = changed || providerStreaming.changed;
 
     const rawAccounts = updated.accounts;
     if (isRecord(rawAccounts)) {
@@ -289,28 +262,13 @@ export function normalizeLegacyConfigValues(cfg: OpenClawConfig): {
           accountEntry = res.entry;
           accountChanged = res.changed;
         }
-        if (provider === "telegram") {
-          const streaming = normalizeTelegramStreamingAliases({
-            entry: accountEntry,
-            pathPrefix: `channels.${provider}.accounts.${accountId}`,
-          });
-          accountEntry = streaming.entry;
-          accountChanged = accountChanged || streaming.changed;
-        } else if (provider === "discord") {
-          const streaming = normalizeDiscordStreamingAliases({
-            entry: accountEntry,
-            pathPrefix: `channels.${provider}.accounts.${accountId}`,
-          });
-          accountEntry = streaming.entry;
-          accountChanged = accountChanged || streaming.changed;
-        } else if (provider === "slack") {
-          const streaming = normalizeSlackStreamingAliases({
-            entry: accountEntry,
-            pathPrefix: `channels.${provider}.accounts.${accountId}`,
-          });
-          accountEntry = streaming.entry;
-          accountChanged = accountChanged || streaming.changed;
-        }
+        const accountStreaming = normalizeStreamingAliasesForProvider({
+          provider,
+          entry: accountEntry,
+          pathPrefix: `channels.${provider}.accounts.${accountId}`,
+        });
+        accountEntry = accountStreaming.entry;
+        accountChanged = accountChanged || accountStreaming.changed;
         if (accountChanged) {
           accounts[accountId] = accountEntry;
           accountsChanged = true;
@@ -333,9 +291,125 @@ export function normalizeLegacyConfigValues(cfg: OpenClawConfig): {
     }
   };
 
+  const seedMissingDefaultAccountsFromSingleAccountBase = () => {
+    const channels = next.channels as Record<string, unknown> | undefined;
+    if (!channels) {
+      return;
+    }
+
+    let channelsChanged = false;
+    const nextChannels = { ...channels };
+    for (const [channelId, rawChannel] of Object.entries(channels)) {
+      if (!isRecord(rawChannel)) {
+        continue;
+      }
+      const rawAccounts = rawChannel.accounts;
+      if (!isRecord(rawAccounts)) {
+        continue;
+      }
+      const accountKeys = Object.keys(rawAccounts);
+      if (accountKeys.length === 0) {
+        continue;
+      }
+      const hasDefault = accountKeys.some((key) => key.trim().toLowerCase() === DEFAULT_ACCOUNT_ID);
+      if (hasDefault) {
+        continue;
+      }
+
+      const keysToMove = Object.entries(rawChannel)
+        .filter(
+          ([key, value]) =>
+            key !== "accounts" &&
+            key !== "enabled" &&
+            value !== undefined &&
+            shouldMoveSingleAccountChannelKey({ channelKey: channelId, key }),
+        )
+        .map(([key]) => key);
+      if (keysToMove.length === 0) {
+        continue;
+      }
+
+      const defaultAccount: Record<string, unknown> = {};
+      for (const key of keysToMove) {
+        const value = rawChannel[key];
+        defaultAccount[key] = value && typeof value === "object" ? structuredClone(value) : value;
+      }
+      const nextChannel: Record<string, unknown> = {
+        ...rawChannel,
+      };
+      for (const key of keysToMove) {
+        delete nextChannel[key];
+      }
+      nextChannel.accounts = {
+        ...rawAccounts,
+        [DEFAULT_ACCOUNT_ID]: defaultAccount,
+      };
+
+      nextChannels[channelId] = nextChannel;
+      channelsChanged = true;
+      changes.push(
+        `Moved channels.${channelId} single-account top-level values into channels.${channelId}.accounts.default.`,
+      );
+    }
+
+    if (!channelsChanged) {
+      return;
+    }
+    next = {
+      ...next,
+      channels: nextChannels as OpenClawConfig["channels"],
+    };
+  };
+
   normalizeProvider("telegram");
   normalizeProvider("slack");
   normalizeProvider("discord");
+  seedMissingDefaultAccountsFromSingleAccountBase();
+
+  const normalizeBrowserSsrFPolicyAlias = () => {
+    const rawBrowser = next.browser;
+    if (!isRecord(rawBrowser)) {
+      return;
+    }
+    const rawSsrFPolicy = rawBrowser.ssrfPolicy;
+    if (!isRecord(rawSsrFPolicy) || !("allowPrivateNetwork" in rawSsrFPolicy)) {
+      return;
+    }
+
+    const legacyAllowPrivateNetwork = rawSsrFPolicy.allowPrivateNetwork;
+    const currentDangerousAllowPrivateNetwork = rawSsrFPolicy.dangerouslyAllowPrivateNetwork;
+
+    let resolvedDangerousAllowPrivateNetwork: unknown = currentDangerousAllowPrivateNetwork;
+    if (
+      typeof legacyAllowPrivateNetwork === "boolean" ||
+      typeof currentDangerousAllowPrivateNetwork === "boolean"
+    ) {
+      // Preserve runtime behavior while collapsing to the canonical key.
+      resolvedDangerousAllowPrivateNetwork =
+        legacyAllowPrivateNetwork === true || currentDangerousAllowPrivateNetwork === true;
+    } else if (currentDangerousAllowPrivateNetwork === undefined) {
+      resolvedDangerousAllowPrivateNetwork = legacyAllowPrivateNetwork;
+    }
+
+    const nextSsrFPolicy: Record<string, unknown> = { ...rawSsrFPolicy };
+    delete nextSsrFPolicy.allowPrivateNetwork;
+    if (resolvedDangerousAllowPrivateNetwork !== undefined) {
+      nextSsrFPolicy.dangerouslyAllowPrivateNetwork = resolvedDangerousAllowPrivateNetwork;
+    }
+
+    const migratedBrowser = { ...next.browser } as Record<string, unknown>;
+    migratedBrowser.ssrfPolicy = nextSsrFPolicy;
+
+    next = {
+      ...next,
+      browser: migratedBrowser as OpenClawConfig["browser"],
+    };
+    changes.push(
+      `Moved browser.ssrfPolicy.allowPrivateNetwork → browser.ssrfPolicy.dangerouslyAllowPrivateNetwork (${String(resolvedDangerousAllowPrivateNetwork)}).`,
+    );
+  };
+
+  normalizeBrowserSsrFPolicyAlias();
 
   const legacyAckReaction = cfg.messages?.ackReaction?.trim();
   const hasWhatsAppConfig = cfg.channels?.whatsapp !== undefined;

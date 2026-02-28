@@ -1,33 +1,11 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+  loadConfigMock as loadConfig,
+  pickPrimaryLanIPv4Mock as pickPrimaryLanIPv4,
+  pickPrimaryTailnetIPv4Mock as pickPrimaryTailnetIPv4,
+  resolveGatewayPortMock as resolveGatewayPort,
+} from "../gateway/gateway-connection.test-mocks.js";
 import { captureEnv, withEnv } from "../test-utils/env.js";
-
-const loadConfig = vi.fn();
-const resolveGatewayPort = vi.fn();
-const pickPrimaryTailnetIPv4 = vi.fn();
-const pickPrimaryLanIPv4 = vi.fn();
-
-vi.mock("../config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/config.js")>();
-  return {
-    ...actual,
-    loadConfig,
-    resolveGatewayPort,
-  };
-});
-
-vi.mock("../infra/tailnet.js", () => ({
-  pickPrimaryTailnetIPv4,
-}));
-
-vi.mock("../gateway/net.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../gateway/net.js")>();
-  return {
-    ...actual,
-    pickPrimaryLanIPv4,
-    // Allow all URLs in tests - security validation is tested separately
-    isSecureWebSocketUrl: () => true,
-  };
-});
 
 const { resolveGatewayConnection } = await import("./gateway-chat.js");
 
@@ -36,10 +14,10 @@ describe("resolveGatewayConnection", () => {
 
   beforeEach(() => {
     envSnapshot = captureEnv(["OPENCLAW_GATEWAY_TOKEN", "OPENCLAW_GATEWAY_PASSWORD"]);
-    loadConfig.mockReset();
-    resolveGatewayPort.mockReset();
-    pickPrimaryTailnetIPv4.mockReset();
-    pickPrimaryLanIPv4.mockReset();
+    loadConfig.mockClear();
+    resolveGatewayPort.mockClear();
+    pickPrimaryTailnetIPv4.mockClear();
+    pickPrimaryLanIPv4.mockClear();
     resolveGatewayPort.mockReturnValue(18789);
     pickPrimaryTailnetIPv4.mockReturnValue(undefined);
     pickPrimaryLanIPv4.mockReturnValue(undefined);
@@ -84,20 +62,21 @@ describe("resolveGatewayConnection", () => {
     });
   });
 
-  it("uses loopback host when local bind is tailnet", () => {
-    loadConfig.mockReturnValue({ gateway: { mode: "local", bind: "tailnet" } });
+  it.each([
+    {
+      label: "tailnet",
+      bind: "tailnet",
+      setup: () => pickPrimaryTailnetIPv4.mockReturnValue("100.64.0.1"),
+    },
+    {
+      label: "lan",
+      bind: "lan",
+      setup: () => pickPrimaryLanIPv4.mockReturnValue("192.168.1.42"),
+    },
+  ])("uses loopback host when local bind is $label", ({ bind, setup }) => {
+    loadConfig.mockReturnValue({ gateway: { mode: "local", bind } });
     resolveGatewayPort.mockReturnValue(18800);
-    pickPrimaryTailnetIPv4.mockReturnValue("100.64.0.1");
-
-    const result = resolveGatewayConnection({});
-
-    expect(result.url).toBe("ws://127.0.0.1:18800");
-  });
-
-  it("uses loopback host when local bind is lan", () => {
-    loadConfig.mockReturnValue({ gateway: { mode: "local", bind: "lan" } });
-    resolveGatewayPort.mockReturnValue(18800);
-    pickPrimaryLanIPv4.mockReturnValue("192.168.1.42");
+    setup();
 
     const result = resolveGatewayConnection({});
 

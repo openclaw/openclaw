@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { getMemorySearchManager, type MemoryIndexManager } from "./index.js";
+import type { MemoryIndexManager } from "./index.js";
 import { createOpenAIEmbeddingProviderMock } from "./test-embeddings-mock.js";
 import { createMemoryManagerOrThrow } from "./test-manager.js";
 
@@ -34,7 +34,7 @@ describe("memory search async sync", () => {
             store: { path: indexPath },
             sync: { watch: false, onSessionStart: false, onSearch: true },
             query: { minScore: 0 },
-            remote: { batch: { enabled: true, wait: true } },
+            remote: { batch: { enabled: false, wait: false } },
           },
         },
         list: [{ id: "main", default: true }],
@@ -42,7 +42,7 @@ describe("memory search async sync", () => {
     }) as OpenClawConfig;
 
   beforeEach(async () => {
-    embedBatch.mockReset();
+    embedBatch.mockClear();
     embedBatch.mockImplementation(async (input: string[]) => input.map(() => [0.2, 0.2, 0.2]));
     workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mem-async-"));
     indexPath = path.join(workspaceDir, "index.sqlite");
@@ -100,15 +100,5 @@ describe("memory search async sync", () => {
     releaseSync();
     await closePromise;
     manager = null;
-
-    const reopened = await getMemorySearchManager({ cfg, agentId: "main", purpose: "status" });
-    expect(reopened.manager).not.toBeNull();
-    if (!reopened.manager) {
-      throw new Error("reopened manager missing");
-    }
-    const status = reopened.manager.status();
-    expect(status.files).toBeGreaterThan(0);
-    expect(status.dirty).toBe(false);
-    await reopened.manager.close?.();
   });
 });

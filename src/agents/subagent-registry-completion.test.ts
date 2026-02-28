@@ -26,8 +26,23 @@ function createRunEntry(): SubagentRunRecord {
 }
 
 describe("emitSubagentEndedHookOnce", () => {
+  const createEmitParams = (
+    overrides?: Partial<Parameters<typeof emitSubagentEndedHookOnce>[0]>,
+  ) => {
+    const entry = overrides?.entry ?? createRunEntry();
+    return {
+      entry,
+      reason: SUBAGENT_ENDED_REASON_COMPLETE,
+      sendFarewell: true,
+      accountId: "acct-1",
+      inFlightRunIds: new Set<string>(),
+      persist: vi.fn(),
+      ...overrides,
+    };
+  };
+
   beforeEach(() => {
-    lifecycleMocks.getGlobalHookRunner.mockReset();
+    lifecycleMocks.getGlobalHookRunner.mockClear();
     lifecycleMocks.runSubagentEnded.mockClear();
   });
 
@@ -37,21 +52,13 @@ describe("emitSubagentEndedHookOnce", () => {
       runSubagentEnded: lifecycleMocks.runSubagentEnded,
     });
 
-    const entry = createRunEntry();
-    const persist = vi.fn();
-    const emitted = await emitSubagentEndedHookOnce({
-      entry,
-      reason: SUBAGENT_ENDED_REASON_COMPLETE,
-      sendFarewell: true,
-      accountId: "acct-1",
-      inFlightRunIds: new Set<string>(),
-      persist,
-    });
+    const params = createEmitParams();
+    const emitted = await emitSubagentEndedHookOnce(params);
 
     expect(emitted).toBe(true);
     expect(lifecycleMocks.runSubagentEnded).not.toHaveBeenCalled();
-    expect(typeof entry.endedHookEmittedAt).toBe("number");
-    expect(persist).toHaveBeenCalledTimes(1);
+    expect(typeof params.entry.endedHookEmittedAt).toBe("number");
+    expect(params.persist).toHaveBeenCalledTimes(1);
   });
 
   it("runs subagent_ended hooks when available", async () => {
@@ -60,20 +67,60 @@ describe("emitSubagentEndedHookOnce", () => {
       runSubagentEnded: lifecycleMocks.runSubagentEnded,
     });
 
-    const entry = createRunEntry();
-    const persist = vi.fn();
-    const emitted = await emitSubagentEndedHookOnce({
-      entry,
-      reason: SUBAGENT_ENDED_REASON_COMPLETE,
-      sendFarewell: true,
-      accountId: "acct-1",
-      inFlightRunIds: new Set<string>(),
-      persist,
-    });
+    const params = createEmitParams();
+    const emitted = await emitSubagentEndedHookOnce(params);
 
     expect(emitted).toBe(true);
     expect(lifecycleMocks.runSubagentEnded).toHaveBeenCalledTimes(1);
-    expect(typeof entry.endedHookEmittedAt).toBe("number");
-    expect(persist).toHaveBeenCalledTimes(1);
+    expect(typeof params.entry.endedHookEmittedAt).toBe("number");
+    expect(params.persist).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns false when runId is blank", async () => {
+    const params = createEmitParams({
+      entry: { ...createRunEntry(), runId: "   " },
+    });
+    const emitted = await emitSubagentEndedHookOnce(params);
+    expect(emitted).toBe(false);
+    expect(params.persist).not.toHaveBeenCalled();
+    expect(lifecycleMocks.runSubagentEnded).not.toHaveBeenCalled();
+  });
+
+  it("returns false when ended hook marker already exists", async () => {
+    const params = createEmitParams({
+      entry: { ...createRunEntry(), endedHookEmittedAt: Date.now() },
+    });
+    const emitted = await emitSubagentEndedHookOnce(params);
+    expect(emitted).toBe(false);
+    expect(params.persist).not.toHaveBeenCalled();
+    expect(lifecycleMocks.runSubagentEnded).not.toHaveBeenCalled();
+  });
+
+  it("returns false when runId is already in flight", async () => {
+    const entry = createRunEntry();
+    const inFlightRunIds = new Set<string>([entry.runId]);
+    const params = createEmitParams({ entry, inFlightRunIds });
+    const emitted = await emitSubagentEndedHookOnce(params);
+    expect(emitted).toBe(false);
+    expect(params.persist).not.toHaveBeenCalled();
+    expect(lifecycleMocks.runSubagentEnded).not.toHaveBeenCalled();
+  });
+
+  it("returns false when subagent hook execution throws", async () => {
+    lifecycleMocks.runSubagentEnded.mockRejectedValueOnce(new Error("boom"));
+    lifecycleMocks.getGlobalHookRunner.mockReturnValue({
+      hasHooks: () => true,
+      runSubagentEnded: lifecycleMocks.runSubagentEnded,
+    });
+
+    const entry = createRunEntry();
+    const inFlightRunIds = new Set<string>();
+    const params = createEmitParams({ entry, inFlightRunIds });
+    const emitted = await emitSubagentEndedHookOnce(params);
+
+    expect(emitted).toBe(false);
+    expect(params.persist).not.toHaveBeenCalled();
+    expect(inFlightRunIds.has(entry.runId)).toBe(false);
+    expect(entry.endedHookEmittedAt).toBeUndefined();
   });
 });

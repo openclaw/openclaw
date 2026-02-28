@@ -31,13 +31,21 @@ describe("config env vars", () => {
 
   it("blocks dangerous startup env vars from config env", async () => {
     await withEnvOverride(
-      { BASH_ENV: undefined, SHELL: undefined, OPENROUTER_API_KEY: undefined },
+      {
+        BASH_ENV: undefined,
+        SHELL: undefined,
+        HOME: undefined,
+        ZDOTDIR: undefined,
+        OPENROUTER_API_KEY: undefined,
+      },
       async () => {
         const config = {
           env: {
             vars: {
               BASH_ENV: "/tmp/pwn.sh",
               SHELL: "/tmp/evil-shell",
+              HOME: "/tmp/evil-home",
+              ZDOTDIR: "/tmp/evil-zdotdir",
               OPENROUTER_API_KEY: "config-key",
             },
           },
@@ -45,11 +53,15 @@ describe("config env vars", () => {
         const entries = collectConfigRuntimeEnvVars(config as OpenClawConfig);
         expect(entries.BASH_ENV).toBeUndefined();
         expect(entries.SHELL).toBeUndefined();
+        expect(entries.HOME).toBeUndefined();
+        expect(entries.ZDOTDIR).toBeUndefined();
         expect(entries.OPENROUTER_API_KEY).toBe("config-key");
 
         applyConfigEnvVars(config as OpenClawConfig);
         expect(process.env.BASH_ENV).toBeUndefined();
         expect(process.env.SHELL).toBeUndefined();
+        expect(process.env.HOME).toBeUndefined();
+        expect(process.env.ZDOTDIR).toBeUndefined();
         expect(process.env.OPENROUTER_API_KEY).toBe("config-key");
       },
     );

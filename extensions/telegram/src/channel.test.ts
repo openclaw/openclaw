@@ -4,9 +4,9 @@ import type {
   OpenClawConfig,
   PluginRuntime,
   ResolvedTelegramAccount,
-  RuntimeEnv,
 } from "openclaw/plugin-sdk";
 import { describe, expect, it, vi } from "vitest";
+import { createRuntimeEnv } from "../../test-utils/runtime-env.js";
 import { telegramPlugin } from "./channel.js";
 import { setTelegramRuntime } from "./runtime.js";
 
@@ -25,20 +25,10 @@ function createCfg(): OpenClawConfig {
   } as OpenClawConfig;
 }
 
-function createRuntimeEnv(): RuntimeEnv {
-  return {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn((code: number): never => {
-      throw new Error(`exit ${code}`);
-    }),
-  };
-}
-
 function createStartAccountCtx(params: {
   cfg: OpenClawConfig;
   accountId: string;
-  runtime: RuntimeEnv;
+  runtime: ReturnType<typeof createRuntimeEnv>;
 }): ChannelGatewayContext<ResolvedTelegramAccount> {
   const account = telegramPlugin.config.resolveAccount(
     params.cfg,
@@ -121,5 +111,75 @@ describe("telegramPlugin duplicate token guard", () => {
 
     expect(probeTelegram).not.toHaveBeenCalled();
     expect(monitorTelegramProvider).not.toHaveBeenCalled();
+  });
+
+  it("passes webhookPort through to monitor startup options", async () => {
+    const monitorTelegramProvider = vi.fn(async () => undefined);
+    const probeTelegram = vi.fn(async () => ({ ok: true, bot: { username: "opsbot" } }));
+    const runtime = {
+      channel: {
+        telegram: {
+          monitorTelegramProvider,
+          probeTelegram,
+        },
+      },
+      logging: {
+        shouldLogVerbose: () => false,
+      },
+    } as unknown as PluginRuntime;
+    setTelegramRuntime(runtime);
+
+    const cfg = createCfg();
+    cfg.channels!.telegram!.accounts!.ops = {
+      ...cfg.channels!.telegram!.accounts!.ops,
+      webhookUrl: "https://example.test/telegram-webhook",
+      webhookSecret: "secret",
+      webhookPort: 9876,
+    };
+
+    await telegramPlugin.gateway!.startAccount!(
+      createStartAccountCtx({
+        cfg,
+        accountId: "ops",
+        runtime: createRuntimeEnv(),
+      }),
+    );
+
+    expect(monitorTelegramProvider).toHaveBeenCalledWith(
+      expect.objectContaining({
+        useWebhook: true,
+        webhookPort: 9876,
+      }),
+    );
+  });
+
+  it("forwards mediaLocalRoots to sendMessageTelegram for outbound media sends", async () => {
+    const sendMessageTelegram = vi.fn(async () => ({ messageId: "tg-1" }));
+    setTelegramRuntime({
+      channel: {
+        telegram: {
+          sendMessageTelegram,
+        },
+      },
+    } as unknown as PluginRuntime);
+
+    const result = await telegramPlugin.outbound!.sendMedia!({
+      cfg: createCfg(),
+      to: "12345",
+      text: "hello",
+      mediaUrl: "/tmp/image.png",
+      mediaLocalRoots: ["/tmp/agent-root"],
+      accountId: "ops",
+    });
+
+    expect(sendMessageTelegram).toHaveBeenCalledWith(
+      "12345",
+      "hello",
+      expect.objectContaining({
+        mediaUrl: "/tmp/image.png",
+        mediaLocalRoots: ["/tmp/agent-root"],
+      }),
+    );
+    expect(result).toMatchObject({ channel: "telegram", messageId: "tg-1" });
   });
 });

@@ -11,10 +11,11 @@ import {
   type AuthRateLimiter,
   type RateLimitCheckResult,
 } from "./auth-rate-limit.js";
+import { resolveGatewayCredentialsFromValues } from "./credentials.js";
 import {
+  isLocalishHost,
   isLoopbackAddress,
   isTrustedProxyAddress,
-  resolveHostName,
   resolveClientIp,
 } from "./net.js";
 
@@ -133,10 +134,6 @@ export function isLocalDirectRequest(
     return false;
   }
 
-  const host = resolveHostName(req.headers?.host);
-  const hostIsLocal = host === "localhost" || host === "127.0.0.1" || host === "::1";
-  const hostIsTailscaleServe = host.endsWith(".ts.net");
-
   const hasForwarded = Boolean(
     req.headers?.["x-forwarded-for"] ||
     req.headers?.["x-real-ip"] ||
@@ -144,7 +141,7 @@ export function isLocalDirectRequest(
   );
 
   const remoteIsTrustedProxy = isTrustedProxyAddress(req.socket?.remoteAddress, trustedProxies);
-  return (hostIsLocal || hostIsTailscaleServe) && (!hasForwarded || remoteIsTrustedProxy);
+  return isLocalishHost(req.headers?.host) && (!hasForwarded || remoteIsTrustedProxy);
 }
 
 function getTailscaleUser(req?: IncomingMessage): TailscaleUser | null {
@@ -246,8 +243,16 @@ export function resolveGatewayAuth(params: {
     }
   }
   const env = params.env ?? process.env;
-  const token = authConfig.token ?? env.OPENCLAW_GATEWAY_TOKEN ?? undefined;
-  const password = authConfig.password ?? env.OPENCLAW_GATEWAY_PASSWORD ?? undefined;
+  const resolvedCredentials = resolveGatewayCredentialsFromValues({
+    configToken: authConfig.token,
+    configPassword: authConfig.password,
+    env,
+    includeLegacyEnv: false,
+    tokenPrecedence: "config-first",
+    passwordPrecedence: "config-first",
+  });
+  const token = resolvedCredentials.token;
+  const password = resolvedCredentials.password;
   const trustedProxy = authConfig.trustedProxy;
 
   let mode: ResolvedGatewayAuth["mode"];

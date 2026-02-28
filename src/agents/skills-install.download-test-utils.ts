@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { captureEnv } from "../test-utils/env.js";
+import { createTempHomeEnv } from "../test-utils/temp-home.js";
 
 export function setTempStateDir(workspaceDir: string): string {
   const stateDir = path.join(workspaceDir, "state");
@@ -12,14 +12,14 @@ export function setTempStateDir(workspaceDir: string): string {
 export async function withTempWorkspace(
   run: (params: { workspaceDir: string; stateDir: string }) => Promise<void>,
 ) {
-  const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
+  const tempHome = await createTempHomeEnv("openclaw-skills-install-home-");
   const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skills-install-"));
   try {
     const stateDir = setTempStateDir(workspaceDir);
     await run({ workspaceDir, stateDir });
   } finally {
-    envSnapshot.restore();
     await fs.rm(workspaceDir, { recursive: true, force: true }).catch(() => undefined);
+    await tempHome.restore();
   }
 }
 

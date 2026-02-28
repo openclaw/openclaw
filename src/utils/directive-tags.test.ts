@@ -1,5 +1,8 @@
 import { describe, expect, test } from "vitest";
-import { stripInlineDirectiveTagsForDisplay } from "./directive-tags.js";
+import {
+  stripInlineDirectiveTagsForDisplay,
+  stripInlineDirectiveTagsFromMessageForDisplay,
+} from "./directive-tags.js";
 
 describe("stripInlineDirectiveTagsForDisplay", () => {
   test("removes reply and audio directives", () => {
@@ -21,5 +24,36 @@ describe("stripInlineDirectiveTagsForDisplay", () => {
     const result = stripInlineDirectiveTagsForDisplay(input);
     expect(result.changed).toBe(false);
     expect(result.text).toBe(input);
+  });
+});
+
+describe("stripInlineDirectiveTagsFromMessageForDisplay", () => {
+  test("strips inline directives from text content blocks", () => {
+    const input = {
+      role: "assistant",
+      content: [{ type: "text", text: "hello [[reply_to_current]] world [[audio_as_voice]]" }],
+    };
+    const result = stripInlineDirectiveTagsFromMessageForDisplay(input);
+    expect(result).toBeDefined();
+    expect(result?.content).toEqual([{ type: "text", text: "hello  world " }]);
+  });
+
+  test("preserves empty-string text when directives are entire content", () => {
+    const input = {
+      role: "assistant",
+      content: [{ type: "text", text: "[[reply_to_current]]" }],
+    };
+    const result = stripInlineDirectiveTagsFromMessageForDisplay(input);
+    expect(result).toBeDefined();
+    expect(result?.content).toEqual([{ type: "text", text: "" }]);
+  });
+
+  test("returns original message when content is not an array", () => {
+    const input = {
+      role: "assistant",
+      content: "plain text",
+    };
+    const result = stripInlineDirectiveTagsFromMessageForDisplay(input);
+    expect(result).toEqual(input);
   });
 });

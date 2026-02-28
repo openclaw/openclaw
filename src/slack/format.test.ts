@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { markdownToSlackMrkdwn } from "./format.js";
+import { escapeSlackMrkdwn } from "./monitor/mrkdwn.js";
 
 describe("markdownToSlackMrkdwn", () => {
   it("handles core markdown formatting conversions", () => {
@@ -55,5 +56,15 @@ describe("markdownToSlackMrkdwn", () => {
     expect(res).toBe(
       "*Important:* Check the _docs_ at <https://example.com|link>\n\n• first\n• second",
     );
+  });
+});
+
+describe("escapeSlackMrkdwn", () => {
+  it("returns plain text unchanged", () => {
+    expect(escapeSlackMrkdwn("heartbeat status ok")).toBe("heartbeat status ok");
+  });
+
+  it("escapes slack and mrkdwn control characters", () => {
+    expect(escapeSlackMrkdwn("mode_*`~<&>\\")).toBe("mode\\_\\*\\`\\~&lt;&amp;&gt;\\\\");
   });
 });

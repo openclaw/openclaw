@@ -13,20 +13,7 @@ export type PluginsLoadConfig = {
   paths?: string[];
 };
 
-export type PluginInstallRecord = {
-  source: "npm" | "archive" | "path";
-  spec?: string;
-  sourcePath?: string;
-  installPath?: string;
-  version?: string;
-  resolvedName?: string;
-  resolvedVersion?: string;
-  resolvedSpec?: string;
-  integrity?: string;
-  shasum?: string;
-  resolvedAt?: string;
-  installedAt?: string;
-};
+export type PluginInstallRecord = InstallRecordBase;
 
 export type PluginsConfig = {
   /** Enable or disable plugin loading. */
@@ -40,3 +27,4 @@ export type PluginsConfig = {
   entries?: Record<string, PluginEntryConfig>;
   installs?: Record<string, PluginInstallRecord>;
 };
+import type { InstallRecordBase } from "./types.installs.js";

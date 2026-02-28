@@ -40,7 +40,7 @@ describe("nodes run: approval transport timeout (#12098)", () => {
   });
 
   beforeEach(() => {
-    callGatewaySpy.mockReset();
+    callGatewaySpy.mockClear();
     callGatewaySpy.mockResolvedValue({ decision: "allow-once" });
   });
 

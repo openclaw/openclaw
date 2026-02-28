@@ -22,6 +22,15 @@ async function readJson(filePath: string): Promise<Record<string, unknown>> {
   return JSON.parse(raw) as Record<string, unknown>;
 }
 
+async function readDefaultProfileFromLocalState(
+  userDataDir: string,
+): Promise<Record<string, unknown>> {
+  const localState = await readJson(path.join(userDataDir, "Local State"));
+  const profile = localState.profile as Record<string, unknown>;
+  const infoCache = profile.info_cache as Record<string, unknown>;
+  return infoCache.Default as Record<string, unknown>;
+}
+
 describe("browser chrome profile decoration", () => {
   let fixtureRoot = "";
   let fixtureCount = 0;
@@ -53,10 +62,7 @@ describe("browser chrome profile decoration", () => {
 
     const expectedSignedArgb = ((0xff << 24) | 0xff4500) >> 0;
 
-    const localState = await readJson(path.join(userDataDir, "Local State"));
-    const profile = localState.profile as Record<string, unknown>;
-    const infoCache = profile.info_cache as Record<string, unknown>;
-    const def = infoCache.Default as Record<string, unknown>;
+    const def = await readDefaultProfileFromLocalState(userDataDir);
 
     expect(def.name).toBe(DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME);
     expect(def.shortcut_name).toBe(DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME);
@@ -84,10 +90,7 @@ describe("browser chrome profile decoration", () => {
   it("best-effort writes name when color is invalid", async () => {
     const userDataDir = await createUserDataDir();
     decorateOpenClawProfile(userDataDir, { color: "lobster-orange" });
-    const localState = await readJson(path.join(userDataDir, "Local State"));
-    const profile = localState.profile as Record<string, unknown>;
-    const infoCache = profile.info_cache as Record<string, unknown>;
-    const def = infoCache.Default as Record<string, unknown>;
+    const def = await readDefaultProfileFromLocalState(userDataDir);
 
     expect(def.name).toBe(DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME);
     expect(def.profile_color_seed).toBeUndefined();
