@@ -5,6 +5,7 @@ import { resolveGoHighLevelAccount, listGoHighLevelAccountIds } from "./accounts
 describe("resolveGoHighLevelAccount", () => {
   afterEach(() => {
     delete process.env.GHL_API_KEY;
+    delete process.env.GHL_TOKEN;
     delete process.env.GHL_LOCATION_ID;
   });
 
@@ -52,6 +53,36 @@ describe("resolveGoHighLevelAccount", () => {
     const account = resolveGoHighLevelAccount({ cfg });
     expect(account.credentialSource).toBe("none");
     expect(account.apiKey).toBeUndefined();
+  });
+
+  it("resolves from GHL_TOKEN env var as fallback", () => {
+    process.env.GHL_TOKEN = "token-key";
+    process.env.GHL_LOCATION_ID = "token-loc";
+
+    const cfg = {
+      channels: {
+        gohighlevel: { enabled: true },
+      },
+    } as unknown as OpenClawConfig;
+
+    const account = resolveGoHighLevelAccount({ cfg });
+    expect(account.credentialSource).toBe("env");
+    expect(account.apiKey).toBe("token-key");
+    expect(account.locationId).toBe("token-loc");
+  });
+
+  it("prefers GHL_API_KEY over GHL_TOKEN", () => {
+    process.env.GHL_API_KEY = "api-key";
+    process.env.GHL_TOKEN = "token-key";
+
+    const cfg = {
+      channels: {
+        gohighlevel: { enabled: true },
+      },
+    } as unknown as OpenClawConfig;
+
+    const account = resolveGoHighLevelAccount({ cfg });
+    expect(account.apiKey).toBe("api-key");
   });
 
   it("does not use env vars for non-default account", () => {
