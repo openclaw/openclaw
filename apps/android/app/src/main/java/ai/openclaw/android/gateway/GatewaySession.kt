@@ -177,7 +177,11 @@ class GatewaySession(
     val conn = currentConnection ?: return false
     val response =
       try {
-        conn.request("node.canvas.capability.refresh", params = null, timeoutMs = timeoutMs)
+        conn.request(
+          "node.canvas.capability.refresh",
+          params = buildJsonObject {},
+          timeoutMs = timeoutMs,
+        )
       } catch (err: Throwable) {
         Log.w("OpenClawGateway", "node.canvas.capability.refresh failed: ${err.message ?: err::class.java.simpleName}")
         return false
