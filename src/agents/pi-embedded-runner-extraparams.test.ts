@@ -254,6 +254,28 @@ describe("applyExtraParamsToAgent", () => {
     expect(payload.enable_search).toBe(true);
   });
 
+  it("accepts camelCase topP and enableSearch aliases", () => {
+    const payload = runQwenPayloadCase({
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "qwen-api/qwen3.5-plus": {
+                params: {
+                  topP: 0.75,
+                  enableSearch: true,
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(payload.top_p).toBe(0.75);
+    expect(payload.enable_search).toBe(true);
+  });
+
   it("does not overwrite explicit qwen payload values", () => {
     const payload = runQwenPayloadCase({
       cfg: {
