@@ -30,6 +30,9 @@ schemes:
     build:
       targets:
         OpenClawWatch: all
+    test:
+      targets:
+        - OpenClawWatchTests
 
 targets:
   OpenClaw:
@@ -171,6 +174,8 @@ targets:
     platform: watchOS
     sources:
       - path: WatchApp
+        excludes:
+          - Tests/**
     dependencies:
       - package: OpenClawKit
       - sdk: WatchConnectivity.framework
@@ -225,3 +230,16 @@ targets:
         CFBundleDisplayName: OpenClawTests
         CFBundleShortVersionString: "2026.2.27"
         CFBundleVersion: "20260227"
+
+  OpenClawWatchTests:
+    type: bundle.unit-test
+    platform: watchOS
+    sources:
+      - path: WatchApp/Tests
+    dependencies:
+      - target: OpenClawWatch
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: ai.openclaw.ios.watch.tests
+        SWIFT_VERSION: "6.0"
+        SWIFT_STRICT_CONCURRENCY: complete
