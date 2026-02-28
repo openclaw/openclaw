@@ -15,6 +15,9 @@ __pycache__/
 .DS_Store
 **/.DS_Store
 ui/src/ui/__screenshots__/
+ui/src/i18n/test/__screenshots__/
+ui/src/ui/controllers/__screenshots__/
+ui/src/ui/views/__screenshots__/
 ui/playwright-report/
 ui/test-results/
 packages/dashboard-next/.next/
