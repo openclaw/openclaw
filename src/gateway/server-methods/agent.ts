@@ -483,7 +483,9 @@ export const agentHandlers: GatewayRequestHandlers = {
         ? request.replyTo.trim()
         : typeof request.to === "string" && request.to.trim()
           ? request.to.trim()
-          : undefined;
+          : typeof request.to === "number" && Number.isFinite(request.to)
+            ? String(Math.trunc(request.to))
+            : undefined;
     const explicitThreadId =
       typeof request.threadId === "string" && request.threadId.trim()
         ? request.threadId.trim()

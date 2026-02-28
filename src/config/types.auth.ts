@@ -25,5 +25,11 @@ export type AuthConfig = {
      * this window, counters reset. Default: 24.
      */
     failureWindowHours?: number;
+    /**
+     * Enable model-level cooldown tracking. When true and modelKey is provided,
+     * cooldowns are tracked per-model within a profile. When false (default),
+     * cooldowns are profile-level only.
+     */
+    modelLevelEnabled?: boolean;
   };
 };

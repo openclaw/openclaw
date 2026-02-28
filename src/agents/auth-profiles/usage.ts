@@ -1,6 +1,5 @@
 import type { OpenClawConfig } from "../../config/config.js";
 import { normalizeProviderId } from "../model-selection.js";
-import { logAuthProfileFailureStateChange } from "./state-observation.js";
 import { saveAuthProfileStore, updateAuthProfileStoreWithLock } from "./store.js";
 import type { AuthProfileFailureReason, AuthProfileStore, ProfileUsageStats } from "./types.js";
 
@@ -10,7 +9,6 @@ const FAILURE_REASON_PRIORITY: AuthProfileFailureReason[] = [
   "billing",
   "format",
   "model_not_found",
-  "overloaded",
   "timeout",
   "rate_limit",
   "unknown",
@@ -21,8 +19,16 @@ const FAILURE_REASON_ORDER = new Map<AuthProfileFailureReason, number>(
 );
 
 function isAuthCooldownBypassedForProvider(provider: string | undefined): boolean {
-  const normalized = normalizeProviderId(provider ?? "");
-  return normalized === "openrouter" || normalized === "kilocode";
+  return normalizeProviderId(provider ?? "") === "openrouter";
+}
+
+/**
+ * Build a usage stats key. When modelKey is provided, use composite key
+ * "profileId:modelKey" for model-level cooldown tracking. Otherwise use
+ * just "profileId" for profile-level cooldown (backward compatible).
+ */
+function buildUsageKey(profileId: string, modelKey?: string): string {
+  return modelKey ? `${profileId}:${modelKey}` : profileId;
 }
 
 export function resolveProfileUnusableUntil(
@@ -38,23 +44,30 @@ export function resolveProfileUnusableUntil(
 }
 
 /**
- * Check if a profile is currently in cooldown (due to rate limits, overload, or other transient failures).
+ * Check if a profile is currently in cooldown (due to rate limiting or errors).
+ * When modelKey is provided AND config enabled, checks model-level cooldown; otherwise checks profile-level.
  */
 export function isProfileInCooldown(
   store: AuthProfileStore,
   profileId: string,
-  now?: number,
+  modelKey?: string,
 ): boolean {
-  if (isAuthCooldownBypassedForProvider(store.profiles[profileId]?.provider)) {
-    return false;
-  }
-  const stats = store.usageStats?.[profileId];
+  // Get config to check if model-level cooldown is enabled
+  const providerKey = store.profiles[profileId]?.provider
+    ? normalizeProviderId(store.profiles[profileId].provider)
+    : "default";
+  const cfgResolved = resolveAuthCooldownConfig({ cfg: undefined, providerId: providerKey });
+  const modelLevelEnabled = cfgResolved.modelLevelEnabled;
+
+  // Use model-level key only if config enabled AND modelKey provided
+  const effectiveKey =
+    modelLevelEnabled && modelKey ? buildUsageKey(profileId, modelKey) : profileId;
+  const stats = store.usageStats?.[effectiveKey];
   if (!stats) {
     return false;
   }
   const unusableUntil = resolveProfileUnusableUntil(stats);
-  const ts = now ?? Date.now();
-  return unusableUntil ? ts < unusableUntil : false;
+  return unusableUntil ? Date.now() < unusableUntil : false;
 }
 
 function isActiveUnusableWindow(until: number | undefined, now: number): boolean {
@@ -110,11 +123,7 @@ export function resolveProfilesUnavailableReason(params: {
       recordedReason = true;
     }
     if (!recordedReason) {
-      // No failure counts recorded for this cooldown window. Previously this
-      // defaulted to "rate_limit", which caused false "rate limit reached"
-      // warnings when the actual reason was unknown (e.g. transient network
-      // blip or server error without a classified failure count).
-      addScore("unknown", 1);
+      addScore("rate_limit", 1);
     }
   }
 
@@ -144,15 +153,32 @@ export function resolveProfilesUnavailableReason(params: {
  * Return the soonest `unusableUntil` timestamp (ms epoch) among the given
  * profiles, or `null` when no profile has a recorded cooldown. Note: the
  * returned timestamp may be in the past if the cooldown has already expired.
+ *
+ * @param profileIds - Array of profile IDs to check
+ * @param modelKeys - Optional array of model keys (one per profileId) for model-level cooldown
  */
 export function getSoonestCooldownExpiry(
   store: AuthProfileStore,
   profileIds: string[],
+  modelKeys?: string[],
 ): number | null {
   let soonest: number | null = null;
-  for (const id of profileIds) {
-    const stats = store.usageStats?.[id];
+  for (let i = 0; i < profileIds.length; i++) {
+    const profileId = profileIds[i];
+    const modelKey = modelKeys?.[i];
+    const usageKey = buildUsageKey(profileId, modelKey);
+    const stats = store.usageStats?.[usageKey];
     if (!stats) {
+      // Fallback to profile-level if model-level stats don't exist
+      if (modelKey && store.usageStats?.[profileId]) {
+        const fallbackStats = store.usageStats[profileId];
+        const until = resolveProfileUnusableUntil(fallbackStats);
+        if (typeof until === "number" && Number.isFinite(until) && until > 0) {
+          if (soonest === null || until < soonest) {
+            soonest = until;
+          }
+        }
+      }
       continue;
     }
     const until = resolveProfileUnusableUntil(stats);
@@ -240,22 +266,43 @@ export function clearExpiredCooldowns(store: AuthProfileStore, now?: number): bo
 /**
  * Mark a profile as successfully used. Resets error count and updates lastUsed.
  * Uses store lock to avoid overwriting concurrent usage updates.
+ * When modelKey is provided, tracks model-level usage; otherwise tracks profile-level.
  */
 export async function markAuthProfileUsed(params: {
   store: AuthProfileStore;
   profileId: string;
+  modelKey?: string;
   agentDir?: string;
 }): Promise<void> {
-  const { store, profileId, agentDir } = params;
+  const { store, profileId, modelKey, agentDir } = params;
+
+  // Get config to check if model-level cooldown is enabled
+  const providerKey = store.profiles[profileId]?.provider
+    ? normalizeProviderId(store.profiles[profileId].provider)
+    : "default";
+  const cfgResolved = resolveAuthCooldownConfig({ cfg: undefined, providerId: providerKey });
+  const modelLevelEnabled = cfgResolved.modelLevelEnabled;
+
+  // Use model-level key only if config enabled AND modelKey provided
+  const effectiveKey =
+    modelLevelEnabled && modelKey ? buildUsageKey(profileId, modelKey) : profileId;
+
   const updated = await updateAuthProfileStoreWithLock({
     agentDir,
     updater: (freshStore) => {
       if (!freshStore.profiles[profileId]) {
         return false;
       }
-      updateUsageStatsEntry(freshStore, profileId, (existing) =>
-        resetUsageStats(existing, { lastUsed: Date.now() }),
-      );
+      freshStore.usageStats = freshStore.usageStats ?? {};
+      freshStore.usageStats[effectiveKey] = {
+        ...freshStore.usageStats[effectiveKey],
+        lastUsed: Date.now(),
+        errorCount: 0,
+        cooldownUntil: undefined,
+        disabledUntil: undefined,
+        disabledReason: undefined,
+        failureCounts: undefined,
+      };
       return true;
     },
   });
@@ -267,9 +314,16 @@ export async function markAuthProfileUsed(params: {
     return;
   }
 
-  updateUsageStatsEntry(store, profileId, (existing) =>
-    resetUsageStats(existing, { lastUsed: Date.now() }),
-  );
+  store.usageStats = store.usageStats ?? {};
+  store.usageStats[effectiveKey] = {
+    ...store.usageStats[profileId],
+    lastUsed: Date.now(),
+    errorCount: 0,
+    cooldownUntil: undefined,
+    disabledUntil: undefined,
+    disabledReason: undefined,
+    failureCounts: undefined,
+  };
   saveAuthProfileStore(store, agentDir);
 }
 
@@ -285,6 +339,7 @@ type ResolvedAuthCooldownConfig = {
   billingBackoffMs: number;
   billingMaxMs: number;
   failureWindowMs: number;
+  modelLevelEnabled: boolean;
 };
 
 function resolveAuthCooldownConfig(params: {
@@ -328,6 +383,7 @@ function resolveAuthCooldownConfig(params: {
     billingBackoffMs: billingBackoffHours * 60 * 60 * 1000,
     billingMaxMs: billingMaxHours * 60 * 60 * 1000,
     failureWindowMs: failureWindowHours * 60 * 60 * 1000,
+    modelLevelEnabled: cooldowns?.modelLevelEnabled ?? false,
   };
 }
 
@@ -358,30 +414,6 @@ export function resolveProfileUnusableUntilForDisplay(
   return resolveProfileUnusableUntil(stats);
 }
 
-function resetUsageStats(
-  existing: ProfileUsageStats | undefined,
-  overrides?: Partial<ProfileUsageStats>,
-): ProfileUsageStats {
-  return {
-    ...existing,
-    errorCount: 0,
-    cooldownUntil: undefined,
-    disabledUntil: undefined,
-    disabledReason: undefined,
-    failureCounts: undefined,
-    ...overrides,
-  };
-}
-
-function updateUsageStatsEntry(
-  store: AuthProfileStore,
-  profileId: string,
-  updater: (existing: ProfileUsageStats | undefined) => ProfileUsageStats,
-): void {
-  store.usageStats = store.usageStats ?? {};
-  store.usageStats[profileId] = updater(store.usageStats[profileId]);
-}
-
 function keepActiveWindowOrRecompute(params: {
   existingUntil: number | undefined;
   now: number;
@@ -405,19 +437,9 @@ function computeNextProfileUsageStats(params: {
     params.existing.lastFailureAt > 0 &&
     params.now - params.existing.lastFailureAt > windowMs;
 
-  // If the previous cooldown has already expired, reset error counters so the
-  // profile gets a fresh backoff window. clearExpiredCooldowns() does this
-  // in-memory during profile ordering, but the on-disk state may still carry
-  // the old counters when the lock-based updater reads a fresh store. Without
-  // this check, stale error counts from an expired cooldown cause the next
-  // failure to escalate to a much longer cooldown (e.g. 1 min → 25 min).
-  const unusableUntil = resolveProfileUnusableUntil(params.existing);
-  const previousCooldownExpired = typeof unusableUntil === "number" && params.now >= unusableUntil;
-
-  const shouldResetCounters = windowExpired || previousCooldownExpired;
-  const baseErrorCount = shouldResetCounters ? 0 : (params.existing.errorCount ?? 0);
+  const baseErrorCount = windowExpired ? 0 : (params.existing.errorCount ?? 0);
   const nextErrorCount = baseErrorCount + 1;
-  const failureCounts = shouldResetCounters ? {} : { ...params.existing.failureCounts };
+  const failureCounts = windowExpired ? {} : { ...params.existing.failureCounts };
   failureCounts[params.reason] = (failureCounts[params.reason] ?? 0) + 1;
 
   const updatedStats: ProfileUsageStats = {
@@ -464,19 +486,27 @@ function computeNextProfileUsageStats(params: {
 export async function markAuthProfileFailure(params: {
   store: AuthProfileStore;
   profileId: string;
+  modelKey?: string;
   reason: AuthProfileFailureReason;
   cfg?: OpenClawConfig;
   agentDir?: string;
-  runId?: string;
 }): Promise<void> {
-  const { store, profileId, reason, agentDir, cfg, runId } = params;
-  const profile = store.profiles[profileId];
-  if (!profile || isAuthCooldownBypassedForProvider(profile.provider)) {
-    return;
-  }
-  let nextStats: ProfileUsageStats | undefined;
-  let previousStats: ProfileUsageStats | undefined;
-  let updateTime = 0;
+  const { store, profileId, modelKey, reason, agentDir, cfg } = params;
+
+  // Get config to check if model-level cooldown is enabled
+  const providerKey = store.profiles[profileId]?.provider
+    ? normalizeProviderId(store.profiles[profileId].provider)
+    : "default";
+  const cfgResolved = resolveAuthCooldownConfig({ cfg, providerId: providerKey });
+  const modelLevelEnabled = cfgResolved.modelLevelEnabled;
+
+  // Determine the effective key for tracking cooldown
+  // - Billing failures (401, 403, invalid key) always use profile-level
+  // - Otherwise, use model-level if config enabled AND modelKey provided
+  const usageKey = buildUsageKey(profileId, modelKey);
+  const effectiveKey =
+    reason === "billing" || !modelLevelEnabled || !modelKey ? profileId : usageKey;
+
   const updated = await updateAuthProfileStoreWithLock({
     agentDir,
     updater: (freshStore) => {
@@ -484,90 +514,65 @@ export async function markAuthProfileFailure(params: {
       if (!profile || isAuthCooldownBypassedForProvider(profile.provider)) {
         return false;
       }
-      const now = Date.now();
-      const providerKey = normalizeProviderId(profile.provider);
-      const cfgResolved = resolveAuthCooldownConfig({
-        cfg,
-        providerId: providerKey,
-      });
+      freshStore.usageStats = freshStore.usageStats ?? {};
+      const existing = freshStore.usageStats[effectiveKey] ?? {};
 
-      previousStats = freshStore.usageStats?.[profileId];
-      updateTime = now;
-      const computed = computeNextProfileUsageStats({
-        existing: previousStats ?? {},
+      const now = Date.now();
+      // Use the already-resolved config
+      freshStore.usageStats[effectiveKey] = computeNextProfileUsageStats({
+        existing,
         now,
         reason,
         cfgResolved,
       });
-      nextStats = computed;
-      updateUsageStatsEntry(freshStore, profileId, () => computed);
       return true;
     },
   });
   if (updated) {
     store.usageStats = updated.usageStats;
-    if (nextStats) {
-      logAuthProfileFailureStateChange({
-        runId,
-        profileId,
-        provider: profile.provider,
-        reason,
-        previous: previousStats,
-        next: nextStats,
-        now: updateTime,
-      });
-    }
     return;
   }
   if (!store.profiles[profileId]) {
     return;
   }
 
+  store.usageStats = store.usageStats ?? {};
+  const existing = store.usageStats[effectiveKey] ?? {};
   const now = Date.now();
-  const providerKey = normalizeProviderId(store.profiles[profileId]?.provider ?? "");
-  const cfgResolved = resolveAuthCooldownConfig({
-    cfg,
-    providerId: providerKey,
-  });
-
-  previousStats = store.usageStats?.[profileId];
-  const computed = computeNextProfileUsageStats({
-    existing: previousStats ?? {},
+  // Use the already-resolved config
+  store.usageStats[effectiveKey] = computeNextProfileUsageStats({
+    existing,
     now,
     reason,
     cfgResolved,
   });
-  nextStats = computed;
-  updateUsageStatsEntry(store, profileId, () => computed);
-  saveAuthProfileStore(store, agentDir);
-  logAuthProfileFailureStateChange({
-    runId,
-    profileId,
-    provider: store.profiles[profileId]?.provider ?? profile.provider,
-    reason,
-    previous: previousStats,
-    next: nextStats,
+
+  store.usageStats[effectiveKey] = computeNextProfileUsageStats({
+    existing,
     now,
+    reason,
+    cfgResolved,
   });
+  saveAuthProfileStore(store, agentDir);
 }
 
 /**
- * Mark a profile as transiently failed. Applies exponential backoff cooldown.
+ * Mark a profile as failed/rate-limited. Applies exponential backoff cooldown.
  * Cooldown times: 1min, 5min, 25min, max 1 hour.
  * Uses store lock to avoid overwriting concurrent usage updates.
  */
 export async function markAuthProfileCooldown(params: {
   store: AuthProfileStore;
   profileId: string;
+  modelKey?: string;
   agentDir?: string;
-  runId?: string;
 }): Promise<void> {
   await markAuthProfileFailure({
     store: params.store,
     profileId: params.profileId,
+    modelKey: params.modelKey,
     reason: "unknown",
     agentDir: params.agentDir,
-    runId: params.runId,
   });
 }
 
@@ -588,7 +593,14 @@ export async function clearAuthProfileCooldown(params: {
         return false;
       }
 
-      updateUsageStatsEntry(freshStore, profileId, (existing) => resetUsageStats(existing));
+      freshStore.usageStats[profileId] = {
+        ...freshStore.usageStats[profileId],
+        errorCount: 0,
+        cooldownUntil: undefined,
+        disabledUntil: undefined,
+        disabledReason: undefined,
+        failureCounts: undefined,
+      };
       return true;
     },
   });
@@ -600,6 +612,13 @@ export async function clearAuthProfileCooldown(params: {
     return;
   }
 
-  updateUsageStatsEntry(store, profileId, (existing) => resetUsageStats(existing));
+  store.usageStats[profileId] = {
+    ...store.usageStats[profileId],
+    errorCount: 0,
+    cooldownUntil: undefined,
+    disabledUntil: undefined,
+    disabledReason: undefined,
+    failureCounts: undefined,
+  };
   saveAuthProfileStore(store, agentDir);
 }

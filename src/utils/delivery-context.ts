@@ -25,7 +25,12 @@ export function normalizeDeliveryContext(context?: DeliveryContext): DeliveryCon
     typeof context.channel === "string"
       ? (normalizeMessageChannel(context.channel) ?? context.channel.trim())
       : undefined;
-  const to = typeof context.to === "string" ? context.to.trim() : undefined;
+  const to =
+    typeof context.to === "string"
+      ? context.to.trim()
+      : typeof context.to === "number" && Number.isFinite(context.to)
+        ? String(Math.trunc(context.to))
+        : undefined;
   const accountId = normalizeAccountId(context.accountId);
   const threadId =
     typeof context.threadId === "number" && Number.isFinite(context.threadId)

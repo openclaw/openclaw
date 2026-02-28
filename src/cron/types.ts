@@ -1,6 +1,4 @@
-import type { FailoverReason } from "../agents/pi-embedded-helpers.js";
 import type { ChannelId } from "../channels/plugins/types.js";
-import type { CronJobBase } from "./types-shared.js";
 
 export type CronSchedule =
   | { kind: "at"; at: string }
@@ -24,18 +22,8 @@ export type CronDelivery = {
   mode: CronDeliveryMode;
   channel?: CronMessageChannel;
   to?: string;
-  /** Explicit channel account id for multi-account setups (e.g. multiple Telegram bots). */
   accountId?: string;
   bestEffort?: boolean;
-  /** Separate destination for failure notifications. */
-  failureDestination?: CronFailureDestination;
-};
-
-export type CronFailureDestination = {
-  channel?: CronMessageChannel;
-  to?: string;
-  accountId?: string;
-  mode?: "announce" | "webhook";
 };
 
 export type CronDeliveryPatch = Partial<CronDelivery>;
@@ -67,45 +55,40 @@ export type CronRunOutcome = {
   sessionKey?: string;
 };
 
-export type CronFailureAlert = {
-  after?: number;
-  channel?: CronMessageChannel;
-  to?: string;
-  cooldownMs?: number;
-  /** Delivery mode: announce (via messaging channels) or webhook (HTTP POST). */
-  mode?: "announce" | "webhook";
-  /** Account ID for multi-account channel configurations. */
-  accountId?: string;
-};
+export type CronPayload =
+  | { kind: "systemEvent"; text: string }
+  | {
+      kind: "agentTurn";
+      message: string;
+      /** Optional model override (provider/model or alias). */
+      model?: string;
+      /** Optional model fallback chain (replaces agents.defaults.model.fallbacks). */
+      modelFallbacks?: string[];
+      thinking?: string;
+      timeoutSeconds?: number;
+      allowUnsafeExternalContent?: boolean;
+      deliver?: boolean;
+      channel?: CronMessageChannel;
+      to?: string;
+      bestEffortDeliver?: boolean;
+    };
 
-export type CronPayload = { kind: "systemEvent"; text: string } | CronAgentTurnPayload;
+export type CronPayloadPatch =
+  | { kind: "systemEvent"; text?: string }
+  | {
+      kind: "agentTurn";
+      message?: string;
+      model?: string;
+      modelFallbacks?: string[];
+      thinking?: string;
+      timeoutSeconds?: number;
+      allowUnsafeExternalContent?: boolean;
+      deliver?: boolean;
+      channel?: CronMessageChannel;
+      to?: string;
+      bestEffortDeliver?: boolean;
+    };
 
-export type CronPayloadPatch = { kind: "systemEvent"; text?: string } | CronAgentTurnPayloadPatch;
-
-type CronAgentTurnPayloadFields = {
-  message: string;
-  /** Optional model override (provider/model or alias). */
-  model?: string;
-  /** Optional per-job fallback models; overrides agent/global fallbacks when defined. */
-  fallbacks?: string[];
-  thinking?: string;
-  timeoutSeconds?: number;
-  allowUnsafeExternalContent?: boolean;
-  /** If true, run with lightweight bootstrap context. */
-  lightContext?: boolean;
-  deliver?: boolean;
-  channel?: CronMessageChannel;
-  to?: string;
-  bestEffortDeliver?: boolean;
-};
-
-type CronAgentTurnPayload = {
-  kind: "agentTurn";
-} & CronAgentTurnPayloadFields;
-
-type CronAgentTurnPayloadPatch = {
-  kind: "agentTurn";
-} & Partial<CronAgentTurnPayloadFields>;
 export type CronJobState = {
   nextRunAtMs?: number;
   runningAtMs?: number;
@@ -115,13 +98,9 @@ export type CronJobState = {
   /** Back-compat alias for lastRunStatus. */
   lastStatus?: "ok" | "error" | "skipped";
   lastError?: string;
-  /** Classified reason for the last error (when available). */
-  lastErrorReason?: FailoverReason;
   lastDurationMs?: number;
   /** Number of consecutive execution errors (reset on success). Used for backoff. */
   consecutiveErrors?: number;
-  /** Last failure alert timestamp (ms since epoch) for cooldown gating. */
-  lastFailureAlertAtMs?: number;
   /** Number of consecutive schedule computation errors. Auto-disables job after threshold. */
   scheduleErrorCount?: number;
   /** Explicit delivery outcome, separate from execution outcome. */
@@ -132,14 +111,22 @@ export type CronJobState = {
   lastDelivered?: boolean;
 };
 
-export type CronJob = CronJobBase<
-  CronSchedule,
-  CronSessionTarget,
-  CronWakeMode,
-  CronPayload,
-  CronDelivery,
-  CronFailureAlert | false
-> & {
+export type CronJob = {
+  id: string;
+  agentId?: string;
+  /** Origin session namespace for reminder delivery and wake routing. */
+  sessionKey?: string;
+  name: string;
+  description?: string;
+  enabled: boolean;
+  deleteAfterRun?: boolean;
+  createdAtMs: number;
+  updatedAtMs: number;
+  schedule: CronSchedule;
+  sessionTarget: CronSessionTarget;
+  wakeMode: CronWakeMode;
+  payload: CronPayload;
+  delivery?: CronDelivery;
   state: CronJobState;
 };
 
