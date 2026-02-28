@@ -67,3 +67,49 @@ describe("downloadLineMedia", () => {
     expect(writeSpy).not.toHaveBeenCalled();
   });
 });
+
+describe("detectContentType via downloadLineMedia", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("detects M4A voice messages as audio/mp4", async () => {
+    // Real M4A magic bytes: 00 00 00 1c 66 74 79 70 4d 34 41 20
+    const m4a = Buffer.from([
+      0x00, 0x00, 0x00, 0x1c, 0x66, 0x74, 0x79, 0x70, 0x4d, 0x34, 0x41, 0x20, 0x00, 0x00, 0x00,
+      0x00,
+    ]);
+    getMessageContentMock.mockResolvedValueOnce(chunks([m4a]));
+    vi.spyOn(fs.promises, "writeFile").mockResolvedValueOnce(undefined);
+
+    const result = await downloadLineMedia("mid", "token");
+    expect(result.contentType).toBe("audio/mp4");
+    expect(result.path).toMatch(/\.m4a$/);
+  });
+
+  it("detects M4B audiobook as audio/mp4", async () => {
+    const m4b = Buffer.from([
+      0x00, 0x00, 0x00, 0x1c, 0x66, 0x74, 0x79, 0x70, 0x4d, 0x34, 0x42, 0x20, 0x00, 0x00, 0x00,
+      0x00,
+    ]);
+    getMessageContentMock.mockResolvedValueOnce(chunks([m4b]));
+    vi.spyOn(fs.promises, "writeFile").mockResolvedValueOnce(undefined);
+
+    const result = await downloadLineMedia("mid", "token");
+    expect(result.contentType).toBe("audio/mp4");
+  });
+
+  it("detects regular MP4 video as video/mp4", async () => {
+    // MP4 with 'mp42' brand
+    const mp4 = Buffer.from([
+      0x00, 0x00, 0x00, 0x1c, 0x66, 0x74, 0x79, 0x70, 0x6d, 0x70, 0x34, 0x32, 0x00, 0x00, 0x00,
+      0x00,
+    ]);
+    getMessageContentMock.mockResolvedValueOnce(chunks([mp4]));
+    vi.spyOn(fs.promises, "writeFile").mockResolvedValueOnce(undefined);
+
+    const result = await downloadLineMedia("mid", "token");
+    expect(result.contentType).toBe("video/mp4");
+    expect(result.path).toMatch(/\.mp4$/);
+  });
+});
