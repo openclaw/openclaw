@@ -426,6 +426,12 @@ private const val defaultTalkProvider = "elevenlabs"
     }
     cacheRunCompletion(runId, terminal)
 
+    // Finish streaming TTS when the pending run completes
+    if (terminal && ttsOnAllResponses) {
+      activeTtsRunId = null
+      if (streamingTts != null) finishStreamingTts()
+    }
+
     if (runId != pendingRunId) return
     pendingFinal?.complete(terminal)
     pendingFinal = null
