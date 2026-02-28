@@ -16,6 +16,7 @@ import {
   describeFailoverError,
   isFailoverError,
   isTimeoutError,
+  resolveFailoverReasonFromError,
 } from "./failover-error.js";
 import {
   buildConfiguredAllowlistKeys,
@@ -495,7 +496,39 @@ export async function runWithModelFallback<T>(params: {
         attempt: i + 1,
         total: candidates.length,
       });
+
+      // Billing errors are provider-wide: skip all remaining candidates from
+      // the same provider immediately to avoid wasting time on other profiles
+      // that will also fail with insufficient credits.
+      const failoverReason = isFailoverError(normalized)
+        ? normalized.reason
+        : resolveFailoverReasonFromError(err);
+      if (failoverReason === "billing") {
+        const billingProvider = candidate.provider;
+        while (i + 1 < candidates.length && candidates[i + 1].provider === billingProvider) {
+          i += 1;
+          attempts.push({
+            provider: candidates[i].provider,
+            model: candidates[i].model,
+            error: `Skipped — billing failure on provider ${billingProvider}`,
+            reason: "billing",
+            status: 402,
+          });
+        }
+      }
     }
+  }
+
+  // When all failures are billing-related, provide a more helpful error
+  // instead of the generic "All models failed" message.
+  const allBilling = attempts.length > 0 && attempts.every((a) => a.reason === "billing");
+  if (allBilling) {
+    throw new Error(
+      "All configured models returned billing errors — your API keys have run out of credits " +
+        "or have insufficient balance. Check your provider billing dashboards and top up, " +
+        "or add a different provider as a fallback.",
+      { cause: lastError instanceof Error ? lastError : undefined },
+    );
   }
 
   throwFallbackFailureSummary({

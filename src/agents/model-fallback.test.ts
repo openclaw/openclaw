@@ -1096,6 +1096,71 @@ describe("runWithModelFallback", () => {
       expect(run).toHaveBeenNthCalledWith(2, "groq", "llama-3.3-70b-versatile"); // Cross-provider works
     });
   });
+
+  // Tests for billing error immediate skip (Bug #2 fix)
+  describe("billing error immediate provider skip", () => {
+    it("skips remaining same-provider candidates on billing error", async () => {
+      const cfg = makeCfg({
+        agents: {
+          defaults: {
+            model: {
+              primary: "anthropic/claude-opus-4-6",
+              fallbacks: ["anthropic/claude-sonnet-4-5", "groq/llama-3.3-70b-versatile"],
+            },
+          },
+        },
+      });
+
+      const billingError = Object.assign(new Error("insufficient credits"), {
+        status: 402,
+      });
+      const run = vi.fn().mockRejectedValueOnce(billingError).mockResolvedValueOnce("groq success");
+
+      const result = await runWithModelFallback({
+        cfg,
+        provider: "anthropic",
+        model: "claude-opus-4-6",
+        run,
+      });
+
+      expect(result.result).toBe("groq success");
+      // Should have skipped claude-sonnet-4-5 (same provider) and gone straight to groq
+      expect(run).toHaveBeenCalledTimes(2);
+      expect(run).toHaveBeenNthCalledWith(1, "anthropic", "claude-opus-4-6");
+      expect(run).toHaveBeenNthCalledWith(2, "groq", "llama-3.3-70b-versatile");
+      // Attempt for the skipped model should have a billing reason
+      const skippedAttempt = result.attempts.find((a) => a.model === "claude-sonnet-4-5");
+      expect(skippedAttempt?.reason).toBe("billing");
+    });
+
+    it("throws informative error when all models fail with billing", async () => {
+      const cfg = makeCfg({
+        agents: {
+          defaults: {
+            model: {
+              primary: "anthropic/claude-opus-4-6",
+              fallbacks: [],
+            },
+          },
+        },
+      });
+
+      const billingError = Object.assign(new Error("insufficient credits"), {
+        status: 402,
+      });
+      const run = vi.fn().mockRejectedValueOnce(billingError);
+
+      await expect(
+        runWithModelFallback({
+          cfg,
+          provider: "anthropic",
+          model: "claude-opus-4-6",
+          run,
+          fallbacksOverride: [],
+        }),
+      ).rejects.toThrow(/billing/i);
+    });
+  });
 });
 
 describe("runWithImageModelFallback", () => {
