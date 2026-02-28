@@ -617,6 +617,7 @@ export {
   parseTelegramThreadId,
 } from "../telegram/outbound-params.js";
 export { type TelegramProbe } from "../telegram/probe.js";
+export { type TelegramInlineButtons, type TelegramInlineButton } from "../telegram/button-types.js";
 
 // Channel: Signal
 export {

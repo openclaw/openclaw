@@ -30,6 +30,7 @@ import {
   type ChannelPlugin,
   type OpenClawConfig,
   type ResolvedTelegramAccount,
+  type TelegramInlineButtons,
   type TelegramProbe,
 } from "openclaw/plugin-sdk";
 import { getTelegramRuntime } from "./runtime.js";
@@ -357,6 +358,63 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
         silent: silent ?? undefined,
       });
       return { channel: "telegram", ...result };
+    },
+    sendPayload: async ({
+      to,
+      payload,
+      mediaLocalRoots,
+      accountId,
+      deps,
+      replyToId,
+      threadId,
+      silent,
+    }) => {
+      const send = deps?.sendTelegram ?? getTelegramRuntime().channel.telegram.sendMessageTelegram;
+      const replyToMessageId = parseTelegramReplyToMessageId(replyToId);
+      const messageThreadId = parseTelegramThreadId(threadId);
+      const telegramData = payload.channelData?.telegram as
+        | { buttons?: TelegramInlineButtons; quoteText?: string }
+        | undefined;
+      const quoteText =
+        typeof telegramData?.quoteText === "string" ? telegramData.quoteText : undefined;
+      const text = payload.text ?? "";
+      const mediaUrls = payload.mediaUrls?.length
+        ? payload.mediaUrls
+        : payload.mediaUrl
+          ? [payload.mediaUrl]
+          : [];
+
+      if (mediaUrls.length === 0) {
+        const result = await send(to, text, {
+          verbose: false,
+          messageThreadId,
+          replyToMessageId,
+          accountId: accountId ?? undefined,
+          buttons: telegramData?.buttons,
+          quoteText,
+          mediaLocalRoots,
+          silent: silent ?? undefined,
+        });
+        return { channel: "telegram", ...result };
+      }
+
+      // Telegram allows reply_markup on media; attach buttons only to first send.
+      let finalResult: Awaited<ReturnType<typeof send>> | undefined;
+      for (let i = 0; i < mediaUrls.length; i += 1) {
+        const mediaUrl = mediaUrls[i];
+        const isFirst = i === 0;
+        finalResult = await send(to, isFirst ? text : "", {
+          verbose: false,
+          messageThreadId,
+          replyToMessageId,
+          accountId: accountId ?? undefined,
+          mediaUrl,
+          mediaLocalRoots,
+          silent: silent ?? undefined,
+          ...(isFirst ? { buttons: telegramData?.buttons, quoteText } : {}),
+        });
+      }
+      return { channel: "telegram", ...(finalResult ?? { messageId: "unknown", chatId: to }) };
     },
     sendPoll: async ({ to, poll, accountId, threadId, silent, isAnonymous }) =>
       await getTelegramRuntime().channel.telegram.sendPollTelegram(to, poll, {

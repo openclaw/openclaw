@@ -20,11 +20,18 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+type DeliveryPayload = { text?: string; channelData?: Record<string, unknown> };
+
+function getFirstDelivery(deliver: ReturnType<typeof vi.fn>): {
+  params: { payloads?: DeliveryPayload[] } | undefined;
+  payload: DeliveryPayload | undefined;
+} {
+  const params = deliver.mock.calls[0]?.[0] as { payloads?: DeliveryPayload[] } | undefined;
+  return { params, payload: params?.payloads?.[0] };
+}
+
 function getFirstDeliveryText(deliver: ReturnType<typeof vi.fn>): string {
-  const firstCall = deliver.mock.calls[0]?.[0] as
-    | { payloads?: Array<{ text?: string }> }
-    | undefined;
-  return firstCall?.payloads?.[0]?.text ?? "";
+  return getFirstDelivery(deliver).payload?.text ?? "";
 }
 
 const TARGETS_CFG = {
@@ -336,5 +343,157 @@ describe("exec approval forwarder", () => {
     ).resolves.toBe(true);
 
     expect(getFirstDeliveryText(deliver)).toContain("Command:\n````\necho ```danger```\n````");
+  });
+
+  it("attaches three inline approval buttons to the request message", async () => {
+    vi.useFakeTimers();
+    const { deliver, forwarder } = createForwarder({ cfg: TARGETS_CFG });
+
+    await expect(forwarder.handleRequested(baseRequest)).resolves.toBe(true);
+
+    const { payload } = getFirstDelivery(deliver);
+    const buttons = (payload?.channelData?.telegram as { buttons?: unknown[] } | undefined)
+      ?.buttons;
+    expect(Array.isArray(buttons)).toBe(true);
+    const row = buttons?.[0] as Array<{ text: string; callback_data: string }> | undefined;
+    expect(row).toHaveLength(3);
+    expect(row?.[0]).toMatchObject({
+      text: "Allow once",
+      callback_data: `/approve ${baseRequest.id} allow-once`,
+    });
+    expect(row?.[1]).toMatchObject({
+      text: "Always allow",
+      callback_data: `/approve ${baseRequest.id} allow-always`,
+    });
+    expect(row?.[2]).toMatchObject({
+      text: "Deny",
+      callback_data: `/approve ${baseRequest.id} deny`,
+    });
+  });
+
+  it("keeps all callback_data values within the 64-byte Telegram limit", async () => {
+    vi.useFakeTimers();
+    const longId = "a".repeat(36); // typical UUID length
+    const request = { ...baseRequest, id: longId };
+    const { deliver, forwarder } = createForwarder({ cfg: TARGETS_CFG });
+
+    await expect(forwarder.handleRequested(request)).resolves.toBe(true);
+
+    const { payload } = getFirstDelivery(deliver);
+    const row = (payload?.channelData?.telegram as { buttons?: unknown[] } | undefined)
+      ?.buttons?.[0] as Array<{ callback_data: string }> | undefined;
+    expect(row).toBeDefined();
+    for (const btn of row ?? []) {
+      const bytes = Buffer.byteLength(btn.callback_data, "utf8");
+      expect(bytes).toBeLessThanOrEqual(64);
+    }
+  });
+
+  it("still attaches buttons when ID produces exactly 64-byte callback_data", async () => {
+    vi.useFakeTimers();
+    // "/approve " (9) + 42 chars + " allow-always" (13) = 64 bytes exactly
+    const exactId = "a".repeat(42);
+    const request = { ...baseRequest, id: exactId };
+    const { deliver, forwarder } = createForwarder({ cfg: TARGETS_CFG });
+
+    await expect(forwarder.handleRequested(request)).resolves.toBe(true);
+
+    const { payload } = getFirstDelivery(deliver);
+    const buttons = (payload?.channelData?.telegram as { buttons?: unknown[] } | undefined)
+      ?.buttons;
+    expect(buttons).toBeDefined();
+    expect(Array.isArray(buttons)).toBe(true);
+    expect(buttons).toHaveLength(1);
+  });
+
+  it("does not attach buttons to resolved messages", async () => {
+    vi.useFakeTimers();
+    const { deliver, forwarder } = createForwarder({ cfg: TARGETS_CFG });
+
+    await forwarder.handleRequested(baseRequest);
+    deliver.mockClear();
+
+    await forwarder.handleResolved({
+      id: baseRequest.id,
+      decision: "allow-once",
+      resolvedBy: "telegram:123",
+      ts: 2000,
+    });
+
+    const { payload } = getFirstDelivery(deliver);
+    expect(payload?.channelData).toBeUndefined();
+  });
+
+  it("does not attach buttons to expired messages", async () => {
+    vi.useFakeTimers();
+    const { deliver, forwarder } = createForwarder({ cfg: TARGETS_CFG });
+
+    await forwarder.handleRequested(baseRequest);
+    deliver.mockClear();
+
+    await vi.runAllTimersAsync();
+
+    const { payload } = getFirstDelivery(deliver);
+    expect(payload?.channelData).toBeUndefined();
+  });
+
+  it("does not attach channelData to non-Telegram targets", async () => {
+    vi.useFakeTimers();
+    const cfg = {
+      approvals: {
+        exec: { enabled: true, mode: "targets", targets: [{ channel: "slack", to: "U1" }] },
+      },
+    } as OpenClawConfig;
+    const { deliver, forwarder } = createForwarder({ cfg });
+
+    await expect(forwarder.handleRequested(baseRequest)).resolves.toBe(true);
+
+    const { payload } = getFirstDelivery(deliver);
+    expect(payload?.channelData).toBeUndefined();
+  });
+
+  it("includes all optional request fields in message text", async () => {
+    vi.useFakeTimers();
+    const { deliver, forwarder } = createForwarder({ cfg: TARGETS_CFG });
+
+    await expect(
+      forwarder.handleRequested({
+        ...baseRequest,
+        request: {
+          ...baseRequest.request,
+          cwd: "/workspace",
+          nodeId: "node-42",
+          envKeys: ["FOO", "BAR"],
+          host: "myhost",
+          agentId: "agent-x",
+          security: "high",
+          ask: "Are you sure?",
+        },
+      }),
+    ).resolves.toBe(true);
+
+    const text = getFirstDeliveryText(deliver);
+    expect(text).toContain("CWD: /workspace");
+    expect(text).toContain("Node: node-42");
+    expect(text).toContain("Env overrides: FOO, BAR");
+    expect(text).toContain("Host: myhost");
+    expect(text).toContain("Agent: agent-x");
+    expect(text).toContain("Security: high");
+    expect(text).toContain("Ask: Are you sure?");
+  });
+
+  it("falls back to no buttons when approval ID exceeds 64-byte callback_data limit", async () => {
+    vi.useFakeTimers();
+    // /approve <id> allow-always = 9 + id.length + 13 bytes; id > 42 chars pushes it over 64
+    const oversizedId = "x".repeat(43);
+    const request = { ...baseRequest, id: oversizedId };
+    const { deliver, forwarder } = createForwarder({ cfg: TARGETS_CFG });
+
+    await expect(forwarder.handleRequested(request)).resolves.toBe(true);
+
+    const { payload } = getFirstDelivery(deliver);
+    // Text fallback still present; buttons absent
+    expect(payload?.text).toContain("Reply with: /approve");
+    expect(payload?.channelData).toBeUndefined();
   });
 });
