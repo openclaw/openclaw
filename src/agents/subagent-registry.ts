@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import { loadConfig } from "../config/config.js";
 import {
   loadSessionStore,
@@ -698,6 +699,7 @@ async function finalizeSubagentCleanup(
           message: `[System Message] Subagent "${taskLabel}" — results lost (announcement delivery failed)`,
           sessionKey: entry.requesterSessionKey,
           deliver: false,
+          idempotencyKey: crypto.randomUUID(),
         },
         timeoutMs: 10_000,
       });

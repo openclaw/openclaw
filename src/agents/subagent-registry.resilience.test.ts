@@ -134,13 +134,14 @@ describe("subagent resilience", () => {
       expect(notifyCall).toBeDefined();
       const params = (
         notifyCall![0] as {
-          params: { message: string; sessionKey: string; deliver: boolean };
+          params: { message: string; sessionKey: string; deliver: boolean; idempotencyKey: string };
         }
       ).params;
       expect(params.sessionKey).toBe("agent:main:main");
       expect(params.message).toContain("important research task");
       expect(params.message).toContain("results lost");
       expect(params.deliver).toBe(false);
+      expect(params.idempotencyKey).toMatch(/^[0-9a-f-]{36}$/);
     });
 
     test("uses label over task for the notification message", async () => {
