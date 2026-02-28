@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import type { PlivoConfig, WebhookSecurityConfig } from "../config.js";
+import { getHeader } from "../http-headers.js";
 import type {
   HangupCallInput,
   InitiateCallInput,
@@ -10,11 +11,13 @@ import type {
   StartListeningInput,
   StopListeningInput,
   WebhookContext,
+  WebhookParseOptions,
   WebhookVerificationResult,
 } from "../types.js";
 import { escapeXml } from "../voice-mapping.js";
 import { reconstructWebhookUrl, verifyPlivoWebhook } from "../webhook-security.js";
 import type { VoiceCallProvider } from "./base.js";
+import { guardedJsonApiRequest } from "./shared/guarded-json-api.js";
 
 export interface PlivoProviderOptions {
   /** Override public URL origin for signature verification */
@@ -30,6 +33,18 @@ export interface PlivoProviderOptions {
 type PendingSpeak = { text: string; locale?: string };
 type PendingListen = { language?: string };
 
+function createPlivoRequestDedupeKey(ctx: WebhookContext): string {
+  const nonceV3 = getHeader(ctx.headers, "x-plivo-signature-v3-nonce");
+  if (nonceV3) {
+    return `plivo:v3:${nonceV3}`;
+  }
+  const nonceV2 = getHeader(ctx.headers, "x-plivo-signature-v2-nonce");
+  if (nonceV2) {
+    return `plivo:v2:${nonceV2}`;
+  }
+  return `plivo:fallback:${crypto.createHash("sha256").update(ctx.rawBody).digest("hex")}`;
+}
+
 export class PlivoProvider implements VoiceCallProvider {
   readonly name = "plivo" as const;
 
@@ -37,6 +52,7 @@ export class PlivoProvider implements VoiceCallProvider {
   private readonly authToken: string;
   private readonly baseUrl: string;
   private readonly options: PlivoProviderOptions;
+  private readonly apiHost: string;
 
   // Best-effort mapping between create-call request UUID and call UUID.
   private requestUuidToCallUuid = new Map<string, string>();
@@ -59,6 +75,7 @@ export class PlivoProvider implements VoiceCallProvider {
     this.authId = config.authId;
     this.authToken = config.authToken;
     this.baseUrl = `https://api.plivo.com/v1/Account/${this.authId}`;
+    this.apiHost = new URL(this.baseUrl).hostname;
     this.options = options;
   }
 
@@ -69,25 +86,19 @@ export class PlivoProvider implements VoiceCallProvider {
     allowNotFound?: boolean;
   }): Promise<T> {
     const { method, endpoint, body, allowNotFound } = params;
-    const response = await fetch(`${this.baseUrl}${endpoint}`, {
+    return await guardedJsonApiRequest<T>({
+      url: `${this.baseUrl}${endpoint}`,
       method,
       headers: {
         Authorization: `Basic ${Buffer.from(`${this.authId}:${this.authToken}`).toString("base64")}`,
         "Content-Type": "application/json",
       },
-      body: body ? JSON.stringify(body) : undefined,
+      body,
+      allowNotFound,
+      allowedHostnames: [this.apiHost],
+      auditContext: "voice-call.plivo.api",
+      errorPrefix: "Plivo API error",
     });
-
-    if (!response.ok) {
-      if (allowNotFound && response.status === 404) {
-        return undefined as T;
-      }
-      const errorText = await response.text();
-      throw new Error(`Plivo API error: ${response.status} ${errorText}`);
-    }
-
-    const text = await response.text();
-    return text ? (JSON.parse(text) as T) : (undefined as T);
   }
 
   verifyWebhook(ctx: WebhookContext): WebhookVerificationResult {
@@ -104,10 +115,18 @@ export class PlivoProvider implements VoiceCallProvider {
       console.warn(`[plivo] Webhook verification failed: ${result.reason}`);
     }
 
-    return { ok: result.ok, reason: result.reason };
+    return {
+      ok: result.ok,
+      reason: result.reason,
+      isReplay: result.isReplay,
+      verifiedRequestKey: result.verifiedRequestKey,
+    };
   }
 
-  parseWebhookEvent(ctx: WebhookContext): ProviderWebhookParseResult {
+  parseWebhookEvent(
+    ctx: WebhookContext,
+    options?: WebhookParseOptions,
+  ): ProviderWebhookParseResult {
     const flow = typeof ctx.query?.flow === "string" ? ctx.query.flow.trim() : "";
 
     const parsed = this.parseBody(ctx.rawBody);
@@ -173,7 +192,8 @@ export class PlivoProvider implements VoiceCallProvider {
 
     // Normal events.
     const callIdFromQuery = this.getCallIdFromQuery(ctx);
-    const event = this.normalizeEvent(parsed, callIdFromQuery);
+    const dedupeKey = options?.verifiedRequestKey ?? createPlivoRequestDedupeKey(ctx);
+    const event = this.normalizeEvent(parsed, callIdFromQuery, dedupeKey);
 
     return {
       events: event ? [event] : [],
@@ -186,7 +206,11 @@ export class PlivoProvider implements VoiceCallProvider {
     };
   }
 
-  private normalizeEvent(params: URLSearchParams, callIdOverride?: string): NormalizedEvent | null {
+  private normalizeEvent(
+    params: URLSearchParams,
+    callIdOverride?: string,
+    dedupeKey?: string,
+  ): NormalizedEvent | null {
     const callUuid = params.get("CallUUID") || "";
     const requestUuid = params.get("RequestUUID") || "";
 
@@ -201,6 +225,7 @@ export class PlivoProvider implements VoiceCallProvider {
 
     const baseEvent = {
       id: crypto.randomUUID(),
+      dedupeKey,
       callId: callIdOverride || callUuid || requestUuid,
       providerCallId: callUuid || requestUuid || undefined,
       timestamp: Date.now(),
@@ -331,31 +356,40 @@ export class PlivoProvider implements VoiceCallProvider {
     });
   }
 
-  async playTts(input: PlayTtsInput): Promise<void> {
-    const callUuid = this.requestUuidToCallUuid.get(input.providerCallId) ?? input.providerCallId;
+  private resolveCallContext(params: {
+    providerCallId: string;
+    callId: string;
+    operation: string;
+  }): {
+    callUuid: string;
+    webhookBase: string;
+  } {
+    const callUuid = this.requestUuidToCallUuid.get(params.providerCallId) ?? params.providerCallId;
     const webhookBase =
-      this.callUuidToWebhookUrl.get(callUuid) || this.callIdToWebhookUrl.get(input.callId);
+      this.callUuidToWebhookUrl.get(callUuid) || this.callIdToWebhookUrl.get(params.callId);
     if (!webhookBase) {
       throw new Error("Missing webhook URL for this call (provider state missing)");
     }
-
     if (!callUuid) {
-      throw new Error("Missing Plivo CallUUID for playTts");
+      throw new Error(`Missing Plivo CallUUID for ${params.operation}`);
     }
+    return { callUuid, webhookBase };
+  }
 
-    const transferUrl = new URL(webhookBase);
+  private async transferCallLeg(params: {
+    callUuid: string;
+    webhookBase: string;
+    callId: string;
+    flow: "xml-speak" | "xml-listen";
+  }): Promise<void> {
+    const transferUrl = new URL(params.webhookBase);
     transferUrl.searchParams.set("provider", "plivo");
-    transferUrl.searchParams.set("flow", "xml-speak");
-    transferUrl.searchParams.set("callId", input.callId);
-
-    this.pendingSpeakByCallId.set(input.callId, {
-      text: input.text,
-      locale: input.locale,
-    });
+    transferUrl.searchParams.set("flow", params.flow);
+    transferUrl.searchParams.set("callId", params.callId);
 
     await this.apiRequest({
       method: "POST",
-      endpoint: `/Call/${callUuid}/`,
+      endpoint: `/Call/${params.callUuid}/`,
       body: {
         legs: "aleg",
         aleg_url: transferUrl.toString(),
@@ -364,35 +398,42 @@ export class PlivoProvider implements VoiceCallProvider {
     });
   }
 
+  async playTts(input: PlayTtsInput): Promise<void> {
+    const { callUuid, webhookBase } = this.resolveCallContext({
+      providerCallId: input.providerCallId,
+      callId: input.callId,
+      operation: "playTts",
+    });
+
+    this.pendingSpeakByCallId.set(input.callId, {
+      text: input.text,
+      locale: input.locale,
+    });
+
+    await this.transferCallLeg({
+      callUuid,
+      webhookBase,
+      callId: input.callId,
+      flow: "xml-speak",
+    });
+  }
+
   async startListening(input: StartListeningInput): Promise<void> {
-    const callUuid = this.requestUuidToCallUuid.get(input.providerCallId) ?? input.providerCallId;
-    const webhookBase =
-      this.callUuidToWebhookUrl.get(callUuid) || this.callIdToWebhookUrl.get(input.callId);
-    if (!webhookBase) {
-      throw new Error("Missing webhook URL for this call (provider state missing)");
-    }
-
-    if (!callUuid) {
-      throw new Error("Missing Plivo CallUUID for startListening");
-    }
-
-    const transferUrl = new URL(webhookBase);
-    transferUrl.searchParams.set("provider", "plivo");
-    transferUrl.searchParams.set("flow", "xml-listen");
-    transferUrl.searchParams.set("callId", input.callId);
+    const { callUuid, webhookBase } = this.resolveCallContext({
+      providerCallId: input.providerCallId,
+      callId: input.callId,
+      operation: "startListening",
+    });
 
     this.pendingListenByCallId.set(input.callId, {
       language: input.language,
     });
 
-    await this.apiRequest({
-      method: "POST",
-      endpoint: `/Call/${callUuid}/`,
-      body: {
-        legs: "aleg",
-        aleg_url: transferUrl.toString(),
-        aleg_method: "POST",
-      },
+    await this.transferCallLeg({
+      callUuid,
+      webhookBase,
+      callId: input.callId,
+      flow: "xml-listen",
     });
   }
 

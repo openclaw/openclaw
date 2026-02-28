@@ -169,10 +169,12 @@ export const browserHandlers: GatewayRequestHandlers = {
         allowlist,
       });
       if (!allowed.ok) {
+        const platform = nodeTarget.platform ?? "unknown";
+        const hint = `node command not allowed: ${allowed.reason} (platform: ${platform}, command: browser.proxy)`;
         respond(
           false,
           undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "node command not allowed", {
+          errorShape(ErrorCodes.INVALID_REQUEST, hint, {
             details: { reason: allowed.reason, command: "browser.proxy" },
           }),
         );

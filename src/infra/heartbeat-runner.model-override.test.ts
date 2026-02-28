@@ -1,6 +1,3 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { telegramPlugin } from "../../extensions/telegram/src/channel.js";
 import { setTelegramRuntime } from "../../extensions/telegram/src/runtime.js";
@@ -13,6 +10,7 @@ import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createPluginRuntime } from "../plugins/runtime/index.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { runHeartbeatOnce } from "./heartbeat-runner.js";
+import { seedSessionStore, withTempHeartbeatSandbox } from "./heartbeat-runner.test-utils.js";
 
 // Avoid pulling optional runtime deps during isolated runs.
 vi.mock("jiti", () => ({ createJiti: () => () => ({}) }));
@@ -30,32 +28,20 @@ async function withHeartbeatFixture(
     seedSession: (sessionKey: string, input: SeedSessionInput) => Promise<void>;
   }) => Promise<unknown>,
 ): Promise<unknown> {
-  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-hb-model-"));
-  const storePath = path.join(tmpDir, "sessions.json");
-
-  const seedSession = async (sessionKey: string, input: SeedSessionInput) => {
-    await fs.writeFile(
-      storePath,
-      JSON.stringify(
-        {
-          [sessionKey]: {
-            sessionId: "sid",
-            updatedAt: input.updatedAt ?? Date.now(),
-            lastChannel: input.lastChannel,
-            lastTo: input.lastTo,
-          },
-        },
-        null,
-        2,
-      ),
-    );
-  };
-
-  try {
-    return await run({ tmpDir, storePath, seedSession });
-  } finally {
-    await fs.rm(tmpDir, { recursive: true, force: true });
-  }
+  return withTempHeartbeatSandbox(
+    async ({ tmpDir, storePath }) => {
+      const seedSession = async (sessionKey: string, input: SeedSessionInput) => {
+        await seedSessionStore(storePath, sessionKey, {
+          updatedAt: input.updatedAt,
+          lastChannel: input.lastChannel,
+          lastProvider: input.lastChannel,
+          lastTo: input.lastTo,
+        });
+      };
+      return run({ tmpDir, storePath, seedSession });
+    },
+    { prefix: "openclaw-hb-model-" },
+  );
 }
 
 beforeEach(() => {
@@ -136,7 +122,7 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
   });
 
   it("passes per-agent heartbeat model override (merged with defaults)", async () => {
-    await withHeartbeatFixture(async ({ storePath, seedSession }) => {
+    await withHeartbeatFixture(async ({ tmpDir, storePath, seedSession }) => {
       const cfg: OpenClawConfig = {
         agents: {
           defaults: {
@@ -149,6 +135,7 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
             { id: "main", default: true },
             {
               id: "ops",
+              workspace: tmpDir,
               heartbeat: {
                 every: "5m",
                 target: "whatsapp",

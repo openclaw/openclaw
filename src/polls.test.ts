@@ -24,10 +24,14 @@ describe("polls", () => {
     ).toThrow(/at most 2/);
   });
 
-  it("clamps poll duration with defaults", () => {
-    expect(normalizePollDurationHours(undefined, { defaultHours: 24, maxHours: 48 })).toBe(24);
-    expect(normalizePollDurationHours(999, { defaultHours: 24, maxHours: 48 })).toBe(48);
-    expect(normalizePollDurationHours(1, { defaultHours: 24, maxHours: 48 })).toBe(1);
+  it.each([
+    { durationHours: undefined, expected: 24 },
+    { durationHours: 999, expected: 48 },
+    { durationHours: 1, expected: 1 },
+  ])("clamps poll duration for $durationHours hours", ({ durationHours, expected }) => {
+    expect(normalizePollDurationHours(durationHours, { defaultHours: 24, maxHours: 48 })).toBe(
+      expected,
+    );
   });
 
   it("rejects both durationSeconds and durationHours", () => {

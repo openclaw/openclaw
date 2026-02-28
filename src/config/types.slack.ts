@@ -45,7 +45,8 @@ export type SlackChannelConfig = {
 };
 
 export type SlackReactionNotificationMode = "off" | "own" | "all" | "allowlist";
-export type SlackStreamMode = "replace" | "status_final" | "append";
+export type SlackStreamingMode = "off" | "partial" | "block" | "progress";
+export type SlackLegacyStreamMode = "replace" | "status_final" | "append";
 
 export type SlackActionConfig = {
   reactions?: boolean;
@@ -104,6 +105,11 @@ export type SlackAccountConfig = {
   userTokenReadOnly?: boolean;
   /** Allow bot-authored messages to trigger replies (default: false). */
   allowBots?: boolean;
+  /**
+   * Break-glass override: allow mutable identity matching (name/slug) in allowlists.
+   * Default behavior is ID-only matching.
+   */
+  dangerouslyAllowNameMatching?: boolean;
   /** Default mention requirement for channel messages (default: true). */
   requireMention?: boolean;
   /**
@@ -126,14 +132,22 @@ export type SlackAccountConfig = {
   /** Merge streamed block replies before sending. */
   blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
   /**
-   * Enable Slack native text streaming (Agents & AI Apps). Default: true.
+   * Stream preview mode:
+   * - "off": disable live preview streaming
+   * - "partial": replace preview text with the latest partial output (default)
+   * - "block": append chunked preview updates
+   * - "progress": show progress status, then send final text
    *
-   * Set to `false` to disable native Slack text streaming and use normal reply
-   * delivery behavior only.
+   * Legacy boolean values are still accepted and auto-migrated.
    */
-  streaming?: boolean;
-  /** Slack stream preview mode (replace|status_final|append). Default: replace. */
-  streamMode?: SlackStreamMode;
+  streaming?: SlackStreamingMode | boolean;
+  /**
+   * Slack native text streaming toggle (`chat.startStream` / `chat.appendStream` / `chat.stopStream`).
+   * Used when `streaming` is `partial`. Default: true.
+   */
+  nativeStreaming?: boolean;
+  /** @deprecated Legacy preview mode key; migrated automatically to `streaming`. */
+  streamMode?: SlackLegacyStreamMode;
   mediaMaxMb?: number;
   /** Reaction notification mode (off|own|all|allowlist). Default: own. */
   reactionNotifications?: SlackReactionNotificationMode;
@@ -160,6 +174,8 @@ export type SlackAccountConfig = {
    * Legacy key: channels.slack.dm.allowFrom.
    */
   allowFrom?: Array<string | number>;
+  /** Default delivery target for CLI --deliver when no explicit --reply-to is provided. */
+  defaultTo?: string;
   dm?: SlackDmConfig;
   channels?: Record<string, SlackChannelConfig>;
   /** Heartbeat visibility settings for this channel. */

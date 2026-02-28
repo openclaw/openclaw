@@ -20,6 +20,7 @@ import {
 import type { sendMessageDiscord } from "../../discord/send.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import type { sendMessageIMessage } from "../../imessage/send.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { markdownToSignalTextChunks, type SignalTextStyleRange } from "../../signal/format.js";
@@ -32,10 +33,14 @@ import { ackDelivery, enqueueDelivery, failDelivery } from "./delivery-queue.js"
 import type { OutboundIdentity } from "./identity.js";
 import type { NormalizedOutboundPayload } from "./payloads.js";
 import { normalizeReplyPayloadsForDelivery } from "./payloads.js";
+import type { OutboundSessionContext } from "./session-context.js";
 import type { OutboundChannel } from "./targets.js";
 
 export type { NormalizedOutboundPayload } from "./payloads.js";
 export { normalizeOutboundPayloads } from "./payloads.js";
+
+const log = createSubsystemLogger("outbound/deliver");
+const TELEGRAM_TEXT_LIMIT = 4096;
 
 type SendMatrixMessage = (
   to: string,
@@ -207,8 +212,8 @@ type DeliverOutboundPayloadsCoreParams = {
   bestEffort?: boolean;
   onError?: (err: unknown, payload: NormalizedOutboundPayload) => void;
   onPayload?: (payload: NormalizedOutboundPayload) => void;
-  /** Active agent id for media local-root scoping. */
-  agentId?: string;
+  /** Session/agent context used for hooks and media local-root scoping. */
+  session?: OutboundSessionContext;
   mirror?: {
     sessionKey: string;
     agentId?: string;
@@ -294,7 +299,7 @@ async function deliverOutboundPayloadsCore(
   const sendSignal = params.deps?.sendSignal ?? sendMessageSignal;
   const mediaLocalRoots = getAgentScopedMediaLocalRoots(
     cfg,
-    params.agentId ?? params.mirror?.agentId,
+    params.session?.agentId ?? params.mirror?.agentId,
   );
   const results: OutboundDeliveryResult[] = [];
   const handler = await createChannelHandler({
@@ -310,11 +315,15 @@ async function deliverOutboundPayloadsCore(
     silent: params.silent,
     mediaLocalRoots,
   });
-  const textLimit = handler.chunker
+  const configuredTextLimit = handler.chunker
     ? resolveTextChunkLimit(cfg, channel, accountId, {
         fallbackLimit: handler.textChunkLimit,
       })
     : undefined;
+  const textLimit =
+    channel === "telegram" && typeof configuredTextLimit === "number"
+      ? Math.min(configuredTextLimit, TELEGRAM_TEXT_LIMIT)
+      : configuredTextLimit;
   const chunkMode = handler.chunker ? resolveChunkMode(cfg, channel, accountId) : "length";
   const isSignalChannel = channel === "signal";
   const signalTableMode = isSignalChannel
@@ -444,7 +453,21 @@ async function deliverOutboundPayloadsCore(
     return normalized ? [normalized] : [];
   });
   const hookRunner = getGlobalHookRunner();
-  const sessionKeyForInternalHooks = params.mirror?.sessionKey;
+  const sessionKeyForInternalHooks = params.mirror?.sessionKey ?? params.session?.key;
+  if (
+    hookRunner?.hasHooks("message_sent") &&
+    params.session?.agentId &&
+    !sessionKeyForInternalHooks
+  ) {
+    log.warn(
+      "deliverOutboundPayloads: session.agentId present without session key; internal message:sent hook will be skipped",
+      {
+        channel,
+        to,
+        agentId: params.session.agentId,
+      },
+    );
+  }
   for (const payload of normalizedPayloads) {
     const payloadSummary: NormalizedOutboundPayload = {
       text: payload.text ?? "",

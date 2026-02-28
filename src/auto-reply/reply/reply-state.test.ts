@@ -1,7 +1,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR } from "../../agents/pi-settings.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
   appendHistoryEntry,
@@ -22,6 +23,12 @@ import {
 import { CURRENT_MESSAGE_MARKER } from "./mentions.js";
 import { incrementCompactionCount } from "./session-updates.js";
 
+const tempDirs: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
+});
+
 async function seedSessionStore(params: {
   storePath: string;
   sessionKey: string;
@@ -35,7 +42,26 @@ async function seedSessionStore(params: {
   );
 }
 
+async function createCompactionSessionFixture(entry: SessionEntry) {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-compact-"));
+  tempDirs.push(tmp);
+  const storePath = path.join(tmp, "sessions.json");
+  const sessionKey = "main";
+  const sessionStore: Record<string, SessionEntry> = { [sessionKey]: entry };
+  await seedSessionStore({ storePath, sessionKey, entry });
+  return { storePath, sessionKey, sessionStore };
+}
+
 describe("history helpers", () => {
+  function createHistoryMapWithTwoEntries() {
+    const historyMap = new Map<string, { sender: string; body: string }[]>();
+    historyMap.set("group", [
+      { sender: "A", body: "one" },
+      { sender: "B", body: "two" },
+    ]);
+    return historyMap;
+  }
+
   it("returns current message when history is empty", () => {
     const result = buildHistoryContext({
       historyText: "  ",
@@ -87,11 +113,7 @@ describe("history helpers", () => {
   });
 
   it("builds context from map and appends entry", () => {
-    const historyMap = new Map<string, { sender: string; body: string }[]>();
-    historyMap.set("group", [
-      { sender: "A", body: "one" },
-      { sender: "B", body: "two" },
-    ]);
+    const historyMap = createHistoryMapWithTwoEntries();
 
     const result = buildHistoryContextFromMap({
       historyMap,
@@ -110,11 +132,7 @@ describe("history helpers", () => {
   });
 
   it("builds context from pending map without appending", () => {
-    const historyMap = new Map<string, { sender: string; body: string }[]>();
-    historyMap.set("group", [
-      { sender: "A", body: "one" },
-      { sender: "B", body: "two" },
-    ]);
+    const historyMap = createHistoryMapWithTwoEntries();
 
     const result = buildPendingHistoryContextFromMap({
       historyMap,
@@ -210,6 +228,24 @@ describe("memory flush settings", () => {
     expect(settings?.prompt).toContain("NO_REPLY");
     expect(settings?.systemPrompt).toContain("NO_REPLY");
   });
+
+  it("falls back to defaults when numeric values are invalid", () => {
+    const settings = resolveMemoryFlushSettings({
+      agents: {
+        defaults: {
+          compaction: {
+            reserveTokensFloor: Number.NaN,
+            memoryFlush: {
+              softThresholdTokens: -100,
+            },
+          },
+        },
+      },
+    });
+
+    expect(settings?.softThresholdTokens).toBe(DEFAULT_MEMORY_FLUSH_SOFT_TOKENS);
+    expect(settings?.reserveTokensFloor).toBe(DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR);
+  });
 });
 
 describe("shouldRunMemoryFlush", () => {
@@ -303,12 +339,8 @@ describe("resolveMemoryFlushContextWindowTokens", () => {
 
 describe("incrementCompactionCount", () => {
   it("increments compaction count", async () => {
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-compact-"));
-    const storePath = path.join(tmp, "sessions.json");
-    const sessionKey = "main";
     const entry = { sessionId: "s1", updatedAt: Date.now(), compactionCount: 2 } as SessionEntry;
-    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: entry };
-    await seedSessionStore({ storePath, sessionKey, entry });
+    const { storePath, sessionKey, sessionStore } = await createCompactionSessionFixture(entry);
 
     const count = await incrementCompactionCount({
       sessionEntry: entry,
@@ -323,9 +355,6 @@ describe("incrementCompactionCount", () => {
   });
 
   it("updates totalTokens when tokensAfter is provided", async () => {
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-compact-"));
-    const storePath = path.join(tmp, "sessions.json");
-    const sessionKey = "main";
     const entry = {
       sessionId: "s1",
       updatedAt: Date.now(),
@@ -334,8 +363,7 @@ describe("incrementCompactionCount", () => {
       inputTokens: 170_000,
       outputTokens: 10_000,
     } as SessionEntry;
-    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: entry };
-    await seedSessionStore({ storePath, sessionKey, entry });
+    const { storePath, sessionKey, sessionStore } = await createCompactionSessionFixture(entry);
 
     await incrementCompactionCount({
       sessionEntry: entry,
@@ -354,17 +382,13 @@ describe("incrementCompactionCount", () => {
   });
 
   it("does not update totalTokens when tokensAfter is not provided", async () => {
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-compact-"));
-    const storePath = path.join(tmp, "sessions.json");
-    const sessionKey = "main";
     const entry = {
       sessionId: "s1",
       updatedAt: Date.now(),
       compactionCount: 0,
       totalTokens: 180_000,
     } as SessionEntry;
-    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: entry };
-    await seedSessionStore({ storePath, sessionKey, entry });
+    const { storePath, sessionKey, sessionStore } = await createCompactionSessionFixture(entry);
 
     await incrementCompactionCount({
       sessionEntry: entry,

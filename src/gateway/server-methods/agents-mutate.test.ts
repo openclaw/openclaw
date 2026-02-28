@@ -1,3 +1,4 @@
+import path from "node:path";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
 /* ------------------------------------------------------------------ */
@@ -26,7 +27,10 @@ const mocks = vi.hoisted(() => ({
   fsMkdir: vi.fn(async () => undefined),
   fsAppendFile: vi.fn(async () => {}),
   fsReadFile: vi.fn(async () => ""),
-  fsStat: vi.fn(async () => null),
+  fsStat: vi.fn(async (..._args: unknown[]) => null as import("node:fs").Stats | null),
+  fsLstat: vi.fn(async (..._args: unknown[]) => null as import("node:fs").Stats | null),
+  fsRealpath: vi.fn(async (p: string) => p),
+  fsOpen: vi.fn(async () => ({}) as unknown),
 }));
 
 vi.mock("../../config/config.js", () => ({
@@ -85,6 +89,9 @@ vi.mock("node:fs/promises", async () => {
     appendFile: mocks.fsAppendFile,
     readFile: mocks.fsReadFile,
     stat: mocks.fsStat,
+    lstat: mocks.fsLstat,
+    realpath: mocks.fsRealpath,
+    open: mocks.fsOpen,
   };
   return { ...patched, default: patched };
 });
@@ -125,12 +132,48 @@ function createErrnoError(code: string) {
   return err;
 }
 
-function mockWorkspaceStateRead(params: { onboardingCompletedAt?: string; errorCode?: string }) {
+function makeFileStat(params?: {
+  size?: number;
+  mtimeMs?: number;
+  dev?: number;
+  ino?: number;
+  nlink?: number;
+}): import("node:fs").Stats {
+  return {
+    isFile: () => true,
+    isSymbolicLink: () => false,
+    size: params?.size ?? 10,
+    mtimeMs: params?.mtimeMs ?? 1234,
+    dev: params?.dev ?? 1,
+    ino: params?.ino ?? 1,
+    nlink: params?.nlink ?? 1,
+  } as unknown as import("node:fs").Stats;
+}
+
+function makeSymlinkStat(params?: { dev?: number; ino?: number }): import("node:fs").Stats {
+  return {
+    isFile: () => false,
+    isSymbolicLink: () => true,
+    size: 0,
+    mtimeMs: 0,
+    dev: params?.dev ?? 1,
+    ino: params?.ino ?? 2,
+  } as unknown as import("node:fs").Stats;
+}
+
+function mockWorkspaceStateRead(params: {
+  onboardingCompletedAt?: string;
+  errorCode?: string;
+  rawContent?: string;
+}) {
   mocks.fsReadFile.mockImplementation(async (...args: unknown[]) => {
     const filePath = args[0];
     if (String(filePath).endsWith("workspace-state.json")) {
       if (params.errorCode) {
         throw createErrnoError(params.errorCode);
+      }
+      if (typeof params.rawContent === "string") {
+        return params.rawContent;
       }
       return JSON.stringify({
         onboardingCompletedAt: params.onboardingCompletedAt ?? "2026-02-15T14:00:00.000Z",
@@ -140,6 +183,24 @@ function mockWorkspaceStateRead(params: { onboardingCompletedAt?: string; errorC
   });
 }
 
+async function listAgentFileNames(agentId = "main") {
+  const { respond, promise } = makeCall("agents.files.list", { agentId });
+  await promise;
+
+  const [, result] = respond.mock.calls[0] ?? [];
+  const files = (result as { files: Array<{ name: string }> }).files;
+  return files.map((file) => file.name);
+}
+
+function expectNotFoundResponseAndNoWrite(respond: ReturnType<typeof vi.fn>) {
+  expect(respond).toHaveBeenCalledWith(
+    false,
+    undefined,
+    expect.objectContaining({ message: expect.stringContaining("not found") }),
+  );
+  expect(mocks.writeConfigFile).not.toHaveBeenCalled();
+}
+
 beforeEach(() => {
   mocks.fsReadFile.mockImplementation(async () => {
     throw createEnoentError();
@@ -147,6 +208,19 @@ beforeEach(() => {
   mocks.fsStat.mockImplementation(async () => {
     throw createEnoentError();
   });
+  mocks.fsLstat.mockImplementation(async () => {
+    throw createEnoentError();
+  });
+  mocks.fsRealpath.mockImplementation(async (p: string) => p);
+  mocks.fsOpen.mockImplementation(
+    async () =>
+      ({
+        stat: async () => makeFileStat(),
+        readFile: async () => Buffer.from(""),
+        writeFile: async () => {},
+        close: async () => {},
+      }) as unknown,
+  );
 });
 
 /* ------------------------------------------------------------------ */
@@ -303,12 +377,7 @@ describe("agents.update", () => {
     });
     await promise;
 
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ message: expect.stringContaining("not found") }),
-    );
-    expect(mocks.writeConfigFile).not.toHaveBeenCalled();
+    expectNotFoundResponseAndNoWrite(respond);
   });
 
   it("ensures workspace when workspace changes", async () => {
@@ -392,12 +461,7 @@ describe("agents.delete", () => {
     });
     await promise;
 
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ message: expect.stringContaining("not found") }),
-    );
-    expect(mocks.writeConfigFile).not.toHaveBeenCalled();
+    expectNotFoundResponseAndNoWrite(respond);
   });
 
   it("rejects invalid params (missing agentId)", async () => {
@@ -419,33 +483,234 @@ describe("agents.files.list", () => {
   });
 
   it("includes BOOTSTRAP.md when onboarding has not completed", async () => {
-    const { respond, promise } = makeCall("agents.files.list", { agentId: "main" });
-    await promise;
-
-    const [, result] = respond.mock.calls[0] ?? [];
-    const files = (result as { files: Array<{ name: string }> }).files;
-    expect(files.some((file) => file.name === "BOOTSTRAP.md")).toBe(true);
+    const names = await listAgentFileNames();
+    expect(names).toContain("BOOTSTRAP.md");
   });
 
   it("hides BOOTSTRAP.md when workspace onboarding is complete", async () => {
     mockWorkspaceStateRead({ onboardingCompletedAt: "2026-02-15T14:00:00.000Z" });
 
-    const { respond, promise } = makeCall("agents.files.list", { agentId: "main" });
-    await promise;
-
-    const [, result] = respond.mock.calls[0] ?? [];
-    const files = (result as { files: Array<{ name: string }> }).files;
-    expect(files.some((file) => file.name === "BOOTSTRAP.md")).toBe(false);
+    const names = await listAgentFileNames();
+    expect(names).not.toContain("BOOTSTRAP.md");
   });
 
   it("falls back to showing BOOTSTRAP.md when workspace state cannot be read", async () => {
     mockWorkspaceStateRead({ errorCode: "EACCES" });
 
-    const { respond, promise } = makeCall("agents.files.list", { agentId: "main" });
+    const names = await listAgentFileNames();
+    expect(names).toContain("BOOTSTRAP.md");
+  });
+
+  it("falls back to showing BOOTSTRAP.md when workspace state is malformed JSON", async () => {
+    mockWorkspaceStateRead({ rawContent: "{" });
+
+    const names = await listAgentFileNames();
+    expect(names).toContain("BOOTSTRAP.md");
+  });
+});
+
+describe("agents.files.get/set symlink safety", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.loadConfigReturn = {};
+    mocks.fsMkdir.mockResolvedValue(undefined);
+  });
+
+  it("rejects agents.files.get when allowlisted file symlink escapes workspace", async () => {
+    const workspace = "/workspace/test-agent";
+    const candidate = path.resolve(workspace, "AGENTS.md");
+    mocks.fsRealpath.mockImplementation(async (p: string) => {
+      if (p === workspace) {
+        return workspace;
+      }
+      if (p === candidate) {
+        return "/outside/secret.txt";
+      }
+      return p;
+    });
+    mocks.fsLstat.mockImplementation(async (...args: unknown[]) => {
+      const p = typeof args[0] === "string" ? args[0] : "";
+      if (p === candidate) {
+        return makeSymlinkStat();
+      }
+      throw createEnoentError();
+    });
+
+    const { respond, promise } = makeCall("agents.files.get", {
+      agentId: "main",
+      name: "AGENTS.md",
+    });
     await promise;
 
-    const [, result] = respond.mock.calls[0] ?? [];
-    const files = (result as { files: Array<{ name: string }> }).files;
-    expect(files.some((file) => file.name === "BOOTSTRAP.md")).toBe(true);
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ message: expect.stringContaining("unsafe workspace file") }),
+    );
+  });
+
+  it("rejects agents.files.set when allowlisted file symlink escapes workspace", async () => {
+    const workspace = "/workspace/test-agent";
+    const candidate = path.resolve(workspace, "AGENTS.md");
+    mocks.fsRealpath.mockImplementation(async (p: string) => {
+      if (p === workspace) {
+        return workspace;
+      }
+      if (p === candidate) {
+        return "/outside/secret.txt";
+      }
+      return p;
+    });
+    mocks.fsLstat.mockImplementation(async (...args: unknown[]) => {
+      const p = typeof args[0] === "string" ? args[0] : "";
+      if (p === candidate) {
+        return makeSymlinkStat();
+      }
+      throw createEnoentError();
+    });
+
+    const { respond, promise } = makeCall("agents.files.set", {
+      agentId: "main",
+      name: "AGENTS.md",
+      content: "x",
+    });
+    await promise;
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ message: expect.stringContaining("unsafe workspace file") }),
+    );
+    expect(mocks.fsOpen).not.toHaveBeenCalled();
+  });
+
+  it("allows in-workspace symlink targets for get/set", async () => {
+    const workspace = "/workspace/test-agent";
+    const candidate = path.resolve(workspace, "AGENTS.md");
+    const target = path.resolve(workspace, "policies", "AGENTS.md");
+    const targetStat = makeFileStat({ size: 7, mtimeMs: 1700, dev: 9, ino: 42 });
+
+    mocks.fsRealpath.mockImplementation(async (p: string) => {
+      if (p === workspace) {
+        return workspace;
+      }
+      if (p === candidate) {
+        return target;
+      }
+      return p;
+    });
+    mocks.fsLstat.mockImplementation(async (...args: unknown[]) => {
+      const p = typeof args[0] === "string" ? args[0] : "";
+      if (p === candidate) {
+        return makeSymlinkStat({ dev: 9, ino: 41 });
+      }
+      if (p === target) {
+        return targetStat;
+      }
+      throw createEnoentError();
+    });
+    mocks.fsStat.mockImplementation(async (...args: unknown[]) => {
+      const p = typeof args[0] === "string" ? args[0] : "";
+      if (p === target) {
+        return targetStat;
+      }
+      throw createEnoentError();
+    });
+    mocks.fsOpen.mockImplementation(
+      async () =>
+        ({
+          stat: async () => targetStat,
+          readFile: async () => Buffer.from("inside\n"),
+          writeFile: async () => {},
+          close: async () => {},
+        }) as unknown,
+    );
+
+    const getCall = makeCall("agents.files.get", { agentId: "main", name: "AGENTS.md" });
+    await getCall.promise;
+    expect(getCall.respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        file: expect.objectContaining({ missing: false, content: "inside\n" }),
+      }),
+      undefined,
+    );
+
+    const setCall = makeCall("agents.files.set", {
+      agentId: "main",
+      name: "AGENTS.md",
+      content: "updated\n",
+    });
+    await setCall.promise;
+    expect(setCall.respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        ok: true,
+        file: expect.objectContaining({ missing: false, content: "updated\n" }),
+      }),
+      undefined,
+    );
+  });
+
+  it("rejects agents.files.get when allowlisted file is a hardlinked alias", async () => {
+    const workspace = "/workspace/test-agent";
+    const candidate = path.resolve(workspace, "AGENTS.md");
+    mocks.fsRealpath.mockImplementation(async (p: string) => {
+      if (p === workspace) {
+        return workspace;
+      }
+      return p;
+    });
+    mocks.fsLstat.mockImplementation(async (...args: unknown[]) => {
+      const p = typeof args[0] === "string" ? args[0] : "";
+      if (p === candidate) {
+        return makeFileStat({ nlink: 2 });
+      }
+      throw createEnoentError();
+    });
+
+    const { respond, promise } = makeCall("agents.files.get", {
+      agentId: "main",
+      name: "AGENTS.md",
+    });
+    await promise;
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ message: expect.stringContaining("unsafe workspace file") }),
+    );
+  });
+
+  it("rejects agents.files.set when allowlisted file is a hardlinked alias", async () => {
+    const workspace = "/workspace/test-agent";
+    const candidate = path.resolve(workspace, "AGENTS.md");
+    mocks.fsRealpath.mockImplementation(async (p: string) => {
+      if (p === workspace) {
+        return workspace;
+      }
+      return p;
+    });
+    mocks.fsLstat.mockImplementation(async (...args: unknown[]) => {
+      const p = typeof args[0] === "string" ? args[0] : "";
+      if (p === candidate) {
+        return makeFileStat({ nlink: 2 });
+      }
+      throw createEnoentError();
+    });
+
+    const { respond, promise } = makeCall("agents.files.set", {
+      agentId: "main",
+      name: "AGENTS.md",
+      content: "x",
+    });
+    await promise;
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ message: expect.stringContaining("unsafe workspace file") }),
+    );
+    expect(mocks.fsOpen).not.toHaveBeenCalled();
   });
 });

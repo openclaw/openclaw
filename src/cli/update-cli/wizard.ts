@@ -1,4 +1,4 @@
-import { confirm, isCancel, select } from "@clack/prompts";
+import { confirm, isCancel } from "@clack/prompts";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import {
   formatUpdateChannelLabel,
@@ -7,26 +7,19 @@ import {
 } from "../../infra/update-channels.js";
 import { checkUpdateStatus } from "../../infra/update-check.js";
 import { defaultRuntime } from "../../runtime.js";
-import { stylePromptHint, stylePromptMessage } from "../../terminal/prompt-style.js";
+import { selectStyled } from "../../terminal/prompt-select-styled.js";
+import { stylePromptMessage } from "../../terminal/prompt-style.js";
 import { theme } from "../../terminal/theme.js";
 import { pathExists } from "../../utils.js";
 import {
   isEmptyDir,
   isGitCheckout,
+  parseTimeoutMsOrExit,
   resolveGitInstallDir,
   resolveUpdateRoot,
   type UpdateWizardOptions,
 } from "./shared.js";
 import { updateCommand } from "./update-command.js";
-
-const selectStyled = <T>(params: Parameters<typeof select<T>>[0]) =>
-  select({
-    ...params,
-    message: stylePromptMessage(params.message),
-    options: params.options.map((opt) =>
-      opt.hint === undefined ? opt : { ...opt, hint: stylePromptHint(opt.hint) },
-    ),
-  });
 
 export async function updateWizardCommand(opts: UpdateWizardOptions = {}): Promise<void> {
   if (!process.stdin.isTTY) {
@@ -37,10 +30,8 @@ export async function updateWizardCommand(opts: UpdateWizardOptions = {}): Promi
     return;
   }
 
-  const timeoutMs = opts.timeout ? Number.parseInt(opts.timeout, 10) * 1000 : undefined;
-  if (timeoutMs !== undefined && (Number.isNaN(timeoutMs) || timeoutMs <= 0)) {
-    defaultRuntime.error("--timeout must be a positive integer (seconds)");
-    defaultRuntime.exit(1);
+  const timeoutMs = parseTimeoutMsOrExit(opts.timeout);
+  if (timeoutMs === null) {
     return;
   }
 

@@ -1,26 +1,20 @@
 import crypto from "node:crypto";
-import { resolveAgentModelFallbacksOverride } from "../../agents/agent-scope.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import { resolveSandboxConfigForAgent, resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import {
-  resolveAgentIdFromSessionKey,
-  type SessionEntry,
-  updateSessionStoreEntry,
-} from "../../config/sessions.js";
+import { type SessionEntry, updateSessionStoreEntry } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
 import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
 import type { GetReplyOptions } from "../types.js";
 import {
-  buildEmbeddedContextFromTemplate,
-  buildTemplateSenderContext,
-  resolveRunAuthProfile,
+  buildEmbeddedRunBaseParams,
+  buildEmbeddedRunContexts,
+  resolveModelFallbackOptions,
 } from "./agent-runner-utils.js";
-import { resolveEnforceFinalTag } from "./agent-runner-utils.js";
 import {
   resolveMemoryFlushContextWindowTokens,
   resolveMemoryFlushPromptForRun,
@@ -103,47 +97,30 @@ export async function runMemoryFlushIfNeeded(params: {
     .join("\n\n");
   try {
     await runWithModelFallback({
-      cfg: params.followupRun.run.config,
-      provider: params.followupRun.run.provider,
-      model: params.followupRun.run.model,
-      agentDir: params.followupRun.run.agentDir,
-      fallbacksOverride: resolveAgentModelFallbacksOverride(
-        params.followupRun.run.config,
-        resolveAgentIdFromSessionKey(params.followupRun.run.sessionKey),
-      ),
+      ...resolveModelFallbackOptions(params.followupRun.run),
       run: (provider, model) => {
-        const authProfile = resolveRunAuthProfile(params.followupRun.run, provider);
-        const embeddedContext = buildEmbeddedContextFromTemplate({
+        const { authProfile, embeddedContext, senderContext } = buildEmbeddedRunContexts({
           run: params.followupRun.run,
           sessionCtx: params.sessionCtx,
           hasRepliedRef: params.opts?.hasRepliedRef,
+          provider,
         });
-        const senderContext = buildTemplateSenderContext(params.sessionCtx);
+        const runBaseParams = buildEmbeddedRunBaseParams({
+          run: params.followupRun.run,
+          provider,
+          model,
+          runId: flushRunId,
+          authProfile,
+        });
         return runEmbeddedPiAgent({
           ...embeddedContext,
           ...senderContext,
-          sessionFile: params.followupRun.run.sessionFile,
-          workspaceDir: params.followupRun.run.workspaceDir,
-          agentDir: params.followupRun.run.agentDir,
-          config: params.followupRun.run.config,
-          skillsSnapshot: params.followupRun.run.skillsSnapshot,
+          ...runBaseParams,
           prompt: resolveMemoryFlushPromptForRun({
             prompt: memoryFlushSettings.prompt,
             cfg: params.cfg,
           }),
           extraSystemPrompt: flushSystemPrompt,
-          ownerNumbers: params.followupRun.run.ownerNumbers,
-          enforceFinalTag: resolveEnforceFinalTag(params.followupRun.run, provider),
-          provider,
-          model,
-          ...authProfile,
-          thinkLevel: params.followupRun.run.thinkLevel,
-          verboseLevel: params.followupRun.run.verboseLevel,
-          reasoningLevel: params.followupRun.run.reasoningLevel,
-          execOverrides: params.followupRun.run.execOverrides,
-          bashElevated: params.followupRun.run.bashElevated,
-          timeoutMs: params.followupRun.run.timeoutMs,
-          runId: flushRunId,
           onAgentEvent: (evt) => {
             if (evt.stream === "compaction") {
               const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";

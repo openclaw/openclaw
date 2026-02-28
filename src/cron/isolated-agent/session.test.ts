@@ -11,10 +11,39 @@ vi.mock("../../config/sessions.js", () => ({
 import { loadSessionStore, evaluateSessionFreshness } from "../../config/sessions.js";
 import { resolveCronSession } from "./session.js";
 
+const NOW_MS = 1_737_600_000_000;
+
+type SessionStore = ReturnType<typeof loadSessionStore>;
+type SessionStoreEntry = SessionStore[string];
+type MockSessionStoreEntry = Partial<SessionStoreEntry>;
+
+function resolveWithStoredEntry(params?: {
+  sessionKey?: string;
+  entry?: MockSessionStoreEntry;
+  forceNew?: boolean;
+  fresh?: boolean;
+}) {
+  const sessionKey = params?.sessionKey ?? "webhook:stable-key";
+  const store: SessionStore = params?.entry
+    ? ({ [sessionKey]: params.entry as SessionStoreEntry } as SessionStore)
+    : {};
+  vi.mocked(loadSessionStore).mockReturnValue(store);
+  vi.mocked(evaluateSessionFreshness).mockReturnValue({ fresh: params?.fresh ?? true });
+
+  return resolveCronSession({
+    cfg: {} as OpenClawConfig,
+    sessionKey,
+    agentId: "main",
+    nowMs: NOW_MS,
+    forceNew: params?.forceNew,
+  });
+}
+
 describe("resolveCronSession", () => {
   it("preserves modelOverride and providerOverride from existing session entry", () => {
-    vi.mocked(loadSessionStore).mockReturnValue({
-      "agent:main:cron:test-job": {
+    const result = resolveWithStoredEntry({
+      sessionKey: "agent:main:cron:test-job",
+      entry: {
         sessionId: "old-session-id",
         updatedAt: 1000,
         modelOverride: "deepseek-v3-4bit-mlx",
@@ -22,14 +51,6 @@ describe("resolveCronSession", () => {
         thinkingLevel: "high",
         model: "k2p5",
       },
-    });
-    vi.mocked(evaluateSessionFreshness).mockReturnValue({ fresh: true });
-
-    const result = resolveCronSession({
-      cfg: {} as OpenClawConfig,
-      sessionKey: "agent:main:cron:test-job",
-      agentId: "main",
-      nowMs: Date.now(),
     });
 
     expect(result.sessionEntry.modelOverride).toBe("deepseek-v3-4bit-mlx");
@@ -40,20 +61,13 @@ describe("resolveCronSession", () => {
   });
 
   it("handles missing modelOverride gracefully", () => {
-    vi.mocked(loadSessionStore).mockReturnValue({
-      "agent:main:cron:test-job": {
+    const result = resolveWithStoredEntry({
+      sessionKey: "agent:main:cron:test-job",
+      entry: {
         sessionId: "old-session-id",
         updatedAt: 1000,
         model: "claude-opus-4-5",
       },
-    });
-    vi.mocked(evaluateSessionFreshness).mockReturnValue({ fresh: true });
-
-    const result = resolveCronSession({
-      cfg: {} as OpenClawConfig,
-      sessionKey: "agent:main:cron:test-job",
-      agentId: "main",
-      nowMs: Date.now(),
     });
 
     expect(result.sessionEntry.modelOverride).toBeUndefined();
@@ -61,13 +75,8 @@ describe("resolveCronSession", () => {
   });
 
   it("handles no existing session entry", () => {
-    vi.mocked(loadSessionStore).mockReturnValue({});
-
-    const result = resolveCronSession({
-      cfg: {} as OpenClawConfig,
+    const result = resolveWithStoredEntry({
       sessionKey: "agent:main:cron:new-job",
-      agentId: "main",
-      nowMs: Date.now(),
     });
 
     expect(result.sessionEntry.modelOverride).toBeUndefined();
@@ -79,20 +88,13 @@ describe("resolveCronSession", () => {
   // New tests for session reuse behavior (#18027)
   describe("session reuse for webhooks/cron", () => {
     it("reuses existing sessionId when session is fresh", () => {
-      vi.mocked(loadSessionStore).mockReturnValue({
-        "webhook:stable-key": {
+      const result = resolveWithStoredEntry({
+        entry: {
           sessionId: "existing-session-id-123",
-          updatedAt: Date.now() - 1000,
+          updatedAt: NOW_MS - 1000,
           systemSent: true,
         },
-      });
-      vi.mocked(evaluateSessionFreshness).mockReturnValue({ fresh: true });
-
-      const result = resolveCronSession({
-        cfg: {} as OpenClawConfig,
-        sessionKey: "webhook:stable-key",
-        agentId: "main",
-        nowMs: Date.now(),
+        fresh: true,
       });
 
       expect(result.sessionEntry.sessionId).toBe("existing-session-id-123");
@@ -101,23 +103,16 @@ describe("resolveCronSession", () => {
     });
 
     it("creates new sessionId when session is stale", () => {
-      vi.mocked(loadSessionStore).mockReturnValue({
-        "webhook:stable-key": {
+      const result = resolveWithStoredEntry({
+        entry: {
           sessionId: "old-session-id",
-          updatedAt: Date.now() - 86400000, // 1 day ago
+          updatedAt: NOW_MS - 86_400_000, // 1 day ago
           systemSent: true,
           modelOverride: "gpt-4.1-mini",
           providerOverride: "openai",
           sendPolicy: "allow",
         },
-      });
-      vi.mocked(evaluateSessionFreshness).mockReturnValue({ fresh: false });
-
-      const result = resolveCronSession({
-        cfg: {} as OpenClawConfig,
-        sessionKey: "webhook:stable-key",
-        agentId: "main",
-        nowMs: Date.now(),
+        fresh: false,
       });
 
       expect(result.sessionEntry.sessionId).not.toBe("old-session-id");
@@ -129,22 +124,15 @@ describe("resolveCronSession", () => {
     });
 
     it("creates new sessionId when forceNew is true", () => {
-      vi.mocked(loadSessionStore).mockReturnValue({
-        "webhook:stable-key": {
+      const result = resolveWithStoredEntry({
+        entry: {
           sessionId: "existing-session-id-456",
-          updatedAt: Date.now() - 1000,
+          updatedAt: NOW_MS - 1000,
           systemSent: true,
           modelOverride: "sonnet-4",
           providerOverride: "anthropic",
         },
-      });
-      vi.mocked(evaluateSessionFreshness).mockReturnValue({ fresh: true });
-
-      const result = resolveCronSession({
-        cfg: {} as OpenClawConfig,
-        sessionKey: "webhook:stable-key",
-        agentId: "main",
-        nowMs: Date.now(),
+        fresh: true,
         forceNew: true,
       });
 
@@ -156,19 +144,11 @@ describe("resolveCronSession", () => {
     });
 
     it("creates new sessionId when entry exists but has no sessionId", () => {
-      vi.mocked(loadSessionStore).mockReturnValue({
-        "webhook:stable-key": {
-          updatedAt: Date.now() - 1000,
+      const result = resolveWithStoredEntry({
+        entry: {
+          updatedAt: NOW_MS - 1000,
           modelOverride: "some-model",
         },
-      } as unknown as ReturnType<typeof loadSessionStore>);
-      vi.mocked(evaluateSessionFreshness).mockReturnValue({ fresh: true });
-
-      const result = resolveCronSession({
-        cfg: {} as OpenClawConfig,
-        sessionKey: "webhook:stable-key",
-        agentId: "main",
-        nowMs: Date.now(),
       });
 
       expect(result.sessionEntry.sessionId).toBeDefined();

@@ -10,6 +10,10 @@ title: "Ollama"
 
 Ollama is a local LLM runtime that makes it easy to run open-source models on your machine. OpenClaw integrates with Ollama's native API (`/api/chat`), supporting streaming and tool calling, and can **auto-discover tool-capable models** when you opt in with `OLLAMA_API_KEY` (or an auth profile) and do not define an explicit `models.providers.ollama` entry.
 
+<Warning>
+**Remote Ollama users**: Do not use the `/v1` OpenAI-compatible URL (`http://host:11434/v1`) with OpenClaw. This breaks tool calling and models may output raw tool JSON as plain text. Use the native Ollama API URL instead: `baseUrl: "http://host:11434"` (no `/v1`).
+</Warning>
+
 ## Quick start
 
 1. Install Ollama: [https://ollama.ai](https://ollama.ai)
@@ -133,12 +137,17 @@ If Ollama is running on a different host or port (explicit config disables auto-
     providers: {
       ollama: {
         apiKey: "ollama-local",
-        baseUrl: "http://ollama-host:11434",
+        baseUrl: "http://ollama-host:11434", // No /v1 - use native Ollama API URL
+        api: "ollama", // Set explicitly to guarantee native tool-calling behavior
       },
     },
   },
 }
 ```
+
+<Warning>
+Do not add `/v1` to the URL. The `/v1` path uses OpenAI-compatible mode, where tool calling is not reliable. Use the base Ollama URL without a path suffix.
+</Warning>
 
 ### Model selection
 
@@ -177,6 +186,10 @@ OpenClaw's Ollama integration uses the **native Ollama API** (`/api/chat`) by de
 
 #### Legacy OpenAI-Compatible Mode
 
+<Warning>
+**Tool calling is not reliable in OpenAI-compatible mode.** Use this mode only if you need OpenAI format for a proxy and do not depend on native tool calling behavior.
+</Warning>
+
 If you need to use the OpenAI-compatible endpoint instead (e.g., behind a proxy that only supports OpenAI format), set `api: "openai-completions"` explicitly:
 
 ```json5
@@ -186,6 +199,7 @@ If you need to use the OpenAI-compatible endpoint instead (e.g., behind a proxy 
       ollama: {
         baseUrl: "http://ollama-host:11434/v1",
         api: "openai-completions",
+        injectNumCtxForOpenAICompat: true, // default: true
         apiKey: "ollama-local",
         models: [...]
       }
@@ -194,7 +208,25 @@ If you need to use the OpenAI-compatible endpoint instead (e.g., behind a proxy 
 }
 ```
 
-Note: The OpenAI-compatible endpoint may not support streaming + tool calling simultaneously. You may need to disable streaming with `params: { streaming: false }` in model config.
+This mode may not support streaming + tool calling simultaneously. You may need to disable streaming with `params: { streaming: false }` in model config.
+
+When `api: "openai-completions"` is used with Ollama, OpenClaw injects `options.num_ctx` by default so Ollama does not silently fall back to a 4096 context window. If your proxy/upstream rejects unknown `options` fields, disable this behavior:
+
+```json5
+{
+  models: {
+    providers: {
+      ollama: {
+        baseUrl: "http://ollama-host:11434/v1",
+        api: "openai-completions",
+        injectNumCtxForOpenAICompat: false,
+        apiKey: "ollama-local",
+        models: [...]
+      }
+    }
+  }
+}
+```
 
 ### Context windows
 

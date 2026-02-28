@@ -1,6 +1,6 @@
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
-import { evaluateEntryMetadataRequirements } from "../shared/entry-status.js";
+import { evaluateEntryRequirementsForCurrentPlatform } from "../shared/entry-status.js";
 import type { RequirementConfigCheck, Requirements } from "../shared/requirements.js";
 import { CONFIG_DIR } from "../utils.js";
 import { hasBinary, isConfigPathTruthy, resolveHookConfig } from "./config.js";
@@ -87,17 +87,18 @@ function buildHookStatus(
   const disabled = managedByPlugin ? false : hookConfig?.enabled === false;
   const always = entry.metadata?.always === true;
   const events = entry.metadata?.events ?? [];
+  const isEnvSatisfied = (envName: string) =>
+    Boolean(process.env[envName] || hookConfig?.env?.[envName]);
+  const isConfigSatisfied = (pathStr: string) => isConfigPathTruthy(config, pathStr);
 
   const { emoji, homepage, required, missing, requirementsSatisfied, configChecks } =
-    evaluateEntryMetadataRequirements({
+    evaluateEntryRequirementsForCurrentPlatform({
       always,
-      metadata: entry.metadata,
-      frontmatter: entry.frontmatter,
+      entry,
       hasLocalBin: hasBinary,
-      localPlatform: process.platform,
       remote: eligibility?.remote,
-      isEnvSatisfied: (envName) => Boolean(process.env[envName] || hookConfig?.env?.[envName]),
-      isConfigSatisfied: (pathStr) => isConfigPathTruthy(config, pathStr),
+      isEnvSatisfied,
+      isConfigSatisfied,
     });
 
   const eligible = !disabled && requirementsSatisfied;

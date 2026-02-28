@@ -6,6 +6,14 @@ type SubscribeEmbeddedPiSession = typeof subscribeEmbeddedPiSession;
 type SubscribeEmbeddedPiSessionParams = Parameters<SubscribeEmbeddedPiSession>[0];
 type PiSession = Parameters<SubscribeEmbeddedPiSession>[0]["session"];
 type OnBlockReply = NonNullable<SubscribeEmbeddedPiSessionParams["onBlockReply"]>;
+type BlockReplyChunking = NonNullable<SubscribeEmbeddedPiSessionParams["blockReplyChunking"]>;
+
+export const THINKING_TAG_CASES = [
+  { tag: "think", open: "<think>", close: "</think>" },
+  { tag: "thinking", open: "<thinking>", close: "</thinking>" },
+  { tag: "thought", open: "<thought>", close: "</thought>" },
+  { tag: "antthinking", open: "<antthinking>", close: "</antthinking>" },
+] as const;
 
 export function createStubSessionHarness(): {
   session: PiSession;
@@ -63,6 +71,25 @@ export function createParagraphChunkedBlockReplyHarness(params: {
   return { emit, onBlockReply, subscription };
 }
 
+export function createTextEndBlockReplyHarness(params?: {
+  onBlockReply?: OnBlockReply;
+  runId?: string;
+  blockReplyChunking?: BlockReplyChunking;
+}): {
+  emit: (evt: unknown) => void;
+  onBlockReply: OnBlockReply;
+  subscription: ReturnType<SubscribeEmbeddedPiSession>;
+} {
+  const onBlockReply: OnBlockReply = params?.onBlockReply ?? (() => {});
+  const { emit, subscription } = createSubscribedSessionHarness({
+    runId: params?.runId ?? "run",
+    onBlockReply,
+    blockReplyBreak: "text_end",
+    blockReplyChunking: params?.blockReplyChunking,
+  });
+  return { emit, onBlockReply, subscription };
+}
+
 export function extractAgentEventPayloads(calls: Array<unknown[]>): Array<Record<string, unknown>> {
   return calls
     .map((call) => {
@@ -111,6 +138,68 @@ export function emitAssistantTextDeltaAndEnd(params: {
     content: [{ type: "text", text: params.text }],
   } as AssistantMessage;
   params.emit({ type: "message_end", message: assistantMessage });
+}
+
+export function emitAssistantTextDelta(params: {
+  emit: (evt: unknown) => void;
+  delta: string;
+}): void {
+  params.emit({
+    type: "message_update",
+    message: { role: "assistant" },
+    assistantMessageEvent: { type: "text_delta", delta: params.delta },
+  });
+}
+
+export function emitAssistantTextEnd(params: {
+  emit: (evt: unknown) => void;
+  content?: string;
+}): void {
+  params.emit({
+    type: "message_update",
+    message: { role: "assistant" },
+    assistantMessageEvent:
+      typeof params.content === "string"
+        ? { type: "text_end", content: params.content }
+        : { type: "text_end" },
+  });
+}
+
+export function emitAssistantLifecycleErrorAndEnd(params: {
+  emit: (evt: unknown) => void;
+  errorMessage: string;
+  provider?: string;
+  model?: string;
+}): void {
+  const assistantMessage = {
+    role: "assistant",
+    stopReason: "error",
+    errorMessage: params.errorMessage,
+    ...(params.provider ? { provider: params.provider } : {}),
+    ...(params.model ? { model: params.model } : {}),
+  } as AssistantMessage;
+  params.emit({ type: "message_update", message: assistantMessage });
+  params.emit({ type: "agent_end" });
+}
+
+type LifecycleErrorAgentEvent = {
+  stream?: unknown;
+  data?: {
+    phase?: unknown;
+    error?: unknown;
+  };
+};
+
+export function findLifecycleErrorAgentEvent(
+  calls: Array<unknown[]>,
+): LifecycleErrorAgentEvent | undefined {
+  for (const call of calls) {
+    const event = call?.[0] as LifecycleErrorAgentEvent | undefined;
+    if (event?.stream === "lifecycle" && event?.data?.phase === "error") {
+      return event;
+    }
+  }
+  return undefined;
 }
 
 export function expectFencedChunks(calls: Array<unknown[]>, expectedPrefix: string): void {

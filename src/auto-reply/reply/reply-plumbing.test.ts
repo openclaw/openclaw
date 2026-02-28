@@ -206,7 +206,7 @@ describe("applyReplyThreading auto-threading", () => {
     expect(result[0].replyToId).toBeUndefined();
   });
 
-  it("keeps explicit tags for Slack when off mode allows tags", () => {
+  it("strips explicit tags for Slack when off mode disallows tags", () => {
     const result = applyReplyThreading({
       payloads: [{ text: "[[reply_to_current]]A" }],
       replyToMode: "off",
@@ -215,8 +215,7 @@ describe("applyReplyThreading auto-threading", () => {
     });
 
     expect(result).toHaveLength(1);
-    expect(result[0].replyToId).toBe("42");
-    expect(result[0].replyToTag).toBe(true);
+    expect(result[0].replyToId).toBeUndefined();
   });
 
   it("keeps explicit tags for Telegram when off mode is enabled", () => {
