@@ -483,8 +483,10 @@ const stimmVoicePlugin = {
       roomName?: string;
       channel: string;
     }): Promise<SessionPayload> => {
-      ensureAgentProcessStarted();
+      // ensureRuntime() throws when the plugin is disabled — check it first so
+      // ensureAgentProcessStarted() never spawns a background process when disabled.
       const rt = await ensureRuntime();
+      ensureAgentProcessStarted();
       const session = await rt.lk.createSession({
         roomName: params.roomName,
         originChannel: params.channel,
@@ -767,7 +769,11 @@ const stimmVoicePlugin = {
                   claimToken: payload.claimToken,
                 };
               },
-              endSession: async (room: string) => rt.lk.endSession(room),
+              endSession: async (room: string) => {
+                const ok = await rt.lk.endSession(room);
+                if (ok) purgeClaimsForRoom(room);
+                return ok;
+              },
               listSessions: () =>
                 rt.lk.listSessions().map((s) => ({
                   roomName: s.roomName,

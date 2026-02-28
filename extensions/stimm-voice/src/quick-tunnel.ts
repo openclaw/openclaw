@@ -95,15 +95,14 @@ export async function startQuickTunnel(params: {
     });
 
     proc.stdout?.on("data", (chunk: Buffer) => {
-      const text = chunk.toString();
-      stdoutBuffer += text;
-      maybeResolveFromText(text);
+      stdoutBuffer += chunk.toString();
+      // Run detection on the accumulated buffer so URLs split across chunks are found.
+      maybeResolveFromText(stdoutBuffer);
     });
 
     proc.stderr?.on("data", (chunk: Buffer) => {
-      const text = chunk.toString();
-      stderrBuffer += text;
-      maybeResolveFromText(text);
+      stderrBuffer += chunk.toString();
+      maybeResolveFromText(stderrBuffer);
     });
 
     proc.on("close", (code) => {
