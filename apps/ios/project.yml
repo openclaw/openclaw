@@ -3,7 +3,8 @@ options:
   bundleIdPrefix: ai.openclaw
   deploymentTarget:
     iOS: "18.0"
-  xcodeVersion: "16.0"
+    watchOS: "26.0"
+  xcodeVersion: "26.1"
 
 settings:
   base:
@@ -24,6 +25,11 @@ schemes:
     test:
       targets:
         - OpenClawTests
+  OpenClawWatch:
+    shared: true
+    build:
+      targets:
+        OpenClawWatch: all
 
 targets:
   OpenClaw:
@@ -37,7 +43,7 @@ targets:
     dependencies:
       - target: OpenClawShareExtension
         embed: true
-      - target: OpenClawWatchApp
+      - target: OpenClawWatch
       - package: OpenClawKit
       - package: OpenClawKit
         product: OpenClawChatUI
@@ -160,21 +166,28 @@ targets:
               NSExtensionActivationSupportsImageWithMaxCount: 10
               NSExtensionActivationSupportsMovieWithMaxCount: 1
 
-  OpenClawWatchApp:
-    type: application.watchapp2
+  OpenClawWatch:
+    type: application
     platform: watchOS
-    deploymentTarget: "11.0"
     sources:
       - path: WatchApp
     dependencies:
-      - target: OpenClawWatchExtension
+      - package: OpenClawKit
+      - sdk: WatchConnectivity.framework
+      - sdk: UserNotifications.framework
+      - sdk: WidgetKit.framework
     configFiles:
       Debug: Config/Signing.xcconfig
       Release: Config/Signing.xcconfig
     settings:
       base:
+        CODE_SIGN_IDENTITY: "Apple Development"
+        CODE_SIGN_STYLE: "$(OPENCLAW_CODE_SIGN_STYLE)"
+        DEVELOPMENT_TEAM: "$(OPENCLAW_DEVELOPMENT_TEAM)"
+        PRODUCT_BUNDLE_IDENTIFIER: "$(OPENCLAW_WATCH_BUNDLE_ID)"
+        SWIFT_VERSION: "6.0"
+        SWIFT_STRICT_CONCURRENCY: complete
         ENABLE_APPINTENTS_METADATA: NO
-        PRODUCT_BUNDLE_IDENTIFIER: "$(OPENCLAW_WATCH_APP_BUNDLE_ID)"
     info:
       path: WatchApp/Info.plist
       properties:
@@ -182,33 +195,6 @@ targets:
         CFBundleShortVersionString: "2026.2.27"
         CFBundleVersion: "20260227"
         WKCompanionAppBundleIdentifier: "$(OPENCLAW_APP_BUNDLE_ID)"
-        WKWatchKitApp: true
-
-  OpenClawWatchExtension:
-    type: watchkit2-extension
-    platform: watchOS
-    deploymentTarget: "11.0"
-    sources:
-      - path: WatchExtension/Sources
-    dependencies:
-      - sdk: WatchConnectivity.framework
-      - sdk: UserNotifications.framework
-    configFiles:
-      Debug: Config/Signing.xcconfig
-      Release: Config/Signing.xcconfig
-    settings:
-      base:
-        PRODUCT_BUNDLE_IDENTIFIER: "$(OPENCLAW_WATCH_EXTENSION_BUNDLE_ID)"
-    info:
-      path: WatchExtension/Info.plist
-      properties:
-        CFBundleDisplayName: OpenClaw
-        CFBundleShortVersionString: "2026.2.27"
-        CFBundleVersion: "20260227"
-        NSExtension:
-          NSExtensionAttributes:
-            WKAppBundleIdentifier: "$(OPENCLAW_WATCH_APP_BUNDLE_ID)"
-          NSExtensionPointIdentifier: com.apple.watchkit
 
   OpenClawTests:
     type: bundle.unit-test

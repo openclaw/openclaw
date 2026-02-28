@@ -613,7 +613,8 @@ jobs:
           exit 1
 
   ios:
-    if: false # ignore iOS in CI for now
+    needs: [docs-scope, changed-scope, check]
+    if: needs.docs-scope.outputs.docs_only != 'true' && (github.event_name == 'push' || needs.changed-scope.outputs.run_macos == 'true')
     runs-on: macos-latest
     steps:
       - name: Checkout
@@ -646,7 +647,7 @@ jobs:
       - name: iOS tests
         run: |
           set -euo pipefail
-          RESULT_BUNDLE_PATH="$RUNNER_TEMP/Clawdis-iOS.xcresult"
+          RESULT_BUNDLE_PATH="$RUNNER_TEMP/OpenClaw-iOS.xcresult"
           DEST_ID="$(
             python3 - <<'PY'
           import json
@@ -725,8 +726,8 @@ jobs:
           )"
           echo "Using iOS Simulator id: $DEST_ID"
           xcodebuild test \
-            -project apps/ios/Clawdis.xcodeproj \
-            -scheme Clawdis \
+            -project apps/ios/OpenClaw.xcodeproj \
+            -scheme OpenClaw \
             -destination "platform=iOS Simulator,id=$DEST_ID" \
             -resultBundlePath "$RESULT_BUNDLE_PATH" \
             -enableCodeCoverage YES
@@ -734,20 +735,20 @@ jobs:
       - name: iOS coverage summary
         run: |
           set -euo pipefail
-          RESULT_BUNDLE_PATH="$RUNNER_TEMP/Clawdis-iOS.xcresult"
+          RESULT_BUNDLE_PATH="$RUNNER_TEMP/OpenClaw-iOS.xcresult"
           xcrun xccov view --report --only-targets "$RESULT_BUNDLE_PATH"
 
       - name: iOS coverage gate (43%)
         run: |
           set -euo pipefail
-          RESULT_BUNDLE_PATH="$RUNNER_TEMP/Clawdis-iOS.xcresult"
+          RESULT_BUNDLE_PATH="$RUNNER_TEMP/OpenClaw-iOS.xcresult"
           RESULT_BUNDLE_PATH="$RESULT_BUNDLE_PATH" python3 - <<'PY'
           import json
           import os
           import subprocess
           import sys
 
-          target_name = "Clawdis.app"
+          target_name = "OpenClaw.app"
           minimum = 0.43
 
           report = json.loads(
@@ -771,6 +772,16 @@ jobs:
           if target_coverage + 1e-12 < minimum:
             sys.exit(1)
           PY
+
+      - name: Build watchOS target
+        run: |
+          set -euo pipefail
+          xcodebuild build \
+            -project apps/ios/OpenClaw.xcodeproj \
+            -scheme OpenClawWatch \
+            -destination 'generic/platform=watchOS Simulator' \
+            CODE_SIGNING_ALLOWED=NO \
+            ONLY_ACTIVE_ARCH=NO
 
   android:
     needs: [docs-scope, changed-scope, check]

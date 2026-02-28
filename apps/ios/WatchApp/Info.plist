@@ -22,7 +22,5 @@
 	<string>20260227</string>
 	<key>WKCompanionAppBundleIdentifier</key>
 	<string>$(OPENCLAW_APP_BUNDLE_ID)</string>
-	<key>WKWatchKitApp</key>
-	<true/>
 </dict>
 </plist>

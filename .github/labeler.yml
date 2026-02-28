@@ -120,6 +120,10 @@
       - any-glob-to-any-file:
           - "apps/ios/**"
           - "docs/platforms/ios.md"
+"app: watch":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "apps/ios/WatchApp/**"
 "app: macos":
   - changed-files:
       - any-glob-to-any-file:
