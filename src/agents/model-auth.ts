@@ -20,6 +20,82 @@ import { normalizeProviderId } from "./model-selection.js";
 
 export { ensureAuthProfileStore, resolveAuthProfileOrder } from "./auth-profiles.js";
 
+// ============================================================================
+// Auth env var registry (single source of truth)
+// ============================================================================
+//
+// PROVIDER_AUTH_ENV_VARS is the canonical list of every env var used for
+// model/provider authentication.  Both `resolveEnvApiKey` (runtime lookups)
+// and `MODEL_AUTH_ENV_VARS` (sandbox hard-denylist) are derived from it.
+//
+// To add a new provider: add an entry here.  Everything else follows.
+//
+// Each value is an ordered array — `resolveEnvApiKey` tries them left-to-right
+// and returns the first that is set.
+
+const PROVIDER_AUTH_ENV_VARS: Record<string, string[]> = {
+  // --- special-case providers (custom resolution logic) ---
+  "github-copilot": ["COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"],
+  anthropic: ["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"],
+  chutes: ["CHUTES_OAUTH_TOKEN", "CHUTES_API_KEY"],
+  zai: ["ZAI_API_KEY", "Z_AI_API_KEY"],
+  opencode: ["OPENCODE_API_KEY", "OPENCODE_ZEN_API_KEY"],
+  "qwen-portal": ["QWEN_OAUTH_TOKEN", "QWEN_PORTAL_API_KEY"],
+  volcengine: ["VOLCANO_ENGINE_API_KEY"],
+  byteplus: ["BYTEPLUS_API_KEY"],
+  "minimax-portal": ["MINIMAX_OAUTH_TOKEN", "MINIMAX_API_KEY"],
+  "kimi-coding": ["KIMI_API_KEY", "KIMICODE_API_KEY"],
+  huggingface: ["HUGGINGFACE_HUB_TOKEN", "HF_TOKEN"],
+
+  // --- generic providers (single env var each) ---
+  openai: ["OPENAI_API_KEY"],
+  google: ["GEMINI_API_KEY"],
+  voyage: ["VOYAGE_API_KEY"],
+  groq: ["GROQ_API_KEY"],
+  deepgram: ["DEEPGRAM_API_KEY"],
+  cerebras: ["CEREBRAS_API_KEY"],
+  xai: ["XAI_API_KEY"],
+  openrouter: ["OPENROUTER_API_KEY"],
+  litellm: ["LITELLM_API_KEY"],
+  "vercel-ai-gateway": ["AI_GATEWAY_API_KEY"],
+  "cloudflare-ai-gateway": ["CLOUDFLARE_AI_GATEWAY_API_KEY"],
+  moonshot: ["MOONSHOT_API_KEY"],
+  minimax: ["MINIMAX_API_KEY"],
+  nvidia: ["NVIDIA_API_KEY"],
+  xiaomi: ["XIAOMI_API_KEY"],
+  synthetic: ["SYNTHETIC_API_KEY"],
+  venice: ["VENICE_API_KEY"],
+  mistral: ["MISTRAL_API_KEY"],
+  together: ["TOGETHER_API_KEY"],
+  qianfan: ["QIANFAN_API_KEY"],
+  ollama: ["OLLAMA_API_KEY"],
+  vllm: ["VLLM_API_KEY"],
+  kilocode: ["KILOCODE_API_KEY"],
+};
+
+// Env vars not tied to a specific provider in PROVIDER_AUTH_ENV_VARS but still
+// used for platform authentication and must be hard-blocked in the sandbox:
+//  - AWS SDK vars: used by resolveAwsSdkEnvVarName() for amazon-bedrock auth
+//  - TTS vars: used by src/tts/tts.ts for ElevenLabs voice synthesis
+const ADDITIONAL_AUTH_ENV_VARS: readonly string[] = [
+  "AWS_BEARER_TOKEN_BEDROCK",
+  "AWS_ACCESS_KEY_ID",
+  "AWS_SECRET_ACCESS_KEY",
+  "AWS_PROFILE",
+  "ELEVENLABS_API_KEY",
+  "XI_API_KEY",
+];
+
+/**
+ * Every env var name used for model/provider/TTS authentication.
+ * The sandbox env sanitizer hard-blocks these regardless of skill declarations.
+ * Derived from PROVIDER_AUTH_ENV_VARS + ADDITIONAL_AUTH_ENV_VARS — never edit directly.
+ */
+export const MODEL_AUTH_ENV_VARS: ReadonlySet<string> = new Set([
+  ...Object.values(PROVIDER_AUTH_ENV_VARS).flat(),
+  ...ADDITIONAL_AUTH_ENV_VARS,
+]);
+
 const AWS_BEARER_ENV = "AWS_BEARER_TOKEN_BEDROCK";
 const AWS_ACCESS_KEY_ENV = "AWS_ACCESS_KEY_ID";
 const AWS_SECRET_KEY_ENV = "AWS_SECRET_ACCESS_KEY";
@@ -247,22 +323,7 @@ export function resolveEnvApiKey(provider: string): EnvApiKeyResult | null {
     return { apiKey: value, source };
   };
 
-  if (normalized === "github-copilot") {
-    return pick("COPILOT_GITHUB_TOKEN") ?? pick("GH_TOKEN") ?? pick("GITHUB_TOKEN");
-  }
-
-  if (normalized === "anthropic") {
-    return pick("ANTHROPIC_OAUTH_TOKEN") ?? pick("ANTHROPIC_API_KEY");
-  }
-
-  if (normalized === "chutes") {
-    return pick("CHUTES_OAUTH_TOKEN") ?? pick("CHUTES_API_KEY");
-  }
-
-  if (normalized === "zai") {
-    return pick("ZAI_API_KEY") ?? pick("Z_AI_API_KEY");
-  }
-
+  // google-vertex uses a third-party SDK for auth (gcloud ADC), not env var lookup
   if (normalized === "google-vertex") {
     const envKey = getEnvApiKey(normalized);
     if (!envKey) {
@@ -271,64 +332,25 @@ export function resolveEnvApiKey(provider: string): EnvApiKeyResult | null {
     return { apiKey: envKey, source: "gcloud adc" };
   }
 
-  if (normalized === "opencode") {
-    return pick("OPENCODE_API_KEY") ?? pick("OPENCODE_ZEN_API_KEY");
-  }
+  // volcengine-plan and byteplus-plan share env vars with their base providers
+  const lookupKey =
+    normalized === "volcengine-plan"
+      ? "volcengine"
+      : normalized === "byteplus-plan"
+        ? "byteplus"
+        : normalized;
 
-  if (normalized === "qwen-portal") {
-    return pick("QWEN_OAUTH_TOKEN") ?? pick("QWEN_PORTAL_API_KEY");
-  }
-
-  if (normalized === "volcengine" || normalized === "volcengine-plan") {
-    return pick("VOLCANO_ENGINE_API_KEY");
-  }
-
-  if (normalized === "byteplus" || normalized === "byteplus-plan") {
-    return pick("BYTEPLUS_API_KEY");
-  }
-  if (normalized === "minimax-portal") {
-    return pick("MINIMAX_OAUTH_TOKEN") ?? pick("MINIMAX_API_KEY");
-  }
-
-  if (normalized === "kimi-coding") {
-    return pick("KIMI_API_KEY") ?? pick("KIMICODE_API_KEY");
-  }
-
-  if (normalized === "huggingface") {
-    return pick("HUGGINGFACE_HUB_TOKEN") ?? pick("HF_TOKEN");
-  }
-
-  const envMap: Record<string, string> = {
-    openai: "OPENAI_API_KEY",
-    google: "GEMINI_API_KEY",
-    voyage: "VOYAGE_API_KEY",
-    groq: "GROQ_API_KEY",
-    deepgram: "DEEPGRAM_API_KEY",
-    cerebras: "CEREBRAS_API_KEY",
-    xai: "XAI_API_KEY",
-    openrouter: "OPENROUTER_API_KEY",
-    litellm: "LITELLM_API_KEY",
-    "vercel-ai-gateway": "AI_GATEWAY_API_KEY",
-    "cloudflare-ai-gateway": "CLOUDFLARE_AI_GATEWAY_API_KEY",
-    moonshot: "MOONSHOT_API_KEY",
-    minimax: "MINIMAX_API_KEY",
-    nvidia: "NVIDIA_API_KEY",
-    xiaomi: "XIAOMI_API_KEY",
-    synthetic: "SYNTHETIC_API_KEY",
-    venice: "VENICE_API_KEY",
-    mistral: "MISTRAL_API_KEY",
-    opencode: "OPENCODE_API_KEY",
-    together: "TOGETHER_API_KEY",
-    qianfan: "QIANFAN_API_KEY",
-    ollama: "OLLAMA_API_KEY",
-    vllm: "VLLM_API_KEY",
-    kilocode: "KILOCODE_API_KEY",
-  };
-  const envVar = envMap[normalized];
-  if (!envVar) {
+  const envVars = PROVIDER_AUTH_ENV_VARS[lookupKey];
+  if (!envVars) {
     return null;
   }
-  return pick(envVar);
+  for (const envVar of envVars) {
+    const result = pick(envVar);
+    if (result) {
+      return result;
+    }
+  }
+  return null;
 }
 
 export function resolveModelAuthMode(
