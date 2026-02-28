@@ -196,13 +196,16 @@ export function getChildLogger(
   opts?: { level?: LogLevel },
 ): TsLogger<LogObj> {
   const base = getLogger();
-  const minLevel = opts?.level ? levelToMinLevel(opts.level) : undefined;
   const name = bindings ? JSON.stringify(bindings) : undefined;
-  return base.getSubLogger({
+  // Only pass minLevel if explicitly provided; otherwise the sublogger inherits the parent's level
+  const subLoggerOpts: Parameters<typeof base.getSubLogger>[0] = {
     name,
-    minLevel,
     prefix: bindings ? [name ?? ""] : [],
-  });
+  };
+  if (opts?.level) {
+    subLoggerOpts.minLevel = levelToMinLevel(opts.level);
+  }
+  return base.getSubLogger(subLoggerOpts);
 }
 
 // Baileys expects a pino-like logger shape. Provide a lightweight adapter.
