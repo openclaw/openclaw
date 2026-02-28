@@ -1,3 +1,20 @@
+/**
+ * SimpleX Chat WebSocket Bus
+ *
+ * Connects to a simplex-chat CLI instance running as a WebSocket server.
+ * The CLI is started with: simplex-chat -p <port>
+ *
+ * Protocol: JSON-based command/response over WebSocket.
+ * Commands: https://github.com/simplex-chat/simplex-chat/blob/stable/docs/CLI.md
+ *
+ * Inbound messages arrive as ChatResponse events.
+ * Outbound messages are sent as ChatCommand strings.
+ *
+ * Supported message types:
+ * - Direct messages (DM): @contactName message
+ * - Group messages: #groupName message
+ */
+
 import WebSocket from "ws";
 
 /** Safe display name pattern — alphanumeric, underscores, dots, hyphens only. */
@@ -6,8 +23,27 @@ const SAFE_DISPLAY_NAME = /^[\w.-]+$/;
 /** Max reconnect delay: 5 minutes */
 const MAX_RECONNECT_MS = 300_000;
 
+/** Heartbeat interval: 30 seconds */
+const HEARTBEAT_INTERVAL_MS = 30_000;
+
 /** Connection timeout: 10 seconds */
 const CONNECTION_TIMEOUT_MS = 10_000;
+
+/** Command timeout: 30 seconds */
+const COMMAND_TIMEOUT_MS = 30_000;
+
+/** TLS relay error patterns */
+const TLS_ERROR_PATTERNS = [
+  /tls/i,
+  /certificate/i,
+  /handshake/i,
+  /relay/i,
+  /connection refused/i,
+  /timeout/i,
+  /ECONNREFUSED/,
+  /ETIMEDOUT/,
+  /ENOTFOUND/,
+];
 
 export type SimplexMessage = {
   contactId: string;
@@ -15,8 +51,11 @@ export type SimplexMessage = {
   text: string;
   messageId?: string;
   timestamp?: string;
-  chatType?: "direct" | "group";
+  /** true if this is a group message */
+  isGroup?: boolean;
+  /** group ID for group messages */
   groupId?: string;
+  /** group name for group messages */
   groupName?: string;
 };
 
@@ -26,12 +65,14 @@ export type SimplexBusOptions = {
   onError: (error: Error, context: string) => void;
   onConnect: () => void;
   onDisconnect: (code: number, reason: string) => void;
+  /** Called when a TLS/relay error is detected (for logging/alerting) */
+  onTlsError?: (error: Error) => void;
   reconnectMs?: number;
 };
 
 export type SimplexBusHandle = {
   sendMessage: (contactId: string, text: string) => Promise<void>;
-  sendToGroup: (groupId: string, text: string) => Promise<void>;
+  sendGroupMessage: (groupId: string, text: string) => Promise<void>;
   close: () => void;
   isConnected: () => boolean;
   getContactId: (displayName: string) => Promise<string | null>;
@@ -39,19 +80,27 @@ export type SimplexBusHandle = {
 };
 
 /**
+ * Check if an error message indicates a TLS/relay failure.
+ */
+function isTlsRelayError(message: string): boolean {
+  return TLS_ERROR_PATTERNS.some((pattern) => pattern.test(message));
+}
+
+/**
  * Start a SimpleX WebSocket bus.
  *
  * Connects to the simplex-chat CLI WebSocket server and forwards
- * incoming DMs to the callback. Outbound messages are sent via
- * the returned handle.
+ * incoming DMs and group messages to the callback. Outbound messages
+ * are sent via the returned handle.
  */
 export function startSimplexBus(options: SimplexBusOptions): SimplexBusHandle {
   let ws: WebSocket | null = null;
   let connected = false;
   let shouldReconnect = true;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-  let connectionTimer: ReturnType<typeof setTimeout> | null = null;
   let reconnectAttempts = 0;
+  let heartbeatInterval: ReturnType<typeof setInterval> | null = null;
+  let connectionTimeout: ReturnType<typeof setTimeout> | null = null;
   const baseReconnectMs = options.reconnectMs ?? 5000;
 
   // Pending command responses
@@ -68,36 +117,70 @@ export function startSimplexBus(options: SimplexBusOptions): SimplexBusHandle {
     return delay;
   }
 
-  function connect() {
-    // Clear any existing connection timer
-    if (connectionTimer) {
-      clearTimeout(connectionTimer);
-      connectionTimer = null;
+  function clearTimers() {
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
     }
+    if (heartbeatInterval) {
+      clearInterval(heartbeatInterval);
+      heartbeatInterval = null;
+    }
+    if (connectionTimeout) {
+      clearTimeout(connectionTimeout);
+      connectionTimeout = null;
+    }
+  }
+
+  function startHeartbeat() {
+    if (heartbeatInterval) clearInterval(heartbeatInterval);
+
+    heartbeatInterval = setInterval(() => {
+      if (ws && connected && ws.readyState === WebSocket.OPEN) {
+        // Send a ping to detect stale connections
+        ws.ping();
+      }
+    }, HEARTBEAT_INTERVAL_MS);
+  }
+
+  function handleTlsError(error: Error, context: string) {
+    const message = error.message || context;
+    if (isTlsRelayError(message)) {
+      options.onTlsError?.(error);
+      options.onError(error, `tls_relay:${context}`);
+    } else {
+      options.onError(error, context);
+    }
+  }
+
+  function connect() {
+    clearTimers();
 
     try {
       ws = new WebSocket(options.wsUrl);
 
       // Connection timeout
-      connectionTimer = setTimeout(() => {
-        if (ws && ws.readyState === WebSocket.CONNECTING) {
-          ws.close();
-          options.onError(new Error("Connection timeout"), "connect_timeout");
-          if (shouldReconnect) {
-            const delay = getReconnectDelay();
-            reconnectTimer = setTimeout(connect, delay);
-          }
+      connectionTimeout = setTimeout(() => {
+        if (!connected) {
+          const err = new Error(`Connection timeout after ${CONNECTION_TIMEOUT_MS}ms`);
+          options.onError(err, "connection_timeout");
+          ws?.terminate();
         }
       }, CONNECTION_TIMEOUT_MS);
 
       ws.on("open", () => {
         connected = true;
         reconnectAttempts = 0; // Reset on successful connection
-        if (connectionTimer) {
-          clearTimeout(connectionTimer);
-          connectionTimer = null;
+        if (connectionTimeout) {
+          clearTimeout(connectionTimeout);
+          connectionTimeout = null;
         }
+        startHeartbeat();
         options.onConnect();
+      });
+
+      ws.on("pong", () => {
+        // Heartbeat response received - connection is alive
       });
 
       ws.on("message", (data: WebSocket.Data) => {
@@ -111,10 +194,7 @@ export function startSimplexBus(options: SimplexBusOptions): SimplexBusHandle {
 
       ws.on("close", (code, reason) => {
         connected = false;
-        if (connectionTimer) {
-          clearTimeout(connectionTimer);
-          connectionTimer = null;
-        }
+        clearTimers();
         options.onDisconnect(code, reason.toString());
         if (shouldReconnect) {
           const delay = getReconnectDelay();
@@ -123,15 +203,10 @@ export function startSimplexBus(options: SimplexBusOptions): SimplexBusHandle {
       });
 
       ws.on("error", (err) => {
-        // Don't log ECONNREFUSED as error - it's expected when CLI isn't running
-        const errMsg = err.message || String(err);
-        if (!errMsg.includes("ECONNREFUSED")) {
-          options.onError(err instanceof Error ? err : new Error(String(err)), "websocket");
-        }
-        // Connection will be retried via close handler
+        handleTlsError(err, "websocket_error");
       });
     } catch (err) {
-      options.onError(err instanceof Error ? err : new Error(String(err)), "connect");
+      handleTlsError(err instanceof Error ? err : new Error(String(err)), "connect");
       if (shouldReconnect) {
         const delay = getReconnectDelay();
         reconnectTimer = setTimeout(connect, delay);
@@ -157,6 +232,7 @@ export function startSimplexBus(options: SimplexBusOptions): SimplexBusHandle {
       }
 
       // Handle incoming message events
+      // Response types: newChatItems, chatItemUpdated, messageDelivery, messageError
       if (parsed.resp?.type === "newChatItems" || parsed.resp?.type === "chatItemUpdated") {
         const chatItems = parsed.resp?.chatItems ?? [parsed.resp?.chatItem];
         for (const item of chatItems) {
@@ -165,78 +241,105 @@ export function startSimplexBus(options: SimplexBusOptions): SimplexBusHandle {
           const chatInfo = item.chatInfo;
           const chatItem = item.chatItem;
 
-          // Determine chat type
-          const isDirect = chatInfo?.type === "direct";
-          const isGroup = chatInfo?.type === "group";
-
-          if (!isDirect && !isGroup) continue;
-
-          // Only process incoming messages (not our own)
-          const dir = chatItem?.chatDir;
-          if (isDirect && dir?.type !== "directRcv") continue;
-          if (isGroup && dir?.type !== "groupRcv") continue;
-
-          const content = chatItem?.content;
-          
-          // Handle different message content types
-          let text = "";
-          if (content?.msgContent?.type === "text") {
-            text = content.msgContent.text;
-          } else if (content?.text) {
-            text = content.text;
-          } else if (content?.type === "rcvMsgContent" && content?.msgContent?.text) {
-            text = content.msgContent.text;
-          }
-          
-          if (!text) continue;
-
-          let contactId = "";
-          let contactName = "";
-          
-          if (isDirect) {
+          // Handle direct messages (DM)
+          if (chatInfo?.type === "direct") {
             const contact = chatInfo.contact;
-            contactId = String(contact?.contactId ?? contact?.localDisplayName);
-            contactName = contact?.localDisplayName ?? contact?.displayName ?? "unknown";
-          } else if (isGroup) {
-            const group = chatInfo.group;
-            contactId = String(group?.groupId ?? group?.localDisplayName);
-            contactName = group?.localDisplayName ?? group?.displayName ?? "unknown";
+            if (!contact) continue;
+
+            // Only process incoming messages (not our own)
+            const dir = chatItem?.chatDir;
+            if (dir?.type !== "directRcv") continue;
+
+            const content = chatItem?.content;
+            if (content?.type !== "rcvMsgContent") {
+              // Also handle text messages with msgContent.type
+              if (content?.msgContent?.type !== "text" && !content?.text) continue;
+            }
+
+            const text = content?.text ?? content?.msgContent?.text ?? "";
+            if (!text) continue;
+
+            const msg: SimplexMessage = {
+              contactId: String(contact.contactId ?? contact.localDisplayName),
+              contactName: contact.localDisplayName ?? contact.displayName ?? "unknown",
+              text,
+              messageId: chatItem.meta?.itemId ? String(chatItem.meta.itemId) : undefined,
+              timestamp: chatItem.meta?.itemTs,
+              isGroup: false,
+            };
+
+            options.onMessage(msg).catch((err) => {
+              options.onError(err instanceof Error ? err : new Error(String(err)), "message_handler");
+            });
           }
 
-          const msg: SimplexMessage = {
-            contactId,
-            contactName,
-            text,
-            messageId: chatItem.meta?.itemId ? String(chatItem.meta.itemId) : undefined,
-            timestamp: chatItem.meta?.itemTs,
-            chatType: isGroup ? "group" : "direct",
-            groupId: isGroup ? contactId : undefined,
-            groupName: isGroup ? contactName : undefined,
-          };
+          // Handle group messages
+          if (chatInfo?.type === "group" || chatInfo?.type === "groupV2") {
+            const groupInfo = chatInfo.groupInfo ?? chatInfo.group;
+            if (!groupInfo) continue;
 
-          options.onMessage(msg).catch((err) => {
-            options.onError(err instanceof Error ? err : new Error(String(err)), "message_handler");
-          });
+            // Only process incoming messages (not our own)
+            const dir = chatItem?.chatDir;
+            if (dir?.type !== "groupRcv" && dir?.type !== "directRcv") continue;
+
+            const content = chatItem?.content;
+            if (content?.type !== "rcvMsgContent") {
+              if (content?.msgContent?.type !== "text" && !content?.text) continue;
+            }
+
+            const text = content?.text ?? content?.msgContent?.text ?? "";
+            if (!text) continue;
+
+            const senderProfile = chatItem?.memberProfile ?? chatItem?.senderProfile;
+            const senderName = senderProfile?.displayName ?? senderProfile?.localDisplayName ?? "unknown";
+
+            const msg: SimplexMessage = {
+              contactId: String(dir?.memberId ?? senderProfile?.memberId ?? "unknown"),
+              contactName: senderName,
+              text,
+              messageId: chatItem.meta?.itemId ? String(chatItem.meta.itemId) : undefined,
+              timestamp: chatItem.meta?.itemTs,
+              isGroup: true,
+              groupId: String(groupInfo.groupId ?? groupInfo.localDisplayName ?? "unknown"),
+              groupName: groupInfo.localDisplayName ?? groupInfo.displayName ?? "unknown",
+            };
+
+            options.onMessage(msg).catch((err) => {
+              options.onError(err instanceof Error ? err : new Error(String(err)), "message_handler");
+            });
+          }
         }
+      }
+
+      // Handle message delivery confirmation
+      if (parsed.resp?.type === "messageDelivery") {
+        const msgId = parsed.resp?.msgId;
+        // Message was delivered - could emit event for tracking
+        options.onError(new Error(`Message delivered: ${msgId}`), "delivery");
+      }
+
+      // Handle message errors
+      if (parsed.resp?.type === "messageError" || parsed.resp?.type === "error") {
+        const errorMsg = parsed.resp?.error ?? parsed.resp?.message ?? JSON.stringify(parsed.resp);
+        options.onError(new Error(errorMsg), "message_error");
       }
 
       // Handle contact request events
       if (parsed.resp?.type === "contactRequest" || parsed.resp?.type === "contactConnecting") {
         // Auto-accept contact requests (pairing is handled at OpenClaw level)
-        const contactReq = parsed.resp?.contactRequest;
+        const contactReq = parsed.resp?.contactRequest ?? parsed.resp?.contact;
         // Validate display name to prevent command injection via crafted names
         if (contactReq?.localDisplayName && SAFE_DISPLAY_NAME.test(contactReq.localDisplayName)) {
           sendCommand(`/ac ${contactReq.localDisplayName}`).catch(() => {});
         }
       }
 
-      // Handle new group invitations
-      if (parsed.resp?.type === "newGroupInvitation") {
-        const groupInvite = parsed.resp?.groupInvitation;
-        if (groupInvite?.groupInfo?.localDisplayName) {
+      // Handle group invitation events
+      if (parsed.resp?.type === "groupInvitation" || parsed.resp?.type === "groupMemberNew") {
+        const groupInv = parsed.resp?.groupInvitation ?? parsed.resp?.groupInfo;
+        if (groupInv?.localDisplayName && SAFE_DISPLAY_NAME.test(groupInv.localDisplayName)) {
           // Auto-accept group invitations
-          const groupName = groupInvite.groupInfo.localDisplayName;
-          sendCommand(`/aic ${groupName}`).catch(() => {});
+          sendCommand(`/gjoin ${groupInv.localDisplayName}`).catch(() => {});
         }
       }
     } catch {
@@ -248,7 +351,7 @@ export function startSimplexBus(options: SimplexBusOptions): SimplexBusHandle {
           contactId: match[1].trim(),
           contactName: match[1].trim(),
           text: match[2],
-          chatType: "direct",
+          isGroup: false,
         };
         options.onMessage(msg).catch((err) => {
           options.onError(err instanceof Error ? err : new Error(String(err)), "message_handler");
@@ -274,13 +377,13 @@ export function startSimplexBus(options: SimplexBusOptions): SimplexBusHandle {
         }
       });
 
-      // Timeout after 30 seconds
+      // Timeout after COMMAND_TIMEOUT_MS
       setTimeout(() => {
         if (pendingCommands.has(corrId)) {
           pendingCommands.delete(corrId);
-          reject(new Error(`Command timed out: ${command}`));
+          reject(new Error(`Command timed out (${COMMAND_TIMEOUT_MS}ms): ${command}`));
         }
-      }, 30000);
+      }, COMMAND_TIMEOUT_MS);
     });
   }
 
@@ -293,15 +396,14 @@ export function startSimplexBus(options: SimplexBusOptions): SimplexBusHandle {
       await sendCommand(`@${contactId} ${text}`);
     },
 
-    sendToGroup: async (groupId: string, text: string) => {
-      // SimpleX CLI command to send to a group: #groupId message
+    sendGroupMessage: async (groupId: string, text: string) => {
+      // SimpleX CLI command to send a group message: #groupName message
       await sendCommand(`#${groupId} ${text}`);
     },
 
     close: () => {
       shouldReconnect = false;
-      if (reconnectTimer) clearTimeout(reconnectTimer);
-      if (connectionTimer) clearTimeout(connectionTimer);
+      clearTimers();
       if (ws) {
         ws.close();
         ws = null;

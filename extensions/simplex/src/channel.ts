@@ -7,7 +7,7 @@ import {
 } from "openclaw/plugin-sdk";
 import { simplexChannelConfigSchema } from "./config-schema.js";
 import { getSimplexRuntime } from "./runtime.js";
-import { startSimplexBus, type SimplexBusHandle } from "./simplex-bus.js";
+import { startSimplexBus, type SimplexBusHandle, type SimplexMessage } from "./simplex-bus.js";
 import {
   listSimplexAccountIds,
   resolveDefaultSimplexAccountId,
@@ -31,7 +31,7 @@ export const simplexPlugin: ChannelPlugin<ResolvedSimplexAccount> = {
   },
   capabilities: {
     chatTypes: ["direct", "group"],
-    media: false,
+    media: false, // TODO: File sending via /file command
     reactions: false,
     edit: false,
     polls: false,
@@ -78,16 +78,16 @@ export const simplexPlugin: ChannelPlugin<ResolvedSimplexAccount> = {
     normalizeTarget: (target) => target.trim(),
     targetResolver: {
       looksLikeId: (input) => {
-        // SimpleX contact IDs are display names or contact IDs
+        // SimpleX contact/group IDs are display names
         return input.trim().length > 0;
       },
-      hint: "<simplex contact name or ID or #groupName>",
+      hint: "<simplex contact name, group name, or ID>",
     },
   },
   outbound: {
     deliveryMode: "direct",
     textChunkLimit: 4096,
-    sendText: async ({ to, text, accountId, chatType }) => {
+    sendText: async ({ to, text, chatType, accountId }) => {
       const runtime = getSimplexRuntime();
       const aid = accountId ?? DEFAULT_ACCOUNT_ID;
       const bus = activeBuses.get(aid);
@@ -104,9 +104,9 @@ export const simplexPlugin: ChannelPlugin<ResolvedSimplexAccount> = {
       });
       const message = runtime.channel.text.convertMarkdownTables(text ?? "", tableMode);
 
-      // Send to group or direct based on chatType
+      // Send to group if chatType is "group", otherwise send DM
       if (chatType === "group") {
-        await bus.sendToGroup(to, message);
+        await bus.sendGroupMessage(to, message);
       } else {
         await bus.sendMessage(to, message);
       }
@@ -114,7 +114,7 @@ export const simplexPlugin: ChannelPlugin<ResolvedSimplexAccount> = {
       return {
         channel: "simplex" as const,
         to,
-        chatType: chatType ?? "direct",
+        chatType,
         messageId: `simplex-${Date.now()}`,
       };
     },
@@ -157,16 +157,16 @@ export const simplexPlugin: ChannelPlugin<ResolvedSimplexAccount> = {
       const runtime = getSimplexRuntime();
       const bus = startSimplexBus({
         wsUrl: account.wsUrl,
-        onMessage: async (msg) => {
-          const chatType = msg.chatType ?? "direct";
-          const chatId = chatType === "group" 
-            ? `simplex:group:${msg.groupId}`
+        onMessage: async (msg: SimplexMessage) => {
+          const chatType = msg.isGroup ? "group" : "direct";
+          const chatId = msg.isGroup 
+            ? `simplex:group:${msg.groupId}` 
             : `simplex:${msg.contactId}`;
-          
+
           ctx.log?.debug?.(
-            `[${account.accountId}] ${chatType === "group" ? "Group" : "DM"} from ${msg.contactName}: ${msg.text.slice(0, 50)}...`,
+            `[${account.accountId}] ${chatType === "group" ? "Group" : "DM"} from ${msg.isGroup ? msg.groupName + "/" + msg.contactName : msg.contactName}: ${msg.text.slice(0, 50)}...`,
           );
-          
+
           // Forward to OpenClaw's message pipeline
           await (
             runtime.channel.reply as {
@@ -181,9 +181,12 @@ export const simplexPlugin: ChannelPlugin<ResolvedSimplexAccount> = {
             chatId,
             text: msg.text,
             messageId: msg.messageId,
+            // For group messages, include group context
+            groupId: msg.groupId,
+            groupName: msg.groupName,
             reply: async (responseText: string) => {
-              if (chatType === "group" && msg.groupId) {
-                await bus.sendToGroup(msg.groupId, responseText);
+              if (msg.isGroup && msg.groupId) {
+                await bus.sendGroupMessage(msg.groupId, responseText);
               } else {
                 await bus.sendMessage(msg.contactId, responseText);
               }
@@ -192,6 +195,9 @@ export const simplexPlugin: ChannelPlugin<ResolvedSimplexAccount> = {
         },
         onError: (error, context) => {
           ctx.log?.error?.(`[${account.accountId}] SimpleX error (${context}): ${error.message}`);
+        },
+        onTlsError: (error) => {
+          ctx.log?.warn?.(`[${account.accountId}] TLS/relay error detected: ${error.message}`);
         },
         onConnect: () => {
           ctx.log?.info(`[${account.accountId}] Connected to SimpleX CLI at ${account.wsUrl}`);
