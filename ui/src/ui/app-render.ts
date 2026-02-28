@@ -786,7 +786,30 @@ export function renderApp(state: AppViewState) {
                   if (!configValue) {
                     return;
                   }
-                  const list = (configValue as { agents?: { list?: unknown[] } }).agents?.list;
+                  const cfg = configValue as {
+                    agents?: { list?: unknown[]; defaults?: { model?: unknown } };
+                  };
+                  const defaultAgentId = state.agentsList?.defaultId;
+                  if (defaultAgentId && agentId === defaultAgentId) {
+                    const basePath = ["agents", "defaults", "model"];
+                    if (!modelId) {
+                      removeConfigFormValue(state, basePath);
+                      return;
+                    }
+                    const existing = cfg.agents?.defaults?.model;
+                    if (existing && typeof existing === "object" && !Array.isArray(existing)) {
+                      const fallbacks = (existing as { fallbacks?: unknown }).fallbacks;
+                      const next = {
+                        primary: modelId,
+                        ...(Array.isArray(fallbacks) ? { fallbacks } : {}),
+                      };
+                      updateConfigFormValue(state, basePath, next);
+                    } else {
+                      updateConfigFormValue(state, basePath, modelId);
+                    }
+                    return;
+                  }
+                  const list = cfg.agents?.list;
                   if (!Array.isArray(list)) {
                     return;
                   }
@@ -822,7 +845,42 @@ export function renderApp(state: AppViewState) {
                   if (!configValue) {
                     return;
                   }
-                  const list = (configValue as { agents?: { list?: unknown[] } }).agents?.list;
+                  const cfg = configValue as {
+                    agents?: { list?: unknown[]; defaults?: { model?: unknown } };
+                  };
+                  const normalized = fallbacks.map((name) => name.trim()).filter(Boolean);
+                  const defaultAgentId = state.agentsList?.defaultId;
+                  if (defaultAgentId && agentId === defaultAgentId) {
+                    const basePath = ["agents", "defaults", "model"];
+                    const existing = cfg.agents?.defaults?.model;
+                    const resolvePrimary = () => {
+                      if (typeof existing === "string") {
+                        return existing.trim() || null;
+                      }
+                      if (existing && typeof existing === "object" && !Array.isArray(existing)) {
+                        const primary = (existing as { primary?: unknown }).primary;
+                        if (typeof primary === "string") {
+                          return primary.trim() || null;
+                        }
+                      }
+                      return null;
+                    };
+                    const primary = resolvePrimary();
+                    if (normalized.length === 0) {
+                      if (primary) {
+                        updateConfigFormValue(state, basePath, primary);
+                      } else {
+                        removeConfigFormValue(state, basePath);
+                      }
+                    } else {
+                      const next = primary
+                        ? { primary, fallbacks: normalized }
+                        : { fallbacks: normalized };
+                      updateConfigFormValue(state, basePath, next);
+                    }
+                    return;
+                  }
+                  const list = cfg.agents?.list;
                   if (!Array.isArray(list)) {
                     return;
                   }
@@ -838,7 +896,6 @@ export function renderApp(state: AppViewState) {
                   }
                   const basePath = ["agents", "list", index, "model"];
                   const entry = list[index] as { model?: unknown };
-                  const normalized = fallbacks.map((name) => name.trim()).filter(Boolean);
                   const existing = entry.model;
                   const resolvePrimary = () => {
                     if (typeof existing === "string") {
