@@ -431,13 +431,17 @@ export function renderChat(props: ChatProps) {
               dir=${detectTextDirection(props.draft)}
               ?disabled=${!props.connected}
               @keydown=${(e: KeyboardEvent) => {
-                  if (e.key === "ArrowUp") {
+                if (e.key === "ArrowUp") {
                   const target = e.target as HTMLTextAreaElement;
-                  if (target.selectionStart === 0 && target.selectionEnd === 0) {
+                  if (
+                    target.value === "" &&
+                    target.selectionStart === 0 &&
+                    target.selectionEnd === 0
+                  ) {
                     const messages = Array.isArray(props.messages) ? props.messages : [];
                     for (let i = messages.length - 1; i >= 0; i--) {
                       const m = normalizeMessage(messages[i]);
-                      if (m.role === "user") {
+                      if (m.role.toLowerCase() === "user") {
                         const textContent = m.content.find((c) => c.type === "text");
                         if (textContent && textContent.text) {
                           e.preventDefault();
@@ -449,8 +453,8 @@ export function renderChat(props: ChatProps) {
                             target.selectionEnd = text.length;
                             adjustTextareaHeight(target);
                           });
+                          break;
                         }
-                        break;
                       }
                     }
                     return;
