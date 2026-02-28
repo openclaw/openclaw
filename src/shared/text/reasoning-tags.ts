@@ -2,9 +2,11 @@ import { findCodeRegions, isInsideCode } from "./code-regions.js";
 export type ReasoningTagMode = "strict" | "preserve";
 export type ReasoningTagTrim = "none" | "start" | "both";
 
-const QUICK_TAG_RE = /<\s*\/?\s*(?:think(?:ing)?|thought|antthinking|final)\b/i;
+const QUICK_TAG_RE = /<\s*\/?\s*(?:think(?:ing)?|thought|antthinking|final|relevant-memories)\b/i;
 const FINAL_TAG_RE = /<\s*\/?\s*final\b[^<>]*>/gi;
 const THINKING_TAG_RE = /<\s*(\/?)\s*(?:think(?:ing)?|thought|antthinking)\b[^<>]*>/gi;
+const RELEVANT_MEMORIES_RE =
+  /<\s*relevant-memories\b[^<>]*>[\s\S]*?<\s*\/\s*relevant-memories\s*>/gi;
 
 function applyTrim(value: string, mode: ReasoningTagTrim): string {
   if (mode === "none") {
@@ -55,6 +57,12 @@ export function stripReasoningTagsFromText(
     }
   } else {
     FINAL_TAG_RE.lastIndex = 0;
+  }
+
+  // Strip relevant-memories blocks (injected by memory-lancedb extension for context)
+  if (RELEVANT_MEMORIES_RE.test(cleaned)) {
+    RELEVANT_MEMORIES_RE.lastIndex = 0;
+    cleaned = cleaned.replace(RELEVANT_MEMORIES_RE, "");
   }
 
   const codeRegions = findCodeRegions(cleaned);
