@@ -3,23 +3,25 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Stub child_process.spawn and execSync.
 const mockKill = vi.fn();
-const mockSpawn = vi.fn(() => {
-  const EventEmitter = require("node:events").EventEmitter;
-  const { Readable } = require("node:stream");
-  const proc = new EventEmitter();
-  proc.pid = 12345;
-  proc.killed = false;
-  proc.kill = vi.fn((signal?: string) => {
-    proc.killed = true;
-    if (signal === "SIGTERM") {
-      setTimeout(() => proc.emit("exit", 0, "SIGTERM"), 10);
-    }
-  });
-  proc.stdout = new Readable({ read() {} });
-  proc.stderr = new Readable({ read() {} });
-  proc.stdin = null;
-  return proc;
-});
+const mockSpawn = vi.fn(
+  (_cmd: string, _args: string[], _opts: { env?: Record<string, string> }) => {
+    const EventEmitter = require("node:events").EventEmitter;
+    const { Readable } = require("node:stream");
+    const proc = new EventEmitter();
+    proc.pid = 12345;
+    proc.killed = false;
+    proc.kill = vi.fn((signal?: string) => {
+      proc.killed = true;
+      if (signal === "SIGTERM") {
+        setTimeout(() => proc.emit("exit", 0, "SIGTERM"), 10);
+      }
+    });
+    proc.stdout = new Readable({ read() {} });
+    proc.stderr = new Readable({ read() {} });
+    proc.stdin = null;
+    return proc;
+  },
+);
 
 const mockExecSync = vi.fn(() => "Python 3.12.0");
 
@@ -176,8 +178,8 @@ describe("AgentProcess", () => {
     });
     agent.start();
 
-    const callArgs = mockSpawn.mock.calls[mockSpawn.mock.calls.length - 1];
-    const childEnv = callArgs[2].env;
+    const callArgs = mockSpawn.mock.calls[mockSpawn.mock.calls.length - 1]!;
+    const childEnv = callArgs[2].env!;
     expect(childEnv.LIVEKIT_URL).toBe("ws://localhost:7880");
     expect(childEnv.LIVEKIT_API_KEY).toBe("devkey");
     expect(childEnv.LIVEKIT_API_SECRET).toBe("secret");

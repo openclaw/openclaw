@@ -1,559 +1,573 @@
 <!doctype html>
 <html lang="en">
-
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Stimm Voice</title>
-  <style>
-    :root {
-      --bg-a: #4a6cf7;
-      --bg-b: #7a3cff;
-      --bg-c: #2f1467;
-      --surface: rgba(20, 16, 52, 0.56);
-      --surface-strong: rgba(20, 16, 52, 0.76);
-      --border: rgba(164, 176, 255, 0.22);
-      --text: #eef1ff;
-      --muted: #c6cbff;
-      --accent: #72e2ff;
-      --accent-strong: #67f6ff;
-      --good: #52d6a0;
-      --warn: #ffbd59;
-      --bad: #ff6b8f;
-      --shadow: 0 24px 64px rgba(3, 3, 20, 0.35);
-    }
-
-    * {
-      box-sizing: border-box;
-      margin: 0;
-      padding: 0;
-    }
-
-    html,
-    body {
-      width: 100%;
-      min-height: 100%;
-    }
-
-    body {
-      font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      color: var(--text);
-      background:
-        radial-gradient(140% 120% at 0% 0%, rgba(126, 203, 255, 0.18), transparent 56%),
-        linear-gradient(130deg, var(--bg-a), var(--bg-b) 45%, var(--bg-c));
-    }
-
-    .layout {
-      min-height: 100vh;
-      display: grid;
-      grid-template-columns: 1fr;
-    }
-
-    .layout.show-info {
-      grid-template-columns: 1fr minmax(300px, 360px);
-    }
-
-    .stage {
-      padding: 28px;
-      display: flex;
-      flex-direction: column;
-    }
-
-    .topbar {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-    }
-
-    .topbar-right {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
-
-    .brand {
-      font-size: 22px;
-      font-weight: 700;
-      letter-spacing: -0.03em;
-    }
-
-    .status-pill {
-      border: 1px solid var(--border);
-      background: var(--surface);
-      border-radius: 999px;
-      padding: 8px 14px;
-      font-size: 12px;
-      color: var(--muted);
-      backdrop-filter: blur(8px);
-    }
-
-    .icon-btn {
-      width: 34px;
-      height: 34px;
-      border-radius: 999px;
-      border: 1px solid var(--border);
-      background: var(--surface);
-      color: var(--text);
-      font-size: 16px;
-      font-weight: 700;
-      line-height: 1;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      cursor: pointer;
-    }
-
-    .center {
-      flex: 1;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-    }
-
-    .stage-card {
-      width: 100%;
-      max-width: 560px;
-      text-align: center;
-    }
-
-    .signal-badge {
-      display: inline-block;
-      padding: 6px 12px;
-      border-radius: 999px;
-      border: 1px solid var(--border);
-      background: var(--surface);
-      color: var(--accent);
-      font-size: 11px;
-      font-weight: 600;
-      letter-spacing: 0.04em;
-      text-transform: uppercase;
-    }
-
-    .visualizer {
-      margin: 24px auto 16px;
-      min-height: 86px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      gap: 10px;
-    }
-
-    .bar {
-      width: 20px;
-      height: 24px;
-      border-radius: 12px;
-      background: linear-gradient(180deg, var(--accent-strong), var(--accent));
-      opacity: 0.38;
-    }
-
-    .visualizer.active .bar {
-      opacity: 1;
-      animation: pulse 640ms ease-in-out infinite alternate;
-    }
-
-    .visualizer.active .bar:nth-child(2) {
-      animation-delay: 80ms;
-    }
-
-    .visualizer.active .bar:nth-child(3) {
-      animation-delay: 160ms;
-    }
-
-    .visualizer.active .bar:nth-child(4) {
-      animation-delay: 120ms;
-    }
-
-    @keyframes pulse {
-      from {
-        height: 20px;
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Stimm Voice</title>
+    <style>
+      :root {
+        --bg-a: #4a6cf7;
+        --bg-b: #7a3cff;
+        --bg-c: #2f1467;
+        --surface: rgba(20, 16, 52, 0.56);
+        --surface-strong: rgba(20, 16, 52, 0.76);
+        --border: rgba(164, 176, 255, 0.22);
+        --text: #eef1ff;
+        --muted: #c6cbff;
+        --accent: #72e2ff;
+        --accent-strong: #67f6ff;
+        --good: #52d6a0;
+        --warn: #ffbd59;
+        --bad: #ff6b8f;
+        --shadow: 0 24px 64px rgba(3, 3, 20, 0.35);
       }
 
-      to {
-        height: 70px;
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
       }
-    }
 
-    .connection-title {
-      font-size: 16px;
-      font-weight: 600;
-      margin-top: 8px;
-    }
+      html,
+      body {
+        width: 100%;
+        min-height: 100%;
+      }
 
-    .room-info {
-      margin-top: 6px;
-      font-size: 13px;
-      color: var(--muted);
-    }
+      body {
+        font-family:
+          Inter,
+          -apple-system,
+          BlinkMacSystemFont,
+          "Segoe UI",
+          Roboto,
+          sans-serif;
+        color: var(--text);
+        background:
+          radial-gradient(140% 120% at 0% 0%, rgba(126, 203, 255, 0.18), transparent 56%),
+          linear-gradient(130deg, var(--bg-a), var(--bg-b) 45%, var(--bg-c));
+      }
 
-    .action-row {
-      margin-top: 24px;
-      display: flex;
-      gap: 10px;
-      justify-content: center;
-      flex-wrap: wrap;
-    }
-
-    .connect-overlay {
-      position: fixed;
-      inset: 0;
-      z-index: 50;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      padding: 24px;
-      background: rgba(8, 8, 28, 0.74);
-      backdrop-filter: blur(8px);
-    }
-
-    .connect-overlay.hidden {
-      display: none;
-    }
-
-    .btn-connect-overlay {
-      width: min(680px, 100%);
-      min-height: 58vh;
-      border-radius: 24px;
-      border: 1px solid rgba(180, 214, 255, 0.62);
-      background: linear-gradient(160deg, rgba(114, 226, 255, 0.22), rgba(95, 131, 255, 0.34));
-      box-shadow: var(--shadow);
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      gap: 14px;
-      padding: 26px;
-      text-align: center;
-    }
-
-    .btn-connect-overlay-icon {
-      width: 88px;
-      height: 88px;
-      border-radius: 999px;
-      border: 1px solid var(--border);
-      background: rgba(12, 16, 40, 0.45);
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 44px;
-      line-height: 1;
-    }
-
-    .btn-connect-overlay-title {
-      font-size: clamp(28px, 4.8vw, 52px);
-      font-weight: 700;
-      letter-spacing: -0.03em;
-    }
-
-    .btn-connect-overlay-subtitle {
-      font-size: clamp(15px, 2.2vw, 20px);
-      color: var(--muted);
-    }
-
-    button,
-    select {
-      border: 1px solid var(--border);
-      background: var(--surface);
-      color: var(--text);
-      border-radius: 12px;
-      padding: 10px 14px;
-      font-size: 13px;
-      font-weight: 600;
-    }
-
-    button {
-      cursor: pointer;
-      transition: 150ms ease;
-    }
-
-    button:hover:not(:disabled) {
-      border-color: rgba(255, 255, 255, 0.45);
-      transform: translateY(-1px);
-    }
-
-    button:disabled,
-    select:disabled {
-      opacity: 0.5;
-      cursor: not-allowed;
-    }
-
-    button.primary {
-      background: linear-gradient(160deg, rgba(114, 226, 255, 0.28), rgba(95, 131, 255, 0.35));
-      border-color: rgba(180, 214, 255, 0.5);
-    }
-
-    button.danger {
-      color: #ffd4df;
-      border-color: rgba(255, 128, 164, 0.5);
-      background: rgba(255, 107, 143, 0.2);
-    }
-
-    button.hangup {
-      display: none;
-      min-width: 240px;
-      padding: 14px 20px;
-      border-color: rgba(255, 128, 164, 0.72);
-      background: linear-gradient(170deg, rgba(255, 118, 156, 0.56), rgba(170, 41, 78, 0.6));
-      color: #fff;
-      align-items: center;
-      justify-content: center;
-      gap: 10px;
-      font-size: 16px;
-      font-weight: 700;
-      letter-spacing: 0.01em;
-    }
-
-    .hangup-icon {
-      width: 28px;
-      height: 28px;
-      border-radius: 999px;
-      background: rgba(18, 10, 24, 0.34);
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      flex: 0 0 auto;
-    }
-
-    .hangup-icon svg {
-      width: 16px;
-      height: 16px;
-      fill: currentColor;
-    }
-
-    .error {
-      margin-top: 16px;
-      color: #ffd2dd;
-      font-size: 13px;
-    }
-
-    .side {
-      border-left: 1px solid var(--border);
-      background: var(--surface-strong);
-      backdrop-filter: blur(10px);
-      box-shadow: var(--shadow);
-      padding: 20px;
-      display: none;
-      flex-direction: column;
-      gap: 14px;
-    }
-
-    .layout.show-info .side {
-      display: flex;
-    }
-
-    .panel {
-      border: 1px solid var(--border);
-      border-radius: 14px;
-      background: rgba(10, 11, 37, 0.34);
-      padding: 14px;
-    }
-
-    .panel h2 {
-      font-size: 12px;
-      text-transform: uppercase;
-      letter-spacing: 0.05em;
-      color: var(--muted);
-      margin-bottom: 10px;
-    }
-
-    .kv {
-      display: grid;
-      grid-template-columns: 110px 1fr;
-      gap: 8px;
-      font-size: 12px;
-      margin-bottom: 8px;
-    }
-
-    .kv span:first-child {
-      color: var(--muted);
-    }
-
-    .device-grid {
-      display: grid;
-      gap: 10px;
-    }
-
-    .device-row {
-      display: grid;
-      gap: 6px;
-    }
-
-    .device-row label {
-      font-size: 12px;
-      color: var(--muted);
-    }
-
-    .support-note {
-      font-size: 12px;
-      color: var(--muted);
-    }
-
-    .transcript {
-      max-height: 30vh;
-      overflow-y: auto;
-      display: grid;
-      gap: 7px;
-    }
-
-    .entry {
-      font-size: 13px;
-      line-height: 1.45;
-      color: #e8ebff;
-    }
-
-    .entry.user {
-      color: #dce2ff;
-    }
-
-    .entry.agent {
-      color: #aeefff;
-    }
-
-    .dot {
-      width: 9px;
-      height: 9px;
-      border-radius: 999px;
-      display: inline-block;
-      margin-right: 7px;
-      background: var(--warn);
-    }
-
-    .dot.connected {
-      background: var(--good);
-      box-shadow: 0 0 8px rgba(82, 214, 160, 0.9);
-    }
-
-    .dot.error {
-      background: var(--bad);
-    }
-
-    .desktop-only {
-      display: block;
-    }
-
-    .mobile-only {
-      display: none;
-    }
-
-    @media (max-width: 980px) {
       .layout {
+        min-height: 100vh;
+        display: grid;
         grid-template-columns: 1fr;
       }
 
       .layout.show-info {
-        grid-template-columns: 1fr;
+        grid-template-columns: 1fr minmax(300px, 360px);
       }
 
-      .layout.show-info .side {
-        border-left: 0;
-        border-top: 1px solid var(--border);
-      }
-    }
-
-    @media (max-width: 768px) {
       .stage {
-        padding: 16px;
+        padding: 28px;
+        display: flex;
+        flex-direction: column;
       }
 
-      .side {
-        padding: 16px;
+      .topbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
       }
 
-      .desktop-only {
+      .topbar-right {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .brand {
+        font-size: 22px;
+        font-weight: 700;
+        letter-spacing: -0.03em;
+      }
+
+      .status-pill {
+        border: 1px solid var(--border);
+        background: var(--surface);
+        border-radius: 999px;
+        padding: 8px 14px;
+        font-size: 12px;
+        color: var(--muted);
+        backdrop-filter: blur(8px);
+      }
+
+      .icon-btn {
+        width: 34px;
+        height: 34px;
+        border-radius: 999px;
+        border: 1px solid var(--border);
+        background: var(--surface);
+        color: var(--text);
+        font-size: 16px;
+        font-weight: 700;
+        line-height: 1;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+      }
+
+      .center {
+        flex: 1;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+
+      .stage-card {
+        width: 100%;
+        max-width: 560px;
+        text-align: center;
+      }
+
+      .signal-badge {
+        display: inline-block;
+        padding: 6px 12px;
+        border-radius: 999px;
+        border: 1px solid var(--border);
+        background: var(--surface);
+        color: var(--accent);
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+      }
+
+      .visualizer {
+        margin: 24px auto 16px;
+        min-height: 86px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 10px;
+      }
+
+      .bar {
+        width: 20px;
+        height: 24px;
+        border-radius: 12px;
+        background: linear-gradient(180deg, var(--accent-strong), var(--accent));
+        opacity: 0.38;
+      }
+
+      .visualizer.active .bar {
+        opacity: 1;
+        animation: pulse 640ms ease-in-out infinite alternate;
+      }
+
+      .visualizer.active .bar:nth-child(2) {
+        animation-delay: 80ms;
+      }
+
+      .visualizer.active .bar:nth-child(3) {
+        animation-delay: 160ms;
+      }
+
+      .visualizer.active .bar:nth-child(4) {
+        animation-delay: 120ms;
+      }
+
+      @keyframes pulse {
+        from {
+          height: 20px;
+        }
+
+        to {
+          height: 70px;
+        }
+      }
+
+      .connection-title {
+        font-size: 16px;
+        font-weight: 600;
+        margin-top: 8px;
+      }
+
+      .room-info {
+        margin-top: 6px;
+        font-size: 13px;
+        color: var(--muted);
+      }
+
+      .action-row {
+        margin-top: 24px;
+        display: flex;
+        gap: 10px;
+        justify-content: center;
+        flex-wrap: wrap;
+      }
+
+      .connect-overlay {
+        position: fixed;
+        inset: 0;
+        z-index: 50;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 24px;
+        background: rgba(8, 8, 28, 0.74);
+        backdrop-filter: blur(8px);
+      }
+
+      .connect-overlay.hidden {
         display: none;
       }
 
-      .mobile-only {
+      .btn-connect-overlay {
+        width: min(680px, 100%);
+        min-height: 58vh;
+        border-radius: 24px;
+        border: 1px solid rgba(180, 214, 255, 0.62);
+        background: linear-gradient(160deg, rgba(114, 226, 255, 0.22), rgba(95, 131, 255, 0.34));
+        box-shadow: var(--shadow);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 14px;
+        padding: 26px;
+        text-align: center;
+      }
+
+      .btn-connect-overlay-icon {
+        width: 88px;
+        height: 88px;
+        border-radius: 999px;
+        border: 1px solid var(--border);
+        background: rgba(12, 16, 40, 0.45);
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 44px;
+        line-height: 1;
+      }
+
+      .btn-connect-overlay-title {
+        font-size: clamp(28px, 4.8vw, 52px);
+        font-weight: 700;
+        letter-spacing: -0.03em;
+      }
+
+      .btn-connect-overlay-subtitle {
+        font-size: clamp(15px, 2.2vw, 20px);
+        color: var(--muted);
+      }
+
+      button,
+      select {
+        border: 1px solid var(--border);
+        background: var(--surface);
+        color: var(--text);
+        border-radius: 12px;
+        padding: 10px 14px;
+        font-size: 13px;
+        font-weight: 600;
+      }
+
+      button {
+        cursor: pointer;
+        transition: 150ms ease;
+      }
+
+      button:hover:not(:disabled) {
+        border-color: rgba(255, 255, 255, 0.45);
+        transform: translateY(-1px);
+      }
+
+      button:disabled,
+      select:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+
+      button.primary {
+        background: linear-gradient(160deg, rgba(114, 226, 255, 0.28), rgba(95, 131, 255, 0.35));
+        border-color: rgba(180, 214, 255, 0.5);
+      }
+
+      button.danger {
+        color: #ffd4df;
+        border-color: rgba(255, 128, 164, 0.5);
+        background: rgba(255, 107, 143, 0.2);
+      }
+
+      button.hangup {
+        display: none;
+        min-width: 240px;
+        padding: 14px 20px;
+        border-color: rgba(255, 128, 164, 0.72);
+        background: linear-gradient(170deg, rgba(255, 118, 156, 0.56), rgba(170, 41, 78, 0.6));
+        color: #fff;
+        align-items: center;
+        justify-content: center;
+        gap: 10px;
+        font-size: 16px;
+        font-weight: 700;
+        letter-spacing: 0.01em;
+      }
+
+      .hangup-icon {
+        width: 28px;
+        height: 28px;
+        border-radius: 999px;
+        background: rgba(18, 10, 24, 0.34);
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        flex: 0 0 auto;
+      }
+
+      .hangup-icon svg {
+        width: 16px;
+        height: 16px;
+        fill: currentColor;
+      }
+
+      .error {
+        margin-top: 16px;
+        color: #ffd2dd;
+        font-size: 13px;
+      }
+
+      .side {
+        border-left: 1px solid var(--border);
+        background: var(--surface-strong);
+        backdrop-filter: blur(10px);
+        box-shadow: var(--shadow);
+        padding: 20px;
+        display: none;
+        flex-direction: column;
+        gap: 14px;
+      }
+
+      .layout.show-info .side {
+        display: flex;
+      }
+
+      .panel {
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        background: rgba(10, 11, 37, 0.34);
+        padding: 14px;
+      }
+
+      .panel h2 {
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: var(--muted);
+        margin-bottom: 10px;
+      }
+
+      .kv {
+        display: grid;
+        grid-template-columns: 110px 1fr;
+        gap: 8px;
+        font-size: 12px;
+        margin-bottom: 8px;
+      }
+
+      .kv span:first-child {
+        color: var(--muted);
+      }
+
+      .device-grid {
+        display: grid;
+        gap: 10px;
+      }
+
+      .device-row {
+        display: grid;
+        gap: 6px;
+      }
+
+      .device-row label {
+        font-size: 12px;
+        color: var(--muted);
+      }
+
+      .support-note {
+        font-size: 12px;
+        color: var(--muted);
+      }
+
+      .transcript {
+        max-height: 30vh;
+        overflow-y: auto;
+        display: grid;
+        gap: 7px;
+      }
+
+      .entry {
+        font-size: 13px;
+        line-height: 1.45;
+        color: #e8ebff;
+      }
+
+      .entry.user {
+        color: #dce2ff;
+      }
+
+      .entry.agent {
+        color: #aeefff;
+      }
+
+      .dot {
+        width: 9px;
+        height: 9px;
+        border-radius: 999px;
+        display: inline-block;
+        margin-right: 7px;
+        background: var(--warn);
+      }
+
+      .dot.connected {
+        background: var(--good);
+        box-shadow: 0 0 8px rgba(82, 214, 160, 0.9);
+      }
+
+      .dot.error {
+        background: var(--bad);
+      }
+
+      .desktop-only {
         display: block;
       }
-    }
-  </style>
-</head>
 
-<body>
-  <div class="layout">
-    <main class="stage">
-      <div class="topbar">
-        <div class="brand">Stimm</div>
-        <div class="topbar-right">
-          <div class="status-pill" id="status-pill">Preparing session…</div>
-          <button class="icon-btn" id="btn-info" aria-label="Afficher les détails">i</button>
+      .mobile-only {
+        display: none;
+      }
+
+      @media (max-width: 980px) {
+        .layout {
+          grid-template-columns: 1fr;
+        }
+
+        .layout.show-info {
+          grid-template-columns: 1fr;
+        }
+
+        .layout.show-info .side {
+          border-left: 0;
+          border-top: 1px solid var(--border);
+        }
+      }
+
+      @media (max-width: 768px) {
+        .stage {
+          padding: 16px;
+        }
+
+        .side {
+          padding: 16px;
+        }
+
+        .desktop-only {
+          display: none;
+        }
+
+        .mobile-only {
+          display: block;
+        }
+      }
+    </style>
+  </head>
+
+  <body>
+    <div class="layout">
+      <main class="stage">
+        <div class="topbar">
+          <div class="brand">Stimm</div>
+          <div class="topbar-right">
+            <div class="status-pill" id="status-pill">Preparing session…</div>
+            <button class="icon-btn" id="btn-info" aria-label="Afficher les détails">i</button>
+          </div>
         </div>
-      </div>
 
-      <div class="center">
-        <section class="stage-card">
-          <div class="signal-badge" id="signal-badge">Agent idle</div>
-          <div class="visualizer" id="visualizer">
-            <div class="bar"></div>
-            <div class="bar"></div>
-            <div class="bar"></div>
-            <div class="bar"></div>
+        <div class="center">
+          <section class="stage-card">
+            <div class="signal-badge" id="signal-badge">Agent idle</div>
+            <div class="visualizer" id="visualizer">
+              <div class="bar"></div>
+              <div class="bar"></div>
+              <div class="bar"></div>
+              <div class="bar"></div>
+            </div>
+            <div class="connection-title" id="status-text">Disconnected</div>
+            <div class="room-info" id="room-info"></div>
+
+            <div class="action-row">
+              <button class="primary" id="btn-connect">Connect</button>
+              <button class="hangup" id="btn-hangup" aria-label="Raccrocher">
+                <span class="hangup-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" role="presentation" focusable="false">
+                    <path
+                      d="M4.4 15.2c2.5 3.8 5.8 6.1 9.8 6.9.6.1 1.2-.1 1.6-.5l2.2-2.2c.4-.4.5-1 .3-1.5l-1-2.9c-.2-.6-.8-.9-1.4-.8l-2.8.5c-1.8-.8-3.2-2.2-4-4l.5-2.8c.1-.6-.2-1.2-.8-1.4l-2.9-1c-.5-.2-1.1-.1-1.5.3L2.1 7.9c-.4.4-.6 1-.5 1.6.8 4 3.1 7.3 6.9 9.8Z"
+                    />
+                  </svg>
+                </span>
+                <span>Raccrocher</span>
+              </button>
+              <button id="btn-mute" disabled>Mute</button>
+              <button id="btn-fullscreen">Fullscreen</button>
+              <button id="btn-mode" class="mobile-only">Mode: Hands-free</button>
+              <button id="btn-proximity" class="mobile-only">Ear detect: off</button>
+            </div>
+
+            <div class="error" id="error-msg" style="display: none"></div>
+          </section>
+        </div>
+      </main>
+
+      <aside class="side">
+        <section class="panel">
+          <h2>Live Status</h2>
+          <div class="kv">
+            <span>State</span><span id="status-line"><span class="dot"></span>Idle</span>
           </div>
-          <div class="connection-title" id="status-text">Disconnected</div>
-          <div class="room-info" id="room-info"></div>
-
-          <div class="action-row">
-            <button class="primary" id="btn-connect">Connect</button>
-            <button class="hangup" id="btn-hangup" aria-label="Raccrocher">
-              <span class="hangup-icon" aria-hidden="true">
-                <svg viewBox="0 0 24 24" role="presentation" focusable="false">
-                  <path
-                    d="M4.4 15.2c2.5 3.8 5.8 6.1 9.8 6.9.6.1 1.2-.1 1.6-.5l2.2-2.2c.4-.4.5-1 .3-1.5l-1-2.9c-.2-.6-.8-.9-1.4-.8l-2.8.5c-1.8-.8-3.2-2.2-4-4l.5-2.8c.1-.6-.2-1.2-.8-1.4l-2.9-1c-.5-.2-1.1-.1-1.5.3L2.1 7.9c-.4.4-.6 1-.5 1.6.8 4 3.1 7.3 6.9 9.8Z" />
-                </svg>
-              </span>
-              <span>Raccrocher</span>
-            </button>
-            <button id="btn-mute" disabled>Mute</button>
-            <button id="btn-fullscreen">Fullscreen</button>
-            <button id="btn-mode" class="mobile-only">Mode: Hands-free</button>
-            <button id="btn-proximity" class="mobile-only">Ear detect: off</button>
-          </div>
-
-          <div class="error" id="error-msg" style="display: none"></div>
+          <div class="kv"><span>Audio Mode</span><span id="audio-mode">Hands-free</span></div>
+          <div class="kv"><span>Room</span><span id="room-side">—</span></div>
+          <div class="kv"><span>Channel</span><span id="channel-side">web</span></div>
         </section>
-      </div>
-    </main>
 
-    <aside class="side">
-      <section class="panel">
-        <h2>Live Status</h2>
-        <div class="kv"><span>State</span><span id="status-line"><span class="dot"></span>Idle</span></div>
-        <div class="kv"><span>Audio Mode</span><span id="audio-mode">Hands-free</span></div>
-        <div class="kv"><span>Room</span><span id="room-side">—</span></div>
-        <div class="kv"><span>Channel</span><span id="channel-side">web</span></div>
-      </section>
-
-      <section class="panel">
-        <h2>Devices</h2>
-        <div class="device-grid">
-          <div class="device-row">
-            <label for="mic-select">Microphone</label>
-            <select id="mic-select"></select>
+        <section class="panel">
+          <h2>Devices</h2>
+          <div class="device-grid">
+            <div class="device-row">
+              <label for="mic-select">Microphone</label>
+              <select id="mic-select"></select>
+            </div>
+            <div class="device-row desktop-only">
+              <label for="speaker-select">Speaker / Headphones</label>
+              <select id="speaker-select"></select>
+            </div>
+            <div class="support-note" id="speaker-support-note"></div>
           </div>
-          <div class="device-row desktop-only">
-            <label for="speaker-select">Speaker / Headphones</label>
-            <select id="speaker-select"></select>
-          </div>
-          <div class="support-note" id="speaker-support-note"></div>
-        </div>
-      </section>
+        </section>
 
-      <section class="panel">
-        <h2>Transcription</h2>
-        <div class="transcript" id="transcript"></div>
-      </section>
-    </aside>
-  </div>
+        <section class="panel">
+          <h2>Transcription</h2>
+          <div class="transcript" id="transcript"></div>
+        </section>
+      </aside>
+    </div>
 
-  <div class="connect-overlay" id="connect-overlay">
-    <button class="btn-connect-overlay" id="btn-connect-overlay" aria-label="Activer l'audio et se connecter">
-      <span class="btn-connect-overlay-icon" aria-hidden="true">🎙️</span>
-      <span class="btn-connect-overlay-title">Appuyer pour parler</span>
-      <span class="btn-connect-overlay-subtitle">Active l'audio et connecte la session</span>
-    </button>
-  </div>
+    <div class="connect-overlay" id="connect-overlay">
+      <button
+        class="btn-connect-overlay"
+        id="btn-connect-overlay"
+        aria-label="Activer l'audio et se connecter"
+      >
+        <span class="btn-connect-overlay-icon" aria-hidden="true">🎙️</span>
+        <span class="btn-connect-overlay-title">Appuyer pour parler</span>
+        <span class="btn-connect-overlay-subtitle">Active l'audio et connecte la session</span>
+      </button>
+    </div>
 
-  <div id="goodbye-screen" style="
+    <div
+      id="goodbye-screen"
+      style="
         display: none;
         width: 100vw;
         height: 100vh;
@@ -562,657 +576,661 @@
         font-size: 42px;
         font-weight: 700;
         letter-spacing: -0.03em;
-      ">
-    A bientôt !
-  </div>
+      "
+    >
+      A bientôt !
+    </div>
 
-  <script src="https://cdn.jsdelivr.net/npm/livekit-client@2/dist/livekit-client.umd.js"></script>
-  <script>
-    let room = null;
-    let localTrack = null;
-    let connected = false;
-    let muted = false;
-    let currentRoomName = "";
-    let currentChannel = "web";
-    let disconnectToken = "";
-    let selectedMicId = "";
-    let selectedSpeakerId = "default";
-    let audioMode = "handsfree";
-    let proximityEnabled = false;
-    let proximitySensor = null;
-    let proximityAutoSwitched = false;
-    let audioUnlockArmed = false;
+    <script src="https://cdn.jsdelivr.net/npm/livekit-client@2/dist/livekit-client.umd.js"></script>
+    <script>
+      let room = null;
+      let localTrack = null;
+      let connected = false;
+      let muted = false;
+      let currentRoomName = "";
+      let currentChannel = "web";
+      let disconnectToken = "";
+      let selectedMicId = "";
+      let selectedSpeakerId = "default";
+      let audioMode = "handsfree";
+      let proximityEnabled = false;
+      let proximitySensor = null;
+      let proximityAutoSwitched = false;
+      let audioUnlockArmed = false;
 
-    const remoteAudioElements = new Map();
-    const remoteAudioByParticipant = new Map();
+      const remoteAudioElements = new Map();
+      const remoteAudioByParticipant = new Map();
 
-    const $ = (id) => document.getElementById(id);
-    const visualizer = $("visualizer");
-    const statusText = $("status-text");
-    const statusPill = $("status-pill");
-    const signalBadge = $("signal-badge");
-    const roomInfo = $("room-info");
-    const statusLine = $("status-line");
-    const audioModeLabel = $("audio-mode");
-    const roomSide = $("room-side");
-    const channelSide = $("channel-side");
-    const transcriptEl = $("transcript");
-    const errorMsg = $("error-msg");
-    const layout = document.querySelector(".layout");
-    const connectOverlay = $("connect-overlay");
-    const goodbyeScreen = $("goodbye-screen");
-    const btnConnect = $("btn-connect");
-    const btnConnectOverlay = $("btn-connect-overlay");
-    const btnHangup = $("btn-hangup");
-    const btnMute = $("btn-mute");
-    const btnFullscreen = $("btn-fullscreen");
-    const btnInfo = $("btn-info");
-    const btnMode = $("btn-mode");
-    const btnProximity = $("btn-proximity");
-    const micSelect = $("mic-select");
-    const speakerSelect = $("speaker-select");
-    const speakerSupportNote = $("speaker-support-note");
+      const $ = (id) => document.getElementById(id);
+      const visualizer = $("visualizer");
+      const statusText = $("status-text");
+      const statusPill = $("status-pill");
+      const signalBadge = $("signal-badge");
+      const roomInfo = $("room-info");
+      const statusLine = $("status-line");
+      const audioModeLabel = $("audio-mode");
+      const roomSide = $("room-side");
+      const channelSide = $("channel-side");
+      const transcriptEl = $("transcript");
+      const errorMsg = $("error-msg");
+      const layout = document.querySelector(".layout");
+      const connectOverlay = $("connect-overlay");
+      const goodbyeScreen = $("goodbye-screen");
+      const btnConnect = $("btn-connect");
+      const btnConnectOverlay = $("btn-connect-overlay");
+      const btnHangup = $("btn-hangup");
+      const btnMute = $("btn-mute");
+      const btnFullscreen = $("btn-fullscreen");
+      const btnInfo = $("btn-info");
+      const btnMode = $("btn-mode");
+      const btnProximity = $("btn-proximity");
+      const micSelect = $("mic-select");
+      const speakerSelect = $("speaker-select");
+      const speakerSupportNote = $("speaker-support-note");
 
-    const isMobile =
-      window.matchMedia("(max-width: 768px)").matches ||
-      /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
-    const canSetSink =
-      typeof HTMLMediaElement !== "undefined" &&
-      typeof HTMLMediaElement.prototype.setSinkId === "function";
+      const isMobile =
+        window.matchMedia("(max-width: 768px)").matches ||
+        /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
+      const canSetSink =
+        typeof HTMLMediaElement !== "undefined" &&
+        typeof HTMLMediaElement.prototype.setSinkId === "function";
 
-    async function createSession() {
-      const voicePath = window.location.pathname.replace(/\/$/, "") || "/voice";
-      const claimPath = `${voicePath}/claim`;
-      const params = new URLSearchParams(window.location.search);
-      const claim = params.get("c") || params.get("claim");
-
-      const res = claim
-        ? await fetch(claimPath, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ claim }),
-        })
-        : await fetch(voicePath, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-        });
-
-      if (!res.ok) {
-        const body = await res.text();
-        if (claim) {
-          throw new Error(`Failed to exchange claim: ${res.status} ${body}`);
-        }
-        throw new Error(
-          `Failed to create session: ${res.status} ${body}. Use a claim link, or enable direct web session create in config.`,
-        );
-      }
-
-      return await res.json();
-    }
-
-    async function endSession(roomName, token) {
-      const voicePath = window.location.pathname.replace(/\/$/, "") || "/voice";
-      const endPath = `${voicePath}/end`;
-      const res = await fetch(endPath, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          room: roomName,
-          disconnectToken: token,
-        }),
-      });
-      if (!res.ok) {
-        const body = await res.text();
-        throw new Error(`Failed to end session: ${res.status} ${body}`);
-      }
-    }
-
-    function showGoodbyeScreen() {
-      setConnectOverlayVisible(false);
-      if (layout) layout.style.display = "none";
-      if (goodbyeScreen) goodbyeScreen.style.display = "flex";
-    }
-
-    function hideGoodbyeScreen() {
-      if (goodbyeScreen) goodbyeScreen.style.display = "none";
-      if (layout) layout.style.display = "grid";
-    }
-
-    function setConnectOverlayVisible(visible) {
-      if (!connectOverlay) return;
-      connectOverlay.classList.toggle("hidden", !visible);
-    }
-
-    function setInfoVisible(visible) {
-      if (!layout) return;
-      layout.classList.toggle("show-info", visible);
-    }
-
-    function updateStatus(state, text) {
-      const dotClass = state === "connected" ? "connected" : state === "error" ? "error" : "";
-      statusText.textContent = text;
-      statusPill.textContent = text;
-      statusLine.innerHTML = `<span class="dot ${dotClass}"></span>${text}`;
-    }
-
-    function setSignal(active) {
-      if (active) {
-        visualizer.classList.add("active");
-        signalBadge.textContent = "Agent speaking";
-      } else {
-        visualizer.classList.remove("active");
-        signalBadge.textContent = "Agent idle";
-      }
-    }
-
-    function showError(message) {
-      errorMsg.textContent = message;
-      errorMsg.style.display = "block";
-    }
-
-    function hideError() {
-      errorMsg.style.display = "none";
-    }
-
-    function addTranscript(role, text) {
-      if (!text || !text.trim()) return;
-      const entry = document.createElement("div");
-      entry.className = `entry ${role}`;
-      entry.textContent = `${role === "user" ? "You" : "Agent"}: ${text}`;
-      transcriptEl.appendChild(entry);
-      transcriptEl.scrollTop = transcriptEl.scrollHeight;
-    }
-
-    async function listDevices() {
-      if (!navigator.mediaDevices?.enumerateDevices) return;
-      const devices = await navigator.mediaDevices.enumerateDevices();
-      const inputDevices = devices.filter((d) => d.kind === "audioinput");
-      const outputDevices = devices.filter((d) => d.kind === "audiooutput");
-
-      micSelect.innerHTML = "";
-      for (let index = 0; index < inputDevices.length; index += 1) {
-        const d = inputDevices[index];
-        const option = document.createElement("option");
-        option.value = d.deviceId;
-        option.textContent = d.label || `Microphone ${index + 1}`;
-        micSelect.appendChild(option);
-      }
-
-      if (!selectedMicId && inputDevices.length > 0) {
-        selectedMicId = inputDevices[0].deviceId;
-      }
-      if (selectedMicId) {
-        micSelect.value = selectedMicId;
-      }
-
-      if (canSetSink && speakerSelect) {
-        speakerSelect.innerHTML = "";
-        if (outputDevices.length === 0) {
-          const defaultOption = document.createElement("option");
-          defaultOption.value = "default";
-          defaultOption.textContent = "Default output";
-          speakerSelect.appendChild(defaultOption);
-        }
-        for (let index = 0; index < outputDevices.length; index += 1) {
-          const d = outputDevices[index];
-          const option = document.createElement("option");
-          option.value = d.deviceId || "default";
-          option.textContent = d.label || `Output ${index + 1}`;
-          speakerSelect.appendChild(option);
-        }
-        if (![...speakerSelect.options].some((opt) => opt.value === selectedSpeakerId)) {
-          selectedSpeakerId = speakerSelect.options[0]?.value || "default";
-        }
-        speakerSelect.value = selectedSpeakerId;
-        speakerSupportNote.textContent = "";
-      } else {
-        if (speakerSelect) speakerSelect.disabled = true;
-        speakerSupportNote.textContent = "Speaker routing selector is available on desktop Chromium browsers.";
-      }
-    }
-
-    async function applyOutputToElement(el) {
-      if (!canSetSink) return;
-      const sinkId = audioMode === "handsfree" ? selectedSpeakerId : "default";
-      try {
-        await el.setSinkId(sinkId || "default");
-      } catch { }
-    }
-
-    async function applyOutputToAll() {
-      const actions = [];
-      for (const el of remoteAudioElements.values()) {
-        actions.push(applyOutputToElement(el));
-        el.volume = audioMode === "handsfree" ? 1 : 0.8;
-      }
-      await Promise.all(actions);
-    }
-
-    function armAudioUnlockGesture() {
-      if (audioUnlockArmed) return;
-      audioUnlockArmed = true;
-
-      const handler = async () => {
-        try {
-          await ensureAudioPlayback(true);
-        } catch { }
-        document.removeEventListener("pointerdown", handler, true);
-        document.removeEventListener("touchstart", handler, true);
-        document.removeEventListener("click", handler, true);
-        audioUnlockArmed = false;
-      };
-
-      document.addEventListener("pointerdown", handler, true);
-      document.addEventListener("touchstart", handler, true);
-      document.addEventListener("click", handler, true);
-    }
-
-    async function ensureAudioPlayback(fromUserGesture = false) {
-      if (!room) return;
-
-      let unlocked = false;
-      if (typeof room.startAudio === "function") {
-        try {
-          await room.startAudio();
-          unlocked = true;
-        } catch { }
-      }
-
-      let played = false;
-      for (const el of remoteAudioElements.values()) {
-        try {
-          await el.play();
-          played = true;
-        } catch { }
-      }
-
-      if (!fromUserGesture && !unlocked && !played) {
-        armAudioUnlockGesture();
-        updateStatus("connected", "Tap once to enable audio");
-      }
-    }
-
-    async function setAudioMode(mode, triggeredByProximity = false) {
-      audioMode = mode;
-      audioModeLabel.textContent = mode === "handsfree" ? "Hands-free" : "Standard";
-      if (btnMode) {
-        btnMode.textContent = `Mode: ${mode === "handsfree" ? "Hands-free" : "Standard"}`;
-      }
-      if (triggeredByProximity) {
-        proximityAutoSwitched = true;
-      } else {
-        proximityAutoSwitched = false;
-      }
-      await applyOutputToAll();
-    }
-
-    async function replaceLocalTrack() {
-      if (!room) return;
-      const newTrack = await LivekitClient.createLocalAudioTrack({
-        deviceId: selectedMicId ? { exact: selectedMicId } : undefined,
-        autoGainControl: true,
-        echoCancellation: true,
-        noiseSuppression: true,
-      });
-      const previous = localTrack;
-      const micSource =
-        LivekitClient?.Track?.Source?.Microphone ??
-        LivekitClient?.Track?.Source?.SOURCE_MICROPHONE;
-      const publishOpts = micSource ? { source: micSource } : undefined;
-
-      localTrack = newTrack;
-      await room.localParticipant.publishTrack(newTrack, publishOpts);
-      if (previous) {
-        try {
-          await room.localParticipant.unpublishTrack(previous);
-        } catch { }
-        previous.stop();
-      }
-    }
-
-    async function warmupAudioPermission() {
-      if (!navigator.mediaDevices?.getUserMedia) return;
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      for (const track of stream.getTracks()) {
-        track.stop();
-      }
-    }
-
-    async function connect(fromUserGesture = false) {
-      if (connected) return;
-      updateStatus("connecting", "Connecting…");
-      hideError();
-      btnConnect.disabled = true;
-      if (btnConnectOverlay) btnConnectOverlay.disabled = true;
-
-      try {
-        const session = await createSession();
-        const token = session.clientToken;
-        currentRoomName = session.room;
-        currentChannel = session.channel || "web";
-        disconnectToken = typeof session.disconnectToken === "string" ? session.disconnectToken : "";
+      async function createSession() {
+        const voicePath = window.location.pathname.replace(/\/$/, "") || "/voice";
+        const claimPath = `${voicePath}/claim`;
         const params = new URLSearchParams(window.location.search);
-        const livekitOverride = params.get("livekit");
-        const serverLivekitUrl = session.livekitUrl || null;
-        let livekitUrl;
-        if (serverLivekitUrl) {
-          livekitUrl = serverLivekitUrl;
-        } else if (livekitOverride) {
-          livekitUrl = livekitOverride;
-        } else {
-          const isSecure = window.location.protocol === "https:";
-          const wsProtocol = isSecure ? "wss:" : "ws:";
-          const livekitPort = isSecure ? "7443" : "7880";
-          livekitUrl = `${wsProtocol}//${window.location.hostname}:${livekitPort}`;
+        const claim = params.get("c") || params.get("claim");
+
+        const res = claim
+          ? await fetch(claimPath, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ claim }),
+            })
+          : await fetch(voicePath, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+            });
+
+        if (!res.ok) {
+          const body = await res.text();
+          if (claim) {
+            throw new Error(`Failed to exchange claim: ${res.status} ${body}`);
+          }
+          throw new Error(
+            `Failed to create session: ${res.status} ${body}. Use a claim link, or enable direct web session create in config.`,
+          );
         }
 
-        room = new LivekitClient.Room({ adaptiveStream: true, dynacast: true });
+        return await res.json();
+      }
 
-        room.on(LivekitClient.RoomEvent.Disconnected, () => {
-          cleanupConnectionUI();
-          updateStatus("disconnected", "Disconnected");
+      async function endSession(roomName, token) {
+        const voicePath = window.location.pathname.replace(/\/$/, "") || "/voice";
+        const endPath = `${voicePath}/end`;
+        const res = await fetch(endPath, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            room: roomName,
+            disconnectToken: token,
+          }),
         });
-
-        room.on(LivekitClient.RoomEvent.TrackSubscribed, async (track, pub, participant) => {
-          if (track.kind !== LivekitClient.Track.Kind.Audio) return;
-          const participantId = participant?.identity || "unknown";
-          const key = pub?.trackSid || track.sid || `${participantId}:audio`;
-          const previousKey = remoteAudioByParticipant.get(participantId);
-          if (previousKey && previousKey !== key) {
-            const oldEl = remoteAudioElements.get(previousKey);
-            if (oldEl) {
-              try {
-                oldEl.remove();
-              } catch { }
-              remoteAudioElements.delete(previousKey);
-            }
-          }
-          const prev = remoteAudioElements.get(key);
-          if (prev) {
-            try {
-              prev.remove();
-            } catch { }
-            remoteAudioElements.delete(key);
-          }
-          const el = track.attach();
-          el.autoplay = true;
-          el.setAttribute("data-lk-track", key);
-          el.setAttribute("data-lk-participant", participantId);
-          document.body.appendChild(el);
-          remoteAudioElements.set(key, el);
-          remoteAudioByParticipant.set(participantId, key);
-          await applyOutputToElement(el);
-          el.volume = audioMode === "handsfree" ? 1 : 0.8;
-          await ensureAudioPlayback();
-          setSignal(true);
-        });
-
-        room.on(LivekitClient.RoomEvent.TrackUnsubscribed, (track, pub) => {
-          const key = pub?.trackSid || track?.sid;
-          if (!key) return;
-          const el = remoteAudioElements.get(key);
-          if (!el) return;
-          try {
-            track?.detach(el);
-          } catch { }
-          try {
-            el.remove();
-          } catch { }
-          remoteAudioElements.delete(key);
-          const participantId = el.getAttribute("data-lk-participant") || "";
-          if (participantId && remoteAudioByParticipant.get(participantId) === key) {
-            remoteAudioByParticipant.delete(participantId);
-          }
-          if (remoteAudioElements.size === 0) {
-            setSignal(false);
-          }
-        });
-
-        room.on(LivekitClient.RoomEvent.DataReceived, (payload) => {
-          try {
-            const message = JSON.parse(new TextDecoder().decode(payload));
-            if (message.type === "transcript") {
-              if (message.partial === true) return;
-              addTranscript("user", message.text || message.data || "");
-            }
-            if (message.type === "response") {
-              addTranscript("agent", message.text || message.data || "");
-            }
-          } catch { }
-        });
-
-        await room.connect(livekitUrl, token);
-        await ensureAudioPlayback(fromUserGesture);
-        await listDevices();
-        await replaceLocalTrack();
-        if (localTrack?.muted) {
-          localTrack.unmute();
+        if (!res.ok) {
+          const body = await res.text();
+          throw new Error(`Failed to end session: ${res.status} ${body}`);
         }
+      }
 
-        connected = true;
-        muted = false;
+      function showGoodbyeScreen() {
         setConnectOverlayVisible(false);
-        btnConnect.style.display = "none";
-        btnConnect.disabled = false;
-        btnHangup.style.display = "inline-flex";
-        btnMute.disabled = false;
-        btnMute.textContent = "Mute";
-        setSignal(true);
+        if (layout) layout.style.display = "none";
+        if (goodbyeScreen) goodbyeScreen.style.display = "flex";
+      }
 
-        roomInfo.textContent = `Connected to ${currentRoomName}`;
-        roomSide.textContent = currentRoomName;
-        channelSide.textContent = currentChannel;
-        updateStatus("connected", "Connected");
-      } catch (error) {
-        const message = error?.message || "Could not connect to voice session.";
-        showError(message);
-        cleanupConnectionUI();
-        updateStatus("error", "Connection failed");
-      } finally {
-        btnConnect.disabled = false;
-        if (btnConnectOverlay) btnConnectOverlay.disabled = false;
+      function hideGoodbyeScreen() {
+        if (goodbyeScreen) goodbyeScreen.style.display = "none";
+        if (layout) layout.style.display = "grid";
       }
-    }
 
-    async function disconnect() {
-      const roomToClose = currentRoomName;
-      const closeToken = disconnectToken;
-      if (room) {
-        try {
-          await room.disconnect();
-        } catch { }
-        room = null;
+      function setConnectOverlayVisible(visible) {
+        if (!connectOverlay) return;
+        connectOverlay.classList.toggle("hidden", !visible);
       }
-      if (localTrack) {
-        localTrack.stop();
-        localTrack = null;
-      }
-      for (const el of remoteAudioElements.values()) {
-        try {
-          el.remove();
-        } catch { }
-      }
-      remoteAudioElements.clear();
-      remoteAudioByParticipant.clear();
 
-      if (roomToClose && closeToken) {
-        try {
-          await endSession(roomToClose, closeToken);
-        } catch (error) {
-          showError(error?.message || "Session disconnected locally, but cloud room teardown failed.");
+      function setInfoVisible(visible) {
+        if (!layout) return;
+        layout.classList.toggle("show-info", visible);
+      }
+
+      function updateStatus(state, text) {
+        const dotClass = state === "connected" ? "connected" : state === "error" ? "error" : "";
+        statusText.textContent = text;
+        statusPill.textContent = text;
+        statusLine.innerHTML = `<span class="dot ${dotClass}"></span>${text}`;
+      }
+
+      function setSignal(active) {
+        if (active) {
+          visualizer.classList.add("active");
+          signalBadge.textContent = "Agent speaking";
+        } else {
+          visualizer.classList.remove("active");
+          signalBadge.textContent = "Agent idle";
         }
       }
 
-      cleanupConnectionUI();
-      updateStatus("disconnected", "Disconnected");
-      showGoodbyeScreen();
-    }
-
-    function cleanupConnectionUI() {
-      connected = false;
-      muted = false;
-      currentRoomName = "";
-      disconnectToken = "";
-      roomInfo.textContent = "";
-      roomSide.textContent = "—";
-      btnConnect.textContent = "Connect";
-      btnConnect.style.display = "inline-flex";
-      btnConnect.classList.add("primary");
-      btnConnect.classList.remove("danger");
-      setConnectOverlayVisible(true);
-      btnHangup.style.display = "none";
-      btnMute.textContent = "Mute";
-      btnMute.disabled = true;
-      setSignal(false);
-    }
-
-    function toggleMute() {
-      if (!localTrack) return;
-      muted = !muted;
-      if (muted) {
-        localTrack.mute();
-        btnMute.textContent = "Unmute";
-        setSignal(false);
-      } else {
-        localTrack.unmute();
-        btnMute.textContent = "Mute";
-        setSignal(true);
-      }
-    }
-
-    async function toggleFullscreen() {
-      if (!document.fullscreenElement) {
-        await document.documentElement.requestFullscreen?.();
-        btnFullscreen.textContent = "Exit Fullscreen";
-        return;
-      }
-      await document.exitFullscreen?.();
-      btnFullscreen.textContent = "Fullscreen";
-    }
-
-    function setupProximity() {
-      if (!isMobile || typeof window.ProximitySensor !== "function") {
-        btnProximity.textContent = "Ear detect: unavailable";
-        btnProximity.disabled = true;
-        return;
+      function showError(message) {
+        errorMsg.textContent = message;
+        errorMsg.style.display = "block";
       }
 
-      proximityEnabled = true;
-      btnProximity.textContent = "Ear detect: on";
-      proximitySensor = new window.ProximitySensor({ frequency: 5 });
-      proximitySensor.addEventListener("reading", async () => {
-        if (!proximityEnabled) return;
-        const near = Number(proximitySensor.distance) <= 0;
-        if (near && audioMode !== "standard") {
-          await setAudioMode("standard", true);
+      function hideError() {
+        errorMsg.style.display = "none";
+      }
+
+      function addTranscript(role, text) {
+        if (!text || !text.trim()) return;
+        const entry = document.createElement("div");
+        entry.className = `entry ${role}`;
+        entry.textContent = `${role === "user" ? "You" : "Agent"}: ${text}`;
+        transcriptEl.appendChild(entry);
+        transcriptEl.scrollTop = transcriptEl.scrollHeight;
+      }
+
+      async function listDevices() {
+        if (!navigator.mediaDevices?.enumerateDevices) return;
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const inputDevices = devices.filter((d) => d.kind === "audioinput");
+        const outputDevices = devices.filter((d) => d.kind === "audiooutput");
+
+        micSelect.innerHTML = "";
+        for (let index = 0; index < inputDevices.length; index += 1) {
+          const d = inputDevices[index];
+          const option = document.createElement("option");
+          option.value = d.deviceId;
+          option.textContent = d.label || `Microphone ${index + 1}`;
+          micSelect.appendChild(option);
         }
-        if (!near && proximityAutoSwitched && audioMode !== "handsfree") {
-          await setAudioMode("handsfree", true);
+
+        if (!selectedMicId && inputDevices.length > 0) {
+          selectedMicId = inputDevices[0].deviceId;
+        }
+        if (selectedMicId) {
+          micSelect.value = selectedMicId;
+        }
+
+        if (canSetSink && speakerSelect) {
+          speakerSelect.innerHTML = "";
+          if (outputDevices.length === 0) {
+            const defaultOption = document.createElement("option");
+            defaultOption.value = "default";
+            defaultOption.textContent = "Default output";
+            speakerSelect.appendChild(defaultOption);
+          }
+          for (let index = 0; index < outputDevices.length; index += 1) {
+            const d = outputDevices[index];
+            const option = document.createElement("option");
+            option.value = d.deviceId || "default";
+            option.textContent = d.label || `Output ${index + 1}`;
+            speakerSelect.appendChild(option);
+          }
+          if (![...speakerSelect.options].some((opt) => opt.value === selectedSpeakerId)) {
+            selectedSpeakerId = speakerSelect.options[0]?.value || "default";
+          }
+          speakerSelect.value = selectedSpeakerId;
+          speakerSupportNote.textContent = "";
+        } else {
+          if (speakerSelect) speakerSelect.disabled = true;
+          speakerSupportNote.textContent =
+            "Speaker routing selector is available on desktop Chromium browsers.";
+        }
+      }
+
+      async function applyOutputToElement(el) {
+        if (!canSetSink) return;
+        const sinkId = audioMode === "handsfree" ? selectedSpeakerId : "default";
+        try {
+          await el.setSinkId(sinkId || "default");
+        } catch {}
+      }
+
+      async function applyOutputToAll() {
+        const actions = [];
+        for (const el of remoteAudioElements.values()) {
+          actions.push(applyOutputToElement(el));
+          el.volume = audioMode === "handsfree" ? 1 : 0.8;
+        }
+        await Promise.all(actions);
+      }
+
+      function armAudioUnlockGesture() {
+        if (audioUnlockArmed) return;
+        audioUnlockArmed = true;
+
+        const handler = async () => {
+          try {
+            await ensureAudioPlayback(true);
+          } catch {}
+          document.removeEventListener("pointerdown", handler, true);
+          document.removeEventListener("touchstart", handler, true);
+          document.removeEventListener("click", handler, true);
+          audioUnlockArmed = false;
+        };
+
+        document.addEventListener("pointerdown", handler, true);
+        document.addEventListener("touchstart", handler, true);
+        document.addEventListener("click", handler, true);
+      }
+
+      async function ensureAudioPlayback(fromUserGesture = false) {
+        if (!room) return;
+
+        let unlocked = false;
+        if (typeof room.startAudio === "function") {
+          try {
+            await room.startAudio();
+            unlocked = true;
+          } catch {}
+        }
+
+        let played = false;
+        for (const el of remoteAudioElements.values()) {
+          try {
+            await el.play();
+            played = true;
+          } catch {}
+        }
+
+        if (!fromUserGesture && !unlocked && !played) {
+          armAudioUnlockGesture();
+          updateStatus("connected", "Tap once to enable audio");
+        }
+      }
+
+      async function setAudioMode(mode, triggeredByProximity = false) {
+        audioMode = mode;
+        audioModeLabel.textContent = mode === "handsfree" ? "Hands-free" : "Standard";
+        if (btnMode) {
+          btnMode.textContent = `Mode: ${mode === "handsfree" ? "Hands-free" : "Standard"}`;
+        }
+        if (triggeredByProximity) {
+          proximityAutoSwitched = true;
+        } else {
           proximityAutoSwitched = false;
         }
-      });
-      proximitySensor.addEventListener("error", () => {
-        btnProximity.textContent = "Ear detect: unavailable";
-        btnProximity.disabled = true;
-      });
-      try {
-        proximitySensor.start();
-      } catch {
-        btnProximity.textContent = "Ear detect: unavailable";
-        btnProximity.disabled = true;
-      }
-    }
-
-    function toggleProximity() {
-      if (!proximitySensor) return;
-      proximityEnabled = !proximityEnabled;
-      btnProximity.textContent = `Ear detect: ${proximityEnabled ? "on" : "off"}`;
-    }
-
-    async function init() {
-      hideGoodbyeScreen();
-      if (isMobile) {
-        btnMode.style.display = "inline-flex";
-        btnProximity.style.display = "inline-flex";
+        await applyOutputToAll();
       }
 
-      if (navigator.mediaDevices?.addEventListener) {
-        navigator.mediaDevices.addEventListener("devicechange", () => {
-          listDevices().catch(() => { });
+      async function replaceLocalTrack() {
+        if (!room) return;
+        const newTrack = await LivekitClient.createLocalAudioTrack({
+          deviceId: selectedMicId ? { exact: selectedMicId } : undefined,
+          autoGainControl: true,
+          echoCancellation: true,
+          noiseSuppression: true,
         });
+        const previous = localTrack;
+        const micSource =
+          LivekitClient?.Track?.Source?.Microphone ??
+          LivekitClient?.Track?.Source?.SOURCE_MICROPHONE;
+        const publishOpts = micSource ? { source: micSource } : undefined;
+
+        localTrack = newTrack;
+        await room.localParticipant.publishTrack(newTrack, publishOpts);
+        if (previous) {
+          try {
+            await room.localParticipant.unpublishTrack(previous);
+          } catch {}
+          previous.stop();
+        }
       }
 
-      micSelect.addEventListener("change", async (event) => {
-        selectedMicId = event.target.value;
-        if (connected) {
+      async function warmupAudioPermission() {
+        if (!navigator.mediaDevices?.getUserMedia) return;
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        for (const track of stream.getTracks()) {
+          track.stop();
+        }
+      }
+
+      async function connect(fromUserGesture = false) {
+        if (connected) return;
+        updateStatus("connecting", "Connecting…");
+        hideError();
+        btnConnect.disabled = true;
+        if (btnConnectOverlay) btnConnectOverlay.disabled = true;
+
+        try {
+          const session = await createSession();
+          const token = session.clientToken;
+          currentRoomName = session.room;
+          currentChannel = session.channel || "web";
+          disconnectToken =
+            typeof session.disconnectToken === "string" ? session.disconnectToken : "";
+          const params = new URLSearchParams(window.location.search);
+          const livekitOverride = params.get("livekit");
+          const serverLivekitUrl = session.livekitUrl || null;
+          let livekitUrl;
+          if (serverLivekitUrl) {
+            livekitUrl = serverLivekitUrl;
+          } else if (livekitOverride) {
+            livekitUrl = livekitOverride;
+          } else {
+            const isSecure = window.location.protocol === "https:";
+            const wsProtocol = isSecure ? "wss:" : "ws:";
+            const livekitPort = isSecure ? "7443" : "7880";
+            livekitUrl = `${wsProtocol}//${window.location.hostname}:${livekitPort}`;
+          }
+
+          room = new LivekitClient.Room({ adaptiveStream: true, dynacast: true });
+
+          room.on(LivekitClient.RoomEvent.Disconnected, () => {
+            cleanupConnectionUI();
+            updateStatus("disconnected", "Disconnected");
+          });
+
+          room.on(LivekitClient.RoomEvent.TrackSubscribed, async (track, pub, participant) => {
+            if (track.kind !== LivekitClient.Track.Kind.Audio) return;
+            const participantId = participant?.identity || "unknown";
+            const key = pub?.trackSid || track.sid || `${participantId}:audio`;
+            const previousKey = remoteAudioByParticipant.get(participantId);
+            if (previousKey && previousKey !== key) {
+              const oldEl = remoteAudioElements.get(previousKey);
+              if (oldEl) {
+                try {
+                  oldEl.remove();
+                } catch {}
+                remoteAudioElements.delete(previousKey);
+              }
+            }
+            const prev = remoteAudioElements.get(key);
+            if (prev) {
+              try {
+                prev.remove();
+              } catch {}
+              remoteAudioElements.delete(key);
+            }
+            const el = track.attach();
+            el.autoplay = true;
+            el.setAttribute("data-lk-track", key);
+            el.setAttribute("data-lk-participant", participantId);
+            document.body.appendChild(el);
+            remoteAudioElements.set(key, el);
+            remoteAudioByParticipant.set(participantId, key);
+            await applyOutputToElement(el);
+            el.volume = audioMode === "handsfree" ? 1 : 0.8;
+            await ensureAudioPlayback();
+            setSignal(true);
+          });
+
+          room.on(LivekitClient.RoomEvent.TrackUnsubscribed, (track, pub) => {
+            const key = pub?.trackSid || track?.sid;
+            if (!key) return;
+            const el = remoteAudioElements.get(key);
+            if (!el) return;
+            try {
+              track?.detach(el);
+            } catch {}
+            try {
+              el.remove();
+            } catch {}
+            remoteAudioElements.delete(key);
+            const participantId = el.getAttribute("data-lk-participant") || "";
+            if (participantId && remoteAudioByParticipant.get(participantId) === key) {
+              remoteAudioByParticipant.delete(participantId);
+            }
+            if (remoteAudioElements.size === 0) {
+              setSignal(false);
+            }
+          });
+
+          room.on(LivekitClient.RoomEvent.DataReceived, (payload) => {
+            try {
+              const message = JSON.parse(new TextDecoder().decode(payload));
+              if (message.type === "transcript") {
+                if (message.partial === true) return;
+                addTranscript("user", message.text || message.data || "");
+              }
+              if (message.type === "response") {
+                addTranscript("agent", message.text || message.data || "");
+              }
+            } catch {}
+          });
+
+          await room.connect(livekitUrl, token);
+          await ensureAudioPlayback(fromUserGesture);
+          await listDevices();
+          await replaceLocalTrack();
+          if (localTrack?.muted) {
+            localTrack.unmute();
+          }
+
+          connected = true;
+          muted = false;
+          setConnectOverlayVisible(false);
+          btnConnect.style.display = "none";
+          btnConnect.disabled = false;
+          btnHangup.style.display = "inline-flex";
+          btnMute.disabled = false;
+          btnMute.textContent = "Mute";
+          setSignal(true);
+
+          roomInfo.textContent = `Connected to ${currentRoomName}`;
+          roomSide.textContent = currentRoomName;
+          channelSide.textContent = currentChannel;
+          updateStatus("connected", "Connected");
+        } catch (error) {
+          const message = error?.message || "Could not connect to voice session.";
+          showError(message);
+          cleanupConnectionUI();
+          updateStatus("error", "Connection failed");
+        } finally {
+          btnConnect.disabled = false;
+          if (btnConnectOverlay) btnConnectOverlay.disabled = false;
+        }
+      }
+
+      async function disconnect() {
+        const roomToClose = currentRoomName;
+        const closeToken = disconnectToken;
+        if (room) {
           try {
-            await replaceLocalTrack();
+            await room.disconnect();
+          } catch {}
+          room = null;
+        }
+        if (localTrack) {
+          localTrack.stop();
+          localTrack = null;
+        }
+        for (const el of remoteAudioElements.values()) {
+          try {
+            el.remove();
+          } catch {}
+        }
+        remoteAudioElements.clear();
+        remoteAudioByParticipant.clear();
+
+        if (roomToClose && closeToken) {
+          try {
+            await endSession(roomToClose, closeToken);
           } catch (error) {
-            showError(error?.message || "Could not switch microphone.");
+            showError(
+              error?.message || "Session disconnected locally, but cloud room teardown failed.",
+            );
           }
         }
-      });
 
-      if (speakerSelect) {
-        speakerSelect.addEventListener("change", async (event) => {
-          selectedSpeakerId = event.target.value || "default";
-          await applyOutputToAll();
-        });
+        cleanupConnectionUI();
+        updateStatus("disconnected", "Disconnected");
+        showGoodbyeScreen();
       }
 
-      const handleManualConnect = async () => {
-        hideGoodbyeScreen();
-        hideError();
-        setConnectOverlayVisible(false);
-        try {
-          await warmupAudioPermission();
-        } catch {
-          showError("Microphone access is required to start voice.");
-          setConnectOverlayVisible(true);
-          updateStatus("error", "Microphone permission required");
+      function cleanupConnectionUI() {
+        connected = false;
+        muted = false;
+        currentRoomName = "";
+        disconnectToken = "";
+        roomInfo.textContent = "";
+        roomSide.textContent = "—";
+        btnConnect.textContent = "Connect";
+        btnConnect.style.display = "inline-flex";
+        btnConnect.classList.add("primary");
+        btnConnect.classList.remove("danger");
+        setConnectOverlayVisible(true);
+        btnHangup.style.display = "none";
+        btnMute.textContent = "Mute";
+        btnMute.disabled = true;
+        setSignal(false);
+      }
+
+      function toggleMute() {
+        if (!localTrack) return;
+        muted = !muted;
+        if (muted) {
+          localTrack.mute();
+          btnMute.textContent = "Unmute";
+          setSignal(false);
+        } else {
+          localTrack.unmute();
+          btnMute.textContent = "Mute";
+          setSignal(true);
+        }
+      }
+
+      async function toggleFullscreen() {
+        if (!document.fullscreenElement) {
+          await document.documentElement.requestFullscreen?.();
+          btnFullscreen.textContent = "Exit Fullscreen";
           return;
         }
-        await connect(true);
-        if (!connected) {
-          setConnectOverlayVisible(true);
-        }
-      };
-
-      btnConnect.addEventListener("click", handleManualConnect);
-      if (btnConnectOverlay) {
-        btnConnectOverlay.addEventListener("click", handleManualConnect);
+        await document.exitFullscreen?.();
+        btnFullscreen.textContent = "Fullscreen";
       }
-      btnHangup.addEventListener("click", async () => {
-        await disconnect();
-      });
-      btnMute.addEventListener("click", toggleMute);
-      btnFullscreen.addEventListener("click", () => {
-        toggleFullscreen().catch(() => { });
-      });
-      btnMode.addEventListener("click", () => {
-        const nextMode = audioMode === "handsfree" ? "standard" : "handsfree";
-        setAudioMode(nextMode).catch(() => { });
-      });
-      btnProximity.addEventListener("click", toggleProximity);
-      btnInfo.addEventListener("click", () => {
-        const visible = layout?.classList.contains("show-info") ?? false;
-        setInfoVisible(!visible);
-      });
 
-      await listDevices();
-      await setAudioMode(isMobile ? "handsfree" : "standard");
-      setupProximity();
-      setInfoVisible(false);
-      setConnectOverlayVisible(true);
-      updateStatus("disconnected", "Ready");
-      statusPill.textContent = "Ready to connect";
-    }
+      function setupProximity() {
+        if (!isMobile || typeof window.ProximitySensor !== "function") {
+          btnProximity.textContent = "Ear detect: unavailable";
+          btnProximity.disabled = true;
+          return;
+        }
 
-    init().catch((error) => {
-      showError(error?.message || "Initialization failed.");
-      updateStatus("error", "Initialization failed");
-    });
-  </script>
-</body>
+        proximityEnabled = true;
+        btnProximity.textContent = "Ear detect: on";
+        proximitySensor = new window.ProximitySensor({ frequency: 5 });
+        proximitySensor.addEventListener("reading", async () => {
+          if (!proximityEnabled) return;
+          const near = Number(proximitySensor.distance) <= 0;
+          if (near && audioMode !== "standard") {
+            await setAudioMode("standard", true);
+          }
+          if (!near && proximityAutoSwitched && audioMode !== "handsfree") {
+            await setAudioMode("handsfree", true);
+            proximityAutoSwitched = false;
+          }
+        });
+        proximitySensor.addEventListener("error", () => {
+          btnProximity.textContent = "Ear detect: unavailable";
+          btnProximity.disabled = true;
+        });
+        try {
+          proximitySensor.start();
+        } catch {
+          btnProximity.textContent = "Ear detect: unavailable";
+          btnProximity.disabled = true;
+        }
+      }
 
+      function toggleProximity() {
+        if (!proximitySensor) return;
+        proximityEnabled = !proximityEnabled;
+        btnProximity.textContent = `Ear detect: ${proximityEnabled ? "on" : "off"}`;
+      }
+
+      async function init() {
+        hideGoodbyeScreen();
+        if (isMobile) {
+          btnMode.style.display = "inline-flex";
+          btnProximity.style.display = "inline-flex";
+        }
+
+        if (navigator.mediaDevices?.addEventListener) {
+          navigator.mediaDevices.addEventListener("devicechange", () => {
+            listDevices().catch(() => {});
+          });
+        }
+
+        micSelect.addEventListener("change", async (event) => {
+          selectedMicId = event.target.value;
+          if (connected) {
+            try {
+              await replaceLocalTrack();
+            } catch (error) {
+              showError(error?.message || "Could not switch microphone.");
+            }
+          }
+        });
+
+        if (speakerSelect) {
+          speakerSelect.addEventListener("change", async (event) => {
+            selectedSpeakerId = event.target.value || "default";
+            await applyOutputToAll();
+          });
+        }
+
+        const handleManualConnect = async () => {
+          hideGoodbyeScreen();
+          hideError();
+          setConnectOverlayVisible(false);
+          try {
+            await warmupAudioPermission();
+          } catch {
+            showError("Microphone access is required to start voice.");
+            setConnectOverlayVisible(true);
+            updateStatus("error", "Microphone permission required");
+            return;
+          }
+          await connect(true);
+          if (!connected) {
+            setConnectOverlayVisible(true);
+          }
+        };
+
+        btnConnect.addEventListener("click", handleManualConnect);
+        if (btnConnectOverlay) {
+          btnConnectOverlay.addEventListener("click", handleManualConnect);
+        }
+        btnHangup.addEventListener("click", async () => {
+          await disconnect();
+        });
+        btnMute.addEventListener("click", toggleMute);
+        btnFullscreen.addEventListener("click", () => {
+          toggleFullscreen().catch(() => {});
+        });
+        btnMode.addEventListener("click", () => {
+          const nextMode = audioMode === "handsfree" ? "standard" : "handsfree";
+          setAudioMode(nextMode).catch(() => {});
+        });
+        btnProximity.addEventListener("click", toggleProximity);
+        btnInfo.addEventListener("click", () => {
+          const visible = layout?.classList.contains("show-info") ?? false;
+          setInfoVisible(!visible);
+        });
+
+        await listDevices();
+        await setAudioMode(isMobile ? "handsfree" : "standard");
+        setupProximity();
+        setInfoVisible(false);
+        setConnectOverlayVisible(true);
+        updateStatus("disconnected", "Ready");
+        statusPill.textContent = "Ready to connect";
+      }
+
+      init().catch((error) => {
+        showError(error?.message || "Initialization failed.");
+        updateStatus("error", "Initialization failed");
+      });
+    </script>
+  </body>
 </html>
