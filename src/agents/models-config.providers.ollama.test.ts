@@ -231,4 +231,38 @@ describe("Ollama provider", () => {
       delete process.env.OLLAMA_API_KEY;
     }
   });
+
+  it("should default api to ollama when explicit models omit provider api", async () => {
+    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
+    process.env.OLLAMA_API_KEY = "test-key";
+
+    try {
+      const explicitModels: ModelDefinitionConfig[] = [
+        {
+          id: "gpt-oss:20b",
+          name: "GPT-OSS 20B",
+          reasoning: false,
+          input: ["text"] as Array<"text" | "image">,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 8192,
+          maxTokens: 81920,
+        },
+      ];
+
+      const providers = await resolveImplicitProviders({
+        agentDir,
+        explicitProviders: {
+          ollama: {
+            baseUrl: "http://remote-ollama:11434",
+            models: explicitModels,
+          },
+        },
+      });
+
+      expect(providers?.ollama?.api).toBe("ollama");
+      expect(providers?.ollama?.models).toEqual(explicitModels);
+    } finally {
+      delete process.env.OLLAMA_API_KEY;
+    }
+  });
 });
