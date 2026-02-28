@@ -355,6 +355,8 @@ describe("notifications changed events", () => {
   beforeEach(() => {
     enqueueSystemEventMock.mockClear();
     requestHeartbeatNowMock.mockClear();
+    loadSessionEntryMock.mockClear();
+    loadSessionEntryMock.mockImplementation((sessionKey: string) => buildSessionLookup(sessionKey));
   });
 
   it("enqueues notifications.changed posted events", async () => {
@@ -415,6 +417,31 @@ describe("notifications changed events", () => {
     expect(requestHeartbeatNowMock).toHaveBeenCalledWith({
       reason: "notifications-event",
       sessionKey: "agent:main:main",
+    });
+  });
+
+  it("canonicalizes notifications session key before enqueue and wake", async () => {
+    loadSessionEntryMock.mockReturnValueOnce({
+      ...buildSessionLookup("node-node-n5"),
+      canonicalKey: "agent:main:node-node-n5",
+    });
+    const ctx = buildCtx();
+    await handleNodeEvent(ctx, "node-n5", {
+      event: "notifications.changed",
+      payloadJSON: JSON.stringify({
+        change: "posted",
+        key: "notif-5",
+      }),
+    });
+
+    expect(loadSessionEntryMock).toHaveBeenCalledWith("node-node-n5");
+    expect(enqueueSystemEventMock).toHaveBeenCalledWith(
+      "Notification posted (node=node-n5 key=notif-5)",
+      { sessionKey: "agent:main:node-node-n5", contextKey: "notification:notif-5" },
+    );
+    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({
+      reason: "notifications-event",
+      sessionKey: "agent:main:node-node-n5",
     });
   });
 

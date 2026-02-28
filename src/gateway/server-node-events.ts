@@ -467,7 +467,8 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       if (!key) {
         return;
       }
-      const sessionKey = normalizeNonEmptyString(obj.sessionKey) ?? `node-${nodeId}`;
+      const sessionKeyRaw = normalizeNonEmptyString(obj.sessionKey) ?? `node-${nodeId}`;
+      const { canonicalKey: sessionKey } = loadSessionEntry(sessionKeyRaw);
       const packageName = normalizeNonEmptyString(obj.packageName);
       const title = compactNotificationEventText(normalizeNonEmptyString(obj.title) ?? "");
       const text = compactNotificationEventText(normalizeNonEmptyString(obj.text) ?? "");
