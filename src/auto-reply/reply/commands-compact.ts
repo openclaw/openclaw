@@ -74,18 +74,26 @@ export const handleCompactCommand: CommandHandler = async (params) => {
   const ackChannel = params.ctx.OriginatingChannel || (params.command.channel as any);
   const ackTo = params.ctx.OriginatingTo || params.command.from || params.command.to;
   if (ackChannel && ackTo) {
-    await routeReply({
-      payload: { text: "🗜️ Compacting… It may take a while." },
-      channel: ackChannel,
-      to: ackTo,
-      sessionKey: params.sessionKey,
-      accountId: params.ctx.AccountId,
-      threadId: params.ctx.MessageThreadId,
-      cfg: params.cfg,
-      mirror: false, // ack is UI-only; don't pollute session transcript before compaction
-    }).catch(() => {
+    try {
+      const ackResult = await routeReply({
+        payload: { text: "🗜️ Compacting… It may take a while." },
+        channel: ackChannel,
+        to: ackTo,
+        sessionKey: params.sessionKey,
+        accountId: params.ctx.AccountId,
+        threadId: params.ctx.MessageThreadId,
+        cfg: params.cfg,
+        mirror: false, // ack is UI-only; don't pollute session transcript before compaction
+      });
+      // routeReply returns { ok: false } for non-routable channels instead of throwing
+      if (!ackResult.ok) {
+        logVerbose(
+          `compact-ack: routeReply returned ok=false${ackResult.error ? ` (${ackResult.error})` : ""}`,
+        );
+      }
+    } catch {
       logVerbose("compact-ack: failed to send immediate feedback");
-    });
+    }
   }
   const customInstructions = extractCompactInstructions({
     rawBody: params.ctx.CommandBody ?? params.ctx.RawBody ?? params.ctx.Body,
