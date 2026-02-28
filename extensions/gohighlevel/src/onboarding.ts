@@ -18,7 +18,7 @@ import {
 
 const channel = "gohighlevel" as const;
 
-const ENV_API_KEY = "GHL_API_KEY";
+const ENV_API_KEY_NAMES = ["GHL_API_KEY", "GHL_TOKEN"] as const;
 
 function setGoHighLevelDmPolicy(cfg: OpenClawConfig, policy: DmPolicy) {
   const allowFrom =
@@ -133,10 +133,11 @@ async function promptCredentials(params: {
   accountId: string;
 }): Promise<OpenClawConfig> {
   const { cfg, prompter, accountId } = params;
-  const envReady = accountId === DEFAULT_ACCOUNT_ID && Boolean(process.env[ENV_API_KEY]);
+  const envKeyName = ENV_API_KEY_NAMES.find((n) => process.env[n]?.trim());
+  const envReady = accountId === DEFAULT_ACCOUNT_ID && Boolean(envKeyName);
   if (envReady) {
     const useEnv = await prompter.confirm({
-      message: "Use GHL_API_KEY env var?",
+      message: `Use ${envKeyName} env var?`,
       initialValue: true,
     });
     if (useEnv) {

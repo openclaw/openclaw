@@ -14,7 +14,8 @@ export type ResolvedGoHighLevelAccount = {
   locationId?: string;
 };
 
-const ENV_API_KEY = "GHL_API_KEY";
+/** Env var names — check GHL_API_KEY first, fall back to GHL_TOKEN for compat. */
+const ENV_API_KEY_NAMES = ["GHL_API_KEY", "GHL_TOKEN"] as const;
 const ENV_LOCATION_ID = "GHL_LOCATION_ID";
 
 function listConfiguredAccountIds(cfg: OpenClawConfig): string[] {
@@ -84,7 +85,7 @@ function resolveCredentials(params: { accountId: string; account: GoHighLevelAcc
 
   // Fall back to env vars for default account
   if (accountId === DEFAULT_ACCOUNT_ID) {
-    const envKey = process.env[ENV_API_KEY]?.trim();
+    const envKey = ENV_API_KEY_NAMES.map((n) => process.env[n]?.trim()).find(Boolean);
     if (envKey) {
       return {
         apiKey: envKey,
