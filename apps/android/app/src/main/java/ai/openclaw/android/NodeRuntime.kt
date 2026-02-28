@@ -20,6 +20,7 @@ import ai.openclaw.android.gateway.probeGatewayTlsFingerprint
 import ai.openclaw.android.node.*
 import ai.openclaw.android.protocol.OpenClawCanvasA2UIAction
 import ai.openclaw.android.voice.MicCaptureManager
+import ai.openclaw.android.voice.TalkModeManager
 import ai.openclaw.android.voice.VoiceConversationEntry
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -248,7 +249,12 @@ class NodeRuntime(context: Context) {
         applyMainSessionKey(mainSessionKey)
         updateStatus()
         micCapture.onGatewayConnectionChanged(true)
-        scope.launch { refreshBrandingFromGateway() }
+        scope.launch {
+          refreshBrandingFromGateway()
+          if (voiceReplySpeakerLazy.isInitialized()) {
+            voiceReplySpeaker.refreshConfig()
+          }
+        }
       },
       onDisconnected = { message ->
         operatorConnected = false
@@ -318,6 +324,22 @@ class NodeRuntime(context: Context) {
       json = json,
       supportsChatSubscribe = false,
     )
+  private val voiceReplySpeakerLazy: Lazy<TalkModeManager> = lazy {
+    // Reuse the existing TalkMode speech engine (ElevenLabs + deterministic system-TTS fallback)
+    // without enabling the legacy talk capture loop.
+    TalkModeManager(
+      context = appContext,
+      scope = scope,
+      session = operatorSession,
+      supportsChatSubscribe = false,
+      isConnected = { operatorConnected },
+    ).also { speaker ->
+      speaker.setPlaybackEnabled(prefs.speakerEnabled.value)
+    }
+  }
+  private val voiceReplySpeaker: TalkModeManager
+    get() = voiceReplySpeakerLazy.value
+
   private val micCapture: MicCaptureManager by lazy {
     MicCaptureManager(
       context = appContext,
@@ -334,6 +356,9 @@ class NodeRuntime(context: Context) {
           }
         val response = operatorSession.request("chat.send", params.toString())
         parseChatSendRunId(response) ?: idempotencyKey
+      },
+      speakAssistantReply = { text ->
+        voiceReplySpeaker.speakAssistantReply(text)
       },
     )
   }
@@ -616,6 +641,16 @@ class NodeRuntime(context: Context) {
     prefs.setTalkEnabled(value)
     micCapture.setMicEnabled(value)
     externalAudioCaptureActive.value = value
+  }
+
+  val speakerEnabled: StateFlow<Boolean>
+    get() = prefs.speakerEnabled
+
+  fun setSpeakerEnabled(value: Boolean) {
+    prefs.setSpeakerEnabled(value)
+    if (voiceReplySpeakerLazy.isInitialized()) {
+      voiceReplySpeaker.setPlaybackEnabled(value)
+    }
   }
 
   fun refreshGatewayConnection() {

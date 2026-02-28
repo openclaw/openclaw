@@ -60,6 +60,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -79,6 +80,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import ai.openclaw.android.LocationMode
 import ai.openclaw.android.MainViewModel
 import ai.openclaw.android.R
@@ -96,6 +100,24 @@ private enum class OnboardingStep(val index: Int, val label: String) {
 private enum class GatewayInputMode {
   SetupCode,
   Manual,
+}
+
+private enum class PermissionToggle {
+  Discovery,
+  Location,
+  Notifications,
+  Microphone,
+  Camera,
+  Photos,
+  Contacts,
+  Calendar,
+  Motion,
+  Sms,
+}
+
+private enum class SpecialAccessToggle {
+  NotificationListener,
+  AppUpdates,
 }
 
 private val onboardingBackgroundGradient =
@@ -210,18 +232,7 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
   var gatewayError by rememberSaveable { mutableStateOf<String?>(null) }
   var attemptedConnect by rememberSaveable { mutableStateOf(false) }
 
-  var enableDiscovery by rememberSaveable { mutableStateOf(true) }
-  var enableLocation by rememberSaveable { mutableStateOf(false) }
-  var enableNotifications by rememberSaveable { mutableStateOf(true) }
-  var enableNotificationListener by rememberSaveable { mutableStateOf(false) }
-  var enableAppUpdates by rememberSaveable { mutableStateOf(false) }
-  var enableMicrophone by rememberSaveable { mutableStateOf(false) }
-  var enableCamera by rememberSaveable { mutableStateOf(false) }
-  var enablePhotos by rememberSaveable { mutableStateOf(false) }
-  var enableContacts by rememberSaveable { mutableStateOf(false) }
-  var enableCalendar by rememberSaveable { mutableStateOf(false) }
-  var enableMotion by rememberSaveable { mutableStateOf(false) }
-  var enableSms by rememberSaveable { mutableStateOf(false) }
+  val lifecycleOwner = LocalLifecycleOwner.current
 
   val smsAvailable =
     remember(context) {
@@ -232,6 +243,13 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
       hasMotionCapabilities(context)
     }
   val motionPermissionRequired = Build.VERSION.SDK_INT >= 29
+  val notificationsPermissionRequired = Build.VERSION.SDK_INT >= 33
+  val discoveryPermission =
+    if (Build.VERSION.SDK_INT >= 33) {
+      Manifest.permission.NEARBY_WIFI_DEVICES
+    } else {
+      Manifest.permission.ACCESS_FINE_LOCATION
+    }
   val photosPermission =
     if (Build.VERSION.SDK_INT >= 33) {
       Manifest.permission.READ_MEDIA_IMAGES
@@ -239,52 +257,93 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
       Manifest.permission.READ_EXTERNAL_STORAGE
     }
 
-  val selectedPermissions =
-    remember(
-      context,
-      enableDiscovery,
-      enableLocation,
-      enableNotifications,
-      enableMicrophone,
-      enableCamera,
-      enablePhotos,
-      enableContacts,
-      enableCalendar,
-      enableMotion,
-      enableSms,
-      smsAvailable,
-      motionAvailable,
-      motionPermissionRequired,
-      photosPermission,
-    ) {
-      val requested = mutableListOf<String>()
-      if (enableDiscovery) {
-        requested += if (Build.VERSION.SDK_INT >= 33) Manifest.permission.NEARBY_WIFI_DEVICES else Manifest.permission.ACCESS_FINE_LOCATION
-      }
-      if (enableLocation) {
-        requested += Manifest.permission.ACCESS_FINE_LOCATION
-        requested += Manifest.permission.ACCESS_COARSE_LOCATION
-      }
-      if (enableNotifications && Build.VERSION.SDK_INT >= 33) requested += Manifest.permission.POST_NOTIFICATIONS
-      if (enableMicrophone) requested += Manifest.permission.RECORD_AUDIO
-      if (enableCamera) requested += Manifest.permission.CAMERA
-      if (enablePhotos) requested += photosPermission
-      if (enableContacts) {
-        requested += Manifest.permission.READ_CONTACTS
-        requested += Manifest.permission.WRITE_CONTACTS
-      }
-      if (enableCalendar) {
-        requested += Manifest.permission.READ_CALENDAR
-        requested += Manifest.permission.WRITE_CALENDAR
-      }
-      if (enableMotion && motionAvailable && motionPermissionRequired) {
-        requested += Manifest.permission.ACTIVITY_RECOGNITION
-      }
-      if (enableSms && smsAvailable) requested += Manifest.permission.SEND_SMS
-      requested
-        .distinct()
-        .filterNot { isPermissionGranted(context, it) }
+  var enableDiscovery by
+    rememberSaveable {
+      mutableStateOf(isPermissionGranted(context, discoveryPermission))
     }
+  var enableLocation by rememberSaveable { mutableStateOf(false) }
+  var enableNotifications by
+    rememberSaveable {
+      mutableStateOf(
+        !notificationsPermissionRequired ||
+          isPermissionGranted(context, Manifest.permission.POST_NOTIFICATIONS),
+      )
+    }
+  var enableNotificationListener by
+    rememberSaveable {
+      mutableStateOf(isNotificationListenerEnabled(context))
+    }
+  var enableAppUpdates by
+    rememberSaveable {
+      mutableStateOf(canInstallUnknownApps(context))
+    }
+  var enableMicrophone by rememberSaveable { mutableStateOf(false) }
+  var enableCamera by rememberSaveable { mutableStateOf(false) }
+  var enablePhotos by rememberSaveable { mutableStateOf(false) }
+  var enableContacts by rememberSaveable { mutableStateOf(false) }
+  var enableCalendar by rememberSaveable { mutableStateOf(false) }
+  var enableMotion by
+    rememberSaveable {
+      mutableStateOf(
+        motionAvailable &&
+          (!motionPermissionRequired || isPermissionGranted(context, Manifest.permission.ACTIVITY_RECOGNITION)),
+      )
+    }
+  var enableSms by
+    rememberSaveable {
+      mutableStateOf(smsAvailable && isPermissionGranted(context, Manifest.permission.SEND_SMS))
+    }
+
+  var pendingPermissionToggle by remember { mutableStateOf<PermissionToggle?>(null) }
+  var pendingSpecialAccessToggle by remember { mutableStateOf<SpecialAccessToggle?>(null) }
+
+  fun setPermissionToggleEnabled(toggle: PermissionToggle, enabled: Boolean) {
+    when (toggle) {
+      PermissionToggle.Discovery -> enableDiscovery = enabled
+      PermissionToggle.Location -> enableLocation = enabled
+      PermissionToggle.Notifications -> enableNotifications = enabled
+      PermissionToggle.Microphone -> enableMicrophone = enabled
+      PermissionToggle.Camera -> enableCamera = enabled
+      PermissionToggle.Photos -> enablePhotos = enabled
+      PermissionToggle.Contacts -> enableContacts = enabled
+      PermissionToggle.Calendar -> enableCalendar = enabled
+      PermissionToggle.Motion -> enableMotion = enabled && motionAvailable
+      PermissionToggle.Sms -> enableSms = enabled && smsAvailable
+    }
+  }
+
+  fun isPermissionToggleGranted(toggle: PermissionToggle): Boolean =
+    when (toggle) {
+      PermissionToggle.Discovery -> isPermissionGranted(context, discoveryPermission)
+      PermissionToggle.Location ->
+        isPermissionGranted(context, Manifest.permission.ACCESS_FINE_LOCATION) ||
+          isPermissionGranted(context, Manifest.permission.ACCESS_COARSE_LOCATION)
+      PermissionToggle.Notifications ->
+        !notificationsPermissionRequired ||
+          isPermissionGranted(context, Manifest.permission.POST_NOTIFICATIONS)
+      PermissionToggle.Microphone -> isPermissionGranted(context, Manifest.permission.RECORD_AUDIO)
+      PermissionToggle.Camera -> isPermissionGranted(context, Manifest.permission.CAMERA)
+      PermissionToggle.Photos -> isPermissionGranted(context, photosPermission)
+      PermissionToggle.Contacts ->
+        isPermissionGranted(context, Manifest.permission.READ_CONTACTS) &&
+          isPermissionGranted(context, Manifest.permission.WRITE_CONTACTS)
+      PermissionToggle.Calendar ->
+        isPermissionGranted(context, Manifest.permission.READ_CALENDAR) &&
+          isPermissionGranted(context, Manifest.permission.WRITE_CALENDAR)
+      PermissionToggle.Motion ->
+        !motionAvailable ||
+          !motionPermissionRequired ||
+          isPermissionGranted(context, Manifest.permission.ACTIVITY_RECOGNITION)
+      PermissionToggle.Sms ->
+        !smsAvailable || isPermissionGranted(context, Manifest.permission.SEND_SMS)
+    }
+
+  fun setSpecialAccessToggleEnabled(toggle: SpecialAccessToggle, enabled: Boolean) {
+    when (toggle) {
+      SpecialAccessToggle.NotificationListener -> enableNotificationListener = enabled
+      SpecialAccessToggle.AppUpdates -> enableAppUpdates = enabled
+    }
+  }
 
   val enabledPermissionSummary =
     remember(
@@ -335,10 +394,83 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
     step = OnboardingStep.FinalCheck
   }
 
-  val permissionLauncher =
+  val togglePermissionLauncher =
     rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
-      proceedFromPermissions()
+      val pendingToggle = pendingPermissionToggle ?: return@rememberLauncherForActivityResult
+      setPermissionToggleEnabled(pendingToggle, isPermissionToggleGranted(pendingToggle))
+      pendingPermissionToggle = null
     }
+
+  val requestPermissionToggle: (PermissionToggle, Boolean, List<String>) -> Unit =
+    request@{ toggle, enabled, permissions ->
+      if (!enabled) {
+        setPermissionToggleEnabled(toggle, false)
+        return@request
+      }
+      if (isPermissionToggleGranted(toggle)) {
+        setPermissionToggleEnabled(toggle, true)
+        return@request
+      }
+      val missing = permissions.distinct().filterNot { isPermissionGranted(context, it) }
+      if (missing.isEmpty()) {
+        setPermissionToggleEnabled(toggle, isPermissionToggleGranted(toggle))
+        return@request
+      }
+      pendingPermissionToggle = toggle
+      togglePermissionLauncher.launch(missing.toTypedArray())
+    }
+
+  val requestSpecialAccessToggle: (SpecialAccessToggle, Boolean) -> Unit =
+    request@{ toggle, enabled ->
+      if (!enabled) {
+        setSpecialAccessToggleEnabled(toggle, false)
+        pendingSpecialAccessToggle = null
+        return@request
+      }
+      val grantedNow =
+        when (toggle) {
+          SpecialAccessToggle.NotificationListener -> isNotificationListenerEnabled(context)
+          SpecialAccessToggle.AppUpdates -> canInstallUnknownApps(context)
+        }
+      if (grantedNow) {
+        setSpecialAccessToggleEnabled(toggle, true)
+        pendingSpecialAccessToggle = null
+        return@request
+      }
+      pendingSpecialAccessToggle = toggle
+      when (toggle) {
+        SpecialAccessToggle.NotificationListener -> openNotificationListenerSettings(context)
+        SpecialAccessToggle.AppUpdates -> openUnknownAppSourcesSettings(context)
+      }
+    }
+
+  DisposableEffect(lifecycleOwner, context, pendingSpecialAccessToggle) {
+    val observer =
+      LifecycleEventObserver { _, event ->
+        if (event != Lifecycle.Event.ON_RESUME) {
+          return@LifecycleEventObserver
+        }
+        when (pendingSpecialAccessToggle) {
+          SpecialAccessToggle.NotificationListener -> {
+            setSpecialAccessToggleEnabled(
+              SpecialAccessToggle.NotificationListener,
+              isNotificationListenerEnabled(context),
+            )
+            pendingSpecialAccessToggle = null
+          }
+          SpecialAccessToggle.AppUpdates -> {
+            setSpecialAccessToggleEnabled(
+              SpecialAccessToggle.AppUpdates,
+              canInstallUnknownApps(context),
+            )
+            pendingSpecialAccessToggle = null
+          }
+          null -> Unit
+        }
+      }
+    lifecycleOwner.lifecycle.addObserver(observer)
+    onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+  }
 
   val qrScanLauncher =
     rememberLauncherForActivityResult(ScanContract()) { result ->
@@ -485,18 +617,105 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
               enableSms = enableSms,
               smsAvailable = smsAvailable,
               context = context,
-              onDiscoveryChange = { enableDiscovery = it },
-              onLocationChange = { enableLocation = it },
-              onNotificationsChange = { enableNotifications = it },
-              onNotificationListenerChange = { enableNotificationListener = it },
-              onAppUpdatesChange = { enableAppUpdates = it },
-              onMicrophoneChange = { enableMicrophone = it },
-              onCameraChange = { enableCamera = it },
-              onPhotosChange = { enablePhotos = it },
-              onContactsChange = { enableContacts = it },
-              onCalendarChange = { enableCalendar = it },
-              onMotionChange = { enableMotion = it },
-              onSmsChange = { enableSms = it },
+              onDiscoveryChange = { checked ->
+                requestPermissionToggle(
+                  PermissionToggle.Discovery,
+                  checked,
+                  listOf(discoveryPermission),
+                )
+              },
+              onLocationChange = { checked ->
+                requestPermissionToggle(
+                  PermissionToggle.Location,
+                  checked,
+                  listOf(
+                    Manifest.permission.ACCESS_FINE_LOCATION,
+                    Manifest.permission.ACCESS_COARSE_LOCATION,
+                  ),
+                )
+              },
+              onNotificationsChange = { checked ->
+                if (!notificationsPermissionRequired) {
+                  setPermissionToggleEnabled(PermissionToggle.Notifications, checked)
+                } else {
+                  requestPermissionToggle(
+                    PermissionToggle.Notifications,
+                    checked,
+                    listOf(Manifest.permission.POST_NOTIFICATIONS),
+                  )
+                }
+              },
+              onNotificationListenerChange = { checked ->
+                requestSpecialAccessToggle(SpecialAccessToggle.NotificationListener, checked)
+              },
+              onAppUpdatesChange = { checked ->
+                requestSpecialAccessToggle(SpecialAccessToggle.AppUpdates, checked)
+              },
+              onMicrophoneChange = { checked ->
+                requestPermissionToggle(
+                  PermissionToggle.Microphone,
+                  checked,
+                  listOf(Manifest.permission.RECORD_AUDIO),
+                )
+              },
+              onCameraChange = { checked ->
+                requestPermissionToggle(
+                  PermissionToggle.Camera,
+                  checked,
+                  listOf(Manifest.permission.CAMERA),
+                )
+              },
+              onPhotosChange = { checked ->
+                requestPermissionToggle(
+                  PermissionToggle.Photos,
+                  checked,
+                  listOf(photosPermission),
+                )
+              },
+              onContactsChange = { checked ->
+                requestPermissionToggle(
+                  PermissionToggle.Contacts,
+                  checked,
+                  listOf(
+                    Manifest.permission.READ_CONTACTS,
+                    Manifest.permission.WRITE_CONTACTS,
+                  ),
+                )
+              },
+              onCalendarChange = { checked ->
+                requestPermissionToggle(
+                  PermissionToggle.Calendar,
+                  checked,
+                  listOf(
+                    Manifest.permission.READ_CALENDAR,
+                    Manifest.permission.WRITE_CALENDAR,
+                  ),
+                )
+              },
+              onMotionChange = { checked ->
+                if (!motionAvailable) {
+                  setPermissionToggleEnabled(PermissionToggle.Motion, false)
+                } else if (!motionPermissionRequired) {
+                  setPermissionToggleEnabled(PermissionToggle.Motion, checked)
+                } else {
+                  requestPermissionToggle(
+                    PermissionToggle.Motion,
+                    checked,
+                    listOf(Manifest.permission.ACTIVITY_RECOGNITION),
+                  )
+                }
+              },
+              onSmsChange = { checked ->
+                if (!smsAvailable) {
+                  setPermissionToggleEnabled(PermissionToggle.Sms, false)
+                } else {
+                  requestPermissionToggle(
+                    PermissionToggle.Sms,
+                    checked,
+                    listOf(Manifest.permission.SEND_SMS),
+                  )
+                }
+              },
             )
           OnboardingStep.FinalCheck ->
             FinalStep(
@@ -609,11 +828,7 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
               onClick = {
                 viewModel.setCameraEnabled(enableCamera)
                 viewModel.setLocationMode(if (enableLocation) LocationMode.WhileUsing else LocationMode.Off)
-                if (selectedPermissions.isEmpty()) {
-                  proceedFromPermissions()
-                } else {
-                  permissionLauncher.launch(selectedPermissions.toTypedArray())
-                }
+                proceedFromPermissions()
               },
               modifier = Modifier.weight(1f).height(52.dp),
               shape = RoundedCornerShape(14.dp),
@@ -1348,8 +1563,8 @@ private fun FinalStep(
       } else {
         GuideBlock(title = "Pairing Required") {
           Text("Run these on the gateway host:", style = onboardingCalloutStyle, color = onboardingTextSecondary)
-          CommandBlock("openclaw nodes pending")
-          CommandBlock("openclaw nodes approve <requestId>")
+          CommandBlock("openclaw devices list")
+          CommandBlock("openclaw devices approve <requestId>")
           Text("Then tap Connect again.", style = onboardingCalloutStyle, color = onboardingTextSecondary)
         }
       }
