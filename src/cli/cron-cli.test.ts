@@ -40,15 +40,21 @@ const { registerCronCli } = await import("./cron-cli.js");
 type CronUpdatePatch = {
   patch?: {
     schedule?: { kind?: string; expr?: string; tz?: string; staggerMs?: number };
-    payload?: { message?: string; model?: string; thinking?: string };
-    delivery?: { mode?: string; channel?: string; to?: string; bestEffort?: boolean };
+    payload?: { kind?: string; message?: string; model?: string; thinking?: string };
+    delivery?: {
+      mode?: string;
+      channel?: string;
+      to?: string;
+      accountId?: string;
+      bestEffort?: boolean;
+    };
   };
 };
 
 type CronAddParams = {
   schedule?: { kind?: string; staggerMs?: number };
   payload?: { model?: string; thinking?: string };
-  delivery?: { mode?: string };
+  delivery?: { mode?: string; accountId?: string };
   deleteAfterRun?: boolean;
   agentId?: string;
   sessionTarget?: string;
@@ -246,6 +252,40 @@ describe("cron cli", () => {
     expect(params?.deleteAfterRun).toBe(false);
   });
 
+  it("includes --account on isolated cron add delivery", async () => {
+    const params = await runCronAddAndGetParams([
+      "--name",
+      "accounted add",
+      "--cron",
+      "* * * * *",
+      "--session",
+      "isolated",
+      "--message",
+      "hello",
+      "--account",
+      "  coordinator  ",
+    ]);
+    expect(params?.delivery?.mode).toBe("announce");
+    expect(params?.delivery?.accountId).toBe("coordinator");
+  });
+
+  it("rejects --account on non-isolated/systemEvent cron add", async () => {
+    await expectCronCommandExit([
+      "cron",
+      "add",
+      "--name",
+      "invalid account add",
+      "--cron",
+      "* * * * *",
+      "--session",
+      "main",
+      "--system-event",
+      "tick",
+      "--account",
+      "coordinator",
+    ]);
+  });
+
   it.each([
     { command: "enable" as const, expectedEnabled: true },
     { command: "disable" as const, expectedEnabled: false },
@@ -352,6 +392,13 @@ describe("cron cli", () => {
 
     expect(patch?.patch?.payload?.kind).toBe("agentTurn");
     expect(patch?.patch?.delivery?.mode).toBe("none");
+  });
+
+  it("updates delivery account without requiring --message on cron edit", async () => {
+    const patch = await runCronEditAndGetPatch(["--account", "  coordinator  "]);
+    expect(patch?.patch?.payload?.kind).toBe("agentTurn");
+    expect(patch?.patch?.delivery?.accountId).toBe("coordinator");
+    expect(patch?.patch?.delivery?.mode).toBeUndefined();
   });
 
   it("does not include undefined delivery fields when updating message", async () => {
