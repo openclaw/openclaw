@@ -51,6 +51,7 @@ export function ensureLifecycleSchema(db: DatabaseSync): void {
       channel         TEXT NOT NULL,
       account_id      TEXT NOT NULL DEFAULT '',
       target          TEXT NOT NULL DEFAULT '',
+      dispatch_kind   TEXT,
       payload         TEXT NOT NULL,
       queued_at       INTEGER NOT NULL,
       status          TEXT NOT NULL DEFAULT 'queued',
