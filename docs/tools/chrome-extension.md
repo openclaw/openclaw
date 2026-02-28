@@ -131,7 +131,7 @@ Chrome "site access" setting for the extension.
 ```
 
 2. `chrome://extensions` → **Reload** the extension.
-3. Right-click the extension icon → *This can read and change site data* → select **On all sites**.
+3. Right-click the extension icon → _This can read and change site data_ → select **On all sites**.
 
 ### `chrome.debugger` conflicts with other extensions
 
@@ -139,7 +139,7 @@ Some Chrome extensions conflict with OpenClaw's use of the `chrome.debugger` API
 
 **Symptom:** all configuration is correct (Options page shows "Relay reachable and authenticated"),
 but clicking the toolbar button still shows `!`. The service worker console
-(`chrome://extensions` → inspect *Service Worker* → Console) logs:
+(`chrome://extensions` → inspect _Service Worker_ → Console) logs:
 
 ```
 attach failed Cannot access a chrome-extension:// URL of different extension
