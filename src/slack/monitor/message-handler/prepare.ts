@@ -110,9 +110,10 @@ async function hasSlackBotParticipatedInThread(params: {
   channelId: string;
   threadTs: string;
   botUserId: string;
+  botId?: string;
   currentMessageTs?: string;
 }): Promise<boolean> {
-  const cacheKey = `${params.channelId}:${params.threadTs}:${params.botUserId}`;
+  const cacheKey = `${params.channelId}:${params.threadTs}:${params.botUserId}:${params.botId ?? ""}`;
   const cached = readThreadParticipationCache(cacheKey);
   if (cached !== undefined) {
     return cached;
@@ -150,7 +151,9 @@ async function hasSlackBotParticipatedInThread(params: {
       });
       const participated =
         response.messages?.some(
-          (reply) => reply.bot_id === params.botUserId || reply.user === params.botUserId,
+          (reply) =>
+            reply.user === params.botUserId ||
+            Boolean(params.botId && reply.bot_id === params.botId),
         ) === true;
       if (participated) {
         writeThreadParticipationCache(cacheKey, true);
@@ -357,6 +360,7 @@ export async function prepareSlackMessage(params: {
       channelId: message.channel,
       threadTs,
       botUserId: ctx.botUserId,
+      botId: ctx.botId,
       currentMessageTs: message.ts,
     });
   }

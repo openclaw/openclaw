@@ -52,6 +52,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
       app: { client: params.appClient ?? {} } as App,
       runtime: {} as RuntimeEnv,
       botUserId: "B1",
+      botId: "BID1",
       teamId: "T1",
       apiAppId: "A1",
       historyLimit: 0,
@@ -596,6 +597,51 @@ describe("slack prepareSlackMessage inbound contract", () => {
         text: "following up",
         ts: "101.000",
         thread_ts: "100.000",
+        parent_user_id: "U2",
+      }),
+    );
+
+    expect(prepared).toBeTruthy();
+    expect(prepared!.ctxPayload.WasMentioned).toBe(true);
+  });
+
+  it("accepts first unmentioned thread follow-up when Slack history only has bot_id messages", async () => {
+    const { storePath } = makeTmpStorePath();
+    const replies = vi.fn().mockResolvedValue({
+      messages: [
+        { text: "thread root", user: "U2", ts: "300.000" },
+        { text: "bot reply", bot_id: "BID1", ts: "300.500" },
+      ],
+      response_metadata: { next_cursor: "" },
+    });
+    const slackCtx = createInboundSlackCtx({
+      cfg: {
+        session: { store: storePath },
+        channels: { slack: { enabled: true, groupPolicy: "open" } },
+      } as OpenClawConfig,
+      appClient: { conversations: { replies } } as App["client"],
+      defaultRequireMention: true,
+      replyToMode: "all",
+    });
+    slackCtx.resolveUserName = async () => ({ name: "Alice" });
+    slackCtx.resolveChannelName = async () => ({ name: "general", type: "channel" });
+
+    const prepared = await prepareMessageWith(
+      slackCtx,
+      {
+        ...createThreadAccount(),
+        config: {
+          ...createThreadAccount().config,
+          thread: { initialHistoryLimit: 0 },
+        },
+      },
+      createThreadReplyMessage({
+        channel: "C123",
+        channel_type: "channel",
+        user: "U1",
+        text: "following up",
+        ts: "301.000",
+        thread_ts: "300.000",
         parent_user_id: "U2",
       }),
     );
