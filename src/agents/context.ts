@@ -159,14 +159,26 @@ function resolveProviderModelRef(params: {
 }
 
 function isAnthropic1MModel(provider: string, model: string): boolean {
-  if (provider !== "anthropic") {
-    return false;
-  }
   const normalized = model.trim().toLowerCase();
-  const modelId = normalized.includes("/")
-    ? (normalized.split("/").at(-1) ?? normalized)
-    : normalized;
-  return ANTHROPIC_1M_MODEL_PREFIXES.some((prefix) => modelId.startsWith(prefix));
+
+  if (provider === "anthropic") {
+    const modelId = normalized.includes("/")
+      ? (normalized.split("/").at(-1) ?? normalized)
+      : normalized;
+    return ANTHROPIC_1M_MODEL_PREFIXES.some((prefix) => modelId.startsWith(prefix));
+  }
+
+  // Bedrock Anthropic model IDs: us.anthropic.claude-opus-4-6-v1:0
+  if (provider === "amazon-bedrock") {
+    const anthropicDotIdx = normalized.indexOf("anthropic.");
+    if (anthropicDotIdx < 0) {
+      return false;
+    }
+    const claudePart = normalized.slice(anthropicDotIdx + "anthropic.".length);
+    return ANTHROPIC_1M_MODEL_PREFIXES.some((prefix) => claudePart.startsWith(prefix));
+  }
+
+  return false;
 }
 
 export function resolveContextTokensForModel(params: {

@@ -1,4 +1,5 @@
 import path from "node:path";
+import { z } from "zod";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { CHANNEL_IDS, normalizeChatChannelId } from "../channels/registry.js";
 import {
@@ -23,6 +24,137 @@ import type { OpenClawConfig, ConfigValidationIssue } from "./types.js";
 import { OpenClawSchema } from "./zod-schema.js";
 
 const LEGACY_REMOVED_PLUGIN_IDS = new Set(["google-antigravity-auth"]);
+
+// ---------------------------------------------------------------------------
+// Helpers for stripping unrecognized keys from raw config and retrying
+// validation. This prevents a single unknown key from silently discarding the
+// entire configuration (see openclaw/openclaw#28140).
+// ---------------------------------------------------------------------------
+
+interface UnrecognizedKeyInfo {
+  path: (string | number)[];
+  keys: string[];
+}
+
+/**
+ * Checks whether all Zod issues are `unrecognized_keys` errors.
+ * Returns the extracted key info when true; `null` otherwise.
+ */
+function extractUnrecognizedKeyIssues(issues: z.ZodIssue[]): UnrecognizedKeyInfo[] | null {
+  const result: UnrecognizedKeyInfo[] = [];
+  for (const iss of issues) {
+    if (iss.code !== "unrecognized_keys") {
+      return null;
+    }
+    result.push({
+      path: iss.path.filter(
+        (s): s is string | number => typeof s === "string" || typeof s === "number",
+      ),
+      keys: (iss as unknown as { keys: string[] }).keys ?? [],
+    });
+  }
+  return result.length > 0 ? result : null;
+}
+
+/**
+ * Deep-clones `obj` with the specified keys removed at the given paths.
+ * Mutates nothing; returns a new object.
+ */
+function stripKeysAtPaths(obj: unknown, removals: UnrecognizedKeyInfo[]): unknown {
+  if (typeof obj !== "object" || obj === null) {
+    return obj;
+  }
+  const result = Array.isArray(obj) ? [...obj] : { ...obj };
+  for (const { path, keys } of removals) {
+    let target: Record<string, unknown> = result as Record<string, unknown>;
+    for (const segment of path) {
+      const next = target[segment];
+      if (typeof next !== "object" || next === null) {
+        break;
+      }
+      // Shallow-clone each level we traverse so we don't mutate the original
+      const cloned = Array.isArray(next) ? [...next] : { ...next };
+      target[segment] = cloned;
+      target = cloned as Record<string, unknown>;
+    }
+    for (const key of keys) {
+      delete target[key];
+    }
+  }
+  return result;
+}
+
+/**
+ * Attempt to validate raw config. If validation fails *only* due to
+ * unrecognized keys, strip them and retry. Returns the stripped keys
+ * as warnings so callers can surface them.
+ *
+ * When validation fails for structural reasons (type errors, missing
+ * required fields, etc.), returns the original failure — no silent
+ * fallback.
+ */
+export function validateConfigWithUnknownKeyRecovery(raw: unknown):
+  | {
+      ok: true;
+      config: OpenClawConfig;
+      warnings: ConfigValidationIssue[];
+      strippedKeys: string[];
+    }
+  | {
+      ok: false;
+      issues: ConfigValidationIssue[];
+      warnings: ConfigValidationIssue[];
+    } {
+  // First pass: normal strict validation
+  const first = validateConfigObjectWithPlugins(raw);
+  if (first.ok) {
+    return { ...first, strippedKeys: [] };
+  }
+
+  // Check if the underlying Zod parse produced only unrecognized-key errors.
+  // We need to re-parse with the raw schema to get Zod-level issue codes,
+  // because validateConfigObjectWithPlugins flattens them.
+  const legacyIssues = findLegacyConfigIssues(raw);
+  if (legacyIssues.length > 0) {
+    // Legacy issues are structural — cannot recover by stripping keys
+    return first;
+  }
+
+  const zodResult = OpenClawSchema.safeParse(raw);
+  if (zodResult.success) {
+    // Zod passed but plugin validation failed — not a key-stripping issue
+    return first;
+  }
+
+  const unrecognized = extractUnrecognizedKeyIssues(zodResult.error.issues);
+  if (!unrecognized) {
+    // Mixed errors: some are structural, not just unknown keys
+    return first;
+  }
+
+  // Strip unrecognized keys and retry full validation
+  const stripped = stripKeysAtPaths(raw, unrecognized);
+  const strippedKeyPaths = unrecognized.flatMap(({ path, keys }) =>
+    keys.map((k) => [...path, k].join(".")),
+  );
+
+  const retry = validateConfigObjectWithPlugins(stripped);
+  if (retry.ok) {
+    const keyWarnings: ConfigValidationIssue[] = strippedKeyPaths.map((p) => ({
+      path: p,
+      message: `Unrecognized config key stripped (config still loaded): "${p}"`,
+    }));
+    return {
+      ok: true,
+      config: retry.config,
+      warnings: [...retry.warnings, ...keyWarnings],
+      strippedKeys: strippedKeyPaths,
+    };
+  }
+
+  // Stripping didn't help — return original failure
+  return first;
+}
 
 function isWorkspaceAvatarPath(value: string, workspaceDir: string): boolean {
   const workspaceRoot = path.resolve(workspaceDir);

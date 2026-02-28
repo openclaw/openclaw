@@ -334,12 +334,25 @@ function parseHeaderList(value: unknown): string[] {
     .filter(Boolean);
 }
 
+function isBedrockAnthropic1MModel(modelId: string): boolean {
+  const normalized = modelId.trim().toLowerCase();
+  const anthropicDotIdx = normalized.indexOf("anthropic.");
+  if (anthropicDotIdx < 0) {
+    return false;
+  }
+  const claudePart = normalized.slice(anthropicDotIdx + "anthropic.".length);
+  return ANTHROPIC_1M_MODEL_PREFIXES.some((prefix) => claudePart.startsWith(prefix));
+}
+
 function resolveAnthropicBetas(
   extraParams: Record<string, unknown> | undefined,
   provider: string,
   modelId: string,
 ): string[] | undefined {
-  if (provider !== "anthropic") {
+  const isDirectAnthropic = provider === "anthropic";
+  const isBedrockAnthropic = provider === "amazon-bedrock" && isAnthropicBedrockModel(modelId);
+
+  if (!isDirectAnthropic && !isBedrockAnthropic) {
     return undefined;
   }
 
@@ -356,7 +369,10 @@ function resolveAnthropicBetas(
   }
 
   if (extraParams?.context1m === true) {
-    if (isAnthropic1MModel(modelId)) {
+    const is1MModel = isDirectAnthropic
+      ? isAnthropic1MModel(modelId)
+      : isBedrockAnthropic1MModel(modelId);
+    if (is1MModel) {
       betas.add(ANTHROPIC_CONTEXT_1M_BETA);
     } else {
       log.warn(`ignoring context1m for non-opus/sonnet model: ${provider}/${modelId}`);
@@ -429,6 +445,36 @@ function createAnthropicBetaHeadersWrapper(
     return underlying(model, context, {
       ...options,
       headers: mergeAnthropicBetaHeader(options?.headers, allBetas),
+    });
+  };
+}
+
+/**
+ * Inject anthropic_beta into Bedrock payload via additionalModelRequestFields.
+ * Bedrock accepts anthropic_beta as a body parameter, not an HTTP header.
+ * Merges with any existing anthropic_beta entries (e.g. interleaved-thinking).
+ */
+function createBedrockAnthropicBetaWrapper(
+  baseStreamFn: StreamFn | undefined,
+  betas: string[],
+): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    const originalOnPayload = options?.onPayload;
+    return underlying(model, context, {
+      ...options,
+      onPayload: (payload) => {
+        if (payload && typeof payload === "object") {
+          const payloadObj = payload as Record<string, unknown>;
+          const amrf = (payloadObj.additionalModelRequestFields ?? {}) as Record<string, unknown>;
+          const existing = Array.isArray(amrf.anthropic_beta)
+            ? (amrf.anthropic_beta as string[])
+            : [];
+          amrf.anthropic_beta = [...new Set([...existing, ...betas])];
+          payloadObj.additionalModelRequestFields = amrf;
+        }
+        originalOnPayload?.(payload);
+      },
     });
   };
 }
@@ -757,10 +803,18 @@ export function applyExtraParamsToAgent(
 
   const anthropicBetas = resolveAnthropicBetas(merged, provider, modelId);
   if (anthropicBetas?.length) {
-    log.debug(
-      `applying Anthropic beta header for ${provider}/${modelId}: ${anthropicBetas.join(",")}`,
-    );
-    agent.streamFn = createAnthropicBetaHeadersWrapper(agent.streamFn, anthropicBetas);
+    if (provider === "amazon-bedrock") {
+      // Bedrock accepts anthropic_beta as a body parameter via additionalModelRequestFields
+      log.debug(
+        `applying Bedrock anthropic_beta for ${provider}/${modelId}: ${anthropicBetas.join(",")}`,
+      );
+      agent.streamFn = createBedrockAnthropicBetaWrapper(agent.streamFn, anthropicBetas);
+    } else {
+      log.debug(
+        `applying Anthropic beta header for ${provider}/${modelId}: ${anthropicBetas.join(",")}`,
+      );
+      agent.streamFn = createAnthropicBetaHeadersWrapper(agent.streamFn, anthropicBetas);
+    }
   }
 
   if (shouldApplySiliconFlowThinkingOffCompat({ provider, modelId, thinkingLevel })) {

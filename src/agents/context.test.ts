@@ -103,6 +103,69 @@ describe("resolveContextTokensForModel", () => {
     expect(result).toBe(ANTHROPIC_CONTEXT_1M_TOKENS);
   });
 
+  it("returns 1M context when context1m is enabled for Bedrock Anthropic Opus model", () => {
+    const result = resolveContextTokensForModel({
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "amazon-bedrock/us.anthropic.claude-opus-4-6-v1:0": {
+                params: { context1m: true },
+              },
+            },
+          },
+        },
+      },
+      provider: "amazon-bedrock",
+      model: "us.anthropic.claude-opus-4-6-v1:0",
+      fallbackContextTokens: 200_000,
+    });
+
+    expect(result).toBe(ANTHROPIC_CONTEXT_1M_TOKENS);
+  });
+
+  it("returns 1M context when context1m is enabled for Bedrock Anthropic Sonnet model", () => {
+    const result = resolveContextTokensForModel({
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "amazon-bedrock/anthropic.claude-sonnet-4-v1:0": {
+                params: { context1m: true },
+              },
+            },
+          },
+        },
+      },
+      provider: "amazon-bedrock",
+      model: "anthropic.claude-sonnet-4-v1:0",
+      fallbackContextTokens: 200_000,
+    });
+
+    expect(result).toBe(ANTHROPIC_CONTEXT_1M_TOKENS);
+  });
+
+  it("does not force 1M context for non-Anthropic Bedrock models", () => {
+    const result = resolveContextTokensForModel({
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "amazon-bedrock/amazon.nova-micro-v1": {
+                params: { context1m: true },
+              },
+            },
+          },
+        },
+      },
+      provider: "amazon-bedrock",
+      model: "amazon.nova-micro-v1",
+      fallbackContextTokens: 200_000,
+    });
+
+    expect(result).toBe(200_000);
+  });
+
   it("does not force 1M context for non-opus/sonnet Anthropic models", () => {
     const result = resolveContextTokensForModel({
       cfg: {

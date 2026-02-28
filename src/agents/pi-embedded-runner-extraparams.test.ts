@@ -810,6 +810,102 @@ describe("applyExtraParamsToAgent", () => {
     });
   });
 
+  it("injects anthropic_beta into Bedrock payload when context1m is enabled for Anthropic model", () => {
+    const payloads: Record<string, unknown>[] = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = {
+        modelId: "us.anthropic.claude-opus-4-6-v1:0",
+        additionalModelRequestFields: {
+          thinking: { type: "enabled", budget_tokens: 10000 },
+          anthropic_beta: ["interleaved-thinking-2025-05-14"],
+        },
+      };
+      options?.onPayload?.(payload);
+      payloads.push(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+    const cfg = buildAnthropicModelConfig("amazon-bedrock/us.anthropic.claude-opus-4-6-v1:0", {
+      context1m: true,
+    });
+
+    applyExtraParamsToAgent(agent, cfg, "amazon-bedrock", "us.anthropic.claude-opus-4-6-v1:0");
+
+    const model = {
+      api: "bedrock-converse-stream",
+      provider: "amazon-bedrock",
+      id: "us.anthropic.claude-opus-4-6-v1:0",
+    } as Model<"bedrock-converse-stream">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(payloads).toHaveLength(1);
+    const amrf = payloads[0]?.additionalModelRequestFields as Record<string, unknown>;
+    expect(amrf.anthropic_beta).toEqual(
+      expect.arrayContaining(["interleaved-thinking-2025-05-14", "context-1m-2025-08-07"]),
+    );
+  });
+
+  it("creates additionalModelRequestFields when absent for Bedrock context1m", () => {
+    const payloads: Record<string, unknown>[] = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = {
+        modelId: "anthropic.claude-sonnet-4-v1:0",
+      };
+      options?.onPayload?.(payload);
+      payloads.push(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+    const cfg = buildAnthropicModelConfig("amazon-bedrock/anthropic.claude-sonnet-4-v1:0", {
+      context1m: true,
+    });
+
+    applyExtraParamsToAgent(agent, cfg, "amazon-bedrock", "anthropic.claude-sonnet-4-v1:0");
+
+    const model = {
+      api: "bedrock-converse-stream",
+      provider: "amazon-bedrock",
+      id: "anthropic.claude-sonnet-4-v1:0",
+    } as Model<"bedrock-converse-stream">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(payloads).toHaveLength(1);
+    const amrf = payloads[0]?.additionalModelRequestFields as Record<string, unknown>;
+    expect(amrf).toBeDefined();
+    expect(amrf.anthropic_beta).toEqual(["context-1m-2025-08-07"]);
+  });
+
+  it("does not inject anthropic_beta for non-Anthropic Bedrock models with context1m", () => {
+    const payloads: Record<string, unknown>[] = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = {
+        modelId: "amazon.nova-micro-v1",
+      };
+      options?.onPayload?.(payload);
+      payloads.push(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+    const cfg = buildAnthropicModelConfig("amazon-bedrock/amazon.nova-micro-v1", {
+      context1m: true,
+    });
+
+    applyExtraParamsToAgent(agent, cfg, "amazon-bedrock", "amazon.nova-micro-v1");
+
+    const model = {
+      api: "bedrock-converse-stream",
+      provider: "amazon-bedrock",
+      id: "amazon.nova-micro-v1",
+    } as Model<"bedrock-converse-stream">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]).not.toHaveProperty("additionalModelRequestFields");
+  });
+
   it("ignores context1m for non-Opus/Sonnet Anthropic models", () => {
     const cfg = buildAnthropicModelConfig("anthropic/claude-haiku-3-5", { context1m: true });
     const headers = runAnthropicHeaderCase({

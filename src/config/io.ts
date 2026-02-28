@@ -50,6 +50,7 @@ import type { OpenClawConfig, ConfigFileSnapshot, LegacyConfigIssue } from "./ty
 import {
   validateConfigObjectRawWithPlugins,
   validateConfigObjectWithPlugins,
+  validateConfigWithUnknownKeyRecovery,
 } from "./validation.js";
 import { compareOpenClawVersions } from "./version.js";
 
@@ -711,7 +712,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       if (preValidationDuplicates.length > 0) {
         throw new DuplicateAgentDirError(preValidationDuplicates);
       }
-      const validated = validateConfigObjectWithPlugins(resolvedConfig);
+      const validated = validateConfigWithUnknownKeyRecovery(resolvedConfig);
       if (!validated.ok) {
         const details = validated.issues
           .map((iss) => `- ${iss.path || "<root>"}: ${iss.message}`)
@@ -724,6 +725,13 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         (error as { code?: string; details?: string }).code = "INVALID_CONFIG";
         (error as { code?: string; details?: string }).details = details;
         throw error;
+      }
+      if (validated.strippedKeys.length > 0) {
+        const keyList = validated.strippedKeys.join(", ");
+        deps.logger.warn(
+          `Config loaded with unrecognized keys stripped: ${keyList}. ` +
+            `Run "openclaw doctor --fix" to clean up. Config settings are preserved.`,
+        );
       }
       if (validated.warnings.length > 0) {
         const details = validated.warnings
@@ -929,6 +937,47 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
 
       const validated = validateConfigObjectWithPlugins(resolvedConfigRaw);
       if (!validated.ok) {
+        // Attempt recovery: strip unrecognized keys and retry.
+        // If recovery succeeds, treat the config as valid (with warnings).
+        const recovered = validateConfigWithUnknownKeyRecovery(resolvedConfigRaw);
+        if (recovered.ok && recovered.strippedKeys.length > 0) {
+          const keyList = recovered.strippedKeys.join(", ");
+          deps.logger.warn(
+            `Config snapshot loaded with unrecognized keys stripped: ${keyList}. ` +
+              `Run "openclaw doctor --fix" to clean up.`,
+          );
+          // Fall through to the success path below with the recovered config
+          const snapshotConfig = normalizeConfigPaths(
+            applyTalkApiKey(
+              applyTalkConfigNormalization(
+                applyModelDefaults(
+                  applyAgentDefaults(
+                    applySessionDefaults(
+                      applyLoggingDefaults(applyMessageDefaults(recovered.config)),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          );
+          normalizeExecSafeBinProfilesInConfig(snapshotConfig);
+          return {
+            snapshot: {
+              path: configPath,
+              exists: true,
+              raw,
+              parsed: parsedRes.parsed,
+              resolved: coerceConfig(resolvedConfigRaw),
+              valid: true,
+              config: snapshotConfig,
+              hash,
+              issues: [],
+              warnings: [...recovered.warnings],
+              legacyIssues,
+            },
+            envSnapshotForRestore: readResolution.envSnapshotForRestore,
+          };
+        }
         return {
           snapshot: {
             path: configPath,

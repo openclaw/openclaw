@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import chokidar from "chokidar";
 import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js";
 import type { OpenClawConfig, ConfigFileSnapshot, GatewayReloadMode } from "../config/config.js";
+import { validateConfigWithUnknownKeyRecovery } from "../config/validation.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { isPlainObject } from "../utils.js";
 
@@ -323,6 +324,23 @@ export function startGatewayConfigReloader(opts: {
 
   const handleInvalidSnapshot = (snapshot: ConfigFileSnapshot): boolean => {
     if (snapshot.valid) {
+      return false;
+    }
+    // Attempt recovery: if the only issues are unrecognized keys, strip them
+    // and use the recovered config instead of skipping the reload entirely.
+    // This prevents a single unknown key from silently freezing config updates.
+    const recovered = validateConfigWithUnknownKeyRecovery(snapshot.resolved);
+    if (recovered.ok && recovered.strippedKeys.length > 0) {
+      const keyList = recovered.strippedKeys.join(", ");
+      opts.log.warn(
+        `config reload: stripped unrecognized keys (${keyList}). ` +
+          `Config settings preserved. Run "openclaw doctor --fix" to clean up.`,
+      );
+      // Overwrite snapshot fields so the reload proceeds with the recovered config
+      snapshot.valid = true;
+      snapshot.config = recovered.config;
+      snapshot.issues = [];
+      snapshot.warnings = [...snapshot.warnings, ...recovered.warnings];
       return false;
     }
     const issues = snapshot.issues.map((issue) => `${issue.path}: ${issue.message}`).join(", ");
