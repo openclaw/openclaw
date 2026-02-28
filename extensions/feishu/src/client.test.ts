@@ -333,6 +333,7 @@ describe("createFeishuWSClient proxy handling", () => {
   it("uses HTTPS_PROXY when https_proxy is unset", () => {
     process.env.HTTPS_PROXY = "http://upper-https:8002";
     process.env.http_proxy = "http://lower-http:8003";
+    process.env.HTTP_PROXY = "http://upper-http:8004";
 
     createFeishuWSClient(baseAccount);
 
