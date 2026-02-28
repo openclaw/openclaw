@@ -108,7 +108,7 @@ function assessQuality(response, userText) {
   return Math.max(0, Math.min(1, score));
 }
 
-// ─── P1: Ollama Restart Helper ────────────────────────────────────
+// ─── P1: Ollama Watchdog ─────────────────────────────────────────
 function restartOllama() {
   try {
     console.warn("[Ollama Watchdog] 失敗 3 次，嘗試重啟 Ollama...");
@@ -118,6 +118,19 @@ function restartOllama() {
   } catch (e) {
     console.error("[Ollama Watchdog] 重啟失敗:", e.message);
     return false;
+  }
+}
+
+// Centralized failure tracking — replaces 6 copy-pasted blocks
+function trackFailure(reason) {
+  ollamaStats.error++;
+  ollamaStats.consecutiveFailures++;
+  console.error(
+    `[Ollama] ${reason}, failures: ${ollamaStats.consecutiveFailures}/${MAX_CONSECUTIVE_FAILURES}`,
+  );
+  if (ollamaStats.consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+    restartOllama();
+    ollamaStats.consecutiveFailures = 0;
   }
 }
 // ──────────────────────────────────────────────────────────────────
@@ -163,16 +176,7 @@ function tryOllamaChat(messages, options) {
           const content = parsed.choices?.[0]?.message?.content || "";
 
           if (!content) {
-            ollamaStats.error++;
-            // P1: 失敗計數遞增
-            ollamaStats.consecutiveFailures++;
-            console.error(
-              `[Ollama] empty_response, failures: ${ollamaStats.consecutiveFailures}/${MAX_CONSECUTIVE_FAILURES}`,
-            );
-            if (ollamaStats.consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
-              restartOllama();
-              ollamaStats.consecutiveFailures = 0;
-            }
+            trackFailure("empty_response");
             resolve({ success: false, reason: "empty_response", latency });
             return;
           }
@@ -188,16 +192,7 @@ function tryOllamaChat(messages, options) {
             usage: parsed.usage || {},
           });
         } catch (e) {
-          ollamaStats.error++;
-          // P1: 失敗計數遞增
-          ollamaStats.consecutiveFailures++;
-          console.error(
-            `[Ollama] parse_error: ${e.message}, failures: ${ollamaStats.consecutiveFailures}/${MAX_CONSECUTIVE_FAILURES}`,
-          );
-          if (ollamaStats.consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
-            restartOllama();
-            ollamaStats.consecutiveFailures = 0;
-          }
+          trackFailure(`parse_error: ${e.message}`);
           resolve({ success: false, reason: "parse_error", error: e.message, latency });
         }
       });
@@ -205,16 +200,7 @@ function tryOllamaChat(messages, options) {
 
     req.on("error", (e) => {
       const latency = Date.now() - startTime;
-      ollamaStats.error++;
-      // P1: 失敗計數遞增
-      ollamaStats.consecutiveFailures++;
-      console.error(
-        `[Ollama] connection_error: ${e.message}, failures: ${ollamaStats.consecutiveFailures}/${MAX_CONSECUTIVE_FAILURES}`,
-      );
-      if (ollamaStats.consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
-        restartOllama();
-        ollamaStats.consecutiveFailures = 0;
-      }
+      trackFailure(`connection_error: ${e.message}`);
       resolve({ success: false, reason: "connection_error", error: e.message, latency });
     });
 
@@ -222,15 +208,7 @@ function tryOllamaChat(messages, options) {
       req.destroy();
       const latency = Date.now() - startTime;
       ollamaStats.timeout++;
-      // P1: 失敗計數遞增
-      ollamaStats.consecutiveFailures++;
-      console.error(
-        `[Ollama] timeout (${latency}ms), failures: ${ollamaStats.consecutiveFailures}/${MAX_CONSECUTIVE_FAILURES}`,
-      );
-      if (ollamaStats.consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
-        restartOllama();
-        ollamaStats.consecutiveFailures = 0;
-      }
+      trackFailure(`timeout (${latency}ms)`);
       resolve({ success: false, reason: "timeout", latency });
     });
 
@@ -285,8 +263,7 @@ function tryOllamaChatStream(messages, options, onChunk, onDone, onError) {
 
   const req = http.request(opts, (res) => {
     if (res.statusCode !== 200) {
-      ollamaStats.error++;
-      ollamaStats.consecutiveFailures++;
+      trackFailure(`HTTP ${res.statusCode}`);
       onError(new Error(`Ollama HTTP ${res.statusCode}`));
       return;
     }
@@ -332,8 +309,7 @@ function tryOllamaChatStream(messages, options, onChunk, onDone, onError) {
       ollamaStats.totalLatency += totalMs;
 
       if (!fullContent) {
-        ollamaStats.error++;
-        ollamaStats.consecutiveFailures++;
+        trackFailure("empty_stream_response");
         onError(new Error("empty_stream_response"));
         return;
       }
@@ -356,23 +332,14 @@ function tryOllamaChatStream(messages, options, onChunk, onDone, onError) {
   });
 
   req.on("error", (e) => {
-    ollamaStats.error++;
-    ollamaStats.consecutiveFailures++;
-    if (ollamaStats.consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
-      restartOllama();
-      ollamaStats.consecutiveFailures = 0;
-    }
+    trackFailure(`stream_error: ${e.message}`);
     onError(e);
   });
 
   req.on("timeout", () => {
     req.destroy();
     ollamaStats.timeout++;
-    ollamaStats.consecutiveFailures++;
-    if (ollamaStats.consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
-      restartOllama();
-      ollamaStats.consecutiveFailures = 0;
-    }
+    trackFailure("stream_timeout");
     onError(new Error("stream_timeout"));
   });
 
