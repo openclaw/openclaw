@@ -87,6 +87,7 @@ function cleanBlocksForInsert(blocks: any[]): { cleaned: any[]; skipped: string[
 
 /** Max blocks per documentBlockChildren.create request */
 const MAX_BLOCKS_PER_INSERT = 50;
+const MAX_CONVERT_RETRY_DEPTH = 8;
 
 async function convertMarkdown(client: Lark.Client, markdown: string) {
   const res = await client.docx.document.convert({
@@ -169,13 +170,86 @@ function splitMarkdownByHeadings(markdown: string): string[] {
   return chunks;
 }
 
+/** Split markdown by size, preferring to break outside fenced code blocks when possible */
+function splitMarkdownBySize(markdown: string, maxChars: number): string[] {
+  if (markdown.length <= maxChars) {
+    return [markdown];
+  }
+
+  const lines = markdown.split("\n");
+  const chunks: string[] = [];
+  let current: string[] = [];
+  let currentLength = 0;
+  let inFencedBlock = false;
+
+  for (const line of lines) {
+    if (/^(`{3,}|~{3,})/.test(line)) {
+      inFencedBlock = !inFencedBlock;
+    }
+
+    const lineLength = line.length + 1;
+    const wouldExceed = currentLength + lineLength > maxChars;
+    if (current.length > 0 && wouldExceed && !inFencedBlock) {
+      chunks.push(current.join("\n"));
+      current = [];
+      currentLength = 0;
+    }
+
+    current.push(line);
+    currentLength += lineLength;
+  }
+
+  if (current.length > 0) {
+    chunks.push(current.join("\n"));
+  }
+
+  if (chunks.length > 1) {
+    return chunks;
+  }
+
+  // Degenerate case: no safe boundary outside fenced content.
+  const midpoint = Math.floor(lines.length / 2);
+  if (midpoint <= 0 || midpoint >= lines.length) {
+    return [markdown];
+  }
+  return [lines.slice(0, midpoint).join("\n"), lines.slice(midpoint).join("\n")];
+}
+
+async function convertMarkdownWithFallback(client: Lark.Client, markdown: string, depth = 0) {
+  try {
+    return await convertMarkdown(client, markdown);
+  } catch (error) {
+    if (depth >= MAX_CONVERT_RETRY_DEPTH || markdown.length < 2) {
+      throw error;
+    }
+
+    const splitTarget = Math.max(256, Math.floor(markdown.length / 2));
+    const chunks = splitMarkdownBySize(markdown, splitTarget);
+    if (chunks.length <= 1) {
+      throw error;
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK block types
+    const blocks: any[] = [];
+    const firstLevelBlockIds: string[] = [];
+
+    for (const chunk of chunks) {
+      const converted = await convertMarkdownWithFallback(client, chunk, depth + 1);
+      blocks.push(...converted.blocks);
+      firstLevelBlockIds.push(...converted.firstLevelBlockIds);
+    }
+
+    return { blocks, firstLevelBlockIds };
+  }
+}
+
 /** Convert markdown in chunks to avoid document.convert content size limits */
 async function chunkedConvertMarkdown(client: Lark.Client, markdown: string) {
   const chunks = splitMarkdownByHeadings(markdown);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK block types
   const allBlocks: any[] = [];
   for (const chunk of chunks) {
-    const { blocks, firstLevelBlockIds } = await convertMarkdown(client, chunk);
+    const { blocks, firstLevelBlockIds } = await convertMarkdownWithFallback(client, chunk);
     const sorted = sortBlocksByFirstLevel(blocks, firstLevelBlockIds);
     allBlocks.push(...sorted);
   }
