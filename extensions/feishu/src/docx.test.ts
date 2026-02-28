@@ -105,6 +105,64 @@ describe("feishu_doc image fetch hardening", () => {
     scopeListMock.mockResolvedValue({ code: 0, data: { scopes: [] } });
   });
 
+  it("inserts blocks sequentially to preserve document order", async () => {
+    const blocks = [
+      { block_type: 3, block_id: "h1" },
+      { block_type: 2, block_id: "t1" },
+      { block_type: 3, block_id: "h2" },
+    ];
+    convertMock.mockResolvedValue({
+      code: 0,
+      data: {
+        blocks,
+        first_level_block_ids: ["h1", "t1", "h2"],
+      },
+    });
+
+    blockListMock.mockResolvedValue({ code: 0, data: { items: [] } });
+
+    // Each call returns the single block that was passed in
+    blockChildrenCreateMock
+      .mockResolvedValueOnce({ code: 0, data: { children: [{ block_type: 3, block_id: "h1" }] } })
+      .mockResolvedValueOnce({ code: 0, data: { children: [{ block_type: 2, block_id: "t1" }] } })
+      .mockResolvedValueOnce({ code: 0, data: { children: [{ block_type: 3, block_id: "h2" }] } });
+
+    const registerTool = vi.fn();
+    registerFeishuDocTools({
+      config: {
+        channels: {
+          feishu: { appId: "app_id", appSecret: "app_secret" },
+        },
+      } as any,
+      logger: { debug: vi.fn(), info: vi.fn() } as any,
+      registerTool,
+    } as any);
+
+    const feishuDocTool = registerTool.mock.calls
+      .map((call) => call[0])
+      .map((tool) => (typeof tool === "function" ? tool({}) : tool))
+      .find((tool) => tool.name === "feishu_doc");
+    expect(feishuDocTool).toBeDefined();
+
+    const result = await feishuDocTool.execute("tool-call", {
+      action: "append",
+      doc_token: "doc_1",
+      content: "## H1\ntext\n## H2",
+    });
+
+    // Verify sequential insertion: one call per block
+    expect(blockChildrenCreateMock).toHaveBeenCalledTimes(3);
+
+    // Verify each call received exactly one block in the correct order
+    const calls = blockChildrenCreateMock.mock.calls;
+    expect(calls[0][0].data.children).toHaveLength(1);
+    expect(calls[0][0].data.children[0].block_id).toBe("h1");
+    expect(calls[1][0].data.children[0].block_id).toBe("t1");
+    expect(calls[2][0].data.children[0].block_id).toBe("h2");
+
+    expect(result.details.blocks_added).toBe(3);
+  });
+
   it("skips image upload when markdown image URL is blocked", async () => {
     const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     fetchRemoteMediaMock.mockRejectedValueOnce(
