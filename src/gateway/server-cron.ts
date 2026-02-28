@@ -186,12 +186,12 @@ export function buildGatewayCronService(params: {
       // fully resolved agent heartbeat config so cron-triggered heartbeats
       // respect agent-specific overrides (agents.list[].heartbeat) before
       // falling back to agents.defaults.heartbeat.
-      const agentEntry = Array.isArray(runtimeConfig.agents?.list)
-        ? runtimeConfig.agents.list.find(
-            (entry) =>
-              entry && typeof entry.id === "string" && normalizeAgentId(entry.id) === agentId,
-          )
-        : undefined;
+      const agentEntry =
+        Array.isArray(runtimeConfig.agents?.list) &&
+        runtimeConfig.agents.list.find(
+          (entry) =>
+            entry && typeof entry.id === "string" && normalizeAgentId(entry.id) === agentId,
+        );
       const baseHeartbeat = {
         ...runtimeConfig.agents?.defaults?.heartbeat,
         ...agentEntry?.heartbeat,
