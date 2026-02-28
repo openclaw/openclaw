@@ -486,17 +486,11 @@ export function recordTurnRecoveryFailure(
   }
 }
 
-export function listRecoverableTurns(opts?: {
-  minAgeMs?: number;
-  maxAgeMs?: number;
-  stateDir?: string;
-}): TurnRow[] {
+export function listRecoverableTurns(opts?: { maxAgeMs?: number; stateDir?: string }): TurnRow[] {
   const db = getLifecycleDb(opts?.stateDir);
   const now = Date.now();
-  const minAge = opts?.minAgeMs ?? 0;
   const maxAge = opts?.maxAgeMs ?? MAX_TURN_RECOVERY_AGE_MS;
   const newerThan = now - maxAge;
-  const olderThan = now - minAge;
   try {
     return db
       .prepare(
@@ -515,11 +509,10 @@ export function listRecoverableTurns(opts?: {
          FROM message_turns
          WHERE status IN ('accepted','running','delivery_pending','failed_retryable')
            AND accepted_at >= ?
-           AND accepted_at <= ?
            AND next_attempt_at <= ?
          ORDER BY accepted_at ASC`,
       )
-      .all(newerThan, olderThan, now) as TurnRow[];
+      .all(newerThan, now) as TurnRow[];
   } catch (err) {
     logVerbose(`message-lifecycle/turns: listRecoverableTurns failed: ${String(err)}`);
     return [];
