@@ -70,16 +70,16 @@ const MODEL_COSTS: Record<
   { input: number; output: number; cacheRead: number; cacheWrite: number }
 > = {
   "glm-5": { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  "minimax-m2.5": { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
-  "kimi-k2.5": { input: 2, output: 12, cacheRead: 0.2, cacheWrite: 0 },
+  "minimax-m2.5": { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  "kimi-k2.5": { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 };
 
 const DEFAULT_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 
 const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   "glm-5": 204800,
-  "minimax-m2.5": 200000,
-  "kimi-k2.5": 131072,
+  "minimax-m2.5": 204800,
+  "kimi-k2.5": 256000,
 };
 
 function getDefaultContextWindow(modelId: string): number {
@@ -88,8 +88,8 @@ function getDefaultContextWindow(modelId: string): number {
 
 const MODEL_MAX_TOKENS: Record<string, number> = {
   "glm-5": 131072,
-  "minimax-m2.5": 64000,
-  "kimi-k2.5": 65536,
+  "minimax-m2.5": 131072,
+  "kimi-k2.5": 8192,
 };
 
 function getDefaultMaxTokens(modelId: string): number {
