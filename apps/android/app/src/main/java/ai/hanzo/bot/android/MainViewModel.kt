@@ -11,6 +11,7 @@ import ai.hanzo.bot.android.node.CameraCaptureManager
 import ai.hanzo.bot.android.node.CanvasController
 import ai.hanzo.bot.android.node.ScreenRecordManager
 import ai.hanzo.bot.android.node.SmsManager
+import ai.hanzo.bot.android.voice.VoiceConversationEntry
 import kotlinx.coroutines.flow.StateFlow
 
 class MainViewModel(app: Application) : AndroidViewModel(app) {
@@ -52,6 +53,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
   val talkStatusText: StateFlow<String> = runtime.talkStatusText
   val talkIsListening: StateFlow<Boolean> = runtime.talkIsListening
   val talkIsSpeaking: StateFlow<Boolean> = runtime.talkIsSpeaking
+  val onboardingCompleted: StateFlow<Boolean> = runtime.onboardingCompleted
+  val micEnabled: StateFlow<Boolean> = runtime.micEnabled
+  val micStatusText: StateFlow<String> = runtime.micStatusText
+  val micLiveTranscript: StateFlow<String?> = runtime.micLiveTranscript
+  val micQueuedMessages: StateFlow<List<String>> = runtime.micQueuedMessages
+  val micConversation: StateFlow<List<VoiceConversationEntry>> = runtime.micConversation
+  val micInputLevel: StateFlow<Float> = runtime.micInputLevel
+  val micIsSending: StateFlow<Boolean> = runtime.micIsSending
   val manualEnabled: StateFlow<Boolean> = runtime.manualEnabled
   val manualHost: StateFlow<String> = runtime.manualHost
   val manualPort: StateFlow<Int> = runtime.manualPort
@@ -136,6 +145,18 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
   fun setTalkEnabled(enabled: Boolean) {
     runtime.setTalkEnabled(enabled)
+  }
+
+  fun setMicEnabled(enabled: Boolean) {
+    runtime.setMicEnabled(enabled)
+  }
+
+  fun setGatewayPassword(password: String) {
+    runtime.setGatewayPassword(password)
+  }
+
+  fun setOnboardingCompleted(value: Boolean) {
+    runtime.setOnboardingCompleted(value)
   }
 
   fun refreshGatewayConnection() {

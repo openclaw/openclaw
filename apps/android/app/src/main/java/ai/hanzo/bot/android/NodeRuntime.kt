@@ -18,7 +18,9 @@ import ai.hanzo.bot.android.gateway.GatewaySession
 import ai.hanzo.bot.android.gateway.probeGatewayTlsFingerprint
 import ai.hanzo.bot.android.node.*
 import ai.hanzo.bot.android.protocol.HanzoBotCanvasA2UIAction
+import ai.hanzo.bot.android.voice.MicCaptureManager
 import ai.hanzo.bot.android.voice.TalkModeManager
+import ai.hanzo.bot.android.voice.VoiceConversationEntry
 import ai.hanzo.bot.android.voice.VoiceWakeManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -87,6 +89,27 @@ class NodeRuntime(context: Context) {
   val talkIsSpeaking: StateFlow<Boolean>
     get() = talkMode.isSpeaking
 
+  val micEnabled: StateFlow<Boolean>
+    get() = mic.micEnabled
+
+  val micStatusText: StateFlow<String>
+    get() = mic.statusText
+
+  val micLiveTranscript: StateFlow<String?>
+    get() = mic.liveTranscript
+
+  val micQueuedMessages: StateFlow<List<String>>
+    get() = mic.queuedMessages
+
+  val micConversation: StateFlow<List<VoiceConversationEntry>>
+    get() = mic.conversation
+
+  val micInputLevel: StateFlow<Float>
+    get() = mic.inputLevel
+
+  val micIsSending: StateFlow<Boolean>
+    get() = mic.isSending
+
   private val discovery = GatewayDiscovery(appContext, scope = scope)
   val gateways: StateFlow<List<GatewayEndpoint>> = discovery.gateways
   val discoveryStatusText: StateFlow<String> = discovery.statusText
@@ -134,6 +157,14 @@ class NodeRuntime(context: Context) {
     sms = sms,
   )
 
+  private val deviceHandlerImpl: DeviceHandler = DeviceHandler(
+    appContext = appContext,
+  )
+
+  private val notificationsHandlerImpl: NotificationsHandler = NotificationsHandler(
+    appContext = appContext,
+  )
+
   private val a2uiHandler: A2UIHandler = A2UIHandler(
     canvas = canvas,
     json = json,
@@ -160,6 +191,8 @@ class NodeRuntime(context: Context) {
     a2uiHandler = a2uiHandler,
     debugHandler = debugHandler,
     appUpdateHandler = appUpdateHandler,
+    deviceHandler = deviceHandlerImpl,
+    notificationsHandler = notificationsHandlerImpl,
     isForeground = { _isForeground.value },
     cameraEnabled = { cameraEnabled.value },
     locationEnabled = { locationMode.value != LocationMode.Off },
@@ -237,6 +270,7 @@ class NodeRuntime(context: Context) {
         _seamColorArgb.value = DEFAULT_SEAM_COLOR_ARGB
         applyMainSessionKey(mainSessionKey)
         updateStatus()
+        mic.onGatewayConnectionChanged(true)
         scope.launch { refreshBrandingFromGateway() }
         scope.launch { gatewayEventHandler.refreshWakeWordsFromGateway() }
       },
@@ -253,6 +287,7 @@ class NodeRuntime(context: Context) {
         talkMode.setMainSessionKey(mainKey)
         chat.applyMainSessionKey(mainKey)
         chat.onDisconnected(message)
+        mic.onGatewayConnectionChanged(false)
         updateStatus()
       },
       onEvent = { event, payloadJson ->
@@ -305,6 +340,31 @@ class NodeRuntime(context: Context) {
     )
   }
 
+  private val mic: MicCaptureManager by lazy {
+    MicCaptureManager(
+      context = appContext,
+      scope = scope,
+      sendToGateway = { message ->
+        val sessionKey = resolveMainSessionKey()
+        val runId = java.util.UUID.randomUUID().toString()
+        val params = buildJsonObject {
+          put("message", JsonPrimitive(message))
+          put("sessionKey", JsonPrimitive(sessionKey))
+          put("thinking", JsonPrimitive(chatThinkingLevel.value))
+          put("idempotencyKey", JsonPrimitive(runId))
+        }
+        val res = operatorSession.request("chat.send", params.toString())
+        val parsed = try {
+          val obj = json.parseToJsonElement(res).asObjectOrNull()
+          (obj?.get("runId") as? JsonPrimitive)?.content?.trim()?.takeIf { it.isNotEmpty() }
+        } catch (_: Throwable) {
+          null
+        }
+        parsed ?: runId
+      },
+    )
+  }
+
   private fun applyMainSessionKey(candidate: String?) {
     val trimmed = normalizeMainKey(candidate) ?: return
     if (isCanonicalMainSessionKey(_mainSessionKey.value)) return
@@ -354,6 +414,7 @@ class NodeRuntime(context: Context) {
   val wakeWords: StateFlow<List<String>> = prefs.wakeWords
   val voiceWakeMode: StateFlow<VoiceWakeMode> = prefs.voiceWakeMode
   val talkEnabled: StateFlow<Boolean> = prefs.talkEnabled
+  val onboardingCompleted: StateFlow<Boolean> = prefs.onboardingCompleted
   val manualEnabled: StateFlow<Boolean> = prefs.manualEnabled
   val manualHost: StateFlow<String> = prefs.manualHost
   val manualPort: StateFlow<Int> = prefs.manualPort
@@ -543,6 +604,18 @@ class NodeRuntime(context: Context) {
 
   fun setTalkEnabled(value: Boolean) {
     prefs.setTalkEnabled(value)
+  }
+
+  fun setMicEnabled(enabled: Boolean) {
+    mic.setMicEnabled(enabled)
+  }
+
+  fun setGatewayPassword(password: String) {
+    prefs.setGatewayPassword(password)
+  }
+
+  fun setOnboardingCompleted(value: Boolean) {
+    prefs.setOnboardingCompleted(value)
   }
 
   fun refreshGatewayConnection() {
@@ -765,6 +838,7 @@ class NodeRuntime(context: Context) {
 
     talkMode.handleGatewayEvent(event, payloadJson)
     chat.handleGatewayEvent(event, payloadJson)
+    mic.handleGatewayEvent(event, payloadJson)
   }
 
   private suspend fun refreshBrandingFromGateway() {

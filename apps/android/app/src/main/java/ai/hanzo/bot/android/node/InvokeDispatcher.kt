@@ -4,7 +4,9 @@ import ai.hanzo.bot.android.gateway.GatewaySession
 import ai.hanzo.bot.android.protocol.HanzoBotCanvasA2UICommand
 import ai.hanzo.bot.android.protocol.HanzoBotCanvasCommand
 import ai.hanzo.bot.android.protocol.HanzoBotCameraCommand
+import ai.hanzo.bot.android.protocol.HanzoBotDeviceCommand
 import ai.hanzo.bot.android.protocol.HanzoBotLocationCommand
+import ai.hanzo.bot.android.protocol.HanzoBotNotificationsCommand
 import ai.hanzo.bot.android.protocol.HanzoBotScreenCommand
 import ai.hanzo.bot.android.protocol.HanzoBotSmsCommand
 
@@ -17,6 +19,8 @@ class InvokeDispatcher(
   private val a2uiHandler: A2UIHandler,
   private val debugHandler: DebugHandler,
   private val appUpdateHandler: AppUpdateHandler,
+  private val deviceHandler: DeviceHandler,
+  private val notificationsHandler: NotificationsHandler,
   private val isForeground: () -> Boolean,
   private val cameraEnabled: () -> Boolean,
   private val locationEnabled: () -> Boolean,
@@ -147,6 +151,7 @@ class InvokeDispatcher(
       }
 
       // Camera commands
+      HanzoBotCameraCommand.List.rawValue -> cameraHandler.handleList()
       HanzoBotCameraCommand.Snap.rawValue -> cameraHandler.handleSnap(paramsJson)
       HanzoBotCameraCommand.Clip.rawValue -> cameraHandler.handleClip(paramsJson)
 
@@ -158,6 +163,16 @@ class InvokeDispatcher(
 
       // SMS command
       HanzoBotSmsCommand.Send.rawValue -> smsHandler.handleSmsSend(paramsJson)
+
+      // Device commands
+      HanzoBotDeviceCommand.Status.rawValue -> deviceHandler.handleDeviceStatus(paramsJson)
+      HanzoBotDeviceCommand.Info.rawValue -> deviceHandler.handleDeviceInfo(paramsJson)
+      HanzoBotDeviceCommand.Permissions.rawValue -> deviceHandler.handleDevicePermissions(paramsJson)
+      HanzoBotDeviceCommand.Health.rawValue -> deviceHandler.handleDeviceHealth(paramsJson)
+
+      // Notifications commands
+      HanzoBotNotificationsCommand.List.rawValue -> notificationsHandler.handleNotificationsList(paramsJson)
+      HanzoBotNotificationsCommand.Actions.rawValue -> notificationsHandler.handleNotificationsActions(paramsJson)
 
       // Debug commands
       "debug.ed25519" -> debugHandler.handleEd25519()

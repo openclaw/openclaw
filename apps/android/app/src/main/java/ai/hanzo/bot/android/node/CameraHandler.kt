@@ -23,6 +23,17 @@ class CameraHandler(
   private val invokeErrorFromThrowable: (err: Throwable) -> Pair<String, String>,
 ) {
 
+  fun handleList(): GatewaySession.InvokeResult {
+    // Android CameraX exposes back and front selectors; report both as available.
+    val hasFront = appContext.packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_CAMERA_FRONT)
+    val hasBack = appContext.packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_CAMERA_ANY)
+    val cameras = buildList {
+      if (hasBack) add("""{"id":"back","position":"back"}""")
+      if (hasFront) add("""{"id":"front","position":"front"}""")
+    }
+    return GatewaySession.InvokeResult.ok("""{"cameras":[${cameras.joinToString(",")}]}""")
+  }
+
   suspend fun handleSnap(paramsJson: String?): GatewaySession.InvokeResult {
     val logFile = if (BuildConfig.DEBUG) java.io.File(appContext.cacheDir, "camera_debug.log") else null
     fun camLog(msg: String) {

@@ -94,6 +94,9 @@ class SecurePrefs(context: Context) {
   private val _talkEnabled = MutableStateFlow(prefs.getBoolean("talk.enabled", false))
   val talkEnabled: StateFlow<Boolean> = _talkEnabled
 
+  private val _onboardingCompleted = MutableStateFlow(prefs.getBoolean("onboarding.completed", false))
+  val onboardingCompleted: StateFlow<Boolean> = _onboardingCompleted
+
   fun setLastDiscoveredStableId(value: String) {
     val trimmed = value.trim()
     prefs.edit { putString("gateway.lastDiscoveredStableID", trimmed) }
@@ -181,6 +184,10 @@ class SecurePrefs(context: Context) {
     prefs.edit { putString(key, password.trim()) }
   }
 
+  fun setGatewayPassword(password: String) {
+    saveGatewayPassword(password)
+  }
+
   fun loadGatewayTlsFingerprint(stableId: String): String? {
     val key = "gateway.tls.$stableId"
     return prefs.getString(key, null)?.trim()?.takeIf { it.isNotEmpty() }
@@ -248,6 +255,11 @@ class SecurePrefs(context: Context) {
   fun setTalkEnabled(value: Boolean) {
     prefs.edit { putBoolean("talk.enabled", value) }
     _talkEnabled.value = value
+  }
+
+  fun setOnboardingCompleted(value: Boolean) {
+    prefs.edit { putBoolean("onboarding.completed", value) }
+    _onboardingCompleted.value = value
   }
 
   private fun loadVoiceWakeMode(): VoiceWakeMode {

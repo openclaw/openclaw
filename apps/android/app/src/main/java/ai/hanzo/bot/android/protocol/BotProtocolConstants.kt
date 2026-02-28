@@ -7,6 +7,7 @@ enum class HanzoBotCapability(val rawValue: String) {
   Sms("sms"),
   VoiceWake("voiceWake"),
   Location("location"),
+  Device("device"),
 }
 
 enum class HanzoBotCanvasCommand(val rawValue: String) {
@@ -34,6 +35,7 @@ enum class HanzoBotCanvasA2UICommand(val rawValue: String) {
 }
 
 enum class HanzoBotCameraCommand(val rawValue: String) {
+  List("camera.list"),
   Snap("camera.snap"),
   Clip("camera.clip"),
   ;
@@ -69,3 +71,36 @@ enum class HanzoBotLocationCommand(val rawValue: String) {
     const val NamespacePrefix: String = "location."
   }
 }
+
+enum class HanzoBotDeviceCommand(val rawValue: String) {
+  Status("device.status"),
+  Info("device.info"),
+  Permissions("device.permissions"),
+  Health("device.health"),
+  ;
+
+  companion object {
+    const val NamespacePrefix: String = "device."
+  }
+}
+
+enum class HanzoBotNotificationsCommand(val rawValue: String) {
+  List("notifications.list"),
+  Actions("notifications.actions"),
+  ;
+
+  companion object {
+    const val NamespacePrefix: String = "notifications."
+  }
+}
+
+// Short aliases for concise usage across the codebase
+typealias BotCapability = HanzoBotCapability
+typealias BotCanvasCommand = HanzoBotCanvasCommand
+typealias BotCanvasA2UICommand = HanzoBotCanvasA2UICommand
+typealias BotCameraCommand = HanzoBotCameraCommand
+typealias BotScreenCommand = HanzoBotScreenCommand
+typealias BotSmsCommand = HanzoBotSmsCommand
+typealias BotLocationCommand = HanzoBotLocationCommand
+typealias BotDeviceCommand = HanzoBotDeviceCommand
+typealias BotNotificationsCommand = HanzoBotNotificationsCommand
