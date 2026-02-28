@@ -289,6 +289,10 @@ export function startSimplexBus(options: SimplexBusOptions): SimplexBusHandle {
 
             const content = chatItem?.content;
 
+            const senderProfile = chatItem?.memberProfile ?? chatItem?.senderProfile;
+            const senderName =
+              senderProfile?.displayName ?? senderProfile?.localDisplayName ?? "unknown";
+
             // Check for voice messages
             const isVoiceMessage =
               content?.type === "voice" || content?.msgContent?.type === "voice";
@@ -385,10 +389,6 @@ export function startSimplexBus(options: SimplexBusOptions): SimplexBusHandle {
 
             const text = content?.text ?? content?.msgContent?.text ?? "";
             if (!text) continue;
-
-            const senderProfile = chatItem?.memberProfile ?? chatItem?.senderProfile;
-            const senderName =
-              senderProfile?.displayName ?? senderProfile?.localDisplayName ?? "unknown";
 
             const msg: SimplexMessage = {
               contactId: String(dir?.memberId ?? senderProfile?.memberId ?? "unknown"),

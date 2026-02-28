@@ -96,7 +96,7 @@ export const simplexPlugin: ChannelPlugin<ResolvedSimplexAccount> = {
   outbound: {
     deliveryMode: "direct",
     textChunkLimit: 4096,
-    sendText: async ({ to, text, chatType, accountId }) => {
+    sendText: async ({ to, text, accountId }) => {
       const runtime = getSimplexRuntime();
       const aid = accountId ?? DEFAULT_ACCOUNT_ID;
       const bus = activeBuses.get(aid);
@@ -106,6 +106,7 @@ export const simplexPlugin: ChannelPlugin<ResolvedSimplexAccount> = {
       if (!bus.isConnected()) {
         throw new Error("SimpleX WebSocket not connected");
       }
+      const chatType = to.startsWith("#") ? "group" : "direct";
       const tableMode = runtime.channel.text.resolveMarkdownTableMode({
         cfg: runtime.config.loadConfig(),
         channel: "simplex",
@@ -114,7 +115,7 @@ export const simplexPlugin: ChannelPlugin<ResolvedSimplexAccount> = {
       const message = runtime.channel.text.convertMarkdownTables(text ?? "", tableMode);
 
       // Send to group if chatType is "group", otherwise send DM
-      if (chatType === "group") {
+      if (to.startsWith("#")) {
         await bus.sendGroupMessage(to, message);
       } else {
         await bus.sendMessage(to, message);
@@ -123,11 +124,11 @@ export const simplexPlugin: ChannelPlugin<ResolvedSimplexAccount> = {
       return {
         channel: "simplex" as const,
         to,
-        chatType,
         messageId: `simplex-${Date.now()}`,
       };
     },
-    sendMedia: async ({ to, media, chatType, accountId, mediaType }) => {
+    sendMedia: async ({ to, text, mediaUrl, accountId }) => {
+      const chatType = to.startsWith("#") ? "group" : "direct";
       const runtime = getSimplexRuntime();
       const aid = accountId ?? DEFAULT_ACCOUNT_ID;
       const bus = activeBuses.get(aid);
@@ -181,14 +182,15 @@ export const simplexPlugin: ChannelPlugin<ResolvedSimplexAccount> = {
       try {
         // Determine if this is a voice message
         const isVoice =
-          mediaType === "voice" ||
+          mediaUrl?.endsWith(".ogg") ||
+          mediaUrl?.endsWith(".m4a") ||
           filePath.endsWith(".m4a") ||
           filePath.endsWith(".mp3") ||
           filePath.endsWith(".ogg") ||
           filePath.endsWith(".wav");
 
         // Send based on chatType and mediaType
-        if (chatType === "group") {
+        if (to.startsWith("#")) {
           if (isVoice) {
             // For group voice, use sendGroupFile (SimpleX doesn't have separate voice command)
             await bus.sendGroupFile(to, filePath);
@@ -206,7 +208,6 @@ export const simplexPlugin: ChannelPlugin<ResolvedSimplexAccount> = {
         return {
           channel: "simplex" as const,
           to,
-          chatType,
           messageId: `simplex-media-${Date.now()}`,
         };
       } finally {
