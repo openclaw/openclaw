@@ -56,6 +56,8 @@ export function listKnownProfileNames(state: BrowserServerState): string[] {
   return [...names];
 }
 
+const MAX_MANAGED_BROWSER_PAGE_TABS = 8;
+
 /**
  * Normalize a CDP WebSocket URL to use the correct base URL.
  */
@@ -136,6 +138,25 @@ function createProfileContext(
       .filter((t) => Boolean(t.targetId));
   };
 
+  const enforceManagedTabLimit = async (keepTargetId: string): Promise<void> => {
+    if (profile.driver !== "openclaw") {
+      return;
+    }
+
+    const pageTabs = (await listTabs()).filter((tab) => (tab.type ?? "page") === "page");
+    if (pageTabs.length <= MAX_MANAGED_BROWSER_PAGE_TABS) {
+      return;
+    }
+
+    const candidates = pageTabs.filter((tab) => tab.targetId !== keepTargetId);
+    const excessCount = pageTabs.length - MAX_MANAGED_BROWSER_PAGE_TABS;
+    for (const tab of candidates.slice(0, excessCount)) {
+      await fetchOk(appendCdpPath(profile.cdpUrl, `/json/close/${tab.targetId}`)).catch(() => {
+        // best-effort cleanup only
+      });
+    }
+  };
+
   const openTab = async (url: string): Promise<BrowserTab> => {
     const ssrfPolicyOpts = withBrowserNavigationPolicy(state().resolved.ssrfPolicy);
 
@@ -152,6 +173,7 @@ function createProfileContext(
         });
         const profileState = getProfileState();
         profileState.lastTargetId = page.targetId;
+        await enforceManagedTabLimit(page.targetId);
         return {
           targetId: page.targetId,
           title: page.title,
@@ -178,10 +200,12 @@ function createProfileContext(
         const found = tabs.find((t) => t.targetId === createdViaCdp);
         if (found) {
           await assertBrowserNavigationResultAllowed({ url: found.url, ...ssrfPolicyOpts });
+          await enforceManagedTabLimit(found.targetId);
           return found;
         }
         await new Promise((r) => setTimeout(r, 100));
       }
+      await enforceManagedTabLimit(createdViaCdp);
       return { targetId: createdViaCdp, title: "", url, type: "page" };
     }
 
@@ -218,6 +242,7 @@ function createProfileContext(
     profileState.lastTargetId = created.id;
     const resolvedUrl = created.url ?? url;
     await assertBrowserNavigationResultAllowed({ url: resolvedUrl, ...ssrfPolicyOpts });
+    await enforceManagedTabLimit(created.id);
     return {
       targetId: created.id,
       title: created.title ?? "",

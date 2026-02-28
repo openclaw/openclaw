@@ -354,6 +354,99 @@ describe("browser server-context tab selection state", () => {
     });
   });
 
+  it("closes excess managed tabs after opening a new tab", async () => {
+    vi.spyOn(cdpModule, "createTargetViaCdp").mockResolvedValue({ targetId: "NEW" });
+
+    const existingTabs = [
+      {
+        id: "OLD1",
+        title: "1",
+        url: "http://127.0.0.1:3001",
+        webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/OLD1",
+        type: "page",
+      },
+      {
+        id: "OLD2",
+        title: "2",
+        url: "http://127.0.0.1:3002",
+        webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/OLD2",
+        type: "page",
+      },
+      {
+        id: "OLD3",
+        title: "3",
+        url: "http://127.0.0.1:3003",
+        webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/OLD3",
+        type: "page",
+      },
+      {
+        id: "OLD4",
+        title: "4",
+        url: "http://127.0.0.1:3004",
+        webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/OLD4",
+        type: "page",
+      },
+      {
+        id: "OLD5",
+        title: "5",
+        url: "http://127.0.0.1:3005",
+        webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/OLD5",
+        type: "page",
+      },
+      {
+        id: "OLD6",
+        title: "6",
+        url: "http://127.0.0.1:3006",
+        webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/OLD6",
+        type: "page",
+      },
+      {
+        id: "OLD7",
+        title: "7",
+        url: "http://127.0.0.1:3007",
+        webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/OLD7",
+        type: "page",
+      },
+      {
+        id: "OLD8",
+        title: "8",
+        url: "http://127.0.0.1:3008",
+        webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/OLD8",
+        type: "page",
+      },
+      {
+        id: "NEW",
+        title: "9",
+        url: "http://127.0.0.1:3009",
+        webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/NEW",
+        type: "page",
+      },
+    ];
+
+    const fetchMock = vi.fn(async (url: unknown) => {
+      const value = String(url);
+      if (value.includes("/json/list")) {
+        return { ok: true, json: async () => existingTabs } as unknown as Response;
+      }
+      if (value.includes("/json/close/OLD1")) {
+        return { ok: true, json: async () => ({}) } as unknown as Response;
+      }
+      throw new Error(`unexpected fetch: ${value}`);
+    });
+
+    global.fetch = withFetchPreconnect(fetchMock);
+    const state = makeState("openclaw");
+    const ctx = createBrowserRouteContext({ getState: () => state });
+    const openclaw = ctx.forProfile("openclaw");
+
+    const opened = await openclaw.openTab("http://127.0.0.1:3009");
+    expect(opened.targetId).toBe("NEW");
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining("/json/close/OLD1"),
+      expect.any(Object),
+    );
+  });
+
   it("blocks unsupported non-network URLs before any HTTP tab-open fallback", async () => {
     const fetchMock = vi.fn(async () => {
       throw new Error("unexpected fetch");
