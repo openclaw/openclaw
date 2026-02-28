@@ -1,14 +1,19 @@
 package ai.openclaw.android.node
 
 import ai.openclaw.android.gateway.GatewaySession
+import ai.openclaw.android.protocol.OpenClawCalendarCommand
 import ai.openclaw.android.protocol.OpenClawCanvasA2UICommand
 import ai.openclaw.android.protocol.OpenClawCanvasCommand
 import ai.openclaw.android.protocol.OpenClawCameraCommand
+import ai.openclaw.android.protocol.OpenClawContactsCommand
 import ai.openclaw.android.protocol.OpenClawDeviceCommand
 import ai.openclaw.android.protocol.OpenClawLocationCommand
+import ai.openclaw.android.protocol.OpenClawMotionCommand
 import ai.openclaw.android.protocol.OpenClawNotificationsCommand
+import ai.openclaw.android.protocol.OpenClawPhotosCommand
 import ai.openclaw.android.protocol.OpenClawScreenCommand
 import ai.openclaw.android.protocol.OpenClawSmsCommand
+import ai.openclaw.android.protocol.OpenClawSystemCommand
 
 class InvokeDispatcher(
   private val canvas: CanvasController,
@@ -16,6 +21,11 @@ class InvokeDispatcher(
   private val locationHandler: LocationHandler,
   private val deviceHandler: DeviceHandler,
   private val notificationsHandler: NotificationsHandler,
+  private val systemHandler: SystemHandler,
+  private val photosHandler: PhotosHandler,
+  private val contactsHandler: ContactsHandler,
+  private val calendarHandler: CalendarHandler,
+  private val motionHandler: MotionHandler,
   private val screenHandler: ScreenHandler,
   private val smsHandler: SmsHandler,
   private val a2uiHandler: A2UIHandler,
@@ -29,6 +39,8 @@ class InvokeDispatcher(
   private val refreshNodeCanvasCapability: suspend () -> Boolean,
   private val onCanvasA2uiPush: () -> Unit,
   private val onCanvasA2uiReset: () -> Unit,
+  private val motionActivityAvailable: () -> Boolean,
+  private val motionPedometerAvailable: () -> Boolean,
 ) {
   suspend fun handleInvoke(command: String, paramsJson: String?): GatewaySession.InvokeResult {
     val spec =
@@ -130,6 +142,24 @@ class InvokeDispatcher(
       OpenClawNotificationsCommand.List.rawValue -> notificationsHandler.handleNotificationsList(paramsJson)
       OpenClawNotificationsCommand.Actions.rawValue -> notificationsHandler.handleNotificationsActions(paramsJson)
 
+      // System command
+      OpenClawSystemCommand.Notify.rawValue -> systemHandler.handleSystemNotify(paramsJson)
+
+      // Photos command
+      OpenClawPhotosCommand.Latest.rawValue -> photosHandler.handlePhotosLatest(paramsJson)
+
+      // Contacts command
+      OpenClawContactsCommand.Search.rawValue -> contactsHandler.handleContactsSearch(paramsJson)
+      OpenClawContactsCommand.Add.rawValue -> contactsHandler.handleContactsAdd(paramsJson)
+
+      // Calendar command
+      OpenClawCalendarCommand.Events.rawValue -> calendarHandler.handleCalendarEvents(paramsJson)
+      OpenClawCalendarCommand.Add.rawValue -> calendarHandler.handleCalendarAdd(paramsJson)
+
+      // Motion command
+      OpenClawMotionCommand.Activity.rawValue -> motionHandler.handleMotionActivity(paramsJson)
+      OpenClawMotionCommand.Pedometer.rawValue -> motionHandler.handleMotionPedometer(paramsJson)
+
       // Screen command
       OpenClawScreenCommand.Record.rawValue -> screenHandler.handleScreenRecord(paramsJson)
 
@@ -210,6 +240,24 @@ class InvokeDispatcher(
           GatewaySession.InvokeResult.error(
             code = "LOCATION_DISABLED",
             message = "LOCATION_DISABLED: enable Location in Settings",
+          )
+        }
+      InvokeCommandAvailability.MotionActivityAvailable ->
+        if (motionActivityAvailable()) {
+          null
+        } else {
+          GatewaySession.InvokeResult.error(
+            code = "MOTION_UNAVAILABLE",
+            message = "MOTION_UNAVAILABLE: accelerometer not available",
+          )
+        }
+      InvokeCommandAvailability.MotionPedometerAvailable ->
+        if (motionPedometerAvailable()) {
+          null
+        } else {
+          GatewaySession.InvokeResult.error(
+            code = "PEDOMETER_UNAVAILABLE",
+            message = "PEDOMETER_UNAVAILABLE: step counter not available",
           )
         }
       InvokeCommandAvailability.SmsAvailable ->

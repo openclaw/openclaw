@@ -23,6 +23,7 @@ import {
 import { formatForLog } from "./ws-log.js";
 
 const MAX_EXEC_EVENT_OUTPUT_CHARS = 180;
+const MAX_NOTIFICATION_EVENT_TEXT_CHARS = 120;
 const VOICE_TRANSCRIPT_DEDUPE_WINDOW_MS = 1500;
 const MAX_RECENT_VOICE_TRANSCRIPTS = 200;
 
@@ -119,6 +120,18 @@ function compactExecEventOutput(raw: string) {
     return normalized;
   }
   const safe = Math.max(1, MAX_EXEC_EVENT_OUTPUT_CHARS - 1);
+  return `${normalized.slice(0, safe)}…`;
+}
+
+function compactNotificationEventText(raw: string) {
+  const normalized = raw.replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return "";
+  }
+  if (normalized.length <= MAX_NOTIFICATION_EVENT_TEXT_CHARS) {
+    return normalized;
+  }
+  const safe = Math.max(1, MAX_NOTIFICATION_EVENT_TEXT_CHARS - 1);
   return `${normalized.slice(0, safe)}…`;
 }
 
@@ -439,6 +452,46 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       ).catch((err) => {
         ctx.logGateway.warn(`agent failed node=${nodeId}: ${formatForLog(err)}`);
       });
+      return;
+    }
+    case "notifications.changed": {
+      const obj = parsePayloadObject(evt.payloadJSON);
+      if (!obj) {
+        return;
+      }
+      const change = normalizeNonEmptyString(obj.change)?.toLowerCase();
+      if (change !== "posted" && change !== "removed") {
+        return;
+      }
+      const key = normalizeNonEmptyString(obj.key);
+      if (!key) {
+        return;
+      }
+      const sessionKeyRaw = normalizeNonEmptyString(obj.sessionKey) ?? `node-${nodeId}`;
+      const { canonicalKey: sessionKey } = loadSessionEntry(sessionKeyRaw);
+      const packageName = normalizeNonEmptyString(obj.packageName);
+      const title = compactNotificationEventText(normalizeNonEmptyString(obj.title) ?? "");
+      const text = compactNotificationEventText(normalizeNonEmptyString(obj.text) ?? "");
+
+      let summary = `Notification ${change} (node=${nodeId} key=${key}`;
+      if (packageName) {
+        summary += ` package=${packageName}`;
+      }
+      summary += ")";
+      if (change === "posted") {
+        const messageParts = [title, text].filter(Boolean);
+        if (messageParts.length > 0) {
+          summary += `: ${messageParts.join(" - ")}`;
+        }
+      }
+
+      const queued = enqueueSystemEvent(summary, {
+        sessionKey,
+        contextKey: `notification:${key}`,
+      });
+      if (queued) {
+        requestHeartbeatNow({ reason: "notifications-event", sessionKey });
+      }
       return;
     }
     case "chat.subscribe": {
