@@ -16,7 +16,13 @@ import {
 import type { MsgContext, TemplateContext } from "../templating.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../thinking.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
-import { getAbortMemory } from "./abort.js";
+import {
+  clearAbortCutoffInSession,
+  readAbortCutoffFromSessionEntry,
+  resolveAbortCutoffFromContext,
+  shouldSkipMessageByAbortCutoff,
+} from "./abort-cutoff.js";
+import { getAbortMemory, isAbortRequestText } from "./abort.js";
 import { buildStatusReply, handleCommands } from "./commands.js";
 import type { InlineDirectives } from "./directive-handling.js";
 import { isDirectiveOnly } from "./directive-handling.js";
@@ -251,6 +257,32 @@ export async function handleInlineActions(params: {
     }
     await opts.onBlockReply(reply);
   };
+
+  const isStopLikeInbound = isAbortRequestText(command.rawBodyNormalized);
+  if (!isStopLikeInbound && sessionEntry) {
+    const cutoff = readAbortCutoffFromSessionEntry(sessionEntry);
+    const incoming = resolveAbortCutoffFromContext(ctx);
+    const shouldSkip = cutoff
+      ? shouldSkipMessageByAbortCutoff({
+          cutoffMessageSid: cutoff.messageSid,
+          cutoffTimestamp: cutoff.timestamp,
+          messageSid: incoming?.messageSid,
+          timestamp: incoming?.timestamp,
+        })
+      : false;
+    if (shouldSkip) {
+      typing.cleanup();
+      return { kind: "reply", reply: undefined };
+    }
+    if (cutoff) {
+      await clearAbortCutoffInSession({
+        sessionEntry,
+        sessionStore,
+        sessionKey,
+        storePath,
+      });
+    }
+  }
 
   const inlineCommand =
     allowTextCommands && command.isAuthorizedSender

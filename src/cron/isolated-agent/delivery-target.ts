@@ -13,7 +13,7 @@ import {
 } from "../../infra/outbound/targets.js";
 import { readChannelAllowFromStoreSync } from "../../pairing/pairing-store.js";
 import { buildChannelAccountBindings } from "../../routing/bindings.js";
-import { normalizeAgentId } from "../../routing/session-key.js";
+import { normalizeAccountId, normalizeAgentId } from "../../routing/session-key.js";
 import { resolveWhatsAppAccount } from "../../web/accounts.js";
 import { normalizeWhatsAppTarget } from "../../whatsapp/normalize.js";
 
@@ -43,6 +43,7 @@ export async function resolveDeliveryTarget(
     channel?: "last" | ChannelId;
     to?: string;
     sessionKey?: string;
+    accountId?: string;
   },
 ): Promise<DeliveryTargetResolution> {
   const requestedChannel = typeof jobPayload.channel === "string" ? jobPayload.channel : "last";
@@ -114,6 +115,11 @@ export async function resolveDeliveryTarget(
     }
   }
 
+  // Explicit delivery account should override inferred session/binding account.
+  if (jobPayload.accountId) {
+    accountId = jobPayload.accountId;
+  }
+
   // Carry threadId when it was explicitly set (from :topic: parsing or config)
   // or when delivering to the same recipient as the session's last conversation.
   // Session-derived threadIds are dropped when the target differs to prevent
@@ -154,13 +160,15 @@ export async function resolveDeliveryTarget(
 
   let allowFromOverride: string[] | undefined;
   if (channel === "whatsapp") {
-    const configuredAllowFromRaw = resolveWhatsAppAccount({ cfg, accountId }).allowFrom ?? [];
+    const resolvedAccountId = normalizeAccountId(accountId);
+    const configuredAllowFromRaw =
+      resolveWhatsAppAccount({ cfg, accountId: resolvedAccountId }).allowFrom ?? [];
     const configuredAllowFrom = configuredAllowFromRaw
       .map((entry) => String(entry).trim())
       .filter((entry) => entry && entry !== "*")
       .map((entry) => normalizeWhatsAppTarget(entry))
       .filter((entry): entry is string => Boolean(entry));
-    const storeAllowFrom = readChannelAllowFromStoreSync("whatsapp", process.env, accountId)
+    const storeAllowFrom = readChannelAllowFromStoreSync("whatsapp", process.env, resolvedAccountId)
       .map((entry) => normalizeWhatsAppTarget(entry))
       .filter((entry): entry is string => Boolean(entry));
     allowFromOverride = [...new Set([...configuredAllowFrom, ...storeAllowFrom])];

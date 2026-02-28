@@ -183,6 +183,25 @@ describe("createSynologyChatPlugin", () => {
       expect(warnings.some((w: string) => w.includes("open"))).toBe(true);
     });
 
+    it("warns when dmPolicy is allowlist and allowedUserIds is empty", () => {
+      const plugin = createSynologyChatPlugin();
+      const account = {
+        accountId: "default",
+        enabled: true,
+        token: "t",
+        incomingUrl: "https://nas/incoming",
+        nasHost: "h",
+        webhookPath: "/w",
+        dmPolicy: "allowlist" as const,
+        allowedUserIds: [],
+        rateLimitPerMinute: 30,
+        botName: "Bot",
+        allowInsecureSsl: false,
+      };
+      const warnings = plugin.security.collectWarnings({ account });
+      expect(warnings.some((w: string) => w.includes("empty allowedUserIds"))).toBe(true);
+    });
+
     it("returns no warnings for fully configured account", () => {
       const plugin = createSynologyChatPlugin();
       const account = {
@@ -338,6 +357,33 @@ describe("createSynologyChatPlugin", () => {
       expect(typeof result.stop).toBe("function");
     });
 
+    it("startAccount refuses allowlist accounts with empty allowedUserIds", async () => {
+      const registerMock = vi.mocked(registerPluginHttpRoute);
+      registerMock.mockClear();
+
+      const plugin = createSynologyChatPlugin();
+      const ctx = {
+        cfg: {
+          channels: {
+            "synology-chat": {
+              enabled: true,
+              token: "t",
+              incomingUrl: "https://nas/incoming",
+              dmPolicy: "allowlist",
+              allowedUserIds: [],
+            },
+          },
+        },
+        accountId: "default",
+        log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      };
+
+      const result = await plugin.gateway.startAccount(ctx);
+      expect(typeof result.stop).toBe("function");
+      expect(ctx.log.warn).toHaveBeenCalledWith(expect.stringContaining("empty allowedUserIds"));
+      expect(registerMock).not.toHaveBeenCalled();
+    });
+
     it("deregisters stale route before re-registering same account/path", async () => {
       const unregisterFirst = vi.fn();
       const unregisterSecond = vi.fn();
@@ -353,6 +399,8 @@ describe("createSynologyChatPlugin", () => {
               token: "t",
               incomingUrl: "https://nas/incoming",
               webhookPath: "/webhook/synology",
+              dmPolicy: "allowlist",
+              allowedUserIds: ["123"],
             },
           },
         },

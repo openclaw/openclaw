@@ -6,6 +6,7 @@ import { normalizeApiKeyInput, validateApiKeyInput } from "./auth-choice.api-key
 import {
   createAuthChoiceAgentModelNoter,
   ensureApiKeyFromOptionEnvOrPrompt,
+  normalizeSecretInputModeInput,
 } from "./auth-choice.apply-helpers.js";
 import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
 import { applyDefaultModelChoice } from "./auth-choice.default-model.js";
@@ -27,10 +28,13 @@ export async function applyAuthChoiceHuggingface(
   let nextConfig = params.config;
   let agentModelOverride: string | undefined;
   const noteAgentModel = createAuthChoiceAgentModelNoter(params);
+  const requestedSecretInputMode = normalizeSecretInputModeInput(params.opts?.secretInputMode);
 
   const hfKey = await ensureApiKeyFromOptionEnvOrPrompt({
     token: params.opts?.token,
     tokenProvider: params.opts?.tokenProvider,
+    secretInputMode: requestedSecretInputMode,
+    config: nextConfig,
     expectedProviders: ["huggingface"],
     provider: "huggingface",
     envLabel: "Hugging Face token",
@@ -38,7 +42,8 @@ export async function applyAuthChoiceHuggingface(
     normalize: normalizeApiKeyInput,
     validate: validateApiKeyInput,
     prompter: params.prompter,
-    setCredential: async (apiKey) => setHuggingfaceApiKey(apiKey, params.agentDir),
+    setCredential: async (apiKey, mode) =>
+      setHuggingfaceApiKey(apiKey, params.agentDir, { secretInputMode: mode }),
     noteMessage: [
       "Hugging Face Inference Providers offer OpenAI-compatible chat completions.",
       "Create a token at: https://huggingface.co/settings/tokens (fine-grained, 'Make calls to Inference Providers').",

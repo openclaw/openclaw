@@ -143,7 +143,7 @@ describe("noteMemorySearchHealth", () => {
     expect(message).toContain("reports memory embeddings are ready");
   });
 
-  it("uses configure hint when gateway probe is unavailable and API key is missing", async () => {
+  it("uses model configure hint when gateway probe is unavailable and API key is missing", async () => {
     resolveMemorySearchConfig.mockReturnValue({
       provider: "gemini",
       local: {},
@@ -160,8 +160,23 @@ describe("noteMemorySearchHealth", () => {
 
     const message = note.mock.calls[0]?.[0] as string;
     expect(message).toContain("Gateway memory probe for default agent is not ready");
-    expect(message).toContain("openclaw configure");
-    expect(message).not.toContain("auth add");
+    expect(message).toContain("openclaw configure --section model");
+    expect(message).not.toContain("openclaw auth add --provider");
+  });
+
+  it("uses model configure hint in auto mode when no provider credentials are found", async () => {
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "auto",
+      local: {},
+      remote: {},
+    });
+
+    await noteMemorySearchHealth(cfg);
+
+    expect(note).toHaveBeenCalledTimes(1);
+    const message = String(note.mock.calls[0]?.[0] ?? "");
+    expect(message).toContain("openclaw configure --section model");
+    expect(message).not.toContain("openclaw auth add --provider");
   });
 });
 
