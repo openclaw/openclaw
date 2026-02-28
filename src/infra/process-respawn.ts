@@ -53,6 +53,12 @@ export function restartGatewayProcessWithFreshPid(): GatewayRespawnResult {
       env: process.env,
       detached: true,
       stdio: "inherit",
+      // On Windows, `stdio: "inherit"` causes Node to allocate a conhost.exe
+      // (Console Host) for each spawned child. These are never reaped when the
+      // child calls unref(), so they accumulate over time — one per cron run.
+      // `windowsHide: true` suppresses the console window allocation entirely,
+      // preventing the leak. No-op on macOS/Linux.
+      windowsHide: true,
     });
     child.unref();
     return { mode: "spawned", pid: child.pid ?? undefined };
