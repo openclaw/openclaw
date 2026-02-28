@@ -9,6 +9,7 @@ import {
   resolveOpenClawManifestInstall,
   resolveOpenClawManifestOs,
   resolveOpenClawManifestRequires,
+  resolveOpenClawManifestPermissions,
 } from "../../shared/frontmatter.js";
 import type {
   OpenClawSkillMetadata,
@@ -88,6 +89,7 @@ export function resolveOpenClawMetadata(
   const requires = resolveOpenClawManifestRequires(metadataObj);
   const install = resolveOpenClawManifestInstall(metadataObj, parseInstallSpec);
   const osRaw = resolveOpenClawManifestOs(metadataObj);
+  const permissions = resolveOpenClawManifestPermissions(metadataObj);
   return {
     always: typeof metadataObj.always === "boolean" ? metadataObj.always : undefined,
     emoji: typeof metadataObj.emoji === "string" ? metadataObj.emoji : undefined,
@@ -97,6 +99,7 @@ export function resolveOpenClawMetadata(
     os: osRaw.length > 0 ? osRaw : undefined,
     requires: requires,
     install: install.length > 0 ? install : undefined,
+    permissions: permissions,
   };
 }
 
