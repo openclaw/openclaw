@@ -47,6 +47,11 @@ function isReasoningConstraintErrorMessage(raw: string): boolean {
   );
 }
 
+function hasRateLimitTpmHint(raw: string): boolean {
+  const lower = raw.toLowerCase();
+  return /\btpm\b/i.test(lower) || lower.includes("tokens per minute");
+}
+
 export function isContextOverflowError(errorMessage?: string): boolean {
   if (!errorMessage) {
     return false;
@@ -54,7 +59,7 @@ export function isContextOverflowError(errorMessage?: string): boolean {
   const lower = errorMessage.toLowerCase();
 
   // Groq uses 413 for TPM (tokens per minute) limits, which is a rate limit, not context overflow.
-  if (lower.includes("tpm") || lower.includes("tokens per minute")) {
+  if (hasRateLimitTpmHint(errorMessage)) {
     return false;
   }
 
@@ -103,8 +108,7 @@ export function isLikelyContextOverflowError(errorMessage?: string): boolean {
   }
 
   // Groq uses 413 for TPM (tokens per minute) limits, which is a rate limit, not context overflow.
-  const lower = errorMessage.toLowerCase();
-  if (lower.includes("tpm") || lower.includes("tokens per minute")) {
+  if (hasRateLimitTpmHint(errorMessage)) {
     return false;
   }
 
@@ -622,7 +626,7 @@ const ERROR_PATTERNS = {
     "quota exceeded",
     "resource_exhausted",
     "usage limit",
-    "tpm",
+    /\btpm\b/i,
     "tokens per minute",
   ],
   overloaded: [
