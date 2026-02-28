@@ -1,0 +1,29 @@
+{
+  "name": "@openclaw/bcl-hustle",
+  "version": "2026.2.28",
+  "private": true,
+  "description": "BusinessClaw (BCL) - Autonomous AI Business Agent",
+  "keywords": [],
+  "license": "ISC",
+  "author": "",
+  "directories": {
+    "test": "tests"
+  },
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.6.0",
+    "croner": "^8.1.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.11"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
