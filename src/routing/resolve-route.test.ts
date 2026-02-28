@@ -102,6 +102,44 @@ describe("resolveAgentRoute", () => {
     expect(route.matchedBy).toBe("binding.peer");
   });
 
+  test("telegram topic peer binding routes to correct agent (#1615)", () => {
+    const cfg: OpenClawConfig = {
+      bindings: [
+        {
+          agentId: "topic-agent",
+          match: {
+            channel: "telegram",
+            peer: { kind: "group", id: "-100123456789", topic: "42" },
+          },
+        },
+        {
+          agentId: "group-agent",
+          match: {
+            channel: "telegram",
+            peer: { kind: "group", id: "-100123456789" },
+          },
+        },
+      ],
+    };
+    // Message from topic 42 should route to topic-agent
+    const topicRoute = resolveAgentRoute({
+      cfg,
+      channel: "telegram",
+      peer: { kind: "group", id: "-100123456789:topic:42" },
+    });
+    expect(topicRoute.agentId).toBe("topic-agent");
+    expect(topicRoute.matchedBy).toBe("binding.peer");
+
+    // Message from the group root (no topic) should route to group-agent
+    const groupRoute = resolveAgentRoute({
+      cfg,
+      channel: "telegram",
+      peer: { kind: "group", id: "-100123456789" },
+    });
+    expect(groupRoute.agentId).toBe("group-agent");
+    expect(groupRoute.matchedBy).toBe("binding.peer");
+  });
+
   test("discord channel peer binding wins over guild binding", () => {
     const cfg: OpenClawConfig = {
       bindings: [
