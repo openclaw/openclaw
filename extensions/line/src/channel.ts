@@ -580,7 +580,7 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
 
         const hasToken = Boolean(
           account.channelAccessToken?.trim() ||
-          (accountId == DEFAULT_ACCOUNT_ID && process.env.LINE_CHANNEL_ACCESS_TOKEN?.trim()) ||
+          (accountId === DEFAULT_ACCOUNT_ID && process.env.LINE_CHANNEL_ACCESS_TOKEN?.trim()) ||
           (account.tokenSource && account.tokenSource !== "none"),
         );
         if (!hasToken) {
@@ -594,7 +594,7 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
 
         const hasSecret = Boolean(
           account.channelSecret?.trim() ||
-          (accountId == DEFAULT_ACCOUNT_ID && process.env.LINE_CHANNEL_SECRET?.trim()),
+          (accountId === DEFAULT_ACCOUNT_ID && process.env.LINE_CHANNEL_SECRET?.trim()),
         );
         if (!hasSecret) {
           issues.push({
@@ -614,12 +614,12 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
       const configured = Boolean(
         (account.channelAccessToken?.trim() ||
           account.config?.tokenFile?.trim() ||
-          (account.accountId == DEFAULT_ACCOUNT_ID &&
+          (account.accountId === DEFAULT_ACCOUNT_ID &&
             process.env.LINE_CHANNEL_ACCESS_TOKEN?.trim()) ||
           (account.tokenSource && account.tokenSource !== "none")) &&
         (account.channelSecret?.trim() ||
           account.config?.secretFile?.trim() ||
-          (account.accountId == DEFAULT_ACCOUNT_ID && process.env.LINE_CHANNEL_SECRET?.trim())),
+          (account.accountId === DEFAULT_ACCOUNT_ID && process.env.LINE_CHANNEL_SECRET?.trim())),
       );
       return {
         accountId: account.accountId,
