@@ -214,7 +214,7 @@ function resolveAliasError(params: {
 function buildOpenAiHeaders(apiKey: string) {
   const headers: Record<string, string> = {};
   if (apiKey) {
-    headers.Authorization = `Bearer ${apiKey}`;
+    headers["api-key"] = `${apiKey}`;
   }
   return headers;
 }
@@ -315,9 +315,9 @@ async function requestOpenAiVerification(params: {
     endpoint,
     headers: buildOpenAiHeaders(params.apiKey),
     body: {
-      model: params.modelId,
       messages: [{ role: "user", content: "Hi" }],
-      max_tokens: 1,
+      temperature: 1,
+      max_completion_tokens: 1,
       stream: false,
     },
   });
