@@ -33,6 +33,7 @@ export type RelayMetricName =
   | "relay.message.notice"
   | "relay.message.ok"
   | "relay.message.auth"
+  | "relay.reconnect.scheduled"
   | "relay.circuit_breaker.open"
   | "relay.circuit_breaker.close"
   | "relay.circuit_breaker.half_open";
@@ -292,6 +293,12 @@ export function createMetrics(onMetric?: OnMetricCallback): NostrMetrics {
       case "relay.reconnect":
         if (relayUrl) {
           getOrCreateRelay(relayUrl).reconnects += value;
+        }
+        break;
+      case "relay.reconnect.scheduled":
+        // Tracked via relay.reconnect counter; value carries delay_ms for the callback
+        if (relayUrl) {
+          getOrCreateRelay(relayUrl).reconnects += 1;
         }
         break;
       case "relay.error":
