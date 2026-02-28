@@ -45,6 +45,18 @@ const MattermostAccountSchemaBase = z
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
     responsePrefix: z.string().optional(),
     replyToMode: z.enum(["off", "first", "all"]).optional(),
+    replyToModeByChatType: z
+      .object({
+        direct: z.enum(["off", "first", "all"]).optional(),
+        channel: z.enum(["off", "first", "all"]).optional(),
+        group: z.enum(["off", "first", "all"]).optional(),
+      })
+      .optional(),
+    dm: z
+      .object({
+        replyToMode: z.enum(["off", "first", "all"]).optional(),
+      })
+      .optional(),
     actions: z
       .object({
         reactions: z.boolean().optional(),

@@ -249,8 +249,15 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = {
     resolveRequireMention: resolveMattermostGroupRequireMention,
   },
   threading: {
-    resolveReplyToMode: ({ cfg, accountId }) => {
+    resolveReplyToMode: ({ cfg, accountId, chatType }) => {
       const account = resolveMattermostAccount({ cfg, accountId });
+      if (account.config.replyToModeByChatType?.[chatType ?? ""] !== undefined) {
+        return account.config.replyToModeByChatType[chatType ?? ""] ?? "off";
+      }
+      if (chatType === "direct" && account.config.dm?.replyToMode !== undefined) {
+        return account.config.dm.replyToMode ?? "off";
+      }
+      if (chatType === "direct") return "off";
       return account.config.replyToMode ?? "off";
     },
   },
