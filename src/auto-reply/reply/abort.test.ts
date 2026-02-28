@@ -175,6 +175,13 @@ describe("abort detection", () => {
       "hoer auf",
       "stopp",
       "pare",
+      // Turkish (tr)
+      "dur",
+      "iptal",
+      // Korean (ko)
+      "멈춰",
+      // Italian (it)
+      "fermati",
     ];
     for (const candidate of positives) {
       expect(isAbortTrigger(candidate)).toBe(true);
@@ -202,6 +209,10 @@ describe("abort detection", () => {
     expect(isAbortRequestText("stopp")).toBe(true);
     expect(isAbortRequestText("pare")).toBe(true);
     expect(isAbortRequestText(" توقف ")).toBe(true);
+    expect(isAbortRequestText("dur")).toBe(true);
+    expect(isAbortRequestText("iptal")).toBe(true);
+    expect(isAbortRequestText("멈춰")).toBe(true);
+    expect(isAbortRequestText("fermati")).toBe(true);
     expect(isAbortRequestText("/stop@openclaw_bot", { botUsername: "openclaw_bot" })).toBe(true);
     expect(isAbortRequestText("/Stop@openclaw_bot", { botUsername: "openclaw_bot" })).toBe(true);
 
