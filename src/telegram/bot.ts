@@ -83,6 +83,21 @@ export function getTelegramSequentialKey(ctx: {
   if (reaction?.chat?.id) {
     return `telegram:${reaction.chat.id}`;
   }
+  const callbackMsg = ctx.update?.callback_query?.message;
+  if (callbackMsg?.chat?.id) {
+    const callbackChatId = callbackMsg.chat.id;
+    const callbackIsGroup =
+      callbackMsg.chat.type === "group" || callbackMsg.chat.type === "supergroup";
+    const callbackThreadId = callbackIsGroup
+      ? resolveTelegramForumThreadId({
+          isForum: callbackMsg.chat.is_forum,
+          messageThreadId: callbackMsg.message_thread_id,
+        })
+      : callbackMsg.message_thread_id;
+    return callbackThreadId != null
+      ? `telegram:${callbackChatId}:topic:${callbackThreadId}:control`
+      : `telegram:${callbackChatId}:control`;
+  }
   const msg =
     ctx.message ??
     ctx.channelPost ??
@@ -90,8 +105,7 @@ export function getTelegramSequentialKey(ctx: {
     ctx.update?.message ??
     ctx.update?.edited_message ??
     ctx.update?.channel_post ??
-    ctx.update?.edited_channel_post ??
-    ctx.update?.callback_query?.message;
+    ctx.update?.edited_channel_post;
   const chatId = msg?.chat?.id ?? ctx.chat?.id;
   const rawText = msg?.text ?? msg?.caption;
   const botUsername = ctx.me?.username;

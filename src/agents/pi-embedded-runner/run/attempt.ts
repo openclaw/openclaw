@@ -702,6 +702,14 @@ export async function runEmbeddedAttempt(
               agentId: sessionAgentId,
               sessionKey: params.sessionKey,
               loopDetection: clientToolLoopDetection,
+              approvals: {
+                tools: params.config?.approvals?.tools,
+                turnSourceChannel: params.messageChannel ?? params.messageProvider,
+                turnSourceTo: params.currentChannelId ?? params.messageTo,
+                turnSourceAccountId: params.agentAccountId,
+                turnSourceThreadId: params.currentThreadTs ?? params.messageThreadId,
+                cwd: effectiveWorkspace,
+              },
             },
           )
         : [];

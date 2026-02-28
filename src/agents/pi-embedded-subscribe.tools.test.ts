@@ -12,4 +12,18 @@ describe("extractToolErrorMessage", () => {
     expect(extractToolErrorMessage({ details: { status: "failed" } })).toBe("failed");
     expect(extractToolErrorMessage({ details: { status: "timeout" } })).toBe("timeout");
   });
+
+  it("normalizes permission denied errors for file-mutation tools", () => {
+    expect(
+      extractToolErrorMessage(
+        {
+          details: {
+            status: "error",
+            error: "EACCES: permission denied, open '/tmp/LOCKED.md'",
+          },
+        },
+        "edit",
+      ),
+    ).toBe("blocked by filesystem protection policy (permission denied)");
+  });
 });

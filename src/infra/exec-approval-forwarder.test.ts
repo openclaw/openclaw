@@ -42,6 +42,7 @@ function createForwarder(params: {
   deliver?: ReturnType<typeof vi.fn>;
   editTelegramMessage?: ReturnType<typeof vi.fn>;
   resolveSessionTarget?: () => { channel: string; to: string } | null;
+  stateFilePath?: string | null;
 }) {
   const deliver = params.deliver ?? vi.fn().mockResolvedValue([]);
   const editTelegramMessage =
@@ -60,6 +61,7 @@ function createForwarder(params: {
   if (params.resolveSessionTarget !== undefined) {
     deps.resolveSessionTarget = params.resolveSessionTarget;
   }
+  deps.stateFilePath = params.stateFilePath ?? null;
   const forwarder = createExecApprovalForwarder(deps);
   return { deliver, editTelegramMessage, forwarder };
 }
@@ -177,6 +179,7 @@ describe("exec approval forwarder", () => {
       deliver,
       nowMs: () => 1000,
       resolveSessionTarget: () => null,
+      stateFilePath: null,
     });
 
     await forwarder.handleRequested(baseRequest);
@@ -390,6 +393,47 @@ describe("exec approval forwarder", () => {
     expect(deliver).toHaveBeenCalledTimes(1);
   });
 
+  it("finalizes late telegram request deliveries when resolve wins the race", async () => {
+    vi.useFakeTimers();
+    let resolveFirstDelivery: ((value: unknown[]) => void) | null = null;
+    const firstDelivery = new Promise<unknown[]>((resolve) => {
+      resolveFirstDelivery = resolve;
+    });
+    const deliver = vi
+      .fn()
+      .mockImplementationOnce(async () => await firstDelivery)
+      .mockResolvedValueOnce([]);
+    const { editTelegramMessage, forwarder } = createForwarder({ cfg: TARGETS_CFG, deliver });
+
+    await expect(forwarder.handleRequested(baseRequest)).resolves.toBe(true);
+
+    await forwarder.handleResolved({
+      id: baseRequest.id,
+      decision: "allow-once",
+      resolvedBy: "telegram:123",
+      ts: 2000,
+    });
+
+    expect(editTelegramMessage).not.toHaveBeenCalled();
+
+    resolveFirstDelivery?.([
+      {
+        channel: "telegram",
+        messageId: "tg-race-1",
+        chatId: "123",
+      },
+    ]);
+    await vi.advanceTimersByTimeAsync(0);
+    await Promise.resolve();
+
+    expect(editTelegramMessage).toHaveBeenCalledWith(
+      "123",
+      "tg-race-1",
+      expect.stringContaining("✅ Exec approval allowed once."),
+      expect.objectContaining({ buttons: [] }),
+    );
+  });
+
   it("sends resolved follow-up when telegram request edit fails", async () => {
     vi.useFakeTimers();
     const deliver = vi.fn().mockResolvedValue([
@@ -419,6 +463,117 @@ describe("exec approval forwarder", () => {
     const resolvedPayload = (deliver.mock.calls[1]?.[0] as { payloads?: Array<{ text?: string }> })
       ?.payloads?.[0];
     expect(resolvedPayload?.text).toContain("✅ Exec approval allowed once.");
+  });
+
+  it("recovers stale pending approvals after restart and clears old telegram buttons", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-exec-approval-recover-"));
+    try {
+      const stateFilePath = path.join(tmpDir, "exec-approval-forwarder.json");
+      fs.writeFileSync(
+        stateFilePath,
+        JSON.stringify(
+          {
+            version: 1,
+            updatedAtMs: 1234,
+            pending: [
+              {
+                request: baseRequest,
+                targets: [{ channel: "telegram", to: "123", source: "target" }],
+                telegramMessages: [
+                  {
+                    targetKey: "telegram:123::",
+                    chatId: "123",
+                    messageId: "tg-stale-1",
+                  },
+                ],
+              },
+            ],
+          },
+          null,
+          2,
+        ),
+        "utf-8",
+      );
+
+      const editTelegramMessage = vi.fn().mockResolvedValue({
+        ok: true,
+        messageId: "tg-stale-1",
+        chatId: "123",
+      });
+      const deliver = vi.fn().mockResolvedValue([]);
+      const { forwarder } = createForwarder({
+        cfg: TARGETS_CFG,
+        deliver,
+        editTelegramMessage,
+        stateFilePath,
+      });
+
+      await forwarder.recoverPendingFromState?.();
+
+      expect(editTelegramMessage).toHaveBeenCalledWith(
+        "123",
+        "tg-stale-1",
+        expect.stringContaining("expired after gateway restart"),
+        expect.objectContaining({ buttons: [] }),
+      );
+      expect(deliver).not.toHaveBeenCalled();
+      const persisted = JSON.parse(fs.readFileSync(stateFilePath, "utf-8")) as {
+        pending?: unknown[];
+      };
+      expect(Array.isArray(persisted.pending) ? persisted.pending.length : -1).toBe(0);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("sends restart-expired follow-up when stale telegram message cannot be edited", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-exec-approval-recover-"));
+    try {
+      const stateFilePath = path.join(tmpDir, "exec-approval-forwarder.json");
+      fs.writeFileSync(
+        stateFilePath,
+        JSON.stringify(
+          {
+            version: 1,
+            updatedAtMs: 1234,
+            pending: [
+              {
+                request: baseRequest,
+                targets: [{ channel: "telegram", to: "123", source: "target" }],
+                telegramMessages: [
+                  {
+                    targetKey: "telegram:123::",
+                    chatId: "123",
+                    messageId: "tg-stale-2",
+                  },
+                ],
+              },
+            ],
+          },
+          null,
+          2,
+        ),
+        "utf-8",
+      );
+
+      const editTelegramMessage = vi.fn().mockRejectedValue(new Error("edit failed"));
+      const deliver = vi.fn().mockResolvedValue([]);
+      const { forwarder } = createForwarder({
+        cfg: TARGETS_CFG,
+        deliver,
+        editTelegramMessage,
+        stateFilePath,
+      });
+
+      await forwarder.recoverPendingFromState?.();
+
+      expect(deliver).toHaveBeenCalledTimes(1);
+      const payload = (deliver.mock.calls[0]?.[0] as { payloads?: Array<{ text?: string }> })
+        ?.payloads?.[0];
+      expect(payload?.text).toContain("expired after gateway restart");
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
   });
 
   it("uses a longer fence when command already contains triple backticks", async () => {

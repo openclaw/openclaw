@@ -154,6 +154,27 @@ describe("createTelegramBot", () => {
     ).toBe("telegram:555");
     expect(
       getTelegramSequentialKey({
+        update: {
+          callback_query: {
+            message: mockMessage({ chat: mockChat({ id: 555, type: "private" }) }),
+          },
+        },
+      }),
+    ).toBe("telegram:555:control");
+    expect(
+      getTelegramSequentialKey({
+        update: {
+          callback_query: {
+            message: mockMessage({
+              chat: mockChat({ id: 555, type: "supergroup", is_forum: true }),
+              message_thread_id: 7,
+            }),
+          },
+        },
+      }),
+    ).toBe("telegram:555:topic:7:control");
+    expect(
+      getTelegramSequentialKey({
         channelPost: mockMessage({ chat: mockChat({ id: -100777111222, type: "channel" }) }),
       }),
     ).toBe("telegram:-100777111222");

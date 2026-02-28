@@ -498,6 +498,46 @@ describe("exec approval handlers", () => {
     );
   });
 
+  it("treats duplicate resolve calls for already-resolved approvals as idempotent success", async () => {
+    const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
+
+    const requestPromise = requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: { twoPhase: true },
+    });
+
+    const requested = broadcasts.find((entry) => entry.event === "exec.approval.requested");
+    const id = (requested?.payload as { id?: string })?.id ?? "";
+    expect(id).not.toBe("");
+
+    const firstResolveRespond = vi.fn();
+    await resolveExecApproval({
+      handlers,
+      id,
+      respond: firstResolveRespond,
+      context,
+    });
+    expect(firstResolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+
+    const secondResolveRespond = vi.fn();
+    await resolveExecApproval({
+      handlers,
+      id,
+      respond: secondResolveRespond,
+      context,
+    });
+    expect(secondResolveRespond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ ok: true, alreadyResolved: true }),
+      undefined,
+    );
+
+    await requestPromise;
+    expect(broadcasts.filter((entry) => entry.event === "exec.approval.resolved")).toHaveLength(1);
+  });
+
   it("stores versioned system.run binding and sorted env keys on approval request", async () => {
     const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
     await requestExecApproval({

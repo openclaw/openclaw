@@ -169,6 +169,17 @@ const TARGET_KEYS = [
   "approvals.exec.targets[].to",
   "approvals.exec.targets[].accountId",
   "approvals.exec.targets[].threadId",
+  "approvals.tools",
+  "approvals.tools.enabled",
+  "approvals.tools.mode",
+  "approvals.tools.tools",
+  "approvals.tools.agentFilter",
+  "approvals.tools.sessionFilter",
+  "approvals.tools.security",
+  "approvals.tools.ask",
+  "approvals.tools.timeoutMs",
+  "approvals.tools.failClosed",
+  "approvals.tools.allowAlwaysTtlMs",
   "nodeHost",
   "nodeHost.browserProxy",
   "nodeHost.browserProxy.enabled",
@@ -378,6 +389,9 @@ const ENUM_EXPECTATIONS: Record<string, string[]> = {
   "models.providers.*.auth": ['"api-key"', '"token"', '"oauth"', '"aws-sdk"'],
   "gateway.reload.mode": ['"off"', '"restart"', '"hot"', '"hybrid"'],
   "approvals.exec.mode": ['"session"', '"targets"', '"both"'],
+  "approvals.tools.mode": ['"selected"', '"mutating"'],
+  "approvals.tools.security": ['"deny"', '"allowlist"', '"full"'],
+  "approvals.tools.ask": ['"off"', '"on-miss"', '"always"'],
   "bindings[].match.peer.kind": ['"direct"', '"group"', '"channel"', '"dm"'],
   "broadcast.strategy": ['"parallel"', '"sequential"'],
   "hooks.mappings[].action": ['"wake"', '"agent"'],
@@ -711,6 +725,14 @@ describe("config help copy quality", () => {
     const targetTo = FIELD_HELP["approvals.exec.targets[].to"];
     expect(/channel ID|user ID|thread root/i.test(targetTo)).toBe(true);
     expect(/differs|per provider/i.test(targetTo)).toBe(true);
+
+    const toolMode = FIELD_HELP["approvals.tools.mode"];
+    expect(toolMode.includes('"selected"')).toBe(true);
+    expect(toolMode.includes('"mutating"')).toBe(true);
+
+    const toolList = FIELD_HELP["approvals.tools.tools"];
+    expect(toolList.includes("apply_patch")).toBe(true);
+    expect(toolList.includes("write")).toBe(true);
   });
 
   it("documents broadcast and audio command examples", () => {

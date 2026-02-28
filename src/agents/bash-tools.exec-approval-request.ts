@@ -22,6 +22,7 @@ export type RequestExecApprovalDecisionParams = {
   turnSourceTo?: string;
   turnSourceAccountId?: string;
   turnSourceThreadId?: string | number;
+  timeoutMs?: number;
 };
 
 type ExecApprovalRequestToolParams = {
@@ -48,6 +49,12 @@ type ExecApprovalRequestToolParams = {
 function buildExecApprovalRequestToolParams(
   params: RequestExecApprovalDecisionParams,
 ): ExecApprovalRequestToolParams {
+  const timeoutMs =
+    typeof params.timeoutMs === "number" &&
+    Number.isFinite(params.timeoutMs) &&
+    params.timeoutMs > 0
+      ? Math.floor(params.timeoutMs)
+      : DEFAULT_APPROVAL_TIMEOUT_MS;
   return {
     id: params.id,
     command: params.command,
@@ -65,7 +72,7 @@ function buildExecApprovalRequestToolParams(
     turnSourceTo: params.turnSourceTo,
     turnSourceAccountId: params.turnSourceAccountId,
     turnSourceThreadId: params.turnSourceThreadId,
-    timeoutMs: DEFAULT_APPROVAL_TIMEOUT_MS,
+    timeoutMs,
     twoPhase: true,
   };
 }
@@ -169,6 +176,7 @@ export async function requestExecApprovalDecisionForHost(params: {
   turnSourceTo?: string;
   turnSourceAccountId?: string;
   turnSourceThreadId?: string | number;
+  timeoutMs?: number;
 }): Promise<string | null> {
   return await requestExecApprovalDecision({
     id: params.approvalId,
@@ -187,6 +195,7 @@ export async function requestExecApprovalDecisionForHost(params: {
     turnSourceTo: params.turnSourceTo,
     turnSourceAccountId: params.turnSourceAccountId,
     turnSourceThreadId: params.turnSourceThreadId,
+    timeoutMs: params.timeoutMs,
   });
 }
 
@@ -207,6 +216,7 @@ export async function registerExecApprovalRequestForHost(params: {
   turnSourceTo?: string;
   turnSourceAccountId?: string;
   turnSourceThreadId?: string | number;
+  timeoutMs?: number;
 }): Promise<ExecApprovalRegistration> {
   return await registerExecApprovalRequest({
     id: params.approvalId,
@@ -225,5 +235,6 @@ export async function registerExecApprovalRequestForHost(params: {
     turnSourceTo: params.turnSourceTo,
     turnSourceAccountId: params.turnSourceAccountId,
     turnSourceThreadId: params.turnSourceThreadId,
+    timeoutMs: params.timeoutMs,
   });
 }

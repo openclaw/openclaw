@@ -52,6 +52,29 @@ function isVerboseToolDetailEnabled(level?: VerboseLevel): boolean {
   return level === "on" || level === "full";
 }
 
+function formatToolErrorDetailForWarning(
+  toolName: string,
+  error: string | undefined,
+): string | null {
+  if (!error) {
+    return null;
+  }
+  const normalizedToolName = toolName.trim().toLowerCase();
+  const normalizedError = error.toLowerCase();
+  const fileMutatingTool =
+    normalizedToolName === "edit" ||
+    normalizedToolName === "write" ||
+    normalizedToolName === "apply_patch";
+  const permissionDenied =
+    normalizedError.includes("eacces") ||
+    normalizedError.includes("eperm") ||
+    normalizedError.includes("permission denied");
+  if (fileMutatingTool && permissionDenied) {
+    return "blocked by filesystem protection policy (permission denied)";
+  }
+  return error;
+}
+
 function resolveToolErrorWarningPolicy(params: {
   lastToolError: LastToolError;
   hasUserFacingReply: boolean;
@@ -292,10 +315,14 @@ export function buildEmbeddedRunPayloads(params: {
         params.lastToolError.meta ? [params.lastToolError.meta] : undefined,
         { markdown: useMarkdown },
       );
-      const errorSuffix =
+      const detailText =
         warningPolicy.includeDetails && params.lastToolError.error
-          ? `: ${params.lastToolError.error}`
-          : "";
+          ? formatToolErrorDetailForWarning(
+              params.lastToolError.toolName,
+              params.lastToolError.error,
+            )
+          : null;
+      const errorSuffix = warningPolicy.includeDetails && detailText ? `: ${detailText}` : "";
       const warningText = `⚠️ ${toolSummary} failed${errorSuffix}`;
       const normalizedWarning = normalizeTextForComparison(warningText);
       const duplicateWarning = normalizedWarning

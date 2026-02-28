@@ -90,6 +90,14 @@ function buildApprovalAudit(params: Parameters<CommandHandler>[0]): ExecApproval
   };
 }
 
+function buildResolveFailureMessage(err: unknown): string {
+  const message = String(err);
+  if (/unknown approval id/i.test(message) || /approval expired or not found/i.test(message)) {
+    return "❌ Approval is no longer pending (already resolved, expired, or service restarted).";
+  }
+  return `❌ Failed to submit approval: ${message}`;
+}
+
 export const handleApproveCommand: CommandHandler = async (params, allowTextCommands) => {
   if (!allowTextCommands) {
     return null;
@@ -138,7 +146,7 @@ export const handleApproveCommand: CommandHandler = async (params, allowTextComm
     return {
       shouldContinue: false,
       reply: {
-        text: `❌ Failed to submit approval: ${String(err)}`,
+        text: buildResolveFailureMessage(err),
       },
     };
   }

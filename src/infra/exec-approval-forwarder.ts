@@ -1,6 +1,8 @@
+import path from "node:path";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
+import { resolveStateDir } from "../config/paths.js";
 import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
 import type {
   ExecApprovalForwardingConfig,
@@ -20,11 +22,16 @@ import type {
   ExecApprovalRequest,
   ExecApprovalResolved,
 } from "./exec-approvals.js";
+import { createAsyncLock, readJsonFile, writeJsonAtomic } from "./json-files.js";
 import type { OutboundDeliveryResult } from "./outbound/deliver.js";
 import { deliverOutboundPayloads } from "./outbound/deliver.js";
 import { resolveSessionDeliveryTarget } from "./outbound/targets.js";
 
 const log = createSubsystemLogger("gateway/exec-approvals");
+const FORWARDER_STATE_FILENAME = "exec-approval-forwarder.json";
+const FORWARDER_STATE_VERSION = 1 as const;
+const FINALIZED_STATE_RETENTION_MS = 15 * 60 * 1000;
+const MAX_FINALIZED_STATE_ENTRIES = 1024;
 
 export type { ExecApprovalRequest, ExecApprovalResolved };
 
@@ -44,9 +51,28 @@ type PendingApproval = {
   telegramMessages: PendingTelegramMessageRef[];
 };
 
+type FinalizedApproval = {
+  request: ExecApprovalRequest;
+  statusText: string;
+  finalizedAtMs: number;
+};
+
+type PersistedPendingApproval = {
+  request: ExecApprovalRequest;
+  targets: ForwardTarget[];
+  telegramMessages: PendingTelegramMessageRef[];
+};
+
+type PersistedForwarderState = {
+  version: typeof FORWARDER_STATE_VERSION;
+  updatedAtMs: number;
+  pending: PersistedPendingApproval[];
+};
+
 export type ExecApprovalForwarder = {
   handleRequested: (request: ExecApprovalRequest) => Promise<boolean>;
   handleResolved: (resolved: ExecApprovalResolved) => Promise<void>;
+  recoverPendingFromState?: () => Promise<void>;
   stop: () => void;
 };
 
@@ -59,6 +85,7 @@ export type ExecApprovalForwarderDeps = {
     cfg: OpenClawConfig;
     request: ExecApprovalRequest;
   }) => ExecApprovalForwardTarget | null;
+  stateFilePath?: string | null;
 };
 
 const DEFAULT_MODE = "session" as const;
@@ -131,6 +158,153 @@ function resolveChannelAccountConfig<T>(
     (key) => key.toLowerCase() === normalized.toLowerCase(),
   );
   return fallbackKey ? accounts[fallbackKey] : undefined;
+}
+
+function resolveForwarderStateFilePath(value?: string | null): string | null {
+  if (value === null) {
+    return null;
+  }
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : null;
+  }
+  return path.join(resolveStateDir(), FORWARDER_STATE_FILENAME);
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function sanitizePersistedTarget(value: unknown): ForwardTarget | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const candidate = value as {
+    channel?: unknown;
+    to?: unknown;
+    accountId?: unknown;
+    threadId?: unknown;
+    source?: unknown;
+  };
+  const channel = typeof candidate.channel === "string" ? candidate.channel.trim() : "";
+  const to = typeof candidate.to === "string" ? candidate.to.trim() : "";
+  if (!channel || !to) {
+    return null;
+  }
+  const source = candidate.source === "session" ? "session" : "target";
+  const accountId = typeof candidate.accountId === "string" ? candidate.accountId : undefined;
+  const threadId =
+    typeof candidate.threadId === "string" || typeof candidate.threadId === "number"
+      ? candidate.threadId
+      : undefined;
+  return { channel, to, accountId, threadId, source };
+}
+
+function isForwardTarget(value: ForwardTarget | null): value is ForwardTarget {
+  return value !== null;
+}
+
+function sanitizePersistedTelegramRef(value: unknown): PendingTelegramMessageRef | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const candidate = value as {
+    targetKey?: unknown;
+    accountId?: unknown;
+    chatId?: unknown;
+    messageId?: unknown;
+  };
+  const targetKey = typeof candidate.targetKey === "string" ? candidate.targetKey.trim() : "";
+  const chatId = typeof candidate.chatId === "string" ? candidate.chatId.trim() : "";
+  const messageId = typeof candidate.messageId === "string" ? candidate.messageId.trim() : "";
+  if (!targetKey || !chatId || !messageId) {
+    return null;
+  }
+  const accountId = typeof candidate.accountId === "string" ? candidate.accountId : undefined;
+  return { targetKey, accountId, chatId, messageId };
+}
+
+function isPendingTelegramMessageRef(
+  value: PendingTelegramMessageRef | null,
+): value is PendingTelegramMessageRef {
+  return value !== null;
+}
+
+function sanitizePersistedRequest(value: unknown): ExecApprovalRequest | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const candidate = value as {
+    id?: unknown;
+    request?: unknown;
+    createdAtMs?: unknown;
+    expiresAtMs?: unknown;
+  };
+  const id = typeof candidate.id === "string" ? candidate.id.trim() : "";
+  if (!id || !candidate.request || typeof candidate.request !== "object") {
+    return null;
+  }
+  const requestPayload = candidate.request as { command?: unknown };
+  const command = typeof requestPayload.command === "string" ? requestPayload.command.trim() : "";
+  if (!command) {
+    return null;
+  }
+  if (!isFiniteNumber(candidate.createdAtMs) || !isFiniteNumber(candidate.expiresAtMs)) {
+    return null;
+  }
+  return {
+    id,
+    request: candidate.request as ExecApprovalRequest["request"],
+    createdAtMs: candidate.createdAtMs,
+    expiresAtMs: candidate.expiresAtMs,
+  };
+}
+
+function readPersistedPendingApprovals(value: unknown): PersistedPendingApproval[] {
+  if (!value || typeof value !== "object") {
+    return [];
+  }
+  const parsed = value as {
+    version?: unknown;
+    pending?: unknown;
+  };
+  if (parsed.version !== FORWARDER_STATE_VERSION || !Array.isArray(parsed.pending)) {
+    return [];
+  }
+  const out: PersistedPendingApproval[] = [];
+  const seenIds = new Set<string>();
+  for (const item of parsed.pending) {
+    if (!item || typeof item !== "object") {
+      continue;
+    }
+    const candidate = item as {
+      request?: unknown;
+      targets?: unknown;
+      telegramMessages?: unknown;
+    };
+    const request = sanitizePersistedRequest(candidate.request);
+    if (!request || seenIds.has(request.id)) {
+      continue;
+    }
+    const targets = Array.isArray(candidate.targets)
+      ? candidate.targets.map((target) => sanitizePersistedTarget(target)).filter(isForwardTarget)
+      : [];
+    if (targets.length === 0) {
+      continue;
+    }
+    const telegramMessages = Array.isArray(candidate.telegramMessages)
+      ? candidate.telegramMessages
+          .map((ref) => sanitizePersistedTelegramRef(ref))
+          .filter(isPendingTelegramMessageRef)
+      : [];
+    seenIds.add(request.id);
+    out.push({
+      request,
+      targets,
+      telegramMessages,
+    });
+  }
+  return out;
 }
 
 // Discord has component-based exec approvals; skip text fallback only when the
@@ -455,7 +629,116 @@ export function createExecApprovalForwarder(
   const editTelegramMessage = deps.editTelegramMessage ?? editMessageTelegram;
   const nowMs = deps.nowMs ?? Date.now;
   const resolveSessionTarget = deps.resolveSessionTarget ?? defaultResolveSessionTarget;
+  const stateFilePath = resolveForwarderStateFilePath(deps.stateFilePath);
+  const withStateLock = createAsyncLock();
+  let recoveredFromState = false;
+  let statePersistenceEnabled = false;
   const pending = new Map<string, PendingApproval>();
+  const finalized = new Map<string, FinalizedApproval>();
+
+  const pruneFinalized = () => {
+    const cutoff = nowMs() - FINALIZED_STATE_RETENTION_MS;
+    for (const [id, entry] of finalized) {
+      if (entry.finalizedAtMs <= cutoff) {
+        finalized.delete(id);
+      }
+    }
+    while (finalized.size > MAX_FINALIZED_STATE_ENTRIES) {
+      const oldestId = finalized.keys().next().value;
+      if (!oldestId) {
+        break;
+      }
+      finalized.delete(oldestId);
+    }
+  };
+
+  const rememberFinalized = (id: string, request: ExecApprovalRequest, statusText: string) => {
+    finalized.set(id, { request, statusText, finalizedAtMs: nowMs() });
+    pruneFinalized();
+  };
+
+  const getFinalized = (id: string): FinalizedApproval | undefined => {
+    pruneFinalized();
+    return finalized.get(id);
+  };
+
+  const snapshotPersistedState = (): PersistedForwarderState => ({
+    version: FORWARDER_STATE_VERSION,
+    updatedAtMs: nowMs(),
+    pending: Array.from(pending.values()).map((entry) => ({
+      request: entry.request,
+      targets: entry.targets.map((target) => ({
+        channel: target.channel,
+        to: target.to,
+        accountId: target.accountId,
+        threadId: target.threadId,
+        source: target.source,
+      })),
+      telegramMessages: entry.telegramMessages.map((ref) => ({ ...ref })),
+    })),
+  });
+
+  const persistPendingState = async () => {
+    if (!stateFilePath || !statePersistenceEnabled) {
+      return;
+    }
+    const snapshot = snapshotPersistedState();
+    await withStateLock(async () => {
+      await writeJsonAtomic(stateFilePath, snapshot);
+    });
+  };
+
+  const schedulePersistPendingState = () => {
+    if (!stateFilePath || !statePersistenceEnabled) {
+      return;
+    }
+    void persistPendingState().catch((err) => {
+      log.error(`exec approvals: failed to persist forwarder state: ${String(err)}`);
+    });
+  };
+
+  const recoverPendingFromState = async () => {
+    if (recoveredFromState) {
+      return;
+    }
+    recoveredFromState = true;
+    statePersistenceEnabled = Boolean(stateFilePath);
+    if (!stateFilePath) {
+      return;
+    }
+    const state = await readJsonFile<unknown>(stateFilePath);
+    const recoveredEntries = readPersistedPendingApprovals(state);
+    if (recoveredEntries.length === 0) {
+      await persistPendingState();
+      return;
+    }
+    log.info(
+      `exec approvals: recovering ${recoveredEntries.length} stale forwarded approvals after restart`,
+    );
+    const cfg = getConfig();
+    for (const recovered of recoveredEntries) {
+      const entry: PendingApproval = {
+        request: recovered.request,
+        targets: recovered.targets,
+        timeoutId: null,
+        telegramMessages: recovered.telegramMessages,
+      };
+      const expiredText = `⏱️ Exec approval expired after gateway restart. ID: ${recovered.request.id}`;
+      const editedTargetKeys = await markPendingTelegramMessagesFinal({
+        entry,
+        statusText: expiredText,
+        nowMs: nowMs(),
+        editTelegramMessage,
+      });
+      const followUpTargets = recovered.targets.filter(
+        (target) => !editedTargetKeys.has(buildTargetKey(target)),
+      );
+      if (followUpTargets.length > 0) {
+        await deliverToTargets({ cfg, targets: followUpTargets, text: expiredText, deliver });
+      }
+    }
+    await persistPendingState();
+  };
 
   const handleRequested = async (request: ExecApprovalRequest): Promise<boolean> => {
     const cfg = getConfig();
@@ -482,7 +765,9 @@ export function createExecApprovalForwarder(
           return;
         }
         pending.delete(request.id);
+        schedulePersistPendingState();
         const expiredText = buildExpiredMessage(request);
+        rememberFinalized(request.id, request, expiredText);
         const editedTargetKeys = await markPendingTelegramMessagesFinal({
           entry,
           statusText: expiredText,
@@ -506,6 +791,7 @@ export function createExecApprovalForwarder(
       telegramMessages: [],
     };
     pending.set(request.id, pendingEntry);
+    schedulePersistPendingState();
 
     if (pending.get(request.id) !== pendingEntry) {
       return false;
@@ -534,25 +820,48 @@ export function createExecApprovalForwarder(
         };
       },
     })
-      .then((deliveries) => {
+      .then(async (deliveries) => {
+        const deliveryRefs = collectTelegramMessageRefs(deliveries);
         if (pending.get(request.id) !== pendingEntry) {
+          const finalizedEntry = getFinalized(request.id);
+          if (!finalizedEntry || deliveryRefs.length === 0) {
+            return;
+          }
+          const lateEntry: PendingApproval = {
+            request: finalizedEntry.request,
+            targets: filteredTargets,
+            timeoutId: null,
+            telegramMessages: deliveryRefs,
+          };
+          await markPendingTelegramMessagesFinal({
+            entry: lateEntry,
+            statusText: finalizedEntry.statusText,
+            nowMs: nowMs(),
+            editTelegramMessage,
+          });
           return;
         }
-        pendingEntry.telegramMessages = collectTelegramMessageRefs(deliveries);
+        pendingEntry.telegramMessages = deliveryRefs;
+        schedulePersistPendingState();
       })
       .catch((err) => {
-        log.error(`exec approvals: failed to deliver request ${request.id}: ${String(err)}`);
+        log.error(
+          `exec approvals: failed to deliver/finalize request ${request.id}: ${String(err)}`,
+        );
       });
     return true;
   };
 
   const handleResolved = async (resolved: ExecApprovalResolved) => {
     const entry = pending.get(resolved.id);
+    const text = buildResolvedMessage(resolved);
     if (entry) {
       if (entry.timeoutId) {
         clearTimeout(entry.timeoutId);
       }
       pending.delete(resolved.id);
+      schedulePersistPendingState();
+      rememberFinalized(resolved.id, entry.request, text);
     }
     const cfg = getConfig();
     let targets = entry?.targets;
@@ -564,6 +873,7 @@ export function createExecApprovalForwarder(
         createdAtMs: resolved.ts,
         expiresAtMs: resolved.ts,
       };
+      rememberFinalized(resolved.id, request, text);
       const config = cfg.approvals?.exec;
       if (shouldForward({ config, request })) {
         targets = resolveForwardTargets({
@@ -577,7 +887,6 @@ export function createExecApprovalForwarder(
     if (!targets || targets.length === 0) {
       return;
     }
-    const text = buildResolvedMessage(resolved);
     const editedTargetKeys = entry
       ? await markPendingTelegramMessagesFinal({
           entry,
@@ -602,9 +911,11 @@ export function createExecApprovalForwarder(
       }
     }
     pending.clear();
+    finalized.clear();
+    schedulePersistPendingState();
   };
 
-  return { handleRequested, handleResolved, stop };
+  return { handleRequested, handleResolved, recoverPendingFromState, stop };
 }
 
 export function shouldForwardExecApproval(params: {

@@ -174,4 +174,35 @@ describe("requestExecApprovalDecision", () => {
     expect(result).toBe("deny");
     expect(vi.mocked(callGatewayTool).mock.calls).toHaveLength(1);
   });
+
+  it("passes custom approval timeout when provided", async () => {
+    vi.mocked(callGatewayTool)
+      .mockResolvedValueOnce({
+        status: "accepted",
+        id: "approval-id",
+        expiresAtMs: DEFAULT_APPROVAL_TIMEOUT_MS,
+      })
+      .mockResolvedValueOnce({ decision: "allow-once" });
+
+    await expect(
+      requestExecApprovalDecision({
+        id: "approval-id",
+        command: "echo hi",
+        cwd: "/tmp",
+        host: "gateway",
+        security: "allowlist",
+        ask: "always",
+        timeoutMs: 45_000,
+      }),
+    ).resolves.toBe("allow-once");
+
+    expect(callGatewayTool).toHaveBeenCalledWith(
+      "exec.approval.request",
+      { timeoutMs: DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS },
+      expect.objectContaining({
+        timeoutMs: 45_000,
+      }),
+      { expectFinal: false },
+    );
+  });
 });

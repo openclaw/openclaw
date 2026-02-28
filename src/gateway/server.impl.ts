@@ -674,6 +674,13 @@ export async function startGatewayServer(
 
   const execApprovalManager = new ExecApprovalManager();
   const execApprovalForwarder = createExecApprovalForwarder();
+  if (!minimalTestGateway) {
+    try {
+      await execApprovalForwarder.recoverPendingFromState?.();
+    } catch (err) {
+      log.error(`exec approvals: forwarder recovery failed: ${String(err)}`);
+    }
+  }
   const execApprovalHandlers = createExecApprovalHandlers(execApprovalManager, {
     forwarder: execApprovalForwarder,
   });

@@ -317,6 +317,20 @@ describe("/approve command", () => {
     );
   });
 
+  it("maps stale or unknown approval ids to a friendly no-longer-pending message", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const params = buildParams("/approve abc allow-once", cfg, { SenderId: "123" });
+
+    callGatewayMock.mockRejectedValueOnce(new Error("unknown approval id"));
+
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("Approval is no longer pending");
+  });
+
   it("rejects gateway clients without approvals scope", async () => {
     const cfg = {
       commands: { text: true },

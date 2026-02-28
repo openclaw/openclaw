@@ -269,19 +269,29 @@ export function createExecApprovalHandlers(
         return;
       }
       const snapshot = manager.getSnapshot(p.id);
+      if (snapshot?.resolvedAtMs !== undefined && snapshot.decision !== undefined) {
+        respond(true, { ok: true, alreadyResolved: true }, undefined);
+        return;
+      }
       const resolvedBy = client?.connect?.client?.displayName ?? client?.connect?.client?.id;
       const ok = manager.resolve(p.id, decision, resolvedBy ?? null);
       if (!ok) {
+        const latestSnapshot = manager.getSnapshot(p.id);
+        if (latestSnapshot?.resolvedAtMs !== undefined && latestSnapshot.decision !== undefined) {
+          respond(true, { ok: true, alreadyResolved: true }, undefined);
+          return;
+        }
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown approval id"));
         return;
       }
+      const ts = Date.now();
       context.broadcast(
         "exec.approval.resolved",
         {
           id: p.id,
           decision,
           resolvedBy,
-          ts: Date.now(),
+          ts,
           request: snapshot?.request,
           audit: p.audit,
         },
@@ -292,7 +302,7 @@ export function createExecApprovalHandlers(
           id: p.id,
           decision,
           resolvedBy,
-          ts: Date.now(),
+          ts,
           request: snapshot?.request,
           audit: p.audit,
         })
