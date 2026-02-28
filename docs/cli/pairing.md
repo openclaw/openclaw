@@ -30,3 +30,4 @@ openclaw pairing approve --channel telegram --account work <code> --notify
 - `pairing list` supports `--account <accountId>` for multi-account channels.
 - `pairing approve` supports `--account <accountId>` and `--notify`.
 - If only one pairing-capable channel is configured, `pairing approve <code>` is allowed.
+- If your pairing message shows the code in angle brackets (for example `<2E9RUPHW>`), pass only the code value: `2E9RUPHW`.
