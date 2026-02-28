@@ -38,9 +38,6 @@ function buildSystemNodeCandidates(
   env: Record<string, string | undefined>,
   platform: NodeJS.Platform,
 ): string[] {
-  if (platform === "darwin") {
-    return ["/opt/homebrew/bin/node", "/usr/local/bin/node", "/usr/bin/node"];
-  }
   if (platform === "linux") {
     return ["/usr/local/bin/node", "/usr/bin/node"];
   }

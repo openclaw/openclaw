@@ -89,10 +89,6 @@ function candidateBinDirs(opts: EnsureOpenClawPathOpts): { prepend: string[]; ap
 
   prepend.push(...resolveBrewPathDirs({ homeDir }));
 
-  // Common global install locations (macOS first).
-  if (platform === "darwin") {
-    prepend.push(path.join(homeDir, "Library", "pnpm"));
-  }
   if (process.env.XDG_BIN_HOME) {
     prepend.push(process.env.XDG_BIN_HOME);
   }
@@ -100,14 +96,14 @@ function candidateBinDirs(opts: EnsureOpenClawPathOpts): { prepend: string[]; ap
   prepend.push(path.join(homeDir, ".local", "share", "pnpm"));
   prepend.push(path.join(homeDir, ".bun", "bin"));
   prepend.push(path.join(homeDir, ".yarn", "bin"));
-  prepend.push("/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin");
+  prepend.push("/usr/local/bin", "/usr/bin", "/bin");
 
   return { prepend: prepend.filter(isDirectory), append: append.filter(isDirectory) };
 }
 
 /**
  * Best-effort PATH bootstrap so skills that require the `openclaw` CLI can run
- * under launchd/minimal environments (and inside the macOS app bundle).
+ * under systemd/minimal environments.
  */
 export function ensureOpenClawCliOnPath(opts: EnsureOpenClawPathOpts = {}) {
   if (isTruthyEnvValue(process.env.OPENCLAW_PATH_BOOTSTRAPPED)) {

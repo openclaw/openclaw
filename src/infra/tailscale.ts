@@ -20,9 +20,6 @@ function parsePossiblyNoisyJsonObject(stdout: string): Record<string, unknown> {
 /**
  * Locate Tailscale binary using multiple strategies:
  * 1. PATH lookup (via which command)
- * 2. Known macOS app path
- * 3. find /Applications for Tailscale.app
- * 4. locate database (if available)
  *
  * @returns Path to Tailscale binary or null if not found
  */
@@ -55,59 +52,12 @@ export async function findTailscaleBinary(): Promise<string | null> {
     // which failed, continue
   }
 
-  // Strategy 2: Known macOS app path
-  const macAppPath = "/Applications/Tailscale.app/Contents/MacOS/Tailscale";
-  if (await checkBinary(macAppPath)) {
-    return macAppPath;
-  }
-
-  // Strategy 3: find command in /Applications
-  try {
-    const { stdout } = await runExec(
-      "find",
-      [
-        "/Applications",
-        "-maxdepth",
-        "3",
-        "-name",
-        "Tailscale",
-        "-path",
-        "*/Tailscale.app/Contents/MacOS/Tailscale",
-      ],
-      { timeoutMs: 5000 },
-    );
-    const found = stdout.trim().split("\n")[0];
-    if (found && (await checkBinary(found))) {
-      return found;
-    }
-  } catch {
-    // find failed, continue
-  }
-
-  // Strategy 4: locate command
-  try {
-    const { stdout } = await runExec("locate", ["Tailscale.app"]);
-    const candidates = stdout
-      .trim()
-      .split("\n")
-      .filter((line) => line.includes("/Tailscale.app/Contents/MacOS/Tailscale"));
-    for (const candidate of candidates) {
-      if (await checkBinary(candidate)) {
-        return candidate;
-      }
-    }
-  } catch {
-    // locate failed, continue
-  }
-
   return null;
 }
 
 export async function getTailnetHostname(exec: typeof runExec = runExec, detectedBinary?: string) {
   // Derive tailnet hostname (or IP fallback) from tailscale status JSON.
-  const candidates = detectedBinary
-    ? [detectedBinary]
-    : ["tailscale", "/Applications/Tailscale.app/Contents/MacOS/Tailscale"];
+  const candidates = detectedBinary ? [detectedBinary] : ["tailscale"];
   let lastError: unknown;
 
   for (const candidate of candidates) {
@@ -176,53 +126,34 @@ export async function readTailscaleStatusJson(
 
 export async function ensureGoInstalled(
   exec: typeof runExec = runExec,
-  prompt: typeof promptYesNo = promptYesNo,
+  _prompt: typeof promptYesNo = promptYesNo,
   runtime: RuntimeEnv = defaultRuntime,
 ) {
-  // Ensure Go toolchain is present; offer Homebrew install if missing.
+  // Ensure Go toolchain is present.
   const hasGo = await exec("go", ["version"]).then(
     () => true,
     () => false,
   );
-  if (hasGo) {
-    return;
-  }
-  const install = await prompt(
-    "Go is not installed. Install via Homebrew (brew install go)?",
-    true,
-  );
-  if (!install) {
-    runtime.error("Go is required to build tailscaled from source. Aborting.");
+  if (!hasGo) {
+    runtime.error("Go is not installed. Please install Go from https://go.dev/dl/");
     runtime.exit(1);
   }
-  logVerbose("Installing Go via Homebrew…");
-  await exec("brew", ["install", "go"]);
 }
 
 export async function ensureTailscaledInstalled(
   exec: typeof runExec = runExec,
-  prompt: typeof promptYesNo = promptYesNo,
+  _prompt: typeof promptYesNo = promptYesNo,
   runtime: RuntimeEnv = defaultRuntime,
 ) {
-  // Ensure tailscaled binary exists; install via Homebrew tailscale if missing.
+  // Ensure tailscaled binary exists.
   const hasTailscaled = await exec("tailscaled", ["--version"]).then(
     () => true,
     () => false,
   );
-  if (hasTailscaled) {
-    return;
-  }
-
-  const install = await prompt(
-    "tailscaled not found. Install via Homebrew (tailscale package)?",
-    true,
-  );
-  if (!install) {
-    runtime.error("tailscaled is required for user-space funnel. Aborting.");
+  if (!hasTailscaled) {
+    runtime.error("tailscaled not found. Please install Tailscale from https://tailscale.com/download/linux");
     runtime.exit(1);
   }
-  logVerbose("Installing tailscaled via Homebrew…");
-  await exec("brew", ["install", "tailscale"]);
 }
 
 type ExecErrorDetails = {
@@ -315,11 +246,6 @@ export async function ensureFunnel(
       runtime.error(
         info(
           "Enable in admin console: https://login.tailscale.com/admin (see https://tailscale.com/kb/1223/funnel)",
-        ),
-      );
-      runtime.error(
-        info(
-          "macOS user-space tailscaled docs: https://github.com/tailscale/tailscale/wiki/Tailscaled-on-macOS",
         ),
       );
       const proceed = await prompt("Attempt local setup with user-space tailscaled?", true);

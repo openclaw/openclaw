@@ -140,11 +140,7 @@ function renderChannel(key: ChannelKey, props: ChannelsProps, data: ChannelsChan
         accountCountLabel,
       });
     case "imessage":
-      return renderIMessageCard({
-        props,
-        imessage: data.imessage,
-        accountCountLabel,
-      });
+      return nothing;
     case "nostr": {
       const nostrAccounts = data.channelAccounts?.nostr ?? [];
       const primaryAccount = nostrAccounts[0];

@@ -76,18 +76,6 @@ const PLATFORM_DEFAULTS: Record<string, string[]> = {
     ...PHOTOS_COMMANDS,
     ...MOTION_COMMANDS,
   ],
-  macos: [
-    ...CANVAS_COMMANDS,
-    ...CAMERA_COMMANDS,
-    ...LOCATION_COMMANDS,
-    ...DEVICE_COMMANDS,
-    ...CONTACTS_COMMANDS,
-    ...CALENDAR_COMMANDS,
-    ...REMINDERS_COMMANDS,
-    ...PHOTOS_COMMANDS,
-    ...MOTION_COMMANDS,
-    ...SYSTEM_COMMANDS,
-  ],
   linux: [...SYSTEM_COMMANDS],
   windows: [...SYSTEM_COMMANDS],
   unknown: [...CANVAS_COMMANDS, ...CAMERA_COMMANDS, ...LOCATION_COMMANDS, ...SYSTEM_COMMANDS],
@@ -101,12 +89,6 @@ function normalizePlatformId(platform?: string, deviceFamily?: string): string {
   if (raw.startsWith("android")) {
     return "android";
   }
-  if (raw.startsWith("mac")) {
-    return "macos";
-  }
-  if (raw.startsWith("darwin")) {
-    return "macos";
-  }
   if (raw.startsWith("win")) {
     return "windows";
   }
@@ -119,9 +101,6 @@ function normalizePlatformId(platform?: string, deviceFamily?: string): string {
   }
   if (family.includes("android")) {
     return "android";
-  }
-  if (family.includes("mac")) {
-    return "macos";
   }
   if (family.includes("windows")) {
     return "windows";

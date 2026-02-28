@@ -1,10 +1,8 @@
 import { formatCliCommand } from "../cli/command-format.js";
 import {
-  resolveGatewayLaunchAgentLabel,
   resolveGatewaySystemdServiceName,
   resolveGatewayWindowsTaskName,
 } from "../daemon/constants.js";
-import { resolveGatewayLogPaths } from "../daemon/launchd.js";
 import { formatRuntimeStatus } from "../daemon/runtime-format.js";
 import type { GatewayServiceRuntime } from "../daemon/service-runtime.js";
 import {
@@ -49,12 +47,10 @@ export function buildGatewayRuntimeHints(
     }
     return hints;
   }
-  if (runtime.cachedLabel && platform === "darwin") {
-    const label = resolveGatewayLaunchAgentLabel(env.OPENCLAW_PROFILE);
+  if (runtime.cachedLabel) {
     hints.push(
-      `LaunchAgent label cached but plist missing. Clear with: launchctl bootout gui/$UID/${label}`,
+      `Service label cached but unit missing. Reinstall with: ${formatCliCommand("openclaw gateway install", env)}`,
     );
-    hints.push(`Then reinstall: ${formatCliCommand("openclaw gateway install", env)}`);
   }
   if (runtime.missingUnit) {
     hints.push(`Service not installed. Run: ${formatCliCommand("openclaw gateway install", env)}`);
@@ -68,11 +64,7 @@ export function buildGatewayRuntimeHints(
     if (fileLog) {
       hints.push(`File logs: ${fileLog}`);
     }
-    if (platform === "darwin") {
-      const logs = resolveGatewayLogPaths(env);
-      hints.push(`Launchd stdout (if installed): ${logs.stdoutPath}`);
-      hints.push(`Launchd stderr (if installed): ${logs.stderrPath}`);
-    } else if (platform === "linux") {
+    if (platform === "linux") {
       const unit = resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE);
       hints.push(`Logs: journalctl --user -u ${unit}.service -n 200 --no-pager`);
     } else if (platform === "win32") {

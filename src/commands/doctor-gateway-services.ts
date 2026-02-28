@@ -248,7 +248,7 @@ export async function maybeScanExtraGatewayServices(
       const removed: string[] = [];
       const failed: string[] = [];
       for (const svc of legacyServices) {
-        if (svc.platform !== "darwin") {
+        if (svc.platform !== "linux") {
           failed.push(`${svc.label} (${svc.platform})`);
           continue;
         }

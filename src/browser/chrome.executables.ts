@@ -158,9 +158,6 @@ function inferKindFromExecutableName(name: string): BrowserExecutable["kind"] {
 }
 
 function detectDefaultChromiumExecutable(platform: NodeJS.Platform): BrowserExecutable | null {
-  if (platform === "darwin") {
-    return detectDefaultChromiumExecutableMac();
-  }
   if (platform === "linux") {
     return detectDefaultChromiumExecutableLinux();
   }
@@ -612,9 +609,6 @@ export function resolveBrowserExecutableForPlatform(
     return detected;
   }
 
-  if (platform === "darwin") {
-    return findChromeExecutableMac();
-  }
   if (platform === "linux") {
     return findChromeExecutableLinux();
   }

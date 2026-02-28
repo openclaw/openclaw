@@ -64,28 +64,13 @@ describe("cron protocol conformance", () => {
         );
       }
     }
-
-    const swiftModelFiles = await resolveSwiftFiles(cwd, SWIFT_MODEL_CANDIDATES);
-    for (const relPath of swiftModelFiles) {
-      const content = await fs.readFile(path.join(cwd, relPath), "utf-8");
-      for (const mode of modes) {
-        const pattern = new RegExp(`\\bcase\\s+${mode}\\b`);
-        expect(pattern.test(content), `${relPath} missing case ${mode}`).toBe(true);
-      }
-    }
   });
 
-  it("cron status shape matches gateway fields in UI + Swift", async () => {
+  it("cron status shape matches gateway fields in UI", async () => {
     const cwd = process.cwd();
     const uiTypes = await fs.readFile(path.join(cwd, "ui/src/ui/types.ts"), "utf-8");
     expect(uiTypes.includes("export type CronStatus")).toBe(true);
     expect(uiTypes.includes("jobs:")).toBe(true);
     expect(uiTypes.includes("jobCount")).toBe(false);
-
-    const [swiftRelPath] = await resolveSwiftFiles(cwd, SWIFT_STATUS_CANDIDATES);
-    const swiftPath = path.join(cwd, swiftRelPath);
-    const swift = await fs.readFile(swiftPath, "utf-8");
-    expect(swift.includes("struct CronSchedulerStatus")).toBe(true);
-    expect(swift.includes("let jobs:")).toBe(true);
   });
 });

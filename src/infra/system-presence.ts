@@ -52,30 +52,10 @@ function initSelfPresence() {
   const host = os.hostname();
   const ip = resolvePrimaryIPv4() ?? undefined;
   const version = resolveRuntimeServiceVersion(process.env, "unknown");
-  const modelIdentifier = (() => {
-    const p = os.platform();
-    if (p === "darwin") {
-      const res = spawnSync("sysctl", ["-n", "hw.model"], {
-        encoding: "utf-8",
-      });
-      const out = typeof res.stdout === "string" ? res.stdout.trim() : "";
-      return out.length > 0 ? out : undefined;
-    }
-    return os.arch();
-  })();
-  const macOSVersion = () => {
-    const res = spawnSync("sw_vers", ["-productVersion"], {
-      encoding: "utf-8",
-    });
-    const out = typeof res.stdout === "string" ? res.stdout.trim() : "";
-    return out.length > 0 ? out : os.release();
-  };
+  const modelIdentifier = os.arch();
   const platform = (() => {
     const p = os.platform();
     const rel = os.release();
-    if (p === "darwin") {
-      return `macos ${macOSVersion()}`;
-    }
     if (p === "win32") {
       return `windows ${rel}`;
     }
@@ -83,9 +63,6 @@ function initSelfPresence() {
   })();
   const deviceFamily = (() => {
     const p = os.platform();
-    if (p === "darwin") {
-      return "Mac";
-    }
     if (p === "win32") {
       return "Windows";
     }

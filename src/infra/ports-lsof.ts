@@ -1,10 +1,7 @@
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 
-const LSOF_CANDIDATES =
-  process.platform === "darwin"
-    ? ["/usr/sbin/lsof", "/usr/bin/lsof"]
-    : ["/usr/bin/lsof", "/usr/sbin/lsof"];
+const LSOF_CANDIDATES = ["/usr/bin/lsof", "/usr/sbin/lsof"];
 
 async function canExecute(path: string): Promise<boolean> {
   try {

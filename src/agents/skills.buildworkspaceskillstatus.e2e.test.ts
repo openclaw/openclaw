@@ -38,8 +38,8 @@ describe("buildWorkspaceSkillStatus", () => {
     await writeSkill({
       dir: skillDir,
       name: "os-skill",
-      description: "Darwin only",
-      metadata: '{"openclaw":{"os":["darwin"]}}',
+      description: "Win32 only",
+      metadata: '{"openclaw":{"os":["win32"]}}',
     });
 
     const report = buildWorkspaceSkillStatus(workspaceDir, {
@@ -48,12 +48,12 @@ describe("buildWorkspaceSkillStatus", () => {
     const skill = report.skills.find((entry) => entry.name === "os-skill");
 
     expect(skill).toBeDefined();
-    if (process.platform === "darwin") {
+    if (process.platform === "win32") {
       expect(skill?.eligible).toBe(true);
       expect(skill?.missing.os).toEqual([]);
     } else {
       expect(skill?.eligible).toBe(false);
-      expect(skill?.missing.os).toEqual(["darwin"]);
+      expect(skill?.missing.os).toEqual(["win32"]);
     }
   });
   it("marks bundled skills blocked by allowlist", async () => {
@@ -107,12 +107,10 @@ describe("buildWorkspaceSkillStatus", () => {
     const skill = report.skills.find((entry) => entry.name === "install-skill");
 
     expect(skill).toBeDefined();
-    if (process.platform === "darwin") {
-      expect(skill?.install.map((opt) => opt.id)).toEqual(["mac"]);
+    if (process.platform === "win32") {
+      expect(skill?.install.map((opt) => opt.id)).toEqual(["win"]);
     } else if (process.platform === "linux") {
       expect(skill?.install.map((opt) => opt.id)).toEqual(["linux"]);
-    } else if (process.platform === "win32") {
-      expect(skill?.install.map((opt) => opt.id)).toEqual(["win"]);
     } else {
       expect(skill?.install).toEqual([]);
     }

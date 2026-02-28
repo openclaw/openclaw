@@ -1,0 +1,9 @@
+{
+  "name": "headless-browser-skill",
+  "version": "1.0.0",
+  "description": "Puppeteer wrapper for Rykiri headless browser skill",
+  "main": "browse.js",
+  "dependencies": {
+    "puppeteer": "^22.0.0"
+  }
+}

@@ -252,8 +252,9 @@ export function createBrowserTool(opts?: {
         throw new Error('node is only supported with target="node".');
       }
 
-      if (!target && !requestedNode && profile === "chrome") {
+      if (!target && !requestedNode && (profile === "chrome" || (process.platform === "win32" && (profile === "openclaw" || !profile)))) {
         // Chrome extension relay takeover is a host Chrome feature; prefer host unless explicitly targeting a node.
+        // On Windows, if we're using the standard openclaw managed profile (or default), also prefer host since sandboxes are often Linux-only.
         target = "host";
       }
 

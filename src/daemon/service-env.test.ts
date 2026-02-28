@@ -96,66 +96,61 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
     expect(result).toContain("/opt/fnm/current/bin");
   });
 
-  it("includes version manager directories on macOS when HOME is set", () => {
+  it("includes version manager directories on Linux/WSL when HOME is set", () => {
     const result = getMinimalServicePathParts({
-      platform: "darwin",
-      home: "/Users/testuser",
+      platform: "linux",
+      home: "/home/testuser",
     });
 
     // Should include common user bin directories
-    expect(result).toContain("/Users/testuser/.local/bin");
-    expect(result).toContain("/Users/testuser/.npm-global/bin");
-    expect(result).toContain("/Users/testuser/bin");
+    expect(result).toContain("/home/testuser/.local/bin");
+    expect(result).toContain("/home/testuser/.npm-global/bin");
+    expect(result).toContain("/home/testuser/bin");
 
-    // Should include version manager paths (macOS specific)
-    // Note: nvm has no stable default path, relies on user's shell config
-    expect(result).toContain("/Users/testuser/Library/Application Support/fnm/aliases/default/bin"); // fnm default on macOS
-    expect(result).toContain("/Users/testuser/.fnm/aliases/default/bin"); // fnm if customized to ~/.fnm
-    expect(result).toContain("/Users/testuser/.volta/bin");
-    expect(result).toContain("/Users/testuser/.asdf/shims");
-    expect(result).toContain("/Users/testuser/Library/pnpm"); // pnpm default on macOS
-    expect(result).toContain("/Users/testuser/.local/share/pnpm"); // pnpm XDG fallback
-    expect(result).toContain("/Users/testuser/.bun/bin");
+    // Should include version manager paths
+    expect(result).toContain("/home/testuser/.fnm/current/bin");
+    expect(result).toContain("/home/testuser/.volta/bin");
+    expect(result).toContain("/home/testuser/.asdf/shims");
+    expect(result).toContain("/home/testuser/.local/share/pnpm");
+    expect(result).toContain("/home/testuser/.bun/bin");
 
-    // Should also include macOS system directories
-    expect(result).toContain("/opt/homebrew/bin");
+    // Should include system directories
     expect(result).toContain("/usr/local/bin");
+    expect(result).toContain("/usr/bin");
+    expect(result).toContain("/bin");
   });
 
-  it("includes env-configured version manager dirs on macOS", () => {
+  it("includes env-configured version manager dirs on Linux/WSL", () => {
     const result = getMinimalServicePathPartsFromEnv({
-      platform: "darwin",
+      platform: "linux",
       env: {
-        HOME: "/Users/testuser",
-        FNM_DIR: "/Users/testuser/Library/Application Support/fnm",
-        NVM_DIR: "/Users/testuser/.nvm",
-        PNPM_HOME: "/Users/testuser/Library/pnpm",
+        HOME: "/home/testuser",
+        FNM_DIR: "/home/testuser/.fnm",
+        NVM_DIR: "/home/testuser/.nvm",
+        PNPM_HOME: "/home/testuser/.local/share/pnpm",
       },
     });
 
-    // fnm uses aliases/default/bin (not current)
-    expect(result).toContain("/Users/testuser/Library/Application Support/fnm/aliases/default/bin");
-    // nvm: relies on NVM_DIR env var (no stable default path)
-    expect(result).toContain("/Users/testuser/.nvm");
+    // fnm uses current/bin on Linux
+    expect(result).toContain("/home/testuser/.fnm/current/bin");
+    // nvm: relies on NVM_DIR env var
+    expect(result).toContain("/home/testuser/.nvm/current/bin");
     // pnpm: binary is directly in PNPM_HOME
-    expect(result).toContain("/Users/testuser/Library/pnpm");
+    expect(result).toContain("/home/testuser/.local/share/pnpm");
   });
 
-  it("places version manager dirs before system dirs on macOS", () => {
+  it("places version manager dirs before system dirs on Linux/WSL", () => {
     const result = getMinimalServicePathParts({
-      platform: "darwin",
-      home: "/Users/testuser",
+      platform: "linux",
+      home: "/home/testuser",
     });
 
-    // fnm on macOS defaults to ~/Library/Application Support/fnm
-    const fnmIndex = result.indexOf(
-      "/Users/testuser/Library/Application Support/fnm/aliases/default/bin",
-    );
-    const homebrewIndex = result.indexOf("/opt/homebrew/bin");
+    const fnmIndex = result.indexOf("/home/testuser/.fnm/current/bin");
+    const systemDirIndex = result.indexOf("/usr/local/bin");
 
     expect(fnmIndex).toBeGreaterThan(-1);
-    expect(homebrewIndex).toBeGreaterThan(-1);
-    expect(fnmIndex).toBeLessThan(homebrewIndex);
+    expect(systemDirIndex).toBeGreaterThan(-1);
+    expect(fnmIndex).toBeLessThan(systemDirIndex);
   });
 
   it("does not include Linux user directories on Windows", () => {
@@ -173,12 +168,11 @@ describe("buildMinimalServicePath", () => {
   const splitPath = (value: string, platform: NodeJS.Platform) =>
     value.split(platform === "win32" ? path.win32.delimiter : path.posix.delimiter);
 
-  it("includes Homebrew + system dirs on macOS", () => {
+  it("includes system dirs on Linux", () => {
     const result = buildMinimalServicePath({
-      platform: "darwin",
+      platform: "linux",
     });
-    const parts = splitPath(result, "darwin");
-    expect(parts).toContain("/opt/homebrew/bin");
+    const parts = splitPath(result, "linux");
     expect(parts).toContain("/usr/local/bin");
     expect(parts).toContain("/usr/bin");
     expect(parts).toContain("/bin");
@@ -277,20 +271,14 @@ describe("buildServiceEnvironment", () => {
     expect(env.OPENCLAW_SERVICE_KIND).toBe("gateway");
     expect(typeof env.OPENCLAW_SERVICE_VERSION).toBe("string");
     expect(env.OPENCLAW_SYSTEMD_UNIT).toBe("openclaw-gateway.service");
-    if (process.platform === "darwin") {
-      expect(env.OPENCLAW_LAUNCHD_LABEL).toBe("ai.openclaw.gateway");
-    }
   });
 
-  it("uses profile-specific unit and label", () => {
+  it("uses profile-specific unit", () => {
     const env = buildServiceEnvironment({
       env: { HOME: "/home/user", OPENCLAW_PROFILE: "work" },
       port: 18789,
     });
     expect(env.OPENCLAW_SYSTEMD_UNIT).toBe("openclaw-gateway-work.service");
-    if (process.platform === "darwin") {
-      expect(env.OPENCLAW_LAUNCHD_LABEL).toBe("ai.openclaw.work");
-    }
   });
 });
 

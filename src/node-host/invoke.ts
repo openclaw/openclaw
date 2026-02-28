@@ -369,17 +369,6 @@ async function sendExecFinishedEvent(params: {
   );
 }
 
-async function runViaMacAppExecHost(params: {
-  approvals: ReturnType<typeof resolveExecApprovals>;
-  request: ExecHostRequest;
-}): Promise<ExecHostResponse | null> {
-  const { approvals, request } = params;
-  return await requestExecHostViaSocket({
-    socketPath: approvals.socketPath,
-    token: approvals.token,
-    request,
-  });
-}
 
 export async function handleInvoke(
   frame: NodeInvokeRequestPayload,
@@ -586,74 +575,6 @@ export async function handleInvoke(
     allowlistSatisfied = false;
   }
 
-  const useMacAppExec = process.platform === "darwin";
-  if (useMacAppExec) {
-    const approvalDecision =
-      params.approvalDecision === "allow-once" || params.approvalDecision === "allow-always"
-        ? params.approvalDecision
-        : null;
-    const execRequest: ExecHostRequest = {
-      command: argv,
-      rawCommand: rawCommand || shellCommand || null,
-      cwd: params.cwd ?? null,
-      env: params.env ?? null,
-      timeoutMs: params.timeoutMs ?? null,
-      needsScreenRecording: params.needsScreenRecording ?? null,
-      agentId: agentId ?? null,
-      sessionKey: sessionKey ?? null,
-      approvalDecision,
-    };
-    const response = await runViaMacAppExecHost({ approvals, request: execRequest });
-    if (!response) {
-      if (execHostEnforced || !execHostFallbackAllowed) {
-        await sendNodeEvent(
-          client,
-          "exec.denied",
-          buildExecEventPayload({
-            sessionKey,
-            runId,
-            host: "node",
-            command: cmdText,
-            reason: "companion-unavailable",
-          }),
-        );
-        await sendInvokeResult(client, frame, {
-          ok: false,
-          error: {
-            code: "UNAVAILABLE",
-            message: "COMPANION_APP_UNAVAILABLE: macOS app exec host unreachable",
-          },
-        });
-        return;
-      }
-    } else if (!response.ok) {
-      const reason = response.error.reason ?? "approval-required";
-      await sendNodeEvent(
-        client,
-        "exec.denied",
-        buildExecEventPayload({
-          sessionKey,
-          runId,
-          host: "node",
-          command: cmdText,
-          reason,
-        }),
-      );
-      await sendInvokeResult(client, frame, {
-        ok: false,
-        error: { code: "UNAVAILABLE", message: response.error.message },
-      });
-      return;
-    } else {
-      const result: ExecHostRunResult = response.payload;
-      await sendExecFinishedEvent({ client, sessionKey, runId, cmdText, result });
-      await sendInvokeResult(client, frame, {
-        ok: true,
-        payloadJSON: JSON.stringify(result),
-      });
-      return;
-    }
-  }
 
   if (security === "deny") {
     await sendNodeEvent(

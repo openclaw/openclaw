@@ -47,9 +47,6 @@ function addCommonUserBinDirs(dirs: string[], home: string): void {
 }
 
 function resolveSystemPathDirs(platform: NodeJS.Platform): string[] {
-  if (platform === "darwin") {
-    return ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"];
-  }
   if (platform === "linux") {
     return ["/usr/local/bin", "/usr/bin", "/bin"];
   }
@@ -57,55 +54,7 @@ function resolveSystemPathDirs(platform: NodeJS.Platform): string[] {
 }
 
 /**
- * Resolve common user bin directories for macOS.
- * These are paths where npm global installs and node version managers typically place binaries.
- *
- * Key differences from Linux:
- * - fnm: macOS uses ~/Library/Application Support/fnm (not ~/.local/share/fnm)
- * - pnpm: macOS uses ~/Library/pnpm (not ~/.local/share/pnpm)
- */
-export function resolveDarwinUserBinDirs(
-  home: string | undefined,
-  env?: Record<string, string | undefined>,
-): string[] {
-  if (!home) {
-    return [];
-  }
-
-  const dirs: string[] = [];
-
-  // Env-configured bin roots (override defaults when present).
-  // Note: FNM_DIR on macOS defaults to ~/Library/Application Support/fnm
-  // Note: PNPM_HOME on macOS defaults to ~/Library/pnpm
-  addNonEmptyDir(dirs, env?.PNPM_HOME);
-  addNonEmptyDir(dirs, appendSubdir(env?.NPM_CONFIG_PREFIX, "bin"));
-  addNonEmptyDir(dirs, appendSubdir(env?.BUN_INSTALL, "bin"));
-  addNonEmptyDir(dirs, appendSubdir(env?.VOLTA_HOME, "bin"));
-  addNonEmptyDir(dirs, appendSubdir(env?.ASDF_DATA_DIR, "shims"));
-  // nvm: no stable default path, relies on env or user's shell config
-  // User must set NVM_DIR and source nvm.sh for it to work
-  addNonEmptyDir(dirs, env?.NVM_DIR);
-  // fnm: use aliases/default (not current)
-  addNonEmptyDir(dirs, appendSubdir(env?.FNM_DIR, "aliases/default/bin"));
-  // pnpm: binary is directly in PNPM_HOME (not in bin subdirectory)
-
-  // Common user bin directories
-  addCommonUserBinDirs(dirs, home);
-
-  // Node version managers - macOS specific paths
-  // nvm: no stable default path, depends on user's shell configuration
-  // fnm: macOS default is ~/Library/Application Support/fnm, not ~/.fnm
-  dirs.push(`${home}/Library/Application Support/fnm/aliases/default/bin`); // fnm default
-  dirs.push(`${home}/.fnm/aliases/default/bin`); // fnm if customized to ~/.fnm
-  // pnpm: macOS default is ~/Library/pnpm, not ~/.local/share/pnpm
-  dirs.push(`${home}/Library/pnpm`); // pnpm default
-  dirs.push(`${home}/.local/share/pnpm`); // pnpm XDG fallback
-
-  return dirs;
-}
-
-/**
- * Resolve common user bin directories for Linux.
+ * Resolve common user bin directories for Linux/WSL.
  * These are paths where npm global installs and node version managers typically place binaries.
  */
 export function resolveLinuxUserBinDirs(
@@ -149,12 +98,7 @@ export function getMinimalServicePathParts(options: MinimalServicePathOptions = 
   const systemDirs = resolveSystemPathDirs(platform);
 
   // Add user bin directories for version managers (npm global, nvm, fnm, volta, etc.)
-  const userDirs =
-    platform === "linux"
-      ? resolveLinuxUserBinDirs(options.home, options.env)
-      : platform === "darwin"
-        ? resolveDarwinUserBinDirs(options.home, options.env)
-        : [];
+  const userDirs = platform === "linux" ? resolveLinuxUserBinDirs(options.home, options.env) : [];
 
   const add = (dir: string) => {
     if (!dir) {
@@ -206,9 +150,7 @@ export function buildServiceEnvironment(params: {
 }): Record<string, string | undefined> {
   const { env, port, token, launchdLabel } = params;
   const profile = env.OPENCLAW_PROFILE;
-  const resolvedLaunchdLabel =
-    launchdLabel ||
-    (process.platform === "darwin" ? resolveGatewayLaunchAgentLabel(profile) : undefined);
+  const resolvedLaunchdLabel = launchdLabel ?? undefined;
   const systemdUnit = `${resolveGatewaySystemdServiceName(profile)}.service`;
   const stateDir = env.OPENCLAW_STATE_DIR;
   const configPath = env.OPENCLAW_CONFIG_PATH;

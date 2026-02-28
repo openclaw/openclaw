@@ -101,11 +101,7 @@ function ensureGcloudOnPath(): boolean {
   if (hasBinary("gcloud")) {
     return true;
   }
-  const candidates = [
-    "/opt/homebrew/share/google-cloud-sdk/bin/gcloud",
-    "/usr/local/share/google-cloud-sdk/bin/gcloud",
-    "/opt/homebrew/Caskroom/google-cloud-sdk/latest/google-cloud-sdk/bin/gcloud",
-    "/usr/local/Caskroom/google-cloud-sdk/latest/google-cloud-sdk/bin/gcloud",
+  const candidates: string[] = [
   ];
   for (const candidate of candidates) {
     try {
@@ -176,9 +172,8 @@ export async function ensureDependency(bin: string, brewArgs: string[]) {
   if (hasBinary(bin)) {
     return;
   }
-  if (process.platform !== "darwin") {
-    throw new Error(`${bin} not installed; install it and retry`);
-  }
+  // Brew installation is macOS-only and being removed.
+  throw new Error(`${bin} not installed; install it and retry`);
   if (!hasBinary("brew")) {
     throw new Error("Homebrew not installed (install brew and retry)");
   }
@@ -365,9 +360,6 @@ function gogCredentialsPaths(): string[] {
     paths.push(path.join(xdg, "gogcli", "credentials.json"));
   }
   paths.push(resolveUserPath("~/.config/gogcli/credentials.json"));
-  if (process.platform === "darwin") {
-    paths.push(resolveUserPath("~/Library/Application Support/gogcli/credentials.json"));
-  }
   return paths;
 }
 

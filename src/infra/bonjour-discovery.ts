@@ -294,7 +294,7 @@ async function discoverWideAreaViaTailnetDns(
   const startedAt = Date.now();
   const remainingMs = () => timeoutMs - (Date.now() - startedAt);
 
-  const tailscaleCandidates = ["tailscale", "/Applications/Tailscale.app/Contents/MacOS/Tailscale"];
+  const tailscaleCandidates = ["tailscale"];
   let ips: string[] = [];
   for (const candidate of tailscaleCandidates) {
     try {
@@ -557,26 +557,6 @@ export async function discoverGatewayBeacons(
     .map((d) => (d.endsWith(".") ? d : `${d}.`));
 
   try {
-    if (platform === "darwin") {
-      const perDomain = await Promise.allSettled(
-        domains.map(async (domain) => await discoverViaDnsSd(domain, timeoutMs, run)),
-      );
-      const discovered = perDomain.flatMap((r) => (r.status === "fulfilled" ? r.value : []));
-
-      const wantsWideArea = wideAreaDomain ? domains.includes(wideAreaDomain) : false;
-      const hasWideArea = wideAreaDomain
-        ? discovered.some((b) => b.domain === wideAreaDomain)
-        : false;
-
-      if (wantsWideArea && !hasWideArea && wideAreaDomain) {
-        const fallback = await discoverWideAreaViaTailnetDns(wideAreaDomain, timeoutMs, run).catch(
-          () => [],
-        );
-        return [...discovered, ...fallback];
-      }
-
-      return discovered;
-    }
     if (platform === "linux") {
       const perDomain = await Promise.allSettled(
         domains.map(async (domain) => await discoverViaAvahi(domain, timeoutMs, run)),

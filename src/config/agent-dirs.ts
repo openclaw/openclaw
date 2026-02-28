@@ -23,7 +23,7 @@ export class DuplicateAgentDirError extends Error {
 
 function canonicalizeAgentDir(agentDir: string): string {
   const resolved = path.resolve(agentDir);
-  if (process.platform === "darwin" || process.platform === "win32") {
+  if (process.platform === "win32") {
     return resolved.toLowerCase();
   }
   return resolved;

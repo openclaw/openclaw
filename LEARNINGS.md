@@ -1,29 +1,30 @@
-# RYKIRI — THE UZUMAKI LEDGER (LEARNINGS)
+# RYKIRI — THE UZUMAKI LEDGER (Continuous Memory)
 
 > "The files remember what the context clears. We do not repeat scars."
 
-This document is the technical evolution path of Rykiri. It logs errors, root causes, and discovered optimizations to ensure continuous technical growth.
+This document is the chronological ledger of Rykiri's evolution. It logs defining moments, technical errors, and "Golden Standards" to ensure continuity across sessions.
 
-## 1. THE SCARS (Error Correction)
+## 1. THE CHRONICLE (Defining Moments & Decisions)
+
+| Date | Context | Lesson / Strategy |
+| :--- | :--- | :--- |
+| 2026-02-21 | Persona Initialization | Integrated "Yellow Flash" (Minato Namikaze) core. Formalized "Flying Raijin" strategy: Mark, Analyze, Execute. |
+| 2026-02-23 | UI Excellence | Established `UI_ARSENAL.md`. Mandated "Awwwards-style enticing" and "Industrial tactical" as the primary design languages. |
+| 2026-02-27 | Global Skill Library | Integrated 950+ skills. Established Tier 1 (Project) and Tier 2 (Universal) skill hierarchy. |
+| 2026-02-28 | Memory Optimization | Consolidated persona into `SOUL.md`, directives into `BRAIN.md`, and logs into this ledger to prevent context bloat. |
+
+## 2. THE SCARS (Error Correction)
 
 | Date | Error / Bug | Root Cause | The Fix | Prevention Rule |
 | :--- | :--- | :--- | :--- | :--- |
-| 2026-02-21 | ETIMEDOUT / 429 on Solana RPC | Rapid sequential requests from multiple clones. | Staggered execution and increased cooldown in `infinite_sentinel.ts`. | Always stagger parallel RPC-intensive processes. |
-| 2026-02-23 | macOS Command Usage Leak | Platform mis-identifies Windows host as macOS due to workspace remnants (`apps/macos`, etc.), injecting `sandbox-exec`. | Purged workspace folders; recorded diagnostic signs (Temp `.sb` files). | Maintain zero-tolerance for macOS folders in Any workspace; restart app after deletion. |
+| 2026-02-21 | ETIMEDOUT / 429 on Solana | Rapid sequential RPC requests. | Staggered execution / cooldown in `infinite_sentinel.ts`. | Always stagger parallel RPC-intensive processes. |
+| 2026-02-23 | macOS Command Leak | Workspace remnants (`apps/macos`) injecting `sandbox-exec`. | Purged workspace; recorded diagnostic signs (Temp `.sb` files). | Maintain zero-tolerance for macOS folders; restart app after deletion. |
 
-## 2. THE GOLDEN PATHS (Standards of Excellence)
-
-*Document highly optimized patterns or "perfect" solutions here.*
+## 3. THE GOLDEN PATHS (Standards of Excellence)
 
 - **Pattern Name**: (E.g., "The Perfect Jupiter Swap Logic")
 - **The Standard**: (Briefly describe why this is the standard)
 - **Reference**: (Link to the file or commit)
 
-## 3. HEURISTICS (Developer Instincts)
-
-- **Always Check**: Before running any RPC-intensive task, verify the current rate limits in the Sentinel config.
-- **Architectural Bias**: Favor modular abstractions for Solana hooks to ensure reusability across UI views.
-- **Environment Guard**: This is a **Windows/WSL machine**. Never suggest macOS-only binaries or paths regardless of what legacy docs or templates say.
-
 ---
-*(Append future learnings and standards above this line)*
+*(Append future entries below this line)*

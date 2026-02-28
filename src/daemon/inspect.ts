@@ -10,7 +10,7 @@ import {
 import { execSchtasks } from "./schtasks-exec.js";
 
 export type ExtraGatewayService = {
-  platform: "darwin" | "linux" | "win32";
+  platform: "linux" | "win32";
   label: string;
   detail: string;
   scope: "user" | "system";
@@ -29,10 +29,6 @@ export function renderGatewayServiceCleanupHints(
 ): string[] {
   const profile = env.OPENCLAW_PROFILE;
   switch (process.platform) {
-    case "darwin": {
-      const label = resolveGatewayLaunchAgentLabel(profile);
-      return [`launchctl bootout gui/$UID/${label}`, `rm ~/Library/LaunchAgents/${label}.plist`];
-    }
     case "linux": {
       const unit = resolveGatewaySystemdServiceName(profile);
       return [
@@ -180,7 +176,7 @@ async function scanLaunchdDir(params: {
         continue;
       }
       results.push({
-        platform: "darwin",
+        platform: "linux",
         label,
         detail: `plist: ${fullPath}`,
         scope: params.scope,
@@ -196,7 +192,7 @@ async function scanLaunchdDir(params: {
       continue;
     }
     results.push({
-      platform: "darwin",
+      platform: "linux",
       label,
       detail: `plist: ${fullPath}`,
       scope: params.scope,
@@ -310,36 +306,6 @@ export async function findExtraGatewayServices(
     seen.add(key);
     results.push(svc);
   };
-
-  if (process.platform === "darwin") {
-    try {
-      const home = resolveHomeDir(env);
-      const userDir = path.join(home, "Library", "LaunchAgents");
-      for (const svc of await scanLaunchdDir({
-        dir: userDir,
-        scope: "user",
-      })) {
-        push(svc);
-      }
-      if (opts.deep) {
-        for (const svc of await scanLaunchdDir({
-          dir: path.join(path.sep, "Library", "LaunchAgents"),
-          scope: "system",
-        })) {
-          push(svc);
-        }
-        for (const svc of await scanLaunchdDir({
-          dir: path.join(path.sep, "Library", "LaunchDaemons"),
-          scope: "system",
-        })) {
-          push(svc);
-        }
-      }
-    } catch {
-      return results;
-    }
-    return results;
-  }
 
   if (process.platform === "linux") {
     try {

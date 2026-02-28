@@ -94,22 +94,6 @@ export function withNormalizedTimestamp<T extends Record<string, unknown>>(
 }
 
 function detectSystemTimeFormat(): boolean {
-  if (process.platform === "darwin") {
-    try {
-      const result = execSync("defaults read -g AppleICUForce24HourTime 2>/dev/null", {
-        encoding: "utf8",
-        timeout: 500,
-      }).trim();
-      if (result === "1") {
-        return true;
-      }
-      if (result === "0") {
-        return false;
-      }
-    } catch {
-      // Not set, fall through
-    }
-  }
 
   if (process.platform === "win32") {
     try {

@@ -76,20 +76,6 @@ systemctl --user restart '${escaped}'
 # Self-cleanup
 rm -f "$0"
 `;
-    } else if (platform === "darwin") {
-      const label = resolveLaunchdLabel(env);
-      const escaped = shellEscape(label);
-      // Fallback to 501 if getuid is not available (though it should be on macOS)
-      const uid = process.getuid ? process.getuid() : 501;
-      filename = `openclaw-restart-${timestamp}.sh`;
-      scriptContent = `#!/bin/sh
-# Standalone restart script — survives parent process termination.
-# Wait briefly to ensure file locks are released after update.
-sleep 1
-launchctl kickstart -k 'gui/${uid}/${escaped}'
-# Self-cleanup
-rm -f "$0"
-`;
     } else if (platform === "win32") {
       const taskName = resolveWindowsTaskName(env);
       if (!isBatchSafe(taskName)) {

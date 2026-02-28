@@ -165,11 +165,6 @@ export async function resolveBrowserOpenCommand(): Promise<BrowserOpenCommand> {
     };
   }
 
-  if (platform === "darwin") {
-    const hasOpen = await detectBinary("open");
-    return hasOpen ? { argv: ["open"], command: "open" } : { argv: null, reason: "missing-open" };
-  }
-
   if (platform === "linux") {
     const wsl = await isWSL();
     if (!hasDisplay && !wsl) {
@@ -265,24 +260,8 @@ export async function openUrl(url: string): Promise<boolean> {
   }
 }
 
-export async function openUrlInBackground(url: string): Promise<boolean> {
-  if (shouldSkipBrowserOpenInTests()) {
-    return false;
-  }
-  if (process.platform !== "darwin") {
-    return false;
-  }
-  const resolved = await resolveBrowserOpenCommand();
-  if (!resolved.argv || resolved.command !== "open") {
-    return false;
-  }
-  const command = ["open", "-g", url];
-  try {
-    await runCommandWithTimeout(command, { timeoutMs: 5_000 });
-    return true;
-  } catch {
-    return false;
-  }
+export async function openUrlInBackground(_url: string): Promise<boolean> {
+  return false;
 }
 
 export async function ensureWorkspaceAndSessions(

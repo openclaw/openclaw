@@ -1,13 +1,4 @@
 import {
-  installLaunchAgent,
-  isLaunchAgentLoaded,
-  readLaunchAgentProgramArguments,
-  readLaunchAgentRuntime,
-  restartLaunchAgent,
-  stopLaunchAgent,
-  uninstallLaunchAgent,
-} from "./launchd.js";
-import {
   installScheduledTask,
   isScheduledTaskInstalled,
   readScheduledTaskCommand,
@@ -64,35 +55,6 @@ export type GatewayService = {
 };
 
 export function resolveGatewayService(): GatewayService {
-  if (process.platform === "darwin") {
-    return {
-      label: "LaunchAgent",
-      loadedText: "loaded",
-      notLoadedText: "not loaded",
-      install: async (args) => {
-        await installLaunchAgent(args);
-      },
-      uninstall: async (args) => {
-        await uninstallLaunchAgent(args);
-      },
-      stop: async (args) => {
-        await stopLaunchAgent({
-          stdout: args.stdout,
-          env: args.env,
-        });
-      },
-      restart: async (args) => {
-        await restartLaunchAgent({
-          stdout: args.stdout,
-          env: args.env,
-        });
-      },
-      isLoaded: async (args) => isLaunchAgentLoaded(args),
-      readCommand: readLaunchAgentProgramArguments,
-      readRuntime: readLaunchAgentRuntime,
-    };
-  }
-
   if (process.platform === "linux") {
     return {
       label: "systemd",

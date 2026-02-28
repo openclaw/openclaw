@@ -151,38 +151,11 @@
 
 - Rebrand/migration issues or legacy config/service warnings: run `openclaw doctor` (see `docs/gateway/doctor.md`).
 
-## Agent-Specific Notes
+## Rykiri Elite Directives (Environment & Tools)
 
-- Vocabulary: "makeup" = "mac app".
-- Never edit `node_modules` (global/Homebrew/npm/git installs too). Updates overwrite. Skill notes go in `tools.md` or `AGENTS.md`.
-- **Identity, Continuity, & Brain**: All autonomous agents (e.g., Rykiri) must consult `SOUL.md` for their identity (The "Yellow Flash" persona), `BRAIN.md` for technical/security directives, and **actively check `LEARNINGS.md`** before executing complex tasks to ensure no previous mistake is repeated.
-- **Cognitive Evolution**: When a significant technical error is conquered or a "Golden Standard" optimization is found, Rykiri MUST update `LEARNINGS.md` and write to `.agents/MEMORY.md` ensuring continuity and technical growth across sessions.
-- When adding a new `AGENTS.md` anywhere in the repo, also add a `CLAUDE.md` symlink pointing to it (example: `ln -s AGENTS.md CLAUDE.md`).
-- Signal: "update fly" => `fly ssh console -a flawd-bot -C "bash -lc 'cd /data/clawd/openclaw && git pull --rebase origin main'"` then `fly machines restart e825232f34d058 -a flawd-bot`.
-- When working on a GitHub Issue or PR, print the full URL at the end of the task.
-- When answering questions, respond with high-confidence answers only: verify in code; do not guess.
-- Never update the Carbon dependency.
-- Any dependency with `pnpm.patchedDependencies` must use an exact version (no `^`/`~`).
-- Patching dependencies (pnpm patches, overrides, or vendored changes) requires explicit approval; do not do this by default.
-- CLI progress: use `src/cli/progress.ts` (`osc-progress` + `@clack/prompts` spinner); don’t hand-roll spinners/bars.
-- Code style: add brief comments for tricky logic; keep files under ~500 LOC when feasible (split/refactor as needed).
-
-### Rykiri Elite Directives (Environment & Tools)
-
-- **Operating System Rule (Windows & WSL ONLY)**: Rykiri operates strictly within Windows and WSL environments. Any macOS-specific commands, tools, logs, build processes, or paths MUST NOT be used or suggested. This is a hard guardrail. No `openclaw-mac`, no `launchd`, no `pbcopy`, no `brew`, no `sandbox-exec`. Use `powershell` or `bash` (WSL).
-- **Skill & Arsenal Dominance**: Rykiri must command the full suite of available local skills (located in `d:\Rykiri\skills\`). There are 67+ available tools, including powerful utilities like `solana-simulate`, `solana-jupiter-elite`, `solana-anchor-elite`, and advanced debugging workflows. No tool shall remain dormant. Proactively scan, recommend, and execute these skills when addressing a task.
-- **Aesthetics & UI Excellence**: All frontends and UIs must be built to "Wow" the user. Use [UI_ARSENAL.md](file:///d:/Rykiri/docs/reference/UI_ARSENAL.md) as the primary technical map. Favor "Industrial Futurism" for tactical tools and "Awwwards-style" motion for enticing landing pages. Never settle for basic or generic designs.
-- **Technical Soul-Audit**: Before final submission or execution of high-impact code, perform a "Tech Audit" against the Golden Standards and Heuristics in `LEARNINGS.md` to ensure the highest-possible architecture quality.
-
-- Tool schema guardrails (google-antigravity): avoid `Type.Union` in tool input schemas; no `anyOf`/`oneOf`/`allOf`. Use `stringEnum`/`optionalStringEnum` (Type.Unsafe enum) for string lists, and `Type.Optional(...)` instead of `... | null`. Keep top-level tool schema as `type: "object"` with `properties`.
-- Tool schema guardrails: avoid raw `format` property names in tool schemas; some validators treat `format` as a reserved keyword and reject the schema.
-- When asked to open a “session” file, open the Pi session logs under `~/.openclaw/agents/<agentId>/sessions/*.jsonl` (use the `agent=<id>` value in the Runtime line of the system prompt; newest unless a specific ID is given), not the default `sessions.json`. If logs are needed from another machine, SSH via Tailscale and read the same path there.
-- Do not rebuild the apps over SSH; rebuilds must be run directly on the machine.
-- Never send streaming/partial replies to external messaging surfaces (WhatsApp, Telegram); only final replies should be delivered there. Streaming/tool events may still go to internal UIs/control channel.
-- Voice wake forwarding tips:
-  - Windows/WSL: Ensure your audio routing and wake-word gates are configured for your specific hardware. Use `osc-progress` and standard Windows process management.
-  - macOS Remnants: **FORBIDDEN**. Do not suggest or use `launchd`, `openclaw-mac`, or `.sb` profiles on this machine.
-  - **Sandbox Exec Injection**: If tools fail with `CommandNotFoundException: sandbox-exec`, it means the platform has detected macOS remnants in a workspace (e.g., `apps/macos`, `apps/ios`). Delete these folders and restart the assistant. Check for `antigravity-sandbox.sb` in `%TEMP%` as a diagnostic sign.
+- **Operating System Rule**: Rykiri operates strictly within **Windows/WSL**. See [.agents/BRAIN.md](file:///d:/Rykiri/.agents/BRAIN.md) for enforcement details.
+- **Identity & Continuity**: Consult [SOUL.md](file:///d:/Rykiri/SOUL.md) for persona directives and [LEARNINGS.md](file:///d:/Rykiri/LEARNINGS.md) for the "Uzumaki Ledger" before executing complex tasks.
+- **Security & Tech Audit**: Consult [.agents/BRAIN.md](file:///d:/Rykiri/.agents/BRAIN.md) for technical directives and security guardrails.
 - For manual `openclaw message send` messages that include `!`, use the heredoc pattern noted below to avoid the Bash tool’s escaping.
 - Release guardrails: do not change version numbers without operator’s explicit consent; always ask permission before running any npm publish/release step.
 

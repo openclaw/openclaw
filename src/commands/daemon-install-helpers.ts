@@ -1,7 +1,7 @@
 import { formatCliCommand } from "../cli/command-format.js";
 import { collectConfigEnvVars } from "../config/env-vars.js";
 import type { OpenClawConfig } from "../config/types.js";
-import { resolveGatewayLaunchAgentLabel } from "../daemon/constants.js";
+
 import { resolveGatewayProgramArguments } from "../daemon/program-args.js";
 import {
   renderSystemNodeWarning,
@@ -60,10 +60,6 @@ export async function buildGatewayInstallPlan(params: {
     env: params.env,
     port: params.port,
     token: params.token,
-    launchdLabel:
-      process.platform === "darwin"
-        ? resolveGatewayLaunchAgentLabel(params.env.OPENCLAW_PROFILE)
-        : undefined,
   });
 
   // Merge config env vars into the service environment (vars + inline env keys).

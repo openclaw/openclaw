@@ -87,7 +87,7 @@ describe("ensureOpenClawCliOnPath", () => {
       execPath: cliPath,
       cwd: tmp,
       homeDir: tmp,
-      platform: "darwin",
+      platform: "linux",
     });
 
     const updated = process.env.PATH ?? "";
@@ -101,7 +101,7 @@ describe("ensureOpenClawCliOnPath", () => {
       execPath: "/tmp/does-not-matter",
       cwd: "/tmp",
       homeDir: "/tmp",
-      platform: "darwin",
+      platform: "linux",
     });
     expect(process.env.PATH).toBe("/bin");
   });
@@ -127,7 +127,7 @@ describe("ensureOpenClawCliOnPath", () => {
       execPath: appCli,
       cwd: tmp,
       homeDir: tmp,
-      platform: "darwin",
+      platform: "linux",
     });
 
     const updated = process.env.PATH ?? "";
@@ -159,7 +159,7 @@ describe("ensureOpenClawCliOnPath", () => {
       execPath: appCli,
       cwd: tmp,
       homeDir: tmp,
-      platform: "darwin",
+      platform: "linux",
     });
     const withoutOptIn = (process.env.PATH ?? "").split(path.delimiter);
     expect(withoutOptIn.includes(localBinDir)).toBe(false);
@@ -171,7 +171,7 @@ describe("ensureOpenClawCliOnPath", () => {
       execPath: appCli,
       cwd: tmp,
       homeDir: tmp,
-      platform: "darwin",
+      platform: "linux",
       allowProjectLocalBin: true,
     });
     const withOptIn = (process.env.PATH ?? "").split(path.delimiter);
