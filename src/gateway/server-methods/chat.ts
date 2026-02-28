@@ -780,7 +780,6 @@ export const chatHandlers: GatewayRequestHandlers = {
       cfg,
       overrideMs: p.timeoutMs,
     });
-    const now = Date.now();
     const clientRunId = p.idempotencyKey;
 
     const sendPolicy = resolveSendPolicy({
@@ -871,6 +870,7 @@ export const chatHandlers: GatewayRequestHandlers = {
     }
 
     try {
+      const now = Date.now();
       const abortController = new AbortController();
       context.chatAbortControllers.set(clientRunId, {
         controller: abortController,
