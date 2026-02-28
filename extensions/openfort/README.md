@@ -79,43 +79,6 @@ List all backend wallet accounts.
 
 - `limit` (number, optional): Maximum number of accounts (default: 10)
 
-## Scripts
-
-Utility scripts are available in the `scripts/` directory. Run with `tsx`:
-
-```bash
-cd extensions/openfort/scripts
-tsx script-name.ts [args...]
-```
-
-### Setup & Configuration
-
-- **`setup-final-sponsorship.ts`** - Create V2 policy + fee sponsorship with dynamic USDC gas payment
-  ```bash
-  tsx setup-final-sponsorship.ts YOUR_SK_KEY YOUR_WALLET_SECRET
-  ```
-
-### EIP-7702 Transactions
-
-- **`send-7702-correct.ts`** ⭐ **WORKING** - Send USDC via EIP-7702 with gas paid in USDC
-  ```bash
-  tsx send-7702-correct.ts SK WALLET_SECRET RECIPIENT AMOUNT
-  # Example: tsx send-7702-correct.ts sk_test_... MIGHAgEA... 0x742d35... 0.5
-  ```
-- **`upgrade-to-7702-delegated.ts`** - Upgrade backend wallet to EIP-7702 delegated account
-
-### Testing & Diagnostics
-
-- **`test-openfort-standalone.ts`** - Standalone integration test
-- **`check-all-balances.ts`** - Check balances for all wallets
-- **`check-balance.ts`** - Check balance for specific wallet
-
-### Utilities
-
-- **`list-accounts-raw.ts`** - List accounts with full details
-- **`list-policies.ts`** - List fee sponsorship policies
-- **`create-usdc-dynamic-sponsorship.ts`** - Alternative sponsorship setup script
-
 ## EIP-7702 & USDC Gas Payment
 
 This extension supports EIP-7702 delegated accounts, allowing EOAs to act as smart accounts with features like:
@@ -134,12 +97,12 @@ This extension supports EIP-7702 delegated accounts, allowing EOAs to act as sma
 
 ### Working Example
 
-The `scripts/send-7702-correct.ts` script demonstrates a complete working implementation:
+The extension implements EIP-7702 support for USDC gas payment:
 
 - Creates EIP-7702 authorization using `hashAuthorization` from viem
-- Signs authorization with `account.sign({ hash })`
+- Signs authorization with backend wallet
 - Creates transaction intent with `signedAuthorization`
-- Signs user operation and submits transaction
+- Signs user operation and submits transaction via Openfort
 - **Result**: USDC transfer with gas paid in USDC, 0 ETH used
 
 **Proven Transaction**: [0x361a41b39cbf2de17546f015fafdcd962b619b7f332baac34c207ab66a723e85](https://sepolia.basescan.org/tx/0x361a41b39cbf2de17546f015fafdcd962b619b7f332baac34c207ab66a723e85)
@@ -169,23 +132,12 @@ openfort/
 ├── package.json                      # Dependencies (@openfort/openfort-node, viem)
 ├── README.md                         # This file
 │
-├── src/                              # Core source code
-│   ├── types.ts                      # TypeScript interfaces & types
-│   ├── constants.ts                  # Network constants & addresses
-│   ├── client.ts                     # OpenfortClient wrapper class
-│   ├── tools.ts                      # Tool implementations (6 tools)
-│   └── utils.ts                      # Type-safe utility functions
-│
-└── scripts/                          # Utility scripts
-    ├── send-7702-correct.ts          # ⭐ Send USDC via EIP-7702
-    ├── setup-final-sponsorship.ts    # Setup fee sponsorship
-    ├── upgrade-to-7702-delegated.ts  # Upgrade to delegated account
-    ├── check-all-balances.ts         # Check balances
-    ├── check-balance.ts              # Check single balance
-    ├── list-accounts-raw.ts          # List accounts
-    ├── list-policies.ts              # List policies
-    ├── create-usdc-dynamic-sponsorship.ts
-    └── test-openfort-standalone.ts   # Integration test
+└── src/                              # Core source code
+    ├── types.ts                      # TypeScript interfaces & types
+    ├── constants.ts                  # Network constants & addresses
+    ├── client.ts                     # OpenfortClient wrapper class
+    ├── tools.ts                      # Tool implementations (6 tools)
+    └── utils.ts                      # Type-safe utility functions
 ```
 
 ## Development
