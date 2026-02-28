@@ -4,6 +4,7 @@ import {
   sanitizeToolCallInputs,
   sanitizeToolUseResultPairing,
   repairToolUseResultPairing,
+  sanitizeToolCallIdsForModel,
 } from "./session-transcript-repair.js";
 
 const TOOL_CALL_BLOCK_TYPES = new Set(["toolCall", "toolUse", "functionCall"]);
@@ -399,5 +400,182 @@ describe("sanitizeToolCallInputs", () => {
     expect((toolCalls[0] as { name?: unknown }).name).toBe("read");
     expect((toolCalls[0] as { id?: unknown }).id).toBe("call_1");
     expect((toolCalls[0] as { arguments?: unknown }).arguments).toEqual({ path: "/tmp/test" });
+  });
+});
+
+describe("sanitizeToolCallIdsForModel", () => {
+  it("rewrites incompatible Kimi-style UUIDs to Anthropic-compatible format", () => {
+    const history = [
+      {
+        role: "assistant",
+        content: [{ type: "toolUse", id: "kimi-uuid-12345-abc!@#", name: "bash", input: {} }],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "kimi-uuid-12345-abc!@#",
+        toolName: "bash",
+        content: [{ type: "text", text: "ok" }],
+        isError: false,
+      },
+    ] as unknown as AgentMessage[];
+
+    const result = sanitizeToolCallIdsForModel(history, "anthropic");
+
+    expect(result.remappedCount).toBe(1);
+    // New ID should match Anthropic pattern
+    const assistant = result.messages[0] as Extract<AgentMessage, { role: "assistant" }>;
+    const toolBlock = (assistant.content as Array<{ id?: string }>)[0];
+    expect(toolBlock?.id).toMatch(/^toolu_[a-f0-9]+$/);
+
+    // Tool result should reference the same new ID
+    const toolResult = result.messages[1] as { toolCallId?: string };
+    expect(toolResult.toolCallId).toBe(toolBlock?.id);
+  });
+
+  it("does not modify already-compatible IDs", () => {
+    const history = [
+      {
+        role: "assistant",
+        content: [{ type: "toolUse", id: "toolu_abc123", name: "bash", input: {} }],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "toolu_abc123",
+        toolName: "bash",
+        content: [{ type: "text", text: "ok" }],
+        isError: false,
+      },
+    ] as unknown as AgentMessage[];
+
+    const result = sanitizeToolCallIdsForModel(history, "anthropic");
+
+    expect(result.remappedCount).toBe(0);
+    // Messages should be returned unchanged (same reference)
+    expect(result.messages).toBe(history);
+  });
+
+  it("handles mixed providers in history after multiple switches", () => {
+    const history = [
+      {
+        role: "assistant",
+        content: [
+          { type: "toolUse", id: "toolu_valid1", name: "read", input: {} },
+          { type: "toolCall", id: "kimi!uuid!2", name: "exec", input: {} },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "toolu_valid1",
+        toolName: "read",
+        content: [{ type: "text", text: "ok" }],
+        isError: false,
+      },
+      {
+        role: "toolResult",
+        toolCallId: "kimi!uuid!2",
+        toolName: "exec",
+        content: [{ type: "text", text: "done" }],
+        isError: false,
+      },
+    ] as unknown as AgentMessage[];
+
+    const result = sanitizeToolCallIdsForModel(history, "anthropic");
+
+    // Only the incompatible ID should be remapped
+    expect(result.remappedCount).toBe(1);
+
+    const assistant = result.messages[0] as Extract<AgentMessage, { role: "assistant" }>;
+    const blocks = assistant.content as Array<{ id?: string }>;
+    expect(blocks[0]?.id).toBe("toolu_valid1"); // kept as-is
+    expect(blocks[1]?.id).toMatch(/^toolu_[a-f0-9]+$/); // remapped
+
+    // Tool results should match
+    const result1 = result.messages[1] as { toolCallId?: string };
+    const result2 = result.messages[2] as { toolCallId?: string };
+    expect(result1.toolCallId).toBe("toolu_valid1");
+    expect(result2.toolCallId).toBe(blocks[1]?.id);
+  });
+
+  it("drops orphan tool results with incompatible IDs and no matching tool_use", () => {
+    const history = [
+      {
+        role: "assistant",
+        content: [{ type: "toolUse", id: "toolu_good", name: "read", input: {} }],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "toolu_good",
+        toolName: "read",
+        content: [{ type: "text", text: "ok" }],
+        isError: false,
+      },
+      {
+        role: "toolResult",
+        toolCallId: "orphan!bad!id",
+        toolName: "exec",
+        content: [{ type: "text", text: "orphan" }],
+        isError: false,
+      },
+    ] as unknown as AgentMessage[];
+
+    const result = sanitizeToolCallIdsForModel(history, "anthropic");
+
+    expect(result.droppedOrphanCount).toBe(1);
+    expect(result.messages).toHaveLength(2);
+  });
+
+  it("rewrites IDs to OpenAI call_ prefix format", () => {
+    const history = [
+      {
+        role: "assistant",
+        content: [{ type: "functionCall", id: "toolu_abc123", name: "bash", arguments: {} }],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "toolu_abc123",
+        toolName: "bash",
+        content: [{ type: "text", text: "ok" }],
+        isError: false,
+      },
+    ] as unknown as AgentMessage[];
+
+    const result = sanitizeToolCallIdsForModel(history, "openai");
+
+    // toolu_ prefix doesn't match OpenAI's call_ pattern
+    expect(result.remappedCount).toBe(1);
+    const assistant = result.messages[0] as Extract<AgentMessage, { role: "assistant" }>;
+    const toolBlock = (assistant.content as Array<{ id?: string }>)[0];
+    expect(toolBlock?.id).toMatch(/^call_[a-f0-9]+$/);
+  });
+
+  it("preserves user and system messages unchanged", () => {
+    const history = [
+      { role: "user", content: "hello" },
+      { role: "system", content: "system prompt" },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "hi there" }],
+      },
+    ] as unknown as AgentMessage[];
+
+    const result = sanitizeToolCallIdsForModel(history, "anthropic");
+
+    expect(result.remappedCount).toBe(0);
+    expect(result.messages).toBe(history);
+  });
+
+  it("uses default pattern for unknown providers", () => {
+    const history = [
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "valid_id-123", name: "bash", arguments: {} }],
+      },
+    ] as unknown as AgentMessage[];
+
+    const result = sanitizeToolCallIdsForModel(history, "unknown-provider");
+
+    // valid_id-123 matches the default pattern [a-zA-Z0-9_-]+
+    expect(result.remappedCount).toBe(0);
+    expect(result.messages).toBe(history);
   });
 });

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { extractToolCallsFromAssistant, extractToolResultId } from "./tool-call-id.js";
 
@@ -372,5 +373,157 @@ export function repairToolUseResultPairing(messages: AgentMessage[]): ToolUseRep
     droppedDuplicateCount,
     droppedOrphanCount,
     moved: changedOrMoved,
+  };
+}
+
+// -- Provider-aware tool call ID sanitization for model switches --
+
+/**
+ * Regex patterns for valid tool call IDs per provider.
+ * When a session switches models mid-conversation, the existing tool call IDs
+ * from the previous provider may be incompatible with the new provider's format.
+ */
+const TOOL_CALL_ID_PATTERNS: Record<string, RegExp> = {
+  anthropic: /^[a-zA-Z0-9_-]+$/,
+  openai: /^call_[a-zA-Z0-9]+$/,
+  google: /^[a-zA-Z0-9_-]+$/,
+  default: /^[a-zA-Z0-9_-]+$/,
+};
+
+/**
+ * Generate a tool call ID compatible with the target provider.
+ * Uses a deterministic hash of the original ID + counter to avoid collisions.
+ */
+function generateCompatibleId(provider: string, originalId: string, counter: number): string {
+  const prefix = provider === "openai" ? "call_" : "toolu_";
+  const hash = createHash("sha256").update(`${originalId}:${counter}`).digest("hex").slice(0, 24);
+  return `${prefix}${hash}`;
+}
+
+export type ToolCallIdSanitizeReport = {
+  messages: AgentMessage[];
+  remappedCount: number;
+  droppedOrphanCount: number;
+};
+
+/**
+ * Sanitize all tool call IDs in session history for compatibility with a target provider.
+ *
+ * When switching models mid-session (e.g. from Kimi-K2 to Claude), tool call IDs
+ * in the existing transcript may use formats incompatible with the new provider:
+ * - Claude requires `^[a-zA-Z0-9_-]+$`
+ * - OpenAI requires `^call_[a-zA-Z0-9]+$`
+ * - DeepSeek/Kimi may generate UUIDs with special characters
+ *
+ * This function rewrites incompatible IDs while maintaining a consistent mapping
+ * between tool_use and tool_result entries.
+ *
+ * See: Issues #7107, #8240
+ */
+export function sanitizeToolCallIdsForModel(
+  messages: AgentMessage[],
+  targetProvider: string,
+): ToolCallIdSanitizeReport {
+  const normalizedProvider = targetProvider.toLowerCase().trim();
+  const pattern = TOOL_CALL_ID_PATTERNS[normalizedProvider] ?? TOOL_CALL_ID_PATTERNS.default;
+
+  // Map old IDs to new IDs for consistency between tool_use and tool_result
+  const idMapping = new Map<string, string>();
+  let remappedCount = 0;
+  let droppedOrphanCount = 0;
+  let changed = false;
+  let idCounter = 0;
+
+  const resolveId = (id: string): string => {
+    if (pattern.test(id)) {
+      return id;
+    }
+    const existing = idMapping.get(id);
+    if (existing) {
+      return existing;
+    }
+    const newId = generateCompatibleId(normalizedProvider, id, idCounter++);
+    idMapping.set(id, newId);
+    remappedCount++;
+    return newId;
+  };
+
+  const out: AgentMessage[] = [];
+
+  for (const msg of messages) {
+    if (!msg || typeof msg !== "object") {
+      out.push(msg);
+      continue;
+    }
+
+    if (msg.role === "assistant" && Array.isArray(msg.content)) {
+      let contentChanged = false;
+      const nextContent = msg.content.map((block) => {
+        if (!block || typeof block !== "object") {
+          return block;
+        }
+        const rec = block as { type?: unknown; id?: unknown };
+        if (
+          typeof rec.type === "string" &&
+          (rec.type === "toolCall" || rec.type === "toolUse" || rec.type === "functionCall") &&
+          typeof rec.id === "string" &&
+          rec.id
+        ) {
+          const newId = resolveId(rec.id);
+          if (newId !== rec.id) {
+            contentChanged = true;
+            changed = true;
+            return { ...(block as unknown as Record<string, unknown>), id: newId };
+          }
+        }
+        return block;
+      });
+
+      out.push(contentChanged ? { ...msg, content: nextContent as typeof msg.content } : msg);
+      continue;
+    }
+
+    if (msg.role === "toolResult") {
+      const toolCallId = (msg as { toolCallId?: unknown }).toolCallId;
+      const toolUseId = (msg as { toolUseId?: unknown }).toolUseId;
+      const id =
+        (typeof toolCallId === "string" && toolCallId) ||
+        (typeof toolUseId === "string" && toolUseId) ||
+        null;
+
+      if (id) {
+        const mappedId = idMapping.get(id);
+        if (mappedId) {
+          // ID was remapped from a tool_use block — update the tool_result to match
+          changed = true;
+          const updates: Record<string, unknown> = {};
+          if (typeof toolCallId === "string" && toolCallId) {
+            updates.toolCallId = mappedId;
+          }
+          if (typeof toolUseId === "string" && toolUseId) {
+            updates.toolUseId = mappedId;
+          }
+          out.push({ ...msg, ...updates } as AgentMessage);
+          continue;
+        }
+        if (!pattern.test(id)) {
+          // Orphan tool_result with incompatible ID and no matching tool_use — drop it
+          droppedOrphanCount++;
+          changed = true;
+          continue;
+        }
+      }
+
+      out.push(msg);
+      continue;
+    }
+
+    out.push(msg);
+  }
+
+  return {
+    messages: changed ? out : messages,
+    remappedCount,
+    droppedOrphanCount,
   };
 }
