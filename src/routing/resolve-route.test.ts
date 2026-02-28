@@ -4,7 +4,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { resolveAgentRoute } from "./resolve-route.js";
 
 describe("resolveAgentRoute", () => {
-  test("defaults to main/default when no bindings exist", () => {
+  test("defaults to per-channel-peer isolation when no bindings exist", () => {
     const cfg: OpenClawConfig = {};
     const route = resolveAgentRoute({
       cfg,
@@ -14,7 +14,7 @@ describe("resolveAgentRoute", () => {
     });
     expect(route.agentId).toBe("main");
     expect(route.accountId).toBe("default");
-    expect(route.sessionKey).toBe("agent:main:main");
+    expect(route.sessionKey).toBe("agent:main:whatsapp:direct:+15551234567");
     expect(route.matchedBy).toBe("default");
   });
 

@@ -129,7 +129,7 @@ export async function collectChannelSecurityFindings(params: {
       allowFrom: input.allowFrom,
       normalizeEntry: input.normalizeEntry,
     });
-    const dmScope = params.cfg.session?.dmScope ?? "main";
+    const dmScope = params.cfg.session?.dmScope ?? "per-channel-peer";
 
     if (input.dmPolicy === "open") {
       const allowFromKey = `${input.allowFromPath}allowFrom`;
