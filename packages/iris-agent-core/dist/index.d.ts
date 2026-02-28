@@ -203,6 +203,16 @@ declare class IrisAgent {
   get state(): AgentState;
   get sessionId(): string | undefined;
   set sessionId(value: string | undefined);
+  /**
+   * Update parallel execution options after construction.
+   * Called by the app layer to wire config values into the agent loop.
+   */
+  setParallelOptions(opts: {
+    toolTimeoutMs?: number;
+    toolCacheMs?: number;
+    maxParallelTools?: number;
+    toolResultCompression?: ToolResultCompressionOptions | false;
+  }): void;
   get thinkingBudgets(): Record<string, number> | undefined;
   set thinkingBudgets(value: Record<string, number> | undefined);
   get transport(): "sse" | "stream";

@@ -121,6 +121,30 @@ export class IrisAgent {
     this._sessionId = value;
   }
 
+  /**
+   * Update parallel execution options after construction.
+   * Called by the app layer to wire config values into the agent loop.
+   */
+  setParallelOptions(opts: {
+    toolTimeoutMs?: number;
+    toolCacheMs?: number;
+    maxParallelTools?: number;
+    toolResultCompression?: ToolResultCompressionOptions | false;
+  }): void {
+    if (opts.toolTimeoutMs !== undefined) {
+      this._toolTimeoutMs = opts.toolTimeoutMs;
+    }
+    if (opts.toolCacheMs !== undefined) {
+      this._toolCacheMs = opts.toolCacheMs;
+    }
+    if (opts.maxParallelTools !== undefined) {
+      this._maxParallelTools = opts.maxParallelTools;
+    }
+    if (opts.toolResultCompression !== undefined) {
+      this._toolResultCompression = opts.toolResultCompression;
+    }
+  }
+
   get thinkingBudgets(): Record<string, number> | undefined {
     return this._thinkingBudgets;
   }

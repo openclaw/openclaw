@@ -597,6 +597,16 @@ var IrisAgent = class {
 	set sessionId(value) {
 		this._sessionId = value;
 	}
+	/**
+	* Update parallel execution options after construction.
+	* Called by the app layer to wire config values into the agent loop.
+	*/
+	setParallelOptions(opts) {
+		if (opts.toolTimeoutMs !== void 0) this._toolTimeoutMs = opts.toolTimeoutMs;
+		if (opts.toolCacheMs !== void 0) this._toolCacheMs = opts.toolCacheMs;
+		if (opts.maxParallelTools !== void 0) this._maxParallelTools = opts.maxParallelTools;
+		if (opts.toolResultCompression !== void 0) this._toolResultCompression = opts.toolResultCompression;
+	}
 	get thinkingBudgets() {
 		return this._thinkingBudgets;
 	}
