@@ -1,0 +1,9 @@
+{
+  "id": "typex",
+  "channels": ["typex"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

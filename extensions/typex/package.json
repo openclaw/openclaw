@@ -1,0 +1,30 @@
+{
+  "name": "@openclaw/typex",
+  "version": "2026.2.27",
+  "description": "OpenClaw TypeX channel plugin",
+  "type": "module",
+  "dependencies": {
+    "qrcode-terminal": "^0.12.0",
+    "zod": "^4.3.6"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "channel": {
+      "id": "typex",
+      "label": "TypeX",
+      "selectionLabel": "TypeX (QR Code Login)",
+      "docsPath": "/channels/typex",
+      "docsLabel": "typex",
+      "blurb": "TypeX bot via QR code login.",
+      "order": 100,
+      "quickstartAllowFrom": true
+    },
+    "install": {
+      "npmSpec": "@openclaw/typex",
+      "localPath": "extensions/typex",
+      "defaultChoice": "npm"
+    }
+  }
+}
