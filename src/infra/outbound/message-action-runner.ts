@@ -162,6 +162,62 @@ export function getToolResult(
   return "toolResult" in result ? result.toolResult : undefined;
 }
 
+function readTrimmedTargetsParam(params: Record<string, unknown>): string[] {
+  const raw = params.targets;
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  const targets: string[] = [];
+  for (const value of raw) {
+    if (typeof value !== "string") {
+      continue;
+    }
+    const trimmed = value.trim();
+    if (trimmed.length > 0) {
+      targets.push(trimmed);
+    }
+  }
+  return targets;
+}
+
+function normalizeTargetsParamForAction(params: {
+  action: ChannelMessageActionName;
+  args: Record<string, unknown>;
+}) {
+  const targets = readTrimmedTargetsParam(params.args);
+  if (targets.length === 0) {
+    return;
+  }
+  if (params.action === "broadcast") {
+    // Keep broadcast targets canonical and trimmed.
+    params.args.targets = targets;
+    return;
+  }
+  if (!actionRequiresTarget(params.action)) {
+    throw new Error(`Action ${params.action} does not accept targets.`);
+  }
+  const explicitTarget = typeof params.args.target === "string" ? params.args.target.trim() : "";
+  const legacyTo = typeof params.args.to === "string" ? params.args.to.trim() : "";
+  const legacyChannelId =
+    typeof params.args.channelId === "string" ? params.args.channelId.trim() : "";
+  const primaryTarget = explicitTarget || legacyTo || legacyChannelId;
+  if (targets.length > 1) {
+    throw new Error(
+      `Action ${params.action} accepts a single destination. Use target for one recipient or broadcast for multiple targets.`,
+    );
+  }
+  const onlyTarget = targets[0];
+  if (primaryTarget && primaryTarget !== onlyTarget) {
+    throw new Error(
+      `Conflicting destinations provided for ${params.action}. Use a single target destination.`,
+    );
+  }
+  if (!primaryTarget) {
+    params.args.target = onlyTarget;
+  }
+  delete params.args.targets;
+}
+
 function applyCrossContextMessageDecoration({
   params,
   message,
@@ -706,6 +762,7 @@ export async function runMessageAction(
   parseComponentsParam(params);
 
   const action = input.action;
+  normalizeTargetsParamForAction({ action, args: params });
   if (action === "broadcast") {
     return handleBroadcastAction(input, params);
   }

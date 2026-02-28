@@ -196,6 +196,33 @@ describe("runMessageAction context isolation", () => {
     expect(result.kind).toBe("send");
   });
 
+  it("accepts single-entry targets for send", async () => {
+    const result = await runDrySend({
+      cfg: slackConfig,
+      actionParams: {
+        channel: "slack",
+        targets: ["#C12345678"],
+        message: "hi",
+      },
+    });
+
+    expect(result.kind).toBe("send");
+  });
+
+  it("rejects multi-entry targets for send", async () => {
+    await expect(
+      runDrySend({
+        cfg: slackConfig,
+        actionParams: {
+          channel: "slack",
+          targets: ["#C12345678", "#C99999999"],
+          message: "hi",
+        },
+        toolContext: { currentChannelId: "C12345678", currentChannelProvider: "slack" },
+      }),
+    ).rejects.toThrow(/single destination/i);
+  });
+
   it("defaults to current channel when target is omitted", async () => {
     const result = await runDrySend({
       cfg: slackConfig,
