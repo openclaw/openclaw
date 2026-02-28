@@ -65,6 +65,12 @@ export function stripThoughtSignatures<T>(
     if (!block || typeof block !== "object") {
       return block;
     }
+    // Anthropic requires thinking/redacted_thinking blocks in the latest assistant
+    // message to be identical to the original response. Never modify these blocks.
+    const blockType = (block as { type?: unknown }).type;
+    if (blockType === "thinking" || blockType === "redacted_thinking") {
+      return block;
+    }
     const rec = block as ContentBlockWithSignature;
     const stripSnake = shouldStripSignature(rec.thought_signature);
     const stripCamel = includeCamelCase ? shouldStripSignature(rec.thoughtSignature) : false;
