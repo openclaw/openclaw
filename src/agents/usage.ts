@@ -34,6 +34,38 @@ export type NormalizedUsage = {
   total?: number;
 };
 
+export type AssistantUsageSnapshot = {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  totalTokens: number;
+  cost: {
+    input: number;
+    output: number;
+    cacheRead: number;
+    cacheWrite: number;
+    total: number;
+  };
+};
+
+export function makeZeroUsageSnapshot(): AssistantUsageSnapshot {
+  return {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: 0,
+    cost: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      total: 0,
+    },
+  };
+}
+
 const asFiniteNumber = (value: unknown): number | undefined => {
   if (typeof value !== "number") {
     return undefined;

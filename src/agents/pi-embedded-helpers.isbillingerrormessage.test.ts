@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   classifyFailoverReason,
   isAuthErrorMessage,
+  isAuthPermanentErrorMessage,
   isBillingErrorMessage,
   isCloudCodeAssistFormatError,
   isCloudflareOrHtmlErrorPage,
@@ -15,6 +16,39 @@ import {
   parseImageDimensionError,
   parseImageSizeError,
 } from "./pi-embedded-helpers.js";
+
+describe("isAuthPermanentErrorMessage", () => {
+  it("matches permanent auth failure patterns", () => {
+    const samples = [
+      "invalid_api_key",
+      "api key revoked",
+      "api key deactivated",
+      "key has been disabled",
+      "key has been revoked",
+      "account has been deactivated",
+      "could not authenticate api key",
+      "could not validate credentials",
+      "API_KEY_REVOKED",
+      "api_key_deleted",
+    ];
+    for (const sample of samples) {
+      expect(isAuthPermanentErrorMessage(sample)).toBe(true);
+    }
+  });
+  it("does not match transient auth errors", () => {
+    const samples = [
+      "unauthorized",
+      "invalid token",
+      "authentication failed",
+      "forbidden",
+      "access denied",
+      "token has expired",
+    ];
+    for (const sample of samples) {
+      expect(isAuthPermanentErrorMessage(sample)).toBe(false);
+    }
+  });
+});
 
 describe("isAuthErrorMessage", () => {
   it("matches credential validation errors", () => {
@@ -479,6 +513,12 @@ describe("classifyFailoverReason", () => {
         '{"error":{"code":503,"message":"The model is overloaded. Please try later","status":"UNAVAILABLE"}}',
       ),
     ).toBe("rate_limit");
+  });
+  it("classifies permanent auth errors as auth_permanent", () => {
+    expect(classifyFailoverReason("invalid_api_key")).toBe("auth_permanent");
+    expect(classifyFailoverReason("Your api key has been revoked")).toBe("auth_permanent");
+    expect(classifyFailoverReason("key has been disabled")).toBe("auth_permanent");
+    expect(classifyFailoverReason("account has been deactivated")).toBe("auth_permanent");
   });
   it("classifies JSON api_error internal server failures as timeout", () => {
     expect(

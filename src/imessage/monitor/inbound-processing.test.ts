@@ -58,3 +58,71 @@ describe("describeIMessageEchoDropLog", () => {
     ).toContain("id=abc-123");
   });
 });
+
+describe("resolveIMessageInboundDecision command auth", () => {
+  const cfg = {} as OpenClawConfig;
+
+  it("does not auto-authorize DM commands in open mode without allowlists", () => {
+    const decision = resolveIMessageInboundDecision({
+      cfg,
+      accountId: "default",
+      message: {
+        id: 100,
+        sender: "+15555550123",
+        text: "/status",
+        is_from_me: false,
+        is_group: false,
+      },
+      opts: undefined,
+      messageText: "/status",
+      bodyText: "/status",
+      allowFrom: [],
+      groupAllowFrom: [],
+      groupPolicy: "open",
+      dmPolicy: "open",
+      storeAllowFrom: [],
+      historyLimit: 0,
+      groupHistories: new Map(),
+      echoCache: undefined,
+      logVerbose: undefined,
+    });
+
+    expect(decision.kind).toBe("dispatch");
+    if (decision.kind !== "dispatch") {
+      return;
+    }
+    expect(decision.commandAuthorized).toBe(false);
+  });
+
+  it("authorizes DM commands for senders in pairing-store allowlist", () => {
+    const decision = resolveIMessageInboundDecision({
+      cfg,
+      accountId: "default",
+      message: {
+        id: 101,
+        sender: "+15555550123",
+        text: "/status",
+        is_from_me: false,
+        is_group: false,
+      },
+      opts: undefined,
+      messageText: "/status",
+      bodyText: "/status",
+      allowFrom: [],
+      groupAllowFrom: [],
+      groupPolicy: "open",
+      dmPolicy: "open",
+      storeAllowFrom: ["+15555550123"],
+      historyLimit: 0,
+      groupHistories: new Map(),
+      echoCache: undefined,
+      logVerbose: undefined,
+    });
+
+    expect(decision.kind).toBe("dispatch");
+    if (decision.kind !== "dispatch") {
+      return;
+    }
+    expect(decision.commandAuthorized).toBe(true);
+  });
+});

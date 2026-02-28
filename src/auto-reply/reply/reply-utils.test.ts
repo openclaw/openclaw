@@ -142,7 +142,7 @@ describe("typing controller", () => {
         typing.markDispatchIdle();
       }
       await vi.advanceTimersByTimeAsync(2_000);
-      expect(onReplyStart, testCase.name).toHaveBeenCalledTimes(5);
+      expect(onReplyStart, testCase.name).toHaveBeenCalledTimes(testCase.first === "run" ? 3 : 5);
 
       if (testCase.second === "run") {
         typing.markRunComplete();
@@ -150,7 +150,7 @@ describe("typing controller", () => {
         typing.markDispatchIdle();
       }
       await vi.advanceTimersByTimeAsync(2_000);
-      expect(onReplyStart, testCase.name).toHaveBeenCalledTimes(5);
+      expect(onReplyStart, testCase.name).toHaveBeenCalledTimes(testCase.first === "run" ? 3 : 5);
     }
   });
 
@@ -254,6 +254,28 @@ describe("resolveTypingMode", () => {
           isGroupChat: false,
           wasMentioned: false,
           isHeartbeat: true,
+        },
+        expected: "never",
+      },
+      {
+        name: "suppressTyping forces never",
+        input: {
+          configured: "instant" as const,
+          isGroupChat: false,
+          wasMentioned: false,
+          isHeartbeat: false,
+          suppressTyping: true,
+        },
+        expected: "never",
+      },
+      {
+        name: "typingPolicy system_event forces never",
+        input: {
+          configured: "instant" as const,
+          isGroupChat: false,
+          wasMentioned: false,
+          isHeartbeat: false,
+          typingPolicy: "system_event" as const,
         },
         expected: "never",
       },
