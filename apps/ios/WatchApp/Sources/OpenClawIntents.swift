@@ -22,17 +22,14 @@ struct OpenClawOpenAppIntent: AppIntent {
     }
 }
 
-/// Toggle intent for the connection status control. The control is read-only
-/// display; tapping it simply opens the app via `opensAppWhenRun`.
-struct ConnectionStatusToggleIntent: SetValueIntent {
-    static let title: LocalizedStringResource = "Toggle Connection Display"
+/// Intent for the connection status control. The control is read-only display;
+/// tapping it simply opens the app.
+struct ConnectionStatusIntent: AppIntent {
+    static let title: LocalizedStringResource = "Connection Status"
+    static let description: IntentDescription = "Open OpenClaw to view connection status"
     static let openAppWhenRun = true
 
-    @Parameter(title: "Connected")
-    var value: Bool
-
     func perform() async throws -> some IntentResult {
-        // Read-only — the toggle opens the app, it does not change state.
         .result()
     }
 }

@@ -41,17 +41,14 @@ struct QuickReplyControl: ControlWidget {
 
 // MARK: - Connection Status Control
 
-/// Status toggle showing the gateway connection state. Tapping opens the app.
+/// Button showing the gateway connection state. Tapping opens the app.
 struct ConnectionStatusControl: ControlWidget {
     static let kind = "ai.openclaw.watch.connection-status"
 
     var body: some ControlWidgetConfiguration {
         StaticControlConfiguration(kind: Self.kind) {
             let connected = ConnectionStatusProvider.isConnected
-            ControlWidgetToggle(
-                isOn: connected,
-                action: ConnectionStatusToggleIntent()
-            ) {
+            ControlWidgetButton(action: ConnectionStatusIntent()) {
                 Label {
                     Text(connected ? "Connected" : "Disconnected")
                 } icon: {

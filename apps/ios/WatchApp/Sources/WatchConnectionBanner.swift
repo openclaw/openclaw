@@ -19,40 +19,48 @@ struct WatchConnectionBanner: View {
     }
 
     var body: some View {
-        if visible {
-            HStack(spacing: WatchDesignTokens.spacingXS) {
-                Image(systemName: icon)
-                    .font(WatchDesignTokens.fontBadge)
-                Text(label)
-                    .font(WatchDesignTokens.fontBadge)
+        Group {
+            if visible {
+                HStack(spacing: WatchDesignTokens.spacingXS) {
+                    Image(systemName: icon)
+                        .font(WatchDesignTokens.fontBadge)
+                        .symbolEffect(
+                            .variableColor.iterative.reversing,
+                            isActive: !isConnected)
+                    Text(label)
+                        .font(WatchDesignTokens.fontBadge)
+                }
+                .padding(.horizontal, WatchDesignTokens.spacingSM)
+                .padding(.vertical, WatchDesignTokens.spacingXS)
+                .frame(maxWidth: .infinity)
+                .glassEffect(.regular.tint(tint))
+                .transition(.opacity)
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel(label)
+                .accessibilityAddTraits(.isStatusElement)
             }
-            .padding(.horizontal, WatchDesignTokens.spacingSM)
-            .padding(.vertical, WatchDesignTokens.spacingXS)
-            .frame(maxWidth: .infinity)
-            .glassEffect(.regular.tint(tint))
-            .transition(.opacity)
-            .onChange(of: isConnected) { _, connected in
-                autoDismissTask?.cancel()
-                autoDismissTask = nil
-                if connected {
-                    autoDismissTask = Task { @MainActor in
-                        try? await Task.sleep(for: .seconds(WatchDesignTokens.bannerAutoDismiss))
-                        guard !Task.isCancelled else { return }
-                        withAnimation(WatchDesignTokens.spring) {
-                            visible = false
-                        }
-                    }
-                } else {
+        }
+        .onChange(of: isConnected) { _, connected in
+            autoDismissTask?.cancel()
+            autoDismissTask = nil
+            if connected {
+                autoDismissTask = Task { @MainActor in
+                    try? await Task.sleep(for: .seconds(WatchDesignTokens.bannerAutoDismiss))
+                    guard !Task.isCancelled else { return }
                     withAnimation(WatchDesignTokens.spring) {
-                        visible = true
+                        visible = false
                     }
                 }
+            } else {
+                // Reset visibility so the banner reappears on disconnect
+                withAnimation(WatchDesignTokens.spring) {
+                    visible = true
+                }
             }
-            .onDisappear {
-                autoDismissTask?.cancel()
-                autoDismissTask = nil
-            }
-            .accessibilityLabel(label)
+        }
+        .onDisappear {
+            autoDismissTask?.cancel()
+            autoDismissTask = nil
         }
     }
 }

@@ -36,5 +36,4 @@ enum WatchDesignTokens {
     // MARK: - Durations
 
     static let bannerAutoDismiss: Double = 2.0
-    static let appearDelay: Double = 0.15
 }

@@ -23,7 +23,7 @@ struct WatchHomeView: View {
     }
 
     var body: some View {
-        ScrollView {
+        ScrollView(.vertical) {
             VStack(spacing: WatchDesignTokens.spacingMD) {
                 if store.hasContent {
                     messageContent
@@ -34,6 +34,7 @@ struct WatchHomeView: View {
             .padding(.horizontal, WatchDesignTokens.spacingSM)
             .animation(WatchDesignTokens.spring, value: store.hasContent)
         }
+        .defaultScrollAnchor(.top)
         .safeAreaInset(edge: .top) {
             WatchConnectionBanner(isConnected: store.isReachable)
                 .padding(.horizontal, WatchDesignTokens.spacingSM)
@@ -75,7 +76,7 @@ struct WatchHomeView: View {
 
     @ViewBuilder
     private var actionButtons: some View {
-        ForEach(store.actions) { action in
+        ForEach(Array(store.actions.enumerated()), id: \.element.id) { index, action in
             WatchActionButton(
                 label: action.label,
                 role: role(for: action),
@@ -84,6 +85,8 @@ struct WatchHomeView: View {
             {
                 onAction?(action)
             }
+            // Double Tap gesture triggers the first action button
+            .handGestureShortcut(index == 0 ? .primaryAction : .never)
         }
     }
 }
