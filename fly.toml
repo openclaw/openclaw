@@ -30,6 +30,14 @@ auto_start_machines = true
 min_machines_running = 1
 processes = ["app"]
 
+# Health check ensures gateway is actually listening before deploy succeeds
+[[http_service.checks]]
+grace_period = "120s"
+interval = "5s"
+method = "GET"
+path = "/"
+timeout = "5s"
+
 [[vm]]
 size = "shared-cpu-4x"
 memory = "8192mb"

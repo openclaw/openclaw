@@ -1,6 +1,6 @@
 {
   "name": "openclaw",
-  "version": "0.1.11",
+  "version": "0.1.13",
   "description": "Multi-channel AI gateway with extensible messaging integrations",
   "keywords": [],
   "license": "MIT",

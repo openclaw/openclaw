@@ -1,0 +1,42 @@
+# Staging deployment for smoke-testing new builds before production.
+# Usage: fly deploy --config fly-staging.toml --app openclaw-jhs-staging
+#
+# No persistent volume — gateway starts with empty state dir.
+# Machine auto-stops after inactivity to save cost.
+
+app = "openclaw-jhs-staging"
+primary_region = "iad"
+
+[build]
+dockerfile = "Dockerfile"
+
+[env]
+NODE_ENV = "production"
+OPENCLAW_PREFER_PNPM = "1"
+# Use ephemeral /tmp for state — no persistent volume on staging
+OPENCLAW_STATE_DIR = "/tmp/openclaw-state"
+OPENCLAW_HOME = "/tmp/openclaw-home"
+NODE_OPTIONS = "--max-old-space-size=4096"
+
+[processes]
+# Skip fly-entrypoint.sh on staging — no tools or workspace needed
+app = "node dist/index.js gateway --allow-unconfigured --port 3000 --bind lan"
+
+[http_service]
+internal_port = 3000
+force_https = true
+auto_stop_machines = true
+auto_start_machines = true
+min_machines_running = 0
+processes = ["app"]
+
+[[http_service.checks]]
+grace_period = "120s"
+interval = "5s"
+method = "GET"
+path = "/"
+timeout = "5s"
+
+[[vm]]
+size = "shared-cpu-4x"
+memory = "8192mb"
