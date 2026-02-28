@@ -25,6 +25,11 @@ const GEMINI_3_1_FLASH_PREFIX = "gemini-3.1-flash";
 const GEMINI_3_1_PRO_TEMPLATE_IDS = ["gemini-3-pro-preview"] as const;
 const GEMINI_3_1_FLASH_TEMPLATE_IDS = ["gemini-3-flash-preview"] as const;
 
+// xAI Grok 4.1 models are not yet in pi-ai's built-in xai catalog.
+// Clone the grok-4 template so users don't get "Unknown model" errors.
+const XAI_GROK_41_PREFIXES = ["grok-4-1", "grok-4-fast", "grok-code-fast"];
+const XAI_GROK_TEMPLATE_MODEL_IDS = ["grok-4"] as const;
+
 function cloneFirstTemplateModel(params: {
   normalizedProvider: string;
   trimmedModelId: string;
@@ -242,6 +247,53 @@ function resolveZaiGlm5ForwardCompatModel(
   } as Model<Api>);
 }
 
+// xAI's Grok 4.1 / Grok 4 Fast / Grok Code Fast models may not be present
+// in pi-ai's built-in catalog yet. Clone grok-4 as a forward-compat fallback.
+function resolveXaiGrokForwardCompatModel(
+  provider: string,
+  modelId: string,
+  modelRegistry: ModelRegistry,
+): Model<Api> | undefined {
+  if (normalizeProviderId(provider) !== "xai") {
+    return undefined;
+  }
+  const trimmed = modelId.trim();
+  const lower = trimmed.toLowerCase();
+  const matchesPrefix = XAI_GROK_41_PREFIXES.some((prefix) => lower.startsWith(prefix));
+  if (!matchesPrefix) {
+    return undefined;
+  }
+
+  for (const templateId of XAI_GROK_TEMPLATE_MODEL_IDS) {
+    const template = modelRegistry.find("xai", templateId) as Model<Api> | null;
+    if (!template) {
+      continue;
+    }
+    const isReasoning = !lower.includes("non-reasoning");
+    return normalizeModelCompat({
+      ...template,
+      id: trimmed,
+      name: trimmed,
+      reasoning: isReasoning,
+      contextWindow: 2_000_000,
+    } as Model<Api>);
+  }
+
+  // Hard-coded fallback when no template is found at all.
+  const isReasoning = !lower.includes("non-reasoning");
+  return normalizeModelCompat({
+    id: trimmed,
+    name: trimmed,
+    api: "openai-completions",
+    provider: "xai",
+    reasoning: isReasoning,
+    input: ["text", "image"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 2_000_000,
+    maxTokens: DEFAULT_CONTEXT_TOKENS,
+  } as Model<Api>);
+}
+
 export function resolveForwardCompatModel(
   provider: string,
   modelId: string,
@@ -252,6 +304,7 @@ export function resolveForwardCompatModel(
     resolveAnthropicOpus46ForwardCompatModel(provider, modelId, modelRegistry) ??
     resolveAnthropicSonnet46ForwardCompatModel(provider, modelId, modelRegistry) ??
     resolveZaiGlm5ForwardCompatModel(provider, modelId, modelRegistry) ??
-    resolveGoogleGeminiCli31ForwardCompatModel(provider, modelId, modelRegistry)
+    resolveGoogleGeminiCli31ForwardCompatModel(provider, modelId, modelRegistry) ??
+    resolveXaiGrokForwardCompatModel(provider, modelId, modelRegistry)
   );
 }
