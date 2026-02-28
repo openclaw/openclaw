@@ -34,6 +34,7 @@ Docs: https://docs.openclaw.ai
 - Ollama/Context window: unify context window handling across discovery, merge, and OpenAI-compatible transport paths. (#29205) Thanks @Sid-Qin, @jimmielightner, and @vincentkoc.
 - Agents/Ollama: demote empty-discovery logging from `warn` to `debug` to reduce noisy warnings in normal edge-case discovery flows. (#26379) Thanks @byungsker.
 - Install/npm: fix npm global install deprecation warnings. (#28318) Thanks @vincentkoc.
+- Browser/Open & navigate: accept `url` as an alias parameter for `open` and `navigate`. (#29260) Thanks @vincentkoc.
 - Slack/Native commands: register Slack native status as `/agentstatus` (Slack-reserved `/status`) so manifest slash command registration stays valid while text `/status` still works. Landed from contributor PR #29032 by @maloqab. Thanks @maloqab.
 - Android/Nodes reliability: reject `facing=both` when `deviceId` is set to avoid mislabeled duplicate captures, allow notification `open`/`reply` on non-clearable entries while still gating dismiss, trigger listener rebind before notification actions, and scale invoke-result ack timeout to invoke budget for large clip payloads. (#28260) Thanks @obviyus.
 - Android/Camera clip: remove `camera.clip` HTTP-upload fallback to base64 so clip transport is deterministic and fail-loud, and reject non-positive `maxWidth` values so invalid inputs fall back to the safe resize default. (#28229) Thanks @obviyus.
