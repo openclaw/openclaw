@@ -4,6 +4,13 @@ read_when:
   - 你需要服务生命周期命令（install/start/stop/restart/status）
 summary: "`openclaw daemon` 的 CLI 参考（Gateway 服务管理的旧别名）"
 title: daemon
+x-i18n:
+  generated_at: "2026-02-28T17:05:00Z"
+  model: claude-opus-4-5
+  provider: pi
+  source_hash: 290792d3d94a18dadcc62c0482685db3afa4d0ba11536622e894ac056c6f7843
+  source_path: cli/daemon.md
+  workflow: 15
 ---
 
 # `openclaw daemon`
