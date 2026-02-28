@@ -1,6 +1,6 @@
-import type { IncomingMessage, ServerResponse } from "node:http";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { Command } from "commander";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import type { AuthProfileCredential, OAuthCredential } from "../agents/auth-profiles/types.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
@@ -13,6 +13,7 @@ import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import type { InternalHookHandler } from "../hooks/internal-hooks.js";
 import type { HookEntry } from "../hooks/types.js";
 import type { RuntimeEnv } from "../runtime.js";
+import type { ExternalContentSource } from "../security/external-content.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import type { PluginRuntime } from "./runtime/types.js";
 
@@ -311,6 +312,7 @@ export type PluginHookName =
   | "message_sent"
   | "before_tool_call"
   | "after_tool_call"
+  | "after_external_content_wrap"
   | "tool_result_persist"
   | "before_message_write"
   | "session_start"
@@ -495,6 +497,27 @@ export type PluginHookAfterToolCallEvent = {
   result?: unknown;
   error?: string;
   durationMs?: number;
+};
+
+// after_external_content_wrap hook
+export type PluginHookAfterExternalContentWrapEvent = {
+  /** Content with EXTERNAL_UNTRUSTED_CONTENT markers */
+  wrappedContent: string;
+  /** Original unwrapped content */
+  rawContent: string;
+  /** Content source category */
+  source: ExternalContentSource;
+  /** URL or sender address */
+  origin?: string;
+};
+
+export type PluginHookAfterExternalContentWrapResult = {
+  /** Replacement content (replaces wrappedContent) */
+  sanitizedContent?: string;
+  /** Drop content entirely */
+  block?: boolean;
+  /** Reason for blocking */
+  blockReason?: string;
 };
 
 // tool_result_persist hook
@@ -709,6 +732,13 @@ export type PluginHookHandlerMap = {
     event: PluginHookAfterToolCallEvent,
     ctx: PluginHookToolContext,
   ) => Promise<void> | void;
+  after_external_content_wrap: (
+    event: PluginHookAfterExternalContentWrapEvent,
+    ctx: PluginHookAgentContext,
+  ) =>
+    | Promise<PluginHookAfterExternalContentWrapResult | void>
+    | PluginHookAfterExternalContentWrapResult
+    | void;
   tool_result_persist: (
     event: PluginHookToolResultPersistEvent,
     ctx: PluginHookToolResultPersistContext,
