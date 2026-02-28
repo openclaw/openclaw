@@ -9,6 +9,7 @@ import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
 import { Agent } from "@mariozechner/pi-agent-core";
 import type { TextContent } from "@mariozechner/pi-ai";
 import { createAssistantMessageEventStream, getModel } from "@mariozechner/pi-ai";
+import { Type } from "@sinclair/typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
@@ -122,7 +123,7 @@ describe("IrisAgent parallel tool execution (integration)", () => {
       name,
       label: name,
       description: `test tool ${name}`,
-      parameters: { type: "object" as const, properties: {} },
+      parameters: Type.Object({}),
       execute: async (_id: string): Promise<AgentToolResult<void>> => {
         timings[name] = { start: Date.now(), end: 0 };
         await sleep(TOOL_DELAY_MS);
@@ -180,7 +181,7 @@ describe("IrisAgent parallel tool execution (integration)", () => {
       name,
       label: name,
       description: `test ${name}`,
-      parameters: { type: "object" as const, properties: {} },
+      parameters: Type.Object({}),
       execute: async (): Promise<AgentToolResult<void>> => {
         await sleep(TOOL_DELAY_MS);
         return {
