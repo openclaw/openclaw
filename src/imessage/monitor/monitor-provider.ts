@@ -22,6 +22,7 @@ import {
 } from "../../config/runtime-group-policy.js";
 import { readSessionUpdatedAt, resolveStorePath } from "../../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose, warn } from "../../globals.js";
+import { isOutboundSuppressed } from "../../infra/outbound/suppress-outbound.js";
 import { normalizeScpRemoteHost } from "../../infra/scp-host.js";
 import { waitForTransportReady } from "../../infra/transport-ready.js";
 import {
@@ -274,23 +275,27 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       });
       if (created) {
         logVerbose(`imessage pairing request sender=${decision.senderId}`);
-        try {
-          await sendMessageIMessage(
-            sender,
-            buildPairingReply({
-              channel: "imessage",
-              idLine: `Your iMessage sender id: ${decision.senderId}`,
-              code,
-            }),
-            {
-              client,
-              maxBytes: mediaMaxBytes,
-              accountId: accountInfo.accountId,
-              ...(chatId ? { chatId } : {}),
-            },
-          );
-        } catch (err) {
-          logVerbose(`imessage pairing reply failed for ${decision.senderId}: ${String(err)}`);
+        if (isOutboundSuppressed({ cfg, channel: "imessage", accountId: accountInfo.accountId })) {
+          logVerbose(`[suppressOutbound] Blocked iMessage pairing reply for ${decision.senderId}`);
+        } else {
+          try {
+            await sendMessageIMessage(
+              sender,
+              buildPairingReply({
+                channel: "imessage",
+                idLine: `Your iMessage sender id: ${decision.senderId}`,
+                code,
+              }),
+              {
+                client,
+                maxBytes: mediaMaxBytes,
+                accountId: accountInfo.accountId,
+                ...(chatId ? { chatId } : {}),
+              },
+            );
+          } catch (err) {
+            logVerbose(`imessage pairing reply failed for ${decision.senderId}: ${String(err)}`);
+          }
         }
       }
       return;

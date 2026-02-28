@@ -331,6 +331,7 @@ export const buildTelegramMessageContext = async ({
       accountId: account.accountId,
       bot,
       logger,
+      cfg,
     }))
   ) {
     return null;

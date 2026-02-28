@@ -665,6 +665,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
         chunkMode,
         sessionKey: ctxPayload.SessionKey,
         threadBindings,
+        cfg,
       });
       replyReference.markSent();
     },

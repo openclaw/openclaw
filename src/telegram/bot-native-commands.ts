@@ -449,6 +449,7 @@ export const registerTelegramNativeCommands = ({
     threadSpec: ReturnType<typeof resolveTelegramThreadSpec>;
     tableMode: ReturnType<typeof resolveMarkdownTableMode>;
     chunkMode: ReturnType<typeof resolveChunkMode>;
+    accountId?: string;
   }) => ({
     chatId: String(params.chatId),
     token: opts.token,
@@ -461,6 +462,8 @@ export const registerTelegramNativeCommands = ({
     tableMode: params.tableMode,
     chunkMode: params.chunkMode,
     linkPreview: telegramCfg.linkPreview,
+    cfg,
+    accountId: params.accountId,
   });
 
   if (commandsToRegister.length > 0 || pluginCatalog.commands.length > 0) {
@@ -517,6 +520,7 @@ export const registerTelegramNativeCommands = ({
             threadSpec,
             tableMode,
             chunkMode,
+            accountId: route.accountId,
           });
           const threadParams = buildTelegramThreadParams(threadSpec) ?? {};
 
@@ -739,6 +743,7 @@ export const registerTelegramNativeCommands = ({
             threadSpec,
             tableMode,
             chunkMode,
+            accountId,
           });
           const from = isGroup
             ? buildTelegramGroupFrom(chatId, threadSpec.id)

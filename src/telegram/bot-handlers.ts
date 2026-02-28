@@ -1444,6 +1444,7 @@ export const registerTelegramHandlers = ({
           accountId,
           bot,
           logger,
+          cfg,
         });
         if (!dmAuthorized) {
           return;
