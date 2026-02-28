@@ -89,9 +89,9 @@ function normalizeSchemaNode(
       if (!isAnySchema(schema.additionalProperties)) {
         const res = normalizeSchemaNode(schema.additionalProperties, [...path, "*"]);
         normalized.additionalProperties = res.schema ?? schema.additionalProperties;
-        if (res.unsupportedPaths.length > 0) {
-          unsupported.add(pathLabel);
-        }
+        // Note: We don't mark the parent as unsupported if additionalProperties has unsupported paths.
+        // This allows dynamic maps (like accounts) to render, with individual fields showing
+        // "Use Raw mode" if they contain complex unions.
       }
     }
   } else if (type === "array") {
@@ -209,33 +209,6 @@ function normalizeUnion(
     return {
       schema: mergedSchema,
       unsupportedPaths: [],
-    };
-  }
-
-  // Handle complex type unions (e.g., array | object) by keeping the anyOf structure
-  // This allows the UI to render the field with a type selector
-  if (remaining.length > 1) {
-    // Recursively normalize each option in the union
-    const normalizedRemaining: JsonSchema[] = [];
-    const allUnsupportedPaths: string[] = [];
-    
-    for (const entry of remaining) {
-      const res = normalizeSchemaNode(entry, path);
-      if (res.schema) {
-        normalizedRemaining.push(res.schema);
-      } else {
-        normalizedRemaining.push(entry);
-      }
-      allUnsupportedPaths.push(...res.unsupportedPaths);
-    }
-    
-    return {
-      schema: {
-        ...schema,
-        anyOf: normalizedRemaining,
-        nullable,
-      },
-      unsupportedPaths: allUnsupportedPaths,
     };
   }
 
