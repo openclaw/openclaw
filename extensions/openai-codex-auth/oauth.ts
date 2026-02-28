@@ -7,9 +7,10 @@ const OPENAI_AUTH_BASE = "https://auth.openai.com";
 const OPENAI_AUTHORIZE_URL = `${OPENAI_AUTH_BASE}/oauth/authorize`;
 const OPENAI_TOKEN_URL = `${OPENAI_AUTH_BASE}/oauth/token`;
 
-// Real Client ID from the official @openai/codex CLI
-const CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
-const REDIRECT_URI = "http://localhost:1455/auth/callback";
+// Client ID from env var (override) or official @openai/codex CLI default
+const CLIENT_ID = process.env["OPENAI_CODEX_CLIENT_ID"] ?? "app_EMoamEEZ73f0CkXaXp7hrann";
+const REDIRECT_URI =
+  process.env["OPENAI_CODEX_REDIRECT_URI"] ?? "http://localhost:1455/auth/callback";
 const SCOPE = "openid profile email model.request offline_access";
 
 export type CodexOAuthToken = {
