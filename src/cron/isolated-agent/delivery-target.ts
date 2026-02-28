@@ -12,6 +12,8 @@ import {
   resolveOutboundTarget,
   resolveSessionDeliveryTarget,
 } from "../../infra/outbound/targets.js";
+import { buildChannelAccountBindings } from "../../routing/bindings.js";
+import { normalizeAgentId } from "../../routing/session-key.js";
 
 /**
  * Result of resolving a cron delivery target.
@@ -34,8 +36,8 @@ export async function resolveDeliveryTarget(
   jobPayload: {
     channel?: "last" | ChannelId;
     to?: string;
-    sessionKey?: string;
     accountId?: string;
+    sessionKey?: string;
   },
 ): Promise<DeliveryTargetResolution> {
   const requestedChannel = typeof jobPayload.channel === "string" ? jobPayload.channel : "last";
@@ -102,24 +104,32 @@ export async function resolveDeliveryTarget(
   const mode = resolved.mode as "explicit" | "implicit";
   const toCandidate = resolved.to;
 
-  // Only carry threadId when delivering to the same recipient as the session's
-  // last conversation, OR when the threadId was explicitly parsed from the
-  // target (e.g. `:topic:NNN`). This prevents stale thread IDs from being
-  // sent to a different target where they would cause API errors.
+  // Prefer an explicit accountId from the job's delivery config (set via
+  // --account on cron add/edit). Fall back to the session's lastAccountId,
+  // then to the agent's bound account from bindings config.
+  const explicitAccountId =
+    typeof jobPayload.accountId === "string" && jobPayload.accountId.trim()
+      ? jobPayload.accountId.trim()
+      : undefined;
+  let accountId = explicitAccountId ?? resolved.accountId;
+  if (!accountId && channel) {
+    const bindings = buildChannelAccountBindings(cfg);
+    const byAgent = bindings.get(channel);
+    const boundAccounts = byAgent?.get(normalizeAgentId(agentId));
+    if (boundAccounts && boundAccounts.length > 0) {
+      accountId = boundAccounts[0];
+    }
+  }
+
+  // Carry threadId when it was explicitly set (from :topic: parsing or config)
+  // or when delivering to the same recipient as the session's last conversation.
+  // Session-derived threadIds are dropped when the target differs to prevent
+  // stale thread IDs from leaking to a different chat.
   const threadId =
     resolved.threadId &&
     (resolved.threadIdExplicit || (resolved.to && resolved.to === resolved.lastTo))
       ? resolved.threadId
       : undefined;
-
-  // Resolve accountId: explicit payload overrides session and bindings.
-  let accountId = jobPayload.accountId ?? resolved.accountId;
-  if (!accountId && cfg.bindings) {
-    const binding = cfg.bindings.find((b) => b.agentId === agentId && b.match?.channel === channel);
-    if (binding?.match?.accountId) {
-      accountId = binding.match.accountId;
-    }
-  }
 
   if (!toCandidate) {
     return {

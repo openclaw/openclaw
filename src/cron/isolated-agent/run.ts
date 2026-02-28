@@ -352,8 +352,8 @@ export async function runCronIsolatedAgentTurn(params: {
   const resolvedDelivery = await resolveDeliveryTarget(cfgWithAgentDefaults, agentId, {
     channel: deliveryPlan.channel ?? "last",
     to: deliveryPlan.to,
-    sessionKey: params.job.sessionKey,
     accountId: deliveryPlan.accountId,
+    sessionKey: params.job.sessionKey,
   });
 
   const { formattedTime, timeLine } = resolveCronStyleNow(params.cfg, now);
