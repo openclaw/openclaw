@@ -57,6 +57,7 @@ Optional env vars:
 
 - `OPENCLAW_IMAGE` — use a remote image instead of building locally (e.g. `ghcr.io/openclaw/openclaw:latest`)
 - `OPENCLAW_DOCKER_APT_PACKAGES` — install extra apt packages during build
+- `OPENCLAW_INSTALL_BROWSER` — set to `1` to install browser deps at build time
 - `OPENCLAW_EXTRA_MOUNTS` — add extra host bind mounts
 - `OPENCLAW_HOME_VOLUME` — persist `/home/node` in a named volume
 - `OPENCLAW_SANDBOX` — opt in to Docker gateway sandbox bootstrap. Only explicit truthy values enable it: `1`, `true`, `yes`, `on`
@@ -216,6 +217,24 @@ Then use `clawdock-start`, `clawdock-stop`, `clawdock-dashboard`, etc. Run `claw
 
 See [`ClawDock` Helper README](https://github.com/openclaw/openclaw/blob/main/scripts/shell-helpers/README.md) for details.
 
+### Keep macOS awake (optional)
+
+Running Docker does not reliably prevent macOS sleep. If your OpenClaw gateway
+must stay online (for Slack/Discord/webhooks), use the keep-awake helper from
+repo root:
+
+```bash
+scripts/openclaw-keepawake.sh on
+scripts/openclaw-keepawake.sh status
+scripts/openclaw-keepawake.sh off
+```
+
+Details:
+
+- Uses `caffeinate -dimsu` in the background.
+- Stores PID at `~/.openclaw/run/keepawake.pid`.
+- Requires macOS (`caffeinate` command).
+
 ### Manual flow (compose)
 
 ```bash
@@ -351,6 +370,109 @@ docker compose run --rm openclaw-cli \
 
 If you need Playwright to install system deps, rebuild the image with
 `OPENCLAW_DOCKER_APT_PACKAGES` instead of using `--with-deps` at runtime.
+
+## Docker troubleshooting notes (real-world)
+
+### CLI cannot connect to gateway (`gateway closed (1006)`)
+
+When `docker compose run --rm openclaw-cli ...` cannot reach the gateway, ensure
+the CLI service uses the gateway network namespace and starts after the gateway:
+
+- `openclaw-cli` uses `network_mode: "service:openclaw-gateway"`
+- `openclaw-cli` has `depends_on: [openclaw-gateway]`
+
+Then restart:
+
+```bash
+docker compose up -d openclaw-gateway
+```
+
+### `ERR_PNPM_NO_GLOBAL_BIN_DIR` while installing skills
+
+If skill install fails with:
+
+- `ERR_PNPM_NO_GLOBAL_BIN_DIR`
+- `Run "pnpm setup" ... or set PNPM_HOME`
+
+set `PNPM_HOME` in the image and include it in `PATH` so global binaries resolve
+for the non-root `node` user.
+
+### Global installs fail (`EACCES` / command not found)
+
+For non-root runtime installs from skills/UI, ensure these paths are configured
+in the image and on `PATH`:
+
+- `PNPM_HOME=/home/node/.local/share/pnpm`
+- `NPM_CONFIG_PREFIX=/home/node/.npm-global`
+- `GOPATH=/home/node/go` (or explicit `GOBIN`)
+
+And include:
+
+- `$PNPM_HOME`
+- `$NPM_CONFIG_PREFIX/bin`
+- `$GOPATH/bin`
+
+This avoids root-owned global install paths and keeps `pnpm`, `npm -g`, and
+`go install` binaries discoverable for the `node` user.
+
+### Slack Socket Mode connected but no replies
+
+If Slack probe is healthy but `lastInboundAt` stays `null`:
+
+1. In Slack app settings, enable **Socket Mode**.
+2. Enable **Event Subscriptions**.
+3. Add bot events (at minimum `message.im`; add `app_mention` if you use mentions).
+4. Enable **App Home → Messages Tab**.
+5. Reinstall the app to workspace after scope/event changes.
+
+If Slack asks for pairing, approve the code from the gateway container:
+
+```bash
+docker compose exec openclaw-gateway node dist/index.js pairing approve slack <PAIRING_CODE>
+```
+
+### Duplicate Slack replies (`edited` + final duplicate)
+
+If you see duplicated Slack responses, disable streaming:
+
+```bash
+docker compose exec openclaw-gateway node dist/index.js config set channels.slack.streaming off
+docker compose exec openclaw-gateway node dist/index.js config set channels.slack.nativeStreaming false
+docker compose restart openclaw-gateway
+```
+
+If duplicates still happen, verify only one OpenClaw gateway instance is connected
+to that Slack app/token pair.
+
+### `crontab: Permission denied` from agent tasks
+
+If an agent cannot manage cron jobs in Docker, your image likely lacks cron
+support (or the gateway is not started with the cron-capable entrypoint).
+
+Checklist:
+
+1. Rebuild the image so cron support from `Dockerfile` is included:
+
+```bash
+docker build -t openclaw:local -f Dockerfile .
+```
+
+2. Recreate gateway so `docker-compose.yml` gateway entrypoint/user changes apply:
+
+```bash
+docker compose up -d --force-recreate openclaw-gateway
+```
+
+3. Verify from inside gateway container:
+
+```bash
+docker compose exec openclaw-gateway sh -lc 'id && which crontab && crontab -l || true'
+```
+
+Notes:
+
+- Gateway starts as root only to launch cron daemon, then drops to `node`.
+- Set `OPENCLAW_ENABLE_CRON=0` to disable cron daemon startup.
 
 4. **Persist Playwright browser downloads**:
 

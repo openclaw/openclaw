@@ -7,12 +7,14 @@ metadata:
     "openclaw":
       {
         "emoji": "🧾",
+        "os": ["darwin"],
         "requires": { "bins": ["summarize"] },
         "install":
           [
             {
               "id": "brew",
               "kind": "brew",
+              "os": ["darwin"],
               "formula": "steipete/tap/summarize",
               "bins": ["summarize"],
               "label": "Install summarize (brew)",
