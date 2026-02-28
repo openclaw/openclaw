@@ -66,4 +66,23 @@ describe("downloadLineMedia", () => {
     await expect(downloadLineMedia("mid", "token", 7)).rejects.toThrow(/Media exceeds/i);
     expect(writeSpy).not.toHaveBeenCalled();
   });
+
+  it("classifies M4A voice messages as audio/mp4", async () => {
+    const m4a = Buffer.from([
+      0x00, 0x00, 0x00, 0x1c, 0x66, 0x74, 0x79, 0x70, 0x4d, 0x34, 0x41, 0x20,
+    ]);
+    getMessageContentMock.mockResolvedValueOnce(chunks([m4a]));
+
+    const writeSpy = vi.spyOn(fs.promises, "writeFile").mockResolvedValueOnce(undefined);
+
+    const result = await downloadLineMedia("voice-message", "token");
+    const writtenPath = writeSpy.mock.calls[0]?.[0];
+
+    expect(result.contentType).toBe("audio/mp4");
+    expect(result.path).toMatch(/\.m4a$/);
+    expect(typeof writtenPath).toBe("string");
+    if (typeof writtenPath === "string") {
+      expect(writtenPath).toMatch(/\.m4a$/);
+    }
+  });
 });
