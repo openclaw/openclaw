@@ -281,6 +281,9 @@ export async function startGatewayServer(
     info: (message) => log.info(message),
     warn: (message) => log.warn(message),
   });
+  // Keep startup behavior aligned with pre-refactor flow: runtime load applies
+  // overrides/defaults used by tests and CLI-provided config mutations.
+  cfgAtStart = loadConfig();
 
   let secretsDegraded = false;
   const emitSecretsStateEvent = (
