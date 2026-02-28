@@ -119,7 +119,7 @@ const NodesToolSchema = Type.Object({
   delayMs: Type.Optional(Type.Number()),
   deviceId: Type.Optional(Type.String()),
   duration: Type.Optional(Type.String()),
-  durationMs: Type.Optional(Type.Number()),
+  durationMs: Type.Optional(Type.Number({ minimum: 1000, maximum: 300000 })),
   includeAudio: Type.Optional(Type.Boolean()),
   // screen_record
   fps: Type.Optional(Type.Number()),
@@ -378,12 +378,14 @@ export function createNodesTool(options?: {
             if (facing !== "front" && facing !== "back") {
               throw new Error("invalid facing (front|back)");
             }
-            const durationMs =
+            let durationMs =
               typeof params.durationMs === "number" && Number.isFinite(params.durationMs)
                 ? params.durationMs
                 : typeof params.duration === "string"
                   ? parseDurationMs(params.duration)
                   : 3000;
+            // Server-side clamp to prevent unbounded recordings
+            durationMs = Math.min(Math.max(durationMs, 1000), 300000);
             const includeAudio =
               typeof params.includeAudio === "boolean" ? params.includeAudio : true;
             const deviceId =
@@ -420,12 +422,14 @@ export function createNodesTool(options?: {
           case "screen_record": {
             const node = readStringParam(params, "node", { required: true });
             const nodeId = await resolveNodeId(gatewayOpts, node);
-            const durationMs =
+            let durationMs =
               typeof params.durationMs === "number" && Number.isFinite(params.durationMs)
                 ? params.durationMs
                 : typeof params.duration === "string"
                   ? parseDurationMs(params.duration)
                   : 10_000;
+            // Server-side clamp to prevent unbounded recordings
+            durationMs = Math.min(Math.max(durationMs, 1000), 300000);
             const fps =
               typeof params.fps === "number" && Number.isFinite(params.fps) ? params.fps : 10;
             const screenIndex =
