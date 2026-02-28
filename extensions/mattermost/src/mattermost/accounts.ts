@@ -1,7 +1,12 @@
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { createAccountListHelpers, type OpenClawConfig } from "openclaw/plugin-sdk/mattermost";
 import { normalizeResolvedSecretInputString, normalizeSecretInputString } from "../secret-input.js";
-import type { MattermostAccountConfig, MattermostChatMode } from "../types.js";
+import type {
+  MattermostAccountConfig,
+  MattermostChatMode,
+  MattermostChatTypeKey,
+  MattermostReplyToMode,
+} from "../types.js";
 import { normalizeMattermostBaseUrl } from "./client.js";
 
 export type MattermostTokenSource = "env" | "config" | "none";
@@ -128,6 +133,26 @@ export function resolveMattermostAccount(params: {
     blockStreaming: merged.blockStreaming,
     blockStreamingCoalesce: merged.blockStreamingCoalesce,
   };
+}
+
+export function resolveMattermostReplyToMode(
+  account: {
+    config: {
+      replyToMode?: MattermostReplyToMode;
+      replyToModeByChatType?: Partial<Record<MattermostChatTypeKey, MattermostReplyToMode>>;
+      dm?: { replyToMode?: MattermostReplyToMode };
+    };
+  },
+  chatType: MattermostChatTypeKey | undefined,
+): MattermostReplyToMode {
+  if (chatType !== undefined && account.config.replyToModeByChatType?.[chatType] !== undefined) {
+    return account.config.replyToModeByChatType[chatType] ?? "off";
+  }
+  if (chatType === "direct" && account.config.dm?.replyToMode !== undefined) {
+    return account.config.dm.replyToMode ?? "off";
+  }
+  if (chatType === "direct") return "off";
+  return account.config.replyToMode ?? "off";
 }
 
 export function listEnabledMattermostAccounts(cfg: OpenClawConfig): ResolvedMattermostAccount[] {
