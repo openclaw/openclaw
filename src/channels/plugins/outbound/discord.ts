@@ -80,6 +80,25 @@ export const discordOutbound: ChannelOutboundAdapter = {
   textChunkLimit: 2000,
   pollMaxOptions: 10,
   resolveTarget: ({ to }) => normalizeDiscordOutboundTarget(to),
+  sendPayload: async (ctx) => {
+    const urls = ctx.payload.mediaUrls?.length
+      ? ctx.payload.mediaUrls
+      : ctx.payload.mediaUrl
+        ? [ctx.payload.mediaUrl]
+        : [];
+    if (urls.length > 0) {
+      let lastResult;
+      for (let i = 0; i < urls.length; i++) {
+        lastResult = await discordOutbound.sendMedia!({
+          ...ctx,
+          text: i === 0 ? (ctx.payload.text ?? "") : "",
+          mediaUrl: urls[i],
+        });
+      }
+      return lastResult;
+    }
+    return discordOutbound.sendText!({ ...ctx });
+  },
   sendText: async ({ to, text, accountId, deps, replyToId, threadId, identity, silent }) => {
     if (!silent) {
       const webhookResult = await maybeSendDiscordWebhookText({
