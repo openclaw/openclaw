@@ -1,4 +1,4 @@
-import type { IncomingMessage, ServerResponse } from "node:http";
+﻿import type { IncomingMessage, ServerResponse } from "node:http";
 import { checkMutableAuth } from "./auth.js";
 import type { DashboardConfig } from "./config.js";
 import type { SupabaseClient } from "./supabase.js";
@@ -86,6 +86,10 @@ export async function handleApiRoutes(
     // --- Collection routes: /iris-dashboard/api/tasks ---
     if (!taskRef) {
       if (method === "GET") {
+        if (!checkMutableAuth(req, config)) {
+          errorResponse(res, 401, "UNAUTHORIZED", "Authentication required");
+          return true;
+        }
         const vr = validateListParams(url.searchParams);
         if (!vr.ok) {
           errorResponse(res, 400, "VALIDATION_ERROR", vr.error);
@@ -146,6 +150,10 @@ export async function handleApiRoutes(
     }
 
     if (method === "GET") {
+      if (!checkMutableAuth(req, config)) {
+        errorResponse(res, 401, "UNAUTHORIZED", "Authentication required");
+        return true;
+      }
       const includeDeleted = url.searchParams.get("include_deleted") === "true";
       const task = await serviceFetchTask(client, id, includeDeleted);
       if (!task) {

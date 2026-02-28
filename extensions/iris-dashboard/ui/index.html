@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
   <meta charset="UTF-8" />
@@ -21,6 +21,7 @@
       <div class="header-actions">
         <button class="btn-icon" id="theme-toggle" title="Alternar tema" aria-label="Alternar tema"></button>
         <button class="btn btn-primary" id="btn-new" title="Nova tarefa (N)">+ Nova Tarefa</button>
+        <button class="btn-icon" id="btn-logout" title="Sair" aria-label="Sair" onclick="localStorage.removeItem('iris-dash-api-key');location.reload()">🚪</button>
       </div>
     </header>
 

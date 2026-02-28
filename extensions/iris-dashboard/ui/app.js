@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Iris Dashboard — Main application
  * Vanilla JS, no framework dependencies.
  */
@@ -8,7 +8,73 @@ import { DashboardApiClient } from "./api.js";
 // ─── Bootstrap ───────────────────────────────────────────────────────────────
 
 const cfg = window.__IRIS_DASHBOARD_CONFIG__ ?? { apiBase: "/iris-dashboard/api" };
-const api = new DashboardApiClient(cfg.apiBase ?? "/iris-dashboard/api");
+
+// ─── Auth Gate ───────────────────────────────────────────────────────────────
+
+const STORAGE_KEY = "iris-dash-api-key";
+
+function getStoredKey() {
+  return localStorage.getItem(STORAGE_KEY) || "";
+}
+
+function showLoginScreen() {
+  const app = document.getElementById("app");
+  app.style.display = "none";
+  const existing = document.getElementById("login-screen");
+  if (existing) existing.remove();
+  const login = document.createElement("div");
+  login.id = "login-screen";
+  login.innerHTML = `
+    <div style="min-height:100vh;display:flex;align-items:center;justify-content:center;background:var(--background);font-family:var(--font-sans)">
+      <div style="background:var(--card);border:1px solid var(--border);border-radius:12px;padding:2.5rem;width:100%;max-width:380px;box-shadow:0 8px 32px rgba(0,0,0,0.3)">
+        <div style="text-align:center;margin-bottom:1.5rem">
+          <span style="font-size:2rem">🌈</span>
+          <h1 style="color:var(--foreground);font-size:1.25rem;margin:0.5rem 0 0.25rem">Iris Dashboard</h1>
+          <p style="color:var(--muted-foreground);font-size:0.85rem;margin:0">Digite a senha para acessar</p>
+        </div>
+        <form id="login-form">
+          <input type="password" id="login-key" placeholder="Senha de acesso"
+            style="width:100%;padding:0.625rem 0.75rem;background:var(--input);border:1px solid var(--border);border-radius:8px;color:var(--foreground);font-size:0.9rem;outline:none;box-sizing:border-box;margin-bottom:0.75rem" />
+          <div id="login-error" style="color:#ef4444;font-size:0.8rem;margin-bottom:0.75rem;display:none"></div>
+          <button type="submit"
+            style="width:100%;padding:0.625rem;background:var(--accent);color:#fff;border:none;border-radius:8px;font-size:0.9rem;font-weight:600;cursor:pointer">Entrar</button>
+        </form>
+      </div>
+    </div>`;
+  document.body.appendChild(login);
+  document.documentElement.setAttribute(
+    "data-theme",
+    localStorage.getItem("iris-dash-theme") || "dark",
+  );
+  document.getElementById("login-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const key = document.getElementById("login-key").value.trim();
+    if (!key) return;
+    try {
+      const res = await fetch(cfg.apiBase + "/tasks?limit=1", {
+        headers: { "Content-Type": "application/json", "X-Iris-Dashboard-Key": key },
+      });
+      if (res.status === 401 || res.status === 403) {
+        document.getElementById("login-error").textContent = "Senha incorreta";
+        document.getElementById("login-error").style.display = "block";
+        return;
+      }
+      localStorage.setItem(STORAGE_KEY, key);
+      login.remove();
+      app.style.display = "";
+      location.reload();
+    } catch (err) {
+      document.getElementById("login-error").textContent = "Erro de conexao";
+      document.getElementById("login-error").style.display = "block";
+    }
+  });
+}
+
+const storedKey = getStoredKey();
+if (!storedKey) {
+  showLoginScreen();
+}
+const api = new DashboardApiClient(cfg.apiBase ?? "/iris-dashboard/api", storedKey);
 
 // ─── State ───────────────────────────────────────────────────────────────────
 

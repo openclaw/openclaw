@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Iris Dashboard — API client
  * Communicates with /iris-dashboard/api/* endpoints.
  */
@@ -52,7 +52,7 @@ export class DashboardApiClient {
       if (v !== undefined && v !== null && v !== "") q.set(k, String(v));
     }
     const url = `${this.base}/tasks${q.size ? "?" + q.toString() : ""}`;
-    const res = await fetch(url);
+    const res = await fetch(url, { headers: this._authHeaders() });
     return this._parse(res);
   }
 
@@ -62,7 +62,9 @@ export class DashboardApiClient {
    * @returns {Promise<object>}
    */
   async fetchTask(id) {
-    const res = await fetch(`${this.base}/tasks/${encodeURIComponent(id)}`);
+    const res = await fetch(`${this.base}/tasks/${encodeURIComponent(id)}`, {
+      headers: this._authHeaders(),
+    });
     return this._parse(res);
   }
 
