@@ -170,6 +170,27 @@ describe("loadWorkspaceBootstrapFiles", () => {
     expectSingleMemoryEntry(files, "alt");
   });
 
+  it("deduplicates when MEMORY.md and memory.md resolve to the same inode", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+    await writeWorkspaceFile({ dir: tempDir, name: "MEMORY.md", content: "shared" });
+    // On case-insensitive FS (macOS APFS), memory.md already exists as the
+    // same file.  On case-sensitive FS (Linux), create a symlink so both
+    // names share an inode.
+    try {
+      await fs.symlink(path.join(tempDir, "MEMORY.md"), path.join(tempDir, "memory.md"));
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "EEXIST") {
+        throw err;
+      }
+    }
+
+    const files = await loadWorkspaceBootstrapFiles(tempDir);
+    expectSingleMemoryEntry(files, "shared");
+  });
+
   it("omits memory entries when no memory files exist", async () => {
     const tempDir = await makeTempWorkspace("openclaw-workspace-");
 

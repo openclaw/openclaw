@@ -484,8 +484,13 @@ async function resolveMemoryBootstrapEntries(
   for (const entry of entries) {
     let key = entry.filePath;
     try {
-      key = await fs.realpath(entry.filePath);
-    } catch {}
+      const stat = await fs.stat(entry.filePath);
+      key = `${stat.dev}:${stat.ino}`;
+    } catch {
+      try {
+        key = await fs.realpath(entry.filePath);
+      } catch {}
+    }
     if (seen.has(key)) {
       continue;
     }
