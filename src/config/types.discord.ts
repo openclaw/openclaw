@@ -111,6 +111,14 @@ export type DiscordVoiceConfig = {
   daveEncryption?: boolean;
   /** Consecutive decrypt failures before DAVE session reinitialization (default: 24). */
   decryptionFailureTolerance?: number;
+  /**
+   * Minimum duration (ms) a user must be continuously speaking before the bot's
+   * current playback is interrupted. Helps prevent background noise, mic bleed, or
+   * brief sounds from cutting off the bot mid-sentence.
+   * Set to 0 to disable (interrupt immediately on any sound, original behaviour).
+   * Default: 400
+   */
+  interruptThresholdMs?: number;
   /** Optional TTS overrides for Discord voice output. */
   tts?: TtsConfig;
 };
