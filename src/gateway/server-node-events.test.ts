@@ -374,7 +374,10 @@ describe("notifications changed events", () => {
       "Notification posted (node=node-n1 key=notif-1 package=com.example.chat): Message - Ping from Alex",
       { sessionKey: "node-node-n1", contextKey: "notification:notif-1" },
     );
-    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({ reason: "notifications-event" });
+    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({
+      reason: "notifications-event",
+      sessionKey: "node-node-n1",
+    });
   });
 
   it("enqueues notifications.changed removed events", async () => {
@@ -392,7 +395,27 @@ describe("notifications changed events", () => {
       "Notification removed (node=node-n2 key=notif-2 package=com.example.mail)",
       { sessionKey: "node-node-n2", contextKey: "notification:notif-2" },
     );
-    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({ reason: "notifications-event" });
+    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({
+      reason: "notifications-event",
+      sessionKey: "node-node-n2",
+    });
+  });
+
+  it("wakes heartbeat on payload sessionKey when provided", async () => {
+    const ctx = buildCtx();
+    await handleNodeEvent(ctx, "node-n4", {
+      event: "notifications.changed",
+      payloadJSON: JSON.stringify({
+        change: "posted",
+        key: "notif-4",
+        sessionKey: "agent:main:main",
+      }),
+    });
+
+    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({
+      reason: "notifications-event",
+      sessionKey: "agent:main:main",
+    });
   });
 
   it("ignores notifications.changed payloads missing required fields", async () => {
