@@ -5,8 +5,9 @@ import {
   TAILSCALE_EXPOSURE_OPTIONS,
   TAILSCALE_MISSING_BIN_NOTE_LINES,
 } from "../gateway/gateway-config-prompts.shared.js";
-import { findTailscaleBinary } from "../infra/tailscale.js";
+import { findTailscaleBinary, getTailnetHostname } from "../infra/tailscale.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { defaultRuntime } from "../runtime.js";
 import { validateIPv4AddressInput } from "../shared/net/ipv4.js";
 import { note } from "../terminal/note.js";
 import { buildGatewayAuthConfig } from "./configure.gateway-auth.js";
@@ -267,6 +268,26 @@ export async function promptGatewayConfig(
     trustedProxy: trustedProxyConfig,
   });
 
+  // When Tailscale is enabled, automatically add the Tailscale origin to allowedOrigins
+  // so users can access the Control UI via the Tailscale URL
+  let allowedOrigins = next.gateway?.controlUi?.allowedOrigins ?? [];
+  if (tailscaleMode !== "off") {
+    try {
+      const tailnetHostname = await getTailnetHostname();
+      const tailscaleOrigin = `https://${tailnetHostname}`;
+      if (!allowedOrigins.includes(tailscaleOrigin)) {
+        allowedOrigins = [...allowedOrigins, tailscaleOrigin];
+        defaultRuntime.log(`Added Tailscale origin to allowedOrigins: ${tailscaleOrigin}`);
+      }
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      defaultRuntime.warn(
+        `Could not detect Tailscale hostname: ${errorMsg}. ` +
+        "You may need to manually add your Tailscale origin to gateway.controlUi.allowedOrigins"
+      );
+    }
+  }
+
   next = {
     ...next,
     gateway: {
@@ -277,6 +298,10 @@ export async function promptGatewayConfig(
       auth: authConfig,
       ...(customBindHost && { customBindHost }),
       ...(trustedProxies && { trustedProxies }),
+      controlUi: {
+        ...next.gateway?.controlUi,
+        allowedOrigins,
+      },
       tailscale: {
         ...next.gateway?.tailscale,
         mode: tailscaleMode,
