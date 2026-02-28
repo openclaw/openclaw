@@ -16,6 +16,10 @@ type ConfigSetParseOpts = {
   strictJson?: boolean;
 };
 
+const OLLAMA_API_KEY_PATH: PathSegment[] = ["models", "providers", "ollama", "apiKey"];
+const OLLAMA_PROVIDER_PATH: PathSegment[] = ["models", "providers", "ollama"];
+const OLLAMA_DEFAULT_BASE_URL = "http://127.0.0.1:11434";
+
 function isIndexSegment(raw: string): boolean {
   return /^[0-9]+$/.test(raw);
 }
@@ -242,6 +246,30 @@ function parseRequiredPath(path: string): PathSegment[] {
   return parsedPath;
 }
 
+function pathEquals(path: PathSegment[], expected: PathSegment[]): boolean {
+  return (
+    path.length === expected.length && path.every((segment, index) => segment === expected[index])
+  );
+}
+
+function ensureValidOllamaProviderForApiKeySet(
+  root: Record<string, unknown>,
+  path: PathSegment[],
+): void {
+  if (!pathEquals(path, OLLAMA_API_KEY_PATH)) {
+    return;
+  }
+  const existing = getAtPath(root, OLLAMA_PROVIDER_PATH);
+  if (existing.found) {
+    return;
+  }
+  setAtPath(root, OLLAMA_PROVIDER_PATH, {
+    baseUrl: OLLAMA_DEFAULT_BASE_URL,
+    api: "ollama",
+    models: [],
+  });
+}
+
 export async function runConfigGet(opts: { path: string; json?: boolean; runtime?: RuntimeEnv }) {
   const runtime = opts.runtime ?? defaultRuntime;
   try {
@@ -345,6 +373,7 @@ export function registerConfigCli(program: Command) {
         // instead of snapshot.config (runtime-merged with defaults).
         // This prevents runtime defaults from leaking into the written config file (issue #6070)
         const next = structuredClone(snapshot.resolved) as Record<string, unknown>;
+        ensureValidOllamaProviderForApiKeySet(next, parsedPath);
         setAtPath(next, parsedPath, parsedValue);
         await writeConfigFile(next);
         defaultRuntime.log(info(`Updated ${path}. Restart the gateway to apply.`));
