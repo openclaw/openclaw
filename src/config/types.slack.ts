@@ -187,6 +187,8 @@ export type SlackAccountConfig = {
    * Slack uses shortcodes (e.g., "eyes") rather than unicode emoji.
    */
   ackReaction?: string;
+  /** When true, block all outbound delivery for this channel/account. */
+  suppressOutbound?: boolean;
 };
 
 export type SlackConfig = {

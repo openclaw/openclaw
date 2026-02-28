@@ -116,4 +116,6 @@ export type MSTeamsConfig = {
   heartbeat?: ChannelHeartbeatVisibilityConfig;
   /** Outbound response prefix override for this channel/account. */
   responsePrefix?: string;
+  /** When true, block all outbound delivery for this channel/account. */
+  suppressOutbound?: boolean;
 };
