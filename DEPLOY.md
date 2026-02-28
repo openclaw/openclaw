@@ -58,16 +58,29 @@ podman login registry.leot.fun -u leot -p <registry-password>
 > 服务器配置较低，构建在本地完成，推送到私有 Registry。
 
 ```bash
-cd d:/work/openclaw
+cd d:/work/agent/openclaw
 
-# 本地构建
-podman build -t registry.leot.fun/openclaw:latest .
+# 本地构建（带浏览器 + 常用工具）
+podman build \
+  --build-arg OPENCLAW_INSTALL_BROWSER=1 \
+  --build-arg OPENCLAW_DOCKER_APT_PACKAGES="ffmpeg fonts-noto-cjk poppler-utils curl wget" \
+  -t registry.leot.fun/openclaw:latest .
 
 # 推送到 Registry
 podman push registry.leot.fun/openclaw:latest
 ```
 
-构建耗时约 5-10 分钟，镜像大小约 4.5GB。
+> **构建参数说明：**
+>
+> | 参数 | 作用 |
+> |---|---|
+> | `OPENCLAW_INSTALL_BROWSER=1` | 预装 Chromium + Xvfb（Playwright 浏览器自动化，+~300MB） |
+> | `ffmpeg` | 音视频处理 |
+> | `fonts-noto-cjk` | 中日韩字体（截图/PDF 渲染需要） |
+> | `poppler-utils` | PDF 工具（`pdftotext` 等） |
+> | `curl wget` | 网络工具 |
+
+构建耗时约 10-15 分钟，镜像大小约 5GB。
 
 ---
 
@@ -360,8 +373,11 @@ podman exec openclaw-gateway node dist/index.js skills list
 
 ```bash
 # === 本地 ===
-cd d:/work/openclaw
-podman build -t registry.leot.fun/openclaw:latest .
+cd d:/work/agent/openclaw
+podman build \
+  --build-arg OPENCLAW_INSTALL_BROWSER=1 \
+  --build-arg OPENCLAW_DOCKER_APT_PACKAGES="ffmpeg fonts-noto-cjk poppler-utils curl wget" \
+  -t registry.leot.fun/openclaw:latest .
 podman push registry.leot.fun/openclaw:latest
 
 # === 服务器 ===
