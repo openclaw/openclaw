@@ -316,8 +316,9 @@ export type GatewayNodesConfig = {
   /** Commands to deny even if they appear in the defaults or node claims. */
   denyCommands?: string[];
   /**
-   * Per-node overrides keyed by node displayName, nodeId, or nodeId prefix.
-   * Match precedence: nodeId exact, then displayName exact, then longest nodeId prefix.
+   * Per-node overrides keyed by nodeId or nodeId prefix.
+   * Match precedence: nodeId exact, then longest nodeId prefix.
+   * displayName-based matching is intentionally unsupported.
    */
   overrides?: Record<string, GatewayNodeOverrideConfig>;
 };

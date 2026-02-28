@@ -179,9 +179,22 @@ describe("config schema regressions", () => {
     const res = validateConfigObject({
       browser: {
         extraArgs: "--proxy-server=http://127.0.0.1:7890" as unknown,
+  it("rejects displayName-like gateway.nodes.overrides keys", () => {
+    const res = validateConfigObject({
+      gateway: {
+        nodes: {
+          overrides: {
+            "My MacBook": {
+              denyCommands: ["system.run"],
+            },
+          },
+        },
       },
     });
 
     expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues[0]?.path).toBe("gateway.nodes.overrides.My MacBook");
+    }
   });
 });

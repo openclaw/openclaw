@@ -1222,6 +1222,28 @@ description: test skill
     );
   });
 
+  it("treats override-only allowCommands as known for global denyCommands audit", async () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        nodes: {
+          denyCommands: ["foo.bar"],
+          overrides: {
+            "node-a": {
+              allowCommands: ["foo.bar"],
+            },
+          },
+        },
+      },
+    };
+
+    const res = await audit(cfg);
+
+    const finding = res.findings.find(
+      (f) => f.checkId === "gateway.nodes.deny_commands_ineffective",
+    );
+    expect(finding).toBeUndefined();
+  });
+
   it("scores dangerous gateway.nodes.allowCommands by exposure", async () => {
     const cases: Array<{
       name: string;
