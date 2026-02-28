@@ -56,6 +56,7 @@ export async function modelsAuthStatusCommand(
     full?: boolean;
     noColor?: boolean;
     sortStatus?: boolean;
+    provider?: string;
   },
   runtime: RuntimeEnv,
 ) {
@@ -107,7 +108,12 @@ export async function modelsAuthStatusCommand(
     unknown: 6,
   };
 
-  const rowsSorted = [...rowsRaw].sort((a, b) => {
+  const providerFilter = opts.provider?.trim();
+  const rowsFiltered = providerFilter
+    ? rowsRaw.filter((row) => row.provider === providerFilter)
+    : rowsRaw;
+
+  const rowsSorted = [...rowsFiltered].sort((a, b) => {
     if (opts.sortStatus) {
       const ra = rank[a.status] ?? 99;
       const rb = rank[b.status] ?? 99;
@@ -123,6 +129,7 @@ export async function modelsAuthStatusCommand(
       authStore: resolveAuthStorePathForDisplay(agentDir),
       defaultModel: cfg.agents?.defaults?.model?.primary ?? null,
       warnAfterMs,
+      provider: providerFilter ?? null,
       rows: rowsSorted,
     });
     return;

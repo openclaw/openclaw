@@ -390,6 +390,7 @@ export function registerModelsCli(program: Command) {
     .option("--full", "Full table view", false)
     .option("--no-color", "Disable colored output", false)
     .option("--sort-status", "Sort by status (cooldown/expired/expiring first)", false)
+    .option("--provider <name>", "Filter by provider (e.g. openai-codex)")
     .action(async (opts, command) => {
       const agent =
         resolveOptionFromCommand<string>(command, "agent") ?? (opts.agent as string | undefined);
@@ -404,6 +405,7 @@ export function registerModelsCli(program: Command) {
             full: Boolean(opts.full),
             noColor: Boolean(opts.noColor),
             sortStatus: Boolean(opts.sortStatus),
+            provider: opts.provider as string | undefined,
           },
           defaultRuntime,
         );
