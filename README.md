@@ -33,7 +33,7 @@ New install? Start here: [Getting started](https://docs.openclaw.ai/start/gettin
 ## Sponsors
 
 | OpenAI                                                            | Blacksmith                                                                   | Convex                                                                | Vercel                                                            |
-| ----------------------------------------------------------------- | ---------------------------------------------------------------------------- | --------------------------------------------------------------------- | ------------------------------------------------------------------|
+| ----------------------------------------------------------------- | ---------------------------------------------------------------------------- | --------------------------------------------------------------------- | ----------------------------------------------------------------- |
 | [![OpenAI](docs/assets/sponsors/openai.svg)](https://openai.com/) | [![Blacksmith](docs/assets/sponsors/blacksmith.svg)](https://blacksmith.sh/) | [![Convex](docs/assets/sponsors/convex.svg)](https://www.convex.dev/) | [![Vercel](docs/assets/sponsors/vercel.svg)](https://vercel.com/) |
 
 **Subscriptions (OAuth):**
