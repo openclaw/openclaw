@@ -135,6 +135,19 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
   outbound: {
     deliveryMode: "direct",
     textChunkLimit: 4000,
+    sendPayload: async (ctx) => {
+      const urls = ctx.payload.mediaUrls?.length
+        ? ctx.payload.mediaUrls
+        : ctx.payload.mediaUrl
+          ? [ctx.payload.mediaUrl]
+          : [];
+      // Nostr has no native media — append URLs to text
+      const parts: string[] = [];
+      if (ctx.payload.text) parts.push(ctx.payload.text);
+      for (const url of urls) parts.push(url);
+      const combined = parts.join("\n");
+      return nostrPlugin.outbound!.sendText!({ ...ctx, text: combined });
+    },
     sendText: async ({ cfg, to, text, accountId }) => {
       const core = getNostrRuntime();
       const aid = accountId ?? DEFAULT_ACCOUNT_ID;

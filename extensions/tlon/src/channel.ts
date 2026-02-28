@@ -169,6 +169,25 @@ const tlonOutbound: ChannelOutboundAdapter = {
     }
     return { ok: true, to: parsed.nest };
   },
+  sendPayload: async (ctx) => {
+    const urls = ctx.payload.mediaUrls?.length
+      ? ctx.payload.mediaUrls
+      : ctx.payload.mediaUrl
+        ? [ctx.payload.mediaUrl]
+        : [];
+    if (urls.length > 0) {
+      let lastResult;
+      for (let i = 0; i < urls.length; i++) {
+        lastResult = await tlonOutbound.sendMedia!({
+          ...ctx,
+          text: i === 0 ? (ctx.payload.text ?? "") : "",
+          mediaUrl: urls[i],
+        });
+      }
+      return lastResult!;
+    }
+    return tlonOutbound.sendText!({ ...ctx });
+  },
   sendText: async ({ cfg, to, text, accountId, replyToId, threadId }) => {
     const account = resolveTlonAccount(cfg, accountId ?? undefined);
     if (!account.configured || !account.ship || !account.url || !account.code) {

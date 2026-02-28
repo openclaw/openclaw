@@ -105,6 +105,26 @@ export const twitchOutbound: ChannelOutboundAdapter = {
    *   accountId: "default",
    * });
    */
+  sendPayload: async (ctx) => {
+    const urls = ctx.payload.mediaUrls?.length
+      ? ctx.payload.mediaUrls
+      : ctx.payload.mediaUrl
+        ? [ctx.payload.mediaUrl]
+        : [];
+    if (urls.length > 0) {
+      let lastResult;
+      for (let i = 0; i < urls.length; i++) {
+        lastResult = await twitchOutbound.sendMedia!({
+          ...ctx,
+          text: i === 0 ? (ctx.payload.text ?? "") : "",
+          mediaUrl: urls[i],
+        });
+      }
+      return lastResult!;
+    }
+    return twitchOutbound.sendText!({ ...ctx });
+  },
+
   sendText: async (params: ChannelOutboundContext): Promise<OutboundDeliveryResult> => {
     const { cfg, to, text, accountId } = params;
     const signal = (params as { signal?: AbortSignal }).signal;

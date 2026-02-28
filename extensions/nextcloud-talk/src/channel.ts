@@ -262,6 +262,19 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> = 
     chunker: (text, limit) => getNextcloudTalkRuntime().channel.text.chunkMarkdownText(text, limit),
     chunkerMode: "markdown",
     textChunkLimit: 4000,
+    sendPayload: async (ctx) => {
+      const urls = ctx.payload.mediaUrls?.length
+        ? ctx.payload.mediaUrls
+        : ctx.payload.mediaUrl
+          ? [ctx.payload.mediaUrl]
+          : [];
+      // Nextcloud Talk has no native media — append URLs to text
+      const parts: string[] = [];
+      if (ctx.payload.text) parts.push(ctx.payload.text);
+      for (const url of urls) parts.push(url);
+      const combined = parts.join("\n");
+      return nextcloudTalkPlugin.outbound!.sendText!({ ...ctx, text: combined });
+    },
     sendText: async ({ cfg, to, text, accountId, replyToId }) => {
       const result = await sendMessageNextcloudTalk(to, text, {
         accountId: accountId ?? undefined,
