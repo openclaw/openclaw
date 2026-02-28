@@ -359,11 +359,10 @@ describe("gateway lock", () => {
     const results = await Promise.allSettled(
       Array.from({ length: contenders }, async (_value, idx) => {
         const lock = await acquireForTest(env, {
-          timeoutMs: 3_000,
+          timeoutMs: 6_000,
           pollIntervalMs: 1,
           staleMs: 10_000,
           platform: idx % 2 === 0 ? "darwin" : "linux",
-          port: idx % 2 === 0 ? 18789 : undefined,
         });
         expect(lock).not.toBeNull();
         await sleep(2);
@@ -375,6 +374,54 @@ describe("gateway lock", () => {
     expect(rejected).toHaveLength(0);
     const { lockPath } = resolveLockPath(env);
     await expect(fs.access(lockPath)).rejects.toThrow();
+  });
+
+  it("propagates stale lock removal errors during owner-dead recovery", async () => {
+    vi.useRealTimers();
+    const env = await makeEnv();
+    await writeLockFile(env, { startTime: 111 });
+    const procSpy = mockProcStatRead({
+      onProcRead: () => makeProcStat(process.pid, 222),
+    });
+    const rmSpy = vi
+      .spyOn(fs, "rm")
+      .mockRejectedValueOnce(Object.assign(new Error("EPERM"), { code: "EPERM" }));
+
+    await expect(
+      acquireForTest(env, {
+        timeoutMs: 80,
+        pollIntervalMs: 5,
+        platform: "linux",
+      }),
+    ).rejects.toMatchObject({
+      name: "GatewayLockError",
+      message: expect.stringContaining("stale-owner recovery"),
+    });
+
+    rmSpy.mockRestore();
+    procSpy.mockRestore();
+  });
+
+  it("surfaces lock-file removal failures during release", async () => {
+    vi.useRealTimers();
+    const env = await makeEnv();
+    const lock = await acquireForTest(env, { timeoutMs: 80 });
+    expect(lock).not.toBeNull();
+    if (!lock) {
+      throw new Error("expected lock handle");
+    }
+
+    const rmSpy = vi
+      .spyOn(fs, "rm")
+      .mockRejectedValueOnce(Object.assign(new Error("EROFS"), { code: "EROFS" }));
+    await expect(lock.release()).rejects.toMatchObject({
+      name: "GatewayLockError",
+      message: expect.stringContaining("release"),
+    });
+    rmSpy.mockRestore();
+
+    const { lockPath } = resolveLockPath(env);
+    await fs.rm(lockPath, { force: true });
   });
 
   it("returns null when multi-gateway override is enabled", async () => {

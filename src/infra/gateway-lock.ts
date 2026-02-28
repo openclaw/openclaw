@@ -278,12 +278,14 @@ async function isLockMtimeStale(
   }
 }
 
-async function tryRemoveLockFile(lockPath: string): Promise<boolean> {
+async function removeLockFile(lockPath: string, reason: string): Promise<void> {
   try {
     await fs.rm(lockPath, { force: true });
-    return true;
-  } catch {
-    return false;
+  } catch (err) {
+    throw new GatewayLockError(
+      `failed to remove gateway lock file (${reason}) at ${lockPath}`,
+      err,
+    );
   }
 }
 
@@ -349,7 +351,7 @@ export async function acquireGatewayLock(
         await handle.writeFile(JSON.stringify(payload), "utf8");
       } catch (writeErr) {
         await handle.close().catch(() => undefined);
-        await tryRemoveLockFile(lockPath);
+        await removeLockFile(lockPath, "cleanup after write failure").catch(() => undefined);
         throw new GatewayLockError(`failed to write gateway lock payload at ${lockPath}`, writeErr);
       }
       emitTelemetry({
@@ -365,7 +367,7 @@ export async function acquireGatewayLock(
         configPath,
         release: async () => {
           await handle.close().catch(() => undefined);
-          await tryRemoveLockFile(lockPath);
+          await removeLockFile(lockPath, "release");
         },
       };
     } catch (err) {
@@ -395,20 +397,19 @@ export async function acquireGatewayLock(
         contentionReported = true;
       }
       if (ownerStatus === "dead" && ownerPid) {
-        if (await tryRemoveLockFile(lockPath)) {
-          staleRecoveries += 1;
-          emitTelemetry({
-            event: "stale-lock-recovered",
-            lockPath,
-            ownerPid,
-            ownerStatus,
-            reason: "owner-dead",
-            waitedMs,
-            attempt: attempts,
-          });
-          contentionReported = false;
-          continue;
-        }
+        await removeLockFile(lockPath, "stale-owner recovery");
+        staleRecoveries += 1;
+        emitTelemetry({
+          event: "stale-lock-recovered",
+          lockPath,
+          ownerPid,
+          ownerStatus,
+          reason: "owner-dead",
+          waitedMs,
+          attempt: attempts,
+        });
+        contentionReported = false;
+        continue;
       }
       if (ownerStatus !== "alive") {
         const nowMs = Date.now();
@@ -416,7 +417,8 @@ export async function acquireGatewayLock(
         if (!stale) {
           stale = await isLockMtimeStale(lockPath, staleMs, nowMs);
         }
-        if (stale && (await tryRemoveLockFile(lockPath))) {
+        if (stale) {
+          await removeLockFile(lockPath, "stale-timestamp recovery");
           staleRecoveries += 1;
           emitTelemetry({
             event: "stale-lock-recovered",
