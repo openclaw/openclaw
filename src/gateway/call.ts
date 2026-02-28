@@ -278,11 +278,7 @@ function resolveGatewayCredentialsFallback(
 
 function isGatewayTokenMismatchError(error: unknown): boolean {
   const message =
-    error instanceof Error
-      ? error.message
-      : typeof error === "string"
-        ? error
-        : String(error);
+    error instanceof Error ? error.message : typeof error === "string" ? error : String(error);
   return message.toLowerCase().includes("gateway token mismatch");
 }
 
@@ -451,7 +447,10 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
       throw error;
     }
     const fallback = resolveGatewayCredentialsFallback(context, resolved);
-    if (!fallback || (fallback.token === resolved.token && fallback.password === resolved.password)) {
+    if (
+      !fallback ||
+      (fallback.token === resolved.token && fallback.password === resolved.password)
+    ) {
       throw error;
     }
     return await attempt(fallback);
