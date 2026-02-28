@@ -9,6 +9,7 @@ import contextPruningExtension from "../pi-extensions/context-pruning.js";
 import { setContextPruningRuntime } from "../pi-extensions/context-pruning/runtime.js";
 import { computeEffectiveSettings } from "../pi-extensions/context-pruning/settings.js";
 import { makeToolPrunablePredicate } from "../pi-extensions/context-pruning/tools.js";
+import transcriptSanitizeExtension from "../pi-extensions/transcript-sanitize.js";
 import { ensurePiCompactionReserveTokens } from "../pi-settings.js";
 import { isCacheTtlEligibleProvider, readLastCacheTtlTimestamp } from "./cache-ttl.js";
 
@@ -69,6 +70,13 @@ export function buildEmbeddedExtensionFactories(params: {
   model: Model<Api> | undefined;
 }): ExtensionFactory[] {
   const factories: ExtensionFactory[] = [];
+
+  // Always load the transcript sanitize extension to repair orphaned
+  // tool_result blocks before every API call. Compaction can split
+  // tool_use/tool_result pairs mid-conversation; this catches them.
+  // See: https://github.com/openclaw/openclaw/issues/30044
+  factories.push(transcriptSanitizeExtension);
+
   if (resolveCompactionMode(params.cfg) === "safeguard") {
     const compactionCfg = params.cfg?.agents?.defaults?.compaction;
     const contextWindowInfo = resolveContextWindowInfo({
