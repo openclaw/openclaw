@@ -9,6 +9,7 @@ import { createReplyPrefixOptions } from "../../../channels/reply-prefix.js";
 import { createTypingCallbacks } from "../../../channels/typing.js";
 import { resolveStorePath, updateLastRoute } from "../../../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../../../globals.js";
+import { stripReasoningTagsFromText } from "../../../shared/text/reasoning-tags.js";
 import { removeSlackReaction } from "../../actions.js";
 import { createSlackDraftStream } from "../../draft-stream.js";
 import {
@@ -21,6 +22,18 @@ import { appendSlackStream, startSlackStream, stopSlackStream } from "../../stre
 import { resolveSlackThreadTargets } from "../../threading.js";
 import { createSlackReplyDeliveryPlan, deliverReplies, resolveSlackThreadTs } from "../replies.js";
 import type { PreparedSlackMessage } from "./types.js";
+
+export function filterReasoningFromPartial(text: string | undefined): string | undefined {
+  const trimmed = text?.trimEnd();
+  if (!trimmed) {
+    return undefined;
+  }
+  const cleaned = stripReasoningTagsFromText(trimmed, { mode: "strict", trim: "both" });
+  if (!cleaned || cleaned.startsWith("Reasoning:\n")) {
+    return undefined;
+  }
+  return cleaned;
+}
 
 function hasMedia(payload: ReplyPayload): boolean {
   return Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
@@ -323,14 +336,14 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   let appendSourceText = "";
   let statusUpdateCount = 0;
   const updateDraftFromPartial = (text?: string) => {
-    const trimmed = text?.trimEnd();
-    if (!trimmed) {
+    const cleaned = filterReasoningFromPartial(text);
+    if (!cleaned) {
       return;
     }
 
     if (streamMode === "append") {
       const next = applyAppendOnlyStreamUpdate({
-        incoming: trimmed,
+        incoming: cleaned,
         rendered: appendRenderedText,
         source: appendSourceText,
       });
@@ -354,7 +367,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       return;
     }
 
-    draftStream.update(trimmed);
+    draftStream.update(cleaned);
     hasStreamedMessage = true;
   };
   const onDraftBoundary =

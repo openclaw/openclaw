@@ -114,7 +114,7 @@ function resolveModelOverrideFromEntry(entry?: SessionEntry): {
   return { provider, model };
 }
 
-function resolveParentSessionKeyCandidate(params: {
+export function resolveParentSessionKeyCandidate(params: {
   sessionKey?: string;
   parentSessionKey?: string;
 }): string | null {

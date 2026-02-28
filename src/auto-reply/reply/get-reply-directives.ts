@@ -16,7 +16,11 @@ import { applyInlineDirectiveOverrides } from "./get-reply-directives-apply.js";
 import { clearExecInlineDirectives, clearInlineDirectives } from "./get-reply-directives-utils.js";
 import { defaultGroupActivation, resolveGroupRequireMention } from "./groups.js";
 import { CURRENT_MESSAGE_MARKER, stripMentions, stripStructuralPrefixes } from "./mentions.js";
-import { createModelSelectionState, resolveContextTokens } from "./model-selection.js";
+import {
+  createModelSelectionState,
+  resolveContextTokens,
+  resolveParentSessionKeyCandidate,
+} from "./model-selection.js";
 import { formatElevatedUnavailableMessage, resolveElevatedPermissions } from "./reply-elevated.js";
 import { stripInlineStatus } from "./reply-inline.js";
 import type { TypingController } from "./typing.js";
@@ -338,9 +342,21 @@ export async function resolveReplyDirectives(params: {
     groupResolution,
   });
   const defaultActivation = defaultGroupActivation(requireMention);
+  const parentThinkLevel = (() => {
+    const parentKey = resolveParentSessionKeyCandidate({
+      sessionKey,
+      parentSessionKey: ctx.ParentSessionKey,
+    });
+    if (!parentKey || !sessionStore) {
+      return undefined;
+    }
+    return sessionStore[parentKey]?.thinkingLevel as ThinkLevel | undefined;
+  })();
+
   const resolvedThinkLevel =
     directives.thinkLevel ??
     (sessionEntry?.thinkingLevel as ThinkLevel | undefined) ??
+    parentThinkLevel ??
     (agentCfg?.thinkingDefault as ThinkLevel | undefined);
 
   const resolvedVerboseLevel =

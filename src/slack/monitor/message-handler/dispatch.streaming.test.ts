@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { isSlackStreamingEnabled, resolveSlackStreamingThreadHint } from "./dispatch.js";
+import {
+  filterReasoningFromPartial,
+  isSlackStreamingEnabled,
+  resolveSlackStreamingThreadHint,
+} from "./dispatch.js";
 
 describe("slack native streaming defaults", () => {
   it("is enabled for partial mode when native streaming is on", () => {
@@ -43,5 +47,33 @@ describe("slack native streaming thread hint", () => {
         messageTs: "1000.3",
       }),
     ).toBe("2000.1");
+  });
+});
+
+describe("filterReasoningFromPartial", () => {
+  it("returns undefined for empty/undefined input", () => {
+    expect(filterReasoningFromPartial(undefined)).toBeUndefined();
+    expect(filterReasoningFromPartial("")).toBeUndefined();
+    expect(filterReasoningFromPartial("   ")).toBeUndefined();
+  });
+
+  it("passes through normal text unchanged", () => {
+    expect(filterReasoningFromPartial("Hello, world!")).toBe("Hello, world!");
+  });
+
+  it("strips thinking tags and returns answer text", () => {
+    expect(filterReasoningFromPartial("<think>reasoning here</think>answer")).toBe("answer");
+  });
+
+  it("returns undefined for text that is only thinking content", () => {
+    expect(filterReasoningFromPartial("<think>only reasoning</think>")).toBeUndefined();
+  });
+
+  it('returns undefined for "Reasoning:\\n" prefixed messages', () => {
+    expect(filterReasoningFromPartial("Reasoning:\nsome thought process")).toBeUndefined();
+  });
+
+  it("handles trailing whitespace gracefully", () => {
+    expect(filterReasoningFromPartial("answer text   ")).toBe("answer text");
   });
 });
