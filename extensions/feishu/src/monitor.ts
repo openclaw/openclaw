@@ -335,6 +335,7 @@ type MonitorAccountParams = {
   runtime?: RuntimeEnv;
   abortSignal?: AbortSignal;
   botOpenId?: string;
+  botOpenIdPrefetched?: boolean;
 };
 
 /**
@@ -346,7 +347,7 @@ async function monitorSingleAccount(params: MonitorAccountParams): Promise<void>
   const log = runtime?.log ?? console.log;
 
   // Fetch bot open_id
-  const botOpenId = params.botOpenId ?? (await fetchBotOpenId(account));
+  const botOpenId = params.botOpenIdPrefetched ? params.botOpenId : await fetchBotOpenId(account);
   botOpenIds.set(accountId, botOpenId ?? "");
   log(`feishu[${accountId}]: bot open_id resolved: ${botOpenId ?? "unknown"}`);
 
@@ -558,6 +559,7 @@ export async function monitorFeishuProvider(opts: MonitorFeishuOpts = {}): Promi
         runtime: opts.runtime,
         abortSignal: opts.abortSignal,
         botOpenId,
+        botOpenIdPrefetched: true,
       }),
     );
   }
