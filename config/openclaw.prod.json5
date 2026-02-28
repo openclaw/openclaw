@@ -98,6 +98,49 @@
         apiKey: "${BRAVE_API_KEY}",
       },
     },
+
+    // Exec tool security configuration (command execution)
+    exec: {
+      // Security mode: "deny" | "allowlist" | "full"
+      // - deny: all exec denied (safe default)
+      // - allowlist: only pre-approved commands allowed
+      // - full: all commands allowed (dangerous, not recommended)
+      security: "allowlist",
+
+      // Approval behavior: "off" | "on-miss" | "always"
+      // - off: no prompts at all
+      // - on-miss: prompt only if command not in allowlist
+      // - always: prompt every time
+      ask: "on-miss",
+
+      // Fallback when no UI available (LINE has no approval UI)
+      // - deny: silently deny unapproved commands
+      // - allowlist: treat as approved if in allowlist
+      // - full: allow everything (dangerous)
+      askFallback: "deny",
+
+      // Host to use: "sandbox" (isolated VM, not available here) or "gateway" (container native execution)
+      host: "gateway",
+
+      // Expanded safe bins (auto-approved, no prompt needed)
+      safeBins: [
+        "jq",
+        "cut",
+        "uniq",
+        "head",
+        "tail",
+        "tr",
+        "wc",
+        "date",
+        "uptime",
+        "whoami",
+        "hostname",
+        "ps",
+        "tree",
+        "curl",
+        "wget"
+      ]
+    },
   },
 
   // Sandbox configuration (defense in depth)

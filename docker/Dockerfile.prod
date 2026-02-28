@@ -39,13 +39,29 @@ RUN CI=true pnpm install --frozen-lockfile --prod
 # Stage 2: Production runtime image
 FROM node:22-bookworm-slim@sha256:dd9d21971ec4395903fa6143c2b9267d048ae01ca6d3ea96f16cb30df6187d94
 
-# Install minimal runtime dependencies
+# Install minimal runtime dependencies + optional browser support
+# (Browser support added separately below via OPENCLAW_INSTALL_BROWSER build arg)
 RUN apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
+
+# Optionally install Chromium and Xvfb for browser automation.
+# Build with: docker build --build-arg OPENCLAW_INSTALL_BROWSER=1 -f docker/Dockerfile.prod ...
+# Adds ~300MB but eliminates the 60-90s Playwright install on every container start.
+ARG OPENCLAW_INSTALL_BROWSER=""
+RUN if [ -n "$OPENCLAW_INSTALL_BROWSER" ]; then \
+    apt-get update && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends xvfb && \
+    mkdir -p /home/node/.cache/ms-playwright && \
+    PLAYWRIGHT_BROWSERS_PATH=/home/node/.cache/ms-playwright \
+    node /app/node_modules/playwright-core/cli.js install --with-deps chromium && \
+    chown -R node:node /home/node/.cache/ms-playwright && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*; \
+    fi
 
 # Note: node:22-bookworm-slim already ships a 'node' user at UID/GID 1000.
 # No need to create a separate user; we reuse 'node' throughout.

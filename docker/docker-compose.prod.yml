@@ -70,8 +70,9 @@ services:
     
     # Persistent volumes
     volumes:
-      # State directory (config, credentials, logs)
-      - openclaw-state:/data/openclaw/state
+      # State directory (config, credentials, logs) — CRITICAL: must mount to /data/.openclaw (HOME path)
+      # Previously: /data/openclaw/state (WRONG — config lost on restart)
+      - openclaw-state:/data/.openclaw
       # Workspace directory (agent working directory)
       - openclaw-workspace:/data/openclaw/workspace
       # Temporary directory (writable in read-only container)
@@ -111,6 +112,21 @@ services:
     init: true
     
     # Network configuration
+    networks:
+      - openclaw-net
+
+  # One-shot service: backup config + sessions before docker compose down
+  # Usage: docker compose -f docker/docker-compose.prod.yml run --rm backup-config
+  # Creates timestamped backup at ./backups/openclaw.json.<timestamp>
+  backup-config:
+    image: ${DOCKER_IMAGE:-piboonsak/openclaw:latest}
+    entrypoint: ["bash", "/scripts/backup-config.sh"]
+    volumes:
+      - openclaw-state:/data/.openclaw:ro
+      - ./backups:/backups
+      - ./scripts/backup-config.sh:/scripts/backup-config.sh:ro
+    profiles:
+      - maintenance
     networks:
       - openclaw-net
 

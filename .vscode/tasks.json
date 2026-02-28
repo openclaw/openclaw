@@ -1,0 +1,12 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "pnpm check",
+			"type": "shell",
+			"command": "pnpm check",
+			"problemMatcher": [],
+			"group": "build"
+		}
+	]
+}

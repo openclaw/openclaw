@@ -144,6 +144,31 @@ docker push piboonsak/openclaw:latest
 
 ### 5. Deploy to VPS via SSH
 
+**Pre-deployment checklist:**
+
+```bash
+# 1. Verify environment variables are set
+bash docker/scripts/check-env.sh
+# Expected: "✓ All required environment variables set"
+
+# 2. Run from repo root (where docker-compose.prod.yml lives)
+cd d:\01_gitrepo\openclaw_github
+```
+
+**First-time deployment setup (v2026.2.27-ws23 or later):**
+
+> **CRITICAL:** This deployment fixes a volume mount path bug. Previous deployments had config/sessions data on container's writable layer (lost on restart). New deployment persists to named volume at `/data/.openclaw/`.
+
+```bash
+# Optional: Backup existing config from old container (if upgrading from earlier version)
+# This is only necessary if you have an existing deployment you want to preserve settings from
+ssh -i "C:\Users\HP Probook 440 G8\.ssh\id_ed25519_hostinger" root@76.13.210.250 <<'BASH_COMMANDS'
+  cd /docker/openclaw-sgnl
+  docker compose --profile maintenance run --rm backup-config
+  # Creates backup at ./backups/openclaw.json.<timestamp>
+BASH_COMMANDS
+```
+
 **Manual deployment to production:**
 
 ```bash
@@ -153,35 +178,40 @@ ssh -i "C:\Users\HP Probook 440 G8\.ssh\id_ed25519_hostinger" root@76.13.210.250
 # Navigate to deployment directory (CORRECT PATH)
 cd /docker/openclaw-sgnl
 
-# Verify environment variables in Hostinger UI are set:
-# - OPENROUTER_API_KEY
-# - BRAVE_API_KEY (for web search)
-# - BRAVE_API_SEARCH_KEY
-# - BRAVE_API_ANSWER_KEY
-# - LINE_CHANNEL_SECRET
-# - LINE_CHANNEL_ACCESS_TOKEN
+# Verify environment variables are set (via Hostinger UI or .env file):
+# - OPENROUTER_API_KEY (required — LLM provider)
+# - BRAVE_API_KEY (required — web search)
+# - BRAVE_API_SEARCH_KEY (optional alternative)
+# - BRAVE_API_ANSWER_KEY (optional alternative)
+# - LINE_CHANNEL_SECRET (required if using LINE)
+# - LINE_CHANNEL_ACCESS_TOKEN (required if using LINE)
 
-# Pull new image from Docker Hub
+# Stage 1: Pull latest Docker image
 docker pull piboonsak/openclaw:latest
 
-# Clear stale LINE session history (prevents "learned helplessness")
-# Script backs up large sessions (>50KB) before clearing
-docker exec openclaw-sgnl-openclaw-1 bash -c '
-  DIR=/data/.openclaw/agents/main/sessions
-  SUFFIX=bak.$(date -u +%Y%m%dT%H%M%SZ)
-  for f in "$DIR"/line-*.jsonl; do
-    [ -f "$f" ] || continue
-    size=$(stat -c%s "$f" 2>/dev/null || echo 0)
-    [ "$size" -lt 51200 ] && continue
-    cp "$f" "${f}.${SUFFIX}" && : > "$f"
-    echo "Cleared $(basename "$f") (was ${size}B)"
-  done
-'
-# Or if script is mounted: docker compose --profile maintenance run --rm clear-sessions
+# For browser support (goldtraders.or.th price checking, etc.):
+# Build with: docker build --build-arg OPENCLAW_INSTALL_BROWSER=1 -f docker/Dockerfile.prod -t piboonsak/openclaw:latest .
+# Then push to Docker Hub before pulling here.
 
-# Restart containers with new image (use docker compose v2 syntax)
+# Stage 2: Backup current config before shutdown (optional but recommended)
+docker compose --profile maintenance run --rm backup-config
+
+# Stage 3: Clear stale LINE session history (prevents "learned helplessness" from old conversation history)
+docker compose --profile maintenance run --rm clear-sessions
+
+# Stage 4: Update and restart
 docker compose down
 docker compose up -d
+
+# Verify health after restart (wait 30-40 seconds)
+sleep 40
+docker ps --filter name=openclaw --format "table {{.Names}}\t{{.Status}}"
+# Expected: "Up 30 seconds (healthy)"
+
+# Stage 5: Configure persistence-critical fixes (first deployment only)
+# These set safe command allowlist and exec host for LINE channel
+docker exec openclaw-sgnl-openclaw-1 node openclaw.mjs config set tools.exec.host gateway
+docker compose restart
 
 # Exit SSH
 exit
@@ -190,6 +220,7 @@ exit
 **Note:** The VPS deployment directory is NOT a git clone. Code changes (from Step 2) don't automatically sync. Configuration is managed through:
 - Hostinger UI (environment variables)
 - Docker image tags in `docker-compose.yml`
+- Volume mounts (via named volumes in docker-compose - persists across restarts)
 
 ### 5a. Create Release Git Tag
 

@@ -1,0 +1,147 @@
+{
+  "version": 1,
+  "comment": "Production exec approvals for OpenClaw VPS deployment",
+  "comment_security": "LLM agents can ONLY run pre-approved commands. This prevents: shell injection, data exfiltration, container escape, privilege escalation.",
+  "comment_usage": "Mount at: /data/.openclaw/exec-approvals.json inside container. Or use 'openclaw config set' CLI to modify.",
+  
+  "defaults": {
+    "security": "allowlist",
+    "comment_security_mode": "allowlist = only approved commands run; ask = prompt user; askFallback = deny if no UI (LINE has no UI, so defaults to deny)",
+    "ask": "on-miss",
+    "askFallback": "deny"
+  },
+
+  "agents": {
+    "main": {
+      "security": "allowlist",
+      "ask": "on-miss",
+      "comment_note": "LINE channel has no approval UI, so ask='on-miss' + askFallback='deny' means: unapproved commands are silently denied",
+      
+      "allowlist": [
+        {
+          "comment": "Safe system info commands (read-only, no side effects)",
+          "pattern": "/usr/bin/date"
+        },
+        {
+          "pattern": "/bin/date"
+        },
+        {
+          "pattern": "/usr/bin/uptime"
+        },
+        {
+          "pattern": "/bin/uptime"
+        },
+        {
+          "pattern": "/usr/bin/whoami"
+        },
+        {
+          "pattern": "/bin/whoami"
+        },
+        {
+          "pattern": "/usr/bin/hostname"
+        },
+        {
+          "pattern": "/bin/hostname"
+        },
+        {
+          "comment": "Process listing (read-only, shows running processes only this container)",
+          "pattern": "/bin/ps"
+        },
+        {
+          "pattern": "/usr/bin/ps"
+        },
+        {
+          "comment": "Cron job inspection (read-only, lists scheduled tasks)",
+          "pattern": "/usr/bin/crontab"
+        },
+        {
+          "comment": "Tree directory listing (read-only, shows directory structure)",
+          "pattern": "/usr/bin/tree"
+        },
+        {
+          "pattern": "/bin/tree"
+        },
+        {
+          "comment": "Network tools (read-only, for diagnostics only)",
+          "pattern": "/usr/bin/curl"
+        },
+        {
+          "pattern": "/usr/bin/wget"
+        },
+        {
+          "pattern": "/bin/wget"
+        },
+        {
+          "comment": "Data processing (read-only stdin, safe for pipes)",
+          "pattern": "/usr/bin/jq"
+        },
+        {
+          "pattern": "/usr/bin/head"
+        },
+        {
+          "pattern": "/usr/bin/tail"
+        },
+        {
+          "pattern": "/usr/bin/wc"
+        },
+        {
+          "pattern": "/usr/bin/cut"
+        },
+        {
+          "pattern": "/usr/bin/tr"
+        },
+        {
+          "pattern": "/usr/bin/uniq"
+        },
+        {
+          "comment": "Docker read-only inspection (allowed: ps, logs, stats, inspect. NOT: exec, run)",
+          "pattern": "/usr/bin/docker ps"
+        },
+        {
+          "pattern": "/usr/bin/docker logs"
+        },
+        {
+          "pattern": "/usr/bin/docker stats"
+        },
+        {
+          "pattern": "/usr/bin/docker inspect"
+        }
+      ]
+    }
+  },
+
+  "comment_blocklist": "Commands that are NEVER allowed, even if in allowlist. These are security-critical.",
+  "never_allow": [
+    {
+      "comment": "Container escape vectors",
+      "pattern": "docker\\s+exec",
+      "reason": "Allows breaking out of container to run commands in sibling containers or host"
+    },
+    {
+      "pattern": "docker\\s+run",
+      "reason": "Allows creating/running arbitrary containers"
+    },
+    {
+      "comment": "Destructive filesystem operations",
+      "pattern": "rm\\s+-rf",
+      "reason": "Can delete entire filesystems"
+    },
+    {
+      "pattern": "dd\\s+if=",
+      "reason": "Low-level disk write access"
+    },
+    {
+      "comment": "Privilege escalation",
+      "pattern": "sudo",
+      "reason": "Privilege escalation"
+    },
+    {
+      "pattern": "su\\s+",
+      "reason": "User switching with potential privilege escalation"
+    },
+    {
+      "pattern": "chmod\\s+777",
+      "reason": "Makes sensitive files world-writable"
+    }
+  ]
+}
