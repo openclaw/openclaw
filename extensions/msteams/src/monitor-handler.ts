@@ -143,12 +143,14 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
       const ctx = context as MSTeamsTurnContext;
       // Handle file consent invokes before passing to normal flow
       if (ctx.activity?.type === "invoke" && ctx.activity?.name === "fileConsent/invoke") {
-        const handled = await handleFileConsentInvoke(ctx, deps.log);
-        if (handled) {
-          // Send invoke response for file consent
-          await ctx.sendActivity({ type: "invokeResponse", value: { status: 200 } });
-          return;
-        }
+        // Send invoke response IMMEDIATELY to prevent Teams timeout
+        await ctx.sendActivity({ type: "invokeResponse", value: { status: 200 } });
+
+        // Handle file upload asynchronously (don't await)
+        handleFileConsentInvoke(ctx, deps.log).catch((err) => {
+          deps.log.debug?.("file consent handler error", { error: String(err) });
+        });
+        return;
       }
       return originalRun.call(handler, context);
     };

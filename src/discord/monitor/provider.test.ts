@@ -9,6 +9,7 @@ const {
   createDiscordNativeCommandMock,
   createNoopThreadBindingManagerMock,
   createThreadBindingManagerMock,
+  reconcileAcpThreadBindingsOnStartupMock,
   createdBindingManagers,
   listNativeCommandSpecsForConfigMock,
   listSkillCommandsForAgentsMock,
@@ -33,6 +34,11 @@ const {
       createdBindingManagers.push(manager);
       return manager;
     }),
+    reconcileAcpThreadBindingsOnStartupMock: vi.fn(() => ({
+      checked: 0,
+      removed: 0,
+      staleSessionKeys: [],
+    })),
     createdBindingManagers,
     listNativeCommandSpecsForConfigMock: vi.fn(() => [{ name: "cmd" }]),
     listSkillCommandsForAgentsMock: vi.fn(() => []),
@@ -224,6 +230,7 @@ vi.mock("./rest-fetch.js", () => ({
 vi.mock("./thread-bindings.js", () => ({
   createNoopThreadBindingManager: createNoopThreadBindingManagerMock,
   createThreadBindingManager: createThreadBindingManagerMock,
+  reconcileAcpThreadBindingsOnStartup: reconcileAcpThreadBindingsOnStartupMock,
 }));
 
 describe("monitorDiscordProvider", () => {
@@ -252,6 +259,11 @@ describe("monitorDiscordProvider", () => {
     createDiscordNativeCommandMock.mockClear().mockReturnValue({ name: "mock-command" });
     createNoopThreadBindingManagerMock.mockClear();
     createThreadBindingManagerMock.mockClear();
+    reconcileAcpThreadBindingsOnStartupMock.mockClear().mockReturnValue({
+      checked: 0,
+      removed: 0,
+      staleSessionKeys: [],
+    });
     createdBindingManagers.length = 0;
     listNativeCommandSpecsForConfigMock.mockClear().mockReturnValue([{ name: "cmd" }]);
     listSkillCommandsForAgentsMock.mockClear().mockReturnValue([]);
@@ -296,6 +308,7 @@ describe("monitorDiscordProvider", () => {
     expect(monitorLifecycleMock).toHaveBeenCalledTimes(1);
     expect(createdBindingManagers).toHaveLength(1);
     expect(createdBindingManagers[0]?.stop).toHaveBeenCalledTimes(1);
+    expect(reconcileAcpThreadBindingsOnStartupMock).toHaveBeenCalledTimes(1);
   });
 
   it("captures gateway errors emitted before lifecycle wait starts", async () => {

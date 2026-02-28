@@ -115,6 +115,7 @@ export async function collectChannelSecurityFindings(params: {
   const warnDmPolicy = async (input: {
     label: string;
     provider: ChannelId;
+    accountId: string;
     dmPolicy: string;
     allowFrom?: Array<string | number> | null;
     policyPath?: string;
@@ -124,6 +125,7 @@ export async function collectChannelSecurityFindings(params: {
     const policyPath = input.policyPath ?? `${input.allowFromPath}policy`;
     const { hasWildcard, isMultiUserDm } = await resolveDmAllowState({
       provider: input.provider,
+      accountId: input.accountId,
       allowFrom: input.allowFrom,
       normalizeEntry: input.normalizeEntry,
     });
@@ -224,7 +226,11 @@ export async function collectChannelSecurityFindings(params: {
           (account as { config?: Record<string, unknown> } | null)?.config ??
           ({} as Record<string, unknown>);
         const dangerousNameMatchingEnabled = isDangerousNameMatchingEnabled(discordCfg);
-        const storeAllowFrom = await readChannelAllowFromStore("discord").catch(() => []);
+        const storeAllowFrom = await readChannelAllowFromStore(
+          "discord",
+          process.env,
+          accountId,
+        ).catch(() => []);
         const discordNameBasedAllowEntries = new Set<string>();
         const discordPathPrefix =
           orderedAccountIds.length > 1 || hasExplicitAccountPath
@@ -427,7 +433,11 @@ export async function collectChannelSecurityFindings(params: {
               : Array.isArray(legacyAllowFromRaw)
                 ? legacyAllowFromRaw
                 : [];
-            const storeAllowFrom = await readChannelAllowFromStore("slack").catch(() => []);
+            const storeAllowFrom = await readChannelAllowFromStore(
+              "slack",
+              process.env,
+              accountId,
+            ).catch(() => []);
             const ownerAllowFromConfigured =
               normalizeAllowFromList([...allowFrom, ...storeAllowFrom]).length > 0;
             const channels = (slackCfg.channels as Record<string, unknown> | undefined) ?? {};
@@ -462,6 +472,7 @@ export async function collectChannelSecurityFindings(params: {
         await warnDmPolicy({
           label: plugin.meta.label ?? plugin.id,
           provider: plugin.id,
+          accountId,
           dmPolicy: dmPolicy.policy,
           allowFrom: dmPolicy.allowFrom,
           policyPath: dmPolicy.policyPath,
@@ -513,7 +524,11 @@ export async function collectChannelSecurityFindings(params: {
         continue;
       }
 
-      const storeAllowFrom = await readChannelAllowFromStore("telegram").catch(() => []);
+      const storeAllowFrom = await readChannelAllowFromStore(
+        "telegram",
+        process.env,
+        accountId,
+      ).catch(() => []);
       const storeHasWildcard = storeAllowFrom.some((v) => String(v).trim() === "*");
       const invalidTelegramAllowFromEntries = new Set<string>();
       for (const entry of storeAllowFrom) {

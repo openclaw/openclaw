@@ -18,6 +18,9 @@ import {
 import { locked } from "./locked.js";
 import type { CronEvent, CronServiceState } from "./state.js";
 import { ensureLoaded, persist } from "./store.js";
+import { DEFAULT_JOB_TIMEOUT_MS, resolveCronJobTimeoutMs } from "./timeout-policy.js";
+
+export { DEFAULT_JOB_TIMEOUT_MS } from "./timeout-policy.js";
 
 const MAX_TIMER_DELAY_MS = 60_000;
 
@@ -30,13 +33,6 @@ const MAX_TIMER_DELAY_MS = 60_000;
  */
 const MIN_REFIRE_GAP_MS = 2_000;
 
-/**
- * Maximum wall-clock time for a single job execution. Acts as a safety net
- * on top of the per-provider / per-agent timeouts to prevent one stuck job
- * from wedging the entire cron lane.
- */
-export const DEFAULT_JOB_TIMEOUT_MS = 10 * 60_000; // 10 minutes
-
 type TimedCronRunOutcome = CronRunOutcome &
   CronRunTelemetry & {
     jobId: string;
@@ -45,17 +41,6 @@ type TimedCronRunOutcome = CronRunOutcome &
     startedAt: number;
     endedAt: number;
   };
-
-function resolveCronJobTimeoutMs(job: CronJob): number | undefined {
-  const configuredTimeoutMs =
-    job.payload.kind === "agentTurn" && typeof job.payload.timeoutSeconds === "number"
-      ? Math.floor(job.payload.timeoutSeconds * 1_000)
-      : undefined;
-  if (configuredTimeoutMs === undefined) {
-    return DEFAULT_JOB_TIMEOUT_MS;
-  }
-  return configuredTimeoutMs <= 0 ? undefined : configuredTimeoutMs;
-}
 
 export async function executeJobCoreWithTimeout(
   state: CronServiceState,

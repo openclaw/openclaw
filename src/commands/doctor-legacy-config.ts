@@ -8,7 +8,7 @@ import {
 } from "../config/discord-preview-streaming.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 
-export function normalizeLegacyConfigValues(cfg: OpenClawConfig): {
+export function normalizeCompatibilityConfigValues(cfg: OpenClawConfig): {
   config: OpenClawConfig;
   changes: string[];
 } {

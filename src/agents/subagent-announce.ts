@@ -1,5 +1,5 @@
 import { resolveQueueSettings } from "../auto-reply/reply/queue.js";
-import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../config/agent-limits.js";
 import { loadConfig } from "../config/config.js";
 import {
@@ -924,6 +924,8 @@ export function buildSubagentSystemPrompt(params: {
   childSessionKey: string;
   label?: string;
   task?: string;
+  /** Whether ACP-specific routing guidance should be included. Defaults to true. */
+  acpEnabled?: boolean;
   /** Depth of the child being spawned (1 = sub-agent, 2 = sub-sub-agent). */
   childDepth?: number;
   /** Config value: max allowed spawn depth. */
@@ -938,6 +940,7 @@ export function buildSubagentSystemPrompt(params: {
     typeof params.maxSpawnDepth === "number"
       ? params.maxSpawnDepth
       : DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH;
+  const acpEnabled = params.acpEnabled !== false;
   const canSpawn = childDepth < maxSpawnDepth;
   const parentLabel = childDepth >= 2 ? "parent orchestrator" : "main agent";
 
@@ -983,6 +986,17 @@ export function buildSubagentSystemPrompt(params: {
       "Default workflow: spawn work, continue orchestrating, and wait for auto-announced completions.",
       "Do NOT repeatedly poll `subagents list` in a loop unless you are actively debugging or intervening.",
       "Coordinate their work and synthesize results before reporting back.",
+      ...(acpEnabled
+        ? [
+            'For ACP harness sessions (codex/claudecode/gemini), use `sessions_spawn` with `runtime: "acp"` (set `agentId` unless `acp.defaultAgent` is configured).',
+            '`agents_list` and `subagents` apply to OpenClaw sub-agents (`runtime: "subagent"`); ACP harness ids are controlled by `acp.allowedAgents`.',
+            "Do not ask users to run slash commands or CLI when `sessions_spawn` can do it directly.",
+            "Do not use `exec` (`openclaw ...`, `acpx ...`) to spawn ACP sessions.",
+            'Use `subagents` only for OpenClaw subagents (`runtime: "subagent"`).',
+            "Subagent results auto-announce back to you; ACP sessions continue in their bound thread.",
+            "Avoid polling loops; spawn, orchestrate, and synthesize results.",
+          ]
+        : []),
       "",
     );
   } else if (childDepth >= 2) {
@@ -1145,6 +1159,9 @@ export async function runSubagentAnnounceFlow(params: {
     }
 
     if (isAnnounceSkip(reply)) {
+      return true;
+    }
+    if (isSilentReplyText(reply, SILENT_REPLY_TOKEN)) {
       return true;
     }
 
