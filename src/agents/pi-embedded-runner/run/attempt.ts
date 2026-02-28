@@ -10,6 +10,7 @@ import {
 import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
 import type { OpenClawConfig } from "../../../config/config.js";
+import { createInternalHookEvent, triggerInternalHook } from "../../../hooks/internal-hooks.js";
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
@@ -1183,6 +1184,15 @@ export async function runEmbeddedAttempt(
       try {
         const promptStartedAt = Date.now();
 
+        // Fire agent:beforeRun internal hook before processing begins
+        void triggerInternalHook(
+          createInternalHookEvent("agent", "beforeRun", params.sessionKey ?? "", {
+            sessionKey: params.sessionKey ?? "",
+            messageProvider: params.messageProvider ?? undefined,
+            timestamp: new Date().toISOString(),
+          }),
+        );
+
         // Run before_prompt_build hooks to allow plugins to inject prompt context.
         // Legacy compatibility: before_agent_start is also checked for context fields.
         let effectivePrompt = params.prompt;
@@ -1447,6 +1457,19 @@ export async function runEmbeddedAttempt(
               log.warn(`agent_end hook failed: ${err}`);
             });
         }
+
+        // Fire agent:afterRun internal hook after the agent completes
+        const totalResponseLength = assistantTexts.reduce((sum, t) => sum + t.length, 0);
+        void triggerInternalHook(
+          createInternalHookEvent("agent", "afterRun", params.sessionKey ?? "", {
+            sessionKey: params.sessionKey ?? "",
+            responseLength: totalResponseLength,
+            timestamp: new Date().toISOString(),
+            success: !aborted && !promptError,
+            error: promptError ? describeUnknownError(promptError) : undefined,
+            durationMs: Date.now() - promptStartedAt,
+          }),
+        );
       } finally {
         clearTimeout(abortTimer);
         if (abortWarnTimer) {

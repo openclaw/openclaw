@@ -93,6 +93,46 @@ export type MessageSentHookEvent = InternalHookEvent & {
   context: MessageSentHookContext;
 };
 
+// ============================================================================
+// Agent Lifecycle Hook Events
+// ============================================================================
+
+export type AgentBeforeRunHookContext = {
+  /** The session key for this agent run */
+  sessionKey: string;
+  /** The channel or provider that triggered this run (e.g., "telegram", "web") */
+  messageProvider?: string;
+  /** ISO timestamp when the run started */
+  timestamp: string;
+};
+
+export type AgentBeforeRunHookEvent = InternalHookEvent & {
+  type: "agent";
+  action: "beforeRun";
+  context: AgentBeforeRunHookContext;
+};
+
+export type AgentAfterRunHookContext = {
+  /** The session key for this agent run */
+  sessionKey: string;
+  /** Total character length of assistant response texts */
+  responseLength: number;
+  /** ISO timestamp when the run completed */
+  timestamp: string;
+  /** Whether the run completed successfully */
+  success: boolean;
+  /** Error description if the run failed */
+  error?: string;
+  /** Duration of the run in milliseconds */
+  durationMs: number;
+};
+
+export type AgentAfterRunHookEvent = InternalHookEvent & {
+  type: "agent";
+  action: "afterRun";
+  context: AgentAfterRunHookContext;
+};
+
 export interface InternalHookEvent {
   /** The type of event (command, session, agent, gateway, etc.) */
   type: InternalHookEventType;
@@ -280,5 +320,31 @@ export function isMessageSentEvent(event: InternalHookEvent): event is MessageSe
     typeof context.to === "string" &&
     typeof context.channelId === "string" &&
     typeof context.success === "boolean"
+  );
+}
+
+export function isAgentBeforeRunEvent(event: InternalHookEvent): event is AgentBeforeRunHookEvent {
+  if (event.type !== "agent" || event.action !== "beforeRun") {
+    return false;
+  }
+  const context = event.context as Partial<AgentBeforeRunHookContext> | null;
+  if (!context || typeof context !== "object") {
+    return false;
+  }
+  return typeof context.sessionKey === "string" && typeof context.timestamp === "string";
+}
+
+export function isAgentAfterRunEvent(event: InternalHookEvent): event is AgentAfterRunHookEvent {
+  if (event.type !== "agent" || event.action !== "afterRun") {
+    return false;
+  }
+  const context = event.context as Partial<AgentAfterRunHookContext> | null;
+  if (!context || typeof context !== "object") {
+    return false;
+  }
+  return (
+    typeof context.sessionKey === "string" &&
+    typeof context.responseLength === "number" &&
+    typeof context.timestamp === "string"
   );
 }
