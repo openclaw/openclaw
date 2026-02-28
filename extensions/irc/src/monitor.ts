@@ -149,10 +149,14 @@ export async function monitorIrcProvider(opts: IrcMonitorOptions): Promise<{ sto
       }
     };
     const timer = setInterval(check, 2000);
-    opts.abortSignal?.addEventListener("abort", () => {
-      clearInterval(timer);
-      resolve();
-    }, { once: true });
+    opts.abortSignal?.addEventListener(
+      "abort",
+      () => {
+        clearInterval(timer);
+        resolve();
+      },
+      { once: true },
+    );
   });
 
   return {
