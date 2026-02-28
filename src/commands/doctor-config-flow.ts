@@ -463,17 +463,23 @@ async function maybeRepairTelegramAllowFromUsernames(cfg: OpenClawConfig): Promi
     return { config: cfg, changes: [] };
   }
 
-  const tokens = Array.from(
-    new Set(
-      listTelegramAccountIds(cfg)
-        .map((accountId) => resolveTelegramAccount({ cfg, accountId }))
-        .map((account) => (account.tokenSource === "none" ? "" : account.token))
-        .map((token) => token.trim())
-        .filter(Boolean),
-    ),
-  );
+  // Collect token + apiRoot pairs so custom Bot API servers are honoured.
+  const tokenEntries: Array<{ token: string; apiRoot?: string }> = [];
+  const seenTokens = new Set<string>();
+  for (const accountId of listTelegramAccountIds(cfg)) {
+    const account = resolveTelegramAccount({ cfg, accountId });
+    if (account.tokenSource === "none") {
+      continue;
+    }
+    const token = account.token.trim();
+    if (!token || seenTokens.has(token)) {
+      continue;
+    }
+    seenTokens.add(token);
+    tokenEntries.push({ token, apiRoot: account.config.apiRoot });
+  }
 
-  if (tokens.length === 0) {
+  if (tokenEntries.length === 0) {
     return {
       config: cfg,
       changes: [
@@ -498,7 +504,7 @@ async function maybeRepairTelegramAllowFromUsernames(cfg: OpenClawConfig): Promi
       return null;
     }
     const username = stripped.startsWith("@") ? stripped : `@${stripped}`;
-    for (const token of tokens) {
+    for (const { token, apiRoot } of tokenEntries) {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 4000);
       try {
@@ -506,6 +512,7 @@ async function maybeRepairTelegramAllowFromUsernames(cfg: OpenClawConfig): Promi
           token,
           chatId: username,
           signal: controller.signal,
+          apiRoot,
         });
         if (id) {
           return id;
