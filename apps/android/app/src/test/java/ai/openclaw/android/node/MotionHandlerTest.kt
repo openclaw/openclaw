@@ -92,7 +92,8 @@ class MotionHandlerTest {
 
 private class FakeMotionDataSource(
   private val hasPermission: Boolean,
-  private val available: Boolean = true,
+  private val activityAvailable: Boolean = true,
+  private val pedometerAvailable: Boolean = true,
   private val activityRecord: MotionActivityRecord =
     MotionActivityRecord(
       startISO = "2026-02-28T00:00:00Z",
@@ -117,7 +118,9 @@ private class FakeMotionDataSource(
   private val activityError: Throwable? = null,
   private val pedometerError: Throwable? = null,
 ) : MotionDataSource {
-  override fun isAvailable(context: Context): Boolean = available
+  override fun isActivityAvailable(context: Context): Boolean = activityAvailable
+
+  override fun isPedometerAvailable(context: Context): Boolean = pedometerAvailable
 
   override fun hasPermission(context: Context): Boolean = hasPermission
 
