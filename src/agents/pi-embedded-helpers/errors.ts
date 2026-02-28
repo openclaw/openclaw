@@ -853,8 +853,9 @@ export function isLikelySSEParseError(errorMessage?: string, errorStack?: string
   // When a stack trace is available, check if the error originated from SSE/streaming code.
   // This narrows detection so generic JSON parse errors (e.g. from tool results or config
   // parsing) are not misidentified as SSE failures.
-  const hasStreamingStack =
-    !errorStack ||
+  // When no stack is available, require the error message itself to mention SSE/streaming
+  // context to avoid false positives on generic JSON parse errors.
+  const stackIndicatesStreaming =
     stackLower.includes("streaming") ||
     stackLower.includes("fromsse") ||
     stackLower.includes("from_sse") ||
@@ -863,6 +864,8 @@ export function isLikelySSEParseError(errorMessage?: string, errorStack?: string
     stackLower.includes("_stream") ||
     stackLower.includes("anthropic") ||
     stackLower.includes("openai");
+  const messageIndicatesStreaming = lower.includes("sse") || lower.includes("stream");
+  const hasStreamingContext = errorStack ? stackIndicatesStreaming : messageIndicatesStreaming;
 
   // Core pattern: SyntaxError from JSON.parse on SSE data
   const hasSyntaxError =
@@ -879,7 +882,7 @@ export function isLikelySSEParseError(errorMessage?: string, errorStack?: string
     lower.includes("sse") ||
     lower.includes("stream");
 
-  if (hasSyntaxError && hasJsonContext && hasStreamingStack) {
+  if (hasSyntaxError && hasJsonContext && hasStreamingContext) {
     return true;
   }
 
@@ -898,7 +901,7 @@ export function isLikelySSEParseError(errorMessage?: string, errorStack?: string
     (lower.includes("unexpected end of json input") ||
       lower.includes("expected ',' or '}' after property value in json") ||
       lower.includes("expected double-quoted property name in json")) &&
-    hasStreamingStack &&
+    hasStreamingContext &&
     !isLikelyContextOverflowError(errorMessage) &&
     !isRateLimitErrorMessage(errorMessage) &&
     !isBillingErrorMessage(errorMessage)

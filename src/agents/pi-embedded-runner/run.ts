@@ -974,6 +974,7 @@ export async function runEmbeddedPiAgent(
               `unsupported thinking level for ${provider}/${modelId}; retrying with ${fallbackThinking}`,
             );
             thinkLevel = fallbackThinking;
+            sseParseRetries = 0;
             continue;
           }
 
