@@ -649,13 +649,43 @@ export async function textToSpeech(params: {
         const tempDir = mkdtempSync(path.join(tempRoot, "tts-"));
         const audioPath = path.join(tempDir, `voice-${Date.now()}.wav`);
 
+        // Parse [speed:N] directive from text
+        let text = params.text;
+        let speed = 1.0;
+        const speedMatch = text.match(/\[speed:([\d.]+)\]/);
+        if (speedMatch) {
+          speed = Math.max(0.5, Math.min(2.0, parseFloat(speedMatch[1])));
+          text = text.replace(speedMatch[0], "").trim();
+        }
+
+        // Auto-detect Spanish → use marto_spanish voice, otherwise magnus_english
+        const voicesDir = path.join(
+          process.env.HOME ?? "/home/jherrild",
+          ".openclaw/workspace/skills/tts-local/voices",
+        );
+        const hasSpanish =
+          /[ñáéíóúü¿¡]/i.test(text) ||
+          /\b(?:el|la|los|las|es|que|por|para|como|pero|con|una?|del|al|más|muy|tiene|puede|está|son|hay|esto|esta|hace|desde|cuando|donde|ahora|bien|todo|también|sin|sobre|entre|otro|otra|después|antes|aquí|cada|fue|ser|hoy|vamos)\b/i.test(
+            text,
+          );
+        const voiceName = hasSpanish ? "marto_spanish" : "magnus_english";
+        const voicePath = path.join(voicesDir, `${voiceName}.wav`);
+
+        const body: Record<string, unknown> = { text };
+        if (existsSync(voicePath)) {
+          body.audio_prompt_path = voicePath;
+        }
+        if (speed !== 1.0) {
+          body.speed = speed;
+        }
+
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), config.timeoutMs ?? 120_000);
         try {
           const res = await fetch(`${localUrl}/synthesize`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ text: params.text }),
+            body: JSON.stringify(body),
             signal: controller.signal,
           });
           if (!res.ok) {
