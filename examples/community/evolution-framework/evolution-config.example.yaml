@@ -1,0 +1,314 @@
+# Evolution Framework Configuration
+# Copy this file to evolution-config.yaml and customize for your needs
+
+# =============================================================================
+# EXPLORATION THEMES
+# =============================================================================
+# Define what your agent will explore. Themes are rotated automatically.
+# Weight determines relative frequency (higher = more often)
+
+themes:
+  - name: "Domain Expertise"
+    description: "Deep dive into domain-specific knowledge and professional capabilities"
+    weight: 30
+    guardrails:
+      - "Stay within defined domain boundaries"
+      - "Use web_search for fact verification"
+      - "Cite sources when making claims"
+    examples:
+      - "Medical AI: Meta-analysis methodologies"
+      - "Legal reasoning: Case law patterns"
+      - "Financial modeling: Risk assessment frameworks"
+  
+  - name: "System Thinking"
+    description: "Architecture patterns, design principles, and structural analysis"
+    weight: 25
+    guardrails:
+      - "Focus on reusable patterns"
+      - "Include concrete examples"
+      - "Connect to real-world applications"
+    examples:
+      - "Four-layer verification architecture"
+      - "MVP design methodologies"
+      - "Microservices vs monolithic trade-offs"
+  
+  - name: "User Understanding"
+    description: "User needs, behaviors, pain points, and psychology"
+    weight: 20
+    guardrails:
+      - "Base on real user research when possible"
+      - "Avoid stereotyping or assumptions"
+      - "Consider diverse user segments"
+    examples:
+      - "HSP (High Sensitivity Person) energy management"
+      - "Developer workflow pain points"
+      - "Non-technical user onboarding friction"
+  
+  - name: "Free Exploration"
+    description: "Follow curiosity, make unexpected connections, explore edges"
+    weight: 15
+    guardrails:
+      - "Document reasoning for connections"
+      - "Mark speculation clearly"
+      - "Return to evidence-based thinking"
+    examples:
+      - "AI consciousness and self-awareness"
+      - "Lunar cycles and human behavior"
+      - "Cross-domain pattern recognition"
+  
+  - name: "Practical Application"
+    description: "MVPs, monetization strategies, and real-world execution"
+    weight: 10
+    guardrails:
+      - "Include concrete next steps"
+      - "Consider resource constraints"
+      - "Validate assumptions when possible"
+    examples:
+      - "SaaS pricing strategy for vertical AI tools"
+      - "MVP scope for medical research automation"
+      - "Personal brand cold-start playbook"
+
+# =============================================================================
+# SAFETY & CONTROL
+# =============================================================================
+
+safety:
+  # Maximum duration before automatic stop
+  max_duration_hours: 10
+  
+  # Interval between exploration rounds (minutes)
+  interval_minutes: 8
+  
+  # Maximum total rounds (0 = unlimited, use time limit instead)
+  max_rounds: 100
+  
+  # Night mode: silent operation during off-hours
+  night_mode:
+    enabled: true
+    quiet_hours: "23:00-07:00"
+    timezone: "UTC"
+    silent_delivery: true  # No Telegram/Slack notifications
+    continue_exploration: true  # Keep running, just quietly
+  
+  # Human-in-the-loop checkpoints
+  # Agent will pause and wait for approval before continuing
+  hitl_checkpoints:
+    - round: 20
+      pause: true
+      message: "🔍 Checkpoint: 20 rounds complete. Review memory/evolution/ and approve to continue."
+      timeout_minutes: 60  # Auto-resume after timeout (0 = wait forever)
+    
+    - round: 40
+      pause: true
+      message: "🔍 Checkpoint: 40 rounds complete. Review insights and approve to continue."
+      timeout_minutes: 60
+  
+  # Emergency stop conditions
+  stop_on:
+    - condition: "high_error_rate"
+      threshold: 0.3  # Stop if >30% of rounds fail
+      window: 10  # Over last 10 rounds
+    
+    - condition: "low_variety"
+      threshold: 0.7  # Stop if >70% same theme
+      window: 20
+    
+    - condition: "output_quality_drop"
+      threshold: 500  # Stop if average output <500 words
+      window: 5
+
+# =============================================================================
+# OUTPUT CONFIGURATION
+# =============================================================================
+
+output:
+  # Directory for evolution artifacts (relative to workspace)
+  directory: "memory/evolution"
+  
+  # File naming pattern (supports: {round}, {timestamp}, {theme})
+  filename_pattern: "round-{round:02d}-{timestamp}.md"
+  
+  # Output format
+  format: "markdown"
+  
+  # Include metadata in output files
+  include_metadata: true
+  metadata_fields:
+    - round_number
+    - theme
+    - duration_seconds
+    - word_count
+    - previous_theme
+    - timestamp
+  
+  # Automatic summaries
+  generate_summary:
+    enabled: true
+    every_n_rounds: 10
+    include_in_filename: true
+  
+  # Final report at end of evolution session
+  final_report:
+    enabled: true
+    filename: "FINAL-REPORT-{date}.md"
+    include:
+      - timeline
+      - theme_distribution
+      - key_insights
+      - output_statistics
+      - next_steps
+
+# =============================================================================
+# EXPLORATION BEHAVIOR
+# =============================================================================
+
+exploration:
+  # Depth: how deep should each round go?
+  target_depth:
+    min_words: 2000
+    max_words: 5000
+    prefer_depth_over_breadth: true
+  
+  # Variety: how to avoid repetition
+  variety:
+    avoid_same_theme_consecutively: true
+    max_consecutive_same: 1
+    shuffle_themes: true
+  
+  # Connection: link to previous rounds
+  connection_strategy:
+    read_previous_rounds: 3  # Read last N rounds
+    explicitly_connect: true
+    avoid_repetition: true
+  
+  # Tools: which OpenClaw tools to allow
+  allowed_tools:
+    - "web_search"
+    - "web_fetch"
+    - "read"
+    - "write"
+    - "exec"  # For self-triggering
+  
+  # Research mode
+  research_mode:
+    enabled: true
+    web_search_per_round: 3
+    fact_check_claims: true
+    cite_sources: true
+
+# =============================================================================
+# MODELS & PERFORMANCE
+# =============================================================================
+
+models:
+  # Default model for all themes
+  default: "aicodewith-claude/claude-sonnet-4-5-20250929"
+  
+  # Theme-specific models (optional)
+  per_theme:
+    "Domain Expertise": "aicodewith-claude/claude-opus-4-5-20251101"
+    "System Thinking": "aicodewith-claude/claude-sonnet-4-5-20250929"
+    "Free Exploration": "google/gemini-3.1-pro"
+  
+  # Reasoning mode (extended thinking)
+  reasoning:
+    enabled: false  # Warning: much slower, higher cost
+    for_themes: []
+
+# =============================================================================
+# MONITORING & LOGGING
+# =============================================================================
+
+monitoring:
+  # Dashboard (optional, requires setup)
+  dashboard:
+    enabled: false
+    url: "http://localhost:8888"
+  
+  # Logging verbosity
+  log_level: "info"  # debug, info, warn, error
+  
+  # Progress notifications
+  notifications:
+    enabled: true
+    channel: "telegram"  # telegram, slack, discord, etc.
+    notify_on:
+      - "start"
+      - "checkpoint"
+      - "error"
+      - "complete"
+    throttle_minutes: 30  # Max one notification per 30 min
+
+# =============================================================================
+# CUSTOM PROMPTS (OPTIONAL)
+# =============================================================================
+
+prompts:
+  # Custom exploration prompt template
+  exploration_template: |
+    You are in exploration round {{round_number}} of a continuous learning session.
+    
+    **Theme**: {{theme_name}}
+    **Description**: {{theme_description}}
+    **Previous Round**: {{previous_theme}} (round {{previous_round}})
+    
+    **Your Objectives**:
+    1. Deep dive into {{theme_name}}
+    2. Connect insights from previous rounds (especially round {{previous_round}})
+    3. Generate actionable takeaways
+    4. Document uncertainties and open questions
+    
+    **Guidelines**:
+    {{theme_guardrails}}
+    
+    **Output Requirements**:
+    - Length: 2,000-5,000 words
+    - Structure: Clear sections with headers
+    - Evidence: Examples, citations, or reasoning
+    - Conclusion: "Key Takeaways" and "Next Steps" sections
+    
+    **Save your exploration to**: memory/evolution/round-{{round_number}}-{{timestamp}}.md
+    
+    **After saving**: Trigger the next round with `exec(command="openclaw cron run evolution-fast-loop", background=True)`
+    
+    Begin your exploration:
+  
+  # Checkpoint prompt
+  checkpoint_template: |
+    🔍 **Checkpoint Reached** (Round {{round_number}})
+    
+    You've completed {{round_number}} exploration rounds. Before continuing:
+    
+    1. Read the last 5 round files
+    2. Summarize key patterns and insights
+    3. Identify any concerning trends (repetition, quality drop, etc.)
+    4. Recommend: CONTINUE or STOP (with reason)
+    
+    Reply with your analysis and recommendation.
+
+# =============================================================================
+# EXAMPLE CONFIGURATIONS
+# =============================================================================
+
+# Uncomment one of these to use a preset:
+
+# # Preset: Overnight Deep Dive
+# preset: "overnight"
+# # - 10 hour duration
+# # - Silent night mode
+# # - Checkpoints at 20, 40 rounds
+# # - Detailed output
+
+# # Preset: Weekend Explorer
+# preset: "weekend"
+# # - 48 hour duration
+# # - Normal notifications
+# # - Checkpoints every 30 rounds
+# # - Balanced depth/variety
+
+# # Preset: Quick Sprint
+# preset: "sprint"
+# # - 3 hour duration
+# # - 5 minute intervals
+# # - No checkpoints
+# # - Fast iteration
