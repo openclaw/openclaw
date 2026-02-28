@@ -51,9 +51,24 @@ export async function runDiscordGatewayLifecycle(params: {
   }
 
   const HELLO_TIMEOUT_MS = 30000;
+  const HELLO_CONNECTED_POLL_MS = 250;
   const MAX_CONSECUTIVE_HELLO_STALLS = 3;
   let helloTimeoutId: ReturnType<typeof setTimeout> | undefined;
+  let helloConnectedPollId: ReturnType<typeof setInterval> | undefined;
   let consecutiveHelloStalls = 0;
+  const clearHelloWatch = () => {
+    if (helloTimeoutId) {
+      clearTimeout(helloTimeoutId);
+      helloTimeoutId = undefined;
+    }
+    if (helloConnectedPollId) {
+      clearInterval(helloConnectedPollId);
+      helloConnectedPollId = undefined;
+    }
+  };
+  const resetHelloStallCounter = () => {
+    consecutiveHelloStalls = 0;
+  };
   const clearResumeState = () => {
     const mutableGateway = gateway as
       | (GatewayPlugin & {
@@ -75,15 +90,40 @@ export async function runDiscordGatewayLifecycle(params: {
   };
   const onGatewayDebug = (msg: unknown) => {
     const message = String(msg);
+    if (message.includes("WebSocket connection closed")) {
+      // Carbon marks `isConnected` true only after READY/RESUMED and flips it
+      // false during reconnect handling after this debug line is emitted.
+      if (gateway?.isConnected) {
+        resetHelloStallCounter();
+      }
+      clearHelloWatch();
+      return;
+    }
     if (!message.includes("WebSocket connection opened")) {
       return;
     }
-    if (helloTimeoutId) {
-      clearTimeout(helloTimeoutId);
-    }
+    clearHelloWatch();
+
+    let sawConnected = gateway?.isConnected === true;
+    helloConnectedPollId = setInterval(() => {
+      if (!gateway?.isConnected) {
+        return;
+      }
+      sawConnected = true;
+      resetHelloStallCounter();
+      if (helloConnectedPollId) {
+        clearInterval(helloConnectedPollId);
+        helloConnectedPollId = undefined;
+      }
+    }, HELLO_CONNECTED_POLL_MS);
+
     helloTimeoutId = setTimeout(() => {
-      if (gateway?.isConnected) {
-        consecutiveHelloStalls = 0;
+      if (helloConnectedPollId) {
+        clearInterval(helloConnectedPollId);
+        helloConnectedPollId = undefined;
+      }
+      if (sawConnected || gateway?.isConnected) {
+        resetHelloStallCounter();
       } else {
         consecutiveHelloStalls += 1;
         const forceFreshIdentify = consecutiveHelloStalls >= MAX_CONSECUTIVE_HELLO_STALLS;
@@ -96,7 +136,7 @@ export async function runDiscordGatewayLifecycle(params: {
         );
         if (forceFreshIdentify) {
           clearResumeState();
-          consecutiveHelloStalls = 0;
+          resetHelloStallCounter();
         }
         gateway?.disconnect();
         gateway?.connect(!forceFreshIdentify);
@@ -168,9 +208,7 @@ export async function runDiscordGatewayLifecycle(params: {
     params.releaseEarlyGatewayErrorGuard?.();
     unregisterGateway(params.accountId);
     stopGatewayLogging();
-    if (helloTimeoutId) {
-      clearTimeout(helloTimeoutId);
-    }
+    clearHelloWatch();
     gatewayEmitter?.removeListener("debug", onGatewayDebug);
     params.abortSignal?.removeEventListener("abort", onAbort);
     if (params.voiceManager) {

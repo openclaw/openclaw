@@ -28,6 +28,40 @@ describe("DiscordMessageListener", () => {
     await handlerDone;
   });
 
+  it("serializes queued handler runs while handle returns immediately", async () => {
+    let firstResolve: (() => void) | undefined;
+    let secondResolve: (() => void) | undefined;
+    const firstDone = new Promise<void>((resolve) => {
+      firstResolve = resolve;
+    });
+    const secondDone = new Promise<void>((resolve) => {
+      secondResolve = resolve;
+    });
+    let runCount = 0;
+    const handler = vi.fn(async () => {
+      runCount += 1;
+      if (runCount === 1) {
+        await firstDone;
+        return;
+      }
+      await secondDone;
+    });
+    const listener = new DiscordMessageListener(handler as never, createLogger() as never);
+
+    await expect(listener.handle({} as never, {} as never)).resolves.toBeUndefined();
+    await expect(listener.handle({} as never, {} as never)).resolves.toBeUndefined();
+
+    // Second event is queued until the first handler run settles.
+    expect(handler).toHaveBeenCalledTimes(1);
+    firstResolve?.();
+    await vi.waitFor(() => {
+      expect(handler).toHaveBeenCalledTimes(2);
+    });
+
+    secondResolve?.();
+    await secondDone;
+  });
+
   it("logs async handler failures", async () => {
     const handler = vi.fn(async () => {
       throw new Error("boom");

@@ -265,7 +265,7 @@ describe("runDiscordGatewayLifecycle", () => {
     }
   });
 
-  it("resets HELLO stall counter after a connected timeout window", async () => {
+  it("resets HELLO stall counter after a successful reconnect that drops quickly", async () => {
     vi.useFakeTimers();
     try {
       const { runDiscordGatewayLifecycle } = await import("./provider.lifecycle.js");
@@ -288,11 +288,17 @@ describe("runDiscordGatewayLifecycle", () => {
         emitter.emit("debug", "WebSocket connection opened");
         await vi.advanceTimersByTimeAsync(30000);
 
+        // Successful reconnect (READY/RESUMED sets isConnected=true), then
+        // quick drop before the HELLO timeout window finishes.
         gateway.isConnected = true;
+        emitter.emit("debug", "WebSocket connection opened");
+        await vi.advanceTimersByTimeAsync(10);
+        emitter.emit("debug", "WebSocket connection closed with code 1006");
+        gateway.isConnected = false;
+
         emitter.emit("debug", "WebSocket connection opened");
         await vi.advanceTimersByTimeAsync(30000);
 
-        gateway.isConnected = false;
         emitter.emit("debug", "WebSocket connection opened");
         await vi.advanceTimersByTimeAsync(30000);
       });
@@ -300,9 +306,10 @@ describe("runDiscordGatewayLifecycle", () => {
       const { lifecycleParams } = createLifecycleHarness({ gateway });
       await expect(runDiscordGatewayLifecycle(lifecycleParams)).resolves.toBeUndefined();
 
-      expect(gateway.connect).toHaveBeenCalledTimes(2);
+      expect(gateway.connect).toHaveBeenCalledTimes(3);
       expect(gateway.connect).toHaveBeenNthCalledWith(1, true);
       expect(gateway.connect).toHaveBeenNthCalledWith(2, true);
+      expect(gateway.connect).toHaveBeenNthCalledWith(3, true);
       expect(gateway.connect).not.toHaveBeenCalledWith(false);
     } finally {
       vi.useRealTimers();

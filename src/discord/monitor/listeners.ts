@@ -118,6 +118,8 @@ export function registerDiscordListener(listeners: Array<object>, listener: obje
 }
 
 export class DiscordMessageListener extends MessageCreateListener {
+  private messageQueue: Promise<void> = Promise.resolve();
+
   constructor(
     private handler: DiscordMessageHandler,
     private logger?: Logger,
@@ -126,19 +128,23 @@ export class DiscordMessageListener extends MessageCreateListener {
   }
 
   async handle(data: DiscordMessageEvent, client: Client) {
-    // Release the event lane immediately; long-running turns continue in the
-    // background while preserving existing error and slow-listener logging.
-    const task = runDiscordListenerWithSlowLog({
-      logger: this.logger,
-      listener: this.constructor.name,
-      event: this.type,
-      run: () => this.handler(data, client),
-      onError: (err) => {
-        const logger = this.logger ?? discordEventQueueLog;
-        logger.error(danger(`discord handler failed: ${String(err)}`));
-      },
-    });
-    void task.catch((err) => {
+    // Release Carbon's dispatch lane immediately, but keep our message handler
+    // serialized to avoid unbounded parallel model/IO work on traffic bursts.
+    this.messageQueue = this.messageQueue
+      .catch(() => {})
+      .then(() =>
+        runDiscordListenerWithSlowLog({
+          logger: this.logger,
+          listener: this.constructor.name,
+          event: this.type,
+          run: () => this.handler(data, client),
+          onError: (err) => {
+            const logger = this.logger ?? discordEventQueueLog;
+            logger.error(danger(`discord handler failed: ${String(err)}`));
+          },
+        }),
+      );
+    void this.messageQueue.catch((err) => {
       const logger = this.logger ?? discordEventQueueLog;
       logger.error(danger(`discord handler failed: ${String(err)}`));
     });
