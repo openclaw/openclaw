@@ -4,7 +4,7 @@ import type { BrowserProfileConfig, OpenClawConfig } from "../config/config.js";
 import { loadConfig, writeConfigFile } from "../config/config.js";
 import { deriveDefaultBrowserCdpPortRange } from "../config/port-defaults.js";
 import { resolveOpenClawUserDataDir } from "./chrome.js";
-import { parseHttpUrl, resolveProfile } from "./config.js";
+import { assertAllowedCdpHost, parseHttpUrl, resolveProfile } from "./config.js";
 import { DEFAULT_BROWSER_DEFAULT_PROFILE_NAME } from "./constants.js";
 import {
   allocateCdpPort,
@@ -73,6 +73,12 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
     let profileConfig: BrowserProfileConfig;
     if (rawCdpUrl) {
       const parsed = parseHttpUrl(rawCdpUrl, "browser.profiles.cdpUrl");
+      assertAllowedCdpHost({
+        host: parsed.parsed.hostname,
+        label: "browser.profiles.cdpUrl",
+        allowedHostnames: cfg.browser?.ssrfPolicy?.allowedHostnames,
+        hostnameAllowlist: cfg.browser?.ssrfPolicy?.hostnameAllowlist,
+      });
       profileConfig = {
         cdpUrl: parsed.normalized,
         ...(driver ? { driver } : {}),

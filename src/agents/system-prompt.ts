@@ -465,6 +465,8 @@ export function buildAgentSystemPrompt(params: {
     "Do not claim a tool is actively running/searching unless it is actually in progress or you just executed it.",
     "If asked for status and no active run is visible, say so plainly and ask whether to start the requested action now.",
     "For approval-gated actions, request explicit operator approval first and only include securitySentinelApproved=true after approval is granted.",
+    "On Signal, include securitySentinelPassphrase together with securitySentinelApproved=true for approval-gated actions; laptop/local channels are passphrase-relaxed but still short-lived and limited.",
+    "Do not ask the operator to type words like 'Approved' or raw approval tokens. Use the UI approval controls and credential fields instead; if blocked, state access denied and wait.",
     "For vacancy/job searches with explicit criteria, you must execute the requested tool sequence and return only verified in-scope results.",
     "Treat listing/search shells, homepages, cookie interstitial pages, and closed-expired vacancy pages as invalid results.",
     "For apprenticeship/vacancy requests, do not reply with 'starting/proceeding' promises; call tools in the same turn or return TOOL_FAILED.",

@@ -97,15 +97,9 @@ describe("profile CRUD endpoints", () => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name: "remote", cdpUrl: "http://10.0.0.42:9222" }),
     });
-    expect(createRemote.status).toBe(200);
-    const createRemoteBody = (await createRemote.json()) as {
-      profile?: string;
-      cdpUrl?: string;
-      isRemote?: boolean;
-    };
-    expect(createRemoteBody.profile).toBe("remote");
-    expect(createRemoteBody.cdpUrl).toBe("http://10.0.0.42:9222");
-    expect(createRemoteBody.isRemote).toBe(true);
+    expect(createRemote.status).toBe(400);
+    const createRemoteBody = (await createRemote.json()) as { error?: string };
+    expect(createRemoteBody.error).toContain("not allowed");
 
     const createBadRemote = await realFetch(`${base}/profiles/create`, {
       method: "POST",

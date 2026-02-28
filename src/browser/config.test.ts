@@ -78,17 +78,31 @@ describe("browser config", () => {
     expect(resolved.color).toBe("#FF4500");
   });
 
-  it("treats non-loopback cdpUrl as remote", () => {
+  it("rejects non-loopback cdpUrl hosts unless allowlisted", () => {
+    expect(() =>
+      resolveBrowserConfig({
+        cdpUrl: "http://example.com:9222",
+      }),
+    ).toThrow(/not allowed/i);
+  });
+
+  it("treats non-loopback cdpUrl as remote when allowlisted", () => {
     const resolved = resolveBrowserConfig({
       cdpUrl: "http://example.com:9222",
+      ssrfPolicy: {
+        allowedHostnames: ["example.com"],
+      },
     });
     const profile = resolveProfile(resolved, "openclaw");
     expect(profile?.cdpIsLoopback).toBe(false);
   });
 
-  it("supports explicit CDP URLs for the default profile", () => {
+  it("supports explicit CDP URLs for the default profile when allowlisted", () => {
     const resolved = resolveBrowserConfig({
       cdpUrl: "http://example.com:9222",
+      ssrfPolicy: {
+        allowedHostnames: ["example.com"],
+      },
     });
     const profile = resolveProfile(resolved, "openclaw");
     expect(profile?.cdpPort).toBe(9222);
@@ -96,8 +110,11 @@ describe("browser config", () => {
     expect(profile?.cdpIsLoopback).toBe(false);
   });
 
-  it("uses profile cdpUrl when provided", () => {
+  it("uses profile cdpUrl when host is allowlisted", () => {
     const resolved = resolveBrowserConfig({
+      ssrfPolicy: {
+        allowedHostnames: ["10.0.0.42"],
+      },
       profiles: {
         remote: { cdpUrl: "http://10.0.0.42:9222", color: "#0066CC" },
       },
@@ -112,6 +129,9 @@ describe("browser config", () => {
   it("uses base protocol for profiles with only cdpPort", () => {
     const resolved = resolveBrowserConfig({
       cdpUrl: "https://example.com:9443",
+      ssrfPolicy: {
+        allowedHostnames: ["example.com"],
+      },
       profiles: {
         work: { cdpPort: 18801, color: "#0066CC" },
       },

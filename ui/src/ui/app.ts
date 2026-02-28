@@ -157,6 +157,7 @@ export class OpenClawApp extends LitElement {
   @state() chatThinkingLevel: string | null = null;
   @state() chatQueue: ChatQueueItem[] = [];
   @state() chatAttachments: ChatAttachment[] = [];
+  @state() securityApprovalPassphrase = "";
   @state() chatManualRefreshInFlight = false;
   @state() chatVoiceSupported = true;
   @state() chatVoiceProfiles: VoiceboxProfile[] = [];

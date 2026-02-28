@@ -11,6 +11,7 @@ import type { AnyAgentTool } from "./tools/common.js";
 export type HookContext = {
   agentId?: string;
   sessionKey?: string;
+  messageProvider?: string;
   loopDetection?: ToolLoopDetectionConfig;
 };
 
@@ -97,7 +98,12 @@ export async function runBeforeToolCallHook(args: {
   const toolName = normalizeToolName(args.toolName || "tool");
   const params = args.params;
 
-  const sentinelDecision = evaluateSecuritySentinel({ toolName, params });
+  const sentinelDecision = evaluateSecuritySentinel({
+    toolName,
+    params,
+    sessionKey: args.ctx?.sessionKey,
+    messageProvider: args.ctx?.messageProvider,
+  });
   await writeSecuritySentinelAudit({ decision: sentinelDecision, params });
   if (sentinelDecision.blocked) {
     const tamperType = sentinelDecision.tamperType ?? "policy_violation";

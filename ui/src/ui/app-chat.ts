@@ -73,6 +73,7 @@ function enqueueChatMessage(
   text: string,
   attachments?: ChatAttachment[],
   refreshSessions?: boolean,
+  suppressLocalEcho?: boolean,
 ) {
   const trimmed = text.trim();
   const hasAttachments = Boolean(attachments && attachments.length > 0);
@@ -87,6 +88,7 @@ function enqueueChatMessage(
       createdAt: Date.now(),
       attachments: hasAttachments ? attachments?.map((att) => ({ ...att })) : undefined,
       refreshSessions,
+      suppressLocalEcho,
     },
   ];
 }
@@ -101,10 +103,13 @@ async function sendChatMessageNow(
     previousAttachments?: ChatAttachment[];
     restoreAttachments?: boolean;
     refreshSessions?: boolean;
+    suppressLocalEcho?: boolean;
   },
 ) {
   resetToolStream(host as unknown as Parameters<typeof resetToolStream>[0]);
-  const runId = await sendChatMessage(host as unknown as OpenClawApp, message, opts?.attachments);
+  const runId = await sendChatMessage(host as unknown as OpenClawApp, message, opts?.attachments, {
+    suppressLocalEcho: opts?.suppressLocalEcho,
+  });
   const ok = Boolean(runId);
   if (!ok && opts?.previousDraft != null) {
     host.chatMessage = opts.previousDraft;
@@ -146,6 +151,7 @@ async function flushChatQueue(host: ChatHost) {
   const ok = await sendChatMessageNow(host, next.text, {
     attachments: next.attachments,
     refreshSessions: next.refreshSessions,
+    suppressLocalEcho: next.suppressLocalEcho,
   });
   if (!ok) {
     host.chatQueue = [next, ...host.chatQueue];
@@ -159,7 +165,7 @@ export function removeQueuedMessage(host: ChatHost, id: string) {
 export async function handleSendChat(
   host: ChatHost,
   messageOverride?: string,
-  opts?: { restoreDraft?: boolean },
+  opts?: { restoreDraft?: boolean; suppressLocalEcho?: boolean },
 ) {
   if (!host.connected) {
     return;
@@ -188,7 +194,7 @@ export async function handleSendChat(
   }
 
   if (isChatBusy(host)) {
-    enqueueChatMessage(host, message, attachmentsToSend, refreshSessions);
+    enqueueChatMessage(host, message, attachmentsToSend, refreshSessions, opts?.suppressLocalEcho);
     return;
   }
 
@@ -199,6 +205,7 @@ export async function handleSendChat(
     previousAttachments: messageOverride == null ? attachments : undefined,
     restoreAttachments: Boolean(messageOverride && opts?.restoreDraft),
     refreshSessions,
+    suppressLocalEcho: Boolean(opts?.suppressLocalEcho),
   });
 }
 

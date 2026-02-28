@@ -76,6 +76,7 @@ export type AppViewState = {
   chatAvatarUrl: string | null;
   chatThinkingLevel: string | null;
   chatQueue: ChatQueueItem[];
+  securityApprovalPassphrase: string;
   chatManualRefreshInFlight: boolean;
   chatVoiceSupported: boolean;
   chatVoiceProfiles: VoiceboxProfile[];
@@ -315,7 +316,10 @@ export type AppViewState = {
   setPassword: (next: string) => void;
   setSessionKey: (next: string) => void;
   setChatMessage: (next: string) => void;
-  handleSendChat: (messageOverride?: string, opts?: { restoreDraft?: boolean }) => Promise<void>;
+  handleSendChat: (
+    messageOverride?: string,
+    opts?: { restoreDraft?: boolean; suppressLocalEcho?: boolean },
+  ) => Promise<void>;
   handleAbortChat: () => Promise<void>;
   removeQueuedMessage: (id: string) => void;
   handleChatScroll: (event: Event) => void;

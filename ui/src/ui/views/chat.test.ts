@@ -224,4 +224,612 @@ describe("chat view", () => {
     expect(onNewSession).toHaveBeenCalledTimes(1);
     expect(container.textContent).not.toContain("Stop");
   });
+
+  it("renders security approval strip for pending sentinel approval", () => {
+    const container = document.createElement("div");
+    const onSecurityApprove = vi.fn();
+    const onSecurityDeny = vi.fn();
+    render(
+      renderChat(
+        createProps({
+          messages: [
+            {
+              role: "assistant",
+              content: [
+                {
+                  type: "text",
+                  text: "I encountered a security alert and need your explicit permission to continue. Would you like to allow this action?",
+                },
+              ],
+            },
+          ],
+          onSecurityApprove,
+          onSecurityDeny,
+        }),
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".chat-approval-strip")).not.toBeNull();
+
+    const buttons = Array.from(container.querySelectorAll(".chat-approval-strip button"));
+    const approve = buttons.find((btn) => btn.textContent?.trim() === "Approve");
+    const deny = buttons.find((btn) => btn.textContent?.trim() === "Do not approve");
+    approve?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    deny?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+    expect(onSecurityApprove).toHaveBeenCalledTimes(1);
+    expect(onSecurityDeny).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows passphrase field and blocks approve until filled when required", () => {
+    const container = document.createElement("div");
+    const onSecurityApprove = vi.fn();
+    const onSecurityPassphraseChange = vi.fn();
+    render(
+      renderChat(
+        createProps({
+          messages: [
+            {
+              role: "assistant",
+              content: [
+                {
+                  type: "text",
+                  text: "Security sentinel blocked tool call: approval requires securitySentinelPassphrase in addition to securitySentinelApproved=true",
+                },
+              ],
+            },
+          ],
+          securityApprovalPassphrase: "",
+          onSecurityApprove,
+          onSecurityDeny: vi.fn(),
+          onSecurityApprovalPassphraseChange,
+        }),
+      ),
+      container,
+    );
+
+    const input = container.querySelector(".chat-approval-strip__secret");
+    expect(input).not.toBeNull();
+    const approve = Array.from(container.querySelectorAll(".chat-approval-strip button")).find(
+      (btn) => btn.textContent?.trim() === "Approve",
+    ) as HTMLButtonElement | undefined;
+    expect(approve).not.toBeUndefined();
+    expect(approve?.disabled).toBe(true);
+
+    (input as HTMLInputElement).value = "letmein";
+    input?.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(onSecurityPassphraseChange).toHaveBeenCalled();
+    expect(onSecurityApprove).toHaveBeenCalledTimes(0);
+  });
+
+  it("passes entered passphrase to approve callback", () => {
+    const container = document.createElement("div");
+    const onSecurityApprove = vi.fn();
+    render(
+      renderChat(
+        createProps({
+          messages: [
+            {
+              role: "assistant",
+              content: [
+                {
+                  type: "text",
+                  text: "Security sentinel blocked tool call: approval requires securitySentinelPassphrase in addition to securitySentinelApproved=true",
+                },
+              ],
+            },
+          ],
+          securityApprovalPassphrase: "letmein",
+          onSecurityApprove,
+          onSecurityDeny: vi.fn(),
+          onSecurityApprovalPassphraseChange: vi.fn(),
+        }),
+      ),
+      container,
+    );
+
+    const approve = Array.from(container.querySelectorAll(".chat-approval-strip button")).find(
+      (btn) => btn.textContent?.trim() === "Approve",
+    );
+    approve?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(onSecurityApprove).toHaveBeenCalledWith("letmein");
+  });
+
+  it("hides security approval strip after explicit user approval response", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          messages: [
+            {
+              role: "assistant",
+              content: [
+                {
+                  type: "text",
+                  text: "Security sentinel blocked tool call: set securitySentinelApproved=true to continue.",
+                },
+              ],
+            },
+            {
+              role: "user",
+              content: [{ type: "text", text: "SecuritySentinelApproved=true" }],
+            },
+          ],
+          onSecurityApprove: vi.fn(),
+          onSecurityDeny: vi.fn(),
+        }),
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".chat-approval-strip")).toBeNull();
+  });
+
+  it("hides security approval strip when assistant confirms approval completion", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          messages: [
+            {
+              role: "assistant",
+              content: [
+                {
+                  type: "text",
+                  text: "Security sentinel blocked tool call: set securitySentinelApproved=true to continue.",
+                },
+              ],
+              timestamp: 1000,
+            },
+            {
+              role: "assistant",
+              content: [{ type: "text", text: "SecuritySentinelApproved=true" }],
+              timestamp: 2000,
+            },
+          ],
+          onSecurityApprove: vi.fn(),
+          onSecurityDeny: vi.fn(),
+        }),
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".chat-approval-strip")).toBeNull();
+  });
+
+  it("keeps security approval strip visible when assistant asks for passphrase", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          messages: [
+            {
+              role: "assistant",
+              content: [
+                {
+                  type: "text",
+                  text: "Security sentinel blocked tool call: approval requires securitySentinelPassphrase in addition to securitySentinelApproved=true",
+                },
+              ],
+              timestamp: 1000,
+            },
+            {
+              role: "assistant",
+              content: [
+                {
+                  type: "text",
+                  text: "I need both: securitySentinelApproved=true and your securitySentinelPassphrase.",
+                },
+              ],
+              timestamp: 2000,
+            },
+          ],
+          onSecurityApprove: vi.fn(),
+          onSecurityDeny: vi.fn(),
+        }),
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".chat-approval-strip")).not.toBeNull();
+  });
+
+  it("hides stale security approval strip after any later user message", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          messages: [
+            {
+              role: "assistant",
+              content: [
+                {
+                  type: "text",
+                  text: "Security sentinel blocked tool call: set securitySentinelApproved=true to continue.",
+                },
+              ],
+              timestamp: 1000,
+            },
+            {
+              role: "user",
+              content: [{ type: "text", text: "ok let's continue" }],
+              timestamp: 2000,
+            },
+          ],
+          onSecurityApprove: vi.fn(),
+          onSecurityDeny: vi.fn(),
+        }),
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".chat-approval-strip")).toBeNull();
+  });
+
+  it("keeps strip hidden after deny acknowledgement message", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          messages: [
+            {
+              role: "assistant",
+              content: [
+                {
+                  type: "text",
+                  text: "Security sentinel blocked tool call: approval requires securitySentinelPassphrase in addition to securitySentinelApproved=true",
+                },
+              ],
+              timestamp: 1000,
+            },
+            {
+              role: "user",
+              content: [{ type: "text", text: "SecuritySentinelApproved=false" }],
+              timestamp: 2000,
+            },
+            {
+              role: "assistant",
+              content: [
+                {
+                  type: "text",
+                  text: "Got it — approval is currently off. I won’t run any approval-gated actions unless you re-approve.",
+                },
+              ],
+              timestamp: 3000,
+            },
+          ],
+          onSecurityApprove: vi.fn(),
+          onSecurityDeny: vi.fn(),
+        }),
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".chat-approval-strip")).toBeNull();
+  });
+
+  it("keeps strip hidden when deny acknowledgement arrives without a local deny user message", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          messages: [
+            {
+              role: "assistant",
+              content: [
+                {
+                  type: "text",
+                  text: "Security sentinel blocked tool call: approval requires securitySentinelPassphrase in addition to securitySentinelApproved=true",
+                },
+              ],
+              timestamp: 1000,
+            },
+            {
+              role: "assistant",
+              content: [
+                {
+                  type: "text",
+                  text: "Got it — approval is currently off. I won’t run any approval-gated actions unless you re-approve.",
+                },
+              ],
+              timestamp: 2000,
+            },
+          ],
+          onSecurityApprove: vi.fn(),
+          onSecurityDeny: vi.fn(),
+        }),
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".chat-approval-strip")).toBeNull();
+  });
+
+  it("re-shows strip when assistant asks to enable approval and provide passphrase after deny", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          messages: [
+            {
+              role: "assistant",
+              content: [
+                {
+                  type: "text",
+                  text: "Understood — approval is now false/off again. I’ll stay paused on any gated actions.",
+                },
+              ],
+              timestamp: 1000,
+            },
+            {
+              role: "user",
+              content: [
+                {
+                  type: "text",
+                  text: "Send a Signal message to my phone saying: test approval flow",
+                },
+              ],
+              timestamp: 2000,
+            },
+            {
+              role: "assistant",
+              content: [
+                {
+                  type: "text",
+                  text: "I can’t run that right now — approval is currently off. Enable approval in the UI and provide securitySentinelPassphrase, then I’ll execute immediately.",
+                },
+              ],
+              timestamp: 3000,
+            },
+          ],
+          onSecurityApprove: vi.fn(),
+          onSecurityDeny: vi.fn(),
+        }),
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".chat-approval-strip")).not.toBeNull();
+    expect(container.querySelector(".chat-approval-passphrase")).not.toBeNull();
+  });
+
+  it("re-shows strip even when deny and re-prompt share the same timestamp", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          messages: [
+            {
+              role: "assistant",
+              content: [
+                {
+                  type: "text",
+                  text: "Security sentinel blocked tool call: approval requires securitySentinelPassphrase in addition to securitySentinelApproved=true",
+                },
+              ],
+              timestamp: 1000,
+            },
+            {
+              role: "user",
+              content: [{ type: "text", text: "SecuritySentinelApproved=false" }],
+              timestamp: 1000,
+            },
+            {
+              role: "assistant",
+              content: [
+                {
+                  type: "text",
+                  text: "I can’t run that right now — approval is currently off. Enable approval in the UI and provide securitySentinelPassphrase, then I’ll execute immediately.",
+                },
+              ],
+              timestamp: 1000,
+            },
+          ],
+          onSecurityApprove: vi.fn(),
+          onSecurityDeny: vi.fn(),
+        }),
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".chat-approval-strip")).not.toBeNull();
+    expect(container.querySelector(".chat-approval-passphrase")).not.toBeNull();
+  });
+
+  it("keeps passphrase input visible while any unresolved request still requires passphrase", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          messages: [
+            {
+              role: "assistant",
+              content: [
+                {
+                  type: "text",
+                  text: "Security sentinel blocked tool call: approval requires securitySentinelPassphrase in addition to securitySentinelApproved=true",
+                },
+              ],
+              timestamp: 1000,
+            },
+          ],
+          toolMessages: [
+            {
+              role: "assistant",
+              content: [
+                {
+                  type: "toolresult",
+                  name: "message",
+                  text: "Security sentinel blocked tool call: explicit operator approval required (set securitySentinelApproved=true for this tool call)",
+                },
+              ],
+              timestamp: 2000,
+            },
+          ],
+          onSecurityApprove: vi.fn(),
+          onSecurityDeny: vi.fn(),
+        }),
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".chat-approval-passphrase")).not.toBeNull();
+  });
+
+  it("hides security approval strip after later user message without text payload", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          messages: [
+            {
+              role: "assistant",
+              content: [
+                {
+                  type: "text",
+                  text: "Security sentinel blocked tool call: set securitySentinelApproved=true to continue.",
+                },
+              ],
+              timestamp: 1000,
+            },
+            {
+              role: "user",
+              timestamp: 2000,
+            },
+          ],
+          onSecurityApprove: vi.fn(),
+          onSecurityDeny: vi.fn(),
+        }),
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".chat-approval-strip")).toBeNull();
+  });
+
+  it("renders security approval strip when sentinel block appears in tool output", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          messages: [],
+          toolMessages: [
+            {
+              role: "assistant",
+              content: [
+                { type: "toolcall", name: "sessions_spawn", arguments: {} },
+                {
+                  type: "toolresult",
+                  name: "sessions_spawn",
+                  text: "Security sentinel blocked tool call: explicit operator approval required (set securitySentinelApproved=true for this tool call)",
+                },
+              ],
+              timestamp: 1000,
+            },
+          ],
+          onSecurityApprove: vi.fn(),
+          onSecurityDeny: vi.fn(),
+        }),
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".chat-approval-strip")).not.toBeNull();
+  });
+
+  it("renders approval strip when tool block has no timestamp and user messages use epoch timestamps", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          messages: [
+            {
+              role: "user",
+              content: [{ type: "text", text: "send signal ping" }],
+              timestamp: 1771900000000,
+            },
+          ],
+          toolMessages: [
+            {
+              role: "assistant",
+              content: [
+                {
+                  type: "toolresult",
+                  name: "message",
+                  text: "Security sentinel blocked tool call: explicit operator approval required (set securitySentinelApproved=true for this tool call)",
+                },
+              ],
+            },
+          ],
+          onSecurityApprove: vi.fn(),
+          onSecurityDeny: vi.fn(),
+        }),
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".chat-approval-strip")).not.toBeNull();
+  });
+
+  it("renders security approval strip for non-text content blocks carrying text payloads", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          messages: [
+            {
+              role: "assistant",
+              content: [
+                {
+                  type: "output_text",
+                  text: "Security sentinel blocked tool call: explicit operator approval required (set securitySentinelApproved=true for this tool call).",
+                },
+              ],
+            },
+          ],
+          onSecurityApprove: vi.fn(),
+          onSecurityDeny: vi.fn(),
+        }),
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".chat-approval-strip")).not.toBeNull();
+  });
+
+  it("hides security approval strip when user already answered after tool block", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          messages: [
+            {
+              role: "user",
+              content: [{ type: "text", text: "SecuritySentinelApproved=true" }],
+              timestamp: 2000,
+            },
+          ],
+          toolMessages: [
+            {
+              role: "assistant",
+              content: [
+                {
+                  type: "toolresult",
+                  name: "sessions_spawn",
+                  text: "Security sentinel blocked tool call: explicit operator approval required.",
+                },
+              ],
+              timestamp: 1000,
+            },
+          ],
+          onSecurityApprove: vi.fn(),
+          onSecurityDeny: vi.fn(),
+        }),
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".chat-approval-strip")).toBeNull();
+  });
 });

@@ -127,6 +127,54 @@ export function parseHttpUrl(raw: string, label: string) {
   };
 }
 
+function normalizeHostname(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function normalizeHostnameList(values?: string[]): string[] {
+  if (!Array.isArray(values) || values.length === 0) {
+    return [];
+  }
+  return Array.from(new Set(values.map((value) => normalizeHostname(value)).filter(Boolean)));
+}
+
+function hostnameMatchesPattern(hostname: string, pattern: string): boolean {
+  if (pattern.startsWith("*.")) {
+    const suffix = pattern.slice(2);
+    if (!suffix || hostname === suffix) {
+      return false;
+    }
+    return hostname.endsWith(`.${suffix}`);
+  }
+  return hostname === pattern;
+}
+
+export function assertAllowedCdpHost(params: {
+  host: string;
+  label: string;
+  allowedHostnames?: string[];
+  hostnameAllowlist?: string[];
+}) {
+  const host = normalizeHostname(params.host);
+  if (!host) {
+    throw new Error(`${params.label} host is required`);
+  }
+  if (isLoopbackHost(host)) {
+    return;
+  }
+  const allowedHostnames = normalizeHostnameList(params.allowedHostnames);
+  if (allowedHostnames.includes(host)) {
+    return;
+  }
+  const hostnameAllowlist = normalizeHostnameList(params.hostnameAllowlist);
+  if (hostnameAllowlist.some((pattern) => hostnameMatchesPattern(host, pattern))) {
+    return;
+  }
+  throw new Error(
+    `${params.label} host "${host}" is not allowed. Use loopback or allowlist the host in browser.ssrfPolicy.allowedHostnames/hostnameAllowlist.`,
+  );
+}
+
 /**
  * Ensure the default "openclaw" profile exists in the profiles map.
  * Auto-creates it with the legacy CDP port (from browser.cdpUrl) or first port if missing.
@@ -204,6 +252,12 @@ export function resolveBrowserConfig(
     | undefined;
   if (rawCdpUrl) {
     cdpInfo = parseHttpUrl(rawCdpUrl, "browser.cdpUrl");
+    assertAllowedCdpHost({
+      host: cdpInfo.parsed.hostname,
+      label: "browser.cdpUrl",
+      allowedHostnames: cfg?.ssrfPolicy?.allowedHostnames,
+      hostnameAllowlist: cfg?.ssrfPolicy?.hostnameAllowlist,
+    });
   } else {
     const derivedPort = controlPort + 1;
     if (derivedPort > 65535) {
@@ -285,6 +339,12 @@ export function resolveProfile(
 
   if (rawProfileUrl) {
     const parsed = parseHttpUrl(rawProfileUrl, `browser.profiles.${profileName}.cdpUrl`);
+    assertAllowedCdpHost({
+      host: parsed.parsed.hostname,
+      label: `browser.profiles.${profileName}.cdpUrl`,
+      allowedHostnames: resolved.ssrfPolicy?.allowedHostnames,
+      hostnameAllowlist: resolved.ssrfPolicy?.hostnameAllowlist,
+    });
     cdpHost = parsed.parsed.hostname;
     cdpPort = parsed.port;
     cdpUrl = parsed.normalized;

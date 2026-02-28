@@ -61,11 +61,22 @@ describe("BrowserProfilesService", () => {
     expect(writeConfigFile).toHaveBeenCalled();
   });
 
-  it("accepts per-profile cdpUrl for remote Chrome", async () => {
-    const resolved = resolveBrowserConfig({});
+  it("accepts per-profile cdpUrl for remote Chrome when host is allowlisted", async () => {
+    const resolved = resolveBrowserConfig({
+      ssrfPolicy: {
+        allowedHostnames: ["10.0.0.42"],
+      },
+    });
     const { ctx } = createCtx(resolved);
 
-    vi.mocked(loadConfig).mockReturnValue({ browser: { profiles: {} } });
+    vi.mocked(loadConfig).mockReturnValue({
+      browser: {
+        profiles: {},
+        ssrfPolicy: {
+          allowedHostnames: ["10.0.0.42"],
+        },
+      },
+    });
 
     const service = createBrowserProfilesService(ctx);
     const result = await service.createProfile({
@@ -89,8 +100,26 @@ describe("BrowserProfilesService", () => {
     );
   });
 
+  it("rejects per-profile remote cdpUrl when host is not allowlisted", async () => {
+    const resolved = resolveBrowserConfig({});
+    const { ctx } = createCtx(resolved);
+
+    vi.mocked(loadConfig).mockReturnValue({ browser: { profiles: {} } });
+
+    const service = createBrowserProfilesService(ctx);
+    await expect(
+      service.createProfile({
+        name: "remote",
+        cdpUrl: "http://10.0.0.42:9222",
+      }),
+    ).rejects.toThrow(/not allowed/i);
+  });
+
   it("deletes remote profiles without stopping or removing local data", async () => {
     const resolved = resolveBrowserConfig({
+      ssrfPolicy: {
+        allowedHostnames: ["10.0.0.42"],
+      },
       profiles: {
         remote: { cdpUrl: "http://10.0.0.42:9222", color: "#0066CC" },
       },
@@ -100,6 +129,9 @@ describe("BrowserProfilesService", () => {
     vi.mocked(loadConfig).mockReturnValue({
       browser: {
         defaultProfile: "openclaw",
+        ssrfPolicy: {
+          allowedHostnames: ["10.0.0.42"],
+        },
         profiles: {
           openclaw: { cdpPort: 18800, color: "#FF4500" },
           remote: { cdpUrl: "http://10.0.0.42:9222", color: "#0066CC" },

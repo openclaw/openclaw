@@ -77,7 +77,7 @@ describe("gateway control-plane write rate limit", () => {
     return respond;
   }
 
-  it("allows 3 control-plane writes and blocks the 4th in the same minute", async () => {
+  it("allows 10 control-plane writes and blocks the 11th in the same minute", async () => {
     const handlerCalls = vi.fn();
     const handler: GatewayRequestHandler = (opts) => {
       handlerCalls(opts);
@@ -87,12 +87,12 @@ describe("gateway control-plane write rate limit", () => {
     const context = buildContext(logWarn);
     const client = buildClient();
 
-    await runRequest({ method: "config.patch", context, client, handler });
-    await runRequest({ method: "config.patch", context, client, handler });
-    await runRequest({ method: "config.patch", context, client, handler });
+    for (let i = 0; i < 10; i += 1) {
+      await runRequest({ method: "config.patch", context, client, handler });
+    }
     const blocked = await runRequest({ method: "config.patch", context, client, handler });
 
-    expect(handlerCalls).toHaveBeenCalledTimes(3);
+    expect(handlerCalls).toHaveBeenCalledTimes(10);
     expect(blocked).toHaveBeenCalledWith(
       false,
       undefined,
@@ -113,9 +113,9 @@ describe("gateway control-plane write rate limit", () => {
     const context = buildContext();
     const client = buildClient();
 
-    await runRequest({ method: "update.run", context, client, handler });
-    await runRequest({ method: "update.run", context, client, handler });
-    await runRequest({ method: "update.run", context, client, handler });
+    for (let i = 0; i < 10; i += 1) {
+      await runRequest({ method: "update.run", context, client, handler });
+    }
 
     const blocked = await runRequest({ method: "update.run", context, client, handler });
     expect(blocked).toHaveBeenCalledWith(
@@ -128,7 +128,7 @@ describe("gateway control-plane write rate limit", () => {
 
     const allowed = await runRequest({ method: "update.run", context, client, handler });
     expect(allowed).toHaveBeenCalledWith(true, undefined, undefined);
-    expect(handlerCalls).toHaveBeenCalledTimes(4);
+    expect(handlerCalls).toHaveBeenCalledTimes(11);
   });
 
   it("uses connId fallback when both device and client IP are unknown", () => {
@@ -139,12 +139,24 @@ describe("gateway control-plane write rate limit", () => {
     expect(key).toBe("unknown-device|unknown-ip|conn=conn-fallback");
   });
 
-  it("keeps device/IP-based key when identity is present", () => {
+  it("includes connId when identity is incomplete", () => {
     const key = resolveControlPlaneRateLimitKey({
       connect: buildConnect(),
       connId: "conn-fallback",
       clientIp: "10.0.0.10",
     });
-    expect(key).toBe("unknown-device|10.0.0.10");
+    expect(key).toBe("unknown-device|10.0.0.10|conn=conn-fallback");
+  });
+
+  it("keeps device/IP-based key when identity is complete", () => {
+    const key = resolveControlPlaneRateLimitKey({
+      connect: {
+        ...buildConnect(),
+        device: { id: "device-1" },
+      },
+      connId: "conn-fallback",
+      clientIp: "10.0.0.10",
+    });
+    expect(key).toBe("device-1|10.0.0.10");
   });
 });

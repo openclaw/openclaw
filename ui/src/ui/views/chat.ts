@@ -77,8 +77,10 @@ export type ChatProps = {
   onAbort?: () => void;
   onQueueRemove: (id: string) => void;
   onNewSession: () => void;
-  onSecurityApprove?: () => void;
+  onSecurityApprove?: (passphrase?: string) => void;
   onSecurityDeny?: () => void;
+  securityApprovalPassphrase?: string;
+  onSecurityApprovalPassphraseChange?: (value: string) => void;
   onOpenSidebar?: (content: string) => void;
   onCloseSidebar?: () => void;
   onSplitRatioChange?: (ratio: number) => void;
@@ -253,7 +255,10 @@ export function renderChat(props: ChatProps) {
   };
 
   const hasAttachments = (props.attachments?.length ?? 0) > 0;
-  const pendingSecurityApproval = resolvePendingSecurityApproval(props.messages);
+  const pendingSecurityApproval = resolvePendingSecurityApproval(
+    props.messages,
+    props.toolMessages,
+  );
   const composePlaceholder = props.connected
     ? hasAttachments
       ? "Add a message or paste more images..."
@@ -386,8 +391,10 @@ export function renderChat(props: ChatProps) {
                     <div class="chat-queue__item">
                       <div class="chat-queue__text">
                         ${
-                          item.text ||
-                          (item.attachments?.length ? `Image (${item.attachments.length})` : "")
+                          item.suppressLocalEcho
+                            ? "Security approval action"
+                            : item.text ||
+                              (item.attachments?.length ? `Image (${item.attachments.length})` : "")
                         }
                       </div>
                       <button
@@ -431,7 +438,39 @@ export function renderChat(props: ChatProps) {
                 <div class="chat-approval-strip" role="status" aria-live="polite">
                   <span class="chat-approval-strip__label">Approval needed</span>
                   <span class="chat-approval-strip__detail">${pendingSecurityApproval.summary}</span>
-                  <button class="btn chat-approval-strip__btn" type="button" @click=${props.onSecurityApprove}>
+                  ${
+                    pendingSecurityApproval.requiresPassphrase &&
+                    props.onSecurityApprovalPassphraseChange
+                      ? html`
+                          <input
+                            class="chat-approval-strip__secret"
+                            type="password"
+                            autocomplete="off"
+                            spellcheck="false"
+                            placeholder="Passphrase"
+                            .value=${props.securityApprovalPassphrase ?? ""}
+                            @input=${(event: Event) =>
+                              props.onSecurityApprovalPassphraseChange?.(
+                                (event.target as HTMLInputElement).value,
+                              )}
+                          />
+                        `
+                      : nothing
+                  }
+                  <button
+                    class="btn chat-approval-strip__btn"
+                    type="button"
+                    ?disabled=${
+                      pendingSecurityApproval.requiresPassphrase &&
+                      !(props.securityApprovalPassphrase ?? "").trim()
+                    }
+                    @click=${() =>
+                      props.onSecurityApprove?.(
+                        pendingSecurityApproval.requiresPassphrase
+                          ? (props.securityApprovalPassphrase ?? "").trim()
+                          : undefined,
+                      )}
+                  >
                     Approve
                   </button>
                   <button
@@ -505,30 +544,290 @@ export function renderChat(props: ChatProps) {
 
 type PendingSecurityApproval = {
   summary: string;
+  requiresPassphrase: boolean;
 };
 
-function resolvePendingSecurityApproval(messages: unknown[]): PendingSecurityApproval | null {
-  const list = Array.isArray(messages) ? messages : [];
-  for (let i = list.length - 1; i >= 0; i--) {
-    const msg = list[i] as Record<string, unknown>;
-    const role = normalizeRoleForGrouping(typeof msg.role === "string" ? msg.role : "other");
-    if (role !== "assistant") {
+const SECURITY_APPROVAL_STALE_MS = 15 * 60 * 1000;
+
+function resolvePendingSecurityApproval(
+  messages: unknown[],
+  toolMessages: unknown[],
+): PendingSecurityApproval | null {
+  const history = Array.isArray(messages) ? messages : [];
+  const tools = Array.isArray(toolMessages) ? toolMessages : [];
+  const fallbackBase = resolveFallbackOrderBase(history, tools);
+  const requests: Array<{ order: number; requiresPassphrase: boolean }> = [];
+  let latestRequestOrder = -1;
+  let latestRequestEpochMs: number | null = null;
+  let latestResolutionOrder = -1;
+  let latestUserOrder = -1;
+  let fallbackOrder = fallbackBase;
+
+  const noteRequest = (text: string, order: number, epochMs: number | null) => {
+    if (order < latestRequestOrder) {
+      return;
+    }
+    latestRequestOrder = order;
+    latestRequestEpochMs = epochMs;
+    requests.push({
+      order,
+      requiresPassphrase: /securitysentinelpassphrase|passphrase/i.test(text),
+    });
+  };
+
+  for (const raw of history) {
+    if (!raw || typeof raw !== "object") {
+      fallbackOrder += 1;
       continue;
     }
-    const text = (extractTextCached(msg) ?? "").trim();
+    const msg = raw as Record<string, unknown>;
+    const role = normalizeRoleForGrouping(typeof msg.role === "string" ? msg.role : "other");
+    const order = fallbackOrder;
+    const epochMs = resolveMessageEpochMs(msg);
+    fallbackOrder += 1;
+    if (role === "user") {
+      latestUserOrder = Math.max(latestUserOrder, order);
+    }
+    const text = extractSecurityText(msg);
     if (!text) {
       continue;
     }
-    const isApprovalPrompt =
-      /security alert/i.test(text) ||
-      /explicit permission/i.test(text) ||
-      /would you like to allow this action/i.test(text);
-    if (!isApprovalPrompt) {
-      return null;
+    if (role === "assistant") {
+      const isPrompt = isSecurityApprovalPrompt(text);
+      const isSignal = isSecuritySentinelSignal(text);
+      if (isPrompt) {
+        noteRequest(text, order, epochMs);
+      }
+      if (isSignal) {
+        noteRequest(text, order, epochMs);
+      }
+      if (
+        !isPrompt &&
+        !isSignal &&
+        (isSecurityApprovalResolution(text) || isSecurityApprovalDenyAcknowledgement(text))
+      ) {
+        latestResolutionOrder = Math.max(latestResolutionOrder, order);
+      }
+      continue;
     }
-    return { summary: "Security Sentinel approval requested" };
+    if (isSecurityApprovalResolution(text)) {
+      latestResolutionOrder = Math.max(latestResolutionOrder, order);
+    }
+  }
+
+  for (const raw of tools) {
+    if (!raw || typeof raw !== "object") {
+      fallbackOrder += 1;
+      continue;
+    }
+    const msg = raw as Record<string, unknown>;
+    const text = extractSecurityText(msg);
+    const order = fallbackOrder;
+    const epochMs = resolveMessageEpochMs(msg);
+    fallbackOrder += 1;
+    if (!text) {
+      continue;
+    }
+    if (isSecurityApprovalResolution(text)) {
+      latestResolutionOrder = Math.max(latestResolutionOrder, order);
+      continue;
+    }
+    if (isSecurityApprovalPrompt(text)) {
+      noteRequest(text, order, epochMs);
+    }
+    if (isSecuritySentinelSignal(text)) {
+      noteRequest(text, order, epochMs);
+    }
+  }
+
+  if (
+    latestRequestEpochMs !== null &&
+    Date.now() - latestRequestEpochMs > SECURITY_APPROVAL_STALE_MS
+  ) {
+    return null;
+  }
+  if (
+    latestRequestOrder >= 0 &&
+    latestResolutionOrder < latestRequestOrder &&
+    latestUserOrder <= latestRequestOrder
+  ) {
+    const unresolvedCutoff = Math.max(latestResolutionOrder, latestUserOrder);
+    const unresolvedRequests = requests.filter((entry) => entry.order > unresolvedCutoff);
+    const requiresPassphrase = unresolvedRequests.some((entry) => entry.requiresPassphrase);
+    return {
+      summary: requiresPassphrase
+        ? "Access denied: approval and passphrase required"
+        : "Access denied: approval required",
+      requiresPassphrase,
+    };
   }
   return null;
+}
+
+function resolveMessageEpochMs(message: Record<string, unknown>): number | null {
+  const timestamp = message.timestamp;
+  if (typeof timestamp !== "number" || !Number.isFinite(timestamp) || timestamp <= 0) {
+    return null;
+  }
+  return normalizeEpochMs(timestamp);
+}
+
+function resolveFallbackOrderBase(messages: unknown[], toolMessages: unknown[]): number {
+  const candidates: number[] = [];
+  for (const list of [messages, toolMessages]) {
+    if (!Array.isArray(list)) {
+      continue;
+    }
+    for (const raw of list) {
+      if (!raw || typeof raw !== "object") {
+        continue;
+      }
+      const ts = (raw as Record<string, unknown>).timestamp;
+      if (typeof ts !== "number" || !Number.isFinite(ts) || ts <= 0) {
+        continue;
+      }
+      if (ts >= 1e12 && ts < 1e14) {
+        candidates.push(ts);
+      } else if (ts >= 1e9 && ts < 1e11) {
+        candidates.push(ts * 1000);
+      }
+    }
+  }
+  if (candidates.length === 0) {
+    return Date.now();
+  }
+  return Math.max(...candidates);
+}
+
+function normalizeEpochMs(value: number): number | null {
+  if (!Number.isFinite(value)) {
+    return null;
+  }
+  if (value >= 1e12 && value < 1e14) {
+    return value;
+  }
+  if (value >= 1e9 && value < 1e11) {
+    return value * 1000;
+  }
+  return null;
+}
+
+function extractSecurityText(message: Record<string, unknown>): string {
+  const direct = (extractTextCached(message) ?? "").trim();
+  if (direct) {
+    return direct;
+  }
+  const parts = collectSecurityTextParts(message);
+  return parts.join("\n").trim();
+}
+
+function collectSecurityTextParts(value: unknown, depth = 0): string[] {
+  if (depth > 3 || value === null || value === undefined) {
+    return [];
+  }
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed ? [trimmed] : [];
+  }
+  if (Array.isArray(value)) {
+    return value.flatMap((entry) => collectSecurityTextParts(entry, depth + 1));
+  }
+  if (typeof value !== "object") {
+    return [];
+  }
+
+  const record = value as Record<string, unknown>;
+  const fields = [
+    "text",
+    "content",
+    "message",
+    "reason",
+    "summary",
+    "error",
+    "detail",
+    "output",
+    "result",
+    "response",
+    "value",
+    "body",
+  ];
+  const parts = fields.flatMap((field) => collectSecurityTextParts(record[field], depth + 1));
+
+  // Fallback for non-standard tool payloads where sentinel signals are nested in objects.
+  if (
+    parts.length === 0 &&
+    (Object.hasOwn(record, "securitySentinelApproved") ||
+      Object.hasOwn(record, "blocked") ||
+      Object.hasOwn(record, "tamper_type"))
+  ) {
+    try {
+      return [JSON.stringify(record)];
+    } catch {
+      return [];
+    }
+  }
+  return parts;
+}
+
+function isSecuritySentinelSignal(text: string): boolean {
+  if (!text) {
+    return false;
+  }
+  return (
+    /security sentinel blocked tool call/i.test(text) ||
+    /explicit operator approval required/i.test(text) ||
+    /tamper_type=/i.test(text)
+  );
+}
+
+function isSecurityApprovalPrompt(text: string): boolean {
+  if (!text) {
+    return false;
+  }
+  return (
+    /access denied/i.test(text) ||
+    /security alert/i.test(text) ||
+    /approval required/i.test(text) ||
+    /requires securitysentinelpassphrase/i.test(text) ||
+    /fill (the )?securitysentinelpassphrase/i.test(text) ||
+    /provide securitysentinelpassphrase/i.test(text) ||
+    /securitysentinelpassphrase/i.test(text) ||
+    /need your explicit approval/i.test(text) ||
+    /explicit permission/i.test(text) ||
+    /explicit operator approval/i.test(text) ||
+    /enable approval in the ui/i.test(text) ||
+    /do you approve/i.test(text) ||
+    /would you like to approve/i.test(text) ||
+    /would you like to allow this action/i.test(text)
+  );
+}
+
+function isSecurityApprovalResolution(text: string): boolean {
+  if (!text) {
+    return false;
+  }
+  const normalized = text.trim().toLowerCase();
+  if (
+    /^securitysentinelapproved\s*=\s*(true|false)(\s+securitysentinelpassphrase\s*=\s*\S+)?$/i.test(
+      normalized,
+    )
+  ) {
+    return true;
+  }
+  if (/^(yes|y|approve|approved|i approve|allow|deny|no|n|do not approve)$/i.test(normalized)) {
+    return true;
+  }
+  return false;
+}
+
+function isSecurityApprovalDenyAcknowledgement(text: string): boolean {
+  if (!text) {
+    return false;
+  }
+  return (
+    /approval is currently off/i.test(text) ||
+    /won[’']?t run any approval-gated actions unless you re-approve/i.test(text)
+  );
 }
 
 const CHAT_HISTORY_RENDER_LIMIT = 200;

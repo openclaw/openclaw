@@ -1,8 +1,37 @@
 FROM node:22-bookworm@sha256:cd7bcd2e7a1e6f72052feb023c7f6b722205d3fcab7bbcbd2d1bfdab10b1e935
 
-# Install Bun (required for build scripts)
-RUN curl -fsSL https://bun.sh/install | bash
-ENV PATH="/root/.bun/bin:${PATH}"
+# Install Bun (pinned binary + checksum verification).
+# You can optionally pin architecture-specific SHA256 values at build time:
+#   --build-arg BUN_SHA256_X64=<sha256> --build-arg BUN_SHA256_ARM64=<sha256>
+ARG BUN_VERSION=1.2.21
+ARG BUN_SHA256_X64=""
+ARG BUN_SHA256_ARM64=""
+RUN set -eux; \
+    apt-get update && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends unzip && \
+    rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*; \
+    arch="$(dpkg --print-architecture)"; \
+    case "$arch" in \
+      amd64) bun_arch="x64"; bun_sha="${BUN_SHA256_X64}" ;; \
+      arm64) bun_arch="aarch64"; bun_sha="${BUN_SHA256_ARM64}" ;; \
+      *) echo "Unsupported architecture for Bun install: ${arch}"; exit 1 ;; \
+    esac; \
+    bun_asset="bun-linux-${bun_arch}.zip"; \
+    bun_url="https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERSION}/${bun_asset}"; \
+    checksums_url="https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERSION}/SHASUMS256.txt"; \
+    curl -fsSLo /tmp/bun.zip "${bun_url}"; \
+    if [ -n "${bun_sha}" ]; then \
+      echo "${bun_sha}  /tmp/bun.zip" | sha256sum -c -; \
+    else \
+      curl -fsSLo /tmp/bun-shasums.txt "${checksums_url}"; \
+      grep " ${bun_asset}$" /tmp/bun-shasums.txt | sed "s|  ${bun_asset}$|  /tmp/bun.zip|" | sha256sum -c -; \
+    fi; \
+    mkdir -p /tmp/bun-install && \
+    unzip -q /tmp/bun.zip -d /tmp/bun-install && \
+    install -m 0755 "/tmp/bun-install/bun-linux-${bun_arch}/bun" /usr/local/bin/bun && \
+    rm -rf /tmp/bun.zip /tmp/bun-shasums.txt /tmp/bun-install && \
+    bun --version | grep -Fx "${BUN_VERSION}"
+ENV PATH="/usr/local/bin:${PATH}"
 
 RUN corepack enable
 

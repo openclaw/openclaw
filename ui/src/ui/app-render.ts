@@ -1035,8 +1035,23 @@ export function renderApp(state: AppViewState) {
                 onAbort: () => void state.handleAbortChat(),
                 onQueueRemove: (id) => state.removeQueuedMessage(id),
                 onNewSession: () => state.handleSendChat("/new", { restoreDraft: true }),
-                onSecurityApprove: () => void state.handleSendChat("SecuritySentinelApproved=true"),
-                onSecurityDeny: () => void state.handleSendChat("SecuritySentinelApproved=false"),
+                securityApprovalPassphrase: state.securityApprovalPassphrase,
+                onSecurityApprovalPassphraseChange: (value) =>
+                  (state.securityApprovalPassphrase = value),
+                onSecurityApprove: (passphrase) => {
+                  const normalizedPassphrase = (passphrase ?? "").trim();
+                  const approvalMessage = normalizedPassphrase
+                    ? `securitySentinelApproved=true securitySentinelPassphrase=${normalizedPassphrase}`
+                    : "securitySentinelApproved=true";
+                  state.securityApprovalPassphrase = "";
+                  void state.handleSendChat(approvalMessage, {
+                    suppressLocalEcho: true,
+                  });
+                },
+                onSecurityDeny: () => {
+                  state.securityApprovalPassphrase = "";
+                  void state.handleSendChat("SecuritySentinelApproved=false");
+                },
                 showNewMessages: state.chatNewMessagesBelow && !state.chatManualRefreshInFlight,
                 onScrollToBottom: () => state.scrollToBottom(),
                 // Sidebar props for tool output viewing

@@ -12,6 +12,7 @@ import {
   runBeforeToolCallHook,
   wrapToolWithBeforeToolCallHook,
 } from "./pi-tools.before-tool-call.js";
+import { __testing as securitySentinelTesting } from "./security-sentinel.js";
 import { CRITICAL_THRESHOLD, GLOBAL_CIRCUIT_BREAKER_THRESHOLD } from "./tool-loop-detection.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
@@ -327,6 +328,10 @@ describe("before_tool_call loop detection behavior", () => {
 });
 
 describe("before_tool_call security sentinel", () => {
+  beforeEach(() => {
+    securitySentinelTesting.clearApprovalGrantsForTest();
+  });
+
   it("blocks web_search without explicit approval when sentinel is enabled", async () => {
     await withEnvAsync({ OPENCLAW_SECURITY_SENTINEL_ENABLED: "1" }, async () => {
       const outcome = await runBeforeToolCallHook({
@@ -370,19 +375,250 @@ describe("before_tool_call security sentinel", () => {
     });
   });
 
-  it("accepts approval aliases (approved/operatorApproved)", async () => {
+  it("rejects legacy approval aliases and only accepts securitySentinelApproved", async () => {
     await withEnvAsync({ OPENCLAW_SECURITY_SENTINEL_ENABLED: "1" }, async () => {
-      const approvedOutcome = await runBeforeToolCallHook({
+      const approvedAliasOutcome = await runBeforeToolCallHook({
         toolName: "web_fetch",
         params: { url: "https://example.com", approved: "yes" },
       });
-      expect(approvedOutcome.blocked).toBe(false);
+      expect(approvedAliasOutcome.blocked).toBe(true);
+      expect(approvedAliasOutcome.blocked ? approvedAliasOutcome.reason : "").toContain(
+        "legacy approval aliases are not accepted",
+      );
 
       const operatorOutcome = await runBeforeToolCallHook({
         toolName: "web_fetch",
         params: { url: "https://example.com", operatorApproved: "true" },
       });
-      expect(operatorOutcome.blocked).toBe(false);
+      expect(operatorOutcome.blocked).toBe(true);
+
+      const canonicalOutcome = await runBeforeToolCallHook({
+        toolName: "web_fetch",
+        params: { url: "https://example.com", securitySentinelApproved: true },
+      });
+      expect(canonicalOutcome.blocked).toBe(false);
     });
+  });
+
+  it("requires a signal passphrase and limits approvals to the configured grant uses", async () => {
+    await withEnvAsync(
+      {
+        OPENCLAW_SECURITY_SENTINEL_ENABLED: "1",
+        OPENCLAW_SECURITY_SENTINEL_SIGNAL_REQUIRE_PASSPHRASE: "1",
+        OPENCLAW_SECURITY_SENTINEL_SIGNAL_PASSPHRASE: "letmein",
+        OPENCLAW_SECURITY_SENTINEL_APPROVAL_GRANT_USES: "2",
+        OPENCLAW_SECURITY_SENTINEL_APPROVAL_GRANT_TTL_MS: "120000",
+      },
+      async () => {
+        const ctx = { sessionKey: "agent:signal:test", messageProvider: "signal" };
+
+        const missingPassphrase = await runBeforeToolCallHook({
+          toolName: "web_search",
+          params: { query: "warwickshire", securitySentinelApproved: true },
+          ctx,
+        });
+        expect(missingPassphrase.blocked).toBe(true);
+        expect(missingPassphrase.blocked ? missingPassphrase.reason : "").toContain(
+          "securitySentinelPassphrase",
+        );
+
+        const approved = await runBeforeToolCallHook({
+          toolName: "web_search",
+          params: {
+            query: "warwickshire",
+            securitySentinelApproved: true,
+            securitySentinelPassphrase: "letmein",
+          },
+          ctx,
+        });
+        expect(approved.blocked).toBe(false);
+
+        const secondCallFromGrant = await runBeforeToolCallHook({
+          toolName: "web_fetch",
+          params: { url: "https://example.com/apprenticeship" },
+          ctx,
+        });
+        expect(secondCallFromGrant.blocked).toBe(false);
+
+        const thirdCallRequiresNewApproval = await runBeforeToolCallHook({
+          toolName: "web_fetch",
+          params: { url: "https://example.com/apprenticeship" },
+          ctx,
+        });
+        expect(thirdCallRequiresNewApproval.blocked).toBe(true);
+      },
+    );
+  });
+
+  it("accepts signal passphrase via configured SHA-256 hash", async () => {
+    await withEnvAsync(
+      {
+        OPENCLAW_SECURITY_SENTINEL_ENABLED: "1",
+        OPENCLAW_SECURITY_SENTINEL_SIGNAL_REQUIRE_PASSPHRASE: "1",
+        OPENCLAW_SECURITY_SENTINEL_SIGNAL_PASSPHRASE_HASH:
+          "1c8bfe8f801d79745c4631d09fff36c82aa37fc4cce4fc946683d7b336b63032",
+      },
+      async () => {
+        const ctx = { sessionKey: "agent:signal:hash", messageProvider: "signal" };
+
+        const approved = await runBeforeToolCallHook({
+          toolName: "web_search",
+          params: {
+            query: "warwickshire",
+            securitySentinelApproved: true,
+            securitySentinelPassphrase: "letmein",
+          },
+          ctx,
+        });
+        expect(approved.blocked).toBe(false);
+
+        const rejected = await runBeforeToolCallHook({
+          toolName: "web_search",
+          params: {
+            query: "warwickshire",
+            securitySentinelApproved: true,
+            securitySentinelPassphrase: "wrong",
+          },
+          ctx: { sessionKey: "agent:signal:hash2", messageProvider: "signal" },
+        });
+        expect(rejected.blocked).toBe(true);
+        expect(rejected.blocked ? rejected.reason : "").toContain("did not match");
+      },
+    );
+  });
+
+  it("requires passphrase for message tool even on webchat", async () => {
+    await withEnvAsync(
+      {
+        OPENCLAW_SECURITY_SENTINEL_ENABLED: "1",
+        OPENCLAW_SECURITY_SENTINEL_REQUIRE_PASSPHRASE_TOOLS: "message",
+        OPENCLAW_SECURITY_SENTINEL_SIGNAL_PASSPHRASE_HASH:
+          "1c8bfe8f801d79745c4631d09fff36c82aa37fc4cce4fc946683d7b336b63032",
+      },
+      async () => {
+        const ctx = { sessionKey: "agent:web:msg", messageProvider: "webchat" };
+        const blocked = await runBeforeToolCallHook({
+          toolName: "message",
+          params: { action: "send", text: "test", securitySentinelApproved: true },
+          ctx,
+        });
+        expect(blocked.blocked).toBe(true);
+        expect(blocked.blocked ? blocked.reason : "").toContain("securitySentinelPassphrase");
+
+        const allowed = await runBeforeToolCallHook({
+          toolName: "message",
+          params: {
+            action: "send",
+            text: "test",
+            securitySentinelApproved: true,
+            securitySentinelPassphrase: "letmein",
+          },
+          ctx: { sessionKey: "agent:web:msg2", messageProvider: "webchat" },
+        });
+        expect(allowed.blocked).toBe(false);
+      },
+    );
+  });
+
+  it("uses relaxed laptop approvals without passphrase but still enforces short grants", async () => {
+    await withEnvAsync(
+      {
+        OPENCLAW_SECURITY_SENTINEL_ENABLED: "1",
+        OPENCLAW_SECURITY_SENTINEL_APPROVAL_GRANT_USES: "2",
+        OPENCLAW_SECURITY_SENTINEL_APPROVAL_GRANT_TTL_MS: "120000",
+      },
+      async () => {
+        const ctx = { sessionKey: "agent:laptop:test", messageProvider: "webchat" };
+
+        const firstApproved = await runBeforeToolCallHook({
+          toolName: "web_search",
+          params: { query: "warwickshire", securitySentinelApproved: true },
+          ctx,
+        });
+        expect(firstApproved.blocked).toBe(false);
+
+        const secondFromGrant = await runBeforeToolCallHook({
+          toolName: "web_fetch",
+          params: { url: "https://example.com/apprenticeship" },
+          ctx,
+        });
+        expect(secondFromGrant.blocked).toBe(false);
+
+        const thirdBlocked = await runBeforeToolCallHook({
+          toolName: "web_fetch",
+          params: { url: "https://example.com/apprenticeship" },
+          ctx,
+        });
+        expect(thirdBlocked.blocked).toBe(true);
+      },
+    );
+  });
+
+  it("does not create any carry-over approval when grant uses is 1", async () => {
+    await withEnvAsync(
+      {
+        OPENCLAW_SECURITY_SENTINEL_ENABLED: "1",
+        OPENCLAW_SECURITY_SENTINEL_APPROVAL_GRANT_USES: "1",
+      },
+      async () => {
+        const ctx = { sessionKey: "agent:laptop:nocarry", messageProvider: "webchat" };
+
+        const approved = await runBeforeToolCallHook({
+          toolName: "web_search",
+          params: { query: "warwickshire", securitySentinelApproved: true },
+          ctx,
+        });
+        expect(approved.blocked).toBe(false);
+
+        const nextCallBlocked = await runBeforeToolCallHook({
+          toolName: "web_fetch",
+          params: { url: "https://example.com/apprenticeship" },
+          ctx,
+        });
+        expect(nextCallBlocked.blocked).toBe(true);
+      },
+    );
+  });
+
+  it("expires approval grants after TTL", async () => {
+    const nowSpy = vi.spyOn(Date, "now");
+    try {
+      await withEnvAsync(
+        {
+          OPENCLAW_SECURITY_SENTINEL_ENABLED: "1",
+          OPENCLAW_SECURITY_SENTINEL_APPROVAL_GRANT_USES: "3",
+          OPENCLAW_SECURITY_SENTINEL_APPROVAL_GRANT_TTL_MS: "200",
+        },
+        async () => {
+          const ctx = { sessionKey: "agent:laptop:ttl", messageProvider: "webchat" };
+          nowSpy.mockReturnValue(1_000);
+
+          const approved = await runBeforeToolCallHook({
+            toolName: "web_search",
+            params: { query: "warwickshire", securitySentinelApproved: true },
+            ctx,
+          });
+          expect(approved.blocked).toBe(false);
+
+          nowSpy.mockReturnValue(1_150);
+          const withinTtl = await runBeforeToolCallHook({
+            toolName: "web_fetch",
+            params: { url: "https://example.com/apprenticeship" },
+            ctx,
+          });
+          expect(withinTtl.blocked).toBe(false);
+
+          nowSpy.mockReturnValue(1_250);
+          const afterTtl = await runBeforeToolCallHook({
+            toolName: "web_fetch",
+            params: { url: "https://example.com/apprenticeship" },
+            ctx,
+          });
+          expect(afterTtl.blocked).toBe(true);
+        },
+      );
+    } finally {
+      nowSpy.mockRestore();
+    }
   });
 });

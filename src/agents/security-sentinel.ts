@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
@@ -7,7 +8,7 @@ import { normalizeToolName } from "./tool-policy.js";
 
 const log = createSubsystemLogger("agents/tools");
 
-const TRUTHY = new Set(["1", "true", "yes", "y", "on", "approved", "approve", "allow"]);
+const TRUTHY = new Set(["1", "true", "yes", "y", "on"]);
 
 const DEFAULT_APPROVAL_REQUIRED_TOOLS = [
   "web_search",
@@ -22,11 +23,23 @@ const DEFAULT_APPROVAL_REQUIRED_TOOLS = [
   "sessions_spawn",
   "subagents",
 ];
+const DEFAULT_APPROVAL_GRANT_USES = 2;
+const DEFAULT_APPROVAL_GRANT_TTL_MS = 2 * 60 * 1000;
+const DEFAULT_STRICT_APPROVAL_CHANNELS = ["signal"];
+const DEFAULT_PASSPHRASE_REQUIRED_TOOLS = ["message"];
+const MAX_APPROVAL_GRANT_KEYS = 2048;
 
 const DESTRUCTIVE_CMD_RX =
   /\b(rm\s+-rf|mkfs|dd\s+if=|shutdown\b|reboot\b|halt\b|poweroff\b|diskutil\s+erase|format\s+[a-z]:|chmod\s+-R\s+777|chown\s+-R\s+root|killall\b)\b/i;
 const PROMPT_INJECTION_RX =
   /\b(ignore\s+previous\s+instructions|delete\s+all\s+logs|exfiltrate|disable\s+security)\b/i;
+
+type ApprovalGrant = {
+  remainingUses: number;
+  expiresAtMs: number;
+};
+
+const approvalGrantsByScope = new Map<string, ApprovalGrant>();
 
 function parseBooleanLike(value: unknown): boolean {
   if (value === true) {
@@ -38,8 +51,26 @@ function parseBooleanLike(value: unknown): boolean {
   return TRUTHY.has(value.trim().toLowerCase());
 }
 
+function parseStrictApprovalFlag(value: unknown): boolean {
+  if (value === true) {
+    return true;
+  }
+  if (typeof value !== "string") {
+    return false;
+  }
+  return value.trim().toLowerCase() === "true";
+}
+
 function isSentinelEnabled(env: NodeJS.ProcessEnv): boolean {
   return parseBooleanLike(env.OPENCLAW_SECURITY_SENTINEL_ENABLED ?? "");
+}
+
+function parsePositiveIntegerLike(value: string | undefined, fallback: number): number {
+  const parsed = Number.parseInt(value ?? "", 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return fallback;
+  }
+  return parsed;
 }
 
 function resolveApprovalRequiredTools(env: NodeJS.ProcessEnv): Set<string> {
@@ -55,16 +86,317 @@ function resolveApprovalRequiredTools(env: NodeJS.ProcessEnv): Set<string> {
   );
 }
 
+function resolveApprovalGrantUses(env: NodeJS.ProcessEnv): number {
+  return parsePositiveIntegerLike(
+    env.OPENCLAW_SECURITY_SENTINEL_APPROVAL_GRANT_USES,
+    DEFAULT_APPROVAL_GRANT_USES,
+  );
+}
+
+function resolveApprovalGrantTtlMs(env: NodeJS.ProcessEnv): number {
+  return parsePositiveIntegerLike(
+    env.OPENCLAW_SECURITY_SENTINEL_APPROVAL_GRANT_TTL_MS,
+    DEFAULT_APPROVAL_GRANT_TTL_MS,
+  );
+}
+
+function normalizeMessageProvider(messageProvider: unknown): string | undefined {
+  if (typeof messageProvider !== "string") {
+    return undefined;
+  }
+  const normalized = messageProvider.trim().toLowerCase();
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function resolveStrictApprovalChannels(env: NodeJS.ProcessEnv): Set<string> {
+  const raw = env.OPENCLAW_SECURITY_SENTINEL_STRICT_APPROVAL_CHANNELS?.trim();
+  if (!raw) {
+    return new Set(DEFAULT_STRICT_APPROVAL_CHANNELS);
+  }
+  return new Set(
+    raw
+      .split(",")
+      .map((entry) => entry.trim().toLowerCase())
+      .filter((entry) => entry.length > 0),
+  );
+}
+
+function resolvePassphraseRequiredTools(env: NodeJS.ProcessEnv): Set<string> {
+  const raw = env.OPENCLAW_SECURITY_SENTINEL_REQUIRE_PASSPHRASE_TOOLS?.trim();
+  if (!raw) {
+    return new Set(DEFAULT_PASSPHRASE_REQUIRED_TOOLS);
+  }
+  return new Set(
+    raw
+      .split(",")
+      .map((entry) => normalizeToolName(entry))
+      .filter((entry) => entry.length > 0),
+  );
+}
+
+function resolveSignalPassphraseRequired(env: NodeJS.ProcessEnv): boolean {
+  const raw = env.OPENCLAW_SECURITY_SENTINEL_SIGNAL_REQUIRE_PASSPHRASE;
+  if (raw === undefined) {
+    return true;
+  }
+  return parseBooleanLike(raw);
+}
+
+function resolveSignalPassphrase(env: NodeJS.ProcessEnv): string | undefined {
+  const primary = env.OPENCLAW_SECURITY_SENTINEL_SIGNAL_PASSPHRASE?.trim();
+  if (primary) {
+    return primary;
+  }
+  const legacy = env.OPENCLAW_SECURITY_SENTINEL_APPROVAL_PASSPHRASE?.trim();
+  return legacy || undefined;
+}
+
+function normalizeSha256Hash(value: string): string | undefined {
+  const normalized = value.trim().toLowerCase();
+  if (/^[a-f0-9]{64}$/.test(normalized)) {
+    return normalized;
+  }
+  return undefined;
+}
+
+function resolveSignalPassphraseHash(env: NodeJS.ProcessEnv): string | undefined {
+  const primary = env.OPENCLAW_SECURITY_SENTINEL_SIGNAL_PASSPHRASE_HASH;
+  if (primary) {
+    const normalized = normalizeSha256Hash(primary);
+    if (normalized) {
+      return normalized;
+    }
+  }
+  const legacy = env.OPENCLAW_SECURITY_SENTINEL_APPROVAL_PASSPHRASE_HASH;
+  if (legacy) {
+    const normalized = normalizeSha256Hash(legacy);
+    if (normalized) {
+      return normalized;
+    }
+  }
+  return undefined;
+}
+
+function hashSha256(value: string): string {
+  return createHash("sha256").update(value, "utf8").digest("hex");
+}
+
 function resolveApprovalFlag(params: unknown): boolean {
   if (!isPlainObject(params)) {
     return false;
   }
+  return parseStrictApprovalFlag(params.securitySentinelApproved);
+}
+
+function resolveLegacyApprovalAliasUsed(params: unknown): boolean {
+  if (!isPlainObject(params)) {
+    return false;
+  }
   return (
-    parseBooleanLike(params.securitySentinelApproved) ||
     parseBooleanLike(params.operatorApproved) ||
     parseBooleanLike(params.approved) ||
     parseBooleanLike(params.approval)
   );
+}
+
+function resolvePassphraseFromParams(params: unknown): string {
+  if (!isPlainObject(params)) {
+    return "";
+  }
+  const direct = [
+    params.securitySentinelPassphrase,
+    params.security_sentinel_passphrase,
+    params.approvalPassphrase,
+    params.passphrase,
+    params.securityPassphrase,
+  ];
+  for (const candidate of direct) {
+    if (typeof candidate === "string" && candidate.trim()) {
+      return candidate.trim();
+    }
+  }
+  return "";
+}
+
+function buildApprovalGrantScope(args: {
+  sessionKey?: string;
+  messageProvider?: string;
+}): string | null {
+  const sessionKey = args.sessionKey?.trim();
+  if (!sessionKey) {
+    return null;
+  }
+  const provider = normalizeMessageProvider(args.messageProvider) ?? "unknown";
+  return `${sessionKey}::${provider}`;
+}
+
+function resolveLiveApprovalGrant(scope: string, nowMs: number): ApprovalGrant | null {
+  const grant = approvalGrantsByScope.get(scope);
+  if (!grant) {
+    return null;
+  }
+  if (grant.remainingUses <= 0 || grant.expiresAtMs <= nowMs) {
+    approvalGrantsByScope.delete(scope);
+    return null;
+  }
+  return grant;
+}
+
+function consumeApprovalGrant(scope: string, nowMs: number): number | null {
+  const grant = resolveLiveApprovalGrant(scope, nowMs);
+  if (!grant) {
+    return null;
+  }
+  grant.remainingUses -= 1;
+  const remainingUses = Math.max(0, grant.remainingUses);
+  if (remainingUses <= 0) {
+    approvalGrantsByScope.delete(scope);
+  } else {
+    approvalGrantsByScope.set(scope, grant);
+  }
+  return remainingUses;
+}
+
+function issueApprovalGrant(args: {
+  scope: string;
+  nowMs: number;
+  uses: number;
+  ttlMs: number;
+}): void {
+  approvalGrantsByScope.set(args.scope, {
+    remainingUses: args.uses,
+    expiresAtMs: args.nowMs + args.ttlMs,
+  });
+  if (approvalGrantsByScope.size > MAX_APPROVAL_GRANT_KEYS) {
+    const oldest = approvalGrantsByScope.keys().next().value;
+    if (oldest) {
+      approvalGrantsByScope.delete(oldest);
+    }
+  }
+}
+
+function resolveApprovalState(args: {
+  params: unknown;
+  env: NodeJS.ProcessEnv;
+  toolName: string;
+  sessionKey?: string;
+  messageProvider?: string;
+}): {
+  approved: boolean;
+  reason?: string;
+  matched: string[];
+  grantRemainingUses?: number;
+} {
+  const matched: string[] = [];
+  const approvedFlag = resolveApprovalFlag(args.params);
+  const usedLegacyAlias = resolveLegacyApprovalAliasUsed(args.params);
+  const nowMs = Date.now();
+  const normalizedProvider = normalizeMessageProvider(args.messageProvider);
+  const strictChannel = !!(
+    normalizedProvider && resolveStrictApprovalChannels(args.env).has(normalizedProvider)
+  );
+  const passphraseRequiredByTool = resolvePassphraseRequiredTools(args.env).has(args.toolName);
+  if (strictChannel) {
+    matched.push("strict_approval_channel");
+  }
+  if (passphraseRequiredByTool) {
+    matched.push("tool_passphrase_required");
+  }
+
+  const grantScope = buildApprovalGrantScope({
+    sessionKey: args.sessionKey,
+    messageProvider: normalizedProvider,
+  });
+
+  if (grantScope) {
+    const remainingFromExistingGrant = consumeApprovalGrant(grantScope, nowMs);
+    if (remainingFromExistingGrant !== null) {
+      matched.push("approval_grant");
+      return {
+        approved: true,
+        matched,
+        grantRemainingUses: remainingFromExistingGrant,
+      };
+    }
+  }
+
+  if (!approvedFlag) {
+    if (usedLegacyAlias) {
+      matched.push("legacy_approval_alias_rejected");
+      return {
+        approved: false,
+        matched,
+        reason:
+          "legacy approval aliases are not accepted; use securitySentinelApproved=true after operator approval",
+      };
+    }
+    return { approved: false, matched };
+  }
+
+  const passphraseRequired =
+    passphraseRequiredByTool || (strictChannel && resolveSignalPassphraseRequired(args.env));
+  if (passphraseRequired) {
+    const configuredPassphrase = resolveSignalPassphrase(args.env);
+    const configuredPassphraseHash = resolveSignalPassphraseHash(args.env);
+    if (!configuredPassphrase && !configuredPassphraseHash) {
+      matched.push("signal_passphrase_policy_unconfigured");
+      return {
+        approved: false,
+        matched,
+        reason:
+          "signal approval passphrase policy is enabled but no passphrase is configured on the gateway",
+      };
+    }
+    const providedPassphrase = resolvePassphraseFromParams(args.params);
+    if (!providedPassphrase) {
+      matched.push("missing_signal_passphrase");
+      return {
+        approved: false,
+        matched,
+        reason:
+          "approval requires securitySentinelPassphrase in addition to securitySentinelApproved=true",
+      };
+    }
+    const plainMatches = configuredPassphrase ? providedPassphrase === configuredPassphrase : false;
+    const hashMatches = configuredPassphraseHash
+      ? hashSha256(providedPassphrase) === configuredPassphraseHash
+      : false;
+    if (!plainMatches && !hashMatches) {
+      matched.push("invalid_signal_passphrase");
+      return {
+        approved: false,
+        matched,
+        reason: "approval passphrase did not match",
+      };
+    }
+  }
+
+  matched.push("explicit_operator_approval");
+  if (!grantScope) {
+    return { approved: true, matched };
+  }
+  const configuredUses = resolveApprovalGrantUses(args.env);
+  if (configuredUses <= 1) {
+    // Zero carry-over mode: the explicit approval only applies to this tool call.
+    return {
+      approved: true,
+      matched,
+      grantRemainingUses: 0,
+    };
+  }
+
+  issueApprovalGrant({
+    scope: grantScope,
+    nowMs,
+    uses: configuredUses,
+    ttlMs: resolveApprovalGrantTtlMs(args.env),
+  });
+  const remainingAfterConsume = consumeApprovalGrant(grantScope, nowMs);
+  return {
+    approved: true,
+    matched,
+    grantRemainingUses: remainingAfterConsume ?? 0,
+  };
 }
 
 function extractPotentialCommand(params: unknown): string {
@@ -120,6 +452,8 @@ export type SecuritySentinelDecision = {
   approvalRequired: boolean;
   riskScore: number;
   matched: string[];
+  messageProvider?: string;
+  grantRemainingUses?: number;
 };
 
 function classifyTamperType(args: {
@@ -148,10 +482,13 @@ function classifyTamperType(args: {
 export function evaluateSecuritySentinel(args: {
   toolName: string;
   params: unknown;
+  sessionKey?: string;
+  messageProvider?: string;
   env?: NodeJS.ProcessEnv;
 }): SecuritySentinelDecision {
   const env = args.env ?? process.env;
   const toolName = normalizeToolName(args.toolName || "tool");
+  const messageProvider = normalizeMessageProvider(args.messageProvider);
   const active = isSentinelEnabled(env);
   if (!active) {
     return {
@@ -162,13 +499,23 @@ export function evaluateSecuritySentinel(args: {
       approvalRequired: false,
       riskScore: 0,
       matched: [],
+      messageProvider,
     };
   }
 
   const approvalRequiredTools = resolveApprovalRequiredTools(env);
   const approvalRequired = approvalRequiredTools.has(toolName);
-  const approved = resolveApprovalFlag(args.params);
-  const matched: string[] = [];
+  const approvalState = approvalRequired
+    ? resolveApprovalState({
+        params: args.params,
+        env,
+        toolName,
+        sessionKey: args.sessionKey,
+        messageProvider,
+      })
+    : { approved: false, matched: [] as string[] };
+  const approved = approvalState.approved;
+  const matched: string[] = [...approvalState.matched];
   let riskScore = approvalRequired ? 70 : 10;
 
   const command = extractPotentialCommand(args.params);
@@ -187,16 +534,20 @@ export function evaluateSecuritySentinel(args: {
     matched.push("approval_required_tool");
     const tamperType = classifyTamperType({ approvalRequired, approved, matched });
     const reasonPrefix = tamperType ? `tamper_type=${tamperType}; ` : "";
+    const approvalReason =
+      approvalState.reason ?? "explicit operator approval required for this tool call";
     return {
       active: true,
       blocked: true,
-      reason: `${reasonPrefix}explicit operator approval required (set securitySentinelApproved=true for this tool call)`,
+      reason: `${reasonPrefix}${approvalReason}`,
       tamperType,
       toolName,
       approved,
       approvalRequired,
       riskScore,
       matched,
+      messageProvider,
+      grantRemainingUses: approvalState.grantRemainingUses,
     };
   }
 
@@ -211,6 +562,8 @@ export function evaluateSecuritySentinel(args: {
     approvalRequired,
     riskScore,
     matched,
+    messageProvider,
+    grantRemainingUses: approvalState.grantRemainingUses,
   };
 }
 
@@ -240,6 +593,8 @@ export async function writeSecuritySentinelAudit(args: {
     approvalRequired: args.decision.approvalRequired,
     riskScore: args.decision.riskScore,
     matched: args.decision.matched,
+    messageProvider: args.decision.messageProvider ?? null,
+    grantRemainingUses: args.decision.grantRemainingUses ?? null,
     params: summarizeParams(args.params),
   };
 
@@ -250,3 +605,9 @@ export async function writeSecuritySentinelAudit(args: {
     log.warn(`security sentinel audit write failed: path=${auditPath} error=${String(err)}`);
   }
 }
+
+export const __testing = {
+  clearApprovalGrantsForTest() {
+    approvalGrantsByScope.clear();
+  },
+};
