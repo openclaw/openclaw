@@ -180,11 +180,6 @@ export class PromptStreamProjector {
       return null;
     }
 
-    const updateEvent = parseSessionUpdateEvent(parsed);
-    if (updateEvent) {
-      return updateEvent;
-    }
-
     if (asTrimmedString(parsed.method) === "session/prompt") {
       const id = normalizeJsonRpcId(parsed.id);
       if (id) {
@@ -193,8 +188,13 @@ export class PromptStreamProjector {
       return null;
     }
 
+    const updateEvent = parseSessionUpdateEvent(parsed);
+    if (updateEvent) {
+      return this.promptRequestIds.size > 0 ? updateEvent : null;
+    }
+
     if (Object.hasOwn(parsed, "error")) {
-      if (!this.shouldHandlePromptResponse(parsed)) {
+      if (!this.consumePromptResponse(parsed)) {
         return null;
       }
       const error = isRecord(parsed.error) ? parsed.error : null;
@@ -211,7 +211,7 @@ export class PromptStreamProjector {
     }
 
     const stopReason = parsePromptStopReason(parsed);
-    if (!stopReason || !this.shouldHandlePromptResponse(parsed)) {
+    if (!stopReason || !this.consumePromptResponse(parsed)) {
       return null;
     }
 
@@ -221,11 +221,15 @@ export class PromptStreamProjector {
     };
   }
 
-  private shouldHandlePromptResponse(message: Record<string, unknown>): boolean {
+  private consumePromptResponse(message: Record<string, unknown>): boolean {
     const id = normalizeJsonRpcId(message.id);
     if (!id) {
       return false;
     }
-    return this.promptRequestIds.has(id);
+    if (!this.promptRequestIds.has(id)) {
+      return false;
+    }
+    this.promptRequestIds.delete(id);
+    return true;
   }
 }
