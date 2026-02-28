@@ -6,6 +6,7 @@ import { createEditTool, createReadTool, createWriteTool } from "@mariozechner/p
 import { SafeOpenError, openFileWithinRoot, writeFileWithinRoot } from "../infra/fs-safe.js";
 import { detectMime } from "../media/mime.js";
 import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
+import { discoverAgentsMd, formatAgentsMdPreamble } from "./agents-md-discovery.js";
 import type { ImageSanitizationLimits } from "./image-sanitization.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
@@ -27,6 +28,10 @@ const MAX_ADAPTIVE_READ_PAGES = 8;
 type OpenClawReadToolOptions = {
   modelContextWindowTokens?: number;
   imageSanitization?: ImageSanitizationLimits;
+  /** Set used to track which directories have already been scanned for AGENTS.md. */
+  seenAgentsDirs?: Set<string>;
+  /** Workspace root path (AGENTS.md in this directory is skipped — already in system prompt). */
+  workspaceRoot?: string;
 };
 
 type ReadTruncationDetails = {
@@ -704,11 +709,29 @@ export function createOpenClawReadTool(
       const filePath = typeof record?.path === "string" ? String(record.path) : "<unknown>";
       const strippedDetailsResult = stripReadTruncationContentDetails(result);
       const normalizedResult = await normalizeReadImageResult(strippedDetailsResult, filePath);
-      return sanitizeToolResultImages(
+      const sanitizedResult = await sanitizeToolResultImages(
         normalizedResult,
         `read:${filePath}`,
         options?.imageSanitization,
       );
+
+      // Hierarchical AGENTS.md discovery: prepend any newly found AGENTS.md files.
+      if (options?.seenAgentsDirs && options.workspaceRoot && typeof filePath === "string") {
+        const entries = await discoverAgentsMd(
+          filePath,
+          options.workspaceRoot,
+          options.seenAgentsDirs,
+        );
+        if (entries.length > 0) {
+          const preamble = formatAgentsMdPreamble(entries);
+          const existingText = getToolResultText(sanitizedResult);
+          if (typeof existingText === "string") {
+            return withToolResultText(sanitizedResult, `${preamble}\n\n${existingText}`);
+          }
+        }
+      }
+
+      return sanitizedResult;
     },
   };
 }
