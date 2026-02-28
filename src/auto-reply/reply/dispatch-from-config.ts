@@ -574,7 +574,9 @@ export async function dispatchReplyFromConfig(params: {
     // Emit message:sent internal hook for embedded runtime channels (Telegram, etc.)
     // This bridges the gap where deliverOutboundPayloads (non-embedded path) emits
     // message_sent but the embedded path does not.
-    if (sessionKey) {
+    // Skip when shouldRouteToOriginating is true — that path uses deliverOutboundPayloads
+    // which already emits message:sent via its own emitMessageSent.
+    if (sessionKey && !shouldRouteToOriginating) {
       const sentContent =
         replies
           .map((r) => r.text ?? "")
@@ -585,7 +587,7 @@ export async function dispatchReplyFromConfig(params: {
           createInternalHookEvent("message", "sent", sessionKey, {
             to: conversationId,
             content: sentContent,
-            success: true,
+            success: queuedFinal || counts.block > 0,
             channelId,
             accountId: ctx.AccountId,
             conversationId,
