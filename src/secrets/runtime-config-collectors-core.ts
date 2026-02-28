@@ -194,8 +194,8 @@ function collectGatewayAssignments(params: {
   if (!isRecord(gateway)) {
     return;
   }
-  if (isRecord(gateway.auth)) {
-    const auth = gateway.auth;
+  const auth = isRecord(gateway.auth) ? gateway.auth : undefined;
+  if (auth) {
     collectSecretInputAssignment({
       value: auth.password,
       path: "gateway.auth.password",
@@ -211,11 +211,8 @@ function collectGatewayAssignments(params: {
   }
   if (isRecord(gateway.remote)) {
     const remote = gateway.remote;
-    const localTokenConfigured = hasConfiguredSecretInput(gateway.auth?.token, params.defaults);
-    const localPasswordConfigured = hasConfiguredSecretInput(
-      gateway.auth?.password,
-      params.defaults,
-    );
+    const localTokenConfigured = hasConfiguredSecretInput(auth?.token, params.defaults);
+    const localPasswordConfigured = hasConfiguredSecretInput(auth?.password, params.defaults);
     const remoteMode = gateway.mode === "remote";
     const remoteUrlConfigured = typeof remote.url === "string" && remote.url.trim().length > 0;
     const remoteEnabled = remote.enabled !== false;
