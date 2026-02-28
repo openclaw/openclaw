@@ -6,6 +6,14 @@ import sys
 import traceback
 from decimal import Decimal
 
+from ostium_python_sdk.ostium import (
+    OpenOrderType,
+    PRECISION_2,
+    convert_to_scaled_integer,
+    fromErrorCodeToMessage,
+    get_tp_sl_prices,
+    to_base_units,
+)
 from ostium_python_sdk.sdk import OstiumSDK
 
 READ_ACTIONS = {
@@ -126,6 +134,121 @@ def _optional_str(payload, key, aliases=None):
         return None
     value = str(value).strip()
     return value or None
+
+
+def _normalize_builder_fee_params(ostium_client, trade_params):
+    builder_address = trade_params.get("builder_address")
+    builder_fee = trade_params.get("builder_fee")
+    if builder_address is None and builder_fee is None:
+        return ("0x0000000000000000000000000000000000000000", 0)
+    if builder_address is None or builder_fee is None:
+        raise ValueError("builder_address and builder_fee must be provided together.")
+    if not ostium_client.web3.is_address(builder_address):
+        raise ValueError("Invalid builder address format")
+
+    builder_fee_value = float(builder_fee)
+    if builder_fee_value > 0.5:
+        raise ValueError("Builder fee too high: Max 0.5 (0.5%).")
+
+    return (
+        builder_address,
+        int(convert_to_scaled_integer(builder_fee_value, precision=4, scale=6)),
+    )
+
+
+def _normalize_open_order_type(order_type_value):
+    order_type = str(order_type_value).upper()
+    if order_type == "LIMIT":
+        return OpenOrderType.LIMIT.value
+    if order_type == "STOP":
+        return OpenOrderType.STOP.value
+    return OpenOrderType.MARKET.value
+
+
+def _extract_order_id_from_price_requested(ostium_client, trade_receipt):
+    order_id = None
+    price_requested_signature = ostium_client.web3.keccak(
+        text="PriceRequested(uint256,bytes32,uint256)"
+    ).hex()
+    if hasattr(trade_receipt, "get"):
+        logs = trade_receipt.get("logs", [])
+    else:
+        logs = getattr(trade_receipt, "logs", [])
+    for log in logs:
+        topics = log.get("topics", []) if hasattr(log, "get") else []
+        if len(topics) == 0:
+            continue
+        topic_zero = topics[0]
+        topic_zero_hex = topic_zero.hex() if hasattr(topic_zero, "hex") else str(topic_zero)
+        if topic_zero_hex == price_requested_signature:
+            topic_one = topics[1]
+            topic_one_hex = topic_one.hex() if hasattr(topic_one, "hex") else str(topic_one)
+            order_id = int(topic_one_hex, 16)
+            break
+    return order_id
+
+
+def _perform_open_trade_explicit_tuple(sdk, trade_params, at_price):
+    ostium_client = sdk.ostium
+    account = ostium_client._get_account()
+    amount = to_base_units(trade_params["collateral"], decimals=6)
+    # Use SDK's existing approval implementation to keep allowance behavior consistent.
+    ostium_client._Ostium__approve(
+        account,
+        amount,
+        ostium_client.use_delegation,
+        trade_params.get("trader_address"),
+    )
+
+    tp_price, sl_price = get_tp_sl_prices(trade_params)
+    order_type_enum = _normalize_open_order_type(trade_params.get("order_type", MARKET_ORDER))
+    slippage = int(ostium_client.slippage_percentage * PRECISION_2)
+    if order_type_enum != OpenOrderType.MARKET.value:
+        slippage = 0
+
+    trade_tuple = (
+        int(convert_to_scaled_integer(trade_params["collateral"], precision=5, scale=6)),
+        int(convert_to_scaled_integer(at_price)),
+        int(convert_to_scaled_integer(tp_price)),
+        int(convert_to_scaled_integer(sl_price)),
+        account.address,
+        int(to_base_units(trade_params["leverage"], decimals=2)),
+        int(trade_params["asset_type"]),
+        0,
+        bool(trade_params["direction"]),
+    )
+
+    builder_fee_tuple = _normalize_builder_fee_params(ostium_client, trade_params)
+
+    if ostium_client.use_delegation and "trader_address" in trade_params:
+        trader_address = trade_params["trader_address"]
+        open_trade_func = ostium_client.ostium_trading_contract.functions.openTrade(
+            trade_tuple,
+            builder_fee_tuple,
+            order_type_enum,
+            slippage,
+        )
+        inner_encoded_data = open_trade_func.build_transaction({"gas": 0})["data"]
+        trade_tx = ostium_client.ostium_trading_contract.functions.delegatedAction(
+            trader_address, inner_encoded_data
+        ).build_transaction({"from": account.address})
+    else:
+        trade_tx = ostium_client.ostium_trading_contract.functions.openTrade(
+            trade_tuple,
+            builder_fee_tuple,
+            order_type_enum,
+            slippage,
+        ).build_transaction({"from": account.address})
+
+    trade_tx["nonce"] = ostium_client.get_nonce(account.address)
+    signed_tx = ostium_client.web3.eth.account.sign_transaction(
+        trade_tx, private_key=ostium_client.private_key
+    )
+    trade_tx_hash = ostium_client.web3.eth.send_raw_transaction(signed_tx.raw_transaction)
+    trade_receipt = ostium_client.web3.eth.wait_for_transaction_receipt(trade_tx_hash)
+    order_id = _extract_order_id_from_price_requested(ostium_client, trade_receipt)
+
+    return {"receipt": trade_receipt, "order_id": order_id}
 
 
 def _required_value(payload, key, aliases=None):
@@ -417,22 +540,21 @@ async def handle_write_action(sdk, payload, action):
             market_price_meta,
         ) = await _normalize_open_trade_payload(sdk, payload)
         try:
-            result = sdk.ostium.perform_trade(trade_params, at_price)
+            result = _perform_open_trade_explicit_tuple(sdk, trade_params, at_price)
+            tx_mode = "explicit_tuple"
         except Exception as error:
-            raw_error = str(error)
-            if "openTrade" in raw_error and "ABI" in raw_error:
-                raise ValueError(
-                    "open_trade payload failed ABI validation after normalization. "
-                    f"tradeParams={json.dumps(to_plain(trade_params))}; atPrice={at_price}; "
-                    f"error={raw_error}"
-                ) from error
-            raise
+            reason_string, suggestion = fromErrorCodeToMessage(error, verbose=bool(payload.get("verbose", False)))
+            details = f"tradeParams={json.dumps(to_plain(trade_params))}; atPrice={at_price}; rawError={str(error)}"
+            if suggestion is not None:
+                raise ValueError(f"{reason_string}\n\n{suggestion}\n\n{details}") from error
+            raise ValueError(f"{reason_string}\n\n{details}") from error
 
         response = {
             "collateralSymbol": collateral_symbol,
             "atPrice": at_price,
             "atPriceSource": at_price_source,
             "tradeParams": to_plain(trade_params),
+            "txMode": tx_mode,
             "tx": to_plain(result),
         }
         if market_price_meta is not None:
