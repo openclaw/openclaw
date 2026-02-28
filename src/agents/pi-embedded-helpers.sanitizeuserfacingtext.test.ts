@@ -160,6 +160,21 @@ describe("stripThoughtSignatures", () => {
       { type: "thinking", thinking: "hmm", thought_signature: "msg_xyz" },
     ]);
   });
+  it("strips msg_* signatures from thinking blocks when allowBase64Only=true (cross-provider)", () => {
+    const input = [
+      { type: "text", text: "hello", thought_signature: "msg_abc" },
+      { type: "thinking", thinking: "hmm", thought_signature: "msg_xyz" },
+      { type: "redacted_thinking", data: "...", thought_signature: "msg_zzz" },
+    ];
+    const result = stripThoughtSignatures(input, { allowBase64Only: true });
+
+    expect(result).toEqual([
+      { type: "text", text: "hello" },
+      // allowBase64Only=true — thinking blocks must also have non-base64 signatures stripped
+      { type: "thinking", thinking: "hmm" },
+      { type: "redacted_thinking", data: "..." },
+    ]);
+  });
   it("handles empty array", () => {
     expect(stripThoughtSignatures([])).toEqual([]);
   });

@@ -66,9 +66,15 @@ export function stripThoughtSignatures<T>(
       return block;
     }
     // Anthropic requires thinking/redacted_thinking blocks in the latest assistant
-    // message to be identical to the original response. Never modify these blocks.
+    // message to be identical to the original response. Only skip sanitization when
+    // targeting Anthropic (allowBase64Only=false). For cross-provider replay
+    // (allowBase64Only=true, e.g. Google/OpenRouter), signatures inside thinking
+    // blocks must still be stripped to avoid rejection by those providers.
     const blockType = (block as { type?: unknown }).type;
-    if (blockType === "thinking" || blockType === "redacted_thinking") {
+    if (
+      (blockType === "thinking" || blockType === "redacted_thinking") &&
+      !allowBase64Only
+    ) {
       return block;
     }
     const rec = block as ContentBlockWithSignature;
