@@ -2,6 +2,11 @@ import { Type } from "@sinclair/typebox";
 import { normalizeGroupActivation } from "../../auto-reply/group-activation.js";
 import { getFollowupQueueDepth, resolveQueueSettings } from "../../auto-reply/reply/queue.js";
 import { buildStatusMessage } from "../../auto-reply/status.js";
+import {
+  normalizeThinkLevel,
+  supportsXHighThinking,
+  type ThinkLevel,
+} from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
 import {
@@ -32,6 +37,7 @@ import {
   modelKey,
   resolveDefaultModelForAgent,
   resolveModelRefFromString,
+  resolveThinkingDefault,
 } from "../model-selection.js";
 import type { AnyAgentTool } from "./common.js";
 import { readStringParam } from "./common.js";
@@ -259,6 +265,7 @@ export function createSessionStatusTool(opts?: {
       }
 
       const configured = resolveDefaultModelForAgent({ cfg, agentId });
+      const catalog = await loadModelCatalog({ config: cfg });
       const modelRaw = readStringParam(params, "model");
       let changedModel = false;
       if (typeof modelRaw === "string") {
@@ -349,6 +356,21 @@ export function createSessionStatusTool(opts?: {
         : `🕒 Time zone: ${userTimezone}`;
 
       const agentDefaults = cfg.agents?.defaults ?? {};
+      let resolvedThinkForCard: ThinkLevel =
+        normalizeThinkLevel(resolved.entry.thinkingLevel) ??
+        resolveThinkingDefault({
+          cfg,
+          provider: configured.provider,
+          model: configured.model,
+          catalog,
+        });
+      if (
+        resolvedThinkForCard === "xhigh" &&
+        !supportsXHighThinking(configured.provider, configured.model)
+      ) {
+        resolvedThinkForCard = "high";
+      }
+
       const defaultLabel = `${configured.provider}/${configured.model}`;
       const agentModel =
         typeof agentDefaults.model === "object" && agentDefaults.model
@@ -365,6 +387,7 @@ export function createSessionStatusTool(opts?: {
         sessionKey: resolved.key,
         sessionStorePath: storePath,
         groupActivation,
+        resolvedThink: resolvedThinkForCard,
         modelAuth: resolveModelAuthLabel({
           provider: providerForCard,
           cfg,
