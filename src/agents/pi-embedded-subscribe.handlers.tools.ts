@@ -11,6 +11,7 @@ import type {
 import {
   extractMessagingToolSend,
   extractToolErrorMessage,
+  extractToolResultAudioAsVoice,
   extractToolResultMediaPaths,
   extractToolResultText,
   filterToolResultMediaUrls,
@@ -147,21 +148,32 @@ function emitToolResultOutput(params: {
     if (outputText) {
       ctx.emitToolOutput(toolName, meta, outputText);
     }
-    return;
+    // Fall through to deliver structured media (e.g. TTS details.mediaUrl)
+    // even in verbose mode — MEDIA: text tokens are already handled by emitToolOutput.
   }
 
   if (isToolError) {
     return;
   }
 
-  // emitToolOutput() already handles MEDIA: directives when enabled; this path
-  // only sends raw media URLs for non-verbose delivery mode.
-  const mediaPaths = filterToolResultMediaUrls(toolName, extractToolResultMediaPaths(result));
+  // When shouldEmitToolOutput() is true, MEDIA: text tokens are already delivered
+  // via emitToolOutput → parseReplyDirectives. Only extract from details to avoid
+  // duplicates. When false, extract from all sources.
+  const mediaPaths = filterToolResultMediaUrls(
+    toolName,
+    extractToolResultMediaPaths(result, {
+      detailsOnly: ctx.shouldEmitToolOutput(),
+    }),
+  );
   if (mediaPaths.length === 0) {
     return;
   }
+  const audioAsVoice = extractToolResultAudioAsVoice(result);
   try {
-    void ctx.params.onToolResult({ mediaUrls: mediaPaths });
+    void ctx.params.onToolResult({
+      mediaUrls: mediaPaths,
+      ...(audioAsVoice ? { audioAsVoice } : undefined),
+    });
   } catch {
     // ignore delivery failures
   }

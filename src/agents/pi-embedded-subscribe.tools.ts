@@ -186,25 +186,58 @@ export function filterToolResultMediaUrls(
  * Extract media file paths from a tool result.
  *
  * Strategy (first match wins):
+ * 0. Read structured `details.mediaUrl` / `details.mediaUrls` (TTS and future tools).
  * 1. Parse `MEDIA:` tokens from text content blocks (all OpenClaw tools).
  * 2. Fall back to `details.path` when image content exists (OpenClaw imageResult).
  *
  * Returns an empty array when no media is found (e.g. Pi SDK `read` tool
  * returns base64 image data but no file path; those need a different delivery
  * path like saving to a temp file).
+ *
+ * When `options.detailsOnly` is true, only Strategy 0 is checked — this avoids
+ * double-delivering MEDIA: text tokens that were already forwarded via
+ * `emitToolOutput` in verbose mode.
  */
-export function extractToolResultMediaPaths(result: unknown): string[] {
+export function extractToolResultMediaPaths(
+  result: unknown,
+  options?: { detailsOnly?: boolean },
+): string[] {
   if (!result || typeof result !== "object") {
     return [];
   }
   const record = result as Record<string, unknown>;
+
+  // Strategy 0: structured details.mediaUrl / details.mediaUrls
+  const details = record.details as Record<string, unknown> | undefined;
+  if (details) {
+    const detailsPaths: string[] = [];
+    if (typeof details.mediaUrl === "string" && details.mediaUrl.trim()) {
+      detailsPaths.push(details.mediaUrl.trim());
+    }
+    if (Array.isArray(details.mediaUrls)) {
+      for (const u of details.mediaUrls) {
+        if (typeof u === "string" && u.trim()) {
+          detailsPaths.push(u.trim());
+        }
+      }
+    }
+    if (detailsPaths.length > 0) {
+      return detailsPaths;
+    }
+  }
+
+  if (options?.detailsOnly) {
+    return [];
+  }
+
   const content = Array.isArray(record.content) ? record.content : null;
   if (!content) {
     return [];
   }
 
-  // Extract MEDIA: paths from text content blocks using the shared parser so
-  // directive matching and validation stay in sync with outbound reply parsing.
+  // Strategy 1: Extract MEDIA: paths from text content blocks using the shared
+  // parser so directive matching and validation stay in sync with outbound
+  // reply parsing.
   const paths: string[] = [];
   let hasImageContent = false;
   for (const item of content) {
@@ -228,9 +261,8 @@ export function extractToolResultMediaPaths(result: unknown): string[] {
     return paths;
   }
 
-  // Fall back to details.path when image content exists but no MEDIA: text.
+  // Strategy 2: Fall back to details.path when image content exists but no MEDIA: text.
   if (hasImageContent) {
-    const details = record.details as Record<string, unknown> | undefined;
     const p = typeof details?.path === "string" ? details.path.trim() : "";
     if (p) {
       return [p];
@@ -238,6 +270,21 @@ export function extractToolResultMediaPaths(result: unknown): string[] {
   }
 
   return [];
+}
+
+/**
+ * Extract the `audioAsVoice` flag from a tool result details.
+ * Used alongside extractToolResultMediaPaths to propagate voice-bubble
+ * metadata from tools like TTS.
+ */
+export function extractToolResultAudioAsVoice(result: unknown): boolean {
+  if (!result || typeof result !== "object") {
+    return false;
+  }
+  const details = (result as Record<string, unknown>).details as
+    | Record<string, unknown>
+    | undefined;
+  return details?.audioAsVoice === true;
 }
 
 export function isToolResultError(result: unknown): boolean {
