@@ -188,7 +188,11 @@ export function getChildLogger(
   opts?: { level?: LogLevel },
 ): TsLogger<LogObj> {
   const base = getLogger();
-  const minLevel = opts?.level ? levelToMinLevel(opts.level) : undefined;
+  const effectiveLevel =
+    opts?.level ??
+    (loggingState.cachedSettings as ResolvedSettings | null)?.level ??
+    resolveSettings().level;
+  const minLevel = levelToMinLevel(effectiveLevel);
   const name = bindings ? JSON.stringify(bindings) : undefined;
   return base.getSubLogger({
     name,
