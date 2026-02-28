@@ -871,10 +871,7 @@ export function renderApp(state: AppViewState) {
                     }
                     return null;
                   };
-                  const applyFallbacks = (
-                    basePath: Array<string | number>,
-                    existing: unknown,
-                  ) => {
+                  const applyFallbacks = (basePath: Array<string | number>, existing: unknown) => {
                     const primary = resolveExistingPrimary(existing);
                     if (normalized.length === 0) {
                       if (primary) {
