@@ -34,12 +34,13 @@ class InvokeDispatcher(
   private val isForeground: () -> Boolean,
   private val cameraEnabled: () -> Boolean,
   private val locationEnabled: () -> Boolean,
-  private val motionAvailable: () -> Boolean,
   private val smsAvailable: () -> Boolean,
   private val debugBuild: () -> Boolean,
   private val refreshNodeCanvasCapability: suspend () -> Boolean,
   private val onCanvasA2uiPush: () -> Unit,
   private val onCanvasA2uiReset: () -> Unit,
+  private val motionActivityAvailable: () -> Boolean,
+  private val motionPedometerAvailable: () -> Boolean,
 ) {
   suspend fun handleInvoke(command: String, paramsJson: String?): GatewaySession.InvokeResult {
     val spec =
@@ -241,13 +242,22 @@ class InvokeDispatcher(
             message = "LOCATION_DISABLED: enable Location in Settings",
           )
         }
-      InvokeCommandAvailability.MotionAvailable ->
-        if (motionAvailable()) {
+      InvokeCommandAvailability.MotionActivityAvailable ->
+        if (motionActivityAvailable()) {
           null
         } else {
           GatewaySession.InvokeResult.error(
             code = "MOTION_UNAVAILABLE",
-            message = "MOTION_UNAVAILABLE: motion sensors not available",
+            message = "MOTION_UNAVAILABLE: accelerometer not available",
+          )
+        }
+      InvokeCommandAvailability.MotionPedometerAvailable ->
+        if (motionPedometerAvailable()) {
+          null
+        } else {
+          GatewaySession.InvokeResult.error(
+            code = "PEDOMETER_UNAVAILABLE",
+            message = "PEDOMETER_UNAVAILABLE: step counter not available",
           )
         }
       InvokeCommandAvailability.SmsAvailable ->
