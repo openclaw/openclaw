@@ -152,10 +152,10 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   };
 
   const closeStreaming = async () => {
-    unregisterStreamAppender(chatId);
     if (streamingStartPromise) {
       await streamingStartPromise;
     }
+    unregisterStreamAppender(chatId);
     await partialUpdateQueue;
     if (streaming?.isActive()) {
       let text = streamText;
