@@ -167,6 +167,7 @@ producing errors like `Nested mappings are not allowed in compact mappings`.
 reference it from the workflow file.
 
 `deploy.sh`:
+
 ```bash
 #!/bin/bash
 echo "deploying $1" | tee /tmp/deploy.log
