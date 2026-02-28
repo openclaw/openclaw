@@ -73,11 +73,7 @@ function inferVivgridModelApi(model: VivgridModelEntry): ModelDefinitionConfig["
     ...toStringArray(model.api_types),
   ];
   const hasAnthropicMessages = apis.some((api) => {
-    return (
-      api.includes("anthropic-messages") ||
-      api.includes("anthropic/messages") ||
-      api.includes("messages")
-    );
+    return api.includes("anthropic-messages") || api.includes("anthropic/messages");
   });
   const hasResponses = apis.some((api) => api.includes("response"));
   const hasCompletions = apis.some(

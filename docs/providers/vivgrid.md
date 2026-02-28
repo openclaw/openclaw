@@ -63,7 +63,12 @@ OpenClaw attempts to discover Vivgrid models dynamically from `GET /v1/models` w
         api: "openai-completions",
         baseUrl: "https://api.vivgrid.com/v1",
         models: [
-          { id: "gpt-5-mini", name: "Vivgrid GPT-5 mini", reasoning: true, input: ["text"] },
+          {
+            id: "gpt-5-mini",
+            name: "Vivgrid GPT-5 mini",
+            reasoning: true,
+            input: ["text", "image"],
+          },
           { id: "gpt-codex", name: "gpt-codex", api: "openai-responses", reasoning: true },
         ],
       },
