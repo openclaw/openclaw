@@ -1,8 +1,9 @@
 import Testing
 @testable import OpenClaw
 
+@MainActor
 @Suite struct TalkModeConfigParsingTests {
-    @Test func prefersNormalizedTalkProviderPayload() async {
+    @Test func prefersNormalizedTalkProviderPayload() {
         let talk: [String: Any] = [
             "provider": "elevenlabs",
             "providers": [
@@ -13,22 +14,18 @@ import Testing
             "voiceId": "voice-legacy",
         ]
 
-        let selection = await MainActor.run { TalkModeManager.selectTalkProviderConfig(talk) }
+        let selection = TalkModeManager.selectTalkProviderConfig(talk)
         #expect(selection?.provider == "elevenlabs")
-        #expect(selection?.normalizedPayload == true)
         #expect(selection?.config["voiceId"] as? String == "voice-normalized")
     }
 
-    @Test func fallsBackToLegacyTalkFieldsWhenNormalizedPayloadMissing() async {
+    @Test func ignoresLegacyTalkFieldsWhenNormalizedPayloadMissing() {
         let talk: [String: Any] = [
             "voiceId": "voice-legacy",
             "apiKey": "legacy-key",
         ]
 
-        let selection = await MainActor.run { TalkModeManager.selectTalkProviderConfig(talk) }
-        #expect(selection?.provider == "elevenlabs")
-        #expect(selection?.normalizedPayload == false)
-        #expect(selection?.config["voiceId"] as? String == "voice-legacy")
-        #expect(selection?.config["apiKey"] as? String == "legacy-key")
+        let selection = TalkModeManager.selectTalkProviderConfig(talk)
+        #expect(selection == nil)
     }
 }

@@ -23,13 +23,13 @@ type ToolExecuteArgsCurrent = [
   string,
   unknown,
   AbortSignal | undefined,
-  AgentToolUpdateCallback<unknown> | undefined,
+  AgentToolUpdateCallback | undefined,
   unknown,
 ];
 type ToolExecuteArgsLegacy = [
   string,
   unknown,
-  AgentToolUpdateCallback<unknown> | undefined,
+  AgentToolUpdateCallback | undefined,
   unknown,
   AbortSignal | undefined,
 ];
@@ -62,10 +62,60 @@ function describeToolExecutionError(err: unknown): {
   return { message: String(err) };
 }
 
+function stringifyToolPayload(payload: unknown): string {
+  if (typeof payload === "string") {
+    return payload;
+  }
+  try {
+    const encoded = JSON.stringify(payload, null, 2);
+    if (typeof encoded === "string") {
+      return encoded;
+    }
+  } catch {
+    // Fall through to String(payload) for non-serializable values.
+  }
+  return String(payload);
+}
+
+function normalizeToolExecutionResult(params: {
+  toolName: string;
+  result: unknown;
+}): AgentToolResult<unknown> {
+  const { toolName, result } = params;
+  if (result && typeof result === "object") {
+    const record = result as Record<string, unknown>;
+    if (Array.isArray(record.content)) {
+      return result as AgentToolResult<unknown>;
+    }
+    logDebug(`tools: ${toolName} returned non-standard result (missing content[]); coercing`);
+    const details = "details" in record ? record.details : record;
+    const safeDetails = details ?? { status: "ok", tool: toolName };
+    return {
+      content: [
+        {
+          type: "text",
+          text: stringifyToolPayload(safeDetails),
+        },
+      ],
+      details: safeDetails,
+    };
+  }
+  const safeDetails = result ?? { status: "ok", tool: toolName };
+  return {
+    content: [
+      {
+        type: "text",
+        text: stringifyToolPayload(safeDetails),
+      },
+    ],
+    details: safeDetails,
+  };
+}
+
 function splitToolExecuteArgs(args: ToolExecuteArgsAny): {
   toolCallId: string;
   params: unknown;
-  onUpdate: AgentToolUpdateCallback<unknown> | undefined;
+  onUpdate: AgentToolUpdateCallback | undefined;
   signal: AbortSignal | undefined;
 } {
   if (isLegacyToolExecuteArgs(args)) {
@@ -111,7 +161,11 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
             }
             executeParams = hookOutcome.params;
           }
-          const result = await tool.execute(toolCallId, executeParams, signal, onUpdate);
+          const rawResult = await tool.execute(toolCallId, executeParams, signal, onUpdate);
+          const result = normalizeToolExecutionResult({
+            toolName: normalizedName,
+            result: rawResult,
+          });
           const afterParams = beforeHookWrapped
             ? (consumeAdjustedParamsForToolCall(toolCallId) ?? executeParams)
             : executeParams;

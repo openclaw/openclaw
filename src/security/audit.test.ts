@@ -438,6 +438,54 @@ describe("security audit", () => {
     );
   });
 
+  it("warns for risky safeBinTrustedDirs entries", async () => {
+    const riskyGlobalTrustedDirs =
+      process.platform === "win32"
+        ? [String.raw`C:\Users\ci-user\bin`, String.raw`C:\Users\ci-user\.local\bin`]
+        : ["/usr/local/bin", "/tmp/openclaw-safe-bins"];
+    const cfg: OpenClawConfig = {
+      tools: {
+        exec: {
+          safeBinTrustedDirs: riskyGlobalTrustedDirs,
+        },
+      },
+      agents: {
+        list: [
+          {
+            id: "ops",
+            tools: {
+              exec: {
+                safeBinTrustedDirs: ["./relative-bin-dir"],
+              },
+            },
+          },
+        ],
+      },
+    };
+
+    const res = await audit(cfg);
+    const finding = res.findings.find(
+      (f) => f.checkId === "tools.exec.safe_bin_trusted_dirs_risky",
+    );
+    expect(finding?.severity).toBe("warn");
+    expect(finding?.detail).toContain(riskyGlobalTrustedDirs[0]);
+    expect(finding?.detail).toContain(riskyGlobalTrustedDirs[1]);
+    expect(finding?.detail).toContain("agents.list.ops.tools.exec");
+  });
+
+  it("does not warn for non-risky absolute safeBinTrustedDirs entries", async () => {
+    const cfg: OpenClawConfig = {
+      tools: {
+        exec: {
+          safeBinTrustedDirs: ["/usr/libexec"],
+        },
+      },
+    };
+
+    const res = await audit(cfg);
+    expectNoFinding(res, "tools.exec.safe_bin_trusted_dirs_risky");
+  });
+
   it("evaluates loopback control UI and logging exposure findings", async () => {
     const cases: Array<{
       name: string;
@@ -850,6 +898,31 @@ describe("security audit", () => {
         expect.objectContaining({
           checkId: "sandbox.dangerous_apparmor_profile",
           severity: "critical",
+        }),
+      ]),
+    );
+  });
+
+  it("flags container namespace join network mode in sandbox config", async () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          sandbox: {
+            mode: "all",
+            docker: {
+              network: "container:peer",
+            },
+          },
+        },
+      },
+    };
+    const res = await audit(cfg);
+    expect(res.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "sandbox.dangerous_network_mode",
+          severity: "critical",
+          title: "Dangerous network mode in sandbox config",
         }),
       ]),
     );

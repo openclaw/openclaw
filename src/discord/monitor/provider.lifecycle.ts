@@ -22,6 +22,8 @@ export async function runDiscordGatewayLifecycle(params: {
   voiceManagerRef: { current: DiscordVoiceManager | null };
   execApprovalsHandler: ExecApprovalsHandler | null;
   threadBindings: { stop: () => void };
+  pendingGatewayErrors?: unknown[];
+  releaseEarlyGatewayErrorGuard?: () => void;
 }) {
   const gateway = params.client.getPlugin<GatewayPlugin>("gateway");
   if (gateway) {
@@ -74,9 +76,46 @@ export async function runDiscordGatewayLifecycle(params: {
   gatewayEmitter?.on("debug", onGatewayDebug);
 
   let sawDisallowedIntents = false;
+  const logGatewayError = (err: unknown) => {
+    if (params.isDisallowedIntentsError(err)) {
+      sawDisallowedIntents = true;
+      params.runtime.error?.(
+        danger(
+          "discord: gateway closed with code 4014 (missing privileged gateway intents). Enable the required intents in the Discord Developer Portal or disable them in config.",
+        ),
+      );
+      return;
+    }
+    params.runtime.error?.(danger(`discord gateway error: ${String(err)}`));
+  };
+  const shouldStopOnGatewayError = (err: unknown) => {
+    const message = String(err);
+    return (
+      message.includes("Max reconnect attempts") ||
+      message.includes("Fatal Gateway error") ||
+      params.isDisallowedIntentsError(err)
+    );
+  };
   try {
     if (params.execApprovalsHandler) {
       await params.execApprovalsHandler.start();
+    }
+
+    // Drain gateway errors emitted before lifecycle listeners were attached.
+    const pendingGatewayErrors = params.pendingGatewayErrors ?? [];
+    if (pendingGatewayErrors.length > 0) {
+      const queuedErrors = [...pendingGatewayErrors];
+      pendingGatewayErrors.length = 0;
+      for (const err of queuedErrors) {
+        logGatewayError(err);
+        if (!shouldStopOnGatewayError(err)) {
+          continue;
+        }
+        if (params.isDisallowedIntentsError(err)) {
+          return;
+        }
+        throw err;
+      }
     }
 
     await waitForDiscordGatewayStop({
@@ -87,32 +126,15 @@ export async function runDiscordGatewayLifecycle(params: {
           }
         : undefined,
       abortSignal: params.abortSignal,
-      onGatewayError: (err) => {
-        if (params.isDisallowedIntentsError(err)) {
-          sawDisallowedIntents = true;
-          params.runtime.error?.(
-            danger(
-              "discord: gateway closed with code 4014 (missing privileged gateway intents). Enable the required intents in the Discord Developer Portal or disable them in config.",
-            ),
-          );
-          return;
-        }
-        params.runtime.error?.(danger(`discord gateway error: ${String(err)}`));
-      },
-      shouldStopOnError: (err) => {
-        const message = String(err);
-        return (
-          message.includes("Max reconnect attempts") ||
-          message.includes("Fatal Gateway error") ||
-          params.isDisallowedIntentsError(err)
-        );
-      },
+      onGatewayError: logGatewayError,
+      shouldStopOnError: shouldStopOnGatewayError,
     });
   } catch (err) {
     if (!sawDisallowedIntents && !params.isDisallowedIntentsError(err)) {
       throw err;
     }
   } finally {
+    params.releaseEarlyGatewayErrorGuard?.();
     unregisterGateway(params.accountId);
     stopGatewayLogging();
     if (helloTimeoutId) {

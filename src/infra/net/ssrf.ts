@@ -4,11 +4,11 @@ import { Agent, type Dispatcher } from "undici";
 import {
   extractEmbeddedIpv4FromIpv6,
   isBlockedSpecialUseIpv4Address,
+  isBlockedSpecialUseIpv6Address,
   isCanonicalDottedDecimalIPv4,
   type Ipv4SpecialUseBlockOptions,
   isIpv4Address,
   isLegacyIpv4Literal,
-  isPrivateOrLoopbackIpAddress,
   parseCanonicalIpAddress,
   parseLooseIpAddress,
 } from "../../shared/net/ip.js";
@@ -120,7 +120,7 @@ export function isPrivateIpAddress(address: string, policy?: SsrFPolicy): boolea
     if (isIpv4Address(strictIp)) {
       return isBlockedSpecialUseIpv4Address(strictIp, blockOptions);
     }
-    if (isPrivateOrLoopbackIpAddress(strictIp.toString())) {
+    if (isBlockedSpecialUseIpv6Address(strictIp)) {
       return true;
     }
     const embeddedIpv4 = extractEmbeddedIpv4FromIpv6(strictIp);
@@ -255,6 +255,24 @@ export type PinnedHostname = {
   lookup: typeof dnsLookupCb;
 };
 
+function dedupeAndPreferIpv4(results: readonly LookupAddress[]): string[] {
+  const seen = new Set<string>();
+  const ipv4: string[] = [];
+  const otherFamilies: string[] = [];
+  for (const entry of results) {
+    if (seen.has(entry.address)) {
+      continue;
+    }
+    seen.add(entry.address);
+    if (entry.family === 4) {
+      ipv4.push(entry.address);
+      continue;
+    }
+    otherFamilies.push(entry.address);
+  }
+  return [...ipv4, ...otherFamilies];
+}
+
 export async function resolvePinnedHostnameWithPolicy(
   hostname: string,
   params: { lookupFn?: LookupFn; policy?: SsrFPolicy } = {},
@@ -290,18 +308,9 @@ export async function resolvePinnedHostnameWithPolicy(
     assertAllowedResolvedAddressesOrThrow(results, params.policy);
   }
 
-  // Sort IPv4 addresses before IPv6 so that Happy Eyeballs (autoSelectFamily) and
-  // round-robin pinned lookups try IPv4 first.  This avoids connection failures on
-  // hosts where IPv6 is configured but not routed (common on cloud VMs and WSL2).
-  // See: https://github.com/openclaw/openclaw/issues/23975
-  const addresses = Array.from(new Set(results.map((entry) => entry.address))).toSorted((a, b) => {
-    const aIsV6 = a.includes(":");
-    const bIsV6 = b.includes(":");
-    if (aIsV6 === bIsV6) {
-      return 0;
-    }
-    return aIsV6 ? 1 : -1;
-  });
+  // Prefer addresses returned as IPv4 by DNS family metadata before other
+  // families so Happy Eyeballs and pinned round-robin both attempt IPv4 first.
+  const addresses = dedupeAndPreferIpv4(results);
   if (addresses.length === 0) {
     throw new Error(`Unable to resolve hostname: ${hostname}`);
   }
@@ -324,10 +333,6 @@ export function createPinnedDispatcher(pinned: PinnedHostname): Dispatcher {
   return new Agent({
     connect: {
       lookup: pinned.lookup,
-      autoSelectFamily: true,
-      autoSelectFamilyAttemptTimeout: 300,
-      keepAlive: true,
-      keepAliveInitialDelay: 15_000, // send OS-level keepalive probes after 15s idle
     },
     keepAliveTimeout: 20_000, // close idle connections after 20s
     keepAliveMaxTimeout: 60_000,
