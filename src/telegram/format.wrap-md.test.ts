@@ -166,6 +166,14 @@ describe("markdownToTelegramChunks - file reference wrapping", () => {
     expect(chunks.map((chunk) => chunk.text).join("")).toBe(input);
     expect(chunks.every((chunk) => chunk.html.length <= 512)).toBe(true);
   });
+
+  it("preserves whitespace when html-limit retry splitting runs", () => {
+    const input = "a < b";
+    const chunks = markdownToTelegramChunks(input, 5);
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.map((chunk) => chunk.text).join("")).toBe(input);
+    expect(chunks.every((chunk) => chunk.html.length <= 5)).toBe(true);
+  });
 });
 
 describe("edge cases", () => {
