@@ -2,6 +2,65 @@
 
 Docs: https://docs.openclaw.ai
 
+## 2026.2.27
+
+### Changes
+
+- Web UI/i18n: add German (`de`) locale support and auto-render language options from supported locale constants in Overview settings. (#28495) thanks @dsantoreis.
+- Discord/Thread bindings: replace fixed TTL lifecycle with inactivity (`idleHours`, default 24h) plus optional hard `maxAgeHours` lifecycle controls, and add `/session idle` + `/session max-age` commands for focused thread-bound sessions. (#27845) Thanks @osolmaz.
+- Android/Nodes: add `camera.list`, `device.permissions`, `device.health`, and `notifications.actions` (`open`/`dismiss`/`reply`) on Android nodes, plus first-class node-tool actions for the new device/notification commands. (#28260) Thanks @obviyus.
+- Android/Nodes parity: add `system.notify`, `photos.latest`, `contacts.search`/`contacts.add`, `calendar.events`/`calendar.add`, and `motion.activity`/`motion.pedometer`, with motion sensor-aware command gating and improved activity sampling reliability. (#29398) Thanks @obviyus.
+- Android/Gateway capability refresh: add live Android capability integration coverage and node canvas capability refresh wiring, plus runtime hardening for A2UI readiness retries, scoped canvas URL normalization, debug diagnostics JSON, and JavaScript MIME delivery. (#28388) Thanks @obviyus.
+- Feishu/Doc permissions: support optional owner permission grant fields on `feishu_doc` create and report permission metadata only when the grant call succeeds, with regression coverage for success/failure/omitted-owner paths. (#28295) Thanks @zhoulongchao77.
+- Feishu/Docx tables + uploads: add `feishu_doc` actions for Docx table creation/cell writing (`create_table`, `write_table_cells`, `create_table_with_values`) and image/file uploads (`upload_image`, `upload_file`) with stricter create/upload error handling for missing `document_id` and placeholder cleanup failures. (#20304) Thanks @xuhao1.
+- Feishu/Reactions: add inbound `im.message.reaction.created_v1` handling, route verified reactions through synthetic inbound turns, and harden verification with timeout + fail-closed filtering so non-bot or unverified reactions are dropped. (#16716) Thanks @schumilin.
+- Memory/LanceDB: support custom OpenAI `baseUrl` and embedding dimensions for LanceDB memory. (#17874) Thanks @rish2jain and @vincentkoc.
+
+### Fixes
+
+- Feishu/Reply media attachments: send Feishu reply `mediaUrl`/`mediaUrls` payloads as attachments alongside text/streamed replies in the reply dispatcher, including legacy fallback when `mediaUrls` is empty. (#28959)
+- Feishu/Reaction notifications: add `channels.feishu.reactionNotifications` (`off | own | all`, default `own`) so operators can disable reaction ingress or allow all verified reaction events (not only bot-authored message reactions). (#28529)
+- Feishu/Outbound session routing: stop assuming bare `oc_` identifiers are always group chats, honor explicit `dm:`/`group:` prefixes for `oc_` chat IDs, and default ambiguous bare `oc_` targets to direct routing to avoid DM session misclassification. (#10407) Thanks @Bermudarat.
+- Feishu/Group session routing: add configurable group session scopes (`group`, `group_sender`, `group_topic`, `group_topic_sender`) with legacy `topicSessionMode=enabled` compatibility so Feishu group conversations can isolate sessions by sender/topic as configured. (#17798)
+- Feishu/Reply-in-thread routing: add `replyInThread` config (`disabled|enabled`) for group replies, propagate `reply_in_thread` across text/card/media/streaming sends, and align topic-scoped session routing so newly created reply threads stay on the same session root. (#27325)
+- Feishu/Typing backoff: re-throw Feishu typing add/remove rate-limit and quota errors (`429`, `99991400`, `99991403`) and detect SDK non-throwing backoff responses so the typing keepalive circuit breaker can stop retries instead of looping indefinitely. (#28494)
+- Feishu/Zalo runtime logging: replace direct `console.log/error` usage in Feishu typing-indicator paths and Zalo monitor paths with runtime-gated logger calls so verbosity controls are respected while preserving typing backoff behavior. (#18841) Thanks @Clawborn.
+- Feishu/Probe status caching: cache successful `probeFeishu()` bot-info results for 10 minutes (bounded cache with per-account keying) to reduce repeated status/onboarding probe API calls, while bypassing cache for failures and exceptions. (#28907) Thanks @Glucksberg.
+- Feishu/Opus media send type: send `.opus` attachments with `msg_type: "audio"` (instead of `"media"`) so Feishu voice messages deliver correctly while `.mp4` remains `msg_type: "media"` and documents remain `msg_type: "file"`. (#28269) Thanks @Glucksberg.
+- Feishu/Mobile video media type: treat inbound `message_type: "media"` as video-equivalent for media key extraction, placeholder inference, and media download resolution so mobile-app video sends ingest correctly. (#25502) Thanks @4ier.
+- Feishu/Inbound sender fallback: fall back to `sender_id.user_id` when `sender_id.open_id` is missing on inbound events, and use ID-type-aware sender lookup so mobile-delivered messages keep stable sender identity/routing. (#26703) Thanks @NewdlDewdl.
+- Feishu/Inbound rich-text parsing: preserve `share_chat` payload summaries when available and add explicit parsing for rich-text `code`/`code_block`/`pre` tags so forwarded and code-heavy messages keep useful context in agent input. (#28591) Thanks @kevinWangSheng.
+- Feishu/Local media sends: propagate `mediaLocalRoots` through Feishu outbound media sending into `loadWebMedia` so local path attachments work with post-CVE local-root enforcement. (#27884) Thanks @joelnishanth.
+- Feishu/Group sender allowlist fallback: add global `channels.feishu.groupSenderAllowFrom` sender authorization for group chats, with per-group `groups.<id>.allowFrom` precedence and regression coverage for allow/block/precedence behavior. (#29174) Thanks @1MoreBuild.
+- Feishu/Docx append/write ordering: insert converted Docx blocks sequentially (single-block creates) so Feishu append/write preserves markdown block order instead of returning shuffled sections in asynchronous batch inserts. (#26172, #26022) Thanks @echoVic.
+- Feishu/Docx convert fallback chunking: recursively split oversized markdown chunks (including long no-heading sections) when `document.convert` hits content limits, while keeping fenced-code-aware split boundaries whenever possible. (#14402) Thanks @lml2468.
+- Feishu/Inbound media regression coverage: add explicit tests for message resource type mapping (`image` stays `image`, non-image maps to `file`) to prevent reintroducing unsupported Feishu `type=audio` fetches. (#16311, #8746) Thanks @Yaxuan42.
+- Feishu/API quota controls: add `typingIndicator` and `resolveSenderNames` config flags (top-level and per-account) so operators can disable typing reactions and sender-name lookup requests while keeping default behavior unchanged. (#10513) Thanks @BigUncle.
+- Security/Feishu webhook ingress: bound unauthenticated webhook rate-limit state with stale-window pruning and a hard key cap to prevent unbounded pre-auth memory growth from rotating source keys. (#26050) Thanks @bmendonca3.
+- Security/Compaction audit: remove the post-compaction audit injection message. (#28507) Thanks @fuller-stack-dev and @vincentkoc.
+- Telegram/Reply media context: include replied media files in inbound context when replying to media, defer reply-media downloads to debounce flush, gate reply-media fetch behind DM authorization, and preserve replied media when non-vision sticker fallback runs (including cached-sticker paths). (#28488) Thanks @obviyus.
+- Telegram/Outbound chunking: route oversize splitting through the shared outbound pipeline (including subagents), retry Telegram sends when escaped HTML exceeds limits, and preserve boundary whitespace when retry re-splitting rendered chunks so plain-text/transcript fidelity is retained. (#29342, #27317; follow-up to #27461) Thanks @obviyus.
+- Gateway/WS: close repeated post-handshake `unauthorized role:*` request floods per connection and sample duplicate rejection logs, preventing a single misbehaving client from degrading gateway responsiveness. (#20168) Thanks @acy103, @vibecodooor, and @vincentkoc.
+- Gateway/macOS supervised restart: actively `launchctl kickstart -k` during intentional supervised restarts to bypass LaunchAgent `ThrottleInterval` delays, and fall back to in-process restart when kickstart fails. Landed from contributor PR #29078 by @cathrynlavery. Thanks @cathrynlavery.
+- Gateway/Auth: improve device-auth v2 migration diagnostics so operators get clearer guidance when legacy clients connect. (#28305) Thanks @vincentkoc.
+- CLI/Install: add an npm-link fallback to fix CLI startup `Permission denied` failures (`exit 127`) on affected installs. (#17151) Thanks @sskyu and @vincentkoc.
+- Onboarding/Custom providers: improve verification reliability for slower local endpoints (for example Ollama) during setup. (#27380) Thanks @Sid-Qin.
+- Ollama/Autodiscovery: harden autodiscovery and warning behavior. (#29201) Thanks @marcodelpin and @vincentkoc.
+- Ollama/Context window: unify context window handling across discovery, merge, and OpenAI-compatible transport paths. (#29205) Thanks @Sid-Qin, @jimmielightner, and @vincentkoc.
+- Agents/Ollama: demote empty-discovery logging from `warn` to `debug` to reduce noisy warnings in normal edge-case discovery flows. (#26379) Thanks @byungsker.
+- Install/npm: fix npm global install deprecation warnings. (#28318) Thanks @vincentkoc.
+- Browser/Open & navigate: accept `url` as an alias parameter for `open` and `navigate`. (#29260) Thanks @vincentkoc.
+- Codex/Usage window: label weekly usage window as `Week` instead of `Day`. (#26267) Thanks @Sid-Qin.
+- Slack/Native commands: register Slack native status as `/agentstatus` (Slack-reserved `/status`) so manifest slash command registration stays valid while text `/status` still works. Landed from contributor PR #29032 by @maloqab. Thanks @maloqab.
+- Android/Nodes reliability: reject `facing=both` when `deviceId` is set to avoid mislabeled duplicate captures, allow notification `open`/`reply` on non-clearable entries while still gating dismiss, trigger listener rebind before notification actions, and scale invoke-result ack timeout to invoke budget for large clip payloads. (#28260) Thanks @obviyus.
+- Android/Camera clip: remove `camera.clip` HTTP-upload fallback to base64 so clip transport is deterministic and fail-loud, and reject non-positive `maxWidth` values so invalid inputs fall back to the safe resize default. (#28229) Thanks @obviyus.
+- Android/Gateway canvas capability refresh: send `node.canvas.capability.refresh` with object `params` (`{}`) from Android node runtime so gateway object-schema validation accepts refresh retries and A2UI host recovery works after scoped capability expiry. (#28413) Thanks @obviyus.
+- Daemon/macOS TLS certs: default LaunchAgent service env `NODE_EXTRA_CA_CERTS` to `/etc/ssl/cert.pem` (while preserving explicit overrides) so HTTPS clients no longer fail with local-issuer errors under launchd. (#27915) Thanks @Lukavyi.
+- Update/Global npm: fallback to `--omit=optional` when global `npm update` fails so optional dependency install failures no longer abort update flows. (#24896) Thanks @xinhuagu and @vincentkoc.
+- Plugins/NPM spec install: fix npm-spec plugin installs when `npm pack` output is empty by detecting newly created `.tgz` archives in the pack directory. (#21039) Thanks @graysurf and @vincentkoc.
+- Plugins/Install: clear stale install errors when an npm package is not found so follow-up install attempts report current state correctly. (#25073) Thanks @dalefrieswthat.
+- OpenAI Responses/Compaction: rewrite and unify the OpenAI Responses store patches to treat empty `baseUrl` as non-direct, honor `compat.supportsStore=false`, and auto-inject server-side compaction `context_management` for compatible direct OpenAI models (with per-model opt-out/threshold overrides). Landed from contributor PRs #16930 (@OiPunk), #22441 (@EdwardWu7), and #25088 (@MoerAI). Thanks @OiPunk, @EdwardWu7, and @MoerAI.
+
 ## 2026.2.26
 
 ### Changes
@@ -18,6 +77,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- FS tools/workspaceOnly: honor `tools.fs.workspaceOnly=false` for host write and edit operations so FS tools can access paths outside the workspace when sandbox is off. (#28822) thanks @lailoo. Fixes #28763. Thanks @cjscld for reporting.
 - Telegram/DM allowlist runtime inheritance: enforce `dmPolicy: "allowlist"` `allowFrom` requirements using effective account-plus-parent config across account-capable channels (Telegram, Discord, Slack, Signal, iMessage, IRC, BlueBubbles, WhatsApp), and align `openclaw doctor` checks to the same inheritance logic so DM traffic is not silently dropped after upgrades. (#27936) Thanks @widingmarcus-cyber.
 - Delivery queue/recovery backoff: prevent retry starvation by persisting `lastAttemptAt` on failed sends and deferring recovery retries until each entry's `lastAttemptAt + backoff` window is eligible, while continuing to recover ready entries behind deferred ones. Landed from contributor PR #27710 by @Jimmy-xuzimo. Thanks @Jimmy-xuzimo.
 - Gemini OAuth/Auth flow: align OAuth project discovery metadata and endpoint fallback handling for Gemini CLI auth, including fallback coverage for environment-provided project IDs. (#16684) Thanks @vincentkoc.
@@ -36,6 +96,7 @@ Docs: https://docs.openclaw.ai
 - Browser/Extension relay init: dedupe concurrent same-port relay startup with shared in-flight initialization promises so callers await one startup lifecycle and receive consistent success/failure results. Landed from contributor PR #21277 by @HOYALIM. (Related #20688)
 - Browser/Fill relay + CLI parity: accept `act.fill` fields without explicit `type` by defaulting missing/empty `type` to `text` in both browser relay route parsing and `openclaw browser fill` CLI field parsing, so relay calls no longer fail when the model omits field type metadata. Landed from contributor PR #27662 by @Uface11. (#27296) Thanks @Uface11.
 - Feishu/Permission error dispatch: merge sender-name permission notices into the main inbound dispatch so one user message produces one agent turn/reply (instead of a duplicate permission-notice turn), with regression coverage. (#27381) thanks @byungsker.
+- Feishu/Merged forward parsing: expand inbound `merge_forward` messages by fetching and formatting API sub-messages in order, so merged forwards provide usable content context instead of only a placeholder line. (#28707) Thanks @tsu-builds.
 - Agents/Canvas default node resolution: when multiple connected canvas-capable nodes exist and no single `mac-*` candidate is selected, default to the first connected candidate instead of failing with `node required` for implicit-node canvas tool calls. Landed from contributor PR #27444 by @carbaj03. Thanks @carbaj03.
 - TUI/stream assembly: preserve streamed text across real tool-boundary drops without keeping stale streamed text when non-text blocks appear only in the final payload. Landed from contributor PR #27711 by @scz2011. (#27674)
 - Hooks/Internal `message:sent`: forward `sessionKey` on outbound sends from agent delivery, cron isolated delivery, gateway receipt acks, heartbeat sends, session-maintenance warnings, and restart-sentinel recovery so internal `message:sent` hooks consistently dispatch with session context, including `openclaw agent --deliver` runs resumed via `--session-id` (without explicit `--session-key`). Landed from contributor PR #27584 by @qualiobra. Thanks @qualiobra.
@@ -89,6 +150,7 @@ Docs: https://docs.openclaw.ai
 - Security/Voice Call (Twilio): bind webhook replay + manager dedupe identity to authenticated request material, remove unsigned `i-twilio-idempotency-token` trust from replay/dedupe keys, and thread verified request identity through provider parse flow to harden cross-provider event dedupe. This ships in the next npm release (`2026.2.26`). Thanks @tdjackey for reporting.
 - Security/Exec approvals forwarding: prefer turn-source channel/account/thread metadata when resolving approval delivery targets so stale session routes do not misroute approval prompts.
 - Security/Pairing multi-account isolation: enforce account-scoped pairing allowlists and pending-request storage across core + extension message channels while preserving channel-scoped defaults for the default account. This ships in the next npm release (`2026.2.26`). Thanks @tdjackey for reporting and @gumadeiras for implementation.
+- Memory/SQLite: deduplicate concurrent memory-manager initialization and auto-reopen stale SQLite handles after atomic reindex swaps, preventing repeated `attempt to write a readonly database` sync failures until gateway restart.
 - Config/Plugins entries: treat unknown `plugins.entries.*` ids as startup warnings (ignored stale keys) instead of hard validation failures that can crash-loop gateway boot. Landed from contributor PR #27506 by @Sid-Qin. (#27455)
 - Telegram native commands: degrade command registration on `BOT_COMMANDS_TOO_MUCH` by retrying with fewer commands instead of crash-looping startup sync. Landed from contributor PR #27512 by @Sid-Qin. (#27456)
 - Web tools/Proxy: route `web_search` provider HTTP calls (Brave, Perplexity, xAI, Gemini, Kimi), redirect resolution, and `web_fetch` through a shared proxy-aware SSRF guard path so gateway installs behind `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY` no longer fail with transport `fetch failed` errors. (#27430) thanks @kevinWangSheng.
@@ -137,6 +199,7 @@ Docs: https://docs.openclaw.ai
 - Followups/Typing indicator: ensure followup turns mark dispatch idle on every exit path (including `NO_REPLY`, empty payloads, and agent errors) so typing keepalive cleanup always runs and channel typing indicators do not get stuck after queued/silent followups. (#26881) Thanks @codexGW.
 - Voice-call/TTS tools: hide the `tts` tool when the message provider is `voice`, preventing voice-call runs from selecting self-playback TTS and falling into silent no-output loops. (#27025)
 - Agents/Tools: normalize non-standard plugin tool results that omit `content` so embedded runs no longer crash with `Cannot read properties of undefined (reading 'filter')` after tool completion (including `tesseramemo_query`). (#27007)
+- Agents/Tool-call dispatch: trim whitespace-padded tool names in both transcript repair and live streamed embedded-runner responses so exact-match tool lookup no longer fails with `Tool ... not found` for model outputs like `" read "`. (#27094) Thanks @openperf and @Sid-Qin.
 - Cron/Model overrides: when isolated `payload.model` is no longer allowlisted, fall back to default model selection instead of failing the job, while still returning explicit errors for invalid model strings. (#26717) Thanks @Youyou972.
 - Agents/Model fallback: keep explicit text + image fallback chains reachable even when `agents.defaults.models` allowlists are present, prefer explicit run `agentId` over session-key parsing for followup fallback override resolution (with session-key fallback), treat agent-level fallback overrides as configured in embedded runner preflight, and classify `model_cooldown` / `cooling down` errors as `rate_limit` so failover continues. (#11972, #24137, #17231)
 - Agents/Model fallback: keep same-provider fallback chains active when session model differs from configured primary, infer cooldown reason from provider profile state (instead of `disabledReason` only), keep no-profile fallback providers eligible (env/models.json paths), and only relax same-provider cooldown fallback attempts for `rate_limit`. (#23816) thanks @ramezgaberiel.
@@ -171,6 +234,7 @@ Docs: https://docs.openclaw.ai
 - Security/Microsoft Teams: isolate group allowlist and command authorization from DM pairing-store entries to prevent cross-context authorization bleed. (#26111) Thanks @bmendonca3.
 - Security/SSRF guard: classify IPv6 multicast literals (`ff00::/8`) as blocked/private-internal targets in shared SSRF IP checks, preventing multicast literals from bypassing URL-host preflight and DNS answer validation. This ships in the next npm release (`2026.2.26`). Thanks @zpbrent for reporting.
 - Tests/Low-memory stability: disable Vitest `vmForks` by default on low-memory local hosts (`<64 GiB`), keep low-profile extension lane parallelism at 4 workers, and align cron isolated-agent tests with `setSessionRuntimeModel` usage to avoid deterministic suite failures. (#26324) Thanks @ngutman.
+- Feishu/WebSocket proxy: pass a proxy agent to Feishu WS clients from standard proxy environment variables and include plugin-local runtime dependency wiring so websocket mode works in proxy-constrained installs. (#26397) Thanks @colin719.
 
 ## 2026.2.24
 
@@ -278,6 +342,7 @@ Docs: https://docs.openclaw.ai
 - Exec approvals: treat bare allowlist `*` as a true wildcard for parsed executables, including unresolved PATH lookups, so global opt-in allowlists work as configured. (#25250) Thanks @widingmarcus-cyber.
 - Gateway/Auth: allow trusted-proxy authenticated Control UI websocket sessions to skip device pairing when device identity is absent, preventing false `pairing required` failures behind trusted reverse proxies. (#25428) Thanks @SidQin-cyber.
 - Agents/Tool dispatch: await block-reply flush before tool execution starts so buffered block replies preserve message ordering around tool calls. (#25427) Thanks @SidQin-cyber.
+- Agents/Compaction: harden summarization prompts to preserve opaque identifiers verbatim (UUIDs, IDs, tokens, host/IP/port, URLs), reducing post-compaction identifier drift and hallucinated identifier reconstruction.
 - iOS/Signing: improve `scripts/ios-team-id.sh` for Xcode 16+ by falling back to Xcode-managed provisioning profiles, add actionable guidance when an Apple account exists but no Team ID can be resolved, and ignore Xcode `xcodebuild` output directories (`apps/ios/build`, `apps/shared/OpenClawKit/build`, `Swabble/build`). (#22773) Thanks @brianleach.
 - macOS/Menu bar: stop reusing the injector delegate for the "Usage cost (30 days)" submenu to prevent recursive submenu injection loops when opening cost history. (#25341) Thanks @yingchunbai.
 - Control UI/Chat images: route image-click opens through a shared safe-open helper (allowing only safe URL schemes) and open new tabs with opener isolation to block tabnabbing. (#18685, #25444, #25847) Thanks @Mariana-Codebase and @shakkernerd.
