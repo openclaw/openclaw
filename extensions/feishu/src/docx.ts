@@ -526,6 +526,56 @@ async function resolveUploadInput(
   };
 }
 
+/**
+ * Collect all descendant blocks of the given top-level blocks via BFS.
+ *
+ * `documentBlockDescendant.create` only returns direct children in its
+ * response, so image blocks nested inside table cells or list subtrees are
+ * not present in `inserted`.  This BFS expands each container block one
+ * level at a time until no new children are found, returning a flat list
+ * that includes every block in the inserted subtree.
+ */
+/* eslint-disable @typescript-eslint/no-explicit-any -- SDK block types */
+async function collectAllDescendantBlocks(
+  client: Lark.Client,
+  docToken: string,
+  topLevelBlocks: any[],
+): Promise<any[]> {
+  /* eslint-enable @typescript-eslint/no-explicit-any */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK block types
+  const allBlocks: any[] = [...topLevelBlocks];
+  // Image blocks (type 27) are leaf nodes — skip them from the start.
+  const queue: string[] = topLevelBlocks
+    .filter((b: any) => b.block_type !== 27)
+    .map((b: any) => b.block_id)
+    .filter(Boolean);
+
+  while (queue.length > 0) {
+    const blockId = queue.shift()!;
+    let pageToken: string | undefined;
+    do {
+      const res = await client.docx.documentBlockChildren.get({
+        path: { document_id: docToken, block_id: blockId },
+        params: { page_token: pageToken, page_size: 200 },
+      });
+      if (res.code !== 0) break;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK block types
+      const items: any[] = res.data?.items ?? [];
+      allBlocks.push(...items);
+      // Image blocks (type 27) are leaf nodes — do not recurse into them.
+      queue.push(
+        ...items
+          .filter((b: any) => b.block_type !== 27)
+          .map((b: any) => b.block_id)
+          .filter(Boolean),
+      );
+      pageToken = res.data?.page_token ?? undefined;
+    } while (pageToken);
+  }
+
+  return allBlocks;
+}
+
 /* eslint-disable @typescript-eslint/no-explicit-any -- SDK block types */
 async function processImages(
   client: Lark.Client,
@@ -540,7 +590,11 @@ async function processImages(
     return 0;
   }
 
-  const imageBlocks = insertedBlocks.filter((b) => b.block_type === 27);
+  // `insertedBlocks` contains only the direct children returned by the
+  // Descendant API.  Image blocks nested inside table cells or list subtrees
+  // will not appear there, so we BFS-expand the full subtree first.
+  const allBlocks = await collectAllDescendantBlocks(client, docToken, insertedBlocks);
+  const imageBlocks = allBlocks.filter((b) => b.block_type === 27);
 
   let processed = 0;
   for (let i = 0; i < Math.min(imageUrls.length, imageBlocks.length); i++) {
