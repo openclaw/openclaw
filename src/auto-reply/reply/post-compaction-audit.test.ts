@@ -14,7 +14,7 @@ describe("extractReadPaths", () => {
           {
             type: "tool_use",
             name: "read",
-            input: { file_path: "WORKFLOW_AUTO.md" },
+            input: { file_path: "AGENTS.md" },
           },
         ],
       },
@@ -31,7 +31,7 @@ describe("extractReadPaths", () => {
     ];
 
     const paths = extractReadPaths(messages);
-    expect(paths).toEqual(["WORKFLOW_AUTO.md", "memory/2026-02-16.md"]);
+    expect(paths).toEqual(["AGENTS.md", "memory/2026-02-16.md"]);
   });
 
   it("handles path parameter (alternative to file_path)", () => {
@@ -78,7 +78,7 @@ describe("extractReadPaths", () => {
           {
             type: "tool_use",
             name: "exec",
-            input: { command: "cat WORKFLOW_AUTO.md" },
+            input: { command: "cat AGENTS.md" },
           },
         ],
       },
@@ -110,7 +110,7 @@ describe("auditPostCompactionReads", () => {
   const workspaceDir = "/Users/test/workspace";
 
   it("passes when all required files are read", () => {
-    const readPaths = ["WORKFLOW_AUTO.md", "memory/2026-02-16.md"];
+    const readPaths = ["AGENTS.md", "memory/2026-02-16.md"];
     const result = auditPostCompactionReads(readPaths, workspaceDir);
 
     expect(result.passed).toBe(true);
@@ -121,16 +121,16 @@ describe("auditPostCompactionReads", () => {
     const result = auditPostCompactionReads([], workspaceDir);
 
     expect(result.passed).toBe(false);
-    expect(result.missingPatterns).toContain("WORKFLOW_AUTO.md");
+    expect(result.missingPatterns).toContain("AGENTS.md");
     expect(result.missingPatterns.some((p) => p.includes("memory"))).toBe(true);
   });
 
   it("reports only missing files", () => {
-    const readPaths = ["WORKFLOW_AUTO.md"];
+    const readPaths = ["AGENTS.md"];
     const result = auditPostCompactionReads(readPaths, workspaceDir);
 
     expect(result.passed).toBe(false);
-    expect(result.missingPatterns).not.toContain("WORKFLOW_AUTO.md");
+    expect(result.missingPatterns).not.toContain("AGENTS.md");
     expect(result.missingPatterns.some((p) => p.includes("memory"))).toBe(true);
   });
 
@@ -139,12 +139,12 @@ describe("auditPostCompactionReads", () => {
     const result = auditPostCompactionReads(readPaths, workspaceDir);
 
     expect(result.passed).toBe(false);
-    expect(result.missingPatterns).toContain("WORKFLOW_AUTO.md");
+    expect(result.missingPatterns).toContain("AGENTS.md");
     expect(result.missingPatterns.length).toBe(1);
   });
 
   it("normalizes relative paths when matching", () => {
-    const readPaths = ["./WORKFLOW_AUTO.md", "memory/2026-02-16.md"];
+    const readPaths = ["./AGENTS.md", "memory/2026-02-16.md"];
     const result = auditPostCompactionReads(readPaths, workspaceDir);
 
     expect(result.passed).toBe(true);
@@ -153,7 +153,7 @@ describe("auditPostCompactionReads", () => {
 
   it("normalizes absolute paths when matching", () => {
     const readPaths = [
-      "/Users/test/workspace/WORKFLOW_AUTO.md",
+      "/Users/test/workspace/AGENTS.md",
       "/Users/test/workspace/memory/2026-02-16.md",
     ];
     const result = auditPostCompactionReads(readPaths, workspaceDir);
@@ -174,24 +174,24 @@ describe("auditPostCompactionReads", () => {
 
 describe("formatAuditWarning", () => {
   it("formats warning message with missing patterns", () => {
-    const missingPatterns = ["WORKFLOW_AUTO.md", "memory\\/\\d{4}-\\d{2}-\\d{2}\\.md"];
+    const missingPatterns = ["AGENTS.md", "memory\\/\\d{4}-\\d{2}-\\d{2}\\.md"];
     const message = formatAuditWarning(missingPatterns);
 
     expect(message).toContain("⚠️ Post-Compaction Audit");
-    expect(message).toContain("WORKFLOW_AUTO.md");
+    expect(message).toContain("AGENTS.md");
     expect(message).toContain("memory");
     expect(message).toContain("Please read them now");
   });
 
   it("formats single missing pattern", () => {
-    const missingPatterns = ["WORKFLOW_AUTO.md"];
+    const missingPatterns = ["AGENTS.md"];
     const message = formatAuditWarning(missingPatterns);
 
-    expect(message).toContain("WORKFLOW_AUTO.md");
-    // Check that the missing patterns list only contains WORKFLOW_AUTO.md
+    expect(message).toContain("AGENTS.md");
+    // Check that the missing patterns list only contains AGENTS.md
     const lines = message.split("\n");
     const patternLines = lines.filter((l) => l.trim().startsWith("- "));
     expect(patternLines).toHaveLength(1);
-    expect(patternLines[0]).toContain("WORKFLOW_AUTO.md");
+    expect(patternLines[0]).toContain("AGENTS.md");
   });
 });

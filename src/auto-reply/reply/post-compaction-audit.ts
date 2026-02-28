@@ -3,7 +3,7 @@ import path from "node:path";
 
 // Default required files — constants, extensible to config later
 const DEFAULT_REQUIRED_READS: Array<string | RegExp> = [
-  "WORKFLOW_AUTO.md",
+  "AGENTS.md",
   /memory\/\d{4}-\d{2}-\d{2}\.md/, // daily memory files
 ];
 
@@ -11,6 +11,17 @@ const DEFAULT_REQUIRED_READS: Array<string | RegExp> = [
  * Audit whether agent read required startup files after compaction.
  * Returns list of missing file patterns.
  */
+function describeRequiredRead(required: string | RegExp): string {
+  if (typeof required === "string") {
+    return required;
+  }
+  const source = required.source;
+  if (source === "memory\\/\\d{4}-\\d{2}-\\d{2}\\.md") {
+    return "memory/YYYY-MM-DD.md";
+  }
+  return source;
+}
+
 export function auditPostCompactionReads(
   readFilePaths: string[],
   workspaceDir: string,
@@ -24,7 +35,7 @@ export function auditPostCompactionReads(
       const requiredResolved = path.resolve(workspaceDir, required);
       const found = normalizedReads.some((r) => r === requiredResolved);
       if (!found) {
-        missingPatterns.push(required);
+        missingPatterns.push(describeRequiredRead(required));
       }
     } else {
       // RegExp — match against relative paths from workspace
@@ -35,7 +46,7 @@ export function auditPostCompactionReads(
         return required.test(normalizedRel);
       });
       if (!found) {
-        missingPatterns.push(required.source);
+        missingPatterns.push(describeRequiredRead(required));
       }
     }
   }
