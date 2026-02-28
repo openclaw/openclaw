@@ -378,6 +378,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "models.providers.*.apiKey": "Model Provider API Key",
   "models.providers.*.auth": "Model Provider Auth Mode",
   "models.providers.*.api": "Model Provider API Adapter",
+  "models.providers.*.injectNumCtxForOpenAICompat": "Model Provider Inject num_ctx (OpenAI Compat)",
   "models.providers.*.headers": "Model Provider Headers",
   "models.providers.*.authHeader": "Model Provider Authorization Header",
   "models.providers.*.models": "Model Provider Model List",
