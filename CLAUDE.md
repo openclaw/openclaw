@@ -113,6 +113,7 @@ pnpm build && pnpm check && pnpm test
 - Pre-PR: `pnpm build && pnpm check && pnpm test`.
 - Prefer rebase for clean history, squash for messy history.
 - AI-assisted PRs: mark as AI-assisted, note testing level, include session logs if possible.
+- When creating PRs, they should target `jhs129/openclaw:main` (no upstream remote configured).
 
 ## Deployment (Fly.io)
 
