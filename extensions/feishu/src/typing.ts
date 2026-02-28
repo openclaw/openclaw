@@ -196,7 +196,9 @@ export async function removeTypingIndicator(params: {
   } catch (err) {
     if (isFeishuBackoffError(err)) {
       if (getFeishuRuntime().logging.shouldLogVerbose()) {
-        runtime?.log?.("[feishu] typing indicator removal hit rate-limit/quota, stopping keepalive");
+        runtime?.log?.(
+          "[feishu] typing indicator removal hit rate-limit/quota, stopping keepalive",
+        );
       }
       throw err;
     }
