@@ -61,7 +61,7 @@ export type MattermostAccountConfig = {
    * - "first": same as "all" (reply in thread under the triggering message)
    * - "all": always reply in a thread; uses existing thread root or starts a new thread under the message
    */
-  replyToMode?: ReplyToMode;
+  replyToMode?: MattermostReplyToMode;
   /** Action toggles for this account. */
   actions?: {
     /** Enable message reaction actions. Default: true. */
