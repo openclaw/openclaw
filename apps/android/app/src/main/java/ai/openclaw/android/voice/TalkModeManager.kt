@@ -194,6 +194,11 @@ class TalkModeManager(
     }
   }
 
+  suspend fun speakAssistantReply(text: String) {
+    reloadConfig()
+    playAssistant(text)
+  }
+
   private fun start() {
     mainHandler.post {
       if (_isListening.value) return@post
