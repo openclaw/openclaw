@@ -139,10 +139,10 @@ export const simplexPlugin: ChannelPlugin<ResolvedSimplexAccount> = {
         throw new Error("SimpleX WebSocket not connected");
       }
 
-      let filePath = media;
+      let filePath = mediaUrl || text;
 
       // If media is a URL, download to temp file
-      if (media.startsWith("http://") || media.startsWith("https://")) {
+      if (mediaUrl && (mediaUrl.startsWith("http://") || mediaUrl.startsWith("https://"))) {
         try {
           const response = await fetch(media);
           if (!response.ok) {
@@ -156,17 +156,17 @@ export const simplexPlugin: ChannelPlugin<ResolvedSimplexAccount> = {
           let ext = ".bin";
           if (
             contentType.includes("image/jpeg") ||
-            media.includes(".jpg") ||
-            media.includes(".jpeg")
+            mediaUrl.includes(".jpg") ||
+            mediaUrl.includes(".jpeg")
           )
             ext = ".jpg";
-          else if (contentType.includes("image/png") || media.includes(".png")) ext = ".png";
-          else if (contentType.includes("image/gif") || media.includes(".gif")) ext = ".gif";
-          else if (contentType.includes("image/webp") || media.includes(".webp")) ext = ".webp";
-          else if (contentType.includes("audio/m4a") || media.includes(".m4a")) ext = ".m4a";
-          else if (contentType.includes("audio/mp3") || media.includes(".mp3")) ext = ".mp3";
-          else if (contentType.includes("audio/ogg") || media.includes(".ogg")) ext = ".ogg";
-          else if (contentType.includes("audio/wav") || media.includes(".wav")) ext = ".wav";
+          else if (contentType.includes("image/png") || mediaUrl.includes(".png")) ext = ".png";
+          else if (contentType.includes("image/gif") || mediaUrl.includes(".gif")) ext = ".gif";
+          else if (contentType.includes("image/webp") || mediaUrl.includes(".webp")) ext = ".webp";
+          else if (contentType.includes("audio/m4a") || mediaUrl.includes(".m4a")) ext = ".m4a";
+          else if (contentType.includes("audio/mp3") || mediaUrl.includes(".mp3")) ext = ".mp3";
+          else if (contentType.includes("audio/ogg") || mediaUrl.includes(".ogg")) ext = ".ogg";
+          else if (contentType.includes("audio/wav") || mediaUrl.includes(".wav")) ext = ".wav";
 
           const tempFile = path.join(os.tmpdir(), `simplex-media-${Date.now()}${ext}`);
           fs.writeFileSync(tempFile, buffer);
@@ -212,7 +212,7 @@ export const simplexPlugin: ChannelPlugin<ResolvedSimplexAccount> = {
         };
       } finally {
         // Clean up temp file if we downloaded it
-        if (media.startsWith("http://") || media.startsWith("https://")) {
+        if (mediaUrl && (mediaUrl.startsWith("http://") || mediaUrl.startsWith("https://"))) {
           try {
             if (fs.existsSync(filePath)) {
               fs.unlinkSync(filePath);
