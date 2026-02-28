@@ -42,16 +42,16 @@ export function resolvePluginManifestPath(rootDir: string): string {
   return path.join(rootDir, PLUGIN_MANIFEST_FILENAME);
 }
 
-export function loadPluginManifest(
-  rootDir: string,
-  options?: { rejectHardlinks?: boolean },
-): PluginManifestLoadResult {
+export function loadPluginManifest(rootDir: string): PluginManifestLoadResult {
   const manifestPath = resolvePluginManifestPath(rootDir);
   const opened = openBoundaryFileSync({
     absolutePath: manifestPath,
     rootPath: rootDir,
     boundaryLabel: "plugin root",
-    rejectHardlinks: options?.rejectHardlinks,
+    // pnpm (and some other package managers) hardlink files from a
+    // content-addressable store, so plugin manifests commonly have nlink > 1.
+    // The boundary-path and fd-identity checks already ensure containment.
+    rejectHardlinks: false,
   });
   if (!opened.ok) {
     if (opened.reason === "path") {

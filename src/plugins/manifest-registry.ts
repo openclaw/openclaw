@@ -167,9 +167,7 @@ export function loadPluginManifestRegistry(params: {
   const realpathCache = new Map<string, string>();
 
   for (const candidate of candidates) {
-    const manifestRes = loadPluginManifest(candidate.rootDir, {
-      rejectHardlinks: candidate.origin !== "bundled" ? undefined : false,
-    });
+    const manifestRes = loadPluginManifest(candidate.rootDir);
     if (!manifestRes.ok) {
       diagnostics.push({
         level: "error",

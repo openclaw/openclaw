@@ -677,7 +677,7 @@ describe("loadOpenClawPlugins", () => {
     expect(registry.diagnostics.some((entry) => entry.message.includes("escapes"))).toBe(true);
   });
 
-  it("rejects plugin entry files that escape plugin root via hardlink", () => {
+  it("accepts plugin entry files that are hardlinked (pnpm stores)", () => {
     if (process.platform === "win32") {
       return;
     }
@@ -686,11 +686,7 @@ describe("loadOpenClawPlugins", () => {
     const outsideDir = makeTempDir();
     const outsideEntry = path.join(outsideDir, "outside.js");
     const linkedEntry = path.join(pluginDir, "entry.js");
-    fs.writeFileSync(
-      outsideEntry,
-      'export default { id: "hardlinked", register() { throw new Error("should not run"); } };',
-      "utf-8",
-    );
+    fs.writeFileSync(outsideEntry, 'export default { id: "hardlinked", register() {} };', "utf-8");
     fs.writeFileSync(
       path.join(pluginDir, "openclaw.plugin.json"),
       JSON.stringify(
@@ -722,9 +718,9 @@ describe("loadOpenClawPlugins", () => {
       },
     });
 
+    // Hardlinked entry files (common with pnpm) should be accepted
     const record = registry.plugins.find((entry) => entry.id === "hardlinked");
-    expect(record?.status).not.toBe("loaded");
-    expect(registry.diagnostics.some((entry) => entry.message.includes("escapes"))).toBe(true);
+    expect(record?.status).toBe("loaded");
   });
 
   it("prefers dist plugin-sdk alias when loader runs from dist", () => {

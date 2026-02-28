@@ -198,7 +198,7 @@ describe("loadPluginManifestRegistry", () => {
     ).toBe(true);
   });
 
-  it("rejects manifest paths that escape plugin root via hardlink", () => {
+  it("accepts manifest paths that are hardlinked (pnpm stores)", () => {
     if (process.platform === "win32") {
       return;
     }
@@ -209,7 +209,7 @@ describe("loadPluginManifestRegistry", () => {
     fs.writeFileSync(path.join(rootDir, "index.ts"), "export default function () {}", "utf-8");
     fs.writeFileSync(
       outsideManifest,
-      JSON.stringify({ id: "unsafe-hardlink", configSchema: { type: "object" } }),
+      JSON.stringify({ id: "hardlinked-ok", configSchema: { type: "object" } }),
       "utf-8",
     );
     try {
@@ -223,14 +223,13 @@ describe("loadPluginManifestRegistry", () => {
 
     const registry = loadRegistry([
       createPluginCandidate({
-        idHint: "unsafe-hardlink",
+        idHint: "hardlinked-ok",
         rootDir,
         origin: "workspace",
       }),
     ]);
-    expect(registry.plugins).toHaveLength(0);
-    expect(
-      registry.diagnostics.some((diag) => diag.message.includes("unsafe plugin manifest path")),
-    ).toBe(true);
+    // Hardlinked manifests (common with pnpm) should be accepted
+    expect(registry.plugins).toHaveLength(1);
+    expect(registry.plugins[0]?.id).toBe("hardlinked-ok");
   });
 });

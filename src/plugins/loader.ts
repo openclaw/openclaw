@@ -534,8 +534,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       // (e.g. /var/... vs /private/var/... on macOS). Canonical boundary checks
       // still enforce containment; skip lexical pre-check to avoid false escapes.
       skipLexicalRootCheck: true,
-      // Bundled plugins may be hardlinked by pnpm's content-addressable store.
-      rejectHardlinks: candidate.origin !== "bundled" ? undefined : false,
+      rejectHardlinks: false,
     });
     if (!opened.ok) {
       record.status = "error";

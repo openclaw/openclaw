@@ -17,7 +17,7 @@ export function resolveBundledPluginSources(params: {
     if (candidate.origin !== "bundled") {
       continue;
     }
-    const manifest = loadPluginManifest(candidate.rootDir, { rejectHardlinks: false });
+    const manifest = loadPluginManifest(candidate.rootDir);
     if (!manifest.ok) {
       continue;
     }

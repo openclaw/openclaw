@@ -231,7 +231,7 @@ describe("discoverOpenClawPlugins", () => {
     );
   });
 
-  it("rejects package extension entries that are hardlinked aliases", async () => {
+  it("accepts package extension entries that are hardlinked (pnpm stores)", async () => {
     if (process.platform === "win32") {
       return;
     }
@@ -261,17 +261,15 @@ describe("discoverOpenClawPlugins", () => {
       "utf-8",
     );
 
-    const { candidates, diagnostics } = await withStateDir(stateDir, async () => {
+    const { candidates } = await withStateDir(stateDir, async () => {
       return discoverOpenClawPlugins({});
     });
 
-    expect(candidates.some((candidate) => candidate.idHint === "pack")).toBe(false);
-    expect(diagnostics.some((entry) => entry.message.includes("escapes package directory"))).toBe(
-      true,
-    );
+    // Hardlinked files (common with pnpm) should be accepted
+    expect(candidates.some((candidate) => candidate.idHint === "pack")).toBe(true);
   });
 
-  it("ignores package manifests that are hardlinked aliases", async () => {
+  it("accepts package manifests that are hardlinked (pnpm stores)", async () => {
     if (process.platform === "win32") {
       return;
     }
@@ -304,7 +302,8 @@ describe("discoverOpenClawPlugins", () => {
       return discoverOpenClawPlugins({});
     });
 
-    expect(candidates.some((candidate) => candidate.idHint === "pack")).toBe(false);
+    // Hardlinked manifests (common with pnpm) should be accepted
+    expect(candidates.some((candidate) => candidate.idHint === "pack")).toBe(true);
   });
 
   it.runIf(process.platform !== "win32")("blocks world-writable plugin paths", async () => {
