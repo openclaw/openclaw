@@ -137,21 +137,22 @@ export function buildGatewayConnectionDetails(
       : undefined;
   const remoteUrl =
     typeof remote?.url === "string" && remote.url.trim().length > 0 ? remote.url.trim() : undefined;
-  const remoteMisconfigured = isRemoteMode && !urlOverride && !remoteUrl;
-  const url = urlOverride || remoteUrl || localUrl;
+  const remoteMisconfigured = isRemoteMode && !forceLoopback && !urlOverride && !remoteUrl;
+  const url = urlOverride || (forceLoopback ? localUrl : remoteUrl || localUrl);
   const urlSource = urlOverride
     ? "cli --url"
-    : remoteUrl
-      ? "config gateway.remote.url"
-      : forceLoopback
-        ? "forced local loopback"
+    : forceLoopback
+      ? "forced local loopback"
+      : remoteUrl
+        ? "config gateway.remote.url"
         : remoteMisconfigured
           ? "missing gateway.remote.url (fallback local)"
           : "local loopback";
   const remoteFallbackNote = remoteMisconfigured
     ? "Warn: gateway.mode=remote but gateway.remote.url is missing; set gateway.remote.url or switch gateway.mode=local."
     : undefined;
-  const bindDetail = !urlOverride && !remoteUrl ? `Bind: ${bindMode}` : undefined;
+  const bindDetail =
+    !urlOverride && (forceLoopback || !remoteUrl) ? `Bind: ${bindMode}` : undefined;
 
   // Security check: block ALL insecure ws:// to non-loopback addresses (CWE-319, CVSS 9.8)
   // This applies to the FINAL resolved URL, regardless of source (config, CLI override, etc).
@@ -241,8 +242,11 @@ function resolveGatewayCallContext(opts: CallGatewayBaseOptions): ResolvedGatewa
   return { config, configPath, isRemoteMode, remote, urlOverride, remoteUrl, explicitAuth };
 }
 
-function ensureRemoteModeUrlConfigured(context: ResolvedGatewayCallContext): void {
-  if (!context.isRemoteMode || context.urlOverride || context.remoteUrl) {
+function ensureRemoteModeUrlConfigured(
+  context: ResolvedGatewayCallContext,
+  forceLoopback = false,
+): void {
+  if (!context.isRemoteMode || forceLoopback || context.urlOverride || context.remoteUrl) {
     return;
   }
   throw new Error(
@@ -273,17 +277,18 @@ async function resolveGatewayTlsFingerprint(params: {
   url: string;
 }): Promise<string | undefined> {
   const { opts, context, url } = params;
+  const forceLoopback = opts.forceLoopback === true;
   const useLocalTls =
     context.config.gateway?.tls?.enabled === true &&
     !context.urlOverride &&
-    !context.remoteUrl &&
+    (forceLoopback || !context.remoteUrl) &&
     url.startsWith("wss://");
   const tlsRuntime = useLocalTls
     ? await loadGatewayTlsRuntime(context.config.gateway?.tls)
     : undefined;
   const overrideTlsFingerprint = trimToUndefined(opts.tlsFingerprint);
   const remoteTlsFingerprint =
-    context.isRemoteMode && !context.urlOverride && context.remoteUrl
+    !forceLoopback && context.isRemoteMode && !context.urlOverride && context.remoteUrl
       ? trimToUndefined(context.remote?.tlsFingerprint)
       : undefined;
   return (
@@ -403,7 +408,7 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
     errorHint: "Fix: pass --token or --password (or gatewayToken in tools).",
     configPath: context.configPath,
   });
-  ensureRemoteModeUrlConfigured(context);
+  ensureRemoteModeUrlConfigured(context, opts.forceLoopback === true);
   const connectionDetails = buildGatewayConnectionDetails({
     config: context.config,
     url: context.urlOverride,

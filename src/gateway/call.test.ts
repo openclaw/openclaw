@@ -288,6 +288,25 @@ describe("buildGatewayConnectionDetails", () => {
     expect(details.bindDetail).toBe("Bind: tailnet");
   });
 
+  it("forces local loopback even when remote url is configured", () => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        mode: "remote",
+        bind: "tailnet",
+        remote: { url: "wss://remote.example.com/ws" },
+      },
+    });
+    resolveGatewayPort.mockReturnValue(18800);
+    pickPrimaryTailnetIPv4.mockReturnValue("100.64.0.9");
+
+    const details = buildGatewayConnectionDetails({ forceLoopback: true });
+
+    expect(details.url).toBe("ws://127.0.0.1:18800");
+    expect(details.urlSource).toBe("forced local loopback");
+    expect(details.bindDetail).toBe("Bind: tailnet");
+    expect(details.remoteFallbackNote).toBeUndefined();
+  });
+
   it("prefers remote url when configured", () => {
     loadConfig.mockReturnValue({
       gateway: {
@@ -442,6 +461,29 @@ describe("callGateway error details", () => {
         timeoutMs: 10,
       }),
     ).rejects.toThrow("gateway remote mode misconfigured");
+  });
+
+  it("allows remote mode without remote url when forceLoopback is enabled", async () => {
+    startMode = "close";
+    closeCode = 1006;
+    closeReason = "";
+    loadConfig.mockReturnValue({
+      gateway: { mode: "remote", bind: "tailnet", remote: {} },
+    });
+    resolveGatewayPort.mockReturnValue(18789);
+    pickPrimaryTailnetIPv4.mockReturnValue("100.64.0.9");
+
+    let err: Error | null = null;
+    try {
+      await callGateway({ method: "health", forceLoopback: true });
+    } catch (caught) {
+      err = caught as Error;
+    }
+
+    expect(err?.message).toContain("gateway closed (1006");
+    expect(err?.message).toContain("Gateway target: ws://127.0.0.1:18789");
+    expect(err?.message).toContain("Source: forced local loopback");
+    expect(err?.message).toContain("Bind: tailnet");
   });
 });
 
