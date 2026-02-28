@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-cd "$ROOT"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+TMP_REPORT_DIR="$(mktemp -d)"
+trap 'rm -rf "$TMP_REPORT_DIR"' EXIT
 
-mkdir -p reports
+cd "$SCRIPT_DIR"
 
 pass=0
 fail=0
@@ -20,9 +22,9 @@ run_test() {
   fi
 }
 
-run_test "preflight runs" ./contrib/heartbeat-runtime-safety/preflight.sh
-run_test "guard runs" ./contrib/heartbeat-runtime-safety/guard.sh
-run_test "freshness runs" ./contrib/heartbeat-runtime-safety/freshness.sh
+run_test "preflight runs" env HEARTBEAT_ROOT="$REPO_ROOT" HEARTBEAT_REPORT_DIR="$TMP_REPORT_DIR" ./preflight.sh
+run_test "guard runs" env HEARTBEAT_ROOT="$REPO_ROOT" HEARTBEAT_REPORT_DIR="$TMP_REPORT_DIR" ./guard.sh
+run_test "freshness runs" env HEARTBEAT_ROOT="$REPO_ROOT" HEARTBEAT_REPORT_DIR="$TMP_REPORT_DIR" ./freshness.sh
 
 if [[ $fail -gt 0 ]]; then
   echo "Tests failed: $fail"

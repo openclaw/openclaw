@@ -1,18 +1,22 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="${HEARTBEAT_ROOT:-$(pwd)}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT_DEFAULT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+ROOT="${HEARTBEAT_ROOT:-$REPO_ROOT_DEFAULT}"
 REPORT_DIR="${HEARTBEAT_REPORT_DIR:-$ROOT/reports}"
 MAX_AGE_MIN="${MAX_AGE_MIN:-15}"
 mkdir -p "$REPORT_DIR"
 TS=$(date +%Y-%m-%d_%H-%M-%S)
 OUT="$REPORT_DIR/heartbeat-freshness-$TS.md"
 NOW=$(date +%s)
+status="PASS"
 
 check() {
   local label="$1" path="$2"
   if [[ -z "$path" || ! -f "$path" ]]; then
     echo "- ❌ $label: missing"
+    status="FAIL"
     return
   fi
 
@@ -23,6 +27,7 @@ check() {
     :
   else
     echo "- ❌ $label: unable to read mtime ($path)"
+    status="FAIL"
     return
   fi
 
@@ -30,34 +35,34 @@ check() {
   if (( age <= MAX_AGE_MIN )); then
     echo "- ✅ $label: ${age}m"
   else
-    echo "- ⚠️ $label: ${age}m"
+    echo "- ❌ $label: stale (${age}m > ${MAX_AGE_MIN}m)"
+    status="FAIL"
   fi
 }
 
 latest() {
   local pattern="$1"
-  local files=()
-  shopt -s nullglob
-  files=($pattern)
-  shopt -u nullglob
-  if (( ${#files[@]} == 0 )); then
-    echo ""
-    return
-  fi
-  printf '%s\n' "${files[@]}" | xargs ls -1t 2>/dev/null | head -n 1
+  find "$REPORT_DIR" -maxdepth 1 -type f -name "$pattern" -print0 2>/dev/null | xargs -0 ls -1t 2>/dev/null | head -n 1 || true
 }
 
-pre=$(latest "$REPORT_DIR/heartbeat-preflight-*.md")
-gua=$(latest "$REPORT_DIR/heartbeat-guard-*.md")
+pre=$(latest "heartbeat-preflight-*.md")
+gua=$(latest "heartbeat-guard-*.md")
 
 {
   echo "# Heartbeat Freshness"
   echo
   echo "Generated: $(date)"
+  echo "Root: $ROOT"
   echo "Max age: ${MAX_AGE_MIN}m"
   echo
   check preflight "$pre"
   check guard "$gua"
+  echo
+  echo "## Result"
+  echo "- $status"
 } > "$OUT"
 
 echo "$OUT"
+if [[ "$status" != "PASS" ]]; then
+  exit 1
+fi

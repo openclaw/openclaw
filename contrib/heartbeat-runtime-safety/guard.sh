@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="${HEARTBEAT_ROOT:-$(pwd)}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT_DEFAULT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+ROOT="${HEARTBEAT_ROOT:-$REPO_ROOT_DEFAULT}"
 REPORT_DIR="${HEARTBEAT_REPORT_DIR:-$ROOT/reports}"
 mkdir -p "$REPORT_DIR"
 TS=$(date +%Y-%m-%d_%H-%M-%S)
@@ -12,13 +14,14 @@ status="PASS"
   echo "# Heartbeat Failure Guard"
   echo
   echo "Generated: $(date)"
+  echo "Root: $ROOT"
   echo
   echo "## Command Results"
 
-  if (cd "$ROOT" && ./contrib/heartbeat-runtime-safety/preflight.sh >/dev/null 2>&1); then
-    echo "- ✅ ./contrib/heartbeat-runtime-safety/preflight.sh"
+  if HEARTBEAT_ROOT="$ROOT" HEARTBEAT_REPORT_DIR="$REPORT_DIR" "$SCRIPT_DIR/preflight.sh" >/dev/null 2>&1; then
+    echo "- ✅ preflight.sh"
   else
-    echo "- ❌ ./contrib/heartbeat-runtime-safety/preflight.sh"
+    echo "- ❌ preflight.sh"
     status="FAIL"
   fi
 
@@ -28,3 +31,6 @@ status="PASS"
 } > "$OUT"
 
 echo "$OUT"
+if [[ "$status" != "PASS" ]]; then
+  exit 1
+fi
