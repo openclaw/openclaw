@@ -2,10 +2,8 @@ import { html } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import { t } from "../i18n/index.ts";
 import { refreshChat } from "./app-chat.ts";
-import { syncUrlWithSessionKey } from "./app-settings.ts";
 import type { AppViewState } from "./app-view-state.ts";
 import { OpenClawApp } from "./app.ts";
-import { ChatState, loadChatHistory } from "./controllers/chat.ts";
 import { icons } from "./icons.ts";
 import { iconForTab, pathForTab, titleForTab, type Tab } from "./navigation.ts";
 import type { ThemeTransitionContext } from "./theme-transition.ts";
@@ -33,18 +31,7 @@ function resolveSidebarChatSessionKey(state: AppViewState): string {
 }
 
 function resetChatStateForSessionSwitch(state: AppViewState, sessionKey: string) {
-  state.sessionKey = sessionKey;
-  state.chatMessage = "";
-  state.chatStream = null;
-  (state as unknown as OpenClawApp).chatStreamStartedAt = null;
-  state.chatRunId = null;
-  (state as unknown as OpenClawApp).resetToolStream();
-  (state as unknown as OpenClawApp).resetChatScroll();
-  state.applySettings({
-    ...state.settings,
-    sessionKey,
-    lastActiveSessionKey: sessionKey,
-  });
+  state.setSessionKey(sessionKey);
 }
 
 export function renderTab(state: AppViewState, tab: Tab) {
@@ -135,25 +122,7 @@ export function renderChatControls(state: AppViewState) {
           ?disabled=${!state.connected}
           @change=${(e: Event) => {
             const next = (e.target as HTMLSelectElement).value;
-            state.sessionKey = next;
-            state.chatMessage = "";
-            state.chatStream = null;
-            (state as unknown as OpenClawApp).chatStreamStartedAt = null;
-            state.chatRunId = null;
-            (state as unknown as OpenClawApp).resetToolStream();
-            (state as unknown as OpenClawApp).resetChatScroll();
-            state.applySettings({
-              ...state.settings,
-              sessionKey: next,
-              lastActiveSessionKey: next,
-            });
-            void state.loadAssistantIdentity();
-            syncUrlWithSessionKey(
-              state as unknown as Parameters<typeof syncUrlWithSessionKey>[0],
-              next,
-              true,
-            );
-            void loadChatHistory(state as unknown as ChatState);
+            state.setSessionKey(next);
           }}
         >
           ${repeat(

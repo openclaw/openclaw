@@ -356,15 +356,7 @@ export function renderApp(state: AppViewState) {
                 onSettingsChange: (next) => state.applySettings(next),
                 onPasswordChange: (next) => (state.password = next),
                 onSessionKeyChange: (next) => {
-                  state.sessionKey = next;
-                  state.chatMessage = "";
-                  state.resetToolStream();
-                  state.applySettings({
-                    ...state.settings,
-                    sessionKey: next,
-                    lastActiveSessionKey: next,
-                  });
-                  void state.loadAssistantIdentity();
+                  state.setSessionKey(next);
                 },
                 onConnect: () => state.connect(),
                 onRefresh: () => state.loadOverview(),
@@ -1121,23 +1113,7 @@ export function renderApp(state: AppViewState) {
                     ${renderChat({
                       sessionKey: state.sessionKey,
                       onSessionKeyChange: (next) => {
-                        state.sessionKey = next;
-                        state.chatMessage = "";
-                        state.chatAttachments = [];
-                        state.chatStream = null;
-                        state.chatStreamStartedAt = null;
-                        state.chatRunId = null;
-                        state.chatQueue = [];
-                        state.resetToolStream();
-                        state.resetChatScroll();
-                        state.applySettings({
-                          ...state.settings,
-                          sessionKey: next,
-                          lastActiveSessionKey: next,
-                        });
-                        void state.loadAssistantIdentity();
-                        void loadChatHistory(state);
-                        void refreshChatAvatar(state);
+                        state.setSessionKey(next);
                       },
                       thinkingLevel: state.chatThinkingLevel,
                       showThinking,

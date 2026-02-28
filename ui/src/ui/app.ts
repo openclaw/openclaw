@@ -641,6 +641,46 @@ export class OpenClawApp extends LitElement {
     });
   }
 
+  /**
+   * Set session key from a non-tab-switch path (e.g. session dropdown, URL).
+   * Updates active tab record and persists so switching tabs does not revert.
+   */
+  setSessionKey(next: string) {
+    const sessionKey = next.trim();
+    if (!sessionKey || this.sessionKey === sessionKey) {
+      return;
+    }
+    this.sessionKey = sessionKey;
+    this.chatMessage = "";
+    this.chatAttachments = [];
+    this.chatStream = null;
+    this.chatStreamStartedAt = null;
+    this.chatRunId = null;
+    this.chatQueue = [];
+    this.resetToolStream();
+    this.resetChatScroll();
+    this.applySettings({
+      ...this.settings,
+      sessionKey,
+      lastActiveSessionKey: sessionKey,
+    });
+    syncUrlWithSessionKeyInternal(
+      this as unknown as Parameters<typeof syncUrlWithSessionKeyInternal>[0],
+      sessionKey,
+      true,
+    );
+    const activeId = this.activeConversationId;
+    if (activeId) {
+      this.conversationTabs = this.conversationTabs.map((t) =>
+        t.id === activeId ? { ...t, sessionKey } : t,
+      );
+      this.persistConversationTabs();
+    }
+    void this.loadAssistantIdentity();
+    void loadChatHistory(this as unknown as Parameters<typeof loadChatHistory>[0]);
+    void refreshChatAvatar(this as unknown as Parameters<typeof refreshChatAvatar>[0]);
+  }
+
   addConversationTab() {
     const id = generateUUID();
     const sessionKey = `main-${id.slice(0, 8)}`;
