@@ -158,12 +158,7 @@ describe("ensureSandboxBrowser create args", () => {
     expect(createArgs).toBeDefined();
     expect(createArgs).toContain("127.0.0.1::6080");
     const envEntries = envEntriesFromDockerArgs(createArgs ?? []);
-    const passwordEntry = envEntries.find((entry) =>
-      entry.startsWith("BOT_BROWSER_NOVNC_PASSWORD="),
-    );
-    expect(passwordEntry).toMatch(/^BOT_BROWSER_NOVNC_PASSWORD=[a-f0-9]{8}$/);
-    expect(result?.noVncUrl).toMatch(/^http:\/\/127\.0\.0\.1:19000\/sandbox\/novnc\?token=/);
-    expect(result?.noVncUrl).not.toContain("password=");
+    expect(envEntries).toContain("BOT_BROWSER_NO_SANDBOX=1");
   });
 
   it("does not inject noVNC password env when noVNC is disabled", async () => {

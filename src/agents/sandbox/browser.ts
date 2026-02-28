@@ -202,6 +202,10 @@ export async function ensureSandboxBrowser(params: {
     args.push("-e", `BOT_BROWSER_CDP_PORT=${params.cfg.browser.cdpPort}`);
     args.push("-e", `BOT_BROWSER_VNC_PORT=${params.cfg.browser.vncPort}`);
     args.push("-e", `BOT_BROWSER_NOVNC_PORT=${params.cfg.browser.noVncPort}`);
+    // Chromium's setuid/namespace sandbox cannot work inside Docker containers
+    // (PID namespace creation requires privileges Docker does not grant by default).
+    // The container itself provides isolation, so --no-sandbox is safe here.
+    args.push("-e", "BOT_BROWSER_NO_SANDBOX=1");
     args.push(browserImage);
     await execDocker(args);
     await execDocker(["start", containerName]);
