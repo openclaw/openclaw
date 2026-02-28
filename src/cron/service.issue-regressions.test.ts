@@ -1060,12 +1060,19 @@ describe("Cron issue regressions", () => {
   it("respects abort signals while retrying main-session wake-now heartbeat runs", async () => {
     vi.useRealTimers();
     const abortController = new AbortController();
-    const runHeartbeatOnce = vi.fn(
-      async (): Promise<HeartbeatRunResult> => ({
+    let callCount = 0;
+    const runHeartbeatOnce = vi.fn(async (): Promise<HeartbeatRunResult> => {
+      callCount++;
+      // Deterministic abort: trigger on 3rd call instead of relying on
+      // setTimeout precision (Windows timer granularity ~15.6ms caused flakes).
+      if (callCount >= 3) {
+        abortController.abort();
+      }
+      return {
         status: "skipped",
         reason: "requests-in-flight",
-      }),
-    );
+      };
+    });
     const enqueueSystemEvent = vi.fn();
     const requestHeartbeatNow = vi.fn();
     const mainJob: CronJob = {
@@ -1088,14 +1095,10 @@ describe("Cron issue regressions", () => {
       enqueueSystemEvent,
       requestHeartbeatNow,
       runHeartbeatOnce,
-      wakeNowHeartbeatBusyMaxWaitMs: 30,
+      wakeNowHeartbeatBusyMaxWaitMs: 10_000,
       wakeNowHeartbeatBusyRetryDelayMs: 5,
       runIsolatedAgentJob: createDefaultIsolatedRunner(),
     });
-
-    setTimeout(() => {
-      abortController.abort();
-    }, 10);
 
     const result = await executeJobCore(state, mainJob, abortController.signal);
 
