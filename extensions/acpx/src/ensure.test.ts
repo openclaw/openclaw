@@ -1,8 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { ACPX_LOCAL_INSTALL_COMMAND, ACPX_PINNED_VERSION } from "./config.js";
+import {
+  ACPX_LOCAL_INSTALL_COMMAND,
+  ACPX_PINNED_VERSION,
+  buildAcpxLocalInstallCommand,
+} from "./config.js";
 
 const { resolveSpawnFailureMock, spawnAndCollectMock } = vi.hoisted(() => ({
-  resolveSpawnFailureMock: vi.fn(() => null),
+  resolveSpawnFailureMock: vi.fn<
+    (error: unknown, cwd: string) => "missing-command" | "missing-cwd" | null
+  >(() => null),
   spawnAndCollectMock: vi.fn(),
 }));
 
@@ -11,7 +17,7 @@ vi.mock("./runtime-internals/process.js", () => ({
   spawnAndCollect: spawnAndCollectMock,
 }));
 
-import { checkPinnedAcpxVersion, ensurePinnedAcpx } from "./ensure.js";
+import { checkAcpxVersion, ensureAcpx } from "./ensure.js";
 
 describe("acpx ensure", () => {
   beforeEach(() => {
@@ -28,7 +34,7 @@ describe("acpx ensure", () => {
       error: null,
     });
 
-    const result = await checkPinnedAcpxVersion({
+    const result = await checkAcpxVersion({
       command: "/plugin/node_modules/.bin/acpx",
       cwd: "/plugin",
       expectedVersion: ACPX_PINNED_VERSION,
@@ -49,7 +55,7 @@ describe("acpx ensure", () => {
       error: null,
     });
 
-    const result = await checkPinnedAcpxVersion({
+    const result = await checkAcpxVersion({
       command: "/plugin/node_modules/.bin/acpx",
       cwd: "/plugin",
       expectedVersion: ACPX_PINNED_VERSION,
@@ -61,6 +67,27 @@ describe("acpx ensure", () => {
       expectedVersion: ACPX_PINNED_VERSION,
       installedVersion: "0.0.9",
       installCommand: ACPX_LOCAL_INSTALL_COMMAND,
+    });
+  });
+
+  it("accepts any installed version when expectedVersion is unset", async () => {
+    spawnAndCollectMock.mockResolvedValueOnce({
+      stdout: "acpx 9.9.9\n",
+      stderr: "",
+      code: 0,
+      error: null,
+    });
+
+    const result = await checkAcpxVersion({
+      command: "/custom/acpx",
+      cwd: "/custom",
+      expectedVersion: undefined,
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      version: "9.9.9",
+      expectedVersion: undefined,
     });
   });
 
@@ -85,7 +112,7 @@ describe("acpx ensure", () => {
         error: null,
       });
 
-    await ensurePinnedAcpx({
+    await ensureAcpx({
       command: "/plugin/node_modules/.bin/acpx",
       pluginRoot: "/plugin",
       expectedVersion: ACPX_PINNED_VERSION,
@@ -115,11 +142,52 @@ describe("acpx ensure", () => {
       });
 
     await expect(
-      ensurePinnedAcpx({
+      ensureAcpx({
         command: "/plugin/node_modules/.bin/acpx",
         pluginRoot: "/plugin",
         expectedVersion: ACPX_PINNED_VERSION,
       }),
     ).rejects.toThrow("failed to install plugin-local acpx");
+  });
+
+  it("skips install path when allowInstall=false", async () => {
+    spawnAndCollectMock.mockResolvedValueOnce({
+      stdout: "",
+      stderr: "",
+      code: 0,
+      error: new Error("not found"),
+    });
+    resolveSpawnFailureMock.mockReturnValue("missing-command");
+
+    await expect(
+      ensureAcpx({
+        command: "/custom/acpx",
+        pluginRoot: "/plugin",
+        expectedVersion: undefined,
+        allowInstall: false,
+      }),
+    ).rejects.toThrow("acpx command not found at /custom/acpx");
+
+    expect(spawnAndCollectMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses expectedVersion for install command metadata", async () => {
+    spawnAndCollectMock.mockResolvedValueOnce({
+      stdout: "acpx 0.0.9\n",
+      stderr: "",
+      code: 0,
+      error: null,
+    });
+
+    const result = await checkAcpxVersion({
+      command: "/plugin/node_modules/.bin/acpx",
+      cwd: "/plugin",
+      expectedVersion: "0.2.0",
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      installCommand: buildAcpxLocalInstallCommand("0.2.0"),
+    });
   });
 });
