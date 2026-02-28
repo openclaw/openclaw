@@ -1018,6 +1018,62 @@ describe("Cron issue regressions", () => {
     cron.stop();
   });
 
+  it("uses full configured timeout window for manual isolated runs while still applying file edits", async () => {
+    vi.useRealTimers();
+    const store = await makeStorePath();
+    const outFile = path.join(path.dirname(store.storePath), "cron-timeout-edit.txt");
+    const timeoutSeconds = 0.6;
+    const timeoutMs = timeoutSeconds * 1_000;
+
+    const runIsolatedAgentJob = vi.fn(async ({ abortSignal }) => {
+      await fs.appendFile(outFile, "edited-by-cron\n", "utf-8");
+      await new Promise<void>((resolve) => {
+        if (!abortSignal) {
+          resolve();
+          return;
+        }
+        if (abortSignal.aborted) {
+          resolve();
+          return;
+        }
+        abortSignal.addEventListener("abort", () => resolve(), { once: true });
+      });
+      return { status: "ok" as const, summary: "completed after abort" };
+    }) as CronServiceOptions["runIsolatedAgentJob"];
+
+    const cron = await startCronForStore({
+      storePath: store.storePath,
+      runIsolatedAgentJob,
+    });
+
+    const job = await cron.add({
+      name: "manual timeout with file edit",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000, anchorMs: Date.now() },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "agentTurn", message: "edit file", timeoutSeconds },
+      delivery: { mode: "none" },
+    });
+
+    const startedAt = Date.now();
+    const result = await cron.run(job.id, "force");
+    const elapsedMs = Date.now() - startedAt;
+
+    expect(result).toEqual({ ok: true, ran: true });
+    expect(await fs.readFile(outFile, "utf-8")).toContain("edited-by-cron");
+    expect(elapsedMs).toBeGreaterThan(timeoutMs * 0.8);
+    expect(elapsedMs).toBeLessThan(timeoutMs * 2);
+
+    const updated = (await cron.list({ includeDisabled: true })).find(
+      (entry) => entry.id === job.id,
+    );
+    expect(updated?.state.lastStatus).toBe("error");
+    expect(updated?.state.lastError).toContain("timed out");
+
+    cron.stop();
+  });
+
   it("applies timeoutSeconds to startup catch-up isolated executions", async () => {
     vi.useRealTimers();
     const store = await makeStorePath();

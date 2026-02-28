@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { runCliAgent } from "../../agents/cli-runner.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 
 // ---------- mocks ----------
@@ -99,8 +100,12 @@ vi.mock("../../agents/cli-runner.js", () => ({
   runCliAgent: vi.fn(),
 }));
 
+const runCliAgentMock = vi.mocked(runCliAgent);
+
+const getCliSessionIdMock = vi.fn().mockReturnValue(undefined);
+
 vi.mock("../../agents/cli-session.js", () => ({
-  getCliSessionId: vi.fn().mockReturnValue(undefined),
+  getCliSessionId: getCliSessionIdMock,
   setCliSessionId: vi.fn(),
 }));
 
@@ -233,6 +238,9 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
     resolveThinkingDefaultMock.mockReturnValue(undefined);
     getModelRefStatusMock.mockReturnValue({ allowed: false });
     isCliProviderMock.mockReturnValue(false);
+    runCliAgentMock.mockReset();
+    getCliSessionIdMock.mockReset();
+    getCliSessionIdMock.mockReturnValue(undefined);
     logWarnMock.mockReset();
     // Fresh session object per test — prevents mutation leaking between tests
     resolveCronSessionMock.mockReturnValue({
@@ -347,6 +355,30 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
     expect(resolveCronSessionMock).toHaveBeenCalledOnce();
     expect(resolveCronSessionMock.mock.calls[0]?.[0]).toMatchObject({
       forceNew: true,
+    });
+  });
+
+  it("does not resume CLI sessions when isolated cron run forced a new session", async () => {
+    isCliProviderMock.mockReturnValue(true);
+    getCliSessionIdMock.mockReturnValue("legacy-cli-session");
+    runWithModelFallbackMock.mockImplementationOnce(async (params) => {
+      const result = await params.run("claude-cli", "sonnet");
+      return { result, provider: "claude-cli", model: "sonnet", attempts: [] };
+    });
+    runCliAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "cli output" }],
+      meta: {
+        durationMs: 25,
+        agentMeta: { provider: "claude-cli", model: "sonnet", sessionId: "new-cli-session" },
+      },
+    });
+
+    const result = await runCronIsolatedAgentTurn(makeParams());
+
+    expect(result.status).toBe("ok");
+    expect(runCliAgentMock).toHaveBeenCalledOnce();
+    expect(runCliAgentMock.mock.calls[0]?.[0]).toMatchObject({
+      cliSessionId: undefined,
     });
   });
 

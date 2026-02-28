@@ -428,7 +428,13 @@ export async function runCronIsolatedAgentTurn(params: {
           throw new Error(abortReason());
         }
         if (isCliProvider(providerOverride, cfgWithAgentDefaults)) {
-          const cliSessionId = getCliSessionId(cronSession.sessionEntry, providerOverride);
+          // Isolated cron runs force a fresh sessionId per execution. Avoid
+          // reusing provider-native resume ids from older runs, otherwise
+          // backend watchdog profiles can apply "resume" timeout heuristics
+          // that fire earlier than this job's explicit timeout.
+          const cliSessionId = cronSession.isNewSession
+            ? undefined
+            : getCliSessionId(cronSession.sessionEntry, providerOverride);
           return runCliAgent({
             sessionId: cronSession.sessionEntry.sessionId,
             sessionKey: agentSessionKey,
