@@ -197,6 +197,9 @@ export class AcpxRuntime implements AcpRuntime {
       sessionName: state.name,
       cwd: state.cwd,
     });
+    const parseContext = {
+      promptRequestIds: new Set<string>(),
+    };
 
     const cancelOnAbort = async () => {
       await this.cancel({
@@ -238,11 +241,14 @@ export class AcpxRuntime implements AcpRuntime {
     const lines = createInterface({ input: child.stdout });
     try {
       for await (const line of lines) {
-        const parsed = parsePromptEventLine(line);
+        const parsed = parsePromptEventLine(line, parseContext);
         if (!parsed) {
           continue;
         }
         if (parsed.type === "done") {
+          if (sawDone) {
+            continue;
+          }
           sawDone = true;
         }
         if (parsed.type === "error") {
