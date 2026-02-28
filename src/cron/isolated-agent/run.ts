@@ -466,7 +466,10 @@ export async function runCronIsolatedAgentTurn(params: {
           verboseLevel: resolvedVerboseLevel,
           timeoutMs,
           runId: cronSession.sessionEntry.sessionId,
-          requireExplicitMessageTarget: true,
+          // Only enforce an explicit message target when the cron delivery target
+          // was successfully resolved. When resolution fails the agent should not
+          // be blocked by a target it cannot satisfy (#27898).
+          requireExplicitMessageTarget: deliveryRequested && resolvedDelivery.ok,
           disableMessageTool: deliveryRequested,
           abortSignal,
         });
