@@ -4,6 +4,7 @@ export const INPUT_PROVENANCE_KIND_VALUES = [
   "external_user",
   "inter_session",
   "internal_system",
+  "tool_invocation",
 ] as const;
 
 export type InputProvenanceKind = (typeof INPUT_PROVENANCE_KIND_VALUES)[number];
@@ -13,6 +14,8 @@ export type InputProvenance = {
   sourceSessionKey?: string;
   sourceChannel?: string;
   sourceTool?: string;
+  skill?: string;
+  mode?: string;
 };
 
 function normalizeOptionalString(value: unknown): string | undefined {
@@ -42,6 +45,8 @@ export function normalizeInputProvenance(value: unknown): InputProvenance | unde
     sourceSessionKey: normalizeOptionalString(record.sourceSessionKey),
     sourceChannel: normalizeOptionalString(record.sourceChannel),
     sourceTool: normalizeOptionalString(record.sourceTool),
+    skill: normalizeOptionalString(record.skill),
+    mode: normalizeOptionalString(record.mode),
   };
 }
 
@@ -69,11 +74,27 @@ export function isInterSessionInputProvenance(value: unknown): boolean {
   return normalizeInputProvenance(value)?.kind === "inter_session";
 }
 
+/**
+ * Check if provenance indicates a tool invocation from another agent.
+ */
+export function isToolInvocationProvenance(value: unknown): boolean {
+  return normalizeInputProvenance(value)?.kind === "tool_invocation";
+}
+
+/**
+ * Check if provenance indicates any cross-session communication.
+ * Returns true for both inter_session and tool_invocation.
+ */
+export function isCrossSessionProvenance(value: unknown): boolean {
+  const provenance = normalizeInputProvenance(value);
+  return provenance?.kind === "inter_session" || provenance?.kind === "tool_invocation";
+}
+
 export function hasInterSessionUserProvenance(
   message: { role?: unknown; provenance?: unknown } | undefined,
 ): boolean {
   if (!message || message.role !== "user") {
     return false;
   }
-  return isInterSessionInputProvenance(message.provenance);
+  return isCrossSessionProvenance(message.provenance);
 }

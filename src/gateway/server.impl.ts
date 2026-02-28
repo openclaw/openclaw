@@ -576,6 +576,8 @@ export async function startGatewayServer(
     removeChatRun,
     chatAbortControllers,
     toolEventRecipients,
+    skillResponses,
+    skillResponsesBySession,
   } = await createGatewayRuntimeState({
     cfg: cfgAtStart,
     bindHost,
@@ -836,6 +838,8 @@ export async function startGatewayServer(
     markChannelLoggedOut,
     wizardRunner,
     broadcastVoiceWakeChanged,
+    skillResponses,
+    skillResponsesBySession,
   };
 
   // Store the gateway context as a fallback for plugin subagent dispatch
@@ -875,17 +879,17 @@ export async function startGatewayServer(
     log,
     isNixMode,
   });
-  const stopGatewayUpdateCheck = minimalTestGateway
-    ? () => {}
-    : scheduleGatewayUpdateCheck({
-        cfg: cfgAtStart,
-        log,
-        isNixMode,
-        onUpdateAvailableChange: (updateAvailable) => {
-          const payload: GatewayUpdateAvailableEventPayload = { updateAvailable };
-          broadcast(GATEWAY_EVENT_UPDATE_AVAILABLE, payload, { dropIfSlow: true });
-        },
-      });
+  if (!minimalTestGateway) {
+    scheduleGatewayUpdateCheck({
+      cfg: cfgAtStart,
+      log,
+      isNixMode,
+      onUpdateAvailableChange: (updateAvailable) => {
+        const payload: GatewayUpdateAvailableEventPayload = { updateAvailable };
+        broadcast(GATEWAY_EVENT_UPDATE_AVAILABLE, payload, { dropIfSlow: true });
+      },
+    });
+  }
   const tailscaleCleanup = minimalTestGateway
     ? null
     : await startGatewayTailscaleExposure({
@@ -996,7 +1000,6 @@ export async function startGatewayServer(
     pluginServices,
     cron,
     heartbeatRunner,
-    updateCheckStop: stopGatewayUpdateCheck,
     nodePresenceTimers,
     broadcast,
     tickInterval,

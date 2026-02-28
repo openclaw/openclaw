@@ -24,6 +24,7 @@ import {
 } from "./server-chat.js";
 import { MAX_PAYLOAD_BYTES } from "./server-constants.js";
 import { attachGatewayUpgradeHandler, createGatewayHttpServer } from "./server-http.js";
+import type { SkillResponse } from "./server-methods/types.js";
 import type { DedupeEntry } from "./server-shared.js";
 import { createGatewayHooksRequestHandler } from "./server/hooks.js";
 import { listenGatewayHttpServer } from "./server/http-listen.js";
@@ -85,6 +86,10 @@ export async function createGatewayRuntimeState(params: {
   ) => ChatRunEntry | undefined;
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
   toolEventRecipients: ReturnType<typeof createToolEventRecipientRegistry>;
+  /** RFC-A2A-RESPONSE-ROUTING: Store for pending skill responses keyed by correlationId */
+  skillResponses: Map<string, SkillResponse>;
+  /** RFC-A2A-RESPONSE-ROUTING: Store for skill responses keyed by sessionKey (for session-scoped retrieval) */
+  skillResponsesBySession: Map<string, SkillResponse[]>;
 }> {
   let canvasHost: CanvasHostHandler | null = null;
   if (params.canvasHostEnabled) {
@@ -208,6 +213,9 @@ export async function createGatewayRuntimeState(params: {
   const removeChatRun = chatRunRegistry.remove;
   const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
   const toolEventRecipients = createToolEventRecipientRegistry();
+  // RFC-A2A-RESPONSE-ROUTING: Skill response storage for async A2A communication
+  const skillResponses = new Map<string, SkillResponse>();
+  const skillResponsesBySession = new Map<string, SkillResponse[]>();
 
   return {
     canvasHost,
@@ -227,5 +235,7 @@ export async function createGatewayRuntimeState(params: {
     removeChatRun,
     chatAbortControllers,
     toolEventRecipients,
+    skillResponses,
+    skillResponsesBySession,
   };
 }
