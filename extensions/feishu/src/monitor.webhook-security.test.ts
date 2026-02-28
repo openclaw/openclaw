@@ -23,7 +23,13 @@ vi.mock("./client.js", () => ({
   createEventDispatcher: vi.fn(() => ({ register: vi.fn() })),
 }));
 
-import { monitorFeishuProvider, stopFeishuMonitor } from "./monitor.js";
+import {
+  clearFeishuWebhookRateLimitStateForTest,
+  getFeishuWebhookRateLimitStateSizeForTest,
+  isWebhookRateLimitedForTest,
+  monitorFeishuProvider,
+  stopFeishuMonitor,
+} from "./monitor.js";
 
 async function getFreePort(): Promise<number> {
   const server = createServer();
@@ -78,7 +84,43 @@ function buildConfig(params: {
   } as ClawdbotConfig;
 }
 
+async function withRunningWebhookMonitor(
+  params: {
+    accountId: string;
+    path: string;
+    verificationToken: string;
+  },
+  run: (url: string) => Promise<void>,
+) {
+  const port = await getFreePort();
+  const cfg = buildConfig({
+    accountId: params.accountId,
+    path: params.path,
+    port,
+    verificationToken: params.verificationToken,
+  });
+
+  const abortController = new AbortController();
+  const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+  const monitorPromise = monitorFeishuProvider({
+    config: cfg,
+    runtime,
+    abortSignal: abortController.signal,
+  });
+
+  const url = `http://127.0.0.1:${port}${params.path}`;
+  await waitUntilServerReady(url);
+
+  try {
+    await run(url);
+  } finally {
+    abortController.abort();
+    await monitorPromise;
+  }
+}
+
 afterEach(() => {
+  clearFeishuWebhookRateLimitStateForTest();
   stopFeishuMonitor();
 });
 
@@ -99,76 +141,69 @@ describe("Feishu webhook security hardening", () => {
 
   it("returns 415 for POST requests without json content type", async () => {
     probeFeishuMock.mockResolvedValue({ ok: true, botOpenId: "bot_open_id" });
-    const port = await getFreePort();
-    const path = "/hook-content-type";
-    const cfg = buildConfig({
-      accountId: "content-type",
-      path,
-      port,
-      verificationToken: "verify_token",
-    });
+    await withRunningWebhookMonitor(
+      {
+        accountId: "content-type",
+        path: "/hook-content-type",
+        verificationToken: "verify_token",
+      },
+      async (url) => {
+        const response = await fetch(url, {
+          method: "POST",
+          headers: { "content-type": "text/plain" },
+          body: "{}",
+        });
 
-    const abortController = new AbortController();
-    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
-    const monitorPromise = monitorFeishuProvider({
-      config: cfg,
-      runtime,
-      abortSignal: abortController.signal,
-    });
-
-    await waitUntilServerReady(`http://127.0.0.1:${port}${path}`);
-
-    const response = await fetch(`http://127.0.0.1:${port}${path}`, {
-      method: "POST",
-      headers: { "content-type": "text/plain" },
-      body: "{}",
-    });
-
-    expect(response.status).toBe(415);
-    expect(await response.text()).toBe("Unsupported Media Type");
-
-    abortController.abort();
-    await monitorPromise;
+        expect(response.status).toBe(415);
+        expect(await response.text()).toBe("Unsupported Media Type");
+      },
+    );
   });
 
   it("rate limits webhook burst traffic with 429", async () => {
     probeFeishuMock.mockResolvedValue({ ok: true, botOpenId: "bot_open_id" });
-    const port = await getFreePort();
-    const path = "/hook-rate-limit";
-    const cfg = buildConfig({
-      accountId: "rate-limit",
-      path,
-      port,
-      verificationToken: "verify_token",
-    });
+    await withRunningWebhookMonitor(
+      {
+        accountId: "rate-limit",
+        path: "/hook-rate-limit",
+        verificationToken: "verify_token",
+      },
+      async (url) => {
+        let saw429 = false;
+        for (let i = 0; i < 130; i += 1) {
+          const response = await fetch(url, {
+            method: "POST",
+            headers: { "content-type": "text/plain" },
+            body: "{}",
+          });
+          if (response.status === 429) {
+            saw429 = true;
+            expect(await response.text()).toBe("Too Many Requests");
+            break;
+          }
+        }
 
-    const abortController = new AbortController();
-    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
-    const monitorPromise = monitorFeishuProvider({
-      config: cfg,
-      runtime,
-      abortSignal: abortController.signal,
-    });
+        expect(saw429).toBe(true);
+      },
+    );
+  });
 
-    await waitUntilServerReady(`http://127.0.0.1:${port}${path}`);
-
-    let saw429 = false;
-    for (let i = 0; i < 130; i += 1) {
-      const response = await fetch(`http://127.0.0.1:${port}${path}`, {
-        method: "POST",
-        headers: { "content-type": "text/plain" },
-        body: "{}",
-      });
-      if (response.status === 429) {
-        saw429 = true;
-        expect(await response.text()).toBe("Too Many Requests");
-        break;
-      }
+  it("caps tracked webhook rate-limit keys to prevent unbounded growth", () => {
+    const now = 1_000_000;
+    for (let i = 0; i < 4_500; i += 1) {
+      isWebhookRateLimitedForTest(`/feishu-rate-limit:key-${i}`, now);
     }
+    expect(getFeishuWebhookRateLimitStateSizeForTest()).toBeLessThanOrEqual(4_096);
+  });
 
-    expect(saw429).toBe(true);
+  it("prunes stale webhook rate-limit state after window elapses", () => {
+    const now = 2_000_000;
+    for (let i = 0; i < 100; i += 1) {
+      isWebhookRateLimitedForTest(`/feishu-rate-limit-stale:key-${i}`, now);
+    }
+    expect(getFeishuWebhookRateLimitStateSizeForTest()).toBe(100);
 
-    abortController.abort();
-    await monitorPromise;
+    isWebhookRateLimitedForTest("/feishu-rate-limit-stale:fresh", now + 60_001);
+    expect(getFeishuWebhookRateLimitStateSizeForTest()).toBe(1);
   });
 });

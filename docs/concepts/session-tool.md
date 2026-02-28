@@ -152,7 +152,7 @@ Parameters:
 - `agentId?` (optional; spawn under another agent id if allowed)
 - `model?` (optional; overrides the sub-agent model; invalid values error)
 - `thinking?` (optional; overrides thinking level for the sub-agent run)
-- `runTimeoutSeconds?` (default 0; when set, aborts the sub-agent run after N seconds)
+- `runTimeoutSeconds?` (defaults to `agents.defaults.subagents.runTimeoutSeconds` when set, otherwise `0`; when set, aborts the sub-agent run after N seconds)
 - `thread?` (default false; request thread-bound routing for this spawn when supported by the channel/plugin)
 - `mode?` (`run|session`; defaults to `run`, but defaults to `session` when `thread=true`; `mode="session"` requires `thread=true`)
 - `cleanup?` (`delete|keep`, default `keep`)

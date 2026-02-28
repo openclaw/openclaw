@@ -75,6 +75,43 @@ export async function isRequesterSpawnedSessionVisible(params: {
   return keys.has(params.targetSessionKey);
 }
 
+export function shouldVerifyRequesterSpawnedSessionVisibility(params: {
+  requesterSessionKey: string;
+  targetSessionKey: string;
+  restrictToSpawned: boolean;
+  resolvedViaSessionId: boolean;
+}): boolean {
+  return (
+    params.restrictToSpawned &&
+    !params.resolvedViaSessionId &&
+    params.requesterSessionKey !== params.targetSessionKey
+  );
+}
+
+export async function isResolvedSessionVisibleToRequester(params: {
+  requesterSessionKey: string;
+  targetSessionKey: string;
+  restrictToSpawned: boolean;
+  resolvedViaSessionId: boolean;
+  limit?: number;
+}): Promise<boolean> {
+  if (
+    !shouldVerifyRequesterSpawnedSessionVisibility({
+      requesterSessionKey: params.requesterSessionKey,
+      targetSessionKey: params.targetSessionKey,
+      restrictToSpawned: params.restrictToSpawned,
+      resolvedViaSessionId: params.resolvedViaSessionId,
+    })
+  ) {
+    return true;
+  }
+  return await isRequesterSpawnedSessionVisible({
+    requesterSessionKey: params.requesterSessionKey,
+    targetSessionKey: params.targetSessionKey,
+    limit: params.limit,
+  });
+}
+
 const SESSION_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export function looksLikeSessionId(value: string): boolean {

@@ -14,18 +14,21 @@ import { resolveControlCommandGate } from "../../channels/command-gating.js";
 import { logInboundDrop } from "../../channels/logging.js";
 import { resolveMentionGatingWithBypass } from "../../channels/mention-gating.js";
 import { loadConfig } from "../../config/config.js";
+import { isDangerousNameMatchingEnabled } from "../../config/dangerous-name-matching.js";
 import { logVerbose, shouldLogVerbose } from "../../globals.js";
 import { recordChannelActivity } from "../../infra/channel-activity.js";
+import {
+  getSessionBindingService,
+  type SessionBindingRecord,
+} from "../../infra/outbound/session-binding-service.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { logDebug } from "../../logger.js";
 import { getChildLogger } from "../../logging.js";
 import { buildPairingReply } from "../../pairing/pairing-messages.js";
-import {
-  readChannelAllowFromStore,
-  upsertChannelPairingRequest,
-} from "../../pairing/pairing-store.js";
+import { upsertChannelPairingRequest } from "../../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
-import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { DEFAULT_ACCOUNT_ID, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { readStoreAllowFromForDmPolicy } from "../../security/dm-policy-shared.js";
 import { fetchPluralKitMessageInfo } from "../pluralkit.js";
 import { sendMessageDiscord } from "../send.js";
 import {
@@ -56,10 +59,7 @@ import {
 } from "./message-utils.js";
 import { resolveDiscordSenderIdentity, resolveDiscordWebhookId } from "./sender-identity.js";
 import { resolveDiscordSystemEvent } from "./system-events.js";
-import {
-  isRecentlyUnboundThreadWebhookMessage,
-  type ThreadBindingRecord,
-} from "./thread-bindings.js";
+import { isRecentlyUnboundThreadWebhookMessage } from "./thread-bindings.js";
 import { resolveDiscordThreadChannel, resolveDiscordThreadParentInfo } from "./threading.js";
 
 export type {
@@ -81,13 +81,16 @@ export function shouldIgnoreBoundThreadWebhookMessage(params: {
   accountId?: string;
   threadId?: string;
   webhookId?: string | null;
-  threadBinding?: ThreadBindingRecord;
+  threadBinding?: SessionBindingRecord;
 }): boolean {
   const webhookId = params.webhookId?.trim() || "";
   if (!webhookId) {
     return false;
   }
-  const boundWebhookId = params.threadBinding?.webhookId?.trim() || "";
+  const boundWebhookId =
+    typeof params.threadBinding?.metadata?.webhookId === "string"
+      ? params.threadBinding.metadata.webhookId.trim()
+      : "";
   if (!boundWebhookId) {
     const threadId = params.threadId?.trim() || "";
     if (!threadId) {
@@ -171,6 +174,7 @@ export async function preflightDiscordMessage(
   }
 
   const dmPolicy = params.discordConfig?.dmPolicy ?? params.discordConfig?.dm?.policy ?? "pairing";
+  const resolvedAccountId = params.accountId ?? DEFAULT_ACCOUNT_ID;
   let commandAuthorized = true;
   if (isDirectMessage) {
     if (dmPolicy === "disabled") {
@@ -178,7 +182,11 @@ export async function preflightDiscordMessage(
       return null;
     }
     if (dmPolicy !== "open") {
-      const storeAllowFrom = await readChannelAllowFromStore("discord").catch(() => []);
+      const storeAllowFrom = await readStoreAllowFromForDmPolicy({
+        provider: "discord",
+        accountId: resolvedAccountId,
+        dmPolicy,
+      });
       const effectiveAllowFrom = [...(params.allowFrom ?? []), ...storeAllowFrom];
       const allowList = normalizeDiscordAllowList(effectiveAllowFrom, ["discord:", "user:", "pk:"]);
       const allowMatch = allowList
@@ -189,6 +197,7 @@ export async function preflightDiscordMessage(
               name: sender.name,
               tag: sender.tag,
             },
+            allowNameMatching: isDangerousNameMatchingEnabled(params.discordConfig),
           })
         : { allowed: false };
       const allowMatchMeta = formatAllowlistMatchMeta(allowMatch);
@@ -199,6 +208,7 @@ export async function preflightDiscordMessage(
           const { code, created } = await upsertChannelPairingRequest({
             channel: "discord",
             id: author.id,
+            accountId: resolvedAccountId,
             meta: {
               tag: formatDiscordUserTag(author),
               name: author.username ?? undefined,
@@ -293,9 +303,15 @@ export async function preflightDiscordMessage(
     // Pass parent peer for thread binding inheritance
     parentPeer: earlyThreadParentId ? { kind: "channel", id: earlyThreadParentId } : undefined,
   });
-  const threadBinding = earlyThreadChannel
-    ? params.threadBindings.getByThreadId(messageChannelId)
-    : undefined;
+  let threadBinding: SessionBindingRecord | undefined;
+  if (earlyThreadChannel) {
+    threadBinding =
+      getSessionBindingService().resolveByConversation({
+        channel: "discord",
+        accountId: params.accountId,
+        conversationId: messageChannelId,
+      }) ?? undefined;
+  }
   if (
     shouldIgnoreBoundThreadWebhookMessage({
       accountId: params.accountId,
@@ -562,6 +578,7 @@ export async function preflightDiscordMessage(
     guildInfo,
     memberRoleIds,
     sender,
+    allowNameMatching: isDangerousNameMatchingEnabled(params.discordConfig),
   });
 
   if (!isDirectMessage) {
@@ -571,11 +588,15 @@ export async function preflightDiscordMessage(
       "pk:",
     ]);
     const ownerOk = ownerAllowList
-      ? allowListMatches(ownerAllowList, {
-          id: sender.id,
-          name: sender.name,
-          tag: sender.tag,
-        })
+      ? allowListMatches(
+          ownerAllowList,
+          {
+            id: sender.id,
+            name: sender.name,
+            tag: sender.tag,
+          },
+          { allowNameMatching: isDangerousNameMatchingEnabled(params.discordConfig) },
+        )
       : false;
     const useAccessGroups = params.cfg.commands?.useAccessGroups !== false;
     const commandGate = resolveControlCommandGate({
@@ -725,5 +746,6 @@ export async function preflightDiscordMessage(
     canDetectMention,
     historyEntry,
     threadBindings: params.threadBindings,
+    discordRestFetch: params.discordRestFetch,
   };
 }

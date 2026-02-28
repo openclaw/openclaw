@@ -68,6 +68,10 @@ export function isRenderablePayload(payload: ReplyPayload): boolean {
   );
 }
 
+export function shouldSuppressReasoningPayload(payload: ReplyPayload): boolean {
+  return payload.isReasoning === true;
+}
+
 export function applyReplyThreading(params: {
   payloads: ReplyPayload[];
   replyToMode: ReplyToMode;
@@ -100,16 +104,35 @@ export function filterMessagingToolMediaDuplicates(params: {
   payloads: ReplyPayload[];
   sentMediaUrls: string[];
 }): ReplyPayload[] {
+  const normalizeMediaForDedupe = (value: string): string => {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return "";
+    }
+    if (!trimmed.toLowerCase().startsWith("file://")) {
+      return trimmed;
+    }
+    try {
+      const parsed = new URL(trimmed);
+      if (parsed.protocol === "file:") {
+        return decodeURIComponent(parsed.pathname || "");
+      }
+    } catch {
+      // Keep fallback below for non-URL-like inputs.
+    }
+    return trimmed.replace(/^file:\/\//i, "");
+  };
+
   const { payloads, sentMediaUrls } = params;
   if (sentMediaUrls.length === 0) {
     return payloads;
   }
-  const sentSet = new Set(sentMediaUrls);
+  const sentSet = new Set(sentMediaUrls.map(normalizeMediaForDedupe).filter(Boolean));
   return payloads.map((payload) => {
     const mediaUrl = payload.mediaUrl;
     const mediaUrls = payload.mediaUrls;
-    const stripSingle = mediaUrl && sentSet.has(mediaUrl);
-    const filteredUrls = mediaUrls?.filter((u) => !sentSet.has(u));
+    const stripSingle = mediaUrl && sentSet.has(normalizeMediaForDedupe(mediaUrl));
+    const filteredUrls = mediaUrls?.filter((u) => !sentSet.has(normalizeMediaForDedupe(u)));
     if (!stripSingle && (!mediaUrls || filteredUrls?.length === mediaUrls.length)) {
       return payload; // No change
     }

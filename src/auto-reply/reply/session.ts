@@ -28,13 +28,63 @@ import {
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import { archiveSessionTranscripts } from "../../gateway/session-utils.fs.js";
 import { deliverSessionMaintenanceWarning } from "../../infra/session-maintenance-warning.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
+import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.js";
+import {
+  INTERNAL_MESSAGE_CHANNEL,
+  isDeliverableMessageChannel,
+  normalizeMessageChannel,
+} from "../../utils/message-channel.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 import { normalizeInboundTextNewlines } from "./inbound-text.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
+
+const log = createSubsystemLogger("session-init");
+
+function resolveSessionKeyChannelHint(sessionKey?: string): string | undefined {
+  const parsed = parseAgentSessionKey(sessionKey);
+  if (!parsed?.rest) {
+    return undefined;
+  }
+  const head = parsed.rest.split(":")[0]?.trim().toLowerCase();
+  if (!head || head === "main" || head === "cron" || head === "subagent" || head === "acp") {
+    return undefined;
+  }
+  return normalizeMessageChannel(head);
+}
+
+function resolveLastChannelRaw(params: {
+  originatingChannelRaw?: string;
+  persistedLastChannel?: string;
+  sessionKey?: string;
+}): string | undefined {
+  const originatingChannel = normalizeMessageChannel(params.originatingChannelRaw);
+  const persistedChannel = normalizeMessageChannel(params.persistedLastChannel);
+  const sessionKeyChannelHint = resolveSessionKeyChannelHint(params.sessionKey);
+  let resolved = params.originatingChannelRaw || params.persistedLastChannel;
+  // Internal webchat/system turns should not overwrite previously known external
+  // delivery routes (or explicit channel hints encoded in the session key).
+  if (originatingChannel === INTERNAL_MESSAGE_CHANNEL) {
+    if (
+      persistedChannel &&
+      persistedChannel !== INTERNAL_MESSAGE_CHANNEL &&
+      isDeliverableMessageChannel(persistedChannel)
+    ) {
+      resolved = persistedChannel;
+    } else if (
+      sessionKeyChannelHint &&
+      sessionKeyChannelHint !== INTERNAL_MESSAGE_CHANNEL &&
+      isDeliverableMessageChannel(sessionKeyChannelHint)
+    ) {
+      resolved = sessionKeyChannelHint;
+    }
+  }
+  return resolved;
+}
 
 export type SessionInitResult = {
   sessionCtx: TemplateContext;
@@ -54,6 +104,21 @@ export type SessionInitResult = {
   bodyStripped?: string;
   triggerBodyNormalized: string;
 };
+
+/**
+ * Default max parent token count beyond which thread/session parent forking is skipped.
+ * This prevents new thread sessions from inheriting near-full parent context.
+ * See #26905.
+ */
+const DEFAULT_PARENT_FORK_MAX_TOKENS = 100_000;
+
+function resolveParentForkMaxTokens(cfg: OpenClawConfig): number {
+  const configured = cfg.session?.parentForkMaxTokens;
+  if (typeof configured === "number" && Number.isFinite(configured) && configured >= 0) {
+    return Math.floor(configured);
+  }
+  return DEFAULT_PARENT_FORK_MAX_TOKENS;
+}
 
 function forkSessionFromParent(params: {
   parentEntry: SessionEntry;
@@ -121,6 +186,7 @@ export async function initSessionState(params: {
   const resetTriggers = sessionCfg?.resetTriggers?.length
     ? sessionCfg.resetTriggers
     : DEFAULT_RESET_TRIGGERS;
+  const parentForkMaxTokens = resolveParentForkMaxTokens(cfg);
   const sessionScope = sessionCfg?.scope ?? "per-sender";
   const storePath = resolveStorePath(sessionCfg?.store, { agentId });
 
@@ -147,6 +213,7 @@ export async function initSessionState(params: {
   let persistedTtsAuto: TtsAutoMode | undefined;
   let persistedModelOverride: string | undefined;
   let persistedProviderOverride: string | undefined;
+  let persistedLabel: string | undefined;
 
   const normalizedChatType = normalizeChatType(ctx.ChatType);
   const isGroup =
@@ -244,6 +311,7 @@ export async function initSessionState(params: {
     persistedTtsAuto = entry.ttsAuto;
     persistedModelOverride = entry.modelOverride;
     persistedProviderOverride = entry.providerOverride;
+    persistedLabel = entry.label;
   } else {
     sessionId = crypto.randomUUID();
     isNewSession = true;
@@ -259,12 +327,18 @@ export async function initSessionState(params: {
       persistedTtsAuto = entry.ttsAuto;
       persistedModelOverride = entry.modelOverride;
       persistedProviderOverride = entry.providerOverride;
+      persistedLabel = entry.label;
     }
   }
 
   const baseEntry = !isNewSession && freshEntry ? entry : undefined;
   // Track the originating channel/to for announce routing (subagent announce-back).
-  const lastChannelRaw = (ctx.OriginatingChannel as string | undefined) || baseEntry?.lastChannel;
+  const originatingChannelRaw = ctx.OriginatingChannel as string | undefined;
+  const lastChannelRaw = resolveLastChannelRaw({
+    originatingChannelRaw,
+    persistedLastChannel: baseEntry?.lastChannel,
+    sessionKey,
+  });
   const lastToRaw = ctx.OriginatingTo || ctx.To || baseEntry?.lastTo;
   const lastAccountIdRaw = ctx.AccountId || baseEntry?.lastAccountId;
   // Only fall back to persisted threadId for thread sessions.  Non-thread
@@ -297,6 +371,7 @@ export async function initSessionState(params: {
     responseUsage: baseEntry?.responseUsage,
     modelOverride: persistedModelOverride ?? baseEntry?.modelOverride,
     providerOverride: persistedProviderOverride ?? baseEntry?.providerOverride,
+    label: persistedLabel ?? baseEntry?.label,
     sendPolicy: baseEntry?.sendPolicy,
     queueMode: baseEntry?.queueMode,
     queueDebounceMs: baseEntry?.queueDebounceMs,
@@ -333,26 +408,40 @@ export async function initSessionState(params: {
     sessionEntry.displayName = threadLabel;
   }
   const parentSessionKey = ctx.ParentSessionKey?.trim();
+  const alreadyForked = sessionEntry.forkedFromParent === true;
   if (
-    isNewSession &&
     parentSessionKey &&
     parentSessionKey !== sessionKey &&
-    sessionStore[parentSessionKey]
+    sessionStore[parentSessionKey] &&
+    !alreadyForked
   ) {
-    console.warn(
-      `[session-init] forking from parent session: parentKey=${parentSessionKey} → sessionKey=${sessionKey} ` +
-        `parentTokens=${sessionStore[parentSessionKey].totalTokens ?? "?"}`,
-    );
-    const forked = forkSessionFromParent({
-      parentEntry: sessionStore[parentSessionKey],
-      agentId,
-      sessionsDir: path.dirname(storePath),
-    });
-    if (forked) {
-      sessionId = forked.sessionId;
-      sessionEntry.sessionId = forked.sessionId;
-      sessionEntry.sessionFile = forked.sessionFile;
-      console.warn(`[session-init] forked session created: file=${forked.sessionFile}`);
+    const parentTokens = sessionStore[parentSessionKey].totalTokens ?? 0;
+    if (parentForkMaxTokens > 0 && parentTokens > parentForkMaxTokens) {
+      // Parent context is too large — forking would create a thread session
+      // that immediately overflows the model's context window. Start fresh
+      // instead and mark as forked to prevent re-attempts. See #26905.
+      log.warn(
+        `skipping parent fork (parent too large): parentKey=${parentSessionKey} → sessionKey=${sessionKey} ` +
+          `parentTokens=${parentTokens} maxTokens=${parentForkMaxTokens}`,
+      );
+      sessionEntry.forkedFromParent = true;
+    } else {
+      log.warn(
+        `forking from parent session: parentKey=${parentSessionKey} → sessionKey=${sessionKey} ` +
+          `parentTokens=${parentTokens}`,
+      );
+      const forked = forkSessionFromParent({
+        parentEntry: sessionStore[parentSessionKey],
+        agentId,
+        sessionsDir: path.dirname(storePath),
+      });
+      if (forked) {
+        sessionId = forked.sessionId;
+        sessionEntry.sessionId = forked.sessionId;
+        sessionEntry.sessionFile = forked.sessionFile;
+        sessionEntry.forkedFromParent = true;
+        log.warn(`forked session created: file=${forked.sessionFile}`);
+      }
     }
   }
   const fallbackSessionFile = !sessionEntry.sessionFile
