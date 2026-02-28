@@ -331,9 +331,9 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       reason: string;
     };
   }): boolean {
-    if (params.hasBodyContent) {
-      return false;
-    }
+    // Process all valid reactions regardless of additional content
+    // Previously, reactions with hasBodyContent were rejected and fell through
+    // to regular message processing, causing them to appear as <media:unknown>
     if (params.reaction.isRemove) {
       return true; // Ignore reaction removals
     }
