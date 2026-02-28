@@ -282,12 +282,14 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
       polls: true,
       reactions: true,
       media: true,
+      blockStreaming: true,
     },
     commands: {
       enforceOwnerForCommands: true,
       skipWhenConfigEmpty: true,
     },
     outbound: DEFAULT_OUTBOUND_TEXT_CHUNK_LIMIT_4000,
+    streaming: DEFAULT_BLOCK_STREAMING_COALESCE,
     config: {
       resolveAllowFrom: ({ cfg, accountId }) =>
         resolveWhatsAppAccount({ cfg, accountId }).allowFrom ?? [],
