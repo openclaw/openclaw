@@ -33,6 +33,56 @@ const skillsLogger = createSubsystemLogger("skills");
 const skillCommandDebugOnce = new Set<string>();
 
 /**
+ * Fallback parser for SKILL.md when pi-coding-agent fails to parse YAML
+ * (e.g., when description contains colons which cause YAML parsing errors).
+ * This extracts name and description using regex to avoid YAML parsing issues.
+ */
+function parseSkillMetadataFallback(skillDir: string): Skill | null {
+  const skillMdPath = path.join(skillDir, "SKILL.md");
+  try {
+    const content = fs.readFileSync(skillMdPath, "utf-8");
+    // Extract frontmatter block between --- and ---
+    const frontmatterMatch = content.match(/^---\n([\s\S]*?)\n---/);
+    if (!frontmatterMatch) {
+      return null;
+    }
+    const frontmatter = frontmatterMatch[1];
+    // Extract name and description using regex that handles colons in values
+    // This is a simple parser that doesn't rely on YAML
+    const lines = frontmatter.split("\n");
+    let name: string | undefined;
+    let description: string | undefined;
+    for (const line of lines) {
+      // Match key: value pattern - the value extends to end of line
+      const match = line.match(/^(\w+):\s*(.*)$/);
+      if (match) {
+        const key = match[1].trim();
+        const value = match[2].trim();
+        if (key === "name" && !name) {
+          name = value;
+        } else if (key === "description" && !description) {
+          description = value;
+        }
+      }
+    }
+    if (!name) {
+      return null;
+    }
+    // Use directory name as fallback for name if not found in frontmatter
+    const dirName = path.basename(skillDir);
+    return {
+      name: name || dirName,
+      description: description || "",
+      filePath: skillMdPath,
+      baseDir: skillDir,
+      source: "openclaw-workspace",
+    } as Skill;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Replace the user's home directory prefix with `~` in skill file paths
  * to reduce system prompt token usage. Models understand `~` expansion,
  * and the read tool resolves `~` to the home directory.
@@ -253,7 +303,16 @@ function loadSkillEntries(
       }
 
       const loaded = loadSkillsFromDir({ dir: baseDir, source: params.source });
-      return unwrapLoadedSkills(loaded);
+      let skills = unwrapLoadedSkills(loaded);
+      // Fallback: if pi-coding-agent failed to parse (e.g., due to colons in description),
+      // try manual parsing to extract at least name and description
+      if (skills.length === 0) {
+        const fallback = parseSkillMetadataFallback(baseDir);
+        if (fallback) {
+          skills = [fallback];
+        }
+      }
+      return skills;
     }
 
     const childDirs = listChildDirectories(baseDir);
@@ -304,7 +363,16 @@ function loadSkillEntries(
       }
 
       const loaded = loadSkillsFromDir({ dir: skillDir, source: params.source });
-      loadedSkills.push(...unwrapLoadedSkills(loaded));
+      let skills = unwrapLoadedSkills(loaded);
+      // Fallback: if pi-coding-agent failed to parse (e.g., due to colons in description),
+      // try manual parsing to extract at least name and description
+      if (skills.length === 0) {
+        const fallback = parseSkillMetadataFallback(skillDir);
+        if (fallback) {
+          skills = [fallback];
+        }
+      }
+      loadedSkills.push(...skills);
 
       if (loadedSkills.length >= limits.maxSkillsLoadedPerSource) {
         break;
