@@ -33,8 +33,13 @@ export function listFeishuAccountIds(cfg: ClawdbotConfig): string[] {
 
 /**
  * Resolve the default account ID.
+ * Honors channels.feishu.defaultAccount if configured.
  */
 export function resolveDefaultFeishuAccountId(cfg: ClawdbotConfig): string {
+  const feishuConfig = cfg.channels?.feishu as FeishuConfig | undefined;
+  if (feishuConfig?.defaultAccount?.trim()) {
+    return feishuConfig.defaultAccount.trim();
+  }
   const ids = listFeishuAccountIds(cfg);
   if (ids.includes(DEFAULT_ACCOUNT_ID)) {
     return DEFAULT_ACCOUNT_ID;
@@ -63,8 +68,8 @@ function resolveAccountConfig(
 function mergeFeishuAccountConfig(cfg: ClawdbotConfig, accountId: string): FeishuConfig {
   const feishuCfg = cfg.channels?.feishu as FeishuConfig | undefined;
 
-  // Extract base config (exclude accounts field to avoid recursion)
-  const { accounts: _ignored, ...base } = feishuCfg ?? {};
+  // Extract base config (exclude accounts and defaultAccount fields to avoid recursion and incorrect inheritance)
+  const { accounts: _ignored, defaultAccount: _ignored2, ...base } = feishuCfg ?? {};
 
   // Get account-specific overrides
   const account = resolveAccountConfig(cfg, accountId) ?? {};
@@ -99,12 +104,17 @@ export function resolveFeishuCredentials(cfg?: FeishuConfig): {
 
 /**
  * Resolve a complete Feishu account with merged config.
+ * When accountId is not provided, uses resolveDefaultFeishuAccountId to honor
+ * channels.feishu.defaultAccount configuration.
  */
 export function resolveFeishuAccount(params: {
   cfg: ClawdbotConfig;
   accountId?: string | null;
 }): ResolvedFeishuAccount {
-  const accountId = normalizeAccountId(params.accountId);
+  // If accountId is explicitly provided, normalize it; otherwise use configured default
+  const accountId = params.accountId?.trim()
+    ? normalizeAccountId(params.accountId)
+    : resolveDefaultFeishuAccountId(params.cfg);
   const feishuCfg = params.cfg.channels?.feishu as FeishuConfig | undefined;
 
   // Base enabled state (top-level)
