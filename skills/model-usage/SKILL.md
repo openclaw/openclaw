@@ -6,7 +6,7 @@ metadata:
     "openclaw":
       {
         "emoji": "📊",
-        "os": ["darwin"],
+        "os": ["darwin", "linux"],
         "requires": { "bins": ["codexbar"] },
         "install":
           [
@@ -28,7 +28,24 @@ metadata:
 
 Get per-model usage cost from CodexBar's local cost logs. Supports "current model" (most recent daily entry) or "all models" summaries for Codex or Claude.
 
-TODO: add Linux CLI support guidance once CodexBar CLI install path is documented for Linux.
+## Linux CLI support
+
+For Linux, install CodexBar via the provided script:
+
+```bash
+# Download and install CodexBar CLI
+curl -fsSL https://github.com/steipete/codexbar/releases/latest/download/codexbar-linux.tar.gz | tar -xz
+sudo mv codexbar /usr/local/bin/
+```
+
+Alternatively, if you have Go installed, you can build from source:
+
+```bash
+git clone https://github.com/steipete/codexbar.git
+cd codexbar
+go build -o codexbar
+sudo mv codexbar /usr/local/bin/
+```
 
 ## Quick start
 
