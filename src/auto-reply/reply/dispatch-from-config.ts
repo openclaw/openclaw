@@ -1,4 +1,5 @@
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { normalizeChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadSessionStore, resolveStorePath, type SessionEntry } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
@@ -274,7 +275,8 @@ export async function dispatchReplyFromConfig(params: {
   const originatingChannel = ctx.OriginatingChannel;
   const originatingTo = ctx.OriginatingTo;
   const liveSourceChannel = ctx.OriginatingChannel ?? ctx.Surface ?? ctx.Provider ?? undefined;
-  const liveSourceChatType = ctx.ChatType ?? sessionStoreEntry.entry?.chatType;
+  const liveSourceChatType =
+    normalizeChatType(ctx.ChatType) ?? normalizeChatType(sessionStoreEntry.entry?.chatType);
   if (!liveSourceChannel) {
     logVerbose(
       `dispatch-from-config: relay routing skipped live channel resolution (session=${sessionStoreEntry.sessionKey ?? sessionKey ?? "unknown"})`,
