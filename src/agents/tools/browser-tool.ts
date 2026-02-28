@@ -405,9 +405,11 @@ export function createBrowserTool(opts?: {
             return formatTabsToolResult(tabs);
           }
         case "open": {
-          const targetUrl = readStringParam(params, "targetUrl", {
-            required: true,
-          });
+          // Accept both "url" and "targetUrl" for convenience
+          const targetUrl = readStringParam(params, "url") ?? readStringParam(params, "targetUrl");
+          if (!targetUrl) {
+            throw new Error("url or targetUrl required");
+          }
           if (proxyRequest) {
             const result = await proxyRequest({
               method: "POST",
@@ -635,9 +637,11 @@ export function createBrowserTool(opts?: {
           });
         }
         case "navigate": {
-          const targetUrl = readStringParam(params, "targetUrl", {
-            required: true,
-          });
+          // Accept both "url" and "targetUrl" for convenience
+          const targetUrl = readStringParam(params, "url") ?? readStringParam(params, "targetUrl");
+          if (!targetUrl) {
+            throw new Error("url or targetUrl required");
+          }
           const targetId = readStringParam(params, "targetId");
           if (proxyRequest) {
             const result = await proxyRequest({
