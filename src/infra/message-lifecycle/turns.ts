@@ -17,6 +17,26 @@ const dedupeFallbackCache = new Map<string, number>();
 let lastJournalWarnAt = 0;
 const log = createSubsystemLogger("message-lifecycle/turns");
 
+/**
+ * In-process registry of turn IDs currently being dispatched on the live path.
+ * The recovery worker checks this set to avoid replaying turns that are still
+ * actively being processed. On crash, this set is lost — which is exactly correct:
+ * the new process has no active turns, so all orphans become eligible for recovery.
+ */
+const activeTurnIds = new Set<string>();
+
+export function registerActiveTurn(id: string): void {
+  activeTurnIds.add(id);
+}
+
+export function unregisterActiveTurn(id: string): void {
+  activeTurnIds.delete(id);
+}
+
+export function isTurnActive(id: string): boolean {
+  return activeTurnIds.has(id);
+}
+
 const NON_TERMINAL_STATES = [
   "accepted",
   "running",

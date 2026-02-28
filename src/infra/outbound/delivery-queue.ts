@@ -5,7 +5,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { resolveStateDir } from "../../config/paths.js";
 import { logVerbose } from "../../globals.js";
 import { getLifecycleDb, runLifecycleTransaction } from "../message-lifecycle/db.js";
-import { finalizeTurn } from "../message-lifecycle/turns.js";
+import { finalizeTurn, isTurnActive } from "../message-lifecycle/turns.js";
 import { generateSecureUuid } from "../secure-random.js";
 import type { OutboundChannel } from "./targets.js";
 
@@ -108,7 +108,17 @@ function resolveExpireAction(cfg: OpenClawConfig): "fail" | "deliver" {
   return action === "deliver" ? "deliver" : "fail";
 }
 
+/**
+ * Attempt to finalize a turn as delivered based on outbox state.
+ * Skipped when the turn is still being actively dispatched — the live dispatch
+ * path owns finalization while it holds the turn. This prevents premature
+ * finalization when tool/block outbox rows are acked before the final reply
+ * is enqueued.
+ */
 async function maybeFinalizeTurnDelivered(turnId: string, stateDir?: string): Promise<void> {
+  if (isTurnActive(turnId)) {
+    return;
+  }
   const db = getLifecycleDb(stateDir);
   try {
     const row = db
@@ -138,6 +148,9 @@ async function maybeFinalizeTurnDelivered(turnId: string, stateDir?: string): Pr
 }
 
 async function maybeFinalizeTurnFailed(turnId: string, stateDir?: string): Promise<void> {
+  if (isTurnActive(turnId)) {
+    return;
+  }
   const db = getLifecycleDb(stateDir);
   try {
     const row = db

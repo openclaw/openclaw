@@ -6,6 +6,8 @@ import {
   markTurnDeliveryPending,
   markTurnRunning,
   recordTurnRecoveryFailure,
+  registerActiveTurn,
+  unregisterActiveTurn,
 } from "../infra/message-lifecycle/turns.js";
 import { getOutboxStatusForTurn } from "../infra/outbound/delivery-queue.js";
 import { isDeliverableMessageChannel, normalizeMessageChannel } from "../utils/message-channel.js";
@@ -91,6 +93,7 @@ async function dispatchInboundMessageInternal({
   let turnId: string | undefined = skipAcceptTurn ? resumeTurnId?.trim() : undefined;
   if (turnId) {
     finalized.MessageTurnId = turnId;
+    registerActiveTurn(turnId);
     markTurnRunning(turnId);
   }
 
@@ -109,6 +112,7 @@ async function dispatchInboundMessageInternal({
     }
     turnId = result.id;
     finalized.MessageTurnId = result.id;
+    registerActiveTurn(result.id);
     markTurnRunning(result.id);
   }
 
@@ -117,44 +121,49 @@ async function dispatchInboundMessageInternal({
     dispatcher.setDeliveryQueueContext(queueContext);
   }
 
-  const result = await withReplyDispatcher({
-    dispatcher,
-    run: () =>
-      dispatchReplyFromConfig({
-        ctx: finalized,
-        cfg,
-        dispatcher,
-        replyOptions,
-        replyResolver,
-      }),
-  });
+  try {
+    const result = await withReplyDispatcher({
+      dispatcher,
+      run: () =>
+        dispatchReplyFromConfig({
+          ctx: finalized,
+          cfg,
+          dispatcher,
+          replyOptions,
+          replyResolver,
+        }),
+    });
 
-  if (turnId) {
-    const successfulSends = dispatcher.getDeliveryStats?.().successfulSends ?? 0;
-    const attemptedFinal = result.attemptedFinal ?? result.counts?.final ?? 0;
-    if (successfulSends > 0) {
-      finalizeTurn(turnId, "delivered");
-      return result;
+    if (turnId) {
+      const attemptedFinal = result.attemptedFinal ?? result.counts?.final ?? 0;
+      // Use outbox status as source of truth for turn finalization. This avoids
+      // premature "delivered" when only tool/block sends succeeded but the final
+      // reply failed.
+      const status = getOutboxStatusForTurn(turnId);
+      if (status.queued > 0) {
+        markTurnDeliveryPending(turnId);
+      } else if (status.delivered > 0 && status.failed === 0) {
+        finalizeTurn(turnId, "delivered");
+      } else if (status.failed > 0 && status.queued === 0) {
+        finalizeTurn(turnId, "failed");
+      } else if (attemptedFinal > 0 && !result.queuedFinal) {
+        recordTurnRecoveryFailure(turnId, "final delivery did not queue successfully");
+      } else if (attemptedFinal > 0 && result.queuedFinal) {
+        // Fail-open for routed/direct sends where provider success is known but outbox
+        // persistence may be unavailable.
+        finalizeTurn(turnId, "delivered");
+      } else {
+        // No outbox rows and no final attempted — e.g. command-only turn with no reply.
+        finalizeTurn(turnId, "delivered");
+      }
     }
-    const status = getOutboxStatusForTurn(turnId);
-    if (status.queued > 0) {
-      markTurnDeliveryPending(turnId);
-    } else if (status.failed > 0) {
-      finalizeTurn(turnId, "failed");
-    } else if (status.delivered > 0) {
-      finalizeTurn(turnId, "delivered");
-    } else if (attemptedFinal > 0 && !result.queuedFinal) {
-      recordTurnRecoveryFailure(turnId, "final delivery did not queue successfully");
-    } else if (attemptedFinal > 0 && result.queuedFinal) {
-      // Fail-open for routed/direct sends where provider success is known but outbox
-      // persistence may be unavailable.
-      finalizeTurn(turnId, "delivered");
-    } else {
-      finalizeTurn(turnId, "delivered");
+
+    return result;
+  } finally {
+    if (turnId) {
+      unregisterActiveTurn(turnId);
     }
   }
-
-  return result;
 }
 
 export async function dispatchInboundMessage(params: {

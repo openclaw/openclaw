@@ -9,6 +9,7 @@ import {
   failStaleTurns,
   finalizeTurn,
   hydrateTurnContext,
+  isTurnActive,
   listRecoverableTurns,
   pruneTurns,
   recordTurnRecoveryFailure,
@@ -105,6 +106,12 @@ export async function startMessageLifecycleWorkers(
     for (const turn of recoverable) {
       if (stopped) {
         return;
+      }
+
+      // Skip turns currently being dispatched on the live path in this process.
+      // After a crash the in-process set is empty, so all orphans are eligible.
+      if (isTurnActive(turn.id)) {
+        continue;
       }
 
       const outbox = getOutboxStatusForTurn(turn.id, params.stateDir);
