@@ -30,6 +30,8 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -242,6 +244,7 @@ private const val defaultTalkProvider = "elevenlabs"
   @Volatile var ttsOnAllResponses = false
 
   // Streaming TTS: active session keyed by runId
+  private val streamingTtsMutex = Mutex()
   private var streamingTts: ElevenLabsStreamingTts? = null
   private var ttsSessionToken = 0  // Incremented on each new session; guards stale finishStreamingTts coroutines
   @Volatile private var activeTtsRunId: String? = null  // Set on each new agent run; cleared by stopTts to block stale deltas
@@ -252,6 +255,10 @@ private const val defaultTalkProvider = "elevenlabs"
     val payload = try {
       json.parseToJsonElement(payloadJson).asObjectOrNull()
     } catch (_: Throwable) { null } ?: return
+    scope.launch { streamingTtsMutex.withLock { handleAgentStreamEventLocked(payload) } }
+  }
+
+  private fun handleAgentStreamEventLocked(payload: kotlinx.serialization.json.JsonObject) {
 
     val stream = payload["stream"]?.asStringOrNull() ?: return
     if (stream != "assistant") return  // Only speak assistant text
