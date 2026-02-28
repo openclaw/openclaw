@@ -21,6 +21,9 @@ function statusLabel(rich: boolean, status: string): string {
   if (status === "ok") {
     return colorize(rich, theme.success, "ok");
   }
+  if (status === "cooldown") {
+    return colorize(rich, theme.warn, "cooldown");
+  }
   if (status === "expiring") {
     return colorize(rich, theme.warn, "expiring");
   }
@@ -49,6 +52,10 @@ export async function modelsAuthStatusCommand(
     plain?: boolean;
     agent?: string;
     warnAfterMs?: string;
+    compact?: boolean;
+    full?: boolean;
+    noColor?: boolean;
+    sortStatus?: boolean;
   },
   runtime: RuntimeEnv,
 ) {
@@ -68,21 +75,46 @@ export async function modelsAuthStatusCommand(
     warnAfterMs,
   });
 
+  if (opts.compact && opts.full) {
+    throw new Error("--compact and --full cannot be used together.");
+  }
+
   const rowsRaw = summary.profiles.map((p) => {
     const unusableUntil = resolveProfileUnusableUntilForDisplay(store, p.profileId);
     const cooldownMs =
       typeof unusableUntil === "number" && Number.isFinite(unusableUntil)
         ? Math.max(0, unusableUntil - Date.now())
         : undefined;
+    const effectiveStatus = cooldownMs && cooldownMs > 0 ? "cooldown" : p.status;
     return {
       profileId: p.profileId,
       provider: p.provider,
       type: p.type,
-      status: p.status,
+      status: effectiveStatus,
       expiresIn: p.status === "static" ? "-" : fmtDurationMs(p.remainingMs),
       cooldown: fmtDurationMs(cooldownMs),
       source: p.source,
     };
+  });
+
+  const rank: Record<string, number> = {
+    cooldown: 0,
+    expired: 1,
+    expiring: 2,
+    ok: 3,
+    static: 4,
+    missing: 5,
+    unknown: 6,
+  };
+
+  const rowsSorted = [...rowsRaw].sort((a, b) => {
+    if (opts.sortStatus) {
+      const ra = rank[a.status] ?? 99;
+      const rb = rank[b.status] ?? 99;
+      if (ra !== rb) return ra - rb;
+    }
+    if (a.provider !== b.provider) return a.provider.localeCompare(b.provider);
+    return a.profileId.localeCompare(b.profileId);
   });
 
   if (opts.json) {
@@ -91,13 +123,13 @@ export async function modelsAuthStatusCommand(
       authStore: resolveAuthStorePathForDisplay(agentDir),
       defaultModel: cfg.agents?.defaults?.model?.primary ?? null,
       warnAfterMs,
-      rows: rowsRaw,
+      rows: rowsSorted,
     });
     return;
   }
 
   if (opts.plain) {
-    for (const row of rowsRaw) {
+    for (const row of rowsSorted) {
       runtime.log(
         [
           row.profileId,
@@ -113,7 +145,7 @@ export async function modelsAuthStatusCommand(
     return;
   }
 
-  const rich = runtime.isTTY;
+  const rich = runtime.isTTY && !opts.noColor;
   const tableWidth = Math.max(60, (process.stdout.columns ?? 120) - 1);
 
   runtime.log(
@@ -124,11 +156,11 @@ export async function modelsAuthStatusCommand(
     )}`,
   );
   runtime.log(
-    `${colorize(rich, theme.muted, "Profiles")}: ${colorize(rich, theme.info, String(rowsRaw.length))}`,
+    `${colorize(rich, theme.muted, "Profiles")}: ${colorize(rich, theme.info, String(rowsSorted.length))}`,
   );
   runtime.log("");
 
-  const rows = rowsRaw.map((r) => ({
+  const rows = rowsSorted.map((r) => ({
     Profile: colorize(rich, theme.accent, r.profileId),
     Provider: r.provider,
     Type: r.type,
@@ -138,10 +170,18 @@ export async function modelsAuthStatusCommand(
     Source: r.source,
   }));
 
-  runtime.log(
-    renderTable({
-      width: tableWidth,
-      columns: [
+  const compact =
+    Boolean(opts.compact) || (!opts.full && (process.stdout.columns ?? 120) < 110);
+
+  const columns = compact
+    ? [
+        { key: "Profile", header: "Profile", minWidth: 24 },
+        { key: "Provider", header: "Provider", minWidth: 12 },
+        { key: "Status", header: "Status", minWidth: 10 },
+        { key: "Expires", header: "Exp", minWidth: 6 },
+        { key: "Cooldown", header: "CD", minWidth: 6 },
+      ]
+    : [
         { key: "Profile", header: "Profile", minWidth: 26 },
         { key: "Provider", header: "Provider", minWidth: 14 },
         { key: "Type", header: "Type", minWidth: 8 },
@@ -149,7 +189,12 @@ export async function modelsAuthStatusCommand(
         { key: "Expires", header: "Expires", minWidth: 8 },
         { key: "Cooldown", header: "Cooldown", minWidth: 9 },
         { key: "Source", header: "Source", minWidth: 8 },
-      ],
+      ];
+
+  runtime.log(
+    renderTable({
+      width: tableWidth,
+      columns,
       rows,
     }).trimEnd(),
   );

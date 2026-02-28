@@ -386,6 +386,10 @@ export function registerModelsCli(program: Command) {
     .option("--plain", "Plain output", false)
     .option("--warn-after-ms <ms>", "Warn window for expiring tokens (default: 24h)")
     .option("--agent <id>", "Agent id to inspect")
+    .option("--compact", "Compact table view", false)
+    .option("--full", "Full table view", false)
+    .option("--no-color", "Disable colored output", false)
+    .option("--sort-status", "Sort by status (cooldown/expired/expiring first)", false)
     .action(async (opts, command) => {
       const agent =
         resolveOptionFromCommand<string>(command, "agent") ?? (opts.agent as string | undefined);
@@ -396,6 +400,10 @@ export function registerModelsCli(program: Command) {
             plain: Boolean(opts.plain),
             warnAfterMs: opts.warnAfterMs as string | undefined,
             agent,
+            compact: Boolean(opts.compact),
+            full: Boolean(opts.full),
+            noColor: Boolean(opts.noColor),
+            sortStatus: Boolean(opts.sortStatus),
           },
           defaultRuntime,
         );
