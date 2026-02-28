@@ -468,6 +468,13 @@ export function normalizeProviders(params: {
         const apiKey = resolveAwsSdkApiKeyVarName();
         mutated = true;
         normalizedProvider = { ...normalizedProvider, apiKey };
+      } else if (normalizedProvider.authHeader === false) {
+        // Provider explicitly opted out of auth (e.g. local models like Ollama, LM Studio).
+        // pi-coding-agent's ModelRegistry validates that providers with custom models have an
+        // apiKey, but auth-less providers don't need one. Use a placeholder to satisfy
+        // validation and prevent the entire models.json from being rejected.
+        mutated = true;
+        normalizedProvider = { ...normalizedProvider, apiKey: "none" };
       } else {
         const fromEnv = resolveEnvApiKeyVarName(normalizedKey);
         const fromProfiles = resolveApiKeyFromProfiles({

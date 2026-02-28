@@ -307,4 +307,102 @@ describe("models-config", () => {
       }
     });
   });
+
+  it("fills placeholder apiKey for authHeader:false provider with models", async () => {
+    await withTempHome(async () => {
+      const cfg: OpenClawConfig = {
+        models: {
+          providers: {
+            "local-qwen": {
+              baseUrl: "http://localhost:8090/v1",
+              api: "openai-completions",
+              authHeader: false,
+              models: [
+                {
+                  id: "coding",
+                  name: "Qwen2.5-Coder-14B (local)",
+                  reasoning: false,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 32768,
+                  maxTokens: 8192,
+                },
+              ],
+            },
+          },
+        },
+      };
+
+      await ensureOpenClawModelsJson(cfg);
+
+      const parsed = await readGeneratedModelsJson<{
+        providers: Record<string, { apiKey?: string; models?: Array<{ id: string }> }>;
+      }>();
+      // A placeholder apiKey should be set so pi-coding-agent's ModelRegistry
+      // validation does not reject the entire models.json.
+      expect(parsed.providers["local-qwen"]?.apiKey).toBe("none");
+      expect(parsed.providers["local-qwen"]?.models?.map((m) => m.id)).toContain("coding");
+    });
+  });
+
+  it("authHeader:false provider does not break other providers in models.json", async () => {
+    await withTempHome(async () => {
+      const cfg: OpenClawConfig = {
+        models: {
+          providers: {
+            "local-qwen": {
+              baseUrl: "http://localhost:8090/v1",
+              api: "openai-completions",
+              authHeader: false,
+              models: [
+                {
+                  id: "coding",
+                  name: "Local Qwen",
+                  reasoning: false,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 32768,
+                  maxTokens: 8192,
+                },
+              ],
+            },
+            "github-copilot": {
+              baseUrl: "https://api.enterprise.githubcopilot.com",
+              apiKey: "ghu_test123",
+              models: [
+                {
+                  id: "claude-opus-4.6",
+                  name: "Claude Opus 4.6 (Copilot)",
+                  api: "openai-completions",
+                  reasoning: true,
+                  input: ["text", "image"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 200000,
+                  maxTokens: 128000,
+                },
+              ],
+            },
+          },
+        },
+      };
+
+      await ensureOpenClawModelsJson(cfg);
+
+      const parsed = await readGeneratedModelsJson<{
+        providers: Record<
+          string,
+          { apiKey?: string; baseUrl?: string; models?: Array<{ id: string; api?: string }> }
+        >;
+      }>();
+      // local-qwen gets placeholder apiKey
+      expect(parsed.providers["local-qwen"]?.apiKey).toBe("none");
+      // github-copilot is preserved with its real apiKey and models
+      expect(parsed.providers["github-copilot"]?.apiKey).toBe("ghu_test123");
+      expect(parsed.providers["github-copilot"]?.baseUrl).toBe(
+        "https://api.enterprise.githubcopilot.com",
+      );
+      const copilotModelIds = parsed.providers["github-copilot"]?.models?.map((m) => m.id);
+      expect(copilotModelIds).toContain("claude-opus-4.6");
+    });
+  });
 });
