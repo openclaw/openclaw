@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import type { Readable } from "node:stream";
-import { ChannelType, type Client, ReadyListener } from "@buape/carbon";
+import { ChannelType, type Client, ReadyListener, VoiceStateUpdateListener } from "@buape/carbon";
 import type { VoicePlugin } from "@buape/carbon/voice";
 import {
   AudioPlayerStatus,
@@ -856,6 +856,67 @@ export class DiscordVoiceReadyListener extends ReadyListener {
 
   async handle() {
     await this.manager.autoJoin();
+  }
+}
+
+/**
+ * Auto-join when a human joins a voice channel, auto-leave when the last human leaves.
+ * Tracks channel occupancy via voiceStateUpdate events.
+ */
+export class DiscordVoicePresenceListener extends VoiceStateUpdateListener {
+  // guildId:channelId → Set of user IDs
+  private channelUsers = new Map<string, Set<string>>();
+
+  constructor(
+    private manager: DiscordVoiceManager,
+    private botUserId: string | undefined,
+  ) {
+    super();
+  }
+
+  async handle(data: Parameters<VoiceStateUpdateListener["handle"]>[0]) {
+    const userId = data.user_id;
+    const guildId = data.guild_id;
+    const newChannelId = data.channel_id;
+
+    // Ignore our own state changes
+    if (!guildId || userId === this.botUserId) {
+      return;
+    }
+
+    // Remove user from any previous channel tracking
+    for (const [key, users] of this.channelUsers) {
+      if (users.delete(userId) && users.size === 0) {
+        this.channelUsers.delete(key);
+      }
+    }
+
+    // Add user to new channel tracking
+    if (newChannelId) {
+      const key = `${guildId}:${newChannelId}`;
+      if (!this.channelUsers.has(key)) {
+        this.channelUsers.set(key, new Set());
+      }
+      this.channelUsers.get(key)!.add(userId);
+    }
+
+    // User joined a voice channel — join if we're not already in one for this guild
+    if (newChannelId && !this.manager.isInVoice(guildId)) {
+      logVoiceVerbose(`auto-join: user ${userId} joined channel ${newChannelId}`);
+      await this.manager.join({ guildId, channelId: newChannelId });
+      return;
+    }
+
+    // Check if our current channel is now empty of humans
+    const session = this.manager.status().find((s) => s.guildId === guildId);
+    if (session?.channelId) {
+      const key = `${guildId}:${session.channelId}`;
+      const humans = this.channelUsers.get(key)?.size ?? 0;
+      if (humans === 0) {
+        logVoiceVerbose(`auto-leave: no humans in channel ${session.channelId}`);
+        await this.manager.leave({ guildId });
+      }
+    }
   }
 }
 
