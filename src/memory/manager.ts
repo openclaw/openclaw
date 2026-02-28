@@ -219,9 +219,11 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     if (key && this.sessionWarm.has(key)) {
       return;
     }
-    void this.sync({ reason: "session-start" }).catch((err) => {
+    try {
+      await this.sync({ reason: "session-start" });
+    } catch (err) {
       log.warn(`memory sync failed (session-start): ${String(err)}`);
-    });
+    }
     if (key) {
       this.sessionWarm.add(key);
     }
@@ -235,11 +237,13 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       sessionKey?: string;
     },
   ): Promise<MemorySearchResult[]> {
-    void this.warmSession(opts?.sessionKey);
+    await this.warmSession(opts?.sessionKey);
     if (this.settings.sync.onSearch && (this.dirty || this.sessionsDirty)) {
-      void this.sync({ reason: "search" }).catch((err) => {
+      try {
+        await this.sync({ reason: "search" });
+      } catch (err) {
         log.warn(`memory sync failed (search): ${String(err)}`);
-      });
+      }
     }
     const cleaned = query.trim();
     if (!cleaned) {
