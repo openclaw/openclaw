@@ -1371,7 +1371,11 @@ describe("runHeartbeatOnce", () => {
     try {
       const res = await runHeartbeatOnce({ cfg });
       // Should not skip due to "run-active" when skipIfRunActive is false
-      expect(res.reason).not.toBe("run-active");
+      if (res.status === "skipped") {
+        expect(res.reason).not.toBe("run-active");
+      } else {
+        expect(res.status).toBe("ran");
+      }
     } finally {
       spy.mockRestore();
     }
@@ -1409,7 +1413,11 @@ describe("runHeartbeatOnce", () => {
     try {
       const res = await runHeartbeatOnce({ cfg });
       // Should not skip due to "run-active" when skipIfRunActive is not configured
-      expect(res.reason).not.toBe("run-active");
+      if (res.status === "skipped") {
+        expect(res.reason).not.toBe("run-active");
+      } else {
+        expect(res.status).toBe("ran");
+      }
     } finally {
       spy.mockRestore();
     }
@@ -1447,7 +1455,11 @@ describe("runHeartbeatOnce", () => {
     try {
       const res = await runHeartbeatOnce({ cfg });
       // Should not skip due to "run-active" when run is not active
-      expect(res.reason).not.toBe("run-active");
+      if (res.status === "skipped") {
+        expect(res.reason).not.toBe("run-active");
+      } else {
+        expect(res.status).toBe("ran");
+      }
     } finally {
       spy.mockRestore();
     }
