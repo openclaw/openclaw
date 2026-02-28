@@ -111,6 +111,12 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   let lastPartial = "";
   /** Persisted content (prior AI text + embedded media) that must survive onPartialReply rewrites */
   let committedText = "";
+  /**
+   * Set when the outbound adapter writes to the stream (via the registered appender).
+   * While true, onPartialReply suppresses the short AI confirmation text that typically
+   * follows a tool call (e.g. "NO", "Done"). Resets when a genuinely new message is detected.
+   */
+  let outboundAppended = false;
   let partialUpdateQueue: Promise<void> = Promise.resolve();
   let streamingStartPromise: Promise<void> | null = null;
 
@@ -146,6 +152,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             }
             committedText += content;
             streamText = committedText;
+            outboundAppended = true;
             partialUpdateQueue = partialUpdateQueue.then(async () => {
               if (streamingStartPromise) await streamingStartPromise;
               if (streaming?.isActive()) await streaming.update(streamText);
@@ -178,6 +185,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     streamText = "";
     lastPartial = "";
     committedText = "";
+    outboundAppended = false;
   };
 
   /** Upload media and embed as markdown in the streaming card. Returns true on success. */
@@ -271,9 +279,12 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               }
             }
             if (info?.kind === "final") {
-              // streamText is already maintained by onPartialReply (committedText + AI text);
-              // only reconstruct when no partials were received (streamText is empty/stale).
-              if (!streamText) {
+              // When outbound adapter wrote to the card, the final AI text is likely
+              // a post-tool confirmation — close with committed content only.
+              // Otherwise, use streamText from onPartialReply when available.
+              if (outboundAppended) {
+                streamText = committedText;
+              } else if (!streamText) {
                 streamText = text;
               }
               await closeStreaming();
@@ -359,6 +370,18 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             if (!payload.text || payload.text === lastPartial) {
               return;
             }
+
+            // Suppress short post-tool confirmation text (e.g. "NO", "Done").
+            // Only suppress while the accumulated text stays under the threshold;
+            // once it grows beyond that it's likely genuine follow-up content.
+            if (outboundAppended) {
+              const SUPPRESS_MAX_CHARS = 15;
+              if (payload.text.length <= SUPPRESS_MAX_CHARS) {
+                return;
+              }
+              outboundAppended = false;
+            }
+
             lastPartial = payload.text;
             streamText = committedText + payload.text;
             partialUpdateQueue = partialUpdateQueue.then(async () => {
