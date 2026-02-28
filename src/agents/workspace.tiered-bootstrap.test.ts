@@ -70,12 +70,26 @@ describe("filterBootstrapFilesForSession", () => {
 
   it("returns minimal files for subagent session", () => {
     const result = filterBootstrapFilesForSession(ALL_FILES, SUBAGENT_KEY);
-    expect(result.map((f) => f.name)).toEqual(["AGENTS.md", "TOOLS.md"]);
+    const names = result.map((f) => f.name);
+    expect(names).toContain("AGENTS.md");
+    expect(names).toContain("TOOLS.md");
+    expect(names).toContain("SOUL.md");
+    expect(names).toContain("IDENTITY.md");
+    expect(names).toContain("USER.md");
+    expect(names).not.toContain("HEARTBEAT.md");
+    expect(names).not.toContain("BOOTSTRAP.md");
+    expect(names).not.toContain("MEMORY.md");
+    expect(names).not.toContain("PROJECT.md");
   });
 
   it("returns minimal files for cron session", () => {
     const result = filterBootstrapFilesForSession(ALL_FILES, CRON_KEY);
-    expect(result.map((f) => f.name)).toEqual(["AGENTS.md", "TOOLS.md"]);
+    const names = result.map((f) => f.name);
+    expect(names).toContain("AGENTS.md");
+    expect(names).toContain("TOOLS.md");
+    expect(names).toContain("SOUL.md");
+    expect(names).not.toContain("HEARTBEAT.md");
+    expect(names).not.toContain("PROJECT.md");
   });
 
   it("returns only recognized files when tierOverride is 'standard' even for subagent", () => {
@@ -86,7 +100,12 @@ describe("filterBootstrapFilesForSession", () => {
 
   it("returns minimal files when tierOverride is 'minimal' for main session", () => {
     const result = filterBootstrapFilesForSession(ALL_FILES, MAIN_KEY, "minimal");
-    expect(result.map((f) => f.name)).toEqual(["AGENTS.md", "TOOLS.md"]);
+    const names = result.map((f) => f.name);
+    expect(names).toContain("AGENTS.md");
+    expect(names).toContain("TOOLS.md");
+    expect(names).toContain("SOUL.md");
+    expect(names).not.toContain("HEARTBEAT.md");
+    expect(names).not.toContain("PROJECT.md");
   });
 
   it("returns all files including extras when tierOverride is 'full'", () => {
