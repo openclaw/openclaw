@@ -58,7 +58,7 @@ run_as_openclaw() {
 
 escape_sed_replacement_pipe_delim() {
   # Escape replacement metacharacters for sed "s|...|...|g" replacement text.
-  printf '%s' "$1" | sed -e 's/[\\&|]/\\\\&/g'
+  printf '%s' "$1" | sed -e 's/[\\&|]/\\&/g'
 }
 
 # Quadlet: opt-in via --quadlet or OPENCLAW_PODMAN_QUADLET=1
