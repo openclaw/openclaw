@@ -997,7 +997,8 @@ class TalkModeManager(
       apiKey = envKey?.takeIf { it.isNotEmpty() }
       voiceAliases = emptyMap()
       defaultOutputFormat = defaultOutputFormatFallback
-      configLoaded = true
+      // Keep config load retryable after transient fetch failures.
+      configLoaded = false
     }
   }
 
