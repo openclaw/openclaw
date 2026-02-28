@@ -2,9 +2,10 @@ import type {
   BlockStreamingCoalesceConfig,
   DmPolicy,
   GroupPolicy,
-  ReplyToMode,
   SecretInput,
 } from "openclaw/plugin-sdk";
+
+export type MattermostReplyToMode = "off" | "first" | "all";
 
 export type MattermostChatMode = "oncall" | "onmessage" | "onchar";
 
