@@ -8,7 +8,8 @@ import { type LogLevel, normalizeLogLevel } from "./levels.js";
 import { getLogger, type LoggerSettings } from "./logger.js";
 import { resolveNodeRequireFromMeta } from "./node-require.js";
 import { loggingState } from "./state.js";
-import { formatLocalIsoWithOffset } from "./timestamps.js";
+import { getConfiguredTimezone } from "./timestamp.js";
+import { formatIsoInTimezone } from "./timestamps.js";
 
 export type ConsoleStyle = "pretty" | "compact" | "json";
 type ConsoleSettings = {
@@ -156,13 +157,31 @@ function isEpipeError(err: unknown): boolean {
 
 export function formatConsoleTimestamp(style: ConsoleStyle): string {
   const now = new Date();
+  const tz = getConfiguredTimezone();
   if (style === "pretty") {
-    const h = String(now.getHours()).padStart(2, "0");
-    const m = String(now.getMinutes()).padStart(2, "0");
-    const s = String(now.getSeconds()).padStart(2, "0");
-    return `${h}:${m}:${s}`;
+    try {
+      const fmt = new Intl.DateTimeFormat("en-CA", {
+        timeZone: tz,
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hourCycle: "h23",
+      });
+      const parts = Object.fromEntries(
+        fmt
+          .formatToParts(now)
+          .filter((x) => x.type !== "literal")
+          .map((x) => [x.type, x.value]),
+      );
+      return `${parts.hour}:${parts.minute}:${parts.second}`;
+    } catch {
+      const h = String(now.getHours()).padStart(2, "0");
+      const m = String(now.getMinutes()).padStart(2, "0");
+      const s = String(now.getSeconds()).padStart(2, "0");
+      return `${h}:${m}:${s}`;
+    }
   }
-  return formatLocalIsoWithOffset(now);
+  return formatIsoInTimezone(now, tz);
 }
 
 function hasTimestampPrefix(value: string): boolean {

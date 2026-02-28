@@ -9,6 +9,8 @@ import { resolveEnvLogLevelOverride } from "./env-log-level.js";
 import { type LogLevel, levelToMinLevel, normalizeLogLevel } from "./levels.js";
 import { resolveNodeRequireFromMeta } from "./node-require.js";
 import { loggingState } from "./state.js";
+import { getConfiguredTimezone } from "./timestamp.js";
+import { formatIsoInTimezone } from "./timestamps.js";
 
 export const DEFAULT_LOG_DIR = resolvePreferredOpenClawTmpDir();
 export const DEFAULT_LOG_FILE = path.join(DEFAULT_LOG_DIR, "openclaw.log"); // legacy single-file path
@@ -113,7 +115,7 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
 
   logger.attachTransport((logObj: LogObj) => {
     try {
-      const time = logObj.date?.toISOString?.() ?? new Date().toISOString();
+      const time = formatIsoInTimezone(logObj.date ?? new Date(), getConfiguredTimezone());
       const line = JSON.stringify({ ...logObj, time });
       const payload = `${line}\n`;
       const payloadBytes = Buffer.byteLength(payload, "utf8");
@@ -122,7 +124,7 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
         if (!warnedAboutSizeCap) {
           warnedAboutSizeCap = true;
           const warningLine = JSON.stringify({
-            time: new Date().toISOString(),
+            time: formatIsoInTimezone(new Date(), getConfiguredTimezone()),
             level: "warn",
             subsystem: "logging",
             message: `log file size cap reached; suppressing writes file=${settings.file} maxFileBytes=${settings.maxFileBytes}`,
