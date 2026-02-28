@@ -146,6 +146,34 @@ async function prunePersistedWebchatUploads(uploadDir: string, keepPath: string)
   }
 }
 
+function isWithinDir(childPath: string, parentDir: string): boolean {
+  const relative = path.relative(parentDir, childPath);
+  return relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative);
+}
+
+export async function cleanupPersistedWebchatUploads(
+  mediaPaths: string[] | undefined,
+): Promise<void> {
+  if (!mediaPaths || mediaPaths.length === 0) {
+    return;
+  }
+  const uploadRoot = path.resolve(resolvePreferredOpenClawTmpDir(), "uploads", "webchat");
+  for (const mediaPath of mediaPaths) {
+    if (!mediaPath) {
+      continue;
+    }
+    const resolvedPath = path.resolve(mediaPath);
+    if (!isWithinDir(resolvedPath, uploadRoot)) {
+      continue;
+    }
+    try {
+      await fs.unlink(resolvedPath);
+    } catch {
+      // Best effort cleanup.
+    }
+  }
+}
+
 function validateAttachmentBase64OrThrow(
   normalized: NormalizedAttachment,
   opts: { maxBytes: number },

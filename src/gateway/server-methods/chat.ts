@@ -30,7 +30,11 @@ import {
   isChatStopCommandText,
   resolveChatRunExpiresAtMs,
 } from "../chat-abort.js";
-import { type ChatImageContent, parseMessageWithAttachments } from "../chat-attachments.js";
+import {
+  cleanupPersistedWebchatUploads,
+  type ChatImageContent,
+  parseMessageWithAttachments,
+} from "../chat-attachments.js";
 import { stripEnvelopeFromMessage, stripEnvelopeFromMessages } from "../chat-sanitize.js";
 import {
   GATEWAY_CLIENT_CAPS,
@@ -836,12 +840,9 @@ export const chatHandlers: GatewayRequestHandlers = {
         const parsed = await parseMessageWithAttachments(inboundMessage, normalizedAttachments, {
           maxBytes: 5_000_000,
           log: context.logGateway,
-          persistImagesToDisk: true,
         });
         parsedMessage = parsed.message;
         parsedImages = parsed.images;
-        parsedMediaPaths = parsed.mediaPaths;
-        parsedMediaTypes = parsed.mediaTypes;
       } catch (err) {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, String(err)));
         return;
@@ -869,16 +870,33 @@ export const chatHandlers: GatewayRequestHandlers = {
       return;
     }
 
+    const now = Date.now();
+    const abortController = new AbortController();
+    context.chatAbortControllers.set(clientRunId, {
+      controller: abortController,
+      sessionId: entry?.sessionId ?? clientRunId,
+      sessionKey: rawSessionKey,
+      startedAtMs: now,
+      expiresAtMs: resolveChatRunExpiresAtMs({ now, timeoutMs }),
+    });
+
+    if (normalizedAttachments.length > 0) {
+      try {
+        const persisted = await parseMessageWithAttachments(inboundMessage, normalizedAttachments, {
+          maxBytes: 5_000_000,
+          log: context.logGateway,
+          persistImagesToDisk: true,
+        });
+        parsedMediaPaths = persisted.mediaPaths;
+        parsedMediaTypes = persisted.mediaTypes;
+      } catch (err) {
+        context.chatAbortControllers.delete(clientRunId);
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, String(err)));
+        return;
+      }
+    }
+
     try {
-      const now = Date.now();
-      const abortController = new AbortController();
-      context.chatAbortControllers.set(clientRunId, {
-        controller: abortController,
-        sessionId: entry?.sessionId ?? clientRunId,
-        sessionKey: rawSessionKey,
-        startedAtMs: now,
-        expiresAtMs: resolveChatRunExpiresAtMs({ now, timeoutMs }),
-      });
       const ackPayload = {
         runId: clientRunId,
         status: "started" as const,
@@ -1114,9 +1132,11 @@ export const chatHandlers: GatewayRequestHandlers = {
           });
         })
         .finally(() => {
+          void cleanupPersistedWebchatUploads(parsedMediaPaths);
           context.chatAbortControllers.delete(clientRunId);
         });
     } catch (err) {
+      context.chatAbortControllers.delete(clientRunId);
       const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));
       const payload = {
         runId: clientRunId,
