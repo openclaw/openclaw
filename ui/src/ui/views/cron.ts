@@ -1,6 +1,6 @@
 import { html, nothing } from "lit";
-import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { ifDefined } from "lit/directives/if-defined.js";
+import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import type { CronFieldErrors, CronFieldKey } from "../controllers/cron.ts";
 import { formatRelativeTimestamp, formatMs } from "../format.ts";
 import { toSanitizedMarkdownHtml } from "../markdown.ts";
