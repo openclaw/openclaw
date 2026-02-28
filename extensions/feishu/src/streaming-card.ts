@@ -99,7 +99,7 @@ export class FeishuStreamingSession {
   async start(
     receiveId: string,
     receiveIdType: "open_id" | "user_id" | "union_id" | "email" | "chat_id" = "chat_id",
-    options?: { replyToMessageId?: string; replyInThread?: boolean },
+    options?: { replyToMessageId?: string; replyInThread?: boolean; rootId?: string },
   ): Promise<void> {
     if (this.state) {
       return;
@@ -144,9 +144,20 @@ export class FeishuStreamingSession {
     const cardId = createData.data.card_id;
     const cardContent = JSON.stringify({ type: "card", data: { card_id: cardId } });
 
-    // Send card message — reply into thread when configured
+    // Topic-group replies require root_id routing. Prefer create+root_id when available.
     let sendRes;
-    if (options?.replyToMessageId) {
+    if (options?.rootId) {
+      const createData = {
+        receive_id: receiveId,
+        msg_type: "interactive",
+        content: cardContent,
+        root_id: options.rootId,
+      };
+      sendRes = await this.client.im.message.create({
+        params: { receive_id_type: receiveIdType },
+        data: createData,
+      });
+    } else if (options?.replyToMessageId) {
       sendRes = await this.client.im.message.reply({
         path: { message_id: options.replyToMessageId },
         data: {
