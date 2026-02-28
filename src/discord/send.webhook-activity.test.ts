@@ -13,7 +13,7 @@ vi.mock("../infra/channel-activity.js", async (importOriginal) => {
 
 describe("sendWebhookMessageDiscord activity", () => {
   beforeEach(() => {
-    recordChannelActivityMock.mockReset();
+    recordChannelActivityMock.mockClear();
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => {

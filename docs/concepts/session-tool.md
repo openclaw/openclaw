@@ -151,7 +151,10 @@ Parameters:
 - `label?` (optional; used for logs/UI)
 - `agentId?` (optional; spawn under another agent id if allowed)
 - `model?` (optional; overrides the sub-agent model; invalid values error)
-- `runTimeoutSeconds?` (default 0; when set, aborts the sub-agent run after N seconds)
+- `thinking?` (optional; overrides thinking level for the sub-agent run)
+- `runTimeoutSeconds?` (defaults to `agents.defaults.subagents.runTimeoutSeconds` when set, otherwise `0`; when set, aborts the sub-agent run after N seconds)
+- `thread?` (default false; request thread-bound routing for this spawn when supported by the channel/plugin)
+- `mode?` (`run|session`; defaults to `run`, but defaults to `session` when `thread=true`; `mode="session"` requires `thread=true`)
 - `cleanup?` (`delete|keep`, default `keep`)
 
 Allowlist:
@@ -168,6 +171,7 @@ Behavior:
 - Sub-agents default to the full tool set **minus session tools** (configurable via `tools.subagents.tools`).
 - Sub-agents are not allowed to call `sessions_spawn` (no sub-agent → sub-agent spawning).
 - Always non-blocking: returns `{ status: "accepted", runId, childSessionKey }` immediately.
+- With `thread=true`, channel plugins can bind delivery/routing to a thread target (Discord support is controlled by `session.threadBindings.*` and `channels.discord.threadBindings.*`).
 - After completion, OpenClaw runs a sub-agent **announce step** and posts the result to the requester chat channel.
   - If the assistant final reply is empty, the latest `toolResult` from sub-agent history is included as `Result`.
 - Reply exactly `ANNOUNCE_SKIP` during the announce step to stay silent.

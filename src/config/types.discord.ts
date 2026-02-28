@@ -13,7 +13,7 @@ import type { DmConfig, ProviderCommandsConfig } from "./types.messages.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 import type { TtsConfig } from "./types.tts.js";
 
-export type DiscordStreamMode = "partial" | "block" | "off";
+export type DiscordStreamMode = "off" | "partial" | "block" | "progress";
 
 export type DiscordDmConfig = {
   /** If false, ignore all incoming Discord DMs. Default: true. */
@@ -107,6 +107,10 @@ export type DiscordVoiceConfig = {
   enabled?: boolean;
   /** Voice channels to auto-join on startup. */
   autoJoin?: DiscordVoiceAutoJoinConfig[];
+  /** Enable/disable DAVE end-to-end encryption (default: true; Discord may require this). */
+  daveEncryption?: boolean;
+  /** Consecutive decrypt failures before DAVE session reinitialization (default: 24). */
+  decryptionFailureTolerance?: number;
   /** Optional TTS overrides for Discord voice output. */
   tts?: TtsConfig;
 };
@@ -159,6 +163,11 @@ export type DiscordThreadBindingsConfig = {
    * threads for subagent sessions. Default: false (opt-in).
    */
   spawnSubagentSessions?: boolean;
+  /**
+   * Allow `/acp spawn` to auto-create + bind Discord threads for ACP
+   * sessions. Default: false (opt-in).
+   */
+  spawnAcpSessions?: boolean;
 };
 
 export type DiscordSlashCommandConfig = {
@@ -185,6 +194,11 @@ export type DiscordAccountConfig = {
   /** Allow bot-authored messages to trigger replies (default: false). */
   allowBots?: boolean;
   /**
+   * Break-glass override: allow mutable identity matching (names/tags/slugs) in allowlists.
+   * Default behavior is ID-only matching.
+   */
+  dangerouslyAllowNameMatching?: boolean;
+  /**
    * Controls how guild channel messages are handled:
    * - "open": guild channels bypass allowlists; mention-gating applies
    * - "disabled": block all guild channel messages
@@ -198,14 +212,20 @@ export type DiscordAccountConfig = {
   /** Disable block streaming for this account. */
   blockStreaming?: boolean;
   /**
-   * Live preview streaming mode (edit-based, like Telegram).
-   * - "partial": send a message and continuously edit it with new content as tokens arrive.
-   * - "block": stream previews in draft-sized chunks (like Telegram block mode).
-   * - "off": no preview streaming (default).
-   * When enabled, block streaming is automatically suppressed to avoid double-streaming.
+   * Live stream preview mode:
+   * - "off": disable preview updates
+   * - "partial": edit a single preview message
+   * - "block": stream in chunked preview updates
+   * - "progress": alias that maps to "partial" on Discord
+   *
+   * Legacy boolean values are still accepted and auto-migrated.
    */
-  streamMode?: DiscordStreamMode;
-  /** Chunking config for Discord stream previews in `streamMode: "block"`. */
+  streaming?: DiscordStreamMode | boolean;
+  /**
+   * @deprecated Legacy key; migrated automatically to `streaming`.
+   */
+  streamMode?: "partial" | "block" | "off";
+  /** Chunking config for Discord stream previews in `streaming: "block"`. */
   draftChunk?: BlockStreamingChunkConfig;
   /** Merge streamed block replies before sending. */
   blockStreamingCoalesce?: BlockStreamingCoalesceConfig;

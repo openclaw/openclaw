@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import type { TwilioConfig, WebhookSecurityConfig } from "../config.js";
+import { getHeader } from "../http-headers.js";
 import type { MediaStreamHandler } from "../media-stream.js";
 import { chunkAudio } from "../telephony-audio.js";
 import type { TelephonyTtsProvider } from "../telephony-tts.js";
@@ -13,12 +14,34 @@ import type {
   StartListeningInput,
   StopListeningInput,
   WebhookContext,
+  WebhookParseOptions,
   WebhookVerificationResult,
 } from "../types.js";
 import { escapeXml, mapVoiceToPolly } from "../voice-mapping.js";
 import type { VoiceCallProvider } from "./base.js";
 import { twilioApiRequest } from "./twilio/api.js";
 import { verifyTwilioProviderWebhook } from "./twilio/webhook.js";
+
+function createTwilioRequestDedupeKey(ctx: WebhookContext, verifiedRequestKey?: string): string {
+  if (verifiedRequestKey) {
+    return verifiedRequestKey;
+  }
+
+  const signature = getHeader(ctx.headers, "x-twilio-signature") ?? "";
+  const params = new URLSearchParams(ctx.rawBody);
+  const callSid = params.get("CallSid") ?? "";
+  const callStatus = params.get("CallStatus") ?? "";
+  const direction = params.get("Direction") ?? "";
+  const callId = typeof ctx.query?.callId === "string" ? ctx.query.callId.trim() : "";
+  const flow = typeof ctx.query?.flow === "string" ? ctx.query.flow.trim() : "";
+  const turnToken = typeof ctx.query?.turnToken === "string" ? ctx.query.turnToken.trim() : "";
+  return `twilio:fallback:${crypto
+    .createHash("sha256")
+    .update(
+      `${signature}\n${callSid}\n${callStatus}\n${direction}\n${callId}\n${flow}\n${turnToken}\n${ctx.rawBody}`,
+    )
+    .digest("hex")}`;
+}
 
 /**
  * Twilio Voice API provider implementation.
@@ -205,14 +228,26 @@ export class TwilioProvider implements VoiceCallProvider {
   /**
    * Parse Twilio webhook event into normalized format.
    */
-  parseWebhookEvent(ctx: WebhookContext): ProviderWebhookParseResult {
+  parseWebhookEvent(
+    ctx: WebhookContext,
+    options?: WebhookParseOptions,
+  ): ProviderWebhookParseResult {
     try {
       const params = new URLSearchParams(ctx.rawBody);
       const callIdFromQuery =
         typeof ctx.query?.callId === "string" && ctx.query.callId.trim()
           ? ctx.query.callId.trim()
           : undefined;
-      const event = this.normalizeEvent(params, callIdFromQuery);
+      const turnTokenFromQuery =
+        typeof ctx.query?.turnToken === "string" && ctx.query.turnToken.trim()
+          ? ctx.query.turnToken.trim()
+          : undefined;
+      const dedupeKey = createTwilioRequestDedupeKey(ctx, options?.verifiedRequestKey);
+      const event = this.normalizeEvent(params, {
+        callIdOverride: callIdFromQuery,
+        dedupeKey,
+        turnToken: turnTokenFromQuery,
+      });
 
       // For Twilio, we must return TwiML. Most actions are driven by Calls API updates,
       // so the webhook response is typically a pause to keep the call alive.
@@ -245,14 +280,24 @@ export class TwilioProvider implements VoiceCallProvider {
   /**
    * Convert Twilio webhook params to normalized event format.
    */
-  private normalizeEvent(params: URLSearchParams, callIdOverride?: string): NormalizedEvent | null {
+  private normalizeEvent(
+    params: URLSearchParams,
+    options?: {
+      callIdOverride?: string;
+      dedupeKey?: string;
+      turnToken?: string;
+    },
+  ): NormalizedEvent | null {
     const callSid = params.get("CallSid") || "";
+    const callIdOverride = options?.callIdOverride;
 
     const baseEvent = {
       id: crypto.randomUUID(),
+      dedupeKey: options?.dedupeKey,
       callId: callIdOverride || callSid,
       providerCallId: callSid,
       timestamp: Date.now(),
+      turnToken: options?.turnToken,
       direction: TwilioProvider.parseDirection(params.get("Direction")),
       from: params.get("From") || undefined,
       to: params.get("To") || undefined,
@@ -603,9 +648,14 @@ export class TwilioProvider implements VoiceCallProvider {
       throw new Error("Missing webhook URL for this call (provider state not initialized)");
     }
 
+    const actionUrl = new URL(webhookUrl);
+    if (input.turnToken) {
+      actionUrl.searchParams.set("turnToken", input.turnToken);
+    }
+
     const twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Gather input="speech" speechTimeout="auto" language="${input.language || "en-US"}" action="${escapeXml(webhookUrl)}" method="POST">
+  <Gather input="speech" speechTimeout="auto" language="${input.language || "en-US"}" action="${escapeXml(actionUrl.toString())}" method="POST">
   </Gather>
 </Response>`;
 

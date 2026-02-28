@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/config.js";
+import { toAgentModelListLike } from "../config/model-input.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import {
   applyAgentDefaultModelPrimary,
@@ -100,7 +101,7 @@ export function applyMinimaxHostedConfig(
       defaults: {
         ...next.agents?.defaults,
         model: {
-          ...next.agents?.defaults?.model,
+          ...toAgentModelListLike(next.agents?.defaults?.model),
           primary: MINIMAX_HOSTED_MODEL_REF,
         },
       },
@@ -180,6 +181,7 @@ function applyMinimaxApiProviderConfigWithBaseUrl(
     ...existingProviderRest,
     baseUrl: params.baseUrl,
     api: "anthropic-messages",
+    authHeader: true,
     ...(normalizedApiKey?.trim() ? { apiKey: normalizedApiKey } : {}),
     models: mergedModels.length > 0 ? mergedModels : [apiModel],
   };

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildTelegramThreadParams,
   buildTypingThreadParams,
+  describeReplyTarget,
   expandTextLinks,
   normalizeForwardedContext,
   resolveTelegramForumThreadId,
@@ -196,6 +197,137 @@ describe("normalizeForwardedContext", () => {
     expect(ctx?.from).toBe("News");
     expect(ctx?.fromSignature).toBeUndefined();
     expect(ctx?.fromChatType).toBe("channel");
+  });
+});
+
+describe("describeReplyTarget", () => {
+  it("returns null when no reply_to_message", () => {
+    const result = describeReplyTarget(
+      // oxlint-disable-next-line typescript/no-explicit-any
+      { message_id: 1, date: 1000, chat: { id: 1, type: "private" } } as any,
+    );
+    expect(result).toBeNull();
+  });
+
+  it("extracts basic reply info", () => {
+    const result = describeReplyTarget({
+      message_id: 2,
+      date: 1000,
+      chat: { id: 1, type: "private" },
+      reply_to_message: {
+        message_id: 1,
+        date: 900,
+        chat: { id: 1, type: "private" },
+        text: "Original message",
+        from: { id: 42, first_name: "Alice", is_bot: false },
+      },
+      // oxlint-disable-next-line typescript/no-explicit-any
+    } as any);
+    expect(result).not.toBeNull();
+    expect(result?.body).toBe("Original message");
+    expect(result?.sender).toBe("Alice");
+    expect(result?.id).toBe("1");
+    expect(result?.kind).toBe("reply");
+  });
+
+  it("extracts forwarded context from reply_to_message (issue #9619)", () => {
+    // When user forwards a message with a comment, the comment message has
+    // reply_to_message pointing to the forwarded message. We should extract
+    // the forward_origin from the reply target.
+    const result = describeReplyTarget({
+      message_id: 3,
+      date: 1100,
+      chat: { id: 1, type: "private" },
+      text: "Here is my comment about this forwarded content",
+      reply_to_message: {
+        message_id: 2,
+        date: 1000,
+        chat: { id: 1, type: "private" },
+        text: "This is the forwarded content",
+        forward_origin: {
+          type: "user",
+          sender_user: {
+            id: 999,
+            first_name: "Bob",
+            last_name: "Smith",
+            username: "bobsmith",
+            is_bot: false,
+          },
+          date: 500,
+        },
+      },
+      // oxlint-disable-next-line typescript/no-explicit-any
+    } as any);
+    expect(result).not.toBeNull();
+    expect(result?.body).toBe("This is the forwarded content");
+    expect(result?.id).toBe("2");
+    // The reply target's forwarded context should be included
+    expect(result?.forwardedFrom).toBeDefined();
+    expect(result?.forwardedFrom?.from).toBe("Bob Smith (@bobsmith)");
+    expect(result?.forwardedFrom?.fromType).toBe("user");
+    expect(result?.forwardedFrom?.fromId).toBe("999");
+    expect(result?.forwardedFrom?.date).toBe(500);
+  });
+
+  it("extracts forwarded context from channel forward in reply_to_message", () => {
+    const result = describeReplyTarget({
+      message_id: 4,
+      date: 1200,
+      chat: { id: 1, type: "private" },
+      text: "Interesting article!",
+      reply_to_message: {
+        message_id: 3,
+        date: 1100,
+        chat: { id: 1, type: "private" },
+        text: "Channel post content here",
+        forward_origin: {
+          type: "channel",
+          chat: { id: -1001234567, title: "Tech News", username: "technews", type: "channel" },
+          date: 800,
+          message_id: 456,
+          author_signature: "Editor",
+        },
+      },
+      // oxlint-disable-next-line typescript/no-explicit-any
+    } as any);
+    expect(result).not.toBeNull();
+    expect(result?.forwardedFrom).toBeDefined();
+    expect(result?.forwardedFrom?.from).toBe("Tech News (Editor)");
+    expect(result?.forwardedFrom?.fromType).toBe("channel");
+    expect(result?.forwardedFrom?.fromMessageId).toBe(456);
+  });
+
+  it("extracts forwarded context from external_reply", () => {
+    const result = describeReplyTarget({
+      message_id: 5,
+      date: 1300,
+      chat: { id: 1, type: "private" },
+      text: "Comment on forwarded message",
+      external_reply: {
+        message_id: 4,
+        date: 1200,
+        chat: { id: 1, type: "private" },
+        text: "Forwarded from elsewhere",
+        forward_origin: {
+          type: "user",
+          sender_user: {
+            id: 123,
+            first_name: "Eve",
+            last_name: "Stone",
+            username: "eve",
+            is_bot: false,
+          },
+          date: 700,
+        },
+      },
+      // oxlint-disable-next-line typescript/no-explicit-any
+    } as any);
+    expect(result).not.toBeNull();
+    expect(result?.id).toBe("4");
+    expect(result?.forwardedFrom?.from).toBe("Eve Stone (@eve)");
+    expect(result?.forwardedFrom?.fromType).toBe("user");
+    expect(result?.forwardedFrom?.fromId).toBe("123");
+    expect(result?.forwardedFrom?.date).toBe(700);
   });
 });
 

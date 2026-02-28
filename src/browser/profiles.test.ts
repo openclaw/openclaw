@@ -52,11 +52,6 @@ describe("profile name validation", () => {
 });
 
 describe("port allocation", () => {
-  it("allocates first port when none used", () => {
-    const usedPorts = new Set<number>();
-    expect(allocateCdpPort(usedPorts)).toBe(CDP_PORT_RANGE_START);
-  });
-
   it("allocates within an explicit range", () => {
     const usedPorts = new Set<number>();
     expect(allocateCdpPort(usedPorts, { start: 20000, end: 20002 })).toBe(20000);
@@ -64,17 +59,29 @@ describe("port allocation", () => {
     expect(allocateCdpPort(usedPorts, { start: 20000, end: 20002 })).toBe(20001);
   });
 
-  it("skips used ports and returns next available", () => {
-    const usedPorts = new Set([CDP_PORT_RANGE_START, CDP_PORT_RANGE_START + 1]);
-    expect(allocateCdpPort(usedPorts)).toBe(CDP_PORT_RANGE_START + 2);
-  });
+  it("allocates next available port from default range", () => {
+    const cases = [
+      { name: "none used", used: new Set<number>(), expected: CDP_PORT_RANGE_START },
+      {
+        name: "sequentially used start ports",
+        used: new Set([CDP_PORT_RANGE_START, CDP_PORT_RANGE_START + 1]),
+        expected: CDP_PORT_RANGE_START + 2,
+      },
+      {
+        name: "first gap wins",
+        used: new Set([CDP_PORT_RANGE_START, CDP_PORT_RANGE_START + 2]),
+        expected: CDP_PORT_RANGE_START + 1,
+      },
+      {
+        name: "ignores outside-range ports",
+        used: new Set([1, 2, 3, 50000]),
+        expected: CDP_PORT_RANGE_START,
+      },
+    ] as const;
 
-  it("finds first gap in used ports", () => {
-    const usedPorts = new Set([
-      CDP_PORT_RANGE_START,
-      CDP_PORT_RANGE_START + 2, // gap at +1
-    ]);
-    expect(allocateCdpPort(usedPorts)).toBe(CDP_PORT_RANGE_START + 1);
+    for (const testCase of cases) {
+      expect(allocateCdpPort(testCase.used), testCase.name).toBe(testCase.expected);
+    }
   });
 
   it("returns null when all ports are exhausted", () => {
@@ -83,11 +90,6 @@ describe("port allocation", () => {
       usedPorts.add(port);
     }
     expect(allocateCdpPort(usedPorts)).toBeNull();
-  });
-
-  it("handles ports outside range in used set", () => {
-    const usedPorts = new Set([1, 2, 3, 50000]); // ports outside range
-    expect(allocateCdpPort(usedPorts)).toBe(CDP_PORT_RANGE_START);
   });
 });
 
@@ -167,23 +169,27 @@ describe("port collision prevention", () => {
 });
 
 describe("color allocation", () => {
-  it("allocates first color when none used", () => {
-    const usedColors = new Set<string>();
-    expect(allocateColor(usedColors)).toBe(PROFILE_COLORS[0]);
-  });
-
   it("allocates next unused color from palette", () => {
-    const usedColors = new Set([PROFILE_COLORS[0].toUpperCase()]);
-    expect(allocateColor(usedColors)).toBe(PROFILE_COLORS[1]);
-  });
-
-  it("skips multiple used colors", () => {
-    const usedColors = new Set([
-      PROFILE_COLORS[0].toUpperCase(),
-      PROFILE_COLORS[1].toUpperCase(),
-      PROFILE_COLORS[2].toUpperCase(),
-    ]);
-    expect(allocateColor(usedColors)).toBe(PROFILE_COLORS[3]);
+    const cases = [
+      { name: "none used", used: new Set<string>(), expected: PROFILE_COLORS[0] },
+      {
+        name: "first color used",
+        used: new Set([PROFILE_COLORS[0].toUpperCase()]),
+        expected: PROFILE_COLORS[1],
+      },
+      {
+        name: "multiple used colors",
+        used: new Set([
+          PROFILE_COLORS[0].toUpperCase(),
+          PROFILE_COLORS[1].toUpperCase(),
+          PROFILE_COLORS[2].toUpperCase(),
+        ]),
+        expected: PROFILE_COLORS[3],
+      },
+    ] as const;
+    for (const testCase of cases) {
+      expect(allocateColor(testCase.used), testCase.name).toBe(testCase.expected);
+    }
   });
 
   it("handles case-insensitive color matching", () => {
@@ -215,7 +221,7 @@ describe("color allocation", () => {
 });
 
 describe("getUsedColors", () => {
-  it("returns empty set for undefined profiles", () => {
+  it("returns empty set when no color profiles are configured", () => {
     expect(getUsedColors(undefined)).toEqual(new Set());
   });
 

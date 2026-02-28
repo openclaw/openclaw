@@ -170,6 +170,14 @@ The Gateway treats these as **claims** and enforces server-side allowlists.
 - Nodes may call `skills.bins` to fetch the current list of skill executables
   for auto-allow checks.
 
+### Operator helper methods
+
+- Operators may call `tools.catalog` (`operator.read`) to fetch the runtime tool catalog for an
+  agent. The response includes grouped tools and provenance metadata:
+  - `source`: `core` or `plugin`
+  - `pluginId`: plugin owner when `source="plugin"`
+  - `optional`: whether a plugin tool is optional
+
 ## Exec approvals
 
 - When an exec request needs approval, the gateway broadcasts `exec.approval.requested`.
@@ -206,7 +214,11 @@ The Gateway treats these as **claims** and enforces server-side allowlists.
 - All WS clients must include `device` identity during `connect` (operator + node).
   Control UI can omit it **only** when `gateway.controlUi.dangerouslyDisableDeviceAuth`
   is enabled for break-glass use.
-- Non-local connections must sign the server-provided `connect.challenge` nonce.
+- All connections must sign the server-provided `connect.challenge` nonce.
+- Preferred signature payload is `v3`, which binds `platform` and `deviceFamily`
+  in addition to device/client/role/scopes/token/nonce fields.
+- Legacy `v2` signatures remain accepted for compatibility, but paired-device
+  metadata pinning still controls command policy on reconnect.
 
 ## TLS + pinning
 

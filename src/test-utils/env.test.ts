@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { captureEnv, captureFullEnv, withEnv, withEnvAsync } from "./env.js";
 
+function restoreEnvKey(key: string, previous: string | undefined): void {
+  if (previous === undefined) {
+    delete process.env[key];
+  } else {
+    process.env[key] = previous;
+  }
+}
+
 describe("env test utils", () => {
   it("captureEnv restores mutated keys", () => {
     const keyA = "OPENCLAW_ENV_TEST_A";
@@ -40,6 +48,32 @@ describe("env test utils", () => {
     expect(process.env[key]).toBe(prev);
   });
 
+  it("withEnv restores values when callback throws", () => {
+    const key = "OPENCLAW_ENV_TEST_SYNC_THROW";
+    const prev = process.env[key];
+
+    expect(() =>
+      withEnv({ [key]: "inside" }, () => {
+        expect(process.env[key]).toBe("inside");
+        throw new Error("boom");
+      }),
+    ).toThrow("boom");
+
+    expect(process.env[key]).toBe(prev);
+  });
+
+  it("withEnv can delete a key only inside callback", () => {
+    const key = "OPENCLAW_ENV_TEST_SYNC_DELETE";
+    const prev = process.env[key];
+    process.env[key] = "outer";
+
+    const seen = withEnv({ [key]: undefined }, () => process.env[key]);
+
+    expect(seen).toBeUndefined();
+    expect(process.env[key]).toBe("outer");
+    restoreEnvKey(key, prev);
+  });
+
   it("withEnvAsync restores values when callback throws", async () => {
     const key = "OPENCLAW_ENV_TEST_ASYNC";
     const prev = process.env[key];
@@ -52,5 +86,27 @@ describe("env test utils", () => {
     ).rejects.toThrow("boom");
 
     expect(process.env[key]).toBe(prev);
+  });
+
+  it("withEnvAsync applies values only inside async callback", async () => {
+    const key = "OPENCLAW_ENV_TEST_ASYNC_OK";
+    const prev = process.env[key];
+
+    const seen = await withEnvAsync({ [key]: "inside" }, async () => process.env[key]);
+
+    expect(seen).toBe("inside");
+    expect(process.env[key]).toBe(prev);
+  });
+
+  it("withEnvAsync can delete a key only inside callback", async () => {
+    const key = "OPENCLAW_ENV_TEST_ASYNC_DELETE";
+    const prev = process.env[key];
+    process.env[key] = "outer";
+
+    const seen = await withEnvAsync({ [key]: undefined }, async () => process.env[key]);
+
+    expect(seen).toBeUndefined();
+    expect(process.env[key]).toBe("outer");
+    restoreEnvKey(key, prev);
   });
 });

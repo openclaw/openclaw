@@ -8,6 +8,7 @@ import {
   InboundDebounceSchema,
   NativeCommandsSettingSchema,
   QueueSchema,
+  TypingModeSchema,
   TtsConfigSchema,
 } from "./zod-schema.core.js";
 import { sensitive } from "./zod-schema.sensitive.js";
@@ -50,14 +51,8 @@ export const SessionSchema = z
     resetByChannel: z.record(z.string(), SessionResetConfigSchema).optional(),
     store: z.string().optional(),
     typingIntervalSeconds: z.number().int().positive().optional(),
-    typingMode: z
-      .union([
-        z.literal("never"),
-        z.literal("instant"),
-        z.literal("thinking"),
-        z.literal("message"),
-      ])
-      .optional(),
+    typingMode: TypingModeSchema.optional(),
+    parentForkMaxTokens: z.number().int().nonnegative().optional(),
     mainKey: z.string().optional(),
     sendPolicy: SessionSendPolicySchema.optional(),
     agentToAgent: z
@@ -81,6 +76,9 @@ export const SessionSchema = z
         pruneDays: z.number().int().positive().optional(),
         maxEntries: z.number().int().positive().optional(),
         rotateBytes: z.union([z.string(), z.number()]).optional(),
+        resetArchiveRetention: z.union([z.string(), z.number(), z.literal(false)]).optional(),
+        maxDiskBytes: z.union([z.string(), z.number()]).optional(),
+        highWaterBytes: z.union([z.string(), z.number()]).optional(),
       })
       .strict()
       .superRefine((val, ctx) => {
@@ -102,6 +100,39 @@ export const SessionSchema = z
             ctx.addIssue({
               code: z.ZodIssueCode.custom,
               path: ["rotateBytes"],
+              message: "invalid size (use b, kb, mb, gb, tb)",
+            });
+          }
+        }
+        if (val.resetArchiveRetention !== undefined && val.resetArchiveRetention !== false) {
+          try {
+            parseDurationMs(String(val.resetArchiveRetention).trim(), { defaultUnit: "d" });
+          } catch {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: ["resetArchiveRetention"],
+              message: "invalid duration (use ms, s, m, h, d)",
+            });
+          }
+        }
+        if (val.maxDiskBytes !== undefined) {
+          try {
+            parseByteSize(String(val.maxDiskBytes).trim(), { defaultUnit: "b" });
+          } catch {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: ["maxDiskBytes"],
+              message: "invalid size (use b, kb, mb, gb, tb)",
+            });
+          }
+        }
+        if (val.highWaterBytes !== undefined) {
+          try {
+            parseByteSize(String(val.highWaterBytes).trim(), { defaultUnit: "b" });
+          } catch {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: ["highWaterBytes"],
               message: "invalid size (use b, kb, mb, gb, tb)",
             });
           }

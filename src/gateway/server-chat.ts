@@ -4,6 +4,7 @@ import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { loadConfig } from "../config/config.js";
 import { type AgentEventPayload, getAgentRunContext } from "../infra/agent-events.js";
 import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
+import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
 import { loadSessionEntry } from "./session-utils.js";
 import { formatForLog } from "./ws-log.js";
 
@@ -283,10 +284,14 @@ export function createAgentEventHandler({
     seq: number,
     text: string,
   ) => {
-    if (isSilentReplyText(text, SILENT_REPLY_TOKEN)) {
+    const cleaned = stripInlineDirectiveTagsForDisplay(text).text;
+    if (!cleaned) {
       return;
     }
-    chatRunState.buffers.set(clientRunId, text);
+    if (isSilentReplyText(cleaned, SILENT_REPLY_TOKEN)) {
+      return;
+    }
+    chatRunState.buffers.set(clientRunId, cleaned);
     if (shouldHideHeartbeatChatOutput(clientRunId, sourceRunId)) {
       return;
     }
@@ -303,7 +308,7 @@ export function createAgentEventHandler({
       state: "delta" as const,
       message: {
         role: "assistant",
-        content: [{ type: "text", text }],
+        content: [{ type: "text", text: cleaned }],
         timestamp: now,
       },
     };
@@ -319,7 +324,9 @@ export function createAgentEventHandler({
     jobState: "done" | "error",
     error?: unknown,
   ) => {
-    const bufferedText = chatRunState.buffers.get(clientRunId)?.trim() ?? "";
+    const bufferedText = stripInlineDirectiveTagsForDisplay(
+      chatRunState.buffers.get(clientRunId) ?? "",
+    ).text.trim();
     const normalizedHeartbeatText = normalizeHeartbeatChatFinalText({
       runId: clientRunId,
       sourceRunId,

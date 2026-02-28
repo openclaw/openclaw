@@ -1,7 +1,7 @@
 import type { ChildProcessWithoutNullStreams, SpawnOptions } from "node:child_process";
 import { killProcessTree } from "../../kill-tree.js";
 import { spawnWithFallback } from "../../spawn-utils.js";
-import type { ManagedRunStdin } from "../types.js";
+import type { ManagedRunStdin, SpawnProcessAdapter } from "../types.js";
 import { toStringEnv } from "./env.js";
 
 function resolveCommand(command: string): string {
@@ -19,15 +19,7 @@ function resolveCommand(command: string): string {
   return command;
 }
 
-export type ChildAdapter = {
-  pid?: number;
-  stdin?: ManagedRunStdin;
-  onStdout: (listener: (chunk: string) => void) => void;
-  onStderr: (listener: (chunk: string) => void) => void;
-  wait: () => Promise<{ code: number | null; signal: NodeJS.Signals | null }>;
-  kill: (signal?: NodeJS.Signals) => void;
-  dispose: () => void;
-};
+export type ChildAdapter = SpawnProcessAdapter<NodeJS.Signals | null>;
 
 export async function createChildAdapter(params: {
   argv: string[];

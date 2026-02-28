@@ -46,19 +46,38 @@ export type CanvasHostConfig = {
   liveReload?: boolean;
 };
 
-export type TalkConfig = {
-  /** Default ElevenLabs voice ID for Talk mode. */
+export type TalkProviderConfig = {
+  /** Default voice ID for the provider's Talk mode implementation. */
   voiceId?: string;
-  /** Optional voice name -> ElevenLabs voice ID map. */
+  /** Optional voice name -> provider voice ID map. */
   voiceAliases?: Record<string, string>;
-  /** Default ElevenLabs model ID for Talk mode. */
+  /** Default provider model ID for Talk mode. */
   modelId?: string;
-  /** Default ElevenLabs output format (e.g. mp3_44100_128). */
+  /** Default provider output format (for example pcm_44100). */
   outputFormat?: string;
-  /** ElevenLabs API key (optional; falls back to ELEVENLABS_API_KEY). */
+  /** Provider API key (optional; provider-specific env fallback may apply). */
   apiKey?: string;
+  /** Provider-specific extensions. */
+  [key: string]: unknown;
+};
+
+export type TalkConfig = {
+  /** Active Talk TTS provider (for example "elevenlabs"). */
+  provider?: string;
+  /** Provider-specific Talk config keyed by provider id. */
+  providers?: Record<string, TalkProviderConfig>;
   /** Stop speaking when user starts talking (default: true). */
   interruptOnSpeech?: boolean;
+
+  /**
+   * Legacy ElevenLabs compatibility fields.
+   * Kept during rollout while older clients migrate to provider/providers.
+   */
+  voiceId?: string;
+  voiceAliases?: Record<string, string>;
+  modelId?: string;
+  outputFormat?: string;
+  apiKey?: string;
 };
 
 export type GatewayControlUiConfig = {
@@ -70,6 +89,11 @@ export type GatewayControlUiConfig = {
   root?: string;
   /** Allowed browser origins for Control UI/WebChat websocket connections. */
   allowedOrigins?: string[];
+  /**
+   * DANGEROUS: Keep Host-header origin fallback behavior.
+   * Supported long-term for deployments that intentionally rely on this policy.
+   */
+  dangerouslyAllowHostHeaderOriginFallback?: boolean;
   /**
    * Insecure-auth toggle.
    * Control UI still requires secure context + device identity unless
@@ -255,8 +279,19 @@ export type GatewayHttpEndpointsConfig = {
   responses?: GatewayHttpResponsesConfig;
 };
 
+export type GatewayHttpSecurityHeadersConfig = {
+  /**
+   * Value for the Strict-Transport-Security response header.
+   * Set to false to disable explicitly.
+   *
+   * Example: "max-age=31536000; includeSubDomains"
+   */
+  strictTransportSecurity?: string | false;
+};
+
 export type GatewayHttpConfig = {
   endpoints?: GatewayHttpEndpointsConfig;
+  securityHeaders?: GatewayHttpSecurityHeadersConfig;
 };
 
 export type GatewayNodesConfig = {

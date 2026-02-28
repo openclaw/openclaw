@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { resolvePreferredOpenClawTmpDir } from "../../../src/infra/tmp-openclaw-dir.js";
 
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
 const resolveFeishuAccountMock = vi.hoisted(() => vi.fn());
@@ -37,6 +37,16 @@ vi.mock("./runtime.js", () => ({
 }));
 
 import { downloadImageFeishu, downloadMessageResourceFeishu, sendMediaFeishu } from "./media.js";
+
+function expectPathIsolatedToTmpRoot(pathValue: string, key: string): void {
+  expect(pathValue).not.toContain(key);
+  expect(pathValue).not.toContain("..");
+
+  const tmpRoot = path.resolve(resolvePreferredOpenClawTmpDir());
+  const resolved = path.resolve(pathValue);
+  const rel = path.relative(tmpRoot, resolved);
+  expect(rel === ".." || rel.startsWith(`..${path.sep}`)).toBe(false);
+}
 
 describe("sendMediaFeishu msg_type routing", () => {
   beforeEach(() => {
@@ -217,13 +227,7 @@ describe("sendMediaFeishu msg_type routing", () => {
 
     expect(result.buffer).toEqual(Buffer.from("image-data"));
     expect(capturedPath).toBeDefined();
-    expect(capturedPath).not.toContain(imageKey);
-    expect(capturedPath).not.toContain("..");
-
-    const tmpRoot = path.resolve(os.tmpdir());
-    const resolved = path.resolve(capturedPath as string);
-    const rel = path.relative(tmpRoot, resolved);
-    expect(rel === ".." || rel.startsWith(`..${path.sep}`)).toBe(false);
+    expectPathIsolatedToTmpRoot(capturedPath as string, imageKey);
   });
 
   it("uses isolated temp paths for message resource downloads", async () => {
@@ -246,13 +250,7 @@ describe("sendMediaFeishu msg_type routing", () => {
 
     expect(result.buffer).toEqual(Buffer.from("resource-data"));
     expect(capturedPath).toBeDefined();
-    expect(capturedPath).not.toContain(fileKey);
-    expect(capturedPath).not.toContain("..");
-
-    const tmpRoot = path.resolve(os.tmpdir());
-    const resolved = path.resolve(capturedPath as string);
-    const rel = path.relative(tmpRoot, resolved);
-    expect(rel === ".." || rel.startsWith(`..${path.sep}`)).toBe(false);
+    expectPathIsolatedToTmpRoot(capturedPath as string, fileKey);
   });
 
   it("rejects invalid image keys before calling feishu api", async () => {

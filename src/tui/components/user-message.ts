@@ -1,20 +1,11 @@
-import { Container, Markdown, Spacer } from "@mariozechner/pi-tui";
-import { markdownTheme, theme } from "../theme/theme.js";
+import { theme } from "../theme/theme.js";
+import { MarkdownMessageComponent } from "./markdown-message.js";
 
-export class UserMessageComponent extends Container {
-  private body: Markdown;
-
+export class UserMessageComponent extends MarkdownMessageComponent {
   constructor(text: string) {
-    super();
-    this.body = new Markdown(text, 1, 1, markdownTheme, {
+    super(text, 1, {
       bgColor: (line) => theme.userBg(line),
       color: (line) => theme.userText(line),
     });
-    this.addChild(new Spacer(1));
-    this.addChild(this.body);
-  }
-
-  setText(text: string) {
-    this.body.setText(text);
   }
 }

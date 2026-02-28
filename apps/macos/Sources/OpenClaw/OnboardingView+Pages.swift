@@ -12,8 +12,6 @@ extension OnboardingView {
             self.welcomePage()
         case 1:
             self.connectionPage()
-        case 2:
-            self.anthropicAuthPage()
         case 3:
             self.wizardPage()
         case 5:
@@ -87,19 +85,9 @@ extension OnboardingView {
 
             self.onboardingCard(spacing: 12, padding: 14) {
                 VStack(alignment: .leading, spacing: 10) {
-                    let localSubtitle: String = {
-                        guard let probe = self.localGatewayProbe else {
-                            return "Gateway starts automatically on this Mac."
-                        }
-                        let base = probe.expected
-                            ? "Existing gateway detected"
-                            : "Port \(probe.port) already in use"
-                        let command = probe.command.isEmpty ? "" : " (\(probe.command) pid \(probe.pid))"
-                        return "\(base)\(command). Will attach."
-                    }()
                     self.connectionChoiceButton(
                         title: "This Mac",
-                        subtitle: localSubtitle,
+                        subtitle: self.localGatewaySubtitle,
                         selected: self.state.connectionMode == .local)
                     {
                         self.selectLocalGateway()
@@ -107,50 +95,7 @@ extension OnboardingView {
 
                     Divider().padding(.vertical, 4)
 
-                    HStack(spacing: 8) {
-                        Image(systemName: "dot.radiowaves.left.and.right")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        Text(self.gatewayDiscovery.statusText)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        if self.gatewayDiscovery.gateways.isEmpty {
-                            ProgressView().controlSize(.small)
-                            Button("Refresh") {
-                                self.gatewayDiscovery.refreshWideAreaFallbackNow(timeoutSeconds: 5.0)
-                            }
-                            .buttonStyle(.link)
-                            .help("Retry Tailscale discovery (DNS-SD).")
-                        }
-                        Spacer(minLength: 0)
-                    }
-
-                    if self.gatewayDiscovery.gateways.isEmpty {
-                        Text("Searching for nearby gateways…")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .padding(.leading, 4)
-                    } else {
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("Nearby gateways")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .padding(.leading, 4)
-                            ForEach(self.gatewayDiscovery.gateways.prefix(6)) { gateway in
-                                self.connectionChoiceButton(
-                                    title: gateway.displayName,
-                                    subtitle: self.gatewaySubtitle(for: gateway),
-                                    selected: self.isSelectedGateway(gateway))
-                                {
-                                    self.selectRemoteGateway(gateway)
-                                }
-                            }
-                        }
-                        .padding(8)
-                        .background(
-                            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                .fill(Color(NSColor.controlBackgroundColor)))
-                    }
+                    self.gatewayDiscoverySection()
 
                     self.connectionChoiceButton(
                         title: "Configure later",
@@ -160,104 +105,168 @@ extension OnboardingView {
                         self.selectUnconfiguredGateway()
                     }
 
-                    Button(self.showAdvancedConnection ? "Hide Advanced" : "Advanced…") {
-                        withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) {
-                            self.showAdvancedConnection.toggle()
-                        }
-                        if self.showAdvancedConnection, self.state.connectionMode != .remote {
-                            self.state.connectionMode = .remote
-                        }
-                    }
-                    .buttonStyle(.link)
+                    self.advancedConnectionSection()
+                }
+            }
+        }
+    }
 
-                    if self.showAdvancedConnection {
-                        let labelWidth: CGFloat = 110
-                        let fieldWidth: CGFloat = 320
+    private var localGatewaySubtitle: String {
+        guard let probe = self.localGatewayProbe else {
+            return "Gateway starts automatically on this Mac."
+        }
+        let base = probe.expected
+            ? "Existing gateway detected"
+            : "Port \(probe.port) already in use"
+        let command = probe.command.isEmpty ? "" : " (\(probe.command) pid \(probe.pid))"
+        return "\(base)\(command). Will attach."
+    }
 
-                        VStack(alignment: .leading, spacing: 10) {
-                            Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 8) {
-                                GridRow {
-                                    Text("Transport")
-                                        .font(.callout.weight(.semibold))
-                                        .frame(width: labelWidth, alignment: .leading)
-                                    Picker("Transport", selection: self.$state.remoteTransport) {
-                                        Text("SSH tunnel").tag(AppState.RemoteTransport.ssh)
-                                        Text("Direct (ws/wss)").tag(AppState.RemoteTransport.direct)
-                                    }
-                                    .pickerStyle(.segmented)
-                                    .frame(width: fieldWidth)
-                                }
-                                if self.state.remoteTransport == .direct {
-                                    GridRow {
-                                        Text("Gateway URL")
-                                            .font(.callout.weight(.semibold))
-                                            .frame(width: labelWidth, alignment: .leading)
-                                        TextField("wss://gateway.example.ts.net", text: self.$state.remoteUrl)
-                                            .textFieldStyle(.roundedBorder)
-                                            .frame(width: fieldWidth)
-                                    }
-                                }
-                                if self.state.remoteTransport == .ssh {
-                                    GridRow {
-                                        Text("SSH target")
-                                            .font(.callout.weight(.semibold))
-                                            .frame(width: labelWidth, alignment: .leading)
-                                        TextField("user@host[:port]", text: self.$state.remoteTarget)
-                                            .textFieldStyle(.roundedBorder)
-                                            .frame(width: fieldWidth)
-                                    }
-                                    if let message = CommandResolver
-                                        .sshTargetValidationMessage(self.state.remoteTarget)
-                                    {
-                                        GridRow {
-                                            Text("")
-                                                .frame(width: labelWidth, alignment: .leading)
-                                            Text(message)
-                                                .font(.caption)
-                                                .foregroundStyle(.red)
-                                                .frame(width: fieldWidth, alignment: .leading)
-                                        }
-                                    }
-                                    GridRow {
-                                        Text("Identity file")
-                                            .font(.callout.weight(.semibold))
-                                            .frame(width: labelWidth, alignment: .leading)
-                                        TextField("/Users/you/.ssh/id_ed25519", text: self.$state.remoteIdentity)
-                                            .textFieldStyle(.roundedBorder)
-                                            .frame(width: fieldWidth)
-                                    }
-                                    GridRow {
-                                        Text("Project root")
-                                            .font(.callout.weight(.semibold))
-                                            .frame(width: labelWidth, alignment: .leading)
-                                        TextField("/home/you/Projects/openclaw", text: self.$state.remoteProjectRoot)
-                                            .textFieldStyle(.roundedBorder)
-                                            .frame(width: fieldWidth)
-                                    }
-                                    GridRow {
-                                        Text("CLI path")
-                                            .font(.callout.weight(.semibold))
-                                            .frame(width: labelWidth, alignment: .leading)
-                                        TextField(
-                                            "/Applications/OpenClaw.app/.../openclaw",
-                                            text: self.$state.remoteCliPath)
-                                            .textFieldStyle(.roundedBorder)
-                                            .frame(width: fieldWidth)
-                                    }
-                                }
-                            }
+    @ViewBuilder
+    private func gatewayDiscoverySection() -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "dot.radiowaves.left.and.right")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Text(self.gatewayDiscovery.statusText)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            if self.gatewayDiscovery.gateways.isEmpty {
+                ProgressView().controlSize(.small)
+                Button("Refresh") {
+                    self.gatewayDiscovery.refreshWideAreaFallbackNow(timeoutSeconds: 5.0)
+                }
+                .buttonStyle(.link)
+                .help("Retry Tailscale discovery (DNS-SD).")
+            }
+            Spacer(minLength: 0)
+        }
 
-                            Text(self.state.remoteTransport == .direct
-                                ? "Tip: use Tailscale Serve so the gateway has a valid HTTPS cert."
-                                : "Tip: keep Tailscale enabled so your gateway stays reachable.")
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                        }
-                        .transition(.opacity.combined(with: .move(edge: .top)))
+        if self.gatewayDiscovery.gateways.isEmpty {
+            Text("Searching for nearby gateways…")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .padding(.leading, 4)
+        } else {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Nearby gateways")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.leading, 4)
+                ForEach(self.gatewayDiscovery.gateways.prefix(6)) { gateway in
+                    self.connectionChoiceButton(
+                        title: gateway.displayName,
+                        subtitle: self.gatewaySubtitle(for: gateway),
+                        selected: self.isSelectedGateway(gateway))
+                    {
+                        self.selectRemoteGateway(gateway)
                     }
                 }
             }
+            .padding(8)
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(Color(NSColor.controlBackgroundColor)))
+        }
+    }
+
+    @ViewBuilder
+    private func advancedConnectionSection() -> some View {
+        Button(self.showAdvancedConnection ? "Hide Advanced" : "Advanced…") {
+            withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) {
+                self.showAdvancedConnection.toggle()
+            }
+            if self.showAdvancedConnection, self.state.connectionMode != .remote {
+                self.state.connectionMode = .remote
+            }
+        }
+        .buttonStyle(.link)
+
+        if self.showAdvancedConnection {
+            let labelWidth: CGFloat = 110
+            let fieldWidth: CGFloat = 320
+
+            VStack(alignment: .leading, spacing: 10) {
+                Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 8) {
+                    GridRow {
+                        Text("Transport")
+                            .font(.callout.weight(.semibold))
+                            .frame(width: labelWidth, alignment: .leading)
+                        Picker("Transport", selection: self.$state.remoteTransport) {
+                            Text("SSH tunnel").tag(AppState.RemoteTransport.ssh)
+                            Text("Direct (ws/wss)").tag(AppState.RemoteTransport.direct)
+                        }
+                        .pickerStyle(.segmented)
+                        .frame(width: fieldWidth)
+                    }
+                    if self.state.remoteTransport == .direct {
+                        GridRow {
+                            Text("Gateway URL")
+                                .font(.callout.weight(.semibold))
+                                .frame(width: labelWidth, alignment: .leading)
+                            TextField("wss://gateway.example.ts.net", text: self.$state.remoteUrl)
+                                .textFieldStyle(.roundedBorder)
+                                .frame(width: fieldWidth)
+                        }
+                    }
+                    if self.state.remoteTransport == .ssh {
+                        GridRow {
+                            Text("SSH target")
+                                .font(.callout.weight(.semibold))
+                                .frame(width: labelWidth, alignment: .leading)
+                            TextField("user@host[:port]", text: self.$state.remoteTarget)
+                                .textFieldStyle(.roundedBorder)
+                                .frame(width: fieldWidth)
+                        }
+                        if let message = CommandResolver
+                            .sshTargetValidationMessage(self.state.remoteTarget)
+                        {
+                            GridRow {
+                                Text("")
+                                    .frame(width: labelWidth, alignment: .leading)
+                                Text(message)
+                                    .font(.caption)
+                                    .foregroundStyle(.red)
+                                    .frame(width: fieldWidth, alignment: .leading)
+                            }
+                        }
+                        GridRow {
+                            Text("Identity file")
+                                .font(.callout.weight(.semibold))
+                                .frame(width: labelWidth, alignment: .leading)
+                            TextField("/Users/you/.ssh/id_ed25519", text: self.$state.remoteIdentity)
+                                .textFieldStyle(.roundedBorder)
+                                .frame(width: fieldWidth)
+                        }
+                        GridRow {
+                            Text("Project root")
+                                .font(.callout.weight(.semibold))
+                                .frame(width: labelWidth, alignment: .leading)
+                            TextField("/home/you/Projects/openclaw", text: self.$state.remoteProjectRoot)
+                                .textFieldStyle(.roundedBorder)
+                                .frame(width: fieldWidth)
+                        }
+                        GridRow {
+                            Text("CLI path")
+                                .font(.callout.weight(.semibold))
+                                .frame(width: labelWidth, alignment: .leading)
+                            TextField(
+                                "/Applications/OpenClaw.app/.../openclaw",
+                                text: self.$state.remoteCliPath)
+                                .textFieldStyle(.roundedBorder)
+                                .frame(width: fieldWidth)
+                        }
+                    }
+                }
+
+                Text(self.state.remoteTransport == .direct
+                    ? "Tip: use Tailscale Serve so the gateway has a valid HTTPS cert."
+                    : "Tip: keep Tailscale enabled so your gateway stays reachable.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            .transition(.opacity.combined(with: .move(edge: .top)))
         }
     }
 
@@ -265,9 +274,11 @@ extension OnboardingView {
         if self.state.remoteTransport == .direct {
             return GatewayDiscoveryHelpers.directUrl(for: gateway) ?? "Gateway pairing only"
         }
-        if let host = GatewayDiscoveryHelpers.sanitizedTailnetHost(gateway.tailnetDns) ?? gateway.lanHost {
-            let portSuffix = gateway.sshPort != 22 ? " · ssh \(gateway.sshPort)" : ""
-            return "\(host)\(portSuffix)"
+        if let target = GatewayDiscoveryHelpers.sshTarget(for: gateway),
+           let parsed = CommandResolver.parseSSHTarget(target)
+        {
+            let portSuffix = parsed.port != 22 ? " · ssh \(parsed.port)" : ""
+            return "\(parsed.host)\(portSuffix)"
         }
         return "Gateway pairing only"
     }
@@ -325,170 +336,6 @@ extension OnboardingView {
                         lineWidth: 1))
         }
         .buttonStyle(.plain)
-    }
-
-    func anthropicAuthPage() -> some View {
-        self.onboardingPage {
-            Text("Connect Claude")
-                .font(.largeTitle.weight(.semibold))
-            Text("Give your model the token it needs!")
-                .font(.body)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 540)
-                .fixedSize(horizontal: false, vertical: true)
-            Text("OpenClaw supports any model — we strongly recommend Opus 4.6 for the best experience.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 540)
-                .fixedSize(horizontal: false, vertical: true)
-
-            self.onboardingCard(spacing: 12, padding: 16) {
-                HStack(alignment: .center, spacing: 10) {
-                    Circle()
-                        .fill(self.anthropicAuthVerified ? Color.green : Color.orange)
-                        .frame(width: 10, height: 10)
-                    Text(
-                        self.anthropicAuthConnected
-                            ? (self.anthropicAuthVerified
-                                ? "Claude connected (OAuth) — verified"
-                                : "Claude connected (OAuth)")
-                            : "Not connected yet")
-                        .font(.headline)
-                    Spacer()
-                }
-
-                if self.anthropicAuthConnected, self.anthropicAuthVerifying {
-                    Text("Verifying OAuth…")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                } else if !self.anthropicAuthConnected {
-                    Text(self.anthropicAuthDetectedStatus.shortDescription)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                } else if self.anthropicAuthVerified, let date = self.anthropicAuthVerifiedAt {
-                    Text("Detected working OAuth (\(date.formatted(date: .abbreviated, time: .shortened))).")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-
-                Text(
-                    "This lets OpenClaw use Claude immediately. Credentials are stored at " +
-                        "`~/.openclaw/credentials/oauth.json` (owner-only).")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-
-                HStack(spacing: 12) {
-                    Text(OpenClawOAuthStore.oauthURL().path)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-
-                    Spacer()
-
-                    Button("Reveal") {
-                        NSWorkspace.shared.activateFileViewerSelecting([OpenClawOAuthStore.oauthURL()])
-                    }
-                    .buttonStyle(.bordered)
-
-                    Button("Refresh") {
-                        self.refreshAnthropicOAuthStatus()
-                    }
-                    .buttonStyle(.bordered)
-                }
-
-                Divider().padding(.vertical, 2)
-
-                HStack(spacing: 12) {
-                    if !self.anthropicAuthVerified {
-                        if self.anthropicAuthConnected {
-                            Button("Verify") {
-                                Task { await self.verifyAnthropicOAuthIfNeeded(force: true) }
-                            }
-                            .buttonStyle(.borderedProminent)
-                            .disabled(self.anthropicAuthBusy || self.anthropicAuthVerifying)
-
-                            if self.anthropicAuthVerificationFailed {
-                                Button("Re-auth (OAuth)") {
-                                    self.startAnthropicOAuth()
-                                }
-                                .buttonStyle(.bordered)
-                                .disabled(self.anthropicAuthBusy || self.anthropicAuthVerifying)
-                            }
-                        } else {
-                            Button {
-                                self.startAnthropicOAuth()
-                            } label: {
-                                if self.anthropicAuthBusy {
-                                    ProgressView()
-                                } else {
-                                    Text("Open Claude sign-in (OAuth)")
-                                }
-                            }
-                            .buttonStyle(.borderedProminent)
-                            .disabled(self.anthropicAuthBusy)
-                        }
-                    }
-                }
-
-                if !self.anthropicAuthVerified, self.anthropicAuthPKCE != nil {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Paste the `code#state` value")
-                            .font(.headline)
-                        TextField("code#state", text: self.$anthropicAuthCode)
-                            .textFieldStyle(.roundedBorder)
-
-                        Toggle("Auto-detect from clipboard", isOn: self.$anthropicAuthAutoDetectClipboard)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .disabled(self.anthropicAuthBusy)
-
-                        Toggle("Auto-connect when detected", isOn: self.$anthropicAuthAutoConnectClipboard)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .disabled(self.anthropicAuthBusy)
-
-                        Button("Connect") {
-                            Task { await self.finishAnthropicOAuth() }
-                        }
-                        .buttonStyle(.bordered)
-                        .disabled(
-                            self.anthropicAuthBusy ||
-                                self.anthropicAuthCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                    }
-                    .onReceive(Self.clipboardPoll) { _ in
-                        self.pollAnthropicClipboardIfNeeded()
-                    }
-                }
-
-                self.onboardingCard(spacing: 8, padding: 12) {
-                    Text("API key (advanced)")
-                        .font(.headline)
-                    Text(
-                        "You can also use an Anthropic API key, but this UI is instructions-only for now " +
-                            "(GUI apps don’t automatically inherit your shell env vars like `ANTHROPIC_API_KEY`).")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                .shadow(color: .clear, radius: 0)
-                .background(Color.clear)
-
-                if let status = self.anthropicAuthStatus {
-                    Text(status)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-        }
-        .task { await self.verifyAnthropicOAuthIfNeeded() }
     }
 
     func permissionsPage() -> some View {

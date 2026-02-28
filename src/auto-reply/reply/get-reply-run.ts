@@ -1,7 +1,6 @@
 import crypto from "node:crypto";
 import { resolveSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
 import type { ExecToolDefaults } from "../../agents/bash-tools.js";
-import { resolveModelAuthLabel } from "../../agents/model-auth-label.js";
 import {
   abortEmbeddedPiRun,
   isEmbeddedPiRunActive,
@@ -41,16 +40,88 @@ import type { InlineDirectives } from "./directive-handling.js";
 import { buildGroupChatContext, buildGroupIntro } from "./groups.js";
 import { buildInboundMetaSystemPrompt, buildInboundUserContextPrefix } from "./inbound-meta.js";
 import type { createModelSelectionState } from "./model-selection.js";
+import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { resolveQueueSettings } from "./queue.js";
 import { routeReply } from "./route-reply.js";
 import { BARE_SESSION_RESET_PROMPT } from "./session-reset-prompt.js";
 import { ensureSkillSnapshot, prependSystemEvents } from "./session-updates.js";
 import { resolveTypingMode } from "./typing-mode.js";
+import { resolveRunTypingPolicy } from "./typing-policy.js";
 import type { TypingController } from "./typing.js";
 import { appendUntrustedContext } from "./untrusted-context.js";
 
 type AgentDefaults = NonNullable<OpenClawConfig["agents"]>["defaults"];
 type ExecOverrides = Pick<ExecToolDefaults, "host" | "security" | "ask" | "node">;
+
+function buildResetSessionNoticeText(params: {
+  provider: string;
+  model: string;
+  defaultProvider: string;
+  defaultModel: string;
+}): string {
+  const modelLabel = `${params.provider}/${params.model}`;
+  const defaultLabel = `${params.defaultProvider}/${params.defaultModel}`;
+  return modelLabel === defaultLabel
+    ? `✅ New session started · model: ${modelLabel}`
+    : `✅ New session started · model: ${modelLabel} (default: ${defaultLabel})`;
+}
+
+function resolveResetSessionNoticeRoute(params: {
+  ctx: MsgContext;
+  command: ReturnType<typeof buildCommandContext>;
+}): {
+  channel: Parameters<typeof routeReply>[0]["channel"];
+  to: string;
+} | null {
+  const commandChannel = params.command.channel?.trim().toLowerCase();
+  const fallbackChannel =
+    commandChannel && commandChannel !== "webchat"
+      ? (commandChannel as Parameters<typeof routeReply>[0]["channel"])
+      : undefined;
+  const channel = params.ctx.OriginatingChannel ?? fallbackChannel;
+  const to = params.ctx.OriginatingTo ?? params.command.from ?? params.command.to;
+  if (!channel || channel === "webchat" || !to) {
+    return null;
+  }
+  return { channel, to };
+}
+
+async function sendResetSessionNotice(params: {
+  ctx: MsgContext;
+  command: ReturnType<typeof buildCommandContext>;
+  sessionKey: string;
+  cfg: OpenClawConfig;
+  accountId: string | undefined;
+  threadId: string | number | undefined;
+  provider: string;
+  model: string;
+  defaultProvider: string;
+  defaultModel: string;
+}): Promise<void> {
+  const route = resolveResetSessionNoticeRoute({
+    ctx: params.ctx,
+    command: params.command,
+  });
+  if (!route) {
+    return;
+  }
+  await routeReply({
+    payload: {
+      text: buildResetSessionNoticeText({
+        provider: params.provider,
+        model: params.model,
+        defaultProvider: params.defaultProvider,
+        defaultModel: params.defaultModel,
+      }),
+    },
+    channel: route.channel,
+    to: route.to,
+    sessionKey: params.sessionKey,
+    accountId: params.accountId,
+    threadId: params.threadId,
+    cfg: params.cfg,
+  });
+}
 
 type RunPreparedReplyParams = {
   ctx: MsgContext;
@@ -163,11 +234,19 @@ export async function runPreparedReply(
   const isGroupChat = sessionCtx.ChatType === "group";
   const wasMentioned = ctx.WasMentioned === true;
   const isHeartbeat = opts?.isHeartbeat === true;
+  const { typingPolicy, suppressTyping } = resolveRunTypingPolicy({
+    requestedPolicy: opts?.typingPolicy,
+    suppressTyping: opts?.suppressTyping === true,
+    isHeartbeat,
+    originatingChannel: ctx.OriginatingChannel,
+  });
   const typingMode = resolveTypingMode({
     configured: sessionCfg?.typingMode ?? agentCfg?.typingMode,
     isGroupChat,
     wasMentioned,
     isHeartbeat,
+    typingPolicy,
+    suppressTyping,
   });
   const shouldInjectGroupIntro = Boolean(
     isGroupChat && (isFirstTurnInSession || sessionEntry?.groupActivationNeedsSystemIntro),
@@ -260,12 +339,11 @@ export async function runPreparedReply(
   prefixedBodyBase = appendUntrustedContext(prefixedBodyBase, sessionCtx.UntrustedContext);
   const threadStarterBody = ctx.ThreadStarterBody?.trim();
   const threadHistoryBody = ctx.ThreadHistoryBody?.trim();
-  const threadContextNote =
-    isNewSession && threadHistoryBody
-      ? `[Thread history - for context]\n${threadHistoryBody}`
-      : isNewSession && threadStarterBody
-        ? `[Thread starter - for context]\n${threadStarterBody}`
-        : undefined;
+  const threadContextNote = threadHistoryBody
+    ? `[Thread history - for context]\n${threadHistoryBody}`
+    : threadStarterBody
+      ? `[Thread starter - for context]\n${threadStarterBody}`
+      : undefined;
   const skillResult = await ensureSkillSnapshot({
     sessionEntry,
     sessionStore,
@@ -320,34 +398,18 @@ export async function runPreparedReply(
     }
   }
   if (resetTriggered && command.isAuthorizedSender) {
-    // oxlint-disable-next-line typescript/no-explicit-any
-    const channel = ctx.OriginatingChannel || (command.channel as any);
-    const to = ctx.OriginatingTo || command.from || command.to;
-    if (channel && to) {
-      const modelLabel = `${provider}/${model}`;
-      const defaultLabel = `${defaultProvider}/${defaultModel}`;
-      const modelAuthLabel = resolveModelAuthLabel({
-        provider,
-        cfg,
-        sessionEntry,
-        agentDir,
-      });
-      const authSuffix =
-        modelAuthLabel && modelAuthLabel !== "unknown" ? ` · 🔑 ${modelAuthLabel}` : "";
-      const text =
-        modelLabel === defaultLabel
-          ? `✅ New session started · model: ${modelLabel}${authSuffix}`
-          : `✅ New session started · model: ${modelLabel} (default: ${defaultLabel})${authSuffix}`;
-      await routeReply({
-        payload: { text },
-        channel,
-        to,
-        sessionKey,
-        accountId: ctx.AccountId,
-        threadId: ctx.MessageThreadId,
-        cfg,
-      });
-    }
+    await sendResetSessionNotice({
+      ctx,
+      command,
+      sessionKey,
+      cfg,
+      accountId: ctx.AccountId,
+      threadId: ctx.MessageThreadId,
+      provider,
+      model,
+      defaultProvider,
+      defaultModel,
+    });
   }
   const sessionIdFinal = sessionId ?? crypto.randomUUID();
   const sessionFile = resolveSessionFilePath(
@@ -408,7 +470,10 @@ export async function runPreparedReply(
       agentDir,
       sessionId: sessionIdFinal,
       sessionKey,
-      messageProvider: sessionCtx.Provider?.trim().toLowerCase() || undefined,
+      messageProvider: resolveOriginMessageProvider({
+        originatingChannel: ctx.OriginatingChannel ?? sessionCtx.OriginatingChannel,
+        provider: ctx.Surface ?? ctx.Provider ?? sessionCtx.Provider,
+      }),
       agentAccountId: sessionCtx.AccountId,
       groupId: resolveGroupSessionKey(sessionCtx)?.id ?? undefined,
       groupChannel: sessionCtx.GroupChannel?.trim() ?? sessionCtx.GroupSubject?.trim(),
