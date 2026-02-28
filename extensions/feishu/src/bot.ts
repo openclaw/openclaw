@@ -188,7 +188,134 @@ function parseMessageContent(content: string, messageType: string): string {
       const { textContent } = parsePostContent(content);
       return textContent;
     }
+    if (messageType === "share_chat") {
+      // Preserve available summary text for merged/forwarded chat messages.
+      if (parsed && typeof parsed === "object") {
+        const share = parsed as {
+          body?: unknown;
+          summary?: unknown;
+          share_chat_id?: unknown;
+        };
+        if (typeof share.body === "string" && share.body.trim().length > 0) {
+          return share.body.trim();
+        }
+        if (typeof share.summary === "string" && share.summary.trim().length > 0) {
+          return share.summary.trim();
+        }
+        if (typeof share.share_chat_id === "string" && share.share_chat_id.trim().length > 0) {
+          return `[Forwarded message: ${share.share_chat_id.trim()}]`;
+        }
+      }
+      return "[Forwarded message]";
+    }
+    if (messageType === "merge_forward") {
+      // Return placeholder; actual content fetched asynchronously in handleFeishuMessage
+      return "[Merged and Forwarded Message - loading...]";
+    }
     return content;
+  } catch {
+    return content;
+  }
+}
+
+/**
+ * Parse merge_forward message content and fetch sub-messages.
+ * Returns formatted text content of all sub-messages.
+ */
+function parseMergeForwardContent(params: {
+  content: string;
+  log?: (...args: any[]) => void;
+}): string {
+  const { content, log } = params;
+  const maxMessages = 50;
+
+  // For merge_forward, the API returns all sub-messages in items array
+  // with upper_message_id pointing to the merge_forward message.
+  // The 'content' parameter here is actually the full API response items array as JSON.
+  log?.(`feishu: parsing merge_forward sub-messages from API response`);
+
+  let items: Array<{
+    message_id?: string;
+    msg_type?: string;
+    body?: { content?: string };
+    sender?: { id?: string };
+    upper_message_id?: string;
+    create_time?: string;
+  }>;
+
+  try {
+    items = JSON.parse(content);
+  } catch {
+    log?.(`feishu: merge_forward items parse failed`);
+    return "[Merged and Forwarded Message - parse error]";
+  }
+
+  if (!Array.isArray(items) || items.length === 0) {
+    return "[Merged and Forwarded Message - no sub-messages]";
+  }
+
+  // Filter to only sub-messages (those with upper_message_id, skip the merge_forward container itself)
+  const subMessages = items.filter((item) => item.upper_message_id);
+
+  if (subMessages.length === 0) {
+    return "[Merged and Forwarded Message - no sub-messages found]";
+  }
+
+  log?.(`feishu: merge_forward contains ${subMessages.length} sub-messages`);
+
+  // Sort by create_time
+  subMessages.sort((a, b) => {
+    const timeA = parseInt(a.create_time || "0", 10);
+    const timeB = parseInt(b.create_time || "0", 10);
+    return timeA - timeB;
+  });
+
+  // Format output
+  const lines: string[] = ["[Merged and Forwarded Messages]"];
+  const limitedMessages = subMessages.slice(0, maxMessages);
+
+  for (const item of limitedMessages) {
+    const msgContent = item.body?.content || "";
+    const msgType = item.msg_type || "text";
+    const formatted = formatSubMessageContent(msgContent, msgType);
+    lines.push(`- ${formatted}`);
+  }
+
+  if (subMessages.length > maxMessages) {
+    lines.push(`... and ${subMessages.length - maxMessages} more messages`);
+  }
+
+  return lines.join("\n");
+}
+
+/**
+ * Format sub-message content based on message type.
+ */
+function formatSubMessageContent(content: string, contentType: string): string {
+  try {
+    const parsed = JSON.parse(content);
+    switch (contentType) {
+      case "text":
+        return parsed.text || content;
+      case "post": {
+        const { textContent } = parsePostContent(content);
+        return textContent;
+      }
+      case "image":
+        return "[Image]";
+      case "file":
+        return `[File: ${parsed.file_name || "unknown"}]`;
+      case "audio":
+        return "[Audio]";
+      case "video":
+        return "[Video]";
+      case "sticker":
+        return "[Sticker]";
+      case "merge_forward":
+        return "[Nested Merged Forward]";
+      default:
+        return `[${contentType}]`;
+    }
   } catch {
     return content;
   }
@@ -292,6 +419,29 @@ function parsePostContent(content: string): {
             const imageKey = normalizeFeishuExternalKey(element.image_key);
             if (imageKey) {
               imageKeys.push(imageKey);
+            }
+          } else if (element.tag === "code") {
+            // Inline code
+            const code =
+              typeof element.text === "string"
+                ? element.text
+                : typeof element.content === "string"
+                  ? element.content
+                  : "";
+            if (code) {
+              textContent += `\`${code}\``;
+            }
+          } else if (element.tag === "code_block" || element.tag === "pre") {
+            // Multiline code block
+            const lang = typeof element.language === "string" ? element.language : "";
+            const code =
+              typeof element.text === "string"
+                ? element.text
+                : typeof element.content === "string"
+                  ? element.content
+                  : "";
+            if (code) {
+              textContent += `\n\`\`\`${lang}\n${code}\n\`\`\`\n`;
             }
           }
         }
@@ -559,6 +709,38 @@ export async function handleFeishuMessage(params: {
   const isGroup = ctx.chatType === "group";
   const senderUserId = event.sender.sender_id.user_id?.trim() || undefined;
 
+  // Handle merge_forward messages: fetch full message via API then expand sub-messages
+  if (event.message.message_type === "merge_forward") {
+    log(
+      `feishu[${account.accountId}]: processing merge_forward message, fetching full content via API`,
+    );
+    try {
+      // Websocket event doesn't include sub-messages, need to fetch via API
+      // The API returns all sub-messages in the items array
+      const client = createFeishuClient(account);
+      const response = (await client.im.message.get({
+        path: { message_id: event.message.message_id },
+      })) as { code?: number; data?: { items?: unknown[] } };
+
+      if (response.code === 0 && response.data?.items && response.data.items.length > 0) {
+        log(
+          `feishu[${account.accountId}]: merge_forward API returned ${response.data.items.length} items`,
+        );
+        const expandedContent = parseMergeForwardContent({
+          content: JSON.stringify(response.data.items),
+          log,
+        });
+        ctx = { ...ctx, content: expandedContent };
+      } else {
+        log(`feishu[${account.accountId}]: merge_forward API returned no items`);
+        ctx = { ...ctx, content: "[Merged and Forwarded Message - could not fetch]" };
+      }
+    } catch (err) {
+      log(`feishu[${account.accountId}]: merge_forward fetch failed: ${String(err)}`);
+      ctx = { ...ctx, content: "[Merged and Forwarded Message - fetch error]" };
+    }
+  }
+
   // Resolve sender display name (best-effort) so the agent can attribute messages correctly.
   const senderResult = await resolveFeishuSenderName({
     account,
@@ -755,19 +937,49 @@ export async function handleFeishuMessage(params: {
     const feishuFrom = `feishu:${ctx.senderOpenId}`;
     const feishuTo = isGroup ? `chat:${ctx.chatId}` : `user:${ctx.senderOpenId}`;
 
-    // Resolve peer ID for session routing
-    // When topicSessionMode is enabled, messages within a topic (identified by root_id)
-    // get a separate session from the main group chat.
+    // Resolve peer ID for session routing.
+    // Default is one session per group chat; this can be customized with groupSessionScope.
     let peerId = isGroup ? ctx.chatId : ctx.senderOpenId;
-    let topicSessionMode: "enabled" | "disabled" = "disabled";
-    if (isGroup && ctx.rootId) {
-      const groupConfig = resolveFeishuGroupConfig({ cfg: feishuCfg, groupId: ctx.chatId });
-      topicSessionMode = groupConfig?.topicSessionMode ?? feishuCfg?.topicSessionMode ?? "disabled";
-      if (topicSessionMode === "enabled") {
-        // Use chatId:topic:rootId as peer ID for topic-scoped sessions
-        peerId = `${ctx.chatId}:topic:${ctx.rootId}`;
-        log(`feishu[${account.accountId}]: topic session isolation enabled, peer=${peerId}`);
+    let groupSessionScope: "group" | "group_sender" | "group_topic" | "group_topic_sender" =
+      "group";
+    let topicRootForSession: string | null = null;
+    const replyInThread =
+      isGroup &&
+      (groupConfig?.replyInThread ?? feishuCfg?.replyInThread ?? "disabled") === "enabled";
+
+    if (isGroup) {
+      const legacyTopicSessionMode =
+        groupConfig?.topicSessionMode ?? feishuCfg?.topicSessionMode ?? "disabled";
+      groupSessionScope =
+        groupConfig?.groupSessionScope ??
+        feishuCfg?.groupSessionScope ??
+        (legacyTopicSessionMode === "enabled" ? "group_topic" : "group");
+
+      // When topic-scoped sessions are enabled and replyInThread is on, the first
+      // bot reply creates the thread rooted at the current message ID.
+      if (groupSessionScope === "group_topic" || groupSessionScope === "group_topic_sender") {
+        topicRootForSession = ctx.rootId ?? (replyInThread ? ctx.messageId : null);
       }
+
+      switch (groupSessionScope) {
+        case "group_sender":
+          peerId = `${ctx.chatId}:sender:${ctx.senderOpenId}`;
+          break;
+        case "group_topic":
+          peerId = topicRootForSession ? `${ctx.chatId}:topic:${topicRootForSession}` : ctx.chatId;
+          break;
+        case "group_topic_sender":
+          peerId = topicRootForSession
+            ? `${ctx.chatId}:topic:${topicRootForSession}:sender:${ctx.senderOpenId}`
+            : `${ctx.chatId}:sender:${ctx.senderOpenId}`;
+          break;
+        case "group":
+        default:
+          peerId = ctx.chatId;
+          break;
+      }
+
+      log(`feishu[${account.accountId}]: group session scope=${groupSessionScope}, peer=${peerId}`);
     }
 
     let route = core.channel.routing.resolveAgentRoute({
@@ -778,9 +990,11 @@ export async function handleFeishuMessage(params: {
         kind: isGroup ? "group" : "direct",
         id: peerId,
       },
-      // Add parentPeer for binding inheritance in topic mode
+      // Add parentPeer for binding inheritance in topic-scoped modes.
       parentPeer:
-        isGroup && ctx.rootId && topicSessionMode === "enabled"
+        isGroup &&
+        topicRootForSession &&
+        (groupSessionScope === "group_topic" || groupSessionScope === "group_topic_sender")
           ? {
               kind: "group",
               id: ctx.chatId,
@@ -943,6 +1157,8 @@ export async function handleFeishuMessage(params: {
       runtime: runtime as RuntimeEnv,
       chatId: ctx.chatId,
       replyToMessageId: ctx.messageId,
+      replyInThread,
+      rootId: ctx.rootId,
       mentionTargets: ctx.mentionTargets,
       accountId: account.accountId,
     });

@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/bluebubbles",
-  "version": "2026.2.26",
+  "version": "2026.2.27",
   "description": "OpenClaw BlueBubbles channel plugin",
   "type": "module",
   "openclaw": {
