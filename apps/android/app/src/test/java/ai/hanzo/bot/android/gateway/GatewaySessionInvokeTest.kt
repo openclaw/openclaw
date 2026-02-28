@@ -35,6 +35,10 @@ private class InMemoryDeviceAuthStore : DeviceAuthTokenStore {
   override fun saveToken(deviceId: String, role: String, token: String) {
     tokens["${deviceId.trim()}|${role.trim()}"] = token.trim()
   }
+
+  override fun clearToken(deviceId: String, role: String) {
+    tokens.remove("${deviceId.trim()}|${role.trim()}")
+  }
 }
 
 @RunWith(RobolectricTestRunner::class)

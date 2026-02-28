@@ -12,6 +12,11 @@ import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.asRequestBody
 
+internal const val CAMERA_CLIP_MAX_RAW_BYTES: Long = 18L * 1024L * 1024L
+
+internal fun isCameraClipWithinPayloadLimit(sizeBytes: Long): Boolean =
+  sizeBytes in 0..CAMERA_CLIP_MAX_RAW_BYTES
+
 class CameraHandler(
   private val appContext: Context,
   private val camera: CameraCaptureManager,

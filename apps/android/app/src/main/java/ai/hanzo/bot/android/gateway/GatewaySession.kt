@@ -55,7 +55,7 @@ data class GatewayConnectOptions(
 class GatewaySession(
   private val scope: CoroutineScope,
   private val identityStore: DeviceIdentityStore,
-  private val deviceAuthStore: DeviceAuthStore,
+  private val deviceAuthStore: DeviceAuthTokenStore,
   private val onConnected: (serverName: String?, remoteAddress: String?, mainSessionKey: String?) -> Unit,
   private val onDisconnected: (message: String) -> Unit,
   private val onEvent: (event: String, payloadJson: String?) -> Unit,
@@ -701,4 +701,14 @@ private fun parseJsonOrNull(payload: String): JsonElement? {
   } catch (_: Throwable) {
     null
   }
+}
+
+private const val INVOKE_ACK_TIMEOUT_FLOOR_MS = 15_000L
+private const val INVOKE_ACK_TIMEOUT_CEILING_MS = 120_000L
+
+internal fun resolveInvokeResultAckTimeoutMs(timeoutMs: Long?): Long {
+  val value = timeoutMs ?: return INVOKE_ACK_TIMEOUT_FLOOR_MS
+  if (value <= INVOKE_ACK_TIMEOUT_FLOOR_MS) return INVOKE_ACK_TIMEOUT_FLOOR_MS
+  if (value > INVOKE_ACK_TIMEOUT_CEILING_MS) return INVOKE_ACK_TIMEOUT_CEILING_MS
+  return value
 }
