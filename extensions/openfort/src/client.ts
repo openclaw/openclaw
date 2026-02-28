@@ -21,6 +21,7 @@ import type {
 } from "./openfort-types.ts";
 import { extractListData } from "./openfort-types.ts";
 import type { OpenfortConfig, AccountInfo } from "./types.ts";
+import { USDC_FIATTOKENV2_2_ABI } from "./usdc-abi.ts";
 import { openfortAddressToViem } from "./utils.ts";
 
 export class OpenfortClient {
@@ -94,7 +95,7 @@ export class OpenfortClient {
 
     // Upgrade to EIP-7702 delegated account
     const chainId = this.chain.id;
-    const updated = await this.openfort.accounts.evm.backend.update({
+    await this.openfort.accounts.evm.backend.update({
       id: account.id,
       accountType: "Delegated Account",
       chainType: "EVM",
@@ -106,6 +107,33 @@ export class OpenfortClient {
     const refreshedAccount = await this.openfort.accounts.evm.backend.get({ id: account.id });
     this.cachedAccount = refreshedAccount as unknown as OpenfortBackendAccount;
     return this.cachedAccount;
+  }
+
+  /**
+   * Get the delegated account ID for use in transaction intents.
+   * Bug Fix: backend.get() doesn't return delegatedAccount.delegatedAccount.id,
+   * so we query accounts.list() to find the delegated account entry.
+   */
+  async getDelegatedAccountId(): Promise<string> {
+    const eoaAccount = await this.getOrCreateAccount();
+
+    // Query all accounts to find the delegated account
+    const accountsResult = await this.openfort.accounts.evm.backend.list({ limit: 100 });
+    const accounts = extractListData<OpenfortBackendAccount>(accountsResult);
+
+    // Find the delegated account matching our EOA address and chain
+    const delegatedAccount = accounts.find(
+      (acc) =>
+        acc.accountType === "Delegated Account" &&
+        acc.address?.toLowerCase() === eoaAccount.address?.toLowerCase() &&
+        acc.chainId === this.chain.id,
+    );
+
+    if (!delegatedAccount) {
+      throw new Error("Delegated account not found after creation");
+    }
+
+    return delegatedAccount.id;
   }
 
   async getWalletClient(): Promise<WalletClient> {
@@ -191,19 +219,33 @@ export class OpenfortClient {
     const network = this.config.network || "base-sepolia";
     const usdcAddress = USDC_ADDRESSES[network];
 
-    const existingContract = contracts.find(
+    let existingContract = contracts.find(
       (c) => c.address?.toLowerCase() === usdcAddress.toLowerCase() && c.chainId === this.chain.id,
     );
 
+    // Bug Fix: Validate that the contract has the transfer function in its ABI
+    // If it doesn't, it means the proxy ABI was fetched instead of the implementation ABI
     if (existingContract) {
-      return existingContract.id;
+      const hasTransfer = existingContract.abi?.some(
+        (item: any) => item.type === "function" && item.name === "transfer",
+      );
+
+      if (!hasTransfer) {
+        // Contract exists but with wrong ABI (proxy instead of implementation)
+        // Delete it and recreate with correct ABI
+        await this.openfort.contracts.delete({ id: existingContract.id });
+        existingContract = undefined;
+      } else {
+        return existingContract.id;
+      }
     }
 
-    // Create new USDC contract
+    // Create new USDC contract with explicit FiatTokenV2_2 ABI
     const newContract = await this.openfort.contracts.create({
       name: `USDC - ${this.chain.name}`,
       address: usdcAddress,
       chainId: this.chain.id,
+      abi: USDC_FIATTOKENV2_2_ABI as any,
     });
 
     return (newContract as unknown as OpenfortContract).id;
@@ -259,8 +301,9 @@ export class OpenfortClient {
     functionName: string;
     functionArgs: unknown[];
   }): Promise<OpenfortTransactionIntent> {
-    const delegatedAccount = await this.ensureDelegatedAccount();
+    await this.ensureDelegatedAccount();
     const eoaAccount = await this.getOrCreateAccount();
+    const delegatedAccountId = await this.getDelegatedAccountId();
 
     // Check if EIP-7702 authorization is needed
     const code = await this.publicClient.getBytecode({
@@ -300,7 +343,7 @@ export class OpenfortClient {
       }>;
       signedAuthorization?: string;
     } = {
-      account: delegatedAccount.delegatedAccount!.id,
+      account: delegatedAccountId,
       chainId: this.chain.id,
       optimistic: false,
       interactions: [

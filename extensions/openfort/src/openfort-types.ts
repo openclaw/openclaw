@@ -16,6 +16,7 @@ export interface OpenfortBackendAccount {
   custody?: string;
   accountType?: string;
   chainType?: string;
+  chainId?: number;
   delegatedAccount?: {
     id: string;
     implementationType: string;
