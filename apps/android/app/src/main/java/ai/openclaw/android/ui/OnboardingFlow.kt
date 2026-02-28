@@ -1563,8 +1563,8 @@ private fun FinalStep(
       } else {
         GuideBlock(title = "Pairing Required") {
           Text("Run these on the gateway host:", style = onboardingCalloutStyle, color = onboardingTextSecondary)
-          CommandBlock("openclaw nodes pending")
-          CommandBlock("openclaw nodes approve <requestId>")
+          CommandBlock("openclaw devices list")
+          CommandBlock("openclaw devices approve <requestId>")
           Text("Then tap Connect again.", style = onboardingCalloutStyle, color = onboardingTextSecondary)
         }
       }
