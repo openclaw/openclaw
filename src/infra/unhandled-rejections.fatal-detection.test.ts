@@ -129,5 +129,23 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
         expect.stringContaining("This operation was aborted"),
       );
     });
+
+    it("does not exit on LLM/API client errors (403, 404, unauthorized)", () => {
+      const llmApiCases = [
+        Object.assign(new Error("Model not permitted"), { statusCode: 403 }),
+        Object.assign(new Error("Not found"), { statusCode: 404 }),
+        new Error("Request failed with status code 403"),
+        new Error("Unauthorized: missing scope for model"),
+      ];
+
+      for (const err of llmApiCases) {
+        expectExitCodeFromUnhandled(err, []);
+      }
+
+      expect(consoleWarnSpy).toHaveBeenCalled();
+      expect(consoleWarnSpy.mock.calls.some((c) => String(c[0]).includes("LLM/API error"))).toBe(
+        true,
+      );
+    });
   });
 });

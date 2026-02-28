@@ -835,7 +835,9 @@ export async function handleOpenResponsesHttpRequest(
         });
       }
     }
-  })();
+  })().catch((err) => {
+    logWarn(`openresponses: streaming response unhandled: ${String(err)}`);
+  });
 
   return true;
 }

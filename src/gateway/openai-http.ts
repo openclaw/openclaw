@@ -3,6 +3,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { createDefaultDeps } from "../cli/deps.js";
 import { agentCommand } from "../commands/agent.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
+import { isLlmOrApiClientError } from "../infra/unhandled-rejections.js";
 import { logWarn } from "../logger.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveAssistantStreamDeltaText } from "./agent-event-assistant-text.js";
@@ -267,8 +268,11 @@ export async function handleOpenAiHttpRequest(
       });
     } catch (err) {
       logWarn(`openai-compat: chat completion failed: ${String(err)}`);
+      const message = isLlmOrApiClientError(err)
+        ? "[System Error: Model API failed]"
+        : "internal error";
       sendJson(res, 500, {
-        error: { message: "internal error", type: "api_error" },
+        error: { message, type: "api_error" },
       });
     }
     return true;
@@ -354,10 +358,13 @@ export async function handleOpenAiHttpRequest(
       if (closed) {
         return;
       }
+      const content = isLlmOrApiClientError(err)
+        ? "[System Error: Model API failed]"
+        : "Error: internal error";
       writeAssistantContentChunk(res, {
         runId,
         model,
-        content: "Error: internal error",
+        content,
         finishReason: "stop",
       });
       emitAgentEvent({
@@ -373,7 +380,9 @@ export async function handleOpenAiHttpRequest(
         res.end();
       }
     }
-  })();
+  })().catch((err) => {
+    logWarn(`openai-compat: streaming chat completion unhandled: ${String(err)}`);
+  });
 
   return true;
 }

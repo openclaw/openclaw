@@ -54,6 +54,19 @@ const TRANSIENT_NETWORK_MESSAGE_SNIPPETS = [
   "temporary failure in name resolution",
 ];
 
+// LLM/API client errors (e.g. 403/404 model permission, wrong scope): log and keep gateway alive
+const LLM_API_MESSAGE_SNIPPETS = [
+  "unauthorized",
+  "forbidden",
+  "permission",
+  "404",
+  "403",
+  "401",
+  "scope",
+  "api_error",
+  "invalid_request",
+];
+
 function getErrorCause(err: unknown): unknown {
   if (!err || typeof err !== "object") {
     return undefined;
@@ -208,6 +221,46 @@ export function isTransientNetworkError(err: unknown): boolean {
   return false;
 }
 
+/**
+ * Checks if an error is an LLM/API client error (e.g. 403/404 model permission, wrong scope).
+ * These should not crash the gateway; log and continue so the process stays alive.
+ * Exported for use in chat/gateway to show a user-facing fallback message.
+ */
+export function isLlmOrApiClientError(err: unknown): boolean {
+  if (!err) {
+    return false;
+  }
+  for (const candidate of collectErrorCandidates(err)) {
+    if (!candidate || typeof candidate !== "object") {
+      continue;
+    }
+    const statusCode = (candidate as { statusCode?: unknown }).statusCode;
+    if (
+      typeof statusCode === "number" &&
+      Number.isFinite(statusCode) &&
+      (statusCode === 401 || statusCode === 403 || statusCode === 404)
+    ) {
+      return true;
+    }
+    const code = extractErrorCodeOrErrno(candidate);
+    if (
+      code &&
+      (code === "401" || code === "403" || code === "404" || code === "E403" || code === "E404")
+    ) {
+      return true;
+    }
+    const rawMessage = (candidate as { message?: unknown }).message;
+    const message = typeof rawMessage === "string" ? rawMessage.toLowerCase() : "";
+    if (!message) {
+      continue;
+    }
+    if (LLM_API_MESSAGE_SNIPPETS.some((snippet) => message.includes(snippet))) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export function registerUnhandledRejectionHandler(handler: UnhandledRejectionHandler): () => void {
   handlers.add(handler);
   return () => {
@@ -259,6 +312,15 @@ export function installUnhandledRejectionHandler(): void {
     if (isTransientNetworkError(reason)) {
       console.warn(
         "[openclaw] Non-fatal unhandled rejection (continuing):",
+        formatUncaughtError(reason),
+      );
+      return;
+    }
+
+    // LLM/API errors (e.g. model not permitted, 403/404): log and keep gateway alive
+    if (isLlmOrApiClientError(reason)) {
+      console.warn(
+        "[openclaw] LLM/API error (non-fatal, gateway continuing):",
         formatUncaughtError(reason),
       );
       return;

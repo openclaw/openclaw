@@ -9,6 +9,7 @@ import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.j
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
+import { isLlmOrApiClientError } from "../../infra/unhandled-rejections.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import {
   stripInlineDirectiveTagsForDisplay,
@@ -940,14 +941,17 @@ export const chatHandlers: GatewayRequestHandlers = {
           });
         })
         .catch((err) => {
-          const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));
+          const errorMessage = isLlmOrApiClientError(err)
+            ? "[System Error: Model API failed]"
+            : String(err);
+          const error = errorShape(ErrorCodes.UNAVAILABLE, errorMessage);
           context.dedupe.set(`chat:${clientRunId}`, {
             ts: Date.now(),
             ok: false,
             payload: {
               runId: clientRunId,
               status: "error" as const,
-              summary: String(err),
+              summary: errorMessage,
             },
             error,
           });
@@ -955,7 +959,7 @@ export const chatHandlers: GatewayRequestHandlers = {
             context,
             runId: clientRunId,
             sessionKey: rawSessionKey,
-            errorMessage: String(err),
+            errorMessage,
           });
         })
         .finally(() => {
