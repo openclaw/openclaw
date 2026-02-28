@@ -12,9 +12,9 @@
   margin-right: 16px;
 }
 
-/* User messages on right */
+/* User messages on left */
 .chat-group.user {
-  flex-direction: row-reverse;
+  flex-direction: row;
   justify-content: flex-start;
 }
 
@@ -25,13 +25,13 @@
   max-width: min(900px, calc(100% - 60px));
 }
 
-/* User messages align content right */
+/* User messages align content left */
 .chat-group.user .chat-group-messages {
-  align-items: flex-end;
+  align-items: flex-start;
 }
 
 .chat-group.user .chat-group-footer {
-  justify-content: flex-end;
+  justify-content: flex-start;
 }
 
 /* Footer at bottom of message group (role + time) */

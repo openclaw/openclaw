@@ -254,9 +254,9 @@
   transform: scale(1.02);
 }
 
-/* User message images align right */
+/* User message images align left */
 .chat-group.user .chat-message-images {
-  justify-content: flex-end;
+  justify-content: flex-start;
 }
 
 /* Compose input row - horizontal layout */

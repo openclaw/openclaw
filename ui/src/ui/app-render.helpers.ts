@@ -394,7 +394,7 @@ function resolveSessionOptions(
   return options;
 }
 
-const THEME_ORDER: ThemeMode[] = ["system", "light", "dark"];
+const THEME_ORDER: ThemeMode[] = ["system", "light", "dark", "indigo", "slate", "rose", "forest"];
 
 export function renderThemeToggle(state: AppViewState) {
   const index = Math.max(0, THEME_ORDER.indexOf(state.theme));
@@ -439,6 +439,42 @@ export function renderThemeToggle(state: AppViewState) {
         >
           ${renderMoonIcon()}
         </button>
+        <button
+          class="theme-toggle__button ${state.theme === "indigo" ? "active" : ""}"
+          @click=${applyTheme("indigo")}
+          aria-pressed=${state.theme === "indigo"}
+          aria-label="Indigo theme"
+          title="Indigo"
+        >
+          ${renderIndigoIcon()}
+        </button>
+        <button
+          class="theme-toggle__button ${state.theme === "slate" ? "active" : ""}"
+          @click=${applyTheme("slate")}
+          aria-pressed=${state.theme === "slate"}
+          aria-label="Slate theme"
+          title="Slate"
+        >
+          ${renderSlateIcon()}
+        </button>
+        <button
+          class="theme-toggle__button ${state.theme === "rose" ? "active" : ""}"
+          @click=${applyTheme("rose")}
+          aria-pressed=${state.theme === "rose"}
+          aria-label="Rose theme"
+          title="Rose"
+        >
+          ${renderRoseIcon()}
+        </button>
+        <button
+          class="theme-toggle__button ${state.theme === "forest" ? "active" : ""}"
+          @click=${applyTheme("forest")}
+          aria-pressed=${state.theme === "forest"}
+          aria-label="Forest theme"
+          title="Forest"
+        >
+          ${renderForestIcon()}
+        </button>
       </div>
     </div>
   `;
@@ -476,6 +512,55 @@ function renderMonitorIcon() {
       <rect width="20" height="14" x="2" y="3" rx="2"></rect>
       <line x1="8" x2="16" y1="21" y2="21"></line>
       <line x1="12" x2="12" y1="17" y2="21"></line>
+    </svg>
+  `;
+}
+
+function renderIndigoIcon() {
+  return html`
+    <svg class="theme-icon" viewBox="0 0 24 24" aria-hidden="true">
+      <circle cx="12" cy="12" r="8" stroke="currentColor" fill="none"></circle>
+      <circle cx="12" cy="12" r="3" fill="currentColor"></circle>
+    </svg>
+  `;
+}
+
+function renderSlateIcon() {
+  return html`
+    <svg class="theme-icon" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M12 3v2"></path>
+      <path d="M12 19v2"></path>
+      <path d="m4.93 4.93 1.41 1.41"></path>
+      <path d="m17.66 17.66 1.41 1.41"></path>
+      <path d="M3 12h2"></path>
+      <path d="M19 12h2"></path>
+      <path d="m6.34 17.66-1.41 1.41"></path>
+      <path d="m19.07 4.93-1.41 1.41"></path>
+      <rect width="8" height="8" x="8" y="8" rx="1"></rect>
+    </svg>
+  `;
+}
+
+function renderRoseIcon() {
+  return html`
+    <svg class="theme-icon" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M12 8c-2 2-2 6 0 8 2-2 2-6 0-8Z"></path>
+      <path d="M12 4c3 3 3 9 0 12-3-3-3-9 0-12Z"></path>
+      <path d="M12 16c-3 3-3 9 0 12 3-3 3-9 0-12Z"></path>
+    </svg>
+  `;
+}
+
+function renderForestIcon() {
+  return html`
+    <svg class="theme-icon" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M12 22v-8"></path>
+      <path d="M8 14v4"></path>
+      <path d="M16 14v4"></path>
+      <path d="M12 14 8 8l4-2 4 2-4 6Z"></path>
+      <path d="M12 14v-2"></path>
+      <path d="m8 8 2 4"></path>
+      <path d="m16 8-2 4"></path>
     </svg>
   `;
 }

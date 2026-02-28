@@ -1,5 +1,5 @@
-export type ThemeMode = "system" | "light" | "dark";
-export type ResolvedTheme = "light" | "dark";
+export type ThemeMode = "system" | "light" | "dark" | "indigo" | "slate" | "rose" | "forest";
+export type ResolvedTheme = "light" | "dark" | "indigo" | "slate" | "rose" | "forest";
 
 export function getSystemTheme(): ResolvedTheme {
   if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
