@@ -229,7 +229,8 @@ function handleTerminalChatEvent(
   if (state !== "final" && state !== "error" && state !== "aborted") {
     return;
   }
-  resetToolStream(host as unknown as Parameters<typeof resetToolStream>[0]);
+  // Keep the latest tool stream visible after terminal events so users can inspect
+  // tool calls/results without requiring a manual refresh.
   void flushChatQueueForEvent(host as unknown as Parameters<typeof flushChatQueueForEvent>[0]);
   const runId = payload?.runId;
   if (!runId || !host.refreshSessionsAfterChat.has(runId)) {

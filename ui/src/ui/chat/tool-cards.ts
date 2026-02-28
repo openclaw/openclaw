@@ -45,19 +45,24 @@ export function extractToolCards(message: unknown): ToolCard[] {
     cards.push({ kind: "result", name, text });
   }
 
-  return cards;
+  return mergeToolCards(cards);
 }
 
 export function renderToolCardSidebar(card: ToolCard, onOpenSidebar?: (content: string) => void) {
   const display = resolveToolDisplay({ name: card.name, args: card.args });
   const detail = formatToolDetail(display);
   const hasText = Boolean(card.text?.trim());
+  const formattedOutput = formatToolOutputForSidebar(card.text ?? "", {
+    toolName: card.name,
+    args: card.args,
+  });
+  const hasSidebarOutput = formattedOutput.trim().length > 0;
 
   const canClick = Boolean(onOpenSidebar);
   const handleClick = canClick
     ? () => {
-        if (hasText) {
-          onOpenSidebar!(formatToolOutputForSidebar(card.text!));
+        if (hasSidebarOutput) {
+          onOpenSidebar!(formattedOutput);
           return;
         }
         const info = `## ${display.label}\n\n${
@@ -70,7 +75,8 @@ export function renderToolCardSidebar(card: ToolCard, onOpenSidebar?: (content: 
   const isShort = hasText && (card.text?.length ?? 0) <= TOOL_INLINE_THRESHOLD;
   const showCollapsed = hasText && !isShort;
   const showInline = hasText && isShort;
-  const isEmpty = !hasText;
+  const isEmpty = !hasText && !hasSidebarOutput;
+  const canView = hasText || hasSidebarOutput;
 
   return html`
     <div
@@ -97,7 +103,7 @@ export function renderToolCardSidebar(card: ToolCard, onOpenSidebar?: (content: 
         </div>
         ${
           canClick
-            ? html`<span class="chat-tool-card__action">${hasText ? "View" : ""} ${icons.check}</span>`
+            ? html`<span class="chat-tool-card__action">${canView ? "View " : ""}${icons.check}</span>`
             : nothing
         }
         ${isEmpty && !canClick ? html`<span class="chat-tool-card__status">${icons.check}</span>` : nothing}
@@ -118,6 +124,29 @@ export function renderToolCardSidebar(card: ToolCard, onOpenSidebar?: (content: 
       ${showInline ? html`<div class="chat-tool-card__inline mono">${card.text}</div>` : nothing}
     </div>
   `;
+}
+
+function mergeToolCards(cards: ToolCard[]): ToolCard[] {
+  for (let i = 0; i < cards.length; i += 1) {
+    const resultCard = cards[i];
+    if (resultCard.kind !== "result") {
+      continue;
+    }
+    for (let j = i - 1; j >= 0; j -= 1) {
+      const callCard = cards[j];
+      if (callCard.kind !== "call" || callCard.name !== resultCard.name) {
+        continue;
+      }
+      if (!callCard.text && resultCard.text) {
+        callCard.text = resultCard.text;
+      }
+      if (resultCard.args === undefined && callCard.args !== undefined) {
+        resultCard.args = callCard.args;
+      }
+      break;
+    }
+  }
+  return cards;
 }
 
 function normalizeContent(content: unknown): Array<Record<string, unknown>> {

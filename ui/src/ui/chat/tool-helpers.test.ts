@@ -75,6 +75,38 @@ describe("tool-helpers", () => {
       const result = formatToolOutputForSidebar("   ");
       expect(result).toBe("   ");
     });
+
+    it("extracts read content from structured JSON payload", () => {
+      const input = JSON.stringify({
+        path: "src/app.ts",
+        content: "line one\nline two",
+      });
+      const result = formatToolOutputForSidebar(input, {
+        toolName: "read",
+        args: { path: "src/app.ts" },
+      });
+
+      expect(result).toContain("src/app.ts");
+      expect(result).toContain("line one");
+      expect(result).toContain("line two");
+      expect(result).toContain("```");
+    });
+
+    it("renders edit arguments as diff even without tool result text", () => {
+      const result = formatToolOutputForSidebar("", {
+        toolName: "edit",
+        args: {
+          path: "src/app.ts",
+          old_string: "alpha\nbeta",
+          new_string: "alpha\ngamma",
+        },
+      });
+
+      expect(result).toContain("```diff");
+      expect(result).toContain("-beta");
+      expect(result).toContain("+gamma");
+      expect(result).toContain("src/app.ts");
+    });
   });
 
   describe("getTruncatedPreview", () => {

@@ -101,7 +101,14 @@ function createHost() {
     assistantAvatar: null,
     assistantAgentId: null,
     sessionKey: "main",
+    chatMessages: [],
+    chatToolMessages: [],
+    chatStream: null,
+    chatStreamStartedAt: null,
     chatRunId: null,
+    toolStreamById: new Map<string, unknown>(),
+    toolStreamOrder: [],
+    toolStreamSyncTimer: null,
     refreshSessionsAfterChat: new Set<string>(),
     execApprovalQueue: [],
     execApprovalError: null,
@@ -225,5 +232,66 @@ describe("connectGateway", () => {
 
     expect(host.lastError).toContain("gateway token mismatch");
     expect(host.lastErrorCode).toBe("AUTH_TOKEN_MISMATCH");
+  });
+
+  it("keeps streamed tool cards visible after final chat event", () => {
+    const host = createHost() as unknown as {
+      chatRunId: string | null;
+      chatToolMessages: unknown[];
+    };
+    host.chatRunId = "run-1";
+
+    connectGateway(host as unknown as Parameters<typeof connectGateway>[0]);
+    const client = gatewayClientInstances[0];
+    expect(client).toBeDefined();
+
+    client.emitEvent({
+      event: "agent",
+      payload: {
+        runId: "run-1",
+        seq: 1,
+        stream: "tool",
+        ts: Date.now(),
+        sessionKey: "main",
+        data: {
+          toolCallId: "call-read-1",
+          name: "read",
+          phase: "start",
+          args: { path: "README.md" },
+        },
+      },
+    });
+    client.emitEvent({
+      event: "agent",
+      payload: {
+        runId: "run-1",
+        seq: 2,
+        stream: "tool",
+        ts: Date.now(),
+        sessionKey: "main",
+        data: {
+          toolCallId: "call-read-1",
+          name: "read",
+          phase: "result",
+          result: { text: "hello from read" },
+        },
+      },
+    });
+    expect(host.chatToolMessages).toHaveLength(1);
+
+    client.emitEvent({
+      event: "chat",
+      payload: {
+        runId: "run-1",
+        sessionKey: "main",
+        state: "final",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "done" }],
+        },
+      },
+    });
+
+    expect(host.chatToolMessages).toHaveLength(1);
   });
 });
