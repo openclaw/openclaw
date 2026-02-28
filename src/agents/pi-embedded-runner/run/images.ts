@@ -512,9 +512,9 @@ export function injectHistoryImagesIntoMessages(
 
     // Convert string content to block array if needed
     if (typeof msg.content === "string") {
-      (msg as Record<string, unknown>).content = [{ type: "text", text: msg.content }];
+      (msg as unknown as Record<string, unknown>).content = [{ type: "text", text: msg.content }];
     } else if (!Array.isArray(msg.content)) {
-      (msg as Record<string, unknown>).content = [];
+      (msg as unknown as Record<string, unknown>).content = [];
     }
 
     // Add images to content blocks
@@ -529,7 +529,7 @@ export function injectHistoryImagesIntoMessages(
           block.data === image.data,
       );
       if (!hasImage) {
-        contentArr.push(image as Record<string, unknown>);
+        contentArr.push(image as unknown as Record<string, unknown>);
         didMutate = true;
       }
     }
