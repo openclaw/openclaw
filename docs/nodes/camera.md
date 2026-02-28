@@ -100,6 +100,12 @@ If permissions are missing, the app will prompt when possible; if denied, `camer
 
 Like `canvas.*`, the Android node only allows `camera.*` commands in the **foreground**. Background invocations return `NODE_BACKGROUND_UNAVAILABLE`.
 
+### Android commands (via Gateway `node.invoke`)
+
+- `camera.list`
+  - Response payload:
+    - `devices`: array of `{ id, name, position, deviceType }`
+
 ### Payload guard
 
 Photos are recompressed to keep the base64 payload under 5 MB.

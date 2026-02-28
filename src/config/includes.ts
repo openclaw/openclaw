@@ -13,11 +13,14 @@
 import fs from "node:fs";
 import path from "node:path";
 import JSON5 from "json5";
+import { canUseBoundaryFileOpen, openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { isPathInside } from "../security/scan-paths.js";
 import { isPlainObject } from "../utils.js";
+import { isBlockedObjectKey } from "./prototype-keys.js";
 
 export const INCLUDE_KEY = "$include";
 export const MAX_INCLUDE_DEPTH = 10;
+export const MAX_INCLUDE_FILE_BYTES = 2 * 1024 * 1024;
 
 // ============================================================================
 // Types
@@ -25,7 +28,16 @@ export const MAX_INCLUDE_DEPTH = 10;
 
 export type IncludeResolver = {
   readFile: (path: string) => string;
+  readFileWithGuards?: (params: IncludeFileReadParams) => string;
   parseJson: (raw: string) => unknown;
+};
+
+export type IncludeFileReadParams = {
+  includePath: string;
+  resolvedPath: string;
+  rootRealDir: string;
+  ioFs?: typeof fs;
+  maxBytes?: number;
 };
 
 // ============================================================================
@@ -54,8 +66,6 @@ export class CircularIncludeError extends ConfigIncludeError {
 // Utilities
 // ============================================================================
 
-const BLOCKED_MERGE_KEYS = new Set(["__proto__", "prototype", "constructor"]);
-
 /** Deep merge: arrays concatenate, objects merge recursively, primitives: source wins */
 export function deepMerge(target: unknown, source: unknown): unknown {
   if (Array.isArray(target) && Array.isArray(source)) {
@@ -64,7 +74,7 @@ export function deepMerge(target: unknown, source: unknown): unknown {
   if (isPlainObject(target) && isPlainObject(source)) {
     const result: Record<string, unknown> = { ...target };
     for (const key of Object.keys(source)) {
-      if (BLOCKED_MERGE_KEYS.has(key)) {
+      if (isBlockedObjectKey(key)) {
         continue;
       }
       result[key] = key in result ? deepMerge(result[key], source[key]) : source[key];
@@ -228,8 +238,18 @@ class IncludeProcessor {
 
   private readFile(includePath: string, resolvedPath: string): string {
     try {
+      if (this.resolver.readFileWithGuards) {
+        return this.resolver.readFileWithGuards({
+          includePath,
+          resolvedPath,
+          rootRealDir: this.rootRealDir,
+        });
+      }
       return this.resolver.readFile(resolvedPath);
     } catch (err) {
+      if (err instanceof ConfigIncludeError) {
+        throw err;
+      }
       throw new ConfigIncludeError(
         `Failed to read include file: ${includePath} (resolved: ${resolvedPath})`,
         includePath,
@@ -266,12 +286,51 @@ function safeRealpath(target: string): string {
   }
 }
 
+export function readConfigIncludeFileWithGuards(params: IncludeFileReadParams): string {
+  const ioFs = params.ioFs ?? fs;
+  const maxBytes = params.maxBytes ?? MAX_INCLUDE_FILE_BYTES;
+  if (!canUseBoundaryFileOpen(ioFs)) {
+    return ioFs.readFileSync(params.resolvedPath, "utf-8");
+  }
+
+  const opened = openBoundaryFileSync({
+    absolutePath: params.resolvedPath,
+    rootPath: params.rootRealDir,
+    rootRealPath: params.rootRealDir,
+    boundaryLabel: "config directory",
+    skipLexicalRootCheck: true,
+    maxBytes,
+    ioFs,
+  });
+  if (!opened.ok) {
+    if (opened.reason === "validation") {
+      throw new ConfigIncludeError(
+        `Include file failed security checks (regular file, max ${maxBytes} bytes, no hardlinks): ${params.includePath}`,
+        params.includePath,
+      );
+    }
+    throw new ConfigIncludeError(
+      `Failed to read include file: ${params.includePath} (resolved: ${params.resolvedPath})`,
+      params.includePath,
+      opened.error instanceof Error ? opened.error : undefined,
+    );
+  }
+
+  try {
+    return ioFs.readFileSync(opened.fd, "utf-8");
+  } finally {
+    ioFs.closeSync(opened.fd);
+  }
+}
+
 // ============================================================================
 // Public API
 // ============================================================================
 
 const defaultResolver: IncludeResolver = {
   readFile: (p) => fs.readFileSync(p, "utf-8"),
+  readFileWithGuards: ({ includePath, resolvedPath, rootRealDir }) =>
+    readConfigIncludeFileWithGuards({ includePath, resolvedPath, rootRealDir }),
   parseJson: (raw) => JSON5.parse(raw),
 };
 

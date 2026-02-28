@@ -1,11 +1,8 @@
 {
   "name": "@openclaw/bluebubbles",
-  "version": "2026.2.20",
+  "version": "2026.2.27",
   "description": "OpenClaw BlueBubbles channel plugin",
   "type": "module",
-  "devDependencies": {
-    "openclaw": "workspace:*"
-  },
   "openclaw": {
     "extensions": [
       "./index.ts"

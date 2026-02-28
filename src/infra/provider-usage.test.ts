@@ -3,6 +3,7 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { withTempHome } from "../../test/helpers/temp-home.js";
 import { ensureAuthProfileStore, listProfilesForProvider } from "../agents/auth-profiles.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { createProviderUsageFetch, makeResponse } from "../test-utils/provider-usage-fetch.js";
 import {
   formatUsageReportLines,
@@ -302,9 +303,7 @@ describe("provider usage loading", () => {
   });
 
   it("falls back to claude.ai web usage when OAuth scope is missing", async () => {
-    const cookieSnapshot = process.env.CLAUDE_AI_SESSION_KEY;
-    process.env.CLAUDE_AI_SESSION_KEY = "sk-ant-web-1";
-    try {
+    await withEnvAsync({ CLAUDE_AI_SESSION_KEY: "sk-ant-web-1" }, async () => {
       const mockFetch = createProviderUsageFetch(async (url) => {
         if (url.includes("api.anthropic.com/api/oauth/usage")) {
           return makeResponse(403, {
@@ -336,29 +335,15 @@ describe("provider usage loading", () => {
       const claude = expectSingleAnthropicProvider(summary);
       expect(claude?.windows.some((w) => w.label === "5h")).toBe(true);
       expect(claude?.windows.some((w) => w.label === "Week")).toBe(true);
-    } finally {
-      if (cookieSnapshot === undefined) {
-        delete process.env.CLAUDE_AI_SESSION_KEY;
-      } else {
-        process.env.CLAUDE_AI_SESSION_KEY = cookieSnapshot;
-      }
-    }
+    });
   });
 
-  it("loads snapshots for copilot antigravity gemini codex and xiaomi", async () => {
+  it("loads snapshots for copilot gemini codex and xiaomi", async () => {
     const mockFetch = createProviderUsageFetch(async (url) => {
       if (url.includes("api.github.com/copilot_internal/user")) {
         return makeResponse(200, {
           quota_snapshots: { chat: { percent_remaining: 80 } },
           copilot_plan: "Copilot Pro",
-        });
-      }
-      if (url.includes("cloudcode-pa.googleapis.com/v1internal:loadCodeAssist")) {
-        return makeResponse(200, {
-          availablePromptCredits: 80,
-          planInfo: { monthlyPromptCredits: 100 },
-          currentTier: { name: "Antigravity Pro" },
-          cloudaicompanionProject: "projects/demo",
         });
       }
       if (url.includes("cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels")) {
@@ -387,7 +372,6 @@ describe("provider usage loading", () => {
     const summary = await loadUsageWithAuth(
       [
         { provider: "github-copilot", token: "copilot-token" },
-        { provider: "google-antigravity", token: "antigravity-token" },
         { provider: "google-gemini-cli", token: "gemini-token" },
         { provider: "openai-codex", token: "codex-token", accountId: "acc-1" },
         { provider: "xiaomi", token: "xiaomi-token" },
@@ -397,7 +381,6 @@ describe("provider usage loading", () => {
 
     expect(summary.providers.map((provider) => provider.provider)).toEqual([
       "github-copilot",
-      "google-antigravity",
       "google-gemini-cli",
       "openai-codex",
       "xiaomi",
@@ -405,10 +388,6 @@ describe("provider usage loading", () => {
     expect(
       summary.providers.find((provider) => provider.provider === "github-copilot")?.windows,
     ).toEqual([{ label: "Chat", usedPercent: 20 }]);
-    expect(
-      summary.providers.find((provider) => provider.provider === "google-antigravity")?.windows
-        .length,
-    ).toBeGreaterThan(0);
     expect(
       summary.providers.find((provider) => provider.provider === "google-gemini-cli")?.windows[0]
         ?.label,

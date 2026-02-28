@@ -21,7 +21,7 @@ Status: production-ready via WhatsApp Web (Baileys). Gateway owns linked session
   </Card>
 </CardGroup>
 
-## Onboarding
+## Quick setup
 
 <Steps>
   <Step title="Configure WhatsApp access policy">
@@ -171,7 +171,7 @@ OpenClaw recommends running WhatsApp on a separate number when possible. (The ch
     - if `groupAllowFrom` is unset, runtime falls back to `allowFrom` when available
     - sender allowlists are evaluated before mention/reply activation
 
-    Note: if no `channels.whatsapp` block exists at all, runtime group-policy fallback is effectively `open`.
+    Note: if no `channels.whatsapp` block exists at all, runtime group-policy fallback is `allowlist` (with a warning log), even if `channels.defaults.groupPolicy` is set.
 
   </Tab>
 

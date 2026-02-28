@@ -1,16 +1,19 @@
-// Main runner for embedded agent execution
+import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
+import { generateSecureToken } from "../../infra/secure-random.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import type { PluginHookBeforeAgentStartResult } from "../../plugins/types.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
-import { resolveAgentNarrativeDir } from "../agent-scope.js";
+import { hasConfiguredModelFallbacks } from "../agent-scope.js";
 import {
   isProfileInCooldown,
   markAuthProfileFailure,
   markAuthProfileGood,
   markAuthProfileUsed,
+  resolveProfilesUnavailableReason,
 } from "../auth-profiles.js";
 import {
   CONTEXT_WINDOW_HARD_MIN_TOKENS,
@@ -60,74 +63,9 @@ import {
 } from "./tool-result-truncation.js";
 import type { EmbeddedPiAgentMeta, EmbeddedPiRunResult } from "./types.js";
 import { describeUnknownError } from "./utils.js";
+import { onAgentEvent } from "../../infra/agent-events.js";
 
 type ApiKeyInfo = ResolvedProviderAuth;
-
-type MindMemoryPluginConfig = {
-  debug?: boolean;
-  graphiti?: { baseUrl?: string; model?: string; rewriteMemories?: boolean; thinking?: string };
-  narrative?: {
-    enabled?: boolean;
-    model?: string;
-    autoBootstrapHistory?: boolean;
-    thinking?: string;
-  };
-};
-
-type MindMemoryPluginEntry = {
-  enabled?: boolean;
-  config?: MindMemoryPluginConfig;
-};
-
-type SessionBranchMessageEntry = {
-  type?: unknown;
-  message?: {
-    role?: unknown;
-    text?: unknown;
-    content?: unknown;
-  };
-  timestamp?: unknown;
-};
-
-type SessionContextMessage = {
-  timestamp?: unknown;
-};
-
-const getMindMemoryPluginEntry = (value: unknown): MindMemoryPluginEntry | undefined => {
-  if (!value || typeof value !== "object") {
-    return undefined;
-  }
-  return value as MindMemoryPluginEntry;
-};
-
-const messageTextFromUnknown = (value: unknown): string => {
-  if (typeof value === "string") {
-    return value;
-  }
-  if (Array.isArray(value)) {
-    return value
-      .map((part) => {
-        if (typeof part === "string") {
-          return part;
-        }
-        if (part && typeof part === "object") {
-          const textCandidate = (part as { text?: unknown }).text;
-          return typeof textCandidate === "string" ? textCandidate : "";
-        }
-        return "";
-      })
-      .filter(Boolean)
-      .join(" ");
-  }
-  return "";
-};
-
-const isMessageBranchEntry = (entry: unknown): entry is SessionBranchMessageEntry => {
-  if (!entry || typeof entry !== "object") {
-    return false;
-  }
-  return (entry as SessionBranchMessageEntry).type === "message";
-};
 
 // Avoid Anthropic's refusal test token poisoning session transcripts.
 const ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL = "ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL";
@@ -167,7 +105,20 @@ const createUsageAccumulator = (): UsageAccumulator => ({
 });
 
 function createCompactionDiagId(): string {
-  return `ovf-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  return `ovf-${Date.now().toString(36)}-${generateSecureToken(4)}`;
+}
+
+// Defensive guard for the outer run loop across all retry branches.
+const BASE_RUN_RETRY_ITERATIONS = 24;
+const RUN_RETRY_ITERATIONS_PER_PROFILE = 8;
+const MIN_RUN_RETRY_ITERATIONS = 32;
+const MAX_RUN_RETRY_ITERATIONS = 160;
+
+function resolveMaxRunRetryIterations(profileCandidateCount: number): number {
+  const scaled =
+    BASE_RUN_RETRY_ITERATIONS +
+    Math.max(1, profileCandidateCount) * RUN_RETRY_ITERATIONS_PER_PROFILE;
+  return Math.min(MAX_RUN_RETRY_ITERATIONS, Math.max(MIN_RUN_RETRY_ITERATIONS, scaled));
 }
 
 const hasUsageValues = (
@@ -281,8 +232,11 @@ export async function runEmbeddedPiAgent(
       let provider = (params.provider ?? DEFAULT_PROVIDER).trim() || DEFAULT_PROVIDER;
       let modelId = (params.model ?? DEFAULT_MODEL).trim() || DEFAULT_MODEL;
       const agentDir = params.agentDir ?? resolveOpenClawAgentDir();
-      const fallbackConfigured =
-        (params.config?.agents?.defaults?.model?.fallbacks?.length ?? 0) > 0;
+      const fallbackConfigured = hasConfiguredModelFallbacks({
+        cfg: params.config,
+        agentId: params.agentId,
+        sessionKey: params.sessionKey,
+      });
       await ensureOpenClawModelsJson(params.config, agentDir);
 
       // Run before_model_resolve hooks early so plugins can override the
@@ -291,8 +245,10 @@ export async function runEmbeddedPiAgent(
       // Legacy compatibility: before_agent_start is also checked for override
       // fields if present. New hook takes precedence when both are set.
       let modelResolveOverride: { providerOverride?: string; modelOverride?: string } | undefined;
+      let legacyBeforeAgentStartResult: PluginHookBeforeAgentStartResult | undefined;
       const hookRunner = getGlobalHookRunner();
       const hookCtx = {
+        runId: params.runId,
         agentId: workspaceResolution.agentId,
         sessionKey: params.sessionKey,
         sessionId: params.sessionId,
@@ -311,14 +267,16 @@ export async function runEmbeddedPiAgent(
       }
       if (hookRunner?.hasHooks("before_agent_start")) {
         try {
-          const legacyResult = await hookRunner.runBeforeAgentStart(
+          legacyBeforeAgentStartResult = await hookRunner.runBeforeAgentStart(
             { prompt: params.prompt },
             hookCtx,
           );
           modelResolveOverride = {
             providerOverride:
-              modelResolveOverride?.providerOverride ?? legacyResult?.providerOverride,
-            modelOverride: modelResolveOverride?.modelOverride ?? legacyResult?.modelOverride,
+              modelResolveOverride?.providerOverride ??
+              legacyBeforeAgentStartResult?.providerOverride,
+            modelOverride:
+              modelResolveOverride?.modelOverride ?? legacyBeforeAgentStartResult?.modelOverride,
           };
         } catch (hookErr) {
           log.warn(
@@ -413,9 +371,18 @@ export async function runEmbeddedPiAgent(
       const resolveAuthProfileFailoverReason = (params: {
         allInCooldown: boolean;
         message: string;
+        profileIds?: Array<string | undefined>;
       }): FailoverReason => {
         if (params.allInCooldown) {
-          return "rate_limit";
+          const profileIds = (params.profileIds ?? profileCandidates).filter(
+            (id): id is string => typeof id === "string" && id.length > 0,
+          );
+          return (
+            resolveProfilesUnavailableReason({
+              store: authStore,
+              profileIds,
+            }) ?? "rate_limit"
+          );
         }
         const classified = classifyFailoverReason(params.message);
         return classified ?? "auth";
@@ -434,6 +401,7 @@ export async function runEmbeddedPiAgent(
         const reason = resolveAuthProfileFailoverReason({
           allInCooldown: params.allInCooldown,
           message,
+          profileIds: profileCandidates,
         });
         if (fallbackConfigured) {
           throw new FailoverError(message, {
@@ -543,331 +511,89 @@ export async function runEmbeddedPiAgent(
       }
 
       const MAX_OVERFLOW_COMPACTION_ATTEMPTS = 3;
+      const MAX_RUN_LOOP_ITERATIONS = resolveMaxRunRetryIterations(profileCandidates.length);
       let overflowCompactionAttempts = 0;
       let toolResultTruncationAttempted = false;
       const usageAccumulator = createUsageAccumulator();
       let lastRunPromptUsage: ReturnType<typeof normalizeUsage> | undefined;
       let autoCompactionCount = 0;
+      let runLoopIterations = 0;
+      const maybeMarkAuthProfileFailure = async (failure: {
+        profileId?: string;
+        reason?: Parameters<typeof markAuthProfileFailure>[0]["reason"] | null;
+        config?: RunEmbeddedPiAgentParams["config"];
+        agentDir?: RunEmbeddedPiAgentParams["agentDir"];
+      }) => {
+        const { profileId, reason } = failure;
+        if (!profileId || !reason || reason === "timeout") {
+          return;
+        }
+        await markAuthProfileFailure({
+          store: authStore,
+          profileId,
+          reason,
+          cfg: params.config,
+          agentDir,
+        });
+      };
 
-      // [MIND] Read STORY.md and QUICK.md for narrative context injection
+      // Fire before_message_process hook: lets plugins inject memory context
+      // (e.g. flashback resonance + narrative story) before the run loop starts.
       let narrativeStory: string | undefined;
-      let quickContext: string | undefined;
-      const mindConfig = getMindMemoryPluginEntry(params.config?.plugins?.entries?.["mind-memory"]);
-      const isMindEnabled = mindConfig?.enabled && (mindConfig?.config?.narrative?.enabled ?? true);
-      if (isMindEnabled && !isProbeSession) {
+      let mindResonance: string | undefined;
+      if (hookRunner?.hasHooks("before_message_process") && !isProbeSession) {
         try {
-          const nodePath = await import("node:path");
           const { isSubagentSessionKey } = await import("../../routing/session-key.js");
           const isSubagent = params.sessionKey ? isSubagentSessionKey(params.sessionKey) : false;
-
-          if (!isSubagent) {
-            const narrativeDir = resolveAgentNarrativeDir(
-              params.config ?? {},
-              workspaceResolution.agentId,
-            );
-            await fs.mkdir(narrativeDir, { recursive: true });
-            const storyPath = nodePath.join(narrativeDir, "STORY.md");
-            // One-time migration: copy STORY.md from workspace to narrativeDir if not yet there
-            try {
-              await fs.access(storyPath);
-            } catch {
-              const oldStoryPath = nodePath.join(resolvedWorkspace, "STORY.md");
-              try {
-                const oldContent = await fs.readFile(oldStoryPath, "utf-8");
-                await fs.writeFile(storyPath, oldContent, "utf-8");
-                process.stderr.write(
-                  `📦 [MIND] Migrated STORY.md from workspace to narrativeDir\n`,
-                );
-              } catch {
-                // No old story, that's fine
-              }
-            }
-            narrativeStory = await fs.readFile(storyPath, "utf-8").catch(() => undefined);
-            quickContext = await fs
-              .readFile(nodePath.join(narrativeDir, "QUICK.md"), "utf-8")
-              .catch(() => undefined);
-            if (narrativeStory && process.stderr.isTTY) {
-              process.stderr.write(`📖 [MIND] Story loaded (${narrativeStory.length} chars)\n`);
-            }
-          }
-        } catch (err) {
-          log.warn(`[MIND] Failed to load STORY.md: ${String(err)}`);
-        }
-      }
-
-      // [MIND] Memory consolidation and flashback retrieval
-      let mindExtraSystemPrompt = "";
-      if (isMindEnabled && !isProbeSession) {
-        const path = await import("node:path");
-        const { isSubagentSessionKey } = await import("../../routing/session-key.js");
-        const isSubagent = params.sessionKey ? isSubagentSessionKey(params.sessionKey) : false;
-
-        if (!isSubagent) {
-          try {
-            const narrativeDir = resolveAgentNarrativeDir(
-              params.config ?? {},
-              workspaceResolution.agentId,
-            );
-            const storyPath = path.join(narrativeDir, "STORY.md");
-            const quickPath = path.join(narrativeDir, "QUICK.md");
-            const memoryDir = path.join(resolvedWorkspace, "memory");
-            const debug = !!mindConfig?.config?.debug;
-
-            // Detect heartbeat prompt
-            const isHeartbeatPrompt =
-              params.prompt.includes("Read HEARTBEAT.md") &&
-              params.prompt.includes("reply HEARTBEAT_OK");
-
-            if (!isHeartbeatPrompt) {
-              const { ConsolidationService } =
-                await import("../../services/memory/ConsolidationService.js");
-              const { GraphService } = await import("../../services/memory/GraphService.js");
-              const { SubconsciousService } =
-                await import("../../services/memory/SubconsciousService.js");
-              const { SessionManager } = await import("@mariozechner/pi-coding-agent");
-              const { resolveSessionTranscriptsDir } =
-                await import("../../config/sessions/paths.js");
-              const { createSubconsciousAgent } = await import("./subconscious-agent.js");
-
-              const gUrl = mindConfig?.config?.graphiti?.baseUrl || "http://localhost:8001";
-              const gs = new GraphService(gUrl, debug);
-              const cons = new ConsolidationService(gs, debug);
-              const subsvc = new SubconsciousService(gs, debug);
-              const globalSessionId = "global-user-memory";
-              const sessionsDir = resolveSessionTranscriptsDir();
-              const safeTokenLimit = Math.floor((ctxInfo.tokens || 50000) * 0.5);
-
-              // Resolve narrative model (needed before parallel block)
-              const narrativeModelStr = mindConfig?.config?.narrative?.model;
-              const [narrativeProvider, narrativeModel] = narrativeModelStr?.includes("/")
-                ? narrativeModelStr.split("/")
-                : [params.provider, narrativeModelStr ?? params.model];
-
-              let narrativeLLM = model;
-              if (narrativeProvider !== params.provider || narrativeModel !== params.model) {
-                if (debug) {
-                  process.stderr.write(
-                    `🎨 [MIND] Narrative uses custom model: ${narrativeProvider}/${narrativeModel} (chat: ${params.provider}/${params.model})\n`,
-                  );
-                }
-                const resolved = resolveModel(
-                  narrativeProvider || params.provider || "",
-                  narrativeModel || params.model || "",
-                  params.agentDir ?? resolveOpenClawAgentDir(),
-                  params.config,
-                );
-                if (resolved.model) {
-                  narrativeLLM = resolved.model;
-                } else if (debug) {
-                  process.stderr.write(
-                    `⚠️ [MIND] Could not resolve narrative model: ${resolved.error}. Using chat model.\n`,
-                  );
-                }
-              } else if (debug) {
-                process.stderr.write(
-                  `🤖 [MIND] Using chat model for narrative: ${params.provider}/${params.model}\n`,
-                );
-              }
-
-              const subconsciousAgent = createSubconsciousAgent({
-                model: narrativeLLM,
-                authStorage,
-                modelRegistry,
-                debug,
-                autoBootstrapHistory: mindConfig?.config?.narrative?.autoBootstrapHistory ?? false,
-                fallbacks: params.config?.agents?.defaults?.model?.fallbacks,
-                reasoning: (mindConfig?.config?.narrative?.thinking ??
-                  "low") as import("@mariozechner/pi-ai").ThinkingLevel,
-              });
-
-              // Resolve flashback agent (may differ from narrative agent)
-              const skipResonance = process.env.MIND_SKIP_RESONANCE === "1";
-              let flashbackModel = narrativeLLM;
-              let flashbackAgent: { complete: (prompt: string) => Promise<{ text: string }> } =
-                subconsciousAgent;
-              const graphitiModelStr = mindConfig?.config?.graphiti?.model;
-              if (
-                !skipResonance &&
-                graphitiModelStr &&
-                graphitiModelStr !== `${narrativeProvider}/${narrativeModel}`
-              ) {
-                const [gProvider, gModel] = graphitiModelStr.includes("/")
-                  ? graphitiModelStr.split("/")
-                  : [narrativeProvider ?? "", graphitiModelStr];
-                const resolvedGraphiti = resolveModel(
-                  gProvider ?? "",
-                  gModel ?? "",
-                  params.agentDir ?? resolveOpenClawAgentDir(),
-                  params.config,
-                );
-                if (resolvedGraphiti.model) {
-                  flashbackModel = resolvedGraphiti.model;
-                  flashbackAgent = createSubconsciousAgent({
-                    model: flashbackModel,
-                    authStorage,
-                    modelRegistry,
-                    debug,
-                    autoBootstrapHistory: false,
-                    fallbacks: params.config?.agents?.defaults?.model?.fallbacks,
-                    reasoning: mindConfig?.config?.graphiti?.thinking as
-                      | import("@mariozechner/pi-ai").ThinkingLevel
-                      | undefined,
-                  });
-                  if (debug) {
-                    process.stderr.write(
-                      `🔍 [MIND] Flashback uses graphiti model: ${gProvider}/${gModel}\n`,
-                    );
-                  }
-                } else if (debug) {
-                  process.stderr.write(
-                    `⚠️ [MIND] Could not resolve graphiti model ${graphitiModelStr}, using narrative model.\n`,
-                  );
-                }
-              }
-
-              // Observer agent: query generation — uses the same model as flashback.
-              const observerAgent = createSubconsciousAgent({
-                model: flashbackModel,
-                authStorage,
-                modelRegistry,
-                debug,
-                autoBootstrapHistory: false,
-                fallbacks: params.config?.agents?.defaults?.model?.fallbacks,
-                reasoning: undefined,
-              });
-
-              // Prepare bootstrap data (sync read before parallel block)
-              const sessionMgr = SessionManager.open(params.sessionFile);
-              const sessionMessages = sessionMgr.buildSessionContext().messages || [];
-
-              // Run all 4 pipeline steps in parallel — none depend on each other's output
-              const rewriteMemories = mindConfig?.config?.graphiti?.rewriteMemories ?? true;
-              const mindPipelineStart = Date.now();
-
-              const [bootstrapResult, syncResult, episodeResult, flashbackResult] =
-                await Promise.allSettled([
-                  // 1. Bootstrap historical episodes from legacy memory files
-                  cons.bootstrapHistoricalEpisodes(globalSessionId, memoryDir, sessionMessages),
-
-                  // 2. Global narrative sync → reload story → fire-and-forget QUICK.md
-                  (async () => {
-                    await cons.syncGlobalNarrative(
-                      sessionsDir,
-                      storyPath,
-                      subconsciousAgent,
-                      undefined,
-                      safeTokenLimit,
-                      params.sessionFile,
-                    );
-                    narrativeStory = await fs.readFile(storyPath, "utf-8").catch(() => undefined);
-                    if (debug && narrativeStory) {
-                      process.stderr.write(
-                        `📖 [MIND] Story reloaded after sync (${narrativeStory.length} chars)\n`,
-                      );
-                    }
-                    void cons
-                      .generateQuickProfile(
-                        storyPath,
-                        quickPath,
-                        resolvedWorkspace,
-                        subconsciousAgent,
-                      )
-                      .catch((e: unknown) => {
-                        if (debug) {
-                          process.stderr.write(
-                            `⚠️ [MIND] QUICK.md regen after global sync failed: ${describeUnknownError(e)}\n`,
-                          );
-                        }
-                      });
-                  })(),
-
-                  // 3. Store user message in Graphiti
-                  gs.addEpisode(globalSessionId, `human: ${params.prompt}`),
-
-                  // 4. Get flashbacks (semantic memory retrieval)
-                  skipResonance
-                    ? Promise.resolve("")
-                    : subsvc.getFlashback(
-                        globalSessionId,
-                        params.prompt,
-                        flashbackAgent,
-                        undefined,
-                        [],
-                        undefined,
-                        quickContext,
-                        rewriteMemories,
-                        observerAgent,
-                      ),
-                ]);
-
-              const mindPipelineMs = Date.now() - mindPipelineStart;
-
-              // Log individual task errors
-              if (bootstrapResult.status === "rejected" && debug) {
-                process.stderr.write(
-                  `⚠️ [MIND] Bootstrap historical episodes failed: ${describeUnknownError(bootstrapResult.reason)}\n`,
-                );
-              }
-              if (syncResult.status === "rejected" && debug) {
-                process.stderr.write(
-                  `⚠️ [MIND] Global narrative sync failed: ${describeUnknownError(syncResult.reason)}\n`,
-                );
-              }
-              if (episodeResult.status === "rejected" && debug) {
-                process.stderr.write(
-                  `⚠️ [MIND] Failed to store episode: ${describeUnknownError(episodeResult.reason)}\n`,
-                );
-              } else if (episodeResult.status === "fulfilled" && debug) {
-                process.stderr.write(
-                  `📝 [MIND] Episode stored for Global ID: ${globalSessionId}\n`,
-                );
-              }
-
-              // Extract flashback result
-              if (skipResonance) {
-                if (debug) {
-                  process.stderr.write(
-                    `⏭️  [MIND] Flashback retrieval skipped (MIND_SKIP_RESONANCE=1)\n`,
-                  );
-                }
-              } else if (flashbackResult.status === "rejected") {
-                if (debug) {
-                  process.stderr.write(
-                    `⚠️ [MIND] Flashback retrieval failed: ${describeUnknownError(flashbackResult.reason)}\n`,
-                  );
-                }
-              } else {
-                const flashbackText = flashbackResult.value;
-                if (flashbackText) {
-                  mindExtraSystemPrompt = `\n\n${flashbackText}\n\nUse these impressions to inform your response if they resonate, but don't explicitly mention them unless directly relevant.`;
-                  if (debug) {
-                    process.stderr.write(
-                      `🌠 [MIND] Resonance injected (${flashbackText.length} chars)\n`,
-                    );
-                  }
-                } else if (debug) {
-                  process.stderr.write(`🔍 [MIND] No relevant flashbacks found\n`);
-                }
-              }
-
-              if (debug) {
-                process.stderr.write(
-                  `⏱️  [LATENCY] Mind pipeline (parallel): ${mindPipelineMs}ms\n`,
-                );
-              }
-            } else if (debug) {
-              process.stderr.write(
-                `💓 [MIND] Heartbeat detected - skipping memory storage & consolidation.\n`,
-              );
-            }
-          } catch (err) {
-            log.warn(`[MIND] Memory processing failed: ${String(err)}`);
-          }
+          const messageProcessResult = await hookRunner.runBeforeMessageProcess(
+            {
+              prompt: params.prompt,
+              sessionKey: params.sessionKey,
+              sessionFile: params.sessionFile,
+              isSubagent,
+              timestamp: new Date().toISOString(),
+            },
+            hookCtx,
+          );
+          narrativeStory = messageProcessResult?.narrativeStory;
+          mindResonance = messageProcessResult?.extraSystemContext;
+        } catch (hookErr) {
+          log.warn(`before_message_process hook failed: ${String(hookErr)}`);
         }
       }
 
       try {
         while (true) {
+          if (runLoopIterations >= MAX_RUN_LOOP_ITERATIONS) {
+            const message =
+              `Exceeded retry limit after ${runLoopIterations} attempts ` +
+              `(max=${MAX_RUN_LOOP_ITERATIONS}).`;
+            log.error(
+              `[run-retry-limit] sessionKey=${params.sessionKey ?? params.sessionId} ` +
+              `provider=${provider}/${modelId} attempts=${runLoopIterations} ` +
+              `maxAttempts=${MAX_RUN_LOOP_ITERATIONS}`,
+            );
+            return {
+              payloads: [
+                {
+                  text:
+                    "Request failed after repeated internal retries. " +
+                    "Please try again, or use /new to start a fresh session.",
+                  isError: true,
+                },
+              ],
+              meta: {
+                durationMs: Date.now() - started,
+                agentMeta: {
+                  sessionId: params.sessionId,
+                  provider,
+                  model: model.id,
+                },
+                error: { kind: "retry_limit", message },
+              },
+            };
+          }
+          runLoopIterations += 1;
           attemptedThinking.add(thinkLevel);
           await fs.mkdir(resolvedWorkspace, { recursive: true });
 
@@ -877,214 +603,31 @@ export async function runEmbeddedPiAgent(
             ? `${params.extraSystemPrompt}\n\n${basePrompt}`
             : basePrompt;
 
-          // [MIND] Wrap onAgentEvent to sync STORY.md after auto-compaction
+          // Wrap onAgentEvent to fire after_compaction hook on auto-compaction.
+          // The hook delivers sessionFile so plugins can read what was compacted.
           const wrappedOnAgentEvent =
-            isMindEnabled && params.sessionKey && !isProbeSession
+            hookRunner?.hasHooks("after_compaction") && params.sessionKey && !isProbeSession
               ? (evt: { stream: string; data: Record<string, unknown> }) => {
-                  if (
-                    evt.stream === "compaction" &&
-                    evt.data.phase === "end" &&
-                    !evt.data.willRetry
-                  ) {
-                    // Fire-and-forget: narrate compacted-away messages to STORY.md
-                    void (async () => {
-                      try {
-                        const path = await import("node:path");
-                        const { SessionManager } = await import("@mariozechner/pi-coding-agent");
-                        const { isSubagentSessionKey } =
-                          await import("../../routing/session-key.js");
-
-                        const isSubagent = isSubagentSessionKey(params.sessionKey);
-                        if (isSubagent) {
-                          return;
-                        }
-
-                        const sm = SessionManager.open(params.sessionFile);
-
-                        // Full history from the .jsonl (all entries, including compacted ones)
-                        const allMessages = sm
-                          .getBranch()
-                          .filter(isMessageBranchEntry)
-                          .map((entry) => {
-                            const msg =
-                              "message" in entry
-                                ? (
-                                    entry as {
-                                      message?: { role?: string; text?: string; content?: string };
-                                    }
-                                  ).message
-                                : undefined;
-                            return {
-                              role: typeof msg?.role === "string" ? msg.role : undefined,
-                              text: messageTextFromUnknown(msg?.text ?? msg?.content),
-                              timestamp: entry.timestamp,
-                            };
-                          })
-                          .filter(
-                            (m): m is { role: string; text: string; timestamp: string } =>
-                              typeof m.role === "string" && m.role !== "system",
-                          );
-
-                        // Messages currently in LLM context (post-compaction)
-                        const contextMessages =
-                          (sm.buildSessionContext().messages as
-                            | SessionContextMessage[]
-                            | undefined) || [];
-                        const contextTimestamps = new Set(
-                          contextMessages
-                            .map((message) => message.timestamp)
-                            .filter((timestamp) => timestamp !== undefined),
-                        );
-
-                        // Messages that got compacted away = in full history but NOT in current context
-                        const compactedMessages = allMessages.filter(
-                          (message) =>
-                            message.timestamp !== undefined &&
-                            !contextTimestamps.has(message.timestamp),
-                        );
-
-                        if (compactedMessages.length === 0) {
-                          if (process.stderr.isTTY) {
-                            process.stderr.write(
-                              `🧠 [MIND] Auto-compaction detected — no new compacted messages to narrate.\n`,
-                            );
-                          }
-                          return;
-                        }
-
-                        if (process.stderr.isTTY) {
-                          process.stderr.write(
-                            `🧠 [MIND] Auto-compaction detected — narrating ${compactedMessages.length} compacted messages to STORY.md...\n`,
-                          );
-                        }
-
-                        const { ConsolidationService } =
-                          await import("../../services/memory/ConsolidationService.js");
-                        const { GraphService } =
-                          await import("../../services/memory/GraphService.js");
-                        const gUrl =
-                          mindConfig?.config?.graphiti?.baseUrl || "http://localhost:8001";
-                        const debug = !!mindConfig?.config?.debug;
-                        const gs = new GraphService(gUrl, debug);
-                        const cons = new ConsolidationService(gs, debug);
-
-                        const narrativeDir = resolveAgentNarrativeDir(
-                          params.config ?? {},
-                          workspaceResolution.agentId,
-                        );
-                        const storyPath = path.join(narrativeDir, "STORY.md");
-                        const quickPath = path.join(narrativeDir, "QUICK.md");
-                        const safeTokenLimit = Math.floor((ctxInfo.tokens || 50000) * 0.5);
-
-                        // Resolve narrative model from config or fallback to chat model
-                        const narrativeModelStr = mindConfig?.config?.narrative?.model;
-                        const [narrativeProvider, narrativeModel] = narrativeModelStr?.includes("/")
-                          ? narrativeModelStr.split("/")
-                          : [params.provider, narrativeModelStr ?? params.model];
-
-                        let narrativeLLM = model;
-
-                        // If a different model is configured for narratives, resolve it
-                        if (
-                          narrativeProvider !== params.provider ||
-                          narrativeModel !== params.model
-                        ) {
-                          if (debug) {
-                            process.stderr.write(
-                              `🎨 [MIND] Post-compaction uses custom model: ${narrativeProvider}/${narrativeModel}\n`,
-                            );
-                          }
-
-                          const { resolveModel } = await import("./model.js");
-                          const { resolveOpenClawAgentDir } = await import("../agent-paths.js");
-                          const resolved = resolveModel(
-                            narrativeProvider || params.provider || "",
-                            narrativeModel || params.model || "",
-                            params.agentDir ?? resolveOpenClawAgentDir(),
-                            params.config,
-                          );
-
-                          if (resolved.model) {
-                            narrativeLLM = resolved.model;
-                          } else if (debug) {
-                            process.stderr.write(
-                              `⚠️ [MIND] Could not resolve narrative model for post-compaction: ${resolved.error}\n`,
-                            );
-                          }
-                        } else if (debug) {
-                          process.stderr.write(
-                            `🤖 [MIND] Using chat model for post-compaction: ${params.provider}/${params.model}\n`,
-                          );
-                        }
-
-                        // Create subconscious agent using the factory
-                        const { createSubconsciousAgent } = await import("./subconscious-agent.js");
-                        const subconsciousAgent = createSubconsciousAgent({
-                          model: narrativeLLM,
-                          authStorage,
-                          modelRegistry,
-                          debug,
-                          autoBootstrapHistory:
-                            mindConfig?.config?.narrative?.autoBootstrapHistory ?? false,
-                          reasoning: (mindConfig?.config?.narrative?.thinking ??
-                            "low") as import("@mariozechner/pi-ai").ThinkingLevel,
-                        });
-
-                        const { retryAsync } = await import("../../infra/retry.js");
-                        await retryAsync(
-                          () =>
-                            cons.syncStoryWithSession(
-                              compactedMessages,
-                              storyPath,
-                              subconsciousAgent,
-                              undefined,
-                              safeTokenLimit,
-                            ),
-                          {
-                            attempts: 3,
-                            minDelayMs: 2000,
-                            maxDelayMs: 30_000,
-                            jitter: 0.3,
-                            label: "post-compaction-story-sync",
-                            onRetry: ({ attempt, maxAttempts, delayMs, err }) => {
-                              process.stderr.write(
-                                `⚠️ [MIND] Post-compaction story sync retry ${attempt}/${maxAttempts}: ${(err as Error).message}. Next in ${delayMs}ms...\n`,
-                              );
-                            },
-                          },
-                        );
-
-                        if (process.stderr.isTTY) {
-                          process.stderr.write(
-                            `✅ [MIND] Post-compaction STORY.md sync complete.\n`,
-                          );
-                        }
-
-                        // Fire-and-forget: regenerate QUICK.md from updated story
-                        void cons
-                          .generateQuickProfile(
-                            storyPath,
-                            quickPath,
-                            resolvedWorkspace,
-                            subconsciousAgent,
-                          )
-                          .catch((e: unknown) => {
-                            if (debug) {
-                              process.stderr.write(
-                                `⚠️ [MIND] QUICK.md regen after post-compaction failed: ${describeUnknownError(e)}\n`,
-                              );
-                            }
-                          });
-                      } catch (e: unknown) {
-                        process.stderr.write(
-                          `❌ [MIND] Post-compaction story sync failed: ${describeUnknownError(e)}\n`,
-                        );
-                      }
-                    })();
-                  }
-                  // Always forward the event to the original handler
-                  params.onAgentEvent?.(evt);
+                if (
+                  evt.stream === "compaction" &&
+                  evt.data.phase === "end" &&
+                  !evt.data.willRetry
+                ) {
+                  hookRunner
+                    .runAfterCompaction(
+                      {
+                        messageCount: 0,
+                        compactedCount: 0,
+                        sessionFile: params.sessionFile,
+                      },
+                      hookCtx,
+                    )
+                    .catch((err: unknown) => {
+                      log.warn(`after_compaction hook (auto-compaction) failed: ${String(err)}`);
+                    });
                 }
+                params.onAgentEvent?.(evt);
+              }
               : params.onAgentEvent;
 
           const attempt = await runEmbeddedAttempt({
@@ -1102,6 +645,7 @@ export async function runEmbeddedPiAgent(
             senderIsOwner: params.senderIsOwner,
             currentChannelId: params.currentChannelId,
             currentThreadTs: params.currentThreadTs,
+            currentMessageId: params.currentMessageId,
             replyToMode: params.replyToMode,
             hasRepliedRef: params.hasRepliedRef,
             sessionFile: params.sessionFile,
@@ -1118,6 +662,7 @@ export async function runEmbeddedPiAgent(
             authStorage,
             modelRegistry,
             agentId: workspaceResolution.agentId,
+            legacyBeforeAgentStartResult,
             thinkLevel,
             verboseLevel: params.verboseLevel,
             reasoningLevel: params.reasoningLevel,
@@ -1146,7 +691,7 @@ export async function runEmbeddedPiAgent(
             ownerNumbers: params.ownerNumbers,
             enforceFinalTag: params.enforceFinalTag,
             narrativeStory,
-            mindResonance: mindExtraSystemPrompt || undefined,
+            mindResonance: mindResonance || undefined,
           });
 
           const {
@@ -1173,11 +718,11 @@ export async function runEmbeddedPiAgent(
           });
           const formattedAssistantErrorText = lastAssistant
             ? formatAssistantErrorText(lastAssistant, {
-                cfg: params.config,
-                sessionKey: params.sessionKey ?? params.sessionId,
-                provider: activeErrorContext.provider,
-                model: activeErrorContext.model,
-              })
+              cfg: params.config,
+              sessionKey: params.sessionKey ?? params.sessionId,
+              provider: activeErrorContext.provider,
+              model: activeErrorContext.model,
+            })
             : undefined;
           const assistantErrorText =
             lastAssistant?.stopReason === "error"
@@ -1186,20 +731,20 @@ export async function runEmbeddedPiAgent(
 
           const contextOverflowError = !aborted
             ? (() => {
-                if (promptError) {
-                  const errorText = describeUnknownError(promptError);
-                  if (isLikelyContextOverflowError(errorText)) {
-                    return { text: errorText, source: "promptError" as const };
-                  }
-                  // Prompt submission failed with a non-overflow error. Do not
-                  // inspect prior assistant errors from history for this attempt.
-                  return null;
+              if (promptError) {
+                const errorText = describeUnknownError(promptError);
+                if (isLikelyContextOverflowError(errorText)) {
+                  return { text: errorText, source: "promptError" as const };
                 }
-                if (assistantErrorText && isLikelyContextOverflowError(assistantErrorText)) {
-                  return { text: assistantErrorText, source: "assistantError" as const };
-                }
+                // Prompt submission failed with a non-overflow error. Do not
+                // inspect prior assistant errors from history for this attempt.
                 return null;
-              })()
+              }
+              if (assistantErrorText && isLikelyContextOverflowError(assistantErrorText)) {
+                return { text: assistantErrorText, source: "assistantError" as const };
+              }
+              return null;
+            })()
             : null;
 
           if (contextOverflowError) {
@@ -1208,10 +753,10 @@ export async function runEmbeddedPiAgent(
             const msgCount = attempt.messagesSnapshot?.length ?? 0;
             log.warn(
               `[context-overflow-diag] sessionKey=${params.sessionKey ?? params.sessionId} ` +
-                `provider=${provider}/${modelId} source=${contextOverflowError.source} ` +
-                `messages=${msgCount} sessionFile=${params.sessionFile} ` +
-                `diagId=${overflowDiagId} compactionAttempts=${overflowCompactionAttempts} ` +
-                `error=${errorText.slice(0, 200)}`,
+              `provider=${provider}/${modelId} source=${contextOverflowError.source} ` +
+              `messages=${msgCount} sessionFile=${params.sessionFile} ` +
+              `diagId=${overflowDiagId} compactionAttempts=${overflowCompactionAttempts} ` +
+              `error=${errorText.slice(0, 200)}`,
             );
             const isCompactionFailure = isCompactionFailureError(errorText);
             const hadAttemptLevelCompaction = attemptCompactionCount > 0;
@@ -1238,8 +783,8 @@ export async function runEmbeddedPiAgent(
               if (log.isEnabled("debug")) {
                 log.debug(
                   `[compaction-diag] decision diagId=${overflowDiagId} branch=compact ` +
-                    `isCompactionFailure=${isCompactionFailure} hasOversizedToolResults=unknown ` +
-                    `attempt=${overflowCompactionAttempts + 1} maxAttempts=${MAX_OVERFLOW_COMPACTION_ATTEMPTS}`,
+                  `isCompactionFailure=${isCompactionFailure} hasOversizedToolResults=unknown ` +
+                  `attempt=${overflowCompactionAttempts + 1} maxAttempts=${MAX_OVERFLOW_COMPACTION_ATTEMPTS}`,
                 );
               }
               overflowCompactionAttempts++;
@@ -1288,23 +833,23 @@ export async function runEmbeddedPiAgent(
               const contextWindowTokens = ctxInfo.tokens;
               const hasOversized = attempt.messagesSnapshot
                 ? sessionLikelyHasOversizedToolResults({
-                    messages: attempt.messagesSnapshot,
-                    contextWindowTokens,
-                  })
+                  messages: attempt.messagesSnapshot,
+                  contextWindowTokens,
+                })
                 : false;
 
               if (hasOversized) {
                 if (log.isEnabled("debug")) {
                   log.debug(
                     `[compaction-diag] decision diagId=${overflowDiagId} branch=truncate_tool_results ` +
-                      `isCompactionFailure=${isCompactionFailure} hasOversizedToolResults=${hasOversized} ` +
-                      `attempt=${overflowCompactionAttempts} maxAttempts=${MAX_OVERFLOW_COMPACTION_ATTEMPTS}`,
+                    `isCompactionFailure=${isCompactionFailure} hasOversizedToolResults=${hasOversized} ` +
+                    `attempt=${overflowCompactionAttempts} maxAttempts=${MAX_OVERFLOW_COMPACTION_ATTEMPTS}`,
                   );
                 }
                 toolResultTruncationAttempted = true;
                 log.warn(
                   `[context-overflow-recovery] Attempting tool result truncation for ${provider}/${modelId} ` +
-                    `(contextWindow=${contextWindowTokens} tokens)`,
+                  `(contextWindow=${contextWindowTokens} tokens)`,
                 );
                 const truncResult = await truncateOversizedToolResultsInSession({
                   sessionFile: params.sessionFile,
@@ -1316,8 +861,8 @@ export async function runEmbeddedPiAgent(
                   log.info(
                     `[context-overflow-recovery] Truncated ${truncResult.truncatedCount} tool result(s); retrying prompt`,
                   );
-                  // Session is now smaller; allow compaction retries again.
-                  overflowCompactionAttempts = 0;
+                  // Do NOT reset overflowCompactionAttempts here — the global cap must remain
+                  // enforced across all iterations to prevent unbounded compaction cycles (OC-65).
                   continue;
                 }
                 log.warn(
@@ -1326,8 +871,8 @@ export async function runEmbeddedPiAgent(
               } else if (log.isEnabled("debug")) {
                 log.debug(
                   `[compaction-diag] decision diagId=${overflowDiagId} branch=give_up ` +
-                    `isCompactionFailure=${isCompactionFailure} hasOversizedToolResults=${hasOversized} ` +
-                    `attempt=${overflowCompactionAttempts} maxAttempts=${MAX_OVERFLOW_COMPACTION_ATTEMPTS}`,
+                  `isCompactionFailure=${isCompactionFailure} hasOversizedToolResults=${hasOversized} ` +
+                  `attempt=${overflowCompactionAttempts} maxAttempts=${MAX_OVERFLOW_COMPACTION_ATTEMPTS}`,
                 );
               }
             }
@@ -1339,8 +884,8 @@ export async function runEmbeddedPiAgent(
             ) {
               log.debug(
                 `[compaction-diag] decision diagId=${overflowDiagId} branch=give_up ` +
-                  `isCompactionFailure=${isCompactionFailure} hasOversizedToolResults=unknown ` +
-                  `attempt=${overflowCompactionAttempts} maxAttempts=${MAX_OVERFLOW_COMPACTION_ATTEMPTS}`,
+                `isCompactionFailure=${isCompactionFailure} hasOversizedToolResults=unknown ` +
+                `attempt=${overflowCompactionAttempts} maxAttempts=${MAX_OVERFLOW_COMPACTION_ATTEMPTS}`,
               );
             }
             const kind = isCompactionFailure ? "compaction_failure" : "context_overflow";
@@ -1420,15 +965,10 @@ export async function runEmbeddedPiAgent(
               };
             }
             const promptFailoverReason = classifyFailoverReason(errorText);
-            if (promptFailoverReason && promptFailoverReason !== "timeout" && lastProfileId) {
-              await markAuthProfileFailure({
-                store: authStore,
-                profileId: lastProfileId,
-                reason: promptFailoverReason,
-                cfg: params.config,
-                agentDir: params.agentDir,
-              });
-            }
+            await maybeMarkAuthProfileFailure({
+              profileId: lastProfileId,
+              reason: promptFailoverReason,
+            });
             if (
               isFailoverErrorMessage(errorText) &&
               promptFailoverReason !== "timeout" &&
@@ -1500,8 +1040,8 @@ export async function runEmbeddedPiAgent(
             );
           }
 
-          // Treat timeout as potential rate limit (Antigravity hangs on rate limit)
-          // But exclude post-prompt compaction timeouts (model succeeded; no profile issue)
+          // Rotate on timeout to try another account/model path in this turn,
+          // but exclude post-prompt compaction timeouts (model succeeded; no profile issue).
           const shouldRotate =
             (!aborted && failoverFailure) || (timedOut && !timedOutDuringCompaction);
 
@@ -1511,17 +1051,15 @@ export async function runEmbeddedPiAgent(
                 timedOut || assistantFailoverReason === "timeout"
                   ? "timeout"
                   : (assistantFailoverReason ?? "unknown");
-              await markAuthProfileFailure({
-                store: authStore,
+              // Skip cooldown for timeouts: a timeout is model/network-specific,
+              // not an auth issue. Marking the profile would poison fallback models
+              // on the same provider (e.g. gpt-5.3 timeout blocks gpt-5.2).
+              await maybeMarkAuthProfileFailure({
                 profileId: lastProfileId,
                 reason,
-                cfg: params.config,
-                agentDir: params.agentDir,
               });
               if (timedOut && !isProbeSession) {
-                log.warn(
-                  `Profile ${lastProfileId} timed out (possible rate limit). Trying next account...`,
-                );
+                log.warn(`Profile ${lastProfileId} timed out. Trying next account...`);
               }
               if (cloudCodeAssistFormatError) {
                 log.warn(
@@ -1540,11 +1078,11 @@ export async function runEmbeddedPiAgent(
               const message =
                 (lastAssistant
                   ? formatAssistantErrorText(lastAssistant, {
-                      cfg: params.config,
-                      sessionKey: params.sessionKey ?? params.sessionId,
-                      provider: activeErrorContext.provider,
-                      model: activeErrorContext.model,
-                    })
+                    cfg: params.config,
+                    sessionKey: params.sessionKey ?? params.sessionId,
+                    provider: activeErrorContext.provider,
+                    model: activeErrorContext.model,
+                  })
                   : undefined) ||
                 lastAssistant?.errorMessage?.trim() ||
                 (timedOut
@@ -1553,9 +1091,9 @@ export async function runEmbeddedPiAgent(
                     ? "LLM request rate limited."
                     : billingFailure
                       ? formatBillingErrorMessage(
-                          activeErrorContext.provider,
-                          activeErrorContext.model,
-                        )
+                        activeErrorContext.provider,
+                        activeErrorContext.model,
+                      )
                       : authFailure
                         ? "LLM request unauthorized."
                         : "LLM request failed.");
@@ -1607,6 +1145,7 @@ export async function runEmbeddedPiAgent(
             toolResultFormat: resolvedToolResultFormat,
             suppressToolErrorWarnings: params.suppressToolErrorWarnings,
             inlineToolResultsAllowed: false,
+            didSendViaMessagingTool: attempt.didSendViaMessagingTool,
           });
 
           // Timeout aborts can leave the run without any assistant payloads.
@@ -1663,12 +1202,12 @@ export async function runEmbeddedPiAgent(
               stopReason: attempt.clientToolCall ? "tool_calls" : undefined,
               pendingToolCalls: attempt.clientToolCall
                 ? [
-                    {
-                      id: `call_${Date.now()}`,
-                      name: attempt.clientToolCall.name,
-                      arguments: JSON.stringify(attempt.clientToolCall.params),
-                    },
-                  ]
+                  {
+                    id: randomBytes(5).toString("hex").slice(0, 9),
+                    name: attempt.clientToolCall.name,
+                    arguments: JSON.stringify(attempt.clientToolCall.params),
+                  },
+                ]
                 : undefined,
             },
             didSendViaMessagingTool: attempt.didSendViaMessagingTool,

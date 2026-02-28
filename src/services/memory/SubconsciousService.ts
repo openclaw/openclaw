@@ -76,14 +76,14 @@ export class SubconsciousService {
     const historyText =
       analysisWindow.length > 0
         ? analysisWindow
-            .map((m) => {
-              let mText = m.text || m.content || "";
-              if (Array.isArray(mText)) {
-                mText = mText.map((p) => (typeof p === "string" ? p : p.text || "")).join(" ");
-              }
-              return `${m.role}: ${String(mText)}`;
-            })
-            .join("\n")
+          .map((m) => {
+            let mText = m.text || m.content || "";
+            if (Array.isArray(mText)) {
+              mText = mText.map((p) => (typeof p === "string" ? p : p.text || "")).join(" ");
+            }
+            return `${m.role}: ${String(mText)}`;
+          })
+          .join("\n")
         : "(No previous context)";
 
     const prompt = `You are the "Subconscious Observer" of an artificial mind.
@@ -247,11 +247,31 @@ Respond with exactly 3 queries, one per line. No numbers, bullets, or explanatio
     rewriteMemories: boolean = true,
     /** Dedicated agent for observer query generation — should have no thinking for low latency. Falls back to agent. */
     observerAgent?: LLMClient | null,
+    onEvent?: (event: { stream: string; data: any }) => void,
   ): Promise<string> {
+    if (onEvent) {
+      onEvent({
+        stream: "tool",
+        data: {
+          tool: "subconscious",
+          phase: "call",
+        },
+      });
+    }
     this.log("🧠 [MIND] Subconscious is exploring memories...");
     const startTime = performance.now();
 
     const t0 = performance.now();
+    if (onEvent) {
+      onEvent({
+        stream: "tool",
+        data: {
+          tool: "subconscious",
+          phase: "status",
+          status: "Buscando recuerdos...",
+        },
+      });
+    }
     const searchQueries = await this.generateSeekerQueries(
       currentPrompt,
       recentMessages,
@@ -379,6 +399,17 @@ Respond with exactly 3 queries, one per line. No numbers, bullets, or explanatio
 
     const t_search = performance.now() - t1;
 
+    if (onEvent) {
+      onEvent({
+        stream: "tool",
+        data: {
+          tool: "subconscious",
+          phase: "status",
+          status: "Resonando con el pasado...",
+        },
+      });
+    }
+
     let rewrittenLines = "";
     const t2 = performance.now();
     if (agent && rewriteMemories) {
@@ -501,6 +532,16 @@ ${groupLines.join("\n")}`;
       `⏱️  [LATENCY] Total: ${totalTime.toFixed(0)}ms (Queries: ${t_queries.toFixed(0)}ms, Search: ${t_search.toFixed(0)}ms, Rewrite: ${t_rewrite.toFixed(0)}ms)\n`,
     );
     process.stderr.write(`================================================\n`);
+
+    if (onEvent) {
+      onEvent({
+        stream: "tool",
+        data: {
+          tool: "subconscious",
+          phase: "result",
+        },
+      });
+    }
 
     return finalResonance;
   }

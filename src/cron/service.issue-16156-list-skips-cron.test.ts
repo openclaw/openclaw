@@ -1,26 +1,16 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { CronService } from "./service.js";
-import { createStartedCronServiceWithFinishedBarrier } from "./service.test-harness.js";
+import {
+  createStartedCronServiceWithFinishedBarrier,
+  setupCronServiceSuite,
+} from "./service.test-harness.js";
 
-const noopLogger = {
-  debug: vi.fn(),
-  info: vi.fn(),
-  warn: vi.fn(),
-  error: vi.fn(),
-};
-
-let fixtureRoot = "";
-let caseId = 0;
-
-async function makeStorePath() {
-  const dir = path.join(fixtureRoot, `case-${caseId++}`);
-  const storePath = path.join(dir, "cron", "jobs.json");
-  await fs.mkdir(path.dirname(storePath), { recursive: true });
-  return { storePath };
-}
+const { logger: noopLogger, makeStorePath } = setupCronServiceSuite({
+  prefix: "openclaw-cron-16156-",
+  baseTimeIso: "2025-12-13T00:00:00.000Z",
+});
 
 async function writeJobsStore(storePath: string, jobs: unknown[]) {
   await fs.mkdir(path.dirname(storePath), { recursive: true });
@@ -39,29 +29,6 @@ function createCronFromStorePath(storePath: string) {
 }
 
 describe("#16156: cron.list() must not silently advance past-due recurring jobs", () => {
-  beforeAll(async () => {
-    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cron-16156-"));
-  });
-
-  afterAll(async () => {
-    if (fixtureRoot) {
-      await fs.rm(fixtureRoot, { recursive: true, force: true }).catch(() => undefined);
-    }
-  });
-
-  beforeEach(() => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2025-12-13T00:00:00.000Z"));
-    noopLogger.debug.mockClear();
-    noopLogger.info.mockClear();
-    noopLogger.warn.mockClear();
-    noopLogger.error.mockClear();
-  });
-
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
   it("does not skip a cron job when list() is called while the job is past-due", async () => {
     const store = await makeStorePath();
     const { cron, enqueueSystemEvent, finished } = createStartedCronServiceWithFinishedBarrier({

@@ -212,7 +212,7 @@ final class GatewayConnectionController {
             await self.connectManual(host: host, port: port, useTLS: useTLS)
         case let .discovered(stableID, _):
             guard let gateway = self.gateways.first(where: { $0.stableID == stableID }) else { return }
-            await self.connectDiscoveredGateway(gateway)
+            _ = await self.connectDiscoveredGateway(gateway)
         }
     }
 
@@ -399,7 +399,7 @@ final class GatewayConnectionController {
             self.didAutoConnect = true
             Task { [weak self] in
                 guard let self else { return }
-                await self.connectDiscoveredGateway(target)
+                _ = await self.connectDiscoveredGateway(target)
             }
             return
         }
@@ -411,7 +411,7 @@ final class GatewayConnectionController {
             self.didAutoConnect = true
             Task { [weak self] in
                 guard let self else { return }
-                await self.connectDiscoveredGateway(gateway)
+                _ = await self.connectDiscoveredGateway(gateway)
             }
             return
         }
@@ -632,7 +632,8 @@ final class GatewayConnectionController {
                             0,
                             NI_NUMERICHOST)
                         guard rc == 0 else { return nil }
-                        return String(cString: buffer)
+                        let bytes = buffer.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }
+                        return String(bytes: bytes, encoding: .utf8)
                     }
 
                     if let host, !host.isEmpty {
@@ -704,7 +705,7 @@ final class GatewayConnectionController {
         var addr = in_addr()
         let parsed = host.withCString { inet_pton(AF_INET, $0, &addr) == 1 }
         guard parsed else { return false }
-        let value = ntohl(addr.s_addr)
+        let value = UInt32(bigEndian: addr.s_addr)
         let firstOctet = UInt8((value >> 24) & 0xFF)
         return firstOctet == 127
     }
@@ -889,11 +890,9 @@ final class GatewayConnectionController {
         permissions["contacts"] = contactsStatus == .authorized || contactsStatus == .limited
 
         let calendarStatus = EKEventStore.authorizationStatus(for: .event)
-        permissions["calendar"] =
-            calendarStatus == .authorized || calendarStatus == .fullAccess || calendarStatus == .writeOnly
+        permissions["calendar"] = Self.hasEventKitAccess(calendarStatus)
         let remindersStatus = EKEventStore.authorizationStatus(for: .reminder)
-        permissions["reminders"] =
-            remindersStatus == .authorized || remindersStatus == .fullAccess || remindersStatus == .writeOnly
+        permissions["reminders"] = Self.hasEventKitAccess(remindersStatus)
 
         let motionStatus = CMMotionActivityManager.authorizationStatus()
         let pedometerStatus = CMPedometer.authorizationStatus()
@@ -911,53 +910,19 @@ final class GatewayConnectionController {
 
     private static func isLocationAuthorized(status: CLAuthorizationStatus) -> Bool {
         switch status {
-        case .authorizedAlways, .authorizedWhenInUse, .authorized:
+        case .authorizedAlways, .authorizedWhenInUse:
             return true
         default:
             return false
         }
     }
 
+    private static func hasEventKitAccess(_ status: EKAuthorizationStatus) -> Bool {
+        status == .fullAccess || status == .writeOnly
+    }
+
     private static func motionAvailable() -> Bool {
         CMMotionActivityManager.isActivityAvailable() || CMPedometer.isStepCountingAvailable()
-    }
-
-    private func platformString() -> String {
-        let v = ProcessInfo.processInfo.operatingSystemVersion
-        let name = switch UIDevice.current.userInterfaceIdiom {
-        case .pad:
-            "iPadOS"
-        case .phone:
-            "iOS"
-        default:
-            "iOS"
-        }
-        return "\(name) \(v.majorVersion).\(v.minorVersion).\(v.patchVersion)"
-    }
-
-    private func deviceFamily() -> String {
-        switch UIDevice.current.userInterfaceIdiom {
-        case .pad:
-            "iPad"
-        case .phone:
-            "iPhone"
-        default:
-            "iOS"
-        }
-    }
-
-    private func modelIdentifier() -> String {
-        var systemInfo = utsname()
-        uname(&systemInfo)
-        let machine = withUnsafeBytes(of: &systemInfo.machine) { ptr in
-            String(bytes: ptr.prefix { $0 != 0 }, encoding: .utf8)
-        }
-        let trimmed = machine?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return trimmed.isEmpty ? "unknown" : trimmed
-    }
-
-    private func appVersion() -> String {
-        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev"
     }
 }
 
@@ -980,19 +945,19 @@ extension GatewayConnectionController {
     }
 
     func _test_platformString() -> String {
-        self.platformString()
+        DeviceInfoHelper.platformString()
     }
 
     func _test_deviceFamily() -> String {
-        self.deviceFamily()
+        DeviceInfoHelper.deviceFamily()
     }
 
     func _test_modelIdentifier() -> String {
-        self.modelIdentifier()
+        DeviceInfoHelper.modelIdentifier()
     }
 
     func _test_appVersion() -> String {
-        self.appVersion()
+        DeviceInfoHelper.appVersion()
     }
 
     func _test_setGateways(_ gateways: [GatewayDiscoveryModel.DiscoveredGateway]) {
@@ -1024,7 +989,7 @@ extension GatewayConnectionController {
 }
 #endif
 
-private final class GatewayTLSFingerprintProbe: NSObject, URLSessionDelegate {
+private final class GatewayTLSFingerprintProbe: NSObject, URLSessionDelegate, @unchecked Sendable {
     private let url: URL
     private let timeoutSeconds: Double
     private let onComplete: (String?) -> Void

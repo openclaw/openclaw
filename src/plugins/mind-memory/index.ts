@@ -1,3 +1,4 @@
+import { access, copyFile, mkdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { complete } from "@mariozechner/pi-ai";
@@ -12,8 +13,13 @@ import { resolveModel } from "../../agents/pi-embedded-runner/model.js";
 import type { OpenClawPluginApi } from "../../plugins/types.js";
 import { ConsolidationService } from "../../services/memory/ConsolidationService.js";
 import { GraphService } from "../../services/memory/GraphService.js";
-import { SubconsciousService, type LLMClient } from "../../services/memory/SubconsciousService.js";
+import {
+  SubconsciousService,
+  type LLMClient,
+  type RecentMessage,
+} from "../../services/memory/SubconsciousService.js";
 import { ensureGraphitiDocker, installDocker } from "./docker.js";
+import { emitAgentEvent } from "../../infra/agent-events.js";
 
 /** Typed shape of the mind-memory plugin config within the global config. */
 type MindMemoryPluginConfig = {
@@ -456,6 +462,305 @@ export default function register(api: PluginApi) {
         }
       } catch (err: unknown) {
         api.logger.warn(`[mind-memory] before_reset hook failed: ${String(err)}`);
+      }
+    })();
+  });
+
+  // Shared helper: resolve narrative LLM client + lighter observer client for query generation.
+  // Called fresh each time (auth tokens may rotate between calls).
+  const resolveNarrativeAgents = async (): Promise<{
+    narrativeAgent: LLMClient;
+    observerAgent: LLMClient;
+  } | null> => {
+    const agentDir = resolveOpenClawAgentDir();
+    const consolidatorOverride = config.narrative?.model;
+    const [narrativeProvider, narrativeModel] = consolidatorOverride
+      ? consolidatorOverride.includes("/")
+        ? consolidatorOverride.split("/")
+        : ["github-copilot", consolidatorOverride]
+      : ["github-copilot", "gemini-2.0-flash-001"];
+
+    const { model, authStorage, modelRegistry, error } = resolveModel(
+      narrativeProvider,
+      narrativeModel,
+      agentDir,
+      api.config,
+    );
+
+    if (!model) {
+      api.logger.warn(`[mind-memory] could not resolve narrative model: ${error ?? "unknown"}`);
+      return null;
+    }
+
+    const { createSubconsciousAgent } = await import(
+      "../../agents/pi-embedded-runner/subconscious-agent.js"
+    );
+    const narrativeAgent = createSubconsciousAgent({
+      model,
+      authStorage,
+      modelRegistry,
+      debug,
+      autoBootstrapHistory: false,
+      reasoning: (config.narrative?.thinking ??
+        "low") as import("@mariozechner/pi-ai").ThinkingLevel,
+    });
+
+    // Observer: no reasoning for low-latency query generation.
+    const graphitiModelOverride = config.graphiti?.model;
+    let observerAgent: LLMClient = narrativeAgent;
+    if (graphitiModelOverride) {
+      const [oProvider, oModel] = graphitiModelOverride.includes("/")
+        ? graphitiModelOverride.split("/")
+        : ["github-copilot", graphitiModelOverride];
+      const {
+        model: oM,
+        authStorage: oAs,
+        modelRegistry: oMr,
+      } = resolveModel(oProvider, oModel, agentDir, api.config);
+      if (oM) {
+        observerAgent = createSubconsciousAgent({
+          model: oM,
+          authStorage: oAs,
+          modelRegistry: oMr,
+          debug,
+          autoBootstrapHistory: false,
+          // No reasoning — latency-sensitive query generation
+        });
+      }
+    }
+
+    return { narrativeAgent, observerAgent };
+  };
+
+  // 5. Register before_message_process hook: full per-message memory pipeline.
+  // Returns narrativeStory (for system prompt injection) and extraSystemContext (flashback resonance).
+  api.on("before_message_process", async (event, _ctx) => {
+    // Skip for subagents — personal memory only applies to the top-level conversation.
+    if (event.isSubagent) return;
+
+    // Skip heartbeat probes (not real user messages).
+    const { prompt } = event;
+    if (
+      (prompt.includes("Read HEARTBEAT.md") && prompt.includes("HEARTBEAT_OK")) ||
+      prompt.trim() === "HEARTBEAT_OK"
+    ) {
+      return;
+    }
+
+    const agentId = resolveDefaultAgentId(api.config);
+    const workspaceDir = resolveAgentWorkspaceDir(api.config, agentId);
+    const memoryDir = config.memoryDir || path.join(workspaceDir, "memory");
+    const narrativeDir = resolveAgentNarrativeDir(api.config, agentId);
+    const storyPath = path.join(narrativeDir, "STORY.md");
+    const quickPath = path.join(narrativeDir, "QUICK.md");
+    const sessionsDir = event.sessionFile ? path.dirname(event.sessionFile) : undefined;
+
+    await mkdir(narrativeDir, { recursive: true });
+
+    // One-time migration: copy STORY.md from workspace root if narrativeDir version is missing.
+    try {
+      await access(storyPath);
+    } catch {
+      try {
+        await copyFile(path.join(workspaceDir, "STORY.md"), storyPath);
+        if (debug) {
+          api.logger.info(`🧠 [MIND] Migrated STORY.md from workspace to narrativeDir`);
+        }
+      } catch {
+        // No workspace STORY.md either — new user, will be created on first sync
+      }
+    }
+
+    // Read STORY.md and QUICK.md for context injection.
+    const [storyContent, quickContext] = await Promise.all([
+      readFile(storyPath, "utf-8").catch(() => undefined),
+      readFile(quickPath, "utf-8").catch(() => undefined),
+    ]);
+
+    const agents = await resolveNarrativeAgents();
+    if (!agents) {
+      return { narrativeStory: storyContent };
+    }
+    const { narrativeAgent, observerAgent } = agents;
+
+    const sessionId = "global-user-memory";
+    const skipResonance = process.env.MIND_SKIP_RESONANCE === "1";
+
+    // Run memory pipeline in parallel:
+    // [0] Bootstrap historical episodes into Graphiti (idempotent flag-file check)
+    // [1] Sync global narrative from recent session files (fire-and-forget QUICK.md regen)
+    // [2] Add current prompt as a graph episode
+    // [3] Get flashback resonance for injection
+    const [, , , flashbackResult] = await Promise.allSettled([
+      config.graphiti?.enabled !== false
+        ? consolidator.bootstrapHistoricalEpisodes(sessionId, memoryDir)
+        : Promise.resolve(),
+      sessionsDir && config.narrative?.enabled !== false
+        ? consolidator
+          .syncGlobalNarrative(
+            sessionsDir,
+            storyPath,
+            narrativeAgent,
+            undefined,
+            50000,
+            event.sessionFile,
+          )
+          .then(() =>
+            consolidator
+              .generateQuickProfile(storyPath, quickPath, workspaceDir, narrativeAgent)
+              .catch(() => { }),
+          )
+          .catch(() => { })
+        : Promise.resolve(),
+      config.graphiti?.enabled !== false
+        ? graphService.addEpisode(sessionId, `user: ${prompt}`, event.timestamp)
+        : Promise.resolve(),
+      !skipResonance && config.graphiti?.enabled !== false
+        ? subconscious.getFlashback(
+          sessionId,
+          prompt,
+          narrativeAgent,
+          undefined,
+          (event.recentMessages ?? []) as RecentMessage[],
+          undefined,
+          quickContext,
+          config.graphiti?.rewriteMemories ?? true,
+          observerAgent,
+          (evt) => {
+            if (event.sessionKey && _ctx.runId) {
+              emitAgentEvent({
+                runId: _ctx.runId,
+                sessionKey: event.sessionKey,
+                stream: evt.stream,
+                data: evt.data,
+              });
+            }
+          },
+        )
+        : Promise.resolve(""),
+    ]);
+
+    const flashback =
+      flashbackResult.status === "fulfilled" && typeof flashbackResult.value === "string"
+        ? flashbackResult.value
+        : undefined;
+
+    return {
+      narrativeStory: storyContent,
+      extraSystemContext: flashback || undefined,
+    };
+  });
+
+  // 6. Register before_compaction hook: sync STORY.md from the pre-compaction message history.
+  // Fire-and-forget so it does not block the compaction LLM call.
+  api.on("before_compaction", (event, _ctx) => {
+    const { messages, sessionFile } = event;
+    if (!messages || messages.length === 0 || config.narrative?.enabled === false) {
+      return;
+    }
+
+    void (async () => {
+      try {
+        const agentId = resolveDefaultAgentId(api.config);
+        const workspaceDir = resolveAgentWorkspaceDir(api.config, agentId);
+        const narrativeDir = resolveAgentNarrativeDir(api.config, agentId);
+        const storyPath = path.join(narrativeDir, "STORY.md");
+        const quickPath = path.join(narrativeDir, "QUICK.md");
+
+        const agents = await resolveNarrativeAgents();
+        if (!agents) return;
+        const { narrativeAgent } = agents;
+
+        type MsgEntry = {
+          role?: string;
+          text?: string;
+          content?: unknown;
+          timestamp?: number | string;
+          created_at?: string;
+        };
+        const sessionMessages = (messages as MsgEntry[]).filter(
+          (m): m is MsgEntry & { role: string } =>
+            typeof m.role === "string" && m.role !== "system",
+        );
+
+        if (sessionMessages.length === 0) return;
+
+        if (debug) {
+          api.logger.info(
+            `🧠 [MIND] before_compaction: syncing ${sessionMessages.length} messages to STORY.md...`,
+          );
+        }
+
+        await consolidator.syncStoryWithSession(
+          sessionMessages,
+          storyPath,
+          narrativeAgent,
+          undefined,
+          50000,
+        );
+
+        // Fire-and-forget QUICK.md regeneration after story sync.
+        void consolidator
+          .generateQuickProfile(storyPath, quickPath, workspaceDir, narrativeAgent)
+          .catch(() => { });
+
+        if (debug) {
+          api.logger.info(`✅ [MIND] before_compaction: STORY.md sync complete.`);
+        }
+
+        void sessionFile; // sessionFile available if needed for future enhancements
+      } catch (err: unknown) {
+        api.logger.warn(`[mind-memory] before_compaction hook failed: ${String(err)}`);
+      }
+    })();
+  });
+
+  // 7. Register after_compaction hook: triggered on auto-compaction from the run loop.
+  // Syncs any unprocessed messages from recent session files to STORY.md.
+  api.on("after_compaction", (event, _ctx) => {
+    const { sessionFile } = event;
+    if (!sessionFile || config.narrative?.enabled === false) {
+      return;
+    }
+
+    void (async () => {
+      try {
+        const sessionsDir = path.dirname(sessionFile);
+        const agentId = resolveDefaultAgentId(api.config);
+        const workspaceDir = resolveAgentWorkspaceDir(api.config, agentId);
+        const narrativeDir = resolveAgentNarrativeDir(api.config, agentId);
+        const storyPath = path.join(narrativeDir, "STORY.md");
+        const quickPath = path.join(narrativeDir, "QUICK.md");
+
+        const agents = await resolveNarrativeAgents();
+        if (!agents) return;
+        const { narrativeAgent } = agents;
+
+        if (debug) {
+          api.logger.info(
+            `🧠 [MIND] after_compaction: syncing global narrative from ${sessionsDir}...`,
+          );
+        }
+
+        await consolidator.syncGlobalNarrative(
+          sessionsDir,
+          storyPath,
+          narrativeAgent,
+          undefined,
+          50000,
+          sessionFile,
+        );
+
+        // Fire-and-forget QUICK.md regeneration after story sync.
+        void consolidator
+          .generateQuickProfile(storyPath, quickPath, workspaceDir, narrativeAgent)
+          .catch(() => { });
+
+        if (debug) {
+          api.logger.info(`✅ [MIND] after_compaction: global narrative sync complete.`);
+        }
+      } catch (err: unknown) {
+        api.logger.warn(`[mind-memory] after_compaction hook failed: ${String(err)}`);
       }
     })();
   });

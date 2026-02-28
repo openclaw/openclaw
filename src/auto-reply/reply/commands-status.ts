@@ -10,6 +10,7 @@ import {
   resolveMainSessionAlias,
 } from "../../agents/tools/sessions-helpers.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { toAgentModelListLike } from "../../config/model-input.js";
 import type { SessionEntry, SessionScope } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import {
@@ -164,7 +165,7 @@ export async function buildStatusReply(params: {
     agent: {
       ...agentDefaults,
       model: {
-        ...agentDefaults.model,
+        ...toAgentModelListLike(agentDefaults.model),
         primary: `${provider}/${model}`,
       },
       contextTokens,

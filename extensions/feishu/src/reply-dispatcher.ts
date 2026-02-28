@@ -8,6 +8,7 @@ import {
 } from "openclaw/plugin-sdk";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
+import { sendMediaFeishu } from "./media.js";
 import type { MentionTarget } from "./mention.js";
 import { buildMentionedCardContent } from "./mention.js";
 import { getFeishuRuntime } from "./runtime.js";
@@ -27,29 +28,53 @@ export type CreateFeishuReplyDispatcherParams = {
   runtime: RuntimeEnv;
   chatId: string;
   replyToMessageId?: string;
+  /** When true, preserve typing indicator on reply target but send messages without reply metadata */
+  skipReplyToInMessages?: boolean;
+  replyInThread?: boolean;
+  rootId?: string;
   mentionTargets?: MentionTarget[];
   accountId?: string;
 };
 
 export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherParams) {
   const core = getFeishuRuntime();
-  const { cfg, agentId, chatId, replyToMessageId, mentionTargets, accountId } = params;
+  const {
+    cfg,
+    agentId,
+    chatId,
+    replyToMessageId,
+    skipReplyToInMessages,
+    replyInThread,
+    rootId,
+    mentionTargets,
+    accountId,
+  } = params;
+  const sendReplyToMessageId = skipReplyToInMessages ? undefined : replyToMessageId;
   const account = resolveFeishuAccount({ cfg, accountId });
   const prefixContext = createReplyPrefixContext({ cfg, agentId });
 
   let typingState: TypingIndicatorState | null = null;
   const typingCallbacks = createTypingCallbacks({
     start: async () => {
+      // Check if typing indicator is enabled (default: true)
+      if (!(account.config.typingIndicator ?? true)) {
+        return;
+      }
       if (!replyToMessageId) {
         return;
       }
-      typingState = await addTypingIndicator({ cfg, messageId: replyToMessageId, accountId });
+      typingState = await addTypingIndicator({
+        cfg,
+        messageId: replyToMessageId,
+        accountId,
+        runtime: params.runtime,
+      });
     },
     stop: async () => {
       if (!typingState) {
         return;
       }
-      await removeTypingIndicator({ cfg, state: typingState, accountId });
+      await removeTypingIndicator({ cfg, state: typingState, accountId, runtime: params.runtime });
       typingState = null;
     },
     onStartError: (err) =>
@@ -99,7 +124,11 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         params.runtime.log?.(`feishu[${account.accountId}] ${message}`),
       );
       try {
-        await streaming.start(chatId, resolveReceiveIdType(chatId));
+        await streaming.start(chatId, resolveReceiveIdType(chatId), {
+          replyToMessageId,
+          replyInThread,
+          rootId,
+        });
       } catch (error) {
         params.runtime.error?.(`feishu: streaming start failed: ${String(error)}`);
         streaming = null;
@@ -138,60 +167,99 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       },
       deliver: async (payload: ReplyPayload, info) => {
         const text = payload.text ?? "";
-        if (!text.trim()) {
+        const mediaList =
+          payload.mediaUrls && payload.mediaUrls.length > 0
+            ? payload.mediaUrls
+            : payload.mediaUrl
+              ? [payload.mediaUrl]
+              : [];
+        const hasText = Boolean(text.trim());
+        const hasMedia = mediaList.length > 0;
+
+        if (!hasText && !hasMedia) {
           return;
         }
 
-        const useCard = renderMode === "card" || (renderMode === "auto" && shouldUseCard(text));
+        if (hasText) {
+          const useCard = renderMode === "card" || (renderMode === "auto" && shouldUseCard(text));
 
-        if ((info?.kind === "block" || info?.kind === "final") && streamingEnabled && useCard) {
-          startStreaming();
-          if (streamingStartPromise) {
-            await streamingStartPromise;
+          if ((info?.kind === "block" || info?.kind === "final") && streamingEnabled && useCard) {
+            startStreaming();
+            if (streamingStartPromise) {
+              await streamingStartPromise;
+            }
+          }
+
+          if (streaming?.isActive()) {
+            if (info?.kind === "final") {
+              streamText = text;
+              await closeStreaming();
+            }
+            // Send media even when streaming handled the text
+            if (hasMedia) {
+              for (const mediaUrl of mediaList) {
+                await sendMediaFeishu({
+                  cfg,
+                  to: chatId,
+                  mediaUrl,
+                  replyToMessageId: sendReplyToMessageId,
+                  replyInThread,
+                  accountId,
+                });
+              }
+            }
+            return;
+          }
+
+          let first = true;
+          if (useCard) {
+            for (const chunk of core.channel.text.chunkTextWithMode(
+              text,
+              textChunkLimit,
+              chunkMode,
+            )) {
+              await sendMarkdownCardFeishu({
+                cfg,
+                to: chatId,
+                text: chunk,
+                replyToMessageId: sendReplyToMessageId,
+                replyInThread,
+                mentions: first ? mentionTargets : undefined,
+                accountId,
+              });
+              first = false;
+            }
+          } else {
+            const converted = core.channel.text.convertMarkdownTables(text, tableMode);
+            for (const chunk of core.channel.text.chunkTextWithMode(
+              converted,
+              textChunkLimit,
+              chunkMode,
+            )) {
+              await sendMessageFeishu({
+                cfg,
+                to: chatId,
+                text: chunk,
+                replyToMessageId: sendReplyToMessageId,
+                replyInThread,
+                mentions: first ? mentionTargets : undefined,
+                accountId,
+              });
+              first = false;
+            }
           }
         }
 
-        if (streaming?.isActive()) {
-          if (info?.kind === "final") {
-            streamText = text;
-            await closeStreaming();
-          }
-          return;
-        }
-
-        let first = true;
-        if (useCard) {
-          for (const chunk of core.channel.text.chunkTextWithMode(
-            text,
-            textChunkLimit,
-            chunkMode,
-          )) {
-            await sendMarkdownCardFeishu({
+        if (hasMedia) {
+          for (const mediaUrl of mediaList) {
+            await sendMediaFeishu({
               cfg,
               to: chatId,
-              text: chunk,
-              replyToMessageId,
-              mentions: first ? mentionTargets : undefined,
+              mediaUrl,
+              replyToMessageId: sendReplyToMessageId,
+              replyInThread,
               accountId,
             });
-            first = false;
-          }
-        } else {
-          const converted = core.channel.text.convertMarkdownTables(text, tableMode);
-          for (const chunk of core.channel.text.chunkTextWithMode(
-            converted,
-            textChunkLimit,
-            chunkMode,
-          )) {
-            await sendMessageFeishu({
-              cfg,
-              to: chatId,
-              text: chunk,
-              replyToMessageId,
-              mentions: first ? mentionTargets : undefined,
-              accountId,
-            });
-            first = false;
           }
         }
       },
