@@ -82,6 +82,16 @@ beforeAll(async () => {
         });
         return { channel: "telegram", messageId: res.messageId, chatId: res.chatId };
       },
+      sendFinal: async ({ to, text, deps, accountId }) => {
+        if (!deps?.sendTelegram) {
+          throw new Error("sendTelegram missing");
+        }
+        const res = await deps.sendTelegram(to, text, {
+          verbose: false,
+          accountId: accountId ?? undefined,
+        });
+        return { channel: "telegram", messageId: res.messageId, chatId: res.chatId };
+      },
     },
   });
   telegramPlugin.config = {

@@ -31,6 +31,27 @@ export const twitchOutbound: ChannelOutboundAdapter = {
   /** Word-boundary chunker with markdown stripping */
   chunker: chunkTextForTwitch,
 
+  sendFinal: async (ctx) => {
+    const media =
+      ctx.payload.mediaUrl ??
+      (Array.isArray(ctx.payload.mediaUrls) && ctx.payload.mediaUrls.length > 0
+        ? ctx.payload.mediaUrls[0]
+        : undefined);
+    if (media) {
+      return twitchOutbound.sendMedia!({
+        ...ctx,
+        text: ctx.payload.text ?? ctx.text,
+        mediaUrl: media,
+        replyToId: ctx.payload.replyToId ?? ctx.replyToId,
+      });
+    }
+    return twitchOutbound.sendText!({
+      ...ctx,
+      text: ctx.payload.text ?? ctx.text,
+      replyToId: ctx.payload.replyToId ?? ctx.replyToId,
+    });
+  },
+
   /**
    * Resolve target from context.
    *

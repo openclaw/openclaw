@@ -154,6 +154,26 @@ const tlonOutbound: ChannelOutboundAdapter = {
       threadId,
     });
   },
+  sendFinal: async (ctx) => {
+    const media =
+      ctx.payload.mediaUrl ??
+      (Array.isArray(ctx.payload.mediaUrls) && ctx.payload.mediaUrls.length > 0
+        ? ctx.payload.mediaUrls[0]
+        : undefined);
+    if (media) {
+      return tlonOutbound.sendMedia!({
+        ...ctx,
+        text: ctx.payload.text ?? ctx.text,
+        mediaUrl: media,
+        replyToId: ctx.payload.replyToId ?? ctx.replyToId,
+      });
+    }
+    return tlonOutbound.sendText!({
+      ...ctx,
+      text: ctx.payload.text ?? ctx.text,
+      replyToId: ctx.payload.replyToId ?? ctx.replyToId,
+    });
+  },
 };
 
 export const tlonPlugin: ChannelPlugin = {

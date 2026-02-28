@@ -87,6 +87,10 @@ const createMSTeamsOutbound = (): ChannelOutboundAdapter => ({
     const result = await mocks.sendMessageMSTeams({ cfg, to, text, mediaUrl });
     return { channel: "msteams", ...result };
   },
+  sendFinal: async ({ cfg, to, text }) => {
+    const result = await mocks.sendMessageMSTeams({ cfg, to, text });
+    return { channel: "msteams", ...result };
+  },
 });
 
 const createMSTeamsPlugin = (params: { outbound: ChannelOutboundAdapter }): ChannelPlugin => ({

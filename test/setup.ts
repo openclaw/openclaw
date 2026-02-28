@@ -76,6 +76,15 @@ const createStubOutbound = (
     }
     return { channel: id, messageId: "test" };
   },
+  sendFinal: async ({ deps, to, text }) => {
+    const send = pickSendFn(id, deps);
+    if (send) {
+      // oxlint-disable-next-line typescript/no-explicit-any
+      const result = await send(to, text, { verbose: false } as any);
+      return { channel: id, ...result };
+    }
+    return { channel: id, messageId: "test" };
+  },
 });
 
 const createStubPlugin = (params: {

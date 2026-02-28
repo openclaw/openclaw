@@ -137,17 +137,12 @@ function createPluginHandler(
   const normalized = normalizeChannelOutboundAdapter({
     channelId: params.channel,
     adapter: params.outbound,
-    warnLegacy: (msg) => log.warn(msg),
   });
   if (!normalized) {
     return null;
   }
   const outbound = normalized.adapter;
   const hasSendTextMedia = outbound.sendText && outbound.sendMedia;
-  const hasSendFinal = Boolean(outbound.sendFinal);
-  if (!hasSendTextMedia && !hasSendFinal) {
-    return null;
-  }
   const baseCtx = createChannelOutboundContextBase(params);
   const chunker = outbound.chunker ?? null;
   const chunkerMode = outbound.chunkerMode;
@@ -200,38 +195,18 @@ function createPluginHandler(
           mediaUrl,
           payload: { text: caption, mediaUrl, mediaUrls: [mediaUrl] },
         });
-  // Enable sendPayload for native v2 adapters and v1 adapters that implement
-  // sendPayload directly (e.g. LINE). Inferred sendFinal (from v1
-  // sendText/sendMedia) doesn't handle multi-media fan-out or text chunking,
-  // so we block that path to avoid dropping attachments or skipping chunking.
-  const isNativeV2 = normalized.contract === "v2";
-  // v1 adapters that expose sendPayload natively (before normalization) should
-  // still use the fast path — the spread in normalizeChannelOutboundAdapter
-  // preserves the original sendPayload on the normalized adapter.
-  const hasNativeSendPayload =
-    normalized.contract === "v1" && typeof outbound.sendPayload === "function";
   return {
     chunker,
     chunkerMode,
     textChunkLimit: outbound.textChunkLimit,
-    sendPayload:
-      isNativeV2 && outbound.sendFinal
-        ? async (payload, overrides) =>
-            outbound.sendFinal({
-              ...resolveCtx(overrides),
-              text: payload.text ?? "",
-              mediaUrl: payload.mediaUrl,
-              payload,
-            })
-        : hasNativeSendPayload
-          ? async (payload, overrides) =>
-              outbound.sendPayload!({
-                ...resolveCtx(overrides),
-                text: payload.text ?? "",
-                mediaUrl: payload.mediaUrl,
-                payload,
-              })
-          : undefined,
+    // Route full payload delivery through sendFinal for channel-data passthrough.
+    sendPayload: async (payload, overrides) =>
+      outbound.sendFinal({
+        ...resolveCtx(overrides),
+        text: payload.text ?? "",
+        mediaUrl: payload.mediaUrl,
+        payload,
+      }),
     sendText: async (text, overrides) => sendText(text, overrides),
     sendMedia: async (caption, mediaUrl, overrides) => sendMedia(caption, mediaUrl, overrides),
   };

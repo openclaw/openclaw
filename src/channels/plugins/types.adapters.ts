@@ -104,8 +104,6 @@ export type ChannelOutboundPayloadContext = ChannelOutboundContext & {
   payload: ReplyPayload;
 };
 
-export type ChannelOutboundContractVersion = "v1" | "v2";
-
 export type ChannelOutboundDeliveryMetadata = {
   turnId?: string;
   outboxId?: string;
@@ -116,7 +114,6 @@ export type ChannelOutboundDeliveryMetadata = {
 
 export type ChannelOutboundAdapter = {
   deliveryMode: "direct" | "gateway" | "hybrid";
-  outboundContract?: ChannelOutboundContractVersion;
   supportsIdempotencyKey?: boolean;
   chunker?: ((text: string, limit: number) => string[]) | null;
   chunkerMode?: "text" | "markdown";
@@ -129,8 +126,7 @@ export type ChannelOutboundAdapter = {
     accountId?: string | null;
     mode?: ChannelOutboundTargetMode;
   }) => { ok: true; to: string } | { ok: false; error: Error };
-  sendFinal?: (ctx: ChannelOutboundPayloadContext) => Promise<OutboundDeliveryResult>;
-  sendPayload?: (ctx: ChannelOutboundPayloadContext) => Promise<OutboundDeliveryResult>;
+  sendFinal: (ctx: ChannelOutboundPayloadContext) => Promise<OutboundDeliveryResult>;
   sendText?: (ctx: ChannelOutboundContext) => Promise<OutboundDeliveryResult>;
   sendMedia?: (ctx: ChannelOutboundContext) => Promise<OutboundDeliveryResult>;
   sendPoll?: (ctx: ChannelPollContext) => Promise<ChannelPollResult>;

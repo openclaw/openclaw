@@ -127,6 +127,17 @@ function createTelegramOutboundPlugin() {
         });
         return { channel: "telegram", messageId: result.messageId, chatId: result.chatId };
       },
+      sendFinal: async (ctx) => {
+        const sendTelegram = ctx.deps?.sendTelegram;
+        if (!sendTelegram) {
+          throw new Error("sendTelegram dependency missing");
+        }
+        const result = await sendTelegram(ctx.to, ctx.text, {
+          accountId: ctx.accountId ?? undefined,
+          verbose: false,
+        });
+        return { channel: "telegram", messageId: result.messageId, chatId: result.chatId };
+      },
     },
   });
 }

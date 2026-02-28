@@ -302,6 +302,25 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount> = {
     chunker: chunkTextForOutbound,
     chunkerMode: "text",
     textChunkLimit: 2000,
+    sendFinal: async (ctx) => {
+      const media =
+        ctx.payload.mediaUrl ??
+        (Array.isArray(ctx.payload.mediaUrls) && ctx.payload.mediaUrls.length > 0
+          ? ctx.payload.mediaUrls[0]
+          : undefined);
+      const text = ctx.payload.text ?? ctx.text;
+      const result = await sendMessageZalo(ctx.to, text, {
+        accountId: ctx.accountId ?? undefined,
+        ...(media ? { mediaUrl: media } : {}),
+        cfg: ctx.cfg,
+      });
+      return {
+        channel: "zalo",
+        ok: result.ok,
+        messageId: result.messageId ?? "",
+        error: result.error ? new Error(result.error) : undefined,
+      };
+    },
     sendText: async ({ to, text, accountId, cfg }) => {
       const result = await sendMessageZalo(to, text, {
         accountId: accountId ?? undefined,

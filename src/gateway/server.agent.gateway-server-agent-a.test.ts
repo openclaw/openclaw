@@ -127,6 +127,7 @@ const createStubChannelPlugin = (params: {
     },
     sendText: async () => ({ channel: params.id, messageId: "msg-test" }),
     sendMedia: async () => ({ channel: params.id, messageId: "msg-test" }),
+    sendFinal: async () => ({ channel: params.id, messageId: "msg-test" }),
   },
 });
 

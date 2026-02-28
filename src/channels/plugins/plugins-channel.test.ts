@@ -71,11 +71,11 @@ describe("signal target normalization", () => {
   });
 });
 
-describe("telegramOutbound.sendPayload", () => {
+describe("telegramOutbound.sendFinal", () => {
   it("sends text payload with buttons", async () => {
     const sendTelegram = vi.fn(async () => ({ messageId: "m1", chatId: "c1" }));
 
-    const result = await telegramOutbound.sendPayload?.({
+    const result = await telegramOutbound.sendFinal?.({
       cfg: {} as OpenClawConfig,
       to: "telegram:123",
       text: "ignored",
@@ -108,7 +108,7 @@ describe("telegramOutbound.sendPayload", () => {
       .mockResolvedValueOnce({ messageId: "m1", chatId: "c1" })
       .mockResolvedValueOnce({ messageId: "m2", chatId: "c1" });
 
-    const result = await telegramOutbound.sendPayload?.({
+    const result = await telegramOutbound.sendFinal?.({
       cfg: {} as OpenClawConfig,
       to: "telegram:123",
       text: "ignored",

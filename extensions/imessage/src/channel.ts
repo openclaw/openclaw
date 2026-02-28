@@ -191,6 +191,31 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount> = {
     chunker: (text, limit) => getIMessageRuntime().channel.text.chunkText(text, limit),
     chunkerMode: "text",
     textChunkLimit: 4000,
+    sendFinal: async (ctx) => {
+      const send =
+        ctx.deps?.sendIMessage ?? getIMessageRuntime().channel.imessage.sendMessageIMessage;
+      const maxBytes = resolveChannelMediaMaxBytes({
+        cfg: ctx.cfg,
+        resolveChannelLimitMb: ({ cfg, accountId }) =>
+          cfg.channels?.imessage?.accounts?.[accountId]?.mediaMaxMb ??
+          cfg.channels?.imessage?.mediaMaxMb,
+        accountId: ctx.accountId,
+      });
+      const text = ctx.payload.text ?? ctx.text;
+      const media =
+        ctx.payload.mediaUrl ??
+        (Array.isArray(ctx.payload.mediaUrls) && ctx.payload.mediaUrls.length > 0
+          ? ctx.payload.mediaUrls[0]
+          : undefined);
+      const replyToId = ctx.payload.replyToId ?? ctx.replyToId;
+      const result = await send(ctx.to, text, {
+        mediaUrl: media,
+        maxBytes,
+        accountId: ctx.accountId ?? undefined,
+        replyToId: replyToId ?? undefined,
+      });
+      return { channel: "imessage", ...result };
+    },
     sendText: async ({ cfg, to, text, accountId, deps, replyToId }) => {
       const send = deps?.sendIMessage ?? getIMessageRuntime().channel.imessage.sendMessageIMessage;
       const maxBytes = resolveChannelMediaMaxBytes({

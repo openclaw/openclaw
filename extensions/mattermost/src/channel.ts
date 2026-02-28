@@ -272,6 +272,28 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = {
       }
       return { ok: true, to: trimmed };
     },
+    sendFinal: async (ctx) => {
+      const text = ctx.payload.text ?? ctx.text;
+      const media =
+        ctx.payload.mediaUrl ??
+        (Array.isArray(ctx.payload.mediaUrls) && ctx.payload.mediaUrls.length > 0
+          ? ctx.payload.mediaUrls[0]
+          : undefined);
+      const replyToId = ctx.payload.replyToId ?? ctx.replyToId;
+      if (media) {
+        const result = await sendMessageMattermost(ctx.to, text, {
+          accountId: ctx.accountId ?? undefined,
+          mediaUrl: media,
+          replyToId: replyToId ?? undefined,
+        });
+        return { channel: "mattermost", ...result };
+      }
+      const result = await sendMessageMattermost(ctx.to, text, {
+        accountId: ctx.accountId ?? undefined,
+        replyToId: replyToId ?? undefined,
+      });
+      return { channel: "mattermost", ...result };
+    },
     sendText: async ({ to, text, accountId, replyToId }) => {
       const result = await sendMessageMattermost(to, text, {
         accountId: accountId ?? undefined,

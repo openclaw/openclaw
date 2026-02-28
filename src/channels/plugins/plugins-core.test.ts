@@ -129,6 +129,7 @@ const msteamsOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
   sendText: async () => ({ channel: "msteams", messageId: "m1" }),
   sendMedia: async () => ({ channel: "msteams", messageId: "m2" }),
+  sendFinal: async () => ({ channel: "msteams", messageId: "m1" }),
 };
 
 const msteamsPlugin: ChannelPlugin = {
@@ -144,6 +145,7 @@ const msteamsOutboundV2: ChannelOutboundAdapter = {
   deliveryMode: "direct",
   sendText: async () => ({ channel: "msteams", messageId: "m3" }),
   sendMedia: async () => ({ channel: "msteams", messageId: "m4" }),
+  sendFinal: async () => ({ channel: "msteams", messageId: "m3" }),
 };
 
 const msteamsPluginV2 = createOutboundTestPlugin({

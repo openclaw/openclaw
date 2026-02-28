@@ -755,6 +755,7 @@ describe("runMessageAction media caption behavior", () => {
                 chatId: "c1",
               }),
               sendMedia,
+              sendFinal: async () => ({ channel: "telegram", messageId: "t1" }),
             },
           }),
         },

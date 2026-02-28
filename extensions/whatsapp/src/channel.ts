@@ -288,6 +288,23 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
     chunkerMode: "text",
     textChunkLimit: 4000,
     pollMaxOptions: 12,
+    sendFinal: async (ctx) => {
+      const media =
+        ctx.payload.mediaUrl ??
+        (Array.isArray(ctx.payload.mediaUrls) && ctx.payload.mediaUrls.length > 0
+          ? ctx.payload.mediaUrls[0]
+          : undefined);
+      const text = ctx.payload.text ?? ctx.text;
+      const send =
+        ctx.deps?.sendWhatsApp ?? getWhatsAppRuntime().channel.whatsapp.sendMessageWhatsApp;
+      const result = await send(ctx.to, text, {
+        verbose: false,
+        ...(media ? { mediaUrl: media } : {}),
+        accountId: ctx.accountId ?? undefined,
+        gifPlayback: ctx.gifPlayback,
+      });
+      return { channel: "whatsapp", ...result };
+    },
     resolveTarget: ({ to, allowFrom, mode }) =>
       resolveWhatsAppOutboundTarget({ to, allowFrom, mode }),
     sendText: async ({ to, text, accountId, deps, gifPlayback }) => {

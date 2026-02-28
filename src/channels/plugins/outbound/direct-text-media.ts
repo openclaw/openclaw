@@ -88,7 +88,6 @@ export function createDirectTextMediaOutbound<
 
   return {
     deliveryMode: "direct",
-    outboundContract: "v2",
     chunker: chunkText,
     chunkerMode: "text",
     textChunkLimit: 4000,

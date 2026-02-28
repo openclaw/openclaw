@@ -219,6 +219,7 @@ describe("messageCommand", () => {
             label: "WhatsApp",
             outbound: {
               deliveryMode: "gateway",
+              sendFinal: async () => ({ channel: "whatsapp", messageId: "mock" }),
             },
           }),
         },

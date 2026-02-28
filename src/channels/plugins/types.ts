@@ -22,7 +22,6 @@ export type {
   ChannelLogoutContext,
   ChannelLogoutResult,
   ChannelOutboundAdapter,
-  ChannelOutboundContractVersion,
   ChannelOutboundDeliveryMetadata,
   ChannelOutboundContext,
   ChannelOutboundPayloadContext,

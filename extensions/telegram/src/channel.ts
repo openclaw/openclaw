@@ -358,6 +358,28 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
       });
       return { channel: "telegram", ...result };
     },
+    sendFinal: async (ctx) => {
+      const send =
+        ctx.deps?.sendTelegram ?? getTelegramRuntime().channel.telegram.sendMessageTelegram;
+      const text = ctx.payload.text ?? ctx.text;
+      const replyToId = ctx.payload.replyToId ?? ctx.replyToId;
+      const replyToMessageId = parseTelegramReplyToMessageId(replyToId);
+      const messageThreadId = parseTelegramThreadId(ctx.threadId);
+      const media =
+        ctx.payload.mediaUrl ??
+        (Array.isArray(ctx.payload.mediaUrls) && ctx.payload.mediaUrls.length > 0
+          ? ctx.payload.mediaUrls[0]
+          : undefined);
+      const result = await send(ctx.to, text, {
+        verbose: false,
+        ...(media ? { mediaUrl: media } : {}),
+        messageThreadId,
+        replyToMessageId,
+        accountId: ctx.accountId ?? undefined,
+        silent: ctx.silent ?? undefined,
+      });
+      return { channel: "telegram", ...result };
+    },
     sendPoll: async ({ to, poll, accountId, threadId, silent, isAnonymous }) =>
       await getTelegramRuntime().channel.telegram.sendPollTelegram(to, poll, {
         accountId: accountId ?? undefined,

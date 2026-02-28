@@ -76,7 +76,7 @@ export const telegramOutbound: ChannelOutboundAdapter = {
     });
     return { channel: "telegram", ...result };
   },
-  sendPayload: async ({ to, payload, mediaLocalRoots, accountId, deps, replyToId, threadId }) => {
+  sendFinal: async ({ to, payload, mediaLocalRoots, accountId, deps, replyToId, threadId }) => {
     const { send, baseOpts: contextOpts } = resolveTelegramSendContext({
       deps,
       accountId,

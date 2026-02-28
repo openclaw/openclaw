@@ -65,8 +65,8 @@ describe("telegramOutbound", () => {
       .fn()
       .mockResolvedValueOnce({ messageId: "tg-1", chatId: "123" })
       .mockResolvedValueOnce({ messageId: "tg-2", chatId: "123" });
-    const sendPayload = telegramOutbound.sendPayload;
-    expect(sendPayload).toBeDefined();
+    const sendFinal = telegramOutbound.sendFinal;
+    expect(sendFinal).toBeDefined();
 
     const payload: ReplyPayload = {
       text: "caption",
@@ -79,7 +79,7 @@ describe("telegramOutbound", () => {
       },
     };
 
-    const result = await sendPayload!({
+    const result = await sendFinal({
       cfg: {},
       to: "123",
       text: "",

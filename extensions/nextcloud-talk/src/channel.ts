@@ -262,6 +262,28 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> = 
     chunker: (text, limit) => getNextcloudTalkRuntime().channel.text.chunkMarkdownText(text, limit),
     chunkerMode: "markdown",
     textChunkLimit: 4000,
+    sendFinal: async (ctx) => {
+      const text = ctx.payload.text ?? ctx.text;
+      const media =
+        ctx.payload.mediaUrl ??
+        (Array.isArray(ctx.payload.mediaUrls) && ctx.payload.mediaUrls.length > 0
+          ? ctx.payload.mediaUrls[0]
+          : undefined);
+      const replyToId = ctx.payload.replyToId ?? ctx.replyToId;
+      if (media) {
+        const messageWithMedia = `${text}\n\nAttachment: ${media}`;
+        const result = await sendMessageNextcloudTalk(ctx.to, messageWithMedia, {
+          accountId: ctx.accountId ?? undefined,
+          replyTo: replyToId ?? undefined,
+        });
+        return { channel: "nextcloud-talk", ...result };
+      }
+      const result = await sendMessageNextcloudTalk(ctx.to, text, {
+        accountId: ctx.accountId ?? undefined,
+        replyTo: replyToId ?? undefined,
+      });
+      return { channel: "nextcloud-talk", ...result };
+    },
     sendText: async ({ to, text, accountId, replyToId }) => {
       const result = await sendMessageNextcloudTalk(to, text, {
         accountId: accountId ?? undefined,

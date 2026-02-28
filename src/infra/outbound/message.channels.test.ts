@@ -245,6 +245,14 @@ const createMSTeamsOutbound = (opts?: { includePoll?: boolean }): ChannelOutboun
     const result = await send(to, text, { mediaUrl });
     return { channel: "msteams", ...result };
   },
+  sendFinal: async ({ deps, to, text }) => {
+    const send = deps?.sendMSTeams;
+    if (!send) {
+      throw new Error("sendMSTeams missing");
+    }
+    const result = await send(to, text);
+    return { channel: "msteams", ...result };
+  },
   ...(opts?.includePoll
     ? {
         pollMaxOptions: 12,
@@ -276,5 +284,9 @@ const createMattermostLikePlugin = (opts: {
       return { channel: "mattermost", messageId: "m1" };
     },
     sendMedia: async () => ({ channel: "mattermost", messageId: "m2" }),
+    sendFinal: async (ctx) => {
+      opts.onSendText(ctx as unknown as Record<string, unknown>);
+      return { channel: "mattermost", messageId: "m1" };
+    },
   },
 });

@@ -38,6 +38,10 @@ const createStubOutboundAdapter = (channelId: ChannelPlugin["id"]): ChannelOutbo
     channel: channelId,
     messageId: `${channelId}-msg`,
   }),
+  sendFinal: async () => ({
+    channel: channelId,
+    messageId: `${channelId}-msg`,
+  }),
 });
 
 const createStubChannelPlugin = (params: StubChannelOptions): ChannelPlugin => ({

@@ -43,6 +43,7 @@ describe("createOutboundTestPlugin", () => {
         deliveryMode: "direct",
         resolveTarget: () => ({ ok: true, to: "target" }),
         sendText: async () => ({ channel: "signal", messageId: "m1" }),
+        sendFinal: async () => ({ channel: "signal", messageId: "m1" }),
       },
     });
     expect(plugin.config.listAccountIds(cfg)).toEqual([]);

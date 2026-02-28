@@ -259,6 +259,28 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount> = {
       });
       return { channel: "signal", ...result };
     },
+    sendFinal: async (ctx) => {
+      const send = ctx.deps?.sendSignal ?? getSignalRuntime().channel.signal.sendMessageSignal;
+      const maxBytes = resolveChannelMediaMaxBytes({
+        cfg: ctx.cfg,
+        resolveChannelLimitMb: ({ cfg, accountId }) =>
+          cfg.channels?.signal?.accounts?.[accountId]?.mediaMaxMb ??
+          cfg.channels?.signal?.mediaMaxMb,
+        accountId: ctx.accountId,
+      });
+      const text = ctx.payload.text ?? ctx.text;
+      const media =
+        ctx.payload.mediaUrl ??
+        (Array.isArray(ctx.payload.mediaUrls) && ctx.payload.mediaUrls.length > 0
+          ? ctx.payload.mediaUrls[0]
+          : undefined);
+      const result = await send(ctx.to, text, {
+        ...(media ? { mediaUrl: media } : {}),
+        maxBytes,
+        accountId: ctx.accountId ?? undefined,
+      });
+      return { channel: "signal", ...result };
+    },
   },
   status: {
     defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),

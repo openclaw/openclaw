@@ -461,6 +461,7 @@ describe("deliverOutboundPayloads", () => {
               chunker,
               chunkerMode: "markdown",
               textChunkLimit: 4000,
+              sendFinal: sendMedia,
               sendText,
               sendMedia,
             },
@@ -776,9 +777,9 @@ describe("deliverOutboundPayloads", () => {
     );
   });
 
-  it("emits message_sent success for sendPayload deliveries", async () => {
+  it("emits message_sent success for sendFinal deliveries", async () => {
     hookMocks.runner.hasHooks.mockReturnValue(true);
-    const sendPayload = vi.fn().mockResolvedValue({ channel: "matrix", messageId: "mx-1" });
+    const sendFinal = vi.fn().mockResolvedValue({ channel: "matrix", messageId: "mx-1" });
     const sendText = vi.fn();
     const sendMedia = vi.fn();
     setActivePluginRegistry(
@@ -788,7 +789,7 @@ describe("deliverOutboundPayloads", () => {
           source: "test",
           plugin: createOutboundTestPlugin({
             id: "matrix",
-            outbound: { deliveryMode: "direct", sendPayload, sendText, sendMedia },
+            outbound: { deliveryMode: "direct", sendFinal, sendText, sendMedia },
           }),
         },
       ]),

@@ -65,6 +65,12 @@ const whatsappOutbound: ChannelOutboundAdapter = {
       ...(await deps.sendWhatsApp(to, text, { verbose: false, mediaUrl })),
     };
   },
+  sendFinal: async ({ deps, to, text }) => {
+    if (!deps?.sendWhatsApp) {
+      throw new Error("Missing sendWhatsApp dep");
+    }
+    return { channel: "whatsapp", ...(await deps.sendWhatsApp(to, text, { verbose: false })) };
+  },
 };
 
 const whatsappPlugin = createOutboundTestPlugin({

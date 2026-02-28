@@ -345,7 +345,7 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
     deliveryMode: "direct",
     chunker: (text, limit) => getLineRuntime().channel.text.chunkMarkdownText(text, limit),
     textChunkLimit: 5000, // LINE allows up to 5000 characters per text message
-    sendPayload: async ({ to, payload, accountId, cfg }) => {
+    sendFinal: async ({ to, payload, accountId, cfg }) => {
       const runtime = getLineRuntime();
       const lineData = (payload.channelData?.line as LineChannelData | undefined) ?? {};
       const sendText = runtime.channel.line.pushMessageLine;

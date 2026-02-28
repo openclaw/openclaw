@@ -87,7 +87,7 @@ function createRuntime(): { runtime: PluginRuntime; mocks: LineRuntimeMocks } {
   };
 }
 
-describe("linePlugin outbound.sendPayload", () => {
+describe("linePlugin outbound.sendFinal", () => {
   it("sends flex message without dropping text", async () => {
     const { runtime, mocks } = createRuntime();
     setLineRuntime(runtime);
@@ -105,7 +105,7 @@ describe("linePlugin outbound.sendPayload", () => {
       },
     };
 
-    await linePlugin.outbound!.sendPayload!({
+    await linePlugin.outbound!.sendFinal!({
       to: "line:group:1",
       text: payload.text,
       payload,
@@ -141,7 +141,7 @@ describe("linePlugin outbound.sendPayload", () => {
       },
     };
 
-    await linePlugin.outbound!.sendPayload!({
+    await linePlugin.outbound!.sendFinal!({
       to: "line:user:1",
       text: payload.text,
       payload,
@@ -174,7 +174,7 @@ describe("linePlugin outbound.sendPayload", () => {
       },
     };
 
-    await linePlugin.outbound!.sendPayload!({
+    await linePlugin.outbound!.sendFinal!({
       to: "line:user:2",
       text: "",
       payload,
@@ -213,7 +213,7 @@ describe("linePlugin outbound.sendPayload", () => {
       },
     };
 
-    await linePlugin.outbound!.sendPayload!({
+    await linePlugin.outbound!.sendFinal!({
       to: "line:user:3",
       text: payload.text,
       payload,
@@ -254,7 +254,7 @@ describe("linePlugin outbound.sendPayload", () => {
       },
     };
 
-    await linePlugin.outbound!.sendPayload!({
+    await linePlugin.outbound!.sendFinal!({
       to: "line:user:3",
       text: payload.text,
       payload,

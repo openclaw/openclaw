@@ -208,6 +208,40 @@ export function createSynologyChatPlugin() {
         }
         return { channel: CHANNEL_ID, messageId: `sc-${Date.now()}`, chatId: to };
       },
+
+      sendFinal: async (ctx: any) => {
+        const account: ResolvedSynologyChatAccount =
+          ctx.account ?? resolveAccount({}, ctx.accountId);
+
+        if (!account.incomingUrl) {
+          throw new Error("Synology Chat incoming URL not configured");
+        }
+
+        const text = ctx.payload.text ?? ctx.text;
+        const media =
+          ctx.payload.mediaUrl ??
+          (Array.isArray(ctx.payload.mediaUrls) && ctx.payload.mediaUrls.length > 0
+            ? ctx.payload.mediaUrls[0]
+            : undefined);
+
+        if (media) {
+          const ok = await sendFileUrl(
+            account.incomingUrl,
+            media,
+            ctx.to,
+            account.allowInsecureSsl,
+          );
+          if (!ok) {
+            throw new Error("Failed to send media to Synology Chat");
+          }
+        } else {
+          const ok = await sendMessage(account.incomingUrl, text, ctx.to, account.allowInsecureSsl);
+          if (!ok) {
+            throw new Error("Failed to send message to Synology Chat");
+          }
+        }
+        return { channel: CHANNEL_ID, messageId: `sc-${Date.now()}`, chatId: ctx.to };
+      },
     },
 
     gateway: {

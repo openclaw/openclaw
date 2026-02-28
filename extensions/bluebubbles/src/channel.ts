@@ -298,6 +298,30 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount> = {
   outbound: {
     deliveryMode: "direct",
     textChunkLimit: 4000,
+    sendFinal: async (ctx) => {
+      const text = ctx.payload.text ?? ctx.text;
+      const media =
+        ctx.payload.mediaUrl ??
+        (Array.isArray(ctx.payload.mediaUrls) && ctx.payload.mediaUrls.length > 0
+          ? ctx.payload.mediaUrls[0]
+          : undefined);
+      if (media) {
+        const result = await sendBlueBubblesMedia({
+          cfg: ctx.cfg,
+          to: ctx.to,
+          mediaUrl: media,
+          caption: text ?? undefined,
+          replyToId: ctx.payload.replyToId ?? ctx.replyToId ?? null,
+          accountId: ctx.accountId ?? undefined,
+        });
+        return { channel: "bluebubbles", ...result };
+      }
+      const result = await sendMessageBlueBubbles(ctx.to, text, {
+        cfg: ctx.cfg,
+        accountId: ctx.accountId ?? undefined,
+      });
+      return { channel: "bluebubbles", ...result };
+    },
     resolveTarget: ({ to }) => {
       const trimmed = to?.trim();
       if (!trimmed) {

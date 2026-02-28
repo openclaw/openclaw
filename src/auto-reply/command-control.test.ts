@@ -13,7 +13,13 @@ const createRegistry = () =>
   createTestRegistry([
     {
       pluginId: "discord",
-      plugin: createOutboundTestPlugin({ id: "discord", outbound: { deliveryMode: "direct" } }),
+      plugin: createOutboundTestPlugin({
+        id: "discord",
+        outbound: {
+          deliveryMode: "direct",
+          sendFinal: async () => ({ channel: "discord", messageId: "mock" }),
+        },
+      }),
       source: "test",
     },
   ]);
@@ -145,7 +151,10 @@ describe("resolveCommandAuthorization", () => {
           pluginId: "discord",
           plugin: createOutboundTestPlugin({
             id: "discord",
-            outbound: { deliveryMode: "direct" },
+            outbound: {
+              deliveryMode: "direct",
+              sendFinal: async () => ({ channel: "discord", messageId: "mock" }),
+            },
           }),
           source: "test",
         },
