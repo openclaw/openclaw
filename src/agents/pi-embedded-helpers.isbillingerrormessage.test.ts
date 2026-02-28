@@ -527,4 +527,42 @@ describe("classifyFailoverReason", () => {
       ),
     ).toBe("timeout");
   });
+
+  it("classifies content filter errors as timeout (retryable via fallback)", () => {
+    // Bailian/Qwen DataInspectionFailed errors (real error format)
+    expect(
+      classifyFailoverReason(
+        "<400> InternalError.Algo.DataInspectionFailed: Input text data may contain inappropriate content.",
+      ),
+    ).toBe("timeout");
+    expect(
+      classifyFailoverReason(
+        "400 InternalError.Algo.DataInspectionFailed: Input contains harmful content",
+      ),
+    ).toBe("timeout");
+    expect(classifyFailoverReason("data_inspection_failed")).toBe("timeout");
+
+    // Content/input violation errors (error-like format)
+    expect(classifyFailoverReason("Input text contains inappropriate content")).toBe("timeout");
+    expect(classifyFailoverReason("Content violates safety policy")).toBe("timeout");
+    expect(classifyFailoverReason("Request rejected: harmful content detected")).toBe("timeout");
+    expect(classifyFailoverReason("Response blocked by safety filter: policy violation")).toBe(
+      "timeout",
+    );
+
+    // Generic content policy violations
+    expect(classifyFailoverReason("Content policy violation detected")).toBe("timeout");
+    expect(classifyFailoverReason("Safety policy violation: input rejected")).toBe("timeout");
+
+    // Case-insensitive matching
+    expect(classifyFailoverReason("INPUT CONTAINS HARMFUL CONTENT")).toBe("timeout");
+  });
+
+  it("does not classify normal text mentioning content policies as errors", () => {
+    // These are legitimate conversation snippets, not error messages
+    expect(classifyFailoverReason("Let's review the content policy guidelines")).toBeNull();
+    expect(classifyFailoverReason("The safety filter is an important feature")).toBeNull();
+    expect(classifyFailoverReason("We should check for inappropriate content")).toBeNull();
+    expect(classifyFailoverReason("Content policy violations are serious")).toBeNull();
+  });
 });

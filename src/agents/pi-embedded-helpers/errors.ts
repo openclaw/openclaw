@@ -685,6 +685,19 @@ const ERROR_PATTERNS = {
     "invalid request format",
     /tool call id was.*must be/i,
   ],
+  contentFilter: [
+    // Bailian/Qwen specific error codes
+    /data[_ ]?inspection[_ ]?failed/i,
+    /internalerror\.algo\./i,
+    // Error message patterns (must look like an error, not casual mention)
+    // Require error verbs or context to avoid false positives on normal text
+    /(?:input|text|content).*(?:contains|has|detected|found).*(?:inappropriate|harmful|unsafe)/i,
+    /(?:input|text|content).*(?:violat).*(?:policy|guideline|rule)/i,
+    /(?:blocked|rejected|denied|failed|detected).*(?:safety|policy|content)/i,
+    // Generic content filter error phrases (must include error-like verbs)
+    /content policy violation.*(detect|block|reject|fail)/i,
+    /safety policy violation.*(detect|block|reject|fail)/i,
+  ],
 } as const;
 
 const TOOL_CALL_INPUT_MISSING_RE =
@@ -916,6 +929,11 @@ export function classifyFailoverReason(raw: string): FailoverReason | null {
   }
   if (isAuthErrorMessage(raw)) {
     return "auth";
+  }
+  // Content filter errors (e.g., Bailian DataInspectionFailed) are often false positives.
+  // Treat them as retryable by falling back to a different model.
+  if (matchesErrorPatterns(raw, ERROR_PATTERNS.contentFilter)) {
+    return "timeout";
   }
   return null;
 }
