@@ -1,8 +1,8 @@
 export function buildControlUiCspHeader(): string {
   // Control UI: block framing, block inline scripts, keep styles permissive
   // (UI uses a lot of inline style attributes in templates).
-  // Control UI imports Google Fonts stylesheets in base.css, so allow the
-  // stylesheet origin and corresponding font file CDN explicitly.
+  // Keep Google Fonts origins explicit in CSP for deployments that load
+  // external Google Fonts stylesheets/font files.
   return [
     "default-src 'self'",
     "base-uri 'none'",
