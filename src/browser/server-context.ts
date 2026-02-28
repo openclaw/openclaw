@@ -1,4 +1,15 @@
 import fs from "node:fs";
+import type { ResolvedBrowserProfile } from "./config.js";
+import type { PwAiModule } from "./pw-ai-module.js";
+import type {
+  BrowserServerState,
+  BrowserRouteContext,
+  BrowserTab,
+  ContextOptions,
+  ProfileContext,
+  ProfileRuntimeState,
+  ProfileStatus,
+} from "./server-context.types.js";
 import { SsrFBlockedError } from "../infra/net/ssrf.js";
 import { fetchJson, fetchOk } from "./cdp.helpers.js";
 import { appendCdpPath, createTargetViaCdp, normalizeCdpWsUrl } from "./cdp.js";
@@ -9,7 +20,6 @@ import {
   resolveOpenClawUserDataDir,
   stopOpenClawChrome,
 } from "./chrome.js";
-import type { ResolvedBrowserProfile } from "./config.js";
 import { resolveProfile } from "./config.js";
 import {
   ensureChromeExtensionRelayServer,
@@ -20,21 +30,11 @@ import {
   InvalidBrowserNavigationUrlError,
   withBrowserNavigationPolicy,
 } from "./navigation-guard.js";
-import type { PwAiModule } from "./pw-ai-module.js";
 import { getPwAiModule } from "./pw-ai-module.js";
 import {
   refreshResolvedBrowserConfigFromDisk,
   resolveBrowserProfileWithHotReload,
 } from "./resolved-config-refresh.js";
-import type {
-  BrowserServerState,
-  BrowserRouteContext,
-  BrowserTab,
-  ContextOptions,
-  ProfileContext,
-  ProfileRuntimeState,
-  ProfileStatus,
-} from "./server-context.types.js";
 import { resolveTargetIdFromTabs } from "./target-id.js";
 import { movePathToTrash } from "./trash.js";
 
@@ -180,6 +180,25 @@ function createProfileContext(
         }
         await new Promise((r) => setTimeout(r, 100));
       }
+
+      if (profile.driver === "extension") {
+        // Chrome extension relay can acknowledge Target.createTarget before
+        // it forwards the attached target list, yielding a transient stale id.
+        // Prefer returning an actually attached tab rather than a synthetic id
+        // that will fail on the next action with "tab not found".
+        const attachedTabs = await listTabs().catch(() => [] as BrowserTab[]);
+        const attachedPage = attachedTabs.find((t) => (t.type ?? "page") === "page");
+        const fallbackTab = attachedPage ?? attachedTabs.at(0) ?? null;
+        if (fallbackTab) {
+          profileState.lastTargetId = fallbackTab.targetId;
+          return fallbackTab;
+        }
+
+        throw new Error(
+          "tab not found (new tab not attached yet). Click the OpenClaw Browser Relay toolbar icon on the tab you want to control (badge ON), then retry.",
+        );
+      }
+
       return { targetId: createdViaCdp, title: "", url, type: "page" };
     }
 

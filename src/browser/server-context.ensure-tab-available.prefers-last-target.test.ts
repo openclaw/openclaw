@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
-import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
 import type { BrowserServerState } from "./server-context.js";
+import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
+import * as cdpModule from "./cdp.js";
 import "./server-context.chrome-test-harness.js";
 import { createBrowserRouteContext } from "./server-context.js";
 
@@ -111,13 +112,81 @@ describe("browser server-context ensureTabAvailable", () => {
     expect(chosen.targetId).toBe("A");
   });
 
-  it("returns a descriptive message when no extension tabs are attached", async () => {
-    const responses = [[]];
-    stubChromeJsonList(responses);
-    const state = makeBrowserState();
+  it("avoids returning a stale synthetic id for extension openTab when relay list lags", async () => {
+    vi.spyOn(cdpModule, "createTargetViaCdp").mockResolvedValue({ targetId: "CREATED" });
 
+    const fetchMock = vi.fn();
+    const responses = [
+      // openTab polling window never sees CREATED, only currently attached tab A.
+      [{ id: "A", type: "page", url: "https://a.example", webSocketDebuggerUrl: "ws://x/a" }],
+      [{ id: "A", type: "page", url: "https://a.example", webSocketDebuggerUrl: "ws://x/a" }],
+      [{ id: "A", type: "page", url: "https://a.example", webSocketDebuggerUrl: "ws://x/a" }],
+      [{ id: "A", type: "page", url: "https://a.example", webSocketDebuggerUrl: "ws://x/a" }],
+      [{ id: "A", type: "page", url: "https://a.example", webSocketDebuggerUrl: "ws://x/a" }],
+      [{ id: "A", type: "page", url: "https://a.example", webSocketDebuggerUrl: "ws://x/a" }],
+      [{ id: "A", type: "page", url: "https://a.example", webSocketDebuggerUrl: "ws://x/a" }],
+      [{ id: "A", type: "page", url: "https://a.example", webSocketDebuggerUrl: "ws://x/a" }],
+      [{ id: "A", type: "page", url: "https://a.example", webSocketDebuggerUrl: "ws://x/a" }],
+      [{ id: "A", type: "page", url: "https://a.example", webSocketDebuggerUrl: "ws://x/a" }],
+      [{ id: "A", type: "page", url: "https://a.example", webSocketDebuggerUrl: "ws://x/a" }],
+      [{ id: "A", type: "page", url: "https://a.example", webSocketDebuggerUrl: "ws://x/a" }],
+      [{ id: "A", type: "page", url: "https://a.example", webSocketDebuggerUrl: "ws://x/a" }],
+      [{ id: "A", type: "page", url: "https://a.example", webSocketDebuggerUrl: "ws://x/a" }],
+      [{ id: "A", type: "page", url: "https://a.example", webSocketDebuggerUrl: "ws://x/a" }],
+      [{ id: "A", type: "page", url: "https://a.example", webSocketDebuggerUrl: "ws://x/a" }],
+      [{ id: "A", type: "page", url: "https://a.example", webSocketDebuggerUrl: "ws://x/a" }],
+      [{ id: "A", type: "page", url: "https://a.example", webSocketDebuggerUrl: "ws://x/a" }],
+      [{ id: "A", type: "page", url: "https://a.example", webSocketDebuggerUrl: "ws://x/a" }],
+      [{ id: "A", type: "page", url: "https://a.example", webSocketDebuggerUrl: "ws://x/a" }],
+      [{ id: "A", type: "page", url: "https://a.example", webSocketDebuggerUrl: "ws://x/a" }],
+      [{ id: "A", type: "page", url: "https://a.example", webSocketDebuggerUrl: "ws://x/a" }],
+      [{ id: "A", type: "page", url: "https://a.example", webSocketDebuggerUrl: "ws://x/a" }],
+      [{ id: "A", type: "page", url: "https://a.example", webSocketDebuggerUrl: "ws://x/a" }],
+      [{ id: "A", type: "page", url: "https://a.example", webSocketDebuggerUrl: "ws://x/a" }],
+    ];
+
+    fetchMock.mockImplementation(async (url: unknown) => {
+      const u = String(url);
+      if (u.includes("/json/list")) {
+        const next = responses.shift() ?? [];
+        return {
+          ok: true,
+          json: async () => next,
+        } as unknown as Response;
+      }
+      throw new Error(`unexpected fetch: ${u}`);
+    });
+
+    global.fetch = withFetchPreconnect(fetchMock);
+    const state = makeBrowserState();
     const ctx = createBrowserRouteContext({ getState: () => state });
     const chrome = ctx.forProfile("chrome");
-    await expect(chrome.ensureTabAvailable()).rejects.toThrow(/no attached Chrome tabs/i);
+
+    const opened = await chrome.openTab("https://example.com");
+    expect(opened.targetId).toBe("A");
+    expect(state.profiles.get("chrome")?.lastTargetId).toBe("A");
+  });
+
+  it("returns a descriptive error when extension openTab cannot find any attached tab", async () => {
+    vi.spyOn(cdpModule, "createTargetViaCdp").mockResolvedValue({ targetId: "CREATED" });
+    const fetchMock = vi.fn(async (url: unknown) => {
+      const u = String(url);
+      if (u.includes("/json/list")) {
+        return {
+          ok: true,
+          json: async () => [],
+        } as unknown as Response;
+      }
+      throw new Error(`unexpected fetch: ${u}`);
+    });
+
+    global.fetch = withFetchPreconnect(fetchMock);
+    const state = makeBrowserState();
+    const ctx = createBrowserRouteContext({ getState: () => state });
+    const chrome = ctx.forProfile("chrome");
+
+    await expect(chrome.openTab("https://example.com")).rejects.toThrow(
+      /new tab not attached yet/i,
+    );
   });
 });
