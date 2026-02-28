@@ -29,6 +29,7 @@ describe("feishu_doc image fetch hardening", () => {
   const blockChildrenCreateMock = vi.hoisted(() => vi.fn());
   const blockChildrenGetMock = vi.hoisted(() => vi.fn());
   const blockChildrenBatchDeleteMock = vi.hoisted(() => vi.fn());
+  const blockDescendantCreateMock = vi.hoisted(() => vi.fn());
   const driveUploadAllMock = vi.hoisted(() => vi.fn());
   const permissionMemberCreateMock = vi.hoisted(() => vi.fn());
   const blockPatchMock = vi.hoisted(() => vi.fn());
@@ -51,6 +52,9 @@ describe("feishu_doc image fetch hardening", () => {
           create: blockChildrenCreateMock,
           get: blockChildrenGetMock,
           batchDelete: blockChildrenBatchDeleteMock,
+        },
+        documentBlockDescendant: {
+          create: blockDescendantCreateMock,
         },
       },
       drive: {
@@ -95,6 +99,11 @@ describe("feishu_doc image fetch hardening", () => {
       data: { items: [{ block_id: "placeholder_block_1" }] },
     });
     blockChildrenBatchDeleteMock.mockResolvedValue({ code: 0 });
+    // write/append use Descendant API; return image block so processImages runs
+    blockDescendantCreateMock.mockResolvedValue({
+      code: 0,
+      data: { children: [{ block_type: 27, block_id: "img_block_1" }] },
+    });
     driveUploadAllMock.mockResolvedValue({ file_token: "token_1" });
     documentCreateMock.mockResolvedValue({
       code: 0,
@@ -121,11 +130,10 @@ describe("feishu_doc image fetch hardening", () => {
 
     blockListMock.mockResolvedValue({ code: 0, data: { items: [] } });
 
-    // Each call returns the single block that was passed in
-    blockChildrenCreateMock
-      .mockResolvedValueOnce({ code: 0, data: { children: [{ block_type: 3, block_id: "h1" }] } })
-      .mockResolvedValueOnce({ code: 0, data: { children: [{ block_type: 2, block_id: "t1" }] } })
-      .mockResolvedValueOnce({ code: 0, data: { children: [{ block_type: 3, block_id: "h2" }] } });
+    blockDescendantCreateMock.mockResolvedValueOnce({
+      code: 0,
+      data: { children: [{ block_type: 3, block_id: "h1" }] },
+    });
 
     const registerTool = vi.fn();
     registerFeishuDocTools({
@@ -150,15 +158,11 @@ describe("feishu_doc image fetch hardening", () => {
       content: "plain text body",
     });
 
-    // Verify sequential insertion: one call per block
-    expect(blockChildrenCreateMock).toHaveBeenCalledTimes(3);
-
-    // Verify each call received exactly one block in the correct order
-    const calls = blockChildrenCreateMock.mock.calls;
-    expect(calls[0][0].data.children).toHaveLength(1);
-    expect(calls[0][0].data.children[0].block_id).toBe("h1");
-    expect(calls[1][0].data.children[0].block_id).toBe("t1");
-    expect(calls[2][0].data.children[0].block_id).toBe("h2");
+    expect(blockDescendantCreateMock).toHaveBeenCalledTimes(1);
+    const call = blockDescendantCreateMock.mock.calls[0]?.[0];
+    expect(call?.data.children_id).toEqual(["h1", "t1", "h2"]);
+    expect(call?.data.descendants).toBeDefined();
+    expect(call?.data.descendants.length).toBeGreaterThanOrEqual(3);
 
     expect(result.details.blocks_added).toBe(3);
   });
@@ -181,9 +185,13 @@ describe("feishu_doc image fetch hardening", () => {
       };
     });
 
-    blockChildrenCreateMock.mockImplementation(async ({ data }) => ({
+    blockDescendantCreateMock.mockImplementation(async ({ data }) => ({
       code: 0,
-      data: { children: data.children },
+      data: {
+        children: (data.children_id as string[]).map((id) => ({
+          block_id: id,
+        })),
+      },
     }));
 
     const registerTool = vi.fn();
