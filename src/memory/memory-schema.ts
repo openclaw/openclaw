@@ -20,6 +20,20 @@ export function ensureMemoryIndexSchema(params: {
       mtime INTEGER NOT NULL,
       size INTEGER NOT NULL
     );
+  \`);
+  params.db.exec(\`
+    CREATE TABLE IF NOT EXISTS file_changes (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      path TEXT NOT NULL,
+      old_hash TEXT,
+      new_hash TEXT NOT NULL,
+      changed_at INTEGER NOT NULL,
+      source TEXT NOT NULL DEFAULT 'agent'
+    );
+  \`);
+  params.db.exec(\`
+    CREATE INDEX IF NOT EXISTS file_changes_path_idx
+      ON file_changes (path, changed_at DESC);
   `);
   params.db.exec(`
     CREATE TABLE IF NOT EXISTS chunks (
