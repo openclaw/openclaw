@@ -317,7 +317,11 @@ export function isEntryEligibleForRecoveryRetry(
   entry: QueuedDelivery,
   now: number,
 ): { eligible: true } | { eligible: false; remainingBackoffMs: number } {
-  const backoff = computeBackoffMs(entry.retryCount + 1);
+  // Use the same backoff level that failDelivery used when writing next_attempt_at.
+  // failDelivery increments attempt_count to nextCount and writes
+  // next_attempt_at = now + computeBackoffMs(nextCount), so entry.retryCount
+  // already reflects the incremented value.
+  const backoff = computeBackoffMs(entry.retryCount);
   if (backoff <= 0) {
     return { eligible: true };
   }
