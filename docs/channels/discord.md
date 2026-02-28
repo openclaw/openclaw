@@ -642,7 +642,8 @@ Default slash command settings:
     - `/focus <target>` bind current/new thread to a subagent/session target
     - `/unfocus` remove current thread binding
     - `/agents` show active runs and binding state
-    - `/session ttl <duration|off>` inspect/update auto-unfocus TTL for focused bindings
+    - `/session idle <duration|off>` inspect/update inactivity auto-unfocus for focused bindings
+    - `/session max-age <duration|off>` inspect/update hard max age for focused bindings
 
     Config:
 
@@ -651,14 +652,16 @@ Default slash command settings:
   session: {
     threadBindings: {
       enabled: true,
-      ttlHours: 24,
+      idleHours: 24,
+      maxAgeHours: 0,
     },
   },
   channels: {
     discord: {
       threadBindings: {
         enabled: true,
-        ttlHours: 24,
+        idleHours: 24,
+        maxAgeHours: 0,
         spawnSubagentSessions: false, // opt-in
       },
     },
@@ -671,9 +674,10 @@ Default slash command settings:
     - `session.threadBindings.*` sets global defaults.
     - `channels.discord.threadBindings.*` overrides Discord behavior.
     - `spawnSubagentSessions` must be true to auto-create/bind threads for `sessions_spawn({ thread: true })`.
+    - `spawnAcpSessions` must be true to auto-create/bind threads for ACP (`/acp spawn ... --thread ...` or `sessions_spawn({ runtime: "acp", thread: true })`).
     - If thread bindings are disabled for an account, `/focus` and related thread binding operations are unavailable.
 
-    See [Sub-agents](/tools/subagents) and [Configuration Reference](/gateway/configuration-reference).
+    See [Sub-agents](/tools/subagents), [ACP Agents](/tools/acp-agents), and [Configuration Reference](/gateway/configuration-reference).
 
   </Accordion>
 

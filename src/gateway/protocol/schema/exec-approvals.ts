@@ -90,6 +90,20 @@ export const ExecApprovalRequestParamsSchema = Type.Object(
     id: Type.Optional(NonEmptyString),
     command: NonEmptyString,
     commandArgv: Type.Optional(Type.Array(Type.String())),
+    systemRunPlanV2: Type.Optional(
+      Type.Object(
+        {
+          version: Type.Literal(2),
+          argv: Type.Array(Type.String()),
+          cwd: Type.Union([Type.String(), Type.Null()]),
+          rawCommand: Type.Union([Type.String(), Type.Null()]),
+          agentId: Type.Union([Type.String(), Type.Null()]),
+          sessionKey: Type.Union([Type.String(), Type.Null()]),
+        },
+        { additionalProperties: false },
+      ),
+    ),
+    env: Type.Optional(Type.Record(NonEmptyString, Type.String())),
     cwd: Type.Optional(Type.Union([Type.String(), Type.Null()])),
     nodeId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     host: Type.Optional(Type.Union([Type.String(), Type.Null()])),
