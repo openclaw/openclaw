@@ -512,6 +512,8 @@ describe("agent event handler", () => {
 
   describe("tool-call message boundary text preservation (#28180)", () => {
     // Helper: emit assistant text, advancing time to bypass 150ms throttle.
+    // delta defaults to "" (normal streaming path where delta is a small suffix).
+    // Pass delta === text to simulate the message_end single-shot path.
     function emitAssistantText(params: {
       handler: ReturnType<typeof createHarness>["handler"];
       runId: string;
@@ -519,6 +521,7 @@ describe("agent event handler", () => {
       text: string;
       nowSpy: ReturnType<typeof vi.spyOn>;
       time: number;
+      delta?: string;
     }) {
       params.nowSpy.mockReturnValue(params.time);
       params.handler({
@@ -526,7 +529,7 @@ describe("agent event handler", () => {
         seq: params.seq,
         stream: "assistant",
         ts: params.time,
-        data: { text: params.text },
+        data: { text: params.text, delta: params.delta ?? "" },
       });
     }
 
@@ -821,6 +824,112 @@ describe("agent event handler", () => {
       expect(lastDeltaText(broadcast)).toBe(
         "Lorem ipsum dolor sit amet.\n\nLorem ipsum dolor sit amet, with new content.",
       );
+
+      nowSpy.mockRestore();
+    });
+
+    it("detects boundary when post-tool message arrives as single-shot (delta === text, same prefix)", () => {
+      // Regression for the case where handleMessageEnd emits a single event
+      // with delta === text (no streaming deltas during the message).  The
+      // prefix checks alone cannot distinguish this from a continuation, but
+      // the delta === text signal reliably marks it as a fresh message start.
+      const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000);
+      const harness = createHarness({ now: 1_000 });
+      const { broadcast, chatRunState, handler } = harness;
+      chatRunState.registry.add("run-single-shot", {
+        sessionKey: "session-1",
+        clientRunId: "client-single-shot",
+      });
+
+      // Pre-tool message streams normally (delta !== text).
+      emitAssistantText({
+        handler,
+        runId: "run-single-shot",
+        seq: 1,
+        text: "Sure.",
+        delta: "Sure.",
+        nowSpy,
+        time: 1_000,
+      });
+      expect(lastDeltaText(broadcast)).toBe("Sure.");
+
+      // Post-tool message arrives as a single-shot emission from message_end
+      // (delta === text).  The new text starts with the prior message text —
+      // so both raw-prefix and cleaned-prefix checks would pass — but the
+      // delta === text check must still force a snapshot.
+      emitAssistantText({
+        handler,
+        runId: "run-single-shot",
+        seq: 2,
+        text: "Sure, here are the results.",
+        delta: "Sure, here are the results.",
+        nowSpy,
+        time: 3_000,
+      });
+      expect(lastDeltaText(broadcast)).toBe("Sure.\n\nSure, here are the results.");
+
+      nowSpy.mockRestore();
+    });
+
+    it("does not create false boundary on the very first single-shot emission (no prior buffer)", () => {
+      // When delta === text but there is no existing buffer, this is the
+      // first message of the run — not a boundary.
+      const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000);
+      const harness = createHarness({ now: 1_000 });
+      const { broadcast, chatRunState, handler } = harness;
+      chatRunState.registry.add("run-first-single-shot", {
+        sessionKey: "session-1",
+        clientRunId: "client-first-single-shot",
+      });
+
+      emitAssistantText({
+        handler,
+        runId: "run-first-single-shot",
+        seq: 1,
+        text: "Hello!",
+        delta: "Hello!",
+        nowSpy,
+        time: 1_000,
+      });
+      // No prior buffer → no boundary → no priorSegments entry.
+      expect(chatRunState.priorSegments.has("client-first-single-shot")).toBe(false);
+      expect(lastDeltaText(broadcast)).toBe("Hello!");
+
+      nowSpy.mockRestore();
+    });
+
+    it("detects boundary for single-shot post-tool message even when text is identical to prior message", () => {
+      // Edge case: model repeats exactly the same text in the post-tool message.
+      const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000);
+      const harness = createHarness({ now: 1_000 });
+      const { broadcast, chatRunState, handler } = harness;
+      chatRunState.registry.add("run-identical-single-shot", {
+        sessionKey: "session-1",
+        clientRunId: "client-identical-single-shot",
+      });
+
+      emitAssistantText({
+        handler,
+        runId: "run-identical-single-shot",
+        seq: 1,
+        text: "Done.",
+        delta: "Done.",
+        nowSpy,
+        time: 1_000,
+      });
+      expect(lastDeltaText(broadcast)).toBe("Done.");
+
+      // Identical text in a new message (single-shot) — still a boundary.
+      emitAssistantText({
+        handler,
+        runId: "run-identical-single-shot",
+        seq: 2,
+        text: "Done.",
+        delta: "Done.",
+        nowSpy,
+        time: 3_000,
+      });
+      expect(lastDeltaText(broadcast)).toBe("Done.\n\nDone.");
 
       nowSpy.mockRestore();
     });

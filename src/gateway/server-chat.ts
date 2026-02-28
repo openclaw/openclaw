@@ -297,6 +297,7 @@ export function createAgentEventHandler({
     sourceRunId: string,
     seq: number,
     text: string,
+    delta: string,
   ) => {
     const cleaned = stripInlineDirectiveTagsForDisplay(text).text;
     if (!cleaned) {
@@ -310,7 +311,7 @@ export function createAgentEventHandler({
     // Snapshot the current buffer as a prior segment so text from earlier
     // messages is preserved (#28180).
     //
-    // Two complementary checks, either of which triggers a snapshot:
+    // Three complementary checks, any of which triggers a snapshot:
     //
     // 1. Raw-text prefix check: within a single message the agent sends
     //    monotonically growing cumulative text, so the new raw text must start
@@ -324,12 +325,24 @@ export function createAgentEventHandler({
     //    within a message, so if the new cleaned text does not start with the
     //    existing cleaned buffer it is a boundary even when raw text looked like
     //    a continuation.
+    //
+    // 3. Single-shot message_end check: when the agent did not stream any
+    //    deltas during a message (e.g. non-streaming providers, or the
+    //    handleMessageEnd fast-path), it emits a single event where
+    //    delta === text (the full message text is sent as both the cumulative
+    //    text and the delta, with no prior partial chunks).  This is the first
+    //    emission of a brand-new assistant message, so delta === text means
+    //    previousCleaned was "" at emit time — i.e. this is the very first
+    //    update of a fresh message.  If there is already an existing buffer,
+    //    this is definitively a new message after a tool-call boundary, even
+    //    when the new text happens to start with the prior message text.
     const existing = chatRunState.buffers.get(clientRunId);
     const lastRaw = chatRunState.rawBuffers.get(clientRunId);
     const isBoundary =
-      existing &&
+      existing !== undefined &&
+      existing !== "" &&
       lastRaw !== undefined &&
-      (!text.startsWith(lastRaw) || !cleaned.startsWith(existing));
+      (!text.startsWith(lastRaw) || !cleaned.startsWith(existing) || delta === text);
     if (isBoundary) {
       const prior = chatRunState.priorSegments.get(clientRunId);
       chatRunState.priorSegments.set(clientRunId, prior ? `${prior}\n\n${existing}` : existing);
@@ -505,7 +518,8 @@ export function createAgentEventHandler({
         nodeSendToSession(sessionKey, "agent", isToolEvent ? toolPayload : agentPayload);
       }
       if (!isAborted && evt.stream === "assistant" && typeof evt.data?.text === "string") {
-        emitChatDelta(sessionKey, clientRunId, evt.runId, evt.seq, evt.data.text);
+        const delta = typeof evt.data.delta === "string" ? evt.data.delta : "";
+        emitChatDelta(sessionKey, clientRunId, evt.runId, evt.seq, evt.data.text, delta);
       } else if (!isAborted && (lifecyclePhase === "end" || lifecyclePhase === "error")) {
         if (chatLink) {
           const finished = chatRunState.registry.shift(evt.runId);
