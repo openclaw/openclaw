@@ -401,6 +401,10 @@ export function parseTtsDirectives(
                 warnings.push("invalid pitch value");
                 break;
               }
+              if (!Number.isInteger(value)) {
+                warnings.push("pitch must be an integer");
+                break;
+              }
               requireInRange(value, -12, 12, "pitch");
               overrides.minimax = { ...overrides.minimax, pitch: value };
             }
