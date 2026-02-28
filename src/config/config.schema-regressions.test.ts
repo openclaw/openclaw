@@ -133,6 +133,22 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(true);
   });
 
+  it("accepts heartbeat routeAllowlist overrides", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          heartbeat: {
+            target: "slack",
+            to: "channel:C123",
+            routeAllowlist: ["user:U07KE3NALTX", "channel:C123"],
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
   it("rejects non-positive pdf limits", () => {
     const res = validateConfigObject({
       agents: {
@@ -149,7 +165,6 @@ describe("config schema regressions", () => {
       expect(res.issues.some((issue) => issue.path.includes("agents.defaults.pdfMax"))).toBe(true);
     }
   });
-
   it("rejects relative iMessage attachment roots", () => {
     const res = validateConfigObject({
       channels: {

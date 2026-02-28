@@ -425,4 +425,209 @@ describe("runHeartbeatOnce ack handling", () => {
   ])("$title", async ({ heartbeat, telegram, expectedAccountId }) => {
     await expectTelegramHeartbeatAccountId({ heartbeat, telegram, expectedAccountId });
   });
+
+  it("routes heartbeat alerts to model-provided heartbeat_to target", async () => {
+    await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const cfg = createHeartbeatConfig({
+        tmpDir,
+        storePath,
+        heartbeat: { every: "5m", target: "telegram" },
+        channels: {
+          telegram: {
+            token: "test-token",
+            allowFrom: ["*"],
+            heartbeat: { showOk: false },
+          },
+        },
+      });
+
+      await seedMainSessionStore(storePath, cfg, {
+        lastChannel: "telegram",
+        lastProvider: "telegram",
+        lastTo: "12345",
+      });
+
+      replySpy.mockResolvedValue({ text: "[[heartbeat_to:67890]] Elevated incident detected" });
+      const sendTelegram = createMessageSendSpy({ chatId: "67890" });
+
+      await runHeartbeatOnce({
+        cfg,
+        deps: makeTelegramDeps({ sendTelegram }),
+      });
+
+      expect(sendTelegram).toHaveBeenCalledTimes(1);
+      expect(sendTelegram).toHaveBeenCalledWith(
+        "67890",
+        "Elevated incident detected",
+        expect.objectContaining({ verbose: false }),
+      );
+    });
+  });
+
+  it("allows heartbeat_to overrides when target is in heartbeat.routeAllowlist", async () => {
+    await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const cfg = createHeartbeatConfig({
+        tmpDir,
+        storePath,
+        heartbeat: {
+          every: "5m",
+          target: "telegram",
+          routeAllowlist: ["67890"],
+        },
+        channels: {
+          telegram: {
+            token: "test-token",
+            allowFrom: ["*"],
+            heartbeat: { showOk: false },
+          },
+        },
+      });
+
+      await seedMainSessionStore(storePath, cfg, {
+        lastChannel: "telegram",
+        lastProvider: "telegram",
+        lastTo: "12345",
+      });
+
+      replySpy.mockResolvedValue({ text: "[[heartbeat_to:67890]] Escalate to secondary target" });
+      const sendTelegram = createMessageSendSpy({ chatId: "67890" });
+
+      await runHeartbeatOnce({
+        cfg,
+        deps: makeTelegramDeps({ sendTelegram }),
+      });
+
+      expect(sendTelegram).toHaveBeenCalledTimes(1);
+      expect(sendTelegram).toHaveBeenCalledWith(
+        "67890",
+        "Escalate to secondary target",
+        expect.objectContaining({ verbose: false }),
+      );
+    });
+  });
+
+  it("ignores heartbeat_to overrides outside heartbeat.routeAllowlist", async () => {
+    await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const cfg = createHeartbeatConfig({
+        tmpDir,
+        storePath,
+        heartbeat: {
+          every: "5m",
+          target: "telegram",
+          routeAllowlist: ["55555"],
+        },
+        channels: {
+          telegram: {
+            token: "test-token",
+            allowFrom: ["*"],
+            heartbeat: { showOk: false },
+          },
+        },
+      });
+
+      await seedMainSessionStore(storePath, cfg, {
+        lastChannel: "telegram",
+        lastProvider: "telegram",
+        lastTo: "12345",
+      });
+
+      replySpy.mockResolvedValue({ text: "[[heartbeat_to:67890]] Keep base route when blocked" });
+      const sendTelegram = createMessageSendSpy();
+
+      await runHeartbeatOnce({
+        cfg,
+        deps: makeTelegramDeps({ sendTelegram }),
+      });
+
+      expect(sendTelegram).toHaveBeenCalledTimes(1);
+      expect(sendTelegram).toHaveBeenCalledWith(
+        "12345",
+        "Keep base route when blocked",
+        expect.objectContaining({ verbose: false }),
+      );
+    });
+  });
+
+  it("redacts xapp and AWS key patterns in heartbeat outbound text", async () => {
+    await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const cfg = createHeartbeatConfig({
+        tmpDir,
+        storePath,
+        heartbeat: { every: "5m", target: "telegram" },
+        channels: {
+          telegram: {
+            token: "test-token",
+            allowFrom: ["*"],
+            heartbeat: { showOk: false },
+          },
+        },
+      });
+
+      await seedMainSessionStore(storePath, cfg, {
+        lastChannel: "telegram",
+        lastProvider: "telegram",
+        lastTo: "12345",
+      });
+
+      const rawXapp = "xapp-1-AABBCCDDEEFF-1234567890ABCDEFFEDCBA";
+      const rawAwsAccessKey = "AKIAABCDEFGHIJKLMNOP";
+      replySpy.mockResolvedValue({
+        text: `Incident trace ${rawXapp} aws_key=${rawAwsAccessKey}`,
+      });
+      const sendTelegram = createMessageSendSpy();
+
+      await runHeartbeatOnce({
+        cfg,
+        deps: makeTelegramDeps({ sendTelegram }),
+      });
+
+      expect(sendTelegram).toHaveBeenCalledTimes(1);
+      const sentText = String(sendTelegram.mock.calls[0]?.[1] ?? "");
+      expect(sentText).toContain("Incident trace");
+      expect(sentText).not.toContain(rawXapp);
+      expect(sentText).not.toContain(rawAwsAccessKey);
+    });
+  });
+
+  it("redacts sensitive patterns in reasoning payloads before delivery", async () => {
+    await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const cfg = createHeartbeatConfig({
+        tmpDir,
+        storePath,
+        heartbeat: { every: "5m", target: "telegram", includeReasoning: true },
+        channels: {
+          telegram: {
+            token: "test-token",
+            allowFrom: ["*"],
+            heartbeat: { showOk: false },
+          },
+        },
+      });
+
+      await seedMainSessionStore(storePath, cfg, {
+        lastChannel: "telegram",
+        lastProvider: "telegram",
+        lastTo: "12345",
+      });
+
+      const rawXapp = "xapp-1-XXYYZZ112233-ABCDEFABCDEFABCDEF";
+      replySpy.mockResolvedValue([
+        { text: `Reasoning: token ${rawXapp}` },
+        { text: "Primary incident summary" },
+      ]);
+      const sendTelegram = createMessageSendSpy();
+
+      await runHeartbeatOnce({
+        cfg,
+        deps: makeTelegramDeps({ sendTelegram }),
+      });
+
+      expect(sendTelegram).toHaveBeenCalledTimes(2);
+      const sentTexts = sendTelegram.mock.calls.map((call) => String(call[1] ?? ""));
+      expect(sentTexts.some((text) => text.startsWith("Reasoning:"))).toBe(true);
+      for (const text of sentTexts) {
+        expect(text).not.toContain(rawXapp);
+      }
+    });
+  });
 });

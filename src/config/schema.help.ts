@@ -224,6 +224,10 @@ export const FIELD_HELP: Record<string, string> = {
     "Optional default working directory for this agent's ACP sessions.",
   "agents.list[].identity.avatar":
     "Avatar image path (relative to the agent workspace only) or a remote URL/data URL.",
+  "agents.defaults.heartbeat.routeAllowlist":
+    "Optional allowlist for model-provided [[heartbeat_to:...]] route overrides. When set, heartbeat routing overrides are accepted only if the resolved destination is in this list.",
+  "agents.list[].heartbeat.routeAllowlist":
+    "Optional allowlist for model-provided [[heartbeat_to:...]] route overrides. When set, heartbeat routing overrides are accepted only if the resolved destination is in this list.",
   "agents.defaults.heartbeat.suppressToolErrorWarnings":
     "Suppress tool error warning payloads during heartbeat runs.",
   "agents.list[].heartbeat.suppressToolErrorWarnings":

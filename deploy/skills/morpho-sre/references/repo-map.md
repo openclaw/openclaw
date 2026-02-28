@@ -23,3 +23,8 @@
 - `/tmp/openclaw-image-repo/image-repo-map.tsv`
 - `/tmp/openclaw-image-repo/workload-image-repo.tsv`
 - Includes `local_repo_path` for immediate on-pod investigation when GitHub clone token is insufficient.
+
+## Helper Scripts
+
+- Clone/update repo mirror: `scripts/repo-clone.sh`
+- Read latest workflow runs: `scripts/github-ci-status.sh`

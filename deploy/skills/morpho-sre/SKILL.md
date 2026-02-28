@@ -19,14 +19,18 @@ metadata: { "openclaw": { "emoji": "🛠️" } }
 - Commons mapping: `/Users/florian/morpho/morpho-infra/projects/commons/variables.auto.tfvars`
 - Clone cache: `/home/node/.openclaw/repos`
 - Correlation script: `/home/node/.openclaw/skills/morpho-sre/scripts/image-repo-map.sh`
+- Repo clone helper: `/home/node/.openclaw/skills/morpho-sre/scripts/repo-clone.sh`
+- CI status helper: `/home/node/.openclaw/skills/morpho-sre/scripts/github-ci-status.sh`
 - Grafana API wrapper: `/home/node/.openclaw/skills/morpho-sre/scripts/grafana-api.sh`
+- Sentinel snapshot helper: `/home/node/.openclaw/skills/morpho-sre/scripts/sentinel-snapshot.sh`
+- Sentinel triage helper: `/home/node/.openclaw/skills/morpho-sre/scripts/sentinel-triage.sh`
 
 ## Incident Workflow
 
 1. Scope incident: impact, first seen, affected namespace/workload.
 2. Build image-to-repo correlation map.
 3. Find affected image, app, repo, revision.
-4. Clone related repo and inspect suspect commit/config.
+4. Clone related repo, inspect suspect commit/config, and check CI signal.
 5. Cross-check k8s state + logs + metrics + traces.
 6. Return evidence, hypotheses, confidence, and minimal next checks.
 
@@ -41,7 +45,7 @@ kubectl get ns | sed -n '1,20p'
 ## Docker Image -> GitHub Repo Correlation
 
 ```bash
-bash /home/node/.openclaw/skills/morpho-sre/scripts/image-repo-map.sh
+/home/node/.openclaw/skills/morpho-sre/scripts/image-repo-map.sh
 ```
 
 The script writes:
@@ -54,34 +58,32 @@ The script writes:
 Filter by image substring:
 
 ```bash
-bash /home/node/.openclaw/skills/morpho-sre/scripts/image-repo-map.sh --image morpho-blue-api
+/home/node/.openclaw/skills/morpho-sre/scripts/image-repo-map.sh --image morpho-blue-api
 ```
 
 ## Clone Repo for RCA
 
 ```bash
-mkdir -p /home/node/.openclaw/repos
-local_repo_path="$(awk -F'\t' 'NR>1 && $7 != "" {print $7; exit}' /tmp/openclaw-image-repo/workload-image-repo.tsv)"
-if [ -n "$local_repo_path" ]; then
-  echo "Use local snapshot: $local_repo_path"
-fi
+# Resolve from image substring and clone/update local repo mirror
+/home/node/.openclaw/skills/morpho-sre/scripts/repo-clone.sh --image morpho-blue-api
 
-repo="$(awk -F'\t' 'NR>1 {print $6; exit}' /tmp/openclaw-image-repo/workload-image-repo.tsv)"
-slug="${repo#https://github.com/}"
-slug="${slug%.git}"
-dest="/home/node/.openclaw/repos/$slug"
-auth_url="$repo"
-if [ -n "${GITHUB_TOKEN:-}" ]; then
-  auth_url="https://x-access-token:${GITHUB_TOKEN}@github.com/${slug}.git"
-fi
-if [ -d "$dest/.git" ]; then
-  git -C "$dest" fetch --all --prune
-else
-  git clone --filter=blob:none "$auth_url" "$dest"
-fi
+# Or clone explicit repo
+/home/node/.openclaw/skills/morpho-sre/scripts/repo-clone.sh --repo morpho-org/morpho-blue-api
 ```
 
-If clone returns `403`, token lacks org repo read. Keep investigating with `local_repo_path` until token is fixed.
+If clone returns `403`, token lacks org repo read. Keep investigating with `workload-image-repo.tsv` `local_repo_path` values until token is fixed.
+
+## GitHub CI Signal
+
+```bash
+# Latest workflow runs for repo resolved from workload image
+/home/node/.openclaw/skills/morpho-sre/scripts/github-ci-status.sh --image morpho-blue-api --limit 5
+
+# Latest workflow runs for explicit repo
+/home/node/.openclaw/skills/morpho-sre/scripts/github-ci-status.sh --repo morpho-org/morpho-blue-api --limit 10
+```
+
+For each RCA output, include latest failing/successful run references with run URL.
 
 ## RCA Checks
 
@@ -99,6 +101,62 @@ kubectl -n <ns> logs deploy/<name> --since=30m | tail -n 200
 curl -s 'http://prometheus-stack-kube-prom-prometheus.monitoring.svc.cluster.local:9090/api/v1/alerts' | jq '.data.alerts[] | select(.state=="firing")'
 ```
 
+## Sentinel Snapshot
+
+```bash
+/home/node/.openclaw/skills/morpho-sre/scripts/sentinel-snapshot.sh
+```
+
+Use this first during heartbeat/sentinel runs. It emits:
+
+- pod anomalies (phase/restarts/reasons)
+- deployment readiness gaps
+- recent warning events
+- firing Prometheus alerts
+
+## Sentinel Triage (Preferred for Heartbeat)
+
+```bash
+/home/node/.openclaw/skills/morpho-sre/scripts/sentinel-triage.sh
+```
+
+Use this first in heartbeat mode. It outputs:
+
+- `health_status` (`state\tok|incident`)
+- `incident_gate` (`should_alert`, `gate_reason`, `incident_fingerprint`)
+- `incident_routing` (`severity_level`, `severity_score`, `recommended_target`)
+- `impact_scope` (primary namespace impact vs supporting namespace noise)
+- `signal_summary` counters
+- `top_container_failures` (container-level state/reason/exit/message)
+- `top_log_signals` (runtime error log snippets, token-redacted)
+- `impacted_repos` (pod/image -> GitHub repo correlation)
+- `image_revision_signal` (image tag -> commit hint -> resolved commit)
+- `suspect_prs` (auto-mapped PRs for resolved deployed commits)
+- `repo_ci_signal` (latest workflow run per impacted repo)
+- `pr_candidates` (repo + likely files for fix PRs)
+- `ranked_hypotheses` (confidence + checks + rollback)
+- compact top issue tables
+
+Optional toggles:
+
+- `INCLUDE_REPO_MAP=0` to skip image->repo correlation
+- `INCLUDE_CI_SIGNAL=0` to skip GitHub Actions enrichment
+- `INCLUDE_LOG_SNIPPETS=0` to skip pod log enrichment
+- `INCLUDE_IMAGE_REVISION=0` to skip image tag -> commit -> PR enrichment
+- `CI_REPO_LIMIT=<n>` and `CI_RUN_LIMIT=<n>` to control API load
+- `LOG_SNIPPET_PODS_LIMIT=<n>`, `LOG_SNIPPET_LINES=<n>`, `LOG_SNIPPET_ERRORS_PER_CONTAINER=<n>` to bound log scraping
+- `ALERT_COOLDOWN_SECONDS=<n>` to suppress duplicate alerts for unchanged incidents
+- `SEVERITY_*_SCORE=<n>` to tune severity thresholds
+- `ROUTE_TARGET_{CRITICAL,HIGH,MEDIUM,LOW}=<target>` for recommended routing
+- `PRIMARY_NAMESPACES=<ns1,ns2>` to prioritize severity/routing for app-critical namespaces
+
+Heartbeat routing directive:
+
+- If triage says `incident_gate.should_alert=yes`, prefix alert with `[[heartbeat_to:<recommended_target>]]`
+- `recommended_target` comes from `incident_routing`
+- Directive is stripped before delivery text is sent
+- Delivery override applies only when target is in `agents.defaults.heartbeat.routeAllowlist`
+
 ## Grafana Dashboard Create/Update (Dev Only)
 
 - Use only `grafana-api.sh` wrapper; do not call Grafana with raw curl.
@@ -106,10 +164,10 @@ curl -s 'http://prometheus-stack-kube-prom-prometheus.monitoring.svc.cluster.loc
 
 ```bash
 # Check API health
-bash /home/node/.openclaw/skills/morpho-sre/scripts/grafana-api.sh GET /api/health
+/home/node/.openclaw/skills/morpho-sre/scripts/grafana-api.sh GET /api/health
 
 # Search dashboards
-bash /home/node/.openclaw/skills/morpho-sre/scripts/grafana-api.sh GET '/api/search?type=dash-db&query='
+/home/node/.openclaw/skills/morpho-sre/scripts/grafana-api.sh GET '/api/search?type=dash-db&query='
 
 # Create or update dashboard from file
 cat >/tmp/dashboard-payload.json <<'EOF'
@@ -127,7 +185,17 @@ cat >/tmp/dashboard-payload.json <<'EOF'
   "overwrite": false
 }
 EOF
-bash /home/node/.openclaw/skills/morpho-sre/scripts/grafana-api.sh POST /api/dashboards/db /tmp/dashboard-payload.json
+/home/node/.openclaw/skills/morpho-sre/scripts/grafana-api.sh POST /api/dashboards/db /tmp/dashboard-payload.json
+```
+
+## Subagent Team Pattern
+
+Use specialized subagents for speed:
+
+```bash
+/subagents spawn sre-k8s "Inspect pod health/events for <ns>/<workload> and summarize top 3 failure signals."
+/subagents spawn sre-observability "Check Prometheus alerts + Grafana panels for <service>, list anomaly windows."
+/subagents spawn sre-release "Correlate image tag to repo commits and recent CI runs."
 ```
 
 ## References

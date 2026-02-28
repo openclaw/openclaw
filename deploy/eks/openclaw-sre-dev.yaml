@@ -39,15 +39,25 @@ spec:
           args:
             - |
               set -eu
+              mkdir -p /state/workspace
               mkdir -p /state/skills/morpho-sre/references
               mkdir -p /state/skills/morpho-sre/scripts
               cp /seed-config/openclaw.json /state/openclaw.json
               cp /seed-skills/SKILL.md /state/skills/morpho-sre/SKILL.md
+              cp /seed-skills/HEARTBEAT.md /state/workspace/HEARTBEAT.md
               cp /seed-skills/repo-map.md /state/skills/morpho-sre/references/repo-map.md
               cp /seed-skills/image-repo-map.sh /state/skills/morpho-sre/scripts/image-repo-map.sh
               cp /seed-skills/grafana-api.sh /state/skills/morpho-sre/scripts/grafana-api.sh
+              cp /seed-skills/repo-clone.sh /state/skills/morpho-sre/scripts/repo-clone.sh
+              cp /seed-skills/github-ci-status.sh /state/skills/morpho-sre/scripts/github-ci-status.sh
+              cp /seed-skills/sentinel-triage.sh /state/skills/morpho-sre/scripts/sentinel-triage.sh
+              cp /seed-skills/sentinel-snapshot.sh /state/skills/morpho-sre/scripts/sentinel-snapshot.sh
               chmod +x /state/skills/morpho-sre/scripts/image-repo-map.sh
               chmod +x /state/skills/morpho-sre/scripts/grafana-api.sh
+              chmod +x /state/skills/morpho-sre/scripts/repo-clone.sh
+              chmod +x /state/skills/morpho-sre/scripts/github-ci-status.sh
+              chmod +x /state/skills/morpho-sre/scripts/sentinel-triage.sh
+              chmod +x /state/skills/morpho-sre/scripts/sentinel-snapshot.sh
               cp /seed-skills/safety.md /state/skills/morpho-sre/references/safety.md
               if [ -f /seed-skills/skills-bundle.tar.gz ]; then
                 tar -xzf /seed-skills/skills-bundle.tar.gz -C /state
@@ -101,7 +111,127 @@ spec:
                 VAULT_TOKEN="$(curl -sS -X POST "${VAULT_ADDR}/v1/auth/${AUTH_PATH}/login" -H "Content-Type: application/json" --data "$LOGIN_BODY" | jq -r '.auth.client_token // empty')"
                 export VAULT_TOKEN
               fi
-              if [ -n "${GITHUB_APP_ID:-}" ] && [ -n "${GITHUB_APP_PRIVATE_KEY:-}" ] && command -v node >/dev/null 2>&1 && command -v curl >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
+              bootstrap_exec_approvals() {
+                approvals_dir="/home/node/.openclaw"
+                approvals_file="${approvals_dir}/exec-approvals.json"
+                default_allowlist="/home/node/.openclaw/skills/morpho-sre/scripts/*.sh,/usr/bin/bash,/usr/bin/sh,/usr/bin/aws,/usr/bin/curl,/usr/bin/git,/usr/bin/gh,/usr/bin/jq,/usr/bin/sed,/usr/bin/awk,/usr/bin/grep,/usr/bin/sort,/usr/bin/cat,/usr/bin/head,/usr/bin/tail,/usr/bin/cut,/usr/bin/uniq,/usr/bin/tr,/usr/bin/wc,/usr/bin/xargs,/usr/bin/timeout,/usr/bin/tar,/usr/bin/unzip,/usr/bin/gzip,/usr/local/bin/kubectl,/usr/local/bin/helm,/usr/local/bin/argocd,/usr/local/bin/vault"
+                raw_allowlist="${EXEC_ALLOWLIST:-$default_allowlist}"
+
+                mkdir -p "$approvals_dir"
+                allowlist_json="$(printf '%s' "$raw_allowlist" \
+                  | tr ',' '\n' \
+                  | sed -E 's/^[[:space:]]+|[[:space:]]+$//g' \
+                  | awk 'NF > 0 { print }' \
+                  | jq -Rsc 'split("\n") | map(select(length > 0))')" || allowlist_json='[]'
+
+                if [ ! -f "$approvals_file" ] || ! jq -e . "$approvals_file" >/dev/null 2>&1; then
+                  socket_token="$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 48 || true)"
+                  if [ -z "$socket_token" ]; then
+                    socket_token="$(date +%s)"
+                  fi
+                  cat >"$approvals_file" <<EOF
+              {
+                "version": 1,
+                "socket": {
+                  "path": "/home/node/.openclaw/exec-approvals.sock",
+                  "token": "${socket_token}"
+                },
+                "defaults": {},
+                "agents": {}
+              }
+              EOF
+                fi
+
+                tmp_file="$(mktemp)"
+                jq --argjson patterns "$allowlist_json" '
+                  def ensure_obj: if type == "object" then . else {} end;
+                  def normalize_patterns($arr):
+                    ($arr // [])
+                    | map(if type == "string" then . else empty end)
+                    | map(gsub("^\\s+|\\s+$"; ""))
+                    | map(select(length > 0))
+                    | unique;
+                  .version = 1
+                  | .socket = (.socket | ensure_obj)
+                  | .agents = (.agents | ensure_obj)
+                  | .agents.main = (.agents.main | ensure_obj)
+                  | .agents.main.allowlist = (
+                      ((.agents.main.allowlist // [])
+                      | map(select((type == "object") and (.pattern | type == "string") and (.pattern | length > 0))))
+                      + (normalize_patterns($patterns) | map({ pattern: . }))
+                    )
+                  | .agents.main.allowlist = (.agents.main.allowlist | unique_by((.pattern | ascii_downcase)))
+                ' "$approvals_file" >"$tmp_file"
+                mv "$tmp_file" "$approvals_file"
+                chmod 600 "$approvals_file"
+                echo "exec-approvals-bootstrap:ok"
+              }
+              bootstrap_exec_approvals
+              bootstrap_auth_profiles() {
+                auth_dir="/home/node/.openclaw/agents/main/agent"
+                auth_file="${auth_dir}/auth-profiles.json"
+                mkdir -p "$auth_dir"
+
+                if [ -n "${CODEX_AUTH_JSON:-}" ]; then
+                  if printf '%s' "$CODEX_AUTH_JSON" | jq -e . >/dev/null 2>&1; then
+                    printf '%s\n' "$CODEX_AUTH_JSON" >"$auth_file"
+                    chmod 600 "$auth_file"
+                    echo "auth-bootstrap:codex-auth-json"
+                  else
+                    echo "auth-bootstrap:invalid-codex-auth-json" >&2
+                  fi
+                fi
+              }
+              bootstrap_auth_profiles
+              github_preflight_log() {
+                echo "github-preflight:$1"
+              }
+              github_preflight_fail() {
+                stage="$1"
+                message="$2"
+                echo "github-preflight:fail:${stage}: ${message}" >&2
+                rm -f /tmp/github-preflight.ok
+                if [ "${GITHUB_AUTH_STRICT:-1}" = "1" ]; then
+                  exit 1
+                fi
+                return 0
+              }
+              github_api_probe() {
+                endpoint="$1"
+                tmp_json="$(mktemp)"
+                code="$(curl -sS -o "$tmp_json" -w '%{http_code}' \
+                  -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+                  -H "Accept: application/vnd.github+json" \
+                  "https://api.github.com/${endpoint}" || true)"
+                if [ "$code" != "200" ]; then
+                  msg="$(jq -r '.message // "http error"' "$tmp_json" 2>/dev/null || echo "http error")"
+                  rm -f "$tmp_json"
+                  github_preflight_fail "probe" "${endpoint} http_${code}: ${msg}"
+                  return 1
+                fi
+                rm -f "$tmp_json"
+                return 0
+              }
+              github_preflight() {
+                required_repo="${GITHUB_REQUIRED_REPO:-morpho-org/morpho-infra}"
+                required_actions_repo="${GITHUB_REQUIRED_ACTIONS_REPO:-$required_repo}"
+
+                missing_tools=""
+                for tool in node curl jq git base64; do
+                  if ! command -v "$tool" >/dev/null 2>&1; then
+                    missing_tools="${missing_tools}${missing_tools:+,}${tool}"
+                  fi
+                done
+                if [ -n "$missing_tools" ]; then
+                  github_preflight_fail "tools" "missing commands: ${missing_tools}"
+                  return 0
+                fi
+
+                if [ -z "${GITHUB_APP_ID:-}" ] || [ -z "${GITHUB_APP_PRIVATE_KEY:-}" ]; then
+                  github_preflight_fail "env" "missing GITHUB_APP_ID or GITHUB_APP_PRIVATE_KEY"
+                  return 0
+                fi
+
                 APP_JWT="$(GITHUB_APP_ID="$GITHUB_APP_ID" GITHUB_APP_PRIVATE_KEY="$GITHUB_APP_PRIVATE_KEY" node - <<'NODE'
               const crypto = require('crypto');
               const appId = process.env.GITHUB_APP_ID;
@@ -115,19 +245,75 @@ spec:
               const signature = crypto.createSign('RSA-SHA256').update(input).sign(key, 'base64url');
               process.stdout.write(`${input}.${signature}`);
               NODE
-                )"
+                )" || {
+                  github_preflight_fail "jwt" "failed to mint app jwt"
+                  return 0
+                }
+
                 INSTALLATION_ID="${GITHUB_APP_INSTALLATION_ID:-}"
                 if [ -z "$INSTALLATION_ID" ]; then
-                  INSTALLATION_ID="$(curl -sS -H "Authorization: Bearer ${APP_JWT}" -H "Accept: application/vnd.github+json" https://api.github.com/app/installations | jq -r '.[] | select(.account.login=="morpho-org") | .id' | head -n1)"
-                fi
-                if [ -n "$INSTALLATION_ID" ]; then
-                  GITHUB_APP_TOKEN="$(curl -sS -X POST -H "Authorization: Bearer ${APP_JWT}" -H "Accept: application/vnd.github+json" "https://api.github.com/app/installations/${INSTALLATION_ID}/access_tokens" | jq -r '.token // empty')"
-                  if [ -n "$GITHUB_APP_TOKEN" ]; then
-                    export GITHUB_TOKEN="$GITHUB_APP_TOKEN"
-                    export GH_TOKEN="$GITHUB_APP_TOKEN"
+                  install_json="$(mktemp)"
+                  install_code="$(curl -sS -o "$install_json" -w '%{http_code}' \
+                    -H "Authorization: Bearer ${APP_JWT}" \
+                    -H "Accept: application/vnd.github+json" \
+                    "https://api.github.com/app/installations" || true)"
+                  if [ "$install_code" != "200" ]; then
+                    install_msg="$(jq -r '.message // "http error"' "$install_json" 2>/dev/null || echo "http error")"
+                    rm -f "$install_json"
+                    github_preflight_fail "installations" "api http_${install_code}: ${install_msg}"
+                    return 0
                   fi
+                  INSTALLATION_ID="$(jq -r '.[] | select(.account.login=="morpho-org") | .id' "$install_json" | head -n1)"
+                  rm -f "$install_json"
                 fi
-              fi
+                if [ -z "$INSTALLATION_ID" ]; then
+                  github_preflight_fail "installations" "no installation id for morpho-org"
+                  return 0
+                fi
+
+                token_json="$(mktemp)"
+                token_code="$(curl -sS -o "$token_json" -w '%{http_code}' \
+                  -X POST \
+                  -H "Authorization: Bearer ${APP_JWT}" \
+                  -H "Accept: application/vnd.github+json" \
+                  "https://api.github.com/app/installations/${INSTALLATION_ID}/access_tokens" || true)"
+                if [ "$token_code" != "201" ] && [ "$token_code" != "200" ]; then
+                  token_msg="$(jq -r '.message // "http error"' "$token_json" 2>/dev/null || echo "http error")"
+                  rm -f "$token_json"
+                  github_preflight_fail "token" "api http_${token_code}: ${token_msg}"
+                  return 0
+                fi
+                GITHUB_APP_TOKEN="$(jq -r '.token // empty' "$token_json")"
+                rm -f "$token_json"
+                if [ -z "$GITHUB_APP_TOKEN" ]; then
+                  github_preflight_fail "token" "empty installation token"
+                  return 0
+                fi
+                export GITHUB_TOKEN="$GITHUB_APP_TOKEN"
+                export GH_TOKEN="$GITHUB_APP_TOKEN"
+
+                github_api_probe "repos/${required_repo}" || return 0
+                github_api_probe "repos/${required_actions_repo}/actions/runs?per_page=1" || return 0
+
+                git_auth_basic="$(printf 'x-access-token:%s' "${GITHUB_TOKEN}" | base64 | tr -d '\n')"
+                if ! git -c credential.helper= -c core.askPass= \
+                  -c "http.extraHeader=Authorization: Basic ${git_auth_basic}" \
+                  ls-remote "https://github.com/${required_repo}.git" HEAD >/tmp/github-preflight-lsremote.txt 2>/tmp/github-preflight-lsremote.err; then
+                  github_preflight_fail "git-ls-remote" "git transport probe failed for ${required_repo}"
+                  return 0
+                fi
+                if ! grep -q 'HEAD' /tmp/github-preflight-lsremote.txt; then
+                  github_preflight_fail "git-ls-remote" "empty ls-remote response for ${required_repo}"
+                  return 0
+                fi
+                rm -f /tmp/github-preflight-lsremote.txt /tmp/github-preflight-lsremote.err
+                touch /tmp/github-preflight.ok
+                github_preflight_log "ok repo=${required_repo} actions_repo=${required_actions_repo}"
+              }
+
+              rm -f /tmp/github-preflight.ok
+              github_preflight_log "start"
+              github_preflight
               exec openclaw gateway --bind lan --port 18789 --allow-unconfigured
           envFrom:
             - secretRef:
@@ -198,6 +384,42 @@ spec:
                 secretKeyRef:
                   name: carapulse-secrets
                   key: github-app-private-key
+                  optional: true
+            - name: CODEX_AUTH_JSON
+              valueFrom:
+                secretKeyRef:
+                  name: carapulse-secrets
+                  key: codex-auth-json
+                  optional: true
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: carapulse-secrets
+                  key: openai-api-key
+                  optional: true
+            - name: OPENAI_ACCESS_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: carapulse-secrets
+                  key: openai-access-token
+                  optional: true
+            - name: OPENAI_AUTH_BOOTSTRAP_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: carapulse-secrets
+                  key: openai-auth-bootstrap-token
+                  optional: true
+            - name: OPENAI_MODEL
+              valueFrom:
+                secretKeyRef:
+                  name: carapulse-secrets
+                  key: openai-model
+                  optional: true
+            - name: OPENAI_REASONING_EFFORT
+              valueFrom:
+                secretKeyRef:
+                  name: carapulse-secrets
+                  key: openai-reasoning-effort
                   optional: true
           ports:
             - name: http

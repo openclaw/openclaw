@@ -1011,6 +1011,51 @@ describe("runHeartbeatOnce", () => {
     }
   });
 
+  it("strips reply_to_current tags from heartbeat outbound text", async () => {
+    const tmpDir = await createCaseDir("openclaw-hb");
+    const storePath = path.join(tmpDir, "sessions.json");
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          workspace: tmpDir,
+          heartbeat: { every: "5m", target: "whatsapp" },
+        },
+      },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+      session: { store: storePath },
+    };
+    const sessionKey = resolveMainSessionKey(cfg);
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({
+        [sessionKey]: {
+          sessionId: "sid",
+          updatedAt: Date.now(),
+          lastChannel: "whatsapp",
+          lastTo: "+1555",
+        },
+      }),
+    );
+
+    const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+    try {
+      replySpy.mockResolvedValue({ text: "[[reply_to_current]] Investigate alert" });
+      const sendWhatsApp = vi
+        .fn<NonNullable<HeartbeatDeps["sendWhatsApp"]>>()
+        .mockResolvedValue({ messageId: "m1", toJid: "jid" });
+
+      await runHeartbeatOnce({
+        cfg,
+        deps: createHeartbeatDeps(sendWhatsApp),
+      });
+
+      expect(sendWhatsApp).toHaveBeenCalledTimes(1);
+      expect(sendWhatsApp).toHaveBeenCalledWith("+1555", "Investigate alert", expect.any(Object));
+    } finally {
+      replySpy.mockRestore();
+    }
+  });
+
   type HeartbeatFileState = "empty" | "actionable" | "missing" | "read-error";
 
   async function runHeartbeatFileScenario(params: {
