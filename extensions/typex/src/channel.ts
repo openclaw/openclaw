@@ -78,10 +78,11 @@ export const typexPlugin = {
       const account =
         cfg.channels?.["typex"]?.accounts?.[id] ||
         (id === DEFAULT_ACCOUNT_ID ? globalCheck : undefined);
+      const channelEnabled = cfg.channels?.["typex"]?.enabled !== false;
       return {
         accountId: id,
         name: account?.name || "TypeX",
-        enabled: account?.enabled !== false,
+        enabled: channelEnabled && account?.enabled !== false,
         configured: Boolean(account?.token),
         tokenSource: "config",
         config: account || {},
