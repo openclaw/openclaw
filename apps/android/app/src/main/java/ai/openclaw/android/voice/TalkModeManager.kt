@@ -335,6 +335,7 @@ private const val defaultTalkProvider = "elevenlabs"
     val tts = streamingTts ?: return
     val token = ttsSessionToken
     streamingTts = null  // Clear immediately so a new session isn't clobbered
+    activeTtsRunId = null  // Allow next response to start fresh
     tts.finish()
     scope.launch {
       delay(500)
