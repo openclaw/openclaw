@@ -4,6 +4,7 @@ import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
 import { inheritOptionFromParent } from "./command-options.js";
 import { formatHelpExamples } from "./help-format.js";
+import { registerUpdateCronCommand } from "./update-cli/cron.js";
 import {
   type UpdateCommandOptions,
   type UpdateStatusOptions,
@@ -149,4 +150,7 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
         defaultRuntime.exit(1);
       }
     });
+
+  // Register the cron subcommand for automatic updates
+  registerUpdateCronCommand(update);
 }
