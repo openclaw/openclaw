@@ -40,6 +40,14 @@ import {
   getVoiceMessageMetadata,
   sendDiscordVoiceMessage,
 } from "./voice-message.js";
+import { getVoiceManager } from "./voice/voice-registry.js";
+
+const AUDIO_EXTENSIONS = new Set([".wav", ".mp3", ".ogg", ".opus", ".flac", ".webm"]);
+
+function isAudioFile(filePath: string): boolean {
+  const ext = path.extname(filePath).toLowerCase();
+  return AUDIO_EXTENSIONS.has(ext);
+}
 
 type DiscordSendOpts = {
   token?: string;
@@ -258,7 +266,58 @@ export async function sendMessageDiscord(
 
   let result: { id: string; channel_id: string } | { id: string | null; channel_id: string };
   try {
-    if (opts.mediaUrl) {
+    // If the bot is in a voice channel and the message has audio, play it in the VC.
+    if (opts.mediaUrl && isAudioFile(opts.mediaUrl)) {
+      const voiceManager = getVoiceManager(opts.accountId);
+      if (voiceManager && voiceManager.playAudioAny(opts.mediaUrl)) {
+        // Audio queued for voice playback. Send text-only in the channel (if any).
+        if (textWithTables.trim()) {
+          result = await sendDiscordText(
+            rest,
+            channelId,
+            textWithTables,
+            opts.replyTo,
+            request,
+            accountInfo.config.maxLinesPerMessage,
+            opts.components,
+            opts.embeds,
+            chunkMode,
+            opts.silent,
+          );
+        } else {
+          // No text to send — return a synthetic result
+          result = { id: null, channel_id: channelId };
+        }
+      } else if (opts.mediaUrl) {
+        result = await sendDiscordMedia(
+          rest,
+          channelId,
+          textWithTables,
+          opts.mediaUrl,
+          opts.mediaLocalRoots,
+          opts.replyTo,
+          request,
+          accountInfo.config.maxLinesPerMessage,
+          opts.components,
+          opts.embeds,
+          chunkMode,
+          opts.silent,
+        );
+      } else {
+        result = await sendDiscordText(
+          rest,
+          channelId,
+          textWithTables,
+          opts.replyTo,
+          request,
+          accountInfo.config.maxLinesPerMessage,
+          opts.components,
+          opts.embeds,
+          chunkMode,
+          opts.silent,
+        );
+      }
+    } else if (opts.mediaUrl) {
       result = await sendDiscordMedia(
         rest,
         channelId,

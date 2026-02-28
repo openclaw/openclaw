@@ -5,6 +5,7 @@ import type { RuntimeEnv } from "../../runtime.js";
 import { attachDiscordGatewayLogging } from "../gateway-logging.js";
 import { getDiscordGatewayEmitter, waitForDiscordGatewayStop } from "../monitor.gateway.js";
 import type { DiscordVoiceManager } from "../voice/manager.js";
+import { unregisterVoiceManager } from "../voice/voice-registry.js";
 import { registerGateway, unregisterGateway } from "./gateway-registry.js";
 
 type ExecApprovalsHandler = {
@@ -145,6 +146,7 @@ export async function runDiscordGatewayLifecycle(params: {
     if (params.voiceManager) {
       await params.voiceManager.destroy();
       params.voiceManagerRef.current = null;
+      unregisterVoiceManager();
     }
     if (params.execApprovalsHandler) {
       await params.execApprovalsHandler.stop();

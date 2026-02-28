@@ -128,6 +128,9 @@ export type ResolvedTtsConfig = {
     proxy?: string;
     timeoutMs?: number;
   };
+  local?: {
+    url: string;
+  };
   prefsPath?: string;
   maxTextLength: number;
   timeoutMs: number;
@@ -303,6 +306,11 @@ export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
       proxy: raw.edge?.proxy?.trim() || undefined,
       timeoutMs: raw.edge?.timeoutMs,
     },
+    local: raw.local?.url
+      ? { url: raw.local.url }
+      : raw.provider === "local"
+        ? { url: "http://127.0.0.1:7860" }
+        : undefined,
     prefsPath: raw.prefsPath,
     maxTextLength: raw.maxTextLength ?? DEFAULT_MAX_TEXT_LENGTH,
     timeoutMs: raw.timeoutMs ?? DEFAULT_TIMEOUT_MS,
@@ -511,7 +519,7 @@ export function resolveTtsApiKey(
   return undefined;
 }
 
-export const TTS_PROVIDERS = ["openai", "elevenlabs", "edge"] as const;
+export const TTS_PROVIDERS = ["openai", "elevenlabs", "edge", "local"] as const;
 
 export function resolveTtsProviderOrder(primary: TtsProvider): TtsProvider[] {
   return [primary, ...TTS_PROVIDERS.filter((provider) => provider !== primary)];
@@ -520,6 +528,9 @@ export function resolveTtsProviderOrder(primary: TtsProvider): TtsProvider[] {
 export function isTtsProviderConfigured(config: ResolvedTtsConfig, provider: TtsProvider): boolean {
   if (provider === "edge") {
     return config.edge.enabled;
+  }
+  if (provider === "local") {
+    return true; // Local TTS has no API key; availability checked at request time
   }
   return Boolean(resolveTtsApiKey(config, provider));
 }
@@ -628,6 +639,42 @@ export async function textToSpeech(params: {
           provider,
           outputFormat: edgeResult.outputFormat,
           voiceCompatible,
+        };
+      }
+
+      if (provider === "local") {
+        const localUrl = config.local?.url ?? "http://127.0.0.1:7860";
+        const tempRoot = resolvePreferredOpenClawTmpDir();
+        mkdirSync(tempRoot, { recursive: true, mode: 0o700 });
+        const tempDir = mkdtempSync(path.join(tempRoot, "tts-"));
+        const audioPath = path.join(tempDir, `voice-${Date.now()}.wav`);
+
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), config.timeoutMs ?? 120_000);
+        try {
+          const res = await fetch(`${localUrl}/synthesize`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ text: params.text }),
+            signal: controller.signal,
+          });
+          if (!res.ok) {
+            throw new Error(`local TTS returned ${res.status}: ${await res.text()}`);
+          }
+          const arrayBuf = await res.arrayBuffer();
+          writeFileSync(audioPath, Buffer.from(arrayBuf));
+        } finally {
+          clearTimeout(timeout);
+        }
+
+        scheduleCleanup(tempDir);
+        return {
+          success: true,
+          audioPath,
+          latencyMs: Date.now() - providerStart,
+          provider,
+          outputFormat: "wav",
+          voiceCompatible: true,
         };
       }
 

@@ -1,4 +1,4 @@
-export type TtsProvider = "elevenlabs" | "openai" | "edge";
+export type TtsProvider = "elevenlabs" | "openai" | "edge" | "local";
 
 export type TtsMode = "final" | "all";
 
@@ -72,6 +72,11 @@ export type TtsConfig = {
     saveSubtitles?: boolean;
     proxy?: string;
     timeoutMs?: number;
+  };
+  /** Local TTS server (e.g. Chatterbox-Turbo). */
+  local?: {
+    /** Base URL for the local TTS server. Default: http://127.0.0.1:7860 */
+    url?: string;
   };
   /** Optional path for local TTS user preferences JSON. */
   prefsPath?: string;

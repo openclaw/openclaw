@@ -344,6 +344,54 @@ export class DiscordVoiceManager {
     }));
   }
 
+  /**
+   * Check if the bot has an active voice session in the given guild.
+   */
+  isInVoice(guildId: string): boolean {
+    return this.sessions.has(guildId);
+  }
+
+  /**
+   * Play an audio file in the voice channel for a given guild.
+   * Returns true if audio was queued, false if not in a voice channel.
+   */
+  playAudio(guildId: string, audioPath: string): boolean {
+    const entry = this.sessions.get(guildId);
+    if (!entry) {
+      return false;
+    }
+    this.enqueuePlayback(entry, async () => {
+      logVoiceVerbose(
+        `playback start (text-triggered): guild ${entry.guildId} channel ${entry.channelId} file ${path.basename(audioPath)}`,
+      );
+      const resource = createAudioResource(audioPath);
+      entry.player.play(resource);
+      await entersState(entry.player, AudioPlayerStatus.Playing, PLAYBACK_READY_TIMEOUT_MS).catch(
+        () => undefined,
+      );
+      await entersState(entry.player, AudioPlayerStatus.Idle, SPEAKING_READY_TIMEOUT_MS).catch(
+        () => undefined,
+      );
+      logVoiceVerbose(
+        `playback done (text-triggered): guild ${entry.guildId} channel ${entry.channelId}`,
+      );
+    });
+    return true;
+  }
+
+  /**
+   * Try to play audio in any active voice session.
+   * Returns true if audio was queued in at least one session.
+   */
+  playAudioAny(audioPath: string): boolean {
+    for (const [guildId] of this.sessions) {
+      if (this.playAudio(guildId, audioPath)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   async join(params: { guildId: string; channelId: string }): Promise<VoiceOperationResult> {
     if (!this.voiceEnabled) {
       return {
