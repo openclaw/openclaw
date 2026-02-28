@@ -178,6 +178,7 @@ class ElevenLabsStreamingTts(
 
       override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
         Log.e(TAG, "WebSocket error: ${t.message}")
+        stopped = true
         cleanup()
       }
 
