@@ -871,6 +871,7 @@
                   "install/hetzner",
                   "install/gcp",
                   "install/macos-vm",
+                  "install/docker-macos",
                   "install/exe-dev",
                   "install/railway",
                   "install/render",
