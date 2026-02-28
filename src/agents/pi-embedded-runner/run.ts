@@ -445,6 +445,13 @@ export async function runEmbeddedPiAgent(
             githubToken: apiKeyInfo.apiKey,
           });
           authStorage.setRuntimeApiKey(model.provider, copilotToken.token);
+          // The Copilot token exchange returns the correct API base URL derived
+          // from the token's proxy-ep field (individual vs enterprise). Update the
+          // model so requests hit the right endpoint — the built-in catalog
+          // hardcodes the individual URL which fails for enterprise tokens (421).
+          if (copilotToken.baseUrl) {
+            model.baseUrl = copilotToken.baseUrl;
+          }
         } else {
           authStorage.setRuntimeApiKey(model.provider, apiKeyInfo.apiKey);
         }
