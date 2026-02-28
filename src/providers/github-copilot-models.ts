@@ -22,6 +22,31 @@ export function getDefaultCopilotModelIds(): string[] {
   return [...DEFAULT_MODEL_IDS];
 }
 
+/**
+ * Resolve the correct API transport for a Copilot model based on its model ID.
+ *
+ * GitHub Copilot proxies requests to different upstream providers:
+ * - Claude models → Anthropic Messages API (native Anthropic transport)
+ * - GPT-5.x / Codex models → OpenAI Responses API
+ * - GPT-4.x / Gemini / Grok / other models → OpenAI Chat Completions API
+ *
+ * pi-ai's built-in catalog already maps these correctly; this function mirrors
+ * that logic for fallback/inline model definitions that aren't in the catalog.
+ */
+export function resolveCopilotModelApi(modelId: string): ModelDefinitionConfig["api"] {
+  const lower = modelId.toLowerCase();
+  // Claude models use the native Anthropic Messages API through Copilot's proxy.
+  if (lower.startsWith("claude-")) {
+    return "anthropic-messages";
+  }
+  // GPT-5.x and Codex models support the OpenAI Responses API.
+  if (lower.startsWith("gpt-5") || lower.includes("codex")) {
+    return "openai-responses";
+  }
+  // All other models (GPT-4.x, Gemini, Grok, o1, o3, etc.) use Chat Completions.
+  return "openai-completions";
+}
+
 export function buildCopilotModelDefinition(modelId: string): ModelDefinitionConfig {
   const id = modelId.trim();
   if (!id) {
@@ -30,10 +55,7 @@ export function buildCopilotModelDefinition(modelId: string): ModelDefinitionCon
   return {
     id,
     name: id,
-    // pi-coding-agent's registry schema doesn't know about a "github-copilot" API.
-    // We use OpenAI-compatible responses API, while keeping the provider id as
-    // "github-copilot" (pi-ai uses that to attach Copilot-specific headers).
-    api: "openai-responses",
+    api: resolveCopilotModelApi(id),
     reasoning: false,
     input: ["text", "image"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },

@@ -324,4 +324,67 @@ describe("resolveModel", () => {
     expect(result.model).toBeUndefined();
     expect(result.error).toBe("Unknown model: google-antigravity/some-model");
   });
+
+  it("uses anthropic-messages api for github-copilot Claude model fallback (enterprise)", () => {
+    const cfg: OpenClawConfig = {
+      models: {
+        providers: {
+          "github-copilot": {
+            baseUrl: "https://api.enterprise.githubcopilot.com",
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModel("github-copilot", "claude-opus-4.7", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      id: "claude-opus-4.7",
+      provider: "github-copilot",
+      api: "anthropic-messages",
+    });
+  });
+
+  it("uses openai-completions api for github-copilot GPT-4.x model fallback", () => {
+    const cfg: OpenClawConfig = {
+      models: {
+        providers: {
+          "github-copilot": {
+            baseUrl: "https://api.individual.githubcopilot.com",
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModel("github-copilot", "gpt-4.2", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      id: "gpt-4.2",
+      provider: "github-copilot",
+      api: "openai-completions",
+    });
+  });
+
+  it("uses openai-responses api for github-copilot GPT-5.x model fallback (enterprise)", () => {
+    const cfg: OpenClawConfig = {
+      models: {
+        providers: {
+          "github-copilot": {
+            baseUrl: "https://api.enterprise.githubcopilot.com",
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModel("github-copilot", "gpt-5.3", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      id: "gpt-5.3",
+      provider: "github-copilot",
+      api: "openai-responses",
+    });
+  });
 });

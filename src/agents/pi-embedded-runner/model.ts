@@ -2,6 +2,7 @@ import type { Api, Model } from "@mariozechner/pi-ai";
 import type { AuthStorage, ModelRegistry } from "@mariozechner/pi-coding-agent";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { ModelDefinitionConfig } from "../../config/types.js";
+import { resolveCopilotModelApi } from "../../providers/github-copilot-models.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { buildModelAliasLines } from "../model-alias-lines.js";
@@ -96,10 +97,18 @@ export function resolveModel(
     }
     const providerCfg = providers[provider];
     if (providerCfg || modelId.startsWith("mock-")) {
+      // For github-copilot, resolve the correct API transport per model rather than
+      // defaulting to openai-responses. Copilot proxies to different backends
+      // (Anthropic for Claude, OpenAI for GPT, etc.) and each needs its native API.
+      const fallbackApi =
+        providerCfg?.api ??
+        (normalizedProvider === "github-copilot"
+          ? resolveCopilotModelApi(modelId)
+          : "openai-responses");
       const fallbackModel: Model<Api> = normalizeModelCompat({
         id: modelId,
         name: modelId,
-        api: providerCfg?.api ?? "openai-responses",
+        api: fallbackApi,
         provider,
         baseUrl: providerCfg?.baseUrl,
         reasoning: false,
