@@ -1,11 +1,6 @@
 import { createTypingKeepaliveLoop } from "../../channels/typing-lifecycle.js";
 import { createTypingStartGuard } from "../../channels/typing-start-guard.js";
-import {
-  hasRelaySkipToken,
-  isSilentReplyPrefixText,
-  isSilentReplyText,
-  SILENT_REPLY_TOKEN,
-} from "../tokens.js";
+import { isSilentReplyPrefixText, isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
 
 export type TypingController = {
   onReplyStart: () => Promise<void>;
@@ -182,9 +177,6 @@ export function createTypingController(params: {
       silentToken &&
       (isSilentReplyText(trimmed, silentToken) || isSilentReplyPrefixText(trimmed, silentToken))
     ) {
-      return;
-    }
-    if (hasRelaySkipToken(trimmed)) {
       return;
     }
     refreshTypingTtl();

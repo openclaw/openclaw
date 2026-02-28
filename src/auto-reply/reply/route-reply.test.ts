@@ -184,7 +184,7 @@ describe("routeReply", () => {
     );
   });
 
-  it("swallows payloads that contain SKIP_RELAY anywhere", async () => {
+  it("does not swallow payloads containing SKIP_RELAY by default", async () => {
     mocks.sendMessageSlack.mockClear();
     const res = await routeReply({
       payload: { text: `relay summary\n\n${RELAY_SKIP_TOKEN}` },
@@ -193,7 +193,11 @@ describe("routeReply", () => {
       cfg: {} as never,
     });
     expect(res.ok).toBe(true);
-    expect(mocks.sendMessageSlack).not.toHaveBeenCalled();
+    expect(mocks.sendMessageSlack).toHaveBeenCalledWith(
+      "channel:C123",
+      `relay summary\n\n${RELAY_SKIP_TOKEN}`,
+      expect.any(Object),
+    );
   });
 
   it("applies responsePrefix when routing", async () => {

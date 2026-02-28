@@ -104,6 +104,7 @@ export async function runMemoryFlushIfNeeded(params: {
           sessionCtx: params.sessionCtx,
           hasRepliedRef: params.opts?.hasRepliedRef,
           provider,
+          followupRun: params.followupRun,
         });
         const runBaseParams = buildEmbeddedRunBaseParams({
           run: params.followupRun.run,

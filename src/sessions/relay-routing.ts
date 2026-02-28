@@ -126,11 +126,7 @@ export function resolveSessionRelayRoute(params: {
   sourceAccountId?: string;
   sourceThreadId?: string | number;
 }): SessionRelayRoute {
-  const channel =
-    normalizeMatchValue(params.channel) ??
-    normalizeMatchValue(params.entry?.channel) ??
-    normalizeMatchValue(params.entry?.lastChannel) ??
-    deriveChannelFromKey(params.sessionKey);
+  const channel = normalizeMatchValue(params.channel) ?? deriveChannelFromKey(params.sessionKey);
   const chatType =
     normalizeChatType(params.chatType ?? params.entry?.chatType) ??
     normalizeChatType(deriveChatTypeFromKey(params.sessionKey));

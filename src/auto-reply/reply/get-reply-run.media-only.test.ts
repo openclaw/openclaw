@@ -212,9 +212,10 @@ describe("runPreparedReply media-only handling", () => {
           agents: { defaults: {} },
         },
         ctx: {
-          Body: "",
-          RawBody: "",
-          CommandBody: "",
+          Body: "Test again",
+          RawBody: "Test again",
+          CommandBody: "Test again",
+          BodyForAgent: "Test again",
           ThreadHistoryBody: "Earlier message in this thread",
           OriginatingChannel: "slack",
           OriginatingTo: "C123",
@@ -238,13 +239,60 @@ describe("runPreparedReply media-only handling", () => {
       threadId: 321,
     });
 
-    const prompt = call?.followupRun.run.extraSystemPrompt;
-    expect(prompt).toContain("Read-Only Relay Contract");
-    expect(prompt).toContain("reply exactly: SKIP_RELAY");
-    expect(prompt).toContain("[RE: <source> - <brief summary>]");
-    expect(prompt).toContain('"channel": "slack"');
-    expect(prompt).toContain('"channel": "telegram"');
-    expect(prompt).toContain('"to": "telegram:primary"');
+    const prompt = call?.followupRun.run.extraSystemPrompt ?? "";
+    expect(prompt).not.toContain("<read_only_metadata>");
+  });
+
+  it("uses inbound channel for relay route when session entry channel is stale", async () => {
+    await runPreparedReply(
+      baseParams({
+        sessionEntry: {
+          channel: "telegram",
+        } as never,
+        cfg: {
+          session: {
+            relayRouting: {
+              targets: {
+                telegramPrimary: {
+                  channel: "telegram",
+                  to: "telegram:primary",
+                },
+              },
+              rules: [
+                {
+                  mode: "read-only",
+                  relayTo: "telegramPrimary",
+                  match: { channel: "slack" },
+                },
+              ],
+            },
+          },
+          channels: {},
+          agents: { defaults: {} },
+        },
+        ctx: {
+          Body: "",
+          RawBody: "",
+          CommandBody: "",
+          ThreadHistoryBody: "Earlier message in this thread",
+          OriginatingChannel: "slack",
+          OriginatingTo: "C123",
+          ChatType: "group",
+          Provider: "slack",
+          Surface: "slack",
+        },
+      }),
+    );
+
+    const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
+    expect(call?.followupRun.relayMode).toBe("read-only");
+    expect(call?.followupRun.relayOutput).toEqual({
+      channel: "telegram",
+      to: "telegram:primary",
+      accountId: undefined,
+      threadId: undefined,
+    });
+    expect(call?.followupRun.run.extraSystemPrompt ?? "").not.toContain("<read_only_metadata>");
   });
 
   it("returns the empty-body reply when there is no text and no media", async () => {

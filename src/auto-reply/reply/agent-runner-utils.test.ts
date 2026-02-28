@@ -173,4 +173,34 @@ describe("agent-runner-utils", () => {
     expect(resolved.embeddedContext.messageProvider).toBe("telegram");
     expect(resolved.embeddedContext.messageTo).toBe("268300329");
   });
+
+  it("uses relay output as embedded run target for read-only followups", () => {
+    const run = makeRun();
+
+    const resolved = buildEmbeddedRunContexts({
+      run,
+      sessionCtx: {
+        Provider: "imessage",
+        OriginatingChannel: "imessage",
+        OriginatingTo: "+15551234567",
+        AccountId: "imsg",
+      },
+      hasRepliedRef: undefined,
+      provider: "openai",
+      followupRun: {
+        relayMode: "read-only",
+        relayOutput: {
+          channel: "telegram",
+          to: "telegram:primary",
+          accountId: "telegram-main",
+          threadId: 42,
+        },
+      },
+    });
+
+    expect(resolved.embeddedContext.messageProvider).toBe("telegram");
+    expect(resolved.embeddedContext.messageTo).toBe("telegram:primary");
+    expect(resolved.embeddedContext.agentAccountId).toBe("telegram-main");
+    expect(resolved.embeddedContext.messageThreadId).toBe(42);
+  });
 });

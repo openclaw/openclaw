@@ -45,5 +45,5 @@ export function hasRelaySkipToken(
   if (!text) {
     return false;
   }
-  return text.toUpperCase().includes(token.toUpperCase());
+  return text.includes(token);
 }

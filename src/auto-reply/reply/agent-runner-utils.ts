@@ -8,7 +8,7 @@ import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { estimateUsageCost, formatTokenCount, formatUsd } from "../../utils/usage-format.js";
 import type { TemplateContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
-import { resolveOriginMessageProvider, resolveOriginMessageTo } from "./origin-routing.js";
+import { resolveRunDeliveryTarget } from "./origin-routing.js";
 import type { FollowupRun } from "./queue.js";
 
 const BUN_FETCH_SOCKET_ERROR_RE = /socket connection was closed unexpectedly/i;
@@ -20,15 +20,28 @@ export function buildThreadingToolContext(params: {
   sessionCtx: TemplateContext;
   config: OpenClawConfig | undefined;
   hasRepliedRef: { value: boolean } | undefined;
+  runtimeProvider?: string;
+  runtimeTo?: string;
+  runtimeAccountId?: string;
+  runtimeThreadId?: string | number;
 }): ChannelThreadingToolContext {
-  const { sessionCtx, config, hasRepliedRef } = params;
+  const {
+    sessionCtx,
+    config,
+    hasRepliedRef,
+    runtimeProvider,
+    runtimeTo,
+    runtimeAccountId,
+    runtimeThreadId,
+  } = params;
   const currentMessageId = sessionCtx.MessageSidFull ?? sessionCtx.MessageSid;
   if (!config) {
     return {
       currentMessageId,
     };
   }
-  const rawProvider = sessionCtx.Provider?.trim().toLowerCase();
+  const rawProvider =
+    runtimeProvider?.trim().toLowerCase() ?? sessionCtx.Provider?.trim().toLowerCase();
   if (!rawProvider) {
     return {
       currentMessageId,
@@ -39,7 +52,7 @@ export function buildThreadingToolContext(params: {
   const dock = provider ? getChannelDock(provider) : undefined;
   if (!dock?.threading?.buildToolContext) {
     return {
-      currentChannelId: sessionCtx.To?.trim() || undefined,
+      currentChannelId: runtimeTo?.trim() || sessionCtx.To?.trim() || undefined,
       currentChannelProvider: provider ?? (rawProvider as ChannelId),
       currentMessageId,
       hasRepliedRef,
@@ -48,16 +61,16 @@ export function buildThreadingToolContext(params: {
   const context =
     dock.threading.buildToolContext({
       cfg: config,
-      accountId: sessionCtx.AccountId,
+      accountId: runtimeAccountId ?? sessionCtx.AccountId,
       context: {
-        Channel: sessionCtx.Provider,
+        Channel: rawProvider,
         From: sessionCtx.From,
-        To: sessionCtx.To,
+        To: runtimeTo ?? sessionCtx.To,
         ChatType: sessionCtx.ChatType,
         CurrentMessageId: currentMessageId,
         ReplyToId: sessionCtx.ReplyToId,
         ThreadLabel: sessionCtx.ThreadLabel,
-        MessageThreadId: sessionCtx.MessageThreadId,
+        MessageThreadId: runtimeThreadId ?? sessionCtx.MessageThreadId,
       },
       hasRepliedRef,
     }) ?? {};
@@ -192,26 +205,47 @@ export function buildEmbeddedContextFromTemplate(params: {
   run: FollowupRun["run"];
   sessionCtx: TemplateContext;
   hasRepliedRef: { value: boolean } | undefined;
+  followupRun?: Pick<
+    FollowupRun,
+    | "relayMode"
+    | "relayOutput"
+    | "originatingChannel"
+    | "originatingTo"
+    | "originatingAccountId"
+    | "originatingThreadId"
+  >;
 }) {
+  const runtimeTarget = resolveRunDeliveryTarget({
+    relayMode: params.followupRun?.relayMode,
+    relayOutput: params.followupRun?.relayOutput,
+    originatingChannel:
+      params.followupRun?.originatingChannel ?? params.sessionCtx.OriginatingChannel,
+    provider: params.run.messageProvider ?? params.sessionCtx.Provider,
+    originatingTo: params.followupRun?.originatingTo ?? params.sessionCtx.OriginatingTo,
+    to: params.sessionCtx.To,
+    originatingAccountId: params.followupRun?.originatingAccountId,
+    accountId: params.run.agentAccountId ?? params.sessionCtx.AccountId,
+    originatingThreadId:
+      params.followupRun?.originatingThreadId ?? params.sessionCtx.MessageThreadId,
+    threadId: params.sessionCtx.MessageThreadId,
+  });
   return {
     sessionId: params.run.sessionId,
     sessionKey: params.run.sessionKey,
     agentId: params.run.agentId,
-    messageProvider: resolveOriginMessageProvider({
-      originatingChannel: params.sessionCtx.OriginatingChannel,
-      provider: params.sessionCtx.Provider,
-    }),
-    agentAccountId: params.sessionCtx.AccountId,
-    messageTo: resolveOriginMessageTo({
-      originatingTo: params.sessionCtx.OriginatingTo,
-      to: params.sessionCtx.To,
-    }),
-    messageThreadId: params.sessionCtx.MessageThreadId ?? undefined,
+    messageProvider: runtimeTarget.messageProvider,
+    agentAccountId: runtimeTarget.accountId,
+    messageTo: runtimeTarget.messageTo,
+    messageThreadId: runtimeTarget.threadId,
     // Provider threading context for tool auto-injection
     ...buildThreadingToolContext({
       sessionCtx: params.sessionCtx,
       config: params.run.config,
       hasRepliedRef: params.hasRepliedRef,
+      runtimeProvider: runtimeTarget.messageProvider,
+      runtimeTo: runtimeTarget.messageTo,
+      runtimeAccountId: runtimeTarget.accountId,
+      runtimeThreadId: runtimeTarget.threadId,
     }),
   };
 }
@@ -239,6 +273,15 @@ export function buildEmbeddedRunContexts(params: {
   sessionCtx: TemplateContext;
   hasRepliedRef: { value: boolean } | undefined;
   provider: string;
+  followupRun?: Pick<
+    FollowupRun,
+    | "relayMode"
+    | "relayOutput"
+    | "originatingChannel"
+    | "originatingTo"
+    | "originatingAccountId"
+    | "originatingThreadId"
+  >;
 }) {
   return {
     authProfile: resolveRunAuthProfile(params.run, params.provider),
@@ -246,6 +289,7 @@ export function buildEmbeddedRunContexts(params: {
       run: params.run,
       sessionCtx: params.sessionCtx,
       hasRepliedRef: params.hasRepliedRef,
+      followupRun: params.followupRun,
     }),
     senderContext: buildTemplateSenderContext(params.sessionCtx),
   };

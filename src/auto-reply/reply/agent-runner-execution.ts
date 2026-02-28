@@ -129,6 +129,7 @@ export async function runAgentTurnWithFallback(params: {
 
   while (true) {
     try {
+      const shouldSwallowRelaySkipToken = params.followupRun.relayMode === "read-only";
       const normalizeStreamingText = (payload: ReplyPayload): { text?: string; skip: boolean } => {
         let text = payload.text;
         if (!params.isHeartbeat && text?.includes("HEARTBEAT_OK")) {
@@ -147,7 +148,7 @@ export async function runAgentTurnWithFallback(params: {
         if (isSilentReplyText(text, SILENT_REPLY_TOKEN)) {
           return { skip: true };
         }
-        if (hasRelaySkipToken(text)) {
+        if (shouldSwallowRelaySkipToken && hasRelaySkipToken(text)) {
           return { skip: true };
         }
         if (
@@ -289,6 +290,7 @@ export async function runAgentTurnWithFallback(params: {
             sessionCtx: params.sessionCtx,
             hasRepliedRef: params.opts?.hasRepliedRef,
             provider,
+            followupRun: params.followupRun,
           });
           const runBaseParams = buildEmbeddedRunBaseParams({
             run: params.followupRun.run,

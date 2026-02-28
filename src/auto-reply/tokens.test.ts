@@ -58,10 +58,10 @@ describe("isSilentReplyPrefixText", () => {
 });
 
 describe("hasRelaySkipToken", () => {
-  it("matches token anywhere in text (case-insensitive)", () => {
+  it("matches token anywhere in text (case-sensitive)", () => {
     expect(hasRelaySkipToken("SKIP_RELAY")).toBe(true);
     expect(hasRelaySkipToken("Please SKIP_RELAY this")).toBe(true);
-    expect(hasRelaySkipToken("skip_relay")).toBe(true);
+    expect(hasRelaySkipToken("skip_relay")).toBe(false);
   });
 
   it("returns false when token is absent", () => {

@@ -457,6 +457,14 @@ describe("createFollowupRunner messaging tool dedupe", () => {
         threadId: 42,
       }),
     );
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageProvider: "telegram",
+        messageTo: "telegram:primary",
+        agentAccountId: "telegram-main",
+        messageThreadId: 42,
+      }),
+    );
     expect(onBlockReply).not.toHaveBeenCalled();
   });
 
@@ -468,10 +476,30 @@ describe("createFollowupRunner messaging tool dedupe", () => {
     });
 
     const runner = createMessagingDedupeRunner(onBlockReply);
-    await runner(baseQueuedRun("imessage"));
+    await runner({
+      ...baseQueuedRun("imessage"),
+      relayMode: "read-only",
+    } as FollowupRun);
 
     expect(routeReplyMock).not.toHaveBeenCalled();
     expect(onBlockReply).not.toHaveBeenCalled();
+  });
+
+  it("does not swallow SKIP_RELAY in non-read-only turns", async () => {
+    const onBlockReply = vi.fn(async () => {});
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "status note with SKIP_RELAY token mention" }],
+      meta: {},
+    });
+
+    const runner = createMessagingDedupeRunner(onBlockReply);
+    await runner(baseQueuedRun("imessage"));
+
+    expect(onBlockReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "status note with SKIP_RELAY token mention",
+      }),
+    );
   });
 });
 

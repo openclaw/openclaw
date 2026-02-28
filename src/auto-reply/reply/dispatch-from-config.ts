@@ -20,6 +20,7 @@ import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { formatAbortReplyText, tryFastAbortFromMessage } from "./abort.js";
 import { shouldBypassAcpDispatchForCommand, tryDispatchAcpReply } from "./dispatch-acp.js";
 import { shouldSkipDuplicateInbound } from "./inbound-dedupe.js";
+import { buildReadOnlyRelayContractPrompt } from "./read-only-relay-contract.js";
 import type { ReplyDispatcher, ReplyDispatchKind } from "./reply-dispatcher.js";
 import { shouldSuppressReasoningPayload } from "./reply-payloads.js";
 import { isRoutableChannel, routeReply } from "./route-reply.js";
@@ -58,6 +59,29 @@ const isInboundAudioContext = (ctx: FinalizedMsgContext): boolean => {
   }
   return AUDIO_HEADER_RE.test(trimmed);
 };
+
+function appendReadOnlyContractToInbound(params: {
+  ctx: FinalizedMsgContext;
+  relayRoute: ReturnType<typeof resolveSessionRelayRoute>;
+}) {
+  const contract = buildReadOnlyRelayContractPrompt({
+    route: params.relayRoute,
+    ctx: params.ctx,
+  });
+  if (!contract) {
+    return;
+  }
+  const appendContract = (value: string): string => {
+    if (value.includes("<read_only_metadata>")) {
+      return value;
+    }
+    const trimmed = value.trim();
+    return trimmed ? `${value}\n\n${contract}` : contract;
+  };
+
+  params.ctx.BodyForAgent = appendContract(params.ctx.BodyForAgent ?? params.ctx.Body ?? "");
+  params.ctx.Body = appendContract(params.ctx.Body ?? params.ctx.BodyForAgent);
+}
 
 const resolveSessionStoreEntry = (
   ctx: FinalizedMsgContext,
@@ -249,6 +273,12 @@ export async function dispatchReplyFromConfig(params: {
   // Debug: `pnpm test src/auto-reply/reply/dispatch-from-config.test.ts`
   const originatingChannel = ctx.OriginatingChannel;
   const originatingTo = ctx.OriginatingTo;
+  const liveSourceChannel = ctx.OriginatingChannel ?? ctx.Surface ?? ctx.Provider ?? undefined;
+  if (!liveSourceChannel) {
+    logVerbose(
+      `dispatch-from-config: relay routing skipped live channel resolution (session=${sessionStoreEntry.sessionKey ?? sessionKey ?? "unknown"})`,
+    );
+  }
   const currentSurface = (ctx.Surface ?? ctx.Provider)?.toLowerCase();
   const shouldRouteByOrigin = Boolean(
     isRoutableChannel(originatingChannel) && originatingTo && originatingChannel !== currentSurface,
@@ -257,17 +287,13 @@ export async function dispatchReplyFromConfig(params: {
     cfg,
     entry: sessionStoreEntry.entry,
     sessionKey: sessionStoreEntry.sessionKey ?? sessionKey,
-    channel:
-      sessionStoreEntry.entry?.channel ??
-      ctx.OriginatingChannel ??
-      ctx.Surface ??
-      ctx.Provider ??
-      undefined,
+    channel: liveSourceChannel,
     chatType: sessionStoreEntry.entry?.chatType,
     sourceTo: ctx.OriginatingTo ?? ctx.To,
     sourceAccountId: ctx.AccountId,
     sourceThreadId: ctx.MessageThreadId,
   });
+  appendReadOnlyContractToInbound({ ctx, relayRoute });
   const hasReadOnlyRoute = relayRoute.mode === "read-only" && Boolean(relayRoute.output);
   const routeTarget =
     hasReadOnlyRoute && relayRoute.output
@@ -366,12 +392,7 @@ export async function dispatchReplyFromConfig(params: {
       cfg,
       entry: sessionStoreEntry.entry,
       sessionKey: sessionStoreEntry.sessionKey ?? sessionKey,
-      channel:
-        sessionStoreEntry.entry?.channel ??
-        ctx.OriginatingChannel ??
-        ctx.Surface ??
-        ctx.Provider ??
-        undefined,
+      channel: liveSourceChannel,
       chatType: sessionStoreEntry.entry?.chatType,
     });
     if (sendPolicy === "deny" && !bypassAcpForCommand) {

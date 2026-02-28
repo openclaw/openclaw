@@ -18,6 +18,7 @@ import {
   resolveOriginAccountId,
   resolveOriginMessageProvider,
   resolveOriginMessageTo,
+  resolveRunDeliveryTarget,
 } from "./origin-routing.js";
 import type { FollowupRun } from "./queue.js";
 import {
@@ -112,7 +113,7 @@ export function createFollowupRunner(params: {
       ) {
         continue;
       }
-      if (hasRelaySkipToken(payload.text)) {
+      if (queued.relayMode === "read-only" && hasRelaySkipToken(payload.text)) {
         continue;
       }
       await typingSignals.signalTextDelta(payload.text);
@@ -166,6 +167,16 @@ export function createFollowupRunner(params: {
       let runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
       let fallbackProvider = queued.run.provider;
       let fallbackModel = queued.run.model;
+      const runDeliveryTarget = resolveRunDeliveryTarget({
+        relayMode: queued.relayMode,
+        relayOutput: queued.relayOutput,
+        originatingChannel: queued.originatingChannel,
+        provider: queued.run.messageProvider,
+        originatingTo: queued.originatingTo,
+        originatingAccountId: queued.originatingAccountId,
+        accountId: queued.run.agentAccountId,
+        originatingThreadId: queued.originatingThreadId,
+      });
       try {
         const fallbackResult = await runWithModelFallback({
           cfg: queued.run.config,
@@ -183,10 +194,10 @@ export function createFollowupRunner(params: {
               sessionId: queued.run.sessionId,
               sessionKey: queued.run.sessionKey,
               agentId: queued.run.agentId,
-              messageProvider: queued.run.messageProvider,
-              agentAccountId: queued.run.agentAccountId,
-              messageTo: queued.originatingTo,
-              messageThreadId: queued.originatingThreadId,
+              messageProvider: runDeliveryTarget.messageProvider,
+              agentAccountId: runDeliveryTarget.accountId,
+              messageTo: runDeliveryTarget.messageTo,
+              messageThreadId: runDeliveryTarget.threadId,
               groupId: queued.run.groupId,
               groupChannel: queued.run.groupChannel,
               groupSpace: queued.run.groupSpace,

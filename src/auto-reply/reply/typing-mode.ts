@@ -1,5 +1,5 @@
 import type { TypingMode } from "../../config/types.js";
-import { hasRelaySkipToken, isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
+import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { TypingPolicy } from "../types.js";
 import type { TypingController } from "./typing.js";
 
@@ -71,7 +71,7 @@ export function createTypingSignaler(params: {
     if (!trimmed) {
       return false;
     }
-    return !isSilentReplyText(trimmed, SILENT_REPLY_TOKEN) && !hasRelaySkipToken(trimmed);
+    return !isSilentReplyText(trimmed, SILENT_REPLY_TOKEN);
   };
 
   const signalRunStart = async () => {
