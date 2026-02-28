@@ -354,6 +354,91 @@ describe("dispatchReplyFromConfig", () => {
     );
   });
 
+  it("matches read-only relay rules using live inbound chat type", async () => {
+    setNoAbort();
+    mocks.routeReply.mockClear();
+    const cfg = {
+      session: {
+        relayRouting: {
+          targets: {
+            telegramPrimary: {
+              channel: "telegram",
+              to: "telegram:primary",
+            },
+          },
+          rules: [
+            {
+              mode: "read-only",
+              relayTo: "telegramPrimary",
+              match: { channel: "imessage", chatType: "direct" },
+            },
+          ],
+        },
+      },
+    } as OpenClawConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "imessage",
+      Surface: "imessage",
+      ChatType: "direct",
+      OriginatingChannel: "imessage",
+      OriginatingTo: "imessage:+15550001111",
+    });
+
+    const replyResolver = async () => ({ text: "relayed" }) satisfies ReplyPayload;
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(mocks.routeReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+        to: "telegram:primary",
+      }),
+    );
+  });
+
+  it("does not inherit source account/thread ids for read-only relay targets", async () => {
+    setNoAbort();
+    mocks.routeReply.mockClear();
+    const cfg = {
+      session: {
+        relayRouting: {
+          targets: {
+            telegramPrimary: {
+              channel: "telegram",
+              to: "telegram:primary",
+            },
+          },
+          rules: [
+            {
+              mode: "read-only",
+              relayTo: "telegramPrimary",
+              match: { channel: "imessage" },
+            },
+          ],
+        },
+      },
+    } as OpenClawConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "imessage",
+      Surface: "imessage",
+      OriginatingChannel: "imessage",
+      OriginatingTo: "imessage:+15550001111",
+      AccountId: "imessage-account",
+      MessageThreadId: "imessage-thread",
+    });
+
+    const replyResolver = async () => ({ text: "relayed" }) satisfies ReplyPayload;
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    const routed = mocks.routeReply.mock.calls[0]?.[0] as
+      | { accountId?: string; threadId?: string | number }
+      | undefined;
+    expect(routed?.accountId).toBeUndefined();
+    expect(routed?.threadId).toBeUndefined();
+  });
+
   it("prefers inbound channel over persisted session channel for relay routing", async () => {
     setNoAbort();
     mocks.routeReply.mockClear();
@@ -877,7 +962,7 @@ describe("dispatchReplyFromConfig", () => {
     expect(runTurnArgs?.text).toContain("<provider>iMessage</provider>");
     expect(runTurnArgs?.text).toContain("<sender>+15550001111</sender>");
     expect(runTurnArgs?.text).toContain("<source_to>imessage:+15550001111</source_to>");
-    expect(runTurnArgs?.text).toContain("<chat_type>unknown</chat_type>");
+    expect(runTurnArgs?.text).toContain("<chat_type>direct</chat_type>");
     expect(runTurnArgs?.text).toContain("SKIP_RELAY");
   });
 
@@ -930,7 +1015,7 @@ describe("dispatchReplyFromConfig", () => {
     expect(resolverCtx?.BodyForAgent).toContain("<provider>iMessage</provider>");
     expect(resolverCtx?.BodyForAgent).toContain("<sender>+15550001111</sender>");
     expect(resolverCtx?.BodyForAgent).toContain("<source_to>imessage:+15550001111</source_to>");
-    expect(resolverCtx?.BodyForAgent).toContain("<chat_type>unknown</chat_type>");
+    expect(resolverCtx?.BodyForAgent).toContain("<chat_type>direct</chat_type>");
     expect(resolverCtx?.BodyForAgent).toContain("SKIP_RELAY");
   });
 
@@ -1510,6 +1595,147 @@ describe("dispatchReplyFromConfig", () => {
         to: "telegram:thread-1",
       }),
     );
+    expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+  });
+
+  it("does not inherit source account/thread ids for ACP read-only relay targets", async () => {
+    setNoAbort();
+    mocks.routeReply.mockClear();
+    const runtime = createAcpRuntime([
+      { type: "text_delta", text: "thread chunk" },
+      { type: "done" },
+    ]);
+    acpMocks.readAcpSessionEntry.mockReturnValue({
+      sessionKey: "agent:codex-acp:session-1",
+      storeSessionKey: "agent:codex-acp:session-1",
+      cfg: {},
+      storePath: "/tmp/mock-sessions.json",
+      entry: {},
+      acp: {
+        backend: "acpx",
+        agent: "codex",
+        runtimeSessionName: "runtime:1",
+        mode: "persistent",
+        state: "idle",
+        lastActivityAt: Date.now(),
+      },
+    });
+    acpMocks.requireAcpRuntimeBackend.mockReturnValue({
+      id: "acpx",
+      runtime,
+    });
+
+    const cfg = {
+      acp: {
+        enabled: true,
+        dispatch: { enabled: true },
+        stream: { coalesceIdleMs: 0, maxChunkChars: 128 },
+      },
+      session: {
+        relayRouting: {
+          targets: {
+            telegramPrimary: {
+              channel: "telegram",
+              to: "telegram:primary",
+            },
+          },
+          rules: [
+            {
+              mode: "read-only",
+              relayTo: "telegramPrimary",
+              match: { channel: "imessage" },
+            },
+          ],
+        },
+      },
+    } as OpenClawConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "imessage",
+      Surface: "imessage",
+      OriginatingChannel: "imessage",
+      OriginatingTo: "imessage:+15550001111",
+      AccountId: "imessage-account",
+      MessageThreadId: "imessage-thread",
+      SessionKey: "agent:codex-acp:session-1",
+      BodyForAgent: "write a test",
+    });
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher });
+
+    expect(mocks.routeReply).toHaveBeenCalled();
+    const routed = mocks.routeReply.mock.calls[0]?.[0] as
+      | { accountId?: string; threadId?: string | number }
+      | undefined;
+    expect(routed?.accountId).toBeUndefined();
+    expect(routed?.threadId).toBeUndefined();
+  });
+
+  it("swallows ACP read-only payloads containing SKIP_RELAY", async () => {
+    setNoAbort();
+    mocks.routeReply.mockClear();
+    const runtime = createAcpRuntime([
+      { type: "text_delta", text: "acknowledged\n\nSKIP_RELAY" },
+      { type: "done" },
+    ]);
+    acpMocks.readAcpSessionEntry.mockReturnValue({
+      sessionKey: "agent:codex-acp:session-1",
+      storeSessionKey: "agent:codex-acp:session-1",
+      cfg: {},
+      storePath: "/tmp/mock-sessions.json",
+      entry: {},
+      acp: {
+        backend: "acpx",
+        agent: "codex",
+        runtimeSessionName: "runtime:1",
+        mode: "persistent",
+        state: "idle",
+        lastActivityAt: Date.now(),
+      },
+    });
+    acpMocks.requireAcpRuntimeBackend.mockReturnValue({
+      id: "acpx",
+      runtime,
+    });
+
+    const cfg = {
+      acp: {
+        enabled: true,
+        dispatch: { enabled: true },
+        stream: { coalesceIdleMs: 0, maxChunkChars: 128 },
+      },
+      session: {
+        relayRouting: {
+          targets: {
+            telegramPrimary: {
+              channel: "telegram",
+              to: "telegram:primary",
+            },
+          },
+          rules: [
+            {
+              mode: "read-only",
+              relayTo: "telegramPrimary",
+              match: { channel: "imessage" },
+            },
+          ],
+        },
+      },
+    } as OpenClawConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "imessage",
+      Surface: "imessage",
+      OriginatingChannel: "imessage",
+      OriginatingTo: "imessage:+15550001111",
+      SessionKey: "agent:codex-acp:session-1",
+      BodyForAgent: "write a test",
+    });
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher });
+
+    expect(mocks.routeReply).not.toHaveBeenCalled();
     expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });

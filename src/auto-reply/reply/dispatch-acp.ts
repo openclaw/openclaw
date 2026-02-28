@@ -22,6 +22,7 @@ import {
   shouldHandleTextCommands,
 } from "../commands-registry.js";
 import type { FinalizedMsgContext } from "../templating.js";
+import { hasRelaySkipToken } from "../tokens.js";
 import type { ReplyPayload } from "../types.js";
 import { createAcpReplyProjector } from "./acp-projector.js";
 import type { ReplyDispatcher, ReplyDispatchKind } from "./reply-dispatcher.js";
@@ -160,6 +161,7 @@ export async function tryDispatchAcpReply(params: {
   sessionTtsAuto?: TtsAutoMode;
   ttsChannel?: string;
   routeTarget?: AcpRouteTarget;
+  relayMode?: "read-write" | "read-only";
   shouldSendToolSummaries: boolean;
   bypassForCommand: boolean;
   recordProcessed: DispatchProcessedRecorder;
@@ -191,6 +193,9 @@ export async function tryDispatchAcpReply(params: {
     kind: ReplyDispatchKind,
     payload: ReplyPayload,
   ): Promise<boolean> => {
+    if (params.relayMode === "read-only" && hasRelaySkipToken(payload.text)) {
+      return true;
+    }
     if (kind === "block" && payload.text?.trim()) {
       if (acpAccumulatedBlockText.length > 0) {
         acpAccumulatedBlockText += "\n";
@@ -214,8 +219,8 @@ export async function tryDispatchAcpReply(params: {
         channel: params.routeTarget.channel,
         to: params.routeTarget.to,
         sessionKey: params.ctx.SessionKey,
-        accountId: params.routeTarget.accountId ?? params.ctx.AccountId,
-        threadId: params.routeTarget.threadId ?? params.ctx.MessageThreadId,
+        accountId: params.routeTarget.accountId,
+        threadId: params.routeTarget.threadId,
         cfg: params.cfg,
       });
       if (!result.ok) {

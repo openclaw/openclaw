@@ -274,6 +274,7 @@ export async function dispatchReplyFromConfig(params: {
   const originatingChannel = ctx.OriginatingChannel;
   const originatingTo = ctx.OriginatingTo;
   const liveSourceChannel = ctx.OriginatingChannel ?? ctx.Surface ?? ctx.Provider ?? undefined;
+  const liveSourceChatType = ctx.ChatType ?? sessionStoreEntry.entry?.chatType;
   if (!liveSourceChannel) {
     logVerbose(
       `dispatch-from-config: relay routing skipped live channel resolution (session=${sessionStoreEntry.sessionKey ?? sessionKey ?? "unknown"})`,
@@ -288,7 +289,7 @@ export async function dispatchReplyFromConfig(params: {
     entry: sessionStoreEntry.entry,
     sessionKey: sessionStoreEntry.sessionKey ?? sessionKey,
     channel: liveSourceChannel,
-    chatType: sessionStoreEntry.entry?.chatType,
+    chatType: liveSourceChatType,
     sourceTo: ctx.OriginatingTo ?? ctx.To,
     sourceAccountId: ctx.AccountId,
     sourceThreadId: ctx.MessageThreadId,
@@ -336,8 +337,8 @@ export async function dispatchReplyFromConfig(params: {
       channel: routeTarget.channel,
       to: routeTarget.to,
       sessionKey: ctx.SessionKey,
-      accountId: routeTarget.accountId ?? ctx.AccountId,
-      threadId: routeTarget.threadId ?? ctx.MessageThreadId,
+      accountId: routeTarget.accountId,
+      threadId: routeTarget.threadId,
       cfg,
       abortSignal,
       mirror,
@@ -363,8 +364,8 @@ export async function dispatchReplyFromConfig(params: {
           channel: routeTarget.channel,
           to: routeTarget.to,
           sessionKey: ctx.SessionKey,
-          accountId: routeTarget.accountId ?? ctx.AccountId,
-          threadId: routeTarget.threadId ?? ctx.MessageThreadId,
+          accountId: routeTarget.accountId,
+          threadId: routeTarget.threadId,
           cfg,
         });
         queuedFinal = result.ok;
@@ -393,7 +394,7 @@ export async function dispatchReplyFromConfig(params: {
       entry: sessionStoreEntry.entry,
       sessionKey: sessionStoreEntry.sessionKey ?? sessionKey,
       channel: liveSourceChannel,
-      chatType: sessionStoreEntry.entry?.chatType,
+      chatType: liveSourceChatType,
     });
     if (sendPolicy === "deny" && !bypassAcpForCommand) {
       logVerbose(
@@ -415,6 +416,7 @@ export async function dispatchReplyFromConfig(params: {
       sessionTtsAuto,
       ttsChannel,
       routeTarget,
+      relayMode: relayRoute.mode,
       shouldSendToolSummaries,
       bypassForCommand: bypassAcpForCommand,
       recordProcessed,
@@ -538,8 +540,8 @@ export async function dispatchReplyFromConfig(params: {
           channel: routeTarget.channel,
           to: routeTarget.to,
           sessionKey: ctx.SessionKey,
-          accountId: routeTarget.accountId ?? ctx.AccountId,
-          threadId: routeTarget.threadId ?? ctx.MessageThreadId,
+          accountId: routeTarget.accountId,
+          threadId: routeTarget.threadId,
           cfg,
         });
         if (!result.ok) {
@@ -588,8 +590,8 @@ export async function dispatchReplyFromConfig(params: {
               channel: routeTarget.channel,
               to: routeTarget.to,
               sessionKey: ctx.SessionKey,
-              accountId: routeTarget.accountId ?? ctx.AccountId,
-              threadId: routeTarget.threadId ?? ctx.MessageThreadId,
+              accountId: routeTarget.accountId,
+              threadId: routeTarget.threadId,
               cfg,
             });
             queuedFinal = result.ok || queuedFinal;
