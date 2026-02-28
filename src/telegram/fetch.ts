@@ -1,6 +1,6 @@
 import * as dns from "node:dns";
 import * as net from "node:net";
-import { Agent, setGlobalDispatcher } from "undici";
+import { EnvHttpProxyAgent, setGlobalDispatcher } from "undici";
 import type { TelegramNetworkConfig } from "../config/types.telegram.js";
 import { resolveFetch } from "../infra/fetch.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -45,8 +45,14 @@ function applyTelegramNetworkWorkarounds(network?: TelegramNetworkConfig): void 
     autoSelectDecision.value !== appliedGlobalDispatcherAutoSelectFamily
   ) {
     try {
+      // Use EnvHttpProxyAgent instead of bare Agent so that HTTP_PROXY / HTTPS_PROXY
+      // environment variables are respected. A bare Agent here would silently
+      // discard any proxy dispatcher set earlier (e.g. by pi-ai's http-proxy.ts),
+      // breaking model API calls in regions that require a proxy for providers
+      // like OpenRouter. EnvHttpProxyAgent is a superset: it honours proxy env
+      // vars when present and behaves identically to Agent when they are absent.
       setGlobalDispatcher(
-        new Agent({
+        new EnvHttpProxyAgent({
           connect: {
             autoSelectFamily: autoSelectDecision.value,
             autoSelectFamilyAttemptTimeout: 300,
