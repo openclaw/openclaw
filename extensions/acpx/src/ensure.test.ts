@@ -45,6 +45,11 @@ describe("acpx ensure", () => {
       version: ACPX_PINNED_VERSION,
       expectedVersion: ACPX_PINNED_VERSION,
     });
+    expect(spawnAndCollectMock).toHaveBeenCalledWith({
+      command: "/plugin/node_modules/.bin/acpx",
+      args: ["--version"],
+      cwd: "/plugin",
+    });
   });
 
   it("reports version mismatch", async () => {
@@ -70,9 +75,9 @@ describe("acpx ensure", () => {
     });
   });
 
-  it("accepts any installed version when expectedVersion is unset", async () => {
+  it("accepts command availability when expectedVersion is unset", async () => {
     spawnAndCollectMock.mockResolvedValueOnce({
-      stdout: "acpx 9.9.9\n",
+      stdout: "Usage: acpx [options]\n",
       stderr: "",
       code: 0,
       error: null,
@@ -86,8 +91,13 @@ describe("acpx ensure", () => {
 
     expect(result).toEqual({
       ok: true,
-      version: "9.9.9",
+      version: "unknown",
       expectedVersion: undefined,
+    });
+    expect(spawnAndCollectMock).toHaveBeenCalledWith({
+      command: "/custom/acpx",
+      args: ["--help"],
+      cwd: "/custom",
     });
   });
 

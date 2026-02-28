@@ -25,6 +25,10 @@ function extractVersion(stdout: string, stderr: string): string | null {
   return match?.[0] ?? null;
 }
 
+function isExpectedVersionConfigured(value: string | undefined): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
 export async function checkAcpxVersion(params: {
   command: string;
   cwd?: string;
@@ -33,9 +37,11 @@ export async function checkAcpxVersion(params: {
   const expectedVersion = params.expectedVersion?.trim() || undefined;
   const installCommand = buildAcpxLocalInstallCommand(expectedVersion ?? ACPX_PINNED_VERSION);
   const cwd = params.cwd ?? ACPX_PLUGIN_ROOT;
+  const hasExpectedVersion = isExpectedVersionConfigured(expectedVersion);
+  const probeArgs = hasExpectedVersion ? ["--version"] : ["--help"];
   const result = await spawnAndCollect({
     command: params.command,
-    args: ["--version"],
+    args: probeArgs,
     cwd,
   });
 
@@ -64,9 +70,19 @@ export async function checkAcpxVersion(params: {
     return {
       ok: false,
       reason: "execution-failed",
-      message: stderr || `acpx --version failed with code ${result.code ?? "unknown"}`,
+      message:
+        stderr ||
+        `acpx ${hasExpectedVersion ? "--version" : "--help"} failed with code ${result.code ?? "unknown"}`,
       expectedVersion,
       installCommand,
+    };
+  }
+
+  if (!hasExpectedVersion) {
+    return {
+      ok: true,
+      version: "unknown",
+      expectedVersion,
     };
   }
 
