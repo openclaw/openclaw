@@ -934,6 +934,57 @@ describe("agent event handler", () => {
       nowSpy.mockRestore();
     });
 
+    it("does not create false boundary when inline directive tag completes mid-stream (ACP path)", () => {
+      // Regression: in the ACP streaming path, data.text is raw cumulative text
+      // that may contain inline directive tags.  When a partial tag like
+      // "[[reply_to:123" gets completed to "[[reply_to:123]]", the cleaned text
+      // (directive-stripped) momentarily SHRINKS because the now-complete tag is
+      // removed.  A cleaned-prefix check (!cleaned.startsWith(existing)) would
+      // therefore fire as true even though no message boundary occurred, causing
+      // a false snapshot into priorSegments and duplicated/garbled output.
+      // Only the raw-prefix check (check 1) and delta===text check (check 2)
+      // should be used — NOT a cleaned-prefix check.
+      const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000);
+      const harness = createHarness({ now: 1_000 });
+      const { broadcast, chatRunState, handler } = harness;
+      chatRunState.registry.add("run-acp-directive", {
+        sessionKey: "session-1",
+        clientRunId: "client-acp-directive",
+      });
+
+      // First token: partial directive tag still visible in raw text (not yet stripped).
+      emitAssistantText({
+        handler,
+        runId: "run-acp-directive",
+        seq: 1,
+        text: "Hello [[reply_to:123",
+        delta: "Hello [[reply_to:123",
+        nowSpy,
+        time: 1_000,
+      });
+      // Partial tag passes through stripInlineDirectiveTagsForDisplay unchanged.
+      expect(lastDeltaText(broadcast)).toBe("Hello [[reply_to:123");
+
+      // Second token: tag is now complete — cleaned text shrinks (tag is stripped).
+      // Raw text grows monotonically so check 1 passes; delta !== text so check 2
+      // passes too.  No boundary should be detected.
+      emitAssistantText({
+        handler,
+        runId: "run-acp-directive",
+        seq: 2,
+        text: "Hello [[reply_to:123]] world",
+        delta: "]] world",
+        nowSpy,
+        time: 3_000,
+      });
+      // Cleaned text is now "Hello  world" (tag stripped) — no prior segment,
+      // no false boundary, and priorSegments must be empty.
+      expect(chatRunState.priorSegments.has("client-acp-directive")).toBe(false);
+      expect(lastDeltaText(broadcast)).not.toContain("\n\n");
+
+      nowSpy.mockRestore();
+    });
+
     it("cleans up priorSegments on abort", () => {
       const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000);
       const harness = createHarness({ now: 1_000 });

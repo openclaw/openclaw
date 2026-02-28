@@ -311,22 +311,14 @@ export function createAgentEventHandler({
     // Snapshot the current buffer as a prior segment so text from earlier
     // messages is preserved (#28180).
     //
-    // Three complementary checks, any of which triggers a snapshot:
+    // Two complementary checks, either of which triggers a snapshot:
     //
     // 1. Raw-text prefix check: within a single message the agent sends
     //    monotonically growing cumulative text, so the new raw text must start
     //    with the previous raw text.  Any raw text that is NOT a prefix-
     //    extension of the last raw text is a definite boundary.
     //
-    // 2. Cleaned-text prefix check: guards the case where the new message
-    //    begins with text that coincidentally extends the previous message's
-    //    raw text (e.g. old message = "Sure", new message starts "Sure, here…").
-    //    The cleaned (directive-stripped) buffer must also grow monotonically
-    //    within a message, so if the new cleaned text does not start with the
-    //    existing cleaned buffer it is a boundary even when raw text looked like
-    //    a continuation.
-    //
-    // 3. Single-shot message_end check: when the agent did not stream any
+    // 2. Single-shot message_end check: when the agent did not stream any
     //    deltas during a message (e.g. non-streaming providers, or the
     //    handleMessageEnd fast-path), it emits a single event where
     //    delta === text (the full message text is sent as both the cumulative
@@ -336,13 +328,21 @@ export function createAgentEventHandler({
     //    update of a fresh message.  If there is already an existing buffer,
     //    this is definitively a new message after a tool-call boundary, even
     //    when the new text happens to start with the prior message text.
+    //
+    // Note: a cleaned-text prefix check (!cleaned.startsWith(existing)) is NOT
+    // used here because directive-tag completion mid-stream can cause the
+    // cleaned text to momentarily shrink (a partial tag like "[[reply_to:123"
+    // passes through, then disappears once "[[reply_to:123]]" is complete),
+    // triggering false-positive boundaries in the ACP streaming path.  Check 1
+    // (raw prefix) catches genuine boundaries reliably; check 2 covers the
+    // single-shot case that raw-prefix alone would miss.
     const existing = chatRunState.buffers.get(clientRunId);
     const lastRaw = chatRunState.rawBuffers.get(clientRunId);
     const isBoundary =
       existing !== undefined &&
       existing !== "" &&
       lastRaw !== undefined &&
-      (!text.startsWith(lastRaw) || !cleaned.startsWith(existing) || delta === text);
+      (!text.startsWith(lastRaw) || delta === text);
     if (isBoundary) {
       const prior = chatRunState.priorSegments.get(clientRunId);
       chatRunState.priorSegments.set(clientRunId, prior ? `${prior}\n\n${existing}` : existing);
