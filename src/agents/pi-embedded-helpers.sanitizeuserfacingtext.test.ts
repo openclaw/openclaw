@@ -156,7 +156,8 @@ describe("stripThoughtSignatures", () => {
     expect(result).toEqual([
       { type: "text", text: "hello" },
       { type: "toolCall", id: "call_1", name: "read", arguments: {} },
-      { type: "thinking", thinking: "hmm" },
+      // thinking blocks are preserved verbatim — signature must not be stripped
+      { type: "thinking", thinking: "hmm", thought_signature: "msg_xyz" },
     ]);
   });
   it("handles empty array", () => {
