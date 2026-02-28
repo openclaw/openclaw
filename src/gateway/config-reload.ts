@@ -46,6 +46,8 @@ const DEFAULT_RELOAD_SETTINGS: GatewayReloadSettings = {
 };
 const MISSING_CONFIG_RETRY_DELAY_MS = 150;
 const MISSING_CONFIG_MAX_RETRIES = 2;
+const INVALID_CONFIG_INITIAL_BACKOFF_MS = 1_000;
+const INVALID_CONFIG_MAX_BACKOFF_MS = 5 * 60 * 1_000;
 
 const BASE_RELOAD_RULES: ReloadRule[] = [
   { prefix: "gateway.remote", kind: "none" },
@@ -274,6 +276,8 @@ export function startGatewayConfigReloader(opts: {
   let stopped = false;
   let restartQueued = false;
   let missingConfigRetries = 0;
+  let invalidConfigBackoffMs = 0;
+  let lastInvalidIssues = "";
 
   const scheduleAfter = (wait: number) => {
     if (stopped) {
@@ -325,10 +329,21 @@ export function startGatewayConfigReloader(opts: {
 
   const handleInvalidSnapshot = (snapshot: ConfigFileSnapshot): boolean => {
     if (snapshot.valid) {
+      // Config became valid again — reset backoff state.
+      invalidConfigBackoffMs = 0;
+      lastInvalidIssues = "";
       return false;
     }
     const issues = snapshot.issues.map((issue) => `${issue.path}: ${issue.message}`).join(", ");
-    opts.log.warn(`config reload skipped (invalid config): ${issues}`);
+    // Only log when the issues change to avoid log spam.
+    if (issues !== lastInvalidIssues) {
+      opts.log.warn(`config reload skipped (invalid config): ${issues}`);
+      lastInvalidIssues = issues;
+      invalidConfigBackoffMs = INVALID_CONFIG_INITIAL_BACKOFF_MS;
+    } else {
+      invalidConfigBackoffMs = Math.min(invalidConfigBackoffMs * 2, INVALID_CONFIG_MAX_BACKOFF_MS);
+    }
+    scheduleAfter(invalidConfigBackoffMs);
     return true;
   };
 

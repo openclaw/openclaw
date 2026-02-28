@@ -292,6 +292,138 @@ describe("startGatewayConfigReloader", () => {
     await reloader.stop();
   });
 
+  it("logs invalid config once and suppresses duplicate warnings", async () => {
+    const invalidSnapshot = makeSnapshot({
+      valid: false,
+      issues: [{ path: "channels.whatsapp.groups.*", message: 'Unrecognized key: "groupPolicy"' }],
+      hash: "invalid-1",
+    });
+    const readSnapshot = vi
+      .fn<() => Promise<ConfigFileSnapshot>>()
+      .mockResolvedValue(invalidSnapshot);
+    const { watcher, log, reloader } = createReloaderHarness(readSnapshot);
+
+    // First change event triggers the warning log.
+    watcher.emit("change");
+    await vi.runOnlyPendingTimersAsync();
+    expect(log.warn).toHaveBeenCalledTimes(1);
+    expect(log.warn).toHaveBeenCalledWith(
+      'config reload skipped (invalid config): channels.whatsapp.groups.*: Unrecognized key: "groupPolicy"',
+    );
+
+    // Backoff timer fires — same issues, so warning is NOT re-logged.
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(readSnapshot).toHaveBeenCalledTimes(2);
+    expect(log.warn).toHaveBeenCalledTimes(1);
+
+    await reloader.stop();
+  });
+
+  it("applies exponential backoff on repeated invalid configs", async () => {
+    const invalidSnapshot = makeSnapshot({
+      valid: false,
+      issues: [{ path: "bad.key", message: "Unrecognized key" }],
+      hash: "invalid-exp",
+    });
+    const readSnapshot = vi
+      .fn<() => Promise<ConfigFileSnapshot>>()
+      .mockResolvedValue(invalidSnapshot);
+    const { watcher, reloader } = createReloaderHarness(readSnapshot);
+
+    watcher.emit("change");
+    // Initial reload (debounce 0ms).
+    await vi.runOnlyPendingTimersAsync();
+    expect(readSnapshot).toHaveBeenCalledTimes(1);
+
+    // First backoff: 1s.
+    await vi.advanceTimersByTimeAsync(999);
+    expect(readSnapshot).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(readSnapshot).toHaveBeenCalledTimes(2);
+
+    // Second backoff: 2s (doubles).
+    await vi.advanceTimersByTimeAsync(1_999);
+    expect(readSnapshot).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(readSnapshot).toHaveBeenCalledTimes(3);
+
+    // Third backoff: 4s (doubles again).
+    await vi.advanceTimersByTimeAsync(3_999);
+    expect(readSnapshot).toHaveBeenCalledTimes(3);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(readSnapshot).toHaveBeenCalledTimes(4);
+
+    await reloader.stop();
+  });
+
+  it("resets backoff when config becomes valid", async () => {
+    const invalidSnapshot = makeSnapshot({
+      valid: false,
+      issues: [{ path: "bad.key", message: "Unrecognized key" }],
+      hash: "invalid-reset",
+    });
+    const validSnapshot = makeSnapshot({
+      config: { gateway: { reload: { debounceMs: 0 } }, hooks: { enabled: true } },
+      hash: "valid-reset",
+    });
+    const readSnapshot = vi
+      .fn<() => Promise<ConfigFileSnapshot>>()
+      .mockResolvedValueOnce(invalidSnapshot)
+      .mockResolvedValueOnce(validSnapshot)
+      .mockResolvedValueOnce(invalidSnapshot);
+    const { watcher, log, reloader } = createReloaderHarness(readSnapshot);
+
+    // First: invalid config, triggers warning.
+    watcher.emit("change");
+    await vi.runOnlyPendingTimersAsync();
+    expect(log.warn).toHaveBeenCalledTimes(1);
+
+    // Backoff fires, config is now valid — backoff resets.
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(readSnapshot).toHaveBeenCalledTimes(2);
+
+    // Another file change — invalid again; should log again (backoff was reset).
+    watcher.emit("change");
+    await vi.runOnlyPendingTimersAsync();
+    expect(log.warn).toHaveBeenCalledTimes(2);
+
+    await reloader.stop();
+  });
+
+  it("re-logs when invalid config issues change", async () => {
+    const snapshot1 = makeSnapshot({
+      valid: false,
+      issues: [{ path: "bad.key", message: "Unrecognized key" }],
+      hash: "invalid-a",
+    });
+    const snapshot2 = makeSnapshot({
+      valid: false,
+      issues: [{ path: "other.key", message: "Invalid type" }],
+      hash: "invalid-b",
+    });
+    const readSnapshot = vi
+      .fn<() => Promise<ConfigFileSnapshot>>()
+      .mockResolvedValueOnce(snapshot1)
+      .mockResolvedValueOnce(snapshot2);
+    const { watcher, log, reloader } = createReloaderHarness(readSnapshot);
+
+    watcher.emit("change");
+    await vi.runOnlyPendingTimersAsync();
+    expect(log.warn).toHaveBeenCalledTimes(1);
+    expect(log.warn).toHaveBeenCalledWith(
+      "config reload skipped (invalid config): bad.key: Unrecognized key",
+    );
+
+    // Backoff fires, different issues — should log again and reset backoff to initial.
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(log.warn).toHaveBeenCalledTimes(2);
+    expect(log.warn).toHaveBeenCalledWith(
+      "config reload skipped (invalid config): other.key: Invalid type",
+    );
+
+    await reloader.stop();
+  });
+
   it("contains restart callback failures and retries on subsequent changes", async () => {
     const readSnapshot = vi
       .fn<() => Promise<ConfigFileSnapshot>>()
