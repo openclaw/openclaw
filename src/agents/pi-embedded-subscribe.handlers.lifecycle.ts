@@ -40,6 +40,7 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext) {
     ctx.log.warn(
       `embedded run agent end: runId=${ctx.params.runId} isError=true error=${errorText}`,
     );
+    const usage = ctx.getUsageTotals();
     emitAgentEvent({
       runId: ctx.params.runId,
       stream: "lifecycle",
@@ -47,6 +48,7 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext) {
         phase: "error",
         error: errorText,
         endedAt: Date.now(),
+        usage,
       },
     });
     void ctx.params.onAgentEvent?.({
@@ -54,21 +56,24 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext) {
       data: {
         phase: "error",
         error: errorText,
+        usage,
       },
     });
   } else {
     ctx.log.debug(`embedded run agent end: runId=${ctx.params.runId} isError=${isError}`);
+    const usage = ctx.getUsageTotals();
     emitAgentEvent({
       runId: ctx.params.runId,
       stream: "lifecycle",
       data: {
         phase: "end",
         endedAt: Date.now(),
+        usage,
       },
     });
     void ctx.params.onAgentEvent?.({
       stream: "lifecycle",
-      data: { phase: "end" },
+      data: { phase: "end", usage },
     });
   }
 
