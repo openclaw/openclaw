@@ -324,6 +324,8 @@ export function buildSandboxCreateArgs(params: {
   allowSourcesOutsideAllowedRoots?: boolean;
   allowReservedContainerTargets?: boolean;
   allowContainerNamespaceJoin?: boolean;
+  /** Env var keys declared by skills (primaryEnv / requires.env) that bypass blocked-pattern checks. */
+  skillAllowedEnvKeys?: ReadonlySet<string>;
 }) {
   // Runtime security validation: blocks dangerous bind mounts, network modes, and profiles.
   validateSandboxSecurity({
@@ -365,7 +367,9 @@ export function buildSandboxCreateArgs(params: {
   if (params.cfg.user) {
     args.push("--user", params.cfg.user);
   }
-  const envSanitization = sanitizeEnvVars(params.cfg.env ?? {});
+  const envSanitization = sanitizeEnvVars(params.cfg.env ?? {}, {
+    allowedKeys: params.skillAllowedEnvKeys,
+  });
   if (envSanitization.blocked.length > 0) {
     log.warn(`Blocked sensitive environment variables: ${envSanitization.blocked.join(", ")}`);
   }
@@ -440,6 +444,7 @@ async function createSandboxContainer(params: {
   agentWorkspaceDir: string;
   scopeKey: string;
   configHash?: string;
+  skillAllowedEnvKeys?: ReadonlySet<string>;
 }) {
   const { name, cfg, workspaceDir, scopeKey } = params;
   await ensureDockerImage(cfg.image);
@@ -451,6 +456,7 @@ async function createSandboxContainer(params: {
     configHash: params.configHash,
     includeBinds: false,
     bindSourceRoots: [workspaceDir, params.agentWorkspaceDir],
+    skillAllowedEnvKeys: params.skillAllowedEnvKeys,
   });
   args.push("--workdir", cfg.workdir);
   appendWorkspaceMountArgs({
@@ -491,16 +497,24 @@ export async function ensureSandboxContainer(params: {
   workspaceDir: string;
   agentWorkspaceDir: string;
   cfg: SandboxConfig;
+  skillAllowedEnvKeys?: ReadonlySet<string>;
 }) {
   const scopeKey = resolveSandboxScopeKey(params.cfg.scope, params.sessionKey);
   const slug = params.cfg.scope === "shared" ? "shared" : slugifySessionKey(scopeKey);
   const name = `${params.cfg.docker.containerPrefix}${slug}`;
   const containerName = name.slice(0, 63);
+  // Only include skill env keys that are actually present in docker.env for hash stability.
+  const envKeys = params.cfg.docker.env ? Object.keys(params.cfg.docker.env) : [];
+  const effectiveSkillEnvKeys = params.skillAllowedEnvKeys?.size
+    ? envKeys.filter((k) => params.skillAllowedEnvKeys!.has(k)).toSorted()
+    : undefined;
+  const sortedSkillEnvKeys = effectiveSkillEnvKeys?.length ? effectiveSkillEnvKeys : undefined;
   const expectedHash = computeSandboxConfigHash({
     docker: params.cfg.docker,
     workspaceAccess: params.cfg.workspaceAccess,
     workspaceDir: params.workspaceDir,
     agentWorkspaceDir: params.agentWorkspaceDir,
+    skillAllowedEnvKeys: sortedSkillEnvKeys,
   });
   const now = Date.now();
   const state = await dockerContainerState(containerName);
@@ -548,6 +562,7 @@ export async function ensureSandboxContainer(params: {
       agentWorkspaceDir: params.agentWorkspaceDir,
       scopeKey,
       configHash: expectedHash,
+      skillAllowedEnvKeys: params.skillAllowedEnvKeys,
     });
   } else if (!running) {
     await execDocker(["start", containerName]);

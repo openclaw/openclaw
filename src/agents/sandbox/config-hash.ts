@@ -6,6 +6,8 @@ type SandboxHashInput = {
   workspaceAccess: SandboxWorkspaceAccess;
   workspaceDir: string;
   agentWorkspaceDir: string;
+  /** Sorted skill-declared env key names; affects which env vars the sanitizer passes through. */
+  skillAllowedEnvKeys?: string[];
 };
 
 type SandboxBrowserHashInput = {

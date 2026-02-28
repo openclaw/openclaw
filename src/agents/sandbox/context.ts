@@ -4,8 +4,24 @@ import { ensureBrowserControlAuth, resolveBrowserControlAuth } from "../../brows
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
 import { defaultRuntime } from "../../runtime.js";
+import { evaluateRuntimeEligibility } from "../../shared/config-eval.js";
 import { resolveUserPath } from "../../utils.js";
+import {
+  listAgentIds,
+  resolveAgentSkillsFilter,
+  resolveAgentWorkspaceDir,
+} from "../agent-scope.js";
 import { syncSkillsToWorkspace } from "../skills.js";
+import {
+  hasBinary,
+  isBundledSkillAllowed,
+  isConfigPathTruthy,
+  resolveBundledAllowlist,
+  resolveSkillConfig,
+} from "../skills/config.js";
+import { resolveSkillDeclaredEnvKeys } from "../skills/env-overrides.js";
+import { resolveSkillKey } from "../skills/frontmatter.js";
+import { loadWorkspaceSkillEntries } from "../skills/workspace.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR } from "../workspace.js";
 import { ensureSandboxBrowser } from "./browser.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
@@ -114,7 +130,7 @@ export async function resolveSandboxContext(params: {
   if (!resolved) {
     return null;
   }
-  const { rawSessionKey, cfg } = resolved;
+  const { rawSessionKey, runtime, cfg } = resolved;
 
   await maybePruneSandboxes(cfg);
 
@@ -131,11 +147,81 @@ export async function resolveSandboxContext(params: {
   });
   const resolvedCfg = docker === cfg.docker ? cfg : { ...cfg, docker };
 
+  // Collect env var names declared by active skills so the sandbox sanitizer can allow them through.
+  // For shared scope, build a union across all agents so hash/allowlist is stable.
+  let skillAllowedEnvKeys: Set<string> | undefined;
+  try {
+    let agentIds = [runtime.agentId];
+    if (cfg.scope === "shared" && params.config) {
+      // Only include agents that also use shared sandbox scope and have sandboxing enabled.
+      const candidates = [...new Set([...listAgentIds(params.config), runtime.agentId])];
+      agentIds = candidates.filter((id) => {
+        const agentSandbox = resolveSandboxConfigForAgent(params.config, id);
+        return agentSandbox.scope === "shared" && agentSandbox.mode !== "off";
+      });
+    }
+    const merged = new Set<string>();
+    for (const agentId of agentIds) {
+      // Use the active workspace for the current agent (honours explicit overrides),
+      // and resolve from config for other agents in shared scope.
+      const wsDir =
+        agentId === runtime.agentId
+          ? agentWorkspaceDir
+          : params.config
+            ? resolveAgentWorkspaceDir(params.config, agentId)
+            : agentWorkspaceDir;
+      // Load skill entries and apply the same filters as shouldIncludeSkill,
+      // except `hasEnv` is stubbed to `true` to avoid a bootstrap deadlock:
+      // the real check tests `requires.env` against the host, but the var may
+      // only exist in sandbox.docker.env. The per-agent skills allowlist is
+      // also applied so skills outside the agent's scope don't widen env access.
+      const entries = loadWorkspaceSkillEntries(wsDir, { config: params.config });
+      const allowBundled = resolveBundledAllowlist(params.config);
+      const agentSkillFilter = params.config
+        ? resolveAgentSkillsFilter(params.config, agentId)
+        : undefined;
+      let activeEntries = entries.filter((e) => {
+        const skillKey = resolveSkillKey(e.skill, e);
+        const skillCfg = resolveSkillConfig(params.config, skillKey);
+        if (skillCfg?.enabled === false) {
+          return false;
+        }
+        if (!isBundledSkillAllowed(e, allowBundled)) {
+          return false;
+        }
+        return evaluateRuntimeEligibility({
+          os: e.metadata?.os,
+          always: e.metadata?.always,
+          requires: e.metadata?.requires,
+          hasBin: hasBinary,
+          hasEnv: () => true,
+          isConfigPathTruthy: (configPath) => isConfigPathTruthy(params.config, configPath),
+        });
+      });
+      if (agentSkillFilter !== undefined) {
+        activeEntries = activeEntries.filter((e) => agentSkillFilter.includes(e.skill.name));
+      }
+      const declaredKeys = resolveSkillDeclaredEnvKeys(
+        activeEntries.map((e) => ({
+          primaryEnv: e.metadata?.primaryEnv,
+          requiredEnv: e.metadata?.requires?.env?.slice(),
+        })),
+      );
+      for (const key of declaredKeys) {
+        merged.add(key);
+      }
+    }
+    skillAllowedEnvKeys = merged.size > 0 ? merged : undefined;
+  } catch {
+    // Skill loading is best-effort; missing skills should not block sandbox creation.
+  }
+
   const containerName = await ensureSandboxContainer({
     sessionKey: rawSessionKey,
     workspaceDir,
     agentWorkspaceDir,
     cfg: resolvedCfg,
+    skillAllowedEnvKeys,
   });
 
   const evaluateEnabled =

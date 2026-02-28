@@ -291,4 +291,53 @@ describe("buildSandboxCreateArgs", () => {
     });
     expect(args).toEqual(expect.arrayContaining(["--network", "container:peer"]));
   });
+
+  it("passes skill-declared env keys through for soft-blocked patterns only", () => {
+    const cfg = createSandboxConfig({
+      env: {
+        NOTION_API_KEY: "ntn_xxx",
+        MY_SECRET: "s3cret",
+        OPENAI_API_KEY: "sk-live-xxx",
+        FOO: "bar",
+      },
+    });
+
+    const args = buildSandboxCreateArgs({
+      name: "openclaw-sbx-skill-env",
+      cfg,
+      scopeKey: "main",
+      createdAtMs: 1700000000000,
+      skillAllowedEnvKeys: new Set(["NOTION_API_KEY", "MY_SECRET"]),
+    });
+
+    expect(args).toEqual(expect.arrayContaining(["--env", "NOTION_API_KEY=ntn_xxx"]));
+    expect(args).toEqual(expect.arrayContaining(["--env", "MY_SECRET=s3cret"]));
+    expect(args).toEqual(expect.arrayContaining(["--env", "FOO=bar"]));
+    // OPENAI_API_KEY is hard-blocked — never unblocked by skill declarations
+    expect(args).not.toEqual(expect.arrayContaining(["--env", "OPENAI_API_KEY=sk-live-xxx"]));
+  });
+
+  it("never passes hard-blocked platform secrets even with skillAllowedEnvKeys", () => {
+    const cfg = createSandboxConfig({
+      env: {
+        GITHUB_TOKEN: "gh-token",
+        OPENCLAW_GATEWAY_TOKEN: "gw-token",
+        NOTION_API_KEY: "ntn_xxx",
+      },
+    });
+
+    const args = buildSandboxCreateArgs({
+      name: "openclaw-sbx-hard-deny",
+      cfg,
+      scopeKey: "main",
+      createdAtMs: 1700000000000,
+      skillAllowedEnvKeys: new Set(["GITHUB_TOKEN", "OPENCLAW_GATEWAY_TOKEN", "NOTION_API_KEY"]),
+    });
+
+    // Soft-blocked NOTION_API_KEY is allowed through
+    expect(args).toEqual(expect.arrayContaining(["--env", "NOTION_API_KEY=ntn_xxx"]));
+    // Hard-blocked keys remain blocked
+    expect(args).not.toEqual(expect.arrayContaining(["--env", "GITHUB_TOKEN=gh-token"]));
+    expect(args).not.toEqual(expect.arrayContaining(["--env", "OPENCLAW_GATEWAY_TOKEN=gw-token"]));
+  });
 });
