@@ -201,6 +201,12 @@ export async function waitForAgentJob(params: {
       scheduleErrorFinish(pending.snapshot, pending.dueAt - Date.now());
     }
 
+    const timerDelayMs = Math.max(1, Math.min(Math.floor(timeoutMs), 2_147_483_647));
+    // Use an inactivity timer rather than an absolute deadline.  Any lifecycle
+    // event (including "info" heartbeats) resets the timer, so the agent is
+    // only considered timed-out after `timerDelayMs` of complete silence.
+    let timer = setTimeout(() => finish(null), timerDelayMs);
+
     const unsubscribe = onAgentEvent((evt) => {
       if (!evt || evt.stream !== "lifecycle") {
         return;
@@ -208,6 +214,13 @@ export async function waitForAgentJob(params: {
       if (evt.runId !== runId) {
         return;
       }
+
+      // Any lifecycle activity for this run means the agent is still working.
+      // Reset the inactivity timer to prevent premature timeout during model
+      // fallback chains or long-running CLI operations.
+      clearTimeout(timer);
+      timer = setTimeout(() => finish(null), timerDelayMs);
+
       const phase = evt.data?.phase;
       if (phase === "start") {
         clearPendingErrorTimer();
@@ -233,9 +246,6 @@ export async function waitForAgentJob(params: {
       recordAgentRunSnapshot(snapshot);
       finish(snapshot);
     });
-
-    const timerDelayMs = Math.max(1, Math.min(Math.floor(timeoutMs), 2_147_483_647));
-    const timer = setTimeout(() => finish(null), timerDelayMs);
   });
 }
 
