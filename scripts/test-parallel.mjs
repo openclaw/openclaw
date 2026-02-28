@@ -86,6 +86,9 @@ const unitIsolatedFilesRaw = [
   "src/slack/monitor/slash.test.ts",
   // Uses process-level unhandledRejection listeners; keep it off vmForks to avoid cross-file leakage.
   "src/imessage/monitor.shutdown.unhandled-rejection.test.ts",
+  // Uses vi.useFakeTimers() with advanceTimersByTimeAsync; keep isolated from vmForks to
+  // avoid fake-timer state leaking into or from other files in the same worker.
+  "src/agents/sandbox/context.timeout.test.ts",
 ];
 const unitIsolatedFiles = unitIsolatedFilesRaw.filter((file) => fs.existsSync(file));
 

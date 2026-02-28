@@ -17,7 +17,11 @@ import { resolveSandboxScopeKey, resolveSandboxWorkspaceDir } from "./shared.js"
 import type { SandboxContext, SandboxDockerConfig, SandboxWorkspaceInfo } from "./types.js";
 import { ensureSandboxWorkspace } from "./workspace.js";
 
-/** Timeout for sandbox initialization (container + browser setup). */
+/**
+ * Timeout for sandbox initialization (Docker container start + browser setup).
+ * 60 s is generous enough for a warm container start but short enough to
+ * unblock the message pipeline when Docker is hung or unreachable.
+ */
 const SANDBOX_INIT_TIMEOUT_MS = 60_000;
 
 async function ensureSandboxWorkspaceLayout(params: {
@@ -118,22 +122,24 @@ export async function resolveSandboxContext(params: {
     return null;
   }
 
-  // Wrap sandbox initialization in a timeout to prevent hung Docker daemons
+  // Wrap sandbox initialization in a timeout to prevent a hung Docker daemon
   // from blocking the entire message processing pipeline indefinitely.
-  return Promise.race([
-    resolveSandboxContextInner(resolved, params),
-    new Promise<never>((_, reject) =>
-      setTimeout(
-        () =>
-          reject(
-            new Error(
-              `Sandbox initialization timed out after ${SANDBOX_INIT_TIMEOUT_MS}ms (Docker may be unresponsive)`,
-            ),
-          ),
-        SANDBOX_INIT_TIMEOUT_MS,
-      ),
-    ),
-  ]);
+  // The timer is cleared via .finally() so it cannot keep the event loop alive
+  // after initialization succeeds. timer.unref() allows the process to exit
+  // cleanly if the event loop is otherwise idle.
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      const msg = `Sandbox initialization timed out after ${SANDBOX_INIT_TIMEOUT_MS / 1000}s (Docker may be unresponsive)`;
+      defaultRuntime.error?.(msg);
+      reject(new Error(msg));
+    }, SANDBOX_INIT_TIMEOUT_MS);
+    timer.unref?.();
+  });
+
+  return Promise.race([resolveSandboxContextInner(resolved, params), timeoutPromise]).finally(() =>
+    clearTimeout(timer),
+  );
 }
 
 async function resolveSandboxContextInner(
