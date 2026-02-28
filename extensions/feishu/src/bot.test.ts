@@ -10,6 +10,7 @@ const {
   mockGetMessageFeishu,
   mockDownloadMessageResourceFeishu,
   mockCreateFeishuClient,
+  mockResolveAgentRoute,
 } = vi.hoisted(() => ({
   mockCreateFeishuReplyDispatcher: vi.fn(() => ({
     dispatcher: vi.fn(),
@@ -24,6 +25,12 @@ const {
     fileName: "clip.mp4",
   }),
   mockCreateFeishuClient: vi.fn(),
+  mockResolveAgentRoute: vi.fn(() => ({
+    agentId: "main",
+    accountId: "default",
+    sessionKey: "agent:main:feishu:dm:ou-attacker",
+    matchedBy: "default",
+  })),
 }));
 
 vi.mock("./reply-dispatcher.js", () => ({
@@ -120,6 +127,12 @@ describe("handleFeishuMessage command authorization", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockResolveAgentRoute.mockReturnValue({
+      agentId: "main",
+      accountId: "default",
+      sessionKey: "agent:main:feishu:dm:ou-attacker",
+      matchedBy: "default",
+    });
     mockCreateFeishuClient.mockReturnValue({
       contact: {
         user: {
@@ -133,12 +146,7 @@ describe("handleFeishuMessage command authorization", () => {
       },
       channel: {
         routing: {
-          resolveAgentRoute: vi.fn(() => ({
-            agentId: "main",
-            accountId: "default",
-            sessionKey: "agent:main:feishu:dm:ou-attacker",
-            matchedBy: "default",
-          })),
+          resolveAgentRoute: mockResolveAgentRoute,
         },
         reply: {
           resolveEnvelopeFormatOptions: vi.fn(() => ({ template: "channel+name+time" })),
@@ -537,6 +545,157 @@ describe("handleFeishuMessage command authorization", () => {
     expect(mockFinalizeInboundContext).toHaveBeenCalledWith(
       expect.objectContaining({
         BodyForAgent: expect.stringContaining("ou-perm: hello group"),
+      }),
+    );
+  });
+
+  it("routes group sessions by sender when groupSessionScope=group_sender", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          groups: {
+            "oc-group": {
+              requireMention: false,
+              groupSessionScope: "group_sender",
+            },
+          },
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: { sender_id: { open_id: "ou-scope-user" } },
+      message: {
+        message_id: "msg-scope-group-sender",
+        chat_id: "oc-group",
+        chat_type: "group",
+        message_type: "text",
+        content: JSON.stringify({ text: "group sender scope" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    expect(mockResolveAgentRoute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        peer: { kind: "group", id: "oc-group:sender:ou-scope-user" },
+        parentPeer: null,
+      }),
+    );
+  });
+
+  it("routes topic sessions and parentPeer when groupSessionScope=group_topic_sender", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          groups: {
+            "oc-group": {
+              requireMention: false,
+              groupSessionScope: "group_topic_sender",
+            },
+          },
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: { sender_id: { open_id: "ou-topic-user" } },
+      message: {
+        message_id: "msg-scope-topic-sender",
+        chat_id: "oc-group",
+        chat_type: "group",
+        root_id: "om_root_topic",
+        message_type: "text",
+        content: JSON.stringify({ text: "topic sender scope" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    expect(mockResolveAgentRoute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        peer: { kind: "group", id: "oc-group:topic:om_root_topic:sender:ou-topic-user" },
+        parentPeer: { kind: "group", id: "oc-group" },
+      }),
+    );
+  });
+
+  it("maps legacy topicSessionMode=enabled to group_topic routing", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          topicSessionMode: "enabled",
+          groups: {
+            "oc-group": {
+              requireMention: false,
+            },
+          },
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: { sender_id: { open_id: "ou-legacy" } },
+      message: {
+        message_id: "msg-legacy-topic-mode",
+        chat_id: "oc-group",
+        chat_type: "group",
+        root_id: "om_root_legacy",
+        message_type: "text",
+        content: JSON.stringify({ text: "legacy topic mode" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    expect(mockResolveAgentRoute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        peer: { kind: "group", id: "oc-group:topic:om_root_legacy" },
+        parentPeer: { kind: "group", id: "oc-group" },
+      }),
+    );
+  });
+
+  it("uses message_id as topic root when group_topic + replyInThread and no root_id", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          groups: {
+            "oc-group": {
+              requireMention: false,
+              groupSessionScope: "group_topic",
+              replyInThread: "enabled",
+            },
+          },
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: { sender_id: { open_id: "ou-topic-init" } },
+      message: {
+        message_id: "msg-new-topic-root",
+        chat_id: "oc-group",
+        chat_type: "group",
+        message_type: "text",
+        content: JSON.stringify({ text: "create topic" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    expect(mockResolveAgentRoute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        peer: { kind: "group", id: "oc-group:topic:msg-new-topic-root" },
+        parentPeer: { kind: "group", id: "oc-group" },
       }),
     );
   });
