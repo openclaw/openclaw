@@ -1,4 +1,5 @@
 import type { ChatType } from "../channels/chat-type.js";
+import type { SafeBinProfileFixture } from "../infra/exec-safe-bin-policy.js";
 import type { AgentElevatedAllowFromConfig, SessionSendPolicyAction } from "./types.base.js";
 
 export type MediaUnderstandingScopeMatch = {
@@ -175,6 +176,42 @@ export type GroupToolPolicyConfig = {
   deny?: string[];
 };
 
+export const TOOLS_BY_SENDER_KEY_TYPES = ["id", "e164", "username", "name"] as const;
+export type ToolsBySenderKeyType = (typeof TOOLS_BY_SENDER_KEY_TYPES)[number];
+
+export function parseToolsBySenderTypedKey(
+  rawKey: string,
+): { type: ToolsBySenderKeyType; value: string } | undefined {
+  const trimmed = rawKey.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const lowered = trimmed.toLowerCase();
+  for (const type of TOOLS_BY_SENDER_KEY_TYPES) {
+    const prefix = `${type}:`;
+    if (!lowered.startsWith(prefix)) {
+      continue;
+    }
+    return {
+      type,
+      value: trimmed.slice(prefix.length),
+    };
+  }
+  return undefined;
+}
+
+/**
+ * Per-sender overrides.
+ *
+ * Prefer explicit key prefixes:
+ * - id:<senderId>
+ * - e164:<phone>
+ * - username:<handle>
+ * - name:<display-name>
+ * - * (wildcard)
+ *
+ * Legacy unprefixed keys are supported for backward compatibility and are matched as senderId only.
+ */
 export type GroupToolPolicyBySenderConfig = Record<string, GroupToolPolicyConfig>;
 
 export type ExecToolConfig = {
@@ -190,6 +227,10 @@ export type ExecToolConfig = {
   pathPrepend?: string[];
   /** Safe stdin-only binaries that can run without allowlist entries. */
   safeBins?: string[];
+  /** Extra explicit directories trusted for safeBins path checks (never derived from PATH). */
+  safeBinTrustedDirs?: string[];
+  /** Optional custom safe-bin profiles for entries in tools.exec.safeBins. */
+  safeBinProfiles?: Record<string, SafeBinProfileFixture>;
   /** Default time (ms) before an exec command auto-backgrounds. */
   backgroundMs?: number;
   /** Default timeout (seconds) before auto-killing exec commands. */
@@ -273,7 +314,7 @@ export type MemorySearchConfig = {
     sessionMemory?: boolean;
   };
   /** Embedding provider mode. */
-  provider?: "openai" | "gemini" | "local" | "voyage";
+  provider?: "openai" | "gemini" | "local" | "voyage" | "mistral";
   remote?: {
     baseUrl?: string;
     apiKey?: string;
@@ -292,7 +333,7 @@ export type MemorySearchConfig = {
     };
   };
   /** Fallback behavior when embeddings fail. */
-  fallback?: "openai" | "gemini" | "local" | "voyage" | "none";
+  fallback?: "openai" | "gemini" | "local" | "voyage" | "mistral" | "none";
   /** Embedding model id (remote) or alias (local). */
   model?: string;
   /** Local embedding settings (node-llama-cpp). */
@@ -389,8 +430,8 @@ export type ToolsConfig = {
     search?: {
       /** Enable web search tool (default: true when API key is present). */
       enabled?: boolean;
-      /** Search provider ("brave", "perplexity", "grok", or "searxng"). */
-      provider?: "brave" | "perplexity" | "grok" | "searxng";
+      /** Search provider ("brave", "perplexity", "grok", "searxng", "gemini", or "kimi"). */
+      provider?: "brave" | "perplexity" | "grok" | "gemini" | "kimi" | "searxng";
       /** Brave Search API key (optional; defaults to BRAVE_API_KEY env var). */
       apiKey?: string;
       /** Default search results count (1-10). */
@@ -421,6 +462,22 @@ export type ToolsConfig = {
       searxng?: {
         /** Base URL for SearXNG API requests (defaults to http://127.0.0.1:8080). */
         baseUrl?: string;
+      };
+      /** Gemini-specific configuration (used when provider="gemini"). */
+      gemini?: {
+        /** Gemini API key (defaults to GEMINI_API_KEY env var). */
+        apiKey?: string;
+        /** Model to use for grounded search (defaults to "gemini-2.5-flash"). */
+        model?: string;
+      };
+      /** Kimi-specific configuration (used when provider="kimi"). */
+      kimi?: {
+        /** Moonshot/Kimi API key (defaults to KIMI_API_KEY or MOONSHOT_API_KEY env var). */
+        apiKey?: string;
+        /** Base URL for API requests (defaults to "https://api.moonshot.ai/v1"). */
+        baseUrl?: string;
+        /** Model to use (defaults to "moonshot-v1-128k"). */
+        model?: string;
       };
     };
     fetch?: {
@@ -525,6 +582,8 @@ export type ToolsConfig = {
     model?: string | { primary?: string; fallbacks?: string[] };
     tools?: {
       allow?: string[];
+      /** Additional allowlist entries merged into allow and/or default sub-agent denylist. */
+      alsoAllow?: string[];
       deny?: string[];
     };
   };

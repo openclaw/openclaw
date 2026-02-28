@@ -16,8 +16,13 @@ import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.j
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
 import { recordInboundSession } from "../../channels/session.js";
 import { loadConfig } from "../../config/config.js";
+import {
+  resolveOpenProviderRuntimeGroupPolicy,
+  resolveDefaultGroupPolicy,
+  warnMissingProviderGroupPolicyFallbackOnce,
+} from "../../config/runtime-group-policy.js";
 import { readSessionUpdatedAt, resolveStorePath } from "../../config/sessions.js";
-import { danger, logVerbose, shouldLogVerbose } from "../../globals.js";
+import { danger, logVerbose, shouldLogVerbose, warn } from "../../globals.js";
 import { normalizeScpRemoteHost } from "../../infra/scp-host.js";
 import { waitForTransportReady } from "../../infra/transport-ready.js";
 import { mediaKindFromMime } from "../../media/constants.js";
@@ -39,6 +44,7 @@ import { probeIMessage } from "../probe.js";
 import { sendMessageIMessage } from "../send.js";
 import { attachIMessageMonitorAbortHandler } from "./abort-handler.js";
 import { deliverReplies } from "./deliver.js";
+import { createSentMessageCache } from "./echo-cache.js";
 import {
   buildIMessageInboundContext,
   resolveIMessageInboundDecision,
@@ -75,51 +81,6 @@ async function detectRemoteHostFromCliPath(cliPath: string): Promise<string | un
   }
 }
 
-/**
- * Cache for recently sent messages, used for echo detection.
- * Keys are scoped by conversation (accountId:target) so the same text in different chats is not conflated.
- * Entries expire after 5 seconds; we do not forget on match so multiple echo deliveries are all filtered.
- */
-class SentMessageCache {
-  private cache = new Map<string, number>();
-  private readonly ttlMs = 5000; // 5 seconds
-
-  remember(scope: string, text: string): void {
-    if (!text?.trim()) {
-      return;
-    }
-    const key = `${scope}:${text.trim()}`;
-    this.cache.set(key, Date.now());
-    this.cleanup();
-  }
-
-  has(scope: string, text: string): boolean {
-    if (!text?.trim()) {
-      return false;
-    }
-    const key = `${scope}:${text.trim()}`;
-    const timestamp = this.cache.get(key);
-    if (!timestamp) {
-      return false;
-    }
-    const age = Date.now() - timestamp;
-    if (age > this.ttlMs) {
-      this.cache.delete(key);
-      return false;
-    }
-    return true;
-  }
-
-  private cleanup(): void {
-    const now = Date.now();
-    for (const [text, timestamp] of this.cache.entries()) {
-      if (now - timestamp > this.ttlMs) {
-        this.cache.delete(text);
-      }
-    }
-  }
-}
-
 export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): Promise<void> {
   const runtime = resolveRuntime(opts);
   const cfg = opts.config ?? loadConfig();
@@ -135,7 +96,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       DEFAULT_GROUP_HISTORY_LIMIT,
   );
   const groupHistories = new Map<string, HistoryEntry[]>();
-  const sentMessageCache = new SentMessageCache();
+  const sentMessageCache = createSentMessageCache();
   const textLimit = resolveTextChunkLimit(cfg, "imessage", accountInfo.accountId);
   const allowFrom = normalizeAllowList(opts.allowFrom ?? imessageCfg.allowFrom);
   const groupAllowFrom = normalizeAllowList(
@@ -143,8 +104,18 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       imessageCfg.groupAllowFrom ??
       (imessageCfg.allowFrom && imessageCfg.allowFrom.length > 0 ? imessageCfg.allowFrom : []),
   );
-  const defaultGroupPolicy = cfg.channels?.defaults?.groupPolicy;
-  const groupPolicy = imessageCfg.groupPolicy ?? defaultGroupPolicy ?? "open";
+  const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
+  const { groupPolicy, providerMissingFallbackApplied } = resolveOpenProviderRuntimeGroupPolicy({
+    providerConfigPresent: cfg.channels?.imessage !== undefined,
+    groupPolicy: imessageCfg.groupPolicy,
+    defaultGroupPolicy,
+  });
+  warnMissingProviderGroupPolicyFallbackOnce({
+    providerMissingFallbackApplied,
+    providerKey: "imessage",
+    accountId: accountInfo.accountId,
+    log: (message) => runtime.log?.(warn(message)),
+  });
   const dmPolicy = imessageCfg.dmPolicy ?? "pairing";
   const includeAttachments = opts.includeAttachments ?? imessageCfg.includeAttachments ?? false;
   const mediaMaxBytes = (opts.mediaMaxMb ?? imessageCfg.mediaMaxMb ?? 16) * 1024 * 1024;
@@ -259,7 +230,11 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         : "";
     const bodyText = messageText || placeholder;
 
-    const storeAllowFrom = await readChannelAllowFromStore("imessage").catch(() => []);
+    const storeAllowFrom = await readChannelAllowFromStore(
+      "imessage",
+      process.env,
+      accountInfo.accountId,
+    ).catch(() => []);
     const decision = resolveIMessageInboundDecision({
       cfg,
       accountId: accountInfo.accountId,
@@ -291,6 +266,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       const { code, created } = await upsertChannelPairingRequest({
         channel: "imessage",
         id: decision.senderId,
+        accountId: accountInfo.accountId,
         meta: {
           sender: decision.senderId,
           chatId: chatId ? String(chatId) : undefined,
@@ -508,3 +484,8 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     await client.stop();
   }
 }
+
+export const __testing = {
+  resolveIMessageRuntimeGroupPolicy: resolveOpenProviderRuntimeGroupPolicy,
+  resolveDefaultGroupPolicy,
+};

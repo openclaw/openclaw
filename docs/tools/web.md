@@ -1,10 +1,11 @@
 ---
-summary: "Web search + fetch tools (Brave Search API, Perplexity direct/OpenRouter, SearXNG)"
+summary: "Web search + fetch tools (Brave Search API, Perplexity direct/OpenRouter, SearXNG, Gemini Google Search grounding)"
 read_when:
   - You want to enable web_search or web_fetch
   - You need Brave Search API key setup
   - You want to use Perplexity Sonar for web search
   - You want to use a self-hosted SearXNG instance
+  - You want to use Gemini with Google Search grounding
 title: "Web Tools"
 ---
 
@@ -12,7 +13,7 @@ title: "Web Tools"
 
 OpenClaw ships two lightweight web tools:
 
-- `web_search` — Search the web via Brave Search API (default), Perplexity Sonar (direct or via OpenRouter), or SearXNG (self-hosted).
+- `web_search` — Search the web via Brave Search API (default), Perplexity Sonar, Gemini with Google Search grounding or SearXNG (self-hosted).
 - `web_fetch` — HTTP fetch + readable extraction (HTML → markdown/text).
 
 These are **not** browser automation. For JS-heavy sites or logins, use the
@@ -24,6 +25,7 @@ These are **not** browser automation. For JS-heavy sites or logins, use the
   - **Brave** (default): returns structured results (title, URL, snippet).
   - **Perplexity**: returns AI-synthesized answers with citations from real-time web search.
   - **SearXNG**: returns structured results from your self-hosted instance (no API key required).
+  - **Gemini**: returns AI-synthesized answers grounded in Google Search with citations.
 - Results are cached by query for 15 minutes (configurable).
 - `web_fetch` does a plain HTTP GET and extracts readable content
   (HTML → markdown/text). It does **not** execute JavaScript.
@@ -36,8 +38,22 @@ These are **not** browser automation. For JS-heavy sites or logins, use the
 | **Brave** (default) | Fast, structured results, free tier          | Traditional search results               | `BRAVE_API_KEY`                              |
 | **Perplexity**      | AI-synthesized answers, citations, real-time | Requires Perplexity or OpenRouter access | `OPENROUTER_API_KEY` or `PERPLEXITY_API_KEY` |
 | **SearXNG**         | Self-hosted, no API key, privacy-focused     | Requires hosting your own instance       | None required                                |
+| **Gemini**          | Google Search grounding, AI-synthesized      | Requires Gemini API key                  | `GEMINI_API_KEY`                             |
 
 See [Brave Search setup](/brave-search) and [Perplexity Sonar](/perplexity) for provider-specific details.
+
+### Auto-detection
+
+If no `provider` is explicitly set, OpenClaw auto-detects which provider to use based on available API keys, checking in this order:
+
+1. **Brave** — `BRAVE_API_KEY` env var or `search.apiKey` config
+2. **Gemini** — `GEMINI_API_KEY` env var or `search.gemini.apiKey` config
+3. **Perplexity** — `PERPLEXITY_API_KEY` / `OPENROUTER_API_KEY` env var or `search.perplexity.apiKey` config
+4. **Grok** — `XAI_API_KEY` env var or `search.grok.apiKey` config
+
+If no keys are found, it falls back to Brave (you'll get a missing-key error prompting you to configure one).
+
+### Explicit provider
 
 Set the provider in config:
 
@@ -46,7 +62,7 @@ Set the provider in config:
   tools: {
     web: {
       search: {
-        provider: "brave", // or "perplexity", "searxng"
+        provider: "brave", // or "perplexity", "searxng" or "gemini"
       },
     },
   },
@@ -231,6 +247,49 @@ docker compose up -d
 ```
 
 The `external: true` setting tells Docker to use an existing network (`openclaw_default`) rather than creating a new one. Once both containers are on the same network, they can communicate using their container names as hostnames.
+
+## Using Gemini (Google Search grounding)
+
+Gemini models support built-in [Google Search grounding](https://ai.google.dev/gemini-api/docs/grounding),
+which returns AI-synthesized answers backed by live Google Search results with citations.
+
+### Getting a Gemini API key
+
+1. Go to [Google AI Studio](https://aistudio.google.com/apikey)
+2. Create an API key
+3. Set `GEMINI_API_KEY` in the Gateway environment, or configure `tools.web.search.gemini.apiKey`
+
+### Setting up Gemini search
+
+```json5
+{
+  tools: {
+    web: {
+      search: {
+        provider: "gemini",
+        gemini: {
+          // API key (optional if GEMINI_API_KEY is set)
+          apiKey: "AIza...",
+          // Model (defaults to "gemini-2.5-flash")
+          model: "gemini-2.5-flash",
+        },
+      },
+    },
+  },
+}
+```
+
+**Environment alternative:** set `GEMINI_API_KEY` in the Gateway environment.
+For a gateway install, put it in `~/.openclaw/.env`.
+
+### Notes
+
+- Citation URLs from Gemini grounding are automatically resolved from Google's
+  redirect URLs to direct URLs.
+- Redirect resolution uses the SSRF guard path (HEAD + redirect checks + http/https validation) before returning the final citation URL.
+- This redirect resolver follows the trusted-network model (private/internal networks allowed by default) to match Gateway operator trust assumptions.
+- The default model (`gemini-2.5-flash`) is fast and cost-effective.
+  Any Gemini model that supports grounding can be used.
 
 ## web_search
 

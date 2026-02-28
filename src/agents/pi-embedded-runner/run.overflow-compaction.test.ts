@@ -2,7 +2,13 @@ import "./run.overflow-compaction.mocks.shared.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { pickFallbackThinkingLevel } from "../pi-embedded-helpers.js";
 import { runEmbeddedPiAgent } from "./run.js";
-import { makeAttemptResult, mockOverflowRetrySuccess } from "./run.overflow-compaction.fixture.js";
+import {
+  makeAttemptResult,
+  makeCompactionSuccess,
+  makeOverflowError,
+  mockOverflowRetrySuccess,
+  queueOverflowAttemptWithOversizedToolOutput,
+} from "./run.overflow-compaction.fixture.js";
 import { mockedGlobalHookRunner } from "./run.overflow-compaction.mocks.shared.js";
 import {
   mockedCompactDirect,
@@ -11,7 +17,6 @@ import {
   mockedTruncateOversizedToolResultsInSession,
   overflowBaseRunParams,
 } from "./run.overflow-compaction.shared-test.js";
-import type { EmbeddedRunAttemptResult } from "./run/types.js";
 const mockedPickFallbackThinkingLevel = vi.mocked(pickFallbackThinkingLevel);
 
 describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
@@ -67,24 +72,13 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
   });
 
   it("does not reset compaction attempt budget after successful tool-result truncation", async () => {
-    const overflowError = new Error("request_too_large: Request size exceeds model context window");
-
+    const overflowError = queueOverflowAttemptWithOversizedToolOutput(
+      mockedRunEmbeddedAttempt,
+      makeOverflowError(),
+    );
     mockedRunEmbeddedAttempt
-      .mockResolvedValueOnce(
-        makeAttemptResult({
-          promptError: overflowError,
-          messagesSnapshot: [
-            {
-              role: "assistant",
-              content: "big tool output",
-            } as unknown as EmbeddedRunAttemptResult["messagesSnapshot"][number],
-          ],
-        }),
-      )
       .mockResolvedValueOnce(makeAttemptResult({ promptError: overflowError }))
       .mockResolvedValueOnce(makeAttemptResult({ promptError: overflowError }))
-      .mockResolvedValueOnce(makeAttemptResult({ promptError: overflowError }))
-      // Keep one extra mocked response so legacy reset behavior does not crash the test.
       .mockResolvedValueOnce(makeAttemptResult({ promptError: overflowError }));
 
     mockedCompactDirect
@@ -93,16 +87,20 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
         compacted: false,
         reason: "nothing to compact",
       })
-      .mockResolvedValueOnce({
-        ok: true,
-        compacted: true,
-        result: { summary: "Compacted 2", firstKeptEntryId: "entry-5", tokensBefore: 160000 },
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        compacted: true,
-        result: { summary: "Compacted 3", firstKeptEntryId: "entry-7", tokensBefore: 140000 },
-      });
+      .mockResolvedValueOnce(
+        makeCompactionSuccess({
+          summary: "Compacted 2",
+          firstKeptEntryId: "entry-5",
+          tokensBefore: 160000,
+        }),
+      )
+      .mockResolvedValueOnce(
+        makeCompactionSuccess({
+          summary: "Compacted 3",
+          firstKeptEntryId: "entry-7",
+          tokensBefore: 140000,
+        }),
+      );
 
     mockedSessionLikelyHasOversizedToolResults.mockReturnValue(true);
     mockedTruncateOversizedToolResultsInSession.mockResolvedValueOnce({
@@ -119,9 +117,9 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
   });
 
   it("returns retry_limit when repeated retries never converge", async () => {
-    mockedRunEmbeddedAttempt.mockReset();
-    mockedCompactDirect.mockReset();
-    mockedPickFallbackThinkingLevel.mockReset();
+    mockedRunEmbeddedAttempt.mockClear();
+    mockedCompactDirect.mockClear();
+    mockedPickFallbackThinkingLevel.mockClear();
     mockedRunEmbeddedAttempt.mockResolvedValue(
       makeAttemptResult({ promptError: new Error("unsupported reasoning mode") }),
     );

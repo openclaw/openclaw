@@ -35,6 +35,10 @@ vi.mock("../version.js", () => ({
   VERSION: "1.0.0",
 }));
 
+vi.mock("../process/exec.js", () => ({
+  runCommandWithTimeout: vi.fn(),
+}));
+
 describe("update-startup", () => {
   let suiteRoot = "";
   let suiteCase = 0;
@@ -44,7 +48,9 @@ describe("update-startup", () => {
   let resolveOpenClawPackageRoot: (typeof import("./openclaw-root.js"))["resolveOpenClawPackageRoot"];
   let checkUpdateStatus: (typeof import("./update-check.js"))["checkUpdateStatus"];
   let resolveNpmChannelTag: (typeof import("./update-check.js"))["resolveNpmChannelTag"];
+  let runCommandWithTimeout: (typeof import("../process/exec.js"))["runCommandWithTimeout"];
   let runGatewayUpdateCheck: (typeof import("./update-startup.js"))["runGatewayUpdateCheck"];
+  let scheduleGatewayUpdateCheck: (typeof import("./update-startup.js"))["scheduleGatewayUpdateCheck"];
   let getUpdateAvailable: (typeof import("./update-startup.js"))["getUpdateAvailable"];
   let resetUpdateAvailableStateForTest: (typeof import("./update-startup.js"))["resetUpdateAvailableStateForTest"];
   let loaded = false;
@@ -70,13 +76,19 @@ describe("update-startup", () => {
     if (!loaded) {
       ({ resolveOpenClawPackageRoot } = await import("./openclaw-root.js"));
       ({ checkUpdateStatus, resolveNpmChannelTag } = await import("./update-check.js"));
-      ({ runGatewayUpdateCheck, getUpdateAvailable, resetUpdateAvailableStateForTest } =
-        await import("./update-startup.js"));
+      ({ runCommandWithTimeout } = await import("../process/exec.js"));
+      ({
+        runGatewayUpdateCheck,
+        scheduleGatewayUpdateCheck,
+        getUpdateAvailable,
+        resetUpdateAvailableStateForTest,
+      } = await import("./update-startup.js"));
       loaded = true;
     }
     vi.mocked(resolveOpenClawPackageRoot).mockClear();
     vi.mocked(checkUpdateStatus).mockClear();
     vi.mocked(resolveNpmChannelTag).mockClear();
+    vi.mocked(runCommandWithTimeout).mockClear();
     resetUpdateAvailableStateForTest();
   });
 
@@ -94,7 +106,7 @@ describe("update-startup", () => {
     suiteCase = 0;
   });
 
-  async function runUpdateCheckAndReadState(channel: "stable" | "beta") {
+  function mockPackageUpdateStatus(tag = "latest", version = "2.0.0") {
     vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue("/opt/openclaw");
     vi.mocked(checkUpdateStatus).mockResolvedValue({
       root: "/opt/openclaw",
@@ -102,9 +114,13 @@ describe("update-startup", () => {
       packageManager: "npm",
     } satisfies UpdateCheckResult);
     vi.mocked(resolveNpmChannelTag).mockResolvedValue({
-      tag: "latest",
-      version: "2.0.0",
+      tag,
+      version,
     });
+  }
+
+  async function runUpdateCheckAndReadState(channel: "stable" | "beta") {
+    mockPackageUpdateStatus("latest", "2.0.0");
 
     const log = { info: vi.fn() };
     await runGatewayUpdateCheck({
@@ -122,6 +138,13 @@ describe("update-startup", () => {
       lastAvailableTag?: string;
     };
     return { log, parsed };
+  }
+
+  function createAutoUpdateSuccessMock() {
+    return vi.fn().mockResolvedValue({
+      ok: true,
+      code: 0,
+    });
   }
 
   it.each([
@@ -237,5 +260,173 @@ describe("update-startup", () => {
 
     expect(log.info).not.toHaveBeenCalled();
     await expect(fs.stat(path.join(tempDir, "update-check.json"))).rejects.toThrow();
+  });
+
+  it("defers stable auto-update until rollout window is due", async () => {
+    mockPackageUpdateStatus("latest", "2.0.0");
+
+    const runAutoUpdate = vi.fn().mockResolvedValue({
+      ok: true,
+      code: 0,
+    });
+    const stableAutoConfig = {
+      update: {
+        channel: "stable" as const,
+        auto: {
+          enabled: true,
+          stableDelayHours: 6,
+          stableJitterHours: 12,
+        },
+      },
+    };
+
+    await runGatewayUpdateCheck({
+      cfg: stableAutoConfig,
+      log: { info: vi.fn() },
+      isNixMode: false,
+      allowInTests: true,
+      runAutoUpdate,
+    });
+    expect(runAutoUpdate).not.toHaveBeenCalled();
+
+    vi.setSystemTime(new Date("2026-01-18T07:00:00Z"));
+    await runGatewayUpdateCheck({
+      cfg: stableAutoConfig,
+      log: { info: vi.fn() },
+      isNixMode: false,
+      allowInTests: true,
+      runAutoUpdate,
+    });
+
+    expect(runAutoUpdate).toHaveBeenCalledTimes(1);
+    expect(runAutoUpdate).toHaveBeenCalledWith({
+      channel: "stable",
+      timeoutMs: 45 * 60 * 1000,
+      root: "/opt/openclaw",
+    });
+  });
+
+  it("runs beta auto-update checks hourly when enabled", async () => {
+    mockPackageUpdateStatus("beta", "2.0.0-beta.1");
+    const runAutoUpdate = createAutoUpdateSuccessMock();
+
+    await runGatewayUpdateCheck({
+      cfg: {
+        update: {
+          channel: "beta",
+          auto: {
+            enabled: true,
+            betaCheckIntervalHours: 1,
+          },
+        },
+      },
+      log: { info: vi.fn() },
+      isNixMode: false,
+      allowInTests: true,
+      runAutoUpdate,
+    });
+
+    expect(runAutoUpdate).toHaveBeenCalledTimes(1);
+    expect(runAutoUpdate).toHaveBeenCalledWith({
+      channel: "beta",
+      timeoutMs: 45 * 60 * 1000,
+      root: "/opt/openclaw",
+    });
+  });
+
+  it("runs auto-update when checkOnStart is false but auto-update is enabled", async () => {
+    mockPackageUpdateStatus("beta", "2.0.0-beta.1");
+    const runAutoUpdate = createAutoUpdateSuccessMock();
+
+    await runGatewayUpdateCheck({
+      cfg: {
+        update: {
+          checkOnStart: false,
+          channel: "beta",
+          auto: {
+            enabled: true,
+            betaCheckIntervalHours: 1,
+          },
+        },
+      },
+      log: { info: vi.fn() },
+      isNixMode: false,
+      allowInTests: true,
+      runAutoUpdate,
+    });
+
+    expect(runAutoUpdate).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses current runtime + entrypoint for default auto-update command execution", async () => {
+    vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue("/opt/openclaw");
+    vi.mocked(checkUpdateStatus).mockResolvedValue({
+      root: "/opt/openclaw",
+      installKind: "package",
+      packageManager: "npm",
+    } satisfies UpdateCheckResult);
+    vi.mocked(resolveNpmChannelTag).mockResolvedValue({
+      tag: "beta",
+      version: "2.0.0-beta.1",
+    });
+    vi.mocked(runCommandWithTimeout).mockResolvedValue({
+      stdout: "{}",
+      stderr: "",
+      code: 0,
+      signal: null,
+      killed: false,
+      termination: "exit",
+    });
+
+    const originalArgv = process.argv.slice();
+    process.argv = [process.execPath, "/opt/openclaw/dist/entry.js"];
+    try {
+      await runGatewayUpdateCheck({
+        cfg: {
+          update: {
+            channel: "beta",
+            auto: {
+              enabled: true,
+              betaCheckIntervalHours: 1,
+            },
+          },
+        },
+        log: { info: vi.fn() },
+        isNixMode: false,
+        allowInTests: true,
+      });
+    } finally {
+      process.argv = originalArgv;
+    }
+
+    expect(runCommandWithTimeout).toHaveBeenCalledWith(
+      [
+        process.execPath,
+        "/opt/openclaw/dist/entry.js",
+        "update",
+        "--yes",
+        "--channel",
+        "beta",
+        "--json",
+      ],
+      expect.objectContaining({
+        timeoutMs: 45 * 60 * 1000,
+        env: expect.objectContaining({
+          OPENCLAW_AUTO_UPDATE: "1",
+        }),
+      }),
+    );
+  });
+
+  it("scheduleGatewayUpdateCheck returns a cleanup function", async () => {
+    mockPackageUpdateStatus("latest", "2.0.0");
+
+    const stop = scheduleGatewayUpdateCheck({
+      cfg: { update: { channel: "stable" } },
+      log: { info: vi.fn() },
+      isNixMode: false,
+    });
+    expect(typeof stop).toBe("function");
+    stop();
   });
 });

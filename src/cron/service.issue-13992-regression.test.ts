@@ -1,55 +1,39 @@
 import { describe, expect, it } from "vitest";
+import { createMockCronStateForJobs } from "./service.test-harness.js";
 import { recomputeNextRunsForMaintenance } from "./service/jobs.js";
-import type { CronServiceState } from "./service/state.js";
 import type { CronJob } from "./types.js";
 
-describe("issue #13992 regression - cron jobs skip execution", () => {
-  function createMockState(jobs: CronJob[]): CronServiceState {
-    return {
-      store: { version: 1, jobs },
-      running: false,
-      timer: null,
-      storeLoadedAtMs: Date.now(),
-      storeFileMtimeMs: null,
-      op: Promise.resolve(),
-      warnedDisabled: false,
-      deps: {
-        storePath: "/mock/path",
-        cronEnabled: true,
-        nowMs: () => Date.now(),
-        enqueueSystemEvent: () => {},
-        requestHeartbeatNow: () => {},
-        runIsolatedAgentJob: async () => ({ status: "ok" }),
-        log: {
-          debug: () => {},
-          info: () => {},
-          warn: () => {},
-          error: () => {},
-        } as never,
-      },
-    };
-  }
+function createCronSystemEventJob(now: number, overrides: Partial<CronJob> = {}): CronJob {
+  const { state, ...jobOverrides } = overrides;
+  return {
+    id: "test-job",
+    name: "test job",
+    enabled: true,
+    schedule: { kind: "cron", expr: "0 8 * * *", tz: "UTC" },
+    payload: { kind: "systemEvent", text: "test" },
+    sessionTarget: "main",
+    wakeMode: "next-heartbeat",
+    createdAtMs: now,
+    updatedAtMs: now,
+    ...jobOverrides,
+    state: state ? { ...state } : {},
+  };
+}
 
+describe("issue #13992 regression - cron jobs skip execution", () => {
   it("should NOT recompute nextRunAtMs for past-due jobs during maintenance", () => {
     const now = Date.now();
     const pastDue = now - 60_000; // 1 minute ago
 
-    const job: CronJob = {
-      id: "test-job",
-      name: "test job",
-      enabled: true,
-      schedule: { kind: "cron", expr: "0 8 * * *", tz: "UTC" },
-      payload: { kind: "systemEvent", text: "test" },
-      sessionTarget: "main",
-      wakeMode: "next-heartbeat",
+    const job = createCronSystemEventJob(now, {
       createdAtMs: now - 3600_000,
       updatedAtMs: now - 3600_000,
       state: {
         nextRunAtMs: pastDue, // This is in the past and should NOT be recomputed
       },
-    };
+    });
 
-    const state = createMockState([job]);
+    const state = createMockCronStateForJobs({ jobs: [job], nowMs: now });
     recomputeNextRunsForMaintenance(state);
 
     // Should not have changed the past-due nextRunAtMs
@@ -59,22 +43,13 @@ describe("issue #13992 regression - cron jobs skip execution", () => {
   it("should compute missing nextRunAtMs during maintenance", () => {
     const now = Date.now();
 
-    const job: CronJob = {
-      id: "test-job",
-      name: "test job",
-      enabled: true,
-      schedule: { kind: "cron", expr: "0 8 * * *", tz: "UTC" },
-      payload: { kind: "systemEvent", text: "test" },
-      sessionTarget: "main",
-      wakeMode: "next-heartbeat",
-      createdAtMs: now,
-      updatedAtMs: now,
+    const job = createCronSystemEventJob(now, {
       state: {
         // nextRunAtMs is missing
       },
-    };
+    });
 
-    const state = createMockState([job]);
+    const state = createMockCronStateForJobs({ jobs: [job], nowMs: now });
     recomputeNextRunsForMaintenance(state);
 
     // Should have computed a nextRunAtMs
@@ -86,22 +61,14 @@ describe("issue #13992 regression - cron jobs skip execution", () => {
     const now = Date.now();
     const futureTime = now + 3600_000;
 
-    const job: CronJob = {
-      id: "test-job",
-      name: "test job",
+    const job = createCronSystemEventJob(now, {
       enabled: false, // Disabled
-      schedule: { kind: "cron", expr: "0 8 * * *", tz: "UTC" },
-      payload: { kind: "systemEvent", text: "test" },
-      sessionTarget: "main",
-      wakeMode: "next-heartbeat",
-      createdAtMs: now,
-      updatedAtMs: now,
       state: {
         nextRunAtMs: futureTime,
       },
-    };
+    });
 
-    const state = createMockState([job]);
+    const state = createMockCronStateForJobs({ jobs: [job], nowMs: now });
     recomputeNextRunsForMaintenance(state);
 
     // Should have cleared nextRunAtMs for disabled job
@@ -113,23 +80,14 @@ describe("issue #13992 regression - cron jobs skip execution", () => {
     const stuckTime = now - 3 * 60 * 60_000; // 3 hours ago (> 2 hour threshold)
     const futureTime = now + 3600_000;
 
-    const job: CronJob = {
-      id: "test-job",
-      name: "test job",
-      enabled: true,
-      schedule: { kind: "cron", expr: "0 8 * * *", tz: "UTC" },
-      payload: { kind: "systemEvent", text: "test" },
-      sessionTarget: "main",
-      wakeMode: "next-heartbeat",
-      createdAtMs: now,
-      updatedAtMs: now,
+    const job = createCronSystemEventJob(now, {
       state: {
         nextRunAtMs: futureTime,
         runningAtMs: stuckTime, // Stuck running marker
       },
-    };
+    });
 
-    const state = createMockState([job]);
+    const state = createMockCronStateForJobs({ jobs: [job], nowMs: now });
     recomputeNextRunsForMaintenance(state);
 
     // Should have cleared stuck running marker
@@ -172,7 +130,7 @@ describe("issue #13992 regression - cron jobs skip execution", () => {
       },
     };
 
-    const state = createMockState([dueJob, malformedJob]);
+    const state = createMockCronStateForJobs({ jobs: [dueJob, malformedJob], nowMs: now });
 
     expect(() => recomputeNextRunsForMaintenance(state)).not.toThrow();
     expect(dueJob.state.nextRunAtMs).toBe(pastDue);

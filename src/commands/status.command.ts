@@ -37,6 +37,33 @@ import {
   resolveUpdateAvailability,
 } from "./status.update.js";
 
+function resolvePairingRecoveryContext(params: {
+  error?: string | null;
+  closeReason?: string | null;
+}): { requestId: string | null } | null {
+  const sanitizeRequestId = (value: string): string | null => {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return null;
+    }
+    // Keep CLI guidance injection-safe: allow only compact id characters.
+    if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(trimmed)) {
+      return null;
+    }
+    return trimmed;
+  };
+  const source = [params.error, params.closeReason]
+    .filter((part) => typeof part === "string" && part.trim().length > 0)
+    .join(" ");
+  if (!source || !/pairing required/i.test(source)) {
+    return null;
+  }
+  const requestIdMatch = source.match(/requestId:\s*([^\s)]+)/i);
+  const requestId =
+    requestIdMatch && requestIdMatch[1] ? sanitizeRequestId(requestIdMatch[1]) : null;
+  return { requestId: requestId || null };
+}
+
 export async function statusCommand(
   opts: {
     json?: boolean;
@@ -230,12 +257,16 @@ export async function statusCommand(
     const suffix = self ? ` · ${self}` : "";
     return `${gatewayMode} · ${target} · ${reach}${auth}${suffix}`;
   })();
+  const pairingRecovery = resolvePairingRecoveryContext({
+    error: gatewayProbe?.error ?? null,
+    closeReason: gatewayProbe?.close?.reason ?? null,
+  });
 
   const agentsValue = (() => {
     const pending =
       agentStatus.bootstrapPendingCount > 0
-        ? `${agentStatus.bootstrapPendingCount} bootstrapping`
-        : "no bootstraps";
+        ? `${agentStatus.bootstrapPendingCount} bootstrap file${agentStatus.bootstrapPendingCount === 1 ? "" : "s"} present`
+        : "no bootstrap files";
     const def = agentStatus.agents.find((a) => a.id === agentStatus.defaultId);
     const defActive = def?.lastActiveAgeMs != null ? formatTimeAgo(def.lastActiveAgeMs) : "unknown";
     const defSuffix = def ? ` · default ${def.id} active ${defActive}` : "";
@@ -398,6 +429,20 @@ export async function statusCommand(
       rows: overviewRows,
     }).trimEnd(),
   );
+
+  if (pairingRecovery) {
+    runtime.log("");
+    runtime.log(theme.warn("Gateway pairing approval required."));
+    if (pairingRecovery.requestId) {
+      runtime.log(
+        theme.muted(
+          `Recovery: ${formatCliCommand(`openclaw devices approve ${pairingRecovery.requestId}`)}`,
+        ),
+      );
+    }
+    runtime.log(theme.muted(`Fallback: ${formatCliCommand("openclaw devices approve --latest")}`));
+    runtime.log(theme.muted(`Inspect: ${formatCliCommand("openclaw devices list")}`));
+  }
 
   runtime.log("");
   runtime.log(theme.heading("Security audit"));

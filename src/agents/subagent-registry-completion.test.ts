@@ -42,7 +42,7 @@ describe("emitSubagentEndedHookOnce", () => {
   };
 
   beforeEach(() => {
-    lifecycleMocks.getGlobalHookRunner.mockReset();
+    lifecycleMocks.getGlobalHookRunner.mockClear();
     lifecycleMocks.runSubagentEnded.mockClear();
   });
 

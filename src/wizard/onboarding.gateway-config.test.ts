@@ -43,6 +43,20 @@ describe("configureGatewayForOnboarding", () => {
     };
   }
 
+  function createQuickstartGateway(authMode: "token" | "password") {
+    return {
+      hasExisting: false,
+      port: 18789,
+      bind: "loopback" as const,
+      authMode,
+      tailscaleMode: "off" as const,
+      token: undefined,
+      password: undefined,
+      customBindHost: undefined,
+      tailscaleResetOnExit: false,
+    };
+  }
+
   it("generates a token when the prompt returns undefined", async () => {
     mocks.randomToken.mockReturnValue("generated-token");
 
@@ -57,17 +71,7 @@ describe("configureGatewayForOnboarding", () => {
       baseConfig: {},
       nextConfig: {},
       localPort: 18789,
-      quickstartGateway: {
-        hasExisting: false,
-        port: 18789,
-        bind: "loopback",
-        authMode: "token",
-        tailscaleMode: "off",
-        token: undefined,
-        password: undefined,
-        customBindHost: undefined,
-        tailscaleResetOnExit: false,
-      },
+      quickstartGateway: createQuickstartGateway("token"),
       prompter,
       runtime,
     });
@@ -97,17 +101,7 @@ describe("configureGatewayForOnboarding", () => {
       baseConfig: {},
       nextConfig: {},
       localPort: 18789,
-      quickstartGateway: {
-        hasExisting: false,
-        port: 18789,
-        bind: "loopback",
-        authMode: "password",
-        tailscaleMode: "off",
-        token: undefined,
-        password: undefined,
-        customBindHost: undefined,
-        tailscaleResetOnExit: false,
-      },
+      quickstartGateway: createQuickstartGateway("password"),
       prompter,
       runtime,
     });
@@ -116,5 +110,30 @@ describe("configureGatewayForOnboarding", () => {
     expect(authConfig?.mode).toBe("password");
     expect(authConfig?.password).toBe("");
     expect(authConfig?.password).not.toBe("undefined");
+  });
+
+  it("seeds control UI allowed origins for non-loopback binds", async () => {
+    mocks.randomToken.mockReturnValue("generated-token");
+
+    const prompter = createPrompter({
+      selectQueue: ["lan", "token", "off"],
+      textQueue: ["18789", undefined],
+    });
+    const runtime = createRuntime();
+
+    const result = await configureGatewayForOnboarding({
+      flow: "advanced",
+      baseConfig: {},
+      nextConfig: {},
+      localPort: 18789,
+      quickstartGateway: createQuickstartGateway("token"),
+      prompter,
+      runtime,
+    });
+
+    expect(result.nextConfig.gateway?.controlUi?.allowedOrigins).toEqual([
+      "http://localhost:18789",
+      "http://127.0.0.1:18789",
+    ]);
   });
 });

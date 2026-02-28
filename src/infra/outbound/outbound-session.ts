@@ -9,6 +9,7 @@ import { parseIMessageTarget, normalizeIMessageHandle } from "../../imessage/tar
 import { buildAgentSessionKey, type RoutePeer } from "../../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../../routing/session-key.js";
 import {
+  looksLikeUuid,
   resolveSignalPeerId,
   resolveSignalRecipient,
   resolveSignalSender,
@@ -44,21 +45,8 @@ export type ResolveOutboundSessionRouteParams = {
   threadId?: string | number | null;
 };
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const UUID_COMPACT_RE = /^[0-9a-f]{32}$/i;
 // Cache Slack channel type lookups to avoid repeated API calls.
 const SLACK_CHANNEL_TYPE_CACHE = new Map<string, "channel" | "group" | "dm" | "unknown">();
-
-function looksLikeUuid(value: string): boolean {
-  if (UUID_RE.test(value) || UUID_COMPACT_RE.test(value)) {
-    return true;
-  }
-  const compact = value.replace(/-/g, "");
-  if (!/^[0-9a-f]+$/i.test(compact)) {
-    return false;
-  }
-  return /[a-f]/i.test(compact);
-}
 
 function normalizeThreadId(value?: string | number | null): string | undefined {
   if (value == null) {
@@ -669,9 +657,15 @@ function resolveNextcloudTalkSession(
 function resolveZaloSession(
   params: ResolveOutboundSessionRouteParams,
 ): OutboundSessionRoute | null {
-  const trimmed = stripProviderPrefix(params.target, "zalo")
-    .replace(/^(zl):/i, "")
-    .trim();
+  return resolveZaloLikeSession(params, "zalo", /^(zl):/i);
+}
+
+function resolveZaloLikeSession(
+  params: ResolveOutboundSessionRouteParams,
+  channel: "zalo" | "zalouser",
+  aliasPrefix: RegExp,
+): OutboundSessionRoute | null {
+  const trimmed = stripProviderPrefix(params.target, channel).replace(aliasPrefix, "").trim();
   if (!trimmed) {
     return null;
   }
@@ -681,7 +675,7 @@ function resolveZaloSession(
   const baseSessionKey = buildBaseSessionKey({
     cfg: params.cfg,
     agentId: params.agentId,
-    channel: "zalo",
+    channel,
     accountId: params.accountId,
     peer,
   });
@@ -690,39 +684,16 @@ function resolveZaloSession(
     baseSessionKey,
     peer,
     chatType: isGroup ? "group" : "direct",
-    from: isGroup ? `zalo:group:${peerId}` : `zalo:${peerId}`,
-    to: `zalo:${peerId}`,
+    from: isGroup ? `${channel}:group:${peerId}` : `${channel}:${peerId}`,
+    to: `${channel}:${peerId}`,
   };
 }
 
 function resolveZalouserSession(
   params: ResolveOutboundSessionRouteParams,
 ): OutboundSessionRoute | null {
-  const trimmed = stripProviderPrefix(params.target, "zalouser")
-    .replace(/^(zlu):/i, "")
-    .trim();
-  if (!trimmed) {
-    return null;
-  }
-  const isGroup = trimmed.toLowerCase().startsWith("group:");
-  const peerId = stripKindPrefix(trimmed);
   // Keep DM vs group aligned with inbound sessions for Zalo Personal.
-  const peer: RoutePeer = { kind: isGroup ? "group" : "direct", id: peerId };
-  const baseSessionKey = buildBaseSessionKey({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    channel: "zalouser",
-    accountId: params.accountId,
-    peer,
-  });
-  return {
-    sessionKey: baseSessionKey,
-    baseSessionKey,
-    peer,
-    chatType: isGroup ? "group" : "direct",
-    from: isGroup ? `zalouser:group:${peerId}` : `zalouser:${peerId}`,
-    to: `zalouser:${peerId}`,
-  };
+  return resolveZaloLikeSession(params, "zalouser", /^(zlu):/i);
 }
 
 function resolveNostrSession(
@@ -815,7 +786,7 @@ function resolveTlonSession(
 
 /**
  * Feishu ID formats:
- * - oc_xxx: chat_id (group chat)
+ * - oc_xxx: chat_id (can be group or DM, use chat_mode to distinguish or explicit dm:/group: prefix)
  * - ou_xxx: user open_id (DM)
  * - on_xxx: user union_id (DM)
  * - cli_xxx: app_id (not a valid send target)
@@ -831,20 +802,27 @@ function resolveFeishuSession(
 
   const lower = trimmed.toLowerCase();
   let isGroup = false;
+  let typeExplicit = false;
 
   if (lower.startsWith("group:") || lower.startsWith("chat:")) {
     trimmed = trimmed.replace(/^(group|chat):/i, "").trim();
     isGroup = true;
+    typeExplicit = true;
   } else if (lower.startsWith("user:") || lower.startsWith("dm:")) {
     trimmed = trimmed.replace(/^(user|dm):/i, "").trim();
     isGroup = false;
+    typeExplicit = true;
   }
 
   const idLower = trimmed.toLowerCase();
-  if (idLower.startsWith("oc_")) {
-    isGroup = true;
-  } else if (idLower.startsWith("ou_") || idLower.startsWith("on_")) {
-    isGroup = false;
+  // Only infer type from ID prefix if not explicitly specified
+  // Note: oc_ is a chat_id and can be either group or DM (must check chat_mode from API)
+  // Only ou_/on_ can be reliably identified as user IDs (always DM)
+  if (!typeExplicit) {
+    if (idLower.startsWith("ou_") || idLower.startsWith("on_")) {
+      isGroup = false;
+    }
+    // oc_ requires explicit prefix: dm:oc_xxx or group:oc_xxx
   }
 
   const peer: RoutePeer = {

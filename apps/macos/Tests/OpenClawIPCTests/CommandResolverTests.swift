@@ -66,6 +66,48 @@ import Testing
         }
     }
 
+    @Test func prefersOpenClawBinaryOverPnpm() async throws {
+        let defaults = self.makeDefaults()
+        defaults.set(AppState.ConnectionMode.local.rawValue, forKey: connectionModeKey)
+
+        let tmp = try makeTempDir()
+        CommandResolver.setProjectRoot(tmp.path)
+
+        let binDir = tmp.appendingPathComponent("bin")
+        let openclawPath = binDir.appendingPathComponent("openclaw")
+        let pnpmPath = binDir.appendingPathComponent("pnpm")
+        try self.makeExec(at: openclawPath)
+        try self.makeExec(at: pnpmPath)
+
+        let cmd = CommandResolver.openclawCommand(
+            subcommand: "rpc",
+            defaults: defaults,
+            configRoot: [:],
+            searchPaths: [binDir.path])
+
+        #expect(cmd.prefix(2).elementsEqual([openclawPath.path, "rpc"]))
+    }
+
+    @Test func usesOpenClawBinaryWithoutNodeRuntime() async throws {
+        let defaults = self.makeDefaults()
+        defaults.set(AppState.ConnectionMode.local.rawValue, forKey: connectionModeKey)
+
+        let tmp = try makeTempDir()
+        CommandResolver.setProjectRoot(tmp.path)
+
+        let binDir = tmp.appendingPathComponent("bin")
+        let openclawPath = binDir.appendingPathComponent("openclaw")
+        try self.makeExec(at: openclawPath)
+
+        let cmd = CommandResolver.openclawCommand(
+            subcommand: "gateway",
+            defaults: defaults,
+            configRoot: [:],
+            searchPaths: [binDir.path])
+
+        #expect(cmd.prefix(2).elementsEqual([openclawPath.path, "gateway"]))
+    }
+
     @Test func fallsBackToPnpm() async throws {
         let defaults = self.makeDefaults()
         defaults.set(AppState.ConnectionMode.local.rawValue, forKey: connectionModeKey)
@@ -76,7 +118,11 @@ import Testing
         let pnpmPath = tmp.appendingPathComponent("node_modules/.bin/pnpm")
         try self.makeExec(at: pnpmPath)
 
-        let cmd = CommandResolver.openclawCommand(subcommand: "rpc", defaults: defaults, configRoot: [:])
+        let cmd = CommandResolver.openclawCommand(
+            subcommand: "rpc",
+            defaults: defaults,
+            configRoot: [:],
+            searchPaths: [tmp.appendingPathComponent("node_modules/.bin").path])
 
         #expect(cmd.prefix(4).elementsEqual([pnpmPath.path, "--silent", "openclaw", "rpc"]))
     }
@@ -95,7 +141,8 @@ import Testing
             subcommand: "health",
             extraArgs: ["--json", "--timeout", "5"],
             defaults: defaults,
-            configRoot: [:])
+            configRoot: [:],
+            searchPaths: [tmp.appendingPathComponent("node_modules/.bin").path])
 
         #expect(cmd.prefix(5).elementsEqual([pnpmPath.path, "--silent", "openclaw", "health", "--json"]))
         #expect(cmd.suffix(2).elementsEqual(["--timeout", "5"]))

@@ -91,7 +91,7 @@ vi.mock("../../config/sessions.js", async (importOriginal) => {
 describe("agent components", () => {
   const createCfg = (): OpenClawConfig => ({}) as OpenClawConfig;
 
-  const createDmButtonInteraction = (overrides: Partial<ButtonInteraction> = {}) => {
+  const createBaseDmInteraction = (overrides: Record<string, unknown> = {}) => {
     const reply = vi.fn().mockResolvedValue(undefined);
     const defer = vi.fn().mockResolvedValue(undefined);
     const interaction = {
@@ -100,22 +100,31 @@ describe("agent components", () => {
       defer,
       reply,
       ...overrides,
-    } as unknown as ButtonInteraction;
+    };
     return { interaction, defer, reply };
   };
 
-  const createDmSelectInteraction = (overrides: Partial<StringSelectMenuInteraction> = {}) => {
-    const reply = vi.fn().mockResolvedValue(undefined);
-    const defer = vi.fn().mockResolvedValue(undefined);
-    const interaction = {
-      rawData: { channel_id: "dm-channel" },
-      user: { id: "123456789", username: "Alice", discriminator: "1234" },
-      values: ["alpha"],
+  const createDmButtonInteraction = (overrides: Partial<ButtonInteraction> = {}) => {
+    const { interaction, defer, reply } = createBaseDmInteraction(
+      overrides as Record<string, unknown>,
+    );
+    return {
+      interaction: interaction as unknown as ButtonInteraction,
       defer,
       reply,
-      ...overrides,
-    } as unknown as StringSelectMenuInteraction;
-    return { interaction, defer, reply };
+    };
+  };
+
+  const createDmSelectInteraction = (overrides: Partial<StringSelectMenuInteraction> = {}) => {
+    const { interaction, defer, reply } = createBaseDmInteraction({
+      values: ["alpha"],
+      ...(overrides as Record<string, unknown>),
+    });
+    return {
+      interaction: interaction as unknown as StringSelectMenuInteraction,
+      defer,
+      reply,
+    };
   };
 
   beforeEach(() => {
@@ -161,6 +170,7 @@ describe("agent components", () => {
     const select = createAgentSelectMenu({
       cfg: createCfg(),
       accountId: "default",
+      discordConfig: { dangerouslyAllowNameMatching: true } as DiscordAccountConfig,
       dmPolicy: "allowlist",
       allowFrom: ["Alice#1234"],
     });
@@ -381,6 +391,70 @@ describe("discord component interactions", () => {
     expect(resolveDiscordModalEntry({ id: "mdl_1" })).toBeNull();
   });
 
+  it("does not mark guild modal events as command-authorized for non-allowlisted users", async () => {
+    registerDiscordComponentEntries({
+      entries: [],
+      modals: [createModalEntry()],
+    });
+
+    const modal = createDiscordComponentModal(
+      createComponentContext({
+        cfg: {
+          commands: { useAccessGroups: true },
+          channels: { discord: { replyToMode: "first" } },
+        } as OpenClawConfig,
+        allowFrom: ["owner-1"],
+      }),
+    );
+    const { interaction, acknowledge } = createModalInteraction({
+      rawData: {
+        channel_id: "guild-channel",
+        guild_id: "guild-1",
+        id: "interaction-guild-1",
+        member: { roles: [] },
+      } as unknown as ModalInteraction["rawData"],
+      guild: { id: "guild-1", name: "Test Guild" } as unknown as ModalInteraction["guild"],
+    });
+
+    await modal.run(interaction, { mid: "mdl_1" } as ComponentData);
+
+    expect(acknowledge).toHaveBeenCalledTimes(1);
+    expect(dispatchReplyMock).toHaveBeenCalledTimes(1);
+    expect(lastDispatchCtx?.CommandAuthorized).toBe(false);
+  });
+
+  it("marks guild modal events as command-authorized for allowlisted users", async () => {
+    registerDiscordComponentEntries({
+      entries: [],
+      modals: [createModalEntry()],
+    });
+
+    const modal = createDiscordComponentModal(
+      createComponentContext({
+        cfg: {
+          commands: { useAccessGroups: true },
+          channels: { discord: { replyToMode: "first" } },
+        } as OpenClawConfig,
+        allowFrom: ["123456789"],
+      }),
+    );
+    const { interaction, acknowledge } = createModalInteraction({
+      rawData: {
+        channel_id: "guild-channel",
+        guild_id: "guild-1",
+        id: "interaction-guild-2",
+        member: { roles: [] },
+      } as unknown as ModalInteraction["rawData"],
+      guild: { id: "guild-1", name: "Test Guild" } as unknown as ModalInteraction["guild"],
+    });
+
+    await modal.run(interaction, { mid: "mdl_1" } as ComponentData);
+
+    expect(acknowledge).toHaveBeenCalledTimes(1);
+    expect(dispatchReplyMock).toHaveBeenCalledTimes(1);
+    expect(lastDispatchCtx?.CommandAuthorized).toBe(true);
+  });
+
   it("keeps reusable modal entries active after submission", async () => {
     const { acknowledge } = await runModalSubmission({ reusable: true });
 
@@ -417,13 +491,20 @@ describe("resolveDiscordOwnerAllowFrom", () => {
     expect(result).toEqual(["123"]);
   });
 
-  it("returns the normalized name slug for name matches", () => {
-    const result = resolveDiscordOwnerAllowFrom({
+  it("returns the normalized name slug for name matches only when enabled", () => {
+    const defaultResult = resolveDiscordOwnerAllowFrom({
       channelConfig: { allowed: true, users: ["Some User"] } as DiscordChannelConfigResolved,
       sender: { id: "999", name: "Some User" },
     });
+    expect(defaultResult).toBeUndefined();
 
-    expect(result).toEqual(["some-user"]);
+    const enabledResult = resolveDiscordOwnerAllowFrom({
+      channelConfig: { allowed: true, users: ["Some User"] } as DiscordChannelConfigResolved,
+      sender: { id: "999", name: "Some User" },
+      allowNameMatching: true,
+    });
+
+    expect(enabledResult).toEqual(["some-user"]);
   });
 });
 
