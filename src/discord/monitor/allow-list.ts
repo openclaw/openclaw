@@ -316,33 +316,42 @@ export function resolveDiscordOwnerAllowedWithRoles(params: {
   memberRoleIds?: string[];
   allowNameMatching?: boolean;
 }): { configured: boolean; allowed: boolean } {
-  const userAllowList = normalizeDiscordAllowList(params.allowFrom, ["discord:", "user:", "pk:"]);
-  if (!userAllowList) {
+  if (!params.allowFrom || params.allowFrom.length === 0) {
     return { configured: false, allowed: false };
   }
-  // Check user-based match first
-  const userOk = allowListMatches(
-    userAllowList,
-    { id: params.userId, name: params.userName, tag: params.userTag },
-    { allowNameMatching: params.allowNameMatching },
-  );
-  if (userOk) {
-    return { configured: true, allowed: true };
+  // Separate role: entries from user entries to prevent cross-contamination:
+  // - role: entries must not leak into name matching (name matching bypass)
+  // - bare numeric entries must not match as role IDs (privilege escalation)
+  const userEntries: string[] = [];
+  const roleEntries: string[] = [];
+  for (const entry of params.allowFrom) {
+    const trimmed = entry.trim();
+    if (trimmed.startsWith("role:")) {
+      roleEntries.push(trimmed);
+    } else {
+      userEntries.push(trimmed);
+    }
   }
-  // Check role-based entries in allowFrom (guild context only)
-  if (params.memberRoleIds && params.memberRoleIds.length > 0) {
-    const roleOk = resolveDiscordRoleAllowed({
-      allowList: params.allowFrom,
-      memberRoleIds: params.memberRoleIds,
-    });
-    // resolveDiscordRoleAllowed returns true when no role: entries exist (no restriction),
-    // but here we only want a positive match when there are explicit role: entries
-    // that matched. Since userAllowList is non-null (checked above), allowFrom is non-empty,
-    // so roleOk=true means either no role entries (all went to names) or a real match.
-    // We need to distinguish: check if any role: entries actually exist.
-    const roleAllowList = normalizeDiscordAllowList(params.allowFrom, ["role:"]);
-    if (roleAllowList && roleAllowList.ids.size > 0 && roleOk) {
+  // Check user-based match (discord:, user:, pk: prefixes + bare IDs)
+  const userAllowList = normalizeDiscordAllowList(userEntries, ["discord:", "user:", "pk:"]);
+  if (userAllowList) {
+    const userOk = allowListMatches(
+      userAllowList,
+      { id: params.userId, name: params.userName, tag: params.userTag },
+      { allowNameMatching: params.allowNameMatching },
+    );
+    if (userOk) {
       return { configured: true, allowed: true };
+    }
+  }
+  // Check role-based entries (guild context only)
+  if (roleEntries.length > 0 && params.memberRoleIds && params.memberRoleIds.length > 0) {
+    const roleAllowList = normalizeDiscordAllowList(roleEntries, ["role:"]);
+    if (roleAllowList && roleAllowList.ids.size > 0) {
+      const roleOk = params.memberRoleIds.some((roleId) => roleAllowList.ids.has(roleId));
+      if (roleOk) {
+        return { configured: true, allowed: true };
+      }
     }
   }
   return { configured: true, allowed: false };

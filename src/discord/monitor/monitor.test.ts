@@ -685,6 +685,29 @@ describe("resolveDiscordOwnerAllowedWithRoles", () => {
 
     expect(result).toEqual({ configured: true, allowed: true });
   });
+
+  it("bare numeric entry does not match as role ID", () => {
+    // A bare numeric in allowFrom should only match as a user ID, never as a role ID
+    const result = resolveDiscordOwnerAllowedWithRoles({
+      allowFrom: ["999888777666555444"],
+      userId: "different-user",
+      memberRoleIds: ["999888777666555444"],
+    });
+
+    expect(result).toEqual({ configured: true, allowed: false });
+  });
+
+  it("role: entries do not leak into name matching", () => {
+    // role: entries must not be treated as names even with allowNameMatching
+    const result = resolveDiscordOwnerAllowedWithRoles({
+      allowFrom: ["role:111111111111111111"],
+      userId: "different-user",
+      userName: "role:111111111111111111",
+      allowNameMatching: true,
+    });
+
+    expect(result).toEqual({ configured: true, allowed: false });
+  });
 });
 
 describe("resolveDiscordRoleAllowed", () => {
