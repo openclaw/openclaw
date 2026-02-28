@@ -272,9 +272,6 @@ export function createTelegramBot(opts: TelegramBotOptions) {
   const groupAllowFrom =
     opts.groupAllowFrom ??
     telegramCfg.groupAllowFrom ??
-    (telegramCfg.allowFrom && telegramCfg.allowFrom.length > 0
-      ? telegramCfg.allowFrom
-      : undefined) ??
     (opts.allowFrom && opts.allowFrom.length > 0 ? opts.allowFrom : undefined);
   const replyToMode = opts.replyToMode ?? telegramCfg.replyToMode ?? "off";
   const nativeEnabled = resolveNativeCommandsEnabled({
