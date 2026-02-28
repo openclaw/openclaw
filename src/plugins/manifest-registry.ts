@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveUserPath } from "../utils.js";
 import { normalizePluginsConfig, type NormalizedPluginsConfig } from "./config-state.js";
@@ -153,13 +154,13 @@ export function loadPluginManifestRegistry(params: {
 
   const discovery = params.candidates
     ? {
-        candidates: params.candidates,
-        diagnostics: params.diagnostics ?? [],
-      }
+      candidates: params.candidates,
+      diagnostics: params.diagnostics ?? [],
+    }
     : discoverOpenClawPlugins({
-        workspaceDir: params.workspaceDir,
-        extraPaths: normalized.loadPaths,
-      });
+      workspaceDir: params.workspaceDir,
+      extraPaths: normalized.loadPaths,
+    });
   const diagnostics: PluginDiagnostic[] = [...discovery.diagnostics];
   const candidates: PluginCandidate[] = discovery.candidates;
   const records: PluginManifestRecord[] = [];
@@ -198,9 +199,16 @@ export function loadPluginManifestRegistry(params: {
       // Check whether both candidates point to the same physical directory
       // (e.g. via symlinks or different path representations). If so, this
       // is a false-positive duplicate and can be silently skipped.
-      const existingReal = safeRealpathSync(existing.candidate.rootDir, realpathCache);
-      const candidateReal = safeRealpathSync(candidate.rootDir, realpathCache);
-      const samePlugin = Boolean(existingReal && candidateReal && existingReal === candidateReal);
+      // Fall back to path.resolve() when safeRealpathSync returns null (e.g.
+      // on Windows or when the path contains unresolvable ".." segments) so
+      // that lexically-equivalent paths are still recognised as the same plugin.
+      const existingReal =
+        safeRealpathSync(existing.candidate.rootDir, realpathCache) ??
+        path.resolve(existing.candidate.rootDir);
+      const candidateReal =
+        safeRealpathSync(candidate.rootDir, realpathCache) ??
+        path.resolve(candidate.rootDir);
+      const samePlugin = existingReal === candidateReal;
       if (samePlugin) {
         // Prefer higher-precedence origins even if candidates are passed in
         // an unexpected order (config > workspace > global > bundled).
