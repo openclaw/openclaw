@@ -68,6 +68,45 @@ type PendingOutboundMessageId = {
 const pendingOutboundMessageIds: PendingOutboundMessageId[] = [];
 let pendingOutboundMessageIdCounter = 0;
 
+type PairingReadInput = Parameters<
+  BlueBubblesCoreRuntime["channel"]["pairing"]["readAllowFromStore"]
+>[0];
+type PairingUpsertInput = Parameters<
+  BlueBubblesCoreRuntime["channel"]["pairing"]["upsertPairingRequest"]
+>[0];
+
+function createScopedPairingAccessCompat(params: {
+  core: BlueBubblesCoreRuntime;
+  channel: "bluebubbles";
+  accountId: string;
+}) {
+  if (typeof createScopedPairingAccess === "function") {
+    return createScopedPairingAccess(params);
+  }
+
+  // Compatibility fallback for older plugin-sdk builds missing createScopedPairingAccess.
+  const resolvedAccountId = String(params.accountId || "default");
+  return {
+    accountId: resolvedAccountId,
+    readAllowFromStore: () =>
+      params.core.channel.pairing.readAllowFromStore({
+        channel: params.channel,
+        accountId: resolvedAccountId,
+      }),
+    readStoreForDmPolicy: (provider: PairingReadInput["channel"], accountId: string) =>
+      params.core.channel.pairing.readAllowFromStore({
+        channel: provider,
+        accountId: String(accountId || "default"),
+      }),
+    upsertPairingRequest: (input: Omit<PairingUpsertInput, "channel" | "accountId">) =>
+      params.core.channel.pairing.upsertPairingRequest({
+        channel: params.channel,
+        accountId: resolvedAccountId,
+        ...input,
+      }),
+  };
+}
+
 function trimOrUndefined(value?: string | null): string | undefined {
   const trimmed = value?.trim();
   return trimmed ? trimmed : undefined;
@@ -422,7 +461,7 @@ export async function processMessage(
   target: WebhookTarget,
 ): Promise<void> {
   const { account, config, runtime, core, statusSink } = target;
-  const pairing = createScopedPairingAccess({
+  const pairing = createScopedPairingAccessCompat({
     core,
     channel: "bluebubbles",
     accountId: account.accountId,
@@ -1387,7 +1426,7 @@ export async function processReaction(
   target: WebhookTarget,
 ): Promise<void> {
   const { account, config, runtime, core } = target;
-  const pairing = createScopedPairingAccess({
+  const pairing = createScopedPairingAccessCompat({
     core,
     channel: "bluebubbles",
     accountId: account.accountId,
