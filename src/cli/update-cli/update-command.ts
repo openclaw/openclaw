@@ -28,6 +28,7 @@ import {
   resolveGlobalPackageRoot,
 } from "../../infra/update-global.js";
 import { runGatewayUpdate, type UpdateRunResult } from "../../infra/update-runner.js";
+import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
 import { syncPluginsForUpdateChannel, updateNpmInstalledPlugins } from "../../plugins/update.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -106,6 +107,33 @@ function resolveGatewayInstallEntrypointCandidates(root?: string): string[] {
   ];
 }
 
+async function resolveUpdatedInstallRoot(fallbackRoot?: string): Promise<string | undefined> {
+  const lookup = process.platform === "win32" ? ["where", "openclaw"] : ["which", "openclaw"];
+  try {
+    const res = await runCommandWithTimeout(lookup, { timeoutMs: 5_000 });
+    if (res.code === 0) {
+      const binaryPath = res.stdout
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .find(Boolean);
+      if (binaryPath) {
+        const resolved = await resolveOpenClawPackageRoot({ argv1: binaryPath, cwd: process.cwd() });
+        if (resolved) {
+          return resolved;
+        }
+      }
+    }
+  } catch {
+    // ignore; fall back to current process context
+  }
+
+  const fromArgv = await resolveOpenClawPackageRoot({
+    argv1: process.argv[1],
+    cwd: process.cwd(),
+  });
+  return fromArgv ?? fallbackRoot;
+}
+
 function formatCommandFailure(stdout: string, stderr: string): string {
   const detail = (stderr || stdout).trim();
   if (!detail) {
@@ -182,7 +210,8 @@ async function refreshGatewayServiceEnv(params: {
     args.push("--json");
   }
 
-  for (const candidate of resolveGatewayInstallEntrypointCandidates(params.result.root)) {
+  const installRoot = await resolveUpdatedInstallRoot(params.result.root);
+  for (const candidate of resolveGatewayInstallEntrypointCandidates(installRoot)) {
     if (!(await pathExists(candidate))) {
       continue;
     }

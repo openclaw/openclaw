@@ -558,26 +558,55 @@ describe("update-cli", () => {
     expect(runDaemonRestart).not.toHaveBeenCalled();
   });
 
-  it("updateCommand refreshes service env from updated install root when available", async () => {
-    const root = createCaseDir("openclaw-updated-root");
-    await fs.mkdir(path.join(root, "dist"), { recursive: true });
-    await fs.writeFile(path.join(root, "dist", "entry.js"), "console.log('ok');\n", "utf8");
+  it("updateCommand refreshes service env from currently installed root after package update", async () => {
+    const staleRoot = createCaseDir("openclaw-stale-root");
+    const currentRoot = createCaseDir("openclaw-current-root");
+    await fs.mkdir(path.join(staleRoot, "dist"), { recursive: true });
+    await fs.writeFile(path.join(staleRoot, "dist", "entry.js"), "console.log('stale');\n", "utf8");
+    await fs.mkdir(path.join(currentRoot, "dist"), { recursive: true });
+    await fs.writeFile(path.join(currentRoot, "dist", "index.js"), "console.log('current');\n", "utf8");
 
     vi.mocked(runGatewayUpdate).mockResolvedValue({
       status: "ok",
       mode: "npm",
-      root,
+      root: staleRoot,
       steps: [],
       durationMs: 100,
     });
     serviceLoaded.mockResolvedValue(true);
+    vi.mocked(runCommandWithTimeout).mockImplementation(async (argv) => {
+      if (argv[0] === "which" && argv[1] === "openclaw") {
+        return {
+          stdout: "/usr/local/bin/openclaw\n",
+          stderr: "",
+          code: 0,
+          signal: null,
+          killed: false,
+          termination: "exit",
+        };
+      }
+      return {
+        stdout: "",
+        stderr: "",
+        code: 0,
+        signal: null,
+        killed: false,
+        termination: "exit",
+      };
+    });
+    vi.mocked(resolveOpenClawPackageRoot).mockImplementation(async ({ argv1 }) => {
+      if (argv1 === "/usr/local/bin/openclaw") {
+        return currentRoot;
+      }
+      return staleRoot;
+    });
 
     await updateCommand({});
 
     expect(runCommandWithTimeout).toHaveBeenCalledWith(
       [
         expect.stringMatching(/node/),
-        path.join(root, "dist", "entry.js"),
+        path.join(currentRoot, "dist", "index.js"),
         "gateway",
         "install",
         "--force",
