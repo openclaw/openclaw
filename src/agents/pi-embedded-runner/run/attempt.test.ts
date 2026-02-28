@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../../../config/config.js";
 import {
   isOllamaCompatProvider,
   resolveAttemptFsWorkspaceOnly,
+  resolveOllamaCompatNumCtxEnabled,
   resolvePromptBuildHookResult,
   resolvePromptModeForSession,
   wrapOllamaCompatNumCtx,
@@ -226,5 +227,40 @@ describe("wrapOllamaCompatNumCtx", () => {
     expect(baseFn).toHaveBeenCalledTimes(1);
     expect((payloadSeen?.options as Record<string, unknown> | undefined)?.num_ctx).toBe(202752);
     expect(downstream).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("resolveOllamaCompatNumCtxEnabled", () => {
+  it("defaults to true when config is missing", () => {
+    expect(resolveOllamaCompatNumCtxEnabled({ providerId: "ollama" })).toBe(true);
+  });
+
+  it("defaults to true when provider config is missing", () => {
+    expect(
+      resolveOllamaCompatNumCtxEnabled({
+        config: { models: { providers: {} } },
+        providerId: "ollama",
+      }),
+    ).toBe(true);
+  });
+
+  it("returns false when provider flag is explicitly disabled", () => {
+    expect(
+      resolveOllamaCompatNumCtxEnabled({
+        config: {
+          models: {
+            providers: {
+              ollama: {
+                baseUrl: "http://127.0.0.1:11434/v1",
+                api: "openai-completions",
+                injectNumCtxForOpenAICompat: false,
+                models: [],
+              },
+            },
+          },
+        },
+        providerId: "ollama",
+      }),
+    ).toBe(false);
   });
 });
