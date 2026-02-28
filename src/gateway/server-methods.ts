@@ -20,6 +20,7 @@ import { modelsHandlers } from "./server-methods/models.js";
 import { nodeHandlers } from "./server-methods/nodes.js";
 import { pushHandlers } from "./server-methods/push.js";
 import { sendHandlers } from "./server-methods/send.js";
+import { sessionsArchivesHandlers } from "./server-methods/sessions-archives.js";
 import { sessionsHandlers } from "./server-methods/sessions.js";
 import { skillsHandlers } from "./server-methods/skills.js";
 import { systemHandlers } from "./server-methods/system.js";
@@ -82,6 +83,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...toolsCatalogHandlers,
   ...ttsHandlers,
   ...skillsHandlers,
+  ...sessionsArchivesHandlers,
   ...sessionsHandlers,
   ...systemHandlers,
   ...updateHandlers,

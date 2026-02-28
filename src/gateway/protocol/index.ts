@@ -168,6 +168,8 @@ import {
   type ResponseFrame,
   ResponseFrameSchema,
   SendParamsSchema,
+  type SessionsArchivesParams,
+  SessionsArchivesParamsSchema,
   type SessionsCompactParams,
   SessionsCompactParamsSchema,
   type SessionsDeleteParams,
@@ -284,6 +286,9 @@ export const validateNodeInvokeResultParams = ajv.compile<NodeInvokeResultParams
 );
 export const validateNodeEventParams = ajv.compile<NodeEventParams>(NodeEventParamsSchema);
 export const validatePushTestParams = ajv.compile<PushTestParams>(PushTestParamsSchema);
+export const validateSessionsArchivesParams = ajv.compile<SessionsArchivesParams>(
+  SessionsArchivesParamsSchema,
+);
 export const validateSessionsListParams = ajv.compile<SessionsListParams>(SessionsListParamsSchema);
 export const validateSessionsPreviewParams = ajv.compile<SessionsPreviewParams>(
   SessionsPreviewParamsSchema,
@@ -445,6 +450,7 @@ export {
   NodePairVerifyParamsSchema,
   NodeListParamsSchema,
   NodeInvokeParamsSchema,
+  SessionsArchivesParamsSchema,
   SessionsListParamsSchema,
   SessionsPreviewParamsSchema,
   SessionsPatchParamsSchema,
@@ -592,6 +598,7 @@ export type {
   NodeInvokeParams,
   NodeInvokeResultParams,
   NodeEventParams,
+  SessionsArchivesParams,
   SessionsListParams,
   SessionsPreviewParams,
   SessionsResolveParams,

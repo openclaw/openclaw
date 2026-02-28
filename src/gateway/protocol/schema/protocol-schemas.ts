@@ -125,6 +125,7 @@ import {
 } from "./nodes.js";
 import { PushTestParamsSchema, PushTestResultSchema } from "./push.js";
 import {
+  SessionsArchivesParamsSchema,
   SessionsCompactParamsSchema,
   SessionsDeleteParamsSchema,
   SessionsListParamsSchema,
@@ -179,6 +180,7 @@ export const ProtocolSchemas: Record<string, TSchema> = {
   NodeInvokeRequestEvent: NodeInvokeRequestEventSchema,
   PushTestParams: PushTestParamsSchema,
   PushTestResult: PushTestResultSchema,
+  SessionsArchivesParams: SessionsArchivesParamsSchema,
   SessionsListParams: SessionsListParamsSchema,
   SessionsPreviewParams: SessionsPreviewParamsSchema,
   SessionsResolveParams: SessionsResolveParamsSchema,

@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import type { SessionArchiveEntry, SessionsArchivesResult } from "../controllers/sessions.ts";
 import { formatRelativeTimestamp } from "../format.ts";
 import { pathForTab } from "../navigation.ts";
 import { formatSessionTokens } from "../presenter.ts";
@@ -13,6 +14,10 @@ export type SessionsProps = {
   includeGlobal: boolean;
   includeUnknown: boolean;
   basePath: string;
+  archivesExpanded: boolean;
+  archivesLoading: boolean;
+  archivesResult: SessionsArchivesResult | null;
+  archivesError: string | null;
   onFiltersChange: (next: {
     activeMinutes: string;
     limit: string;
@@ -30,6 +35,8 @@ export type SessionsProps = {
     },
   ) => void;
   onDelete: (key: string) => void;
+  onToggleArchives: () => void;
+  onRefreshArchives: () => void;
 };
 
 const THINK_LEVELS = ["", "off", "minimal", "low", "medium", "high", "xhigh"] as const;
@@ -210,6 +217,8 @@ export function renderSessions(props: SessionsProps) {
               )
         }
       </div>
+
+      ${renderArchivesSection(props)}
     </section>
   `;
 }
@@ -316,6 +325,129 @@ function renderRow(
           Delete
         </button>
       </div>
+    </div>
+  `;
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) {
+    return `${bytes} B`;
+  }
+  if (bytes < 1024 * 1024) {
+    return `${(bytes / 1024).toFixed(1)} KB`;
+  }
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function renderArchivesSection(props: SessionsProps) {
+  const expanded = props.archivesExpanded;
+  const chevron = expanded ? "▾" : "▸";
+  return html`
+    <div style="margin-top: 24px; border-top: 1px solid var(--border, #333); padding-top: 16px;">
+      <div class="row" style="justify-content: space-between; align-items: center;">
+        <button
+          class="btn"
+          style="background: none; border: none; cursor: pointer; padding: 0; font-size: 14px; color: var(--fg, #ccc);"
+          @click=${props.onToggleArchives}
+        >
+          ${chevron} Archived Sessions
+          ${
+            props.archivesResult
+              ? html`<span class="muted" style="margin-left: 6px;">(${props.archivesResult.total})</span>`
+              : nothing
+          }
+        </button>
+        ${
+          expanded
+            ? html`
+                <button
+                  class="btn"
+                  ?disabled=${props.archivesLoading}
+                  @click=${props.onRefreshArchives}
+                >
+                  ${props.archivesLoading ? "Loading…" : "Refresh"}
+                </button>
+              `
+            : nothing
+        }
+      </div>
+
+      ${
+        expanded
+          ? html`
+              <div class="muted" style="margin-top: 4px; font-size: 12px;">
+                Archived and orphaned session transcripts (read-only).
+              </div>
+
+              ${
+                props.archivesError
+                  ? html`<div class="callout danger" style="margin-top: 8px;">
+                      ${props.archivesError}
+                    </div>`
+                  : nothing
+              }
+
+              ${renderArchivesTable(props.archivesResult)}
+            `
+          : nothing
+      }
+    </div>
+  `;
+}
+
+function renderArchivesTable(result: SessionsArchivesResult | null) {
+  const archives = result?.archives ?? [];
+  return html`
+    <div class="table" style="margin-top: 12px;">
+      <div class="table-head">
+        <div>Session ID</div>
+        <div>File</div>
+        <div>Reason</div>
+        <div>Archived</div>
+        <div>Created</div>
+        <div>Size</div>
+        <div>Messages</div>
+      </div>
+      ${
+        archives.length === 0
+          ? html`
+              <div class="muted">No archived sessions found.</div>
+            `
+          : archives.map((entry) => renderArchiveRow(entry))
+      }
+    </div>
+  `;
+}
+
+function renderArchiveRow(entry: SessionArchiveEntry) {
+  const archivedAt = entry.archivedAt ? formatRelativeTimestamp(Date.parse(entry.archivedAt)) : "—";
+  const createdAt = entry.createdAt ? formatRelativeTimestamp(Date.parse(entry.createdAt)) : "—";
+  const reason = entry.archiveReason ?? "—";
+  const messages =
+    entry.messageCount !== undefined && entry.messageCount !== null
+      ? String(entry.messageCount)
+      : "—";
+
+  return html`
+    <div class="table-row">
+      <div class="mono" style="font-size: 12px;" title=${entry.sessionId}>
+        ${entry.sessionId.length > 20 ? entry.sessionId.slice(0, 20) + "…" : entry.sessionId}
+      </div>
+      <div class="mono" style="font-size: 11px; word-break: break-all;" title=${entry.fileName}>
+        ${entry.fileName.length > 40 ? entry.fileName.slice(0, 40) + "…" : entry.fileName}
+      </div>
+      <div>
+        <span
+          class="badge"
+          style="font-size: 11px; ${reason === "orphaned" ? "color: var(--warn, #f0ad4e);" : ""}"
+        >
+          ${reason}
+        </span>
+      </div>
+      <div>${archivedAt}</div>
+      <div>${createdAt}</div>
+      <div>${formatBytes(entry.sizeBytes)}</div>
+      <div>${messages}</div>
     </div>
   `;
 }

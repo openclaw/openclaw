@@ -54,7 +54,12 @@ import {
 import { loadLogs } from "./controllers/logs.ts";
 import { loadNodes } from "./controllers/nodes.ts";
 import { loadPresence } from "./controllers/presence.ts";
-import { deleteSessionAndRefresh, loadSessions, patchSession } from "./controllers/sessions.ts";
+import {
+  deleteSessionAndRefresh,
+  loadArchives,
+  loadSessions,
+  patchSession,
+} from "./controllers/sessions.ts";
 import {
   installSkill,
   loadSkills,
@@ -420,6 +425,10 @@ export function renderApp(state: AppViewState) {
                 includeGlobal: state.sessionsIncludeGlobal,
                 includeUnknown: state.sessionsIncludeUnknown,
                 basePath: state.basePath,
+                archivesExpanded: state.archivesExpanded,
+                archivesLoading: state.archivesLoading,
+                archivesResult: state.archivesResult,
+                archivesError: state.archivesError,
                 onFiltersChange: (next) => {
                   state.sessionsFilterActive = next.activeMinutes;
                   state.sessionsFilterLimit = next.limit;
@@ -429,6 +438,13 @@ export function renderApp(state: AppViewState) {
                 onRefresh: () => loadSessions(state),
                 onPatch: (key, patch) => patchSession(state, key, patch),
                 onDelete: (key) => deleteSessionAndRefresh(state, key),
+                onToggleArchives: () => {
+                  state.archivesExpanded = !state.archivesExpanded;
+                  if (state.archivesExpanded && !state.archivesResult) {
+                    void loadArchives(state);
+                  }
+                },
+                onRefreshArchives: () => void loadArchives(state),
               })
             : nothing
         }

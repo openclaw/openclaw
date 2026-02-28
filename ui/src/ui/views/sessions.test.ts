@@ -23,10 +23,16 @@ function buildProps(result: SessionsListResult): SessionsProps {
     includeGlobal: false,
     includeUnknown: false,
     basePath: "",
+    archivesExpanded: false,
+    archivesLoading: false,
+    archivesResult: null,
+    archivesError: null,
     onFiltersChange: () => undefined,
     onRefresh: () => undefined,
     onPatch: () => undefined,
     onDelete: () => undefined,
+    onToggleArchives: () => undefined,
+    onRefreshArchives: () => undefined,
   };
 }
 

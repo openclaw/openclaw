@@ -108,6 +108,14 @@ export const SessionsCompactParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const SessionsArchivesParamsSchema = Type.Object(
+  {
+    agentId: Type.Optional(NonEmptyString),
+    limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 200 })),
+  },
+  { additionalProperties: false },
+);
+
 export const SessionsUsageParamsSchema = Type.Object(
   {
     /** Specific session key to analyze; if omitted returns all sessions. */

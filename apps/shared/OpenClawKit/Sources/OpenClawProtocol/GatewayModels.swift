@@ -1026,6 +1026,24 @@ public struct PushTestResult: Codable, Sendable {
     }
 }
 
+public struct SessionsArchivesParams: Codable, Sendable {
+    public let agentid: String?
+    public let limit: Int?
+
+    public init(
+        agentid: String?,
+        limit: Int?)
+    {
+        self.agentid = agentid
+        self.limit = limit
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case agentid = "agentId"
+        case limit
+    }
+}
+
 public struct SessionsListParams: Codable, Sendable {
     public let limit: Int?
     public let activeminutes: Int?
@@ -3091,19 +3109,27 @@ public struct DevicePairResolvedEvent: Codable, Sendable {
 }
 
 public struct ChatHistoryParams: Codable, Sendable {
-    public let sessionkey: String
+    public let sessionkey: String?
+    public let archivefile: String?
+    public let agentid: String?
     public let limit: Int?
 
     public init(
-        sessionkey: String,
+        sessionkey: String?,
+        archivefile: String?,
+        agentid: String?,
         limit: Int?)
     {
         self.sessionkey = sessionkey
+        self.archivefile = archivefile
+        self.agentid = agentid
         self.limit = limit
     }
 
     private enum CodingKeys: String, CodingKey {
         case sessionkey = "sessionKey"
+        case archivefile = "archiveFile"
+        case agentid = "agentId"
         case limit
     }
 }

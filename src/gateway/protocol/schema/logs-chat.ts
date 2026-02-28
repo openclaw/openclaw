@@ -25,7 +25,11 @@ export const LogsTailResultSchema = Type.Object(
 // WebChat/WebSocket-native chat methods
 export const ChatHistoryParamsSchema = Type.Object(
   {
-    sessionKey: NonEmptyString,
+    sessionKey: Type.Optional(NonEmptyString),
+    /** Archived transcript filename (from sessions.archives response). Mutually exclusive with sessionKey. */
+    archiveFile: Type.Optional(NonEmptyString),
+    /** Agent that owns the archive (default "main"). Only used with archiveFile. */
+    agentId: Type.Optional(NonEmptyString),
     limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 1000 })),
   },
   { additionalProperties: false },

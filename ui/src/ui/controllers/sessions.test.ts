@@ -14,6 +14,10 @@ function createState(request: RequestFn, overrides: Partial<SessionsState> = {})
     sessionsFilterLimit: "0",
     sessionsIncludeGlobal: true,
     sessionsIncludeUnknown: true,
+    archivesExpanded: false,
+    archivesLoading: false,
+    archivesResult: null,
+    archivesError: null,
     ...overrides,
   };
 }

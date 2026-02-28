@@ -1,14 +1,19 @@
 import fs from "node:fs";
 import path from "node:path";
 import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
-import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { resolveDefaultAgentId, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveThinkingDefault } from "../../agents/model-selection.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
-import { resolveSessionFilePath } from "../../config/sessions.js";
+import { loadConfig } from "../../config/config.js";
+import {
+  resolveSessionFilePath,
+  resolveSessionTranscriptsDirForAgent,
+} from "../../config/sessions.js";
+import { normalizeAgentId } from "../../routing/session-key.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import {
   stripInlineDirectiveTagsForDisplay,
@@ -542,11 +547,129 @@ export const chatHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const { sessionKey, limit } = params as {
-      sessionKey: string;
+    const {
+      sessionKey,
+      archiveFile,
+      agentId: rawAgentId,
+      limit,
+    } = params as {
+      sessionKey?: string;
+      archiveFile?: string;
+      agentId?: string;
       limit?: number;
     };
-    const { cfg, storePath, entry } = loadSessionEntry(sessionKey);
+
+    // Require exactly one of sessionKey or archiveFile.
+    if (!sessionKey && !archiveFile) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "one of sessionKey or archiveFile is required"),
+      );
+      return;
+    }
+    if (sessionKey && archiveFile) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "sessionKey and archiveFile are mutually exclusive"),
+      );
+      return;
+    }
+
+    // Archive file path: read directly from the sessions directory.
+    if (archiveFile) {
+      const cfg = loadConfig();
+      const agentId = normalizeAgentId(rawAgentId ?? resolveDefaultAgentId(cfg));
+      let sessionsDir: string;
+      try {
+        sessionsDir = resolveSessionTranscriptsDirForAgent(agentId);
+      } catch {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "unable to resolve sessions directory"),
+        );
+        return;
+      }
+
+      // Security: validate filename doesn't contain path traversal.
+      const baseName = path.basename(archiveFile);
+      if (baseName !== archiveFile || archiveFile.includes("..") || archiveFile.includes("/")) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "invalid archiveFile name"),
+        );
+        return;
+      }
+
+      const filePath = path.join(sessionsDir, baseName);
+      // Double-check resolved path is within sessions directory.
+      const realSessions = fs.realpathSync(sessionsDir);
+      let realFile: string;
+      try {
+        realFile = fs.realpathSync(filePath);
+      } catch {
+        respond(true, { archiveFile, messages: [] });
+        return;
+      }
+      if (!realFile.startsWith(realSessions + path.sep)) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "invalid archiveFile path"),
+        );
+        return;
+      }
+
+      // Read the transcript directly.
+      let rawMessages: unknown[];
+      try {
+        const content = fs.readFileSync(filePath, "utf-8");
+        rawMessages = [];
+        for (const line of content.split("\n")) {
+          if (!line.trim()) {
+            continue;
+          }
+          try {
+            const parsed = JSON.parse(line);
+            if (parsed?.message) {
+              rawMessages.push(parsed.message);
+            }
+          } catch {
+            // ignore bad lines
+          }
+        }
+      } catch {
+        respond(true, { archiveFile, messages: [] });
+        return;
+      }
+
+      const hardMax = 1000;
+      const defaultLimit = 200;
+      const requested = typeof limit === "number" ? limit : defaultLimit;
+      const max = Math.min(hardMax, requested);
+      const sliced = rawMessages.length > max ? rawMessages.slice(-max) : rawMessages;
+      const sanitized = stripEnvelopeFromMessages(sliced);
+      const normalized = sanitizeChatHistoryMessages(sanitized);
+      const maxHistoryBytes = getMaxChatHistoryMessagesBytes();
+      const perMessageHardCap = Math.min(CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES, maxHistoryBytes);
+      const replaced = replaceOversizedChatHistoryMessages({
+        messages: normalized,
+        maxSingleMessageBytes: perMessageHardCap,
+      });
+      const capped = capArrayByJsonBytes(replaced.messages, maxHistoryBytes).items;
+      const bounded = enforceChatHistoryFinalBudget({
+        messages: capped,
+        maxBytes: maxHistoryBytes,
+      });
+      respond(true, { archiveFile, messages: bounded.messages });
+      return;
+    }
+
+    // Existing sessionKey path.
+    const { cfg, storePath, entry } = loadSessionEntry(sessionKey!);
     const sessionId = entry?.sessionId;
     const rawMessages =
       sessionId && storePath ? readSessionMessages(sessionId, storePath, entry?.sessionFile) : [];
@@ -578,7 +701,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       if (configured) {
         thinkingLevel = configured;
       } else {
-        const sessionAgentId = resolveSessionAgentId({ sessionKey, config: cfg });
+        const sessionAgentId = resolveSessionAgentId({ sessionKey: sessionKey!, config: cfg });
         const { provider, model } = resolveSessionModelRef(cfg, entry, sessionAgentId);
         const catalog = await context.loadGatewayModelCatalog();
         thinkingLevel = resolveThinkingDefault({

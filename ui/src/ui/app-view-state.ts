@@ -163,6 +163,10 @@ export type AppViewState = {
   sessionsFilterLimit: string;
   sessionsIncludeGlobal: boolean;
   sessionsIncludeUnknown: boolean;
+  archivesExpanded: boolean;
+  archivesLoading: boolean;
+  archivesResult: import("./controllers/sessions.ts").SessionsArchivesResult | null;
+  archivesError: string | null;
   usageLoading: boolean;
   usageResult: SessionsUsageResult | null;
   usageCostSummary: CostUsageSummary | null;

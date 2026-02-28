@@ -2,6 +2,21 @@ import { toNumber } from "../format.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import type { SessionsListResult } from "../types.ts";
 
+export type SessionArchiveEntry = {
+  sessionId: string;
+  fileName: string;
+  archiveReason?: string;
+  archivedAt?: string;
+  createdAt?: string;
+  sizeBytes: number;
+  messageCount?: number;
+};
+
+export type SessionsArchivesResult = {
+  archives: SessionArchiveEntry[];
+  total: number;
+};
+
 export type SessionsState = {
   client: GatewayBrowserClient | null;
   connected: boolean;
@@ -12,6 +27,10 @@ export type SessionsState = {
   sessionsFilterLimit: string;
   sessionsIncludeGlobal: boolean;
   sessionsIncludeUnknown: boolean;
+  archivesExpanded: boolean;
+  archivesLoading: boolean;
+  archivesResult: SessionsArchivesResult | null;
+  archivesError: string | null;
 };
 
 export async function loadSessions(
@@ -124,4 +143,33 @@ export async function deleteSessionAndRefresh(state: SessionsState, key: string)
   }
   await loadSessions(state);
   return true;
+}
+
+export async function loadArchives(state: SessionsState, opts?: { limit?: number }) {
+  if (!state.client || !state.connected) {
+    return;
+  }
+  if (state.archivesLoading) {
+    return;
+  }
+  state.archivesLoading = true;
+  state.archivesError = null;
+  try {
+    const params: Record<string, unknown> = {};
+    const limit = opts?.limit ?? 50;
+    if (limit > 0) {
+      params.limit = limit;
+    }
+    const res = await state.client.request<SessionsArchivesResult | undefined>(
+      "sessions.archives",
+      params,
+    );
+    if (res) {
+      state.archivesResult = res;
+    }
+  } catch (err) {
+    state.archivesError = String(err);
+  } finally {
+    state.archivesLoading = false;
+  }
 }
