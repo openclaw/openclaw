@@ -176,14 +176,24 @@ private const val defaultTalkProvider = "elevenlabs"
   private var audioFocusRequest: AudioFocusRequest? = null
   private val audioFocusListener = AudioManager.OnAudioFocusChangeListener { focusChange ->
     when (focusChange) {
-      AudioManager.AUDIOFOCUS_LOSS,
-      AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> {
+      AudioManager.AUDIOFOCUS_LOSS -> {
+        // Permanent loss (e.g. another app takes over) — stop TTS
         if (_isSpeaking.value) {
-          Log.d(tag, "audio focus lost; stopping TTS")
+          Log.d(tag, "audio focus lost permanently; stopping TTS")
           stopSpeaking(resetInterrupt = true)
         }
       }
-      else -> { /* regained or duck — ignore */ }
+      AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> {
+        // Transient loss (e.g. notification) — duck/pause AudioTrack but don't kill session
+        Log.d(tag, "audio focus lost transiently; ducking")
+        streamingTts?.audioTrack?.setVolume(0.2f)
+      }
+      AudioManager.AUDIOFOCUS_GAIN -> {
+        // Regained — restore volume
+        Log.d(tag, "audio focus regained")
+        streamingTts?.audioTrack?.setVolume(1.0f)
+      }
+      else -> {}
     }
   }
 
@@ -382,6 +392,7 @@ private const val defaultTalkProvider = "elevenlabs"
     if (pending == null || runId != pending) {
       if (ttsOnAllResponses && state in listOf("final", "error", "aborted")) {
         activeTtsRunId = null  // Allow next response to start fresh
+        Log.d(tag, "chat $state for non-pending run, streamingTts=${streamingTts != null}")
         if (streamingTts != null) {
           finishStreamingTts()
         } else if (state == "final") {

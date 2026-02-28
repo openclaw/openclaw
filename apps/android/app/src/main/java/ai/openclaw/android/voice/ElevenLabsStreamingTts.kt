@@ -58,7 +58,7 @@ class ElevenLabsStreamingTts(
   val isPlaying: StateFlow<Boolean> = _isPlaying
 
   private var webSocket: WebSocket? = null
-  private var audioTrack: AudioTrack? = null
+  internal var audioTrack: AudioTrack? = null
   private var trackStarted = false
   private var client: OkHttpClient? = null
   @Volatile private var stopped = false
@@ -235,7 +235,7 @@ class ElevenLabsStreamingTts(
     // Send empty text to signal end of stream
     val eos = JSONObject().apply { put("text", "") }
     ws.send(eos.toString())
-    Log.d(TAG, "sent EOS")
+    Log.d(TAG, "sent EOS — total text was: ${sentFullText.take(80)}")
   }
 
   /**
