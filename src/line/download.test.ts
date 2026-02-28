@@ -67,33 +67,22 @@ describe("downloadLineMedia", () => {
     expect(writeSpy).not.toHaveBeenCalled();
   });
 
-  it("detects M4A audio from ftyp major brand (#29751)", async () => {
-    // Real M4A magic bytes: size(4) + "ftyp" + "M4A "
-    const m4a = Buffer.from([
-      0x00,
-      0x00,
-      0x00,
-      0x1c, // box size
-      0x66,
-      0x74,
-      0x79,
-      0x70, // "ftyp"
-      0x4d,
-      0x34,
-      0x41,
-      0x20, // "M4A " major brand
+  it("classifies M4A ftyp major brand as audio/mp4", async () => {
+    const m4aHeader = Buffer.from([
+      0x00, 0x00, 0x00, 0x1c, 0x66, 0x74, 0x79, 0x70, 0x4d, 0x34, 0x41, 0x20,
     ]);
-    getMessageContentMock.mockResolvedValueOnce(chunks([m4a]));
-    vi.spyOn(fs.promises, "writeFile").mockResolvedValueOnce(undefined);
+    getMessageContentMock.mockResolvedValueOnce(chunks([m4aHeader]));
+    const writeSpy = vi.spyOn(fs.promises, "writeFile").mockResolvedValueOnce(undefined);
 
-    const result = await downloadLineMedia("mid-m4a", "token");
+    const result = await downloadLineMedia("mid-audio", "token");
+    const writtenPath = writeSpy.mock.calls[0]?.[0];
 
     expect(result.contentType).toBe("audio/mp4");
     expect(result.path).toMatch(/\.m4a$/);
+    expect(writtenPath).toBe(result.path);
   });
 
   it("detects MP4 video from ftyp major brand (isom)", async () => {
-    // MP4 video magic bytes: size(4) + "ftyp" + "isom"
     const mp4 = Buffer.from([
       0x00,
       0x00,
@@ -106,7 +95,7 @@ describe("downloadLineMedia", () => {
       0x69,
       0x73,
       0x6f,
-      0x6d, // "isom" major brand
+      0x6d,
     ]);
     getMessageContentMock.mockResolvedValueOnce(chunks([mp4]));
     vi.spyOn(fs.promises, "writeFile").mockResolvedValueOnce(undefined);
