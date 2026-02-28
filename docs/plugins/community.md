@@ -49,3 +49,8 @@ Use this format when adding entries:
   npm: `@icesword760/openclaw-wechat`
   repo: `https://github.com/icesword0760/openclaw-wechat`
   install: `openclaw plugins install @icesword760/openclaw-wechat`
+
+- **Canvas LMS** — Adds Canvas LMS tools for university workflows including courses, assignments, submissions, announcements, files, grades, and calendar events.
+  npm: `@kansodata/openclaw-canvas-lms`
+  repo: `https://github.com/Kansodata/openclaw-canvas-lms`
+  install: `openclaw plugins install @kansodata/openclaw-canvas-lms`
