@@ -231,7 +231,14 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_3: LegacyConfigMigration[] = [
       const normalizeEntry = (entry: Record<string, unknown>, prefix: string) => {
         if (Object.prototype.hasOwnProperty.call(entry, "allowlist")) {
           const legacyAllowlist = Array.isArray(entry.allowlist) ? entry.allowlist : undefined;
-          if (entry.allowFrom === undefined && legacyAllowlist && legacyAllowlist.length > 0) {
+          const legacyDm = getRecord(entry.dm);
+          const hasCanonicalDmAllowFrom = Array.isArray(legacyDm?.allowFrom);
+          if (
+            entry.allowFrom === undefined &&
+            !hasCanonicalDmAllowFrom &&
+            legacyAllowlist &&
+            legacyAllowlist.length > 0
+          ) {
             entry.allowFrom = legacyAllowlist;
             changes.push(`Moved ${prefix}.allowlist → ${prefix}.allowFrom.`);
           } else {

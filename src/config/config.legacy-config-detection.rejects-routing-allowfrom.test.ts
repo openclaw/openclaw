@@ -162,6 +162,30 @@ describe("legacy config detection", () => {
     ).toBeUndefined();
   });
 
+  it("keeps dm.allowFrom authoritative when removing legacy discord allowlist aliases", async () => {
+    const res = migrateLegacyConfig({
+      channels: {
+        discord: {
+          dm: { allowFrom: ["111"] },
+          allowlist: ["legacy-top"],
+          accounts: {
+            ops: {
+              dm: { allowFrom: ["222"] },
+              allowlist: ["legacy-account"],
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.changes).toContain("Removed channels.discord.allowlist.");
+    expect(res.changes).toContain("Removed channels.discord.accounts.ops.allowlist.");
+    expect(res.config?.channels?.discord?.allowFrom).toBeUndefined();
+    expect(res.config?.channels?.discord?.dm?.allowFrom).toEqual(["111"]);
+    expect(res.config?.channels?.discord?.accounts?.ops?.allowFrom).toBeUndefined();
+    expect(res.config?.channels?.discord?.accounts?.ops?.dm?.allowFrom).toEqual(["222"]);
+  });
+
   it("migrates legacy agents.list routing entries", async () => {
     const res = migrateLegacyConfig({
       agents: {
