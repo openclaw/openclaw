@@ -37,6 +37,10 @@ const tabOperationLocks = new Set()
 /** @type {Set<number>} */
 const reattachPending = new Set()
 
+// Tabs the user has opted into — survives debugger detach for onUpdated re-attach.
+/** @type {Set<number>} */
+const trackedTabs = new Set()
+
 // Reconnect state for exponential backoff.
 let reconnectAttempt = 0
 let reconnectTimer = null
@@ -492,6 +496,7 @@ async function attachTab(tabId, opts = {}) {
   }
 
   setBadge(tabId, 'on')
+  trackedTabs.add(tabId)
   await persistState()
 
   return { sessionId, targetId }
@@ -813,6 +818,7 @@ async function onDebuggerDetach(source, reason) {
 // Tab lifecycle listeners — clean up stale entries.
 chrome.tabs.onRemoved.addListener((tabId) => void whenReady(() => {
   reattachPending.delete(tabId)
+  trackedTabs.delete(tabId)
   if (!tabs.has(tabId)) return
   const tab = tabs.get(tabId)
   if (tab?.sessionId) tabBySession.delete(tab.sessionId)
@@ -852,6 +858,33 @@ chrome.tabs.onReplaced.addListener((addedTabId, removedTabId) => void whenReady(
   setBadge(addedTabId, 'on')
   void persistState()
 }))
+
+// Re-attach debugger when tab finishes loading after navigation.
+// This complements the fixed-delay retries in onDebuggerDetach with a
+// reliable "page loaded" signal via chrome.tabs.onUpdated.
+chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  if (changeInfo.status !== 'complete') return
+
+  // If already attached, just update badge.
+  if (tabs.has(tabId)) {
+    setBadge(tabId, relayWs?.readyState === WebSocket.OPEN ? 'on' : 'connecting')
+    return
+  }
+
+  // Only re-attach tabs that were previously attached (tracked).
+  if (!trackedTabs.has(tabId)) return
+  if (reattachPending.has(tabId)) return
+  if (!relayWs || relayWs.readyState !== WebSocket.OPEN) return
+
+  void (async () => {
+    try {
+      await attachTab(tabId)
+      reattachPending.delete(tabId)
+    } catch (err) {
+      console.warn(`onUpdated re-attach failed for tab ${tabId}:`, err)
+    }
+  })()
+})
 
 // Register debugger listeners at module scope so detach/event handling works
 // even when the relay WebSocket is down.
