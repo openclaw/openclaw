@@ -263,9 +263,16 @@ async function resolveTelegramCommandAuth(params: {
     senderId,
     senderUsername,
   });
+  const groupSenderAllowed = isGroup
+    ? isSenderAllowed({ allow: effectiveGroupAllow, senderId, senderUsername })
+    : false;
+  const authorizers = [{ configured: dmAllow.hasEntries, allowed: senderAllowed }];
+  if (isGroup) {
+    authorizers.push({ configured: effectiveGroupAllow.hasEntries, allowed: groupSenderAllowed });
+  }
   const commandAuthorized = resolveCommandAuthorizedFromAuthorizers({
     useAccessGroups,
-    authorizers: [{ configured: dmAllow.hasEntries, allowed: senderAllowed }],
+    authorizers,
     modeWhenAccessGroupsOff: "configured",
   });
   if (requireAuth && !commandAuthorized) {
