@@ -89,6 +89,7 @@ import {
 } from "../google.js";
 import { getDmHistoryLimitFromSessionKey, limitHistoryTurns } from "../history.js";
 import { log } from "../logger.js";
+import { mergeExtraSystemPrompt } from "../merge-extra-system-prompt.js";
 import { buildModelAliasLines } from "../model.js";
 import {
   clearActiveEmbeddedRun,
@@ -774,7 +775,10 @@ export async function runEmbeddedAttempt(
       workspaceDir: effectiveWorkspace,
       defaultThinkLevel: params.thinkLevel,
       reasoningLevel: params.reasoningLevel ?? "off",
-      extraSystemPrompt: params.extraSystemPrompt,
+      extraSystemPrompt: mergeExtraSystemPrompt(
+        params.extraSystemPrompt,
+        params.config?.agents?.defaults?.systemPromptSuffix,
+      ),
       ownerNumbers: params.ownerNumbers,
       ownerDisplay: ownerDisplay.ownerDisplay,
       ownerDisplaySecret: ownerDisplay.ownerDisplaySecret,

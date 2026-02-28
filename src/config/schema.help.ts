@@ -705,6 +705,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Max characters of each workspace bootstrap file injected into the system prompt before truncation (default: 20000).",
   "agents.defaults.bootstrapTotalMaxChars":
     "Max total characters across all injected workspace bootstrap files (default: 150000).",
+  "agents.defaults.systemPromptSuffix":
+    "Text appended to the system prompt on every turn. Survives compaction because it is injected from config, not from conversation history. Use for persistent behavioral rules, constraints, or identity that must never be lost.",
   "agents.defaults.repoRoot":
     "Optional repository root shown in the system prompt runtime line (overrides auto-detect).",
   "agents.defaults.envelopeTimezone":

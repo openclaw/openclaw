@@ -70,6 +70,7 @@ import {
 import { getDmHistoryLimitFromSessionKey, limitHistoryTurns } from "./history.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
+import { mergeExtraSystemPrompt } from "./merge-extra-system-prompt.js";
 import { buildModelAliasLines, resolveModel } from "./model.js";
 import { buildEmbeddedSandboxInfo } from "./sandbox-info.js";
 import { prewarmSessionFile, trackSessionManagerAccess } from "./session-manager-cache.js";
@@ -489,7 +490,10 @@ export async function compactEmbeddedPiSessionDirect(
       workspaceDir: effectiveWorkspace,
       defaultThinkLevel: params.thinkLevel,
       reasoningLevel: params.reasoningLevel ?? "off",
-      extraSystemPrompt: params.extraSystemPrompt,
+      extraSystemPrompt: mergeExtraSystemPrompt(
+        params.extraSystemPrompt,
+        params.config?.agents?.defaults?.systemPromptSuffix,
+      ),
       ownerNumbers: params.ownerNumbers,
       ownerDisplay: ownerDisplay.ownerDisplay,
       ownerDisplaySecret: ownerDisplay.ownerDisplaySecret,

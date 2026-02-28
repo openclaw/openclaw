@@ -754,3 +754,51 @@ describe("buildSubagentSystemPrompt", () => {
     }
   });
 });
+
+describe("systemPromptSuffix", () => {
+  it("appends suffix to the system prompt when provided via extraSystemPrompt merge", () => {
+    const suffix = "RULE: Always respond in Portuguese.";
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      extraSystemPrompt: suffix,
+    });
+
+    expect(prompt).toContain(suffix);
+  });
+
+  it("merges suffix with existing extraSystemPrompt without replacing it", () => {
+    const existing = "Subagent context: you are a cron job.";
+    const suffix = "RULE: Never commit to public repos.";
+    const merged = [existing, suffix].filter(Boolean).join("\n\n");
+
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      extraSystemPrompt: merged,
+    });
+
+    expect(prompt).toContain(existing);
+    expect(prompt).toContain(suffix);
+  });
+
+  it("works correctly when suffix is undefined (no extraSystemPrompt)", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+    });
+
+    // Should still produce a valid prompt
+    expect(prompt).toBeTruthy();
+    expect(prompt.length).toBeGreaterThan(100);
+  });
+
+  it("handles empty string suffix gracefully", () => {
+    const parts = ["existing context", ""].filter(Boolean);
+    expect(parts).toEqual(["existing context"]);
+
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      extraSystemPrompt: parts.join("\n\n"),
+    });
+
+    expect(prompt).toContain("existing context");
+  });
+});

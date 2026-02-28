@@ -28,6 +28,7 @@ import { resolveOpenClawDocsPath } from "./docs-path.js";
 import { FailoverError, resolveFailoverStatus } from "./failover-error.js";
 import { classifyFailoverReason, isFailoverErrorMessage } from "./pi-embedded-helpers.js";
 import type { EmbeddedPiRunResult } from "./pi-embedded-runner.js";
+import { mergeExtraSystemPrompt } from "./pi-embedded-runner/merge-extra-system-prompt.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "./workspace-run.js";
 
 const log = createSubsystemLogger("agent/claude-cli");
@@ -79,7 +80,10 @@ export async function runCliAgent(params: {
   const modelDisplay = `${params.provider}/${modelId}`;
 
   const extraSystemPrompt = [
-    params.extraSystemPrompt?.trim(),
+    mergeExtraSystemPrompt(
+      params.extraSystemPrompt?.trim(),
+      params.config?.agents?.defaults?.systemPromptSuffix,
+    ),
     "Tools are disabled in this session. Do not call tools.",
   ]
     .filter(Boolean)

@@ -758,6 +758,22 @@ Default: `~/.openclaw/workspace`.
 }
 ```
 
+### `agents.defaults.systemPromptSuffix`
+
+Text appended to the system prompt on every turn. Because it is injected from config (not conversation history), it **survives compaction** — making it ideal for persistent behavioral rules, constraints, or identity that must never be lost during long sessions.
+
+The suffix is appended _after_ any existing `extraSystemPrompt` (e.g. from channel config or subagent context), so it never replaces other system prompt sources.
+
+```json5
+{
+  agents: {
+    defaults: {
+      systemPromptSuffix: "Always respond in Portuguese. Never commit to public repos without explicit approval.",
+    },
+  },
+}
+```
+
 ### `agents.defaults.repoRoot`
 
 Optional repository root shown in the system prompt's Runtime line. If unset, OpenClaw auto-detects by walking upward from the workspace.
