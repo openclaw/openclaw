@@ -264,16 +264,18 @@ export async function deliverOutboundPayloads(
   // When bestEffort is true, per-payload errors are caught and passed to onError
   // without throwing — so the outer try/catch never fires. We track whether any
   // payload failed so we can call failDelivery instead of ackDelivery.
+  // When bestEffort is true but onError is absent, we still wrap so hadPartialFailure is set.
   let hadPartialFailure = false;
-  const wrappedParams = params.onError
-    ? {
-        ...params,
-        onError: (err: unknown, payload: NormalizedOutboundPayload) => {
-          hadPartialFailure = true;
-          params.onError!(err, payload);
-        },
-      }
-    : params;
+  const wrappedParams =
+    params.bestEffort || params.onError
+      ? {
+          ...params,
+          onError: (err: unknown, payload: NormalizedOutboundPayload) => {
+            hadPartialFailure = true;
+            params.onError?.(err, payload);
+          },
+        }
+      : params;
 
   try {
     const results = await deliverOutboundPayloadsCore(wrappedParams);
