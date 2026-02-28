@@ -18,6 +18,7 @@ import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
 import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
 import type { OpenClawConfig, ReplyToMode, TelegramAccountConfig } from "../config/types.js";
 import { danger, logVerbose } from "../globals.js";
+import { isOutboundSuppressed } from "../infra/outbound/suppress-outbound.js";
 import { getAgentScopedMediaLocalRoots } from "../media/local-roots.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { TelegramMessageContext } from "./bot-message-context.js";
@@ -180,8 +181,16 @@ export const dispatchTelegramMessage = async ({
   const forceBlockStreamingForReasoning = resolvedReasoningLevel === "on";
   const streamReasoningDraft = resolvedReasoningLevel === "stream";
   const previewStreamingEnabled = streamMode !== "off";
+  const telegramOutboundSuppressed = isOutboundSuppressed({
+    cfg,
+    channel: "telegram",
+    accountId: route.accountId,
+  });
   const canStreamAnswerDraft =
-    previewStreamingEnabled && !accountBlockStreamingEnabled && !forceBlockStreamingForReasoning;
+    previewStreamingEnabled &&
+    !accountBlockStreamingEnabled &&
+    !forceBlockStreamingForReasoning &&
+    !telegramOutboundSuppressed;
   const canStreamReasoningDraft = canStreamAnswerDraft || streamReasoningDraft;
   const draftReplyToMessageId =
     replyToMode !== "off" && typeof msg.message_id === "number" ? msg.message_id : undefined;
@@ -447,21 +456,25 @@ export const dispatchTelegramMessage = async ({
 
   let queuedFinal = false;
 
-  if (statusReactionController) {
+  if (statusReactionController && !telegramOutboundSuppressed) {
     void statusReactionController.setThinking();
   }
 
-  const typingCallbacks = createTypingCallbacks({
-    start: sendTyping,
-    onStartError: (err) => {
-      logTypingFailure({
-        log: logVerbose,
-        channel: "telegram",
-        target: String(chatId),
-        error: err,
-      });
-    },
-  });
+  const typingCallbacks = createTypingCallbacks(
+    telegramOutboundSuppressed
+      ? { start: async () => {}, onStartError: () => {} }
+      : {
+          start: sendTyping,
+          onStartError: (err) => {
+            logTypingFailure({
+              log: logVerbose,
+              channel: "telegram",
+              target: String(chatId),
+              error: err,
+            });
+          },
+        },
+  );
 
   try {
     ({ queuedFinal } = await dispatchReplyWithBufferedBlockDispatcher({
@@ -622,11 +635,12 @@ export const dispatchTelegramMessage = async ({
               splitReasoningOnNextStream = reasoningLane.hasStreamedMessage;
             }
           : undefined,
-        onToolStart: statusReactionController
-          ? async (payload) => {
-              await statusReactionController.setTool(payload.name);
-            }
-          : undefined,
+        onToolStart:
+          statusReactionController && !telegramOutboundSuppressed
+            ? async (payload) => {
+                await statusReactionController.setTool(payload.name);
+              }
+            : undefined,
         onModelSelected,
       },
     }));
@@ -693,7 +707,7 @@ export const dispatchTelegramMessage = async ({
 
   const hasFinalResponse = queuedFinal || sentFallback;
 
-  if (statusReactionController && !hasFinalResponse) {
+  if (statusReactionController && !telegramOutboundSuppressed && !hasFinalResponse) {
     void statusReactionController.setError().catch((err) => {
       logVerbose(`telegram: status reaction error finalize failed: ${String(err)}`);
     });
@@ -704,11 +718,11 @@ export const dispatchTelegramMessage = async ({
     return;
   }
 
-  if (statusReactionController) {
+  if (statusReactionController && !telegramOutboundSuppressed) {
     void statusReactionController.setDone().catch((err) => {
       logVerbose(`telegram: status reaction finalize failed: ${String(err)}`);
     });
-  } else {
+  } else if (!statusReactionController) {
     removeAckReactionAfterReply({
       removeAfterReply: removeAckAfterReply,
       ackReactionPromise,

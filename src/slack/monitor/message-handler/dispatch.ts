@@ -140,46 +140,55 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     isThreadReply,
   });
 
-  const typingTarget = statusThreadTs ? `${message.channel}/${statusThreadTs}` : message.channel;
-  const typingCallbacks = createTypingCallbacks({
-    start: async () => {
-      didSetStatus = true;
-      await ctx.setSlackThreadStatus({
-        channelId: message.channel,
-        threadTs: statusThreadTs,
-        status: "is typing...",
-      });
-    },
-    stop: async () => {
-      if (!didSetStatus) {
-        return;
-      }
-      didSetStatus = false;
-      await ctx.setSlackThreadStatus({
-        channelId: message.channel,
-        threadTs: statusThreadTs,
-        status: "",
-      });
-    },
-    onStartError: (err) => {
-      logTypingFailure({
-        log: (message) => runtime.error?.(danger(message)),
-        channel: "slack",
-        action: "start",
-        target: typingTarget,
-        error: err,
-      });
-    },
-    onStopError: (err) => {
-      logTypingFailure({
-        log: (message) => runtime.error?.(danger(message)),
-        channel: "slack",
-        action: "stop",
-        target: typingTarget,
-        error: err,
-      });
-    },
+  const slackOutboundSuppressed = isOutboundSuppressed({
+    cfg,
+    channel: "slack",
+    accountId: account.accountId,
   });
+  const typingTarget = statusThreadTs ? `${message.channel}/${statusThreadTs}` : message.channel;
+  const typingCallbacks = createTypingCallbacks(
+    slackOutboundSuppressed
+      ? { start: async () => {}, onStartError: () => {} }
+      : {
+          start: async () => {
+            didSetStatus = true;
+            await ctx.setSlackThreadStatus({
+              channelId: message.channel,
+              threadTs: statusThreadTs,
+              status: "is typing...",
+            });
+          },
+          stop: async () => {
+            if (!didSetStatus) {
+              return;
+            }
+            didSetStatus = false;
+            await ctx.setSlackThreadStatus({
+              channelId: message.channel,
+              threadTs: statusThreadTs,
+              status: "",
+            });
+          },
+          onStartError: (err) => {
+            logTypingFailure({
+              log: (message) => runtime.error?.(danger(message)),
+              channel: "slack",
+              action: "start",
+              target: typingTarget,
+              error: err,
+            });
+          },
+          onStopError: (err) => {
+            logTypingFailure({
+              log: (message) => runtime.error?.(danger(message)),
+              channel: "slack",
+              action: "stop",
+              target: typingTarget,
+              error: err,
+            });
+          },
+        },
+  );
 
   const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
     cfg,
@@ -192,11 +201,6 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     streaming: account.config.streaming,
     streamMode: account.config.streamMode,
     nativeStreaming: account.config.nativeStreaming,
-  });
-  const slackOutboundSuppressed = isOutboundSuppressed({
-    cfg,
-    channel: "slack",
-    accountId: account.accountId,
   });
   const previewStreamingEnabled = slackStreaming.mode !== "off" && !slackOutboundSuppressed;
   const streamingEnabled = isSlackStreamingEnabled({
