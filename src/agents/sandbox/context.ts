@@ -208,6 +208,7 @@ async function resolveSandboxContextInner(
     workspaceDir,
     agentWorkspaceDir,
     cfg: resolvedCfg,
+    abortSignal,
   });
 
   // Abort before the browser setup phase — ensureSandboxBrowser involves
@@ -252,6 +253,7 @@ async function resolveSandboxContextInner(
     cfg: resolvedCfg,
     evaluateEnabled,
     bridgeAuth,
+    abortSignal,
   });
 
   const sandboxContext: SandboxContext = {
