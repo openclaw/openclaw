@@ -395,7 +395,7 @@ describe("exec approval forwarder", () => {
 
   it("finalizes late telegram request deliveries when resolve wins the race", async () => {
     vi.useFakeTimers();
-    let resolveFirstDelivery: ((value: unknown[]) => void) | null = null;
+    let resolveFirstDelivery!: (value: unknown[]) => void;
     const firstDelivery = new Promise<unknown[]>((resolve) => {
       resolveFirstDelivery = resolve;
     });
@@ -416,7 +416,7 @@ describe("exec approval forwarder", () => {
 
     expect(editTelegramMessage).not.toHaveBeenCalled();
 
-    resolveFirstDelivery?.([
+    resolveFirstDelivery([
       {
         channel: "telegram",
         messageId: "tg-race-1",
