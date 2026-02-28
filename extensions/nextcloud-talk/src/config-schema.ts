@@ -32,6 +32,7 @@ export const NextcloudTalkAccountSchemaBase = z
     apiUser: z.string().optional(),
     apiPassword: z.string().optional(),
     apiPasswordFile: z.string().optional(),
+    allowInsecureSsl: z.boolean().optional(),
     dmPolicy: DmPolicySchema.optional().default("pairing"),
     webhookPort: z.number().int().positive().optional(),
     webhookHost: z.string().optional(),

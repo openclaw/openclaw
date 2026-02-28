@@ -32,12 +32,18 @@ export type NextcloudTalkAccountConfig = {
   botSecret?: string;
   /** Path to file containing bot secret (for secret managers). */
   botSecretFile?: string;
-  /** Optional API user for room lookups (DM detection). */
+  /** Optional API user for room lookups and typing indicators. */
   apiUser?: string;
-  /** Optional API password/app password for room lookups. */
+  /** Optional API password/app password for room lookups and typing indicators. */
   apiPassword?: string;
   /** Path to file containing API password/app password. */
   apiPasswordFile?: string;
+  /**
+   * Disable TLS certificate verification for HPB signaling WebSocket connections.
+   * Only use this for self-hosted instances with self-signed certificates.
+   * Default: false (certificates are verified).
+   */
+  allowInsecureSsl?: boolean;
   /** Direct message policy (default: pairing). */
   dmPolicy?: DmPolicy;
   /** Webhook server port. Default: 8788. */

@@ -1,10 +1,13 @@
+import { readFileSync } from "node:fs";
 import {
   GROUP_POLICY_BLOCKED_LABEL,
   createScopedPairingAccess,
   createNormalizedOutboundDeliverer,
   createReplyPrefixOptions,
+  createTypingCallbacks,
   formatTextWithAttachmentLinks,
   logInboundDrop,
+  logTypingFailure,
   readStoreAllowFromForDmPolicy,
   resolveDmGroupAccessWithCommandGate,
   resolveOutboundMediaUrls,
@@ -27,9 +30,23 @@ import {
 import { resolveNextcloudTalkRoomKind } from "./room-info.js";
 import { getNextcloudTalkRuntime } from "./runtime.js";
 import { sendMessageNextcloudTalk } from "./send.js";
+import { createNcTalkTypingManager } from "./signaling-typing.js";
 import type { CoreConfig, GroupPolicy, NextcloudTalkInboundMessage } from "./types.js";
 
 const CHANNEL_ID = "nextcloud-talk" as const;
+
+function resolveNcApiPassword(cfg: {
+  apiPassword?: string;
+  apiPasswordFile?: string;
+}): string | undefined {
+  if (cfg.apiPassword?.trim()) return cfg.apiPassword.trim();
+  if (!cfg.apiPasswordFile) return undefined;
+  try {
+    return readFileSync(cfg.apiPasswordFile, "utf-8").trim() || undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 async function deliverNextcloudTalkReply(params: {
   payload: OutboundReplyPayload;
@@ -315,11 +332,37 @@ export async function handleNextcloudTalkInbound(params: {
     });
   });
 
+  // Typing indicators via HPB WebSocket signaling (optional — requires apiUser + apiPassword)
+  const apiUser = account.config.apiUser?.trim();
+  const apiPassword = resolveNcApiPassword(account.config);
+  const typingCallbacks = (() => {
+    if (!apiUser || !apiPassword) return undefined;
+    const mgr = createNcTalkTypingManager({
+      baseUrl: account.baseUrl,
+      apiUser,
+      apiPassword,
+      roomToken,
+      allowInsecureSsl: account.config.allowInsecureSsl ?? false,
+    });
+    return createTypingCallbacks({
+      start: () => mgr.sendTyping(),
+      stop: () => mgr.stop(),
+      onStartError: (err) =>
+        logTypingFailure({
+          log: runtime.log ?? (() => undefined),
+          channel: CHANNEL_ID,
+          target: roomToken,
+          error: err,
+        }),
+    });
+  })();
+
   await core.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
     ctx: ctxPayload,
     cfg: config as OpenClawConfig,
     dispatcherOptions: {
       ...prefixOptions,
+      typingCallbacks,
       deliver: deliverReply,
       onError: (err, info) => {
         runtime.error?.(`nextcloud-talk ${info.kind} reply failed: ${String(err)}`);
