@@ -6,6 +6,7 @@ import {
   resolveOllamaCompatNumCtxEnabled,
   resolvePromptBuildHookResult,
   resolvePromptModeForSession,
+  shouldInjectOllamaCompatNumCtx,
   wrapOllamaCompatNumCtx,
   wrapStreamFnTrimToolCallNames,
 } from "./attempt.js";
@@ -208,6 +209,16 @@ describe("isOllamaCompatProvider", () => {
       }),
     ).toBe(false);
   });
+
+  it("detects IPv6 loopback Ollama OpenAI-compatible endpoint", () => {
+    expect(
+      isOllamaCompatProvider({
+        provider: "custom",
+        api: "openai-completions",
+        baseUrl: "http://[::1]:11434/v1",
+      }),
+    ).toBe(true);
+  });
 });
 
 describe("wrapOllamaCompatNumCtx", () => {
@@ -247,6 +258,45 @@ describe("resolveOllamaCompatNumCtxEnabled", () => {
   it("returns false when provider flag is explicitly disabled", () => {
     expect(
       resolveOllamaCompatNumCtxEnabled({
+        config: {
+          models: {
+            providers: {
+              ollama: {
+                baseUrl: "http://127.0.0.1:11434/v1",
+                api: "openai-completions",
+                injectNumCtxForOpenAICompat: false,
+                models: [],
+              },
+            },
+          },
+        },
+        providerId: "ollama",
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("shouldInjectOllamaCompatNumCtx", () => {
+  it("requires openai-completions adapter", () => {
+    expect(
+      shouldInjectOllamaCompatNumCtx({
+        model: {
+          provider: "ollama",
+          api: "openai-responses",
+          baseUrl: "http://127.0.0.1:11434/v1",
+        },
+      }),
+    ).toBe(false);
+  });
+
+  it("respects provider flag disablement", () => {
+    expect(
+      shouldInjectOllamaCompatNumCtx({
+        model: {
+          provider: "ollama",
+          api: "openai-completions",
+          baseUrl: "http://127.0.0.1:11434/v1",
+        },
         config: {
           models: {
             providers: {
