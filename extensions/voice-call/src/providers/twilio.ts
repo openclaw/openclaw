@@ -87,6 +87,8 @@ export class TwilioProvider implements VoiceCallProvider {
   private callStreamMap = new Map<string, string>();
   /** Per-call tokens for media stream authentication */
   private streamAuthTokens = new Map<string, string>();
+  /** Tracks callSids that already have an active media stream to prevent duplicate streams */
+  private activeStreamCallSids = new Set<string>();
 
   /** Storage for TwiML content (for notify mode with URL-based TwiML) */
   private readonly twimlStorage = new Map<string, string>();
@@ -335,12 +337,14 @@ export class TwilioProvider implements VoiceCallProvider {
       case "no-answer":
       case "failed":
         this.streamAuthTokens.delete(callSid);
+        if (callSid) this.activeStreamCallSids.delete(callSid);
         if (callIdOverride) {
           this.deleteStoredTwiml(callIdOverride);
         }
         return { ...baseEvent, type: "call.ended", reason: callStatus };
       case "canceled":
         this.streamAuthTokens.delete(callSid);
+        if (callSid) this.activeStreamCallSids.delete(callSid);
         if (callIdOverride) {
           this.deleteStoredTwiml(callIdOverride);
         }
@@ -396,7 +400,16 @@ export class TwilioProvider implements VoiceCallProvider {
 
       // Conversation mode: return streaming TwiML immediately for outbound calls.
       if (isOutbound) {
+        // Guard against duplicate webhook POSTs from Twilio (issue #5732):
+        // Twilio may send the webhook twice; only the first should get <Connect><Stream>.
+        if (callSid && this.activeStreamCallSids.has(callSid)) {
+          console.log(`[voice-call] Duplicate webhook for ${callSid} — returning empty TwiML`);
+          return TwilioProvider.EMPTY_TWIML;
+        }
         const streamUrl = callSid ? this.getStreamUrlForCall(callSid) : null;
+        if (streamUrl && callSid) {
+          this.activeStreamCallSids.add(callSid);
+        }
         return streamUrl ? this.getStreamConnectXml(streamUrl) : TwilioProvider.PAUSE_TWIML;
       }
     }
