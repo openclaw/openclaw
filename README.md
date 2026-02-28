@@ -49,7 +49,7 @@ An uncompromised Windows-first operational environment.
 ---
 
 ## 🛠️ The Feature Arsenal
-Rykiri commands 70+ elite skills located in `~/.agents/skills/`, dynamically pulling in context for operations:
+Rykiri commands over 1000+ elite skills located in `~/.agents/skills/`, dynamically pulling in context for operations:
 - **`headless-browser`** — Native stealth scraping capabilities.
 - **`solana-verify-build`** — Immutable program distribution.
 - **`unique-ui-design`** — The "5-Layer Authenticity Stack" for non-generic UIs.
