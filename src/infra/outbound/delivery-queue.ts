@@ -171,9 +171,13 @@ export async function ackDelivery(id: string, stateDir?: string): Promise<void> 
 export async function failDelivery(id: string, error: string, stateDir?: string): Promise<void> {
   const db = getLifecycleDb(stateDir);
   try {
-    const row = db.prepare(`SELECT attempt_count FROM message_outbox WHERE id=?`).get(id) as
-      | { attempt_count: number }
-      | undefined;
+    // Only act on non-terminal rows — if the live path already acked/failed
+    // this entry, the recovery worker should not resurrect it.
+    const row = db
+      .prepare(
+        `SELECT attempt_count FROM message_outbox WHERE id=? AND status IN ('queued','failed_retryable')`,
+      )
+      .get(id) as { attempt_count: number } | undefined;
     if (!row) {
       return;
     }
