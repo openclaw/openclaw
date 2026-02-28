@@ -7,7 +7,6 @@ import {
   type HistoryEntry,
   getGlobalHookRunner,
   installRequestBodyLimitGuard,
-  getGlobalHookRunner,
 } from "openclaw/plugin-sdk";
 import { resolveFeishuAccount, listEnabledFeishuAccounts } from "./accounts.js";
 import { handleFeishuMessage, type FeishuMessageEvent, type FeishuBotAddedEvent } from "./bot.js";
