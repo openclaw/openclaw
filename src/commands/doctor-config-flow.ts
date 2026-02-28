@@ -1267,9 +1267,28 @@ function detectEmptyAllowlistPolicy(cfg: OpenClawConfig): string[] {
 
   const warnings: string[] = [];
 
-  // Discord and Slack enforce group allowlists via guild/channel config
-  // (guilds.*.channels / channels.*), not sender-based groupAllowFrom.
-  const usesChannelBasedGroupAllowlist = new Set(["discord", "slack"]);
+  const usesSenderBasedGroupAllowlist = (channelName?: string): boolean => {
+    if (!channelName) {
+      return true;
+    }
+    // These channels enforce group access via channel/space config, not sender-based
+    // groupAllowFrom lists.
+    return !(channelName === "discord" || channelName === "slack" || channelName === "googlechat");
+  };
+
+  const allowsGroupAllowFromFallback = (channelName?: string): boolean => {
+    if (!channelName) {
+      return true;
+    }
+    // Keep doctor warnings aligned with runtime access semantics.
+    return !(
+      channelName === "googlechat" ||
+      channelName === "imessage" ||
+      channelName === "matrix" ||
+      channelName === "msteams" ||
+      channelName === "irc"
+    );
+  };
 
   const checkAccount = (
     account: Record<string, unknown>,
@@ -1312,24 +1331,27 @@ function detectEmptyAllowlistPolicy(cfg: OpenClawConfig): string[] {
       (parent?.groupPolicy as string | undefined) ??
       undefined;
 
-    // Skip sender-based check for channels that use channel/guild allowlists
-    // (Discord: guilds.*.channels, Slack: channels.*).
-    if (
-      groupPolicy === "allowlist" &&
-      (!channelName || !usesChannelBasedGroupAllowlist.has(channelName))
-    ) {
+    if (groupPolicy === "allowlist" && usesSenderBasedGroupAllowlist(channelName)) {
       const rawGroupAllowFrom =
         (account.groupAllowFrom as Array<string | number> | undefined) ??
         (parent?.groupAllowFrom as Array<string | number> | undefined);
       // Match runtime semantics: resolveGroupAllowFromSources treats
       // empty arrays as unset and falls back to allowFrom.
       const groupAllowFrom = hasAllowFromEntries(rawGroupAllowFrom) ? rawGroupAllowFrom : undefined;
-      const effectiveGroupAllowFrom = groupAllowFrom ?? effectiveAllowFrom;
+      const fallbackToAllowFrom = allowsGroupAllowFromFallback(channelName);
+      const effectiveGroupAllowFrom =
+        groupAllowFrom ?? (fallbackToAllowFrom ? effectiveAllowFrom : undefined);
 
       if (!hasAllowFromEntries(effectiveGroupAllowFrom)) {
-        warnings.push(
-          `- ${prefix}.groupPolicy is "allowlist" but groupAllowFrom (and allowFrom) is empty — all group messages will be silently dropped. Add sender IDs to ${prefix}.groupAllowFrom or ${prefix}.allowFrom, or set groupPolicy to "open".`,
-        );
+        if (fallbackToAllowFrom) {
+          warnings.push(
+            `- ${prefix}.groupPolicy is "allowlist" but groupAllowFrom (and allowFrom) is empty — all group messages will be silently dropped. Add sender IDs to ${prefix}.groupAllowFrom or ${prefix}.allowFrom, or set groupPolicy to "open".`,
+          );
+        } else {
+          warnings.push(
+            `- ${prefix}.groupPolicy is "allowlist" but groupAllowFrom is empty — this channel does not fall back to allowFrom, so all group messages will be silently dropped. Add sender IDs to ${prefix}.groupAllowFrom, or set groupPolicy to "open".`,
+          );
+        }
       }
     }
   };
