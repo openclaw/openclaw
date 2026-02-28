@@ -12,6 +12,7 @@ import {
   type RuntimeEnv,
 } from "openclaw/plugin-sdk";
 import type { CoreConfig, ReplyToMode } from "../../types.js";
+import { fetchEventSummary } from "../actions/summary.js";
 import {
   formatPollAsText,
   isPollStartType,
@@ -443,7 +444,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         isThreadRoot: false, // @vector-im/matrix-bot-sdk doesn't have this info readily available
       });
 
-      const route = core.channel.routing.resolveAgentRoute({
+      const baseRoute = core.channel.routing.resolveAgentRoute({
         cfg,
         channel: "dejoy",
         peer: {
@@ -451,14 +452,58 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           id: isDirectMessage ? senderId : roomId,
         },
       });
-      const envelopeFrom = isDirectMessage ? senderName : (roomName ?? roomId);
-      const textWithId = `${bodyText}\n[dejoy event id: ${messageId} room: ${roomId}]`;
+
+      const route = {
+        ...baseRoute,
+        sessionKey: threadRootId
+          ? `${baseRoute.sessionKey}:thread:${threadRootId}`
+          : baseRoute.sessionKey,
+      };
+
+      let threadStarterBody: string | undefined;
+      let threadLabel: string | undefined;
+      let parentSessionKey: string | undefined;
+
       const storePath = core.channel.session.resolveStorePath(
         (cfg as { session?: { store?: string } }).session?.store,
-        {
-          agentId: route.agentId,
-        },
+        { agentId: route.agentId },
       );
+
+      if (threadRootId) {
+        const existingSession = core.channel.session.readSessionUpdatedAt({
+          storePath,
+          sessionKey: route.sessionKey,
+        });
+
+        if (existingSession === undefined) {
+          try {
+            const rootEvent = await fetchEventSummary(client, roomId, threadRootId);
+            if (rootEvent?.body) {
+              const rootSenderName = rootEvent.sender
+                ? await getMemberDisplayName(roomId, rootEvent.sender)
+                : undefined;
+
+              threadStarterBody = core.channel.reply.formatAgentEnvelope({
+                channel: "dejoy",
+                from: rootSenderName ?? rootEvent.sender ?? "Unknown",
+                timestamp: rootEvent.timestamp,
+                envelope: core.channel.reply.resolveEnvelopeFormatOptions(cfg),
+                body: rootEvent.body,
+              });
+
+              threadLabel = `DeJoy thread in ${roomName ?? roomId}`;
+              parentSessionKey = baseRoute.sessionKey;
+            }
+          } catch (err) {
+            logVerboseMessage(`dejoy: failed to fetch thread root ${threadRootId}: ${String(err)}`);
+          }
+        }
+      }
+
+      const envelopeFrom = isDirectMessage ? senderName : (roomName ?? roomId);
+      const textWithId = threadRootId
+        ? `${bodyText}\n[dejoy event id: ${messageId} room: ${roomId} thread: ${threadRootId}]`
+        : `${bodyText}\n[dejoy event id: ${messageId} room: ${roomId}]`;
       const envelopeOptions = core.channel.reply.resolveEnvelopeFormatOptions(cfg);
       const previousTimestamp = core.channel.session.readSessionUpdatedAt({
         storePath,
