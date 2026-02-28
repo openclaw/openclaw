@@ -1,3 +1,4 @@
+import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
 import { DEFAULT_AGENT_ID } from "../../routing/session-key.js";
 import { resolveCronDeliveryPlan } from "../delivery.js";
@@ -16,6 +17,7 @@ import {
   resolveJobPayloadTextForMain,
 } from "./jobs.js";
 import { locked } from "./locked.js";
+import { classifyRunErrorKind, errorBackoffMs, resolveBackoffSchedule } from "./retry-policy.js";
 import type { CronEvent, CronServiceState } from "./state.js";
 import { ensureLoaded, persist } from "./store.js";
 import { DEFAULT_JOB_TIMEOUT_MS, resolveCronJobTimeoutMs } from "./timeout-policy.js";
@@ -87,28 +89,20 @@ function isAbortError(err: unknown): boolean {
   }
   return err.name === "AbortError" || err.message === timeoutErrorMessage();
 }
-/**
- * Exponential backoff delays (in ms) indexed by consecutive error count.
- * After the last entry the delay stays constant.
- */
-const ERROR_BACKOFF_SCHEDULE_MS = [
-  30_000, // 1st error  →  30 s
-  60_000, // 2nd error  →   1 min
-  5 * 60_000, // 3rd error  →   5 min
-  15 * 60_000, // 4th error  →  15 min
-  60 * 60_000, // 5th+ error →  60 min
-];
-
-function errorBackoffMs(consecutiveErrors: number): number {
-  const idx = Math.min(consecutiveErrors - 1, ERROR_BACKOFF_SCHEDULE_MS.length - 1);
-  return ERROR_BACKOFF_SCHEDULE_MS[Math.max(0, idx)];
-}
-
-function resolveDeliveryStatus(params: { job: CronJob; delivered?: boolean }): CronDeliveryStatus {
+function resolveDeliveryStatus(params: {
+  job: CronJob;
+  delivered?: boolean;
+  deliveryAttempted?: boolean;
+}): CronDeliveryStatus {
   if (params.delivered === true) {
     return "delivered";
   }
   if (params.delivered === false) {
+    return "not-delivered";
+  }
+  // When delivery was attempted but delivered is undefined, treat as not-delivered
+  // rather than "unknown" — the delivery path ran and did not confirm success.
+  if (params.deliveryAttempted === true) {
     return "not-delivered";
   }
   return resolveCronDeliveryPlan(params.job).requested ? "unknown" : "not-requested";
@@ -126,6 +120,7 @@ export function applyJobResult(
     status: CronRunStatus;
     error?: string;
     delivered?: boolean;
+    deliveryAttempted?: boolean;
     startedAt: number;
     endedAt: number;
   },
@@ -137,7 +132,11 @@ export function applyJobResult(
   job.state.lastDurationMs = Math.max(0, result.endedAt - result.startedAt);
   job.state.lastError = result.error;
   job.state.lastDelivered = result.delivered;
-  const deliveryStatus = resolveDeliveryStatus({ job, delivered: result.delivered });
+  const deliveryStatus = resolveDeliveryStatus({
+    job,
+    delivered: result.delivered,
+    deliveryAttempted: result.deliveryAttempted,
+  });
   job.state.lastDeliveryStatus = deliveryStatus;
   job.state.lastDeliveryError =
     deliveryStatus === "not-delivered" && result.error ? result.error : undefined;
@@ -172,22 +171,41 @@ export function applyJobResult(
         );
       }
     } else if (result.status === "error" && job.enabled) {
-      // Apply exponential backoff for errored jobs to prevent retry storms.
-      const backoff = errorBackoffMs(job.state.consecutiveErrors ?? 1);
-      const normalNext = computeJobNextRunAtMs(job, result.endedAt);
-      const backoffNext = result.endedAt + backoff;
-      // Use whichever is later: the natural next run or the backoff delay.
-      job.state.nextRunAtMs =
-        normalNext !== undefined ? Math.max(normalNext, backoffNext) : backoffNext;
-      state.deps.log.info(
-        {
-          jobId: job.id,
-          consecutiveErrors: job.state.consecutiveErrors,
-          backoffMs: backoff,
-          nextRunAtMs: job.state.nextRunAtMs,
-        },
-        "cron: applying error backoff",
-      );
+      // Classify the error to decide retry behaviour.
+      const errorKind = classifyRunErrorKind(result.error);
+      if (errorKind === "terminal") {
+        // Terminal errors: disable the job to prevent futile retries.
+        job.enabled = false;
+        job.state.nextRunAtMs = undefined;
+        state.deps.log.warn(
+          {
+            jobId: job.id,
+            jobName: job.name,
+            errorKind,
+            error: result.error,
+          },
+          "cron: disabling job after terminal error",
+        );
+      } else {
+        // Transient errors: apply exponential backoff.
+        const schedule = resolveBackoffSchedule(state.deps.cronConfig);
+        const backoff = errorBackoffMs(job.state.consecutiveErrors ?? 1, schedule);
+        const normalNext = computeJobNextRunAtMs(job, result.endedAt);
+        const backoffNext = result.endedAt + backoff;
+        // Use whichever is later: the natural next run or the backoff delay.
+        job.state.nextRunAtMs =
+          normalNext !== undefined ? Math.max(normalNext, backoffNext) : backoffNext;
+        state.deps.log.info(
+          {
+            jobId: job.id,
+            consecutiveErrors: job.state.consecutiveErrors,
+            errorKind,
+            backoffMs: backoff,
+            nextRunAtMs: job.state.nextRunAtMs,
+          },
+          "cron: applying error backoff",
+        );
+      }
     } else if (job.enabled) {
       const naturalNext = computeJobNextRunAtMs(job, result.endedAt);
       if (job.schedule.kind === "cron") {
@@ -224,6 +242,7 @@ function applyOutcomeToStoredJob(state: CronServiceState, result: TimedCronRunOu
     status: result.status,
     error: result.error,
     delivered: result.delivered,
+    deliveryAttempted: result.deliveryAttempted,
     startedAt: result.startedAt,
     endedAt: result.endedAt,
   });
@@ -733,7 +752,7 @@ export async function executeJobCore(
     res.deliveryAttempted !== true &&
     !suppressMainSummary
   ) {
-    const prefix = "Cron";
+    const prefix = state.deps.responsePrefix ?? "Cron";
     const label =
       res.status === "error" ? `${prefix} (error): ${summaryText}` : `${prefix}: ${summaryText}`;
     state.deps.enqueueSystemEvent(label, {
@@ -785,6 +804,7 @@ export async function executeJob(
   let coreResult: {
     status: CronRunStatus;
     delivered?: boolean;
+    deliveryAttempted?: boolean;
   } & CronRunOutcome &
     CronRunTelemetry;
   try {
@@ -798,6 +818,7 @@ export async function executeJob(
     status: coreResult.status,
     error: coreResult.error,
     delivered: coreResult.delivered,
+    deliveryAttempted: coreResult.deliveryAttempted,
     startedAt,
     endedAt,
   });
@@ -837,6 +858,28 @@ function emitJobFinished(
     model: result.model,
     provider: result.provider,
     usage: result.usage,
+  });
+
+  // Bridge cron events into the internal hook system so extensions and
+  // automation can react to job completions (e.g. alerting, chaining).
+  const hookEvent = createInternalHookEvent(
+    "cron",
+    "finished",
+    job.sessionKey ?? `cron:${job.id}`,
+    {
+      jobId: job.id,
+      jobName: job.name,
+      status: result.status,
+      error: result.error,
+      summary: result.summary,
+      delivered: result.delivered,
+      deliveryStatus: job.state.lastDeliveryStatus,
+      durationMs: job.state.lastDurationMs,
+      nextRunAtMs: job.state.nextRunAtMs,
+    },
+  );
+  void triggerInternalHook(hookEvent).catch(() => {
+    /* hook errors must not break cron */
   });
 }
 

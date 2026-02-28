@@ -25,7 +25,19 @@ import {
 } from "./normalize.js";
 import type { CronServiceState } from "./state.js";
 
-const STUCK_RUN_MS = 2 * 60 * 60 * 1000;
+const DEFAULT_STUCK_RUN_MS = 2 * 60 * 60 * 1000;
+
+/**
+ * Resolve the stuck-run timeout, preferring the user-configured value from
+ * `cron.stuckRunTimeoutMs` when present and valid.
+ */
+function resolveStuckRunMs(state: CronServiceState): number {
+  const custom = state.deps.cronConfig?.stuckRunTimeoutMs;
+  if (typeof custom === "number" && Number.isFinite(custom) && custom > 0) {
+    return custom;
+  }
+  return DEFAULT_STUCK_RUN_MS;
+}
 
 function resolveStableCronOffsetMs(jobId: string, staggerMs: number) {
   if (staggerMs <= 1) {
@@ -233,8 +245,9 @@ function normalizeJobTickState(params: { state: CronServiceState; job: CronJob; 
     return { changed, skip: true };
   }
 
+  const stuckMs = resolveStuckRunMs(state);
   const runningAt = job.state.runningAtMs;
-  if (typeof runningAt === "number" && nowMs - runningAt > STUCK_RUN_MS) {
+  if (typeof runningAt === "number" && nowMs - runningAt > stuckMs) {
     state.deps.log.warn(
       { jobId: job.id, runningAtMs: runningAt },
       "cron: clearing stuck running marker",

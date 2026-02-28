@@ -89,6 +89,11 @@ export type CronServiceDeps = {
       CronRunTelemetry
   >;
   onEvent?: (evt: CronEvent) => void;
+  /**
+   * Prefix used for cron summary messages posted to the main session
+   * (e.g. "Cron" → "Cron: <summary>"). Defaults to "Cron" when omitted.
+   */
+  responsePrefix?: string;
 };
 
 export type CronServiceDepsInternal = Omit<CronServiceDeps, "nowMs"> & {

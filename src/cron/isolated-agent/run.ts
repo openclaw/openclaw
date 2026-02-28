@@ -47,6 +47,7 @@ import {
   getHookType,
   isExternalHookSession,
 } from "../../security/external-content.js";
+import { stripInlineDirectiveTagsForDisplay } from "../../utils/directive-tags.js";
 import { resolveCronDeliveryPlan } from "../delivery.js";
 import type { CronJob, CronRunOutcome, CronRunTelemetry } from "../types.js";
 import {
@@ -549,6 +550,27 @@ export async function runCronIsolatedAgentTurn(params: {
   let summary = pickSummaryFromPayloads(payloads) ?? pickSummaryFromOutput(firstText);
   let outputText = pickLastNonEmptyTextFromPayloads(payloads);
   let synthesizedText = outputText?.trim() || summary?.trim() || undefined;
+
+  // Strip inline directive tags (e.g. [[reply_to_current]], [[audio_as_voice]])
+  // that have no meaning in a cron context and would leak into delivery output.
+  if (synthesizedText) {
+    const stripped = stripInlineDirectiveTagsForDisplay(synthesizedText);
+    if (stripped.changed) {
+      synthesizedText = stripped.text.trim() || undefined;
+    }
+  }
+  if (outputText) {
+    const stripped = stripInlineDirectiveTagsForDisplay(outputText);
+    if (stripped.changed) {
+      outputText = stripped.text.trim() || undefined;
+    }
+  }
+  if (summary) {
+    const stripped = stripInlineDirectiveTagsForDisplay(summary);
+    if (stripped.changed) {
+      summary = stripped.text.trim() || undefined;
+    }
+  }
   const deliveryPayload = pickLastDeliverablePayload(payloads);
   let deliveryPayloads =
     deliveryPayload !== undefined

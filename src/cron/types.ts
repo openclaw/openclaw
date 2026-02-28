@@ -117,6 +117,12 @@ export type CronJob = {
   description?: string;
   enabled: boolean;
   deleteAfterRun?: boolean;
+  /**
+   * When `true`, the scheduler skips this job's scheduled fire if a previous
+   * run is still in progress instead of queuing a second concurrent execution.
+   * Useful for long-running jobs where overlapping runs cause data races.
+   */
+  skipIfRunActive?: boolean;
   createdAtMs: number;
   updatedAtMs: number;
   schedule: CronSchedule;

@@ -10,7 +10,13 @@ import type { CliDeps } from "../cli/deps.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 
-export type InternalHookEventType = "command" | "session" | "agent" | "gateway" | "message";
+export type InternalHookEventType =
+  | "command"
+  | "session"
+  | "agent"
+  | "gateway"
+  | "message"
+  | "cron";
 
 export type AgentBootstrapHookContext = {
   workspaceDir: string;
@@ -231,6 +237,48 @@ export function createInternalHookEvent(
     timestamp: new Date(),
     messages: [],
   };
+}
+
+// ============================================================================
+// Cron Hook Events
+// ============================================================================
+
+export type CronExecutionHookContext = {
+  /** Cron job ID. */
+  jobId: string;
+  /** Cron job name. */
+  jobName: string;
+  /** Execution outcome: ok, error, or skipped. */
+  status: string;
+  /** Error message when status is "error". */
+  error?: string;
+  /** Run summary text. */
+  summary?: string;
+  /** Whether delivery succeeded. */
+  delivered?: boolean;
+  /** Delivery status string. */
+  deliveryStatus?: string;
+  /** Duration of the run in milliseconds. */
+  durationMs?: number;
+  /** Next scheduled run timestamp in milliseconds. */
+  nextRunAtMs?: number;
+};
+
+export type CronExecutionHookEvent = InternalHookEvent & {
+  type: "cron";
+  action: "finished";
+  context: CronExecutionHookContext;
+};
+
+export function isCronExecutionEvent(event: InternalHookEvent): event is CronExecutionHookEvent {
+  if (event.type !== "cron" || event.action !== "finished") {
+    return false;
+  }
+  const context = event.context as Partial<CronExecutionHookContext> | null;
+  if (!context || typeof context !== "object") {
+    return false;
+  }
+  return typeof context.jobId === "string" && typeof context.status === "string";
 }
 
 export function isAgentBootstrapEvent(event: InternalHookEvent): event is AgentBootstrapHookEvent {

@@ -103,6 +103,10 @@ export async function start(state: CronServiceState) {
           "cron: clearing stale running marker on startup",
         );
         job.state.runningAtMs = undefined;
+        // Also clear nextRunAtMs so the maintenance recompute below fills it
+        // with the correct next occurrence. Interrupted jobs are skipped by
+        // runMissedJobs, so their past-due nextRunAtMs must be advanced.
+        job.state.nextRunAtMs = undefined;
         startupInterruptedJobIds.add(job.id);
       }
     }
@@ -113,7 +117,11 @@ export async function start(state: CronServiceState) {
 
   await locked(state, async () => {
     await ensureLoaded(state, { forceReload: true, skipRecompute: true });
-    recomputeNextRuns(state);
+    // Use maintenance-only recompute to avoid advancing past-due nextRunAtMs
+    // values for jobs that runMissedJobs intentionally skipped (e.g. jobs
+    // whose running marker was cleared on startup). Those jobs keep their
+    // past-due nextRunAtMs and will fire on the next timer tick. (#29690)
+    recomputeNextRunsForMaintenance(state);
     await persist(state);
     armTimer(state);
     state.deps.log.info(
@@ -394,6 +402,7 @@ export async function run(state: CronServiceState, id: string, mode?: "due" | "f
       status: coreResult.status,
       error: coreResult.error,
       delivered: coreResult.delivered,
+      deliveryAttempted: coreResult.deliveryAttempted,
       startedAt,
       endedAt,
     });

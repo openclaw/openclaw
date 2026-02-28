@@ -144,6 +144,7 @@ export async function dispatchCronDelivery(
       errorKind: "delivery-target",
       summary,
       outputText,
+      delivered: false,
       deliveryAttempted,
       ...params.telemetry,
     });
@@ -192,12 +193,14 @@ export async function dispatchCronDelivery(
       delivered = deliveryResults.length > 0;
       return null;
     } catch (err) {
+      delivered = false;
       if (!params.deliveryBestEffort) {
         return params.withRunSession({
           status: "error",
           summary,
           outputText,
           error: String(err),
+          delivered: false,
           deliveryAttempted,
           ...params.telemetry,
         });
@@ -322,6 +325,7 @@ export async function dispatchCronDelivery(
       if (didAnnounce) {
         delivered = true;
       } else {
+        delivered = false;
         const message = "cron announce delivery failed";
         if (!params.deliveryBestEffort) {
           return params.withRunSession({
@@ -329,6 +333,7 @@ export async function dispatchCronDelivery(
             summary,
             outputText,
             error: message,
+            delivered: false,
             deliveryAttempted,
             ...params.telemetry,
           });
@@ -336,12 +341,14 @@ export async function dispatchCronDelivery(
         logWarn(`[cron:${params.job.id}] ${message}`);
       }
     } catch (err) {
+      delivered = false;
       if (!params.deliveryBestEffort) {
         return params.withRunSession({
           status: "error",
           summary,
           outputText,
           error: String(err),
+          delivered: false,
           deliveryAttempted,
           ...params.telemetry,
         });

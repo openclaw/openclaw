@@ -23,4 +23,16 @@ export type CronConfig = {
     maxBytes?: number | string;
     keepLines?: number;
   };
+  /**
+   * Custom exponential backoff schedule (array of millisecond delays) for
+   * consecutive cron execution errors. Each entry corresponds to the Nth
+   * consecutive error. After the last entry the delay stays constant.
+   * Default: [30000, 60000, 300000, 900000, 3600000]
+   */
+  retryBackoff?: number[];
+  /**
+   * How long (in ms) a job's `runningAtMs` marker must be stale before the
+   * scheduler clears it as "stuck". Default: 7200000 (2 hours).
+   */
+  stuckRunTimeoutMs?: number;
 };

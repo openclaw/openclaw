@@ -384,6 +384,8 @@ export const OpenClawSchema = z
           })
           .strict()
           .optional(),
+        retryBackoff: z.array(z.number().positive()).optional(),
+        stuckRunTimeoutMs: z.number().int().positive().optional(),
       })
       .strict()
       .superRefine((val, ctx) => {
