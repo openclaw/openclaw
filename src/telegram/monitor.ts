@@ -299,10 +299,13 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
       // and we'll restart the runner.
       // Uses a self-scheduling loop instead of setInterval to prevent overlapping checks
       // when a health check takes longer than the interval period.
+      // healthCheckStopped guards against a concurrent in-flight check scheduling a new
+      // timer after stopHealthCheck() has been called (e.g., during runner teardown).
+      let healthCheckStopped = false;
       const startHealthCheck = () => {
         const scheduleNext = () => {
           healthCheckTimer = setTimeout(async () => {
-            if (opts.abortSignal?.aborted) {
+            if (healthCheckStopped || opts.abortSignal?.aborted) {
               return;
             }
             try {
@@ -322,7 +325,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
               }
               logVerbose("[telegram] Health check passed");
             } catch (err) {
-              if (opts.abortSignal?.aborted) {
+              if (healthCheckStopped || opts.abortSignal?.aborted) {
                 return;
               }
               // Health check failed - connection is likely stale
@@ -333,13 +336,17 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
               void stopRunner();
               return; // Don't schedule next check; runner restart will create a new watchdog
             }
-            scheduleNext();
+            // Only reschedule if watchdog is still active (not torn down mid-check).
+            if (!healthCheckStopped) {
+              scheduleNext();
+            }
           }, HEALTH_CHECK_INTERVAL_MS);
         };
         scheduleNext();
       };
 
       const stopHealthCheck = () => {
+        healthCheckStopped = true;
         if (healthCheckTimer) {
           clearTimeout(healthCheckTimer);
           healthCheckTimer = undefined;
@@ -352,13 +359,16 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
       try {
         // runner.task() returns a promise that resolves when the runner stops
         await runner.task();
-        if (staleConnectionDetected) {
-          // Runner was stopped due to health check failure; continue to restart
-          restartAttempts = 0; // Reset backoff since this is a controlled restart
-          return "continue";
-        }
+        // Abort takes highest priority — always exit cleanly when signaled.
         if (opts.abortSignal?.aborted) {
           return "exit";
+        }
+        if (staleConnectionDetected) {
+          // Runner was stopped due to health check failure; continue to restart
+          // without backoff since this is a controlled recovery restart.
+          forceRestarted = false;
+          restartAttempts = 0;
+          return "continue";
         }
         const reason = forceRestarted
           ? "unhandled network error"
