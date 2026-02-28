@@ -162,6 +162,7 @@ export function createOpenClawTools(options?: {
       agentGroupSpace: options?.agentGroupSpace,
       sandboxed: options?.sandboxed,
       requesterAgentIdOverride: options?.requesterAgentIdOverride,
+      requesterSenderId: options?.requesterSenderId,
     }),
     createSubagentsTool({
       agentSessionKey: options?.agentSessionKey,

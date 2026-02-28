@@ -387,6 +387,7 @@ function startSubagentAnnounceCleanupFlow(runId: string, entry: SubagentRunRecor
     childRunId: entry.runId,
     requesterSessionKey: entry.requesterSessionKey,
     requesterOrigin,
+    requesterSenderId: entry.requesterSenderId,
     requesterDisplayKey: entry.requesterDisplayKey,
     task: entry.task,
     timeoutMs: SUBAGENT_ANNOUNCE_TIMEOUT_MS,
@@ -897,6 +898,7 @@ export function registerSubagentRun(params: {
   childSessionKey: string;
   requesterSessionKey: string;
   requesterOrigin?: DeliveryContext;
+  requesterSenderId?: string;
   requesterDisplayKey: string;
   task: string;
   cleanup: "delete" | "keep";
@@ -920,6 +922,7 @@ export function registerSubagentRun(params: {
     childSessionKey: params.childSessionKey,
     requesterSessionKey: params.requesterSessionKey,
     requesterOrigin,
+    requesterSenderId: params.requesterSenderId,
     requesterDisplayKey: params.requesterDisplayKey,
     task: params.task,
     cleanup: params.cleanup,

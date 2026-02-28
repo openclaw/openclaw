@@ -7,6 +7,7 @@ import {
   resolveAgentIdFromSessionKey,
   resolveMainSessionKey,
   resolveStorePath,
+  type SessionEntry,
 } from "../config/sessions.js";
 import { callGateway } from "../gateway/call.js";
 import { createBoundDeliveryRouter } from "../infra/outbound/bound-delivery-router.js";
@@ -71,12 +72,14 @@ function buildCompletionDeliveryMessage(params: {
   spawnMode?: SpawnSubagentMode;
   outcome?: SubagentRunOutcome;
   announceType?: SubagentAnnounceType;
+  requesterUserId?: string;
 }): string {
   const findingsText = params.findings.trim();
   if (isAnnounceSkip(findingsText)) {
     return "";
   }
   const hasFindings = findingsText.length > 0 && findingsText !== "(no output)";
+  const mention = params.requesterUserId ? `<@${params.requesterUserId}> ` : "";
   // Cron completions are standalone messages — skip the subagent status header.
   if (params.announceType === "cron job") {
     return hasFindings ? findingsText : "";
@@ -84,22 +87,42 @@ function buildCompletionDeliveryMessage(params: {
   const header = (() => {
     if (params.outcome?.status === "error") {
       return params.spawnMode === "session"
-        ? `❌ Subagent ${params.subagentName} failed this task (session remains active)`
-        : `❌ Subagent ${params.subagentName} failed`;
+        ? `${mention}❌ Subagent ${params.subagentName} failed this task (session remains active)`
+        : `${mention}❌ Subagent ${params.subagentName} failed`;
     }
     if (params.outcome?.status === "timeout") {
       return params.spawnMode === "session"
-        ? `⏱️ Subagent ${params.subagentName} timed out on this task (session remains active)`
-        : `⏱️ Subagent ${params.subagentName} timed out`;
+        ? `${mention}⏱️ Subagent ${params.subagentName} timed out on this task (session remains active)`
+        : `${mention}⏱️ Subagent ${params.subagentName} timed out`;
     }
     return params.spawnMode === "session"
-      ? `✅ Subagent ${params.subagentName} completed this task (session remains active)`
-      : `✅ Subagent ${params.subagentName} finished`;
+      ? `${mention}✅ Subagent ${params.subagentName} completed this task (session remains active)`
+      : `${mention}✅ Subagent ${params.subagentName} finished`;
   })();
   if (!hasFindings) {
     return header;
   }
   return `${header}\n\n${findingsText}`;
+}
+
+function extractUserIdFromSessionEntry(entry?: SessionEntry | null): string | undefined {
+  // Prefer raw sender fields captured by session persistence when available.
+  const rawSenderId =
+    entry && typeof entry === "object"
+      ? ((entry as unknown as { senderId?: unknown; SenderId?: unknown }).senderId ??
+        (entry as unknown as { senderId?: unknown; SenderId?: unknown }).SenderId)
+      : undefined;
+  if (typeof rawSenderId === "string" && /^\d+$/.test(rawSenderId.trim())) {
+    return rawSenderId.trim();
+  }
+  // Fallback: try to extract from origin.from for DMs (format: "discord:${userId}")
+  if (entry?.origin?.from?.startsWith("discord:")) {
+    const parts = entry.origin.from.split(":");
+    if (parts.length >= 2 && parts[1] && /^\d+$/.test(parts[1])) {
+      return parts[1];
+    }
+  }
+  return undefined;
 }
 
 function summarizeDeliveryError(error: unknown): string {
@@ -1060,6 +1083,8 @@ export async function runSubagentAnnounceFlow(params: {
   childRunId: string;
   requesterSessionKey: string;
   requesterOrigin?: DeliveryContext;
+  /** Trusted requester sender id captured at spawn time (e.g. Discord user id). */
+  requesterSenderId?: string;
   requesterDisplayKey: string;
   task: string;
   timeoutMs: number;
@@ -1278,12 +1303,19 @@ export async function runSubagentAnnounceFlow(params: {
       startedAt: params.startedAt,
       endedAt: params.endedAt,
     });
+    // Prefer trusted sender id captured at spawn time; fallback to session entry heuristics.
+    const { entry: requesterEntry } = loadRequesterSessionEntry(targetRequesterSessionKey);
+    const requesterUserId =
+      (typeof params.requesterSenderId === "string" && /^\d+$/.test(params.requesterSenderId)
+        ? params.requesterSenderId
+        : undefined) ?? extractUserIdFromSessionEntry(requesterEntry);
     completionMessage = buildCompletionDeliveryMessage({
       findings,
       subagentName,
       spawnMode: params.spawnMode,
       outcome,
       announceType,
+      requesterUserId,
     });
     const internalSummaryMessage = [
       `[System Message] [sessionId: ${announceSessionId}] A ${announceType} "${taskLabel}" just ${statusLabel}.`,

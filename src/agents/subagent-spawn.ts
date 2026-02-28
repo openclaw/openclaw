@@ -49,6 +49,8 @@ export type SpawnSubagentContext = {
   agentGroupChannel?: string | null;
   agentGroupSpace?: string | null;
   requesterAgentIdOverride?: string;
+  /** Trusted requester sender id from inbound context (e.g. Discord user id). */
+  requesterSenderId?: string;
 };
 
 export const SUBAGENT_SPAWN_ACCEPTED_NOTE =
@@ -490,6 +492,7 @@ export async function spawnSubagentDirect(
     childSessionKey,
     requesterSessionKey: requesterInternalKey,
     requesterOrigin,
+    requesterSenderId: ctx.requesterSenderId,
     requesterDisplayKey,
     task,
     cleanup,

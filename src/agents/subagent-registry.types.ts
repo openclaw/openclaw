@@ -8,6 +8,8 @@ export type SubagentRunRecord = {
   childSessionKey: string;
   requesterSessionKey: string;
   requesterOrigin?: DeliveryContext;
+  /** Trusted requester sender id captured at spawn time (e.g. Discord user id). */
+  requesterSenderId?: string;
   requesterDisplayKey: string;
   task: string;
   cleanup: "delete" | "keep";
