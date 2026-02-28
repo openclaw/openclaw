@@ -1,11 +1,15 @@
 import fs from "fs";
 import path from "path";
 import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk";
+import { resolveFeishuAccount } from "./accounts.js";
 import { getStreamAppender } from "./active-streams.js";
 import { sendMediaFeishu, uploadImageFeishu } from "./media.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { sendMessageFeishu } from "./send.js";
 import { normalizeFeishuTarget } from "./targets.js";
+
+/** Content was embedded in an active streaming card; no discrete message was created. */
+const STREAM_EMBEDDED_RESULT = { channel: "feishu" as const, messageId: "stream-embedded" };
 
 function normalizePossibleLocalImagePath(text: string | undefined): string | null {
   const raw = text?.trim();
@@ -64,7 +68,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
             accountId: accountId ?? undefined,
           });
           appender(`\n![image](${imageKey})\n`);
-          return { channel: "feishu" };
+          return STREAM_EMBEDDED_RESULT;
         } catch {
           // fall through to separate message
         }
@@ -87,7 +91,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
     const appender = normalizedTo ? getStreamAppender(normalizedTo) : undefined;
     if (appender) {
       appender(text);
-      return { channel: "feishu" };
+      return STREAM_EMBEDDED_RESULT;
     }
 
     const result = await sendMessageFeishu({ cfg, to, text, accountId: accountId ?? undefined });
@@ -104,7 +108,8 @@ export const feishuOutbound: ChannelOutboundAdapter = {
       }
       if (mediaUrl) {
         try {
-          const mediaMaxBytes = 30 * 1024 * 1024;
+          const account = resolveFeishuAccount({ cfg, accountId: accountId ?? undefined });
+          const mediaMaxBytes = (account.config?.mediaMaxMb ?? 30) * 1024 * 1024;
           const loaded = await getFeishuRuntime().media.loadWebMedia(mediaUrl, {
             maxBytes: mediaMaxBytes,
             optimizeImages: false,
@@ -137,7 +142,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
           appender(`\n📎 ${mediaUrl}\n`);
         }
       }
-      return { channel: "feishu" };
+      return STREAM_EMBEDDED_RESULT;
     }
 
     // Send text first if provided

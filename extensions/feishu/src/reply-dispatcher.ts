@@ -271,7 +271,11 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               }
             }
             if (info?.kind === "final") {
-              streamText = committedText + text;
+              // streamText is already maintained by onPartialReply (committedText + AI text);
+              // only reconstruct when no partials were received (streamText is empty/stale).
+              if (!streamText) {
+                streamText = text;
+              }
               await closeStreaming();
             }
             return;
