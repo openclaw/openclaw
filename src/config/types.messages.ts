@@ -1,5 +1,8 @@
+import type { ToolProgressConfig } from "../channels/tool-progress.js";
 import type { QueueDropPolicy, QueueMode, QueueModeByProvider } from "./types.queue.js";
 import type { TtsConfig } from "./types.tts.js";
+
+export type { ToolProgressConfig };
 
 export type GroupChatConfig = {
   mentionPatterns?: string[];
@@ -117,6 +120,8 @@ export type MessagesConfig = {
   removeAckAfterReply?: boolean;
   /** Lifecycle status reactions configuration. */
   statusReactions?: StatusReactionsConfig;
+  /** Tool progress status messages (edit-in-place). */
+  toolProgress?: ToolProgressConfig;
   /** When true, suppress ⚠️ tool-error warnings from being shown to the user. Default: false. */
   suppressToolErrors?: boolean;
   /** Text-to-speech settings for outbound replies. */

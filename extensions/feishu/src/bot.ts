@@ -1,4 +1,5 @@
-import type { ClawdbotConfig, RuntimeEnv } from "openclaw/plugin-sdk";
+import type { ClawdbotConfig, RuntimeEnv, ToolProgressConfig } from "openclaw/plugin-sdk";
+import { createToolProgressController } from "openclaw/plugin-sdk";
 import {
   buildAgentMediaPayload,
   buildPendingHistoryContextFromMap,
@@ -33,6 +34,7 @@ import { parsePostContent } from "./post.js";
 import { createFeishuReplyDispatcher } from "./reply-dispatcher.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { getMessageFeishu, sendMessageFeishu } from "./send.js";
+import { resolveReceiveIdType } from "./targets.js";
 import type { FeishuMessageContext, FeishuMediaInfo, ResolvedFeishuAccount } from "./types.js";
 import type { DynamicAgentCreationConfig } from "./types.js";
 
@@ -1174,20 +1176,96 @@ export async function handleFeishuMessage(params: {
       accountId: account.accountId,
     });
 
-    log(`feishu[${account.accountId}]: dispatching to agent (session=${route.sessionKey})`);
-    const { queuedFinal, counts } = await core.channel.reply.withReplyDispatcher({
-      dispatcher,
-      onSettled: () => {
-        markDispatchIdle();
+    const toolProgressConfig = cfg.messages?.toolProgress as ToolProgressConfig | undefined;
+    const toolProgressEnabled = toolProgressConfig?.enabled === true;
+    // Lazy client: only created when tool progress adapter actually sends a message.
+    let _tpClient: ReturnType<typeof createFeishuClient> | undefined;
+    const getTpClient = () => (_tpClient ??= createFeishuClient(account));
+    const feishuReceiveIdType = resolveReceiveIdType(ctx.chatId);
+    const toolProgressController = createToolProgressController({
+      enabled: toolProgressEnabled,
+      adapter: {
+        send: async (text) => {
+          const content = JSON.stringify({ text });
+          const response = await getTpClient().im.message.create({
+            params: { receive_id_type: feishuReceiveIdType },
+            data: {
+              receive_id: ctx.chatId,
+              content,
+              msg_type: "text",
+              // Match reply dispatcher threading: use root_id for topic threads,
+              // reply_in_thread for new threads.
+              ...(ctx.rootId ? { root_id: ctx.rootId } : {}),
+              ...(replyInThread && !ctx.rootId ? { reply_in_thread: true } : {}),
+            },
+          });
+          return response.data?.message_id;
+        },
+        edit: async (messageId, text) => {
+          const content = JSON.stringify({ text });
+          await getTpClient().im.message.update({
+            path: { message_id: messageId as string },
+            data: { msg_type: "text", content },
+          });
+        },
+        delete: async (messageId) => {
+          await getTpClient().im.message.delete({
+            path: { message_id: messageId as string },
+          });
+        },
       },
-      run: () =>
-        core.channel.reply.dispatchReplyFromConfig({
-          ctx: ctxPayload,
-          cfg,
-          dispatcher,
-          replyOptions,
-        }),
+      config: toolProgressConfig,
+      onError: (err) => {
+        log(`feishu[${account.accountId}]: tool progress error: ${String(err)}`);
+      },
     });
+
+    log(`feishu[${account.accountId}]: dispatching to agent (session=${route.sessionKey})`);
+    let queuedFinal: boolean;
+    let counts: { block?: number; final?: number };
+    try {
+      ({ queuedFinal, counts } = await core.channel.reply.withReplyDispatcher({
+        dispatcher,
+        onSettled: () => {
+          markDispatchIdle();
+        },
+        run: () =>
+          core.channel.reply.dispatchReplyFromConfig({
+            ctx: ctxPayload,
+            cfg,
+            dispatcher,
+            replyOptions: {
+              ...replyOptions,
+              onToolStart: toolProgressEnabled
+                ? async (payload: { name?: string; meta?: string; toolCallId?: string }) => {
+                    toolProgressController.onToolStart(
+                      payload.toolCallId,
+                      payload.name,
+                      payload.meta,
+                    );
+                  }
+                : undefined,
+              onToolEnd: toolProgressEnabled
+                ? async (payload: {
+                    name?: string;
+                    meta?: string;
+                    isError?: boolean;
+                    toolCallId?: string;
+                  }) => {
+                    toolProgressController.onToolEnd(
+                      payload.toolCallId,
+                      payload.name,
+                      payload.meta,
+                      payload.isError,
+                    );
+                  }
+                : undefined,
+            },
+          }),
+      }));
+    } finally {
+      await toolProgressController.cleanup();
+    }
 
     if (isGroup && historyKey && chatHistories) {
       clearHistoryEntriesIfEnabled({

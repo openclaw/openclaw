@@ -183,6 +183,14 @@ export const MessagesSchema = z
       })
       .strict()
       .optional(),
+    toolProgress: z
+      .object({
+        enabled: z.boolean().optional(),
+        throttleMs: z.number().int().min(500).max(10_000).optional(),
+        maxVisibleTools: z.number().int().min(1).max(20).optional(),
+      })
+      .strict()
+      .optional(),
     suppressToolErrors: z.boolean().optional(),
     tts: TtsConfigSchema,
   })

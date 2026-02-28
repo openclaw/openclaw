@@ -1,4 +1,5 @@
 import { ChannelType } from "@buape/carbon";
+import { Routes } from "discord-api-types/v10";
 import { resolveAckReaction, resolveHumanDelayConfig } from "../../agents/identity.js";
 import { EmbeddedBlockChunker } from "../../agents/pi-embedded-block-chunker.js";
 import { resolveChunkMode } from "../../auto-reply/chunk.js";
@@ -20,6 +21,7 @@ import {
   DEFAULT_TIMING,
   type StatusReactionAdapter,
 } from "../../channels/status-reactions.js";
+import { createToolProgressController } from "../../channels/tool-progress.js";
 import { createTypingCallbacks } from "../../channels/typing.js";
 import { isDangerousNameMatchingEnabled } from "../../config/dangerous-name-matching.js";
 import { resolveDiscordPreviewStreamMode } from "../../config/discord-preview-streaming.js";
@@ -677,6 +679,32 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     },
   });
 
+  const toolProgressConfig = cfg.messages?.toolProgress;
+  const toolProgressEnabled = toolProgressConfig?.enabled === true;
+  const toolProgressController = createToolProgressController({
+    enabled: toolProgressEnabled,
+    adapter: {
+      send: async (text) => {
+        const sent = (await client.rest.post(Routes.channelMessages(deliverChannelId), {
+          body: { content: text },
+        })) as { id?: string } | undefined;
+        return sent?.id;
+      },
+      edit: async (messageId, text) => {
+        await client.rest.patch(Routes.channelMessage(deliverChannelId, messageId as string), {
+          body: { content: text },
+        });
+      },
+      delete: async (messageId) => {
+        await client.rest.delete(Routes.channelMessage(deliverChannelId, messageId as string));
+      },
+    },
+    config: toolProgressConfig,
+    onError: (err) => {
+      logVerbose(`discord: tool progress error: ${String(err)}`);
+    },
+  });
+
   let dispatchResult: Awaited<ReturnType<typeof dispatchInboundMessage>> | null = null;
   let dispatchError = false;
   try {
@@ -719,9 +747,23 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
         onReasoningStream: async () => {
           await statusReactions.setThinking();
         },
-        onToolStart: async (payload) => {
-          await statusReactions.setTool(payload.name);
-        },
+        onToolStart:
+          statusReactionsEnabled || toolProgressEnabled
+            ? async (payload) => {
+                await statusReactions.setTool(payload.name);
+                toolProgressController.onToolStart(payload.toolCallId, payload.name, payload.meta);
+              }
+            : undefined,
+        onToolEnd: toolProgressEnabled
+          ? async (payload) => {
+              toolProgressController.onToolEnd(
+                payload.toolCallId,
+                payload.name,
+                payload.meta,
+                payload.isError,
+              );
+            }
+          : undefined,
       },
     });
   } catch (err) {
@@ -740,6 +782,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     } finally {
       markDispatchIdle();
     }
+    await toolProgressController.cleanup();
     if (statusReactionsEnabled) {
       if (dispatchError) {
         await statusReactions.setError();

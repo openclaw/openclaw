@@ -330,6 +330,12 @@ export {
   shouldAckReaction,
   shouldAckReactionForWhatsApp,
 } from "../channels/ack-reactions.js";
+export { createToolProgressController } from "../channels/tool-progress.js";
+export type {
+  ToolProgressAdapter,
+  ToolProgressConfig,
+  ToolProgressController,
+} from "../channels/tool-progress.js";
 export { createTypingCallbacks } from "../channels/typing.js";
 export { createReplyPrefixContext, createReplyPrefixOptions } from "../channels/reply-prefix.js";
 export { logAckFailure, logInboundDrop, logTypingFailure } from "../channels/logging.js";

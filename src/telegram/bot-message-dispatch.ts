@@ -13,6 +13,7 @@ import type { ReplyPayload } from "../auto-reply/types.js";
 import { removeAckReactionAfterReply } from "../channels/ack-reactions.js";
 import { logAckFailure, logTypingFailure } from "../channels/logging.js";
 import { createReplyPrefixOptions } from "../channels/reply-prefix.js";
+import { createToolProgressController } from "../channels/tool-progress.js";
 import { createTypingCallbacks } from "../channels/typing.js";
 import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
 import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
@@ -23,6 +24,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import type { TelegramMessageContext } from "./bot-message-context.js";
 import type { TelegramBotOptions } from "./bot.js";
 import { deliverReplies } from "./bot/delivery.js";
+import { buildTelegramThreadParams } from "./bot/helpers.js";
 import type { TelegramStreamMode } from "./bot/types.js";
 import type { TelegramInlineButtons } from "./button-types.js";
 import { createTelegramDraftStream } from "./draft-stream.js";
@@ -458,6 +460,32 @@ export const dispatchTelegramMessage = async ({
     },
   });
 
+  const toolProgressConfig = cfg.messages?.toolProgress;
+  const toolProgressEnabled = toolProgressConfig?.enabled === true;
+  const threadParams = buildTelegramThreadParams(threadSpec);
+  const toolProgressController = createToolProgressController({
+    enabled: toolProgressEnabled,
+    adapter: {
+      send: async (text) => {
+        const result = await bot.api.sendMessage(chatId, text, {
+          ...threadParams,
+          disable_notification: true,
+        });
+        return result.message_id;
+      },
+      edit: async (messageId, text) => {
+        await bot.api.editMessageText(chatId, messageId as number, text);
+      },
+      delete: async (messageId) => {
+        await bot.api.deleteMessage(chatId, messageId as number);
+      },
+    },
+    config: toolProgressConfig,
+    onError: (err) => {
+      logVerbose(`telegram: tool progress error: ${String(err)}`);
+    },
+  });
+
   try {
     ({ queuedFinal } = await dispatchReplyWithBufferedBlockDispatcher({
       ctx: ctxPayload,
@@ -617,9 +645,21 @@ export const dispatchTelegramMessage = async ({
               splitReasoningOnNextStream = reasoningLane.hasStreamedMessage;
             }
           : undefined,
-        onToolStart: statusReactionController
+        onToolStart:
+          statusReactionController || toolProgressEnabled
+            ? async (payload) => {
+                await statusReactionController?.setTool(payload.name);
+                toolProgressController.onToolStart(payload.toolCallId, payload.name, payload.meta);
+              }
+            : undefined,
+        onToolEnd: toolProgressEnabled
           ? async (payload) => {
-              await statusReactionController.setTool(payload.name);
+              toolProgressController.onToolEnd(
+                payload.toolCallId,
+                payload.name,
+                payload.meta,
+                payload.isError,
+              );
             }
           : undefined,
         onModelSelected,
@@ -672,6 +712,7 @@ export const dispatchTelegramMessage = async ({
         );
       }
     }
+    await toolProgressController.cleanup();
   }
   let sentFallback = false;
   const deliverySummary = deliveryState.snapshot();

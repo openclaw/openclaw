@@ -43,7 +43,7 @@ type DispatchInboundParams = {
   replyOptions?: {
     onReasoningStream?: () => Promise<void> | void;
     onReasoningEnd?: () => Promise<void> | void;
-    onToolStart?: (payload: { name?: string }) => Promise<void> | void;
+    onToolStart?: (payload: { name?: string; toolCallId?: string }) => Promise<void> | void;
     onPartialReply?: (payload: { text?: string }) => Promise<void> | void;
     onAssistantMessageStart?: () => Promise<void> | void;
   };

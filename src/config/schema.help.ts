@@ -1345,6 +1345,14 @@ export const FIELD_HELP: Record<string, string> = {
     "Override default status reaction emojis. Keys: thinking, tool, coding, web, done, error, stallSoft, stallHard. Must be valid Telegram reaction emojis.",
   "messages.statusReactions.timing":
     "Override default timing. Keys: debounceMs (700), stallSoftMs (25000), stallHardMs (60000), doneHoldMs (1500), errorHoldMs (2500).",
+  "messages.toolProgress":
+    "Real-time tool execution progress messages shown via edit-in-place status updates while the agent works.",
+  "messages.toolProgress.enabled":
+    "Enable tool progress status messages. When enabled, a temporary status message shows which tools are running and completed. Deleted when the final reply is sent. Default: false.",
+  "messages.toolProgress.throttleMs":
+    "Minimum interval between status message edits (ms). Lower values give more real-time updates but increase API calls. Default: 1500.",
+  "messages.toolProgress.maxVisibleTools":
+    "Maximum number of completed tool lines to keep visible in the status message. Older entries are collapsed. Default: 3.",
   "messages.inbound.debounceMs":
     "Debounce window (ms) for batching rapid inbound messages from the same sender (0 to disable).",
   "channels.telegram.dmPolicy":
