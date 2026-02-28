@@ -7,7 +7,6 @@ import {
 } from "../gateway/gateway-config-prompts.shared.js";
 import { findTailscaleBinary, getTailnetHostname } from "../infra/tailscale.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { defaultRuntime } from "../runtime.js";
 import { validateIPv4AddressInput } from "../shared/net/ipv4.js";
 import { note } from "../terminal/note.js";
 import { buildGatewayAuthConfig } from "./configure.gateway-auth.js";
@@ -277,11 +276,11 @@ export async function promptGatewayConfig(
       const tailscaleOrigin = `https://${tailnetHostname}`;
       if (!allowedOrigins.includes(tailscaleOrigin)) {
         allowedOrigins = [...allowedOrigins, tailscaleOrigin];
-        defaultRuntime.log(`Added Tailscale origin to allowedOrigins: ${tailscaleOrigin}`);
+        runtime.log(`Added Tailscale origin to allowedOrigins: ${tailscaleOrigin}`);
       }
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err);
-      defaultRuntime.warn(
+      runtime.error(
         `Could not detect Tailscale hostname: ${errorMsg}. ` +
         "You may need to manually add your Tailscale origin to gateway.controlUi.allowedOrigins"
       );
