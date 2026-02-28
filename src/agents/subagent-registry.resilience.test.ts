@@ -135,9 +135,7 @@ describe("subagent resilience", () => {
       expect(entry).toBeDefined();
       expect(entry!.endedAt).toBeTypeOf("number");
       expect(entry!.outcome?.status).toBe("error");
-      expect((entry!.outcome as { error?: string }).error).toContain(
-        "gateway connection lost",
-      );
+      expect((entry!.outcome as { error?: string }).error).toContain("gateway connection lost");
     });
 
     test("error message includes the original exception text", async () => {
@@ -208,9 +206,11 @@ describe("subagent resilience", () => {
         (call) => (call[0] as { method: string }).method === "agent",
       );
       expect(notifyCall).toBeDefined();
-      const params = (notifyCall![0] as {
-        params: { message: string; sessionKey: string; deliver: boolean };
-      }).params;
+      const params = (
+        notifyCall![0] as {
+          params: { message: string; sessionKey: string; deliver: boolean };
+        }
+      ).params;
       expect(params.sessionKey).toBe("agent:main:main");
       expect(params.message).toContain("important research task");
       expect(params.message).toContain("results lost");
