@@ -27,6 +27,22 @@ jobs:
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           script: |
+
+            async function safeGithubCall(callFn) {
+              for (let attempt = 0; attempt < 5; attempt++) {
+                try {
+                  return await callFn();
+                } catch (error) {
+                  if (error.status === 403 && error.message.includes('rate limit')) {
+                    const delay = Math.pow(2, attempt) * 1000;
+                    await new Promise(r => setTimeout(r, delay));
+                  } else {
+                    throw error;
+                  }
+                }
+              }
+            }
+
             // Labels prefixed with "r:" are auto-response triggers.
             const rules = [
               {
@@ -81,11 +97,11 @@ jobs:
               }
               let isMember = false;
               try {
-                const membership = await github.rest.teams.getMembershipForUserInOrg({
+                const membership = await safeGithubCall(() => await github.rest.teams.getMembershipForUserInOrg({
                   org: context.repo.owner,
                   team_slug: maintainerTeam,
                   username: normalized,
-                });
+                }));
                 isMember = membership?.data?.state === "active";
               } catch (error) {
                 if (error?.status !== 404) {
@@ -167,12 +183,12 @@ jobs:
               }
 
               if (responses.length > 0) {
-                await github.rest.issues.createComment({
+                await safeGithubCall(() => await github.rest.issues.createComment({
                   owner: context.repo.owner,
                   repo: context.repo.repo,
                   issue_number: target.number,
                   body: responses.join("\n\n"),
-                });
+                }));
               }
               return;
             }
@@ -187,12 +203,12 @@ jobs:
                   authorLogin,
                 );
                 if (mentionCount >= 3) {
-                  await github.rest.issues.createComment({
+                  await safeGithubCall(() => await github.rest.issues.createComment({
                     owner: context.repo.owner,
                     repo: context.repo.repo,
                     issue_number: issue.number,
                     body: pingWarningMessage,
-                  });
+                  }));
                 }
               }
             }
@@ -201,12 +217,12 @@ jobs:
             if (hasTriggerLabel) {
               labelSet.delete(triggerLabel);
               try {
-                await github.rest.issues.removeLabel({
+                await safeGithubCall(() => await github.rest.issues.removeLabel({
                   owner: context.repo.owner,
                   repo: context.repo.repo,
                   issue_number: target.number,
                   name: triggerLabel,
-                });
+                }));
               } catch (error) {
                 if (error?.status !== 404) {
                   throw error;
@@ -227,30 +243,30 @@ jobs:
               const hasTestflightLabel = labelSet.has("r: testflight");
               const hasSecurityLabel = labelSet.has("security");
               if (title.toLowerCase().includes("security") && !hasSecurityLabel) {
-                await github.rest.issues.addLabels({
+                await safeGithubCall(() => await github.rest.issues.addLabels({
                   owner: context.repo.owner,
                   repo: context.repo.repo,
                   issue_number: issue.number,
                   labels: ["security"],
-                });
+                }));
                 labelSet.add("security");
               }
               if (title.toLowerCase().includes("testflight") && !hasTestflightLabel) {
-                await github.rest.issues.addLabels({
+                await safeGithubCall(() => await github.rest.issues.addLabels({
                   owner: context.repo.owner,
                   repo: context.repo.repo,
                   issue_number: issue.number,
                   labels: ["r: testflight"],
-                });
+                }));
                 labelSet.add("r: testflight");
               }
               if (haystack.includes("moltbook") && !hasMoltbookLabel) {
-                await github.rest.issues.addLabels({
+                await safeGithubCall(() => await github.rest.issues.addLabels({
                   owner: context.repo.owner,
                   repo: context.repo.repo,
                   issue_number: issue.number,
                   labels: ["r: moltbook"],
-                });
+                }));
                 labelSet.add("r: moltbook");
               }
             }
@@ -262,55 +278,55 @@ jobs:
 
             if (pullRequest) {
               if (labelSet.has(dirtyLabel)) {
-                await github.rest.issues.createComment({
+                await safeGithubCall(() => await github.rest.issues.createComment({
                   owner: context.repo.owner,
                   repo: context.repo.repo,
                   issue_number: pullRequest.number,
                   body: noisyPrMessage,
-                });
-                await github.rest.issues.update({
+                }));
+                await safeGithubCall(() => await github.rest.issues.update({
                   owner: context.repo.owner,
                   repo: context.repo.repo,
                   issue_number: pullRequest.number,
                   state: "closed",
-                });
+                }));
                 return;
               }
               const labelCount = labelSet.size;
               if (labelCount > 20) {
-                await github.rest.issues.createComment({
+                await safeGithubCall(() => await github.rest.issues.createComment({
                   owner: context.repo.owner,
                   repo: context.repo.repo,
                   issue_number: pullRequest.number,
                   body: noisyPrMessage,
-                });
-                await github.rest.issues.update({
+                }));
+                await safeGithubCall(() => await github.rest.issues.update({
                   owner: context.repo.owner,
                   repo: context.repo.repo,
                   issue_number: pullRequest.number,
                   state: "closed",
-                });
+                }));
                 return;
               }
               if (labelSet.has(invalidLabel)) {
-                await github.rest.issues.update({
+                await safeGithubCall(() => await github.rest.issues.update({
                   owner: context.repo.owner,
                   repo: context.repo.repo,
                   issue_number: pullRequest.number,
                   state: "closed",
-                });
+                }));
                 return;
               }
             }
 
             if (issue && labelSet.has(invalidLabel)) {
-              await github.rest.issues.update({
+              await safeGithubCall(() => await github.rest.issues.update({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 issue_number: issue.number,
                 state: "closed",
                 state_reason: "not_planned",
-              });
+              }));
               return;
             }
 
@@ -321,27 +337,27 @@ jobs:
 
             const issueNumber = target.number;
 
-            await github.rest.issues.createComment({
+            await safeGithubCall(() => await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: issueNumber,
               body: rule.message,
-            });
+            }));
 
             if (rule.close) {
-              await github.rest.issues.update({
+              await safeGithubCall(() => await github.rest.issues.update({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 issue_number: issueNumber,
                 state: "closed",
-              });
+              }));
             }
 
             if (rule.lock) {
-              await github.rest.issues.lock({
+              await safeGithubCall(() => await github.rest.issues.lock({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 issue_number: issueNumber,
                 lock_reason: rule.lockReason ?? "resolved",
-              });
+              }));
             }
