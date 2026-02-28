@@ -638,6 +638,7 @@ export function buildKimiCodingProvider(): ProviderConfig {
   return {
     baseUrl: KIMI_CODING_BASE_URL,
     api: "anthropic-messages",
+    headers: { "User-Agent": "claude-code/0.1.0" },
     models: [
       {
         id: KIMI_CODING_DEFAULT_MODEL_ID,

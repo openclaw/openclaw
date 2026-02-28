@@ -900,6 +900,7 @@ export async function runEmbeddedAttempt(
         params.streamParams,
         params.thinkLevel,
         sessionAgentId,
+        params.config?.models?.providers?.[params.provider]?.headers,
       );
 
       if (cacheTrace) {

@@ -717,6 +717,24 @@ function createZaiToolStreamWrapper(
 }
 
 /**
+ * Wrap a streamFn to inject provider-level headers into every stream call.
+ * Call-site headers (options.headers) take precedence over provider headers.
+ *
+ * @internal Exported for testing
+ */
+export function createProviderHeadersWrapper(
+  baseStreamFn: StreamFn | undefined,
+  headers: Record<string, string>,
+): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) =>
+    underlying(model, context, {
+      ...options,
+      headers: { ...headers, ...options?.headers },
+    });
+}
+
+/**
  * Apply extra params (like temperature) to an agent's streamFn.
  * Also adds OpenRouter app attribution headers when using the OpenRouter provider.
  *
@@ -730,6 +748,7 @@ export function applyExtraParamsToAgent(
   extraParamsOverride?: Record<string, unknown>,
   thinkingLevel?: ThinkLevel,
   agentId?: string,
+  providerHeaders?: Record<string, string>,
 ): void {
   const extraParams = resolveExtraParams({
     cfg,
@@ -806,4 +825,9 @@ export function applyExtraParamsToAgent(
   // Force `store=true` for direct OpenAI Responses models and auto-enable
   // server-side compaction for compatible OpenAI Responses payloads.
   agent.streamFn = createOpenAIResponsesContextManagementWrapper(agent.streamFn, merged);
+
+  // Inject provider-level headers (e.g. kimi-coding's required User-Agent).
+  if (providerHeaders && Object.keys(providerHeaders).length > 0) {
+    agent.streamFn = createProviderHeadersWrapper(agent.streamFn, providerHeaders);
+  }
 }
