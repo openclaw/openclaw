@@ -8,6 +8,7 @@ import { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel
 import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
 import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
+  normalizeNonTelegramGroupPolicy,
   resolveOpenProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
@@ -134,17 +135,22 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
   const loopRateLimiter = createLoopRateLimiter();
   const textLimit = resolveTextChunkLimit(cfg, "imessage", accountInfo.accountId);
   const allowFrom = normalizeAllowList(opts.allowFrom ?? imessageCfg.allowFrom);
+  const defaultGroupAllowFrom = cfg.channels?.defaults?.groupAllowFrom;
   const groupAllowFrom = normalizeAllowList(
     opts.groupAllowFrom ??
       imessageCfg.groupAllowFrom ??
+      defaultGroupAllowFrom ??
       (imessageCfg.allowFrom && imessageCfg.allowFrom.length > 0 ? imessageCfg.allowFrom : []),
   );
   const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
-  const { groupPolicy, providerMissingFallbackApplied } = resolveOpenProviderRuntimeGroupPolicy({
-    providerConfigPresent: cfg.channels?.imessage !== undefined,
-    groupPolicy: imessageCfg.groupPolicy,
-    defaultGroupPolicy,
-  });
+  const { groupPolicy: rawGroupPolicy, providerMissingFallbackApplied } =
+    resolveOpenProviderRuntimeGroupPolicy({
+      providerConfigPresent: cfg.channels?.imessage !== undefined,
+      groupPolicy: imessageCfg.groupPolicy,
+      defaultGroupPolicy,
+    });
+  // "members" is Telegram-only; normalize to "open" for iMessage
+  const groupPolicy = normalizeNonTelegramGroupPolicy(rawGroupPolicy);
   warnMissingProviderGroupPolicyFallbackOnce({
     providerMissingFallbackApplied,
     providerKey: "imessage",

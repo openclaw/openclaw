@@ -4,6 +4,7 @@ import {
   resolveChannelEntryMatchWithFallback,
   resolveNestedAllowlistDecision,
 } from "openclaw/plugin-sdk/channel-targets";
+import { normalizeNonTelegramGroupPolicy } from "openclaw/plugin-sdk/config-runtime";
 import { evaluateMatchedGroupAccessForPolicy } from "openclaw/plugin-sdk/group-access";
 import type {
   AllowlistMatch,
@@ -120,6 +121,15 @@ export function resolveNextcloudTalkGroupAllow(params: {
   innerAllowFrom: Array<string | number> | undefined;
   senderId: string;
 }): { allowed: boolean; outerMatch: AllowlistMatch; innerMatch: AllowlistMatch } {
+  // "members" is Telegram-only; normalize to "open" for Nextcloud Talk
+  const groupPolicy = normalizeNonTelegramGroupPolicy(params.groupPolicy);
+  if (groupPolicy === "disabled") {
+    return { allowed: false, outerMatch: { allowed: false }, innerMatch: { allowed: false } };
+  }
+  if (groupPolicy === "open") {
+    return { allowed: true, outerMatch: { allowed: true }, innerMatch: { allowed: true } };
+  }
+
   const outerAllow = normalizeNextcloudTalkAllowlist(params.outerAllowFrom);
   const innerAllow = normalizeNextcloudTalkAllowlist(params.innerAllowFrom);
   const outerMatch = resolveNextcloudTalkAllowlistMatch({

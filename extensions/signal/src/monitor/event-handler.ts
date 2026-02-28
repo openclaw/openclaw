@@ -19,6 +19,7 @@ import {
   resolveChannelGroupRequireMention,
 } from "openclaw/plugin-sdk/config-runtime";
 import { readSessionUpdatedAt, resolveStorePath } from "openclaw/plugin-sdk/config-runtime";
+import { normalizeNonTelegramGroupPolicy } from "openclaw/plugin-sdk/config-runtime";
 import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
 import {
   createInternalHookEvent,
@@ -541,7 +542,8 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       await resolveSignalAccessState({
         accountId: deps.accountId,
         dmPolicy: deps.dmPolicy,
-        groupPolicy: deps.groupPolicy,
+        // "members" is Telegram-only; normalize to "open" for Signal
+        groupPolicy: normalizeNonTelegramGroupPolicy(deps.groupPolicy),
         allowFrom: deps.allowFrom,
         groupAllowFrom: deps.groupAllowFrom,
         sender,

@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { normalizeNonTelegramGroupPolicy } from "openclaw/plugin-sdk/config-runtime";
 import {
   createTopLevelChannelAllowFromSetter,
   createTopLevelChannelDmPolicy,
@@ -228,7 +229,9 @@ const msteamsGroupAccess: NonNullable<ChannelSetupWizard["groupAccess"]> = {
   currentPolicy: ({ cfg }) => cfg.channels?.msteams?.groupPolicy ?? "allowlist",
   currentEntries: ({ cfg }) => listMSTeamsGroupEntries(cfg),
   updatePrompt: ({ cfg }) => Boolean(cfg.channels?.msteams?.teams),
-  setPolicy: ({ cfg, policy }) => setMSTeamsGroupPolicy(cfg, policy),
+  // "members" is Telegram-only; normalize to "open" for MS Teams
+  setPolicy: ({ cfg, policy }) =>
+    setMSTeamsGroupPolicy(cfg, normalizeNonTelegramGroupPolicy(policy)),
   resolveAllowlist: async ({ cfg, entries, prompter }) =>
     await resolveMSTeamsGroupAllowlist({ cfg, entries, prompter }),
   applyAllowlist: ({ cfg, resolved }) =>
