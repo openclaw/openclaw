@@ -4,6 +4,7 @@ import type { CanvasHostHandler, CanvasHostServer } from "../canvas-host/server.
 import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js";
 import { stopGmailWatcher } from "../hooks/gmail-watcher.js";
 import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
+import { logDebug, logWarn } from "../logger.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
 
 export function createGatewayCloseHandler(params: {
@@ -41,8 +42,8 @@ export function createGatewayCloseHandler(params: {
     if (params.bonjourStop) {
       try {
         await params.bonjourStop();
-      } catch {
-        /* ignore */
+      } catch (err) {
+        logWarn(`gateway: bonjour stop failed: ${String(err)}`);
       }
     }
     if (params.tailscaleCleanup) {
@@ -51,15 +52,15 @@ export function createGatewayCloseHandler(params: {
     if (params.canvasHost) {
       try {
         await params.canvasHost.close();
-      } catch {
-        /* ignore */
+      } catch (err) {
+        logWarn(`gateway: canvas host close failed: ${String(err)}`);
       }
     }
     if (params.canvasHostServer) {
       try {
         await params.canvasHostServer.close();
-      } catch {
-        /* ignore */
+      } catch (err) {
+        logWarn(`gateway: canvas host server close failed: ${String(err)}`);
       }
     }
     for (const plugin of listChannelPlugins()) {
@@ -73,8 +74,8 @@ export function createGatewayCloseHandler(params: {
     params.heartbeatRunner.stop();
     try {
       params.updateCheckStop?.();
-    } catch {
-      /* ignore */
+    } catch (err) {
+      logDebug(`gateway: update check stop failed: ${String(err)}`);
     }
     for (const timer of params.nodePresenceTimers.values()) {
       clearInterval(timer);
@@ -90,23 +91,23 @@ export function createGatewayCloseHandler(params: {
     if (params.agentUnsub) {
       try {
         params.agentUnsub();
-      } catch {
-        /* ignore */
+      } catch (err) {
+        logDebug(`gateway: agent unsub failed: ${String(err)}`);
       }
     }
     if (params.heartbeatUnsub) {
       try {
         params.heartbeatUnsub();
-      } catch {
-        /* ignore */
+      } catch (err) {
+        logDebug(`gateway: heartbeat unsub failed: ${String(err)}`);
       }
     }
     params.chatRunState.clear();
     for (const c of params.clients) {
       try {
         c.socket.close(1012, "service restart");
-      } catch {
-        /* ignore */
+      } catch (err) {
+        logDebug(`gateway: client socket close failed: ${String(err)}`);
       }
     }
     params.clients.clear();
