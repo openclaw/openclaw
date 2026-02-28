@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import * as piEmbeddedRuns from "../agents/pi-embedded-runner/runs.js";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
 import * as replyModule from "../auto-reply/reply.js";
 import { whatsappOutbound } from "../channels/plugins/outbound/whatsapp.js";
@@ -1293,6 +1294,162 @@ describe("runHeartbeatOnce", () => {
       expect(calledCtx.Body).not.toContain("Please relay the command output to the user");
     } finally {
       replySpy.mockRestore();
+    }
+  });
+
+  it("skips heartbeat when skipIfRunActive is true and embedded run is active", async () => {
+    const tmpDir = await createCaseDir("hb-skip-active");
+    const storePath = path.join(tmpDir, "sessions.json");
+    const sessionId = "test-session-active-run";
+
+    // Create a session with an active embedded run
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          workspace: tmpDir,
+          heartbeat: { every: "5m", skipIfRunActive: true },
+        },
+      },
+      session: { store: storePath },
+    };
+    const sessionKey = resolveMainSessionKey(cfg);
+
+    // Set up session with a sessionId
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({
+        [sessionKey]: {
+          sessionId,
+          updatedAt: Date.now(),
+        },
+      }),
+    );
+
+    // Spy on isEmbeddedPiRunActive to return true (active run)
+    const spy = vi.spyOn(piEmbeddedRuns, "isEmbeddedPiRunActive").mockReturnValue(true);
+
+    try {
+      const res = await runHeartbeatOnce({ cfg });
+      expect(res.status).toBe("skipped");
+      if (res.status === "skipped") {
+        expect(res.reason).toBe("run-active");
+      }
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("does not skip when skipIfRunActive is false", async () => {
+    const tmpDir = await createCaseDir("hb-no-skip-active");
+    const storePath = path.join(tmpDir, "sessions.json");
+    const sessionId = "test-session-inactive-run";
+
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          workspace: tmpDir,
+          heartbeat: { every: "5m", skipIfRunActive: false },
+        },
+      },
+      session: { store: storePath },
+    };
+    const sessionKey = resolveMainSessionKey(cfg);
+
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({
+        [sessionKey]: {
+          sessionId,
+          updatedAt: Date.now(),
+        },
+      }),
+    );
+
+    // Spy on isEmbeddedPiRunActive to return true
+    const spy = vi.spyOn(piEmbeddedRuns, "isEmbeddedPiRunActive").mockReturnValue(true);
+
+    try {
+      const res = await runHeartbeatOnce({ cfg });
+      // Should not skip due to "run-active" when skipIfRunActive is false
+      expect(res.reason).not.toBe("run-active");
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("does not skip when skipIfRunActive is not set (default)", async () => {
+    const tmpDir = await createCaseDir("hb-no-skip-default");
+    const storePath = path.join(tmpDir, "sessions.json");
+    const sessionId = "test-session-active-run";
+
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          workspace: tmpDir,
+          heartbeat: { every: "5m" }, // skipIfRunActive not set
+        },
+      },
+      session: { store: storePath },
+    };
+    const sessionKey = resolveMainSessionKey(cfg);
+
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({
+        [sessionKey]: {
+          sessionId,
+          updatedAt: Date.now(),
+        },
+      }),
+    );
+
+    // Spy on isEmbeddedPiRunActive to return true
+    const spy = vi.spyOn(piEmbeddedRuns, "isEmbeddedPiRunActive").mockReturnValue(true);
+
+    try {
+      const res = await runHeartbeatOnce({ cfg });
+      // Should not skip due to "run-active" when skipIfRunActive is not configured
+      expect(res.reason).not.toBe("run-active");
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("does not skip when run is not active even if skipIfRunActive is true", async () => {
+    const tmpDir = await createCaseDir("hb-skip-not-active");
+    const storePath = path.join(tmpDir, "sessions.json");
+    const sessionId = "test-session-inactive";
+
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          workspace: tmpDir,
+          heartbeat: { every: "5m", skipIfRunActive: true },
+        },
+      },
+      session: { store: storePath },
+    };
+    const sessionKey = resolveMainSessionKey(cfg);
+
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({
+        [sessionKey]: {
+          sessionId,
+          updatedAt: Date.now(),
+        },
+      }),
+    );
+
+    // Spy on isEmbeddedPiRunActive to return false (no active run)
+    const spy = vi.spyOn(piEmbeddedRuns, "isEmbeddedPiRunActive").mockReturnValue(false);
+
+    try {
+      const res = await runHeartbeatOnce({ cfg });
+      // Should not skip due to "run-active" when run is not active
+      expect(res.reason).not.toBe("run-active");
+    } finally {
+      spy.mockRestore();
     }
   });
 });

@@ -7,6 +7,7 @@ import {
 } from "../agents/agent-scope.js";
 import { appendCronStyleCurrentTimeLine } from "../agents/current-time.js";
 import { resolveEffectiveMessagesConfig } from "../agents/identity.js";
+import { isEmbeddedPiRunActive } from "../agents/pi-embedded-runner/runs.js";
 import { DEFAULT_HEARTBEAT_FILENAME } from "../agents/workspace.js";
 import { resolveHeartbeatReplyPayload } from "../auto-reply/heartbeat-reply-payload.js";
 import {
@@ -617,6 +618,15 @@ export async function runHeartbeatOnce(opts: {
   const queueSize = (opts.deps?.getQueueSize ?? getQueueSize)(CommandLane.Main);
   if (queueSize > 0) {
     return { status: "skipped", reason: "requests-in-flight" };
+  }
+
+  // Resolve session to get sessionId for active run check
+  const session = resolveHeartbeatSession(cfg, agentId, heartbeat, opts.sessionKey);
+  const sessionId = session.entry?.sessionId;
+
+  // Skip if heartbeat.skipIfRunActive is enabled and an embedded Pi run is active
+  if (heartbeat?.skipIfRunActive && sessionId && isEmbeddedPiRunActive(sessionId)) {
+    return { status: "skipped", reason: "run-active" };
   }
 
   // Preflight centralizes trigger classification, event inspection, and HEARTBEAT.md gating.

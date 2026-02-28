@@ -242,6 +242,13 @@ export type AgentDefaultsConfig = {
      * Default: false (only the final heartbeat payload is delivered).
      */
     includeReasoning?: boolean;
+    /**
+     * Skip heartbeat tick if an embedded Pi run is currently active for this session.
+     * When true, the heartbeat will not fire while the agent is actively executing.
+     *
+     * Default: false.
+     */
+    skipIfRunActive?: boolean;
   };
   /** Max concurrent agent runs across all conversations. Default: 1 (sequential). */
   maxConcurrent?: number;
