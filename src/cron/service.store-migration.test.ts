@@ -148,4 +148,103 @@ describe("CronService store migrations", () => {
     cron.stop();
     await store.cleanup();
   });
+
+  it("repairs missing and duplicate job ids during store load", async () => {
+    const store = await makeStorePath();
+    await fs.mkdir(path.dirname(store.storePath), { recursive: true });
+    await fs.writeFile(
+      store.storePath,
+      JSON.stringify(
+        {
+          version: 1,
+          jobs: [
+            {
+              id: "stable-id",
+              name: "stable",
+              enabled: true,
+              createdAtMs: Date.parse("2026-02-01T12:00:00.000Z"),
+              updatedAtMs: Date.parse("2026-02-01T12:00:00.000Z"),
+              schedule: {
+                kind: "every",
+                everyMs: 60_000,
+                anchorMs: Date.parse("2026-02-01T12:00:00.000Z"),
+              },
+              sessionTarget: "main",
+              wakeMode: "next-heartbeat",
+              payload: { kind: "systemEvent", text: "stable" },
+            },
+            {
+              id: "",
+              name: "blank-id",
+              enabled: true,
+              createdAtMs: Date.parse("2026-02-01T12:00:00.000Z"),
+              updatedAtMs: Date.parse("2026-02-01T12:00:00.000Z"),
+              schedule: {
+                kind: "every",
+                everyMs: 60_000,
+                anchorMs: Date.parse("2026-02-01T12:00:00.000Z"),
+              },
+              sessionTarget: "main",
+              wakeMode: "next-heartbeat",
+              payload: { kind: "systemEvent", text: "blank-id" },
+            },
+            {
+              id: "dup-id",
+              name: "dup-1",
+              enabled: true,
+              createdAtMs: Date.parse("2026-02-01T12:00:00.000Z"),
+              updatedAtMs: Date.parse("2026-02-01T12:00:00.000Z"),
+              schedule: {
+                kind: "every",
+                everyMs: 60_000,
+                anchorMs: Date.parse("2026-02-01T12:00:00.000Z"),
+              },
+              sessionTarget: "main",
+              wakeMode: "next-heartbeat",
+              payload: { kind: "systemEvent", text: "dup-1" },
+            },
+            {
+              id: "dup-id",
+              name: "dup-2",
+              enabled: true,
+              createdAtMs: Date.parse("2026-02-01T12:00:00.000Z"),
+              updatedAtMs: Date.parse("2026-02-01T12:00:00.000Z"),
+              schedule: {
+                kind: "every",
+                everyMs: 60_000,
+                anchorMs: Date.parse("2026-02-01T12:00:00.000Z"),
+              },
+              sessionTarget: "main",
+              wakeMode: "next-heartbeat",
+              payload: { kind: "systemEvent", text: "dup-2" },
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const cron = await createStartedCron(store.storePath).start();
+
+    const jobs = await cron.list({ includeDisabled: true });
+    expect(jobs).toHaveLength(4);
+
+    const ids = jobs.map((entry) => entry.id);
+    expect(ids.filter((id) => typeof id === "string" && id.trim().length > 0)).toHaveLength(4);
+    expect(new Set(ids).size).toBe(4);
+    expect(jobs.some((entry) => entry.id === "stable-id")).toBe(true);
+
+    const persisted = JSON.parse(await fs.readFile(store.storePath, "utf-8")) as {
+      jobs: Array<{ id: string }>;
+    };
+    const persistedIds = persisted.jobs.map((entry) => entry.id);
+    expect(persistedIds).toHaveLength(4);
+    expect(new Set(persistedIds).size).toBe(4);
+    expect(persistedIds.some((id) => id === "stable-id")).toBe(true);
+
+    cron.stop();
+    await store.cleanup();
+  });
 });

@@ -116,14 +116,14 @@ describe("Cron issue #29757 delayed-interval replay", () => {
       tick: 1,
       jobName: "book return reminder",
     });
-    expect(firstTickBook?.runningAtMs).toBe(firstAtRunAtMs);
+    expect(firstTickBook).toBeUndefined();
 
     const delayedSecondTickBook = findSnapshot(snapshots, {
       label: "delayed-replay-run",
       tick: 2,
       jobName: "book return reminder",
     });
-    expect(delayedSecondTickBook?.runningAtMs).toBeUndefined();
+    expect(delayedSecondTickBook).toBeUndefined();
 
     const persisted = JSON.parse(await fs.readFile(store.storePath, "utf-8")) as {
       jobs: Array<{
@@ -136,8 +136,7 @@ describe("Cron issue #29757 delayed-interval replay", () => {
     const persistedBook = persisted.jobs.find((job) => job.name === "book return reminder");
 
     expect(persistedDaily?.state?.lastRunAtMs).toBeUndefined();
-    expect(persistedBook?.enabled).toBe(false);
-    expect(persistedBook?.state?.runningAtMs).toBeUndefined();
+    expect(persistedBook).toBeUndefined();
     expect(finished.filter((evt) => evt.summary === "book reminder")).toHaveLength(1);
   });
 });
