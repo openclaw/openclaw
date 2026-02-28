@@ -4,6 +4,7 @@ import path from "node:path";
 import { serializePayload, type MessagePayloadObject, type RequestClient } from "@buape/carbon";
 import { ChannelType, Routes } from "discord-api-types/v10";
 import { resolveChunkMode } from "../auto-reply/chunk.js";
+import { isSilentReplyText } from "../auto-reply/tokens.js";
 import { loadConfig } from "../config/config.js";
 import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
 import { recordChannelActivity } from "../infra/channel-activity.js";
@@ -131,6 +132,10 @@ export async function sendMessageDiscord(
   text: string,
   opts: DiscordSendOpts = {},
 ): Promise<DiscordSendResult> {
+  const trimmedText = text?.trim() ?? "";
+  if (isSilentReplyText(trimmedText) && !opts.mediaUrl && !opts.components) {
+    return { messageId: "suppressed", channelId: "" };
+  }
   const cfg = loadConfig();
   const accountInfo = resolveDiscordAccount({
     cfg,

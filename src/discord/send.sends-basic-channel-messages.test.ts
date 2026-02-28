@@ -174,6 +174,26 @@ describe("sendMessageDiscord", () => {
     expect(res.channelId).toBe("chan1");
   });
 
+  it("suppresses NO_REPLY token without making an API call", async () => {
+    const { rest, postMock } = makeDiscordRest();
+    const res = await sendMessageDiscord("channel:789", "NO_REPLY", {
+      rest,
+      token: "t",
+    });
+    expect(res).toEqual({ messageId: "suppressed", channelId: "" });
+    expect(postMock).not.toHaveBeenCalled();
+  });
+
+  it("suppresses NO_REPLY token with surrounding whitespace", async () => {
+    const { rest, postMock } = makeDiscordRest();
+    const res = await sendMessageDiscord("channel:789", "  NO_REPLY  ", {
+      rest,
+      token: "t",
+    });
+    expect(res).toEqual({ messageId: "suppressed", channelId: "" });
+    expect(postMock).not.toHaveBeenCalled();
+  });
+
   it("rejects bare numeric IDs as ambiguous", async () => {
     const { rest } = makeDiscordRest();
     await expect(
