@@ -180,6 +180,9 @@ importers:
       sqlite-vec:
         specifier: 0.1.7-alpha.2
         version: 0.1.7-alpha.2
+      strip-ansi:
+        specifier: ^7.2.0
+        version: 7.2.0
       tar:
         specifier: 7.5.9
         version: 7.5.9
