@@ -342,11 +342,18 @@ export const simplexPlugin: ChannelPlugin<ResolvedSimplexAccount> = {
             : undefined;
 
           // Forward to OpenClaw's message pipeline with routing info
-          await (
+          const handler = (
             runtime.channel.reply as {
               handleInboundMessage?: (params: unknown) => Promise<void>;
             }
-          ).handleInboundMessage?.({
+          ).handleInboundMessage;
+          if (!handler) {
+            console.warn(
+              "SimpleX: handleInboundMessage not available on runtime.channel.reply — message dropped",
+            );
+            return;
+          }
+          await handler({
             channel: "simplex",
             accountId: account.accountId,
             senderId: msg.contactId,

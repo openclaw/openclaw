@@ -15,9 +15,9 @@
  * - Group messages: #groupName message
  */
 
-import WebSocket from "ws";
 import fs from "fs";
 import path from "path";
+import WebSocket from "ws";
 
 /** Safe display name pattern — alphanumeric, underscores, dots, hyphens only. */
 const SAFE_DISPLAY_NAME = /^[\w.-]+$/;
@@ -288,27 +288,31 @@ export function startSimplexBus(options: SimplexBusOptions): SimplexBusHandle {
             if (dir?.type !== "directRcv") continue;
 
             const content = chatItem?.content;
-            
+
             // Check for voice messages
-            const isVoiceMessage = content?.type === "voice" || content?.msgContent?.type === "voice";
-            
+            const isVoiceMessage =
+              content?.type === "voice" || content?.msgContent?.type === "voice";
+
             if (isVoiceMessage) {
               const msg: SimplexMessage = {
                 contactId: String(contact.contactId ?? contact.localDisplayName),
                 contactName: contact.localDisplayName ?? contact.displayName ?? "unknown",
-                text: "[Voice message]",  // Placeholder - downstream should handle transcription
+                text: "[Voice message]", // Placeholder - downstream should handle transcription
                 messageId: chatItem.meta?.itemId ? String(chatItem.meta.itemId) : undefined,
                 timestamp: chatItem.meta?.itemTs,
                 isGroup: false,
                 isVoice: true,
               };
-              
+
               options.onMessage(msg).catch((err) => {
-                options.onError(err instanceof Error ? err : new Error(String(err)), "message_handler");
+                options.onError(
+                  err instanceof Error ? err : new Error(String(err)),
+                  "message_handler",
+                );
               });
               continue;
             }
-            
+
             if (content?.type !== "rcvMsgContent") {
               // Also handle text messages with msgContent.type
               if (content?.msgContent?.type !== "text" && !content?.text) continue;
@@ -327,7 +331,10 @@ export function startSimplexBus(options: SimplexBusOptions): SimplexBusHandle {
             };
 
             options.onMessage(msg).catch((err) => {
-              options.onError(err instanceof Error ? err : new Error(String(err)), "message_handler");
+              options.onError(
+                err instanceof Error ? err : new Error(String(err)),
+                "message_handler",
+              );
             });
           }
 
@@ -341,16 +348,17 @@ export function startSimplexBus(options: SimplexBusOptions): SimplexBusHandle {
             if (dir?.type !== "groupRcv" && dir?.type !== "directRcv") continue;
 
             const content = chatItem?.content;
-            
+
             // Check for voice messages (type === 'voice')
-            const isVoiceMessage = content?.type === "voice" || content?.msgContent?.type === "voice";
-            
+            const isVoiceMessage =
+              content?.type === "voice" || content?.msgContent?.type === "voice";
+
             // For voice messages, we need to get the file info
             if (isVoiceMessage) {
               const msg: SimplexMessage = {
                 contactId: String(dir?.memberId ?? senderProfile?.memberId ?? "unknown"),
                 contactName: senderName,
-                text: "[Voice message]",  // Placeholder - downstream should handle transcription
+                text: "[Voice message]", // Placeholder - downstream should handle transcription
                 messageId: chatItem.meta?.itemId ? String(chatItem.meta.itemId) : undefined,
                 timestamp: chatItem.meta?.itemTs,
                 isGroup: true,
@@ -360,13 +368,16 @@ export function startSimplexBus(options: SimplexBusOptions): SimplexBusHandle {
                 // Voice files are received via rcvFileComplete event, so we need to correlate
                 fileReceived: undefined, // Will be set when file event arrives
               };
-              
+
               options.onMessage(msg).catch((err) => {
-                options.onError(err instanceof Error ? err : new Error(String(err)), "message_handler");
+                options.onError(
+                  err instanceof Error ? err : new Error(String(err)),
+                  "message_handler",
+                );
               });
               continue;
             }
-            
+
             // Text messages
             if (content?.type !== "rcvMsgContent") {
               if (content?.msgContent?.type !== "text" && !content?.text) continue;
@@ -376,7 +387,8 @@ export function startSimplexBus(options: SimplexBusOptions): SimplexBusHandle {
             if (!text) continue;
 
             const senderProfile = chatItem?.memberProfile ?? chatItem?.senderProfile;
-            const senderName = senderProfile?.displayName ?? senderProfile?.localDisplayName ?? "unknown";
+            const senderName =
+              senderProfile?.displayName ?? senderProfile?.localDisplayName ?? "unknown";
 
             const msg: SimplexMessage = {
               contactId: String(dir?.memberId ?? senderProfile?.memberId ?? "unknown"),
@@ -390,7 +402,10 @@ export function startSimplexBus(options: SimplexBusOptions): SimplexBusHandle {
             };
 
             options.onMessage(msg).catch((err) => {
-              options.onError(err instanceof Error ? err : new Error(String(err)), "message_handler");
+              options.onError(
+                err instanceof Error ? err : new Error(String(err)),
+                "message_handler",
+              );
             });
           }
         }
@@ -398,9 +413,7 @@ export function startSimplexBus(options: SimplexBusOptions): SimplexBusHandle {
 
       // Handle message delivery confirmation
       if (parsed.resp?.type === "messageDelivery") {
-        const msgId = parsed.resp?.msgId;
-        // Message was delivered - could emit event for tracking
-        options.onError(new Error(`Message delivered: ${msgId}`), "delivery");
+        // Message delivery confirmation - no action needed (success path)
       }
 
       // Handle message errors
@@ -422,9 +435,20 @@ export function startSimplexBus(options: SimplexBusOptions): SimplexBusHandle {
         let mediaType: "image" | "voice" | "file" = "file";
         if (fileName) {
           const ext = fileName.toLowerCase();
-          if (ext.endsWith(".jpg") || ext.endsWith(".jpeg") || ext.endsWith(".png") || ext.endsWith(".gif") || ext.endsWith(".webp")) {
+          if (
+            ext.endsWith(".jpg") ||
+            ext.endsWith(".jpeg") ||
+            ext.endsWith(".png") ||
+            ext.endsWith(".gif") ||
+            ext.endsWith(".webp")
+          ) {
             mediaType = "image";
-          } else if (ext.endsWith(".m4a") || ext.endsWith(".mp3") || ext.endsWith(".ogg") || ext.endsWith(".wav")) {
+          } else if (
+            ext.endsWith(".m4a") ||
+            ext.endsWith(".mp3") ||
+            ext.endsWith(".ogg") ||
+            ext.endsWith(".wav")
+          ) {
             mediaType = "voice";
           }
         }
@@ -540,7 +564,7 @@ export function startSimplexBus(options: SimplexBusOptions): SimplexBusHandle {
     }
     // Check for path traversal (..)
     const normalized = path.normalize(filePath);
-    if (normalized.includes('..')) {
+    if (normalized.includes("..")) {
       throw new Error(`Path traversal not allowed: ${filePath}`);
     }
     // Check if file exists
@@ -599,7 +623,9 @@ export function startSimplexBus(options: SimplexBusOptions): SimplexBusHandle {
       // Validate file path and check it's an image
       validateFilePath(imagePath);
       if (!isImageFile(imagePath)) {
-        throw new Error(`Not a valid image file: ${imagePath}. Allowed: ${IMAGE_EXTENSIONS.join(", ")}`);
+        throw new Error(
+          `Not a valid image file: ${imagePath}. Allowed: ${IMAGE_EXTENSIONS.join(", ")}`,
+        );
       }
       // Send as file (SimpleX handles images as files)
       const safeContactId = contactId.replace(/[@#]/g, "");
@@ -610,7 +636,9 @@ export function startSimplexBus(options: SimplexBusOptions): SimplexBusHandle {
       // Validate file path and check it's a voice file
       validateFilePath(audioPath);
       if (!isVoiceFile(audioPath)) {
-        throw new Error(`Not a valid voice file: ${audioPath}. Allowed: ${VOICE_EXTENSIONS.join(", ")}`);
+        throw new Error(
+          `Not a valid voice file: ${audioPath}. Allowed: ${VOICE_EXTENSIONS.join(", ")}`,
+        );
       }
       // Send as file (SimpleX sends voice as .m4a files)
       const safeContactId = contactId.replace(/[@#]/g, "");
@@ -621,7 +649,7 @@ export function startSimplexBus(options: SimplexBusOptions): SimplexBusHandle {
       // Initiate file reception: /freceive <fileId>
       try {
         await sendCommand(`/freceive ${fileId}`);
-        
+
         // Poll for file to be available in the database (max 60 seconds)
         // In a real implementation, we'd check the SQLite DB for rcv_complete status
         // For now, return null to indicate the file needs to be retrieved

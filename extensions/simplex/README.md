@@ -88,6 +88,7 @@ In your `openclaw.json`:
 ### Direct Messages (DM)
 
 Send to a contact using `@ContactName`:
+
 ```
 @alice Hello Alice!
 ```
@@ -95,11 +96,13 @@ Send to a contact using `@ContactName`:
 ### Group Messages
 
 Send to a group using `#GroupName`:
+
 ```
 #MyGroup Hello everyone!
 ```
 
 **Note:** The bot must already be a member of the group. Use the SimpleX CLI to join groups:
+
 ```
 /gjoin <group_name>
 ```
@@ -127,6 +130,7 @@ Send to a group using `#GroupName`:
 ### Connection Refused
 
 Ensure the SimpleX CLI is running with WebSocket enabled:
+
 ```bash
 simplex-chat -p 5225
 ```
@@ -134,6 +138,7 @@ simplex-chat -p 5225
 ### TLS/Relay Errors
 
 If you see TLS or relay connection errors:
+
 - These are often transient network issues
 - The plugin has automatic reconnection with exponential backoff
 - Check your internet connection
@@ -170,16 +175,95 @@ If you see TLS or relay connection errors:
 
 The plugin uses these SimpleX CLI commands:
 
-| Command | Description |
-|---------|-------------|
-| `@contact message` | Send DM to contact |
-| `#group message` | Send message to group |
-| `/contacts` | List contacts |
-| `/groups` | List groups |
-| `/ac <name>` | Accept contact request |
-| `/gjoin <name>` | Join group |
+| Command            | Description            |
+| ------------------ | ---------------------- |
+| `@contact message` | Send DM to contact     |
+| `#group message`   | Send message to group  |
+| `/contacts`        | List contacts          |
+| `/groups`          | List groups            |
+| `/ac <name>`       | Accept contact request |
+| `/gjoin <name>`    | Join group             |
 
 ## Contributing
 
 This plugin follows the OpenClaw channel plugin architecture.
 See the [Nostr plugin](../nostr) for a similar reference implementation.
+
+---
+
+## Use Cases
+
+### Personal AI Assistant
+
+The routing feature enables powerful personal assistant configurations where different contacts or groups are handled by different AI agents with specific language and voice preferences.
+
+#### Example: Alexandre's Setup
+
+```json
+{
+  "channels": {
+    "simplex": {
+      "enabled": true,
+      "wsPort": 5225,
+      "userRouting": [
+        {
+          "contactName": "FormidableVisionary",
+          "agent": "fiancee-assistant",
+          "language": "en",
+          "model": "claude-sonnet-4-20250514",
+          "voiceReplies": true,
+          "includeHistory": true,
+          "maxHistoryMessages": 20
+        },
+        {
+          "contactName": "Talleyrand_2010",
+          "agent": "digimate",
+          "language": "en",
+          "voiceReplies": true
+        },
+        {
+          "contactName": "PleasantTeammate",
+          "agent": "digimate",
+          "language": "en",
+          "voiceReplies": true
+        }
+      ],
+      "groupRouting": [
+        {
+          "groupName": "EffuzionNext",
+          "agent": "digimate",
+          "language": "fr",
+          "voiceReplies": true,
+          "memberFilter": ["FormidableVisionary"],
+          "priority": 10
+        }
+      ],
+      "defaultAgent": "digimate",
+      "defaultLanguage": "fr",
+      "defaultVoiceReplies": false
+    }
+  }
+}
+```
+
+#### How It Works
+
+- **FormidableVisionary** → Routes to the fiancée assistant with:
+  - English (Canadian) language setting
+  - Claude Sonnet model
+  - Voice replies enabled (TTS)
+
+- **Talleyrand_2010 / PleasantTeammate** → Routes to Digimate main agent:
+  - English language
+  - Voice replies enabled
+  - These are Alexandre's own devices (secondary instances)
+
+- **EffuzionNext group** → Routes based on member:
+  - Messages from FormidableVisionary get special handling (English, voice replies)
+  - Other members fall through to default agent (Digimate, French)
+
+#### Notes
+
+- The fiancée (FormidableVisionary) speaks English Canadian — configure `language: "en"` and optionally specify a voice model optimized for North American English
+- Voice replies require TTS to be configured in OpenClaw's `messages.tts` settings
+- Use `memberExclude` to filter out your own devices from group routing (prevents echo loops)
