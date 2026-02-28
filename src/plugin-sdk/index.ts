@@ -228,6 +228,7 @@ export type { WizardPrompter } from "../wizard/prompts.js";
 export {
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
+  normalizeAgentId,
   resolveThreadSessionKeys,
 } from "../routing/session-key.js";
 export {
