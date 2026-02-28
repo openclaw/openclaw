@@ -32,6 +32,7 @@ import {
 } from "../../auto-reply/thinking.js";
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { applyConfigEnvVars } from "../../config/env-vars.js";
 import {
   resolveSessionTranscriptPath,
   setSessionRuntimeModel,
@@ -98,6 +99,9 @@ export async function runCronIsolatedAgentTurn(params: {
   agentId?: string;
   lane?: string;
 }): Promise<RunCronAgentTurnResult> {
+  // Apply env vars from config so isolated sessions can access them (e.g., OPENROUTER_API_KEY)
+  applyConfigEnvVars(params.cfg);
+
   const abortSignal = params.abortSignal ?? params.signal;
   const isAborted = () => abortSignal?.aborted === true;
   const abortReason = () => {
