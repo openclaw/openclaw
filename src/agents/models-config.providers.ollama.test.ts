@@ -196,73 +196,57 @@ describe("Ollama provider", () => {
     expect(mockOllamaModel).not.toHaveProperty("params");
   });
 
-  it("should skip discovery when explicit models are configured", async () => {
+  it("should skip discovery fetch when explicit models are configured", async () => {
     const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
-    process.env.OLLAMA_API_KEY = "test-key";
+    vi.stubEnv("VITEST", "");
+    vi.stubEnv("NODE_ENV", "development");
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const explicitModels: ModelDefinitionConfig[] = [
+      {
+        id: "gpt-oss:20b",
+        name: "GPT-OSS 20B",
+        reasoning: false,
+        input: ["text"] as Array<"text" | "image">,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 8192,
+        maxTokens: 81920,
+      },
+    ];
 
-    try {
-      const explicitModels: ModelDefinitionConfig[] = [
-        {
-          id: "gpt-oss:20b",
-          name: "GPT-OSS 20B",
-          reasoning: false,
-          input: ["text"] as Array<"text" | "image">,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          contextWindow: 8192,
-          maxTokens: 81920,
+    const providers = await resolveImplicitProviders({
+      agentDir,
+      explicitProviders: {
+        ollama: {
+          baseUrl: "http://remote-ollama:11434/v1",
+          models: explicitModels,
+          apiKey: "config-ollama-key",
         },
-      ];
+      },
+    });
 
-      const providers = await resolveImplicitProviders({
-        agentDir,
-        explicitProviders: {
-          ollama: {
-            baseUrl: "http://remote-ollama:11434",
-            api: "ollama",
-            models: explicitModels,
-          },
-        },
-      });
-
-      // Should use explicit models, not run discovery
-      expect(providers?.ollama?.models).toEqual(explicitModels);
-      expect(providers?.ollama?.baseUrl).toBe("http://remote-ollama:11434");
-    } finally {
-      delete process.env.OLLAMA_API_KEY;
-    }
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(providers?.ollama?.models).toEqual(explicitModels);
+    expect(providers?.ollama?.baseUrl).toBe("http://remote-ollama:11434");
+    expect(providers?.ollama?.api).toBe("ollama");
+    expect(providers?.ollama?.apiKey).toBe("config-ollama-key");
   });
 
-  it("should default api to ollama when explicit models omit provider api", async () => {
+  it("should preserve explicit apiKey when discovery path has no models and no env key", async () => {
     const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
-    process.env.OLLAMA_API_KEY = "test-key";
 
-    try {
-      const explicitModels: ModelDefinitionConfig[] = [
-        {
-          id: "gpt-oss:20b",
-          name: "GPT-OSS 20B",
-          reasoning: false,
-          input: ["text"] as Array<"text" | "image">,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          contextWindow: 8192,
-          maxTokens: 81920,
+    const providers = await resolveImplicitProviders({
+      agentDir,
+      explicitProviders: {
+        ollama: {
+          baseUrl: "http://remote-ollama:11434/v1",
+          api: "openai-completions",
+          models: [],
+          apiKey: "config-ollama-key",
         },
-      ];
+      },
+    });
 
-      const providers = await resolveImplicitProviders({
-        agentDir,
-        explicitProviders: {
-          ollama: {
-            baseUrl: "http://remote-ollama:11434",
-            models: explicitModels,
-          },
-        },
-      });
-
-      expect(providers?.ollama?.api).toBe("ollama");
-      expect(providers?.ollama?.models).toEqual(explicitModels);
-    } finally {
-      delete process.env.OLLAMA_API_KEY;
-    }
+    expect(providers?.ollama?.apiKey).toBe("config-ollama-key");
   });
 });
