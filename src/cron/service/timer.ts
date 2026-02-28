@@ -663,6 +663,11 @@ export async function executeJobCore(
           reason,
           agentId: job.agentId,
           sessionKey: targetMainSessionKey,
+          // Cron-triggered heartbeats should deliver to the last active channel.
+          // Without this override, heartbeat target defaults to "none" (since
+          // e2362d35) and cron main-session responses are silently swallowed.
+          // See: https://github.com/openclaw/openclaw/issues/28508
+          heartbeat: { target: "last" },
         });
         if (
           heartbeatResult.status !== "skipped" ||
