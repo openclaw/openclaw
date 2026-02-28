@@ -3,11 +3,20 @@ package ai.openclaw.android.node
 import ai.openclaw.android.protocol.OpenClawCanvasA2UICommand
 import ai.openclaw.android.protocol.OpenClawCanvasCommand
 import ai.openclaw.android.protocol.OpenClawCameraCommand
+import ai.openclaw.android.protocol.OpenClawCapability
 import ai.openclaw.android.protocol.OpenClawDeviceCommand
 import ai.openclaw.android.protocol.OpenClawLocationCommand
 import ai.openclaw.android.protocol.OpenClawNotificationsCommand
 import ai.openclaw.android.protocol.OpenClawScreenCommand
 import ai.openclaw.android.protocol.OpenClawSmsCommand
+
+data class NodeRuntimeFlags(
+  val cameraEnabled: Boolean,
+  val locationEnabled: Boolean,
+  val smsAvailable: Boolean,
+  val voiceWakeEnabled: Boolean,
+  val debugBuild: Boolean,
+)
 
 enum class InvokeCommandAvailability {
   Always,
@@ -17,6 +26,19 @@ enum class InvokeCommandAvailability {
   DebugBuild,
 }
 
+enum class NodeCapabilityAvailability {
+  Always,
+  CameraEnabled,
+  LocationEnabled,
+  SmsAvailable,
+  VoiceWakeEnabled,
+}
+
+data class NodeCapabilitySpec(
+  val name: String,
+  val availability: NodeCapabilityAvailability = NodeCapabilityAvailability.Always,
+)
+
 data class InvokeCommandSpec(
   val name: String,
   val requiresForeground: Boolean = false,
@@ -24,6 +46,29 @@ data class InvokeCommandSpec(
 )
 
 object InvokeCommandRegistry {
+  val capabilityManifest: List<NodeCapabilitySpec> =
+    listOf(
+      NodeCapabilitySpec(name = OpenClawCapability.Canvas.rawValue),
+      NodeCapabilitySpec(name = OpenClawCapability.Screen.rawValue),
+      NodeCapabilitySpec(name = OpenClawCapability.Device.rawValue),
+      NodeCapabilitySpec(
+        name = OpenClawCapability.Camera.rawValue,
+        availability = NodeCapabilityAvailability.CameraEnabled,
+      ),
+      NodeCapabilitySpec(
+        name = OpenClawCapability.Sms.rawValue,
+        availability = NodeCapabilityAvailability.SmsAvailable,
+      ),
+      NodeCapabilitySpec(
+        name = OpenClawCapability.VoiceWake.rawValue,
+        availability = NodeCapabilityAvailability.VoiceWakeEnabled,
+      ),
+      NodeCapabilitySpec(
+        name = OpenClawCapability.Location.rawValue,
+        availability = NodeCapabilityAvailability.LocationEnabled,
+      ),
+    )
+
   val all: List<InvokeCommandSpec> =
     listOf(
       InvokeCommandSpec(
@@ -118,20 +163,29 @@ object InvokeCommandRegistry {
 
   fun find(command: String): InvokeCommandSpec? = byNameInternal[command]
 
-  fun advertisedCommands(
-    cameraEnabled: Boolean,
-    locationEnabled: Boolean,
-    smsAvailable: Boolean,
-    debugBuild: Boolean,
-  ): List<String> {
+  fun advertisedCapabilities(flags: NodeRuntimeFlags): List<String> {
+    return capabilityManifest
+      .filter { spec ->
+        when (spec.availability) {
+          NodeCapabilityAvailability.Always -> true
+          NodeCapabilityAvailability.CameraEnabled -> flags.cameraEnabled
+          NodeCapabilityAvailability.LocationEnabled -> flags.locationEnabled
+          NodeCapabilityAvailability.SmsAvailable -> flags.smsAvailable
+          NodeCapabilityAvailability.VoiceWakeEnabled -> flags.voiceWakeEnabled
+        }
+      }
+      .map { it.name }
+  }
+
+  fun advertisedCommands(flags: NodeRuntimeFlags): List<String> {
     return all
       .filter { spec ->
         when (spec.availability) {
           InvokeCommandAvailability.Always -> true
-          InvokeCommandAvailability.CameraEnabled -> cameraEnabled
-          InvokeCommandAvailability.LocationEnabled -> locationEnabled
-          InvokeCommandAvailability.SmsAvailable -> smsAvailable
-          InvokeCommandAvailability.DebugBuild -> debugBuild
+          InvokeCommandAvailability.CameraEnabled -> flags.cameraEnabled
+          InvokeCommandAvailability.LocationEnabled -> flags.locationEnabled
+          InvokeCommandAvailability.SmsAvailable -> flags.smsAvailable
+          InvokeCommandAvailability.DebugBuild -> flags.debugBuild
         }
       }
       .map { it.name }
