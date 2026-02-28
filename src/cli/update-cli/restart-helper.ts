@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { DEFAULT_GATEWAY_PORT } from "../../config/paths.js";
 import {
   resolveGatewayLaunchAgentLabel,
   resolveGatewaySystemdServiceName,
@@ -95,6 +96,8 @@ rm -f "$0"
       if (!isBatchSafe(taskName)) {
         return null;
       }
+      const envPort = Number(env.OPENCLAW_GATEWAY_PORT?.trim());
+      const port = Number.isFinite(envPort) && envPort > 0 ? envPort : DEFAULT_GATEWAY_PORT;
       filename = `openclaw-restart-${timestamp}.bat`;
       scriptContent = `@echo off
 REM Standalone restart script — survives parent process termination.
@@ -105,13 +108,13 @@ REM Poll for gateway port release before rerun; force-kill listener if stuck.
 set /a attempts=0
 :wait_for_port_release
 set /a attempts+=1
-netstat -ano | findstr /R /C:":18789 .*LISTENING" >nul
+netstat -ano | findstr /R /C:":${port} .*LISTENING" >nul
 if errorlevel 1 goto port_released
 if %attempts% GEQ 10 goto force_kill_listener
 timeout /t 1 /nobreak >nul
 goto wait_for_port_release
 :force_kill_listener
-for /f "tokens=5" %%P in ('netstat -ano ^| findstr /R /C:":18789 .*LISTENING"') do (
+for /f "tokens=5" %%P in ('netstat -ano ^| findstr /R /C:":${port} .*LISTENING"') do (
   taskkill /F /PID %%P >nul 2>&1
   goto port_released
 )

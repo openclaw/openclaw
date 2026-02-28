@@ -22,12 +22,12 @@ describe("restart-helper", () => {
     await fs.unlink(scriptPath);
   }
 
-  function expectWindowsRestartWaitOrdering(content: string) {
+  function expectWindowsRestartWaitOrdering(content: string, port = 18789) {
     const endCommand = 'schtasks /End /TN "';
     const pollAttemptsInit = "set /a attempts=0";
     const pollLabel = ":wait_for_port_release";
     const pollAttemptIncrement = "set /a attempts+=1";
-    const pollNetstatCheck = 'netstat -ano | findstr /R /C:":18789 .*LISTENING" >nul';
+    const pollNetstatCheck = `netstat -ano | findstr /R /C:":${port} .*LISTENING" >nul`;
     const forceKillLabel = ":force_kill_listener";
     const forceKillCommand = "taskkill /F /PID %%P >nul 2>&1";
     const portReleasedLabel = ":port_released";
@@ -140,6 +140,21 @@ describe("restart-helper", () => {
       expect(content).toContain('schtasks /End /TN "OpenClaw Gateway (custom)"');
       expect(content).toContain('schtasks /Run /TN "OpenClaw Gateway (custom)"');
       expectWindowsRestartWaitOrdering(content);
+      await cleanupScript(scriptPath);
+    });
+
+    it("uses OPENCLAW_GATEWAY_PORT for port polling on Windows", async () => {
+      Object.defineProperty(process, "platform", { value: "win32" });
+
+      const { scriptPath, content } = await prepareAndReadScript({
+        OPENCLAW_PROFILE: "default",
+        OPENCLAW_GATEWAY_PORT: "19000",
+      });
+      expect(content).toContain('netstat -ano | findstr /R /C:":19000 .*LISTENING" >nul');
+      expect(content).toContain(
+        'for /f "tokens=5" %%P in (\'netstat -ano ^| findstr /R /C:":19000 .*LISTENING"\') do (',
+      );
+      expectWindowsRestartWaitOrdering(content, 19000);
       await cleanupScript(scriptPath);
     });
 
