@@ -10,6 +10,7 @@ import {
   resolveDefaultAgentId,
 } from "../../agents/agent-scope.js";
 import { resolveModel } from "../../agents/pi-embedded-runner/model.js";
+import { emitAgentEvent } from "../../infra/agent-events.js";
 import type { OpenClawPluginApi } from "../../plugins/types.js";
 import { ConsolidationService } from "../../services/memory/ConsolidationService.js";
 import { GraphService } from "../../services/memory/GraphService.js";
@@ -19,7 +20,6 @@ import {
   type RecentMessage,
 } from "../../services/memory/SubconsciousService.js";
 import { ensureGraphitiDocker, installDocker } from "./docker.js";
-import { emitAgentEvent } from "../../infra/agent-events.js";
 
 /** Typed shape of the mind-memory plugin config within the global config. */
 type MindMemoryPluginConfig = {
@@ -492,9 +492,8 @@ export default function register(api: PluginApi) {
       return null;
     }
 
-    const { createSubconsciousAgent } = await import(
-      "../../agents/pi-embedded-runner/subconscious-agent.js"
-    );
+    const { createSubconsciousAgent } =
+      await import("../../agents/pi-embedded-runner/subconscious-agent.js");
     const narrativeAgent = createSubconsciousAgent({
       model,
       authStorage,
@@ -536,7 +535,9 @@ export default function register(api: PluginApi) {
   // Returns narrativeStory (for system prompt injection) and extraSystemContext (flashback resonance).
   api.on("before_message_process", async (event, _ctx) => {
     // Skip for subagents — personal memory only applies to the top-level conversation.
-    if (event.isSubagent) return;
+    if (event.isSubagent) {
+      return;
+    }
 
     // Skip heartbeat probes (not real user messages).
     const { prompt } = event;
@@ -597,46 +598,46 @@ export default function register(api: PluginApi) {
         : Promise.resolve(),
       sessionsDir && config.narrative?.enabled !== false
         ? consolidator
-          .syncGlobalNarrative(
-            sessionsDir,
-            storyPath,
-            narrativeAgent,
-            undefined,
-            50000,
-            event.sessionFile,
-          )
-          .then(() =>
-            consolidator
-              .generateQuickProfile(storyPath, quickPath, workspaceDir, narrativeAgent)
-              .catch(() => { }),
-          )
-          .catch(() => { })
+            .syncGlobalNarrative(
+              sessionsDir,
+              storyPath,
+              narrativeAgent,
+              undefined,
+              50000,
+              event.sessionFile,
+            )
+            .then(() =>
+              consolidator
+                .generateQuickProfile(storyPath, quickPath, workspaceDir, narrativeAgent)
+                .catch(() => {}),
+            )
+            .catch(() => {})
         : Promise.resolve(),
       config.graphiti?.enabled !== false
         ? graphService.addEpisode(sessionId, `user: ${prompt}`, event.timestamp)
         : Promise.resolve(),
       !skipResonance && config.graphiti?.enabled !== false
         ? subconscious.getFlashback(
-          sessionId,
-          prompt,
-          narrativeAgent,
-          undefined,
-          (event.recentMessages ?? []) as RecentMessage[],
-          undefined,
-          quickContext,
-          config.graphiti?.rewriteMemories ?? true,
-          observerAgent,
-          (evt) => {
-            if (event.sessionKey && _ctx.runId) {
-              emitAgentEvent({
-                runId: _ctx.runId,
-                sessionKey: event.sessionKey,
-                stream: evt.stream,
-                data: evt.data,
-              });
-            }
-          },
-        )
+            sessionId,
+            prompt,
+            narrativeAgent,
+            undefined,
+            (event.recentMessages ?? []) as RecentMessage[],
+            undefined,
+            quickContext,
+            config.graphiti?.rewriteMemories ?? true,
+            observerAgent,
+            (evt) => {
+              if (event.sessionKey && _ctx.runId) {
+                emitAgentEvent({
+                  runId: _ctx.runId,
+                  sessionKey: event.sessionKey,
+                  stream: evt.stream,
+                  data: evt.data,
+                });
+              }
+            },
+          )
         : Promise.resolve(""),
     ]);
 
@@ -668,7 +669,9 @@ export default function register(api: PluginApi) {
         const quickPath = path.join(narrativeDir, "QUICK.md");
 
         const agents = await resolveNarrativeAgents();
-        if (!agents) return;
+        if (!agents) {
+          return;
+        }
         const { narrativeAgent } = agents;
 
         type MsgEntry = {
@@ -683,7 +686,9 @@ export default function register(api: PluginApi) {
             typeof m.role === "string" && m.role !== "system",
         );
 
-        if (sessionMessages.length === 0) return;
+        if (sessionMessages.length === 0) {
+          return;
+        }
 
         if (debug) {
           api.logger.info(
@@ -697,12 +702,22 @@ export default function register(api: PluginApi) {
           narrativeAgent,
           undefined,
           50000,
+          (evt) => {
+            if (_ctx.runId && _ctx.sessionKey) {
+              emitAgentEvent({
+                runId: _ctx.runId,
+                sessionKey: _ctx.sessionKey,
+                stream: evt.stream,
+                data: evt.data,
+              });
+            }
+          },
         );
 
         // Fire-and-forget QUICK.md regeneration after story sync.
         void consolidator
           .generateQuickProfile(storyPath, quickPath, workspaceDir, narrativeAgent)
-          .catch(() => { });
+          .catch(() => {});
 
         if (debug) {
           api.logger.info(`✅ [MIND] before_compaction: STORY.md sync complete.`);
@@ -733,7 +748,9 @@ export default function register(api: PluginApi) {
         const quickPath = path.join(narrativeDir, "QUICK.md");
 
         const agents = await resolveNarrativeAgents();
-        if (!agents) return;
+        if (!agents) {
+          return;
+        }
         const { narrativeAgent } = agents;
 
         if (debug) {
@@ -749,12 +766,22 @@ export default function register(api: PluginApi) {
           undefined,
           50000,
           sessionFile,
+          (evt) => {
+            if (_ctx.runId && _ctx.sessionKey) {
+              emitAgentEvent({
+                runId: _ctx.runId,
+                sessionKey: _ctx.sessionKey,
+                stream: evt.stream,
+                data: evt.data,
+              });
+            }
+          },
         );
 
         // Fire-and-forget QUICK.md regeneration after story sync.
         void consolidator
           .generateQuickProfile(storyPath, quickPath, workspaceDir, narrativeAgent)
-          .catch(() => { });
+          .catch(() => {});
 
         if (debug) {
           api.logger.info(`✅ [MIND] after_compaction: global narrative sync complete.`);

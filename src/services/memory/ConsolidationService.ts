@@ -217,9 +217,21 @@ export class ConsolidationService {
     agent: { complete: (prompt: string) => Promise<{ text?: string | null }> },
     identityContext?: string,
     anchorTimestamp?: number,
+    onEvent?: (event: { stream: string; data: unknown }) => void,
   ): Promise<string> {
     if (typeof oldMessages !== "string" && oldMessages.length === 0) {
       return currentStory;
+    }
+
+    if (onEvent) {
+      onEvent({
+        stream: "tool",
+        data: {
+          tool: "narrative_update",
+          phase: "call",
+          status: "Actualizando historia...",
+        },
+      });
     }
 
     this.log(`📖 [MIND] Updating Narrative Story for ${sessionId}...`);
@@ -353,6 +365,16 @@ export class ConsolidationService {
       const wordCount = newStory.split(/\s+/).length;
 
       if (wordCount > MAX_STORY_WORDS) {
+        if (onEvent) {
+          onEvent({
+            stream: "tool",
+            data: {
+              tool: "narrative_update",
+              phase: "status",
+              status: "Comprimiendo historia...",
+            },
+          });
+        }
         this.log(
           `📦 [MIND] Story too long (${wordCount} words). Compressing to ${MAX_STORY_WORDS} words...`,
         );
@@ -535,7 +557,7 @@ ${soul ? `=== SOUL.md ===\n${soul}\n\n` : ""}${user ? `=== USER.md ===\n${user}\
   async bootstrapFromLegacyMemory(
     sessionId: string,
     storyPath: string,
-    agent: { complete: (prompt: string) => Promise<{ text?: string }> },
+    agent: { complete: (prompt: string) => Promise<{ text?: string | null }> },
     identityContext: string | undefined,
     safeTokenLimit: number,
     memoryDir?: string,
@@ -645,10 +667,11 @@ ${soul ? `=== SOUL.md ===\n${soul}\n\n` : ""}${user ? `=== USER.md ===\n${user}\
   async syncGlobalNarrative(
     sessionsDir: string,
     storyPath: string,
-    agent: { complete: (prompt: string) => Promise<{ text?: string }> },
+    agent: { complete: (prompt: string) => Promise<{ text?: string | null }> },
     identityContext?: string,
     safeTokenLimit: number = 50000,
     currentSessionFile?: string,
+    onEvent?: (event: { stream: string; data: unknown }) => void,
   ): Promise<void> {
     try {
       this.log(`🌍 [MIND] Starting Global Narrative Sync (Limit: ${safeTokenLimit} tokens)...`);
@@ -803,6 +826,7 @@ ${soul ? `=== SOUL.md ===\n${soul}\n\n` : ""}${user ? `=== USER.md ===\n${user}\
             agent,
             identityContext,
             currentBatch[currentBatch.length - 1]?.timestamp,
+            onEvent,
           );
           currentBatch = [];
           currentBatchTokens = 0;
@@ -832,6 +856,7 @@ ${soul ? `=== SOUL.md ===\n${soul}\n\n` : ""}${user ? `=== USER.md ===\n${user}\
             const t = lastMsg.timestamp;
             return typeof t === "string" ? new Date(t).getTime() : t;
           })(),
+          onEvent,
         );
       }
     } catch (e: unknown) {
@@ -854,9 +879,10 @@ ${soul ? `=== SOUL.md ===\n${soul}\n\n` : ""}${user ? `=== USER.md ===\n${user}\
       created_at?: string;
     }>,
     storyPath: string,
-    agent: { complete: (prompt: string) => Promise<{ text?: string }> },
+    agent: { complete: (prompt: string) => Promise<{ text?: string | null }> },
     identityContext?: string,
     safeTokenLimit: number = 50000,
+    onEvent?: (event: { stream: string; data: unknown }) => void,
   ): Promise<void> {
     try {
       // 1. Get Story Anchor
@@ -931,6 +957,7 @@ ${soul ? `=== SOUL.md ===\n${soul}\n\n` : ""}${user ? `=== USER.md ===\n${user}\
               const t = currentBatch[currentBatch.length - 1].timestamp;
               return typeof t === "string" ? new Date(t).getTime() : t;
             })(),
+            onEvent,
           );
           currentBatch = [];
           currentBatchTokens = 0;
@@ -955,6 +982,7 @@ ${soul ? `=== SOUL.md ===\n${soul}\n\n` : ""}${user ? `=== USER.md ===\n${user}\
             const t = lastMsg.timestamp;
             return typeof t === "string" ? new Date(t).getTime() : t;
           })(),
+          onEvent,
         );
       }
     } catch (e: unknown) {
