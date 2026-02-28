@@ -194,7 +194,7 @@ export function buildGatewayCronService(params: {
         );
       const baseHeartbeat = {
         ...runtimeConfig.agents?.defaults?.heartbeat,
-        ...agentEntry?.heartbeat,
+        ...(agentEntry && typeof agentEntry !== "boolean" ? agentEntry.heartbeat : undefined),
       };
       const heartbeatOverride = opts?.heartbeat
         ? { ...baseHeartbeat, ...opts.heartbeat }
