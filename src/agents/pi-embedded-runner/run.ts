@@ -712,6 +712,7 @@ export async function runEmbeddedPiAgent(
               log.warn(
                 `context overflow persisted after in-attempt compaction (attempt ${overflowCompactionAttempts}/${MAX_OVERFLOW_COMPACTION_ATTEMPTS}); retrying prompt without additional compaction for ${provider}/${modelId}`,
               );
+              sseParseRetries = 0;
               continue;
             }
             // Attempt explicit overflow compaction only when this attempt did not
@@ -761,6 +762,7 @@ export async function runEmbeddedPiAgent(
               if (compactResult.compacted) {
                 autoCompactionCount += 1;
                 log.info(`auto-compaction succeeded for ${provider}/${modelId}; retrying prompt`);
+                sseParseRetries = 0;
                 continue;
               }
               log.warn(
@@ -804,6 +806,7 @@ export async function runEmbeddedPiAgent(
                   );
                   // Do NOT reset overflowCompactionAttempts here — the global cap must remain
                   // enforced across all iterations to prevent unbounded compaction cycles (OC-65).
+                  sseParseRetries = 0;
                   continue;
                 }
                 log.warn(
