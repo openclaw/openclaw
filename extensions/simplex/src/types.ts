@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk";
+import type { SimplexUserRouting, SimplexGroupRouting } from "./config-schema.js";
 
 export type ResolvedSimplexAccount = {
   accountId: string;
@@ -17,6 +18,22 @@ export type ResolvedSimplexAccount = {
   filterMemberIds: string[];
   /** Display names to filter out */
   filterDisplayNames: string[];
+  /** User routing configuration */
+  userRouting: SimplexUserRouting[];
+  /** Group routing configuration */
+  groupRouting: SimplexGroupRouting[];
+  /** Default agent for unmatched contacts */
+  defaultAgent?: string;
+  /** Default language */
+  defaultLanguage: string;
+  /** Default model */
+  defaultModel?: string;
+  /** Default voice replies */
+  defaultVoiceReplies: boolean;
+  /** Store conversation history */
+  storeHistory: boolean;
+  /** Max stored history */
+  maxStoredHistory: number;
   config: Record<string, unknown>;
 };
 
@@ -99,6 +116,14 @@ export function resolveSimplexAccount(params: {
     autoStart: (simplexCfg.autoStart as boolean) ?? false,
     filterMemberIds: (simplexCfg.filterMemberIds as string[]) ?? [],
     filterDisplayNames: (simplexCfg.filterDisplayNames as string[]) ?? [],
+    userRouting: (simplexCfg.userRouting as SimplexUserRouting[]) ?? [],
+    groupRouting: (simplexCfg.groupRouting as SimplexGroupRouting[]) ?? [],
+    defaultAgent: simplexCfg.defaultAgent as string | undefined,
+    defaultLanguage: (simplexCfg.defaultLanguage as string) ?? "en",
+    defaultModel: simplexCfg.defaultModel as string | undefined,
+    defaultVoiceReplies: (simplexCfg.defaultVoiceReplies as boolean) ?? false,
+    storeHistory: (simplexCfg.storeHistory as boolean) ?? true,
+    maxStoredHistory: (simplexCfg.maxStoredHistory as number) ?? 50,
     config: simplexCfg,
   };
 }

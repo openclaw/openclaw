@@ -2,6 +2,83 @@ import { MarkdownConfigSchema, buildChannelConfigSchema } from "openclaw/plugin-
 import { z } from "zod";
 
 /**
+ * Per-user routing configuration.
+ * Maps SimpleX contacts to specific OpenClaw agents and preferences.
+ * This is the KEY feature for personal assistant use cases.
+ */
+export const SimplexUserRoutingSchema = z.object({
+  /** SimpleX display name to match (exact match) */
+  contactName: z.string(),
+  
+  /** OpenClaw agent to route messages to (e.g., "digimate", "fiancee-assistant") */
+  agent: z.string(),
+  
+  /** Language for this user (ISO 639-1 code, e.g., "fr", "en") */
+  language: z.string().default("fr"),
+  
+  /** Model to use for this user (e.g., "claude-sonnet-4-6", "claude-haiku") */
+  model: z.string().optional(),
+  
+  /** Whether to respond with voice (TTS) for this user */
+  voiceReplies: z.boolean().default(true),
+  
+  /** System prompt override for this user */
+  systemPrompt: z.string().optional(),
+  
+  /** Whether to include conversation history for this user */
+  includeHistory: z.boolean().default(true),
+  
+  /** Maximum history messages to include */
+  maxHistoryMessages: z.number().int().min(1).max(50).default(10),
+  
+  /** Priority for this route (higher = checked first) */
+  priority: z.number().int().min(0).max(100).default(50),
+});
+
+export type SimplexUserRouting = z.infer<typeof SimplexUserRoutingSchema>;
+
+/**
+ * Group routing configuration.
+ * Maps group names/IDs to agent configurations with member filtering.
+ */
+export const SimplexGroupRoutingSchema = z.object({
+  /** Group display name or ID */
+  groupName: z.string(),
+  
+  /** OpenClaw agent to route messages to */
+  agent: z.string(),
+  
+  /** Language for this group */
+  language: z.string().default("fr"),
+  
+  /** Model to use for this group */
+  model: z.string().optional(),
+  
+  /** Whether to respond with voice */
+  voiceReplies: z.boolean().default(false),
+  
+  /** System prompt override */
+  systemPrompt: z.string().optional(),
+  
+  /** Include conversation history */
+  includeHistory: z.boolean().default(true),
+  
+  /** Max history messages */
+  maxHistoryMessages: z.number().int().min(1).max(50).default(10),
+  
+  /** Route only specific members to agent (empty = all members) */
+  memberFilter: z.array(z.string()).optional(),
+  
+  /** Exclude specific members from routing (e.g., Alexandre's own devices) */
+  memberExclude: z.array(z.string()).optional(),
+  
+  /** Priority for this route */
+  priority: z.number().int().min(0).max(100).default(50),
+});
+
+export type SimplexGroupRouting = z.infer<typeof SimplexGroupRoutingSchema>;
+
+/**
  * SimpleX Chat channel configuration schema.
  *
  * The plugin connects to a local simplex-chat CLI instance running
@@ -54,10 +131,54 @@ export const SimplexConfigSchema = z.object({
   allowFrom: z.array(z.string()).optional(),
 
   /**
-   * Group routing configuration. Map group names or IDs to agent names.
-   * Example: { "EffuzionNext": "agent:effuzion" }
+   * User routing configuration - route specific contacts to specific agents.
+   * 
+   * Example (fiancée use case):
+   * [
+   *   { contactName: "FormidableVisionary", agent: "fiancee-assistant", language: "fr", voiceReplies: true },
+   *   { contactName: "Talleyrand_2010", agent: "digimate", language: "en" },
+   *   { contactName: "PleasantTeammate", agent: "digimate", language: "en" }
+   * ]
    */
-  groupRouting: z.record(z.string()).optional(),
+  userRouting: z.array(SimplexUserRoutingSchema).optional(),
+
+  /**
+   * Group routing configuration - route group messages to agents.
+   * Supports member filtering to route specific members to specific agents.
+   * 
+   * Example:
+   * [
+   *   { 
+   *     groupName: "EffuzionNext", 
+   *     agent: "fiancee-assistant", 
+   *     language: "fr",
+   *     memberExclude: ["Talleyrand_2010", "PleasantTeammate", "Digimate"]  // Alexandre's devices
+   *   }
+   * ]
+   */
+  groupRouting: z.array(SimplexGroupRoutingSchema).optional(),
+
+  /**
+   * Default agent for unmatched contacts/groups.
+   * If not set, unmatched messages are handled by the default OpenClaw pipeline.
+   */
+  defaultAgent: z.string().optional(),
+
+  /**
+   * Default language for responses (when not specified in routing).
+   * Default: "en"
+   */
+  defaultLanguage: z.string().default("en"),
+
+  /**
+   * Default model for AI responses.
+   */
+  defaultModel: z.string().optional(),
+
+  /**
+   * Default voice reply setting.
+   */
+  defaultVoiceReplies: z.boolean().default(false),
 
   /**
    * Reconnection settings for the WebSocket client.
@@ -107,6 +228,18 @@ export const SimplexConfigSchema = z.object({
    * Example: ["Alexandre", "MyBot"]
    */
   filterDisplayNames: z.array(z.string()).optional(),
+
+  /**
+   * Conversation history storage - keep history per contact/group for context.
+   * Default: true (enabled)
+   */
+  storeHistory: z.boolean().default(true),
+
+  /**
+   * Maximum history messages to store per conversation.
+   * Default: 50
+   */
+  maxStoredHistory: z.number().int().min(1).max(500).default(50),
 });
 
 export type SimplexConfig = z.infer<typeof SimplexConfigSchema>;
