@@ -198,45 +198,63 @@ export async function startGatewayServer(
   opts: GatewayServerOptions = {},
 ): Promise<GatewayServer> {
   // Fast preflight: check port availability before any heavy initialization.
-  // Reads only the bind config from the config file (cheap JSON parse) to
-  // determine the correct host, avoiding false positives for custom bind
-  // addresses and false negatives for loopback.
+  // Honors CLI overrides (opts.host / opts.bind) first, then falls back to the
+  // config file for the bind mode so the probe targets the same address the
+  // gateway will actually use.
   {
-    let preflightHost = opts.host ?? "127.0.0.1";
-    if (!opts.host) {
-      try {
-        const snap = await readConfigFileSnapshot();
-        if (snap.valid) {
-          const bindMode = snap.config.gateway?.bind ?? "loopback";
-          if (bindMode === "custom" && snap.config.gateway?.customBindHost) {
-            preflightHost = snap.config.gateway.customBindHost;
-          } else if (bindMode === "lan") {
-            preflightHost = "0.0.0.0";
+    let preflightHost: string | null = opts.host ?? null;
+    if (!preflightHost) {
+      // CLI --bind flag takes priority over config file.
+      let bindMode = opts.bind;
+      if (!bindMode) {
+        try {
+          const snap = await readConfigFileSnapshot();
+          if (snap.valid) {
+            bindMode = snap.config.gateway?.bind;
+            if (bindMode === "custom" && snap.config.gateway?.customBindHost) {
+              preflightHost = snap.config.gateway.customBindHost;
+            }
           }
+        } catch {
+          // Config unreadable — fall back to loopback probe.
         }
-      } catch {
-        // Config unreadable — fall back to loopback probe.
+      }
+      if (!preflightHost) {
+        const mode = bindMode ?? "loopback";
+        if (mode === "lan") {
+          preflightHost = "0.0.0.0";
+        } else if (mode === "tailnet") {
+          // Tailnet IP requires network discovery that defeats the purpose of
+          // a cheap preflight. Skip the probe — the real bind will surface the
+          // conflict later with full context.
+          preflightHost = null;
+        } else {
+          preflightHost = "127.0.0.1";
+        }
       }
     }
-    await new Promise<void>((resolve, reject) => {
-      const probe = net.createServer();
-      probe.once("error", (err: NodeJS.ErrnoException) => {
-        if (err.code === "EADDRINUSE") {
-          reject(
-            new GatewayLockError(
-              `another gateway instance is already listening on ws://${preflightHost}:${port}`,
-              err,
-            ),
-          );
-        } else {
-          resolve();
-        }
+    if (preflightHost) {
+      const probeHost = preflightHost;
+      await new Promise<void>((resolve, reject) => {
+        const probe = net.createServer();
+        probe.once("error", (err: NodeJS.ErrnoException) => {
+          if (err.code === "EADDRINUSE") {
+            reject(
+              new GatewayLockError(
+                `another gateway instance is already listening on ws://${probeHost}:${port}`,
+                err,
+              ),
+            );
+          } else {
+            resolve();
+          }
+        });
+        probe.once("listening", () => {
+          probe.close(() => resolve());
+        });
+        probe.listen(port, probeHost);
       });
-      probe.once("listening", () => {
-        probe.close(() => resolve());
-      });
-      probe.listen(port, preflightHost);
-    });
+    }
   }
 
   const minimalTestGateway =
