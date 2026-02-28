@@ -19,6 +19,7 @@ import {
   promptLegacyChannelAllowFrom,
   parseOnboardingEntriesWithParser,
   promptParsedAllowFromForScopedChannel,
+  promptSingleChannelSecretInput,
   promptSingleChannelToken,
   promptResolvedAllowFrom,
   resolveAccountIdForConfigure,
@@ -284,6 +285,69 @@ describe("promptSingleChannelToken", () => {
       hasConfigToken: false,
     });
     expect(result).toEqual({ useEnv: false, token: "xyz" });
+  });
+});
+
+describe("promptSingleChannelSecretInput", () => {
+  it("returns use-env action when plaintext mode selects env fallback", async () => {
+    const prompter = {
+      select: vi.fn(async () => "plaintext"),
+      confirm: vi.fn(async () => true),
+      text: vi.fn(async () => ""),
+      note: vi.fn(async () => undefined),
+    };
+
+    const result = await promptSingleChannelSecretInput({
+      cfg: {},
+      // oxlint-disable-next-line typescript/no-explicit-any
+      prompter: prompter as any,
+      providerHint: "telegram",
+      credentialLabel: "Telegram bot token",
+      accountConfigured: false,
+      canUseEnv: true,
+      hasConfigToken: false,
+      envPrompt: "use env",
+      keepPrompt: "keep",
+      inputPrompt: "token",
+      preferredEnvVar: "TELEGRAM_BOT_TOKEN",
+    });
+
+    expect(result).toEqual({ action: "use-env" });
+  });
+
+  it("returns ref + resolved value when external env ref is selected", async () => {
+    process.env.OPENCLAW_TEST_TOKEN = "secret-token";
+    const prompter = {
+      select: vi.fn().mockResolvedValueOnce("ref").mockResolvedValueOnce("env"),
+      confirm: vi.fn(async () => false),
+      text: vi.fn(async () => "OPENCLAW_TEST_TOKEN"),
+      note: vi.fn(async () => undefined),
+    };
+
+    const result = await promptSingleChannelSecretInput({
+      cfg: {},
+      // oxlint-disable-next-line typescript/no-explicit-any
+      prompter: prompter as any,
+      providerHint: "discord",
+      credentialLabel: "Discord bot token",
+      accountConfigured: false,
+      canUseEnv: false,
+      hasConfigToken: false,
+      envPrompt: "use env",
+      keepPrompt: "keep",
+      inputPrompt: "token",
+      preferredEnvVar: "OPENCLAW_TEST_TOKEN",
+    });
+
+    expect(result).toEqual({
+      action: "set",
+      value: {
+        source: "env",
+        provider: "default",
+        id: "OPENCLAW_TEST_TOKEN",
+      },
+      resolvedValue: "secret-token",
+    });
   });
 });
 

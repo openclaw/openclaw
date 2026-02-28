@@ -34,6 +34,7 @@ openclaw qr --url wss://gateway.example/ws --token '<token>'
 ## Notes
 
 - `--token` and `--password` are mutually exclusive.
+- With `--remote`, if remote credentials are configured as SecretRefs and you do not pass `--token` or `--password`, the command resolves them from the active gateway snapshot. If gateway is unavailable, the command fails fast.
 - After scanning, approve device pairing with:
   - `openclaw devices list`
   - `openclaw devices approve <requestId>`

@@ -1,4 +1,8 @@
 import {
+  promptSecretRefForOnboarding,
+  resolveSecretInputModeForEnvSelection,
+} from "../commands/auth-choice.apply-helpers.js";
+import {
   normalizeGatewayTokenInput,
   randomToken,
   validateGatewayPasswordInput,
@@ -166,13 +170,38 @@ export async function configureGatewayForOnboarding(
   }
 
   if (authMode === "password") {
-    const password =
-      flow === "quickstart" && quickstartGateway.password
-        ? quickstartGateway.password
-        : await prompter.text({
+    let password: unknown =
+      flow === "quickstart" && quickstartGateway.password ? quickstartGateway.password : undefined;
+    if (!password) {
+      const selectedMode = await resolveSecretInputModeForEnvSelection({
+        prompter,
+        copy: {
+          modeMessage: "How do you want to provide the gateway password?",
+          plaintextLabel: "Enter password now",
+          plaintextHint: "Stores the password directly in OpenClaw config",
+        },
+      });
+      if (selectedMode === "ref") {
+        const resolved = await promptSecretRefForOnboarding({
+          provider: "gateway-auth-password",
+          config: nextConfig,
+          prompter,
+          preferredEnvVar: "OPENCLAW_GATEWAY_PASSWORD",
+          copy: {
+            sourceMessage: "Where is this gateway password stored?",
+            envVarPlaceholder: "OPENCLAW_GATEWAY_PASSWORD",
+          },
+        });
+        password = resolved.ref;
+      } else {
+        password = String(
+          (await prompter.text({
             message: "Gateway password",
             validate: validateGatewayPasswordInput,
-          });
+          })) ?? "",
+        ).trim();
+      }
+    }
     nextConfig = {
       ...nextConfig,
       gateway: {
@@ -180,7 +209,8 @@ export async function configureGatewayForOnboarding(
         auth: {
           ...nextConfig.gateway?.auth,
           mode: "password",
-          password: String(password ?? "").trim(),
+          password:
+            typeof password === "string" ? String(password ?? "").trim() : (password as string),
         },
       },
     };

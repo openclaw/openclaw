@@ -15,6 +15,8 @@ import { formatDocsLink } from "../terminal/links.js";
 import { colorize, isRich, theme } from "../terminal/theme.js";
 import { shortenHomeInString, shortenHomePath } from "../utils.js";
 import { formatErrorMessage, withManager } from "./cli-utils.js";
+import { resolveCommandSecretRefsViaGateway } from "./command-secret-gateway.js";
+import { getMemoryCommandSecretTargetIds } from "./command-secret-targets.js";
 import { formatHelpExamples } from "./help-format.js";
 import { withProgress, withProgressTotals } from "./progress.js";
 
@@ -43,6 +45,17 @@ type MemorySourceScan = {
   totalFiles: number | null;
   issues: string[];
 };
+
+async function loadMemoryCommandConfig(
+  commandName: string,
+): Promise<ReturnType<typeof loadConfig>> {
+  const { resolvedConfig } = await resolveCommandSecretRefsViaGateway({
+    config: loadConfig(),
+    commandName,
+    targetIds: getMemoryCommandSecretTargetIds(),
+  });
+  return resolvedConfig;
+}
 
 function formatSourceLabel(source: string, workspaceDir: string, agentId: string): string {
   if (source === "memory") {
@@ -297,7 +310,7 @@ async function scanMemorySources(params: {
 
 export async function runMemoryStatus(opts: MemoryCommandOptions) {
   setVerbose(Boolean(opts.verbose));
-  const cfg = loadConfig();
+  const cfg = await loadMemoryCommandConfig("memory status");
   const agentIds = resolveAgentIds(cfg, opts.agent);
   const allResults: Array<{
     agentId: string;
@@ -570,7 +583,7 @@ export function registerMemoryCli(program: Command) {
     .option("--verbose", "Verbose logging", false)
     .action(async (opts: MemoryCommandOptions) => {
       setVerbose(Boolean(opts.verbose));
-      const cfg = loadConfig();
+      const cfg = await loadMemoryCommandConfig("memory index");
       const agentIds = resolveAgentIds(cfg, opts.agent);
       for (const agentId of agentIds) {
         await withMemoryManagerForAgent({
@@ -725,7 +738,7 @@ export function registerMemoryCli(program: Command) {
           process.exitCode = 1;
           return;
         }
-        const cfg = loadConfig();
+        const cfg = await loadMemoryCommandConfig("memory search");
         const agentId = resolveAgent(cfg, opts.agent);
         await withMemoryManagerForAgent({
           cfg,

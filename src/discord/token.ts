@@ -8,8 +8,8 @@ export type DiscordTokenResolution = BaseTokenResolution & {
   source: DiscordTokenSource;
 };
 
-export function normalizeDiscordToken(raw?: string | null): string | undefined {
-  if (!raw) {
+export function normalizeDiscordToken(raw?: unknown): string | undefined {
+  if (typeof raw !== "string") {
     return undefined;
   }
   const trimmed = raw.trim();

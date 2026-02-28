@@ -50,11 +50,13 @@ import { createPluginRuntime } from "../plugins/runtime/index.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
 import { getTotalQueueSize } from "../process/command-queue.js";
 import type { RuntimeEnv } from "../runtime.js";
+import type { CommandSecretAssignment } from "../secrets/command-config.js";
 import {
   activateSecretsRuntimeSnapshot,
   clearSecretsRuntimeSnapshot,
   getActiveSecretsRuntimeSnapshot,
   prepareSecretsRuntimeSnapshot,
+  resolveCommandSecretsFromActiveRuntimeSnapshot,
 } from "../secrets/runtime.js";
 import { runOnboardingWizard } from "../wizard/onboarding.js";
 import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
@@ -696,6 +698,16 @@ export async function startGatewayServer(
         activate: true,
       });
       return { warningCount: prepared.warnings.length };
+    },
+    resolveSecrets: async ({ commandName, targetIds }) => {
+      const { assignments, diagnostics } = resolveCommandSecretsFromActiveRuntimeSnapshot({
+        commandName,
+        targetIds: new Set(targetIds),
+      });
+      if (assignments.length === 0) {
+        return { assignments: [] as CommandSecretAssignment[], diagnostics };
+      }
+      return { assignments, diagnostics };
     },
   });
 

@@ -10,37 +10,8 @@ import {
   prepareSecretsRuntimeSnapshot,
 } from "./runtime.js";
 
-const OPENAI_ENV_KEY_REF = { source: "env", provider: "default", id: "OPENAI_API_KEY" } as const;
-
-function createOpenAiEnvModelsConfig(): NonNullable<OpenClawConfig["models"]> {
-  return {
-    providers: {
-      openai: {
-        baseUrl: "https://api.openai.com/v1",
-        apiKey: OPENAI_ENV_KEY_REF,
-        models: [],
-      },
-    },
-  };
-}
-
-function createOpenAiFileModelsConfig(): NonNullable<OpenClawConfig["models"]> {
-  return {
-    providers: {
-      openai: {
-        baseUrl: "https://api.openai.com/v1",
-        apiKey: { source: "file", provider: "default", id: "/providers/openai/apiKey" },
-        models: [],
-      },
-    },
-  };
-}
-
-function loadAuthStoreWithProfiles(profiles: AuthProfileStore["profiles"]): AuthProfileStore {
-  return {
-    version: 1,
-    profiles,
-  };
+function asConfig(value: unknown): OpenClawConfig {
+  return value as OpenClawConfig;
 }
 
 describe("secrets runtime snapshot", () => {
@@ -49,8 +20,25 @@ describe("secrets runtime snapshot", () => {
   });
 
   it("resolves env refs for config and auth profiles", async () => {
-    const config: OpenClawConfig = {
-      models: createOpenAiEnvModelsConfig(),
+    const config = asConfig({
+      agents: {
+        defaults: {
+          memorySearch: {
+            remote: {
+              apiKey: { source: "env", provider: "default", id: "MEMORY_REMOTE_API_KEY" },
+            },
+          },
+        },
+      },
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+            models: [],
+          },
+        },
+      },
       skills: {
         entries: {
           "review-pr": {
@@ -59,7 +47,55 @@ describe("secrets runtime snapshot", () => {
           },
         },
       },
-    };
+      talk: {
+        apiKey: { source: "env", provider: "default", id: "TALK_API_KEY" },
+        providers: {
+          elevenlabs: {
+            apiKey: { source: "env", provider: "default", id: "TALK_PROVIDER_API_KEY" },
+          },
+        },
+      },
+      gateway: {
+        remote: {
+          token: { source: "env", provider: "default", id: "REMOTE_GATEWAY_TOKEN" },
+          password: { source: "env", provider: "default", id: "REMOTE_GATEWAY_PASSWORD" },
+        },
+      },
+      channels: {
+        telegram: {
+          botToken: { source: "env", provider: "default", id: "TELEGRAM_BOT_TOKEN_REF" },
+          webhookSecret: { source: "env", provider: "default", id: "TELEGRAM_WEBHOOK_SECRET_REF" },
+          accounts: {
+            work: {
+              botToken: {
+                source: "env",
+                provider: "default",
+                id: "TELEGRAM_WORK_BOT_TOKEN_REF",
+              },
+            },
+          },
+        },
+        slack: {
+          signingSecret: { source: "env", provider: "default", id: "SLACK_SIGNING_SECRET_REF" },
+          accounts: {
+            work: {
+              botToken: { source: "env", provider: "default", id: "SLACK_WORK_BOT_TOKEN_REF" },
+              appToken: { source: "env", provider: "default", id: "SLACK_WORK_APP_TOKEN_REF" },
+            },
+          },
+        },
+      },
+      tools: {
+        web: {
+          search: {
+            apiKey: { source: "env", provider: "default", id: "WEB_SEARCH_API_KEY" },
+            gemini: {
+              apiKey: { source: "env", provider: "default", id: "WEB_SEARCH_GEMINI_API_KEY" },
+            },
+          },
+        },
+      },
+    });
 
     const snapshot = await prepareSecretsRuntimeSnapshot({
       config,
@@ -67,6 +103,19 @@ describe("secrets runtime snapshot", () => {
         OPENAI_API_KEY: "sk-env-openai",
         GITHUB_TOKEN: "ghp-env-token",
         REVIEW_SKILL_API_KEY: "sk-skill-ref",
+        MEMORY_REMOTE_API_KEY: "mem-ref-key",
+        TALK_API_KEY: "talk-ref-key",
+        TALK_PROVIDER_API_KEY: "talk-provider-ref-key",
+        REMOTE_GATEWAY_TOKEN: "remote-token-ref",
+        REMOTE_GATEWAY_PASSWORD: "remote-password-ref",
+        TELEGRAM_BOT_TOKEN_REF: "telegram-bot-ref",
+        TELEGRAM_WEBHOOK_SECRET_REF: "telegram-webhook-ref",
+        TELEGRAM_WORK_BOT_TOKEN_REF: "telegram-work-ref",
+        SLACK_SIGNING_SECRET_REF: "slack-signing-ref",
+        SLACK_WORK_BOT_TOKEN_REF: "slack-work-bot-ref",
+        SLACK_WORK_APP_TOKEN_REF: "slack-work-app-ref",
+        WEB_SEARCH_API_KEY: "web-search-ref",
+        WEB_SEARCH_GEMINI_API_KEY: "web-search-gemini-ref",
       },
       agentDirs: ["/tmp/openclaw-agent-main"],
       loadAuthStore: () =>
@@ -93,7 +142,24 @@ describe("secrets runtime snapshot", () => {
 
     expect(snapshot.config.models?.providers?.openai?.apiKey).toBe("sk-env-openai");
     expect(snapshot.config.skills?.entries?.["review-pr"]?.apiKey).toBe("sk-skill-ref");
-    expect(snapshot.warnings).toHaveLength(2);
+    expect(snapshot.config.agents?.defaults?.memorySearch?.remote?.apiKey).toBe("mem-ref-key");
+    expect(snapshot.config.talk?.apiKey).toBe("talk-ref-key");
+    expect(snapshot.config.talk?.providers?.elevenlabs?.apiKey).toBe("talk-provider-ref-key");
+    expect(snapshot.config.gateway?.remote?.token).toBe("remote-token-ref");
+    expect(snapshot.config.gateway?.remote?.password).toBe("remote-password-ref");
+    expect(snapshot.config.channels?.telegram?.botToken).toEqual({
+      source: "env",
+      provider: "default",
+      id: "TELEGRAM_BOT_TOKEN_REF",
+    });
+    expect(snapshot.config.channels?.telegram?.webhookSecret).toBe("telegram-webhook-ref");
+    expect(snapshot.config.channels?.telegram?.accounts?.work?.botToken).toBe("telegram-work-ref");
+    expect(snapshot.config.channels?.slack?.signingSecret).toBe("slack-signing-ref");
+    expect(snapshot.config.channels?.slack?.accounts?.work?.botToken).toBe("slack-work-bot-ref");
+    expect(snapshot.config.channels?.slack?.accounts?.work?.appToken).toBe("slack-work-app-ref");
+    expect(snapshot.config.tools?.web?.search?.apiKey).toBe("web-search-ref");
+    expect(snapshot.config.tools?.web?.search?.gemini?.apiKey).toBe("web-search-gemini-ref");
+    expect(snapshot.warnings).toHaveLength(3);
     expect(snapshot.authStores[0]?.store.profiles["openai:default"]).toMatchObject({
       type: "api_key",
       key: "sk-env-openai",
@@ -219,7 +285,7 @@ describe("secrets runtime snapshot", () => {
       );
       await fs.chmod(secretsPath, 0o600);
 
-      const config: OpenClawConfig = {
+      const config = asConfig({
         secrets: {
           providers: {
             default: {
@@ -241,7 +307,7 @@ describe("secrets runtime snapshot", () => {
             },
           },
         },
-      };
+      });
 
       const snapshot = await prepareSecretsRuntimeSnapshot({
         config,
@@ -267,7 +333,7 @@ describe("secrets runtime snapshot", () => {
 
       await expect(
         prepareSecretsRuntimeSnapshot({
-          config: {
+          config: asConfig({
             secrets: {
               providers: {
                 default: {
@@ -280,7 +346,7 @@ describe("secrets runtime snapshot", () => {
             models: {
               ...createOpenAiFileModelsConfig(),
             },
-          },
+          }),
           agentDirs: ["/tmp/openclaw-agent-main"],
           loadAuthStore: () => ({ version: 1, profiles: {} }),
         }),
@@ -292,9 +358,17 @@ describe("secrets runtime snapshot", () => {
 
   it("activates runtime snapshots for loadConfig and ensureAuthProfileStore", async () => {
     const prepared = await prepareSecretsRuntimeSnapshot({
-      config: {
-        models: createOpenAiEnvModelsConfig(),
-      },
+      config: asConfig({
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+              models: [],
+            },
+          },
+        },
+      }),
       env: { OPENAI_API_KEY: "sk-runtime" },
       agentDirs: ["/tmp/openclaw-agent-main"],
       loadAuthStore: () =>
@@ -315,6 +389,380 @@ describe("secrets runtime snapshot", () => {
       type: "api_key",
       key: "sk-runtime",
     });
+  });
+
+  it("skips inactive-surface refs and emits diagnostics", async () => {
+    const config = asConfig({
+      agents: {
+        defaults: {
+          memorySearch: {
+            enabled: false,
+            remote: {
+              apiKey: { source: "env", provider: "default", id: "DISABLED_MEMORY_API_KEY" },
+            },
+          },
+        },
+      },
+      gateway: {
+        auth: {
+          mode: "token",
+          password: { source: "env", provider: "default", id: "DISABLED_GATEWAY_PASSWORD" },
+        },
+      },
+      channels: {
+        telegram: {
+          botToken: { source: "env", provider: "default", id: "DISABLED_TELEGRAM_BASE_TOKEN" },
+          accounts: {
+            disabled: {
+              enabled: false,
+              botToken: {
+                source: "env",
+                provider: "default",
+                id: "DISABLED_TELEGRAM_ACCOUNT_TOKEN",
+              },
+            },
+          },
+        },
+      },
+      tools: {
+        web: {
+          search: {
+            enabled: false,
+            apiKey: { source: "env", provider: "default", id: "DISABLED_WEB_SEARCH_API_KEY" },
+            gemini: {
+              apiKey: {
+                source: "env",
+                provider: "default",
+                id: "DISABLED_WEB_SEARCH_GEMINI_API_KEY",
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config,
+      env: {},
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    expect(snapshot.config.channels?.telegram?.botToken).toEqual({
+      source: "env",
+      provider: "default",
+      id: "DISABLED_TELEGRAM_BASE_TOKEN",
+    });
+    expect(
+      snapshot.warnings.filter(
+        (warning) => warning.code === "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
+      ),
+    ).toHaveLength(6);
+    expect(snapshot.warnings.map((warning) => warning.path)).toEqual(
+      expect.arrayContaining([
+        "agents.defaults.memorySearch.remote.apiKey",
+        "gateway.auth.password",
+        "channels.telegram.botToken",
+        "channels.telegram.accounts.disabled.botToken",
+        "tools.web.search.apiKey",
+        "tools.web.search.gemini.apiKey",
+      ]),
+    );
+  });
+
+  it("fails when enabled channel surfaces contain unresolved refs", async () => {
+    await expect(
+      prepareSecretsRuntimeSnapshot({
+        config: asConfig({
+          channels: {
+            telegram: {
+              botToken: {
+                source: "env",
+                provider: "default",
+                id: "MISSING_ENABLED_TELEGRAM_TOKEN",
+              },
+              accounts: {
+                work: {
+                  enabled: true,
+                },
+              },
+            },
+          },
+        }),
+        env: {},
+        agentDirs: ["/tmp/openclaw-agent-main"],
+        loadAuthStore: () => ({ version: 1, profiles: {} }),
+      }),
+    ).rejects.toThrow('Environment variable "MISSING_ENABLED_TELEGRAM_TOKEN" is missing or empty.');
+  });
+
+  it("treats top-level Telegram token as inactive when all enabled accounts override it", async () => {
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        channels: {
+          telegram: {
+            botToken: {
+              source: "env",
+              provider: "default",
+              id: "UNUSED_TELEGRAM_BASE_TOKEN",
+            },
+            accounts: {
+              work: {
+                enabled: true,
+                botToken: {
+                  source: "env",
+                  provider: "default",
+                  id: "TELEGRAM_WORK_TOKEN",
+                },
+              },
+              disabled: {
+                enabled: false,
+              },
+            },
+          },
+        },
+      }),
+      env: {
+        TELEGRAM_WORK_TOKEN: "telegram-work-token",
+      },
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    expect(snapshot.config.channels?.telegram?.accounts?.work?.botToken).toBe(
+      "telegram-work-token",
+    );
+    expect(snapshot.config.channels?.telegram?.botToken).toEqual({
+      source: "env",
+      provider: "default",
+      id: "UNUSED_TELEGRAM_BASE_TOKEN",
+    });
+    expect(snapshot.warnings.map((warning) => warning.path)).toContain(
+      "channels.telegram.botToken",
+    );
+  });
+
+  it("treats Telegram account overrides as enabled when account.enabled is omitted", async () => {
+    await expect(
+      prepareSecretsRuntimeSnapshot({
+        config: asConfig({
+          channels: {
+            telegram: {
+              enabled: true,
+              accounts: {
+                inheritedEnabled: {
+                  botToken: {
+                    source: "env",
+                    provider: "default",
+                    id: "MISSING_INHERITED_TELEGRAM_ACCOUNT_TOKEN",
+                  },
+                },
+              },
+            },
+          },
+        }),
+        env: {},
+        agentDirs: ["/tmp/openclaw-agent-main"],
+        loadAuthStore: () => ({ version: 1, profiles: {} }),
+      }),
+    ).rejects.toThrow(
+      'Environment variable "MISSING_INHERITED_TELEGRAM_ACCOUNT_TOKEN" is missing or empty.',
+    );
+  });
+
+  it("handles Discord nested inheritance for enabled and disabled accounts", async () => {
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        channels: {
+          discord: {
+            voice: {
+              tts: {
+                openai: {
+                  apiKey: { source: "env", provider: "default", id: "DISCORD_BASE_TTS_OPENAI" },
+                },
+              },
+            },
+            pluralkit: {
+              token: { source: "env", provider: "default", id: "DISCORD_BASE_PK_TOKEN" },
+            },
+            accounts: {
+              enabledInherited: {
+                enabled: true,
+              },
+              enabledOverride: {
+                enabled: true,
+                voice: {
+                  tts: {
+                    openai: {
+                      apiKey: {
+                        source: "env",
+                        provider: "default",
+                        id: "DISCORD_ENABLED_OVERRIDE_TTS_OPENAI",
+                      },
+                    },
+                  },
+                },
+              },
+              disabledOverride: {
+                enabled: false,
+                voice: {
+                  tts: {
+                    openai: {
+                      apiKey: {
+                        source: "env",
+                        provider: "default",
+                        id: "DISCORD_DISABLED_OVERRIDE_TTS_OPENAI",
+                      },
+                    },
+                  },
+                },
+                pluralkit: {
+                  token: {
+                    source: "env",
+                    provider: "default",
+                    id: "DISCORD_DISABLED_OVERRIDE_PK_TOKEN",
+                  },
+                },
+              },
+            },
+          },
+        },
+      }),
+      env: {
+        DISCORD_BASE_TTS_OPENAI: "base-tts-openai",
+        DISCORD_BASE_PK_TOKEN: "base-pk-token",
+        DISCORD_ENABLED_OVERRIDE_TTS_OPENAI: "enabled-override-tts-openai",
+      },
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    expect(snapshot.config.channels?.discord?.voice?.tts?.openai?.apiKey).toBe("base-tts-openai");
+    expect(snapshot.config.channels?.discord?.pluralkit?.token).toBe("base-pk-token");
+    expect(
+      snapshot.config.channels?.discord?.accounts?.enabledOverride?.voice?.tts?.openai?.apiKey,
+    ).toBe("enabled-override-tts-openai");
+    expect(
+      snapshot.config.channels?.discord?.accounts?.disabledOverride?.voice?.tts?.openai?.apiKey,
+    ).toEqual({
+      source: "env",
+      provider: "default",
+      id: "DISCORD_DISABLED_OVERRIDE_TTS_OPENAI",
+    });
+    expect(snapshot.config.channels?.discord?.accounts?.disabledOverride?.pluralkit?.token).toEqual(
+      {
+        source: "env",
+        provider: "default",
+        id: "DISCORD_DISABLED_OVERRIDE_PK_TOKEN",
+      },
+    );
+    expect(snapshot.warnings.map((warning) => warning.path)).toEqual(
+      expect.arrayContaining([
+        "channels.discord.accounts.disabledOverride.voice.tts.openai.apiKey",
+        "channels.discord.accounts.disabledOverride.pluralkit.token",
+      ]),
+    );
+  });
+
+  it("skips top-level Discord voice refs when all enabled accounts override nested voice config", async () => {
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        channels: {
+          discord: {
+            voice: {
+              tts: {
+                openai: {
+                  apiKey: {
+                    source: "env",
+                    provider: "default",
+                    id: "DISCORD_UNUSED_BASE_TTS_OPENAI",
+                  },
+                },
+              },
+            },
+            accounts: {
+              enabledOverride: {
+                enabled: true,
+                voice: {
+                  tts: {
+                    openai: {
+                      apiKey: {
+                        source: "env",
+                        provider: "default",
+                        id: "DISCORD_ENABLED_ONLY_TTS_OPENAI",
+                      },
+                    },
+                  },
+                },
+              },
+              disabledInherited: {
+                enabled: false,
+              },
+            },
+          },
+        },
+      }),
+      env: {
+        DISCORD_ENABLED_ONLY_TTS_OPENAI: "enabled-only-tts-openai",
+      },
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    expect(
+      snapshot.config.channels?.discord?.accounts?.enabledOverride?.voice?.tts?.openai?.apiKey,
+    ).toBe("enabled-only-tts-openai");
+    expect(snapshot.config.channels?.discord?.voice?.tts?.openai?.apiKey).toEqual({
+      source: "env",
+      provider: "default",
+      id: "DISCORD_UNUSED_BASE_TTS_OPENAI",
+    });
+    expect(snapshot.warnings.map((warning) => warning.path)).toContain(
+      "channels.discord.voice.tts.openai.apiKey",
+    );
+  });
+
+  it("fails when an enabled Discord account override has an unresolved nested ref", async () => {
+    await expect(
+      prepareSecretsRuntimeSnapshot({
+        config: asConfig({
+          channels: {
+            discord: {
+              voice: {
+                tts: {
+                  openai: {
+                    apiKey: { source: "env", provider: "default", id: "DISCORD_BASE_TTS_OK" },
+                  },
+                },
+              },
+              accounts: {
+                enabledOverride: {
+                  enabled: true,
+                  voice: {
+                    tts: {
+                      openai: {
+                        apiKey: {
+                          source: "env",
+                          provider: "default",
+                          id: "DISCORD_ENABLED_OVERRIDE_TTS_MISSING",
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        }),
+        env: {
+          DISCORD_BASE_TTS_OK: "base-tts-openai",
+        },
+        agentDirs: ["/tmp/openclaw-agent-main"],
+        loadAuthStore: () => ({ version: 1, profiles: {} }),
+      }),
+    ).rejects.toThrow(
+      'Environment variable "DISCORD_ENABLED_OVERRIDE_TTS_MISSING" is missing or empty.',
+    );
   });
 
   it("does not write inherited auth stores during runtime secret activation", async () => {

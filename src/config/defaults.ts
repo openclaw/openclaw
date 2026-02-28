@@ -10,6 +10,7 @@ import {
 } from "./talk.js";
 import type { OpenClawConfig } from "./types.js";
 import type { ModelDefinitionConfig } from "./types.models.js";
+import { hasConfiguredSecretInput } from "./types.secrets.js";
 
 type WarnState = { warned: boolean };
 
@@ -180,10 +181,9 @@ export function applyTalkApiKey(config: OpenClawConfig): OpenClawConfig {
     return normalized;
   }
 
-  const existingProviderApiKey =
-    typeof active.config?.apiKey === "string" ? active.config.apiKey.trim() : "";
-  const existingLegacyApiKey = typeof talk?.apiKey === "string" ? talk.apiKey.trim() : "";
-  if (existingProviderApiKey || existingLegacyApiKey) {
+  const existingProviderApiKeyConfigured = hasConfiguredSecretInput(active.config?.apiKey);
+  const existingLegacyApiKeyConfigured = hasConfiguredSecretInput(talk?.apiKey);
+  if (existingProviderApiKeyConfigured || existingLegacyApiKeyConfigured) {
     return normalized;
   }
 
@@ -196,8 +196,6 @@ export function applyTalkApiKey(config: OpenClawConfig): OpenClawConfig {
     ...talk,
     provider: talk?.provider ?? providerId,
     providers,
-    // Keep legacy shape populated during compatibility rollout.
-    apiKey: resolved,
   };
 
   return {

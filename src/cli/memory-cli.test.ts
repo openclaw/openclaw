@@ -7,6 +7,10 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 const getMemorySearchManager = vi.fn();
 const loadConfig = vi.fn(() => ({}));
 const resolveDefaultAgentId = vi.fn(() => "main");
+const resolveCommandSecretRefsViaGateway = vi.fn(async ({ config }: { config: unknown }) => ({
+  resolvedConfig: config,
+  diagnostics: [],
+}));
 
 vi.mock("../memory/index.js", () => ({
   getMemorySearchManager,
@@ -18,6 +22,10 @@ vi.mock("../config/config.js", () => ({
 
 vi.mock("../agents/agent-scope.js", () => ({
   resolveDefaultAgentId,
+}));
+
+vi.mock("./command-secret-gateway.js", () => ({
+  resolveCommandSecretRefsViaGateway,
 }));
 
 let registerMemoryCli: typeof import("./memory-cli.js").registerMemoryCli;
@@ -34,6 +42,7 @@ beforeAll(async () => {
 afterEach(() => {
   vi.restoreAllMocks();
   getMemorySearchManager.mockClear();
+  resolveCommandSecretRefsViaGateway.mockClear();
   process.exitCode = undefined;
   setVerbose(false);
 });
@@ -146,6 +155,38 @@ describe("memory cli", () => {
       expect.stringContaining("Embedding cache: enabled (123 entries)"),
     );
     expect(close).toHaveBeenCalled();
+  });
+
+  it("resolves configured memory SecretRefs through gateway snapshot", async () => {
+    loadConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          memorySearch: {
+            remote: {
+              apiKey: { source: "env", provider: "default", id: "MEMORY_REMOTE_API_KEY" },
+            },
+          },
+        },
+      },
+    });
+    const close = vi.fn(async () => {});
+    mockManager({
+      probeVectorAvailability: vi.fn(async () => true),
+      status: () => makeMemoryStatus(),
+      close,
+    });
+
+    await runMemoryCli(["status"]);
+
+    expect(resolveCommandSecretRefsViaGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        commandName: "memory status",
+        targetIds: new Set([
+          "agents.defaults.memorySearch.remote.apiKey",
+          "agents.list[].memorySearch.remote.apiKey",
+        ]),
+      }),
+    );
   });
 
   it("prints vector error when unavailable", async () => {

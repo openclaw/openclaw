@@ -1605,7 +1605,8 @@ Defaults for Talk mode (macOS/iOS/Android).
 ```
 
 - Voice IDs fall back to `ELEVENLABS_VOICE_ID` or `SAG_VOICE_ID`.
-- `apiKey` falls back to `ELEVENLABS_API_KEY`.
+- `apiKey` and `providers.*.apiKey` accept plaintext strings or SecretRef objects.
+- `ELEVENLABS_API_KEY` fallback applies only when no Talk API key is configured.
 - `voiceAliases` lets Talk directives use friendly names.
 
 ---
@@ -2638,14 +2639,11 @@ Validation:
 - `source: "file"` id: absolute JSON pointer (for example `"/providers/openai/apiKey"`)
 - `source: "exec"` id pattern: `^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$`
 
-### Supported fields in config
+### Supported credential surface
 
-- `models.providers.<provider>.apiKey`
-- `skills.entries.<skillKey>.apiKey`
-- `channels.googlechat.serviceAccount`
-- `channels.googlechat.serviceAccountRef`
-- `channels.googlechat.accounts.<accountId>.serviceAccount`
-- `channels.googlechat.accounts.<accountId>.serviceAccountRef`
+- Canonical matrix: [SecretRef Credential Surface](/reference/secretref-credential-surface)
+- `secrets apply` targets supported `openclaw.json` credential paths.
+- `auth-profiles.json` refs are included in runtime resolution and audit coverage.
 
 ### Secret providers config
 
@@ -2683,6 +2681,7 @@ Notes:
 - If `trustedDirs` is configured, the trusted-dir check applies to the resolved target path.
 - `exec` child environment is minimal by default; pass required variables explicitly with `passEnv`.
 - Secret refs are resolved at activation time into an in-memory snapshot, then request paths read the snapshot only.
+- Active-surface filtering applies during activation: unresolved refs on enabled surfaces fail startup/reload, while inactive surfaces are skipped with diagnostics.
 
 ---
 

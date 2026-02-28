@@ -18,8 +18,28 @@ async function invokeSecretsReload(params: {
 }
 
 describe("secrets handlers", () => {
+  function createHandlers(overrides?: {
+    reloadSecrets?: () => Promise<{ warningCount: number }>;
+    resolveSecrets?: (params: { commandName: string; targetIds: string[] }) => Promise<{
+      assignments: Array<{ path: string; pathSegments: string[]; value: unknown }>;
+      diagnostics: string[];
+    }>;
+  }) {
+    const reloadSecrets = overrides?.reloadSecrets ?? (async () => ({ warningCount: 0 }));
+    const resolveSecrets =
+      overrides?.resolveSecrets ??
+      (async () => ({
+        assignments: [],
+        diagnostics: [],
+      }));
+    return createSecretsHandlers({
+      reloadSecrets,
+      resolveSecrets,
+    });
+  }
+
   it("responds with warning count on successful reload", async () => {
-    const handlers = createSecretsHandlers({
+    const handlers = createHandlers({
       reloadSecrets: vi.fn().mockResolvedValue({ warningCount: 2 }),
     });
     const respond = vi.fn();
@@ -28,7 +48,7 @@ describe("secrets handlers", () => {
   });
 
   it("returns unavailable when reload fails", async () => {
-    const handlers = createSecretsHandlers({
+    const handlers = createHandlers({
       reloadSecrets: vi.fn().mockRejectedValue(new Error("reload failed")),
     });
     const respond = vi.fn();
@@ -39,6 +59,122 @@ describe("secrets handlers", () => {
       expect.objectContaining({
         code: "UNAVAILABLE",
         message: "Error: reload failed",
+      }),
+    );
+  });
+
+  it("resolves requested command secret assignments from the active snapshot", async () => {
+    const resolveSecrets = vi.fn().mockResolvedValue({
+      assignments: [{ path: "talk.apiKey", pathSegments: ["talk", "apiKey"], value: "sk" }],
+      diagnostics: ["note"],
+    });
+    const handlers = createHandlers({ resolveSecrets });
+    const respond = vi.fn();
+    await handlers["secrets.resolve"]({
+      req: { type: "req", id: "1", method: "secrets.resolve" },
+      params: { commandName: "memory status", targetIds: ["talk.apiKey"] },
+      client: null,
+      isWebchatConnect: () => false,
+      respond,
+      context: {} as never,
+    });
+    expect(resolveSecrets).toHaveBeenCalledWith({
+      commandName: "memory status",
+      targetIds: ["talk.apiKey"],
+    });
+    expect(respond).toHaveBeenCalledWith(true, {
+      ok: true,
+      assignments: [{ path: "talk.apiKey", pathSegments: ["talk", "apiKey"], value: "sk" }],
+      diagnostics: ["note"],
+    });
+  });
+
+  it("rejects invalid secrets.resolve params", async () => {
+    const handlers = createHandlers();
+    const respond = vi.fn();
+    await handlers["secrets.resolve"]({
+      req: { type: "req", id: "1", method: "secrets.resolve" },
+      params: { commandName: "", targetIds: "bad" },
+      client: null,
+      isWebchatConnect: () => false,
+      respond,
+      context: {} as never,
+    });
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "INVALID_REQUEST",
+      }),
+    );
+  });
+
+  it("rejects secrets.resolve params when targetIds entries are not strings", async () => {
+    const resolveSecrets = vi.fn();
+    const handlers = createHandlers({ resolveSecrets });
+    const respond = vi.fn();
+    await handlers["secrets.resolve"]({
+      req: { type: "req", id: "1", method: "secrets.resolve" },
+      params: { commandName: "memory status", targetIds: ["talk.apiKey", 12] },
+      client: null,
+      isWebchatConnect: () => false,
+      respond,
+      context: {} as never,
+    });
+    expect(resolveSecrets).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "INVALID_REQUEST",
+        message: "invalid secrets.resolve params: targetIds",
+      }),
+    );
+  });
+
+  it("rejects unknown secrets.resolve target ids", async () => {
+    const resolveSecrets = vi.fn();
+    const handlers = createHandlers({ resolveSecrets });
+    const respond = vi.fn();
+    await handlers["secrets.resolve"]({
+      req: { type: "req", id: "1", method: "secrets.resolve" },
+      params: { commandName: "memory status", targetIds: ["unknown.target"] },
+      client: null,
+      isWebchatConnect: () => false,
+      respond,
+      context: {} as never,
+    });
+    expect(resolveSecrets).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "INVALID_REQUEST",
+        message: 'invalid secrets.resolve params: unknown target id "unknown.target"',
+      }),
+    );
+  });
+
+  it("returns unavailable when secrets.resolve handler returns an invalid payload shape", async () => {
+    const resolveSecrets = vi.fn().mockResolvedValue({
+      assignments: [{ path: "talk.apiKey", pathSegments: [""], value: "sk" }],
+      diagnostics: [],
+    });
+    const handlers = createHandlers({ resolveSecrets });
+    const respond = vi.fn();
+    await handlers["secrets.resolve"]({
+      req: { type: "req", id: "1", method: "secrets.resolve" },
+      params: { commandName: "memory status", targetIds: ["talk.apiKey"] },
+      client: null,
+      isWebchatConnect: () => false,
+      respond,
+      context: {} as never,
+    });
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "UNAVAILABLE",
       }),
     );
   });

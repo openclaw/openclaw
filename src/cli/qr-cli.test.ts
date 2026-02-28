@@ -12,6 +12,10 @@ const runtime = {
 
 const loadConfig = vi.fn();
 const runCommandWithTimeout = vi.fn();
+const resolveCommandSecretRefsViaGateway = vi.fn(async ({ config }: { config: unknown }) => ({
+  resolvedConfig: config,
+  diagnostics: [],
+}));
 const qrGenerate = vi.fn((_input, _opts, cb: (output: string) => void) => {
   cb("ASCII-QR");
 });
@@ -19,6 +23,7 @@ const qrGenerate = vi.fn((_input, _opts, cb: (output: string) => void) => {
 vi.mock("../runtime.js", () => ({ defaultRuntime: runtime }));
 vi.mock("../config/config.js", () => ({ loadConfig }));
 vi.mock("../process/exec.js", () => ({ runCommandWithTimeout }));
+vi.mock("./command-secret-gateway.js", () => ({ resolveCommandSecretRefsViaGateway }));
 vi.mock("qrcode-terminal", () => ({
   default: {
     generate: qrGenerate,
@@ -91,6 +96,7 @@ describe("registerQrCli", () => {
     });
     expect(runtime.log).toHaveBeenCalledWith(expected);
     expect(qrGenerate).not.toHaveBeenCalled();
+    expect(resolveCommandSecretRefsViaGateway).not.toHaveBeenCalled();
   });
 
   it("renders ASCII QR by default", async () => {
@@ -152,6 +158,12 @@ describe("registerQrCli", () => {
       token: "remote-tok",
     });
     expect(runtime.log).toHaveBeenCalledWith(expected);
+    expect(resolveCommandSecretRefsViaGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        commandName: "qr --remote",
+        targetIds: new Set(["gateway.remote.token", "gateway.remote.password"]),
+      }),
+    );
   });
 
   it.each([

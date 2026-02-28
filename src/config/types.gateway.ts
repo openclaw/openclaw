@@ -1,3 +1,5 @@
+import type { SecretInput } from "./types.secrets.js";
+
 export type GatewayBindMode = "auto" | "lan" | "loopback" | "custom" | "tailnet";
 
 export type GatewayTlsConfig = {
@@ -56,7 +58,7 @@ export type TalkProviderConfig = {
   /** Default provider output format (for example pcm_44100). */
   outputFormat?: string;
   /** Provider API key (optional; provider-specific env fallback may apply). */
-  apiKey?: string;
+  apiKey?: SecretInput;
   /** Provider-specific extensions. */
   [key: string]: unknown;
 };
@@ -77,7 +79,7 @@ export type TalkConfig = {
   voiceAliases?: Record<string, string>;
   modelId?: string;
   outputFormat?: string;
-  apiKey?: string;
+  apiKey?: SecretInput;
 };
 
 export type GatewayControlUiConfig = {

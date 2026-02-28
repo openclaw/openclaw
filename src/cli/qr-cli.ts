@@ -6,6 +6,8 @@ import { runCommandWithTimeout } from "../process/exec.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
+import { resolveCommandSecretRefsViaGateway } from "./command-secret-gateway.js";
+import { getQrRemoteCommandSecretTargetIds } from "./command-secret-targets.js";
 
 type QrCliOptions = {
   json?: boolean;
@@ -61,7 +63,21 @@ export function registerQrCli(program: Command) {
           throw new Error("Use either --token or --password, not both.");
         }
 
-        const loaded = loadConfig();
+        const token = typeof opts.token === "string" ? opts.token.trim() : "";
+        const password = typeof opts.password === "string" ? opts.password.trim() : "";
+        const wantsRemote = opts.remote === true;
+
+        const loadedRaw = loadConfig();
+        const loaded =
+          wantsRemote && !token && !password
+            ? (
+                await resolveCommandSecretRefsViaGateway({
+                  config: loadedRaw,
+                  commandName: "qr --remote",
+                  targetIds: getQrRemoteCommandSecretTargetIds(),
+                })
+              ).resolvedConfig
+            : loadedRaw;
         const cfg = {
           ...loaded,
           gateway: {
@@ -72,9 +88,6 @@ export function registerQrCli(program: Command) {
           },
         };
 
-        const token = typeof opts.token === "string" ? opts.token.trim() : "";
-        const password = typeof opts.password === "string" ? opts.password.trim() : "";
-        const wantsRemote = opts.remote === true;
         if (token) {
           cfg.gateway.auth.mode = "token";
           cfg.gateway.auth.token = token;

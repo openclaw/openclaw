@@ -65,7 +65,8 @@ export function resolveTelegramToken(
     return { token: "", source: "none" };
   }
 
-  const accountToken = accountCfg?.botToken?.trim();
+  const accountTokenRaw = accountCfg?.botToken;
+  const accountToken = typeof accountTokenRaw === "string" ? accountTokenRaw.trim() : "";
   if (accountToken) {
     return { token: accountToken, source: "config" };
   }
@@ -88,7 +89,8 @@ export function resolveTelegramToken(
     }
   }
 
-  const configToken = telegramCfg?.botToken?.trim();
+  const configTokenRaw = telegramCfg?.botToken;
+  const configToken = typeof configTokenRaw === "string" ? configTokenRaw.trim() : "";
   if (configToken && allowEnv) {
     return { token: configToken, source: "config" };
   }

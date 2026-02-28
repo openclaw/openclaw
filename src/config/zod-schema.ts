@@ -545,7 +545,7 @@ export const OpenClawSchema = z
                 voiceAliases: z.record(z.string(), z.string()).optional(),
                 modelId: z.string().optional(),
                 outputFormat: z.string().optional(),
-                apiKey: z.string().optional().register(sensitive),
+                apiKey: SecretInputSchema.optional().register(sensitive),
               })
               .catchall(z.unknown()),
           )
@@ -554,7 +554,7 @@ export const OpenClawSchema = z
         voiceAliases: z.record(z.string(), z.string()).optional(),
         modelId: z.string().optional(),
         outputFormat: z.string().optional(),
-        apiKey: z.string().optional().register(sensitive),
+        apiKey: SecretInputSchema.optional().register(sensitive),
         interruptOnSpeech: z.boolean().optional(),
       })
       .strict()
@@ -596,7 +596,7 @@ export const OpenClawSchema = z
               ])
               .optional(),
             token: z.string().optional().register(sensitive),
-            password: z.string().optional().register(sensitive),
+            password: SecretInputSchema.optional().register(sensitive),
             allowTailscale: z.boolean().optional(),
             rateLimit: z
               .object({
@@ -639,8 +639,8 @@ export const OpenClawSchema = z
           .object({
             url: z.string().optional(),
             transport: z.union([z.literal("ssh"), z.literal("direct")]).optional(),
-            token: z.string().optional().register(sensitive),
-            password: z.string().optional().register(sensitive),
+            token: SecretInputSchema.optional().register(sensitive),
+            password: SecretInputSchema.optional().register(sensitive),
             tlsFingerprint: z.string().optional(),
             sshTarget: z.string().optional(),
             sshIdentity: z.string().optional(),
