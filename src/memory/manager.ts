@@ -311,8 +311,28 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       mmr: hybrid.mmr,
       temporalDecay: hybrid.temporalDecay,
     });
+    const strict = merged.filter((entry) => entry.score >= minScore);
+    if (strict.length > 0 || keywordResults.length === 0) {
+      return strict.slice(0, maxResults);
+    }
 
-    return merged.filter((entry) => entry.score >= minScore).slice(0, maxResults);
+    // Hybrid defaults can produce keyword-only matches with max score equal to
+    // textWeight (for example 0.3). If minScore is higher (for example 0.35),
+    // these exact lexical hits get filtered out even when they are the only
+    // relevant results.
+    const relaxedMinScore = Math.min(minScore, hybrid.textWeight);
+    const keywordKeys = new Set(
+      keywordResults.map(
+        (entry) => `${entry.source}:${entry.path}:${entry.startLine}:${entry.endLine}`,
+      ),
+    );
+    return merged
+      .filter(
+        (entry) =>
+          keywordKeys.has(`${entry.source}:${entry.path}:${entry.startLine}:${entry.endLine}`) &&
+          entry.score >= relaxedMinScore,
+      )
+      .slice(0, maxResults);
   }
 
   private async searchVector(
