@@ -571,6 +571,54 @@ describe("handleFeishuMessage command authorization", () => {
     );
   });
 
+  it("uses media message_type file_key (not thumbnail image_key) for inbound mobile video download", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          dmPolicy: "open",
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: {
+          open_id: "ou-sender",
+        },
+      },
+      message: {
+        message_id: "msg-media-inbound",
+        chat_id: "oc-dm",
+        chat_type: "p2p",
+        message_type: "media",
+        content: JSON.stringify({
+          file_key: "file_media_payload",
+          image_key: "img_media_thumb",
+          file_name: "mobile.mp4",
+        }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    expect(mockDownloadMessageResourceFeishu).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageId: "msg-media-inbound",
+        fileKey: "file_media_payload",
+        type: "file",
+      }),
+    );
+    expect(mockSaveMediaBuffer).toHaveBeenCalledWith(
+      expect.any(Buffer),
+      "video/mp4",
+      "inbound",
+      expect.any(Number),
+      "clip.mp4",
+    );
+  });
+
   it("includes message_id in BodyForAgent on its own line", async () => {
     mockShouldComputeCommandAuthorized.mockReturnValue(false);
 
