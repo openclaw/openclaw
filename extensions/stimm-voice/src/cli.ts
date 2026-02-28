@@ -233,15 +233,23 @@ export function registerStimmVoiceCli(deps: VoiceCliDeps): void {
         logger.info(`  Use this token to connect from a LiveKit client.`);
       }
 
-      if (!opts.wait) {
-        // LiveKit SDK keeps open HTTP/WebSocket handles — exit explicitly so the
-        // CLI doesn't hang after printing the QR code.
+      if (!opts.wait && !session.shareUrl) {
+        // No tunnel running in this process — LiveKit SDK keeps open
+        // HTTP/WebSocket handles so we exit explicitly to avoid hanging.
         process.exit(0);
       }
 
-      if (opts.wait) {
-        logger.info(`  Press Ctrl+C (or send SIGTERM) to end the session and exit.`);
+      if (opts.wait || session.shareUrl) {
+        if (session.shareUrl) {
+          logger.info(`  Press Ctrl+C (or send SIGTERM) to end the session and close the tunnel.`);
+        } else {
+          logger.info(`  Press Ctrl+C (or send SIGTERM) to end the session and exit.`);
+        }
         let exiting = false;
+        let resolveKeepAlive!: () => void;
+        const keepAlive = new Promise<void>((res) => {
+          resolveKeepAlive = res;
+        });
         const cleanup = async () => {
           if (exiting) return;
           exiting = true;
@@ -259,14 +267,12 @@ export function registerStimmVoiceCli(deps: VoiceCliDeps): void {
               `[stimm-voice] Failed to end session: ${err instanceof Error ? err.message : String(err)}`,
             );
           }
+          resolveKeepAlive();
           process.exit(0);
         };
         process.once("SIGINT", () => void cleanup());
         process.once("SIGTERM", () => void cleanup());
-        // Keep the event loop alive until a signal fires.
-        await new Promise<void>((_resolve) => {
-          /* intentionally unresolved — exits via signal handlers above */
-        });
+        await keepAlive;
       }
     });
 

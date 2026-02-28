@@ -152,6 +152,8 @@ describe("registerStimmVoiceCli", () => {
     });
 
     const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
+    // Emit SIGINT after event loop tick so the handler is registered first.
+    setTimeout(() => process.emit("SIGINT"), 10);
     await prog.commands["voice:start"].action!({ channel: "web" });
     exitSpy.mockRestore();
 
