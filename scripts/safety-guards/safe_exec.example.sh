@@ -28,16 +28,19 @@ fi
 if [ "${SAFE_EXEC_ALLOW_DANGEROUS:-0}" != "1" ]; then
   case "$1" in
     rm|mkfs|shutdown|reboot|halt|dd)
-      echo "Blocked: destructive command blocked by default"; exit 2 ;;
+      echo "BLOCKED: destructive command blocked by default"; exit 2 ;;
     "rm"*)
-      echo "Blocked: destructive command blocked by default"; exit 2 ;;
+      echo "BLOCKED: destructive command blocked by default"; exit 2 ;;
   esac
   if printf '%s ' "$1" "$2" "$3" "$4" | grep -Eiq "\\b(rm|mkfs|dd|chmod|chown|kill|launchctl|sudo)\\s"; then
-    echo "Blocked: unsafe command pattern matched"; exit 2
+    echo "BLOCKED: unsafe command pattern matched"; exit 2
   fi
 fi
 
-if [ "${SAFE_EXEC_ALLOW_DANGEROUS}" = "1" ] && [ -n "${SAFE_EXEC_APPROVAL_NOTE:-}" ]; then
+if [ "${SAFE_EXEC_ALLOW_DANGEROUS}" = "1" ]; then
+  if [ -z "${SAFE_EXEC_APPROVAL_NOTE:-}" ]; then
+    echo "BLOCKED: SAFE_EXEC_APPROVAL_NOTE required for dangerous mode"; exit 2
+  fi
   echo "[SAFE_EXEC] approved: $(printf '%s' "$SAFE_EXEC_APPROVAL_NOTE" | sanitize 'not-logged')"
 fi
 

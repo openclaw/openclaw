@@ -75,3 +75,18 @@ For a short, reusable template, see [Minimal Public Safety Checklist](/security/
 
 - Public workflow template: [Minimal Public Safety Shell Guard Templates](/security/minimal-public-safety-shell-guard)
 - Checklist: [Minimal Public Safety Checklist](/security/minimal-public-safety-checklist)
+
+## Public template guard usage notes
+
+When using the template scripts in `scripts/safety-guards`, recommended defaults are:
+
+- Keep `safe_exec` at deny-by-default (`SAFE_EXEC_ALLOW_DANGEROUS=0`) for day-to-day use.
+- Only enable dangerous mode with an explicit `SAFE_EXEC_APPROVAL_NOTE`.
+- Use `public_publish_guard.example.sh` with a strict flag for CI/automation where leakage must not pass.
+
+Example:
+
+```bash
+SAFE_EXEC_ALLOW_DANGEROUS=1 SAFE_EXEC_APPROVAL_NOTE="Manual patch for incident response" ./security_auto.example.sh exec ./repair.sh
+PUBLIC_PUBLISH_STRICT=1 ./security_auto.example.sh publish draft.md > draft-safe.md
+```
