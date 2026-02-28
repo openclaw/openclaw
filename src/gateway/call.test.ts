@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
 import { captureEnv } from "../test-utils/env.js";
 import {
   loadConfigMock as loadConfig,
@@ -588,10 +589,15 @@ describe("callGateway password resolution", () => {
   ] as const;
 
   beforeEach(() => {
-    envSnapshot = captureEnv(["OPENCLAW_GATEWAY_PASSWORD", "OPENCLAW_GATEWAY_TOKEN"]);
+    envSnapshot = captureEnv([
+      "OPENCLAW_GATEWAY_PASSWORD",
+      "OPENCLAW_GATEWAY_TOKEN",
+      "LOCAL_REF_PASSWORD",
+    ]);
     resetGatewayCallMocks();
     delete process.env.OPENCLAW_GATEWAY_PASSWORD;
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
+    delete process.env.LOCAL_REF_PASSWORD;
     setGatewayNetworkDefaults(18789);
   });
 
@@ -645,6 +651,29 @@ describe("callGateway password resolution", () => {
     await callGateway({ method: "health" });
 
     expect(lastClientOptions?.password).toBe(expectedPassword);
+  });
+
+  it("resolves gateway.auth.password SecretInput refs for gateway calls", async () => {
+    process.env.LOCAL_REF_PASSWORD = "resolved-local-ref-password";
+    loadConfig.mockReturnValue({
+      gateway: {
+        mode: "local",
+        bind: "loopback",
+        auth: {
+          mode: "password",
+          password: { source: "env", provider: "default", id: "LOCAL_REF_PASSWORD" },
+        },
+      },
+      secrets: {
+        providers: {
+          default: { source: "env" },
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    await callGateway({ method: "health" });
+
+    expect(lastClientOptions?.password).toBe("resolved-local-ref-password");
   });
 
   it.each(explicitAuthCases)("uses explicit $label when url override is set", async (testCase) => {
