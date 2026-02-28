@@ -14,7 +14,10 @@ import {
   truncateText,
   type ExtractMode,
 } from "./web-fetch-utils.js";
-import { fetchWithWebToolsNetworkGuard } from "./web-guarded-fetch.js";
+import {
+  fetchWithWebToolsNetworkGuard,
+  WEB_TOOLS_FAKE_IP_SSRF_POLICY,
+} from "./web-guarded-fetch.js";
 import {
   CacheEntry,
   DEFAULT_CACHE_TTL_MINUTES,
@@ -527,6 +530,7 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
       url: params.url,
       maxRedirects: params.maxRedirects,
       timeoutSeconds: params.timeoutSeconds,
+      policy: WEB_TOOLS_FAKE_IP_SSRF_POLICY,
       init: {
         headers: {
           Accept: "text/markdown, text/html;q=0.9, */*;q=0.1",

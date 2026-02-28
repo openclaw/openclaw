@@ -9,6 +9,13 @@ export const WEB_TOOLS_TRUSTED_NETWORK_SSRF_POLICY: SsrFPolicy = {
   dangerouslyAllowPrivateNetwork: true,
 };
 
+// Allow RFC 2544 benchmark range (198.18.0.0/15) used by Mihomo/Clash fake-ip DNS
+// This is more targeted than dangerouslyAllowPrivateNetwork - it only allows the
+// benchmark range while still blocking other private networks (localhost, 10.x, etc.)
+export const WEB_TOOLS_FAKE_IP_SSRF_POLICY: SsrFPolicy = {
+  allowRfc2544BenchmarkRange: true,
+};
+
 type WebToolGuardedFetchOptions = Omit<GuardedFetchOptions, "proxy"> & {
   timeoutSeconds?: number;
 };
