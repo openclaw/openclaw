@@ -38,6 +38,10 @@ RUN if [ -n "$OPENCLAW_INSTALL_BROWSER" ]; then \
       PLAYWRIGHT_BROWSERS_PATH=/home/node/.cache/ms-playwright \
       node /app/node_modules/playwright-core/cli.js install --with-deps chromium && \
       chown -R node:node /home/node/.cache/ms-playwright && \
+      # Create /usr/bin/chromium symlink so OpenClaw can discover the browser
+      # via its standard system-path search (avoids manual executablePath config).
+      CHROME_BIN=$(find /home/node/.cache/ms-playwright -path '*/chrome-linux*/chrome' -type f | head -1) && \
+      if [ -n "$CHROME_BIN" ]; then ln -sf "$CHROME_BIN" /usr/bin/chromium; fi && \
       apt-get clean && \
       rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*; \
     fi

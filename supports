@@ -1,0 +1,7 @@
+# OpenClaw PR 列表
+
+## gushiaoke 提交的 PR
+
+| # | 标题 | 分支 | 目标 | 状态 | 创建时间 | 链接 |
+|---|------|------|------|------|----------|------|
+| 29565 | config: add missing extraArgs to browser zod schema | fix/browser-extra-args-schema | main | OPEN | 2026-02-28 | https://github.com/openclaw/openclaw/pull/29565 |
