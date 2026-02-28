@@ -50,7 +50,8 @@ function processContent(rawContent: string, objectName: string) {
 
 function buildFileDownloadUrl(file: RichObjectParam, baseUrl: string, apiUser: string | undefined): string | undefined {
   if (baseUrl && apiUser && file.path) {
-    return `${baseUrl}/remote.php/dav/files/${encodeURIComponent(apiUser)}/${file.path}`;
+    const encodedPath = file.path.split("/").map(encodeURIComponent).join("/");
+    return `${baseUrl}/remote.php/dav/files/${encodeURIComponent(apiUser)}/${encodedPath}`;
   }
   return file.link || undefined;
 }
@@ -172,6 +173,14 @@ describe("buildFileDownloadUrl", () => {
   it("constructs WebDAV URL when baseUrl + apiUser + path available", () => {
     const url = buildFileDownloadUrl({ type: "file", id: "1", name: "test.jpg", path: "Talk/test.jpg" }, "https://cloud.example.com", "bot-user");
     expect(url).toBe("https://cloud.example.com/remote.php/dav/files/bot-user/Talk/test.jpg");
+  });
+
+  it("encodes special characters in file path segments", () => {
+    const url = buildFileDownloadUrl(
+      { type: "file", id: "1", name: "photo (3).png", path: "Talk/photo (3).png" },
+      "https://cloud.example.com", "bot-user"
+    );
+    expect(url).toBe("https://cloud.example.com/remote.php/dav/files/bot-user/Talk/photo%20(3).png");
   });
 
   it("falls back to link when apiUser missing", () => {

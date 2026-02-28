@@ -45,7 +45,8 @@ function buildFileDownloadUrl(
   apiUser: string | undefined,
 ): string | undefined {
   if (baseUrl && apiUser && file.path) {
-    return `${baseUrl}/remote.php/dav/files/${encodeURIComponent(apiUser)}/${file.path}`;
+    const encodedPath = file.path.split("/").map(encodeURIComponent).join("/");
+    return `${baseUrl}/remote.php/dav/files/${encodeURIComponent(apiUser)}/${encodedPath}`;
   }
   return file.link || undefined;
 }
