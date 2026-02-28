@@ -48,6 +48,7 @@ Examples:
 ```text
 /ostium {"action":"open_trade","network":"mainnet","atPrice":98000,"tradeParams":{"collateral":10,"leverage":5,"asset_type":0,"direction":true}}
 /ostium {"action":"open_trade","network":"mainnet","at_price":98000,"tradeParams":{"collateral":10,"leverage":5,"asset_type":0,"direction":true}}
+/ostium {"action":"open_trade","network":"mainnet","tradeParams":{"collateral":5,"leverage":2,"pair_index":0,"direction":"long","order_type":"MARKET"}}
 ```
 
 ## Notes
@@ -55,6 +56,10 @@ Examples:
 - `RPC_URL` is required for all actions.
 - `PRIVATE_KEY` is required for write actions.
 - `network` must be `mainnet` or `testnet`.
+- `open_trade` accepts both nested (`tradeParams`) and top-level aliases for `collateral`, `leverage`, and pair id (`pairIndex`/`pair_id`/`asset_type`).
+- `direction` accepts `long/short`, boolean, or numeric `0/1` (`0=long`, `1=short`).
+- If `atPrice`/`at_price` is omitted for a market order, the runner fetches the live mid price automatically.
+- Collateral defaults to USDC; non-USDC collateral symbols are rejected.
 - Write/read id+price params accept both camelCase and snake_case aliases:
 - `atPrice` or `at_price`
 - `marketPrice` or `market_price`
