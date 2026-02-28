@@ -926,7 +926,9 @@ export async function handleFeishuMessage(params: {
   const dmPolicy = feishuCfg?.dmPolicy ?? "pairing";
   const configAllowFrom = feishuCfg?.allowFrom ?? [];
   const useAccessGroups = cfg.commands?.useAccessGroups !== false;
-  const broadcastAgents = isGroup ? resolveBroadcastAgents(cfg, ctx.chatId) : null;
+  const broadcastAgents = isGroup
+    ? resolveBroadcastAgents(cfg, ctx.chatId)?.map((id) => id.toLowerCase())
+    : null;
 
   if (isGroup) {
     if (groupConfig?.enabled === false) {
@@ -1240,7 +1242,11 @@ export async function handleFeishuMessage(params: {
         : undefined;
 
     // --- Shared context builder for dispatch ---
-    const buildCtxPayloadForAgent = (agentSessionKey: string, agentAccountId: string) =>
+    const buildCtxPayloadForAgent = (
+      agentSessionKey: string,
+      agentAccountId: string,
+      wasMentioned: boolean,
+    ) =>
       core.channel.reply.finalizeInboundContext({
         Body: combinedBody,
         BodyForAgent: messageBody,
@@ -1262,7 +1268,7 @@ export async function handleFeishuMessage(params: {
         MessageSid: ctx.messageId,
         ReplyToBody: quotedContent ?? undefined,
         Timestamp: Date.now(),
-        WasMentioned: ctx.mentionedBot,
+        WasMentioned: wasMentioned,
         CommandAuthorized: commandAuthorized,
         OriginatingChannel: "feishu" as const,
         OriginatingTo: feishuTo,
@@ -1281,7 +1287,7 @@ export async function handleFeishuMessage(params: {
       const strategy =
         ((cfg as Record<string, unknown>).broadcast as Record<string, unknown> | undefined)
           ?.strategy || "parallel";
-      const activeAgentId = ctx.mentionedBot ? route.agentId : null;
+      const activeAgentId = ctx.mentionedBot ? route.agentId.toLowerCase() : null;
       const agentIds = (cfg.agents?.list ?? []).map((a: { id: string }) => a.id.toLowerCase());
       const hasKnownAgents = agentIds.length > 0;
 
@@ -1298,7 +1304,11 @@ export async function handleFeishuMessage(params: {
         }
 
         const agentSessionKey = buildBroadcastSessionKey(route.sessionKey, route.agentId, agentId);
-        const agentCtx = buildCtxPayloadForAgent(agentSessionKey, route.accountId);
+        const agentCtx = buildCtxPayloadForAgent(
+          agentSessionKey,
+          route.accountId,
+          agentId === activeAgentId,
+        );
 
         if (agentId === activeAgentId) {
           // Active agent: real Feishu dispatcher (responds on Feishu)
@@ -1384,7 +1394,11 @@ export async function handleFeishuMessage(params: {
       );
     } else {
       // --- Single-agent dispatch (existing behavior) ---
-      const ctxPayload = buildCtxPayloadForAgent(route.sessionKey, route.accountId);
+      const ctxPayload = buildCtxPayloadForAgent(
+        route.sessionKey,
+        route.accountId,
+        ctx.mentionedBot,
+      );
 
       const { dispatcher, replyOptions, markDispatchIdle } = createFeishuReplyDispatcher({
         cfg,
