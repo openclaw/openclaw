@@ -159,7 +159,9 @@ export type SlackAccountConfig = {
    * Optional per-chat-type reply threading overrides.
    * Example: { direct: "all", group: "first", channel: "off" }.
    */
-  replyToModeByChatType?: Partial<Record<"direct" | "group" | "channel", ReplyToMode>>;
+  replyToModeByChatType?: Partial<
+    Record<"direct" | "group" | "channel" | "private-channel", ReplyToMode>
+  >;
   /** Thread session behavior. */
   thread?: SlackThreadConfig;
   actions?: SlackActionConfig;

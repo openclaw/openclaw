@@ -121,6 +121,9 @@ function channelKind(channelType?: string | null): ChatType {
   if (normalized === "G") {
     return "group";
   }
+  if (normalized === "P") {
+    return "private-channel";
+  }
   return "channel";
 }
 
