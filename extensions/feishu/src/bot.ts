@@ -189,10 +189,24 @@ function parseMessageContent(content: string, messageType: string): string {
       return textContent;
     }
     if (messageType === "share_chat") {
-      // Handle merged/forwarded messages (share_chat)
-      // This indicates a message that was forwarded from a chat
-      // The actual content requires additional API calls to fetch
-      return "[Forwarded message - original content requires additional API call to retrieve]";
+      // Preserve available summary text for merged/forwarded chat messages.
+      if (parsed && typeof parsed === "object") {
+        const share = parsed as {
+          body?: unknown;
+          summary?: unknown;
+          share_chat_id?: unknown;
+        };
+        if (typeof share.body === "string" && share.body.trim().length > 0) {
+          return share.body.trim();
+        }
+        if (typeof share.summary === "string" && share.summary.trim().length > 0) {
+          return share.summary.trim();
+        }
+        if (typeof share.share_chat_id === "string" && share.share_chat_id.trim().length > 0) {
+          return `[Forwarded message: ${share.share_chat_id.trim()}]`;
+        }
+      }
+      return "[Forwarded message]";
     }
     return content;
   } catch {
@@ -299,15 +313,29 @@ function parsePostContent(content: string): {
             if (imageKey) {
               imageKeys.push(imageKey);
             }
-          } else if (element.tag === "code" || element.tag === "code_block") {
-            // Inline or block code
-            const code = element.text || element.content || "";
-            textContent += `\`${code}\``;
-          } else if (element.tag === "pre") {
-            // Preformatted text / code block
-            const lang = element.language || "";
-            const code = element.text || element.content || "";
-            textContent += `\n\`\`\`${lang}\n${code}\n\`\`\`\n`;
+          } else if (element.tag === "code") {
+            // Inline code
+            const code =
+              typeof element.text === "string"
+                ? element.text
+                : typeof element.content === "string"
+                  ? element.content
+                  : "";
+            if (code) {
+              textContent += `\`${code}\``;
+            }
+          } else if (element.tag === "code_block" || element.tag === "pre") {
+            // Multiline code block
+            const lang = typeof element.language === "string" ? element.language : "";
+            const code =
+              typeof element.text === "string"
+                ? element.text
+                : typeof element.content === "string"
+                  ? element.content
+                  : "";
+            if (code) {
+              textContent += `\n\`\`\`${lang}\n${code}\n\`\`\`\n`;
+            }
           }
         }
         textContent += "\n";
