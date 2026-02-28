@@ -330,7 +330,7 @@ async function requestOpenAiVerification(params: {
       body: {
         messages: [{ role: "user", content: "Hi" }],
         temperature: 1,
-        max_completion_tokens: DEFAULT_MAX_TOKENS,
+        max_completion_tokens: 5,
         stream: false,
       },
     });
