@@ -34,6 +34,7 @@ export type AuthChoice =
   | "zai-global"
   | "zai-cn"
   | "xiaomi-api-key"
+  | "upstage-api-key"
   | "minimax-cloud"
   | "minimax"
   | "minimax-api"
@@ -66,6 +67,7 @@ export type AuthChoiceGroupId =
   | "moonshot"
   | "zai"
   | "xiaomi"
+  | "upstage"
   | "opencode-zen"
   | "minimax"
   | "synthetic"
@@ -125,6 +127,7 @@ export type OnboardOptions = {
   geminiApiKey?: string;
   zaiApiKey?: string;
   xiaomiApiKey?: string;
+  upstageApiKey?: string;
   minimaxApiKey?: string;
   syntheticApiKey?: string;
   veniceApiKey?: string;

@@ -31,6 +31,7 @@ import {
   applyLitellmConfig,
   applyMistralConfig,
   applyXaiConfig,
+  applyUpstageConfig,
   applyXiaomiConfig,
   applyZaiConfig,
   setAnthropicApiKey,
@@ -54,6 +55,7 @@ import {
   setTogetherApiKey,
   setHuggingfaceApiKey,
   setVercelAiGatewayApiKey,
+  setUpstageApiKey,
   setXiaomiApiKey,
   setZaiApiKey,
 } from "../../onboard-auth.js";
@@ -360,6 +362,33 @@ export async function applyNonInteractiveAuthChoice(params: {
       mode: "api_key",
     });
     return applyXiaomiConfig(nextConfig);
+  }
+
+  if (authChoice === "upstage-api-key") {
+    const resolved = await resolveApiKey({
+      provider: "upstage",
+      cfg: baseConfig,
+      flagValue: opts.upstageApiKey,
+      flagName: "--upstage-api-key",
+      envVar: "UPSTAGE_API_KEY",
+      runtime,
+    });
+    if (!resolved) {
+      return null;
+    }
+    if (
+      !(await maybeSetResolvedApiKey(resolved, (value) =>
+        setUpstageApiKey(value, undefined, apiKeyStorageOptions),
+      ))
+    ) {
+      return null;
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "upstage:default",
+      provider: "upstage",
+      mode: "api_key",
+    });
+    return applyUpstageConfig(nextConfig);
   }
 
   if (authChoice === "xai-api-key") {

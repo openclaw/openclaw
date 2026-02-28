@@ -187,6 +187,17 @@ const QIANFAN_DEFAULT_COST = {
   cacheWrite: 0,
 };
 
+export const UPSTAGE_BASE_URL = "https://api.upstage.ai/v1/solar";
+export const UPSTAGE_DEFAULT_MODEL_ID = "solar-pro3-260126";
+const UPSTAGE_DEFAULT_CONTEXT_WINDOW = 128000;
+const UPSTAGE_DEFAULT_MAX_TOKENS = 8192;
+const UPSTAGE_DEFAULT_COST = {
+  input: 0.15,
+  output: 0.6,
+  cacheRead: 0.015,
+  cacheWrite: 0,
+};
+
 const NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1";
 const NVIDIA_DEFAULT_MODEL_ID = "nvidia/llama-3.1-nemotron-70b-instruct";
 const NVIDIA_DEFAULT_CONTEXT_WINDOW = 131072;
@@ -849,6 +860,33 @@ export function buildQianfanProvider(): ProviderConfig {
   };
 }
 
+export function buildUpstageProvider(): ProviderConfig {
+  return {
+    baseUrl: UPSTAGE_BASE_URL,
+    api: "openai-completions",
+    models: [
+      {
+        id: UPSTAGE_DEFAULT_MODEL_ID,
+        name: "Solar Pro3",
+        reasoning: true,
+        input: ["text"],
+        cost: UPSTAGE_DEFAULT_COST,
+        contextWindow: UPSTAGE_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: UPSTAGE_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: "solar-pro2-251215",
+        name: "Solar Pro2",
+        reasoning: true,
+        input: ["text"],
+        cost: UPSTAGE_DEFAULT_COST,
+        contextWindow: 65000,
+        maxTokens: 8192,
+      },
+    ],
+  };
+}
+
 export function buildNvidiaProvider(): ProviderConfig {
   return {
     baseUrl: NVIDIA_BASE_URL,
@@ -1094,6 +1132,13 @@ export async function resolveImplicitProviders(params: {
     resolveApiKeyFromProfiles({ provider: "qianfan", store: authStore });
   if (qianfanKey) {
     providers.qianfan = { ...buildQianfanProvider(), apiKey: qianfanKey };
+  }
+
+  const upstageKey =
+    resolveEnvApiKeyVarName("upstage") ??
+    resolveApiKeyFromProfiles({ provider: "upstage", store: authStore });
+  if (upstageKey) {
+    providers.upstage = { ...buildUpstageProvider(), apiKey: upstageKey };
   }
 
   const openrouterKey =
