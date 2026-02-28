@@ -1,8 +1,10 @@
-import { describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "openclaw/plugin-sdk";
+import { describe, expect, it, vi } from "vitest";
 import {
   extractNapCatInboundMessage,
   isNapCatEventMentioningSelf,
   normalizeNapCatAllowFrom,
+  resolveNapCatCommandAuthorized,
   resolveNapCatGroupConfig,
 } from "./inbound.js";
 
@@ -94,6 +96,45 @@ describe("resolveNapCatGroupConfig", () => {
       requireMention: false,
       allowFrom: ["111"],
       enabled: undefined,
+    });
+  });
+});
+
+describe("resolveNapCatCommandAuthorized", () => {
+  it("returns undefined when command auth should not be computed", () => {
+    const resolveFromAuthorizers = vi.fn(() => false);
+    const result = resolveNapCatCommandAuthorized({
+      cfg: {} as OpenClawConfig,
+      rawBody: "hello",
+      senderId: "123",
+      effectiveAllowFrom: ["123"],
+      effectiveGroupAllowFrom: [],
+      shouldComputeCommandAuthorized: () => false,
+      resolveCommandAuthorizedFromAuthorizers: resolveFromAuthorizers,
+    });
+    expect(result).toBeUndefined();
+    expect(resolveFromAuthorizers).not.toHaveBeenCalled();
+  });
+
+  it("resolves authorization from effective allowlists when command auth is required", () => {
+    const resolveFromAuthorizers = vi.fn(() => false);
+    const result = resolveNapCatCommandAuthorized({
+      cfg: {} as OpenClawConfig,
+      rawBody: "/status",
+      senderId: "999",
+      effectiveAllowFrom: ["123"],
+      effectiveGroupAllowFrom: ["456"],
+      shouldComputeCommandAuthorized: () => true,
+      resolveCommandAuthorizedFromAuthorizers: resolveFromAuthorizers,
+    });
+
+    expect(result).toBe(false);
+    expect(resolveFromAuthorizers).toHaveBeenCalledWith({
+      useAccessGroups: true,
+      authorizers: [
+        { configured: true, allowed: false },
+        { configured: true, allowed: false },
+      ],
     });
   });
 });

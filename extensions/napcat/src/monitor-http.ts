@@ -117,13 +117,34 @@ export async function startNapCatHttpMonitor(
   });
 
   await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(port, host, () => resolve());
+    const onListen = () => {
+      server.off("error", onError);
+      resolve();
+    };
+    const onError = (err: Error) => {
+      server.off("listening", onListen);
+      reject(err);
+    };
+    server.once("error", onError);
+    server.listen(port, host, onListen);
+  });
+  options.statusSink?.({
+    connected: true,
+    lastConnectedAt: Date.now(),
+    lastError: null,
+  });
+
+  server.on("error", (err) => {
+    options.statusSink?.({
+      connected: false,
+      lastError: String(err),
+    });
   });
 
   return {
     stop: async () => {
       await closeServer(server);
+      options.statusSink?.({ connected: false });
     },
   };
 }

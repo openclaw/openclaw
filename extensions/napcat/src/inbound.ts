@@ -223,6 +223,34 @@ export function resolveNapCatGroupConfig(params: {
   };
 }
 
+export function resolveNapCatCommandAuthorized(params: {
+  cfg: OpenClawConfig;
+  rawBody: string;
+  senderId: string;
+  effectiveAllowFrom: string[];
+  effectiveGroupAllowFrom: string[];
+  shouldComputeCommandAuthorized: (rawBody: string, cfg: OpenClawConfig) => boolean;
+  resolveCommandAuthorizedFromAuthorizers: (params: {
+    useAccessGroups: boolean;
+    authorizers: Array<{ configured: boolean; allowed: boolean }>;
+  }) => boolean;
+}): boolean | undefined {
+  const shouldComputeAuth = params.shouldComputeCommandAuthorized(params.rawBody, params.cfg);
+  if (!shouldComputeAuth) {
+    return undefined;
+  }
+  const useAccessGroups = params.cfg.commands?.useAccessGroups !== false;
+  const ownerAllowed = isNapCatSenderAllowed(params.effectiveAllowFrom, params.senderId);
+  const groupAllowed = isNapCatSenderAllowed(params.effectiveGroupAllowFrom, params.senderId);
+  return params.resolveCommandAuthorizedFromAuthorizers({
+    useAccessGroups,
+    authorizers: [
+      { configured: params.effectiveAllowFrom.length > 0, allowed: ownerAllowed },
+      { configured: params.effectiveGroupAllowFrom.length > 0, allowed: groupAllowed },
+    ],
+  });
+}
+
 export function extractNapCatInboundMessage(event: unknown): NapCatInboundMessage | null {
   if (!event || typeof event !== "object" || Array.isArray(event)) {
     return null;
@@ -332,6 +360,17 @@ export async function processNapCatEvent(params: {
     storeAllowFrom,
     isSenderAllowed: (allowFrom) => isNapCatSenderAllowed(allowFrom, inbound.senderId),
   });
+  const commandAuthorized = resolveNapCatCommandAuthorized({
+    cfg: params.config,
+    rawBody: inbound.rawBody,
+    senderId: inbound.senderId,
+    effectiveAllowFrom: access.effectiveAllowFrom,
+    effectiveGroupAllowFrom: access.effectiveGroupAllowFrom,
+    shouldComputeCommandAuthorized: (rawBody, cfg) =>
+      core.channel.commands.shouldComputeCommandAuthorized(rawBody, cfg),
+    resolveCommandAuthorizedFromAuthorizers: (commandParams) =>
+      core.channel.commands.resolveCommandAuthorizedFromAuthorizers(commandParams),
+  });
 
   if (!inbound.isGroup && access.decision === "pairing") {
     await issuePairingChallenge({
@@ -420,7 +459,7 @@ export async function processNapCatEvent(params: {
     OriginatingChannel: CHANNEL_ID,
     OriginatingTo: toTarget,
     GroupSubject: inbound.isGroup ? inbound.targetId : undefined,
-    CommandAuthorized: true,
+    CommandAuthorized: commandAuthorized,
     MediaUrl: inbound.mediaUrls[0],
     MediaUrls: inbound.mediaUrls.length > 0 ? inbound.mediaUrls : undefined,
   });
