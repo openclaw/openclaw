@@ -595,12 +595,10 @@ private const val defaultTalkProvider = "elevenlabs"
     // Release SpeechRecognizer before making the API call and playing TTS.
     // Must use withContext(Main) — not post() — so we WAIT for destruction before
     // proceeding. A fire-and-forget post() races with TTS startup: the recognizer
-    // stays alive, picks up TTS audio as speech (onBeginningOfSpeech), and the
-    // OS kills the AudioTrack write (returns 0) on OxygenOS/OnePlus devices.
+    // Stop recognizer before TTS to prevent it picking up TTS audio as speech.
+    // Use cancel() not destroy() — keeps the engine warm for faster restart after TTS.
     withContext(Dispatchers.Main) {
       recognizer?.cancel()
-      recognizer?.destroy()
-      recognizer = null
     }
 
     reloadConfig()
