@@ -1,6 +1,7 @@
 package ai.openclaw.android.node
 
 import ai.openclaw.android.protocol.OpenClawCameraCommand
+import ai.openclaw.android.protocol.OpenClawCapability
 import ai.openclaw.android.protocol.OpenClawDeviceCommand
 import ai.openclaw.android.protocol.OpenClawLocationCommand
 import ai.openclaw.android.protocol.OpenClawNotificationsCommand
@@ -11,13 +12,60 @@ import org.junit.Test
 
 class InvokeCommandRegistryTest {
   @Test
+  fun advertisedCapabilities_respectsFeatureAvailability() {
+    val capabilities =
+      InvokeCommandRegistry.advertisedCapabilities(
+        NodeRuntimeFlags(
+          cameraEnabled = false,
+          locationEnabled = false,
+          smsAvailable = false,
+          voiceWakeEnabled = false,
+          debugBuild = false,
+        ),
+      )
+
+    assertTrue(capabilities.contains(OpenClawCapability.Canvas.rawValue))
+    assertTrue(capabilities.contains(OpenClawCapability.Screen.rawValue))
+    assertTrue(capabilities.contains(OpenClawCapability.Device.rawValue))
+    assertFalse(capabilities.contains(OpenClawCapability.Camera.rawValue))
+    assertFalse(capabilities.contains(OpenClawCapability.Location.rawValue))
+    assertFalse(capabilities.contains(OpenClawCapability.Sms.rawValue))
+    assertFalse(capabilities.contains(OpenClawCapability.VoiceWake.rawValue))
+  }
+
+  @Test
+  fun advertisedCapabilities_includesFeatureCapabilitiesWhenEnabled() {
+    val capabilities =
+      InvokeCommandRegistry.advertisedCapabilities(
+        NodeRuntimeFlags(
+          cameraEnabled = true,
+          locationEnabled = true,
+          smsAvailable = true,
+          voiceWakeEnabled = true,
+          debugBuild = false,
+        ),
+      )
+
+    assertTrue(capabilities.contains(OpenClawCapability.Canvas.rawValue))
+    assertTrue(capabilities.contains(OpenClawCapability.Screen.rawValue))
+    assertTrue(capabilities.contains(OpenClawCapability.Device.rawValue))
+    assertTrue(capabilities.contains(OpenClawCapability.Camera.rawValue))
+    assertTrue(capabilities.contains(OpenClawCapability.Location.rawValue))
+    assertTrue(capabilities.contains(OpenClawCapability.Sms.rawValue))
+    assertTrue(capabilities.contains(OpenClawCapability.VoiceWake.rawValue))
+  }
+
+  @Test
   fun advertisedCommands_respectsFeatureAvailability() {
     val commands =
       InvokeCommandRegistry.advertisedCommands(
-        cameraEnabled = false,
-        locationEnabled = false,
-        smsAvailable = false,
-        debugBuild = false,
+        NodeRuntimeFlags(
+          cameraEnabled = false,
+          locationEnabled = false,
+          smsAvailable = false,
+          voiceWakeEnabled = false,
+          debugBuild = false,
+        ),
       )
 
     assertFalse(commands.contains(OpenClawCameraCommand.Snap.rawValue))
@@ -40,10 +88,13 @@ class InvokeCommandRegistryTest {
   fun advertisedCommands_includesFeatureCommandsWhenEnabled() {
     val commands =
       InvokeCommandRegistry.advertisedCommands(
-        cameraEnabled = true,
-        locationEnabled = true,
-        smsAvailable = true,
-        debugBuild = true,
+        NodeRuntimeFlags(
+          cameraEnabled = true,
+          locationEnabled = true,
+          smsAvailable = true,
+          voiceWakeEnabled = false,
+          debugBuild = true,
+        ),
       )
 
     assertTrue(commands.contains(OpenClawCameraCommand.Snap.rawValue))
