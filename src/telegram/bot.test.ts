@@ -735,6 +735,46 @@ describe("createTelegramBot", () => {
     expect(payload.WasMentioned).toBe(true);
   });
 
+  it("allows configured group messages in allowlist mode without sender allowlist", async () => {
+    onSpy.mockClear();
+    replySpy.mockClear();
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          groupPolicy: "allowlist",
+          groups: {
+            "-123456789": { requireMention: false },
+          },
+        },
+      },
+      bindings: [
+        {
+          agentId: "main",
+          match: {
+            channel: "telegram",
+            peer: { kind: "group", id: "-123456789" },
+          },
+        },
+      ],
+    });
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+    await handler({
+      message: {
+        chat: { id: -123456789, type: "group", title: "Bound Group" },
+        from: { id: 987654321, username: "member" },
+        text: "hello",
+        date: 1736380800,
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(replySpy).toHaveBeenCalledTimes(1);
+  });
+
   it("inherits group allowlist + requireMention in topics", async () => {
     onSpy.mockClear();
     replySpy.mockClear();

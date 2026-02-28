@@ -541,7 +541,7 @@ export const registerTelegramHandlers = ({
       enforcePolicy: true,
       useTopicAndGroupOverrides: true,
       enforceAllowlistAuthorization: true,
-      allowEmptyAllowlistEntries: false,
+      allowEmptyAllowlistEntries: true,
       requireSenderForAllowlistAuthorization: true,
       checkChatAllowlist: true,
     });
