@@ -198,11 +198,26 @@ function queueSessionStoreTouch(params: {
   });
 }
 
-function parseSessionKeyFromPayloadJSON(payloadJSON: string): string | null {
+function previewPayloadJSON(payloadJSON: string, maxChars = 160): string {
+  const compact = payloadJSON.replace(/\s+/g, " ").trim();
+  if (compact.length <= maxChars) {
+    return compact;
+  }
+  return compact.slice(0, maxChars) + "…";
+}
+
+function parseSessionKeyFromPayloadJSON(
+  ctx: NodeEventContext,
+  payloadJSON: string,
+  label: string,
+): string | null {
   let payload: unknown;
   try {
     payload = JSON.parse(payloadJSON) as unknown;
-  } catch {
+  } catch (err) {
+    ctx.logGateway.warn(
+      `node-events: JSON parse failed (${label}) len=${payloadJSON.length} preview=${previewPayloadJSON(payloadJSON)}: ${formatForLog(err)}`,
+    );
     return null;
   }
   if (typeof payload !== "object" || payload === null) {
@@ -213,14 +228,21 @@ function parseSessionKeyFromPayloadJSON(payloadJSON: string): string | null {
   return sessionKey.length > 0 ? sessionKey : null;
 }
 
-function parsePayloadObject(payloadJSON?: string | null): Record<string, unknown> | null {
+function parsePayloadObject(
+  ctx: NodeEventContext,
+  label: string,
+  payloadJSON?: string | null,
+): Record<string, unknown> | null {
   if (!payloadJSON) {
     return null;
   }
   let payload: unknown;
   try {
     payload = JSON.parse(payloadJSON) as unknown;
-  } catch {
+  } catch (err) {
+    ctx.logGateway.warn(
+      `node-events: JSON parse failed (${label}) len=${payloadJSON.length} preview=${previewPayloadJSON(payloadJSON)}: ${formatForLog(err)}`,
+    );
     return null;
   }
   return typeof payload === "object" && payload !== null
@@ -263,7 +285,7 @@ async function sendReceiptAck(params: {
 export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt: NodeEvent) => {
   switch (evt.event) {
     case "voice.transcript": {
-      const obj = parsePayloadObject(evt.payloadJSON);
+      const obj = parsePayloadObject(ctx, evt.type, evt.payloadJSON);
       if (!obj) {
         return;
       }
@@ -455,7 +477,7 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       return;
     }
     case "notifications.changed": {
-      const obj = parsePayloadObject(evt.payloadJSON);
+      const obj = parsePayloadObject(ctx, evt.type, evt.payloadJSON);
       if (!obj) {
         return;
       }
@@ -498,7 +520,7 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       if (!evt.payloadJSON) {
         return;
       }
-      const sessionKey = parseSessionKeyFromPayloadJSON(evt.payloadJSON);
+      const sessionKey = parseSessionKeyFromPayloadJSON(ctx, evt.payloadJSON, "chat.subscribe");
       if (!sessionKey) {
         return;
       }
@@ -509,7 +531,7 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       if (!evt.payloadJSON) {
         return;
       }
-      const sessionKey = parseSessionKeyFromPayloadJSON(evt.payloadJSON);
+      const sessionKey = parseSessionKeyFromPayloadJSON(ctx, evt.payloadJSON, "chat.unsubscribe");
       if (!sessionKey) {
         return;
       }
@@ -519,7 +541,7 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
     case "exec.started":
     case "exec.finished":
     case "exec.denied": {
-      const obj = parsePayloadObject(evt.payloadJSON);
+      const obj = parsePayloadObject(ctx, evt.type, evt.payloadJSON);
       if (!obj) {
         return;
       }
@@ -576,7 +598,7 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       return;
     }
     case "push.apns.register": {
-      const obj = parsePayloadObject(evt.payloadJSON);
+      const obj = parsePayloadObject(ctx, evt.type, evt.payloadJSON);
       if (!obj) {
         return;
       }
