@@ -69,6 +69,7 @@ export type GatewayClientOptions = {
   onConnectError?: (err: Error) => void;
   onClose?: (code: number, reason: string) => void;
   onGap?: (info: { expected: number; received: number }) => void;
+  bindMode?: import("../config/config.js").GatewayBindMode;
 };
 
 export const GATEWAY_CLOSE_CODE_HINTS: Readonly<Record<number, string>> = {
@@ -117,7 +118,7 @@ export class GatewayClient {
     // Security check: block ALL plaintext ws:// to non-loopback addresses (CWE-319, CVSS 9.8)
     // This protects both credentials AND chat/conversation data from MITM attacks.
     // Device tokens may be loaded later in sendConnect(), so we block regardless of hasCredentials.
-    if (!isSecureWebSocketUrl(url)) {
+    if (!isSecureWebSocketUrl(url, this.opts.bindMode)) {
       // Safe hostname extraction - avoid throwing on malformed URLs in error path
       let displayHost = url;
       try {
