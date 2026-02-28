@@ -6,6 +6,7 @@ import {
   createScopedPairingAccess,
   DEFAULT_GROUP_HISTORY_LIMIT,
   type HistoryEntry,
+  normalizeAgentId,
   recordPendingHistoryEntryIfEnabled,
   resolveOpenProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
@@ -927,7 +928,7 @@ export async function handleFeishuMessage(params: {
   const configAllowFrom = feishuCfg?.allowFrom ?? [];
   const useAccessGroups = cfg.commands?.useAccessGroups !== false;
   const broadcastAgents = isGroup
-    ? resolveBroadcastAgents(cfg, ctx.chatId)?.map((id) => id.toLowerCase())
+    ? resolveBroadcastAgents(cfg, ctx.chatId)?.map((id) => normalizeAgentId(id))
     : null;
 
   if (isGroup) {
@@ -1287,8 +1288,8 @@ export async function handleFeishuMessage(params: {
       const strategy =
         ((cfg as Record<string, unknown>).broadcast as Record<string, unknown> | undefined)
           ?.strategy || "parallel";
-      const activeAgentId = ctx.mentionedBot ? route.agentId.toLowerCase() : null;
-      const agentIds = (cfg.agents?.list ?? []).map((a: { id: string }) => a.id.toLowerCase());
+      const activeAgentId = ctx.mentionedBot ? normalizeAgentId(route.agentId) : null;
+      const agentIds = (cfg.agents?.list ?? []).map((a: { id: string }) => normalizeAgentId(a.id));
       const hasKnownAgents = agentIds.length > 0;
 
       log(
@@ -1296,7 +1297,7 @@ export async function handleFeishuMessage(params: {
       );
 
       const dispatchForAgent = async (agentId: string) => {
-        if (hasKnownAgents && !agentIds.includes(agentId.toLowerCase())) {
+        if (hasKnownAgents && !agentIds.includes(normalizeAgentId(agentId))) {
           log(
             `feishu[${account.accountId}]: broadcast agent ${agentId} not found in agents.list; skipping`,
           );
