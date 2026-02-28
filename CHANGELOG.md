@@ -59,6 +59,7 @@ Docs: https://docs.openclaw.ai
 - Install/npm: fix npm global install deprecation warnings. (#28318) Thanks @vincentkoc.
 - fix(model): preserve reasoning in provider fallback resolution. (#29285) Fixes #25636. Thanks @vincentkoc.
 - Browser/Open & navigate: accept `url` as an alias parameter for `open` and `navigate`. (#29260) Thanks @vincentkoc.
+- Sandbox/Browser Docker: pass `OPENCLAW_BROWSER_NO_SANDBOX=1` to sandbox browser containers and bump sandbox browser security hash epoch so existing containers are recreated and pick up the env on upgrade. (#29879) Thanks @Lukavyi.
 - Codex/Usage window: label weekly usage window as `Week` instead of `Day`. (#26267) Thanks @Sid-Qin.
 - Slack/Native commands: register Slack native status as `/agentstatus` (Slack-reserved `/status`) so manifest slash command registration stays valid while text `/status` still works. Landed from contributor PR #29032 by @maloqab. Thanks @maloqab.
 - Android/Nodes reliability: reject `facing=both` when `deviceId` is set to avoid mislabeled duplicate captures, allow notification `open`/`reply` on non-clearable entries while still gating dismiss, trigger listener rebind before notification actions, and scale invoke-result ack timeout to invoke budget for large clip payloads. (#28260) Thanks @obviyus.
