@@ -115,6 +115,28 @@ describe("applyJobPatch", () => {
     });
   });
 
+  it("merges delivery.accountId from patch and preserves existing", () => {
+    const job = createIsolatedAgentTurnJob("job-acct", {
+      mode: "announce",
+      channel: "telegram",
+      to: "-100123",
+    });
+
+    applyJobPatch(job, { delivery: { mode: "announce", accountId: " coordinator " } });
+    expect(job.delivery?.accountId).toBe("coordinator");
+    expect(job.delivery?.mode).toBe("announce");
+    expect(job.delivery?.to).toBe("-100123");
+
+    // Updating other fields preserves accountId
+    applyJobPatch(job, { delivery: { mode: "announce", to: "-100999" } });
+    expect(job.delivery?.accountId).toBe("coordinator");
+    expect(job.delivery?.to).toBe("-100999");
+
+    // Clearing accountId with empty string
+    applyJobPatch(job, { delivery: { mode: "announce", accountId: "" } });
+    expect(job.delivery?.accountId).toBeUndefined();
+  });
+
   it("rejects webhook delivery without a valid http(s) target URL", () => {
     const expectedError = "cron webhook delivery requires delivery.to to be a valid http(s) URL";
     const cases = [
