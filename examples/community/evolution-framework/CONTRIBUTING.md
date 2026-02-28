@@ -72,18 +72,13 @@ openclaw >= 2026.2.0
 ### Setup
 
 ```bash
-# Clone repository
-git clone https://github.com/your-org/openclaw-evolution-framework.git
-cd openclaw-evolution-framework
+# Fork the openclaw repository (if not already forked)
+# Clone your fork
+git clone https://github.com/your-username/openclaw.git
+cd openclaw
 
-# Install dependencies (if any)
-npm install
-
-# Copy example config
-cp evolution-config.example.yaml evolution-config.yaml
-
-# Run tests (coming soon)
-npm test
+# Create a branch in examples/community/
+git checkout -b feature/evolution-your-contribution
 ```
 
 ## 📝 Pull Request Process
@@ -106,12 +101,14 @@ git checkout -b feature/your-feature-name
 Before submitting:
 
 ```bash
-# Test your config
-openclaw cron add --file cron-evolution-job.json
-openclaw cron run evolution-fast-loop
+# Verify your changes don't break existing examples
+cd examples/community/evolution-framework
 
-# Verify output
-ls -la memory/evolution/
+# Test the config is valid YAML
+python3 -c "import yaml; yaml.safe_load(open('evolution-config.example.yaml'))"
+
+# Verify JSON files are valid
+python3 -m json.tool cron-evolution-job.json > /dev/null
 ```
 
 ### 4. Submit PR

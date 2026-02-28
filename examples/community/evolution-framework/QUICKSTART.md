@@ -16,17 +16,17 @@ openclaw --version
 ## Step 1: Clone & Setup (1 minute)
 
 ```bash
-# Clone the repository
-git clone https://github.com/your-org/openclaw-evolution-framework.git
-cd openclaw-evolution-framework
+# Copy example files to your OpenClaw workspace
+cp evolution-config.example.yaml ~/.openclaw/workspace/evolution-config.yaml
+cp cron-evolution-job.json ~/.openclaw/workspace/
 
-# Create your config from the example
-cp evolution-config.example.yaml evolution-config.yaml
+# Create output directory
+mkdir -p ~/.openclaw/workspace/memory/evolution
 ```
 
 ## Step 2: Customize Your Config (2 minutes)
 
-Edit `evolution-config.yaml`:
+Edit `~/.openclaw/workspace/evolution-config.yaml`:
 
 ```yaml
 # Minimal config for first run
@@ -59,13 +59,22 @@ output:
 ## Step 3: Add the Cron Job (1 minute)
 
 ```bash
-# Add the evolution cron job
-openclaw cron add --file cron-evolution-job.json
+# Create the cron job using CLI
+openclaw cron add \
+  --name evolution-fast-loop \
+  --every 8m \
+  --session isolated \
+  --message "Run evolution exploration following evolution-config.yaml" \
+  --timeout-seconds 900 \
+  --announce \
+  --channel telegram
 
 # Verify it's added
 openclaw cron list
-# You should see: evolution-fast-loop
+# You should see: evolution-fast-loop (enabled, every 480000ms)
 ```
+
+**Note**: See `cron-evolution-job.json` for the complete payload message with detailed instructions.
 
 ## Step 4: Start Your First Session (1 minute)
 
@@ -96,13 +105,13 @@ tail -f ~/.openclaw/agents/main/sessions/*.jsonl
 
 ```bash
 # List all exploration rounds
-ls -la memory/evolution/
+ls -la ~/.openclaw/workspace/memory/evolution/
 
 # Read the first round
-cat memory/evolution/round-01-*.md
+cat ~/.openclaw/workspace/memory/evolution/round-01-*.md
 
 # View the summary (after session completes)
-cat memory/evolution/summary-*.md
+cat ~/.openclaw/workspace/memory/evolution/summary-*.md
 ```
 
 ## Common Issues
@@ -125,11 +134,11 @@ openclaw cron run evolution-fast-loop
 
 **Fix**:
 ```bash
-# Create output directory
-mkdir -p memory/evolution
+# Create output directory in workspace
+mkdir -p ~/.openclaw/workspace/memory/evolution
 
 # Check permissions
-chmod 755 memory/evolution
+chmod 755 ~/.openclaw/workspace/memory/evolution
 ```
 
 ### "API key errors"
