@@ -2439,6 +2439,11 @@
   gap: 8px;
 }
 
+.agent-files-editor .field textarea {
+  min-height: 50vh;
+  max-height: none;
+}
+
 .agent-tools-meta {
   display: grid;
   gap: 12px;
