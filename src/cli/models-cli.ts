@@ -11,6 +11,7 @@ import {
   modelsAuthOrderSetCommand,
   modelsAuthPasteTokenCommand,
   modelsAuthSetupTokenCommand,
+  modelsAuthStatusCommand,
   modelsFallbacksAddCommand,
   modelsFallbacksClearCommand,
   modelsFallbacksListCommand,
@@ -372,6 +373,29 @@ export function registerModelsCli(program: Command) {
           {
             profileId: opts.profileId as string | undefined,
             yes: Boolean(opts.yes),
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  auth
+    .command("status")
+    .description("Show auth profiles in a status table")
+    .option("--json", "Output JSON", false)
+    .option("--plain", "Plain output", false)
+    .option("--warn-after-ms <ms>", "Warn window for expiring tokens (default: 24h)")
+    .option("--agent <id>", "Agent id to inspect")
+    .action(async (opts, command) => {
+      const agent =
+        resolveOptionFromCommand<string>(command, "agent") ?? (opts.agent as string | undefined);
+      await runModelsCommand(async () => {
+        await modelsAuthStatusCommand(
+          {
+            json: Boolean(opts.json),
+            plain: Boolean(opts.plain),
+            warnAfterMs: opts.warnAfterMs as string | undefined,
+            agent,
           },
           defaultRuntime,
         );
