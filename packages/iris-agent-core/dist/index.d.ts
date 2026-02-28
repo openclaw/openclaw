@@ -168,6 +168,14 @@ interface IrisAgentOptions {
   thinkingBudgets?: Record<string, number>;
   transport?: "sse" | "stream";
   maxRetryDelayMs?: number;
+  /** Per-tool execution timeout in ms. 0 or undefined = no timeout. */
+  toolTimeoutMs?: number;
+  /** Tool result cache TTL in ms. -1 = session-scoped. 0 or undefined = disabled. */
+  toolCacheMs?: number;
+  /** Max tools executed simultaneously. Default: 5. */
+  maxParallelTools?: number;
+  /** Age-based tool result compression. undefined = defaults on. false = disabled. */
+  toolResultCompression?: ToolResultCompressionOptions | false;
 }
 declare class IrisAgent {
   private _state;
@@ -185,6 +193,10 @@ declare class IrisAgent {
   private _thinkingBudgets?;
   private _transport;
   private _maxRetryDelayMs?;
+  private _toolTimeoutMs?;
+  private _toolCacheMs?;
+  private _maxParallelTools?;
+  private _toolResultCompression?;
   private runningPrompt?;
   private resolveRunningPrompt?;
   constructor(opts?: IrisAgentOptions);

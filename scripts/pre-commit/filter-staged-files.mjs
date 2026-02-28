@@ -23,7 +23,19 @@ if (mode !== "lint" && mode !== "format") {
 const lintExts = new Set([".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"]);
 const formatExts = new Set([".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".json", ".md", ".mdx"]);
 
+// Segments that, when found in a path, indicate generated/vendored files that
+// should be skipped by both linter and formatter (matching .oxfmtrc.jsonc ignorePatterns).
+const IGNORED_SEGMENTS = new Set(["dist", "node_modules", "vendor", "assets"]);
+
+const isInIgnoredDir = (filePath) => {
+  const parts = filePath.split(/[\\/]/);
+  return parts.some((segment) => IGNORED_SEGMENTS.has(segment));
+};
+
 const shouldSelect = (filePath) => {
+  if (isInIgnoredDir(filePath)) {
+    return false;
+  }
   const ext = path.extname(filePath).toLowerCase();
   if (mode === "lint") {
     return lintExts.has(ext);

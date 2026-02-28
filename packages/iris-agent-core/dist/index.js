@@ -583,6 +583,10 @@ var IrisAgent = class {
 		this._thinkingBudgets = opts.thinkingBudgets;
 		this._transport = opts.transport ?? "sse";
 		this._maxRetryDelayMs = opts.maxRetryDelayMs;
+		this._toolTimeoutMs = opts.toolTimeoutMs;
+		this._toolCacheMs = opts.toolCacheMs;
+		this._maxParallelTools = opts.maxParallelTools;
+		this._toolResultCompression = opts.toolResultCompression;
 	}
 	get state() {
 		return this._state;
@@ -756,7 +760,11 @@ var IrisAgent = class {
 				}
 				return this._dequeueSteeringMessages();
 			},
-			getFollowUpMessages: async () => this._dequeueFollowUpMessages()
+			getFollowUpMessages: async () => this._dequeueFollowUpMessages(),
+			toolTimeoutMs: this._toolTimeoutMs,
+			toolCacheMs: this._toolCacheMs,
+			maxParallelTools: this._maxParallelTools,
+			toolResultCompression: this._toolResultCompression
 		};
 		let partial = null;
 		try {
