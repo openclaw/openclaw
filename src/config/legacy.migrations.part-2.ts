@@ -265,6 +265,26 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_2: LegacyConfigMigration[] = [
             entryCopy.sandbox = legacySandbox;
           }
 
+          const legacyNestedRouting = getRecord(entryCopy.routing);
+          const legacyNestedGroupChat = getRecord(legacyNestedRouting?.groupChat);
+          if (legacyNestedGroupChat?.mentionPatterns !== undefined) {
+            const groupChat = ensureRecord(target, "groupChat");
+            if (groupChat.mentionPatterns === undefined) {
+              groupChat.mentionPatterns = legacyNestedGroupChat.mentionPatterns;
+              changes.push(
+                `Moved routing.agents.${agentId}.routing.groupChat.mentionPatterns → agents.list (id "${agentId}").groupChat.mentionPatterns.`,
+              );
+            } else {
+              changes.push(
+                `Removed routing.agents.${agentId}.routing.groupChat.mentionPatterns (agents.list groupChat mentionPatterns already set).`,
+              );
+            }
+          }
+          if (Object.prototype.hasOwnProperty.call(entryCopy, "routing")) {
+            delete entryCopy.routing;
+            changes.push(`Removed routing.agents.${agentId}.routing.`);
+          }
+
           mergeMissing(target, entryCopy);
         }
         delete routing.agents;

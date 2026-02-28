@@ -218,4 +218,89 @@ export const LEGACY_CONFIG_MIGRATIONS_PART_3: LegacyConfigMigration[] = [
       delete raw.identity;
     },
   },
+  {
+    id: "discord.allowlist-aliases-v2",
+    describe: "Normalize legacy Discord allowlist aliases",
+    apply: (raw, changes) => {
+      const channels = getRecord(raw.channels);
+      const discord = getRecord(channels?.discord);
+      if (!discord) {
+        return;
+      }
+
+      const normalizeEntry = (entry: Record<string, unknown>, prefix: string) => {
+        if (Object.prototype.hasOwnProperty.call(entry, "allowlist")) {
+          const legacyAllowlist = Array.isArray(entry.allowlist) ? entry.allowlist : undefined;
+          if (entry.allowFrom === undefined && legacyAllowlist) {
+            entry.allowFrom = legacyAllowlist;
+            changes.push(`Moved ${prefix}.allowlist → ${prefix}.allowFrom.`);
+          } else {
+            changes.push(`Removed ${prefix}.allowlist.`);
+          }
+          delete entry.allowlist;
+        }
+
+        if (Object.prototype.hasOwnProperty.call(entry, "groupAllowFrom")) {
+          delete entry.groupAllowFrom;
+          changes.push(`Removed ${prefix}.groupAllowFrom (unsupported for Discord).`);
+        }
+      };
+
+      normalizeEntry(discord, "channels.discord");
+
+      const accounts = getRecord(discord.accounts);
+      if (!accounts) {
+        return;
+      }
+      for (const [accountId, accountRaw] of Object.entries(accounts)) {
+        const account = getRecord(accountRaw);
+        if (!account) {
+          continue;
+        }
+        normalizeEntry(account, `channels.discord.accounts.${accountId}`);
+      }
+    },
+  },
+  {
+    id: "agents.list-routing-v2",
+    describe: "Remove legacy agents.list[].routing keys",
+    apply: (raw, changes) => {
+      const agents = getRecord(raw.agents);
+      const list = getAgentsList(agents);
+      if (list.length === 0) {
+        return;
+      }
+
+      for (const [index, entryRaw] of list.entries()) {
+        const entry = getRecord(entryRaw);
+        if (!entry || !Object.prototype.hasOwnProperty.call(entry, "routing")) {
+          continue;
+        }
+
+        const agentId =
+          typeof entry.id === "string" && entry.id.trim().length > 0
+            ? entry.id.trim()
+            : `index-${index}`;
+
+        const legacyRouting = getRecord(entry.routing);
+        const legacyGroupChat = getRecord(legacyRouting?.groupChat);
+        if (legacyGroupChat?.mentionPatterns !== undefined) {
+          const groupChat = ensureRecord(entry, "groupChat");
+          if (groupChat.mentionPatterns === undefined) {
+            groupChat.mentionPatterns = legacyGroupChat.mentionPatterns;
+            changes.push(
+              `Moved agents.list (id "${agentId}").routing.groupChat.mentionPatterns → agents.list (id "${agentId}").groupChat.mentionPatterns.`,
+            );
+          } else {
+            changes.push(
+              `Removed agents.list (id "${agentId}").routing.groupChat.mentionPatterns (agents.list groupChat mentionPatterns already set).`,
+            );
+          }
+        }
+
+        delete entry.routing;
+        changes.push(`Removed agents.list (id "${agentId}").routing.`);
+      }
+    },
+  },
 ];

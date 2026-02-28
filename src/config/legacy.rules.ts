@@ -17,6 +17,35 @@ function hasLegacyThreadBindingTtlInAccounts(value: unknown): boolean {
   );
 }
 
+function hasLegacyDiscordAllowlistAliases(value: unknown): boolean {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  const hasLegacyAliases = (entry: unknown): boolean =>
+    isRecord(entry) &&
+    (Object.prototype.hasOwnProperty.call(entry, "allowlist") ||
+      Object.prototype.hasOwnProperty.call(entry, "groupAllowFrom"));
+
+  if (hasLegacyAliases(value)) {
+    return true;
+  }
+
+  if (!isRecord(value.accounts)) {
+    return false;
+  }
+  return Object.values(value.accounts).some((account) => hasLegacyAliases(account));
+}
+
+function hasLegacyAgentListRoutingEntries(value: unknown): boolean {
+  if (!Array.isArray(value)) {
+    return false;
+  }
+  return value.some(
+    (entry) => isRecord(entry) && Object.prototype.hasOwnProperty.call(entry, "routing"),
+  );
+}
+
 export const LEGACY_CONFIG_RULES: LegacyConfigRule[] = [
   {
     path: ["whatsapp"],
@@ -63,6 +92,18 @@ export const LEGACY_CONFIG_RULES: LegacyConfigRule[] = [
     message:
       "channels.discord.accounts.<id>.threadBindings.ttlHours was renamed to channels.discord.accounts.<id>.threadBindings.idleHours (auto-migrated on load).",
     match: (value) => hasLegacyThreadBindingTtlInAccounts(value),
+  },
+  {
+    path: ["channels", "discord"],
+    message:
+      "channels.discord.allowlist/groupAllowFrom aliases were removed; use allowFrom and guild/channel policy settings instead (auto-migrated on load).",
+    match: (value) => hasLegacyDiscordAllowlistAliases(value),
+  },
+  {
+    path: ["agents", "list"],
+    message:
+      "agents.list[].routing was removed; use top-level bindings/session routing settings instead (auto-migrated on load).",
+    match: (value) => hasLegacyAgentListRoutingEntries(value),
   },
   {
     path: ["routing", "allowFrom"],

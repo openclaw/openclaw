@@ -103,4 +103,28 @@ describe("legacy migrate mention routing", () => {
       (res.config?.channels?.telegram as { requireMention?: unknown } | undefined)?.requireMention,
     ).toBeUndefined();
   });
+
+  it("drops routing.agents.*.routing while preserving mention patterns", () => {
+    const res = migrateLegacyConfig({
+      routing: {
+        agents: {
+          main: {
+            routing: {
+              groupChat: { mentionPatterns: ["@openclaw"] },
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.changes).toContain(
+      'Moved routing.agents.main.routing.groupChat.mentionPatterns → agents.list (id "main").groupChat.mentionPatterns.',
+    );
+    expect(res.changes).toContain("Removed routing.agents.main.routing.");
+    expect(res.changes).toContain("Moved routing.agents → agents.list.");
+    expect(res.config?.agents?.list?.[0]?.groupChat?.mentionPatterns).toEqual(["@openclaw"]);
+    expect(
+      (res.config?.agents?.list?.[0] as { routing?: unknown } | undefined)?.routing,
+    ).toBeUndefined();
+  });
 });
