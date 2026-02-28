@@ -312,6 +312,107 @@ describe("applyCustomApiConfig", () => {
   ])("rejects $name", ({ params, expectedMessage }) => {
     expect(() => applyCustomApiConfig(params)).toThrow(expectedMessage);
   });
+
+  it("uses custom contextWindow and maxTokens when provided", () => {
+    const result = applyCustomApiConfig({
+      config: {},
+      baseUrl: "https://llm.example.com/v1",
+      modelId: "foo-large",
+      compatibility: "openai",
+      contextWindow: 32000,
+      maxTokens: 8192,
+    });
+    const provider = result.config.models?.providers?.[result.providerId!];
+    const model = provider?.models?.find((m: { id: string }) => m.id === "foo-large");
+    expect(model?.contextWindow).toBe(32000);
+    expect(model?.maxTokens).toBe(8192);
+  });
+
+  it("defaults contextWindow to 16000 and maxTokens to 4096 when omitted", () => {
+    const result = applyCustomApiConfig({
+      config: {},
+      baseUrl: "https://llm.example.com/v1",
+      modelId: "foo-large",
+      compatibility: "openai",
+    });
+    const provider = result.config.models?.providers?.[result.providerId!];
+    const model = provider?.models?.find((m: { id: string }) => m.id === "foo-large");
+    expect(model?.contextWindow).toBe(16000);
+    expect(model?.maxTokens).toBe(4096);
+  });
+
+  it("updates contextWindow and maxTokens when re-onboarding an existing model", () => {
+    const first = applyCustomApiConfig({
+      config: {},
+      baseUrl: "https://llm.example.com/v1",
+      modelId: "foo-large",
+      compatibility: "openai",
+      contextWindow: 16000,
+      maxTokens: 4096,
+    });
+    const second = applyCustomApiConfig({
+      config: first.config,
+      baseUrl: "https://llm.example.com/v1",
+      modelId: "foo-large",
+      compatibility: "openai",
+      contextWindow: 64000,
+      maxTokens: 16384,
+    });
+    const provider = second.config.models?.providers?.[second.providerId!];
+    const models = provider?.models?.filter((m: { id: string }) => m.id === "foo-large");
+    expect(models).toHaveLength(1);
+    expect(models![0].contextWindow).toBe(64000);
+    expect(models![0].maxTokens).toBe(16384);
+  });
+
+  it.each([
+    {
+      name: "contextWindow below 16000",
+      params: {
+        config: {},
+        baseUrl: "https://llm.example.com/v1",
+        modelId: "foo-large",
+        compatibility: "openai" as const,
+        contextWindow: 8000,
+      },
+      expectedMessage: "Custom context window must be an integer >= 16000.",
+    },
+    {
+      name: "maxTokens below 1000",
+      params: {
+        config: {},
+        baseUrl: "https://llm.example.com/v1",
+        modelId: "foo-large",
+        compatibility: "openai" as const,
+        maxTokens: 500,
+      },
+      expectedMessage: "Custom max tokens must be an integer >= 1000.",
+    },
+    {
+      name: "non-integer contextWindow",
+      params: {
+        config: {},
+        baseUrl: "https://llm.example.com/v1",
+        modelId: "foo-large",
+        compatibility: "openai" as const,
+        contextWindow: 16000.5,
+      },
+      expectedMessage: "Custom context window must be an integer >= 16000.",
+    },
+    {
+      name: "non-integer maxTokens",
+      params: {
+        config: {},
+        baseUrl: "https://llm.example.com/v1",
+        modelId: "foo-large",
+        compatibility: "openai" as const,
+        maxTokens: 1000.7,
+      },
+      expectedMessage: "Custom max tokens must be an integer >= 1000.",
+    },
+  ])("rejects $name", ({ params, expectedMessage }) => {
+    expect(() => applyCustomApiConfig(params)).toThrow(expectedMessage);
+  });
 });
 
 describe("parseNonInteractiveCustomApiFlags", () => {
