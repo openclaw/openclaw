@@ -60,6 +60,22 @@ describe("model-selection", () => {
         provider: "anthropic",
         model: "claude-sonnet-4-6",
       });
+      expect(parseModelRef("anthropic/haiku", "openai")).toEqual({
+        provider: "anthropic",
+        model: "claude-haiku-4-5",
+      });
+      expect(parseModelRef("haiku-4.5", "anthropic")).toEqual({
+        provider: "anthropic",
+        model: "claude-haiku-4-5",
+      });
+      expect(parseModelRef("haiku-3.5", "anthropic")).toEqual({
+        provider: "anthropic",
+        model: "claude-haiku-4-5",
+      });
+      expect(parseModelRef("claude-haiku-3-5", "anthropic")).toEqual({
+        provider: "anthropic",
+        model: "claude-haiku-4-5",
+      });
     });
 
     it("should use default provider if none specified", () => {
@@ -111,6 +127,10 @@ describe("model-selection", () => {
       expect(parseModelRef("vercel-ai-gateway/opus-4.6", "openai")).toEqual({
         provider: "vercel-ai-gateway",
         model: "anthropic/claude-opus-4-6",
+      });
+      expect(parseModelRef("vercel-ai-gateway/haiku", "openai")).toEqual({
+        provider: "vercel-ai-gateway",
+        model: "anthropic/claude-haiku-4-5",
       });
     });
 
