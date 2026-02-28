@@ -381,12 +381,66 @@ describe("update-cli", () => {
       config: cfg,
       resolved: cfg,
     });
-    vi.mocked(runGatewayUpdate).mockResolvedValue(makeOkUpdateResult());
+    vi.mocked(runGatewayUpdate).mockResolvedValue(
+      makeOkUpdateResult({
+        after: { version: "2026.2.17" },
+      }),
+    );
 
     await updateCommand({});
 
     const lastWrite = vi.mocked(writeConfigFile).mock.calls.at(-1)?.[0] as OpenClawConfig;
     expect(lastWrite).toEqual(cfg);
+    const lastWriteOptions = vi.mocked(writeConfigFile).mock.calls.at(-1)?.[1] as {
+      metaVersionOverride?: string;
+    };
+    expect(lastWriteOptions?.metaVersionOverride).toBe("2026.2.17");
+  });
+
+  it("skips metadata refresh when config uses include directives", async () => {
+    const cfg = { gateway: { mode: "local" } } as OpenClawConfig;
+    vi.mocked(readConfigFileSnapshot).mockResolvedValue({
+      ...baseSnapshot,
+      parsed: { $include: "./shared.json5" },
+      config: cfg,
+      resolved: cfg,
+    });
+    vi.mocked(runGatewayUpdate).mockResolvedValue(
+      makeOkUpdateResult({
+        after: { version: "2026.2.17" },
+      }),
+    );
+
+    await updateCommand({});
+
+    const metadataTouchCalls = vi
+      .mocked(writeConfigFile)
+      .mock.calls.filter(([, options]) =>
+        Boolean((options as { metaVersionOverride?: string })?.metaVersionOverride),
+      );
+    expect(metadataTouchCalls.length).toBe(0);
+  });
+
+  it("uses resolved target version when update result has no after.version", async () => {
+    const tempDir = createCaseDir("openclaw-update");
+    mockPackageInstallStatus(tempDir);
+    vi.mocked(resolveNpmChannelTag).mockResolvedValue({
+      tag: "latest",
+      version: "2026.2.17",
+    });
+    vi.mocked(runGatewayUpdate).mockResolvedValue(
+      makeOkUpdateResult({
+        mode: "npm",
+        after: {},
+      }),
+    );
+
+    await updateCommand({});
+
+    const lastWriteOptions = vi.mocked(writeConfigFile).mock.calls.at(-1)?.[1] as {
+      metaVersionOverride?: string;
+    };
+    expect(lastWriteOptions?.metaVersionOverride).toBe("2026.2.17");
   });
 
   it("updateCommand --dry-run previews without mutating", async () => {
