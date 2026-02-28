@@ -44,6 +44,30 @@ if (module.enableCompileCache && !process.env.NODE_DISABLE_COMPILE_CACHE) {
   }
 }
 
+// Fast-path: print version and exit without loading the dist bundle.
+{
+  const VERSION_FLAGS = new Set(["--version", "-v", "-V"]);
+  const args = process.argv.slice(2);
+  let wantsVersion = false;
+  for (const arg of args) {
+    if (arg === "--") break;
+    if (!arg.startsWith("-")) break; // stop at first non-flag (subcommand)
+    if (VERSION_FLAGS.has(arg)) {
+      wantsVersion = true;
+      break;
+    }
+  }
+  if (wantsVersion) {
+    let version = process.env.OPENCLAW_BUNDLED_VERSION;
+    if (!version) {
+      const require = module.createRequire(import.meta.url);
+      version = require("./package.json").version;
+    }
+    process.stdout.write(`${version}\n`);
+    process.exit(0);
+  }
+}
+
 const isModuleNotFoundError = (err) =>
   err && typeof err === "object" && "code" in err && err.code === "ERR_MODULE_NOT_FOUND";
 
