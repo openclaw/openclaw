@@ -35,6 +35,7 @@ export type SlackMessageEvent = {
   subtype?: string;
   username?: string;
   text?: string;
+  blocks?: unknown[];
   ts?: string;
   thread_ts?: string;
   event_ts?: string;
@@ -51,6 +52,7 @@ export type SlackAppMentionEvent = {
   bot_id?: string;
   username?: string;
   text?: string;
+  blocks?: unknown[];
   ts?: string;
   thread_ts?: string;
   event_ts?: string;

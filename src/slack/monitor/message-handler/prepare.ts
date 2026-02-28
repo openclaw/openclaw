@@ -50,6 +50,56 @@ import {
 import { resolveSlackRoomContextHints } from "../room-context.js";
 import type { PreparedSlackMessage } from "./types.js";
 
+function normalizeSlackText(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = value.replace(/\s+/g, " ").trim();
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function collectSlackBlockText(value: unknown, out: string[], depth = 0) {
+  if (depth > 8 || value == null) {
+    return;
+  }
+  if (typeof value === "string") {
+    const normalized = normalizeSlackText(value);
+    if (normalized) {
+      out.push(normalized);
+    }
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      collectSlackBlockText(item, out, depth + 1);
+    }
+    return;
+  }
+  if (typeof value !== "object") {
+    return;
+  }
+
+  const record = value as Record<string, unknown>;
+  // Collect canonical Block Kit text containers.
+  collectSlackBlockText(record.text, out, depth + 1);
+  collectSlackBlockText(record.alt_text, out, depth + 1);
+  collectSlackBlockText(record.title, out, depth + 1);
+  collectSlackBlockText(record.fields, out, depth + 1);
+  collectSlackBlockText(record.elements, out, depth + 1);
+}
+
+function resolveSlackInboundBlocksText(blocks: unknown): string | undefined {
+  if (!Array.isArray(blocks) || blocks.length === 0) {
+    return undefined;
+  }
+  const parts: string[] = [];
+  collectSlackBlockText(blocks, parts);
+  if (parts.length === 0) {
+    return undefined;
+  }
+  return parts.join("\n");
+}
+
 export async function prepareSlackMessage(params: {
   ctx: SlackMonitorContext;
   account: ResolvedSlackAccount;
@@ -350,8 +400,16 @@ export async function prepareSlackMessage(params: {
       : undefined;
   const fileOnlyPlaceholder = fileOnlyFallback ? `[Slack file: ${fileOnlyFallback}]` : undefined;
 
+  const trimmedMessageText = (message.text ?? "").trim();
+  const blockBody = resolveSlackInboundBlocksText(message.blocks);
+  const primaryBody =
+    blockBody &&
+    (isBotMessage ? blockBody.length >= trimmedMessageText.length : !trimmedMessageText)
+      ? blockBody
+      : trimmedMessageText;
+
   const rawBody =
-    [(message.text ?? "").trim(), attachmentContent?.text, mediaPlaceholder, fileOnlyPlaceholder]
+    [primaryBody, attachmentContent?.text, mediaPlaceholder, fileOnlyPlaceholder]
       .filter(Boolean)
       .join("\n") || "";
   if (!rawBody) {

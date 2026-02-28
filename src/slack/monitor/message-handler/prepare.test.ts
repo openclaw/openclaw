@@ -210,6 +210,59 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(prepared!.ctxPayload.RawBody).toContain("[Forwarded message from Bob]\nForwarded hello");
   });
 
+  it("prefers blocks text for bot messages when fallback text is truncated", async () => {
+    const slackCtx = createInboundSlackCtx({
+      cfg: {
+        channels: { slack: { enabled: true, allowBots: true } },
+      } as OpenClawConfig,
+      defaultRequireMention: false,
+    });
+    slackCtx.resolveUserName = async () => ({ name: "Bot Sender" }) as never;
+
+    const prepared = await prepareMessageWith(
+      slackCtx,
+      createSlackAccount({ allowBots: true }),
+      createSlackMessage({
+        channel: "C123",
+        channel_type: "channel",
+        bot_id: "B2",
+        user: undefined,
+        text: "Please confirm you see",
+        blocks: [
+          {
+            type: "section",
+            text: {
+              type: "mrkdwn",
+              text: "Please confirm you see this full proposal: Phase 2 Sprint includes auth hardening, queue reliability and rollout checklist.",
+            },
+          },
+        ],
+      }),
+    );
+
+    expect(prepared).toBeTruthy();
+    expect(prepared!.ctxPayload.RawBody).toContain("Phase 2 Sprint includes auth hardening");
+    expect(prepared!.ctxPayload.RawBody).not.toBe("Please confirm you see");
+  });
+
+  it("keeps direct text for human messages when text is present", async () => {
+    const prepared = await prepareWithDefaultCtx(
+      createSlackMessage({
+        text: "Human plain text message",
+        blocks: [
+          {
+            type: "section",
+            text: { type: "mrkdwn", text: "Block variant" },
+          },
+        ],
+      }),
+    );
+
+    expect(prepared).toBeTruthy();
+    expect(prepared!.ctxPayload.RawBody).toContain("Human plain text message");
+    expect(prepared!.ctxPayload.RawBody).not.toContain("Block variant");
+  });
+
   it("ignores non-forward attachments when no direct text/files are present", async () => {
     const prepared = await prepareWithDefaultCtx(
       createSlackMessage({
