@@ -251,8 +251,9 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = {
   threading: {
     resolveReplyToMode: ({ cfg, accountId, chatType }) => {
       const account = resolveMattermostAccount({ cfg, accountId });
-      if (account.config.replyToModeByChatType?.[chatType ?? ""] !== undefined) {
-        return account.config.replyToModeByChatType[chatType ?? ""] ?? "off";
+      const normalizedChatType = (chatType ?? "") as import("./types.js").MattermostChatTypeKey;
+      if (account.config.replyToModeByChatType?.[normalizedChatType] !== undefined) {
+        return account.config.replyToModeByChatType[normalizedChatType] ?? "off";
       }
       if (chatType === "direct" && account.config.dm?.replyToMode !== undefined) {
         return account.config.dm.replyToMode ?? "off";
