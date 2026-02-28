@@ -26,7 +26,7 @@ metadata:
             },
             {
               "id": "snap",
-              "kind": "apt",
+              "kind": "snap",
               "label": "Install Obsidian via Snap (Linux)",
               "command": "sudo snap install obsidian --classic",
               "bins": ["obsidian"],
