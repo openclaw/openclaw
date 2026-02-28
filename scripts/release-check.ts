@@ -3,6 +3,7 @@
 import { execSync } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { sparkleBuildFloorsFromShortVersion, type SparkleBuildFloors } from "./sparkle-build.ts";
 
 type PackFile = { path: string };
 type PackResult = { files?: PackFile[] };
@@ -20,12 +21,6 @@ const appcastPath = resolve("appcast.xml");
 type PackageJson = {
   name?: string;
   version?: string;
-};
-
-type CalverSparkleFloors = {
-  dateKey: number;
-  legacyFloor: number;
-  laneFloor: number;
 };
 
 function normalizePluginSyncVersion(version: string): string {
@@ -94,45 +89,6 @@ function checkPluginVersions() {
   }
 }
 
-function sparkleFloorsFromShortVersion(shortVersion: string): CalverSparkleFloors | null {
-  const match = /^([0-9]{4})\.([0-9]{1,2})\.([0-9]{1,2})([.-].*)?$/.exec(shortVersion.trim());
-  if (!match) {
-    return null;
-  }
-  const year = Number(match[1]);
-  const month = Number(match[2]);
-  const day = Number(match[3]);
-  if (
-    !Number.isInteger(year) ||
-    !Number.isInteger(month) ||
-    !Number.isInteger(day) ||
-    month < 1 ||
-    month > 12 ||
-    day < 1 ||
-    day > 31
-  ) {
-    return null;
-  }
-
-  const dateKey = Number(`${year}${String(month).padStart(2, "0")}${String(day).padStart(2, "0")}`);
-  const legacyFloor = Number(`${dateKey}0`);
-
-  // Must stay aligned with canonical_build_from_version in scripts/package-mac-app.sh.
-  const suffix = match[4] ?? "";
-  let lane = 90;
-  if (suffix.length > 0) {
-    const numericSuffix = /([0-9]+)$/.exec(suffix)?.[1];
-    if (numericSuffix) {
-      lane = Math.min(Number.parseInt(numericSuffix, 10), 89);
-    } else {
-      lane = 1;
-    }
-  }
-
-  const laneFloor = Number(`${dateKey}${String(lane).padStart(2, "0")}`);
-  return { dateKey, legacyFloor, laneFloor };
-}
-
 function extractTag(item: string, tag: string): string | null {
   const escapedTag = tag.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const regex = new RegExp(`<${escapedTag}>([^<]+)</${escapedTag}>`);
@@ -143,7 +99,7 @@ function checkAppcastSparkleVersions() {
   const xml = readFileSync(appcastPath, "utf8");
   const itemMatches = [...xml.matchAll(/<item>([\s\S]*?)<\/item>/g)];
   const errors: string[] = [];
-  const calverItems: Array<{ title: string; sparkleBuild: number; floors: CalverSparkleFloors }> =
+  const calverItems: Array<{ title: string; sparkleBuild: number; floors: SparkleBuildFloors }> =
     [];
 
   if (itemMatches.length === 0) {
@@ -167,13 +123,12 @@ function checkAppcastSparkleVersions() {
     if (!shortVersion) {
       continue;
     }
-    const floors = sparkleFloorsFromShortVersion(shortVersion);
+    const floors = sparkleBuildFloorsFromShortVersion(shortVersion);
     if (floors === null) {
       continue;
     }
 
-    const sparkleBuild = Number(sparkleVersion);
-    calverItems.push({ title, sparkleBuild, floors });
+    calverItems.push({ title, sparkleBuild: Number(sparkleVersion), floors });
   }
 
   const adoptionDateKey = calverItems
@@ -186,7 +141,6 @@ function checkAppcastSparkleVersions() {
       item.sparkleBuild >= 1_000_000_000 ||
       (typeof adoptionDateKey === "number" && item.floors.dateKey >= adoptionDateKey);
     const floor = expectLaneFloor ? item.floors.laneFloor : item.floors.legacyFloor;
-
     if (item.sparkleBuild < floor) {
       const floorLabel = expectLaneFloor ? "lane floor" : "legacy floor";
       errors.push(
