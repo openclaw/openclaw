@@ -1,56 +1,5 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 
-// Style-Bert-VITS2 API types
-type Sbv2Model = {
-  model_id: number;
-  model_name: string;
-  spk2id: Record<string, number>;
-  style2id: Record<string, number>;
-};
-
-type Sbv2Config = {
-  endpoint?: string;
-  modelId?: string;
-  speakerId?: number;
-  style?: string;
-  styleWeight?: number;
-  speed?: number;
-};
-
-async function listSbv2Models(endpoint: string): Promise<Sbv2Model[]> {
-  const res = await fetch(`${endpoint.replace(/\/$/, "")}/models/info`);
-  if (!res.ok) {
-    throw new Error(`SBV2 API error (${res.status}): ${await res.text()}`);
-  }
-  return (await res.json()) as Sbv2Model[];
-}
-
-async function generateSbv2Speech(
-  endpoint: string,
-  text: string,
-  cfg: Sbv2Config,
-): Promise<string> {
-  const base = endpoint.replace(/\/$/, "");
-  const modelId = cfg.modelId ?? "Hakua";
-  const speakerId = cfg.speakerId ?? 0;
-  const style = cfg.style ?? "Neutral";
-  const styleWeight = cfg.styleWeight ?? 1.0;
-  const speed = cfg.speed ?? 1.0;
-
-  const params = new URLSearchParams({
-    text,
-    model_id: modelId,
-    speaker_id: String(speakerId),
-    style,
-    style_weight: String(styleWeight),
-    speed: String(speed),
-    language: "JP",
-    auto_split: "true",
-  });
-  const url = `${base}/voice?${params.toString()}`;
-  return url;
-}
-
 type ElevenLabsVoice = {
   voice_id: string;
   name?: string;
@@ -127,7 +76,7 @@ function findVoice(voices: ElevenLabsVoice[], query: string): ElevenLabsVoice | 
 export default function register(api: OpenClawPluginApi) {
   api.registerCommand({
     name: "voice",
-    description: "List/set Talk voice. Supports ElevenLabs and Style-Bert-VITS2.",
+    description: "List/set ElevenLabs Talk voice (affects iOS Talk playback).",
     acceptsArgs: true,
     handler: async (ctx) => {
       const args = ctx.args?.trim() ?? "";
@@ -135,112 +84,13 @@ export default function register(api: OpenClawPluginApi) {
       const action = (tokens[0] ?? "status").toLowerCase();
 
       const cfg = api.runtime.config.loadConfig();
-
-      // Determine provider from plugin config or talk config
-      const pluginCfg = (cfg.plugins?.entries?.["talk-voice"]?.config ?? {}) as {
-        provider?: string;
-        styleBertVits2?: Sbv2Config;
-      };
-      const provider = pluginCfg.provider ?? "elevenlabs";
-
-      // --- Style-Bert-VITS2 provider ---
-      if (provider === "style-bert-vits2") {
-        const sbv2Cfg = pluginCfg.styleBertVits2 ?? {};
-        const endpoint = (sbv2Cfg.endpoint ?? "http://localhost:5000").trim();
-
-        if (action === "status") {
-          return {
-            text:
-              "Talk voice status (Style-Bert-VITS2):\n" +
-              `- endpoint: ${endpoint}\n` +
-              `- model: ${sbv2Cfg.modelId ?? "Hakua"}\n` +
-              `- speaker: ${sbv2Cfg.speakerId ?? 0}\n` +
-              `- style: ${sbv2Cfg.style ?? "Neutral"}\n` +
-              `- speed: ${sbv2Cfg.speed ?? 1.0}`,
-          };
-        }
-
-        if (action === "list") {
-          const models = await listSbv2Models(endpoint);
-          const lines = ["Style-Bert-VITS2 Models:", ""];
-          for (const m of models) {
-            lines.push(`- ${m.model_name} (id: ${m.model_id})`);
-            const speakers = Object.keys(m.spk2id ?? {}).join(", ");
-            if (speakers) {
-              lines.push(`  speakers: ${speakers}`);
-            }
-            const styles = Object.keys(m.style2id ?? {}).join(", ");
-            if (styles) {
-              lines.push(`  styles: ${styles}`);
-            }
-          }
-          return { text: lines.join("\n") };
-        }
-
-        if (action === "set") {
-          const modelName = tokens.slice(1).join(" ").trim();
-          if (!modelName) {
-            return { text: "Usage: /voice set <modelName> [speakerId] [style]" };
-          }
-          const speakerId = tokens[2] ? Number.parseInt(tokens[2], 10) : 0;
-          const style = tokens[3] ?? "Neutral";
-          const nextConfig = {
-            ...cfg,
-            plugins: {
-              ...cfg.plugins,
-              entries: {
-                ...(cfg.plugins?.entries ?? {}),
-                "talk-voice": {
-                  ...(cfg.plugins?.entries?.["talk-voice"] ?? {}),
-                  config: {
-                    ...pluginCfg,
-                    provider: "style-bert-vits2",
-                    styleBertVits2: {
-                      ...sbv2Cfg,
-                      modelId: modelName,
-                      speakerId: Number.isFinite(speakerId) ? speakerId : 0,
-                      style,
-                    },
-                  },
-                },
-              },
-            },
-          };
-          await api.runtime.config.writeConfigFile(nextConfig);
-          return {
-            text: `✅ SBV2 voice set to model=${modelName} speaker=${speakerId} style=${style}`,
-          };
-        }
-
-        if (action === "speak") {
-          const text = tokens.slice(1).join(" ").trim();
-          if (!text) {
-            return { text: "Usage: /voice speak <text>" };
-          }
-          const url = await generateSbv2Speech(endpoint, text, sbv2Cfg);
-          return { text: `SBV2 audio URL: ${url}` };
-        }
-
-        return {
-          text: [
-            "Style-Bert-VITS2 voice commands:",
-            "",
-            "/voice status",
-            "/voice list",
-            "/voice set <modelName> [speakerId] [style]",
-            "/voice speak <text>",
-          ].join("\n"),
-        };
-      }
-
-      // --- ElevenLabs provider (default) ---
       const apiKey = (cfg.talk?.apiKey ?? "").trim();
       if (!apiKey) {
         return {
           text:
             "Talk voice is not configured.\n\n" +
             "Missing: talk.apiKey (ElevenLabs API key).\n" +
-            "Or set plugins.entries.talk-voice.config.provider = 'style-bert-vits2' for local TTS.",
+            "Set it on the gateway, then retry.",
         };
       }
 
@@ -249,7 +99,7 @@ export default function register(api: OpenClawPluginApi) {
       if (action === "status") {
         return {
           text:
-            "Talk voice status (ElevenLabs):\n" +
+            "Talk voice status:\n" +
             `- talk.voiceId: ${currentVoiceId ? currentVoiceId : "(unset)"}\n` +
             `- talk.apiKey: ${mask(apiKey)}`,
         };
@@ -293,8 +143,6 @@ export default function register(api: OpenClawPluginApi) {
           "/voice status",
           "/voice list [limit]",
           "/voice set <voiceId|name>",
-          "",
-          "Tip: Switch to SBV2 with: plugins.entries.talk-voice.config.provider = 'style-bert-vits2'",
         ].join("\n"),
       };
     },

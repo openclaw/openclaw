@@ -1,54 +1,10 @@
 {
   "id": "talk-voice",
   "name": "Talk Voice",
-  "description": "Manage Talk voice selection (list/set). Supports ElevenLabs and Style-Bert-VITS2.",
+  "description": "Manage Talk voice selection (list/set).",
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
-    "properties": {
-      "provider": {
-        "type": "string",
-        "enum": ["elevenlabs", "style-bert-vits2", "system"],
-        "description": "TTS provider to use.",
-        "default": "elevenlabs"
-      },
-      "styleBertVits2": {
-        "type": "object",
-        "additionalProperties": false,
-        "description": "Style-Bert-VITS2 configuration",
-        "properties": {
-          "endpoint": {
-            "type": "string",
-            "description": "HTTP endpoint of the SBV2 API server.",
-            "default": "http://localhost:5000"
-          },
-          "modelId": {
-            "type": "string",
-            "description": "SBV2 model name to use.",
-            "default": "Hakua"
-          },
-          "speakerId": {
-            "type": "number",
-            "description": "Speaker ID within the model.",
-            "default": 0
-          },
-          "style": {
-            "type": "string",
-            "description": "Speaking style (Neutral, Happy, Sad, etc.)",
-            "default": "Neutral"
-          },
-          "styleWeight": {
-            "type": "number",
-            "description": "Style blend weight (0.0 - 1.0).",
-            "default": 1.0
-          },
-          "speed": {
-            "type": "number",
-            "description": "Speech speed multiplier.",
-            "default": 1.0
-          }
-        }
-      }
-    }
+    "properties": {}
   }
 }
