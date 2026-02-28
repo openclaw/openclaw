@@ -5,6 +5,7 @@ import { resolveConfigDir, resolveUserPath } from "../utils.js";
 import { resolveBundledPluginsDir } from "./bundled-dir.js";
 import {
   getPackageManifestMetadata,
+  shouldRejectHardlinkedPluginFiles,
   type OpenClawPackageManifest,
   type PackageManifest,
 } from "./manifest.js";
@@ -223,12 +224,16 @@ function shouldIgnoreScannedDirectory(dirName: string): boolean {
   return false;
 }
 
-function readPackageManifest(dir: string): PackageManifest | null {
+function readPackageManifest(
+  dir: string,
+  options?: { rejectHardlinks?: boolean },
+): PackageManifest | null {
   const manifestPath = path.join(dir, "package.json");
   const opened = openBoundaryFileSync({
     absolutePath: manifestPath,
     rootPath: dir,
     boundaryLabel: "plugin package directory",
+    rejectHardlinks: options?.rejectHardlinks,
   });
   if (!opened.ok) {
     return null;
@@ -324,12 +329,14 @@ function resolvePackageEntrySource(params: {
   entryPath: string;
   sourceLabel: string;
   diagnostics: PluginDiagnostic[];
+  rejectHardlinks?: boolean;
 }): string | null {
   const source = path.resolve(params.packageDir, params.entryPath);
   const opened = openBoundaryFileSync({
     absolutePath: source,
     rootPath: params.packageDir,
     boundaryLabel: "plugin package directory",
+    rejectHardlinks: params.rejectHardlinks,
   });
   if (!opened.ok) {
     params.diagnostics.push({
@@ -367,6 +374,7 @@ function discoverInDirectory(params: {
     });
     return;
   }
+  const rejectHardlinks = shouldRejectHardlinkedPluginFiles(params.origin);
 
   for (const entry of entries) {
     const fullPath = path.join(params.dir, entry.name);
@@ -393,7 +401,7 @@ function discoverInDirectory(params: {
       continue;
     }
 
-    const manifest = readPackageManifest(fullPath);
+    const manifest = readPackageManifest(fullPath, { rejectHardlinks });
     const extensions = manifest ? resolvePackageExtensions(manifest) : [];
 
     if (extensions.length > 0) {
@@ -403,6 +411,7 @@ function discoverInDirectory(params: {
           entryPath: extPath,
           sourceLabel: fullPath,
           diagnostics: params.diagnostics,
+          rejectHardlinks,
         });
         if (!resolved) {
           continue;
@@ -470,6 +479,7 @@ function discoverFromPath(params: {
   }
 
   const stat = fs.statSync(resolved);
+  const rejectHardlinks = shouldRejectHardlinkedPluginFiles(params.origin);
   if (stat.isFile()) {
     if (!isExtensionFile(resolved)) {
       params.diagnostics.push({
@@ -494,7 +504,7 @@ function discoverFromPath(params: {
   }
 
   if (stat.isDirectory()) {
-    const manifest = readPackageManifest(resolved);
+    const manifest = readPackageManifest(resolved, { rejectHardlinks });
     const extensions = manifest ? resolvePackageExtensions(manifest) : [];
 
     if (extensions.length > 0) {
@@ -504,6 +514,7 @@ function discoverFromPath(params: {
           entryPath: extPath,
           sourceLabel: resolved,
           diagnostics: params.diagnostics,
+          rejectHardlinks,
         });
         if (!source) {
           continue;

@@ -18,6 +18,7 @@ import {
 import { discoverOpenClawPlugins } from "./discovery.js";
 import { initializeGlobalHookRunner } from "./hook-runner-global.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
+import { shouldRejectHardlinkedPluginFiles } from "./manifest.js";
 import { isPathInside, safeStatSync } from "./path-safety.js";
 import { createPluginRegistry, type PluginRecord, type PluginRegistry } from "./registry.js";
 import { setActivePluginRegistry } from "./runtime.js";
@@ -530,6 +531,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       absolutePath: candidate.source,
       rootPath: pluginRoot,
       boundaryLabel: "plugin root",
+      rejectHardlinks: shouldRejectHardlinkedPluginFiles(candidate.origin),
       // Discovery stores rootDir as realpath but source may still be a lexical alias
       // (e.g. /var/... vs /private/var/... on macOS). Canonical boundary checks
       // still enforce containment; skip lexical pre-check to avoid false escapes.

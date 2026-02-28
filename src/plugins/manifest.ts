@@ -3,7 +3,7 @@ import path from "node:path";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { isRecord } from "../utils.js";
-import type { PluginConfigUiHint, PluginKind } from "./types.js";
+import type { PluginConfigUiHint, PluginKind, PluginOrigin } from "./types.js";
 
 export const PLUGIN_MANIFEST_FILENAME = "openclaw.plugin.json";
 export const PLUGIN_MANIFEST_FILENAMES = [PLUGIN_MANIFEST_FILENAME] as const;
@@ -42,12 +42,20 @@ export function resolvePluginManifestPath(rootDir: string): string {
   return path.join(rootDir, PLUGIN_MANIFEST_FILENAME);
 }
 
-export function loadPluginManifest(rootDir: string): PluginManifestLoadResult {
+export function shouldRejectHardlinkedPluginFiles(origin: PluginOrigin): boolean {
+  return origin !== "bundled";
+}
+
+export function loadPluginManifest(
+  rootDir: string,
+  options?: { rejectHardlinks?: boolean },
+): PluginManifestLoadResult {
   const manifestPath = resolvePluginManifestPath(rootDir);
   const opened = openBoundaryFileSync({
     absolutePath: manifestPath,
     rootPath: rootDir,
     boundaryLabel: "plugin root",
+    rejectHardlinks: options?.rejectHardlinks,
   });
   if (!opened.ok) {
     if (opened.reason === "path") {
