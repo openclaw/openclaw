@@ -390,6 +390,7 @@ export async function onTimer(state: CronServiceState) {
     }): Promise<TimedCronRunOutcome> => {
       const { id, job } = params;
     
+      const startedAt = state.deps.nowMs();
       job.state.runningAtMs = startedAt;
       emit(state, { jobId: job.id, action: "started", runAtMs: startedAt });
       const jobTimeoutMs = resolveCronJobTimeoutMs(job);
