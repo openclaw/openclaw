@@ -445,8 +445,8 @@ describe("config io write", () => {
         .find((entry) => typeof entry === "string" && entry.startsWith("Config overwrite:"));
       expect(typeof overwriteLog).toBe("string");
       expect(overwriteLog).toContain(configPath);
-      expect(overwriteLog).toContain(`${configPath}.bak`);
       expect(overwriteLog).toContain("sha256");
+      await expect(fs.stat(`${configPath}.bak`)).rejects.toThrow();
     });
   });
 
