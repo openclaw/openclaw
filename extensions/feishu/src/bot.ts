@@ -760,6 +760,10 @@ export async function handleFeishuMessage(params: {
     let peerId = isGroup ? ctx.chatId : ctx.senderOpenId;
     let groupSessionScope: "group" | "group_sender" | "group_topic" | "group_topic_sender" =
       "group";
+    let topicRootForSession: string | null = null;
+    const replyInThread =
+      isGroup &&
+      (groupConfig?.replyInThread ?? feishuCfg?.replyInThread ?? "disabled") === "enabled";
 
     if (isGroup) {
       const legacyTopicSessionMode =
@@ -769,16 +773,22 @@ export async function handleFeishuMessage(params: {
         feishuCfg?.groupSessionScope ??
         (legacyTopicSessionMode === "enabled" ? "group_topic" : "group");
 
+      // When topic-scoped sessions are enabled and replyInThread is on, the first
+      // bot reply creates the thread rooted at the current message ID.
+      if (groupSessionScope === "group_topic" || groupSessionScope === "group_topic_sender") {
+        topicRootForSession = ctx.rootId ?? (replyInThread ? ctx.messageId : null);
+      }
+
       switch (groupSessionScope) {
         case "group_sender":
           peerId = `${ctx.chatId}:sender:${ctx.senderOpenId}`;
           break;
         case "group_topic":
-          peerId = ctx.rootId ? `${ctx.chatId}:topic:${ctx.rootId}` : ctx.chatId;
+          peerId = topicRootForSession ? `${ctx.chatId}:topic:${topicRootForSession}` : ctx.chatId;
           break;
         case "group_topic_sender":
-          peerId = ctx.rootId
-            ? `${ctx.chatId}:topic:${ctx.rootId}:sender:${ctx.senderOpenId}`
+          peerId = topicRootForSession
+            ? `${ctx.chatId}:topic:${topicRootForSession}:sender:${ctx.senderOpenId}`
             : `${ctx.chatId}:sender:${ctx.senderOpenId}`;
           break;
         case "group":
@@ -801,7 +811,7 @@ export async function handleFeishuMessage(params: {
       // Add parentPeer for binding inheritance in topic-scoped modes.
       parentPeer:
         isGroup &&
-        ctx.rootId &&
+        topicRootForSession &&
         (groupSessionScope === "group_topic" || groupSessionScope === "group_topic_sender")
           ? {
               kind: "group",
@@ -965,6 +975,7 @@ export async function handleFeishuMessage(params: {
       runtime: runtime as RuntimeEnv,
       chatId: ctx.chatId,
       replyToMessageId: ctx.messageId,
+      replyInThread,
       mentionTargets: ctx.mentionTargets,
       accountId: account.accountId,
     });
