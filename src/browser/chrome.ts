@@ -285,6 +285,13 @@ export async function launchOpenClawChrome(
   }
 
   const proc = spawnOnce();
+
+  // Collect stderr for diagnostics in case Chrome fails to start.
+  const stderrChunks: Buffer[] = [];
+  proc.stderr?.on("data", (chunk: Buffer) => {
+    stderrChunks.push(chunk);
+  });
+
   // Wait for CDP to come up.
   const readyDeadline = Date.now() + 15_000;
   while (Date.now() < readyDeadline) {
@@ -295,13 +302,21 @@ export async function launchOpenClawChrome(
   }
 
   if (!(await isChromeReachable(profile.cdpUrl, 500))) {
+    const stderrOutput = Buffer.concat(stderrChunks).toString("utf8").trim();
+    const stderrHint = stderrOutput
+      ? `\nChrome stderr:\n${stderrOutput.slice(0, 2000)}`
+      : "";
+    const sandboxHint =
+      process.platform === "linux" && !resolved.noSandbox
+        ? "\nHint: If running in a container or as root, try setting browser.noSandbox: true in config."
+        : "";
     try {
       proc.kill("SIGKILL");
     } catch {
       // ignore
     }
     throw new Error(
-      `Failed to start Chrome CDP on port ${profile.cdpPort} for profile "${profile.name}".`,
+      `Failed to start Chrome CDP on port ${profile.cdpPort} for profile "${profile.name}".${sandboxHint}${stderrHint}`,
     );
   }
 
