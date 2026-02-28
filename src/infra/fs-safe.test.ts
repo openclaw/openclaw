@@ -67,7 +67,7 @@ describe("fs-safe", () => {
         rootDir: root,
         relativePath: path.join("..", path.basename(outside), "outside.txt"),
       }),
-    ).rejects.toMatchObject({ code: "invalid-path" });
+    ).rejects.toMatchObject({ code: "outside-workspace" });
   });
 
   it.runIf(process.platform !== "win32")("blocks symlink escapes under root", async () => {
@@ -131,7 +131,7 @@ describe("fs-safe", () => {
         relativePath: "../escape.txt",
         data: "x",
       }),
-    ).rejects.toMatchObject({ code: "invalid-path" });
+    ).rejects.toMatchObject({ code: "outside-workspace" });
   });
 
   it.runIf(process.platform !== "win32")("rejects writing through hardlink aliases", async () => {

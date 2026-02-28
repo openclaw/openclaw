@@ -75,6 +75,10 @@ export function attachMediaRoutes(
       });
     } catch (err) {
       if (err instanceof SafeOpenError) {
+        if (err.code === "outside-workspace") {
+          res.status(400).send("file is outside workspace root");
+          return;
+        }
         if (err.code === "invalid-path") {
           res.status(400).send("invalid path");
           return;
