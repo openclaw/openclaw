@@ -1010,9 +1010,19 @@ export function startHeartbeatRunner(opts: {
     return now + intervalMs;
   };
 
+  // Short retry delay when a heartbeat is skipped due to requests-in-flight.
+  // Avoids pushing the schedule forward by the full interval (e.g. 120 min)
+  // when the main lane is momentarily busy.
+  const SKIP_RETRY_DELAY_MS = 45_000;
+
   const advanceAgentSchedule = (agent: HeartbeatAgentState, now: number) => {
     agent.lastRunMs = now;
     agent.nextDueMs = now + agent.intervalMs;
+  };
+
+  /** Schedule a short retry without advancing lastRunMs. */
+  const scheduleAgentRetry = (agent: HeartbeatAgentState, now: number) => {
+    agent.nextDueMs = now + SKIP_RETRY_DELAY_MS;
   };
 
   const scheduleNext = () => {
@@ -1135,7 +1145,9 @@ export function startHeartbeatRunner(opts: {
           sessionKey: requestedSessionKey,
           deps: { runtime: state.runtime },
         });
-        if (res.status !== "skipped" || res.reason !== "disabled") {
+        if (res.status === "skipped" && res.reason === "requests-in-flight") {
+          scheduleAgentRetry(targetAgent, now);
+        } else if (res.status !== "skipped" || res.reason !== "disabled") {
           advanceAgentSchedule(targetAgent, now);
         }
         scheduleNext();
@@ -1174,7 +1186,7 @@ export function startHeartbeatRunner(opts: {
         continue;
       }
       if (res.status === "skipped" && res.reason === "requests-in-flight") {
-        advanceAgentSchedule(agent, now);
+        scheduleAgentRetry(agent, now);
         scheduleNext();
         return res;
       }

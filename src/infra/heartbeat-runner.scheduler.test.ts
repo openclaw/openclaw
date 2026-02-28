@@ -134,7 +134,7 @@ describe("startHeartbeatRunner", () => {
     expect(runSpy).not.toHaveBeenCalled();
   });
 
-  it("reschedules timer when runOnce returns requests-in-flight", async () => {
+  it("retries soon when runOnce returns requests-in-flight instead of waiting full interval", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(0));
 
@@ -158,9 +158,46 @@ describe("startHeartbeatRunner", () => {
     await vi.advanceTimersByTimeAsync(30 * 60_000 + 1_000);
     expect(runSpy).toHaveBeenCalledTimes(1);
 
-    // Timer should be rescheduled; next heartbeat should still fire
-    await vi.advanceTimersByTimeAsync(30 * 60_000 + 1_000);
+    // Retry should fire within ~45s, NOT after another 30 minutes.
+    // The wake layer retries after 1s, and the runner schedules at 45s;
+    // advancing 60s covers both.
+    await vi.advanceTimersByTimeAsync(60_000);
     expect(runSpy).toHaveBeenCalledTimes(2);
+
+    runner.stop();
+  });
+
+  it("does not advance lastRunMs on requests-in-flight skip", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(0));
+
+    let callCount = 0;
+    const runSpy = vi.fn().mockImplementation(async () => {
+      callCount++;
+      if (callCount <= 2) {
+        return { status: "skipped", reason: "requests-in-flight" };
+      }
+      return { status: "ran", durationMs: 1 };
+    });
+
+    const runner = startHeartbeatRunner({
+      cfg: {
+        agents: { defaults: { heartbeat: { every: "120m" } } },
+      } as OpenClawConfig,
+      runOnce: runSpy,
+    });
+
+    // First heartbeat: skipped (requests-in-flight)
+    await vi.advanceTimersByTimeAsync(120 * 60_000 + 1_000);
+    expect(runSpy).toHaveBeenCalledTimes(1);
+
+    // Second attempt ~45s later: still skipped
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(runSpy).toHaveBeenCalledTimes(2);
+
+    // Third attempt ~45s later: succeeds
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(runSpy).toHaveBeenCalledTimes(3);
 
     runner.stop();
   });
