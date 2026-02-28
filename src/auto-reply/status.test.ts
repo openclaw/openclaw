@@ -88,6 +88,28 @@ describe("buildStatusMessage", () => {
     expect(normalized).toContain("Queue: collect");
   });
 
+  it("falls back to sessionEntry levels when resolved levels are not passed", () => {
+    const text = buildStatusMessage({
+      agent: {
+        model: "anthropic/pi:opus",
+      },
+      sessionEntry: {
+        sessionId: "abc",
+        updatedAt: 0,
+        thinkingLevel: "high",
+        verboseLevel: "full",
+        reasoningLevel: "on",
+      },
+      sessionKey: "agent:main:main",
+      queue: { mode: "collect", depth: 0 },
+    });
+    const normalized = normalizeTestText(text);
+
+    expect(normalized).toContain("Think: high");
+    expect(normalized).toContain("verbose:full");
+    expect(normalized).toContain("Reasoning: on");
+  });
+
   it("uses per-agent sandbox config when config and session key are provided", () => {
     const text = buildStatusMessage({
       config: {
