@@ -1,4 +1,5 @@
 import { html } from "lit";
+import { t } from "../../i18n/index.ts";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { icons } from "../icons.ts";
 import { toSanitizedMarkdownHtml } from "../markdown.ts";
@@ -14,8 +15,8 @@ export function renderMarkdownSidebar(props: MarkdownSidebarProps) {
   return html`
     <div class="sidebar-panel">
       <div class="sidebar-header">
-        <div class="sidebar-title">Tool Output</div>
-        <button @click=${props.onClose} class="btn" title="Close sidebar">
+        <div class="sidebar-title">${t("markdown.sidebar.title")}</div>
+        <button @click=${props.onClose} class="btn" title=${t("markdown.sidebar.close")}>
           ${icons.x}
         </button>
       </div>
@@ -25,13 +26,13 @@ export function renderMarkdownSidebar(props: MarkdownSidebarProps) {
             ? html`
               <div class="callout danger">${props.error}</div>
               <button @click=${props.onViewRawText} class="btn" style="margin-top: 12px;">
-                View Raw Text
+                ${t("markdown.sidebar.viewRaw")}
               </button>
             `
             : props.content
               ? html`<div class="sidebar-markdown">${unsafeHTML(toSanitizedMarkdownHtml(props.content))}</div>`
               : html`
-                  <div class="muted">No content available</div>
+                  <div class="muted">${t("markdown.sidebar.noContent")}</div>
                 `
         }
       </div>

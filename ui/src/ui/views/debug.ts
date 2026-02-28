@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { t } from "../../i18n/index.ts";
 import type { EventLogEntry } from "../app-events.ts";
 import { formatEventPayload } from "../presenter.ts";
 
@@ -37,16 +38,16 @@ export function renderDebug(props: DebugProps) {
       <div class="card">
         <div class="row" style="justify-content: space-between;">
           <div>
-            <div class="card-title">Snapshots</div>
-            <div class="card-sub">Status, health, and heartbeat data.</div>
+            <div class="card-title">${t("debug.snapshots.title")}</div>
+            <div class="card-sub">${t("debug.snapshots.subtitle")}</div>
           </div>
           <button class="btn" ?disabled=${props.loading} @click=${props.onRefresh}>
-            ${props.loading ? "Refreshing…" : "Refresh"}
+            ${props.loading ? t("common.refreshing") : t("common.refresh")}
           </button>
         </div>
         <div class="stack" style="margin-top: 12px;">
           <div>
-            <div class="muted">Status</div>
+            <div class="muted">${t("debug.snapshots.status")}</div>
             ${
               securitySummary
                 ? html`<div class="callout ${securityTone}" style="margin-top: 8px;">
@@ -58,22 +59,22 @@ export function renderDebug(props: DebugProps) {
             <pre class="code-block">${JSON.stringify(props.status ?? {}, null, 2)}</pre>
           </div>
           <div>
-            <div class="muted">Health</div>
+            <div class="muted">${t("debug.snapshots.health")}</div>
             <pre class="code-block">${JSON.stringify(props.health ?? {}, null, 2)}</pre>
           </div>
           <div>
-            <div class="muted">Last heartbeat</div>
+            <div class="muted">${t("debug.snapshots.lastHeartbeat")}</div>
             <pre class="code-block">${JSON.stringify(props.heartbeat ?? {}, null, 2)}</pre>
           </div>
         </div>
       </div>
 
       <div class="card">
-        <div class="card-title">Manual RPC</div>
+        <div class="card-title">${t("debug.rpc.title")}</div>
         <div class="card-sub">Send a raw gateway method with JSON params.</div>
         <div class="form-grid" style="margin-top: 16px;">
           <label class="field">
-            <span>Method</span>
+            <span>${t("debug.rpc.method")}</span>
             <input
               .value=${props.callMethod}
               @input=${(e: Event) => props.onCallMethodChange((e.target as HTMLInputElement).value)}
@@ -81,7 +82,7 @@ export function renderDebug(props: DebugProps) {
             />
           </label>
           <label class="field">
-            <span>Params (JSON)</span>
+            <span>${t("debug.rpc.params")}</span>
             <textarea
               .value=${props.callParams}
               @input=${(e: Event) =>
@@ -109,7 +110,7 @@ export function renderDebug(props: DebugProps) {
     </section>
 
     <section class="card" style="margin-top: 18px;">
-      <div class="card-title">Models</div>
+      <div class="card-title">${t("debug.models.title")}</div>
       <div class="card-sub">Catalog from models.list.</div>
       <pre class="code-block" style="margin-top: 12px;">${JSON.stringify(
         props.models ?? [],
@@ -119,12 +120,12 @@ export function renderDebug(props: DebugProps) {
     </section>
 
     <section class="card" style="margin-top: 18px;">
-      <div class="card-title">Event Log</div>
-      <div class="card-sub">Latest gateway events.</div>
+      <div class="card-title">${t("debug.events.title")}</div>
+      <div class="card-sub">${t("debug.events.subtitle")}</div>
       ${
         props.eventLog.length === 0
           ? html`
-              <div class="muted" style="margin-top: 12px">No events yet.</div>
+              <div class="muted" style="margin-top: 12px">${t("debug.events.noEvents")}</div>
             `
           : html`
             <div class="list" style="margin-top: 12px;">
