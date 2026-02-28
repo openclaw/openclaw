@@ -219,6 +219,8 @@ PETRO_CONFIG = CycleConfig(
     report_title="석유화학 사이클 분석",
     demand_weight=20,
     cycle_weight=80,
+    vault_sector_note="325 석유화학",
+    related_vault_notes=["315 에너지-석화", "326 철강"],
 )
 
 
@@ -681,6 +683,14 @@ def build_petro_report(data: dict, pulse: dict, cycle: dict | None,
         L.append("|------|------|------|---------|----------|")
         for key, ind in sorted(indicators.items()):
             L.append(f"| {ind['name']} | {ind['close']:.2f} | {ind['change_pct']:+.1f}% | {ind['zscore']:+.2f} | {ind['category']} |")
+    L.append("")
+
+    # 볼트 연계
+    L.append("## 볼트 연계\n")
+    L.append(f"- 섹터 노트: [[{PETRO_CONFIG.vault_sector_note}]]")
+    if PETRO_CONFIG.related_vault_notes:
+        related = " | ".join(f"[[{n}]]" for n in PETRO_CONFIG.related_vault_notes)
+        L.append(f"- 관련 섹터: {related}")
     L.append("")
 
     return "\n".join(L)

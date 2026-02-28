@@ -56,6 +56,7 @@ DAILY       = ACTIVITY / "730 일일"
 # Ops 하위 경로
 PLAYBOOK    = OPS / "820 플레이북"
 REPORTS     = OPS / "840 리포트"
+SECTOR_NOTES = STRUCTURE / "320 산업"
 EXECUTION   = OPS / "850 실행"
 REPORTS_ARCHIVE   = REPORTS / "841 아카이브"
 REPORTS_HYPO      = REPORTS / "842 가설"

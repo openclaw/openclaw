@@ -68,6 +68,8 @@ class CycleConfig:
     score_history_max: int = 260                    # 히스토리 최대 건수
     peakout_history_max: int = 52                   # 피크아웃 히스토리 최대
     chart_dir_name: str = "charts"
+    vault_sector_note: str = ""                    # 볼트 섹터 노트명 (예: "322 조선업")
+    related_vault_notes: list[str] = field(default_factory=list)  # 관련 볼트 노트
 
     # derived paths
     @property

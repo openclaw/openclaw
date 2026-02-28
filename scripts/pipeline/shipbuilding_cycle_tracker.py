@@ -38,6 +38,28 @@ SCRIPTS_DIR = SCRIPT_DIR.parent
 sys.path.insert(0, str(SCRIPTS_DIR))
 
 from shared.log import make_logger  # noqa: E402
+from shared.cycle_base import (  # noqa: E402
+    CycleConfig, KST as _KST_BASE, CYCLE_PHASES as _CYCLE_PHASES_BASE,
+    DART_REPRT_CODES as _DART_REPRT_CODES_BASE,
+    DART_ACCOUNT_PATTERNS as _DART_ACCOUNT_PATTERNS_BASE,
+    compute_zscore_entry, fetch_kr_ohlcv, fetch_global_ohlcv,
+    zscore_to_ratio, zscore_to_1_10,
+    calculate_market_pulse_generic,
+    calculate_combined_score as _combined_score_generic,
+    determine_cycle_phase as _determine_cycle_phase_base,
+    append_score_history as _append_score_history_base,
+    load_score_history as _load_score_history_base,
+    append_peakout_history as _append_peakout_history_base,
+    load_peakout_history as _load_peakout_history_base,
+    load_manual_indicators as _load_manual_base,
+    save_manual_indicators as _save_manual_base,
+    peakout_item,
+    send_progress_dm as _send_progress_dm_base,
+    send_telegram_pdf_generic,
+    find_korean_font, render_md_section, setup_chart_env,
+    qoq_change, sorted_quarters,
+    load_json_safe, save_json_atomic,
+)
 
 # ── 선택적 라이브러리 (graceful degradation) ──────────────────────
 try:
@@ -61,7 +83,7 @@ except ImportError:
 # KR 종목 6자리 코드 (pykrx/FDR용, .KS suffix 불필요)
 _KR_TICKERS = {"hhi", "mipo", "engine", "hanwha", "samsung", "etf", "hanjin", "daehan"}
 
-KST = timezone(timedelta(hours=9))
+KST = _KST_BASE
 
 # ── 디렉토리 & 상수 ─────────────────────────────────────────────
 OUTPUT_DIR = SCRIPTS_DIR.parent / "memory" / "shipbuilding-indicators"
@@ -250,17 +272,11 @@ MANUAL_INDICATORS = {
 }
 
 # ── DART 재무제표 ─────────────────────────────────────────────────
-DART_REPRT_CODES = {"11013": "Q1", "11012": "Q2", "11014": "Q3", "11011": "Q4"}
-
+DART_REPRT_CODES = _DART_REPRT_CODES_BASE
 DART_ACCOUNT_PATTERNS: dict[str, list[str]] = {
-    "revenue":              ["매출액", "수익(매출액)"],
-    "operating_profit":     ["영업이익", "영업이익(손실)"],
-    "net_income":           ["당기순이익", "당기순이익(손실)", "분기순이익"],
+    **_DART_ACCOUNT_PATTERNS_BASE,
     "contract_assets":      ["계약자산"],
     "contract_liabilities": ["계약부채"],
-    "total_assets":         ["자산총계"],
-    "total_equity":         ["자본총계"],
-    "operating_cf":         ["영업활동현금흐름", "영업활동으로인한현금흐름"],
 }
 
 HISTORICAL_PE_RANGES: dict[str, dict[str, Any]] = {
@@ -286,13 +302,7 @@ PEAKOUT_THRESHOLDS: dict[str, dict[str, Any]] = {
 }
 
 # ── 사이클 Phase ─────────────────────────────────────────────────
-CYCLE_PHASES = [
-    (0,  25, "TROUGH",         "불황 — 수주 감소, 선가 하락"),
-    (26, 45, "EARLY_RECOVERY", "초기 회복 — 노후선 교체 시작"),
-    (46, 65, "EXPANSION",      "확장 — 수주 증가, 선가 상승"),
-    (66, 85, "PEAK",           "피크 — 캐파 풀, 리드타임 최장"),
-    (86, 100, "OVERHEATING",   "과열 — 피크아웃 징후 감시 필요"),
-]
+CYCLE_PHASES = _CYCLE_PHASES_BASE
 
 SUPERCYCLE_LABELS = {
     "PRE":       "Pre-Supercycle (1기: LNG·컨테이너 중심)",
@@ -1141,61 +1151,9 @@ def _estimate_from_orders(orders: list[dict]) -> dict[str, Any]:
 #  Tier 1 수집 (pykrx + FDR + yfinance fallback)
 # ══════════════════════════════════════════════════════════════════
 
-def _compute_zscore_entry(series, meta: dict) -> dict[str, Any] | None:
-    """Close 시계열 → z-score 엔트리. 5개 미만이면 None."""
-    import pandas as pd
-    if isinstance(series, pd.DataFrame):
-        series = series.squeeze()
-    series = series.dropna()
-    if len(series) < 5:
-        return None
-    close = float(series.iloc[-1])
-    prev = float(series.iloc[-2]) if len(series) >= 2 else close
-    change_pct = ((close - prev) / prev * 100) if prev else 0.0
-    window = min(20, len(series))
-    ma = float(series.tail(window).mean())
-    std = float(series.tail(window).std())
-    zscore = (close - ma) / std if std > 0 else 0.0
-    return {
-        "ticker": meta["ticker"], "name": meta["name"], "category": meta["category"],
-        "close": round(close, 2), "prev": round(prev, 2),
-        "change_pct": round(change_pct, 2), "ma20": round(ma, 2),
-        "std20": round(std, 4), "zscore": round(zscore, 2),
-        "data_points": len(series), "data_date": str(series.index[-1].date()),
-    }
-
-
-def _fetch_kr_ohlcv(ticker_6: str, days: int = 520) -> "pd.DataFrame | None":
-    """pykrx로 KR 종목 OHLCV 수집. 실패 시 None."""
-    if not HAS_PYKRX:
-        return None
-    try:
-        end = datetime.now().strftime("%Y%m%d")
-        start = (datetime.now() - timedelta(days=days)).strftime("%Y%m%d")
-        df = krx_stock.get_market_ohlcv_by_date(start, end, ticker_6)
-        if df is not None and not df.empty:
-            # 표준 컬럼명으로 변환 (pykrx: 시가/고가/저가/종가)
-            df = df.rename(columns={"종가": "Close", "시가": "Open", "고가": "High",
-                                     "저가": "Low", "거래량": "Volume"})
-            return df
-    except Exception as e:
-        log(f"  pykrx error {ticker_6}: {e}")
-    return None
-
-
-def _fetch_global_ohlcv(ticker: str, days: int = 520) -> "pd.DataFrame | None":
-    """FDR로 글로벌 종목 OHLCV 수집. 실패 시 None."""
-    if not HAS_FDR:
-        return None
-    try:
-        start = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
-        end = datetime.now().strftime("%Y-%m-%d")
-        df = fdr.DataReader(ticker, start, end)
-        if df is not None and not df.empty:
-            return df
-    except Exception as e:
-        log(f"  FDR error {ticker}: {e}")
-    return None
+_compute_zscore_entry = compute_zscore_entry  # cycle_base 공통
+_fetch_kr_ohlcv = fetch_kr_ohlcv  # cycle_base 공통
+_fetch_global_ohlcv = fetch_global_ohlcv  # cycle_base 공통
 
 
 def collect_tier1(dry_run: bool = False) -> dict[str, Any]:
@@ -1573,22 +1531,8 @@ def _dart_supplementary_raw_div(api_key: str, stock_code: str, year: str, comp: 
 #  Scoring
 # ══════════════════════════════════════════════════════════════════
 
-def _zscore_to_ratio(zscore: float) -> float:
-    """z-score → 0.0~1.0. >=1.5→1.0 / >=0.5→0.75 / >=-0.5→0.5 / >=-1.5→0.25 / else→0"""
-    if zscore >= 1.5:
-        return 1.0
-    if zscore >= 0.5:
-        return 0.75
-    if zscore >= -0.5:
-        return 0.5
-    if zscore >= -1.5:
-        return 0.25
-    return 0.0
-
-
-def _zscore_to_1_10(zscore: float) -> float:
-    """z-score → 1~10 선형 매핑. z=-2→1, z=0→5.5, z=+2→10."""
-    return round(max(1.0, min(10.0, 5.5 + zscore * 2.25)), 1)
+_zscore_to_ratio = zscore_to_ratio  # cycle_base 공통
+_zscore_to_1_10 = zscore_to_1_10  # cycle_base 공통
 
 
 # ── 운임 프록시 자동 매핑 ──────────────────────────────────────────
@@ -1616,21 +1560,7 @@ def auto_structural_scores(indicators: dict[str, Any]) -> dict[str, float]:
 
 def calculate_market_pulse(indicators: dict[str, Any]) -> dict[str, Any]:
     """Tier 1 → Market Pulse (0~100)."""
-    total_w = 0
-    weighted = 0.0
-    details: dict[str, Any] = {}
-    for key, weight in MARKET_PULSE_WEIGHTS.items():
-        ind = indicators.get(key)
-        if not ind or "zscore" not in ind:
-            continue
-        ratio = _zscore_to_ratio(ind["zscore"])
-        contrib = ratio * weight
-        weighted += contrib
-        total_w += weight
-        details[key] = {"zscore": ind["zscore"], "ratio": ratio, "contribution": round(contrib, 1), "weight": weight}
-    score = (weighted / total_w * 100) if total_w > 0 else 0.0
-    return {"score": round(score, 1), "indicators_used": len(details),
-            "indicators_total": len(MARKET_PULSE_WEIGHTS), "details": details}
+    return calculate_market_pulse_generic(indicators, MARKET_PULSE_WEIGHTS)
 
 
 def calculate_cycle_score(fin_trends: dict, val_ctx: dict, dart_data: dict | None,
@@ -1727,20 +1657,11 @@ def calculate_cycle_score(fin_trends: dict, val_ctx: dict, dart_data: dict | Non
 
 def calculate_combined_score(pulse: dict, cycle: dict | None) -> dict[str, Any]:
     """Demand(Market Pulse) 15% + Cycle Score 85% = Combined."""
-    ps = pulse["score"]
-    if cycle is None:
-        return {"combined": None, "market_pulse": ps, "cycle_score": None,
-                "method": "market_pulse_only", "note": "Cycle Score 데이터 부족"}
-    cs = cycle["score"]
-    return {"combined": round(ps * 0.15 + cs * 0.85, 1), "market_pulse": ps, "cycle_score": cs,
-            "method": "combined", "note": f"Demand 15%({ps:.0f}) + Cycle 85%({cs:.0f})"}
+    return _combined_score_generic(pulse, cycle, demand_pct=15, cycle_pct=85)
 
 
 def determine_cycle_phase(score: float) -> tuple[str, str]:
-    for lo, hi, code, desc in CYCLE_PHASES:
-        if lo <= score <= hi:
-            return code, desc
-    return "UNKNOWN", "판정 불가"
+    return _determine_cycle_phase_base(score)
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -1765,16 +1686,8 @@ def _load_valuation() -> dict | None:
         return None
 
 
-def _sorted_quarters(quarters: dict) -> list[tuple[str, dict]]:
-    """분기 키를 시간순 정렬 (오래된 것 먼저)."""
-    return sorted(quarters.items(), key=lambda x: x[0])
-
-
-def _qoq_change(current: int | None, previous: int | None) -> float | None:
-    """QoQ 변동률 (%). None이면 계산 불가."""
-    if current is None or previous is None or previous == 0:
-        return None
-    return (current - previous) / abs(previous) * 100
+_sorted_quarters = sorted_quarters  # cycle_base 공통
+_qoq_change = qoq_change  # cycle_base 공통
 
 
 def analyze_financial_trends(financials: dict | None) -> dict[str, Any]:
@@ -2242,6 +2155,27 @@ SCENARIO_TEMPLATES: dict[str, dict[str, Any]] = {
     },
 }
 
+# ── CycleConfig 인스턴스 ────────────────────────────────────────
+SHIP_CONFIG = CycleConfig(
+    domain="shipbuilding",
+    output_dir=OUTPUT_DIR,
+    report_dir=REPORT_DIR,
+    tier1_indicators=TIER1_INDICATORS,
+    market_pulse_weights=MARKET_PULSE_WEIGHTS,
+    cycle_score_weights=CYCLE_SCORE_WEIGHTS,
+    manual_indicators=MANUAL_INDICATORS,
+    peakout_thresholds=PEAKOUT_THRESHOLDS,
+    historical_pe_ranges=HISTORICAL_PE_RANGES,
+    dart_targets={k: {"code": v["stock_code"], "name": v["name"], "focus": v.get("tier", "")}
+                  for k, v in SHIPBUILDER_STOCKS.items()},
+    scenario_templates=SCENARIO_TEMPLATES,
+    kr_tickers=_KR_TICKERS,
+    emoji="🚢",
+    report_title="조선업 사이클 분석",
+    vault_sector_note="322 조선업",
+    related_vault_notes=["324 해운업", "326 철강", "314 산업재"],
+)
+
 
 def _build_investment_judgment_section(
     combined: dict, fin_trends: dict, val_ctx: dict,
@@ -2554,42 +2488,29 @@ def _save_report_data(week: int, year: int, pulse: dict, combined: dict,
 def _append_score_history(week: int, year: int, combined: dict,
                           pulse: dict, cycle: dict | None) -> None:
     """스코어 히스토리에 주간 엔트리 append (최대 260건)."""
-    history: list[dict[str, Any]] = []
-    if SCORE_HISTORY_FILE.exists():
-        try:
-            history = json.loads(SCORE_HISTORY_FILE.read_text())
-        except (json.JSONDecodeError, OSError):
-            pass
-
+    history = load_json_safe(SCORE_HISTORY_FILE, [])
+    if not isinstance(history, list):
+        history = []
     week_tag = f"{year}-W{week:02d}"
     entry: dict[str, Any] = {
         "date": datetime.now(KST).strftime("%Y-%m-%d"),
-        "week_tag": week_tag,
-        "year": year, "week": week,
+        "week_tag": week_tag, "year": year, "week": week,
         "combined": combined.get("combined"),
         "market_pulse": pulse.get("score"),
         "cycle_score": combined.get("cycle_score"),
-        "pulse_details": pulse.get("details", {}),  # v6.1: WoW 비교용
+        "pulse_details": pulse.get("details", {}),
     }
-    # week_tag 기반 upsert (동일 주차 → 덮어쓰기)
     history = [h for h in history if not (h.get("year") == year and h.get("week") == week)]
     history.append(entry)
-    # 최대 260건 유지
     if len(history) > 260:
         history = history[-260:]
-
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    SCORE_HISTORY_FILE.write_text(json.dumps(history, ensure_ascii=False, indent=2))
+    save_json_atomic(SCORE_HISTORY_FILE, history)
 
 
 def _load_score_history() -> list[dict[str, Any]]:
-    """스코어 히스토리 로드."""
-    if SCORE_HISTORY_FILE.exists():
-        try:
-            return json.loads(SCORE_HISTORY_FILE.read_text())
-        except (json.JSONDecodeError, OSError):
-            pass
-    return []
+    data = load_json_safe(SCORE_HISTORY_FILE, [])
+    return data if isinstance(data, list) else []
 
 
 def _load_longterm_proxies() -> dict[str, Any]:
@@ -2610,23 +2531,17 @@ def _append_peakout_history(peakout: list) -> None:
     for p in peakout:
         key = p.get("key", p.get("desc", "")[:10])
         snapshot[key] = p.get("value")
-    # 같은 날짜 기존 엔트리 교체
     existing = [h for h in existing if h.get("date") != date_str]
     existing.append(snapshot)
     if len(existing) > 52:
         existing = existing[-52:]
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    PEAKOUT_HISTORY_FILE.write_text(json.dumps(existing, ensure_ascii=False, indent=2))
+    save_json_atomic(PEAKOUT_HISTORY_FILE, existing)
 
 
 def _load_peakout_history() -> list[dict[str, Any]]:
-    """피크아웃 히스토리 로드."""
-    if PEAKOUT_HISTORY_FILE.exists():
-        try:
-            return json.loads(PEAKOUT_HISTORY_FILE.read_text())
-        except (json.JSONDecodeError, OSError):
-            pass
-    return []
+    data = load_json_safe(PEAKOUT_HISTORY_FILE, [])
+    return data if isinstance(data, list) else []
 
 
 def _append_vessel_mix_history(vessel_mix: dict, week: int, year: int) -> None:
@@ -4165,6 +4080,12 @@ def build_weekly_report(data: dict, pulse: dict, cycle: dict | None,
     for key, src in REPORT_SOURCES.items():
         L.append(f"- [{src['title']}]({src['url']})")
 
+    # ── 볼트 연계 ──
+    L.append("\n## 볼트 연계")
+    L.append(f"- 섹터 노트: [[{SHIP_CONFIG.vault_sector_note}]]")
+    related = " | ".join(f"[[{n}]]" for n in SHIP_CONFIG.related_vault_notes)
+    L.append(f"- 관련 섹터: {related}")
+
     L.append(f"\n*Generated by shipbuilding_cycle_tracker.py v6.2*")
     return "\n".join(L)
 
@@ -4347,7 +4268,7 @@ def format_telegram_dm(pulse: dict, combined: dict, signals: list,
 # ══════════════════════════════════════════════════════════════════
 
 def _setup_chart_env():
-    """matplotlib 한글 폰트 + Agg 백엔드 설정. market_indicator_tracker 패턴 재사용."""
+    """matplotlib 한글 폰트 + Agg 백엔드 설정."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -5179,11 +5100,11 @@ def generate_charts(data: dict, pulse: dict, combined: dict,
 # ══════════════════════════════════════════════════════════════════
 
 def _find_korean_font() -> str | None:
-    """시스템에서 한글 TTC/TTF 폰트 경로 반환. NanumGothic 우선 (윈도우 호환)."""
+    """시스템에서 한글 TTC/TTF 폰트 경로 반환. NanumGothic 우선."""
     candidates = [
         "/System/Library/AssetsV2/com_apple_MobileAsset_Font8/7a0b5c0f3c1d41c4c52a33343496c9c65ad52c50.asset/AssetData/NanumGothic.ttc",
         "/Library/Fonts/NanumGothic.ttf",
-        "/usr/share/fonts/truetype/nanum/NanumGothic.ttf",  # Linux
+        "/usr/share/fonts/truetype/nanum/NanumGothic.ttf",
         "/System/Library/Fonts/AppleSDGothicNeo.ttc",
         "/System/Library/Fonts/Supplemental/AppleGothic.ttf",
     ]
@@ -5332,7 +5253,6 @@ def _render_md_section(pdf, section: str) -> None:
         s = re.sub(r"\*\*(.+?)\*\*", r"\1", s)
         s = re.sub(r"\*(.+?)\*", r"\1", s)
         s = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", s)
-        # 화살표 → 텍스트 치환 (폰트 글리프 누락 방지)
         s = s.replace("\u2191", "(+)").replace("\u2193", "(-)")
         s = s.replace("\u2192", "->").replace("\u2190", "<-")
         s = _emoji_re.sub("", s)
@@ -5340,7 +5260,7 @@ def _render_md_section(pdf, section: str) -> None:
 
     def _safe_multi_cell(w: float, h: float, txt: str, **kw) -> None:
         """multi_cell wrapper — 실패 시에도 반드시 Y 진행."""
-        pdf.set_x(pdf.l_margin)  # X 강제 리셋 (오른쪽 밀림 방지)
+        pdf.set_x(pdf.l_margin)
         try:
             pdf.multi_cell(w, h, txt, **kw)
         except Exception:
@@ -5350,7 +5270,7 @@ def _render_md_section(pdf, section: str) -> None:
             try:
                 pdf.multi_cell(w, h, txt, **kw)
             except Exception:
-                pdf.ln(h)  # 실패해도 Y 진행 (겹침 방지)
+                pdf.ln(h)
             pdf.set_font_size(prev)
 
     def _render_table(rows: list[str]) -> None:
@@ -5369,7 +5289,6 @@ def _render_md_section(pdf, section: str) -> None:
         row_h = 5.5
         pdf.set_font("Korean", "", font_size)
 
-        # 열 너비: 실제 텍스트 폭 기준 비례 배분
         col_w = [0.0] * ncols
         for row in parsed:
             for i, cell in enumerate(row):
@@ -5393,7 +5312,7 @@ def _render_md_section(pdf, section: str) -> None:
             pdf.set_font("Korean", style, font_size)
             if is_header:
                 pdf.set_fill_color(230, 230, 230)
-            pdf.set_x(pdf.l_margin)  # 매 행 X 리셋
+            pdf.set_x(pdf.l_margin)
             for ci in range(ncols):
                 txt = _clean(row[ci]) if ci < len(row) else ""
                 fill = is_header
@@ -5406,7 +5325,6 @@ def _render_md_section(pdf, section: str) -> None:
             pdf.ln()
         pdf.ln(2)
 
-    # ── 라인별 렌더링 (테이블은 연속 수집 후 그리드 출력) ──
     lines = section.split("\n")
     i = 0
     while i < len(lines):
@@ -5416,7 +5334,6 @@ def _render_md_section(pdf, section: str) -> None:
             i += 1
             continue
 
-        # 테이블 연속 행 수집
         if stripped.startswith("|"):
             table_rows: list[str] = []
             while i < len(lines) and lines[i].strip().startswith("|"):
@@ -5427,7 +5344,6 @@ def _render_md_section(pdf, section: str) -> None:
             _render_table(table_rows)
             continue
 
-        # 헤더
         if stripped.startswith("### "):
             pdf.set_font("Korean", "B", 12)
             _safe_multi_cell(eff_w, 7, _clean(stripped[4:]))
@@ -5457,25 +5373,13 @@ def _render_md_section(pdf, section: str) -> None:
 def send_telegram_pdf(pdf_path: Path, caption: str,
                       chat_id: str = str(DM_CHAT_ID),
                       dry_run: bool = False) -> bool:
-    """sendDocument API로 PDF 전송 (shared telegram 경유). DM only (테스트 중)."""
-    if dry_run:
-        log(f"DRY-RUN: skip PDF send ({pdf_path.name})")
-        return True
-    ok = send_document(chat_id, str(pdf_path), caption=caption)
-    if ok:
-        log(f"PDF sent to {chat_id}")
-    return ok
+    """sendDocument API로 PDF 전송 (shared telegram 경유). DM only."""
+    return send_telegram_pdf_generic(pdf_path, caption, dry_run=dry_run, log=log)
 
 
 def _send_progress_dm(msg: str, dry_run: bool = False) -> None:
     """진행 보고 DM 전송 (shared telegram 경유)."""
-    if dry_run:
-        log(f"DRY-RUN progress: {msg}")
-        return
-    try:
-        send_dm(msg, level="critical")
-    except Exception:
-        pass  # 진행 보고 실패는 무시
+    _send_progress_dm_base(msg, dry_run, log)
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -5577,18 +5481,13 @@ def send_telegram_full_report(report: str, dry_run: bool = False,
 # ══════════════════════════════════════════════════════════════════
 
 def load_manual_indicators() -> dict:
-    if not MANUAL_FILE.exists():
-        return {}
-    try:
-        return json.loads(MANUAL_FILE.read_text())
-    except (json.JSONDecodeError, OSError):
-        return {}
+    return load_json_safe(MANUAL_FILE, {})
 
 
 def save_manual_indicators(data: dict) -> None:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     data["updated_at"] = datetime.now(KST).isoformat()
-    MANUAL_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2))
+    save_json_atomic(MANUAL_FILE, data)
 
 
 def send_manual_update_reminder(dry_run: bool = False) -> bool:
