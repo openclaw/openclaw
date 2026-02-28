@@ -50,6 +50,26 @@ const PERCENT_KEYS = [
   "usageRatio",
 ] as const;
 
+const REMAINING_PERCENT_KEYS = [
+  "remain_percent",
+  "remainPercent",
+  "remaining_percent",
+  "remainingPercent",
+  "left_percent",
+  "leftPercent",
+  "percent_left",
+  "percentLeft",
+  "remain_rate",
+  "remaining_rate",
+  "left_rate",
+  "remain_ratio",
+  "remaining_ratio",
+  "left_ratio",
+  "remainRatio",
+  "remainingRatio",
+  "leftRatio",
+] as const;
+
 const USED_KEYS = [
   "used",
   "usage",
@@ -283,17 +303,29 @@ function deriveUsedPercent(payload: Record<string, unknown>): number | null {
       ? clampPercent((used / total) * 100)
       : null;
 
+  const remainingPercentRaw = pickNumber(payload, REMAINING_PERCENT_KEYS);
+  const fromRemainingPercent =
+    remainingPercentRaw !== undefined
+      ? clampPercent(
+          100 - (remainingPercentRaw <= 1 ? remainingPercentRaw * 100 : remainingPercentRaw),
+        )
+      : null;
+
   const percentRaw = pickNumber(payload, PERCENT_KEYS);
-  if (percentRaw !== undefined) {
-    const normalized = clampPercent(percentRaw <= 1 ? percentRaw * 100 : percentRaw);
-    if (fromCounts !== null) {
-      // Count-derived usage is more stable across provider percent field variations.
-      return fromCounts;
-    }
-    return normalized;
+  const fromPercent =
+    percentRaw !== undefined ? clampPercent(percentRaw <= 1 ? percentRaw * 100 : percentRaw) : null;
+
+  // Count-derived usage is most reliable when present.
+  if (fromCounts !== null) {
+    return fromCounts;
   }
 
-  return fromCounts;
+  // Some MiniMax remains payloads report remaining%, not used%.
+  if (fromRemainingPercent !== null) {
+    return fromRemainingPercent;
+  }
+
+  return fromPercent;
 }
 
 export async function fetchMinimaxUsage(

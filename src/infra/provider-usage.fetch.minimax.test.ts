@@ -91,6 +91,28 @@ describe("fetchMinimaxUsage", () => {
     ]);
   });
 
+  it("derives used percent from remaining percent fields", async () => {
+    const mockFetch = createProviderUsageFetch(async () =>
+      makeResponse(200, {
+        data: {
+          remaining_percent: 95,
+          window_hours: 5,
+          plan_name: "M2.5",
+        },
+      }),
+    );
+
+    const result = await fetchMinimaxUsage("key", 5000, mockFetch);
+    expect(result.plan).toBe("M2.5");
+    expect(result.windows).toEqual([
+      {
+        label: "5h",
+        usedPercent: 5,
+        resetAt: undefined,
+      },
+    ]);
+  });
+
   it("derives used from total and remaining counts", async () => {
     const mockFetch = createProviderUsageFetch(async () =>
       makeResponse(200, {
