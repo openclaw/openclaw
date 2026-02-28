@@ -53,8 +53,8 @@ export function resolveRunDeliveryTarget(params: {
     return {
       messageProvider: relayChannel,
       messageTo: relayTo,
-      accountId: params.relayOutput?.accountId ?? params.originatingAccountId ?? params.accountId,
-      threadId: params.relayOutput?.threadId ?? params.originatingThreadId ?? params.threadId,
+      accountId: params.relayOutput?.accountId,
+      threadId: params.relayOutput?.threadId,
       viaRelayOutput: true,
     };
   }

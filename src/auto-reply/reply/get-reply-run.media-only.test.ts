@@ -295,6 +295,57 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.followupRun.run.extraSystemPrompt ?? "").not.toContain("<read_only_metadata>");
   });
 
+  it("uses inbound chat type for relay route when session entry chat type is stale", async () => {
+    await runPreparedReply(
+      baseParams({
+        sessionEntry: {
+          chatType: "group",
+        } as never,
+        cfg: {
+          session: {
+            relayRouting: {
+              targets: {
+                telegramPrimary: {
+                  channel: "telegram",
+                  to: "telegram:primary",
+                },
+              },
+              rules: [
+                {
+                  mode: "read-only",
+                  relayTo: "telegramPrimary",
+                  match: { channel: "slack", chatType: "direct" },
+                },
+              ],
+            },
+          },
+          channels: {},
+          agents: { defaults: {} },
+        },
+        ctx: {
+          Body: "",
+          RawBody: "",
+          CommandBody: "",
+          ThreadHistoryBody: "Earlier message in this thread",
+          OriginatingChannel: "slack",
+          OriginatingTo: "U123",
+          ChatType: "direct",
+          Provider: "slack",
+          Surface: "slack",
+        },
+      }),
+    );
+
+    const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
+    expect(call?.followupRun.relayMode).toBe("read-only");
+    expect(call?.followupRun.relayOutput).toEqual({
+      channel: "telegram",
+      to: "telegram:primary",
+      accountId: undefined,
+      threadId: undefined,
+    });
+  });
+
   it("returns the empty-body reply when there is no text and no media", async () => {
     const result = await runPreparedReply(
       baseParams({

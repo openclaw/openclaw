@@ -3,6 +3,7 @@ import {
   resolveOriginAccountId,
   resolveOriginMessageProvider,
   resolveOriginMessageTo,
+  resolveRunDeliveryTarget,
 } from "./origin-routing.js";
 
 describe("origin-routing helpers", () => {
@@ -39,5 +40,49 @@ describe("origin-routing helpers", () => {
     });
 
     expect(accountId).toBe("work");
+  });
+
+  it("does not inherit source account/thread ids for read-only relay targets", () => {
+    const target = resolveRunDeliveryTarget({
+      relayMode: "read-only",
+      relayOutput: {
+        channel: "telegram",
+        to: "telegram:primary",
+      },
+      originatingAccountId: "imessage-account",
+      accountId: "fallback-account",
+      originatingThreadId: "imsg-thread",
+      threadId: "fallback-thread",
+    });
+
+    expect(target).toEqual({
+      messageProvider: "telegram",
+      messageTo: "telegram:primary",
+      accountId: undefined,
+      threadId: undefined,
+      viaRelayOutput: true,
+    });
+  });
+
+  it("uses relay account/thread when explicitly configured", () => {
+    const target = resolveRunDeliveryTarget({
+      relayMode: "read-only",
+      relayOutput: {
+        channel: "telegram",
+        to: "telegram:primary",
+        accountId: "telegram-main",
+        threadId: 42,
+      },
+      originatingAccountId: "imessage-account",
+      originatingThreadId: "imsg-thread",
+    });
+
+    expect(target).toEqual({
+      messageProvider: "telegram",
+      messageTo: "telegram:primary",
+      accountId: "telegram-main",
+      threadId: 42,
+      viaRelayOutput: true,
+    });
   });
 });

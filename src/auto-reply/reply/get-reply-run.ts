@@ -7,6 +7,7 @@ import {
   isEmbeddedPiRunStreaming,
   resolveEmbeddedSessionLane,
 } from "../../agents/pi-embedded.js";
+import { normalizeChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
   resolveGroupSessionKey,
@@ -274,12 +275,14 @@ export async function runPreparedReply(
       `runPreparedReply: relay routing missing live source channel (session=${sessionKey})`,
     );
   }
+  const liveSourceChatType =
+    normalizeChatType(ctx.ChatType) ?? normalizeChatType(sessionEntry?.chatType);
   const relayRoute = resolveSessionRelayRoute({
     cfg,
     entry: sessionEntry,
     sessionKey,
     channel: liveSourceChannel,
-    chatType: sessionEntry?.chatType,
+    chatType: liveSourceChatType,
     sourceTo: ctx.OriginatingTo ?? ctx.To,
     sourceAccountId: ctx.AccountId,
     sourceThreadId: ctx.MessageThreadId,
