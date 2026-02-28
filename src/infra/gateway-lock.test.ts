@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
+import { EventEmitter } from "node:events";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -91,6 +93,50 @@ function mockProcStatRead(params: { onProcRead: () => string }) {
   });
 }
 
+async function writeLockFile(
+  env: NodeJS.ProcessEnv,
+  params: { startTime: number; createdAt?: string } = { startTime: 111 },
+) {
+  const { lockPath, configPath } = resolveLockPath(env);
+  const payload = createLockPayload({
+    configPath,
+    startTime: params.startTime,
+    createdAt: params.createdAt,
+  });
+  await fs.writeFile(lockPath, JSON.stringify(payload), "utf8");
+  return { lockPath, configPath };
+}
+
+function createEaccesProcStatSpy() {
+  return mockProcStatRead({
+    onProcRead: () => {
+      throw new Error("EACCES");
+    },
+  });
+}
+
+function createPortProbeConnectionSpy(result: "connect" | "refused") {
+  return vi.spyOn(net, "createConnection").mockImplementation(() => {
+    const socket = new EventEmitter() as net.Socket;
+    socket.destroy = vi.fn();
+    setImmediate(() => {
+      if (result === "connect") {
+        socket.emit("connect");
+        return;
+      }
+      socket.emit("error", Object.assign(new Error("ECONNREFUSED"), { code: "ECONNREFUSED" }));
+    });
+    return socket;
+  });
+}
+
+async function writeRecentLockFile(env: NodeJS.ProcessEnv, startTime = 111) {
+  await writeLockFile(env, {
+    startTime,
+    createdAt: new Date().toISOString(),
+  });
+}
+
 describe("gateway lock", () => {
   beforeAll(async () => {
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gateway-lock-"));
@@ -154,15 +200,8 @@ describe("gateway lock", () => {
   it("keeps lock on linux when proc access fails unless stale", async () => {
     vi.useRealTimers();
     const env = await makeEnv();
-    const { lockPath, configPath } = resolveLockPath(env);
-    const payload = createLockPayload({ configPath, startTime: 111 });
-    await fs.writeFile(lockPath, JSON.stringify(payload), "utf8");
-
-    const spy = mockProcStatRead({
-      onProcRead: () => {
-        throw new Error("EACCES");
-      },
-    });
+    await writeLockFile(env);
+    const spy = createEaccesProcStatSpy();
 
     const pending = acquireForTest(env, {
       timeoutMs: 15,
@@ -172,42 +211,13 @@ describe("gateway lock", () => {
     await expect(pending).rejects.toBeInstanceOf(GatewayLockError);
 
     spy.mockRestore();
-
-    const stalePayload = createLockPayload({
-      configPath,
-      startTime: 111,
-      createdAt: new Date(0).toISOString(),
-    });
-    await fs.writeFile(lockPath, JSON.stringify(stalePayload), "utf8");
-
-    const staleSpy = mockProcStatRead({
-      onProcRead: () => {
-        throw new Error("EACCES");
-      },
-    });
-
-    const lock = await acquireForTest(env, {
-      staleMs: 1,
-      platform: "linux",
-    });
-    expect(lock).not.toBeNull();
-
-    await lock?.release();
-    staleSpy.mockRestore();
   });
 
   it("keeps lock when fs.stat fails until payload is stale", async () => {
     vi.useRealTimers();
     const env = await makeEnv();
-    const { lockPath, configPath } = resolveLockPath(env);
-    const payload = createLockPayload({ configPath, startTime: 111 });
-    await fs.writeFile(lockPath, JSON.stringify(payload), "utf8");
-
-    const procSpy = mockProcStatRead({
-      onProcRead: () => {
-        throw new Error("EACCES");
-      },
-    });
+    await writeLockFile(env);
+    const procSpy = createEaccesProcStatSpy();
     const statSpy = vi
       .spyOn(fs, "stat")
       .mockRejectedValue(Object.assign(new Error("EPERM"), { code: "EPERM" }));
@@ -220,29 +230,44 @@ describe("gateway lock", () => {
     await expect(pending).rejects.toBeInstanceOf(GatewayLockError);
 
     procSpy.mockRestore();
+    statSpy.mockRestore();
+  });
 
-    const stalePayload = createLockPayload({
-      configPath,
-      startTime: 111,
-      createdAt: new Date(0).toISOString(),
-    });
-    await fs.writeFile(lockPath, JSON.stringify(stalePayload), "utf8");
-
-    const staleProcSpy = mockProcStatRead({
-      onProcRead: () => {
-        throw new Error("EACCES");
-      },
-    });
+  it("treats lock as stale when owner pid is alive but configured port is free", async () => {
+    vi.useRealTimers();
+    const env = await makeEnv();
+    await writeRecentLockFile(env);
+    const connectSpy = createPortProbeConnectionSpy("refused");
 
     const lock = await acquireForTest(env, {
-      staleMs: 1,
-      platform: "linux",
+      timeoutMs: 80,
+      pollIntervalMs: 5,
+      staleMs: 10_000,
+      platform: "darwin",
+      port: 18789,
     });
     expect(lock).not.toBeNull();
-
     await lock?.release();
-    staleProcSpy.mockRestore();
-    statSpy.mockRestore();
+    connectSpy.mockRestore();
+  });
+
+  it("keeps lock when configured port is busy and owner pid is alive", async () => {
+    vi.useRealTimers();
+    const env = await makeEnv();
+    await writeRecentLockFile(env);
+    const connectSpy = createPortProbeConnectionSpy("connect");
+    try {
+      const pending = acquireForTest(env, {
+        timeoutMs: 20,
+        pollIntervalMs: 2,
+        staleMs: 10_000,
+        platform: "darwin",
+        port: 18789,
+      });
+      await expect(pending).rejects.toBeInstanceOf(GatewayLockError);
+    } finally {
+      connectSpy.mockRestore();
+    }
   });
 
   it("returns null when multi-gateway override is enabled", async () => {

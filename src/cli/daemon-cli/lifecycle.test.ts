@@ -41,6 +41,8 @@ vi.mock("../../daemon/service.js", () => ({
 }));
 
 vi.mock("./restart-health.js", () => ({
+  DEFAULT_RESTART_HEALTH_ATTEMPTS: 120,
+  DEFAULT_RESTART_HEALTH_DELAY_MS: 500,
   waitForGatewayHealthyRestart,
   terminateStaleGatewayPids,
   renderRestartDiagnostics,
@@ -56,11 +58,11 @@ vi.mock("./lifecycle-core.js", () => ({
 describe("runDaemonRestart health checks", () => {
   beforeEach(() => {
     vi.resetModules();
-    service.readCommand.mockReset();
-    service.restart.mockReset();
-    runServiceRestart.mockReset();
-    waitForGatewayHealthyRestart.mockReset();
-    terminateStaleGatewayPids.mockReset();
+    service.readCommand.mockClear();
+    service.restart.mockClear();
+    runServiceRestart.mockClear();
+    waitForGatewayHealthyRestart.mockClear();
+    terminateStaleGatewayPids.mockClear();
     renderRestartDiagnostics.mockClear();
     resolveGatewayPort.mockClear();
     loadConfig.mockClear();
@@ -123,7 +125,8 @@ describe("runDaemonRestart health checks", () => {
     const { runDaemonRestart } = await import("./lifecycle.js");
 
     await expect(runDaemonRestart({ json: true })).rejects.toMatchObject({
-      message: "Gateway restart failed health checks.",
+      message: "Gateway restart timed out after 60s waiting for health checks.",
+      hints: ["openclaw gateway status --deep", "openclaw doctor"],
     });
     expect(terminateStaleGatewayPids).not.toHaveBeenCalled();
     expect(renderRestartDiagnostics).toHaveBeenCalledTimes(1);

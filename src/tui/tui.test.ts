@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { getSlashCommands, parseCommand } from "./commands.js";
 import {
   createBackspaceDeduper,
+  resolveCtrlCAction,
   resolveFinalAssistantText,
   resolveGatewayDisconnectState,
   resolveTuiSessionKey,
@@ -90,27 +91,33 @@ describe("resolveGatewayDisconnectState", () => {
 });
 
 describe("createBackspaceDeduper", () => {
-  it("suppresses duplicate backspace events within the dedupe window", () => {
-    let now = 1000;
+  function createTimedDedupe(start = 1000) {
+    let now = start;
     const dedupe = createBackspaceDeduper({
       dedupeWindowMs: 8,
       now: () => now,
     });
+    return {
+      dedupe,
+      advance: (deltaMs: number) => {
+        now += deltaMs;
+      },
+    };
+  }
+
+  it("suppresses duplicate backspace events within the dedupe window", () => {
+    const { dedupe, advance } = createTimedDedupe();
 
     expect(dedupe("\x7f")).toBe("\x7f");
-    now += 1;
+    advance(1);
     expect(dedupe("\x08")).toBe("");
   });
 
   it("preserves backspace events outside the dedupe window", () => {
-    let now = 1000;
-    const dedupe = createBackspaceDeduper({
-      dedupeWindowMs: 8,
-      now: () => now,
-    });
+    const { dedupe, advance } = createTimedDedupe();
 
     expect(dedupe("\x7f")).toBe("\x7f");
-    now += 10;
+    advance(10);
     expect(dedupe("\x7f")).toBe("\x7f");
   });
 
@@ -118,5 +125,28 @@ describe("createBackspaceDeduper", () => {
     const dedupe = createBackspaceDeduper();
     expect(dedupe("a")).toBe("a");
     expect(dedupe("\x1b[A")).toBe("\x1b[A");
+  });
+});
+
+describe("resolveCtrlCAction", () => {
+  it("clears input and arms exit on first ctrl+c when editor has text", () => {
+    expect(resolveCtrlCAction({ hasInput: true, now: 2000, lastCtrlCAt: 0 })).toEqual({
+      action: "clear",
+      nextLastCtrlCAt: 2000,
+    });
+  });
+
+  it("exits on second ctrl+c within the exit window", () => {
+    expect(resolveCtrlCAction({ hasInput: false, now: 2800, lastCtrlCAt: 2000 })).toEqual({
+      action: "exit",
+      nextLastCtrlCAt: 2000,
+    });
+  });
+
+  it("shows warning when exit window has elapsed", () => {
+    expect(resolveCtrlCAction({ hasInput: false, now: 3501, lastCtrlCAt: 2000 })).toEqual({
+      action: "warn",
+      nextLastCtrlCAt: 3501,
+    });
   });
 });

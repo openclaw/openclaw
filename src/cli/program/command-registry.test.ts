@@ -68,6 +68,7 @@ describe("command-registry", () => {
     expect(names).toContain("memory");
     expect(names).toContain("agents");
     expect(names).toContain("browser");
+    expect(names).toContain("sessions");
     expect(names).not.toContain("agent");
     expect(names).not.toContain("status");
     expect(names).not.toContain("doctor");

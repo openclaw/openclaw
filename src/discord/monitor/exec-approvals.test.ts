@@ -309,6 +309,15 @@ describe("DiscordExecApprovalHandler.shouldHandle", () => {
     );
   });
 
+  it("rejects unsafe nested-repetition regex in session filter", () => {
+    const handler = createHandler({
+      enabled: true,
+      approvers: ["123"],
+      sessionFilter: ["(a+)+$"],
+    });
+    expect(handler.shouldHandle(createRequest({ sessionKey: `${"a".repeat(28)}!` }))).toBe(false);
+  });
+
   it("filters by discord account when session store includes account", () => {
     writeStore({
       "agent:test-agent:discord:channel:999888777": {
@@ -543,9 +552,9 @@ describe("ExecApprovalButton", () => {
 
 describe("DiscordExecApprovalHandler target config", () => {
   beforeEach(() => {
-    mockRestPost.mockReset();
-    mockRestPatch.mockReset();
-    mockRestDelete.mockReset();
+    mockRestPost.mockClear().mockResolvedValue({ id: "mock-message", channel_id: "mock-channel" });
+    mockRestPatch.mockClear().mockResolvedValue({});
+    mockRestDelete.mockClear().mockResolvedValue({});
   });
 
   it("accepts all target modes and defaults to dm when target is omitted", () => {
@@ -595,9 +604,9 @@ describe("DiscordExecApprovalHandler target config", () => {
 
 describe("DiscordExecApprovalHandler timeout cleanup", () => {
   beforeEach(() => {
-    mockRestPost.mockReset();
-    mockRestPatch.mockReset();
-    mockRestDelete.mockReset();
+    mockRestPost.mockClear().mockResolvedValue({ id: "mock-message", channel_id: "mock-channel" });
+    mockRestPatch.mockClear().mockResolvedValue({});
+    mockRestDelete.mockClear().mockResolvedValue({});
   });
 
   it("cleans up request cache for the exact approval id", async () => {
@@ -639,9 +648,9 @@ describe("DiscordExecApprovalHandler timeout cleanup", () => {
 
 describe("DiscordExecApprovalHandler delivery routing", () => {
   beforeEach(() => {
-    mockRestPost.mockReset();
-    mockRestPatch.mockReset();
-    mockRestDelete.mockReset();
+    mockRestPost.mockClear().mockResolvedValue({ id: "mock-message", channel_id: "mock-channel" });
+    mockRestPatch.mockClear().mockResolvedValue({});
+    mockRestDelete.mockClear().mockResolvedValue({});
   });
 
   it("falls back to DM delivery when channel target has no channel id", async () => {

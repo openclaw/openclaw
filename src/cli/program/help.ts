@@ -5,6 +5,7 @@ import { escapeRegExp } from "../../utils.js";
 import { hasFlag, hasRootVersionAlias } from "../argv.js";
 import { formatCliBannerLine, hasEmittedCliBanner } from "../banner.js";
 import { replaceCliName, resolveCliName } from "../cli-name.js";
+import { CLI_LOG_LEVEL_VALUES, parseCliLogLevelOption } from "../log-level-option.js";
 import { getCoreCliCommandsWithSubcommands } from "./command-registry.js";
 import type { ProgramContext } from "./context.js";
 import { getSubCliCommandsWithSubcommands } from "./register.subclis.js";
@@ -54,6 +55,11 @@ export function configureProgramHelp(program: Command, ctx: ProgramContext) {
     .option(
       "--profile <name>",
       "Use a named profile (isolates OPENCLAW_STATE_DIR/OPENCLAW_CONFIG_PATH under ~/.openclaw-<name>)",
+    )
+    .option(
+      "--log-level <level>",
+      `Global log level override for file + console (${CLI_LOG_LEVEL_VALUES})`,
+      parseCliLogLevelOption,
     );
 
   program.option("--no-color", "Disable ANSI colors", false);

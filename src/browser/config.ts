@@ -75,19 +75,28 @@ function normalizeStringList(raw: string[] | undefined): string[] | undefined {
 
 function resolveBrowserSsrFPolicy(cfg: BrowserConfig | undefined): SsrFPolicy | undefined {
   const allowPrivateNetwork = cfg?.ssrfPolicy?.allowPrivateNetwork;
+  const dangerouslyAllowPrivateNetwork = cfg?.ssrfPolicy?.dangerouslyAllowPrivateNetwork;
   const allowedHostnames = normalizeStringList(cfg?.ssrfPolicy?.allowedHostnames);
   const hostnameAllowlist = normalizeStringList(cfg?.ssrfPolicy?.hostnameAllowlist);
+  const hasExplicitPrivateSetting =
+    allowPrivateNetwork !== undefined || dangerouslyAllowPrivateNetwork !== undefined;
+  // Browser defaults to trusted-network mode unless explicitly disabled by policy.
+  const resolvedAllowPrivateNetwork =
+    dangerouslyAllowPrivateNetwork === true ||
+    allowPrivateNetwork === true ||
+    !hasExplicitPrivateSetting;
 
   if (
-    allowPrivateNetwork === undefined &&
-    allowedHostnames === undefined &&
-    hostnameAllowlist === undefined
+    !resolvedAllowPrivateNetwork &&
+    !hasExplicitPrivateSetting &&
+    !allowedHostnames &&
+    !hostnameAllowlist
   ) {
     return undefined;
   }
 
   return {
-    ...(allowPrivateNetwork === true ? { allowPrivateNetwork: true } : {}),
+    ...(resolvedAllowPrivateNetwork ? { dangerouslyAllowPrivateNetwork: true } : {}),
     ...(allowedHostnames ? { allowedHostnames } : {}),
     ...(hostnameAllowlist ? { hostnameAllowlist } : {}),
   };

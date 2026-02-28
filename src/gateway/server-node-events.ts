@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { resolveSessionAgentId } from "../agents/agent-scope.js";
 import { normalizeChannelId } from "../channels/plugins/index.js";
 import { createOutboundSendDeps } from "../cli/outbound-send-deps.js";
 import { agentCommand } from "../commands/agent.js";
@@ -7,6 +6,7 @@ import { loadConfig } from "../config/config.js";
 import { updateSessionStore } from "../config/sessions.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { deliverOutboundPayloads } from "../infra/outbound/deliver.js";
+import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
 import { resolveOutboundTarget } from "../infra/outbound/targets.js";
 import { registerApnsToken } from "../infra/push-apns.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
@@ -200,6 +200,21 @@ function parseSessionKeyFromPayloadJSON(payloadJSON: string): string | null {
   return sessionKey.length > 0 ? sessionKey : null;
 }
 
+function parsePayloadObject(payloadJSON?: string | null): Record<string, unknown> | null {
+  if (!payloadJSON) {
+    return null;
+  }
+  let payload: unknown;
+  try {
+    payload = JSON.parse(payloadJSON) as unknown;
+  } catch {
+    return null;
+  }
+  return typeof payload === "object" && payload !== null
+    ? (payload as Record<string, unknown>)
+    : null;
+}
+
 async function sendReceiptAck(params: {
   cfg: ReturnType<typeof loadConfig>;
   deps: NodeEventContext["deps"];
@@ -217,13 +232,16 @@ async function sendReceiptAck(params: {
   if (!resolved.ok) {
     throw new Error(String(resolved.error));
   }
-  const agentId = resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg });
+  const session = buildOutboundSessionContext({
+    cfg: params.cfg,
+    sessionKey: params.sessionKey,
+  });
   await deliverOutboundPayloads({
     cfg: params.cfg,
     channel: params.channel,
     to: resolved.to,
     payloads: [{ text: params.text }],
-    agentId,
+    session,
     bestEffort: true,
     deps: createOutboundSendDeps(params.deps),
   });
@@ -232,17 +250,10 @@ async function sendReceiptAck(params: {
 export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt: NodeEvent) => {
   switch (evt.event) {
     case "voice.transcript": {
-      if (!evt.payloadJSON) {
+      const obj = parsePayloadObject(evt.payloadJSON);
+      if (!obj) {
         return;
       }
-      let payload: unknown;
-      try {
-        payload = JSON.parse(evt.payloadJSON) as unknown;
-      } catch {
-        return;
-      }
-      const obj =
-        typeof payload === "object" && payload !== null ? (payload as Record<string, unknown>) : {};
       const text = typeof obj.text === "string" ? obj.text.trim() : "";
       if (!text) {
         return;
@@ -455,22 +466,24 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
     case "exec.started":
     case "exec.finished":
     case "exec.denied": {
-      if (!evt.payloadJSON) {
+      const obj = parsePayloadObject(evt.payloadJSON);
+      if (!obj) {
         return;
       }
-      let payload: unknown;
-      try {
-        payload = JSON.parse(evt.payloadJSON) as unknown;
-      } catch {
-        return;
-      }
-      const obj =
-        typeof payload === "object" && payload !== null ? (payload as Record<string, unknown>) : {};
       const sessionKey =
         typeof obj.sessionKey === "string" ? obj.sessionKey.trim() : `node-${nodeId}`;
       if (!sessionKey) {
         return;
       }
+
+      // Respect tools.exec.notifyOnExit setting (default: true)
+      // When false, skip system event notifications for node exec events.
+      const cfg = loadConfig();
+      const notifyOnExit = cfg.tools?.exec?.notifyOnExit !== false;
+      if (!notifyOnExit) {
+        return;
+      }
+
       const runId = typeof obj.runId === "string" ? obj.runId.trim() : "";
       const command = typeof obj.command === "string" ? obj.command.trim() : "";
       const exitCode =
@@ -510,17 +523,10 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       return;
     }
     case "push.apns.register": {
-      if (!evt.payloadJSON) {
+      const obj = parsePayloadObject(evt.payloadJSON);
+      if (!obj) {
         return;
       }
-      let payload: unknown;
-      try {
-        payload = JSON.parse(evt.payloadJSON) as unknown;
-      } catch {
-        return;
-      }
-      const obj =
-        typeof payload === "object" && payload !== null ? (payload as Record<string, unknown>) : {};
       const token = typeof obj.token === "string" ? obj.token : "";
       const topic = typeof obj.topic === "string" ? obj.topic : "";
       const environment = obj.environment;

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { SsrFBlockedError, type LookupFn } from "../infra/net/ssrf.js";
 import {
   assertBrowserNavigationAllowed,
+  assertBrowserNavigationResultAllowed,
   InvalidBrowserNavigationUrlError,
 } from "./navigation-guard.js";
 
@@ -100,5 +101,23 @@ describe("browser navigation guard", () => {
         url: "not a url",
       }),
     ).rejects.toBeInstanceOf(InvalidBrowserNavigationUrlError);
+  });
+
+  it("validates final network URLs after navigation", async () => {
+    const lookupFn = createLookupFn("127.0.0.1");
+    await expect(
+      assertBrowserNavigationResultAllowed({
+        url: "http://private.test",
+        lookupFn,
+      }),
+    ).rejects.toBeInstanceOf(SsrFBlockedError);
+  });
+
+  it("ignores non-network browser-internal final URLs", async () => {
+    await expect(
+      assertBrowserNavigationResultAllowed({
+        url: "chrome-error://chromewebdata/",
+      }),
+    ).resolves.toBeUndefined();
   });
 });

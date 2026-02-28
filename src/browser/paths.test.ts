@@ -6,6 +6,8 @@ import {
   resolveExistingPathsWithinRoot,
   resolvePathsWithinRoot,
   resolvePathWithinRoot,
+  resolveStrictExistingPathsWithinRoot,
+  resolveWritablePathWithinRoot,
 } from "./paths.js";
 
 async function createFixtureRoot(): Promise<{ baseDir: string; uploadsDir: string }> {
@@ -138,6 +140,83 @@ describe("resolveExistingPathsWithinRoot", () => {
       });
     },
   );
+
+  it.runIf(process.platform !== "win32")(
+    "accepts canonical absolute paths when upload root is a symlink alias",
+    async () => {
+      await withFixtureRoot(async ({ baseDir }) => {
+        const canonicalUploadsDir = path.join(baseDir, "canonical", "uploads");
+        const aliasedUploadsDir = path.join(baseDir, "uploads-link");
+        await fs.mkdir(canonicalUploadsDir, { recursive: true });
+        await fs.symlink(canonicalUploadsDir, aliasedUploadsDir);
+
+        const filePath = path.join(canonicalUploadsDir, "ok.txt");
+        await fs.writeFile(filePath, "ok", "utf8");
+        const canonicalPath = await fs.realpath(filePath);
+
+        const firstPass = await resolveWithinUploads({
+          uploadsDir: aliasedUploadsDir,
+          requestedPaths: [path.join(aliasedUploadsDir, "ok.txt")],
+        });
+        expect(firstPass.ok).toBe(true);
+
+        const secondPass = await resolveWithinUploads({
+          uploadsDir: aliasedUploadsDir,
+          requestedPaths: [canonicalPath],
+        });
+        expect(secondPass.ok).toBe(true);
+        if (secondPass.ok) {
+          expect(secondPass.paths).toEqual([canonicalPath]);
+        }
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "rejects canonical absolute paths outside symlinked upload root",
+    async () => {
+      await withFixtureRoot(async ({ baseDir }) => {
+        const canonicalUploadsDir = path.join(baseDir, "canonical", "uploads");
+        const aliasedUploadsDir = path.join(baseDir, "uploads-link");
+        await fs.mkdir(canonicalUploadsDir, { recursive: true });
+        await fs.symlink(canonicalUploadsDir, aliasedUploadsDir);
+
+        const outsideDir = path.join(baseDir, "outside");
+        await fs.mkdir(outsideDir, { recursive: true });
+        const outsideFile = path.join(outsideDir, "secret.txt");
+        await fs.writeFile(outsideFile, "secret", "utf8");
+
+        const result = await resolveWithinUploads({
+          uploadsDir: aliasedUploadsDir,
+          requestedPaths: [await fs.realpath(outsideFile)],
+        });
+        expectInvalidResult(result, "must stay within uploads directory");
+      });
+    },
+  );
+});
+
+describe("resolveStrictExistingPathsWithinRoot", () => {
+  function expectInvalidResult(
+    result: Awaited<ReturnType<typeof resolveStrictExistingPathsWithinRoot>>,
+    expectedSnippet: string,
+  ) {
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain(expectedSnippet);
+    }
+  }
+
+  it("rejects missing files instead of returning lexical fallbacks", async () => {
+    await withFixtureRoot(async ({ uploadsDir }) => {
+      const result = await resolveStrictExistingPathsWithinRoot({
+        rootDir: uploadsDir,
+        requestedPaths: ["missing.txt"],
+        scopeLabel: "uploads directory",
+      });
+      expectInvalidResult(result, "regular non-symlink file");
+    });
+  });
 });
 
 describe("resolvePathWithinRoot", () => {
@@ -165,6 +244,45 @@ describe("resolvePathWithinRoot", () => {
       expect(result.error).toContain("must stay within uploads directory");
     }
   });
+});
+
+describe("resolveWritablePathWithinRoot", () => {
+  it("accepts a writable path under root when parent is a real directory", async () => {
+    await withFixtureRoot(async ({ uploadsDir }) => {
+      const result = await resolveWritablePathWithinRoot({
+        rootDir: uploadsDir,
+        requestedPath: "safe.txt",
+        scopeLabel: "uploads directory",
+      });
+      expect(result).toEqual({
+        ok: true,
+        path: path.resolve(uploadsDir, "safe.txt"),
+      });
+    });
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "rejects write paths routed through a symlinked parent directory",
+    async () => {
+      await withFixtureRoot(async ({ baseDir, uploadsDir }) => {
+        const outsideDir = path.join(baseDir, "outside");
+        await fs.mkdir(outsideDir, { recursive: true });
+        const symlinkDir = path.join(uploadsDir, "escape-link");
+        await fs.symlink(outsideDir, symlinkDir);
+
+        const result = await resolveWritablePathWithinRoot({
+          rootDir: uploadsDir,
+          requestedPath: "escape-link/pwned.txt",
+          scopeLabel: "uploads directory",
+        });
+
+        expect(result.ok).toBe(false);
+        if (!result.ok) {
+          expect(result.error).toContain("must stay within uploads directory");
+        }
+      });
+    },
+  );
 });
 
 describe("resolvePathsWithinRoot", () => {

@@ -34,6 +34,12 @@ async function writeJsonFixture(root: string, relativePath: string, value: unkno
   await fs.writeFile(filePath, JSON.stringify(value), "utf-8");
 }
 
+function expectVersionMetadataToBeMissing(moduleUrl: string) {
+  expect(readVersionFromPackageJsonForModuleUrl(moduleUrl)).toBeNull();
+  expect(readVersionFromBuildInfoForModuleUrl(moduleUrl)).toBeNull();
+  expect(resolveVersionFromModuleUrl(moduleUrl)).toBeNull();
+}
+
 describe("version resolution", () => {
   it("resolves package version from nested dist/plugin-sdk module URL", async () => {
     await withTempDir(async (root) => {
@@ -69,9 +75,7 @@ describe("version resolution", () => {
   it("returns null when no version metadata exists", async () => {
     await withTempDir(async (root) => {
       const moduleUrl = await ensureModuleFixture(root);
-      expect(readVersionFromPackageJsonForModuleUrl(moduleUrl)).toBeNull();
-      expect(readVersionFromBuildInfoForModuleUrl(moduleUrl)).toBeNull();
-      expect(resolveVersionFromModuleUrl(moduleUrl)).toBeNull();
+      expectVersionMetadataToBeMissing(moduleUrl);
     });
   });
 
@@ -80,9 +84,7 @@ describe("version resolution", () => {
       await writeJsonFixture(root, "package.json", { name: "other-package", version: "9.9.9" });
       await writeJsonFixture(root, "build-info.json", { version: "  " });
       const moduleUrl = await ensureModuleFixture(root);
-      expect(readVersionFromPackageJsonForModuleUrl(moduleUrl)).toBeNull();
-      expect(readVersionFromBuildInfoForModuleUrl(moduleUrl)).toBeNull();
-      expect(resolveVersionFromModuleUrl(moduleUrl)).toBeNull();
+      expectVersionMetadataToBeMissing(moduleUrl);
     });
   });
 

@@ -19,7 +19,7 @@ vi.mock("../logging/subsystem.js", () => ({
 
 describe("resolveTelegramAccount", () => {
   afterEach(() => {
-    warnMock.mockReset();
+    warnMock.mockClear();
   });
 
   it("falls back to the first configured account when accountId is omitted", () => {
@@ -97,5 +97,74 @@ describe("resolveTelegramAccount", () => {
     const lines = warnMock.mock.calls.map(([line]) => String(line));
     expect(lines).toContain("listTelegramAccountIds [ 'work' ]");
     expect(lines).toContain("resolve { accountId: 'work', enabled: true, tokenSource: 'config' }");
+  });
+});
+
+describe("resolveTelegramAccount allowFrom precedence", () => {
+  it("prefers accounts.default allowlists over top-level for default account", () => {
+    const resolved = resolveTelegramAccount({
+      cfg: {
+        channels: {
+          telegram: {
+            allowFrom: ["top"],
+            groupAllowFrom: ["top-group"],
+            accounts: {
+              default: {
+                botToken: "123:default",
+                allowFrom: ["default"],
+                groupAllowFrom: ["default-group"],
+              },
+            },
+          },
+        },
+      },
+      accountId: "default",
+    });
+
+    expect(resolved.config.allowFrom).toEqual(["default"]);
+    expect(resolved.config.groupAllowFrom).toEqual(["default-group"]);
+  });
+
+  it("falls back to top-level allowlists for named account without overrides", () => {
+    const resolved = resolveTelegramAccount({
+      cfg: {
+        channels: {
+          telegram: {
+            allowFrom: ["top"],
+            groupAllowFrom: ["top-group"],
+            accounts: {
+              work: { botToken: "123:work" },
+            },
+          },
+        },
+      },
+      accountId: "work",
+    });
+
+    expect(resolved.config.allowFrom).toEqual(["top"]);
+    expect(resolved.config.groupAllowFrom).toEqual(["top-group"]);
+  });
+
+  it("does not inherit default account allowlists for named account when top-level is absent", () => {
+    const resolved = resolveTelegramAccount({
+      cfg: {
+        channels: {
+          telegram: {
+            accounts: {
+              default: {
+                botToken: "123:default",
+                allowFrom: ["default"],
+                groupAllowFrom: ["default-group"],
+              },
+              work: { botToken: "123:work" },
+            },
+          },
+        },
+      },
+      accountId: "work",
+    });
+
+    expect(resolved.config.allowFrom).toBeUndefined();
+    expect(resolved.config.groupAllowFrom).toBeUndefined();
   });
 });

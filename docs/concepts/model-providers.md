@@ -70,6 +70,8 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 - Auth: OAuth (ChatGPT)
 - Example model: `openai-codex/gpt-5.3-codex`
 - CLI: `openclaw onboard --auth-choice openai-codex` or `openclaw models auth login --provider openai-codex`
+- Default transport is `auto` (WebSocket-first, SSE fallback)
+- Override per model via `agents.defaults.models["openai-codex/<model>"].params.transport` (`"sse"`, `"websocket"`, or `"auto"`)
 
 ```json5
 {
@@ -102,6 +104,7 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 
 - Providers: `google-vertex`, `google-antigravity`, `google-gemini-cli`
 - Auth: Vertex uses gcloud ADC; Antigravity/Gemini CLI use their respective auth flows
+- Caution: Antigravity and Gemini CLI OAuth in OpenClaw are unofficial integrations. Some users have reported Google account restrictions after using third-party clients. Review Google terms and use a non-critical account if you choose to proceed.
 - Antigravity OAuth is shipped as a bundled plugin (`google-antigravity-auth`, disabled by default).
   - Enable: `openclaw plugins enable google-antigravity-auth`
   - Login: `openclaw models auth login --provider google-antigravity --set-default`
@@ -126,16 +129,31 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 - Example model: `vercel-ai-gateway/anthropic/claude-opus-4.6`
 - CLI: `openclaw onboard --auth-choice ai-gateway-api-key`
 
+### Kilo Gateway
+
+- Provider: `kilocode`
+- Auth: `KILOCODE_API_KEY`
+- Example model: `kilocode/anthropic/claude-opus-4.6`
+- CLI: `openclaw onboard --kilocode-api-key <key>`
+- Base URL: `https://api.kilo.ai/api/gateway/`
+- Expanded built-in catalog includes GLM-5 Free, MiniMax M2.5 Free, GPT-5.2, Gemini 3 Pro Preview, Gemini 3 Flash Preview, Grok Code Fast 1, and Kimi K2.5.
+
+See [/providers/kilocode](/providers/kilocode) for setup details.
+
 ### Other built-in providers
 
 - OpenRouter: `openrouter` (`OPENROUTER_API_KEY`)
 - Example model: `openrouter/anthropic/claude-sonnet-4-5`
+- Kilo Gateway: `kilocode` (`KILOCODE_API_KEY`)
+- Example model: `kilocode/anthropic/claude-opus-4.6`
 - xAI: `xai` (`XAI_API_KEY`)
+- Mistral: `mistral` (`MISTRAL_API_KEY`)
+- Example model: `mistral/mistral-large-latest`
+- CLI: `openclaw onboard --auth-choice mistral-api-key`
 - Groq: `groq` (`GROQ_API_KEY`)
 - Cerebras: `cerebras` (`CEREBRAS_API_KEY`)
   - GLM models on Cerebras use ids `zai-glm-4.7` and `zai-glm-4.6`.
   - OpenAI-compatible base URL: `https://api.cerebras.ai/v1`.
-- Mistral: `mistral` (`MISTRAL_API_KEY`)
 - GitHub Copilot: `github-copilot` (`COPILOT_GITHUB_TOKEN` / `GH_TOKEN` / `GITHUB_TOKEN`)
 - Hugging Face Inference: `huggingface` (`HUGGINGFACE_HUB_TOKEN` or `HF_TOKEN`) — OpenAI-compatible router; example model: `huggingface/deepseek-ai/DeepSeek-R1`; CLI: `openclaw onboard --auth-choice huggingface-api-key`. See [Hugging Face (Inference)](/providers/huggingface).
 

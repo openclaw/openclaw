@@ -93,6 +93,15 @@ describe("redactSensitiveText", () => {
     expect(output).toBe("token=abcdef…ghij");
   });
 
+  it("ignores unsafe nested-repetition custom patterns", () => {
+    const input = `${"a".repeat(28)}!`;
+    const output = redactSensitiveText(input, {
+      mode: "tools",
+      patterns: ["(a+)+$"],
+    });
+    expect(output).toBe(input);
+  });
+
   it("skips redaction when mode is off", () => {
     const input = "OPENAI_API_KEY=sk-1234567890abcdef";
     const output = redactSensitiveText(input, {

@@ -1,8 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import type { TelegramAccountConfig } from "../config/types.js";
-import type { RuntimeEnv } from "../runtime.js";
 import { registerTelegramNativeCommands } from "./bot-native-commands.js";
+import { createNativeCommandTestParams } from "./bot-native-commands.test-helpers.js";
 
 // All mocks scoped to this file only — does not affect bot-native-commands.test.ts
 
@@ -43,35 +42,6 @@ vi.mock("./bot/delivery.js", () => ({
   deliverReplies: vi.fn(async () => ({ delivered: true })),
 }));
 
-const buildParams = (cfg: OpenClawConfig, accountId = "default") => ({
-  bot: {
-    api: {
-      setMyCommands: vi.fn().mockResolvedValue(undefined),
-      sendMessage: vi.fn().mockResolvedValue(undefined),
-    },
-    command: vi.fn(),
-  } as unknown as Parameters<typeof registerTelegramNativeCommands>[0]["bot"],
-  cfg,
-  runtime: {} as unknown as RuntimeEnv,
-  accountId,
-  telegramCfg: {} as TelegramAccountConfig,
-  allowFrom: [],
-  groupAllowFrom: [],
-  replyToMode: "off" as const,
-  textLimit: 4096,
-  useAccessGroups: false,
-  nativeEnabled: true,
-  nativeSkillsEnabled: true,
-  nativeDisabledExplicit: false,
-  resolveGroupPolicy: () => ({ allowlistEnabled: false, allowed: true }),
-  resolveTelegramGroupConfig: () => ({
-    groupConfig: undefined,
-    topicConfig: undefined,
-  }),
-  shouldSkipUpdate: () => false,
-  opts: { token: "token" },
-});
-
 function createDeferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
   const promise = new Promise<T>((res) => {
@@ -80,85 +50,73 @@ function createDeferred<T>() {
   return { promise, resolve };
 }
 
-describe("registerTelegramNativeCommands — session metadata", () => {
-  it("calls recordSessionMetaFromInbound after a native slash command", async () => {
-    sessionMocks.recordSessionMetaFromInbound.mockReset().mockResolvedValue(undefined);
-    sessionMocks.resolveStorePath.mockReset().mockReturnValue("/tmp/openclaw-sessions.json");
+type TelegramCommandHandler = (ctx: unknown) => Promise<void>;
 
-    const commandHandlers = new Map<string, (ctx: unknown) => Promise<void>>();
-    const cfg: OpenClawConfig = {};
+function buildStatusCommandContext() {
+  return {
+    match: "",
+    message: {
+      message_id: 1,
+      date: Math.floor(Date.now() / 1000),
+      chat: { id: 100, type: "private" as const },
+      from: { id: 200, username: "bob" },
+    },
+  };
+}
 
-    registerTelegramNativeCommands({
-      ...buildParams(cfg),
-      allowFrom: ["*"],
+function registerAndResolveStatusHandler(cfg: OpenClawConfig): TelegramCommandHandler {
+  const commandHandlers = new Map<string, TelegramCommandHandler>();
+  registerTelegramNativeCommands({
+    ...createNativeCommandTestParams({
       bot: {
         api: {
           setMyCommands: vi.fn().mockResolvedValue(undefined),
           sendMessage: vi.fn().mockResolvedValue(undefined),
         },
-        command: vi.fn((name: string, cb: (ctx: unknown) => Promise<void>) => {
+        command: vi.fn((name: string, cb: TelegramCommandHandler) => {
           commandHandlers.set(name, cb);
         }),
       } as unknown as Parameters<typeof registerTelegramNativeCommands>[0]["bot"],
-    });
+      cfg,
+      allowFrom: ["*"],
+    }),
+  });
 
-    const handler = commandHandlers.get("status");
-    expect(handler).toBeTruthy();
-    await handler?.({
-      match: "",
-      message: {
-        message_id: 1,
-        date: Math.floor(Date.now() / 1000),
-        chat: { id: 100, type: "private" },
-        from: { id: 200, username: "bob" },
-      },
-    });
+  const handler = commandHandlers.get("status");
+  expect(handler).toBeTruthy();
+  return handler as TelegramCommandHandler;
+}
+
+describe("registerTelegramNativeCommands — session metadata", () => {
+  beforeEach(() => {
+    sessionMocks.recordSessionMetaFromInbound.mockClear().mockResolvedValue(undefined);
+    sessionMocks.resolveStorePath.mockClear().mockReturnValue("/tmp/openclaw-sessions.json");
+    replyMocks.dispatchReplyWithBufferedBlockDispatcher.mockClear().mockResolvedValue(undefined);
+  });
+
+  it("calls recordSessionMetaFromInbound after a native slash command", async () => {
+    const cfg: OpenClawConfig = {};
+    const handler = registerAndResolveStatusHandler(cfg);
+    await handler(buildStatusCommandContext());
 
     expect(sessionMocks.recordSessionMetaFromInbound).toHaveBeenCalledTimes(1);
     const call = (
       sessionMocks.recordSessionMetaFromInbound.mock.calls as unknown as Array<
-        [{ sessionKey?: string; ctx?: { OriginatingChannel?: string } }]
+        [{ sessionKey?: string; ctx?: { OriginatingChannel?: string; Provider?: string } }]
       >
     )[0]?.[0];
     expect(call?.ctx?.OriginatingChannel).toBe("telegram");
+    expect(call?.ctx?.Provider).toBe("telegram");
     expect(call?.sessionKey).toBeDefined();
   });
 
   it("awaits session metadata persistence before dispatch", async () => {
     const deferred = createDeferred<void>();
-    sessionMocks.recordSessionMetaFromInbound.mockReset().mockReturnValue(deferred.promise);
-    sessionMocks.resolveStorePath.mockReset().mockReturnValue("/tmp/openclaw-sessions.json");
-    replyMocks.dispatchReplyWithBufferedBlockDispatcher.mockReset().mockResolvedValue(undefined);
+    sessionMocks.recordSessionMetaFromInbound.mockReturnValue(deferred.promise);
 
-    const commandHandlers = new Map<string, (ctx: unknown) => Promise<void>>();
     const cfg: OpenClawConfig = {};
-
-    registerTelegramNativeCommands({
-      ...buildParams(cfg),
-      allowFrom: ["*"],
-      bot: {
-        api: {
-          setMyCommands: vi.fn().mockResolvedValue(undefined),
-          sendMessage: vi.fn().mockResolvedValue(undefined),
-        },
-        command: vi.fn((name: string, cb: (ctx: unknown) => Promise<void>) => {
-          commandHandlers.set(name, cb);
-        }),
-      } as unknown as Parameters<typeof registerTelegramNativeCommands>[0]["bot"],
-    });
-
-    const handler = commandHandlers.get("status");
-    expect(handler).toBeTruthy();
-
-    const runPromise = handler?.({
-      match: "",
-      message: {
-        message_id: 1,
-        date: Math.floor(Date.now() / 1000),
-        chat: { id: 100, type: "private" },
-        from: { id: 200, username: "bob" },
-      },
-    });
+    const handler = registerAndResolveStatusHandler(cfg);
+    const runPromise = handler(buildStatusCommandContext());
 
     await vi.waitFor(() => {
       expect(sessionMocks.recordSessionMetaFromInbound).toHaveBeenCalledTimes(1);

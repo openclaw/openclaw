@@ -16,14 +16,31 @@ struct ExecAllowlistTests {
         let cases: [Case]
     }
 
+    private struct WrapperResolutionParityFixture: Decodable {
+        struct Case: Decodable {
+            let id: String
+            let argv: [String]
+            let expectedRawExecutable: String?
+        }
+
+        let cases: [Case]
+    }
+
     private static func loadShellParserParityCases() throws -> [ShellParserParityFixture.Case] {
-        let fixtureURL = self.shellParserParityFixtureURL()
+        let fixtureURL = self.fixtureURL(filename: "exec-allowlist-shell-parser-parity.json")
         let data = try Data(contentsOf: fixtureURL)
         let fixture = try JSONDecoder().decode(ShellParserParityFixture.self, from: data)
         return fixture.cases
     }
 
-    private static func shellParserParityFixtureURL() -> URL {
+    private static func loadWrapperResolutionParityCases() throws -> [WrapperResolutionParityFixture.Case] {
+        let fixtureURL = self.fixtureURL(filename: "exec-wrapper-resolution-parity.json")
+        let data = try Data(contentsOf: fixtureURL)
+        let fixture = try JSONDecoder().decode(WrapperResolutionParityFixture.self, from: data)
+        return fixture.cases
+    }
+
+    private static func fixtureURL(filename: String) -> URL {
         var repoRoot = URL(fileURLWithPath: #filePath)
         for _ in 0..<5 {
             repoRoot.deleteLastPathComponent()
@@ -31,7 +48,7 @@ struct ExecAllowlistTests {
         return repoRoot
             .appendingPathComponent("test")
             .appendingPathComponent("fixtures")
-            .appendingPathComponent("exec-allowlist-shell-parser-parity.json")
+            .appendingPathComponent(filename)
     }
 
     @Test func matchUsesResolvedPath() {
@@ -160,6 +177,17 @@ struct ExecAllowlistTests {
         }
     }
 
+    @Test func resolveMatchesSharedWrapperResolutionFixture() throws {
+        let fixtures = try Self.loadWrapperResolutionParityCases()
+        for fixture in fixtures {
+            let resolution = ExecCommandResolution.resolve(
+                command: fixture.argv,
+                cwd: nil,
+                env: ["PATH": "/usr/bin:/bin"])
+            #expect(resolution?.rawExecutable == fixture.expectedRawExecutable)
+        }
+    }
+
     @Test func resolveForAllowlistTreatsPlainShInvocationAsDirectExec() {
         let command = ["/bin/sh", "./script.sh"]
         let resolutions = ExecCommandResolution.resolveForAllowlist(
@@ -169,6 +197,30 @@ struct ExecAllowlistTests {
             env: ["PATH": "/usr/bin:/bin"])
         #expect(resolutions.count == 1)
         #expect(resolutions[0].executableName == "sh")
+    }
+
+    @Test func resolveForAllowlistUnwrapsEnvShellWrapperChains() {
+        let command = ["/usr/bin/env", "/bin/sh", "-lc", "echo allowlisted && /usr/bin/touch /tmp/openclaw-allowlist-test"]
+        let resolutions = ExecCommandResolution.resolveForAllowlist(
+            command: command,
+            rawCommand: nil,
+            cwd: nil,
+            env: ["PATH": "/usr/bin:/bin"])
+        #expect(resolutions.count == 2)
+        #expect(resolutions[0].executableName == "echo")
+        #expect(resolutions[1].executableName == "touch")
+    }
+
+    @Test func resolveForAllowlistUnwrapsEnvToEffectiveDirectExecutable() {
+        let command = ["/usr/bin/env", "FOO=bar", "/usr/bin/printf", "ok"]
+        let resolutions = ExecCommandResolution.resolveForAllowlist(
+            command: command,
+            rawCommand: nil,
+            cwd: nil,
+            env: ["PATH": "/usr/bin:/bin"])
+        #expect(resolutions.count == 1)
+        #expect(resolutions[0].resolvedPath == "/usr/bin/printf")
+        #expect(resolutions[0].executableName == "printf")
     }
 
     @Test func matchAllRequiresEverySegmentToMatch() {

@@ -29,6 +29,16 @@ async function expectPathMissing(filePath: string) {
   await expect(fs.stat(filePath)).rejects.toThrow();
 }
 
+async function expectStateDirEnvRestored(params: {
+  prev: EnvSnapshot;
+  capturedStateDir: string;
+  capturedTempRoot: string;
+}) {
+  expectStateDirVars(params.prev);
+  await expectPathMissing(params.capturedStateDir);
+  await expectPathMissing(params.capturedTempRoot);
+}
+
 describe("state-dir-env helpers", () => {
   it("set/snapshot/restore round-trips OPENCLAW_STATE_DIR", () => {
     const prev = snapshotCurrentStateDirVars();
@@ -55,9 +65,7 @@ describe("state-dir-env helpers", () => {
       await fs.writeFile(path.join(stateDir, "probe.txt"), "ok", "utf8");
     });
 
-    expectStateDirVars(prev);
-    await expectPathMissing(capturedStateDir);
-    await expectPathMissing(capturedTempRoot);
+    await expectStateDirEnvRestored({ prev, capturedStateDir, capturedTempRoot });
   });
 
   it("withStateDirEnv restores env and cleans temp root when callback throws", async () => {
@@ -73,8 +81,28 @@ describe("state-dir-env helpers", () => {
       }),
     ).rejects.toThrow("boom");
 
-    expectStateDirVars(prev);
-    await expectPathMissing(capturedStateDir);
-    await expectPathMissing(capturedTempRoot);
+    await expectStateDirEnvRestored({ prev, capturedStateDir, capturedTempRoot });
+  });
+
+  it("withStateDirEnv restores both env vars when legacy var was previously set", async () => {
+    const testSnapshot = snapshotStateDirEnv();
+    process.env.OPENCLAW_STATE_DIR = "/tmp/original-openclaw";
+    process.env.CLAWDBOT_STATE_DIR = "/tmp/original-legacy";
+    const prev = snapshotCurrentStateDirVars();
+
+    let capturedTempRoot = "";
+    let capturedStateDir = "";
+    try {
+      await withStateDirEnv("openclaw-state-dir-env-", async ({ tempRoot, stateDir }) => {
+        capturedTempRoot = tempRoot;
+        capturedStateDir = stateDir;
+        expect(process.env.OPENCLAW_STATE_DIR).toBe(stateDir);
+        expect(process.env.CLAWDBOT_STATE_DIR).toBeUndefined();
+      });
+
+      await expectStateDirEnvRestored({ prev, capturedStateDir, capturedTempRoot });
+    } finally {
+      restoreStateDirEnv(testSnapshot);
+    }
   });
 });
