@@ -2,9 +2,10 @@ name: easyrunner
 services:
   openclaw-gateway:
     image: localhost/openclaw:latest
-    # Inline entrypoint creates minimal config on first run then starts the gateway.
-    # This allows the upstream Dockerfile to be used unmodified - no custom ENTRYPOINT needed.
-    entrypoint:
+    # Inline command creates minimal config on first run then starts the gateway.
+    # Uses `command:` (maps to quadlet Exec=) instead of `entrypoint:` (maps to quadlet Entrypoint=,
+    # which is only supported in Podman 5.0+). This allows the upstream Dockerfile to be used unmodified.
+    command:
       - /bin/sh
       - -c
       - |
