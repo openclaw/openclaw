@@ -252,22 +252,6 @@ function applyOutcomeToStoredJob(state: CronServiceState, result: TimedCronRunOu
     return;
   }
 
-  
-  if (typeof job.state.runningAtMs === "number" && job.state.runningAtMs !== result.startedAt) {
-   
-    state.deps.log.warn(
-      {
-        jobId: job.id,
-        expectedRunningAtMs: result.startedAt,
-        actualRunningAtMs: job.state.runningAtMs,
-      },
-      "cron: skipping nextRunAtMs update - job runningAtMs mismatch (concurrent execution?)",
-    );
-    
-    job.state.runningAtMs = undefined;
-    return;
-  }
-
   const shouldDelete = applyJobResult(state, job, {
     status: result.status,
     error: result.error,
