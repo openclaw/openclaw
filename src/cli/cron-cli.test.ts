@@ -674,4 +674,20 @@ describe("cron cli", () => {
     const patch = updateCall?.[2] as { patch?: { failureAlert?: boolean } };
     expect(patch?.patch?.failureAlert).toBe(false);
   });
+
+  it("uses a longer default timeout for cron run", async () => {
+    await runCronCommand(["cron", "run", "job-1", "--expect-final"]);
+
+    const runCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.run");
+    const opts = (runCall?.[1] ?? {}) as { timeout?: string };
+    expect(opts.timeout).toBe("600000");
+  });
+
+  it("preserves explicit --timeout for cron run", async () => {
+    await runCronCommand(["cron", "run", "job-1", "--expect-final", "--timeout", "45000"]);
+
+    const runCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.run");
+    const opts = (runCall?.[1] ?? {}) as { timeout?: string };
+    expect(opts.timeout).toBe("45000");
+  });
 });
