@@ -1497,17 +1497,17 @@ export async function runEmbeddedAttempt(
                   agentDir: params.agentDir ?? "",
                   userPrompt: effectivePrompt,
                 });
-                if (preAnalysis.analysisText) {
+                if (preAnalysis.successfulImageCount > 0 && preAnalysis.analysisText) {
                   log.debug(
                     `Image pre-analysis: analyzed ${preAnalysis.imageCount} image(s) with ${preAnalysis.provider}/${preAnalysis.model}`,
                   );
                   const promptWithAnalysis = effectivePrompt + preAnalysis.analysisText;
                   await abortable(activeSession.prompt(promptWithAnalysis));
                 } else {
-                  // No analysis produced, fall back to main model with images if supported
+                  // No successful analysis produced, fall back to main model with images if supported.
                   if (mainModelSupportsImages) {
                     log.debug(
-                      `Image pre-analysis: no analysis, falling back to main model with images`,
+                      `Image pre-analysis: no successful analyses, falling back to main model with images`,
                     );
                     await abortable(
                       activeSession.prompt(effectivePrompt, { images: imageResult.images }),

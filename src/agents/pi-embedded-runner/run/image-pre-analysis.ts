@@ -51,6 +51,7 @@ export async function analyzeImagesWithImageModel(params: {
   provider: string;
   model: string;
   imageCount: number;
+  successfulImageCount: number;
 }> {
   const { images, config, agentDir } = params;
 
@@ -60,6 +61,7 @@ export async function analyzeImagesWithImageModel(params: {
       provider: "",
       model: "",
       imageCount: 0,
+      successfulImageCount: 0,
     };
   }
 
@@ -184,5 +186,6 @@ export async function analyzeImagesWithImageModel(params: {
     provider: lastProvider,
     model: lastModel,
     imageCount: analyzedCount,
+    successfulImageCount: successCount,
   };
 }
