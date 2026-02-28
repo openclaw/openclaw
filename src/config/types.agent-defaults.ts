@@ -233,6 +233,8 @@ export type AgentDefaultsConfig = {
     directPolicy?: "allow" | "block";
     /** Optional delivery override (E.164 for WhatsApp, chat id for Telegram). Supports :topic:NNN suffix for Telegram topics. */
     to?: string;
+    /** Optional allowlist for model-provided heartbeat_to override targets. Empty/omitted means unrestricted. */
+    routeAllowlist?: string[];
     /** Optional account id for multi-account channels. */
     accountId?: string;
     /** Override the heartbeat prompt body (default: "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK."). */
