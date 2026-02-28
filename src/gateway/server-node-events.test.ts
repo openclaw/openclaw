@@ -357,6 +357,7 @@ describe("notifications changed events", () => {
     requestHeartbeatNowMock.mockClear();
     loadSessionEntryMock.mockClear();
     loadSessionEntryMock.mockImplementation((sessionKey: string) => buildSessionLookup(sessionKey));
+    enqueueSystemEventMock.mockReturnValue(true);
   });
 
   it("enqueues notifications.changed posted events", async () => {
@@ -456,6 +457,31 @@ describe("notifications changed events", () => {
 
     expect(enqueueSystemEventMock).not.toHaveBeenCalled();
     expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
+  });
+
+  it("does not wake heartbeat when notifications.changed event is deduped", async () => {
+    enqueueSystemEventMock.mockReset();
+    enqueueSystemEventMock.mockReturnValueOnce(true).mockReturnValueOnce(false);
+    const ctx = buildCtx();
+    const payload = JSON.stringify({
+      change: "posted",
+      key: "notif-dupe",
+      packageName: "com.example.chat",
+      title: "Message",
+      text: "Ping from Alex",
+    });
+
+    await handleNodeEvent(ctx, "node-n6", {
+      event: "notifications.changed",
+      payloadJSON: payload,
+    });
+    await handleNodeEvent(ctx, "node-n6", {
+      event: "notifications.changed",
+      payloadJSON: payload,
+    });
+
+    expect(enqueueSystemEventMock).toHaveBeenCalledTimes(2);
+    expect(requestHeartbeatNowMock).toHaveBeenCalledTimes(1);
   });
 });
 
