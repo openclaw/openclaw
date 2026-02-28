@@ -29,6 +29,23 @@ import {
 import { buildCursorPositionResponse, stripDsrRequests } from "./pty-dsr.js";
 import { getShellConfig, sanitizeBinaryOutput } from "./shell-utils.js";
 
+// Sanitize inherited host env before merge so dangerous variables from process.env
+// are not propagated into non-sandboxed executions.
+export function sanitizeHostBaseEnv(env: Record<string, string>): Record<string, string> {
+  const sanitized: Record<string, string> = {};
+  for (const [key, value] of Object.entries(env)) {
+    const upperKey = key.toUpperCase();
+    if (upperKey === "PATH") {
+      sanitized[key] = value;
+      continue;
+    }
+    if (isDangerousHostEnvVarName(upperKey)) {
+      continue;
+    }
+    sanitized[key] = value;
+  }
+  return sanitized;
+}
 // Centralized sanitization helper.
 // Throws an error if dangerous variables or PATH modifications are detected on the host.
 export function validateHostEnv(env: Record<string, string>): void {

@@ -101,7 +101,12 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
           items: { oneOf: [{ type: "string" }, { type: "number" }] },
         },
         requireMention: { type: "boolean" },
+        groupSessionScope: {
+          type: "string",
+          enum: ["group", "group_sender", "group_topic", "group_topic_sender"],
+        },
         topicSessionMode: { type: "string", enum: ["disabled", "enabled"] },
+        replyInThread: { type: "string", enum: ["disabled", "enabled"] },
         historyLimit: { type: "integer", minimum: 0 },
         dmHistoryLimit: { type: "integer", minimum: 0 },
         textChunkLimit: { type: "integer", minimum: 1 },

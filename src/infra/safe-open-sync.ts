@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { sameFileIdentity as hasSameFileIdentity } from "./file-identity.js";
 
 export type SafeOpenSyncFailureReason = "path" | "validation" | "io";
 
@@ -6,9 +7,10 @@ export type SafeOpenSyncResult =
   | { ok: true; path: string; fd: number; stat: fs.Stats }
   | { ok: false; reason: SafeOpenSyncFailureReason; error?: unknown };
 
-const OPEN_READ_FLAGS =
-  fs.constants.O_RDONLY |
-  (typeof fs.constants.O_NOFOLLOW === "number" ? fs.constants.O_NOFOLLOW : 0);
+type SafeOpenSyncFs = Pick<
+  typeof fs,
+  "constants" | "lstatSync" | "realpathSync" | "openSync" | "fstatSync" | "closeSync"
+>;
 
 function isExpectedPathError(error: unknown): boolean {
   const code =
@@ -17,41 +19,48 @@ function isExpectedPathError(error: unknown): boolean {
 }
 
 export function sameFileIdentity(left: fs.Stats, right: fs.Stats): boolean {
-  // On Windows, lstatSync (by path) may return dev=0 while fstatSync (by fd)
-  // returns the real volume serial number.  When either dev is 0, fall back to
-  // ino-only comparison which is still unique within a single volume.
-  const devMatch =
-    left.dev === right.dev || (process.platform === "win32" && (left.dev === 0 || right.dev === 0));
-  return devMatch && left.ino === right.ino;
+  return hasSameFileIdentity(left, right);
 }
 
 export function openVerifiedFileSync(params: {
   filePath: string;
   resolvedPath?: string;
   rejectPathSymlink?: boolean;
+  rejectHardlinks?: boolean;
   maxBytes?: number;
+  ioFs?: SafeOpenSyncFs;
 }): SafeOpenSyncResult {
+  const ioFs = params.ioFs ?? fs;
+  const openReadFlags =
+    ioFs.constants.O_RDONLY |
+    (typeof ioFs.constants.O_NOFOLLOW === "number" ? ioFs.constants.O_NOFOLLOW : 0);
   let fd: number | null = null;
   try {
     if (params.rejectPathSymlink) {
-      const candidateStat = fs.lstatSync(params.filePath);
+      const candidateStat = ioFs.lstatSync(params.filePath);
       if (candidateStat.isSymbolicLink()) {
         return { ok: false, reason: "validation" };
       }
     }
 
-    const realPath = params.resolvedPath ?? fs.realpathSync(params.filePath);
-    const preOpenStat = fs.lstatSync(realPath);
+    const realPath = params.resolvedPath ?? ioFs.realpathSync(params.filePath);
+    const preOpenStat = ioFs.lstatSync(realPath);
     if (!preOpenStat.isFile()) {
+      return { ok: false, reason: "validation" };
+    }
+    if (params.rejectHardlinks && preOpenStat.nlink > 1) {
       return { ok: false, reason: "validation" };
     }
     if (params.maxBytes !== undefined && preOpenStat.size > params.maxBytes) {
       return { ok: false, reason: "validation" };
     }
 
-    fd = fs.openSync(realPath, OPEN_READ_FLAGS);
-    const openedStat = fs.fstatSync(fd);
+    fd = ioFs.openSync(realPath, openReadFlags);
+    const openedStat = ioFs.fstatSync(fd);
     if (!openedStat.isFile()) {
+      return { ok: false, reason: "validation" };
+    }
+    if (params.rejectHardlinks && openedStat.nlink > 1) {
       return { ok: false, reason: "validation" };
     }
     if (params.maxBytes !== undefined && openedStat.size > params.maxBytes) {
@@ -71,7 +80,7 @@ export function openVerifiedFileSync(params: {
     return { ok: false, reason: "io", error };
   } finally {
     if (fd !== null) {
-      fs.closeSync(fd);
+      ioFs.closeSync(fd);
     }
   }
 }
