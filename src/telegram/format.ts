@@ -258,11 +258,69 @@ function splitTelegramChunkByHtmlLimit(
     Number.isFinite(candidateLimit) && candidateLimit > 0
       ? candidateLimit
       : Math.max(1, Math.floor(currentTextLength / 2));
-  const split = chunkMarkdownIR(chunk, splitLimit);
+  const split = splitMarkdownIRPreserveWhitespace(chunk, splitLimit);
   if (split.length > 1) {
     return split;
   }
-  return chunkMarkdownIR(chunk, Math.max(1, Math.floor(currentTextLength / 2)));
+  return splitMarkdownIRPreserveWhitespace(chunk, Math.max(1, Math.floor(currentTextLength / 2)));
+}
+
+function sliceStyleSpans(
+  styles: MarkdownIR["styles"],
+  start: number,
+  end: number,
+): MarkdownIR["styles"] {
+  return styles.flatMap((span) => {
+    if (span.end <= start || span.start >= end) {
+      return [];
+    }
+    const nextStart = Math.max(span.start, start) - start;
+    const nextEnd = Math.min(span.end, end) - start;
+    if (nextEnd <= nextStart) {
+      return [];
+    }
+    return [{ ...span, start: nextStart, end: nextEnd }];
+  });
+}
+
+function sliceLinkSpans(
+  links: MarkdownIR["links"],
+  start: number,
+  end: number,
+): MarkdownIR["links"] {
+  return links.flatMap((link) => {
+    if (link.end <= start || link.start >= end) {
+      return [];
+    }
+    const nextStart = Math.max(link.start, start) - start;
+    const nextEnd = Math.min(link.end, end) - start;
+    if (nextEnd <= nextStart) {
+      return [];
+    }
+    return [{ ...link, start: nextStart, end: nextEnd }];
+  });
+}
+
+function splitMarkdownIRPreserveWhitespace(ir: MarkdownIR, limit: number): MarkdownIR[] {
+  if (!ir.text) {
+    return [];
+  }
+  const normalizedLimit = Math.max(1, Math.floor(limit));
+  if (normalizedLimit <= 0 || ir.text.length <= normalizedLimit) {
+    return [ir];
+  }
+  const chunks: MarkdownIR[] = [];
+  let cursor = 0;
+  while (cursor < ir.text.length) {
+    const end = Math.min(ir.text.length, cursor + normalizedLimit);
+    chunks.push({
+      text: ir.text.slice(cursor, end),
+      styles: sliceStyleSpans(ir.styles, cursor, end),
+      links: sliceLinkSpans(ir.links, cursor, end),
+    });
+    cursor = end;
+  }
+  return chunks;
 }
 
 function renderTelegramChunksWithinHtmlLimit(
