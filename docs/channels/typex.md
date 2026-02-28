@@ -65,5 +65,5 @@ openclaw channels add
 ## Notes
 
 - Inbound messages are polled from TypeX API.
-- Message offset (`pos`) is stored in state files under `~/.openclaw/typex/`.
+- Message offset (`pos`) is stored in state files under `~/.openclaw/state/typex/`.
 - Default target hint is `chat_id`.

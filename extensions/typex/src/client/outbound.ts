@@ -24,7 +24,7 @@ export const typexOutbound: ChannelOutboundAdapter = {
   sendText: async ({ to, text, accountId, cfg }: any) => {
     const token = resolveToken(cfg, accountId);
     const client = getTypeXClient(accountId ?? undefined, { token, skipConfigCheck: true });
-    const result = await sendMessageTypeX(client, text ?? "");
+    const result = await sendMessageTypeX(client, to, text ?? "");
     return {
       channel: "typex",
       messageId: result?.message_id || "unknown",
@@ -38,7 +38,7 @@ export const typexOutbound: ChannelOutboundAdapter = {
     }
     const token = resolveToken(cfg, accountId);
     const client = getTypeXClient(accountId ?? undefined, { token, skipConfigCheck: true });
-    const result = await sendMessageTypeX(client, text ?? "");
+    const result = await sendMessageTypeX(client, to, text ?? "");
     return {
       channel: "typex",
       messageId: result?.message_id || "unknown",

@@ -113,7 +113,7 @@ export async function processTypeXMessage(
         };
         // Handle text response
         if (responsePayload.text) {
-          await sendMessageTypeX(client, responsePayload.text, {
+          await sendMessageTypeX(client, chatId, responsePayload.text, {
             msgType: TypeXMessageEnum.richText,
           });
         }
@@ -126,7 +126,12 @@ export async function processTypeXMessage(
             : [];
 
         for (const mediaUrl of mediaUrls) {
-          await sendMessageTypeX(client, {}, { mediaUrl, msgType: TypeXMessageEnum.richText });
+          await sendMessageTypeX(
+            client,
+            chatId,
+            {},
+            { mediaUrl, msgType: TypeXMessageEnum.richText },
+          );
         }
       },
       onError: (err: Error) => {

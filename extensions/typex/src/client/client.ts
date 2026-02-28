@@ -2,7 +2,6 @@ import { OpenClawConfig, WizardPrompter } from "openclaw/plugin-sdk";
 import { TypeXMessageEnum, type TypeXClientOptions } from "./types.js";
 
 const TYPEX_DOMAIN = "https://api-coco.typex.im";
-// const TYPEX_DOMAIN = "https://api-tx.bossjob.net.cn";
 
 let prompter: WizardPrompter | undefined;
 
@@ -88,7 +87,7 @@ export class TypeXClient {
     }
   }
 
-  async sendMessage(content: string | object, msgType: TypeXMessageEnum = 0) {
+  async sendMessage(to: string, content: string | object, msgType: TypeXMessageEnum = 0) {
     const token = this.accessToken;
     if (!token) {
       throw new Error("TypeXClient: Not authenticated.");
@@ -109,11 +108,11 @@ export class TypeXClient {
 
     if (prompter)
       prompter.note(
-        `TypeXClient sending message: content=${typeof finalContent === "string" ? finalContent : JSON.stringify(finalContent)}`,
+        `TypeXClient sending message: to=${to} content=${typeof finalContent === "string" ? finalContent : JSON.stringify(finalContent)}`,
       );
     else
       console.log(
-        `TypeXClient sending message: content=${typeof finalContent === "string" ? finalContent : JSON.stringify(finalContent)}`,
+        `TypeXClient sending message: to=${to} content=${typeof finalContent === "string" ? finalContent : JSON.stringify(finalContent)}`,
       );
 
     try {

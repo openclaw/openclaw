@@ -1,4 +1,3 @@
-import { formatErrorMessage } from "openclaw/plugin-sdk";
 import type { TypeXClient } from "./client.js";
 // import { loadWebMedia } from "../web/media.js";
 import { TypeXMessageEnum } from "./types.js";
@@ -11,6 +10,7 @@ export type TypeXSendOpts = {
 
 export async function sendMessageTypeX(
   client: TypeXClient,
+  to: string,
   content: string | { text?: string },
   opts: TypeXSendOpts = {},
 ) {
@@ -21,5 +21,5 @@ export async function sendMessageTypeX(
     throw new Error("TypeX media sending is not supported yet.");
   }
 
-  return await client.sendMessage(finalContent, msgType);
+  return await client.sendMessage(to, finalContent, msgType);
 }

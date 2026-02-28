@@ -63,5 +63,5 @@ openclaw channels add
 ## 说明
 
 - 入站消息通过 TypeX API 轮询获取。
-- 偏移量 `pos` 保存在 state 文件（`~/.openclaw/typex/`）中。
+- 偏移量 `pos` 保存在 state 文件（`~/.openclaw/state/typex/`）中。
 - 默认目标提示为 `chat_id`。
