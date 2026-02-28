@@ -571,11 +571,17 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
       if (release) {
         await release();
       }
+      let redirectHostname: string;
+      try {
+        redirectHostname = new URL(finalUrl).hostname;
+      } catch {
+        redirectHostname = finalUrl;
+      }
       return jsonResult({
         error: "url_not_allowed",
         message: `Redirect target not in allowlist. Allowed domains: ${redirectAllowlist.join(", ")}`,
         blockedUrl: finalUrl,
-        blockedHostname: new URL(finalUrl).hostname,
+        blockedHostname: redirectHostname,
       }) as unknown as Record<string, unknown>;
     }
 
