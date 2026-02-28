@@ -98,7 +98,7 @@ def plan_migration(files: list[Path]) -> tuple[list[tuple[Path, Path, str]], lis
             if dst.exists():
                 stem = f.stem
                 suffix = f.suffix
-                dst = DST_DIR / f"{stem}_from500{suffix}"
+                dst = DST_DIR / f"{stem}_from400{suffix}"
             to_move.append((f, dst, reason))
         else:
             to_keep.append((f, reason))
@@ -150,7 +150,7 @@ def main():
 
     print(f"\n{'='*60}")
     print(f"  이동 대상: {len(to_move)}개 → 200 정리/240 인사이트")
-    print(f"  유지:      {len(to_keep)}개 (500 잔류)")
+    print(f"  유지:      {len(to_keep)}개 (400 잔류)")
     print(f"  백업 파일: {len(backups)}개 (_orig/_reclass)")
     print(f"{'='*60}\n")
 
@@ -163,7 +163,7 @@ def main():
         print()
 
     if to_keep:
-        print(f"[KEEP — 500 유지] ({len(to_keep)}개)")
+        print(f"[KEEP — 400 유지] ({len(to_keep)}개)")
         for path, reason in to_keep[:20]:
             print(f"  {path.relative_to(VAULT)}  ({reason})")
         if len(to_keep) > 20:

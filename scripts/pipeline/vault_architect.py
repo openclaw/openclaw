@@ -847,7 +847,7 @@ def format_report(diag: DiagnosisResult, stats: PhaseStats) -> str:
     lines = [f"\U0001f3d7 <b>볼트 아키텍트</b> | {today}", ""]
 
     lines.append("<b>진단:</b>")
-    stage_nums = {"캡처": "100", "정리": "200", "연결": "400", "판단": "500"}
+    stage_nums = {"캡처": "100", "정리": "200", "연결": "300", "판단": "400"}
     for stage in ["캡처", "정리", "연결", "판단"]:
         cnt = diag.counts.get(stage, 0)
         lines.append(f"  {stage_nums[stage]} {stage}: {cnt}")

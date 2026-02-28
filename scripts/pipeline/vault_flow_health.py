@@ -543,7 +543,7 @@ def detect_misplaced_notes(
 ) -> list[dict]:
     """각 단계에서 잘못 분류된 노트 감지.
 
-    Returns list of {"note": stem, "current": "500", "suggested": "200", "reason": "..."}.
+    Returns list of {"note": stem, "current": "400", "suggested": "200", "reason": "..."}.
     """
     if vault_root is None:
         vault_root = VAULT
