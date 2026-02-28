@@ -4,7 +4,6 @@ export type InlineToolSecretViolation = {
 };
 
 const SENSITIVE_KEY_NAMES = new Set([
-  "token",
   "accesstoken",
   "refreshtoken",
   "idtoken",
@@ -21,6 +20,8 @@ const SENSITIVE_KEY_NAMES = new Set([
 
 // These keys represent opaque resource identifiers, not credentials.
 const NON_SECRET_TOKEN_KEYS = new Set([
+  "token",
+  "apptoken",
   "filetoken",
   "foldertoken",
   "doctoken",
@@ -52,8 +53,7 @@ function shouldInspectKey(key: string): boolean {
     normalized.includes("secret") ||
     normalized.includes("apikey") ||
     normalized.includes("accesstoken") ||
-    normalized.includes("refreshtoken") ||
-    normalized.endsWith("token")
+    normalized.includes("refreshtoken")
   );
 }
 

@@ -33,6 +33,27 @@ describe("tool inline secret policy", () => {
     expect(violation).toBeNull();
   });
 
+  it("does not flag bare token handles", () => {
+    const violation = findInlineToolSecretViolation({
+      token: "resume-handle-123",
+    });
+    expect(violation).toBeNull();
+  });
+
+  it("does not flag app_token resource identifiers", () => {
+    const violation = findInlineToolSecretViolation({
+      app_token: "bascnAABBCCDDEE",
+    });
+    expect(violation).toBeNull();
+  });
+
+  it("still flags access_token credentials", () => {
+    const violation = findInlineToolSecretViolation({
+      access_token: "ya29.secret",
+    });
+    expect(violation).toEqual({ key: "access_token", path: "access_token" });
+  });
+
   it("supports emergency bypass env flag", () => {
     process.env.OPENCLAW_ALLOW_INLINE_TOOL_SECRETS = "1";
     try {
