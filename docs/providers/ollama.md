@@ -199,6 +199,7 @@ If you need to use the OpenAI-compatible endpoint instead (e.g., behind a proxy 
       ollama: {
         baseUrl: "http://ollama-host:11434/v1",
         api: "openai-completions",
+        injectNumCtxForOpenAICompat: true, // default: true
         apiKey: "ollama-local",
         models: [...]
       }
@@ -208,6 +209,24 @@ If you need to use the OpenAI-compatible endpoint instead (e.g., behind a proxy 
 ```
 
 This mode may not support streaming + tool calling simultaneously. You may need to disable streaming with `params: { streaming: false }` in model config.
+
+When `api: "openai-completions"` is used with Ollama, OpenClaw injects `options.num_ctx` by default so Ollama does not silently fall back to a 4096 context window. If your proxy/upstream rejects unknown `options` fields, disable this behavior:
+
+```json5
+{
+  models: {
+    providers: {
+      ollama: {
+        baseUrl: "http://ollama-host:11434/v1",
+        api: "openai-completions",
+        injectNumCtxForOpenAICompat: false,
+        apiKey: "ollama-local",
+        models: [...]
+      }
+    }
+  }
+}
+```
 
 ### Context windows
 
