@@ -125,7 +125,9 @@ describe("registerStimmVoiceCli", () => {
       logger,
     });
 
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
     await prog.commands["voice:start"].action!({ channel: "web" });
+    exitSpy.mockRestore();
     expect(rm.createSession).toHaveBeenCalled();
     expect(logger.info).toHaveBeenCalledWith(expect.stringContaining("Voice session started"));
   });
@@ -149,7 +151,9 @@ describe("registerStimmVoiceCli", () => {
       logger,
     });
 
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
     await prog.commands["voice:start"].action!({ channel: "web" });
+    exitSpy.mockRestore();
 
     expect(logger.info).toHaveBeenCalledWith(
       expect.stringContaining("Share URL: https://example.trycloudflare.com/voice?claim=abc"),

@@ -233,6 +233,12 @@ export function registerStimmVoiceCli(deps: VoiceCliDeps): void {
         logger.info(`  Use this token to connect from a LiveKit client.`);
       }
 
+      if (!opts.wait) {
+        // LiveKit SDK keeps open HTTP/WebSocket handles — exit explicitly so the
+        // CLI doesn't hang after printing the QR code.
+        process.exit(0);
+      }
+
       if (opts.wait) {
         logger.info(`  Press Ctrl+C (or send SIGTERM) to end the session and exit.`);
         let exiting = false;
