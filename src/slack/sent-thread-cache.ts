@@ -1,7 +1,7 @@
 /**
  * In-memory cache of Slack threads the bot has participated in.
  * Used to auto-respond in threads without requiring @mention after the first reply.
- * Mirrors the pattern used by MS Teams and Telegram sent-message caches.
+ * Follows a similar TTL pattern to the MS Teams and Telegram sent-message caches.
  */
 
 const TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
@@ -9,8 +9,8 @@ const MAX_ENTRIES = 5000;
 
 const threadParticipation = new Map<string, number>();
 
-function makeKey(channelId: string, threadTs: string): string {
-  return `${channelId}:${threadTs}`;
+function makeKey(accountId: string, channelId: string, threadTs: string): string {
+  return `${accountId}:${channelId}:${threadTs}`;
 }
 
 function evictExpired(): void {
@@ -22,21 +22,29 @@ function evictExpired(): void {
   }
 }
 
-export function recordSlackThreadParticipation(channelId: string, threadTs: string): void {
-  if (!channelId || !threadTs) {
+export function recordSlackThreadParticipation(
+  accountId: string,
+  channelId: string,
+  threadTs: string,
+): void {
+  if (!accountId || !channelId || !threadTs) {
     return;
   }
   if (threadParticipation.size >= MAX_ENTRIES) {
     evictExpired();
   }
-  threadParticipation.set(makeKey(channelId, threadTs), Date.now());
+  threadParticipation.set(makeKey(accountId, channelId, threadTs), Date.now());
 }
 
-export function hasSlackThreadParticipation(channelId: string, threadTs: string): boolean {
-  if (!channelId || !threadTs) {
+export function hasSlackThreadParticipation(
+  accountId: string,
+  channelId: string,
+  threadTs: string,
+): boolean {
+  if (!accountId || !channelId || !threadTs) {
     return false;
   }
-  const key = makeKey(channelId, threadTs);
+  const key = makeKey(accountId, channelId, threadTs);
   const timestamp = threadParticipation.get(key);
   if (timestamp == null) {
     return false;

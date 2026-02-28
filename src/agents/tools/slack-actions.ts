@@ -205,8 +205,8 @@ export async function handleSlackAction(
           blocks,
         });
 
-        if (threadTs && result.channelId) {
-          recordSlackThreadParticipation(result.channelId, threadTs);
+        if (threadTs && result.channelId && account.accountId) {
+          recordSlackThreadParticipation(account.accountId, result.channelId, threadTs);
         }
 
         // Keep "first" mode consistent even when the agent explicitly provided

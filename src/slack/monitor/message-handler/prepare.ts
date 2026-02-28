@@ -212,7 +212,7 @@ export async function prepareSlackMessage(params: {
     ctx.botUserId &&
     message.thread_ts &&
     (message.parent_user_id === ctx.botUserId ||
-      hasSlackThreadParticipation(message.channel, message.thread_ts)),
+      hasSlackThreadParticipation(account.accountId, message.channel, message.thread_ts)),
   );
 
   const sender = message.user ? await ctx.resolveUserName(message.user) : null;

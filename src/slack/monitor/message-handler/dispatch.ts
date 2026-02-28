@@ -190,9 +190,13 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   });
   let streamSession: SlackStreamSession | null = null;
   let streamFailed = false;
+  let usedReplyThreadTs: string | undefined;
 
   const deliverNormally = async (payload: ReplyPayload, forcedThreadTs?: string): Promise<void> => {
     const replyThreadTs = forcedThreadTs ?? replyPlan.nextThreadTs();
+    if (replyThreadTs) {
+      usedReplyThreadTs ??= replyThreadTs;
+    }
     await deliverReplies({
       replies: [payload],
       target: prepared.replyTarget,
@@ -426,8 +430,9 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
 
   const anyReplyDelivered = queuedFinal || (counts.block ?? 0) > 0 || (counts.final ?? 0) > 0;
 
-  if (anyReplyDelivered && statusThreadTs) {
-    recordSlackThreadParticipation(message.channel, statusThreadTs);
+  const participationThreadTs = usedReplyThreadTs ?? statusThreadTs;
+  if (anyReplyDelivered && participationThreadTs) {
+    recordSlackThreadParticipation(account.accountId, message.channel, participationThreadTs);
   }
 
   if (!anyReplyDelivered) {
