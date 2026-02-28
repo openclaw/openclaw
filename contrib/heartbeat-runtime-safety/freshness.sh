@@ -42,7 +42,17 @@ check() {
 
 latest() {
   local pattern="$1"
-  find "$REPORT_DIR" -maxdepth 1 -type f -name "$pattern" -print0 2>/dev/null | xargs -0 ls -1t 2>/dev/null | head -n 1 || true
+  local files=()
+  shopt -s nullglob
+  files=("$REPORT_DIR"/$pattern)
+  shopt -u nullglob
+
+  if (( ${#files[@]} == 0 )); then
+    echo ""
+    return
+  fi
+
+  ls -1t "${files[@]}" 2>/dev/null | head -n 1 || true
 }
 
 pre=$(latest "heartbeat-preflight-*.md")
