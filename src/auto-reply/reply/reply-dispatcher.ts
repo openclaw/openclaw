@@ -188,6 +188,7 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
             gifPlayback: deliveryQueueContext.gifPlayback,
             silent: deliveryQueueContext.silent,
             turnId: deliveryQueueContext.turnId,
+            dispatchKind: kind,
           }).catch(() => null);
         }
         try {

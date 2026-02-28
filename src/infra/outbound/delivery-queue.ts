@@ -42,6 +42,8 @@ type QueuedDeliveryPayload = {
   gifPlayback?: boolean;
   silent?: boolean;
   mirror?: DeliveryMirrorPayload;
+  /** Dispatch kind (tool/block/final). Non-final entries are skipped during recovery. */
+  dispatchKind?: "tool" | "block" | "final";
 };
 
 type QueuedDeliveryParams = QueuedDeliveryPayload & {
@@ -55,6 +57,7 @@ export interface QueuedDelivery extends QueuedDeliveryPayload {
   lastAttemptAt?: number;
   lastError?: string;
   turnId?: string;
+  dispatchKind?: "tool" | "block" | "final";
 }
 
 export type RecoverySummary = {
@@ -127,6 +130,7 @@ export async function enqueueDelivery(
     gifPlayback: params.gifPlayback,
     silent: params.silent,
     mirror: params.mirror,
+    dispatchKind: params.dispatchKind,
   });
   db.prepare(
     `INSERT INTO message_outbox
@@ -464,7 +468,34 @@ export async function recoverPendingDeliveries(opts: {
     }
   }
 
-  if (pending.length === 0) {
+  // Non-final payloads (tool results, blocks) are expendable during crash recovery —
+  // the turn recovery worker replays the entire turn, regenerating them. Recovering them
+  // would send them as separate messages through deliverOutboundPayloads, bypassing
+  // channel-specific kind filtering (e.g. web channel suppresses non-final sends).
+  const db2 = getLifecycleDb(opts.stateDir);
+  const finalOnly: QueuedDelivery[] = [];
+  for (const entry of pending) {
+    if (entry.dispatchKind && entry.dispatchKind !== "final") {
+      try {
+        db2
+          .prepare(
+            `UPDATE message_outbox
+             SET status='failed_terminal',
+                 error_class='terminal',
+                 terminal_reason='non_final_recovery_skip',
+                 completed_at=?
+           WHERE id=?`,
+          )
+          .run(Date.now(), entry.id);
+      } catch {
+        // non-fatal
+      }
+      continue;
+    }
+    finalOnly.push(entry);
+  }
+
+  if (finalOnly.length === 0) {
     return {
       recovered: 0,
       failed: 0,
@@ -473,7 +504,7 @@ export async function recoverPendingDeliveries(opts: {
       skippedStartupCutoff,
     };
   }
-  opts.log.info(`Found ${pending.length} pending delivery entries — starting recovery`);
+  opts.log.info(`Found ${finalOnly.length} pending delivery entries — starting recovery`);
 
   const deadline = Date.now() + (opts.maxRecoveryMs ?? 60_000);
   let recovered = 0;
@@ -481,10 +512,10 @@ export async function recoverPendingDeliveries(opts: {
   let skippedMaxRetries = 0;
   let deferredBackoff = 0;
 
-  for (const entry of pending) {
+  for (const entry of finalOnly) {
     const now = Date.now();
     if (now >= deadline) {
-      const deferred = pending.length - recovered - failed - skippedMaxRetries - deferredBackoff;
+      const deferred = finalOnly.length - recovered - failed - skippedMaxRetries - deferredBackoff;
       opts.log.warn(`Recovery time budget exceeded — ${deferred} entries deferred to next tick`);
       break;
     }
