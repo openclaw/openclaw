@@ -132,7 +132,8 @@ export function isOllamaCompatProvider(model: {
   baseUrl?: string;
   api?: string;
 }): boolean {
-  if (normalizeProviderId(model.provider ?? "") === "ollama") {
+  const providerId = normalizeProviderId(model.provider ?? "");
+  if (providerId === "ollama") {
     return true;
   }
   if (!model.baseUrl) {
@@ -146,7 +147,16 @@ export function isOllamaCompatProvider(model: {
       hostname === "127.0.0.1" ||
       hostname === "::1" ||
       hostname === "[::1]";
-    return isLocalhost && parsed.port === "11434";
+    if (isLocalhost && parsed.port === "11434") {
+      return true;
+    }
+
+    // Allow remote/LAN Ollama OpenAI-compatible endpoints when the provider id
+    // itself indicates Ollama usage (e.g. "my-ollama").
+    const providerHintsOllama = providerId.includes("ollama");
+    const isOllamaPort = parsed.port === "11434";
+    const isOllamaCompatPath = parsed.pathname === "/" || /^\/v1\/?$/i.test(parsed.pathname);
+    return providerHintsOllama && isOllamaPort && isOllamaCompatPath;
   } catch {
     return false;
   }

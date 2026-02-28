@@ -210,6 +210,16 @@ describe("isOllamaCompatProvider", () => {
     ).toBe(false);
   });
 
+  it("detects remote Ollama-compatible endpoint when provider id hints ollama", () => {
+    expect(
+      isOllamaCompatProvider({
+        provider: "my-ollama",
+        api: "openai-completions",
+        baseUrl: "http://ollama-host:11434/v1",
+      }),
+    ).toBe(true);
+  });
+
   it("detects IPv6 loopback Ollama OpenAI-compatible endpoint", () => {
     expect(
       isOllamaCompatProvider({
@@ -218,6 +228,16 @@ describe("isOllamaCompatProvider", () => {
         baseUrl: "http://[::1]:11434/v1",
       }),
     ).toBe(true);
+  });
+
+  it("does not classify arbitrary remote hosts on 11434 without ollama provider hint", () => {
+    expect(
+      isOllamaCompatProvider({
+        provider: "custom",
+        api: "openai-completions",
+        baseUrl: "http://example.com:11434/v1",
+      }),
+    ).toBe(false);
   });
 });
 
