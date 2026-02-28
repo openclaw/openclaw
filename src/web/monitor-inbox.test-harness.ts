@@ -17,6 +17,10 @@ export const DEFAULT_WEB_INBOX_CONFIG = {
       // Allow all in tests by default.
       allowFrom: ["*"],
     },
+    defaults: {
+      // Use branded mode for tests that expect pairing messages
+      unpairedResponse: "branded",
+    },
   },
   messages: {
     messagePrefix: undefined,
