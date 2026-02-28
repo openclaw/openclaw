@@ -51,9 +51,19 @@ export async function runDiscordGatewayLifecycle(params: {
   }
 
   const HELLO_TIMEOUT_MS = 30000;
+  const MAX_CONSECUTIVE_STALLS = 5;
   let helloTimeoutId: ReturnType<typeof setTimeout> | undefined;
+  let consecutiveStalls = 0;
   const onGatewayDebug = (msg: unknown) => {
     const message = String(msg);
+
+    // Reset stall counter when gateway successfully receives HELLO
+    // (indicated by a successful resume or identify completing).
+    if (message.includes("Received HELLO") || message.includes("Session resumed")) {
+      consecutiveStalls = 0;
+      return;
+    }
+
     if (!message.includes("WebSocket connection opened")) {
       return;
     }
@@ -62,11 +72,32 @@ export async function runDiscordGatewayLifecycle(params: {
     }
     helloTimeoutId = setTimeout(() => {
       if (!gateway?.isConnected) {
-        params.runtime.log?.(
-          danger(
-            `connection stalled: no HELLO received within ${HELLO_TIMEOUT_MS}ms, forcing reconnect`,
-          ),
-        );
+        consecutiveStalls++;
+        if (consecutiveStalls >= MAX_CONSECUTIVE_STALLS) {
+          params.runtime.log?.(
+            danger(
+              `connection stalled: ${consecutiveStalls} consecutive stalls without HELLO — clearing session to force fresh IDENTIFY`,
+            ),
+          );
+          // Invalidate session state so the next connect() sends a fresh
+          // IDENTIFY instead of trying to resume a dead session.
+          const state = (
+            gateway as unknown as {
+              state?: { sessionId?: string | null; resumeGatewayUrl?: string | null };
+            }
+          ).state;
+          if (state) {
+            state.sessionId = null;
+            state.resumeGatewayUrl = null;
+          }
+          consecutiveStalls = 0;
+        } else {
+          params.runtime.log?.(
+            danger(
+              `connection stalled: no HELLO received within ${HELLO_TIMEOUT_MS}ms (stall ${consecutiveStalls}/${MAX_CONSECUTIVE_STALLS}), forcing reconnect`,
+            ),
+          );
+        }
         gateway?.disconnect();
         gateway?.connect(false);
       }
