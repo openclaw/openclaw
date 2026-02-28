@@ -600,6 +600,23 @@ export async function dispatchReplyFromConfig(params: {
     return { queuedFinal, counts };
   } catch (err) {
     recordProcessed("error", { error: String(err) });
+
+    // Emit message:sent with success: false on error (mirrors deliver.ts catch path)
+    if (sessionKey && !shouldRouteToOriginating) {
+      const errorContent = accumulatedBlockText || "";
+      void triggerInternalHook(
+        createInternalHookEvent("message", "sent", sessionKey, {
+          to: conversationId,
+          content: errorContent,
+          success: false,
+          error: err instanceof Error ? err.message : String(err),
+          channelId,
+          accountId: ctx.AccountId,
+          conversationId,
+        }),
+      ).catch(() => {});
+    }
+
     markIdle("message_error");
     throw err;
   }
