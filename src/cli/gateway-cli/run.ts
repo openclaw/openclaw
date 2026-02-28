@@ -449,7 +449,16 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
         // ignore diagnostics failures
       }
       await maybeExplainGatewayServiceStop();
-      defaultRuntime.exit(1);
+      // If the port is already bound by another gateway instance, exit 0 so
+      // service managers (systemd, launchd) with Restart=on-failure do not
+      // spin in a tight crash-loop.  Any other lock-acquisition failure is
+      // still a real error and warrants a non-zero exit.
+      const lockCause = (err as GatewayLockError).cause;
+      const isPortConflict =
+        lockCause != null &&
+        typeof lockCause === "object" &&
+        (lockCause as NodeJS.ErrnoException).code === "EADDRINUSE";
+      defaultRuntime.exit(isPortConflict ? 0 : 1);
       return;
     }
     defaultRuntime.error(`Gateway failed to start: ${String(err)}`);
