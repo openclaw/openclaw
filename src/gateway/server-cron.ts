@@ -139,10 +139,10 @@ export function buildGatewayCronService(params: {
     const sessionKey =
       opts?.sessionKey && agentId
         ? resolveCronSessionKey({
-            runtimeConfig,
-            agentId,
-            requestedSessionKey: opts.sessionKey,
-          })
+          runtimeConfig,
+          agentId,
+          requestedSessionKey: opts.sessionKey,
+        })
         : undefined;
     return { runtimeConfig, agentId, sessionKey };
   };
@@ -194,7 +194,7 @@ export function buildGatewayCronService(params: {
         );
       const baseHeartbeat = {
         ...runtimeConfig.agents?.defaults?.heartbeat,
-        ...agentEntry?.heartbeat,
+        ...(typeof agentEntry === "object" && agentEntry ? agentEntry.heartbeat : undefined),
       };
       const heartbeatOverride = opts?.heartbeat
         ? { ...baseHeartbeat, ...opts.heartbeat }
