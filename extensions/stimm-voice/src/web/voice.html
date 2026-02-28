@@ -1023,6 +1023,13 @@
         } catch (error) {
           const message = error?.message || "Could not connect to voice session.";
           showError(message);
+          // Claim was already consumed server-side — end the orphaned session now so the
+          // room is cleaned up and the user can retry with a fresh link.
+          if (currentRoomName && disconnectToken) {
+            try {
+              await endSession(currentRoomName, disconnectToken);
+            } catch {}
+          }
           cleanupConnectionUI();
           updateStatus("error", "Connection failed");
         } finally {

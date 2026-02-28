@@ -223,9 +223,10 @@ const stimmVoicePlugin = {
         // Supervisor callback — Python OpenClawSupervisor posts here.
         OPENCLAW_SUPERVISOR_URL: `http://127.0.0.1:${gatewayPort}/stimm/supervisor`,
       };
-      if (config.access.supervisorSecret) {
-        env.OPENCLAW_SUPERVISOR_SECRET = config.access.supervisorSecret;
-      }
+      // Always pass the secret so the Python agent can authenticate. Falls back to the
+      // same derived secret used by the /stimm/supervisor route.
+      env.OPENCLAW_SUPERVISOR_SECRET =
+        config.access.supervisorSecret || `livekit:${config.livekit.apiSecret}`;
       // Per-pipeline API keys (only set if resolved).
       if (config.voiceAgent.stt.apiKey) env.STIMM_STT_API_KEY = config.voiceAgent.stt.apiKey;
       if (config.voiceAgent.tts.apiKey) env.STIMM_TTS_API_KEY = config.voiceAgent.tts.apiKey;
@@ -815,9 +816,13 @@ const stimmVoicePlugin = {
           res.end();
           return;
         }
-        if (config.access.supervisorSecret) {
+        {
+          // Always enforce auth — fall back to derived secret when no explicit one is configured,
+          // matching the claimSecret derivation above.
           const provided = req.headers["x-stimm-supervisor-secret"];
-          const expected = Buffer.from(config.access.supervisorSecret, "utf8");
+          const effectiveSecret =
+            config.access.supervisorSecret || `livekit:${config.livekit.apiSecret}`;
+          const expected = Buffer.from(effectiveSecret, "utf8");
           const actual = Buffer.from(typeof provided === "string" ? provided : "", "utf8");
           if (actual.length !== expected.length || !timingSafeEqual(actual, expected)) {
             res.writeHead(401, { "Content-Type": "application/json" });
