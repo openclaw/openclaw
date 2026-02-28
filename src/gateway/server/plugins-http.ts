@@ -9,6 +9,9 @@ export type PluginHttpRequestHandler = (
   res: ServerResponse,
 ) => Promise<boolean>;
 
+// Only checks specific routes registered via registerHttpRoute, not wildcard handlers
+// registered via registerHttpHandler. Wildcard handlers (e.g., webhooks) implement
+// their own signature-based auth and are handled separately in the auth enforcement logic.
 export function isRegisteredPluginHttpRoutePath(
   registry: PluginRegistry,
   pathname: string,
