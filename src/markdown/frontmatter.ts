@@ -149,7 +149,26 @@ export function parseFrontmatterBlock(content: string): ParsedFrontmatter {
 
   const merged: ParsedFrontmatter = { ...yamlParsed };
   for (const [key, value] of Object.entries(lineParsed)) {
-    if (value.startsWith("{") || value.startsWith("[")) {
+    const yamlValue = yamlParsed[key];
+    // Prefer the line-parser value in these two cases:
+    // 1. The line-parser found a JSON-like value (starts with { or [) for a
+    //    field where YAML produced a plain string — keep the raw JSON form.
+    // 2. YAML parsed a single-line field as a nested object (JSON string
+    //    starting with "{") because of an unquoted colon inside the value
+    //    (e.g. "description: Foo IMPORTANT: bar"), but the line-parser
+    //    correctly read it as a plain, single-line string.  In this case we
+    //    trust the line-parser.  We guard against multi-line YAML objects
+    //    (indented blocks) by requiring the line-parser value to be a
+    //    single-line, non-JSON string.
+    const lineParsedIsPlainSingleLine =
+      !value.includes("\n") &&
+      !value.startsWith("{") &&
+      !value.startsWith("[");
+    const yamlWasMisparsedAsObject =
+      typeof yamlValue === "string" &&
+      (yamlValue.startsWith("{") || yamlValue.startsWith("[")) &&
+      lineParsedIsPlainSingleLine;
+    if (value.startsWith("{") || value.startsWith("[") || yamlWasMisparsedAsObject) {
       merged[key] = value;
     }
   }
