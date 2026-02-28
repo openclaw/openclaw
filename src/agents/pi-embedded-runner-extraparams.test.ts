@@ -209,6 +209,44 @@ describe("applyExtraParamsToAgent", () => {
     return calls[0]?.headers;
   }
 
+  function extractCodexAccountIdFromJwt(token: string | undefined): string | undefined {
+    if (typeof token !== "string") {
+      return undefined;
+    }
+    const parts = token.split(".");
+    if (parts.length !== 3 || !parts[1]) {
+      return undefined;
+    }
+    try {
+      const payload = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8")) as {
+        [key: string]: unknown;
+      };
+      const authClaim = payload["https://api.openai.com/auth"];
+      if (!authClaim || typeof authClaim !== "object" || Array.isArray(authClaim)) {
+        return undefined;
+      }
+      const accountId = (authClaim as { chatgpt_account_id?: unknown }).chatgpt_account_id;
+      return typeof accountId === "string" ? accountId : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  function makeCodexJwt(accountId: string): string {
+    const header = Buffer.from(JSON.stringify({ alg: "none", typ: "JWT" }), "utf8").toString(
+      "base64url",
+    );
+    const payload = Buffer.from(
+      JSON.stringify({
+        "https://api.openai.com/auth": {
+          chatgpt_account_id: accountId,
+        },
+      }),
+      "utf8",
+    ).toString("base64url");
+    return `${header}.${payload}.`;
+  }
+
   it("does not inject reasoning when thinkingLevel is off (default) for OpenRouter", () => {
     // Regression: "off" is a truthy string, so the old code injected
     // reasoning: { effort: "none" }, causing a 400 on models that require
@@ -649,6 +687,79 @@ describe("applyExtraParamsToAgent", () => {
 
     expect(calls).toHaveLength(1);
     expect(calls[0]?.transport).toBe("auto");
+  });
+
+  it("wraps opaque Codex tokens with JWT compat claims while preserving Authorization", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+    const opaqueToken = "dku_test_opaque_member_token";
+
+    applyExtraParamsToAgent(agent, undefined, "openai-codex", "gpt-5.3-codex");
+
+    const model = {
+      api: "openai-codex-responses",
+      provider: "openai-codex",
+      id: "gpt-5.3-codex",
+    } as Model<"openai-codex-responses">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {
+      apiKey: opaqueToken,
+      headers: { "X-Custom": "1" },
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.apiKey).not.toBe(opaqueToken);
+    expect(extractCodexAccountIdFromJwt(calls[0]?.apiKey)).toBe("compat");
+    expect(calls[0]?.headers).toEqual({
+      "X-Custom": "1",
+      Authorization: `Bearer ${opaqueToken}`,
+      "chatgpt-account-id": "compat",
+    });
+  });
+
+  it("reuses explicit chatgpt-account-id for Codex opaque-token compat", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+    const opaqueToken = "dku_test_opaque_member_token";
+
+    applyExtraParamsToAgent(agent, undefined, "openai-codex", "gpt-5.3-codex");
+
+    const model = {
+      api: "openai-codex-responses",
+      provider: "openai-codex",
+      id: "gpt-5.3-codex",
+    } as Model<"openai-codex-responses">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {
+      apiKey: opaqueToken,
+      headers: { "chatgpt-account-id": "acct_user_123" },
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(extractCodexAccountIdFromJwt(calls[0]?.apiKey)).toBe("acct_user_123");
+    expect(calls[0]?.headers).toEqual({
+      Authorization: `Bearer ${opaqueToken}`,
+      "chatgpt-account-id": "acct_user_123",
+    });
+  });
+
+  it("keeps JWT Codex tokens unchanged", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+    const jwtToken = makeCodexJwt("acct_from_jwt");
+
+    applyExtraParamsToAgent(agent, undefined, "openai-codex", "gpt-5.3-codex");
+
+    const model = {
+      api: "openai-codex-responses",
+      provider: "openai-codex",
+      id: "gpt-5.3-codex",
+    } as Model<"openai-codex-responses">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {
+      apiKey: jwtToken,
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.apiKey).toBe(jwtToken);
+    expect(calls[0]?.headers).toBeUndefined();
   });
 
   it("disables prompt caching for non-Anthropic Bedrock models", () => {
