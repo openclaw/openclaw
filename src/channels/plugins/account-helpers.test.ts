@@ -81,6 +81,35 @@ describe("createAccountListHelpers", () => {
     it("returns sorted ids", () => {
       expect(listAccountIds(cfg({ z: {}, a: {}, m: {} }))).toEqual(["a", "m", "z"]);
     });
+
+    it("includes default when base config has botToken and named accounts exist", () => {
+      const config = {
+        channels: {
+          testchannel: {
+            botToken: "xoxb-base",
+            appToken: "xapp-base",
+            accounts: { tank: {} },
+          },
+        },
+      } as unknown as OpenClawConfig;
+      expect(listAccountIds(config)).toEqual(["default", "tank"]);
+    });
+
+    it("does not duplicate default when already in accounts", () => {
+      const config = {
+        channels: {
+          testchannel: {
+            botToken: "xoxb-base",
+            accounts: { default: {}, tank: {} },
+          },
+        },
+      } as unknown as OpenClawConfig;
+      expect(listAccountIds(config)).toEqual(["default", "tank"]);
+    });
+
+    it("does not include default when base has no tokens", () => {
+      expect(listAccountIds(cfg({ tank: {} }))).toEqual(["tank"]);
+    });
   });
 
   describe("resolveDefaultAccountId", () => {

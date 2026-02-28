@@ -43,6 +43,16 @@ export function createAccountListHelpers(
     if (ids.length === 0) {
       return [DEFAULT_ACCOUNT_ID];
     }
+    // If the base channel config has its own tokens (botToken/appToken/token),
+    // include the default account alongside named accounts so both providers start.
+    if (!ids.includes(DEFAULT_ACCOUNT_ID)) {
+      const channel = cfg.channels?.[channelKey];
+      const base = channel as Record<string, unknown> | undefined;
+      const hasBaseTokens = Boolean(base?.botToken || base?.appToken || base?.token);
+      if (hasBaseTokens) {
+        return [DEFAULT_ACCOUNT_ID, ...ids].toSorted((a, b) => a.localeCompare(b));
+      }
+    }
     return ids.toSorted((a, b) => a.localeCompare(b));
   }
 
