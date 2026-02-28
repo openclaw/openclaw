@@ -16,6 +16,12 @@ export function getLifecycleDb(stateDir?: string): DatabaseSync {
   if (cached) {
     return cached;
   }
+  // Once a path falls back to in-memory, stick with it for the process lifetime
+  // to avoid orphaning the in-memory DB if the disk recovers later.
+  const memCached = DB_CACHE.get(`memory:${dbPath}`);
+  if (memCached) {
+    return memCached;
+  }
 
   const { DatabaseSync } = requireNodeSqlite();
   let db: DatabaseSync;
