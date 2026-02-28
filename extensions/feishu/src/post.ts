@@ -6,6 +6,7 @@ const MARKDOWN_SPECIAL_CHARS = /([\\`*_{}\[\]()#+\-!|>~])/g;
 type PostParseResult = {
   textContent: string;
   imageKeys: string[];
+  mediaKeys: Array<{ fileKey: string; fileName?: string }>;
   mentionedOpenIds: string[];
 };
 
@@ -125,7 +126,12 @@ function renderCodeBlockElement(element: Record<string, unknown>): string {
   return `\`\`\`${language}\n${code}${trailingNewline}\`\`\``;
 }
 
-function renderElement(element: unknown, imageKeys: string[], mentionedOpenIds: string[]): string {
+function renderElement(
+  element: unknown,
+  imageKeys: string[],
+  mediaKeys: Array<{ fileKey: string; fileName?: string }>,
+  mentionedOpenIds: string[],
+): string {
   if (!isRecord(element)) {
     return escapeMarkdownText(toStringOrEmpty(element));
   }
@@ -151,6 +157,14 @@ function renderElement(element: unknown, imageKeys: string[], mentionedOpenIds: 
         imageKeys.push(imageKey);
       }
       return "![image]";
+    }
+    case "media": {
+      const fileKey = normalizeFeishuExternalKey(toStringOrEmpty(element.file_key));
+      if (fileKey) {
+        const fileName = toStringOrEmpty(element.file_name) || undefined;
+        mediaKeys.push({ fileKey, fileName });
+      }
+      return "[media]";
     }
     case "emotion":
       return renderEmotionElement(element);
@@ -220,10 +234,16 @@ export function parsePostContent(content: string): PostParseResult {
     const parsed = JSON.parse(content);
     const payload = resolvePostPayload(parsed);
     if (!payload) {
-      return { textContent: FALLBACK_POST_TEXT, imageKeys: [], mentionedOpenIds: [] };
+      return {
+        textContent: FALLBACK_POST_TEXT,
+        imageKeys: [],
+        mediaKeys: [],
+        mentionedOpenIds: [],
+      };
     }
 
     const imageKeys: string[] = [];
+    const mediaKeys: Array<{ fileKey: string; fileName?: string }> = [];
     const mentionedOpenIds: string[] = [];
     const paragraphs: string[] = [];
 
@@ -233,7 +253,7 @@ export function parsePostContent(content: string): PostParseResult {
       }
       let renderedParagraph = "";
       for (const element of paragraph) {
-        renderedParagraph += renderElement(element, imageKeys, mentionedOpenIds);
+        renderedParagraph += renderElement(element, imageKeys, mediaKeys, mentionedOpenIds);
       }
       paragraphs.push(renderedParagraph);
     }
@@ -245,9 +265,10 @@ export function parsePostContent(content: string): PostParseResult {
     return {
       textContent: textContent || FALLBACK_POST_TEXT,
       imageKeys,
+      mediaKeys,
       mentionedOpenIds,
     };
   } catch {
-    return { textContent: FALLBACK_POST_TEXT, imageKeys: [], mentionedOpenIds: [] };
+    return { textContent: FALLBACK_POST_TEXT, imageKeys: [], mediaKeys: [], mentionedOpenIds: [] };
   }
 }
