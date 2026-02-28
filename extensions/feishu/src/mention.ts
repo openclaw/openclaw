@@ -16,6 +16,49 @@ export type MentionTarget = {
   key: string; // Placeholder in original message, e.g. @_user_1
 };
 
+const AT_USER_ID_TAG_RE =
+  /<at\s+user_id\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s>]+))\s*>[\s\S]*?<\/at>/gi;
+const AT_ID_TAG_RE = /<at\s+id\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s>/]+))\s*(?:\/>|>\s*<\/at>)/gi;
+
+function pickMentionId(
+  quotedDouble?: string,
+  quotedSingle?: string,
+  unquoted?: string,
+): string | null {
+  const value = (quotedDouble ?? quotedSingle ?? unquoted ?? "").trim();
+  return value ? value : null;
+}
+
+export function normalizeMentionTagsForCard(content: string): string {
+  if (!content.includes("<at")) {
+    return content;
+  }
+  return content.replace(AT_USER_ID_TAG_RE, (full, quotedDouble, quotedSingle, unquoted) => {
+    const id = pickMentionId(quotedDouble, quotedSingle, unquoted);
+    if (!id) {
+      return full;
+    }
+    return `<at id=${id}></at>`;
+  });
+}
+
+export function normalizeMentionTagsForText(
+  content: string,
+  displayNameByOpenId?: Record<string, string>,
+): string {
+  if (!content.includes("<at")) {
+    return content;
+  }
+  return content.replace(AT_ID_TAG_RE, (full, quotedDouble, quotedSingle, unquoted) => {
+    const id = pickMentionId(quotedDouble, quotedSingle, unquoted);
+    if (!id) {
+      return full;
+    }
+    const displayName = displayNameByOpenId?.[id] ?? (id === "all" ? "Everyone" : id);
+    return `<at user_id="${id}">${displayName}</at>`;
+  });
+}
+
 /**
  * Extract mention targets from message event (excluding the bot itself)
  */
