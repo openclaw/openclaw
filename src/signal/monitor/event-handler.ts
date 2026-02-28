@@ -331,9 +331,20 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       reason: string;
     };
   }): boolean {
-    // Process all valid reactions regardless of additional content
-    // Previously, reactions with hasBodyContent were rejected and fell through
-    // to regular message processing, causing them to appear as <media:unknown>
+    // Only process as reaction-only if there's no meaningful message content
+    // If there's actual message text, let it fall through to message processing
+    const dataMessage = params.envelope.dataMessage;
+    const rawMessage = dataMessage?.message ?? "";
+    const messageText = rawMessage.trim();
+    const quoteText = dataMessage?.quote?.text?.trim() ?? "";
+
+    if (messageText || quoteText) {
+      // There's meaningful text content - process as message, not reaction
+      return false;
+    }
+
+    // Process as reaction-only when there's no meaningful text content
+    // This fixes the media:unknown issue for reactions with attachments/metadata
     if (params.reaction.isRemove) {
       return true; // Ignore reaction removals
     }
