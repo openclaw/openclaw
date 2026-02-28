@@ -84,11 +84,9 @@ describe("createFeishuWSClient proxy handling", () => {
 
     createFeishuWSClient(baseAccount);
 
-    expect(httpsProxyAgentCtorMock).toHaveBeenCalledTimes(1);
-    expect(httpsProxyAgentCtorMock).toHaveBeenCalledWith([
-      "http://lower-https:8001",
-      "http://upper-https:8002",
-    ]);
+    expect(httpsProxyAgentCtorMock).toHaveBeenCalledTimes(2);
+    expect(httpsProxyAgentCtorMock).toHaveBeenCalledWith("http://lower-https:8001");
+    expect(httpsProxyAgentCtorMock).toHaveBeenCalledWith("http://upper-https:8002");
     const options = firstWsClientOptions();
     expect(options.agent).toEqual({ proxyUrl: "http://lower-https:8001" });
   });
