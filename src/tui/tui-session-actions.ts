@@ -114,7 +114,7 @@ export function createSessionActions(context: SessionActionContext) {
     }
   };
 
-  const resolveModelSelection = (entry?: SessionInfoEntry) => {
+  const resolveModelSelection = (entry?: SessionInfoEntry, defaults?: SessionInfoDefaults) => {
     if (entry?.modelProvider || entry?.model) {
       return {
         modelProvider: entry.modelProvider ?? state.sessionInfo.modelProvider,
@@ -126,9 +126,10 @@ export function createSessionActions(context: SessionActionContext) {
       const overrideProvider = entry?.providerOverride?.trim() || state.sessionInfo.modelProvider;
       return { modelProvider: overrideProvider, model: overrideModel };
     }
+    // Fall back to defaults, then to state
     return {
-      modelProvider: state.sessionInfo.modelProvider,
-      model: state.sessionInfo.model,
+      modelProvider: defaults?.modelProvider ?? state.sessionInfo.modelProvider,
+      model: defaults?.model ?? state.sessionInfo.model,
     };
   };
 
@@ -199,7 +200,7 @@ export function createSessionActions(context: SessionActionContext) {
       next.updatedAt = entry.updatedAt;
     }
 
-    const selection = resolveModelSelection(entry);
+    const selection = resolveModelSelection(entry, defaults);
     if (selection.modelProvider !== undefined) {
       next.modelProvider = selection.modelProvider;
     }
