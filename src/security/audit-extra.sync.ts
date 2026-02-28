@@ -60,7 +60,8 @@ function summarizeGroupPolicy(cfg: OpenClawConfig): {
     }
     const section = value as Record<string, unknown>;
     const policy = section.groupPolicy;
-    if (policy === "open") {
+    // "members" normalizes to "open" for non-Telegram channels; count both in the open bucket.
+    if (policy === "open" || policy === "members") {
       open += 1;
     } else if (policy === "allowlist") {
       allowlist += 1;
