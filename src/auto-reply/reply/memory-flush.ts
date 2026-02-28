@@ -110,14 +110,26 @@ export function resolveMemoryFlushContextWindowTokens(params: {
   );
 }
 
+/**
+ * Minimum time (ms) between consecutive memory flushes.
+ * Prevents a flush loop when non-flush compactions keep invalidating the
+ * compaction-count dedup guard (#8723).
+ */
+export const MEMORY_FLUSH_COOLDOWN_MS = 60_000;
+
 export function shouldRunMemoryFlush(params: {
   entry?: Pick<
     SessionEntry,
-    "totalTokens" | "totalTokensFresh" | "compactionCount" | "memoryFlushCompactionCount"
+    | "totalTokens"
+    | "totalTokensFresh"
+    | "compactionCount"
+    | "memoryFlushCompactionCount"
+    | "memoryFlushAt"
   >;
   contextWindowTokens: number;
   reserveTokensFloor: number;
   softThresholdTokens: number;
+  nowMs?: number;
 }): boolean {
   const totalTokens = resolveFreshSessionTotalTokens(params.entry);
   if (!totalTokens || totalTokens <= 0) {
@@ -131,6 +143,13 @@ export function shouldRunMemoryFlush(params: {
     return false;
   }
   if (totalTokens < threshold) {
+    return false;
+  }
+
+  // Time-based cooldown: prevent rapid-fire flushes (#8723).
+  const lastFlushTime = params.entry?.memoryFlushAt;
+  const now = params.nowMs ?? Date.now();
+  if (typeof lastFlushTime === "number" && now - lastFlushTime < MEMORY_FLUSH_COOLDOWN_MS) {
     return false;
   }
 

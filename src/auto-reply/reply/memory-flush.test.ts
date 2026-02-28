@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { resolveMemoryFlushPromptForRun } from "./memory-flush.js";
+import {
+  MEMORY_FLUSH_COOLDOWN_MS,
+  resolveMemoryFlushPromptForRun,
+  shouldRunMemoryFlush,
+} from "./memory-flush.js";
 
 describe("resolveMemoryFlushPromptForRun", () => {
   const cfg = {
@@ -33,5 +37,71 @@ describe("resolveMemoryFlushPromptForRun", () => {
 
     expect(prompt).toContain("Current time: already present");
     expect((prompt.match(/Current time:/g) ?? []).length).toBe(1);
+  });
+});
+
+describe("shouldRunMemoryFlush", () => {
+  const baseParams = {
+    contextWindowTokens: 200_000,
+    reserveTokensFloor: 10_000,
+    softThresholdTokens: 5_000,
+  };
+  const aboveThreshold = { totalTokens: 190_000, totalTokensFresh: true as const };
+
+  it("returns true when above threshold and no prior flush", () => {
+    expect(
+      shouldRunMemoryFlush({
+        ...baseParams,
+        entry: { ...aboveThreshold, compactionCount: 1 },
+      }),
+    ).toBe(true);
+  });
+
+  it("returns false when tokens are below threshold", () => {
+    expect(
+      shouldRunMemoryFlush({
+        ...baseParams,
+        entry: { totalTokens: 100_000, totalTokensFresh: true, compactionCount: 1 },
+      }),
+    ).toBe(false);
+  });
+
+  it("returns false when compaction-count dedup matches", () => {
+    expect(
+      shouldRunMemoryFlush({
+        ...baseParams,
+        entry: { ...aboveThreshold, compactionCount: 3, memoryFlushCompactionCount: 3 },
+      }),
+    ).toBe(false);
+  });
+
+  it("returns false within cooldown period", () => {
+    expect(
+      shouldRunMemoryFlush({
+        ...baseParams,
+        entry: {
+          ...aboveThreshold,
+          compactionCount: 2,
+          memoryFlushCompactionCount: 1,
+          memoryFlushAt: 1000,
+        },
+        nowMs: 1000 + MEMORY_FLUSH_COOLDOWN_MS - 1,
+      }),
+    ).toBe(false);
+  });
+
+  it("returns true after cooldown expires", () => {
+    expect(
+      shouldRunMemoryFlush({
+        ...baseParams,
+        entry: {
+          ...aboveThreshold,
+          compactionCount: 2,
+          memoryFlushCompactionCount: 1,
+          memoryFlushAt: 1000,
+        },
+        nowMs: 1000 + MEMORY_FLUSH_COOLDOWN_MS + 1,
+      }),
+    ).toBe(true);
   });
 });
