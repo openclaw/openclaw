@@ -1357,7 +1357,13 @@ export async function handleFeishuMessage(params: {
 
       if (strategy === "sequential") {
         for (const agentId of broadcastAgents) {
-          await dispatchForAgent(agentId);
+          try {
+            await dispatchForAgent(agentId);
+          } catch (err) {
+            log(
+              `feishu[${account.accountId}]: broadcast dispatch failed for agent=${agentId}: ${String(err)}`,
+            );
+          }
         }
       } else {
         await Promise.allSettled(broadcastAgents.map(dispatchForAgent));
