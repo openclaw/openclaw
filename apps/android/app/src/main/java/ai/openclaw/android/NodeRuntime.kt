@@ -349,7 +349,9 @@ class NodeRuntime(context: Context) {
         parseChatSendRunId(response) ?: idempotencyKey
       },
       speakAssistantReply = { text ->
-        voiceReplySpeaker.speakAssistantReply(text)
+        if (prefs.speakerEnabled.value) {
+          voiceReplySpeaker.speakAssistantReply(text)
+        }
       },
     )
   }
@@ -632,6 +634,13 @@ class NodeRuntime(context: Context) {
     prefs.setTalkEnabled(value)
     micCapture.setMicEnabled(value)
     externalAudioCaptureActive.value = value
+  }
+
+  val speakerEnabled: StateFlow<Boolean>
+    get() = prefs.speakerEnabled
+
+  fun setSpeakerEnabled(value: Boolean) {
+    prefs.setSpeakerEnabled(value)
   }
 
   fun refreshGatewayConnection() {
