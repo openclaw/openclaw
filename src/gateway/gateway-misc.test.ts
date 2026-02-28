@@ -401,7 +401,7 @@ describe("resolveNodeCommandAllowlist", () => {
           nodes: {
             denyCommands: ["camera.snap"],
             overrides: {
-              "lukin-dev": {
+              "node-123": {
                 denyCommands: ["browser.proxy"],
               },
             },
@@ -422,7 +422,7 @@ describe("resolveNodeCommandAllowlist", () => {
           nodes: {
             allowCommands: ["camera.snap"],
             overrides: {
-              "my-node": {
+              n1: {
                 allowCommands: ["screen.record"],
               },
             },
@@ -435,22 +435,19 @@ describe("resolveNodeCommandAllowlist", () => {
     expect(allow.has("screen.record")).toBe(true);
   });
 
-  it("nodeId match takes priority over displayName", () => {
+  it("ignores displayName-only overrides", () => {
     const allow = resolveNodeCommandAllowlist(
       {
         gateway: {
           nodes: {
             overrides: {
               "my-display": { denyCommands: ["system.run"] },
-              "node-abc": { denyCommands: ["system.notify"] },
             },
           },
         },
       },
       { platform: "linux", deviceFamily: "", nodeId: "node-abc", displayName: "my-display" },
     );
-    // nodeId override wins: system.notify denied, system.run allowed
-    expect(allow.has("system.notify")).toBe(false);
     expect(allow.has("system.run")).toBe(true);
   });
 
@@ -504,7 +501,7 @@ describe("resolveNodeCommandAllowlist", () => {
           },
         },
       },
-      { platform: "linux", deviceFamily: "", nodeId: "n1", displayName: "my-node" },
+      { platform: "linux", deviceFamily: "", nodeId: "my-node", displayName: "my-node" },
     );
     // camera.snap added by allow but removed by deny
     expect(allow.has("camera.snap")).toBe(false);

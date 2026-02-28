@@ -202,7 +202,7 @@ export function resolveNodeCommandAllowlist(
 
 function resolveNodeOverride(
   cfg: OpenClawConfig,
-  node?: Partial<Pick<NodeSession, "nodeId" | "displayName">>,
+  node?: Partial<Pick<NodeSession, "nodeId">>,
 ): GatewayNodeOverrideConfig | undefined {
   const overrides = cfg.gateway?.nodes?.overrides;
   if (!overrides || !node) {
@@ -212,11 +212,7 @@ function resolveNodeOverride(
   if (node.nodeId && overrides[node.nodeId]) {
     return overrides[node.nodeId];
   }
-  // 2. displayName exact match
-  if (node.displayName && overrides[node.displayName]) {
-    return overrides[node.displayName];
-  }
-  // 3. nodeId prefix match (longest prefix wins; skip empty keys)
+  // 2. nodeId prefix match (longest prefix wins; skip empty keys)
   if (node.nodeId) {
     let bestKey: string | undefined;
     for (const key of Object.keys(overrides)) {

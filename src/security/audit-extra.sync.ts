@@ -1057,16 +1057,36 @@ export function collectNodeDenyCommandPatternFindings(cfg: OpenClawConfig): Secu
     return findings;
   }
 
-  const knownCommands = listKnownNodeCommands(cfg);
-  for (const entry of listConfiguredNodeAllowCommandEntries(cfg)) {
-    for (const value of entry.values) {
-      knownCommands.add(value);
+  const baseKnownCommands = listKnownNodeCommands(cfg);
+  const allowEntries = listConfiguredNodeAllowCommandEntries(cfg);
+  const globalAllowCommands = new Set(
+    allowEntries.filter((entry) => !entry.overrideKey).flatMap((entry) => entry.values),
+  );
+  const overrideAllowCommands = new Map<string, Set<string>>();
+  for (const entry of allowEntries) {
+    if (!entry.overrideKey) {
+      continue;
     }
+    const values = overrideAllowCommands.get(entry.overrideKey) ?? new Set<string>();
+    for (const value of entry.values) {
+      values.add(value);
+    }
+    overrideAllowCommands.set(entry.overrideKey, values);
   }
 
   const patternLike: string[] = [];
   const unknownExact: string[] = [];
   for (const entry of denyEntries) {
+    const knownCommands = new Set(baseKnownCommands);
+    for (const value of globalAllowCommands) {
+      knownCommands.add(value);
+    }
+    if (entry.overrideKey) {
+      for (const value of overrideAllowCommands.get(entry.overrideKey) ?? []) {
+        knownCommands.add(value);
+      }
+    }
+
     for (const value of entry.values) {
       if (looksLikeNodeCommandPattern(value)) {
         patternLike.push(`${entry.path}: ${value}`);
@@ -1100,7 +1120,11 @@ export function collectNodeDenyCommandPatternFindings(cfg: OpenClawConfig): Secu
 
     detailParts.push(`Unknown command names (not in defaults/allowCommands): ${unknownDetails}`);
   }
-  const examples = Array.from(knownCommands).slice(0, 8);
+  const exampleCommands = new Set(baseKnownCommands);
+  for (const value of globalAllowCommands) {
+    exampleCommands.add(value);
+  }
+  const examples = Array.from(exampleCommands).slice(0, 8);
 
   findings.push({
     checkId: "gateway.nodes.deny_commands_ineffective",
