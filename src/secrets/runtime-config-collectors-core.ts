@@ -85,6 +85,9 @@ function collectAgentMemorySearchAssignments(params: {
       continue;
     }
     const memorySearch = isRecord(rawAgent.memorySearch) ? rawAgent.memorySearch : undefined;
+    if (memorySearch?.enabled === false) {
+      continue;
+    }
     if (!memorySearch || !Object.prototype.hasOwnProperty.call(memorySearch, "remote")) {
       hasEnabledAgentWithoutOverride = true;
       continue;

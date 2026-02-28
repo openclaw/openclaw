@@ -507,6 +507,46 @@ describe("secrets runtime snapshot", () => {
     );
   });
 
+  it("treats defaults memorySearch ref as inactive when all enabled agents disable memorySearch", async () => {
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        agents: {
+          defaults: {
+            memorySearch: {
+              remote: {
+                apiKey: {
+                  source: "env",
+                  provider: "default",
+                  id: "DEFAULT_MEMORY_REMOTE_API_KEY",
+                },
+              },
+            },
+          },
+          list: [
+            {
+              enabled: true,
+              memorySearch: {
+                enabled: false,
+              },
+            },
+          ],
+        },
+      }),
+      env: {},
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    expect(snapshot.config.agents?.defaults?.memorySearch?.remote?.apiKey).toEqual({
+      source: "env",
+      provider: "default",
+      id: "DEFAULT_MEMORY_REMOTE_API_KEY",
+    });
+    expect(snapshot.warnings.map((warning) => warning.path)).toContain(
+      "agents.defaults.memorySearch.remote.apiKey",
+    );
+  });
+
   it("fails when enabled channel surfaces contain unresolved refs", async () => {
     await expect(
       prepareSecretsRuntimeSnapshot({
