@@ -28,7 +28,10 @@ export type LoggerSettings = {
   consoleStyle?: ConsoleStyle;
 };
 
-type LogObj = { date?: Date } & Record<string, unknown>;
+type LogObj = { date?: Date; _meta?: { logLevelName?: string; logLevelId?: number } } & Record<
+  string,
+  unknown
+>;
 
 type ResolvedSettings = {
   level: LogLevel;
@@ -113,6 +116,11 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
 
   logger.attachTransport((logObj: LogObj) => {
     try {
+      // Check if this log level should be written to file
+      const logLevelName = (logObj._meta as { logLevelName?: string })?.logLevelName?.toLowerCase();
+      if (logLevelName && !isFileLogLevelEnabled(logLevelName as LogLevel)) {
+        return;
+      }
       const time = logObj.date?.toISOString?.() ?? new Date().toISOString();
       const line = JSON.stringify({ ...logObj, time });
       const payload = `${line}\n`;
