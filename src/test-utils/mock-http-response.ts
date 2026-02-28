@@ -7,6 +7,7 @@ export function createMockServerResponse(): ServerResponse & { body?: string } {
     statusCode: number;
     body?: string;
     setHeader: (key: string, value: string) => unknown;
+    getHeader: (key: string) => string | undefined;
     end: (body?: string) => unknown;
   } = {
     headersSent: false,
@@ -15,6 +16,7 @@ export function createMockServerResponse(): ServerResponse & { body?: string } {
       headers[key.toLowerCase()] = value;
       return res;
     },
+    getHeader: (key: string) => headers[key.toLowerCase()],
     end: (body?: string) => {
       res.headersSent = true;
       res.body = body;
