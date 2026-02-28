@@ -11,7 +11,7 @@ import { registerAgentRunContext } from "../../infra/agent-events.js";
 import { defaultRuntime } from "../../runtime.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
 import type { OriginatingChannelType } from "../templating.js";
-import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
+import { hasRelaySkipToken, isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { resolveRunAuthProfile } from "./agent-runner-utils.js";
 import {
@@ -69,11 +69,34 @@ export function createFollowupRunner(params: {
    * where the message originated.
    */
   const sendFollowupPayloads = async (payloads: ReplyPayload[], queued: FollowupRun) => {
-    // Check if we should route to originating channel.
     const { originatingChannel, originatingTo } = queued;
-    const shouldRouteToOriginating = isRoutableChannel(originatingChannel) && originatingTo;
+    const hasResolvedRelayOutput = Boolean(
+      queued.relayMode === "read-only" &&
+      queued.relayOutput &&
+      isRoutableChannel(queued.relayOutput.channel) &&
+      queued.relayOutput.to,
+    );
+    const shouldRouteToOriginating =
+      !hasResolvedRelayOutput && isRoutableChannel(originatingChannel) && originatingTo;
+    const routeChannel = hasResolvedRelayOutput
+      ? queued.relayOutput!.channel
+      : shouldRouteToOriginating
+        ? originatingChannel
+        : undefined;
+    const routeTo = hasResolvedRelayOutput
+      ? queued.relayOutput!.to
+      : shouldRouteToOriginating
+        ? originatingTo
+        : undefined;
+    const routeAccountId = hasResolvedRelayOutput
+      ? queued.relayOutput!.accountId
+      : queued.originatingAccountId;
+    const routeThreadId = hasResolvedRelayOutput
+      ? queued.relayOutput!.threadId
+      : queued.originatingThreadId;
+    const shouldRoute = Boolean(routeChannel && routeTo);
 
-    if (!shouldRouteToOriginating && !opts?.onBlockReply) {
+    if (!shouldRoute && !opts?.onBlockReply) {
       logVerbose("followup queue: no onBlockReply handler; dropping payloads");
       return;
     }
@@ -89,17 +112,20 @@ export function createFollowupRunner(params: {
       ) {
         continue;
       }
+      if (hasRelaySkipToken(payload.text)) {
+        continue;
+      }
       await typingSignals.signalTextDelta(payload.text);
 
       // Route to originating channel if set, otherwise fall back to dispatcher.
-      if (shouldRouteToOriginating) {
+      if (shouldRoute && routeChannel && routeTo) {
         const result = await routeReply({
           payload,
-          channel: originatingChannel,
-          to: originatingTo,
+          channel: routeChannel,
+          to: routeTo,
           sessionKey: queued.run.sessionKey,
-          accountId: queued.originatingAccountId,
-          threadId: queued.originatingThreadId,
+          accountId: routeAccountId,
+          threadId: routeThreadId,
           cfg: queued.run.config,
         });
         if (!result.ok) {
@@ -117,7 +143,7 @@ export function createFollowupRunner(params: {
           const origin = resolveOriginMessageProvider({
             originatingChannel,
           });
-          if (opts?.onBlockReply && origin && origin === provider) {
+          if (!hasResolvedRelayOutput && opts?.onBlockReply && origin && origin === provider) {
             await opts.onBlockReply(payload);
           }
         }

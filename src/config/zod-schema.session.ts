@@ -22,6 +22,69 @@ const SessionResetConfigSchema = z
   .strict();
 
 export const SessionSendPolicySchema = createAllowDenyChannelRulesSchema();
+const SessionRelayRoutingModeSchema = z.union([z.literal("read-write"), z.literal("read-only")]);
+const SessionRelayRoutingTargetSchema = z
+  .object({
+    channel: z.string(),
+    to: z.string(),
+    accountId: z.string().optional(),
+    threadId: z.union([z.string(), z.number()]).optional(),
+  })
+  .strict();
+const SessionRelayRoutingRuleSchema = z
+  .object({
+    mode: SessionRelayRoutingModeSchema,
+    relayTo: z.string().optional(),
+    match: z
+      .object({
+        channel: z.string().optional(),
+        chatType: z
+          .union([
+            z.literal("direct"),
+            z.literal("group"),
+            z.literal("channel"),
+            /** @deprecated Use `direct` instead. Kept for backward compatibility. */
+            z.literal("dm"),
+          ])
+          .optional(),
+        keyPrefix: z.string().optional(),
+        rawKeyPrefix: z.string().optional(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict();
+export const SessionRelayRoutingSchema = z
+  .object({
+    defaultMode: SessionRelayRoutingModeSchema.optional(),
+    targets: z.record(z.string(), SessionRelayRoutingTargetSchema).optional(),
+    rules: z.array(SessionRelayRoutingRuleSchema).optional(),
+  })
+  .strict()
+  .superRefine((val, ctx) => {
+    const targets = val.targets ?? {};
+    for (const [index, rule] of (val.rules ?? []).entries()) {
+      if (rule.mode !== "read-only") {
+        continue;
+      }
+      const relayKey = rule.relayTo?.trim();
+      if (!relayKey) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["rules", index, "relayTo"],
+          message: "read-only relay rule requires relayTo target key",
+        });
+        continue;
+      }
+      if (!targets[relayKey]) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["rules", index, "relayTo"],
+          message: `relayTo target not found: ${relayKey}`,
+        });
+      }
+    }
+  });
 
 export const SessionSchema = z
   .object({
@@ -55,6 +118,7 @@ export const SessionSchema = z
     parentForkMaxTokens: z.number().int().nonnegative().optional(),
     mainKey: z.string().optional(),
     sendPolicy: SessionSendPolicySchema.optional(),
+    relayRouting: SessionRelayRoutingSchema.optional(),
     agentToAgent: z
       .object({
         maxPingPongTurns: z.number().int().min(0).max(5).optional(),

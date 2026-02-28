@@ -2,6 +2,7 @@ import { escapeRegExp } from "../utils.js";
 
 export const HEARTBEAT_TOKEN = "HEARTBEAT_OK";
 export const SILENT_REPLY_TOKEN = "NO_REPLY";
+export const RELAY_SKIP_TOKEN = "SKIP_RELAY";
 
 export function isSilentReplyText(
   text: string | undefined,
@@ -35,4 +36,14 @@ export function isSilentReplyPrefixText(
     return false;
   }
   return token.toUpperCase().startsWith(normalized);
+}
+
+export function hasRelaySkipToken(
+  text: string | undefined,
+  token: string = RELAY_SKIP_TOKEN,
+): boolean {
+  if (!text) {
+    return false;
+  }
+  return text.toUpperCase().includes(token.toUpperCase());
 }

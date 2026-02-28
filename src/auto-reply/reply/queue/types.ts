@@ -18,6 +18,13 @@ export type QueueSettings = {
 
 export type QueueDedupeMode = "message-id" | "prompt" | "none";
 
+export type FollowupRelayOutput = {
+  channel: OriginatingChannelType;
+  to: string;
+  accountId?: string;
+  threadId?: string | number;
+};
+
 export type FollowupRun = {
   prompt: string;
   /** Provider message ID, when available (for deduplication). */
@@ -41,6 +48,10 @@ export type FollowupRun = {
   originatingThreadId?: string | number;
   /** Chat type for context-aware threading (e.g., DM vs channel). */
   originatingChatType?: string;
+  /** Relay routing mode resolved at enqueue time. */
+  relayMode?: "read-write" | "read-only";
+  /** Optional resolved relay destination for read-only source turns. */
+  relayOutput?: FollowupRelayOutput;
   run: {
     agentId: string;
     agentDir: string;

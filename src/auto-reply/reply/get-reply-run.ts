@@ -18,6 +18,7 @@ import {
 import { logVerbose } from "../../globals.js";
 import { clearCommandLane, getQueueSize } from "../../process/command-queue.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
+import { resolveSessionRelayRoute } from "../../sessions/relay-routing.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { hasControlCommand } from "../command-detection.js";
 import { buildInboundMediaNote } from "../media-note.js";
@@ -121,6 +122,62 @@ async function sendResetSessionNotice(params: {
     threadId: params.threadId,
     cfg: params.cfg,
   });
+}
+
+function buildReadOnlyRelayContractPrompt(params: {
+  route: ReturnType<typeof resolveSessionRelayRoute>;
+  ctx: MsgContext;
+}): string | undefined {
+  if (params.route.mode !== "read-only" || !params.route.output) {
+    return undefined;
+  }
+  const metadata = {
+    source: {
+      channel: params.route.source.channel,
+      chatType: params.route.source.chatType,
+      sessionKey: params.route.source.sessionKey,
+      to: params.route.source.to,
+      accountId: params.route.source.accountId,
+      threadId: params.route.source.threadId,
+      provider: params.ctx.Provider,
+      surface: params.ctx.Surface,
+      from: params.ctx.From,
+      senderId: params.ctx.SenderId,
+      senderName: params.ctx.SenderName,
+      senderUsername: params.ctx.SenderUsername,
+      senderTag: params.ctx.SenderTag,
+      senderE164: params.ctx.SenderE164,
+      conversationLabel: params.ctx.ConversationLabel,
+      groupSubject: params.ctx.GroupSubject,
+      groupChannel: params.ctx.GroupChannel,
+      groupSpace: params.ctx.GroupSpace,
+      messageId:
+        params.ctx.MessageSidFull ??
+        params.ctx.MessageSid ??
+        params.ctx.MessageSidFirst ??
+        params.ctx.MessageSidLast,
+    },
+    relayDestination: {
+      channel: params.route.output.channel,
+      to: params.route.output.to,
+      accountId: params.route.output.accountId,
+      threadId: params.route.output.threadId,
+      targetKey: params.route.output.targetKey,
+    },
+  };
+
+  return [
+    "## Read-Only Relay Contract (trusted)",
+    "This inbound message came from a read-only channel route.",
+    "If no user-visible relay is needed, reply exactly: SKIP_RELAY",
+    "Otherwise your reply must begin exactly with:",
+    "[RE: <source> - <brief summary>] <message to relay>",
+    "Your reply is relayed to the configured read-write destination below, not to the source surface.",
+    "",
+    "```json",
+    JSON.stringify(metadata, null, 2),
+    "```",
+  ].join("\n");
 }
 
 type RunPreparedReplyParams = {
@@ -264,10 +321,34 @@ export async function runPreparedReply(
       })
     : "";
   const groupSystemPrompt = sessionCtx.GroupSystemPrompt?.trim() ?? "";
+  const relayRoute = resolveSessionRelayRoute({
+    cfg,
+    entry: sessionEntry,
+    sessionKey,
+    channel:
+      sessionEntry?.channel ??
+      (typeof ctx.OriginatingChannel === "string" ? ctx.OriginatingChannel : undefined) ??
+      ctx.Surface ??
+      ctx.Provider,
+    chatType: sessionEntry?.chatType,
+    sourceTo: ctx.OriginatingTo ?? ctx.To,
+    sourceAccountId: ctx.AccountId,
+    sourceThreadId: ctx.MessageThreadId,
+  });
+  const readOnlyRelayPrompt = buildReadOnlyRelayContractPrompt({
+    route: relayRoute,
+    ctx,
+  });
   const inboundMetaPrompt = buildInboundMetaSystemPrompt(
     isNewSession ? sessionCtx : { ...sessionCtx, ThreadStarterBody: undefined },
   );
-  const extraSystemPrompt = [inboundMetaPrompt, groupChatContext, groupIntro, groupSystemPrompt]
+  const extraSystemPrompt = [
+    inboundMetaPrompt,
+    readOnlyRelayPrompt,
+    groupChatContext,
+    groupIntro,
+    groupSystemPrompt,
+  ]
     .filter(Boolean)
     .join("\n\n");
   const baseBody = sessionCtx.BodyStripped ?? sessionCtx.Body ?? "";
@@ -465,6 +546,15 @@ export async function runPreparedReply(
     originatingAccountId: ctx.AccountId,
     originatingThreadId: ctx.MessageThreadId,
     originatingChatType: ctx.ChatType,
+    relayMode: relayRoute.mode,
+    relayOutput: relayRoute.output
+      ? {
+          channel: relayRoute.output.channel,
+          to: relayRoute.output.to,
+          accountId: relayRoute.output.accountId,
+          threadId: relayRoute.output.threadId,
+        }
+      : undefined,
     run: {
       agentId,
       agentDir,

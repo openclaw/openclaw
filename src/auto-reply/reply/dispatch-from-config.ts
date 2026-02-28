@@ -10,6 +10,7 @@ import {
   logSessionStateChange,
 } from "../../logging/diagnostic.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import { resolveSessionRelayRoute } from "../../sessions/relay-routing.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { maybeApplyTtsToPayload, normalizeTtsAutoMode, resolveTtsConfig } from "../../tts/tts.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
@@ -242,37 +243,63 @@ export async function dispatchReplyFromConfig(params: {
     });
   }
 
-  // Check if we should route replies to originating channel instead of dispatcher.
-  // Only route when the originating channel is DIFFERENT from the current surface.
-  // This handles cross-provider routing (e.g., message from Telegram being processed
-  // by a shared session that's currently on Slack) while preserving normal dispatcher
-  // flow when the provider handles its own messages.
+  // Resolve relay routing first so read-only channels always route to the configured
+  // read-write destination instead of the inbound source surface.
   //
   // Debug: `pnpm test src/auto-reply/reply/dispatch-from-config.test.ts`
   const originatingChannel = ctx.OriginatingChannel;
   const originatingTo = ctx.OriginatingTo;
   const currentSurface = (ctx.Surface ?? ctx.Provider)?.toLowerCase();
-  const shouldRouteToOriginating = Boolean(
+  const shouldRouteByOrigin = Boolean(
     isRoutableChannel(originatingChannel) && originatingTo && originatingChannel !== currentSurface,
   );
+  const relayRoute = resolveSessionRelayRoute({
+    cfg,
+    entry: sessionStoreEntry.entry,
+    sessionKey: sessionStoreEntry.sessionKey ?? sessionKey,
+    channel:
+      sessionStoreEntry.entry?.channel ??
+      ctx.OriginatingChannel ??
+      ctx.Surface ??
+      ctx.Provider ??
+      undefined,
+    chatType: sessionStoreEntry.entry?.chatType,
+    sourceTo: ctx.OriginatingTo ?? ctx.To,
+    sourceAccountId: ctx.AccountId,
+    sourceThreadId: ctx.MessageThreadId,
+  });
+  const hasReadOnlyRoute = relayRoute.mode === "read-only" && Boolean(relayRoute.output);
+  const routeTarget =
+    hasReadOnlyRoute && relayRoute.output
+      ? {
+          channel: relayRoute.output.channel,
+          to: relayRoute.output.to,
+          accountId: relayRoute.output.accountId,
+          threadId: relayRoute.output.threadId,
+        }
+      : shouldRouteByOrigin && originatingChannel && originatingTo
+        ? {
+            channel: originatingChannel,
+            to: originatingTo,
+            accountId: ctx.AccountId,
+            threadId: ctx.MessageThreadId,
+          }
+        : undefined;
+  const shouldRouteReplies = Boolean(routeTarget);
   const shouldSuppressTyping =
-    shouldRouteToOriginating || originatingChannel === INTERNAL_MESSAGE_CHANNEL;
-  const ttsChannel = shouldRouteToOriginating ? originatingChannel : currentSurface;
+    shouldRouteReplies || originatingChannel === INTERNAL_MESSAGE_CHANNEL;
+  const ttsChannel = routeTarget?.channel ?? currentSurface;
 
   /**
    * Helper to send a payload via route-reply (async).
-   * Only used when actually routing to a different provider.
-   * Note: Only called when shouldRouteToOriginating is true, so
-   * originatingChannel and originatingTo are guaranteed to be defined.
+   * Only used when actually routing to a different provider/target.
    */
   const sendPayloadAsync = async (
     payload: ReplyPayload,
     abortSignal?: AbortSignal,
     mirror?: boolean,
   ): Promise<void> => {
-    // TypeScript doesn't narrow these from the shouldRouteToOriginating check,
-    // but they're guaranteed non-null when this function is called.
-    if (!originatingChannel || !originatingTo) {
+    if (!routeTarget) {
       return;
     }
     if (abortSignal?.aborted) {
@@ -280,11 +307,11 @@ export async function dispatchReplyFromConfig(params: {
     }
     const result = await routeReply({
       payload,
-      channel: originatingChannel,
-      to: originatingTo,
+      channel: routeTarget.channel,
+      to: routeTarget.to,
       sessionKey: ctx.SessionKey,
-      accountId: ctx.AccountId,
-      threadId: ctx.MessageThreadId,
+      accountId: routeTarget.accountId ?? ctx.AccountId,
+      threadId: routeTarget.threadId ?? ctx.MessageThreadId,
       cfg,
       abortSignal,
       mirror,
@@ -304,14 +331,14 @@ export async function dispatchReplyFromConfig(params: {
       } satisfies ReplyPayload;
       let queuedFinal = false;
       let routedFinalCount = 0;
-      if (shouldRouteToOriginating && originatingChannel && originatingTo) {
+      if (routeTarget) {
         const result = await routeReply({
           payload,
-          channel: originatingChannel,
-          to: originatingTo,
+          channel: routeTarget.channel,
+          to: routeTarget.to,
           sessionKey: ctx.SessionKey,
-          accountId: ctx.AccountId,
-          threadId: ctx.MessageThreadId,
+          accountId: routeTarget.accountId ?? ctx.AccountId,
+          threadId: routeTarget.threadId ?? ctx.MessageThreadId,
           cfg,
         });
         queuedFinal = result.ok;
@@ -366,9 +393,7 @@ export async function dispatchReplyFromConfig(params: {
       inboundAudio,
       sessionTtsAuto,
       ttsChannel,
-      shouldRouteToOriginating,
-      originatingChannel,
-      originatingTo,
+      routeTarget,
       shouldSendToolSummaries,
       bypassForCommand: bypassAcpForCommand,
       recordProcessed,
@@ -400,7 +425,7 @@ export async function dispatchReplyFromConfig(params: {
       requestedPolicy: params.replyOptions?.typingPolicy,
       suppressTyping: params.replyOptions?.suppressTyping === true || shouldSuppressTyping,
       originatingChannel,
-      systemEvent: shouldRouteToOriginating,
+      systemEvent: shouldRouteReplies,
     });
 
     const replyResult = await (params.replyResolver ?? getReplyFromConfig)(
@@ -423,7 +448,7 @@ export async function dispatchReplyFromConfig(params: {
             if (!deliveryPayload) {
               return;
             }
-            if (shouldRouteToOriginating) {
+            if (shouldRouteReplies) {
               await sendPayloadAsync(deliveryPayload, undefined, false);
             } else {
               dispatcher.sendToolResult(deliveryPayload);
@@ -455,7 +480,7 @@ export async function dispatchReplyFromConfig(params: {
               inboundAudio,
               ttsAuto: sessionTtsAuto,
             });
-            if (shouldRouteToOriginating) {
+            if (shouldRouteReplies) {
               await sendPayloadAsync(ttsPayload, context?.abortSignal, false);
             } else {
               dispatcher.sendBlockReply(ttsPayload);
@@ -485,15 +510,15 @@ export async function dispatchReplyFromConfig(params: {
         inboundAudio,
         ttsAuto: sessionTtsAuto,
       });
-      if (shouldRouteToOriginating && originatingChannel && originatingTo) {
+      if (routeTarget) {
         // Route final reply to originating channel.
         const result = await routeReply({
           payload: ttsReply,
-          channel: originatingChannel,
-          to: originatingTo,
+          channel: routeTarget.channel,
+          to: routeTarget.to,
           sessionKey: ctx.SessionKey,
-          accountId: ctx.AccountId,
-          threadId: ctx.MessageThreadId,
+          accountId: routeTarget.accountId ?? ctx.AccountId,
+          threadId: routeTarget.threadId ?? ctx.MessageThreadId,
           cfg,
         });
         if (!result.ok) {
@@ -536,14 +561,14 @@ export async function dispatchReplyFromConfig(params: {
             mediaUrl: ttsSyntheticReply.mediaUrl,
             audioAsVoice: ttsSyntheticReply.audioAsVoice,
           };
-          if (shouldRouteToOriginating && originatingChannel && originatingTo) {
+          if (routeTarget) {
             const result = await routeReply({
               payload: ttsOnlyPayload,
-              channel: originatingChannel,
-              to: originatingTo,
+              channel: routeTarget.channel,
+              to: routeTarget.to,
               sessionKey: ctx.SessionKey,
-              accountId: ctx.AccountId,
-              threadId: ctx.MessageThreadId,
+              accountId: routeTarget.accountId ?? ctx.AccountId,
+              threadId: routeTarget.threadId ?? ctx.MessageThreadId,
               cfg,
             });
             queuedFinal = result.ok || queuedFinal;

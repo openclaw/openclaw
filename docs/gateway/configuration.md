@@ -182,6 +182,21 @@ When validation fails:
     {
       session: {
         dmScope: "per-channel-peer",  // recommended for multi-user
+        relayRouting: {
+          targets: {
+            primaryTelegram: {
+              channel: "telegram",
+              to: "telegram:123456789",
+            },
+          },
+          rules: [
+            {
+              mode: "read-only",
+              relayTo: "primaryTelegram",
+              match: { channel: "imessage", chatType: "direct" },
+            },
+          ],
+        },
         threadBindings: {
           enabled: true,
           idleHours: 24,
@@ -197,6 +212,7 @@ When validation fails:
     ```
 
     - `dmScope`: `main` (shared) | `per-peer` | `per-channel-peer` | `per-account-channel-peer`
+    - `relayRouting`: route selected channels as `read-only` and relay model replies to a configured `read-write` destination.
     - `threadBindings`: global defaults for thread-bound session routing (Discord supports `/focus`, `/unfocus`, `/agents`, `/session idle`, and `/session max-age`).
     - See [Session Management](/concepts/session) for scoping, identity links, and send policy.
     - See [full reference](/gateway/configuration-reference#session) for all fields.

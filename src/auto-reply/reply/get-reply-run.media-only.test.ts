@@ -185,6 +185,68 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.followupRun.prompt).toContain("Earlier message in this thread");
   });
 
+  it("injects read-only relay contract prompt and followup relay metadata", async () => {
+    await runPreparedReply(
+      baseParams({
+        cfg: {
+          session: {
+            relayRouting: {
+              targets: {
+                telegramPrimary: {
+                  channel: "telegram",
+                  to: "telegram:primary",
+                  accountId: "telegram-main",
+                  threadId: 321,
+                },
+              },
+              rules: [
+                {
+                  mode: "read-only",
+                  relayTo: "telegramPrimary",
+                  match: { channel: "slack" },
+                },
+              ],
+            },
+          },
+          channels: {},
+          agents: { defaults: {} },
+        },
+        ctx: {
+          Body: "",
+          RawBody: "",
+          CommandBody: "",
+          ThreadHistoryBody: "Earlier message in this thread",
+          OriginatingChannel: "slack",
+          OriginatingTo: "C123",
+          ChatType: "group",
+          Provider: "slack",
+          Surface: "slack",
+          From: "U_SOURCE",
+          SenderId: "U_SOURCE",
+          SenderName: "Source User",
+          MessageSid: "m-123",
+        },
+      }),
+    );
+
+    const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
+    expect(call?.followupRun.relayMode).toBe("read-only");
+    expect(call?.followupRun.relayOutput).toEqual({
+      channel: "telegram",
+      to: "telegram:primary",
+      accountId: "telegram-main",
+      threadId: 321,
+    });
+
+    const prompt = call?.followupRun.run.extraSystemPrompt;
+    expect(prompt).toContain("Read-Only Relay Contract");
+    expect(prompt).toContain("reply exactly: SKIP_RELAY");
+    expect(prompt).toContain("[RE: <source> - <brief summary>]");
+    expect(prompt).toContain('"channel": "slack"');
+    expect(prompt).toContain('"channel": "telegram"');
+    expect(prompt).toContain('"to": "telegram:primary"');
+  });
+
   it("returns the empty-body reply when there is no text and no media", async () => {
     const result = await runPreparedReply(
       baseParams({

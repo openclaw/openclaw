@@ -11,7 +11,7 @@ import type { PluginRegistry } from "../../plugins/registry.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { createIMessageTestPlugin } from "../../test-utils/imessage-test-plugin.js";
-import { SILENT_REPLY_TOKEN } from "../tokens.js";
+import { RELAY_SKIP_TOKEN, SILENT_REPLY_TOKEN } from "../tokens.js";
 
 const mocks = vi.hoisted(() => ({
   sendMessageDiscord: vi.fn(async () => ({ messageId: "m1", channelId: "c1" })),
@@ -182,6 +182,18 @@ describe("routeReply", () => {
       `${SILENT_REPLY_TOKEN} -- (why am I here?)`,
       expect.any(Object),
     );
+  });
+
+  it("swallows payloads that contain SKIP_RELAY anywhere", async () => {
+    mocks.sendMessageSlack.mockClear();
+    const res = await routeReply({
+      payload: { text: `relay summary\n\n${RELAY_SKIP_TOKEN}` },
+      channel: "slack",
+      to: "channel:C123",
+      cfg: {} as never,
+    });
+    expect(res.ok).toBe(true);
+    expect(mocks.sendMessageSlack).not.toHaveBeenCalled();
   });
 
   it("applies responsePrefix when routing", async () => {

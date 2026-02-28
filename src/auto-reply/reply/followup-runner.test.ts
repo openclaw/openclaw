@@ -426,6 +426,53 @@ describe("createFollowupRunner messaging tool dedupe", () => {
     );
     expect(onBlockReply).not.toHaveBeenCalled();
   });
+
+  it("routes read-only followups to configured relay output", async () => {
+    const onBlockReply = vi.fn(async () => {});
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "[RE: iMessage - test] relayed message" }],
+      meta: {},
+    });
+
+    const runner = createMessagingDedupeRunner(onBlockReply);
+
+    await runner({
+      ...baseQueuedRun("imessage"),
+      originatingChannel: "imessage",
+      originatingTo: "+15551234567",
+      relayMode: "read-only",
+      relayOutput: {
+        channel: "telegram",
+        to: "telegram:primary",
+        accountId: "telegram-main",
+        threadId: 42,
+      },
+    } as FollowupRun);
+
+    expect(routeReplyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+        to: "telegram:primary",
+        accountId: "telegram-main",
+        threadId: 42,
+      }),
+    );
+    expect(onBlockReply).not.toHaveBeenCalled();
+  });
+
+  it("swallows payloads containing SKIP_RELAY", async () => {
+    const onBlockReply = vi.fn(async () => {});
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "acknowledged\n\nSKIP_RELAY" }],
+      meta: {},
+    });
+
+    const runner = createMessagingDedupeRunner(onBlockReply);
+    await runner(baseQueuedRun("imessage"));
+
+    expect(routeReplyMock).not.toHaveBeenCalled();
+    expect(onBlockReply).not.toHaveBeenCalled();
+  });
 });
 
 describe("createFollowupRunner typing cleanup", () => {

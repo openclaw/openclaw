@@ -1027,6 +1027,36 @@ export const FIELD_HELP: Record<string, string> = {
     "Matches a normalized session-key prefix after internal key normalization steps in policy consumers. Use this for general prefix controls, and prefer rawKeyPrefix when exact full-key matching is required.",
   "session.sendPolicy.rules[].match.rawKeyPrefix":
     "Matches the raw, unnormalized session-key prefix for exact full-key policy targeting. Use this when normalized keyPrefix is too broad and you need agent-prefixed or transport-specific precision.",
+  "session.relayRouting":
+    "Controls automatic reply routing with read-write/read-only channel modes. Use read-only rules to ingest inbound messages without replying to that source channel directly.",
+  "session.relayRouting.defaultMode":
+    'Fallback routing mode when no relay rule matches: "read-write" (default) or "read-only". Use read-only default only when a single unambiguous relay target is configured.',
+  "session.relayRouting.targets":
+    "Named relay destinations used by read-only rules. Each target defines the read-write channel and destination id where relayed replies should be delivered.",
+  "session.relayRouting.targets.*.channel":
+    "Output channel/provider id for a relay target (for example telegram, slack, or discord). Use the same provider id format as channels.* keys so routing stays explicit and predictable.",
+  "session.relayRouting.targets.*.to":
+    "Destination id for a relay target (chat/user/channel id in the destination provider format). Use the exact provider-native id to avoid relay delivery misses.",
+  "session.relayRouting.targets.*.accountId":
+    "Optional provider account id override for relay delivery when multiple accounts exist for the destination channel. Use this to force delivery through one configured account.",
+  "session.relayRouting.targets.*.threadId":
+    "Optional thread/topic id override for relay delivery to thread-capable destination channels. Use this when relays must land in a specific thread.",
+  "session.relayRouting.rules":
+    "Ordered read-write/read-only routing rules evaluated against channel/chatType/session-key prefixes. Use narrow rules first because the first matching rule wins.",
+  "session.relayRouting.rules[].mode":
+    'Routing mode for matched sessions: "read-write" allows normal replies, "read-only" requires relayTo and routes replies to a configured target. Use read-only for listen-only sources.',
+  "session.relayRouting.rules[].relayTo":
+    "Named relay target key used when mode=read-only. Use one of the keys defined under session.relayRouting.targets so replies always route to a configured read-write destination.",
+  "session.relayRouting.rules[].match":
+    "Optional rule match conditions combining channel, chatType, keyPrefix, and rawKeyPrefix. Use match filters to scope read-only routing precisely.",
+  "session.relayRouting.rules[].match.channel":
+    "Matches rule application to a specific inbound channel/provider id. Use this to isolate behavior per source channel.",
+  "session.relayRouting.rules[].match.chatType":
+    "Matches rule application by chat type (direct, group, channel). Use this to keep DM and group relay behavior separate.",
+  "session.relayRouting.rules[].match.keyPrefix":
+    "Matches a normalized session-key prefix after internal key normalization. Use this for broad prefix routing.",
+  "session.relayRouting.rules[].match.rawKeyPrefix":
+    "Matches the raw, unnormalized session-key prefix for exact targeting. Use this when normalized matching is too broad.",
   "session.agentToAgent":
     "Groups controls for inter-agent session exchanges, including loop prevention limits on reply chaining. Keep defaults unless you run advanced agent-to-agent automation with strict turn caps.",
   "session.agentToAgent.maxPingPongTurns":

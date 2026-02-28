@@ -116,6 +116,66 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(true);
   });
 
+  it("accepts session relayRouting with read-only rule mapped to read-write target", () => {
+    const res = validateConfigObject({
+      session: {
+        relayRouting: {
+          targets: {
+            telegramPrimary: {
+              channel: "telegram",
+              to: "12345",
+            },
+          },
+          rules: [
+            {
+              mode: "read-only",
+              relayTo: "telegramPrimary",
+              match: { channel: "imessage", chatType: "direct" },
+            },
+          ],
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects read-only relay rules without relayTo target", () => {
+    const res = validateConfigObject({
+      session: {
+        relayRouting: {
+          rules: [{ mode: "read-only", match: { channel: "imessage" } }],
+        },
+      },
+    });
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues[0]?.path).toBe("session.relayRouting.rules.0.relayTo");
+    }
+  });
+
+  it("rejects read-only relay rules that reference unknown targets", () => {
+    const res = validateConfigObject({
+      session: {
+        relayRouting: {
+          targets: {
+            telegramPrimary: {
+              channel: "telegram",
+              to: "12345",
+            },
+          },
+          rules: [{ mode: "read-only", relayTo: "missing", match: { channel: "imessage" } }],
+        },
+      },
+    });
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues[0]?.path).toBe("session.relayRouting.rules.0.relayTo");
+    }
+  });
+
   it("rejects relative iMessage attachment roots", () => {
     const res = validateConfigObject({
       channels: {

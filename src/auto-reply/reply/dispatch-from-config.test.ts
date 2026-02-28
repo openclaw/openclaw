@@ -305,6 +305,99 @@ describe("dispatchReplyFromConfig", () => {
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
   });
 
+  it("routes to relayRouting target for read-only channels", async () => {
+    setNoAbort();
+    mocks.routeReply.mockClear();
+    const cfg = {
+      session: {
+        relayRouting: {
+          targets: {
+            telegramPrimary: {
+              channel: "telegram",
+              to: "telegram:primary",
+            },
+          },
+          rules: [
+            {
+              mode: "read-only",
+              relayTo: "telegramPrimary",
+              match: { channel: "slack" },
+            },
+          ],
+        },
+      },
+    } as OpenClawConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "slack",
+      Surface: "slack",
+      OriginatingChannel: "slack",
+      OriginatingTo: "channel:C123",
+    });
+
+    const replyResolver = async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      expect(opts?.suppressTyping).toBe(true);
+      expect(opts?.typingPolicy).toBe("system_event");
+      return { text: "relayed" } satisfies ReplyPayload;
+    };
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(mocks.routeReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+        to: "telegram:primary",
+      }),
+    );
+  });
+
+  it("prefers read-only relay target over origin-channel routing", async () => {
+    setNoAbort();
+    mocks.routeReply.mockClear();
+    const cfg = {
+      session: {
+        relayRouting: {
+          targets: {
+            telegramPrimary: {
+              channel: "telegram",
+              to: "telegram:primary",
+            },
+          },
+          rules: [
+            {
+              mode: "read-only",
+              relayTo: "telegramPrimary",
+            },
+          ],
+        },
+      },
+    } as OpenClawConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "slack",
+      Surface: "slack",
+      OriginatingChannel: "discord",
+      OriginatingTo: "discord:chan",
+    });
+
+    const replyResolver = async () => ({ text: "relayed" }) satisfies ReplyPayload;
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(mocks.routeReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+        to: "telegram:primary",
+      }),
+    );
+    expect(mocks.routeReply).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "discord",
+        to: "discord:chan",
+      }),
+    );
+  });
+
   it("forces suppressTyping for internal webchat turns", async () => {
     setNoAbort();
     const cfg = emptyConfig;

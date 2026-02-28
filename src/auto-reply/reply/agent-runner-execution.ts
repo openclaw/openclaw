@@ -29,6 +29,7 @@ import { stripHeartbeatToken } from "../heartbeat.js";
 import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
 import {
+  hasRelaySkipToken,
   HEARTBEAT_TOKEN,
   isSilentReplyPrefixText,
   isSilentReplyText,
@@ -144,6 +145,9 @@ export async function runAgentTurnWithFallback(params: {
           text = stripped.text;
         }
         if (isSilentReplyText(text, SILENT_REPLY_TOKEN)) {
+          return { skip: true };
+        }
+        if (hasRelaySkipToken(text)) {
           return { skip: true };
         }
         if (

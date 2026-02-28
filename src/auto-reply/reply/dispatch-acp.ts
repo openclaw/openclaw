@@ -144,6 +144,13 @@ export type AcpDispatchAttemptResult = {
   counts: Record<ReplyDispatchKind, number>;
 };
 
+export type AcpRouteTarget = {
+  channel: string;
+  to: string;
+  accountId?: string;
+  threadId?: string | number;
+};
+
 export async function tryDispatchAcpReply(params: {
   ctx: FinalizedMsgContext;
   cfg: OpenClawConfig;
@@ -152,9 +159,7 @@ export async function tryDispatchAcpReply(params: {
   inboundAudio: boolean;
   sessionTtsAuto?: TtsAutoMode;
   ttsChannel?: string;
-  shouldRouteToOriginating: boolean;
-  originatingChannel?: string;
-  originatingTo?: string;
+  routeTarget?: AcpRouteTarget;
   shouldSendToolSummaries: boolean;
   bypassForCommand: boolean;
   recordProcessed: DispatchProcessedRecorder;
@@ -203,14 +208,14 @@ export async function tryDispatchAcpReply(params: {
       ttsAuto: params.sessionTtsAuto,
     });
 
-    if (params.shouldRouteToOriginating && params.originatingChannel && params.originatingTo) {
+    if (params.routeTarget) {
       const result = await routeReply({
         payload: ttsPayload,
-        channel: params.originatingChannel,
-        to: params.originatingTo,
+        channel: params.routeTarget.channel,
+        to: params.routeTarget.to,
         sessionKey: params.ctx.SessionKey,
-        accountId: params.ctx.AccountId,
-        threadId: params.ctx.MessageThreadId,
+        accountId: params.routeTarget.accountId ?? params.ctx.AccountId,
+        threadId: params.routeTarget.threadId ?? params.ctx.MessageThreadId,
         cfg: params.cfg,
       });
       if (!result.ok) {

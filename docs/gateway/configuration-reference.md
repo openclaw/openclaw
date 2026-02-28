@@ -1389,6 +1389,22 @@ See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for preceden
       rules: [{ action: "deny", match: { channel: "discord", chatType: "group" } }],
       default: "allow",
     },
+    relayRouting: {
+      targets: {
+        primaryTelegram: {
+          channel: "telegram",
+          to: "telegram:123456789",
+        },
+      },
+      rules: [
+        {
+          mode: "read-only",
+          relayTo: "primaryTelegram",
+          match: { channel: "imessage", chatType: "direct" },
+        },
+      ],
+      defaultMode: "read-write",
+    },
   },
 }
 ```
@@ -1408,6 +1424,11 @@ See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for preceden
   - Set `0` to disable this guard and always allow parent forking.
 - **`mainKey`**: legacy field. Runtime now always uses `"main"` for the main direct-chat bucket.
 - **`sendPolicy`**: match by `channel`, `chatType` (`direct|group|channel`, with legacy `dm` alias), `keyPrefix`, or `rawKeyPrefix`. First deny wins.
+- **`relayRouting`**: controls read-write/read-only routing for auto replies.
+  - `rules[]`: ordered rules; first match wins. `mode: "read-only"` requires `relayTo`.
+  - `targets`: named read-write destinations used by read-only rules.
+  - `defaultMode`: fallback when no rule matches (`read-write` by default).
+  - Read-only routing still gives the model full inbound metadata, but delivery goes to the configured relay target instead of the source channel.
 - **`maintenance`**: session-store cleanup + retention controls.
   - `mode`: `warn` emits warnings only; `enforce` applies cleanup.
   - `pruneAfter`: age cutoff for stale entries (default `30d`).
