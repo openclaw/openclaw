@@ -15,6 +15,7 @@ import {
   type ExtractMode,
 } from "./web-fetch-utils.js";
 import { fetchWithWebToolsNetworkGuard } from "./web-guarded-fetch.js";
+import type { SsrFPolicy } from "../../infra/net/ssrf.js";
 import {
   CacheEntry,
   DEFAULT_CACHE_TTL_MINUTES,
@@ -128,6 +129,22 @@ function resolveFirecrawlConfig(fetch?: WebFetchConfig): FirecrawlFetchConfig {
   if (!fetch || typeof fetch !== "object") {
     return undefined;
   }
+
+function resolveSsrfPolicy(fetch?: WebFetchConfig): SsrFPolicy | undefined {
+  if (!fetch || typeof fetch !== "object") {
+    return undefined;
+  }
+  const ssrfPolicy = fetch.ssrfPolicy;
+  if (!ssrfPolicy || typeof ssrfPolicy !== "object") {
+    return undefined;
+  }
+  return {
+    allowPrivateNetwork: ssrfPolicy.allowPrivateNetwork,
+    dangerouslyAllowPrivateNetwork: ssrfPolicy.dangerouslyAllowPrivateNetwork,
+    allowedHostnames: ssrfPolicy.allowedHostnames,
+    hostnameAllowlist: ssrfPolicy.hostnameAllowlist,
+  };
+}
   const firecrawl = "firecrawl" in fetch ? fetch.firecrawl : undefined;
   if (!firecrawl || typeof firecrawl !== "object") {
     return undefined;
@@ -446,6 +463,7 @@ type WebFetchRuntimeParams = FirecrawlRuntimeParams & {
   cacheTtlMs: number;
   userAgent: string;
   readabilityEnabled: boolean;
+  ssrfPolicy?: SsrFPolicy;
 };
 
 function toFirecrawlContentParams(
@@ -534,6 +552,7 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
           "Accept-Language": "en-US,en;q=0.9",
         },
       },
+      ssrfPolicy: params.ssrfPolicy,
     });
     res = result.response;
     finalUrl = result.finalUrl;
@@ -744,6 +763,7 @@ export function createWebFetchTool(options?: {
       const extractMode = readStringParam(params, "extractMode") === "text" ? "text" : "markdown";
       const maxChars = readNumberParam(params, "maxChars", { integer: true });
       const maxCharsCap = resolveFetchMaxCharsCap(fetch);
+      const ssrfPolicy = resolveSsrfPolicy(fetch);
       const result = await runWebFetch({
         url,
         extractMode,
@@ -766,6 +786,7 @@ export function createWebFetchTool(options?: {
         firecrawlProxy: "auto",
         firecrawlStoreInCache: true,
         firecrawlTimeoutSeconds,
+        ssrfPolicy,
       });
       return jsonResult(result);
     },

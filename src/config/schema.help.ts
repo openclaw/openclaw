@@ -616,6 +616,11 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.web.fetch.cacheTtlMinutes": "Cache TTL in minutes for web_fetch results.",
   "tools.web.fetch.maxRedirects": "Maximum redirects allowed for web_fetch (default: 3).",
   "tools.web.fetch.userAgent": "Override User-Agent header for web_fetch requests.",
+  "tools.web.fetch.ssrfPolicy": "Configure SSRF policy for web_fetch to allow private network access (useful in proxy environments).",
+  "tools.web.fetch.ssrfPolicy.allowPrivateNetwork": "Allow fetching from private IP addresses (e.g., 192.168.x.x).",
+  "tools.web.fetch.ssrfPolicy.dangerouslyAllowPrivateNetwork": "Allow fetching from all private/internal IP addresses including 198.18.x.x (RFC 2544 benchmark range). Use only in trusted networks.",
+  "tools.web.fetch.ssrfPolicy.allowedHostnames": "Whitelist specific hostnames to bypass SSRF checks.",
+  "tools.web.fetch.ssrfPolicy.hostnameAllowlist": "Alias for allowedHostnames for backward compatibility.",
   "tools.web.fetch.readability":
     "Use Readability to extract main content from HTML (fallbacks to basic HTML cleanup).",
   "tools.web.fetch.firecrawl.enabled": "Enable Firecrawl fallback for web_fetch (if configured).",

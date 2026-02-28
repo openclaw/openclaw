@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { getBlockedNetworkModeReason } from "../agents/sandbox/network-mode.js";
+import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
 import { AgentModelSchema } from "./zod-schema.agent-model.js";
 import {
@@ -314,6 +315,15 @@ export const ToolsWebFetchSchema = z
     cacheTtlMinutes: z.number().nonnegative().optional(),
     maxRedirects: z.number().int().nonnegative().optional(),
     userAgent: z.string().optional(),
+    ssrfPolicy: z
+      .object({
+        allowPrivateNetwork: z.boolean().optional(),
+        dangerouslyAllowPrivateNetwork: z.boolean().optional(),
+        allowedHostnames: z.array(z.string()).optional(),
+        hostnameAllowlist: z.array(z.string()).optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .optional();

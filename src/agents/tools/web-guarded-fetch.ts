@@ -27,18 +27,19 @@ function resolveTimeoutMs(params: {
 }
 
 export async function fetchWithWebToolsNetworkGuard(
-  params: WebToolGuardedFetchOptions,
+  params: WebToolGuardedFetchOptions & { ssrfPolicy?: SsrFPolicy },
 ): Promise<GuardedFetchResult> {
-  const { timeoutSeconds, ...rest } = params;
+  const { timeoutSeconds, ssrfPolicy, ...rest } = params;
   return fetchWithSsrFGuard({
     ...rest,
     timeoutMs: resolveTimeoutMs({ timeoutMs: rest.timeoutMs, timeoutSeconds }),
     proxy: "env",
+    policy: ssrfPolicy,
   });
 }
 
 export async function withWebToolsNetworkGuard<T>(
-  params: WebToolGuardedFetchOptions,
+  params: WebToolGuardedFetchOptions & { ssrfPolicy?: SsrFPolicy },
   run: (result: { response: Response; finalUrl: string }) => Promise<T>,
 ): Promise<T> {
   const { response, finalUrl, release } = await fetchWithWebToolsNetworkGuard(params);
