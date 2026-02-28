@@ -77,6 +77,11 @@ export type SkillEligibilityContext = {
     hasAnyBin: (bins: string[]) => boolean;
     note?: string;
   };
+  sandbox?: {
+    hasBin: (bin: string) => boolean;
+    hasAnyBin: (bins: string[]) => boolean;
+    image?: string;
+  };
 };
 
 export type SkillSnapshot = {
