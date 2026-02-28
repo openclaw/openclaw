@@ -325,8 +325,9 @@ export async function initSessionState(params: {
       persistedVerbose = entry.verboseLevel;
       persistedReasoning = entry.reasoningLevel;
       persistedTtsAuto = entry.ttsAuto;
-      persistedModelOverride = entry.modelOverride;
-      persistedProviderOverride = entry.providerOverride;
+      // Do NOT carry over modelOverride / providerOverride on /new or /reset.
+      // These may have been set by a cron or subagent session using a fallback
+      // model, and the new session should start with the configured primary.
       persistedLabel = entry.label;
     }
   }
