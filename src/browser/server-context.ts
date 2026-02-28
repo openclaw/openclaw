@@ -282,6 +282,21 @@ function createProfileContext(
     const isExtension = profile.driver === "extension";
     const profileState = getProfileState();
     const httpReachable = await isHttpReachable();
+    const waitForCdpReadyAfterLaunch = async () => {
+      // launchOpenClawChrome() can return before Chrome is fully ready to serve /json/version + CDP WS.
+      // If a follow-up call (snapshot/screenshot/etc.) races ahead, we can hit PortInUseError trying to
+      // launch again on the same port. Poll briefly so browser(action="start"/"open") is stable.
+      const maxAttempts = 50;
+      for (let attempt = 0; attempt < maxAttempts; attempt++) {
+        if (await isReachable(1200)) {
+          return;
+        }
+        await new Promise((r) => setTimeout(r, 100));
+      }
+      throw new Error(
+        `Chrome CDP websocket for profile "${profile.name}" is not reachable after start.`,
+      );
+    };
 
     if (isExtension && remoteCdp) {
       throw new Error(
@@ -319,6 +334,13 @@ function createProfileContext(
       }
       const launched = await launchOpenClawChrome(current.resolved, profile);
       attachRunning(launched);
+      try {
+        await waitForCdpReadyAfterLaunch();
+      } catch (err) {
+        await stopOpenClawChrome(launched).catch(() => {});
+        setProfileRunning(null);
+        throw err;
+      }
       return;
     }
 
