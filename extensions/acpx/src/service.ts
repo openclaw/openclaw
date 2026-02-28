@@ -5,12 +5,8 @@ import type {
   PluginLogger,
 } from "openclaw/plugin-sdk";
 import { registerAcpRuntimeBackend, unregisterAcpRuntimeBackend } from "openclaw/plugin-sdk";
-import {
-  ACPX_PINNED_VERSION,
-  resolveAcpxPluginConfig,
-  type ResolvedAcpxPluginConfig,
-} from "./config.js";
-import { ensurePinnedAcpx } from "./ensure.js";
+import { resolveAcpxPluginConfig, type ResolvedAcpxPluginConfig } from "./config.js";
+import { ensureAcpx } from "./ensure.js";
 import { ACPX_BACKEND_ID, AcpxRuntime } from "./runtime.js";
 
 type AcpxRuntimeLike = AcpRuntime & {
@@ -61,18 +57,21 @@ export function createAcpxRuntimeService(
         runtime,
         healthy: () => runtime?.isHealthy() ?? false,
       });
+      const expectedVersionLabel = pluginConfig.expectedVersion ?? "any";
+      const installLabel = pluginConfig.allowPluginLocalInstall ? "enabled" : "disabled";
       ctx.logger.info(
-        `acpx runtime backend registered (command: ${pluginConfig.command}, pinned: ${ACPX_PINNED_VERSION})`,
+        `acpx runtime backend registered (command: ${pluginConfig.command}, expectedVersion: ${expectedVersionLabel}, pluginLocalInstall: ${installLabel})`,
       );
 
       lifecycleRevision += 1;
       const currentRevision = lifecycleRevision;
       void (async () => {
         try {
-          await ensurePinnedAcpx({
+          await ensureAcpx({
             command: pluginConfig.command,
             logger: ctx.logger,
-            expectedVersion: ACPX_PINNED_VERSION,
+            expectedVersion: pluginConfig.expectedVersion,
+            allowInstall: pluginConfig.allowPluginLocalInstall,
           });
           if (currentRevision !== lifecycleRevision) {
             return;

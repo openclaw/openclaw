@@ -265,6 +265,8 @@ async function createMockRuntime(params?: {
 
   const config: ResolvedAcpxPluginConfig = {
     command: scriptPath,
+    allowPluginLocalInstall: false,
+    installCommand: "n/a",
     cwd: dir,
     permissionMode: params?.permissionMode ?? "approve-all",
     nonInteractivePermissions: "fail",
@@ -581,6 +583,8 @@ describe("AcpxRuntime", () => {
     const runtime = new AcpxRuntime(
       {
         command: "/definitely/missing/acpx",
+        allowPluginLocalInstall: false,
+        installCommand: "n/a",
         cwd: process.cwd(),
         permissionMode: "approve-reads",
         nonInteractivePermissions: "fail",
@@ -603,6 +607,8 @@ describe("AcpxRuntime", () => {
     const runtime = new AcpxRuntime(
       {
         command: "/definitely/missing/acpx",
+        allowPluginLocalInstall: false,
+        installCommand: "n/a",
         cwd: process.cwd(),
         permissionMode: "approve-reads",
         nonInteractivePermissions: "fail",
