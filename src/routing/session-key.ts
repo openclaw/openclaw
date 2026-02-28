@@ -1,5 +1,6 @@
 import type { ChatType } from "../channels/chat-type.js";
 import { parseAgentSessionKey, type ParsedAgentSessionKey } from "../sessions/session-key-utils.js";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "./account-id.js";
 
 export {
   getSubagentDepth,
@@ -9,10 +10,14 @@ export {
   parseAgentSessionKey,
   type ParsedAgentSessionKey,
 } from "../sessions/session-key-utils.js";
+export {
+  DEFAULT_ACCOUNT_ID,
+  normalizeAccountId,
+  normalizeOptionalAccountId,
+} from "./account-id.js";
 
 export const DEFAULT_AGENT_ID = "main";
 export const DEFAULT_MAIN_KEY = "main";
-export const DEFAULT_ACCOUNT_ID = "default";
 export type SessionKeyShape = "missing" | "agent" | "legacy_or_alias" | "malformed_agent";
 
 // Pre-compiled regex
@@ -44,15 +49,16 @@ export function toAgentStoreSessionKey(params: {
   mainKey?: string | undefined;
 }): string {
   const raw = (params.requestKey ?? "").trim();
-  if (!raw || raw === DEFAULT_MAIN_KEY) {
+  if (!raw || raw.toLowerCase() === DEFAULT_MAIN_KEY) {
     return buildAgentMainSessionKey({ agentId: params.agentId, mainKey: params.mainKey });
+  }
+  const parsed = parseAgentSessionKey(raw);
+  if (parsed) {
+    return `agent:${parsed.agentId}:${parsed.rest}`;
   }
   const lowered = raw.toLowerCase();
   if (lowered.startsWith("agent:")) {
     return lowered;
-  }
-  if (lowered.startsWith("subagent:")) {
-    return `agent:${normalizeAgentId(params.agentId)}:${lowered}`;
   }
   return `agent:${normalizeAgentId(params.agentId)}:${lowered}`;
 }
@@ -94,39 +100,7 @@ export function normalizeAgentId(value: string | undefined | null): string {
 }
 
 export function sanitizeAgentId(value: string | undefined | null): string {
-  const trimmed = (value ?? "").trim();
-  if (!trimmed) {
-    return DEFAULT_AGENT_ID;
-  }
-  if (VALID_ID_RE.test(trimmed)) {
-    return trimmed.toLowerCase();
-  }
-  return (
-    trimmed
-      .toLowerCase()
-      .replace(INVALID_CHARS_RE, "-")
-      .replace(LEADING_DASH_RE, "")
-      .replace(TRAILING_DASH_RE, "")
-      .slice(0, 64) || DEFAULT_AGENT_ID
-  );
-}
-
-export function normalizeAccountId(value: string | undefined | null): string {
-  const trimmed = (value ?? "").trim();
-  if (!trimmed) {
-    return DEFAULT_ACCOUNT_ID;
-  }
-  if (VALID_ID_RE.test(trimmed)) {
-    return trimmed.toLowerCase();
-  }
-  return (
-    trimmed
-      .toLowerCase()
-      .replace(INVALID_CHARS_RE, "-")
-      .replace(LEADING_DASH_RE, "")
-      .replace(TRAILING_DASH_RE, "")
-      .slice(0, 64) || DEFAULT_ACCOUNT_ID
-  );
+  return normalizeAgentId(value);
 }
 
 export function buildAgentMainSessionKey(params: {
@@ -250,12 +224,15 @@ export function resolveThreadSessionKeys(params: {
   threadId?: string | null;
   parentSessionKey?: string;
   useSuffix?: boolean;
+  normalizeThreadId?: (threadId: string) => string;
 }): { sessionKey: string; parentSessionKey?: string } {
   const threadId = (params.threadId ?? "").trim();
   if (!threadId) {
     return { sessionKey: params.baseSessionKey, parentSessionKey: undefined };
   }
-  const normalizedThreadId = threadId.toLowerCase();
+  const normalizedThreadId = (params.normalizeThreadId ?? ((value: string) => value.toLowerCase()))(
+    threadId,
+  );
   const useSuffix = params.useSuffix ?? true;
   const sessionKey = useSuffix
     ? `${params.baseSessionKey}:thread:${normalizedThreadId}`

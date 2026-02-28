@@ -1,12 +1,15 @@
 import AVFoundation
+import Contacts
 import CoreLocation
 import CoreMotion
 import CryptoKit
+import EventKit
 import Foundation
 import Darwin
 import OpenClawKit
 import Network
 import Observation
+import Photos
 import ReplayKit
 import Security
 import Speech
@@ -209,7 +212,7 @@ final class GatewayConnectionController {
             await self.connectManual(host: host, port: port, useTLS: useTLS)
         case let .discovered(stableID, _):
             guard let gateway = self.gateways.first(where: { $0.stableID == stableID }) else { return }
-            await self.connectDiscoveredGateway(gateway)
+            _ = await self.connectDiscoveredGateway(gateway)
         }
     }
 
@@ -396,7 +399,7 @@ final class GatewayConnectionController {
             self.didAutoConnect = true
             Task { [weak self] in
                 guard let self else { return }
-                await self.connectDiscoveredGateway(target)
+                _ = await self.connectDiscoveredGateway(target)
             }
             return
         }
@@ -408,7 +411,7 @@ final class GatewayConnectionController {
             self.didAutoConnect = true
             Task { [weak self] in
                 guard let self else { return }
-                await self.connectDiscoveredGateway(gateway)
+                _ = await self.connectDiscoveredGateway(gateway)
             }
             return
         }
@@ -629,7 +632,8 @@ final class GatewayConnectionController {
                             0,
                             NI_NUMERICHOST)
                         guard rc == 0 else { return nil }
-                        return String(cString: buffer)
+                        let bytes = buffer.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }
+                        return String(bytes: bytes, encoding: .utf8)
                     }
 
                     if let host, !host.isEmpty {
@@ -780,7 +784,6 @@ final class GatewayConnectionController {
     }
 
     private func currentCaps() -> [String] {
-        let permissionSnapshot = IOSPermissionCenter.statusSnapshot()
         var caps = [OpenClawCapability.canvas.rawValue, OpenClawCapability.screen.rawValue]
 
         // Default-on: if the key doesn't exist yet, treat it as enabled.
@@ -801,19 +804,11 @@ final class GatewayConnectionController {
         if WatchMessagingService.isSupportedOnDevice() {
             caps.append(OpenClawCapability.watch.rawValue)
         }
-        if permissionSnapshot.photosAllowed {
-            caps.append(OpenClawCapability.photos.rawValue)
-        }
-        if permissionSnapshot.contactsAllowed {
-            caps.append(OpenClawCapability.contacts.rawValue)
-        }
-        if permissionSnapshot.calendarReadAllowed || permissionSnapshot.calendarWriteAllowed {
-            caps.append(OpenClawCapability.calendar.rawValue)
-        }
-        if permissionSnapshot.remindersReadAllowed || permissionSnapshot.remindersWriteAllowed {
-            caps.append(OpenClawCapability.reminders.rawValue)
-        }
-        if Self.motionAvailable() && permissionSnapshot.motionAllowed {
+        caps.append(OpenClawCapability.photos.rawValue)
+        caps.append(OpenClawCapability.contacts.rawValue)
+        caps.append(OpenClawCapability.calendar.rawValue)
+        caps.append(OpenClawCapability.reminders.rawValue)
+        if Self.motionAvailable() {
             caps.append(OpenClawCapability.motion.rawValue)
         }
 
@@ -821,7 +816,6 @@ final class GatewayConnectionController {
     }
 
     private func currentCommands() -> [String] {
-        let permissionSnapshot = IOSPermissionCenter.statusSnapshot()
         var commands: [String] = [
             OpenClawCanvasCommand.present.rawValue,
             OpenClawCanvasCommand.hide.rawValue,
@@ -865,20 +859,12 @@ final class GatewayConnectionController {
             commands.append(OpenClawContactsCommand.add.rawValue)
         }
         if caps.contains(OpenClawCapability.calendar.rawValue) {
-            if permissionSnapshot.calendarReadAllowed {
-                commands.append(OpenClawCalendarCommand.events.rawValue)
-            }
-            if permissionSnapshot.calendarWriteAllowed {
-                commands.append(OpenClawCalendarCommand.add.rawValue)
-            }
+            commands.append(OpenClawCalendarCommand.events.rawValue)
+            commands.append(OpenClawCalendarCommand.add.rawValue)
         }
         if caps.contains(OpenClawCapability.reminders.rawValue) {
-            if permissionSnapshot.remindersReadAllowed {
-                commands.append(OpenClawRemindersCommand.list.rawValue)
-            }
-            if permissionSnapshot.remindersWriteAllowed {
-                commands.append(OpenClawRemindersCommand.add.rawValue)
-            }
+            commands.append(OpenClawRemindersCommand.list.rawValue)
+            commands.append(OpenClawRemindersCommand.add.rawValue)
         }
         if caps.contains(OpenClawCapability.motion.rawValue) {
             commands.append(OpenClawMotionCommand.activity.rawValue)
@@ -889,7 +875,6 @@ final class GatewayConnectionController {
     }
 
     private func currentPermissions() -> [String: Bool] {
-        let permissionSnapshot = IOSPermissionCenter.statusSnapshot()
         var permissions: [String: Bool] = [:]
         permissions["camera"] = AVCaptureDevice.authorizationStatus(for: .video) == .authorized
         permissions["microphone"] = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
@@ -899,23 +884,20 @@ final class GatewayConnectionController {
             && CLLocationManager.locationServicesEnabled()
         permissions["screenRecording"] = RPScreenRecorder.shared().isAvailable
 
-        permissions["photos"] = permissionSnapshot.photosAllowed
-        permissions["photosDenied"] = permissionSnapshot.photos.isDeniedOrRestricted
-        permissions["contacts"] = permissionSnapshot.contactsAllowed
-        permissions["contactsDenied"] = permissionSnapshot.contacts.isDeniedOrRestricted
+        let photoStatus = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+        permissions["photos"] = photoStatus == .authorized || photoStatus == .limited
+        let contactsStatus = CNContactStore.authorizationStatus(for: .contacts)
+        permissions["contacts"] = contactsStatus == .authorized || contactsStatus == .limited
 
-        permissions["calendar"] = permissionSnapshot.calendarReadAllowed || permissionSnapshot.calendarWriteAllowed
-        permissions["calendarRead"] = permissionSnapshot.calendarReadAllowed
-        permissions["calendarWrite"] = permissionSnapshot.calendarWriteAllowed
-        permissions["calendarDenied"] = permissionSnapshot.calendar.isDeniedOrRestricted
+        let calendarStatus = EKEventStore.authorizationStatus(for: .event)
+        permissions["calendar"] = Self.hasEventKitAccess(calendarStatus)
+        let remindersStatus = EKEventStore.authorizationStatus(for: .reminder)
+        permissions["reminders"] = Self.hasEventKitAccess(remindersStatus)
 
-        permissions["reminders"] = permissionSnapshot.remindersReadAllowed || permissionSnapshot.remindersWriteAllowed
-        permissions["remindersRead"] = permissionSnapshot.remindersReadAllowed
-        permissions["remindersWrite"] = permissionSnapshot.remindersWriteAllowed
-        permissions["remindersDenied"] = permissionSnapshot.reminders.isDeniedOrRestricted
-
-        permissions["motion"] = permissionSnapshot.motionAllowed
-        permissions["motionDenied"] = permissionSnapshot.motion.isDeniedOrRestricted
+        let motionStatus = CMMotionActivityManager.authorizationStatus()
+        let pedometerStatus = CMPedometer.authorizationStatus()
+        permissions["motion"] =
+            motionStatus == .authorized || pedometerStatus == .authorized
 
         let watchStatus = WatchMessagingService.currentStatusSnapshot()
         permissions["watchSupported"] = watchStatus.supported
@@ -928,53 +910,19 @@ final class GatewayConnectionController {
 
     private static func isLocationAuthorized(status: CLAuthorizationStatus) -> Bool {
         switch status {
-        case .authorizedAlways, .authorizedWhenInUse, .authorized:
+        case .authorizedAlways, .authorizedWhenInUse:
             return true
         default:
             return false
         }
     }
 
+    private static func hasEventKitAccess(_ status: EKAuthorizationStatus) -> Bool {
+        status == .fullAccess || status == .writeOnly
+    }
+
     private static func motionAvailable() -> Bool {
         CMMotionActivityManager.isActivityAvailable() || CMPedometer.isStepCountingAvailable()
-    }
-
-    private func platformString() -> String {
-        let v = ProcessInfo.processInfo.operatingSystemVersion
-        let name = switch UIDevice.current.userInterfaceIdiom {
-        case .pad:
-            "iPadOS"
-        case .phone:
-            "iOS"
-        default:
-            "iOS"
-        }
-        return "\(name) \(v.majorVersion).\(v.minorVersion).\(v.patchVersion)"
-    }
-
-    private func deviceFamily() -> String {
-        switch UIDevice.current.userInterfaceIdiom {
-        case .pad:
-            "iPad"
-        case .phone:
-            "iPhone"
-        default:
-            "iOS"
-        }
-    }
-
-    private func modelIdentifier() -> String {
-        var systemInfo = utsname()
-        uname(&systemInfo)
-        let machine = withUnsafeBytes(of: &systemInfo.machine) { ptr in
-            String(bytes: ptr.prefix { $0 != 0 }, encoding: .utf8)
-        }
-        let trimmed = machine?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return trimmed.isEmpty ? "unknown" : trimmed
-    }
-
-    private func appVersion() -> String {
-        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev"
     }
 }
 
@@ -997,19 +945,19 @@ extension GatewayConnectionController {
     }
 
     func _test_platformString() -> String {
-        self.platformString()
+        DeviceInfoHelper.platformString()
     }
 
     func _test_deviceFamily() -> String {
-        self.deviceFamily()
+        DeviceInfoHelper.deviceFamily()
     }
 
     func _test_modelIdentifier() -> String {
-        self.modelIdentifier()
+        DeviceInfoHelper.modelIdentifier()
     }
 
     func _test_appVersion() -> String {
-        self.appVersion()
+        DeviceInfoHelper.appVersion()
     }
 
     func _test_setGateways(_ gateways: [GatewayDiscoveryModel.DiscoveredGateway]) {
@@ -1041,7 +989,7 @@ extension GatewayConnectionController {
 }
 #endif
 
-private final class GatewayTLSFingerprintProbe: NSObject, URLSessionDelegate {
+private final class GatewayTLSFingerprintProbe: NSObject, URLSessionDelegate, @unchecked Sendable {
     private let url: URL
     private let timeoutSeconds: Double
     private let onComplete: (String?) -> Void

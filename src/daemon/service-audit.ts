@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveLaunchAgentPlistPath } from "./launchd.js";
+import { isBunRuntime, isNodeRuntime } from "./runtime-binary.js";
 import {
   isSystemNodePath,
   isVersionManagedNodePath,
@@ -222,16 +223,6 @@ function auditGatewayToken(
     detail: serviceToken ? "service token is stale" : "service token is missing",
     level: "recommended",
   });
-}
-
-function isNodeRuntime(execPath: string): boolean {
-  const base = path.basename(execPath).toLowerCase();
-  return base === "node" || base === "node.exe";
-}
-
-function isBunRuntime(execPath: string): boolean {
-  const base = path.basename(execPath).toLowerCase();
-  return base === "bun" || base === "bun.exe";
 }
 
 function getPathModule(platform: NodeJS.Platform) {

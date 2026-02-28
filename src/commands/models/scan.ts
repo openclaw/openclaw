@@ -4,6 +4,7 @@ import { type ModelScanResult, scanOpenRouterModels } from "../../agents/model-s
 import { withProgressTotals } from "../../cli/progress.js";
 import { loadConfig } from "../../config/config.js";
 import { logConfigUpdated } from "../../config/logging.js";
+import { toAgentModelListLike } from "../../config/model-input.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import {
   stylePromptHint,
@@ -297,9 +298,7 @@ export async function modelsScanCommand(
         nextModels[entry] = {};
       }
     }
-    const existingImageModel = cfg.agents?.defaults?.imageModel as
-      | { primary?: string; fallbacks?: string[] }
-      | undefined;
+    const existingImageModel = toAgentModelListLike(cfg.agents?.defaults?.imageModel);
     const nextImageModel =
       selectedImages.length > 0
         ? {
@@ -308,9 +307,7 @@ export async function modelsScanCommand(
             ...(opts.setImage ? { primary: selectedImages[0] } : {}),
           }
         : cfg.agents?.defaults?.imageModel;
-    const existingModel = cfg.agents?.defaults?.model as
-      | { primary?: string; fallbacks?: string[] }
-      | undefined;
+    const existingModel = toAgentModelListLike(cfg.agents?.defaults?.model);
     const defaults = {
       ...cfg.agents?.defaults,
       model: {

@@ -259,6 +259,48 @@ jobs:
       - name: Check types and lint and oxfmt
         run: pnpm check
 
+      - name: Enforce safe external URL opening policy
+        run: pnpm lint:ui:no-raw-window-open
+
+  # Report-only dead-code scans. Runs after scope detection and stores machine-readable
+  # results as artifacts for later triage before we enable hard gates.
+  # Temporarily disabled in CI while we process initial findings.
+  deadcode:
+    name: dead-code report
+    needs: [docs-scope, changed-scope]
+    # if: needs.docs-scope.outputs.docs_only != 'true' && (github.event_name == 'push' || needs.changed-scope.outputs.run_node == 'true')
+    if: false
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - tool: knip
+            command: pnpm deadcode:report:ci:knip
+          - tool: ts-prune
+            command: pnpm deadcode:report:ci:ts-prune
+          - tool: ts-unused-exports
+            command: pnpm deadcode:report:ci:ts-unused
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+
+      - name: Run ${{ matrix.tool }} dead-code scan
+        run: ${{ matrix.command }}
+
+      - name: Upload dead-code results
+        uses: actions/upload-artifact@v4
+        with:
+          name: dead-code-${{ matrix.tool }}-${{ github.run_id }}
+          path: .artifacts/deadcode
+
   # Validate docs (format, lint, broken links) only when docs files changed.
   check-docs:
     needs: [docs-scope]
@@ -278,7 +320,9 @@ jobs:
       - name: Check docs
         run: pnpm check:docs
 
-  secrets:
+  skills-python:
+    needs: [docs-scope, changed-scope]
+    if: needs.docs-scope.outputs.docs_only != 'true' && (github.event_name == 'push' || needs.changed-scope.outputs.run_node == 'true')
     runs-on: blacksmith-16vcpu-ubuntu-2404
     steps:
       - name: Checkout
@@ -291,10 +335,39 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install detect-secrets
+      - name: Install Python tooling
         run: |
           python -m pip install --upgrade pip
-          python -m pip install detect-secrets==1.5.0
+          python -m pip install pytest ruff pyyaml
+
+      - name: Lint Python skill scripts
+        run: python -m ruff check skills
+
+      - name: Test skill Python scripts
+        run: python -m pytest -q skills
+
+  secrets:
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install pre-commit
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pre-commit detect-secrets==1.5.0
 
       - name: Detect secrets
         run: |
@@ -303,10 +376,35 @@ jobs:
             exit 1
           fi
 
+      - name: Detect committed private keys
+        run: pre-commit run --all-files detect-private-key
+
+      - name: Audit changed GitHub workflows with zizmor
+        run: |
+          set -euo pipefail
+
+          if [ "${{ github.event_name }}" = "push" ]; then
+            BASE="${{ github.event.before }}"
+          else
+            BASE="${{ github.event.pull_request.base.sha }}"
+          fi
+
+          mapfile -t workflow_files < <(git diff --name-only "$BASE" HEAD -- '.github/workflows/*.yml' '.github/workflows/*.yaml')
+          if [ "${#workflow_files[@]}" -eq 0 ]; then
+            echo "No workflow changes detected; skipping zizmor."
+            exit 0
+          fi
+
+          pre-commit run zizmor --files "${workflow_files[@]}"
+
+      - name: Audit production dependencies
+        run: pre-commit run --all-files pnpm-audit-prod
+
   checks-windows:
     needs: [docs-scope, changed-scope, build-artifacts, check]
     if: needs.docs-scope.outputs.docs_only != 'true' && (github.event_name == 'push' || needs.changed-scope.outputs.run_node == 'true')
     runs-on: blacksmith-16vcpu-windows-2025
+    timeout-minutes: 45
     env:
       NODE_OPTIONS: --max-old-space-size=4096
       # Keep total concurrency predictable on the 16 vCPU runner:
@@ -321,12 +419,23 @@ jobs:
         include:
           - runtime: node
             task: lint
+            shard_index: 0
+            shard_count: 1
             command: pnpm lint
           - runtime: node
             task: test
+            shard_index: 1
+            shard_count: 2
+            command: pnpm canvas:a2ui:bundle && pnpm test
+          - runtime: node
+            task: test
+            shard_index: 2
+            shard_count: 2
             command: pnpm canvas:a2ui:bundle && pnpm test
           - runtime: node
             task: protocol
+            shard_index: 0
+            shard_count: 1
             command: pnpm protocol:check
     steps:
       - name: Checkout
@@ -398,6 +507,12 @@ jobs:
           pnpm -v
           pnpm install --frozen-lockfile --ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true || pnpm install --frozen-lockfile --ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true
 
+      - name: Configure test shard (Windows)
+        if: matrix.task == 'test'
+        run: |
+          echo "OPENCLAW_TEST_SHARDS=${{ matrix.shard_count }}" >> "$GITHUB_ENV"
+          echo "OPENCLAW_TEST_SHARD_INDEX=${{ matrix.shard_index }}" >> "$GITHUB_ENV"
+
       - name: Configure vitest JSON reports
         if: matrix.task == 'test'
         run: echo "OPENCLAW_VITEST_REPORT_DIR=$RUNNER_TEMP/vitest-reports" >> "$GITHUB_ENV"
@@ -415,7 +530,7 @@ jobs:
         if: matrix.task == 'test'
         uses: actions/upload-artifact@v4
         with:
-          name: vitest-reports-${{ runner.os }}-${{ matrix.runtime }}
+          name: vitest-reports-${{ runner.os }}-${{ matrix.runtime }}-shard${{ matrix.shard_index }}of${{ matrix.shard_count }}
           path: |
             ${{ env.OPENCLAW_VITEST_REPORT_DIR }}
             ${{ runner.temp }}/vitest-slowest.md

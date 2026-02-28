@@ -1,9 +1,10 @@
 import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
 import { normalizeTargetForProvider } from "../infra/outbound/target-normalization.js";
-import { MEDIA_TOKEN_RE } from "../media/parse.js";
+import { splitMediaFromOutput } from "../media/parse.js";
 import { truncateUtf16Safe } from "../utils.js";
 import { collectTextContentBlocks } from "./content-blocks.js";
 import { type MessagingToolSend } from "./pi-embedded-messaging.js";
+import { normalizeToolName } from "./tool-policy.js";
 
 const TOOL_RESULT_MAX_CHARS = 8000;
 const TOOL_ERROR_MAX_CHARS = 400;
@@ -129,6 +130,58 @@ export function extractToolResultText(result: unknown): string | undefined {
   return texts.join("\n");
 }
 
+// Core tool names that are allowed to emit local MEDIA: paths.
+// Plugin/MCP tools are intentionally excluded to prevent untrusted file reads.
+const TRUSTED_TOOL_RESULT_MEDIA = new Set([
+  "agents_list",
+  "apply_patch",
+  "browser",
+  "canvas",
+  "cron",
+  "edit",
+  "exec",
+  "gateway",
+  "image",
+  "memory_get",
+  "memory_search",
+  "message",
+  "nodes",
+  "process",
+  "read",
+  "session_status",
+  "sessions_history",
+  "sessions_list",
+  "sessions_send",
+  "sessions_spawn",
+  "subagents",
+  "tts",
+  "web_fetch",
+  "web_search",
+  "write",
+]);
+const HTTP_URL_RE = /^https?:\/\//i;
+
+export function isToolResultMediaTrusted(toolName?: string): boolean {
+  if (!toolName) {
+    return false;
+  }
+  const normalized = normalizeToolName(toolName);
+  return TRUSTED_TOOL_RESULT_MEDIA.has(normalized);
+}
+
+export function filterToolResultMediaUrls(
+  toolName: string | undefined,
+  mediaUrls: string[],
+): string[] {
+  if (mediaUrls.length === 0) {
+    return mediaUrls;
+  }
+  if (isToolResultMediaTrusted(toolName)) {
+    return mediaUrls;
+  }
+  return mediaUrls.filter((url) => HTTP_URL_RE.test(url.trim()));
+}
+
 /**
  * Extract media file paths from a tool result.
  *
@@ -150,7 +203,8 @@ export function extractToolResultMediaPaths(result: unknown): string[] {
     return [];
   }
 
-  // Extract MEDIA: paths from text content blocks.
+  // Extract MEDIA: paths from text content blocks using the shared parser so
+  // directive matching and validation stay in sync with outbound reply parsing.
   const paths: string[] = [];
   let hasImageContent = false;
   for (const item of content) {
@@ -163,24 +217,9 @@ export function extractToolResultMediaPaths(result: unknown): string[] {
       continue;
     }
     if (entry.type === "text" && typeof entry.text === "string") {
-      // Only parse lines that start with MEDIA: (after trimming) to avoid
-      // false-matching placeholders like <media:audio> or mid-line mentions.
-      // Mirrors the line-start guard in splitMediaFromOutput (media/parse.ts).
-      for (const line of entry.text.split("\n")) {
-        if (!line.trimStart().startsWith("MEDIA:")) {
-          continue;
-        }
-        MEDIA_TOKEN_RE.lastIndex = 0;
-        let match: RegExpExecArray | null;
-        while ((match = MEDIA_TOKEN_RE.exec(line)) !== null) {
-          const p = match[1]
-            ?.replace(/^[`"'[{(]+/, "")
-            .replace(/[`"'\]})\\,]+$/, "")
-            .trim();
-          if (p && p.length <= 4096) {
-            paths.push(p);
-          }
-        }
+      const parsed = splitMediaFromOutput(entry.text);
+      if (parsed.mediaUrls?.length) {
+        paths.push(...parsed.mediaUrls);
       }
     }
   }
@@ -247,6 +286,14 @@ export function extractToolErrorMessage(result: unknown): string | undefined {
   return normalizeToolErrorText(text);
 }
 
+function resolveMessageToolTarget(args: Record<string, unknown>): string | undefined {
+  const toRaw = typeof args.to === "string" ? args.to : undefined;
+  if (toRaw) {
+    return toRaw;
+  }
+  return typeof args.target === "string" ? args.target : undefined;
+}
+
 export function extractMessagingToolSend(
   toolName: string,
   args: Record<string, unknown>,
@@ -259,7 +306,7 @@ export function extractMessagingToolSend(
     if (action !== "send" && action !== "thread-reply") {
       return undefined;
     }
-    const toRaw = typeof args.to === "string" ? args.to : undefined;
+    const toRaw = resolveMessageToolTarget(args);
     if (!toRaw) {
       return undefined;
     }

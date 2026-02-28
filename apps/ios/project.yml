@@ -92,8 +92,8 @@ targets:
           - CFBundleURLName: ai.openclaw.ios
             CFBundleURLSchemes:
               - openclaw
-        CFBundleShortVersionString: "2026.2.20"
-        CFBundleVersion: "20260220"
+        CFBundleShortVersionString: "2026.2.27"
+        CFBundleVersion: "20260227"
         UILaunchScreen: {}
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
@@ -108,13 +108,8 @@ targets:
         NSBonjourServices:
           - _openclaw-gw._tcp
         NSCameraUsageDescription: OpenClaw can capture photos or short video clips when requested via the gateway.
-        NSPhotoLibraryUsageDescription: OpenClaw can read your photo library when you ask it to share recent photos.
-        NSContactsUsageDescription: OpenClaw can read and create contacts when requested via the gateway.
         NSLocationWhenInUseUsageDescription: OpenClaw uses your location when you allow location sharing.
         NSLocationAlwaysAndWhenInUseUsageDescription: OpenClaw can share your location in the background when you enable Always.
-        NSCalendarsFullAccessUsageDescription: OpenClaw can read and add calendar events when requested via the gateway.
-        NSRemindersFullAccessUsageDescription: OpenClaw can read and add reminders when requested via the gateway.
-        NSMotionUsageDescription: OpenClaw uses Motion & Fitness data for activity and pedometer commands.
         NSMicrophoneUsageDescription: OpenClaw needs microphone access for voice wake.
         NSSpeechRecognitionUsageDescription: OpenClaw uses on-device speech recognition for voice wake.
         UISupportedInterfaceOrientations:
@@ -138,11 +133,13 @@ targets:
       - path: ShareExtension
     dependencies:
       - package: OpenClawKit
+      - sdk: AppIntents.framework
     settings:
       base:
         CODE_SIGN_IDENTITY: "Apple Development"
         CODE_SIGN_STYLE: "$(OPENCLAW_CODE_SIGN_STYLE)"
         DEVELOPMENT_TEAM: "$(OPENCLAW_DEVELOPMENT_TEAM)"
+        ENABLE_APPINTENTS_METADATA: NO
         PRODUCT_BUNDLE_IDENTIFIER: "$(OPENCLAW_SHARE_BUNDLE_ID)"
         PROVISIONING_PROFILE_SPECIFIER: "$(OPENCLAW_SHARE_PROFILE)"
         SWIFT_VERSION: "6.0"
@@ -151,8 +148,8 @@ targets:
       path: ShareExtension/Info.plist
       properties:
         CFBundleDisplayName: OpenClaw Share
-        CFBundleShortVersionString: "2026.2.20"
-        CFBundleVersion: "20260220"
+        CFBundleShortVersionString: "2026.2.27"
+        CFBundleVersion: "20260227"
         NSExtension:
           NSExtensionPointIdentifier: com.apple.share-services
           NSExtensionPrincipalClass: "$(PRODUCT_MODULE_NAME).ShareViewController"
@@ -176,13 +173,14 @@ targets:
       Release: Config/Signing.xcconfig
     settings:
       base:
+        ENABLE_APPINTENTS_METADATA: NO
         PRODUCT_BUNDLE_IDENTIFIER: "$(OPENCLAW_WATCH_APP_BUNDLE_ID)"
     info:
       path: WatchApp/Info.plist
       properties:
         CFBundleDisplayName: OpenClaw
-        CFBundleShortVersionString: "2026.2.20"
-        CFBundleVersion: "20260220"
+        CFBundleShortVersionString: "2026.2.27"
+        CFBundleVersion: "20260227"
         WKCompanionAppBundleIdentifier: "$(OPENCLAW_APP_BUNDLE_ID)"
         WKWatchKitApp: true
 
@@ -205,8 +203,8 @@ targets:
       path: WatchExtension/Info.plist
       properties:
         CFBundleDisplayName: OpenClaw
-        CFBundleShortVersionString: "2026.2.20"
-        CFBundleVersion: "20260220"
+        CFBundleShortVersionString: "2026.2.27"
+        CFBundleVersion: "20260227"
         NSExtension:
           NSExtensionAttributes:
             WKAppBundleIdentifier: "$(OPENCLAW_WATCH_APP_BUNDLE_ID)"
@@ -215,6 +213,9 @@ targets:
   OpenClawTests:
     type: bundle.unit-test
     platform: iOS
+    configFiles:
+      Debug: Signing.xcconfig
+      Release: Signing.xcconfig
     sources:
       - path: Tests
     dependencies:
@@ -224,6 +225,9 @@ targets:
       - sdk: AppIntents.framework
     settings:
       base:
+        CODE_SIGN_IDENTITY: "Apple Development"
+        CODE_SIGN_STYLE: "$(OPENCLAW_CODE_SIGN_STYLE)"
+        DEVELOPMENT_TEAM: "$(OPENCLAW_DEVELOPMENT_TEAM)"
         PRODUCT_BUNDLE_IDENTIFIER: ai.openclaw.ios.tests
         SWIFT_VERSION: "6.0"
         SWIFT_STRICT_CONCURRENCY: complete
@@ -233,5 +237,5 @@ targets:
       path: Tests/Info.plist
       properties:
         CFBundleDisplayName: OpenClawTests
-        CFBundleShortVersionString: "2026.2.20"
-        CFBundleVersion: "20260220"
+        CFBundleShortVersionString: "2026.2.27"
+        CFBundleVersion: "20260227"

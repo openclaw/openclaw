@@ -1,6 +1,6 @@
 import type { OpenClawConfig, HookConfig } from "../config/config.js";
 import {
-  evaluateRuntimeRequires,
+  evaluateRuntimeEligibility,
   hasBinary,
   isConfigPathTruthyWithDefaults,
   resolveConfigPath,
@@ -36,6 +36,30 @@ export function resolveHookConfig(
   return entry;
 }
 
+function evaluateHookRuntimeEligibility(params: {
+  entry: HookEntry;
+  config?: OpenClawConfig;
+  hookConfig?: HookConfig;
+  eligibility?: HookEligibilityContext;
+}): boolean {
+  const { entry, config, hookConfig, eligibility } = params;
+  const remote = eligibility?.remote;
+  const base = {
+    os: entry.metadata?.os,
+    remotePlatforms: remote?.platforms,
+    always: entry.metadata?.always,
+    requires: entry.metadata?.requires,
+    hasRemoteBin: remote?.hasBin,
+    hasAnyRemoteBin: remote?.hasAnyBin,
+  };
+  return evaluateRuntimeEligibility({
+    ...base,
+    hasBin: hasBinary,
+    hasEnv: (envName) => Boolean(process.env[envName] || hookConfig?.env?.[envName]),
+    isConfigPathTruthy: (configPath) => isConfigPathTruthy(config, configPath),
+  });
+}
+
 export function shouldIncludeHook(params: {
   entry: HookEntry;
   config?: OpenClawConfig;
@@ -45,34 +69,16 @@ export function shouldIncludeHook(params: {
   const hookKey = resolveHookKey(entry.hook.name, entry);
   const hookConfig = resolveHookConfig(config, hookKey);
   const pluginManaged = entry.hook.source === "openclaw-plugin";
-  const osList = entry.metadata?.os ?? [];
-  const remotePlatforms = eligibility?.remote?.platforms ?? [];
 
   // Check if explicitly disabled
   if (!pluginManaged && hookConfig?.enabled === false) {
     return false;
   }
 
-  // Check OS requirement
-  if (
-    osList.length > 0 &&
-    !osList.includes(resolveRuntimePlatform()) &&
-    !remotePlatforms.some((platform) => osList.includes(platform))
-  ) {
-    return false;
-  }
-
-  // If marked as 'always', bypass all other checks
-  if (entry.metadata?.always === true) {
-    return true;
-  }
-
-  return evaluateRuntimeRequires({
-    requires: entry.metadata?.requires,
-    hasBin: hasBinary,
-    hasRemoteBin: eligibility?.remote?.hasBin,
-    hasAnyRemoteBin: eligibility?.remote?.hasAnyBin,
-    hasEnv: (envName) => Boolean(process.env[envName] || hookConfig?.env?.[envName]),
-    isConfigPathTruthy: (configPath) => isConfigPathTruthy(config, configPath),
+  return evaluateHookRuntimeEligibility({
+    entry,
+    config,
+    hookConfig,
+    eligibility,
   });
 }
