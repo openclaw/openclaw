@@ -1,345 +1,22 @@
-import fs from "node:fs";
-import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { runAcpRuntimeAdapterContract } from "../../../src/acp/runtime/adapter-contract.testkit.js";
-import { ACPX_PINNED_VERSION, type ResolvedAcpxPluginConfig } from "./config.js";
+import {
+  cleanupMockRuntimeFixtures,
+  createMockRuntimeFixture,
+  NOOP_LOGGER,
+  readMockRuntimeLogEntries,
+} from "./runtime-internals/test-fixtures.js";
 import { AcpxRuntime, decodeAcpxRuntimeHandleState } from "./runtime.js";
 
-const NOOP_LOGGER = {
-  info: (_message: string) => {},
-  warn: (_message: string) => {},
-  error: (_message: string) => {},
-  debug: (_message: string) => {},
-};
-
-const MOCK_CLI_SCRIPT = String.raw`#!/usr/bin/env node
-const fs = require("node:fs");
-
-const args = process.argv.slice(2);
-const logPath = process.env.MOCK_ACPX_LOG;
-const writeLog = (entry) => {
-  if (!logPath) return;
-  fs.appendFileSync(logPath, JSON.stringify(entry) + "\n");
-};
-const emitJson = (payload) => process.stdout.write(JSON.stringify(payload) + "\n");
-const emitUpdate = (sessionId, update) =>
-  emitJson({
-    jsonrpc: "2.0",
-    method: "session/update",
-    params: { sessionId, update },
-  });
-
-if (args.includes("--version")) {
-  process.stdout.write("mock-acpx ${ACPX_PINNED_VERSION}\\n");
-  process.exit(0);
-}
-
-if (args.includes("--help")) {
-  process.stdout.write("mock-acpx help\\n");
-  process.exit(0);
-}
-
-const commandIndex = args.findIndex(
-  (arg) =>
-    arg === "prompt" ||
-    arg === "cancel" ||
-    arg === "sessions" ||
-    arg === "set-mode" ||
-    arg === "set" ||
-    arg === "status",
-);
-const command = commandIndex >= 0 ? args[commandIndex] : "";
-const agent = commandIndex > 0 ? args[commandIndex - 1] : "unknown";
-
-const readFlag = (flag) => {
-  const idx = args.indexOf(flag);
-  if (idx < 0) return "";
-  return String(args[idx + 1] || "");
-};
-
-const sessionFromOption = readFlag("--session");
-const ensureName = readFlag("--name");
-const closeName = command === "sessions" && args[commandIndex + 1] === "close" ? String(args[commandIndex + 2] || "") : "";
-const setModeValue = command === "set-mode" ? String(args[commandIndex + 1] || "") : "";
-const setKey = command === "set" ? String(args[commandIndex + 1] || "") : "";
-const setValue = command === "set" ? String(args[commandIndex + 2] || "") : "";
-
-if (command === "sessions" && args[commandIndex + 1] === "ensure") {
-  writeLog({ kind: "ensure", agent, args, sessionName: ensureName });
-  emitJson({
-    action: "session_ensured",
-    acpxRecordId: "rec-" + ensureName,
-    acpxSessionId: "sid-" + ensureName,
-    agentSessionId: "inner-" + ensureName,
-    name: ensureName,
-    created: true,
-  });
-  process.exit(0);
-}
-
-if (command === "cancel") {
-  writeLog({ kind: "cancel", agent, args, sessionName: sessionFromOption });
-  emitJson({
-    acpxSessionId: "sid-" + sessionFromOption,
-    cancelled: true,
-  });
-  process.exit(0);
-}
-
-if (command === "set-mode") {
-  writeLog({ kind: "set-mode", agent, args, sessionName: sessionFromOption, mode: setModeValue });
-  emitJson({
-    action: "mode_set",
-    acpxSessionId: "sid-" + sessionFromOption,
-    mode: setModeValue,
-  });
-  process.exit(0);
-}
-
-if (command === "set") {
-  writeLog({
-    kind: "set",
-    agent,
-    args,
-    sessionName: sessionFromOption,
-    key: setKey,
-    value: setValue,
-  });
-  emitJson({
-    action: "config_set",
-    acpxSessionId: "sid-" + sessionFromOption,
-    key: setKey,
-    value: setValue,
-  });
-  process.exit(0);
-}
-
-if (command === "status") {
-  writeLog({ kind: "status", agent, args, sessionName: sessionFromOption });
-  emitJson({
-    acpxRecordId: sessionFromOption ? "rec-" + sessionFromOption : null,
-    acpxSessionId: sessionFromOption ? "sid-" + sessionFromOption : null,
-    agentSessionId: sessionFromOption ? "inner-" + sessionFromOption : null,
-    status: sessionFromOption ? "alive" : "no-session",
-    pid: 4242,
-    uptime: 120,
-  });
-  process.exit(0);
-}
-
-if (command === "sessions" && args[commandIndex + 1] === "close") {
-  writeLog({ kind: "close", agent, args, sessionName: closeName });
-  emitJson({
-    action: "session_closed",
-    acpxRecordId: "rec-" + closeName,
-    acpxSessionId: "sid-" + closeName,
-    name: closeName,
-  });
-  process.exit(0);
-}
-
-if (command === "prompt") {
-  const stdinText = fs.readFileSync(0, "utf8");
-  writeLog({ kind: "prompt", agent, args, sessionName: sessionFromOption, stdinText });
-  const requestId = "req-1";
-
-  emitJson({
-    jsonrpc: "2.0",
-    id: 0,
-    method: "session/load",
-    params: {
-      sessionId: sessionFromOption,
-      cwd: process.cwd(),
-      mcpServers: [],
-    },
-  });
-  emitJson({
-    jsonrpc: "2.0",
-    id: 0,
-    error: {
-      code: -32002,
-      message: "Resource not found",
-    },
-  });
-
-  emitJson({
-    jsonrpc: "2.0",
-    id: requestId,
-    method: "session/prompt",
-    params: {
-      sessionId: sessionFromOption,
-      prompt: [
-        {
-          type: "text",
-          text: stdinText.trim(),
-        },
-      ],
-    },
-  });
-
-  if (stdinText.includes("trigger-error")) {
-    emitJson({
-      jsonrpc: "2.0",
-      id: requestId,
-      error: {
-        code: -32000,
-        message: "mock failure",
-      },
-    });
-    process.exit(1);
-  }
-
-  if (stdinText.includes("split-spacing")) {
-    emitUpdate(sessionFromOption, {
-      sessionUpdate: "agent_message_chunk",
-      content: { type: "text", text: "alpha" },
-    });
-    emitUpdate(sessionFromOption, {
-      sessionUpdate: "agent_message_chunk",
-      content: { type: "text", text: " beta" },
-    });
-    emitUpdate(sessionFromOption, {
-      sessionUpdate: "agent_message_chunk",
-      content: { type: "text", text: " gamma" },
-    });
-    emitJson({
-      jsonrpc: "2.0",
-      id: requestId,
-      result: {
-        stopReason: "end_turn",
-      },
-    });
-    process.exit(0);
-  }
-
-  if (stdinText.includes("double-done")) {
-    emitUpdate(sessionFromOption, {
-      sessionUpdate: "agent_message_chunk",
-      content: { type: "text", text: "ok" },
-    });
-    emitJson({
-      jsonrpc: "2.0",
-      id: requestId,
-      result: {
-        stopReason: "end_turn",
-      },
-    });
-    emitJson({
-      jsonrpc: "2.0",
-      id: requestId,
-      result: {
-        stopReason: "end_turn",
-      },
-    });
-    process.exit(0);
-  }
-
-  emitUpdate(sessionFromOption, {
-    sessionUpdate: "agent_thought_chunk",
-    content: { type: "text", text: "thinking" },
-  });
-  emitUpdate(sessionFromOption, {
-    sessionUpdate: "tool_call",
-    toolCallId: "tool-1",
-    title: "run-tests",
-    status: "in_progress",
-    kind: "command",
-  });
-  emitUpdate(sessionFromOption, {
-    sessionUpdate: "agent_message_chunk",
-    content: { type: "text", text: "echo:" + stdinText.trim() },
-  });
-  emitJson({
-    jsonrpc: "2.0",
-    id: requestId,
-    result: {
-      stopReason: "end_turn",
-    },
-  });
-  process.exit(0);
-}
-
-writeLog({ kind: "unknown", args });
-emitJson({
-  error: {
-    code: "USAGE",
-    message: "unknown command",
-  },
-});
-process.exit(2);
-`;
-
-const tempDirs: string[] = [];
-
-async function createMockRuntime(params?: {
-  permissionMode?: ResolvedAcpxPluginConfig["permissionMode"];
-  queueOwnerTtlSeconds?: number;
-}): Promise<{
-  runtime: AcpxRuntime;
-  logPath: string;
-  config: ResolvedAcpxPluginConfig;
-}> {
-  const dir = await mkdtemp(path.join(os.tmpdir(), "openclaw-acpx-runtime-test-"));
-  tempDirs.push(dir);
-  const scriptPath = path.join(dir, "mock-acpx.cjs");
-  const logPath = path.join(dir, "calls.log");
-  await writeFile(scriptPath, MOCK_CLI_SCRIPT, "utf8");
-  await chmod(scriptPath, 0o755);
-  process.env.MOCK_ACPX_LOG = logPath;
-
-  const config: ResolvedAcpxPluginConfig = {
-    command: scriptPath,
-    allowPluginLocalInstall: false,
-    installCommand: "n/a",
-    cwd: dir,
-    permissionMode: params?.permissionMode ?? "approve-all",
-    nonInteractivePermissions: "fail",
-    queueOwnerTtlSeconds: params?.queueOwnerTtlSeconds ?? 0.1,
-  };
-
-  return {
-    runtime: new AcpxRuntime(config, {
-      queueOwnerTtlSeconds: params?.queueOwnerTtlSeconds,
-      logger: NOOP_LOGGER,
-    }),
-    logPath,
-    config,
-  };
-}
-
-async function readLogEntries(logPath: string): Promise<Array<Record<string, unknown>>> {
-  if (!fs.existsSync(logPath)) {
-    return [];
-  }
-  const raw = await readFile(logPath, "utf8");
-  return raw
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line) => JSON.parse(line) as Record<string, unknown>);
-}
-
 afterEach(async () => {
-  delete process.env.MOCK_ACPX_LOG;
-  while (tempDirs.length > 0) {
-    const dir = tempDirs.pop();
-    if (!dir) {
-      continue;
-    }
-    await rm(dir, {
-      recursive: true,
-      force: true,
-      maxRetries: 10,
-      retryDelay: 10,
-    });
-  }
+  await cleanupMockRuntimeFixtures();
 });
 
 describe("AcpxRuntime", () => {
   it("passes the shared ACP adapter contract suite", async () => {
-    const fixture = await createMockRuntime();
+    const fixture = await createMockRuntimeFixture();
     await runAcpRuntimeAdapterContract({
       createRuntime: async () => fixture.runtime,
       agentId: "codex",
@@ -353,7 +30,7 @@ describe("AcpxRuntime", () => {
       },
     });
 
-    const logs = await readLogEntries(fixture.logPath);
+    const logs = await readMockRuntimeLogEntries(fixture.logPath);
     expect(logs.some((entry) => entry.kind === "ensure")).toBe(true);
     expect(logs.some((entry) => entry.kind === "status")).toBe(true);
     expect(logs.some((entry) => entry.kind === "set-mode")).toBe(true);
@@ -363,7 +40,7 @@ describe("AcpxRuntime", () => {
   });
 
   it("ensures sessions and streams prompt events", async () => {
-    const { runtime, logPath } = await createMockRuntime({ queueOwnerTtlSeconds: 180 });
+    const { runtime, logPath } = await createMockRuntimeFixture({ queueOwnerTtlSeconds: 180 });
 
     const handle = await runtime.ensureSession({
       sessionKey: "agent:codex:acp:123",
@@ -408,7 +85,7 @@ describe("AcpxRuntime", () => {
       stopReason: "end_turn",
     });
 
-    const logs = await readLogEntries(logPath);
+    const logs = await readMockRuntimeLogEntries(logPath);
     const ensure = logs.find((entry) => entry.kind === "ensure");
     const prompt = logs.find((entry) => entry.kind === "prompt");
     expect(ensure).toBeDefined();
@@ -421,7 +98,7 @@ describe("AcpxRuntime", () => {
   });
 
   it("passes a queue-owner TTL by default to avoid long idle stalls", async () => {
-    const { runtime, logPath } = await createMockRuntime();
+    const { runtime, logPath } = await createMockRuntimeFixture();
     const handle = await runtime.ensureSession({
       sessionKey: "agent:codex:acp:ttl-default",
       agent: "codex",
@@ -437,7 +114,7 @@ describe("AcpxRuntime", () => {
       // drain
     }
 
-    const logs = await readLogEntries(logPath);
+    const logs = await readMockRuntimeLogEntries(logPath);
     const prompt = logs.find((entry) => entry.kind === "prompt");
     expect(prompt).toBeDefined();
     const promptArgs = (prompt?.args as string[]) ?? [];
@@ -447,7 +124,7 @@ describe("AcpxRuntime", () => {
   });
 
   it("preserves leading spaces across streamed text deltas", async () => {
-    const { runtime } = await createMockRuntime();
+    const { runtime } = await createMockRuntimeFixture();
     const handle = await runtime.ensureSession({
       sessionKey: "agent:codex:acp:space",
       agent: "codex",
@@ -471,7 +148,7 @@ describe("AcpxRuntime", () => {
   });
 
   it("emits done once when ACP stream repeats stop reason responses", async () => {
-    const { runtime } = await createMockRuntime();
+    const { runtime } = await createMockRuntimeFixture();
     const handle = await runtime.ensureSession({
       sessionKey: "agent:codex:acp:double-done",
       agent: "codex",
@@ -493,7 +170,7 @@ describe("AcpxRuntime", () => {
   });
 
   it("maps acpx error events into ACP runtime error events", async () => {
-    const { runtime } = await createMockRuntime();
+    const { runtime } = await createMockRuntimeFixture();
     const handle = await runtime.ensureSession({
       sessionKey: "agent:codex:acp:456",
       agent: "codex",
@@ -519,7 +196,7 @@ describe("AcpxRuntime", () => {
   });
 
   it("supports cancel and close using encoded runtime handle state", async () => {
-    const { runtime, logPath, config } = await createMockRuntime();
+    const { runtime, logPath, config } = await createMockRuntimeFixture();
     const handle = await runtime.ensureSession({
       sessionKey: "agent:claude:acp:789",
       agent: "claude",
@@ -534,7 +211,7 @@ describe("AcpxRuntime", () => {
     await secondRuntime.cancel({ handle, reason: "test" });
     await secondRuntime.close({ handle, reason: "test" });
 
-    const logs = await readLogEntries(logPath);
+    const logs = await readMockRuntimeLogEntries(logPath);
     const cancel = logs.find((entry) => entry.kind === "cancel");
     const close = logs.find((entry) => entry.kind === "close");
     expect(cancel?.sessionName).toBe("agent:claude:acp:789");
@@ -542,7 +219,7 @@ describe("AcpxRuntime", () => {
   });
 
   it("exposes control capabilities and runs set-mode/set/status commands", async () => {
-    const { runtime, logPath } = await createMockRuntime();
+    const { runtime, logPath } = await createMockRuntimeFixture();
     const handle = await runtime.ensureSession({
       sessionKey: "agent:codex:acp:controls",
       agent: "codex",
@@ -574,14 +251,14 @@ describe("AcpxRuntime", () => {
     expect(status.details?.status).toBe("alive");
     expect(status.details?.pid).toBe(4242);
 
-    const logs = await readLogEntries(logPath);
+    const logs = await readMockRuntimeLogEntries(logPath);
     expect(logs.find((entry) => entry.kind === "set-mode")?.mode).toBe("plan");
     expect(logs.find((entry) => entry.kind === "set")?.key).toBe("model");
     expect(logs.find((entry) => entry.kind === "status")).toBeDefined();
   });
 
   it("skips prompt execution when runTurn starts with an already-aborted signal", async () => {
-    const { runtime, logPath } = await createMockRuntime();
+    const { runtime, logPath } = await createMockRuntimeFixture();
     const handle = await runtime.ensureSession({
       sessionKey: "agent:codex:acp:aborted",
       agent: "codex",
@@ -601,13 +278,13 @@ describe("AcpxRuntime", () => {
       events.push(event);
     }
 
-    const logs = await readLogEntries(logPath);
+    const logs = await readMockRuntimeLogEntries(logPath);
     expect(events).toEqual([]);
     expect(logs.some((entry) => entry.kind === "prompt")).toBe(false);
   });
 
   it("does not mark backend unhealthy when a per-session cwd is missing", async () => {
-    const { runtime } = await createMockRuntime();
+    const { runtime } = await createMockRuntimeFixture();
     const missingCwd = path.join(os.tmpdir(), "openclaw-acpx-runtime-test-missing-cwd");
 
     await runtime.probeAvailability();
@@ -646,7 +323,7 @@ describe("AcpxRuntime", () => {
   });
 
   it("marks runtime healthy when command is available", async () => {
-    const { runtime } = await createMockRuntime();
+    const { runtime } = await createMockRuntimeFixture();
     await runtime.probeAvailability();
     expect(runtime.isHealthy()).toBe(true);
   });

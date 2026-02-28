@@ -1,13 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { parsePromptEventLine, toAcpxErrorEvent } from "./events.js";
+import { PromptStreamProjector } from "./events.js";
 
 function jsonLine(payload: unknown): string {
   return JSON.stringify(payload);
 }
 
-describe("acpx runtime event parsing", () => {
+describe("PromptStreamProjector", () => {
   it("maps agent message chunks to output deltas", () => {
-    const event = parsePromptEventLine(
+    const projector = new PromptStreamProjector();
+    const event = projector.ingestLine(
       jsonLine({
         jsonrpc: "2.0",
         method: "session/update",
@@ -32,7 +33,8 @@ describe("acpx runtime event parsing", () => {
   });
 
   it("preserves leading spaces in streamed output chunks", () => {
-    const event = parsePromptEventLine(
+    const projector = new PromptStreamProjector();
+    const event = projector.ingestLine(
       jsonLine({
         jsonrpc: "2.0",
         method: "session/update",
@@ -57,7 +59,8 @@ describe("acpx runtime event parsing", () => {
   });
 
   it("maps agent thought chunks to thought deltas", () => {
-    const event = parsePromptEventLine(
+    const projector = new PromptStreamProjector();
+    const event = projector.ingestLine(
       jsonLine({
         jsonrpc: "2.0",
         method: "session/update",
@@ -82,7 +85,8 @@ describe("acpx runtime event parsing", () => {
   });
 
   it("maps tool call updates to tool_call events", () => {
-    const event = parsePromptEventLine(
+    const projector = new PromptStreamProjector();
+    const event = projector.ingestLine(
       jsonLine({
         jsonrpc: "2.0",
         method: "session/update",
@@ -105,7 +109,19 @@ describe("acpx runtime event parsing", () => {
   });
 
   it("maps prompt response stop reasons to done events", () => {
-    const event = parsePromptEventLine(
+    const projector = new PromptStreamProjector();
+    projector.ingestLine(
+      jsonLine({
+        jsonrpc: "2.0",
+        id: "req-1",
+        method: "session/prompt",
+        params: {
+          sessionId: "session-1",
+          prompt: [{ type: "text", text: "hello" }],
+        },
+      }),
+    );
+    const event = projector.ingestLine(
       jsonLine({
         jsonrpc: "2.0",
         id: "req-1",
@@ -122,7 +138,19 @@ describe("acpx runtime event parsing", () => {
   });
 
   it("maps json-rpc errors to runtime errors", () => {
-    const event = parsePromptEventLine(
+    const projector = new PromptStreamProjector();
+    projector.ingestLine(
+      jsonLine({
+        jsonrpc: "2.0",
+        id: "req-1",
+        method: "session/prompt",
+        params: {
+          sessionId: "session-1",
+          prompt: [{ type: "text", text: "hello" }],
+        },
+      }),
+    );
+    const event = projector.ingestLine(
       jsonLine({
         jsonrpc: "2.0",
         id: "req-1",
@@ -137,16 +165,12 @@ describe("acpx runtime event parsing", () => {
       type: "error",
       message: "adapter failed",
       code: "-32000",
-      retryable: undefined,
     });
   });
 
-  it("ignores non-prompt response errors when parse context is provided", () => {
-    const context = {
-      promptRequestIds: new Set<string>(),
-    };
-
-    const promptRequest = parsePromptEventLine(
+  it("ignores non-prompt response errors", () => {
+    const projector = new PromptStreamProjector();
+    projector.ingestLine(
       jsonLine({
         jsonrpc: "2.0",
         id: 3,
@@ -156,9 +180,8 @@ describe("acpx runtime event parsing", () => {
           prompt: [{ type: "text", text: "hello" }],
         },
       }),
-      context,
     );
-    const loadError = parsePromptEventLine(
+    const loadError = projector.ingestLine(
       jsonLine({
         jsonrpc: "2.0",
         id: 1,
@@ -167,9 +190,8 @@ describe("acpx runtime event parsing", () => {
           message: "Resource not found",
         },
       }),
-      context,
     );
-    const promptDone = parsePromptEventLine(
+    const promptDone = projector.ingestLine(
       jsonLine({
         jsonrpc: "2.0",
         id: 3,
@@ -177,32 +199,12 @@ describe("acpx runtime event parsing", () => {
           stopReason: "end_turn",
         },
       }),
-      context,
     );
 
-    expect(promptRequest).toBeNull();
     expect(loadError).toBeNull();
     expect(promptDone).toEqual({
       type: "done",
       stopReason: "end_turn",
-    });
-  });
-});
-
-describe("toAcpxErrorEvent", () => {
-  it("reads control command errors from json output", () => {
-    expect(
-      toAcpxErrorEvent({
-        error: {
-          code: "NO_SESSION",
-          message: "No matching session",
-          retryable: false,
-        },
-      }),
-    ).toEqual({
-      code: "NO_SESSION",
-      message: "No matching session",
-      retryable: false,
     });
   });
 });
