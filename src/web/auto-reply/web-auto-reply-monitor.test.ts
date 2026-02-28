@@ -107,6 +107,26 @@ describe("applyGroupGating", () => {
     expect(result.shouldProcess).toBe(true);
   });
 
+  it("treats reply context as implicit mention even without reply sender metadata", () => {
+    const cfg = makeConfig({});
+    const { result } = runGroupGating({
+      cfg,
+      msg: createGroupMessage({
+        id: "m2",
+        to: "+15550000",
+        accountId: "default",
+        body: "follow up",
+        timestamp: Date.now(),
+        selfJid: "15551234567@s.whatsapp.net",
+        selfE164: "+15551234567",
+        replyToId: "m1",
+        replyToBody: "previous bot reply",
+      }),
+    });
+
+    expect(result.shouldProcess).toBe(true);
+  });
+
   it("bypasses mention gating for owner /new in group chats", () => {
     const cfg = makeConfig({
       channels: {

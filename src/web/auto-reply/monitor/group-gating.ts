@@ -124,9 +124,16 @@ export function applyGroupGating(params: {
   const replySenderE164 = params.msg.replyToSenderE164
     ? normalizeE164(params.msg.replyToSenderE164)
     : null;
+  const replySenderFromText = params.msg.replyToSender
+    ? normalizeE164(params.msg.replyToSender)
+    : null;
+  const hasReplyContext = Boolean(params.msg.replyToId);
   const implicitMention = Boolean(
+    hasReplyContext ||
     (selfJid && replySenderJid && selfJid === replySenderJid) ||
-    (selfE164 && replySenderE164 && selfE164 === replySenderE164),
+    (selfE164 &&
+      ((replySenderE164 && selfE164 === replySenderE164) ||
+        (replySenderFromText && selfE164 === replySenderFromText))),
   );
   const mentionGate = resolveMentionGating({
     requireMention,
