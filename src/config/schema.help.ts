@@ -1412,6 +1412,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Toggle DAVE end-to-end encryption for Discord voice joins (default: true in @discordjs/voice; Discord may require this).",
   "channels.discord.voice.decryptionFailureTolerance":
     "Consecutive decrypt failures before DAVE attempts session recovery (passed to @discordjs/voice; default: 24).",
+  "channels.discord.voice.interruptThresholdMs":
+    "Minimum playback duration (ms) before incoming speech can interrupt the bot. 0 = always interruptible (default).",
   "channels.discord.voice.tts":
     "Optional TTS overrides for Discord voice playback (merged with messages.tts).",
   "channels.discord.intents.presence":

@@ -75,6 +75,7 @@ type VoiceSessionEntry = {
   decryptFailureCount: number;
   lastDecryptFailureAt: number;
   decryptRecoveryInFlight: boolean;
+  playbackStartedAt: number;
   stop: () => void;
 };
 
@@ -451,6 +452,7 @@ export class DiscordVoiceManager {
       decryptFailureCount: 0,
       lastDecryptFailureAt: 0,
       decryptRecoveryInFlight: false,
+      playbackStartedAt: 0,
       stop: () => {
         if (speakingHandler) {
           connection.receiver.speaking.off("start", speakingHandler);
@@ -555,13 +557,22 @@ export class DiscordVoiceManager {
       return;
     }
 
+    const interruptThresholdMs = this.params.discordConfig.voice?.interruptThresholdMs ?? 0;
+    if (entry.player.state.status === AudioPlayerStatus.Playing) {
+      const elapsed = Date.now() - entry.playbackStartedAt;
+      if (elapsed < interruptThresholdMs) {
+        logVoiceVerbose(
+          `capture skipped (bot playing ${elapsed}ms < threshold ${interruptThresholdMs}ms): guild ${entry.guildId} channel ${entry.channelId} user ${userId}`,
+        );
+        return;
+      }
+      entry.player.stop(true);
+    }
+
     entry.activeSpeakers.add(userId);
     logVoiceVerbose(
       `capture start: guild ${entry.guildId} channel ${entry.channelId} user ${userId}`,
     );
-    if (entry.player.state.status === AudioPlayerStatus.Playing) {
-      entry.player.stop(true);
-    }
 
     const stream = entry.connection.receiver.subscribe(userId, {
       end: {
@@ -689,12 +700,14 @@ export class DiscordVoiceManager {
       );
       const resource = createAudioResource(audioPath);
       entry.player.play(resource);
+      entry.playbackStartedAt = Date.now();
       await entersState(entry.player, AudioPlayerStatus.Playing, PLAYBACK_READY_TIMEOUT_MS).catch(
         () => undefined,
       );
       await entersState(entry.player, AudioPlayerStatus.Idle, SPEAKING_READY_TIMEOUT_MS).catch(
         () => undefined,
       );
+      entry.playbackStartedAt = 0;
       logVoiceVerbose(`playback done: guild ${entry.guildId} channel ${entry.channelId}`);
     });
   }

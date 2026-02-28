@@ -111,6 +111,8 @@ export type DiscordVoiceConfig = {
   daveEncryption?: boolean;
   /** Consecutive decrypt failures before DAVE session reinitialization (default: 24). */
   decryptionFailureTolerance?: number;
+  /** Minimum playback duration (ms) before speech can interrupt the bot. 0 = always interruptible (default). */
+  interruptThresholdMs?: number;
   /** Optional TTS overrides for Discord voice output. */
   tts?: TtsConfig;
 };
