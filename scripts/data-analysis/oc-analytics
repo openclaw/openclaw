@@ -1,0 +1,488 @@
+#!/usr/bin/env python3
+"""
+oc-analytics — OpenClaw telemetry analysis CLI.
+
+Unified command-line tool for analyzing cron run logs and session data.
+
+Usage:
+    oc-analytics summary                    # Quick overview of all data
+    oc-analytics cron                       # Cron run log analysis
+    oc-analytics cron --daily               # Daily breakdown table
+    oc-analytics cron --models              # Model comparison table
+    oc-analytics cron --jobs                # Per-job health table
+    oc-analytics cron --charts ./charts     # Generate all charts
+    oc-analytics sessions                   # List recent sessions
+    oc-analytics session <id>               # Analyze a specific session
+    oc-analytics export --format csv        # Export cron data to CSV
+    oc-analytics export --format parquet    # Export cron data to Parquet
+"""
+
+from __future__ import annotations
+
+import argparse
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+# Ensure sibling modules are importable
+sys.path.insert(0, str(Path(__file__).parent))
+
+from openclaw_loader import (
+    load_cron_runs,
+    load_sessions,
+    load_session_transcript,
+    cron_daily_summary,
+    cron_model_summary,
+    cron_job_summary,
+    export_to_csv,
+    export_to_parquet,
+)
+
+# ---------------------------------------------------------------------------
+# Formatting helpers
+# ---------------------------------------------------------------------------
+
+BOLD = "\033[1m"
+DIM = "\033[2m"
+GREEN = "\033[32m"
+RED = "\033[31m"
+YELLOW = "\033[33m"
+BLUE = "\033[34m"
+CYAN = "\033[36m"
+RESET = "\033[0m"
+
+
+def _no_color() -> bool:
+    import os
+    return os.environ.get("NO_COLOR") is not None or not sys.stdout.isatty()
+
+
+def c(text: str, color: str) -> str:
+    if _no_color():
+        return text
+    return f"{color}{text}{RESET}"
+
+
+def header(text: str) -> None:
+    print(f"\n{c(text, BOLD)}")
+    print(c("─" * min(len(text) + 4, 60), DIM))
+
+
+def usd(val: float | None) -> str:
+    if val is None or val != val:  # NaN check
+        return "—"
+    return f"${val:,.4f}"
+
+
+def pct(val: float | None) -> str:
+    if val is None or val != val:
+        return "—"
+    return f"{val:.0%}"
+
+
+def bar(rate: float, width: int = 20) -> str:
+    filled = int(rate * width)
+    if _no_color():
+        return "█" * filled + "░" * (width - filled)
+    color = GREEN if rate >= 0.9 else (YELLOW if rate >= 0.7 else RED)
+    return f"{color}{'█' * filled}{'░' * (width - filled)}{RESET}"
+
+
+def status_icon(rate: float) -> str:
+    if rate >= 0.95:
+        return c("✓", GREEN)
+    elif rate >= 0.8:
+        return c("⚠", YELLOW)
+    else:
+        return c("✗", RED)
+
+
+def fmt_duration(ms: float | None) -> str:
+    if ms is None or ms != ms:
+        return "—"
+    if ms < 1000:
+        return f"{ms:.0f}ms"
+    return f"{ms / 1000:.1f}s"
+
+
+def fmt_tokens(n: float | None) -> str:
+    if n is None or n != n:
+        return "—"
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:.1f}M"
+    if n >= 1_000:
+        return f"{n / 1_000:.1f}K"
+    return f"{n:.0f}"
+
+
+def fmt_size(b: int) -> str:
+    if b >= 1_048_576:
+        return f"{b / 1_048_576:.1f}MB"
+    if b >= 1024:
+        return f"{b / 1024:.1f}KB"
+    return f"{b}B"
+
+
+# ---------------------------------------------------------------------------
+# Subcommands
+# ---------------------------------------------------------------------------
+
+
+def cmd_summary(args: argparse.Namespace) -> int:
+    """Quick overview of all available data."""
+    header("OpenClaw Analytics Summary")
+
+    df = load_cron_runs(openclaw_dir=args.dir)
+    sessions = load_sessions(openclaw_dir=args.dir)
+
+    # Cron section
+    print(f"\n{c('Cron Jobs', BLUE)}")
+    if df.empty:
+        print("  No cron run logs found.")
+    else:
+        print(f"  Executions:  {len(df)}")
+        print(f"  Jobs:        {df['job_id'].nunique()}")
+        print(f"  Models:      {df['model'].dropna().nunique()}")
+        print(f"  Date range:  {df['timestamp'].min():%Y-%m-%d} → {df['timestamp'].max():%Y-%m-%d}")
+
+        ok = (df["status"] == "ok").sum()
+        err = (df["status"] == "error").sum()
+        rate = ok / len(df) if len(df) > 0 else 0
+        print(f"  Success:     {ok}/{len(df)} ({pct(rate)}) {bar(rate, 15)}")
+
+        total_tokens = df["total_tokens"].sum()
+        if total_tokens > 0:
+            print(f"  Tokens:      {fmt_tokens(total_tokens)}")
+
+    # Sessions section
+    print(f"\n{c('Sessions', BLUE)}")
+    if sessions.empty:
+        print("  No sessions found.")
+    else:
+        total_size = sessions["size_bytes"].sum()
+        print(f"  Sessions:    {len(sessions)}")
+        print(f"  Total size:  {fmt_size(total_size)}")
+        print(f"  Most recent: {sessions['modified_at'].iloc[0]:%Y-%m-%d %H:%M}")
+
+    print()
+    return 0
+
+
+def cmd_cron(args: argparse.Namespace) -> int:
+    """Cron run log analysis."""
+    df = load_cron_runs(openclaw_dir=args.dir, job_id=args.job)
+
+    if df.empty:
+        print("No cron run logs found.")
+        return 1
+
+    # Filter by days
+    if args.days:
+        cutoff = datetime.now(timezone.utc) - __import__("datetime").timedelta(days=args.days)
+        df = df[df["timestamp"] >= cutoff]
+        if df.empty:
+            print(f"No runs in the last {args.days} days.")
+            return 1
+
+    # Charts
+    if args.charts:
+        try:
+            from visualize import CronViz
+            viz = CronViz(df)
+            viz.save_all(args.charts)
+        except ImportError:
+            print("matplotlib required for charts. Install: pip install matplotlib")
+            return 1
+        return 0
+
+    # Default: overview + requested breakdowns
+    show_all = not (args.daily or args.models or args.jobs or args.errors)
+
+    if show_all:
+        header("Cron Runs Overview")
+        print(f"  Total:    {len(df)} executions")
+        print(f"  Jobs:     {df['job_id'].nunique()}")
+        print(f"  Models:   {df['model'].dropna().nunique()}")
+        print(f"  Range:    {df['timestamp'].min():%Y-%m-%d} → {df['timestamp'].max():%Y-%m-%d}")
+        print(f"  Tokens:   {fmt_tokens(df['total_tokens'].sum())}")
+        print()
+        for status in ["ok", "error", "skipped"]:
+            count = (df["status"] == status).sum()
+            if count > 0:
+                color = GREEN if status == "ok" else (RED if status == "error" else YELLOW)
+                print(f"  {c(status, color):>18s}: {count} ({count / len(df):.0%})")
+
+    if show_all or args.daily:
+        header("Daily Breakdown")
+        daily = cron_daily_summary(df)
+        if daily.empty:
+            print("  No data.")
+        else:
+            recent = daily.tail(args.days or 14)
+            print(f"  {'Date':<12} {'Runs':>5} {'OK':>4} {'Err':>4} {'Rate':>6}  {'':>20} {'Tokens':>10}")
+            for _, row in recent.iterrows():
+                rate = row["success_rate"]
+                print(
+                    f"  {str(row['date']):<12} "
+                    f"{row['total_runs']:>5} "
+                    f"{c(str(row['ok_count']), GREEN):>4} "
+                    f"{c(str(row['error_count']), RED) if row['error_count'] > 0 else str(row['error_count']):>4} "
+                    f"{pct(rate):>6}  "
+                    f"{bar(rate):>20} "
+                    f"{fmt_tokens(row['total_tokens']):>10}"
+                )
+
+    if show_all or args.models:
+        header("Model Performance")
+        models = cron_model_summary(df)
+        if models.empty:
+            print("  No data.")
+        else:
+            print(f"  {'Provider':<12} {'Model':<28} {'Runs':>5} {'Avg':>8} {'Err%':>6} {'Tokens':>10}")
+            print(f"  {'─'*12} {'─'*28} {'─'*5} {'─'*8} {'─'*6} {'─'*10}")
+            for _, row in models.iterrows():
+                err_color = RED if row["error_rate"] > 0.1 else (YELLOW if row["error_rate"] > 0 else GREEN)
+                print(
+                    f"  {row['provider']:<12} "
+                    f"{row['model']:<28} "
+                    f"{row['run_count']:>5} "
+                    f"{fmt_duration(row['avg_duration_ms']):>8} "
+                    f"{c(pct(row['error_rate']), err_color):>6} "
+                    f"{fmt_tokens(row['total_tokens']):>10}"
+                )
+
+    if show_all or args.jobs:
+        header("Job Health")
+        jobs = cron_job_summary(df)
+        if jobs.empty:
+            print("  No data.")
+        else:
+            for _, row in jobs.iterrows():
+                icon = status_icon(row["success_rate"])
+                print(
+                    f"  {icon} {row['job_id']:<28} "
+                    f"runs={row['run_count']:<4}  "
+                    f"rate={pct(row['success_rate']):<5} "
+                    f"avg={fmt_duration(row['avg_duration_ms']):<8} "
+                    f"last={row['last_run']:%Y-%m-%d %H:%M}"
+                )
+
+    if show_all or args.errors:
+        errors = df[df["status"] == "error"]
+        if not errors.empty:
+            header(f"Recent Errors ({len(errors)} total)")
+            for _, row in errors.tail(5).iterrows():
+                print(f"  {c('[' + row['timestamp'].strftime('%Y-%m-%d %H:%M') + ']', DIM)} "
+                      f"job={row['job_id']}")
+                if row.get("error"):
+                    print(f"    {c('error:', RED)} {str(row['error'])[:100]}")
+
+    print()
+    return 0
+
+
+def cmd_sessions(args: argparse.Namespace) -> int:
+    """List available sessions."""
+    sessions = load_sessions(openclaw_dir=args.dir, limit=args.limit or 20)
+
+    if sessions.empty:
+        print("No sessions found.")
+        return 1
+
+    header(f"Sessions ({len(sessions)} found)")
+    print(f"  {'Session ID':<40} {'Size':>8} {'Lines':>6} {'Modified':<20}")
+    print(f"  {'─'*40} {'─'*8} {'─'*6} {'─'*20}")
+    for _, row in sessions.iterrows():
+        print(
+            f"  {row['session_id']:<40} "
+            f"{fmt_size(row['size_bytes']):>8} "
+            f"{row['line_count']:>6} "
+            f"{row['modified_at']:%Y-%m-%d %H:%M}"
+        )
+
+    print()
+    return 0
+
+
+def cmd_session(args: argparse.Namespace) -> int:
+    """Analyze a specific session."""
+    df = load_session_transcript(args.session_id, openclaw_dir=args.dir)
+
+    if df.empty:
+        print(f"Session '{args.session_id}' not found or empty.")
+        return 1
+
+    header(f"Session: {args.session_id}")
+
+    # Overview
+    total_messages = len(df)
+    user_msgs = (df["role"] == "user").sum()
+    asst_msgs = (df["role"] == "assistant").sum()
+
+    print(f"  Messages:    {total_messages} (user: {user_msgs}, assistant: {asst_msgs})")
+
+    if df["timestamp"].notna().any():
+        first = df["timestamp"].dropna().min()
+        last = df["timestamp"].dropna().max()
+        duration = last - first
+        print(f"  Duration:    {duration}")
+        print(f"  Period:      {first:%Y-%m-%d %H:%M} → {last:%Y-%m-%d %H:%M}")
+
+    # Token usage
+    total_in = df["tokens_input"].sum()
+    total_out = df["tokens_output"].sum()
+    if total_in > 0 or total_out > 0:
+        print(f"  Input:       {fmt_tokens(total_in)}")
+        print(f"  Output:      {fmt_tokens(total_out)}")
+        print(f"  Total:       {fmt_tokens(total_in + total_out)}")
+
+    # Cost
+    total_cost = df["cost_total"].sum()
+    if total_cost > 0:
+        print(f"  Cost:        {usd(total_cost)}")
+
+    # Models used
+    models = df["model"].dropna().unique()
+    if len(models) > 0:
+        print(f"  Models:      {', '.join(models)}")
+
+    # Latency stats
+    durations = df["duration_ms"].dropna()
+    if len(durations) > 0:
+        print(f"\n{c('  Latency', BLUE)}")
+        print(f"    avg:  {fmt_duration(durations.mean())}")
+        print(f"    p50:  {fmt_duration(durations.median())}")
+        print(f"    p95:  {fmt_duration(durations.quantile(0.95))}")
+        print(f"    max:  {fmt_duration(durations.max())}")
+
+    # Tool usage
+    all_tools = []
+    for tools in df["tool_names"]:
+        if isinstance(tools, list):
+            all_tools.extend(tools)
+    if all_tools:
+        from collections import Counter
+        counts = Counter(all_tools).most_common(10)
+        print(f"\n{c('  Tools Used', BLUE)}")
+        for name, count in counts:
+            print(f"    {name:<30} {count:>4}x")
+
+    # Turn-by-turn preview (if --verbose)
+    if args.verbose:
+        header("Turn-by-Turn")
+        for _, row in df.iterrows():
+            role_color = CYAN if row["role"] == "user" else GREEN
+            ts = row["timestamp"].strftime("%H:%M:%S") if row["timestamp"] else "??:??:??"
+            tokens = ""
+            if row.get("tokens_input") and row["tokens_input"] == row["tokens_input"]:
+                tokens = f" [{fmt_tokens(row['tokens_input'])}→{fmt_tokens(row.get('tokens_output'))}]"
+            dur = ""
+            if row.get("duration_ms") and row["duration_ms"] == row["duration_ms"]:
+                dur = f" ({fmt_duration(row['duration_ms'])})"
+            preview = str(row.get("content_preview", ""))[:80]
+            print(f"  {c(ts, DIM)} {c(str(row['role']), role_color)}{tokens}{dur}")
+            if preview:
+                print(f"    {preview}")
+
+    print()
+    return 0
+
+
+def cmd_export(args: argparse.Namespace) -> int:
+    """Export cron data to CSV or Parquet."""
+    df = load_cron_runs(openclaw_dir=args.dir)
+    if df.empty:
+        print("No cron run data to export.")
+        return 1
+
+    outfile = args.output or f"openclaw_cron_runs.{args.format}"
+
+    if args.format == "csv":
+        export_to_csv(df, outfile)
+    elif args.format == "parquet":
+        export_to_parquet(df, outfile)
+    else:
+        print(f"Unknown format: {args.format}")
+        return 1
+
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# Argument parser
+# ---------------------------------------------------------------------------
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="oc-analytics",
+        description="OpenClaw telemetry analysis CLI.",
+    )
+    parser.add_argument(
+        "--dir", help="Override ~/.openclaw base directory."
+    )
+
+    sub = parser.add_subparsers(dest="command")
+
+    # summary
+    sub.add_parser("summary", help="Quick overview of all data.")
+
+    # cron
+    cron_p = sub.add_parser("cron", help="Cron run log analysis.")
+    cron_p.add_argument("--daily", action="store_true", help="Show daily breakdown.")
+    cron_p.add_argument("--models", action="store_true", help="Show model comparison.")
+    cron_p.add_argument("--jobs", action="store_true", help="Show per-job health.")
+    cron_p.add_argument("--errors", action="store_true", help="Show recent errors.")
+    cron_p.add_argument("--job", help="Filter to a specific job ID.")
+    cron_p.add_argument("--days", type=int, help="Limit to last N days.")
+    cron_p.add_argument("--charts", metavar="DIR", help="Generate charts to directory.")
+
+    # sessions
+    sess_p = sub.add_parser("sessions", help="List available sessions.")
+    sess_p.add_argument("--limit", type=int, default=20, help="Max sessions to list.")
+
+    # session (single)
+    s_p = sub.add_parser("session", help="Analyze a specific session.")
+    s_p.add_argument("session_id", help="Session ID to analyze.")
+    s_p.add_argument("-v", "--verbose", action="store_true", help="Show turn-by-turn details.")
+
+    # export
+    exp_p = sub.add_parser("export", help="Export cron data.")
+    exp_p.add_argument("--format", choices=["csv", "parquet"], default="csv")
+    exp_p.add_argument("--output", "-o", help="Output file path.")
+
+    return parser
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+
+def main() -> int:
+    parser = build_parser()
+    args = parser.parse_args()
+
+    if not args.command:
+        # Default to summary
+        args.command = "summary"
+        return cmd_summary(args)
+
+    commands = {
+        "summary": cmd_summary,
+        "cron": cmd_cron,
+        "sessions": cmd_sessions,
+        "session": cmd_session,
+        "export": cmd_export,
+    }
+
+    handler = commands.get(args.command)
+    if not handler:
+        parser.print_help()
+        return 1
+
+    return handler(args)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

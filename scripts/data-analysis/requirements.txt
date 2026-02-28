@@ -1,0 +1,3 @@
+pandas>=2.0
+pyarrow>=14.0
+matplotlib>=3.7
