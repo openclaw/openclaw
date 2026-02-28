@@ -76,7 +76,7 @@ jobs:
             cargo-windows-
 
       - name: Install Node dependencies
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --no-frozen-lockfile
 
       - name: Build Control UI
         run: pnpm ui:build
