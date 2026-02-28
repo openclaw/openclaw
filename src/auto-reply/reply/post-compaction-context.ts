@@ -145,8 +145,9 @@ export async function readPostCompactionContext(workspaceDir: string): Promise<s
         ? combined.slice(0, MAX_CONTEXT_CHARS) + "\n...[truncated]..."
         : combined;
 
-    // Resolve actual existing startup files from Session Startup section (first section)
-    const sessionStartupText = sections[0] ?? "";
+    // Resolve actual existing startup files from the Session Startup section only
+    const sessionStartupSections = extractSections(content, ["Session Startup"]);
+    const sessionStartupText = sessionStartupSections.length > 0 ? sessionStartupSections[0] : "";
     const candidates = extractStartupFileCandidates(sessionStartupText);
     const timezone = resolveUserTimezone();
     const nowMs = Date.now();
@@ -164,7 +165,7 @@ export async function readPostCompactionContext(workspaceDir: string): Promise<s
       "[Post-compaction context refresh]\n\n" +
       "Session was just compacted. The conversation summary above is a hint, NOT a substitute for your startup sequence. " +
       "Execute your Session Startup sequence now — read the required files before responding to the user. " +
-      "If a file listed below does not exist in your workspace, skip it and continue." +
+      "If a file listed below does not exist in your workspace, skip it and continue.\n" +
       existingFilesBlock +
       "Critical rules from AGENTS.md:\n\n" +
       safeContent
