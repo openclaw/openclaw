@@ -7,10 +7,6 @@ mkdir -p "$REPORT_DIR"
 TS=$(date +%Y-%m-%d_%H-%M-%S)
 OUT="$REPORT_DIR/heartbeat-guard-$TS.md"
 
-commands=(
-  "./contrib/heartbeat-runtime-safety/preflight.sh"
-)
-
 status="PASS"
 {
   echo "# Heartbeat Failure Guard"
@@ -18,14 +14,14 @@ status="PASS"
   echo "Generated: $(date)"
   echo
   echo "## Command Results"
-  for cmd in "${commands[@]}"; do
-    if (cd "$ROOT" && eval "$cmd" >/dev/null 2>&1); then
-      echo "- ✅ $cmd"
-    else
-      echo "- ❌ $cmd"
-      status="FAIL"
-    fi
-  done
+
+  if (cd "$ROOT" && ./contrib/heartbeat-runtime-safety/preflight.sh >/dev/null 2>&1); then
+    echo "- ✅ ./contrib/heartbeat-runtime-safety/preflight.sh"
+  else
+    echo "- ❌ ./contrib/heartbeat-runtime-safety/preflight.sh"
+    status="FAIL"
+  fi
+
   echo
   echo "## Overall"
   echo "- $status"

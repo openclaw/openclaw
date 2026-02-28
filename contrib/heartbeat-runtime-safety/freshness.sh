@@ -11,10 +11,11 @@ NOW=$(date +%s)
 
 check() {
   local label="$1" path="$2"
-  if [[ ! -f "$path" ]]; then
-    echo "- ❌ $label: missing ($path)"
+  if [[ -z "$path" || ! -f "$path" ]]; then
+    echo "- ❌ $label: missing"
     return
   fi
+
   local mt age
   if mt=$(stat -f %m "$path" 2>/dev/null); then
     :
@@ -24,6 +25,7 @@ check() {
     echo "- ❌ $label: unable to read mtime ($path)"
     return
   fi
+
   age=$(( (NOW - mt) / 60 ))
   if (( age <= MAX_AGE_MIN )); then
     echo "- ✅ $label: ${age}m"
@@ -32,7 +34,19 @@ check() {
   fi
 }
 
-latest() { ls -1t $1 2>/dev/null | head -n 1 || true; }
+latest() {
+  local pattern="$1"
+  local files=()
+  shopt -s nullglob
+  files=($pattern)
+  shopt -u nullglob
+  if (( ${#files[@]} == 0 )); then
+    echo ""
+    return
+  fi
+  printf '%s\n' "${files[@]}" | xargs ls -1t 2>/dev/null | head -n 1
+}
+
 pre=$(latest "$REPORT_DIR/heartbeat-preflight-*.md")
 gua=$(latest "$REPORT_DIR/heartbeat-guard-*.md")
 
