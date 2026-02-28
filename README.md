@@ -58,6 +58,26 @@ Rykiri commands over 1000+ elite skills located in `~/.agents/skills/`, dynamica
 
 ---
 
+## 🌌 Antigravity Integration
+Rykiri natively integrates with the **Antigravity** execution environment via the `@openclaw/google-antigravity-auth` plugin, allowing you to route advanced multi-model intelligence directly into your workflow.
+
+### How to Integrate
+1. **Enable the Plugin**: Ensure your workspace includes the `@openclaw/google-antigravity-auth` extension (it is included by default via workspace package references).
+2. **Configure Provider**: Update your active configuration (e.g., `openclaw.json` or environment variables) to target the `google-antigravity` provider.
+3. **Select Models**: Set your active agent model to an Antigravity-supported endpoint. 
+
+Example `openclaw.json` configuration snippet:
+```json5
+{
+  agent: {
+    provider: "google-antigravity",
+    model: "google-antigravity/gemini-3-flash" // Example: Select Gemini 3 via Antigravity or Claude Opus
+  }
+}
+```
+
+---
+
 ## 🚀 Quick Start
 
 Ensure you are running within a compliant **Windows/WSL** environment with Node ≥22.
