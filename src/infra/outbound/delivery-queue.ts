@@ -42,6 +42,7 @@ type QueuedDeliveryPayload = {
   gifPlayback?: boolean;
   silent?: boolean;
   mirror?: DeliveryMirrorPayload;
+  dispatchKind?: string;
 };
 
 type QueuedDeliveryParams = QueuedDeliveryPayload;
@@ -125,12 +126,26 @@ export async function enqueueDelivery(
   });
   db.prepare(
     `INSERT INTO message_outbox
-       (id, turn_id, channel, account_id, target, payload, queued_at, status, attempt_count, next_attempt_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?)`,
-  ).run(id, null, params.channel, params.accountId ?? "", params.to, payload, now, now);
+       (id, turn_id, channel, account_id, target, dispatch_kind, payload, queued_at, status, attempt_count, next_attempt_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?)`,
+  ).run(
+    id,
+    null,
+    params.channel,
+    params.accountId ?? "",
+    params.to,
+    params.dispatchKind ?? null,
+    payload,
+    now,
+    now,
+  );
   return id;
 }
 
+// ackDelivery is best-effort bookkeeping after a successful send.
+// If the UPDATE fails, the entry stays queued and the recovery worker
+// will re-send it. This is safe because channel sends are idempotent
+// (via idempotency keys where supported, or harmless duplicate delivery).
 /** Mark a delivery as successful. */
 export async function ackDelivery(id: string, stateDir?: string): Promise<void> {
   const db = getLifecycleDb(stateDir);
@@ -145,6 +160,9 @@ export async function ackDelivery(id: string, stateDir?: string): Promise<void> 
   }
 }
 
+// failDelivery write errors are self-correcting: the entry remains in
+// 'queued' status and will be retried up to MAX_RETRIES times.
+// After MAX_RETRIES, moveToFailed marks it terminal.
 /** Record a failed delivery attempt. */
 export async function failDelivery(id: string, error: string, stateDir?: string): Promise<void> {
   const db = getLifecycleDb(stateDir);
@@ -207,6 +225,7 @@ export async function loadPendingDeliveries(stateDir?: string): Promise<QueuedDe
         `SELECT id, payload, queued_at, attempt_count, last_attempt_at, last_error
            FROM message_outbox
           WHERE status IN ('queued', 'failed_retryable')
+            AND (dispatch_kind IS NULL OR dispatch_kind = 'final')
             AND next_attempt_at <= ?
           ORDER BY queued_at ASC`,
       )
