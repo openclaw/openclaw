@@ -104,6 +104,7 @@ export function createToolProgressController(params: {
   let activeTool: string | undefined;
   const completedTools: CompletedTool[] = [];
   let lastEditAt = 0;
+  let lastSentText = "";
   let pendingUpdate = false;
   let flushEnqueued = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -143,12 +144,18 @@ export function createToolProgressController(params: {
       return;
     }
 
+    // Skip no-op edits to avoid "message is not modified" API errors.
+    if (text === lastSentText && messageId !== undefined) {
+      return;
+    }
+
     try {
       if (messageId === undefined) {
         messageId = await adapter.send(text);
       } else {
         await adapter.edit(messageId, text);
       }
+      lastSentText = text;
       lastEditAt = Date.now();
     } catch (err) {
       onError?.(err);

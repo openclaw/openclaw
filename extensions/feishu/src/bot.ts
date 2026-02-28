@@ -1193,6 +1193,10 @@ export async function handleFeishuMessage(params: {
               receive_id: ctx.chatId,
               content,
               msg_type: "text",
+              // Match reply dispatcher threading: use root_id for topic threads,
+              // reply_in_thread for new threads.
+              ...(ctx.rootId ? { root_id: ctx.rootId } : {}),
+              ...(replyInThread && !ctx.rootId ? { reply_in_thread: true } : {}),
             },
           });
           return response.data?.message_id;
@@ -1217,33 +1221,37 @@ export async function handleFeishuMessage(params: {
     });
 
     log(`feishu[${account.accountId}]: dispatching to agent (session=${route.sessionKey})`);
-    const { queuedFinal, counts } = await core.channel.reply.withReplyDispatcher({
-      dispatcher,
-      onSettled: () => {
-        markDispatchIdle();
-      },
-      run: () =>
-        core.channel.reply.dispatchReplyFromConfig({
-          ctx: ctxPayload,
-          cfg,
-          dispatcher,
-          replyOptions: {
-            ...replyOptions,
-            onToolStart: toolProgressEnabled
-              ? async (payload: { name?: string; meta?: string }) => {
-                  toolProgressController.onToolStart(payload.name, payload.meta);
-                }
-              : undefined,
-            onToolEnd: toolProgressEnabled
-              ? async (payload: { name?: string; meta?: string; isError?: boolean }) => {
-                  toolProgressController.onToolEnd(payload.name, payload.meta, payload.isError);
-                }
-              : undefined,
-          },
-        }),
-    });
-
-    await toolProgressController.cleanup();
+    let queuedFinal: boolean;
+    let counts: { block?: number; final?: number };
+    try {
+      ({ queuedFinal, counts } = await core.channel.reply.withReplyDispatcher({
+        dispatcher,
+        onSettled: () => {
+          markDispatchIdle();
+        },
+        run: () =>
+          core.channel.reply.dispatchReplyFromConfig({
+            ctx: ctxPayload,
+            cfg,
+            dispatcher,
+            replyOptions: {
+              ...replyOptions,
+              onToolStart: toolProgressEnabled
+                ? async (payload: { name?: string; meta?: string }) => {
+                    toolProgressController.onToolStart(payload.name, payload.meta);
+                  }
+                : undefined,
+              onToolEnd: toolProgressEnabled
+                ? async (payload: { name?: string; meta?: string; isError?: boolean }) => {
+                    toolProgressController.onToolEnd(payload.name, payload.meta, payload.isError);
+                  }
+                : undefined,
+            },
+          }),
+      }));
+    } finally {
+      await toolProgressController.cleanup();
+    }
 
     if (isGroup && historyKey && chatHistories) {
       clearHistoryEntriesIfEnabled({
