@@ -3,6 +3,7 @@ import {
   stripHeartbeatToken,
 } from "../../auto-reply/heartbeat.js";
 import { truncateUtf16Safe } from "../../utils.js";
+import { stripInlineDirectiveTagsForDisplay } from "../../utils/directive-tags.js";
 
 type DeliveryPayload = {
   text?: string;
@@ -43,11 +44,15 @@ export function pickLastNonEmptyTextFromPayloads(payloads: Array<{ text?: string
 export function pickLastDeliverablePayload(payloads: DeliveryPayload[]) {
   for (let i = payloads.length - 1; i >= 0; i--) {
     const payload = payloads[i];
-    const text = (payload?.text ?? "").trim();
+    let text = (payload?.text ?? "").trim();
+    // Strip directive tags (e.g., [[reply_to_current]], [[audio_as_voice]]) from text
+    // to prevent them from leaking to users via direct cron delivery.
+    const stripped = stripInlineDirectiveTagsForDisplay(text);
+    text = stripped.text;
     const hasMedia = Boolean(payload?.mediaUrl) || (payload?.mediaUrls?.length ?? 0) > 0;
     const hasChannelData = Object.keys(payload?.channelData ?? {}).length > 0;
     if (text || hasMedia || hasChannelData) {
-      return payload;
+      return { ...payload, text };
     }
   }
   return undefined;
