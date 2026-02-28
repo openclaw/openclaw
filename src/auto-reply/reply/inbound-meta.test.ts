@@ -75,6 +75,48 @@ describe("buildInboundMetaSystemPrompt", () => {
     expect(payload["flags"]).toBeUndefined();
   });
 
+  it("includes message_id in system metadata for group chats", () => {
+    const prompt = buildInboundMetaSystemPrompt({
+      MessageSid: "msg-456",
+      MessageSidFull: "msg-456-full",
+      OriginatingTo: "telegram:-1001249586642",
+      OriginatingChannel: "telegram",
+      Provider: "telegram",
+      Surface: "telegram",
+      ChatType: "group",
+    } as TemplateContext);
+
+    const payload = parseInboundMetaPayload(prompt);
+    expect(payload["message_id"]).toBe("msg-456");
+  });
+
+  it("omits message_id from system metadata when MessageSid is empty", () => {
+    const prompt = buildInboundMetaSystemPrompt({
+      MessageSid: "   ",
+      OriginatingTo: "bluebubbles:+15551234567",
+      OriginatingChannel: "bluebubbles",
+      Provider: "bluebubbles",
+      Surface: "bluebubbles",
+      ChatType: "direct",
+    } as TemplateContext);
+
+    const payload = parseInboundMetaPayload(prompt);
+    expect(payload["message_id"]).toBeUndefined();
+  });
+
+  it("omits message_id from system metadata when MessageSid is undefined", () => {
+    const prompt = buildInboundMetaSystemPrompt({
+      OriginatingTo: "bluebubbles:+15551234567",
+      OriginatingChannel: "bluebubbles",
+      Provider: "bluebubbles",
+      Surface: "bluebubbles",
+      ChatType: "direct",
+    } as TemplateContext);
+
+    const payload = parseInboundMetaPayload(prompt);
+    expect(payload["message_id"]).toBeUndefined();
+  });
+
   it("omits sender_id when blank", () => {
     const prompt = buildInboundMetaSystemPrompt({
       MessageSid: "458",
@@ -111,6 +153,50 @@ describe("buildInboundUserContextPrefix", () => {
     const conversationInfo = parseConversationInfoPayload(text);
     expect(conversationInfo["message_id"]).toBe("short-id");
     expect(conversationInfo["message_id_full"]).toBeUndefined();
+  });
+
+  it("includes message_id for direct chats when MessageSidFull is absent", () => {
+    const text = buildInboundUserContextPrefix({
+      ChatType: "direct",
+      MessageSid: "42",
+    } as TemplateContext);
+
+    const conversationInfo = parseConversationInfoPayload(text);
+    expect(conversationInfo["message_id"]).toBe("42");
+    expect(conversationInfo["message_id_full"]).toBeUndefined();
+  });
+
+  it("returns empty string for direct chats with no MessageSid", () => {
+    const text = buildInboundUserContextPrefix({
+      ChatType: "direct",
+    } as TemplateContext);
+
+    expect(text).toBe("");
+  });
+
+  it("returns empty string for direct chats with blank MessageSid", () => {
+    const text = buildInboundUserContextPrefix({
+      ChatType: "direct",
+      MessageSid: "   ",
+    } as TemplateContext);
+
+    expect(text).toBe("");
+  });
+
+  it("suppresses reply_to_id and sender_id for direct chats while keeping message_id", () => {
+    const text = buildInboundUserContextPrefix({
+      ChatType: "direct",
+      MessageSid: "dm-msg-1",
+      ReplyToId: "dm-msg-0",
+      SenderId: "user-123",
+      ConversationLabel: "John Doe",
+    } as TemplateContext);
+
+    const conversationInfo = parseConversationInfoPayload(text);
+    expect(conversationInfo["message_id"]).toBe("dm-msg-1");
+    expect(conversationInfo["reply_to_id"]).toBeUndefined();
+    expect(conversationInfo["sender_id"]).toBeUndefined();
+    expect(conversationInfo["conversation_label"]).toBeUndefined();
   });
 
   it("does not treat group chats as direct based on sender id", () => {
