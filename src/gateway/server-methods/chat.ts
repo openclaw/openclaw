@@ -849,6 +849,16 @@ export const chatHandlers: GatewayRequestHandlers = {
       }
     }
 
+    // Re-check dedupe after attachment parsing to preserve idempotency when a concurrent
+    // request finishes while this request is still parsing attachments.
+    const cachedAfterParse = context.dedupe.get(`chat:${clientRunId}`);
+    if (cachedAfterParse) {
+      respond(cachedAfterParse.ok, cachedAfterParse.payload, cachedAfterParse.error, {
+        cached: true,
+      });
+      return;
+    }
+
     // Re-check in-flight runs after attachment parsing, which can include I/O and widen
     // the race window for concurrent requests sharing the same idempotencyKey.
     const activeAfterParse = context.chatAbortControllers.get(clientRunId);
