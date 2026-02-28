@@ -7,6 +7,7 @@ EXTRA_COMPOSE_FILE="$ROOT_DIR/docker-compose.extra.yml"
 IMAGE_NAME="${OPENCLAW_IMAGE:-openclaw:local}"
 EXTRA_MOUNTS="${OPENCLAW_EXTRA_MOUNTS:-}"
 HOME_VOLUME_NAME="${OPENCLAW_HOME_VOLUME:-}"
+SANDBOX_ENABLED="${OPENCLAW_SANDBOX:-}"
 
 fail() {
   echo "ERROR: $*" >&2
@@ -178,6 +179,14 @@ export OPENCLAW_DOCKER_APT_PACKAGES="${OPENCLAW_DOCKER_APT_PACKAGES:-}"
 export OPENCLAW_EXTRA_MOUNTS="$EXTRA_MOUNTS"
 export OPENCLAW_HOME_VOLUME="$HOME_VOLUME_NAME"
 export OPENCLAW_ALLOW_INSECURE_PRIVATE_WS="${OPENCLAW_ALLOW_INSECURE_PRIVATE_WS:-}"
+export OPENCLAW_SANDBOX="$SANDBOX_ENABLED"
+
+# Detect Docker socket GID for sandbox group_add.
+DOCKER_GID=""
+if [[ -n "$SANDBOX_ENABLED" && -S /var/run/docker.sock ]]; then
+  DOCKER_GID="$(stat -c '%g' /var/run/docker.sock 2>/dev/null || stat -f '%g' /var/run/docker.sock 2>/dev/null || echo "")"
+fi
+export DOCKER_GID
 
 if [[ -z "${OPENCLAW_GATEWAY_TOKEN:-}" ]]; then
   EXISTING_CONFIG_TOKEN="$(read_config_gateway_token || true)"
@@ -230,6 +239,15 @@ YAML
     printf '      - %s\n' "$mount" >>"$EXTRA_COMPOSE_FILE"
   done
 
+  # When sandbox is enabled and Docker GID is known, add group_add so the
+  # non-root node user can access /var/run/docker.sock inside the container.
+  if [[ -n "${DOCKER_GID:-}" && -n "${SANDBOX_ENABLED:-}" ]]; then
+    cat >>"$EXTRA_COMPOSE_FILE" <<YAML
+    group_add:
+      - "${DOCKER_GID}"
+YAML
+  fi
+
   cat >>"$EXTRA_COMPOSE_FILE" <<'YAML'
   openclaw-cli:
     volumes:
@@ -254,6 +272,31 @@ volumes:
 YAML
   fi
 }
+
+# When sandbox is requested, automatically add Docker socket mount and
+# Docker CLI build arg unless the user has already configured them.
+if [[ -n "$SANDBOX_ENABLED" ]]; then
+  if [[ -S /var/run/docker.sock ]]; then
+    SOCKET_MOUNT="/var/run/docker.sock:/var/run/docker.sock"
+    if [[ "$EXTRA_MOUNTS" != *"docker.sock"* ]]; then
+      if [[ -n "$EXTRA_MOUNTS" ]]; then
+        EXTRA_MOUNTS="${EXTRA_MOUNTS},${SOCKET_MOUNT}"
+      else
+        EXTRA_MOUNTS="$SOCKET_MOUNT"
+      fi
+      export OPENCLAW_EXTRA_MOUNTS="$EXTRA_MOUNTS"
+      echo "==> Sandbox: auto-added Docker socket mount"
+    fi
+  else
+    echo "WARNING: OPENCLAW_SANDBOX=1 but /var/run/docker.sock not found." >&2
+    echo "  Sandbox requires Docker socket access. Mount it manually or" >&2
+    echo "  ensure Docker is running on the host." >&2
+  fi
+  # Ensure Docker CLI is installed in local builds.
+  if [[ -z "${OPENCLAW_INSTALL_DOCKER_CLI:-}" ]]; then
+    export OPENCLAW_INSTALL_DOCKER_CLI=1
+  fi
+fi
 
 VALID_MOUNTS=()
 if [[ -n "$EXTRA_MOUNTS" ]]; then
@@ -339,6 +382,7 @@ if [[ "$IMAGE_NAME" == "openclaw:local" ]]; then
   echo "==> Building Docker image: $IMAGE_NAME"
   docker build \
     --build-arg "OPENCLAW_DOCKER_APT_PACKAGES=${OPENCLAW_DOCKER_APT_PACKAGES}" \
+    --build-arg "OPENCLAW_INSTALL_DOCKER_CLI=${OPENCLAW_INSTALL_DOCKER_CLI:-}" \
     -t "$IMAGE_NAME" \
     -f "$ROOT_DIR/Dockerfile" \
     "$ROOT_DIR"
@@ -398,6 +442,35 @@ echo "Docs: https://docs.openclaw.ai/channels"
 echo ""
 echo "==> Starting gateway"
 docker compose "${COMPOSE_ARGS[@]}" up -d openclaw-gateway
+
+# --- Sandbox setup (opt-in via OPENCLAW_SANDBOX=1) ---
+if [[ -n "$SANDBOX_ENABLED" ]]; then
+  echo ""
+  echo "==> Sandbox setup"
+
+  # Build sandbox image if Dockerfile.sandbox exists.
+  if [[ -f "$ROOT_DIR/Dockerfile.sandbox" ]]; then
+    echo "Building sandbox image: openclaw-sandbox:bookworm-slim"
+    docker build \
+      -t "openclaw-sandbox:bookworm-slim" \
+      -f "$ROOT_DIR/Dockerfile.sandbox" \
+      "$ROOT_DIR"
+  fi
+
+  # Enable sandbox in OpenClaw config.
+  docker compose "${COMPOSE_ARGS[@]}" run --rm openclaw-cli \
+    config set agents.defaults.sandbox.mode "non-main" >/dev/null 2>&1 || true
+  docker compose "${COMPOSE_ARGS[@]}" run --rm openclaw-cli \
+    config set agents.defaults.sandbox.scope "agent" >/dev/null 2>&1 || true
+  docker compose "${COMPOSE_ARGS[@]}" run --rm openclaw-cli \
+    config set agents.defaults.sandbox.workspaceAccess "none" >/dev/null 2>&1 || true
+
+  echo "Sandbox enabled: mode=non-main, scope=agent, workspaceAccess=none"
+  echo "Docs: https://docs.openclaw.ai/security/sandbox"
+
+  # Restart gateway to pick up sandbox config.
+  docker compose "${COMPOSE_ARGS[@]}" restart openclaw-gateway
+fi
 
 echo ""
 echo "Gateway running with host port mapping."
