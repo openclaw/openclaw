@@ -461,6 +461,14 @@ function parsePostContent(content: string): {
 }
 
 /**
+ * Map Feishu message type to messageResource.get resource type.
+ * Feishu messageResource API supports only: image | file.
+ */
+export function toMessageResourceType(messageType: string): "image" | "file" {
+  return messageType === "image" ? "image" : "file";
+}
+
+/**
  * Infer placeholder text based on message type.
  */
 function inferPlaceholder(messageType: string): string {
@@ -570,7 +578,7 @@ async function resolveFeishuMediaList(params: {
       return [];
     }
 
-    const resourceType = messageType === "image" ? "image" : "file";
+    const resourceType = toMessageResourceType(messageType);
     const result = await downloadMessageResourceFeishu({
       cfg,
       messageId,
