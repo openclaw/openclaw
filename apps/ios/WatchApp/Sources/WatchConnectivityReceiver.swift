@@ -119,7 +119,7 @@ final class WatchConnectivityReceiver: NSObject {
             errorMessage: nil)
     }
 
-    nonisolated private static func normalizeObject(_ value: Any) -> [String: Any]? {
+    nonisolated static func normalizeObject(_ value: Any) -> [String: Any]? {
         if let object = value as? [String: Any] {
             return object
         }
@@ -137,7 +137,7 @@ final class WatchConnectivityReceiver: NSObject {
         return nil
     }
 
-    nonisolated private static func parseActions(_ value: Any?) -> [WatchPromptAction] {
+    nonisolated static func parseActions(_ value: Any?) -> [WatchPromptAction] {
         guard let raw = value as? [Any] else {
             return []
         }
@@ -155,7 +155,7 @@ final class WatchConnectivityReceiver: NSObject {
         }
     }
 
-    nonisolated private static func parseNotificationPayload(_ payload: [String: Any]) -> WatchNotifyMessage? {
+    nonisolated static func parseNotificationPayload(_ payload: [String: Any]) -> WatchNotifyMessage? {
         guard let type = payload["type"] as? String, type == "watch.notify" else {
             return nil
         }

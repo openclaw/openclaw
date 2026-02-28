@@ -108,6 +108,19 @@ struct OpenClawWidgetView: View {
         }
     }
 
+    // MARK: - Shared Accessibility
+
+    private var widgetAccessibilityLabel: String {
+        var parts = [entry.title, entry.body]
+        if let risk = entry.risk, !risk.isEmpty {
+            parts.insert("\(risk) risk", at: 0)
+        }
+        if entry.hasActions {
+            parts.append("Actions available")
+        }
+        return parts.joined(separator: ", ")
+    }
+
     // MARK: - Rectangular (Smart Stack)
 
     private var riskColor: Color? {
@@ -129,6 +142,7 @@ struct OpenClawWidgetView: View {
                     Circle()
                         .fill(color)
                         .frame(width: 8, height: 8)
+                        .accessibilityHidden(true)
                 }
             }
             Text(entry.body)
@@ -137,6 +151,8 @@ struct OpenClawWidgetView: View {
                 .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(widgetAccessibilityLabel)
         .widgetURL(URL(string: "openclaw://watch/inbox")!)
         .containerBackground(.fill.tertiary, for: .widget)
     }
@@ -171,6 +187,7 @@ struct OpenClawWidgetView: View {
                     .widgetAccentable()
             }
         }
+        .accessibilityLabel(widgetAccessibilityLabel)
         .widgetURL(URL(string: "openclaw://watch/inbox")!)
         .containerBackground(.fill.tertiary, for: .widget)
     }
@@ -182,6 +199,7 @@ struct OpenClawWidgetView: View {
         let suffix = entry.hasActions ? " \u{00B7} Actions" : ""
         return Text("\(prefix)\(entry.title)\(suffix)")
             .widgetAccentable()
+            .accessibilityLabel(widgetAccessibilityLabel)
     }
 
     // MARK: - Corner
@@ -190,6 +208,7 @@ struct OpenClawWidgetView: View {
         Image(systemName: entry.hasActions ? "bubble.left.and.exclamationmark.bubble.right.fill" : "bubble.left.fill")
             .font(.title3)
             .widgetAccentable()
+            .accessibilityLabel(widgetAccessibilityLabel)
             .widgetLabel {
                 Text(entry.title)
             }
