@@ -293,7 +293,7 @@ export async function tryFastAbortFromMessage(params: {
   const raw = stripStructuralPrefixes(ctx.CommandBody ?? ctx.RawBody ?? ctx.Body ?? "");
   const isGroup = ctx.ChatType?.trim().toLowerCase() === "group";
   const stripped = isGroup ? stripMentions(raw, ctx, cfg, agentId) : raw;
-  const abortRequested = isAbortRequestText(stripped);
+  const abortRequested = isAbortRequestText(stripped, undefined, cfg.session?.abortTriggers);
   if (!abortRequested) {
     return { handled: false, aborted: false };
   }
