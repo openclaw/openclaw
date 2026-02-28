@@ -58,6 +58,17 @@ const BDI_RUNTIME_PATH = "../../mabos/bdi-runtime/index.js";
 export default function register(api: OpenClawPluginApi) {
   const log = api.logger;
 
+  // ── ERP PostgreSQL (lazy) ───────────────────────────────────
+  type PgClient = import("pg").Pool;
+  let _erpPg: PgClient | null = null;
+  async function getErpPg(): Promise<PgClient> {
+    if (!_erpPg) {
+      const { getErpPgPool } = await import("../../mabos/erp/db/postgres.js");
+      _erpPg = getErpPgPool();
+    }
+    return _erpPg;
+  }
+
   // ── 1. Register all 99 tools ──────────────────────────────────
   const factories = [
     createBdiTools,
@@ -2716,6 +2727,863 @@ export default function register(api: OpenClawPluginApi) {
     { names: ["mabos_memory_search"] },
   );
 
+  // ── ERP Dashboard API ────────────────────────────────────────
+  // Shared helper: parse URL query params
+  const erpQueryParams = (req: import("node:http").IncomingMessage) => {
+    const url = new URL(req.url || "/", "http://localhost");
+    return Object.fromEntries(url.searchParams.entries());
+  };
+
+  // --- Inventory ---
+  api.registerHttpRoute({
+    path: "/mabos/api/erp/inventory/items",
+    handler: async (req, res) => {
+      if (!(await requireAuth(req, res))) return;
+      try {
+        const pg = await getErpPg();
+        const { listStockItems } = await import("../../mabos/erp/inventory/queries.js");
+        const params = erpQueryParams(req);
+        const items = await listStockItems(pg, {
+          status: params.status || undefined,
+          warehouse_id: params.warehouse_id || undefined,
+          limit: params.limit ? parseInt(params.limit) : 50,
+        });
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ items }));
+      } catch (err) {
+        res.statusCode = 500;
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ error: String(err) }));
+      }
+    },
+  });
+
+  api.registerHttpRoute({
+    path: "/mabos/api/erp/inventory/alerts",
+    handler: async (req, res) => {
+      if (!(await requireAuth(req, res))) return;
+      try {
+        const pg = await getErpPg();
+        const { lowStockAlerts } = await import("../../mabos/erp/inventory/queries.js");
+        const alerts = await lowStockAlerts(pg);
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ alerts }));
+      } catch (err) {
+        res.statusCode = 500;
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ error: String(err) }));
+      }
+    },
+  });
+
+  registerParamRoute("/mabos/api/erp/inventory/items/:id/movements", async (req, res) => {
+    try {
+      const pg = await getErpPg();
+      const { getStockMovements } = await import("../../mabos/erp/inventory/queries.js");
+      const url = new URL(req.url || "", "http://localhost");
+      const segments = url.pathname.split("/");
+      const itemId = segments[segments.length - 2]; // .../items/:id/movements
+      const movements = await getStockMovements(pg, itemId);
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify({ movements }));
+    } catch (err) {
+      res.statusCode = 500;
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify({ error: String(err) }));
+    }
+  });
+
+  // --- Customers ---
+  api.registerHttpRoute({
+    path: "/mabos/api/erp/customers/contacts",
+    handler: async (req, res) => {
+      if (!(await requireAuth(req, res))) return;
+      try {
+        const pg = await getErpPg();
+        const params = erpQueryParams(req);
+        // Search or list
+        if (params.q) {
+          const { searchContacts } = await import("../../mabos/erp/customers/queries.js");
+          const contacts = await searchContacts(
+            pg,
+            params.q,
+            params.limit ? parseInt(params.limit) : 50,
+          );
+          res.setHeader("Content-Type", "application/json");
+          res.end(JSON.stringify({ contacts }));
+          return;
+        }
+        const { listContacts } = await import("../../mabos/erp/customers/queries.js");
+        const contacts = await listContacts(pg, {
+          segment: params.segment || undefined,
+          lifecycle_stage: params.lifecycle_stage || undefined,
+          limit: params.limit ? parseInt(params.limit) : 50,
+        });
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ contacts }));
+      } catch (err) {
+        res.statusCode = 500;
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ error: String(err) }));
+      }
+    },
+  });
+
+  registerParamRoute("/mabos/api/erp/customers/contacts/:id", async (req, res) => {
+    try {
+      const pg = await getErpPg();
+      const { getContact } = await import("../../mabos/erp/customers/queries.js");
+      const url = new URL(req.url || "", "http://localhost");
+      const id = url.pathname.split("/").pop()!;
+      const contact = await getContact(pg, id);
+      if (!contact) {
+        res.statusCode = 404;
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ error: "Contact not found" }));
+        return;
+      }
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify(contact));
+    } catch (err) {
+      res.statusCode = 500;
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify({ error: String(err) }));
+    }
+  });
+
+  // --- Finance / Accounting ---
+  api.registerHttpRoute({
+    path: "/mabos/api/erp/finance/invoices",
+    handler: async (req, res) => {
+      if (!(await requireAuth(req, res))) return;
+      try {
+        const pg = await getErpPg();
+        const { listInvoices } = await import("../../mabos/erp/finance/queries.js");
+        const params = erpQueryParams(req);
+        const invoices = await listInvoices(pg, {
+          status: params.status || undefined,
+          customer_id: params.customer_id || undefined,
+          limit: params.limit ? parseInt(params.limit) : 50,
+        });
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ invoices }));
+      } catch (err) {
+        res.statusCode = 500;
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ error: String(err) }));
+      }
+    },
+  });
+
+  api.registerHttpRoute({
+    path: "/mabos/api/erp/finance/accounts",
+    handler: async (req, res) => {
+      if (!(await requireAuth(req, res))) return;
+      try {
+        const pg = await getErpPg();
+        const { listAccounts } = await import("../../mabos/erp/finance/queries.js");
+        const params = erpQueryParams(req);
+        const accounts = await listAccounts(pg, {
+          type: params.type || undefined,
+          limit: params.limit ? parseInt(params.limit) : 50,
+        });
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ accounts }));
+      } catch (err) {
+        res.statusCode = 500;
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ error: String(err) }));
+      }
+    },
+  });
+
+  api.registerHttpRoute({
+    path: "/mabos/api/erp/finance/profit-loss",
+    handler: async (req, res) => {
+      if (!(await requireAuth(req, res))) return;
+      try {
+        const pg = await getErpPg();
+        const { profitLoss } = await import("../../mabos/erp/finance/queries.js");
+        const params = erpQueryParams(req);
+        const from = params.from || new Date(Date.now() - 30 * 86400000).toISOString();
+        const to = params.to || new Date().toISOString();
+        const result = await profitLoss(pg, from, to);
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify(result));
+      } catch (err) {
+        res.statusCode = 500;
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ error: String(err) }));
+      }
+    },
+  });
+
+  registerParamRoute("/mabos/api/erp/finance/balance/:accountId", async (req, res) => {
+    try {
+      const pg = await getErpPg();
+      const { getAccountBalance } = await import("../../mabos/erp/finance/queries.js");
+      const url = new URL(req.url || "", "http://localhost");
+      const id = url.pathname.split("/").pop()!;
+      const account = await getAccountBalance(pg, id);
+      if (!account) {
+        res.statusCode = 404;
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ error: "Account not found" }));
+        return;
+      }
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify(account));
+    } catch (err) {
+      res.statusCode = 500;
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify({ error: String(err) }));
+    }
+  });
+
+  // --- E-Commerce ---
+  api.registerHttpRoute({
+    path: "/mabos/api/erp/ecommerce/products",
+    handler: async (req, res) => {
+      if (!(await requireAuth(req, res))) return;
+      try {
+        const pg = await getErpPg();
+        const { listProducts } = await import("../../mabos/erp/ecommerce/queries.js");
+        const params = erpQueryParams(req);
+        const products = await listProducts(pg, {
+          category: params.category || undefined,
+          status: params.status || undefined,
+          limit: params.limit ? parseInt(params.limit) : 50,
+        });
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ products }));
+      } catch (err) {
+        res.statusCode = 500;
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ error: String(err) }));
+      }
+    },
+  });
+
+  api.registerHttpRoute({
+    path: "/mabos/api/erp/ecommerce/orders",
+    handler: async (req, res) => {
+      if (!(await requireAuth(req, res))) return;
+      try {
+        const pg = await getErpPg();
+        const { listOrders } = await import("../../mabos/erp/ecommerce/queries.js");
+        const params = erpQueryParams(req);
+        const orders = await listOrders(pg, {
+          status: params.status || undefined,
+          customer_id: params.customer_id || undefined,
+          limit: params.limit ? parseInt(params.limit) : 50,
+        });
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ orders }));
+      } catch (err) {
+        res.statusCode = 500;
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ error: String(err) }));
+      }
+    },
+  });
+
+  registerParamRoute("/mabos/api/erp/ecommerce/orders/:id", async (req, res) => {
+    const url = new URL(req.url || "", "http://localhost");
+    const id = url.pathname.split("/").pop()!;
+    try {
+      const pg = await getErpPg();
+      if (req.method === "PUT") {
+        const body = await readMabosJsonBody<{ status: string }>(req, res);
+        if (!body) return;
+        const { updateOrderStatus } = await import("../../mabos/erp/ecommerce/queries.js");
+        const order = await updateOrderStatus(pg, id, body.status);
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ ok: true, order }));
+        return;
+      }
+      const { getOrder } = await import("../../mabos/erp/ecommerce/queries.js");
+      const order = await getOrder(pg, id);
+      if (!order) {
+        res.statusCode = 404;
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ error: "Order not found" }));
+        return;
+      }
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify(order));
+    } catch (err) {
+      res.statusCode = 500;
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify({ error: String(err) }));
+    }
+  });
+
+  // --- Suppliers ---
+  api.registerHttpRoute({
+    path: "/mabos/api/erp/suppliers/list",
+    handler: async (req, res) => {
+      if (!(await requireAuth(req, res))) return;
+      try {
+        const pg = await getErpPg();
+        const { listSuppliers } = await import("../../mabos/erp/suppliers/queries.js");
+        const params = erpQueryParams(req);
+        const suppliers = await listSuppliers(pg, {
+          status: params.status || undefined,
+          category: params.category || undefined,
+          limit: params.limit ? parseInt(params.limit) : 50,
+        });
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ suppliers }));
+      } catch (err) {
+        res.statusCode = 500;
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ error: String(err) }));
+      }
+    },
+  });
+
+  registerParamRoute("/mabos/api/erp/suppliers/:id", async (req, res) => {
+    try {
+      const pg = await getErpPg();
+      const { getSupplier } = await import("../../mabos/erp/suppliers/queries.js");
+      const url = new URL(req.url || "", "http://localhost");
+      const id = url.pathname.split("/").pop()!;
+      const supplier = await getSupplier(pg, id);
+      if (!supplier) {
+        res.statusCode = 404;
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ error: "Supplier not found" }));
+        return;
+      }
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify(supplier));
+    } catch (err) {
+      res.statusCode = 500;
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify({ error: String(err) }));
+    }
+  });
+
+  api.registerHttpRoute({
+    path: "/mabos/api/erp/suppliers/purchase-orders",
+    handler: async (req, res) => {
+      if (!(await requireAuth(req, res))) return;
+      try {
+        const pg = await getErpPg();
+        const { listPurchaseOrders } = await import("../../mabos/erp/suppliers/queries.js");
+        const params = erpQueryParams(req);
+        const orders = await listPurchaseOrders(pg, {
+          supplier_id: params.supplier_id || undefined,
+          status: params.status || undefined,
+          limit: params.limit ? parseInt(params.limit) : 50,
+        });
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ orders }));
+      } catch (err) {
+        res.statusCode = 500;
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ error: String(err) }));
+      }
+    },
+  });
+
+  registerParamRoute("/mabos/api/erp/suppliers/purchase-orders/:id", async (req, res) => {
+    try {
+      const pg = await getErpPg();
+      const { getPurchaseOrder } = await import("../../mabos/erp/suppliers/queries.js");
+      const url = new URL(req.url || "", "http://localhost");
+      const id = url.pathname.split("/").pop()!;
+      const order = await getPurchaseOrder(pg, id);
+      if (!order) {
+        res.statusCode = 404;
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ error: "Purchase order not found" }));
+        return;
+      }
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify(order));
+    } catch (err) {
+      res.statusCode = 500;
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify({ error: String(err) }));
+    }
+  });
+
+  // --- Marketing ---
+  api.registerHttpRoute({
+    path: "/mabos/api/erp/marketing/campaigns",
+    handler: async (req, res) => {
+      if (!(await requireAuth(req, res))) return;
+      try {
+        const pg = await getErpPg();
+        const { listCampaigns } = await import("../../mabos/erp/marketing/queries.js");
+        const params = erpQueryParams(req);
+        const campaigns = await listCampaigns(pg, {
+          status: params.status || undefined,
+          type: params.type || undefined,
+          limit: params.limit ? parseInt(params.limit) : 50,
+        });
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ campaigns }));
+      } catch (err) {
+        res.statusCode = 500;
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ error: String(err) }));
+      }
+    },
+  });
+
+  registerParamRoute("/mabos/api/erp/marketing/campaigns/:id/metrics", async (req, res) => {
+    try {
+      const pg = await getErpPg();
+      const { getCampaignMetrics } = await import("../../mabos/erp/marketing/queries.js");
+      const url = new URL(req.url || "", "http://localhost");
+      const segments = url.pathname.split("/");
+      const id = segments[segments.length - 2]; // .../campaigns/:id/metrics
+      const metrics = await getCampaignMetrics(pg, id);
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify({ metrics }));
+    } catch (err) {
+      res.statusCode = 500;
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify({ error: String(err) }));
+    }
+  });
+
+  api.registerHttpRoute({
+    path: "/mabos/api/erp/marketing/kpis",
+    handler: async (req, res) => {
+      if (!(await requireAuth(req, res))) return;
+      try {
+        const pg = await getErpPg();
+        const { listKpis } = await import("../../mabos/erp/marketing/queries.js");
+        const params = erpQueryParams(req);
+        const kpis = await listKpis(pg, {
+          status: params.status || undefined,
+          period: params.period || undefined,
+          limit: params.limit ? parseInt(params.limit) : 50,
+        });
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ kpis }));
+      } catch (err) {
+        res.statusCode = 500;
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ error: String(err) }));
+      }
+    },
+  });
+
+  // --- Supply Chain ---
+  api.registerHttpRoute({
+    path: "/mabos/api/erp/supply-chain/shipments",
+    handler: async (req, res) => {
+      if (!(await requireAuth(req, res))) return;
+      try {
+        const pg = await getErpPg();
+        const params = erpQueryParams(req);
+        if (params.tracking) {
+          const { trackShipment } = await import("../../mabos/erp/supply-chain/queries.js");
+          const shipment = await trackShipment(pg, params.tracking);
+          res.setHeader("Content-Type", "application/json");
+          res.end(JSON.stringify({ shipment }));
+          return;
+        }
+        const { listShipments } = await import("../../mabos/erp/supply-chain/queries.js");
+        const shipments = await listShipments(pg, {
+          status: params.status || undefined,
+          supplier_id: params.supplier_id || undefined,
+          limit: params.limit ? parseInt(params.limit) : 50,
+        });
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ shipments }));
+      } catch (err) {
+        res.statusCode = 500;
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ error: String(err) }));
+      }
+    },
+  });
+
+  registerParamRoute("/mabos/api/erp/supply-chain/shipments/:id", async (req, res) => {
+    try {
+      const pg = await getErpPg();
+      const { getShipment } = await import("../../mabos/erp/supply-chain/queries.js");
+      const url = new URL(req.url || "", "http://localhost");
+      const id = url.pathname.split("/").pop()!;
+      const shipment = await getShipment(pg, id);
+      if (!shipment) {
+        res.statusCode = 404;
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ error: "Shipment not found" }));
+        return;
+      }
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify(shipment));
+    } catch (err) {
+      res.statusCode = 500;
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify({ error: String(err) }));
+    }
+  });
+
+  api.registerHttpRoute({
+    path: "/mabos/api/erp/supply-chain/routes",
+    handler: async (req, res) => {
+      if (!(await requireAuth(req, res))) return;
+      try {
+        const pg = await getErpPg();
+        const { listRoutes } = await import("../../mabos/erp/supply-chain/queries.js");
+        const params = erpQueryParams(req);
+        const routes = await listRoutes(pg, {
+          status: params.status || undefined,
+          limit: params.limit ? parseInt(params.limit) : 50,
+        });
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ routes }));
+      } catch (err) {
+        res.statusCode = 500;
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ error: String(err) }));
+      }
+    },
+  });
+
+  // --- Compliance ---
+  api.registerHttpRoute({
+    path: "/mabos/api/erp/compliance/policies",
+    handler: async (req, res) => {
+      if (!(await requireAuth(req, res))) return;
+      try {
+        const pg = await getErpPg();
+        const { listPolicies } = await import("../../mabos/erp/compliance/queries.js");
+        const params = erpQueryParams(req);
+        const policies = await listPolicies(pg, {
+          status: params.status || undefined,
+          category: params.category || undefined,
+          limit: params.limit ? parseInt(params.limit) : 50,
+        });
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ policies }));
+      } catch (err) {
+        res.statusCode = 500;
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ error: String(err) }));
+      }
+    },
+  });
+
+  api.registerHttpRoute({
+    path: "/mabos/api/erp/compliance/violations",
+    handler: async (req, res) => {
+      if (!(await requireAuth(req, res))) return;
+      try {
+        const pg = await getErpPg();
+        const { listViolations } = await import("../../mabos/erp/compliance/queries.js");
+        const params = erpQueryParams(req);
+        const violations = await listViolations(pg, {
+          status: params.status || undefined,
+          severity: params.severity || undefined,
+          policy_id: params.policy_id || undefined,
+          limit: params.limit ? parseInt(params.limit) : 50,
+        });
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ violations }));
+      } catch (err) {
+        res.statusCode = 500;
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ error: String(err) }));
+      }
+    },
+  });
+
+  registerParamRoute("/mabos/api/erp/compliance/violations/:id", async (req, res) => {
+    try {
+      const pg = await getErpPg();
+      const { getViolation } = await import("../../mabos/erp/compliance/queries.js");
+      const url = new URL(req.url || "", "http://localhost");
+      const id = url.pathname.split("/").pop()!;
+      const violation = await getViolation(pg, id);
+      if (!violation) {
+        res.statusCode = 404;
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ error: "Violation not found" }));
+        return;
+      }
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify(violation));
+    } catch (err) {
+      res.statusCode = 500;
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify({ error: String(err) }));
+    }
+  });
+
+  // --- Legal ---
+  api.registerHttpRoute({
+    path: "/mabos/api/erp/legal/contracts",
+    handler: async (req, res) => {
+      if (!(await requireAuth(req, res))) return;
+      try {
+        const pg = await getErpPg();
+        const { listContracts } = await import("../../mabos/erp/legal/queries.js");
+        const params = erpQueryParams(req);
+        const contracts = await listContracts(pg, {
+          status: params.status || undefined,
+          type: params.type || undefined,
+          limit: params.limit ? parseInt(params.limit) : 50,
+        });
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ contracts }));
+      } catch (err) {
+        res.statusCode = 500;
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ error: String(err) }));
+      }
+    },
+  });
+
+  api.registerHttpRoute({
+    path: "/mabos/api/erp/legal/cases",
+    handler: async (req, res) => {
+      if (!(await requireAuth(req, res))) return;
+      try {
+        const pg = await getErpPg();
+        const { listCases } = await import("../../mabos/erp/legal/queries.js");
+        const params = erpQueryParams(req);
+        const cases = await listCases(pg, {
+          status: params.status || undefined,
+          case_type: params.case_type || undefined,
+          limit: params.limit ? parseInt(params.limit) : 50,
+        });
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ cases }));
+      } catch (err) {
+        res.statusCode = 500;
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ error: String(err) }));
+      }
+    },
+  });
+
+  // --- Legal (Redesign) ---
+  api.registerHttpRoute({
+    path: "/mabos/api/erp/legal/partnership-contracts",
+    handler: async (req, res) => {
+      if (!(await requireAuth(req, res))) return;
+      try {
+        const pg = await getErpPg();
+        const { listPartnershipContracts } = await import("../../mabos/erp/legal/queries.js");
+        const params = erpQueryParams(req);
+        const contracts = await listPartnershipContracts(pg, {
+          status: params.status || undefined,
+          limit: params.limit ? parseInt(params.limit) : 50,
+        });
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ contracts }));
+      } catch (err) {
+        res.statusCode = 500;
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ error: String(err) }));
+      }
+    },
+  });
+
+  api.registerHttpRoute({
+    path: "/mabos/api/erp/legal/freelancer-contracts",
+    handler: async (req, res) => {
+      if (!(await requireAuth(req, res))) return;
+      try {
+        const pg = await getErpPg();
+        const { listFreelancerContracts } = await import("../../mabos/erp/legal/queries.js");
+        const params = erpQueryParams(req);
+        const contracts = await listFreelancerContracts(pg, {
+          status: params.status || undefined,
+          limit: params.limit ? parseInt(params.limit) : 50,
+        });
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ contracts }));
+      } catch (err) {
+        res.statusCode = 500;
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ error: String(err) }));
+      }
+    },
+  });
+
+  api.registerHttpRoute({
+    path: "/mabos/api/erp/legal/corporate-documents",
+    handler: async (req, res) => {
+      if (!(await requireAuth(req, res))) return;
+      try {
+        const pg = await getErpPg();
+        const { listCorporateDocuments } = await import("../../mabos/erp/legal/queries.js");
+        const params = erpQueryParams(req);
+        const documents = await listCorporateDocuments(pg, {
+          doc_type: params.doc_type || undefined,
+          status: params.status || undefined,
+          limit: params.limit ? parseInt(params.limit) : 50,
+        });
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ documents }));
+      } catch (err) {
+        res.statusCode = 500;
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ error: String(err) }));
+      }
+    },
+  });
+
+  api.registerHttpRoute({
+    path: "/mabos/api/erp/legal/structure",
+    handler: async (req, res) => {
+      if (!(await requireAuth(req, res))) return;
+      try {
+        const pg = await getErpPg();
+        const { getLegalStructure } = await import("../../mabos/erp/legal/queries.js");
+        const structure = await getLegalStructure(pg);
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ structure }));
+      } catch (err) {
+        res.statusCode = 500;
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ error: String(err) }));
+      }
+    },
+  });
+
+  api.registerHttpRoute({
+    path: "/mabos/api/erp/legal/guardrails",
+    handler: async (req, res) => {
+      if (!(await requireAuth(req, res))) return;
+      try {
+        const pg = await getErpPg();
+        const { listComplianceGuardrails } = await import("../../mabos/erp/legal/queries.js");
+        const params = erpQueryParams(req);
+        const guardrails = await listComplianceGuardrails(pg, {
+          active: params.active ? params.active === "true" : undefined,
+          category: params.category || undefined,
+          limit: params.limit ? parseInt(params.limit) : 50,
+        });
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ guardrails }));
+      } catch (err) {
+        res.statusCode = 500;
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ error: String(err) }));
+      }
+    },
+  });
+
+  // --- Analytics ---
+  api.registerHttpRoute({
+    path: "/mabos/api/erp/analytics/reports",
+    handler: async (req, res) => {
+      if (!(await requireAuth(req, res))) return;
+      try {
+        const pg = await getErpPg();
+        const { listReports } = await import("../../mabos/erp/analytics/queries.js");
+        const params = erpQueryParams(req);
+        const reports = await listReports(pg, {
+          type: params.type || undefined,
+          status: params.status || undefined,
+          limit: params.limit ? parseInt(params.limit) : 50,
+        });
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ reports }));
+      } catch (err) {
+        res.statusCode = 500;
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ error: String(err) }));
+      }
+    },
+  });
+
+  registerParamRoute("/mabos/api/erp/analytics/reports/:id", async (req, res) => {
+    try {
+      const pg = await getErpPg();
+      const url = new URL(req.url || "", "http://localhost");
+      const id = url.pathname.split("/").pop()!;
+      if (req.method === "POST") {
+        // Run report
+        const { runReport } = await import("../../mabos/erp/analytics/queries.js");
+        const result = await runReport(pg, id);
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ ok: true, result }));
+        return;
+      }
+      const { getReport } = await import("../../mabos/erp/analytics/queries.js");
+      const report = await getReport(pg, id);
+      if (!report) {
+        res.statusCode = 404;
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ error: "Report not found" }));
+        return;
+      }
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify(report));
+    } catch (err) {
+      res.statusCode = 500;
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify({ error: String(err) }));
+    }
+  });
+
+  registerParamRoute("/mabos/api/erp/analytics/reports/:id/run", async (req, res) => {
+    try {
+      const pg = await getErpPg();
+      const url = new URL(req.url || "", "http://localhost");
+      const segments = url.pathname.split("/");
+      const id = segments[segments.length - 2];
+      const { runReport } = await import("../../mabos/erp/analytics/queries.js");
+      const result = await runReport(pg, id);
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify({ ok: true, result }));
+    } catch (err) {
+      res.statusCode = 500;
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify({ error: String(err) }));
+    }
+  });
+
+  registerParamRoute("/mabos/api/erp/analytics/reports/:id/snapshots", async (req, res) => {
+    try {
+      const pg = await getErpPg();
+      const url = new URL(req.url || "", "http://localhost");
+      const segments = url.pathname.split("/");
+      const id = segments[segments.length - 2];
+      const { getSnapshots } = await import("../../mabos/erp/analytics/queries.js");
+      const snapshots = await getSnapshots(pg, id);
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify({ snapshots }));
+    } catch (err) {
+      res.statusCode = 500;
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify({ error: String(err) }));
+    }
+  });
+
+  api.registerHttpRoute({
+    path: "/mabos/api/erp/analytics/dashboards",
+    handler: async (req, res) => {
+      if (!(await requireAuth(req, res))) return;
+      try {
+        const pg = await getErpPg();
+        const { listDashboards } = await import("../../mabos/erp/analytics/queries.js");
+        const params = erpQueryParams(req);
+        const dashboards = await listDashboards(pg, {
+          owner_id: params.owner_id || undefined,
+          limit: params.limit ? parseInt(params.limit) : 50,
+        });
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ dashboards }));
+      } catch (err) {
+        res.statusCode = 500;
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ error: String(err) }));
+      }
+    },
+  });
+
   // ── BPMN 2.0 Workflow API ────────────────────────────────────
 
   const BPMN_DB = "mabos";
@@ -3207,7 +4075,12 @@ export default function register(api: OpenClawPluginApi) {
 
   // ── 6. Agent Lifecycle Hooks ──────────────────────────────────
 
-  // Inject BDI context + Persona.md into the system prompt
+  // ── Observation/compression state ──
+  let observerToolCallCount = 0;
+  const OBSERVER_TOOL_CALL_THRESHOLD = 10;
+
+  // Inject BDI context + Persona.md + observation log into the system prompt
+  // When cacheAwareLayoutEnabled: splits into stable (systemPrompt) + dynamic (prependContext)
   api.on("before_agent_start", async (_event, ctx) => {
     if (ctx.workspaceDir) {
       const agentDir = ctx.workspaceDir;
@@ -3215,41 +4088,85 @@ export default function register(api: OpenClawPluginApi) {
         const { readFile } = await import("node:fs/promises");
         const { join } = await import("node:path");
 
-        const parts: string[] = [];
+        // Read plugin config for cache-aware layout toggle
+        const pluginConfig = (api.pluginConfig ?? {}) as Record<string, unknown>;
+        const cacheAwareEnabled = pluginConfig.cacheAwareLayoutEnabled === true;
 
         // Load Persona.md
         const persona = await readFile(join(agentDir, "Persona.md"), "utf-8").catch(() => null);
-        if (persona) {
-          parts.push(`## Agent Persona\n${persona}`);
+
+        // Load observation log (Observer/Reflector pipeline)
+        let observations: any[] = [];
+        try {
+          const { loadObservationLog } = await import("./src/tools/observation-store.js");
+          const agentId = agentDir.split("/").pop() || "default";
+          const obsLog = await loadObservationLog(api, agentId);
+          observations = obsLog.observations;
+        } catch {
+          // Observation log unavailable — not critical
         }
 
         // Load active goals summary
         const goals = await readFile(join(agentDir, "Goals.md"), "utf-8").catch(() => null);
+        let activeGoals = "";
         if (goals) {
-          // Extract only active goals (first 500 chars for prompt budget)
-          const activeGoals = goals
+          activeGoals = goals
             .split("\n")
             .filter((l) => l.includes("status: active") || l.startsWith("## "))
             .slice(0, 20)
             .join("\n");
-          if (activeGoals.trim()) {
-            parts.push(`## Active Goals\n${activeGoals}`);
-          }
         }
 
         // Load current commitments
         const commitments = await readFile(join(agentDir, "Commitments.md"), "utf-8").catch(
           () => null,
         );
-        if (commitments && commitments.trim()) {
-          const summary = commitments.slice(0, 300);
-          parts.push(`## Current Commitments\n${summary}`);
-        }
+        const commitmentSummary = commitments?.trim() ? commitments.slice(0, 300) : "";
 
-        if (parts.length > 0) {
-          return {
-            prependContext: `[MABOS Agent Context]\n${parts.join("\n\n")}\n`,
-          };
+        if (cacheAwareEnabled) {
+          // Cache-aware mode: split into stable + dynamic blocks
+          const { assembleCacheAwareContext } = await import("./src/tools/cache-aware-layout.js");
+          const { stableBlock, dynamicBlock } = assembleCacheAwareContext({
+            persona: persona || undefined,
+            observations,
+            activeGoals: activeGoals.trim() || undefined,
+            commitments: commitmentSummary || undefined,
+          });
+
+          const result: Record<string, string> = {};
+          if (stableBlock) result.systemPrompt = stableBlock;
+          if (dynamicBlock) result.prependContext = dynamicBlock;
+
+          if (Object.keys(result).length > 0) return result;
+        } else {
+          // Legacy mode: everything in prependContext
+          const parts: string[] = [];
+
+          if (persona) {
+            parts.push(`## Agent Persona\n${persona}`);
+          }
+
+          if (observations.length > 0) {
+            const { formatObservationLog } = await import("./src/tools/observer.js");
+            const formatted = formatObservationLog(observations);
+            if (formatted.trim()) {
+              parts.push(formatted);
+            }
+          }
+
+          if (activeGoals.trim()) {
+            parts.push(`## Active Goals\n${activeGoals}`);
+          }
+
+          if (commitmentSummary) {
+            parts.push(`## Current Commitments\n${commitmentSummary}`);
+          }
+
+          if (parts.length > 0) {
+            return {
+              prependContext: `[MABOS Agent Context]\n${parts.join("\n\n")}\n`,
+            };
+          }
         }
       } catch (err) {
         log.debug(`Agent context injection skipped: ${err}`);
@@ -3258,8 +4175,8 @@ export default function register(api: OpenClawPluginApi) {
     return undefined;
   });
 
-  // BDI tool call audit trail
-  api.on("after_tool_call", async (event, _ctx) => {
+  // BDI tool call audit trail + auto-observer trigger
+  api.on("after_tool_call", async (event, ctx) => {
     if (
       event.toolName.startsWith("belief_") ||
       event.toolName.startsWith("goal_") ||
@@ -3270,6 +4187,42 @@ export default function register(api: OpenClawPluginApi) {
       event.toolName.startsWith("mabos_")
     ) {
       api.logger.info(`[mabos] BDI tool: ${event.toolName} (${event.durationMs ?? 0}ms)`);
+    }
+
+    // Auto-trigger observer after threshold tool calls (non-blocking)
+    observerToolCallCount++;
+    if (observerToolCallCount >= OBSERVER_TOOL_CALL_THRESHOLD && ctx.workspaceDir) {
+      observerToolCallCount = 0;
+      void (async () => {
+        try {
+          const { loadObservationLog, saveObservationLog } =
+            await import("./src/tools/observation-store.js");
+          const { compressMessagesToObservations } = await import("./src/tools/observer.js");
+          const { reflectObservations } = await import("./src/tools/reflector.js");
+          const agentId = ctx.workspaceDir!.split("/").pop() || "default";
+          const obsLog = await loadObservationLog(api, agentId);
+
+          // Create a summary observation of the tool activity burst
+          const summary = `Completed ${OBSERVER_TOOL_CALL_THRESHOLD} tool calls including ${event.toolName}`;
+          const { observations } = compressMessagesToObservations(
+            [{ role: "assistant", content: summary, timestamp: new Date().toISOString() }],
+            obsLog.observations,
+          );
+          obsLog.observations.push(...observations);
+          obsLog.total_tool_calls_compressed += OBSERVER_TOOL_CALL_THRESHOLD;
+          obsLog.last_observer_run_at = new Date().toISOString();
+
+          // Reflect if needed
+          if (obsLog.observations.length > 100) {
+            obsLog.observations = reflectObservations(obsLog.observations);
+            obsLog.last_reflector_run_at = new Date().toISOString();
+          }
+
+          await saveObservationLog(api, agentId, obsLog);
+        } catch {
+          // Non-critical — observer failure should never block tool execution
+        }
+      })();
     }
   });
 

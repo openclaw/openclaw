@@ -1,25 +1,41 @@
-import { Package, MessageSquare, ChevronRight, Users } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
+import { Package } from "lucide-react";
+import { useState } from "react";
+import { InventoryStatsRow } from "@/components/inventory/InventoryStatsRow";
+import { StockAlertTable } from "@/components/inventory/StockAlertTable";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { useAgents } from "@/hooks/useAgents";
-import type { AgentListResponse } from "@/lib/types";
+import { DataTable, type Column } from "@/components/ui/data-table";
+import { StatusBadge } from "@/components/ui/status-badge";
+import { useStockItems, useLowStockAlerts } from "@/hooks/useInventory";
+import type { StockItem } from "@/lib/types";
 
-const BUSINESS_ID = "vividwalls";
+const statusOptions = ["all", "active", "discontinued", "reserved"] as const;
 
-const upcomingFeatures = [
-  "Stock tracking across multiple locations",
-  "Purchase order management and approvals",
-  "Warehouse management and transfers",
-  "Supplier portal and vendor scoring",
+const columns: Column<StockItem>[] = [
+  { key: "sku", header: "SKU", sortable: true },
+  { key: "name", header: "Name", sortable: true },
+  { key: "quantity", header: "Quantity", sortable: true },
+  { key: "reorder_point", header: "Reorder Point", sortable: true },
+  {
+    key: "status",
+    header: "Status",
+    render: (row) => <StatusBadge status={row.status} />,
+  },
+  {
+    key: "warehouse_id",
+    header: "Warehouse",
+    render: (row) => (row.warehouse_id as string) || "—",
+  },
 ];
 
 export function InventoryPage() {
-  const { data: agentsRaw } = useAgents(BUSINESS_ID);
-
-  const agentsResponse = agentsRaw as AgentListResponse | undefined;
-  const inventoryAgents = agentsResponse?.agents?.filter(
-    (a) => a.id.includes("inventory") || a.id.includes("fulfillment") || a.id.includes("product"),
+  const [statusFilter, setStatusFilter] = useState("all");
+  const { data: itemsData, isLoading: itemsLoading } = useStockItems(
+    statusFilter !== "all" ? { status: statusFilter } : undefined,
   );
+  const { data: alertsData, isLoading: alertsLoading } = useLowStockAlerts();
+
+  const items = itemsData?.items ?? [];
+  const alerts = alertsData?.alerts ?? [];
 
   return (
     <div className="space-y-6">
@@ -33,124 +49,56 @@ export function InventoryPage() {
         >
           <Package className="w-5 h-5 text-[var(--accent-orange)]" />
         </div>
-        <div className="flex-1">
-          <div className="flex items-center gap-2">
-            <h1 className="text-2xl font-bold text-[var(--text-primary)]">Inventory</h1>
-            <Badge
-              variant="outline"
-              className="border-[var(--accent-orange)]/30 text-[var(--accent-orange)] text-[10px]"
-            >
-              Coming Soon
-            </Badge>
-          </div>
-          <p className="text-sm text-[var(--text-secondary)] mt-0.5">
-            Stock management and supply-chain operations
-          </p>
+        <div>
+          <h1 className="text-2xl font-bold text-[var(--text-primary)]">Inventory</h1>
+          <p className="text-sm text-[var(--text-secondary)]">Stock management and tracking</p>
         </div>
       </div>
 
-      {/* Relevant Agent Status */}
-      {inventoryAgents && inventoryAgents.length > 0 && (
-        <Card className="border-[var(--border-mabos)] bg-[var(--bg-card)] shadow-none">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-[var(--text-secondary)] flex items-center gap-2">
-              <Users className="w-4 h-4" />
-              Related Agents
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {inventoryAgents.map((agent) => (
-                <div
-                  key={agent.id}
-                  className="flex items-center gap-3 p-3 rounded-lg bg-[var(--bg-secondary)] border border-[var(--border-mabos)]"
-                >
-                  <span
-                    className="w-2 h-2 rounded-full shrink-0"
-                    style={{
-                      backgroundColor:
-                        agent.status === "active"
-                          ? "var(--accent-green)"
-                          : agent.status === "error"
-                            ? "var(--accent-red)"
-                            : "var(--accent-orange)",
-                    }}
-                  />
-                  <div className="min-w-0">
-                    <p className="text-sm text-[var(--text-primary)] truncate">{agent.name}</p>
-                    <p className="text-[10px] text-[var(--text-muted)] capitalize">
-                      {agent.status} - {agent.beliefs} beliefs, {agent.goals} goals
-                    </p>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
-      )}
+      {/* Stats */}
+      <InventoryStatsRow items={items} alerts={alerts} isLoading={itemsLoading || alertsLoading} />
 
-      <div className="max-w-2xl space-y-6">
-        {/* Description card */}
-        <Card className="border-[var(--border-mabos)] bg-[var(--bg-card)] shadow-none">
-          <CardHeader className="pb-2">
+      {/* Filter + Main Table */}
+      <Card className="border-[var(--border-mabos)] bg-[var(--bg-card)] shadow-none">
+        <CardHeader className="pb-2">
+          <div className="flex items-center justify-between">
             <CardTitle className="text-sm font-medium text-[var(--text-secondary)]">
-              About this Module
+              Stock Items
             </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-sm text-[var(--text-primary)] leading-relaxed">
-              Track stock levels, manage suppliers, and monitor inventory across locations.
-            </p>
-            <p className="text-sm text-[var(--text-muted)] mt-3 leading-relaxed">
-              While this module is under development, you can interact with the{" "}
-              <span className="text-[var(--accent-orange)] font-medium">Inventory Manager</span>{" "}
-              agent through the chat panel for inventory-related queries and operations.
-            </p>
-          </CardContent>
-        </Card>
-
-        {/* Upcoming features */}
-        <Card className="border-[var(--border-mabos)] bg-[var(--bg-card)] shadow-none">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-[var(--text-secondary)]">
-              Upcoming Features
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <ul className="space-y-3">
-              {upcomingFeatures.map((feature) => (
-                <li key={feature} className="flex items-center gap-3">
-                  <ChevronRight className="w-4 h-4 text-[var(--accent-orange)] shrink-0" />
-                  <span className="text-sm text-[var(--text-primary)]">{feature}</span>
-                </li>
+            <select
+              className="text-xs px-2 py-1 rounded border border-[var(--border-mabos)] bg-[var(--bg-secondary)] text-[var(--text-primary)]"
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value)}
+            >
+              {statusOptions.map((s) => (
+                <option key={s} value={s}>
+                  {s === "all" ? "All Statuses" : s.charAt(0).toUpperCase() + s.slice(1)}
+                </option>
               ))}
-            </ul>
-          </CardContent>
-        </Card>
+            </select>
+          </div>
+        </CardHeader>
+        <CardContent>
+          <DataTable
+            columns={columns}
+            data={items}
+            isLoading={itemsLoading}
+            emptyMessage="No stock items found"
+          />
+        </CardContent>
+      </Card>
 
-        {/* Chat CTA */}
-        <Card className="border-[var(--border-mabos)] bg-[var(--bg-card)] shadow-none">
-          <CardContent className="py-4">
-            <div className="flex items-center gap-3">
-              <div
-                className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0"
-                style={{
-                  backgroundColor: "color-mix(in srgb, var(--accent-green) 15%, var(--bg-card))",
-                }}
-              >
-                <MessageSquare className="w-4 h-4 text-[var(--accent-green)]" />
-              </div>
-              <div>
-                <p className="text-sm font-medium text-[var(--text-primary)]">Use the Chat Panel</p>
-                <p className="text-xs text-[var(--text-muted)] mt-0.5">
-                  Open the chat panel and ask the Inventory Manager agent about stock levels,
-                  suppliers, or purchase orders.
-                </p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
+      {/* Low Stock Alerts */}
+      <Card className="border-[var(--border-mabos)] bg-[var(--bg-card)] shadow-none">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm font-medium text-[var(--accent-orange)]">
+            Low Stock Alerts
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <StockAlertTable alerts={alerts} isLoading={alertsLoading} />
+        </CardContent>
+      </Card>
     </div>
   );
 }

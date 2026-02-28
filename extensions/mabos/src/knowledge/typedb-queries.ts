@@ -194,10 +194,18 @@ export class MemoryQueries {
       source: string;
       store: string;
       tags: string[];
+      observed_at?: string;
+      referenced_dates?: string[];
     },
   ): string {
     const tagClauses = item.tags.map((t) => `, has tag ${JSON.stringify(t)}`).join("");
     const now = new Date().toISOString();
+    const observedAtClause = item.observed_at
+      ? `,\n    has observed_at ${JSON.stringify(item.observed_at)}`
+      : "";
+    const refDateClauses = (item.referenced_dates ?? [])
+      .map((d) => `,\n    has referenced_date ${JSON.stringify(d)}`)
+      .join("");
 
     return `match
   $agent isa agent, has uid ${JSON.stringify(agentId)};
@@ -211,7 +219,7 @@ insert
     has store_name ${JSON.stringify(item.store)},
     has access_count 0${tagClauses},
     has created_at ${JSON.stringify(now)},
-    has accessed_at ${JSON.stringify(now)};
+    has accessed_at ${JSON.stringify(now)}${observedAtClause}${refDateClauses};
   (owner: $agent, owned: $mem) isa agent_owns;`;
   }
 
@@ -1115,6 +1123,8 @@ export function getBaseSchema(): string {
   attribute store_name, value string;
   attribute access_count, value integer;
   attribute accessed_at, value string;
+  attribute observed_at, value string;
+  attribute referenced_date, value string;
   attribute tag, value string;
   attribute situation, value string;
   attribute solution, value string;
@@ -1233,7 +1243,9 @@ export function getBaseSchema(): string {
     owns access_count,
     owns tag,
     owns created_at,
-    owns accessed_at;
+    owns accessed_at,
+    owns observed_at,
+    owns referenced_date;
 
   entity cbr_case,
     owns uid @key,

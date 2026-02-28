@@ -1018,6 +1018,12 @@ export async function runEmbeddedAttempt(
               `hooks: prepended context to prompt (${hookResult.prependContext.length} chars)`,
             );
           }
+          if (hookResult?.systemPrompt) {
+            applySystemPromptOverrideToSession(activeSession, hookResult.systemPrompt);
+            log.debug(
+              `hooks: applied system prompt override (${hookResult.systemPrompt.length} chars)`,
+            );
+          }
         }
 
         log.debug(`embedded run prompt start: runId=${params.runId} sessionId=${params.sessionId}`);

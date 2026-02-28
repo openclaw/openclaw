@@ -48,6 +48,42 @@
         "type": "number",
         "default": 5000,
         "description": "Expenditure threshold requiring stakeholder approval"
+      },
+      "temporalModelEnabled": {
+        "type": "boolean",
+        "default": true,
+        "description": "Enable three-date temporal model for memory items (observed_at, referenced_dates)"
+      },
+      "observerEnabled": {
+        "type": "boolean",
+        "default": true,
+        "description": "Enable Observer compression pipeline for conversation context"
+      },
+      "observerMode": {
+        "type": "string",
+        "enum": ["heuristic", "llm", "hybrid"],
+        "default": "hybrid",
+        "description": "Observer mode: heuristic (zero API cost), llm (always refine), hybrid (heuristic first, LLM when quality threshold not met)"
+      },
+      "observerTokenThreshold": {
+        "type": "number",
+        "default": 30000,
+        "description": "Token threshold before observer triggers compression"
+      },
+      "reflectorEnabled": {
+        "type": "boolean",
+        "default": true,
+        "description": "Enable Reflector GC pipeline for observation log"
+      },
+      "reflectorTokenThreshold": {
+        "type": "number",
+        "default": 40000,
+        "description": "Token threshold before reflector triggers observation pruning"
+      },
+      "cacheAwareLayoutEnabled": {
+        "type": "boolean",
+        "default": false,
+        "description": "Enable prompt-cache-aware context layout (splits into stable systemPrompt + dynamic prependContext). Opt-in as it relies on core systemPrompt hook fix."
       }
     }
   }

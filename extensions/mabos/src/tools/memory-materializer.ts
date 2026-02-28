@@ -154,6 +154,10 @@ export async function materializeMemoryItems(
     if (item.derived_from?.length)
       lines.push(`- **Derived from:** ${item.derived_from.join(", ")}`);
     lines.push(`- **Created:** ${item.created_at}`);
+    if (item.observed_at && item.observed_at !== item.created_at)
+      lines.push(`- **Observed:** ${item.observed_at}`);
+    if (item.referenced_dates?.length)
+      lines.push(`- **Referenced dates:** ${item.referenced_dates.join(", ")}`);
     lines.push("");
     lines.push(item.content);
     lines.push("");
@@ -324,6 +328,35 @@ export async function materializeQuarterlyReview(
 }
 
 /**
+ * Materialize observation log as a searchable Markdown file.
+ */
+export async function materializeObservations(
+  api: OpenClawPluginApi,
+  agentId: string,
+): Promise<void> {
+  const ws = resolveWorkspaceDir(api);
+  const logPath = join(ws, "agents", agentId, "observation-log.json");
+  const outPath = join(ws, "agents", agentId, "memory", "mabos-observations.md");
+
+  const store = await readJson(logPath);
+  if (!store?.observations?.length) return;
+
+  const { formatObservationLog } = await import("./observer.js");
+  const formatted = formatObservationLog(store.observations);
+
+  const lines: string[] = [
+    `# MABOS Observations — ${agentId}`,
+    "",
+    `> Auto-materialized from observation-log.json. ${store.observations.length} observations.`,
+    `> Messages compressed: ${store.total_messages_compressed ?? 0}. Tool calls compressed: ${store.total_tool_calls_compressed ?? 0}.`,
+    "",
+    formatted,
+  ];
+
+  await writeMd(outPath, lines.join("\n"));
+}
+
+/**
  * Run all materializers in parallel. Failures are non-fatal.
  */
 export async function materializeAll(api: OpenClawPluginApi, agentId: string): Promise<void> {
@@ -331,5 +364,6 @@ export async function materializeAll(api: OpenClawPluginApi, agentId: string): P
     materializeFacts(api, agentId).catch(() => {}),
     materializeBeliefs(api, agentId).catch(() => {}),
     materializeMemoryItems(api, agentId).catch(() => {}),
+    materializeObservations(api, agentId).catch(() => {}),
   ]);
 }

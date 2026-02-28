@@ -20,6 +20,10 @@ import { getTypeDBClient } from "../knowledge/typedb-client.js";
 import { MemoryQueries } from "../knowledge/typedb-queries.js";
 import { textResult, resolveWorkspaceDir, generatePrefixedId } from "./common.js";
 import { materializeMemoryItems } from "./memory-materializer.js";
+import { loadObservationLog, saveObservationLog } from "./observation-store.js";
+import { compressMessagesToObservations, formatObservationLog } from "./observer.js";
+import { reflectObservations } from "./reflector.js";
+import { extractReferencedDates, computeMemoryScore } from "./temporal-utils.js";
 
 async function readJson(p: string) {
   try {
@@ -179,6 +183,8 @@ type MemoryItem = {
   accessed_at: string;
   access_count: number;
   derived_from?: string[]; // R1: IDs of source memories this was summarized from
+  observed_at?: string; // When the event actually occurred (three-date model)
+  referenced_dates?: string[]; // Dates extracted from content (three-date model)
 };
 
 type MemoryStore = {
@@ -198,7 +204,25 @@ function memoryPath(api: OpenClawPluginApi, agentId: string) {
 
 async function loadMemory(api: OpenClawPluginApi, agentId: string): Promise<MemoryStore> {
   const store = await readJson(memoryPath(api, agentId));
-  return store || { working: [], short_term: [], long_term: [], version: 0 };
+  if (!store) return { working: [], short_term: [], long_term: [], version: 0 };
+
+  // Lazy migration: backfill three-date model fields on v1 stores
+  if ((store.version ?? 0) < 2) {
+    for (const key of ["working", "short_term", "long_term"] as const) {
+      for (const item of store[key] ?? []) {
+        if (!item.observed_at) item.observed_at = item.created_at;
+        if (!item.referenced_dates) {
+          item.referenced_dates = extractReferencedDates(item.content, new Date(item.created_at));
+          if (item.referenced_dates.length === 0) item.referenced_dates = undefined;
+        }
+      }
+    }
+    store.version = 2;
+    // Save migrated store (fire-and-forget)
+    writeJson(memoryPath(api, agentId), store).catch(() => {});
+  }
+
+  return store;
 }
 
 async function saveMemory(api: OpenClawPluginApi, agentId: string, store: MemoryStore) {
@@ -355,6 +379,12 @@ const MemoryStoreParams = Type.Object({
       description: "Target store (default: short_term)",
     }),
   ),
+  observed_at: Type.Optional(
+    Type.String({
+      description:
+        "When the event actually occurred (ISO date). Auto-extracted from content if not provided.",
+    }),
+  ),
 });
 
 const MemoryRecallParams = Type.Object({
@@ -412,6 +442,13 @@ const MemoryCheckpointParams = Type.Object({
   open_questions: Type.Optional(Type.Array(Type.String(), { description: "Open questions" })),
 });
 
+const MemoryObserveParams = Type.Object({
+  agent_id: Type.String({ description: "Agent ID" }),
+  messages_summary: Type.Optional(
+    Type.String({ description: "Summary of recent messages to compress into observations" }),
+  ),
+});
+
 // ── R3: Resolve latest checkpoint for continuity after compaction ──
 
 export async function resolveLatestCheckpoint(
@@ -446,6 +483,11 @@ export function createMemoryTools(api: OpenClawPluginApi): AnyAgentTool[] {
         const now = new Date().toISOString();
         const targetStore = params.store || "short_term";
 
+        // Three-date model: extract referenced dates and set observed_at
+        const referencedDates = extractReferencedDates(params.content, new Date(now));
+        const observedAt =
+          params.observed_at || (referencedDates.length > 0 ? referencedDates[0] : undefined);
+
         const item: MemoryItem = {
           id: generatePrefixedId("M"),
           content: params.content,
@@ -456,6 +498,8 @@ export function createMemoryTools(api: OpenClawPluginApi): AnyAgentTool[] {
           created_at: now,
           accessed_at: now,
           access_count: 0,
+          observed_at: observedAt,
+          referenced_dates: referencedDates.length > 0 ? referencedDates : undefined,
         };
 
         if (targetStore === "working") {
@@ -530,6 +574,8 @@ export function createMemoryTools(api: OpenClawPluginApi): AnyAgentTool[] {
               source: params.source || "manual",
               store: targetStore,
               tags: params.tags || [],
+              observed_at: item.observed_at,
+              referenced_dates: item.referenced_dates,
             });
             await client.insertData(typeql, `mabos_${params.agent_id.split("/")[0] || "default"}`);
           }
@@ -644,14 +690,16 @@ export function createMemoryTools(api: OpenClawPluginApi): AnyAgentTool[] {
                 semanticScoreMap.set(sr.content.toLowerCase().trim(), sr.score);
               }
 
-              // Re-score JSON items: if content matches a semantic result, boost with hybrid score
+              // Re-score JSON items using unified scoring (three-date model)
               type ScoredItem = MemoryItem & { _store: string; _score: number };
               const scored: ScoredItem[] = items.map((item) => {
                 const contentKey = item.content.toLowerCase().trim();
                 const semanticScore = semanticScoreMap.get(contentKey);
                 if (semanticScore !== undefined) {
-                  // Blend: semantic score (0-1 range) weighted heavily + importance
-                  return { ...item, _score: semanticScore * 0.7 + item.importance * 0.3 };
+                  return {
+                    ...item,
+                    _score: computeMemoryScore({ item, semanticScore, query: params.query }),
+                  };
                 }
                 // Check for partial content overlap
                 let bestPartialScore = 0;
@@ -661,12 +709,17 @@ export function createMemoryTools(api: OpenClawPluginApi): AnyAgentTool[] {
                   }
                 }
                 if (bestPartialScore > 0) {
-                  return { ...item, _score: bestPartialScore * 0.7 + item.importance * 0.3 };
+                  return {
+                    ...item,
+                    _score: computeMemoryScore({
+                      item,
+                      semanticScore: bestPartialScore,
+                      query: params.query,
+                    }),
+                  };
                 }
-                // No semantic match — use original importance × recency score
-                const recency =
-                  1 - (Date.now() - new Date(item.created_at).getTime()) / (24 * 60 * 60 * 1000);
-                return { ...item, _score: item.importance * 0.6 + recency * 0.4 };
+                // No semantic match — use importance + temporal scoring
+                return { ...item, _score: computeMemoryScore({ item, query: params.query }) };
               });
 
               // Also include semantic-only results (from materialized files) that don't match JSON items
@@ -700,30 +753,20 @@ export function createMemoryTools(api: OpenClawPluginApi): AnyAgentTool[] {
                   i.content.toLowerCase().includes(q) ||
                   i.tags.some((t) => t.toLowerCase().includes(q)),
               );
-              // Sort by importance × recency
+              // Sort by unified memory score (three-date model)
               items.sort((a, b) => {
-                const scoreA =
-                  a.importance * 0.6 +
-                  (1 - (Date.now() - new Date(a.created_at).getTime()) / (24 * 60 * 60 * 1000)) *
-                    0.4;
-                const scoreB =
-                  b.importance * 0.6 +
-                  (1 - (Date.now() - new Date(b.created_at).getTime()) / (24 * 60 * 60 * 1000)) *
-                    0.4;
+                const scoreA = computeMemoryScore({ item: a, query: params.query });
+                const scoreB = computeMemoryScore({ item: b, query: params.query });
                 return scoreB - scoreA;
               });
               items = items.slice(0, limit);
             }
           }
         } else {
-          // No query — sort by importance × recency
+          // No query — sort by unified memory score (three-date model)
           items.sort((a, b) => {
-            const scoreA =
-              a.importance * 0.6 +
-              (1 - (Date.now() - new Date(a.created_at).getTime()) / (24 * 60 * 60 * 1000)) * 0.4;
-            const scoreB =
-              b.importance * 0.6 +
-              (1 - (Date.now() - new Date(b.created_at).getTime()) / (24 * 60 * 60 * 1000)) * 0.4;
+            const scoreA = computeMemoryScore({ item: a });
+            const scoreB = computeMemoryScore({ item: b });
             return scoreB - scoreA;
           });
           items = items.slice(0, limit);
@@ -961,6 +1004,49 @@ ${mem.long_term.length > 0 ? `Types: ${[...new Set(mem.long_term.map((i) => i.ty
         await writeMd(checkpointPath, lines.join("\n"));
 
         return textResult(`Checkpoint saved to memory/checkpoints/${dateStr}-${timeStr}.md`);
+      },
+    },
+
+    // Observer/Reflector compression tool
+    {
+      name: "memory_observe",
+      label: "Observe & Compress",
+      description:
+        "Compress recent conversation messages into compact observations. Runs heuristic compression to reduce context size while preserving critical information.",
+      parameters: MemoryObserveParams,
+      async execute(_id: string, params: Static<typeof MemoryObserveParams>) {
+        const log = await loadObservationLog(api, params.agent_id);
+
+        // Compress the summary as a set of pseudo-messages if provided
+        if (params.messages_summary) {
+          const messages = [
+            {
+              role: "assistant" as const,
+              content: params.messages_summary,
+              timestamp: new Date().toISOString(),
+            },
+          ];
+          const { observations, messagesCompressed, toolCallsCompressed } =
+            compressMessagesToObservations(messages, log.observations);
+
+          log.observations.push(...observations);
+          log.total_messages_compressed += messagesCompressed;
+          log.total_tool_calls_compressed += toolCallsCompressed;
+          log.last_observer_run_at = new Date().toISOString();
+        }
+
+        // Run reflector if observation count is high
+        if (log.observations.length > 100) {
+          log.observations = reflectObservations(log.observations);
+          log.last_reflector_run_at = new Date().toISOString();
+        }
+
+        await saveObservationLog(api, params.agent_id, log);
+
+        const formatted = formatObservationLog(log.observations);
+        return textResult(
+          `Observations: ${log.observations.length} items (${log.total_messages_compressed} messages, ${log.total_tool_calls_compressed} tool calls compressed)\n\n${formatted}`,
+        );
       },
     },
   ];
