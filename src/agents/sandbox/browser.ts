@@ -263,6 +263,10 @@ export async function ensureSandboxBrowser(params: {
     }
     args.push("-e", `OPENCLAW_BROWSER_VNC_PORT=${params.cfg.browser.vncPort}`);
     args.push("-e", `OPENCLAW_BROWSER_NOVNC_PORT=${params.cfg.browser.noVncPort}`);
+    // Chromium's setuid/namespace sandbox cannot work inside Docker containers
+    // (PID namespace creation requires privileges Docker does not grant by default).
+    // The container itself provides isolation, so --no-sandbox is safe here.
+    args.push("-e", "OPENCLAW_BROWSER_NO_SANDBOX=1");
     if (noVncEnabled && noVncPassword) {
       args.push("-e", `${NOVNC_PASSWORD_ENV_KEY}=${noVncPassword}`);
     }
