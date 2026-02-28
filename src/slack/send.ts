@@ -173,16 +173,40 @@ async function resolveChannelId(
   // files.uploadV2 → completeUploadExternal validates channel_id against
   // ^[CGDZ][A-Z0-9]{8,}$ and rejects U-prefixed IDs.  Always resolve user
   // IDs via conversations.open to obtain the DM channel ID.
-  const isUserId = recipient.kind === "user" || /^U[A-Z0-9]+$/i.test(recipient.id);
-  if (!isUserId) {
+  const isUserId = recipient.kind === "user" || /^U[A-Z0-9]{8,}$/i.test(recipient.id);
+  if (isUserId) {
+    const response = await client.conversations.open({ users: recipient.id });
+    const channelId = response.channel?.id;
+    if (!channelId) {
+      throw new Error("Failed to open Slack DM channel");
+    }
+    return { channelId, isDm: true };
+  }
+
+  // For channel targets, check if it's a valid channel ID (C-prefixed) or a channel name.
+  // If it's a channel name (not a valid ID), resolve it to a channel ID using conversations.lookupByName.
+  if (/^C[A-Z0-9]{8,}$/i.test(recipient.id)) {
     return { channelId: recipient.id };
   }
-  const response = await client.conversations.open({ users: recipient.id });
-  const channelId = response.channel?.id;
-  if (!channelId) {
-    throw new Error("Failed to open Slack DM channel");
+
+  // It's a channel name - resolve to channel ID using conversations.lookupByName
+  try {
+    // Use raw API call since lookupByName may not be in the TypeScript types
+    const response = (await client.apiCall("conversations.lookupByName", {
+      name: recipient.id,
+    })) as {
+      ok?: boolean;
+      channel?: { id?: string };
+    };
+    if (response.ok && response.channel?.id) {
+      return { channelId: response.channel.id };
+    }
+  } catch (error) {
+    // If lookup fails, the channel might not exist or bot doesn't have access.
+    // Return original ID and let Slack API handle the error.
+    console.error(`Failed to resolve Slack channel name "${recipient.id}":`, error);
   }
-  return { channelId, isDm: true };
+  return { channelId: recipient.id };
 }
 
 async function uploadSlackFile(params: {
