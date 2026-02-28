@@ -24,15 +24,35 @@ describe("restart-helper", () => {
 
   function expectWindowsRestartWaitOrdering(content: string) {
     const endCommand = 'schtasks /End /TN "';
-    const waitCommand = "timeout /t 3 /nobreak >nul";
+    const pollAttemptsInit = "set /a attempts=0";
+    const pollLabel = ":wait_for_port_release";
+    const pollAttemptIncrement = "set /a attempts+=1";
+    const pollNetstatCheck = 'netstat -ano | findstr /R /C:":18789 .*LISTENING" >nul';
+    const forceKillLabel = ":force_kill_listener";
+    const forceKillCommand = "taskkill /F /PID %%P >nul 2>&1";
+    const portReleasedLabel = ":port_released";
     const runCommand = 'schtasks /Run /TN "';
     const endIndex = content.indexOf(endCommand);
-    const waitIndex = content.indexOf(waitCommand, endIndex);
-    const runIndex = content.indexOf(runCommand, waitIndex);
+    const attemptsInitIndex = content.indexOf(pollAttemptsInit, endIndex);
+    const pollLabelIndex = content.indexOf(pollLabel, attemptsInitIndex);
+    const pollAttemptIncrementIndex = content.indexOf(pollAttemptIncrement, pollLabelIndex);
+    const pollNetstatCheckIndex = content.indexOf(pollNetstatCheck, pollAttemptIncrementIndex);
+    const forceKillLabelIndex = content.indexOf(forceKillLabel, pollNetstatCheckIndex);
+    const forceKillCommandIndex = content.indexOf(forceKillCommand, forceKillLabelIndex);
+    const portReleasedLabelIndex = content.indexOf(portReleasedLabel, forceKillCommandIndex);
+    const runIndex = content.indexOf(runCommand, portReleasedLabelIndex);
 
     expect(endIndex).toBeGreaterThanOrEqual(0);
-    expect(waitIndex).toBeGreaterThan(endIndex);
-    expect(runIndex).toBeGreaterThan(waitIndex);
+    expect(attemptsInitIndex).toBeGreaterThan(endIndex);
+    expect(pollLabelIndex).toBeGreaterThan(attemptsInitIndex);
+    expect(pollAttemptIncrementIndex).toBeGreaterThan(pollLabelIndex);
+    expect(pollNetstatCheckIndex).toBeGreaterThan(pollAttemptIncrementIndex);
+    expect(forceKillLabelIndex).toBeGreaterThan(pollNetstatCheckIndex);
+    expect(forceKillCommandIndex).toBeGreaterThan(forceKillLabelIndex);
+    expect(portReleasedLabelIndex).toBeGreaterThan(forceKillCommandIndex);
+    expect(runIndex).toBeGreaterThan(portReleasedLabelIndex);
+
+    expect(content).not.toContain("timeout /t 3 /nobreak >nul");
   }
 
   beforeEach(() => {
