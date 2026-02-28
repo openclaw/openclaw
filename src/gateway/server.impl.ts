@@ -710,7 +710,7 @@ export async function startGatewayServer(
     lifecycleWorkersPromise = (async () => {
       const { startMessageLifecycleWorkers } = await import("./server-message-lifecycle.js");
       lifecycleWorkers = await startMessageLifecycleWorkers({
-        cfg: cfgAtStart,
+        getCfg: loadConfig,
         log: log.child("message-lifecycle"),
       });
     })().catch((err) => log.error(`Message lifecycle workers failed: ${String(err)}`));

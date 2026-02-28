@@ -486,6 +486,28 @@ export async function recoverPendingDeliveries(opts: {
     }
   }
 
+  // Non-final outbox rows (tool/block dispatches) are never recovered — the parent turn
+  // will be replayed from scratch. Mark orphaned non-final rows as terminal so they
+  // don't accumulate unboundedly.
+  if (opts.startupCutoff !== undefined) {
+    const db = getLifecycleDb(opts.stateDir);
+    try {
+      db.prepare(
+        `UPDATE message_outbox
+           SET status='failed_terminal',
+               error_class='terminal',
+               terminal_reason='non-final dispatch pruned on recovery',
+               completed_at=?
+         WHERE status IN ('queued','failed_retryable')
+           AND dispatch_kind IS NOT NULL
+           AND dispatch_kind != 'final'
+           AND queued_at < ?`,
+      ).run(Date.now(), opts.startupCutoff);
+    } catch (err) {
+      logVerbose(`delivery-queue: non-final terminalization failed: ${String(err)}`);
+    }
+  }
+
   const pending = await loadPendingDeliveries(opts.stateDir, opts.startupCutoff);
 
   // Count entries excluded by the startup cutoff so the log reflects full activity.

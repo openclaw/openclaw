@@ -20,7 +20,8 @@ export type LifecycleWorkerHandle = {
 };
 
 type StartLifecycleWorkersParams = {
-  cfg: OpenClawConfig;
+  /** Live config getter — called on each worker pass so hot-reloaded values take effect. */
+  getCfg: () => OpenClawConfig;
   log: LifecycleWorkerLogger;
   stateDir?: string;
   outboxIntervalMs?: number;
@@ -54,7 +55,7 @@ export async function startMessageLifecycleWorkers(
     const summary = await recoverPendingDeliveries({
       deliver: deliverOutboundPayloads,
       log: outboxLog,
-      cfg: params.cfg,
+      cfg: params.getCfg(),
       stateDir: params.stateDir,
       maxRecoveryMs: Math.max(750, Math.floor(outboxIntervalMs * 0.75)),
       startupCutoff,
