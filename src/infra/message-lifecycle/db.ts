@@ -92,6 +92,14 @@ function registerCleanupHook(): void {
   process.once("exit", closeLifecycleDbCache);
 }
 
+/** True when the lifecycle DB for `stateDir` fell back to `:memory:`. */
+export function isLifecycleDbInMemory(stateDir?: string): boolean {
+  const base = stateDir ?? resolveStateDir();
+  const dbPath = path.resolve(path.join(base, DB_FILENAME));
+  // In-memory fallback uses `memory:${dbPath}` as cache key (see getLifecycleDb).
+  return DB_CACHE.has(`memory:${dbPath}`);
+}
+
 export function closeLifecycleDbCache(): void {
   for (const db of DB_CACHE.values()) {
     try {

@@ -4,7 +4,11 @@ import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveStateDir } from "../../config/paths.js";
 import { logVerbose } from "../../globals.js";
-import { getLifecycleDb, runLifecycleTransaction } from "../message-lifecycle/db.js";
+import {
+  getLifecycleDb,
+  isLifecycleDbInMemory,
+  runLifecycleTransaction,
+} from "../message-lifecycle/db.js";
 import { generateSecureUuid } from "../secure-random.js";
 import type { OutboundChannel } from "./targets.js";
 
@@ -326,6 +330,8 @@ export function isEntryEligibleForRecoveryRetry(
 export async function importLegacyFileQueue(stateDir?: string): Promise<void> {
   const queueDir = resolveQueueDir(stateDir);
   const db = getLifecycleDb(stateDir);
+  // Don't delete legacy files when the DB is in-memory; they'd be lost on restart.
+  const inMemory = isLifecycleDbInMemory(stateDir);
   let files: string[];
   try {
     files = fs.readdirSync(queueDir);
@@ -380,7 +386,9 @@ export async function importLegacyFileQueue(stateDir?: string): Promise<void> {
           entry.lastAttemptAt ?? null,
         );
       });
-      fs.unlinkSync(filePath);
+      if (!inMemory) {
+        fs.unlinkSync(filePath);
+      }
     } catch (err) {
       logVerbose(`delivery-queue: failed to import ${filePath}: ${String(err)}`);
     }
