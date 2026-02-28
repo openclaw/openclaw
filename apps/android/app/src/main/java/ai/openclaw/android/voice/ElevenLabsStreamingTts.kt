@@ -63,6 +63,8 @@ class ElevenLabsStreamingTts(
   private var client: OkHttpClient? = null
   @Volatile private var stopped = false
   @Volatile private var finished = false
+  @Volatile var hasReceivedAudio = false
+    private set
   private var drainJob: Job? = null
 
   // Track text already sent so we only send incremental chunks
@@ -77,6 +79,7 @@ class ElevenLabsStreamingTts(
   fun start() {
     stopped = false
     finished = false
+    hasReceivedAudio = false
     sentTextLength = 0
     trackStarted = false
     wsReady = false
@@ -199,6 +202,7 @@ class ElevenLabsStreamingTts(
   /**
    * Returns true if text was accepted, false if text diverged (caller should restart).
    */
+  @Synchronized
   fun sendText(fullText: String): Boolean {
     if (stopped) return false
     if (finished) return true  // Already finishing — not a diverge, don't restart
@@ -233,6 +237,7 @@ class ElevenLabsStreamingTts(
    * Signal that no more text is coming. Sends EOS to ElevenLabs.
    * The WebSocket will close after generating remaining audio.
    */
+  @Synchronized
   fun finish() {
     if (stopped || finished) return
     finished = true
@@ -278,6 +283,7 @@ class ElevenLabsStreamingTts(
     if (!trackStarted) {
       track.play()
       trackStarted = true
+      hasReceivedAudio = true
       Log.d(TAG, "AudioTrack started on first chunk")
     }
 

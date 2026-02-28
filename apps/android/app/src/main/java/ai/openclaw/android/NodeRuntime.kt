@@ -344,8 +344,11 @@ class NodeRuntime(context: Context) {
     MicCaptureManager(
       context = appContext,
       scope = scope,
-      sendToGateway = { message ->
+      sendToGateway = { message, onRunIdKnown ->
         val idempotencyKey = UUID.randomUUID().toString()
+        // Notify MicCaptureManager of the idempotency key *before* the network
+        // call so pendingRunId is set before any chat events can arrive.
+        onRunIdKnown(idempotencyKey)
         val params =
           buildJsonObject {
             put("sessionKey", JsonPrimitive(resolveMainSessionKey()))
@@ -374,6 +377,9 @@ class NodeRuntime(context: Context) {
 
   val micEnabled: StateFlow<Boolean>
     get() = micCapture.micEnabled
+
+  val micCooldown: StateFlow<Boolean>
+    get() = micCapture.micCooldown
 
   val micQueuedMessages: StateFlow<List<String>>
     get() = micCapture.queuedMessages
