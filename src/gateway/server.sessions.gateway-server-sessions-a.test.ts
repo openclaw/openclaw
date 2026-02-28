@@ -447,7 +447,13 @@ describe("gateway server sessions", () => {
     piSdkMock.models = [{ id: "gpt-test-a", name: "A", provider: "openai" }];
     const modelPatched = await rpcReq<{
       ok: true;
-      entry: { modelOverride?: string; providerOverride?: string };
+      entry: {
+        modelOverride?: string;
+        providerOverride?: string;
+        model?: string;
+        modelProvider?: string;
+      };
+      resolved?: { model?: string; modelProvider?: string };
     }>(ws, "sessions.patch", {
       key: "agent:main:main",
       model: "openai/gpt-test-a",
@@ -455,6 +461,20 @@ describe("gateway server sessions", () => {
     expect(modelPatched.ok).toBe(true);
     expect(modelPatched.payload?.entry.modelOverride).toBe("gpt-test-a");
     expect(modelPatched.payload?.entry.providerOverride).toBe("openai");
+    expect(modelPatched.payload?.entry.model).toBeUndefined();
+    expect(modelPatched.payload?.entry.modelProvider).toBeUndefined();
+    expect(modelPatched.payload?.resolved?.modelProvider).toBe("openai");
+    expect(modelPatched.payload?.resolved?.model).toBe("gpt-test-a");
+
+    const listAfterModelPatch = await rpcReq<{
+      sessions: Array<{ key: string; modelProvider?: string; model?: string }>;
+    }>(ws, "sessions.list", {});
+    expect(listAfterModelPatch.ok).toBe(true);
+    const mainAfterModelPatch = listAfterModelPatch.payload?.sessions.find(
+      (session) => session.key === "agent:main:main",
+    );
+    expect(mainAfterModelPatch?.modelProvider).toBe("openai");
+    expect(mainAfterModelPatch?.model).toBe("gpt-test-a");
 
     const compacted = await rpcReq<{ ok: true; compacted: boolean }>(ws, "sessions.compact", {
       key: "agent:main:main",
@@ -492,8 +512,8 @@ describe("gateway server sessions", () => {
     expect(reset.ok).toBe(true);
     expect(reset.payload?.key).toBe("agent:main:main");
     expect(reset.payload?.entry.sessionId).not.toBe("sess-main");
-    expect(reset.payload?.entry.modelProvider).toBe("anthropic");
-    expect(reset.payload?.entry.model).toBe("claude-sonnet-4-6");
+    expect(reset.payload?.entry.modelProvider).toBe("openai");
+    expect(reset.payload?.entry.model).toBe("gpt-test-a");
     const filesAfterReset = await fs.readdir(dir);
     expect(filesAfterReset.some((f) => f.startsWith("sess-main.jsonl.reset."))).toBe(true);
 
