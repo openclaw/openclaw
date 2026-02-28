@@ -40,7 +40,7 @@ export function createMcpBridgeService(pluginConfig?: unknown): OpenClawPluginSe
 
         try {
           ctx.logger.info(
-            `mcp-bridge: connecting to "${name}" (${serverConfig.transport}://${serverConfig.url ?? serverConfig.command})`,
+            `mcp-bridge: connecting to "${name}" (${serverConfig.url ?? serverConfig.command})`,
           );
           const conn = await connectMcpServer(name, serverConfig);
           connections.push(conn);
