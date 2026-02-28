@@ -31,21 +31,26 @@ import {
   ensureBindingsLoaded,
   rememberThreadBindingToken,
   normalizeTargetKind,
-  normalizeThreadBindingTtlMs,
+  normalizeThreadBindingDurationMs,
   normalizeThreadId,
   rememberRecentUnboundWebhookEcho,
   removeBindingRecord,
   resolveBindingIdsForSession,
   resolveBindingRecordKey,
-  resolveThreadBindingExpiresAt,
+  resolveThreadBindingIdleTimeoutMs,
+  resolveThreadBindingInactivityExpiresAt,
+  resolveThreadBindingMaxAgeExpiresAt,
+  resolveThreadBindingMaxAgeMs,
   resolveThreadBindingsPath,
   saveBindingsToDisk,
   setBindingRecord,
+  THREAD_BINDING_TOUCH_PERSIST_MIN_INTERVAL_MS,
   shouldDefaultPersist,
   resetThreadBindingsForTests,
 } from "./thread-bindings.state.js";
 import {
-  DEFAULT_THREAD_BINDING_TTL_MS,
+  DEFAULT_THREAD_BINDING_IDLE_TIMEOUT_MS,
+  DEFAULT_THREAD_BINDING_MAX_AGE_MS,
   THREAD_BINDINGS_SWEEP_INTERVAL_MS,
   type ThreadBindingManager,
   type ThreadBindingRecord,
@@ -62,15 +67,36 @@ function unregisterManager(accountId: string, manager: ThreadBindingManager) {
   }
 }
 
+function resolveEffectiveBindingExpiresAt(params: {
+  record: ThreadBindingRecord;
+  defaultIdleTimeoutMs: number;
+  defaultMaxAgeMs: number;
+}): number | undefined {
+  const inactivityExpiresAt = resolveThreadBindingInactivityExpiresAt({
+    record: params.record,
+    defaultIdleTimeoutMs: params.defaultIdleTimeoutMs,
+  });
+  const maxAgeExpiresAt = resolveThreadBindingMaxAgeExpiresAt({
+    record: params.record,
+    defaultMaxAgeMs: params.defaultMaxAgeMs,
+  });
+  if (inactivityExpiresAt != null && maxAgeExpiresAt != null) {
+    return Math.min(inactivityExpiresAt, maxAgeExpiresAt);
+  }
+  return inactivityExpiresAt ?? maxAgeExpiresAt;
+}
+
 function createNoopManager(accountIdRaw?: string): ThreadBindingManager {
   const accountId = normalizeAccountId(accountIdRaw);
   return {
     accountId,
-    getSessionTtlMs: () => DEFAULT_THREAD_BINDING_TTL_MS,
+    getIdleTimeoutMs: () => DEFAULT_THREAD_BINDING_IDLE_TIMEOUT_MS,
+    getMaxAgeMs: () => DEFAULT_THREAD_BINDING_MAX_AGE_MS,
     getByThreadId: () => undefined,
     getBySessionKey: () => undefined,
     listBySessionKey: () => [],
     listBindings: () => [],
+    touchThread: () => null,
     bindTarget: async () => null,
     unbindThread: () => null,
     unbindBySessionKey: () => [],
@@ -86,7 +112,10 @@ function toThreadBindingTargetKind(raw: BindingTargetKind): "subagent" | "acp" {
   return raw === "subagent" ? "subagent" : "acp";
 }
 
-function toSessionBindingRecord(record: ThreadBindingRecord): SessionBindingRecord {
+function toSessionBindingRecord(
+  record: ThreadBindingRecord,
+  defaults: { idleTimeoutMs: number; maxAgeMs: number },
+): SessionBindingRecord {
   const bindingId =
     resolveBindingRecordKey({
       accountId: record.accountId,
@@ -104,13 +133,26 @@ function toSessionBindingRecord(record: ThreadBindingRecord): SessionBindingReco
     },
     status: "active",
     boundAt: record.boundAt,
-    expiresAt: record.expiresAt,
+    expiresAt: resolveEffectiveBindingExpiresAt({
+      record,
+      defaultIdleTimeoutMs: defaults.idleTimeoutMs,
+      defaultMaxAgeMs: defaults.maxAgeMs,
+    }),
     metadata: {
       agentId: record.agentId,
       label: record.label,
       webhookId: record.webhookId,
       webhookToken: record.webhookToken,
       boundBy: record.boundBy,
+      lastActivityAt: record.lastActivityAt,
+      idleTimeoutMs: resolveThreadBindingIdleTimeoutMs({
+        record,
+        defaultIdleTimeoutMs: defaults.idleTimeoutMs,
+      }),
+      maxAgeMs: resolveThreadBindingMaxAgeMs({
+        record,
+        defaultMaxAgeMs: defaults.maxAgeMs,
+      }),
     },
   };
 }
@@ -137,7 +179,8 @@ export function createThreadBindingManager(
     token?: string;
     persist?: boolean;
     enableSweeper?: boolean;
-    sessionTtlMs?: number;
+    idleTimeoutMs?: number;
+    maxAgeMs?: number;
   } = {},
 ): ThreadBindingManager {
   ensureBindingsLoaded();
@@ -152,14 +195,22 @@ export function createThreadBindingManager(
 
   const persist = params.persist ?? shouldDefaultPersist();
   PERSIST_BY_ACCOUNT_ID.set(accountId, persist);
-  const sessionTtlMs = normalizeThreadBindingTtlMs(params.sessionTtlMs);
+  const idleTimeoutMs = normalizeThreadBindingDurationMs(
+    params.idleTimeoutMs,
+    DEFAULT_THREAD_BINDING_IDLE_TIMEOUT_MS,
+  );
+  const maxAgeMs = normalizeThreadBindingDurationMs(
+    params.maxAgeMs,
+    DEFAULT_THREAD_BINDING_MAX_AGE_MS,
+  );
   const resolveCurrentToken = () => getThreadBindingToken(accountId) ?? params.token;
 
   let sweepTimer: NodeJS.Timeout | null = null;
 
   const manager: ThreadBindingManager = {
     accountId,
-    getSessionTtlMs: () => sessionTtlMs,
+    getIdleTimeoutMs: () => idleTimeoutMs,
+    getMaxAgeMs: () => maxAgeMs,
     getByThreadId: (threadId) => {
       const key = resolveBindingRecordKey({
         accountId,
@@ -189,6 +240,35 @@ export function createThreadBindingManager(
     },
     listBindings: () =>
       [...BINDINGS_BY_THREAD_ID.values()].filter((entry) => entry.accountId === accountId),
+    touchThread: (touchParams) => {
+      const key = resolveBindingRecordKey({
+        accountId,
+        threadId: touchParams.threadId,
+      });
+      if (!key) {
+        return null;
+      }
+      const existing = BINDINGS_BY_THREAD_ID.get(key);
+      if (!existing || existing.accountId !== accountId) {
+        return null;
+      }
+      const now = Date.now();
+      const at =
+        typeof touchParams.at === "number" && Number.isFinite(touchParams.at)
+          ? Math.max(0, Math.floor(touchParams.at))
+          : now;
+      const nextRecord: ThreadBindingRecord = {
+        ...existing,
+        lastActivityAt: Math.max(existing.lastActivityAt || 0, at),
+      };
+      setBindingRecord(nextRecord);
+      if (touchParams.persist ?? persist) {
+        saveBindingsToDisk({
+          minIntervalMs: THREAD_BINDING_TOUCH_PERSIST_MIN_INTERVAL_MS,
+        });
+      }
+      return nextRecord;
+    },
     bindTarget: async (bindParams) => {
       let threadId = normalizeThreadId(bindParams.threadId);
       let channelId = bindParams.channelId?.trim() || "";
@@ -250,7 +330,7 @@ export function createThreadBindingManager(
         webhookToken = createdWebhook.webhookToken ?? "";
       }
 
-      const boundAt = Date.now();
+      const now = Date.now();
       const record: ThreadBindingRecord = {
         accountId,
         channelId,
@@ -262,8 +342,10 @@ export function createThreadBindingManager(
         webhookId: webhookId || undefined,
         webhookToken: webhookToken || undefined,
         boundBy: bindParams.boundBy?.trim() || "system",
-        boundAt,
-        expiresAt: sessionTtlMs > 0 ? boundAt + sessionTtlMs : undefined,
+        boundAt: now,
+        lastActivityAt: now,
+        idleTimeoutMs,
+        maxAgeMs,
       };
 
       setBindingRecord(record);
@@ -301,7 +383,14 @@ export function createThreadBindingManager(
         const farewell = resolveThreadBindingFarewellText({
           reason: unbindParams.reason,
           farewellText: unbindParams.farewellText,
-          sessionTtlMs,
+          idleTimeoutMs: resolveThreadBindingIdleTimeoutMs({
+            record: removed,
+            defaultIdleTimeoutMs: idleTimeoutMs,
+          }),
+          maxAgeMs: resolveThreadBindingMaxAgeMs({
+            record: removed,
+            defaultMaxAgeMs: maxAgeMs,
+          }),
         });
         // Use bot send path for farewell messages so unbound threads don't process
         // webhook echoes as fresh inbound turns when allowBots is enabled.
@@ -366,20 +455,50 @@ export function createThreadBindingManager(
         } catch {
           return;
         }
-        for (const binding of bindings) {
-          const expiresAt = resolveThreadBindingExpiresAt({
+        for (const snapshotBinding of bindings) {
+          // Re-read live state after any awaited work from earlier iterations.
+          // This avoids unbinding based on stale snapshot data when activity touches
+          // happen while the sweeper loop is in-flight.
+          const binding = manager.getByThreadId(snapshotBinding.threadId);
+          if (!binding) {
+            continue;
+          }
+          const now = Date.now();
+          const inactivityExpiresAt = resolveThreadBindingInactivityExpiresAt({
             record: binding,
-            sessionTtlMs,
+            defaultIdleTimeoutMs: idleTimeoutMs,
           });
-          if (expiresAt != null && Date.now() >= expiresAt) {
-            const ttlFromBinding = Math.max(0, expiresAt - binding.boundAt);
+          const maxAgeExpiresAt = resolveThreadBindingMaxAgeExpiresAt({
+            record: binding,
+            defaultMaxAgeMs: maxAgeMs,
+          });
+          const expirationCandidates: Array<{
+            reason: "idle-expired" | "max-age-expired";
+            at: number;
+          }> = [];
+          if (inactivityExpiresAt != null && now >= inactivityExpiresAt) {
+            expirationCandidates.push({ reason: "idle-expired", at: inactivityExpiresAt });
+          }
+          if (maxAgeExpiresAt != null && now >= maxAgeExpiresAt) {
+            expirationCandidates.push({ reason: "max-age-expired", at: maxAgeExpiresAt });
+          }
+          if (expirationCandidates.length > 0) {
+            expirationCandidates.sort((a, b) => a.at - b.at);
+            const reason = expirationCandidates[0]?.reason ?? "idle-expired";
             manager.unbindThread({
               threadId: binding.threadId,
-              reason: "ttl-expired",
+              reason,
               sendFarewell: true,
               farewellText: resolveThreadBindingFarewellText({
-                reason: "ttl-expired",
-                sessionTtlMs: ttlFromBinding,
+                reason,
+                idleTimeoutMs: resolveThreadBindingIdleTimeoutMs({
+                  record: binding,
+                  defaultIdleTimeoutMs: idleTimeoutMs,
+                }),
+                maxAgeMs: resolveThreadBindingMaxAgeMs({
+                  record: binding,
+                  defaultMaxAgeMs: maxAgeMs,
+                }),
               }),
             });
             continue;
@@ -479,19 +598,30 @@ export function createThreadBindingManager(
         boundBy,
         introText,
       });
-      return bound ? toSessionBindingRecord(bound) : null;
+      return bound
+        ? toSessionBindingRecord(bound, {
+            idleTimeoutMs,
+            maxAgeMs,
+          })
+        : null;
     },
     listBySession: (targetSessionKey) =>
-      manager.listBySessionKey(targetSessionKey).map(toSessionBindingRecord),
+      manager
+        .listBySessionKey(targetSessionKey)
+        .map((entry) => toSessionBindingRecord(entry, { idleTimeoutMs, maxAgeMs })),
     resolveByConversation: (ref) => {
       if (ref.channel !== "discord") {
         return null;
       }
       const binding = manager.getByThreadId(ref.conversationId);
-      return binding ? toSessionBindingRecord(binding) : null;
+      return binding ? toSessionBindingRecord(binding, { idleTimeoutMs, maxAgeMs }) : null;
     },
-    touch: () => {
-      // Thread bindings are activity-touched by inbound/outbound message flows.
+    touch: (bindingId, at) => {
+      const threadId = resolveThreadIdFromBindingId({ accountId, bindingId });
+      if (!threadId) {
+        return;
+      }
+      manager.touchThread({ threadId, at, persist: true });
     },
     unbind: async (input) => {
       if (input.targetSessionKey?.trim()) {
@@ -499,7 +629,7 @@ export function createThreadBindingManager(
           targetSessionKey: input.targetSessionKey,
           reason: input.reason,
         });
-        return removed.map(toSessionBindingRecord);
+        return removed.map((entry) => toSessionBindingRecord(entry, { idleTimeoutMs, maxAgeMs }));
       }
       const threadId = resolveThreadIdFromBindingId({
         accountId,
@@ -512,7 +642,7 @@ export function createThreadBindingManager(
         threadId,
         reason: input.reason,
       });
-      return removed ? [toSessionBindingRecord(removed)] : [];
+      return removed ? [toSessionBindingRecord(removed, { idleTimeoutMs, maxAgeMs })] : [];
     },
   });
 
