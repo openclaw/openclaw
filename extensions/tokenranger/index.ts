@@ -75,6 +75,7 @@ const tokenRangerPlugin = {
     api.on("before_agent_start", async (event) => {
       // Build session history from messages
       let sessionHistory = "";
+      let userTurnCount = 0;
       if (event.messages && Array.isArray(event.messages)) {
         const parts: string[] = [];
         for (const msg of event.messages) {
@@ -92,6 +93,9 @@ const tokenRangerPlugin = {
               .map((c) => (c.text as string) ?? "")
               .join(" ");
           }
+          if (role === "user") {
+            userTurnCount++;
+          }
           if (content && (role === "user" || role === "assistant")) {
             parts.push(`${role}: ${content}`);
           }
@@ -99,19 +103,37 @@ const tokenRangerPlugin = {
         sessionHistory = parts.join("\n\n");
       }
 
+      // Skip turn 1: let the initial prompt go directly to the API without
+      // compression. The first user message often contains critical constraints,
+      // formatting specs, and "don't do X" rules that are easily lost in
+      // summarization. Compression begins at turn 2+.
+      if (userTurnCount <= 1) {
+        api.logger.debug?.(
+          `[tokenranger] Skipping turn 1: sending initial prompt directly to API (${userTurnCount} user turn(s))`,
+        );
+        return;
+      }
+
+      // Strip code blocks (``` ... ```) from session history before compression.
+      // Code blocks must be preserved verbatim to maintain syntax/lint/convention;
+      // the SLM compressor can mangle indentation, quotes, and structure.
+      const historyForCompression = sessionHistory.replace(/```[\s\S]*?```/g, "");
+
       // Debug: log hook invocation details
       api.logger.debug?.(
         `[tokenranger] before_agent_start: ` +
           `messages=${event.messages?.length ?? 0}, ` +
+          `userTurns=${userTurnCount}, ` +
           `historyLen=${sessionHistory.length}, ` +
+          `afterCodeStrip=${historyForCompression.length}, ` +
           `minRequired=${cfg.minPromptLength}, ` +
           `prompt=${(event.prompt ?? "").substring(0, 80)}`,
       );
 
-      // Skip if history is too short to benefit from compression
-      if (sessionHistory.length < cfg.minPromptLength) {
+      // Skip if history (after code block removal) is too short to benefit
+      if (historyForCompression.length < cfg.minPromptLength) {
         api.logger.debug?.(
-          `[tokenranger] Skipping: history too short (${sessionHistory.length} < ${cfg.minPromptLength})`,
+          `[tokenranger] Skipping: history too short after code strip (${historyForCompression.length} < ${cfg.minPromptLength})`,
         );
         return;
       }
@@ -138,7 +160,7 @@ const tokenRangerPlugin = {
       try {
         const result = await compressContext({
           prompt: event.prompt ?? "",
-          sessionHistory,
+          sessionHistory: historyForCompression,
           serviceUrl: cfg.serviceUrl,
           timeoutMs: cfg.timeoutMs,
           strategyOverride,
