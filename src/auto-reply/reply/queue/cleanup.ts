@@ -1,5 +1,6 @@
 import { resolveEmbeddedSessionLane } from "../../../agents/pi-embedded.js";
 import { clearCommandLane } from "../../../process/command-queue.js";
+import { defaultRuntime } from "../../../runtime.js";
 import { clearFollowupQueue } from "./state.js";
 
 export type ClearSessionQueueResult = {
@@ -23,6 +24,12 @@ export function clearSessionQueues(keys: Array<string | undefined>): ClearSessio
     clearedKeys.push(cleaned);
     followupCleared += clearFollowupQueue(cleaned);
     laneCleared += clearCommandLane(resolveEmbeddedSessionLane(cleaned));
+  }
+
+  if (followupCleared > 0) {
+    defaultRuntime.error?.(
+      `followup queue: ${followupCleared} queued message(s) discarded on abort (keys=${clearedKeys.join(",")})`,
+    );
   }
 
   return { followupCleared, laneCleared, keys: clearedKeys };

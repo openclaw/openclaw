@@ -6,7 +6,6 @@ import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
-import { logVerbose } from "../../globals.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
 import { defaultRuntime } from "../../runtime.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
@@ -74,7 +73,9 @@ export function createFollowupRunner(params: {
     const shouldRouteToOriginating = isRoutableChannel(originatingChannel) && originatingTo;
 
     if (!shouldRouteToOriginating && !opts?.onBlockReply) {
-      logVerbose("followup queue: no onBlockReply handler; dropping payloads");
+      defaultRuntime.error?.(
+        `followup queue: no reply handler available; ${payloads.length} payload(s) dropped`,
+      );
       return;
     }
 
@@ -104,7 +105,7 @@ export function createFollowupRunner(params: {
         });
         if (!result.ok) {
           const errorMsg = result.error ?? "unknown error";
-          logVerbose(`followup queue: route-reply failed: ${errorMsg}`);
+          defaultRuntime.error?.(`followup queue: route-reply failed: ${errorMsg}`);
           // Fall back to the caller-provided dispatcher only when the
           // originating channel matches the session's message provider.
           // In that case onBlockReply was created by the same channel's
