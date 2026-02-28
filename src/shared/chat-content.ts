@@ -20,23 +20,33 @@ export function extractTextFromChatContent(
   }
 
   const chunks: string[] = [];
+  const thinkingChunks: string[] = [];
   for (const block of content) {
     if (!block || typeof block !== "object") {
       continue;
     }
-    if ((block as { type?: unknown }).type !== "text") {
-      continue;
-    }
-    const text = (block as { text?: unknown }).text;
-    if (typeof text !== "string") {
-      continue;
-    }
-    const value = opts?.sanitizeText ? opts.sanitizeText(text) : text;
-    if (value.trim()) {
-      chunks.push(value);
+    const blockType = (block as { type?: unknown }).type;
+    if (blockType === "text") {
+      const text = (block as { text?: unknown }).text;
+      if (typeof text !== "string") {
+        continue;
+      }
+      const value = opts?.sanitizeText ? opts.sanitizeText(text) : text;
+      if (value.trim()) {
+        chunks.push(value);
+      }
+    } else if (blockType === "thinking") {
+      const thinking = (block as { thinking?: unknown }).thinking;
+      if (typeof thinking === "string" && thinking.trim()) {
+        thinkingChunks.push(thinking);
+      }
     }
   }
 
-  const joined = normalize(chunks.join(joinWith));
+  // Prefer text blocks; fall back to thinking blocks when text is empty
+  // to avoid silently dropping content from models that place their
+  // response in thinking blocks (e.g. extended-thinking / high-thinking modes).
+  const source = chunks.length > 0 ? chunks : thinkingChunks;
+  const joined = normalize(source.join(joinWith));
   return joined ? joined : null;
 }
