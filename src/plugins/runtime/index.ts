@@ -31,6 +31,9 @@ function resolveVersion(): string {
 export function createPluginRuntime(): PluginRuntime {
   const runtime = {
     version: resolveVersion(),
+    agents: {
+      runEmbeddedPiAgent,
+    },
     config: createRuntimeConfig(),
     system: createRuntimeSystem(),
     media: createRuntimeMedia(),

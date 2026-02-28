@@ -27,6 +27,9 @@ export type PluginRuntimeCore = {
     getImageMetadata: typeof import("../../media/image-ops.js").getImageMetadata;
     resizeToJpeg: typeof import("../../media/image-ops.js").resizeToJpeg;
   };
+  agents: {
+    runEmbeddedPiAgent: typeof import("../../agents/pi-embedded.js").runEmbeddedPiAgent;
+  };
   tts: {
     textToSpeechTelephony: typeof import("../../tts/tts.js").textToSpeechTelephony;
   };
