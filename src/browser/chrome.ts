@@ -6,6 +6,7 @@ import WebSocket from "ws";
 import { ensurePortAvailable } from "../infra/ports.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { CONFIG_DIR } from "../utils.js";
+import { isRunningInContainer } from "./chrome.platform.js";
 import { appendCdpPath } from "./cdp.helpers.js";
 import { getHeadersWithAuth, normalizeCdpWsUrl } from "./cdp.js";
 import {
@@ -206,7 +207,7 @@ export async function launchOpenClawChrome(
       args.push("--headless=new");
       args.push("--disable-gpu");
     }
-    if (resolved.noSandbox) {
+    if (resolved.noSandbox || (process.platform === "linux" && isRunningInContainer())) {
       args.push("--no-sandbox");
       args.push("--disable-setuid-sandbox");
     }
@@ -285,6 +286,22 @@ export async function launchOpenClawChrome(
   }
 
   const proc = spawnOnce();
+
+  // Collect Chrome stderr so we can surface it in the timeout error message.
+  const stderrLines: string[] = [];
+  proc.stderr?.on("data", (chunk: Buffer) => {
+    const lines = String(chunk).split(/\r?\n/).filter(Boolean);
+    for (const line of lines) {
+      // Keep only lines that look like errors/warnings to avoid flooding logs.
+      if (/error|fatal|fail|crash|sandbox|zygote|gpu|signal/i.test(line)) {
+        stderrLines.push(line);
+        if (stderrLines.length > 20) {
+          stderrLines.shift();
+        }
+      }
+    }
+  });
+
   // Wait for CDP to come up.
   const readyDeadline = Date.now() + 15_000;
   while (Date.now() < readyDeadline) {
@@ -300,9 +317,18 @@ export async function launchOpenClawChrome(
     } catch {
       // ignore
     }
-    throw new Error(
+    const diagLines: string[] = [
       `Failed to start Chrome CDP on port ${profile.cdpPort} for profile "${profile.name}".`,
-    );
+    ];
+    if (stderrLines.length > 0) {
+      diagLines.push(`Chrome stderr:\n${stderrLines.map((l) => `  ${l}`).join("\n")}`);
+    }
+    if (process.platform === "linux" && !resolved.noSandbox) {
+      diagLines.push(
+        'Hint: on Linux (especially containers/CentOS), try setting browser.noSandbox: true in your config.',
+      );
+    }
+    throw new Error(diagLines.join("\n"));
   }
 
   const pid = proc.pid ?? -1;
