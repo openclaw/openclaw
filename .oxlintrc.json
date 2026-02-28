@@ -26,6 +26,7 @@
     "assets/",
     "dist/",
     "docs/_layouts/",
+    "examples/",
     "extensions/",
     "node_modules/",
     "patches/",
