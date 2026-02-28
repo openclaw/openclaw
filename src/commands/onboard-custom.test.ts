@@ -259,7 +259,7 @@ describe("promptCustomApiConfig", () => {
 
     const promise = runPromptCustomApi(prompter);
 
-    await vi.advanceTimersByTimeAsync(30_000);
+    await vi.advanceTimersByTimeAsync(120_000);
     await promise;
 
     expect(prompter.text).toHaveBeenCalledTimes(6);

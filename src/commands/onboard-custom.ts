@@ -18,7 +18,7 @@ import type { SecretInputMode } from "./onboard-types.js";
 const DEFAULT_OLLAMA_BASE_URL = "http://127.0.0.1:11434/v1";
 const DEFAULT_CONTEXT_WINDOW = 4096;
 const DEFAULT_MAX_TOKENS = 4096;
-const VERIFY_TIMEOUT_MS = 30_000;
+const VERIFY_TIMEOUT_MS = 120_000;
 
 /**
  * Detects if a URL is from Azure AI Foundry or Azure OpenAI.
