@@ -80,11 +80,28 @@ function detectContentType(buffer: Buffer): string {
     ) {
       return "image/webp";
     }
-    // MP4
+    // M4A/AAC - check brand at bytes 8-11 (M4A , M4AE, M4AP, etc.)
+    // Must check BEFORE generic MP4 since both have 'ftyp' at bytes 4-7
+    if (buffer.length >= 12) {
+      if (buffer[4] === 0x66 && buffer[5] === 0x74 && buffer[6] === 0x79 && buffer[7] === 0x70) {
+        // M4A brands at bytes 8-11
+        const brand = String.fromCharCode(buffer[8], buffer[9], buffer[10], buffer[11]);
+        if (
+          brand === "M4A " ||
+          brand === "M4AE" ||
+          brand === "M4AP" ||
+          brand === "M4BP" ||
+          brand === "M4VP"
+        ) {
+          return "audio/mp4";
+        }
+      }
+    }
+    // MP4 (generic video)
     if (buffer[4] === 0x66 && buffer[5] === 0x74 && buffer[6] === 0x79 && buffer[7] === 0x70) {
       return "video/mp4";
     }
-    // M4A/AAC
+    // Legacy M4A check (fallback for short buffers)
     if (buffer[0] === 0x00 && buffer[1] === 0x00 && buffer[2] === 0x00) {
       if (buffer[4] === 0x66 && buffer[5] === 0x74 && buffer[6] === 0x79 && buffer[7] === 0x70) {
         return "audio/mp4";
