@@ -17,9 +17,10 @@ import type {
   AgentMessage,
   AgentState,
   AgentTool,
+  StreamFn,
   ThinkingLevel,
+  ToolResultCompressionOptions,
 } from "@mariozechner/pi-agent-core";
-import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { AssistantMessage, ImageContent } from "@mariozechner/pi-ai";
 import { getModel, streamSimple } from "@mariozechner/pi-ai";
 import { agentLoop, agentLoopContinue } from "./agent-loop.js";
@@ -39,6 +40,14 @@ export interface IrisAgentOptions {
   thinkingBudgets?: Record<string, number>;
   transport?: "sse" | "stream";
   maxRetryDelayMs?: number;
+  /** Per-tool execution timeout in ms. 0 or undefined = no timeout. */
+  toolTimeoutMs?: number;
+  /** Tool result cache TTL in ms. -1 = session-scoped. 0 or undefined = disabled. */
+  toolCacheMs?: number;
+  /** Max tools executed simultaneously. Default: 5. */
+  maxParallelTools?: number;
+  /** Age-based tool result compression. undefined = defaults on. false = disabled. */
+  toolResultCompression?: ToolResultCompressionOptions | false;
 }
 
 function defaultConvertToLlm(messages: AgentMessage[]) {
@@ -74,6 +83,10 @@ export class IrisAgent {
   private _thinkingBudgets?: Record<string, number>;
   private _transport: "sse" | "stream";
   private _maxRetryDelayMs?: number;
+  private _toolTimeoutMs?: number;
+  private _toolCacheMs?: number;
+  private _maxParallelTools?: number;
+  private _toolResultCompression?: ToolResultCompressionOptions | false;
   private runningPrompt?: Promise<void>;
   private resolveRunningPrompt?: () => void;
 
@@ -91,6 +104,10 @@ export class IrisAgent {
     this._thinkingBudgets = opts.thinkingBudgets;
     this._transport = opts.transport ?? "sse";
     this._maxRetryDelayMs = opts.maxRetryDelayMs;
+    this._toolTimeoutMs = opts.toolTimeoutMs;
+    this._toolCacheMs = opts.toolCacheMs;
+    this._maxParallelTools = opts.maxParallelTools;
+    this._toolResultCompression = opts.toolResultCompression;
   }
 
   // ─── State accessors ────────────────────────────────────────────────────────
@@ -334,6 +351,10 @@ export class IrisAgent {
         return this._dequeueSteeringMessages();
       },
       getFollowUpMessages: async () => this._dequeueFollowUpMessages(),
+      toolTimeoutMs: this._toolTimeoutMs,
+      toolCacheMs: this._toolCacheMs,
+      maxParallelTools: this._maxParallelTools,
+      toolResultCompression: this._toolResultCompression,
     } as AgentLoopConfig;
 
     let partial: AssistantMessage | null = null;
