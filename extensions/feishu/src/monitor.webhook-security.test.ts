@@ -263,4 +263,40 @@ describe("Feishu webhook security hardening", () => {
       await monitorPromise;
     }
   });
+
+  it("does not refetch bot info after a failed sequential preflight", async () => {
+    const started: string[] = [];
+    let releaseBetaProbe!: () => void;
+    const betaProbeReleased = new Promise<void>((resolve) => {
+      releaseBetaProbe = () => resolve();
+    });
+
+    probeFeishuMock.mockImplementation(async (account: { accountId: string }) => {
+      started.push(account.accountId);
+      if (account.accountId === "alpha") {
+        return { ok: false };
+      }
+      await betaProbeReleased;
+      return { ok: true, botOpenId: `bot_${account.accountId}` };
+    });
+
+    const abortController = new AbortController();
+    const monitorPromise = monitorFeishuProvider({
+      config: buildMultiAccountWebsocketConfig(["alpha", "beta"]),
+      abortSignal: abortController.signal,
+    });
+
+    try {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(started).toEqual(["alpha", "beta"]);
+      expect(started.filter((accountId) => accountId === "alpha")).toHaveLength(1);
+    } finally {
+      releaseBetaProbe();
+      abortController.abort();
+      await monitorPromise;
+    }
+  });
 });
