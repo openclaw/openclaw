@@ -165,6 +165,52 @@ def _normalize_open_order_type(order_type_value):
     return OpenOrderType.MARKET.value
 
 
+def _canon_component_name(name):
+    return "".join(ch for ch in str(name or "") if ch.isalnum()).lower()
+
+
+def _get_open_trade_abi_components(ostium_client):
+    contract_abi = getattr(ostium_client.ostium_trading_contract, "abi", None)
+    if not isinstance(contract_abi, list):
+        raise ValueError("Could not inspect openTrade ABI on ostium_trading_contract.")
+
+    for abi_item in contract_abi:
+        if (
+            isinstance(abi_item, dict)
+            and abi_item.get("type") == "function"
+            and abi_item.get("name") == "openTrade"
+        ):
+            inputs = abi_item.get("inputs", [])
+            if not isinstance(inputs, list) or len(inputs) < 2:
+                continue
+            trade_components = inputs[0].get("components", [])
+            builder_components = inputs[1].get("components", [])
+            if isinstance(trade_components, list) and isinstance(builder_components, list):
+                return trade_components, builder_components
+
+    raise ValueError("openTrade ABI definition not found in ostium_trading_contract.")
+
+
+def _build_struct_tuple(components, value_map, label):
+    values = []
+    missing = []
+    for component in components:
+        component_name = component.get("name") if isinstance(component, dict) else None
+        canonical = _canon_component_name(component_name)
+        if canonical not in value_map:
+            missing.append(str(component_name))
+            continue
+        values.append(value_map[canonical])
+
+    if missing:
+        known = ", ".join(sorted(value_map.keys()))
+        raise ValueError(
+            f"Unsupported {label} ABI components: missing mapping for {', '.join(missing)}; "
+            f"known mapped fields: {known}"
+        )
+    return tuple(values)
+
+
 def _extract_order_id_from_price_requested(ostium_client, trade_receipt):
     order_id = None
     price_requested_signature = ostium_client.web3.keccak(
@@ -206,39 +252,73 @@ def _perform_open_trade_explicit_tuple(sdk, trade_params, at_price):
     if order_type_enum != OpenOrderType.MARKET.value:
         slippage = 0
 
-    trade_tuple = (
-        int(convert_to_scaled_integer(trade_params["collateral"], precision=5, scale=6)),
-        int(convert_to_scaled_integer(at_price)),
-        int(convert_to_scaled_integer(tp_price)),
-        int(convert_to_scaled_integer(sl_price)),
-        account.address,
-        int(to_base_units(trade_params["leverage"], decimals=2)),
-        int(trade_params["asset_type"]),
-        0,
-        bool(trade_params["direction"]),
-    )
+    trade_components, builder_components = _get_open_trade_abi_components(ostium_client)
 
-    builder_fee_tuple = _normalize_builder_fee_params(ostium_client, trade_params)
+    scaled_collateral = int(convert_to_scaled_integer(trade_params["collateral"], precision=5, scale=6))
+    scaled_open_price = int(convert_to_scaled_integer(at_price))
+    scaled_tp = int(convert_to_scaled_integer(tp_price))
+    scaled_sl = int(convert_to_scaled_integer(sl_price))
+    scaled_leverage = int(to_base_units(trade_params["leverage"], decimals=2))
+    pair_index = int(trade_params["asset_type"])
+    trade_index = 0
+    is_buy = bool(trade_params["direction"])
 
-    if ostium_client.use_delegation and "trader_address" in trade_params:
-        trader_address = trade_params["trader_address"]
+    trade_value_map = {
+        "collateral": scaled_collateral,
+        "openprice": scaled_open_price,
+        "tp": scaled_tp,
+        "sl": scaled_sl,
+        "trader": account.address,
+        "traderaddress": account.address,
+        "leverage": scaled_leverage,
+        "pairindex": pair_index,
+        "pairid": pair_index,
+        "pair": pair_index,
+        "index": trade_index,
+        "tradeindex": trade_index,
+        "buy": is_buy,
+        "islong": is_buy,
+        "direction": is_buy,
+    }
+
+    builder_address, builder_fee_value = _normalize_builder_fee_params(ostium_client, trade_params)
+    builder_value_map = {
+        "builder": builder_address,
+        "builderaddress": builder_address,
+        "builderfee": int(builder_fee_value),
+    }
+
+    trade_tuple = _build_struct_tuple(trade_components, trade_value_map, "Trade")
+    builder_fee_tuple = _build_struct_tuple(builder_components, builder_value_map, "BuilderFee")
+
+    component_names = [component.get("name") for component in trade_components]
+    builder_component_names = [component.get("name") for component in builder_components]
+
+    try:
         open_trade_func = ostium_client.ostium_trading_contract.functions.openTrade(
             trade_tuple,
             builder_fee_tuple,
             order_type_enum,
             slippage,
         )
-        inner_encoded_data = open_trade_func.build_transaction({"gas": 0})["data"]
+        # Validate ABI encoding before attempting tx build/send.
+        open_trade_func._encode_transaction_data()
+    except Exception as error:
+        raise ValueError(
+            "openTrade ABI preflight failed. "
+            f"tradeComponents={component_names}; builderComponents={builder_component_names}; "
+            f"tradeTuple={trade_tuple}; builderFeeTuple={builder_fee_tuple}; "
+            f"orderType={order_type_enum}; slippage={slippage}; rawError={str(error)}"
+        ) from error
+
+    if ostium_client.use_delegation and "trader_address" in trade_params:
+        trader_address = trade_params["trader_address"]
+        inner_encoded_data = open_trade_func._encode_transaction_data()
         trade_tx = ostium_client.ostium_trading_contract.functions.delegatedAction(
             trader_address, inner_encoded_data
         ).build_transaction({"from": account.address})
     else:
-        trade_tx = ostium_client.ostium_trading_contract.functions.openTrade(
-            trade_tuple,
-            builder_fee_tuple,
-            order_type_enum,
-            slippage,
-        ).build_transaction({"from": account.address})
+        trade_tx = open_trade_func.build_transaction({"from": account.address})
 
     trade_tx["nonce"] = ostium_client.get_nonce(account.address)
     signed_tx = ostium_client.web3.eth.account.sign_transaction(
