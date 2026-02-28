@@ -77,6 +77,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Dashboard/Sessions: allow authenticated Control UI clients to delete and patch sessions while still blocking regular webchat clients from session mutation RPCs, fixing Dashboard session delete failures. (#21264) Thanks @jskoiz.
 - Podman/Quadlet setup: fix `sed` escaping and UID mismatch in Podman Quadlet setup. (#26414) Thanks @KnHack and @vincentkoc.
 - Browser/Navigate: resolve the correct `targetId` in navigate responses after renderer swaps. (#25326) Thanks @stone-jin and @vincentkoc.
 - Agents/Ollama discovery: skip Ollama discovery when explicit models are configured. (#28827) Thanks @Kansodata and @vincentkoc.
