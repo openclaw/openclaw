@@ -243,7 +243,13 @@ function renderGroupedMessage(
   const extractedText = extractTextCached(message);
   const extractedThinking =
     opts.showReasoning && role === "assistant" ? extractThinkingCached(message) : null;
-  const markdownBase = extractedText?.trim() ? extractedText : null;
+
+  // Tool result messages often contain the tool output as plain extracted text.
+  // When we also render tool cards, showing that extracted text produces duplicated,
+  // poorly-formatted "code" blobs in the chat bubble.
+  // Prefer the tool cards (which render output in monospace + sidebar fences).
+  const markdownBase =
+    isToolResult && hasToolCards ? null : extractedText?.trim() ? extractedText : null;
   const reasoningMarkdown = extractedThinking ? formatReasoningMarkdown(extractedThinking) : null;
   const markdown = markdownBase;
   const canCopyMarkdown = role === "assistant" && Boolean(markdown?.trim());

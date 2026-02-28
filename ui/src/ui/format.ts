@@ -58,3 +58,37 @@ export function parseList(input: string): string[] {
 export function stripThinkingTags(value: string): string {
   return stripReasoningTagsFromText(value, { mode: "preserve", trim: "start" });
 }
+
+// ANSI/control-character sanitization
+//
+// Tool outputs (especially CLI commands) often include ANSI escape sequences for colors,
+// cursor movement, etc. Those can render as noisy "[31m" fragments in the web UI,
+// and they can also confuse markdown (e.g. `src/**/*.test.ts`).
+//
+// We strip ANSI and normalize newlines for consistent display across OS/tooling.
+
+export function stripAnsi(value: string): string {
+  // Based on the widely-used strip-ansi patterns (CSI + OSC).
+  // - CSI: ESC [ ... cmd
+  // - OSC: ESC ] ... BEL or ST
+  const csi = /[\u001B\u009B][[\]()#;?]*(?:\d{1,4}(?:;\d{0,4})*)?[0-9A-ORZcf-nq-uy=><]/g;
+  const osc = /\u001B\][^\u0007]*(?:\u0007|\u001B\\)/g;
+  return value.replace(osc, "").replace(csi, "");
+}
+
+export function normalizeTerminalText(value: string): string {
+  // Normalize Windows newlines and progress-style CR updates.
+  let out = value.replaceAll("\r\n", "\n").replaceAll("\r", "\n");
+
+  // First pass: remove proper ANSI sequences (ESC-prefixed).
+  out = stripAnsi(out);
+
+  // Second pass: some pipelines drop the ESC char but leave the rest of the SGR sequence,
+  // resulting in noisy fragments like "[31m" in the UI. Strip those too.
+  // Only remove sequences that start with '[' followed by digits/semicolons and a final letter.
+  out = out.replace(/\[(?:\d{1,4}(?:;\d{0,4})*)[A-Za-z]/g, "");
+
+  // Drop other control chars (keep \n and \t).
+  out = out.replace(/[\u0000-\u0008\u000B-\u001A\u001C-\u001F\u007F]/g, "");
+  return out;
+}

@@ -552,6 +552,72 @@ export function wrapToolParamNormalization(
   };
 }
 
+function toTrimmedStringOrNull(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const trimmed = value.trim();
+  return trimmed ? trimmed : null;
+}
+
+function limitDiffText(text: string, opts?: { maxChars?: number; maxLines?: number }): string {
+  const maxChars = Math.max(1000, opts?.maxChars ?? 40_000);
+  const maxLines = Math.max(50, opts?.maxLines ?? 400);
+  const normalized = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  const lines = normalized.split("\n");
+  const slicedLines = lines.slice(0, maxLines);
+  let out = slicedLines.join("\n");
+  let truncated = slicedLines.length < lines.length;
+  if (out.length > maxChars) {
+    out = out.slice(0, maxChars);
+    truncated = true;
+  }
+  if (truncated) {
+    out += "\n\n… (diff truncated)";
+  }
+  return out;
+}
+
+function buildEditUnifiedDiff(params: Record<string, unknown>): string | null {
+  const filePath = toTrimmedStringOrNull(params.path ?? params.file_path);
+  const oldText = toTrimmedStringOrNull(params.oldText ?? params.old_string);
+  const newText = toTrimmedStringOrNull(params.newText ?? params.new_string);
+  if (oldText === null || newText === null) {
+    return null;
+  }
+
+  const safePath = (filePath ?? "<unknown>").replace(/\\/g, "/");
+  const oldLimited = limitDiffText(oldText);
+  const newLimited = limitDiffText(newText);
+
+  const oldLines = oldLimited.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
+  const newLines = newLimited.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
+
+  // This is a "display diff" (not a minimal patch). It’s meant to be readable in the UI.
+  const body = [...oldLines.map((l) => `-${l}`), ...newLines.map((l) => `+${l}`)].join("\n");
+  return `--- a/${safePath}\n+++ b/${safePath}\n@@\n${body}`;
+}
+
+export function createOpenClawEditTool(base: AnyAgentTool): AnyAgentTool {
+  return {
+    ...base,
+    execute: async (toolCallId, params, signal, onUpdate) => {
+      const normalized = normalizeToolParams(params);
+      const record =
+        normalized ??
+        (params && typeof params === "object" ? (params as Record<string, unknown>) : undefined);
+      const diff = record ? buildEditUnifiedDiff(record) : null;
+      const result = await base.execute(toolCallId, normalized ?? params, signal, onUpdate);
+      if (!diff) {
+        return result;
+      }
+      const existing = getToolResultText(result);
+      const nextText = existing?.trim() ? `${existing}\n\n${diff}` : diff;
+      return withToolResultText(result, nextText);
+    },
+  };
+}
+
 export function wrapToolWorkspaceRootGuard(tool: AnyAgentTool, root: string): AnyAgentTool {
   return wrapToolWorkspaceRootGuardWithOptions(tool, root);
 }
@@ -664,7 +730,8 @@ export function createSandboxedEditTool(params: SandboxToolParams) {
   const base = createEditTool(params.root, {
     operations: createSandboxEditOperations(params),
   }) as unknown as AnyAgentTool;
-  return wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.edit);
+  const normalized = wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.edit);
+  return createOpenClawEditTool(normalized);
 }
 
 export function createHostWorkspaceWriteTool(root: string, options?: { workspaceOnly?: boolean }) {
@@ -678,7 +745,8 @@ export function createHostWorkspaceEditTool(root: string, options?: { workspaceO
   const base = createEditTool(root, {
     operations: createHostEditOperations(root, options),
   }) as unknown as AnyAgentTool;
-  return wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.edit);
+  const normalized = wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.edit);
+  return createOpenClawEditTool(normalized);
 }
 
 export function createOpenClawReadTool(

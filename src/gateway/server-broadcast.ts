@@ -1,5 +1,6 @@
 import { MAX_BUFFERED_BYTES } from "./server-constants.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
+import { GATEWAY_CLIENT_CAPS, hasGatewayClientCap } from "./protocol/client-info.js";
 import { logWs, shouldLogWs, summarizeAgentEventForWsLog } from "./ws-log.js";
 
 const ADMIN_SCOPE = "operator.admin";
@@ -97,6 +98,18 @@ export function createGatewayBroadcaster(params: { clients: Set<GatewayWsClient>
       if (!hasEventScope(c, event)) {
         continue;
       }
+
+      // Tool streams can be noisy and may include sensitive output.
+      // Only deliver tool agent events to clients that explicitly opt in.
+      if (event === "agent") {
+        const payloadAny = payload as { stream?: unknown } | null;
+        if (payloadAny && typeof payloadAny === "object" && payloadAny.stream === "tool") {
+          if (!hasGatewayClientCap(c.connect.caps, GATEWAY_CLIENT_CAPS.TOOL_EVENTS)) {
+            continue;
+          }
+        }
+      }
+
       const slow = c.socket.bufferedAmount > MAX_BUFFERED_BYTES;
       if (slow && opts?.dropIfSlow) {
         continue;

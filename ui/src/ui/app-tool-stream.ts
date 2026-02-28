@@ -1,4 +1,4 @@
-import { truncateText } from "./format.ts";
+import { normalizeTerminalText, truncateText } from "./format.ts";
 
 const TOOL_STREAM_LIMIT = 50;
 const TOOL_STREAM_THROTTLE_MS = 80;
@@ -161,11 +161,39 @@ function formatToolOutput(value: unknown): string | null {
       text = String(value);
     }
   }
-  const truncated = truncateText(text, TOOL_OUTPUT_CHAR_LIMIT);
+  const normalized = normalizeTerminalText(text);
+  const truncated = truncateText(normalized, TOOL_OUTPUT_CHAR_LIMIT);
   if (!truncated.truncated) {
     return truncated.text;
   }
   return `${truncated.text}\n\n… truncated (${truncated.total} chars, showing first ${truncated.text.length}).`;
+}
+
+function formatEditDiff(args: unknown): string | null {
+  if (!args || typeof args !== "object") {
+    return null;
+  }
+  const a = args as Record<string, unknown>;
+  const path = typeof a.path === "string" ? a.path : typeof a.file_path === "string" ? a.file_path : null;
+  const oldText =
+    typeof a.oldText === "string" ? a.oldText : typeof a.old_string === "string" ? a.old_string : null;
+  const newText =
+    typeof a.newText === "string" ? a.newText : typeof a.new_string === "string" ? a.new_string : null;
+  if (oldText === null || newText === null) {
+    return null;
+  }
+
+  const normalize = (s: string) => s.replaceAll("\r\n", "\n").replaceAll("\r", "\n");
+  const oldLines = normalize(oldText).split("\n");
+  const newLines = normalize(newText).split("\n");
+
+  const headerPath = (path ?? "<unknown>").replaceAll("\\", "/");
+  const body = [
+    ...oldLines.map((l) => `-${l}`),
+    ...newLines.map((l) => `+${l}`),
+  ].join("\n");
+
+  return `--- a/${headerPath}\n+++ b/${headerPath}\n@@\n${body}`;
 }
 
 function buildToolStreamMessage(entry: ToolStreamEntry): Record<string, unknown> {
@@ -301,16 +329,23 @@ function resolveAcceptedSession(
   },
 ): { accepted: boolean; sessionKey?: string } {
   const sessionKey = typeof payload.sessionKey === "string" ? payload.sessionKey : undefined;
-  if (sessionKey && sessionKey !== host.sessionKey) {
+
+  // Prefer session-scoped routing when available: tool/lifecycle events may carry a runId
+  // that differs from the client-side chatRunId, but still belong to the active session.
+  if (sessionKey) {
+    if (sessionKey !== host.sessionKey) {
+      return { accepted: false };
+    }
+    if (host.chatRunId) {
+      return { accepted: true, sessionKey };
+    }
+    if (options?.allowSessionScopedWhenIdle) {
+      return { accepted: true, sessionKey };
+    }
     return { accepted: false };
   }
-  if (!host.chatRunId && options?.allowSessionScopedWhenIdle && sessionKey) {
-    return { accepted: true, sessionKey };
-  }
-  // Fallback: only accept session-less events for the active run.
-  if (!sessionKey && host.chatRunId && payload.runId !== host.chatRunId) {
-    return { accepted: false };
-  }
+
+  // Legacy fallback: session-less events must match the active run.
   if (host.chatRunId && payload.runId !== host.chatRunId) {
     return { accepted: false };
   }
@@ -414,7 +449,15 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
   }
   const name = typeof data.name === "string" ? data.name : "tool";
   const phase = typeof data.phase === "string" ? data.phase : "";
-  const args = phase === "start" ? data.args : undefined;
+
+  const argsCandidate =
+    data.args ??
+    // some providers/bridges may use different field names
+    data.arguments ??
+    data.params;
+  const args =
+    argsCandidate && typeof argsCandidate === "object" ? (argsCandidate as Record<string, unknown>) : undefined;
+
   const output =
     phase === "update"
       ? formatToolOutput(data.partialResult)
@@ -447,6 +490,15 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
       entry.output = output || undefined;
     }
     entry.updatedAt = now;
+  }
+
+  // Some tools (notably `edit`) often return empty output even on success.
+  // To keep the UI informative, synthesize a diff-like preview from args.
+  if (phase === "result" && (!entry.output || entry.output.trim() === "") && entry.name === "edit") {
+    const diff = formatEditDiff(entry.args);
+    if (diff) {
+      entry.output = diff;
+    }
   }
 
   entry.message = buildToolStreamMessage(entry);

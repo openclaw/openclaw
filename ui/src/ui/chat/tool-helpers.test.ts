@@ -37,25 +37,43 @@ describe("tool-helpers", () => {
       expect(result).toContain('"inner"');
     });
 
-    it("returns plain text for non-JSON content", () => {
+    it("wraps plain text output in a text code block", () => {
       const input = "This is plain text output";
       const result = formatToolOutputForSidebar(input);
 
-      expect(result).toBe("This is plain text output");
+      expect(result).toBe(`\`\`\`text
+This is plain text output
+\`\`\``);
     });
 
-    it("returns as-is for invalid JSON starting with {", () => {
+    it("formats unified diffs as diff code blocks", () => {
+      const input = `--- a/file.txt
++++ b/file.txt
+@@
+-old
++new`;
+      const result = formatToolOutputForSidebar(input);
+      expect(result.startsWith("```diff\n")).toBe(true);
+      expect(result).toContain("-old");
+      expect(result).toContain("+new");
+    });
+
+    it("wraps invalid JSON starting with { in a text code block", () => {
       const input = "{not valid json";
       const result = formatToolOutputForSidebar(input);
 
-      expect(result).toBe("{not valid json");
+      expect(result).toBe(`\`\`\`text
+{not valid json
+\`\`\``);
     });
 
-    it("returns as-is for invalid JSON starting with [", () => {
+    it("wraps invalid JSON starting with [ in a text code block", () => {
       const input = "[not valid json";
       const result = formatToolOutputForSidebar(input);
 
-      expect(result).toBe("[not valid json");
+      expect(result).toBe(`\`\`\`text
+[not valid json
+\`\`\``);
     });
 
     it("trims whitespace before detecting JSON", () => {
@@ -66,6 +84,22 @@ describe("tool-helpers", () => {
       expect(result).toContain('"trimmed"');
     });
 
+    it("strips ANSI sequences", () => {
+      const input = "\u001b[31mRED\u001b[0m";
+      const result = formatToolOutputForSidebar(input);
+      expect(result).toBe(`\`\`\`text
+RED
+\`\`\``);
+    });
+
+    it("strips orphaned SGR fragments when ESC is missing", () => {
+      const input = "[1m[46m RUN [49m[22m hello [0m";
+      const result = formatToolOutputForSidebar(input);
+      expect(result).toBe(`\`\`\`text
+ RUN  hello 
+\`\`\``);
+    });
+
     it("handles empty string", () => {
       const result = formatToolOutputForSidebar("");
       expect(result).toBe("");
@@ -74,6 +108,13 @@ describe("tool-helpers", () => {
     it("handles whitespace-only string", () => {
       const result = formatToolOutputForSidebar("   ");
       expect(result).toBe("   ");
+    });
+
+    it("does not let markdown eat glob patterns", () => {
+      const input = "include: src/**/*.test.ts";
+      const result = formatToolOutputForSidebar(input);
+      expect(result).toContain("src/**/*.test.ts");
+      expect(result.startsWith("```text\n")).toBe(true);
     });
   });
 
@@ -116,13 +157,6 @@ describe("tool-helpers", () => {
       expect(result.endsWith("…")).toBe(false);
     });
 
-    it("handles single line within limits", () => {
-      const input = "Single line";
-      const result = getTruncatedPreview(input);
-
-      expect(result).toBe("Single line");
-    });
-
     it("handles empty string", () => {
       const result = getTruncatedPreview("");
       expect(result).toBe("");
@@ -136,6 +170,12 @@ describe("tool-helpers", () => {
 
       expect(result.length).toBe(101); // 100 + ellipsis
       expect(result.endsWith("…")).toBe(true);
+    });
+
+    it("normalizes CRLF and strips ANSI", () => {
+      const input = "A\r\n\u001b[32mB\u001b[0m";
+      const result = getTruncatedPreview(input);
+      expect(result).toBe("A\nB");
     });
   });
 });
