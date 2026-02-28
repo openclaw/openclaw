@@ -8,7 +8,12 @@
     "noEmitOnError": true,
     "outDir": "dist/plugin-sdk",
     "rootDir": "src",
-    "tsBuildInfoFile": "dist/plugin-sdk/.tsbuildinfo"
+    "tsBuildInfoFile": "dist/plugin-sdk/.tsbuildinfo",
+    "paths": {
+      "openclaw/plugin-sdk": ["./src/plugin-sdk/index.ts"],
+      "openclaw/plugin-sdk/*": ["./src/plugin-sdk/*.ts"],
+      "openclaw/plugin-sdk/account-id": ["./src/plugin-sdk/account-id.ts"]
+    }
   },
   "include": ["src/plugin-sdk/index.ts", "src/plugin-sdk/account-id.ts", "src/types/**/*.d.ts"],
   "exclude": ["node_modules", "dist", "src/**/*.test.ts"]
