@@ -14,6 +14,8 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Gateway/Config migration: auto-seed `gateway.controlUi.allowedOrigins` for existing `bind=lan` / `bind=custom` installs that upgrade to v2026.2.26+ without the required origins set. These installs crash-loop immediately after upgrade with no recovery path (issue #29385). The migration seeds the same defaults the onboarding wizard now produces; existing `allowedOrigins` and `dangerouslyAllowHostHeaderOriginFallback` values are never overwritten.
+
 - Feishu/Local media sends: propagate `mediaLocalRoots` through Feishu outbound media sending into `loadWebMedia` so local path attachments work with post-CVE local-root enforcement. (#27884) Thanks @joelnishanth.
 - Security/Feishu webhook ingress: bound unauthenticated webhook rate-limit state with stale-window pruning and a hard key cap to prevent unbounded pre-auth memory growth from rotating source keys. (#26050) Thanks @bmendonca3.
 - Telegram/Reply media context: include replied media files in inbound context when replying to media, defer reply-media downloads to debounce flush, gate reply-media fetch behind DM authorization, and preserve replied media when non-vision sticker fallback runs (including cached-sticker paths). (#28488) Thanks @obviyus.

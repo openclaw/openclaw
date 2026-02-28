@@ -411,6 +411,62 @@ export function normalizeCompatibilityConfigValues(cfg: OpenClawConfig): {
 
   normalizeBrowserSsrFPolicyAlias();
 
+  // Migration: seed gateway.controlUi.allowedOrigins for existing non-loopback installs.
+  //
+  // v2026.2.26 added a startup guard that requires gateway.controlUi.allowedOrigins (or
+  // the host-header fallback flag) whenever the gateway binds to a non-loopback address.
+  // The onboarding wizard was updated to seed this for new installs, but existing
+  // bind=lan/bind=custom installs that upgrade get no migration and crash-loop immediately
+  // with no recovery hint (issue #29385).
+  //
+  // We auto-migrate here: if bind is non-loopback and neither allowedOrigins nor the
+  // fallback flag is already set, we seed allowedOrigins to the same defaults the
+  // onboarding wizard would have produced (localhost + 127.0.0.1 + the bind host if custom).
+  const migrateControlUiAllowedOrigins = (): void => {
+    const bind = next.gateway?.bind;
+    const isNonLoopback = bind === "lan" || bind === "tailnet" || bind === "custom";
+    if (!isNonLoopback) {
+      return;
+    }
+    const controlUi = next.gateway?.controlUi;
+    const alreadyHasOrigins =
+      Array.isArray(controlUi?.allowedOrigins) && controlUi.allowedOrigins.length > 0;
+    const alreadyHasFallback = controlUi?.dangerouslyAllowHostHeaderOriginFallback === true;
+    if (alreadyHasOrigins || alreadyHasFallback) {
+      return;
+    }
+    // Seed the same defaults as onboarding: localhost + 127.0.0.1 + custom bind host (if any).
+    const port: number = next.gateway?.port ?? 18789;
+    const origins = new Set<string>([`http://localhost:${port}`, `http://127.0.0.1:${port}`]);
+    if (bind === "custom") {
+      const customHost = next.gateway?.customBindHost;
+      if (customHost) {
+        origins.add(`http://${customHost}:${port}`);
+      }
+    } else if (bind === "lan") {
+      // For bind=lan, also include the machine's gateway port on the LAN interface.
+      // The host-header fallback would normally handle this, but seeding localhost
+      // ensures the Control UI is at minimum reachable from the host itself.
+    }
+    next = {
+      ...next,
+      gateway: {
+        ...next.gateway,
+        controlUi: {
+          ...controlUi,
+          allowedOrigins: [...origins],
+        },
+      },
+    };
+    changes.push(
+      `Seeded gateway.controlUi.allowedOrigins ${JSON.stringify([...origins])} for bind=${bind} (required since v2026.2.26). ` +
+        "If you need to reach the Control UI from another machine, add its origin to gateway.controlUi.allowedOrigins " +
+        "or set gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true.",
+    );
+  };
+
+  migrateControlUiAllowedOrigins();
+
   const legacyAckReaction = cfg.messages?.ackReaction?.trim();
   const hasWhatsAppConfig = cfg.channels?.whatsapp !== undefined;
   if (legacyAckReaction && hasWhatsAppConfig) {

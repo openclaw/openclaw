@@ -298,3 +298,97 @@ describe("normalizeCompatibilityConfigValues", () => {
     );
   });
 });
+
+describe("controlUi.allowedOrigins migration (issue #29385)", () => {
+  it("seeds allowedOrigins for bind=lan with no existing controlUi config", () => {
+    const res = normalizeCompatibilityConfigValues({
+      gateway: {
+        bind: "lan",
+        auth: { mode: "token", token: "tok" },
+      },
+    });
+    expect(res.config.gateway?.controlUi?.allowedOrigins).toEqual([
+      "http://localhost:18789",
+      "http://127.0.0.1:18789",
+    ]);
+    expect(res.changes.some((c) => c.includes("gateway.controlUi.allowedOrigins"))).toBe(true);
+    expect(res.changes.some((c) => c.includes("bind=lan"))).toBe(true);
+  });
+
+  it("seeds allowedOrigins using configured port", () => {
+    const res = normalizeCompatibilityConfigValues({
+      gateway: {
+        bind: "lan",
+        port: 9000,
+        auth: { mode: "token", token: "tok" },
+      },
+    });
+    expect(res.config.gateway?.controlUi?.allowedOrigins).toEqual([
+      "http://localhost:9000",
+      "http://127.0.0.1:9000",
+    ]);
+  });
+
+  it("seeds allowedOrigins including custom bind host for bind=custom", () => {
+    const res = normalizeCompatibilityConfigValues({
+      gateway: {
+        bind: "custom",
+        customBindHost: "192.168.1.100",
+        auth: { mode: "token", token: "tok" },
+      },
+    });
+    expect(res.config.gateway?.controlUi?.allowedOrigins).toContain("http://192.168.1.100:18789");
+    expect(res.config.gateway?.controlUi?.allowedOrigins).toContain("http://localhost:18789");
+  });
+
+  it("does not overwrite existing allowedOrigins", () => {
+    const existingOrigins = ["https://control.example.com"];
+    const res = normalizeCompatibilityConfigValues({
+      gateway: {
+        bind: "lan",
+        auth: { mode: "token", token: "tok" },
+        controlUi: { allowedOrigins: existingOrigins },
+      },
+    });
+    expect(res.config.gateway?.controlUi?.allowedOrigins).toEqual(existingOrigins);
+    expect(res.changes.some((c) => c.includes("gateway.controlUi.allowedOrigins"))).toBe(false);
+  });
+
+  it("does not overwrite when dangerouslyAllowHostHeaderOriginFallback is set", () => {
+    const res = normalizeCompatibilityConfigValues({
+      gateway: {
+        bind: "lan",
+        auth: { mode: "token", token: "tok" },
+        controlUi: { dangerouslyAllowHostHeaderOriginFallback: true },
+      },
+    });
+    expect(res.config.gateway?.controlUi?.allowedOrigins).toBeUndefined();
+    expect(res.changes.some((c) => c.includes("gateway.controlUi.allowedOrigins"))).toBe(false);
+  });
+
+  it("does not touch loopback bind", () => {
+    const res = normalizeCompatibilityConfigValues({
+      gateway: {
+        bind: "loopback",
+        auth: { mode: "token", token: "tok" },
+      },
+    });
+    expect(res.config.gateway?.controlUi?.allowedOrigins).toBeUndefined();
+    expect(res.changes.some((c) => c.includes("gateway.controlUi.allowedOrigins"))).toBe(false);
+  });
+
+  it("preserves existing controlUi fields when seeding allowedOrigins", () => {
+    const res = normalizeCompatibilityConfigValues({
+      gateway: {
+        bind: "lan",
+        auth: { mode: "token", token: "tok" },
+        controlUi: { basePath: "/app" },
+      },
+    });
+    expect(res.config.gateway?.controlUi?.basePath).toBe("/app");
+    expect(res.config.gateway?.controlUi?.allowedOrigins).toEqual([
+      "http://localhost:18789",
+      "http://127.0.0.1:18789",
+    ]);
+  });
+});
