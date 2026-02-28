@@ -19,7 +19,7 @@ import {
   handleSendChat as handleSendChatInternal,
   removeQueuedMessage as removeQueuedMessageInternal,
 } from "./app-chat.ts";
-import { DEFAULT_CRON_FORM, DEFAULT_LOG_LEVEL_FILTERS } from "./app-defaults.ts";
+import { DEFAULT_CRON_FORM } from "./app-defaults.ts";
 import type { EventLogEntry } from "./app-events.ts";
 import { connectGateway as connectGatewayInternal } from "./app-gateway.ts";
 import {
@@ -363,9 +363,7 @@ export class OpenClawApp extends LitElement {
   @state() logsFile: string | null = null;
   @state() logsEntries: LogEntry[] = [];
   @state() logsFilterText = "";
-  @state() logsLevelFilters: Record<LogLevel, boolean> = {
-    ...DEFAULT_LOG_LEVEL_FILTERS,
-  };
+  @state() logsLevelFilters: Record<LogLevel, boolean> = this.settings.logsLevelFilters;
   @state() logsAutoFollow = true;
   @state() logsTruncated = false;
   @state() logsCursor: number | null = null;

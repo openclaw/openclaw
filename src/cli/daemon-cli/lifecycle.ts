@@ -63,7 +63,7 @@ export async function runDaemonStop(opts: DaemonLifecycleOptions = {}) {
 }
 
 /**
- * Restart the gateway service service.
+ * Restart the gateway service.
  * @returns `true` if restart succeeded, `false` if the service was not loaded.
  * Throws/exits on check or restart failures.
  */
