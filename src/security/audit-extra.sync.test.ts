@@ -1,5 +1,24 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+
+// @mariozechner/pi-coding-agent uses 'strip-ansi' which is a missing transitive
+// dep in the published package. Mock the module so the test worker can load the
+// source files under test without triggering the broken import chain:
+// audit-extra.sync → agents/sandbox → sandbox/context → agents/skills →
+// agents/skills/workspace → @mariozechner/pi-coding-agent → bash-executor → strip-ansi
+vi.mock("@mariozechner/pi-coding-agent", () => ({
+  CURRENT_SESSION_VERSION: 1,
+  SessionManager: vi.fn(),
+  codingTools: [],
+  createReadTool: vi.fn(),
+  createEditTool: vi.fn(),
+  createWriteTool: vi.fn(),
+  readTool: {},
+  formatSkillsForPrompt: vi.fn(() => ""),
+  loadSkillsFromDir: vi.fn(async () => []),
+  estimateTokens: vi.fn(() => 0),
+  generateSummary: vi.fn(async () => ""),
+}));
 import {
   collectAttackSurfaceSummaryFindings,
   collectExposureMatrixFindings,

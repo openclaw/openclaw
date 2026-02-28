@@ -10,6 +10,25 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 
+// @mariozechner/pi-coding-agent uses 'strip-ansi' which is a missing transitive
+// dep in the published package. Mock to prevent load-time failure via the
+// context → browser → (transitive) → pi-coding-agent chain.
+vi.mock("@mariozechner/pi-coding-agent", () => ({
+  CURRENT_SESSION_VERSION: 1,
+  SessionManager: vi.fn(),
+  AuthStorage: vi.fn(),
+  ModelRegistry: vi.fn(),
+  codingTools: [],
+  createReadTool: vi.fn(),
+  createEditTool: vi.fn(),
+  createWriteTool: vi.fn(),
+  readTool: {},
+  formatSkillsForPrompt: vi.fn(() => ""),
+  loadSkillsFromDir: vi.fn(async () => []),
+  estimateTokens: vi.fn(() => 0),
+  generateSummary: vi.fn(async () => ""),
+}));
+
 // Make maybePruneSandboxes hang forever to simulate a stuck Docker daemon.
 vi.mock("./prune.js", () => ({
   maybePruneSandboxes: vi.fn(
