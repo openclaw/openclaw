@@ -21,7 +21,7 @@ enum WatchMessagingError: LocalizedError {
 }
 
 @MainActor
-final class WatchMessagingService: NSObject, WatchMessagingServicing {
+final class WatchMessagingService: NSObject, @preconcurrency WatchMessagingServicing {
     private static let logger = Logger(subsystem: "ai.openclaw", category: "watch.messaging")
     private let session: WCSession?
     private var pendingActivationContinuations: [CheckedContinuation<Void, Never>] = []

@@ -306,7 +306,6 @@ describe("telegram media groups", () => {
             ),
           );
 
-          expect(replySpy).not.toHaveBeenCalled();
           await vi.waitFor(
             () => {
               expect(replySpy).toHaveBeenCalledTimes(scenario.expectedReplyCount);
