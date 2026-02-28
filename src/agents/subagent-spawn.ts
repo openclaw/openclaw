@@ -78,9 +78,9 @@ export function splitModelRef(ref?: string) {
   if (!trimmed) {
     return { provider: undefined, model: undefined };
   }
-  const [provider, model] = trimmed.split("/", 2);
-  if (model) {
-    return { provider, model };
+  const slashIndex = trimmed.indexOf("/");
+  if (slashIndex !== -1) {
+    return { provider: trimmed.slice(0, slashIndex), model: trimmed.slice(slashIndex + 1) };
   }
   return { provider: undefined, model: trimmed };
 }
@@ -408,6 +408,10 @@ export async function spawnSubagentDirect(
         provider: primaryProvider ?? "",
         model: primaryModel ?? "",
         fallbacksOverride: resolvedFallbacks,
+        // Any error (including non-failover errors like invalid model names)
+        // may trigger the next fallback candidate. This is intentional: align
+        // with runWithModelFallback's "any error may be transient" philosophy.
+        // The trade-off is slightly higher latency for misconfigured models.
         run: async (_provider, _model) => {
           const candidateModel = `${_provider}/${_model}`;
           await callGateway({

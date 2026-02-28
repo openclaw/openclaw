@@ -252,6 +252,8 @@ describe("sessions_spawn depth + child limits", () => {
     callGatewayMock.mockImplementation(async (opts: unknown) => {
       const req = opts as { method?: string; params?: { model?: string } };
       if (req.method === "sessions.patch" && req.params?.model) {
+        // Reject any model patch: with fallback candidates the default model
+        // would also be tried, so we must reject all model-bearing patches.
         throw new Error(`invalid model: ${req.params.model}`);
       }
       if (req.method === "agent") {
