@@ -373,16 +373,13 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
 
   const toolProgressConfig = cfg.messages?.toolProgress;
   const toolProgressEnabled = toolProgressConfig?.enabled === true;
-  // Honor replyToMode: only thread progress if already in a thread or mode threads replies.
-  const slackProgressThreadTs =
-    ctx.replyToMode === "off" ? incomingThreadTs : (incomingThreadTs ?? messageTs);
   const toolProgressController = createToolProgressController({
     enabled: toolProgressEnabled,
     adapter: {
       send: async (text) => {
         const result = await ctx.app.client.chat.postMessage({
           channel: message.channel,
-          thread_ts: slackProgressThreadTs,
+          thread_ts: statusThreadTs,
           text,
         });
         return result.ts;
