@@ -277,6 +277,122 @@ describe("chat abort transcript persistence", () => {
     });
   });
 
+  it("persists full composed text (prior segments + current) on run-scoped abort (#28180)", async () => {
+    const { transcriptPath, sessionId } = await createTranscriptFixture(
+      "openclaw-chat-abort-run-prior-",
+    );
+    const runId = "idem-abort-run-prior";
+    const respond = vi.fn();
+    const context = createChatAbortContext({
+      chatAbortControllers: new Map([[runId, createActiveRun("main", sessionId)]]),
+      // Current buffer only has the post-tool-call segment.
+      chatRunBuffers: new Map([[runId, "Here are the results."]]),
+      // Prior segment has the pre-tool-call text.
+      chatPriorSegments: new Map([[runId, "Sure, let me check."]]),
+      chatDeltaSentAt: new Map([[runId, Date.now()]]),
+      removeChatRun: vi
+        .fn()
+        .mockReturnValue({ sessionKey: "main", clientRunId: "client-idem-abort-run-prior" }),
+      agentRunSeq: new Map<string, number>([[runId, 2]]),
+      broadcast: vi.fn(),
+      nodeSendToSession: vi.fn(),
+      logGateway: { warn: vi.fn() },
+    });
+
+    await invokeChatAbort(context, { sessionKey: "main", runId }, respond);
+
+    const [ok1, payload1] = respond.mock.calls.at(-1) ?? [];
+    expect(ok1).toBe(true);
+    expect(payload1).toMatchObject({ aborted: true, runIds: [runId] });
+
+    const lines = await readTranscriptLines(transcriptPath);
+    const persisted = lines
+      .map((line) => line.message)
+      .find((message) => message?.idempotencyKey === `${runId}:assistant`);
+
+    expect(persisted).toBeDefined();
+    // The persisted transcript message must contain both pre- and post-tool-call text.
+    const content = persisted?.content;
+    expect(Array.isArray(content)).toBe(true);
+    const textBlock = (content as Array<{ type: string; text?: string }>).find(
+      (b) => b.type === "text",
+    );
+    expect(textBlock?.text).toBe("Sure, let me check.\n\nHere are the results.");
+  });
+
+  it("persists full composed text (prior segments + current) on session-scoped abort (#28180)", async () => {
+    const { transcriptPath, sessionId } = await createTranscriptFixture(
+      "openclaw-chat-abort-session-prior-",
+    );
+    const respond = vi.fn();
+    const context = createChatAbortContext({
+      chatAbortControllers: new Map([["run-c", createActiveRun("main", sessionId)]]),
+      chatRunBuffers: new Map([["run-c", "Continuing after tool."]]),
+      chatPriorSegments: new Map([["run-c", "Pre-tool segment."]]),
+      chatDeltaSentAt: new Map([["run-c", Date.now()]]),
+    });
+
+    await invokeChatAbort(context, { sessionKey: "main" }, respond);
+
+    const [ok, payload] = respond.mock.calls.at(-1) ?? [];
+    expect(ok).toBe(true);
+    expect(payload).toMatchObject({ aborted: true });
+
+    const lines = await readTranscriptLines(transcriptPath);
+    const persisted = lines
+      .map((line) => line.message)
+      .find((message) => message?.idempotencyKey === "run-c:assistant");
+
+    expect(persisted).toBeDefined();
+    const content = persisted?.content;
+    expect(Array.isArray(content)).toBe(true);
+    const textBlock = (content as Array<{ type: string; text?: string }>).find(
+      (b) => b.type === "text",
+    );
+    expect(textBlock?.text).toBe("Pre-tool segment.\n\nContinuing after tool.");
+  });
+
+  it("persists only prior segment text when current buffer is empty on run-scoped abort (#28180)", async () => {
+    const { transcriptPath, sessionId } = await createTranscriptFixture(
+      "openclaw-chat-abort-run-prior-only-",
+    );
+    const runId = "idem-abort-run-prior-only";
+    const respond = vi.fn();
+    const context = createChatAbortContext({
+      chatAbortControllers: new Map([[runId, createActiveRun("main", sessionId)]]),
+      // No current buffer — aborted exactly at the tool-call boundary.
+      chatRunBuffers: new Map(),
+      chatPriorSegments: new Map([[runId, "Pre-tool text only."]]),
+      chatDeltaSentAt: new Map([[runId, Date.now()]]),
+      removeChatRun: vi
+        .fn()
+        .mockReturnValue({ sessionKey: "main", clientRunId: "client-prior-only" }),
+      agentRunSeq: new Map<string, number>([[runId, 1]]),
+      broadcast: vi.fn(),
+      nodeSendToSession: vi.fn(),
+      logGateway: { warn: vi.fn() },
+    });
+
+    await invokeChatAbort(context, { sessionKey: "main", runId }, respond);
+
+    const [ok1, payload1] = respond.mock.calls.at(-1) ?? [];
+    expect(ok1).toBe(true);
+    expect(payload1).toMatchObject({ aborted: true, runIds: [runId] });
+
+    const lines = await readTranscriptLines(transcriptPath);
+    const persisted = lines
+      .map((line) => line.message)
+      .find((message) => message?.idempotencyKey === `${runId}:assistant`);
+
+    expect(persisted).toBeDefined();
+    const content = persisted?.content;
+    expect(Array.isArray(content)).toBe(true);
+    const textBlock = (content as Array<{ type: string; text?: string }>).find(
+      (b) => b.type === "text",
+    );
+    expect(textBlock?.text).toBe("Pre-tool text only.");
+  });
+
   it("skips run-scoped transcript persistence when partial text is blank", async () => {
     const { transcriptPath, sessionId } = await createTranscriptFixture(
       "openclaw-chat-abort-run-blank-",

@@ -388,6 +388,7 @@ function appendAssistantTranscriptMessage(params: {
 function collectSessionAbortPartials(params: {
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
   chatRunBuffers: Map<string, string>;
+  chatPriorSegments: Map<string, string>;
   sessionKey: string;
   abortOrigin: AbortOrigin;
 }): AbortedPartialSnapshot[] {
@@ -396,7 +397,12 @@ function collectSessionAbortPartials(params: {
     if (active.sessionKey !== params.sessionKey) {
       continue;
     }
-    const text = params.chatRunBuffers.get(runId);
+    const current = params.chatRunBuffers.get(runId) ?? "";
+    const prior = params.chatPriorSegments.get(runId);
+    // Compose full run text (prior segments + current buffer) so that text
+    // accumulated before tool-call boundaries is included in the transcript,
+    // matching what clients already saw via delta broadcasts (#28180).
+    const text = prior && current ? `${prior}\n\n${current}` : (prior ?? current);
     if (!text || !text.trim()) {
       continue;
     }
@@ -467,6 +473,7 @@ function abortChatRunsForSessionKeyWithPartials(params: {
   const snapshots = collectSessionAbortPartials({
     chatAbortControllers: params.context.chatAbortControllers,
     chatRunBuffers: params.context.chatRunBuffers,
+    chatPriorSegments: params.context.chatPriorSegments,
     sessionKey: params.sessionKey,
     abortOrigin: params.abortOrigin,
   });
@@ -645,7 +652,15 @@ export const chatHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const partialText = context.chatRunBuffers.get(runId);
+    const currentBuffer = context.chatRunBuffers.get(runId) ?? "";
+    const prior = context.chatPriorSegments.get(runId);
+    // Compose full run text (prior segments + current buffer) so that text
+    // accumulated before tool-call boundaries is included in the transcript,
+    // matching what clients already saw via delta broadcasts (#28180).
+    const partialText =
+      prior && currentBuffer
+        ? `${prior}\n\n${currentBuffer}`
+        : (prior ?? currentBuffer) || undefined;
     const res = abortChatRunById(ops, {
       runId,
       sessionKey: rawSessionKey,
