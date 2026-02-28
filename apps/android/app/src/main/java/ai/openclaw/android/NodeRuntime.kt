@@ -20,6 +20,7 @@ import ai.openclaw.android.gateway.probeGatewayTlsFingerprint
 import ai.openclaw.android.node.*
 import ai.openclaw.android.protocol.OpenClawCanvasA2UIAction
 import ai.openclaw.android.voice.MicCaptureManager
+import ai.openclaw.android.voice.TalkModeManager
 import ai.openclaw.android.voice.VoiceConversationEntry
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -318,6 +319,18 @@ class NodeRuntime(context: Context) {
       json = json,
       supportsChatSubscribe = false,
     )
+  private val voiceReplySpeaker: TalkModeManager by lazy {
+    // Reuse the existing TalkMode speech engine (ElevenLabs + deterministic system-TTS fallback)
+    // without enabling the legacy talk capture loop.
+    TalkModeManager(
+      context = appContext,
+      scope = scope,
+      session = operatorSession,
+      supportsChatSubscribe = false,
+      isConnected = { operatorConnected },
+    )
+  }
+
   private val micCapture: MicCaptureManager by lazy {
     MicCaptureManager(
       context = appContext,
@@ -334,6 +347,9 @@ class NodeRuntime(context: Context) {
           }
         val response = operatorSession.request("chat.send", params.toString())
         parseChatSendRunId(response) ?: idempotencyKey
+      },
+      speakAssistantReply = { text ->
+        voiceReplySpeaker.speakAssistantReply(text)
       },
     )
   }
