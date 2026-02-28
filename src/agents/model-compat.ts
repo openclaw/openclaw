@@ -28,6 +28,18 @@ function isAnthropicMessagesModel(model: Model<Api>): model is Model<"anthropic-
 function normalizeAnthropicBaseUrl(baseUrl: string): string {
   return baseUrl.replace(/\/v1\/?$/, "");
 }
+/**
+ * pi-ai constructs the OpenAI-compatible API endpoint as `${baseUrl}/chat/completions`.
+ * If a user configures `baseUrl` with a trailing `/v1` (e.g. "https://api.n1n.ai/v1"),
+ * the resulting URL becomes "…/v1/chat/completions/chat/completions" which causes a 404.
+ *
+ * Strip a single trailing `/v1` (with optional trailing slash) from the
+ * baseUrl for openai-completions models so users with either format work.
+ */
+function normalizeOpenAiCompletionsBaseUrl(baseUrl: string): string {
+  return baseUrl.replace(/\/v1\/?$/, "");
+}
+
 export function normalizeModelCompat(model: Model<Api>): Model<Api> {
   const baseUrl = model.baseUrl ?? "";
 
@@ -37,6 +49,15 @@ export function normalizeModelCompat(model: Model<Api>): Model<Api> {
     const normalised = normalizeAnthropicBaseUrl(baseUrl);
     if (normalised !== baseUrl) {
       return { ...model, baseUrl: normalised } as Model<"anthropic-messages">;
+    }
+  }
+
+  // Normalise openai-completions baseUrl: strip trailing /v1 that users may
+  // have included in their config. pi-ai appends /chat/completions itself.
+  if (isOpenAiCompletionsModel(model) && baseUrl) {
+    const normalised = normalizeOpenAiCompletionsBaseUrl(baseUrl);
+    if (normalised !== baseUrl) {
+      return { ...model, baseUrl: normalised } as Model<"openai-completions">;
     }
   }
 
