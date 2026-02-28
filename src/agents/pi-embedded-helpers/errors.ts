@@ -843,10 +843,16 @@ export function isImageSizeError(errorMessage?: string): boolean {
  * SSE `data:` lines or splits them via raw newlines in thinking_delta content.
  * The Anthropic SDK's `JSON.parse(sse.data)` throws, killing the entire stream.
  */
-export function isLikelySSEParseError(errorMessage?: string, errorStack?: string): boolean {
+export function isLikelySSEParseError(
+  errorMessage?: string,
+  errorStackOrOpts?: string | { streamingContext?: boolean },
+): boolean {
   if (!errorMessage) {
     return false;
   }
+  const errorStack = typeof errorStackOrOpts === "string" ? errorStackOrOpts : undefined;
+  const explicitStreamingContext =
+    typeof errorStackOrOpts === "object" ? (errorStackOrOpts.streamingContext ?? false) : undefined;
   const lower = errorMessage.toLowerCase();
   const stackLower = errorStack?.toLowerCase() ?? "";
 
@@ -865,7 +871,12 @@ export function isLikelySSEParseError(errorMessage?: string, errorStack?: string
     stackLower.includes("anthropic") ||
     stackLower.includes("openai");
   const messageIndicatesStreaming = lower.includes("sse") || /\bstream(ing)?\b/.test(lower);
-  const hasStreamingContext = errorStack ? stackIndicatesStreaming : messageIndicatesStreaming;
+  const hasStreamingContext =
+    explicitStreamingContext !== undefined
+      ? explicitStreamingContext
+      : errorStack
+        ? stackIndicatesStreaming
+        : messageIndicatesStreaming;
 
   // Core pattern: SyntaxError from JSON.parse on SSE data
   const hasSyntaxError =

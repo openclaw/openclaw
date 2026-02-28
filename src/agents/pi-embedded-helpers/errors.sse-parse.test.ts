@@ -175,4 +175,29 @@ describe("isLikelySSEParseError", () => {
       isLikelySSEParseError("SyntaxError: Unexpected token < in JSON from downstream service"),
     ).toBe(false);
   });
+
+  // Explicit streamingContext option
+  describe("streamingContext option", () => {
+    it("matches generic JSON parse error with streamingContext: true", () => {
+      expect(
+        isLikelySSEParseError("SyntaxError: Unexpected end of JSON input", {
+          streamingContext: true,
+        }),
+      ).toBe(true);
+    });
+
+    it("rejects generic JSON parse error with streamingContext: false", () => {
+      expect(
+        isLikelySSEParseError("SyntaxError: Unexpected end of JSON input", {
+          streamingContext: false,
+        }),
+      ).toBe(false);
+    });
+
+    it("streamingContext: true does not override non-JSON errors", () => {
+      expect(isLikelySSEParseError("connection reset by peer", { streamingContext: true })).toBe(
+        false,
+      );
+    });
+  });
 });
