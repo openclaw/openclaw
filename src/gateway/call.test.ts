@@ -597,7 +597,9 @@ describe("callGateway password resolution", () => {
     expect(lastClientOptions?.password).toBe(expectedPassword);
   });
 
-  it("uses local credentials when forceLoopback is enabled in remote mode", async () => {
+  it("prefers local credentials over env when forceLoopback is enabled in remote mode", async () => {
+    process.env.OPENCLAW_GATEWAY_TOKEN = "env-remote-token";
+    process.env.OPENCLAW_GATEWAY_PASSWORD = "env-remote-password";
     loadConfig.mockReturnValue({
       gateway: {
         mode: "remote",

@@ -271,6 +271,8 @@ function resolveGatewayCredentials(
     explicitAuth: context.explicitAuth,
     urlOverride: context.urlOverride,
     modeOverride: forceLoopback ? "local" : undefined,
+    localTokenPrecedence: forceLoopback ? "config-first" : undefined,
+    localPasswordPrecedence: forceLoopback ? "config-first" : undefined,
     remotePasswordPrecedence: "env-first",
   });
 }
