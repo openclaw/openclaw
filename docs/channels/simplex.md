@@ -31,15 +31,19 @@ simplex-chat
 
 ```bash
 simplex-chat -p 5225
+# or explicit URL
+simplex-chat --ws-url ws://127.0.0.1:5225
 ```
 
 3. Install and enable the plugin:
 
 ```bash
-openclaw plugins install @openclaw/simplex
+openclaw plugins install @effuzion/openclaw-simplex
 ```
 
-4. Configure:
+4. Configure (examples):
+
+- Minimal:
 
 ```json
 {
@@ -48,6 +52,24 @@ openclaw plugins install @openclaw/simplex
       "enabled": true,
       "wsPort": 5225,
       "dmPolicy": "pairing"
+    }
+  }
+}
+```
+
+- With reconnection, routing and auto-accept:
+
+```json
+{
+  "channels": {
+    "simplex": {
+      "enabled": true,
+      "wsUrl": "ws://127.0.0.1:5225",
+      "dmPolicy": "pairing",
+      "autoAcceptContacts": false,
+      "reconnection": { "maxRetries": 10, "backoffMs": 200, "backoffFactor": 2 },
+      "groupRouting": { "EffuzionNext": "agent:effuzion" },
+      "messageOptions": { "allowText": true, "allowFiles": true }
     }
   }
 }
@@ -67,7 +89,18 @@ To connect your SimpleX app to the bot:
 
 1. Generate a contact link from the bot: the plugin auto-creates one on startup
 2. Scan or open the link in your SimpleX app
-3. The bot accepts the request; pairing approval is handled at the OpenClaw level
+3. The bot accepts the request; pairing approval is handled at the OpenClaw level (or auto-accepted when configured)
+
+## Message types
+
+The plugin supports the following message kinds (depending on the CLI version):
+
+- text — plain text messages
+- file — arbitrary file attachments (sent/received using CLI file commands)
+- image — image files (jpeg/png). The plugin can optionally convert images to JPEG.
+- voice — audio messages (m4a preferred)
+
+When sending voice messages the plugin prefers M4A by default for compatibility; this is configurable via `messageOptions.preferM4AForVoice`.
 
 ## Security
 
@@ -79,9 +112,8 @@ To connect your SimpleX app to the bot:
 
 ## Limitations (MVP)
 
-- DMs only (no group chats yet)
-- Text only (no media/file attachments yet)
-- No message editing or reactions
-- Single account per gateway
+- Group routing available but depends on CLI support for groups
+- Some CLI versions may not support all file types or file metadata
+- Single account per gateway by default
 
-These will be addressed in future releases.
+If you need help debugging the WebSocket connection, check that the CLI is running and bound to 127.0.0.1 and consult `~/.simplex/simplex_v1_chat.db` for stored messages.

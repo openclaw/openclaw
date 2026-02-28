@@ -5,7 +5,7 @@ import { z } from "zod";
  * SimpleX Chat channel configuration schema.
  *
  * The plugin connects to a local simplex-chat CLI instance running
- * as a WebSocket server (simplex-chat -p <port>).
+ * as a WebSocket server (simplex-chat -p <port> or --ws-url).
  */
 export const SimplexConfigSchema = z.object({
   /** Display name for this SimpleX account */
@@ -15,20 +15,31 @@ export const SimplexConfigSchema = z.object({
   enabled: z.boolean().optional(),
 
   /** Markdown formatting overrides (tables). */
-  markdown: MarkdownConfigSchema,
+  markdown: MarkdownConfigSchema.optional(),
 
   /**
-   * WebSocket port for the simplex-chat CLI.
-   * Start the CLI with: simplex-chat -p <port>
+   * Full WebSocket URL to connect to (overrides host/port if present).
+   * Default: ws://127.0.0.1:5225
+   */
+  wsUrl: z.string().optional(),
+
+  /**
+   * WebSocket port for the simplex-chat CLI (used if wsUrl not provided).
    * Default: 5225
    */
   wsPort: z.number().int().min(1).max(65535).optional(),
 
   /**
-   * WebSocket host for the simplex-chat CLI.
+   * WebSocket host for the simplex-chat CLI (used if wsUrl not provided).
    * Default: 127.0.0.1 (localhost only — never expose externally)
    */
   wsHost: z.string().optional(),
+
+  /**
+   * Whether to auto-accept incoming contact requests (pairing).
+   * Default: false (requires manual approval)
+   */
+  autoAcceptContacts: z.boolean().optional(),
 
   /**
    * DM policy: who can message this bot.
@@ -41,6 +52,31 @@ export const SimplexConfigSchema = z.object({
    * Allowlist of SimpleX contact IDs that can DM without pairing.
    */
   allowFrom: z.array(z.string()).optional(),
+
+  /**
+   * Group routing configuration. Map group names or IDs to agent names.
+   * Example: { "EffuzionNext": "agent:effuzion" }
+   */
+  groupRouting: z.record(z.string()).optional(),
+
+  /**
+   * Reconnection settings for the WebSocket client.
+   */
+  reconnection: z.object({
+    maxRetries: z.number().int().min(0).optional(),
+    backoffMs: z.number().int().min(0).optional(),
+    backoffFactor: z.number().optional(),
+  }).optional(),
+
+  /**
+   * Message format options: control how incoming/outgoing messages are represented.
+   */
+  messageOptions: z.object({
+    allowText: z.boolean().optional(),
+    allowFiles: z.boolean().optional(),
+    preferM4AForVoice: z.boolean().optional(),
+    convertImagesToJpeg: z.boolean().optional(),
+  }).optional(),
 
   /**
    * Path to the simplex-chat binary (if not on PATH).

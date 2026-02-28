@@ -1,4 +1,4 @@
-# @openclaw/simplex
+# @effuzion/openclaw-simplex
 
 SimpleX Chat channel plugin for OpenClaw.
 
@@ -12,6 +12,22 @@ SimpleX Chat channel plugin for OpenClaw.
 - **No metadata** — relays can't see who talks to whom
 - **Open source** — audited cryptography
 
+## Installation
+
+### Option 1: Install from npm (recommended)
+
+```bash
+openclaw plugins install @effuzion/openclaw-simplex
+```
+
+### Option 2: Local development
+
+```bash
+# Clone or place in extensions/simplex
+cd extensions/simplex
+npm install
+```
+
 ## Prerequisites
 
 1. Install the SimpleX Chat CLI:
@@ -20,9 +36,12 @@ SimpleX Chat channel plugin for OpenClaw.
    # Ubuntu/Debian
    curl -L https://github.com/simplex-chat/simplex-chat/releases/latest/download/simplex-chat-ubuntu-22_04-x86-64 -o /usr/local/bin/simplex-chat
    chmod +x /usr/local/bin/simplex-chat
+
+   # macOS
+   brew install simplex-chat
    ```
 
-2. Create a SimpleX profile:
+2. Create a SimpleX profile (first time only):
 
    ```bash
    simplex-chat
@@ -44,9 +63,11 @@ In your `openclaw.json`:
   "channels": {
     "simplex": {
       "enabled": true,
+      "name": "OpenClaw Bot",
       "wsPort": 5225,
       "wsHost": "127.0.0.1",
-      "dmPolicy": "pairing"
+      "dmPolicy": "pairing",
+      "allowFrom": []
     }
   },
   "plugins": {
@@ -59,28 +80,53 @@ In your `openclaw.json`:
 }
 ```
 
-## Configuration Options
+### Configuration Options
 
-| Option      | Default     | Description                         |
-| ----------- | ----------- | ----------------------------------- |
-| `enabled`   | `true`      | Enable/disable the channel          |
-| `wsPort`    | `5225`      | WebSocket port for simplex-chat CLI |
-| `wsHost`    | `127.0.0.1` | WebSocket host (keep localhost!)    |
-| `dmPolicy`  | `"pairing"` | DM policy: `"open"` or `"pairing"`  |
-| `allowFrom` | `[]`        | Pre-approved contact IDs            |
-| `cliPath`   | auto        | Path to simplex-chat binary         |
-| `autoStart` | `false`     | Auto-start the CLI process          |
+| Option      | Default     | Description                                                 |
+| ----------- | ----------- | ----------------------------------------------------------- |
+| `enabled`   | `true`      | Enable/disable the channel                                  |
+| `name`      | `"SimpleX"` | Display name for this account                              |
+| `wsPort`    | `5225`      | WebSocket port for simplex-chat CLI                        |
+| `wsHost`    | `"127.0.0.1"` | WebSocket host (keep localhost!)                          |
+| `dmPolicy`  | `"pairing"` | DM policy: `"open"` or `"pairing"`                         |
+| `allowFrom` | `[]`        | Pre-approved contact IDs (bypasses pairing)                |
+| `cliPath`   | auto        | Path to simplex-chat binary                                 |
+| `dbPath`    | auto        | Path to SimpleX Chat database directory                     |
+| `autoStart` | `false`     | Auto-start the CLI process (requires cliPath)              |
 
-## Connecting
+## Usage
 
-1. Start OpenClaw with SimpleX enabled
-2. On your phone/desktop SimpleX app, create a new contact link
-3. Share the link with the bot, or use `/pair simplex` in another channel
-4. The bot will auto-accept contact requests (pairing handled at OpenClaw level)
+### Starting the Gateway
+
+```bash
+openclaw gateway restart
+```
+
+The plugin will connect to the SimpleX CLI WebSocket and start receiving DMs.
+
+### Connecting a Contact
+
+1. Generate a contact link from the bot:
+   ```bash
+   # In any channel where the bot is present
+   /pair simplex
+   ```
+
+2. Share the link with your SimpleX app (mobile/desktop)
+3. The bot auto-accepts the contact request
+4. You can now DM the bot via SimpleX!
+
+### Sending Messages
+
+The bot responds to DMs in the same way as other channels. From any SimpleX contact, send a message and the agent will respond.
+
+### Group Chats
+
+> **Note:** Group chat support is planned for a future release. Currently only DMs are supported.
 
 ## Security Notes
 
-- **Always bind to localhost** (`wsHost: "127.0.0.1"`) — the WebSocket has no auth
+- **Always bind to localhost** (`wsHost: "127.0.0.1"`) — the WebSocket has no authentication
 - The SimpleX CLI stores keys in `~/.simplex/` — protect this directory
 - Use `dmPolicy: "pairing"` to require approval for new contacts
 - For maximum security, run the CLI in a separate user/namespace
@@ -99,6 +145,44 @@ In your `openclaw.json`:
                                         ▼
                                    [Your Agent]
 ```
+
+## Troubleshooting
+
+### Connection refused
+
+Make sure the SimpleX CLI is running:
+```bash
+simplex-chat -p 5225
+```
+
+### Messages not received
+
+Check the gateway logs:
+```bash
+openclaw gateway logs | grep simplex
+```
+
+### WebSocket errors
+
+Ensure no firewall is blocking localhost:5225
+
+## Development
+
+```bash
+# Install dependencies
+npm install
+
+# Build (if needed)
+npx tsc
+
+# Test locally
+cd ../..
+openclaw gateway restart
+```
+
+## License
+
+MIT
 
 ## Contributing
 

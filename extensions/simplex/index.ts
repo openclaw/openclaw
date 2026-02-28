@@ -2,6 +2,8 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { emptyPluginConfigSchema } from "openclaw/plugin-sdk";
 import { simplexPlugin } from "./src/channel.js";
 import { setSimplexRuntime } from "./src/runtime.js";
+import type { ResolvedSimplexAccount } from "./src/types.js";
+import type { SimplexConfig } from "./src/config-schema.js";
 
 const plugin = {
   id: "simplex",
@@ -16,3 +18,6 @@ const plugin = {
 };
 
 export default plugin;
+
+// Re-export types for external use
+export type { ResolvedSimplexAccount, SimplexConfig };

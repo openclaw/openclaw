@@ -17,6 +17,78 @@ export type ResolvedSimplexAccount = {
 };
 
 /**
+ * SimpleX WebSocket protocol minimal types.
+ * These cover commonly-observed messages from the simplex-chat CLI.
+ */
+
+export type SimplexWsRequest = {
+  corrId?: string; // optional correlation id
+  cmd?: string; // CLI command (send, file, pairing, etc)
+  action?: string; // alternative field name used by some versions
+  args?: Record<string, unknown>;
+};
+
+export type SimplexWsResponse = {
+  corrId?: string;
+  type: string; // eg: "ok", "error", "newChatItems", "pairingRequest", "fileReady"
+  payload?: any;
+  error?: string;
+};
+
+export type SimplexChatItem = {
+  id: string;
+  from?: string | null;
+  to?: string[] | null;
+  body?: string | null;
+  timestamp: number; // unix ms
+  type: "text" | "file" | "image" | "voice" | "system";
+  fileId?: string;
+  fileName?: string;
+  mime?: string;
+};
+
+export type SimplexContact = {
+  id: string; // opaque contact id
+  label?: string; // user-provided name
+  paired: boolean;
+  createdAt?: number;
+};
+
+export type SimplexGroup = {
+  id: string | number;
+  name?: string;
+  members?: string[];
+};
+
+export type SimplexMessage =
+  | {
+      kind: "text";
+      text: string;
+    }
+  | {
+      kind: "file";
+      fileId: string;
+      fileName?: string;
+      mime?: string;
+      size?: number;
+    }
+  | {
+      kind: "image";
+      fileId: string;
+      fileName?: string;
+      mime?: string;
+      width?: number;
+      height?: number;
+    }
+  | {
+      kind: "voice";
+      fileId: string;
+      fileName?: string;
+      mime?: string; // often audio/m4a
+      durationMs?: number;
+    };
+
+/**
  * Resolve SimpleX account from config.
  */
 export function resolveSimplexAccount(params: {
@@ -31,12 +103,14 @@ export function resolveSimplexAccount(params: {
   const enabled = (simplexCfg.enabled as boolean) ?? true;
   const name = (simplexCfg.name as string) ?? "SimpleX";
 
+  const wsUrl = (simplexCfg.wsUrl as string) ?? `ws://${wsHost}:${wsPort}`;
+
   return {
     accountId: params.accountId ?? "default",
     name,
     enabled,
     configured: enabled, // Configured if enabled (CLI must be running externally or auto-started)
-    wsUrl: `ws://${wsHost}:${wsPort}`,
+    wsUrl,
     wsPort,
     wsHost,
     dmPolicy: (simplexCfg.dmPolicy as "open" | "pairing") ?? "pairing",

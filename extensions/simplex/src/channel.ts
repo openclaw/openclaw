@@ -14,8 +14,10 @@ import {
   resolveSimplexAccount,
   type ResolvedSimplexAccount,
 } from "./types.js";
+
 // Active bus handles per account
 const activeBuses = new Map<string, SimplexBusHandle>();
+
 export const simplexPlugin: ChannelPlugin<ResolvedSimplexAccount> = {
   id: "simplex",
   meta: {
@@ -28,7 +30,7 @@ export const simplexPlugin: ChannelPlugin<ResolvedSimplexAccount> = {
     order: 56,
   },
   capabilities: {
-    chatTypes: ["direct"],
+    chatTypes: ["direct", "group"],
     media: false,
     reactions: false,
     edit: false,
@@ -79,13 +81,13 @@ export const simplexPlugin: ChannelPlugin<ResolvedSimplexAccount> = {
         // SimpleX contact IDs are display names or contact IDs
         return input.trim().length > 0;
       },
-      hint: "<simplex contact name or ID>",
+      hint: "<simplex contact name or ID or #groupName>",
     },
   },
   outbound: {
     deliveryMode: "direct",
     textChunkLimit: 4096,
-    sendText: async ({ to, text, accountId }) => {
+    sendText: async ({ to, text, accountId, chatType }) => {
       const runtime = getSimplexRuntime();
       const aid = accountId ?? DEFAULT_ACCOUNT_ID;
       const bus = activeBuses.get(aid);
@@ -101,10 +103,18 @@ export const simplexPlugin: ChannelPlugin<ResolvedSimplexAccount> = {
         accountId: aid,
       });
       const message = runtime.channel.text.convertMarkdownTables(text ?? "", tableMode);
-      await bus.sendMessage(to, message);
+
+      // Send to group or direct based on chatType
+      if (chatType === "group") {
+        await bus.sendToGroup(to, message);
+      } else {
+        await bus.sendMessage(to, message);
+      }
+
       return {
         channel: "simplex" as const,
         to,
+        chatType: chatType ?? "direct",
         messageId: `simplex-${Date.now()}`,
       };
     },
@@ -148,9 +158,15 @@ export const simplexPlugin: ChannelPlugin<ResolvedSimplexAccount> = {
       const bus = startSimplexBus({
         wsUrl: account.wsUrl,
         onMessage: async (msg) => {
+          const chatType = msg.chatType ?? "direct";
+          const chatId = chatType === "group" 
+            ? `simplex:group:${msg.groupId}`
+            : `simplex:${msg.contactId}`;
+          
           ctx.log?.debug?.(
-            `[${account.accountId}] DM from ${msg.contactName}: ${msg.text.slice(0, 50)}...`,
+            `[${account.accountId}] ${chatType === "group" ? "Group" : "DM"} from ${msg.contactName}: ${msg.text.slice(0, 50)}...`,
           );
+          
           // Forward to OpenClaw's message pipeline
           await (
             runtime.channel.reply as {
@@ -161,12 +177,16 @@ export const simplexPlugin: ChannelPlugin<ResolvedSimplexAccount> = {
             accountId: account.accountId,
             senderId: msg.contactId,
             senderName: msg.contactName,
-            chatType: "direct",
-            chatId: `simplex:${msg.contactId}`,
+            chatType,
+            chatId,
             text: msg.text,
             messageId: msg.messageId,
             reply: async (responseText: string) => {
-              await bus.sendMessage(msg.contactId, responseText);
+              if (chatType === "group" && msg.groupId) {
+                await bus.sendToGroup(msg.groupId, responseText);
+              } else {
+                await bus.sendMessage(msg.contactId, responseText);
+              }
             },
           });
         },

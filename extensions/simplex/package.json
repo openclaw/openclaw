@@ -1,18 +1,43 @@
 {
-  "name": "@openclaw/simplex",
-  "version": "2026.2.17",
+  "name": "@effuzion/openclaw-simplex",
+  "version": "1.0.0",
   "description": "SimpleX Chat channel plugin for OpenClaw — zero-metadata, decentralized DMs",
   "type": "module",
   "main": "index.ts",
+  "types": "index.ts",
+  "exports": {
+    ".": "./index.ts",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.ts",
+    "src",
+    "openclaw.plugin.json",
+    "README.md"
+  ],
+  "keywords": [
+    "openclaw",
+    "openclaw-plugin",
+    "simplex",
+    "simplex-chat",
+    "messaging",
+    "encrypted",
+    "privacy"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/effuzion/openclaw-simplex.git"
+  },
+  "license": "MIT",
   "dependencies": {
-    "ws": "^8.0.0"
+    "ws": "^8.18.0"
   },
   "devDependencies": {
-    "@types/ws": "^8.0.0"
+    "@types/ws": "^8.5.13"
   },
   "peerDependencies": {
-    "openclaw": "*",
-    "zod": "*"
+    "openclaw": ">=2026.1.0",
+    "zod": ">=3.22.0"
   },
   "openclaw": {
     "extensions": [
@@ -29,9 +54,9 @@
       "quickstartAllowFrom": true
     },
     "install": {
-      "npmSpec": "@openclaw/simplex",
+      "npmSpec": "@effuzion/openclaw-simplex",
       "localPath": "extensions/simplex",
-      "defaultChoice": "local"
+      "defaultChoice": "npm"
     }
   }
 }
