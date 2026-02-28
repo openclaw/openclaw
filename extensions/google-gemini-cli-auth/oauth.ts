@@ -224,14 +224,26 @@ function generatePkce(): { verifier: string; challenge: string } {
   return { verifier, challenge };
 }
 
-function resolvePlatform(): "WINDOWS" | "MACOS" | "LINUX" {
-  if (process.platform === "win32") {
-    return "WINDOWS";
+type ClientMetadataPlatform =
+  | "PLATFORM_UNSPECIFIED"
+  | "DARWIN_AMD64"
+  | "DARWIN_ARM64"
+  | "LINUX_AMD64"
+  | "LINUX_ARM64"
+  | "WINDOWS_AMD64";
+
+function resolvePlatform(): ClientMetadataPlatform {
+  const arch = process.arch === "arm64" ? "ARM64" : "AMD64";
+  if (process.platform === "darwin") {
+    return arch === "ARM64" ? "DARWIN_ARM64" : "DARWIN_AMD64";
   }
   if (process.platform === "linux") {
-    return "LINUX";
+    return arch === "ARM64" ? "LINUX_ARM64" : "LINUX_AMD64";
   }
-  return "MACOS";
+  if (process.platform === "win32") {
+    return "WINDOWS_AMD64";
+  }
+  return "PLATFORM_UNSPECIFIED";
 }
 
 async function fetchWithTimeout(
@@ -466,7 +478,7 @@ async function discoverProject(accessToken: string): Promise<string> {
   const envProject = process.env.GOOGLE_CLOUD_PROJECT || process.env.GOOGLE_CLOUD_PROJECT_ID;
   const platform = resolvePlatform();
   const metadata = {
-    ideType: "ANTIGRAVITY",
+    ideType: "GEMINI_CLI",
     platform,
     pluginType: "GEMINI",
   };
@@ -509,6 +521,24 @@ async function discoverProject(accessToken: string): Promise<string> {
           data = { currentTier: { id: TIER_STANDARD } };
           activeEndpoint = endpoint;
           loadError = undefined;
+          break;
+        }
+        // The 400 body may still carry project/tier data for already-provisioned accounts.
+        const projectFromError =
+          errorPayload?.cloudaicompanionProject?.id ??
+          errorPayload?.response?.cloudaicompanionProject?.id ??
+          (typeof errorPayload?.cloudaicompanionProject === "string"
+            ? errorPayload.cloudaicompanionProject
+            : undefined);
+        if (projectFromError || errorPayload?.currentTier || errorPayload?.allowedTiers) {
+          data = {
+            cloudaicompanionProject: projectFromError ?? errorPayload.cloudaicompanionProject,
+            currentTier: errorPayload.currentTier,
+            allowedTiers: errorPayload.allowedTiers,
+          };
+          activeEndpoint = endpoint;
+          loadError = undefined;
+          loadStatus = undefined;
           break;
         }
         loadError = new Error(`loadCodeAssist failed: ${response.status} ${response.statusText}`);
@@ -603,8 +633,12 @@ async function discoverProject(accessToken: string): Promise<string> {
       if (envProject) {
         return envProject;
       }
-      // Proceed without a project; user can set GOOGLE_CLOUD_PROJECT manually.
-      return "";
+      // Include the raw body so users/maintainers can diagnose the missing project.
+      throw new Error(
+        "Could not provision a Google Cloud project for this account. " +
+          "Set GOOGLE_CLOUD_PROJECT or GOOGLE_CLOUD_PROJECT_ID and try again. " +
+          `(onboardUser 400 body: ${JSON.stringify(errorBody)})`,
+      );
     }
     throw new Error(`onboardUser failed: ${onboardResponse.status} ${onboardResponse.statusText}`);
   }
