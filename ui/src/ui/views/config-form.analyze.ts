@@ -89,9 +89,11 @@ function normalizeSchemaNode(
       if (!isAnySchema(schema.additionalProperties)) {
         const res = normalizeSchemaNode(schema.additionalProperties, [...path, "*"]);
         normalized.additionalProperties = res.schema ?? schema.additionalProperties;
-        // Note: We don't mark the parent as unsupported if additionalProperties has unsupported paths.
-        // This allows dynamic maps (like accounts) to render, with individual fields showing
-        // "Use Raw mode" if they contain complex unions.
+        // Propagate unsupported paths from additionalProperties to ensure
+        // users are directed to Raw mode when nested fields cannot be edited
+        for (const entry of res.unsupportedPaths) {
+          unsupported.add(entry);
+        }
       }
     }
   } else if (type === "array") {
@@ -195,19 +197,21 @@ function normalizeUnion(
   const primitiveTypes = new Set(["string", "number", "integer", "boolean"]);
   if (
     remaining.length > 0 &&
+    literals.length === 0 &&
     remaining.every((entry) => entry.type && primitiveTypes.has(String(entry.type)))
   ) {
-    // Handle case where anyOf includes primitive types with const values (e.g., boolean | {const: "auto"})
-    // Merge literals into enum if present
-    const mergedSchema: JsonSchema = {
-      ...schema,
-      nullable,
-    };
-    if (literals.length > 0) {
-      mergedSchema.enum = literals;
-    }
+    // Only primitive unions without literals are supported
+    // Mixed primitive-plus-literal unions (e.g., number | {const: "auto"}) are not supported
+    // because the UI renders them as number inputs and cannot surface literal options
     return {
-      schema: mergedSchema,
+      schema: {
+        ...schema,
+        nullable,
+        // Clear union fields to avoid contradictory schema
+        anyOf: undefined,
+        oneOf: undefined,
+        allOf: undefined,
+      },
       unsupportedPaths: [],
     };
   }
