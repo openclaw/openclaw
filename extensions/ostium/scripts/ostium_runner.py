@@ -60,16 +60,37 @@ def to_plain(value):
     return value
 
 
-def require_int(payload, key):
-    if key not in payload:
-        raise ValueError(f"Missing required field: {key}")
-    return int(payload[key])
+def _find_value(payload, keys):
+    for key in keys:
+        if key in payload and payload.get(key) is not None:
+            return payload.get(key)
+
+    # Allow top-level aliases to be passed inside tradeParams as well.
+    trade_params = payload.get("tradeParams")
+    if isinstance(trade_params, dict):
+        for key in keys:
+            if key in trade_params and trade_params.get(key) is not None:
+                return trade_params.get(key)
+
+    return None
 
 
-def require_float(payload, key):
-    if key not in payload:
-        raise ValueError(f"Missing required field: {key}")
-    return float(payload[key])
+def require_int(payload, key, aliases=None):
+    keys = [key] + (aliases or [])
+    value = _find_value(payload, keys)
+    if value is None:
+        accepted = ", ".join(keys)
+        raise ValueError(f"Missing required field: {key} (accepted: {accepted})")
+    return int(value)
+
+
+def require_float(payload, key, aliases=None):
+    keys = [key] + (aliases or [])
+    value = _find_value(payload, keys)
+    if value is None:
+        accepted = ", ".join(keys)
+        raise ValueError(f"Missing required field: {key} (accepted: {accepted})")
+    return float(value)
 
 
 def require_trade_params(payload):
@@ -91,35 +112,35 @@ async def handle_read_action(sdk, payload, action):
         return {"traderAddress": resolved_trader, "openTrades": to_plain(open_trades)}
 
     if action == "get_open_trade_metrics":
-        pair_id = require_int(payload, "pairId")
-        trade_index = require_int(payload, "tradeIndex")
+        pair_id = require_int(payload, "pairId", aliases=["pair_id", "pairIndex"])
+        trade_index = require_int(payload, "tradeIndex", aliases=["trade_index", "index"])
         trader_address = payload.get("traderAddress")
         metrics = await sdk.get_open_trade_metrics(pair_id, trade_index, trader_address)
         return {"pairId": pair_id, "tradeIndex": trade_index, "metrics": to_plain(metrics)}
 
     if action == "get_target_funding_rate":
-        pair_id = require_int(payload, "pairId")
+        pair_id = require_int(payload, "pairId", aliases=["pair_id", "pairIndex"])
         target_rate = await sdk.get_target_funding_rate(pair_id)
         return {"pairId": pair_id, "targetFundingRate": to_plain(target_rate)}
 
     if action == "get_pair_max_leverage":
-        pair_id = require_int(payload, "pairId")
+        pair_id = require_int(payload, "pairId", aliases=["pair_id", "pairIndex"])
         max_leverage = await sdk.get_pair_max_leverage(pair_id)
         return {"pairId": pair_id, "maxLeverage": to_plain(max_leverage)}
 
     if action == "get_pair_overnight_max_leverage":
-        pair_id = require_int(payload, "pairId")
+        pair_id = require_int(payload, "pairId", aliases=["pair_id", "pairIndex"])
         max_leverage = await sdk.get_pair_overnight_max_leverage(pair_id)
         return {"pairId": pair_id, "overnightMaxLeverage": to_plain(max_leverage)}
 
     if action == "get_rollover_rate":
-        pair_id = require_int(payload, "pairId")
+        pair_id = require_int(payload, "pairId", aliases=["pair_id", "pairIndex"])
         period_hours = int(payload.get("periodHours", 24))
         rollover = await sdk.get_rollover_rate_for_pair_id(pair_id, period_hours=period_hours)
         return {"pairId": pair_id, "periodHours": period_hours, "rolloverRate": to_plain(rollover)}
 
     if action == "get_funding_rate":
-        pair_id = require_int(payload, "pairId")
+        pair_id = require_int(payload, "pairId", aliases=["pair_id", "pairIndex"])
         period_hours = int(payload.get("periodHours", 24))
         funding = await sdk.get_funding_rate_for_pair_id(pair_id, period_hours=period_hours)
         return {"pairId": pair_id, "periodHours": period_hours, "fundingRate": to_plain(funding)}
@@ -130,14 +151,18 @@ async def handle_read_action(sdk, payload, action):
 def handle_write_action(sdk, payload, action):
     if action == "open_trade":
         trade_params = require_trade_params(payload)
-        at_price = require_float(payload, "atPrice")
+        at_price = require_float(
+            payload,
+            "atPrice",
+            aliases=["at_price", "price", "entryPrice", "entry_price"],
+        )
         result = sdk.ostium.perform_trade(trade_params, at_price)
         return {"tx": to_plain(result)}
 
     if action == "close_trade":
-        pair_id = require_int(payload, "pairId")
-        trade_index = require_int(payload, "tradeIndex")
-        market_price = require_float(payload, "marketPrice")
+        pair_id = require_int(payload, "pairId", aliases=["pair_id", "pairIndex"])
+        trade_index = require_int(payload, "tradeIndex", aliases=["trade_index", "index"])
+        market_price = require_float(payload, "marketPrice", aliases=["market_price", "price"])
         close_percentage = float(payload.get("closePercentage", 100))
         trader_address = payload.get("traderAddress")
         result = sdk.ostium.close_trade(
@@ -150,24 +175,24 @@ def handle_write_action(sdk, payload, action):
         return {"tx": to_plain(result)}
 
     if action == "cancel_limit_order":
-        pair_id = require_int(payload, "pairId")
-        trade_index = require_int(payload, "tradeIndex")
+        pair_id = require_int(payload, "pairId", aliases=["pair_id", "pairIndex"])
+        trade_index = require_int(payload, "tradeIndex", aliases=["trade_index", "index"])
         trader_address = payload.get("traderAddress")
         result = sdk.ostium.cancel_limit_order(pair_id, trade_index, trader_address)
         return {"tx": to_plain(result)}
 
     if action == "update_tp":
-        pair_id = require_int(payload, "pairId")
-        trade_index = require_int(payload, "tradeIndex")
-        tp_price = require_float(payload, "tpPrice")
+        pair_id = require_int(payload, "pairId", aliases=["pair_id", "pairIndex"])
+        trade_index = require_int(payload, "tradeIndex", aliases=["trade_index", "index"])
+        tp_price = require_float(payload, "tpPrice", aliases=["tp_price", "tp"])
         trader_address = payload.get("traderAddress")
         result = sdk.ostium.update_tp(pair_id, trade_index, tp_price, trader_address)
         return {"tx": to_plain(result)}
 
     if action == "update_sl":
-        pair_id = require_int(payload, "pairId")
-        trade_index = require_int(payload, "tradeIndex")
-        sl_price = require_float(payload, "slPrice")
+        pair_id = require_int(payload, "pairId", aliases=["pair_id", "pairIndex"])
+        trade_index = require_int(payload, "tradeIndex", aliases=["trade_index", "index"])
+        sl_price = require_float(payload, "slPrice", aliases=["sl_price", "sl"])
         trader_address = payload.get("traderAddress")
         result = sdk.ostium.update_sl(pair_id, trade_index, sl_price, trader_address)
         return {"tx": to_plain(result)}

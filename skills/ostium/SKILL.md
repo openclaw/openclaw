@@ -47,6 +47,7 @@ Examples:
 
 ```text
 /ostium {"action":"open_trade","network":"mainnet","atPrice":98000,"tradeParams":{"collateral":10,"leverage":5,"asset_type":0,"direction":true}}
+/ostium {"action":"open_trade","network":"mainnet","at_price":98000,"tradeParams":{"collateral":10,"leverage":5,"asset_type":0,"direction":true}}
 ```
 
 ## Notes
@@ -54,3 +55,10 @@ Examples:
 - `RPC_URL` is required for all actions.
 - `PRIVATE_KEY` is required for write actions.
 - `network` must be `mainnet` or `testnet`.
+- Write/read id+price params accept both camelCase and snake_case aliases:
+- `atPrice` or `at_price`
+- `marketPrice` or `market_price`
+- `tpPrice` or `tp_price`
+- `slPrice` or `sl_price`
+- `pairId` or `pair_id`
+- `tradeIndex` or `trade_index`
