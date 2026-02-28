@@ -17,10 +17,24 @@ import os
 import re
 import sys
 import time
+import signal
 import urllib.error
 import urllib.request
 from datetime import datetime, timedelta
 from pathlib import Path
+
+
+# ── 타임아웃 핸들러 ──────────────────────────────────────────────────
+class TimeoutError(Exception):
+    """작업 타임아웃 초과 예외"""
+    pass
+
+
+def timeout_handler(signum, frame):
+    raise TimeoutError(f"Operation timed out after {TARGET_TIMEOUT_SECS} seconds")
+
+
+TARGET_TIMEOUT_SECS = 480  # 8분 (cron 600초보다 짧게)
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from shared.log import make_logger
@@ -31,11 +45,7 @@ CHARTS_DIR = OUTPUT_DIR / "charts"
 WATCHLIST_FILE = OUTPUT_DIR / "watchlist.json"
 LOGS_DIR = WORKSPACE / "logs"
 LOG_FILE = LOGS_DIR / "geopolitical_monitor.log"
-FORWARD_SCRIPT = WORKSPACE / "scripts" / "forward_to_telegram.py"
-DM_CHAT_ID = "492860021"
-GROUP_CHAT_ID = "-1003076685086"
-RON_TOPIC_ID = 30413
-BOT_TOKEN = "8554125313:AAGC5Zzb9nCbPYgmOVqs3pVn-qzIA2oOtkI"
+from shared.telegram import send_photo, send_album, send_group_chunked, GROUP_CHAT_ID, RON_TOPIC_ID
 
 log = make_logger(log_file=LOG_FILE)
 
@@ -937,70 +947,6 @@ def compute_alert_level(anomalies: list[dict]) -> tuple[str, str]:
 
 # ── 텔레그램 알림 ────────────────────────────────────────────────────
 
-def send_telegram_photo(photo_path: str, caption: str, chat_id: str = DM_CHAT_ID,
-                        message_thread_id: int | None = None) -> bool:
-    """Send photo via Telegram Bot API using requests."""
-    try:
-        import requests
-    except ImportError:
-        log("requests not installed, skipping photo send", level="WARN")
-        return False
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
-    try:
-        payload: dict = {"chat_id": chat_id, "caption": caption[:1024]}
-        if message_thread_id is not None:
-            payload["message_thread_id"] = message_thread_id
-        with open(photo_path, "rb") as f:
-            r = requests.post(url, data=payload, files={"photo": f}, timeout=30)
-        return r.status_code == 200
-    except Exception as e:
-        log(f"Photo send error: {e}", level="WARN")
-        return False
-
-
-def send_telegram_album(photos: list[dict], chat_id: str = DM_CHAT_ID,
-                        message_thread_id: int | None = None) -> bool:
-    """sendMediaGroup API로 앨범 전송. photos: [{"path": Path, "caption": str}, ...].
-
-    실패 시 False 반환 → 호출부에서 개별 sendPhoto fallback.
-    """
-    if not photos:
-        return False
-    try:
-        import requests
-    except ImportError:
-        log("requests not installed, skipping album send", level="WARN")
-        return False
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMediaGroup"
-    media = []
-    files = {}
-    for i, p in enumerate(photos):
-        attach_key = f"photo{i}"
-        caption = p.get("caption", "")[:1024]
-        media.append({
-            "type": "photo",
-            "media": f"attach://{attach_key}",
-            **({"caption": caption, "parse_mode": "Markdown"} if i == 0 else
-               {"caption": caption} if caption else {}),
-        })
-        files[attach_key] = open(str(p["path"]), "rb")  # noqa: SIM115
-    try:
-        payload: dict = {"chat_id": chat_id, "media": json.dumps(media)}
-        if message_thread_id is not None:
-            payload["message_thread_id"] = message_thread_id
-        r = requests.post(url, data=payload, files=files, timeout=60)
-        ok = r.status_code == 200
-        if not ok:
-            log(f"Album send failed ({r.status_code}): {r.text[:200]}", level="WARN")
-        return ok
-    except Exception as e:
-        log(f"Album send error: {e}", level="WARN")
-        return False
-    finally:
-        for fh in files.values():
-            fh.close()
-
-
 def format_telegram_message(today_data: dict, anomalies: list, watchlist: dict) -> str:
     """Format Telegram notification text (v4: detailed with averages, countries, tiers)."""
     regions = today_data.get("regions", {})
@@ -1129,48 +1075,13 @@ def format_telegram_message(today_data: dict, anomalies: list, watchlist: dict) 
     return "\n".join(lines)
 
 
-def _send_telegram_text(text: str, chat_id: str = GROUP_CHAT_ID,
-                        message_thread_id: int | None = RON_TOPIC_ID) -> bool:
-    """Send text message via Bot API directly (no forward wrapper)."""
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    payload: dict = {
-        "chat_id": chat_id,
-        "text": text,
-        "parse_mode": "Markdown",
-        "disable_web_page_preview": True,
-    }
-    if message_thread_id is not None:
-        payload["message_thread_id"] = message_thread_id
-    data = json.dumps(payload).encode()
-    req = urllib.request.Request(url, data=data,
-                                headers={"Content-Type": "application/json"})
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            result = json.loads(resp.read())
-            return result.get("ok", False)
-    except urllib.error.HTTPError:
-        # Retry without parse_mode on Markdown error
-        payload.pop("parse_mode", None)
-        data = json.dumps(payload).encode()
-        req = urllib.request.Request(url, data=data,
-                                    headers={"Content-Type": "application/json"})
-        try:
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                result = json.loads(resp.read())
-                return result.get("ok", False)
-        except Exception:
-            return False
-    except Exception:
-        return False
-
-
 def notify_telegram(today_data: dict, anomalies: list, screenshots: dict):
     """Send geopolitical summary to 지식사랑방 Ron topic."""
     watchlist = load_watchlist()
     msg = format_telegram_message(today_data, anomalies, watchlist)
 
-    # Text → Bot API 직접 전송 (forward_to_telegram 래핑 불필요)
-    if _send_telegram_text(msg):
+    # Text → shared telegram 모듈 경유
+    if send_group_chunked(msg, topic_id=RON_TOPIC_ID):
         log("Telegram text sent (지식사랑방 론 토픽)")
     else:
         log("Telegram text send failed", level="WARN")
@@ -1190,13 +1101,11 @@ def notify_telegram(today_data: dict, anomalies: list, screenshots: dict):
                 caption = f"🚢 {name} {count_str}".strip()
             album_photos.append({"path": path, "caption": caption})
     if album_photos:
-        if not send_telegram_album(album_photos, chat_id=GROUP_CHAT_ID,
-                                   message_thread_id=RON_TOPIC_ID):
+        if not send_album(GROUP_CHAT_ID, album_photos, topic_id=RON_TOPIC_ID):
             log("Album failed, falling back to individual photos")
             for p in album_photos:
-                send_telegram_photo(str(p["path"]), p["caption"],
-                                    chat_id=GROUP_CHAT_ID,
-                                    message_thread_id=RON_TOPIC_ID)
+                send_photo(GROUP_CHAT_ID, str(p["path"]), caption=p["caption"],
+                           topic_id=RON_TOPIC_ID)
 
 
 # ── 차트 정리 ────────────────────────────────────────────────────────
@@ -1347,6 +1256,11 @@ def collect_all(watchlist: dict, target_region: str | None = None,
 # ── main ─────────────────────────────────────────────────────────────
 
 def main():
+    # 타임아웃 설정 (Unix/Linux/macOS only)
+    if sys.platform != "win32":
+        signal.signal(signal.SIGALRM, timeout_handler)
+        signal.alarm(TARGET_TIMEOUT_SECS)
+
     parser = argparse.ArgumentParser(description="지정학 모니터: 항공기/선박/뉴스/피자지수 감시")
     parser.add_argument("--dry-run", action="store_true", help="수집만, 저장 없음")
     parser.add_argument("--notify", action="store_true", help="수집 + 저장 + 텔레그램")
@@ -1391,6 +1305,11 @@ def main():
     cleanup_old_charts(7)
     log(f"Done: {today_data['summary']}")
     print(json.dumps(today_data, indent=2, ensure_ascii=False, default=str))
+
+    # 타임아웃 alarm 취소
+    if sys.platform != "win32":
+        signal.alarm(0)
+
     return today_data
 
 

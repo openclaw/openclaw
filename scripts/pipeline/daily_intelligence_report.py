@@ -19,13 +19,12 @@ import re
 import subprocess
 import sys
 import time
-import urllib.request
 from datetime import datetime, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from shared.db import db_connection, resolve_ops_db_path
-from shared.llm import llm_chat_with_fallback, check_gateway
+from shared.llm import llm_chat_direct, check_gateway, DIRECT_PREMIUM_CHAIN
 from shared.log import make_logger
 from shared.vault_paths import VAULT, INBOX
 
@@ -37,15 +36,10 @@ MEMORY_DIR = MEMORY / "daily-report"
 STATE_FILE = MEMORY_DIR / "state.json"
 LOG_FILE = WORKSPACE / "logs" / "daily_intelligence_report.log"
 
-BOT_TOKEN = "8554125313:AAGC5Zzb9nCbPYgmOVqs3pVn-qzIA2oOtkI"
-DM_CHAT_ID = "492860021"
-GROUP_CHAT_ID = "-1003076685086"
-RON_TOPIC_ID = 30413
+from shared.telegram import send_dm_chunked, send_group_chunked, send_dm_photo, DM_CHAT_ID, GROUP_CHAT_ID, RON_TOPIC_ID
 
-MODELS = ["github-copilot/gpt-5-mini", "qwen2.5:7b"]
-# 데일리 리포트 PEST/총괄 전용 — 하루 1회, 상위 모델 우선
-MODELS_PREMIUM = ["github-copilot/claude-sonnet-4-6",
-                  "github-copilot/gpt-5-mini", "qwen2.5:7b"]
+MODELS = list(DIRECT_PREMIUM_CHAIN)
+MODELS_PREMIUM = list(DIRECT_PREMIUM_CHAIN)
 
 # ── v2.0 섹터 맵 ──────────────────────────────────────────────────
 
@@ -73,111 +67,7 @@ WINDOW_HOURS = [1, 7, 13, 19]
 log = make_logger(log_file=LOG_FILE)
 
 
-# ── 텔레그램 전송 ────────────────────────────────────────────────────
-
-def _split_message(text: str, max_len: int = 4000) -> list[str]:
-    """긴 메시지를 텔레그램 4096 제한에 맞춰 분할."""
-    if len(text) <= max_len:
-        return [text]
-    chunks: list[str] = []
-    while text:
-        if len(text) <= max_len:
-            chunks.append(text)
-            break
-        split_at = text.rfind("\n", 0, max_len)
-        if split_at < max_len // 2:
-            split_at = max_len
-        chunks.append(text[:split_at])
-        text = text[split_at:].lstrip("\n")
-    return chunks
-
-
-def _send_telegram_text(text: str, chat_id: str = DM_CHAT_ID,
-                        message_thread_id: int | None = None) -> bool:
-    """텔레그램 Bot API sendMessage. 긴 메시지는 자동 분할."""
-    success = True
-    for chunk in _split_message(text):
-        payload: dict = {
-            "chat_id": chat_id,
-            "text": chunk,
-            "parse_mode": "HTML",
-            "disable_web_page_preview": True,
-        }
-        if message_thread_id:
-            payload["message_thread_id"] = message_thread_id
-        data = json.dumps(payload).encode("utf-8")
-        req = urllib.request.Request(
-            f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-            data=data,
-            headers={"Content-Type": "application/json"},
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                result = json.loads(resp.read().decode("utf-8"))
-                if not result.get("ok"):
-                    log(f"Telegram failed: {result}")
-                    success = False
-        except Exception as e:
-            log(f"Telegram error: {e}")
-            success = False
-    return success
-
-
-def _send_to_ron_topic(text: str) -> bool:
-    """론토픽(지식사랑방 Ron 스레드)으로 전송."""
-    return _send_telegram_text(text, chat_id=GROUP_CHAT_ID,
-                               message_thread_id=RON_TOPIC_ID)
-
-
 CHART_DIR = MEMORY_DIR / "charts"
-
-
-def _send_telegram_photo(path: Path, caption: str = "",
-                         chat_id: str = DM_CHAT_ID) -> bool:
-    """텔레그램 Bot API sendPhoto (multipart)."""
-    import http.client
-    import mimetypes
-    boundary = "----DailyReportBoundary"
-    body_parts: list[bytes] = []
-
-    # caption field
-    body_parts.append(f"--{boundary}\r\n".encode())
-    body_parts.append(b'Content-Disposition: form-data; name="chat_id"\r\n\r\n')
-    body_parts.append(f"{chat_id}\r\n".encode())
-
-    body_parts.append(f"--{boundary}\r\n".encode())
-    body_parts.append(b'Content-Disposition: form-data; name="caption"\r\n\r\n')
-    body_parts.append(f"{caption[:1024]}\r\n".encode())
-
-    # photo file
-    body_parts.append(f"--{boundary}\r\n".encode())
-    body_parts.append(
-        f'Content-Disposition: form-data; name="photo"; filename="{path.name}"\r\n'
-        f"Content-Type: {mimetypes.guess_type(str(path))[0] or 'image/png'}\r\n\r\n"
-        .encode()
-    )
-    body_parts.append(path.read_bytes())
-    body_parts.append(f"\r\n--{boundary}--\r\n".encode())
-
-    body = b"".join(body_parts)
-    try:
-        conn = http.client.HTTPSConnection("api.telegram.org", timeout=30)
-        conn.request(
-            "POST",
-            f"/bot{BOT_TOKEN}/sendPhoto",
-            body=body,
-            headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
-        )
-        resp = conn.getresponse()
-        result = json.loads(resp.read().decode("utf-8"))
-        conn.close()
-        if not result.get("ok"):
-            log(f"Photo send failed: {result}")
-            return False
-        return True
-    except Exception as e:
-        log(f"Photo send error: {e}")
-        return False
 
 
 def _setup_matplotlib():
@@ -430,6 +320,8 @@ def _find_latest_json(directory: Path, exclude: list[str] | None = None,
     candidates: list[Path] = []
     for f in directory.iterdir():
         if not f.is_file() or f.suffix != ".json":
+            continue
+        if f.name.startswith("."):
             continue
         if f.name in exclude:
             continue
@@ -1384,9 +1276,10 @@ def build_pest_analysis(mkt: dict, geo: dict, social: dict) -> str:
             "아래 시장 데이터를 PEST 프레임워크(정치/경제/사회/기술)로 해석하세요.\n\n"
             "형식 규칙 (반드시 준수):\n"
             "1. 정확히 4줄만 출력. 각 줄은 P: E: S: T: 로 시작.\n"
-            "2. 각 축 2-3문장으로 수치를 인용하며 해석. 마지막에 방향 기호(▲▼─) 1개.\n"
+            "2. 각 축 3-4문장: 수치 인용 → 원인 해석 → 투자자 관점의 판단/액션 1문장. 마지막에 방향 기호(▲▼─) 1개.\n"
             "3. 100% 한국어. 지표 코드(SPX, VIX 등)만 영어 허용.\n"
-            "4. 인명은 한국어(트럼프, 파월). 표/마크다운/볼드 금지.\n\n"
+            "4. 인명은 한국어(트럼프, 파월). 표/마크다운/볼드 금지.\n"
+            "5. 반드시 각 축 마지막 문장에 '~해야 한다', '~가 유리하다', '~에 주의' 등 판단을 포함.\n\n"
             "예시 (이 수준의 깊이와 분량으로 작성):\n"
             "P: EPU 725(z=2.1)로 정책 불확실성 극대화. "
             "트럼프의 상호관세 정책이 3월 발효 예정이나 세부 조건 미확정으로 "
@@ -1407,7 +1300,7 @@ def build_pest_analysis(mkt: dict, geo: dict, social: dict) -> str:
     ]
 
     try:
-        content, model, error = llm_chat_with_fallback(
+        content, model, error = llm_chat_direct(
             messages, MODELS_PREMIUM, max_tokens=800, timeout=90,
         )
         log(f"PEST model: {model or 'FAILED'}{f' err={error}' if error else ''}")
@@ -1429,7 +1322,7 @@ def build_pest_analysis(mkt: dict, geo: dict, social: dict) -> str:
             if current:
                 merged.append(current)
             # Cap each axis to 250 chars
-            pest_lines = [l[:250] for l in merged
+            pest_lines = [l[:350] for l in merged
                           if l[:2] in ("P:", "E:", "S:", "T:") and len(l) > 5]
             if len(pest_lines) >= 3:
                 return "\n".join(pest_lines[:4])
@@ -1454,12 +1347,15 @@ def _pest_fallback(mkt: dict, geo: dict, social: dict) -> str:
     if epu_z > 2:
         p_text = (f"P: EPU {epu_val}(z={epu_z:.1f})로 정책 불확실성 극대. "
                   f"글로벌 EPU도 {epu_gl_change:+.0f}% 동반급등. DOUGHCON {doughcon}. "
-                  "무역·재정 정책 방향 미확정, 관망 불가피 ▼")
+                  "정책 방향 미확정 상황에서 수출·무역 의존 섹터 신규 진입을 자제하고, "
+                  "관세·재정 정책 확정 시점까지 현금 비중 확대가 유리하다 ▼")
     elif epu_z > 1:
         p_text = (f"P: EPU {epu_val}(z={epu_z:.1f}), 정책 불확실성 높음. "
-                  f"DOUGHCON {doughcon}. 정책 리스크 주시 필요 ─")
+                  f"DOUGHCON {doughcon}. 정책 민감 업종(방산·에너지) 비중 점검이 필요하며, "
+                  "변동성 확대에 대비한 포지션 축소를 고려해야 한다 ─")
     else:
-        p_text = f"P: EPU {epu_val}, 정책 환경 안정. DOUGHCON {doughcon} ─"
+        p_text = (f"P: EPU {epu_val}, 정책 환경 안정적. DOUGHCON {doughcon}. "
+                  "정치 리스크가 낮아 매크로 변수보다 기업 펀더멘털에 집중 가능하다 ─")
     lines.append(p_text)
 
     # E: VIX+KOSPI+SPX 기반
@@ -1473,13 +1369,16 @@ def _pest_fallback(mkt: dict, geo: dict, social: dict) -> str:
     krw_change = float(usdkrw.get("change_pct", 0) or 0) if isinstance(usdkrw, dict) else 0
     if kospi_change > 1 and vix_change < -3:
         e_text = (f"E: VIX {vix_change:+.1f}% 급감+코스피 {kospi_change:+.1f}%+SPX {spx_change:+.1f}%, "
-                  f"리스크온 전환 뚜렷. 원화 {krw_change:+.1f}% ▲")
+                  f"리스크온 전환 뚜렷. 원화 {krw_change:+.1f}%. "
+                  "변동성 축소 구간에서 성장주·기술주 비중 확대가 유리하다 ▲")
     elif vix_change > 5:
         e_text = (f"E: VIX {vix_change:+.1f}% 급등, 공포 확산. "
-                  f"코스피 {kospi_change:+.1f}%, 위험자산 회피 ▼")
+                  f"코스피 {kospi_change:+.1f}%. "
+                  "위험자산 노출을 줄이고 방어적 포지션(국채·현금) 전환을 고려해야 한다 ▼")
     else:
         e_text = (f"E: VIX {vix_change:+.1f}%, 코스피 {kospi_change:+.1f}%, "
-                  f"SPX {spx_change:+.1f}%. 혼조세 ─")
+                  f"SPX {spx_change:+.1f}%. 뚜렷한 방향성 부재로 "
+                  "기존 포지션 유지하되 방향 확인 후 대응이 적절하다 ─")
     lines.append(e_text)
 
     # S: social sentiment + keywords
@@ -1487,12 +1386,15 @@ def _pest_fallback(mkt: dict, geo: dict, social: dict) -> str:
     kw = ", ".join(social.get("keywords", [])[:4]) or "특이 키워드 없음"
     if sentiment > 5:
         s_text = (f"S: 소셜 감성 {sentiment:+d}, 강한 긍정. "
-                  f"주요 키워드: {kw}. 시장 낙관론 우세 ▲")
+                  f"주요 키워드: {kw}. 낙관론이 우세하나, "
+                  "극단적 낙관은 역추세 신호일 수 있으므로 추격 매수보다 분할 접근이 안전하다 ▲")
     elif sentiment < -5:
         s_text = (f"S: 소셜 감성 {sentiment:+d}, 비관 우세. "
-                  f"키워드: {kw}. 투자 심리 위축 ▼")
+                  f"키워드: {kw}. 공포 심리가 극에 달한 구간에서 "
+                  "역발상 매수 기회를 탐색하되 추가 하락 여력도 열어둬야 한다 ▼")
     else:
-        s_text = f"S: 소셜 감성 {sentiment:+d}, 중립. 키워드: {kw} ─"
+        s_text = (f"S: 소셜 감성 {sentiment:+d}, 중립. 키워드: {kw}. "
+                  "뚜렷한 심리 편향이 없어 펀더멘털과 수급에 집중할 시점이다 ─")
     lines.append(s_text)
 
     # T: SOXX+DDR5 기반
@@ -1502,13 +1404,16 @@ def _pest_fallback(mkt: dict, geo: dict, social: dict) -> str:
     ddr5_change = float(ddr5.get("change_pct", 0) or 0) if isinstance(ddr5, dict) else 0
     if soxx_change > 1:
         t_text = (f"T: SOXX {soxx_change:+.1f}%, DDR5 {ddr5_change:+.1f}%. "
-                  "반도체·AI 업종 강세 지속, 기술 모멘텀 건재 ▲")
+                  "반도체·AI 업종 강세 지속. "
+                  "HBM·GPU 밸류체인과 AI 인프라 관련주 비중 유지가 유리하다 ▲")
     elif soxx_change < -2:
         t_text = (f"T: SOXX {soxx_change:+.1f}%, DDR5 {ddr5_change:+.1f}%. "
-                  "기술주 약세, 밸류에이션 부담 노출 ▼")
+                  "기술주 약세로 밸류에이션 부담 노출. "
+                  "단기 기술주 비중 축소하고 실적 확인된 종목 위주로 선별해야 한다 ▼")
     else:
         t_text = (f"T: SOXX {soxx_change:+.1f}%, DDR5 {ddr5_change:+.1f}%. "
-                  "기술 섹터 중립 ─")
+                  "기술 섹터 관망세. 방향성 확인 전까지 기존 비중 유지하며 "
+                  "실적 시즌 결과에 따라 포지션을 조정하는 것이 적절하다 ─")
     lines.append(t_text)
 
     return "\n".join(lines)
@@ -1646,7 +1551,7 @@ def build_falsification(mkt: dict, geo: dict,
             )},
             {"role": "user", "content": raw_flags},
         ]
-        content, model, error = llm_chat_with_fallback(
+        content, model, error = llm_chat_direct(
             messages, MODELS_PREMIUM, max_tokens=500, timeout=90,
         )
         log(f"Falsification model: {model or 'FAILED'}{f' err={error}' if error else ''}")
@@ -1690,7 +1595,7 @@ def build_executive_summary(factcheck: str, pest: str,
     ]
 
     try:
-        content, model, error = llm_chat_with_fallback(
+        content, model, error = llm_chat_direct(
             messages, MODELS_PREMIUM, max_tokens=400, timeout=90,
         )
         log(f"Executive model: {model or 'FAILED'}{f' err={error}' if error else ''}")
@@ -2045,7 +1950,13 @@ def _get_blog_summary() -> str:
 
 
 def _llm_one_line_summary(context: str) -> str:
-    """LLM으로 1줄 종합 요약 생성."""
+    """LLM으로 1줄 종합 요약 생성.
+
+    Uses a short per-model timeout (10s) so that the full model-chain retry loop
+    stays well under the 120s cron job budget.  With 4 fallback models the
+    worst-case LLM cost is 4 × 10s = 40s; the remainder is plenty for startup
+    and the Telegram send.
+    """
     if not context.strip():
         return ""
     messages = [
@@ -2057,8 +1968,8 @@ def _llm_one_line_summary(context: str) -> str:
         {"role": "user", "content": context},
     ]
     try:
-        content, model, error = llm_chat_with_fallback(
-            messages, MODELS, max_tokens=100, timeout=30,
+        content, model, error = llm_chat_direct(
+            messages, MODELS, max_tokens=100, timeout=10,
         )
         if content:
             return content.strip().split("\n")[0][:100]
@@ -2213,11 +2124,11 @@ def main() -> int:
             log("Dry-run: daily report generated, not sent")
             return 0
 
-        if _send_telegram_text(report, chat_id=DM_CHAT_ID):
+        if send_dm_chunked(report):
             log("Daily report sent to DM")
             if credit_path:
-                if _send_telegram_photo(
-                    credit_path,
+                if send_dm_photo(
+                    str(credit_path),
                     "KOSPI 매수판단 신호 — 신용비율\n"
                     "신용비율 = 신용잔고 ÷ (신용잔고+예수금) × 100\n"
                     "개인투자자 레버리지 수준을 나타내며, 높을수록 과열·낮을수록 매수 기회\n"
@@ -2242,7 +2153,7 @@ def main() -> int:
             log("Dry-run: 6h summary generated, not sent")
             return 0
 
-        if _send_to_ron_topic(summary):
+        if send_group_chunked(summary, topic_id=RON_TOPIC_ID):
             log("6h summary sent to Ron topic")
             _record_run("6h-summary")
             return 0

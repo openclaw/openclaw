@@ -27,32 +27,15 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from shared.db import db_connection, db_transaction
 from shared.log import make_logger
+from shared.telegram import send_dm as _shared_send_dm, _get_bot_token, DM_CHAT_ID
 
 # ── paths ──
 WORKSPACE = Path(os.path.expanduser("~/.openclaw/workspace"))
 OPS_DB = Path(os.path.expanduser("~/.openclaw/data/ops_multiagent.db"))
 LOGS_DIR = WORKSPACE / "logs"
 LOG_FILE = LOGS_DIR / "task_briefing.log"
-DM_CHAT_ID = 492860021
 
 log = make_logger(log_file=LOG_FILE)
-
-
-def _bot_token() -> str:
-    """openclaw.json에서 Telegram bot token 읽기."""
-    cfg_path = Path(os.path.expanduser("~/.openclaw/openclaw.json"))
-    if cfg_path.exists():
-        try:
-            with open(cfg_path) as f:
-                cfg = json.load(f)
-            providers = cfg.get("providers", {})
-            tg = providers.get("telegram", {})
-            token = tg.get("botToken", "")
-            if token:
-                return token
-        except Exception:
-            pass
-    return os.environ.get("TELEGRAM_BOT_TOKEN", "8554125313:AAGC5Zzb9nCbPYgmOVqs3pVn-qzIA2oOtkI")
 
 
 # ── DB queries ──
@@ -317,7 +300,7 @@ def build_on_demand_briefing() -> str:
 
 def _tg_api(method: str, payload: dict) -> dict | None:
     """Telegram Bot API 호출 헬퍼."""
-    token = _bot_token()
+    token = _get_bot_token()
     url = f"https://api.telegram.org/bot{token}/{method}"
     data = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
@@ -392,33 +375,7 @@ def send_dm(text: str, dry_run: bool = False) -> bool:
     if dry_run:
         log("DRY-RUN — DM 발송 생략")
         return True
-    token = _bot_token()
-    url = f"https://api.telegram.org/bot{token}/sendMessage"
-    payload = json.dumps({
-        "chat_id": DM_CHAT_ID,
-        "text": text[:4000],
-        "parse_mode": "HTML",
-    }).encode("utf-8")
-    req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
-    try:
-        with urllib.request.urlopen(req, timeout=15) as r:
-            return r.status == 200
-    except Exception as e:
-        log(f"DM HTML 실패: {e}, plain text 재시도", level="WARN")
-        # HTML 파싱 실패 시 plain text 폴백
-        import re
-        plain = re.sub(r"<[^>]+>", "", text)
-        payload2 = json.dumps({
-            "chat_id": DM_CHAT_ID,
-            "text": plain[:4000],
-        }).encode("utf-8")
-        req2 = urllib.request.Request(url, data=payload2, headers={"Content-Type": "application/json"})
-        try:
-            with urllib.request.urlopen(req2, timeout=15) as r:
-                return r.status == 200
-        except Exception as e2:
-            log(f"DM plain text도 실패: {e2}", level="ERROR")
-            return False
+    return _shared_send_dm(text)
 
 
 # ── CLI ──

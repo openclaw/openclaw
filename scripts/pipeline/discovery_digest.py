@@ -14,22 +14,19 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-import urllib.error
-import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from shared.telegram import send_dm
 
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 KST = timezone(timedelta(hours=9))
 
-REPORTS_DIR = Path.home() / ".openclaw" / "workspace" / "reports" / "ideas"
-STATE_PATH = REPORTS_DIR / "discovery_digest_state.json"
-
-TELEGRAM_BOT_TOKEN = "8554125313:AAGC5Zzb9nCbPYgmOVqs3pVn-qzIA2oOtkI"
-TELEGRAM_CHAT_ID = "492860021"
-TELEGRAM_API = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+FILTERED_DIR = Path.home() / ".openclaw" / "workspace" / "memory" / "filtered-ideas"
+STATE_PATH = FILTERED_DIR / "discovery_digest_state.json"
 
 MAX_ITEMS = 10
 MAX_MESSAGE_LEN = 4090
@@ -88,30 +85,41 @@ def save_state(state: dict) -> None:
 # ---------------------------------------------------------------------------
 # Discovery loading
 # ---------------------------------------------------------------------------
-def find_scored_file() -> Path | None:
-    """Return today's scored file, falling back to yesterday's."""
-    for date_str in (today_str(), yesterday_str()):
-        path = REPORTS_DIR / f"scored_discoveries_{date_str}.jsonl"
-        if path.exists():
+def find_filtered_file() -> Path | None:
+    """Return the most recent filtered file from today or yesterday."""
+    today = now_kst().strftime("%Y-%m-%d")
+    yesterday = (now_kst() - timedelta(days=1)).strftime("%Y-%m-%d")
+    candidates = sorted(FILTERED_DIR.glob("filtered_*.json"), reverse=True)
+    for path in candidates:
+        name = path.stem  # e.g. filtered_2026-02-28_0907
+        if name.startswith(f"filtered_{today}") or name.startswith(f"filtered_{yesterday}"):
             return path
     return None
 
 
 def load_discoveries(path: Path, min_score: int) -> list[dict]:
-    """Load discoveries with score >= min_score from a JSONL file."""
+    """Load discoveries with score >= min_score from a filtered JSON file."""
+    try:
+        items = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return []
+    if not isinstance(items, list):
+        return []
     results = []
-    for line in path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            item = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        score = item.get("relevance_score", 0)
+    for item in items:
+        score = item.get("score", item.get("relevance_score", 0))
         if score >= min_score:
+            # Normalize fields for formatting
+            item["relevance_score"] = score
+            if not item.get("title"):
+                text = item.get("text", "")
+                first_line = text.strip().split("\n")[0].lstrip("# ").strip()
+                item["title"] = first_line[:80] if first_line else "untitled"
+            if not item.get("url"):
+                item["url"] = item.get("file", "")
+            if not item.get("relevance_reason"):
+                item["relevance_reason"] = item.get("reason", "")
             results.append(item)
-    # Sort by score descending, then by title
     results.sort(key=lambda x: (-x.get("relevance_score", 0), x.get("title", "")))
     return results
 
@@ -146,34 +154,6 @@ def format_message(discoveries: list[dict]) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Telegram sending
-# ---------------------------------------------------------------------------
-def send_telegram(text: str) -> bool:
-    """Send message via Telegram Bot API. Returns True on success."""
-    payload = json.dumps({
-        "chat_id": TELEGRAM_CHAT_ID,
-        "text": text,
-        "parse_mode": "HTML",
-        "disable_web_page_preview": True,
-    }).encode("utf-8")
-
-    req = urllib.request.Request(
-        TELEGRAM_API,
-        data=payload,
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-
-    try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            body = json.loads(resp.read().decode("utf-8"))
-            return body.get("ok", False)
-    except (urllib.error.URLError, urllib.error.HTTPError, OSError) as exc:
-        print(f"[ERROR] Telegram send failed: {exc}", file=sys.stderr)
-        return False
-
-
-# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 def main() -> None:
@@ -193,10 +173,10 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    # Find scored file
-    scored_file = find_scored_file()
+    # Find filtered file
+    scored_file = find_filtered_file()
     if scored_file is None:
-        print("No scored_discoveries file found for today or yesterday")
+        print("No filtered discoveries file found for today or yesterday")
         return
 
     # Load discoveries
@@ -228,7 +208,7 @@ def main() -> None:
         return
 
     # Send
-    ok = send_telegram(message)
+    ok = send_dm(message)
     if not ok:
         print("[ERROR] Failed to send Telegram message", file=sys.stderr)
         sys.exit(1)

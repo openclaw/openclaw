@@ -98,10 +98,10 @@ PRICE_HISTORY_FILE = OUTPUT_DIR / "price_history.json"
 
 DART_API_KEY_FILE = Path.home() / ".openclaw" / "dart_api_key"
 TANKER_DATA_FILE = OUTPUT_DIR / "tanker_data.json"
-BOT_TOKEN = "8554125313:AAGC5Zzb9nCbPYgmOVqs3pVn-qzIA2oOtkI"
-GROUP_CHAT_ID = "-1003076685086"
-RON_TOPIC_ID = 30413
-DM_CHAT_ID = "492860021"
+from shared.telegram import (
+    send_dm, send_dm_chunked, send_document, send_group_chunked,
+    DM_CHAT_ID, GROUP_CHAT_ID, RON_TOPIC_ID,
+)
 
 log = make_logger(log_file=str(SCRIPTS_DIR.parent / "logs" / "shipbuilding_cycle.log"))
 
@@ -5455,58 +5455,25 @@ def _render_md_section(pdf, section: str) -> None:
 
 
 def send_telegram_pdf(pdf_path: Path, caption: str,
-                      chat_id: str = DM_CHAT_ID,
+                      chat_id: str = str(DM_CHAT_ID),
                       dry_run: bool = False) -> bool:
-    """sendDocument API로 PDF 전송. DM only (테스트 중)."""
+    """sendDocument API로 PDF 전송 (shared telegram 경유). DM only (테스트 중)."""
     if dry_run:
         log(f"DRY-RUN: skip PDF send ({pdf_path.name})")
         return True
-    import urllib.request
-    try:
-        boundary = "----FormBoundary" + datetime.now().strftime("%Y%m%d%H%M%S")
-        body = b""
-        # chat_id
-        body += f"--{boundary}\r\n".encode()
-        body += b"Content-Disposition: form-data; name=\"chat_id\"\r\n\r\n"
-        body += f"{chat_id}\r\n".encode()
-        # caption
-        body += f"--{boundary}\r\n".encode()
-        body += b"Content-Disposition: form-data; name=\"caption\"\r\n\r\n"
-        body += f"{caption}\r\n".encode()
-        # document
-        body += f"--{boundary}\r\n".encode()
-        body += f'Content-Disposition: form-data; name="document"; filename="{pdf_path.name}"\r\n'.encode()
-        body += b"Content-Type: application/pdf\r\n\r\n"
-        body += pdf_path.read_bytes()
-        body += b"\r\n"
-        body += f"--{boundary}--\r\n".encode()
-
-        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendDocument"
-        req = urllib.request.Request(url, data=body)
-        req.add_header("Content-Type", f"multipart/form-data; boundary={boundary}")
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            ok = json.loads(resp.read()).get("ok")
-        if ok:
-            log(f"PDF sent to {chat_id}")
-        return bool(ok)
-    except Exception as e:
-        log(f"ERROR PDF send: {e}")
-        return False
+    ok = send_document(chat_id, str(pdf_path), caption=caption)
+    if ok:
+        log(f"PDF sent to {chat_id}")
+    return ok
 
 
 def _send_progress_dm(msg: str, dry_run: bool = False) -> None:
-    """진행 보고 DM 전송."""
+    """진행 보고 DM 전송 (shared telegram 경유)."""
     if dry_run:
         log(f"DRY-RUN progress: {msg}")
         return
-    import urllib.request
-    import urllib.parse
     try:
-        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-        payload = urllib.parse.urlencode({
-            "chat_id": DM_CHAT_ID, "text": msg,
-        }).encode()
-        urllib.request.urlopen(urllib.request.Request(url, data=payload), timeout=10)
+        send_dm(msg, level="critical")
     except Exception:
         pass  # 진행 보고 실패는 무시
 
@@ -5516,27 +5483,15 @@ def _send_progress_dm(msg: str, dry_run: bool = False) -> None:
 # ══════════════════════════════════════════════════════════════════
 
 def send_telegram(text: str, dry_run: bool = False) -> bool:
-    """지식사랑방 론 토픽으로 전송."""
+    """지식사랑방 론 토픽으로 전송 (shared telegram 경유)."""
     if dry_run:
         log("DRY-RUN: skip send")
         print(text)
         return True
-    import urllib.request
-    import urllib.parse
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    payload = urllib.parse.urlencode({
-        "chat_id": GROUP_CHAT_ID, "message_thread_id": RON_TOPIC_ID,
-        "text": text, "parse_mode": "HTML",
-    }).encode()
-    try:
-        with urllib.request.urlopen(urllib.request.Request(url, data=payload), timeout=15) as resp:
-            ok = json.loads(resp.read()).get("ok")
-        if ok:
-            log("Sent to 지식사랑방 론 토픽")
-        return bool(ok)
-    except Exception as e:
-        log(f"ERROR send: {e}")
-        return False
+    ok = send_group_chunked(text, topic_id=RON_TOPIC_ID)
+    if ok:
+        log("Sent to 지식사랑방 론 토픽")
+    return ok
 
 
 def _md_to_telegram_html(md: str) -> str:
@@ -5590,51 +5545,27 @@ def _split_report_for_telegram(report: str, max_len: int = 4000) -> list[str]:
 
 def send_telegram_full_report(report: str, dry_run: bool = False,
                               dm_only: bool = True) -> bool:
-    """전체 리포트를 분할 전송. dm_only=True면 DM으로만 (테스트 완료 전)."""
+    """전체 리포트를 분할 전송 (shared telegram 경유).
+
+    dm_only=True면 DM으로만 (테스트 완료 전).
+    _split_report_for_telegram으로 ## 섹션 경계 분할 후
+    _md_to_telegram_html 변환하여 전송.
+    """
     if dry_run:
         log("DRY-RUN: skip report send")
         print(report)
         return True
-    import urllib.request
-    import urllib.parse
-    import time
 
     chunks = _split_report_for_telegram(report)
-    targets = [DM_CHAT_ID] if dm_only else [DM_CHAT_ID, GROUP_CHAT_ID]
     log(f"Sending full report: {len(chunks)} chunks, {len(report)} chars total (dm_only={dm_only})")
 
-    success = True
-    for i, chunk in enumerate(chunks):
-        html = _md_to_telegram_html(chunk)
-        for chat_id in targets:
-            params: dict[str, Any] = {
-                "chat_id": chat_id,
-                "text": html,
-                "parse_mode": "HTML",
-            }
-            if chat_id == GROUP_CHAT_ID:
-                params["message_thread_id"] = RON_TOPIC_ID
-            url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-            payload = urllib.parse.urlencode(params).encode()
-            ok = False
-            try:
-                with urllib.request.urlopen(urllib.request.Request(url, data=payload), timeout=15) as resp:
-                    ok = json.loads(resp.read()).get("ok", False)
-            except Exception:
-                pass  # HTML 파싱 실패 → plain text fallback
-            if not ok:
-                fallback_params = {k: v for k, v in params.items() if k != "parse_mode"}
-                fallback_params["text"] = chunk
-                payload = urllib.parse.urlencode(fallback_params).encode()
-                try:
-                    with urllib.request.urlopen(urllib.request.Request(url, data=payload), timeout=15) as resp:
-                        ok = json.loads(resp.read()).get("ok", False)
-                except Exception as e:
-                    log(f"ERROR send chunk {i}: {e}")
-            if not ok:
-                success = False
-        if i < len(chunks) - 1:
-            time.sleep(1)
+    # 각 청크를 MD→HTML 변환하여 결합 후 chunked 전송
+    html_report = "\n".join(_md_to_telegram_html(chunk) for chunk in chunks)
+    success = send_dm_chunked(html_report)
+
+    if not dm_only:
+        if not send_group_chunked(html_report, topic_id=RON_TOPIC_ID):
+            success = False
 
     dest = "DM" if dm_only else "DM + 지식사랑방"
     log(f"Report sent to {dest} ({len(chunks)} parts)" if success else f"ERROR: partial send to {dest}")

@@ -23,17 +23,16 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from shared.log import make_logger
+from shared.telegram import (
+    send_dm, send_group, send_photo,
+    GROUP_CHAT_ID, RON_TOPIC_ID,
+)
 
 WORKSPACE = Path(os.path.expanduser("~/.openclaw/workspace"))
 OUTPUT_DIR = WORKSPACE / "memory" / "market-indicators"
 CHART_DIR = OUTPUT_DIR / "charts"
 LOGS_DIR = WORKSPACE / "logs"
 LOG_FILE = LOGS_DIR / "market_indicator_tracker.log"
-FORWARD_SCRIPT = WORKSPACE / "scripts" / "forward_to_telegram.py"
-BOT_TOKEN = "8554125313:AAGC5Zzb9nCbPYgmOVqs3pVn-qzIA2oOtkI"
-DM_CHAT_ID = "492860021"
-GROUP_CHAT_ID = "-1003076685086"
-GROUP_TOPIC_ID = "30413"
 DM_SENT_FILE = OUTPUT_DIR / ".dm_sent_today.json"
 
 log = make_logger(log_file=LOG_FILE)
@@ -76,11 +75,11 @@ INDICATORS = {
 KR3Y_CONFIG = {"name": "한국 국채3년", "category": "금리", "region": "korea"}
 ECOS_API_KEY = os.getenv("ECOS_API_KEY", "4GXR28BEVCS7PZE3G3MS")
 
-# 한경 데이터센터 금리 지표 (KR3Y 외)
+# 한경 데이터센터 금리 지표 (KR3Y 외) + ECOS item code (817Y002 테이블)
 HANKYUNG_RATE_CONFIGS = {
-    "CD91":   {"name": "CD 91일",   "category": "금리", "region": "korea", "hk_name": "CD91일물"},
+    "CD91":   {"name": "CD 91일",   "category": "금리", "region": "korea", "hk_name": "CD91일물",  "ecos_item": "010502000"},
     "CP91":   {"name": "CP 91일",   "category": "금리", "region": "korea", "hk_name": "CP91일물"},
-    "KRC3Y":  {"name": "회사채3년",  "category": "금리", "region": "korea", "hk_name": "회사채3년"},
+    "KRC3Y":  {"name": "회사채3년",  "category": "금리", "region": "korea", "hk_name": "회사채3년", "ecos_item": "010300000"},
 }
 HANKYUNG_URL = "https://datacenter.hankyung.com/rates-bonds"
 
@@ -267,30 +266,52 @@ def _fetch_hankyung_rates(targets=None):
         return {}
 
 
-def _fetch_kr3y_ecos():
-    """ECOS API에서 한국 국채 3년물 금리 히스토리 조회 (MA/zscore용)."""
+def _fetch_ecos_rate_history(item_code="010200000", days=400):
+    """ECOS API에서 금리 히스토리 조회 (817Y002 시장금리 일별).
+
+    Args:
+        item_code: ECOS 항목코드 (010200000=국고3년, 010300000=회사채AA-,
+                   010502000=CD91일)
+        days: 조회 기간 (일). 400이면 YoY 계산 가능.
+    Returns:
+        list[float] | None: 일별 금리값 리스트 (오래된순)
+    """
+    import time as _time
     try:
         import requests
     except ImportError:
         return None
-    try:
-        end = datetime.now().strftime("%Y%m%d")
-        start = (datetime.now() - timedelta(days=60)).strftime("%Y%m%d")
-        limit = 10 if ECOS_API_KEY == "sample" else 30
-        url = (
-            f"https://ecos.bok.or.kr/api/StatisticSearch/"
-            f"{ECOS_API_KEY}/json/kr/1/{limit}/817Y002/D/{start}/{end}/010200000"
-        )
-        r = requests.get(url, timeout=15)
-        data = r.json()
-        if "StatisticSearch" not in data:
+    end = datetime.now().strftime("%Y%m%d")
+    start = (datetime.now() - timedelta(days=days)).strftime("%Y%m%d")
+    limit = 10 if ECOS_API_KEY == "sample" else 300
+    url = (
+        f"https://ecos.bok.or.kr/api/StatisticSearch/"
+        f"{ECOS_API_KEY}/json/kr/1/{limit}/817Y002/D/{start}/{end}/{item_code}"
+    )
+    for attempt in range(2):
+        try:
+            r = requests.get(url, timeout=20)
+            data = r.json()
+            if "StatisticSearch" not in data:
+                if attempt == 0:
+                    _time.sleep(1)
+                    continue
+                return None
+            rows = data["StatisticSearch"]["row"]
+            if not rows:
+                return None
+            return [float(r["DATA_VALUE"]) for r in rows]
+        except Exception:
+            if attempt == 0:
+                _time.sleep(1)
+                continue
             return None
-        rows = data["StatisticSearch"]["row"]
-        if not rows:
-            return None
-        return [float(r["DATA_VALUE"]) for r in rows]
-    except Exception:
-        return None
+    return None
+
+
+def _fetch_kr3y_ecos():
+    """후방호환 래퍼."""
+    return _fetch_ecos_rate_history("010200000", days=400)
 
 
 def fetch_kr3y_bond():
@@ -333,18 +354,48 @@ def fetch_kr3y_bond():
         m_prev = hist[-21]
         mom_pct = ((close - m_prev) / m_prev * 100) if m_prev != 0 else 0
 
+    yoy_pct = 0.0
+    if len(hist) > 240:  # ~영업일 1년
+        y_prev = hist[-241]
+        yoy_pct = ((close - y_prev) / y_prev * 100) if y_prev != 0 else 0
+
     log(f"KR3Y: {close}% ({source}, {len(hist)} data points)")
     return {
         "close": round(close, 2),
         "prev": round(prev, 2),
         "change_pct": round(change_pct, 2),
         "mom_pct": round(mom_pct, 2),
-        "yoy_pct": 0.0,
+        "yoy_pct": round(yoy_pct, 2),
         "ma20": round(ma, 2),
         "std20": round(std, 4),
         "zscore": round(zscore, 2),
         "data_points": len(hist),
         "data_date": data_date,
+    }
+
+
+def _calc_rate_stats(close, hist):
+    """금리 히스토리에서 MA20/std/zscore/MoM/YoY 계산."""
+    if not hist:
+        hist = [close]
+    ma = sum(hist) / len(hist)
+    std = (sum((v - ma) ** 2 for v in hist) / len(hist)) ** 0.5
+    zscore = ((close - ma) / std) if std > 0 else 0
+    mom_pct = 0.0
+    if len(hist) > 20:
+        m_prev = hist[-21]
+        mom_pct = ((close - m_prev) / m_prev * 100) if m_prev != 0 else 0
+    yoy_pct = 0.0
+    if len(hist) > 240:
+        y_prev = hist[-241]
+        yoy_pct = ((close - y_prev) / y_prev * 100) if y_prev != 0 else 0
+    return {
+        "mom_pct": round(mom_pct, 2),
+        "yoy_pct": round(yoy_pct, 2),
+        "ma20": round(ma, 2),
+        "std20": round(std, 4),
+        "zscore": round(zscore, 2),
+        "data_points": len(hist),
     }
 
 
@@ -984,9 +1035,8 @@ def _dm_row(key, d, anomaly_tickers):
 
 
 def send_anomaly_dm(anomalies, summary, indicators, credit_data=None,
-                    chat_id=DM_CHAT_ID, topic_id=None):
-    """Send market report via Telegram (HTML, direct API)."""
-    import urllib.request
+                    chat_id=None, topic_id=None):
+    """Send market report via Telegram (HTML, shared.telegram 경유)."""
 
     now = datetime.now()
     date_str = now.strftime("%m/%d %H:%M")
@@ -1057,29 +1107,11 @@ def send_anomaly_dm(anomalies, summary, indicators, credit_data=None,
     return _send_telegram_text(text, chat_id, topic_id)
 
 
-def _send_telegram_text(text, chat_id=DM_CHAT_ID, topic_id=None):
-    """Telegram Bot API로 HTML 텍스트 전송."""
-    import urllib.request
-    try:
-        payload = {"chat_id": chat_id, "text": text,
-                   "parse_mode": "HTML", "disable_web_page_preview": True}
-        if topic_id:
-            payload["message_thread_id"] = int(topic_id)
-        data = json.dumps(payload).encode("utf-8")
-        req = urllib.request.Request(
-            f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-            data=data, headers={"Content-Type": "application/json"},
-        )
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            result = json.loads(resp.read().decode("utf-8"))
-            if result.get("ok"):
-                log(f"Telegram sent to {chat_id}")
-                return True
-        log(f"Telegram failed: {result}")
-        return False
-    except Exception as e:
-        log(f"Telegram error: {e}")
-        return False
+def _send_telegram_text(text, chat_id=None, topic_id=None):
+    """Telegram 전송 — shared.telegram 모듈 경유."""
+    if chat_id is not None and int(chat_id) == GROUP_CHAT_ID:
+        return send_group(text, topic_id=topic_id)
+    return send_dm(text)
 
 
 # ── 차트 생성 ────────────────────────────────────────────────────
@@ -1397,27 +1429,22 @@ def generate_anomaly_charts(anomalies, indicators, credit_data=None):
     return chart_results
 
 
-def send_telegram_images(chart_results, chat_id=DM_CHAT_ID, topic_id=None):
-    """텔레그램 Bot API로 차트 이미지 + 캡션 전송."""
-    import requests
+def send_telegram_images(chart_results, chat_id=None, topic_id=None):
+    """텔레그램 Bot API로 차트 이미지 + 캡션 전송 (shared.telegram 경유)."""
+    target_chat = int(chat_id) if chat_id is not None else None
     sent = 0
     for path, caption in chart_results:
         try:
-            url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
-            form_data = {"chat_id": chat_id, "caption": caption[:1024]}
-            if topic_id:
-                form_data["message_thread_id"] = topic_id
-            with open(str(path), "rb") as f:
-                r = requests.post(
-                    url,
-                    data=form_data,
-                    files={"photo": f},
-                    timeout=30,
-                )
-            if r.status_code == 200:
+            if target_chat is not None and target_chat == GROUP_CHAT_ID:
+                ok = send_photo(GROUP_CHAT_ID, str(path), caption=caption[:1024],
+                                topic_id=topic_id)
+            else:
+                ok = send_photo(GROUP_CHAT_ID, str(path), caption=caption[:1024],
+                                topic_id=topic_id)
+            if ok:
                 sent += 1
             else:
-                log(f"Chart send failed: {r.text[:100]}", level="WARN")
+                log(f"Chart send failed for {path}", level="WARN")
         except Exception as e:
             log(f"Chart send error: {e}", level="WARN")
     log(f"Charts sent: {sent}/{len(chart_results)}")
@@ -1452,16 +1479,24 @@ def main():
     if kr3y:
         indicators["KR3Y"] = kr3y
 
-    # 한경 금리 지표 (CD91, CP91, 회사채3년)
+    # 한경 금리 지표 (CD91, CP91, 회사채3년) + ECOS 히스토리로 MoM/YoY 계산
     hk_targets = {cfg["hk_name"]: key for key, cfg in HANKYUNG_RATE_CONFIGS.items()}
     hk_rates = _fetch_hankyung_rates(hk_targets)
     for key, hk in hk_rates.items():
-        indicators[key] = {
-            "close": hk["close"], "prev": hk["prev"],
-            "change_pct": hk["change_pct"],
+        close = hk["close"]
+        ecos_item = HANKYUNG_RATE_CONFIGS.get(key, {}).get("ecos_item")
+        hist = _fetch_ecos_rate_history(ecos_item, days=400) if ecos_item else None
+        if hist and abs(hist[-1] - close) > 0.001:
+            hist.append(close)
+        stats = _calc_rate_stats(close, hist) if hist else {
             "mom_pct": 0.0, "yoy_pct": 0.0,
-            "ma20": hk["close"], "std20": 0, "zscore": 0,
-            "data_points": 1, "data_date": hk["data_date"],
+            "ma20": close, "std20": 0, "zscore": 0, "data_points": 1,
+        }
+        indicators[key] = {
+            "close": close, "prev": hk["prev"],
+            "change_pct": hk["change_pct"],
+            "data_date": hk["data_date"],
+            **stats,
         }
     if hk_rates:
         rate_strs = [f"{k}={v['close']}%" for k, v in hk_rates.items()]
@@ -1472,12 +1507,17 @@ def main():
         spread = indicators["KRC3Y"]["close"] - indicators["KR3Y"]["close"]
         prev_spread = indicators["KRC3Y"]["prev"] - indicators["KR3Y"]["prev"]
         chg = ((spread - prev_spread) / prev_spread * 100) if prev_spread != 0 else 0
+        # CRSPRD MoM/YoY: 구성요소에서 파생
+        krc3y_d = indicators["KRC3Y"]
+        kr3y_d = indicators["KR3Y"]
+        cr_mom = krc3y_d["mom_pct"] - kr3y_d["mom_pct"]
+        cr_yoy = krc3y_d["yoy_pct"] - kr3y_d["yoy_pct"]
         indicators["CRSPRD"] = {
             "close": round(spread, 3), "prev": round(prev_spread, 3),
             "change_pct": round(chg, 2),
-            "mom_pct": 0.0, "yoy_pct": 0.0,
+            "mom_pct": round(cr_mom, 2), "yoy_pct": round(cr_yoy, 2),
             "ma20": round(spread, 3), "std20": 0, "zscore": 0,
-            "data_points": 1,
+            "data_points": min(krc3y_d["data_points"], kr3y_d["data_points"]),
             "data_date": indicators["KRC3Y"].get("data_date", ""),
         }
         log(f"Credit spread: {spread:.3f}%p")
@@ -1555,7 +1595,7 @@ def main():
         else:
             # 지식사랑방 론채널에 리포트 전송 (항상)
             send_anomaly_dm(anomalies, summary, indicators, credit_data,
-                            chat_id=GROUP_CHAT_ID, topic_id=GROUP_TOPIC_ID)
+                            chat_id=GROUP_CHAT_ID, topic_id=RON_TOPIC_ID)
             # 이상치 있으면 DM 알림도 추가
             if anomalies:
                 dm_sent = send_anomaly_dm(anomalies, summary, indicators, credit_data)
@@ -1563,7 +1603,7 @@ def main():
             chart_results = generate_anomaly_charts(anomalies, indicators, credit_data)
             if chart_results:
                 charts_sent = send_telegram_images(
-                    chart_results, chat_id=GROUP_CHAT_ID, topic_id=GROUP_TOPIC_ID)
+                    chart_results, chat_id=GROUP_CHAT_ID, topic_id=RON_TOPIC_ID)
             if dm_sent or charts_sent or True:  # 그룹 전송은 항상 기록
                 DM_SENT_FILE.write_text(
                     json.dumps({"date": today, "anomalies": len(anomalies),

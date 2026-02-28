@@ -38,6 +38,7 @@ from shared.frontmatter import parse_frontmatter, update_frontmatter, write_note
 from shared.classify import classify_by_text, load_classification
 from shared.llm import llm_chat_direct, DIRECT_PREMIUM_CHAIN
 from shared.log import make_logger
+from shared.telegram import send_dm
 from shared.vault_paths import (
     VAULT, NOTES, ATOMIC_NOTES, STRUCTURE,
     CAT_COMPANY, CAT_MARKET, CAT_INDUSTRY, CAT_PROG, CAT_INSIGHT,
@@ -54,9 +55,6 @@ WORKSPACE = Path(os.path.expanduser("~/.openclaw/workspace"))
 STATE_DIR = WORKSPACE / "memory" / "vault-architect"
 STATE_FILE = STATE_DIR / "state.json"
 LOG_FILE = WORKSPACE / "logs" / "vault_architect.log"
-
-BOT_TOKEN = "8554125313:AAGC5Zzb9nCbPYgmOVqs3pVn-qzIA2oOtkI"
-DM_CHAT_ID = "492860021"
 
 # 카테고리 → 200 하위 폴더 매핑
 CATEGORY_FOLDER_MAP = {
@@ -894,29 +892,6 @@ def format_report(diag: DiagnosisResult, stats: PhaseStats) -> str:
     return "\n".join(lines)
 
 
-def send_telegram(text: str) -> bool:
-    import urllib.request
-    try:
-        payload = {
-            "chat_id": DM_CHAT_ID,
-            "text": text,
-            "parse_mode": "HTML",
-            "disable_web_page_preview": True,
-        }
-        data = json.dumps(payload).encode("utf-8")
-        req = urllib.request.Request(
-            f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-            data=data,
-            headers={"Content-Type": "application/json"},
-        )
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            result = json.loads(resp.read().decode("utf-8"))
-            return bool(result.get("ok"))
-    except Exception as e:
-        log(f"Telegram error: {e}", level="ERROR")
-        return False
-
-
 # ── 메인 ────────────────────────────────────────────────────────
 
 def main():
@@ -1041,7 +1016,7 @@ def main():
     print(report.replace("<b>", "").replace("</b>", ""))
 
     if args.notify and not args.dry_run:
-        if send_telegram(report):
+        if send_dm(report):
             log("Telegram 리포트 전송 완료")
         else:
             log("Telegram 전송 실패", level="ERROR")

@@ -10,15 +10,15 @@ Usage:
 import argparse
 import json
 import os
-import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from shared.log import make_logger
-from shared.llm import llm_chat_with_fallback
+from shared.llm import llm_chat_direct, DIRECT_DEFAULT_CHAIN
 from shared.frontmatter import render_frontmatter
+from shared.telegram import send_dm
 
 BLOG_ID = "ranto28"
 RSS_URL = f"https://rss.blog.naver.com/{BLOG_ID}"
@@ -27,12 +27,10 @@ OUTPUT_DIR = WORKSPACE / "memory" / "blog-insights"
 PROCESSED_FILE = OUTPUT_DIR / ".processed_blogs.json"
 LOGS_DIR = WORKSPACE / "logs"
 LOG_FILE = LOGS_DIR / "blog_monitor.log"
-FORWARD_SCRIPT = WORKSPACE / "scripts" / "forward_to_telegram.py"
-DM_CHAT_ID = "492860021"
 
 log = make_logger(log_file=LOG_FILE)
 
-EXTRACT_MODELS = ["gpt-5-mini", "qwen3:8b"]
+EXTRACT_MODELS = list(DIRECT_DEFAULT_CHAIN)
 
 # 관심 카테고리 (맛집/일상/여행 제외)
 INCLUDE_CATEGORIES = {"경제", "주식", "국제정세", "사회", "부동산", "금융", "투자", "정치"}
@@ -148,7 +146,7 @@ def extract_insight(title, summary_text, categories):
         )},
         {"role": "user", "content": f"제목: {title}\n카테고리: {cat_str}\n\n{text}"},
     ]
-    content, model, err = llm_chat_with_fallback(
+    content, model, err = llm_chat_direct(
         messages, EXTRACT_MODELS, temperature=0.2, max_tokens=800, timeout=45,
     )
     if not content:
@@ -247,12 +245,12 @@ def _update_geo_watchlist(regions):
     if not new_regions:
         return
     for name in new_regions[:2]:
-        content, _, _ = llm_chat_with_fallback(
+        content, _, _ = llm_chat_direct(
             [{"role": "system", "content":
               'Geographic region -> JSON: {"id":"snake_case","bbox":[lat_min,lon_min,lat_max,lon_max],'
               '"keywords":["kw1"],"types":["news"]}. JSON only.'},
              {"role": "user", "content": name}],
-            ["gpt-5-mini", "qwen3:8b"], temperature=0.1, max_tokens=200, timeout=20)
+            ["gpt-5-mini", "qwen2.5:7b"], temperature=0.1, max_tokens=200, timeout=20)
         if not content:
             continue
         clean = content.strip().strip("`")
@@ -271,40 +269,52 @@ def _update_geo_watchlist(regions):
         json.dump(wl, f, indent=2, ensure_ascii=False)
 
 
+def generate_summary_text(entries, extracted_map=None):
+    """Generate a summary text of processed blog entries for reporting.
+
+    Args:
+        entries: list of feedparser entries processed
+        extracted_map: optional dict mapping entry id to extracted insight
+
+    Returns:
+        str: summary text with counts and titles
+    """
+    if not entries:
+        return "처리된 블로그 글 없음"
+
+    lines = [f"블로그 모니터 요약 ({len(entries)}건)"]
+    for entry in entries[:10]:
+        title = getattr(entry, "title", "Untitled")
+        has_insight = ""
+        if extracted_map:
+            eid = getattr(entry, "id", getattr(entry, "link", ""))
+            if eid in extracted_map and extracted_map[eid]:
+                has_insight = " ✓"
+        lines.append(f"  - {title[:60]}{has_insight}")
+    if len(entries) > 10:
+        lines.append(f"  ... 외 {len(entries) - 10}건")
+    return "\n".join(lines)
+
+
 # ── 텔레그램 전달 ───────────────────────────────────────────────────
 
 def notify_telegram(entry, extracted):
-    """Send blog insight to Telegram via forward_to_telegram.py."""
-    if not FORWARD_SCRIPT.exists():
-        log("forward_to_telegram.py not found, skipping notification")
-        return False
-
+    """Send blog insight to Telegram via Bot API."""
     title = getattr(entry, "title", "Untitled")
     link = getattr(entry, "link", "")
     insight = extracted.get("insight", "") if extracted else ""
 
-    summary_lines = [f"*{title}*", ""]
+    lines = [f"<b>{title}</b>", ""]
     if insight:
-        summary_lines.append(insight[:500])
-        summary_lines.append("")
-    summary_lines.append(f"[원문]({link})")
-    summary = "\n".join(summary_lines)
+        lines.append(insight[:500])
+        lines.append("")
+    lines.append(f'<a href="{link}">원문</a>')
+    text = "\n".join(lines)
 
-    try:
-        result = subprocess.run(
-            [sys.executable, str(FORWARD_SCRIPT),
-             "--source", "blog_insights",
-             "--summary", summary],
-            timeout=30, capture_output=True, text=True,
-        )
-        if result.returncode == 0:
-            log(f"Telegram notification sent: {title[:40]}")
-            return True
-        log(f"Telegram notify failed: {result.stderr.strip()[:100]}")
-        return False
-    except Exception as e:
-        log(f"Telegram notify error: {e}")
-        return False
+    if send_dm(text):
+        log(f"Telegram notification sent: {title[:40]}")
+        return True
+    return False
 
 
 # ── main ─────────────────────────────────────────────────────────────

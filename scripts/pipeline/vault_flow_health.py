@@ -21,6 +21,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from shared.frontmatter import parse_frontmatter
 from shared.log import make_logger
+from shared.telegram import send_dm
 from shared.vault_paths import (
     VAULT, INBOX as DEFAULT_INBOX, NOTES, STRUCTURE, INSIGHTS, RESOURCES,
     ACTIVITY, OPS, SYSTEM, ATOMIC_NOTES, PLAYBOOK, REPORTS, REPORTS_ARCHIVE,
@@ -33,8 +34,6 @@ STATE_DIR = WORKSPACE / "memory" / "vault-flow-health"
 STATE_FILE = STATE_DIR / "state.json"
 LOG_FILE = WORKSPACE / "logs" / "vault_flow_health.log"
 
-BOT_TOKEN = "8554125313:AAGC5Zzb9nCbPYgmOVqs3pVn-qzIA2oOtkI"
-DM_CHAT_ID = "492860021"
 
 # 깔때기 검증 대상 (100 캡처는 수신함이므로 제외)
 FUNNEL_STAGES = ["정리", "연결", "판단"]
@@ -898,36 +897,6 @@ def format_report(
     return "\n".join(lines)
 
 
-# ── 텔레그램 전송 ──────────────────────────────────────────────────
-
-def _send_telegram_text(text: str, chat_id: str = DM_CHAT_ID) -> bool:
-    """텔레그램 Bot API로 메시지 전송."""
-    import urllib.request
-
-    try:
-        payload = {
-            "chat_id": chat_id,
-            "text": text,
-            "parse_mode": "HTML",
-            "disable_web_page_preview": True,
-        }
-        data = json.dumps(payload).encode("utf-8")
-        req = urllib.request.Request(
-            f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-            data=data,
-            headers={"Content-Type": "application/json"},
-        )
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            result = json.loads(resp.read().decode("utf-8"))
-            if result.get("ok"):
-                return True
-        log(f"Telegram failed: {result}")
-        return False
-    except Exception as e:
-        log(f"Telegram error: {e}")
-        return False
-
-
 # ── 메인 ──────────────────────────────────────────────────────────
 
 def main():
@@ -990,7 +959,7 @@ def main():
         log("Dry-run: report generated, not sent")
         return
 
-    if _send_telegram_text(report):
+    if send_dm(report):
         log("Report sent to Telegram DM")
     else:
         log("Failed to send report", level="ERROR")

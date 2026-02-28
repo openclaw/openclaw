@@ -33,15 +33,12 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from shared.db import db_connection, db_transaction
-from shared.llm import llm_chat_with_fallback
+from shared.llm import llm_chat_direct, DIRECT_DEFAULT_CHAIN
 from shared.log import make_logger
+from shared.telegram import send_dm_chunked, send_group_chunked, RON_TOPIC_ID
 
 # ── Constants ──────────────────────────────────────────────────────────────────
 
-BOT_TOKEN = "8554125313:AAGC5Zzb9nCbPYgmOVqs3pVn-qzIA2oOtkI"
-DM_CHAT_ID = "492860021"
-GROUP_CHAT_ID = "-1003076685086"
-RON_TOPIC_ID = 30413
 BASE_URL = "https://t.me/s/"
 
 DB_PATH = Path(os.path.expanduser("~/.openclaw/data/ops_multiagent.db"))
@@ -61,7 +58,7 @@ REQUEST_DELAY = 2  # seconds between channel requests
 MAX_PAGES_PER_CHANNEL = 2
 LOOKBACK_HOURS = 24
 MAX_RETRIES = 3
-LLM_MODELS = ["gpt-5-mini", "qwen3:8b"]
+LLM_MODELS = list(DIRECT_DEFAULT_CHAIN)
 RETENTION_DAYS = 30
 REPORT_RETENTION_DAYS = 90
 TOP_N = 10
@@ -611,7 +608,7 @@ def analyze_posts(posts: list[dict]) -> dict:
         {"role": "user", "content": f"인기 게시물 {len(posts)}개:\n\n{combined}"},
     ]
 
-    content, model, err = llm_chat_with_fallback(
+    content, model, err = llm_chat_direct(
         messages, LLM_MODELS, temperature=0.2, max_tokens=1200, timeout=60,
     )
     if not content:
@@ -731,94 +728,17 @@ def format_report(top_posts: list[dict], analysis: dict,
 
 # ── Telegram ──────────────────────────────────────────────────────────────────
 
-def _send_telegram_text(text: str, chat_id: str = GROUP_CHAT_ID,
-                        message_thread_id: int | None = RON_TOPIC_ID) -> bool:
-    """Send text via Bot API directly (no forward wrapper)."""
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    payload: dict = {
-        "chat_id": chat_id,
-        "text": text,
-        "parse_mode": "Markdown",
-        "disable_web_page_preview": True,
-    }
-    if message_thread_id is not None:
-        payload["message_thread_id"] = message_thread_id
-    data = json.dumps(payload).encode()
-    req = urllib.request.Request(
-        url, data=data, headers={"Content-Type": "application/json"},
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            result = json.loads(resp.read())
-            return result.get("ok", False)
-    except urllib.error.HTTPError:
-        # Retry without parse_mode on Markdown error
-        payload.pop("parse_mode", None)
-        data = json.dumps(payload).encode()
-        req = urllib.request.Request(
-            url, data=data, headers={"Content-Type": "application/json"},
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                result = json.loads(resp.read())
-                return result.get("ok", False)
-        except Exception:
-            return False
-    except Exception:
-        return False
-
-
-def _split_message(text: str, max_len: int = 4096) -> list[str]:
-    """Split message into chunks respecting line boundaries."""
-    if len(text) <= max_len:
-        return [text]
-    chunks: list[str] = []
-    current = ""
-    for line in text.split("\n"):
-        # If single line exceeds limit, force-split
-        if len(line) > max_len:
-            if current:
-                chunks.append(current)
-                current = ""
-            while len(line) > max_len:
-                chunks.append(line[:max_len])
-                line = line[max_len:]
-            if line:
-                current = line
-            continue
-        if len(current) + len(line) + 1 > max_len:
-            if current:
-                chunks.append(current)
-            current = line
-        else:
-            current = current + "\n" + line if current else line
-    if current:
-        chunks.append(current)
-    return chunks
-
-
 def notify_telegram(report_text: str) -> bool:
     """Send report to DM and group topic."""
-    chunks = _split_message(report_text)
-    all_ok = True
-
-    # Send to DM
-    for chunk in chunks:
-        if not _send_telegram_text(chunk, chat_id=DM_CHAT_ID,
-                                   message_thread_id=None):
-            log("DM send failed", level="WARN")
-            all_ok = False
-        time.sleep(0.5)
-
-    # Send to group topic
-    for chunk in chunks:
-        if not _send_telegram_text(chunk, chat_id=GROUP_CHAT_ID,
-                                   message_thread_id=RON_TOPIC_ID):
-            log("Group send failed", level="WARN")
-            all_ok = False
-        time.sleep(0.5)
-
-    return all_ok
+    ok_dm = send_dm_chunked(report_text, parse_mode="Markdown")
+    if not ok_dm:
+        log("DM send failed", level="WARN")
+    ok_group = send_group_chunked(
+        report_text, topic_id=RON_TOPIC_ID, parse_mode="Markdown",
+    )
+    if not ok_group:
+        log("Group send failed", level="WARN")
+    return ok_dm and ok_group
 
 
 # ── Report Archive ────────────────────────────────────────────────────────────
