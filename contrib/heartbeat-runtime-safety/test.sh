@@ -20,9 +20,9 @@ run_test() {
   fi
 }
 
-run_test "preflight runs" ./upstream/heartbeat-runtime-safety/preflight.sh
-run_test "guard runs" ./upstream/heartbeat-runtime-safety/guard.sh
-run_test "freshness runs" ./upstream/heartbeat-runtime-safety/freshness.sh
+run_test "preflight runs" ./contrib/heartbeat-runtime-safety/preflight.sh
+run_test "guard runs" ./contrib/heartbeat-runtime-safety/guard.sh
+run_test "freshness runs" ./contrib/heartbeat-runtime-safety/freshness.sh
 
 if [[ $fail -gt 0 ]]; then
   echo "Tests failed: $fail"

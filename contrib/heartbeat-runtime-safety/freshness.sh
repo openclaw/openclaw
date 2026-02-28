@@ -16,7 +16,14 @@ check() {
     return
   fi
   local mt age
-  mt=$(stat -f %m "$path")
+  if mt=$(stat -f %m "$path" 2>/dev/null); then
+    :
+  elif mt=$(stat -c %Y "$path" 2>/dev/null); then
+    :
+  else
+    echo "- ❌ $label: unable to read mtime ($path)"
+    return
+  fi
   age=$(( (NOW - mt) / 60 ))
   if (( age <= MAX_AGE_MIN )); then
     echo "- ✅ $label: ${age}m"

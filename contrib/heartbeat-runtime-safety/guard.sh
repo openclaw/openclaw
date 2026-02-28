@@ -8,7 +8,7 @@ TS=$(date +%Y-%m-%d_%H-%M-%S)
 OUT="$REPORT_DIR/heartbeat-guard-$TS.md"
 
 commands=(
-  "./upstream/heartbeat-runtime-safety/preflight.sh"
+  "./contrib/heartbeat-runtime-safety/preflight.sh"
 )
 
 status="PASS"
