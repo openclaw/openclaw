@@ -14,11 +14,8 @@ import type {
 import { AcpRuntimeError } from "openclaw/plugin-sdk";
 import { type ResolvedAcpxPluginConfig } from "./config.js";
 import { checkAcpxVersion } from "./ensure.js";
-import {
-  parseJsonLines,
-  parsePromptEventLine,
-  toAcpxErrorEvent,
-} from "./runtime-internals/events.js";
+import { parseControlJsonError } from "./runtime-internals/control-errors.js";
+import { parseJsonLines, PromptStreamProjector } from "./runtime-internals/events.js";
 import {
   resolveSpawnFailure,
   spawnAndCollect,
@@ -197,9 +194,7 @@ export class AcpxRuntime implements AcpRuntime {
       sessionName: state.name,
       cwd: state.cwd,
     });
-    const parseContext = {
-      promptRequestIds: new Set<string>(),
-    };
+    const projector = new PromptStreamProjector();
 
     const cancelOnAbort = async () => {
       await this.cancel({
@@ -241,7 +236,7 @@ export class AcpxRuntime implements AcpRuntime {
     const lines = createInterface({ input: child.stdout });
     try {
       for await (const line of lines) {
-        const parsed = parsePromptEventLine(line, parseContext);
+        const parsed = projector.ingestLine(line);
         if (!parsed) {
           continue;
         }
@@ -312,7 +307,7 @@ export class AcpxRuntime implements AcpRuntime {
       fallbackCode: "ACP_TURN_FAILED",
       ignoreNoSession: true,
     });
-    const detail = events.find((event) => !toAcpxErrorEvent(event)) ?? events[0];
+    const detail = events.find((event) => !parseControlJsonError(event)) ?? events[0];
     if (!detail) {
       return {
         summary: "acpx status unavailable",
@@ -558,7 +553,7 @@ export class AcpxRuntime implements AcpRuntime {
     }
 
     const events = parseJsonLines(result.stdout);
-    const errorEvent = events.map((event) => toAcpxErrorEvent(event)).find(Boolean) ?? null;
+    const errorEvent = events.map((event) => parseControlJsonError(event)).find(Boolean) ?? null;
     if (errorEvent) {
       if (params.ignoreNoSession && errorEvent.code === "NO_SESSION") {
         return events;
