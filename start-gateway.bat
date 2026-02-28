@@ -1,3 +1,3 @@
 @echo off
-cd /d C:\Users\User\projects\openclaw
+cd /d %~dp0
 node scripts\run-node.mjs gateway
