@@ -130,5 +130,38 @@ describe("normalizeMentions (via parseFeishuMessageEvent)", () => {
       BOT_OPEN_ID,
     );
     expect(ctx.content).toBe('<at user_id="ou_x">&lt;script&gt;</at> test');
+  it("returns original text when botOpenId is missing", () => {
+    const mentions: Mentions = [{ key: "@_bot_1", name: "Bot", id: { open_id: "ou_bot" } }];
+    expect(stripBotMention("@Bot hello @_bot_1", mentions)).toBe("@Bot hello @_bot_1");
+  });
+
+  it("strips mention name and key for normal mentions", () => {
+    const mentions: Mentions = [{ key: "@_bot_1", name: "Bot", id: { open_id: "ou_bot" } }];
+    expect(stripBotMention("@Bot hello @_bot_1", mentions, "ou_bot")).toBe("hello");
+  });
+
+  it("treats mention.name regex metacharacters as literal text", () => {
+    const mentions: Mentions = [{ key: "@_bot_1", name: ".*", id: { open_id: "ou_bot" } }];
+    expect(stripBotMention("@NotBot hello", mentions, "ou_bot")).toBe("@NotBot hello");
+  });
+
+  it("treats mention.key regex metacharacters as literal text", () => {
+    const mentions: Mentions = [{ key: ".*", name: "Bot", id: { open_id: "ou_bot" } }];
+    expect(stripBotMention("hello world", mentions, "ou_bot")).toBe("hello world");
+  });
+
+  it("trims once after all mention replacements", () => {
+    const mentions: Mentions = [{ key: "@_bot_1", name: "Bot", id: { open_id: "ou_bot" } }];
+    expect(stripBotMention("  @_bot_1 hello   ", mentions, "ou_bot")).toBe("hello");
+  });
+
+  it("strips only the current bot mention and preserves other user mentions", () => {
+    const mentions: Mentions = [
+      { key: "@_bot_1", name: "Bot One", id: { open_id: "ou_bot_1" } },
+      { key: "@_bot_2", name: "Bot Two", id: { open_id: "ou_bot_2" } },
+    ];
+    expect(stripBotMention("@Bot One @_bot_1 hi @Bot Two @_bot_2", mentions, "ou_bot_1")).toBe(
+      "hi @Bot Two @_bot_2",
+    );
   });
 });
