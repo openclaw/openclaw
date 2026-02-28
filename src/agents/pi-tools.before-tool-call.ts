@@ -212,7 +212,15 @@ export async function runBeforeToolCallHook(args: {
     }
   } catch (err) {
     const toolCallId = args.toolCallId ? ` toolCallId=${args.toolCallId}` : "";
-    log.warn(`before_tool_call hook failed: tool=${toolName}${toolCallId} error=${String(err)}`);
+    // Fail-closed: a crashing hook must not silently allow the tool call through.
+    // Log the error then block so a broken plugin can't bypass its own gate.
+    log.error(
+      `before_tool_call hook threw — blocking tool call as fail-safe: tool=${toolName}${toolCallId} error=${String(err)}`,
+    );
+    return {
+      blocked: true,
+      reason: `Plugin hook error for tool "${toolName}" — blocked as a safety measure. Check logs for details.`,
+    };
   }
 
   return { blocked: false, params };

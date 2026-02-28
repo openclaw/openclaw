@@ -152,7 +152,13 @@ describe("gateway control-plane write rate limit", () => {
     const key = resolveControlPlaneRateLimitKey({
       connect: {
         ...buildConnect(),
-        device: { id: "device-1" },
+        device: {
+          id: "device-1",
+          publicKey: "stub-pub-key",
+          signature: "stub-signature",
+          signedAt: 0,
+          nonce: "stub-nonce",
+        },
       },
       connId: "conn-fallback",
       clientIp: "10.0.0.10",

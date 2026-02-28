@@ -29,10 +29,16 @@ const DEFAULT_STRICT_APPROVAL_CHANNELS = ["signal"];
 const DEFAULT_PASSPHRASE_REQUIRED_TOOLS = ["message"];
 const MAX_APPROVAL_GRANT_KEYS = 2048;
 
+// Catches destructive shell commands in tool parameters.
+// Covers flag-order variants (rm -rf / rm -fr), long-form flags, disk tools,
+// and shell redirects to block/character devices.
 const DESTRUCTIVE_CMD_RX =
-  /\b(rm\s+-rf|mkfs|dd\s+if=|shutdown\b|reboot\b|halt\b|poweroff\b|diskutil\s+erase|format\s+[a-z]:|chmod\s+-R\s+777|chown\s+-R\s+root|killall\b)\b/i;
+  /\b(rm\s+-[^\s]*r[^\s]*f|rm\s+--recursive|rm\s+--force|mkfs|dd\s+if=|shutdown\b|reboot\b|halt\b|poweroff\b|diskutil\s+erase|format\s+[a-z]:|chmod\s+-R\s+777|chown\s+-R\s+root|killall\b|shred\b|wipe\b|fdisk\b|truncate\s+-s\s+0)\b|>\s*\/dev\/(sd[a-z]|nvme|disk|hd[a-z])/i;
+// Catches common prompt-injection phrases that attempt to override agent behaviour.
+// Deliberately broad to catch natural-language variants; false-positive risk is low
+// because these phrases are rarely in legitimate tool payloads.
 const PROMPT_INJECTION_RX =
-  /\b(ignore\s+previous\s+instructions|delete\s+all\s+logs|exfiltrate|disable\s+security)\b/i;
+  /\b(ignore\s+(previous|prior|all|your)\s+(instructions?|rules?|guidelines?|constraints?)|disregard\s+(previous|prior|all|your)\s+(instructions?|rules?|guidelines?)|forget\s+(previous|prior|all|your)\s+(instructions?|rules?|guidelines?)|new\s+(system\s+)?instructions?|override\s+(security|safety|restrictions?|policy|policies|instructions?)|delete\s+all\s+logs|exfiltrate|disable\s+security|you\s+are\s+now\s+(a\s+|an\s+)?(different|new|unrestricted)|act\s+as\s+(a\s+|an\s+)?(jailbreak|unrestricted|unfiltered|evil|hacker|admin)|pretend\s+(you\s+)?(have\s+no|there\s+are\s+no)\s+(rules?|restrictions?|constraints?|guidelines?)|jailbreak\b)\b/i;
 
 type ApprovalGrant = {
   remainingUses: number;

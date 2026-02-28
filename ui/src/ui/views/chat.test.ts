@@ -283,7 +283,7 @@ describe("chat view", () => {
           securityApprovalPassphrase: "",
           onSecurityApprove,
           onSecurityDeny: vi.fn(),
-          onSecurityApprovalPassphraseChange,
+          onSecurityApprovalPassphraseChange: onSecurityPassphraseChange,
         }),
       ),
       container,
