@@ -485,7 +485,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         To: `room:${roomId}`,
         SessionKey: route.sessionKey,
         AccountId: route.accountId,
-        ChatType: isDirectMessage ? "direct" : "channel",
+        ChatType: threadRootId ? "thread" : isDirectMessage ? "direct" : "channel",
         ConversationLabel: envelopeFrom,
         SenderName: senderName,
         SenderId: senderId,
@@ -508,6 +508,9 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         CommandSource: "text" as const,
         OriginatingChannel: "dejoy" as const,
         OriginatingTo: `room:${roomId}`,
+        ThreadStarterBody: threadStarterBody,
+        ThreadLabel: threadLabel,
+        ParentSessionKey: parentSessionKey,
       });
 
       await core.channel.session.recordInboundSession({
