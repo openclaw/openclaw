@@ -45,6 +45,22 @@ A phase-1 extraction is considered successful when:
 4. Add CI checks for runtime-safety script smoke tests.
 5. Remove contrib staging copy once core integration is complete.
 
+## Reviewer Validation Notes
+
+Quick smoke test:
+
+```bash
+./contrib/heartbeat-runtime-safety/preflight.sh
+./contrib/heartbeat-runtime-safety/guard.sh
+MAX_AGE_MIN=15 ./contrib/heartbeat-runtime-safety/freshness.sh
+./contrib/heartbeat-runtime-safety/test.sh
+```
+
+Expected result:
+- clean exit status in healthy environments,
+- deterministic markdown output for downstream report indexing,
+- clear failure signals when prerequisites are missing or artifacts are stale.
+
 ## Notes
 
 - This is intentionally scoped to a minimal phase-1 contribution.
