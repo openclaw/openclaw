@@ -418,6 +418,28 @@ export class OpenClawApp extends LitElement {
   connectedCallback() {
     super.connectedCallback();
     handleConnected(this as unknown as Parameters<typeof handleConnected>[0]);
+    // After URL params: if we have tab state, make active tab's session win so reload shows correct conversation
+    const activeId = this.activeConversationId;
+    if (activeId) {
+      const tab = this.conversationTabs.find((t) => t.id === activeId);
+      if (tab && tab.sessionKey !== this.sessionKey) {
+        this.sessionKey = tab.sessionKey;
+        this.applySettings({
+          ...this.settings,
+          sessionKey: tab.sessionKey,
+          lastActiveSessionKey: tab.sessionKey,
+        });
+        syncUrlWithSessionKeyInternal(
+          this as unknown as Parameters<typeof syncUrlWithSessionKeyInternal>[0],
+          tab.sessionKey,
+          true,
+        );
+        if (this.tab === "chat") {
+          void loadChatHistory(this as unknown as Parameters<typeof loadChatHistory>[0]);
+          void refreshChatAvatar(this as unknown as Parameters<typeof refreshChatAvatar>[0]);
+        }
+      }
+    }
   }
 
   protected firstUpdated() {

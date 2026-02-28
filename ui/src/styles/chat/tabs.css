@@ -26,7 +26,7 @@
   align-items: center;
   gap: 8px;
   padding: 10px 8px 10px 16px;
-  background: transparent;
+  background: var(--bg-muted, var(--panel-hover));
   border-radius: 8px 8px 0 0;
   color: var(--muted);
   font-size: 14px;
