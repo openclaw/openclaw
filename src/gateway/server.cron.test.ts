@@ -41,6 +41,16 @@ async function yieldToEventLoop() {
   await setImmediatePromise();
 }
 
+function createDeferred<T>() {
+  let resolve: (value: T) => void = () => {};
+  let reject: (err: unknown) => void = () => {};
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
 async function rmTempDir(dir: string) {
   for (let i = 0; i < 100; i += 1) {
     try {
@@ -498,6 +508,101 @@ describe("gateway server cron", () => {
       await cleanupCronTestRun({ ws, server, dir, prevSkipCron });
     }
   }, 45_000);
+
+  test("returns immediate accepted ticket, dedupes duplicate force runs, and supports runId filtering", async () => {
+    const { prevSkipCron, dir } = await setupCronTestRun({
+      tempPrefix: "openclaw-gw-cron-run-ticket-",
+      cronEnabled: false,
+    });
+    const deferred = createDeferred<{ status: "ok"; summary: string }>();
+    cronIsolatedRun.mockImplementationOnce(async () => await deferred.promise);
+
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws);
+
+    try {
+      const addRes = await rpcReq(ws, "cron.add", {
+        name: "ticketed run",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "agentTurn", message: "run me" },
+      });
+      expect(addRes.ok).toBe(true);
+      const jobIdValue = (addRes.payload as { id?: unknown } | null)?.id;
+      const jobId = typeof jobIdValue === "string" ? jobIdValue : "";
+      expect(jobId.length > 0).toBe(true);
+
+      const firstRunRes = await rpcReq(ws, "cron.run", { id: jobId, mode: "force" }, 20_000);
+      expect(firstRunRes.ok).toBe(true);
+      const firstPayload = firstRunRes.payload as
+        | { accepted?: unknown; runId?: unknown; requestId?: unknown; deduped?: unknown }
+        | undefined;
+      expect(firstPayload?.accepted).toBe(true);
+      expect(typeof firstPayload?.runId).toBe("string");
+      expect(typeof firstPayload?.requestId).toBe("string");
+      expect(firstPayload?.deduped).toBe(false);
+
+      const secondRunRes = await rpcReq(ws, "cron.run", { id: jobId, mode: "force" }, 20_000);
+      expect(secondRunRes.ok).toBe(true);
+      const secondPayload = secondRunRes.payload as
+        | { accepted?: unknown; runId?: unknown; requestId?: unknown; deduped?: unknown }
+        | undefined;
+      expect(secondPayload?.accepted).toBe(true);
+      expect(secondPayload?.deduped).toBe(true);
+      expect(secondPayload?.runId).toBe(firstPayload?.runId);
+      expect(secondPayload?.requestId).toBe(firstPayload?.requestId);
+
+      deferred.resolve({ status: "ok", summary: "ticketed done" });
+
+      const runId = typeof firstPayload?.runId === "string" ? firstPayload.runId : "";
+      expect(runId.length > 0).toBe(true);
+      await waitForCondition(async () => {
+        const filtered = await rpcReq(ws, "cron.runs", { id: jobId, runId, limit: 1 }, 20_000);
+        const entries = (filtered.payload as { entries?: unknown } | null)?.entries;
+        return (
+          Array.isArray(entries) &&
+          entries.length > 0 &&
+          (entries[0] as { runId?: unknown }).runId === runId
+        );
+      }, CRON_WAIT_TIMEOUT_MS);
+
+      const filteredRuns = await rpcReq(ws, "cron.runs", { id: jobId, runId, limit: 1 }, 20_000);
+      const filteredEntries = (filteredRuns.payload as { entries?: unknown } | null)?.entries as
+        | Array<{ runId?: unknown; status?: unknown; summary?: unknown }>
+        | undefined;
+      expect(Array.isArray(filteredEntries)).toBe(true);
+      expect(filteredEntries?.[0]?.runId).toBe(runId);
+      expect(filteredEntries?.[0]?.status).toBe("ok");
+      expect(filteredEntries?.[0]?.summary).toBe("ticketed done");
+    } finally {
+      await cleanupCronTestRun({ ws, server, dir, prevSkipCron });
+    }
+  }, 45_000);
+
+  test("returns RUN_NOT_ACCEPTED payload when cron.run target job does not exist", async () => {
+    const { prevSkipCron, dir } = await setupCronTestRun({
+      tempPrefix: "openclaw-gw-cron-not-accepted-",
+      cronEnabled: false,
+    });
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws);
+
+    try {
+      const runRes = await rpcReq(ws, "cron.run", { id: "missing-job", mode: "force" }, 20_000);
+      expect(runRes.ok).toBe(true);
+      const payload = runRes.payload as
+        | { accepted?: unknown; errorType?: unknown; status?: unknown; runId?: unknown }
+        | undefined;
+      expect(payload?.accepted).toBe(false);
+      expect(payload?.status).toBe("not-accepted");
+      expect(payload?.errorType).toBe("RUN_NOT_ACCEPTED");
+      expect(payload?.runId).toBe(null);
+    } finally {
+      await cleanupCronTestRun({ ws, server, dir, prevSkipCron });
+    }
+  });
 
   test("posts webhooks for delivery mode and legacy notify fallback only when summary exists", async () => {
     const legacyNotifyJob = {

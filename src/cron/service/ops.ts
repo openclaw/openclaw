@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { CronJob, CronJobCreate, CronJobPatch } from "../types.js";
 import {
   applyJobPatch,
@@ -10,7 +11,7 @@ import {
   recomputeNextRunsForMaintenance,
 } from "./jobs.js";
 import { locked } from "./locked.js";
-import type { CronServiceState } from "./state.js";
+import type { CronRunOptions, CronServiceState } from "./state.js";
 import { ensureLoaded, persist, warnIfDisabled } from "./store.js";
 import {
   applyJobResult,
@@ -333,7 +334,16 @@ export async function remove(state: CronServiceState, id: string) {
   });
 }
 
-export async function run(state: CronServiceState, id: string, mode?: "due" | "force") {
+export async function run(
+  state: CronServiceState,
+  id: string,
+  mode?: "due" | "force",
+  opts?: CronRunOptions,
+) {
+  const runId =
+    typeof opts?.runId === "string" && opts.runId.trim().length > 0
+      ? opts.runId.trim()
+      : randomUUID();
   const prepared = await locked(state, async () => {
     warnIfDisabled(state, "run");
     await ensureLoaded(state, { skipRecompute: true });
@@ -354,7 +364,7 @@ export async function run(state: CronServiceState, id: string, mode?: "due" | "f
     // Persist the running marker before releasing lock so timer ticks that
     // force-reload from disk cannot start the same job concurrently.
     await persist(state);
-    emit(state, { jobId: job.id, action: "started", runAtMs: now });
+    emit(state, { jobId: job.id, action: "started", runId, runAtMs: now });
     const executionJob = JSON.parse(JSON.stringify(job)) as typeof job;
     return {
       ok: true,
@@ -401,6 +411,7 @@ export async function run(state: CronServiceState, id: string, mode?: "due" | "f
     emit(state, {
       jobId: job.id,
       action: "finished",
+      runId,
       status: coreResult.status,
       error: coreResult.error,
       summary: coreResult.summary,

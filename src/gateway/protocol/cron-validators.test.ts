@@ -74,6 +74,7 @@ describe("cron protocol validators", () => {
     expect(
       validateCronRunsParams({
         id: "job-1",
+        runId: "run-1",
         limit: 50,
         offset: 0,
         status: "error",

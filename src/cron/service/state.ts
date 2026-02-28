@@ -14,6 +14,7 @@ import type {
 export type CronEvent = {
   jobId: string;
   action: "added" | "updated" | "removed" | "started" | "finished";
+  runId?: string;
   runAtMs?: number;
   durationMs?: number;
   status?: CronRunStatus;
@@ -120,6 +121,7 @@ export function createCronServiceState(deps: CronServiceDeps): CronServiceState 
 }
 
 export type CronRunMode = "due" | "force";
+export type CronRunOptions = { runId?: string };
 export type CronWakeMode = "now" | "next-heartbeat";
 
 export type CronStatusSummary = {

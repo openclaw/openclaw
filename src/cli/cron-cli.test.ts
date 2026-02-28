@@ -8,13 +8,16 @@ const defaultGatewayMock = async (
   _opts: unknown,
   params?: unknown,
   _timeoutMs?: number,
-) => {
+): Promise<unknown> => {
   if (method === "cron.status") {
     return { enabled: true };
   }
   return { ok: true, params };
 };
-const callGatewayFromCli = vi.fn(defaultGatewayMock);
+const callGatewayFromCli =
+  vi.fn<
+    (method: string, _opts: unknown, params?: unknown, _timeoutMs?: number) => Promise<unknown>
+  >(defaultGatewayMock);
 
 vi.mock("./gateway-rpc.js", async () => {
   const actual = await vi.importActual<typeof import("./gateway-rpc.js")>("./gateway-rpc.js");
@@ -36,6 +39,7 @@ vi.mock("../runtime.js", () => ({
 }));
 
 const { registerCronCli } = await import("./cron-cli.js");
+const { defaultRuntime } = await import("../runtime.js");
 
 type CronUpdatePatch = {
   patch?: {
@@ -121,6 +125,20 @@ function getGatewayCallParams<T>(method: string): T {
   return (call?.[2] ?? {}) as T;
 }
 
+function logArgsToText(value: unknown): string {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (value === undefined) {
+    return "";
+  }
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return "";
+  }
+}
+
 async function runCronEditWithScheduleLookup(
   schedule: unknown,
   editArgs: string[],
@@ -145,6 +163,58 @@ async function expectCronEditWithScheduleLookupExit(
 }
 
 describe("cron cli", () => {
+  it("reconciles once via cron.runs when cron run times out and latest run is ok", async () => {
+    resetGatewayMock();
+    vi.mocked(defaultRuntime.log).mockClear();
+    callGatewayFromCli.mockImplementation(async (method: string) => {
+      if (method === "cron.run") {
+        throw new Error("gateway timeout after 60000ms");
+      }
+      if (method === "cron.runs") {
+        return { entries: [{ ts: Date.now(), runId: "run-ok-1", status: "ok", summary: "done" }] };
+      }
+      if (method === "cron.status") {
+        return { enabled: true };
+      }
+      return { ok: true };
+    });
+    const program = buildProgram();
+    await program.parseAsync(["cron", "run", "job-1"], { from: "user" });
+
+    const methods = callGatewayFromCli.mock.calls.map((call) => call[0]);
+    expect(methods).toContain("cron.run");
+    expect(methods).toContain("cron.runs");
+    const logLines = vi.mocked(defaultRuntime.log).mock.calls.map((call) => logArgsToText(call[0]));
+    expect(logLines.some((line) => line.includes('"status": "transport-timeout"'))).toBe(true);
+    expect(logLines.some((line) => line.includes('"state": "recent-run-observed"'))).toBe(true);
+  });
+
+  it("reconciles once via cron.runs when cron run times out and latest run is error", async () => {
+    resetGatewayMock();
+    vi.mocked(defaultRuntime.log).mockClear();
+    callGatewayFromCli.mockImplementation(async (method: string) => {
+      if (method === "cron.run") {
+        throw new Error("gateway timeout after 60000ms");
+      }
+      if (method === "cron.runs") {
+        return {
+          entries: [{ ts: Date.now(), runId: "run-err-1", status: "error", summary: "failed" }],
+        };
+      }
+      if (method === "cron.status") {
+        return { enabled: true };
+      }
+      return { ok: true };
+    });
+    const program = buildProgram();
+    await program.parseAsync(["cron", "run", "job-1"], { from: "user" });
+
+    const logLines = vi.mocked(defaultRuntime.log).mock.calls.map((call) => logArgsToText(call[0]));
+    expect(logLines.some((line) => line.includes('"status": "transport-timeout"'))).toBe(true);
+    expect(logLines.some((line) => line.includes('"run-err-1"'))).toBe(true);
+    expect(logLines.some((line) => line.includes('"error"'))).toBe(true);
+  });
+
   it("trims model and thinking on cron add", { timeout: CRON_CLI_TEST_TIMEOUT_MS }, async () => {
     await runCronCommand([
       "cron",

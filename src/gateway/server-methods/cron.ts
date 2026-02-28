@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normalize.js";
 import {
   readCronRunLogEntriesPage,
@@ -20,6 +21,119 @@ import {
   validateWakeParams,
 } from "../protocol/index.js";
 import type { GatewayRequestHandlers } from "./types.js";
+
+const CRON_FORCE_RUN_DEDUPE_WINDOW_MS = 60_000;
+const CRON_TRANSPORT_TIMEOUT_ERROR = "GATEWAY_TRANSPORT_TIMEOUT";
+const CRON_RUN_NOT_ACCEPTED_ERROR = "RUN_NOT_ACCEPTED";
+const CRON_RUN_EXECUTION_FAILURE_ERROR = "CRON_RUN_EXECUTION_FAILURE";
+
+type CronRunAcceptedPayload = {
+  ok: true;
+  ran: true;
+  accepted: true;
+  status: "accepted";
+  requestId: string;
+  runId: string;
+  jobId: string;
+  mode: "due" | "force";
+  queuedAt: number;
+  deduped: boolean;
+  errorType: null;
+  transportErrorType: typeof CRON_TRANSPORT_TIMEOUT_ERROR;
+  enqueueErrorType: typeof CRON_RUN_NOT_ACCEPTED_ERROR;
+  executionErrorType: typeof CRON_RUN_EXECUTION_FAILURE_ERROR;
+  reconcile: {
+    method: "cron.runs";
+    params: { id: string; runId: string; limit: 1 };
+  };
+  note: string;
+};
+
+type CronRunNotAcceptedPayload = {
+  ok: false;
+  ran: false;
+  accepted: false;
+  status: "not-accepted";
+  requestId: null;
+  runId: null;
+  jobId: string;
+  mode: "due" | "force";
+  queuedAt: number;
+  deduped: false;
+  errorType: typeof CRON_RUN_NOT_ACCEPTED_ERROR;
+  errorMessage: string;
+  reconcile: {
+    method: "cron.runs";
+    params: { id: string; limit: 1 };
+  };
+};
+
+function buildAcceptedCronRunPayload(params: {
+  requestId: string;
+  runId: string;
+  jobId: string;
+  mode: "due" | "force";
+  queuedAt: number;
+  deduped?: boolean;
+  note?: string;
+}): CronRunAcceptedPayload {
+  return {
+    ok: true,
+    ran: true,
+    accepted: true,
+    status: "accepted",
+    requestId: params.requestId,
+    runId: params.runId,
+    jobId: params.jobId,
+    mode: params.mode,
+    queuedAt: params.queuedAt,
+    deduped: params.deduped === true,
+    errorType: null,
+    transportErrorType: CRON_TRANSPORT_TIMEOUT_ERROR,
+    enqueueErrorType: CRON_RUN_NOT_ACCEPTED_ERROR,
+    executionErrorType: CRON_RUN_EXECUTION_FAILURE_ERROR,
+    reconcile: {
+      method: "cron.runs",
+      params: {
+        id: params.jobId,
+        runId: params.runId,
+        limit: 1,
+      },
+    },
+    note:
+      params.note ??
+      "If transport times out after acceptance, reconcile once via cron.runs using jobId+runId.",
+  };
+}
+
+function buildNotAcceptedCronRunPayload(params: {
+  jobId: string;
+  mode: "due" | "force";
+  queuedAt: number;
+  errorMessage: string;
+}): CronRunNotAcceptedPayload {
+  return {
+    ok: false,
+    ran: false,
+    accepted: false,
+    status: "not-accepted",
+    requestId: null,
+    runId: null,
+    jobId: params.jobId,
+    mode: params.mode,
+    queuedAt: params.queuedAt,
+    deduped: false,
+    errorType: CRON_RUN_NOT_ACCEPTED_ERROR,
+    errorMessage: params.errorMessage,
+    reconcile: {
+      method: "cron.runs",
+      params: {
+        id: params.jobId,
+        limit: 1,
+      },
+    },
+  };
+}
 
 export const cronHandlers: GatewayRequestHandlers = {
   wake: ({ params, respond, context }) => {
@@ -199,6 +313,8 @@ export const cronHandlers: GatewayRequestHandlers = {
     }
     const p = params as { id?: string; jobId?: string; mode?: "due" | "force" };
     const jobId = p.id ?? p.jobId;
+    const mode = p.mode ?? "force";
+    const now = Date.now();
     if (!jobId) {
       respond(
         false,
@@ -207,8 +323,127 @@ export const cronHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const result = await context.cron.run(jobId, p.mode ?? "force");
-    respond(true, result, undefined);
+
+    const jobs = await context.cron.list({ includeDisabled: true });
+    const job = jobs.find((entry) => entry.id === jobId);
+    if (!job) {
+      respond(
+        true,
+        buildNotAcceptedCronRunPayload({
+          jobId,
+          mode,
+          queuedAt: now,
+          errorMessage: `job not found: ${jobId}`,
+        }),
+        undefined,
+      );
+      return;
+    }
+
+    const dedupeKey = `cron.run:force:${jobId}`;
+    if (mode === "force") {
+      const cached = context.dedupe.get(dedupeKey);
+      const cachedPayload =
+        cached && typeof cached.payload === "object" && cached.payload !== null
+          ? (cached.payload as Partial<CronRunAcceptedPayload>)
+          : null;
+      if (
+        cached &&
+        cached.ok &&
+        cachedPayload?.requestId &&
+        cachedPayload?.runId &&
+        now - cached.ts <= CRON_FORCE_RUN_DEDUPE_WINDOW_MS
+      ) {
+        respond(
+          true,
+          buildAcceptedCronRunPayload({
+            requestId: cachedPayload.requestId,
+            runId: cachedPayload.runId,
+            jobId,
+            mode,
+            queuedAt:
+              typeof cachedPayload.queuedAt === "number" && Number.isFinite(cachedPayload.queuedAt)
+                ? cachedPayload.queuedAt
+                : cached.ts,
+            deduped: true,
+            note: `Duplicate manual force run suppressed for ${CRON_FORCE_RUN_DEDUPE_WINDOW_MS}ms window.`,
+          }),
+          undefined,
+        );
+        return;
+      }
+    }
+
+    if (mode === "force" && typeof job.state.runningAtMs === "number") {
+      respond(
+        true,
+        buildNotAcceptedCronRunPayload({
+          jobId,
+          mode,
+          queuedAt: now,
+          errorMessage: `job already running: ${jobId}`,
+        }),
+        undefined,
+      );
+      return;
+    }
+
+    if (
+      mode === "due" &&
+      typeof job.state.nextRunAtMs === "number" &&
+      Number.isFinite(job.state.nextRunAtMs) &&
+      job.state.nextRunAtMs > now
+    ) {
+      respond(
+        true,
+        buildNotAcceptedCronRunPayload({
+          jobId,
+          mode,
+          queuedAt: now,
+          errorMessage: `job not due yet (nextRunAtMs=${job.state.nextRunAtMs})`,
+        }),
+        undefined,
+      );
+      return;
+    }
+
+    const requestId = randomUUID();
+    const runId = requestId;
+    const acceptedPayload = buildAcceptedCronRunPayload({
+      requestId,
+      runId,
+      jobId,
+      mode,
+      queuedAt: now,
+      deduped: false,
+    });
+    if (mode === "force") {
+      context.dedupe.set(dedupeKey, { ts: now, ok: true, payload: acceptedPayload });
+    }
+
+    respond(true, acceptedPayload, undefined);
+
+    void context.cron
+      .run(jobId, mode, { runId })
+      .then((result) => {
+        if (!result.ok || !result.ran) {
+          if (mode === "force") {
+            context.dedupe.delete(dedupeKey);
+          }
+          const reason = "reason" in result ? result.reason : "unknown";
+          context.logGateway.warn(
+            `cron.run accepted but not executed (requestId=${requestId}, jobId=${jobId}, reason=${String(reason)})`,
+          );
+        }
+      })
+      .catch((err) => {
+        if (mode === "force") {
+          context.dedupe.delete(dedupeKey);
+        }
+        context.logGateway.error(
+          `cron.run accepted execution failed (requestId=${requestId}, jobId=${jobId}): ${String(err)}`,
+        );
+      });
   },
   "cron.runs": async ({ params, respond, context }) => {
     if (!validateCronRunsParams(params)) {
@@ -226,6 +461,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       scope?: "job" | "all";
       id?: string;
       jobId?: string;
+      runId?: string;
       limit?: number;
       offset?: number;
       statuses?: Array<"ok" | "error" | "skipped">;
@@ -261,6 +497,7 @@ export const cronHandlers: GatewayRequestHandlers = {
         status: p.status,
         deliveryStatuses: p.deliveryStatuses,
         deliveryStatus: p.deliveryStatus,
+        runId: p.runId,
         query: p.query,
         sortDir: p.sortDir,
         jobNameById,
@@ -290,6 +527,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       status: p.status,
       deliveryStatuses: p.deliveryStatuses,
       deliveryStatus: p.deliveryStatus,
+      runId: p.runId,
       query: p.query,
       sortDir: p.sortDir,
     });

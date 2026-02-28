@@ -69,6 +69,8 @@ export type GatewayConnectionDetails = {
   message: string;
 };
 
+export const GATEWAY_TRANSPORT_TIMEOUT_ERROR = "GATEWAY_TRANSPORT_TIMEOUT";
+
 export type ExplicitGatewayAuth = {
   token?: string;
   password?: string;
@@ -299,6 +301,29 @@ function formatGatewayTimeoutError(
   return `gateway timeout after ${timeoutMs}ms\n${connectionDetails.message}`;
 }
 
+export class GatewayTransportTimeoutError extends Error {
+  readonly code = GATEWAY_TRANSPORT_TIMEOUT_ERROR;
+  readonly timeoutMs: number;
+  readonly connectionDetails: GatewayConnectionDetails;
+
+  constructor(timeoutMs: number, connectionDetails: GatewayConnectionDetails) {
+    super(formatGatewayTimeoutError(timeoutMs, connectionDetails));
+    this.name = "GatewayTransportTimeoutError";
+    this.timeoutMs = timeoutMs;
+    this.connectionDetails = connectionDetails;
+  }
+}
+
+export function isGatewayTransportTimeoutError(err: unknown): err is GatewayTransportTimeoutError {
+  return (
+    err instanceof GatewayTransportTimeoutError ||
+    (typeof err === "object" &&
+      err !== null &&
+      "code" in err &&
+      (err as { code?: unknown }).code === GATEWAY_TRANSPORT_TIMEOUT_ERROR)
+  );
+}
+
 async function executeGatewayRequestWithScopes<T>(params: {
   opts: CallGatewayBaseOptions;
   scopes: OperatorScope[];
@@ -371,7 +396,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
     const timer = setTimeout(() => {
       ignoreClose = true;
       client.stop();
-      stop(new Error(formatGatewayTimeoutError(timeoutMs, params.connectionDetails)));
+      stop(new GatewayTransportTimeoutError(timeoutMs, params.connectionDetails));
     }, safeTimerTimeoutMs);
 
     client.start();

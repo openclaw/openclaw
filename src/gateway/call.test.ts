@@ -55,8 +55,14 @@ vi.mock("./client.js", () => ({
   },
 }));
 
-const { buildGatewayConnectionDetails, callGateway, callGatewayCli, callGatewayScoped } =
-  await import("./call.js");
+const {
+  GatewayTransportTimeoutError,
+  buildGatewayConnectionDetails,
+  callGateway,
+  callGatewayCli,
+  callGatewayScoped,
+  isGatewayTransportTimeoutError,
+} = await import("./call.js");
 
 function resetGatewayCallMocks() {
   loadConfig.mockClear();
@@ -360,8 +366,10 @@ describe("callGateway error details", () => {
     setLocalLoopbackGatewayConfig();
 
     vi.useFakeTimers();
+    let err: unknown;
     let errMessage = "";
     const promise = callGateway({ method: "health", timeoutMs: 5 }).catch((caught) => {
+      err = caught;
       errMessage = caught instanceof Error ? caught.message : String(caught);
     });
 
@@ -369,6 +377,8 @@ describe("callGateway error details", () => {
     await promise;
 
     expect(errMessage).toContain("gateway timeout after 5ms");
+    expect(err).toBeInstanceOf(GatewayTransportTimeoutError);
+    expect(isGatewayTransportTimeoutError(err)).toBe(true);
     expect(errMessage).toContain("Gateway target: ws://127.0.0.1:18789");
     expect(errMessage).toContain("Source: local loopback");
     expect(errMessage).toContain("Bind: loopback");
