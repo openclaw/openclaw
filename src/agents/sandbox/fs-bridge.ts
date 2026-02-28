@@ -23,6 +23,7 @@ type PathSafetyOptions = {
   aliasPolicy?: PathAliasPolicy;
   requireWritable?: boolean;
   allowMissingTarget?: boolean;
+  allowExistingDirectoryTarget?: boolean;
 };
 
 export type SandboxResolvedPath = {
@@ -132,7 +133,11 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
   async mkdirp(params: { filePath: string; cwd?: string; signal?: AbortSignal }): Promise<void> {
     const target = this.resolveResolvedPath(params);
     this.ensureWriteAccess(target, "create directories");
-    await this.assertPathSafety(target, { action: "create directories", requireWritable: true });
+    await this.assertPathSafety(target, {
+      action: "create directories",
+      requireWritable: true,
+      allowExistingDirectoryTarget: true,
+    });
     await this.runCommand('set -eu; mkdir -p -- "$1"', {
       args: [target.containerPath],
       signal: params.signal,
@@ -260,12 +265,18 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
       aliasPolicy: options.aliasPolicy,
     });
     if (!guarded.ok) {
-      if (guarded.reason !== "path" || options.allowMissingTarget === false) {
-        throw guarded.error instanceof Error
-          ? guarded.error
-          : new Error(
-              `Sandbox boundary checks failed; cannot ${options.action}: ${target.containerPath}`,
-            );
+      const existingDirectoryAllowed =
+        guarded.reason === "validation" &&
+        options.allowExistingDirectoryTarget === true &&
+        this.isExistingDirectoryPath(target.hostPath);
+      if (!existingDirectoryAllowed) {
+        if (guarded.reason !== "path" || options.allowMissingTarget === false) {
+          throw guarded.error instanceof Error
+            ? guarded.error
+            : new Error(
+                `Sandbox boundary checks failed; cannot ${options.action}: ${target.containerPath}`,
+              );
+        }
       }
     } else {
       fs.closeSync(guarded.fd);
@@ -333,6 +344,14 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
   private ensureWriteAccess(target: SandboxResolvedFsPath, action: string) {
     if (!allowsWrites(this.sandbox.workspaceAccess) || !target.writable) {
       throw new Error(`Sandbox path is read-only; cannot ${action}: ${target.containerPath}`);
+    }
+  }
+
+  private isExistingDirectoryPath(hostPath: string): boolean {
+    try {
+      return fs.lstatSync(hostPath).isDirectory();
+    } catch {
+      return false;
     }
   }
 

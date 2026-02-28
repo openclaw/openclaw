@@ -173,6 +173,28 @@ describe("sandbox fs bridge shell compatibility", () => {
     expect(mockedExecDockerRaw).not.toHaveBeenCalled();
   });
 
+  it("allows mkdirp on an already-existing in-workspace directory", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-fs-bridge-mkdirp-"));
+    const workspaceDir = path.join(stateDir, "workspace");
+    const nestedDir = path.join(workspaceDir, "memory", "state");
+    await fs.mkdir(nestedDir, { recursive: true });
+
+    const bridge = createSandboxFsBridge({
+      sandbox: createSandbox({
+        workspaceDir,
+        agentWorkspaceDir: workspaceDir,
+      }),
+    });
+
+    await expect(
+      bridge.mkdirp({ filePath: path.join(workspaceDir, "memory", "state") }),
+    ).resolves.toBeUndefined();
+    const mkdirCall = findCallByScriptFragment('mkdir -p -- "$1"');
+    expect(mkdirCall).toBeDefined();
+    expect(getDockerPathArg(mkdirCall?.[0] ?? [])).toBe("/workspace/memory/state");
+    await fs.rm(stateDir, { recursive: true, force: true });
+  });
+
   it("rejects pre-existing host symlink escapes before docker exec", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-fs-bridge-"));
     const workspaceDir = path.join(stateDir, "workspace");
