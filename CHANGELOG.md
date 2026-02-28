@@ -29,6 +29,7 @@ Docs: https://docs.openclaw.ai
 - Gateway/Auth: improve device-auth v2 migration diagnostics so operators get clearer guidance when legacy clients connect. (#28305) Thanks @vincentkoc.
 - CLI/Install: add an npm-link fallback to fix CLI startup `Permission denied` failures (`exit 127`) on affected installs. (#17151) Thanks @sskyu and @vincentkoc.
 - Onboarding/Custom providers: improve verification reliability for slower local endpoints (for example Ollama) during setup. (#27380) Thanks @Sid-Qin.
+- Ollama/Autodiscovery: harden autodiscovery and warning behavior. (#29201) Thanks @marcodelpin and @vincentkoc.
 - Agents/Ollama: demote empty-discovery logging from `warn` to `debug` to reduce noisy warnings in normal edge-case discovery flows. (#26379) Thanks @byungsker.
 - Install/npm: fix npm global install deprecation warnings. (#28318) Thanks @vincentkoc.
 - Slack/Native commands: register Slack native status as `/agentstatus` (Slack-reserved `/status`) so manifest slash command registration stays valid while text `/status` still works. Landed from contributor PR #29032 by @maloqab. Thanks @maloqab.
