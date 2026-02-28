@@ -6,7 +6,7 @@ import {
   type SessionEntry,
 } from "../config/sessions.js";
 import { callGateway } from "../gateway/call.js";
-import { onAgentEvent } from "../infra/agent-events.js";
+import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
 import { defaultRuntime } from "../runtime.js";
 import { type DeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { resetAnnounceQueuesForTests } from "./subagent-announce-queue.js";
@@ -347,6 +347,20 @@ async function completeSubagentRun(params: {
     persistSubagentRuns();
   }
 
+  // Emit subagent lifecycle event so WS clients can observe completion.
+  emitAgentEvent({
+    runId: params.runId,
+    stream: "subagent",
+    sessionKey: entry.requesterSessionKey,
+    data: {
+      phase: params.outcome.status === "ok" ? "completed" : "error",
+      childSessionKey: entry.childSessionKey,
+      parentSessionKey: entry.requesterSessionKey,
+      label: entry.label,
+      durationMs: endedAt - (entry.startedAt ?? endedAt),
+      outcome: params.outcome.status,
+    },
+  });
   const suppressedForSteerRestart = suppressAnnounceForSteerRestart(entry);
   const shouldEmitEndedHook =
     !suppressedForSteerRestart &&

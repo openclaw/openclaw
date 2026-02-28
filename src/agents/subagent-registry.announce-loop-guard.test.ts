@@ -35,6 +35,7 @@ vi.mock("../gateway/call.js", () => ({
 }));
 
 vi.mock("../infra/agent-events.js", () => ({
+  emitAgentEvent: vi.fn(),
   onAgentEvent: vi.fn().mockReturnValue(() => {}),
 }));
 
