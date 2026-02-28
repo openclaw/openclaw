@@ -14,7 +14,7 @@ describe("feishu policy", () => {
           "*": { requireMention: false },
           "oc-explicit": { requireMention: true },
         },
-      } as FeishuConfig;
+      } as unknown as FeishuConfig;
 
       const resolved = resolveFeishuGroupConfig({
         cfg,
@@ -30,7 +30,7 @@ describe("feishu policy", () => {
           "*": { requireMention: false },
           "oc-explicit": { requireMention: true },
         },
-      } as FeishuConfig;
+      } as unknown as FeishuConfig;
 
       const resolved = resolveFeishuGroupConfig({
         cfg,
@@ -46,7 +46,7 @@ describe("feishu policy", () => {
           "*": { requireMention: false },
           OC_UPPER: { requireMention: true },
         },
-      } as FeishuConfig;
+      } as unknown as FeishuConfig;
 
       const resolved = resolveFeishuGroupConfig({
         cfg,
