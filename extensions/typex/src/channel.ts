@@ -1,5 +1,9 @@
 import type { ChannelPlugin } from "openclaw/plugin-sdk";
-import { buildChannelConfigSchema, DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk";
+import {
+  buildChannelConfigSchema,
+  DEFAULT_ACCOUNT_ID,
+  formatPairingApproveHint,
+} from "openclaw/plugin-sdk";
 import { monitorTypeXProvider } from "./client/monitor.js";
 import { typexOutbound } from "./client/outbound.js";
 import { TypeXConfigSchema } from "./config-schema.js";
@@ -220,15 +224,21 @@ export const typexPlugin = {
     },
   },
   security: {
-    // Simplified security policy
-    resolveDmPolicy: () => ({
-      policy: "open",
-      allowFrom: [],
-      policyPath: "",
-      allowFromPath: "",
-      approveHint: "",
-      normalizeEntry: (s) => s,
-    }),
+    resolveDmPolicy: ({ cfg, accountId, account }) => {
+      const resolvedAccountId = accountId ?? account.accountId ?? DEFAULT_ACCOUNT_ID;
+      const useAccountPath = Boolean(cfg.channels?.typex?.accounts?.[resolvedAccountId]);
+      const basePath = useAccountPath
+        ? `channels.typex.accounts.${resolvedAccountId}.`
+        : "channels.typex.";
+      return {
+        policy: account.config.dmPolicy ?? "pairing",
+        allowFrom: account.config.allowFrom ?? [],
+        policyPath: `${basePath}dmPolicy`,
+        allowFromPath: basePath,
+        approveHint: formatPairingApproveHint("typex"),
+        normalizeEntry: (raw: string) => String(raw).trim(),
+      };
+    },
   },
 
   groups: {

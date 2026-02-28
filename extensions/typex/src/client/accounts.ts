@@ -89,6 +89,10 @@ export function listTypeXAccountIds(cfg: OpenClawConfig): string[] {
 }
 
 export function resolveDefaultTypeXAccountId(cfg: OpenClawConfig): string {
+  const configuredDefault = cfg.channels?.["typex"]?.defaultAccount?.trim();
+  if (configuredDefault) {
+    return normalizeAccountId(configuredDefault);
+  }
   const ids = listTypeXAccountIds(cfg);
   if (ids.includes(DEFAULT_ACCOUNT_ID)) {
     return DEFAULT_ACCOUNT_ID;
