@@ -559,6 +559,105 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(replies).toHaveBeenCalledTimes(1);
   });
 
+  it("accepts first unmentioned thread follow-up when Slack thread history shows prior bot reply", async () => {
+    const { storePath } = makeTmpStorePath();
+    const replies = vi.fn().mockResolvedValue({
+      messages: [
+        { text: "thread root", user: "U2", ts: "100.000" },
+        { text: "bot reply", user: "B1", ts: "100.500" },
+      ],
+      response_metadata: { next_cursor: "" },
+    });
+    const slackCtx = createInboundSlackCtx({
+      cfg: {
+        session: { store: storePath },
+        channels: { slack: { enabled: true, groupPolicy: "open" } },
+      } as OpenClawConfig,
+      appClient: { conversations: { replies } } as App["client"],
+      defaultRequireMention: true,
+      replyToMode: "all",
+    });
+    slackCtx.resolveUserName = async () => ({ name: "Alice" });
+    slackCtx.resolveChannelName = async () => ({ name: "general", type: "channel" });
+
+    const prepared = await prepareMessageWith(
+      slackCtx,
+      {
+        ...createThreadAccount(),
+        config: {
+          ...createThreadAccount().config,
+          thread: { initialHistoryLimit: 0 },
+        },
+      },
+      createThreadReplyMessage({
+        channel: "C123",
+        channel_type: "channel",
+        user: "U1",
+        text: "following up",
+        ts: "101.000",
+        thread_ts: "100.000",
+        parent_user_id: "U2",
+      }),
+    );
+
+    expect(prepared).toBeTruthy();
+    expect(prepared!.ctxPayload.WasMentioned).toBe(true);
+  });
+
+  it("keeps mention gating thread-scoped when only base channel session is warm", async () => {
+    const { storePath } = makeTmpStorePath();
+    const cfg = {
+      session: { store: storePath },
+      channels: { slack: { enabled: true, groupPolicy: "open" } },
+    } as OpenClawConfig;
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "slack",
+      accountId: "default",
+      teamId: "T1",
+      peer: { kind: "channel", id: "C123" },
+    });
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify({ [route.sessionKey]: { updatedAt: Date.now() } }, null, 2),
+    );
+
+    const replies = vi.fn().mockResolvedValue({
+      messages: [{ text: "thread root", user: "U2", ts: "200.000" }],
+      response_metadata: { next_cursor: "" },
+    });
+    const slackCtx = createInboundSlackCtx({
+      cfg,
+      appClient: { conversations: { replies } } as App["client"],
+      defaultRequireMention: true,
+      replyToMode: "all",
+    });
+    slackCtx.resolveUserName = async () => ({ name: "Alice" });
+    slackCtx.resolveChannelName = async () => ({ name: "general", type: "channel" });
+
+    const prepared = await prepareMessageWith(
+      slackCtx,
+      {
+        ...createThreadAccount(),
+        config: {
+          ...createThreadAccount().config,
+          thread: { initialHistoryLimit: 0 },
+        },
+      },
+      createThreadReplyMessage({
+        channel: "C123",
+        channel_type: "channel",
+        user: "U1",
+        text: "unmentioned reply",
+        ts: "201.000",
+        thread_ts: "200.000",
+        parent_user_id: "U2",
+      }),
+    );
+
+    expect(prepared).toBeNull();
+  });
+
   it("includes thread_ts and parent_user_id metadata in thread replies", async () => {
     const message = createSlackMessage({
       text: "this is a reply",

@@ -50,6 +50,125 @@ import {
 import { resolveSlackRoomContextHints } from "../room-context.js";
 import type { PreparedSlackMessage } from "./types.js";
 
+type SlackThreadParticipationCacheEntry = {
+  participated: boolean;
+  updatedAt: number;
+};
+
+type SlackRepliesProbeMessage = {
+  user?: string;
+  bot_id?: string;
+};
+
+type SlackRepliesProbeResponse = {
+  messages?: SlackRepliesProbeMessage[];
+  response_metadata?: { next_cursor?: string };
+};
+
+const THREAD_PARTICIPATION_CACHE_TTL_MS = 60_000;
+const THREAD_PARTICIPATION_CACHE_MAX = 500;
+const THREAD_PARTICIPATION_MAX_PAGES = 4;
+const THREAD_PARTICIPATION_FETCH_LIMIT = 200;
+const THREAD_PARTICIPATION_CACHE = new Map<string, SlackThreadParticipationCacheEntry>();
+
+function pruneThreadParticipationCache() {
+  while (THREAD_PARTICIPATION_CACHE.size > THREAD_PARTICIPATION_CACHE_MAX) {
+    const oldestKey = THREAD_PARTICIPATION_CACHE.keys().next().value;
+    if (!oldestKey) {
+      break;
+    }
+    THREAD_PARTICIPATION_CACHE.delete(oldestKey);
+  }
+}
+
+function readThreadParticipationCache(cacheKey: string): boolean | undefined {
+  const entry = THREAD_PARTICIPATION_CACHE.get(cacheKey);
+  if (!entry) {
+    return undefined;
+  }
+  const now = Date.now();
+  if (now - entry.updatedAt > THREAD_PARTICIPATION_CACHE_TTL_MS) {
+    THREAD_PARTICIPATION_CACHE.delete(cacheKey);
+    return undefined;
+  }
+  THREAD_PARTICIPATION_CACHE.delete(cacheKey);
+  THREAD_PARTICIPATION_CACHE.set(cacheKey, { ...entry, updatedAt: now });
+  return entry.participated;
+}
+
+function writeThreadParticipationCache(cacheKey: string, participated: boolean) {
+  THREAD_PARTICIPATION_CACHE.delete(cacheKey);
+  THREAD_PARTICIPATION_CACHE.set(cacheKey, {
+    participated,
+    updatedAt: Date.now(),
+  });
+  pruneThreadParticipationCache();
+}
+
+async function hasSlackBotParticipatedInThread(params: {
+  client: SlackMonitorContext["app"]["client"];
+  channelId: string;
+  threadTs: string;
+  botUserId: string;
+  currentMessageTs?: string;
+}): Promise<boolean> {
+  const cacheKey = `${params.channelId}:${params.threadTs}:${params.botUserId}`;
+  const cached = readThreadParticipationCache(cacheKey);
+  if (cached !== undefined) {
+    return cached;
+  }
+
+  const conversations = params.client.conversations as
+    | {
+        replies?: (args: {
+          channel: string;
+          ts: string;
+          limit: number;
+          inclusive: boolean;
+          latest?: string;
+          cursor?: string;
+        }) => Promise<SlackRepliesProbeResponse>;
+      }
+    | undefined;
+  const fetchReplies = conversations?.replies;
+  if (!fetchReplies) {
+    writeThreadParticipationCache(cacheKey, false);
+    return false;
+  }
+
+  let cursor: string | undefined;
+  let pageCount = 0;
+  try {
+    do {
+      const response = await fetchReplies({
+        channel: params.channelId,
+        ts: params.threadTs,
+        limit: THREAD_PARTICIPATION_FETCH_LIMIT,
+        inclusive: true,
+        ...(params.currentMessageTs ? { latest: params.currentMessageTs } : {}),
+        ...(cursor ? { cursor } : {}),
+      });
+      const participated =
+        response.messages?.some(
+          (reply) => reply.bot_id === params.botUserId || reply.user === params.botUserId,
+        ) === true;
+      if (participated) {
+        writeThreadParticipationCache(cacheKey, true);
+        return true;
+      }
+      const next = response.response_metadata?.next_cursor;
+      cursor = typeof next === "string" && next.trim() ? next.trim() : undefined;
+      pageCount += 1;
+    } while (cursor && pageCount < THREAD_PARTICIPATION_MAX_PAGES);
+  } catch {
+    writeThreadParticipationCache(cacheKey, false);
+    return false;
+  }
+
+  writeThreadParticipationCache(cacheKey, false);
+  return false;
+}
+
 export async function prepareSlackMessage(params: {
   ctx: SlackMonitorContext;
   account: ResolvedSlackAccount;
@@ -85,6 +204,9 @@ export async function prepareSlackMessage(params: {
         defaultRequireMention: ctx.defaultRequireMention,
       })
     : null;
+  const shouldRequireMention = isRoom
+    ? (channelConfig?.requireMention ?? ctx.defaultRequireMention)
+    : false;
 
   const allowBots =
     channelConfig?.allowBots ??
@@ -212,30 +334,32 @@ export async function prepareSlackMessage(params: {
       }));
   // Treat as an implicit mention when:
   // (a) the bot authored the thread root message (original behaviour), OR
-  // (b) the bot has previously replied in this thread (session already exists).
-  //     This covers scenario where the bot joined a thread via @mention but is
-  //     NOT the parent_user_id, so follow-up replies without @mention still
-  //     reach the bot (fixes: #25760).
+  // (b) thread-scoped session activity indicates prior participation, OR
+  // (c) Slack thread history confirms prior bot participation.
   //
-  // Thread session participation check: For thread replies, check both:
-  // 1. The thread-specific session (if bot has previously replied in this thread)
-  // 2. The base channel session (handles routing discontinuity)
-  //
-  // Why check the base session: Thread sessions are deferred during prepare
-  // (PR #19083). When the bot replies to the first @mention in a thread:
-  // - Internally: Gateway routes the response to the CHANNEL session (thread
-  //   session doesn't exist yet due to deferred creation)
-  // - On Slack: Bot's reply displays as a THREAD message (correct UI)
-  //
-  // This creates a discontinuity: the bot's participation exists in the channel
-  // session internally, but appears as a thread message externally. We check
-  // both sessions to bridge this gap.
-  const botParticipatedInThread =
+  // We intentionally avoid base channel session fallback to prevent cross-thread
+  // false positives in requireMention channels.
+  const hasThreadSessionActivity =
+    isThreadReply && Boolean(readSessionUpdatedAt({ storePath, sessionKey }));
+  const shouldProbeThreadParticipation =
     isThreadReply &&
-    Boolean(
-      readSessionUpdatedAt({ storePath, sessionKey }) ||
-      readSessionUpdatedAt({ storePath, sessionKey: baseSessionKey }),
-    );
+    isRoom &&
+    shouldRequireMention &&
+    Boolean(ctx.botUserId) &&
+    Boolean(threadTs) &&
+    !hasThreadSessionActivity &&
+    !wasMentioned &&
+    message.parent_user_id !== ctx.botUserId;
+  let botParticipatedInThread = hasThreadSessionActivity;
+  if (shouldProbeThreadParticipation && threadTs && ctx.botUserId) {
+    botParticipatedInThread = await hasSlackBotParticipatedInThread({
+      client: ctx.app.client,
+      channelId: message.channel,
+      threadTs,
+      botUserId: ctx.botUserId,
+      currentMessageTs: message.ts,
+    });
+  }
   const implicitMention = Boolean(
     !isDirectMessage &&
     ctx.botUserId &&
@@ -305,10 +429,6 @@ export async function prepareSlackMessage(params: {
     });
     return null;
   }
-
-  const shouldRequireMention = isRoom
-    ? (channelConfig?.requireMention ?? ctx.defaultRequireMention)
-    : false;
 
   // Allow "control commands" to bypass mention gating if sender is authorized.
   const canDetectMention = Boolean(ctx.botUserId) || mentionRegexes.length > 0;
