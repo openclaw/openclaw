@@ -21,7 +21,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@mariozechner/pi-ai": "0.54.1",
+    "@mariozechner/pi-ai": "0.55.1",
     "partial-json": "*"
   },
   "devDependencies": {
