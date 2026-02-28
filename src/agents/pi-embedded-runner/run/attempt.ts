@@ -148,6 +148,31 @@ export function isOllamaCompatProvider(model: {
   }
 }
 
+export function resolveOllamaCompatNumCtxEnabled(params: {
+  config?: OpenClawConfig;
+  providerId?: string;
+}): boolean {
+  const providerId = params.providerId?.trim();
+  if (!providerId) {
+    return true;
+  }
+  const providers = params.config?.models?.providers;
+  if (!providers) {
+    return true;
+  }
+  const direct = providers[providerId];
+  if (direct) {
+    return direct.injectNumCtxForOpenAICompat ?? true;
+  }
+  const normalized = normalizeProviderId(providerId);
+  for (const [candidateId, candidate] of Object.entries(providers)) {
+    if (normalizeProviderId(candidateId) === normalized) {
+      return candidate.injectNumCtxForOpenAICompat ?? true;
+    }
+  }
+  return true;
+}
+
 export function wrapOllamaCompatNumCtx(baseFn: StreamFn | undefined, numCtx: number): StreamFn {
   const streamFn = baseFn ?? streamSimple;
   return (model, context, options) =>
@@ -816,7 +841,19 @@ export async function runEmbeddedAttempt(
 
       // Ollama with OpenAI-compatible API needs num_ctx in payload.options.
       // Otherwise Ollama defaults to a 4096 context window.
-      if (params.model.api !== "ollama" && isOllamaCompatProvider(params.model)) {
+      const providerIdForNumCtx =
+        typeof params.model.provider === "string" && params.model.provider.trim().length > 0
+          ? params.model.provider
+          : params.provider;
+      const shouldInjectNumCtx = resolveOllamaCompatNumCtxEnabled({
+        config: params.config,
+        providerId: providerIdForNumCtx,
+      });
+      if (
+        shouldInjectNumCtx &&
+        params.model.api !== "ollama" &&
+        isOllamaCompatProvider(params.model)
+      ) {
         const numCtx = Math.max(
           1,
           Math.floor(
