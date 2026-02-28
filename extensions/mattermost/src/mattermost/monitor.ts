@@ -666,12 +666,15 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     const threadRootId = post.root_id?.trim() || undefined;
     const replyToMode = account.config.replyToMode ?? "off";
     const effectiveReplyToId =
-      threadRootId ??
-      (replyToMode === "all" || replyToMode === "first" ? post.id : undefined);
+      threadRootId ?? (replyToMode === "all" || replyToMode === "first" ? post.id : undefined);
     const threadKeys = resolveThreadSessionKeys({
       baseSessionKey,
-      threadId: threadRootId ?? (replyToMode === "all" || replyToMode === "first" ? post.id : undefined),
-      parentSessionKey: (threadRootId || replyToMode === "all" || replyToMode === "first") ? baseSessionKey : undefined,
+      threadId:
+        threadRootId ?? (replyToMode === "all" || replyToMode === "first" ? post.id : undefined),
+      parentSessionKey:
+        threadRootId || replyToMode === "all" || replyToMode === "first"
+          ? baseSessionKey
+          : undefined,
     });
     const sessionKey = threadKeys.sessionKey;
     const historyKey = kind === "direct" ? null : sessionKey;
