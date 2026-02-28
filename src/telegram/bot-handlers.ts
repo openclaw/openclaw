@@ -99,6 +99,36 @@ function resolveInboundMediaFileId(msg: Message): string | undefined {
   );
 }
 
+/** Build a human-readable file metadata string from a Telegram message. */
+function buildFileMetadataStub(msg: Message): string {
+  const formatSize = (bytes?: number) =>
+    bytes != null ? `${(bytes / (1024 * 1024)).toFixed(1)}MB` : "unknown size";
+
+  if (msg.document) {
+    return `File: ${msg.document.file_name ?? "unnamed"}, ${formatSize(msg.document.file_size)}`;
+  }
+  if (msg.video) {
+    return `Video: ${msg.video.file_name ?? "unnamed"}, ${formatSize(msg.video.file_size)}`;
+  }
+  if (msg.audio) {
+    return `Audio: ${msg.audio.file_name ?? "unnamed"}, ${formatSize(msg.audio.file_size)}`;
+  }
+  if (msg.voice) {
+    return `Voice message: ${formatSize(msg.voice.file_size)}`;
+  }
+  if (msg.photo) {
+    const largest = msg.photo[msg.photo.length - 1];
+    return `Photo: ${largest?.width ?? "?"}x${largest?.height ?? "?"}, ${formatSize(largest?.file_size)}`;
+  }
+  if (msg.video_note) {
+    return `Video note: ${formatSize(msg.video_note.file_size)}`;
+  }
+  if (msg.sticker) {
+    return `Sticker: ${msg.sticker.emoji ?? ""} ${msg.sticker.set_name ?? ""}`.trim();
+  }
+  return "Media: unknown type";
+}
+
 export const registerTelegramHandlers = ({
   cfg,
   accountId,
@@ -925,31 +955,27 @@ export const registerTelegramHandlers = ({
     try {
       media = await resolveMedia(ctx, mediaMaxBytes, opts.token, opts.proxyFetch);
     } catch (mediaErr) {
-      if (isMediaSizeLimitError(mediaErr)) {
-        if (sendOversizeWarning) {
-          const limitMb = Math.round(mediaMaxBytes / (1024 * 1024));
-          await withTelegramApiErrorLogging({
-            operation: "sendMessage",
-            runtime,
-            fn: () =>
-              bot.api.sendMessage(chatId, `⚠️ File too large. Maximum size is ${limitMb}MB.`, {
-                reply_to_message_id: msg.message_id,
-              }),
-          }).catch(() => {});
-        }
-        logger.warn({ chatId, error: String(mediaErr) }, oversizeLogMessage);
-        return;
-      }
-      logger.warn({ chatId, error: String(mediaErr) }, "media fetch failed");
-      await withTelegramApiErrorLogging({
-        operation: "sendMessage",
-        runtime,
-        fn: () =>
-          bot.api.sendMessage(chatId, "⚠️ Failed to download media. Please try again.", {
-            reply_to_message_id: msg.message_id,
-          }),
-      }).catch(() => {});
-      return;
+      // Instead of dropping the message, inject file metadata so the agent
+      // is aware a file was sent even when the download fails.
+      const fileMeta = buildFileMetadataStub(msg);
+      const reason = isMediaSizeLimitError(mediaErr)
+        ? `exceeds ${Math.round(mediaMaxBytes / (1024 * 1024))}MB download limit`
+        : "download failed";
+      const metaLine = `⚠️ [${fileMeta}] (${reason})`;
+      const existingText = (msg.text ?? msg.caption ?? "").trim();
+      // Append metadata AFTER existing text to preserve command detection
+      // (commands must be at the start of the message).
+      // Also clear entities/caption_entities since offsets are invalid for the rewritten text.
+      (msg as { text?: string }).text = existingText ? `${existingText}\n${metaLine}` : metaLine;
+      (msg as { caption?: string }).caption = undefined;
+      (msg as { entities?: unknown }).entities = undefined;
+      (msg as { caption_entities?: unknown }).caption_entities = undefined;
+
+      logger.warn(
+        { chatId, error: String(mediaErr), fileMeta },
+        isMediaSizeLimitError(mediaErr) ? oversizeLogMessage : "media fetch failed",
+      );
+      // media stays null — message continues to agent with metadata stub
     }
 
     // Skip sticker-only messages where the sticker was skipped (animated/video)
