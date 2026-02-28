@@ -6,7 +6,11 @@ import {
   resolveAuthStorePathForDisplay,
   resolveProfileUnusableUntilForDisplay,
 } from "../../agents/auth-profiles.js";
-import { getCustomProviderApiKey, resolveAwsSdkEnvVarName, resolveEnvApiKey } from "../../agents/model-auth.js";
+import {
+  getCustomProviderApiKey,
+  resolveAwsSdkEnvVarName,
+  resolveEnvApiKey,
+} from "../../agents/model-auth.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { shortenHomePath } from "../../utils.js";
 import { maskApiKey } from "./list.format.js";
