@@ -593,7 +593,9 @@ export function createGatewayHttpServer(opts: {
         }
       }
       if (handlePluginRequest) {
-        if (shouldEnforcePluginGatewayAuth?.(requestPath) ?? false) {
+        if (
+          (shouldEnforcePluginGatewayAuth ?? isProtectedPluginRoutePath)(requestPath)
+        ) {
           const pluginAuthOk = await enforcePluginRouteGatewayAuth({
             req,
             res,
