@@ -51,10 +51,6 @@ class MicCaptureManager(
     private const val pendingRunTimeoutMs = 45_000L
   }
 
-  private data class QueuedUtterance(
-    val text: String,
-  )
-
   private val mainHandler = Handler(Looper.getMainLooper())
   private val json = Json { ignoreUnknownKeys = true }
 
@@ -82,7 +78,7 @@ class MicCaptureManager(
   private val _isSending = MutableStateFlow(false)
   val isSending: StateFlow<Boolean> = _isSending
 
-  private val messageQueue = ArrayDeque<QueuedUtterance>()
+  private val messageQueue = ArrayDeque<String>()
   private val sessionSegments = mutableListOf<String>()
   private var lastFinalSegment: String? = null
   private var pendingRunId: String? = null
@@ -255,12 +251,12 @@ class MicCaptureManager(
       role = VoiceConversationRole.User,
       text = message,
     )
-    messageQueue.addLast(QueuedUtterance(text = message))
+    messageQueue.addLast(message)
     publishQueue()
   }
 
   private fun publishQueue() {
-    _queuedMessages.value = messageQueue.map { it.text }
+    _queuedMessages.value = messageQueue.toList()
   }
 
   private fun sendQueuedIfIdle() {
@@ -286,7 +282,7 @@ class MicCaptureManager(
 
     scope.launch {
       try {
-        val runId = sendToGateway(next.text)
+        val runId = sendToGateway(next)
         pendingRunId = runId
         if (runId == null) {
           pendingRunTimeoutJob?.cancel()
@@ -365,15 +361,21 @@ class MicCaptureManager(
 
   private fun updateConversationEntry(id: String, text: String?, isStreaming: Boolean) {
     val current = _conversation.value
-    _conversation.value =
-      current.map { entry ->
-        if (entry.id == id) {
-          val updatedText = text ?: entry.text
-          entry.copy(text = updatedText, isStreaming = isStreaming)
-        } else {
-          entry
-        }
+    if (current.isEmpty()) return
+
+    val targetIndex =
+      when {
+        current[current.lastIndex].id == id -> current.lastIndex
+        else -> current.indexOfFirst { it.id == id }
       }
+    if (targetIndex < 0) return
+
+    val entry = current[targetIndex]
+    val updatedText = text ?: entry.text
+    if (updatedText == entry.text && entry.isStreaming == isStreaming) return
+    val updated = current.toMutableList()
+    updated[targetIndex] = entry.copy(text = updatedText, isStreaming = isStreaming)
+    _conversation.value = updated
   }
 
   private fun upsertPendingAssistant(text: String, isStreaming: Boolean) {
