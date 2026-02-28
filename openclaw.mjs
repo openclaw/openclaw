@@ -50,8 +50,8 @@ if (module.enableCompileCache && !process.env.NODE_DISABLE_COMPILE_CACHE) {
   const args = process.argv.slice(2);
   let wantsVersion = false;
   for (const arg of args) {
-    if (arg === "--") break;
-    if (!arg.startsWith("-")) break; // stop at first non-flag (subcommand)
+    if (arg === "--") { break; }
+    if (!arg.startsWith("-")) { break; } // stop at first non-flag (subcommand)
     if (VERSION_FLAGS.has(arg)) {
       wantsVersion = true;
       break;
