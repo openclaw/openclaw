@@ -1,0 +1,35 @@
+{
+  "name": "@openclaw/gohighlevel",
+  "version": "2026.2.27",
+  "private": true,
+  "description": "OpenClaw GoHighLevel channel plugin",
+  "type": "module",
+  "dependencies": {},
+  "peerDependencies": {
+    "openclaw": ">=2026.1.26"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "channel": {
+      "id": "gohighlevel",
+      "label": "GoHighLevel",
+      "selectionLabel": "GoHighLevel (CRM)",
+      "detailLabel": "GoHighLevel",
+      "docsPath": "/channels/gohighlevel",
+      "docsLabel": "gohighlevel",
+      "blurb": "GoHighLevel CRM — AI chatbot for SMS, webchat, email, IG, FB, and GMB.",
+      "aliases": [
+        "ghl",
+        "highlevel"
+      ],
+      "order": 70
+    },
+    "install": {
+      "npmSpec": "@openclaw/gohighlevel",
+      "localPath": "extensions/gohighlevel",
+      "defaultChoice": "npm"
+    }
+  }
+}
