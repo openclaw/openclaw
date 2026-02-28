@@ -180,17 +180,26 @@ function parseModelsArgs(raw: string): {
   };
 }
 
+/** Surfaces that deliver output into persistent chat history (Telegram, Discord, Slack, …). */
+const CHANNEL_SURFACES = new Set(["telegram", "discord", "slack", "whatsapp", "signal", "irc"]);
+
+function isChannelSurface(surface?: string): boolean {
+  return surface ? CHANNEL_SURFACES.has(surface) : false;
+}
+
 function resolveProviderLabel(params: {
   provider: string;
   cfg: OpenClawConfig;
   agentDir?: string;
   sessionEntry?: SessionEntry;
+  surface?: string;
 }): string {
   const authLabel = resolveModelAuthLabel({
     provider: params.provider,
     cfg: params.cfg,
     sessionEntry: params.sessionEntry,
     agentDir: params.agentDir,
+    hideKeySnippet: isChannelSurface(params.surface),
   });
   if (!authLabel || authLabel === "unknown") {
     return params.provider;
@@ -204,12 +213,14 @@ export function formatModelsAvailableHeader(params: {
   cfg: OpenClawConfig;
   agentDir?: string;
   sessionEntry?: SessionEntry;
+  surface?: string;
 }): string {
   const providerLabel = resolveProviderLabel({
     provider: params.provider,
     cfg: params.cfg,
     agentDir: params.agentDir,
     sessionEntry: params.sessionEntry,
+    surface: params.surface,
   });
   return `Models (${providerLabel}) — ${params.total} available`;
 }
@@ -281,6 +292,7 @@ export async function resolveModelsCommandReply(params: {
     cfg: params.cfg,
     agentDir: params.agentDir,
     sessionEntry: params.sessionEntry,
+    surface: params.surface,
   });
 
   if (total === 0) {
@@ -314,6 +326,7 @@ export async function resolveModelsCommandReply(params: {
       cfg: params.cfg,
       agentDir: params.agentDir,
       sessionEntry: params.sessionEntry,
+      surface: params.surface,
     });
     return {
       text,
