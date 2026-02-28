@@ -10,6 +10,7 @@ import android.os.Looper
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
+import android.util.Log
 import androidx.core.content.ContextCompat
 import java.util.UUID
 import kotlinx.coroutines.CoroutineScope
@@ -39,8 +40,10 @@ class MicCaptureManager(
   private val context: Context,
   private val scope: CoroutineScope,
   private val sendToGateway: suspend (String) -> String?,
+  private val speakAssistantReply: suspend (String) -> Unit = {},
 ) {
   companion object {
+    private const val tag = "MicCapture"
     private const val speechMinSessionMs = 30_000L
     private const val speechCompleteSilenceMs = 1_500L
     private const val speechPossibleSilenceMs = 900L
@@ -140,6 +143,7 @@ class MicCaptureManager(
         val finalText = parseAssistantText(payload)?.trim().orEmpty()
         if (finalText.isNotEmpty()) {
           upsertPendingAssistant(text = finalText, isStreaming = false)
+          playAssistantReplyAsync(finalText)
         } else if (pendingAssistantEntryId != null) {
           updateConversationEntry(pendingAssistantEntryId!!, text = null, isStreaming = false)
         }
@@ -384,6 +388,18 @@ class MicCaptureManager(
       return
     }
     updateConversationEntry(id = currentId, text = text, isStreaming = isStreaming)
+  }
+
+  private fun playAssistantReplyAsync(text: String) {
+    val spoken = text.trim()
+    if (spoken.isEmpty()) return
+    scope.launch {
+      try {
+        speakAssistantReply(spoken)
+      } catch (err: Throwable) {
+        Log.w(tag, "assistant speech failed: ${err.message ?: err::class.simpleName}")
+      }
+    }
   }
 
   private fun onFinalTranscript(text: String) {
