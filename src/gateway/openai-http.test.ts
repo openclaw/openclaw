@@ -517,4 +517,62 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       // shared server
     }
   });
+
+  it("GET /v1/models returns model list", async () => {
+    const port = enabledPort;
+
+    {
+      const res = await fetch(`http://127.0.0.1:${port}/v1/models`, {
+        method: "GET",
+        headers: { authorization: "Bearer secret" },
+      });
+      expect(res.status).toBe(200);
+      const json = (await res.json()) as Record<string, unknown>;
+      expect(json.object).toBe("list");
+      const data = json.data as Array<Record<string, unknown>>;
+      expect(Array.isArray(data)).toBe(true);
+      expect(data.length).toBe(2);
+      expect(data[0]?.id).toBe("openclaw");
+      expect(data[0]?.object).toBe("model");
+      expect(data[0]?.owned_by).toBe("openclaw");
+      expect(data[1]?.id).toBe("openclaw:main");
+    }
+
+    // Unauthorized
+    {
+      const res = await fetch(`http://127.0.0.1:${port}/v1/models`, {
+        method: "GET",
+      });
+      expect(res.status).toBe(401);
+      await res.text();
+    }
+
+    // Wrong method
+    {
+      const res = await fetch(`http://127.0.0.1:${port}/v1/models`, {
+        method: "POST",
+        headers: {
+          authorization: "Bearer secret",
+          "content-type": "application/json",
+        },
+        body: "{}",
+      });
+      expect(res.status).toBe(405);
+      await res.text();
+    }
+  });
+
+  it("returns 404 for /v1/models when disabled", async () => {
+    await expectChatCompletionsDisabled(async (port) => {
+      const server = await startServerWithDefaultConfig(port);
+      const res = await fetch(`http://127.0.0.1:${port}/v1/models`, {
+        method: "GET",
+        headers: { authorization: "Bearer secret" },
+      });
+      expect(res.status).toBe(404);
+      await res.text();
+      return server;
+    });
+  });
+
 });

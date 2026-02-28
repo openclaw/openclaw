@@ -12,6 +12,7 @@ import {
 } from "./agent-prompt.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
+import { authorizeGatewayBearerRequestOrReply } from "./http-auth-helpers.js";
 import { sendJson, setSseHeaders, writeDone } from "./http-common.js";
 import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
 import { resolveGatewayRequestContext } from "./http-utils.js";
@@ -377,5 +378,52 @@ export async function handleOpenAiHttpRequest(
     }
   })();
 
+  return true;
+}
+
+type OpenAiModelsOptions = {
+  auth: ResolvedGatewayAuth;
+  trustedProxies?: string[];
+  allowRealIpFallback?: boolean;
+  rateLimiter?: AuthRateLimiter;
+};
+
+export async function handleOpenAiModelsRequest(
+  req: IncomingMessage,
+  res: ServerResponse,
+  opts: OpenAiModelsOptions,
+): Promise<boolean> {
+  const url = new URL(req.url ?? "/", `http://${req.headers.host || "localhost"}`);
+  if (url.pathname !== "/v1/models") {
+    return false;
+  }
+
+  if (req.method !== "GET") {
+    res.setHeader("Allow", "GET");
+    sendJson(res, 405, {
+      error: { message: "Method Not Allowed", type: "invalid_request_error" },
+    });
+    return true;
+  }
+
+  const authorized = await authorizeGatewayBearerRequestOrReply({
+    req,
+    res,
+    auth: opts.auth,
+    trustedProxies: opts.trustedProxies,
+    allowRealIpFallback: opts.allowRealIpFallback,
+    rateLimiter: opts.rateLimiter,
+  });
+  if (!authorized) {
+    return true;
+  }
+
+  sendJson(res, 200, {
+    object: "list",
+    data: [
+      { id: "openclaw", object: "model", created: 1700000000, owned_by: "openclaw" },
+      { id: "openclaw:main", object: "model", created: 1700000000, owned_by: "openclaw" },
+    ],
+  });
   return true;
 }
