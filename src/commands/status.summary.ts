@@ -134,7 +134,7 @@ export async function getStatusSummary(
         const updatedAt = entry?.updatedAt ?? null;
         const age = updatedAt ? now - updatedAt : null;
         const resolvedModel = resolveSessionModelRef(cfg, entry, opts.agentIdOverride);
-        const model = resolvedModel.model ?? configModel ?? null;
+        const model = resolvedModel.model ?? null;
         const contextTokens =
           resolveContextTokensForModel({
             cfg,
