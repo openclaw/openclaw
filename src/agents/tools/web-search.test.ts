@@ -25,6 +25,7 @@ const {
   resolveBraveMode,
   mapBraveLlmContextResults,
   freshnessToExaStartDate,
+  freshnessToExaDates,
   resolveExaApiKey,
 } = __testing;
 
@@ -504,7 +505,7 @@ describe("exa freshnessToExaStartDate", () => {
     expect(result).toBe(expected.toISOString().slice(0, 10));
   });
 
-  it("extracts start date from a date range", () => {
+  it("extracts start date from a date range (deprecated compat)", () => {
     expect(freshnessToExaStartDate("2024-03-01to2024-03-31")).toBe("2024-03-01");
   });
 
@@ -517,6 +518,32 @@ describe("exa freshnessToExaStartDate", () => {
     const pw = freshnessToExaStartDate("PW");
     expect(pd).toMatch(/^\d{4}-\d{2}-\d{2}$/);
     expect(pw).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  });
+});
+
+describe("exa freshnessToExaDates", () => {
+  it("returns only startPublishedDate for shortcut values", () => {
+    const result = freshnessToExaDates("pd");
+    expect(result.startPublishedDate).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(result.endPublishedDate).toBeUndefined();
+  });
+
+  it("returns both startPublishedDate and endPublishedDate for date ranges", () => {
+    const result = freshnessToExaDates("2024-03-01to2024-03-31");
+    expect(result.startPublishedDate).toBe("2024-03-01");
+    expect(result.endPublishedDate).toBe("2024-03-31");
+  });
+
+  it("is case-insensitive for date range extraction", () => {
+    const result = freshnessToExaDates("2024-03-01TO2024-03-31");
+    expect(result.startPublishedDate).toBe("2024-03-01");
+    expect(result.endPublishedDate).toBe("2024-03-31");
+  });
+
+  it("returns empty object for unknown values", () => {
+    const result = freshnessToExaDates("invalid");
+    expect(result.startPublishedDate).toBeUndefined();
+    expect(result.endPublishedDate).toBeUndefined();
   });
 });
 
