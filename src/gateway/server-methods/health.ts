@@ -1,4 +1,5 @@
 import { getStatusSummary } from "../../commands/status.js";
+import { loadConfig } from "../../config/config.js";
 import { ErrorCodes, errorShape } from "../protocol/index.js";
 import { HEALTH_REFRESH_INTERVAL_MS } from "../server-constants.js";
 import { formatError } from "../server-utils.js";
@@ -13,7 +14,12 @@ export const healthHandlers: GatewayRequestHandlers = {
     const wantsProbe = params?.probe === true;
     const now = Date.now();
     const cached = getHealthCache();
-    if (!wantsProbe && cached && now - cached.ts < HEALTH_REFRESH_INTERVAL_MS) {
+    const cfg = loadConfig();
+    const refreshIntervalMs =
+      (cfg.gateway?.healthRefreshIntervalSeconds ?? 0) > 0
+        ? cfg.gateway!.healthRefreshIntervalSeconds! * 1000
+        : HEALTH_REFRESH_INTERVAL_MS;
+    if (!wantsProbe && cached && now - cached.ts < refreshIntervalMs) {
       respond(true, cached, undefined, { cached: true });
       void refreshHealthSnapshot({ probe: false }).catch((err) =>
         logHealth.error(`background health refresh failed: ${formatError(err)}`),

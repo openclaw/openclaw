@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { ToolPolicySchema } from "./zod-schema.agent-runtime.js";
-import { ChannelHeartbeatVisibilitySchema } from "./zod-schema.channels.js";
+import { ChannelHeartbeatVisibilitySchema, HealthProbeModeSchema } from "./zod-schema.channels.js";
 import {
   BlockStreamingCoalesceSchema,
   DmConfigSchema,
@@ -123,6 +123,7 @@ export const WhatsAppConfigSchema = WhatsAppSharedSchema.extend({
     })
     .strict()
     .optional(),
+  healthProbe: HealthProbeModeSchema,
 })
   .strict()
   .superRefine((value, ctx) => {

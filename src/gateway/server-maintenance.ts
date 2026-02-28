@@ -25,6 +25,8 @@ export function startGatewayMaintenanceTimers(params: {
   getHealthVersion: () => number;
   refreshGatewayHealthSnapshot: (opts?: { probe?: boolean }) => Promise<HealthSummary>;
   logHealth: { error: (msg: string) => void };
+  /** Override the periodic health refresh interval (ms). Falls back to HEALTH_REFRESH_INTERVAL_MS. */
+  healthRefreshIntervalMs?: number;
   dedupe: Map<string, DedupeEntry>;
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
   chatRunState: { abortedRuns: Map<string, number> };
@@ -60,11 +62,12 @@ export function startGatewayMaintenanceTimers(params: {
   }, TICK_INTERVAL_MS);
 
   // periodic health refresh to keep cached snapshot warm
+  const effectiveHealthIntervalMs = params.healthRefreshIntervalMs ?? HEALTH_REFRESH_INTERVAL_MS;
   const healthInterval = setInterval(() => {
     void params
       .refreshGatewayHealthSnapshot({ probe: true })
       .catch((err) => params.logHealth.error(`refresh failed: ${formatError(err)}`));
-  }, HEALTH_REFRESH_INTERVAL_MS);
+  }, effectiveHealthIntervalMs);
 
   // Prime cache so first client gets a snapshot without waiting.
   void params

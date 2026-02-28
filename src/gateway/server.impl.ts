@@ -606,6 +606,9 @@ export async function startGatewayServer(
       getHealthVersion,
       refreshGatewayHealthSnapshot,
       logHealth,
+      healthRefreshIntervalMs: cfgAtStart.gateway?.healthRefreshIntervalSeconds
+        ? cfgAtStart.gateway.healthRefreshIntervalSeconds * 1000
+        : undefined,
       dedupe,
       chatAbortControllers,
       chatRunState,

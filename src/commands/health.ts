@@ -6,6 +6,7 @@ import { withProgress } from "../cli/progress.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
+import type { HealthProbeMode } from "../config/types.channels.js";
 import { buildGatewayConnectionDetails, callGateway } from "../gateway/call.js";
 import { info } from "../globals.js";
 import { isTruthyEnvValue } from "../infra/env.js";
@@ -110,6 +111,12 @@ const formatDurationParts = (ms: number): string => {
 
 const resolveHeartbeatSummary = (cfg: ReturnType<typeof loadConfig>, agentId: string) =>
   resolveHeartbeatSummaryForAgent(cfg, agentId);
+
+/** Resolve the effective health probe mode for a channel (per-channel > defaults > "full"). */
+function resolveHealthProbeMode(cfg: OpenClawConfig, channelId: string): HealthProbeMode {
+  const channelCfg = cfg.channels?.[channelId] as { healthProbe?: HealthProbeMode } | undefined;
+  return channelCfg?.healthProbe ?? cfg.channels?.defaults?.healthProbe ?? "full";
+}
 
 const resolveAgentOrder = (cfg: ReturnType<typeof loadConfig>) => {
   const defaultAgentId = resolveDefaultAgentId(cfg);
@@ -426,7 +433,8 @@ export async function getHealthSnapshot(params?: {
 
       let probe: unknown;
       let lastProbeAt: number | null = null;
-      if (enabled && configured && doProbe && plugin.status?.probeAccount) {
+      const probeMode = resolveHealthProbeMode(cfg, plugin.id);
+      if (enabled && configured && doProbe && probeMode !== "skip" && plugin.status?.probeAccount) {
         try {
           probe = await plugin.status.probeAccount({
             account,

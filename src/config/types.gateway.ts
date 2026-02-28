@@ -362,4 +362,11 @@ export type GatewayConfig = {
    * Set to 0 to disable. Default: 5.
    */
   channelHealthCheckMinutes?: number;
+  /**
+   * Health snapshot cache TTL in seconds.
+   * Controls how long the cached health snapshot is considered fresh before
+   * re-probing channels. Higher values reduce API calls to external platforms.
+   * Default: 60.
+   */
+  healthRefreshIntervalSeconds?: number;
 };

@@ -171,6 +171,105 @@ describe("gateway.channelHealthCheckMinutes", () => {
   });
 });
 
+describe("gateway.healthRefreshIntervalSeconds", () => {
+  it("accepts a positive integer", () => {
+    const res = validateConfigObject({
+      gateway: {
+        healthRefreshIntervalSeconds: 300,
+      },
+    });
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects zero", () => {
+    const res = validateConfigObject({
+      gateway: {
+        healthRefreshIntervalSeconds: 0,
+      },
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues[0]?.path).toBe("gateway.healthRefreshIntervalSeconds");
+    }
+  });
+
+  it("rejects negative values", () => {
+    const res = validateConfigObject({
+      gateway: {
+        healthRefreshIntervalSeconds: -10,
+      },
+    });
+    expect(res.ok).toBe(false);
+  });
+
+  it("accepts max bound (86400 = 24h)", () => {
+    const res = validateConfigObject({
+      gateway: {
+        healthRefreshIntervalSeconds: 86_400,
+      },
+    });
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects values above 86400", () => {
+    const res = validateConfigObject({
+      gateway: {
+        healthRefreshIntervalSeconds: 86_401,
+      },
+    });
+    expect(res.ok).toBe(false);
+  });
+});
+
+describe("channels.defaults.healthProbe", () => {
+  it("accepts full", () => {
+    const res = validateConfigObject({
+      channels: {
+        defaults: { healthProbe: "full" },
+      },
+    });
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts skip", () => {
+    const res = validateConfigObject({
+      channels: {
+        defaults: { healthProbe: "skip" },
+      },
+    });
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects invalid values", () => {
+    const res = validateConfigObject({
+      channels: {
+        defaults: { healthProbe: "invalid" },
+      },
+    });
+    expect(res.ok).toBe(false);
+  });
+});
+
+describe("per-channel healthProbe", () => {
+  it("accepts healthProbe on a built-in channel", () => {
+    const res = validateConfigObject({
+      channels: {
+        telegram: { healthProbe: "skip" },
+      },
+    });
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts healthProbe on an extension channel via passthrough", () => {
+    const res = validateConfigObject({
+      channels: {
+        feishu: { healthProbe: "skip" },
+      },
+    });
+    expect(res.ok).toBe(true);
+  });
+});
+
 describe("cron webhook schema", () => {
   it("accepts cron.webhookToken and legacy cron.webhook", () => {
     const res = OpenClawSchema.safeParse({

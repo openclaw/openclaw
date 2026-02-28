@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { ChannelHeartbeatVisibilitySchema } from "./zod-schema.channels.js";
+import { ChannelHeartbeatVisibilitySchema, HealthProbeModeSchema } from "./zod-schema.channels.js";
 import { GroupPolicySchema } from "./zod-schema.core.js";
 import {
   BlueBubblesConfigSchema,
@@ -16,7 +16,7 @@ import { WhatsAppConfigSchema } from "./zod-schema.providers-whatsapp.js";
 
 export * from "./zod-schema.providers-core.js";
 export * from "./zod-schema.providers-whatsapp.js";
-export { ChannelHeartbeatVisibilitySchema } from "./zod-schema.channels.js";
+export { ChannelHeartbeatVisibilitySchema, HealthProbeModeSchema } from "./zod-schema.channels.js";
 
 const ChannelModelByChannelSchema = z
   .record(z.string(), z.record(z.string(), z.string()))
@@ -28,6 +28,7 @@ export const ChannelsSchema = z
       .object({
         groupPolicy: GroupPolicySchema.optional(),
         heartbeat: ChannelHeartbeatVisibilitySchema,
+        healthProbe: HealthProbeModeSchema,
       })
       .strict()
       .optional(),

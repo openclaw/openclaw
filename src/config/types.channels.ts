@@ -18,10 +18,18 @@ export type ChannelHeartbeatVisibilityConfig = {
   useIndicator?: boolean;
 };
 
+export type HealthProbeMode = "full" | "skip";
+
 export type ChannelDefaultsConfig = {
   groupPolicy?: GroupPolicy;
   /** Default heartbeat visibility for all channels. */
   heartbeat?: ChannelHeartbeatVisibilityConfig;
+  /**
+   * Default health probe mode for all channels.
+   * - "full" (default): probe channels via external API during health snapshots
+   * - "skip": skip probeAccount() to avoid consuming API rate limits
+   */
+  healthProbe?: HealthProbeMode;
 };
 
 export type ChannelModelByChannelConfig = Record<string, Record<string, string>>;
@@ -37,6 +45,13 @@ export type ExtensionChannelConfig = {
   defaultTo?: string;
   dmPolicy?: string;
   groupPolicy?: GroupPolicy;
+  /**
+   * Health probe mode for this channel.
+   * - "full" (default): probe via external API during health snapshots
+   * - "skip": skip probeAccount() to avoid consuming API rate limits
+   * Overrides channels.defaults.healthProbe when set.
+   */
+  healthProbe?: HealthProbeMode;
   accounts?: Record<string, unknown>;
   [key: string]: unknown;
 };
