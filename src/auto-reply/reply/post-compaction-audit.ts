@@ -86,12 +86,33 @@ export function auditPostCompactionReads(
   const normalizedReads = readFilePaths.map((p) => path.resolve(workspaceDir, p));
   const missingPatterns: string[] = [];
 
+  // if today’s timeline hasn't been created yet, skip the daily-file regex
+
+  const shouldSkipTimelineCheck = (() => {
+    const DATE_REGEX = /memory\/(?:timeline\/)?\d{4}-\d{2}-\d{2}\.md/;
+    const today = new Date().toISOString().slice(0, 10);
+    const candidates = [
+      path.join(workspaceDir, "memory", `${today}.md`),
+      path.join(workspaceDir, "memory", "timeline", `${today}.md`),
+    ];
+    const todayExists = candidates.some((p) => fs.existsSync(p));
+    return !todayExists && resolved.some((r) => typeof r !== "string" && DATE_REGEX.test(r.source));
+  })();
+
   for (const required of resolved) {
     if (typeof required === "string") {
       const requiredResolved = path.resolve(workspaceDir, required);
       const found = normalizedReads.some((r) => r === requiredResolved);
       if (!found) {
-        missingPatterns.push(required);
+        if (
+          shouldSkipTimelineCheck &&
+          typeof required !== "string" &&
+          /\d{4}-\d{2}-\d{2}/.test(required.source)
+        ) {
+          // skip timeline requirement when the file doesn't exist yet
+        } else {
+          missingPatterns.push(required);
+        }
       }
     } else {
       // RegExp — match against relative paths from workspace
@@ -102,7 +123,9 @@ export function auditPostCompactionReads(
         return required.test(normalizedRel);
       });
       if (!found) {
-        missingPatterns.push(required.source);
+        if (!(shouldSkipTimelineCheck && /\d{4}-\d{2}-\d{2}/.test(required.source))) {
+          missingPatterns.push(required.source);
+        }
       }
     }
   }
