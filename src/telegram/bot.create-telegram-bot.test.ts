@@ -2037,7 +2037,7 @@ describe("createTelegramBot", () => {
       vi.useRealTimers();
     }
   });
-  it("drops oversized channel_post media instead of dispatching a placeholder message", async () => {
+  it("passes metadata stub for oversized channel_post media instead of dropping", async () => {
     loadConfig.mockReturnValue({
       channels: {
         telegram: {
@@ -2074,7 +2074,10 @@ describe("createTelegramBot", () => {
       getFile: async () => ({ file_path: "photos/oversized.jpg" }),
     });
 
-    expect(replySpy).not.toHaveBeenCalled();
+    // Message should now reach agent with metadata stub instead of being dropped
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    const payload = replySpy.mock.calls[0][0];
+    expect(payload.Body).toContain("⚠️");
     fetchSpy.mockRestore();
   });
   it("passes file metadata to agent when media download fails for direct messages", async () => {
