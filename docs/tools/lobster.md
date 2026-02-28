@@ -159,7 +159,7 @@ pipeline DSL syntax (`|` piping, `approve`, etc.) are only available in inline p
 strings passed via the `pipeline` tool parameter, not in `.lobster` file steps.
 
 Additionally, YAML compact mappings can reject `command` strings that contain a
-colon-space (`: `) in an unquoted value
+colon-space (`":"`) in an unquoted value
 (e.g. `bash -c ‘curl -H Content-Type: application/json http://example.com’`),
 producing errors like `Nested mappings are not allowed in compact mappings`.
 
