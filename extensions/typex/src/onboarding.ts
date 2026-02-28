@@ -3,11 +3,27 @@ import qrcode from "qrcode-terminal";
 import { resolveDefaultTypeXAccountId } from "./client/accounts.js";
 import { getTypeXClient } from "./client/client.js";
 
+function extractQrCodeId(qrcodeData: string): string {
+  try {
+    const url = new URL(qrcodeData);
+    return url.searchParams.get("qr_code_id") || "";
+  } catch {
+    // Fallback for raw querystrings or non-URL payloads.
+    const queryOnly = qrcodeData.includes("?") ? qrcodeData.split("?")[1] || "" : qrcodeData;
+    return new URLSearchParams(queryOnly).get("qr_code_id") || "";
+  }
+}
+
 export const typexOnboardingAdapter: ChannelOnboardingAdapter = {
   channel: "typex",
   getStatus: async ({ cfg }) => {
     const accountId = resolveDefaultTypeXAccountId(cfg);
-    const configured = Boolean(cfg.channels?.["typex"]?.accounts?.[accountId]?.token);
+    const accountToken = cfg.channels?.["typex"]?.accounts?.[accountId]?.token;
+    const topLevelToken = cfg.channels?.["typex"]?.token;
+    const configured = Boolean(
+      (typeof accountToken === "string" && accountToken.trim()) ||
+      (typeof topLevelToken === "string" && topLevelToken.trim()),
+    );
 
     return {
       channel: "typex",
@@ -24,8 +40,10 @@ export const typexOnboardingAdapter: ChannelOnboardingAdapter = {
 
     try {
       const qrcodeData = await client.fetchQrcodeUrl();
-      const parsedData = new URLSearchParams(qrcodeData);
-      const qrcodeId = parsedData.get("qr_code_id") || "";
+      const qrcodeId = extractQrCodeId(qrcodeData);
+      if (!qrcodeId) {
+        throw new Error("TypeX QR payload missing qr_code_id.");
+      }
       console.log("\nScan this QR code with TypeX App:\n");
       qrcode.generate(qrcodeData, { small: true });
 
@@ -75,7 +93,7 @@ export const typexOnboardingAdapter: ChannelOnboardingAdapter = {
       return { cfg, accountId: userId };
     } catch (error) {
       await prompter.note(`Setup Failed: ${String(error)}`, "Error");
-      return { cfg };
+      throw error;
     }
   },
 };

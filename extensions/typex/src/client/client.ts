@@ -147,6 +147,7 @@ export class TypeXClient {
             Cookie: token,
           },
           body: JSON.stringify({
+            ...(to ? { chat_id: to } : {}),
             content: {
               text: finalContent,
             },
