@@ -1,16 +1,19 @@
 import { html } from "lit";
 import { repeat } from "lit/directives/repeat.js";
+import { parseAgentSessionKey } from "../../../src/sessions/session-key-utils.js";
 import { t } from "../i18n/index.ts";
 import { refreshChat } from "./app-chat.ts";
 import { syncUrlWithSessionKey } from "./app-settings.ts";
 import type { AppViewState } from "./app-view-state.ts";
 import { OpenClawApp } from "./app.ts";
 import { ChatState, loadChatHistory } from "./controllers/chat.ts";
+import { patchSession } from "./controllers/sessions.ts";
 import { icons } from "./icons.ts";
 import { iconForTab, pathForTab, titleForTab, type Tab } from "./navigation.ts";
 import type { ThemeTransitionContext } from "./theme-transition.ts";
 import type { ThemeMode } from "./theme.ts";
 import type { SessionsListResult } from "./types.ts";
+import { generateUUID } from "./uuid.ts";
 
 type SessionDefaultsSnapshot = {
   mainSessionKey?: string;
@@ -35,6 +38,11 @@ function resolveSidebarChatSessionKey(state: AppViewState): string {
 function resetChatStateForSessionSwitch(state: AppViewState, sessionKey: string) {
   state.sessionKey = sessionKey;
   state.chatMessage = "";
+  state.chatAttachments = [];
+  state.chatQueue = [];
+  state.sidebarOpen = false;
+  state.sidebarContent = null;
+  state.sidebarError = null;
   state.chatStream = null;
   (state as unknown as OpenClawApp).chatStreamStartedAt = null;
   state.chatRunId = null;
@@ -45,6 +53,61 @@ function resetChatStateForSessionSwitch(state: AppViewState, sessionKey: string)
     sessionKey,
     lastActiveSessionKey: sessionKey,
   });
+}
+
+function slugifySessionTitle(input: string): string {
+  const raw = (input ?? "").trim().toLowerCase();
+  if (!raw) {
+    return "chat";
+  }
+  // Keep it conservative: [a-z0-9-]
+  const slug = raw
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "")
+    .slice(0, 40);
+  return slug || "chat";
+}
+
+function formatUiSessionTimestamp(d: Date): string {
+  const y = String(d.getFullYear());
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mm = String(d.getMinutes()).padStart(2, "0");
+  return `${y}${m}${day}-${hh}${mm}`;
+}
+
+type SessionDefaultsSnapshotExtra = {
+  defaultAgentId?: string;
+};
+
+function resolveAgentIdForNewUiSession(state: AppViewState): string {
+  const parsed = parseAgentSessionKey(state.sessionKey);
+  if (parsed?.agentId) {
+    return parsed.agentId;
+  }
+  const selected = state.agentsSelectedId?.trim();
+  if (selected) {
+    return selected;
+  }
+  const assistant = state.assistantAgentId?.trim();
+  if (assistant) {
+    return assistant;
+  }
+  const snapshot = state.hello?.snapshot as
+    | { sessionDefaults?: SessionDefaultsSnapshotExtra }
+    | undefined;
+  const fallback = snapshot?.sessionDefaults?.defaultAgentId?.trim();
+  return fallback || "main";
+}
+
+function generateNewUiSessionKey(state: AppViewState, title?: string): string {
+  const agentId = resolveAgentIdForNewUiSession(state);
+  const ts = formatUiSessionTimestamp(new Date());
+  const slug = slugifySessionTitle(title ?? "");
+  const rand = generateUUID().split("-")[0].slice(0, 4).toLowerCase();
+  return `agent:${agentId}:ui:${ts}-${slug}-${rand}`;
 }
 
 export function renderTab(state: AppViewState, tab: Tab) {
@@ -93,6 +156,50 @@ export function renderChatControls(state: AppViewState) {
   const disableFocusToggle = state.onboarding;
   const showThinking = state.onboarding ? false : state.settings.chatShowThinking;
   const focusActive = state.onboarding ? true : state.settings.chatFocusMode;
+
+  const switchToSession = (next: string) => {
+    resetChatStateForSessionSwitch(state, next);
+    void state.loadAssistantIdentity();
+    syncUrlWithSessionKey(
+      state as unknown as Parameters<typeof syncUrlWithSessionKey>[0],
+      next,
+      true,
+    );
+    void loadChatHistory(state as unknown as ChatState);
+  };
+
+  const handleNewSession = async () => {
+    if (!state.connected) {
+      return;
+    }
+    const titleRaw = window.prompt("New session name (optional)", "");
+    if (titleRaw === null) {
+      return;
+    }
+    const title = titleRaw.trim();
+    const key = generateNewUiSessionKey(state, title || undefined);
+    const label = title || `Chat ${formatUiSessionTimestamp(new Date())}`;
+    await patchSession(state as unknown as Parameters<typeof patchSession>[0], key, { label });
+    switchToSession(key);
+  };
+
+  const handleRenameSession = async () => {
+    if (!state.connected) {
+      return;
+    }
+    const currentRow = state.sessionsResult?.sessions?.find((row) => row.key === state.sessionKey);
+    const suggested =
+      currentRow?.label?.trim() || resolveSessionDisplayName(state.sessionKey, currentRow);
+    const nextRaw = window.prompt("Rename session", suggested);
+    if (nextRaw === null) {
+      return;
+    }
+    const nextLabel = nextRaw.trim();
+    await patchSession(state as unknown as Parameters<typeof patchSession>[0], state.sessionKey, {
+      label: nextLabel || null,
+    });
+  };
+
   // Refresh icon
   const refreshIcon = html`
     <svg
@@ -135,25 +242,7 @@ export function renderChatControls(state: AppViewState) {
           ?disabled=${!state.connected}
           @change=${(e: Event) => {
             const next = (e.target as HTMLSelectElement).value;
-            state.sessionKey = next;
-            state.chatMessage = "";
-            state.chatStream = null;
-            (state as unknown as OpenClawApp).chatStreamStartedAt = null;
-            state.chatRunId = null;
-            (state as unknown as OpenClawApp).resetToolStream();
-            (state as unknown as OpenClawApp).resetChatScroll();
-            state.applySettings({
-              ...state.settings,
-              sessionKey: next,
-              lastActiveSessionKey: next,
-            });
-            void state.loadAssistantIdentity();
-            syncUrlWithSessionKey(
-              state as unknown as Parameters<typeof syncUrlWithSessionKey>[0],
-              next,
-              true,
-            );
-            void loadChatHistory(state as unknown as ChatState);
+            switchToSession(next);
           }}
         >
           ${repeat(
@@ -166,6 +255,27 @@ export function renderChatControls(state: AppViewState) {
           )}
         </select>
       </label>
+
+      <button
+        class="btn btn--sm btn--icon"
+        ?disabled=${!state.connected}
+        @click=${handleNewSession}
+        aria-label="New session"
+        title="Create and switch to a new named session"
+      >
+        ${icons.plus}
+      </button>
+
+      <button
+        class="btn btn--sm btn--icon"
+        ?disabled=${!state.connected}
+        @click=${handleRenameSession}
+        aria-label="Rename session"
+        title="Rename current session"
+      >
+        ${icons.edit}
+      </button>
+
       <button
         class="btn btn--sm btn--icon"
         ?disabled=${state.chatLoading || !state.connected}

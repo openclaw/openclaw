@@ -91,6 +91,28 @@ Cron jobs panel notes:
 - Set `cron.webhookToken` to send a dedicated bearer token, if omitted the webhook is sent without an auth header.
 - Deprecated fallback: stored legacy jobs with `notify: true` can still use `cron.webhook` until migrated.
 
+## Session management in Chat
+
+The Chat tab supports explicit session management so you can isolate topics by session key.
+
+- **Session selector**: switch between recent sessions.
+- **New session**: create a new session key and switch to it immediately.
+- **Rename session**: update the current session label (display name).
+
+### Session key vs `/new`
+
+- `/new` (or reset) starts a new transcript under the **same** session key.
+- **New session** creates a **different** session key, which isolates context/history from other topics.
+
+### How the dropdown list is populated
+
+The Chat session dropdown reuses the existing Control UI sessions state from `sessions.list`.
+The number of entries depends on current sessions filters (`activeMinutes`, `limit`, `includeGlobal`, `includeUnknown`).
+
+### Deep links
+
+You can open a specific session directly with `/chat?session=<sessionKey>`.
+
 ## Chat behavior
 
 - `chat.send` is **non-blocking**: it acks immediately with `{ runId, status: "started" }` and the response streams via `chat` events.

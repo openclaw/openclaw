@@ -54,6 +54,17 @@ Notes:
 - If the same person contacts you on multiple channels, use `session.identityLinks` to collapse their DM sessions into one canonical identity.
 - You can verify your DM settings with `openclaw security audit` (see [security](/cli/security)).
 
+## Session mutation permissions for browser clients
+
+`webchat` clients are intentionally restricted from mutating session metadata (`sessions.patch`, `sessions.delete`).
+
+Control UI uses `client.mode = "ui"` for management workflows (session label updates and session-focused chat UX), while preserving mutation restrictions for regular webchat clients.
+
+This keeps a clear separation between:
+
+- end-user webchat messaging surface (no session metadata mutation)
+- authenticated control/management surface (session metadata management allowed)
+
 ## Gateway is the source of truth
 
 All session state is **owned by the gateway** (the “master” OpenClaw). UI clients (macOS app, WebChat, etc.) must query the gateway for session lists and token counts instead of reading local files.
