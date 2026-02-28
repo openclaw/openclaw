@@ -142,7 +142,22 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       : undefined;
 
   const bot = new Bot(opts.token, client ? { client } : undefined);
-  bot.api.config.use(apiThrottler());
+  // Configure apiThrottler with more permissive group settings to avoid
+  // ~54s delays when block streaming is enabled. The default group config
+  // (maxConcurrent: 1, minTime: 1000) causes group messages to be starved
+  // when DM block streaming consumes the global reservoir.
+  // See: https://github.com/openclaw/openclaw/issues/29822
+  bot.api.config.use(
+    apiThrottler({
+      group: {
+        // Allow up to 20 messages per minute per group (Telegram's actual limit)
+        reservoir: 20,
+        reservoirRefreshAmount: 20,
+        reservoirRefreshInterval: 60000,
+        // Remove minTime restriction to allow burst sends during block streaming
+      },
+    }),
+  );
   // Catch all errors from bot middleware to prevent unhandled rejections
   bot.catch((err) => {
     runtime.error?.(danger(`telegram bot error: ${formatUncaughtError(err)}`));
