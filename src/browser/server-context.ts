@@ -286,9 +286,15 @@ function createProfileContext(
       // launchOpenClawChrome() can return before Chrome is fully ready to serve /json/version + CDP WS.
       // If a follow-up call (snapshot/screenshot/etc.) races ahead, we can hit PortInUseError trying to
       // launch again on the same port. Poll briefly so browser(action="start"/"open") is stable.
-      const maxAttempts = 50;
-      for (let attempt = 0; attempt < maxAttempts; attempt++) {
-        if (await isReachable(1200)) {
+      //
+      // Bound the wait by wall-clock time to avoid long stalls when /json/version is reachable
+      // but the CDP WebSocket never becomes ready.
+      const deadlineMs = Date.now() + 8000;
+      while (Date.now() < deadlineMs) {
+        const remainingMs = Math.max(0, deadlineMs - Date.now());
+        // Keep each attempt short; loopback profiles derive a WS timeout from this value.
+        const attemptTimeoutMs = Math.max(75, Math.min(250, remainingMs));
+        if (await isReachable(attemptTimeoutMs)) {
           return;
         }
         await new Promise((r) => setTimeout(r, 100));
