@@ -88,6 +88,11 @@ export type GatewayBrowserClientOptions = {
   onGap?: (info: { expected: number; received: number }) => void;
 };
 
+function normalizeAuthToken(value: string | undefined | null): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
 // 4008 = application-defined code (browser rejects 1008 "Policy Violation")
 const CONNECT_FAILED_CLOSE_CODE = 4008;
 
@@ -101,8 +106,11 @@ export class GatewayBrowserClient {
   private connectTimer: number | null = null;
   private backoffMs = 800;
   private pendingConnectError: GatewayErrorInfo | undefined;
+  private lastGoodAuthToken: string | undefined;
 
-  constructor(private opts: GatewayBrowserClientOptions) {}
+  constructor(private opts: GatewayBrowserClientOptions) {
+    this.lastGoodAuthToken = normalizeAuthToken(opts.token);
+  }
 
   start() {
     this.closed = false;
@@ -177,16 +185,19 @@ export class GatewayBrowserClient {
     const role = "operator";
     let deviceIdentity: Awaited<ReturnType<typeof loadOrCreateDeviceIdentity>> | null = null;
     let canFallbackToShared = false;
-    let authToken = this.opts.token;
+    const sharedToken = normalizeAuthToken(this.opts.token);
+    let authToken = this.lastGoodAuthToken ?? sharedToken;
 
     if (isSecureContext) {
       deviceIdentity = await loadOrCreateDeviceIdentity();
-      const storedToken = loadDeviceAuthToken({
-        deviceId: deviceIdentity.deviceId,
-        role,
-      })?.token;
-      authToken = storedToken ?? this.opts.token;
-      canFallbackToShared = Boolean(storedToken && this.opts.token);
+      const storedToken = normalizeAuthToken(
+        loadDeviceAuthToken({
+          deviceId: deviceIdentity.deviceId,
+          role,
+        })?.token,
+      );
+      authToken = storedToken ?? this.lastGoodAuthToken ?? sharedToken;
+      canFallbackToShared = Boolean(storedToken && sharedToken);
     }
     const auth =
       authToken || this.opts.password
@@ -249,7 +260,11 @@ export class GatewayBrowserClient {
 
     void this.request<GatewayHelloOk>("connect", params)
       .then((hello) => {
+        if (authToken) {
+          this.lastGoodAuthToken = authToken;
+        }
         if (hello?.auth?.deviceToken && deviceIdentity) {
+          this.lastGoodAuthToken = normalizeAuthToken(hello.auth.deviceToken) ?? this.lastGoodAuthToken;
           storeDeviceAuthToken({
             deviceId: deviceIdentity.deviceId,
             role: hello.auth.role ?? role,
@@ -272,6 +287,7 @@ export class GatewayBrowserClient {
         }
         if (canFallbackToShared && deviceIdentity) {
           clearDeviceAuthToken({ deviceId: deviceIdentity.deviceId, role });
+          this.lastGoodAuthToken = sharedToken ?? this.lastGoodAuthToken;
         }
         this.ws?.close(CONNECT_FAILED_CLOSE_CODE, "connect failed");
       });
