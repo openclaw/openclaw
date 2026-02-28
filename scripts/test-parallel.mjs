@@ -90,6 +90,9 @@ const unitIsolatedFilesRaw = [
   "src/imessage/monitor.shutdown.unhandled-rejection.test.ts",
   // Mutates process.cwd() and mocks core module loaders; isolate from the shared fast lane.
   "src/infra/git-commit.test.ts",
+  // Uses vi.useFakeTimers() with advanceTimersByTimeAsync; keep isolated from vmForks to
+  // avoid fake-timer state leaking into or from other files in the same worker.
+  "src/agents/sandbox/context.timeout.test.ts",
 ];
 const unitIsolatedFiles = unitIsolatedFilesRaw.filter((file) => fs.existsSync(file));
 
