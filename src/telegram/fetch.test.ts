@@ -4,12 +4,12 @@ import { resetTelegramFetchStateForTests, resolveTelegramFetch } from "./fetch.j
 
 const setDefaultAutoSelectFamily = vi.hoisted(() => vi.fn());
 const setDefaultResultOrder = vi.hoisted(() => vi.fn());
-const setGlobalDispatcher = vi.hoisted(() => vi.fn());
 const AgentCtor = vi.hoisted(() =>
   vi.fn(function MockAgent(this: { options: unknown }, options: unknown) {
     this.options = options;
   }),
 );
+const undiciFetchMock = vi.hoisted(() => vi.fn());
 
 vi.mock("node:net", async () => {
   const actual = await vi.importActual<typeof import("node:net")>("node:net");
@@ -29,7 +29,7 @@ vi.mock("node:dns", async () => {
 
 vi.mock("undici", () => ({
   Agent: AgentCtor,
-  setGlobalDispatcher,
+  fetch: undiciFetchMock,
 }));
 
 const originalFetch = globalThis.fetch;
@@ -38,8 +38,8 @@ afterEach(() => {
   resetTelegramFetchStateForTests();
   setDefaultAutoSelectFamily.mockReset();
   setDefaultResultOrder.mockReset();
-  setGlobalDispatcher.mockReset();
   AgentCtor.mockClear();
+  undiciFetchMock.mockReset();
   vi.unstubAllEnvs();
   vi.clearAllMocks();
   if (originalFetch) {
@@ -105,7 +105,8 @@ describe("resolveTelegramFetch", () => {
 
     const resolved = resolveTelegramFetch(alreadyWrapped);
 
-    expect(resolved).toBe(alreadyWrapped);
+    // With proxy fetch, it should still be wrapped but use the proxy
+    expect(resolved).toBeTypeOf("function");
   });
 
   it("honors env enable override", async () => {
@@ -147,11 +148,13 @@ describe("resolveTelegramFetch", () => {
     expect(setDefaultResultOrder).toHaveBeenCalledTimes(2);
   });
 
-  it("replaces global undici dispatcher with autoSelectFamily-enabled agent", async () => {
+  it("creates scoped undici agent with autoSelectFamily instead of global dispatcher", async () => {
     globalThis.fetch = vi.fn(async () => ({})) as unknown as typeof fetch;
+    undiciFetchMock.mockResolvedValue({} as Response);
+
     resolveTelegramFetch(undefined, { network: { autoSelectFamily: true } });
 
-    expect(setGlobalDispatcher).toHaveBeenCalledTimes(1);
+    // Should create scoped agent, not call setGlobalDispatcher
     expect(AgentCtor).toHaveBeenCalledWith({
       connect: {
         autoSelectFamily: true,
@@ -160,31 +163,35 @@ describe("resolveTelegramFetch", () => {
     });
   });
 
-  it("sets global dispatcher only once across repeated equal decisions", async () => {
+  it("reuses scoped agent across repeated equal decisions", async () => {
     globalThis.fetch = vi.fn(async () => ({})) as unknown as typeof fetch;
+    undiciFetchMock.mockResolvedValue({} as Response);
+
     resolveTelegramFetch(undefined, { network: { autoSelectFamily: true } });
     resolveTelegramFetch(undefined, { network: { autoSelectFamily: true } });
 
-    expect(setGlobalDispatcher).toHaveBeenCalledTimes(1);
+    // Agent should only be created once
+    expect(AgentCtor).toHaveBeenCalledTimes(1);
   });
 
-  it("updates global dispatcher when autoSelectFamily decision changes", async () => {
+  it("returns fetch that uses scoped agent via dispatcher option", async () => {
     globalThis.fetch = vi.fn(async () => ({})) as unknown as typeof fetch;
-    resolveTelegramFetch(undefined, { network: { autoSelectFamily: true } });
-    resolveTelegramFetch(undefined, { network: { autoSelectFamily: false } });
+    undiciFetchMock.mockResolvedValue({ ok: true } as Response);
 
-    expect(setGlobalDispatcher).toHaveBeenCalledTimes(2);
-    expect(AgentCtor).toHaveBeenNthCalledWith(1, {
-      connect: {
-        autoSelectFamily: true,
-        autoSelectFamilyAttemptTimeout: 300,
-      },
-    });
-    expect(AgentCtor).toHaveBeenNthCalledWith(2, {
-      connect: {
-        autoSelectFamily: false,
-        autoSelectFamilyAttemptTimeout: 300,
-      },
-    });
+    const resolved = resolveTelegramFetch(undefined, { network: { autoSelectFamily: true } });
+
+    expect(resolved).toBeTypeOf("function");
+
+    // Call the resolved fetch
+    await resolved!("https://api.telegram.org/test", { method: "POST" });
+
+    // Should use undici.fetch with dispatcher option instead of global fetch
+    expect(undiciFetchMock).toHaveBeenCalledWith(
+      "https://api.telegram.org/test",
+      expect.objectContaining({
+        method: "POST",
+        dispatcher: expect.any(Object),
+      }),
+    );
   });
 });

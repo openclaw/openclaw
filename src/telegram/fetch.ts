@@ -1,8 +1,8 @@
 import * as dns from "node:dns";
 import * as net from "node:net";
-import { Agent, setGlobalDispatcher } from "undici";
+import { Agent, fetch as undiciFetch } from "undici";
 import type { TelegramNetworkConfig } from "../config/types.telegram.js";
-import { resolveFetch } from "../infra/fetch.js";
+import { resolveFetch, wrapFetchWithAbortSignal } from "../infra/fetch.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   resolveTelegramAutoSelectFamilyDecision,
@@ -11,13 +11,13 @@ import {
 
 let appliedAutoSelectFamily: boolean | null = null;
 let appliedDnsResultOrder: string | null = null;
-let appliedGlobalDispatcherAutoSelectFamily: boolean | null = null;
+let telegramAgent: Agent | null = null;
 const log = createSubsystemLogger("telegram/network");
 
 // Node 22 workaround: enable autoSelectFamily to allow IPv4 fallback on broken IPv6 networks.
 // Many networks have IPv6 configured but not routed, causing "Network is unreachable" errors.
 // See: https://github.com/nodejs/node/issues/54359
-function applyTelegramNetworkWorkarounds(network?: TelegramNetworkConfig): void {
+function applyTelegramNetworkWorkarounds(network?: TelegramNetworkConfig): Agent | null {
   // Apply autoSelectFamily workaround
   const autoSelectDecision = resolveTelegramAutoSelectFamilyDecision({ network });
   if (autoSelectDecision.value !== null && autoSelectDecision.value !== appliedAutoSelectFamily) {
@@ -36,27 +36,24 @@ function applyTelegramNetworkWorkarounds(network?: TelegramNetworkConfig): void 
   // Node 22's built-in globalThis.fetch uses undici's internal Agent whose
   // connect options are frozen at construction time. Calling
   // net.setDefaultAutoSelectFamily() after that agent is created has no
-  // effect on it. Replace the global dispatcher with one that carries the
-  // current autoSelectFamily setting so subsequent globalThis.fetch calls
-  // inherit the same decision.
+  // effect on it. Create a scoped Agent with the autoSelectFamily setting
+  // instead of modifying the global dispatcher, to avoid breaking other
+  // HTTP clients (e.g., Anthropic SDK gets HTTP 403).
   // See: https://github.com/openclaw/openclaw/issues/25676
-  if (
-    autoSelectDecision.value !== null &&
-    autoSelectDecision.value !== appliedGlobalDispatcherAutoSelectFamily
-  ) {
+  // See: https://github.com/openclaw/openclaw/issues/29510
+  if (autoSelectDecision.value !== null) {
     try {
-      setGlobalDispatcher(
-        new Agent({
+      if (!telegramAgent) {
+        telegramAgent = new Agent({
           connect: {
             autoSelectFamily: autoSelectDecision.value,
             autoSelectFamilyAttemptTimeout: 300,
           },
-        }),
-      );
-      appliedGlobalDispatcherAutoSelectFamily = autoSelectDecision.value;
-      log.info(`global undici dispatcher autoSelectFamily=${autoSelectDecision.value}`);
+        });
+        log.info(`created scoped undici agent autoSelectFamily=${autoSelectDecision.value}`);
+      }
     } catch {
-      // ignore if setGlobalDispatcher is unavailable
+      // ignore if Agent is unavailable
     }
   }
 
@@ -76,6 +73,22 @@ function applyTelegramNetworkWorkarounds(network?: TelegramNetworkConfig): void 
       }
     }
   }
+
+  return telegramAgent;
+}
+
+// Create a fetch function that uses undici's fetch with the scoped Telegram agent.
+// This ensures Telegram network workarounds don't affect other HTTP clients (e.g., Anthropic SDK).
+// See: https://github.com/openclaw/openclaw/issues/29510
+function createTelegramFetchWithAgent(agent: Agent): typeof fetch {
+  const fetcher = (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    return undiciFetch(url, {
+      ...(init as Record<string, unknown>),
+      dispatcher: agent,
+    });
+  }) as typeof fetch;
+  return wrapFetchWithAbortSignal(fetcher);
 }
 
 // Prefer wrapped fetch when available to normalize AbortSignal across runtimes.
@@ -83,10 +96,21 @@ export function resolveTelegramFetch(
   proxyFetch?: typeof fetch,
   options?: { network?: TelegramNetworkConfig },
 ): typeof fetch | undefined {
-  applyTelegramNetworkWorkarounds(options?.network);
+  const telegramAgent = applyTelegramNetworkWorkarounds(options?.network);
+
+  // If we have a proxy fetch, use it (it already handles its own agent)
   if (proxyFetch) {
     return resolveFetch(proxyFetch);
   }
+
+  // If we have a scoped Telegram agent (due to autoSelectFamily workaround),
+  // use undici.fetch with the agent instead of the global fetch to avoid
+  // polluting the global dispatcher (which breaks Anthropic SDK).
+  // See: https://github.com/openclaw/openclaw/issues/29510
+  if (telegramAgent) {
+    return createTelegramFetchWithAgent(telegramAgent);
+  }
+
   const fetchImpl = resolveFetch();
   if (!fetchImpl) {
     throw new Error("fetch is not available; set channels.telegram.proxy in config");
@@ -97,5 +121,5 @@ export function resolveTelegramFetch(
 export function resetTelegramFetchStateForTests(): void {
   appliedAutoSelectFamily = null;
   appliedDnsResultOrder = null;
-  appliedGlobalDispatcherAutoSelectFamily = null;
+  telegramAgent = null;
 }
