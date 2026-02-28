@@ -29,14 +29,23 @@ export type CreateFeishuReplyDispatcherParams = {
   chatId: string;
   replyToMessageId?: string;
   replyInThread?: boolean;
+  rootId?: string;
   mentionTargets?: MentionTarget[];
   accountId?: string;
 };
 
 export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherParams) {
   const core = getFeishuRuntime();
-  const { cfg, agentId, chatId, replyToMessageId, replyInThread, mentionTargets, accountId } =
-    params;
+  const {
+    cfg,
+    agentId,
+    chatId,
+    replyToMessageId,
+    replyInThread,
+    rootId,
+    mentionTargets,
+    accountId,
+  } = params;
   const account = resolveFeishuAccount({ cfg, accountId });
   const prefixContext = createReplyPrefixContext({ cfg, agentId });
 
@@ -105,6 +114,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         await streaming.start(chatId, resolveReceiveIdType(chatId), {
           replyToMessageId,
           replyInThread,
+          rootId,
         });
       } catch (error) {
         params.runtime.error?.(`feishu: streaming start failed: ${String(error)}`);
