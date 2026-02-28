@@ -162,7 +162,7 @@ export class FeishuStreamingSession {
     }
     const apiBase = resolveApiBase(this.creds.domain);
     this.state.sequence += 1;
-    const { release } = await fetchWithSsrFGuard({
+    const { response, release } = await fetchWithSsrFGuard({
       url: `${apiBase}/cardkit/v1/cards/${this.state.cardId}/elements/content/content`,
       init: {
         method: "PUT",
