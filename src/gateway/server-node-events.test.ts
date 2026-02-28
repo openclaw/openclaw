@@ -351,6 +351,64 @@ describe("voice transcript events", () => {
   });
 });
 
+describe("notifications changed events", () => {
+  beforeEach(() => {
+    enqueueSystemEventMock.mockClear();
+    requestHeartbeatNowMock.mockClear();
+  });
+
+  it("enqueues notifications.changed posted events", async () => {
+    const ctx = buildCtx();
+    await handleNodeEvent(ctx, "node-n1", {
+      event: "notifications.changed",
+      payloadJSON: JSON.stringify({
+        change: "posted",
+        key: "notif-1",
+        packageName: "com.example.chat",
+        title: "Message",
+        text: "Ping from Alex",
+      }),
+    });
+
+    expect(enqueueSystemEventMock).toHaveBeenCalledWith(
+      "Notification posted (node=node-n1 key=notif-1 package=com.example.chat): Message - Ping from Alex",
+      { sessionKey: "node-node-n1", contextKey: "notification:notif-1" },
+    );
+    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({ reason: "notifications-event" });
+  });
+
+  it("enqueues notifications.changed removed events", async () => {
+    const ctx = buildCtx();
+    await handleNodeEvent(ctx, "node-n2", {
+      event: "notifications.changed",
+      payloadJSON: JSON.stringify({
+        change: "removed",
+        key: "notif-2",
+        packageName: "com.example.mail",
+      }),
+    });
+
+    expect(enqueueSystemEventMock).toHaveBeenCalledWith(
+      "Notification removed (node=node-n2 key=notif-2 package=com.example.mail)",
+      { sessionKey: "node-node-n2", contextKey: "notification:notif-2" },
+    );
+    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({ reason: "notifications-event" });
+  });
+
+  it("ignores notifications.changed payloads missing required fields", async () => {
+    const ctx = buildCtx();
+    await handleNodeEvent(ctx, "node-n3", {
+      event: "notifications.changed",
+      payloadJSON: JSON.stringify({
+        change: "posted",
+      }),
+    });
+
+    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+    expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
+  });
+});
+
 describe("agent request events", () => {
   beforeEach(() => {
     agentCommandMock.mockClear();
