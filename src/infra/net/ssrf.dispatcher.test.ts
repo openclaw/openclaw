@@ -61,7 +61,7 @@ function createDispatcherWithPinnedOverride(lookup: PinnedHostname["lookup"]) {
 }
 
 describe("createPinnedDispatcher", () => {
-  it("uses pinned lookup without overriding global family policy", () => {
+  it("creates dispatcher with pinned lookup and TCP keepalive options", () => {
     const lookup = vi.fn() as unknown as PinnedHostname["lookup"];
     const pinned: PinnedHostname = {
       hostname: "api.telegram.org",
@@ -75,12 +75,14 @@ describe("createPinnedDispatcher", () => {
     expect(agentCtor).toHaveBeenCalledWith({
       connect: {
         lookup,
+        autoSelectFamily: true,
+        autoSelectFamilyAttemptTimeout: 300,
+        keepAlive: true,
+        keepAliveInitialDelay: 15_000,
       },
+      keepAliveTimeout: 20_000,
+      keepAliveMaxTimeout: 60_000,
     });
-    const firstCallArg = agentCtor.mock.calls[0]?.[0] as
-      | { connect?: Record<string, unknown> }
-      | undefined;
-    expect(firstCallArg?.connect?.autoSelectFamily).toBeUndefined();
   });
 
   it("preserves caller transport hints while overriding lookup", () => {
