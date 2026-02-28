@@ -256,7 +256,7 @@ export async function resolveModelsCommandReply(params: {
           allModels.push(`${p}/${m}`);
         }
       }
-      
+
       const total = allModels.length;
       if (total === 0) {
         const lines: string[] = [
@@ -267,7 +267,7 @@ export async function resolveModelsCommandReply(params: {
         ];
         return { text: lines.join("\n") };
       }
-      
+
       const lines: string[] = [`Models (all providers) — ${total} available`];
       for (const ref of allModels) {
         const aliases = aliasIndex.byKey.get(ref);
