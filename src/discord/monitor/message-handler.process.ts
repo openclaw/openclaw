@@ -26,6 +26,7 @@ import { resolveDiscordPreviewStreamMode } from "../../config/discord-preview-st
 import { resolveMarkdownTableMode } from "../../config/markdown-tables.js";
 import { readSessionUpdatedAt, resolveStorePath } from "../../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../../globals.js";
+import { isOutboundSuppressed } from "../../infra/outbound/suppress-outbound.js";
 import { convertMarkdownTables } from "../../markdown/tables.js";
 import { buildAgentSessionKey } from "../../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../../routing/session-key.js";
@@ -435,7 +436,9 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     typeof discordConfig?.blockStreaming === "boolean"
       ? discordConfig.blockStreaming
       : cfg.agents?.defaults?.blockStreamingDefault === "on";
-  const canStreamDraft = discordStreamMode !== "off" && !accountBlockStreamingEnabled;
+  const outboundSuppressed = isOutboundSuppressed({ cfg, channel: "discord", accountId });
+  const canStreamDraft =
+    discordStreamMode !== "off" && !accountBlockStreamingEnabled && !outboundSuppressed;
   const draftReplyToMessageId = () => replyReference.use();
   const deliverChannelId = deliverTarget.startsWith("channel:")
     ? deliverTarget.slice("channel:".length)

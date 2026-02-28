@@ -10,6 +10,7 @@ import { createTypingCallbacks } from "../../../channels/typing.js";
 import { resolveStorePath, updateLastRoute } from "../../../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../../../globals.js";
 import { resolveAgentOutboundIdentity } from "../../../infra/outbound/identity.js";
+import { isOutboundSuppressed } from "../../../infra/outbound/suppress-outbound.js";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "../../../security/dm-policy-shared.js";
 import { removeSlackReaction } from "../../actions.js";
 import { createSlackDraftStream } from "../../draft-stream.js";
@@ -192,7 +193,12 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     streamMode: account.config.streamMode,
     nativeStreaming: account.config.nativeStreaming,
   });
-  const previewStreamingEnabled = slackStreaming.mode !== "off";
+  const slackOutboundSuppressed = isOutboundSuppressed({
+    cfg,
+    channel: "slack",
+    accountId: account.accountId,
+  });
+  const previewStreamingEnabled = slackStreaming.mode !== "off" && !slackOutboundSuppressed;
   const streamingEnabled = isSlackStreamingEnabled({
     mode: slackStreaming.mode,
     nativeStreaming: slackStreaming.nativeStreaming,
@@ -233,6 +239,10 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   };
 
   const deliverWithStreaming = async (payload: ReplyPayload): Promise<void> => {
+    if (isOutboundSuppressed({ cfg, channel: "slack", accountId: account.accountId })) {
+      logVerbose("[suppressOutbound] Blocked Slack streamed reply");
+      return;
+    }
     if (streamFailed || hasMedia(payload) || !payload.text?.trim()) {
       await deliverNormally(payload, streamSession?.threadTs);
       return;
