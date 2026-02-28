@@ -49,3 +49,8 @@ Use this format when adding entries:
   npm: `@icesword760/openclaw-wechat`
   repo: `https://github.com/icesword0760/openclaw-wechat`
   install: `openclaw plugins install @icesword760/openclaw-wechat`
+
+- **NeuroVerseOS Governance** — Deterministic constitutional runtime enforcement for OpenClaw agents.
+  npm: `@neuroverseos/governance`
+  repo: `https://github.com/RegardsKiki2/neuroverseos-openclaw-governance`
+  install: `openclaw plugins install @neuroverseos/governance`
