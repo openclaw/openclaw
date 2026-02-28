@@ -43,7 +43,20 @@ export async function noteMemorySearchHealth(
   if (resolved.provider !== "auto") {
     if (resolved.provider === "local") {
       if (hasLocalEmbeddings(resolved.local)) {
-        return; // local model file exists
+        return; // local model file exists or is a downloadable path (hf:/http:)
+      }
+      // Even if we can't confirm the model on disk, if the running gateway
+      // reports embeddings are ready, trust it over the static config check.
+      if (opts?.gatewayMemoryProbe?.checked && opts.gatewayMemoryProbe.ready) {
+        note(
+          [
+            'Memory search provider is set to "local" but the local model file was not found in the CLI environment.',
+            "The running gateway reports memory embeddings are ready for the default agent.",
+            `Verify: ${formatCliCommand("openclaw memory status --deep")}`,
+          ].join("\n"),
+          "Memory search",
+        );
+        return;
       }
       note(
         [
