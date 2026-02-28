@@ -38,7 +38,7 @@ struct WatchMessageCard: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(WatchDesignTokens.spacingMD)
-        .glassEffect(.regular)
+        .background(.fill.quaternary, in: RoundedRectangle(cornerRadius: 12))
         .opacity(appeared ? 1 : 0)
         .scaleEffect(appeared ? 1 : 0.95)
         .onAppear {

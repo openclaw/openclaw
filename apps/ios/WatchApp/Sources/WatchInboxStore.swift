@@ -1,7 +1,6 @@
 import Foundation
 import Observation
 import UserNotifications
-import WatchKit
 import WidgetKit
 
 struct WatchPromptAction: Codable, Sendable, Equatable, Identifiable {
@@ -42,7 +41,7 @@ struct WatchNotifyMessage: Sendable {
         var replyStatusAt: Date?
     }
 
-    private static let persistedStateKey = "watch.inbox.state.v1"
+    static let persistedStateKey = "watch.inbox.state.v1"
     private let defaults: UserDefaults
 
     var title = "OpenClaw"
@@ -69,7 +68,7 @@ struct WatchNotifyMessage: Sendable {
         return Date().timeIntervalSince1970 * 1000 > Double(expiresAtMs)
     }
 
-    init(defaults: UserDefaults = .standard) {
+    init(defaults: UserDefaults = WatchAppGroup.defaults) {
         self.defaults = defaults
         self.restorePersistedState()
         Task {
@@ -177,17 +176,6 @@ struct WatchNotifyMessage: Sendable {
         }
     }
 
-    private func mapHapticRisk(_ risk: String?) -> WKHapticType {
-        switch risk?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
-        case "high":
-            return .failure
-        case "medium":
-            return .notification
-        default:
-            return .click
-        }
-    }
-
     func makeReplyDraft(action: WatchPromptAction) -> WatchReplyDraft {
         let prompt = self.promptId?.trimmingCharacters(in: .whitespacesAndNewlines)
         return WatchReplyDraft(
@@ -222,7 +210,7 @@ struct WatchNotifyMessage: Sendable {
         self.persistState()
     }
 
-    private func postLocalNotification(identifier: String, title: String, body: String, risk: String?) async {
+    private func postLocalNotification(identifier: String, title: String, body: String, risk _: String?) async {
         let content = UNMutableNotificationContent()
         content.title = title
         content.body = body
@@ -235,6 +223,6 @@ struct WatchNotifyMessage: Sendable {
             trigger: UNTimeIntervalNotificationTrigger(timeInterval: 0.2, repeats: false))
 
         _ = try? await UNUserNotificationCenter.current().add(request)
-        WKInterfaceDevice.current().play(self.mapHapticRisk(risk))
+        // Haptics are handled declaratively via .sensoryFeedback() in WatchHomeView.
     }
 }

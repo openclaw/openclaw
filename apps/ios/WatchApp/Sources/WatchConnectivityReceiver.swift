@@ -23,6 +23,7 @@ final class WatchConnectivityReceiver: NSObject {
     private let store: WatchInboxStore
     private let session: WCSession?
     private var activationContinuation: CheckedContinuation<Void, Never>?
+    private var pendingActivationContinuations: [CheckedContinuation<Void, Never>] = []
 
     init(store: WatchInboxStore) {
         self.store = store
@@ -43,6 +44,15 @@ final class WatchConnectivityReceiver: NSObject {
     private func ensureActivated() async {
         guard let session = self.session else { return }
         if session.activationState == .activated {
+            return
+        }
+        // Guard against concurrent calls: if a continuation is already pending,
+        // wait for it to be resumed by the delegate rather than creating a new one.
+        if self.activationContinuation != nil {
+            await withCheckedContinuation { continuation in
+                // Store a chained continuation that will be resumed after the first.
+                self.pendingActivationContinuations.append(continuation)
+            }
             return
         }
         session.activate()
@@ -199,6 +209,10 @@ extension WatchConnectivityReceiver: WCSessionDelegate {
         Task { @MainActor in
             self.activationContinuation?.resume()
             self.activationContinuation = nil
+            for pending in self.pendingActivationContinuations {
+                pending.resume()
+            }
+            self.pendingActivationContinuations.removeAll()
         }
     }
 

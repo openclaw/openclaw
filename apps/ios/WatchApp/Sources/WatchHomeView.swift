@@ -4,6 +4,8 @@ struct WatchHomeView: View {
     @Bindable var store: WatchInboxStore
     var onAction: ((WatchPromptAction) -> Void)?
 
+    @State private var lastRisk: String?
+
     private func role(for action: WatchPromptAction) -> ButtonRole? {
         switch action.style?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
         case "destructive": .destructive
@@ -12,11 +14,17 @@ struct WatchHomeView: View {
         }
     }
 
+    private var hapticFeedback: SensoryFeedback {
+        switch lastRisk?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "high": .error
+        case "medium": .warning
+        default: .success
+        }
+    }
+
     var body: some View {
         ScrollView {
             VStack(spacing: WatchDesignTokens.spacingMD) {
-                WatchConnectionBanner(isConnected: store.isReachable)
-
                 if store.hasContent {
                     messageContent
                 } else {
@@ -25,6 +33,17 @@ struct WatchHomeView: View {
             }
             .padding(.horizontal, WatchDesignTokens.spacingSM)
             .animation(WatchDesignTokens.spring, value: store.hasContent)
+        }
+        .safeAreaInset(edge: .top) {
+            WatchConnectionBanner(isConnected: store.isReachable)
+                .padding(.horizontal, WatchDesignTokens.spacingSM)
+        }
+        .sensoryFeedback(hapticFeedback, trigger: store.updatedAt) { oldValue, newValue in
+            // Only trigger when a new message arrives (updatedAt changes)
+            oldValue != newValue && newValue != nil
+        }
+        .onChange(of: store.risk) { _, newRisk in
+            lastRisk = newRisk
         }
     }
 

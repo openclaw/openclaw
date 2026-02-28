@@ -1,5 +1,13 @@
 import SwiftUI
 
+enum WatchAppGroup {
+    static let suiteName = "group.ai.openclaw.watch"
+
+    static var defaults: UserDefaults {
+        UserDefaults(suiteName: suiteName) ?? .standard
+    }
+}
+
 enum WatchDesignTokens {
     // MARK: - Spacing
 

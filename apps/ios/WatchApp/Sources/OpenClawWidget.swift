@@ -32,7 +32,7 @@ struct OpenClawWidgetProvider: TimelineProvider {
     }
 
     private func readLatestEntry() -> OpenClawWidgetEntry {
-        guard let data = UserDefaults.standard.data(forKey: "watch.inbox.state.v1"),
+        guard let data = WatchAppGroup.defaults.data(forKey: WatchInboxStore.persistedStateKey),
             let state = try? JSONDecoder().decode(WidgetPersistedState.self, from: data)
         else {
             return OpenClawWidgetEntry(
@@ -72,10 +72,27 @@ private struct WidgetPersistedState: Codable {
     }
 }
 
-// MARK: - Widget View
+// MARK: - Adaptive Widget View
 
 struct OpenClawWidgetView: View {
     let entry: OpenClawWidgetEntry
+
+    @Environment(\.widgetFamily) private var family
+
+    var body: some View {
+        switch family {
+        case .accessoryCircular:
+            circularContent
+        case .accessoryInline:
+            inlineContent
+        case .accessoryCorner:
+            cornerContent
+        default:
+            rectangularContent
+        }
+    }
+
+    // MARK: - Rectangular (Smart Stack)
 
     private var riskColor: Color? {
         switch entry.risk?.lowercased() {
@@ -85,7 +102,7 @@ struct OpenClawWidgetView: View {
         }
     }
 
-    var body: some View {
+    private var rectangularContent: some View {
         VStack(alignment: .leading, spacing: WatchDesignTokens.spacingXS) {
             HStack(spacing: WatchDesignTokens.spacingXS) {
                 Text(entry.title)
@@ -106,6 +123,50 @@ struct OpenClawWidgetView: View {
         .widgetURL(URL(string: "openclaw://watch/inbox")!)
         .containerBackground(.fill.tertiary, for: .widget)
     }
+
+    // MARK: - Circular
+
+    private var circularIcon: String {
+        entry.hasActions ? "bubble.left.and.exclamationmark.bubble.right.fill" : "bubble.left.fill"
+    }
+
+    private var circularTint: Color {
+        switch entry.risk?.lowercased() {
+        case "high": .red
+        case "medium": .orange
+        default: .accentColor
+        }
+    }
+
+    private var circularContent: some View {
+        ZStack {
+            AccessoryWidgetBackground()
+            Image(systemName: circularIcon)
+                .font(.system(size: 18))
+                .foregroundStyle(circularTint)
+        }
+        .widgetURL(URL(string: "openclaw://watch/inbox")!)
+        .containerBackground(.fill.tertiary, for: .widget)
+    }
+
+    // MARK: - Inline
+
+    private var inlineContent: some View {
+        let prefix = entry.risk?.lowercased() == "high" ? "⚠ " : ""
+        return Text("\(prefix)\(entry.title)")
+    }
+
+    // MARK: - Corner
+
+    private var cornerContent: some View {
+        Image(systemName: entry.hasActions ? "bubble.left.and.exclamationmark.bubble.right.fill" : "bubble.left.fill")
+            .font(.title3)
+            .widgetLabel {
+                Text(entry.title)
+            }
+            .widgetURL(URL(string: "openclaw://watch/inbox")!)
+            .containerBackground(.fill.tertiary, for: .widget)
+    }
 }
 
 // MARK: - Widget
@@ -119,7 +180,12 @@ struct OpenClawWidget: Widget {
         }
         .configurationDisplayName("OpenClaw")
         .description("Latest notification from your gateway")
-        .supportedFamilies([.accessoryRectangular])
+        .supportedFamilies([
+            .accessoryRectangular,
+            .accessoryCircular,
+            .accessoryInline,
+            .accessoryCorner,
+        ])
     }
 }
 

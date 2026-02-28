@@ -4,6 +4,7 @@ struct WatchConnectionBanner: View {
     let isConnected: Bool
 
     @State private var visible = true
+    @State private var autoDismissTask: Task<Void, Never>?
 
     private var icon: String {
         isConnected ? "antenna.radiowaves.left.and.right" : "antenna.radiowaves.left.and.right.slash"
@@ -31,10 +32,12 @@ struct WatchConnectionBanner: View {
             .glassEffect(.regular.tint(tint))
             .transition(.opacity)
             .onChange(of: isConnected) { _, connected in
+                autoDismissTask?.cancel()
+                autoDismissTask = nil
                 if connected {
-                    // Auto-hide after brief delay when connected
-                    Task { @MainActor in
+                    autoDismissTask = Task { @MainActor in
                         try? await Task.sleep(for: .seconds(WatchDesignTokens.bannerAutoDismiss))
+                        guard !Task.isCancelled else { return }
                         withAnimation(WatchDesignTokens.spring) {
                             visible = false
                         }
@@ -44,6 +47,10 @@ struct WatchConnectionBanner: View {
                         visible = true
                     }
                 }
+            }
+            .onDisappear {
+                autoDismissTask?.cancel()
+                autoDismissTask = nil
             }
             .accessibilityLabel(label)
         }

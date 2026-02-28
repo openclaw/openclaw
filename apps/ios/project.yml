@@ -184,6 +184,11 @@ targets:
     configFiles:
       Debug: Config/Signing.xcconfig
       Release: Config/Signing.xcconfig
+    entitlements:
+      path: WatchApp/OpenClawWatch.entitlements
+      properties:
+        com.apple.security.application-groups:
+          - group.ai.openclaw.watch
     settings:
       base:
         CODE_SIGN_IDENTITY: "Apple Development"
@@ -192,7 +197,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: "$(OPENCLAW_WATCH_BUNDLE_ID)"
         SWIFT_VERSION: "6.0"
         SWIFT_STRICT_CONCURRENCY: complete
-        ENABLE_APPINTENTS_METADATA: NO
+        ENABLE_APPINTENTS_METADATA: YES
     info:
       path: WatchApp/Info.plist
       properties:

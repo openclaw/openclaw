@@ -11,12 +11,12 @@ enum ConnectionStatusProvider {
     private static let key = "watch.control.isConnected"
 
     static var isConnected: Bool {
-        UserDefaults.standard.bool(forKey: key)
+        WatchAppGroup.defaults.bool(forKey: key)
     }
 
     /// Called by the main app when reachability changes.
     static func write(isConnected: Bool) {
-        UserDefaults.standard.set(isConnected, forKey: key)
+        WatchAppGroup.defaults.set(isConnected, forKey: key)
         ControlCenter.shared.reloadControls(
             ofKind: ConnectionStatusControl.kind)
     }
