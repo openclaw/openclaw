@@ -150,3 +150,8 @@ export function stopFeishuMonitorState(accountId?: string): void {
   httpServers.clear();
   botOpenIds.clear();
 }
+
+export function getBotOpenId(accountId: string): string | undefined {
+  const value = botOpenIds.get(accountId)?.trim();
+  return value ? value : undefined;
+}

@@ -8,6 +8,7 @@ import {
 import { fetchBotOpenIdForMonitor } from "./monitor.startup.js";
 import {
   clearFeishuWebhookRateLimitStateForTest,
+  getBotOpenId,
   getFeishuWebhookRateLimitStateSizeForTest,
   isWebhookRateLimitedForTest,
   stopFeishuMonitorState,
@@ -22,6 +23,7 @@ export type MonitorFeishuOpts = {
 
 export {
   clearFeishuWebhookRateLimitStateForTest,
+  getBotOpenId,
   getFeishuWebhookRateLimitStateSizeForTest,
   isWebhookRateLimitedForTest,
   resolveReactionSyntheticEvent,
