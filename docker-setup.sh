@@ -464,8 +464,21 @@ if [[ -n "$SANDBOX_ENABLED" ]]; then
     echo "  Agent exec may fail if the configured sandbox image does not exist." >&2
   fi
 
+  # Verify Docker CLI is available inside the container for non-local images.
+  if [[ "$IMAGE_NAME" != "openclaw:local" ]]; then
+    if ! docker compose "${COMPOSE_ARGS[@]}" run --rm --entrypoint docker openclaw-gateway --version >/dev/null 2>&1; then
+      echo "WARNING: Docker CLI not found inside the container image." >&2
+      echo "  Sandbox requires Docker CLI. Rebuild with --build-arg OPENCLAW_INSTALL_DOCKER_CLI=1" >&2
+      echo "  or use a local build (OPENCLAW_IMAGE=openclaw:local). Skipping sandbox setup." >&2
+      SANDBOX_ENABLED=""
+    fi
+  fi
+fi
+
+# Apply sandbox config only if prerequisites are met.
+if [[ -n "$SANDBOX_ENABLED" ]]; then
   # Enable sandbox in OpenClaw config.
-  local sandbox_config_ok=true
+  sandbox_config_ok=true
   if ! docker compose "${COMPOSE_ARGS[@]}" run --rm openclaw-cli \
     config set agents.defaults.sandbox.mode "non-main" >/dev/null; then
     echo "WARNING: Failed to set agents.defaults.sandbox.mode" >&2
