@@ -14,10 +14,10 @@ import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
-import okhttp3.mockwebserver.Dispatcher
-import okhttp3.mockwebserver.MockResponse
-import okhttp3.mockwebserver.MockWebServer
-import okhttp3.mockwebserver.RecordedRequest
+import mockwebserver3.Dispatcher
+import mockwebserver3.MockResponse
+import mockwebserver3.MockWebServer
+import mockwebserver3.RecordedRequest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -58,7 +58,7 @@ class GatewaySessionInvokeTest {
           object : Dispatcher() {
             override fun dispatch(request: RecordedRequest): MockResponse {
               handshakeOrigin.compareAndSet(null, request.getHeader("Origin"))
-              return MockResponse().withWebSocketUpgrade(
+              return MockResponse.Builder().webSocketUpgrade(
                 object : WebSocketListener() {
                   override fun onOpen(webSocket: WebSocket, response: Response) {
                     webSocket.send(
@@ -90,7 +90,7 @@ class GatewaySessionInvokeTest {
                     }
                   }
                 },
-              )
+              ).build()
             }
           }
         start()
@@ -193,7 +193,7 @@ class GatewaySessionInvokeTest {
         dispatcher =
           object : Dispatcher() {
             override fun dispatch(request: RecordedRequest): MockResponse {
-              return MockResponse().withWebSocketUpgrade(
+              return MockResponse.Builder().webSocketUpgrade(
                 object : WebSocketListener() {
                   override fun onOpen(webSocket: WebSocket, response: Response) {
                     webSocket.send(
@@ -225,7 +225,7 @@ class GatewaySessionInvokeTest {
                     }
                   }
                 },
-              )
+              ).build()
             }
           }
         start()
@@ -323,7 +323,7 @@ class GatewaySessionInvokeTest {
         dispatcher =
           object : Dispatcher() {
             override fun dispatch(request: RecordedRequest): MockResponse {
-              return MockResponse().withWebSocketUpgrade(
+              return MockResponse.Builder().webSocketUpgrade(
                 object : WebSocketListener() {
                   override fun onOpen(webSocket: WebSocket, response: Response) {
                     webSocket.send(
@@ -355,7 +355,7 @@ class GatewaySessionInvokeTest {
                     }
                   }
                 },
-              )
+              ).build()
             }
           }
         start()
