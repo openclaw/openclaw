@@ -15,6 +15,8 @@ export type WhatsAppActionConfig = {
 };
 
 export type WhatsAppGroupConfig = {
+  /** Human-readable group name (resolved automatically or set manually). */
+  name?: string;
   requireMention?: boolean;
   tools?: GroupToolPolicyConfig;
   toolsBySender?: GroupToolPolicyBySenderConfig;
