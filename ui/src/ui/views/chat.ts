@@ -212,15 +212,17 @@ async function handlePaste(e: ClipboardEvent, props: ChatProps) {
       )
     ).filter((att): att is ChatAttachment => att !== null);
 
-    const current = props.attachments ?? [];
-    props.onAttachmentsChange([...current, ...newAttachments]);
+    props.onAttachmentsChange(
+      typeof props.attachments === "function"
+        ? props.attachments((prev: ChatAttachment[]) => [...prev, ...newAttachments])
+        : [...(props.attachments ?? []), ...newAttachments],
+    );
   } catch (err) {
     console.error("Failed to read pasted files:", err);
   }
 }
 
 async function handleDrop(e: DragEvent, props: ChatProps) {
-  e.preventDefault();
   const target = e.currentTarget as HTMLElement;
   if (target) {
     target.classList.remove("drag-over");
@@ -242,13 +244,15 @@ async function handleDrop(e: DragEvent, props: ChatProps) {
       }
       imageFiles.push(file);
     } else {
-      alert(`File ${file.name} is not a supported image type`);
+      // alert(`File ${file.name} is not a supported image type`);
     }
   }
 
   if (imageFiles.length === 0) {
     return;
   }
+
+  e.preventDefault();
 
   try {
     const newAttachments: ChatAttachment[] = (
@@ -274,8 +278,11 @@ async function handleDrop(e: DragEvent, props: ChatProps) {
       )
     ).filter((att): att is ChatAttachment => att !== null);
 
-    const current = props.attachments ?? [];
-    props.onAttachmentsChange([...current, ...newAttachments]);
+    props.onAttachmentsChange(
+      typeof props.attachments === "function"
+        ? props.attachments((prev: ChatAttachment[]) => [...prev, ...newAttachments])
+        : [...(props.attachments ?? []), ...newAttachments],
+    );
   } catch (err) {
     console.error("Failed to read dropped files:", err);
   }

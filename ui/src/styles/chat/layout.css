@@ -9,7 +9,8 @@
   flex-direction: column;
   flex: 1 1 0;
   height: 100%;
-  min-height: 0; /* Allow flex shrinking */
+  min-height: 0;
+  /* Allow flex shrinking */
   overflow: hidden;
   background: transparent !important;
   border: none !important;
@@ -49,12 +50,14 @@
 
 /* Chat thread - scrollable middle section, transparent */
 .chat-thread {
-  flex: 1 1 0; /* Grow, shrink, and use 0 base for proper scrolling */
+  flex: 1 1 0;
+  /* Grow, shrink, and use 0 base for proper scrolling */
   overflow-y: auto;
   overflow-x: hidden;
   padding: 12px 4px;
   margin: 0 -4px;
-  min-height: 0; /* Allow shrinking for flex scroll behavior */
+  min-height: 0;
+  /* Allow shrinking for flex scroll behavior */
   border-radius: 12px;
   background: transparent;
 }
@@ -146,7 +149,8 @@
   display: flex;
   flex-direction: column;
   gap: 12px;
-  margin-top: auto; /* Push to bottom of flex container */
+  margin-top: auto;
+  /* Push to bottom of flex container */
   padding: 12px 4px 4px;
   background: linear-gradient(to bottom, transparent, var(--bg) 20%);
   z-index: 10;
@@ -163,7 +167,8 @@
   border: 1px solid var(--border);
   width: fit-content;
   max-width: 100%;
-  align-self: flex-start; /* Don't stretch in flex column parent */
+  align-self: flex-start;
+  /* Don't stretch in flex column parent */
 }
 
 .chat-attachment {
@@ -289,7 +294,7 @@
 }
 
 /* Hide the "Message" label - keep textarea only */
-.chat-compose__field > span {
+.chat-compose__field>span {
   display: none;
 }
 
@@ -380,20 +385,6 @@
 .btn--icon:hover {
   background: rgba(255, 255, 255, 0.12);
   border-color: rgba(255, 255, 255, 0.2);
-}
-
-/* Light theme icon button overrides */
-:root[data-theme="light"] .btn--icon {
-  background: #ffffff;
-  border-color: var(--border);
-  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.05);
-  color: var(--muted);
-}
-
-:root[data-theme="light"] .btn--icon:hover {
-  background: #ffffff;
-  border-color: var(--border-strong);
-  color: var(--text);
 }
 
 /* Light theme icon button overrides */
