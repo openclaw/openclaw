@@ -34,7 +34,30 @@ type ElevenLabsVoiceEntry = {
   name: string;
 };
 
-function parseTtsCommand(normalized: string): ParsedTtsCommand | null {
+function parseRawTtsArgs(rawCommandBody: string | undefined, action: string): string | undefined {
+  const trimmed = rawCommandBody?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const lowered = trimmed.toLowerCase();
+  if (lowered === "/tts") {
+    return "";
+  }
+  if (!lowered.startsWith("/tts ")) {
+    return undefined;
+  }
+  const rest = trimmed.slice(5).trim();
+  if (!rest) {
+    return "";
+  }
+  const [rawAction, ...rawTail] = rest.split(/\s+/);
+  if (rawAction.toLowerCase() !== action) {
+    return undefined;
+  }
+  return rawTail.join(" ").trim();
+}
+
+function parseTtsCommand(normalized: string, rawCommandBody?: string): ParsedTtsCommand | null {
   // Accept `/tts` and `/tts <action> [args]` as a single control surface.
   if (normalized === "/tts") {
     return { action: "status", args: "" };
@@ -47,7 +70,10 @@ function parseTtsCommand(normalized: string): ParsedTtsCommand | null {
     return { action: "status", args: "" };
   }
   const [action, ...tail] = rest.split(/\s+/);
-  return { action: action.toLowerCase(), args: tail.join(" ").trim() };
+  const normalizedAction = action.toLowerCase();
+  const normalizedArgs = tail.join(" ").trim();
+  const rawArgs = parseRawTtsArgs(rawCommandBody, normalizedAction);
+  return { action: normalizedAction, args: rawArgs ?? normalizedArgs };
 }
 
 function ttsUsage(): ReplyPayload {
@@ -144,7 +170,10 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
   if (!allowTextCommands) {
     return null;
   }
-  const parsed = parseTtsCommand(params.command.commandBodyNormalized);
+  const parsed = parseTtsCommand(
+    params.command.commandBodyNormalized,
+    params.ctx.CommandBody ?? params.ctx.RawBody ?? params.ctx.Body,
+  );
   if (!parsed) {
     return null;
   }
