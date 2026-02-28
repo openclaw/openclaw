@@ -39,8 +39,8 @@ function resolveLegacyStoragePaths(env: NodeJS.ProcessEnv = process.env): {
 } {
   const stateDir = getDeJoyRuntime().state.resolveStateDir(env, os.homedir);
   return {
-    storagePath: path.join(stateDir, "matrix", "bot-storage.json"),
-    cryptoPath: path.join(stateDir, "matrix", "crypto"),
+    storagePath: path.join(stateDir, "dejoy", "bot-storage.json"),
+    cryptoPath: path.join(stateDir, "dejoy", "crypto"),
   };
 }
 
