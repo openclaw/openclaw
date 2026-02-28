@@ -387,11 +387,22 @@ class NodeRuntime(context: Context) {
   val micIsSending: StateFlow<Boolean>
     get() = micCapture.isSending
 
+  private val talkMode: TalkModeManager by lazy {
+    TalkModeManager(
+      context = appContext,
+      scope = scope,
+      session = operatorSession,
+      supportsChatSubscribe = true,
+      isConnected = { operatorConnected },
+    )
+  }
+
   private fun applyMainSessionKey(candidate: String?) {
     val trimmed = normalizeMainKey(candidate) ?: return
     if (isCanonicalMainSessionKey(_mainSessionKey.value)) return
     if (_mainSessionKey.value == trimmed) return
     _mainSessionKey.value = trimmed
+    talkMode.setMainSessionKey(trimmed)
     chat.applyMainSessionKey(trimmed)
   }
 
@@ -529,7 +540,14 @@ class NodeRuntime(context: Context) {
 
     scope.launch {
       prefs.talkEnabled.collect { enabled ->
+        // MicCaptureManager handles STT + send to gateway.
+        // TalkModeManager plays TTS on assistant responses.
         micCapture.setMicEnabled(enabled)
+        if (enabled) {
+          // Mic on = user is on voice screen and wants TTS responses.
+          talkMode.ttsOnAllResponses = true
+          scope.launch { talkMode.ensureChatSubscribed() }
+        }
         externalAudioCaptureActive.value = enabled
       }
     }
@@ -637,8 +655,25 @@ class NodeRuntime(context: Context) {
     prefs.setCanvasDebugStatusEnabled(value)
   }
 
+  fun setVoiceScreenActive(active: Boolean) {
+    if (!active) {
+      // User left voice screen — stop mic and TTS
+      talkMode.ttsOnAllResponses = false
+      talkMode.stopTts()
+      micCapture.setMicEnabled(false)
+      prefs.setTalkEnabled(false)
+    }
+    // Don't re-enable on active=true; mic toggle drives that
+  }
+
   fun setMicEnabled(value: Boolean) {
     prefs.setTalkEnabled(value)
+    if (value) {
+      // Tapping mic on interrupts any active TTS (barge-in)
+      talkMode.stopTts()
+      talkMode.ttsOnAllResponses = true
+      scope.launch { talkMode.ensureChatSubscribed() }
+    }
     micCapture.setMicEnabled(value)
     externalAudioCaptureActive.value = value
   }
@@ -834,6 +869,7 @@ class NodeRuntime(context: Context) {
 
   private fun handleGatewayEvent(event: String, payloadJson: String?) {
     micCapture.handleGatewayEvent(event, payloadJson)
+    talkMode.handleGatewayEvent(event, payloadJson)
     chat.handleGatewayEvent(event, payloadJson)
   }
 
