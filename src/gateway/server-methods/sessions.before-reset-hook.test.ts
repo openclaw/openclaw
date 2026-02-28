@@ -139,6 +139,7 @@ vi.mock("../../routing/session-key.js", () => ({
   isSubagentSessionKey: vi.fn(() => false),
   normalizeAgentId: vi.fn((id: string) => id),
   parseAgentSessionKey: vi.fn(() => ({ agentId: "main" })),
+  resolveAgentIdFromSessionKey: vi.fn(() => "main"),
 }));
 
 function makeHookRunner(opts: { hasBeforeReset: boolean }) {

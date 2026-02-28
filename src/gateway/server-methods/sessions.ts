@@ -22,6 +22,7 @@ import {
   isSubagentSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
+  resolveAgentIdFromSessionKey,
 } from "../../routing/session-key.js";
 import {
   ErrorCodes,
@@ -446,7 +447,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const hookRunner = getGlobalHookRunner();
     if (hookRunner?.hasHooks("before_reset")) {
       const sessionFile = entry?.sessionFile;
-      const agentId = (target.canonicalKey ?? key).split(":")[0] || "main";
+      const agentId = resolveAgentIdFromSessionKey(target.canonicalKey ?? key);
       void (async () => {
         try {
           const messages: unknown[] = [];
