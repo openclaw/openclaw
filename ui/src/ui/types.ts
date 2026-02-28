@@ -286,6 +286,7 @@ export type ConfigSnapshot = {
 export type ConfigUiHint = {
   label?: string;
   help?: string;
+  tags?: string[];
   group?: string;
   order?: number;
   advanced?: boolean;
@@ -342,6 +343,35 @@ export type AgentsListResult = {
   mainKey: string;
   scope: string;
   agents: GatewayAgentRow[];
+};
+
+export type ToolCatalogProfile = {
+  id: "minimal" | "coding" | "messaging" | "full";
+  label: string;
+};
+
+export type ToolCatalogEntry = {
+  id: string;
+  label: string;
+  description: string;
+  source: "core" | "plugin";
+  pluginId?: string;
+  optional?: boolean;
+  defaultProfiles: Array<"minimal" | "coding" | "messaging" | "full">;
+};
+
+export type ToolCatalogGroup = {
+  id: string;
+  label: string;
+  source: "core" | "plugin";
+  pluginId?: string;
+  tools: ToolCatalogEntry[];
+};
+
+export type ToolsCatalogResult = {
+  agentId: string;
+  profiles: ToolCatalogProfile[];
+  groups: ToolCatalogGroup[];
 };
 
 export type AgentIdentityResult = {
@@ -439,7 +469,7 @@ export type {
 export type CronSchedule =
   | { kind: "at"; at: string }
   | { kind: "every"; everyMs: number; anchorMs?: number }
-  | { kind: "cron"; expr: string; tz?: string };
+  | { kind: "cron"; expr: string; tz?: string; staggerMs?: number };
 
 export type CronSessionTarget = "main" | "isolated";
 export type CronWakeMode = "next-heartbeat" | "now";
@@ -449,6 +479,7 @@ export type CronPayload =
   | {
       kind: "agentTurn";
       message: string;
+      model?: string;
       thinking?: string;
       timeoutSeconds?: number;
     };
@@ -492,15 +523,56 @@ export type CronStatus = {
   nextWakeAtMs?: number | null;
 };
 
+export type CronJobsEnabledFilter = "all" | "enabled" | "disabled";
+export type CronJobsSortBy = "nextRunAtMs" | "updatedAtMs" | "name";
+export type CronSortDir = "asc" | "desc";
+export type CronRunsStatusFilter = "all" | "ok" | "error" | "skipped";
+export type CronRunsStatusValue = "ok" | "error" | "skipped";
+export type CronDeliveryStatus = "delivered" | "not-delivered" | "unknown" | "not-requested";
+export type CronRunScope = "job" | "all";
+
 export type CronRunLogEntry = {
   ts: number;
   jobId: string;
-  status: "ok" | "error" | "skipped";
+  jobName?: string;
+  status?: CronRunsStatusValue;
   durationMs?: number;
   error?: string;
   summary?: string;
+  deliveryStatus?: CronDeliveryStatus;
+  deliveryError?: string;
+  delivered?: boolean;
+  runAtMs?: number;
+  nextRunAtMs?: number;
+  model?: string;
+  provider?: string;
+  usage?: {
+    input_tokens?: number;
+    output_tokens?: number;
+    total_tokens?: number;
+    cache_read_tokens?: number;
+    cache_write_tokens?: number;
+  };
   sessionId?: string;
   sessionKey?: string;
+};
+
+export type CronJobsListResult = {
+  jobs?: CronJob[];
+  total?: number;
+  offset?: number;
+  limit?: number;
+  hasMore?: boolean;
+  nextOffset?: number | null;
+};
+
+export type CronRunsResult = {
+  entries?: CronRunLogEntry[];
+  total?: number;
+  offset?: number;
+  limit?: number;
+  hasMore?: boolean;
+  nextOffset?: number | null;
 };
 
 export type SkillsStatusConfigCheck = {
@@ -556,35 +628,6 @@ export type StatusSummary = Record<string, unknown>;
 
 export type HealthSnapshot = Record<string, unknown>;
 
-/** Strongly-typed health response from the gateway (richer than HealthSnapshot). */
-export type HealthSummary = {
-  ok: boolean;
-  ts: number;
-  durationMs: number;
-  heartbeatSeconds: number;
-  defaultAgentId: string;
-  agents: Array<{ id: string; name?: string }>;
-  sessions: {
-    path: string;
-    count: number;
-    recent: Array<{
-      key: string;
-      updatedAt: number | null;
-      age: number | null;
-    }>;
-  };
-};
-
-/** A model entry returned by the gateway model-catalog endpoint. */
-export type ModelCatalogEntry = {
-  id: string;
-  name: string;
-  provider: string;
-  contextWindow?: number;
-  reasoning?: boolean;
-  input?: Array<"text" | "image">;
-};
-
 export type LogLevel = "trace" | "debug" | "info" | "warn" | "error" | "fatal";
 
 export type LogEntry = {
@@ -594,17 +637,4 @@ export type LogEntry = {
   subsystem?: string | null;
   message?: string | null;
   meta?: Record<string, unknown> | null;
-};
-
-// ── Attention ───────────────────────────────────────
-
-export type AttentionSeverity = "error" | "warning" | "info";
-
-export type AttentionItem = {
-  severity: AttentionSeverity;
-  icon: string;
-  title: string;
-  description: string;
-  href?: string;
-  external?: boolean;
 };

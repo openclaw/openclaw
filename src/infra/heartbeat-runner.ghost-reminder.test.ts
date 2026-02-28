@@ -1,24 +1,19 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { telegramPlugin } from "../../extensions/telegram/src/channel.js";
-import { setTelegramRuntime } from "../../extensions/telegram/src/runtime.js";
 import * as replyModule from "../auto-reply/reply.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { setActivePluginRegistry } from "../plugins/runtime.js";
-import { createPluginRuntime } from "../plugins/runtime/index.js";
-import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { runHeartbeatOnce } from "./heartbeat-runner.js";
-import { seedMainSessionStore, withTempHeartbeatSandbox } from "./heartbeat-runner.test-utils.js";
+import {
+  seedMainSessionStore,
+  setupTelegramHeartbeatPluginRuntimeForTests,
+  withTempHeartbeatSandbox,
+} from "./heartbeat-runner.test-utils.js";
 import { enqueueSystemEvent, resetSystemEventsForTest } from "./system-events.js";
 
 // Avoid pulling optional runtime deps during isolated runs.
 vi.mock("jiti", () => ({ createJiti: () => () => ({}) }));
 
 beforeEach(() => {
-  const runtime = createPluginRuntime();
-  setTelegramRuntime(runtime);
-  setActivePluginRegistry(
-    createTestRegistry([{ pluginId: "telegram", plugin: telegramPlugin, source: "test" }]),
-  );
+  setupTelegramHeartbeatPluginRuntimeForTests();
   resetSystemEventsForTest();
 });
 
@@ -42,6 +37,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
   const createConfig = async (params: {
     tmpDir: string;
     storePath: string;
+    target?: "telegram" | "none";
   }): Promise<{ cfg: OpenClawConfig; sessionKey: string }> => {
     const cfg: OpenClawConfig = {
       agents: {
@@ -49,7 +45,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
           workspace: params.tmpDir,
           heartbeat: {
             every: "5m",
-            target: "telegram",
+            target: params.target ?? "telegram",
           },
         },
       },
@@ -59,7 +55,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
     const sessionKey = await seedMainSessionStore(params.storePath, cfg, {
       lastChannel: "telegram",
       lastProvider: "telegram",
-      lastTo: "155462274",
+      lastTo: "-100155462274",
     });
 
     return { cfg, sessionKey };
@@ -101,6 +97,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
     replyText: string;
     reason: string;
     enqueue: (sessionKey: string) => void;
+    target?: "telegram" | "none";
   }): Promise<{
     result: Awaited<ReturnType<typeof runHeartbeatOnce>>;
     sendTelegram: ReturnType<typeof vi.fn>;
@@ -110,7 +107,11 @@ describe("Ghost reminder bug (issue #13317)", () => {
     return withTempHeartbeatSandbox(
       async ({ tmpDir, storePath }) => {
         const { sendTelegram, getReplySpy } = createHeartbeatDeps(params.replyText);
-        const { cfg, sessionKey } = await createConfig({ tmpDir, storePath });
+        const { cfg, sessionKey } = await createConfig({
+          tmpDir,
+          storePath,
+          target: params.target,
+        });
         params.enqueue(sessionKey);
         const result = await runHeartbeatOnce({
           cfg,
@@ -196,5 +197,39 @@ describe("Ghost reminder bug (issue #13317)", () => {
     expect(calledCtx?.Body).toContain("Cron: QMD maintenance completed");
     expect(calledCtx?.Body).not.toContain("Read HEARTBEAT.md");
     expect(sendTelegram).toHaveBeenCalled();
+  });
+
+  it("uses an internal-only cron prompt when delivery target is none", async () => {
+    const { result, sendTelegram, calledCtx } = await runHeartbeatCase({
+      tmpPrefix: "openclaw-cron-internal-",
+      replyText: "Handled internally",
+      reason: "cron:reminder-job",
+      target: "none",
+      enqueue: (sessionKey) => {
+        enqueueSystemEvent("Reminder: Rotate API keys", { sessionKey });
+      },
+    });
+
+    expect(result.status).toBe("ran");
+    expect(calledCtx?.Provider).toBe("cron-event");
+    expect(calledCtx?.Body).toContain("Handle this reminder internally");
+    expect(sendTelegram).not.toHaveBeenCalled();
+  });
+
+  it("uses an internal-only exec prompt when delivery target is none", async () => {
+    const { result, sendTelegram, calledCtx } = await runHeartbeatCase({
+      tmpPrefix: "openclaw-exec-internal-",
+      replyText: "Handled internally",
+      reason: "exec-event",
+      target: "none",
+      enqueue: (sessionKey) => {
+        enqueueSystemEvent("exec finished: deploy succeeded", { sessionKey });
+      },
+    });
+
+    expect(result.status).toBe("ran");
+    expect(calledCtx?.Provider).toBe("exec-event");
+    expect(calledCtx?.Body).toContain("Handle the result internally");
+    expect(sendTelegram).not.toHaveBeenCalled();
   });
 });

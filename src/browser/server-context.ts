@@ -17,6 +17,7 @@ import {
 } from "./extension-relay.js";
 import {
   assertBrowserNavigationAllowed,
+  assertBrowserNavigationResultAllowed,
   InvalidBrowserNavigationUrlError,
   withBrowserNavigationPolicy,
 } from "./navigation-guard.js";
@@ -176,6 +177,7 @@ function createProfileContext(
         const tabs = await listTabs().catch(() => [] as BrowserTab[]);
         const found = tabs.find((t) => t.targetId === createdViaCdp);
         if (found) {
+          await assertBrowserNavigationResultAllowed({ url: found.url, ...ssrfPolicyOpts });
           return found;
         }
         await new Promise((r) => setTimeout(r, 100));
@@ -214,10 +216,12 @@ function createProfileContext(
     }
     const profileState = getProfileState();
     profileState.lastTargetId = created.id;
+    const resolvedUrl = created.url ?? url;
+    await assertBrowserNavigationResultAllowed({ url: resolvedUrl, ...ssrfPolicyOpts });
     return {
       targetId: created.id,
       title: created.title ?? "",
-      url: created.url ?? url,
+      url: resolvedUrl,
       wsUrl: normalizeWsUrl(created.webSocketDebuggerUrl, profile.cdpUrl),
       type: created.type,
     };
@@ -410,8 +414,12 @@ function createProfileContext(
     };
 
     let chosen = targetId ? resolveById(targetId) : pickDefault();
-    if (!chosen && profile.driver === "extension" && candidates.length === 1) {
-      // If an agent passes a stale/foreign targetId but we only have a single attached tab,
+    if (
+      !chosen &&
+      (profile.driver === "extension" || !profile.cdpIsLoopback) &&
+      candidates.length === 1
+    ) {
+      // If an agent passes a stale/foreign targetId but only one candidate remains,
       // recover by using that tab instead of failing hard.
       chosen = candidates[0] ?? null;
     }

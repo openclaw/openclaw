@@ -7,6 +7,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 
 export const TELEGRAM_MAX_COMMANDS = 100;
+const TELEGRAM_COMMAND_RETRY_RATIO = 0.8;
 
 export type TelegramMenuCommand = {
   command: string;
@@ -17,6 +18,31 @@ type TelegramPluginCommandSpec = {
   name: string;
   description: string;
 };
+
+function isBotCommandsTooMuchError(err: unknown): boolean {
+  if (!err) {
+    return false;
+  }
+  const pattern = /\bBOT_COMMANDS_TOO_MUCH\b/i;
+  if (typeof err === "string") {
+    return pattern.test(err);
+  }
+  if (err instanceof Error) {
+    if (pattern.test(err.message)) {
+      return true;
+    }
+  }
+  if (typeof err === "object") {
+    const maybe = err as { description?: unknown; message?: unknown };
+    if (typeof maybe.description === "string" && pattern.test(maybe.description)) {
+      return true;
+    }
+    if (typeof maybe.message === "string" && pattern.test(maybe.message)) {
+      return true;
+    }
+  }
+  return false;
+}
 
 export function buildPluginTelegramMenuCommands(params: {
   specs: TelegramPluginCommandSpec[];
@@ -93,11 +119,34 @@ export function syncTelegramMenuCommands(params: {
       return;
     }
 
-    await withTelegramApiErrorLogging({
-      operation: "setMyCommands",
-      runtime,
-      fn: () => bot.api.setMyCommands(commandsToRegister),
-    });
+    let retryCommands = commandsToRegister;
+    while (retryCommands.length > 0) {
+      try {
+        await withTelegramApiErrorLogging({
+          operation: "setMyCommands",
+          runtime,
+          fn: () => bot.api.setMyCommands(retryCommands),
+        });
+        return;
+      } catch (err) {
+        if (!isBotCommandsTooMuchError(err)) {
+          throw err;
+        }
+        const nextCount = Math.floor(retryCommands.length * TELEGRAM_COMMAND_RETRY_RATIO);
+        const reducedCount =
+          nextCount < retryCommands.length ? nextCount : retryCommands.length - 1;
+        if (reducedCount <= 0) {
+          runtime.error?.(
+            "Telegram rejected native command registration (BOT_COMMANDS_TOO_MUCH); leaving menu empty. Reduce commands or disable channels.telegram.commands.native.",
+          );
+          return;
+        }
+        runtime.log?.(
+          `Telegram rejected ${retryCommands.length} commands (BOT_COMMANDS_TOO_MUCH); retrying with ${reducedCount}.`,
+        );
+        retryCommands = retryCommands.slice(0, reducedCount);
+      }
+    }
   };
 
   void sync().catch((err) => {

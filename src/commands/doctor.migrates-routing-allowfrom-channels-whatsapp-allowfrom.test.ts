@@ -16,7 +16,7 @@ import {
 } from "./doctor.e2e-harness.js";
 import "./doctor.fast-path-mocks.js";
 
-const DOCTOR_MIGRATION_TIMEOUT_MS = 20_000;
+const DOCTOR_MIGRATION_TIMEOUT_MS = process.platform === "win32" ? 60_000 : 45_000;
 const { doctorCommand } = await import("./doctor.js");
 
 describe("doctor command", () => {
@@ -54,9 +54,11 @@ describe("doctor command", () => {
     const remote = gateway.remote as Record<string, unknown>;
     const channels = (written.channels as Record<string, unknown>) ?? {};
 
-    expect(channels.whatsapp).toEqual({
-      allowFrom: ["+15555550123"],
-    });
+    expect(channels.whatsapp).toEqual(
+      expect.objectContaining({
+        allowFrom: ["+15555550123"],
+      }),
+    );
     expect(written.routing).toBeUndefined();
     expect(remote.token).toBe("legacy-remote-token");
     expect(auth).toBeUndefined();

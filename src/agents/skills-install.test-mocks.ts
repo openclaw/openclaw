@@ -1,9 +1,9 @@
-import { vi } from "vitest";
+import { Mock, vi } from "vitest";
 
-export const runCommandWithTimeoutMock = vi.fn();
-export const scanDirectoryWithSummaryMock = vi.fn();
-export const fetchWithSsrFGuardMock = vi.fn();
-export const hasBinaryMock = vi.fn();
+export const runCommandWithTimeoutMock: Mock<(...args: unknown[]) => unknown> = vi.fn();
+export const scanDirectoryWithSummaryMock: Mock<(...args: unknown[]) => unknown> = vi.fn();
+export const fetchWithSsrFGuardMock: Mock<(...args: unknown[]) => unknown> = vi.fn();
+export const hasBinaryMock: Mock<(bin: string) => boolean> = vi.fn();
 
 export function runCommandWithTimeoutFromMock(...args: unknown[]) {
   return runCommandWithTimeoutMock(...args);
@@ -13,8 +13,8 @@ export function fetchWithSsrFGuardFromMock(...args: unknown[]) {
   return fetchWithSsrFGuardMock(...args);
 }
 
-export function hasBinaryFromMock(...args: unknown[]) {
-  return hasBinaryMock(...args);
+export function hasBinaryFromMock(bin: string) {
+  return hasBinaryMock(bin);
 }
 
 export function scanDirectoryWithSummaryFromMock(...args: unknown[]) {

@@ -22,12 +22,17 @@ const PRIVATE_OR_LOOPBACK_IPV4_RANGES = new Set<Ipv4Range>([
   "carrierGradeNat",
 ]);
 
-const PRIVATE_OR_LOOPBACK_IPV6_RANGES = new Set<Ipv6Range>([
+const BLOCKED_IPV6_SPECIAL_USE_RANGES = new Set<Ipv6Range>([
   "unspecified",
   "loopback",
   "linkLocal",
   "uniqueLocal",
+  "multicast",
 ]);
+const RFC2544_BENCHMARK_PREFIX: [ipaddr.IPv4, number] = [ipaddr.IPv4.parse("198.18.0.0"), 15];
+export type Ipv4SpecialUseBlockOptions = {
+  allowRfc2544BenchmarkRange?: boolean;
+};
 
 const EMBEDDED_IPV4_SENTINEL_RULES: Array<{
   matches: (parts: number[]) => boolean;
@@ -79,6 +84,32 @@ function stripIpv6Brackets(value: string): string {
   return value;
 }
 
+function isNumericIpv4LiteralPart(value: string): boolean {
+  return /^[0-9]+$/.test(value) || /^0x[0-9a-f]+$/i.test(value);
+}
+
+function parseIpv6WithEmbeddedIpv4(raw: string): ipaddr.IPv6 | undefined {
+  if (!raw.includes(":") || !raw.includes(".")) {
+    return undefined;
+  }
+  const match = /^(.*:)([^:%]+(?:\.[^:%]+){3})(%[0-9A-Za-z]+)?$/i.exec(raw);
+  if (!match) {
+    return undefined;
+  }
+  const [, prefix, embeddedIpv4, zoneSuffix = ""] = match;
+  if (!ipaddr.IPv4.isValidFourPartDecimal(embeddedIpv4)) {
+    return undefined;
+  }
+  const octets = embeddedIpv4.split(".").map((part) => Number.parseInt(part, 10));
+  const high = ((octets[0] << 8) | octets[1]).toString(16);
+  const low = ((octets[2] << 8) | octets[3]).toString(16);
+  const normalizedIpv6 = `${prefix}${high}:${low}${zoneSuffix}`;
+  if (!ipaddr.IPv6.isValid(normalizedIpv6)) {
+    return undefined;
+  }
+  return ipaddr.IPv6.parse(normalizedIpv6);
+}
+
 export function isIpv4Address(address: ParsedIpAddress): address is ipaddr.IPv4 {
   return address.kind() === "ipv4";
 }
@@ -115,7 +146,7 @@ export function parseCanonicalIpAddress(raw: string | undefined): ParsedIpAddres
   if (ipaddr.IPv6.isValid(normalized)) {
     return ipaddr.IPv6.parse(normalized);
   }
-  return undefined;
+  return parseIpv6WithEmbeddedIpv4(normalized);
 }
 
 export function parseLooseIpAddress(raw: string | undefined): ParsedIpAddress | undefined {
@@ -127,10 +158,10 @@ export function parseLooseIpAddress(raw: string | undefined): ParsedIpAddress | 
   if (!normalized) {
     return undefined;
   }
-  if (!ipaddr.isValid(normalized)) {
-    return undefined;
+  if (ipaddr.isValid(normalized)) {
+    return ipaddr.parse(normalized);
   }
-  return ipaddr.parse(normalized);
+  return parseIpv6WithEmbeddedIpv4(normalized);
 }
 
 export function normalizeIpAddress(raw: string | undefined): string | undefined {
@@ -163,7 +194,20 @@ export function isLegacyIpv4Literal(raw: string | undefined): boolean {
   if (!normalized || normalized.includes(":")) {
     return false;
   }
-  return ipaddr.IPv4.isValid(normalized) && !ipaddr.IPv4.isValidFourPartDecimal(normalized);
+  if (isCanonicalDottedDecimalIPv4(normalized)) {
+    return false;
+  }
+  const parts = normalized.split(".");
+  if (parts.length === 0 || parts.length > 4) {
+    return false;
+  }
+  if (parts.some((part) => part.length === 0)) {
+    return false;
+  }
+  if (!parts.every((part) => isNumericIpv4LiteralPart(part))) {
+    return false;
+  }
+  return true;
 }
 
 export function isLoopbackIpAddress(raw: string | undefined): boolean {
@@ -184,11 +228,15 @@ export function isPrivateOrLoopbackIpAddress(raw: string | undefined): boolean {
   if (isIpv4Address(normalized)) {
     return PRIVATE_OR_LOOPBACK_IPV4_RANGES.has(normalized.range());
   }
-  if (PRIVATE_OR_LOOPBACK_IPV6_RANGES.has(normalized.range())) {
+  return isBlockedSpecialUseIpv6Address(normalized);
+}
+
+export function isBlockedSpecialUseIpv6Address(address: ipaddr.IPv6): boolean {
+  if (BLOCKED_IPV6_SPECIAL_USE_RANGES.has(address.range())) {
     return true;
   }
   // ipaddr.js does not classify deprecated site-local fec0::/10 as private.
-  return (normalized.parts[0] & 0xffc0) === 0xfec0;
+  return (address.parts[0] & 0xffc0) === 0xfec0;
 }
 
 export function isRfc1918Ipv4Address(raw: string | undefined): boolean {
@@ -207,8 +255,15 @@ export function isCarrierGradeNatIpv4Address(raw: string | undefined): boolean {
   return parsed.range() === "carrierGradeNat";
 }
 
-export function isBlockedSpecialUseIpv4Address(address: ipaddr.IPv4): boolean {
-  return BLOCKED_IPV4_SPECIAL_USE_RANGES.has(address.range());
+export function isBlockedSpecialUseIpv4Address(
+  address: ipaddr.IPv4,
+  options: Ipv4SpecialUseBlockOptions = {},
+): boolean {
+  const inRfc2544BenchmarkRange = address.match(RFC2544_BENCHMARK_PREFIX);
+  if (inRfc2544BenchmarkRange && options.allowRfc2544BenchmarkRange === true) {
+    return false;
+  }
+  return BLOCKED_IPV4_SPECIAL_USE_RANGES.has(address.range()) || inRfc2544BenchmarkRange;
 }
 
 function decodeIpv4FromHextets(high: number, low: number): ipaddr.IPv4 {
@@ -276,7 +331,13 @@ export function isIpInCidr(ip: string, cidr: string): boolean {
     return false;
   }
   try {
-    return comparableIp.match([comparableBase, prefixLength]);
+    if (isIpv4Address(comparableIp) && isIpv4Address(comparableBase)) {
+      return comparableIp.match([comparableBase, prefixLength]);
+    }
+    if (isIpv6Address(comparableIp) && isIpv6Address(comparableBase)) {
+      return comparableIp.match([comparableBase, prefixLength]);
+    }
+    return false;
   } catch {
     return false;
   }

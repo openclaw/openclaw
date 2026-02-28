@@ -1,8 +1,9 @@
 import { vi } from "vitest";
 
 type SessionsSpawnTestConfig = ReturnType<(typeof import("../config/config.js"))["loadConfig"]>;
-type CreateOpenClawTools = (typeof import("./openclaw-tools.js"))["createOpenClawTools"];
-export type CreateOpenClawToolsOpts = Parameters<CreateOpenClawTools>[0];
+type CreateSessionsSpawnTool =
+  (typeof import("./tools/sessions-spawn-tool.js"))["createSessionsSpawnTool"];
+export type CreateOpenClawToolsOpts = Parameters<CreateSessionsSpawnTool>[0];
 export type GatewayRequest = { method?: string; params?: unknown };
 export type AgentWaitCall = { runId?: string; timeoutMs?: number };
 type SessionsSpawnGatewayMockOptions = {
@@ -57,12 +58,8 @@ export function setSessionsSpawnConfigOverride(next: SessionsSpawnTestConfig): v
 
 export async function getSessionsSpawnTool(opts: CreateOpenClawToolsOpts) {
   // Dynamic import: ensure harness mocks are installed before tool modules load.
-  const { createOpenClawTools } = await import("./openclaw-tools.js");
-  const tool = createOpenClawTools(opts).find((candidate) => candidate.name === "sessions_spawn");
-  if (!tool) {
-    throw new Error("missing sessions_spawn tool");
-  }
-  return tool;
+  const { createSessionsSpawnTool } = await import("./tools/sessions-spawn-tool.js");
+  return createSessionsSpawnTool(opts);
 }
 
 export function setupSessionsSpawnGatewayMock(setupOpts: SessionsSpawnGatewayMockOptions): {

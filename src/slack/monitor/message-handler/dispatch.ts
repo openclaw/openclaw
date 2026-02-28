@@ -40,12 +40,14 @@ export function resolveSlackStreamingThreadHint(params: {
   replyToMode: "off" | "first" | "all";
   incomingThreadTs: string | undefined;
   messageTs: string | undefined;
+  isThreadReply?: boolean;
 }): string | undefined {
   return resolveSlackThreadTs({
     replyToMode: params.replyToMode,
     incomingThreadTs: params.incomingThreadTs,
     messageTs: params.messageTs,
     hasReplied: false,
+    isThreadReply: params.isThreadReply,
   });
 }
 
@@ -80,12 +82,13 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         channel: "slack",
         to: `user:${message.user}`,
         accountId: route.accountId,
+        threadId: prepared.ctxPayload.MessageThreadId,
       },
       ctx: prepared.ctxPayload,
     });
   }
 
-  const { statusThreadTs } = resolveSlackThreadTargets({
+  const { statusThreadTs, isThreadReply } = resolveSlackThreadTargets({
     message,
     replyToMode: ctx.replyToMode,
   });
@@ -102,6 +105,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     incomingThreadTs,
     messageTs,
     hasRepliedRef,
+    isThreadReply,
   });
 
   const typingTarget = statusThreadTs ? `${message.channel}/${statusThreadTs}` : message.channel;
@@ -166,6 +170,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     replyToMode: ctx.replyToMode,
     incomingThreadTs,
     messageTs,
+    isThreadReply,
   });
   const useStreaming = shouldUseStreaming({
     streamingEnabled,
@@ -184,6 +189,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       runtime,
       textLimit: ctx.textLimit,
       replyThreadTs,
+      replyToMode: ctx.replyToMode,
     });
     replyPlan.markSent();
   };
@@ -237,6 +243,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   const { dispatcher, replyOptions, markDispatchIdle } = createReplyDispatcherWithTyping({
     ...prefixOptions,
     humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
+    typingCallbacks,
     deliver: async (payload) => {
       if (useStreaming) {
         await deliverWithStreaming(payload);
@@ -298,8 +305,6 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       runtime.error?.(danger(`slack ${info.kind} reply failed: ${String(err)}`));
       typingCallbacks.onIdle?.();
     },
-    onReplyStart: typingCallbacks.onReplyStart,
-    onIdle: typingCallbacks.onIdle,
   });
 
   const draftStream = createSlackDraftStream({

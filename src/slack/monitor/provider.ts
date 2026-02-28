@@ -10,6 +10,7 @@ import {
   summarizeMapping,
 } from "../../channels/allowlists/resolve-utils.js";
 import { loadConfig } from "../../config/config.js";
+import { isDangerousNameMatchingEnabled } from "../../config/dangerous-name-matching.js";
 import {
   resolveOpenProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
@@ -121,7 +122,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   const useAccessGroups = cfg.commands?.useAccessGroups !== false;
   const reactionMode = slackCfg.reactionNotifications ?? "own";
   const reactionAllowlist = slackCfg.reactionAllowlist ?? [];
-  const replyToMode = slackCfg.replyToMode ?? "all";
+  const replyToMode = slackCfg.replyToMode ?? "off";
   const threadHistoryScope = slackCfg.thread?.historyScope ?? "thread";
   const threadInheritParent = slackCfg.thread?.inheritParent ?? false;
   const slashCommand = resolveSlackSlashCommandConfig(opts.slashCommand ?? slackCfg.slashCommand);
@@ -210,6 +211,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     dmEnabled,
     dmPolicy,
     allowFrom,
+    allowNameMatching: isDangerousNameMatchingEnabled(slackCfg),
     groupDmEnabled,
     groupDmChannels,
     defaultRequireMention: slackCfg.requireMention,

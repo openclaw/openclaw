@@ -6,6 +6,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import {
   clearSessionStoreCacheForTest,
   loadSessionStore,
+  mergeSessionEntry,
   resolveAndPersistSessionFile,
   updateSessionStore,
 } from "../sessions.js";
@@ -56,16 +57,64 @@ describe("session path safety", () => {
     expect(resolved).toBe(path.resolve(sessionsDir, "sess-1-topic-topic%2Fa%2Bb.jsonl"));
   });
 
-  it("rejects absolute sessionFile paths outside known agent sessions dirs", () => {
+  it("falls back to derived path when sessionFile is outside known agent sessions dirs", () => {
     const sessionsDir = "/tmp/openclaw/agents/main/sessions";
 
-    expect(() =>
-      resolveSessionFilePath(
+    const resolved = resolveSessionFilePath(
+      "sess-1",
+      { sessionFile: "/tmp/openclaw/agents/work/not-sessions/abc-123.jsonl" },
+      { sessionsDir },
+    );
+    expect(resolved).toBe(path.resolve(sessionsDir, "sess-1.jsonl"));
+  });
+
+  it("accepts symlink-alias session paths that resolve under the sessions dir", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-symlink-session-"));
+    const realRoot = path.join(tmpDir, "real-state");
+    const aliasRoot = path.join(tmpDir, "alias-state");
+    try {
+      const sessionsDir = path.join(realRoot, "agents", "main", "sessions");
+      fs.mkdirSync(sessionsDir, { recursive: true });
+      fs.symlinkSync(realRoot, aliasRoot, "dir");
+      const viaAlias = path.join(aliasRoot, "agents", "main", "sessions", "sess-1.jsonl");
+      fs.writeFileSync(path.join(sessionsDir, "sess-1.jsonl"), "");
+      const resolved = resolveSessionFilePath("sess-1", { sessionFile: viaAlias }, { sessionsDir });
+      expect(fs.realpathSync(resolved)).toBe(
+        fs.realpathSync(path.join(sessionsDir, "sess-1.jsonl")),
+      );
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("falls back when sessionFile is a symlink that escapes sessions dir", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-symlink-escape-"));
+    const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
+    const outsideDir = path.join(tmpDir, "outside");
+    try {
+      fs.mkdirSync(sessionsDir, { recursive: true });
+      fs.mkdirSync(outsideDir, { recursive: true });
+      const outsideFile = path.join(outsideDir, "escaped.jsonl");
+      fs.writeFileSync(outsideFile, "");
+      const symlinkPath = path.join(sessionsDir, "escaped.jsonl");
+      fs.symlinkSync(outsideFile, symlinkPath, "file");
+
+      const resolved = resolveSessionFilePath(
         "sess-1",
-        { sessionFile: "/tmp/openclaw/agents/work/not-sessions/abc-123.jsonl" },
+        { sessionFile: symlinkPath },
         { sessionsDir },
-      ),
-    ).toThrow(/within sessions directory/);
+      );
+      expect(fs.realpathSync(path.dirname(resolved))).toBe(fs.realpathSync(sessionsDir));
+      expect(path.basename(resolved)).toBe("sess-1.jsonl");
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -166,6 +215,42 @@ describe("session store lock (Promise chain mutex)", () => {
 
     const store = loadSessionStore(storePath);
     expect(store[key]?.modelOverride).toBe("recovered");
+  });
+
+  it("clears stale runtime provider when model is patched without provider", () => {
+    const merged = mergeSessionEntry(
+      {
+        sessionId: "sess-runtime",
+        updatedAt: 100,
+        modelProvider: "anthropic",
+        model: "claude-opus-4-6",
+      },
+      {
+        model: "gpt-5.2",
+      },
+    );
+    expect(merged.model).toBe("gpt-5.2");
+    expect(merged.modelProvider).toBeUndefined();
+  });
+
+  it("normalizes orphan modelProvider fields at store write boundary", async () => {
+    const key = "agent:main:orphan-provider";
+    const { storePath } = await makeTmpStore({
+      [key]: {
+        sessionId: "sess-orphan",
+        updatedAt: 100,
+        modelProvider: "anthropic",
+      },
+    });
+
+    await updateSessionStore(storePath, async (store) => {
+      const entry = store[key];
+      entry.updatedAt = Date.now();
+    });
+
+    const store = loadSessionStore(storePath);
+    expect(store[key]?.modelProvider).toBeUndefined();
+    expect(store[key]?.model).toBeUndefined();
   });
 });
 

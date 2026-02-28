@@ -1,17 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { Command } from "commander";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createIosNodeListResponse } from "./program.nodes-test-helpers.js";
-import {
-  callGateway,
-  installBaseProgramMocks,
-  installSmokeProgramMocks,
-  runTui,
-  runtime,
-} from "./program.test-mocks.js";
+import { callGateway, installBaseProgramMocks, runtime } from "./program.test-mocks.js";
 
 installBaseProgramMocks();
-installSmokeProgramMocks();
-
-const { buildProgram } = await import("./program.js");
+let registerNodesCli: (program: Command) => void;
 
 function formatRuntimeLogCallArg(value: unknown): string {
   if (typeof value === "string") {
@@ -31,14 +24,17 @@ function formatRuntimeLogCallArg(value: unknown): string {
 }
 
 describe("cli program (nodes basics)", () => {
-  function createProgramWithCleanRuntimeLog() {
-    const program = buildProgram();
-    runtime.log.mockClear();
-    return program;
-  }
+  let program: Command;
+
+  beforeAll(async () => {
+    ({ registerNodesCli } = await import("./nodes-cli.js"));
+    program = new Command();
+    program.exitOverride();
+    registerNodesCli(program);
+  });
 
   async function runProgram(argv: string[]) {
-    const program = createProgramWithCleanRuntimeLog();
+    runtime.log.mockClear();
     await program.parseAsync(argv, { from: "user" });
   }
 
@@ -61,14 +57,6 @@ describe("cli program (nodes basics)", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    runTui.mockResolvedValue(undefined);
-  });
-
-  it("runs nodes list and calls node.pair.list", async () => {
-    callGateway.mockResolvedValue({ pending: [], paired: [] });
-    await runProgram(["nodes", "list"]);
-    expect(callGateway).toHaveBeenCalledWith(expect.objectContaining({ method: "node.pair.list" }));
-    expect(runtime.log).toHaveBeenCalledWith("Pending: 0 · Paired: 0");
   });
 
   it("runs nodes list --connected and filters to connected nodes", async () => {

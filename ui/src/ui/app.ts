@@ -53,6 +53,7 @@ import {
 import type { AppViewState } from "./app-view-state.ts";
 import { normalizeAssistantIdentity } from "./assistant-identity.ts";
 import { loadAssistantIdentity as loadAssistantIdentityInternal } from "./controllers/assistant-identity.ts";
+import type { CronFieldErrors } from "./controllers/cron.ts";
 import type { DevicePairingList } from "./controllers/devices.ts";
 import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./controllers/exec-approvals.ts";
@@ -60,7 +61,7 @@ import type { SkillMessage } from "./controllers/skills.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";
 import type { Tab } from "./navigation.ts";
 import { loadSettings, type UiSettings } from "./storage.ts";
-import { VALID_THEMES, type ResolvedTheme, type ThemeMode } from "./theme.ts";
+import type { ResolvedTheme, ThemeMode } from "./theme.ts";
 import type {
   AgentsListResult,
   AgentsFilesListResult,
@@ -70,18 +71,19 @@ import type {
   CronJob,
   CronRunLogEntry,
   CronStatus,
-  HealthSummary,
+  HealthSnapshot,
   LogEntry,
   LogLevel,
-  ModelCatalogEntry,
   PresenceEntry,
   ChannelsStatusSnapshot,
   SessionsListResult,
   SkillStatusReport,
+  ToolsCatalogResult,
   StatusSummary,
   NostrProfile,
 } from "./types.ts";
 import { type ChatAttachment, type ChatQueueItem, type CronFormState } from "./ui-types.ts";
+import { generateUUID } from "./uuid.ts";
 import type { NostrProfileFormState } from "./views/channels.nostr-profile-form.ts";
 
 declare global {
@@ -108,6 +110,7 @@ function resolveOnboardingMode(): boolean {
 @customElement("openclaw-app")
 export class OpenClawApp extends LitElement {
   private i18nController = new I18nController(this);
+  clientInstanceId = generateUUID();
   @state() settings: UiSettings = loadSettings();
   constructor() {
     super();
@@ -119,11 +122,11 @@ export class OpenClawApp extends LitElement {
   @state() tab: Tab = "chat";
   @state() onboarding = resolveOnboardingMode();
   @state() connected = false;
-  @state() theme: ThemeMode = this.settings.theme ?? "dark";
+  @state() theme: ThemeMode = this.settings.theme ?? "system";
   @state() themeResolved: ResolvedTheme = "dark";
-  @state() themeOrder: ThemeMode[] = this.buildThemeOrder(this.theme);
   @state() hello: GatewayHelloOk | null = null;
   @state() lastError: string | null = null;
+  @state() lastErrorCode: string | null = null;
   @state() eventLog: EventLogEntry[] = [];
   private eventLogBuffer: EventLogEntry[] = [];
   private toolStreamSyncTimer: number | null = null;
@@ -215,6 +218,9 @@ export class OpenClawApp extends LitElement {
   @state() agentsList: AgentsListResult | null = null;
   @state() agentsError: string | null = null;
   @state() agentsSelectedId: string | null = null;
+  @state() toolsCatalogLoading = false;
+  @state() toolsCatalogError: string | null = null;
+  @state() toolsCatalogResult: ToolsCatalogResult | null = null;
   @state() agentsPanel: "overview" | "files" | "tools" | "skills" | "channels" | "cron" =
     "overview";
   @state() agentFilesLoading = false;
@@ -239,12 +245,6 @@ export class OpenClawApp extends LitElement {
   @state() sessionsFilterLimit = "120";
   @state() sessionsIncludeGlobal = true;
   @state() sessionsIncludeUnknown = false;
-  @state() sessionsSearchQuery = "";
-  @state() sessionsSortColumn: "key" | "kind" | "updated" | "tokens" = "updated";
-  @state() sessionsSortDir: "asc" | "desc" = "desc";
-  @state() sessionsPage = 0;
-  @state() sessionsPageSize = 10;
-  @state() sessionsActionsOpenKey: string | null = null;
 
   @state() usageLoading = false;
   @state() usageResult: import("./types.js").SessionsUsageResult | null = null;
@@ -302,32 +302,38 @@ export class OpenClawApp extends LitElement {
   usageQueryDebounceTimer: number | null = null;
 
   @state() cronLoading = false;
+  @state() cronJobsLoadingMore = false;
   @state() cronJobs: CronJob[] = [];
+  @state() cronJobsTotal = 0;
+  @state() cronJobsHasMore = false;
+  @state() cronJobsNextOffset: number | null = null;
+  @state() cronJobsLimit = 50;
+  @state() cronJobsQuery = "";
+  @state() cronJobsEnabledFilter: import("./types.js").CronJobsEnabledFilter = "all";
+  @state() cronJobsSortBy: import("./types.js").CronJobsSortBy = "nextRunAtMs";
+  @state() cronJobsSortDir: import("./types.js").CronSortDir = "asc";
   @state() cronStatus: CronStatus | null = null;
   @state() cronError: string | null = null;
   @state() cronForm: CronFormState = { ...DEFAULT_CRON_FORM };
+  @state() cronFieldErrors: CronFieldErrors = {};
+  @state() cronEditingJobId: string | null = null;
   @state() cronRunsJobId: string | null = null;
+  @state() cronRunsLoadingMore = false;
   @state() cronRuns: CronRunLogEntry[] = [];
+  @state() cronRunsTotal = 0;
+  @state() cronRunsHasMore = false;
+  @state() cronRunsNextOffset: number | null = null;
+  @state() cronRunsLimit = 50;
+  @state() cronRunsScope: import("./types.js").CronRunScope = "all";
+  @state() cronRunsStatuses: import("./types.js").CronRunsStatusValue[] = [];
+  @state() cronRunsDeliveryStatuses: import("./types.js").CronDeliveryStatus[] = [];
+  @state() cronRunsStatusFilter: import("./types.js").CronRunsStatusFilter = "all";
+  @state() cronRunsQuery = "";
+  @state() cronRunsSortDir: import("./types.js").CronSortDir = "desc";
+  @state() cronModelSuggestions: string[] = [];
   @state() cronBusy = false;
 
   @state() updateAvailable: import("./types.js").UpdateAvailable | null = null;
-
-  // Overview dashboard state
-  @state() attentionItems: import("./types.js").AttentionItem[] = [];
-  @state() paletteOpen = false;
-  paletteQuery = "";
-  paletteActiveIndex = 0;
-  @state() streamMode = (() => {
-    try {
-      const stored = localStorage.getItem("openclaw:stream-mode");
-      // Default to true (redacted) unless explicitly disabled
-      return stored === null ? true : stored === "true";
-    } catch {
-      return true;
-    }
-  })();
-  @state() overviewLogLines: string[] = [];
-  @state() overviewLogCursor = 0;
 
   @state() skillsLoading = false;
   @state() skillsReport: SkillStatusReport | null = null;
@@ -337,14 +343,10 @@ export class OpenClawApp extends LitElement {
   @state() skillsBusyKey: string | null = null;
   @state() skillMessages: Record<string, SkillMessage> = {};
 
-  @state() healthLoading = false;
-  @state() healthResult: HealthSummary | null = null;
-  @state() healthError: string | null = null;
-
   @state() debugLoading = false;
   @state() debugStatus: StatusSummary | null = null;
-  @state() debugHealth: HealthSummary | null = null;
-  @state() debugModels: ModelCatalogEntry[] = [];
+  @state() debugHealth: HealthSnapshot | null = null;
+  @state() debugModels: unknown[] = [];
   @state() debugHeartbeat: unknown = null;
   @state() debugCallMethod = "";
   @state() debugCallParams = "{}";
@@ -383,6 +385,8 @@ export class OpenClawApp extends LitElement {
   basePath = "";
   private popStateHandler = () =>
     onPopStateInternal(this as unknown as Parameters<typeof onPopStateInternal>[0]);
+  private themeMedia: MediaQueryList | null = null;
+  private themeMediaHandler: ((event: MediaQueryListEvent) => void) | null = null;
   private topbarObserver: ResizeObserver | null = null;
 
   createRenderRoot() {
@@ -460,13 +464,6 @@ export class OpenClawApp extends LitElement {
 
   setTheme(next: ThemeMode, context?: Parameters<typeof setThemeInternal>[2]) {
     setThemeInternal(this as unknown as Parameters<typeof setThemeInternal>[0], next, context);
-    this.themeOrder = this.buildThemeOrder(next);
-  }
-
-  buildThemeOrder(active: ThemeMode): ThemeMode[] {
-    const all = [...VALID_THEMES];
-    const rest = all.filter((id) => id !== active);
-    return [active, ...rest];
   }
 
   async loadOverview() {

@@ -99,8 +99,10 @@ Open:
 - Non-loopback binds still **require** a shared token/password (`gateway.auth` or env).
 - The wizard generates a gateway token by default (even on loopback).
 - The UI sends `connect.params.auth.token` or `connect.params.auth.password`.
-- The Control UI sends anti-clickjacking headers and only accepts same-origin browser
-  websocket connections unless `gateway.controlUi.allowedOrigins` is set.
+- For non-loopback Control UI deployments, set `gateway.controlUi.allowedOrigins`
+  explicitly (full origins). Without it, gateway startup is refused by default.
+- `gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true` enables
+  Host-header origin fallback mode, but is a dangerous security downgrade.
 - With Serve, Tailscale identity headers can satisfy Control UI/WebSocket auth
   when `gateway.auth.allowTailscale` is `true` (no token/password required).
   HTTP API endpoints still require token/password. Set
