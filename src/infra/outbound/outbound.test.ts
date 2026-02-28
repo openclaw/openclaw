@@ -333,10 +333,12 @@ describe("delivery-queue", () => {
       deliver,
       log = createLog(),
       maxRecoveryMs,
+      startupCutoff,
     }: {
       deliver: ReturnType<typeof vi.fn>;
       log?: ReturnType<typeof createLog>;
       maxRecoveryMs?: number;
+      startupCutoff?: number;
     }) => {
       const result = await recoverPendingDeliveries({
         deliver: deliver as DeliverFn,
@@ -344,6 +346,7 @@ describe("delivery-queue", () => {
         cfg: baseCfg,
         stateDir: tmpDir,
         ...(maxRecoveryMs === undefined ? {} : { maxRecoveryMs }),
+        ...(startupCutoff === undefined ? {} : { startupCutoff }),
       });
       return { result, log };
     };
@@ -352,7 +355,7 @@ describe("delivery-queue", () => {
       // Manually create queue entries as if gateway crashed before delivery.
       await enqueueCrashRecoveryEntries();
       const deliver = vi.fn().mockResolvedValue([]);
-      const { result } = await runRecovery({ deliver });
+      const { result } = await runRecovery({ deliver, startupCutoff: Date.now() });
 
       expect(deliver).toHaveBeenCalledTimes(2);
       expect(result.recovered).toBe(2);
@@ -363,6 +366,25 @@ describe("delivery-queue", () => {
       // Queue should be empty after recovery.
       const remaining = await loadPendingDeliveries(tmpDir);
       expect(remaining).toHaveLength(0);
+    });
+
+    it("skips freshly-enqueued entries when startupCutoff is set (prevents duplicate delivery)", async () => {
+      // Regression: outbox worker fired within 1s of enqueue and double-delivered because
+      // fresh entries (retryCount=0, no lastAttemptAt) were immediately eligible.
+      // With startupCutoff set, entries enqueued after startup are skipped unless they have
+      // a prior attempt recorded (i.e., a transient failure that needs retry).
+      const startupCutoff = Date.now();
+      await enqueueDelivery(
+        { channel: "whatsapp", to: "+1", payloads: [{ text: "live" }] },
+        tmpDir,
+      );
+
+      const deliver = vi.fn().mockResolvedValue([]);
+      const { result } = await runRecovery({ deliver, startupCutoff });
+
+      expect(deliver).not.toHaveBeenCalled();
+      expect(result.recovered).toBe(0);
+      expect(result.deferredBackoff).toBe(0);
     });
 
     it("moves entries that exceeded max retries to terminal failed status", async () => {
@@ -519,6 +541,7 @@ describe("delivery-queue", () => {
         failed: 0,
         skippedMaxRetries: 0,
         deferredBackoff: 1,
+        skippedStartupCutoff: 0,
       });
 
       const remaining = await loadPendingDeliveries(tmpDir);
@@ -549,6 +572,7 @@ describe("delivery-queue", () => {
         failed: 0,
         skippedMaxRetries: 0,
         deferredBackoff: 1,
+        skippedStartupCutoff: 0,
       });
       expect(deliver).toHaveBeenCalledTimes(1);
       expect(deliver).toHaveBeenCalledWith(
@@ -578,6 +602,7 @@ describe("delivery-queue", () => {
         failed: 0,
         skippedMaxRetries: 0,
         deferredBackoff: 1,
+        skippedStartupCutoff: 0,
       });
       expect(firstDeliver).not.toHaveBeenCalled();
 
@@ -589,6 +614,7 @@ describe("delivery-queue", () => {
         failed: 0,
         skippedMaxRetries: 0,
         deferredBackoff: 0,
+        skippedStartupCutoff: 0,
       });
       expect(secondDeliver).toHaveBeenCalledTimes(1);
 
@@ -607,6 +633,7 @@ describe("delivery-queue", () => {
         failed: 0,
         skippedMaxRetries: 0,
         deferredBackoff: 0,
+        skippedStartupCutoff: 0,
       });
       expect(deliver).not.toHaveBeenCalled();
     });

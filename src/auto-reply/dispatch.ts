@@ -1,10 +1,12 @@
 import type { OpenClawConfig } from "../config/config.js";
+import { isDeliverableMessageChannel, normalizeMessageChannel } from "../utils/message-channel.js";
 import type { DispatchFromConfigResult } from "./reply/dispatch-from-config.js";
 import { dispatchReplyFromConfig } from "./reply/dispatch-from-config.js";
 import { finalizeInboundContext } from "./reply/inbound-context.js";
 import {
   createReplyDispatcher,
   createReplyDispatcherWithTyping,
+  type DeliveryQueueContext,
   type ReplyDispatcher,
   type ReplyDispatcherOptions,
   type ReplyDispatcherWithTypingOptions,
@@ -22,7 +24,6 @@ export async function withReplyDispatcher<T>(params: {
   try {
     return await params.run();
   } finally {
-    // Ensure dispatcher reservations are always released on every exit path.
     params.dispatcher.markComplete();
     try {
       await params.dispatcher.waitForIdle();
@@ -32,6 +33,64 @@ export async function withReplyDispatcher<T>(params: {
   }
 }
 
+type DispatchInboundMessageInternalParams = {
+  ctx: MsgContext | FinalizedMsgContext;
+  cfg: OpenClawConfig;
+  dispatcher: ReplyDispatcher;
+  replyOptions?: Omit<GetReplyOptions, "onToolResult" | "onBlockReply">;
+  replyResolver?: typeof import("./reply.js").getReplyFromConfig;
+};
+
+function resolveDeliveryQueueContext(params: {
+  ctx: FinalizedMsgContext;
+}): DeliveryQueueContext | undefined {
+  const channel = normalizeMessageChannel(
+    params.ctx.OriginatingChannel ?? params.ctx.Surface ?? params.ctx.Provider,
+  );
+  if (!channel || !isDeliverableMessageChannel(channel)) {
+    return undefined;
+  }
+  const to = params.ctx.OriginatingTo?.trim() || params.ctx.To?.trim();
+  if (!to) {
+    return undefined;
+  }
+  return {
+    channel,
+    to,
+    accountId: params.ctx.AccountId?.trim() || undefined,
+    threadId: params.ctx.MessageThreadId,
+    replyToId: params.ctx.ReplyToId?.trim() || undefined,
+    turnId: params.ctx.MessageTurnId,
+  };
+}
+
+async function dispatchInboundMessageInternal({
+  ctx,
+  cfg,
+  dispatcher,
+  replyOptions,
+  replyResolver,
+}: DispatchInboundMessageInternalParams): Promise<DispatchInboundResult> {
+  const finalized = finalizeInboundContext(ctx);
+
+  if (dispatcher.setDeliveryQueueContext) {
+    const queueContext = resolveDeliveryQueueContext({ ctx: finalized });
+    dispatcher.setDeliveryQueueContext(queueContext);
+  }
+
+  return await withReplyDispatcher({
+    dispatcher,
+    run: () =>
+      dispatchReplyFromConfig({
+        ctx: finalized,
+        cfg,
+        dispatcher,
+        replyOptions,
+        replyResolver,
+      }),
+  });
+}
+
 export async function dispatchInboundMessage(params: {
   ctx: MsgContext | FinalizedMsgContext;
   cfg: OpenClawConfig;
@@ -39,18 +98,7 @@ export async function dispatchInboundMessage(params: {
   replyOptions?: Omit<GetReplyOptions, "onToolResult" | "onBlockReply">;
   replyResolver?: typeof import("./reply.js").getReplyFromConfig;
 }): Promise<DispatchInboundResult> {
-  const finalized = finalizeInboundContext(params.ctx);
-  return await withReplyDispatcher({
-    dispatcher: params.dispatcher,
-    run: () =>
-      dispatchReplyFromConfig({
-        ctx: finalized,
-        cfg: params.cfg,
-        dispatcher: params.dispatcher,
-        replyOptions: params.replyOptions,
-        replyResolver: params.replyResolver,
-      }),
-  });
+  return dispatchInboundMessageInternal(params);
 }
 
 export async function dispatchInboundMessageWithBufferedDispatcher(params: {
@@ -64,7 +112,7 @@ export async function dispatchInboundMessageWithBufferedDispatcher(params: {
     params.dispatcherOptions,
   );
   try {
-    return await dispatchInboundMessage({
+    return await dispatchInboundMessageInternal({
       ctx: params.ctx,
       cfg: params.cfg,
       dispatcher,
@@ -87,7 +135,7 @@ export async function dispatchInboundMessageWithDispatcher(params: {
   replyResolver?: typeof import("./reply.js").getReplyFromConfig;
 }): Promise<DispatchInboundResult> {
   const dispatcher = createReplyDispatcher(params.dispatcherOptions);
-  return await dispatchInboundMessage({
+  return await dispatchInboundMessageInternal({
     ctx: params.ctx,
     cfg: params.cfg,
     dispatcher,

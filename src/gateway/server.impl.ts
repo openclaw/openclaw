@@ -703,22 +703,17 @@ export async function startGatewayServer(
     void cron.start().catch((err) => logCron.error(`failed to start: ${String(err)}`));
   }
 
-  // Migrate legacy file-queue entries into SQLite outbox and recover pending deliveries.
+  // Start message lifecycle workers (outbox recovery + pruning).
+  let lifecycleWorkers: import("./server-message-lifecycle.js").LifecycleWorkerHandle | undefined;
+  let lifecycleWorkersPromise: Promise<void | undefined> = Promise.resolve(undefined);
   if (!minimalTestGateway) {
-    void (async () => {
-      const { importLegacyFileQueue, recoverPendingDeliveries } =
-        await import("../infra/outbound/delivery-queue.js");
-      const { deliverOutboundPayloads } = await import("../infra/outbound/deliver.js");
-      await importLegacyFileQueue().catch((err) =>
-        log.warn(`Legacy queue import failed: ${String(err)}`),
-      );
-      const logRecovery = log.child("delivery-recovery");
-      await recoverPendingDeliveries({
-        deliver: deliverOutboundPayloads,
-        log: logRecovery,
+    lifecycleWorkersPromise = (async () => {
+      const { startMessageLifecycleWorkers } = await import("./server-message-lifecycle.js");
+      lifecycleWorkers = await startMessageLifecycleWorkers({
         cfg: cfgAtStart,
+        log: log.child("message-lifecycle"),
       });
-    })().catch((err) => log.error(`Delivery recovery failed: ${String(err)}`));
+    })().catch((err) => log.error(`Message lifecycle workers failed: ${String(err)}`));
   }
 
   const execApprovalManager = new ExecApprovalManager();
@@ -992,6 +987,8 @@ export async function startGatewayServer(
       authRateLimiter?.dispose();
       browserAuthRateLimiter.dispose();
       channelHealthMonitor?.stop();
+      await lifecycleWorkersPromise.catch(() => undefined);
+      await lifecycleWorkers?.stop();
       clearSecretsRuntimeSnapshot();
       await close(opts);
     },
