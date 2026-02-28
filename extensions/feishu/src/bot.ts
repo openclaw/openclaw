@@ -812,12 +812,15 @@ export async function handleFeishuMessage(params: {
       return;
     }
 
-    // Additional sender-level allowlist check if group has specific allowFrom config
-    const senderAllowFrom = groupConfig?.allowFrom ?? [];
-    if (senderAllowFrom.length > 0) {
+    // Sender-level allowlist: per-group allowFrom takes precedence, then global groupSenderAllowFrom
+    const perGroupSenderAllowFrom = groupConfig?.allowFrom ?? [];
+    const globalSenderAllowFrom = feishuCfg?.groupSenderAllowFrom ?? [];
+    const effectiveSenderAllowFrom =
+      perGroupSenderAllowFrom.length > 0 ? perGroupSenderAllowFrom : globalSenderAllowFrom;
+    if (effectiveSenderAllowFrom.length > 0) {
       const senderAllowed = isFeishuGroupAllowed({
         groupPolicy: "allowlist",
-        allowFrom: senderAllowFrom,
+        allowFrom: effectiveSenderAllowFrom,
         senderId: ctx.senderOpenId,
         senderIds: [senderUserId],
         senderName: ctx.senderName,
