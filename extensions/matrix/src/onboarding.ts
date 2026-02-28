@@ -5,6 +5,7 @@ import {
   formatDocsLink,
   hasConfiguredSecretInput,
   mergeAllowFromEntries,
+  normalizeNonTelegramGroupPolicy,
   promptSingleChannelSecretInput,
   normalizeNonTelegramGroupPolicy,
   promptChannelAccessConfig,

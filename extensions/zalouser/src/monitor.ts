@@ -10,6 +10,7 @@ import {
   createReplyPrefixOptions,
   resolveOutboundMediaUrls,
   mergeAllowlist,
+  normalizeNonTelegramGroupPolicy,
   resolveMentionGatingWithBypass,
   normalizeNonTelegramGroupPolicy,
   resolveOpenProviderRuntimeGroupPolicy,
