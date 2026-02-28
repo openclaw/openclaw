@@ -25,6 +25,7 @@ export function checkBrowserOrigin(params: {
   requestHost?: string;
   origin?: string;
   allowedOrigins?: string[];
+  allowHostHeaderOriginFallback?: boolean;
 }): OriginCheckResult {
   const parsedOrigin = parseOrigin(params.origin);
   if (!parsedOrigin) {
@@ -39,7 +40,11 @@ export function checkBrowserOrigin(params: {
   }
 
   const requestHost = normalizeHostHeader(params.requestHost);
-  if (requestHost && parsedOrigin.host === requestHost) {
+  if (
+    params.allowHostHeaderOriginFallback === true &&
+    requestHost &&
+    parsedOrigin.host === requestHost
+  ) {
     return { ok: true };
   }
 

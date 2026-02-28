@@ -25,6 +25,12 @@ Exec approvals are enforced locally on the execution host:
 - **gateway host** → `openclaw` process on the gateway machine
 - **node host** → node runner (macOS companion app or headless node host)
 
+Trust model note:
+
+- Gateway-authenticated callers are trusted operators for that Gateway.
+- Paired nodes extend that trusted operator capability onto the node host.
+- Exec approvals reduce accidental execution risk, but are not a per-user auth boundary.
+
 macOS split:
 
 - **node host service** forwards `system.run` to the **macOS app** over local IPC.
@@ -119,6 +125,12 @@ When **Auto-allow skill CLIs** is enabled, executables referenced by known skill
 are treated as allowlisted on nodes (macOS node or headless node host). This uses
 `skills.bins` over the Gateway RPC to fetch the skill bin list. Disable this if you want strict manual allowlists.
 
+Important trust notes:
+
+- This is an **implicit convenience allowlist**, separate from manual path allowlist entries.
+- It is intended for trusted operator environments where Gateway and node are in the same trust boundary.
+- If you require strict explicit trust, keep `autoAllowSkills: false` and use manual path allowlist entries only.
+
 ## Safe bins (stdin-only)
 
 `tools.exec.safeBins` defines a small list of **stdin-only** binaries (for example `jq`)
@@ -131,25 +143,32 @@ Custom safe bins must define an explicit profile in `tools.exec.safeBinProfiles.
 Validation is deterministic from argv shape only (no host filesystem existence checks), which
 prevents file-existence oracle behavior from allow/deny differences.
 File-oriented options are denied for default safe bins (for example `sort -o`, `sort --output`,
-`sort --files0-from`, `sort --compress-program`, `wc --files0-from`, `jq -f/--from-file`,
+`sort --files0-from`, `sort --compress-program`, `sort --random-source`,
+`sort --temporary-directory`/`-T`, `wc --files0-from`, `jq -f/--from-file`,
 `grep -f/--file`).
 Safe bins also enforce explicit per-binary flag policy for options that break stdin-only
 behavior (for example `sort -o/--output/--compress-program` and grep recursive flags).
+Long options are validated fail-closed in safe-bin mode: unknown flags and ambiguous
+abbreviations are rejected.
 Denied flags by safe-bin profile:
 
 <!-- SAFE_BIN_DENIED_FLAGS:START -->
 
 - `grep`: `--dereference-recursive`, `--directories`, `--exclude-from`, `--file`, `--recursive`, `-R`, `-d`, `-f`, `-r`
 - `jq`: `--argfile`, `--from-file`, `--library-path`, `--rawfile`, `--slurpfile`, `-L`, `-f`
-- `sort`: `--compress-program`, `--files0-from`, `--output`, `-o`
+- `sort`: `--compress-program`, `--files0-from`, `--output`, `--random-source`, `--temporary-directory`, `-T`, `-o`
 - `wc`: `--files0-from`
 <!-- SAFE_BIN_DENIED_FLAGS:END -->
 
 Safe bins also force argv tokens to be treated as **literal text** at execution time (no globbing
 and no `$VARS` expansion) for stdin-only segments, so patterns like `*` or `$HOME/...` cannot be
 used to smuggle file reads.
-Safe bins must also resolve from trusted binary directories (system defaults plus the gateway
-process `PATH` at startup). This blocks request-scoped PATH hijacking attempts.
+Safe bins must also resolve from trusted binary directories (system defaults plus optional
+`tools.exec.safeBinTrustedDirs`). `PATH` entries are never auto-trusted.
+Default trusted safe-bin directories are intentionally minimal: `/bin`, `/usr/bin`.
+If your safe-bin executable lives in package-manager/user paths (for example
+`/opt/homebrew/bin`, `/usr/local/bin`, `/opt/local/bin`, `/snap/bin`), add them explicitly
+to `tools.exec.safeBinTrustedDirs`.
 Shell chaining and redirections are not auto-allowed in allowlist mode.
 
 Shell chaining (`&&`, `||`, `;`) is allowed when every top-level segment satisfies the allowlist
@@ -161,6 +180,11 @@ On macOS companion-app approvals, raw shell text containing shell control or exp
 the shell binary itself is allowlisted.
 For shell wrappers (`bash|sh|zsh ... -c/-lc`), request-scoped env overrides are reduced to a
 small explicit allowlist (`TERM`, `LANG`, `LC_*`, `COLORTERM`, `NO_COLOR`, `FORCE_COLOR`).
+For allow-always decisions in allowlist mode, known dispatch wrappers
+(`env`, `nice`, `nohup`, `stdbuf`, `timeout`) persist inner executable paths instead of wrapper
+paths. Shell multiplexers (`busybox`, `toybox`) are also unwrapped for shell applets (`sh`, `ash`,
+etc.) so inner executables are persisted instead of multiplexer binaries. If a wrapper or
+multiplexer cannot be safely unwrapped, no allowlist entry is persisted automatically.
 
 Default safe bins: `jq`, `cut`, `uniq`, `head`, `tail`, `tr`, `wc`.
 
@@ -182,6 +206,7 @@ rejected so file operands cannot be smuggled as ambiguous positionals.
 Configuration location:
 
 - `safeBins` comes from config (`tools.exec.safeBins` or per-agent `agents.list[].tools.exec.safeBins`).
+- `safeBinTrustedDirs` comes from config (`tools.exec.safeBinTrustedDirs` or per-agent `agents.list[].tools.exec.safeBinTrustedDirs`).
 - `safeBinProfiles` comes from config (`tools.exec.safeBinProfiles` or per-agent `agents.list[].tools.exec.safeBinProfiles`). Per-agent profile keys override global keys.
 - allowlist entries live in host-local `~/.openclaw/exec-approvals.json` under `agents.<id>.allowlist` (or via Control UI / `openclaw approvals allowlist ...`).
 - `openclaw security audit` warns with `tools.exec.safe_bins_interpreter_unprofiled` when interpreter/runtime bins appear in `safeBins` without explicit profiles.

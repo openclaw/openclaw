@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import { CONFIG_PATH } from "../config/config.js";
+import type { DeviceIdentity } from "../infra/device-identity.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import type { GatewayClient } from "./client.js";
 
@@ -23,6 +24,7 @@ import { installGatewayTestHooks, onceMessage, rpcReq } from "./test-helpers.js"
 import { installConnectedControlUiServerSuite } from "./test-with-server.js";
 
 installGatewayTestHooks({ scope: "suite" });
+const FAST_WAIT_OPTS = { timeout: 1_000, interval: 2 } as const;
 
 let ws: WebSocket;
 let port: number;
@@ -35,6 +37,9 @@ installConnectedControlUiServerSuite((started) => {
 const connectNodeClient = async (params: {
   port: number;
   commands: string[];
+  platform?: string;
+  deviceFamily?: string;
+  deviceIdentity?: DeviceIdentity;
   instanceId?: string;
   displayName?: string;
   onEvent?: (evt: { event?: string; payload?: unknown }) => void;
@@ -50,11 +55,13 @@ const connectNodeClient = async (params: {
     clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
     clientVersion: "1.0.0",
     clientDisplayName: params.displayName,
-    platform: "ios",
+    platform: params.platform ?? "ios",
+    deviceFamily: params.deviceFamily,
     mode: GATEWAY_CLIENT_MODES.NODE,
     instanceId: params.instanceId,
     scopes: [],
     commands: params.commands,
+    deviceIdentity: params.deviceIdentity,
     onEvent: params.onEvent,
     timeoutMessage: "timeout waiting for node to connect",
   });
@@ -139,12 +146,9 @@ describe("gateway update.run", () => {
       const res = await onceMessage(ws, (o) => o.type === "res" && o.id === id);
       expect(res.ok).toBe(true);
 
-      await vi.waitFor(
-        () => {
-          expect(sigusr1.mock.calls.length).toBeGreaterThan(0);
-        },
-        { timeout: 2_000, interval: 10 },
-      );
+      await vi.waitFor(() => {
+        expect(sigusr1.mock.calls.length).toBeGreaterThan(0);
+      }, FAST_WAIT_OPTS);
       expect(sigusr1).toHaveBeenCalled();
 
       const sentinelPath = path.join(os.homedir(), ".openclaw", "restart-sentinel.json");
@@ -193,16 +197,13 @@ describe("gateway node command allowlist", () => {
   test("enforces command allowlists across node clients", async () => {
     const waitForConnectedCount = async (count: number) => {
       await expect
-        .poll(
-          async () => {
-            const listRes = await rpcReq<{
-              nodes?: Array<{ nodeId: string; connected?: boolean }>;
-            }>(ws, "node.list", {});
-            const nodes = listRes.payload?.nodes ?? [];
-            return nodes.filter((node) => node.connected).length;
-          },
-          { timeout: 2_000 },
-        )
+        .poll(async () => {
+          const listRes = await rpcReq<{
+            nodes?: Array<{ nodeId: string; connected?: boolean }>;
+          }>(ws, "node.list", {});
+          const nodes = listRes.payload?.nodes ?? [];
+          return nodes.filter((node) => node.connected).length;
+        }, FAST_WAIT_OPTS)
         .toBe(count);
     };
 
@@ -316,6 +317,53 @@ describe("gateway node command allowlist", () => {
       systemClient?.stop();
       emptyClient?.stop();
       allowedClient?.stop();
+    }
+  });
+
+  test("rejects reconnect metadata spoof for paired node devices", async () => {
+    const { loadOrCreateDeviceIdentity } = await import("../infra/device-identity.js");
+    const deviceIdentityPath = path.join(
+      os.tmpdir(),
+      `openclaw-spoof-test-device-${Date.now()}-${Math.random().toString(36).slice(2)}.json`,
+    );
+    const deviceIdentity = loadOrCreateDeviceIdentity(deviceIdentityPath);
+
+    let iosClient: GatewayClient | undefined;
+    try {
+      iosClient = await connectNodeClientWithPairing({
+        port,
+        commands: ["canvas.snapshot"],
+        platform: "ios",
+        deviceFamily: "iPhone",
+        instanceId: "node-platform-pin",
+        displayName: "node-platform-pin",
+        deviceIdentity,
+      });
+      iosClient.stop();
+      await expect
+        .poll(async () => {
+          const listRes = await rpcReq<{ nodes?: Array<{ connected?: boolean }> }>(
+            ws,
+            "node.list",
+            {},
+          );
+          return (listRes.payload?.nodes ?? []).filter((node) => node.connected).length;
+        }, FAST_WAIT_OPTS)
+        .toBe(0);
+
+      await expect(
+        connectNodeClient({
+          port,
+          commands: ["system.run"],
+          platform: "linux",
+          deviceFamily: "linux",
+          instanceId: "node-platform-pin",
+          displayName: "node-platform-pin",
+          deviceIdentity,
+        }),
+      ).rejects.toThrow(/pairing required/i);
+    } finally {
+      iosClient?.stop();
     }
   });
 });

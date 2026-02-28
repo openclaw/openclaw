@@ -6,6 +6,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig, writeConfigFile } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { resolveArchiveKind } from "../infra/archive.js";
+import { findBundledPluginByNpmSpec } from "../plugins/bundled-sources.js";
 import { enablePluginInConfig } from "../plugins/enable.js";
 import { installPluginFromNpmSpec, installPluginFromPath } from "../plugins/install.js";
 import { recordPluginInstall } from "../plugins/installs.js";
@@ -145,6 +146,16 @@ function logSlotWarnings(warnings: string[]) {
   for (const warning of warnings) {
     defaultRuntime.log(theme.warn(warning));
   }
+}
+
+function isPackageNotFoundInstallError(message: string): boolean {
+  const lower = message.toLowerCase();
+  return (
+    lower.includes("npm pack failed:") &&
+    (lower.includes("e404") ||
+      lower.includes("404 not found") ||
+      lower.includes("could not be found"))
+  );
 }
 
 export function registerPluginsCli(program: Command) {
@@ -614,8 +625,52 @@ export function registerPluginsCli(program: Command) {
         logger: createPluginInstallLogger(),
       });
       if (!result.ok) {
-        defaultRuntime.error(result.error);
-        process.exit(1);
+        const bundledFallback = isPackageNotFoundInstallError(result.error)
+          ? findBundledPluginByNpmSpec({ spec: raw })
+          : undefined;
+        if (!bundledFallback) {
+          defaultRuntime.error(result.error);
+          process.exit(1);
+        }
+
+        const existing = cfg.plugins?.load?.paths ?? [];
+        const mergedPaths = Array.from(new Set([...existing, bundledFallback.localPath]));
+        let next: OpenClawConfig = {
+          ...cfg,
+          plugins: {
+            ...cfg.plugins,
+            load: {
+              ...cfg.plugins?.load,
+              paths: mergedPaths,
+            },
+            entries: {
+              ...cfg.plugins?.entries,
+              [bundledFallback.pluginId]: {
+                ...(cfg.plugins?.entries?.[bundledFallback.pluginId] as object | undefined),
+                enabled: true,
+              },
+            },
+          },
+        };
+        next = recordPluginInstall(next, {
+          pluginId: bundledFallback.pluginId,
+          source: "path",
+          spec: raw,
+          sourcePath: bundledFallback.localPath,
+          installPath: bundledFallback.localPath,
+        });
+        const slotResult = applySlotSelectionForPlugin(next, bundledFallback.pluginId);
+        next = slotResult.config;
+        await writeConfigFile(next);
+        logSlotWarnings(slotResult.warnings);
+        defaultRuntime.log(
+          theme.warn(
+            `npm package unavailable for ${raw}; using bundled plugin at ${shortenHomePath(bundledFallback.localPath)}.`,
+          ),
+        );
+        defaultRuntime.log(`Installed plugin: ${bundledFallback.pluginId}`);
+        defaultRuntime.log(`Restart the gateway to load plugins.`);
+        return;
       }
       // Ensure config validation sees newly installed plugin(s) even if the cache was warmed at startup.
       clearPluginManifestRegistryCache();

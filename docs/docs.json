@@ -92,6 +92,10 @@
       "destination": "/providers/moonshot"
     },
     {
+      "source": "/mistral",
+      "destination": "/providers/mistral"
+    },
+    {
       "source": "/openrouter",
       "destination": "/providers/openrouter"
     },
@@ -133,7 +137,7 @@
     },
     {
       "source": "/providers/grammy",
-      "destination": "/channels/grammy"
+      "destination": "/channels/telegram"
     },
     {
       "source": "/providers/imessage",
@@ -361,7 +365,11 @@
     },
     {
       "source": "/grammy",
-      "destination": "/channels/grammy"
+      "destination": "/channels/telegram"
+    },
+    {
+      "source": "/channels/grammy",
+      "destination": "/channels/telegram"
     },
     {
       "source": "/group-messages",
@@ -897,6 +905,7 @@
                   "channels/imessage",
                   "channels/bluebubbles",
                   "channels/msteams",
+                  "channels/synology-chat",
                   "channels/line",
                   "channels/matrix",
                   "channels/nextcloud-talk",
@@ -997,7 +1006,12 @@
               },
               {
                 "group": "Agent coordination",
-                "pages": ["tools/agent-send", "tools/subagents", "tools/multi-agent-sandbox-tools"]
+                "pages": [
+                  "tools/agent-send",
+                  "tools/subagents",
+                  "tools/acp-agents",
+                  "tools/multi-agent-sandbox-tools"
+                ]
               },
               {
                 "group": "Skills",
@@ -1066,6 +1080,7 @@
                   "providers/bedrock",
                   "providers/vercel-ai-gateway",
                   "providers/moonshot",
+                  "providers/mistral",
                   "providers/minimax",
                   "providers/opencode",
                   "providers/glm",
@@ -1129,6 +1144,8 @@
                       "gateway/configuration-reference",
                       "gateway/configuration-examples",
                       "gateway/authentication",
+                      "gateway/secrets",
+                      "gateway/secrets-plan-contract",
                       "gateway/trusted-proxy-auth",
                       "gateway/health",
                       "gateway/heartbeat",
@@ -1224,6 +1241,7 @@
                   "cli/qr",
                   "cli/reset",
                   "cli/sandbox",
+                  "cli/secrets",
                   "cli/security",
                   "cli/sessions",
                   "cli/setup",
@@ -1257,7 +1275,7 @@
               },
               {
                 "group": "Technical reference",
-                "pages": ["reference/wizard", "reference/token-use", "channels/grammy"]
+                "pages": ["reference/wizard", "reference/token-use", "reference/prompt-caching"]
               },
               {
                 "group": "Concept internals",

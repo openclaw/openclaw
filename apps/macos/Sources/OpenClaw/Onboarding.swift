@@ -1,5 +1,4 @@
 import AppKit
-import Combine
 import Observation
 import OpenClawChatUI
 import OpenClawDiscovery
@@ -69,22 +68,6 @@ struct OnboardingView: View {
     @State var workspacePath: String = ""
     @State var workspaceStatus: String?
     @State var workspaceApplying = false
-    @State var anthropicAuthPKCE: AnthropicOAuth.PKCE?
-    @State var anthropicAuthCode: String = ""
-    @State var anthropicAuthStatus: String?
-    @State var anthropicAuthBusy = false
-    @State var anthropicAuthConnected = false
-    @State var anthropicAuthVerifying = false
-    @State var anthropicAuthVerified = false
-    @State var anthropicAuthVerificationAttempted = false
-    @State var anthropicAuthVerificationFailed = false
-    @State var anthropicAuthVerifiedAt: Date?
-    @State var anthropicAuthDetectedStatus: OpenClawOAuthStore.AnthropicOAuthStatus = .missingFile
-    @State var anthropicAuthAutoDetectClipboard = true
-    @State var anthropicAuthAutoConnectClipboard = true
-    @State var anthropicAuthLastPasteboardChangeCount = NSPasteboard.general.changeCount
-    @State var monitoringAuth = false
-    @State var authMonitorTask: Task<Void, Never>?
     @State var needsBootstrap = false
     @State var didAutoKickoff = false
     @State var showAdvancedConnection = false
@@ -104,18 +87,8 @@ struct OnboardingView: View {
     let pageWidth: CGFloat = Self.windowWidth
     let contentHeight: CGFloat = 460
     let connectionPageIndex = 1
-    let anthropicAuthPageIndex = 2
     let wizardPageIndex = 3
     let onboardingChatPageIndex = 8
-
-    static let clipboardPoll: AnyPublisher<Date, Never> = {
-        if ProcessInfo.processInfo.isRunningTests {
-            return Empty(completeImmediately: false).eraseToAnyPublisher()
-        }
-        return Timer.publish(every: 0.4, on: .main, in: .common)
-            .autoconnect()
-            .eraseToAnyPublisher()
-    }()
 
     let permissionsPageIndex = 5
     static func pageOrder(

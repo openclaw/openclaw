@@ -17,6 +17,14 @@ from pathlib import Path
 from quick_validate import validate_skill
 
 
+def _is_within(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
+
+
 def package_skill(skill_path, output_dir=None):
     """
     Package a skill folder into a .skill file.
@@ -73,18 +81,25 @@ def package_skill(skill_path, output_dir=None):
             for file_path in skill_path.rglob("*"):
                 # Security: never follow or package symlinks.
                 if file_path.is_symlink():
-                    print(f"[ERROR] Symlinks are not allowed in skills: {file_path}")
-                    print("   This is a security restriction to prevent including arbitrary files.")
-                    return None
+                    print(f"[WARN] Skipping symlink: {file_path}")
+                    continue
 
                 rel_parts = file_path.relative_to(skill_path).parts
                 if any(part in EXCLUDED_DIRS for part in rel_parts):
                     continue
 
                 if file_path.is_file():
-                    # Calculate the relative path within the zip
-                    arcname = file_path.relative_to(skill_path.parent)
+                    resolved_file = file_path.resolve()
+                    if not _is_within(resolved_file, skill_path):
+                        print(f"[ERROR] File escapes skill root: {file_path}")
+                        return None
+                    # If output lives under skill_path, avoid writing archive into itself.
+                    if resolved_file == skill_filename.resolve():
+                        print(f"[WARN] Skipping output archive: {file_path}")
+                        continue
 
+                    # Calculate the relative path within the zip.
+                    arcname = Path(skill_name) / file_path.relative_to(skill_path)
                     zipf.write(file_path, arcname)
                     print(f"  Added: {arcname}")
 

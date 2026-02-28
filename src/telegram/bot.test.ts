@@ -11,6 +11,7 @@ import {
   commandSpy,
   editMessageTextSpy,
   enqueueSystemEventSpy,
+  getFileSpy,
   getLoadConfigMock,
   getReadChannelAllowFromStoreMock,
   getOnHandler,
@@ -193,6 +194,50 @@ describe("createTelegramBot", () => {
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-2");
   });
 
+  it("allows callback_query in groups when group policy authorizes the sender", async () => {
+    onSpy.mockClear();
+    editMessageTextSpy.mockClear();
+    listSkillCommandsForAgents.mockClear();
+
+    createTelegramBot({
+      token: "tok",
+      config: {
+        channels: {
+          telegram: {
+            dmPolicy: "open",
+            capabilities: { inlineButtons: "allowlist" },
+            allowFrom: [],
+            groupPolicy: "open",
+            groups: { "*": { requireMention: false } },
+          },
+        },
+      },
+    });
+    const callbackHandler = onSpy.mock.calls.find((call) => call[0] === "callback_query")?.[1] as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+    expect(callbackHandler).toBeDefined();
+
+    await callbackHandler({
+      callbackQuery: {
+        id: "cbq-group-1",
+        data: "commands_page_2",
+        from: { id: 42, first_name: "Ada", username: "ada_bot" },
+        message: {
+          chat: { id: -100999, type: "supergroup", title: "Test Group" },
+          date: 1736380800,
+          message_id: 20,
+        },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    // The callback should be processed (not silently blocked)
+    expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
+    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-group-1");
+  });
+
   it("edits commands list for pagination callbacks", async () => {
     onSpy.mockClear();
     listSkillCommandsForAgents.mockClear();
@@ -358,6 +403,189 @@ describe("createTelegramBot", () => {
     expect(payload.ReplyToId).toBe("9001");
     expect(payload.ReplyToBody).toBe("summarize this");
     expect(payload.ReplyToSender).toBe("Ada");
+  });
+
+  it("includes replied image media in inbound context for text replies", async () => {
+    onSpy.mockClear();
+    replySpy.mockClear();
+    getFileSpy.mockClear();
+
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(
+      async () =>
+        new Response(new Uint8Array([0x89, 0x50, 0x4e, 0x47]), {
+          status: 200,
+          headers: { "content-type": "image/png" },
+        }),
+    );
+    try {
+      createTelegramBot({ token: "tok" });
+      const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+      await handler({
+        message: {
+          chat: { id: 7, type: "private" },
+          text: "what is in this image?",
+          date: 1736380800,
+          reply_to_message: {
+            message_id: 9001,
+            photo: [{ file_id: "reply-photo-1" }],
+            from: { first_name: "Ada" },
+          },
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({}),
+      });
+
+      expect(replySpy).toHaveBeenCalledTimes(1);
+      const payload = replySpy.mock.calls[0][0] as {
+        MediaPath?: string;
+        MediaPaths?: string[];
+        ReplyToBody?: string;
+      };
+      expect(payload.ReplyToBody).toBe("<media:image>");
+      expect(payload.MediaPaths).toHaveLength(1);
+      expect(payload.MediaPath).toBe(payload.MediaPaths?.[0]);
+      expect(getFileSpy).toHaveBeenCalledWith("reply-photo-1");
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
+  it("does not fetch reply media for unauthorized DM replies", async () => {
+    onSpy.mockClear();
+    replySpy.mockClear();
+    getFileSpy.mockClear();
+    sendMessageSpy.mockClear();
+    readChannelAllowFromStore.mockResolvedValue([]);
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          dmPolicy: "pairing",
+          allowFrom: [],
+        },
+      },
+    });
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+    await handler({
+      message: {
+        chat: { id: 7, type: "private" },
+        text: "hey",
+        date: 1736380800,
+        from: { id: 999, first_name: "Eve" },
+        reply_to_message: {
+          message_id: 9001,
+          photo: [{ file_id: "reply-photo-1" }],
+          from: { first_name: "Ada" },
+        },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({}),
+    });
+
+    expect(getFileSpy).not.toHaveBeenCalled();
+    expect(replySpy).not.toHaveBeenCalled();
+    expect(sendMessageSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("defers reply media download until debounce flush", async () => {
+    const DEBOUNCE_MS = 4321;
+    onSpy.mockClear();
+    replySpy.mockClear();
+    getFileSpy.mockClear();
+    loadConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          envelopeTimezone: "utc",
+        },
+      },
+      messages: {
+        inbound: {
+          debounceMs: DEBOUNCE_MS,
+        },
+      },
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+        },
+      },
+    });
+
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(
+      async () =>
+        new Response(new Uint8Array([0x89, 0x50, 0x4e, 0x47]), {
+          status: 200,
+          headers: { "content-type": "image/png" },
+        }),
+    );
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    try {
+      createTelegramBot({ token: "tok" });
+      const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+      await handler({
+        message: {
+          chat: { id: 7, type: "private" },
+          text: "first",
+          date: 1736380800,
+          message_id: 101,
+          from: { id: 42, first_name: "Ada" },
+          reply_to_message: {
+            message_id: 9001,
+            photo: [{ file_id: "reply-photo-1" }],
+            from: { first_name: "Ada" },
+          },
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({}),
+      });
+      await handler({
+        message: {
+          chat: { id: 7, type: "private" },
+          text: "second",
+          date: 1736380801,
+          message_id: 102,
+          from: { id: 42, first_name: "Ada" },
+          reply_to_message: {
+            message_id: 9001,
+            photo: [{ file_id: "reply-photo-1" }],
+            from: { first_name: "Ada" },
+          },
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({}),
+      });
+
+      expect(replySpy).not.toHaveBeenCalled();
+      expect(getFileSpy).not.toHaveBeenCalled();
+
+      const flushTimerCallIndex = setTimeoutSpy.mock.calls.findLastIndex(
+        (call) => call[1] === DEBOUNCE_MS,
+      );
+      const flushTimer =
+        flushTimerCallIndex >= 0
+          ? (setTimeoutSpy.mock.calls[flushTimerCallIndex]?.[0] as (() => unknown) | undefined)
+          : undefined;
+      if (flushTimerCallIndex >= 0) {
+        clearTimeout(
+          setTimeoutSpy.mock.results[flushTimerCallIndex]?.value as ReturnType<typeof setTimeout>,
+        );
+      }
+      expect(flushTimer).toBeTypeOf("function");
+      await flushTimer?.();
+      await vi.waitFor(() => {
+        expect(replySpy).toHaveBeenCalledTimes(1);
+      });
+
+      expect(getFileSpy).toHaveBeenCalledTimes(1);
+      expect(getFileSpy).toHaveBeenCalledWith("reply-photo-1");
+    } finally {
+      setTimeoutSpy.mockRestore();
+      fetchSpy.mockRestore();
+    }
   });
 
   it("handles quote-only replies without reply metadata", async () => {
@@ -830,6 +1058,95 @@ describe("createTelegramBot", () => {
         contextKey: expect.stringContaining("telegram:reaction:add:1234:42:9"),
       }),
     );
+  });
+
+  it.each([
+    {
+      name: "blocks reaction when dmPolicy is disabled",
+      updateId: 510,
+      channelConfig: { dmPolicy: "disabled", reactionNotifications: "all" },
+      reaction: {
+        chat: { id: 1234, type: "private" },
+        message_id: 42,
+        user: { id: 9, first_name: "Ada" },
+        date: 1736380800,
+        old_reaction: [],
+        new_reaction: [{ type: "emoji", emoji: "👍" }],
+      },
+      expectedEnqueueCalls: 0,
+    },
+    {
+      name: "blocks reaction in allowlist mode for unauthorized direct sender",
+      updateId: 511,
+      channelConfig: {
+        dmPolicy: "allowlist",
+        allowFrom: ["12345"],
+        reactionNotifications: "all",
+      },
+      reaction: {
+        chat: { id: 1234, type: "private" },
+        message_id: 42,
+        user: { id: 9, first_name: "Ada" },
+        date: 1736380800,
+        old_reaction: [],
+        new_reaction: [{ type: "emoji", emoji: "👍" }],
+      },
+      expectedEnqueueCalls: 0,
+    },
+    {
+      name: "allows reaction in allowlist mode for authorized direct sender",
+      updateId: 512,
+      channelConfig: { dmPolicy: "allowlist", allowFrom: ["9"], reactionNotifications: "all" },
+      reaction: {
+        chat: { id: 1234, type: "private" },
+        message_id: 42,
+        user: { id: 9, first_name: "Ada" },
+        date: 1736380800,
+        old_reaction: [],
+        new_reaction: [{ type: "emoji", emoji: "👍" }],
+      },
+      expectedEnqueueCalls: 1,
+    },
+    {
+      name: "blocks reaction in group allowlist mode for unauthorized sender",
+      updateId: 513,
+      channelConfig: {
+        dmPolicy: "open",
+        groupPolicy: "allowlist",
+        groupAllowFrom: ["12345"],
+        reactionNotifications: "all",
+      },
+      reaction: {
+        chat: { id: 9999, type: "supergroup" },
+        message_id: 77,
+        user: { id: 9, first_name: "Ada" },
+        date: 1736380800,
+        old_reaction: [],
+        new_reaction: [{ type: "emoji", emoji: "🔥" }],
+      },
+      expectedEnqueueCalls: 0,
+    },
+  ])("$name", async ({ updateId, channelConfig, reaction, expectedEnqueueCalls }) => {
+    onSpy.mockClear();
+    enqueueSystemEventSpy.mockClear();
+
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: channelConfig,
+      },
+    });
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message_reaction") as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+
+    await handler({
+      update: { update_id: updateId },
+      messageReaction: reaction,
+    });
+
+    expect(enqueueSystemEventSpy).toHaveBeenCalledTimes(expectedEnqueueCalls);
   });
 
   it("skips reaction when reactionNotifications is off", async () => {

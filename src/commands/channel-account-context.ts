@@ -4,7 +4,7 @@ import type { OpenClawConfig } from "../config/config.js";
 
 export type ChannelDefaultAccountContext = {
   accountIds: string[];
-  defaultAccountId?: string;
+  defaultAccountId: string;
   account: unknown;
   enabled: boolean;
   configured: boolean;

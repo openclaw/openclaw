@@ -1,33 +1,11 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+  loadConfigMock as loadConfig,
+  pickPrimaryLanIPv4Mock as pickPrimaryLanIPv4,
+  pickPrimaryTailnetIPv4Mock as pickPrimaryTailnetIPv4,
+  resolveGatewayPortMock as resolveGatewayPort,
+} from "../gateway/gateway-connection.test-mocks.js";
 import { captureEnv, withEnv } from "../test-utils/env.js";
-
-const loadConfig = vi.fn();
-const resolveGatewayPort = vi.fn();
-const pickPrimaryTailnetIPv4 = vi.fn();
-const pickPrimaryLanIPv4 = vi.fn();
-
-vi.mock("../config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/config.js")>();
-  return {
-    ...actual,
-    loadConfig,
-    resolveGatewayPort,
-  };
-});
-
-vi.mock("../infra/tailnet.js", () => ({
-  pickPrimaryTailnetIPv4,
-}));
-
-vi.mock("../gateway/net.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../gateway/net.js")>();
-  return {
-    ...actual,
-    pickPrimaryLanIPv4,
-    // Allow all URLs in tests - security validation is tested separately
-    isSecureWebSocketUrl: () => true,
-  };
-});
 
 const { resolveGatewayConnection } = await import("./gateway-chat.js");
 

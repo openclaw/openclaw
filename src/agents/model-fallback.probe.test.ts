@@ -8,6 +8,7 @@ vi.mock("./auth-profiles.js", () => ({
   ensureAuthProfileStore: vi.fn(),
   getSoonestCooldownExpiry: vi.fn(),
   isProfileInCooldown: vi.fn(),
+  resolveProfilesUnavailableReason: vi.fn(),
   resolveAuthProfileOrder: vi.fn(),
 }));
 
@@ -15,6 +16,7 @@ import {
   ensureAuthProfileStore,
   getSoonestCooldownExpiry,
   isProfileInCooldown,
+  resolveProfilesUnavailableReason,
   resolveAuthProfileOrder,
 } from "./auth-profiles.js";
 import { _probeThrottleInternals, runWithModelFallback } from "./model-fallback.js";
@@ -22,6 +24,7 @@ import { _probeThrottleInternals, runWithModelFallback } from "./model-fallback.
 const mockedEnsureAuthProfileStore = vi.mocked(ensureAuthProfileStore);
 const mockedGetSoonestCooldownExpiry = vi.mocked(getSoonestCooldownExpiry);
 const mockedIsProfileInCooldown = vi.mocked(isProfileInCooldown);
+const mockedResolveProfilesUnavailableReason = vi.mocked(resolveProfilesUnavailableReason);
 const mockedResolveAuthProfileOrder = vi.mocked(resolveAuthProfileOrder);
 
 const makeCfg = makeModelFallbackCfg;
@@ -98,6 +101,7 @@ describe("runWithModelFallback – probe logic", () => {
     mockedIsProfileInCooldown.mockImplementation((_store, profileId: string) => {
       return profileId.startsWith("openai");
     });
+    mockedResolveProfilesUnavailableReason.mockReturnValue("rate_limit");
   });
 
   afterEach(() => {
@@ -117,6 +121,22 @@ describe("runWithModelFallback – probe logic", () => {
 
     // Should skip primary and use fallback
     expectFallbackUsed(result, run);
+  });
+
+  it("uses inferred unavailable reason when skipping a cooldowned primary model", async () => {
+    const cfg = makeCfg();
+    const expiresIn30Min = NOW + 30 * 60 * 1000;
+    mockedGetSoonestCooldownExpiry.mockReturnValue(expiresIn30Min);
+    mockedResolveProfilesUnavailableReason.mockReturnValue("billing");
+
+    const run = vi.fn().mockResolvedValue("ok");
+
+    const result = await runPrimaryCandidate(cfg, run);
+
+    expect(result.result).toBe("ok");
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(run).toHaveBeenCalledWith("anthropic", "claude-haiku-3-5");
+    expect(result.attempts[0]?.reason).toBe("billing");
   });
 
   it("probes primary model when within 2-min margin of cooldown expiry", async () => {
@@ -143,7 +163,7 @@ describe("runWithModelFallback – probe logic", () => {
     expectPrimaryProbeSuccess(result, run, "recovered");
   });
 
-  it("does NOT probe non-primary candidates during cooldown", async () => {
+  it("attempts non-primary fallbacks during rate-limit cooldown after primary probe failure", async () => {
     const cfg = makeCfg({
       agents: {
         defaults: {
@@ -162,25 +182,23 @@ describe("runWithModelFallback – probe logic", () => {
     const almostExpired = NOW + 30 * 1000; // 30s remaining
     mockedGetSoonestCooldownExpiry.mockReturnValue(almostExpired);
 
-    // Primary probe fails with 429
+    // Primary probe fails with 429; fallback should still be attempted for rate_limit cooldowns.
     const run = vi
       .fn()
       .mockRejectedValueOnce(Object.assign(new Error("rate limited"), { status: 429 }))
-      .mockResolvedValue("should-not-reach");
+      .mockResolvedValue("fallback-ok");
 
-    try {
-      await runWithModelFallback({
-        cfg,
-        provider: "openai",
-        model: "gpt-4.1-mini",
-        run,
-      });
-      expect.unreachable("should have thrown since all candidates exhausted");
-    } catch {
-      // Primary was probed (i === 0 + within margin), non-primary were skipped
-      expect(run).toHaveBeenCalledTimes(1); // only primary was actually called
-      expect(run).toHaveBeenCalledWith("openai", "gpt-4.1-mini");
-    }
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      run,
+    });
+
+    expect(result.result).toBe("fallback-ok");
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(run).toHaveBeenNthCalledWith(1, "openai", "gpt-4.1-mini");
+    expect(run).toHaveBeenNthCalledWith(2, "anthropic", "claude-haiku-3-5");
   });
 
   it("throttles probe when called within 30s interval", async () => {

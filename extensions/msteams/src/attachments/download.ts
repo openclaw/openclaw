@@ -1,3 +1,4 @@
+import { fetchWithBearerAuthScopeFallback } from "openclaw/plugin-sdk";
 import { getMSTeamsRuntime } from "../runtime.js";
 import { downloadAndStoreMSTeamsRemoteMedia } from "./remote-media.js";
 import {
@@ -7,6 +8,7 @@ import {
   isRecord,
   isUrlAllowed,
   normalizeContentType,
+  resolveMediaSsrfPolicy,
   resolveRequestUrl,
   resolveAuthAllowedHosts,
   resolveAllowedHosts,
@@ -89,81 +91,17 @@ async function fetchWithAuthFallback(params: {
   tokenProvider?: MSTeamsAccessTokenProvider;
   fetchFn?: typeof fetch;
   requestInit?: RequestInit;
-  allowHosts: string[];
   authAllowHosts: string[];
 }): Promise<Response> {
-  const fetchFn = params.fetchFn ?? fetch;
-  const firstAttempt = await fetchFn(params.url, params.requestInit);
-  if (firstAttempt.ok) {
-    return firstAttempt;
-  }
-  if (!params.tokenProvider) {
-    return firstAttempt;
-  }
-  if (firstAttempt.status !== 401 && firstAttempt.status !== 403) {
-    return firstAttempt;
-  }
-  if (!isUrlAllowed(params.url, params.authAllowHosts)) {
-    return firstAttempt;
-  }
-
-  const scopes = scopeCandidatesForUrl(params.url);
-  for (const scope of scopes) {
-    try {
-      const token = await params.tokenProvider.getAccessToken(scope);
-      const authHeaders = new Headers(params.requestInit?.headers);
-      authHeaders.set("Authorization", `Bearer ${token}`);
-      const res = await fetchFn(params.url, {
-        ...params.requestInit,
-        headers: authHeaders,
-        redirect: "manual",
-      });
-      if (res.ok) {
-        return res;
-      }
-      const redirectUrl = readRedirectUrl(params.url, res);
-      if (redirectUrl && isUrlAllowed(redirectUrl, params.allowHosts)) {
-        const redirectRes = await fetchFn(redirectUrl, params.requestInit);
-        if (redirectRes.ok) {
-          return redirectRes;
-        }
-        if (
-          (redirectRes.status === 401 || redirectRes.status === 403) &&
-          isUrlAllowed(redirectUrl, params.authAllowHosts)
-        ) {
-          const redirectAuthHeaders = new Headers(params.requestInit?.headers);
-          redirectAuthHeaders.set("Authorization", `Bearer ${token}`);
-          const redirectAuthRes = await fetchFn(redirectUrl, {
-            ...params.requestInit,
-            headers: redirectAuthHeaders,
-            redirect: "manual",
-          });
-          if (redirectAuthRes.ok) {
-            return redirectAuthRes;
-          }
-        }
-      }
-    } catch {
-      // Try the next scope.
-    }
-  }
-
-  return firstAttempt;
-}
-
-function readRedirectUrl(baseUrl: string, res: Response): string | null {
-  if (![301, 302, 303, 307, 308].includes(res.status)) {
-    return null;
-  }
-  const location = res.headers.get("location");
-  if (!location) {
-    return null;
-  }
-  try {
-    return new URL(location, baseUrl).toString();
-  } catch {
-    return null;
-  }
+  return await fetchWithBearerAuthScopeFallback({
+    url: params.url,
+    scopes: scopeCandidatesForUrl(params.url),
+    tokenProvider: params.tokenProvider,
+    fetchFn: params.fetchFn,
+    requestInit: params.requestInit,
+    requireHttps: true,
+    shouldAttachAuth: (url) => isUrlAllowed(url, params.authAllowHosts),
+  });
 }
 
 /**
@@ -186,6 +124,7 @@ export async function downloadMSTeamsAttachments(params: {
   }
   const allowHosts = resolveAllowedHosts(params.allowHosts);
   const authAllowHosts = resolveAuthAllowedHosts(params.authAllowHosts);
+  const ssrfPolicy = resolveMediaSsrfPolicy(allowHosts);
 
   // Download ANY downloadable attachment (not just images)
   const downloadable = list.filter(isDownloadableAttachment);
@@ -254,13 +193,13 @@ export async function downloadMSTeamsAttachments(params: {
         contentTypeHint: candidate.contentTypeHint,
         placeholder: candidate.placeholder,
         preserveFilenames: params.preserveFilenames,
+        ssrfPolicy,
         fetchImpl: (input, init) =>
           fetchWithAuthFallback({
             url: resolveRequestUrl(input),
             tokenProvider: params.tokenProvider,
             fetchFn: params.fetchFn,
             requestInit: init,
-            allowHosts,
             authAllowHosts,
           }),
       });

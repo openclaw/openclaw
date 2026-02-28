@@ -2,9 +2,42 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { appendCronRunLog, readCronRunLogEntries, resolveCronRunLogPath } from "./run-log.js";
+import {
+  appendCronRunLog,
+  DEFAULT_CRON_RUN_LOG_KEEP_LINES,
+  DEFAULT_CRON_RUN_LOG_MAX_BYTES,
+  getPendingCronRunLogWriteCountForTests,
+  readCronRunLogEntries,
+  resolveCronRunLogPruneOptions,
+  resolveCronRunLogPath,
+} from "./run-log.js";
 
 describe("cron run log", () => {
+  it("resolves prune options from config with defaults", () => {
+    expect(resolveCronRunLogPruneOptions()).toEqual({
+      maxBytes: DEFAULT_CRON_RUN_LOG_MAX_BYTES,
+      keepLines: DEFAULT_CRON_RUN_LOG_KEEP_LINES,
+    });
+    expect(
+      resolveCronRunLogPruneOptions({
+        maxBytes: "5mb",
+        keepLines: 123,
+      }),
+    ).toEqual({
+      maxBytes: 5 * 1024 * 1024,
+      keepLines: 123,
+    });
+    expect(
+      resolveCronRunLogPruneOptions({
+        maxBytes: "invalid",
+        keepLines: -1,
+      }),
+    ).toEqual({
+      maxBytes: DEFAULT_CRON_RUN_LOG_MAX_BYTES,
+      keepLines: DEFAULT_CRON_RUN_LOG_KEEP_LINES,
+    });
+  });
+
   async function withRunLogDir(prefix: string, run: (dir: string) => Promise<void>) {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
     try {
@@ -18,6 +51,19 @@ describe("cron run log", () => {
     const storePath = path.join(os.tmpdir(), "cron", "jobs.json");
     const p = resolveCronRunLogPath({ storePath, jobId: "job-1" });
     expect(p.endsWith(path.join(os.tmpdir(), "cron", "runs", "job-1.jsonl"))).toBe(true);
+  });
+
+  it("rejects unsafe job ids when resolving run log path", () => {
+    const storePath = path.join(os.tmpdir(), "cron", "jobs.json");
+    expect(() => resolveCronRunLogPath({ storePath, jobId: "../job-1" })).toThrow(
+      /invalid cron run log job id/i,
+    );
+    expect(() => resolveCronRunLogPath({ storePath, jobId: "nested/job-1" })).toThrow(
+      /invalid cron run log job id/i,
+    );
+    expect(() => resolveCronRunLogPath({ storePath, jobId: "..\\job-1" })).toThrow(
+      /invalid cron run log job id/i,
+    );
   });
 
   it("appends JSONL and prunes by line count", async () => {
@@ -183,6 +229,20 @@ describe("cron run log", () => {
       expect(entries[1]?.model).toBeUndefined();
       expect(entries[1]?.provider).toBeUndefined();
       expect(entries[1]?.usage?.input_tokens).toBeUndefined();
+    });
+  });
+
+  it("cleans up pending-write bookkeeping after appends complete", async () => {
+    await withRunLogDir("openclaw-cron-log-pending-", async (dir) => {
+      const logPath = path.join(dir, "runs", "job-cleanup.jsonl");
+      await appendCronRunLog(logPath, {
+        ts: 1,
+        jobId: "job-cleanup",
+        action: "finished",
+        status: "ok",
+      });
+
+      expect(getPendingCronRunLogWriteCountForTests()).toBe(0);
     });
   });
 });

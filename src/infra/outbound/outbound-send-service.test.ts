@@ -8,17 +8,16 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../channels/plugins/message-actions.js", () => ({
-  dispatchChannelMessageAction: (...args: unknown[]) => mocks.dispatchChannelMessageAction(...args),
+  dispatchChannelMessageAction: mocks.dispatchChannelMessageAction,
 }));
 
 vi.mock("./message.js", () => ({
-  sendMessage: (...args: unknown[]) => mocks.sendMessage(...args),
-  sendPoll: (...args: unknown[]) => mocks.sendPoll(...args),
+  sendMessage: mocks.sendMessage,
+  sendPoll: mocks.sendPoll,
 }));
 
 vi.mock("../../media/local-roots.js", () => ({
-  getAgentScopedMediaLocalRoots: (...args: unknown[]) =>
-    mocks.getAgentScopedMediaLocalRoots(...args),
+  getAgentScopedMediaLocalRoots: mocks.getAgentScopedMediaLocalRoots,
 }));
 
 import { executePollAction, executeSendAction } from "./outbound-send-service.js";

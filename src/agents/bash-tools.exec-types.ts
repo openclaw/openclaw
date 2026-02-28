@@ -9,6 +9,7 @@ export type ExecToolDefaults = {
   node?: string;
   pathPrepend?: string[];
   safeBins?: string[];
+  safeBinTrustedDirs?: string[];
   safeBinProfiles?: Record<string, SafeBinProfileFixture>;
   agentId?: string;
   backgroundMs?: number;
@@ -20,6 +21,9 @@ export type ExecToolDefaults = {
   scopeKey?: string;
   sessionKey?: string;
   messageProvider?: string;
+  currentChannelId?: string;
+  currentThreadTs?: string;
+  accountId?: string;
   notifyOnExit?: boolean;
   notifyOnExitEmptySuccess?: boolean;
   cwd?: string;
