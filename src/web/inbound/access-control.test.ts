@@ -160,7 +160,7 @@ describe("WhatsApp dmPolicy precedence", () => {
 });
 
 describe("suppressOutbound blocks pairing replies", () => {
-  it("does not send pairing reply when suppressOutbound is true", async () => {
+  it("creates pairing request but blocks reply when suppressOutbound is true", async () => {
     setAccessControlTestConfig({
       channels: {
         whatsapp: {
@@ -184,10 +184,11 @@ describe("suppressOutbound blocks pairing replies", () => {
     });
 
     expect(result.allowed).toBe(false);
+    expect(upsertPairingRequestMock).toHaveBeenCalled();
     expect(sendMessageMock).not.toHaveBeenCalled();
   });
 
-  it("sends pairing reply when suppressOutbound is false", async () => {
+  it("creates pairing request and sends reply when suppressOutbound is false", async () => {
     setAccessControlTestConfig({
       channels: {
         whatsapp: {
@@ -211,6 +212,7 @@ describe("suppressOutbound blocks pairing replies", () => {
     });
 
     expect(result.allowed).toBe(false);
+    expect(upsertPairingRequestMock).toHaveBeenCalled();
     expect(sendMessageMock).toHaveBeenCalled();
   });
 });

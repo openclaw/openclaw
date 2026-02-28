@@ -169,17 +169,8 @@ export async function checkInboundAccessControl(params: {
     }
     if (access.decision === "pairing" && !isSamePhone) {
       const candidate = params.from;
-      const outboundSuppressed = isOutboundSuppressed({
-        cfg,
-        channel: "whatsapp",
-        accountId: account.accountId,
-      });
-      if (suppressPairingReply || outboundSuppressed) {
-        logVerbose(
-          outboundSuppressed
-            ? `[suppressOutbound] Blocked pairing reply for ${candidate}.`
-            : `Skipping pairing reply for historical DM from ${candidate}.`,
-        );
+      if (suppressPairingReply) {
+        logVerbose(`Skipping pairing reply for historical DM from ${candidate}.`);
       } else {
         const { code, created } = await upsertChannelPairingRequest({
           channel: "whatsapp",
@@ -191,16 +182,25 @@ export async function checkInboundAccessControl(params: {
           logVerbose(
             `whatsapp pairing request sender=${candidate} name=${params.pushName ?? "unknown"}`,
           );
-          try {
-            await params.sock.sendMessage(params.remoteJid, {
-              text: buildPairingReply({
-                channel: "whatsapp",
-                idLine: `Your WhatsApp phone number: ${candidate}`,
-                code,
-              }),
-            });
-          } catch (err) {
-            logVerbose(`whatsapp pairing reply failed for ${candidate}: ${String(err)}`);
+          const outboundSuppressed = isOutboundSuppressed({
+            cfg,
+            channel: "whatsapp",
+            accountId: account.accountId,
+          });
+          if (outboundSuppressed) {
+            logVerbose(`[suppressOutbound] Blocked pairing reply for ${candidate}.`);
+          } else {
+            try {
+              await params.sock.sendMessage(params.remoteJid, {
+                text: buildPairingReply({
+                  channel: "whatsapp",
+                  idLine: `Your WhatsApp phone number: ${candidate}`,
+                  code,
+                }),
+              });
+            } catch (err) {
+              logVerbose(`whatsapp pairing reply failed for ${candidate}: ${String(err)}`);
+            }
           }
         }
       }
