@@ -431,6 +431,7 @@ export async function startServerWithClient(
     `ws://127.0.0.1:${port}`,
     wsHeaders ? { headers: wsHeaders } : undefined,
   );
+  trackConnectChallengeNonce(ws);
   await new Promise<void>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error("timeout waiting for ws open")), 10_000);
     const cleanup = () => {
@@ -498,6 +499,28 @@ export async function connectReq(
     } | null;
   },
 ): Promise<ConnectResponse> {
+  // Ensure challenge nonce tracking is active before we need it.
+  trackConnectChallengeNonce(ws);
+
+  // Wait briefly for the challenge nonce to arrive (server sends it on open).
+  if (!getTrackedConnectChallengeNonce(ws)) {
+    await new Promise<void>((resolve) => {
+      const check = () => {
+        if (getTrackedConnectChallengeNonce(ws)) {
+          clearTimeout(timer);
+          resolve();
+        }
+      };
+      const timer = setTimeout(() => {
+        ws.off("message", check);
+        resolve(); // proceed without nonce — tests that don't need device auth
+      }, 500);
+      ws.on("message", check);
+      // Check immediately in case it already arrived.
+      check();
+    });
+  }
+
   const { randomUUID } = await import("node:crypto");
   const id = randomUUID();
   const client = opts?.client ?? {
@@ -535,7 +558,7 @@ export async function connectReq(
     }
     const identity = loadOrCreateDeviceIdentity();
     const signedAtMs = Date.now();
-    const nonce = opts?.device?.nonce ?? "";
+    const nonce = getTrackedConnectChallengeNonce(ws) ?? "";
     const payload = buildDeviceAuthPayload({
       deviceId: identity.deviceId,
       clientId: client.id,
@@ -551,7 +574,7 @@ export async function connectReq(
       publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
       signature: signDevicePayload(identity.privateKeyPem, payload),
       signedAt: signedAtMs,
-      nonce: opts?.device?.nonce,
+      nonce: nonce || undefined,
     };
   })();
   ws.send(
