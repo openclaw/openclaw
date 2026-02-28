@@ -2,6 +2,11 @@ import { Type } from "@sinclair/typebox";
 import { normalizeGroupActivation } from "../../auto-reply/group-activation.js";
 import { getFollowupQueueDepth, resolveQueueSettings } from "../../auto-reply/reply/queue.js";
 import { buildStatusMessage } from "../../auto-reply/status.js";
+import {
+  formatThinkingLevels,
+  normalizeThinkLevel,
+  supportsXHighThinking,
+} from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
 import {
@@ -45,6 +50,7 @@ import {
 const SessionStatusToolSchema = Type.Object({
   sessionKey: Type.Optional(Type.String()),
   model: Type.Optional(Type.String()),
+  thinking: Type.Optional(Type.String()),
 });
 
 function resolveSessionEntry(params: {
@@ -180,7 +186,7 @@ export function createSessionStatusTool(opts?: {
     label: "Session Status",
     name: "session_status",
     description:
-      "Show a /status-equivalent session status card (usage + time + cost when available). Use for model-use questions (📊 session_status). Optional: set per-session model override (model=default resets overrides).",
+      "Show a /status-equivalent session status card (usage + time + cost when available). Use for model-use questions (📊 session_status). Optional: set per-session model override (model=default resets overrides) and thinking level override (thinking=default resets).",
     parameters: SessionStatusToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -261,6 +267,8 @@ export function createSessionStatusTool(opts?: {
       const configured = resolveDefaultModelForAgent({ cfg, agentId });
       const modelRaw = readStringParam(params, "model");
       let changedModel = false;
+      const thinkingRaw = readStringParam(params, "thinking");
+      let changedThinking = false;
       if (typeof modelRaw === "string") {
         const selection = await resolveModelOverride({
           cfg,
@@ -291,6 +299,47 @@ export function createSessionStatusTool(opts?: {
           });
           resolved.entry = nextEntry;
           changedModel = true;
+        }
+      }
+
+      if (typeof thinkingRaw === "string") {
+        const raw = thinkingRaw.trim();
+        const nextEntry: SessionEntry = { ...resolved.entry };
+        if (!raw || raw.toLowerCase() === "default") {
+          if (nextEntry.thinkingLevel !== undefined) {
+            nextEntry.thinkingLevel = undefined;
+            store[resolved.key] = nextEntry;
+            await updateSessionStore(storePath, (nextStore) => {
+              nextStore[resolved.key] = nextEntry;
+            });
+            resolved.entry = nextEntry;
+            changedThinking = true;
+          }
+        } else {
+          const normalized = normalizeThinkLevel(raw);
+          if (!normalized) {
+            const provider = nextEntry.providerOverride?.trim() || configured.provider;
+            const model = nextEntry.modelOverride?.trim() || configured.model;
+            throw new Error(
+              `Unrecognized thinking level "${raw}". Allowed: ${formatThinkingLevels(provider, model)} (or "default").`,
+            );
+          }
+          const provider = nextEntry.providerOverride?.trim() || configured.provider;
+          const model = nextEntry.modelOverride?.trim() || configured.model;
+          if (normalized === "xhigh" && !supportsXHighThinking(provider, model)) {
+            throw new Error(
+              `Thinking level "xhigh" is not supported for ${provider}/${model}. Allowed: ${formatThinkingLevels(provider, model)}.`,
+            );
+          }
+          if (nextEntry.thinkingLevel !== normalized) {
+            nextEntry.thinkingLevel = normalized;
+            store[resolved.key] = nextEntry;
+            await updateSessionStore(storePath, (nextStore) => {
+              nextStore[resolved.key] = nextEntry;
+            });
+            resolved.entry = nextEntry;
+            changedThinking = true;
+          }
         }
       }
 
@@ -390,6 +439,7 @@ export function createSessionStatusTool(opts?: {
           ok: true,
           sessionKey: resolved.key,
           changedModel,
+          changedThinking,
           statusText,
         },
       };

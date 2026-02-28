@@ -1,6 +1,10 @@
 import fs from "node:fs";
 import { openBoundaryFile } from "../../infra/boundary-file-read.js";
-import { PATH_ALIAS_POLICIES, type PathAliasPolicy } from "../../infra/path-alias-guards.js";
+import {
+  PATH_ALIAS_POLICIES,
+  assertNoPathAliasEscape,
+  type PathAliasPolicy,
+} from "../../infra/path-alias-guards.js";
 import { execDockerRaw, type ExecDockerRawResult } from "./docker.js";
 import {
   buildSandboxFsMounts,
@@ -253,22 +257,31 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
       );
     }
 
-    const guarded = await openBoundaryFile({
-      absolutePath: target.hostPath,
-      rootPath: lexicalMount.hostRoot,
-      boundaryLabel: "sandbox mount root",
-      aliasPolicy: options.aliasPolicy,
-    });
-    if (!guarded.ok) {
-      if (guarded.reason !== "path" || options.allowMissingTarget === false) {
-        throw guarded.error instanceof Error
-          ? guarded.error
-          : new Error(
-              `Sandbox boundary checks failed; cannot ${options.action}: ${target.containerPath}`,
-            );
+    if (options.action === "read files") {
+      const guarded = await openBoundaryFile({
+        absolutePath: target.hostPath,
+        rootPath: lexicalMount.hostRoot,
+        boundaryLabel: "sandbox mount root",
+        aliasPolicy: options.aliasPolicy,
+      });
+      if (!guarded.ok) {
+        if (guarded.reason !== "path" || options.allowMissingTarget === false) {
+          throw guarded.error instanceof Error
+            ? guarded.error
+            : new Error(
+                `Sandbox boundary checks failed; cannot ${options.action}: ${target.containerPath}`,
+              );
+        }
+      } else {
+        fs.closeSync(guarded.fd);
       }
     } else {
-      fs.closeSync(guarded.fd);
+      await assertNoPathAliasEscape({
+        absolutePath: target.hostPath,
+        rootPath: lexicalMount.hostRoot,
+        boundaryLabel: "sandbox mount root",
+        policy: options.aliasPolicy,
+      });
     }
 
     const canonicalContainerPath = await this.resolveCanonicalContainerPath({

@@ -213,6 +213,47 @@ describe("session_status tool", () => {
     expect(details.sessionKey).toBe("main");
   });
 
+  it("sets per-session thinking override", async () => {
+    resetSessionStore({
+      main: {
+        sessionId: "s1",
+        updatedAt: 10,
+      },
+    });
+
+    const tool = getSessionStatusTool();
+
+    await tool.execute("call-think-1", { thinking: "high" });
+    expect(updateSessionStoreMock).toHaveBeenCalled();
+    const [, savedStore] = updateSessionStoreMock.mock.calls.at(-1) as [
+      string,
+      Record<string, unknown>,
+    ];
+    const saved = savedStore.main as Record<string, unknown>;
+    expect(saved.thinkingLevel).toBe("high");
+  });
+
+  it("resets per-session thinking override via thinking=default", async () => {
+    resetSessionStore({
+      main: {
+        sessionId: "s1",
+        updatedAt: 10,
+        thinkingLevel: "low",
+      },
+    });
+
+    const tool = getSessionStatusTool();
+
+    await tool.execute("call-think-2", { thinking: "default" });
+    expect(updateSessionStoreMock).toHaveBeenCalled();
+    const [, savedStore] = updateSessionStoreMock.mock.calls.at(-1) as [
+      string,
+      Record<string, unknown>,
+    ];
+    const saved = savedStore.main as Record<string, unknown>;
+    expect(saved.thinkingLevel).toBeUndefined();
+  });
+
   it("resets per-session model override via model=default", async () => {
     resetSessionStore({
       main: {

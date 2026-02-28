@@ -46,6 +46,7 @@ import { normalizeConfigPaths } from "./normalize-paths.js";
 import { resolveConfigPath, resolveDefaultConfigCandidates, resolveStateDir } from "./paths.js";
 import { isBlockedObjectKey } from "./prototype-keys.js";
 import { applyConfigOverrides } from "./runtime-overrides.js";
+import { stripInvalidRuntimeKeys } from "./sanitize-invalid-keys.js";
 import type { OpenClawConfig, ConfigFileSnapshot, LegacyConfigIssue } from "./types.js";
 import {
   validateConfigObjectRawWithPlugins,
@@ -704,6 +705,13 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       if (typeof resolvedConfig !== "object" || resolvedConfig === null) {
         return {};
       }
+      // Strip known-invalid runtime keys that older versions may have written
+      // to the config file (issue #29780). This prevents crash loops when the
+      // strict schema rejects keys like groupAllowFrom on Discord accounts.
+      const { stripped: strippedLoadKeys } = stripInvalidRuntimeKeys(resolvedConfig);
+      if (strippedLoadKeys.length > 0) {
+        deps.logger.warn(`Stripped invalid config keys: ${strippedLoadKeys.join(", ")}`);
+      }
       const preValidationDuplicates = findDuplicateAgentDirs(resolvedConfig as OpenClawConfig, {
         env: deps.env,
         homedir: deps.homedir,
@@ -925,6 +933,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       }
 
       const resolvedConfigRaw = readResolution.resolvedConfigRaw;
+      stripInvalidRuntimeKeys(resolvedConfigRaw);
       const legacyIssues = findLegacyConfigIssues(resolvedConfigRaw);
 
       const validated = validateConfigObjectWithPlugins(resolvedConfigRaw);
@@ -1062,6 +1071,15 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       } catch {
         envRefMap = null;
       }
+    }
+
+    // Strip known-invalid runtime keys that may have leaked into the persist
+    // candidate from the raw file snapshot (issue #29780).
+    const { stripped: strippedWriteKeys } = stripInvalidRuntimeKeys(persistCandidate);
+    if (strippedWriteKeys.length > 0) {
+      deps.logger.warn(
+        `Stripped invalid config keys before write: ${strippedWriteKeys.join(", ")}`,
+      );
     }
 
     const validated = validateConfigObjectRawWithPlugins(persistCandidate);
