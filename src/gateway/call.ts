@@ -47,6 +47,11 @@ type CallGatewayBaseOptions = {
    * Does not affect config loading; callers still control auth via opts.token/password/env/config.
    */
   configPath?: string;
+  /**
+   * Force local loopback target resolution for internal in-process calls.
+   * Explicit URL overrides and configured remote URLs still take precedence.
+   */
+  forceLoopback?: boolean;
 };
 
 export type CallGatewayScopedOptions = CallGatewayBaseOptions & {
@@ -107,7 +112,12 @@ export function ensureExplicitGatewayAuth(params: {
 }
 
 export function buildGatewayConnectionDetails(
-  options: { config?: OpenClawConfig; url?: string; configPath?: string } = {},
+  options: {
+    config?: OpenClawConfig;
+    url?: string;
+    configPath?: string;
+    forceLoopback?: boolean;
+  } = {},
 ): GatewayConnectionDetails {
   const config = options.config ?? loadConfig();
   const configPath =
@@ -120,6 +130,7 @@ export function buildGatewayConnectionDetails(
   const scheme = tlsEnabled ? "wss" : "ws";
   // Self-connections should always target loopback; bind mode only controls listener exposure.
   const localUrl = `${scheme}://127.0.0.1:${localPort}`;
+  const forceLoopback = options.forceLoopback === true;
   const urlOverride =
     typeof options.url === "string" && options.url.trim().length > 0
       ? options.url.trim()
@@ -132,9 +143,11 @@ export function buildGatewayConnectionDetails(
     ? "cli --url"
     : remoteUrl
       ? "config gateway.remote.url"
-      : remoteMisconfigured
-        ? "missing gateway.remote.url (fallback local)"
-        : "local loopback";
+      : forceLoopback
+        ? "forced local loopback"
+        : remoteMisconfigured
+          ? "missing gateway.remote.url (fallback local)"
+          : "local loopback";
   const remoteFallbackNote = remoteMisconfigured
     ? "Warn: gateway.mode=remote but gateway.remote.url is missing; set gateway.remote.url or switch gateway.mode=local."
     : undefined;
@@ -394,6 +407,7 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
   const connectionDetails = buildGatewayConnectionDetails({
     config: context.config,
     url: context.urlOverride,
+    forceLoopback: opts.forceLoopback,
     ...(opts.configPath ? { configPath: opts.configPath } : {}),
   });
   const url = connectionDetails.url;

@@ -11,7 +11,7 @@ import { resetSubagentRegistryForTests } from "./subagent-registry.js";
 import { SUBAGENT_SPAWN_ACCEPTED_NOTE } from "./subagent-spawn.js";
 
 const callGatewayMock = getCallGatewayMock();
-type GatewayCall = { method?: string; params?: unknown };
+type GatewayCall = { method?: string; params?: unknown; forceLoopback?: boolean };
 type SessionsSpawnConfigOverride = Parameters<typeof setSessionsSpawnConfigOverride>[0];
 
 function mockLongRunningSpawnFlow(params: {
@@ -303,5 +303,40 @@ describe("openclaw-tools: subagents (sessions_spawn model + thinking)", () => {
       runId: "run-1",
     });
     expect(spawnedTimeout).toBe(2);
+  });
+
+  it("sessions_spawn uses forceLoopback for internal gateway calls", async () => {
+    const calls: GatewayCall[] = [];
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as GatewayCall;
+      calls.push(request);
+      if (request.method === "agent") {
+        return { runId: "run-force-loopback", status: "accepted", acceptedAt: 1001 };
+      }
+      return {};
+    });
+
+    const tool = await getSessionsSpawnTool({
+      agentSessionKey: "main",
+      agentChannel: "whatsapp",
+    });
+
+    const result = await tool.execute("call-force-loopback", {
+      task: "do thing",
+      model: "minimax/MiniMax-M2.1",
+      thinking: "off",
+    });
+    expect(result.details).toMatchObject({
+      status: "accepted",
+      runId: "run-force-loopback",
+    });
+
+    const spawnCalls = calls.filter(
+      (call) => call.method === "sessions.patch" || call.method === "agent",
+    );
+    expect(spawnCalls.length).toBeGreaterThan(0);
+    for (const call of spawnCalls) {
+      expect(call.forceLoopback).toBe(true);
+    }
   });
 });

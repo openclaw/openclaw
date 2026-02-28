@@ -274,6 +274,20 @@ describe("buildGatewayConnectionDetails", () => {
     expect(details.bindDetail).toBe("Bind: lan");
   });
 
+  it("labels local target as forced loopback when requested", () => {
+    loadConfig.mockReturnValue({
+      gateway: { mode: "local", bind: "tailnet" },
+    });
+    resolveGatewayPort.mockReturnValue(18800);
+    pickPrimaryTailnetIPv4.mockReturnValue("100.64.0.9");
+
+    const details = buildGatewayConnectionDetails({ forceLoopback: true });
+
+    expect(details.url).toBe("ws://127.0.0.1:18800");
+    expect(details.urlSource).toBe("forced local loopback");
+    expect(details.bindDetail).toBe("Bind: tailnet");
+  });
+
   it("prefers remote url when configured", () => {
     loadConfig.mockReturnValue({
       gateway: {
@@ -372,6 +386,31 @@ describe("callGateway error details", () => {
     expect(errMessage).toContain("Gateway target: ws://127.0.0.1:18789");
     expect(errMessage).toContain("Source: local loopback");
     expect(errMessage).toContain("Bind: loopback");
+  });
+
+  it("reports forced loopback source on timeout when requested", async () => {
+    startMode = "silent";
+    loadConfig.mockReturnValue({
+      gateway: { mode: "local", bind: "lan" },
+    });
+    resolveGatewayPort.mockReturnValue(18789);
+    pickPrimaryTailnetIPv4.mockReturnValue(undefined);
+    pickPrimaryLanIPv4.mockReturnValue("192.168.1.42");
+
+    vi.useFakeTimers();
+    let errMessage = "";
+    const promise = callGateway({ method: "health", timeoutMs: 5, forceLoopback: true }).catch(
+      (caught) => {
+        errMessage = caught instanceof Error ? caught.message : String(caught);
+      },
+    );
+
+    await vi.advanceTimersByTimeAsync(5);
+    await promise;
+
+    expect(errMessage).toContain("gateway timeout after 5ms");
+    expect(errMessage).toContain("Source: forced local loopback");
+    expect(errMessage).toContain("Bind: lan");
   });
 
   it("does not overflow very large timeout values", async () => {
