@@ -308,10 +308,9 @@ export async function sendFileFeishu(params: {
   cfg: ClawdbotConfig;
   to: string;
   fileKey: string;
-  /** Use "media" for video, "audio" for audio, "file" for documents */
-  msgType?: "file" | "media" | "audio";
+  /** Use "media" for audio/video files, "file" for documents */
+  msgType?: "file" | "media";
   replyToMessageId?: string;
-  replyInThread?: boolean;
   accountId?: string;
 }): Promise<SendMediaResult> {
   const { cfg, to, fileKey, replyToMessageId, replyInThread, accountId } = params;
@@ -380,9 +379,7 @@ export function detectFileType(
 }
 
 /**
- * Upload and send media (image or file) from URL, local path, or buffer.
- * When mediaUrl is a local path, mediaLocalRoots (from core outbound context)
- * must be passed so loadWebMedia allows the path (post CVE-2026-26321).
+ * Upload and send media (image or file) from URL, local path, or buffer
  */
 export async function sendMediaFeishu(params: {
   cfg: ClawdbotConfig;
@@ -447,13 +444,13 @@ export async function sendMediaFeishu(params: {
       fileType,
       accountId,
     });
-    // Feishu API: opus -> "audio", mp4 -> "media", everything else -> "file"
-    const msgType = fileType === "opus" ? "audio" : fileType === "mp4" ? "media" : "file";
+    // Feishu requires msg_type "media" for audio/video, "file" for documents
+    const isMedia = fileType === "mp4" || fileType === "opus";
     return sendFileFeishu({
       cfg,
       to,
       fileKey,
-      msgType,
+      msgType: isMedia ? "media" : "file",
       replyToMessageId,
       replyInThread,
       accountId,
