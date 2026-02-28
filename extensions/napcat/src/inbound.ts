@@ -1,4 +1,4 @@
-import type { ChannelAccountSnapshot, OpenClawConfig, RuntimeEnv } from "openclaw/plugin-sdk";
+import type { ChannelAccountSnapshot, GroupPolicy, OpenClawConfig, RuntimeEnv } from "openclaw/plugin-sdk";
 import {
   createNormalizedOutboundDeliverer,
   createReplyPrefixOptions,
@@ -141,21 +141,17 @@ function resolveSenderName(event: OneBotMessageEvent): string | undefined {
   return undefined;
 }
 
-function isGroupMessageAllowed(params: {
-  account: ResolvedNapCatAccount;
+export function isNapCatGroupMessageAllowed(params: {
+  groups: Record<string, NapCatGroupConfig> | undefined;
   groupId: string;
+  groupPolicy?: GroupPolicy | null;
 }): boolean {
-  const groups = params.account.config.groups ?? {};
-  const groupKeys = Object.keys(groups);
-  if (groupKeys.length === 0) {
-    return true;
-  }
   const resolved = resolveNapCatGroupConfig({
-    groups,
+    groups: params.groups,
     groupId: params.groupId,
   });
   if (!resolved.matched) {
-    return false;
+    return params.groupPolicy !== "disabled";
   }
   if (resolved.enabled === false) {
     return false;
@@ -194,8 +190,9 @@ export function isNapCatEventMentioningSelf(event: OneBotMessageEvent): boolean 
     return false;
   }
 
-  const selfMention = new RegExp(`\\[CQ:at,qq=${escapeRegExp(selfId)}\\]`, "i");
-  return selfMention.test(raw) || /\[CQ:at,qq=all\]/i.test(raw);
+  const selfMention = new RegExp(`\\[CQ:at,[^\\]]*\\bqq=${escapeRegExp(selfId)}(?:,|\\])`, "i");
+  const everyoneMention = /\[CQ:at,[^\]]*\bqq=all(?:,|\])/i;
+  return selfMention.test(raw) || everyoneMention.test(raw);
 }
 
 export function resolveNapCatGroupConfig(params: {
@@ -332,9 +329,16 @@ export async function processNapCatEvent(params: {
     defaultGroupPolicy,
   });
 
-  if (inbound.isGroup && !isGroupMessageAllowed({ account: params.account, groupId: inbound.targetId })) {
+  if (
+    inbound.isGroup &&
+    !isNapCatGroupMessageAllowed({
+      groups: params.account.config.groups,
+      groupId: inbound.targetId,
+      groupPolicy,
+    })
+  ) {
     params.runtime.log?.(
-      `[napcat] dropping group message from ${inbound.targetId} (group not allowlisted)`,
+      `[napcat] dropping group message from ${inbound.targetId} (group blocked by policy)`,
     );
     return;
   }

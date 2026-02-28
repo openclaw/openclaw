@@ -162,4 +162,128 @@ describe("napcatPlugin gateway.startAccount", () => {
     expect(patches.some((entry) => entry.running === true)).toBe(true);
     expect(patches.some((entry) => entry.running === false)).toBe(true);
   });
+
+  it("keeps connected=true when ws drops but http transport remains connected", async () => {
+    const httpStop = vi.fn(async () => {});
+    const wsStop = vi.fn();
+    hoisted.startNapCatHttpMonitor.mockImplementation(
+      async (params: { statusSink?: (patch: Partial<ChannelAccountSnapshot>) => void }) => {
+        params.statusSink?.({
+          connected: true,
+          lastConnectedAt: Date.now(),
+          lastError: null,
+        });
+        return { stop: httpStop };
+      },
+    );
+    hoisted.startNapCatWsMonitor.mockImplementation(
+      (params: { statusSink?: (patch: Partial<ChannelAccountSnapshot>) => void }) => {
+        params.statusSink?.({
+          reconnectAttempts: 0,
+          lastConnectedAt: Date.now(),
+          lastError: null,
+        });
+        params.statusSink?.({
+          lastDisconnect: {
+            at: Date.now(),
+            status: 1006,
+            error: "ws down",
+          },
+        });
+        return { stop: wsStop };
+      },
+    );
+
+    const patches: ChannelAccountSnapshot[] = [];
+    const abort = new AbortController();
+    const task = napcatPlugin.gateway!.startAccount!(
+      createStartAccountCtx({
+        account: buildAccount(),
+        abortSignal: abort.signal,
+        statusPatchSink: (next) => patches.push({ ...next }),
+      }),
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    const runningSnapshots = patches.filter((entry) => entry.running === true);
+    expect(runningSnapshots.some((entry) => entry.connected === true)).toBe(true);
+    expect(runningSnapshots.some((entry) => entry.connected === false)).toBe(false);
+
+    abort.abort();
+    await task;
+  });
+
+  it("resets running status when monitor startup fails", async () => {
+    hoisted.startNapCatHttpMonitor.mockRejectedValue(new Error("listen failed"));
+    const patches: ChannelAccountSnapshot[] = [];
+    const abort = new AbortController();
+
+    await expect(
+      napcatPlugin.gateway!.startAccount!(
+        createStartAccountCtx({
+          account: buildAccount(),
+          abortSignal: abort.signal,
+          statusPatchSink: (next) => patches.push({ ...next }),
+        }),
+      ),
+    ).rejects.toThrow("listen failed");
+
+    expect(hoisted.startNapCatWsMonitor).not.toHaveBeenCalled();
+    const last = patches[patches.length - 1];
+    expect(last?.running).toBe(false);
+    expect(last?.connected).toBe(false);
+    expect(String(last?.lastError ?? "")).toContain("listen failed");
+  });
+
+  it("keeps connected=true when http drops but ws transport remains connected", async () => {
+    const httpStop = vi.fn(async () => {});
+    const wsStop = vi.fn();
+    hoisted.startNapCatHttpMonitor.mockImplementation(
+      async (params: { statusSink?: (patch: Partial<ChannelAccountSnapshot>) => void }) => {
+        params.statusSink?.({
+          connected: true,
+          lastConnectedAt: Date.now(),
+          lastError: null,
+        });
+        setTimeout(() => {
+          params.statusSink?.({
+            connected: false,
+            lastError: "http down",
+          });
+        }, 0);
+        return { stop: httpStop };
+      },
+    );
+    hoisted.startNapCatWsMonitor.mockImplementation(
+      (params: { statusSink?: (patch: Partial<ChannelAccountSnapshot>) => void }) => {
+        params.statusSink?.({
+          reconnectAttempts: 0,
+          lastConnectedAt: Date.now(),
+          lastError: null,
+        });
+        return { stop: wsStop };
+      },
+    );
+
+    const patches: ChannelAccountSnapshot[] = [];
+    const abort = new AbortController();
+    const task = napcatPlugin.gateway!.startAccount!(
+      createStartAccountCtx({
+        account: buildAccount(),
+        abortSignal: abort.signal,
+        statusPatchSink: (next) => patches.push({ ...next }),
+      }),
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    const runningSnapshots = patches.filter((entry) => entry.running === true);
+    expect(runningSnapshots.some((entry) => String(entry.lastError ?? "").includes("http down"))).toBe(true);
+    const latestRunning = runningSnapshots[runningSnapshots.length - 1];
+    expect(latestRunning?.connected).toBe(true);
+
+    abort.abort();
+    await task;
+  });
 });

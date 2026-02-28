@@ -355,43 +355,96 @@ export const napcatPlugin: ChannelPlugin<ResolvedNapCatAccount> = {
         lastError: null,
       });
 
+      let httpConnected = false;
+      let wsConnected = false;
+      // Aggregate transport connectivity so a single transport outage does not
+      // mark the account unhealthy while the other inbound path is still live.
+      const resolveConnected = () => {
+        if (account.transport.http.enabled && account.transport.ws.enabled) {
+          return httpConnected || wsConnected;
+        }
+        if (account.transport.http.enabled) {
+          return httpConnected;
+        }
+        if (account.transport.ws.enabled) {
+          return wsConnected;
+        }
+        return false;
+      };
       const statusSink = (patch: Partial<ChannelAccountSnapshot>) => {
         ctx.setStatus({
           accountId: ctx.accountId,
           ...patch,
         });
       };
+      const makeTransportStatusSink = (transport: "http" | "ws") => {
+        return (patch: Partial<ChannelAccountSnapshot>) => {
+          const nextPatch: Partial<ChannelAccountSnapshot> = { ...patch };
+          let shouldRecomputeConnected = false;
+
+          if (transport === "http") {
+            if (typeof patch.connected === "boolean") {
+              httpConnected = patch.connected;
+              shouldRecomputeConnected = true;
+            }
+          } else {
+            if (typeof patch.connected === "boolean") {
+              wsConnected = patch.connected;
+              shouldRecomputeConnected = true;
+            } else if (patch.lastDisconnect !== undefined) {
+              wsConnected = false;
+              shouldRecomputeConnected = true;
+            } else if (typeof patch.lastConnectedAt === "number") {
+              wsConnected = true;
+              shouldRecomputeConnected = true;
+            } else if (typeof patch.reconnectAttempts === "number" && patch.reconnectAttempts > 0) {
+              wsConnected = false;
+              shouldRecomputeConnected = true;
+            }
+          }
+
+          if (shouldRecomputeConnected) {
+            nextPatch.connected = resolveConnected();
+          }
+
+          statusSink(nextPatch);
+        };
+      };
 
       const stoppers: Array<() => void | Promise<void>> = [];
-
-      if (account.transport.http.enabled) {
-        ctx.log?.info(
-          `[${account.accountId}] napcat http inbound listening on ${account.transport.http.host}:${account.transport.http.port}${account.transport.http.path}`,
-        );
-        const httpHandle = await startNapCatHttpMonitor({
-          account,
-          config: ctx.cfg,
-          runtime: ctx.runtime,
-          statusSink,
-        });
-        stoppers.push(async () => {
-          await httpHandle.stop();
-        });
-      }
-
-      if (account.transport.ws.enabled) {
-        ctx.log?.info(`[${account.accountId}] napcat ws inbound connecting to ${account.transport.ws.url}`);
-        const wsHandle = startNapCatWsMonitor({
-          account,
-          config: ctx.cfg,
-          runtime: ctx.runtime,
-          statusSink,
-        });
-        stoppers.push(() => wsHandle.stop());
-      }
+      let fatalError: unknown;
 
       try {
+        if (account.transport.http.enabled) {
+          ctx.log?.info(
+            `[${account.accountId}] napcat http inbound listening on ${account.transport.http.host}:${account.transport.http.port}${account.transport.http.path}`,
+          );
+          const httpHandle = await startNapCatHttpMonitor({
+            account,
+            config: ctx.cfg,
+            runtime: ctx.runtime,
+            statusSink: makeTransportStatusSink("http"),
+          });
+          stoppers.push(async () => {
+            await httpHandle.stop();
+          });
+        }
+
+        if (account.transport.ws.enabled) {
+          ctx.log?.info(`[${account.accountId}] napcat ws inbound connecting to ${account.transport.ws.url}`);
+          const wsHandle = startNapCatWsMonitor({
+            account,
+            config: ctx.cfg,
+            runtime: ctx.runtime,
+            statusSink: makeTransportStatusSink("ws"),
+          });
+          stoppers.push(() => wsHandle.stop());
+        }
+
         await waitForAbortSignal(ctx.abortSignal);
+      } catch (err) {
+        fatalError = err;
+        throw err;
       } finally {
         for (const stop of stoppers.reverse()) {
           try {
@@ -405,6 +458,7 @@ export const napcatPlugin: ChannelPlugin<ResolvedNapCatAccount> = {
           running: false,
           connected: false,
           lastStopAt: Date.now(),
+          ...(fatalError ? { lastError: String(fatalError) } : {}),
         });
       }
     },

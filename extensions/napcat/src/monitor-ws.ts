@@ -19,6 +19,7 @@ export function startNapCatWsMonitor(options: NapCatWsMonitorOptions): NapCatWsM
   let stopped = false;
   let reconnectAttempts = 0;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  const controlsConnectivity = !options.account.transport.http.enabled;
 
   const clearTimer = () => {
     if (reconnectTimer) {
@@ -58,7 +59,7 @@ export function startNapCatWsMonitor(options: NapCatWsMonitorOptions): NapCatWsM
     } catch (err) {
       reconnectAttempts += 1;
       options.statusSink?.({
-        connected: false,
+        ...(controlsConnectivity ? { connected: false } : {}),
         reconnectAttempts,
         lastError: String(err),
       });
@@ -69,7 +70,7 @@ export function startNapCatWsMonitor(options: NapCatWsMonitorOptions): NapCatWsM
     ws.on("open", () => {
       reconnectAttempts = 0;
       options.statusSink?.({
-        connected: true,
+        ...(controlsConnectivity ? { connected: true } : {}),
         reconnectAttempts: 0,
         lastConnectedAt: Date.now(),
         lastError: null,
@@ -101,7 +102,6 @@ export function startNapCatWsMonitor(options: NapCatWsMonitorOptions): NapCatWsM
 
     ws.on("error", (err) => {
       options.statusSink?.({
-        connected: false,
         lastError: String(err),
       });
       options.runtime.error?.(`[napcat] ws error: ${String(err)}`);
@@ -115,7 +115,7 @@ export function startNapCatWsMonitor(options: NapCatWsMonitorOptions): NapCatWsM
             ? reason.toString("utf-8")
             : "";
       options.statusSink?.({
-        connected: false,
+        ...(controlsConnectivity ? { connected: false } : {}),
         lastDisconnect: {
           at: Date.now(),
           status: code,
@@ -145,7 +145,9 @@ export function startNapCatWsMonitor(options: NapCatWsMonitorOptions): NapCatWsM
         }
       }
       ws = null;
-      options.statusSink?.({ connected: false });
+      if (controlsConnectivity) {
+        options.statusSink?.({ connected: false });
+      }
     },
   };
 }

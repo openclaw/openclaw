@@ -22,12 +22,20 @@ function normalizeUrl(value?: string): string | undefined {
   return trimmed.replace(/\/+$/g, "");
 }
 
+function normalizeHttpPath(value?: string): string {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return DEFAULT_NAPCAT_HTTP_PATH;
+  }
+  return trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
+}
+
 function resolveTransportHttp(config: NapCatConfig): ResolvedNapCatTransportHttpConfig {
   return {
     enabled: config.transport?.http?.enabled !== false,
     host: config.transport?.http?.host?.trim() || DEFAULT_NAPCAT_HTTP_HOST,
     port: config.transport?.http?.port ?? DEFAULT_NAPCAT_HTTP_PORT,
-    path: config.transport?.http?.path?.trim() || DEFAULT_NAPCAT_HTTP_PATH,
+    path: normalizeHttpPath(config.transport?.http?.path),
     bodyMaxBytes: config.transport?.http?.bodyMaxBytes ?? DEFAULT_NAPCAT_HTTP_BODY_MAX_BYTES,
   };
 }

@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import { describe, expect, it, vi } from "vitest";
 import {
   extractNapCatInboundMessage,
+  isNapCatGroupMessageAllowed,
   isNapCatEventMentioningSelf,
   normalizeNapCatAllowFrom,
   resolveNapCatCommandAuthorized,
@@ -67,6 +68,22 @@ describe("isNapCatEventMentioningSelf", () => {
     });
     expect(result).toBe(true);
   });
+
+  it("detects CQ mention with extra params", () => {
+    const result = isNapCatEventMentioningSelf({
+      self_id: 10001,
+      message: "[CQ:at,qq=10001,name=bot] hello",
+    });
+    expect(result).toBe(true);
+  });
+
+  it("detects CQ @all mention with extra params", () => {
+    const result = isNapCatEventMentioningSelf({
+      self_id: 10001,
+      message: "[CQ:at,name=all,qq=all] hello",
+    });
+    expect(result).toBe(true);
+  });
 });
 
 describe("normalizeNapCatAllowFrom", () => {
@@ -97,6 +114,63 @@ describe("resolveNapCatGroupConfig", () => {
       allowFrom: ["111"],
       enabled: undefined,
     });
+  });
+});
+
+describe("isNapCatGroupMessageAllowed", () => {
+  it("allows unmatched groups when groupPolicy is allowlist", () => {
+    const allowed = isNapCatGroupMessageAllowed({
+      groupId: "999",
+      groupPolicy: "allowlist",
+      groups: {
+        "123": { allow: true },
+      },
+    });
+    expect(allowed).toBe(true);
+  });
+
+  it("allows unmatched groups when groupPolicy is open", () => {
+    const allowed = isNapCatGroupMessageAllowed({
+      groupId: "999",
+      groupPolicy: "open",
+      groups: {
+        "123": { allow: true },
+      },
+    });
+    expect(allowed).toBe(true);
+  });
+
+  it("blocks unmatched groups when groupPolicy is disabled", () => {
+    const allowed = isNapCatGroupMessageAllowed({
+      groupId: "999",
+      groupPolicy: "disabled",
+      groups: {
+        "123": { allow: true },
+      },
+    });
+    expect(allowed).toBe(false);
+  });
+
+  it("blocks when wildcard group config disables all groups", () => {
+    const allowed = isNapCatGroupMessageAllowed({
+      groupId: "999",
+      groupPolicy: "open",
+      groups: {
+        "*": { allow: false },
+      },
+    });
+    expect(allowed).toBe(false);
+  });
+
+  it("blocks when exact group config disables the group", () => {
+    const allowed = isNapCatGroupMessageAllowed({
+      groupId: "999",
+      groupPolicy: "open",
+      groups: {
+        "999": { allow: false },
+      },
+    });
+    expect(allowed).toBe(false);
   });
 });
 
