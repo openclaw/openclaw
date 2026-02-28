@@ -184,6 +184,8 @@ async function invokeAgent(
     respond?: ReturnType<typeof vi.fn>;
     reqId?: string;
     context?: GatewayRequestContext;
+    client?: AgentHandlerArgs["client"];
+    isWebchatConnect?: AgentHandlerArgs["isWebchatConnect"];
   },
 ) {
   const respond = options?.respond ?? vi.fn();
@@ -192,8 +194,8 @@ async function invokeAgent(
     respond: respond as never,
     context: options?.context ?? makeContext(),
     req: { type: "req", id: options?.reqId ?? "agent-test-req", method: "agent" },
-    client: null,
-    isWebchatConnect: () => false,
+    client: options?.client ?? null,
+    isWebchatConnect: options?.isWebchatConnect ?? (() => false),
   });
   return respond;
 }
@@ -344,6 +346,56 @@ describe("gateway agent handler", () => {
     await vi.waitFor(() => expect(mocks.agentCommand).toHaveBeenCalled());
     const callArgs = mocks.agentCommand.mock.calls.at(-1)?.[0] as Record<string, unknown>;
     expect(callArgs.bestEffortDeliver).toBe(false);
+  });
+
+  it("keeps origin messageChannel as webchat while delivery channel uses last session channel", async () => {
+    mockMainSessionEntry({
+      sessionId: "existing-session-id",
+      lastChannel: "telegram",
+      lastTo: "12345",
+    });
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+      const store: Record<string, unknown> = {
+        "agent:main:main": {
+          sessionId: "existing-session-id",
+          updatedAt: Date.now(),
+          lastChannel: "telegram",
+          lastTo: "12345",
+        },
+      };
+      return await updater(store);
+    });
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+
+    await invokeAgent(
+      {
+        message: "webchat turn",
+        sessionKey: "agent:main:main",
+        idempotencyKey: "test-webchat-origin-channel",
+      },
+      {
+        reqId: "webchat-origin-1",
+        client: {
+          connect: {
+            client: { id: "webchat-ui", mode: "webchat" },
+          },
+        } as AgentHandlerArgs["client"],
+        isWebchatConnect: () => true,
+      },
+    );
+
+    await vi.waitFor(() => expect(mocks.agentCommand).toHaveBeenCalled());
+    const callArgs = mocks.agentCommand.mock.calls.at(-1)?.[0] as {
+      channel?: string;
+      messageChannel?: string;
+      runContext?: { messageChannel?: string };
+    };
+    expect(callArgs.channel).toBe("telegram");
+    expect(callArgs.messageChannel).toBe("webchat");
+    expect(callArgs.runContext?.messageChannel).toBe("webchat");
   });
 
   it("handles missing cliSessionIds gracefully", async () => {

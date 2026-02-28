@@ -563,6 +563,17 @@ export const agentHandlers: GatewayRequestHandlers = {
       return;
     }
 
+    const normalizedTurnSource = normalizeMessageChannel(turnSourceChannel);
+    const turnSourceMessageChannel =
+      normalizedTurnSource && isGatewayMessageChannel(normalizedTurnSource)
+        ? normalizedTurnSource
+        : undefined;
+    const originMessageChannel =
+      turnSourceMessageChannel ??
+      (client?.connect && isWebchatConnect(client.connect)
+        ? INTERNAL_MESSAGE_CHANNEL
+        : resolvedChannel);
+
     const deliver = request.deliver === true && resolvedChannel !== INTERNAL_MESSAGE_CHANNEL;
 
     const accepted = {
@@ -594,7 +605,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         accountId: resolvedAccountId,
         threadId: resolvedThreadId,
         runContext: {
-          messageChannel: resolvedChannel,
+          messageChannel: originMessageChannel,
           accountId: resolvedAccountId,
           groupId: resolvedGroupId,
           groupChannel: resolvedGroupChannel,
@@ -607,7 +618,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         spawnedBy: spawnedByValue,
         timeout: request.timeout?.toString(),
         bestEffortDeliver,
-        messageChannel: resolvedChannel,
+        messageChannel: originMessageChannel,
         runId,
         lane: request.lane,
         extraSystemPrompt: request.extraSystemPrompt,

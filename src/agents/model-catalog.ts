@@ -154,14 +154,6 @@ export function __setModelCatalogImportForTest(loader?: () => Promise<PiSdkModul
   importPiSdk = loader ?? defaultImportPiSdk;
 }
 
-function createAuthStorage(AuthStorageLike: unknown, path: string) {
-  const withFactory = AuthStorageLike as { create?: (path: string) => unknown };
-  if (typeof withFactory.create === "function") {
-    return withFactory.create(path);
-  }
-  return new (AuthStorageLike as { new (path: string): unknown })(path);
-}
-
 export async function loadModelCatalog(params?: {
   config?: OpenClawConfig;
   useCache?: boolean;
@@ -186,9 +178,6 @@ export async function loadModelCatalog(params?: {
     try {
       const cfg = params?.config ?? loadConfig();
       await ensureOpenClawModelsJson(cfg);
-      await (
-        await import("./pi-auth-json.js")
-      ).ensurePiAuthJsonFromAuthProfiles(resolveOpenClawAgentDir());
       // IMPORTANT: keep the dynamic import *inside* the try/catch.
       // If this fails once (e.g. during a pnpm install that temporarily swaps node_modules),
       // we must not poison the cache with a rejected promise (otherwise all channel handlers
@@ -196,7 +185,7 @@ export async function loadModelCatalog(params?: {
       const piSdk = await importPiSdk();
       const agentDir = resolveOpenClawAgentDir();
       const { join } = await import("node:path");
-      const authStorage = createAuthStorage(piSdk.AuthStorage, join(agentDir, "auth.json"));
+      const authStorage = piSdk.discoverAuthStorage(agentDir);
       const registry = new (piSdk.ModelRegistry as unknown as {
         new (
           authStorage: unknown,

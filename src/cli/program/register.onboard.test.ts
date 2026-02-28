@@ -108,6 +108,17 @@ describe("registerOnboardCommand", () => {
     );
   });
 
+  it("forwards --reset-scope to onboard command options", async () => {
+    await runCli(["onboard", "--reset", "--reset-scope", "full"]);
+    expect(onboardCommandMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reset: true,
+        resetScope: "full",
+      }),
+      runtime,
+    );
+  });
+
   it("parses --mistral-api-key and forwards mistralApiKey", async () => {
     await runCli(["onboard", "--mistral-api-key", "sk-mistral-test"]);
     expect(onboardCommandMock).toHaveBeenCalledWith(

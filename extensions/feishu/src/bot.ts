@@ -3,6 +3,7 @@ import {
   buildAgentMediaPayload,
   buildPendingHistoryContextFromMap,
   clearHistoryEntriesIfEnabled,
+  createScopedPairingAccess,
   DEFAULT_GROUP_HISTORY_LIMIT,
   type HistoryEntry,
   recordPendingHistoryEntryIfEnabled,
@@ -187,6 +188,26 @@ function parseMessageContent(content: string, messageType: string): string {
       const { textContent } = parsePostContent(content);
       return textContent;
     }
+    if (messageType === "share_chat") {
+      // Preserve available summary text for merged/forwarded chat messages.
+      if (parsed && typeof parsed === "object") {
+        const share = parsed as {
+          body?: unknown;
+          summary?: unknown;
+          share_chat_id?: unknown;
+        };
+        if (typeof share.body === "string" && share.body.trim().length > 0) {
+          return share.body.trim();
+        }
+        if (typeof share.summary === "string" && share.summary.trim().length > 0) {
+          return share.summary.trim();
+        }
+        if (typeof share.share_chat_id === "string" && share.share_chat_id.trim().length > 0) {
+          return `[Forwarded message: ${share.share_chat_id.trim()}]`;
+        }
+      }
+      return "[Forwarded message]";
+    }
     return content;
   } catch {
     return content;
@@ -291,6 +312,29 @@ function parsePostContent(content: string): {
             const imageKey = normalizeFeishuExternalKey(element.image_key);
             if (imageKey) {
               imageKeys.push(imageKey);
+            }
+          } else if (element.tag === "code") {
+            // Inline code
+            const code =
+              typeof element.text === "string"
+                ? element.text
+                : typeof element.content === "string"
+                  ? element.content
+                  : "";
+            if (code) {
+              textContent += `\`${code}\``;
+            }
+          } else if (element.tag === "code_block" || element.tag === "pre") {
+            // Multiline code block
+            const lang = typeof element.language === "string" ? element.language : "";
+            const code =
+              typeof element.text === "string"
+                ? element.text
+                : typeof element.content === "string"
+                  ? element.content
+                  : "";
+            if (code) {
+              textContent += `\n\`\`\`${lang}\n${code}\n\`\`\`\n`;
             }
           }
         }
@@ -496,6 +540,40 @@ export function parseFeishuMessageEvent(
   return ctx;
 }
 
+export function buildFeishuAgentBody(params: {
+  ctx: Pick<
+    FeishuMessageContext,
+    "content" | "senderName" | "senderOpenId" | "mentionTargets" | "messageId"
+  >;
+  quotedContent?: string;
+  permissionErrorForAgent?: PermissionError;
+}): string {
+  const { ctx, quotedContent, permissionErrorForAgent } = params;
+  let messageBody = ctx.content;
+  if (quotedContent) {
+    messageBody = `[Replying to: "${quotedContent}"]\n\n${ctx.content}`;
+  }
+
+  // DMs already have per-sender sessions, but this label still improves attribution.
+  const speaker = ctx.senderName ?? ctx.senderOpenId;
+  messageBody = `${speaker}: ${messageBody}`;
+
+  if (ctx.mentionTargets && ctx.mentionTargets.length > 0) {
+    const targetNames = ctx.mentionTargets.map((t) => t.name).join(", ");
+    messageBody += `\n\n[System: Your reply will automatically @mention: ${targetNames}. Do not write @xxx yourself.]`;
+  }
+
+  // Keep message_id on its own line so shared message-id hint stripping can parse it reliably.
+  messageBody = `[message_id: ${ctx.messageId}]\n${messageBody}`;
+
+  if (permissionErrorForAgent) {
+    const grantUrl = permissionErrorForAgent.grantUrl ?? "";
+    messageBody += `\n\n[System: The bot encountered a Feishu API permission error. Please inform the user about this issue and provide the permission grant URL for the admin to authorize. Permission grant URL: ${grantUrl}]`;
+  }
+
+  return messageBody;
+}
+
 export async function handleFeishuMessage(params: {
   cfg: ClawdbotConfig;
   event: FeishuMessageEvent;
@@ -641,6 +719,11 @@ export async function handleFeishuMessage(params: {
 
   try {
     const core = getFeishuRuntime();
+    const pairing = createScopedPairingAccess({
+      core,
+      channel: "feishu",
+      accountId: account.accountId,
+    });
     const shouldComputeCommandAuthorized = core.channel.commands.shouldComputeCommandAuthorized(
       ctx.content,
       cfg,
@@ -649,7 +732,7 @@ export async function handleFeishuMessage(params: {
       !isGroup &&
       dmPolicy !== "allowlist" &&
       (dmPolicy !== "open" || shouldComputeCommandAuthorized)
-        ? await core.channel.pairing.readAllowFromStore("feishu").catch(() => [])
+        ? await pairing.readAllowFromStore().catch(() => [])
         : [];
     const effectiveDmAllowFrom = [...configAllowFrom, ...storeAllowFrom];
     const dmAllowed = resolveFeishuAllowlistMatch({
@@ -661,8 +744,7 @@ export async function handleFeishuMessage(params: {
 
     if (!isGroup && dmPolicy !== "open" && !dmAllowed) {
       if (dmPolicy === "pairing") {
-        const { code, created } = await core.channel.pairing.upsertPairingRequest({
-          channel: "feishu",
+        const { code, created } = await pairing.upsertPairingRequest({
           id: ctx.senderOpenId,
           meta: { name: ctx.senderName },
         });
@@ -716,19 +798,49 @@ export async function handleFeishuMessage(params: {
     const feishuFrom = `feishu:${ctx.senderOpenId}`;
     const feishuTo = isGroup ? `chat:${ctx.chatId}` : `user:${ctx.senderOpenId}`;
 
-    // Resolve peer ID for session routing
-    // When topicSessionMode is enabled, messages within a topic (identified by root_id)
-    // get a separate session from the main group chat.
+    // Resolve peer ID for session routing.
+    // Default is one session per group chat; this can be customized with groupSessionScope.
     let peerId = isGroup ? ctx.chatId : ctx.senderOpenId;
-    let topicSessionMode: "enabled" | "disabled" = "disabled";
-    if (isGroup && ctx.rootId) {
-      const groupConfig = resolveFeishuGroupConfig({ cfg: feishuCfg, groupId: ctx.chatId });
-      topicSessionMode = groupConfig?.topicSessionMode ?? feishuCfg?.topicSessionMode ?? "disabled";
-      if (topicSessionMode === "enabled") {
-        // Use chatId:topic:rootId as peer ID for topic-scoped sessions
-        peerId = `${ctx.chatId}:topic:${ctx.rootId}`;
-        log(`feishu[${account.accountId}]: topic session isolation enabled, peer=${peerId}`);
+    let groupSessionScope: "group" | "group_sender" | "group_topic" | "group_topic_sender" =
+      "group";
+    let topicRootForSession: string | null = null;
+    const replyInThread =
+      isGroup &&
+      (groupConfig?.replyInThread ?? feishuCfg?.replyInThread ?? "disabled") === "enabled";
+
+    if (isGroup) {
+      const legacyTopicSessionMode =
+        groupConfig?.topicSessionMode ?? feishuCfg?.topicSessionMode ?? "disabled";
+      groupSessionScope =
+        groupConfig?.groupSessionScope ??
+        feishuCfg?.groupSessionScope ??
+        (legacyTopicSessionMode === "enabled" ? "group_topic" : "group");
+
+      // When topic-scoped sessions are enabled and replyInThread is on, the first
+      // bot reply creates the thread rooted at the current message ID.
+      if (groupSessionScope === "group_topic" || groupSessionScope === "group_topic_sender") {
+        topicRootForSession = ctx.rootId ?? (replyInThread ? ctx.messageId : null);
       }
+
+      switch (groupSessionScope) {
+        case "group_sender":
+          peerId = `${ctx.chatId}:sender:${ctx.senderOpenId}`;
+          break;
+        case "group_topic":
+          peerId = topicRootForSession ? `${ctx.chatId}:topic:${topicRootForSession}` : ctx.chatId;
+          break;
+        case "group_topic_sender":
+          peerId = topicRootForSession
+            ? `${ctx.chatId}:topic:${topicRootForSession}:sender:${ctx.senderOpenId}`
+            : `${ctx.chatId}:sender:${ctx.senderOpenId}`;
+          break;
+        case "group":
+        default:
+          peerId = ctx.chatId;
+          break;
+      }
+
+      log(`feishu[${account.accountId}]: group session scope=${groupSessionScope}, peer=${peerId}`);
     }
 
     let route = core.channel.routing.resolveAgentRoute({
@@ -739,9 +851,11 @@ export async function handleFeishuMessage(params: {
         kind: isGroup ? "group" : "direct",
         id: peerId,
       },
-      // Add parentPeer for binding inheritance in topic mode
+      // Add parentPeer for binding inheritance in topic-scoped modes.
       parentPeer:
-        isGroup && ctx.rootId && topicSessionMode === "enabled"
+        isGroup &&
+        topicRootForSession &&
+        (groupSessionScope === "group_topic" || groupSessionScope === "group_topic_sender")
           ? {
               kind: "group",
               id: ctx.chatId,
@@ -823,85 +937,15 @@ export async function handleFeishuMessage(params: {
     }
 
     const envelopeOptions = core.channel.reply.resolveEnvelopeFormatOptions(cfg);
-
-    // Build message body with quoted content if available
-    let messageBody = ctx.content;
-    if (quotedContent) {
-      messageBody = `[Replying to: "${quotedContent}"]\n\n${ctx.content}`;
-    }
-
-    // Include a readable speaker label so the model can attribute instructions.
-    // (DMs already have per-sender sessions, but the prefix is still useful for clarity.)
-    const speaker = ctx.senderName ?? ctx.senderOpenId;
-    messageBody = `${speaker}: ${messageBody}`;
-
-    // If there are mention targets, inform the agent that replies will auto-mention them
-    if (ctx.mentionTargets && ctx.mentionTargets.length > 0) {
-      const targetNames = ctx.mentionTargets.map((t) => t.name).join(", ");
-      messageBody += `\n\n[System: Your reply will automatically @mention: ${targetNames}. Do not write @xxx yourself.]`;
-    }
-
+    const messageBody = buildFeishuAgentBody({
+      ctx,
+      quotedContent,
+      permissionErrorForAgent,
+    });
     const envelopeFrom = isGroup ? `${ctx.chatId}:${ctx.senderOpenId}` : ctx.senderOpenId;
-
-    // If there's a permission error, dispatch a separate notification first
     if (permissionErrorForAgent) {
-      const grantUrl = permissionErrorForAgent.grantUrl ?? "";
-      const permissionNotifyBody = `[System: The bot encountered a Feishu API permission error. Please inform the user about this issue and provide the permission grant URL for the admin to authorize. Permission grant URL: ${grantUrl}]`;
-
-      const permissionBody = core.channel.reply.formatAgentEnvelope({
-        channel: "Feishu",
-        from: envelopeFrom,
-        timestamp: new Date(),
-        envelope: envelopeOptions,
-        body: permissionNotifyBody,
-      });
-
-      const permissionCtx = core.channel.reply.finalizeInboundContext({
-        Body: permissionBody,
-        BodyForAgent: permissionNotifyBody,
-        RawBody: permissionNotifyBody,
-        CommandBody: permissionNotifyBody,
-        From: feishuFrom,
-        To: feishuTo,
-        SessionKey: route.sessionKey,
-        AccountId: route.accountId,
-        ChatType: isGroup ? "group" : "direct",
-        GroupSubject: isGroup ? ctx.chatId : undefined,
-        SenderName: "system",
-        SenderId: "system",
-        Provider: "feishu" as const,
-        Surface: "feishu" as const,
-        MessageSid: `${ctx.messageId}:permission-error`,
-        Timestamp: Date.now(),
-        WasMentioned: false,
-        CommandAuthorized: commandAuthorized,
-        OriginatingChannel: "feishu" as const,
-        OriginatingTo: feishuTo,
-      });
-
-      const {
-        dispatcher: permDispatcher,
-        replyOptions: permReplyOptions,
-        markDispatchIdle: markPermIdle,
-      } = createFeishuReplyDispatcher({
-        cfg,
-        agentId: route.agentId,
-        runtime: runtime as RuntimeEnv,
-        chatId: ctx.chatId,
-        replyToMessageId: ctx.messageId,
-        accountId: account.accountId,
-      });
-
-      log(`feishu[${account.accountId}]: dispatching permission error notification to agent`);
-
-      await core.channel.reply.dispatchReplyFromConfig({
-        ctx: permissionCtx,
-        cfg,
-        dispatcher: permDispatcher,
-        replyOptions: permReplyOptions,
-      });
-
-      markPermIdle();
+      // Keep the notice in a single dispatch to avoid duplicate replies (#27372).
+      log(`feishu[${account.accountId}]: appending permission error notice to message body`);
     }
 
     const body = core.channel.reply.formatAgentEnvelope({
@@ -944,7 +988,7 @@ export async function handleFeishuMessage(params: {
 
     const ctxPayload = core.channel.reply.finalizeInboundContext({
       Body: combinedBody,
-      BodyForAgent: ctx.content,
+      BodyForAgent: messageBody,
       InboundHistory: inboundHistory,
       RawBody: ctx.content,
       CommandBody: ctx.content,
@@ -974,20 +1018,26 @@ export async function handleFeishuMessage(params: {
       runtime: runtime as RuntimeEnv,
       chatId: ctx.chatId,
       replyToMessageId: ctx.messageId,
+      replyInThread,
+      rootId: ctx.rootId,
       mentionTargets: ctx.mentionTargets,
       accountId: account.accountId,
     });
 
     log(`feishu[${account.accountId}]: dispatching to agent (session=${route.sessionKey})`);
-
-    const { queuedFinal, counts } = await core.channel.reply.dispatchReplyFromConfig({
-      ctx: ctxPayload,
-      cfg,
+    const { queuedFinal, counts } = await core.channel.reply.withReplyDispatcher({
       dispatcher,
-      replyOptions,
+      onSettled: () => {
+        markDispatchIdle();
+      },
+      run: () =>
+        core.channel.reply.dispatchReplyFromConfig({
+          ctx: ctxPayload,
+          cfg,
+          dispatcher,
+          replyOptions,
+        }),
     });
-
-    markDispatchIdle();
 
     if (isGroup && historyKey && chatHistories) {
       clearHistoryEntriesIfEnabled({

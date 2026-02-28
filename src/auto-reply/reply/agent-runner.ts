@@ -44,12 +44,6 @@ import { createAudioAsVoiceBuffer, createBlockReplyPipeline } from "./block-repl
 import { resolveEffectiveBlockStreamingConfig } from "./block-streaming.js";
 import { createFollowupRunner } from "./followup-runner.js";
 import { resolveOriginMessageProvider, resolveOriginMessageTo } from "./origin-routing.js";
-import {
-  auditPostCompactionReads,
-  extractReadPaths,
-  formatAuditWarning,
-  readSessionMessages,
-} from "./post-compaction-audit.js";
 import { readPostCompactionContext } from "./post-compaction-context.js";
 import { resolveActiveRunQueueAction } from "./queue-policy.js";
 import { enqueueFollowupRun, type FollowupRun, type QueueSettings } from "./queue.js";
@@ -94,9 +88,6 @@ function appendUnscheduledReminderNote(payloads: ReplyPayload[]): ReplyPayload[]
     };
   });
 }
-
-// Track sessions pending post-compaction read audit (Layer 3)
-const pendingPostCompactionAudits = new Map<string, boolean>();
 
 export async function runReplyAgent(params: {
   commandBody: string;
@@ -704,9 +695,6 @@ export async function runReplyAgent(params: {
           .catch(() => {
             // Silent failure — post-compaction context is best-effort
           });
-
-        // Set pending audit flag for Layer 3 (post-compaction read audit)
-        pendingPostCompactionAudits.set(sessionKey, true);
       }
 
       if (verboseEnabled) {
@@ -721,25 +709,6 @@ export async function runReplyAgent(params: {
       finalPayloads = appendUsageLine(finalPayloads, responseUsageLine);
     }
 
-    // Post-compaction read audit (Layer 3)
-    if (sessionKey && pendingPostCompactionAudits.get(sessionKey)) {
-      pendingPostCompactionAudits.delete(sessionKey); // Delete FIRST — one-shot only
-      try {
-        const sessionFile = activeSessionEntry?.sessionFile;
-        if (sessionFile) {
-          const messages = readSessionMessages(sessionFile);
-          const readPaths = extractReadPaths(messages);
-          const workspaceDir = process.cwd();
-          const audit = auditPostCompactionReads(readPaths, workspaceDir);
-          if (!audit.passed) {
-            enqueueSystemEvent(formatAuditWarning(audit.missingPatterns), { sessionKey });
-          }
-        }
-      } catch {
-        // Silent failure — audit is best-effort
-      }
-    }
-
     return finalizeWithFollowup(
       finalPayloads.length === 1 ? finalPayloads[0] : finalPayloads,
       queueKey,
@@ -748,5 +717,12 @@ export async function runReplyAgent(params: {
   } finally {
     blockReplyPipeline?.stop();
     typing.markRunComplete();
+    // Safety net: the dispatcher's onIdle callback normally fires
+    // markDispatchIdle(), but if the dispatcher exits early, errors,
+    // or the reply path doesn't go through it cleanly, the second
+    // signal never fires and the typing keepalive loop runs forever.
+    // Calling this twice is harmless — cleanup() is guarded by the
+    // `active` flag.  Same pattern as the followup runner fix (#26881).
+    typing.markDispatchIdle();
   }
 }
