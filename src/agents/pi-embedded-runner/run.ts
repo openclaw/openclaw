@@ -535,6 +535,7 @@ export async function runEmbeddedPiAgent(
           agentDir,
         });
       };
+      let sseParseRetries = 0;
       try {
         while (true) {
           if (runLoopIterations >= MAX_RUN_LOOP_ITERATIONS) {
@@ -904,12 +905,21 @@ export async function runEmbeddedPiAgent(
                 },
               };
             }
-            // Handle malformed SSE parse errors (proxy-induced truncation/splitting) with auto-retry
+            // Handle malformed SSE parse errors (proxy-induced truncation/splitting) with auto-retry.
+            // Cap consecutive SSE retries to avoid loops when a provider consistently returns
+            // non-SSE malformed responses; after the cap, fall through to failover/rotation.
             if (isLikelySSEParseError(errorText)) {
+              sseParseRetries++;
+              if (sseParseRetries <= 3) {
+                log.warn(
+                  `[sse-parse-retry] Malformed SSE event from ${provider}/${modelId} (attempt ${sseParseRetries}/3); retrying (error: ${errorText.slice(0, 200)})`,
+                );
+                continue;
+              }
               log.warn(
-                `[sse-parse-retry] Malformed SSE event from ${provider}/${modelId}; retrying (error: ${errorText.slice(0, 200)})`,
+                `[sse-parse-retry] SSE parse retry cap reached for ${provider}/${modelId}; falling through to failover`,
               );
-              continue;
+              sseParseRetries = 0;
             }
             const promptFailoverReason = classifyFailoverReason(errorText);
             await maybeMarkAuthProfileFailure({
@@ -987,16 +997,24 @@ export async function runEmbeddedPiAgent(
             );
           }
 
-          // Handle malformed SSE parse errors (proxy-induced truncation/splitting) with auto-retry
+          // Handle malformed SSE parse errors (proxy-induced truncation/splitting) with auto-retry.
+          // Same cap as above to prevent infinite loops on persistent provider errors.
           if (
             !aborted &&
             (isLikelySSEParseError(assistantErrorText) ||
               isLikelySSEParseError(lastAssistant?.errorMessage))
           ) {
+            sseParseRetries++;
+            if (sseParseRetries <= 3) {
+              log.warn(
+                `[sse-parse-retry] Malformed SSE event from ${provider}/${modelId} (attempt ${sseParseRetries}/3); retrying (error: ${(assistantErrorText ?? lastAssistant?.errorMessage ?? "").slice(0, 200)})`,
+              );
+              continue;
+            }
             log.warn(
-              `[sse-parse-retry] Malformed SSE event from ${provider}/${modelId}; retrying (error: ${(assistantErrorText ?? lastAssistant?.errorMessage ?? "").slice(0, 200)})`,
+              `[sse-parse-retry] SSE parse retry cap reached for ${provider}/${modelId}; falling through to failover`,
             );
-            continue;
+            sseParseRetries = 0;
           }
 
           // Rotate on timeout to try another account/model path in this turn,
