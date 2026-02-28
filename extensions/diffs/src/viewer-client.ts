@@ -89,6 +89,7 @@ function createToolbarButton(params: {
   button.title = params.title;
   button.setAttribute("aria-label", params.title);
   button.innerHTML = params.iconMarkup;
+  applyToolbarButtonStyles(button, params.active);
   button.addEventListener("click", (event) => {
     event.preventDefault();
     params.onClick();
@@ -96,46 +97,74 @@ function createToolbarButton(params: {
   return button;
 }
 
+function applyToolbarButtonStyles(button: HTMLButtonElement, active: boolean): void {
+  button.style.display = "inline-flex";
+  button.style.alignItems = "center";
+  button.style.justifyContent = "center";
+  button.style.width = "24px";
+  button.style.height = "24px";
+  button.style.padding = "0";
+  button.style.margin = "0";
+  button.style.border = "0";
+  button.style.borderRadius = "0";
+  button.style.background = "transparent";
+  button.style.boxShadow = "none";
+  button.style.lineHeight = "0";
+  button.style.cursor = "pointer";
+  button.style.overflow = "visible";
+  button.style.flex = "0 0 auto";
+  button.style.opacity = active ? "0.92" : "0.6";
+  button.style.color =
+    viewerState.theme === "dark" ? "rgba(226, 232, 240, 0.74)" : "rgba(15, 23, 42, 0.52)";
+
+  const svg = button.querySelector<SVGElement>("svg");
+  if (!svg) {
+    return;
+  }
+  svg.style.display = "block";
+  svg.style.width = "16px";
+  svg.style.height = "16px";
+  svg.style.minWidth = "16px";
+  svg.style.minHeight = "16px";
+  svg.style.overflow = "visible";
+  svg.style.flex = "0 0 auto";
+  svg.style.color = "inherit";
+  svg.style.fill = "currentColor";
+  svg.style.pointerEvents = "none";
+}
+
 function splitIcon(): string {
   return `<svg viewBox="0 0 16 16" aria-hidden="true">
     <path fill="currentColor" d="M14 0H8.5v16H14a2 2 0 0 0 2-2V2a2 2 0 0 0-2-2m-1.5 6.5v1h1a.5.5 0 0 1 0 1h-1v1a.5.5 0 0 1-1 0v-1h-1a.5.5 0 0 1 0-1h1v-1a.5.5 0 0 1 1 0"></path>
-    <path fill="currentColor" opacity="0.35" d="M2 0a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h5.5V0zm.5 7.5h3a.5.5 0 0 1 0 1h-3a.5.5 0 0 1 0-1"></path>
+    <path fill="currentColor" opacity="0.5" d="M2 0a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h5.5V0zm.5 7.5h3a.5.5 0 0 1 0 1h-3a.5.5 0 0 1 0-1"></path>
   </svg>`;
 }
 
 function unifiedIcon(): string {
   return `<svg viewBox="0 0 16 16" aria-hidden="true">
     <path fill="currentColor" fill-rule="evenodd" d="M16 14a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2V8.5h16zm-8-4a.5.5 0 0 0-.5.5v1h-1a.5.5 0 0 0 0 1h1v1a.5.5 0 0 0 1 0v-1h1a.5.5 0 0 0 0-1h-1v-1A.5.5 0 0 0 8 10" clip-rule="evenodd"></path>
-    <path fill="currentColor" fill-rule="evenodd" opacity="0.4" d="M14 0a2 2 0 0 1 2 2v5.5H0V2a2 2 0 0 1 2-2zM6.5 3.5a.5.5 0 0 0 0 1h3a.5.5 0 0 0 0-1z" clip-rule="evenodd"></path>
+    <path fill="currentColor" fill-rule="evenodd" opacity="0.5" d="M14 0a2 2 0 0 1 2 2v5.5H0V2a2 2 0 0 1 2-2zM6.5 3.5a.5.5 0 0 0 0 1h3a.5.5 0 0 0 0-1z" clip-rule="evenodd"></path>
   </svg>`;
 }
 
 function wrapIcon(active: boolean): string {
-  if (active) {
-    return `<svg viewBox="0 0 16 16" aria-hidden="true">
-      <path fill="currentColor" opacity="0.88" d="M2 4.25h8.25a2.75 2.75 0 1 1 0 5.5H7.5a.75.75 0 0 0 0 1.5h3.1l-1.07 1.06a.75.75 0 1 0 1.06 1.06l2.35-2.34a.75.75 0 0 0 0-1.06l-2.35-2.34a.75.75 0 1 0-1.06 1.06l1.07 1.06H10.25a1.25 1.25 0 1 0 0-2.5H2z"></path>
-      <rect x="2" y="11.75" width="4.75" height="1.5" rx=".75" fill="currentColor" opacity="0.55"></rect>
-    </svg>`;
-  }
   return `<svg viewBox="0 0 16 16" aria-hidden="true">
-    <rect x="2" y="4" width="12" height="1.5" rx=".75" fill="currentColor"></rect>
-    <rect x="2" y="7.25" width="12" height="1.5" rx=".75" fill="currentColor" opacity="0.82"></rect>
-    <rect x="2" y="10.5" width="12" height="1.5" rx=".75" fill="currentColor" opacity="0.64"></rect>
+    <path fill="currentColor" fill-rule="evenodd" clip-rule="evenodd" opacity="${active ? "1" : "0.85"}" d="M3.868 3.449a1.21 1.21 0 0 0-.473-.329c-.274-.111-.623-.15-1.055-.076a3.5 3.5 0 0 0-.71.208c-.082.035-.16.077-.235.125l-.043.03v1.056l.168-.139c.15-.124.326-.225.527-.303.196-.074.4-.113.604-.113.188 0 .33.051.431.157.087.095.137.248.147.456l-.962.144c-.219.03-.41.086-.57.166a1.245 1.245 0 0 0-.398.311c-.103.125-.181.27-.229.426-.097.33-.093.68.011 1.008a1.096 1.096 0 0 0 .638.67c.155.063.328.093.528.093a1.25 1.25 0 0 0 .978-.441v.345h1.007V4.65c0-.255-.03-.484-.089-.681a1.423 1.423 0 0 0-.275-.52zm-.636 1.896v.236c0 .119-.018.231-.055.341a.745.745 0 0 1-.377.447.694.694 0 0 1-.512.027.454.454 0 0 1-.156-.094.389.389 0 0 1-.094-.139.474.474 0 0 1-.035-.186c0-.077.01-.147.024-.212a.33.33 0 0 1 .078-.141.436.436 0 0 1 .161-.109 1.3 1.3 0 0 1 .305-.073l.661-.097zm5.051-1.067a2.253 2.253 0 0 0-.244-.656 1.354 1.354 0 0 0-.436-.459 1.165 1.165 0 0 0-.642-.173 1.136 1.136 0 0 0-.69.223 1.33 1.33 0 0 0-.264.266V1H5.09v6.224h.918v-.281c.123.152.287.266.472.328.098.032.208.047.33.047.255 0 .483-.06.677-.177.192-.115.355-.278.486-.486a2.29 2.29 0 0 0 .293-.718 3.87 3.87 0 0 0 .096-.886 3.714 3.714 0 0 0-.078-.773zm-.86.758c0 .232-.02.439-.06.613-.036.172-.09.315-.159.424a.639.639 0 0 1-.233.237.582.582 0 0 1-.565.014.683.683 0 0 1-.21-.183.925.925 0 0 1-.142-.283A1.187 1.187 0 0 1 6 5.5v-.517c0-.164.02-.314.06-.447.036-.132.087-.242.156-.336a.668.668 0 0 1 .228-.208.584.584 0 0 1 .29-.071.554.554 0 0 1 .496.279c.063.099.108.214.143.354.031.143.05.306.05.482zM2.407 9.9a.913.913 0 0 1 .316-.239c.218-.1.547-.105.766-.018.104.042.204.1.32.184l.33.26V8.945l-.097-.062a1.932 1.932 0 0 0-.905-.215c-.308 0-.593.057-.846.168-.25.11-.467.27-.647.475-.18.21-.318.453-.403.717-.09.272-.137.57-.137.895 0 .289.043.561.13.808.086.249.211.471.373.652.161.185.361.333.597.441.232.104.493.155.778.155.233 0 .434-.028.613-.084.165-.05.322-.123.466-.217l.078-.061v-.889l-.2.095a.4.4 0 0 1-.076.026c-.05.017-.099.035-.128.049-.036.023-.227.09-.227.09-.06.024-.14.043-.218.059a.977.977 0 0 1-.599-.057.827.827 0 0 1-.306-.225 1.088 1.088 0 0 1-.205-.376 1.728 1.728 0 0 1-.076-.529c0-.21.028-.399.083-.56.054-.158.13-.294.22-.4zM14 6h-4V5h4.5l.5.5v6l-.5.5H7.879l2.07 2.071-.706.707-2.89-2.889v-.707l2.89-2.89L9.95 9l-2 2H14V6z"></path>
   </svg>`;
 }
 
 function backgroundIcon(active: boolean): string {
   if (active) {
     return `<svg viewBox="0 0 16 16" aria-hidden="true">
-      <path fill="currentColor" opacity="0.4" d="M0 2.25a.75.75 0 0 1 .75-.75h10.5a.75.75 0 0 1 0 1.5H.75A.75.75 0 0 1 0 2.25"></path>
+      <path fill="currentColor" opacity="0.5" d="M0 2.25a.75.75 0 0 1 .75-.75h10.5a.75.75 0 0 1 0 1.5H.75A.75.75 0 0 1 0 2.25"></path>
       <path fill="currentColor" fill-rule="evenodd" d="M15 5a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1H1a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1zM2.5 9a.5.5 0 0 0 0 1h8a.5.5 0 0 0 0-1zm0-2a.5.5 0 0 0 0 1h11a.5.5 0 0 0 0-1z" clip-rule="evenodd"></path>
-      <path fill="currentColor" opacity="0.4" d="M0 14.75A.75.75 0 0 1 .75 14h5.5a.75.75 0 0 1 0 1.5H.75a.75.75 0 0 1-.75-.75"></path>
+      <path fill="currentColor" opacity="0.5" d="M0 14.75A.75.75 0 0 1 .75 14h5.5a.75.75 0 0 1 0 1.5H.75a.75.75 0 0 1-.75-.75"></path>
     </svg>`;
   }
   return `<svg viewBox="0 0 16 16" aria-hidden="true">
-    <path fill="currentColor" opacity="0.22" d="M0 2.25a.75.75 0 0 1 .75-.75h10.5a.75.75 0 0 1 0 1.5H.75A.75.75 0 0 1 0 2.25"></path>
-    <path fill="currentColor" opacity="0.22" fill-rule="evenodd" d="M15 5a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1H1a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1zM2.5 9a.5.5 0 0 0 0 1h8a.5.5 0 0 0 0-1zm0-2a.5.5 0 0 0 0 1h11a.5.5 0 0 0 0-1z" clip-rule="evenodd"></path>
-    <path fill="currentColor" opacity="0.22" d="M0 14.75A.75.75 0 0 1 .75 14h5.5a.75.75 0 0 1 0 1.5H.75a.75.75 0 0 1-.75-.75"></path>
+    <path fill="currentColor" opacity="0.34" d="M0 2.25a.75.75 0 0 1 .75-.75h10.5a.75.75 0 0 1 0 1.5H.75A.75.75 0 0 1 0 2.25"></path>
+    <path fill="currentColor" opacity="0.34" fill-rule="evenodd" d="M15 5a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1H1a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1zM2.5 9a.5.5 0 0 0 0 1h8a.5.5 0 0 0 0-1zm0-2a.5.5 0 0 0 0 1h11a.5.5 0 0 0 0-1z" clip-rule="evenodd"></path>
+    <path fill="currentColor" opacity="0.34" d="M0 14.75A.75.75 0 0 1 .75 14h5.5a.75.75 0 0 1 0 1.5H.75a.75.75 0 0 1-.75-.75"></path>
     <path d="M2.5 13.5 13.5 2.5" stroke="currentColor" stroke-width="1.35" stroke-linecap="round"></path>
   </svg>`;
 }
@@ -148,13 +177,19 @@ function themeIcon(theme: DiffTheme): string {
     </svg>`;
   }
   return `<svg viewBox="0 0 16 16" aria-hidden="true">
-    <path fill="currentColor" d="M6.856.764a.75.75 0 0 1 .094 1.035A5.75 5.75 0 0 0 13.81 10.95a.75.75 0 1 1 1.13.99A7.251 7.251 0 1 1 6.762.858a.75.75 0 0 1 .094-.094"></path>
+    <path fill="currentColor" d="M8.21 2.109a.256.256 0 0 0-.42 0L6.534 3.893a.256.256 0 0 1-.316.085l-1.982-.917a.256.256 0 0 0-.362.21l-.196 2.174a.256.256 0 0 1-.232.232l-2.175.196a.256.256 0 0 0-.209.362l.917 1.982a.256.256 0 0 1-.085.316L.11 9.791a.256.256 0 0 0 0 .418L1.23 11H3.1a5 5 0 1 1 9.8 0h1.869l1.123-.79a.256.256 0 0 0 0-.42l-1.785-1.257a.256.256 0 0 1-.085-.316l.917-1.982a.256.256 0 0 0-.21-.362l-2.174-.196a.256.256 0 0 1-.232-.232l-.196-2.175a.256.256 0 0 0-.362-.209l-1.982.917a.256.256 0 0 1-.316-.085z"></path>
+    <path fill="currentColor" d="M4 10q.001.519.126 1h7.748A4 4 0 1 0 4 10M.75 12a.75.75 0 0 0 0 1.5h14.5a.75.75 0 0 0 0-1.5z"></path>
   </svg>`;
 }
 
 function createToolbar(): HTMLElement {
   const toolbar = document.createElement("div");
   toolbar.className = "oc-diff-toolbar";
+  toolbar.style.display = "inline-flex";
+  toolbar.style.alignItems = "center";
+  toolbar.style.gap = "6px";
+  toolbar.style.marginInlineStart = "6px";
+  toolbar.style.flex = "0 0 auto";
 
   toolbar.append(
     createToolbarButton({
