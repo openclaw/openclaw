@@ -1,3 +1,4 @@
+import * as crypto from "crypto";
 import * as http from "http";
 import * as Lark from "@larksuiteoapi/node-sdk";
 import {
@@ -10,6 +11,7 @@ import { resolveFeishuAccount, listEnabledFeishuAccounts } from "./accounts.js";
 import { handleFeishuMessage, type FeishuMessageEvent, type FeishuBotAddedEvent } from "./bot.js";
 import { createFeishuWSClient, createEventDispatcher } from "./client.js";
 import { probeFeishu } from "./probe.js";
+import { getMessageFeishu } from "./send.js";
 import type { ResolvedFeishuAccount } from "./types.js";
 
 export type MonitorFeishuOpts = {
@@ -29,6 +31,29 @@ const FEISHU_WEBHOOK_RATE_LIMIT_WINDOW_MS = 60_000;
 const FEISHU_WEBHOOK_RATE_LIMIT_MAX_REQUESTS = 120;
 const FEISHU_WEBHOOK_RATE_LIMIT_MAX_TRACKED_KEYS = 4_096;
 const FEISHU_WEBHOOK_COUNTER_LOG_EVERY = 25;
+const FEISHU_REACTION_VERIFY_TIMEOUT_MS = 1_500;
+
+export type FeishuReactionCreatedEvent = {
+  message_id: string;
+  chat_id?: string;
+  chat_type?: "p2p" | "group";
+  reaction_type?: { emoji_type?: string };
+  operator_type?: string;
+  user_id?: { open_id?: string };
+  action_time?: string;
+};
+
+type ResolveReactionSyntheticEventParams = {
+  cfg: ClawdbotConfig;
+  accountId: string;
+  event: FeishuReactionCreatedEvent;
+  botOpenId?: string;
+  fetchMessage?: typeof getMessageFeishu;
+  verificationTimeoutMs?: number;
+  logger?: (message: string) => void;
+  uuid?: () => string;
+};
+
 const feishuWebhookRateLimits = new Map<string, { count: number; windowStartMs: number }>();
 const feishuWebhookStatusCounters = new Map<string, number>();
 let lastWebhookRateLimitCleanupMs = 0;
@@ -115,6 +140,99 @@ function recordWebhookStatus(
   }
 }
 
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T | null> {
+  let timeoutId: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race<T | null>([
+      promise,
+      new Promise<null>((resolve) => {
+        timeoutId = setTimeout(() => resolve(null), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
+  }
+}
+
+export async function resolveReactionSyntheticEvent(
+  params: ResolveReactionSyntheticEventParams,
+): Promise<FeishuMessageEvent | null> {
+  const {
+    cfg,
+    accountId,
+    event,
+    botOpenId,
+    fetchMessage = getMessageFeishu,
+    verificationTimeoutMs = FEISHU_REACTION_VERIFY_TIMEOUT_MS,
+    logger,
+    uuid = () => crypto.randomUUID(),
+  } = params;
+
+  const emoji = event.reaction_type?.emoji_type;
+  const messageId = event.message_id;
+  const senderId = event.user_id?.open_id;
+  if (!emoji || !messageId || !senderId) {
+    return null;
+  }
+
+  const account = resolveFeishuAccount({ cfg, accountId });
+  const reactionNotifications = account.config.reactionNotifications ?? "own";
+  if (reactionNotifications === "off") {
+    return null;
+  }
+
+  // Skip bot self-reactions
+  if (event.operator_type === "app" || senderId === botOpenId) {
+    return null;
+  }
+
+  // Skip typing indicator emoji
+  if (emoji === "Typing") {
+    return null;
+  }
+
+  if (reactionNotifications === "own" && !botOpenId) {
+    logger?.(
+      `feishu[${accountId}]: bot open_id unavailable, skipping reaction ${emoji} on ${messageId}`,
+    );
+    return null;
+  }
+
+  const reactedMsg = await withTimeout(
+    fetchMessage({ cfg, messageId, accountId }),
+    verificationTimeoutMs,
+  ).catch(() => null);
+  const isBotMessage = reactedMsg?.senderType === "app" || reactedMsg?.senderOpenId === botOpenId;
+  if (!reactedMsg || (reactionNotifications === "own" && !isBotMessage)) {
+    logger?.(
+      `feishu[${accountId}]: ignoring reaction on non-bot/unverified message ${messageId} ` +
+        `(sender: ${reactedMsg?.senderOpenId ?? "unknown"})`,
+    );
+    return null;
+  }
+
+  const syntheticChatIdRaw = event.chat_id ?? reactedMsg.chatId;
+  const syntheticChatId = syntheticChatIdRaw?.trim() ? syntheticChatIdRaw : `p2p:${senderId}`;
+  const syntheticChatType: "p2p" | "group" = event.chat_type ?? "p2p";
+  return {
+    sender: {
+      sender_id: { open_id: senderId },
+      sender_type: "user",
+    },
+    message: {
+      message_id: `${messageId}:reaction:${emoji}:${uuid()}`,
+      chat_id: syntheticChatId,
+      chat_type: syntheticChatType,
+      message_type: "text",
+      content: JSON.stringify({
+        text: `[reacted with ${emoji} to message ${messageId}]`,
+      }),
+    },
+  };
+}
+
 async function fetchBotOpenId(account: ResolvedFeishuAccount): Promise<string | undefined> {
   try {
     const result = await probeFeishu(account);
@@ -184,6 +302,53 @@ function registerEventHandlers(
       } catch (err) {
         error(`feishu[${accountId}]: error handling bot removed event: ${String(err)}`);
       }
+    },
+    "im.message.reaction.created_v1": async (data) => {
+      const processReaction = async () => {
+        const event = data as FeishuReactionCreatedEvent;
+        const myBotId = botOpenIds.get(accountId);
+        const syntheticEvent = await resolveReactionSyntheticEvent({
+          cfg,
+          accountId,
+          event,
+          botOpenId: myBotId,
+          logger: log,
+        });
+        if (!syntheticEvent) {
+          return;
+        }
+        const promise = handleFeishuMessage({
+          cfg,
+          event: syntheticEvent,
+          botOpenId: myBotId,
+          runtime,
+          chatHistories,
+          accountId,
+        });
+        if (fireAndForget) {
+          promise.catch((err) => {
+            error(`feishu[${accountId}]: error handling reaction: ${String(err)}`);
+          });
+          return;
+        }
+        await promise;
+      };
+
+      if (fireAndForget) {
+        void processReaction().catch((err) => {
+          error(`feishu[${accountId}]: error handling reaction event: ${String(err)}`);
+        });
+        return;
+      }
+
+      try {
+        await processReaction();
+      } catch (err) {
+        error(`feishu[${accountId}]: error handling reaction event: ${String(err)}`);
+      }
+    },
+    "im.message.reaction.deleted_v1": async () => {
+      // Ignore reaction removals
     },
   });
 }
