@@ -56,6 +56,7 @@ function resolveWindowsTaskName(env: NodeJS.ProcessEnv): string {
  */
 export async function prepareRestartScript(
   env: NodeJS.ProcessEnv = process.env,
+  gatewayPort: number = DEFAULT_GATEWAY_PORT,
 ): Promise<string | null> {
   const tmpDir = os.tmpdir();
   const timestamp = Date.now();
@@ -96,8 +97,8 @@ rm -f "$0"
       if (!isBatchSafe(taskName)) {
         return null;
       }
-      const envPort = Number(env.OPENCLAW_GATEWAY_PORT?.trim());
-      const port = Number.isFinite(envPort) && envPort > 0 ? envPort : DEFAULT_GATEWAY_PORT;
+      const port =
+        Number.isFinite(gatewayPort) && gatewayPort > 0 ? gatewayPort : DEFAULT_GATEWAY_PORT;
       filename = `openclaw-restart-${timestamp}.bat`;
       scriptContent = `@echo off
 REM Standalone restart script — survives parent process termination.

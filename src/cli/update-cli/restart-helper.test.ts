@@ -11,8 +11,8 @@ describe("restart-helper", () => {
   const originalPlatform = process.platform;
   const originalGetUid = process.getuid;
 
-  async function prepareAndReadScript(env: Record<string, string>) {
-    const scriptPath = await prepareRestartScript(env);
+  async function prepareAndReadScript(env: Record<string, string>, gatewayPort = 18789) {
+    const scriptPath = await prepareRestartScript(env, gatewayPort);
     expect(scriptPath).toBeTruthy();
     const content = await fs.readFile(scriptPath!, "utf-8");
     return { scriptPath: scriptPath!, content };
@@ -143,18 +143,21 @@ describe("restart-helper", () => {
       await cleanupScript(scriptPath);
     });
 
-    it("uses OPENCLAW_GATEWAY_PORT for port polling on Windows", async () => {
+    it("uses passed gateway port for port polling on Windows", async () => {
       Object.defineProperty(process, "platform", { value: "win32" });
+      const customPort = 9999;
 
-      const { scriptPath, content } = await prepareAndReadScript({
-        OPENCLAW_PROFILE: "default",
-        OPENCLAW_GATEWAY_PORT: "19000",
-      });
-      expect(content).toContain('netstat -ano | findstr /R /C:":19000 .*LISTENING" >nul');
-      expect(content).toContain(
-        'for /f "tokens=5" %%P in (\'netstat -ano ^| findstr /R /C:":19000 .*LISTENING"\') do (',
+      const { scriptPath, content } = await prepareAndReadScript(
+        {
+          OPENCLAW_PROFILE: "default",
+        },
+        customPort,
       );
-      expectWindowsRestartWaitOrdering(content, 19000);
+      expect(content).toContain(`netstat -ano | findstr /R /C:":${customPort} .*LISTENING" >nul`);
+      expect(content).toContain(
+        `for /f "tokens=5" %%P in ('netstat -ano ^| findstr /R /C:":${customPort} .*LISTENING"') do (`,
+      );
+      expectWindowsRestartWaitOrdering(content, customPort);
       await cleanupScript(scriptPath);
     });
 
