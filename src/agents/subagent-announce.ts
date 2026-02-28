@@ -316,6 +316,82 @@ async function readLatestSubagentOutput(sessionKey: string): Promise<string | un
   return undefined;
 }
 
+/**
+ * Aggregate ALL assistant text from a subagent's session history.
+ *
+ * Unlike {@link readLatestSubagentOutput} which returns only the most recent
+ * assistant message, this function collects text from every assistant turn in
+ * chronological order.  This is used when a subagent times out or errors so
+ * that intermediate findings accumulated over multiple tool-call rounds are
+ * preserved instead of being silently lost.
+ */
+async function readAggregatedSubagentOutput(params: {
+  sessionKey: string;
+  maxChars?: number;
+}): Promise<string | undefined> {
+  const MAX_CHARS = params.maxChars ?? 32_000;
+  const history = await callGateway<{ messages?: Array<unknown> }>({
+    method: "chat.history",
+    params: { sessionKey: params.sessionKey, limit: 200 },
+  });
+  const messages = Array.isArray(history?.messages) ? history.messages : [];
+
+  const chunks: string[] = [];
+  let totalLength = 0;
+
+  for (const msg of messages) {
+    if (!msg || typeof msg !== "object") {
+      continue;
+    }
+    if ((msg as { role?: unknown }).role !== "assistant") {
+      continue;
+    }
+    const text = extractSubagentOutputText(msg);
+    if (!text?.trim()) {
+      continue;
+    }
+    const trimmed = text.trim();
+    if (totalLength + trimmed.length > MAX_CHARS) {
+      const remaining = MAX_CHARS - totalLength;
+      if (remaining > 100) {
+        chunks.push(trimmed.slice(0, remaining) + "\n[...truncated]");
+      }
+      break;
+    }
+    chunks.push(trimmed);
+    totalLength += trimmed.length;
+  }
+
+  if (chunks.length === 0) {
+    return undefined;
+  }
+  if (chunks.length === 1) {
+    return chunks[0];
+  }
+  return chunks.join("\n\n");
+}
+
+async function readAggregatedSubagentOutputWithRetry(params: {
+  sessionKey: string;
+  maxWaitMs: number;
+  maxChars?: number;
+}): Promise<string | undefined> {
+  const RETRY_INTERVAL_MS = FAST_TEST_MODE ? FAST_TEST_RETRY_INTERVAL_MS : 100;
+  const deadline = Date.now() + Math.max(0, Math.min(params.maxWaitMs, 15_000));
+  let result: string | undefined;
+  while (Date.now() < deadline) {
+    result = await readAggregatedSubagentOutput({
+      sessionKey: params.sessionKey,
+      maxChars: params.maxChars,
+    });
+    if (result?.trim()) {
+      return result;
+    }
+    await new Promise((resolve) => setTimeout(resolve, RETRY_INTERVAL_MS));
+  }
+  return result;
+}
+
 async function readLatestSubagentOutputWithRetry(params: {
   sessionKey: string;
   maxWaitMs: number;
@@ -1133,18 +1209,50 @@ export async function runSubagentAnnounceFlow(params: {
           outcome = { status: "timeout" };
         }
       }
-      reply = await readLatestSubagentOutput(params.childSessionKey);
+      // For timeout/error: if we already had a roundOneReply, the aggregated
+      // output likely contains more information from later turns.
+      if ((outcome?.status === "timeout" || outcome?.status === "error") && reply) {
+        const aggregated = await readAggregatedSubagentOutput({
+          sessionKey: params.childSessionKey,
+        });
+        if (aggregated?.trim() && aggregated.trim().length > (reply?.trim().length ?? 0)) {
+          reply = aggregated;
+        }
+      }
+      const shouldAggregate = outcome?.status === "timeout" || outcome?.status === "error";
+      if (!reply) {
+        if (shouldAggregate) {
+          reply = await readAggregatedSubagentOutput({
+            sessionKey: params.childSessionKey,
+          });
+        } else {
+          reply = await readLatestSubagentOutput(params.childSessionKey);
+        }
+      }
     }
 
     if (!reply) {
-      reply = await readLatestSubagentOutput(params.childSessionKey);
+      if (outcome?.status === "timeout" || outcome?.status === "error") {
+        reply = await readAggregatedSubagentOutput({
+          sessionKey: params.childSessionKey,
+        });
+      } else {
+        reply = await readLatestSubagentOutput(params.childSessionKey);
+      }
     }
 
     if (!reply?.trim()) {
-      reply = await readLatestSubagentOutputWithRetry({
-        sessionKey: params.childSessionKey,
-        maxWaitMs: params.timeoutMs,
-      });
+      if (outcome?.status === "timeout" || outcome?.status === "error") {
+        reply = await readAggregatedSubagentOutputWithRetry({
+          sessionKey: params.childSessionKey,
+          maxWaitMs: params.timeoutMs,
+        });
+      } else {
+        reply = await readLatestSubagentOutputWithRetry({
+          sessionKey: params.childSessionKey,
+          maxWaitMs: params.timeoutMs,
+        });
+      }
     }
 
     if (
