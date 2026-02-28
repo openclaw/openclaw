@@ -239,15 +239,6 @@ YAML
     printf '      - %s\n' "$mount" >>"$EXTRA_COMPOSE_FILE"
   done
 
-  # When sandbox is enabled and Docker GID is known, add group_add so the
-  # non-root node user can access /var/run/docker.sock inside the container.
-  if [[ -n "${DOCKER_GID:-}" && -n "${SANDBOX_ENABLED:-}" ]]; then
-    cat >>"$EXTRA_COMPOSE_FILE" <<YAML
-    group_add:
-      - "${DOCKER_GID}"
-YAML
-  fi
-
   cat >>"$EXTRA_COMPOSE_FILE" <<'YAML'
   openclaw-cli:
     volumes:
@@ -273,26 +264,9 @@ YAML
   fi
 }
 
-# When sandbox is requested, automatically add Docker socket mount and
-# Docker CLI build arg unless the user has already configured them.
+# When sandbox is requested, ensure Docker CLI build arg is set for local builds.
+# Docker socket mount is deferred until sandbox prerequisites are verified.
 if [[ -n "$SANDBOX_ENABLED" ]]; then
-  if [[ -S /var/run/docker.sock ]]; then
-    SOCKET_MOUNT="/var/run/docker.sock:/var/run/docker.sock"
-    if [[ "$EXTRA_MOUNTS" != *"docker.sock"* ]]; then
-      if [[ -n "$EXTRA_MOUNTS" ]]; then
-        EXTRA_MOUNTS="${EXTRA_MOUNTS},${SOCKET_MOUNT}"
-      else
-        EXTRA_MOUNTS="$SOCKET_MOUNT"
-      fi
-      export OPENCLAW_EXTRA_MOUNTS="$EXTRA_MOUNTS"
-      echo "==> Sandbox: auto-added Docker socket mount"
-    fi
-  else
-    echo "WARNING: OPENCLAW_SANDBOX=1 but /var/run/docker.sock not found." >&2
-    echo "  Sandbox requires Docker socket access. Mount it manually or" >&2
-    echo "  ensure Docker is running on the host." >&2
-  fi
-  # Ensure Docker CLI is installed in local builds.
   if [[ -z "${OPENCLAW_INSTALL_DOCKER_CLI:-}" ]]; then
     export OPENCLAW_INSTALL_DOCKER_CLI=1
   fi
@@ -477,6 +451,33 @@ fi
 
 # Apply sandbox config only if prerequisites are met.
 if [[ -n "$SANDBOX_ENABLED" ]]; then
+  # Mount Docker socket via a dedicated compose overlay. This overlay is
+  # created only after sandbox prerequisites pass, so the socket is never
+  # exposed when sandbox cannot actually run.
+  if [[ -S /var/run/docker.sock ]]; then
+    SANDBOX_COMPOSE_FILE="$ROOT_DIR/docker-compose.sandbox.yml"
+    cat >"$SANDBOX_COMPOSE_FILE" <<'YAML'
+services:
+  openclaw-gateway:
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+YAML
+    if [[ -n "${DOCKER_GID:-}" ]]; then
+      cat >>"$SANDBOX_COMPOSE_FILE" <<YAML
+    group_add:
+      - "${DOCKER_GID}"
+YAML
+    fi
+    COMPOSE_ARGS+=("-f" "$SANDBOX_COMPOSE_FILE")
+    echo "==> Sandbox: added Docker socket mount"
+  else
+    echo "WARNING: OPENCLAW_SANDBOX=1 but /var/run/docker.sock not found." >&2
+    echo "  Sandbox requires Docker socket access. Skipping sandbox setup." >&2
+    SANDBOX_ENABLED=""
+  fi
+fi
+
+if [[ -n "$SANDBOX_ENABLED" ]]; then
   # Enable sandbox in OpenClaw config.
   sandbox_config_ok=true
   if ! docker compose "${COMPOSE_ARGS[@]}" run --rm openclaw-cli \
@@ -502,8 +503,8 @@ if [[ -n "$SANDBOX_ENABLED" ]]; then
   fi
   echo "Docs: https://docs.openclaw.ai/security/sandbox"
 
-  # Restart gateway to pick up sandbox config.
-  docker compose "${COMPOSE_ARGS[@]}" restart openclaw-gateway
+  # Restart gateway with sandbox compose overlay to pick up socket mount + config.
+  docker compose "${COMPOSE_ARGS[@]}" up -d openclaw-gateway
 fi
 
 echo ""
