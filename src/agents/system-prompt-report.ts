@@ -135,11 +135,7 @@ export function buildSystemPromptReport(params: {
   tools: AgentTool[];
 }): SessionSystemPromptReport {
   const systemPrompt = params.systemPrompt.trim();
-  const projectContext = extractBetween(
-    systemPrompt,
-    "\n# Project Context\n",
-    "\n## Silent Replies\n",
-  );
+  const projectContext = extractBetween(systemPrompt, "\n# Project Context\n", "\n## Runtime\n");
   const projectContextChars = projectContext.text.length;
   const toolListText = extractToolListText(systemPrompt);
   const toolListChars = toolListText.length;

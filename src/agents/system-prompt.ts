@@ -569,12 +569,9 @@ export function buildAgentSystemPrompt(params: {
     ...buildVoiceSection({ isMinimal, ttsHint: params.ttsHint }),
   ];
 
-  if (extraSystemPrompt) {
-    // Use "Subagent Context" header for minimal mode (subagents), otherwise "Group Chat Context"
-    const contextHeader =
-      promptMode === "minimal" ? "## Subagent Context" : "## Group Chat Context";
-    lines.push(contextHeader, extraSystemPrompt, "");
-  }
+  // --- Stable sections (cacheable prefix) ---
+  // Session-stable sections placed before dynamic content to maximize the prefix that
+  // can be cached. See https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching
   if (params.reactionGuidance) {
     const { level, channel } = params.reactionGuidance;
     const guidanceText =
@@ -600,28 +597,6 @@ export function buildAgentSystemPrompt(params: {
   }
   if (reasoningHint) {
     lines.push("## Reasoning Format", reasoningHint, "");
-  }
-
-  const contextFiles = params.contextFiles ?? [];
-  const validContextFiles = contextFiles.filter(
-    (file) => typeof file.path === "string" && file.path.trim().length > 0,
-  );
-  if (validContextFiles.length > 0) {
-    const hasSoulFile = validContextFiles.some((file) => {
-      const normalizedPath = file.path.trim().replace(/\\/g, "/");
-      const baseName = normalizedPath.split("/").pop() ?? normalizedPath;
-      return baseName.toLowerCase() === "soul.md";
-    });
-    lines.push("# Project Context", "", "The following project context files have been loaded:");
-    if (hasSoulFile) {
-      lines.push(
-        "If SOUL.md is present, embody its persona and tone. Avoid stiff, generic replies; follow its guidance unless higher-priority instructions override it.",
-      );
-    }
-    lines.push("");
-    for (const file of validContextFiles) {
-      lines.push(`## ${file.path}`, "", file.content, "");
-    }
   }
 
   // Skip silent replies for subagent/none modes
@@ -653,6 +628,38 @@ export function buildAgentSystemPrompt(params: {
       'If something needs attention, do NOT include "HEARTBEAT_OK"; reply with the alert text instead.',
       "",
     );
+  }
+
+  // --- Dynamic sections (cache-volatile, placed at end) ---
+  // extraSystemPrompt, contextFiles, and Runtime may change between requests.
+  // Placing them after stable sections maximizes the cacheable prefix.
+  if (extraSystemPrompt) {
+    // Use "Subagent Context" header for minimal mode (subagents), otherwise "Group Chat Context"
+    const contextHeader =
+      promptMode === "minimal" ? "## Subagent Context" : "## Group Chat Context";
+    lines.push(contextHeader, extraSystemPrompt, "");
+  }
+
+  const contextFiles = params.contextFiles ?? [];
+  const validContextFiles = contextFiles.filter(
+    (file) => typeof file.path === "string" && file.path.trim().length > 0,
+  );
+  if (validContextFiles.length > 0) {
+    const hasSoulFile = validContextFiles.some((file) => {
+      const normalizedPath = file.path.trim().replace(/\\/g, "/");
+      const baseName = normalizedPath.split("/").pop() ?? normalizedPath;
+      return baseName.toLowerCase() === "soul.md";
+    });
+    lines.push("# Project Context", "", "The following project context files have been loaded:");
+    if (hasSoulFile) {
+      lines.push(
+        "If SOUL.md is present, embody its persona and tone. Avoid stiff, generic replies; follow its guidance unless higher-priority instructions override it.",
+      );
+    }
+    lines.push("");
+    for (const file of validContextFiles) {
+      lines.push(`## ${file.path}`, "", file.content, "");
+    }
   }
 
   lines.push(

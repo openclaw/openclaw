@@ -636,6 +636,119 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("## Reactions");
     expect(prompt).toContain("Reactions are enabled for Telegram in MINIMAL mode.");
   });
+
+  it("places stable sections before dynamic sections for prompt caching", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      extraSystemPrompt: "Group chat context here",
+      contextFiles: [{ path: "AGENTS.md", content: "Agent instructions" }],
+      reactionGuidance: { level: "minimal", channel: "Telegram" },
+      reasoningTagHint: true,
+      runtimeInfo: {
+        host: "host",
+        os: "macOS",
+        arch: "arm64",
+        node: "v22",
+        model: "anthropic/claude",
+      },
+    });
+
+    // Stable sections must appear before dynamic sections to maximize the
+    // cacheable prefix for Anthropic prompt caching (prefix-based).
+    const reactionsIdx = prompt.indexOf("## Reactions");
+    const reasoningIdx = prompt.indexOf("## Reasoning Format");
+    const silentIdx = prompt.indexOf("## Silent Replies");
+    const heartbeatsIdx = prompt.indexOf("## Heartbeats");
+    const groupChatIdx = prompt.indexOf("## Group Chat Context");
+    const projectCtxIdx = prompt.indexOf("# Project Context");
+    const runtimeIdx = prompt.indexOf("## Runtime");
+
+    // All sections must be present.
+    expect(reactionsIdx, "Reactions section missing").toBeGreaterThan(-1);
+    expect(reasoningIdx, "Reasoning Format section missing").toBeGreaterThan(-1);
+    expect(silentIdx, "Silent Replies section missing").toBeGreaterThan(-1);
+    expect(heartbeatsIdx, "Heartbeats section missing").toBeGreaterThan(-1);
+    expect(groupChatIdx, "Group Chat Context section missing").toBeGreaterThan(-1);
+    expect(projectCtxIdx, "Project Context section missing").toBeGreaterThan(-1);
+    expect(runtimeIdx, "Runtime section missing").toBeGreaterThan(-1);
+
+    // Stable sections come before dynamic sections.
+    expect(reactionsIdx, "Reactions must precede Group Chat").toBeLessThan(groupChatIdx);
+    expect(reasoningIdx, "Reasoning must precede Group Chat").toBeLessThan(groupChatIdx);
+    expect(silentIdx, "Silent Replies must precede Group Chat").toBeLessThan(groupChatIdx);
+    expect(heartbeatsIdx, "Heartbeats must precede Group Chat").toBeLessThan(groupChatIdx);
+
+    // Dynamic section ordering: extraSystemPrompt → contextFiles → Runtime
+    expect(groupChatIdx, "Group Chat must precede Project Context").toBeLessThan(projectCtxIdx);
+    expect(projectCtxIdx, "Project Context must precede Runtime").toBeLessThan(runtimeIdx);
+  });
+
+  it("maintains ordering invariant when optional stable sections are absent", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      extraSystemPrompt: "Group context",
+      contextFiles: [{ path: "AGENTS.md", content: "Instructions" }],
+      // No reactionGuidance, no reasoningTagHint — these stable sections are absent
+      runtimeInfo: {
+        host: "host",
+        os: "macOS",
+        arch: "arm64",
+        node: "v22",
+        model: "anthropic/claude",
+      },
+    });
+
+    // Even without optional stable sections, dynamic sections stay at the end.
+    const silentIdx = prompt.indexOf("## Silent Replies");
+    const heartbeatsIdx = prompt.indexOf("## Heartbeats");
+    const groupChatIdx = prompt.indexOf("## Group Chat Context");
+    const projectCtxIdx = prompt.indexOf("# Project Context");
+    const runtimeIdx = prompt.indexOf("## Runtime");
+
+    expect(silentIdx, "Silent Replies section missing").toBeGreaterThan(-1);
+    expect(heartbeatsIdx, "Heartbeats section missing").toBeGreaterThan(-1);
+    expect(groupChatIdx, "Group Chat Context section missing").toBeGreaterThan(-1);
+    expect(projectCtxIdx, "Project Context section missing").toBeGreaterThan(-1);
+    expect(runtimeIdx, "Runtime section missing").toBeGreaterThan(-1);
+
+    expect(heartbeatsIdx, "Heartbeats must precede Group Chat").toBeLessThan(groupChatIdx);
+    expect(groupChatIdx, "Group Chat must precede Project Context").toBeLessThan(projectCtxIdx);
+    expect(projectCtxIdx, "Project Context must precede Runtime").toBeLessThan(runtimeIdx);
+  });
+
+  it("maintains ordering invariant in minimal mode (subagents)", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      promptMode: "minimal",
+      extraSystemPrompt: "Subagent context",
+      contextFiles: [{ path: "AGENTS.md", content: "Instructions" }],
+      runtimeInfo: {
+        host: "host",
+        os: "macOS",
+        arch: "arm64",
+        node: "v22",
+        model: "anthropic/claude",
+      },
+    });
+
+    // In minimal mode, Silent Replies and Heartbeats are skipped.
+    // Dynamic sections must still appear at the end.
+    expect(prompt).not.toContain("## Silent Replies");
+    expect(prompt).not.toContain("## Heartbeats");
+
+    const subagentCtxIdx = prompt.indexOf("## Subagent Context");
+    const projectCtxIdx = prompt.indexOf("# Project Context");
+    const runtimeIdx = prompt.indexOf("## Runtime");
+
+    expect(subagentCtxIdx, "Subagent Context section missing").toBeGreaterThan(-1);
+    expect(projectCtxIdx, "Project Context section missing").toBeGreaterThan(-1);
+    expect(runtimeIdx, "Runtime section missing").toBeGreaterThan(-1);
+
+    expect(subagentCtxIdx, "Subagent Context must precede Project Context").toBeLessThan(
+      projectCtxIdx,
+    );
+    expect(projectCtxIdx, "Project Context must precede Runtime").toBeLessThan(runtimeIdx);
+  });
 });
 
 describe("buildSubagentSystemPrompt", () => {
