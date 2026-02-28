@@ -236,6 +236,10 @@ export async function dispatchCronDelivery(
         threadId: delivery.threadId,
       },
     });
+    const responsePrefix = resolveResponsePrefix(params.cfgWithAgentDefaults, params.agentId, {
+      channel: delivery.channel,
+      accountId: delivery.accountId,
+    });
     const taskLabel =
       typeof params.job.name === "string" && params.job.name.trim()
         ? params.job.name.trim()
@@ -303,6 +307,10 @@ export async function dispatchCronDelivery(
         });
       }
       deliveryAttempted = true;
+      const textWithPrefix =
+        responsePrefix && synthesizedText && !synthesizedText.startsWith(responsePrefix)
+          ? `${responsePrefix} ${synthesizedText}`
+          : synthesizedText;
       const didAnnounce = await runSubagentAnnounceFlow({
         childSessionKey: params.agentSessionKey,
         childRunId: `${params.job.id}:${params.runSessionId}:${params.runStartedAt}`,
@@ -317,7 +325,7 @@ export async function dispatchCronDelivery(
         task: taskLabel,
         timeoutMs: params.timeoutMs,
         cleanup: params.job.deleteAfterRun ? "delete" : "keep",
-        roundOneReply: synthesizedText,
+        roundOneReply: textWithPrefix,
         // Keep delivery outcome truthful for cron state: if outbound send fails,
         // announce flow must report false so caller can apply best-effort policy.
         bestEffortDeliver: false,
