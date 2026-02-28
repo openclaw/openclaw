@@ -116,8 +116,7 @@ export function registerFeishuChatTools(api: OpenClawPluginApi) {
             case "info":
               return json(await getChatInfo(client, p.chat_id));
             default:
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any -- exhaustive check fallback
-              return json({ error: `Unknown action: ${(p as any).action}` });
+              return json({ error: `Unknown action: ${String(p.action)}` });
           }
         } catch (err) {
           return json({ error: err instanceof Error ? err.message : String(err) });

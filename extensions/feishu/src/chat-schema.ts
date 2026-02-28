@@ -1,21 +1,24 @@
 import { Type, type Static } from "@sinclair/typebox";
 
-export const FeishuChatSchema = Type.Union([
-  Type.Object({
-    action: Type.Literal("members"),
-    chat_id: Type.String({ description: "Chat ID (from URL or event payload)" }),
-    page_size: Type.Optional(Type.Number({ description: "Page size (1-100, default 50)" })),
-    page_token: Type.Optional(Type.String({ description: "Pagination token" })),
-    member_id_type: Type.Optional(
-      Type.Union([Type.Literal("open_id"), Type.Literal("user_id"), Type.Literal("union_id")], {
-        description: "Member ID type (default: open_id)",
-      }),
-    ),
+const CHAT_ACTION_VALUES = ["members", "info"] as const;
+const MEMBER_ID_TYPE_VALUES = ["open_id", "user_id", "union_id"] as const;
+
+export const FeishuChatSchema = Type.Object({
+  action: Type.Unsafe<(typeof CHAT_ACTION_VALUES)[number]>({
+    type: "string",
+    enum: [...CHAT_ACTION_VALUES],
+    description: "Action to run: members | info",
   }),
-  Type.Object({
-    action: Type.Literal("info"),
-    chat_id: Type.String({ description: "Chat ID (from URL or event payload)" }),
-  }),
-]);
+  chat_id: Type.String({ description: "Chat ID (from URL or event payload)" }),
+  page_size: Type.Optional(Type.Number({ description: "Page size (1-100, default 50)" })),
+  page_token: Type.Optional(Type.String({ description: "Pagination token" })),
+  member_id_type: Type.Optional(
+    Type.Unsafe<(typeof MEMBER_ID_TYPE_VALUES)[number]>({
+      type: "string",
+      enum: [...MEMBER_ID_TYPE_VALUES],
+      description: "Member ID type (default: open_id)",
+    }),
+  ),
+});
 
 export type FeishuChatParams = Static<typeof FeishuChatSchema>;
