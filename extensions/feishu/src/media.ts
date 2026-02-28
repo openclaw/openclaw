@@ -265,9 +265,10 @@ export async function sendImageFeishu(params: {
   to: string;
   imageKey: string;
   replyToMessageId?: string;
+  replyInThread?: boolean;
   accountId?: string;
 }): Promise<SendMediaResult> {
-  const { cfg, to, imageKey, replyToMessageId, accountId } = params;
+  const { cfg, to, imageKey, replyToMessageId, replyInThread, accountId } = params;
   const { client, receiveId, receiveIdType } = resolveFeishuSendTarget({
     cfg,
     to,
@@ -281,6 +282,7 @@ export async function sendImageFeishu(params: {
       data: {
         content,
         msg_type: "image",
+        ...(replyInThread ? { reply_in_thread: true } : {}),
       },
     });
     assertFeishuMessageApiSuccess(response, "Feishu image reply failed");
@@ -309,9 +311,10 @@ export async function sendFileFeishu(params: {
   /** Use "media" for video, "audio" for audio, "file" for documents */
   msgType?: "file" | "media" | "audio";
   replyToMessageId?: string;
+  replyInThread?: boolean;
   accountId?: string;
 }): Promise<SendMediaResult> {
-  const { cfg, to, fileKey, replyToMessageId, accountId } = params;
+  const { cfg, to, fileKey, replyToMessageId, replyInThread, accountId } = params;
   const msgType = params.msgType ?? "file";
   const { client, receiveId, receiveIdType } = resolveFeishuSendTarget({
     cfg,
@@ -326,6 +329,7 @@ export async function sendFileFeishu(params: {
       data: {
         content,
         msg_type: msgType,
+        ...(replyInThread ? { reply_in_thread: true } : {}),
       },
     });
     assertFeishuMessageApiSuccess(response, "Feishu file reply failed");
@@ -387,12 +391,22 @@ export async function sendMediaFeishu(params: {
   mediaBuffer?: Buffer;
   fileName?: string;
   replyToMessageId?: string;
+  replyInThread?: boolean;
   accountId?: string;
   /** Allowed roots for local path reads; required for local filePath to work. */
   mediaLocalRoots?: readonly string[];
 }): Promise<SendMediaResult> {
-  const { cfg, to, mediaUrl, mediaBuffer, fileName, replyToMessageId, accountId, mediaLocalRoots } =
-    params;
+  const {
+    cfg,
+    to,
+    mediaUrl,
+    mediaBuffer,
+    fileName,
+    replyToMessageId,
+    replyInThread,
+    accountId,
+    mediaLocalRoots,
+  } = params;
   const account = resolveFeishuAccount({ cfg, accountId });
   if (!account.configured) {
     throw new Error(`Feishu account "${account.accountId}" not configured`);
@@ -423,7 +437,7 @@ export async function sendMediaFeishu(params: {
 
   if (isImage) {
     const { imageKey } = await uploadImageFeishu({ cfg, image: buffer, accountId });
-    return sendImageFeishu({ cfg, to, imageKey, replyToMessageId, accountId });
+    return sendImageFeishu({ cfg, to, imageKey, replyToMessageId, replyInThread, accountId });
   } else {
     const fileType = detectFileType(name);
     const { fileKey } = await uploadFileFeishu({
@@ -441,6 +455,7 @@ export async function sendMediaFeishu(params: {
       fileKey,
       msgType,
       replyToMessageId,
+      replyInThread,
       accountId,
     });
   }
