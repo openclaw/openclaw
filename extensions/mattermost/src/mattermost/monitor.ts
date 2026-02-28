@@ -686,7 +686,8 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
 
     const baseSessionKey = route.sessionKey;
     const threadRootId = post.root_id?.trim() || undefined;
-    const replyToMode = resolveMattermostReplyToMode(account, kind);
+    const chatType = kind === "direct" ? "direct" : kind === "channel" ? "channel" : "group";
+    const replyToMode = resolveMattermostReplyToMode(account, chatType);
     const effectiveReplyToId =
       threadRootId ?? (replyToMode === "all" || replyToMode === "first" ? post.id : undefined);
     const threadKeys = resolveThreadSessionKeys({

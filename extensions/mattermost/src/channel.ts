@@ -19,6 +19,7 @@ import {
   listMattermostAccountIds,
   resolveDefaultMattermostAccountId,
   resolveMattermostAccount,
+  resolveMattermostReplyToMode,
   type ResolvedMattermostAccount,
 } from "./mattermost/accounts.js";
 import { normalizeMattermostBaseUrl } from "./mattermost/client.js";
@@ -251,15 +252,11 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = {
   threading: {
     resolveReplyToMode: ({ cfg, accountId, chatType }) => {
       const account = resolveMattermostAccount({ cfg, accountId });
-      const normalizedChatType = (chatType ?? "") as import("./types.js").MattermostChatTypeKey;
-      if (account.config.replyToModeByChatType?.[normalizedChatType] !== undefined) {
-        return account.config.replyToModeByChatType[normalizedChatType] ?? "off";
-      }
-      if (chatType === "direct" && account.config.dm?.replyToMode !== undefined) {
-        return account.config.dm.replyToMode ?? "off";
-      }
-      if (chatType === "direct") return "off";
-      return account.config.replyToMode ?? "off";
+      const normalizedChatType =
+        chatType === "direct" || chatType === "channel" || chatType === "group"
+          ? chatType
+          : undefined;
+      return resolveMattermostReplyToMode(account, normalizedChatType);
     },
   },
   actions: mattermostMessageActions,
