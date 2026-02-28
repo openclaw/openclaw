@@ -1,3 +1,4 @@
+import net from "node:net";
 import path from "node:path";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { getActiveEmbeddedRunCount } from "../agents/pi-embedded-runner/runs.js";
@@ -29,6 +30,7 @@ import {
 import { isDiagnosticsEnabled } from "../infra/diagnostic-events.js";
 import { logAcceptedEnvOption } from "../infra/env.js";
 import { createExecApprovalForwarder } from "../infra/exec-approval-forwarder.js";
+import { GatewayLockError } from "../infra/gateway-lock.js";
 import { onHeartbeatEvent } from "../infra/heartbeat-events.js";
 import { startHeartbeatRunner, type HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
@@ -195,6 +197,29 @@ export async function startGatewayServer(
   port = 18789,
   opts: GatewayServerOptions = {},
 ): Promise<GatewayServer> {
+  // Fail fast: check port availability before any heavy initialization (~340MB).
+  // Without this, a port conflict + systemd Restart=always creates an infinite
+  // crash loop that can exhaust system resources and kill the host VM.
+  await new Promise<void>((resolve, reject) => {
+    const probe = net.createServer();
+    probe.once("error", (err: NodeJS.ErrnoException) => {
+      if (err.code === "EADDRINUSE") {
+        reject(
+          new GatewayLockError(
+            `another gateway instance is already listening on ws://127.0.0.1:${port}`,
+            err,
+          ),
+        );
+      } else {
+        reject(err);
+      }
+    });
+    probe.once("listening", () => {
+      probe.close(() => resolve());
+    });
+    probe.listen(port, "127.0.0.1");
+  });
+
   const minimalTestGateway =
     process.env.VITEST === "1" && process.env.OPENCLAW_TEST_MINIMAL_GATEWAY === "1";
 
