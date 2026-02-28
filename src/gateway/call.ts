@@ -49,7 +49,7 @@ type CallGatewayBaseOptions = {
   configPath?: string;
   /**
    * Force local loopback target resolution for internal in-process calls.
-   * Explicit URL overrides and configured remote URLs still take precedence.
+   * Explicit URL overrides still take precedence.
    */
   forceLoopback?: boolean;
 };
@@ -258,7 +258,10 @@ function ensureRemoteModeUrlConfigured(
   );
 }
 
-function resolveGatewayCredentials(context: ResolvedGatewayCallContext): {
+function resolveGatewayCredentials(
+  context: ResolvedGatewayCallContext,
+  forceLoopback = false,
+): {
   token?: string;
   password?: string;
 } {
@@ -267,6 +270,7 @@ function resolveGatewayCredentials(context: ResolvedGatewayCallContext): {
     env: process.env,
     explicitAuth: context.explicitAuth,
     urlOverride: context.urlOverride,
+    modeOverride: forceLoopback ? "local" : undefined,
     remotePasswordPrecedence: "env-first",
   });
 }
@@ -417,7 +421,7 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
   });
   const url = connectionDetails.url;
   const tlsFingerprint = await resolveGatewayTlsFingerprint({ opts, context, url });
-  const { token, password } = resolveGatewayCredentials(context);
+  const { token, password } = resolveGatewayCredentials(context, opts.forceLoopback === true);
   return await executeGatewayRequestWithScopes<T>({
     opts,
     scopes,
