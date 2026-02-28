@@ -95,7 +95,6 @@ export function createCanvasTool(options?: { config?: OpenClawConfig }): AnyAgen
       "New surface: beginRendering + surfaceUpdate (two lines).",
       "Update: surfaceUpdate only (same surfaceId, components merge by id).",
       "Remove: deleteSurface.",
-      "Component catalog and props are in the A2UI bootstrap file.",
     ].join("\n"),
     parameters: CanvasToolSchema,
     execute: async (_toolCallId, args) => {
