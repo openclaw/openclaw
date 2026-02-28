@@ -3,6 +3,7 @@ import {
   extractNapCatInboundMessage,
   isNapCatEventMentioningSelf,
   normalizeNapCatAllowFrom,
+  resolveNapCatGroupConfig,
 } from "./inbound.js";
 
 describe("extractNapCatInboundMessage", () => {
@@ -56,10 +57,43 @@ describe("isNapCatEventMentioningSelf", () => {
     });
     expect(result).toBe(false);
   });
+
+  it("detects CQ mention when message is string", () => {
+    const result = isNapCatEventMentioningSelf({
+      self_id: 10001,
+      message: "[CQ:at,qq=10001] hello",
+    });
+    expect(result).toBe(true);
+  });
 });
 
 describe("normalizeNapCatAllowFrom", () => {
   it("normalizes and deduplicates entries", () => {
     expect(normalizeNapCatAllowFrom(["qq:user:1", "1", " group:2 "])).toEqual(["1", "2"]);
+  });
+});
+
+describe("resolveNapCatGroupConfig", () => {
+  it("applies wildcard defaults when exact group omits fields", () => {
+    const result = resolveNapCatGroupConfig({
+      groupId: "123",
+      groups: {
+        "*": {
+          requireMention: false,
+          allowFrom: ["111"],
+        },
+        "123": {
+          allow: true,
+        },
+      },
+    });
+
+    expect(result).toEqual({
+      matched: true,
+      allow: true,
+      requireMention: false,
+      allowFrom: ["111"],
+      enabled: undefined,
+    });
   });
 });

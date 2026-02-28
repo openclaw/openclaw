@@ -15,6 +15,7 @@ import { getNapCatRuntime } from "./runtime.js";
 import { sendNapCatMedia, sendNapCatText } from "./send.js";
 import { isNapCatSenderAllowed, normalizeNapCatAllowEntry } from "./targets.js";
 import type {
+  NapCatGroupConfig,
   NapCatInboundMessage,
   OneBotMessageEvent,
   OneBotSegment,
@@ -63,6 +64,10 @@ function toStringId(value: unknown): string {
     return String(value);
   }
   return "";
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function normalizeSegments(value: unknown): OneBotSegment[] {
@@ -145,16 +150,17 @@ function isGroupMessageAllowed(params: {
   if (groupKeys.length === 0) {
     return true;
   }
-  const exact = groups[params.groupId];
-  const wildcard = groups["*"];
-  const cfg = exact ?? wildcard;
-  if (!cfg) {
+  const resolved = resolveNapCatGroupConfig({
+    groups,
+    groupId: params.groupId,
+  });
+  if (!resolved.matched) {
     return false;
   }
-  if (cfg.enabled === false) {
+  if (resolved.enabled === false) {
     return false;
   }
-  if (cfg.allow === false) {
+  if (resolved.allow === false) {
     return false;
   }
   return true;
@@ -166,13 +172,55 @@ export function isNapCatEventMentioningSelf(event: OneBotMessageEvent): boolean 
     return false;
   }
   const segments = normalizeSegments(event.message);
-  return segments.some((segment) => {
-    if (segment.type.toLowerCase() !== "at") {
-      return false;
-    }
-    const qq = toStringId(segment.data?.qq);
-    return qq === "all" || qq === selfId;
-  });
+  if (
+    segments.some((segment) => {
+      if (segment.type.toLowerCase() !== "at") {
+        return false;
+      }
+      const qq = toStringId(segment.data?.qq);
+      return qq === "all" || qq === selfId;
+    })
+  ) {
+    return true;
+  }
+
+  const raw =
+    typeof event.message === "string"
+      ? event.message
+      : typeof event.raw_message === "string"
+        ? event.raw_message
+        : "";
+  if (!raw.trim()) {
+    return false;
+  }
+
+  const selfMention = new RegExp(`\\[CQ:at,qq=${escapeRegExp(selfId)}\\]`, "i");
+  return selfMention.test(raw) || /\[CQ:at,qq=all\]/i.test(raw);
+}
+
+export function resolveNapCatGroupConfig(params: {
+  groups: Record<string, NapCatGroupConfig> | undefined;
+  groupId: string;
+}): {
+  matched: boolean;
+  enabled?: boolean;
+  allow?: boolean;
+  requireMention?: boolean;
+  allowFrom?: Array<string | number>;
+} {
+  const groups = params.groups ?? {};
+  const exact = groups[params.groupId];
+  const wildcard = groups["*"];
+  if (!exact && !wildcard) {
+    return { matched: false };
+  }
+  return {
+    matched: true,
+    enabled: exact?.enabled ?? wildcard?.enabled,
+    allow: exact?.allow ?? wildcard?.allow,
+    requireMention: exact?.requireMention ?? wildcard?.requireMention,
+    allowFrom: exact?.allowFrom ?? wildcard?.allowFrom,
+  };
 }
 
 export function extractNapCatInboundMessage(event: unknown): NapCatInboundMessage | null {
@@ -270,15 +318,17 @@ export async function processNapCatEvent(params: {
     readStore: pairing.readStoreForDmPolicy,
   });
 
-  const groupConfig =
-    params.account.config.groups?.[inbound.targetId] ?? params.account.config.groups?.["*"];
+  const groupConfig = resolveNapCatGroupConfig({
+    groups: params.account.config.groups,
+    groupId: inbound.targetId,
+  });
   const access = resolveDmGroupAccessWithLists({
     isGroup: inbound.isGroup,
     dmPolicy,
     groupPolicy,
     allowFrom: params.account.config.dm?.allowFrom ?? [],
     groupAllowFrom:
-      groupConfig?.allowFrom ?? params.account.config.groupAllowFrom ?? params.account.config.dm?.allowFrom,
+      groupConfig.allowFrom ?? params.account.config.groupAllowFrom ?? params.account.config.dm?.allowFrom,
     storeAllowFrom,
     isSenderAllowed: (allowFrom) => isNapCatSenderAllowed(allowFrom, inbound.senderId),
   });
@@ -313,7 +363,7 @@ export async function processNapCatEvent(params: {
   }
 
   if (inbound.isGroup) {
-    const requireMention = groupConfig?.requireMention ?? true;
+    const requireMention = groupConfig.requireMention ?? true;
     if (requireMention && !isNapCatEventMentioningSelf(inbound.event)) {
       return;
     }
