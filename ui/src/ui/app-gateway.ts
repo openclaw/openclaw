@@ -163,6 +163,9 @@ export function connectGateway(host: GatewayHost) {
       applySnapshot(host, hello);
       // Reset orphaned chat run state from before disconnect.
       // Any in-flight run's final event was lost during the disconnect window.
+      const hadOrphanedChatActivity =
+        Boolean(host.chatRunId) ||
+        Boolean((host as unknown as { chatStream: string | null }).chatStream);
       host.chatRunId = null;
       (host as unknown as { chatStream: string | null }).chatStream = null;
       (host as unknown as { chatStreamStartedAt: number | null }).chatStreamStartedAt = null;
@@ -173,6 +176,11 @@ export function connectGateway(host: GatewayHost) {
       void loadNodes(host as unknown as OpenClawApp, { quiet: true });
       void loadDevices(host as unknown as OpenClawApp, { quiet: true });
       void refreshActiveTab(host as unknown as Parameters<typeof refreshActiveTab>[0]);
+      // If a run was active during disconnect its final event was lost; reload
+      // history so the completed response (already saved to transcript) is shown.
+      if (hadOrphanedChatActivity) {
+        void loadChatHistory(host as unknown as OpenClawApp);
+      }
     },
     onClose: ({ code, reason, error }) => {
       if (host.client !== client) {
