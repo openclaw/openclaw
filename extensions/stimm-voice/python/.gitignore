@@ -1,2 +1,8 @@
 # Compiled shared objects (rebuild from .c source)
 *.so
+
+# Python virtual environment
+.venv/
+venv/
+__pycache__/
+*.pyc
