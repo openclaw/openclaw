@@ -2895,6 +2895,66 @@ description: test skill
     expectNoFinding(res, "gateway.http.no_auth");
   });
 
+  it("warns when gateway token looks short", async () => {
+    const cfg: OpenClawConfig = {
+      gateway: { auth: { mode: "token", token: "short-tok" } },
+    };
+
+    const res = await audit(cfg);
+
+    expectFinding(res, "gateway.token_too_short", "warn");
+  });
+
+  it("does not warn when gateway token is long enough", async () => {
+    const cfg: OpenClawConfig = {
+      gateway: { auth: { mode: "token", token: "a-very-long-random-token-value-here" } },
+    };
+
+    const res = await audit(cfg);
+
+    expectNoFinding(res, "gateway.token_too_short");
+  });
+
+  it("warns when gateway password looks short", async () => {
+    const cfg: OpenClawConfig = {
+      gateway: { auth: { mode: "password", password: "short" } },
+    };
+
+    const res = await audit(cfg);
+
+    expectFinding(res, "gateway.password_too_short", "warn");
+  });
+
+  it("does not warn when gateway password is long enough", async () => {
+    const cfg: OpenClawConfig = {
+      gateway: { auth: { mode: "password", password: "a-very-strong-password-here!" } },
+    };
+
+    const res = await audit(cfg);
+
+    expectNoFinding(res, "gateway.password_too_short");
+  });
+
+  it("reports plugin.http_routes_no_auth when plugins enabled without allowlist", async () => {
+    const cfg: OpenClawConfig = {
+      plugins: { enabled: true },
+    };
+
+    const res = await audit(cfg);
+
+    expectFinding(res, "plugin.http_routes_no_auth", "info");
+  });
+
+  it("does not report plugin.http_routes_no_auth when plugins.allow is configured", async () => {
+    const cfg: OpenClawConfig = {
+      plugins: { enabled: true, allow: ["trusted-plugin"] },
+    };
+
+    const res = await audit(cfg);
+
+    expectNoFinding(res, "plugin.http_routes_no_auth");
+  });
+
   it("reports HTTP API session-key override surfaces when enabled", async () => {
     const cfg: OpenClawConfig = {
       gateway: {

@@ -1,73 +1,73 @@
 # Security Audit Report: openclaw
 
-**日期:** 2026-02-24
-**稽核方式:** Claude Code Multi-Agent Security Audit
+**Date:** 2026-02-24
+**Method:** Claude Code Multi-Agent Security Audit
 
-## 摘要
+## Summary
 
 - Critical: 0 | High: 0 | Medium: 2 | Low: 0 | Info: 1
-- 整體風險等級: Medium
+- Overall risk level: Medium
 
-## 專案概述
+## Project Overview
 
-- 技術棧簡述
-  - TypeScript / ESM 專案，使用 pnpm 管理依賴
-  - Multi-channel AI gateway，支援多種通訊頻道（Discord、Telegram、Slack 等）
-  - 插件系統支援工具、HTTP 路由、頻道、Provider 等擴充
-  - Gateway server 提供 HTTP/WebSocket 介面，搭配認證中介層
-- 攻擊面分析
-  - Gateway HTTP/WebSocket 端點（認證、rate limiting、origin 檢查）
-  - Plugin HTTP routes（由插件註冊，繞過閘道認證中介層）
-  - 瀏覽器控制端點（CDP 遠端連線）
-  - 工具執行系統（sandbox、safe bins、elevated exec）
-  - 設定檔與狀態目錄的檔案系統權限
-  - 環境變數載入（shell profile）
+- Technology stack
+  - TypeScript / ESM project, using pnpm for dependency management
+  - Multi-channel AI gateway supporting various communication channels (Discord, Telegram, Slack, etc.)
+  - Plugin system supporting tools, HTTP routes, channels, providers, and other extensions
+  - Gateway server providing HTTP/WebSocket interface with authentication middleware
+- Attack surface analysis
+  - Gateway HTTP/WebSocket endpoints (authentication, rate limiting, origin checks)
+  - Plugin HTTP routes (registered by plugins, bypass gateway authentication middleware)
+  - Browser control endpoints (CDP remote connections)
+  - Tool execution system (sandbox, safe bins, elevated exec)
+  - File system permissions for config files and state directories
+  - Environment variable loading (shell profile)
 
-## 發現
+## Findings
 
-### [Medium] O1: Gateway 密碼模式無強度檢查
+### [Medium] O1: Gateway password mode lacks strength check
 
-**狀態:** 已修復
-**檔案:** `src/security/audit.ts`
-**說明:** token 模式有 `gateway.token_too_short` 檢查，但 password 模式沒有對應的強度檢查。
-**影響:** 使用者可能設定過短的密碼，降低閘道安全性。
-**修復方式:** 新增 `gateway.password_too_short` audit finding，密碼長度 < 16 時發出警告。
-**驗證方法:** 執行 `pnpm test` 確認測試通過。
+**Status:** Fixed
+**File:** `src/security/audit.ts`
+**Description:** Token mode has a `gateway.token_too_short` check, but password mode lacked a corresponding strength check.
+**Impact:** Users could set overly short passwords, reducing gateway security.
+**Fix:** Added `gateway.password_too_short` audit finding that warns when password length < 16 characters.
+**Verification:** Run `pnpm test` to confirm tests pass.
 
-### [Medium] O2: Plugin HTTP Routes 無認證檢查
+### [Medium] O2: Plugin HTTP routes lack authentication check
 
-**狀態:** 已修復（新增 audit warning）
-**檔案:** `src/security/audit.ts`
-**說明:** 插件可以透過 registry 註冊 HTTP routes，這些路由不經過閘道認證中介層。
-**影響:** 惡意或設計不當的插件可能暴露未受保護的端點。
-**修復方式:** 新增 `plugin.http_routes_no_auth` audit info finding，提醒管理者檢視插件路由。
-**驗證方法:** 執行 `pnpm test` 確認測試通過。
+**Status:** Fixed (added audit warning)
+**File:** `src/security/audit.ts`
+**Description:** Plugins can register HTTP routes via the registry; these routes do not pass through gateway authentication middleware.
+**Impact:** Malicious or misconfigured plugins could expose unprotected endpoints.
+**Fix:** Added `plugin.http_routes_no_auth` audit info finding to alert operators to review plugin routes.
+**Verification:** Run `pnpm test` to confirm tests pass.
 
-### [Info] O3: Shell 環境變數載入
+### [Info] O3: Shell environment variable loading
 
-**狀態:** 已接受風險
-**說明:** `OPENCLAW_LOAD_SHELL_ENV` 選項可從 shell profile 載入環境變數，這是設計意圖。
-**影響:** 若 shell profile 被竄改，可能注入惡意環境變數。
-**建議:** 在文件中明確說明此選項的安全影響。
+**Status:** Risk accepted
+**Description:** The `OPENCLAW_LOAD_SHELL_ENV` option can load environment variables from shell profiles; this is by design.
+**Impact:** If a shell profile is tampered with, malicious environment variables could be injected.
+**Recommendation:** Explicitly document the security implications of this option.
 
-## 正面安全觀察
+## Positive Security Observations
 
-1. **timing-safe secret comparison** -- 使用 node:crypto 的 timingSafeEqual
-2. **Rate limiting** -- IP 追蹤、滑動窗口、鎖定機制
-3. **Input validation** -- Zod + AJV 雙重驗證
-4. **Output sanitization** -- UI 使用 dompurify
-5. **Audit logging** -- 完整的稽核日誌系統
-6. **Tool policy** -- 工具執行策略與危險工具偵測
-7. **Path guards** -- 目錄走訪防護
-8. **Secrets detection** -- detect-secrets 整合
-9. **Trusted proxy support** -- 可信代理標頭驗證
+1. **Timing-safe secret comparison** -- uses node:crypto timingSafeEqual
+2. **Rate limiting** -- IP tracking, sliding window, lockout mechanism
+3. **Input validation** -- Zod + AJV dual validation
+4. **Output sanitization** -- UI uses dompurify
+5. **Audit logging** -- comprehensive audit log system
+6. **Tool policy** -- tool execution policies and dangerous tool detection
+7. **Path guards** -- directory traversal protection
+8. **Secrets detection** -- detect-secrets integration
+9. **Trusted proxy support** -- trusted proxy header verification
 
-## 建議
+## Recommendations
 
-1. 考慮為 plugin HTTP routes 加入可選的認證中介層
-2. 定期更新依賴套件以修補已知漏洞
-3. 考慮加入 CSP headers 到 gateway HTTP 回應
+1. Consider adding optional authentication middleware for plugin HTTP routes
+2. Regularly update dependencies to patch known vulnerabilities
+3. Consider adding CSP headers to gateway HTTP responses
 
-## 附錄：修改檔案清單
+## Appendix: Modified Files
 
-- `src/security/audit.ts` -- 新增 password 強度與 plugin route 的 audit findings
+- `src/security/audit.ts` -- added password strength and plugin route audit findings
