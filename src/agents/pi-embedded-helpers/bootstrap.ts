@@ -65,6 +65,11 @@ export function stripThoughtSignatures<T>(
     if (!block || typeof block !== "object") {
       return block;
     }
+    // Skip thinking and redacted_thinking blocks - they must be preserved verbatim for Anthropic
+    const blockType = (block as { type?: unknown }).type;
+    if (blockType === "thinking" || blockType === "redacted_thinking") {
+      return block;
+    }
     const rec = block as ContentBlockWithSignature;
     const stripSnake = shouldStripSignature(rec.thought_signature);
     const stripCamel = includeCamelCase ? shouldStripSignature(rec.thoughtSignature) : false;
