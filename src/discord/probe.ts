@@ -198,11 +198,29 @@ export async function fetchDiscordApplicationId(
   timeoutMs: number,
   fetcher: typeof fetch = fetch,
 ): Promise<string | undefined> {
-  const json = await fetchDiscordApplicationMe(token, timeoutMs, fetcher);
-  if (json?.id) {
-    return json.id;
+  const normalized = normalizeDiscordToken(token);
+  if (!normalized) {
+    return undefined;
   }
-  // Fallback: extract the application ID directly from the token to handle
-  // cases where the API call fails (timeout, network error, etc.).
-  return parseApplicationIdFromToken(token);
+  try {
+    const res = await fetchWithTimeout(
+      `${DISCORD_API_BASE}/oauth2/applications/@me`,
+      { headers: { Authorization: `Bot ${normalized}` } },
+      timeoutMs,
+      getResolvedFetch(fetcher),
+    );
+    if (res.ok) {
+      const json = (await res.json()) as { id?: string };
+      if (json?.id) {
+        return json.id;
+      }
+    }
+    // Non-ok HTTP response (401, 403, etc.) — fail fast so credential
+    // errors surface immediately rather than being masked by the fallback.
+    return undefined;
+  } catch {
+    // Transport / timeout error — fall back to extracting the application
+    // ID directly from the token to keep the bot starting.
+    return parseApplicationIdFromToken(token);
+  }
 }
