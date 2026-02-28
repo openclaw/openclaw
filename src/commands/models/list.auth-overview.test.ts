@@ -40,8 +40,9 @@ describe("resolveProviderAuthOverview — Bedrock AWS SDK auth", () => {
       expect(overview.env).toBeDefined();
       expect(overview.env?.source).toBe("env: AWS_BEARER_TOKEN_BEDROCK");
     } finally {
-      if (original === undefined) delete process.env.AWS_BEARER_TOKEN_BEDROCK;
-      else process.env.AWS_BEARER_TOKEN_BEDROCK = original;
+      if (original === undefined) {
+        delete process.env.AWS_BEARER_TOKEN_BEDROCK;
+      } else process.env.AWS_BEARER_TOKEN_BEDROCK = original;
     }
   });
 
@@ -64,10 +65,18 @@ describe("resolveProviderAuthOverview — Bedrock AWS SDK auth", () => {
       expect(overview.effective.kind).toBe("missing");
       expect(overview.env).toBeUndefined();
     } finally {
-      if (original !== undefined) process.env.AWS_BEARER_TOKEN_BEDROCK = original;
-      if (origAccess !== undefined) process.env.AWS_ACCESS_KEY_ID = origAccess;
-      if (origSecret !== undefined) process.env.AWS_SECRET_ACCESS_KEY = origSecret;
-      if (origProfile !== undefined) process.env.AWS_PROFILE = origProfile;
+      if (original !== undefined) {
+        process.env.AWS_BEARER_TOKEN_BEDROCK = original;
+      }
+      if (origAccess !== undefined) {
+        process.env.AWS_ACCESS_KEY_ID = origAccess;
+      }
+      if (origSecret !== undefined) {
+        process.env.AWS_SECRET_ACCESS_KEY = origSecret;
+      }
+      if (origProfile !== undefined) {
+        process.env.AWS_PROFILE = origProfile;
+      }
     }
   });
 });
