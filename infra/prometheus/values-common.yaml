@@ -1,0 +1,233 @@
+# Prometheus Helm Chart - Common Configuration
+# Shared baseline for both production and staging clusters
+# Chart: prometheus-community/kube-prometheus-stack v54.0+
+# This file contains common settings; environment-specific overrides in values-prod.yaml and values-staging.yaml
+
+# === PROMETHEUS CONFIGURATION ===
+prometheus:
+  # High Availability Configuration - 2 replicas deployed across separate nodes
+  prometheusSpec:
+    # Global scrape configuration applied to all scrape jobs unless overridden
+    scrapeInterval: 30s          # Collect metrics every 30 seconds
+    scrapeTimeout: 15s           # Wait 15 seconds for target response
+    evaluationInterval: 30s      # Evaluate alert/recording rules every 30 seconds
+    
+    # Persistent storage using EFS for high-availability time-series database
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          # StorageClass created by infrastructure (EFS CSI driver)
+          storageClassName: efs-sc
+          accessModes:
+            - ReadWriteMany  # Required for Prometheus replication (shared storage)
+          resources:
+            requests:
+              storage: 100Gi   # 100GB for 15-day retention at 30s scrape interval
+    
+    # Data retention policy
+    retention: 15d               # Keep data for 15 days
+    retentionSize: "90GB"        # Compress/delete when reaching 90GB (safety margin from 100GB)
+    
+    # CPU and memory allocation per Prometheus pod
+    resources:
+      requests:
+        cpu: 1000m              # Request 1 CPU core
+        memory: 2Gi             # Request 2GB RAM
+      limits:
+        cpu: 1500m              # Max 1.5 CPU cores
+        memory: 3Gi             # Max 3GB RAM
+    
+    # High availability and scheduling - Pod anti-affinity ensures pods run on different nodes
+    replicas: 2                 # Deploy 2 Prometheus instances
+    affinity:
+      podAntiAffinity:
+        # REQUIRED: Prevent both Prometheus pods from landing on same node
+        requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchExpressions:
+                - key: app.kubernetes.io/name
+                  operator: In
+                  values:
+                    - prometheus
+            topologyKey: kubernetes.io/hostname  # Spread across nodes
+    
+    # Service Monitor discovery - Prometheus automatically discovers ServiceMonitor resources
+    serviceMonitorSelector: {}  # Discover ALL ServiceMonitors
+    serviceMonitorNamespaceSelector: {}  # In ALL namespaces
+    
+    # Probe discovery for external endpoint monitoring (optional)
+    probeSelector: {}
+    probeNamespaceSelector: {}
+    
+    # Rule file discovery for alerts and recording rules
+    ruleSelector: {}
+    ruleNamespaceSelector: {}
+    
+    # Security context - Run as non-root user for security compliance
+    securityContext:
+      runAsNonRoot: true
+      runAsUser: 65534           # 'nobody' user
+      fsGroup: 65534
+    
+    # Additional scrape configs (can add manual scrape jobs here if needed)
+    additionalScrapeConfigs: []
+    
+    # Log level
+    logLevel: info              # Standard logging level
+    
+    # WAL (Write-Ahead Log) - Store metrics locally before flushing to storage
+    walCompressionEnabled: true # Compress WAL for faster recovery
+  
+  # Prometheus service configuration
+  service:
+    type: ClusterIP             # Internal-only access (use Grafana as gateway)
+    port: 9090
+  
+  # Pod Disruption Budget - Ensures at least 1 Prometheus pod survives cluster maintenance
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1             # At least 1 replica must remain available
+
+# === PROMETHEUS OPERATOR ===
+# Manages Prometheus instances via Custom Resources
+prometheusOperator:
+  enabled: true
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
+# === ALERTMANAGER ===
+# Routes alerts to external systems (PagerDuty, Slack)
+alertmanager:
+  enabled: true
+  alertmanagerSpec:
+    # Storage for notification history (7-day retention)
+    storage:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: efs-sc
+          accessModes:
+            - ReadWriteMany
+          resources:
+            requests:
+              storage: 10Gi
+    
+    # High availability configuration
+    replicas: 2
+    affinity:
+      podAntiAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchExpressions:
+                - key: app.kubernetes.io/name
+                  operator: In
+                  values:
+                    - alertmanager
+            topologyKey: kubernetes.io/hostname
+    
+    # Resources per AlertManager pod
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 200m
+        memory: 256Mi
+    
+    # Storage retention (7 days for notification history)
+    retention: 168h
+  
+  # AlertManager Pod Disruption Budget
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+
+# === GRAFANA ===
+# Disable here; will install separately via grafana/grafana chart
+grafana:
+  enabled: false
+
+# === KUBE-STATE-METRICS ===
+# Exports Kubernetes object metrics (pods, deployments, nodes)
+kubeStateMetrics:
+  enabled: true
+  serviceMonitor:
+    enabled: true
+    interval: 30s
+
+# === NODE-EXPORTER ===
+# Collects node-level metrics (CPU, memory, disk, network)
+nodeExporter:
+  enabled: true
+
+# === PROMETHEUS NODE-EXPORTER DAEMONSET ===
+# Runs on every node to collect system metrics
+prometheus-node-exporter:
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 100m
+      memory: 128Mi
+
+# === KUBE-APISERVER SCRAPING ===
+# Monitor Kubernetes API server health
+kubeApiServer:
+  enabled: true
+
+# === ETCD SCRAPING ===
+# Monitor etcd (Kubernetes data store) - optional for production
+kubeEtcd:
+  enabled: false  # Set to true for production if you have direct etcd access
+
+# === KUBELET SCRAPING ===
+# Monitor kubelet metrics on each node
+kubelet:
+  enabled: true
+  namespace: kube-system
+
+# === KUBE-CONTROLLER-MANAGER SCRAPING ===
+kubeControllerManager:
+  enabled: false  # Often not accessible in managed EKS clusters
+
+# === KUBE-SCHEDULER SCRAPING ===
+kubeScheduler:
+  enabled: false  # Often not accessible in managed EKS clusters
+
+# === KUBE-PROXY SCRAPING ===
+kubeProxy:
+  enabled: false  # Often not accessible in managed EKS clusters
+
+# === DEFAULT RULES ===
+# Includes basic Kubernetes cluster monitoring rules
+defaultRules:
+  create: true                 # Create default PrometheusRules
+  rules:
+    alertmanager: true         # AlertManager alerts
+    etcd: false                # Skip etcd (not available in managed EKS)
+    kubeApiserver: true        # API server alerts
+    kubeApiserverAvailability: true
+    kubeApiserverSlos: true
+    kubernetesApps: true       # Deployment/StatefulSet alerts
+    kubernetesNodeNotReady: true
+    kubernetesNotready: true
+    kubernetesResources: true  # CPU/memory quota alerts
+    kubernetesStorage: true    # PVC alerts
+    kubernetesSystem: true     # System component alerts
+    kubeScheduler: false       # Skip (not available in managed EKS)
+    kubeStateMetrics: true     # kube-state-metrics health
+    node: true                 # Node-exporter rules
+    prometheus: true           # Prometheus self-monitoring
+
+# === SERVICE ACCOUNT ===
+serviceAccount:
+  create: true
+  name: prometheus
+  annotations:
+    # Optional: Add IAM role ARN for AWS integration
+    # eks.amazonaws.com/role-arn: arn:aws:iam::ACCOUNT_ID:role/prometheus-role

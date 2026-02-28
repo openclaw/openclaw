@@ -1,0 +1,217 @@
+# Prometheus Helm Chart - Production Environment Overrides
+# Applied on top of values-common.yaml for production cluster (us-east-1)
+# Usage: helm install prometheus-stack prometheus-community/kube-prometheus-stack \
+#        --namespace monitoring \
+#        --values values-common.yaml \
+#        --values values-prod.yaml
+
+# === PRODUCTION-SPECIFIC OVERRIDES ===
+
+prometheus:
+  prometheusSpec:
+    # External labels applied to all metrics scraped in production
+    # Helps identify data origin and enables cross-cluster queries
+    externalLabels:
+      cluster: "clarity-router-prod"          # Cluster identifier
+      environment: "production"               # Environment designation
+      region: "us-east-1"                    # AWS region
+      monitoring_stack: "kube-prometheus-stack"  # Stack identifier
+    
+    # Production increases resource requests/limits
+    resources:
+      requests:
+        cpu: 1000m              # 1 CPU core per pod
+        memory: 2Gi             # 2GB RAM per pod
+      limits:
+        cpu: 1500m              # 1.5 CPU cores max
+        memory: 3Gi             # 3GB RAM max
+    
+    # Aggressive retention for production (full 15 days)
+    retention: 15d              # Keep all metrics for 15 days
+    retentionSize: "90GB"       # Compress when reaching 90GB
+    
+    # Storage configuration for production
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: efs-sc
+          accessModes:
+            - ReadWriteMany
+          resources:
+            requests:
+              storage: 100Gi    # 100GB for production 15-day retention
+    
+    # Ensure production has 2 replicas minimum
+    replicas: 2
+    
+    # Production configuration: Enable query logging for audit
+    queryLogFile: /prometheus/query.log  # Log all queries for audit
+  
+  # Prometheus ingress configuration (optional)
+  ingress:
+    enabled: false              # Use port-forward for security
+    # To enable, add:
+    # ingressClassName: nginx
+    # hosts:
+    #   - prometheus.example.com
+    # tls:
+    #   - secretName: prometheus-tls
+    #     hosts:
+    #       - prometheus.example.com
+
+# === ALERTMANAGER PRODUCTION CONFIGURATION ===
+# Production AlertManager routes to PagerDuty for critical incidents
+alertmanager:
+  enabled: true
+  
+  alertmanagerSpec:
+    # Production: Larger storage for longer history
+    storage:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: efs-sc
+          accessModes:
+            - ReadWriteMany
+          resources:
+            requests:
+              storage: 10Gi    # 10GB for 7-day notification history
+    
+    # Production: 2 replicas for high availability
+    replicas: 2
+    
+    # Increased resources for production
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 200m
+        memory: 256Mi
+  
+  # AlertManager configuration via ConfigMap (referenced separately)
+  config: |
+    global:
+      # Production: 5-minute resolve timeout
+      resolve_timeout: 5m
+    
+    route:
+      receiver: "default"
+      # Group alerts to avoid notification spam
+      group_by: ["alertname", "cluster", "environment", "job", "instance"]
+      group_wait: 30s        # Wait 30 seconds before sending grouped alerts
+      group_interval: 5m     # Re-group alerts every 5 minutes
+      repeat_interval: 4h    # Re-send unresolved alerts every 4 hours
+      
+      # Critical incidents route to PagerDuty (production only)
+      routes:
+        - match:
+            severity: critical
+          receiver: "pagerduty-critical"
+          continue: true
+          group_wait: 10s     # Immediate critical alerts
+          repeat_interval: 1h # Re-escalate critical alerts hourly
+        
+        - match:
+            severity: warning
+          receiver: "slack-warnings"
+          group_wait: 1m      # Batch warnings slightly
+          repeat_interval: 6h # Re-notify warnings every 6 hours
+    
+    receivers:
+      # Critical incidents: PagerDuty integration
+      - name: "pagerduty-critical"
+        pagerduty_configs:
+          - service_key: "${PAGERDUTY_SERVICE_KEY}"  # Set via Kubernetes Secret
+            description: "{{ .GroupLabels.alertname }} on {{ .GroupLabels.cluster }}"
+            details:
+              severity: "{{ .GroupLabels.severity }}"
+              cluster: "{{ .GroupLabels.cluster }}"
+              environment: "{{ .GroupLabels.environment }}"
+              alerts_count: "{{ .Alerts | len }}"
+            grouping: "{{ .GroupLabels.alertname }}"
+      
+      # Warnings: Slack integration
+      - name: "slack-warnings"
+        slack_configs:
+          - api_url: "${SLACK_WEBHOOK_URL}"  # Set via Kubernetes Secret
+            channel: "#monitoring-alerts"
+            icon_emoji: ":warning:"
+            title: "{{ .GroupLabels.alertname }}"
+            text: |
+              *Severity:* {{ .GroupLabels.severity }}
+              *Cluster:* {{ .GroupLabels.cluster }}
+              *Environment:* {{ .GroupLabels.environment }}
+              *Count:* {{ .Alerts | len }}
+              {{ range .Alerts }}
+              • {{ .Labels.instance }} - {{ .Annotations.description }}
+              {{ end }}
+            send_resolved: true
+      
+      # Default receiver for unmatched alerts
+      - name: "default"
+        slack_configs:
+          - api_url: "${SLACK_WEBHOOK_URL}"
+            channel: "#monitoring-default"
+            title: "{{ .GroupLabels.alertname }}"
+            text: "{{ .CommonAnnotations.description }}"
+
+# === PROMETHEUS OPERATOR ===
+# Production configuration for Prometheus Operator
+prometheusOperator:
+  enabled: true
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
+# === KUBE-STATE-METRICS ===
+# Production: Enable full Kubernetes object monitoring
+kubeStateMetrics:
+  enabled: true
+  serviceMonitor:
+    enabled: true
+    interval: 30s
+
+# === NODE-EXPORTER ===
+nodeExporter:
+  enabled: true
+
+# === KUBE-APISERVER SCRAPING ===
+kubeApiServer:
+  enabled: true
+
+# === KUBELET SCRAPING ===
+kubelet:
+  enabled: true
+  namespace: kube-system
+
+# === DEFAULT RULES ===
+# Enable production Kubernetes monitoring rules
+defaultRules:
+  create: true
+  rules:
+    alertmanager: true
+    etcd: false
+    kubeApiserver: true
+    kubeApiserverAvailability: true
+    kubeApiserverSlos: true
+    kubernetesApps: true
+    kubernetesNodeNotReady: true
+    kubernetesNotready: true
+    kubernetesResources: true
+    kubernetesStorage: true
+    kubernetesSystem: true
+    kubeStateMetrics: true
+    node: true
+    prometheus: true
+
+# === SERVICE ACCOUNT ===
+serviceAccount:
+  create: true
+  name: prometheus
+  annotations:
+    # Optional: AWS IAM role for IRSA (IAM Roles for Service Accounts)
+    eks.amazonaws.com/role-arn: "arn:aws:iam::ACCOUNT_ID_PROD:role/prometheus-role"

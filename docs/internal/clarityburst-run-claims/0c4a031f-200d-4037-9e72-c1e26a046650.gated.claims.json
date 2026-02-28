@@ -1,0 +1,1 @@
+{"mode":"gated","workloadId":"0c4a031f-200d-4037-9e72-c1e26a046650","contractPointsTotal":0,"toolExecutions":0,"llmCalls":0,"routerCalls":0,"outcomes":{"proceeds":0,"abstains":0,"confirms":0,"modifies":0},"denoms":{"toolDenom":1,"outcomeDenom":1},"durationMs":1426,"llmCallsPerTool":0,"routerCallsPerTool":0,"abstainRate":0,"confirmRate":0,"proceedRate":0}

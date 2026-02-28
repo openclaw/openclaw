@@ -1,0 +1,169 @@
+---
+# Grafana Datasources ConfigMap for ClarityRouter Observability
+# Defines Prometheus and Loki datasources for metrics and logs visualization
+# Applied to: both production and staging clusters
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-datasources
+  namespace: monitoring
+  labels:
+    app: grafana
+    component: datasources
+data:
+  datasources.yaml: |
+    apiVersion: 1
+    
+    # List of datasources to auto-add to Grafana
+    datasources:
+      
+      # ====================
+      # PRODUCTION CLUSTER
+      # ====================
+      
+      # Production Prometheus (primary datasource)
+      - name: prometheus-prod
+        type: prometheus
+        uid: prometheus-prod-uid
+        url: http://prometheus-kube-prom-prometheus.monitoring:9090
+        access: proxy
+        isDefault: true
+        
+        # Query settings
+        jsonData:
+          # Global query timeout (seconds)
+          queryTimeout: 60s
+          # Interval for scraping (must match Prometheus scrape_interval)
+          timeInterval: 30s
+          # HTTP method for queries
+          httpMethod: GET
+          # Enable custom headers if needed
+          tlsSkipVerify: false
+        
+        # Health check settings
+        healthCheck:
+          enabled: true
+          interval: 60s
+          timeout: 10s
+        
+        editable: true
+      
+      # Production Loki (logs)
+      - name: loki-prod
+        type: loki
+        uid: loki-prod-uid
+        url: http://loki.monitoring:3100
+        access: proxy
+        isDefault: false
+        
+        jsonData:
+          # Maximum number of logs to return per query
+          maxLines: 1000
+          # Query timeout
+          queryTimeout: 60s
+          # Regex patterns for log parsing
+          deriveFields:
+            - name: TraceID
+              matcherRegex: traceID=(\w+)
+              url: /explore?left=$${__value.raw}
+        
+        healthCheck:
+          enabled: true
+          interval: 60s
+          timeout: 10s
+        
+        editable: true
+      
+      # ====================
+      # STAGING CLUSTER
+      # ====================
+      
+      # Staging Prometheus
+      - name: prometheus-staging
+        type: prometheus
+        uid: prometheus-staging-uid
+        url: http://prometheus-staging-kube-prom-prometheus.monitoring:9090
+        access: proxy
+        isDefault: false
+        
+        jsonData:
+          queryTimeout: 60s
+          timeInterval: 30s
+          httpMethod: GET
+          tlsSkipVerify: false
+        
+        healthCheck:
+          enabled: true
+          interval: 60s
+          timeout: 10s
+        
+        editable: true
+      
+      # Staging Loki (logs)
+      - name: loki-staging
+        type: loki
+        uid: loki-staging-uid
+        url: http://loki-staging.monitoring:3100
+        access: proxy
+        isDefault: false
+        
+        jsonData:
+          maxLines: 1000
+          queryTimeout: 60s
+          deriveFields:
+            - name: TraceID
+              matcherRegex: traceID=(\w+)
+              url: /explore?left=$${__value.raw}
+        
+        healthCheck:
+          enabled: true
+          interval: 60s
+          timeout: 10s
+        
+        editable: true
+
+---
+# Alternative ConfigMap for template variables used in dashboards
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-vars
+  namespace: monitoring
+  labels:
+    app: grafana
+    component: dashboard-variables
+data:
+  # Dashboard variable definitions (used in dashboard provisioning)
+  # Format: key=value for easy reference in dashboard JSON
+  
+  # Cluster identifiers
+  cluster_prod: "prod"
+  cluster_staging: "staging"
+  
+  # Datasource names (must match datasources.yaml above)
+  datasource_prometheus_prod: "prometheus-prod"
+  datasource_prometheus_staging: "prometheus-staging"
+  datasource_loki_prod: "loki-prod"
+  datasource_loki_staging: "loki-staging"
+  
+  # Monitoring namespace
+  monitoring_namespace: "monitoring"
+  
+  # Router namespace
+  router_namespace: "clarity-router"
+  
+  # Key metrics
+  metric_availability: "clarityrouter_router_availability"
+  metric_latency: "clarityrouter_request_latency_ms"
+  metric_requests: "clarityrouter_requests_total"
+  metric_errors: "clarityrouter_errors_total"
+  
+  # Common query variables
+  rate_interval: "5m"
+  heatmap_bucket: "10m"
+  
+  # SLO targets
+  slo_p99_latency_ms: "200"
+  slo_availability_percent: "99.95"
+  slo_error_rate_percent: "1.0"

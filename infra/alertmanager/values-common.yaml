@@ -1,0 +1,88 @@
+# AlertManager Helm Configuration - Shared (for kube-prometheus-stack)
+# This file contains common AlertManager configuration for both production and staging clusters
+# Deploy via: helm install alertmanager prometheus-community/kube-prometheus-stack -f values-common.yaml -f values-prod.yaml (or values-staging.yaml)
+
+alertmanager:
+  enabled: true
+  
+  # High Availability Configuration
+  alertmanagerSpec:
+    replicas: 2
+    
+    # Resource Allocation
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 200m
+        memory: 256Mi
+    
+    # Pod Anti-Affinity: Spread replicas across different nodes
+    affinity:
+      podAntiAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution:
+        - labelSelector:
+            matchExpressions:
+            - key: app.kubernetes.io/name
+              operator: In
+              values:
+              - alertmanager
+          topologyKey: kubernetes.io/hostname
+    
+    # Pod Disruption Budget: At least 1 replica must stay alive
+    podDisruptionBudget:
+      enabled: true
+      minAvailable: 1
+    
+    # Storage Configuration: 10GB PVC for alert history
+    storage:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: efs-sc
+          accessModes:
+          - ReadWriteOnce
+          resources:
+            requests:
+              storage: 10Gi
+    
+    # Service Configuration
+    serviceSpec:
+      type: ClusterIP
+      ports:
+      - name: http
+        port: 9093
+        protocol: TCP
+        targetPort: 9093
+    
+    # Security Context
+    securityContext:
+      runAsNonRoot: true
+      runAsUser: 65534
+      fsGroup: 65534
+    
+    # Logging
+    logLevel: info
+    
+    # Retention: Keep alert history for 7 days
+    retention: 168h
+    
+    # External URL (used for links in notifications)
+    externalUrl: "http://alertmanager.monitoring.svc.cluster.local:9093"
+  
+  # Service Monitor for Prometheus to scrape AlertManager metrics
+  serviceMonitor:
+    enabled: true
+    interval: 30s
+    scrapeTimeout: 10s
+    labels:
+      release: prometheus
+
+# Pod Disruption Budget for AlertManager
+podDisruptionBudgets:
+  alertmanager:
+    enabled: true
+    minAvailable: 1
+    labels:
+      app: alertmanager
+      component: alertmanager

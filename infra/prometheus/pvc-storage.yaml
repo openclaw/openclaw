@@ -1,0 +1,307 @@
+# Persistent Volume Claims (PVCs) for Observability Stack
+# Uses EFS (Elastic File System) storage via EFS CSI driver
+# StorageClass: efs-sc (must be created first)
+#
+# Prerequisites:
+#   1. EFS CSI driver installed on cluster (helm install aws-efs-csi-driver)
+#   2. StorageClass 'efs-sc' created (see below)
+#   3. EFS file system exists in AWS
+#
+# Apply to monitoring namespace:
+#   kubectl apply -f pvc-storage.yaml -n monitoring
+
+---
+# StorageClass for EFS
+# References the EFS CSI provisioner
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: efs-sc
+  namespace: monitoring
+provisioner: efs.csi.aws.com
+allowVolumeExpansion: true           # Allow PVC resizing
+parameters:
+  basePath: "/dynamic_provisioning"  # Subdirectory prefix for multi-tenancy
+  directoryPerms: "700"               # Directory permissions
+  uid: "65534"                        # UID for 'nobody' user
+  gid: "65534"                        # GID for 'nobody' user
+reclaimPolicy: Delete                 # Delete underlying PV when PVC is deleted
+volumeBindingMode: Immediate          # Bind immediately (not WaitForFirstConsumer)
+
+---
+# PVC for Prometheus
+# Purpose: Time-series database storage for metric data
+# Capacity: 100GB (supports 15-day retention at 30s scrape interval)
+# Access Mode: ReadWriteMany (required for Prometheus pod replication)
+# Retention: 15 days of metrics from both production and staging router instances
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: prometheus-storage
+  namespace: monitoring
+  labels:
+    app: prometheus
+    component: tsdb
+    environment: observability
+spec:
+  accessModes:
+    - ReadWriteMany  # Required for Prometheus HA (multiple pods share storage)
+  storageClassName: efs-sc
+  resources:
+    requests:
+      storage: 100Gi   # 100GB storage
+
+---
+# PVC for Loki
+# Purpose: Log aggregation and index storage
+# Capacity: 150GB (supports 30-day retention with high log volume)
+# Access Mode: ReadWriteMany (for distributed log ingestion)
+# Retention: 30 days of logs from all namespaces across both clusters
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: loki-storage
+  namespace: monitoring
+  labels:
+    app: loki
+    component: log-aggregation
+    environment: observability
+spec:
+  accessModes:
+    - ReadWriteMany  # For distributed chunk storage and querying
+  storageClassName: efs-sc
+  resources:
+    requests:
+      storage: 150Gi  # 150GB storage for logs + index
+
+---
+# PVC for Grafana
+# Purpose: Configuration, dashboard definitions, plugins
+# Capacity: 10GB (sufficient for dashboards and user data)
+# Access Mode: ReadWriteOnce (Grafana single writer per pod)
+# Note: Grafana HA uses shared storage via EFS
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: grafana-storage
+  namespace: monitoring
+  labels:
+    app: grafana
+    component: dashboards
+    environment: observability
+spec:
+  accessModes:
+    - ReadWriteMany  # Changed to ReadWriteMany for multi-pod Grafana (HA)
+  storageClassName: efs-sc
+  resources:
+    requests:
+      storage: 10Gi   # 10GB for dashboards and configuration
+
+---
+# PVC for AlertManager
+# Purpose: Alert history and notification state
+# Capacity: 10GB (sufficient for 7-day alert history)
+# Access Mode: ReadWriteMany (for AlertManager clustering)
+# Retention: 7 days of alert metadata and firing history
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: alertmanager-storage
+  namespace: monitoring
+  labels:
+    app: alertmanager
+    component: alerts
+    environment: observability
+spec:
+  accessModes:
+    - ReadWriteMany  # For AlertManager cluster replication
+  storageClassName: efs-sc
+  resources:
+    requests:
+      storage: 10Gi   # 10GB for alert history
+
+---
+# AWS EFS File System Configuration (Manual Prerequisites)
+# Execute these commands once per cluster to set up EFS
+#
+# NOTE: These are NOT Kubernetes resources; they are AWS CLI commands
+#       to be run before deploying the observability stack.
+#
+# For Production Cluster (us-east-1):
+# ====================================
+# 
+# 1. Create EFS file system
+# aws efs create-file-system \
+#   --performance-mode generalPurpose \
+#   --throughput-mode bursting \
+#   --region us-east-1 \
+#   --tags Key=Name,Value=clarity-router-monitoring-efs \
+#          Key=Environment,Value=production \
+#          Key=Cost-Center,Value=observability
+#
+# 2. Get EFS ID
+# EFS_ID=$(aws efs describe-file-systems \
+#   --region us-east-1 \
+#   --query 'FileSystems[?Tags[?Key==`Name` && Value==`clarity-router-monitoring-efs`]].FileSystemId' \
+#   --output text)
+# echo "EFS ID: $EFS_ID"
+#
+# 3. Find subnets for each AZ and create mount targets
+# # Get subnet IDs for each AZ
+# for AZ in us-east-1a us-east-1b us-east-1c; do
+#   SUBNET=$(aws ec2 describe-subnets \
+#     --filters "Name=availability-zone,Values=$AZ" \
+#            "Name=tag:karpenter.sh/discovery,Values=clarity-router-prod" \
+#     --region us-east-1 \
+#     --query 'Subnets[0].SubnetId' \
+#     --output text)
+#   
+#   if [ -n "$SUBNET" ] && [ "$SUBNET" != "None" ]; then
+#     echo "Creating mount target in $AZ (subnet: $SUBNET)"
+#     aws efs create-mount-target \
+#       --file-system-id $EFS_ID \
+#       --subnet-id $SUBNET \
+#       --region us-east-1
+#   fi
+# done
+#
+# For Staging Cluster (us-west-2):
+# ==================================
+# Repeat steps 1-3 with region=us-west-2, environment=staging
+#
+# 4. Verify mount targets are available
+# aws efs describe-mount-targets \
+#   --file-system-id $EFS_ID \
+#   --region us-east-1
+#
+# Expected output: 3 mount targets (one per AZ), LifeCycleState: available
+
+---
+# StorageClass Alternative: GP3 EBS (not recommended for observability)
+# If EFS is not available, use GP3 EBS with limitations:
+#
+# apiVersion: storage.k8s.io/v1
+# kind: StorageClass
+# metadata:
+#   name: ebs-gp3-sc
+# provisioner: ebs.csi.aws.com
+# parameters:
+#   type: gp3
+#   iops: "3000"       # General purpose IOPS
+#   throughput: "125"  # MB/s
+#   encrypted: "true"
+# allowVolumeExpansion: true
+# volumeBindingMode: WaitForFirstConsumer
+# reclaimPolicy: Delete
+#
+# LIMITATIONS:
+# - Cannot use ReadWriteMany (EBS supports ReadWriteOnce only)
+# - Requires single Prometheus/Loki pod (no HA)
+# - Higher latency than EFS
+# - Not recommended for production
+
+---
+# MONITORING STORAGE USAGE:
+# ========================
+#
+# 1. Check PVC usage from command line
+# kubectl get pvc -n monitoring
+# kubectl describe pvc prometheus-storage -n monitoring
+#
+# 2. Get actual disk usage (requires pod exec)
+# kubectl exec -it prometheus-0 -n monitoring -- df -h /prometheus
+#
+# 3. Monitor via Prometheus metrics
+# # In Prometheus UI, query:
+# kubelet_volume_stats_used_bytes{persistentvolumeclaim="prometheus-storage"}
+# kubelet_volume_stats_capacity_bytes{persistentvolumeclaim="prometheus-storage"}
+#
+# 4. Calculate percentage used
+# (
+#   kubelet_volume_stats_used_bytes{persistentvolumeclaim="prometheus-storage"}
+#   /
+#   kubelet_volume_stats_capacity_bytes{persistentvolumeclaim="prometheus-storage"}
+# ) * 100
+#
+# 5. Create Grafana alert for storage usage >80%
+# alert: PVCUsageHigh
+#   expr: |
+#     (
+#       kubelet_volume_stats_used_bytes{persistentvolumeclaim=~"prometheus|loki|grafana"}
+#       /
+#       kubelet_volume_stats_capacity_bytes{persistentvolumeclaim=~"prometheus|loki|grafana"}
+#     ) > 0.80
+#   for: 10m
+
+---
+# RESIZE PROCEDURE (if more storage needed):
+# ==========================================
+#
+# 1. Patch PVC to increase size
+# kubectl patch pvc prometheus-storage -n monitoring \
+#   -p '{"spec":{"resources":{"requests":{"storage":"150Gi"}}}}'
+#
+# 2. Verify expansion request
+# kubectl get pvc prometheus-storage -n monitoring
+# # Check Conditions: should show "Resizing" or "FileSystemResizePending"
+#
+# 3. EFS automatically expands (no manual action needed)
+# # AWS EFS is elastic - automatically grows with data
+#
+# 4. For EBS volumes, pod restart triggers expansion
+# kubectl rollout restart deployment/prometheus -n monitoring
+
+---
+# BACKUP STRATEGY:
+# ================
+#
+# EFS Snapshots (Daily for Production, Weekly for Staging)
+#
+# 1. Get EFS ID
+# EFS_ID=$(aws efs describe-file-systems \
+#   --query 'FileSystems[?Tags[?Key==`Name`]].FileSystemId' \
+#   --output text | head -1)
+#
+# 2. Create manual snapshot
+# aws efs create-backup-vault \
+#   --backup-vault-name clarity-router-monitoring-daily \
+#   --region us-east-1
+#
+# 3. Setup automated backups via AWS Backup
+# aws backup create-backup-plan \
+#   --backup-plan '{...}' \
+#   --region us-east-1
+#
+# 4. Restore from snapshot (if needed)
+# aws backup start-recovery-point-restoration \
+#   --recovery-point-arn "arn:aws:backup:..." \
+#   --iam-role-arn "arn:aws:iam::...role/AWSServiceRoleForBackup" \
+#   --region us-east-1
+
+---
+# TROUBLESHOOTING:
+# ================
+#
+# 1. PVC stuck in Pending state
+# kubectl describe pvc prometheus-storage -n monitoring
+# # Check Events for provisioning errors
+# # Ensure EFS CSI driver is running: kubectl get pods -n kube-system | grep efs-csi
+#
+# 2. Mount failures
+# kubectl logs -n kube-system -l app=efs-csi-controller
+# kubectl logs -n kube-system -l app=efs-csi-node
+#
+# 3. Permission denied errors
+# # Verify EFS mount target security group allows NFS (port 2049)
+# aws ec2 describe-security-groups --filter Name=group-id,Values=sg-xxxxx
+#
+# 4. Slow I/O performance
+# # Check EFS performance metrics
+# aws cloudwatch get-metric-statistics \
+#   --namespace AWS/EFS \
+#   --metric-name BurstCreditBalance \
+#   --dimensions Name=FileSystemId,Value=$EFS_ID \
+#   --start-time 2024-01-01T00:00:00Z \
+#   --end-time 2024-01-02T00:00:00Z \
+#   --period 300 \
+#   --statistics Average

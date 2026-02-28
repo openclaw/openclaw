@@ -1,0 +1,284 @@
+{
+  "pack_id": "openclawd.NETWORK_IO",
+  "pack_version": "1.0.0",
+  "stage_id": "NETWORK_IO",
+  "description": "Controls all network input/output operations including HTTP requests, socket connections, and data transfers. Enforces destination restrictions and bandwidth limits.",
+  "thresholds": {
+    "min_confidence_T": 0.55,
+    "dominance_margin_Delta": 0.1
+  },
+  "contracts": [
+    {
+      "contract_id": "NETWORK_GET_PUBLIC",
+      "risk_class": "LOW",
+      "required_fields": [
+        "url",
+        "method"
+      ],
+      "limits": {},
+      "needs_confirmation": false,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "NETWORK_DNS_LOOKUP",
+      "risk_class": "LOW",
+      "required_fields": [
+        "hostname"
+      ],
+      "limits": {},
+      "needs_confirmation": false,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "NETWORK_HEAD_REQUEST",
+      "risk_class": "LOW",
+      "required_fields": [
+        "url"
+      ],
+      "limits": {},
+      "needs_confirmation": false,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "NETWORK_POST_DATA",
+      "risk_class": "MEDIUM",
+      "required_fields": [
+        "url",
+        "method",
+        "body"
+      ],
+      "limits": {
+        "max_body_kb": 1024,
+        "rate_per_minute": 60
+      },
+      "needs_confirmation": false,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "NETWORK_DOWNLOAD_RESOURCE",
+      "risk_class": "MEDIUM",
+      "required_fields": [
+        "url",
+        "destination_path"
+      ],
+      "limits": {
+        "max_size_mb": 100
+      },
+      "needs_confirmation": false,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "NETWORK_UPLOAD_RESOURCE",
+      "risk_class": "MEDIUM",
+      "required_fields": [
+        "url",
+        "source_path",
+        "method"
+      ],
+      "limits": {
+        "max_size_mb": 50,
+        "allowed_destinations": []
+      },
+      "needs_confirmation": false,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "NETWORK_WEBSOCKET_CONNECT",
+      "risk_class": "MEDIUM",
+      "required_fields": [
+        "url",
+        "destination_class"
+      ],
+      "limits": {
+        "max_connections": 5,
+        "idle_timeout_minutes": 30
+      },
+      "needs_confirmation": false,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "NETWORK_AUTHENTICATED_REQUEST",
+      "risk_class": "HIGH",
+      "required_fields": [
+        "url",
+        "method",
+        "auth_header"
+      ],
+      "limits": {
+        "token_expiry_check": true
+      },
+      "needs_confirmation": true,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "NETWORK_INTERNAL_ENDPOINT",
+      "risk_class": "HIGH",
+      "required_fields": [
+        "url",
+        "method",
+        "destination_class"
+      ],
+      "limits": {
+        "allowed_internal_ranges": []
+      },
+      "needs_confirmation": true,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "NETWORK_RAW_SOCKET",
+      "risk_class": "CRITICAL",
+      "required_fields": [
+        "host",
+        "port",
+        "protocol"
+      ],
+      "limits": {
+        "allowed_ports": [],
+        "requires_audit": true
+      },
+      "needs_confirmation": true,
+      "deny_by_default": true,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "NETWORK_PROXY_TUNNEL",
+      "risk_class": "CRITICAL",
+      "required_fields": [
+        "proxy_url",
+        "target_url",
+        "justification"
+      ],
+      "limits": {
+        "requires_approval": true,
+        "max_duration_minutes": 60
+      },
+      "needs_confirmation": true,
+      "deny_by_default": true,
+      "capability_requirements": []
+    }
+  ],
+  "field_schema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "type": "object",
+    "properties": {
+      "url": {
+        "type": "string",
+        "format": "uri",
+        "description": "Target URL for the network operation"
+      },
+      "method": {
+        "type": "string",
+        "enum": [
+          "GET",
+          "POST",
+          "PUT",
+          "PATCH",
+          "DELETE",
+          "HEAD",
+          "OPTIONS"
+        ],
+        "description": "HTTP method to use"
+      },
+      "hostname": {
+        "type": "string",
+        "description": "Hostname for DNS lookup"
+      },
+      "body": {
+        "type": [
+          "string",
+          "object"
+        ],
+        "description": "Request body for POST/PUT/PATCH requests"
+      },
+      "destination_path": {
+        "type": "string",
+        "description": "Local path to save downloaded resource"
+      },
+      "source_path": {
+        "type": "string",
+        "description": "Local path of file to upload"
+      },
+      "destination_class": {
+        "type": "string",
+        "enum": [
+          "public",
+          "internal",
+          "private",
+          "restricted"
+        ],
+        "description": "Classification of network destination"
+      },
+      "auth_header": {
+        "type": "string",
+        "description": "Authorization header value"
+      },
+      "host": {
+        "type": "string",
+        "description": "Target host for raw socket connection"
+      },
+      "port": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 65535,
+        "description": "Target port for socket connection"
+      },
+      "protocol": {
+        "type": "string",
+        "enum": [
+          "tcp",
+          "udp",
+          "tls"
+        ],
+        "description": "Socket protocol"
+      },
+      "proxy_url": {
+        "type": "string",
+        "format": "uri",
+        "description": "Proxy server URL for tunnel"
+      },
+      "target_url": {
+        "type": "string",
+        "format": "uri",
+        "description": "Final destination URL through proxy"
+      },
+      "justification": {
+        "type": "string",
+        "description": "Reason for sensitive network operations"
+      },
+      "headers": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "string"
+        },
+        "description": "Additional HTTP headers"
+      },
+      "timeout_ms": {
+        "type": "integer",
+        "minimum": 0,
+        "description": "Request timeout in milliseconds"
+      },
+      "follow_redirects": {
+        "type": "boolean",
+        "default": true,
+        "description": "Whether to follow HTTP redirects"
+      },
+      "verify_ssl": {
+        "type": "boolean",
+        "default": true,
+        "description": "Whether to verify SSL certificates"
+      }
+    },
+    "required": [
+      "url"
+    ]
+  }
+}

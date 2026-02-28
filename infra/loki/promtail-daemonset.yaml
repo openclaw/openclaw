@@ -1,0 +1,414 @@
+# Promtail DaemonSet - Log Collection Agent
+# Runs on all cluster nodes to collect container, kubelet, and system logs
+# Sends logs to Loki for centralized storage and querying
+#
+# Promtail is a log collector that:
+# - Runs as DaemonSet on every node (including master/control-plane)
+# - Scrapes container logs from /var/log/containers/
+# - Parses JSON-formatted Docker/containerd logs
+# - Extracts Kubernetes metadata (namespace, pod, container names)
+# - Attaches labels for filtering and aggregation
+# - Forwards logs to Loki for storage
+#
+
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: promtail
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: promtail
+    app.kubernetes.io/version: v2.9.0
+    app.kubernetes.io/part-of: loki-stack
+    environment: shared
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: promtail
+  
+  # Update strategy: RollingUpdate to avoid complete log collection gaps
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1  # Update 1 node at a time
+  
+  # Pod template specification
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: promtail
+        app.kubernetes.io/version: v2.9.0
+        app.kubernetes.io/part-of: loki-stack
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "3101"
+        prometheus.io/path: "/metrics"
+    
+    spec:
+      # Service account for Kubernetes API access (label discovery)
+      serviceAccountName: promtail
+      
+      # Run on all nodes, including master/control-plane
+      tolerations:
+        # Master node toleration
+        - key: node-role.kubernetes.io/master
+          operator: Exists
+          effect: NoSchedule
+        # Control-plane toleration (K8s 1.25+)
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+          effect: NoSchedule
+        # Allow tainted nodes (if any)
+        - key: node.kubernetes.io/not-ready
+          operator: Exists
+          effect: NoExecute
+          tolerationSeconds: 300
+        - key: node.kubernetes.io/unreachable
+          operator: Exists
+          effect: NoExecute
+          tolerationSeconds: 300
+      
+      # Host networking for direct access to node logs (optional, can remove if not needed)
+      # hostNetwork: false  # Use default pod networking; comment out if hostNetwork needed
+      
+      # DNS policy for hostname resolution
+      dnsPolicy: ClusterFirstWithHostNet
+      
+      # Pod priority: high priority ensures logs are collected even during resource pressure
+      priorityClassName: system-node-critical
+      
+      # Init container: wait for Loki service to be ready before starting Promtail
+      initContainers:
+        - name: wait-for-loki
+          image: busybox:1.35
+          command:
+            - sh
+            - -c
+            - |
+              echo "Waiting for Loki service to be ready..."
+              until nc -z loki 3100; do
+                echo "Loki not ready, waiting..."
+                sleep 5
+              done
+              echo "Loki is ready!"
+          resources:
+            requests:
+              cpu: 50m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+      
+      # Main containers
+      containers:
+        - name: promtail
+          image: grafana/promtail:2.9.0  # Match Loki version
+          imagePullPolicy: IfNotPresent
+          
+          # Promtail ports
+          ports:
+            - name: http-metrics
+              containerPort: 3101
+              protocol: TCP
+          
+          # Environment variables
+          env:
+            # Node name for pod labels
+            - name: HOSTNAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            # Pod namespace
+            - name: NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            # Cluster name (customize per environment)
+            - name: CLUSTER_NAME
+              value: "prod"  # Override in production/staging deployments
+          
+          # Volume mounts: access to node logs
+          volumeMounts:
+            # Container logs from Docker/containerd
+            - name: varlog
+              mountPath: /var/log
+              readOnly: true
+            # Kubernetes logs
+            - name: varlibdockercontainers
+              mountPath: /var/lib/docker/containers
+              readOnly: true
+            # Promtail configuration
+            - name: config
+              mountPath: /etc/promtail
+              readOnly: true
+            # Position tracking (where we left off reading logs)
+            - name: positions
+              mountPath: /tmp/promtail-positions
+          
+          # Resource requests and limits
+          resources:
+            requests:
+              cpu: 100m        # Low baseline CPU
+              memory: 128Mi    # Low baseline memory
+            limits:
+              cpu: 200m        # Allow some burst
+              memory: 256Mi    # Memory limit
+          
+          # Security context
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          
+          # Liveness probe: check if Promtail is responding
+          livenessProbe:
+            httpGet:
+              path: /ready
+              port: 3101
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          
+          # Readiness probe: check if Promtail can ingest logs
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 3101
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          
+          # Command and args
+          args:
+            - -config.file=/etc/promtail/promtail-config.yaml
+            - -config.expand-env=true
+      
+      # Volumes
+      volumes:
+        # Host /var/log directory
+        - name: varlog
+          hostPath:
+            path: /var/log
+            type: Directory
+        
+        # Docker/containerd container logs
+        - name: varlibdockercontainers
+          hostPath:
+            path: /var/lib/docker/containers
+            type: DirectoryOrCreate
+        
+        # Promtail configuration ConfigMap
+        - name: config
+          configMap:
+            name: promtail-config
+            defaultMode: 0444  # Read-only
+        
+        # Position tracking (ephemeral for each pod)
+        - name: positions
+          emptyDir:
+            sizeLimit: 1Gi  # Limit position tracking size
+
+---
+# ServiceAccount for Promtail
+# Allows Promtail to query Kubernetes API for pod metadata
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: promtail
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: promtail
+    app.kubernetes.io/part-of: loki-stack
+
+---
+# ClusterRole: Permissions for Kubernetes API access
+# Required for Promtail to discover pod labels and metadata
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: promtail
+  labels:
+    app.kubernetes.io/name: promtail
+    app.kubernetes.io/part-of: loki-stack
+rules:
+  # Get nodes (for node name resolution)
+  - apiGroups: [""]
+    resources:
+      - nodes
+    verbs:
+      - get
+      - list
+      - watch
+  
+  # Get pods (for pod metadata)
+  - apiGroups: [""]
+    resources:
+      - pods
+    verbs:
+      - get
+      - list
+      - watch
+  
+  # Optional: Get pod logs (if using API for log access)
+  - apiGroups: [""]
+    resources:
+      - pods/log
+    verbs:
+      - get
+
+---
+# ClusterRoleBinding: Bind ServiceAccount to ClusterRole
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: promtail
+  labels:
+    app.kubernetes.io/name: promtail
+    app.kubernetes.io/part-of: loki-stack
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: promtail
+subjects:
+  - kind: ServiceAccount
+    name: promtail
+    namespace: monitoring
+
+---
+# Service for Promtail metrics (Prometheus scrape target)
+apiVersion: v1
+kind: Service
+metadata:
+  name: promtail
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: promtail
+    app.kubernetes.io/part-of: loki-stack
+spec:
+  type: ClusterIP
+  ports:
+    - name: http-metrics
+      port: 3101
+      protocol: TCP
+      targetPort: 3101
+  selector:
+    app.kubernetes.io/name: promtail
+
+---
+# PodMonitor for Prometheus (if using Prometheus Operator)
+# Uncomment if Prometheus Operator is installed
+#
+# apiVersion: monitoring.coreos.com/v1
+# kind: PodMonitor
+# metadata:
+#   name: promtail
+#   namespace: monitoring
+#   labels:
+#     app.kubernetes.io/name: promtail
+#     app.kubernetes.io/part-of: loki-stack
+# spec:
+#   selector:
+#     matchLabels:
+#       app.kubernetes.io/name: promtail
+#   podMetricsEndpoints:
+#     - port: http-metrics
+#       interval: 30s
+#       path: /metrics
+
+---
+# NetworkPolicy: Allow Promtail to connect to Loki
+# Restricts Promtail traffic for security
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: promtail-to-loki
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: promtail
+    app.kubernetes.io/part-of: loki-stack
+spec:
+  # Apply to Promtail pods
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: promtail
+  
+  # Egress rules: what Promtail can send to
+  policyTypes:
+    - Egress
+  
+  egress:
+    # Allow DNS (for service discovery)
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: UDP
+          port: 53
+    
+    # Allow Loki service
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: loki
+      ports:
+        - protocol: TCP
+          port: 3100
+    
+    # Allow Kubernetes API (for pod metadata)
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              name: kube-system
+      ports:
+        - protocol: TCP
+          port: 443
+
+# ============================================================================
+# DEPLOYMENT INSTRUCTIONS
+# ============================================================================
+#
+# Prerequisites:
+# 1. Monitoring namespace exists: kubectl create ns monitoring
+# 2. Loki service is running: kubectl get svc loki -n monitoring
+# 3. Promtail config (promtail-config.yaml) is deployed as ConfigMap
+#
+# Deploy this DaemonSet:
+# kubectl apply -f promtail-daemonset.yaml
+#
+# Verify deployment:
+# kubectl get daemonset -n monitoring
+# kubectl get pods -n monitoring -l app.kubernetes.io/name=promtail
+# kubectl logs -f <promtail-pod> -n monitoring
+#
+# Check metrics:
+# kubectl port-forward -n monitoring svc/promtail 3101:3101
+# curl http://localhost:3101/metrics | grep promtail
+#
+# Key metrics to monitor:
+# - promtail_read_bytes_total: total bytes read from log files
+# - promtail_entries_total: total log entries sent to Loki
+# - promtail_files_active_total: number of actively monitored files
+#
+# Troubleshooting:
+# 1. If Promtail can't reach Loki:
+#    - Check Loki service: kubectl get svc -n monitoring | grep loki
+#    - Check network connectivity: kubectl exec <promtail-pod> -n monitoring -- \
+#      curl http://loki:3100/api/v1/status/buildinfo
+#
+# 2. If logs aren't being collected:
+#    - Check Promtail logs: kubectl logs <promtail-pod> -n monitoring | grep -i error
+#    - Verify /var/log is readable: verify volumeMounts
+#    - Check promtail-config.yaml for scrape config errors
+#
+# 3. If Promtail is memory-heavy:
+#    - Increase limit: resources.limits.memory
+#    - Reduce batch size in config (max_streams)
+#    - Reduce log file retention on nodes
+#
+# 4. If Promtail is CPU-heavy:
+#    - Reduce scrape frequency: scrape_interval in config
+#    - Increase chunk size: chunk_size in config
+#    - Optimize label extraction regex

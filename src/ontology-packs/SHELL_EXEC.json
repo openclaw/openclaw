@@ -1,0 +1,347 @@
+{
+  "pack_id": "openclawd.SHELL_EXEC",
+  "pack_version": "1.0.0",
+  "stage_id": "SHELL_EXEC",
+  "description": "Controls shell command execution including process spawning, environment configuration, and privilege escalation. Enforces command allowlists and execution context restrictions.",
+  "thresholds": {
+    "min_confidence_T": 0,
+    "dominance_margin_Delta": 0
+  },
+  "contracts": [
+    {
+      "contract_id": "SHELL_RUN_READONLY",
+      "risk_class": "LOW",
+      "required_fields": [
+        "command"
+      ],
+      "limits": {},
+      "needs_confirmation": false,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "SHELL_LIST_PROCESSES",
+      "risk_class": "LOW",
+      "required_fields": [
+        "command"
+      ],
+      "limits": {},
+      "needs_confirmation": false,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "SHELL_PRINT_ENV",
+      "risk_class": "LOW",
+      "required_fields": [
+        "command"
+      ],
+      "limits": {},
+      "needs_confirmation": false,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "SHELL_RUN_BUILD_TOOL",
+      "risk_class": "MEDIUM",
+      "required_fields": [
+        "command",
+        "cwd"
+      ],
+      "limits": {
+        "allowed_commands": [
+          "npm",
+          "yarn",
+          "pnpm",
+          "pip",
+          "cargo",
+          "go",
+          "make",
+          "gradle",
+          "mvn"
+        ],
+        "max_runtime_seconds": 600
+      },
+      "needs_confirmation": false,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "SHELL_RUN_LINTER",
+      "risk_class": "MEDIUM",
+      "required_fields": [
+        "command",
+        "cwd"
+      ],
+      "limits": {
+        "allowed_commands": [
+          "eslint",
+          "prettier",
+          "black",
+          "flake8",
+          "rubocop",
+          "clippy"
+        ]
+      },
+      "needs_confirmation": false,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "SHELL_RUN_TEST",
+      "risk_class": "MEDIUM",
+      "required_fields": [
+        "command",
+        "cwd"
+      ],
+      "limits": {
+        "max_runtime_seconds": 300
+      },
+      "needs_confirmation": false,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "SHELL_SET_ENV",
+      "risk_class": "MEDIUM",
+      "required_fields": [
+        "command",
+        "env"
+      ],
+      "limits": {
+        "forbidden_vars": [
+          "PATH",
+          "LD_PRELOAD",
+          "LD_LIBRARY_PATH"
+        ]
+      },
+      "needs_confirmation": false,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "SHELL_RUN_WITH_ARGS",
+      "risk_class": "MEDIUM",
+      "required_fields": [
+        "command",
+        "args"
+      ],
+      "limits": {
+        "max_args": 50,
+        "max_arg_length": 1000
+      },
+      "needs_confirmation": false,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "SHELL_PIPE_COMMANDS",
+      "risk_class": "HIGH",
+      "required_fields": [
+        "command",
+        "pipeline"
+      ],
+      "limits": {
+        "max_pipe_stages": 5
+      },
+      "needs_confirmation": true,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "SHELL_RUN_ARBITRARY",
+      "risk_class": "HIGH",
+      "required_fields": [
+        "command",
+        "justification"
+      ],
+      "limits": {
+        "max_runtime_seconds": 60,
+        "requires_sandbox": true
+      },
+      "needs_confirmation": true,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "SHELL_BACKGROUND_PROCESS",
+      "risk_class": "HIGH",
+      "required_fields": [
+        "command",
+        "daemon_mode"
+      ],
+      "limits": {
+        "max_background_processes": 3,
+        "max_lifetime_hours": 24
+      },
+      "needs_confirmation": true,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "SHELL_KILL_PROCESS",
+      "risk_class": "HIGH",
+      "required_fields": [
+        "command",
+        "pid",
+        "signal"
+      ],
+      "limits": {
+        "allowed_signals": [
+          "SIGTERM",
+          "SIGINT",
+          "SIGHUP"
+        ]
+      },
+      "needs_confirmation": true,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "SHELL_RUN_SUDO",
+      "risk_class": "CRITICAL",
+      "required_fields": [
+        "command",
+        "allows_sudo",
+        "justification"
+      ],
+      "limits": {
+        "requires_approval": true,
+        "audit_all": true
+      },
+      "needs_confirmation": true,
+      "deny_by_default": true,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "SHELL_MODIFY_SYSTEM",
+      "risk_class": "CRITICAL",
+      "required_fields": [
+        "command",
+        "system_scope",
+        "authorization"
+      ],
+      "limits": {
+        "forbidden_paths": [
+          "/etc",
+          "/usr",
+          "/bin",
+          "/sbin"
+        ],
+        "requires_rollback_plan": true
+      },
+      "needs_confirmation": true,
+      "deny_by_default": true,
+      "capability_requirements": []
+    }
+  ],
+  "field_schema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "type": "object",
+    "properties": {
+      "command": {
+        "type": "string",
+        "description": "Shell command to execute"
+      },
+      "args": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "description": "Command arguments"
+      },
+      "cwd": {
+        "type": "string",
+        "description": "Working directory for command execution"
+      },
+      "env": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "string"
+        },
+        "description": "Environment variables to set"
+      },
+      "allows_sudo": {
+        "type": "boolean",
+        "default": false,
+        "description": "Whether sudo/elevated execution is permitted"
+      },
+      "pipeline": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "description": "List of commands to pipe together"
+      },
+      "justification": {
+        "type": "string",
+        "description": "Reason for executing sensitive commands"
+      },
+      "daemon_mode": {
+        "type": "boolean",
+        "default": false,
+        "description": "Run as background daemon"
+      },
+      "pid": {
+        "type": "integer",
+        "description": "Process ID for kill operations"
+      },
+      "signal": {
+        "type": "string",
+        "enum": [
+          "SIGTERM",
+          "SIGINT",
+          "SIGKILL",
+          "SIGHUP",
+          "SIGUSR1",
+          "SIGUSR2"
+        ],
+        "description": "Signal to send to process"
+      },
+      "system_scope": {
+        "type": "string",
+        "enum": [
+          "services",
+          "packages",
+          "network",
+          "users",
+          "kernel"
+        ],
+        "description": "Category of system modification"
+      },
+      "authorization": {
+        "type": "string",
+        "description": "Authorization token for system-level commands"
+      },
+      "timeout_seconds": {
+        "type": "integer",
+        "minimum": 0,
+        "description": "Command timeout in seconds"
+      },
+      "capture_output": {
+        "type": "boolean",
+        "default": true,
+        "description": "Whether to capture stdout/stderr"
+      },
+      "shell": {
+        "type": "string",
+        "enum": [
+          "bash",
+          "sh",
+          "zsh",
+          "powershell",
+          "cmd"
+        ],
+        "description": "Shell to use for execution"
+      },
+      "interactive": {
+        "type": "boolean",
+        "default": false,
+        "description": "Whether command requires interactive input"
+      }
+    },
+    "required": [
+      "command"
+    ]
+  }
+}

@@ -1,0 +1,272 @@
+{
+  "pack_id": "openclawd.SUBAGENT_SPAWN",
+  "pack_version": "1.0.0",
+  "stage_id": "SUBAGENT_SPAWN",
+  "description": "Manages the creation and lifecycle of subordinate agent instances. Controls resource allocation and permission inheritance for spawned agents.",
+  "thresholds": {
+    "min_confidence_T": 0,
+    "dominance_margin_Delta": 0
+  },
+  "contracts": [
+    {
+      "contract_id": "SPAWN_READONLY_AGENT",
+      "risk_class": "LOW",
+      "required_fields": [
+        "agent_type"
+      ],
+      "limits": {},
+      "needs_confirmation": false,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "SPAWN_EPHEMERAL_WORKER",
+      "risk_class": "LOW",
+      "required_fields": [
+        "agent_type",
+        "ttl_seconds"
+      ],
+      "limits": {},
+      "needs_confirmation": false,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "SPAWN_SANDBOXED_AGENT",
+      "risk_class": "LOW",
+      "required_fields": [
+        "agent_type",
+        "sandbox_profile"
+      ],
+      "limits": {},
+      "needs_confirmation": false,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "SPAWN_WITH_RESOURCE_LIMITS",
+      "risk_class": "MEDIUM",
+      "required_fields": [
+        "agent_type",
+        "resource_quota"
+      ],
+      "limits": {
+        "max_memory_mb": 512,
+        "max_cpu_percent": 25
+      },
+      "needs_confirmation": false,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "SPAWN_PERSISTENT_AGENT",
+      "risk_class": "MEDIUM",
+      "required_fields": [
+        "agent_type",
+        "persistence_scope"
+      ],
+      "limits": {
+        "max_lifetime_hours": 24
+      },
+      "needs_confirmation": false,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "SPAWN_NETWORKED_AGENT",
+      "risk_class": "MEDIUM",
+      "required_fields": [
+        "agent_type",
+        "network_policy"
+      ],
+      "limits": {
+        "allowed_outbound_ports": [
+          80,
+          443
+        ]
+      },
+      "needs_confirmation": false,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "SPAWN_WITH_CREDENTIAL_ACCESS",
+      "risk_class": "HIGH",
+      "required_fields": [
+        "agent_type",
+        "credential_scope"
+      ],
+      "limits": {
+        "credential_ttl_minutes": 60
+      },
+      "needs_confirmation": true,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "SPAWN_ELEVATED_AGENT",
+      "risk_class": "HIGH",
+      "required_fields": [
+        "agent_type",
+        "elevation_level",
+        "justification"
+      ],
+      "limits": {
+        "max_elevation": 2
+      },
+      "needs_confirmation": true,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "SPAWN_PRIVILEGED_AGENT",
+      "risk_class": "CRITICAL",
+      "required_fields": [
+        "agent_type",
+        "privilege_set",
+        "authorization"
+      ],
+      "limits": {
+        "requires_approval": true
+      },
+      "needs_confirmation": true,
+      "deny_by_default": true,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "SPAWN_UNRESTRICTED_AGENT",
+      "risk_class": "CRITICAL",
+      "required_fields": [
+        "agent_type",
+        "unrestricted_scope",
+        "emergency_override"
+      ],
+      "limits": {
+        "max_concurrent": 1,
+        "requires_audit": true
+      },
+      "needs_confirmation": true,
+      "deny_by_default": true,
+      "capability_requirements": []
+    }
+  ],
+  "field_schema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "type": "object",
+    "properties": {
+      "agent_type": {
+        "type": "string",
+        "description": "Type identifier for the agent to spawn"
+      },
+      "agent_name": {
+        "type": "string",
+        "description": "Optional human-readable name for the agent"
+      },
+      "ttl_seconds": {
+        "type": "integer",
+        "minimum": 1,
+        "description": "Time-to-live in seconds for ephemeral agents"
+      },
+      "sandbox_profile": {
+        "type": "string",
+        "enum": [
+          "strict",
+          "moderate",
+          "permissive"
+        ],
+        "description": "Sandbox isolation profile"
+      },
+      "resource_quota": {
+        "type": "object",
+        "properties": {
+          "memory_mb": {
+            "type": "integer"
+          },
+          "cpu_percent": {
+            "type": "number"
+          },
+          "disk_mb": {
+            "type": "integer"
+          }
+        },
+        "description": "Resource allocation limits"
+      },
+      "persistence_scope": {
+        "type": "string",
+        "enum": [
+          "session",
+          "task",
+          "permanent"
+        ],
+        "description": "How long agent state should persist"
+      },
+      "network_policy": {
+        "type": "object",
+        "properties": {
+          "allow_outbound": {
+            "type": "boolean"
+          },
+          "allow_inbound": {
+            "type": "boolean"
+          },
+          "allowed_hosts": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "description": "Network access policy for the agent"
+      },
+      "credential_scope": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "description": "List of credential namespaces the agent can access"
+      },
+      "elevation_level": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 3,
+        "description": "Privilege elevation level"
+      },
+      "justification": {
+        "type": "string",
+        "description": "Reason for elevated or privileged spawn"
+      },
+      "privilege_set": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "description": "Set of privileges to grant"
+      },
+      "authorization": {
+        "type": "string",
+        "description": "Authorization token for privileged spawn"
+      },
+      "unrestricted_scope": {
+        "type": "string",
+        "description": "Scope for unrestricted agent operations"
+      },
+      "emergency_override": {
+        "type": "string",
+        "description": "Emergency override code"
+      },
+      "inherit_permissions": {
+        "type": "boolean",
+        "default": false,
+        "description": "Whether to inherit parent agent permissions"
+      },
+      "max_children": {
+        "type": "integer",
+        "minimum": 0,
+        "description": "Maximum number of child agents this agent can spawn"
+      }
+    },
+    "required": [
+      "agent_type"
+    ]
+  }
+}

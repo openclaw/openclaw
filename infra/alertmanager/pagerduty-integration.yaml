@@ -1,0 +1,566 @@
+# PagerDuty Integration Setup Guide
+# This document describes how to set up PagerDuty integration for AlertManager
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: alertmanager-pagerduty-docs
+  namespace: monitoring
+  labels:
+    app: alertmanager
+    component: pagerduty-integration
+data:
+  PAGERDUTY_INTEGRATION_GUIDE.md: |
+    # PagerDuty Integration for AlertManager
+    
+    ## Overview
+    AlertManager sends critical alerts to PagerDuty to trigger incident pages for on-call engineers. This guide covers:
+    - Creating PagerDuty services and integrations
+    - Configuring escalation policies
+    - Setting up AlertManager integration
+    - Testing and validation
+    
+    ## Step 1: Create PagerDuty Service
+    
+    ### Prerequisites
+    - PagerDuty account (admin access)
+    - On-call schedule configured
+    - Escalation policy defined
+    
+    ### Creating the Service
+    
+    1. **Log into PagerDuty**
+       - Go to: https://subdomain.pagerduty.com
+       - Navigate to: Services → New Service
+    
+    2. **Configure Service**
+       - **Service Name**: "ClarityRouter Production"
+       - **Escalation Policy**: Select or create new
+       - **Alert Creation**: "Create alerts and incidents"
+       - **Alert Grouping**: Intelligent
+       - **Incident Urgency**: High
+    
+    3. **Create Integration**
+       - Left sidebar → "Integrations" (under Services)
+       - Click "New Integration"
+       - Select "Events API v2" from dropdown
+       - Click "Add"
+       - Copy the **Integration Key** (you'll need this for AlertManager)
+    
+    ## Step 2: Configure Escalation Policy
+    
+    ### Recommended Escalation Path
+    
+    ```
+    Level 1: Primary On-Call Engineer (5 minutes)
+    Level 2: Team Lead / Secondary On-Call (10 minutes)
+    Level 3: Infrastructure Manager (15 minutes)
+    Level 4: Escalate to all on-call (if still unacknowledged)
+    ```
+    
+    ### Setting Up Escalation
+    
+    1. Go to: Configuration → Escalation Policies
+    2. Click "New Escalation Policy"
+    3. Fill in details:
+       - **Name**: "ClarityRouter Production Escalation"
+       - **Repeat Policy**: "Don't repeat the escalation policy"
+       - **Escalation Target**: Select schedule (primary on-call)
+       - **Delay**: 5 minutes
+    
+    4. Click "Add Another Escalation Level"
+       - Target: Secondary on-call schedule
+       - Delay: 10 minutes (from level 1)
+    
+    5. Click "Add Another Escalation Level"
+       - Target: Manager schedule
+       - Delay: 15 minutes (from level 1)
+    
+    6. Save
+    
+    ### Alternative: Simple Setup (Single Level)
+    
+    For initial deployment:
+    - **Escalation Target**: Team schedule
+    - **Delay**: 5 minutes (before escalation)
+    - Upgrade to multi-level as team grows
+    
+    ## Step 3: Store Integration Key in Kubernetes
+    
+    ### Create Secret
+    
+    ```bash
+    # Get integration key from PagerDuty service
+    # Format: <service-id>/<integration-key>
+    
+    kubectl create secret generic alertmanager-pagerduty \
+      --from-literal=service-key="<integration-key-from-pagerduty>" \
+      -n monitoring
+    
+    # Verify
+    kubectl get secret alertmanager-pagerduty -n monitoring
+    ```
+    
+    ### Reference in AlertManager
+    
+    In `values-prod.yaml`:
+    ```yaml
+    alertmanager:
+      config:
+        global:
+          pagerduty_url: "https://events.pagerduty.com/v2/enqueue"
+        
+        receivers:
+        - name: pagerduty-critical
+          pagerduty_configs:
+          - service_key: ${PAGERDUTY_SERVICE_KEY_PROD}
+            description: "{{ .GroupLabels.alertname }}"
+            details:
+              severity: "{{ .GroupLabels.severity }}"
+              cluster: "{{ .GroupLabels.cluster }}"
+    ```
+    
+    ## Step 4: PagerDuty Alert Configuration
+    
+    ### Routing Configuration
+    
+    ```yaml
+    route:
+      routes:
+      - match:
+          severity: critical
+        receiver: pagerduty-critical
+        group_wait: 10s          # Send immediately
+        group_interval: 2m       # Regroup every 2 minutes
+        repeat_interval: 1h      # Re-send hourly
+    ```
+    
+    ### Severity Mapping
+    
+    | Alert Severity | PagerDuty Impact | Auto-Resolve |
+    |---|---|---|
+    | critical | Triggers incident | Manual (1h repeat) |
+    | warning | Creates alert only | After 6h (no escalation) |
+    | info | Logged only | After 12h |
+    
+    ### Incident Auto-Resolution
+    
+    When AlertManager resolves an alert:
+    - PagerDuty incident automatically resolves (if no other alerts)
+    - Clears page-out
+    - Updates incident status to "Resolved"
+    
+    ## Step 5: Test Integration
+    
+    ### Via AlertManager API
+    
+    ```bash
+    # Port-forward to AlertManager
+    kubectl port-forward -n monitoring svc/alertmanager 9093:9093 &
+    
+    # Create test critical alert
+    curl -X POST http://localhost:9093/api/v1/alerts \
+      -H 'Content-Type: application/json' \
+      -d '[{
+        "labels": {
+          "alertname": "TestAlertCritical",
+          "severity": "critical",
+          "cluster": "clarity-router-prod"
+        },
+        "annotations": {
+          "summary": "Test critical alert",
+          "description": "This is a test alert to trigger PagerDuty incident"
+        },
+        "generatorURL": "https://prometheus.internal/graph"
+      }]'
+    ```
+    
+    Expected result: Incident appears in PagerDuty dashboard
+    
+    ### Via PagerDuty Events API (Direct Test)
+    
+    ```bash
+    # Get integration key
+    SERVICE_KEY=$(kubectl get secret alertmanager-pagerduty \
+      -o jsonpath='{.data.service-key}' -n monitoring | base64 -d)
+    
+    # Send test alert
+    curl -X POST https://events.pagerduty.com/v2/enqueue \
+      -H 'Content-Type: application/json' \
+      -d "{
+        \"routing_key\": \"$SERVICE_KEY\",
+        \"event_action\": \"trigger\",
+        \"dedup_key\": \"test-alert-$(date +%s)\",
+        \"payload\": {
+          \"summary\": \"Test Alert from AlertManager\",
+          \"severity\": \"critical\",
+          \"source\": \"AlertManager Test\",
+          \"custom_details\": {
+            \"cluster\": \"clarity-router-prod\",
+            \"alert\": \"TestAlert\",
+            \"grafana_dashboard\": \"https://grafana.internal/d/router-health-overview\"
+          }
+        }
+      }"
+    ```
+    
+    ### Verify Integration
+    
+    1. Log into PagerDuty
+    2. Go to: Incidents tab
+    3. Look for incident with title "TestAlert"
+    4. Verify details match
+    5. Check escalation policy triggered
+    6. Acknowledge and resolve to test workflow
+    
+    ## Step 6: Configure Auto-Resolution
+    
+    ### Enable Auto-Resolve in PagerDuty
+    
+    1. Service Settings → "Incident Behavior"
+    2. **Auto-resolve incidents**: Enabled
+    3. **Auto-resolve timeout**: 30 minutes
+       - Incident auto-resolves if no updates
+       - Prevents stale incidents
+    
+    ### AlertManager Resolution Notification
+    
+    When AlertManager sends resolution:
+    ```yaml
+    pagerduty_configs:
+    - service_key: ${PAGERDUTY_SERVICE_KEY}
+      description: "{{ .GroupLabels.alertname }}"
+      severity: '{{ if eq .Status "firing" }}critical{{ else }}resolved{{ end }}'
+      # "resolved" status automatically closes PagerDuty incident
+    ```
+    
+    ## Incident Notification Structure
+    
+    ### Critical Alert → PagerDuty Incident
+    
+    ```
+    ┌─────────────────────────────────────────┐
+    │  PagerDuty Incident                      │
+    ├─────────────────────────────────────────┤
+    │ Title: RouterUnavailable                 │
+    │ Status: Triggered                        │
+    │ Urgency: High                            │
+    │ Escalation Policy: 5min→10min→15min     │
+    ├─────────────────────────────────────────┤
+    │ Details:                                 │
+    │ • Cluster: clarity-router-prod           │
+    │ • Severity: critical                     │
+    │ • Alert Count: 3                         │
+    │ • Started: 2026-02-15 12:35:00 UTC      │
+    ├─────────────────────────────────────────┤
+    │ Notification Channels:                   │
+    │ • Email (primary engineer)               │
+    │ • Phone call (if not acked in 5 min)     │
+    │ • SMS (if still escalating)              │
+    └─────────────────────────────────────────┘
+    ```
+    
+    ## Best Practices
+    
+    ### 1. Tuning Alert Sensitivity
+    - **group_wait**: 10s for critical (don't wait to page)
+    - **group_interval**: 2m to regroup new related alerts
+    - **repeat_interval**: 1h to avoid paging fatigue
+    
+    ### 2. Escalation Policy
+    - Start with 5-minute level for primary on-call
+    - Use multiple levels to prevent alert storms
+    - Escalate to manager if unacknowledged
+    
+    ### 3. Incident Management
+    - Acknowledge incidents promptly (stops escalation)
+    - Resolve when alert is fixed (closes incident)
+    - Add context/runbooks to incidents
+    
+    ### 4. On-Call Rotation
+    - Set up weekly rotation schedules
+    - Configure override for vacations/sick leave
+    - Notify team of schedule changes
+    
+    ### 5. Monitoring PagerDuty
+    - Track Mean Time To Respond (MTTR)
+    - Monitor false alert rate
+    - Adjust severity/grouping as needed
+    
+    ## Troubleshooting
+    
+    ### Alert Not Creating Incident
+    
+    1. **Check integration key**
+       ```bash
+       kubectl get secret alertmanager-pagerduty \
+         -o jsonpath='{.data.service-key}' -n monitoring | base64 -d
+       ```
+    
+    2. **Verify service is active**
+       - PagerDuty → Services → Check status
+       - Enable if "Maintenance" or disabled
+    
+    3. **Check AlertManager logs**
+       ```bash
+       kubectl logs -n monitoring alertmanager-0 | grep pagerduty
+       ```
+    
+    4. **Test with curl** (see Step 5)
+    
+    ### Incident Not Auto-Resolving
+    
+    1. **Check auto-resolve setting**
+       - PagerDuty → Service Settings → Incident Behavior
+       - Ensure "Auto-resolve" is enabled
+    
+    2. **Verify AlertManager sends resolved status**
+       ```bash
+       curl http://localhost:9093/api/v1/alerts
+       # Check for alerts with "status":"resolved"
+       ```
+    
+    3. **Check dedup key matching**
+       - AlertManager uses alert fingerprint as dedup_key
+       - Resolved alert must have same dedup_key as firing alert
+    
+    ### Too Many Incidents
+    
+    1. **Adjust grouping**
+       - Increase `group_by` labels (group more alerts)
+       - Increase `group_wait` (batch more alerts)
+    
+    2. **Add inhibition rules**
+       - Suppress secondary alerts when parent is firing
+       - Example: suppress pod alerts if node is down
+    
+    3. **Review alert rules**
+       - Check if too many false positives
+       - Adjust thresholds and durations
+    
+    ### Escalation Not Triggering
+    
+    1. **Verify escalation policy**
+       - Go to service settings → escalation policy
+       - Check schedules are assigned to people
+       - Verify people are on-call
+    
+    2. **Check incident urgency**
+       - High urgency → escalates
+       - Low urgency → not escalated
+    
+    3. **Test with PagerDuty UI**
+       - Manually create test incident
+       - Verify escalation triggers
+    
+    ## Advanced Configuration
+    
+    ### Custom Alert Groups
+    
+    ```yaml
+    pagerduty_configs:
+    - service_key: ${PAGERDUTY_SERVICE_KEY}
+      grouping: "{{ .GroupLabels.alertname }}"
+      # Groups incidents by alert name
+      # Prevents separate incidents for same alert
+    ```
+    
+    ### Alert Details Customization
+    
+    ```yaml
+    details:
+      severity: "{{ .GroupLabels.severity }}"
+      cluster: "{{ .GroupLabels.cluster }}"
+      duration: "{{ (now.Sub (index .Alerts 0).StartsAt).Minutes | printf \"%.0f\" }} minutes"
+      grafana_url: "https://grafana.internal/d/router-health?var-cluster={{ .GroupLabels.cluster }}"
+      runbook_url: "{{ (index .Alerts 0).Annotations.runbook_url }}"
+    ```
+    
+    ### Webhook Integration (Bi-Directional Sync)
+    
+    For automatic incident acknowledgement when alert is handled:
+    
+    ```yaml
+    # Configure in PagerDuty service
+    Integration Settings → Webhooks
+    Enable: "Webhook Trigger"
+    
+    # Post to AlertManager silence API
+    POST /api/v1/silences
+    When incident is acknowledged, silence corresponding alert
+    ```
+    
+    ## Related Documentation
+    - PagerDuty Events API v2: https://developer.pagerduty.com/docs/events-api-v2/overview/
+    - AlertManager PagerDuty Config: https://prometheus.io/docs/alerting/latest/configuration/#pagerduty_config
+    - PagerDuty Services: https://support.pagerduty.com/docs/services-and-integrations
+    - Escalation Policies: https://support.pagerduty.com/docs/escalation-policies
+
+  pagerduty-test-script.sh: |
+    #!/bin/bash
+    # Test PagerDuty integration with AlertManager
+    # Usage: ./pagerduty-test-script.sh <service-key>
+    
+    set -e
+    
+    SERVICE_KEY="${1:-}"
+    
+    if [ -z "$SERVICE_KEY" ]; then
+        echo "Usage: $0 <service-key>"
+        echo ""
+        echo "Get service key from:"
+        echo "  kubectl get secret alertmanager-pagerduty -o jsonpath='{.data.service-key}' -n monitoring | base64 -d"
+        exit 1
+    fi
+    
+    echo "Testing PagerDuty integration..."
+    echo "Service Key: ${SERVICE_KEY:0:10}..."
+    echo ""
+    
+    # Test 1: Create incident
+    echo "Test 1: Creating test incident..."
+    
+    RESPONSE=$(curl -s -X POST https://events.pagerduty.com/v2/enqueue \
+      -H 'Content-Type: application/json' \
+      -d "{
+        \"routing_key\": \"$SERVICE_KEY\",
+        \"event_action\": \"trigger\",
+        \"dedup_key\": \"test-alert-$(date +%s%N)\",
+        \"payload\": {
+          \"summary\": \"Test Alert from AlertManager\",
+          \"severity\": \"critical\",
+          \"source\": \"AlertManager Integration Test\",
+          \"custom_details\": {
+            \"cluster\": \"clarity-router-prod\",
+            \"alert_name\": \"TestCriticalAlert\",
+            \"dashboard\": \"https://grafana.internal/d/router-health-overview\",
+            \"timestamp\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"
+          }
+        }
+      }")
+    
+    echo "Response: $RESPONSE"
+    
+    if echo "$RESPONSE" | grep -q '"status":"success"'; then
+        echo "✅ Incident created successfully!"
+        
+        DEDUP_KEY=$(echo "$RESPONSE" | grep -o '"dedup_key":"[^"]*"' | cut -d'"' -f4)
+        echo "Dedup Key: $DEDUP_KEY"
+        echo ""
+        
+        echo "Next steps:"
+        echo "1. Check PagerDuty dashboard - incident should appear"
+        echo "2. Acknowledge the incident"
+        echo "3. View incident details and escalation path"
+        echo ""
+        
+        # Test 2: Resolve incident
+        echo "Test 2: Resolving test incident (waiting 5 seconds)..."
+        sleep 5
+        
+        RESOLVE_RESPONSE=$(curl -s -X POST https://events.pagerduty.com/v2/enqueue \
+          -H 'Content-Type: application/json' \
+          -d "{
+            \"routing_key\": \"$SERVICE_KEY\",
+            \"event_action\": \"resolve\",
+            \"dedup_key\": \"$DEDUP_KEY\"
+          }")
+        
+        echo "Resolution Response: $RESOLVE_RESPONSE"
+        
+        if echo "$RESOLVE_RESPONSE" | grep -q '"status":"success"'; then
+            echo "✅ Incident resolved successfully!"
+            echo ""
+            echo "PagerDuty integration is working correctly."
+        else
+            echo "⚠️ Resolution might have failed. Check PagerDuty dashboard."
+        fi
+    else
+        echo "❌ Error creating incident:"
+        echo "$RESPONSE"
+        echo ""
+        echo "Possible issues:"
+        echo "• Invalid service key"
+        echo "• Service is disabled/deleted"
+        echo "• API rate limit exceeded"
+        exit 1
+    fi
+
+  pagerduty-incident-example.json: |
+    {
+      "status": "triggered",
+      "incident_number": 42,
+      "title": "RouterUnavailable",
+      "description": "Router is unavailable - no pods responding to health checks",
+      "created_at": "2026-02-15T12:35:00Z",
+      "status_at": "2026-02-15T12:35:00Z",
+      "pending_actions": [],
+      "incident_key": "baf7cf21b1da41b4b0221008339ff357",
+      "service": {
+        "id": "PIJ4EFG",
+        "type": "service_reference",
+        "summary": "ClarityRouter Production",
+        "self": "https://api.pagerduty.com/services/PIJ4EFG",
+        "html_url": "https://subdomain.pagerduty.com/services/PIJ4EFG"
+      },
+      "assignments": [
+        {
+          "at": "2026-02-15T12:35:00Z",
+          "assignee": {
+            "id": "PIJ4EFH",
+            "type": "user_reference",
+            "summary": "On-Call Engineer",
+            "self": "https://api.pagerduty.com/users/PIJ4EFH",
+            "html_url": "https://subdomain.pagerduty.com/users/PIJ4EFH"
+          }
+        }
+      ],
+      "escalation_policy": {
+        "id": "PIJ4EFI",
+        "type": "escalation_policy_reference",
+        "summary": "ClarityRouter Production Escalation",
+        "self": "https://api.pagerduty.com/escalation_policies/PIJ4EFI",
+        "html_url": "https://subdomain.pagerduty.com/escalation_policies/PIJ4EFI"
+      },
+      "teams": [
+        {
+          "id": "PIJ4EFJ",
+          "type": "team_reference",
+          "summary": "Infrastructure Team",
+          "self": "https://api.pagerduty.com/teams/PIJ4EFJ",
+          "html_url": "https://subdomain.pagerduty.com/teams/PIJ4EFJ"
+        }
+      ],
+      "urgency": "high",
+      "last_status_change_at": "2026-02-15T12:35:00Z",
+      "last_status_change_by": {
+        "id": "PIJ4EFK",
+        "type": "service_reference",
+        "summary": "AlertManager Integration",
+        "self": "https://api.pagerduty.com/services/PIJ4EFK"
+      },
+      "first_trigger_log_entry": {
+        "id": "Q0LFCRHLZWHSF",
+        "type": "log_entry_reference",
+        "summary": "Triggered through the website",
+        "self": "https://api.pagerduty.com/log_entries/Q0LFCRHLZWHSF",
+        "html_url": "https://subdomain.pagerduty.com/log_entries/Q0LFCRHLZWHSF"
+      },
+      "escalation_policy_reference": {
+        "id": "PIJ4EFI",
+        "type": "escalation_policy_reference",
+        "summary": "ClarityRouter Production Escalation"
+      },
+      "conference_bridge": null,
+      "conference_number": null,
+      "conference_url": null,
+      "sla_specification": {
+        "id": "PIJ4EFL",
+        "type": "service_sla_specification"
+      },
+      "alert_counts": {
+        "all": 3,
+        "triggered": 3,
+        "resolved": 0
+      }
+    }

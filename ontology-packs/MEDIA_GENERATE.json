@@ -1,0 +1,315 @@
+{
+  "pack_id": "openclawd.MEDIA_GENERATE",
+  "pack_version": "1.0.0",
+  "stage_id": "MEDIA_GENERATE",
+  "description": "Controls the generation of media assets including images, audio, and video content. Governs resource consumption, content safety checks, and output constraints.",
+  "thresholds": {
+    "min_confidence_T": 0,
+    "dominance_margin_Delta": 0
+  },
+  "contracts": [
+    {
+      "contract_id": "MEDIA_GENERATE_THUMBNAIL",
+      "risk_class": "LOW",
+      "required_fields": [
+        "source_ref",
+        "output_format"
+      ],
+      "limits": {},
+      "needs_confirmation": false,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "MEDIA_CONVERT_FORMAT",
+      "risk_class": "LOW",
+      "required_fields": [
+        "source_ref",
+        "target_format"
+      ],
+      "limits": {},
+      "needs_confirmation": false,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "MEDIA_RESIZE_IMAGE",
+      "risk_class": "LOW",
+      "required_fields": [
+        "source_ref",
+        "dimensions"
+      ],
+      "limits": {},
+      "needs_confirmation": false,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "MEDIA_GENERATE_CHART",
+      "risk_class": "MEDIUM",
+      "required_fields": [
+        "chart_type",
+        "data",
+        "output_format"
+      ],
+      "limits": {
+        "max_data_points": 10000,
+        "max_output_size_mb": 5
+      },
+      "needs_confirmation": false,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "MEDIA_GENERATE_DIAGRAM",
+      "risk_class": "MEDIUM",
+      "required_fields": [
+        "diagram_type",
+        "definition"
+      ],
+      "limits": {
+        "max_nodes": 500,
+        "max_complexity": 100
+      },
+      "needs_confirmation": false,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "MEDIA_SYNTHESIZE_AUDIO",
+      "risk_class": "MEDIUM",
+      "required_fields": [
+        "audio_type",
+        "parameters"
+      ],
+      "limits": {
+        "max_duration_seconds": 300,
+        "max_output_size_mb": 50
+      },
+      "needs_confirmation": false,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "MEDIA_GENERATE_AI_IMAGE",
+      "risk_class": "HIGH",
+      "required_fields": [
+        "prompt",
+        "model",
+        "parameters"
+      ],
+      "limits": {
+        "max_resolution": 2048,
+        "content_filter": true
+      },
+      "needs_confirmation": true,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "MEDIA_GENERATE_AI_VIDEO",
+      "risk_class": "HIGH",
+      "required_fields": [
+        "prompt",
+        "model",
+        "duration_seconds"
+      ],
+      "limits": {
+        "max_duration_seconds": 60,
+        "max_resolution": 1080,
+        "content_filter": true
+      },
+      "needs_confirmation": true,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "MEDIA_DEEPFAKE_GENERATION",
+      "risk_class": "CRITICAL",
+      "required_fields": [
+        "source_media",
+        "target_likeness",
+        "consent_proof",
+        "authorization"
+      ],
+      "limits": {
+        "requires_consent_verification": true,
+        "requires_watermark": true,
+        "requires_audit": true
+      },
+      "needs_confirmation": true,
+      "deny_by_default": true,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "MEDIA_UNRESTRICTED_GENERATION",
+      "risk_class": "CRITICAL",
+      "required_fields": [
+        "media_type",
+        "parameters",
+        "bypass_reason",
+        "authorization"
+      ],
+      "limits": {
+        "requires_approval_chain": true,
+        "audit_all_outputs": true
+      },
+      "needs_confirmation": true,
+      "deny_by_default": true,
+      "capability_requirements": []
+    }
+  ],
+  "field_schema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "type": "object",
+    "properties": {
+      "source_ref": {
+        "type": "string",
+        "description": "Reference to source media asset"
+      },
+      "output_format": {
+        "type": "string",
+        "enum": [
+          "png",
+          "jpg",
+          "webp",
+          "gif",
+          "svg",
+          "mp3",
+          "wav",
+          "mp4",
+          "webm"
+        ],
+        "description": "Desired output format"
+      },
+      "target_format": {
+        "type": "string",
+        "description": "Target format for conversion"
+      },
+      "dimensions": {
+        "type": "object",
+        "properties": {
+          "width": {
+            "type": "integer"
+          },
+          "height": {
+            "type": "integer"
+          },
+          "maintain_aspect": {
+            "type": "boolean"
+          }
+        },
+        "description": "Output dimensions"
+      },
+      "chart_type": {
+        "type": "string",
+        "enum": [
+          "bar",
+          "line",
+          "pie",
+          "scatter",
+          "histogram",
+          "heatmap"
+        ],
+        "description": "Type of chart to generate"
+      },
+      "data": {
+        "type": [
+          "array",
+          "object"
+        ],
+        "description": "Data for chart generation"
+      },
+      "diagram_type": {
+        "type": "string",
+        "enum": [
+          "flowchart",
+          "sequence",
+          "class",
+          "state",
+          "er",
+          "gantt"
+        ],
+        "description": "Type of diagram to generate"
+      },
+      "definition": {
+        "type": "string",
+        "description": "Diagram definition (e.g., Mermaid syntax)"
+      },
+      "audio_type": {
+        "type": "string",
+        "enum": [
+          "tts",
+          "music",
+          "sfx",
+          "ambient"
+        ],
+        "description": "Type of audio to synthesize"
+      },
+      "parameters": {
+        "type": "object",
+        "description": "Generation parameters specific to media type"
+      },
+      "prompt": {
+        "type": "string",
+        "description": "Text prompt for AI generation"
+      },
+      "model": {
+        "type": "string",
+        "description": "AI model identifier for generation"
+      },
+      "duration_seconds": {
+        "type": "number",
+        "minimum": 0,
+        "description": "Duration for audio/video generation"
+      },
+      "source_media": {
+        "type": "string",
+        "description": "Source media reference for deepfake"
+      },
+      "target_likeness": {
+        "type": "string",
+        "description": "Target likeness reference"
+      },
+      "consent_proof": {
+        "type": "string",
+        "description": "Proof of consent for likeness usage"
+      },
+      "authorization": {
+        "type": "string",
+        "description": "Authorization token for sensitive operations"
+      },
+      "bypass_reason": {
+        "type": "string",
+        "description": "Justification for bypassing content filters"
+      },
+      "media_type": {
+        "type": "string",
+        "enum": [
+          "image",
+          "audio",
+          "video",
+          "3d"
+        ],
+        "description": "Type of media to generate"
+      },
+      "quality": {
+        "type": "string",
+        "enum": [
+          "draft",
+          "standard",
+          "high",
+          "maximum"
+        ],
+        "description": "Output quality level"
+      },
+      "style": {
+        "type": "string",
+        "description": "Style preset or description"
+      }
+    },
+    "required": [
+      "output_format"
+    ]
+  }
+}

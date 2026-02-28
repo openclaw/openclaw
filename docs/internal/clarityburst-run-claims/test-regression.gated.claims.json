@@ -1,0 +1,1 @@
+{"mode":"gated","workloadId":"test-regression","toolExecutions":6,"llmCalls":12,"routerCalls":10,"durationMs":1200,"llmCallsPerTool":2,"routerCallsPerTool":1.67,"abstainRate":0.1,"confirmRate":0.3,"proceedRate":0.6}

@@ -1,0 +1,407 @@
+# Loki Service Definition
+# Kubernetes Service for internal cluster access to Loki
+#
+# This service provides:
+# - HTTP endpoint for log ingestion (Promtail pushes logs)
+# - HTTP endpoint for log queries (Grafana, LogQL clients)
+# - Internal DNS resolution (loki:3100)
+# - Service discovery for monitoring
+#
+# Service Type: ClusterIP (internal-only, no external access)
+#
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: loki
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: loki
+    app.kubernetes.io/version: 2.9.0
+    app.kubernetes.io/part-of: loki-stack
+    environment: shared
+  annotations:
+    # Prometheus metrics endpoint discovery
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "3100"
+    prometheus.io/path: "/metrics"
+    # Service monitoring labels
+    monitoring: "true"
+
+spec:
+  # Service type: ClusterIP (internal cluster access only)
+  # For production, consider ServiceMonitor if using Prometheus Operator
+  type: ClusterIP
+  
+  # Cluster IP can be fixed or auto-assigned (recommended: auto-assign)
+  clusterIP: null  # Auto-assign IP address
+  
+  # Service ports
+  ports:
+    # Main HTTP port for ingestion and queries
+    - name: http
+      port: 3100                    # Service port
+      targetPort: http              # Pod port name
+      protocol: TCP
+    
+    # GRPC port (optional, for distributed tracing)
+    # - name: grpc
+    #   port: 9096
+    #   targetPort: 9096
+    #   protocol: TCP
+    
+    # Metrics port (Prometheus scraping)
+    - name: metrics
+      port: 3100                    # Same as HTTP (Prometheus scrapes /metrics path)
+      targetPort: http
+      protocol: TCP
+  
+  # Pod selector: match Loki deployment pods
+  selector:
+    app.kubernetes.io/name: loki
+  
+  # Session affinity (optional: stick client connections to same pod)
+  sessionAffinity: None
+  # sessionAffinity: ClientIP      # Uncomment for sticky sessions
+  # sessionAffinityConfig:
+  #   clientIP:
+  #     timeoutSeconds: 10800       # 3 hours
+  
+  # DNS policy
+  # publishNotReadyAddresses: false  # Only expose ready pods (default)
+
+---
+
+# Headless Service (optional, for direct pod access if needed)
+# Use when you need DNS records for individual Loki pods
+# Useful for StatefulSet or when direct pod communication is needed
+apiVersion: v1
+kind: Service
+metadata:
+  name: loki-headless
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: loki
+    app.kubernetes.io/version: 2.9.0
+    app.kubernetes.io/part-of: loki-stack
+    service-type: headless
+  annotations:
+    description: "Headless service for direct pod-to-pod communication"
+
+spec:
+  # Headless service: no cluster IP
+  clusterIP: None
+  
+  # Service ports
+  ports:
+    - name: http
+      port: 3100
+      targetPort: http
+      protocol: TCP
+    
+    - name: metrics
+      port: 3100
+      targetPort: http
+      protocol: TCP
+  
+  # Pod selector
+  selector:
+    app.kubernetes.io/name: loki
+  
+  # Enable DNS records for individual pods
+  publishNotReadyAddresses: false
+
+---
+
+# ServiceMonitor for Prometheus Operator (if installed)
+# Enables automatic scraping of Loki metrics by Prometheus
+# Only needed if using Prometheus Operator (not standalone Prometheus)
+#
+# Install Prometheus Operator:
+# helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+# helm install prometheus-operator prometheus-community/kube-prometheus-stack
+#
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: loki
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: loki
+    app.kubernetes.io/part-of: loki-stack
+spec:
+  # Select the Loki service
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: loki
+  
+  # Endpoints to scrape
+  endpoints:
+    # HTTP metrics endpoint
+    - port: metrics
+      path: /metrics
+      interval: 30s                 # Scrape every 30 seconds
+      scrapeTimeout: 10s
+      scheme: http
+      
+      # Relabel configs for metric processing
+      relabelings:
+        # Add namespace label
+        - sourceLabels: [__meta_kubernetes_namespace]
+          targetLabel: namespace
+        # Add pod name label
+        - sourceLabels: [__meta_kubernetes_pod_name]
+          targetLabel: pod
+        # Add service name label
+        - sourceLabels: [__meta_kubernetes_service_name]
+          targetLabel: service
+      
+      # Metric relabeling: keep only specific metrics
+      metricRelabelings:
+        # Example: keep only Loki-specific metrics
+        - sourceLabels: [__name__]
+          regex: "loki_.*|prometheus_.*"
+          action: keep
+
+---
+
+# NetworkPolicy: Ingress (allow access to Loki service)
+# Restricts traffic to Loki for security
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: loki-ingress
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: loki
+    app.kubernetes.io/part-of: loki-stack
+spec:
+  # Apply to Loki pods
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: loki
+  
+  # Ingress rules: who can access Loki
+  policyTypes:
+    - Ingress
+  
+  ingress:
+    # Allow from Promtail (log ingestion)
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: promtail
+      ports:
+        - protocol: TCP
+          port: 3100
+    
+    # Allow from Grafana (queries)
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: grafana
+      ports:
+        - protocol: TCP
+          port: 3100
+    
+    # Allow from same namespace (for testing/debugging)
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: monitoring
+      ports:
+        - protocol: TCP
+          port: 3100
+    
+    # Allow Prometheus scraping (port 3100/metrics)
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: prometheus
+      ports:
+        - protocol: TCP
+          port: 3100
+
+---
+
+# PodMonitor for Prometheus Operator (alternative to ServiceMonitor)
+# Use this if you prefer pod-level monitoring over service-level
+#
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: loki
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: loki
+    app.kubernetes.io/part-of: loki-stack
+spec:
+  # Select Loki pods
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: loki
+  
+  # Pod ports to scrape
+  podMetricsEndpoints:
+    - port: metrics
+      path: /metrics
+      interval: 30s
+      scrapeTimeout: 10s
+
+---
+
+# Endpoint for Service Discovery (manual, if ServiceMonitor not available)
+# Only needed if not using Prometheus Operator
+#
+# For standalone Prometheus, add to prometheus.yml:
+# scrape_configs:
+#   - job_name: 'loki'
+#     kubernetes_sd_configs:
+#       - role: service
+#         namespaces:
+#           names:
+#             - monitoring
+#     relabel_configs:
+#       - source_labels: [__meta_kubernetes_service_name]
+#         action: keep
+#         regex: loki
+
+# ============================================================================
+# SERVICE CONFIGURATION NOTES
+# ============================================================================
+#
+# Loki Service Endpoints:
+# 
+# 1. HTTP API (port 3100):
+#    - POST /loki/api/v1/push           - Log ingestion (Promtail)
+#    - GET  /loki/api/v1/query          - Instant queries (Grafana)
+#    - GET  /loki/api/v1/query_range    - Range queries (Grafana)
+#    - GET  /loki/api/v1/labels         - Label discovery
+#    - GET  /api/prom/push              - Legacy ingestion (deprecated)
+#    - GET  /api/prom/query             - Legacy queries (deprecated)
+#    - GET  /metrics                    - Prometheus metrics
+#    - GET  /ready                      - Readiness probe
+#    - GET  /health                     - Liveness probe
+#
+# 2. Internal DNS:
+#    - loki:3100                        - Cluster internal DNS
+#    - loki.monitoring:3100             - FQDN (namespace.svc.cluster.local)
+#    - loki.monitoring.svc.cluster.local:3100  - Full FQDN
+#
+# 3. Metrics Endpoint:
+#    - http://loki:3100/metrics         - Prometheus metrics
+#    - Port 3100 (same as HTTP API)
+#    - Standard Prometheus format
+#
+# ============================================================================
+# CLIENTS AND CONSUMERS
+# ============================================================================
+#
+# Promtail: Log ingestion
+# - Push logs to: http://loki:3100/loki/api/v1/push
+# - Batch size: 1MB (configurable)
+# - Retry policy: exponential backoff
+#
+# Grafana: Log queries and visualization
+# - Query endpoint: http://loki:3100/loki/api/v1/query_range
+# - Datasource type: Loki
+# - Authentication: None (cluster-internal)
+#
+# LogQL CLI: Command-line query tool
+# - Endpoint: http://loki:3100
+# - LogQL syntax: {cluster="prod"} | json
+#
+# Custom clients (optional):
+# - Any application can query Loki HTTP API
+# - Use LogQL for log filtering and aggregation
+# - Rate limiting applied per client (if configured)
+#
+# ============================================================================
+# MONITORING & HEALTH CHECKS
+# ============================================================================
+#
+# Liveness Probe (is Loki process running?):
+# GET http://loki:3100/alive
+# Returns: 200 OK if running
+#
+# Readiness Probe (is Loki ready to serve requests?):
+# GET http://loki:3100/ready
+# Returns: 200 OK if ready (distributor operational)
+#
+# ServiceMonitor:
+# - Scrapes metrics from http://loki:3100/metrics every 30s
+# - Sends metrics to Prometheus
+# - Allows alerting and dashboards
+#
+# Key Metrics to Monitor:
+# - loki_distributor_bytes_received_total
+# - loki_distributor_lines_received_total
+# - loki_ingester_chunks_created_total
+# - loki_querier_request_duration_seconds
+# - loki_querier_request_duration_seconds_bucket (for p99 latency)
+#
+# ============================================================================
+# TROUBLESHOOTING SERVICE CONNECTIVITY
+# ============================================================================
+#
+# Test connectivity from Promtail:
+# kubectl exec -it <promtail-pod> -n monitoring -- \
+#   curl -v http://loki:3100/api/prom/ready
+#
+# Test connectivity from within cluster:
+# kubectl run -it --rm debug --image=busybox -- \
+#   wget -O- http://loki:3100/ready
+#
+# Test metrics scraping:
+# kubectl port-forward -n monitoring svc/loki 3100:3100
+# curl http://localhost:3100/metrics | head -20
+#
+# Verify DNS resolution:
+# kubectl exec -it <pod> -n monitoring -- nslookup loki
+#
+# Check service endpoints:
+# kubectl get endpoints -n monitoring loki
+# kubectl describe service loki -n monitoring
+#
+# ============================================================================
+# SECURITY CONSIDERATIONS
+# ============================================================================
+#
+# Current Setup: Internal cluster-only access
+# - No external exposure (no Ingress)
+# - No authentication (cluster-internal trust)
+# - NetworkPolicy restricts to Promtail, Grafana, Prometheus
+#
+# For External Access (optional):
+# 1. Add Ingress (requires HTTPS/TLS)
+# 2. Add authentication (OAuth, JWT, mutual TLS)
+# 3. Add rate limiting
+# 4. Add request/response size limits
+#
+# Example Ingress (with authentication):
+# ---
+# apiVersion: networking.k8s.io/v1
+# kind: Ingress
+# metadata:
+#   name: loki
+#   namespace: monitoring
+#   annotations:
+#     kubernetes.io/ingress.class: nginx
+#     cert-manager.io/cluster-issuer: letsencrypt-prod
+#     # Add authentication annotations (nginx-auth-type, etc.)
+# spec:
+#   tls:
+#     - hosts:
+#         - loki.example.com
+#       secretName: loki-tls
+#   rules:
+#     - host: loki.example.com
+#       http:
+#         paths:
+#           - path: /
+#             pathType: Prefix
+#             backend:
+#               service:
+#                 name: loki
+#                 port:
+#                   number: 3100

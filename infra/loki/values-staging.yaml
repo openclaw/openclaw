@@ -1,0 +1,232 @@
+# Loki Helm Chart Values - Staging Environment
+# Staging-specific overrides for the common Loki configuration
+#
+# This file overrides values-common.yaml with staging-specific settings:
+# - Staging AWS S3 bucket and region (us-west-2)
+# - Moderate resource allocation (between dev and prod)
+# - Staging-focused monitoring
+# - Cost optimization (2 replicas vs 3 in prod)
+#
+
+# ============================================================================
+# STAGING LOKI OVERRIDES
+# ============================================================================
+loki:
+  # 2 replicas for staging HA (cost optimization vs production)
+  replicas: 2
+  
+  # Persistent storage: staging allocation
+  persistence:
+    enabled: true
+    storageClassName: efs-sc
+    accessModes:
+      - ReadWriteMany
+    # Staging: moderate allocation (less traffic than production)
+    size: 150Gi  # 150GB = ~5GB/day * 30 days
+  
+  # Staging pod disruption budget
+  podDisruptionBudget:
+    minAvailable: 1  # Keep 1 replica minimum
+  
+  # Staging: standard affinity rules (preferred, not required)
+  affinity:
+    podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          podAffinityTerm:
+            labelSelector:
+              matchExpressions:
+                - key: app.kubernetes.io/name
+                  operator: In
+                  values:
+                    - loki
+            topologyKey: kubernetes.io/hostname
+  
+  # Staging: moderate resource allocation
+  resources:
+    requests:
+      cpu: 500m       # Moderate CPU for staging
+      memory: 1Gi     # Moderate memory
+    limits:
+      cpu: 1500m      # Allow burst
+      memory: 3Gi     # Staging max
+  
+  # Staging-specific Loki config
+  config:
+    auth_enabled: false
+    
+    # Standard ingestion settings
+    ingester:
+      chunk_idle_period: 30s
+      chunk_retain_period: 1m
+      max_chunk_age: 1h
+      max_streams_per_user: 100000
+      flush_interval: 30s
+    
+    # Staging: moderate limits
+    limits_config:
+      enforce_metric_name: false
+      reject_old_samples: true
+      reject_old_samples_max_age: 30d
+      max_entries_limit_per_second: 1500000  # Moderate for staging
+      ingestion_rate_mb: 50                  # Lower rate limit
+      ingestion_burst_size_mb: 100
+    
+    # Staging S3 storage (us-west-2)
+    schema_config:
+      configs:
+        - from: 2024-01-01
+          store: boltdb-shipper
+          object_store: s3
+          schema: v11
+          index:
+            prefix: index_staging_  # Staging index prefix
+            period: 24h
+    
+    storage_config:
+      boltdb_shipper:
+        shared_store: s3
+        cache_location: /loki/cache
+        active_index_directory: /loki/index
+      
+      # Staging S3 configuration (us-west-2)
+      s3:
+        # REQUIRED: Replace PLACEHOLDER_BUCKET with actual staging bucket
+        s3: s3://STAGING_LOGS_BUCKET/loki
+        endpoint: s3.us-west-2.amazonaws.com  # Staging uses us-west-2
+        access_key_id: ${AWS_ACCESS_KEY_ID}
+        secret_access_key: ${AWS_SECRET_ACCESS_KEY}
+        insecure: false
+        sse_encryption: true  # Standard encryption (no KMS)
+      
+      # Query result caching
+      cache_config:
+        enable_fifocache: true
+        default_validity: 5m
+    
+    # Staging: moderate querying
+    querier:
+      max_concurrent: 20     # Standard concurrent queries
+      query_timeout: 5m
+      engine: prometheus
+    
+    # Staging: query caching
+    query_range:
+      align_queries_with_step: true
+      cache_results: true
+      results_cache:
+        cache:
+          enable_fifocache: true
+          default_validity: 6h  # Moderate cache TTL
+    
+    # Chunk encoding
+    chunk_store_config:
+      max_look_back_period: 30d
+      chunk_encoding: snappy
+    
+    # Staging server config
+    server:
+      http_listen_port: 3100
+      log_level: info  # Standard logging
+      grpc_server_max_recv_msg_size: 52428800
+    
+    # Staging: enable metrics
+    metrics:
+      enabled: true
+  
+  # Staging service config
+  service:
+    type: ClusterIP
+    port: 3100
+    annotations:
+      prometheus.io/scrape: "true"
+      prometheus.io/port: "3100"
+      prometheus.io/path: "/metrics"
+  
+  # Staging labels
+  serviceLabels:
+    grafana_datasource: "true"
+    environment: "staging"
+    prometheus_scrape: "true"
+  
+  # Staging: Pod priority (system-cluster-critical is high; can use lower if needed)
+  priorityClassName: system-cluster-critical
+
+# ============================================================================
+# STAGING PROMTAIL OVERRIDES
+# ============================================================================
+promtail:
+  enabled: true
+  
+  # Run on all nodes
+  tolerations:
+    - key: node-role.kubernetes.io/master
+      operator: Exists
+      effect: NoSchedule
+    - key: node-role.kubernetes.io/control-plane
+      operator: Exists
+      effect: NoSchedule
+  
+  # Staging: moderate resources
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 250m
+      memory: 384Mi
+  
+  # Staging: standard priority
+  priorityClassName: system-node-critical
+
+# ============================================================================
+# PROMETHEUS MONITORING (Staging)
+# ============================================================================
+# These metrics should be scraped by the staging Prometheus deployment
+
+# ============================================================================
+# DEPLOYMENT NOTES - STAGING
+# ============================================================================
+#
+# PRE-DEPLOYMENT REQUIREMENTS:
+# 1. Create S3 bucket: STAGING_LOGS_BUCKET in us-west-2
+# 2. Create IAM policy for Loki S3 access
+# 3. Create EFS filesystem in us-west-2
+# 4. Ensure EFS-CSI driver is installed
+# 5. Create storage class with EFS provisioner
+#
+# DEPLOYMENT COMMAND (Staging):
+# helm install loki grafana/loki-stack \
+#   -f values-common.yaml -f values-staging.yaml \
+#   -n monitoring --create-namespace
+#
+# REGION NOTE:
+# - Staging cluster is in us-west-2 (Oregon)
+# - S3 endpoint: s3.us-west-2.amazonaws.com
+# - EFS must be in us-west-2 (same region as cluster)
+#
+# VERIFICATION:
+# kubectl get pods -n monitoring -l release=loki
+# kubectl get pvc -n monitoring
+# kubectl logs -f <loki-pod> -n monitoring
+#
+# COST OPTIMIZATION (Staging):
+# - 2 replicas vs 3 in production (saves ~33% compute)
+# - Moderate resource requests/limits
+# - Shorter cache TTL for cost control
+# - Consider enabling S3 Intelligent-Tiering for staging logs
+#
+# MONITORING & ALERTING:
+# - Monitor storage PVC usage
+# - Alert on high cardinality (loki_ingester_memory_streams)
+# - Check Promtail error rates in logs
+#
+# TROUBLESHOOTING:
+# - If S3 access fails: verify IAM policy and credentials
+# - If EFS not mounted: check EFS-CSI driver installation
+# - If queries timeout: check network connectivity to S3
+#
+# TESTING:
+# - Use staging for testing log queries before production
+# - Test label cardinality scenarios in staging
+# - Test retention policies in staging environment

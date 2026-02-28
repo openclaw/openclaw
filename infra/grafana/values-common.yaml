@@ -1,0 +1,256 @@
+# Common Grafana Helm Configuration for ClarityRouter Observability
+# Shared settings for both production and staging environments
+# This file is merged with environment-specific overrides (values-prod.yaml, values-staging.yaml)
+
+# Grafana chart version: 7.0+
+grafana:
+  # Global settings
+  enabled: true
+  
+  # Replica configuration for high availability
+  replicas: 2
+  
+  # Pod disruption budget: allow only 1 pod to be unavailable at a time
+  podDisruptionBudget:
+    minAvailable: 1
+  
+  # Service configuration
+  service:
+    type: ClusterIP
+    port: 3000
+  
+  # Ingress configuration
+  ingress:
+    enabled: true
+    ingressClassName: nginx
+    path: /
+    pathType: Prefix
+    # TLS can be enabled in environment-specific overrides
+    hosts:
+      - grafana.local
+    # tls:
+    #   - secretName: grafana-tls
+    #     hosts:
+    #       - grafana.example.com
+  
+  # Admin user configuration
+  adminUser: admin
+  # Admin password will be set via Kubernetes secret in production
+  # Use: kubectl create secret generic grafana-admin-secret --from-literal=password=<RANDOM_PASSWORD>
+  # Then reference it via: adminPassword: $GF_SECURITY_ADMIN_PASSWORD
+  # Or use automatic secret generation
+  admin:
+    existingSecret: grafana-admin-secret
+    passwordKey: password
+  
+  # Persistence configuration
+  persistence:
+    enabled: true
+    type: pvc
+    storageClassName: efs-sc
+    accessModes:
+      - ReadWriteOnce
+    size: 10Gi
+    # Mount path for Grafana data
+    mountPath: /var/lib/grafana
+  
+  # Resource requests and limits
+  resources:
+    limits:
+      cpu: 1000m
+      memory: 2Gi
+    requests:
+      cpu: 500m
+      memory: 1Gi
+  
+  # Pod anti-affinity: spread replicas across different nodes
+  affinity:
+    podAntiAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        - labelSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/name
+                operator: In
+                values:
+                  - grafana
+          topologyKey: kubernetes.io/hostname
+  
+  # RBAC configuration
+  rbac:
+    create: true
+    pspEnabled: false
+  
+  # Service account
+  serviceAccount:
+    create: true
+    autoMount: true
+  
+  # Grafana configuration via ConfigMap
+  grafana.ini:
+    # Server configuration
+    server:
+      root_url: http://grafana.local/
+      serve_from_sub_path: false
+      enable_gzip: true
+    
+    # Database configuration
+    database:
+      type: sqlite3
+      path: /var/lib/grafana/grafana.db
+    
+    # Security
+    security:
+      admin_user: admin
+      # Password set via secret
+      cookie_secure: false  # Enable if using HTTPS
+      cookie_samesite: lax
+      # LDAP/OAuth can be configured here (optional)
+    
+    # Authentication
+    auth:
+      disable_login_form: false
+      # LDAP example (commented out):
+      # [auth.ldap]
+      # enabled = true
+      # config_file = /etc/grafana/ldap.toml
+    
+    # Users and organizations
+    users:
+      allow_sign_up: false
+      auto_assign_org_role: Viewer
+    
+    # Session settings
+    session:
+      provider: file
+      provider_config: sessions
+      cookie_name: grafana_session
+      cookie_secure: false
+      session_life_time: 86400  # 24 hours
+    
+    # Analytics
+    analytics:
+      reporting_enabled: false
+    
+    # Alerting
+    alerting:
+      enabled: true
+      # AlertManager configuration
+      alertmanager_config_path: /etc/grafana/provisioning/alertmanager.yml
+    
+    # Logging
+    log:
+      mode: console
+      level: info
+  
+  # Data sources provisioning
+  datasources:
+    datasources.yaml:
+      apiVersion: 1
+      datasources:
+        # Prometheus (prod) - will be overridden/extended in prod values
+        - name: prometheus-prod
+          type: prometheus
+          url: http://prometheus-kube-prom-prometheus.monitoring:9090
+          access: proxy
+          isDefault: true
+          jsonData:
+            timeInterval: 30s
+          editable: true
+        
+        # Loki (prod) - will be overridden/extended in prod values
+        - name: loki-prod
+          type: loki
+          url: http://loki.monitoring:3100
+          access: proxy
+          jsonData:
+            maxLines: 1000
+          editable: true
+  
+  # Provisioning for dashboards
+  dashboardProviders:
+    dashboardproviders.yaml:
+      apiVersion: 1
+      providers:
+        - name: 'Router Observability'
+          orgId: 1
+          folder: 'Router Observability'
+          type: file
+          disableDeletion: false
+          editable: true
+          options:
+            path: /var/lib/grafana/dashboards/router-observability
+        
+        - name: 'System Dashboards'
+          orgId: 1
+          folder: 'System'
+          type: file
+          disableDeletion: false
+          editable: true
+          options:
+            path: /var/lib/grafana/dashboards/system
+  
+  # Dashboard ConfigMaps to mount
+  dashboards:
+    router-observability:
+      dashboard-router-health: {}
+      dashboard-performance-details: {}
+      dashboard-infrastructure-health: {}
+  
+  # Plugins (optional)
+  plugins: []
+  # Example: ["grafana-piechart-panel", "grafana-worldmap-panel"]
+  
+  # Notification channels (optional)
+  notifiers: []
+  # Will be configured via AlertManager integration
+  
+  # Environment variables
+  env:
+    GF_PATHS_PROVISIONING: /etc/grafana/provisioning
+    GF_SECURITY_ADMIN_USER: admin
+    # GF_SECURITY_ADMIN_PASSWORD: set via secret
+  
+  # Additional volumes (for LDAP config, etc.)
+  extraVolumes: []
+  # - name: ldap-config
+  #   configMap:
+  #     name: ldap-config
+  
+  extraVolumeMounts: []
+  # - name: ldap-config
+  #   mountPath: /etc/grafana/ldap.toml
+  #   subPath: ldap.toml
+
+# Teams configuration (RBAC)
+# Note: Teams are typically managed via Grafana UI or provisioned separately
+# This is a reference configuration - implement via Grafana API or UI
+teams:
+  - name: Production
+    members:
+      - admin
+    role: Editor
+  
+  - name: Staging
+    members:
+      - admin
+    role: Viewer
+
+# Prometheus datasource selector for queries
+prometheus:
+  url: http://prometheus-kube-prom-prometheus.monitoring:9090
+  queryTimeout: 60s
+  httpMethod: GET
+
+# Loki datasource selector for logs
+loki:
+  url: http://loki.monitoring:3100
+  maxLines: 1000
+
+# AlertManager configuration
+alerting:
+  alertmanager:
+    enabled: true
+    url: http://prometheus-stack-kube-prom-alertmanager.monitoring:9093
+  
+  # Notification routing (configured in AlertManager)
+  notificationChannels: []

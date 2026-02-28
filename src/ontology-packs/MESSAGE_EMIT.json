@@ -1,0 +1,314 @@
+{
+  "pack_id": "openclawd.MESSAGE_EMIT",
+  "pack_version": "1.0.0",
+  "stage_id": "MESSAGE_EMIT",
+  "description": "Controls outbound message emission to users, systems, and external channels. Governs content filtering, rate limiting, and delivery confirmation.",
+  "thresholds": {
+    "min_confidence_T": 0,
+    "dominance_margin_Delta": 0
+  },
+  "contracts": [
+    {
+      "contract_id": "EMIT_LOG_MESSAGE",
+      "risk_class": "LOW",
+      "required_fields": [
+        "message_type",
+        "content"
+      ],
+      "limits": {},
+      "needs_confirmation": false,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "EMIT_INTERNAL_EVENT",
+      "risk_class": "LOW",
+      "required_fields": [
+        "event_type",
+        "payload"
+      ],
+      "limits": {},
+      "needs_confirmation": false,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "EMIT_STATUS_UPDATE",
+      "risk_class": "LOW",
+      "required_fields": [
+        "status_type",
+        "content"
+      ],
+      "limits": {},
+      "needs_confirmation": false,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "EMIT_USER_RESPONSE",
+      "risk_class": "LOW",
+      "required_fields": [
+        "recipient_id",
+        "content"
+      ],
+      "limits": {},
+      "needs_confirmation": false,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "EMIT_BATCH_MESSAGES",
+      "risk_class": "MEDIUM",
+      "required_fields": [
+        "recipients",
+        "content"
+      ],
+      "limits": {
+        "max_recipients": 100,
+        "rate_per_minute": 60
+      },
+      "needs_confirmation": false,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "EMIT_WEBHOOK_PAYLOAD",
+      "risk_class": "MEDIUM",
+      "required_fields": [
+        "webhook_url",
+        "payload"
+      ],
+      "limits": {
+        "max_payload_kb": 256,
+        "allowed_domains": []
+      },
+      "needs_confirmation": false,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "EMIT_EXTERNAL_NOTIFICATION",
+      "risk_class": "MEDIUM",
+      "required_fields": [
+        "channel",
+        "recipient",
+        "content"
+      ],
+      "limits": {
+        "rate_per_hour": 100
+      },
+      "needs_confirmation": false,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "EMIT_WITH_ATTACHMENT",
+      "risk_class": "MEDIUM",
+      "required_fields": [
+        "recipient_id",
+        "content",
+        "attachment_ref"
+      ],
+      "limits": {
+        "max_attachment_mb": 10
+      },
+      "needs_confirmation": false,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "EMIT_SENSITIVE_CONTENT",
+      "risk_class": "HIGH",
+      "required_fields": [
+        "recipient_id",
+        "content",
+        "sensitivity_level"
+      ],
+      "limits": {
+        "requires_encryption": true
+      },
+      "needs_confirmation": true,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "EMIT_BROADCAST_MESSAGE",
+      "risk_class": "HIGH",
+      "required_fields": [
+        "broadcast_scope",
+        "content"
+      ],
+      "limits": {
+        "max_recipients": 10000
+      },
+      "needs_confirmation": true,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "EMIT_IMPERSONATED_MESSAGE",
+      "risk_class": "CRITICAL",
+      "required_fields": [
+        "sender_identity",
+        "recipient_id",
+        "content",
+        "authorization"
+      ],
+      "limits": {
+        "requires_audit": true
+      },
+      "needs_confirmation": true,
+      "deny_by_default": true,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "EMIT_SYSTEM_ALERT",
+      "risk_class": "CRITICAL",
+      "required_fields": [
+        "alert_level",
+        "alert_scope",
+        "content"
+      ],
+      "limits": {
+        "requires_confirmation_chain": true
+      },
+      "needs_confirmation": true,
+      "deny_by_default": true,
+      "capability_requirements": []
+    }
+  ],
+  "field_schema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "type": "object",
+    "properties": {
+      "message_type": {
+        "type": "string",
+        "enum": [
+          "info",
+          "warning",
+          "error",
+          "debug",
+          "trace"
+        ],
+        "description": "Type of log message"
+      },
+      "content": {
+        "type": "string",
+        "description": "Message content to emit"
+      },
+      "event_type": {
+        "type": "string",
+        "description": "Type identifier for internal events"
+      },
+      "payload": {
+        "type": "object",
+        "description": "Structured payload for events or webhooks"
+      },
+      "status_type": {
+        "type": "string",
+        "enum": [
+          "progress",
+          "completion",
+          "failure",
+          "pending"
+        ],
+        "description": "Type of status update"
+      },
+      "recipient_id": {
+        "type": "string",
+        "description": "Identifier of message recipient"
+      },
+      "recipients": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "description": "List of recipient identifiers for batch messages"
+      },
+      "webhook_url": {
+        "type": "string",
+        "format": "uri",
+        "description": "Target URL for webhook delivery"
+      },
+      "channel": {
+        "type": "string",
+        "enum": [
+          "email",
+          "sms",
+          "push",
+          "slack",
+          "teams",
+          "discord"
+        ],
+        "description": "External notification channel"
+      },
+      "attachment_ref": {
+        "type": "string",
+        "description": "Reference to attachment resource"
+      },
+      "sensitivity_level": {
+        "type": "string",
+        "enum": [
+          "public",
+          "internal",
+          "confidential",
+          "secret"
+        ],
+        "description": "Content sensitivity classification"
+      },
+      "broadcast_scope": {
+        "type": "string",
+        "enum": [
+          "team",
+          "organization",
+          "public"
+        ],
+        "description": "Scope of broadcast message"
+      },
+      "sender_identity": {
+        "type": "string",
+        "description": "Identity to impersonate for message sending"
+      },
+      "authorization": {
+        "type": "string",
+        "description": "Authorization token for sensitive operations"
+      },
+      "alert_level": {
+        "type": "string",
+        "enum": [
+          "info",
+          "warning",
+          "critical",
+          "emergency"
+        ],
+        "description": "Severity level of system alert"
+      },
+      "alert_scope": {
+        "type": "string",
+        "description": "Scope of systems affected by alert"
+      },
+      "delivery_mode": {
+        "type": "string",
+        "enum": [
+          "immediate",
+          "queued",
+          "scheduled"
+        ],
+        "description": "When to deliver the message"
+      },
+      "scheduled_time": {
+        "type": "string",
+        "format": "date-time",
+        "description": "Scheduled delivery time for queued messages"
+      },
+      "retry_on_failure": {
+        "type": "boolean",
+        "default": false,
+        "description": "Whether to retry failed deliveries"
+      }
+    },
+    "required": [
+      "content"
+    ]
+  }
+}

@@ -1,0 +1,163 @@
+# ServiceMonitor for ClarityRouter Metrics
+# Discovers and scrapes metrics from clarityrouter pods
+# This resource is discovered by Prometheus via label selector
+# Chart: prometheus-community/kube-prometheus-stack
+# The Prometheus operator creates scrape jobs based on ServiceMonitor resources
+
+---
+# ServiceMonitor for router metrics in production namespace
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: clarityrouter-metrics
+  namespace: clarity-router
+  labels:
+    release: prometheus              # Must match Prometheus serviceMonitorSelector
+    app: clarityrouter
+    environment: production
+spec:
+  # Service selector - match services with app=router label
+  selector:
+    matchLabels:
+      app: router                    # Selector must match Service labels in clarity-router NS
+  
+  # Namespace selector - only monitor in clarity-router namespace
+  namespaceSelector:
+    matchNames:
+      - clarity-router
+  
+  # Endpoints to scrape - matches service port names
+  endpoints:
+    # Metrics endpoint on router pods
+    - port: metrics                  # Port name in Service spec (pod :9090)
+      interval: 30s                  # Global scrape interval (overridable per endpoint)
+      path: /metrics                 # Prometheus metrics path
+      scheme: https                  # Use HTTPS (assumes self-signed certs)
+      tlsConfig:
+        insecureSkipVerify: true      # Self-signed certs in dev/staging (set to false in prod)
+      
+      # Relabel configs to add/modify labels
+      relabelings:
+        # Add job label
+        - sourceLabels: []
+          targetLabel: job
+          replacement: clarityrouter
+        
+        # Preserve service name
+        - sourceLabels: [__meta_kubernetes_service_name]
+          targetLabel: service
+        
+        # Preserve pod name
+        - sourceLabels: [__meta_kubernetes_pod_name]
+          targetLabel: pod
+        
+        # Preserve namespace
+        - sourceLabels: [__meta_kubernetes_namespace]
+          targetLabel: namespace
+      
+      # Optional: metric relabeling (rename/drop metrics)
+      metricRelabelings: []
+      
+      # HTTP basic auth (if needed)
+      # basicAuth:
+      #   username:
+      #     name: secret-name
+      #     key: username
+      #   password:
+      #     name: secret-name
+      #     key: password
+      
+      # Bearer token (if needed)
+      # bearerTokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token
+
+---
+# ServiceMonitor for router metrics in staging namespace
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: clarityrouter-metrics-staging
+  namespace: clarity-router-staging
+  labels:
+    release: prometheus              # Must match Prometheus serviceMonitorSelector
+    app: clarityrouter
+    environment: staging
+spec:
+  # Service selector - match services with app=router label
+  selector:
+    matchLabels:
+      app: router                    # Selector must match Service labels in clarity-router-staging NS
+  
+  # Namespace selector - only monitor in clarity-router-staging namespace
+  namespaceSelector:
+    matchNames:
+      - clarity-router-staging
+  
+  # Endpoints to scrape
+  endpoints:
+    - port: metrics                  # Port name in Service spec (pod :9090)
+      interval: 30s                  # Scrape every 30 seconds
+      path: /metrics                 # Prometheus metrics path
+      scheme: https                  # Use HTTPS
+      tlsConfig:
+        insecureSkipVerify: true      # Self-signed certs
+      
+      # Relabel configs to add/modify labels
+      relabelings:
+        # Add job label
+        - sourceLabels: []
+          targetLabel: job
+          replacement: clarityrouter-staging
+        
+        # Preserve service name
+        - sourceLabels: [__meta_kubernetes_service_name]
+          targetLabel: service
+        
+        # Preserve pod name
+        - sourceLabels: [__meta_kubernetes_pod_name]
+          targetLabel: pod
+        
+        # Preserve namespace
+        - sourceLabels: [__meta_kubernetes_namespace]
+          targetLabel: namespace
+
+---
+# NOTES:
+# ------
+# 
+# 1. Prerequisites:
+#    - clarityrouter pods must expose metrics on a port named "metrics" (default :9090)
+#    - Service in clarity-router namespace must have label: app=router
+#    - Service in clarity-router-staging namespace must have label: app=router
+#
+# 2. Metrics Expected from clarityrouter:
+#    - clarityrouter_request_latency_ms (histogram)
+#    - clarityrouter_requests_total (counter)
+#    - clarityrouter_errors_total (counter)
+#    - clarityrouter_router_availability (gauge)
+#    - go_* (Go runtime metrics)
+#    - process_* (Process metrics)
+#
+# 3. TLS Configuration:
+#    - Set insecureSkipVerify: false in production with valid CA certs
+#    - Add tlsConfig.caFile path to CA certificate
+#
+# 4. Authentication:
+#    - If metrics endpoint requires auth, uncomment basicAuth or bearerTokenFile
+#    - Create Kubernetes Secret with credentials
+#
+# 5. Verification:
+#    # Check ServiceMonitor status
+#    kubectl get servicemonitor -A
+#    kubectl describe servicemonitor clarityrouter-metrics -n clarity-router
+#
+#    # Verify Prometheus discovers targets
+#    kubectl port-forward -n monitoring svc/prometheus-stack-kube-prom-prometheus 9090:9090
+#    # Visit http://localhost:9090/targets
+#
+#    # Check scrape config generated
+#    curl http://localhost:9090/api/v1/status/config | jq .
+#
+# 6. Manual Query Example:
+#    # After targets are scraped, run in Prometheus UI:
+#    rate(clarityrouter_requests_total[5m])
+#    histogram_quantile(0.99, rate(clarityrouter_request_latency_ms_bucket[5m]))

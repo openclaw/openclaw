@@ -1,0 +1,208 @@
+# Loki Helm Chart Values - Common Configuration
+# Shared configuration for both production and staging clusters
+# Chart: grafana/loki-stack v2.9+
+#
+# This file defines the baseline Loki stack configuration including:
+# - Loki distributor, ingester, querier, and storage components
+# - Promtail DaemonSet for log collection
+# - Persistent storage configuration (EFS)
+# - High availability settings (2 replicas with pod anti-affinity)
+#
+
+# ============================================================================
+# LOKI CONFIGURATION
+# ============================================================================
+loki:
+  enabled: true
+  
+  # Loki replica configuration
+  # 2 replicas for HA with pod anti-affinity to spread across nodes
+  replicas: 2
+  
+  # Persistent storage configuration
+  persistence:
+    enabled: true
+    storageClassName: efs-sc  # EFS storage class (CSI provisioner)
+    accessModes:
+      - ReadWriteMany  # Required for multi-replica HA
+    size: 150Gi  # 150GB for ~30 days of logs at 5GB/day
+    
+  # Pod disruption budget: ensure at least 1 replica stays available during disruptions
+  podDisruptionBudget:
+    minAvailable: 1
+  
+  # Pod anti-affinity: spread Loki replicas across different nodes
+  affinity:
+    podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          podAffinityTerm:
+            labelSelector:
+              matchExpressions:
+                - key: app.kubernetes.io/name
+                  operator: In
+                  values:
+                    - loki
+            topologyKey: kubernetes.io/hostname
+  
+  # Resource requests and limits
+  resources:
+    requests:
+      cpu: 500m       # Baseline CPU for 2 replicas
+      memory: 1Gi     # Baseline memory for 2 replicas
+    limits:
+      cpu: 1000m      # Max CPU burst capability
+      memory: 2Gi     # Max memory allocation
+  
+  # Loki config via ConfigMap
+  config:
+    # Authentication disabled (cluster-internal access only)
+    auth_enabled: false
+    
+    # Ingestion pipeline: how data flows from Promtail to storage
+    ingester:
+      chunk_idle_period: 30s          # Time before chunks are flushed if idle
+      chunk_retain_period: 1m         # Minimum time to keep chunks in memory
+      max_chunk_age: 1h               # Force flush chunks older than 1 hour
+      max_streams_per_user: 100000    # Prevent unbounded cardinality
+      flush_interval: 30s             # Periodic flush interval
+      
+    # Rate limiting and enforcement
+    limits_config:
+      enforce_metric_name: false      # Allow logs without metric names
+      reject_old_samples: true        # Reject samples older than 30 days
+      reject_old_samples_max_age: 30d # 30-day retention policy
+      max_entries_limit_per_second: 1000000  # Rate limit per ingester (very high)
+      
+    # Distributed tracing (optional, disable if not needed)
+    trace:
+      enabled: false
+    
+    # Schema configuration: defines storage format and indexing
+    schema_config:
+      configs:
+        - from: 2024-01-01
+          store: boltdb-shipper      # Local index with remote object store
+          object_store: s3           # S3 for log storage (configurable per env)
+          schema: v11                # Latest Loki index schema
+          index:
+            prefix: index_           # Index table prefix
+            period: 24h              # Daily index tables
+    
+    # Storage backend configuration
+    storage_config:
+      boltdb_shipper:
+        shared_store: s3             # Remote object store for shared access
+        cache_location: /tmp/boltdb-shipper-cache
+        active_index_directory: /loki/index  # Local index directory
+        
+      # S3 object store configuration (placeholder values, override per environment)
+      s3:
+        s3: s3://PLACEHOLDER_BUCKET/loki  # S3 bucket and path
+        endpoint: s3.PLACEHOLDER_REGION.amazonaws.com
+        access_key_id: ${AWS_ACCESS_KEY_ID}
+        secret_access_key: ${AWS_SECRET_ACCESS_KEY}
+        insecure: false              # Use HTTPS
+        sse_encryption: true         # Server-side encryption
+        
+      # Index cache configuration (optional)
+      cache_config:
+        enable_fifocache: true
+        default_validity: 5m
+    
+    # Query configuration: how data is retrieved from storage
+    querier:
+      max_concurrent: 20             # Maximum concurrent queries per querier
+      query_timeout: 5m              # Query timeout for complex queries
+      engine: prometheus             # Query engine (prometheus for label queries)
+      
+    # Query range configuration: optimize repeated queries
+    query_range:
+      align_queries_with_step: true  # Align query boundaries to step size
+      cache_results: true            # Cache query results
+      results_cache:
+        cache:
+          enable_fifocache: true
+          default_validity: 1h       # Cache TTL
+    
+    # Chunk encoding configuration
+    chunk_store_config:
+      max_look_back_period: 30d      # Don't look back past retention
+      chunk_encoding: snappy         # Compression algorithm (snappy, gzip, lz4)
+    
+    # Server configuration
+    server:
+      http_listen_port: 3100         # Loki HTTP port
+      log_level: info                # Log level (debug, info, warn, error)
+      grpc_server_max_recv_msg_size: 52428800  # 50MB GRPC message limit
+
+  # Service configuration
+  service:
+    type: ClusterIP                  # Internal cluster service
+    port: 3100                       # HTTP port for queries and ingestion
+    
+  # Loki datasource for Grafana (autodiscovery label)
+  serviceLabels:
+    grafana_datasource: "true"       # Grafana will auto-discover this as a datasource
+
+# ============================================================================
+# PROMTAIL CONFIGURATION (Log Collection Agent)
+# ============================================================================
+promtail:
+  enabled: true
+  
+  # Run on all nodes including master nodes
+  tolerations:
+    - key: node-role.kubernetes.io/master
+      operator: Exists
+      effect: NoSchedule
+    - key: node-role.kubernetes.io/control-plane
+      operator: Exists
+      effect: NoSchedule
+  
+  # Resource requests for Promtail (lightweight)
+  resources:
+    requests:
+      cpu: 100m       # Low CPU footprint
+      memory: 128Mi   # Minimal memory
+    limits:
+      cpu: 200m       # Allow some burst
+      memory: 256Mi   # Memory limit
+
+# ============================================================================
+# GRAFANA DATASOURCE (Optional Grafana integration)
+# ============================================================================
+# If Grafana is deployed in the same cluster, it can automatically
+# discover Loki as a datasource via the service label above
+
+# ============================================================================
+# NOTES AND OPERATIONAL GUIDANCE
+# ============================================================================
+#
+# HIGH AVAILABILITY:
+# - 2 Loki replicas with pod anti-affinity ensures logs are distributed
+# - ReadWriteMany EFS storage allows all replicas to access the same data
+# - Pod Disruption Budget (minAvailable=1) prevents simultaneous pod evictions
+#
+# STORAGE SIZING:
+# - 150GB = ~5GB/day * 30 days (conservative estimate)
+# - Expected log volume: 100-200 req/sec * 500 bytes = 50-100MB/sec
+# - Compressed logs: ~5GB/day (10x compression)
+#
+# MONITORING:
+# - Loki exposes Prometheus metrics on port 3100/metrics
+# - Key metrics: loki_distributor_bytes_received_total, loki_ingester_chunks_created_total
+#
+# RETENTION POLICY:
+# - reject_old_samples_max_age: 30d deletes logs older than 30 days
+# - Index tables roll daily; old index tables are cleaned up automatically
+#
+# PERFORMANCE TUNING:
+# - max_concurrent (20): increase if queries are slow; each needs ~100MB
+# - chunk_idle_period (30s): lower = more frequent flushes, higher = better compression
+# - max_streams_per_user (100000): watch for cardinality explosion
+#
+# TROUBLESHOOTING:
+# - Check Promtail pod logs: kubectl logs -f <promtail-pod> -n monitoring
+# - Check Loki pod logs: kubectl logs -f <loki-pod> -n monitoring
+# - Query Loki: kubectl exec <loki-pod> -- curl localhost:3100/api/prom/query

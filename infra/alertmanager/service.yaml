@@ -1,0 +1,378 @@
+# AlertManager Service Definition
+# Exposes AlertManager API and UI endpoints within the Kubernetes cluster
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: alertmanager
+  namespace: monitoring
+  labels:
+    app: alertmanager
+    component: alertmanager
+    version: "1.0"
+  annotations:
+    description: "AlertManager service for alert routing and notifications"
+spec:
+  # Service Type: ClusterIP for internal access only
+  # AlertManager does not need external exposure
+  type: ClusterIP
+  
+  # Selector: Routes traffic to AlertManager pods
+  selector:
+    app: alertmanager
+    component: alertmanager
+  
+  # Ports
+  ports:
+  
+  # HTTP API and UI Port
+  - name: http
+    port: 9093
+    protocol: TCP
+    targetPort: 9093
+    # Service port 9093 → Pod port 9093
+    # Access internally: http://alertmanager:9093
+    # Access internally (FQDN): http://alertmanager.monitoring.svc.cluster.local:9093
+    
+  # Cluster Communication Port (for AlertManager mesh)
+  - name: cluster
+    port: 6783
+    protocol: TCP
+    targetPort: 6783
+    # Used by AlertManager replicas to communicate
+    # Not exposed externally, only internally
+  
+  # Session Affinity
+  sessionAffinity: None
+  # Do not use session affinity - AlertManager is stateless
+  # Each request can be routed to any replica
+  
+  # Service Account
+  serviceAccountName: alertmanager
+
+---
+# AlertManager ServiceMonitor (for Prometheus scraping)
+# Allows Prometheus to automatically discover and scrape AlertManager metrics
+
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: alertmanager
+  namespace: monitoring
+  labels:
+    app: alertmanager
+    release: prometheus
+spec:
+  # Selector: Matches the AlertManager service
+  selector:
+    matchLabels:
+      app: alertmanager
+      component: alertmanager
+  
+  # Monitor Endpoints
+  endpoints:
+  - port: http
+    interval: 30s
+    scrapeTimeout: 10s
+    path: /metrics
+    scheme: http
+    
+    # Metric relabeling (optional)
+    relabelings:
+    - sourceLabels: [__meta_kubernetes_pod_name]
+      targetLabel: pod
+    - sourceLabels: [__meta_kubernetes_pod_node_name]
+      targetLabel: node
+    - sourceLabels: [__meta_kubernetes_namespace]
+      targetLabel: namespace
+
+---
+# AlertManager Headless Service (for StatefulSet)
+# Allows direct pod-to-pod communication within the cluster
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: alertmanager-headless
+  namespace: monitoring
+  labels:
+    app: alertmanager
+    component: alertmanager
+spec:
+  type: ClusterIP
+  clusterIP: None  # Headless service (no cluster IP)
+  
+  selector:
+    app: alertmanager
+    component: alertmanager
+  
+  # Ports for pod communication
+  ports:
+  - name: http
+    port: 9093
+    protocol: TCP
+    targetPort: 9093
+  
+  - name: cluster
+    port: 6783
+    protocol: TCP
+    targetPort: 6783
+
+---
+# RBAC: ServiceAccount for AlertManager
+
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: alertmanager
+  namespace: monitoring
+  labels:
+    app: alertmanager
+    component: alertmanager
+
+---
+# RBAC: ClusterRole for AlertManager
+# Permissions needed by AlertManager to discover and configure
+
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: alertmanager
+  labels:
+    app: alertmanager
+    component: alertmanager
+rules:
+# Read ConfigMaps (alert configuration)
+- apiGroups: [""]
+  resources: ["configmaps"]
+  verbs: ["get", "list", "watch"]
+
+# Read Secrets (webhook URLs, API keys)
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["get", "list", "watch"]
+
+# Read Pods (for logging and debugging)
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list"]
+
+# Read Services (service discovery)
+- apiGroups: [""]
+  resources: ["services"]
+  verbs: ["get", "list"]
+
+# Read Namespace metadata
+- apiGroups: [""]
+  resources: ["namespaces"]
+  verbs: ["get", "list"]
+
+---
+# RBAC: ClusterRoleBinding for AlertManager
+
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: alertmanager
+  labels:
+    app: alertmanager
+    component: alertmanager
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: alertmanager
+subjects:
+- kind: ServiceAccount
+  name: alertmanager
+  namespace: monitoring
+
+---
+# NetworkPolicy: Allow inbound to AlertManager
+
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: alertmanager-ingress
+  namespace: monitoring
+spec:
+  podSelector:
+    matchLabels:
+      app: alertmanager
+      component: alertmanager
+  
+  policyTypes:
+  - Ingress
+  
+  ingress:
+  # Allow Prometheus to scrape metrics
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: monitoring
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: prometheus
+    ports:
+    - protocol: TCP
+      port: 9093
+  
+  # Allow AlertManager cluster communication
+  - from:
+    - podSelector:
+        matchLabels:
+          app: alertmanager
+    ports:
+    - protocol: TCP
+      port: 6783
+  
+  # Allow kubectl port-forward (debugging)
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: kube-system
+    ports:
+    - protocol: TCP
+      port: 9093
+
+---
+# NetworkPolicy: Allow egress from AlertManager
+
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: alertmanager-egress
+  namespace: monitoring
+spec:
+  podSelector:
+    matchLabels:
+      app: alertmanager
+      component: alertmanager
+  
+  policyTypes:
+  - Egress
+  
+  egress:
+  # Allow DNS queries
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: kube-system
+    ports:
+    - protocol: UDP
+      port: 53
+  
+  # Allow Kubernetes API communication
+  - to:
+    - podSelector:
+        matchLabels:
+          component: kube-apiserver
+    ports:
+    - protocol: TCP
+      port: 443
+  
+  # Allow external webhook destinations (Slack, PagerDuty, etc.)
+  - to:
+    - namespaceSelector: {}
+    ports:
+    - protocol: TCP
+      port: 443  # HTTPS for webhook calls
+  
+  # Allow AlertManager cluster communication (between replicas)
+  - to:
+    - podSelector:
+        matchLabels:
+          app: alertmanager
+    ports:
+    - protocol: TCP
+      port: 6783
+
+---
+# PodDisruptionBudget: Ensure High Availability
+
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: alertmanager
+  namespace: monitoring
+  labels:
+    app: alertmanager
+    component: alertmanager
+spec:
+  # At least 1 AlertManager replica must stay alive
+  minAvailable: 1
+  
+  selector:
+    matchLabels:
+      app: alertmanager
+      component: alertmanager
+  
+  # Unhealthiness grace period (for drains)
+  unhealthyPodEvictionPolicy: AlwaysAllow
+
+---
+# HorizontalPodAutoscaler (Optional: for scaling based on load)
+# Uncomment if you want AlertManager to scale with alert volume
+
+# apiVersion: autoscaling/v2
+# kind: HorizontalPodAutoscaler
+# metadata:
+#   name: alertmanager
+#   namespace: monitoring
+# spec:
+#   scaleTargetRef:
+#     apiVersion: apps/v1
+#     kind: StatefulSet
+#     name: alertmanager
+#   minReplicas: 2
+#   maxReplicas: 5
+#   metrics:
+#   - type: Resource
+#     resource:
+#       name: cpu
+#       target:
+#         type: Utilization
+#         averageUtilization: 70
+#   - type: Resource
+#     resource:
+#       name: memory
+#       target:
+#         type: Utilization
+#         averageUtilization: 80
+
+---
+# Notes and Documentation
+# This service definition provides:
+#
+# 1. ClusterIP Service (alertmanager)
+#    - HTTP API and UI access
+#    - Used by Prometheus, Grafana, and operators
+#    - Internal DNS: alertmanager.monitoring.svc.cluster.local:9093
+#
+# 2. Headless Service (alertmanager-headless)
+#    - Pod-to-pod communication
+#    - Used by AlertManager StatefulSet for clustering
+#    - Enables DNS resolution to individual pods
+#
+# 3. ServiceMonitor (alertmanager)
+#    - Enables Prometheus to scrape AlertManager metrics
+#    - Metrics like alertmanager_alerts, alertmanager_notifications_total
+#
+# 4. RBAC (ServiceAccount, ClusterRole, ClusterRoleBinding)
+#    - Permissions for AlertManager to read configuration
+#    - Minimal permissions (least privilege)
+#
+# 5. NetworkPolicy (ingress and egress)
+#    - Controls traffic to/from AlertManager pods
+#    - Allows Prometheus scraping, cluster communication, external webhooks
+#    - Restrictive by default (deny-all by default in namespace with NetworkPolicy)
+#
+# 6. PodDisruptionBudget
+#    - Prevents involuntary disruption during node maintenance
+#    - Keeps at least 1 replica running
+#
+# Access Methods:
+# - Internal: kubectl port-forward -n monitoring svc/alertmanager 9093:9093
+# - Then access: http://localhost:9093
+# - UI: http://localhost:9093 (shows firing alerts, routes, silences)
+# - API: http://localhost:9093/api/v1/alerts (JSON API)
+# - Health check: curl http://localhost:9093/-/healthy

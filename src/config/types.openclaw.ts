@@ -112,6 +112,9 @@ export type OpenClawConfig = {
   talk?: TalkConfig;
   gateway?: GatewayConfig;
   memory?: MemoryConfig;
+  clarityburst?: {
+    enabled?: boolean;
+  };
 };
 
 export type ConfigValidationIssue = {

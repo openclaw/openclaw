@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { GatewayWsClient } from "./server/ws-types.js";
+import { applyCanvasUiOverrides } from "../clarityburst/decision-override.js";
 
 export type NodeSession = {
   nodeId: string;
@@ -128,6 +129,12 @@ export class NodeRegistry {
       timeoutMs: params.timeoutMs,
       idempotencyKey: params.idempotencyKey,
     };
+    await applyCanvasUiOverrides({
+      stageId: "CANVAS_UI",
+      userConfirmed: false,
+      componentType: payload.command,
+      canvasId: requestId,
+    });
     const ok = this.sendEventToSession(node, "node.invoke.request", payload);
     if (!ok) {
       return {

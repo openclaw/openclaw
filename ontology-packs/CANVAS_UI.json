@@ -1,0 +1,287 @@
+{
+  "pack_id": "openclawd.CANVAS_UI",
+  "pack_version": "1.0.0",
+  "stage_id": "CANVAS_UI",
+  "description": "Controls user interface rendering and canvas manipulation operations. Governs visual element creation, layout changes, and user interaction handling.",
+  "thresholds": {
+    "min_confidence_T": 0,
+    "dominance_margin_Delta": 0
+  },
+  "contracts": [
+    {
+      "contract_id": "CANVAS_RENDER_TEXT",
+      "risk_class": "LOW",
+      "required_fields": [
+        "element_type",
+        "content"
+      ],
+      "limits": {},
+      "needs_confirmation": false,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "CANVAS_RENDER_STATIC",
+      "risk_class": "LOW",
+      "required_fields": [
+        "element_type",
+        "properties"
+      ],
+      "limits": {},
+      "needs_confirmation": false,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "CANVAS_UPDATE_LAYOUT",
+      "risk_class": "LOW",
+      "required_fields": [
+        "layout_id",
+        "changes"
+      ],
+      "limits": {},
+      "needs_confirmation": false,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "CANVAS_RENDER_INTERACTIVE",
+      "risk_class": "MEDIUM",
+      "required_fields": [
+        "element_type",
+        "properties",
+        "event_handlers"
+      ],
+      "limits": {
+        "max_handlers": 10,
+        "allowed_events": [
+          "click",
+          "hover",
+          "focus",
+          "blur",
+          "change"
+        ]
+      },
+      "needs_confirmation": false,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "CANVAS_BATCH_UPDATE",
+      "risk_class": "MEDIUM",
+      "required_fields": [
+        "updates"
+      ],
+      "limits": {
+        "max_updates": 100,
+        "max_depth": 10
+      },
+      "needs_confirmation": false,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "CANVAS_EMBED_MEDIA",
+      "risk_class": "MEDIUM",
+      "required_fields": [
+        "media_type",
+        "source_url"
+      ],
+      "limits": {
+        "allowed_sources": [],
+        "max_media_size_mb": 50
+      },
+      "needs_confirmation": false,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "CANVAS_INJECT_SCRIPT",
+      "risk_class": "HIGH",
+      "required_fields": [
+        "script_content",
+        "execution_context"
+      ],
+      "limits": {
+        "max_script_size_kb": 100,
+        "requires_csp_check": true
+      },
+      "needs_confirmation": true,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "CANVAS_FULL_SCREEN_TAKEOVER",
+      "risk_class": "CRITICAL",
+      "required_fields": [
+        "takeover_type",
+        "duration",
+        "justification"
+      ],
+      "limits": {
+        "max_duration_seconds": 300,
+        "requires_user_gesture": true
+      },
+      "needs_confirmation": true,
+      "deny_by_default": true,
+      "capability_requirements": []
+    }
+  ],
+  "field_schema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "type": "object",
+    "properties": {
+      "element_type": {
+        "type": "string",
+        "enum": [
+          "text",
+          "image",
+          "button",
+          "input",
+          "container",
+          "list",
+          "table",
+          "chart",
+          "form",
+          "modal"
+        ],
+        "description": "Type of UI element to render"
+      },
+      "content": {
+        "type": "string",
+        "description": "Text content for text elements"
+      },
+      "properties": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "className": {
+            "type": "string"
+          },
+          "style": {
+            "type": "object"
+          },
+          "attributes": {
+            "type": "object"
+          }
+        },
+        "description": "Element properties and styling"
+      },
+      "layout_id": {
+        "type": "string",
+        "description": "Identifier of layout to update"
+      },
+      "changes": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "target": {
+              "type": "string"
+            },
+            "property": {
+              "type": "string"
+            },
+            "value": {}
+          }
+        },
+        "description": "List of layout changes to apply"
+      },
+      "event_handlers": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "string"
+        },
+        "description": "Event handler mappings"
+      },
+      "updates": {
+        "type": "array",
+        "items": {
+          "type": "object"
+        },
+        "description": "Batch of UI updates"
+      },
+      "media_type": {
+        "type": "string",
+        "enum": [
+          "image",
+          "video",
+          "audio",
+          "iframe"
+        ],
+        "description": "Type of media to embed"
+      },
+      "source_url": {
+        "type": "string",
+        "format": "uri",
+        "description": "URL of media source"
+      },
+      "script_content": {
+        "type": "string",
+        "description": "JavaScript code to inject"
+      },
+      "execution_context": {
+        "type": "string",
+        "enum": [
+          "isolated",
+          "page",
+          "privileged"
+        ],
+        "description": "Context for script execution"
+      },
+      "takeover_type": {
+        "type": "string",
+        "enum": [
+          "fullscreen",
+          "modal",
+          "overlay"
+        ],
+        "description": "Type of screen takeover"
+      },
+      "duration": {
+        "type": "integer",
+        "minimum": 0,
+        "description": "Duration of takeover in seconds"
+      },
+      "justification": {
+        "type": "string",
+        "description": "Reason for takeover request"
+      },
+      "animation": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string"
+          },
+          "duration_ms": {
+            "type": "integer"
+          },
+          "easing": {
+            "type": "string"
+          }
+        },
+        "description": "Animation configuration"
+      },
+      "accessibility": {
+        "type": "object",
+        "properties": {
+          "aria_label": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "tabindex": {
+            "type": "integer"
+          }
+        },
+        "description": "Accessibility attributes"
+      }
+    },
+    "required": [
+      "element_type"
+    ]
+  }
+}

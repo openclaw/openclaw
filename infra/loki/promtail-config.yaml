@@ -1,0 +1,271 @@
+# Promtail Configuration - Log Scraping and Label Configuration
+# ConfigMap containing Promtail's scrape pipeline configuration
+#
+# This configuration defines:
+# - Scrape configs for container logs, kubelet logs, and system logs
+# - Log parsing and label extraction
+# - Kubernetes metadata enrichment
+# - Log forwarding to Loki
+#
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: promtail-config
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: promtail
+    app.kubernetes.io/part-of: loki-stack
+
+data:
+  promtail-config.yaml: |
+    # Promtail configuration
+    server:
+      http_listen_port: 3101  # Prometheus metrics port
+      log_level: info         # Log level: debug, info, warn, error
+    
+    # ========================================================================
+    # CLIENT CONFIGURATION - Where to send logs
+    # ========================================================================
+    clients:
+      - url: http://loki:3100/loki/api/v1/push  # Loki service endpoint
+        batchwait: 1s                            # Wait up to 1s before sending batch
+        batchsize: 1048576                       # Send batch when 1MB collected
+        # Optional: add auth headers if Loki has authentication
+        # basic_auth:
+        #   username: username
+        #   password: password
+    
+    # ========================================================================
+    # SCRAPE CONFIGS - What logs to collect and how to parse them
+    # ========================================================================
+    scrape_configs:
+      # =====================================================================
+      # CONFIG 1: Container Logs (Docker/Containerd JSON format)
+      # Path: /var/log/containers/*.log
+      # =====================================================================
+      - job_name: container_logs
+        # Log files to scrape (glob pattern)
+        static_configs:
+          - targets:
+              - localhost
+            labels:
+              job: container_logs
+              __path__: /var/log/containers/*/*.log
+        
+        # Pipeline stages: parse, extract labels, format
+        pipeline_stages:
+          # ================================================================
+          # Stage 1: Multiline detection
+          # Handles logs that span multiple lines
+          # ================================================================
+          - multiline:
+              line_start_pattern: '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+Z'
+          
+          # ================================================================
+          # Stage 2: JSON parsing
+          # Container logs from Docker/containerd are JSON formatted
+          # Example: {"log":"message","stream":"stdout","time":"2024-01-01T..."}
+          # ================================================================
+          - json:
+              expressions:
+                log_message: log         # Extract the "log" field
+                stream: stream           # Extract the "stream" field (stdout/stderr)
+                timestamp: time          # Extract the "time" field
+          
+          # ================================================================
+          # Stage 3: Timestamp parsing
+          # Convert timestamp string to proper format
+          # ================================================================
+          - timestamp:
+              source: timestamp
+              format: RFC3339Nano       # RFC3339 with nanoseconds
+              location: UTC
+          
+          # ================================================================
+          # Stage 4: Label extraction from file path
+          # Extract from path: /var/log/containers/<namespace>_<pod>_<uid>/<container>.log
+          # Example: /var/log/containers/default_my-pod-abc123_uid/my-container.log
+          # ================================================================
+          - regex:
+              expression: '\/var\/log\/containers\/(?P<namespace>[^_]+)_(?P<pod_name>[^_]+)_(?P<pod_uid>[a-f0-9]+)\/(?P<container_name>[^\/]+)\.log'
+              source: __path__
+          
+          # ================================================================
+          # Stage 5: Parse pod labels from Kubernetes API
+          # Requires: Promtail has Kubernetes API access (ServiceAccount + RBAC)
+          # Adds labels: pod_labels_app, pod_labels_version, etc.
+          # ================================================================
+          - kubernetes_metadata:
+              namespace_name: ${namespace}
+              pod_name: ${pod_name}
+              # Labels to extract from pod metadata
+              labels:
+                - app
+                - version
+                - stage
+                - component
+                - tier
+                - release
+          
+          # ================================================================
+          # Stage 6: Add cluster and node information
+          # ================================================================
+          - labels:
+              cluster: ${CLUSTER_NAME}  # Environment variable: prod/staging
+              namespace: ${namespace}   # From path parsing
+              pod: ${pod_name}          # From path parsing
+              container: ${container_name}  # From path parsing
+              node: ${HOSTNAME}         # Environment variable: node name
+              stream: ${stream}         # stdout or stderr
+          
+          # ================================================================
+          # Stage 7: Output structured log
+          # Use the "log" field as the output (parsed earlier)
+          # ================================================================
+          - output:
+              source: log_message
+      
+      # =====================================================================
+      # CONFIG 2: Kubelet Logs
+      # Kubelet (node agent) logs for debugging node-level issues
+      # =====================================================================
+      - job_name: kubelet_logs
+        static_configs:
+          - targets:
+              - localhost
+            labels:
+              job: kubelet_logs
+              __path__: /var/log/kubelet.log*  # kubelet.log and rotated logs
+        
+        pipeline_stages:
+          # Parse each line as-is (plain text, not JSON)
+          - regex:
+              expression: '^(?P<timestamp>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+Z)\s+(?P<level>\w+)\s+(?P<component>\w+)\s+(?P<message>.+)$'
+          
+          # Add cluster and node labels
+          - labels:
+              cluster: ${CLUSTER_NAME}
+              node: ${HOSTNAME}
+              job: kubelet_logs
+              source: kubelet
+      
+      # =====================================================================
+      # CONFIG 3: System Logs (Optional)
+      # System-level logs from syslog or journald
+      # Uncomment if you want to collect system logs
+      # =====================================================================
+      # - job_name: syslog
+      #   static_configs:
+      #     - targets:
+      #         - localhost
+      #       labels:
+      #         job: syslog
+      #         __path__: /var/log/syslog*
+      #   
+      #   pipeline_stages:
+      #     # Parse syslog format
+      #     - regex:
+      #         expression: '^(?P<timestamp>[\w\s:]+)\s+(?P<hostname>\S+)\s+(?P<process>\S+)\[?\d*\]?: (?P<message>.+)$'
+      #     
+      #     - labels:
+      #         cluster: ${CLUSTER_NAME}
+      #         node: ${HOSTNAME}
+      #         job: syslog
+      #         source: system
+      
+      # =====================================================================
+      # CONFIG 4: Application-specific logs (Example)
+      # For applications that write logs in specific locations
+      # Uncomment and customize for your applications
+      # =====================================================================
+      # - job_name: app_logs
+      #   static_configs:
+      #     - targets:
+      #         - localhost
+      #       labels:
+      #         job: app_logs
+      #         __path__: /var/log/myapp/*.log
+      #   
+      #   pipeline_stages:
+      #     - json:
+      #         expressions:
+      #           message: msg
+      #           level: level
+      #     - labels:
+      #         cluster: ${CLUSTER_NAME}
+      #         node: ${HOSTNAME}
+      #         app: myapp
+
+    # ========================================================================
+    # TRACING CONFIGURATION (Optional)
+    # For distributed tracing integration
+    # ========================================================================
+    # tracing:
+    #   enabled: true
+    #   jaeger:
+    #     endpoint: jaeger-agent:6831
+
+---
+
+# ============================================================================
+# NOTES ON CONFIGURATION
+# ============================================================================
+#
+# SCRAPE CONFIGS:
+# 1. Container logs: Primary source - captures stdout/stderr from all pods
+# 2. Kubelet logs: Node-level diagnostics (pod scheduling, resource issues)
+# 3. System logs: Optional - syslog or journald logs
+# 4. Application logs: Optional - for apps that write directly to files
+#
+# LABEL EXTRACTION:
+# - Automatically extracts:
+#   * cluster: Which cluster (prod/staging)
+#   * namespace: Kubernetes namespace
+#   * pod: Pod name
+#   * container: Container name
+#   * node: Node name
+#   * pod_labels_*: Pod labels (app, version, stage, etc.)
+# 
+# - Avoid high-cardinality labels:
+#   ✓ Good: namespace, pod, container, app
+#   ✗ Bad: request-id, user-id, trace-id (creates label explosion)
+#
+# KUBERNETES METADATA:
+# - kubernetes_metadata stage extracts pod labels from K8s API
+# - Requires: ServiceAccount with RBAC to read pods
+# - Labels are case-sensitive (pod_labels_app, not pod_labels_App)
+#
+# PIPELINE STAGES:
+# 1. multiline: Handle multi-line logs
+# 2. json/regex: Parse log format
+# 3. timestamp: Extract and format timestamp
+# 4. regex: Extract fields using patterns
+# 5. kubernetes_metadata: Add pod labels
+# 6. labels: Add/assign final labels
+# 7. output: Extract the log message to send
+#
+# PERFORMANCE TIPS:
+# - Use static_configs for known log locations (faster than dynamic discovery)
+# - Limit __path__ patterns to necessary directories (avoid /var/log/*)
+# - Use efficient regex patterns (avoid unnecessary capturing groups)
+# - Increase batchsize if CPU is low, decrease if network is congested
+# - Monitor Promtail CPU/memory: kubectl top pods -n monitoring
+#
+# TROUBLESHOOTING:
+# - Check Promtail logs: kubectl logs <pod> -n monitoring | grep -i error
+# - Verify label extraction: Check Loki datasource in Grafana
+# - Test regex patterns: Use online regex tester with sample logs
+# - Monitor cardinality: Check Loki metrics for high series count
+#
+# LABEL CARDINALITY EXAMPLE:
+# ✓ Low cardinality (good):
+#   cluster="prod", namespace="api", pod="router-1", container="router"
+# ✗ High cardinality (bad):
+#   cluster="prod", request_id="abc-123", user_id="user-456" (millions of series!)
+#
+# RETENTION & PERFORMANCE:
+# - Loki's retention is based on log age (30 days)
+# - Label cardinality affects query performance
+# - More labels = slower queries
+# - Keep only essential labels; use log message content for specifics

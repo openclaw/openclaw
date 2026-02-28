@@ -1,0 +1,236 @@
+{
+  "pack_id": "openclawd.TOOL_DISPATCH_GATE",
+  "pack_version": "2.0.0",
+  "stage_id": "TOOL_DISPATCH_GATE",
+  "description": "Controls permission slips for distinct tool action regimes. Governs what categories of operations an agent is allowed to dispatch.",
+  "thresholds": {
+    "min_confidence_T": 0.55,
+    "dominance_margin_Delta": 0.10
+  },
+  "abstain_policy": {
+    "description": "Controls dispatch blocking when classifier abstains due to low confidence or ambiguity",
+    "blocking_outcomes": ["ABSTAIN_CONFIRM", "ABSTAIN_CLARIFY"],
+    "on_abstain": {
+      "action": "block_dispatch",
+      "return_value": [],
+      "rationale": "When outcome ∈ { ABSTAIN_CONFIRM, ABSTAIN_CLARIFY }, block tool dispatch and return empty array to prevent uncertain operations"
+    },
+    "outcome_definitions": {
+      "ABSTAIN_CONFIRM": {
+        "description": "Classifier confidence below threshold; requires explicit user confirmation before proceeding",
+        "trigger_condition": "confidence < min_confidence_T",
+        "user_interaction": "prompt_confirmation"
+      },
+      "ABSTAIN_CLARIFY": {
+        "description": "Ambiguous intent detected; requires clarification from user to disambiguate",
+        "trigger_condition": "top_intents_margin < dominance_margin_Delta",
+        "user_interaction": "request_clarification"
+      }
+    }
+  },
+  "contracts": [
+    {
+      "contract_id": "DISPATCH_NOOP",
+      "risk_class": "LOW",
+      "required_fields": ["tool_name"],
+      "limits": {
+        "maxRetries": 0,
+        "timeoutMs": 5000,
+        "maxBatchSize": 1,
+        "maxChainDepth": 1
+      },
+      "needs_confirmation": false,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "DISPATCH_READ_ONLY",
+      "risk_class": "LOW",
+      "required_fields": ["tool_name", "target_resource"],
+      "limits": {
+        "maxRetries": 3,
+        "timeoutMs": 30000,
+        "maxBatchSize": 10,
+        "maxChainDepth": 5
+      },
+      "needs_confirmation": false,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "DISPATCH_WRITE",
+      "risk_class": "MEDIUM",
+      "required_fields": ["tool_name", "target_path"],
+      "limits": {
+        "maxRetries": 2,
+        "timeoutMs": 60000,
+        "maxBatchSize": 5,
+        "maxChainDepth": 3,
+        "maxFileSizeBytes": 10485760
+      },
+      "needs_confirmation": false,
+      "deny_by_default": false,
+      "capability_requirements": ["fs_write"]
+    },
+    {
+      "contract_id": "DISPATCH_DELETE",
+      "risk_class": "HIGH",
+      "required_fields": ["tool_name", "target_path", "confirmation_token"],
+      "limits": {
+        "maxRetries": 1,
+        "timeoutMs": 30000,
+        "maxBatchSize": 3,
+        "maxChainDepth": 1,
+        "maxDeleteCount": 10
+      },
+      "needs_confirmation": true,
+      "deny_by_default": false,
+      "capability_requirements": ["fs_write"]
+    },
+    {
+      "contract_id": "DISPATCH_SHELL_EXEC",
+      "risk_class": "HIGH",
+      "required_fields": ["tool_name", "command", "working_directory"],
+      "limits": {
+        "maxRetries": 1,
+        "timeoutMs": 120000,
+        "maxBatchSize": 1,
+        "maxChainDepth": 2,
+        "maxOutputBytes": 1048576
+      },
+      "needs_confirmation": true,
+      "deny_by_default": false,
+      "capability_requirements": ["shell"]
+    },
+    {
+      "contract_id": "DISPATCH_NETWORK_REQUEST",
+      "risk_class": "MEDIUM",
+      "required_fields": ["tool_name", "url", "method"],
+      "limits": {
+        "maxRetries": 3,
+        "timeoutMs": 30000,
+        "maxBatchSize": 5,
+        "maxChainDepth": 3,
+        "rateLimitPerMinute": 60,
+        "maxResponseBytes": 5242880
+      },
+      "needs_confirmation": false,
+      "deny_by_default": false,
+      "capability_requirements": ["network"]
+    },
+    {
+      "contract_id": "DISPATCH_BROWSER_AUTOMATE",
+      "risk_class": "MEDIUM",
+      "required_fields": ["tool_name", "action_type"],
+      "limits": {
+        "maxRetries": 2,
+        "timeoutMs": 60000,
+        "maxBatchSize": 1,
+        "maxChainDepth": 10,
+        "maxNavigations": 20,
+        "maxScreenshots": 10
+      },
+      "needs_confirmation": false,
+      "deny_by_default": false,
+      "capability_requirements": ["browser"]
+    },
+    {
+      "contract_id": "DISPATCH_SENSITIVE_DATA",
+      "risk_class": "HIGH",
+      "required_fields": ["tool_name", "data_classification", "access_justification"],
+      "limits": {
+        "maxRetries": 1,
+        "timeoutMs": 30000,
+        "maxBatchSize": 1,
+        "maxChainDepth": 1,
+        "allowedClassifications": ["internal", "confidential"]
+      },
+      "needs_confirmation": true,
+      "deny_by_default": false,
+      "capability_requirements": ["sensitive_access"]
+    },
+    {
+      "contract_id": "DISPATCH_PRIVILEGED_ADMIN",
+      "risk_class": "CRITICAL",
+      "required_fields": ["tool_name", "admin_scope", "justification", "authorization_token"],
+      "limits": {
+        "maxRetries": 0,
+        "timeoutMs": 300000,
+        "maxBatchSize": 1,
+        "maxChainDepth": 1,
+        "requiresAuditLog": true,
+        "maxSessionDurationSec": 600
+      },
+      "needs_confirmation": true,
+      "deny_by_default": true,
+      "capability_requirements": ["shell", "critical_opt_in"]
+    }
+  ],
+  "field_schema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "type": "object",
+    "properties": {
+      "tool_name": {
+        "type": "string",
+        "description": "Identifier of the tool to dispatch"
+      },
+      "target_resource": {
+        "type": "string",
+        "description": "Resource identifier for read operations"
+      },
+      "target_path": {
+        "type": "string",
+        "description": "File or directory path for write/delete operations"
+      },
+      "confirmation_token": {
+        "type": "string",
+        "description": "Token confirming destructive operation intent"
+      },
+      "command": {
+        "type": "string",
+        "description": "Shell command to execute"
+      },
+      "working_directory": {
+        "type": "string",
+        "description": "Directory context for shell execution"
+      },
+      "url": {
+        "type": "string",
+        "format": "uri",
+        "description": "Target URL for network requests"
+      },
+      "method": {
+        "type": "string",
+        "enum": ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"],
+        "description": "HTTP method for network requests"
+      },
+      "action_type": {
+        "type": "string",
+        "enum": ["navigate", "click", "type", "screenshot", "evaluate", "wait"],
+        "description": "Type of browser automation action"
+      },
+      "data_classification": {
+        "type": "string",
+        "enum": ["public", "internal", "confidential", "restricted"],
+        "description": "Data sensitivity classification"
+      },
+      "access_justification": {
+        "type": "string",
+        "description": "Reason for accessing sensitive data"
+      },
+      "admin_scope": {
+        "type": "string",
+        "description": "Scope of administrative operation"
+      },
+      "justification": {
+        "type": "string",
+        "description": "Reason for privileged operations"
+      },
+      "authorization_token": {
+        "type": "string",
+        "description": "Token authorizing privileged operation"
+      }
+    },
+    "required": ["tool_name"]
+  }
+}

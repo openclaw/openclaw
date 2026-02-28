@@ -1,0 +1,110 @@
+{
+  "pack_id": "openclawd.CRON_PREFLIGHT_GATE",
+  "pack_version": "1.0.0",
+  "stage_id": "CRON_PREFLIGHT_GATE",
+  "description": "Pre-flight validation gate that runs before any tool dispatch. Verifies ledger health and commits to a specific cron task.",
+  "execution_order": "FIRST",
+  "precondition_stages": [],
+  "blocks_on_failure": [
+    "TOOL_DISPATCH_GATE",
+    "SHELL_EXEC",
+    "FILE_SYSTEM_OPS",
+    "NETWORK_IO",
+    "BROWSER_AUTOMATE",
+    "MEMORY_MODIFY",
+    "CRON_SCHEDULE",
+    "MESSAGE_EMIT",
+    "MEDIA_GENERATE",
+    "NODE_INVOKE",
+    "CANVAS_UI",
+    "SUBAGENT_SPAWN"
+  ],
+  "ledger_verification_config": {
+    "ledger_path": "docs/internal/clarityburst-usage-ledger.jsonl",
+    "window_size": 50,
+    "required_invariants": [
+      "file_exists",
+      "valid_jsonl",
+      "required_fields_present",
+      "unique_run_ids",
+      "baseline_gated_coherence"
+    ]
+  },
+  "cron_task_config": {
+    "task_enum_location": "src/clarityburst/cron-task.ts",
+    "allow_dynamic_tasks": false,
+    "require_capability_declaration": true
+  },
+  "decision_record_requirements": {
+    "mandatory_fields": [
+      "nextCronTask",
+      "ledger_verification",
+      "task_committed_at"
+    ],
+    "immutable_fields": [
+      "nextCronTask"
+    ],
+    "persistence": "permanent"
+  },
+  "failure_mode": "escalate_on_validation_failure",
+  "contracts": [
+    {
+      "contract_id": "CRON_PREFLIGHT_VALIDATE",
+      "risk_class": "CRITICAL",
+      "description": "Validate ledger state and select cron task",
+      "required_fields": [
+        "ledger_path",
+        "cron_task_id"
+      ],
+      "limits": {
+        "maxRetries": 0,
+        "timeoutMs": 10000,
+        "maxBatchSize": 1,
+        "maxChainDepth": 1
+      },
+      "needs_confirmation": false,
+      "deny_by_default": false,
+      "capability_requirements": [
+        "critical_opt_in"
+      ],
+      "escalation_conditions": [
+        "ledger_verification_failed",
+        "task_selection_ambiguous",
+        "task_not_in_enum"
+      ]
+    }
+  ],
+  "field_schema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "type": "object",
+    "properties": {
+      "ledger_path": {
+        "type": "string",
+        "description": "Path to usage ledger file"
+      },
+      "cron_task_id": {
+        "type": "string",
+        "enum": [
+          "HEARTBEAT_CHECK",
+          "MEMORY_MAINTENANCE",
+          "CACHE_REFRESH",
+          "LOG_ROTATION",
+          "BACKUP_EXECUTION",
+          "SCHEDULED_REPORT",
+          "CREDENTIAL_ROTATION",
+          "HEALTH_PROBE",
+          "INDEX_REBUILD",
+          "STATE_SYNC",
+          "METRICS_AGGREGATION",
+          "CLEANUP_TEMP_DATA",
+          "UPDATE_CONFIG_CACHE"
+        ],
+        "description": "Selected cron task from closed enum"
+      }
+    },
+    "required": [
+      "ledger_path",
+      "cron_task_id"
+    ]
+  }
+}

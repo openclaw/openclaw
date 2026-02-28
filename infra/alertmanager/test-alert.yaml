@@ -1,0 +1,431 @@
+# AlertManager Test Alerts
+# These examples show how to send test alerts to AlertManager for validation
+
+---
+# Test Alert 1: Critical Severity Alert
+# This will trigger PagerDuty incident in production
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: alertmanager-test-critical
+  namespace: monitoring
+  labels:
+    app: alertmanager-test
+    severity: critical
+spec:
+  template:
+    metadata:
+      labels:
+        app: alertmanager-test
+        test: critical
+    spec:
+      serviceAccountName: alertmanager
+      containers:
+      - name: test-alert
+        image: curlimages/curl:latest
+        command:
+        - /bin/sh
+        - -c
+        - |
+          set -e
+          echo "Sending test critical alert to AlertManager..."
+          
+          curl -X POST http://alertmanager:9093/api/v1/alerts \
+            -H 'Content-Type: application/json' \
+            -d '[{
+              "labels": {
+                "alertname": "TestCriticalAlert",
+                "severity": "critical",
+                "cluster": "clarity-router-prod",
+                "job": "alertmanager-test"
+              },
+              "annotations": {
+                "summary": "Test critical alert from AlertManager",
+                "description": "This is a test alert to verify Slack and PagerDuty integration",
+                "runbook_url": "https://docs.example.com/runbooks/test-alert"
+              },
+              "generatorURL": "https://prometheus.internal/graph?g0.expr=ALERTS"
+            }]'
+          
+          echo ""
+          echo "✅ Test critical alert sent!"
+          echo "Expected: Slack notification and PagerDuty incident"
+          exit 0
+        resources:
+          requests:
+            cpu: 10m
+            memory: 32Mi
+          limits:
+            cpu: 50m
+            memory: 64Mi
+      restartPolicy: Never
+  backoffLimit: 1
+
+---
+# Test Alert 2: Warning Severity Alert
+# This will create Slack notification only
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: alertmanager-test-warning
+  namespace: monitoring
+  labels:
+    app: alertmanager-test
+    severity: warning
+spec:
+  template:
+    metadata:
+      labels:
+        app: alertmanager-test
+        test: warning
+    spec:
+      serviceAccountName: alertmanager
+      containers:
+      - name: test-alert
+        image: curlimages/curl:latest
+        command:
+        - /bin/sh
+        - -c
+        - |
+          set -e
+          echo "Sending test warning alert to AlertManager..."
+          
+          curl -X POST http://alertmanager:9093/api/v1/alerts \
+            -H 'Content-Type: application/json' \
+            -d '[{
+              "labels": {
+                "alertname": "TestWarningAlert",
+                "severity": "warning",
+                "cluster": "clarity-router-prod",
+                "job": "alertmanager-test"
+              },
+              "annotations": {
+                "summary": "Test warning alert from AlertManager",
+                "description": "This is a test warning alert to verify Slack integration only"
+              },
+              "generatorURL": "https://prometheus.internal/graph"
+            }]'
+          
+          echo ""
+          echo "✅ Test warning alert sent!"
+          echo "Expected: Slack notification only (no PagerDuty incident)"
+          exit 0
+        resources:
+          requests:
+            cpu: 10m
+            memory: 32Mi
+          limits:
+            cpu: 50m
+            memory: 64Mi
+      restartPolicy: Never
+  backoffLimit: 1
+
+---
+# Test Alert 3: Multiple Grouped Alerts
+# Tests alert grouping behavior
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: alertmanager-test-grouped
+  namespace: monitoring
+  labels:
+    app: alertmanager-test
+    test: grouped
+spec:
+  template:
+    metadata:
+      labels:
+        app: alertmanager-test
+        test: grouped
+    spec:
+      serviceAccountName: alertmanager
+      containers:
+      - name: test-alert
+        image: curlimages/curl:latest
+        command:
+        - /bin/sh
+        - -c
+        - |
+          set -e
+          echo "Sending grouped test alerts to AlertManager..."
+          
+          TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          
+          curl -X POST http://alertmanager:9093/api/v1/alerts \
+            -H 'Content-Type: application/json' \
+            -d "[
+              {
+                \"labels\": {
+                  \"alertname\": \"TestHighCPUUsage\",
+                  \"severity\": \"warning\",
+                  \"cluster\": \"clarity-router-prod\",
+                  \"pod\": \"router-0\"
+                },
+                \"annotations\": {
+                  \"summary\": \"High CPU on router-0\",
+                  \"description\": \"CPU usage: 85%\"
+                },
+                \"startsAt\": \"$TIMESTAMP\"
+              },
+              {
+                \"labels\": {
+                  \"alertname\": \"TestHighCPUUsage\",
+                  \"severity\": \"warning\",
+                  \"cluster\": \"clarity-router-prod\",
+                  \"pod\": \"router-1\"
+                },
+                \"annotations\": {
+                  \"summary\": \"High CPU on router-1\",
+                  \"description\": \"CPU usage: 78%\"
+                },
+                \"startsAt\": \"$TIMESTAMP\"
+              },
+              {
+                \"labels\": {
+                  \"alertname\": \"TestHighCPUUsage\",
+                  \"severity\": \"warning\",
+                  \"cluster\": \"clarity-router-prod\",
+                  \"pod\": \"router-2\"
+                },
+                \"annotations\": {
+                  \"summary\": \"High CPU on router-2\",
+                  \"description\": \"CPU usage: 92%\"
+                },
+                \"startsAt\": \"$TIMESTAMP\"
+              }
+            ]"
+          
+          echo ""
+          echo "✅ Grouped test alerts sent!"
+          echo "Expected: Single Slack notification with 3 grouped alerts"
+          exit 0
+        resources:
+          requests:
+            cpu: 10m
+            memory: 32Mi
+          limits:
+            cpu: 50m
+            memory: 64Mi
+      restartPolicy: Never
+  backoffLimit: 1
+
+---
+# Test Alert 4: Resolved Alert
+# Tests alert resolution and auto-closing
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: alertmanager-test-resolved
+  namespace: monitoring
+  labels:
+    app: alertmanager-test
+    test: resolved
+spec:
+  template:
+    metadata:
+      labels:
+        app: alertmanager-test
+        test: resolved
+    spec:
+      serviceAccountName: alertmanager
+      containers:
+      - name: test-alert
+        image: curlimages/curl:latest
+        command:
+        - /bin/sh
+        - -c
+        - |
+          set -e
+          echo "Sending resolved test alert to AlertManager..."
+          
+          # First, trigger the alert
+          echo "1. Triggering test alert..."
+          curl -X POST http://alertmanager:9093/api/v1/alerts \
+            -H 'Content-Type: application/json' \
+            -d '[{
+              "labels": {
+                "alertname": "TestResolvedAlert",
+                "severity": "critical",
+                "cluster": "clarity-router-prod"
+              },
+              "annotations": {
+                "summary": "Test alert (will be resolved)",
+                "description": "This alert will be resolved in a moment"
+              },
+              "startsAt": "'$(date -u +%Y-%m-%dT%H:%M:%SZ)'"
+            }]'
+          
+          echo ""
+          echo "Alert triggered. Waiting 5 seconds before resolving..."
+          sleep 5
+          
+          # Then, send resolved notification
+          echo "2. Sending resolved notification..."
+          curl -X POST http://alertmanager:9093/api/v1/alerts \
+            -H 'Content-Type: application/json' \
+            -d '[{
+              "labels": {
+                "alertname": "TestResolvedAlert",
+                "severity": "critical",
+                "cluster": "clarity-router-prod"
+              },
+              "annotations": {
+                "summary": "Test alert (will be resolved)",
+                "description": "This alert has been resolved"
+              },
+              "startsAt": "'$(date -u +%Y-%m-%dT%H:%M:%SZ)'",
+              "endsAt": "'$(date -u +%Y-%m-%dT%H:%M:%SZ)'"
+            }]'
+          
+          echo ""
+          echo "✅ Resolved test alert sent!"
+          echo "Expected: 'Resolved' notification in Slack, PagerDuty incident closed"
+          exit 0
+        resources:
+          requests:
+            cpu: 10m
+            memory: 32Mi
+          limits:
+            cpu: 50m
+            memory: 64Mi
+      restartPolicy: Never
+  backoffLimit: 1
+
+---
+# Manual Test: Using curl directly
+# For manual testing without creating jobs
+#
+# Steps:
+# 1. Port-forward to AlertManager:
+#    kubectl port-forward -n monitoring svc/alertmanager 9093:9093 &
+#
+# 2. Send test alert via curl:
+#    curl -X POST http://localhost:9093/api/v1/alerts \
+#      -H 'Content-Type: application/json' \
+#      -d '[{
+#        "labels": {
+#          "alertname": "TestAlert",
+#          "severity": "critical",
+#          "cluster": "clarity-router-prod"
+#        },
+#        "annotations": {
+#          "summary": "Test alert",
+#          "description": "This is a test alert"
+#        },
+#        "generatorURL": "https://prometheus.internal/graph"
+#      }]'
+#
+# 3. Check AlertManager API:
+#    curl http://localhost:9093/api/v1/alerts
+#    curl http://localhost:9093/api/v1/alerts/groups
+#
+# 4. Access AlertManager UI:
+#    Open in browser: http://localhost:9093
+#
+
+---
+# Running the Tests
+# 
+# Option 1: Run all test jobs:
+#   kubectl apply -f test-alert.yaml
+#
+# Option 2: Run specific test:
+#   kubectl apply -f test-alert.yaml -l test=critical
+#
+# Option 3: Watch test jobs:
+#   kubectl get jobs -n monitoring -l app=alertmanager-test
+#   kubectl logs -n monitoring -l app=alertmanager-test
+#
+# Option 4: Clean up test jobs:
+#   kubectl delete jobs -n monitoring -l app=alertmanager-test
+#
+
+---
+# Expected Test Results
+#
+# Test 1 (Critical):
+#   ✓ Slack message in #monitoring-general
+#   ✓ Slack message in #monitoring-alerts  
+#   ✓ PagerDuty incident triggered
+#   ✓ Escalation policy initiated (5 min timer)
+#
+# Test 2 (Warning):
+#   ✓ Slack message in #monitoring-alerts
+#   ✗ No PagerDuty incident (warning severity)
+#
+# Test 3 (Grouped):
+#   ✓ Single Slack message with 3 alerts grouped
+#   ✓ Message shows "Alerts: 3 firing"
+#   ✓ All 3 pods listed in details
+#
+# Test 4 (Resolved):
+#   ✓ Initial Slack notification
+#   ✓ Follow-up Slack notification with status "resolved" (green)
+#   ✓ PagerDuty incident auto-closes
+#
+
+---
+# Troubleshooting Tests
+#
+# If alerts are not appearing:
+#
+# 1. Check AlertManager is running:
+#    kubectl get pods -n monitoring -l app=alertmanager
+#
+# 2. Check AlertManager logs:
+#    kubectl logs -n monitoring alertmanager-0
+#
+# 3. Check route/receiver configuration:
+#    kubectl get configmap -n monitoring alertmanager-config
+#
+# 4. Verify webhooks are set:
+#    kubectl get secret -n monitoring alertmanager-slack-prod
+#    kubectl get secret -n monitoring alertmanager-pagerduty
+#
+# 5. Test webhook directly:
+#    WEBHOOK=$(kubectl get secret alertmanager-slack-prod \
+#      -o jsonpath='{.data.webhook-url}' -n monitoring | base64 -d)
+#    curl -X POST "$WEBHOOK" -d '{"text":"test"}'
+#
+# 6. Check if alerts are reaching AlertManager:
+#    kubectl port-forward -n monitoring svc/alertmanager 9093:9093
+#    curl http://localhost:9093/api/v1/alerts
+#
+
+---
+# Cleanup Jobs
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: alertmanager-test-cleanup
+  namespace: monitoring
+  labels:
+    app: alertmanager-test
+    type: cleanup
+spec:
+  template:
+    metadata:
+      labels:
+        app: alertmanager-test
+    spec:
+      serviceAccountName: alertmanager
+      containers:
+      - name: cleanup
+        image: bitnami/kubectl:latest
+        command:
+        - /bin/sh
+        - -c
+        - |
+          echo "Cleaning up test jobs..."
+          kubectl delete jobs -n monitoring -l app=alertmanager-test
+          echo "✅ Cleanup complete"
+          exit 0
+        resources:
+          requests:
+            cpu: 10m
+            memory: 32Mi
+          limits:
+            cpu: 50m
+            memory: 64Mi
+      restartPolicy: Never
+  backoffLimit: 1

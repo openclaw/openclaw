@@ -1,0 +1,178 @@
+# AlertManager Helm Configuration - Staging Overrides
+# This file contains staging-specific settings with Slack-only integration
+# Deploy via: helm install alertmanager prometheus-community/kube-prometheus-stack -f values-common.yaml -f values-staging.yaml
+
+alertmanager:
+  config:
+    # Global Settings
+    global:
+      resolve_timeout: 5m
+      # Slack API URL is injected at deployment time
+    
+    # Root Route: Default behavior for all alerts
+    route:
+      receiver: "slack-staging-all"
+      
+      # Group alerts by: cluster, severity, alertname
+      group_by:
+      - cluster
+      - severity
+      - alertname
+      
+      # Batching behavior
+      group_wait: 10s        # Wait 10s before sending first batch
+      group_interval: 5m     # Re-evaluate grouping every 5 minutes
+      repeat_interval: 4h    # Repeat unresolved alerts every 4 hours
+      
+      # Sub-routes: Hierarchical alert routing
+      routes:
+      
+      # CRITICAL ALERTS: Route to dedicated critical channel (faster repeat)
+      - match:
+          severity: critical
+        receiver: "slack-staging-critical"
+        group_wait: 10s
+        group_interval: 2m     # More aggressive re-grouping for critical
+        repeat_interval: 2h    # Repeat every 2 hours (more frequent in staging for testing)
+        continue: true
+      
+      # WARNINGS: Route to general staging alerts
+      - match:
+          severity: warning
+        receiver: "slack-staging-alerts"
+        group_wait: 30s
+        group_interval: 5m
+        repeat_interval: 6h    # Less frequent repeats for warnings
+      
+      # Staging cluster-specific routing
+      - match:
+          cluster: clarity-router-staging
+        receiver: "slack-staging-all"
+        group_wait: 10s
+        group_interval: 5m
+        repeat_interval: 4h
+      
+      # Catch-all for info/debug level
+      - match:
+          severity: info
+        receiver: "slack-staging-info"
+        group_wait: 1m
+        group_interval: 30m
+        repeat_interval: 12h
+    
+    # Receivers: Define notification endpoints
+    receivers:
+    
+    # Default: Slack #monitoring-staging-alerts
+    - name: "slack-staging-all"
+      slack_configs:
+      - api_url: ${SLACK_WEBHOOK_URL_STAGING}
+        channel: "#monitoring-staging-alerts"
+        title: "🔔 {{ .GroupLabels.alertname }}"
+        text: |
+          *Status:* {{ .Status | toUpper }}
+          *Severity:* {{ .GroupLabels.severity }}
+          *Cluster:* {{ .GroupLabels.cluster }}
+          *Alerts:* {{ .Alerts | len }} firing
+          
+          {{ range .Alerts }}
+          • {{ .Labels.instance }} - {{ .Annotations.description }}
+          {{ end }}
+        send_resolved: true
+        color: '{{ if eq .Status "firing" }}danger{{ else }}good{{ end }}'
+        actions:
+        - type: button
+          text: "View in Grafana"
+          url: "https://grafana-staging.internal/d/router-health-overview"
+    
+    # Slack: Critical alerts (dedicated channel for urgent attention)
+    - name: "slack-staging-critical"
+      slack_configs:
+      - api_url: ${SLACK_WEBHOOK_URL_STAGING}
+        channel: "#monitoring-staging-critical"
+        title: "🚨 CRITICAL: {{ .GroupLabels.alertname }}"
+        text: |
+          *Cluster:* {{ .GroupLabels.cluster }}
+          *Alerts:* {{ .Alerts | len }}
+          
+          {{ range .Alerts }}
+          • {{ .Labels.instance }} - {{ .Annotations.description }}
+          {{ end }}
+        send_resolved: true
+        color: "danger"
+        icon_emoji: ":rotating_light:"
+        actions:
+        - type: button
+          text: "View in Grafana"
+          url: "https://grafana-staging.internal/d/router-health-overview"
+        - type: button
+          text: "View Logs"
+          url: "https://grafana-staging.internal/d/router-logs"
+    
+    # Slack: Warning alerts
+    - name: "slack-staging-alerts"
+      slack_configs:
+      - api_url: ${SLACK_WEBHOOK_URL_STAGING}
+        channel: "#monitoring-staging-alerts"
+        title: "⚠️ WARNING: {{ .GroupLabels.alertname }}"
+        text: |
+          *Cluster:* {{ .GroupLabels.cluster }}
+          *Alerts:* {{ .Alerts | len }}
+          
+          {{ range .Alerts }}
+          • {{ .Labels.instance }} - {{ .Annotations.description }}
+          {{ end }}
+        send_resolved: true
+        color: "warning"
+        actions:
+        - type: button
+          text: "View in Grafana"
+          url: "https://grafana-staging.internal/d/router-performance"
+    
+    # Slack: Info/Debug level
+    - name: "slack-staging-info"
+      slack_configs:
+      - api_url: ${SLACK_WEBHOOK_URL_STAGING}
+        channel: "#monitoring-staging-general"
+        title: "ℹ️ {{ .GroupLabels.alertname }}"
+        text: "{{ .CommonAnnotations.description }}"
+        send_resolved: true
+        color: "#0099ff"
+    
+    # Inhibition Rules: Suppress child alerts when parent is firing
+    inhibit_rules:
+    
+    # If node is down, inhibit pod-level alerts on that node
+    - source_match:
+        severity: critical
+        alertname: NodeDown
+      target_match_re:
+        severity: "warning|info"
+      equal:
+      - cluster
+      - node
+    
+    # If all pods are down, inhibit per-pod CPU/memory alerts
+    - source_match:
+        alertname: AllPodsDown
+      target_match_re:
+        alertname: "HighCPUUsage|HighMemoryUsage|PodRestartLoop"
+      equal:
+      - cluster
+      - namespace
+    
+    # If pod is evicted, inhibit CPU pressure alerts
+    - source_match:
+        alertname: PodEvicted
+      target_match_re:
+        alertname: "CPUPressure|MemoryPressure"
+      equal:
+      - cluster
+      - node
+      - pod
+
+# Staging cluster note:
+# - Uses Slack-only routing for easier testing and less noisy alerting
+# - No PagerDuty integration (staging alerts go to team channels)
+# - Shorter repeat intervals for testing alert behavior
+# - Multiple Slack channels for alert categorization

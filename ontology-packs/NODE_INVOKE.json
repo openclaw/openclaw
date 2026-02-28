@@ -1,0 +1,277 @@
+{
+  "pack_id": "openclawd.NODE_INVOKE",
+  "pack_version": "1.0.0",
+  "stage_id": "NODE_INVOKE",
+  "description": "Manages invocation of Node.js modules, scripts, and runtime operations. Controls module loading, script execution contexts, and resource access boundaries.",
+  "thresholds": {
+    "min_confidence_T": 0,
+    "dominance_margin_Delta": 0
+  },
+  "contracts": [
+    {
+      "contract_id": "NODE_REQUIRE_BUILTIN",
+      "risk_class": "LOW",
+      "required_fields": [
+        "module_name"
+      ],
+      "limits": {},
+      "needs_confirmation": false,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "NODE_REQUIRE_LOCAL",
+      "risk_class": "LOW",
+      "required_fields": [
+        "module_path"
+      ],
+      "limits": {},
+      "needs_confirmation": false,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "NODE_RUN_SCRIPT",
+      "risk_class": "LOW",
+      "required_fields": [
+        "script_path"
+      ],
+      "limits": {},
+      "needs_confirmation": false,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "NODE_REQUIRE_NPM_PACKAGE",
+      "risk_class": "MEDIUM",
+      "required_fields": [
+        "module_name",
+        "version_constraint"
+      ],
+      "limits": {
+        "allowed_packages": [],
+        "blocked_packages": [
+          "eval",
+          "vm2"
+        ]
+      },
+      "needs_confirmation": false,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "NODE_SPAWN_WORKER",
+      "risk_class": "MEDIUM",
+      "required_fields": [
+        "worker_script",
+        "worker_data"
+      ],
+      "limits": {
+        "max_workers": 4,
+        "max_memory_mb": 256
+      },
+      "needs_confirmation": false,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "NODE_DYNAMIC_IMPORT",
+      "risk_class": "MEDIUM",
+      "required_fields": [
+        "module_specifier"
+      ],
+      "limits": {
+        "allowed_protocols": [
+          "file",
+          "node"
+        ],
+        "max_module_size_kb": 1024
+      },
+      "needs_confirmation": false,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "NODE_EVAL_CODE",
+      "risk_class": "HIGH",
+      "required_fields": [
+        "code",
+        "context_type"
+      ],
+      "limits": {
+        "max_code_length": 10000,
+        "timeout_ms": 5000
+      },
+      "needs_confirmation": true,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "NODE_CREATE_VM_CONTEXT",
+      "risk_class": "HIGH",
+      "required_fields": [
+        "context_options",
+        "sandbox_level"
+      ],
+      "limits": {
+        "max_contexts": 3,
+        "memory_limit_mb": 128
+      },
+      "needs_confirmation": true,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "NODE_NATIVE_ADDON",
+      "risk_class": "CRITICAL",
+      "required_fields": [
+        "addon_path",
+        "justification"
+      ],
+      "limits": {
+        "allowed_addons": [],
+        "requires_signature_check": true
+      },
+      "needs_confirmation": true,
+      "deny_by_default": true,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "NODE_MODIFY_PROCESS",
+      "risk_class": "CRITICAL",
+      "required_fields": [
+        "process_property",
+        "new_value",
+        "authorization"
+      ],
+      "limits": {
+        "forbidden_properties": [
+          "env",
+          "execPath",
+          "argv0"
+        ],
+        "requires_audit": true
+      },
+      "needs_confirmation": true,
+      "deny_by_default": true,
+      "capability_requirements": []
+    }
+  ],
+  "field_schema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "type": "object",
+    "properties": {
+      "module_name": {
+        "type": "string",
+        "description": "Name of the module to require/import"
+      },
+      "module_path": {
+        "type": "string",
+        "description": "File path to local module"
+      },
+      "module_specifier": {
+        "type": "string",
+        "description": "ES module specifier for dynamic import"
+      },
+      "script_path": {
+        "type": "string",
+        "description": "Path to Node.js script to execute"
+      },
+      "version_constraint": {
+        "type": "string",
+        "description": "Semver version constraint for npm packages"
+      },
+      "worker_script": {
+        "type": "string",
+        "description": "Path to worker thread script"
+      },
+      "worker_data": {
+        "type": "object",
+        "description": "Data to pass to worker thread"
+      },
+      "code": {
+        "type": "string",
+        "description": "JavaScript code to evaluate"
+      },
+      "context_type": {
+        "type": "string",
+        "enum": [
+          "isolated",
+          "shared",
+          "privileged"
+        ],
+        "description": "Type of evaluation context"
+      },
+      "context_options": {
+        "type": "object",
+        "properties": {
+          "timeout": {
+            "type": "integer"
+          },
+          "breakOnSigint": {
+            "type": "boolean"
+          },
+          "contextName": {
+            "type": "string"
+          }
+        },
+        "description": "VM context configuration options"
+      },
+      "sandbox_level": {
+        "type": "string",
+        "enum": [
+          "strict",
+          "moderate",
+          "none"
+        ],
+        "description": "Level of sandbox isolation"
+      },
+      "addon_path": {
+        "type": "string",
+        "description": "Path to native addon (.node file)"
+      },
+      "justification": {
+        "type": "string",
+        "description": "Reason for sensitive operations"
+      },
+      "process_property": {
+        "type": "string",
+        "description": "Process property to modify"
+      },
+      "new_value": {
+        "type": [
+          "string",
+          "number",
+          "boolean",
+          "object"
+        ],
+        "description": "New value for process property"
+      },
+      "authorization": {
+        "type": "string",
+        "description": "Authorization token for critical operations"
+      },
+      "env_vars": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "string"
+        },
+        "description": "Environment variables for script execution"
+      },
+      "cwd": {
+        "type": "string",
+        "description": "Working directory for script execution"
+      },
+      "node_options": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "description": "Node.js CLI options"
+      }
+    },
+    "required": [
+      "module_name"
+    ]
+  }
+}

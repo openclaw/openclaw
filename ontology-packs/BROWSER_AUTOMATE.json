@@ -1,0 +1,342 @@
+{
+  "pack_id": "openclawd.BROWSER_AUTOMATE",
+  "pack_version": "1.0.0",
+  "stage_id": "BROWSER_AUTOMATE",
+  "description": "Governs automated browser interactions including navigation, DOM manipulation, and form submissions. Controls access to sensitive browser capabilities like credential input and script execution.",
+  "thresholds": {
+    "min_confidence_T": 0,
+    "dominance_margin_Delta": 0
+  },
+  "contracts": [
+    {
+      "contract_id": "BROWSER_NAVIGATE_PUBLIC",
+      "risk_class": "LOW",
+      "required_fields": [
+        "url"
+      ],
+      "limits": {},
+      "needs_confirmation": false,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "BROWSER_SCREENSHOT",
+      "risk_class": "LOW",
+      "required_fields": [
+        "action"
+      ],
+      "limits": {},
+      "needs_confirmation": false,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "BROWSER_READ_DOM",
+      "risk_class": "LOW",
+      "required_fields": [
+        "selectors"
+      ],
+      "limits": {},
+      "needs_confirmation": false,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "BROWSER_CLICK_ELEMENT",
+      "risk_class": "LOW",
+      "required_fields": [
+        "action",
+        "selectors"
+      ],
+      "limits": {},
+      "needs_confirmation": false,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "BROWSER_TYPE_TEXT",
+      "risk_class": "MEDIUM",
+      "required_fields": [
+        "action",
+        "selectors",
+        "text_content"
+      ],
+      "limits": {
+        "max_text_length": 10000
+      },
+      "needs_confirmation": false,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "BROWSER_SUBMIT_FORM",
+      "risk_class": "MEDIUM",
+      "required_fields": [
+        "action",
+        "form_selector"
+      ],
+      "limits": {
+        "allowed_domains": []
+      },
+      "needs_confirmation": false,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "BROWSER_DOWNLOAD_FILE",
+      "risk_class": "MEDIUM",
+      "required_fields": [
+        "action",
+        "download_url"
+      ],
+      "limits": {
+        "max_file_size_mb": 100,
+        "allowed_extensions": []
+      },
+      "needs_confirmation": false,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "BROWSER_MULTI_TAB",
+      "risk_class": "MEDIUM",
+      "required_fields": [
+        "action",
+        "tab_count"
+      ],
+      "limits": {
+        "max_tabs": 5
+      },
+      "needs_confirmation": false,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "BROWSER_UPLOAD_FILE",
+      "risk_class": "HIGH",
+      "required_fields": [
+        "action",
+        "selectors",
+        "file_path"
+      ],
+      "limits": {
+        "max_file_size_mb": 50,
+        "allowed_extensions": []
+      },
+      "needs_confirmation": true,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "BROWSER_RUN_JS",
+      "risk_class": "HIGH",
+      "required_fields": [
+        "action",
+        "script_content"
+      ],
+      "limits": {
+        "max_script_length": 5000,
+        "execution_timeout_ms": 10000
+      },
+      "needs_confirmation": true,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "BROWSER_ACCESS_COOKIES",
+      "risk_class": "HIGH",
+      "required_fields": [
+        "action",
+        "cookie_scope"
+      ],
+      "limits": {
+        "allowed_domains": []
+      },
+      "needs_confirmation": true,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "BROWSER_NAVIGATE_AUTHENTICATED",
+      "risk_class": "HIGH",
+      "required_fields": [
+        "url",
+        "auth_context"
+      ],
+      "limits": {
+        "session_timeout_minutes": 30
+      },
+      "needs_confirmation": true,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "BROWSER_TYPE_PASSWORD",
+      "risk_class": "CRITICAL",
+      "required_fields": [
+        "action",
+        "selectors",
+        "credential_ref"
+      ],
+      "limits": {
+        "requires_secure_context": true
+      },
+      "needs_confirmation": true,
+      "deny_by_default": true,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "BROWSER_BYPASS_SECURITY",
+      "risk_class": "CRITICAL",
+      "required_fields": [
+        "action",
+        "bypass_type",
+        "justification"
+      ],
+      "limits": {
+        "requires_audit": true,
+        "max_duration_minutes": 5
+      },
+      "needs_confirmation": true,
+      "deny_by_default": true,
+      "capability_requirements": []
+    }
+  ],
+  "field_schema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "type": "object",
+    "properties": {
+      "action": {
+        "type": "string",
+        "enum": [
+          "navigate",
+          "click",
+          "type",
+          "screenshot",
+          "scroll",
+          "wait",
+          "evaluate",
+          "upload",
+          "download"
+        ],
+        "description": "Browser action to perform"
+      },
+      "url": {
+        "type": "string",
+        "format": "uri",
+        "description": "URL to navigate to"
+      },
+      "selectors": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "description": "CSS or XPath selectors for target elements"
+      },
+      "text_content": {
+        "type": "string",
+        "description": "Text to type into form fields"
+      },
+      "form_selector": {
+        "type": "string",
+        "description": "Selector for form element to submit"
+      },
+      "download_url": {
+        "type": "string",
+        "format": "uri",
+        "description": "URL of file to download"
+      },
+      "tab_count": {
+        "type": "integer",
+        "minimum": 1,
+        "description": "Number of browser tabs to manage"
+      },
+      "file_path": {
+        "type": "string",
+        "description": "Path to file for upload operations"
+      },
+      "script_content": {
+        "type": "string",
+        "description": "JavaScript code to execute in browser context"
+      },
+      "cookie_scope": {
+        "type": "string",
+        "enum": [
+          "read",
+          "write",
+          "delete",
+          "all"
+        ],
+        "description": "Scope of cookie access"
+      },
+      "auth_context": {
+        "type": "object",
+        "properties": {
+          "session_id": {
+            "type": "string"
+          },
+          "auth_type": {
+            "type": "string"
+          }
+        },
+        "description": "Authentication context for authenticated navigation"
+      },
+      "credential_ref": {
+        "type": "string",
+        "description": "Reference to stored credential for password entry"
+      },
+      "bypass_type": {
+        "type": "string",
+        "enum": [
+          "ssl_warning",
+          "popup_blocker",
+          "same_origin"
+        ],
+        "description": "Type of security bypass requested"
+      },
+      "justification": {
+        "type": "string",
+        "description": "Reason for security bypass"
+      },
+      "can_type_passwords": {
+        "type": "boolean",
+        "default": false,
+        "description": "Whether password typing is permitted"
+      },
+      "can_upload": {
+        "type": "boolean",
+        "default": false,
+        "description": "Whether file uploads are permitted"
+      },
+      "can_run_js": {
+        "type": "boolean",
+        "default": false,
+        "description": "Whether JavaScript execution is permitted"
+      },
+      "viewport": {
+        "type": "object",
+        "properties": {
+          "width": {
+            "type": "integer"
+          },
+          "height": {
+            "type": "integer"
+          }
+        },
+        "description": "Browser viewport dimensions"
+      },
+      "user_agent": {
+        "type": "string",
+        "description": "Custom user agent string"
+      },
+      "timeout_ms": {
+        "type": "integer",
+        "minimum": 0,
+        "description": "Action timeout in milliseconds"
+      }
+    },
+    "required": [
+      "action"
+    ]
+  }
+}

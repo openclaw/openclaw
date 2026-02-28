@@ -1,0 +1,294 @@
+{
+  "pack_id": "openclawd.FILE_SYSTEM_OPS",
+  "pack_version": "1.0.0",
+  "stage_id": "FILE_SYSTEM_OPS",
+  "description": "Manages all file system operations including reading, writing, and directory manipulation. Enforces path restrictions, scope boundaries, and permission checks.",
+  "thresholds": {
+    "min_confidence_T": 0.55,
+    "dominance_margin_Delta": 0.10
+  },
+  "contracts": [
+    {
+      "contract_id": "FS_READ_FILE",
+      "risk_class": "LOW",
+      "required_fields": [
+        "path",
+        "operation"
+      ],
+      "limits": {},
+      "needs_confirmation": false,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "FS_LIST_DIRECTORY",
+      "risk_class": "LOW",
+      "required_fields": [
+        "path",
+        "operation"
+      ],
+      "limits": {},
+      "needs_confirmation": false,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "FS_GET_METADATA",
+      "risk_class": "LOW",
+      "required_fields": [
+        "path"
+      ],
+      "limits": {},
+      "needs_confirmation": false,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "FS_WRITE_WORKSPACE",
+      "risk_class": "MEDIUM",
+      "required_fields": [
+        "path",
+        "operation",
+        "scope"
+      ],
+      "limits": {
+        "max_file_size_mb": 10,
+        "allowed_scopes": [
+          "workspace"
+        ]
+      },
+      "needs_confirmation": false,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "FS_CREATE_DIRECTORY",
+      "risk_class": "MEDIUM",
+      "required_fields": [
+        "path",
+        "operation"
+      ],
+      "limits": {
+        "max_depth": 10
+      },
+      "needs_confirmation": false,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "FS_COPY_FILE",
+      "risk_class": "MEDIUM",
+      "required_fields": [
+        "source_path",
+        "dest_path",
+        "operation"
+      ],
+      "limits": {
+        "max_file_size_mb": 100
+      },
+      "needs_confirmation": false,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "FS_MOVE_FILE",
+      "risk_class": "MEDIUM",
+      "required_fields": [
+        "source_path",
+        "dest_path",
+        "operation"
+      ],
+      "limits": {
+        "same_scope_only": true
+      },
+      "needs_confirmation": false,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "FS_DELETE_FILE",
+      "risk_class": "HIGH",
+      "required_fields": [
+        "path",
+        "operation",
+        "scope"
+      ],
+      "limits": {
+        "requires_backup": true
+      },
+      "needs_confirmation": true,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "FS_DELETE_DIRECTORY",
+      "risk_class": "HIGH",
+      "required_fields": [
+        "path",
+        "operation",
+        "recursive"
+      ],
+      "limits": {
+        "max_items": 1000
+      },
+      "needs_confirmation": true,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "FS_WRITE_OUTSIDE_WORKSPACE",
+      "risk_class": "HIGH",
+      "required_fields": [
+        "path",
+        "operation",
+        "scope",
+        "justification"
+      ],
+      "limits": {
+        "allowed_external_paths": []
+      },
+      "needs_confirmation": true,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "FS_MODIFY_PERMISSIONS",
+      "risk_class": "CRITICAL",
+      "required_fields": [
+        "path",
+        "operation",
+        "permissions"
+      ],
+      "limits": {
+        "requires_audit": true
+      },
+      "needs_confirmation": true,
+      "deny_by_default": true,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "FS_ACCESS_SYSTEM_FILES",
+      "risk_class": "CRITICAL",
+      "required_fields": [
+        "path",
+        "operation",
+        "system_scope",
+        "authorization"
+      ],
+      "limits": {
+        "allowed_system_paths": [],
+        "requires_approval": true
+      },
+      "needs_confirmation": true,
+      "deny_by_default": true,
+      "capability_requirements": []
+    }
+  ],
+  "field_schema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "type": "object",
+    "properties": {
+      "path": {
+        "type": "string",
+        "description": "Primary file or directory path"
+      },
+      "operation": {
+        "type": "string",
+        "enum": [
+          "read",
+          "write",
+          "append",
+          "delete",
+          "copy",
+          "move",
+          "mkdir",
+          "rmdir",
+          "list",
+          "stat",
+          "chmod"
+        ],
+        "description": "File system operation to perform"
+      },
+      "scope": {
+        "type": "string",
+        "enum": [
+          "workspace",
+          "project",
+          "user",
+          "system"
+        ],
+        "description": "Scope boundary for the operation"
+      },
+      "source_path": {
+        "type": "string",
+        "description": "Source path for copy/move operations"
+      },
+      "dest_path": {
+        "type": "string",
+        "description": "Destination path for copy/move operations"
+      },
+      "content": {
+        "type": "string",
+        "description": "Content to write to file"
+      },
+      "encoding": {
+        "type": "string",
+        "enum": [
+          "utf8",
+          "binary",
+          "base64",
+          "hex"
+        ],
+        "default": "utf8",
+        "description": "File encoding"
+      },
+      "recursive": {
+        "type": "boolean",
+        "default": false,
+        "description": "Whether to operate recursively on directories"
+      },
+      "permissions": {
+        "type": "string",
+        "pattern": "^[0-7]{3,4}$",
+        "description": "Unix-style permission mode"
+      },
+      "system_scope": {
+        "type": "string",
+        "enum": [
+          "config",
+          "logs",
+          "temp",
+          "binaries"
+        ],
+        "description": "Category of system files being accessed"
+      },
+      "justification": {
+        "type": "string",
+        "description": "Reason for operations outside normal scope"
+      },
+      "authorization": {
+        "type": "string",
+        "description": "Authorization token for system-level access"
+      },
+      "create_parents": {
+        "type": "boolean",
+        "default": false,
+        "description": "Create parent directories if they don't exist"
+      },
+      "overwrite": {
+        "type": "boolean",
+        "default": false,
+        "description": "Overwrite existing files"
+      },
+      "backup": {
+        "type": "boolean",
+        "default": false,
+        "description": "Create backup before destructive operations"
+      }
+    },
+    "required": [
+      "path",
+      "operation"
+    ]
+  }
+}

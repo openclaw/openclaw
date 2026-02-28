@@ -1,0 +1,297 @@
+# AlertManager Silences ConfigMap
+# This ConfigMap contains pre-configured silence rules for known false-positives
+# and maintenance windows
+#
+# Silences are temporary alert suppressions - they can be managed via:
+# 1. AlertManager API: POST /api/v1/silences
+# 2. AlertManager UI: http://alertmanager:9093
+# 3. This ConfigMap (static, recreated on pod restart)
+#
+# NOTE: Dynamic silences (created via UI/API) are stored in the AlertManager PVC
+# This ConfigMap provides defaults only
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: alertmanager-silences
+  namespace: monitoring
+  labels:
+    app: alertmanager
+    component: silences
+data:
+  # Silence definitions in JSON format (AlertManager silence API schema)
+  silences.json: |
+    [
+      {
+        "id": "maintenance-window-weekly",
+        "status": {
+          "state": "pending"
+        },
+        "matchers": [
+          {
+            "name": "alertname",
+            "value": ".*",
+            "isRegex": true
+          }
+        ],
+        "startsAt": "2026-02-22T00:00:00Z",
+        "endsAt": "2026-02-22T02:00:00Z",
+        "createdBy": "ops-team",
+        "comment": "Weekly maintenance window - no alerts expected"
+      },
+      {
+        "id": "staging-dev-tests",
+        "status": {
+          "state": "active"
+        },
+        "matchers": [
+          {
+            "name": "cluster",
+            "value": "clarity-router-staging",
+            "isRegex": false
+          }
+        ],
+        "startsAt": "2026-02-15T00:00:00Z",
+        "endsAt": "2026-12-31T23:59:59Z",
+        "createdBy": "dev-team",
+        "comment": "Suppress staging alerts for non-production environment"
+      },
+      {
+        "id": "false-positive-cert-expiry",
+        "status": {
+          "state": "active"
+        },
+        "matchers": [
+          {
+            "name": "alertname",
+            "value": "CertificateExpiryWarning",
+            "isRegex": false
+          },
+          {
+            "name": "certificate",
+            "value": "self-signed-test",
+            "isRegex": false
+          }
+        ],
+        "startsAt": "2026-02-15T00:00:00Z",
+        "endsAt": "2027-12-31T23:59:59Z",
+        "createdBy": "ops-team",
+        "comment": "Ignore self-signed test certificates"
+      },
+      {
+        "id": "e2e-test-alerts",
+        "status": {
+          "state": "pending"
+        },
+        "matchers": [
+          {
+            "name": "alertname",
+            "value": "TestAlert.*",
+            "isRegex": true
+          }
+        ],
+        "startsAt": "2026-02-15T20:00:00Z",
+        "endsAt": "2026-02-15T21:00:00Z",
+        "createdBy": "automation",
+        "comment": "Silence test alerts during e2e testing window"
+      },
+      {
+        "id": "known-issue-high-memory",
+        "status": {
+          "state": "pending"
+        },
+        "matchers": [
+          {
+            "name": "alertname",
+            "value": "HighMemoryUsage",
+            "isRegex": false
+          },
+          {
+            "name": "pod",
+            "value": "router-0",
+            "isRegex": false
+          }
+        ],
+        "startsAt": "2026-02-15T00:00:00Z",
+        "endsAt": "2026-02-20T00:00:00Z",
+        "createdBy": "dev-team",
+        "comment": "Known memory leak in router-0 - being investigated (ISSUE-1234)"
+      }
+    ]
+
+  # Human-readable silence descriptions
+  README: |
+    # AlertManager Silences
+    
+    ## Overview
+    Silences temporarily suppress alerts without affecting monitoring. They are useful for:
+    - Maintenance windows (deployments, upgrades)
+    - Known false-positives (test environments, development)
+    - Cascading failures (suppress dependent alerts)
+    
+    ## Silence States
+    - **pending**: Not yet active (startsAt in future)
+    - **active**: Currently suppressing matching alerts
+    - **expired**: Past endsAt, no longer suppressing
+    
+    ## Pre-configured Silences
+    
+    ### 1. maintenance-window-weekly
+    - **Scope**: All alerts
+    - **Duration**: Weekly (specific days/times)
+    - **Purpose**: Suppress all alerts during maintenance window
+    - **Update**: Adjust startsAt/endsAt for your maintenance schedule
+    
+    ### 2. staging-dev-tests
+    - **Scope**: clarity-router-staging cluster only
+    - **Duration**: Long-term (for entire staging lifecycle)
+    - **Purpose**: Reduce noise from staging environment
+    - **Note**: Can be disabled when staging should alert
+    
+    ### 3. false-positive-cert-expiry
+    - **Scope**: Self-signed test certificates
+    - **Duration**: Long-term
+    - **Purpose**: Ignore false-positive certificate expiry warnings
+    - **Update**: Remove when certificate is renewed
+    
+    ### 4. e2e-test-alerts
+    - **Scope**: Alerts matching "TestAlert*" pattern
+    - **Duration**: During test window
+    - **Purpose**: Suppress test alerts during e2e testing
+    - **Note**: Enable/disable as needed for test runs
+    
+    ### 5. known-issue-high-memory
+    - **Scope**: HighMemoryUsage alert on router-0 pod
+    - **Duration**: Investigation period
+    - **Purpose**: Suppress known issue (reference: ISSUE-1234)
+    - **Status**: Should be resolved by 2026-02-20
+    - **Update**: Remove once issue is fixed
+    
+    ## Managing Silences
+    
+    ### Via AlertManager API
+    ```bash
+    # List active silences
+    curl http://alertmanager:9093/api/v1/silences
+    
+    # Create silence
+    curl -X POST http://alertmanager:9093/api/v1/silences \
+      -H 'Content-Type: application/json' \
+      -d '{
+        "matchers": [
+          {"name": "alertname", "value": "TestAlert", "isRegex": false}
+        ],
+        "startsAt": "2026-02-15T20:00:00Z",
+        "endsAt": "2026-02-15T21:00:00Z",
+        "createdBy": "ops-team",
+        "comment": "Test silence"
+      }'
+    
+    # Delete silence by ID
+    curl -X DELETE http://alertmanager:9093/api/v1/silences/<silence-id>
+    ```
+    
+    ### Via AlertManager Web UI
+    1. Access: http://alertmanager:9093
+    2. Click "Silences" tab
+    3. Click "New Silence" button
+    4. Configure matchers (alert name, labels, etc.)
+    5. Set start and end times
+    6. Click "Create"
+    
+    ## Silence Matchers
+    
+    Matchers filter which alerts are suppressed:
+    
+    - **Exact match**: `isRegex: false`
+      - Example: `{"name": "cluster", "value": "clarity-router-prod"}`
+      - Suppresses: Alerts with `cluster="clarity-router-prod"`
+    
+    - **Regex match**: `isRegex: true`
+      - Example: `{"name": "alertname", "value": ".*Latency.*"}`
+      - Suppresses: Alerts matching the pattern (LatencySLOBreach, LatencyDegraded, etc.)
+    
+    - **Multiple matchers (AND logic)**:
+      - All matchers must match for silence to apply
+      - Example: `alertname=TestAlert* AND pod=router-0`
+    
+    ## Best Practices
+    
+    1. **Always set expiration dates**: Prevent permanent silences from being forgotten
+    2. **Use specific matchers**: Suppress only the alerts you intend to
+    3. **Add comments**: Document why and for how long
+    4. **Reference issues**: Link to JIRA/GitHub issues for follow-up
+    5. **Test before deploying**: Create silence, trigger test alert, verify suppression
+    
+    ## Common Patterns
+    
+    ### Maintenance Window
+    ```json
+    {
+      "matchers": [{"name": "alertname", "value": ".*", "isRegex": true}],
+      "startsAt": "2026-02-20T02:00:00Z",
+      "endsAt": "2026-02-20T04:00:00Z",
+      "comment": "Kubernetes upgrade maintenance"
+    }
+    ```
+    
+    ### Staging Environment
+    ```json
+    {
+      "matchers": [{"name": "cluster", "value": "clarity-router-staging"}],
+      "startsAt": "2026-02-15T00:00:00Z",
+      "endsAt": "2026-12-31T23:59:59Z",
+      "comment": "Suppress staging alerts"
+    }
+    ```
+    
+    ### Specific Pod
+    ```json
+    {
+      "matchers": [
+        {"name": "pod", "value": "router-0"},
+        {"name": "alertname", "value": "HighMemoryUsage"}
+      ],
+      "startsAt": "2026-02-15T00:00:00Z",
+      "endsAt": "2026-02-20T00:00:00Z",
+      "comment": "Known memory leak - being investigated"
+    }
+    ```
+    
+    ### Test Window
+    ```json
+    {
+      "matchers": [
+        {"name": "alertname", "value": "TestAlert.*", "isRegex": true}
+      ],
+      "startsAt": "2026-02-15T20:00:00Z",
+      "endsAt": "2026-02-15T21:00:00Z",
+      "comment": "E2E testing window"
+    }
+    ```
+    
+    ## Troubleshooting
+    
+    ### Silence not suppressing alerts
+    - Check matcher syntax and values
+    - Verify silence is active (check state and times)
+    - Confirm alert labels match matcher values
+    - Try with wildcard matcher: `{"name": "alertname", "value": ".*", "isRegex": true}`
+    
+    ### Silence deleted unexpectedly
+    - ConfigMap silences are read-only (static)
+    - Use API-created silences for dynamic management
+    - Check if AlertManager pod was restarted (may re-load ConfigMap)
+
+---
+# Manual Silence Application Instructions
+# 
+# To apply silences from this ConfigMap:
+# 1. Save a silence JSON from the silences.json section
+# 2. Update startsAt/endsAt for your current date/time
+# 3. POST to AlertManager API:
+# 
+# $ kubectl port-forward -n monitoring svc/alertmanager 9093:9093 &
+# $ curl -X POST http://localhost:9093/api/v1/silences \
+#   -H 'Content-Type: application/json' \
+#   -d @silence.json

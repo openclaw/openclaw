@@ -1,0 +1,274 @@
+{
+  "pack_id": "openclawd.MEMORY_MODIFY",
+  "pack_version": "1.0.0",
+  "stage_id": "MEMORY_MODIFY",
+  "description": "Controls modifications to agent memory, knowledge stores, and persistent state. Governs what can be remembered, forgotten, or altered in long-term storage.",
+  "thresholds": {
+    "min_confidence_T": 0,
+    "dominance_margin_Delta": 0
+  },
+  "contracts": [
+    {
+      "contract_id": "MEMORY_READ_CONTEXT",
+      "risk_class": "LOW",
+      "required_fields": [
+        "memory_scope"
+      ],
+      "limits": {},
+      "needs_confirmation": false,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "MEMORY_STORE_SESSION",
+      "risk_class": "LOW",
+      "required_fields": [
+        "key",
+        "value",
+        "memory_scope"
+      ],
+      "limits": {},
+      "needs_confirmation": false,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "MEMORY_STORE_PERSISTENT",
+      "risk_class": "MEDIUM",
+      "required_fields": [
+        "key",
+        "value",
+        "memory_scope",
+        "retention_policy"
+      ],
+      "limits": {
+        "max_value_size_kb": 256,
+        "max_entries": 1000
+      },
+      "needs_confirmation": false,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "MEMORY_UPDATE_KNOWLEDGE",
+      "risk_class": "MEDIUM",
+      "required_fields": [
+        "knowledge_id",
+        "updates",
+        "source_attribution"
+      ],
+      "limits": {
+        "max_update_size_kb": 100,
+        "requires_source": true
+      },
+      "needs_confirmation": false,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "MEMORY_DELETE_ENTRY",
+      "risk_class": "HIGH",
+      "required_fields": [
+        "key",
+        "memory_scope",
+        "reason"
+      ],
+      "limits": {
+        "requires_backup": true
+      },
+      "needs_confirmation": true,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "MEMORY_BULK_MODIFY",
+      "risk_class": "HIGH",
+      "required_fields": [
+        "operations",
+        "memory_scope"
+      ],
+      "limits": {
+        "max_operations": 100,
+        "requires_transaction": true
+      },
+      "needs_confirmation": true,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "MEMORY_CLEAR_SCOPE",
+      "risk_class": "CRITICAL",
+      "required_fields": [
+        "memory_scope",
+        "confirmation_token",
+        "justification"
+      ],
+      "limits": {
+        "requires_double_confirmation": true,
+        "creates_backup": true
+      },
+      "needs_confirmation": true,
+      "deny_by_default": true,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "MEMORY_MODIFY_CORE_IDENTITY",
+      "risk_class": "CRITICAL",
+      "required_fields": [
+        "identity_field",
+        "new_value",
+        "authorization",
+        "audit_reason"
+      ],
+      "limits": {
+        "requires_admin_approval": true,
+        "immutable_fields": [
+          "agent_id",
+          "creation_date"
+        ],
+        "requires_full_audit": true
+      },
+      "needs_confirmation": true,
+      "deny_by_default": true,
+      "capability_requirements": []
+    }
+  ],
+  "field_schema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "type": "object",
+    "properties": {
+      "key": {
+        "type": "string",
+        "description": "Memory entry key/identifier"
+      },
+      "value": {
+        "type": [
+          "string",
+          "number",
+          "boolean",
+          "object",
+          "array"
+        ],
+        "description": "Value to store in memory"
+      },
+      "memory_scope": {
+        "type": "string",
+        "enum": [
+          "session",
+          "conversation",
+          "user",
+          "project",
+          "global",
+          "system"
+        ],
+        "description": "Scope of memory operation"
+      },
+      "retention_policy": {
+        "type": "object",
+        "properties": {
+          "ttl_days": {
+            "type": "integer"
+          },
+          "auto_expire": {
+            "type": "boolean"
+          },
+          "archive_on_expire": {
+            "type": "boolean"
+          }
+        },
+        "description": "How long to retain the memory"
+      },
+      "knowledge_id": {
+        "type": "string",
+        "description": "Identifier of knowledge entry to update"
+      },
+      "updates": {
+        "type": "object",
+        "description": "Fields to update in knowledge entry"
+      },
+      "source_attribution": {
+        "type": "object",
+        "properties": {
+          "source_type": {
+            "type": "string"
+          },
+          "source_url": {
+            "type": "string"
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "description": "Attribution for knowledge source"
+      },
+      "reason": {
+        "type": "string",
+        "description": "Reason for deletion or modification"
+      },
+      "operations": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "set",
+                "delete",
+                "update",
+                "append"
+              ]
+            },
+            "key": {
+              "type": "string"
+            },
+            "value": {}
+          }
+        },
+        "description": "List of bulk operations"
+      },
+      "confirmation_token": {
+        "type": "string",
+        "description": "Token confirming destructive operation"
+      },
+      "justification": {
+        "type": "string",
+        "description": "Detailed justification for scope clear"
+      },
+      "identity_field": {
+        "type": "string",
+        "description": "Core identity field to modify"
+      },
+      "new_value": {
+        "type": [
+          "string",
+          "object"
+        ],
+        "description": "New value for identity field"
+      },
+      "authorization": {
+        "type": "string",
+        "description": "Authorization token for critical modifications"
+      },
+      "audit_reason": {
+        "type": "string",
+        "description": "Reason to record in audit log"
+      },
+      "tags": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "description": "Tags for memory entry categorization"
+      },
+      "metadata": {
+        "type": "object",
+        "description": "Additional metadata for the memory entry"
+      }
+    },
+    "required": [
+      "memory_scope"
+    ]
+  }
+}

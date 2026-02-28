@@ -1,0 +1,235 @@
+# Loki Helm Chart Values - Production Environment
+# Production-specific overrides for the common Loki configuration
+#
+# This file overrides values-common.yaml with production-specific settings:
+# - Production AWS S3 bucket and region (us-east-1)
+# - Higher resource limits for production workloads
+# - Production-grade monitoring and alerting
+# - Stricter resource requests/limits
+#
+
+# ============================================================================
+# PRODUCTION LOKI OVERRIDES
+# ============================================================================
+loki:
+  # Increase replicas for production HA
+  replicas: 3  # 3 replicas for higher availability and load distribution
+  
+  # Persistent storage: production should be larger
+  persistence:
+    enabled: true
+    storageClassName: efs-sc
+    accessModes:
+      - ReadWriteMany
+    # Production: slightly larger allocation (considering higher log volume)
+    size: 200Gi  # 200GB = ~6.7GB/day * 30 days (with headroom for spikes)
+  
+  # Production pod disruption budget
+  podDisruptionBudget:
+    minAvailable: 2  # Keep 2 replicas minimum during disruptions
+  
+  # Production: stricter affinity rules
+  affinity:
+    podAntiAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        - labelSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/name
+                operator: In
+                values:
+                  - loki
+          topologyKey: kubernetes.io/hostname  # Spread across different nodes (strict)
+  
+  # Production: higher resource allocation
+  resources:
+    requests:
+      cpu: 1000m      # Increase to handle production load
+      memory: 2Gi     # Production baseline
+    limits:
+      cpu: 2000m      # Allow aggressive scaling
+      memory: 4Gi     # Production max
+  
+  # Production-specific Loki config
+  config:
+    auth_enabled: false  # Still cluster-internal only
+    
+    # Stricter ingestion limits for production
+    ingester:
+      chunk_idle_period: 30s
+      chunk_retain_period: 1m
+      max_chunk_age: 1h
+      max_streams_per_user: 100000  # Monitor for cardinality issues
+      flush_interval: 30s
+      flush_min_period: 5s           # Production: faster flushes
+    
+    # Production: enforce stricter limits
+    limits_config:
+      enforce_metric_name: false
+      reject_old_samples: true
+      reject_old_samples_max_age: 30d
+      max_entries_limit_per_second: 2000000  # Higher for production traffic
+      ingestion_rate_mb: 100                 # Rate limiting per distributor
+      ingestion_burst_size_mb: 150           # Allow burst up to 150MB
+    
+    # Production S3 storage
+    schema_config:
+      configs:
+        - from: 2024-01-01
+          store: boltdb-shipper
+          object_store: s3
+          schema: v11
+          index:
+            prefix: index_prod_  # Production index prefix
+            period: 24h
+    
+    storage_config:
+      boltdb_shipper:
+        shared_store: s3
+        cache_location: /loki/cache
+        active_index_directory: /loki/index
+      
+      # Production S3 configuration (us-east-1)
+      s3:
+        # REQUIRED: Replace PLACEHOLDER_BUCKET with actual production bucket
+        s3: s3://PROD_LOGS_BUCKET/loki
+        endpoint: s3.us-east-1.amazonaws.com
+        access_key_id: ${AWS_ACCESS_KEY_ID}
+        secret_access_key: ${AWS_SECRET_ACCESS_KEY}
+        insecure: false
+        sse_encryption: true
+        # Production: use KMS encryption
+        sse_kms_key_id: ${KMS_KEY_ID}  # Optional: KMS key for encryption
+      
+      # Enable query result caching for production
+      cache_config:
+        enable_fifocache: true
+        default_validity: 10m  # Longer cache TTL in production
+    
+    # Production: aggressive querying
+    querier:
+      max_concurrent: 40     # Higher concurrency for production queries
+      query_timeout: 10m     # Longer timeout for complex prod queries
+      engine: prometheus
+    
+    # Production: result caching
+    query_range:
+      align_queries_with_step: true
+      cache_results: true
+      results_cache:
+        cache:
+          enable_fifocache: true
+          default_validity: 24h  # Cache queries for 24 hours in production
+    
+    # Chunk encoding
+    chunk_store_config:
+      max_look_back_period: 30d
+      chunk_encoding: snappy
+    
+    # Production server config
+    server:
+      http_listen_port: 3100
+      log_level: warn  # Less verbose in production
+      grpc_server_max_recv_msg_size: 104857600  # 100MB for large batches
+    
+    # Production: enable metrics for monitoring
+    metrics:
+      enabled: true
+  
+  # Production service config
+  service:
+    type: ClusterIP
+    port: 3100
+    # Production: add internal load balancer annotations if needed
+    annotations:
+      prometheus.io/scrape: "true"
+      prometheus.io/port: "3100"
+      prometheus.io/path: "/metrics"
+  
+  # Production labels for monitoring
+  serviceLabels:
+    grafana_datasource: "true"
+    environment: "production"
+    prometheus_scrape: "true"
+  
+  # Production: Pod priority to ensure Loki runs during node pressure
+  priorityClassName: system-cluster-critical
+
+# ============================================================================
+# PRODUCTION PROMTAIL OVERRIDES
+# ============================================================================
+promtail:
+  enabled: true
+  
+  # Production: run on all nodes
+  tolerations:
+    - key: node-role.kubernetes.io/master
+      operator: Exists
+      effect: NoSchedule
+    - key: node-role.kubernetes.io/control-plane
+      operator: Exists
+      effect: NoSchedule
+  
+  # Production: slightly higher resources
+  resources:
+    requests:
+      cpu: 150m
+      memory: 256Mi
+    limits:
+      cpu: 300m
+      memory: 512Mi
+  
+  # Production: higher priority
+  priorityClassName: system-node-critical
+
+# ============================================================================
+# PROMETHEUS MONITORING (Integration with existing Prometheus)
+# ============================================================================
+# These metrics should be scrapped by the Prometheus deployment:
+# - loki_distributor_bytes_received_total
+# - loki_distributor_lines_received_total
+# - loki_ingester_chunks_created_total
+# - loki_querier_request_duration_seconds
+# - loki_ingester_disk_chunkqueue_depth
+
+# ============================================================================
+# DEPLOYMENT NOTES - PRODUCTION
+# ============================================================================
+#
+# PRE-DEPLOYMENT REQUIREMENTS:
+# 1. Create S3 bucket: PROD_LOGS_BUCKET (or use existing)
+# 2. Create IAM policy for Loki S3 access (see README.md for policy)
+# 3. Create EFS filesystem in us-east-1 (or use existing)
+# 4. Ensure EFS-CSI driver is installed: helm install aws-efs-csi-driver ...
+# 5. Create storage class: kubectl apply -f pvc-storage.yaml (or update existing)
+#
+# DEPLOYMENT COMMAND:
+# helm install loki grafana/loki-stack -f values-common.yaml -f values-prod.yaml \
+#   -n monitoring --create-namespace
+#
+# VERIFICATION:
+# 1. Check pod status: kubectl get pods -n monitoring -l release=loki
+# 2. Check storage: kubectl get pvc -n monitoring
+# 3. Check service: kubectl get svc -n monitoring | grep loki
+# 4. Test ingestion: Check Promtail logs for any errors
+# 5. Test queries: Open Grafana and query Loki as datasource
+#
+# MONITORING:
+# - Set up alerts for: loki_distributor_bytes_received_total (ingestion rate)
+# - Set up alerts for: loki_ingester_disk_chunkqueue_depth (queue depth > 100)
+# - Set up alerts for: PVC usage > 80% (storage utilization)
+#
+# SCALING:
+# - If CPU is saturated: increase replicas and resource limits
+# - If queries are slow: increase max_concurrent workers
+# - If cardinality is high: check Promtail label configuration
+# - If storage fills up: increase PVC size or reduce retention
+#
+# BACKUP:
+# - S3 storage is the primary backup (object-level durability)
+# - Index is stored in EFS (replicated across AZs)
+# - No manual backups needed; S3 versioning should be enabled
+#
+# DISASTER RECOVERY:
+# - If Loki pods crash: PVC and S3 data persist
+# - If EFS fails: index rebuilds from S3 (may take time)
+# - If S3 is corrupted: logs are lost (enable versioning for recovery)

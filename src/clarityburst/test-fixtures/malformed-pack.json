@@ -1,0 +1,30 @@
+{
+  "pack_id": "test.MALFORMED_PACK",
+  "pack_version": "1.0.0",
+  "stage_id": "TEST_MALFORMED_STAGE",
+  "description": "Deliberately malformed pack for testing fail-closed validation",
+  "thresholds": {
+    "min_confidence_T": 0.5,
+    "dominance_margin_Delta": 0.1
+  },
+  "contracts": [
+    {
+      "contract_id": "VALID_CONTRACT",
+      "risk_class": "LOW",
+      "required_fields": ["field1"],
+      "limits": {},
+      "needs_confirmation": false,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "MISSING_CAPABILITY_REQUIREMENTS",
+      "risk_class": "MEDIUM",
+      "required_fields": ["field1"],
+      "limits": {},
+      "needs_confirmation": false,
+      "deny_by_default": false
+    }
+  ],
+  "field_schema": {}
+}

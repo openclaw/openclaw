@@ -10,6 +10,8 @@ import { normalizePollInput, type PollInput } from "../polls.js";
 import { toWhatsappJid } from "../utils.js";
 import { type ActiveWebSendOptions, requireActiveWebListener } from "./active-listener.js";
 import { loadWebMedia } from "./media.js";
+import { applyMessageEmitOverrides } from "../clarityburst/decision-override.js";
+import { ClarityBurstAbstainError } from "../clarityburst/errors.js";
 
 const outboundLog = createSubsystemLogger("gateway/channels/whatsapp").child("outbound");
 
@@ -85,6 +87,22 @@ export async function sendMessageWhatsApp(
             accountId,
           }
         : undefined;
+    const emitCtx = {
+      stageId: "MESSAGE_EMIT",
+      userConfirmed: false,
+      channel: "whatsapp",
+      target: String(to),
+      kind: "send",
+    };
+    const gate = await applyMessageEmitOverrides(emitCtx);
+    if (gate.outcome === "ABSTAIN_CONFIRM" || gate.outcome === "ABSTAIN_CLARIFY") {
+      throw new ClarityBurstAbstainError({
+        outcome: gate.outcome,
+        reason: gate.reason,
+        contractId: gate.contractId ?? null,
+        instructions: gate.instructions ?? "",
+      });
+    }
     const result = sendOptions
       ? await active.sendMessage(to, text, mediaBuffer, mediaType, sendOptions)
       : await active.sendMessage(to, text, mediaBuffer, mediaType);

@@ -1,0 +1,245 @@
+{
+  "pack_id": "openclawd.CRON_SCHEDULE",
+  "pack_version": "1.0.0",
+  "stage_id": "CRON_SCHEDULE",
+  "description": "Controls the scheduling and management of recurring tasks and cron-like job execution. Governs timing constraints, resource allocation, and job lifecycle.",
+  "thresholds": {
+    "min_confidence_T": 0,
+    "dominance_margin_Delta": 0
+  },
+  "contracts": [
+    {
+      "contract_id": "CRON_LIST_JOBS",
+      "risk_class": "LOW",
+      "required_fields": [
+        "scope"
+      ],
+      "limits": {},
+      "needs_confirmation": false,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "CRON_GET_JOB_STATUS",
+      "risk_class": "LOW",
+      "required_fields": [
+        "job_id"
+      ],
+      "limits": {},
+      "needs_confirmation": false,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "CRON_SCHEDULE_ONESHOT",
+      "risk_class": "MEDIUM",
+      "required_fields": [
+        "job_name",
+        "schedule_time",
+        "action"
+      ],
+      "limits": {
+        "max_delay_hours": 168,
+        "max_pending_jobs": 10
+      },
+      "needs_confirmation": false,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "CRON_SCHEDULE_RECURRING",
+      "risk_class": "MEDIUM",
+      "required_fields": [
+        "job_name",
+        "cron_expression",
+        "action"
+      ],
+      "limits": {
+        "min_interval_minutes": 5,
+        "max_jobs": 20
+      },
+      "needs_confirmation": false,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "CRON_PAUSE_JOB",
+      "risk_class": "MEDIUM",
+      "required_fields": [
+        "job_id"
+      ],
+      "limits": {
+        "max_pause_duration_hours": 72
+      },
+      "needs_confirmation": false,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "CRON_CANCEL_JOB",
+      "risk_class": "HIGH",
+      "required_fields": [
+        "job_id",
+        "reason"
+      ],
+      "limits": {
+        "requires_confirmation_for_recurring": true
+      },
+      "needs_confirmation": true,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "CRON_SCHEDULE_PRIVILEGED",
+      "risk_class": "HIGH",
+      "required_fields": [
+        "job_name",
+        "cron_expression",
+        "action",
+        "privilege_level"
+      ],
+      "limits": {
+        "max_privilege_level": 2
+      },
+      "needs_confirmation": true,
+      "deny_by_default": false,
+      "capability_requirements": []
+    },
+    {
+      "contract_id": "CRON_SYSTEM_JOB",
+      "risk_class": "CRITICAL",
+      "required_fields": [
+        "job_name",
+        "cron_expression",
+        "system_action",
+        "authorization"
+      ],
+      "limits": {
+        "requires_audit": true,
+        "requires_approval": true
+      },
+      "needs_confirmation": true,
+      "deny_by_default": true,
+      "capability_requirements": []
+    }
+  ],
+  "field_schema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "type": "object",
+    "properties": {
+      "job_id": {
+        "type": "string",
+        "description": "Unique identifier for the scheduled job"
+      },
+      "job_name": {
+        "type": "string",
+        "description": "Human-readable name for the job"
+      },
+      "scope": {
+        "type": "string",
+        "enum": [
+          "user",
+          "project",
+          "system"
+        ],
+        "description": "Scope for listing jobs"
+      },
+      "schedule_time": {
+        "type": "string",
+        "format": "date-time",
+        "description": "ISO 8601 timestamp for one-shot execution"
+      },
+      "cron_expression": {
+        "type": "string",
+        "pattern": "^[\\d\\*\\-\\/\\,]+\\s+[\\d\\*\\-\\/\\,]+\\s+[\\d\\*\\-\\/\\,]+\\s+[\\d\\*\\-\\/\\,]+\\s+[\\d\\*\\-\\/\\,]+",
+        "description": "Cron expression (minute hour day month weekday)"
+      },
+      "action": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "http",
+              "script",
+              "function",
+              "message"
+            ]
+          },
+          "target": {
+            "type": "string"
+          },
+          "payload": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "type",
+          "target"
+        ],
+        "description": "Action to execute when job triggers"
+      },
+      "system_action": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string"
+          },
+          "command": {
+            "type": "string"
+          },
+          "args": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "description": "System-level action for privileged jobs"
+      },
+      "privilege_level": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 3,
+        "description": "Required privilege level for job execution"
+      },
+      "authorization": {
+        "type": "string",
+        "description": "Authorization token for system jobs"
+      },
+      "reason": {
+        "type": "string",
+        "description": "Reason for job cancellation or modification"
+      },
+      "timezone": {
+        "type": "string",
+        "description": "Timezone for schedule interpretation"
+      },
+      "retry_policy": {
+        "type": "object",
+        "properties": {
+          "max_retries": {
+            "type": "integer"
+          },
+          "backoff_seconds": {
+            "type": "integer"
+          }
+        },
+        "description": "Retry configuration for failed executions"
+      },
+      "timeout_seconds": {
+        "type": "integer",
+        "minimum": 1,
+        "description": "Maximum execution time for job"
+      },
+      "enabled": {
+        "type": "boolean",
+        "default": true,
+        "description": "Whether job is active"
+      }
+    },
+    "required": [
+      "job_name"
+    ]
+  }
+}

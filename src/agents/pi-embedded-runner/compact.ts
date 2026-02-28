@@ -362,7 +362,7 @@ export async function compactEmbeddedPiSessionDirect(
       warn: makeBootstrapWarn({ sessionLabel, warn: (message) => log.warn(message) }),
     });
     const runAbortController = new AbortController();
-    const toolsRaw = createOpenClawCodingTools({
+    const toolsRaw = await createOpenClawCodingTools({
       exec: {
         elevated: params.bashElevated,
       },
@@ -567,6 +567,7 @@ export async function compactEmbeddedPiSessionDirect(
       const { builtInTools, customTools } = splitSdkTools({
         tools,
         sandboxEnabled: !!sandbox?.enabled,
+        runId: params.sessionId,
       });
 
       const { session } = await createAgentSession({

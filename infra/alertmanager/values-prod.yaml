@@ -1,0 +1,180 @@
+# AlertManager Helm Configuration - Production Overrides
+# This file contains production-specific settings with PagerDuty integration
+# Deploy via: helm install alertmanager prometheus-community/kube-prometheus-stack -f values-common.yaml -f values-prod.yaml
+
+# Override the AlertManager config section with production settings
+alertmanager:
+  config:
+    # Global Settings
+    global:
+      resolve_timeout: 5m
+      # PagerDuty global URL
+      pagerduty_url: https://events.pagerduty.com/v2/enqueue
+    
+    # Root Route: Default behavior for all alerts
+    route:
+      receiver: "default-receiver"
+      
+      # Group alerts by: cluster, severity, alertname
+      group_by:
+      - cluster
+      - severity
+      - alertname
+      
+      # Batching behavior
+      group_wait: 10s        # Wait 10s before sending first batch
+      group_interval: 5m     # Re-evaluate grouping every 5 minutes
+      repeat_interval: 4h    # Repeat unresolved alerts every 4 hours
+      
+      # Sub-routes: Hierarchical alert routing
+      routes:
+      
+      # CRITICAL ALERTS: Route to PagerDuty
+      - match:
+          severity: critical
+        receiver: "pagerduty-critical"
+        group_wait: 10s
+        group_interval: 2m     # More aggressive re-grouping for critical
+        repeat_interval: 1h    # Repeat every hour until resolved
+        continue: true
+      
+      # WARNINGS: Route to Slack
+      - match:
+          severity: warning
+        receiver: "slack-warnings"
+        group_wait: 30s
+        group_interval: 5m
+        repeat_interval: 6h    # Less frequent repeats for warnings
+      
+      # Production cluster-specific routing
+      - match:
+          cluster: clarity-router-prod
+        receiver: "pagerduty-prod-critical"
+        group_wait: 10s
+        group_interval: 2m
+        repeat_interval: 1h
+      
+      # Catch-all for info/debug level
+      - match:
+          severity: info
+        receiver: "slack-info"
+        group_wait: 1m
+        group_interval: 30m
+        repeat_interval: 12h
+    
+    # Receivers: Define notification endpoints
+    receivers:
+    
+    # Default receiver: Slack #monitoring-general
+    - name: "default-receiver"
+      slack_configs:
+      - api_url: ${SLACK_WEBHOOK_URL}
+        channel: "#monitoring-general"
+        title: "🔔 {{ .GroupLabels.alertname }}"
+        text: |
+          *Status:* {{ .Status | toUpper }}
+          *Severity:* {{ .GroupLabels.severity }}
+          *Cluster:* {{ .GroupLabels.cluster }}
+          *Alerts:* {{ .Alerts | len }} firing
+          
+          {{ range .Alerts }}
+          • {{ .Labels.instance }} - {{ .Annotations.description }}
+          {{ end }}
+        send_resolved: true
+        color: '{{ if eq .Status "firing" }}danger{{ else }}good{{ end }}'
+        actions:
+        - type: button
+          text: "View in Grafana"
+          url: "https://grafana.internal/d/router-health-overview"
+    
+    # Slack: Warning alerts
+    - name: "slack-warnings"
+      slack_configs:
+      - api_url: ${SLACK_WEBHOOK_URL}
+        channel: "#monitoring-alerts"
+        title: "⚠️ WARNING: {{ .GroupLabels.alertname }}"
+        text: |
+          *Cluster:* {{ .GroupLabels.cluster }}
+          *Alerts:* {{ .Alerts | len }}
+          
+          {{ range .Alerts }}
+          • {{ .Labels.instance }} - {{ .Annotations.description }}
+          {{ end }}
+        send_resolved: true
+        color: "warning"
+        actions:
+        - type: button
+          text: "View in Grafana"
+          url: "https://grafana.internal/d/router-performance"
+    
+    # Slack: Info/Debug level
+    - name: "slack-info"
+      slack_configs:
+      - api_url: ${SLACK_WEBHOOK_URL}
+        channel: "#monitoring-general"
+        title: "ℹ️ {{ .GroupLabels.alertname }}"
+        text: "{{ .CommonAnnotations.description }}"
+        send_resolved: true
+        color: "#0099ff"
+    
+    # PagerDuty: Critical alerts with escalation
+    - name: "pagerduty-critical"
+      pagerduty_configs:
+      - service_key: ${PAGERDUTY_SERVICE_KEY_PROD}
+        description: "{{ .GroupLabels.alertname }} ({{ .GroupLabels.cluster }})"
+        details:
+          severity: "{{ .GroupLabels.severity }}"
+          cluster: "{{ .GroupLabels.cluster }}"
+          alertname: "{{ .GroupLabels.alertname }}"
+          alert_count: "{{ .Alerts | len }}"
+          first_alert: "{{ (index .Alerts 0).Labels.instance }}"
+        severity: '{{ if eq .Status "firing" }}critical{{ else }}resolved{{ end }}'
+        client: "AlertManager (prod)"
+        client_url: "https://prometheus.internal/alerts"
+    
+    # PagerDuty: Production-specific critical routing
+    - name: "pagerduty-prod-critical"
+      pagerduty_configs:
+      - service_key: ${PAGERDUTY_SERVICE_KEY_PROD}
+        description: "{{ .GroupLabels.alertname }} in {{ .GroupLabels.cluster }}"
+        details:
+          severity: "{{ .GroupLabels.severity }}"
+          cluster: "{{ .GroupLabels.cluster }}"
+          alertname: "{{ .GroupLabels.alertname }}"
+          value: "{{ (index .Alerts 0).ValueString }}"
+          timestamp: "{{ (index .Alerts 0).StartsAt }}"
+        severity: critical
+        client: "AlertManager (prod)"
+        client_url: "https://prometheus.internal/d/router-health-overview"
+    
+    # Inhibition Rules: Suppress child alerts when parent is firing
+    inhibit_rules:
+    
+    # If node is down, inhibit pod-level alerts on that node
+    - source_match:
+        severity: critical
+        alertname: NodeDown
+      target_match_re:
+        severity: "warning|info"
+      equal:
+      - cluster
+      - node
+    
+    # If all pods are down, inhibit per-pod CPU/memory alerts
+    - source_match:
+        alertname: AllPodsDown
+      target_match_re:
+        alertname: "HighCPUUsage|HighMemoryUsage|PodRestartLoop"
+      equal:
+      - cluster
+      - namespace
+    
+    # If pod is evicted, inhibit CPU pressure alerts
+    - source_match:
+        alertname: PodEvicted
+      target_match_re:
+        alertname: "CPUPressure|MemoryPressure"
+      equal:
+      - cluster
+      - node
+      - pod

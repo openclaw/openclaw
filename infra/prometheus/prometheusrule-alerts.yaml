@@ -1,0 +1,407 @@
+# PrometheusRule for ClarityRouter Recording Rules and Alerts
+# Defines:
+#   - Recording rules (pre-computed SLO metrics for performance)
+#   - Alert rules (notifications for operational issues)
+# Chart: prometheus-community/kube-prometheus-stack
+# The Prometheus operator creates alert jobs based on PrometheusRule resources
+
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: clarityrouter-rules
+  namespace: monitoring
+  labels:
+    prometheus: kube-prometheus-stack
+    release: prometheus
+spec:
+  groups:
+    # =========================================================================
+    # RECORDING RULES
+    # Pre-computed metrics for dashboard/alerting performance
+    # Evaluate every 1 minute, use 5-minute windows for stability
+    # =========================================================================
+    
+    - name: clarityrouter.recording-rules
+      interval: 1m
+      rules:
+        # === LATENCY PERCENTILES ===
+        # Calculate p50, p95, p99 from request_latency_ms histogram
+        # Used for dashboards and SLO tracking
+        
+        - record: slo:clarityrouter_latency_p50:5m
+          expr: histogram_quantile(0.50, sum(rate(clarityrouter_request_latency_ms_bucket[5m])) by (le))
+          labels:
+            slo: "latency"
+            percentile: "p50"
+        
+        - record: slo:clarityrouter_latency_p95:5m
+          expr: histogram_quantile(0.95, sum(rate(clarityrouter_request_latency_ms_bucket[5m])) by (le))
+          labels:
+            slo: "latency"
+            percentile: "p95"
+        
+        - record: slo:clarityrouter_latency_p99:5m
+          expr: histogram_quantile(0.99, sum(rate(clarityrouter_request_latency_ms_bucket[5m])) by (le))
+          labels:
+            slo: "latency"
+            percentile: "p99"
+        
+        # === ERROR RATE ===
+        # Calculate percentage of failed requests over 5-minute window
+        # Denominator: total requests
+        
+        - record: slo:clarityrouter_error_rate:5m
+          expr: |
+            (
+              sum(rate(clarityrouter_errors_total[5m]))
+              /
+              sum(rate(clarityrouter_requests_total[5m]))
+            ) * 100
+          labels:
+            slo: "error_rate"
+        
+        # === ERROR RATE BY TYPE ===
+        # Breakdown of errors by failure category
+        
+        - record: slo:clarityrouter_error_rate_by_type:5m
+          expr: |
+            (
+              sum by (error_type) (rate(clarityrouter_errors_total[5m]))
+              /
+              sum(rate(clarityrouter_requests_total[5m]))
+            ) * 100
+          labels:
+            slo: "error_rate"
+        
+        # === AVAILABILITY ===
+        # Percentage of successful requests (no errors)
+        # SLO target: 99.95% (approximately 21 seconds downtime per day)
+        
+        - record: slo:clarityrouter_availability:5m
+          expr: |
+            (
+              sum(rate(clarityrouter_requests_total{status="success"}[5m]))
+              /
+              sum(rate(clarityrouter_requests_total[5m]))
+            ) * 100
+          labels:
+            slo: "availability"
+        
+        # === REQUEST THROUGHPUT ===
+        # Requests per second (5-minute average)
+        
+        - record: slo:clarityrouter_rps:5m
+          expr: sum(rate(clarityrouter_requests_total[5m]))
+          labels:
+            slo: "throughput"
+        
+        # === SUCCESS RATE ===
+        # Complementary to error rate (sanity check)
+        
+        - record: slo:clarityrouter_success_rate:5m
+          expr: |
+            (
+              sum(increase(clarityrouter_requests_total{status="success"}[5m]))
+              /
+              sum(increase(clarityrouter_requests_total[5m]))
+            ) * 100
+          labels:
+            slo: "success_rate"
+        
+        # === P99 LATENCY MOVING AVERAGE (1 HOUR) ===
+        # For trend analysis and SLO reporting
+        
+        - record: slo:clarityrouter_latency_p99:1h
+          expr: histogram_quantile(0.99, sum(rate(clarityrouter_request_latency_ms_bucket[1h])) by (le))
+          labels:
+            slo: "latency"
+            percentile: "p99"
+            window: "1h"
+        
+        # === AVAILABILITY MOVING AVERAGE (1 HOUR) ===
+        # For trend analysis and SLO reporting
+        
+        - record: slo:clarityrouter_availability:1h
+          expr: |
+            (
+              sum(rate(clarityrouter_requests_total{status="success"}[1h]))
+              /
+              sum(rate(clarityrouter_requests_total[1h]))
+            ) * 100
+          labels:
+            slo: "availability"
+            window: "1h"
+
+    # =========================================================================
+    # ALERT RULES
+    # Critical and warning conditions for operational alerting
+    # =========================================================================
+    
+    - name: clarityrouter.alerts
+      interval: 30s
+      rules:
+        # === CRITICAL: ROUTER UNAVAILABLE ===
+        # No healthy router pods detected
+        
+        - alert: RouterUnavailable
+          expr: clarityrouter_router_availability == 0
+          for: 2m
+          labels:
+            severity: critical
+            job: clarityrouter
+            component: router
+          annotations:
+            summary: "ClarityBurst Router is unavailable"
+            description: "Router pod(s) not responding to health checks for >2 minutes. Immediate investigation required."
+            runbook: "https://docs.openclaw.ai/runbooks/router-unavailable"
+            dashboard: "https://grafana.example.com/d/router-health"
+        
+        # === CRITICAL: P99 LATENCY SLO BREACH (SUSTAINED) ===
+        # P99 latency exceeds 250ms SLO target for >5 minutes
+        # SLO target: < 200ms, threshold: 250ms (red zone)
+        
+        - alert: LatencySLOBreach
+          expr: slo:clarityrouter_latency_p99:5m > 250
+          for: 5m
+          labels:
+            severity: critical
+            job: clarityrouter
+            component: latency
+          annotations:
+            summary: "Router P99 latency exceeds SLO ({{ $value | humanize }}ms > 250ms)"
+            description: "P99 latency has exceeded 250ms for >5 minutes. SLO target: <200ms. Investigate performance degradation."
+            runbook: "https://docs.openclaw.ai/runbooks/latency-degradation"
+            dashboard: "https://grafana.example.com/d/router-performance"
+        
+        # === CRITICAL: HIGH ERROR RATE ===
+        # Error rate exceeds 1% for >2 minutes
+        
+        - alert: HighErrorRate
+          expr: slo:clarityrouter_error_rate:5m > 1.0
+          for: 2m
+          labels:
+            severity: critical
+            job: clarityrouter
+            component: errors
+          annotations:
+            summary: "Router error rate critical ({{ $value | humanizePercentage }})"
+            description: "Error rate has exceeded 1% threshold for >2 minutes. {{ $value | humanizePercentage }} errors detected."
+            runbook: "https://docs.openclaw.ai/runbooks/high-error-rate"
+            dashboard: "https://grafana.example.com/d/router-performance"
+        
+        # === CRITICAL: ALL ROUTER PODS DOWN ===
+        # All router pods have failed or been terminated
+        
+        - alert: AllPodsDown
+          expr: |
+            count(kube_pod_status_phase{pod=~"router-.*", phase="Running"})
+            /
+            count(kube_pod_status_phase{pod=~"router-.*"})
+            == 0
+          for: 1m
+          labels:
+            severity: critical
+            job: clarityrouter
+            component: pod-health
+          annotations:
+            summary: "All router pods are down"
+            description: "No running router pods detected. Immediate manual intervention required."
+            runbook: "https://docs.openclaw.ai/runbooks/pod-failure"
+            dashboard: "https://grafana.example.com/d/router-health"
+        
+        # === WARNING: LATENCY DEGRADATION ===
+        # P99 latency approaches SLO boundary (200ms)
+        # Warning fired at 200ms for 10 minutes
+        
+        - alert: LatencyDegraded
+          expr: slo:clarityrouter_latency_p99:5m > 200
+          for: 10m
+          labels:
+            severity: warning
+            job: clarityrouter
+            component: latency
+          annotations:
+            summary: "Router latency elevated ({{ $value | humanize }}ms, SLO: 200ms)"
+            description: "P99 latency is approaching SLO limit for >10 minutes. Current: {{ $value | humanize }}ms. Monitor for escalation."
+            runbook: "https://docs.openclaw.ai/runbooks/latency-degradation"
+            dashboard: "https://grafana.example.com/d/router-performance"
+        
+        # === WARNING: ELEVATED ERROR RATE ===
+        # Error rate between 0.5% - 1% for 5+ minutes
+        
+        - alert: ElevatedErrorRate
+          expr: slo:clarityrouter_error_rate:5m > 0.5 and slo:clarityrouter_error_rate:5m <= 1.0
+          for: 5m
+          labels:
+            severity: warning
+            job: clarityrouter
+            component: errors
+          annotations:
+            summary: "Router error rate elevated ({{ $value | humanizePercentage }})"
+            description: "Error rate is {{ $value | humanizePercentage }}, above normal baseline. Monitor for escalation."
+            runbook: "https://docs.openclaw.ai/runbooks/elevated-error-rate"
+            dashboard: "https://grafana.example.com/d/router-performance"
+        
+        # === WARNING: CERTIFICATE EXPIRY SOON ===
+        # TLS certificate expires within 7 days
+        
+        - alert: CertificateExpiryWarning
+          expr: |
+            (certmanager_certificate_expiration_timestamp_seconds - time())
+            < 7 * 24 * 3600
+          labels:
+            severity: warning
+            job: certmanager
+            component: tls
+          annotations:
+            summary: "TLS certificate expiring soon (in {{ $value | humanizeDuration }})"
+            description: "Certificate will expire in less than 7 days. Schedule renewal."
+            runbook: "https://docs.openclaw.ai/runbooks/cert-renewal"
+        
+        # === WARNING: POD RESTART LOOP ===
+        # Pod restarted >3 times in 1 hour (likely crash loop)
+        
+        - alert: PodRestartLoop
+          expr: |
+            increase(kube_pod_container_status_restarts_total{pod=~"router-.*"}[1h]) > 3
+          labels:
+            severity: warning
+            job: kubernetes
+            component: pod-health
+          annotations:
+            summary: "Pod {{ $labels.pod }} restarting frequently ({{ $value }} restarts in 1h)"
+            description: "Pod has restarted >3 times in the last hour. Likely in crash loop. Check logs."
+            runbook: "https://docs.openclaw.ai/runbooks/pod-crash-loop"
+        
+        # === WARNING: HIGH CPU USAGE ===
+        # Router pods consuming >80% CPU for 10+ minutes
+        
+        - alert: HighCPUUsage
+          expr: |
+            sum(rate(container_cpu_usage_seconds_total{pod=~"router-.*"}[5m])) > 0.8
+          for: 10m
+          labels:
+            severity: warning
+            job: kubernetes
+            component: resource-usage
+          annotations:
+            summary: "Router pod CPU usage high ({{ $value | humanizePercentage }})"
+            description: "Average CPU usage >80% for >10 minutes. Monitor for performance issues."
+            runbook: "https://docs.openclaw.ai/runbooks/high-cpu"
+        
+        # === WARNING: HIGH MEMORY USAGE ===
+        # Router pods consuming >800MB RAM for 10+ minutes (potential leak)
+        
+        - alert: HighMemoryUsage
+          expr: |
+            sum(container_memory_usage_bytes{pod=~"router-.*"}) / 1e9 > 0.8
+          for: 10m
+          labels:
+            severity: warning
+            job: kubernetes
+            component: resource-usage
+          annotations:
+            summary: "Router pod memory usage high ({{ $value | humanize }}GB)"
+            description: "Memory usage >800MB for >10 minutes. Check for memory leak."
+            runbook: "https://docs.openclaw.ai/runbooks/memory-leak"
+        
+        # === CRITICAL: NODE CPU EXHAUSTION ===
+        # Node CPU >95% utilized for 5+ minutes (may impact pod scheduling)
+        
+        - alert: NodeCPUExhaustion
+          expr: |
+            (
+              1 - avg by (node) (rate(node_cpu_seconds_total{mode="idle"}[5m]))
+            ) > 0.95
+          for: 5m
+          labels:
+            severity: critical
+            job: kubernetes
+            component: node-health
+          annotations:
+            summary: "Node {{ $labels.node }} CPU exhausted ({{ $value | humanizePercentage }})"
+            description: "Node CPU >95% for >5 minutes. May impact pod scheduling. Add capacity or investigate runaway workloads."
+            runbook: "https://docs.openclaw.ai/runbooks/node-exhaustion"
+        
+        # === WARNING: NODE MEMORY PRESSURE ===
+        # Node memory >80% allocated
+        
+        - alert: NodeMemoryPressure
+          expr: |
+            (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) > 0.80
+          for: 10m
+          labels:
+            severity: warning
+            job: kubernetes
+            component: node-health
+          annotations:
+            summary: "Node {{ $labels.node }} memory pressure ({{ $value | humanizePercentage }} used)"
+            description: "Node memory >80% allocated. Monitor for eviction risks."
+            runbook: "https://docs.openclaw.ai/runbooks/memory-pressure"
+        
+        # === WARNING: DISK USAGE HIGH ===
+        # Node disk >85% utilized
+        
+        - alert: DiskUsageHigh
+          expr: |
+            (
+              1 - (node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"})
+            ) > 0.85
+          for: 10m
+          labels:
+            severity: warning
+            job: kubernetes
+            component: node-health
+          annotations:
+            summary: "Node {{ $labels.node }} disk {{ $value | humanizePercentage }} full"
+            description: "Root filesystem >85% utilized. Clean up old logs or data."
+            runbook: "https://docs.openclaw.ai/runbooks/disk-space"
+        
+        # === WARNING: PVC USAGE HIGH ===
+        # Persistent volume >80% utilized
+        
+        - alert: PVCUsageHigh
+          expr: |
+            (
+              kubelet_volume_stats_used_bytes
+              /
+              kubelet_volume_stats_capacity_bytes
+            ) > 0.80
+          for: 10m
+          labels:
+            severity: warning
+            job: kubernetes
+            component: storage
+          annotations:
+            summary: "PVC {{ $labels.persistentvolumeclaim }} {{ $value | humanizePercentage }} full"
+            description: "Persistent volume >80% utilized. Plan capacity increase."
+            runbook: "https://docs.openclaw.ai/runbooks/pvc-capacity"
+
+---
+# DEPLOYMENT NOTES:
+# -----------------
+# 
+# 1. Apply this resource to monitoring namespace:
+#    kubectl apply -f prometheusrule-alerts.yaml -n monitoring
+#
+# 2. Verify PrometheusRule is loaded:
+#    kubectl get prometheusrule -n monitoring
+#    kubectl describe prometheusrule clarityrouter-rules -n monitoring
+#
+# 3. Check Prometheus has discovered the rules:
+#    kubectl port-forward -n monitoring svc/prometheus-stack-kube-prom-prometheus 9090:9090
+#    # Visit http://localhost:9090/alerts
+#
+# 4. Verify recording rules are evaluating:
+#    # In Prometheus UI, query:
+#    slo:clarityrouter_latency_p99:5m
+#    slo:clarityrouter_error_rate:5m
+#    slo:clarityrouter_availability:5m
+#
+# 5. Test alert firing (simulate):
+#    # Scale down router pods to trigger alerts
+#    kubectl scale deployment router --replicas=0 -n clarity-router
+#    # Check Prometheus Alerts tab for firing alerts
+#    # Scale back up
+#    kubectl scale deployment router --replicas=3 -n clarity-router

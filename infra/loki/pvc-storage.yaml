@@ -1,0 +1,268 @@
+# Persistent Volume Claim for Loki Storage
+# 150GB EFS-backed storage for Loki logs and index
+#
+# This PVC provides shared storage for:
+# - Loki index (boltdb local database + remote S3)
+# - Temporary chunked log data
+# - Position tracking and metadata
+#
+# Storage class: efs-sc (requires EFS CSI Driver)
+# Access mode: ReadWriteMany (required for multi-replica Loki deployment)
+# Size: 150GB (~5GB/day * 30-day retention with compression)
+#
+
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: loki-storage
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: loki
+    app.kubernetes.io/part-of: loki-stack
+    storage-type: log-aggregation
+    retention: 30-days
+spec:
+  # Access mode: ReadWriteMany allows multiple pods to read/write simultaneously
+  # Required for Loki HA deployment with 2+ replicas
+  accessModes:
+    - ReadWriteMany
+  
+  # Storage class: efs-sc uses EFS CSI driver
+  # Must be created separately: kubectl apply -f storage-class.yaml
+  # Or use existing storage class name
+  storageClassName: efs-sc
+  
+  # Storage size: 150GB
+  # Sizing calculation:
+  # - Expected log volume: 100-200 requests/sec * 500 bytes = 50-100 MB/sec
+  # - Per day: ~4.3-8.6 TB uncompressed
+  # - With snappy compression: ~430-860 GB/day
+  # - With aggressive chunk compression: ~5 GB/day (conservative)
+  # - 30-day retention: 5 GB/day * 30 days = 150 GB
+  # - Add 20% headroom for spikes: 150 GB is sufficient
+  resources:
+    requests:
+      storage: 150Gi
+
+---
+
+# Storage Class for EFS (Amazon Elastic File System)
+# This enables dynamic provisioning of EFS-backed storage
+# Requires: EFS CSI Driver installed on the cluster
+#
+# Install EFS CSI Driver:
+# helm repo add aws-efs-csi-driver https://kubernetes-sigs.github.io/aws-efs-csi-driver/
+# helm install aws-efs-csi-driver aws-efs-csi-driver/aws-efs-csi-driver \
+#   -n kube-system \
+#   --set serviceAccount.create=true
+#
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: efs-sc
+  labels:
+    provisioner: efs.csi.aws.com
+provisioner: efs.csi.aws.com
+allowVolumeExpansion: true
+parameters:
+  # REQUIRED: Replace with your EFS filesystem ID
+  fileSystemId: fs-PLACEHOLDER_EFS_ID
+  
+  # Directory to mount within the EFS filesystem
+  # All PVCs for this class will be mounted under this directory
+  basePath: "/loki"
+  
+  # GID for the directory (optional)
+  # gidRangeStart: "1000"
+  # gidRangeEnd: "2000"
+  
+  # Subdomain name for EFS (optional, for multi-AZ)
+  # subPathPattern: "${.PVC.name}"
+
+---
+
+# StatefulSet Volume Claim Template (if using StatefulSet instead of Deployment)
+# This is an example of how to reference the PVC in a StatefulSet
+# NOT needed if using Helm values that specify persistence
+#
+# Example in StatefulSet:
+# volumeClaimTemplates:
+#   - metadata:
+#       name: loki-storage
+#     spec:
+#       accessModes: [ "ReadWriteMany" ]
+#       storageClassName: efs-sc
+#       resources:
+#         requests:
+#           storage: 150Gi
+
+# ============================================================================
+# STORAGE CONFIGURATION DETAILS
+# ============================================================================
+#
+# EFS (Elastic File System):
+# - Fully managed NFS file system
+# - Multi-AZ replication (durability)
+# - Automatic scaling (no pre-provisioning needed)
+# - Pay-per-use pricing (~$0.30/GB-month)
+# - For 150GB: ~$45/month
+#
+# Why EFS for Loki?
+# - ReadWriteMany access (multiple Loki replicas)
+# - Distributed storage across AZs
+# - No single point of failure
+# - Direct block-level replication
+#
+# Alternative Storage Options:
+# - S3 for log chunks (configured in values files)
+# - Local disks (single-node only, no HA)
+# - EBS (limited to single node)
+# - NFS (requires separate NFS server)
+#
+# Storage Layout:
+# /loki/
+#   ├── index/              # Local boltdb index
+#   ├── cache/              # Query result cache
+#   └── chunks/             # Temporary chunk storage
+#
+# ============================================================================
+# DEPLOYMENT INSTRUCTIONS
+# ============================================================================
+#
+# Prerequisites:
+# 1. EFS filesystem created in the cluster's VPC
+#    - Go to AWS Console > EFS > Create file system
+#    - Select same VPC as Kubernetes cluster
+#    - Enable performance mode: General Purpose (default)
+#    - Enable encryption at rest
+#    - Enable encryption in transit
+#
+# 2. EFS CSI Driver installed
+#    helm repo add aws-efs-csi-driver \
+#      https://kubernetes-sigs.github.io/aws-efs-csi-driver/
+#    helm install aws-efs-csi-driver \
+#      aws-efs-csi-driver/aws-efs-csi-driver \
+#      -n kube-system --create-namespace
+#
+# 3. Replace PLACEHOLDER_EFS_ID with actual EFS filesystem ID
+#    aws efs describe-file-systems --query 'FileSystems[0].FileSystemId'
+#
+# 4. Apply the storage class and PVC:
+#    kubectl apply -f pvc-storage.yaml
+#
+# Verification:
+# 1. Check storage class:
+#    kubectl get storageclass
+#
+# 2. Check PVC status:
+#    kubectl get pvc -n monitoring
+#    # Should show "Bound" status
+#
+# 3. Check PV details:
+#    kubectl get pv | grep loki
+#    kubectl describe pv <pv-name>
+#
+# 4. Verify mount in Loki pod:
+#    kubectl exec -it <loki-pod> -n monitoring -- df -h | grep loki
+#    # Should show mounted EFS with 150G capacity
+#
+# ============================================================================
+# MONITORING & ALERTS
+# ============================================================================
+#
+# Monitor PVC usage:
+# 1. Check used vs total:
+#    kubectl exec -it <loki-pod> -n monitoring -- df -h /loki
+#
+# 2. Create Prometheus alert:
+#    expr: kubelet_volume_stats_used_bytes{persistentvolumeclaim="loki-storage"} 
+#          / kubelet_volume_stats_capacity_bytes * 100 > 80
+#    alert: PVCUsageHigh
+#    for: 10m
+#
+# 3. Monitor EFS metrics in CloudWatch:
+#    - FilesystemSize (bytes)
+#    - DataWriteIOBytes (throughput)
+#    - DataReadIOBytes (throughput)
+#    - ClientConnections (number of clients)
+#
+# ============================================================================
+# SCALING & EXPANSION
+# ============================================================================
+#
+# Expanding Storage:
+# 1. Edit PVC to increase size:
+#    kubectl patch pvc loki-storage -n monitoring \
+#      -p '{"spec":{"resources":{"requests":{"storage":"200Gi"}}}}'
+#
+# 2. EFS automatically scales (no manual expansion needed)
+#
+# 3. Check new size:
+#    kubectl get pvc loki-storage -n monitoring
+#
+# If storage approaches 150GB:
+# 1. Increase PVC size (above)
+# 2. Reduce retention period in Loki config
+# 3. Enable S3 tiering for cheaper long-term storage
+#
+# ============================================================================
+# DISASTER RECOVERY
+# ============================================================================
+#
+# Data Sources:
+# 1. EFS: Local index and metadata (primary)
+# 2. S3: Log chunks and backup (secondary)
+#
+# Recovery Scenarios:
+# 1. If EFS corrupted:
+#    - Logs are stored in S3
+#    - Index can rebuild from S3
+#    - Full recovery may take time
+#
+# 2. If S3 deleted:
+#    - Local index on EFS is still available
+#    - Query recent logs (in memory/cache)
+#    - Historical logs lost
+#
+# Best Practice:
+# - Enable EFS backup policies (AWS Backup)
+# - Enable S3 versioning
+# - Test restore procedures regularly
+# - Monitor CloudWatch for storage anomalies
+#
+# ============================================================================
+# COST ESTIMATION
+# ============================================================================
+#
+# EFS Pricing (as of 2024):
+# - Storage: $0.30 per GB-month
+# - 150GB: 150 * $0.30 = $45/month
+# - Data in: Free
+# - Data out: Standard EC2 rates (~$0.02/GB)
+# - Provisioned throughput: Optional, ~$6 per MB/sec-month
+#
+# S3 Pricing:
+# - Storage: ~$0.023 per GB-month
+# - PUT requests: ~$0.005 per 1000 requests
+# - GET requests: ~$0.0004 per 1000 requests
+# - Data transfer out: ~$0.02 per GB
+#
+# Total Monthly Cost (150GB logs):
+# - EFS: $45
+# - S3: $3.45 (150GB * $0.023)
+# - Rough total: $48-55/month
+#
+# ============================================================================
+# SECURITY
+# ============================================================================
+#
+# EFS Security:
+# 1. Encryption at rest: Enable in AWS console
+# 2. Encryption in transit: Enabled by default in CSI driver
+# 3. Access control: Managed via RBAC + Kubernetes NetworkPolicy
+# 4. Audit logging: Enable CloudTrail for EFS API calls
+#
+# Pod Security:
+# - Promtail: ReadOnly access to logs
+# - Loki: ReadWrite access to EFS
+# - No privileged containers needed

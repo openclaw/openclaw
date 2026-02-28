@@ -1,0 +1,314 @@
+# AlertManager Configuration (ConfigMap)
+# This ConfigMap contains the core AlertManager routing configuration
+# Apply to both production and staging clusters
+# NOTE: This is a base template - secret environment variables are injected at deployment time
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: alertmanager-config
+  namespace: monitoring
+  labels:
+    app: alertmanager
+    version: "1.0"
+data:
+  alertmanager.yaml: |
+    # AlertManager Configuration
+    # Global settings apply to all receivers and routes
+    global:
+      # Time before alert is auto-resolved if not updated
+      resolve_timeout: 5m
+      
+      # External URLs for alert links
+      slack_api_url: '${SLACK_WEBHOOK_URL}'
+      pagerduty_url: 'https://events.pagerduty.com/v2/enqueue'
+    
+    # Root Route: Default receiver and grouping behavior
+    route:
+      # Default receiver if no route matches
+      receiver: 'default-receiver'
+      
+      # Group By: Alerts with identical labels are grouped together
+      # This reduces notification noise when multiple related alerts fire
+      group_by:
+      - 'cluster'           # Group by cluster (prod vs staging)
+      - 'severity'          # Separate critical from warnings
+      - 'alertname'         # Further group by specific alert
+      - 'job'               # Then by job (clarityrouter, kube-state-metrics, etc.)
+      
+      # Batching Settings: Control when alerts are sent
+      group_wait: 10s       # Wait 10 seconds before sending first notification for a new group
+                            # Allows multiple related alerts to batch together
+      group_interval: 5m    # Re-evaluate grouping every 5 minutes
+                            # If new alerts match an existing group, add them to next notification
+      repeat_interval: 4h   # Repeat unresolved alerts every 4 hours (default)
+                            # Can be overridden per sub-route
+      
+      # Sub-Routes: Hierarchical routing rules (processed in order)
+      routes:
+      
+      # Route 1: Critical Severity Alerts
+      # Match: Any alert with severity=critical
+      # Action: Send immediately with aggressive re-evaluation
+      - match:
+          severity: critical
+        receiver: 'pagerduty-critical'
+        group_wait: 10s         # Don't wait, send immediately for critical
+        group_interval: 2m      # Re-group every 2 minutes (more responsive)
+        repeat_interval: 1h     # Repeat every hour for critical unresolved alerts
+        continue: true          # Continue to evaluate other routes (allows multi-receiver matching)
+      
+      # Route 2: Warning Severity Alerts
+      # Match: Any alert with severity=warning
+      # Action: Send to Slack with less aggressive repeat
+      - match:
+          severity: warning
+        receiver: 'slack-warnings'
+        group_wait: 30s         # Wait 30 seconds to batch multiple warnings
+        group_interval: 5m      # Re-group every 5 minutes
+        repeat_interval: 6h     # Only repeat every 6 hours (less noisy)
+      
+      # Route 3: Production Cluster Alerts
+      # Match: Alerts from clarity-router-prod cluster
+      # Action: PagerDuty escalation for production incidents
+      - match:
+          cluster: 'clarity-router-prod'
+        receiver: 'pagerduty-prod-critical'
+        group_wait: 10s
+        group_interval: 2m
+        repeat_interval: 1h
+      
+      # Route 4: Staging Cluster Alerts
+      # Match: Alerts from clarity-router-staging cluster
+      # Action: Slack only (no page-out for staging)
+      - match:
+          cluster: 'clarity-router-staging'
+        receiver: 'slack-staging-all'
+        group_wait: 10s
+        group_interval: 5m
+        repeat_interval: 4h
+      
+      # Route 5: Info/Debug Level Alerts
+      # Match: Low severity alerts (development, tests)
+      # Action: Send to Slack with infrequent repeats
+      - match:
+          severity: info
+        receiver: 'slack-info'
+        group_wait: 1m          # Wait longer for info-level
+        group_interval: 30m     # Regroup less frequently
+        repeat_interval: 12h    # Very infrequent repeats
+    
+    # Receivers: Notification Endpoints
+    # Each receiver defines how and where to send notifications
+    receivers:
+    
+    # Receiver 1: Default Fallback (Slack #monitoring-general)
+    # Used for alerts that don't match any specific route
+    - name: 'default-receiver'
+      slack_configs:
+      - api_url: '${SLACK_WEBHOOK_URL}'
+        channel: '#monitoring-general'
+        title: '🔔 {{ .GroupLabels.alertname }}'
+        text: |
+          *Status:* {{ .Status | toUpper }}
+          *Severity:* {{ .GroupLabels.severity }}
+          *Cluster:* {{ .GroupLabels.cluster }}
+          *Job:* {{ .GroupLabels.job }}
+          *Alerts:* {{ .Alerts | len }} firing
+          
+          *Alerts:*
+          {{ range .Alerts }}
+          • {{ .Labels.instance }} - {{ .Annotations.description }}
+          {{ end }}
+        
+        send_resolved: true
+        color: '{{ if eq .Status "firing" }}danger{{ else }}good{{ end }}'
+        
+        # Action buttons for quick access
+        actions:
+        - type: button
+          text: 'View in Grafana'
+          url: 'https://grafana.internal/d/router-health-overview'
+        - type: button
+          text: 'View Logs'
+          url: 'https://grafana.internal/d/logs?var-namespace={{ .GroupLabels.job }}'
+    
+    # Receiver 2: Slack Warnings (#monitoring-alerts)
+    # All warning-level alerts
+    - name: 'slack-warnings'
+      slack_configs:
+      - api_url: '${SLACK_WEBHOOK_URL}'
+        channel: '#monitoring-alerts'
+        icon_emoji: ':warning:'
+        title: '⚠️ WARNING: {{ .GroupLabels.alertname }}'
+        text: |
+          *Cluster:* {{ .GroupLabels.cluster }}
+          *Severity:* {{ .GroupLabels.severity }}
+          *Alert Count:* {{ .Alerts | len }}
+          
+          *Details:*
+          {{ range .Alerts }}
+          • {{ .Labels.instance }} - {{ .Annotations.description }}
+          • Value: {{ .Value }}
+          {{ end }}
+        
+        send_resolved: true
+        color: 'warning'
+        
+        actions:
+        - type: button
+          text: 'View in Grafana'
+          url: 'https://grafana.internal/d/router-performance'
+    
+    # Receiver 3: Slack Info (#monitoring-general)
+    # Low-severity/debug alerts
+    - name: 'slack-info'
+      slack_configs:
+      - api_url: '${SLACK_WEBHOOK_URL}'
+        channel: '#monitoring-general'
+        title: 'ℹ️ {{ .GroupLabels.alertname }}'
+        text: '{{ .CommonAnnotations.description }}'
+        send_resolved: true
+        color: '#0099ff'
+    
+    # Receiver 4: Slack Staging All (#monitoring-staging-alerts)
+    # All staging alerts route here
+    - name: 'slack-staging-all'
+      slack_configs:
+      - api_url: '${SLACK_WEBHOOK_URL_STAGING}'
+        channel: '#monitoring-staging-alerts'
+        title: '🔔 {{ .GroupLabels.alertname }}'
+        text: |
+          *Status:* {{ .Status | toUpper }}
+          *Severity:* {{ .GroupLabels.severity }}
+          *Cluster:* {{ .GroupLabels.cluster }}
+          *Alerts:* {{ .Alerts | len }} firing
+          
+          {{ range .Alerts }}
+          • {{ .Labels.instance }} - {{ .Annotations.description }}
+          {{ end }}
+        
+        send_resolved: true
+        color: '{{ if eq .Status "firing" }}danger{{ else }}good{{ end }}'
+        
+        actions:
+        - type: button
+          text: 'View in Grafana'
+          url: 'https://grafana-staging.internal/d/router-health-overview'
+    
+    # Receiver 5: PagerDuty Critical
+    # Production critical alerts - trigger immediate page-outs
+    - name: 'pagerduty-critical'
+      pagerduty_configs:
+      - service_key: '${PAGERDUTY_SERVICE_KEY_PROD}'
+        description: '{{ .GroupLabels.alertname }} in {{ .GroupLabels.cluster }}'
+        
+        # Alert details included in PagerDuty incident
+        details:
+          severity: '{{ .GroupLabels.severity }}'
+          cluster: '{{ .GroupLabels.cluster }}'
+          alertname: '{{ .GroupLabels.alertname }}'
+          job: '{{ .GroupLabels.job }}'
+          alert_count: '{{ .Alerts | len }}'
+          first_alert: '{{ (index .Alerts 0).Labels.instance }}'
+          summary: '{{ (index .Alerts 0).Annotations.summary }}'
+        
+        # Severity affects escalation policy
+        severity: '{{ if eq .Status "firing" }}critical{{ else }}resolved{{ end }}'
+        
+        # Context for debugging
+        client: 'AlertManager (prod)'
+        client_url: 'https://prometheus.internal/graph?g0.expr=ALERTS%7Bseverity%3D%22critical%22%7D'
+    
+    # Receiver 6: PagerDuty Production Critical (with escalation)
+    # Production cluster alerts with full escalation policy
+    - name: 'pagerduty-prod-critical'
+      pagerduty_configs:
+      - service_key: '${PAGERDUTY_SERVICE_KEY_PROD}'
+        description: '{{ .GroupLabels.alertname }} ({{ .GroupLabels.cluster }})'
+        
+        details:
+          severity: '{{ .GroupLabels.severity }}'
+          cluster: '{{ .GroupLabels.cluster }}'
+          alertname: '{{ .GroupLabels.alertname }}'
+          alert_count: '{{ .Alerts | len }}'
+          start_time: '{{ (index .Alerts 0).StartsAt }}'
+          duration: '{{ if gt (now.Sub (index .Alerts 0).StartsAt).Minutes 0 }}{{ (now.Sub (index .Alerts 0).StartsAt).Minutes | printf "%.0f" }} minutes{{ else }}just now{{ end }}'
+        
+        severity: critical
+        client: 'AlertManager (clarity-router-prod)'
+        client_url: 'https://prometheus.internal/alerts'
+    
+    # Inhibition Rules: Automatic Alert Suppression
+    # When a source alert fires, matching target alerts are suppressed
+    # This prevents noise from secondary/dependent failures
+    inhibit_rules:
+    
+    # Rule 1: Node Down → Suppress Pod Alerts
+    # If a node is critical down, suppress warning/info alerts on that node
+    # (pod-level issues are secondary to the node failure)
+    - source_match:
+        severity: 'critical'
+        alertname: 'NodeDown'
+      target_match_re:
+        severity: 'warning|info'
+      equal:
+      - 'cluster'
+      - 'node'
+    
+    # Rule 2: All Pods Down → Suppress Per-Pod Metrics
+    # If all pods are down, don't alert on individual pod CPU/memory usage
+    - source_match:
+        alertname: 'AllPodsDown'
+      target_match_re:
+        alertname: 'HighCPUUsage|HighMemoryUsage|PodRestartLoop|HighMemoryUsagePercent'
+      equal:
+      - 'cluster'
+      - 'namespace'
+    
+    # Rule 3: Pod Evicted → Suppress Resource Pressure
+    # If pod is evicted, don't alert on CPU/memory pressure (consequence of eviction)
+    - source_match:
+        alertname: 'PodEvicted'
+      target_match_re:
+        alertname: 'CPUPressure|MemoryPressure'
+      equal:
+      - 'cluster'
+      - 'node'
+      - 'pod'
+    
+    # Rule 4: Router Unavailable → Suppress Latency/Error Alerts
+    # If router is down, latency and error rate alerts are expected
+    - source_match:
+        alertname: 'RouterUnavailable'
+      target_match_re:
+        alertname: 'HighErrorRate|LatencySLOBreach|LatencyDegraded'
+      equal:
+      - 'cluster'
+    
+    # Rule 5: Low Memory → Suppress Pod Restart Loop
+    # If node memory is low, pod restarts are expected
+    - source_match:
+        alertname: 'NodeMemoryLow'
+      target_match_re:
+        alertname: 'PodRestartLoop'
+      equal:
+      - 'cluster'
+      - 'node'
+
+---
+# Note: Environment variable substitution for webhooks
+# Environment variables that must be set before this ConfigMap is applied:
+# 
+# Production:
+#   SLACK_WEBHOOK_URL          - Slack webhook for #monitoring-general
+#   SLACK_WEBHOOK_URL_ALERTS   - Slack webhook for #monitoring-alerts (optional)
+#   PAGERDUTY_SERVICE_KEY_PROD - PagerDuty service integration key
+# 
+# Staging:
+#   SLACK_WEBHOOK_URL_STAGING  - Slack webhook for staging channels
+# 
+# Example deployment:
+# $ export SLACK_WEBHOOK_URL="https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXX"
+# $ export PAGERDUTY_SERVICE_KEY_PROD="<integration-key-from-pagerduty>"
+# $ envsubst < alertmanager-config.yaml | kubectl apply -f -

@@ -1,0 +1,550 @@
+# Slack Integration Setup Guide and Templates
+# This document describes how to set up Slack webhooks for AlertManager integration
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: alertmanager-slack-docs
+  namespace: monitoring
+  labels:
+    app: alertmanager
+    component: slack-integration
+data:
+  SLACK_INTEGRATION_GUIDE.md: |
+    # Slack Integration for AlertManager
+    
+    ## Overview
+    AlertManager sends notifications to Slack via incoming webhooks. This guide covers:
+    - Creating Slack webhooks
+    - Configuring webhook URLs in Kubernetes
+    - Customizing message templates
+    - Testing the integration
+    
+    ## Step 1: Create Slack Workspace Webhooks
+    
+    ### Prerequisites
+    - Slack workspace admin access
+    - Slack app creation permissions
+    
+    ### Creating Webhooks
+    
+    1. **Access Slack Workspace Settings**
+       - Go to: https://api.slack.com/apps
+       - Click "Create New App"
+       - Choose "From scratch"
+       - App Name: "OpenClaw AlertManager"
+       - Workspace: Select your Slack workspace
+    
+    2. **Enable Incoming Webhooks**
+       - Left sidebar → "Incoming Webhooks"
+       - Toggle "Activate Incoming Webhooks" → On
+       - Click "Add New Webhook to Workspace"
+       - Select channel (or use default)
+       - Click "Allow"
+    
+    3. **Copy Webhook URLs**
+       - You'll see your webhook URL: `https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXX`
+       - Create separate webhooks for each channel:
+         - `#monitoring-general` → SLACK_WEBHOOK_URL
+         - `#monitoring-alerts` → SLACK_WEBHOOK_URL_ALERTS
+         - `#monitoring-staging-alerts` → SLACK_WEBHOOK_URL_STAGING
+         - `#monitoring-staging-critical` → SLACK_WEBHOOK_URL_STAGING_CRITICAL
+    
+    4. **Customize App Display** (Optional)
+       - Left sidebar → "App Home"
+       - Upload avatar/logo
+       - Set description: "Sends alerts from Kubernetes monitoring stack"
+    
+    ## Step 2: Store Webhooks in Kubernetes Secrets
+    
+    ### Create Secret for Production Webhooks
+    
+    ```bash
+    kubectl create secret generic alertmanager-slack-prod \
+      --from-literal=webhook-url="https://hooks.slack.com/services/T.../B.../XXX" \
+      --from-literal=webhook-url-alerts="https://hooks.slack.com/services/T.../B.../YYY" \
+      -n monitoring
+    ```
+    
+    ### Create Secret for Staging Webhooks
+    
+    ```bash
+    kubectl create secret generic alertmanager-slack-staging \
+      --from-literal=webhook-url-staging="https://hooks.slack.com/services/T.../B.../ZZZ" \
+      --from-literal=webhook-url-staging-critical="https://hooks.slack.com/services/T.../B.../WWW" \
+      -n monitoring
+    ```
+    
+    ## Step 3: Reference Secrets in AlertManager Config
+    
+    In `values-prod.yaml`:
+    ```yaml
+    alertmanager:
+      config:
+        global:
+          slack_api_url: ${SLACK_WEBHOOK_URL}
+        route:
+          routes:
+          - match:
+              severity: warning
+            receiver: slack-warnings
+    
+    receivers:
+    - name: slack-warnings
+      slack_configs:
+      - api_url: ${SLACK_WEBHOOK_URL_ALERTS}
+        channel: "#monitoring-alerts"
+    ```
+    
+    Environment variable injection (at deployment):
+    ```bash
+    export SLACK_WEBHOOK_URL=$(kubectl get secret alertmanager-slack-prod -o jsonpath='{.data.webhook-url}' | base64 -d)
+    helm install ... -f values-common.yaml -f values-prod.yaml
+    ```
+    
+    ## Step 4: Test the Integration
+    
+    ### Test via curl
+    ```bash
+    # Get webhook URL
+    WEBHOOK=$(kubectl get secret alertmanager-slack-prod -o jsonpath='{.data.webhook-url}' | base64 -d)
+    
+    # Send test message
+    curl -X POST "$WEBHOOK" \
+      -H 'Content-Type: application/json' \
+      -d '{
+        "text": "AlertManager Test Message",
+        "attachments": [
+          {
+            "color": "good",
+            "title": "Test Alert",
+            "text": "This is a test message from AlertManager",
+            "fields": [
+              {"title": "Severity", "value": "critical", "short": true},
+              {"title": "Cluster", "value": "clarity-router-prod", "short": true}
+            ],
+            "actions": [
+              {
+                "type": "button",
+                "text": "View in Grafana",
+                "url": "https://grafana.internal"
+              }
+            ]
+          }
+        ]
+      }'
+    ```
+    
+    ### Test via AlertManager API
+    ```bash
+    # Port-forward to AlertManager
+    kubectl port-forward -n monitoring svc/alertmanager 9093:9093 &
+    
+    # Create test alert
+    curl -X POST http://localhost:9093/api/v1/alerts \
+      -H 'Content-Type: application/json' \
+      -d '[{
+        "labels": {
+          "alertname": "TestAlert",
+          "severity": "critical",
+          "cluster": "clarity-router-prod"
+        },
+        "annotations": {
+          "summary": "Test alert from monitoring stack",
+          "description": "This is a test alert to verify Slack integration"
+        },
+        "generatorURL": "https://prometheus.internal/graph"
+      }]'
+    ```
+    
+    Expected result: Message appears in Slack channel with emoji, title, and buttons
+    
+    ## Step 5: Customize Message Templates
+    
+    ### Alert Message Template Format
+    
+    In AlertManager config, Slack messages are formatted with templates:
+    
+    ```yaml
+    slack_configs:
+    - api_url: ${SLACK_WEBHOOK_URL}
+      channel: "#monitoring-alerts"
+      
+      # Message title (shown in bold)
+      title: "🚨 {{ .GroupLabels.alertname }}"
+      
+      # Message body
+      text: |
+        *Status:* {{ .Status | toUpper }}
+        *Severity:* {{ .GroupLabels.severity }}
+        *Cluster:* {{ .GroupLabels.cluster }}
+        *Alert Count:* {{ .Alerts | len }}
+        
+        *Affected Instances:*
+        {{ range .Alerts }}
+        • {{ .Labels.instance }} - {{ .Annotations.description }}
+        {{ end }}
+      
+      # Color (hex or named: good/warning/danger)
+      color: '{{ if eq .Status "firing" }}danger{{ else }}good{{ end }}'
+      
+      # Icon emoji
+      icon_emoji: ":warning:"
+      
+      # Send resolved notifications
+      send_resolved: true
+    ```
+    
+    ### Template Variables
+    
+    | Variable | Description | Example |
+    |----------|-------------|---------|
+    | `.Status` | "firing" or "resolved" | firing |
+    | `.GroupLabels.<label>` | Label value from alert group | clarity-router-prod |
+    | `.CommonLabels.<label>` | Common label across all alerts | critical |
+    | `.Alerts \| len` | Number of alerts in group | 5 |
+    | `.Alerts[0].Labels.<label>` | First alert's label | router-0 |
+    | `.Alerts[0].Annotations.<annotation>` | First alert's annotation | "High latency detected" |
+    | `{{ range .Alerts }}...{{ end }}` | Loop over alerts | Renders each alert |
+    
+    ### Color Codes
+    
+    - `good` - Green (resolved/ok)
+    - `warning` - Orange/yellow
+    - `danger` - Red (firing/critical)
+    - `#0099ff` - Blue (info)
+    - `#hexcode` - Custom color
+    
+    ### Emoji Codes
+    
+    Common emojis for alerts:
+    - `:rotating_light:` - 🚨 Critical/emergency
+    - `:warning:` - ⚠️ Warning
+    - `:information_source:` - ℹ️ Info
+    - `:white_check_mark:` - ✅ Resolved
+    - `:robot_face:` - 🤖 Automation/system
+    
+    ## Example Message Templates
+    
+    ### Critical Alert
+    ```yaml
+    title: "🚨 {{ .GroupLabels.alertname }}"
+    text: |
+      *CRITICAL ALERT*
+      *Cluster:* {{ .GroupLabels.cluster }}
+      *Description:* {{ (index .Alerts 0).Annotations.description }}
+      *Value:* {{ (index .Alerts 0).Value }}
+      *Duration:* {{ (now.Sub (index .Alerts 0).StartsAt).Minutes | printf "%.0f" }} minutes
+    color: "danger"
+    icon_emoji: ":rotating_light:"
+    ```
+    
+    ### Warning Alert
+    ```yaml
+    title: "⚠️ {{ .GroupLabels.alertname }}"
+    text: |
+      *Warning:* {{ .GroupLabels.alertname }}
+      *Cluster:* {{ .GroupLabels.cluster }}
+      *Alerts:* {{ .Alerts | len }}
+    color: "warning"
+    ```
+    
+    ### With Action Buttons
+    ```yaml
+    actions:
+    - type: button
+      text: "🔍 View in Grafana"
+      url: "https://grafana.internal/d/router-health-overview?var-cluster={{ .GroupLabels.cluster }}"
+    - type: button
+      text: "📋 View Logs"
+      url: "https://grafana.internal/d/logs?var-namespace={{ .GroupLabels.job }}"
+    - type: button
+      text: "📚 Runbook"
+      url: "{{ (index .Alerts 0).Annotations.runbook_url }}"
+    ```
+    
+    ## Troubleshooting
+    
+    ### Webhook URL Invalid
+    - Check URL format: `https://hooks.slack.com/services/TXXX/BXXX/XXX`
+    - Verify webhook is still active in Slack (apps may expire)
+    - Regenerate webhook if needed (Slack API dashboard)
+    
+    ### Message Not Appearing in Channel
+    - Confirm channel name matches (include `#`)
+    - Check AlertManager logs: `kubectl logs -n monitoring alertmanager-0`
+    - Verify alert matches route (check labels and matchers)
+    - Test webhook with curl command above
+    
+    ### Message Format Wrong
+    - Check template syntax (Golang templates)
+    - Verify variable names exist in alert labels
+    - Use `{{ . | toJson }}` to debug available variables
+    
+    ### Duplicate Messages
+    - Check AlertManager replicas (may each send notification)
+    - Verify silence rules aren't creating duplicates
+    - Check if webhook is attached to multiple channels
+    
+    ## Best Practices
+    
+    1. **Use Multiple Webhooks**: Separate webhooks per channel for better control
+    2. **Include Context**: Add timestamps, durations, affected instances
+    3. **Add Buttons**: Link to Grafana dashboards, runbooks, logs
+    4. **Format Clearly**: Use bold, code blocks, emoji for readability
+    5. **Avoid Spam**: Tune group_wait, group_interval, repeat_interval
+    6. **Monitor Errors**: Enable AlertManager debug logging to catch issues
+    7. **Document Channels**: Keep team aware of alert channel purposes
+    
+    ## Channel Structure (Recommended)
+    
+    | Channel | Purpose | Alert Types |
+    |---------|---------|-------------|
+    | #monitoring-general | Catch-all default | Info/debug/fallback |
+    | #monitoring-alerts | Production warnings | All warnings |
+    | #monitoring-critical | Critical incidents | Critical severity |
+    | #monitoring-staging-alerts | Staging environment | Staging only |
+    | #monitoring-staging-critical | Staging urgent | Staging critical |
+    
+    ## Advanced: Custom Slack App
+    
+    For more control, create a custom Slack Bot App:
+    
+    1. Go to https://api.slack.com/apps
+    2. Create new app (from scratch)
+    3. Enable Scopes:
+       - `chat:write` - Send messages
+       - `files:write` - Upload files (optional)
+    4. Get OAuth Token (starts with `xoxb-`)
+    5. Use in webhook URL: `https://slack.com/api/chat.postMessage` with token
+    
+    ## Related Documentation
+    - AlertManager Slack Configuration: https://prometheus.io/docs/alerting/latest/configuration/#slack_config
+    - Slack Incoming Webhooks: https://api.slack.com/messaging/webhooks
+    - Slack Message Formatting: https://api.slack.com/messaging/composing/layouts
+
+  message-template-critical.json: |
+    {
+      "text": "🚨 Critical Alert",
+      "blocks": [
+        {
+          "type": "header",
+          "text": {
+            "type": "plain_text",
+            "text": "🚨 Critical Alert Triggered"
+          }
+        },
+        {
+          "type": "section",
+          "fields": [
+            {
+              "type": "mrkdwn",
+              "text": "*Alert:*\nRouterUnavailable"
+            },
+            {
+              "type": "mrkdwn",
+              "text": "*Cluster:*\nclarity-router-prod"
+            },
+            {
+              "type": "mrkdwn",
+              "text": "*Severity:*\ncritical"
+            },
+            {
+              "type": "mrkdwn",
+              "text": "*Duration:*\n5 minutes"
+            }
+          ]
+        },
+        {
+          "type": "section",
+          "text": {
+            "type": "mrkdwn",
+            "text": "*Description:*\nRouter is unavailable - no pods responding to health checks\n\n*Affected Instances:*\n• router-0 - Pod not responding\n• router-1 - Pod not responding\n• router-canary - Pod not responding"
+          }
+        },
+        {
+          "type": "actions",
+          "elements": [
+            {
+              "type": "button",
+              "text": {
+                "type": "plain_text",
+                "text": "📊 View in Grafana"
+              },
+              "url": "https://grafana.internal/d/router-health-overview"
+            },
+            {
+              "type": "button",
+              "text": {
+                "type": "plain_text",
+                "text": "📋 View Logs"
+              },
+              "url": "https://grafana.internal/d/logs"
+            },
+            {
+              "type": "button",
+              "text": {
+                "type": "plain_text",
+                "text": "📚 Runbook"
+              },
+              "url": "https://docs.example.com/runbooks/router-unavailable"
+            }
+          ]
+        },
+        {
+          "type": "divider"
+        },
+        {
+          "type": "context",
+          "elements": [
+            {
+              "type": "mrkdwn",
+              "text": "AlertManager • Fired at <!date^1644949536^{date_pretty} {time_secs}|2026-02-15 12:35:36 UTC>"
+            }
+          ]
+        }
+      ]
+    }
+
+  message-template-warning.json: |
+    {
+      "text": "⚠️ Warning Alert",
+      "blocks": [
+        {
+          "type": "header",
+          "text": {
+            "type": "plain_text",
+            "text": "⚠️ Warning Alert"
+          }
+        },
+        {
+          "type": "section",
+          "fields": [
+            {
+              "type": "mrkdwn",
+              "text": "*Alert:*\nHighCPUUsage"
+            },
+            {
+              "type": "mrkdwn",
+              "text": "*Cluster:*\nclarity-router-prod"
+            },
+            {
+              "type": "mrkdwn",
+              "text": "*Severity:*\nwarning"
+            },
+            {
+              "type": "mrkdwn",
+              "text": "*Count:*\n2 pods"
+            }
+          ]
+        },
+        {
+          "type": "section",
+          "text": {
+            "type": "mrkdwn",
+            "text": "*Description:*\nRouter pod CPU usage high - approaching limits\n\n*Affected Pods:*\n• router-0: 85% CPU (limit: 1000m)\n• router-1: 78% CPU (limit: 1000m)"
+          }
+        },
+        {
+          "type": "actions",
+          "elements": [
+            {
+              "type": "button",
+              "text": {
+                "type": "plain_text",
+                "text": "📊 Performance Dashboard"
+              },
+              "url": "https://grafana.internal/d/router-performance"
+            }
+          ]
+        }
+      ]
+    }
+
+  webhook-test-script.sh: |
+    #!/bin/bash
+    # Test Slack webhook integration
+    # Usage: ./webhook-test-script.sh <webhook-url> [message-type]
+    
+    set -e
+    
+    WEBHOOK_URL="${1:-}"
+    MESSAGE_TYPE="${2:-critical}"
+    
+    if [ -z "$WEBHOOK_URL" ]; then
+        echo "Usage: $0 <webhook-url> [critical|warning|info]"
+        echo ""
+        echo "Example:"
+        echo "  $0 'https://hooks.slack.com/services/T.../B.../XXX' critical"
+        exit 1
+    fi
+    
+    if [[ ! "$WEBHOOK_URL" =~ ^https://hooks\.slack\.com ]]; then
+        echo "Error: Invalid Slack webhook URL"
+        exit 1
+    fi
+    
+    case "$MESSAGE_TYPE" in
+        critical)
+            PAYLOAD='{
+              "text": "🚨 Test Alert - Critical",
+              "attachments": [{
+                "color": "danger",
+                "title": "Router Unavailable",
+                "text": "Test critical alert from AlertManager",
+                "fields": [
+                  {"title": "Cluster", "value": "clarity-router-prod", "short": true},
+                  {"title": "Severity", "value": "critical", "short": true},
+                  {"title": "Status", "value": "firing", "short": true},
+                  {"title": "Count", "value": "3 pods", "short": true}
+                ],
+                "actions": [
+                  {"type": "button", "text": "View in Grafana", "url": "https://grafana.internal"}
+                ]
+              }]
+            }'
+            ;;
+        warning)
+            PAYLOAD='{
+              "text": "⚠️ Test Alert - Warning",
+              "attachments": [{
+                "color": "warning",
+                "title": "High CPU Usage",
+                "text": "Test warning alert from AlertManager",
+                "fields": [
+                  {"title": "Cluster", "value": "clarity-router-prod", "short": true},
+                  {"title": "Severity", "value": "warning", "short": true},
+                  {"title": "Pods", "value": "router-0, router-1", "short": false}
+                ]
+              }]
+            }'
+            ;;
+        info)
+            PAYLOAD='{
+              "text": "ℹ️ Test Alert - Info",
+              "attachments": [{
+                "color": "#0099ff",
+                "title": "System Information",
+                "text": "Test info message from AlertManager"
+              }]
+            }'
+            ;;
+        *)
+            echo "Error: Unknown message type. Use: critical, warning, or info"
+            exit 1
+            ;;
+    esac
+    
+    echo "Sending $MESSAGE_TYPE test message to Slack..."
+    RESPONSE=$(curl -s -X POST "$WEBHOOK_URL" \
+      -H 'Content-Type: application/json' \
+      -d "$PAYLOAD")
+    
+    if [ "$RESPONSE" = "ok" ]; then
+        echo "✅ Message sent successfully!"
+        echo "Check your Slack channel for the test message."
+    else
+        echo "❌ Error sending message:"
+        echo "$RESPONSE"
+        exit 1
+    fi

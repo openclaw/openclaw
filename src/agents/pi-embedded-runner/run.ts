@@ -1156,6 +1156,9 @@ export async function runEmbeddedPiAgent(
             successfulCronAdds: attempt.successfulCronAdds,
           };
         }
+      } catch (err) {
+        log.error('embedded runner failed', { error: err, sessionId: params.sessionId });
+        throw err;
       } finally {
         process.chdir(prevCwd);
       }

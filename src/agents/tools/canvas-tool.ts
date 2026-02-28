@@ -14,6 +14,9 @@ import { optionalStringEnum, stringEnum } from "../schema/typebox.js";
 import { type AnyAgentTool, imageResult, jsonResult, readStringParam } from "./common.js";
 import { callGatewayTool, readGatewayCallOptions } from "./gateway.js";
 import { resolveNodeId } from "./nodes-utils.js";
+import { applyNodeInvokeOverrides } from "../../clarityburst/decision-override.js";
+import { ClarityBurstAbstainError } from "../../clarityburst/errors.js";
+import { convertAbstainToBlockedResponse } from "../pi-tool-definition-adapter.js";
 
 const CANVAS_ACTIONS = [
   "present",
@@ -96,13 +99,37 @@ export function createCanvasTool(options?: { config?: OpenClawConfig }): AnyAgen
         true,
       );
 
-      const invoke = async (command: string, invokeParams?: Record<string, unknown>) =>
-        await callGatewayTool("node.invoke", gatewayOpts, {
+      const invoke = async (command: string, invokeParams?: Record<string, unknown>) => {
+        const nodeCtx = {
+          stageId: "NODE_INVOKE" as const,
+          userConfirmed: false,
+          functionName: command,
+          nodeId,
+        };
+      
+        const gate = await applyNodeInvokeOverrides(nodeCtx);
+      
+        if (gate.outcome === "ABSTAIN_CONFIRM" || gate.outcome === "ABSTAIN_CLARIFY") {
+          return jsonResult(
+            convertAbstainToBlockedResponse(
+              new ClarityBurstAbstainError({
+                stageId: "NODE_INVOKE",
+                outcome: gate.outcome,
+                reason: gate.reason,
+                contractId: gate.contractId ?? null,
+                instructions: gate.instructions ?? "",
+              })
+            )
+          );
+        }
+      
+        return await callGatewayTool("node.invoke", gatewayOpts, {
           nodeId,
           command,
           params: invokeParams,
           idempotencyKey: crypto.randomUUID(),
         });
+      };
 
       switch (action) {
         case "present": {

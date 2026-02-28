@@ -1,0 +1,186 @@
+# Production-specific Grafana Helm Configuration (us-east-1)
+# These values override and extend values-common.yaml
+# Deployment: helm install grafana grafana/grafana \
+#   --namespace monitoring \
+#   --values infra/grafana/values-common.yaml \
+#   --values infra/grafana/values-prod.yaml
+
+grafana:
+  # Increase replicas for production HA
+  replicas: 2
+  
+  # Ingress for production domain
+  ingress:
+    enabled: true
+    ingressClassName: nginx
+    hosts:
+      - grafana.clarity-router.prod
+    path: /
+    pathType: Prefix
+    tls:
+      - secretName: grafana-tls-prod
+        hosts:
+          - grafana.clarity-router.prod
+    annotations:
+      cert-manager.io/cluster-issuer: letsencrypt-prod
+      nginx.ingress.kubernetes.io/ssl-redirect: "true"
+  
+  # Higher resource limits for production workload
+  resources:
+    limits:
+      cpu: 2000m
+      memory: 4Gi
+    requests:
+      cpu: 1000m
+      memory: 2Gi
+  
+  # Larger persistent storage for production dashboards
+  persistence:
+    enabled: true
+    storageClassName: efs-sc
+    size: 20Gi
+    accessModes:
+      - ReadWriteOnce
+  
+  # Grafana configuration for production
+  grafana.ini:
+    server:
+      root_url: https://grafana.clarity-router.prod/
+      serve_from_sub_path: false
+      enable_gzip: true
+      protocol: http  # Reverse proxy handles HTTPS
+    
+    security:
+      admin_user: admin
+      cookie_secure: true
+      cookie_samesite: strict
+      disable_initial_admin_user: false
+      # Enable LDAP for production (optional)
+      # ldap_config_file: /etc/grafana/ldap.toml
+    
+    # LDAP Configuration (optional - uncomment if using LDAP)
+    # auth.ldap:
+    #   enabled: true
+    #   config_file: /etc/grafana/ldap.toml
+    #   allow_sign_up: true
+    
+    # Enable detailed logging for production monitoring
+    log:
+      mode: console
+      level: info
+    
+    # Session settings with longer timeout
+    session:
+      provider: file
+      provider_config: sessions
+      cookie_secure: true
+      session_life_time: 86400  # 24 hours
+    
+    # Alerting enabled
+    alerting:
+      enabled: true
+  
+  # Production datasources: both prod and staging Prometheus/Loki
+  datasources:
+    datasources.yaml:
+      apiVersion: 1
+      datasources:
+        # Production Prometheus (primary)
+        - name: prometheus-prod
+          type: prometheus
+          url: http://prometheus-kube-prom-prometheus.monitoring:9090
+          access: proxy
+          isDefault: true
+          jsonData:
+            timeInterval: 30s
+          editable: true
+        
+        # Production Loki
+        - name: loki-prod
+          type: loki
+          url: http://loki.monitoring:3100
+          access: proxy
+          jsonData:
+            maxLines: 1000
+          editable: true
+        
+        # Staging Prometheus (for comparison)
+        - name: prometheus-staging
+          type: prometheus
+          url: http://prometheus-staging-kube-prom-prometheus.monitoring:9090
+          access: proxy
+          isDefault: false
+          jsonData:
+            timeInterval: 30s
+          editable: true
+        
+        # Staging Loki (for comparison)
+        - name: loki-staging
+          type: loki
+          url: http://loki-staging.monitoring:3100
+          access: proxy
+          isDefault: false
+          jsonData:
+            maxLines: 1000
+          editable: true
+  
+  # Environment variables for production
+  env:
+    GF_PATHS_PROVISIONING: /etc/grafana/provisioning
+    GF_SECURITY_ADMIN_USER: admin
+    GF_INSTALL_PLUGINS: "grafana-piechart-panel,grafana-worldmap-panel"
+    GF_SECURITY_ANGULAR_SUPPORT_ENABLED: "false"
+  
+  # Extra volumes for production configs (e.g., LDAP)
+  # Uncomment if using LDAP
+  # extraVolumes:
+  #   - name: ldap-config
+  #     configMap:
+  #       name: ldap-config
+  # 
+  # extraVolumeMounts:
+  #   - name: ldap-config
+  #     mountPath: /etc/grafana/ldap.toml
+  #     subPath: ldap.toml
+
+# Production teams configuration
+teams:
+  - name: Production
+    email: prod-team@clarity-router.prod
+    members:
+      - admin
+    role: Editor
+  
+  - name: Staging
+    email: staging-team@clarity-router.prod
+    members:
+      - admin
+    role: Viewer
+  
+  - name: On-Call
+    email: oncall@clarity-router.prod
+    members:
+      - admin
+    role: Editor
+
+# Production-specific AlertManager settings
+alerting:
+  alertmanager:
+    enabled: true
+    url: http://prometheus-stack-kube-prom-alertmanager.monitoring:9093
+  
+  # Notification channels for production
+  # Configure Slack, PagerDuty, etc. via Grafana UI or separate provisioning
+  notificationChannels:
+    - name: "Production Alerts - Slack"
+      type: slack
+      # Webhook URL configured via secret
+    
+    - name: "Production Alerts - PagerDuty"
+      type: pagerduty
+      # Service key configured via secret
+
+# Production cluster label for dashboard filtering
+cluster: prod
+environment: production
+region: us-east-1

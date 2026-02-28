@@ -1,0 +1,1 @@
+{"mode":"baseline","workloadId":"test-regression","toolExecutions":5,"llmCalls":10,"routerCalls":8,"durationMs":1000,"llmCallsPerTool":2,"routerCallsPerTool":1.6,"abstainRate":0.1,"confirmRate":0.3,"proceedRate":0.6}

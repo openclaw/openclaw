@@ -1,0 +1,157 @@
+# Staging-specific Grafana Helm Configuration (us-west-2)
+# These values override and extend values-common.yaml
+# Deployment: helm install grafana grafana/grafana \
+#   --namespace monitoring \
+#   --values infra/grafana/values-common.yaml \
+#   --values infra/grafana/values-staging.yaml
+
+grafana:
+  # Standard 2 replicas for staging
+  replicas: 2
+  
+  # Ingress for staging domain
+  ingress:
+    enabled: true
+    ingressClassName: nginx
+    hosts:
+      - grafana.clarity-router.staging
+    path: /
+    pathType: Prefix
+    tls:
+      - secretName: grafana-tls-staging
+        hosts:
+          - grafana.clarity-router.staging
+    annotations:
+      cert-manager.io/cluster-issuer: letsencrypt-staging
+      nginx.ingress.kubernetes.io/ssl-redirect: "true"
+  
+  # Standard resource limits for staging
+  resources:
+    limits:
+      cpu: 1500m
+      memory: 3Gi
+    requests:
+      cpu: 750m
+      memory: 1.5Gi
+  
+  # Moderate persistent storage for staging dashboards
+  persistence:
+    enabled: true
+    storageClassName: efs-sc
+    size: 15Gi
+    accessModes:
+      - ReadWriteOnce
+  
+  # Grafana configuration for staging
+  grafana.ini:
+    server:
+      root_url: https://grafana.clarity-router.staging/
+      serve_from_sub_path: false
+      enable_gzip: true
+      protocol: http  # Reverse proxy handles HTTPS
+    
+    security:
+      admin_user: admin
+      cookie_secure: true
+      cookie_samesite: lax
+      disable_initial_admin_user: false
+    
+    # Standard logging for staging
+    log:
+      mode: console
+      level: info
+    
+    # Session settings
+    session:
+      provider: file
+      provider_config: sessions
+      cookie_secure: true
+      session_life_time: 86400
+    
+    # Alerting enabled for staging
+    alerting:
+      enabled: true
+  
+  # Staging datasources: both prod and staging Prometheus/Loki
+  datasources:
+    datasources.yaml:
+      apiVersion: 1
+      datasources:
+        # Production Prometheus (read-only for comparison)
+        - name: prometheus-prod
+          type: prometheus
+          url: http://prometheus-kube-prom-prometheus.monitoring:9090
+          access: proxy
+          isDefault: false
+          jsonData:
+            timeInterval: 30s
+          editable: false
+          readOnly: true
+        
+        # Production Loki (read-only)
+        - name: loki-prod
+          type: loki
+          url: http://loki.monitoring:3100
+          access: proxy
+          isDefault: false
+          jsonData:
+            maxLines: 1000
+          editable: false
+          readOnly: true
+        
+        # Staging Prometheus (primary for staging team)
+        - name: prometheus-staging
+          type: prometheus
+          url: http://prometheus-staging-kube-prom-prometheus.monitoring:9090
+          access: proxy
+          isDefault: true
+          jsonData:
+            timeInterval: 30s
+          editable: true
+        
+        # Staging Loki (primary for staging team)
+        - name: loki-staging
+          type: loki
+          url: http://loki-staging.monitoring:3100
+          access: proxy
+          isDefault: false
+          jsonData:
+            maxLines: 1000
+          editable: true
+  
+  # Environment variables for staging
+  env:
+    GF_PATHS_PROVISIONING: /etc/grafana/provisioning
+    GF_SECURITY_ADMIN_USER: admin
+    GF_INSTALL_PLUGINS: "grafana-piechart-panel"
+
+# Staging teams configuration
+teams:
+  - name: Staging
+    email: staging-team@clarity-router.staging
+    members:
+      - admin
+    role: Editor
+  
+  - name: Production
+    email: prod-team@clarity-router.staging
+    members:
+      - admin
+    role: Viewer
+
+# Staging-specific AlertManager settings
+alerting:
+  alertmanager:
+    enabled: true
+    url: http://prometheus-stack-kube-prom-alertmanager.monitoring:9093
+  
+  # Notification channels for staging (minimal)
+  notificationChannels:
+    - name: "Staging Alerts - Slack"
+      type: slack
+      # Webhook URL configured via secret
+
+# Staging cluster label for dashboard filtering
+cluster: staging
+environment: staging
+region: us-west-2
