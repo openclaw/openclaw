@@ -8,6 +8,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk";
 import { AgentProcess } from "./agent-process.js";
 import {
   ACCESS_MODES,
@@ -485,14 +486,18 @@ async function fetchJson(
 ): Promise<unknown> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const { response, release } = await fetchWithSsrFGuard({
+    url,
+    init: { ...init, signal: controller.signal },
+  });
   try {
-    const response = await fetch(url, { ...init, signal: controller.signal });
+    clearTimeout(timer);
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}`);
     }
     return response.json();
   } finally {
-    clearTimeout(timer);
+    await release();
   }
 }
 
@@ -568,13 +573,17 @@ async function fetchVoicesFromLiveKitDocs(lane: ModelLane, provider: string): Pr
   const url = getLiveKitDocsPluginUrl(lane, provider);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 10_000);
+  const { response, release } = await fetchWithSsrFGuard({
+    url,
+    init: { signal: controller.signal },
+  });
   try {
-    const response = await fetch(url, { signal: controller.signal });
+    clearTimeout(timer);
     if (!response.ok) return [];
     const html = await response.text();
     return uniq(extractVoiceLikeTokens(html)).slice(0, 80);
   } finally {
-    clearTimeout(timer);
+    await release();
   }
 }
 
@@ -582,13 +591,17 @@ async function fetchLanguagesFromLiveKitDocs(lane: ModelLane, provider: string):
   const url = getLiveKitDocsPluginUrl(lane, provider);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 10_000);
+  const { response, release } = await fetchWithSsrFGuard({
+    url,
+    init: { signal: controller.signal },
+  });
   try {
-    const response = await fetch(url, { signal: controller.signal });
+    clearTimeout(timer);
     if (!response.ok) return [];
     const html = await response.text();
     return uniq(extractLanguageLikeTokens(html)).slice(0, 80);
   } finally {
-    clearTimeout(timer);
+    await release();
   }
 }
 
