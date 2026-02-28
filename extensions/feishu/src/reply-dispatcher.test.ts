@@ -8,6 +8,8 @@ const sendMediaFeishuMock = vi.hoisted(() => vi.fn());
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
 const resolveReceiveIdTypeMock = vi.hoisted(() => vi.fn());
 const createReplyDispatcherWithTypingMock = vi.hoisted(() => vi.fn());
+const addTypingIndicatorMock = vi.hoisted(() => vi.fn(async () => ({ messageId: "om_msg" })));
+const removeTypingIndicatorMock = vi.hoisted(() => vi.fn(async () => {}));
 const streamingInstances = vi.hoisted(() => [] as any[]);
 
 vi.mock("./accounts.js", () => ({ resolveFeishuAccount: resolveFeishuAccountMock }));
@@ -19,6 +21,10 @@ vi.mock("./send.js", () => ({
 vi.mock("./media.js", () => ({ sendMediaFeishu: sendMediaFeishuMock }));
 vi.mock("./client.js", () => ({ createFeishuClient: createFeishuClientMock }));
 vi.mock("./targets.js", () => ({ resolveReceiveIdType: resolveReceiveIdTypeMock }));
+vi.mock("./typing.js", () => ({
+  addTypingIndicator: addTypingIndicatorMock,
+  removeTypingIndicator: removeTypingIndicatorMock,
+}));
 vi.mock("./streaming-card.js", () => ({
   FeishuStreamingSession: class {
     active = false;
@@ -81,6 +87,33 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
         },
       },
     });
+  });
+
+  it("skips typing indicator when account typingIndicator is disabled", async () => {
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "auto",
+        streaming: true,
+        typingIndicator: false,
+      },
+    });
+
+    createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent",
+      runtime: {} as never,
+      chatId: "oc_chat",
+      replyToMessageId: "om_parent",
+    });
+
+    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+    await options.onReplyStart?.();
+
+    expect(addTypingIndicatorMock).not.toHaveBeenCalled();
   });
 
   it("keeps auto mode plain text on non-streaming send path", async () => {
