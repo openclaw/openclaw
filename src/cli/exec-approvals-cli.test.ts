@@ -142,4 +142,93 @@ describe("exec approvals CLI", () => {
     );
     expect(runtimeErrors).toHaveLength(0);
   });
+
+  describe("trust command", () => {
+    it("rejects non-TTY invocation", async () => {
+      const originalIsTTY = process.stdin.isTTY;
+      Object.defineProperty(process.stdin, "isTTY", { value: false, configurable: true });
+
+      try {
+        await runApprovalsCommand(["approvals", "trust", "--minutes", "15"]);
+      } catch {
+        // commander exitOverride throws
+      }
+
+      expect(runtimeErrors.some((e) => String(e).includes("interactive terminal"))).toBe(true);
+      Object.defineProperty(process.stdin, "isTTY", { value: originalIsTTY, configurable: true });
+    });
+
+    it("rejects minutes above absolute max", async () => {
+      Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
+
+      try {
+        await runApprovalsCommand(["approvals", "trust", "--minutes", "600"]);
+      } catch {
+        // commander exitOverride throws
+      }
+
+      expect(runtimeErrors.some((e) => String(e).includes("480 minutes"))).toBe(true);
+    });
+
+    it("rejects minutes above default max without --force", async () => {
+      Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
+
+      try {
+        await runApprovalsCommand(["approvals", "trust", "--minutes", "120"]);
+      } catch {
+        // commander exitOverride throws
+      }
+
+      expect(runtimeErrors.some((e) => String(e).includes("--force"))).toBe(true);
+    });
+  });
+
+  describe("untrust command", () => {
+    it("clears an active trust window", async () => {
+      const now = Date.now();
+      localSnapshot.file = {
+        version: 1,
+        agents: {
+          main: {
+            security: "allowlist",
+            trustWindow: {
+              status: "active",
+              expiresAt: now + 600_000,
+              grantedAt: now,
+              security: "full",
+              ask: "off",
+            },
+          },
+        },
+      };
+
+      const saveExecApprovals = vi.mocked(execApprovals.saveExecApprovals);
+      saveExecApprovals.mockClear();
+
+      await runApprovalsCommand(["approvals", "untrust"]);
+
+      expect(saveExecApprovals).toHaveBeenCalled();
+      const savedFile = saveExecApprovals.mock.calls[0][0];
+      expect(savedFile.agents?.main?.trustWindow).toBeUndefined();
+      expect(savedFile.agents?.main?.security).toBe("allowlist");
+      expect(runtimeErrors).toHaveLength(0);
+    });
+
+    it("handles missing trust window gracefully", async () => {
+      localSnapshot.file = {
+        version: 1,
+        agents: {
+          main: { security: "allowlist" },
+        },
+      };
+
+      const saveExecApprovals = vi.mocked(execApprovals.saveExecApprovals);
+      saveExecApprovals.mockClear();
+
+      await runApprovalsCommand(["approvals", "untrust"]);
+
+      expect(saveExecApprovals).not.toHaveBeenCalled();
+      expect(runtimeErrors).toHaveLength(0);
+    });
+  });
 });

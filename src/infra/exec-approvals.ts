@@ -78,8 +78,18 @@ export type ExecAllowlistEntry = {
   lastResolvedPath?: string;
 };
 
+export type TrustWindow = {
+  status: "active";
+  expiresAt: number;
+  grantedAt: number;
+  grantedBy?: string;
+  security: ExecSecurity;
+  ask: ExecAsk;
+};
+
 export type ExecApprovalsAgent = ExecApprovalsDefaults & {
   allowlist?: ExecAllowlistEntry[];
+  trustWindow?: TrustWindow;
 };
 
 export type ExecApprovalsFile = {
@@ -431,6 +441,22 @@ export function resolveExecApprovalsFromFile(params: {
       agent.autoAllowSkills ?? wildcard.autoAllowSkills ?? resolvedDefaults.autoAllowSkills,
     ),
   };
+  // Trust window override: if active and not expired, override agent security/ask.
+  // Pure read — no side effects. Expired windows are ignored, not cleaned up here.
+  const trustWindow = agent.trustWindow;
+  const trustWindowActive =
+    trustWindow?.status === "active" &&
+    typeof trustWindow.expiresAt === "number" &&
+    Date.now() < trustWindow.expiresAt;
+
+  const finalAgent: Required<ExecApprovalsDefaults> = trustWindowActive
+    ? {
+        ...resolvedAgent,
+        security: normalizeSecurity(trustWindow.security, resolvedAgent.security),
+        ask: normalizeAsk(trustWindow.ask, resolvedAgent.ask),
+      }
+    : resolvedAgent;
+
   const allowlist = [
     ...(Array.isArray(wildcard.allowlist) ? wildcard.allowlist : []),
     ...(Array.isArray(agent.allowlist) ? agent.allowlist : []),
@@ -442,7 +468,7 @@ export function resolveExecApprovalsFromFile(params: {
     ),
     token: params.token ?? file.socket?.token ?? "",
     defaults: resolvedDefaults,
-    agent: resolvedAgent,
+    agent: finalAgent,
     allowlist,
     file,
   };

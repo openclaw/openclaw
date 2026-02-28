@@ -6,6 +6,9 @@ import {
   saveExecApprovals,
   type ExecApprovalsFile,
   type ExecApprovalsSnapshot,
+  type TrustWindow,
+  type ExecSecurity,
+  type ExecAsk,
 } from "../../infra/exec-approvals.js";
 import {
   ErrorCodes,
@@ -189,5 +192,65 @@ export const execApprovalsHandlers: GatewayRequestHandlers = {
       const payload = safeParseJson(res.payloadJSON ?? null);
       respond(true, payload, undefined);
     });
+  },
+
+  "exec.approvals.trust": ({ params, respond }) => {
+    const p = params as { agentId?: string; minutes?: number; grantedBy?: string };
+    const minutes = typeof p.minutes === "number" ? p.minutes : 0;
+    if (minutes <= 0 || minutes > 480) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "minutes must be between 1 and 480"),
+      );
+      return;
+    }
+    const agentId = p.agentId?.trim() || "main";
+    const now = Date.now();
+    const expiresAt = now + minutes * 60_000;
+
+    ensureExecApprovals();
+    const snapshot = readExecApprovalsSnapshot();
+    const file = snapshot.file;
+    const agents = file.agents ?? {};
+    const agent = agents[agentId] ?? {};
+
+    const trustWindow: TrustWindow = {
+      status: "active" as const,
+      expiresAt,
+      grantedAt: now,
+      grantedBy: p.grantedBy,
+      security: "full" as ExecSecurity,
+      ask: "off" as ExecAsk,
+    };
+
+    agents[agentId] = { ...agent, trustWindow };
+    file.agents = agents;
+    saveExecApprovals(file);
+
+    respond(true, { ok: true, expiresAt, agentId }, undefined);
+  },
+
+  "exec.approvals.untrust": ({ params, respond }) => {
+    const p = params as { agentId?: string; revokedBy?: string };
+    const agentId = p.agentId?.trim() || "main";
+
+    ensureExecApprovals();
+    const snapshot = readExecApprovalsSnapshot();
+    const file = snapshot.file;
+    const agents = file.agents ?? {};
+    const agent = agents[agentId];
+
+    if (!agent?.trustWindow || agent.trustWindow.status !== "active") {
+      respond(true, { ok: true, agentId, message: "No active trust window" }, undefined);
+      return;
+    }
+
+    const { trustWindow: _, ...agentWithout } = agent;
+    agents[agentId] = agentWithout;
+    file.agents = agents;
+    saveExecApprovals(file);
+
+    respond(true, { ok: true, agentId }, undefined);
   },
 };

@@ -6,6 +6,9 @@ import {
   saveExecApprovals,
   type ExecApprovalsAgent,
   type ExecApprovalsFile,
+  type ExecSecurity,
+  type ExecAsk,
+  type TrustWindow,
 } from "../infra/exec-approvals.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import { defaultRuntime } from "../runtime.js";
@@ -479,4 +482,148 @@ export function registerExecApprovalsCli(program: Command) {
       return true;
     },
   });
+
+  // ── Trust Window Commands ──────────────────────────────────────────────
+
+  const DEFAULT_MAX_TRUST_MINUTES = 60;
+  const ABSOLUTE_MAX_TRUST_MINUTES = 480;
+
+  type TrustOpts = ExecApprovalsCliOpts & {
+    minutes?: string;
+    yes?: boolean;
+    force?: boolean;
+    agent?: string;
+  };
+
+  approvals
+    .command("trust")
+    .description("Grant a time-bounded trust window (unrestricted exec)")
+    .requiredOption("--minutes <n>", "Duration in minutes")
+    .option("--agent <id>", "Agent id (defaults to main)")
+    .option("--yes", "Skip confirmation prompt", false)
+    .option("--force", "Allow exceeding default max duration", false)
+    .action(async (opts: TrustOpts) => {
+      try {
+        // TTY gate: prevent agent self-escalation
+        if (!process.stdin.isTTY) {
+          exitWithError(
+            "Trust window grants require an interactive terminal.\n" +
+              "This prevents automated processes from escalating their own privileges.",
+          );
+        }
+
+        const minutes = parseInt(String(opts.minutes), 10);
+        if (isNaN(minutes) || minutes <= 0) {
+          exitWithError("--minutes must be a positive integer.");
+        }
+        if (minutes > ABSOLUTE_MAX_TRUST_MINUTES) {
+          exitWithError(
+            `Maximum trust window is ${ABSOLUTE_MAX_TRUST_MINUTES} minutes (${ABSOLUTE_MAX_TRUST_MINUTES / 60}h). ` +
+              `For longer periods, adjust the base security policy.`,
+          );
+        }
+        if (minutes > DEFAULT_MAX_TRUST_MINUTES && !opts.force) {
+          exitWithError(
+            `Default max is ${DEFAULT_MAX_TRUST_MINUTES} minutes. ` +
+              `Use --force to grant up to ${ABSOLUTE_MAX_TRUST_MINUTES} minutes.`,
+          );
+        }
+
+        const agentKey = opts.agent?.trim() || "main";
+        const now = Date.now();
+        const expiresAt = now + minutes * 60_000;
+        const expiresDate = new Date(expiresAt);
+        const timeStr = expiresDate.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+
+        // Interactive confirmation (unless --yes)
+        if (!opts.yes) {
+          const readline = await import("node:readline");
+          const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+          const answer = await new Promise<string>((resolve) => {
+            rl.question(
+              `\n⚠️  This will allow agent "${agentKey}" to execute any command for ${minutes} minutes without approval.\n` +
+                `    Continue? [y/N] `,
+              resolve,
+            );
+          });
+          rl.close();
+          if (answer.trim().toLowerCase() !== "y") {
+            defaultRuntime.log("Cancelled.");
+            return;
+          }
+        }
+
+        const snapshot = loadSnapshotLocal();
+        const file = snapshot.file;
+        const agents = file.agents ?? {};
+        const agent = agents[agentKey] ?? {};
+
+        const trustWindow: TrustWindow = {
+          status: "active",
+          expiresAt,
+          grantedAt: now,
+          security: "full" as ExecSecurity,
+          ask: "off" as ExecAsk,
+        };
+
+        agents[agentKey] = { ...agent, trustWindow };
+        file.agents = agents;
+        saveExecApprovals(file);
+
+        defaultRuntime.log("");
+        defaultRuntime.log(`🔓 Trust window active`);
+        defaultRuntime.log(`   Agent: ${agentKey}`);
+        defaultRuntime.log(`   Duration: ${minutes} minutes`);
+        defaultRuntime.log(`   Expires at: ${timeStr}`);
+        defaultRuntime.log(`   Run \`openclaw approvals untrust\` to revoke early`);
+      } catch (err) {
+        defaultRuntime.error(formatCliError(err));
+        defaultRuntime.exit(1);
+      }
+    });
+
+  type UntrustOpts = ExecApprovalsCliOpts & {
+    agent?: string;
+  };
+
+  approvals
+    .command("untrust")
+    .description("Revoke an active trust window immediately")
+    .option("--agent <id>", "Agent id (defaults to main)")
+    .action(async (opts: UntrustOpts) => {
+      try {
+        const agentKey = opts.agent?.trim() || "main";
+        const snapshot = loadSnapshotLocal();
+        const file = snapshot.file;
+        const agents = file.agents ?? {};
+        const agent = agents[agentKey];
+
+        if (!agent?.trustWindow || agent.trustWindow.status !== "active") {
+          defaultRuntime.log(`No active trust window for agent "${agentKey}".`);
+          return;
+        }
+
+        const wasActive = agent.trustWindow.expiresAt > Date.now();
+        const remainingMs = wasActive ? agent.trustWindow.expiresAt - Date.now() : 0;
+        const remainingMin = Math.ceil(remainingMs / 60_000);
+
+        // Remove the trust window
+        const { trustWindow: _, ...agentWithout } = agent;
+        agents[agentKey] = agentWithout;
+        file.agents = agents;
+        saveExecApprovals(file);
+
+        if (wasActive) {
+          defaultRuntime.log(
+            `🔒 Trust window revoked for agent "${agentKey}" (${remainingMin}m remaining).`,
+          );
+        } else {
+          defaultRuntime.log(`🔒 Expired trust window cleared for agent "${agentKey}".`);
+        }
+        defaultRuntime.log(`   Normal approval policy restored.`);
+      } catch (err) {
+        defaultRuntime.error(formatCliError(err));
+        defaultRuntime.exit(1);
+      }
+    });
 }

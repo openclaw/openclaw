@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { makePathEnv, makeTempDir } from "./exec-approvals-test-helpers.js";
 import {
   analyzeArgvCommand,
@@ -21,7 +21,9 @@ import {
   resolveCommandResolutionFromArgv,
   resolveExecApprovalsPath,
   resolveExecApprovalsSocketPath,
+  resolveExecApprovalsFromFile,
   type ExecAllowlistEntry,
+  type ExecApprovalsFile,
 } from "./exec-approvals.js";
 
 function buildNestedEnvShellCommand(params: {
@@ -874,6 +876,153 @@ describe("exec approvals policy helpers", () => {
         ask: "on-miss",
         security: "full",
         analysisOk: false,
+        allowlistSatisfied: false,
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("trust window", () => {
+  it("overrides security/ask when active and not expired", () => {
+    const now = Date.now();
+    const file: ExecApprovalsFile = {
+      version: 1,
+      agents: {
+        main: {
+          security: "allowlist",
+          ask: "on-miss",
+          trustWindow: {
+            status: "active",
+            expiresAt: now + 60_000,
+            grantedAt: now,
+            security: "full",
+            ask: "off",
+          },
+        },
+      },
+    };
+    const resolved = resolveExecApprovalsFromFile({ file, agentId: "main" });
+    expect(resolved.agent.security).toBe("full");
+    expect(resolved.agent.ask).toBe("off");
+  });
+
+  it("ignores expired window — falls back to base policy", () => {
+    const now = Date.now();
+    const file: ExecApprovalsFile = {
+      version: 1,
+      agents: {
+        main: {
+          security: "allowlist",
+          ask: "on-miss",
+          trustWindow: {
+            status: "active",
+            expiresAt: now - 1000,
+            grantedAt: now - 61_000,
+            security: "full",
+            ask: "off",
+          },
+        },
+      },
+    };
+    const resolved = resolveExecApprovalsFromFile({ file, agentId: "main" });
+    expect(resolved.agent.security).toBe("allowlist");
+    expect(resolved.agent.ask).toBe("on-miss");
+  });
+
+  it("does not write to disk (pure read path)", () => {
+    const writeSpy = vi.spyOn(fs, "writeFileSync");
+    const now = Date.now();
+    const file: ExecApprovalsFile = {
+      version: 1,
+      agents: {
+        main: {
+          security: "allowlist",
+          ask: "on-miss",
+          trustWindow: {
+            status: "active",
+            expiresAt: now - 1000,
+            grantedAt: now - 61_000,
+            security: "full",
+            ask: "off",
+          },
+        },
+      },
+    };
+    resolveExecApprovalsFromFile({ file, agentId: "main" });
+    expect(writeSpy).not.toHaveBeenCalled();
+    writeSpy.mockRestore();
+  });
+
+  it("overrides security: deny base policy when window is active", () => {
+    const now = Date.now();
+    const file: ExecApprovalsFile = {
+      version: 1,
+      agents: {
+        main: {
+          security: "deny",
+          trustWindow: {
+            status: "active",
+            expiresAt: now + 60_000,
+            grantedAt: now,
+            security: "full",
+            ask: "off",
+          },
+        },
+      },
+    };
+    const resolved = resolveExecApprovalsFromFile({ file, agentId: "main" });
+    expect(resolved.agent.security).toBe("full");
+    expect(resolved.agent.ask).toBe("off");
+  });
+
+  it("does not affect other agents", () => {
+    const now = Date.now();
+    const file: ExecApprovalsFile = {
+      version: 1,
+      agents: {
+        main: {
+          security: "allowlist",
+          ask: "on-miss",
+          trustWindow: {
+            status: "active",
+            expiresAt: now + 60_000,
+            grantedAt: now,
+            security: "full",
+            ask: "off",
+          },
+        },
+        other: {
+          security: "deny",
+          ask: "always",
+        },
+      },
+    };
+    const resolvedOther = resolveExecApprovalsFromFile({ file, agentId: "other" });
+    expect(resolvedOther.agent.security).toBe("deny");
+    expect(resolvedOther.agent.ask).toBe("always");
+  });
+
+  it("agent without trustWindow is unaffected", () => {
+    const file: ExecApprovalsFile = {
+      version: 1,
+      agents: {
+        main: {
+          security: "allowlist",
+          ask: "on-miss",
+        },
+      },
+    };
+    const resolved = resolveExecApprovalsFromFile({ file, agentId: "main" });
+    expect(resolved.agent.security).toBe("allowlist");
+    expect(resolved.agent.ask).toBe("on-miss");
+  });
+
+  it("requiresExecApproval returns false during active trust window settings", () => {
+    expect(
+      requiresExecApproval({
+        ask: "off",
+        security: "full",
+        analysisOk: true,
         allowlistSatisfied: false,
       }),
     ).toBe(false);
