@@ -158,9 +158,10 @@ processed by the Lobster pipeline DSL. This means `exec --shell "..."` and other
 pipeline DSL syntax (`|` piping, `approve`, etc.) are only available in inline pipeline
 strings passed via the `pipeline` tool parameter, not in `.lobster` file steps.
 
-Additionally, YAML compact mappings can reject embedded quotes in `command` strings
-(e.g. `bash -c ‘echo "hello"’`), producing errors like
-`Nested mappings are not allowed in compact mappings`.
+Additionally, YAML compact mappings can reject `command` strings that contain a
+colon-space (`: `) in an unquoted value
+(e.g. `bash -c ‘curl -H Content-Type: application/json http://example.com’`),
+producing errors like `Nested mappings are not allowed in compact mappings`.
 
 **Workaround 1 — external script:** Move complex shell logic into a bash script and
 reference it from the workflow file.
@@ -178,7 +179,7 @@ steps:
 ```
 
 **Workaround 2 — JSON format:** Use JSON instead of YAML for the `.lobster` file.
-JSON handles embedded quotes naturally via backslash escaping.
+JSON handles embedded quotes and colons naturally via backslash escaping.
 
 ```json
 {
@@ -186,7 +187,7 @@ JSON handles embedded quotes naturally via backslash escaping.
   "steps": [
     {
       "id": "deploy",
-      "command": "bash -c ‘echo \"deploying\" | tee /tmp/deploy.log’"
+      "command": "bash ./deploy.sh production"
     }
   ]
 }
