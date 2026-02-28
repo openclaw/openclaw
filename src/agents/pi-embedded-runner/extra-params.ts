@@ -186,7 +186,7 @@ function createBedrockNoCacheWrapper(baseStreamFn: StreamFn | undefined): Stream
 
 function isDirectOpenAIBaseUrl(baseUrl: unknown): boolean {
   if (typeof baseUrl !== "string" || !baseUrl.trim()) {
-    return true;
+    return false;
   }
 
   try {
@@ -208,7 +208,13 @@ function shouldForceResponsesStore(model: {
   api?: unknown;
   provider?: unknown;
   baseUrl?: unknown;
+  compat?: { supportsStore?: boolean };
 }): boolean {
+  // Never force store=true when the model explicitly declares supportsStore=false
+  // (e.g. Azure OpenAI Responses API without server-side persistence).
+  if (model.compat?.supportsStore === false) {
+    return false;
+  }
   if (typeof model.api !== "string" || typeof model.provider !== "string") {
     return false;
   }
@@ -221,19 +227,82 @@ function shouldForceResponsesStore(model: {
   return isDirectOpenAIBaseUrl(model.baseUrl);
 }
 
-function createOpenAIResponsesStoreWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
+function parsePositiveInteger(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+    return Math.floor(value);
+  }
+  if (typeof value === "string") {
+    const parsed = Number.parseInt(value, 10);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return parsed;
+    }
+  }
+  return undefined;
+}
+
+function resolveOpenAIResponsesCompactThreshold(model: { contextWindow?: unknown }): number {
+  const contextWindow = parsePositiveInteger(model.contextWindow);
+  if (contextWindow) {
+    return Math.max(1_000, Math.floor(contextWindow * 0.7));
+  }
+  return 80_000;
+}
+
+function shouldEnableOpenAIResponsesServerCompaction(
+  model: {
+    api?: unknown;
+    provider?: unknown;
+    baseUrl?: unknown;
+    compat?: { supportsStore?: boolean };
+  },
+  extraParams: Record<string, unknown> | undefined,
+): boolean {
+  const configured = extraParams?.responsesServerCompaction;
+  if (configured === false) {
+    return false;
+  }
+  if (!shouldForceResponsesStore(model)) {
+    return false;
+  }
+  if (configured === true) {
+    return true;
+  }
+  // Auto-enable for direct OpenAI Responses models.
+  return model.provider === "openai";
+}
+
+function createOpenAIResponsesContextManagementWrapper(
+  baseStreamFn: StreamFn | undefined,
+  extraParams: Record<string, unknown> | undefined,
+): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
-    if (!shouldForceResponsesStore(model)) {
+    const forceStore = shouldForceResponsesStore(model);
+    const useServerCompaction = shouldEnableOpenAIResponsesServerCompaction(model, extraParams);
+    if (!forceStore && !useServerCompaction) {
       return underlying(model, context, options);
     }
 
+    const compactThreshold =
+      parsePositiveInteger(extraParams?.responsesCompactThreshold) ??
+      resolveOpenAIResponsesCompactThreshold(model);
     const originalOnPayload = options?.onPayload;
     return underlying(model, context, {
       ...options,
       onPayload: (payload) => {
         if (payload && typeof payload === "object") {
-          (payload as { store?: unknown }).store = true;
+          const payloadObj = payload as Record<string, unknown>;
+          if (forceStore) {
+            payloadObj.store = true;
+          }
+          if (useServerCompaction && payloadObj.context_management === undefined) {
+            payloadObj.context_management = [
+              {
+                type: "compaction",
+                compact_threshold: compactThreshold,
+              },
+            ];
+          }
         }
         originalOnPayload?.(payload);
       },
@@ -734,7 +803,7 @@ export function applyExtraParamsToAgent(
   agent.streamFn = createGoogleThinkingPayloadWrapper(agent.streamFn, thinkingLevel);
 
   // Work around upstream pi-ai hardcoding `store: false` for Responses API.
-  // Force `store=true` for direct OpenAI/OpenAI Codex providers so multi-turn
-  // server-side conversation state is preserved.
-  agent.streamFn = createOpenAIResponsesStoreWrapper(agent.streamFn);
+  // Force `store=true` for direct OpenAI Responses models and auto-enable
+  // server-side compaction for compatible OpenAI Responses payloads.
+  agent.streamFn = createOpenAIResponsesContextManagementWrapper(agent.streamFn, merged);
 }
