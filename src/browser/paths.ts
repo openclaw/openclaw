@@ -235,6 +235,12 @@ async function resolveCheckedPathsWithinRoot(params: {
         resolvedPaths.push(pathResult.fallbackPath);
         continue;
       }
+      if (err instanceof SafeOpenError && err.code === "outside-workspace") {
+        return {
+          ok: false,
+          error: `File is outside ${params.scopeLabel}`,
+        };
+      }
       return {
         ok: false,
         error: `Invalid path: must stay within ${params.scopeLabel} and be a regular non-symlink file`,
