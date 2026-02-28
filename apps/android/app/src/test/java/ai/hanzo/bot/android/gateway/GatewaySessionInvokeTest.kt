@@ -57,7 +57,7 @@ class GatewaySessionInvokeTest {
         dispatcher =
           object : Dispatcher() {
             override fun dispatch(request: RecordedRequest): MockResponse {
-              handshakeOrigin.compareAndSet(null, request.getHeader("Origin"))
+              handshakeOrigin.compareAndSet(null, request.headers["Origin"])
               return MockResponse.Builder().webSocketUpgrade(
                 object : WebSocketListener() {
                   override fun onOpen(webSocket: WebSocket, response: Response) {
@@ -177,7 +177,7 @@ class GatewaySessionInvokeTest {
     } finally {
       session.disconnect()
       sessionJob.cancelAndJoin()
-      server.shutdown()
+      server.close()
     }
   }
 
@@ -308,7 +308,7 @@ class GatewaySessionInvokeTest {
     } finally {
       session.disconnect()
       sessionJob.cancelAndJoin()
-      server.shutdown()
+      server.close()
     }
   }
 
@@ -440,7 +440,7 @@ class GatewaySessionInvokeTest {
     } finally {
       session.disconnect()
       sessionJob.cancelAndJoin()
-      server.shutdown()
+      server.close()
     }
   }
 }
