@@ -41,11 +41,11 @@ describe("isFeishuBackoffError", () => {
     expect(isFeishuBackoffError(new Error("network timeout"))).toBe(false);
   });
 
-  it("returns undefined for null", () => {
+  it("returns false for null", () => {
     expect(isFeishuBackoffError(null)).toBe(false);
   });
 
-  it("returns undefined for undefined", () => {
+  it("returns false for undefined", () => {
     expect(isFeishuBackoffError(undefined)).toBe(false);
   });
 
