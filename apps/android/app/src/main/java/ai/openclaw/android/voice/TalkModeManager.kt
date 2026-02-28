@@ -243,6 +243,7 @@ private const val defaultTalkProvider = "elevenlabs"
 
   // Streaming TTS: active session keyed by runId
   private var streamingTts: ElevenLabsStreamingTts? = null
+  private var ttsSessionToken = 0  // Incremented on each new session; guards stale finishStreamingTts coroutines
 
   /** Handle agent stream events — only speak assistant text, not tool calls or thinking. */
   private fun handleAgentStreamEvent(payloadJson: String?) {
@@ -279,6 +280,8 @@ private const val defaultTalkProvider = "elevenlabs"
         outputFormat = "pcm_24000",
         sampleRate = 24000,
       )
+      ttsSessionToken++
+      val myToken = ttsSessionToken
       streamingTts = tts
       _isSpeaking.value = true
       _statusText.value = "Speaking…"
@@ -303,6 +306,8 @@ private const val defaultTalkProvider = "elevenlabs"
           scope = scope, voiceId = voiceId2, apiKey = apiKey2,
           modelId = streamModel2, outputFormat = "pcm_24000", sampleRate = 24000,
         )
+        ttsSessionToken++
+        val myToken = ttsSessionToken
         streamingTts = newTts
         requestAudioFocusForTts()
         newTts.start()
@@ -315,12 +320,14 @@ private const val defaultTalkProvider = "elevenlabs"
   /** Called when chat final/error/aborted arrives — finish any active streaming TTS. */
   private fun finishStreamingTts() {
     val tts = streamingTts ?: return
+    val token = ttsSessionToken
     streamingTts = null  // Clear immediately so a new session isn't clobbered
     tts.finish()
     scope.launch {
       delay(500)
       while (tts.isPlaying.value) { delay(200) }
-      abandonAudioFocus()
+      // Only abandon focus if no new TTS session started while we were draining
+      if (ttsSessionToken == token) abandonAudioFocus()
       _isSpeaking.value = false
       _statusText.value = "Ready"
     }
