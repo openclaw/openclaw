@@ -1,0 +1,14 @@
+{
+  "name": "@openclaw/mcp-bridge",
+  "version": "0.1.0",
+  "description": "MCP Bridge - connect MCP servers as native OpenClaw tools",
+  "type": "module",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.1"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

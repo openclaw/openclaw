@@ -1,0 +1,53 @@
+{
+  "id": "mcp-bridge",
+  "name": "MCP Bridge",
+  "description": "Connect MCP servers and register their tools as native OpenClaw agent tools.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "servers": {
+        "type": "object",
+        "description": "MCP server configurations keyed by server name",
+        "additionalProperties": {
+          "type": "object",
+          "properties": {
+            "transport": {
+              "type": "string",
+              "enum": ["http", "stdio"],
+              "default": "http"
+            },
+            "url": {
+              "type": "string",
+              "description": "MCP server URL (for http transport)"
+            },
+            "command": {
+              "type": "string",
+              "description": "Command to start the MCP server (for stdio transport)"
+            },
+            "args": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "Arguments for the command (for stdio transport)"
+            },
+            "env": {
+              "type": "object",
+              "additionalProperties": { "type": "string" },
+              "description": "Environment variables for the subprocess (for stdio transport)"
+            },
+            "enabled": {
+              "type": "boolean",
+              "default": true
+            }
+          }
+        }
+      }
+    }
+  },
+  "uiHints": {
+    "servers": {
+      "label": "MCP Servers",
+      "help": "Configure MCP servers to connect. Each server's tools become available as native OpenClaw tools."
+    }
+  }
+}

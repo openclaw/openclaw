@@ -130,8 +130,8 @@ export class AcpGatewayAgent implements Agent {
           embeddedContext: true,
         },
         mcpCapabilities: {
-          http: false,
-          sse: false,
+          http: true,
+          sse: true,
         },
         sessionCapabilities: {
           list: {},
@@ -144,7 +144,7 @@ export class AcpGatewayAgent implements Agent {
 
   async newSession(params: NewSessionRequest): Promise<NewSessionResponse> {
     if (params.mcpServers.length > 0) {
-      this.log(`ignoring ${params.mcpServers.length} MCP servers`);
+      this.log(`received ${params.mcpServers.length} MCP servers (handled by mcp-bridge plugin)`);
     }
     this.enforceSessionCreateRateLimit("newSession");
 
@@ -175,7 +175,7 @@ export class AcpGatewayAgent implements Agent {
 
   async loadSession(params: LoadSessionRequest): Promise<LoadSessionResponse> {
     if (params.mcpServers.length > 0) {
-      this.log(`ignoring ${params.mcpServers.length} MCP servers`);
+      this.log(`received ${params.mcpServers.length} MCP servers (handled by mcp-bridge plugin)`);
     }
     if (!this.sessionStore.hasSession(params.sessionId)) {
       this.enforceSessionCreateRateLimit("loadSession");
