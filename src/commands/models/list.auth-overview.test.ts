@@ -42,7 +42,9 @@ describe("resolveProviderAuthOverview — Bedrock AWS SDK auth", () => {
     } finally {
       if (original === undefined) {
         delete process.env.AWS_BEARER_TOKEN_BEDROCK;
-      } else process.env.AWS_BEARER_TOKEN_BEDROCK = original;
+      } else {
+        process.env.AWS_BEARER_TOKEN_BEDROCK = original;
+      }
     }
   });
 
