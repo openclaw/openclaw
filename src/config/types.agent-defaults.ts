@@ -243,6 +243,27 @@ export type AgentDefaultsConfig = {
      */
     includeReasoning?: boolean;
   };
+  /**
+   * Session idle nudge — prevents silent hangs after errors.
+   * When a non-main session has been idle for the configured duration,
+   * a new agent turn is triggered with a nudge message.
+   *
+   * - `true` or omitted: enabled with 5 min default
+   * - `false`: disabled
+   * - number: idle threshold in ms
+   * - object: full config (`idleMs`, `message`, `maxNudges`)
+   */
+  idleNudge?:
+    | boolean
+    | number
+    | {
+        /** Idle threshold in ms before nudging (default: 300000 = 5 min). */
+        idleMs?: number;
+        /** Custom nudge message text. */
+        message?: string;
+        /** Maximum nudges per session (default: 3; 0 = unlimited). */
+        maxNudges?: number;
+      };
   /** Max concurrent agent runs across all conversations. Default: 1 (sequential). */
   maxConcurrent?: number;
   /** Sub-agent defaults (spawned via sessions_spawn). */

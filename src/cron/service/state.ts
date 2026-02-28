@@ -1,5 +1,6 @@
 import type { CronConfig } from "../../config/types.cron.js";
 import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
+import type { IdleNudgeConfig } from "../idle-nudge.js";
 import type {
   CronDeliveryStatus,
   CronJob,
@@ -91,6 +92,16 @@ export type CronServiceDeps = {
       CronRunTelemetry
   >;
   onEvent?: (evt: CronEvent) => void;
+  /** Idle nudge config (resolved from agents.defaults.idleNudge). null = disabled. */
+  idleNudgeConfig?: IdleNudgeConfig | null;
+  /** Trigger an isolated agent run on an existing idle session. */
+  nudgeSession?: (
+    sessionKey: string,
+    message: string,
+  ) => Promise<{
+    status: "ok" | "error" | "skipped";
+    error?: string;
+  }>;
 };
 
 export type CronServiceDepsInternal = Omit<CronServiceDeps, "nowMs"> & {

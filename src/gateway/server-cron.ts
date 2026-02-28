@@ -7,6 +7,7 @@ import {
   resolveAgentMainSessionKey,
 } from "../config/sessions.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
+import { resolveIdleNudgeConfig } from "../cron/idle-nudge.js";
 import { runCronIsolatedAgentTurn } from "../cron/isolated-agent.js";
 import {
   appendCronRunLog,
@@ -25,6 +26,7 @@ import { enqueueSystemEvent } from "../infra/system-events.js";
 import { getChildLogger } from "../logging.js";
 import { normalizeAgentId, toAgentStoreSessionKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
+import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 
 export type GatewayCronState = {
   cron: CronService;
@@ -218,6 +220,36 @@ export function buildGatewayCronService(params: {
         abortSignal,
         agentId,
         sessionKey: `cron:${job.id}`,
+        lane: "cron",
+      });
+    },
+    idleNudgeConfig: resolveIdleNudgeConfig(params.cfg.agents?.defaults),
+    nudgeSession: async (sessionKey, message) => {
+      // Session keys in the store are "agent:<agentId>:<rest>".
+      // runCronIsolatedAgentTurn re-wraps with buildAgentMainSessionKey,
+      // so strip the prefix and pass the bare key + correct agentId.
+      const parsed = parseAgentSessionKey(sessionKey);
+      const bareKey = parsed?.rest ?? sessionKey;
+      const { agentId, cfg: runtimeConfig } = resolveCronAgent(parsed?.agentId);
+      const nudgeJob = {
+        id: `idle-nudge-${Date.now()}`,
+        name: "idle-nudge",
+        enabled: true,
+        createdAtMs: Date.now(),
+        updatedAtMs: Date.now(),
+        schedule: { kind: "at" as const, at: new Date().toISOString() },
+        sessionTarget: "isolated" as const,
+        payload: { kind: "agentTurn" as const, message },
+        state: { nextRunAtMs: Date.now() },
+        deleteAfterRun: true,
+      };
+      return await runCronIsolatedAgentTurn({
+        cfg: runtimeConfig,
+        deps: params.deps,
+        job: nudgeJob,
+        message,
+        agentId,
+        sessionKey: bareKey,
         lane: "cron",
       });
     },

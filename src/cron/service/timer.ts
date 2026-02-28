@@ -1,6 +1,8 @@
+import path from "node:path";
 import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
 import { DEFAULT_AGENT_ID } from "../../routing/session-key.js";
 import { resolveCronDeliveryPlan } from "../delivery.js";
+import { sweepIdleSessions } from "../idle-nudge.js";
 import { sweepCronRunSessions } from "../session-reaper.js";
 import type {
   CronDeliveryStatus,
@@ -437,6 +439,25 @@ export async function onTimer(state: CronServiceState) {
           });
         } catch (err) {
           state.deps.log.warn({ err: String(err), storePath }, "cron: session reaper sweep failed");
+        }
+      }
+
+      // Idle nudge sweep — nudge non-main sessions that have gone idle (#71)
+      if (state.deps.idleNudgeConfig && state.deps.nudgeSession) {
+        const nudgeConfig = state.deps.idleNudgeConfig;
+        for (const storePath of storePaths) {
+          try {
+            await sweepIdleSessions({
+              sessionStorePath: storePath,
+              sessionsDir: path.dirname(storePath),
+              config: nudgeConfig,
+              nowMs,
+              log: state.deps.log,
+              nudgeSession: state.deps.nudgeSession,
+            });
+          } catch (err) {
+            state.deps.log.warn({ err: String(err), storePath }, "cron: idle nudge sweep failed");
+          }
         }
       }
     }
