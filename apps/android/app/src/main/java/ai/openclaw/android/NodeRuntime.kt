@@ -98,6 +98,26 @@ class NodeRuntime(context: Context) {
     appContext = appContext,
   )
 
+  private val systemHandler: SystemHandler = SystemHandler(
+    appContext = appContext,
+  )
+
+  private val photosHandler: PhotosHandler = PhotosHandler(
+    appContext = appContext,
+  )
+
+  private val contactsHandler: ContactsHandler = ContactsHandler(
+    appContext = appContext,
+  )
+
+  private val calendarHandler: CalendarHandler = CalendarHandler(
+    appContext = appContext,
+  )
+
+  private val motionHandler: MotionHandler = MotionHandler(
+    appContext = appContext,
+  )
+
   private val screenHandler: ScreenHandler = ScreenHandler(
     screenRecorder = screenRecorder,
     setScreenRecordActive = { _screenRecordActive.value = it },
@@ -120,6 +140,7 @@ class NodeRuntime(context: Context) {
     cameraEnabled = { cameraEnabled.value },
     locationMode = { locationMode.value },
     voiceWakeMode = { VoiceWakeMode.Off },
+    motionAvailable = { motionHandler.isAvailable() },
     smsAvailable = { sms.canSendSms() },
     hasRecordAudioPermission = { hasRecordAudioPermission() },
     manualTls = { manualTls.value },
@@ -131,6 +152,11 @@ class NodeRuntime(context: Context) {
     locationHandler = locationHandler,
     deviceHandler = deviceHandler,
     notificationsHandler = notificationsHandler,
+    systemHandler = systemHandler,
+    photosHandler = photosHandler,
+    contactsHandler = contactsHandler,
+    calendarHandler = calendarHandler,
+    motionHandler = motionHandler,
     screenHandler = screenHandler,
     smsHandler = smsHandlerImpl,
     a2uiHandler = a2uiHandler,
@@ -139,6 +165,7 @@ class NodeRuntime(context: Context) {
     isForeground = { _isForeground.value },
     cameraEnabled = { cameraEnabled.value },
     locationEnabled = { locationMode.value != LocationMode.Off },
+    motionAvailable = { motionHandler.isAvailable() },
     smsAvailable = { sms.canSendSms() },
     debugBuild = { BuildConfig.DEBUG },
     refreshNodeCanvasCapability = { nodeSession.refreshNodeCanvasCapability() },
