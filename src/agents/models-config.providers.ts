@@ -1028,11 +1028,12 @@ export async function resolveImplicitProviders(params: {
   const explicitOllama = params.explicitProviders?.ollama;
   const hasExplicitModels =
     Array.isArray(explicitOllama?.models) && explicitOllama.models.length > 0;
-  if (hasExplicitModels) {
+  if (hasExplicitModels && explicitOllama) {
     providers.ollama = {
       ...explicitOllama,
+      baseUrl: resolveOllamaApiBase(explicitOllama.baseUrl),
       api: explicitOllama.api ?? "ollama",
-      apiKey: ollamaKey ?? "ollama-local",
+      apiKey: ollamaKey ?? explicitOllama.apiKey ?? "ollama-local",
     };
   } else {
     const ollamaBaseUrl = explicitOllama?.baseUrl;
@@ -1042,10 +1043,10 @@ export async function resolveImplicitProviders(params: {
     const ollamaProvider = await buildOllamaProvider(ollamaBaseUrl, {
       quiet: !ollamaKey && !hasExplicitOllamaConfig,
     });
-    if (ollamaProvider.models.length > 0 || ollamaKey) {
+    if (ollamaProvider.models.length > 0 || ollamaKey || explicitOllama?.apiKey) {
       providers.ollama = {
         ...ollamaProvider,
-        apiKey: ollamaKey ?? "ollama-local",
+        apiKey: ollamaKey ?? explicitOllama?.apiKey ?? "ollama-local",
       };
     }
   }
