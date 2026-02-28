@@ -224,6 +224,9 @@ export function resolveNapCatCommandAuthorized(params: {
   cfg: OpenClawConfig;
   rawBody: string;
   senderId: string;
+  isGroup: boolean;
+  configuredAllowFrom: string[];
+  configuredGroupAllowFrom: string[];
   effectiveAllowFrom: string[];
   effectiveGroupAllowFrom: string[];
   shouldComputeCommandAuthorized: (rawBody: string, cfg: OpenClawConfig) => boolean;
@@ -237,13 +240,17 @@ export function resolveNapCatCommandAuthorized(params: {
     return undefined;
   }
   const useAccessGroups = params.cfg.commands?.useAccessGroups !== false;
-  const ownerAllowed = isNapCatSenderAllowed(params.effectiveAllowFrom, params.senderId);
-  const groupAllowed = isNapCatSenderAllowed(params.effectiveGroupAllowFrom, params.senderId);
+  const commandAllowFrom = params.isGroup ? params.configuredAllowFrom : params.effectiveAllowFrom;
+  const commandGroupAllowFrom = params.isGroup
+    ? params.configuredGroupAllowFrom
+    : params.effectiveGroupAllowFrom;
+  const ownerAllowed = isNapCatSenderAllowed(commandAllowFrom, params.senderId);
+  const groupAllowed = isNapCatSenderAllowed(commandGroupAllowFrom, params.senderId);
   return params.resolveCommandAuthorizedFromAuthorizers({
     useAccessGroups,
     authorizers: [
-      { configured: params.effectiveAllowFrom.length > 0, allowed: ownerAllowed },
-      { configured: params.effectiveGroupAllowFrom.length > 0, allowed: groupAllowed },
+      { configured: commandAllowFrom.length > 0, allowed: ownerAllowed },
+      { configured: commandGroupAllowFrom.length > 0, allowed: groupAllowed },
     ],
   });
 }
@@ -354,6 +361,10 @@ export async function processNapCatEvent(params: {
     groups: params.account.config.groups,
     groupId: inbound.targetId,
   });
+  const configuredAllowFrom = normalizeNapCatAllowFrom(params.account.config.dm?.allowFrom);
+  const configuredGroupAllowFrom = normalizeNapCatAllowFrom(
+    groupConfig.allowFrom ?? params.account.config.groupAllowFrom ?? params.account.config.dm?.allowFrom,
+  );
   const access = resolveDmGroupAccessWithLists({
     isGroup: inbound.isGroup,
     dmPolicy,
@@ -368,6 +379,9 @@ export async function processNapCatEvent(params: {
     cfg: params.config,
     rawBody: inbound.rawBody,
     senderId: inbound.senderId,
+    isGroup: inbound.isGroup,
+    configuredAllowFrom,
+    configuredGroupAllowFrom,
     effectiveAllowFrom: access.effectiveAllowFrom,
     effectiveGroupAllowFrom: access.effectiveGroupAllowFrom,
     shouldComputeCommandAuthorized: (rawBody, cfg) =>

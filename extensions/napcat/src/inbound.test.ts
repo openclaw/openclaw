@@ -181,6 +181,9 @@ describe("resolveNapCatCommandAuthorized", () => {
       cfg: {} as OpenClawConfig,
       rawBody: "hello",
       senderId: "123",
+      isGroup: false,
+      configuredAllowFrom: [],
+      configuredGroupAllowFrom: [],
       effectiveAllowFrom: ["123"],
       effectiveGroupAllowFrom: [],
       shouldComputeCommandAuthorized: () => false,
@@ -196,6 +199,9 @@ describe("resolveNapCatCommandAuthorized", () => {
       cfg: {} as OpenClawConfig,
       rawBody: "/status",
       senderId: "999",
+      isGroup: false,
+      configuredAllowFrom: [],
+      configuredGroupAllowFrom: [],
       effectiveAllowFrom: ["123"],
       effectiveGroupAllowFrom: ["456"],
       shouldComputeCommandAuthorized: () => true,
@@ -208,6 +214,31 @@ describe("resolveNapCatCommandAuthorized", () => {
       authorizers: [
         { configured: true, allowed: false },
         { configured: true, allowed: false },
+      ],
+    });
+  });
+
+  it("uses configured allowlists for group command auth", () => {
+    const resolveFromAuthorizers = vi.fn(() => false);
+    const result = resolveNapCatCommandAuthorized({
+      cfg: {} as OpenClawConfig,
+      rawBody: "/status",
+      senderId: "999",
+      isGroup: true,
+      configuredAllowFrom: [],
+      configuredGroupAllowFrom: [],
+      effectiveAllowFrom: ["999"],
+      effectiveGroupAllowFrom: [],
+      shouldComputeCommandAuthorized: () => true,
+      resolveCommandAuthorizedFromAuthorizers: resolveFromAuthorizers,
+    });
+
+    expect(result).toBe(false);
+    expect(resolveFromAuthorizers).toHaveBeenCalledWith({
+      useAccessGroups: true,
+      authorizers: [
+        { configured: false, allowed: false },
+        { configured: false, allowed: false },
       ],
     });
   });
