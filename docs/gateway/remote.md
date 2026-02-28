@@ -101,6 +101,20 @@ You can persist a remote target so CLI commands use it by default:
 
 When the gateway is loopback-only, keep the URL at `ws://127.0.0.1:18789` and open the SSH tunnel first.
 
+## Credential precedence
+
+Gateway call/probe credential resolution now follows one shared contract:
+
+- Explicit credentials (`--token`, `--password`, or tool `gatewayToken`) always win.
+- Local mode defaults:
+  - token: `OPENCLAW_GATEWAY_TOKEN` -> `gateway.auth.token` -> `gateway.remote.token`
+  - password: `OPENCLAW_GATEWAY_PASSWORD` -> `gateway.auth.password` -> `gateway.remote.password`
+- Remote mode defaults:
+  - token: `gateway.remote.token` -> `OPENCLAW_GATEWAY_TOKEN` -> `gateway.auth.token`
+  - password: `OPENCLAW_GATEWAY_PASSWORD` -> `gateway.remote.password` -> `gateway.auth.password`
+- Remote probe/status token checks are strict by default: they use `gateway.remote.token` only (no local token fallback) when targeting remote mode.
+- Legacy `CLAWDBOT_GATEWAY_*` env vars are only used by compatibility call paths; probe/status/auth resolution uses `OPENCLAW_GATEWAY_*` only.
+
 ## Chat UI over SSH
 
 WebChat no longer uses a separate HTTP port. The SwiftUI chat UI connects directly to the Gateway WebSocket.
@@ -120,7 +134,8 @@ Short version: **keep the Gateway loopback-only** unless you’re sure you need 
 
 - **Loopback + SSH/Tailscale Serve** is the safest default (no public exposure).
 - **Non-loopback binds** (`lan`/`tailnet`/`custom`, or `auto` when loopback is unavailable) must use auth tokens/passwords.
-- `gateway.remote.token` is **only** for remote CLI calls — it does **not** enable local auth.
+- `gateway.remote.token` / `.password` are client credential sources. They do **not** configure server auth by themselves.
+- Local call paths can use `gateway.remote.*` as fallback when `gateway.auth.*` is unset.
 - `gateway.remote.tlsFingerprint` pins the remote TLS cert when using `wss://`.
 - **Tailscale Serve** can authenticate Control UI/WebSocket traffic via identity
   headers when `gateway.auth.allowTailscale: true`; HTTP API endpoints still

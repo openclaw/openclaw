@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   classifyFailoverReason,
   isAuthErrorMessage,
+  isAuthPermanentErrorMessage,
   isBillingErrorMessage,
   isCloudCodeAssistFormatError,
   isCloudflareOrHtmlErrorPage,
@@ -15,6 +16,39 @@ import {
   parseImageDimensionError,
   parseImageSizeError,
 } from "./pi-embedded-helpers.js";
+
+describe("isAuthPermanentErrorMessage", () => {
+  it("matches permanent auth failure patterns", () => {
+    const samples = [
+      "invalid_api_key",
+      "api key revoked",
+      "api key deactivated",
+      "key has been disabled",
+      "key has been revoked",
+      "account has been deactivated",
+      "could not authenticate api key",
+      "could not validate credentials",
+      "API_KEY_REVOKED",
+      "api_key_deleted",
+    ];
+    for (const sample of samples) {
+      expect(isAuthPermanentErrorMessage(sample)).toBe(true);
+    }
+  });
+  it("does not match transient auth errors", () => {
+    const samples = [
+      "unauthorized",
+      "invalid token",
+      "authentication failed",
+      "forbidden",
+      "access denied",
+      "token has expired",
+    ];
+    for (const sample of samples) {
+      expect(isAuthPermanentErrorMessage(sample)).toBe(false);
+    }
+  });
+});
 
 describe("isAuthErrorMessage", () => {
   it("matches credential validation errors", () => {
@@ -68,6 +102,40 @@ describe("isBillingErrorMessage", () => {
     for (const sample of falsePositives) {
       expect(isBillingErrorMessage(sample)).toBe(false);
     }
+  });
+  it("does not false-positive on long assistant responses mentioning billing keywords", () => {
+    // Simulate a multi-paragraph assistant response that mentions billing terms
+    const longResponse =
+      "Sure! Here's how to set up billing for your SaaS application.\n\n" +
+      "## Payment Integration\n\n" +
+      "First, you'll need to configure your payment gateway. Most providers offer " +
+      "a dashboard where you can manage credits, view invoices, and upgrade your plan. " +
+      "The billing page typically shows your current balance and payment history.\n\n" +
+      "## Managing Credits\n\n" +
+      "Users can purchase credits through the billing portal. When their credit balance " +
+      "runs low, send them a notification to upgrade their plan or add more credits. " +
+      "You should also handle insufficient balance cases gracefully.\n\n" +
+      "## Subscription Plans\n\n" +
+      "Offer multiple plan tiers with different features. Allow users to upgrade or " +
+      "downgrade their plan at any time. Make sure the billing cycle is clear.\n\n" +
+      "Let me know if you need more details on any of these topics!";
+    expect(longResponse.length).toBeGreaterThan(512);
+    expect(isBillingErrorMessage(longResponse)).toBe(false);
+  });
+  it("still matches explicit 402 markers in long payloads", () => {
+    const longStructuredError =
+      '{"error":{"code":402,"message":"payment required","details":"' + "x".repeat(700) + '"}}';
+    expect(longStructuredError.length).toBeGreaterThan(512);
+    expect(isBillingErrorMessage(longStructuredError)).toBe(true);
+  });
+  it("does not match long numeric text that is not a billing error", () => {
+    const longNonError =
+      "Quarterly report summary: subsystem A returned 402 records after retry. " +
+      "This is an analytics count, not an HTTP/API billing failure. " +
+      "Notes: " +
+      "x".repeat(700);
+    expect(longNonError.length).toBeGreaterThan(512);
+    expect(isBillingErrorMessage(longNonError)).toBe(false);
   });
   it("still matches real HTTP 402 billing errors", () => {
     const realErrors = [
@@ -178,12 +246,60 @@ describe("isContextOverflowError", () => {
     }
   });
 
+  it("matches Kimi 'model token limit' context overflow errors", () => {
+    const samples = [
+      "Invalid request: Your request exceeded model token limit: 262144 (requested: 291351)",
+      "error, status code: 400, message: Invalid request: Your request exceeded model token limit: 262144 (requested: 291351)",
+      "Your request exceeded model token limit",
+    ];
+    for (const sample of samples) {
+      expect(isContextOverflowError(sample)).toBe(true);
+    }
+  });
+
+  it("matches exceed/context/max_tokens overflow variants", () => {
+    const samples = [
+      "input length and max_tokens exceed context limit (i.e 156321 + 48384 > 200000)",
+      "This request exceeds the model's maximum context length",
+      "LLM request rejected: max_tokens would exceed context window",
+      "input length would exceed context budget for this model",
+    ];
+    for (const sample of samples) {
+      expect(isContextOverflowError(sample)).toBe(true);
+    }
+  });
+
+  it("matches Chinese context overflow error messages from proxy providers", () => {
+    const samples = [
+      "上下文过长",
+      "错误：上下文过长，请减少输入",
+      "上下文超出限制",
+      "上下文长度超出模型最大限制",
+      "超出最大上下文长度",
+      "请压缩上下文后重试",
+    ];
+    for (const sample of samples) {
+      expect(isContextOverflowError(sample)).toBe(true);
+    }
+  });
+
   it("ignores normal conversation text mentioning context overflow", () => {
     // These are legitimate conversation snippets, not error messages
     expect(isContextOverflowError("Let's investigate the context overflow bug")).toBe(false);
     expect(isContextOverflowError("The mystery context overflow errors are strange")).toBe(false);
     expect(isContextOverflowError("We're debugging context overflow issues")).toBe(false);
     expect(isContextOverflowError("Something is causing context overflow messages")).toBe(false);
+  });
+
+  it("excludes reasoning-required invalid-request errors", () => {
+    const samples = [
+      "400 Reasoning is mandatory for this endpoint and cannot be disabled.",
+      '{"type":"error","error":{"type":"invalid_request_error","message":"Reasoning is mandatory for this endpoint and cannot be disabled."}}',
+      "This model requires reasoning to be enabled",
+    ];
+    for (const sample of samples) {
+      expect(isContextOverflowError(sample)).toBe(false);
+    }
   });
 });
 
@@ -263,6 +379,17 @@ describe("isLikelyContextOverflowError", () => {
       expect(isLikelyContextOverflowError(sample)).toBe(false);
     }
   });
+
+  it("excludes reasoning-required invalid-request errors", () => {
+    const samples = [
+      "400 Reasoning is mandatory for this endpoint and cannot be disabled.",
+      '{"type":"error","error":{"type":"invalid_request_error","message":"Reasoning is mandatory for this endpoint and cannot be disabled."}}',
+      "This endpoint requires reasoning",
+    ];
+    for (const sample of samples) {
+      expect(isLikelyContextOverflowError(sample)).toBe(false);
+    }
+  });
 });
 
 describe("isTransientHttpError", () => {
@@ -270,12 +397,12 @@ describe("isTransientHttpError", () => {
     expect(isTransientHttpError("500 Internal Server Error")).toBe(true);
     expect(isTransientHttpError("502 Bad Gateway")).toBe(true);
     expect(isTransientHttpError("503 Service Unavailable")).toBe(true);
+    expect(isTransientHttpError("504 Gateway Timeout")).toBe(true);
     expect(isTransientHttpError("521 <!DOCTYPE html><html></html>")).toBe(true);
     expect(isTransientHttpError("529 Overloaded")).toBe(true);
   });
 
   it("returns false for non-retryable or non-http text", () => {
-    expect(isTransientHttpError("504 Gateway Timeout")).toBe(false);
     expect(isTransientHttpError("429 Too Many Requests")).toBe(false);
     expect(isTransientHttpError("network timeout")).toBe(false);
   });
@@ -334,8 +461,18 @@ describe("classifyFailoverReason", () => {
     expect(classifyFailoverReason("invalid api key")).toBe("auth");
     expect(classifyFailoverReason("no credentials found")).toBe("auth");
     expect(classifyFailoverReason("no api key found")).toBe("auth");
+    expect(classifyFailoverReason("You have insufficient permissions for this operation.")).toBe(
+      "auth",
+    );
+    expect(classifyFailoverReason("Missing scopes: model.request")).toBe("auth");
     expect(classifyFailoverReason("429 too many requests")).toBe("rate_limit");
     expect(classifyFailoverReason("resource has been exhausted")).toBe("rate_limit");
+    expect(
+      classifyFailoverReason("model_cooldown: All credentials for model gpt-5 are cooling down"),
+    ).toBe("rate_limit");
+    expect(classifyFailoverReason("all credentials for model x are cooling down")).toBe(
+      "rate_limit",
+    );
     expect(
       classifyFailoverReason(
         '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
@@ -376,6 +513,12 @@ describe("classifyFailoverReason", () => {
         '{"error":{"code":503,"message":"The model is overloaded. Please try later","status":"UNAVAILABLE"}}',
       ),
     ).toBe("rate_limit");
+  });
+  it("classifies permanent auth errors as auth_permanent", () => {
+    expect(classifyFailoverReason("invalid_api_key")).toBe("auth_permanent");
+    expect(classifyFailoverReason("Your api key has been revoked")).toBe("auth_permanent");
+    expect(classifyFailoverReason("key has been disabled")).toBe("auth_permanent");
+    expect(classifyFailoverReason("account has been deactivated")).toBe("auth_permanent");
   });
   it("classifies JSON api_error internal server failures as timeout", () => {
     expect(

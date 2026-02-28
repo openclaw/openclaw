@@ -21,7 +21,7 @@ import {
   type GatewayClientMode,
   type GatewayClientName,
 } from "../utils/message-channel.js";
-import { buildDeviceAuthPayload } from "./device-auth.js";
+import { buildDeviceAuthPayloadV3 } from "./device-auth.js";
 import { isSecureWebSocketUrl } from "./net.js";
 import {
   type ConnectParams,
@@ -45,12 +45,14 @@ export type GatewayClientOptions = {
   connectDelayMs?: number;
   tickWatchMinIntervalMs?: number;
   token?: string;
+  deviceToken?: string;
   password?: string;
   instanceId?: string;
   clientName?: GatewayClientName;
   clientDisplayName?: string;
   clientVersion?: string;
   platform?: string;
+  deviceFamily?: string;
   mode?: GatewayClientMode;
   role?: string;
   scopes?: string[];
@@ -178,10 +180,14 @@ export class GatewayClient {
     this.ws.on("close", (code, reason) => {
       const reasonText = rawDataToString(reason);
       this.ws = null;
-      // If closed due to device token mismatch, clear the stored token and pairing so next attempt can get a fresh one
+      // Clear persisted device auth state only when device-token auth was active.
+      // Shared token/password failures can return the same close reason but should
+      // not erase a valid cached device token.
       if (
         code === 1008 &&
         reasonText.toLowerCase().includes("device token mismatch") &&
+        !this.opts.token &&
+        !this.opts.password &&
         this.opts.deviceIdentity
       ) {
         const deviceId = this.opts.deviceIdentity.deviceId;
@@ -237,26 +243,35 @@ export class GatewayClient {
       this.connectTimer = null;
     }
     const role = this.opts.role ?? "operator";
+    const explicitGatewayToken = this.opts.token?.trim() || undefined;
+    const explicitDeviceToken = this.opts.deviceToken?.trim() || undefined;
     const storedToken = this.opts.deviceIdentity
       ? loadDeviceAuthToken({ deviceId: this.opts.deviceIdentity.deviceId, role })?.token
       : null;
-    // Prefer explicitly provided credentials (e.g. CLI `--token`) over any persisted
-    // device-auth tokens. Persisted tokens are only used when no token is provided.
-    const authToken = this.opts.token ?? storedToken ?? undefined;
+    // Keep shared gateway credentials explicit. Persisted per-device tokens only
+    // participate when no explicit shared token is provided.
+    const resolvedDeviceToken =
+      explicitDeviceToken ?? (!explicitGatewayToken ? (storedToken ?? undefined) : undefined);
+    // Legacy compatibility: keep `auth.token` populated for device-token auth when
+    // no explicit shared token is present.
+    const authToken = explicitGatewayToken ?? resolvedDeviceToken;
+    const authPassword = this.opts.password?.trim() || undefined;
     const auth =
-      authToken || this.opts.password
+      authToken || authPassword || resolvedDeviceToken
         ? {
             token: authToken,
-            password: this.opts.password,
+            deviceToken: resolvedDeviceToken,
+            password: authPassword,
           }
         : undefined;
     const signedAtMs = Date.now();
     const scopes = this.opts.scopes ?? ["operator.admin"];
+    const platform = this.opts.platform ?? process.platform;
     const device = (() => {
       if (!this.opts.deviceIdentity) {
         return undefined;
       }
-      const payload = buildDeviceAuthPayload({
+      const payload = buildDeviceAuthPayloadV3({
         deviceId: this.opts.deviceIdentity.deviceId,
         clientId: this.opts.clientName ?? GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
         clientMode: this.opts.mode ?? GATEWAY_CLIENT_MODES.BACKEND,
@@ -265,6 +280,8 @@ export class GatewayClient {
         signedAtMs,
         token: authToken ?? null,
         nonce,
+        platform,
+        deviceFamily: this.opts.deviceFamily,
       });
       const signature = signDevicePayload(this.opts.deviceIdentity.privateKeyPem, payload);
       return {
@@ -282,7 +299,8 @@ export class GatewayClient {
         id: this.opts.clientName ?? GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
         displayName: this.opts.clientDisplayName,
         version: this.opts.clientVersion ?? "dev",
-        platform: this.opts.platform ?? process.platform,
+        platform,
+        deviceFamily: this.opts.deviceFamily,
         mode: this.opts.mode ?? GATEWAY_CLIENT_MODES.BACKEND,
         instanceId: this.opts.instanceId,
       },

@@ -230,7 +230,11 @@ describe("resolveDeliveryTarget", () => {
       target: { channel: "last", to: undefined },
     });
     expect(result.channel).toBe("telegram");
-    expect(result.error).toBeUndefined();
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error("expected unresolved delivery target");
+    }
+    expect(result.error.message).toContain('No delivery target resolved for channel "telegram"');
   });
 
   it("returns an error when channel selection is ambiguous", async () => {
@@ -245,7 +249,11 @@ describe("resolveDeliveryTarget", () => {
     });
     expect(result.channel).toBeUndefined();
     expect(result.to).toBeUndefined();
-    expect(result.error?.message).toContain("Channel is required");
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error("expected ambiguous channel selection error");
+    }
+    expect(result.error.message).toContain("Channel is required");
   });
 
   it("uses sessionKey thread entry before main session entry", async () => {
@@ -289,6 +297,41 @@ describe("resolveDeliveryTarget", () => {
 
     expect(result.channel).toBe("telegram");
     expect(result.to).toBe("987654");
-    expect(result.error).toBeUndefined();
+    expect(result.ok).toBe(true);
+  });
+
+  it("explicit delivery.accountId overrides session-derived accountId", async () => {
+    setMainSessionEntry({
+      sessionId: "sess-5",
+      updatedAt: 1000,
+      lastChannel: "telegram",
+      lastTo: "chat-999",
+      lastAccountId: "default",
+    });
+
+    const result = await resolveDeliveryTarget(makeCfg({ bindings: [] }), AGENT_ID, {
+      channel: "telegram",
+      to: "chat-999",
+      accountId: "bot-b",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.accountId).toBe("bot-b");
+  });
+
+  it("explicit delivery.accountId overrides bindings-derived accountId", async () => {
+    setMainSessionEntry(undefined);
+    const cfg = makeCfg({
+      bindings: [{ agentId: AGENT_ID, match: { channel: "telegram", accountId: "bound" } }],
+    });
+
+    const result = await resolveDeliveryTarget(cfg, AGENT_ID, {
+      channel: "telegram",
+      to: "chat-777",
+      accountId: "explicit",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.accountId).toBe("explicit");
   });
 });

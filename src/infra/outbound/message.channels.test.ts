@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelOutboundAdapter, ChannelPlugin } from "../../channels/plugins/types.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import { createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { createMSTeamsTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { createIMessageTestPlugin } from "../../test-utils/imessage-test-plugin.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
 import { sendMessage, sendPoll } from "./message.js";
@@ -37,7 +37,7 @@ describe("sendMessage channel normalization", () => {
         {
           pluginId: "msteams",
           source: "test",
-          plugin: createMSTeamsPlugin({
+          plugin: createMSTeamsTestPlugin({
             outbound: createMSTeamsOutbound(),
             aliases: ["teams"],
           }),
@@ -131,7 +131,7 @@ describe("sendPoll channel normalization", () => {
         {
           pluginId: "msteams",
           source: "test",
-          plugin: createMSTeamsPlugin({
+          plugin: createMSTeamsTestPlugin({
             aliases: ["teams"],
             outbound: createMSTeamsOutbound({ includePoll: true }),
           }),
@@ -194,6 +194,35 @@ describe("gateway url override hardening", () => {
       }),
     );
   });
+
+  it("forwards explicit agentId in gateway send params", async () => {
+    setRegistry(
+      createTestRegistry([
+        {
+          pluginId: "mattermost",
+          source: "test",
+          plugin: {
+            ...createMattermostLikePlugin({ onSendText: () => {} }),
+            outbound: { deliveryMode: "gateway" },
+          },
+        },
+      ]),
+    );
+
+    callGatewayMock.mockResolvedValueOnce({ messageId: "m-agent" });
+    await sendMessage({
+      cfg: {},
+      to: "channel:town-square",
+      content: "hi",
+      channel: "mattermost",
+      agentId: "work",
+    });
+
+    const call = callGatewayMock.mock.calls[0]?.[0] as {
+      params?: Record<string, unknown>;
+    };
+    expect(call.params?.agentId).toBe("work");
+  });
 });
 
 const emptyRegistry = createTestRegistry([]);
@@ -248,25 +277,4 @@ const createMattermostLikePlugin = (opts: {
     },
     sendMedia: async () => ({ channel: "mattermost", messageId: "m2" }),
   },
-});
-
-const createMSTeamsPlugin = (params: {
-  aliases?: string[];
-  outbound: ChannelOutboundAdapter;
-}): ChannelPlugin => ({
-  id: "msteams",
-  meta: {
-    id: "msteams",
-    label: "Microsoft Teams",
-    selectionLabel: "Microsoft Teams (Bot Framework)",
-    docsPath: "/channels/msteams",
-    blurb: "Bot Framework; enterprise support.",
-    aliases: params.aliases,
-  },
-  capabilities: { chatTypes: ["direct"] },
-  config: {
-    listAccountIds: () => [],
-    resolveAccount: () => ({}),
-  },
-  outbound: params.outbound,
 });

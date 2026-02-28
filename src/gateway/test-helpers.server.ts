@@ -18,7 +18,7 @@ import { DEFAULT_AGENT_ID, toAgentStoreSessionKey } from "../routing/session-key
 import { captureEnv } from "../test-utils/env.js";
 import { getDeterministicFreePortBlock } from "../test-utils/ports.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
-import { buildDeviceAuthPayload } from "./device-auth.js";
+import { buildDeviceAuthPayloadV3 } from "./device-auth.js";
 import { PROTOCOL_VERSION } from "./protocol/index.js";
 import type { GatewayServerOptions } from "./server.js";
 import {
@@ -404,13 +404,37 @@ export async function startServerWithClient(
   return { server, ws, port, prevToken: prev, envSnapshot };
 }
 
+export async function startConnectedServerWithClient(
+  token?: string,
+  opts?: GatewayServerOptions & { wsHeaders?: Record<string, string> },
+) {
+  const started = await startServerWithClient(token, opts);
+  await connectOk(started.ws);
+  return started;
+}
+
 type ConnectResponse = {
   type: "res";
   id: string;
   ok: boolean;
   payload?: Record<string, unknown>;
-  error?: { message?: string };
+  error?: { message?: string; code?: string; details?: unknown };
 };
+
+function resolveDefaultTestDeviceIdentityPath(params: {
+  clientId: string;
+  clientMode: string;
+  platform: string;
+  deviceFamily?: string;
+  role: string;
+}) {
+  const safe =
+    `${params.clientId}-${params.clientMode}-${params.platform}-${params.deviceFamily ?? "none"}-${params.role}`
+      .replace(/[^a-zA-Z0-9._-]+/g, "_")
+      .toLowerCase();
+  const suiteRoot = process.env.OPENCLAW_STATE_DIR ?? process.env.HOME ?? os.tmpdir();
+  return path.join(suiteRoot, "test-device-identities", `${safe}.json`);
+}
 
 export async function readConnectChallengeNonce(
   ws: WebSocket,
@@ -442,6 +466,7 @@ export async function connectReq(
   ws: WebSocket,
   opts?: {
     token?: string;
+    deviceToken?: string;
     password?: string;
     skipDefaultAuth?: boolean;
     minProtocol?: number;
@@ -468,6 +493,7 @@ export async function connectReq(
       signedAt: number;
       nonce?: string;
     } | null;
+    deviceIdentityPath?: string;
     skipConnectChallengeNonce?: boolean;
     timeoutMs?: number;
   },
@@ -494,7 +520,9 @@ export async function connectReq(
         ? ((testState.gatewayAuth as { password?: string }).password ?? undefined)
         : process.env.OPENCLAW_GATEWAY_PASSWORD;
   const token = opts?.token ?? defaultToken;
+  const deviceToken = opts?.deviceToken?.trim() || undefined;
   const password = opts?.password ?? defaultPassword;
+  const authTokenForSignature = token ?? deviceToken;
   const requestedScopes = Array.isArray(opts?.scopes)
     ? opts.scopes
     : role === "operator"
@@ -515,17 +543,28 @@ export async function connectReq(
     if (!connectChallengeNonce) {
       throw new Error("missing connect.challenge nonce");
     }
-    const identity = loadOrCreateDeviceIdentity();
+    const identityPath =
+      opts?.deviceIdentityPath ??
+      resolveDefaultTestDeviceIdentityPath({
+        clientId: client.id,
+        clientMode: client.mode,
+        platform: client.platform,
+        deviceFamily: client.deviceFamily,
+        role,
+      });
+    const identity = loadOrCreateDeviceIdentity(identityPath);
     const signedAtMs = Date.now();
-    const payload = buildDeviceAuthPayload({
+    const payload = buildDeviceAuthPayloadV3({
       deviceId: identity.deviceId,
       clientId: client.id,
       clientMode: client.mode,
       role,
       scopes: requestedScopes,
       signedAtMs,
-      token: token ?? null,
+      token: authTokenForSignature ?? null,
       nonce: connectChallengeNonce,
+      platform: client.platform,
+      deviceFamily: client.deviceFamily,
     });
     return {
       id: identity.deviceId,
@@ -550,9 +589,10 @@ export async function connectReq(
         role,
         scopes: requestedScopes,
         auth:
-          token || password
+          token || password || deviceToken
             ? {
                 token,
+                deviceToken,
                 password,
               }
             : undefined,

@@ -16,6 +16,7 @@ export {
   getApiErrorPayloadFingerprint,
   isAuthAssistantError,
   isAuthErrorMessage,
+  isAuthPermanentErrorMessage,
   isModelNotFoundErrorMessage,
   isBillingAssistantError,
   parseApiErrorInfo,

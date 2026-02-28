@@ -13,6 +13,18 @@ function asOpenClawConfig(config: Partial<OpenClawConfig>): OpenClawConfig {
   return config as OpenClawConfig;
 }
 
+function createToolConfig() {
+  return asOpenClawConfig({ agents: { list: [{ id: "main", default: true }] } });
+}
+
+function createMemoryGetToolOrThrow(config: OpenClawConfig = createToolConfig()) {
+  const tool = createMemoryGetTool({ config });
+  if (!tool) {
+    throw new Error("tool missing");
+  }
+  return tool;
+}
+
 beforeEach(() => {
   resetMemoryToolMockState({
     backend: "builtin",
@@ -144,12 +156,7 @@ describe("memory tools", () => {
       throw new Error("path required");
     });
 
-    const cfg = { agents: { list: [{ id: "main", default: true }] } };
-    const tool = createMemoryGetTool({ config: cfg });
-    expect(tool).not.toBeNull();
-    if (!tool) {
-      throw new Error("tool missing");
-    }
+    const tool = createMemoryGetToolOrThrow();
 
     const result = await tool.execute("call_2", { path: "memory/NOPE.md" });
     expect(result.details).toEqual({
@@ -165,12 +172,7 @@ describe("memory tools", () => {
       return { text: "", path: "memory/2026-02-19.md" };
     });
 
-    const cfg = { agents: { list: [{ id: "main", default: true }] } };
-    const tool = createMemoryGetTool({ config: cfg });
-    expect(tool).not.toBeNull();
-    if (!tool) {
-      throw new Error("tool missing");
-    }
+    const tool = createMemoryGetToolOrThrow();
 
     const result = await tool.execute("call_enoent", { path: "memory/2026-02-19.md" });
     expect(result.details).toEqual({

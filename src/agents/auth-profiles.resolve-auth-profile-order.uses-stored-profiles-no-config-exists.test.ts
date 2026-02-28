@@ -9,6 +9,32 @@ describe("resolveAuthProfileOrder", () => {
   const store = ANTHROPIC_STORE;
   const cfg = ANTHROPIC_CFG;
 
+  function resolveMinimaxOrderWithProfile(profile: {
+    type: "token";
+    provider: "minimax";
+    token: string;
+    expires?: number;
+  }) {
+    return resolveAuthProfileOrder({
+      cfg: {
+        auth: {
+          order: {
+            minimax: ["minimax:default"],
+          },
+        },
+      },
+      store: {
+        version: 1,
+        profiles: {
+          "minimax:default": {
+            ...profile,
+          },
+        },
+      },
+      provider: "minimax",
+    });
+  }
+
   it("uses stored profiles when no config exists", () => {
     const order = resolveAuthProfileOrder({
       store,
@@ -145,51 +171,26 @@ describe("resolveAuthProfileOrder", () => {
     });
     expect(order).toEqual(["minimax:prod"]);
   });
-  it("drops token profiles with empty credentials", () => {
-    const order = resolveAuthProfileOrder({
-      cfg: {
-        auth: {
-          order: {
-            minimax: ["minimax:default"],
-          },
-        },
+  it.each([
+    {
+      caseName: "drops token profiles with empty credentials",
+      profile: {
+        type: "token" as const,
+        provider: "minimax" as const,
+        token: "   ",
       },
-      store: {
-        version: 1,
-        profiles: {
-          "minimax:default": {
-            type: "token",
-            provider: "minimax",
-            token: "   ",
-          },
-        },
+    },
+    {
+      caseName: "drops token profiles that are already expired",
+      profile: {
+        type: "token" as const,
+        provider: "minimax" as const,
+        token: "sk-minimax",
+        expires: Date.now() - 1000,
       },
-      provider: "minimax",
-    });
-    expect(order).toEqual([]);
-  });
-  it("drops token profiles that are already expired", () => {
-    const order = resolveAuthProfileOrder({
-      cfg: {
-        auth: {
-          order: {
-            minimax: ["minimax:default"],
-          },
-        },
-      },
-      store: {
-        version: 1,
-        profiles: {
-          "minimax:default": {
-            type: "token",
-            provider: "minimax",
-            token: "sk-minimax",
-            expires: Date.now() - 1000,
-          },
-        },
-      },
-      provider: "minimax",
-    });
+    },
+  ])("$caseName", ({ profile }) => {
+    const order = resolveMinimaxOrderWithProfile(profile);
     expect(order).toEqual([]);
   });
   it("keeps oauth profiles that can refresh", () => {

@@ -108,6 +108,58 @@ describe("deliverMatrixReplies", () => {
     );
   });
 
+  it("skips reasoning-only replies with Reasoning prefix", async () => {
+    await deliverMatrixReplies({
+      replies: [
+        { text: "Reasoning:\nThe user wants X because Y.", replyToId: "r1" },
+        { text: "Here is the answer.", replyToId: "r2" },
+      ],
+      roomId: "room:reason",
+      client: {} as MatrixClient,
+      runtime: runtimeEnv,
+      textLimit: 4000,
+      replyToMode: "first",
+    });
+
+    expect(sendMessageMatrixMock).toHaveBeenCalledTimes(1);
+    expect(sendMessageMatrixMock.mock.calls[0]?.[1]).toBe("Here is the answer.");
+  });
+
+  it("skips reasoning-only replies with thinking tags", async () => {
+    await deliverMatrixReplies({
+      replies: [
+        { text: "<thinking>internal chain of thought</thinking>", replyToId: "r1" },
+        { text: "  <think>more reasoning</think>  ", replyToId: "r2" },
+        { text: "<antthinking>hidden</antthinking>", replyToId: "r3" },
+        { text: "Visible reply", replyToId: "r4" },
+      ],
+      roomId: "room:tags",
+      client: {} as MatrixClient,
+      runtime: runtimeEnv,
+      textLimit: 4000,
+      replyToMode: "all",
+    });
+
+    expect(sendMessageMatrixMock).toHaveBeenCalledTimes(1);
+    expect(sendMessageMatrixMock.mock.calls[0]?.[1]).toBe("Visible reply");
+  });
+
+  it("delivers all replies when none are reasoning-only", async () => {
+    await deliverMatrixReplies({
+      replies: [
+        { text: "First answer", replyToId: "r1" },
+        { text: "Second answer", replyToId: "r2" },
+      ],
+      roomId: "room:normal",
+      client: {} as MatrixClient,
+      runtime: runtimeEnv,
+      textLimit: 4000,
+      replyToMode: "all",
+    });
+
+    expect(sendMessageMatrixMock).toHaveBeenCalledTimes(2);
+  });
+
   it("suppresses replyToId when threadId is set", async () => {
     chunkMarkdownTextWithModeMock.mockImplementation((text: string) => text.split("|"));
 

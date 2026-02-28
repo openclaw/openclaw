@@ -38,6 +38,31 @@ vi.mock("../config/config.js", () => ({
   })),
 }));
 
+vi.mock("../config/sessions.js", () => {
+  const sessionStore = new Proxy<Record<string, { sessionId: string; updatedAt: number }>>(
+    {},
+    {
+      get(target, prop, receiver) {
+        if (typeof prop !== "string" || prop in target) {
+          return Reflect.get(target, prop, receiver);
+        }
+        return { sessionId: `sess-${prop}`, updatedAt: 1 };
+      },
+    },
+  );
+
+  return {
+    loadSessionStore: vi.fn(() => sessionStore),
+    resolveAgentIdFromSessionKey: (key: string) => {
+      const match = key.match(/^agent:([^:]+)/);
+      return match?.[1] ?? "main";
+    },
+    resolveMainSessionKey: () => "agent:main:main",
+    resolveStorePath: () => "/tmp/test-store",
+    updateSessionStore: vi.fn(),
+  };
+});
+
 const announceSpy = vi.fn(async (_params: unknown) => true);
 const runSubagentEndedHookMock = vi.fn(async (_event?: unknown, _ctx?: unknown) => {});
 vi.mock("./subagent-announce.js", () => ({
@@ -58,6 +83,7 @@ vi.mock("./subagent-registry.store.js", () => ({
 
 describe("subagent registry steer restarts", () => {
   let mod: typeof import("./subagent-registry.js");
+  type RegisterSubagentRunInput = Parameters<typeof mod.registerSubagentRun>[0];
 
   beforeAll(async () => {
     mod = await import("./subagent-registry.js");
@@ -88,6 +114,42 @@ describe("subagent registry steer restarts", () => {
         callGateway.mockImplementation(originalCallGateway);
       }
     }
+  };
+
+  const createDeferredAnnounceResolver = (): ((value: boolean) => void) => {
+    let resolveAnnounce!: (value: boolean) => void;
+    announceSpy.mockImplementationOnce(
+      () =>
+        new Promise<boolean>((resolve) => {
+          resolveAnnounce = resolve;
+        }),
+    );
+    return (value: boolean) => {
+      resolveAnnounce(value);
+    };
+  };
+
+  const registerCompletionModeRun = (
+    runId: string,
+    childSessionKey: string,
+    task: string,
+    options: Partial<Pick<RegisterSubagentRunInput, "spawnMode">> = {},
+  ): void => {
+    mod.registerSubagentRun({
+      runId,
+      childSessionKey,
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      requesterOrigin: {
+        channel: "discord",
+        to: "channel:123",
+        accountId: "work",
+      },
+      task,
+      cleanup: "keep",
+      expectsCompletionMessage: true,
+      ...options,
+    });
   };
 
   afterEach(async () => {
@@ -159,28 +221,12 @@ describe("subagent registry steer restarts", () => {
 
   it("defers subagent_ended hook for completion-mode runs until announce delivery resolves", async () => {
     await withPendingAgentWait(async () => {
-      let resolveAnnounce!: (value: boolean) => void;
-      announceSpy.mockImplementationOnce(
-        () =>
-          new Promise<boolean>((resolve) => {
-            resolveAnnounce = resolve;
-          }),
+      const resolveAnnounce = createDeferredAnnounceResolver();
+      registerCompletionModeRun(
+        "run-completion-delayed",
+        "agent:main:subagent:completion-delayed",
+        "completion-mode task",
       );
-
-      mod.registerSubagentRun({
-        runId: "run-completion-delayed",
-        childSessionKey: "agent:main:subagent:completion-delayed",
-        requesterSessionKey: "agent:main:main",
-        requesterDisplayKey: "main",
-        requesterOrigin: {
-          channel: "discord",
-          to: "channel:123",
-          accountId: "work",
-        },
-        task: "completion-mode task",
-        cleanup: "keep",
-        expectsCompletionMessage: true,
-      });
 
       lifecycleHandler?.({
         stream: "lifecycle",
@@ -211,29 +257,13 @@ describe("subagent registry steer restarts", () => {
 
   it("does not emit subagent_ended on completion for persistent session-mode runs", async () => {
     await withPendingAgentWait(async () => {
-      let resolveAnnounce!: (value: boolean) => void;
-      announceSpy.mockImplementationOnce(
-        () =>
-          new Promise<boolean>((resolve) => {
-            resolveAnnounce = resolve;
-          }),
+      const resolveAnnounce = createDeferredAnnounceResolver();
+      registerCompletionModeRun(
+        "run-persistent-session",
+        "agent:main:subagent:persistent-session",
+        "persistent session task",
+        { spawnMode: "session" },
       );
-
-      mod.registerSubagentRun({
-        runId: "run-persistent-session",
-        childSessionKey: "agent:main:subagent:persistent-session",
-        requesterSessionKey: "agent:main:main",
-        requesterDisplayKey: "main",
-        requesterOrigin: {
-          channel: "discord",
-          to: "channel:123",
-          accountId: "work",
-        },
-        task: "persistent session task",
-        cleanup: "keep",
-        expectsCompletionMessage: true,
-        spawnMode: "session",
-      });
 
       lifecycleHandler?.({
         stream: "lifecycle",

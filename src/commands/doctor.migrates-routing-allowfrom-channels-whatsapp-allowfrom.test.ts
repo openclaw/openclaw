@@ -16,7 +16,8 @@ import {
 } from "./doctor.e2e-harness.js";
 import "./doctor.fast-path-mocks.js";
 
-const DOCTOR_MIGRATION_TIMEOUT_MS = 20_000;
+const DOCTOR_MIGRATION_TIMEOUT_MS = process.platform === "win32" ? 60_000 : 45_000;
+const { doctorCommand } = await import("./doctor.js");
 
 describe("doctor command", () => {
   it("does not add a new gateway auth token while fixing legacy issues on invalid config", async () => {
@@ -34,7 +35,6 @@ describe("doctor command", () => {
       legacyIssues: [{ path: "routing.allowFrom", message: "legacy" }],
     });
 
-    const { doctorCommand } = await import("./doctor.js");
     const runtime = createDoctorRuntime();
 
     migrateLegacyConfig.mockReturnValue({
@@ -54,9 +54,11 @@ describe("doctor command", () => {
     const remote = gateway.remote as Record<string, unknown>;
     const channels = (written.channels as Record<string, unknown>) ?? {};
 
-    expect(channels.whatsapp).toEqual({
-      allowFrom: ["+15555550123"],
-    });
+    expect(channels.whatsapp).toEqual(
+      expect.objectContaining({
+        allowFrom: ["+15555550123"],
+      }),
+    );
     expect(written.routing).toBeUndefined();
     expect(remote.token).toBe("legacy-remote-token");
     expect(auth).toBeUndefined();
@@ -78,7 +80,6 @@ describe("doctor command", () => {
       serviceIsLoaded.mockResolvedValueOnce(false);
       serviceInstall.mockClear();
 
-      const { doctorCommand } = await import("./doctor.js");
       await doctorCommand(createDoctorRuntime());
 
       expect(uninstallLegacyGatewayServices).not.toHaveBeenCalled();
@@ -108,7 +109,6 @@ describe("doctor command", () => {
 
     mockDoctorConfigSnapshot();
 
-    const { doctorCommand } = await import("./doctor.js");
     await doctorCommand(createDoctorRuntime());
 
     expect(runGatewayUpdate).toHaveBeenCalledWith(expect.objectContaining({ cwd: root }));

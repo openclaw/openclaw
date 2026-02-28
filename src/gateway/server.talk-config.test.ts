@@ -1,4 +1,12 @@
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
+import {
+  loadOrCreateDeviceIdentity,
+  publicKeyRawBase64UrlFromPem,
+  signDevicePayload,
+} from "../infra/device-identity.js";
+import { buildDeviceAuthPayload } from "./device-auth.js";
 import {
   connectOk,
   installGatewayTestHooks,
@@ -9,20 +17,17 @@ import { withServer } from "./test-with-server.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
-async function createFreshOperatorDevice(scopes: string[], nonce: string) {
-  const { randomUUID } = await import("node:crypto");
-  const { tmpdir } = await import("node:os");
-  const { join } = await import("node:path");
-  const { buildDeviceAuthPayload } = await import("./device-auth.js");
-  const { loadOrCreateDeviceIdentity, publicKeyRawBase64UrlFromPem, signDevicePayload } =
-    await import("../infra/device-identity.js");
+type GatewaySocket = Parameters<Parameters<typeof withServer>[0]>[0];
+const TALK_CONFIG_DEVICE_PATH = path.join(
+  os.tmpdir(),
+  `openclaw-talk-config-device-${process.pid}.json`,
+);
+const TALK_CONFIG_DEVICE = loadOrCreateDeviceIdentity(TALK_CONFIG_DEVICE_PATH);
 
-  const identity = loadOrCreateDeviceIdentity(
-    join(tmpdir(), `openclaw-talk-config-${randomUUID()}.json`),
-  );
+async function createFreshOperatorDevice(scopes: string[], nonce: string) {
   const signedAtMs = Date.now();
   const payload = buildDeviceAuthPayload({
-    deviceId: identity.deviceId,
+    deviceId: TALK_CONFIG_DEVICE.deviceId,
     clientId: "test",
     clientMode: "test",
     role: "operator",
@@ -33,12 +38,27 @@ async function createFreshOperatorDevice(scopes: string[], nonce: string) {
   });
 
   return {
-    id: identity.deviceId,
-    publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
-    signature: signDevicePayload(identity.privateKeyPem, payload),
+    id: TALK_CONFIG_DEVICE.deviceId,
+    publicKey: publicKeyRawBase64UrlFromPem(TALK_CONFIG_DEVICE.publicKeyPem),
+    signature: signDevicePayload(TALK_CONFIG_DEVICE.privateKeyPem, payload),
     signedAt: signedAtMs,
     nonce,
   };
+}
+
+async function connectOperator(ws: GatewaySocket, scopes: string[]) {
+  const nonce = await readConnectChallengeNonce(ws);
+  expect(nonce).toBeTruthy();
+  await connectOk(ws, {
+    token: "secret",
+    scopes,
+    device: await createFreshOperatorDevice(scopes, String(nonce)),
+  });
+}
+
+async function writeTalkConfig(config: { apiKey?: string; voiceId?: string }) {
+  const { writeConfigFile } = await import("../config/config.js");
+  await writeConfigFile({ talk: config });
 }
 
 describe("gateway talk.config", () => {
@@ -58,40 +78,35 @@ describe("gateway talk.config", () => {
     });
 
     await withServer(async (ws) => {
-      const nonce = await readConnectChallengeNonce(ws);
-      expect(nonce).toBeTruthy();
-      await connectOk(ws, {
-        token: "secret",
-        scopes: ["operator.read"],
-        device: await createFreshOperatorDevice(["operator.read"], String(nonce)),
-      });
-      const res = await rpcReq<{ config?: { talk?: { apiKey?: string; voiceId?: string } } }>(
-        ws,
-        "talk.config",
-        {},
-      );
+      await connectOperator(ws, ["operator.read"]);
+      const res = await rpcReq<{
+        config?: {
+          talk?: {
+            provider?: string;
+            providers?: {
+              elevenlabs?: { voiceId?: string; apiKey?: string };
+            };
+            apiKey?: string;
+            voiceId?: string;
+          };
+        };
+      }>(ws, "talk.config", {});
       expect(res.ok).toBe(true);
+      expect(res.payload?.config?.talk?.provider).toBe("elevenlabs");
+      expect(res.payload?.config?.talk?.providers?.elevenlabs?.voiceId).toBe("voice-123");
+      expect(res.payload?.config?.talk?.providers?.elevenlabs?.apiKey).toBe(
+        "__OPENCLAW_REDACTED__",
+      );
       expect(res.payload?.config?.talk?.voiceId).toBe("voice-123");
       expect(res.payload?.config?.talk?.apiKey).toBe("__OPENCLAW_REDACTED__");
     });
   });
 
   it("requires operator.talk.secrets for includeSecrets", async () => {
-    const { writeConfigFile } = await import("../config/config.js");
-    await writeConfigFile({
-      talk: {
-        apiKey: "secret-key-abc",
-      },
-    });
+    await writeTalkConfig({ apiKey: "secret-key-abc" });
 
     await withServer(async (ws) => {
-      const nonce = await readConnectChallengeNonce(ws);
-      expect(nonce).toBeTruthy();
-      await connectOk(ws, {
-        token: "secret",
-        scopes: ["operator.read"],
-        device: await createFreshOperatorDevice(["operator.read"], String(nonce)),
-      });
+      await connectOperator(ws, ["operator.read"]);
       const res = await rpcReq(ws, "talk.config", { includeSecrets: true });
       expect(res.ok).toBe(false);
       expect(res.error?.message).toContain("missing scope: operator.talk.secrets");
@@ -99,29 +114,49 @@ describe("gateway talk.config", () => {
   });
 
   it("returns secrets for operator.talk.secrets scope", async () => {
-    const { writeConfigFile } = await import("../config/config.js");
-    await writeConfigFile({
-      talk: {
-        apiKey: "secret-key-abc",
-      },
-    });
+    await writeTalkConfig({ apiKey: "secret-key-abc" });
 
     await withServer(async (ws) => {
-      const nonce = await readConnectChallengeNonce(ws);
-      expect(nonce).toBeTruthy();
-      await connectOk(ws, {
-        token: "secret",
-        scopes: ["operator.read", "operator.write", "operator.talk.secrets"],
-        device: await createFreshOperatorDevice(
-          ["operator.read", "operator.write", "operator.talk.secrets"],
-          String(nonce),
-        ),
-      });
+      await connectOperator(ws, ["operator.read", "operator.write", "operator.talk.secrets"]);
       const res = await rpcReq<{ config?: { talk?: { apiKey?: string } } }>(ws, "talk.config", {
         includeSecrets: true,
       });
       expect(res.ok).toBe(true);
       expect(res.payload?.config?.talk?.apiKey).toBe("secret-key-abc");
+    });
+  });
+
+  it("prefers normalized provider payload over conflicting legacy talk keys", async () => {
+    const { writeConfigFile } = await import("../config/config.js");
+    await writeConfigFile({
+      talk: {
+        provider: "elevenlabs",
+        providers: {
+          elevenlabs: {
+            voiceId: "voice-normalized",
+          },
+        },
+        voiceId: "voice-legacy",
+      },
+    });
+
+    await withServer(async (ws) => {
+      await connectOperator(ws, ["operator.read"]);
+      const res = await rpcReq<{
+        config?: {
+          talk?: {
+            provider?: string;
+            providers?: {
+              elevenlabs?: { voiceId?: string };
+            };
+            voiceId?: string;
+          };
+        };
+      }>(ws, "talk.config", {});
+      expect(res.ok).toBe(true);
+      expect(res.payload?.config?.talk?.provider).toBe("elevenlabs");
+      expect(res.payload?.config?.talk?.providers?.elevenlabs?.voiceId).toBe("voice-normalized");
+      expect(res.payload?.config?.talk?.voiceId).toBe("voice-normalized");
     });
   });
 });

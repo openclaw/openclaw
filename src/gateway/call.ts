@@ -15,6 +15,7 @@ import {
   type GatewayClientName,
 } from "../utils/message-channel.js";
 import { GatewayClient } from "./client.js";
+import { resolveGatewayCredentialsFromConfig } from "./credentials.js";
 import {
   CLI_DEFAULT_OPERATOR_SCOPES,
   resolveLeastPrivilegeOperatorScopesForMethod,
@@ -244,27 +245,13 @@ function resolveGatewayCredentials(context: ResolvedGatewayCallContext): {
   token?: string;
   password?: string;
 } {
-  const authToken = context.config.gateway?.auth?.token;
-  const authPassword = context.config.gateway?.auth?.password;
-  const token =
-    context.explicitAuth.token ||
-    (!context.urlOverride
-      ? context.isRemoteMode
-        ? trimToUndefined(context.remote?.token)
-        : trimToUndefined(process.env.OPENCLAW_GATEWAY_TOKEN) ||
-          trimToUndefined(process.env.CLAWDBOT_GATEWAY_TOKEN) ||
-          trimToUndefined(authToken)
-      : undefined);
-  const password =
-    context.explicitAuth.password ||
-    (!context.urlOverride
-      ? trimToUndefined(process.env.OPENCLAW_GATEWAY_PASSWORD) ||
-        trimToUndefined(process.env.CLAWDBOT_GATEWAY_PASSWORD) ||
-        (context.isRemoteMode
-          ? trimToUndefined(context.remote?.password)
-          : trimToUndefined(authPassword))
-      : undefined);
-  return { token, password };
+  return resolveGatewayCredentialsFromConfig({
+    cfg: context.config,
+    env: process.env,
+    explicitAuth: context.explicitAuth,
+    urlOverride: context.urlOverride,
+    remotePasswordPrecedence: "env-first",
+  });
 }
 
 async function resolveGatewayTlsFingerprint(params: {

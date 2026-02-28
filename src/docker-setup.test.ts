@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -151,6 +151,42 @@ describe("docker-setup.sh", () => {
     expect(extraCompose).toContain("openclaw-home:");
     const log = await readFile(activeSandbox.logPath, "utf8");
     expect(log).toContain("--build-arg OPENCLAW_DOCKER_APT_PACKAGES=ffmpeg build-essential");
+  });
+
+  it("precreates config identity dir for CLI device auth writes", async () => {
+    const activeSandbox = requireSandbox(sandbox);
+    const configDir = join(activeSandbox.rootDir, "config-identity");
+    const workspaceDir = join(activeSandbox.rootDir, "workspace-identity");
+
+    const result = runDockerSetup(activeSandbox, {
+      OPENCLAW_CONFIG_DIR: configDir,
+      OPENCLAW_WORKSPACE_DIR: workspaceDir,
+    });
+
+    expect(result.status).toBe(0);
+    const identityDirStat = await stat(join(configDir, "identity"));
+    expect(identityDirStat.isDirectory()).toBe(true);
+  });
+
+  it("reuses existing config token when OPENCLAW_GATEWAY_TOKEN is unset", async () => {
+    const activeSandbox = requireSandbox(sandbox);
+    const configDir = join(activeSandbox.rootDir, "config-token-reuse");
+    const workspaceDir = join(activeSandbox.rootDir, "workspace-token-reuse");
+    await mkdir(configDir, { recursive: true });
+    await writeFile(
+      join(configDir, "openclaw.json"),
+      JSON.stringify({ gateway: { auth: { mode: "token", token: "config-token-123" } } }),
+    );
+
+    const result = runDockerSetup(activeSandbox, {
+      OPENCLAW_GATEWAY_TOKEN: undefined,
+      OPENCLAW_CONFIG_DIR: configDir,
+      OPENCLAW_WORKSPACE_DIR: workspaceDir,
+    });
+
+    expect(result.status).toBe(0);
+    const envFile = await readFile(join(activeSandbox.rootDir, ".env"), "utf8");
+    expect(envFile).toContain("OPENCLAW_GATEWAY_TOKEN=config-token-123");
   });
 
   it("rejects injected multiline OPENCLAW_EXTRA_MOUNTS values", async () => {
