@@ -14,6 +14,20 @@ let appliedDnsResultOrder: string | null = null;
 let appliedGlobalDispatcherAutoSelectFamily: boolean | null = null;
 const log = createSubsystemLogger("telegram/network");
 
+function hasProxyEnvConfigured(): boolean {
+  if (process.env.NODE_USE_ENV_PROXY === "1") {
+    return true;
+  }
+  return Boolean(
+    process.env.HTTP_PROXY ||
+    process.env.HTTPS_PROXY ||
+    process.env.ALL_PROXY ||
+    process.env.http_proxy ||
+    process.env.https_proxy ||
+    process.env.all_proxy,
+  );
+}
+
 // Node 22 workaround: enable autoSelectFamily to allow IPv4 fallback on broken IPv6 networks.
 // Many networks have IPv6 configured but not routed, causing "Network is unreachable" errors.
 // See: https://github.com/nodejs/node/issues/54359
@@ -40,7 +54,10 @@ function applyTelegramNetworkWorkarounds(network?: TelegramNetworkConfig): void 
   // current autoSelectFamily setting so subsequent globalThis.fetch calls
   // inherit the same decision.
   // See: https://github.com/openclaw/openclaw/issues/25676
+  // Avoid overriding proxy-aware dispatchers when proxy env routing is enabled.
+  const proxyEnvConfigured = hasProxyEnvConfigured();
   if (
+    !proxyEnvConfigured &&
     autoSelectDecision.value !== null &&
     autoSelectDecision.value !== appliedGlobalDispatcherAutoSelectFamily
   ) {

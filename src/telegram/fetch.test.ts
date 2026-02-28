@@ -33,6 +33,21 @@ vi.mock("undici", () => ({
 }));
 
 const originalFetch = globalThis.fetch;
+const PROXY_ENV_KEYS = [
+  "NODE_USE_ENV_PROXY",
+  "HTTP_PROXY",
+  "HTTPS_PROXY",
+  "ALL_PROXY",
+  "http_proxy",
+  "https_proxy",
+  "all_proxy",
+] as const;
+
+function clearProxyEnvsForTest(): void {
+  for (const key of PROXY_ENV_KEYS) {
+    vi.stubEnv(key, "");
+  }
+}
 
 afterEach(() => {
   resetTelegramFetchStateForTests();
@@ -148,6 +163,7 @@ describe("resolveTelegramFetch", () => {
   });
 
   it("replaces global undici dispatcher with autoSelectFamily-enabled agent", async () => {
+    clearProxyEnvsForTest();
     globalThis.fetch = vi.fn(async () => ({})) as unknown as typeof fetch;
     resolveTelegramFetch(undefined, { network: { autoSelectFamily: true } });
 
@@ -160,7 +176,41 @@ describe("resolveTelegramFetch", () => {
     });
   });
 
+  it("does not replace global dispatcher when NODE_USE_ENV_PROXY is enabled", async () => {
+    vi.stubEnv("NODE_USE_ENV_PROXY", "1");
+    globalThis.fetch = vi.fn(async () => ({})) as unknown as typeof fetch;
+
+    resolveTelegramFetch(undefined, { network: { autoSelectFamily: true } });
+
+    expect(setGlobalDispatcher).not.toHaveBeenCalled();
+    expect(AgentCtor).not.toHaveBeenCalled();
+    expect(setDefaultAutoSelectFamily).toHaveBeenCalledWith(true);
+  });
+
+  it("does not replace global dispatcher when proxy URL envs are configured", async () => {
+    vi.stubEnv("HTTPS_PROXY", "http://127.0.0.1:1082");
+    globalThis.fetch = vi.fn(async () => ({})) as unknown as typeof fetch;
+
+    resolveTelegramFetch(undefined, { network: { autoSelectFamily: true } });
+
+    expect(setGlobalDispatcher).not.toHaveBeenCalled();
+    expect(AgentCtor).not.toHaveBeenCalled();
+    expect(setDefaultAutoSelectFamily).toHaveBeenCalledWith(true);
+  });
+
+  it("does not replace global dispatcher when lowercase proxy envs are configured", async () => {
+    vi.stubEnv("all_proxy", "socks5://127.0.0.1:1082");
+    globalThis.fetch = vi.fn(async () => ({})) as unknown as typeof fetch;
+
+    resolveTelegramFetch(undefined, { network: { autoSelectFamily: true } });
+
+    expect(setGlobalDispatcher).not.toHaveBeenCalled();
+    expect(AgentCtor).not.toHaveBeenCalled();
+    expect(setDefaultAutoSelectFamily).toHaveBeenCalledWith(true);
+  });
+
   it("sets global dispatcher only once across repeated equal decisions", async () => {
+    clearProxyEnvsForTest();
     globalThis.fetch = vi.fn(async () => ({})) as unknown as typeof fetch;
     resolveTelegramFetch(undefined, { network: { autoSelectFamily: true } });
     resolveTelegramFetch(undefined, { network: { autoSelectFamily: true } });
@@ -169,6 +219,7 @@ describe("resolveTelegramFetch", () => {
   });
 
   it("updates global dispatcher when autoSelectFamily decision changes", async () => {
+    clearProxyEnvsForTest();
     globalThis.fetch = vi.fn(async () => ({})) as unknown as typeof fetch;
     resolveTelegramFetch(undefined, { network: { autoSelectFamily: true } });
     resolveTelegramFetch(undefined, { network: { autoSelectFamily: false } });

@@ -679,6 +679,35 @@ openclaw message send --channel telegram --target @name --message "hi"
 
   </Accordion>
 
+  <Accordion title="Telegram is online, but model requests fail in proxy environments">
+
+    Symptoms:
+    - Telegram health checks and bot updates look normal.
+    - model requests (for example `openai-codex`) fail with transport errors such as:
+      - `fetch failed`
+      - `ERR_TLS_CERT_ALTNAME_INVALID`
+      - `UND_ERR_CONNECT_TIMEOUT`
+
+    What to check:
+    - Keep gateway proxy envs configured when your host requires proxy egress:
+      - `NODE_USE_ENV_PROXY=1`
+      - `HTTP_PROXY=...`
+      - `HTTPS_PROXY=...`
+      - `ALL_PROXY=...`
+    - Verify with:
+
+```bash
+openclaw config get env.vars --json
+openclaw gateway restart
+openclaw logs --follow
+```
+
+    Notes:
+    - Newer OpenClaw builds keep proxy-aware routing when Telegram applies Node 22 network workarounds.
+    - If this still reproduces on your version, upgrade to the latest release and re-test.
+
+  </Accordion>
+
   <Accordion title="Polling or network instability">
 
     - Node 22+ + custom fetch/proxy can trigger immediate abort behavior if AbortSignal types mismatch.

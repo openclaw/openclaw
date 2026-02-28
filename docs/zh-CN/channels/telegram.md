@@ -690,6 +690,25 @@ Telegram 反应作为**单独的 `message_reaction` 事件**到达，而不是�
 - 确保你的 Telegram 用户 ID 已授权（通过配对或 `channels.telegram.allowFrom`）
 - 即使在 `groupPolicy: "open"` 的群组中，命令也需要授权
 
+**Telegram 正常在线，但模型请求在代理环境下失败：**
+
+- 现象：
+  - Telegram 健康检查和收消息都正常
+  - 模型请求（例如 `openai-codex`）报传输错误，如：
+    - `fetch failed`
+    - `ERR_TLS_CERT_ALTNAME_INVALID`
+    - `UND_ERR_CONNECT_TIMEOUT`
+- 检查网关代理环境变量是否完整：
+  - `NODE_USE_ENV_PROXY=1`
+  - `HTTP_PROXY=...`
+  - `HTTPS_PROXY=...`
+  - `ALL_PROXY=...`
+- 可用以下命令验证：
+  - `openclaw config get env.vars --json`
+  - `openclaw gateway restart`
+  - `openclaw logs --follow`
+- 说明：较新版本会在 Telegram 的 Node 22 网络兼容逻辑下保留代理路由；如果你的版本仍复现，先升级到最新版本再复测。
+
 **长轮询在 Node 22+ 上立即中止（通常与代理/自定义 fetch 有关）：**
 
 - Node 22+ 对 `AbortSignal` 实例更严格；外部信号可以立即中止 `fetch` 调用。
