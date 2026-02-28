@@ -38,6 +38,14 @@
       "useDelegation": {
         "type": "boolean",
         "description": "Enable delegatedAction behavior in the SDK."
+      },
+      "rpcUrl": {
+        "type": "string",
+        "description": "Default RPC URL fallback when tool input/env omits it."
+      },
+      "privateKey": {
+        "type": "string",
+        "description": "Default private key fallback for write actions."
       }
     }
   }

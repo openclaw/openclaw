@@ -1,8 +1,6 @@
 import { spawn } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { Type } from "@sinclair/typebox";
-import type { OpenClawPluginApi } from "../../../src/plugins/types.js";
 
 const ACTIONS = [
   "get_pairs",
@@ -18,9 +16,9 @@ const ACTIONS = [
   "cancel_limit_order",
   "update_tp",
   "update_sl",
-] as const;
+];
 
-const WRITE_ACTIONS = new Set<string>([
+const WRITE_ACTIONS = new Set([
   "open_trade",
   "close_trade",
   "cancel_limit_order",
@@ -28,38 +26,25 @@ const WRITE_ACTIONS = new Set<string>([
   "update_sl",
 ]);
 
-const NETWORKS = ["mainnet", "testnet"] as const;
+const NETWORKS = ["mainnet", "testnet"];
 
-type OstiumPluginConfig = {
-  allowWrites?: boolean;
-  defaultNetwork?: "mainnet" | "testnet";
-  pythonBin?: string;
-  runnerPath?: string;
-  timeoutMs?: number;
-  rpcUrlEnvVar?: string;
-  privateKeyEnvVar?: string;
-  useDelegation?: boolean;
-};
-
-function parseCommandJson(command: string): Record<string, unknown> {
+function parseCommandJson(command: string) {
   const trimmed = command.trim();
   if (!trimmed) {
     throw new Error('Empty command payload. Pass JSON like {"action":"get_pairs"}.');
   }
-
   try {
-    const parsed: unknown = JSON.parse(trimmed);
+    const parsed = JSON.parse(trimmed);
     if (!parsed || Array.isArray(parsed) || typeof parsed !== "object") {
       throw new Error("Command payload must be a JSON object.");
     }
-    return parsed as Record<string, unknown>;
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`Invalid command JSON: ${message}`);
+    return parsed;
+  } catch (error: any) {
+    throw new Error(`Invalid command JSON: ${error?.message || String(error)}`);
   }
 }
 
-function resolveInput(params: Record<string, unknown>): Record<string, unknown> {
+function resolveInput(params: Record<string, unknown>) {
   if (typeof params.command !== "string" || (params.action as string | undefined)?.trim()) {
     return params;
   }
@@ -67,14 +52,12 @@ function resolveInput(params: Record<string, unknown>): Record<string, unknown> 
   return { ...params, ...fromCommand };
 }
 
-function getAction(value: unknown): string {
+function getAction(value: unknown) {
   if (typeof value !== "string" || !value.trim()) {
-    throw new Error(
-      `Missing action. Supported actions: ${ACTIONS.join(", ")}. You can also pass command JSON.`,
-    );
+    throw new Error(`Missing action. Supported actions: ${ACTIONS.join(", ")}.`);
   }
   const action = value.trim();
-  if (!ACTIONS.includes(action as (typeof ACTIONS)[number])) {
+  if (!ACTIONS.includes(action)) {
     throw new Error(`Unsupported action "${action}". Supported actions: ${ACTIONS.join(", ")}`);
   }
   return action;
@@ -115,21 +98,19 @@ function runPythonRunner(
       stderr += chunk.toString();
     });
 
-    child.on("error", (error) => {
+    child.on("error", (error: any) => {
       clearTimeout(timeoutHandle);
-      reject(new Error(`Failed to execute ${pythonBin}: ${error.message}`));
+      reject(new Error(`Failed to execute ${pythonBin}: ${error?.message || String(error)}`));
     });
 
-    child.on("close", (code) => {
+    child.on("close", (code: number | null) => {
       clearTimeout(timeoutHandle);
       if (timedOut) {
         reject(new Error(`Ostium runner timed out after ${timeoutMs}ms.`));
         return;
       }
       if (code !== 0) {
-        const stderrText = stderr.trim();
-        const stdoutText = stdout.trim();
-        const details = stderrText || stdoutText || `exit code ${String(code)}`;
+        const details = stderr.trim() || stdout.trim() || `exit code ${String(code)}`;
         reject(new Error(`Ostium runner failed: ${details}`));
         return;
       }
@@ -146,65 +127,41 @@ function runPythonRunner(
   });
 }
 
-export function createOstiumTool(api: OpenClawPluginApi) {
-  const actionSchema = Type.Unsafe<string>({
-    type: "string",
-    enum: [...ACTIONS],
-    description: "Ostium action to execute.",
-  });
-
-  const networkSchema = Type.Unsafe<string>({
-    type: "string",
-    enum: [...NETWORKS],
-    description: "Target Ostium network.",
-  });
-
+export function createOstiumTool(api: any) {
   return {
     name: "ostium",
     label: "Ostium",
     description:
       "Run Ostium SDK reads and writes (pairs, metrics, open/close/update trade) over Arbitrum.",
-    parameters: Type.Object(
-      {
-        action: Type.Optional(actionSchema),
-        command: Type.Optional(
-          Type.String({
-            description:
-              'Optional raw command payload for slash dispatch. Provide JSON, for example: {"action":"get_pairs"}.',
-          }),
-        ),
-        network: Type.Optional(networkSchema),
-        traderAddress: Type.Optional(Type.String()),
-        pairId: Type.Optional(Type.Number()),
-        tradeIndex: Type.Optional(Type.Number()),
-        periodHours: Type.Optional(Type.Number()),
-        includingCurrentPriceAndMarketStatus: Type.Optional(Type.Boolean()),
-        tradeParams: Type.Optional(
-          Type.Object(
-            {},
-            {
-              additionalProperties: true,
-              description: "Trade parameter object passed to SDK open_trade call.",
-            },
-          ),
-        ),
-        atPrice: Type.Optional(Type.Number()),
-        marketPrice: Type.Optional(Type.Number()),
-        closePercentage: Type.Optional(Type.Number()),
-        tpPrice: Type.Optional(Type.Number()),
-        slPrice: Type.Optional(Type.Number()),
-        useDelegation: Type.Optional(Type.Boolean()),
-        verbose: Type.Optional(Type.Boolean()),
-        rpcUrl: Type.Optional(Type.String()),
-        privateKey: Type.Optional(Type.String()),
-        commandName: Type.Optional(Type.String()),
-        skillName: Type.Optional(Type.String()),
+    parameters: {
+      type: "object",
+      additionalProperties: true,
+      properties: {
+        action: { type: "string", enum: ACTIONS },
+        command: { type: "string" },
+        network: { type: "string", enum: NETWORKS },
+        traderAddress: { type: "string" },
+        pairId: { type: "number" },
+        tradeIndex: { type: "number" },
+        periodHours: { type: "number" },
+        includingCurrentPriceAndMarketStatus: { type: "boolean" },
+        tradeParams: { type: "object", additionalProperties: true },
+        atPrice: { type: "number" },
+        marketPrice: { type: "number" },
+        closePercentage: { type: "number" },
+        tpPrice: { type: "number" },
+        slPrice: { type: "number" },
+        useDelegation: { type: "boolean" },
+        verbose: { type: "boolean" },
+        rpcUrl: { type: "string" },
+        privateKey: { type: "string" },
+        commandName: { type: "string" },
+        skillName: { type: "string" },
       },
-      { additionalProperties: true },
-    ),
+    },
 
     async execute(_id: string, params: Record<string, unknown>) {
-      const pluginConfig = (api.pluginConfig ?? {}) as OstiumPluginConfig;
+      const pluginConfig = (api.pluginConfig ?? {}) as Record<string, any>;
       const input = resolveInput(params);
       const action = getAction(input.action);
 
@@ -218,30 +175,27 @@ export function createOstiumTool(api: OpenClawPluginApi) {
           ? input.network
           : (pluginConfig.defaultNetwork ?? "mainnet");
 
-      if (!NETWORKS.includes(networkValue as (typeof NETWORKS)[number])) {
+      if (!NETWORKS.includes(networkValue)) {
         throw new Error(`Invalid network "${networkValue}". Use mainnet or testnet.`);
       }
 
-      const rpcUrlEnvVar =
-        typeof pluginConfig.rpcUrlEnvVar === "string" && pluginConfig.rpcUrlEnvVar.trim()
-          ? pluginConfig.rpcUrlEnvVar.trim()
-          : "RPC_URL";
-      const privateKeyEnvVar =
-        typeof pluginConfig.privateKeyEnvVar === "string" && pluginConfig.privateKeyEnvVar.trim()
-          ? pluginConfig.privateKeyEnvVar.trim()
-          : "PRIVATE_KEY";
-      const pythonBin =
-        typeof pluginConfig.pythonBin === "string" && pluginConfig.pythonBin.trim()
-          ? pluginConfig.pythonBin.trim()
-          : "python3";
+      const rpcUrlEnvVar = pluginConfig.rpcUrlEnvVar?.trim?.() || "RPC_URL";
+      const privateKeyEnvVar = pluginConfig.privateKeyEnvVar?.trim?.() || "PRIVATE_KEY";
+      const pythonBin = pluginConfig.pythonBin?.trim?.() || "python3";
       const timeoutMs =
         typeof pluginConfig.timeoutMs === "number" && pluginConfig.timeoutMs > 0
           ? pluginConfig.timeoutMs
-          : 120_000;
-      const runnerPath =
-        typeof pluginConfig.runnerPath === "string" && pluginConfig.runnerPath.trim()
-          ? pluginConfig.runnerPath.trim()
-          : getDefaultRunnerPath();
+          : 120000;
+      const runnerPath = pluginConfig.runnerPath?.trim?.() || getDefaultRunnerPath();
+
+      const cfgRpcUrl =
+        typeof pluginConfig.rpcUrl === "string" && pluginConfig.rpcUrl.trim()
+          ? pluginConfig.rpcUrl.trim()
+          : undefined;
+      const cfgPrivateKey =
+        typeof pluginConfig.privateKey === "string" && pluginConfig.privateKey.trim()
+          ? pluginConfig.privateKey.trim()
+          : undefined;
 
       const payload: Record<string, unknown> = {
         ...input,
@@ -255,6 +209,13 @@ export function createOstiumTool(api: OpenClawPluginApi) {
         privateKeyEnvVar,
       };
 
+      if (typeof payload.rpcUrl !== "string" && cfgRpcUrl) {
+        payload.rpcUrl = cfgRpcUrl;
+      }
+      if (typeof payload.privateKey !== "string" && cfgPrivateKey) {
+        payload.privateKey = cfgPrivateKey;
+      }
+
       delete payload.command;
       delete payload.commandName;
       delete payload.skillName;
@@ -266,31 +227,28 @@ export function createOstiumTool(api: OpenClawPluginApi) {
         timeoutMs,
       );
 
-      let parsed: unknown;
+      let parsed: any;
       try {
         parsed = JSON.parse(output);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        throw new Error(`Ostium runner returned invalid JSON: ${message}`);
+      } catch (error: any) {
+        throw new Error(`Ostium runner returned invalid JSON: ${error?.message || String(error)}`);
       }
 
       if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
         throw new Error("Ostium runner returned invalid payload.");
       }
 
-      const parsedRecord = parsed as Record<string, unknown>;
-      const ok = parsedRecord.ok;
-      if (ok === false) {
-        const errorText =
-          typeof parsedRecord.error === "string" ? parsedRecord.error : "unknown Ostium error";
-        throw new Error(`Ostium action "${action}" failed: ${errorText}`);
+      if (parsed.ok === false) {
+        throw new Error(
+          `Ostium action "${action}" failed: ${parsed.error || "unknown Ostium error"}`,
+        );
       }
 
-      const text = JSON.stringify(parsedRecord.result ?? parsedRecord, null, 2);
+      const text = JSON.stringify(parsed.result ?? parsed, null, 2);
       return {
         content: [{ type: "text", text }],
         details: {
-          json: parsedRecord,
+          json: parsed,
           action,
           network: networkValue,
           writesEnabled: allowWrites,
