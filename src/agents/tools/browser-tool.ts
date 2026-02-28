@@ -88,7 +88,15 @@ function readOptionalTargetAndTimeout(params: Record<string, unknown>) {
  * Read URL parameter with alias support.
  * Supports both 'targetUrl' (canonical) and 'url' (alias for backwards compatibility).
  */
-function readUrlParam(params: Record<string, unknown>, options: { required?: boolean } = {}) {
+function readUrlParam(params: Record<string, unknown>, options: { required: true }): string;
+function readUrlParam(
+  params: Record<string, unknown>,
+  options?: { required?: boolean },
+): string | undefined;
+function readUrlParam(
+  params: Record<string, unknown>,
+  options: { required?: boolean } = {},
+): string | undefined {
   const { required = false } = options;
   // Try targetUrl first (canonical name)
   let url = typeof params.targetUrl === "string" ? params.targetUrl.trim() : undefined;

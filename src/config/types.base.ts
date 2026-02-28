@@ -176,6 +176,8 @@ export type LoggingConfig = {
   redactSensitive?: "off" | "tools";
   /** Regex patterns used to redact sensitive tokens (defaults apply when unset). */
   redactPatterns?: string[];
+  /** Optional file path for human-readable formatted log output alongside NDJSON logs. */
+  formattedFile?: string;
 };
 
 export type DiagnosticsOtelConfig = {

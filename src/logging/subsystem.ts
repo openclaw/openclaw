@@ -110,7 +110,7 @@ function pickSubsystemColor(color: ChalkInstance, subsystem: string): ChalkInsta
   return color[name];
 }
 
-function formatSubsystemForConsole(subsystem: string): string {
+export function formatSubsystemForConsole(subsystem: string): string {
   const parts = subsystem.split("/").filter(Boolean);
   const original = parts.join("/") || subsystem;
   while (
@@ -177,7 +177,7 @@ export function stripRedundantSubsystemPrefixForConsole(
   return message.slice(i);
 }
 
-function formatConsoleLine(opts: {
+export function formatConsoleLine(opts: {
   level: LogLevel;
   subsystem: string;
   message: string;

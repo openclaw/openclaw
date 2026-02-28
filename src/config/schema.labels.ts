@@ -25,6 +25,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "logging.consoleStyle": "Console Log Style",
   "logging.redactSensitive": "Sensitive Data Redaction Mode",
   "logging.redactPatterns": "Custom Redaction Patterns",
+  "logging.formattedFile": "Formatted Log File Path",
   update: "Updates",
   "update.channel": "Update Channel",
   "update.checkOnStart": "Update Check on Start",

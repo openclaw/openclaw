@@ -9,6 +9,7 @@ import { resolveEnvLogLevelOverride } from "./env-log-level.js";
 import { type LogLevel, levelToMinLevel, normalizeLogLevel } from "./levels.js";
 import { resolveNodeRequireFromMeta } from "./node-require.js";
 import { loggingState } from "./state.js";
+import { formatConsoleLine } from "./subsystem.js";
 
 export const DEFAULT_LOG_DIR = resolvePreferredOpenClawTmpDir();
 export const DEFAULT_LOG_FILE = path.join(DEFAULT_LOG_DIR, "openclaw.log"); // legacy single-file path
@@ -23,6 +24,7 @@ const requireConfig = resolveNodeRequireFromMeta(import.meta.url);
 export type LoggerSettings = {
   level?: LogLevel;
   file?: string;
+  formattedFile?: string;
   maxFileBytes?: number;
   consoleLevel?: LogLevel;
   consoleStyle?: ConsoleStyle;
@@ -33,6 +35,7 @@ type LogObj = { date?: Date } & Record<string, unknown>;
 type ResolvedSettings = {
   level: LogLevel;
   file: string;
+  formattedFile?: string;
   maxFileBytes: number;
 };
 export type LoggerResolvedSettings = ResolvedSettings;
@@ -75,15 +78,21 @@ function resolveSettings(): ResolvedSettings {
   const envLevel = resolveEnvLogLevelOverride();
   const level = envLevel ?? fromConfig;
   const file = cfg?.file ?? defaultRollingPathForToday();
+  const formattedFile = cfg?.formattedFile;
   const maxFileBytes = resolveMaxLogFileBytes(cfg?.maxFileBytes);
-  return { level, file, maxFileBytes };
+  return { level, file, formattedFile, maxFileBytes };
 }
 
 function settingsChanged(a: ResolvedSettings | null, b: ResolvedSettings) {
   if (!a) {
     return true;
   }
-  return a.level !== b.level || a.file !== b.file || a.maxFileBytes !== b.maxFileBytes;
+  return (
+    a.level !== b.level ||
+    a.file !== b.file ||
+    a.formattedFile !== b.formattedFile ||
+    a.maxFileBytes !== b.maxFileBytes
+  );
 }
 
 export function isFileLogLevelEnabled(level: LogLevel): boolean {
@@ -141,6 +150,53 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
       // never block on logging failures
     }
   });
+
+  // Attach formatted file transport if configured
+  if (settings.formattedFile) {
+    const formattedFilePath = settings.formattedFile;
+    const maxBytes = settings.maxFileBytes;
+    fs.mkdirSync(path.dirname(formattedFilePath), { recursive: true });
+    let currentFormattedFileBytes = getCurrentLogFileBytes(formattedFilePath);
+    let warnedAboutFormattedSizeCap = false;
+
+    logger.attachTransport((logObj: LogObj) => {
+      try {
+        const level = (logObj.level as LogLevel) ?? "info";
+        const subsystem = typeof logObj.subsystem === "string" ? logObj.subsystem : "openclaw";
+        const message = typeof logObj.message === "string" ? logObj.message : "";
+        const meta = logObj.meta as Record<string, unknown> | undefined;
+
+        const formattedLine = formatConsoleLine({
+          level,
+          subsystem,
+          message,
+          style: "compact",
+          meta,
+        });
+        const payload = `${formattedLine}\n`;
+        const payloadBytes = Buffer.byteLength(payload, "utf8");
+        const nextBytes = currentFormattedFileBytes + payloadBytes;
+
+        if (nextBytes > maxBytes) {
+          if (!warnedAboutFormattedSizeCap) {
+            warnedAboutFormattedSizeCap = true;
+            const warningLine = `[${new Date().toISOString()}] [logging] log file size cap reached; suppressing writes file=${formattedFilePath} maxFileBytes=${maxBytes}`;
+            appendLogLine(formattedFilePath, `${warningLine}\n`);
+            process.stderr.write(
+              `[openclaw] formatted log file size cap reached; suppressing writes file=${formattedFilePath} maxFileBytes=${maxBytes}\n`,
+            );
+          }
+          return;
+        }
+        if (appendLogLine(formattedFilePath, payload)) {
+          currentFormattedFileBytes = nextBytes;
+        }
+      } catch {
+        // never block on logging failures
+      }
+    });
+  }
+
   for (const transport of externalTransports) {
     attachExternalTransport(logger, transport);
   }
