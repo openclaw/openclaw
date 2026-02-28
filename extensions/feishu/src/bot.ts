@@ -927,8 +927,9 @@ export async function handleFeishuMessage(params: {
   const dmPolicy = feishuCfg?.dmPolicy ?? "pairing";
   const configAllowFrom = feishuCfg?.allowFrom ?? [];
   const useAccessGroups = cfg.commands?.useAccessGroups !== false;
-  const broadcastAgents = isGroup
-    ? resolveBroadcastAgents(cfg, ctx.chatId)?.map((id) => normalizeAgentId(id))
+  const rawBroadcastAgents = isGroup ? resolveBroadcastAgents(cfg, ctx.chatId) : null;
+  const broadcastAgents = rawBroadcastAgents
+    ? [...new Set(rawBroadcastAgents.map((id) => normalizeAgentId(id)))]
     : null;
 
   if (isGroup) {
