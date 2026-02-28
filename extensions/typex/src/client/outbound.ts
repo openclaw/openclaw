@@ -3,8 +3,20 @@ import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk";
 import { getTypeXClient } from "./client.js";
 import { sendMessageTypeX } from "./send.js";
 
+function resolveOutboundAccountId(cfg: OpenClawConfig, accountId?: string | null): string {
+  const explicit = accountId?.trim();
+  if (explicit) {
+    return explicit;
+  }
+  const configuredDefault = cfg.channels?.typex?.defaultAccount?.trim();
+  if (configuredDefault) {
+    return configuredDefault;
+  }
+  return DEFAULT_ACCOUNT_ID;
+}
+
 function resolveToken(cfg: OpenClawConfig, accountId?: string | null): string | undefined {
-  const id = accountId ?? DEFAULT_ACCOUNT_ID;
+  const id = resolveOutboundAccountId(cfg, accountId);
   const account = cfg.channels?.typex?.accounts?.[id];
   if (typeof account?.token === "string" && account.token.trim()) {
     return account.token;
@@ -22,8 +34,9 @@ export const typexOutbound: ChannelOutboundAdapter = {
   textChunkLimit: 2000,
 
   sendText: async ({ to, text, accountId, cfg }: any) => {
+    const resolvedAccountId = resolveOutboundAccountId(cfg, accountId);
     const token = resolveToken(cfg, accountId);
-    const client = getTypeXClient(accountId ?? undefined, { token, skipConfigCheck: true });
+    const client = getTypeXClient(resolvedAccountId, { token, skipConfigCheck: true });
     const result = await sendMessageTypeX(client, to, text ?? "");
     return {
       channel: "typex",
@@ -36,8 +49,9 @@ export const typexOutbound: ChannelOutboundAdapter = {
     if (mediaUrl) {
       throw new Error("TypeX media sending is not supported yet.");
     }
+    const resolvedAccountId = resolveOutboundAccountId(cfg, accountId);
     const token = resolveToken(cfg, accountId);
-    const client = getTypeXClient(accountId ?? undefined, { token, skipConfigCheck: true });
+    const client = getTypeXClient(resolvedAccountId, { token, skipConfigCheck: true });
     const result = await sendMessageTypeX(client, to, text ?? "");
     return {
       channel: "typex",

@@ -213,17 +213,29 @@ export async function monitorTypeXProvider(opts: MonitorTypeXOpts) {
 
         if (messages && messages.length > 0) {
           for (const msg of messages) {
-            await processTypeXMessage(client, msg, appId || accountObj.accountId, {
-              accountId: accountObj.accountId,
-              cfg,
-              typexCfg,
-              botName: accountObj.name,
-              logger,
-            });
-
-            if (typeof msg.position === "number") {
-              currentPos = msg.position;
-              await savePos(accountObj.accountId, currentPos);
+            const nextPos =
+              typeof msg.position === "number" && Number.isFinite(msg.position) && msg.position >= 0
+                ? msg.position
+                : null;
+            try {
+              await processTypeXMessage(client, msg, appId || accountObj.accountId, {
+                accountId: accountObj.accountId,
+                cfg,
+                typexCfg,
+                botName: accountObj.name,
+                logger,
+              });
+            } catch (err) {
+              logger?.error(
+                `[${accountObj.accountId}] processTypeXMessage failed: ${
+                  err instanceof Error ? err.stack : String(err)
+                }`,
+              );
+            } finally {
+              if (typeof nextPos === "number") {
+                currentPos = nextPos;
+                await savePos(accountObj.accountId, currentPos);
+              }
             }
           }
         }

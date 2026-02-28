@@ -16,6 +16,22 @@ const meta = {
   order: 100,
 };
 
+function resolveConfiguredDefaultAccountId(cfg: any): string | undefined {
+  const configuredDefault = cfg.channels?.["typex"]?.defaultAccount?.trim();
+  if (configuredDefault) {
+    return configuredDefault;
+  }
+  return undefined;
+}
+
+function resolveAccountSelectionId(cfg: any, accountId?: string | null): string {
+  const explicit = accountId?.trim();
+  if (explicit) {
+    return explicit;
+  }
+  return resolveConfiguredDefaultAccountId(cfg) || DEFAULT_ACCOUNT_ID;
+}
+
 export const typexPlugin = {
   id: "typex",
   meta,
@@ -44,11 +60,20 @@ export const typexPlugin = {
 
   config: {
     listAccountIds: (cfg) => {
-      const accs = cfg.channels?.["typex"]?.accounts || {};
-      return Object.keys(accs);
+      const channelCfg = cfg.channels?.["typex"];
+      const accs = channelCfg?.accounts || {};
+      const ids = new Set<string>(Object.keys(accs));
+      if (typeof channelCfg?.token === "string" && channelCfg.token.trim()) {
+        ids.add(DEFAULT_ACCOUNT_ID);
+      }
+      const configuredDefault = resolveConfiguredDefaultAccountId(cfg);
+      if (configuredDefault) {
+        ids.add(configuredDefault);
+      }
+      return Array.from(ids);
     },
     resolveAccount: (cfg, accountId) => {
-      const id = accountId || DEFAULT_ACCOUNT_ID;
+      const id = resolveAccountSelectionId(cfg, accountId);
       const globalCheck = cfg.channels?.["typex"];
       const account =
         cfg.channels?.["typex"]?.accounts?.[id] ||
@@ -63,7 +88,7 @@ export const typexPlugin = {
       };
     },
     defaultAccountId: (cfg) => {
-      const configuredDefault = cfg.channels?.["typex"]?.defaultAccount?.trim();
+      const configuredDefault = resolveConfiguredDefaultAccountId(cfg);
       if (configuredDefault) {
         return configuredDefault;
       }
@@ -71,8 +96,82 @@ export const typexPlugin = {
       const first = Object.keys(accs)[0];
       return first || DEFAULT_ACCOUNT_ID;
     },
-    setAccountEnabled: ({ cfg }) => cfg,
-    deleteAccount: ({ cfg }) => cfg,
+    setAccountEnabled: ({ cfg, accountId, enabled }) => {
+      const id = resolveAccountSelectionId(cfg, accountId);
+      const typexCfg = (cfg.channels?.["typex"] ?? {}) as Record<string, any>;
+      const accounts = { ...(typexCfg.accounts ?? {}) };
+      const hasAccountEntry = Object.prototype.hasOwnProperty.call(accounts, id);
+
+      if (id === DEFAULT_ACCOUNT_ID && !hasAccountEntry) {
+        return {
+          ...cfg,
+          channels: {
+            ...cfg.channels,
+            typex: {
+              ...typexCfg,
+              enabled,
+            },
+          },
+        };
+      }
+
+      const existing = accounts[id] ?? {};
+      return {
+        ...cfg,
+        channels: {
+          ...cfg.channels,
+          typex: {
+            ...typexCfg,
+            accounts: {
+              ...accounts,
+              [id]: {
+                ...existing,
+                enabled,
+              },
+            },
+          },
+        },
+      };
+    },
+    deleteAccount: ({ cfg, accountId }) => {
+      const id = resolveAccountSelectionId(cfg, accountId);
+      const typexCfg = cfg.channels?.["typex"];
+      if (!typexCfg) {
+        return cfg;
+      }
+      const accounts = { ...(typexCfg.accounts ?? {}) } as Record<string, any>;
+      const hasAccountEntry = Object.prototype.hasOwnProperty.call(accounts, id);
+
+      if (id === DEFAULT_ACCOUNT_ID && !hasAccountEntry) {
+        const nextTypex = { ...typexCfg } as Record<string, any>;
+        delete nextTypex.token;
+        if (nextTypex.defaultAccount === DEFAULT_ACCOUNT_ID) {
+          delete nextTypex.defaultAccount;
+        }
+        return {
+          ...cfg,
+          channels: {
+            ...cfg.channels,
+            typex: nextTypex,
+          },
+        };
+      }
+
+      delete accounts[id];
+      const nextDefault =
+        typexCfg.defaultAccount === id ? Object.keys(accounts)[0] : typexCfg.defaultAccount;
+      return {
+        ...cfg,
+        channels: {
+          ...cfg.channels,
+          typex: {
+            ...typexCfg,
+            defaultAccount: nextDefault,
+            accounts: Object.keys(accounts).length > 0 ? accounts : undefined,
+          },
+        },
+      };
+    },
     isConfigured: (acc) => acc.configured,
     describeAccount: (acc) => ({
       accountId: acc.accountId!,
