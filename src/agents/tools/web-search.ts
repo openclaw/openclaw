@@ -981,6 +981,9 @@ async function runSearxngSearch(params: {
     {
       url: endpoint.toString(),
       timeoutSeconds: params.timeoutSeconds,
+      // SearXNG is a user-configured self-hosted endpoint (may be localhost or LAN IP),
+      // so we apply the trusted SSRF policy the same way other user-endpoint providers do.
+      policy: WEB_TOOLS_TRUSTED_NETWORK_SSRF_POLICY,
       init: {
         method: "GET",
         headers: {
