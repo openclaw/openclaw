@@ -12,6 +12,7 @@ import type { ChatAbortControllerEntry } from "./chat-abort.js";
 import type { ControlUiRootState } from "./control-ui.js";
 import type { HooksConfigResolved } from "./hooks.js";
 import { isLoopbackHost, resolveGatewayListenHosts } from "./net.js";
+import { isProtectedPluginRoutePath } from "./security-path.js";
 import {
   createGatewayBroadcaster,
   type GatewayBroadcastFn,
@@ -24,13 +25,11 @@ import {
 } from "./server-chat.js";
 import { MAX_PAYLOAD_BYTES } from "./server-constants.js";
 import { attachGatewayUpgradeHandler, createGatewayHttpServer } from "./server-http.js";
-import { isProtectedPluginRoutePath } from "./security-path.js";
 import type { DedupeEntry } from "./server-shared.js";
 import { createGatewayHooksRequestHandler } from "./server/hooks.js";
 import { listenGatewayHttpServer } from "./server/http-listen.js";
 import {
   createGatewayPluginRequestHandler,
-  hasRegisteredPluginHttpHandlers,
   isRegisteredPluginHttpRoutePath,
 } from "./server/plugins-http.js";
 import type { GatewayTlsRuntime } from "./server/tls.js";
@@ -124,10 +123,7 @@ export async function createGatewayRuntimeState(params: {
     if (isProtectedPluginRoutePath(requestPath)) {
       return true;
     }
-    if (isRegisteredPluginHttpRoutePath(params.pluginRegistry, requestPath)) {
-      return true;
-    }
-    return hasRegisteredPluginHttpHandlers(params.pluginRegistry);
+    return isRegisteredPluginHttpRoutePath(params.pluginRegistry, requestPath);
   };
 
   const bindHosts = await resolveGatewayListenHosts(params.bindHost);

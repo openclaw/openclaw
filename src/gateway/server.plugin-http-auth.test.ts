@@ -3,7 +3,7 @@ import { describe, expect, test, vi } from "vitest";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import type { HooksConfigResolved } from "./hooks.js";
-import { canonicalizePathVariant } from "./security-path.js";
+import { canonicalizePathVariant, isProtectedPluginRoutePath } from "./security-path.js";
 import { createGatewayHttpServer, createHooksRequestHandler } from "./server-http.js";
 import { withTempConfig } from "./test-temp-config.js";
 
@@ -287,6 +287,8 @@ describe("gateway plugin HTTP auth boundary", () => {
           openResponsesEnabled: false,
           handleHooksRequest: async () => false,
           handlePluginRequest,
+          shouldEnforcePluginGatewayAuth: (requestPath) =>
+            isProtectedPluginRoutePath(requestPath) || requestPath === "/plugin/public",
           resolvedAuth,
         });
 
@@ -412,7 +414,7 @@ describe("gateway plugin HTTP auth boundary", () => {
     });
   });
 
-  test("requires gateway auth for wildcard plugin handlers when using default enforcement", async () => {
+  test("keeps wildcard plugin handlers ungated when no auth predicate is configured", async () => {
     const resolvedAuth: ResolvedGatewayAuth = {
       mode: "token",
       token: "test-token",
@@ -449,9 +451,8 @@ describe("gateway plugin HTTP auth boundary", () => {
 
         const unauthenticated = createResponse();
         await dispatchRequest(server, createRequest({ path: "/googlechat" }), unauthenticated.res);
-        expect(unauthenticated.res.statusCode).toBe(401);
-        expect(unauthenticated.getBody()).toContain("Unauthorized");
-        expect(handlePluginRequest).not.toHaveBeenCalled();
+        expect(unauthenticated.res.statusCode).toBe(200);
+        expect(unauthenticated.getBody()).toContain('"route":"wildcard-default"');
 
         const authenticated = createResponse();
         await dispatchRequest(
@@ -501,6 +502,7 @@ describe("gateway plugin HTTP auth boundary", () => {
           openResponsesEnabled: false,
           handleHooksRequest: async () => false,
           handlePluginRequest,
+          shouldEnforcePluginGatewayAuth: isProtectedPluginRoutePath,
           resolvedAuth,
         });
 
@@ -550,6 +552,7 @@ describe("gateway plugin HTTP auth boundary", () => {
           openResponsesEnabled: false,
           handleHooksRequest: async () => false,
           handlePluginRequest,
+          shouldEnforcePluginGatewayAuth: isProtectedPluginRoutePath,
           resolvedAuth,
         });
 

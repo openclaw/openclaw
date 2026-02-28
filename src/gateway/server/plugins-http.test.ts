@@ -4,7 +4,6 @@ import { makeMockHttpResponse } from "../test-http-response.js";
 import { createTestRegistry } from "./__tests__/test-utils.js";
 import {
   createGatewayPluginRequestHandler,
-  hasRegisteredPluginHttpHandlers,
   isRegisteredPluginHttpRoutePath,
 } from "./plugins-http.js";
 
@@ -116,15 +115,5 @@ describe("plugin HTTP registry helpers", () => {
     });
     expect(isRegisteredPluginHttpRoutePath(registry, "/demo")).toBe(true);
     expect(isRegisteredPluginHttpRoutePath(registry, "/missing")).toBe(false);
-  });
-
-  it("detects presence of wildcard handlers", () => {
-    const emptyRegistry = createTestRegistry();
-    expect(hasRegisteredPluginHttpHandlers(emptyRegistry)).toBe(false);
-
-    const handlerRegistry = createTestRegistry({
-      httpHandlers: [{ pluginId: "wildcard", handler: async () => false, source: "wildcard" }],
-    });
-    expect(hasRegisteredPluginHttpHandlers(handlerRegistry)).toBe(true);
   });
 });
