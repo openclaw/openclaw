@@ -14,7 +14,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vi
 // Module-level mocks (hoisted by vitest)
 // ---------------------------------------------------------------------------
 
-const callGatewayMock = vi.fn(async () => ({ status: "ok" }));
+const callGatewayMock = vi.fn(async (_req: Record<string, unknown>) => ({ status: "ok" }));
 
 vi.mock("../gateway/call.js", () => ({
   callGateway: callGatewayMock,
@@ -108,7 +108,7 @@ describe("subagent resilience", () => {
 
   describe("error recovery — waitForSubagentCompletion catch block", () => {
     test("marks run as errored when agent.wait throws", async () => {
-      callGatewayMock.mockImplementation(async (req: { method: string }) => {
+      callGatewayMock.mockImplementation(async (req) => {
         if (req.method === "agent.wait") {
           throw new Error("gateway connection lost");
         }
@@ -139,7 +139,7 @@ describe("subagent resilience", () => {
     });
 
     test("error message includes the original exception text", async () => {
-      callGatewayMock.mockImplementation(async (req: { method: string }) => {
+      callGatewayMock.mockImplementation(async (req) => {
         if (req.method === "agent.wait") {
           throw new Error("ECONNREFUSED 127.0.0.1:18789");
         }
@@ -257,7 +257,7 @@ describe("subagent resilience", () => {
     test("completes cleanup even if gateway notification fails", async () => {
       announceMock.mockResolvedValue(false);
 
-      callGatewayMock.mockImplementation(async (req: { method: string }) => {
+      callGatewayMock.mockImplementation(async (req) => {
         if (req.method === "agent") {
           throw new Error("parent session unavailable");
         }
