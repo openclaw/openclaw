@@ -1329,7 +1329,7 @@ describe("handleCommands subagents", () => {
       cleanup: "keep",
       createdAt: 1000,
       startedAt: 1000,
-    });
+    });//given a run, steer it to check timer.ts instead
     const cfg = {
       commands: { text: true },
       channels: { whatsapp: { allowFrom: ["*"] } },
