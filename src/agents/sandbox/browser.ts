@@ -38,13 +38,24 @@ import { appendWorkspaceMountArgs } from "./workspace-mounts.js";
 const HOT_BROWSER_WINDOW_MS = 5 * 60 * 1000;
 const CDP_SOURCE_RANGE_ENV_KEY = "OPENCLAW_BROWSER_CDP_SOURCE_RANGE";
 
-async function waitForSandboxCdp(params: { cdpPort: number; timeoutMs: number }): Promise<boolean> {
+async function waitForSandboxCdp(params: {
+  cdpPort: number;
+  timeoutMs: number;
+  signal?: AbortSignal;
+}): Promise<boolean> {
   const deadline = Date.now() + Math.max(0, params.timeoutMs);
   const url = `http://127.0.0.1:${params.cdpPort}/json/version`;
   while (Date.now() < deadline) {
+    // Bail out immediately if the caller has been cancelled.
+    if (params.signal?.aborted) {
+      return false;
+    }
     try {
       const ctrl = new AbortController();
+      // Combine the per-attempt timeout with the caller's abort signal.
       const t = setTimeout(ctrl.abort.bind(ctrl), 1000);
+      const handleExternalAbort = () => ctrl.abort();
+      params.signal?.addEventListener("abort", handleExternalAbort);
       try {
         const res = await fetch(url, { signal: ctrl.signal });
         if (res.ok) {
@@ -52,9 +63,13 @@ async function waitForSandboxCdp(params: { cdpPort: number; timeoutMs: number })
         }
       } finally {
         clearTimeout(t);
+        params.signal?.removeEventListener("abort", handleExternalAbort);
       }
     } catch {
-      // ignore
+      // ignore fetch/timeout errors; re-check abort before sleeping
+    }
+    if (params.signal?.aborted) {
+      return false;
     }
     await new Promise((r) => setTimeout(r, 150));
   }
@@ -344,11 +359,12 @@ export async function ensureSandboxBrowser(params: {
       ? async () => {
           const state = await dockerContainerState(containerName);
           if (state.exists && !state.running) {
-            await execDocker(["start", containerName]);
+            await execDocker(["start", containerName], { signal: params.abortSignal });
           }
           const ok = await waitForSandboxCdp({
             cdpPort: mappedCdp,
             timeoutMs: params.cfg.browser.autoStartTimeoutMs,
+            signal: params.abortSignal,
           });
           if (!ok) {
             throw new Error(
