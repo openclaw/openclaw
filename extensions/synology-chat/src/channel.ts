@@ -312,19 +312,11 @@ export function createSynologyChatPlugin() {
 
         log?.info?.(`Registered HTTP route: ${account.webhookPath} for Synology Chat`);
 
-        let stopResolve: () => void;
-        const untilStopped = new Promise<void>((resolve) => {
-            stopResolve = resolve;
-        });
-
         const stopFn = () => {
-            log?.info?.(`Stopping Synology Chat channel (account: ${accountId})`);
-            if (typeof unregister === "function") unregister();
-            activeRouteUnregisters.delete(routeKey);
-            stopResolve();
+          log?.info?.(`Stopping Synology Chat channel (account: ${accountId})`);
+          if (typeof unregister === "function") unregister();
+          activeRouteUnregisters.delete(routeKey);
         };
-
-        await untilStopped;
 
         return { stop: stopFn };
       },

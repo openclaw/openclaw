@@ -21,7 +21,7 @@ export async function sendMessage(
   incomingUrl: string,
   text: string,
   userId?: string | number,
-  allowInsecureSsl = true,
+  allowInsecureSsl = false,
 ): Promise<boolean> {
   // Synology Chat API requires user_ids (numeric) to specify the recipient
   // The @mention is optional but user_ids is mandatory
@@ -71,7 +71,7 @@ export async function sendFileUrl(
   incomingUrl: string,
   fileUrl: string,
   userId?: string | number,
-  allowInsecureSsl = true,
+  allowInsecureSsl = false,
 ): Promise<boolean> {
   const payloadObj: Record<string, any> = { file_url: fileUrl };
   if (userId) {
@@ -92,7 +92,7 @@ export async function sendFileUrl(
   }
 }
 
-function doPost(url: string, body: string, allowInsecureSsl = true): Promise<boolean> {
+function doPost(url: string, body: string, allowInsecureSsl = false): Promise<boolean> {
   return new Promise((resolve, reject) => {
     let parsedUrl: URL;
     try {
