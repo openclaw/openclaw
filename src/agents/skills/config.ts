@@ -91,6 +91,8 @@ export function shouldIncludeSkill(params: {
     hasBin: hasBinary,
     hasRemoteBin: eligibility?.remote?.hasBin,
     hasAnyRemoteBin: eligibility?.remote?.hasAnyBin,
+    hasSandboxBin: eligibility?.sandbox?.hasBin,
+    hasAnySandboxBin: eligibility?.sandbox?.hasAnyBin,
     hasEnv: (envName) =>
       Boolean(
         process.env[envName] ||

@@ -53,6 +53,8 @@ type RuntimeRequirementEvalParams = {
   hasBin: (bin: string) => boolean;
   hasAnyRemoteBin?: (bins: string[]) => boolean;
   hasRemoteBin?: (bin: string) => boolean;
+  hasSandboxBin?: (bin: string) => boolean;
+  hasAnySandboxBin?: (bins: string[]) => boolean;
   hasEnv: (envName: string) => boolean;
   isConfigPathTruthy: (pathStr: string) => boolean;
 };
@@ -72,6 +74,9 @@ export function evaluateRuntimeRequires(params: RuntimeRequirementEvalParams): b
       if (params.hasRemoteBin?.(bin)) {
         continue;
       }
+      if (params.hasSandboxBin?.(bin)) {
+        continue;
+      }
       return false;
     }
   }
@@ -80,7 +85,9 @@ export function evaluateRuntimeRequires(params: RuntimeRequirementEvalParams): b
   if (requiredAnyBins.length > 0) {
     const anyFound = requiredAnyBins.some((bin) => params.hasBin(bin));
     if (!anyFound && !params.hasAnyRemoteBin?.(requiredAnyBins)) {
-      return false;
+      if (!params.hasAnySandboxBin?.(requiredAnyBins)) {
+        return false;
+      }
     }
   }
 
