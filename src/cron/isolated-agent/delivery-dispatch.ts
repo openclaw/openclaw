@@ -1,3 +1,4 @@
+import { resolveResponsePrefix } from "../../agents/identity.js";
 import { runSubagentAnnounceFlow } from "../../agents/subagent-announce.js";
 import { countActiveDescendantRuns } from "../../agents/subagent-registry.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
@@ -152,12 +153,20 @@ export async function dispatchCronDelivery(
     delivery: SuccessfulDeliveryTarget,
   ): Promise<RunCronAgentTurnResult | null> => {
     const identity = resolveAgentOutboundIdentity(params.cfgWithAgentDefaults, params.agentId);
+    const responsePrefix = resolveResponsePrefix(params.cfgWithAgentDefaults, params.agentId, {
+      channel: delivery.channel,
+      accountId: delivery.accountId,
+    });
     try {
+      const textWithPrefix =
+        responsePrefix && synthesizedText && !synthesizedText.startsWith(responsePrefix)
+          ? `${responsePrefix} ${synthesizedText}`
+          : synthesizedText;
       const payloadsForDelivery =
         deliveryPayloads.length > 0
           ? deliveryPayloads
-          : synthesizedText
-            ? [{ text: synthesizedText }]
+          : textWithPrefix
+            ? [{ text: textWithPrefix }]
             : [];
       if (payloadsForDelivery.length === 0) {
         return null;
