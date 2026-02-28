@@ -26,6 +26,7 @@ describe("parsePostContent", () => {
       "Daily \\*Plan\\*\n\n**Bold** *Italic* <u>Underline</u> ~~Strike~~ `Code`",
     );
     expect(result.imageKeys).toEqual([]);
+    expect(result.mediaKeys).toEqual([]);
     expect(result.mentionedOpenIds).toEqual([]);
   });
 
@@ -50,6 +51,7 @@ describe("parsePostContent", () => {
     expect(result.textContent).toBe(
       "[Docs \\[v2\\]](https://example.com/guide(a)) @alice\\_bob @ou\\_123 [https://example.com/no\\-text](https://example.com/no-text)",
     );
+    expect(result.mediaKeys).toEqual([]);
     expect(result.mentionedOpenIds).toEqual(["ou_123"]);
   });
 
@@ -70,6 +72,7 @@ describe("parsePostContent", () => {
 
     expect(result.textContent).toBe("Before ![image] after\n![image]");
     expect(result.imageKeys).toEqual(["img_1", "img_2"]);
+    expect(result.mediaKeys).toEqual([]);
     expect(result.mentionedOpenIds).toEqual([]);
   });
 
