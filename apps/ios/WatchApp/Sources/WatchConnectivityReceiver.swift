@@ -18,9 +18,11 @@ struct WatchReplySendResult: Sendable, Equatable {
     var errorMessage: String?
 }
 
-final class WatchConnectivityReceiver: NSObject, @unchecked Sendable {
+@MainActor
+final class WatchConnectivityReceiver: NSObject {
     private let store: WatchInboxStore
     private let session: WCSession?
+    private var activationContinuation: CheckedContinuation<Void, Never>?
 
     init(store: WatchInboxStore) {
         self.store = store
@@ -44,11 +46,8 @@ final class WatchConnectivityReceiver: NSObject, @unchecked Sendable {
             return
         }
         session.activate()
-        for _ in 0..<8 {
-            if session.activationState == .activated {
-                return
-            }
-            try? await Task.sleep(nanoseconds: 100_000_000)
+        await withCheckedContinuation { continuation in
+            self.activationContinuation = continuation
         }
     }
 
@@ -110,7 +109,7 @@ final class WatchConnectivityReceiver: NSObject, @unchecked Sendable {
             errorMessage: nil)
     }
 
-    private static func normalizeObject(_ value: Any) -> [String: Any]? {
+    nonisolated private static func normalizeObject(_ value: Any) -> [String: Any]? {
         if let object = value as? [String: Any] {
             return object
         }
@@ -128,7 +127,7 @@ final class WatchConnectivityReceiver: NSObject, @unchecked Sendable {
         return nil
     }
 
-    private static func parseActions(_ value: Any?) -> [WatchPromptAction] {
+    nonisolated private static func parseActions(_ value: Any?) -> [WatchPromptAction] {
         guard let raw = value as? [Any] else {
             return []
         }
@@ -146,7 +145,7 @@ final class WatchConnectivityReceiver: NSObject, @unchecked Sendable {
         }
     }
 
-    private static func parseNotificationPayload(_ payload: [String: Any]) -> WatchNotifyMessage? {
+    nonisolated private static func parseNotificationPayload(_ payload: [String: Any]) -> WatchNotifyMessage? {
         guard let type = payload["type"] as? String, type == "watch.notify" else {
             return nil
         }
@@ -192,20 +191,25 @@ final class WatchConnectivityReceiver: NSObject, @unchecked Sendable {
 }
 
 extension WatchConnectivityReceiver: WCSessionDelegate {
-    func session(
+    nonisolated func session(
         _: WCSession,
         activationDidCompleteWith _: WCSessionActivationState,
         error _: (any Error)?)
-    {}
+    {
+        Task { @MainActor in
+            self.activationContinuation?.resume()
+            self.activationContinuation = nil
+        }
+    }
 
-    func session(_: WCSession, didReceiveMessage message: [String: Any]) {
+    nonisolated func session(_: WCSession, didReceiveMessage message: [String: Any]) {
         guard let incoming = Self.parseNotificationPayload(message) else { return }
         Task { @MainActor in
             self.store.consume(message: incoming, transport: "sendMessage")
         }
     }
 
-    func session(
+    nonisolated func session(
         _: WCSession,
         didReceiveMessage message: [String: Any],
         replyHandler: @escaping ([String: Any]) -> Void)
@@ -220,14 +224,14 @@ extension WatchConnectivityReceiver: WCSessionDelegate {
         }
     }
 
-    func session(_: WCSession, didReceiveUserInfo userInfo: [String: Any]) {
+    nonisolated func session(_: WCSession, didReceiveUserInfo userInfo: [String: Any]) {
         guard let incoming = Self.parseNotificationPayload(userInfo) else { return }
         Task { @MainActor in
             self.store.consume(message: incoming, transport: "transferUserInfo")
         }
     }
 
-    func session(_: WCSession, didReceiveApplicationContext applicationContext: [String: Any]) {
+    nonisolated func session(_: WCSession, didReceiveApplicationContext applicationContext: [String: Any]) {
         guard let incoming = Self.parseNotificationPayload(applicationContext) else { return }
         Task { @MainActor in
             self.store.consume(message: incoming, transport: "applicationContext")
