@@ -50,6 +50,7 @@ vi.mock("../../plugins/hook-runner-global.js", () => ({
 vi.mock("../../hooks/internal-hooks.js", () => ({
   createInternalHookEvent: internalHookMocks.createInternalHookEvent,
   triggerInternalHook: internalHookMocks.triggerInternalHook,
+  hasInternalHooks: vi.fn().mockReturnValue(false),
 }));
 vi.mock("./delivery-queue.js", () => ({
   enqueueDelivery: queueMocks.enqueueDelivery,
