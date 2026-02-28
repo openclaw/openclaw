@@ -14,6 +14,7 @@ BUILD_TS=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 GIT_COMMIT=$(cd "$ROOT_DIR" && git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 GIT_BUILD_NUMBER=$(cd "$ROOT_DIR" && git rev-list --count HEAD 2>/dev/null || echo "0")
 APP_VERSION="${APP_VERSION:-$PKG_VERSION}"
+APP_BUILD="${APP_BUILD:-}"
 BUILD_CONFIG="${BUILD_CONFIG:-debug}"
 BUILD_ARCHS_VALUE="${BUILD_ARCHS:-$(uname -m)}"
 if [[ "${BUILD_ARCHS_VALUE}" == "all" ]]; then
@@ -29,42 +30,17 @@ if [[ "$BUNDLE_ID" == *.debug ]]; then
   AUTO_CHECKS=false
 fi
 
-canonical_build_from_version() {
-  local version="$1"
-  if [[ "$version" =~ ^([0-9]{4})\.([0-9]{1,2})\.([0-9]{1,2})([.-].*)?$ ]]; then
-    local year="${BASH_REMATCH[1]}"
-    local month="${BASH_REMATCH[2]}"
-    local day="${BASH_REMATCH[3]}"
-    local month_dec=$((10#$month))
-    local day_dec=$((10#$day))
-    local suffix="${BASH_REMATCH[4]:-}"
-    local lane=90
-    # Keep stable releases above same-day prereleases so Sparkle can advance beta -> stable.
-    if [[ -n "$suffix" ]]; then
-      if [[ "$suffix" =~ ([0-9]+)$ ]]; then
-        lane=$((10#${BASH_REMATCH[1]}))
-        if (( lane > 89 )); then
-          lane=89
-        fi
-      else
-        lane=1
-      fi
-    fi
-    printf "%d%02d%02d%02d" "$year" "$month_dec" "$day_dec" "$lane"
-    return 0
-  fi
-  return 1
+sparkle_canonical_build_from_version() {
+  node --import tsx "$ROOT_DIR/scripts/sparkle-build.ts" canonical-build "$1"
 }
 
 if [[ -z "${APP_BUILD:-}" ]]; then
   APP_BUILD="$GIT_BUILD_NUMBER"
-  if CANONICAL_BUILD="$(canonical_build_from_version "$APP_VERSION")"; then
+  if CANONICAL_BUILD="$(sparkle_canonical_build_from_version "$APP_VERSION" 2>/dev/null)"; then
     if [[ "$CANONICAL_BUILD" =~ ^[0-9]+$ ]] && (( CANONICAL_BUILD > APP_BUILD )); then
       APP_BUILD="$CANONICAL_BUILD"
     fi
   fi
-else
-  APP_BUILD="${APP_BUILD}"
 fi
 
 if [[ "$AUTO_CHECKS" == "true" && ! "$APP_BUILD" =~ ^[0-9]+$ ]]; then
