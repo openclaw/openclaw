@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { estimateTokens } from "@mariozechner/pi-coding-agent";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { withEnvAsync } from "../test-utils/env.js";
 import "./test-helpers/fast-core-tools.js";
@@ -53,9 +54,15 @@ function expectConfigMutationCall(params: {
 }
 
 function estimateTokenUsageFromText(text: string): number {
-  // Keep benchmark deterministic and dependency-free with the same heuristic
-  // used in compaction/tool-result truncation paths.
-  return Math.ceil(text.length / 4);
+  const message = {
+    role: "toolResult",
+    toolCallId: "call_benchmark",
+    toolName: "gateway",
+    isError: false,
+    content: [{ type: "text", text }],
+    timestamp: 0,
+  } as const satisfies Parameters<typeof estimateTokens>[0];
+  return estimateTokens(message);
 }
 
 function readToolResultText(result: { content?: Array<{ type?: string; text?: string }> }): string {
