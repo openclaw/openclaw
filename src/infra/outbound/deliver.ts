@@ -4,6 +4,26 @@ import {
   resolveChunkMode,
   resolveTextChunkLimit,
 } from "../../auto-reply/chunk.js";
+
+/**
+ * Builds footer text based on config.
+ * Footer is only added when ui.footer.enabled=true.
+ */
+function buildFooterText(cfg: OpenClawConfig): string | null {
+  const footer = cfg.ui?.footer;
+  if (!footer?.enabled) {
+    return null;
+  }
+  if (!footer.showModel && !footer.template) {
+    return null;
+  }
+  if (footer.template) {
+    return footer.template.replace("{model}", "unknown");
+  }
+  return `🧠 当前模型：unknown`;
+}
+
+
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { resolveChannelMediaMaxBytes } from "../../channels/plugins/media-limits.js";
 import { loadChannelOutboundAdapter } from "../../channels/plugins/outbound/load.js";
@@ -447,6 +467,21 @@ async function deliverOutboundPayloadsCore(
     const normalized = normalizeWhatsAppPayload(payload);
     return normalized ? [normalized] : [];
   });
+
+  // Append footer if enabled
+  const footerText = buildFooterText(cfg);
+  let finalPayloads: ReplyPayload[] = normalizedPayloads;
+  if (footerText) {
+    finalPayloads = normalizedPayloads.map((payload, idx) => {
+      if (idx === normalizedPayloads.length - 1 && payload.text) {
+        return {
+          ...payload,
+          text: payload.text + "\n\n" + footerText,
+        };
+      }
+      return payload;
+    });
+  }
   const hookRunner = getGlobalHookRunner();
   const sessionKeyForInternalHooks = params.mirror?.sessionKey ?? params.session?.key;
   if (
@@ -463,7 +498,7 @@ async function deliverOutboundPayloadsCore(
       },
     );
   }
-  for (const payload of normalizedPayloads) {
+  for (const payload of finalPayloads) {
     const payloadSummary: NormalizedOutboundPayload = {
       text: payload.text ?? "",
       mediaUrls: payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []),
