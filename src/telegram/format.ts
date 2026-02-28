@@ -241,6 +241,58 @@ export function renderTelegramHtmlText(
   return markdownToTelegramHtml(text, { tableMode: options.tableMode });
 }
 
+function splitTelegramChunkByHtmlLimit(
+  chunk: MarkdownIR,
+  htmlLimit: number,
+  renderedHtmlLength: number,
+): MarkdownIR[] {
+  const currentTextLength = chunk.text.length;
+  if (currentTextLength <= 1) {
+    return [chunk];
+  }
+  const proportionalLimit = Math.floor(
+    (currentTextLength * htmlLimit) / Math.max(renderedHtmlLength, 1),
+  );
+  const candidateLimit = Math.min(currentTextLength - 1, proportionalLimit);
+  const splitLimit =
+    Number.isFinite(candidateLimit) && candidateLimit > 0
+      ? candidateLimit
+      : Math.max(1, Math.floor(currentTextLength / 2));
+  const split = chunkMarkdownIR(chunk, splitLimit);
+  if (split.length > 1) {
+    return split;
+  }
+  return chunkMarkdownIR(chunk, Math.max(1, Math.floor(currentTextLength / 2)));
+}
+
+function renderTelegramChunksWithinHtmlLimit(
+  ir: MarkdownIR,
+  limit: number,
+): TelegramFormattedChunk[] {
+  const normalizedLimit = Math.max(1, Math.floor(limit));
+  const pending = chunkMarkdownIR(ir, normalizedLimit);
+  const rendered: TelegramFormattedChunk[] = [];
+  while (pending.length > 0) {
+    const chunk = pending.shift();
+    if (!chunk) {
+      continue;
+    }
+    const html = wrapFileReferencesInHtml(renderTelegramHtml(chunk));
+    if (html.length <= normalizedLimit || chunk.text.length <= 1) {
+      rendered.push({ html, text: chunk.text });
+      continue;
+    }
+    const split = splitTelegramChunkByHtmlLimit(chunk, normalizedLimit, html.length);
+    if (split.length <= 1) {
+      // Worst-case safety: avoid retry loops, deliver the chunk as-is.
+      rendered.push({ html, text: chunk.text });
+      continue;
+    }
+    pending.unshift(...split);
+  }
+  return rendered;
+}
+
 export function markdownToTelegramChunks(
   markdown: string,
   limit: number,
@@ -253,11 +305,7 @@ export function markdownToTelegramChunks(
     blockquotePrefix: "",
     tableMode: options.tableMode,
   });
-  const chunks = chunkMarkdownIR(ir, limit);
-  return chunks.map((chunk) => ({
-    html: wrapFileReferencesInHtml(renderTelegramHtml(chunk)),
-    text: chunk.text,
-  }));
+  return renderTelegramChunksWithinHtmlLimit(ir, limit);
 }
 
 export function markdownToTelegramHtmlChunks(markdown: string, limit: number): string[] {
