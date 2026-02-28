@@ -128,6 +128,23 @@ describe("isBillingErrorMessage", () => {
     expect(longStructuredError.length).toBeGreaterThan(512);
     expect(isBillingErrorMessage(longStructuredError)).toBe(true);
   });
+  it("does not false-positive on long assistant text discussing HTTP 402 errors", () => {
+    const longDiscussion =
+      "Here's what I found about the billing error detection in the codebase.\n\n" +
+      "The `isBillingErrorMessage` function checks for patterns like http 402, " +
+      "error code 402, and payment required. The ERROR_PATTERNS.billing array " +
+      "includes terms like 'insufficient credits' and 'credit balance'. When " +
+      "an API returns HTTP 402 Payment Required, the response is rewritten to " +
+      "a user-friendly billing error message. This affects all channels.\n\n" +
+      "The BILLING_ERROR_HEAD_RE regex matches patterns at the start of text, " +
+      "while BILLING_ERROR_HARD_402_RE is used for longer payloads. Both need " +
+      "to be careful not to match assistant content that merely discusses these " +
+      "error patterns in an analytical or educational context.\n\n" +
+      "Related issues: #19258, #13935, #15055. The error code 402 check was " +
+      "too broad and matched normal conversation about billing systems.";
+    expect(longDiscussion.length).toBeGreaterThan(512);
+    expect(isBillingErrorMessage(longDiscussion)).toBe(false);
+  });
   it("does not match long numeric text that is not a billing error", () => {
     const longNonError =
       "Quarterly report summary: subsystem A returned 402 records after retry. " +
