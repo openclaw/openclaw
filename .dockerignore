@@ -34,6 +34,9 @@ tmp
 # build artifacts
 dist
 **/dist
+# iris-agent-core ships its dist in git (needed for Docker builds)
+!packages/iris-agent-core/dist/
+!packages/iris-agent-core/dist/**
 apps/macos/.build
 apps/ios/build
 **/*.trace

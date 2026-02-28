@@ -9,6 +9,7 @@ import type {
   Model,
   SimpleStreamOptions,
   StopReason,
+  ToolCall,
 } from "@mariozechner/pi-ai";
 import { EventStream } from "@mariozechner/pi-ai";
 import { parse as partialParse } from "partial-json";
@@ -178,7 +179,7 @@ function processProxyEvent(
         return {
           type: "toolcall_end",
           contentIndex: proxyEvent.contentIndex,
-          toolCall: toolCall as Parameters<typeof Object.assign>[0],
+          toolCall: toolCall as unknown as ToolCall,
           partial: partial as unknown as AssistantMessage,
         };
       }
