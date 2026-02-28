@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { createDefaultDeps } from "../cli/deps.js";
 import { agentCommandFromIngress } from "../commands/agent.js";
+import type { ImageContent } from "../commands/agent/types.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
 import { logWarn } from "../logger.js";
 import { defaultRuntime } from "../runtime.js";
@@ -12,6 +13,7 @@ import {
 } from "./agent-prompt.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
+import { authorizeGatewayBearerRequestOrReply } from "./http-auth-helpers.js";
 import { sendJson, setSseHeaders, writeDone } from "./http-common.js";
 import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
 import { resolveGatewayRequestContext } from "./http-utils.js";
@@ -42,7 +44,7 @@ function writeSse(res: ServerResponse, data: unknown) {
 }
 
 function buildAgentCommandInput(params: {
-  prompt: { message: string; extraSystemPrompt?: string };
+  prompt: { message: string; extraSystemPrompt?: string; images?: ImageContent[] };
   sessionKey: string;
   runId: string;
   messageChannel: string;
@@ -50,6 +52,7 @@ function buildAgentCommandInput(params: {
   return {
     message: params.prompt.message,
     extraSystemPrompt: params.prompt.extraSystemPrompt,
+    images: params.prompt.images,
     sessionKey: params.sessionKey,
     runId: params.runId,
     deliver: false as const,
@@ -123,14 +126,50 @@ function extractTextContent(content: unknown): string {
   return "";
 }
 
+function extractImageContent(content: unknown): ImageContent[] {
+  if (!Array.isArray(content)) {
+    return [];
+  }
+  const images: ImageContent[] = [];
+  for (const part of content) {
+    if (!part || typeof part !== "object") {
+      continue;
+    }
+    const type = (part as { type?: unknown }).type;
+    if (type !== "image_url") {
+      continue;
+    }
+    const imageUrl = (part as { image_url?: unknown }).image_url;
+    if (!imageUrl || typeof imageUrl !== "object") {
+      continue;
+    }
+    const url = (imageUrl as { url?: unknown }).url;
+    if (typeof url !== "string") {
+      continue;
+    }
+    // Parse data URIs: data:<mimeType>;base64,<data>
+    const dataUriMatch = url.match(/^data:(image\/[^;]+);base64,(.+)$/);
+    if (dataUriMatch) {
+      images.push({
+        type: "image",
+        mimeType: dataUriMatch[1],
+        data: dataUriMatch[2],
+      });
+    }
+  }
+  return images;
+}
+
 function buildAgentPrompt(messagesUnknown: unknown): {
   message: string;
   extraSystemPrompt?: string;
+  images?: ImageContent[];
 } {
   const messages = asMessages(messagesUnknown);
 
   const systemParts: string[] = [];
   const conversationEntries: ConversationEntry[] = [];
+  const allImages: ImageContent[] = [];
 
   for (const msg of messages) {
     if (!msg || typeof msg !== "object") {
@@ -138,16 +177,28 @@ function buildAgentPrompt(messagesUnknown: unknown): {
     }
     const role = typeof msg.role === "string" ? msg.role.trim() : "";
     const content = extractTextContent(msg.content).trim();
-    if (!role || !content) {
+    if (!role) {
       continue;
     }
     if (role === "system" || role === "developer") {
-      systemParts.push(content);
+      if (content) {
+        systemParts.push(content);
+      }
       continue;
     }
 
     const normalizedRole = role === "function" ? "tool" : role;
     if (normalizedRole !== "user" && normalizedRole !== "assistant" && normalizedRole !== "tool") {
+      continue;
+    }
+
+    const msgImages = normalizedRole === "user" ? extractImageContent(msg.content) : [];
+    if (normalizedRole === "user") {
+      allImages.push(...msgImages);
+    }
+
+    // Skip messages with neither text nor images
+    if (!content && msgImages.length === 0) {
       continue;
     }
 
@@ -172,6 +223,7 @@ function buildAgentPrompt(messagesUnknown: unknown): {
   return {
     message,
     extraSystemPrompt: systemParts.length > 0 ? systemParts.join("\n\n") : undefined,
+    images: allImages.length > 0 ? allImages : undefined,
   };
 }
 
@@ -228,7 +280,7 @@ export async function handleOpenAiHttpRequest(
     useMessageChannelHeader: true,
   });
   const prompt = buildAgentPrompt(payload.messages);
-  if (!prompt.message) {
+  if (!prompt.message && (!prompt.images || prompt.images.length === 0)) {
     sendJson(res, 400, {
       error: {
         message: "Missing user message in `messages`.",
@@ -379,3 +431,4 @@ export async function handleOpenAiHttpRequest(
 
   return true;
 }
+
