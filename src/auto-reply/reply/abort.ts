@@ -88,15 +88,29 @@ function normalizeAbortTriggerText(text: string): string {
     .trim();
 }
 
-export function isAbortTrigger(text?: string): boolean {
+export function isAbortTrigger(text?: string, extraTriggers?: readonly string[]): boolean {
   if (!text) {
     return false;
   }
   const normalized = normalizeAbortTriggerText(text);
-  return ABORT_TRIGGERS.has(normalized);
+  if (ABORT_TRIGGERS.has(normalized)) {
+    return true;
+  }
+  if (extraTriggers?.length) {
+    for (const extra of extraTriggers) {
+      if (normalizeAbortTriggerText(extra) === normalized) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
-export function isAbortRequestText(text?: string, options?: CommandNormalizeOptions): boolean {
+export function isAbortRequestText(
+  text?: string,
+  options?: CommandNormalizeOptions,
+  extraTriggers?: readonly string[],
+): boolean {
   if (!text) {
     return false;
   }
@@ -108,7 +122,7 @@ export function isAbortRequestText(text?: string, options?: CommandNormalizeOpti
   return (
     normalizedLower === "/stop" ||
     normalizeAbortTriggerText(normalizedLower) === "/stop" ||
-    isAbortTrigger(normalizedLower)
+    isAbortTrigger(normalizedLower, extraTriggers)
   );
 }
 

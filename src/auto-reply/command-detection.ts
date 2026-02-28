@@ -61,7 +61,7 @@ export function isControlCommandMessage(
     return true;
   }
   const normalized = normalizeCommandBody(trimmed, options).trim().toLowerCase();
-  return isAbortTrigger(normalized);
+  return isAbortTrigger(normalized, cfg?.session?.abortTriggers);
 }
 
 /**

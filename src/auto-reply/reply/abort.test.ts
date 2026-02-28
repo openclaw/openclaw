@@ -211,6 +211,28 @@ describe("abort detection", () => {
     expect(isAbortRequestText("/abort")).toBe(false);
   });
 
+  it("isAbortTrigger respects extraTriggers from config", () => {
+    const extra = ["kesiyorum", "BITTI", "yeter artık!"];
+    expect(isAbortTrigger("kesiyorum", extra)).toBe(true);
+    expect(isAbortTrigger("bitti", extra)).toBe(true); // normalized to lowercase
+    expect(isAbortTrigger("yeter artık", extra)).toBe(true); // punctuation stripped
+    expect(isAbortTrigger("bilinmiyor", extra)).toBe(false);
+    // built-in triggers still work alongside extraTriggers
+    expect(isAbortTrigger("stop", extra)).toBe(true);
+    expect(isAbortTrigger("halt", extra)).toBe(true);
+    // no extraTriggers = original behaviour
+    expect(isAbortTrigger("kesiyorum")).toBe(false);
+  });
+
+  it("isAbortRequestText respects extraTriggers from config", () => {
+    const extra = ["dur bakalım", "Yeter!"];
+    expect(isAbortRequestText("dur bakalım", undefined, extra)).toBe(true);
+    expect(isAbortRequestText("yeter", undefined, extra)).toBe(true); // punctuation stripped
+    expect(isAbortRequestText("devam et", undefined, extra)).toBe(false);
+    // without extraTriggers, custom phrase is not recognized
+    expect(isAbortRequestText("dur bakalım")).toBe(false);
+  });
+
   it("removes abort memory entry when flag is reset", () => {
     setAbortMemory("session-1", true);
     expect(getAbortMemory("session-1")).toBe(true);

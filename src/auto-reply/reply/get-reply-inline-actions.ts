@@ -258,7 +258,11 @@ export async function handleInlineActions(params: {
     await opts.onBlockReply(reply);
   };
 
-  const isStopLikeInbound = isAbortRequestText(command.rawBodyNormalized);
+  const isStopLikeInbound = isAbortRequestText(
+    command.rawBodyNormalized,
+    undefined,
+    cfg.session?.abortTriggers,
+  );
   if (!isStopLikeInbound && sessionEntry) {
     const cutoff = readAbortCutoffFromSessionEntry(sessionEntry);
     const incoming = resolveAbortCutoffFromContext(ctx);
