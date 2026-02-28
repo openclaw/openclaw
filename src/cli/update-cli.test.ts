@@ -374,6 +374,21 @@ describe("update-cli", () => {
     expect(defaultRuntime.log).toHaveBeenCalled();
   });
 
+  it("refreshes config metadata after successful update", async () => {
+    const cfg = { gateway: { mode: "local" } } as OpenClawConfig;
+    vi.mocked(readConfigFileSnapshot).mockResolvedValue({
+      ...baseSnapshot,
+      config: cfg,
+      resolved: cfg,
+    });
+    vi.mocked(runGatewayUpdate).mockResolvedValue(makeOkUpdateResult());
+
+    await updateCommand({});
+
+    const lastWrite = vi.mocked(writeConfigFile).mock.calls.at(-1)?.[0] as OpenClawConfig;
+    expect(lastWrite).toEqual(cfg);
+  });
+
   it("updateCommand --dry-run previews without mutating", async () => {
     vi.mocked(defaultRuntime.log).mockClear();
     serviceLoaded.mockResolvedValue(true);

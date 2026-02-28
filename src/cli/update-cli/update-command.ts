@@ -501,6 +501,29 @@ async function updatePluginsAfterCoreUpdate(params: {
   }
 }
 
+async function touchConfigMetaAfterUpdate(params: { jsonMode: boolean }): Promise<void> {
+  const snapshot = await readConfigFileSnapshot();
+  if (!snapshot.exists) {
+    return;
+  }
+  if (!snapshot.valid) {
+    if (!params.jsonMode) {
+      defaultRuntime.log(
+        theme.warn("Skipping config metadata refresh: config is invalid (run openclaw doctor)."),
+      );
+    }
+    return;
+  }
+
+  try {
+    await writeConfigFile(snapshot.config);
+  } catch (err) {
+    if (!params.jsonMode) {
+      defaultRuntime.log(theme.warn(`Failed to refresh config metadata: ${String(err)}`));
+    }
+  }
+}
+
 async function maybeRestartService(params: {
   shouldRestart: boolean;
   result: UpdateRunResult;
@@ -906,6 +929,8 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     gatewayPort: resolveGatewayPort(configSnapshot.valid ? configSnapshot.config : undefined),
     restartScriptPath,
   });
+
+  await touchConfigMetaAfterUpdate({ jsonMode: Boolean(opts.json) });
 
   if (!opts.json) {
     defaultRuntime.log(theme.muted(pickUpdateQuip()));
