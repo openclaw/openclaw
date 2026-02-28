@@ -18,9 +18,7 @@ function formatValidationIssues(snapshot: ConfigFileSnapshot): string {
   if (snapshot.issues.length === 0) {
     return "Unknown validation issue.";
   }
-  return snapshot.issues
-    .map((issue) => `${issue.path || "<root>"}: ${issue.message}`)
-    .join("\n");
+  return snapshot.issues.map((issue) => `${issue.path || "<root>"}: ${issue.message}`).join("\n");
 }
 
 function assertSnapshotValid(snapshot: ConfigFileSnapshot): asserts snapshot is ConfigFileSnapshot {
@@ -49,7 +47,9 @@ async function migrateLegacyIfNeeded(snapshot: ConfigFileSnapshot, log: StartupC
   }
   await writeConfigFile(migrated);
   if (changes.length > 0) {
-    log.info(`gateway: migrated legacy config entries:\n${changes.map((entry) => `- ${entry}`).join("\n")}`);
+    log.info(
+      `gateway: migrated legacy config entries:\n${changes.map((entry) => `- ${entry}`).join("\n")}`,
+    );
   }
   return true;
 }
@@ -61,7 +61,9 @@ async function autoEnablePluginsIfNeeded(snapshot: ConfigFileSnapshot, log: Star
   }
   try {
     await writeConfigFile(autoEnable.config);
-    log.info(`gateway: auto-enabled plugins:\n${autoEnable.changes.map((entry) => `- ${entry}`).join("\n")}`);
+    log.info(
+      `gateway: auto-enabled plugins:\n${autoEnable.changes.map((entry) => `- ${entry}`).join("\n")}`,
+    );
   } catch (err) {
     log.warn(`gateway: failed to persist plugin auto-enable changes: ${String(err)}`);
   }

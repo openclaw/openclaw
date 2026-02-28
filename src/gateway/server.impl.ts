@@ -89,8 +89,8 @@ import { loadGatewayPlugins, setFallbackGatewayContext } from "./server-plugins.
 import { createGatewayReloadHandlers } from "./server-reload-handlers.js";
 import { resolveGatewayRuntimeConfig } from "./server-runtime-config.js";
 import { createGatewayRuntimeState } from "./server-runtime-state.js";
-import { prepareGatewayStartupConfig } from "./server-startup-config.js";
 import { resolveSessionKeyForRun } from "./server-session-key.js";
+import { prepareGatewayStartupConfig } from "./server-startup-config.js";
 import { logGatewayStartup } from "./server-startup-log.js";
 import { startGatewaySidecars } from "./server-startup.js";
 import { startGatewayTailscaleExposure } from "./server-tailscale.js";
