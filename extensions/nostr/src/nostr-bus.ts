@@ -503,9 +503,7 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
     // On reconnect, use lastProcessedAt with lookback so we catch recent messages
     // but still dedup via the seen tracker
     const reconnectSince =
-      reconnectAttempts === 0
-        ? since
-        : Math.max(0, lastProcessedAt - STARTUP_LOOKBACK_SEC);
+      reconnectAttempts === 0 ? since : Math.max(0, lastProcessedAt - STARTUP_LOOKBACK_SEC);
 
     currentSub = pool.subscribeMany(
       relays,
@@ -532,10 +530,7 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
 
           // Auto-reconnect unless intentionally closed
           if (!closed) {
-            const backoff = Math.min(
-              RECONNECT_BASE_MS * 2 ** reconnectAttempts,
-              RECONNECT_MAX_MS,
-            );
+            const backoff = Math.min(RECONNECT_BASE_MS * 2 ** reconnectAttempts, RECONNECT_MAX_MS);
             const jitter = Math.floor(Math.random() * RECONNECT_JITTER_MS);
             const delay = backoff + jitter;
             reconnectAttempts++;

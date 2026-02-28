@@ -267,7 +267,9 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
             sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
             ctx: ctxPayload,
             onRecordError: (err) => {
-              ctx.log?.error?.(`[${account.accountId}] failed updating session meta: ${String(err)}`);
+              ctx.log?.error?.(
+                `[${account.accountId}] failed updating session meta: ${String(err)}`,
+              );
             },
           });
 
@@ -292,12 +294,17 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = {
               deliver: async (payload) => {
                 const replyText = (payload as { text?: string }).text;
                 if (replyText) {
-                  const formatted = runtime.channel.text.convertMarkdownTables(replyText, tableMode);
+                  const formatted = runtime.channel.text.convertMarkdownTables(
+                    replyText,
+                    tableMode,
+                  );
                   await reply(formatted);
                 }
               },
               onError: (err, info) => {
-                ctx.log?.error?.(`[${account.accountId}] Nostr ${info.kind} reply failed: ${String(err)}`);
+                ctx.log?.error?.(
+                  `[${account.accountId}] Nostr ${info.kind} reply failed: ${String(err)}`,
+                );
               },
             },
             replyOptions: {
