@@ -676,9 +676,16 @@ export class DiscordVoiceManager {
     const speakerLabel = await this.resolveSpeakerLabel(entry.guildId, userId);
     const prompt = speakerLabel ? `${speakerLabel}: ${transcript}` : transcript;
 
+    // Inject voice context so the agent knows its text will be spoken aloud
+    const voiceContext = [
+      "[VOICE MODE] Your response will be spoken aloud via text-to-speech.",
+      "Keep responses concise and conversational. Avoid markdown, lists, or code blocks.",
+      "Spanish text automatically uses a Spanish voice. Prepend [slow] to speak slower.",
+    ].join(" ");
+
     const result = await agentCommand(
       {
-        message: prompt,
+        message: `${voiceContext}\n\n${prompt}`,
         sessionKey: entry.route.sessionKey,
         agentId: entry.route.agentId,
         messageChannel: "discord",
@@ -716,35 +723,57 @@ export class DiscordVoiceManager {
       return;
     }
 
-    const ttsResult = await textToSpeech({
-      text: speakText,
-      cfg: ttsCfg,
-      channel: "discord",
-      overrides: directive.overrides,
-    });
-    if (!ttsResult.success || !ttsResult.audioPath) {
-      logger.warn(`discord voice: TTS failed: ${ttsResult.error ?? "unknown error"}`);
-      return;
+    // Split into sentences for pipelined TTS — first sentence plays while the rest generate
+    const sentences = speakText
+      .split(/(?<=[.!?])\s+/)
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
+    // Merge very short fragments with the previous sentence
+    const merged: string[] = [];
+    for (const s of sentences) {
+      if (merged.length > 0 && s.length < 20) {
+        merged[merged.length - 1] += " " + s;
+      } else {
+        merged.push(s);
+      }
     }
-    const audioPath = ttsResult.audioPath;
+    const chunks = merged.length > 0 ? merged : [speakText];
+
     logVoiceVerbose(
-      `tts ok (${speakText.length} chars): guild ${entry.guildId} channel ${entry.channelId}`,
+      `tts streaming ${chunks.length} sentence(s): guild ${entry.guildId} channel ${entry.channelId}`,
     );
 
-    this.enqueuePlayback(entry, async () => {
+    for (const chunk of chunks) {
+      const ttsResult = await textToSpeech({
+        text: chunk,
+        cfg: ttsCfg,
+        channel: "discord",
+        overrides: directive.overrides,
+      });
+      if (!ttsResult.success || !ttsResult.audioPath) {
+        logger.warn(`discord voice: TTS chunk failed: ${ttsResult.error ?? "unknown error"}`);
+        continue;
+      }
+      const audioPath = ttsResult.audioPath;
       logVoiceVerbose(
-        `playback start: guild ${entry.guildId} channel ${entry.channelId} file ${path.basename(audioPath)}`,
+        `tts chunk ok (${chunk.length} chars): guild ${entry.guildId} channel ${entry.channelId}`,
       );
-      const resource = createAudioResource(audioPath);
-      entry.player.play(resource);
-      await entersState(entry.player, AudioPlayerStatus.Playing, PLAYBACK_READY_TIMEOUT_MS).catch(
-        () => undefined,
-      );
-      await entersState(entry.player, AudioPlayerStatus.Idle, SPEAKING_READY_TIMEOUT_MS).catch(
-        () => undefined,
-      );
-      logVoiceVerbose(`playback done: guild ${entry.guildId} channel ${entry.channelId}`);
-    });
+
+      this.enqueuePlayback(entry, async () => {
+        logVoiceVerbose(
+          `playback start: guild ${entry.guildId} channel ${entry.channelId} file ${path.basename(audioPath)}`,
+        );
+        const resource = createAudioResource(audioPath);
+        entry.player.play(resource);
+        await entersState(entry.player, AudioPlayerStatus.Playing, PLAYBACK_READY_TIMEOUT_MS).catch(
+          () => undefined,
+        );
+        await entersState(entry.player, AudioPlayerStatus.Idle, SPEAKING_READY_TIMEOUT_MS).catch(
+          () => undefined,
+        );
+        logVoiceVerbose(`playback done: guild ${entry.guildId} channel ${entry.channelId}`);
+      });
+    }
   }
 
   private handleReceiveError(entry: VoiceSessionEntry, err: unknown) {
