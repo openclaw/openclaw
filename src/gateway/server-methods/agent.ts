@@ -12,6 +12,7 @@ import {
   type SessionEntry,
   updateSessionStore,
 } from "../../config/sessions.js";
+import { logVerbose } from "../../globals.js";
 import {
   registerAgentRunContext,
   extractSkillInvocationRouting,
