@@ -240,6 +240,7 @@ extension WatchConnectivityReceiver: WCSessionDelegate {
 
     nonisolated func sessionReachabilityDidChange(_ session: WCSession) {
         let reachable = session.isReachable
+        ConnectionStatusProvider.write(isConnected: reachable)
         Task { @MainActor in
             self.store.isReachable = reachable
         }
