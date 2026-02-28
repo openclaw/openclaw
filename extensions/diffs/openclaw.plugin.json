@@ -1,0 +1,10 @@
+{
+  "id": "diffs",
+  "name": "Diffs",
+  "description": "Read-only diff viewer and image renderer for agents.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
