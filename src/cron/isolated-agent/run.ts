@@ -214,14 +214,24 @@ export async function runCronIsolatedAgentTurn(params: {
       model = resolvedOverride.ref.model;
     }
   }
+  // Determine if we should force a new session.
+  // - For "main" session targets, always reuse existing sessions when valid.
+  // - For "isolated" session targets (webhooks, cron jobs), by default we force new
+  //   sessions to prevent context leakage across runs. However, if a custom sessionKey
+  //   is provided AND the config allows it (hooks.allowRequestSessionKey), we should
+  //   respect the sessionKey and reuse the session when valid.
+  const isIsolatedTarget = params.job.sessionTarget === "isolated";
+  const customSessionKeyProvided = agentSessionKey && !agentSessionKey.startsWith("cron:");
+  const hooksAllowRequestSessionKey = params.cfg.hooks?.allowRequestSessionKey === true;
+  const forceNew = isIsolatedTarget && !(customSessionKeyProvided && hooksAllowRequestSessionKey);
+
   const now = Date.now();
   const cronSession = resolveCronSession({
     cfg: params.cfg,
     sessionKey: agentSessionKey,
     agentId,
     nowMs: now,
-    // Isolated cron runs must not carry prior turn context across executions.
-    forceNew: params.job.sessionTarget === "isolated",
+    forceNew,
   });
   const runSessionId = cronSession.sessionEntry.sessionId;
   const runSessionKey = baseSessionKey.startsWith("cron:")
