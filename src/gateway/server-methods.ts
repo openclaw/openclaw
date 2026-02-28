@@ -134,6 +134,12 @@ function authorizeGatewayMethod(method: string, client: GatewayRequestOptions["c
   if (role !== "operator") {
     return errorShape(ErrorCodes.INVALID_REQUEST, `unauthorized role: ${role}`);
   }
+  // Health is a basic monitoring endpoint accessible to any connected operator
+  // regardless of scopes, so unauthenticated/low-privilege clients can still
+  // check gateway availability.
+  if (method === "health") {
+    return null;
+  }
   if (scopes.includes(ADMIN_SCOPE)) {
     return null;
   }

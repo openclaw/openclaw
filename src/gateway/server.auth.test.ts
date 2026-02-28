@@ -63,6 +63,8 @@ const readConnectChallengeNonce = async (ws: WebSocket) => {
 const openTailscaleWs = async (port: number) => {
   const ws = new WebSocket(`ws://127.0.0.1:${port}`, {
     headers: {
+      // Match host to origin so the browser origin check passes.
+      host: "gateway.tailnet.ts.net",
       origin: "https://gateway.tailnet.ts.net",
       "x-forwarded-for": "100.64.0.1",
       "x-forwarded-proto": "https",
@@ -624,7 +626,9 @@ describe("gateway server auth/connect", () => {
     });
 
     test("returns nonce-required detail code when nonce is blank", async () => {
-      const ws = await openWs(port);
+      // Use a non-local host header so the server treats this as a remote
+      // connection where a nonce is required.
+      const ws = await openWs(port, { host: "gateway.example" });
       const token = resolveGatewayTokenOrEnv();
       const nonce = await readConnectChallengeNonce(ws);
       const { device } = await createSignedDevice({

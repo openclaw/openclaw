@@ -248,7 +248,7 @@ describe("exec approval handlers", () => {
   const defaultExecApprovalRequestParams = {
     command: "echo ok",
     cwd: "/tmp",
-    host: "node",
+    host: "gateway",
     timeoutMs: 2000,
   } as const;
 

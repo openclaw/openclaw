@@ -38,6 +38,7 @@ import { resolveNodeCommandAllowlist } from "../../node-command-policy.js";
 import { checkBrowserOrigin } from "../../origin-check.js";
 import { GATEWAY_CLIENT_IDS } from "../../protocol/client-info.js";
 import {
+  ConnectErrorDetailCodes,
   resolveAuthConnectErrorDetailCode,
   resolveDeviceAuthConnectErrorDetailCode,
 } from "../../protocol/connect-error-details.js";
@@ -450,17 +451,47 @@ export function attachGatewayWsMessageHandler(params: {
           // IAM auth is cryptographically verified via JWKS — treat IAM-authenticated
           // control UI connections as trusted (equivalent to shared-secret for bypass purposes).
           const iamAuthOk = authOk && authMethod === "iam" && isControlUi;
+          // Trusted-proxy auth verifies identity via the reverse proxy headers.
+          const trustedProxyAuthOk =
+            authOk && authMethod === "trusted-proxy" && resolvedAuth.mode === "trusted-proxy";
+          // dangerouslyDisableDeviceAuth skips all device identity requirements.
+          const dangerouslyDisableDeviceAuth =
+            isControlUi && configSnapshot.gateway?.controlUi?.dangerouslyDisableDeviceAuth === true;
 
-          if (scopes.length > 0 && !allowControlUiBypass && !iamAuthOk) {
+          // Preserve scopes when the connection is authenticated via a trusted
+          // method (shared secret, trusted proxy, IAM, or bypass mode).
+          if (
+            scopes.length > 0 &&
+            !allowControlUiBypass &&
+            !iamAuthOk &&
+            !sharedAuthOk &&
+            !trustedProxyAuthOk &&
+            !dangerouslyDisableDeviceAuth
+          ) {
             scopes = [];
             connectParams.scopes = scopes;
           }
-          const canSkipDevice = sharedAuthOk || (authOk && allowControlUiBypass) || iamAuthOk;
 
-          if (isControlUi && !allowControlUiBypass && !iamAuthOk) {
-            const errorMessage = "control ui requires HTTPS or localhost (secure context)";
+          // Control UI requires an explicit bypass to connect without device identity.
+          // Shared token alone is NOT sufficient — the UI needs one of:
+          //   - allowInsecureAuth (+ localhost), OR
+          //   - dangerouslyDisableDeviceAuth, OR
+          //   - IAM auth, OR
+          //   - trusted-proxy auth
+          // Node role control-UI always requires device identity, no exceptions.
+          if (
+            isControlUi &&
+            !allowControlUiBypass &&
+            !iamAuthOk &&
+            !trustedProxyAuthOk &&
+            !dangerouslyDisableDeviceAuth
+          ) {
+            const errorMessage =
+              role === "node"
+                ? "control ui requires device identity"
+                : "control ui requires HTTPS or localhost (secure context)";
             setHandshakeState("failed");
-            setCloseCause("control-ui-insecure-auth", {
+            setCloseCause(role === "node" ? "device-required" : "control-ui-insecure-auth", {
               client: connectParams.client.id,
               clientDisplayName: connectParams.client.displayName,
               mode: connectParams.client.mode,
@@ -470,18 +501,19 @@ export function attachGatewayWsMessageHandler(params: {
               type: "res",
               id: frame.id,
               ok: false,
-              error: errorShape(ErrorCodes.INVALID_REQUEST, errorMessage),
+              error: errorShape(ErrorCodes.INVALID_REQUEST, errorMessage, {
+                details: {
+                  code: ConnectErrorDetailCodes.CONTROL_UI_DEVICE_IDENTITY_REQUIRED,
+                },
+              }),
             });
             close(1008, errorMessage);
             return;
           }
-
-          // Allow shared-secret or IAM-authenticated connections (e.g., control-ui) to skip device identity
-          if (!canSkipDevice) {
-            if (!authOk && hasSharedAuth) {
-              rejectUnauthorized(authResult);
-              return;
-            }
+          // Node role control-UI with trusted-proxy/IAM auth but no device:
+          // still requires a device identity.
+          if (isControlUi && role === "node") {
+            const errorMessage = "control ui requires device identity";
             setHandshakeState("failed");
             setCloseCause("device-required", {
               client: connectParams.client.id,
@@ -493,15 +525,62 @@ export function attachGatewayWsMessageHandler(params: {
               type: "res",
               id: frame.id,
               ok: false,
-              error: errorShape(ErrorCodes.NOT_PAIRED, "device identity required"),
+              error: errorShape(ErrorCodes.INVALID_REQUEST, errorMessage, {
+                details: {
+                  code: ConnectErrorDetailCodes.CONTROL_UI_DEVICE_IDENTITY_REQUIRED,
+                },
+              }),
             });
-            close(1008, "device identity required");
+            close(1008, errorMessage);
             return;
+          }
+          // Node role always requires a device identity regardless of auth method.
+          // Only operators may connect without a device.
+          const canSkipDevice =
+            role !== "node" &&
+            (sharedAuthOk ||
+              (authOk && allowControlUiBypass) ||
+              iamAuthOk ||
+              trustedProxyAuthOk ||
+              dangerouslyDisableDeviceAuth);
+
+          // Allow shared-secret, IAM, trusted-proxy, or bypass connections to skip device identity.
+          if (!canSkipDevice) {
+            // Operators with verified shared-secret can proceed without a device identity.
+            if (role === "operator" && sharedAuthOk) {
+              // Allowed — sharedAuthOk is already part of canSkipDevice, but this
+              // guard catches edge cases where canSkipDevice somehow evaluates false.
+            } else if (!authOk && hasSharedAuth) {
+              rejectUnauthorized(authResult);
+              return;
+            } else {
+              setHandshakeState("failed");
+              setCloseCause("device-required", {
+                client: connectParams.client.id,
+                clientDisplayName: connectParams.client.displayName,
+                mode: connectParams.client.mode,
+                version: connectParams.client.version,
+              });
+              send({
+                type: "res",
+                id: frame.id,
+                ok: false,
+                error: errorShape(ErrorCodes.NOT_PAIRED, "device identity required"),
+              });
+              close(1008, "device identity required");
+              return;
+            }
           }
         }
         if (device) {
+          // When dangerouslyDisableDeviceAuth is enabled for control-UI connections,
+          // skip all device signature / timestamp / nonce verification so stale or
+          // malformed device identities are still accepted.
+          const skipDeviceVerification =
+            isControlUi && configSnapshot.gateway?.controlUi?.dangerouslyDisableDeviceAuth === true;
+
           const derivedId = deriveDeviceIdFromPublicKey(device.publicKey);
-          if (!derivedId || derivedId !== device.id) {
+          if (!skipDeviceVerification && (!derivedId || derivedId !== device.id)) {
             setHandshakeState("failed");
             setCloseCause("device-auth-invalid", {
               reason: "device-id-mismatch",
@@ -522,120 +601,122 @@ export function attachGatewayWsMessageHandler(params: {
             close(1008, "device identity mismatch");
             return;
           }
-          const signedAt = device.signedAt;
-          if (
-            typeof signedAt !== "number" ||
-            Math.abs(Date.now() - signedAt) > DEVICE_SIGNATURE_SKEW_MS
-          ) {
-            setHandshakeState("failed");
-            setCloseCause("device-auth-invalid", {
-              reason: "device-signature-stale",
-              client: connectParams.client.id,
+          if (!skipDeviceVerification) {
+            const signedAt = device.signedAt;
+            if (
+              typeof signedAt !== "number" ||
+              Math.abs(Date.now() - signedAt) > DEVICE_SIGNATURE_SKEW_MS
+            ) {
+              setHandshakeState("failed");
+              setCloseCause("device-auth-invalid", {
+                reason: "device-signature-stale",
+                client: connectParams.client.id,
+                deviceId: device.id,
+              });
+              send({
+                type: "res",
+                id: frame.id,
+                ok: false,
+                error: errorShape(ErrorCodes.INVALID_REQUEST, "device signature expired", {
+                  details: {
+                    code: resolveDeviceAuthConnectErrorDetailCode("device-signature-stale"),
+                    reason: "device-signature-stale",
+                  },
+                }),
+              });
+              close(1008, "device signature expired");
+              return;
+            }
+            const nonceRequired = !isLocalClient;
+            const providedNonce = typeof device.nonce === "string" ? device.nonce.trim() : "";
+            if (nonceRequired && !providedNonce) {
+              setHandshakeState("failed");
+              setCloseCause("device-auth-invalid", {
+                reason: "device-nonce-missing",
+                client: connectParams.client.id,
+                deviceId: device.id,
+              });
+              send({
+                type: "res",
+                id: frame.id,
+                ok: false,
+                error: errorShape(ErrorCodes.INVALID_REQUEST, "device nonce required", {
+                  details: {
+                    code: resolveDeviceAuthConnectErrorDetailCode("device-nonce-missing"),
+                    reason: "device-nonce-missing",
+                  },
+                }),
+              });
+              close(1008, "device nonce required");
+              return;
+            }
+            if (providedNonce && providedNonce !== connectNonce) {
+              setHandshakeState("failed");
+              setCloseCause("device-auth-invalid", {
+                reason: "device-nonce-mismatch",
+                client: connectParams.client.id,
+                deviceId: device.id,
+              });
+              send({
+                type: "res",
+                id: frame.id,
+                ok: false,
+                error: errorShape(ErrorCodes.INVALID_REQUEST, "device nonce mismatch", {
+                  details: {
+                    code: resolveDeviceAuthConnectErrorDetailCode("device-nonce-mismatch"),
+                    reason: "device-nonce-mismatch",
+                  },
+                }),
+              });
+              close(1008, "device nonce mismatch");
+              return;
+            }
+            // Build the payload the node client signed.  Modern clients use v3
+            // (includes platform/deviceFamily), older clients use v2.  Try v3
+            // first, then fall back to v2.
+            const basePayloadParams = {
               deviceId: device.id,
+              clientId: connectParams.client.id,
+              clientMode: connectParams.client.mode,
+              role,
+              scopes,
+              signedAtMs: signedAt,
+              token: connectParams.auth?.token ?? null,
+              nonce: providedNonce || "",
+            };
+            const v3Payload = buildDeviceAuthPayloadV3({
+              ...basePayloadParams,
+              platform: connectParams.client.platform,
+              deviceFamily: connectParams.client.deviceFamily,
             });
-            send({
-              type: "res",
-              id: frame.id,
-              ok: false,
-              error: errorShape(ErrorCodes.INVALID_REQUEST, "device signature expired", {
-                details: {
-                  code: resolveDeviceAuthConnectErrorDetailCode("device-signature-stale"),
-                  reason: "device-signature-stale",
-                },
-              }),
-            });
-            close(1008, "device signature expired");
-            return;
-          }
-          const nonceRequired = !isLocalClient;
-          const providedNonce = typeof device.nonce === "string" ? device.nonce.trim() : "";
-          if (nonceRequired && !providedNonce) {
-            setHandshakeState("failed");
-            setCloseCause("device-auth-invalid", {
-              reason: "device-nonce-missing",
-              client: connectParams.client.id,
-              deviceId: device.id,
-            });
-            send({
-              type: "res",
-              id: frame.id,
-              ok: false,
-              error: errorShape(ErrorCodes.INVALID_REQUEST, "device nonce required", {
-                details: {
-                  code: resolveDeviceAuthConnectErrorDetailCode("device-nonce-missing"),
-                  reason: "device-nonce-missing",
-                },
-              }),
-            });
-            close(1008, "device nonce required");
-            return;
-          }
-          if (providedNonce && providedNonce !== connectNonce) {
-            setHandshakeState("failed");
-            setCloseCause("device-auth-invalid", {
-              reason: "device-nonce-mismatch",
-              client: connectParams.client.id,
-              deviceId: device.id,
-            });
-            send({
-              type: "res",
-              id: frame.id,
-              ok: false,
-              error: errorShape(ErrorCodes.INVALID_REQUEST, "device nonce mismatch", {
-                details: {
-                  code: resolveDeviceAuthConnectErrorDetailCode("device-nonce-mismatch"),
-                  reason: "device-nonce-mismatch",
-                },
-              }),
-            });
-            close(1008, "device nonce mismatch");
-            return;
-          }
-          // Build the payload the node client signed.  Modern clients use v3
-          // (includes platform/deviceFamily), older clients use v2.  Try v3
-          // first, then fall back to v2.
-          const basePayloadParams = {
-            deviceId: device.id,
-            clientId: connectParams.client.id,
-            clientMode: connectParams.client.mode,
-            role,
-            scopes,
-            signedAtMs: signedAt,
-            token: connectParams.auth?.token ?? null,
-            nonce: providedNonce || "",
-          };
-          const v3Payload = buildDeviceAuthPayloadV3({
-            ...basePayloadParams,
-            platform: connectParams.client.platform,
-            deviceFamily: connectParams.client.deviceFamily,
-          });
-          const v2Payload = buildDeviceAuthPayload(basePayloadParams);
-          const rejectDeviceSignatureInvalid = () => {
-            setHandshakeState("failed");
-            setCloseCause("device-auth-invalid", {
-              reason: "device-signature",
-              client: connectParams.client.id,
-              deviceId: device.id,
-            });
-            send({
-              type: "res",
-              id: frame.id,
-              ok: false,
-              error: errorShape(ErrorCodes.INVALID_REQUEST, "device signature invalid", {
-                details: {
-                  code: resolveDeviceAuthConnectErrorDetailCode("device-signature"),
-                  reason: "device-signature",
-                },
-              }),
-            });
-            close(1008, "device signature invalid");
-          };
-          const signatureOk =
-            verifyDeviceSignature(device.publicKey, v3Payload, device.signature) ||
-            verifyDeviceSignature(device.publicKey, v2Payload, device.signature);
-          if (!signatureOk) {
-            rejectDeviceSignatureInvalid();
-            return;
+            const v2Payload = buildDeviceAuthPayload(basePayloadParams);
+            const rejectDeviceSignatureInvalid = () => {
+              setHandshakeState("failed");
+              setCloseCause("device-auth-invalid", {
+                reason: "device-signature",
+                client: connectParams.client.id,
+                deviceId: device.id,
+              });
+              send({
+                type: "res",
+                id: frame.id,
+                ok: false,
+                error: errorShape(ErrorCodes.INVALID_REQUEST, "device signature invalid", {
+                  details: {
+                    code: resolveDeviceAuthConnectErrorDetailCode("device-signature"),
+                    reason: "device-signature",
+                  },
+                }),
+              });
+              close(1008, "device signature invalid");
+            };
+            const signatureOk =
+              verifyDeviceSignature(device.publicKey, v3Payload, device.signature) ||
+              verifyDeviceSignature(device.publicKey, v2Payload, device.signature);
+            if (!signatureOk) {
+              rejectDeviceSignatureInvalid();
+              return;
+            }
           }
           devicePublicKey = normalizeDevicePublicKeyBase64Url(device.publicKey);
           if (!devicePublicKey) {
@@ -660,7 +741,13 @@ export function attachGatewayWsMessageHandler(params: {
         // Accept either auth.deviceToken (dedicated field) or auth.token as the
         // device token candidate so clients have flexibility in how they present it.
         const deviceTokenCandidate = connectParams.auth?.deviceToken || connectParams.auth?.token;
+        // Track whether the client explicitly used the dedicated deviceToken field.
+        const usedExplicitDeviceToken = Boolean(connectParams.auth?.deviceToken);
         if (!authOk && deviceTokenCandidate && device) {
+          // Save the original shared-auth failure so we can restore it when
+          // the fallback device-token check also fails and the client did not
+          // use the explicit deviceToken field (they likely intended shared auth).
+          const sharedAuthFailResult = authResult;
           if (effectiveRateLimiter) {
             const deviceRateCheck = effectiveRateLimiter.check(
               clientIp,
@@ -687,7 +774,12 @@ export function attachGatewayWsMessageHandler(params: {
               authMethod = "device-token";
               effectiveRateLimiter?.reset(clientIp, AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN);
             } else {
-              authResult = { ok: false, reason: "device_token_mismatch" };
+              // When the client used auth.token (not auth.deviceToken) and the
+              // shared-token check also failed, preserve the shared-token error
+              // so the client sees the relevant "token mismatch" message.
+              authResult = usedExplicitDeviceToken
+                ? { ok: false, reason: "device_token_mismatch" }
+                : sharedAuthFailResult;
               effectiveRateLimiter?.recordFailure(clientIp, AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN);
             }
           }
@@ -697,8 +789,14 @@ export function attachGatewayWsMessageHandler(params: {
           return;
         }
 
+        // Skip pairing only for dangerouslyDisableDeviceAuth (explicit bypass) or
+        // IAM-authenticated control UI.  allowInsecureAuth alone does NOT bypass
+        // pairing — it only relaxes the "device identity required" gate above.
+        const dangerouslyDisableDeviceAuthForPairing =
+          isControlUi && configSnapshot.gateway?.controlUi?.dangerouslyDisableDeviceAuth === true;
         const skipPairing =
-          (allowControlUiBypass && sharedAuthOk) || (isControlUi && authOk && authMethod === "iam");
+          (dangerouslyDisableDeviceAuthForPairing && sharedAuthOk) ||
+          (isControlUi && authOk && authMethod === "iam");
         if (device && devicePublicKey && !skipPairing) {
           const requirePairing = async (reason: string, _paired?: { deviceId: string }) => {
             const pairing = await requestDevicePairing({
@@ -713,10 +811,10 @@ export function attachGatewayWsMessageHandler(params: {
               remoteIp: reportedClientIp,
               // Browser-origin non-control-ui clients must not get silent auto-pairing,
               // even on loopback, to prevent malicious scripts from silently pairing.
+              // Token auth only auto-approves pairing for local connections to prevent
+              // stolen tokens from silently pairing remote devices.
               silent:
-                hasBrowserOrigin && !isControlUi
-                  ? false
-                  : isLocalClient || authMethod === "iam" || authMethod === "token",
+                hasBrowserOrigin && !isControlUi ? false : isLocalClient || authMethod === "iam",
             });
             const context = buildRequestContext();
             if (pairing.request.silent === true) {
@@ -751,7 +849,10 @@ export function attachGatewayWsMessageHandler(params: {
                 id: frame.id,
                 ok: false,
                 error: errorShape(ErrorCodes.NOT_PAIRED, "pairing required", {
-                  details: { requestId: pairing.request.requestId },
+                  details: {
+                    code: ConnectErrorDetailCodes.PAIRING_REQUIRED,
+                    requestId: pairing.request.requestId,
+                  },
                 }),
               });
               close(1008, "pairing required");
@@ -814,9 +915,14 @@ export function attachGatewayWsMessageHandler(params: {
           }
         }
 
-        const deviceToken = device
-          ? await ensureDeviceToken({ deviceId: device.id, role, scopes })
-          : null;
+        // Skip device-token issuance when device auth is bypassed — the token
+        // would be meaningless because the device identity wasn't verified.
+        const skipDeviceTokenIssuance =
+          isControlUi && configSnapshot.gateway?.controlUi?.dangerouslyDisableDeviceAuth === true;
+        const deviceToken =
+          device && !skipDeviceTokenIssuance
+            ? await ensureDeviceToken({ deviceId: device.id, role, scopes })
+            : null;
 
         if (role === "node") {
           const cfg = loadConfig();
