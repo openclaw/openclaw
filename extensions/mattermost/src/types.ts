@@ -2,6 +2,7 @@ import type {
   BlockStreamingCoalesceConfig,
   DmPolicy,
   GroupPolicy,
+  ReplyToMode,
   SecretInput,
 } from "openclaw/plugin-sdk/mattermost";
 
@@ -56,6 +57,13 @@ export type MattermostAccountConfig = {
   replyToMode?: "off" | "first" | "all";
   /** Outbound response prefix override for this channel/account. */
   responsePrefix?: string;
+  /**
+   * Controls whether bot replies are sent as thread replies.
+   * - "off" (default): only thread-reply when incoming message is already a thread reply
+   * - "first": same as "all" (reply in thread under the triggering message)
+   * - "all": always reply in a thread; uses existing thread root or starts a new thread under the message
+   */
+  replyToMode?: ReplyToMode;
   /** Action toggles for this account. */
   actions?: {
     /** Enable message reaction actions. Default: true. */
