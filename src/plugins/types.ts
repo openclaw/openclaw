@@ -13,6 +13,7 @@ import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import type { InternalHookHandler } from "../hooks/internal-hooks.js";
 import type { HookEntry } from "../hooks/types.js";
 import type { RuntimeEnv } from "../runtime.js";
+import type { ToolExecutionGuard } from "../security/types.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import type { PluginRuntime } from "./runtime/types.js";
 
@@ -275,6 +276,8 @@ export type OpenClawPluginApi = {
    */
   registerCommand: (command: OpenClawPluginCommandDefinition) => void;
   resolvePath: (input: string) => string;
+  /** IBEL: Register a tool execution guard on the global guard pipeline. */
+  registerGuard: (guard: ToolExecutionGuard) => void;
   /** Register a lifecycle hook handler */
   on: <K extends PluginHookName>(
     hookName: K,

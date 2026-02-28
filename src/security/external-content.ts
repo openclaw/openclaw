@@ -1,4 +1,6 @@
 import { randomBytes } from "node:crypto";
+import { InstructionLevel } from "./types.js";
+import type { TaggedPayload } from "./types.js";
 
 /**
  * Security utilities for handling untrusted external content.
@@ -322,4 +324,22 @@ export function wrapWebContent(
   const includeWarning = source === "web_fetch";
   // Marker sanitization happens in wrapExternalContent
   return wrapExternalContent(content, { source, includeWarning });
+}
+
+/**
+ * IBEL: Tag external content with privilege metadata.
+ *
+ * Complements wrapExternalContent() — that function adds textual boundary
+ * markers for LLM context; this function produces a TaggedPayload for the
+ * guard pipeline's taint tracking system. Existing callers are unchanged.
+ */
+export function tagExternalContent(
+  content: unknown,
+  opts?: { source?: ExternalContentSource },
+): TaggedPayload {
+  return {
+    level: InstructionLevel.EXTERNAL_CONTENT,
+    content,
+    source: opts?.source,
+  };
 }

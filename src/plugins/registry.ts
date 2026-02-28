@@ -8,6 +8,7 @@ import type {
 } from "../gateway/server-methods/types.js";
 import { registerInternalHook } from "../hooks/internal-hooks.js";
 import type { HookEntry } from "../hooks/types.js";
+import { ensureGlobalGuardPipeline } from "../security/guard-pipeline.js";
 import { resolveUserPath } from "../utils.js";
 import { registerPluginCommand } from "./commands.js";
 import { normalizePluginHttpPath } from "./http-path.js";
@@ -498,6 +499,9 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       registerService: (service) => registerService(record, service),
       registerCommand: (command) => registerCommand(record, command),
       resolvePath: (input: string) => resolveUserPath(input),
+      registerGuard: (guard) => {
+        ensureGlobalGuardPipeline().register(guard);
+      },
       on: (hookName, handler, opts) => registerTypedHook(record, hookName, handler, opts),
     };
   };

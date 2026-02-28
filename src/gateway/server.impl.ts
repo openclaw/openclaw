@@ -64,6 +64,7 @@ import {
   type GatewayUpdateAvailableEventPayload,
 } from "./events.js";
 import { ExecApprovalManager } from "./exec-approval-manager.js";
+import { initializeGlobalExecApprovalManager } from "../security/exec-approval-global.js";
 import { NodeRegistry } from "./node-registry.js";
 import type { startBrowserControlServerIfEnabled } from "./server-browser.js";
 import { createChannelManager } from "./server-channels.js";
@@ -391,6 +392,17 @@ export async function startGatewayServer(
         coreGatewayHandlers,
         baseMethods,
       });
+
+  // ── IBEL: Register default tool execution guards ─────────────────────────
+  {
+    const { ensureGlobalGuardPipeline } = await import("../security/guard-pipeline.js");
+    const { TaintRiskGuard, CapabilityAllowlistGuard } =
+      await import("../security/tool-execution-guard.js");
+    const pipeline = ensureGlobalGuardPipeline();
+    pipeline.register(TaintRiskGuard);
+    pipeline.register(CapabilityAllowlistGuard);
+  }
+
   const channelLogs = Object.fromEntries(
     listChannelPlugins().map((plugin) => [plugin.id, logChannels.child(plugin.id)]),
   ) as Record<ChannelId, ReturnType<typeof createSubsystemLogger>>;
@@ -673,6 +685,7 @@ export async function startGatewayServer(
   }
 
   const execApprovalManager = new ExecApprovalManager();
+  initializeGlobalExecApprovalManager(execApprovalManager);
   const execApprovalForwarder = createExecApprovalForwarder();
   const execApprovalHandlers = createExecApprovalHandlers(execApprovalManager, {
     forwarder: execApprovalForwarder,
