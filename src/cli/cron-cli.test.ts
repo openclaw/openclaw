@@ -215,6 +215,32 @@ describe("cron cli", () => {
     expect(logLines.some((line) => line.includes('"error"'))).toBe(true);
   });
 
+  it("does not classify timeout reconciliation as recent when latest run predates request", async () => {
+    resetGatewayMock();
+    vi.mocked(defaultRuntime.log).mockClear();
+    const oldTs = Date.now() - 10 * 60_000;
+    callGatewayFromCli.mockImplementation(async (method: string) => {
+      if (method === "cron.run") {
+        throw new Error("gateway timeout after 60000ms");
+      }
+      if (method === "cron.runs") {
+        return {
+          entries: [{ ts: oldTs, runId: "run-old-1", status: "ok", summary: "old run" }],
+        };
+      }
+      if (method === "cron.status") {
+        return { enabled: true };
+      }
+      return { ok: true };
+    });
+    const program = buildProgram();
+    await program.parseAsync(["cron", "run", "job-1"], { from: "user" });
+
+    const logLines = vi.mocked(defaultRuntime.log).mock.calls.map((call) => logArgsToText(call[0]));
+    expect(logLines.some((line) => line.includes('"status": "transport-timeout"'))).toBe(true);
+    expect(logLines.some((line) => line.includes('"state": "pending-or-older-run"'))).toBe(true);
+  });
+
   it("trims model and thinking on cron add", { timeout: CRON_CLI_TEST_TIMEOUT_MS }, async () => {
     await runCronCommand([
       "cron",

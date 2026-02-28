@@ -314,7 +314,6 @@ export const cronHandlers: GatewayRequestHandlers = {
     const p = params as { id?: string; jobId?: string; mode?: "due" | "force" };
     const jobId = p.id ?? p.jobId;
     const mode = p.mode ?? "force";
-    const now = Date.now();
     if (!jobId) {
       respond(
         false,
@@ -326,6 +325,7 @@ export const cronHandlers: GatewayRequestHandlers = {
 
     const jobs = await context.cron.list({ includeDisabled: true });
     const job = jobs.find((entry) => entry.id === jobId);
+    const now = Date.now();
     if (!job) {
       respond(
         true,

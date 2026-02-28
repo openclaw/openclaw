@@ -2536,6 +2536,7 @@ public struct CronRunsParams: Codable, Sendable {
     public let scope: AnyCodable?
     public let id: String?
     public let jobid: String?
+    public let runid: String?
     public let limit: Int?
     public let offset: Int?
     public let statuses: [AnyCodable]?
@@ -2549,6 +2550,7 @@ public struct CronRunsParams: Codable, Sendable {
         scope: AnyCodable?,
         id: String?,
         jobid: String?,
+        runid: String?,
         limit: Int?,
         offset: Int?,
         statuses: [AnyCodable]?,
@@ -2561,6 +2563,7 @@ public struct CronRunsParams: Codable, Sendable {
         self.scope = scope
         self.id = id
         self.jobid = jobid
+        self.runid = runid
         self.limit = limit
         self.offset = offset
         self.statuses = statuses
@@ -2575,6 +2578,7 @@ public struct CronRunsParams: Codable, Sendable {
         case scope
         case id
         case jobid = "jobId"
+        case runid = "runId"
         case limit
         case offset
         case statuses
@@ -2589,6 +2593,7 @@ public struct CronRunsParams: Codable, Sendable {
 public struct CronRunLogEntry: Codable, Sendable {
     public let ts: Int
     public let jobid: String
+    public let runid: String?
     public let action: String
     public let status: AnyCodable?
     public let error: String?
@@ -2609,6 +2614,7 @@ public struct CronRunLogEntry: Codable, Sendable {
     public init(
         ts: Int,
         jobid: String,
+        runid: String?,
         action: String,
         status: AnyCodable?,
         error: String?,
@@ -2628,6 +2634,7 @@ public struct CronRunLogEntry: Codable, Sendable {
     {
         self.ts = ts
         self.jobid = jobid
+        self.runid = runid
         self.action = action
         self.status = status
         self.error = error
@@ -2649,6 +2656,7 @@ public struct CronRunLogEntry: Codable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case ts
         case jobid = "jobId"
+        case runid = "runId"
         case action
         case status
         case error

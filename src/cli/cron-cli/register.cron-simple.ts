@@ -6,6 +6,7 @@ import { addGatewayClientOptions, callGatewayFromCli } from "../gateway-rpc.js";
 import { warnIfCronSchedulerDisabled } from "./shared.js";
 
 const CRON_RUN_RECONCILE_RECENT_MS = 2 * 60_000;
+const CRON_RUN_RECONCILE_CLOCK_SKEW_MS = 1_000;
 
 function isCronRunTimeoutLikeError(err: unknown): boolean {
   if (isGatewayTransportTimeoutError(err)) {
@@ -15,8 +16,11 @@ function isCronRunTimeoutLikeError(err: unknown): boolean {
   return /gateway timeout after/i.test(text);
 }
 
-async function reconcileCronRunTimeout(params: { id: string; opts: Record<string, unknown> }) {
-  const startedAt = Date.now();
+async function reconcileCronRunTimeout(params: {
+  id: string;
+  opts: Record<string, unknown>;
+  startedAt: number;
+}) {
   try {
     const runsPayload = (await callGatewayFromCli("cron.runs", params.opts, {
       id: params.id,
@@ -25,11 +29,16 @@ async function reconcileCronRunTimeout(params: { id: string; opts: Record<string
     const latest = Array.isArray(runsPayload.entries) ? runsPayload.entries[0] : undefined;
     const latestTs =
       latest && typeof latest.ts === "number" && Number.isFinite(latest.ts) ? latest.ts : null;
+    const observedAfterStart =
+      latestTs !== null && latestTs >= params.startedAt - CRON_RUN_RECONCILE_CLOCK_SKEW_MS;
     const recent =
-      latestTs !== null && Math.abs(startedAt - latestTs) <= CRON_RUN_RECONCILE_RECENT_MS;
+      observedAfterStart &&
+      latestTs - params.startedAt <=
+        CRON_RUN_RECONCILE_RECENT_MS + CRON_RUN_RECONCILE_CLOCK_SKEW_MS;
     return {
       state: recent ? "recent-run-observed" : "pending-or-older-run",
       checkedAt: Date.now(),
+      startedAt: params.startedAt,
       latest: latest ?? null,
       windowMs: CRON_RUN_RECONCILE_RECENT_MS,
     };
@@ -37,6 +46,7 @@ async function reconcileCronRunTimeout(params: { id: string; opts: Record<string
     return {
       state: "reconcile-failed",
       checkedAt: Date.now(),
+      startedAt: params.startedAt,
       error: String(reconcileErr),
     };
   }
@@ -132,6 +142,7 @@ export function registerCronSimpleCommands(cron: Command) {
       .argument("<id>", "Job id")
       .option("--due", "Run only when due (default behavior in older versions)", false)
       .action(async (id, opts) => {
+        const runStartedAt = Date.now();
         try {
           const res = await callGatewayFromCli("cron.run", opts, {
             id,
@@ -144,6 +155,7 @@ export function registerCronSimpleCommands(cron: Command) {
             const reconciliation = await reconcileCronRunTimeout({
               id: String(id),
               opts: opts as Record<string, unknown>,
+              startedAt: runStartedAt,
             });
             defaultRuntime.log(
               JSON.stringify(
