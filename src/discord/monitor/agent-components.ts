@@ -1456,7 +1456,7 @@ export class AgentSelectMenu extends StringSelectMenu {
 
 class DiscordComponentButton extends Button {
   label = "component";
-  customId = "*";
+  customId = "__openclaw_discord_component_button_wildcard__";
   style = ButtonStyle.Primary;
   customIdParser = parseDiscordComponentCustomIdForCarbon;
   private ctx: AgentComponentContext;
@@ -1488,7 +1488,7 @@ class DiscordComponentButton extends Button {
 }
 
 class DiscordComponentStringSelect extends StringSelectMenu {
-  customId = "*";
+  customId = "__openclaw_discord_component_string_select_wildcard__";
   options: APIStringSelectComponent["options"] = [];
   customIdParser = parseDiscordComponentCustomIdForCarbon;
   private ctx: AgentComponentContext;
@@ -1511,7 +1511,7 @@ class DiscordComponentStringSelect extends StringSelectMenu {
 }
 
 class DiscordComponentUserSelect extends UserSelectMenu {
-  customId = "*";
+  customId = "__openclaw_discord_component_user_select_wildcard__";
   customIdParser = parseDiscordComponentCustomIdForCarbon;
   private ctx: AgentComponentContext;
 
@@ -1533,7 +1533,7 @@ class DiscordComponentUserSelect extends UserSelectMenu {
 }
 
 class DiscordComponentRoleSelect extends RoleSelectMenu {
-  customId = "*";
+  customId = "__openclaw_discord_component_role_select_wildcard__";
   customIdParser = parseDiscordComponentCustomIdForCarbon;
   private ctx: AgentComponentContext;
 
@@ -1555,7 +1555,7 @@ class DiscordComponentRoleSelect extends RoleSelectMenu {
 }
 
 class DiscordComponentMentionableSelect extends MentionableSelectMenu {
-  customId = "*";
+  customId = "__openclaw_discord_component_mentionable_select_wildcard__";
   customIdParser = parseDiscordComponentCustomIdForCarbon;
   private ctx: AgentComponentContext;
 
@@ -1577,7 +1577,7 @@ class DiscordComponentMentionableSelect extends MentionableSelectMenu {
 }
 
 class DiscordComponentChannelSelect extends ChannelSelectMenu {
-  customId = "*";
+  customId = "__openclaw_discord_component_channel_select_wildcard__";
   customIdParser = parseDiscordComponentCustomIdForCarbon;
   private ctx: AgentComponentContext;
 
@@ -1600,7 +1600,7 @@ class DiscordComponentChannelSelect extends ChannelSelectMenu {
 
 class DiscordComponentModal extends Modal {
   title = "OpenClaw form";
-  customId = "*";
+  customId = "__openclaw_discord_component_modal_wildcard__";
   components = [];
   customIdParser = parseDiscordModalCustomIdForCarbon;
   private ctx: AgentComponentContext;
