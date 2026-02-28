@@ -68,7 +68,21 @@ export function createGatewayBroadcaster(params: { clients: Set<GatewayWsClient>
       return;
     }
     const isTargeted = Boolean(targetConnIds);
-    const eventSeq = isTargeted ? undefined : ++seq;
+
+    const isAgentToolEvent = (() => {
+      if (event !== "agent") {
+        return false;
+      }
+      if (!payload || typeof payload !== "object") {
+        return false;
+      }
+      return (payload as { stream?: unknown }).stream === "tool";
+    })();
+
+    // Tool streams are high-frequency and may be dropped for slow consumers.
+    // Avoid sequencing them so UI clients don't raise spurious "event gap" warnings.
+    const shouldSequence = !isTargeted && !isAgentToolEvent;
+    const eventSeq = shouldSequence ? ++seq : undefined;
     const frame = JSON.stringify({
       type: "event",
       event,

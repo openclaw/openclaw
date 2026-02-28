@@ -391,6 +391,8 @@ export async function handleToolExecutionEnd(
       toolCallId,
       meta,
       isError: isToolError,
+      // include args so UI can render a stable tool detail even if the start event is dropped
+      args: startData?.args as Record<string, unknown> | undefined,
       result: sanitizedResult,
     },
   });
@@ -402,6 +404,7 @@ export async function handleToolExecutionEnd(
       toolCallId,
       meta,
       isError: isToolError,
+      args: startData?.args as Record<string, unknown> | undefined,
     },
   });
 

@@ -226,6 +226,8 @@ export async function startGatewayWithClient(params: {
   configPath: string;
   token: string;
   clientDisplayName?: string;
+  caps?: string[];
+  onEvent?: (evt: { event?: string; payload?: unknown }) => void;
 }) {
   await writeFile(params.configPath, `${JSON.stringify(params.cfg, null, 2)}\n`);
   process.env.OPENCLAW_CONFIG_PATH = params.configPath;
@@ -240,6 +242,8 @@ export async function startGatewayWithClient(params: {
     url: `ws://127.0.0.1:${port}`,
     token: params.token,
     clientDisplayName: params.clientDisplayName,
+    caps: params.caps,
+    onEvent: params.onEvent,
   });
 
   return { port, server, client };

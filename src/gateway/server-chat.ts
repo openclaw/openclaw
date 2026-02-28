@@ -438,9 +438,9 @@ export function createAgentEventHandler({
     agentRunSeq.set(evt.runId, evt.seq);
     if (isToolEvent) {
       // Always broadcast tool events over WS (filtered by tool-events capability).
-      // This ensures tool output streams live in the Control UI without requiring
-      // per-run recipient registration to succeed.
-      broadcast("agent", toolPayloadForWs, { dropIfSlow: true });
+      // Drop only update frames for slow consumers; keep start/result best-effort.
+      const toolPhase = typeof evt.data?.phase === "string" ? evt.data.phase : "";
+      broadcast("agent", toolPayloadForWs, { dropIfSlow: toolPhase === "update" });
     } else {
       broadcast("agent", agentPayload);
     }

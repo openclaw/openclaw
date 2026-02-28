@@ -75,11 +75,18 @@ describe("gateway e2e", () => {
         gateway: { auth: { token } },
       };
 
+      const agentEvents: unknown[] = [];
       const { server, client } = await startGatewayWithClient({
         cfg,
         configPath,
         token,
         clientDisplayName: "vitest-mock-openai",
+        caps: ["tool-events"],
+        onEvent: (evt) => {
+          if (evt.event === "agent") {
+            agentEvents.push(evt.payload);
+          }
+        },
       });
 
       try {
@@ -106,6 +113,15 @@ describe("gateway e2e", () => {
           },
           { expectFinal: true },
         );
+
+        // Assert tool events were streamed over WS
+        const toolPayloads = agentEvents
+          .filter((p): p is { stream?: unknown; data?: any } => !!p && typeof p === "object")
+          .filter((p) => p.stream === "tool");
+        expect(toolPayloads.length).toBeGreaterThan(0);
+        const phases = toolPayloads.map((p) => String(p.data?.phase ?? ""));
+        expect(phases).toContain("start");
+        expect(phases).toContain("result");
 
         expect(payload?.status).toBe("ok");
         const text = extractPayloadText(payload?.result);
