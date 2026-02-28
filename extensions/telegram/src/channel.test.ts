@@ -209,3 +209,112 @@ describe("telegramPlugin duplicate token guard", () => {
     );
   });
 });
+
+describe("telegramPlugin.outbound.sendPayload", () => {
+  it("forwards buttons to sendMessageTelegram when channelData.telegram.buttons is set (no media)", async () => {
+    const sendMessageTelegram = vi.fn(async () => ({ messageId: "tg-payload-1" }));
+    setTelegramRuntime({
+      channel: { telegram: { sendMessageTelegram } },
+    } as unknown as PluginRuntime);
+
+    const buttons = [[{ text: "Yes", callback_data: "/approve abc allow-once" }]];
+    const result = await telegramPlugin.outbound!.sendPayload!({
+      cfg: createCfg(),
+      to: "99999",
+      text: "Approve?",
+      payload: { text: "Approve?", channelData: { telegram: { buttons } } },
+      accountId: "ops",
+    });
+
+    expect(sendMessageTelegram).toHaveBeenCalledOnce();
+    expect(sendMessageTelegram).toHaveBeenCalledWith(
+      "99999",
+      "Approve?",
+      expect.objectContaining({ buttons }),
+    );
+    expect(result).toMatchObject({ channel: "telegram", messageId: "tg-payload-1" });
+  });
+
+  it("attaches buttons only to first send when multiple mediaUrls are present", async () => {
+    const sendMessageTelegram = vi.fn(
+      async (_to: string, _text: string, opts: { mediaUrl?: string }) => ({
+        messageId: `tg-${opts.mediaUrl ?? "text"}`,
+      }),
+    );
+    setTelegramRuntime({
+      channel: { telegram: { sendMessageTelegram } },
+    } as unknown as PluginRuntime);
+
+    const buttons = [[{ text: "OK", callback_data: "/approve xyz allow-always" }]];
+    await telegramPlugin.outbound!.sendPayload!({
+      cfg: createCfg(),
+      to: "55555",
+      text: "See images",
+      payload: {
+        text: "See images",
+        mediaUrls: ["/tmp/img1.png", "/tmp/img2.png"],
+        channelData: { telegram: { buttons } },
+      },
+      accountId: "ops",
+    });
+
+    expect(sendMessageTelegram).toHaveBeenCalledTimes(2);
+    // First call: text + buttons
+    expect(sendMessageTelegram).toHaveBeenNthCalledWith(
+      1,
+      "55555",
+      "See images",
+      expect.objectContaining({ buttons, mediaUrl: "/tmp/img1.png" }),
+    );
+    // Second call: no text, no buttons
+    expect(sendMessageTelegram).toHaveBeenNthCalledWith(
+      2,
+      "55555",
+      "",
+      expect.not.objectContaining({ buttons }),
+    );
+  });
+
+  it("forwards silent flag to sendMessageTelegram", async () => {
+    const sendMessageTelegram = vi.fn(async () => ({ messageId: "tg-s1" }));
+    setTelegramRuntime({
+      channel: { telegram: { sendMessageTelegram } },
+    } as unknown as PluginRuntime);
+
+    await telegramPlugin.outbound!.sendPayload!({
+      cfg: createCfg(),
+      to: "99999",
+      text: "silent approval",
+      payload: { text: "silent approval", channelData: { telegram: { buttons: [] } } },
+      silent: true,
+    });
+
+    expect(sendMessageTelegram).toHaveBeenCalledWith(
+      "99999",
+      "silent approval",
+      expect.objectContaining({ silent: true }),
+    );
+  });
+
+  it("sends without buttons when channelData is absent", async () => {
+    const sendMessageTelegram = vi.fn(async () => ({ messageId: "tg-payload-plain" }));
+    setTelegramRuntime({
+      channel: { telegram: { sendMessageTelegram } },
+    } as unknown as PluginRuntime);
+
+    const result = await telegramPlugin.outbound!.sendPayload!({
+      cfg: createCfg(),
+      to: "11111",
+      text: "plain text",
+      payload: { text: "plain text" },
+      accountId: "ops",
+    });
+
+    expect(sendMessageTelegram).toHaveBeenCalledOnce();
+    const callOpts = (sendMessageTelegram.mock.calls as unknown[][])[0]?.[2] as
+      | Record<string, unknown>
+      | undefined;
+    expect(callOpts?.buttons).toBeUndefined();
+    expect(result).toMatchObject({ channel: "telegram" });
+  });
+});
