@@ -47,6 +47,18 @@ function isReasoningConstraintErrorMessage(raw: string): boolean {
   );
 }
 
+function isDataInspectionFailedErrorMessage(raw?: string): boolean {
+  if (!raw) {
+    return false;
+  }
+  const lower = raw.toLowerCase();
+  return (
+    lower.includes("internalerror.algo.datainspectionfailed") ||
+    (lower.includes("input text data") && lower.includes("inappropriate content")) ||
+    (lower.includes("input data") && lower.includes("inappropriate content"))
+  );
+}
+
 export function isContextOverflowError(errorMessage?: string): boolean {
   if (!errorMessage) {
     return false;
@@ -497,6 +509,13 @@ export function formatAssistantErrorText(
     return (
       "Reasoning is required for this model endpoint. " +
       "Use /think minimal (or any non-off level) and try again."
+    );
+  }
+
+  if (isDataInspectionFailedErrorMessage(raw)) {
+    return (
+      "Provider content inspection rejected this request. " +
+      "Run /new (or /reset) to start a fresh session and retry."
     );
   }
 

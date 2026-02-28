@@ -44,6 +44,15 @@ describe("formatAssistantErrorText", () => {
     expect(result).toContain("/think minimal");
     expect(result).not.toContain("Context overflow");
   });
+  it("returns a recovery hint for DashScope data inspection failures", () => {
+    const msg = makeAssistantError(
+      "<400> InternalError.Algo.DataInspectionFailed: Input text data may contain inappropriate content.",
+    );
+    const result = formatAssistantErrorText(msg);
+    expect(result).toContain("content inspection rejected");
+    expect(result).toContain("/new");
+    expect(result).not.toContain("Context overflow");
+  });
   it("returns a friendly message for Anthropic role ordering", () => {
     const msg = makeAssistantError('messages: roles must alternate between "user" and "assistant"');
     expect(formatAssistantErrorText(msg)).toContain("Message ordering conflict");
