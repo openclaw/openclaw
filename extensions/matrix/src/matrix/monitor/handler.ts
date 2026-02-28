@@ -674,6 +674,65 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         return;
       }
 
+      const reasoningDraftState = {
+        messageId: undefined as string | undefined,
+        lastText: "",
+        updateChain: Promise.resolve(),
+      };
+      const enqueueReasoningDraftUpdate = async (text?: string) => {
+        const trimmedText = text?.trim();
+        if (!trimmedText || trimmedText === reasoningDraftState.lastText) {
+          return;
+        }
+        reasoningDraftState.lastText = trimmedText;
+        reasoningDraftState.updateChain = reasoningDraftState.updateChain
+          .then(async () => {
+            if (!reasoningDraftState.messageId) {
+              const result = await sendMessageMatrix(`room:${roomId}`, trimmedText, {
+                client,
+                replyToId: replyToMode === "off" ? undefined : messageId,
+                threadId: threadTarget,
+                accountId: route.accountId,
+              });
+              if (result.messageId) {
+                reasoningDraftState.messageId = result.messageId;
+              }
+              return;
+            }
+            const editEventId = await client.sendMessage(roomId, {
+              msgtype: "m.text",
+              body: `* ${trimmedText}`,
+              "m.new_content": {
+                msgtype: "m.text",
+                body: trimmedText,
+              },
+              "m.relates_to": {
+                rel_type: RelationType.Replace,
+                event_id: reasoningDraftState.messageId,
+              },
+            });
+            void editEventId;
+          })
+          .catch((err) => {
+            runtime.error?.(`matrix reasoning draft update failed: ${String(err)}`);
+          });
+        await reasoningDraftState.updateChain;
+      };
+      const clearReasoningDraft = async () => {
+        await reasoningDraftState.updateChain;
+        if (!reasoningDraftState.messageId) {
+          return;
+        }
+        const eventId = reasoningDraftState.messageId;
+        try {
+          await client.redactEvent(roomId, eventId);
+        } catch (err) {
+          logVerboseMessage(`matrix reasoning draft cleanup failed (${eventId}): ${String(err)}`);
+        }
+        reasoningDraftState.messageId = undefined;
+        reasoningDraftState.lastText = "";
+      };
+
       let didSendReply = false;
       const tableMode = core.channel.text.resolveMarkdownTableMode({
         cfg,
@@ -713,7 +772,10 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           ...prefixOptions,
           humanDelay: core.channel.reply.resolveHumanDelayConfig(cfg, route.agentId),
           typingCallbacks,
-          deliver: async (payload) => {
+          deliver: async (payload, info) => {
+            if (info.kind === "final") {
+              await clearReasoningDraft();
+            }
             await deliverMatrixReplies({
               replies: [payload],
               roomId,
@@ -736,11 +798,15 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         cfg,
         ctxPayload,
         dispatcher,
-        onSettled: () => {
+        onSettled: async () => {
+          await clearReasoningDraft();
           markDispatchIdle();
         },
         replyOptions: {
           ...replyOptions,
+          onReasoningStream: async (payload) => {
+            await enqueueReasoningDraftUpdate(payload.text);
+          },
           skillFilter: roomConfig?.skills,
           onModelSelected,
         },
