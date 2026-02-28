@@ -908,6 +908,7 @@
                   "channels/synology-chat",
                   "channels/line",
                   "channels/matrix",
+                  "channels/napcat",
                   "channels/nextcloud-talk",
                   "channels/nostr",
                   "channels/tlon",

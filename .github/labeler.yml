@@ -41,6 +41,11 @@
       - any-glob-to-any-file:
           - "extensions/matrix/**"
           - "docs/channels/matrix.md"
+"channel: napcat":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/napcat/**"
+          - "docs/channels/napcat.md"
 "channel: mattermost":
   - changed-files:
       - any-glob-to-any-file:
