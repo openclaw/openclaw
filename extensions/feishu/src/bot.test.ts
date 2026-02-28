@@ -827,7 +827,7 @@ describe("handleFeishuMessage command authorization", () => {
         }
       | undefined;
     await expect(call?.replyResolver?.()).resolves.toBeUndefined();
-    expect(mockWithReplyDispatcher).not.toHaveBeenCalled();
+    expect(mockWithReplyDispatcher).toHaveBeenCalledTimes(1);
   });
 
   it("plugin dispatch mode still forwards control commands by default", async () => {
@@ -866,7 +866,7 @@ describe("handleFeishuMessage command authorization", () => {
 
     expect(mockIsControlCommandMessage).not.toHaveBeenCalled();
     expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(1);
-    expect(mockWithReplyDispatcher).not.toHaveBeenCalled();
+    expect(mockWithReplyDispatcher).toHaveBeenCalledTimes(1);
   });
 
   it("plugin dispatch mode can skip forwarding control commands", async () => {
