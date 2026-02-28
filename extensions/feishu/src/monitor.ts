@@ -334,6 +334,7 @@ type MonitorAccountParams = {
   account: ResolvedFeishuAccount;
   runtime?: RuntimeEnv;
   abortSignal?: AbortSignal;
+  botOpenId?: string;
 };
 
 /**
@@ -345,7 +346,7 @@ async function monitorSingleAccount(params: MonitorAccountParams): Promise<void>
   const log = runtime?.log ?? console.log;
 
   // Fetch bot open_id
-  const botOpenId = await fetchBotOpenId(account);
+  const botOpenId = params.botOpenId ?? (await fetchBotOpenId(account));
   botOpenIds.set(accountId, botOpenId ?? "");
   log(`feishu[${accountId}]: bot open_id resolved: ${botOpenId ?? "unknown"}`);
 
@@ -546,17 +547,21 @@ export async function monitorFeishuProvider(opts: MonitorFeishuOpts = {}): Promi
     `feishu: starting ${accounts.length} account(s): ${accounts.map((a) => a.accountId).join(", ")}`,
   );
 
-  // Start all accounts in parallel
-  await Promise.all(
-    accounts.map((account) =>
+  const monitorPromises: Promise<void>[] = [];
+  for (const account of accounts) {
+    // Probe sequentially so large multi-account startups do not burst Feishu's bot-info endpoint.
+    const botOpenId = await fetchBotOpenId(account);
+    monitorPromises.push(
       monitorSingleAccount({
         cfg,
         account,
         runtime: opts.runtime,
         abortSignal: opts.abortSignal,
+        botOpenId,
       }),
-    ),
-  );
+    );
+  }
+  await Promise.all(monitorPromises);
 }
 
 /**
