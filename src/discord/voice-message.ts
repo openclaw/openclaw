@@ -15,8 +15,7 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
-import { RateLimitError } from "@buape/carbon";
-import type { RequestClient } from "@buape/carbon";
+import { RateLimitError, type RequestClient } from "@buape/carbon";
 import type { RetryRunner } from "../infra/retry-policy.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 
@@ -264,7 +263,7 @@ export async function sendDiscordVoiceMessage(
     });
     if (!res.ok) {
       if (res.status === 429) {
-        const retryData = await res.json().catch(() => ({})) as {
+        const retryData = (await res.json().catch(() => ({}))) as {
           message?: string;
           retry_after?: number;
           global?: boolean;
@@ -275,13 +274,11 @@ export async function sendDiscordVoiceMessage(
           global: retryData.global ?? false,
         });
       }
-      const errorBody = await res.json().catch(() => null) as {
+      const errorBody = (await res.json().catch(() => null)) as {
         code?: number;
         message?: string;
       } | null;
-      const err = new Error(
-        `Upload URL request failed: ${res.status} ${errorBody?.message ?? ""}`,
-      );
+      const err = new Error(`Upload URL request failed: ${res.status} ${errorBody?.message ?? ""}`);
       if (errorBody?.code !== undefined) {
         (err as Error & { code: number }).code = errorBody.code;
       }
