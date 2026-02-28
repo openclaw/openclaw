@@ -73,7 +73,7 @@ function extractPermissionError(err: unknown): PermissionError | null {
 }
 
 // --- Sender name resolution (so the agent can distinguish who is speaking in group chats) ---
-// Cache display names by open_id to avoid an API call on every message.
+// Cache display names by sender id (open_id/user_id) to avoid an API call on every message.
 const SENDER_NAME_TTL_MS = 10 * 60 * 1000;
 const senderNameCache = new Map<string, { name: string; expireAt: number }>();
 
@@ -87,26 +87,40 @@ type SenderNameResult = {
   permissionError?: PermissionError;
 };
 
+function resolveSenderLookupIdType(senderId: string): "open_id" | "user_id" | "union_id" {
+  const trimmed = senderId.trim();
+  if (trimmed.startsWith("ou_")) {
+    return "open_id";
+  }
+  if (trimmed.startsWith("on_")) {
+    return "union_id";
+  }
+  return "user_id";
+}
+
 async function resolveFeishuSenderName(params: {
   account: ResolvedFeishuAccount;
-  senderOpenId: string;
+  senderId: string;
   log: (...args: any[]) => void;
 }): Promise<SenderNameResult> {
-  const { account, senderOpenId, log } = params;
+  const { account, senderId, log } = params;
   if (!account.configured) return {};
-  if (!senderOpenId) return {};
 
-  const cached = senderNameCache.get(senderOpenId);
+  const normalizedSenderId = senderId.trim();
+  if (!normalizedSenderId) return {};
+
+  const cached = senderNameCache.get(normalizedSenderId);
   const now = Date.now();
   if (cached && cached.expireAt > now) return { name: cached.name };
 
   try {
     const client = createFeishuClient(account);
+    const userIdType = resolveSenderLookupIdType(normalizedSenderId);
 
-    // contact/v3/users/:user_id?user_id_type=open_id
+    // contact/v3/users/:user_id?user_id_type=<open_id|user_id|union_id>
     const res: any = await client.contact.user.get({
-      path: { user_id: senderOpenId },
-      params: { user_id_type: "open_id" },
+      path: { user_id: normalizedSenderId },
+      params: { user_id_type: userIdType },
     });
 
     const name: string | undefined =
@@ -116,7 +130,7 @@ async function resolveFeishuSenderName(params: {
       res?.data?.user?.en_name;
 
     if (name && typeof name === "string") {
-      senderNameCache.set(senderOpenId, { name, expireAt: now + SENDER_NAME_TTL_MS });
+      senderNameCache.set(normalizedSenderId, { name, expireAt: now + SENDER_NAME_TTL_MS });
       return { name };
     }
 
@@ -130,7 +144,7 @@ async function resolveFeishuSenderName(params: {
     }
 
     // Best-effort. Don't fail message handling if name lookup fails.
-    log(`feishu: failed to resolve sender name for ${senderOpenId}: ${String(err)}`);
+    log(`feishu: failed to resolve sender name for ${normalizedSenderId}: ${String(err)}`);
     return {};
   }
 }
@@ -629,12 +643,17 @@ export function parseFeishuMessageEvent(
   const rawContent = parseMessageContent(event.message.content, event.message.message_type);
   const mentionedBot = checkBotMentioned(event, botOpenId);
   const content = stripBotMention(rawContent, event.message.mentions);
+  const senderOpenId = event.sender.sender_id.open_id?.trim();
+  const senderUserId = event.sender.sender_id.user_id?.trim();
+  const senderFallbackId = senderOpenId || senderUserId || "";
 
   const ctx: FeishuMessageContext = {
     chatId: event.message.chat_id,
     messageId: event.message.message_id,
-    senderId: event.sender.sender_id.user_id || event.sender.sender_id.open_id || "",
-    senderOpenId: event.sender.sender_id.open_id || "",
+    senderId: senderUserId || senderOpenId || "",
+    // Keep the historical field name, but fall back to user_id when open_id is unavailable
+    // (common in some mobile app deliveries).
+    senderOpenId: senderFallbackId,
     chatType: event.message.chat_type,
     mentionedBot,
     rootId: event.message.root_id || undefined,
@@ -754,7 +773,7 @@ export async function handleFeishuMessage(params: {
   // Resolve sender display name (best-effort) so the agent can attribute messages correctly.
   const senderResult = await resolveFeishuSenderName({
     account,
-    senderOpenId: ctx.senderOpenId,
+    senderId: ctx.senderOpenId,
     log,
   });
   if (senderResult.name) ctx = { ...ctx, senderName: senderResult.name };

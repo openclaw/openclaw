@@ -59,6 +59,15 @@ describe("parseFeishuMessageEvent – mentionedBot", () => {
     expect(ctx.mentionedBot).toBe(false);
   });
 
+  it("falls back to sender user_id when open_id is missing", () => {
+    const event = makeEvent("p2p", []);
+    (event as any).sender.sender_id = { user_id: "u_mobile_only" };
+
+    const ctx = parseFeishuMessageEvent(event as any, BOT_OPEN_ID);
+    expect(ctx.senderOpenId).toBe("u_mobile_only");
+    expect(ctx.senderId).toBe("u_mobile_only");
+  });
+
   it("returns mentionedBot=true when bot is mentioned", () => {
     const event = makeEvent("group", [
       { key: "@_user_1", name: "Bot", id: { open_id: BOT_OPEN_ID } },
