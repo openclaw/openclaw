@@ -376,6 +376,9 @@ upsert_env "$ENV_FILE" \
   OPENCLAW_EXTRA_MOUNTS \
   OPENCLAW_HOME_VOLUME \
   OPENCLAW_DOCKER_APT_PACKAGES \
+  OPENCLAW_SANDBOX \
+  DOCKER_GID \
+  OPENCLAW_INSTALL_DOCKER_CLI \
   OPENCLAW_ALLOW_INSECURE_PRIVATE_WS
 
 if [[ "$IMAGE_NAME" == "openclaw:local" ]]; then
@@ -455,17 +458,35 @@ if [[ -n "$SANDBOX_ENABLED" ]]; then
       -t "openclaw-sandbox:bookworm-slim" \
       -f "$ROOT_DIR/Dockerfile.sandbox" \
       "$ROOT_DIR"
+  else
+    echo "WARNING: Dockerfile.sandbox not found in $ROOT_DIR" >&2
+    echo "  Sandbox config will be applied but no sandbox image will be built." >&2
+    echo "  Agent exec may fail if the configured sandbox image does not exist." >&2
   fi
 
   # Enable sandbox in OpenClaw config.
-  docker compose "${COMPOSE_ARGS[@]}" run --rm openclaw-cli \
-    config set agents.defaults.sandbox.mode "non-main" >/dev/null 2>&1 || true
-  docker compose "${COMPOSE_ARGS[@]}" run --rm openclaw-cli \
-    config set agents.defaults.sandbox.scope "agent" >/dev/null 2>&1 || true
-  docker compose "${COMPOSE_ARGS[@]}" run --rm openclaw-cli \
-    config set agents.defaults.sandbox.workspaceAccess "none" >/dev/null 2>&1 || true
+  local sandbox_config_ok=true
+  if ! docker compose "${COMPOSE_ARGS[@]}" run --rm openclaw-cli \
+    config set agents.defaults.sandbox.mode "non-main" >/dev/null; then
+    echo "WARNING: Failed to set agents.defaults.sandbox.mode" >&2
+    sandbox_config_ok=false
+  fi
+  if ! docker compose "${COMPOSE_ARGS[@]}" run --rm openclaw-cli \
+    config set agents.defaults.sandbox.scope "agent" >/dev/null; then
+    echo "WARNING: Failed to set agents.defaults.sandbox.scope" >&2
+    sandbox_config_ok=false
+  fi
+  if ! docker compose "${COMPOSE_ARGS[@]}" run --rm openclaw-cli \
+    config set agents.defaults.sandbox.workspaceAccess "none" >/dev/null; then
+    echo "WARNING: Failed to set agents.defaults.sandbox.workspaceAccess" >&2
+    sandbox_config_ok=false
+  fi
 
-  echo "Sandbox enabled: mode=non-main, scope=agent, workspaceAccess=none"
+  if [[ "$sandbox_config_ok" == true ]]; then
+    echo "Sandbox enabled: mode=non-main, scope=agent, workspaceAccess=none"
+  else
+    echo "WARNING: Sandbox config was partially applied. Check errors above." >&2
+  fi
   echo "Docs: https://docs.openclaw.ai/security/sandbox"
 
   # Restart gateway to pick up sandbox config.
