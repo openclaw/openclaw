@@ -48,11 +48,38 @@ function waitForLine(
 }
 
 describe("runCommandWithTimeout", () => {
-  it("never enables shell execution (Windows cmd.exe injection hardening)", () => {
+  it("enables shell for Windows batch launchers", () => {
     expect(
       shouldSpawnWithShell({
         resolvedCommand: "npm.cmd",
         platform: "win32",
+      }),
+    ).toBe(true);
+    expect(
+      shouldSpawnWithShell({
+        resolvedCommand: "pnpm.BAT",
+        platform: "win32",
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps shell disabled for non-batch commands", () => {
+    expect(
+      shouldSpawnWithShell({
+        resolvedCommand: "node.exe",
+        platform: "win32",
+      }),
+    ).toBe(false);
+    expect(
+      shouldSpawnWithShell({
+        resolvedCommand: "pnpm",
+        platform: "win32",
+      }),
+    ).toBe(false);
+    expect(
+      shouldSpawnWithShell({
+        resolvedCommand: "npm.cmd",
+        platform: "linux",
       }),
     ).toBe(false);
   });
