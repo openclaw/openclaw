@@ -42,6 +42,19 @@ interface MediaRef {
   contentType?: string;
 }
 
+const LINE_DOWNLOADABLE_MESSAGE_TYPES: ReadonlySet<string> = new Set([
+  "image",
+  "video",
+  "audio",
+  "file",
+]);
+
+function isDownloadableLineMessageType(
+  messageType: MessageEvent["message"]["type"],
+): messageType is "image" | "video" | "audio" | "file" {
+  return LINE_DOWNLOADABLE_MESSAGE_TYPES.has(messageType);
+}
+
 export interface LineHandlerContext {
   cfg: OpenClawConfig;
   account: ResolvedLineAccount;
@@ -232,12 +245,7 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
   // Download media if applicable
   const allMedia: MediaRef[] = [];
 
-  if (
-    message.type === "image" ||
-    message.type === "video" ||
-    message.type === "audio" ||
-    message.type === "file"
-  ) {
+  if (isDownloadableLineMessageType(message.type)) {
     try {
       const media = await downloadLineMedia(message.id, account.channelAccessToken, mediaMaxBytes);
       allMedia.push({
