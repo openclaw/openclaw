@@ -82,6 +82,7 @@ export const SUBAGENT_SPAWN_ACCEPTED_NOTE =
   "Auto-announce is push-based. After spawning children, do NOT call sessions_list, sessions_history, exec sleep, or any polling tool. Wait for completion events to arrive as user messages, track expected child session keys, and only send your final answer after ALL expected completions arrive. If a child completion event arrives AFTER your final answer, reply ONLY with NO_REPLY.";
 export const SUBAGENT_SPAWN_SESSION_ACCEPTED_NOTE =
   "thread-bound session stays active after this task; continue in-thread for follow-ups.";
+const SUBAGENT_SPAWN_GATEWAY_TIMEOUT_MS = 30_000;
 
 export type SpawnSubagentResult = {
   status: "accepted" | "forbidden" | "error";
@@ -281,6 +282,7 @@ export async function spawnSubagentDirect(
   });
   const hookRunner = getGlobalHookRunner();
   const cfg = loadConfig();
+  const gatewayTimeoutMs = SUBAGENT_SPAWN_GATEWAY_TIMEOUT_MS;
 
   // When agent omits runTimeoutSeconds, use the config default.
   // Falls back to 0 (no timeout) if config key is also unset,
@@ -406,11 +408,11 @@ export async function spawnSubagentDirect(
       await callGateway({
         method: "sessions.patch",
         params: { key: childSessionKey, ...patch },
-        timeoutMs: 10_000,
+        timeoutMs: gatewayTimeoutMs,
       });
       return undefined;
     } catch (err) {
-      return err instanceof Error ? err.message : typeof err === "string" ? err : "error";
+      return summarizeError(err);
     }
   };
 
@@ -466,7 +468,7 @@ export async function spawnSubagentDirect(
         await callGateway({
           method: "sessions.delete",
           params: { key: childSessionKey, emitLifecycleHooks: false },
-          timeoutMs: 10_000,
+          timeoutMs: gatewayTimeoutMs,
         });
       } catch {
         // Best-effort cleanup only.
@@ -574,7 +576,7 @@ export async function spawnSubagentDirect(
         label: label || undefined,
         ...spawnedMetadata,
       },
-      timeoutMs: 10_000,
+      timeoutMs: gatewayTimeoutMs,
     });
     if (typeof response?.runId === "string" && response.runId) {
       childRunId = response.runId;
@@ -624,7 +626,7 @@ export async function spawnSubagentDirect(
             deleteTranscript: true,
             emitLifecycleHooks: !endedHookEmitted,
           },
-          timeoutMs: 10_000,
+          timeoutMs: gatewayTimeoutMs,
         });
       } catch {
         // Best-effort only.
