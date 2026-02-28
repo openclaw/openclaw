@@ -215,6 +215,13 @@ export function registerCronAddCommand(cron: Command) {
           if (sessionTarget === "isolated" && payload.kind !== "agentTurn") {
             throw new Error("Isolated jobs require --message (agentTurn).");
           }
+          // Validate that sessionTarget "main" is only used with the main agent
+          if (sessionTarget === "main" && agentId && agentId.trim() !== "main") {
+            throw new Error(
+              'sessionTarget "main" is only valid for the main agent. ' +
+                'Use sessionTarget "isolated" with --message (agentTurn) for other agents.',
+            );
+          }
           if (
             (opts.announce || typeof opts.deliver === "boolean") &&
             (sessionTarget !== "isolated" || payload.kind !== "agentTurn")
