@@ -191,7 +191,8 @@ export const dispatchTelegramMessage = async ({
     !accountBlockStreamingEnabled &&
     !forceBlockStreamingForReasoning &&
     !telegramOutboundSuppressed;
-  const canStreamReasoningDraft = canStreamAnswerDraft || streamReasoningDraft;
+  const canStreamReasoningDraft =
+    !telegramOutboundSuppressed && (canStreamAnswerDraft || streamReasoningDraft);
   const draftReplyToMessageId =
     replyToMode !== "off" && typeof msg.message_id === "number" ? msg.message_id : undefined;
   const draftMinInitialChars = DRAFT_MIN_INITIAL_CHARS;

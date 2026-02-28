@@ -378,7 +378,13 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
   const reactionAllowlist = normalizeAllowList(accountInfo.config.reactionAllowlist);
   const mediaMaxBytes = (opts.mediaMaxMb ?? accountInfo.config.mediaMaxMb ?? 8) * 1024 * 1024;
   const ignoreAttachments = opts.ignoreAttachments ?? accountInfo.config.ignoreAttachments ?? false;
-  const sendReadReceipts = Boolean(opts.sendReadReceipts ?? accountInfo.config.sendReadReceipts);
+  const outboundSuppressed = isOutboundSuppressed({
+    cfg,
+    channel: "signal",
+    accountId: accountInfo.accountId,
+  });
+  const sendReadReceipts =
+    !outboundSuppressed && Boolean(opts.sendReadReceipts ?? accountInfo.config.sendReadReceipts);
 
   const autoStart = opts.autoStart ?? accountInfo.config.autoStart ?? !accountInfo.config.httpUrl;
   const startupTimeoutMs = Math.min(

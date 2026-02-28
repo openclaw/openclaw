@@ -32,6 +32,7 @@ import { resolveMarkdownTableMode } from "../../config/markdown-tables.js";
 import { readSessionUpdatedAt, resolveStorePath } from "../../config/sessions.js";
 import type { DiscordAccountConfig } from "../../config/types.discord.js";
 import { logVerbose } from "../../globals.js";
+import { isOutboundSuppressed } from "../../infra/outbound/suppress-outbound.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { logDebug, logError } from "../../logger.js";
 import { buildPairingReply } from "../../pairing/pairing-messages.js";
@@ -1009,13 +1010,15 @@ async function dispatchDiscordComponentEvent(params: {
         });
         replyReference.markSent();
       },
-      onReplyStart: async () => {
-        try {
-          await sendTyping({ client: interaction.client, channelId: typingChannelId });
-        } catch (err) {
-          logVerbose(`discord: typing failed for component reply: ${String(err)}`);
-        }
-      },
+      onReplyStart: isOutboundSuppressed({ cfg: ctx.cfg, channel: "discord", accountId })
+        ? undefined
+        : async () => {
+            try {
+              await sendTyping({ client: interaction.client, channelId: typingChannelId });
+            } catch (err) {
+              logVerbose(`discord: typing failed for component reply: ${String(err)}`);
+            }
+          },
       onError: (err) => {
         logError(`discord component dispatch failed: ${String(err)}`);
       },
