@@ -37,7 +37,7 @@ describe("buildInboundMetaSystemPrompt", () => {
     expect(payload["channel"]).toBe("telegram");
   });
 
-  it("does not include per-turn message identifiers (cache stability)", () => {
+  it("includes trusted message_id for reaction targeting", () => {
     const prompt = buildInboundMetaSystemPrompt({
       MessageSid: "123",
       MessageSidFull: "123",
@@ -51,7 +51,7 @@ describe("buildInboundMetaSystemPrompt", () => {
     } as TemplateContext);
 
     const payload = parseInboundMetaPayload(prompt);
-    expect(payload["message_id"]).toBeUndefined();
+    expect(payload["message_id"]).toBe("123");
     expect(payload["message_id_full"]).toBeUndefined();
     expect(payload["reply_to_id"]).toBeUndefined();
     expect(payload["sender_id"]).toBeUndefined();
@@ -101,14 +101,16 @@ describe("buildInboundUserContextPrefix", () => {
     expect(text).toBe("");
   });
 
-  it("hides message identifiers for direct chats", () => {
+  it("includes message_id for direct chats", () => {
     const text = buildInboundUserContextPrefix({
       ChatType: "direct",
       MessageSid: "short-id",
       MessageSidFull: "provider-full-id",
     } as TemplateContext);
 
-    expect(text).toBe("");
+    const conversationInfo = parseConversationInfoPayload(text);
+    expect(conversationInfo["message_id"]).toBe("short-id");
+    expect(conversationInfo["message_id_full"]).toBeUndefined();
   });
 
   it("does not treat group chats as direct based on sender id", () => {
