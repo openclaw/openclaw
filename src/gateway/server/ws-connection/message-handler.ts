@@ -497,6 +497,7 @@ export function attachGatewayWsMessageHandler(params: {
 
         const isControlUi = connectParams.client.id === GATEWAY_CLIENT_IDS.CONTROL_UI;
         const isWebchat = isWebchatConnect(connectParams);
+        let originTokenOnlyAuth = false;
         if (enforceOriginCheckForAnyClient || isControlUi || isWebchat) {
           const hostHeaderOriginFallbackEnabled =
             configSnapshot.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true;
@@ -519,10 +520,14 @@ export function attachGatewayWsMessageHandler(params: {
             close(1008, truncateCloseReason(errorMessage));
             return;
           }
-          if (originCheck.matchedBy === "host-header-fallback") {
+          if (originCheck.matched?.tokenOnlyAuth) {
+            originTokenOnlyAuth = true;
+          }
+          // Warn when origin was accepted via fallback (not explicit allowlist match)
+          if (!originCheck.matched) {
             originCheckMetrics.hostHeaderFallbackAccepted += 1;
             logWsControl.warn(
-              `security warning: websocket origin accepted via Host-header fallback conn=${connId} count=${originCheckMetrics.hostHeaderFallbackAccepted} host=${requestHost ?? "n/a"} origin=${requestOrigin ?? "n/a"}`,
+              `security warning: websocket origin accepted via fallback conn=${connId} count=${originCheckMetrics.hostHeaderFallbackAccepted} host=${requestHost ?? "n/a"} origin=${requestOrigin ?? "n/a"}`,
             );
             if (hostHeaderOriginFallbackEnabled) {
               logGateway.warn(
@@ -542,6 +547,7 @@ export function attachGatewayWsMessageHandler(params: {
           isControlUi,
           controlUiConfig: configSnapshot.gateway?.controlUi,
           deviceRaw,
+          originTokenOnlyAuth,
         });
         const device = controlUiAuthPolicy.device;
 

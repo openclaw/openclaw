@@ -379,13 +379,13 @@ export const FIELD_HELP: Record<string, string> = {
   "gateway.controlUi.root":
     "Optional filesystem root for Control UI assets (defaults to dist/control-ui).",
   "gateway.controlUi.allowedOrigins":
-    "Allowed browser origins for Control UI/WebChat websocket connections (full origins only, e.g. https://control.example.com). Required for non-loopback Control UI deployments unless dangerous Host-header fallback is explicitly enabled.",
+    'Allowed browser origins for Control UI/WebChat websocket connections. Each entry is either a plain origin string (e.g. "https://control.example.com") or an object with per-origin options: { origin: "https://dash.example.com", tokenOnlyAuth: true }. When tokenOnlyAuth is true, device identity checks are skipped for that origin (token/password auth only). Required for non-loopback Control UI deployments unless dangerous Host-header fallback is explicitly enabled.',
   "gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback":
     "DANGEROUS toggle that enables Host-header based origin fallback for Control UI/WebChat websocket checks. This mode is supported when your deployment intentionally relies on Host-header origin policy; explicit gateway.controlUi.allowedOrigins remains the recommended hardened default.",
   "gateway.controlUi.allowInsecureAuth":
     "Loosens strict browser auth checks for Control UI when you must run a non-standard setup. Keep this off unless you trust your network and proxy path, because impersonation risk is higher.",
   "gateway.controlUi.dangerouslyDisableDeviceAuth":
-    "Disables Control UI device identity checks and relies on token/password only. Use only for short-lived debugging on trusted networks, then turn it off immediately.",
+    "DEPRECATED: Use per-origin tokenOnlyAuth in allowedOrigins instead. Globally disables Control UI device identity checks for all origins. Prefer per-origin tokenOnlyAuth for fine-grained control.",
   "gateway.http.endpoints.chatCompletions.enabled":
     "Enable the OpenAI-compatible `POST /v1/chat/completions` endpoint (default: false).",
   "gateway.http.endpoints.chatCompletions.maxBodyBytes":

@@ -116,7 +116,7 @@ export async function resolveGatewayRuntimeConfig(params: {
 
   const trustedProxies = params.cfg.gateway?.trustedProxies ?? [];
   const controlUiAllowedOrigins = (params.cfg.gateway?.controlUi?.allowedOrigins ?? [])
-    .map((value) => value.trim())
+    .map((value) => (typeof value === "string" ? value.trim() : (value.origin?.trim() ?? "")))
     .filter(Boolean);
   const dangerouslyAllowHostHeaderOriginFallback =
     params.cfg.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true;

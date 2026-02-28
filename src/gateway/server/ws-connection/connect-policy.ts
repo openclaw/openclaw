@@ -5,6 +5,8 @@ import { roleCanSkipDeviceIdentity } from "../../role-policy.js";
 export type ControlUiAuthPolicy = {
   allowInsecureAuthConfigured: boolean;
   dangerouslyDisableDeviceAuth: boolean;
+  /** Per-origin tokenOnlyAuth flag from the matched allowedOrigins entry. */
+  originTokenOnlyAuth: boolean;
   allowBypass: boolean;
   device: ConnectParams["device"] | null | undefined;
 };
@@ -18,17 +20,26 @@ export function resolveControlUiAuthPolicy(params: {
       }
     | undefined;
   deviceRaw: ConnectParams["device"] | null | undefined;
+  /** Whether the matched origin entry has tokenOnlyAuth enabled. */
+  originTokenOnlyAuth?: boolean;
 }): ControlUiAuthPolicy {
   const allowInsecureAuthConfigured =
     params.isControlUi && params.controlUiConfig?.allowInsecureAuth === true;
   const dangerouslyDisableDeviceAuth =
     params.isControlUi && params.controlUiConfig?.dangerouslyDisableDeviceAuth === true;
+  const originTokenOnlyAuth = params.isControlUi && params.originTokenOnlyAuth === true;
+
+  // Device auth is bypassed if EITHER the global dangerous flag is set
+  // OR the matched origin has tokenOnlyAuth enabled.
+  const allowBypass = dangerouslyDisableDeviceAuth || originTokenOnlyAuth;
+
   return {
     allowInsecureAuthConfigured,
     dangerouslyDisableDeviceAuth,
+    originTokenOnlyAuth,
     // `allowInsecureAuth` must not bypass secure-context/device-auth requirements.
-    allowBypass: dangerouslyDisableDeviceAuth,
-    device: dangerouslyDisableDeviceAuth ? null : params.deviceRaw,
+    allowBypass,
+    device: allowBypass ? null : params.deviceRaw,
   };
 }
 

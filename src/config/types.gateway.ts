@@ -96,6 +96,24 @@ export type TalkConfigResponse = TalkConfig & {
   resolved?: ResolvedTalkConfig;
 };
 
+/**
+ * An allowed origin entry can be a plain string (e.g. "https://example.com")
+ * or an object with per-origin options.
+ */
+export type AllowedOriginEntry =
+  | string
+  | {
+      /** The full origin URL (e.g. "https://dash.example.com"). */
+      origin: string;
+      /**
+       * When true, connections from this origin are authenticated by gateway
+       * token/password only — device identity (Web Crypto) is not required.
+       * Use for trusted origins that cannot provide device identity
+       * (e.g. non-HTTPS reverse-proxied dashboards on a private LAN).
+       */
+      tokenOnlyAuth?: boolean;
+    };
+
 export type GatewayControlUiConfig = {
   /** If false, the Gateway will not serve the Control UI (default /). */
   enabled?: boolean;
@@ -103,8 +121,11 @@ export type GatewayControlUiConfig = {
   basePath?: string;
   /** Optional filesystem root for Control UI assets (defaults to dist/control-ui). */
   root?: string;
-  /** Allowed browser origins for Control UI/WebChat websocket connections. */
-  allowedOrigins?: string[];
+  /**
+   * Allowed browser origins for Control UI/WebChat websocket connections.
+   * Each entry is either a plain origin string or an object with per-origin options.
+   */
+  allowedOrigins?: AllowedOriginEntry[];
   /**
    * DANGEROUS: Keep Host-header origin fallback behavior.
    * Supported long-term for deployments that intentionally rely on this policy.
@@ -116,7 +137,10 @@ export type GatewayControlUiConfig = {
    * dangerouslyDisableDeviceAuth is enabled.
    */
   allowInsecureAuth?: boolean;
-  /** DANGEROUS: Disable device identity checks for the Control UI (default: false). */
+  /**
+   * @deprecated Use per-origin `tokenOnlyAuth` in `allowedOrigins` instead.
+   * DANGEROUS: Disable device identity checks for the Control UI (default: false).
+   */
   dangerouslyDisableDeviceAuth?: boolean;
 };
 

@@ -347,7 +347,7 @@ function collectGatewayConfigFindings(
   const auth = resolveGatewayAuth({ authConfig: cfg.gateway?.auth, tailscaleMode, env });
   const controlUiEnabled = cfg.gateway?.controlUi?.enabled !== false;
   const controlUiAllowedOrigins = (cfg.gateway?.controlUi?.allowedOrigins ?? [])
-    .map((value) => value.trim())
+    .map((value) => (typeof value === "string" ? value.trim() : (value.origin?.trim() ?? "")))
     .filter(Boolean);
   const dangerouslyAllowHostHeaderOriginFallback =
     cfg.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true;
@@ -569,10 +569,32 @@ function collectGatewayConfigFindings(
     findings.push({
       checkId: "gateway.control_ui.device_auth_disabled",
       severity: "critical",
-      title: "DANGEROUS: Control UI device auth disabled",
+      title: "DANGEROUS: Control UI device auth disabled (deprecated)",
       detail:
-        "gateway.controlUi.dangerouslyDisableDeviceAuth=true disables device identity checks for the Control UI.",
-      remediation: "Disable it unless you are in a short-lived break-glass scenario.",
+        "gateway.controlUi.dangerouslyDisableDeviceAuth=true disables device identity checks for ALL Control UI origins. " +
+        "This flag is deprecated — use per-origin tokenOnlyAuth in allowedOrigins instead.",
+      remediation:
+        'Remove dangerouslyDisableDeviceAuth and add tokenOnlyAuth per-origin: { origin: "https://example.com", tokenOnlyAuth: true }.',
+    });
+  }
+
+  // Check for per-origin tokenOnlyAuth entries.
+  const tokenOnlyAuthOrigins = (cfg.gateway?.controlUi?.allowedOrigins ?? [])
+    .filter(
+      (entry): entry is { origin: string; tokenOnlyAuth?: boolean } =>
+        typeof entry === "object" && entry.tokenOnlyAuth === true,
+    )
+    .map((entry) => entry.origin);
+  if (tokenOnlyAuthOrigins.length > 0) {
+    findings.push({
+      checkId: "gateway.control_ui.per_origin_token_only_auth",
+      severity: "warn",
+      title: "Control UI per-origin token-only auth enabled",
+      detail:
+        `${tokenOnlyAuthOrigins.length} origin(s) have tokenOnlyAuth enabled: ${tokenOnlyAuthOrigins.join(", ")}. ` +
+        "These origins skip device identity checks and rely on token/password auth only.",
+      remediation:
+        "Only use tokenOnlyAuth for trusted origins on private networks where device identity is unavailable.",
     });
   }
 

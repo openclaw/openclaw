@@ -37,6 +37,60 @@ describe("ws connect policy", () => {
     expect(regular.device?.id).toBe("dev-2");
   });
 
+  test("per-origin tokenOnlyAuth bypasses device auth", () => {
+    const policy = resolveControlUiAuthPolicy({
+      isControlUi: true,
+      controlUiConfig: {},
+      deviceRaw: {
+        id: "dev-1",
+        publicKey: "pk",
+        signature: "sig",
+        signedAt: Date.now(),
+        nonce: "nonce-1",
+      },
+      originTokenOnlyAuth: true,
+    });
+    expect(policy.allowBypass).toBe(true);
+    expect(policy.originTokenOnlyAuth).toBe(true);
+    expect(policy.dangerouslyDisableDeviceAuth).toBe(false);
+    expect(policy.device).toBeNull();
+  });
+
+  test("per-origin tokenOnlyAuth has no effect when isControlUi=false", () => {
+    const policy = resolveControlUiAuthPolicy({
+      isControlUi: false,
+      controlUiConfig: {},
+      deviceRaw: {
+        id: "dev-1",
+        publicKey: "pk",
+        signature: "sig",
+        signedAt: Date.now(),
+        nonce: "nonce-1",
+      },
+      originTokenOnlyAuth: true,
+    });
+    expect(policy.allowBypass).toBe(false);
+    expect(policy.originTokenOnlyAuth).toBe(false);
+    expect(policy.device?.id).toBe("dev-1");
+  });
+
+  test("per-origin tokenOnlyAuth=false does not bypass", () => {
+    const policy = resolveControlUiAuthPolicy({
+      isControlUi: true,
+      controlUiConfig: {},
+      deviceRaw: {
+        id: "dev-1",
+        publicKey: "pk",
+        signature: "sig",
+        signedAt: Date.now(),
+        nonce: "nonce-1",
+      },
+      originTokenOnlyAuth: false,
+    });
+    expect(policy.allowBypass).toBe(false);
+    expect(policy.device?.id).toBe("dev-1");
+  });
+
   test("evaluates missing-device decisions", () => {
     const policy = resolveControlUiAuthPolicy({
       isControlUi: false,
@@ -171,6 +225,30 @@ describe("ws connect policy", () => {
     ).toBe("allow");
   });
 
+  test("per-origin tokenOnlyAuth allows missing device identity for control-ui", () => {
+    const tokenOnlyPolicy = resolveControlUiAuthPolicy({
+      isControlUi: true,
+      controlUiConfig: {},
+      deviceRaw: null,
+      originTokenOnlyAuth: true,
+    });
+
+    // tokenOnlyAuth origin with valid shared auth should allow missing device identity.
+    expect(
+      evaluateMissingDeviceIdentity({
+        hasDeviceIdentity: false,
+        role: "operator",
+        isControlUi: true,
+        controlUiAuthPolicy: tokenOnlyPolicy,
+        trustedProxyAuthOk: false,
+        sharedAuthOk: true,
+        authOk: true,
+        hasSharedAuth: true,
+        isLocalClient: false,
+      }).kind,
+    ).toBe("allow");
+  });
+
   test("pairing bypass requires control-ui bypass + shared auth (or trusted-proxy auth)", () => {
     const bypass = resolveControlUiAuthPolicy({
       isControlUi: true,
@@ -186,6 +264,17 @@ describe("ws connect policy", () => {
     expect(shouldSkipControlUiPairing(bypass, false, false)).toBe(false);
     expect(shouldSkipControlUiPairing(strict, true, false)).toBe(false);
     expect(shouldSkipControlUiPairing(strict, false, true)).toBe(true);
+  });
+
+  test("pairing bypass works with per-origin tokenOnlyAuth", () => {
+    const tokenOnlyPolicy = resolveControlUiAuthPolicy({
+      isControlUi: true,
+      controlUiConfig: {},
+      deviceRaw: null,
+      originTokenOnlyAuth: true,
+    });
+    expect(shouldSkipControlUiPairing(tokenOnlyPolicy, true, false)).toBe(true);
+    expect(shouldSkipControlUiPairing(tokenOnlyPolicy, false, false)).toBe(false);
   });
 
   test("trusted-proxy control-ui bypass only applies to operator + trusted-proxy auth", () => {
