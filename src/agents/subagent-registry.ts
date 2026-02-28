@@ -7,6 +7,7 @@ import {
 } from "../config/sessions.js";
 import { callGateway } from "../gateway/call.js";
 import { onAgentEvent } from "../infra/agent-events.js";
+import { logWarn } from "../logger.js";
 import { defaultRuntime } from "../runtime.js";
 import { type DeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { resetAnnounceQueuesForTests } from "./subagent-announce-queue.js";
@@ -1129,8 +1130,11 @@ export function markSubagentRunTerminated(params: {
         error: reason,
         inFlightRunIds: endedHookInFlightRunIds,
         persist: persistSubagentRuns,
-      }).catch(() => {
+      }).catch((err) => {
         // Hook failures should not break termination flow.
+        logWarn(
+          `subagents: ended hook failed (runId=${entry.runId} childSessionKey=${entry.childSessionKey}): ${String(err)}`,
+        );
       });
     }
   }
