@@ -217,8 +217,7 @@ private object SystemMotionDataSource : MotionDataSource {
     return when {
       averageDelta <= 0.55 -> "stationary"
       averageDelta <= 1.80 -> "walking"
-      averageDelta > 1.80 -> "running"
-      else -> "unknown"
+      else -> "running"
     }
   }
 
