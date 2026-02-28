@@ -41,7 +41,9 @@ import {
   validateAgentsDeleteParams,
   validateAgentsFilesGetParams,
   validateAgentsFilesListParams,
+  validateAgentsFilesReadParams,
   validateAgentsFilesSetParams,
+  validateAgentsFilesTreeParams,
   validateAgentsListParams,
   validateAgentsUpdateParams,
 } from "../protocol/index.js";
@@ -64,6 +66,9 @@ const BOOTSTRAP_FILE_NAMES_POST_ONBOARDING = BOOTSTRAP_FILE_NAMES.filter(
 const MEMORY_FILE_NAMES = [DEFAULT_MEMORY_FILENAME, DEFAULT_MEMORY_ALT_FILENAME] as const;
 
 const ALLOWED_FILE_NAMES = new Set<string>([...BOOTSTRAP_FILE_NAMES, ...MEMORY_FILE_NAMES]);
+const DEFAULT_READ_LIMIT = 16_000;
+const MAX_TREE_ENTRIES = 6_000;
+const MARKDOWN_EXTENSIONS = new Set([".md", ".markdown"]);
 
 function resolveAgentWorkspaceFileOrRespondError(
   params: Record<string, unknown>,
@@ -99,6 +104,16 @@ function resolveAgentWorkspaceFileOrRespondError(
 type FileMeta = {
   size: number;
   updatedAtMs: number;
+};
+
+type TreeEntry = {
+  path: string;
+  name: string;
+  type: "file" | "dir";
+  depth: number;
+  markdown?: boolean;
+  size?: number;
+  updatedAtMs?: number;
 };
 
 type ResolvedAgentWorkspaceFilePath =
@@ -228,6 +243,127 @@ async function statFileSafely(filePath: string): Promise<FileMeta | null> {
   } catch {
     return null;
   }
+}
+
+function isMarkdownFile(fileName: string) {
+  return MARKDOWN_EXTENSIONS.has(path.extname(fileName).toLowerCase());
+}
+
+function toPosixRelative(workspaceDir: string, targetPath: string): string {
+  return path.relative(workspaceDir, targetPath).split(path.sep).join("/");
+}
+
+async function resolveWorkspaceReadPath(
+  workspaceDir: string,
+  relativePathRaw: string,
+): Promise<{ workspaceReal: string; ioPath: string } | null> {
+  const relativePath = relativePathRaw.trim().replaceAll("\\", "/");
+  if (!relativePath || relativePath.startsWith("/")) {
+    return null;
+  }
+  const workspaceReal = await resolveWorkspaceRealPath(workspaceDir);
+  const ioPath = path.resolve(workspaceReal, relativePath);
+  try {
+    await assertNoPathAliasEscape({
+      absolutePath: ioPath,
+      rootPath: workspaceReal,
+      boundaryLabel: "workspace root",
+    });
+  } catch {
+    return null;
+  }
+  return { workspaceReal, ioPath };
+}
+
+async function buildWorkspaceTree(workspaceDir: string, includeAll: boolean): Promise<TreeEntry[]> {
+  const root = await resolveWorkspaceRealPath(workspaceDir);
+
+  const walk = async (dirAbs: string, depth: number): Promise<{ items: TreeEntry[]; hasMarkdown: boolean }> => {
+    let dirents: Awaited<ReturnType<typeof fs.readdir>>;
+    try {
+      dirents = await fs.readdir(dirAbs, { withFileTypes: true });
+    } catch {
+      return { items: [], hasMarkdown: false };
+    }
+
+    dirents.sort((a, b) => {
+      if (a.isDirectory() && !b.isDirectory()) {
+        return -1;
+      }
+      if (!a.isDirectory() && b.isDirectory()) {
+        return 1;
+      }
+      return a.name.localeCompare(b.name);
+    });
+
+    const localItems: TreeEntry[] = [];
+    let markdownInTree = false;
+
+    for (const dirent of dirents) {
+      if (dirent.name.startsWith(".")) {
+        continue;
+      }
+      const childAbs = path.join(dirAbs, dirent.name);
+      const relPath = toPosixRelative(root, childAbs);
+      if (!relPath || relPath.startsWith("..")) {
+        continue;
+      }
+
+      if (dirent.isDirectory()) {
+        const nested = await walk(childAbs, depth + 1);
+        if (includeAll || nested.items.length > 0) {
+          localItems.push({
+            path: relPath,
+            name: dirent.name,
+            type: "dir",
+            depth,
+          });
+          localItems.push(...nested.items);
+        }
+        if (nested.hasMarkdown) {
+          markdownInTree = true;
+        }
+        continue;
+      }
+
+      if (!dirent.isFile()) {
+        continue;
+      }
+
+      const markdown = isMarkdownFile(dirent.name);
+      if (!includeAll && !markdown) {
+        continue;
+      }
+
+      const meta = await statFileSafely(childAbs);
+      if (!meta) {
+        continue;
+      }
+      localItems.push({
+        path: relPath,
+        name: dirent.name,
+        type: "file",
+        depth,
+        markdown,
+        size: meta.size,
+        updatedAtMs: meta.updatedAtMs,
+      });
+      if (markdown) {
+        markdownInTree = true;
+      }
+      if (localItems.length >= MAX_TREE_ENTRIES) {
+        break;
+      }
+    }
+
+    return { items: localItems, hasMarkdown: markdownInTree };
+  };
+
+  const result = await walk(root, 0);
+  if (result.items.length > MAX_TREE_ENTRIES) {
+    return result.items.slice(0, MAX_TREE_ENTRIES);
+  }
+  return result.items;
 }
 
 async function listAgentFiles(workspaceDir: string, options?: { hideBootstrap?: boolean }) {
@@ -731,6 +867,126 @@ export const agentsHandlers: GatewayRequestHandlers = {
           updatedAtMs: meta?.updatedAtMs,
           content,
         },
+      },
+      undefined,
+    );
+  },
+  "agents.files.tree": async ({ params, respond }) => {
+    if (!validateAgentsFilesTreeParams(params)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid agents.files.tree params: ${formatValidationErrors(
+            validateAgentsFilesTreeParams.errors,
+          )}`,
+        ),
+      );
+      return;
+    }
+    const cfg = loadConfig();
+    const agentId = resolveAgentIdOrError(String(params.agentId ?? ""), cfg);
+    if (!agentId) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown agent id"));
+      return;
+    }
+    const includeAll = Boolean(params.includeAll);
+    const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+    const entries = await buildWorkspaceTree(workspaceDir, includeAll);
+    const fileEntries = entries.filter((entry) => entry.type === "file");
+    const markdownCount = fileEntries.filter((entry) => entry.markdown).length;
+    respond(
+      true,
+      {
+        agentId,
+        workspace: workspaceDir,
+        includeAll,
+        entries,
+        markdownCount,
+        fileCount: fileEntries.length,
+        dirCount: entries.length - fileEntries.length,
+      },
+      undefined,
+    );
+  },
+  "agents.files.read": async ({ params, respond }) => {
+    if (!validateAgentsFilesReadParams(params)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid agents.files.read params: ${formatValidationErrors(
+            validateAgentsFilesReadParams.errors,
+          )}`,
+        ),
+      );
+      return;
+    }
+    const cfg = loadConfig();
+    const agentId = resolveAgentIdOrError(String(params.agentId ?? ""), cfg);
+    if (!agentId) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown agent id"));
+      return;
+    }
+
+    const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+    const resolved = await resolveWorkspaceReadPath(workspaceDir, String(params.path ?? ""));
+    if (!resolved) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "invalid file path"));
+      return;
+    }
+
+    const { workspaceReal, ioPath } = resolved;
+    const meta = await statFileSafely(ioPath);
+    if (!meta) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "file not found"));
+      return;
+    }
+
+    let safeRead: Awaited<ReturnType<typeof readLocalFileSafely>>;
+    try {
+      safeRead = await readLocalFileSafely({ filePath: ioPath });
+    } catch (err) {
+      if (err instanceof SafeOpenError && err.code === "not-found") {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "file not found"));
+        return;
+      }
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unsafe workspace file"));
+      return;
+    }
+
+    const content = safeRead.buffer.toString("utf-8");
+    const totalChars = content.length;
+    const offsetRaw = Number(params.offset ?? 0);
+    const limitRaw = Number(params.limit ?? DEFAULT_READ_LIMIT);
+    const offset = Number.isFinite(offsetRaw) ? Math.max(0, Math.floor(offsetRaw)) : 0;
+    const limit = Number.isFinite(limitRaw)
+      ? Math.max(1, Math.min(200_000, Math.floor(limitRaw)))
+      : DEFAULT_READ_LIMIT;
+    const chunk = content.slice(offset, offset + limit);
+    const nextOffset = offset + chunk.length;
+    const truncated = nextOffset < totalChars;
+
+    respond(
+      true,
+      {
+        agentId,
+        workspace: workspaceDir,
+        file: {
+          path: toPosixRelative(workspaceReal, ioPath),
+          name: path.basename(ioPath),
+          size: safeRead.stat.size,
+          updatedAtMs: Math.floor(safeRead.stat.mtimeMs),
+          markdown: isMarkdownFile(ioPath),
+        },
+        content: chunk,
+        offset,
+        limit,
+        totalChars,
+        truncated,
+        nextOffset: truncated ? nextOffset : undefined,
       },
       undefined,
     );

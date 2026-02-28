@@ -13,6 +13,8 @@ import type { ThemeMode } from "./theme.ts";
 import type {
   AgentsListResult,
   AgentsFilesListResult,
+  AgentsFilesTreeResult,
+  AgentsFilesReadResult,
   AgentIdentityResult,
   ChannelsStatusSnapshot,
   ConfigSnapshot,
@@ -149,6 +151,14 @@ export type AppViewState = {
   agentFileDrafts: Record<string, string>;
   agentFileActive: string | null;
   agentFileSaving: boolean;
+  agentFilesTree: AgentsFilesTreeResult | null;
+  agentFilesIncludeAll: boolean;
+  agentMarkdownActivePath: string | null;
+  agentMarkdownRendered: boolean;
+  agentMarkdownSearch: string;
+  agentMarkdownRead: AgentsFilesReadResult | null;
+  agentMarkdownReadLoading: boolean;
+  agentMarkdownReadError: string | null;
   agentIdentityLoading: boolean;
   agentIdentityError: string | null;
   agentIdentityById: Record<string, AgentIdentityResult>;

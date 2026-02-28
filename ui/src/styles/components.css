@@ -2439,6 +2439,65 @@
   gap: 8px;
 }
 
+.agent-files-grid--explorer {
+  grid-template-columns: minmax(260px, 340px) minmax(0, 1fr);
+}
+
+.agent-tree-list {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 8px;
+  max-height: 70vh;
+  overflow: auto;
+  background: var(--bg-elevated);
+}
+
+.agent-tree-dir {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+  padding: 4px 0;
+}
+
+.agent-tree-file {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  padding: 6px 8px;
+  cursor: pointer;
+}
+
+.agent-tree-file:hover {
+  border-color: var(--border-strong);
+  background: var(--card);
+}
+
+.agent-tree-file.active {
+  border-color: var(--accent);
+  background: var(--card);
+}
+
+.agent-markdown-viewer {
+  max-height: 70vh;
+  overflow: auto;
+}
+
+.agent-file-header--sticky {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--card);
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.agent-markdown-body {
+  margin-top: 12px;
+}
+
 .agent-tools-meta {
   display: grid;
   gap: 12px;

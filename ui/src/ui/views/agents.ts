@@ -2,6 +2,8 @@ import { html, nothing } from "lit";
 import type {
   AgentIdentityResult,
   AgentsFilesListResult,
+  AgentsFilesReadResult,
+  AgentsFilesTreeResult,
   AgentsListResult,
   ChannelsStatusSnapshot,
   CronJob,
@@ -56,6 +58,14 @@ export type AgentsProps = {
   agentFileContents: Record<string, string>;
   agentFileDrafts: Record<string, string>;
   agentFileSaving: boolean;
+  agentFilesTree: AgentsFilesTreeResult | null;
+  agentFilesIncludeAll: boolean;
+  agentMarkdownActivePath: string | null;
+  agentMarkdownRendered: boolean;
+  agentMarkdownSearch: string;
+  agentMarkdownRead: AgentsFilesReadResult | null;
+  agentMarkdownReadLoading: boolean;
+  agentMarkdownReadError: string | null;
   agentIdentityLoading: boolean;
   agentIdentityError: string | null;
   agentIdentityById: Record<string, AgentIdentityResult>;
@@ -71,6 +81,11 @@ export type AgentsProps = {
   onSelectAgent: (agentId: string) => void;
   onSelectPanel: (panel: AgentsPanel) => void;
   onLoadFiles: (agentId: string) => void;
+  onToggleIncludeAllFiles: (enabled: boolean) => void;
+  onSelectWorkspaceFile: (path: string) => void;
+  onLoadMoreWorkspaceFile: () => void;
+  onToggleWorkspaceRenderMode: (rendered: boolean) => void;
+  onWorkspaceSearchChange: (value: string) => void;
   onSelectFile: (name: string) => void;
   onFileDraftChange: (name: string, content: string) => void;
   onFileReset: (name: string) => void;
@@ -198,7 +213,20 @@ export function renderAgents(props: AgentsProps) {
                         agentFileContents: props.agentFileContents,
                         agentFileDrafts: props.agentFileDrafts,
                         agentFileSaving: props.agentFileSaving,
+                        agentFilesTree: props.agentFilesTree,
+                        agentFilesIncludeAll: props.agentFilesIncludeAll,
+                        agentMarkdownActivePath: props.agentMarkdownActivePath,
+                        agentMarkdownRendered: props.agentMarkdownRendered,
+                        agentMarkdownSearch: props.agentMarkdownSearch,
+                        agentMarkdownRead: props.agentMarkdownRead,
+                        agentMarkdownReadLoading: props.agentMarkdownReadLoading,
+                        agentMarkdownReadError: props.agentMarkdownReadError,
                         onLoadFiles: props.onLoadFiles,
+                        onToggleIncludeAllFiles: props.onToggleIncludeAllFiles,
+                        onSelectWorkspaceFile: props.onSelectWorkspaceFile,
+                        onLoadMoreWorkspaceFile: props.onLoadMoreWorkspaceFile,
+                        onToggleWorkspaceRenderMode: props.onToggleWorkspaceRenderMode,
+                        onWorkspaceSearchChange: props.onWorkspaceSearchChange,
                         onSelectFile: props.onSelectFile,
                         onFileDraftChange: props.onFileDraftChange,
                         onFileReset: props.onFileReset,

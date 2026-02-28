@@ -164,6 +164,74 @@ export const AgentsFilesSetResultSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const AgentsWorkspaceEntrySchema = Type.Object(
+  {
+    path: NonEmptyString,
+    name: NonEmptyString,
+    type: Type.Union([Type.Literal("file"), Type.Literal("dir")]),
+    depth: Type.Integer({ minimum: 0 }),
+    markdown: Type.Optional(Type.Boolean()),
+    size: Type.Optional(Type.Integer({ minimum: 0 })),
+    updatedAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
+  },
+  { additionalProperties: false },
+);
+
+export const AgentsFilesTreeParamsSchema = Type.Object(
+  {
+    agentId: NonEmptyString,
+    includeAll: Type.Optional(Type.Boolean()),
+  },
+  { additionalProperties: false },
+);
+
+export const AgentsFilesTreeResultSchema = Type.Object(
+  {
+    agentId: NonEmptyString,
+    workspace: NonEmptyString,
+    includeAll: Type.Boolean(),
+    entries: Type.Array(AgentsWorkspaceEntrySchema),
+    markdownCount: Type.Integer({ minimum: 0 }),
+    fileCount: Type.Integer({ minimum: 0 }),
+    dirCount: Type.Integer({ minimum: 0 }),
+  },
+  { additionalProperties: false },
+);
+
+export const AgentsFilesReadParamsSchema = Type.Object(
+  {
+    agentId: NonEmptyString,
+    path: NonEmptyString,
+    offset: Type.Optional(Type.Integer({ minimum: 0 })),
+    limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 200000 })),
+  },
+  { additionalProperties: false },
+);
+
+export const AgentsFilesReadResultSchema = Type.Object(
+  {
+    agentId: NonEmptyString,
+    workspace: NonEmptyString,
+    file: Type.Object(
+      {
+        path: NonEmptyString,
+        name: NonEmptyString,
+        size: Type.Integer({ minimum: 0 }),
+        updatedAtMs: Type.Integer({ minimum: 0 }),
+        markdown: Type.Boolean(),
+      },
+      { additionalProperties: false },
+    ),
+    content: Type.String(),
+    offset: Type.Integer({ minimum: 0 }),
+    limit: Type.Integer({ minimum: 1 }),
+    totalChars: Type.Integer({ minimum: 0 }),
+    truncated: Type.Boolean(),
+    nextOffset: Type.Optional(Type.Integer({ minimum: 0 })),
+  },
+  { additionalProperties: false },
+);
+
 export const ModelsListParamsSchema = Type.Object({}, { additionalProperties: false });
 
 export const ModelsListResultSchema = Type.Object(

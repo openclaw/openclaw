@@ -5,7 +5,13 @@ import { refreshChatAvatar } from "./app-chat.ts";
 import { renderUsageTab } from "./app-render-usage-tab.ts";
 import { renderChatControls, renderTab, renderThemeToggle } from "./app-render.helpers.ts";
 import type { AppViewState } from "./app-view-state.ts";
-import { loadAgentFileContent, loadAgentFiles, saveAgentFile } from "./controllers/agent-files.ts";
+import {
+  loadAgentFileContent,
+  loadAgentFiles,
+  loadAgentFilesTree,
+  loadAgentMarkdownFile,
+  saveAgentFile,
+} from "./controllers/agent-files.ts";
 import { loadAgentIdentities, loadAgentIdentity } from "./controllers/agent-identity.ts";
 import { loadAgentSkills } from "./controllers/agent-skills.ts";
 import { loadAgents, loadToolsCatalog } from "./controllers/agents.ts";
@@ -537,6 +543,14 @@ export function renderApp(state: AppViewState) {
                 agentFileContents: state.agentFileContents,
                 agentFileDrafts: state.agentFileDrafts,
                 agentFileSaving: state.agentFileSaving,
+                agentFilesTree: state.agentFilesTree,
+                agentFilesIncludeAll: state.agentFilesIncludeAll,
+                agentMarkdownActivePath: state.agentMarkdownActivePath,
+                agentMarkdownRendered: state.agentMarkdownRendered,
+                agentMarkdownSearch: state.agentMarkdownSearch,
+                agentMarkdownRead: state.agentMarkdownRead,
+                agentMarkdownReadLoading: state.agentMarkdownReadLoading,
+                agentMarkdownReadError: state.agentMarkdownReadError,
                 agentIdentityLoading: state.agentIdentityLoading,
                 agentIdentityError: state.agentIdentityError,
                 agentIdentityById: state.agentIdentityById,
@@ -572,6 +586,12 @@ export function renderApp(state: AppViewState) {
                   state.agentFileActive = null;
                   state.agentFileContents = {};
                   state.agentFileDrafts = {};
+                  state.agentFilesTree = null;
+                  state.agentMarkdownActivePath = null;
+                  state.agentMarkdownRead = null;
+                  state.agentMarkdownReadError = null;
+                  state.agentMarkdownReadLoading = false;
+                  state.agentMarkdownSearch = "";
                   state.agentSkillsReport = null;
                   state.agentSkillsError = null;
                   state.agentSkillsAgentId = null;
@@ -580,7 +600,12 @@ export function renderApp(state: AppViewState) {
                     void loadToolsCatalog(state, agentId);
                   }
                   if (state.agentsPanel === "files") {
-                    void loadAgentFiles(state, agentId);
+                    void (async () => {
+                      await loadAgentFiles(state, agentId);
+                      if (state.agentMarkdownActivePath) {
+                        await loadAgentMarkdownFile(state, agentId, state.agentMarkdownActivePath);
+                      }
+                    })();
                   }
                   if (state.agentsPanel === "skills") {
                     void loadAgentSkills(state, agentId);
@@ -595,7 +620,20 @@ export function renderApp(state: AppViewState) {
                       state.agentFileActive = null;
                       state.agentFileContents = {};
                       state.agentFileDrafts = {};
-                      void loadAgentFiles(state, resolvedAgentId);
+                      state.agentFilesTree = null;
+                      state.agentMarkdownActivePath = null;
+                      state.agentMarkdownRead = null;
+                      state.agentMarkdownReadError = null;
+                      void (async () => {
+                        await loadAgentFiles(state, resolvedAgentId);
+                        if (state.agentMarkdownActivePath) {
+                          await loadAgentMarkdownFile(
+                            state,
+                            resolvedAgentId,
+                            state.agentMarkdownActivePath,
+                          );
+                        }
+                      })();
                     }
                   }
                   if (panel === "tools") {
@@ -613,7 +651,59 @@ export function renderApp(state: AppViewState) {
                     void state.loadCron();
                   }
                 },
-                onLoadFiles: (agentId) => loadAgentFiles(state, agentId),
+                onLoadFiles: (agentId) => {
+                  void (async () => {
+                    await loadAgentFiles(state, agentId);
+                    if (state.agentMarkdownActivePath) {
+                      await loadAgentMarkdownFile(state, agentId, state.agentMarkdownActivePath);
+                    }
+                    if (state.agentFileActive) {
+                      await loadAgentFileContent(state, agentId, state.agentFileActive, {
+                        force: true,
+                        preserveDraft: true,
+                      });
+                    }
+                  })();
+                },
+                onToggleIncludeAllFiles: (enabled) => {
+                  state.agentFilesIncludeAll = enabled;
+                  if (!resolvedAgentId) {
+                    return;
+                  }
+                  void loadAgentFilesTree(state, resolvedAgentId);
+                },
+                onSelectWorkspaceFile: (filePath) => {
+                  state.agentMarkdownActivePath = filePath;
+                  state.agentMarkdownSearch = "";
+                  if (!resolvedAgentId) {
+                    return;
+                  }
+                  void loadAgentMarkdownFile(state, resolvedAgentId, filePath);
+                },
+                onLoadMoreWorkspaceFile: () => {
+                  if (
+                    !resolvedAgentId ||
+                    !state.agentMarkdownRead?.truncated ||
+                    !state.agentMarkdownRead.nextOffset
+                  ) {
+                    return;
+                  }
+                  void loadAgentMarkdownFile(
+                    state,
+                    resolvedAgentId,
+                    state.agentMarkdownRead.file.path,
+                    {
+                      offset: state.agentMarkdownRead.nextOffset,
+                      append: true,
+                    },
+                  );
+                },
+                onToggleWorkspaceRenderMode: (rendered) => {
+                  state.agentMarkdownRendered = rendered;
+                },
+                onWorkspaceSearchChange: (value) => {
+                  state.agentMarkdownSearch = value;
+                },
                 onSelectFile: (name) => {
                   state.agentFileActive = name;
                   if (!resolvedAgentId) {

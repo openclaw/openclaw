@@ -230,6 +230,14 @@ export class OpenClawApp extends LitElement {
   @state() agentFileDrafts: Record<string, string> = {};
   @state() agentFileActive: string | null = null;
   @state() agentFileSaving = false;
+  @state() agentFilesTree: import("./types.ts").AgentsFilesTreeResult | null = null;
+  @state() agentFilesIncludeAll = false;
+  @state() agentMarkdownActivePath: string | null = null;
+  @state() agentMarkdownRendered = true;
+  @state() agentMarkdownSearch = "";
+  @state() agentMarkdownRead: import("./types.ts").AgentsFilesReadResult | null = null;
+  @state() agentMarkdownReadLoading = false;
+  @state() agentMarkdownReadError: string | null = null;
   @state() agentIdentityLoading = false;
   @state() agentIdentityError: string | null = null;
   @state() agentIdentityById: Record<string, AgentIdentityResult> = {};

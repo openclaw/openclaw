@@ -409,6 +409,44 @@ export type AgentsFilesSetResult = {
   file: AgentFileEntry;
 };
 
+export type AgentWorkspaceEntry = {
+  path: string;
+  name: string;
+  type: "file" | "dir";
+  depth: number;
+  markdown?: boolean;
+  size?: number;
+  updatedAtMs?: number;
+};
+
+export type AgentsFilesTreeResult = {
+  agentId: string;
+  workspace: string;
+  includeAll: boolean;
+  entries: AgentWorkspaceEntry[];
+  markdownCount: number;
+  fileCount: number;
+  dirCount: number;
+};
+
+export type AgentsFilesReadResult = {
+  agentId: string;
+  workspace: string;
+  file: {
+    path: string;
+    name: string;
+    size: number;
+    updatedAtMs: number;
+    markdown: boolean;
+  };
+  content: string;
+  offset: number;
+  limit: number;
+  totalChars: number;
+  truncated: boolean;
+  nextOffset?: number;
+};
+
 export type GatewaySessionRow = {
   key: string;
   kind: "direct" | "group" | "global" | "unknown";

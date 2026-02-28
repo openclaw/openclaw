@@ -1,5 +1,7 @@
 import { html, nothing } from "lit";
+import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { formatRelativeTimestamp } from "../format.ts";
+import { toSanitizedMarkdownHtml } from "../markdown.ts";
 import {
   formatCronPayload,
   formatCronSchedule,
@@ -7,8 +9,11 @@ import {
   formatNextRun,
 } from "../presenter.ts";
 import type {
+  AgentWorkspaceEntry,
   AgentFileEntry,
   AgentsFilesListResult,
+  AgentsFilesReadResult,
+  AgentsFilesTreeResult,
   ChannelAccountSnapshot,
   ChannelsStatusSnapshot,
   CronJob,
@@ -352,6 +357,69 @@ export function renderAgentCron(params: {
   `;
 }
 
+function maskLikelySecrets(content: string): string {
+  const patterns: RegExp[] = [
+    /\bAKIA[0-9A-Z]{16}\b/g,
+    /\bsk-[A-Za-z0-9]{20,}\b/g,
+    /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/g,
+    /\bAIza[0-9A-Za-z\-_]{20,}\b/g,
+  ];
+  let masked = content;
+  for (const pattern of patterns) {
+    masked = masked.replace(pattern, (token) => `${token.slice(0, 6)}…${token.slice(-4)}`);
+  }
+  return masked;
+}
+
+function countMatches(haystack: string, needle: string): number {
+  const query = needle.trim().toLowerCase();
+  if (!query) {
+    return 0;
+  }
+  const target = haystack.toLowerCase();
+  let from = 0;
+  let count = 0;
+  while (from < target.length) {
+    const idx = target.indexOf(query, from);
+    if (idx < 0) {
+      break;
+    }
+    count += 1;
+    from = idx + query.length;
+  }
+  return count;
+}
+
+function renderWorkspaceTreeEntry(
+  entry: AgentWorkspaceEntry,
+  activePath: string | null,
+  onSelect: (path: string) => void,
+) {
+  if (entry.type === "dir") {
+    return html`
+      <div class="agent-tree-dir" style=${`padding-left: ${entry.depth * 14 + 8}px;`}>
+        <span class="mono">${entry.name}/</span>
+      </div>
+    `;
+  }
+  const status = `${entry.markdown ? "markdown" : "file"} · ${formatBytes(entry.size)} · ${formatRelativeTimestamp(
+    entry.updatedAtMs ?? null,
+  )}`;
+  return html`
+    <button
+      type="button"
+      class="agent-tree-file ${activePath === entry.path ? "active" : ""}"
+      style=${`padding-left: ${entry.depth * 14 + 8}px;`}
+      @click=${() => onSelect(entry.path)}
+    >
+      <div>
+        <div class="agent-file-name mono">${entry.name}</div>
+        <div class="agent-file-meta">${status}</div>
+      </div>
+    </button>
+  `;
+}
+
 export function renderAgentFiles(params: {
   agentId: string;
   agentFilesList: AgentsFilesListResult | null;
@@ -361,7 +429,20 @@ export function renderAgentFiles(params: {
   agentFileContents: Record<string, string>;
   agentFileDrafts: Record<string, string>;
   agentFileSaving: boolean;
+  agentFilesTree: AgentsFilesTreeResult | null;
+  agentFilesIncludeAll: boolean;
+  agentMarkdownActivePath: string | null;
+  agentMarkdownRendered: boolean;
+  agentMarkdownSearch: string;
+  agentMarkdownRead: AgentsFilesReadResult | null;
+  agentMarkdownReadLoading: boolean;
+  agentMarkdownReadError: string | null;
   onLoadFiles: (agentId: string) => void;
+  onToggleIncludeAllFiles: (enabled: boolean) => void;
+  onSelectWorkspaceFile: (path: string) => void;
+  onLoadMoreWorkspaceFile: () => void;
+  onToggleWorkspaceRenderMode: (rendered: boolean) => void;
+  onWorkspaceSearchChange: (value: string) => void;
   onSelectFile: (name: string) => void;
   onFileDraftChange: (name: string, content: string) => void;
   onFileReset: (name: string) => void;
@@ -374,8 +455,157 @@ export function renderAgentFiles(params: {
   const baseContent = active ? (params.agentFileContents[active] ?? "") : "";
   const draft = active ? (params.agentFileDrafts[active] ?? baseContent) : "";
   const isDirty = active ? draft !== baseContent : false;
+  const tree = params.agentFilesTree?.agentId === params.agentId ? params.agentFilesTree : null;
+  const entries = tree?.entries ?? [];
+  const activeRead = params.agentMarkdownRead;
+  const safeContent = activeRead ? maskLikelySecrets(activeRead.content) : "";
+  const searchCount = activeRead ? countMatches(safeContent, params.agentMarkdownSearch) : 0;
 
   return html`
+    <section class="card">
+      <div class="row" style="justify-content: space-between; gap: 12px; flex-wrap: wrap;">
+        <div>
+          <div class="card-title">Workspace Markdown Explorer</div>
+          <div class="card-sub">Read-only tree + viewer for agent workspace docs.</div>
+        </div>
+        <div class="row" style="gap: 8px; flex-wrap: wrap;">
+          <label class="field" style="margin: 0; min-width: 180px;">
+            <span>Search in file</span>
+            <input
+              .value=${params.agentMarkdownSearch}
+              @input=${(e: Event) =>
+                params.onWorkspaceSearchChange((e.target as HTMLInputElement).value)}
+              placeholder="Find text"
+            />
+          </label>
+          <button
+            class="btn btn--sm ${params.agentMarkdownRendered ? "active" : ""}"
+            @click=${() => params.onToggleWorkspaceRenderMode(true)}
+          >
+            Rendered
+          </button>
+          <button
+            class="btn btn--sm ${!params.agentMarkdownRendered ? "active" : ""}"
+            @click=${() => params.onToggleWorkspaceRenderMode(false)}
+          >
+            Raw
+          </button>
+          <label class="cfg-toggle" title="Show all files">
+            <input
+              type="checkbox"
+              .checked=${params.agentFilesIncludeAll}
+              @change=${(e: Event) =>
+                params.onToggleIncludeAllFiles((e.target as HTMLInputElement).checked)}
+            />
+            <span class="cfg-toggle__track"></span>
+          </label>
+          <button
+            class="btn btn--sm"
+            ?disabled=${params.agentFilesLoading}
+            @click=${() => params.onLoadFiles(params.agentId)}
+          >
+            ${params.agentFilesLoading ? "Loading…" : "Refresh"}
+          </button>
+        </div>
+      </div>
+      ${
+        tree
+          ? html`<div class="muted mono" style="margin-top: 8px;">Workspace: ${tree.workspace}</div>`
+          : nothing
+      }
+      ${
+        tree
+          ? html`
+              <div class="muted" style="margin-top: 6px;">
+                ${tree.markdownCount} markdown · ${tree.fileCount} files · ${tree.dirCount} folders
+              </div>
+            `
+          : nothing
+      }
+      ${
+        params.agentFilesError
+          ? html`<div class="callout danger" style="margin-top: 12px;">${params.agentFilesError}</div>`
+          : nothing
+      }
+      ${
+        params.agentMarkdownReadError
+          ? html`
+              <div class="callout danger" style="margin-top: 12px;">${params.agentMarkdownReadError}</div>
+            `
+          : nothing
+      }
+      ${
+        !tree
+          ? html`
+              <div class="callout info" style="margin-top: 12px">
+                Load files to browse markdown documents.
+              </div>
+            `
+          : html`
+              <div class="agent-files-grid agent-files-grid--explorer" style="margin-top: 14px;">
+                <div class="agent-files-list agent-tree-list">
+                  ${
+                    entries.length === 0
+                      ? html`<div class="muted">No files found.</div>`
+                      : entries.map((entry) =>
+                          renderWorkspaceTreeEntry(
+                            entry,
+                            params.agentMarkdownActivePath,
+                            params.onSelectWorkspaceFile,
+                          ),
+                        )
+                  }
+                </div>
+                <div class="agent-files-editor agent-markdown-viewer">
+                  ${
+                    !activeRead
+                      ? html`<div class="muted">Select a file to preview.</div>`
+                      : html`
+                          <div class="agent-file-header agent-file-header--sticky">
+                            <div>
+                              <div class="agent-file-title mono">${activeRead.file.path}</div>
+                              <div class="agent-file-sub">
+                                ${formatBytes(activeRead.file.size)} · ${formatRelativeTimestamp(
+                                  activeRead.file.updatedAtMs,
+                                )} · ${activeRead.file.markdown ? "markdown" : "text"}
+                              </div>
+                            </div>
+                            <div class="muted">${searchCount > 0 ? `${searchCount} matches` : ""}</div>
+                          </div>
+                          <div class="agent-markdown-body">
+                            ${
+                              params.agentMarkdownRendered
+                                ? html`
+                                    <article class="md-content">${unsafeHTML(
+                                      toSanitizedMarkdownHtml(safeContent),
+                                    )}</article>
+                                  `
+                                : html`<pre class="code-block">${safeContent}</pre>`
+                            }
+                          </div>
+                          ${
+                            activeRead.truncated
+                              ? html`
+                                  <div class="row" style="justify-content: flex-end; margin-top: 12px;">
+                                    <button
+                                      class="btn btn--sm"
+                                      ?disabled=${params.agentMarkdownReadLoading}
+                                      @click=${params.onLoadMoreWorkspaceFile}
+                                    >
+                                      ${params.agentMarkdownReadLoading ? "Loading…" : "Load more"}
+                                    </button>
+                                  </div>
+                                `
+                              : nothing
+                          }
+                        `
+                  }
+                </div>
+              </div>
+            `
+      }
+    </section>
+
     <section class="card">
       <div class="row" style="justify-content: space-between;">
         <div>
