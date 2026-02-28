@@ -35,7 +35,8 @@ type ElevenLabsVoiceEntry = {
 };
 
 function parseRawTtsArgs(rawCommandBody: string | undefined, action: string): string | undefined {
-  const trimmed = rawCommandBody?.trim();
+  const firstLine = rawCommandBody?.split(/\r?\n/, 1)[0];
+  const trimmed = firstLine?.trim();
   if (!trimmed) {
     return undefined;
   }

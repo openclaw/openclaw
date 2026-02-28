@@ -1494,4 +1494,28 @@ describe("handleCommands /tts", () => {
       globalThis.fetch = originalFetch;
     }
   });
+
+  it("parses /tts args from first line only for raw command text", async () => {
+    const prefsPath = path.join(testWorkspaceDir, "tts-voice-multiline.json");
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+      messages: {
+        tts: {
+          prefsPath,
+          elevenlabs: { voiceId: "pMsXgVXv3BLzUgSXRplE" },
+        },
+      },
+    } as OpenClawConfig;
+
+    const setVoiceParams = buildParams("/tts voice 21m00Tcm4TlvDq8ikWAM\nthanks", cfg);
+    const setVoiceResult = await handleCommands(setVoiceParams);
+    expect(setVoiceResult.shouldContinue).toBe(false);
+    expect(setVoiceResult.reply?.text).toContain("voice set to 21m00Tcm4TlvDq8ikWAM");
+
+    const setProviderParams = buildParams("/tts provider edge\nthanks", cfg);
+    const setProviderResult = await handleCommands(setProviderParams);
+    expect(setProviderResult.shouldContinue).toBe(false);
+    expect(setProviderResult.reply?.text).toContain("provider set to edge");
+  });
 });

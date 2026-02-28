@@ -198,6 +198,23 @@ describe("commands registry", () => {
     ]);
   });
 
+  it("keeps TTS native action choices aligned with implemented handlers", () => {
+    const tts = listChatCommands().find((command) => command.key === "tts");
+    expect(tts).toBeTruthy();
+    const actionArg = tts?.args?.find((arg) => arg.name === "action");
+    expect(actionArg?.choices).toEqual([
+      { value: "on", label: "On" },
+      { value: "off", label: "Off" },
+      { value: "status", label: "Status" },
+      { value: "provider", label: "Provider" },
+      { value: "voice", label: "Voice" },
+      { value: "limit", label: "Limit" },
+      { value: "summary", label: "Summary" },
+      { value: "audio", label: "Audio" },
+      { value: "help", label: "Help" },
+    ]);
+  });
+
   it("detects known text commands", () => {
     const detection = getCommandDetection();
     expect(detection.exact.has("/commands")).toBe(true);
