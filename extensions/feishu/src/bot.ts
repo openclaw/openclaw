@@ -8,6 +8,7 @@ import {
   type HistoryEntry,
   normalizeAgentId,
   recordPendingHistoryEntryIfEnabled,
+  normalizeNonTelegramGroupPolicy,
   resolveOpenProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
@@ -995,11 +996,14 @@ export async function handleFeishuMessage(params: {
       return;
     }
     const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
-    const { groupPolicy, providerMissingFallbackApplied } = resolveOpenProviderRuntimeGroupPolicy({
-      providerConfigPresent: cfg.channels?.feishu !== undefined,
-      groupPolicy: feishuCfg?.groupPolicy,
-      defaultGroupPolicy,
-    });
+    const { groupPolicy: rawGroupPolicy, providerMissingFallbackApplied } =
+      resolveOpenProviderRuntimeGroupPolicy({
+        providerConfigPresent: cfg.channels?.feishu !== undefined,
+        groupPolicy: feishuCfg?.groupPolicy,
+        defaultGroupPolicy,
+      });
+    // "members" is Telegram-only; normalize to "open" for Feishu
+    const groupPolicy = normalizeNonTelegramGroupPolicy(rawGroupPolicy);
     warnMissingProviderGroupPolicyFallbackOnce({
       providerMissingFallbackApplied,
       providerKey: "feishu",

@@ -7,6 +7,7 @@ import type {
 import {
   buildChannelKeyCandidates,
   normalizeChannelSlug,
+  normalizeNonTelegramGroupPolicy,
   resolveChannelEntryMatchWithFallback,
   resolveMentionGatingWithBypass,
   resolveNestedAllowlistDecision,
@@ -128,10 +129,12 @@ export function resolveNextcloudTalkGroupAllow(params: {
   innerAllowFrom: Array<string | number> | undefined;
   senderId: string;
 }): { allowed: boolean; outerMatch: AllowlistMatch; innerMatch: AllowlistMatch } {
-  if (params.groupPolicy === "disabled") {
+  // "members" is Telegram-only; normalize to "open" for Nextcloud Talk
+  const groupPolicy = normalizeNonTelegramGroupPolicy(params.groupPolicy);
+  if (groupPolicy === "disabled") {
     return { allowed: false, outerMatch: { allowed: false }, innerMatch: { allowed: false } };
   }
-  if (params.groupPolicy === "open") {
+  if (groupPolicy === "open") {
     return { allowed: true, outerMatch: { allowed: true }, innerMatch: { allowed: true } };
   }
 

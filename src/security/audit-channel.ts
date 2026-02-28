@@ -537,7 +537,9 @@ export async function collectChannelSecurityFindings(params: {
       const groups = telegramCfg.groups as Record<string, unknown> | undefined;
       const groupsConfigured = Boolean(groups) && Object.keys(groups ?? {}).length > 0;
       const groupAccessPossible =
-        groupPolicy === "open" || (groupPolicy === "allowlist" && groupsConfigured);
+        groupPolicy === "open" ||
+        groupPolicy === "members" ||
+        (groupPolicy === "allowlist" && groupsConfigured);
       if (!groupAccessPossible) {
         continue;
       }

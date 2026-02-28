@@ -67,8 +67,11 @@ async function resolveWhatsAppCommandAuthorized(params: {
   const dmPolicy = account.dmPolicy ?? "pairing";
   const groupPolicy = account.groupPolicy ?? "allowlist";
   const configuredAllowFrom = account.allowFrom ?? [];
+  const defaultGroupAllowFrom = params.cfg.channels?.defaults?.groupAllowFrom;
   const configuredGroupAllowFrom =
-    account.groupAllowFrom ?? (configuredAllowFrom.length > 0 ? configuredAllowFrom : undefined);
+    account.groupAllowFrom ??
+    defaultGroupAllowFrom ??
+    (configuredAllowFrom.length > 0 ? configuredAllowFrom : undefined);
 
   const storeAllowFrom = isGroup
     ? []
