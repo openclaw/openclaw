@@ -20,6 +20,78 @@ require_cmd() {
   fi
 }
 
+read_config_gateway_token() {
+  local config_path="$OPENCLAW_CONFIG_DIR/openclaw.json"
+  if [[ ! -f "$config_path" ]]; then
+    return 0
+  fi
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - "$config_path" <<'PY'
+import json
+import sys
+
+path = sys.argv[1]
+try:
+    with open(path, "r", encoding="utf-8") as f:
+        cfg = json.load(f)
+except Exception:
+    raise SystemExit(0)
+
+gateway = cfg.get("gateway")
+if not isinstance(gateway, dict):
+    raise SystemExit(0)
+auth = gateway.get("auth")
+if not isinstance(auth, dict):
+    raise SystemExit(0)
+token = auth.get("token")
+if isinstance(token, str):
+    token = token.strip()
+    if token:
+        print(token)
+PY
+    return 0
+  fi
+  if command -v node >/dev/null 2>&1; then
+    node - "$config_path" <<'NODE'
+const fs = require("node:fs");
+const configPath = process.argv[2];
+try {
+  const cfg = JSON.parse(fs.readFileSync(configPath, "utf8"));
+  const token = cfg?.gateway?.auth?.token;
+  if (typeof token === "string" && token.trim().length > 0) {
+    process.stdout.write(token.trim());
+  }
+} catch {
+  // Keep docker-setup resilient when config parsing fails.
+}
+NODE
+  fi
+}
+
+ensure_control_ui_allowed_origins() {
+  if [[ "${OPENCLAW_GATEWAY_BIND}" == "loopback" ]]; then
+    return 0
+  fi
+
+  local allowed_origin_json
+  local current_allowed_origins
+  allowed_origin_json="$(printf '["http://127.0.0.1:%s"]' "$OPENCLAW_GATEWAY_PORT")"
+  current_allowed_origins="$(
+    docker compose "${COMPOSE_ARGS[@]}" run --rm openclaw-cli \
+      config get gateway.controlUi.allowedOrigins 2>/dev/null || true
+  )"
+  current_allowed_origins="${current_allowed_origins//$'\r'/}"
+
+  if [[ -n "$current_allowed_origins" && "$current_allowed_origins" != "null" && "$current_allowed_origins" != "[]" ]]; then
+    echo "Control UI allowlist already configured; leaving gateway.controlUi.allowedOrigins unchanged."
+    return 0
+  fi
+
+  docker compose "${COMPOSE_ARGS[@]}" run --rm openclaw-cli \
+    config set gateway.controlUi.allowedOrigins "$allowed_origin_json" --strict-json >/dev/null
+  echo "Set gateway.controlUi.allowedOrigins to $allowed_origin_json for non-loopback bind."
+}
+
 contains_disallowed_chars() {
   local value="$1"
   [[ "$value" == *$'\n'* || "$value" == *$'\r'* || "$value" == *$'\t'* ]]
@@ -97,7 +169,11 @@ export OPENCLAW_EXTRA_MOUNTS="$EXTRA_MOUNTS"
 export OPENCLAW_HOME_VOLUME="$HOME_VOLUME_NAME"
 
 if [[ -z "${OPENCLAW_GATEWAY_TOKEN:-}" ]]; then
-  if command -v openssl >/dev/null 2>&1; then
+  EXISTING_CONFIG_TOKEN="$(read_config_gateway_token || true)"
+  if [[ -n "$EXISTING_CONFIG_TOKEN" ]]; then
+    OPENCLAW_GATEWAY_TOKEN="$EXISTING_CONFIG_TOKEN"
+    echo "Reusing gateway token from $OPENCLAW_CONFIG_DIR/openclaw.json"
+  elif command -v openssl >/dev/null 2>&1; then
     OPENCLAW_GATEWAY_TOKEN="$(openssl rand -hex 32)"
   else
     OPENCLAW_GATEWAY_TOKEN="$(python3 - <<'PY'
@@ -272,6 +348,10 @@ echo "  - Tailscale exposure: Off"
 echo "  - Install Gateway daemon: No"
 echo ""
 docker compose "${COMPOSE_ARGS[@]}" run --rm openclaw-cli onboard --no-install-daemon
+
+echo ""
+echo "==> Control UI origin allowlist"
+ensure_control_ui_allowed_origins
 
 echo ""
 echo "==> Provider setup (optional)"

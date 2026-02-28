@@ -60,6 +60,37 @@ async function resolveStickerVisionSupport(cfg: OpenClawConfig, agentId: string)
   }
 }
 
+export function pruneStickerMediaFromContext(
+  ctxPayload: {
+    MediaPath?: string;
+    MediaUrl?: string;
+    MediaType?: string;
+    MediaPaths?: string[];
+    MediaUrls?: string[];
+    MediaTypes?: string[];
+  },
+  opts?: { stickerMediaIncluded?: boolean },
+) {
+  if (opts?.stickerMediaIncluded === false) {
+    return;
+  }
+  const nextMediaPaths = Array.isArray(ctxPayload.MediaPaths)
+    ? ctxPayload.MediaPaths.slice(1)
+    : undefined;
+  const nextMediaUrls = Array.isArray(ctxPayload.MediaUrls)
+    ? ctxPayload.MediaUrls.slice(1)
+    : undefined;
+  const nextMediaTypes = Array.isArray(ctxPayload.MediaTypes)
+    ? ctxPayload.MediaTypes.slice(1)
+    : undefined;
+  ctxPayload.MediaPaths = nextMediaPaths && nextMediaPaths.length > 0 ? nextMediaPaths : undefined;
+  ctxPayload.MediaUrls = nextMediaUrls && nextMediaUrls.length > 0 ? nextMediaUrls : undefined;
+  ctxPayload.MediaTypes = nextMediaTypes && nextMediaTypes.length > 0 ? nextMediaTypes : undefined;
+  ctxPayload.MediaPath = ctxPayload.MediaPaths?.[0];
+  ctxPayload.MediaUrl = ctxPayload.MediaUrls?.[0] ?? ctxPayload.MediaPath;
+  ctxPayload.MediaType = ctxPayload.MediaTypes?.[0];
+}
+
 type DispatchTelegramMessageParams = {
   context: TelegramMessageContext;
   bot: Bot;
@@ -311,13 +342,10 @@ export const dispatchTelegramMessage = async ({
         // Update context to use description instead of image
         ctxPayload.Body = formattedDesc;
         ctxPayload.BodyForAgent = formattedDesc;
-        // Clear media paths so native vision doesn't process the image again
-        ctxPayload.MediaPath = undefined;
-        ctxPayload.MediaType = undefined;
-        ctxPayload.MediaUrl = undefined;
-        ctxPayload.MediaPaths = undefined;
-        ctxPayload.MediaUrls = undefined;
-        ctxPayload.MediaTypes = undefined;
+        // Drop only the sticker attachment; keep replied media context if present.
+        pruneStickerMediaFromContext(ctxPayload, {
+          stickerMediaIncluded: ctxPayload.StickerMediaIncluded,
+        });
       }
 
       // Cache the description for future encounters
@@ -567,7 +595,10 @@ export const dispatchTelegramMessage = async ({
               reasoningStepState.resetForNextStep();
               if (answerLane.hasStreamedMessage) {
                 const previewMessageId = answerLane.stream?.messageId();
-                if (typeof previewMessageId === "number") {
+                // Only archive previews that still need a matching final text update.
+                // Once a preview has already been finalized, archiving it here causes
+                // cleanup to delete a user-visible final message on later media-only turns.
+                if (typeof previewMessageId === "number" && !finalizedPreviewByLane.answer) {
                   archivedAnswerPreviews.push({
                     messageId: previewMessageId,
                     textSnapshot: answerLane.lastPartialText,
@@ -576,6 +607,8 @@ export const dispatchTelegramMessage = async ({
                 answerLane.stream?.forceNewMessage();
               }
               resetDraftLaneState(answerLane);
+              // New assistant message boundary: this lane now tracks a fresh preview lifecycle.
+              finalizedPreviewByLane.answer = false;
             }
           : undefined,
         onReasoningEnd: reasoningLane.stream

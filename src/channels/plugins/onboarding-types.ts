@@ -62,6 +62,13 @@ export type ChannelOnboardingResult = {
   accountId?: string;
 };
 
+export type ChannelOnboardingConfiguredResult = ChannelOnboardingResult | "skip";
+
+export type ChannelOnboardingInteractiveContext = ChannelOnboardingConfigureContext & {
+  configured: boolean;
+  label: string;
+};
+
 export type ChannelOnboardingDmPolicy = {
   label: string;
   channel: ChannelId;
@@ -80,6 +87,12 @@ export type ChannelOnboardingAdapter = {
   channel: ChannelId;
   getStatus: (ctx: ChannelOnboardingStatusContext) => Promise<ChannelOnboardingStatus>;
   configure: (ctx: ChannelOnboardingConfigureContext) => Promise<ChannelOnboardingResult>;
+  configureInteractive?: (
+    ctx: ChannelOnboardingInteractiveContext,
+  ) => Promise<ChannelOnboardingConfiguredResult>;
+  configureWhenConfigured?: (
+    ctx: ChannelOnboardingInteractiveContext,
+  ) => Promise<ChannelOnboardingConfiguredResult>;
   dmPolicy?: ChannelOnboardingDmPolicy;
   onAccountRecorded?: (accountId: string, options?: SetupChannelsOptions) => void;
   disable?: (cfg: OpenClawConfig) => OpenClawConfig;
