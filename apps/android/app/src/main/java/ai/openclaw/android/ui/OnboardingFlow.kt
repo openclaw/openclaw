@@ -319,14 +319,18 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
       if (enabled.isEmpty()) "None selected" else enabled.joinToString(", ")
     }
 
-  val proceedFromPermissions: () -> Unit = {
-    when {
-      enableNotificationListener && !isNotificationListenerEnabled(context) -> {
-        openNotificationListenerSettings(context)
-      }
-      enableAppUpdates && !canInstallUnknownApps(context) -> {
-        openUnknownAppSourcesSettings(context)
-      }
+  val proceedFromPermissions: () -> Unit = proceed@{
+    var openedSpecialSetup = false
+    if (enableNotificationListener && !isNotificationListenerEnabled(context)) {
+      openNotificationListenerSettings(context)
+      openedSpecialSetup = true
+    }
+    if (enableAppUpdates && !canInstallUnknownApps(context)) {
+      openUnknownAppSourcesSettings(context)
+      openedSpecialSetup = true
+    }
+    if (openedSpecialSetup) {
+      return@proceed
     }
     step = OnboardingStep.FinalCheck
   }
