@@ -195,7 +195,7 @@ export function buildGatewayCronService(params: {
         undefined;
       const baseHeartbeat = {
         ...runtimeConfig.agents?.defaults?.heartbeat,
-        ...agentHeartbeat,
+        ...agentEntry?.heartbeat,
       };
       const heartbeatOverride = opts?.heartbeat
         ? { ...baseHeartbeat, ...opts.heartbeat }
