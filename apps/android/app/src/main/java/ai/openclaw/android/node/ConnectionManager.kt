@@ -15,6 +15,7 @@ class ConnectionManager(
   private val cameraEnabled: () -> Boolean,
   private val locationMode: () -> LocationMode,
   private val voiceWakeMode: () -> VoiceWakeMode,
+  private val motionAvailable: () -> Boolean,
   private val smsAvailable: () -> Boolean,
   private val hasRecordAudioPermission: () -> Boolean,
   private val manualTls: () -> Boolean,
@@ -78,6 +79,7 @@ class ConnectionManager(
       locationEnabled = locationMode() != LocationMode.Off,
       smsAvailable = smsAvailable(),
       voiceWakeEnabled = voiceWakeMode() != VoiceWakeMode.Off && hasRecordAudioPermission(),
+      motionAvailable = motionAvailable(),
       debugBuild = BuildConfig.DEBUG,
     )
 
