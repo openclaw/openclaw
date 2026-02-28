@@ -1267,10 +1267,15 @@ function detectEmptyAllowlistPolicy(cfg: OpenClawConfig): string[] {
 
   const warnings: string[] = [];
 
+  // Discord and Slack enforce group allowlists via guild/channel config
+  // (guilds.*.channels / channels.*), not sender-based groupAllowFrom.
+  const usesChannelBasedGroupAllowlist = new Set(["discord", "slack"]);
+
   const checkAccount = (
     account: Record<string, unknown>,
     prefix: string,
     parent?: Record<string, unknown>,
+    channelName?: string,
   ) => {
     const dmEntry = account.dm;
     const dm =
@@ -1307,7 +1312,12 @@ function detectEmptyAllowlistPolicy(cfg: OpenClawConfig): string[] {
       (parent?.groupPolicy as string | undefined) ??
       undefined;
 
-    if (groupPolicy === "allowlist") {
+    // Skip sender-based check for channels that use channel/guild allowlists
+    // (Discord: guilds.*.channels, Slack: channels.*).
+    if (
+      groupPolicy === "allowlist" &&
+      (!channelName || !usesChannelBasedGroupAllowlist.has(channelName))
+    ) {
       const rawGroupAllowFrom =
         (account.groupAllowFrom as Array<string | number> | undefined) ??
         (parent?.groupAllowFrom as Array<string | number> | undefined);
@@ -1330,7 +1340,7 @@ function detectEmptyAllowlistPolicy(cfg: OpenClawConfig): string[] {
     if (!channelConfig || typeof channelConfig !== "object") {
       continue;
     }
-    checkAccount(channelConfig, `channels.${channelName}`);
+    checkAccount(channelConfig, `channels.${channelName}`, undefined, channelName);
 
     const accounts = channelConfig.accounts;
     if (accounts && typeof accounts === "object") {
@@ -1340,7 +1350,12 @@ function detectEmptyAllowlistPolicy(cfg: OpenClawConfig): string[] {
         if (!account || typeof account !== "object") {
           continue;
         }
-        checkAccount(account, `channels.${channelName}.accounts.${accountId}`, channelConfig);
+        checkAccount(
+          account,
+          `channels.${channelName}.accounts.${accountId}`,
+          channelConfig,
+          channelName,
+        );
       }
     }
   }
