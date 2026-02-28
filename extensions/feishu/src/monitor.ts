@@ -31,6 +31,29 @@ const FEISHU_WEBHOOK_RATE_LIMIT_WINDOW_MS = 60_000;
 const FEISHU_WEBHOOK_RATE_LIMIT_MAX_REQUESTS = 120;
 const FEISHU_WEBHOOK_RATE_LIMIT_MAX_TRACKED_KEYS = 4_096;
 const FEISHU_WEBHOOK_COUNTER_LOG_EVERY = 25;
+const FEISHU_REACTION_VERIFY_TIMEOUT_MS = 1_500;
+
+export type FeishuReactionCreatedEvent = {
+  message_id: string;
+  chat_id?: string;
+  chat_type?: "p2p" | "group";
+  reaction_type?: { emoji_type?: string };
+  operator_type?: string;
+  user_id?: { open_id?: string };
+  action_time?: string;
+};
+
+type ResolveReactionSyntheticEventParams = {
+  cfg: ClawdbotConfig;
+  accountId: string;
+  event: FeishuReactionCreatedEvent;
+  botOpenId?: string;
+  fetchMessage?: typeof getMessageFeishu;
+  verificationTimeoutMs?: number;
+  logger?: (message: string) => void;
+  uuid?: () => string;
+};
+
 const feishuWebhookRateLimits = new Map<string, { count: number; windowStartMs: number }>();
 const feishuWebhookStatusCounters = new Map<string, number>();
 let lastWebhookRateLimitCleanupMs = 0;
@@ -117,6 +140,95 @@ function recordWebhookStatus(
   }
 }
 
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T | null> {
+  let timeoutId: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race<T | null>([
+      promise,
+      new Promise<null>((resolve) => {
+        timeoutId = setTimeout(() => resolve(null), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
+  }
+}
+
+export async function resolveReactionSyntheticEvent(
+  params: ResolveReactionSyntheticEventParams,
+): Promise<FeishuMessageEvent | null> {
+  const {
+    cfg,
+    accountId,
+    event,
+    botOpenId,
+    fetchMessage = getMessageFeishu,
+    verificationTimeoutMs = FEISHU_REACTION_VERIFY_TIMEOUT_MS,
+    logger,
+    uuid = () => crypto.randomUUID(),
+  } = params;
+
+  const emoji = event.reaction_type?.emoji_type;
+  const messageId = event.message_id;
+  const senderId = event.user_id?.open_id;
+  if (!emoji || !messageId || !senderId) {
+    return null;
+  }
+
+  // Skip bot self-reactions
+  if (event.operator_type === "app" || senderId === botOpenId) {
+    return null;
+  }
+
+  // Skip typing indicator emoji
+  if (emoji === "Typing") {
+    return null;
+  }
+
+  // Fail closed if bot identity cannot be resolved; otherwise reactions on any
+  // message can leak into the agent.
+  if (!botOpenId) {
+    logger?.(
+      `feishu[${accountId}]: bot open_id unavailable, skipping reaction ${emoji} on ${messageId}`,
+    );
+    return null;
+  }
+
+  const reactedMsg = await withTimeout(
+    fetchMessage({ cfg, messageId, accountId }),
+    verificationTimeoutMs,
+  ).catch(() => null);
+  const isBotMessage = reactedMsg?.senderType === "app" || reactedMsg?.senderOpenId === botOpenId;
+  if (!reactedMsg || !isBotMessage) {
+    logger?.(
+      `feishu[${accountId}]: ignoring reaction on non-bot/unverified message ${messageId} ` +
+        `(sender: ${reactedMsg?.senderOpenId ?? "unknown"})`,
+    );
+    return null;
+  }
+
+  const syntheticChatIdRaw = event.chat_id ?? reactedMsg.chatId;
+  const syntheticChatId = syntheticChatIdRaw?.trim() ? syntheticChatIdRaw : `p2p:${senderId}`;
+  const syntheticChatType: "p2p" | "group" = event.chat_type ?? "p2p";
+  return {
+    sender: {
+      sender_id: { open_id: senderId },
+      sender_type: "user",
+    },
+    message: {
+      message_id: `${messageId}:reaction:${emoji}:${uuid()}`,
+      chat_id: syntheticChatId,
+      chat_type: syntheticChatType,
+      message_type: "text",
+      content: JSON.stringify({
+        text: `[reacted with ${emoji} to message ${messageId}]`,
+      }),
+    },
+  };
+}
+
 async function fetchBotOpenId(account: ResolvedFeishuAccount): Promise<string | undefined> {
   try {
     const result = await probeFeishu(account);
@@ -188,78 +300,19 @@ function registerEventHandlers(
       }
     },
     "im.message.reaction.created_v1": async (data) => {
-      try {
-        const event = data as unknown as {
-          message_id: string;
-          reaction_type: { emoji_type: string };
-          operator_type: string;
-          user_id: { open_id: string };
-          action_time: string;
-        };
-
-        const emoji = event.reaction_type?.emoji_type;
-        const messageId = event.message_id;
-        const senderId = event.user_id?.open_id;
-
-        // Skip bot self-reactions
+      const processReaction = async () => {
+        const event = data as FeishuReactionCreatedEvent;
         const myBotId = botOpenIds.get(accountId);
-        if (event.operator_type === "app" || senderId === myBotId) {
+        const syntheticEvent = await resolveReactionSyntheticEvent({
+          cfg,
+          accountId,
+          event,
+          botOpenId: myBotId,
+          logger: log,
+        });
+        if (!syntheticEvent) {
           return;
         }
-
-        // Skip typing indicator emoji (if used)
-        if (emoji === "Typing") {
-          return;
-        }
-
-        // Only process reactions on messages sent by this bot.
-        // Without this filter, the agent receives spurious notifications for
-        // reactions the user leaves on *any* message (including other people's
-        // messages in unrelated chats), which is noisy and confusing.
-        if (myBotId) {
-          try {
-            const reactedMsg = await getMessageFeishu({ cfg, messageId, accountId });
-            const isBotMessage =
-              reactedMsg?.senderType === "app" || reactedMsg?.senderOpenId === myBotId;
-            if (!reactedMsg || !isBotMessage) {
-              log(
-                `feishu[${accountId}]: ignoring reaction on non-bot message ${messageId} ` +
-                  `(sender: ${reactedMsg?.senderOpenId ?? "unknown"})`,
-              );
-              return;
-            }
-          } catch (err) {
-            // If we can't verify the message sender (e.g. permission error,
-            // deleted message), skip the reaction rather than routing a
-            // potentially irrelevant event to the agent.
-            log(
-              `feishu[${accountId}]: could not verify reacted message ${messageId}, skipping: ${String(err)}`,
-            );
-            return;
-          }
-        }
-
-        log(`feishu[${accountId}]: reaction ${emoji} on ${messageId} from ${senderId}`);
-
-        // Note: Feishu DM chat_ids also use "oc_" prefix, so we cannot distinguish
-        // group vs DM by prefix alone. For now treat all reactions as DM (p2p)
-        // routing via the sender's open_id.
-        const syntheticEvent: FeishuMessageEvent = {
-          sender: {
-            sender_id: { open_id: senderId },
-            sender_type: "user",
-          },
-          message: {
-            message_id: `${messageId}:reaction:${emoji}:${crypto.randomUUID()}`,
-            chat_id: `p2p:${senderId}`,
-            chat_type: "p2p",
-            message_type: "text",
-            content: JSON.stringify({
-              text: `[reacted with ${emoji} to message ${messageId}]`,
-            }),
-          },
-        };
-
         const promise = handleFeishuMessage({
           cfg,
           event: syntheticEvent,
@@ -268,14 +321,24 @@ function registerEventHandlers(
           chatHistories,
           accountId,
         });
-
         if (fireAndForget) {
           promise.catch((err) => {
             error(`feishu[${accountId}]: error handling reaction: ${String(err)}`);
           });
-        } else {
-          await promise;
+          return;
         }
+        await promise;
+      };
+
+      if (fireAndForget) {
+        void processReaction().catch((err) => {
+          error(`feishu[${accountId}]: error handling reaction event: ${String(err)}`);
+        });
+        return;
+      }
+
+      try {
+        await processReaction();
       } catch (err) {
         error(`feishu[${accountId}]: error handling reaction event: ${String(err)}`);
       }
