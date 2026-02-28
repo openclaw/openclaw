@@ -34,7 +34,12 @@ vi.mock("../../plugins/hook-runner-global.js", () => ({
 
 vi.mock("../../hooks/internal-hooks.js", () => ({
   triggerInternalHook: (...args: unknown[]) => mockTriggerInternalHook(...args),
-  createInternalHookEvent: (...args: unknown[]) => mockCreateInternalHookEvent(...args),
+  createInternalHookEvent: (
+    type: string,
+    action: string,
+    sessionKey: string,
+    context: Record<string, unknown>,
+  ) => mockCreateInternalHookEvent(type, action, sessionKey, context),
 }));
 
 // Mock grammy and media loader (same as delivery.test.ts — no real API calls).
