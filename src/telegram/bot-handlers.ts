@@ -851,7 +851,7 @@ export const registerTelegramHandlers = ({
       chatId,
       resolvedThreadId,
       storeAllowFrom,
-      sendOversizeWarning,
+      sendOversizeWarning: _sendOversizeWarning,
       oversizeLogMessage,
     } = params;
 
