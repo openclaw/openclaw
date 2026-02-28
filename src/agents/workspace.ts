@@ -1084,8 +1084,10 @@ export async function loadWorkspaceBootstrapFiles(dir: string): Promise<Workspac
  * Bootstrap loading tiers control which workspace files are injected
  * into a session's context window.
  *
- * - `"minimal"` — Only AGENTS.md and TOOLS.md for subagent sessions; cron
- *   sessions additionally retain SOUL/IDENTITY/USER (see CRON_BOOTSTRAP_ALLOWLIST).
+ * - `"minimal"` — AGENTS.md, TOOLS.md, SOUL.md, IDENTITY.md, USER.md.
+ *   Used by subagent and cron sessions to keep context lean. Cron sessions
+ *   share the same allowlist (see CRON_BOOTSTRAP_ALLOWLIST) so the branch
+ *   remains in place for future divergence.
  * - `"standard"` — All recognized bootstrap files (SOUL.md, IDENTITY.md,
  *   USER.md, HEARTBEAT.md, BOOTSTRAP.md, MEMORY.md, plus minimal set).
  *   Default for main sessions.
@@ -1094,7 +1096,13 @@ export async function loadWorkspaceBootstrapFiles(dir: string): Promise<Workspac
  */
 export type BootstrapTier = "minimal" | "standard" | "full";
 
-const MINIMAL_BOOTSTRAP_ALLOWLIST = new Set([DEFAULT_AGENTS_FILENAME, DEFAULT_TOOLS_FILENAME]);
+const MINIMAL_BOOTSTRAP_ALLOWLIST = new Set([
+  DEFAULT_AGENTS_FILENAME,
+  DEFAULT_TOOLS_FILENAME,
+  DEFAULT_SOUL_FILENAME,
+  DEFAULT_IDENTITY_FILENAME,
+  DEFAULT_USER_FILENAME,
+]);
 
 const SUBAGENT_BOOTSTRAP_ALLOWLIST = MINIMAL_BOOTSTRAP_ALLOWLIST;
 
