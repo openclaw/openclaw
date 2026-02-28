@@ -30,6 +30,7 @@ import { createGatewayHooksRequestHandler } from "./server/hooks.js";
 import { listenGatewayHttpServer } from "./server/http-listen.js";
 import {
   createGatewayPluginRequestHandler,
+  hasRegisteredPluginHttpHandlers,
   isRegisteredPluginHttpRoutePath,
 } from "./server/plugins-http.js";
 import type { GatewayTlsRuntime } from "./server/tls.js";
@@ -123,7 +124,10 @@ export async function createGatewayRuntimeState(params: {
     if (isProtectedPluginRoutePath(requestPath)) {
       return true;
     }
-    return isRegisteredPluginHttpRoutePath(params.pluginRegistry, requestPath);
+    if (isRegisteredPluginHttpRoutePath(params.pluginRegistry, requestPath)) {
+      return true;
+    }
+    return hasRegisteredPluginHttpHandlers(params.pluginRegistry);
   };
 
   const bindHosts = await resolveGatewayListenHosts(params.bindHost);

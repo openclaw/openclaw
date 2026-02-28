@@ -17,6 +17,11 @@ export function isRegisteredPluginHttpRoutePath(
   return routes.some((entry) => entry.path === pathname);
 }
 
+export function hasRegisteredPluginHttpHandlers(registry: PluginRegistry): boolean {
+  const handlers = registry.httpHandlers ?? [];
+  return handlers.length > 0;
+}
+
 export function createGatewayPluginRequestHandler(params: {
   registry: PluginRegistry;
   log: SubsystemLogger;

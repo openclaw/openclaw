@@ -412,6 +412,62 @@ describe("gateway plugin HTTP auth boundary", () => {
     });
   });
 
+  test("requires gateway auth for wildcard plugin handlers when using default enforcement", async () => {
+    const resolvedAuth: ResolvedGatewayAuth = {
+      mode: "token",
+      token: "test-token",
+      password: undefined,
+      allowTailscale: false,
+    };
+
+    await withTempConfig({
+      cfg: { gateway: { trustedProxies: [] } },
+      prefix: "openclaw-plugin-http-auth-wildcard-default-test-",
+      run: async () => {
+        const handlePluginRequest = vi.fn(async (req: IncomingMessage, res: ServerResponse) => {
+          const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
+          if (pathname === "/googlechat") {
+            res.statusCode = 200;
+            res.setHeader("Content-Type", "application/json; charset=utf-8");
+            res.end(JSON.stringify({ ok: true, route: "wildcard-default" }));
+            return true;
+          }
+          return false;
+        });
+
+        const server = createGatewayHttpServer({
+          canvasHost: null,
+          clients: new Set(),
+          controlUiEnabled: false,
+          controlUiBasePath: "/__control__",
+          openAiChatCompletionsEnabled: false,
+          openResponsesEnabled: false,
+          handleHooksRequest: async () => false,
+          handlePluginRequest,
+          resolvedAuth,
+        });
+
+        const unauthenticated = createResponse();
+        await dispatchRequest(server, createRequest({ path: "/googlechat" }), unauthenticated.res);
+        expect(unauthenticated.res.statusCode).toBe(401);
+        expect(unauthenticated.getBody()).toContain("Unauthorized");
+        expect(handlePluginRequest).not.toHaveBeenCalled();
+
+        const authenticated = createResponse();
+        await dispatchRequest(
+          server,
+          createRequest({
+            path: "/googlechat",
+            authorization: "Bearer test-token",
+          }),
+          authenticated.res,
+        );
+        expect(authenticated.res.statusCode).toBe(200);
+        expect(authenticated.getBody()).toContain('"route":"wildcard-default"');
+      },
+    });
+  });
+
   test("requires gateway auth for canonicalized /api/channels variants", async () => {
     const resolvedAuth: ResolvedGatewayAuth = {
       mode: "token",

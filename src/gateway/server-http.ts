@@ -524,24 +524,6 @@ export function createGatewayHttpServer(opts: {
       if (await handleSlackHttpRequest(req, res)) {
         return;
       }
-      if (handlePluginRequest) {
-        if (shouldEnforcePluginGatewayAuth?.(requestPath) ?? true) {
-          const pluginAuthOk = await enforcePluginRouteGatewayAuth({
-            req,
-            res,
-            auth: resolvedAuth,
-            trustedProxies,
-            allowRealIpFallback,
-            rateLimiter,
-          });
-          if (!pluginAuthOk) {
-            return;
-          }
-        }
-        if (await handlePluginRequest(req, res)) {
-          return;
-        }
-      }
       if (openResponsesEnabled) {
         if (
           await handleOpenResponsesHttpRequest(req, res, {
@@ -607,6 +589,24 @@ export function createGatewayHttpServer(opts: {
             root: controlUiRoot,
           })
         ) {
+          return;
+        }
+      }
+      if (handlePluginRequest) {
+        if (shouldEnforcePluginGatewayAuth?.(requestPath) ?? true) {
+          const pluginAuthOk = await enforcePluginRouteGatewayAuth({
+            req,
+            res,
+            auth: resolvedAuth,
+            trustedProxies,
+            allowRealIpFallback,
+            rateLimiter,
+          });
+          if (!pluginAuthOk) {
+            return;
+          }
+        }
+        if (await handlePluginRequest(req, res)) {
           return;
         }
       }
