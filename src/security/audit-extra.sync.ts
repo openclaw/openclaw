@@ -1085,6 +1085,12 @@ export function collectNodeDenyCommandPatternFindings(cfg: OpenClawConfig): Secu
       for (const value of overrideAllowCommands.get(entry.overrideKey) ?? []) {
         knownCommands.add(value);
       }
+    } else {
+      for (const values of overrideAllowCommands.values()) {
+        for (const value of values) {
+          knownCommands.add(value);
+        }
+      }
     }
 
     for (const value of entry.values) {
