@@ -1,82 +1,12 @@
 import type { AcpRuntimeEvent } from "openclaw/plugin-sdk";
+import { isAcpJsonRpcMessage, normalizeJsonRpcId } from "./jsonrpc.js";
 import {
-  asOptionalBoolean,
   asOptionalString,
   asString,
   asTrimmedString,
-  type AcpxErrorEvent,
   type AcpxJsonObject,
   isRecord,
 } from "./shared.js";
-
-type JsonRpcId = string | number | null;
-
-export type PromptParseContext = {
-  promptRequestIds: Set<string>;
-};
-
-function isJsonRpcId(value: unknown): value is JsonRpcId {
-  return (
-    value === null ||
-    typeof value === "string" ||
-    (typeof value === "number" && Number.isFinite(value))
-  );
-}
-
-function normalizeJsonRpcId(value: unknown): string | null {
-  if (!isJsonRpcId(value) || value == null) {
-    return null;
-  }
-  return String(value);
-}
-
-function isAcpJsonRpcMessage(value: unknown): value is Record<string, unknown> {
-  if (!isRecord(value) || value.jsonrpc !== "2.0") {
-    return false;
-  }
-
-  const hasMethod = typeof value.method === "string" && value.method.length > 0;
-  const hasId = Object.hasOwn(value, "id");
-
-  if (hasMethod && !hasId) {
-    return true;
-  }
-
-  if (hasMethod && hasId) {
-    return isJsonRpcId(value.id);
-  }
-
-  if (!hasMethod && hasId) {
-    if (!isJsonRpcId(value.id)) {
-      return false;
-    }
-    const hasResult = Object.hasOwn(value, "result");
-    const hasError = Object.hasOwn(value, "error");
-    return hasResult !== hasError;
-  }
-
-  return false;
-}
-
-export function toAcpxErrorEvent(value: unknown): AcpxErrorEvent | null {
-  if (!isRecord(value)) {
-    return null;
-  }
-  const error = isRecord(value.error) ? value.error : null;
-  if (!error) {
-    return null;
-  }
-  const message = asTrimmedString(error.message) || "acpx reported an error";
-  const codeValue = error.code;
-  return {
-    message,
-    code:
-      typeof codeValue === "number" && Number.isFinite(codeValue)
-        ? String(codeValue)
-        : asOptionalString(codeValue),
-    retryable: asOptionalBoolean(error.retryable),
-  };
-}
 
 export function parseJsonLines(value: string): AcpxJsonObject[] {
   const events: AcpxJsonObject[] = [];
@@ -228,96 +158,74 @@ function parseSessionUpdateEvent(message: Record<string, unknown>): AcpRuntimeEv
   }
 }
 
-function shouldHandlePromptResponse(params: {
-  message: Record<string, unknown>;
-  context?: PromptParseContext;
-}): boolean {
-  const id = normalizeJsonRpcId(params.message.id);
-  if (!id) {
-    return false;
-  }
-  if (!params.context) {
-    return true;
-  }
-  return params.context.promptRequestIds.has(id);
-}
+export class PromptStreamProjector {
+  private readonly promptRequestIds = new Set<string>();
 
-export function parsePromptEventLine(
-  line: string,
-  context?: PromptParseContext,
-): AcpRuntimeEvent | null {
-  const trimmed = line.trim();
-  if (!trimmed) {
-    return null;
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(trimmed);
-  } catch {
-    return {
-      type: "status",
-      text: trimmed,
-    };
-  }
-
-  if (!isRecord(parsed)) {
-    return null;
-  }
-
-  if (!isAcpJsonRpcMessage(parsed)) {
-    const fallbackError = toAcpxErrorEvent(parsed);
-    if (fallbackError) {
+  ingestLine(line: string): AcpRuntimeEvent | null {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      return null;
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(trimmed);
+    } catch {
       return {
-        type: "error",
-        message: fallbackError.message,
-        code: fallbackError.code,
-        retryable: fallbackError.retryable,
+        type: "status",
+        text: trimmed,
       };
     }
-    return null;
-  }
 
-  const updateEvent = parseSessionUpdateEvent(parsed);
-  if (updateEvent) {
-    return updateEvent;
-  }
-
-  if (asTrimmedString(parsed.method) === "session/prompt") {
-    const id = normalizeJsonRpcId(parsed.id);
-    if (id && context) {
-      context.promptRequestIds.add(id);
-    }
-    return null;
-  }
-
-  if (Object.hasOwn(parsed, "error")) {
-    if (!shouldHandlePromptResponse({ message: parsed, context })) {
+    if (!isRecord(parsed) || !isAcpJsonRpcMessage(parsed)) {
       return null;
     }
-    const error = isRecord(parsed.error) ? parsed.error : null;
-    const message = asTrimmedString(error?.message);
-    const codeValue = error?.code;
-    return {
-      type: "error",
-      message: message || "acpx runtime error",
-      code:
-        typeof codeValue === "number" && Number.isFinite(codeValue)
-          ? String(codeValue)
-          : asOptionalString(codeValue),
-      retryable: asOptionalBoolean(error?.retryable),
-    };
-  }
 
-  const stopReason = parsePromptStopReason(parsed);
-  if (stopReason) {
-    if (!shouldHandlePromptResponse({ message: parsed, context })) {
+    const updateEvent = parseSessionUpdateEvent(parsed);
+    if (updateEvent) {
+      return updateEvent;
+    }
+
+    if (asTrimmedString(parsed.method) === "session/prompt") {
+      const id = normalizeJsonRpcId(parsed.id);
+      if (id) {
+        this.promptRequestIds.add(id);
+      }
       return null;
     }
+
+    if (Object.hasOwn(parsed, "error")) {
+      if (!this.shouldHandlePromptResponse(parsed)) {
+        return null;
+      }
+      const error = isRecord(parsed.error) ? parsed.error : null;
+      const message = asTrimmedString(error?.message);
+      const codeValue = error?.code;
+      return {
+        type: "error",
+        message: message || "acpx runtime error",
+        code:
+          typeof codeValue === "number" && Number.isFinite(codeValue)
+            ? String(codeValue)
+            : asOptionalString(codeValue),
+      };
+    }
+
+    const stopReason = parsePromptStopReason(parsed);
+    if (!stopReason || !this.shouldHandlePromptResponse(parsed)) {
+      return null;
+    }
+
     return {
       type: "done",
       stopReason,
     };
   }
 
-  return null;
+  private shouldHandlePromptResponse(message: Record<string, unknown>): boolean {
+    const id = normalizeJsonRpcId(message.id);
+    if (!id) {
+      return false;
+    }
+    return this.promptRequestIds.has(id);
+  }
 }
