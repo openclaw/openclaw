@@ -570,6 +570,18 @@ export type BootstrapTier = "minimal" | "standard" | "full";
 
 const MINIMAL_BOOTSTRAP_ALLOWLIST = new Set([DEFAULT_AGENTS_FILENAME, DEFAULT_TOOLS_FILENAME]);
 
+const STANDARD_BOOTSTRAP_ALLOWLIST = new Set([
+  DEFAULT_AGENTS_FILENAME,
+  DEFAULT_TOOLS_FILENAME,
+  DEFAULT_SOUL_FILENAME,
+  DEFAULT_IDENTITY_FILENAME,
+  DEFAULT_USER_FILENAME,
+  DEFAULT_HEARTBEAT_FILENAME,
+  DEFAULT_BOOTSTRAP_FILENAME,
+  DEFAULT_MEMORY_FILENAME,
+  DEFAULT_MEMORY_ALT_FILENAME,
+]);
+
 /**
  * Resolve the effective bootstrap tier for a session.
  *
@@ -599,8 +611,11 @@ export function filterBootstrapFilesForSession(
   if (tier === "minimal") {
     return files.filter((file) => MINIMAL_BOOTSTRAP_ALLOWLIST.has(file.name));
   }
-  // "standard" and "full" both include all loaded files.
-  // "full" additionally loads extra bootstrap patterns — handled by the caller.
+  if (tier === "standard") {
+    // Standard includes only recognized bootstrap files, excluding extra patterns.
+    return files.filter((file) => STANDARD_BOOTSTRAP_ALLOWLIST.has(file.name));
+  }
+  // "full" includes all loaded files, including extra bootstrap patterns.
   return files;
 }
 
