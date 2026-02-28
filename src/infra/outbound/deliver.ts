@@ -200,19 +200,25 @@ function createPluginHandler(
           mediaUrl,
           payload: { text: caption, mediaUrl, mediaUrls: [mediaUrl] },
         });
+  // Only enable sendPayload for native v2 adapters. Inferred sendFinal (from
+  // v1 sendText/sendMedia) doesn't handle multi-media fan-out or text chunking,
+  // so letting it take the sendPayload fast path would drop attachments and skip
+  // chunking for channelData payloads.
+  const isNativeV2 = normalized.contract === "v2";
   return {
     chunker,
     chunkerMode,
     textChunkLimit: outbound.textChunkLimit,
-    sendPayload: outbound.sendFinal
-      ? async (payload, overrides) =>
-          outbound.sendFinal({
-            ...resolveCtx(overrides),
-            text: payload.text ?? "",
-            mediaUrl: payload.mediaUrl,
-            payload,
-          })
-      : undefined,
+    sendPayload:
+      isNativeV2 && outbound.sendFinal
+        ? async (payload, overrides) =>
+            outbound.sendFinal({
+              ...resolveCtx(overrides),
+              text: payload.text ?? "",
+              mediaUrl: payload.mediaUrl,
+              payload,
+            })
+        : undefined,
     sendText: async (text, overrides) => sendText(text, overrides),
     sendMedia: async (caption, mediaUrl, overrides) => sendMedia(caption, mediaUrl, overrides),
   };
