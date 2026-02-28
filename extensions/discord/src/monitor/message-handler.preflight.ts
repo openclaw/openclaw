@@ -11,7 +11,11 @@ import {
 import { resolveControlCommandGate } from "openclaw/plugin-sdk/command-auth-native";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-detection";
 import { shouldHandleTextCommands } from "openclaw/plugin-sdk/command-surface";
-import { isDangerousNameMatchingEnabled, loadConfig } from "openclaw/plugin-sdk/config-runtime";
+import {
+  isDangerousNameMatchingEnabled,
+  loadConfig,
+  normalizeNonTelegramGroupPolicy,
+} from "openclaw/plugin-sdk/config-runtime";
 import type { SessionBindingRecord } from "openclaw/plugin-sdk/conversation-binding-runtime";
 import { enqueueSystemEvent, recordChannelActivity } from "openclaw/plugin-sdk/infra-runtime";
 import {
@@ -800,7 +804,8 @@ export async function preflightDiscordMessage(
   if (
     isGuildMessage &&
     !isDiscordGroupAllowedByPolicy({
-      groupPolicy: params.groupPolicy,
+      // Normalize "members" to "open": Discord has no Bot API member-check equivalent.
+      groupPolicy: normalizeNonTelegramGroupPolicy(params.groupPolicy),
       guildAllowlisted: Boolean(guildInfo),
       channelAllowlistConfigured,
       channelAllowed,
