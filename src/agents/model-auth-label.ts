@@ -36,6 +36,13 @@ export function resolveModelAuthLabel(params: {
   cfg?: OpenClawConfig;
   sessionEntry?: SessionEntry;
   agentDir?: string;
+  /**
+   * When true, suppress partial API key/token snippets from the output.
+   * Use this for chat-channel surfaces (Telegram, Discord, Slack, etc.) where
+   * key previews would leak sensitive material into message history.
+   * OAuth and secret-ref labels are still shown unchanged.
+   */
+  hideKeySnippet?: boolean;
 }): string | undefined {
   const resolvedProvider = params.provider?.trim();
   if (!resolvedProvider) {
@@ -69,13 +76,13 @@ export function resolveModelAuthLabel(params: {
       return `oauth${label ? ` (${label})` : ""}`;
     }
     if (profile.type === "token") {
-      return `token ${formatCredentialSnippet({ value: profile.token, ref: profile.tokenRef })}${
-        label ? ` (${label})` : ""
-      }`;
+      const tokenSnippet = formatCredentialSnippet({ value: profile.token, ref: profile.tokenRef });
+      const tokenDisplay = params.hideKeySnippet && !profile.tokenRef ? "" : ` ${tokenSnippet}`;
+      return `token${tokenDisplay}${label ? ` (${label})` : ""}`;
     }
-    return `api-key ${formatCredentialSnippet({ value: profile.key, ref: profile.keyRef })}${
-      label ? ` (${label})` : ""
-    }`;
+    const keySnippet = formatCredentialSnippet({ value: profile.key, ref: profile.keyRef });
+    const keyDisplay = params.hideKeySnippet && !profile.keyRef ? "" : ` ${keySnippet}`;
+    return `api-key${keyDisplay}${label ? ` (${label})` : ""}`;
   }
 
   const envKey = resolveEnvApiKey(providerKey);
@@ -83,11 +90,17 @@ export function resolveModelAuthLabel(params: {
     if (envKey.source.includes("OAUTH_TOKEN")) {
       return `oauth (${envKey.source})`;
     }
+    if (params.hideKeySnippet) {
+      return `api-key (${envKey.source})`;
+    }
     return `api-key ${formatApiKeySnippet(envKey.apiKey)} (${envKey.source})`;
   }
 
   const customKey = getCustomProviderApiKey(params.cfg, providerKey);
   if (customKey) {
+    if (params.hideKeySnippet) {
+      return `api-key (models.json)`;
+    }
     return `api-key ${formatApiKeySnippet(customKey)} (models.json)`;
   }
 

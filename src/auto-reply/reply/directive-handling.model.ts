@@ -231,6 +231,7 @@ export async function maybeHandleModelDirectiveInfo(params: {
     const reply = await resolveModelsCommandReply({
       cfg: params.cfg,
       commandBodyNormalized: "/models",
+      surface: params.surface,
     });
     return reply ?? { text: "No models available." };
   }
