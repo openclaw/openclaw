@@ -1,0 +1,15 @@
+{
+  "name": "@openclaw/uls-bridge",
+  "version": "2026.2.27",
+  "private": true,
+  "description": "OpenClaw ULS (Unified Latent Space) bridge plugin — cross-agent shared memory with dialectical constraint enforcement",
+  "type": "module",
+  "peerDependencies": {
+    "openclaw": ">=2026.1.26"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

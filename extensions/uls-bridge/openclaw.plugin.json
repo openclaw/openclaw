@@ -1,0 +1,29 @@
+{
+  "id": "uls-bridge",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": {
+        "type": "boolean",
+        "default": false,
+        "description": "Enable ULS shared memory bridge"
+      },
+      "storagePath": {
+        "type": "string",
+        "description": "Path to ULS storage directory (default: ~/.openclaw/uls)"
+      },
+      "indexType": {
+        "type": "string",
+        "enum": ["simple", "faiss"],
+        "default": "simple",
+        "description": "Vector index backend"
+      },
+      "maxInjectionTokens": {
+        "type": "number",
+        "default": 2048,
+        "description": "Max tokens to inject from shared memory into prompts"
+      }
+    }
+  }
+}
