@@ -595,6 +595,27 @@ function createOpenRouterWrapper(
   };
 }
 
+/**
+ * Create a streamFn wrapper that injects custom headers from provider config.
+ * This enables providers like kimi-coding that require specific headers
+ * (e.g., User-Agent) for authentication.
+ */
+function createProviderHeadersWrapper(
+  baseStreamFn: StreamFn | undefined,
+  headers: Record<string, string>,
+): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    return underlying(model, context, {
+      ...options,
+      headers: {
+        ...options?.headers,
+        ...headers,
+      },
+    });
+  };
+}
+
 function isGemini31Model(modelId: string): boolean {
   const normalized = modelId.toLowerCase();
   return normalized.includes("gemini-3.1-pro") || normalized.includes("gemini-3.1-flash");
@@ -781,6 +802,16 @@ export function applyExtraParamsToAgent(
     const openRouterThinkingLevel = modelId === "auto" ? undefined : thinkingLevel;
     agent.streamFn = createOpenRouterWrapper(agent.streamFn, openRouterThinkingLevel);
     agent.streamFn = createOpenRouterSystemCacheWrapper(agent.streamFn);
+  }
+
+  // Inject custom headers from provider config (e.g., User-Agent for kimi-coding).
+  // This enables providers that require specific headers for authentication.
+  const providerHeaders = cfg?.models?.providers?.[provider]?.headers;
+  if (providerHeaders && Object.keys(providerHeaders).length > 0) {
+    log.debug(
+      `injecting provider headers for ${provider}: ${Object.keys(providerHeaders).join(", ")}`,
+    );
+    agent.streamFn = createProviderHeadersWrapper(agent.streamFn, providerHeaders);
   }
 
   if (provider === "amazon-bedrock" && !isAnthropicBedrockModel(modelId)) {
