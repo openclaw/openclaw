@@ -6,7 +6,12 @@ import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { readLoggingConfig } from "./config.js";
 import type { ConsoleStyle } from "./console.js";
 import { resolveEnvLogLevelOverride } from "./env-log-level.js";
-import { type LogLevel, levelToMinLevel, normalizeLogLevel } from "./levels.js";
+import {
+  type LogLevel,
+  levelToMinLevel,
+  levelToTslogMinLevel,
+  normalizeLogLevel,
+} from "./levels.js";
 import { resolveNodeRequireFromMeta } from "./node-require.js";
 import { loggingState } from "./state.js";
 
@@ -107,7 +112,7 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
   let warnedAboutSizeCap = false;
   const logger = new TsLogger<LogObj>({
     name: "openclaw",
-    minLevel: levelToMinLevel(settings.level),
+    minLevel: levelToTslogMinLevel(settings.level),
     type: "hidden", // no ansi formatting
   });
 
@@ -188,11 +193,15 @@ export function getChildLogger(
   opts?: { level?: LogLevel },
 ): TsLogger<LogObj> {
   const base = getLogger();
-  const minLevel = opts?.level ? levelToMinLevel(opts.level) : undefined;
+  const minLevel = opts?.level ? levelToTslogMinLevel(opts.level) : undefined;
   const name = bindings ? JSON.stringify(bindings) : undefined;
+  // Do NOT pass `minLevel: undefined` — spreading an explicit `undefined` value
+  // into getSubLogger's settings object overrides the parent logger's minLevel,
+  // and tslog resolves `undefined` as 0 (allow-all), breaking level filtering
+  // for all child loggers when no explicit level override is requested.
   return base.getSubLogger({
     name,
-    minLevel,
+    ...(minLevel !== undefined ? { minLevel } : {}),
     prefix: bindings ? [name ?? ""] : [],
   });
 }
