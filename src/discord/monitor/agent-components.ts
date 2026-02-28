@@ -27,6 +27,7 @@ import { resolveCommandAuthorizedFromAuthorizers } from "../../channels/command-
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
 import { recordInboundSession } from "../../channels/session.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { loadConfig } from "../../config/config.js";
 import { isDangerousNameMatchingEnabled } from "../../config/dangerous-name-matching.js";
 import { resolveMarkdownTableMode } from "../../config/markdown-tables.js";
 import { readSessionUpdatedAt, resolveStorePath } from "../../config/sessions.js";
@@ -34,8 +35,9 @@ import type { DiscordAccountConfig } from "../../config/types.discord.js";
 import { logVerbose } from "../../globals.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { logDebug, logError } from "../../logger.js";
-import { buildPairingReply } from "../../pairing/pairing-messages.js";
+import { buildUnpairedResponse } from "../../pairing/pairing-messages.js";
 import { upsertChannelPairingRequest } from "../../pairing/pairing-store.js";
+import { getUnpairedResponseMode } from "../../pairing/unpaired-response.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
 import { createNonExitingRuntime, type RuntimeEnv } from "../../runtime.js";
 import { readStoreAllowFromForDmPolicy } from "../../security/dm-policy-shared.js";
@@ -501,19 +503,25 @@ async function ensureDmComponentAuthorized(params: {
         name: user.username,
       },
     });
-    try {
-      await interaction.reply({
-        content: created
-          ? buildPairingReply({
-              channel: "discord",
-              idLine: `Your Discord user id: ${user.id}`,
-              code,
-            })
-          : "Pairing already requested. Ask the bot owner to approve your code.",
-        ...replyOpts,
-      });
-    } catch {
-      // Interaction may have expired
+    const cfg = loadConfig();
+    const responseText = created
+      ? buildUnpairedResponse({
+          channel: "discord",
+          idLine: `Your Discord user id: ${user.id}`,
+          code,
+          mode: getUnpairedResponseMode(cfg),
+        })
+      : "Pairing already requested. Ask the bot owner to approve your code.";
+    // Only send response if not null (i.e., not in silent mode)
+    if (responseText !== null) {
+      try {
+        await interaction.reply({
+          content: responseText,
+          ...replyOpts,
+        });
+      } catch {
+        // Interaction may have expired
+      }
     }
     return false;
   }

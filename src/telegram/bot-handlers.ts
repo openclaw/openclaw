@@ -23,6 +23,7 @@ import { danger, logVerbose, warn } from "../globals.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { MediaFetchError } from "../media/fetch.js";
 import { readChannelAllowFromStore } from "../pairing/pairing-store.js";
+import { getUnpairedResponseMode } from "../pairing/unpaired-response.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../routing/session-key.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
@@ -1367,6 +1368,7 @@ export const registerTelegramHandlers = ({
         const dmAuthorized = await enforceTelegramDmAccess({
           isGroup: event.isGroup,
           dmPolicy,
+          unpairedResponse: getUnpairedResponseMode(loadConfig()),
           msg: event.msg,
           chatId: event.chatId,
           effectiveDmAllow,

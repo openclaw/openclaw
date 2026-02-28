@@ -5,8 +5,9 @@ import {
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "../../config/runtime-group-policy.js";
 import { logVerbose } from "../../globals.js";
-import { buildPairingReply } from "../../pairing/pairing-messages.js";
+import { buildUnpairedResponse } from "../../pairing/pairing-messages.js";
 import { upsertChannelPairingRequest } from "../../pairing/pairing-store.js";
+import { getUnpairedResponseMode } from "../../pairing/unpaired-response.js";
 import {
   readStoreAllowFromForDmPolicy,
   resolveDmGroupAccessWithLists,
@@ -181,16 +182,20 @@ export async function checkInboundAccessControl(params: {
           logVerbose(
             `whatsapp pairing request sender=${candidate} name=${params.pushName ?? "unknown"}`,
           );
-          try {
-            await params.sock.sendMessage(params.remoteJid, {
-              text: buildPairingReply({
-                channel: "whatsapp",
-                idLine: `Your WhatsApp phone number: ${candidate}`,
-                code,
-              }),
-            });
-          } catch (err) {
-            logVerbose(`whatsapp pairing reply failed for ${candidate}: ${String(err)}`);
+          const responseText = buildUnpairedResponse({
+            channel: "whatsapp",
+            idLine: `Your WhatsApp phone number: ${candidate}`,
+            code,
+            mode: getUnpairedResponseMode(cfg),
+          });
+          if (responseText !== null) {
+            try {
+              await params.sock.sendMessage(params.remoteJid, {
+                text: responseText,
+              });
+            } catch (err) {
+              logVerbose(`whatsapp pairing reply failed for ${candidate}: ${String(err)}`);
+            }
           }
         }
       }

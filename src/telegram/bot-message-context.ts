@@ -33,6 +33,7 @@ import { readSessionUpdatedAt, resolveStorePath } from "../config/sessions.js";
 import type { DmPolicy, TelegramGroupConfig, TelegramTopicConfig } from "../config/types.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { recordChannelActivity } from "../infra/channel-activity.js";
+import { getUnpairedResponseMode } from "../pairing/unpaired-response.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../routing/session-key.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
@@ -277,6 +278,7 @@ export const buildTelegramMessageContext = async ({
     !(await enforceTelegramDmAccess({
       isGroup,
       dmPolicy,
+      unpairedResponse: getUnpairedResponseMode(loadConfig()),
       msg,
       chatId,
       effectiveDmAllow,
