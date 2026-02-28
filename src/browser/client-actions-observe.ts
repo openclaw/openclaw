@@ -25,7 +25,7 @@ function buildQuerySuffix(params: Array<[string, string | boolean | undefined]>)
 export async function browserConsoleMessages(
   baseUrl: string | undefined,
   opts: { level?: string; targetId?: string; profile?: string } = {},
-): Promise<{ ok: true; messages: BrowserConsoleMessage[]; targetId: string }> {
+): Promise<{ ok: true; messages: BrowserConsoleMessage[]; targetId: string; url?: string }> {
   const suffix = buildQuerySuffix([
     ["level", opts.level],
     ["targetId", opts.targetId],
@@ -35,6 +35,7 @@ export async function browserConsoleMessages(
     ok: true;
     messages: BrowserConsoleMessage[];
     targetId: string;
+    url?: string;
   }>(withBaseUrl(baseUrl, `/console${suffix}`), { timeoutMs: 20000 });
 }
 
