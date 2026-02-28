@@ -1,10 +1,10 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import type { GatewayClient } from "./client.js";
 import { CONFIG_PATH } from "../config/config.js";
+import { resolveRestartSentinelPath } from "../infra/restart-sentinel.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 
 vi.mock("../infra/update-runner.js", () => ({
@@ -19,7 +19,13 @@ vi.mock("../infra/update-runner.js", () => ({
 
 import { runGatewayUpdate } from "../infra/update-runner.js";
 import { connectGatewayClient } from "./test-helpers.e2e.js";
-import { connectOk, installGatewayTestHooks, onceMessage, rpcReq } from "./test-helpers.js";
+import {
+  connectOk,
+  installGatewayTestHooks,
+  onceMessage,
+  rpcReq,
+  trackConnectChallengeNonce,
+} from "./test-helpers.js";
 import { installConnectedControlUiServerSuite } from "./test-with-server.js";
 
 installGatewayTestHooks({ scope: "suite" });
@@ -74,6 +80,7 @@ async function waitForSignal(check: () => boolean, timeoutMs = 2000) {
 describe("gateway role enforcement", () => {
   test("enforces operator and node permissions", async () => {
     const nodeWs = new WebSocket(`ws://127.0.0.1:${port}`);
+    trackConnectChallengeNonce(nodeWs);
     await new Promise<void>((resolve) => nodeWs.once("open", resolve));
 
     try {
@@ -140,7 +147,7 @@ describe("gateway update.run", () => {
       await waitForSignal(() => sigusr1.mock.calls.length > 0);
       expect(sigusr1).toHaveBeenCalled();
 
-      const sentinelPath = path.join(os.homedir(), ".bot", "restart-sentinel.json");
+      const sentinelPath = resolveRestartSentinelPath();
       const raw = await fs.readFile(sentinelPath, "utf-8");
       const parsed = JSON.parse(raw) as {
         payload?: { kind?: string; stats?: { mode?: string } };

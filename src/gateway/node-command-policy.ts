@@ -20,6 +20,9 @@ const SCREEN_DANGEROUS_COMMANDS = ["screen.record"];
 const LOCATION_COMMANDS = ["location.get"];
 
 const DEVICE_COMMANDS = ["device.info", "device.status"];
+const DEVICE_DIAGNOSTICS_COMMANDS = ["device.permissions", "device.health"];
+
+const ANDROID_NOTIFICATION_COMMANDS = ["notifications.list", "notifications.actions"];
 
 const CONTACTS_COMMANDS = ["contacts.search"];
 const CONTACTS_DANGEROUS_COMMANDS = ["contacts.add"];
@@ -70,6 +73,8 @@ const PLATFORM_DEFAULTS: Record<string, string[]> = {
     ...CAMERA_COMMANDS,
     ...LOCATION_COMMANDS,
     ...DEVICE_COMMANDS,
+    ...DEVICE_DIAGNOSTICS_COMMANDS,
+    ...ANDROID_NOTIFICATION_COMMANDS,
     ...CONTACTS_COMMANDS,
     ...CALENDAR_COMMANDS,
     ...REMINDERS_COMMANDS,

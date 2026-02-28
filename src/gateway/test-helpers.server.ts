@@ -18,7 +18,12 @@ import { resetLogger, setLoggerOverride } from "../logging.js";
 import { DEFAULT_AGENT_ID, toAgentStoreSessionKey } from "../routing/session-key.js";
 import { captureEnv } from "../test-utils/env.js";
 import { getDeterministicFreePortBlock } from "../test-utils/ports.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+  type GatewayClientMode,
+  type GatewayClientName,
+} from "../utils/message-channel.js";
 import { buildDeviceAuthPayload } from "./device-auth.js";
 import { PROTOCOL_VERSION } from "./protocol/index.js";
 import {
@@ -304,6 +309,38 @@ type TrackedWs = WebSocket & Record<string, unknown>;
 export function getTrackedConnectChallengeNonce(ws: WebSocket): string | undefined {
   const tracked = (ws as TrackedWs)[CONNECT_CHALLENGE_NONCE_KEY];
   return typeof tracked === "string" && tracked.trim().length > 0 ? tracked.trim() : undefined;
+}
+
+/**
+ * Wait for the connect challenge nonce to arrive on a tracked WebSocket.
+ * Returns the nonce string once available, or undefined after timeout.
+ */
+export async function readConnectChallengeNonce(
+  ws: WebSocket,
+  timeoutMs = 2000,
+): Promise<string | undefined> {
+  trackConnectChallengeNonce(ws);
+  const existing = getTrackedConnectChallengeNonce(ws);
+  if (existing) {
+    return existing;
+  }
+  return new Promise<string | undefined>((resolve) => {
+    const timer = setTimeout(() => {
+      ws.off("message", check);
+      resolve(getTrackedConnectChallengeNonce(ws));
+    }, timeoutMs);
+    const check = () => {
+      const nonce = getTrackedConnectChallengeNonce(ws);
+      if (nonce) {
+        clearTimeout(timer);
+        ws.off("message", check);
+        resolve(nonce);
+      }
+    };
+    ws.on("message", check);
+    // Check immediately in case it arrived between calls.
+    check();
+  });
 }
 
 export function trackConnectChallengeNonce(ws: WebSocket): void {
@@ -658,4 +695,59 @@ export async function waitForSystemEvent(timeoutMs = 2000) {
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   throw new Error("timeout waiting for system event");
+}
+
+/**
+ * Reads the connect challenge nonce from a WebSocket that already has
+ * `trackConnectChallengeNonce` installed. Returns the cached nonce if
+ * already captured, otherwise waits for the `connect.challenge` event.
+ */
+export async function readConnectChallengeNonce(ws: WebSocket): Promise<string> {
+  const cached = getTrackedConnectChallengeNonce(ws);
+  if (cached) {
+    return cached;
+  }
+  const challenge = await onceMessage<{
+    type?: string;
+    event?: string;
+    payload?: Record<string, unknown> | null;
+  }>(ws, (o) => o.type === "event" && o.event === "connect.challenge");
+  const nonce = (challenge.payload as { nonce?: unknown } | undefined)?.nonce;
+  expect(typeof nonce).toBe("string");
+  return String(nonce);
+}
+
+/**
+ * Convenience wrapper: starts a gateway server + connected client and
+ * immediately performs `connectOk`. Returns the same shape as
+ * `startServerWithClient` plus the resolved port.
+ */
+export async function startConnectedServerWithClient(
+  token?: string,
+  opts?: Parameters<typeof startServerWithClient>[1],
+) {
+  const started = await startServerWithClient(token, opts);
+  await connectOk(started.ws);
+  return started;
+}
+
+/**
+ * Opens a webchat WebSocket client, tracks the nonce, waits for open,
+ * and performs `connectOk` with webchat client info.
+ */
+export async function connectWebchatClient(params: { port: number }): Promise<WebSocket> {
+  const ws = new WebSocket(`ws://127.0.0.1:${params.port}`, {
+    headers: { origin: `http://127.0.0.1:${params.port}` },
+  });
+  trackConnectChallengeNonce(ws);
+  await new Promise<void>((resolve) => ws.once("open", resolve));
+  await connectOk(ws, {
+    client: {
+      id: GATEWAY_CLIENT_NAMES.WEBCHAT,
+      version: "1.0.0",
+      platform: "test",
+      mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+    },
+  });
+  return ws;
 }

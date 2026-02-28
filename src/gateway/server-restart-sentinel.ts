@@ -98,6 +98,7 @@ export async function scheduleRestartSentinelWake(_params: { deps: CliDeps }) {
       threadId: resolvedThreadId,
       payloads: [{ text: message }],
       agentId: outboundSession?.agentId,
+      session: outboundSession,
       bestEffort: true,
     });
   } catch (err) {

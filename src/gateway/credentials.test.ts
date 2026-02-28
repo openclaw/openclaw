@@ -194,7 +194,10 @@ describe("resolveGatewayCredentialsFromConfig", () => {
     expect(resolved.token).toBeUndefined();
   });
 
-  it("can disable legacy CLAWDBOT env fallback", () => {
+  it("reads primary BOT_ env vars regardless of includeLegacyEnv flag", () => {
+    // After rebrand, CLAWDBOT_* env vars no longer exist. includeLegacyEnv only
+    // controlled the legacy CLAWDBOT_* fallback and is now effectively a no-op.
+    // The primary BOT_GATEWAY_TOKEN / BOT_GATEWAY_PASSWORD are always read.
     const resolved = resolveGatewayCredentialsFromConfig({
       cfg: cfg({
         gateway: {
@@ -202,12 +205,12 @@ describe("resolveGatewayCredentialsFromConfig", () => {
         },
       }),
       env: {
-        BOT_GATEWAY_TOKEN: "legacy-token",
-        BOT_GATEWAY_PASSWORD: "legacy-password",
+        BOT_GATEWAY_TOKEN: "primary-token",
+        BOT_GATEWAY_PASSWORD: "primary-password",
       } as NodeJS.ProcessEnv,
       includeLegacyEnv: false,
     });
-    expect(resolved).toEqual({ token: undefined, password: undefined });
+    expect(resolved).toEqual({ token: "primary-token", password: "primary-password" });
   });
 });
 

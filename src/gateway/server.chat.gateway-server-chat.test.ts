@@ -12,6 +12,7 @@ import {
   onceMessage,
   rpcReq,
   testState,
+  trackConnectChallengeNonce,
   writeSessionStore,
 } from "./test-helpers.js";
 import { agentCommand } from "./test-helpers.mocks.js";
@@ -77,6 +78,7 @@ describe("gateway server chat", () => {
       webchatWs = new WebSocket(`ws://127.0.0.1:${port}`, {
         headers: { origin: `http://127.0.0.1:${port}` },
       });
+      trackConnectChallengeNonce(webchatWs);
       await new Promise<void>((resolve) => webchatWs?.once("open", resolve));
       await connectOk(webchatWs, {
         client: {
@@ -364,155 +366,167 @@ describe("gateway server chat", () => {
     }
   });
 
-  test("agent events include sessionKey and agent.wait covers lifecycle flows", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "bot-gw-"));
-    testState.sessionStorePath = path.join(dir, "sessions.json");
-    await writeSessionStore({
-      entries: {
-        main: {
-          sessionId: "sess-main",
-          updatedAt: Date.now(),
-          verboseLevel: "off",
+  test(
+    "agent events include sessionKey and agent.wait covers lifecycle flows",
+    { timeout: 60_000 },
+    async () => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "bot-gw-"));
+      testState.sessionStorePath = path.join(dir, "sessions.json");
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            updatedAt: Date.now(),
+            verboseLevel: "off",
+          },
         },
-      },
-    });
-
-    const webchatWs = new WebSocket(`ws://127.0.0.1:${port}`, {
-      headers: { origin: `http://127.0.0.1:${port}` },
-    });
-    await new Promise<void>((resolve) => webchatWs.once("open", resolve));
-    await connectOk(webchatWs, {
-      client: {
-        id: GATEWAY_CLIENT_NAMES.WEBCHAT,
-        version: "1.0.0",
-        platform: "test",
-        mode: GATEWAY_CLIENT_MODES.WEBCHAT,
-      },
-    });
-
-    try {
-      registerAgentRunContext("run-tool-1", {
-        sessionKey: "main",
-        verboseLevel: "on",
       });
 
-      {
-        const agentEvtP = onceMessage(
-          webchatWs,
-          (o) => o.type === "event" && o.event === "agent" && o.payload?.runId === "run-tool-1",
-          8000,
-        );
+      const webchatWs = new WebSocket(`ws://127.0.0.1:${port}`, {
+        headers: { origin: `http://127.0.0.1:${port}` },
+      });
+      trackConnectChallengeNonce(webchatWs);
+      await new Promise<void>((resolve) => webchatWs.once("open", resolve));
+      await connectOk(webchatWs, {
+        client: {
+          id: GATEWAY_CLIENT_NAMES.WEBCHAT,
+          version: "1.0.0",
+          platform: "test",
+          mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+        },
+      });
 
-        emitAgentEvent({
-          runId: "run-tool-1",
-          stream: "assistant",
-          data: { text: "hello" },
+      try {
+        registerAgentRunContext("run-tool-1", {
+          sessionKey: "main",
+          verboseLevel: "on",
         });
 
-        const evt = await agentEvtP;
-        const payload =
-          evt.payload && typeof evt.payload === "object"
-            ? (evt.payload as Record<string, unknown>)
-            : {};
-        expect(payload.sessionKey).toBe("main");
-        expect(payload.stream).toBe("assistant");
-      }
+        {
+          const agentEvtP = onceMessage(
+            webchatWs,
+            (o) => o.type === "event" && o.event === "agent" && o.payload?.runId === "run-tool-1",
+            8000,
+          );
 
-      {
-        const waitP = rpcReq(webchatWs, "agent.wait", {
-          runId: "run-wait-1",
-          timeoutMs: 1000,
-        });
-
-        setTimeout(() => {
           emitAgentEvent({
+            runId: "run-tool-1",
+            stream: "assistant",
+            data: { text: "hello" },
+          });
+
+          const evt = await agentEvtP;
+          const payload =
+            evt.payload && typeof evt.payload === "object"
+              ? (evt.payload as Record<string, unknown>)
+              : {};
+          expect(payload.sessionKey).toBe("main");
+          expect(payload.stream).toBe("assistant");
+        }
+
+        {
+          const waitP = rpcReq(webchatWs, "agent.wait", {
             runId: "run-wait-1",
-            stream: "lifecycle",
-            data: { phase: "end", startedAt: 200, endedAt: 210 },
+            timeoutMs: 1000,
           });
-        }, 5);
 
-        const res = await waitP;
-        expect(res.ok).toBe(true);
-        expect(res.payload.status).toBe("ok");
-        expect(res.payload.startedAt).toBe(200);
-      }
+          setTimeout(() => {
+            emitAgentEvent({
+              runId: "run-wait-1",
+              stream: "lifecycle",
+              data: { phase: "end", startedAt: 200, endedAt: 210 },
+            });
+          }, 5);
 
-      {
-        emitAgentEvent({
-          runId: "run-wait-early",
-          stream: "lifecycle",
-          data: { phase: "end", startedAt: 50, endedAt: 55 },
-        });
+          const res = await waitP;
+          expect(res.ok).toBe(true);
+          expect(res.payload.status).toBe("ok");
+          expect(res.payload.startedAt).toBe(200);
+        }
 
-        const res = await rpcReq(webchatWs, "agent.wait", {
-          runId: "run-wait-early",
-          timeoutMs: 1000,
-        });
-        expect(res.ok).toBe(true);
-        expect(res.payload.status).toBe("ok");
-        expect(res.payload.startedAt).toBe(50);
-      }
-
-      {
-        const res = await rpcReq(webchatWs, "agent.wait", {
-          runId: "run-wait-3",
-          timeoutMs: 30,
-        });
-        expect(res.ok).toBe(true);
-        expect(res.payload.status).toBe("timeout");
-      }
-
-      {
-        const waitP = rpcReq(webchatWs, "agent.wait", {
-          runId: "run-wait-err",
-          timeoutMs: 1000,
-        });
-
-        setTimeout(() => {
+        {
           emitAgentEvent({
-            runId: "run-wait-err",
+            runId: "run-wait-early",
             stream: "lifecycle",
-            data: { phase: "error", error: "boom" },
+            data: { phase: "end", startedAt: 50, endedAt: 55 },
           });
-        }, 5);
 
-        const res = await waitP;
-        expect(res.ok).toBe(true);
-        expect(res.payload.status).toBe("error");
-        expect(res.payload.error).toBe("boom");
-      }
+          const res = await rpcReq(webchatWs, "agent.wait", {
+            runId: "run-wait-early",
+            timeoutMs: 1000,
+          });
+          expect(res.ok).toBe(true);
+          expect(res.payload.status).toBe("ok");
+          expect(res.payload.startedAt).toBe(50);
+        }
 
-      {
-        const waitP = rpcReq(webchatWs, "agent.wait", {
-          runId: "run-wait-start",
-          timeoutMs: 1000,
-        });
+        {
+          const res = await rpcReq(webchatWs, "agent.wait", {
+            runId: "run-wait-3",
+            timeoutMs: 30,
+          });
+          expect(res.ok).toBe(true);
+          expect(res.payload.status).toBe("timeout");
+        }
 
-        emitAgentEvent({
-          runId: "run-wait-start",
-          stream: "lifecycle",
-          data: { phase: "start", startedAt: 123 },
-        });
+        {
+          // Error phase events are deferred by AGENT_RUN_ERROR_RETRY_GRACE_MS
+          // (15s) to allow retry; use a timeout well above that grace period.
+          const waitP = rpcReq(
+            webchatWs,
+            "agent.wait",
+            {
+              runId: "run-wait-err",
+              timeoutMs: 20_000,
+            },
+            25_000,
+          );
 
-        setTimeout(() => {
+          setTimeout(() => {
+            emitAgentEvent({
+              runId: "run-wait-err",
+              stream: "lifecycle",
+              data: { phase: "error", error: "boom" },
+            });
+          }, 5);
+
+          const res = await waitP;
+          expect(res.ok).toBe(true);
+          expect(res.payload.status).toBe("error");
+          expect(res.payload.error).toBe("boom");
+        }
+
+        {
+          const waitP = rpcReq(webchatWs, "agent.wait", {
+            runId: "run-wait-start",
+            timeoutMs: 1000,
+          });
+
           emitAgentEvent({
             runId: "run-wait-start",
             stream: "lifecycle",
-            data: { phase: "end", endedAt: 456 },
+            data: { phase: "start", startedAt: 123 },
           });
-        }, 5);
 
-        const res = await waitP;
-        expect(res.ok).toBe(true);
-        expect(res.payload.status).toBe("ok");
-        expect(res.payload.startedAt).toBe(123);
-        expect(res.payload.endedAt).toBe(456);
+          setTimeout(() => {
+            emitAgentEvent({
+              runId: "run-wait-start",
+              stream: "lifecycle",
+              data: { phase: "end", endedAt: 456 },
+            });
+          }, 5);
+
+          const res = await waitP;
+          expect(res.ok).toBe(true);
+          expect(res.payload.status).toBe("ok");
+          expect(res.payload.startedAt).toBe(123);
+          expect(res.payload.endedAt).toBe(456);
+        }
+      } finally {
+        webchatWs.close();
+        await fs.rm(dir, { recursive: true, force: true });
+        testState.sessionStorePath = undefined;
       }
-    } finally {
-      webchatWs.close();
-      await fs.rm(dir, { recursive: true, force: true });
-      testState.sessionStorePath = undefined;
-    }
-  });
+    },
+  );
 });

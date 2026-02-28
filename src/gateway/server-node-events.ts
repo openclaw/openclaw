@@ -107,13 +107,30 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
         return;
       }
       const sessionKeyRaw = typeof obj.sessionKey === "string" ? obj.sessionKey.trim() : "";
+      const eventId = typeof obj.eventId === "string" ? obj.eventId.trim() : "";
+
+      // Deduplicate repeated transcript payloads for the same session.
+      // When an eventId is provided, use it as the dedup key; otherwise hash on text.
+      const dedupeKey = `voice:${sessionKeyRaw || "default"}:${eventId || text}`;
+      const existingDedupe = ctx.dedupe.get(dedupeKey);
+      if (existingDedupe) {
+        return;
+      }
+      ctx.dedupe.set(dedupeKey, { ts: Date.now(), ok: true });
+
       const cfg = loadConfig();
       const rawMainKey = normalizeMainKey(cfg.session?.mainKey);
       const sessionKey = sessionKeyRaw.length > 0 ? sessionKeyRaw : rawMainKey;
       const { storePath, entry, canonicalKey } = loadSessionEntry(sessionKey);
       const now = Date.now();
       const sessionId = entry?.sessionId ?? randomUUID();
-      await touchSessionStore({ cfg, sessionKey, storePath, canonicalKey, entry, sessionId, now });
+
+      // Fire-and-forget: do not block agent dispatch when session-store touch fails.
+      touchSessionStore({ cfg, sessionKey, storePath, canonicalKey, entry, sessionId, now }).catch(
+        (err) => {
+          ctx.logGateway.warn(`voice session-store update failed: ${formatForLog(err)}`);
+        },
+      );
 
       // Ensure chat UI clients refresh when this run completes (even though it wasn't started via chat.send).
       // This maps agent bus events (keyed by sessionId) to chat events (keyed by clientRunId).
@@ -130,6 +147,11 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
           thinking: "low",
           deliver: false,
           messageChannel: "node",
+          inputProvenance: {
+            kind: "external_user",
+            sourceChannel: "voice",
+            sourceTool: "gateway.voice.transcript",
+          },
         },
         defaultRuntime,
         ctx.deps,
@@ -167,9 +189,9 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       }
 
       const channelRaw = typeof link?.channel === "string" ? link.channel.trim() : "";
-      const channel = normalizeChannelId(channelRaw) ?? undefined;
-      const to = typeof link?.to === "string" && link.to.trim() ? link.to.trim() : undefined;
-      const deliver = Boolean(link?.deliver) && Boolean(channel);
+      let channel = normalizeChannelId(channelRaw) ?? undefined;
+      let to = typeof link?.to === "string" && link.to.trim() ? link.to.trim() : undefined;
+      let deliver = Boolean(link?.deliver);
 
       const sessionKeyRaw = (link?.sessionKey ?? "").trim();
       const sessionKey = sessionKeyRaw.length > 0 ? sessionKeyRaw : `node-${nodeId}`;
@@ -178,6 +200,24 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       const now = Date.now();
       const sessionId = entry?.sessionId ?? randomUUID();
       await touchSessionStore({ cfg, sessionKey, storePath, canonicalKey, entry, sessionId, now });
+
+      // When delivery is requested but no explicit channel was provided,
+      // attempt to reuse the session's last known route. If no route is
+      // available, disable delivery instead of falling back globally.
+      if (deliver && !channel) {
+        const lastChannel = entry?.lastChannel;
+        const lastTo = entry?.lastTo;
+        if (lastChannel) {
+          channel = normalizeChannelId(lastChannel) ?? undefined;
+          to = lastTo ?? to;
+        }
+        if (!channel) {
+          ctx.logGateway.warn(
+            `agent delivery disabled node=${nodeId} session=${canonicalKey}: no route`,
+          );
+          deliver = false;
+        }
+      }
 
       void agentCommand(
         {
@@ -227,6 +267,13 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       if (!evt.payloadJSON) {
         return;
       }
+
+      // Suppress all exec notifications when notifyOnExit is false.
+      const execCfg = loadConfig();
+      if (execCfg.tools?.exec?.notifyOnExit === false) {
+        return;
+      }
+
       let payload: unknown;
       try {
         payload = JSON.parse(evt.payloadJSON) as unknown;

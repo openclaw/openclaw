@@ -37,7 +37,9 @@ import {
   capArrayByJsonBytes,
   loadSessionEntry,
   readSessionMessages,
+  truncateOversizedMessages,
   resolveSessionModelRef,
+  truncateOversizedMessages,
 } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
 import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
@@ -408,7 +410,12 @@ export const chatHandlers: GatewayRequestHandlers = {
     const max = Math.min(hardMax, requested);
     const sliced = rawMessages.length > max ? rawMessages.slice(-max) : rawMessages;
     const sanitized = stripEnvelopeFromMessages(sliced);
-    const capped = capArrayByJsonBytes(sanitized, getMaxChatHistoryMessagesBytes()).items;
+    const maxBytes = getMaxChatHistoryMessagesBytes();
+    // Truncate individual oversized messages before total-array byte capping so that
+    // a single huge message does not push the entire response over the byte limit.
+    const perMessageMax = Math.max(Math.floor(maxBytes / 2), 8192);
+    const truncated = truncateOversizedMessages(sanitized, perMessageMax);
+    const capped = capArrayByJsonBytes(truncated, maxBytes).items;
     let thinkingLevel = entry?.thinkingLevel;
     if (!thinkingLevel) {
       const configured = cfg.agents?.defaults?.thinkingDefault;
@@ -703,7 +710,6 @@ export const chatHandlers: GatewayRequestHandlers = {
           runId: clientRunId,
           abortSignal: abortController.signal,
           images: parsedImages.length > 0 ? parsedImages : undefined,
-          disableBlockStreaming: true,
           onAgentRunStart: (runId) => {
             agentRunStarted = true;
             const connId = typeof client?.connId === "string" ? client.connId : undefined;

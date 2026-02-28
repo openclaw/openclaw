@@ -17,7 +17,11 @@ import {
   resolveAgentDeliveryPlan,
   resolveAgentOutboundTarget,
 } from "../../infra/outbound/agent-delivery.js";
-import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
+import {
+  listConfiguredMessageChannels,
+  resolveMessageChannelSelection,
+} from "../../infra/outbound/channel-selection.js";
+import { resolveOutboundTarget } from "../../infra/outbound/targets.js";
 import { classifySessionKeyShape, normalizeAgentId } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeInputProvenance, type InputProvenance } from "../../sessions/input-provenance.js";
@@ -532,9 +536,43 @@ export const agentHandlers: GatewayRequestHandlers = {
           deliveryTargetMode,
           resolvedAccountId,
         };
-      } catch (err) {
-        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, String(err)));
-        return;
+      } catch {
+        // Multiple channels configured — try to find one with a resolvable
+        // outbound target (e.g. via allowFrom) so delivery can proceed.
+        const configured = await listConfiguredMessageChannels(cfgResolved);
+        let picked = false;
+        for (const candidate of configured) {
+          const probe = resolveOutboundTarget({
+            channel: candidate,
+            cfg: cfgResolved,
+            mode: "implicit",
+          });
+          if (probe.ok) {
+            resolvedChannel = candidate;
+            resolvedTo = probe.to;
+            deliveryTargetMode = deliveryTargetMode ?? "implicit";
+            effectivePlan = {
+              ...deliveryPlan,
+              resolvedChannel,
+              resolvedTo,
+              deliveryTargetMode,
+              resolvedAccountId,
+            };
+            picked = true;
+            break;
+          }
+        }
+        if (!picked) {
+          respond(
+            false,
+            undefined,
+            errorShape(
+              ErrorCodes.INVALID_REQUEST,
+              "delivery channel is required: pass --channel/--reply-channel or use a main session with a previous channel",
+            ),
+          );
+          return;
+        }
       }
     }
 

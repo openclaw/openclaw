@@ -33,6 +33,9 @@ describe("gateway tools.catalog", () => {
       const noPlugins = await rpcReq<{
         groups?: Array<{ source?: "core" | "plugin" }>;
       }>(ws, "tools.catalog", { includePlugins: false });
+      if (!noPlugins.ok) {
+        throw new Error(`tools.catalog failed: ${JSON.stringify(noPlugins.error)}`);
+      }
       expect(noPlugins.ok).toBe(true);
       expect((noPlugins.payload?.groups ?? []).every((group) => group.source !== "plugin")).toBe(
         true,

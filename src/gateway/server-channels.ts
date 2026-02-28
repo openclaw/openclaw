@@ -4,9 +4,18 @@ import type { createSubsystemLogger } from "../logging/subsystem.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { type ChannelId, getChannelPlugin, listChannelPlugins } from "../channels/plugins/index.js";
+import { computeBackoff, sleepWithAbort } from "../infra/backoff.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resetDirectoryCache } from "../infra/outbound/target-resolver.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
+
+const MAX_RESTART_ATTEMPTS = 10;
+const RESTART_BACKOFF_POLICY = {
+  initialMs: 1000,
+  maxMs: 30_000,
+  factor: 2,
+  jitter: 0.1,
+};
 
 export type ChannelRuntimeSnapshot = {
   channels: Partial<Record<ChannelId, ChannelAccountSnapshot>>;
@@ -172,11 +181,42 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
           .finally(() => {
             store.aborts.delete(id);
             store.tasks.delete(id);
+            const current = getRuntime(channelId, id);
+            const attempts = current.reconnectAttempts ?? 0;
             setRuntime(channelId, id, {
               accountId: id,
               running: false,
               lastStopAt: Date.now(),
             });
+
+            // Auto-restart with exponential backoff unless manually stopped or max attempts reached.
+            if (manuallyStopped.has(`${channelId}:${id}`) || attempts >= MAX_RESTART_ATTEMPTS) {
+              return;
+            }
+            const nextAttempt = attempts + 1;
+            setRuntime(channelId, id, {
+              accountId: id,
+              running: false,
+              lastStopAt: Date.now(),
+              reconnectAttempts: nextAttempt,
+            });
+            const restartAbort = new AbortController();
+            store.aborts.set(id, restartAbort);
+            const restartTask = (async () => {
+              const delayMs = computeBackoff(RESTART_BACKOFF_POLICY, nextAttempt);
+              try {
+                await sleepWithAbort(delayMs, restartAbort.signal);
+              } catch {
+                return;
+              }
+              store.aborts.delete(id);
+              store.tasks.delete(id);
+              if (manuallyStopped.has(`${channelId}:${id}`)) {
+                return;
+              }
+              await startChannel(channelId, id);
+            })();
+            store.tasks.set(id, restartTask);
           });
         store.tasks.set(id, tracked);
       }),
@@ -287,9 +327,11 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
           ? plugin.config.isEnabled(account, cfg)
           : isAccountEnabled(account);
         const described = plugin.config.describeAccount?.(account, cfg);
-        const configured = described?.configured;
+        // When describeAccount is not implemented, default enabled/configured to true.
+        const snapshotEnabled = described ? described.enabled : enabled;
+        const configured = described ? described.configured : true;
         const current = store.runtimes.get(id) ?? cloneDefaultRuntime(plugin.id, id);
-        const next = { ...current, accountId: id };
+        const next = { ...current, accountId: id, enabled: snapshotEnabled, configured };
         if (!next.running) {
           if (!enabled) {
             next.lastError ??= plugin.config.disabledReason?.(account, cfg) ?? "disabled";

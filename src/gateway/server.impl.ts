@@ -291,6 +291,11 @@ export async function startGatewayServer(
   const authRateLimiter: AuthRateLimiter | undefined = rateLimitConfig
     ? createAuthRateLimiter(rateLimitConfig)
     : undefined;
+  // Browser-origin rate limiter: same config but loopback is never exempt so that
+  // browser-injected WebSocket connections cannot bypass rate limiting on localhost.
+  const browserAuthRateLimiter: AuthRateLimiter | undefined = rateLimitConfig
+    ? createAuthRateLimiter({ ...rateLimitConfig, exemptLoopback: false })
+    : undefined;
 
   let controlUiRootState: ControlUiRootState | undefined;
   if (controlUiRootOverride) {
@@ -555,6 +560,7 @@ export async function startGatewayServer(
     canvasHostServerPort,
     resolvedAuth,
     rateLimiter: authRateLimiter,
+    browserRateLimiter: browserAuthRateLimiter,
     gatewayMethods,
     events: GATEWAY_EVENTS,
     logGateway: log,

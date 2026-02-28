@@ -79,6 +79,7 @@ const BASE_RELOAD_RULES_TAIL: ReloadRule[] = [
   { prefix: "session", kind: "none" },
   { prefix: "talk", kind: "none" },
   { prefix: "skills", kind: "none" },
+  { prefix: "secrets", kind: "none" },
   { prefix: "plugins", kind: "restart" },
   { prefix: "ui", kind: "none" },
   { prefix: "gateway", kind: "restart" },
@@ -150,7 +151,7 @@ export function diffConfigPaths(prev: unknown, next: unknown, prefix = ""): stri
     return paths;
   }
   if (Array.isArray(prev) && Array.isArray(next)) {
-    if (prev.length === next.length && prev.every((val, idx) => val === next[idx])) {
+    if (prev.length === next.length && JSON.stringify(prev) === JSON.stringify(next)) {
       return [];
     }
   }
@@ -279,6 +280,9 @@ export function startGatewayConfigReloader(opts: {
     }, wait);
   };
 
+  const MISSING_FILE_MAX_RETRIES = 2;
+  const MISSING_FILE_RETRY_DELAY_MS = 100;
+
   const runReload = async () => {
     if (stopped) {
       return;
@@ -293,7 +297,28 @@ export function startGatewayConfigReloader(opts: {
       debounceTimer = null;
     }
     try {
-      const snapshot = await opts.readSnapshot();
+      let snapshot = await opts.readSnapshot();
+
+      // Retry logic for missing config files (editor save race, atomic rename).
+      if (!snapshot.exists) {
+        let retries = 0;
+        while (!snapshot.exists && retries < MISSING_FILE_MAX_RETRIES) {
+          retries++;
+          opts.log.info(
+            `config reload retry (${retries}/${MISSING_FILE_MAX_RETRIES}): config file not found`,
+          );
+          await new Promise<void>((resolve) => setTimeout(resolve, MISSING_FILE_RETRY_DELAY_MS));
+          if (stopped) {
+            return;
+          }
+          snapshot = await opts.readSnapshot();
+        }
+        if (!snapshot.exists) {
+          opts.log.warn("config reload skipped (config file not found)");
+          return;
+        }
+      }
+
       if (!snapshot.valid) {
         const issues = snapshot.issues.map((issue) => `${issue.path}: ${issue.message}`).join(", ");
         opts.log.warn(`config reload skipped (invalid config): ${issues}`);
@@ -316,7 +341,11 @@ export function startGatewayConfigReloader(opts: {
       if (settings.mode === "restart") {
         if (!restartQueued) {
           restartQueued = true;
-          opts.onRestart(plan, nextConfig);
+          try {
+            await Promise.resolve(opts.onRestart(plan, nextConfig));
+          } catch (err) {
+            opts.log.error(`config restart failed: ${String(err)}`);
+          }
         }
         return;
       }
@@ -331,7 +360,12 @@ export function startGatewayConfigReloader(opts: {
         }
         if (!restartQueued) {
           restartQueued = true;
-          opts.onRestart(plan, nextConfig);
+          try {
+            await Promise.resolve(opts.onRestart(plan, nextConfig));
+          } catch (err) {
+            restartQueued = false;
+            opts.log.error(`config restart failed: ${String(err)}`);
+          }
         }
         return;
       }

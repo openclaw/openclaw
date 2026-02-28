@@ -81,6 +81,8 @@ export function attachGatewayWsMessageHandler(params: {
   resolvedAuth: ResolvedGatewayAuth;
   /** Optional rate limiter for auth brute-force protection. */
   rateLimiter?: AuthRateLimiter;
+  /** Browser-origin rate limiter (loopback is never exempt). */
+  browserRateLimiter?: AuthRateLimiter;
   gatewayMethods: string[];
   events: string[];
   extraHandlers: GatewayRequestHandlers;
@@ -112,6 +114,7 @@ export function attachGatewayWsMessageHandler(params: {
     connectNonce,
     resolvedAuth,
     rateLimiter,
+    browserRateLimiter,
     gatewayMethods,
     events,
     extraHandlers,
@@ -304,7 +307,10 @@ export function attachGatewayWsMessageHandler(params: {
 
         const isControlUi = connectParams.client.id === GATEWAY_CLIENT_IDS.CONTROL_UI;
         const isWebchat = isWebchatConnect(connectParams);
-        if (isControlUi || isWebchat) {
+        // Reject non-local browser origins for all browser-origin clients (not just
+        // control-ui/webchat) to prevent cross-origin WebSocket attacks.
+        const hasBrowserOrigin = Boolean(requestOrigin);
+        if (isControlUi || isWebchat || hasBrowserOrigin) {
           const originCheck = checkBrowserOrigin({
             requestHost,
             origin: requestOrigin,
@@ -345,12 +351,16 @@ export function attachGatewayWsMessageHandler(params: {
         const device = deviceRaw;
 
         const hasDeviceTokenCandidate = Boolean(connectParams.auth?.token && device);
+        // Browser-origin connections use the non-loopback-exempt rate limiter to prevent
+        // brute-force attacks from browser-injected WebSocket connections on localhost.
+        const effectiveRateLimiter =
+          hasBrowserOrigin && browserRateLimiter ? browserRateLimiter : rateLimiter;
         let authResult: GatewayAuthResult = await authorizeGatewayConnect({
           auth: resolvedAuth,
           connectAuth: connectParams.auth,
           req: upgradeReq,
           trustedProxies,
-          rateLimiter: hasDeviceTokenCandidate ? undefined : rateLimiter,
+          rateLimiter: hasDeviceTokenCandidate ? undefined : effectiveRateLimiter,
           clientIp,
           rateLimitScope: AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
         });
@@ -358,10 +368,13 @@ export function attachGatewayWsMessageHandler(params: {
         if (
           hasDeviceTokenCandidate &&
           authResult.ok &&
-          rateLimiter &&
+          effectiveRateLimiter &&
           (authResult.method === "token" || authResult.method === "password")
         ) {
-          const sharedRateCheck = rateLimiter.check(clientIp, AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET);
+          const sharedRateCheck = effectiveRateLimiter.check(
+            clientIp,
+            AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
+          );
           if (!sharedRateCheck.allowed) {
             authResult = {
               ok: false,
@@ -370,7 +383,7 @@ export function attachGatewayWsMessageHandler(params: {
               retryAfterMs: sharedRateCheck.retryAfterMs,
             };
           } else {
-            rateLimiter.reset(clientIp, AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET);
+            effectiveRateLimiter.reset(clientIp, AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET);
           }
         }
 
@@ -611,8 +624,11 @@ export function attachGatewayWsMessageHandler(params: {
         }
 
         if (!authOk && connectParams.auth?.token && device) {
-          if (rateLimiter) {
-            const deviceRateCheck = rateLimiter.check(clientIp, AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN);
+          if (effectiveRateLimiter) {
+            const deviceRateCheck = effectiveRateLimiter.check(
+              clientIp,
+              AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN,
+            );
             if (!deviceRateCheck.allowed) {
               authResult = {
                 ok: false,
@@ -632,10 +648,10 @@ export function attachGatewayWsMessageHandler(params: {
             if (tokenCheck.ok) {
               authOk = true;
               authMethod = "device-token";
-              rateLimiter?.reset(clientIp, AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN);
+              effectiveRateLimiter?.reset(clientIp, AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN);
             } else {
               authResult = { ok: false, reason: "device_token_mismatch" };
-              rateLimiter?.recordFailure(clientIp, AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN);
+              effectiveRateLimiter?.recordFailure(clientIp, AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN);
             }
           }
         }
@@ -658,7 +674,12 @@ export function attachGatewayWsMessageHandler(params: {
               role,
               scopes,
               remoteIp: reportedClientIp,
-              silent: isLocalClient || authMethod === "iam" || authMethod === "token",
+              // Browser-origin non-control-ui clients must not get silent auto-pairing,
+              // even on loopback, to prevent malicious scripts from silently pairing.
+              silent:
+                hasBrowserOrigin && !isControlUi
+                  ? false
+                  : isLocalClient || authMethod === "iam" || authMethod === "token",
             });
             const context = buildRequestContext();
             if (pairing.request.silent === true) {

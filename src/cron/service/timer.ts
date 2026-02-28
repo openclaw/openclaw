@@ -443,6 +443,7 @@ async function executeJobCore(
     state.deps.enqueueSystemEvent(text, {
       agentId: job.agentId,
       contextKey: `cron:${job.id}`,
+      sessionKey: job.sessionKey,
     });
     if (job.wakeMode === "now" && state.deps.runHeartbeatOnce) {
       const reason = `cron:${job.id}`;
@@ -461,7 +462,7 @@ async function executeJobCore(
           break;
         }
         if (state.deps.nowMs() - waitStartedAt > maxWaitMs) {
-          state.deps.requestHeartbeatNow({ reason });
+          state.deps.requestHeartbeatNow({ reason, sessionKey: job.sessionKey });
           return { status: "ok", summary: text };
         }
         await delay(retryDelayMs);
@@ -475,7 +476,7 @@ async function executeJobCore(
         return { status: "error", error: heartbeatResult.reason, summary: text };
       }
     } else {
-      state.deps.requestHeartbeatNow({ reason: `cron:${job.id}` });
+      state.deps.requestHeartbeatNow({ reason: `cron:${job.id}`, sessionKey: job.sessionKey });
       return { status: "ok", summary: text };
     }
   }

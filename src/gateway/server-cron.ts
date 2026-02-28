@@ -169,13 +169,27 @@ export function buildGatewayCronService(params: {
       const sessionKey = resolveCronSessionKey({
         runtimeConfig,
         agentId,
+        requestedSessionKey: opts?.sessionKey,
       });
       enqueueSystemEvent(text, { sessionKey, contextKey: opts?.contextKey });
     },
     requestHeartbeatNow: (opts) => {
-      requestHeartbeatNow({
-        reason: opts?.reason,
-      });
+      if (opts?.sessionKey) {
+        const { agentId, cfg: runtimeConfig } = resolveCronAgent();
+        const sessionKey = resolveCronSessionKey({
+          runtimeConfig,
+          agentId,
+          requestedSessionKey: opts.sessionKey,
+        });
+        requestHeartbeatNow({
+          reason: opts?.reason,
+          sessionKey,
+        });
+      } else {
+        requestHeartbeatNow({
+          reason: opts?.reason,
+        });
+      }
     },
     runHeartbeatOnce: async (opts) => {
       const runtimeConfig = loadConfig();

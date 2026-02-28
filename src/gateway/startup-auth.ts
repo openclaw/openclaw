@@ -107,7 +107,20 @@ export async function ensureGatewayStartupAuth(params: {
     authOverride: params.authOverride,
     tailscaleOverride: params.tailscaleOverride,
   });
-  if (resolved.mode !== "token" || (resolved.token?.trim().length ?? 0) > 0) {
+
+  // Determine whether the resolved auth is already explicitly configured.
+  // We generate a token when either:
+  //   1. mode is "token" but no token value exists yet, OR
+  //   2. mode defaulted to "none" because nothing was configured (implicit none)
+  //
+  // We do NOT generate when the user explicitly set mode to password, none,
+  // trusted-proxy, or iam — those are intentional choices.
+  const hasExplicitMode = Boolean(params.cfg.gateway?.auth?.mode || params.authOverride?.mode);
+  const needsGeneration =
+    (resolved.mode === "token" && !resolved.token?.trim().length) ||
+    (resolved.mode === "none" && !hasExplicitMode);
+
+  if (!needsGeneration) {
     assertHooksTokenSeparateFromGatewayAuth({ cfg: params.cfg, auth: resolved });
     return { cfg: params.cfg, auth: resolved, persistedGeneratedToken: false };
   }

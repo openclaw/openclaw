@@ -32,7 +32,15 @@ export function createGatewayHooksRequestHandler(params: {
   const dispatchAgentHook = (
     value: HookAgentPayload & { sessionKey: string; allowUnsafeExternalContent?: boolean },
   ) => {
-    const sessionKey = value.sessionKey;
+    // Strip duplicate agent prefix: when the sessionKey starts with `agent:{agentId}:`,
+    // the isolated runner will re-add it, so we normalize to avoid double-prefixing.
+    let sessionKey = value.sessionKey;
+    if (value.agentId) {
+      const prefix = `agent:${value.agentId}:`;
+      if (sessionKey.startsWith(prefix)) {
+        sessionKey = sessionKey.slice(prefix.length);
+      }
+    }
     const mainSessionKey = resolveMainSessionKeyFromConfig();
     const jobId = randomUUID();
     const now = Date.now();

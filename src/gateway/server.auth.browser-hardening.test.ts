@@ -99,7 +99,8 @@ describe("gateway auth browser hardening", () => {
     await withGatewayServer(async ({ port }) => {
       const firstWs = await openWs(port, { origin: originForPort(port) });
       try {
-        const first = await connectReq(firstWs, { token: "wrong" });
+        // Use device: null to force shared-secret auth path (no device-token fallback).
+        const first = await connectReq(firstWs, { token: "wrong", device: null });
         expect(first.ok).toBe(false);
         expect(first.error?.message ?? "").not.toContain("retry later");
       } finally {
@@ -108,7 +109,7 @@ describe("gateway auth browser hardening", () => {
 
       const secondWs = await openWs(port, { origin: originForPort(port) });
       try {
-        const second = await connectReq(secondWs, { token: "wrong" });
+        const second = await connectReq(secondWs, { token: "wrong", device: null });
         expect(second.ok).toBe(false);
         expect(second.error?.message ?? "").toContain("retry later");
       } finally {

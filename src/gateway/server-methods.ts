@@ -1,5 +1,6 @@
 import type { GatewayRequestHandlers, GatewayRequestOptions } from "./server-methods/types.js";
 import { checkBillingAllowance } from "./billing/billing-gate.js";
+import { consumeControlPlaneWriteBudget } from "./control-plane-rate-limit.js";
 import { ErrorCodes, errorShape } from "./protocol/index.js";
 import { agentHandlers } from "./server-methods/agent.js";
 import { agentsHandlers } from "./server-methods/agents.js";
@@ -21,6 +22,7 @@ import { sessionsHandlers } from "./server-methods/sessions.js";
 import { skillsHandlers } from "./server-methods/skills.js";
 import { systemHandlers } from "./server-methods/system.js";
 import { talkHandlers } from "./server-methods/talk.js";
+import { toolsCatalogHandlers } from "./server-methods/tools-catalog.js";
 import { ttsHandlers } from "./server-methods/tts.js";
 import { updateHandlers } from "./server-methods/update.js";
 import { usageHandlers } from "./server-methods/usage.js";
@@ -58,6 +60,7 @@ const BILLABLE_METHODS = new Set(["agent", "agent.wait", "chat.send"]);
 const ADMIN_METHOD_PREFIXES = ["exec.approvals."];
 const READ_METHODS = new Set([
   "health",
+  "doctor.memory.status",
   "logs.tail",
   "channels.status",
   "status",
@@ -66,12 +69,17 @@ const READ_METHODS = new Set([
   "tts.status",
   "tts.providers",
   "models.list",
+  "tools.catalog",
   "agents.list",
   "agent.identity.get",
   "skills.status",
   "voicewake.get",
   "sessions.list",
   "sessions.preview",
+  "sessions.resolve",
+  "sessions.usage",
+  "sessions.usage.timeseries",
+  "sessions.usage.logs",
   "cron.list",
   "cron.status",
   "cron.runs",
@@ -83,6 +91,8 @@ const READ_METHODS = new Set([
   "config.get",
   "talk.config",
   "screen.vnc",
+  "agents.files.list",
+  "agents.files.get",
   "marketplace.status",
   "marketplace.earnings",
   "marketplace.config",
@@ -195,6 +205,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...talkHandlers,
   ...ttsHandlers,
   ...skillsHandlers,
+  ...toolsCatalogHandlers,
   ...sessionsHandlers,
   ...systemHandlers,
   ...updateHandlers,
@@ -208,6 +219,28 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...marketplaceHandlers,
 };
 
+function isControlPlaneWriteMethod(method: string): boolean {
+  return (
+    method.startsWith("config.") ||
+    method.startsWith("wizard.") ||
+    method.startsWith("update.") ||
+    method === "channels.logout" ||
+    method === "agents.create" ||
+    method === "agents.update" ||
+    method === "agents.delete" ||
+    method === "skills.install" ||
+    method === "skills.update" ||
+    method === "cron.add" ||
+    method === "cron.update" ||
+    method === "cron.remove" ||
+    method === "cron.run" ||
+    method === "sessions.patch" ||
+    method === "sessions.reset" ||
+    method === "sessions.delete" ||
+    method === "sessions.compact"
+  );
+}
+
 export async function handleGatewayRequest(
   opts: GatewayRequestOptions & { extraHandlers?: GatewayRequestHandlers },
 ): Promise<void> {
@@ -216,6 +249,24 @@ export async function handleGatewayRequest(
   if (authError) {
     respond(false, undefined, authError);
     return;
+  }
+
+  // Control-plane write rate limit: prevent rapid-fire config mutations from
+  // a single client (e.g. the control UI or automation scripts).
+  if (isControlPlaneWriteMethod(req.method)) {
+    const budget = consumeControlPlaneWriteBudget({ client: client ?? null });
+    if (!budget.allowed) {
+      context.logGateway.warn(
+        `control-plane rate limit exceeded for ${budget.key} (method=${req.method}, retryAfterMs=${budget.retryAfterMs})`,
+      );
+      respond(false, undefined, {
+        code: "UNAVAILABLE",
+        message: "control-plane write rate limit exceeded; try again shortly",
+        retryable: true,
+        retryAfterMs: budget.retryAfterMs,
+      });
+      return;
+    }
   }
 
   // Billing gate: block LLM-triggering methods when tenant has no credits

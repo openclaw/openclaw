@@ -265,6 +265,36 @@ export function capArrayByJsonBytes<T>(
   return { items: next, bytes };
 }
 
+const OVERSIZED_PLACEHOLDER = "[chat.history omitted: message too large]";
+
+/**
+ * Replace individual messages whose JSON serialization exceeds `perMessageMaxBytes`
+ * with a lightweight placeholder stub preserving the message role and timestamp.
+ */
+export function truncateOversizedMessages(
+  messages: unknown[],
+  perMessageMaxBytes: number,
+): unknown[] {
+  if (messages.length === 0) {
+    return messages;
+  }
+  let changed = false;
+  const next = messages.map((msg) => {
+    const bytes = jsonUtf8Bytes(msg);
+    if (bytes <= perMessageMaxBytes) {
+      return msg;
+    }
+    changed = true;
+    const entry = msg && typeof msg === "object" ? (msg as Record<string, unknown>) : {};
+    return {
+      role: entry.role ?? "assistant",
+      timestamp: entry.timestamp,
+      content: [{ type: "text", text: OVERSIZED_PLACEHOLDER }],
+    };
+  });
+  return changed ? next : messages;
+}
+
 const MAX_LINES_TO_SCAN = 10;
 
 type TranscriptMessage = {

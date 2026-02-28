@@ -46,6 +46,7 @@ export {
   readSessionPreviewItemsFromTranscript,
   readSessionMessages,
   resolveSessionTranscriptCandidates,
+  truncateOversizedMessages,
 } from "./session-utils.fs.js";
 export type {
   GatewayAgentRow,

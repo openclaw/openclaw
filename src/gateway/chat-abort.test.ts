@@ -44,17 +44,25 @@ function createOps(params: {
 }
 
 describe("isChatStopCommandText", () => {
-  it("matches slash and standalone multilingual stop forms", () => {
-    expect(isChatStopCommandText(" /STOP!!! ")).toBe(true);
-    expect(isChatStopCommandText("stop please")).toBe(true);
-    expect(isChatStopCommandText("do not do that")).toBe(true);
-    expect(isChatStopCommandText("停止")).toBe(true);
-    expect(isChatStopCommandText("やめて")).toBe(true);
-    expect(isChatStopCommandText("توقف")).toBe(true);
-    expect(isChatStopCommandText("остановись")).toBe(true);
-    expect(isChatStopCommandText("halt")).toBe(true);
-    expect(isChatStopCommandText("stopp")).toBe(true);
-    expect(isChatStopCommandText("pare")).toBe(true);
+  it("matches exact abort triggers and /stop command", () => {
+    // Exact abort triggers (case-insensitive, whitespace-trimmed)
+    expect(isChatStopCommandText("stop")).toBe(true);
+    expect(isChatStopCommandText(" STOP ")).toBe(true);
+    expect(isChatStopCommandText("esc")).toBe(true);
+    expect(isChatStopCommandText("abort")).toBe(true);
+    expect(isChatStopCommandText("wait")).toBe(true);
+    expect(isChatStopCommandText("exit")).toBe(true);
+    expect(isChatStopCommandText("interrupt")).toBe(true);
+    expect(isChatStopCommandText("/stop")).toBe(true);
+    expect(isChatStopCommandText(" /stop ")).toBe(true);
+    expect(isChatStopCommandText("/STOP")).toBe(true);
+
+    // Non-matching: extra text, punctuation, or unrecognized words
+    expect(isChatStopCommandText(" /STOP!!! ")).toBe(false);
+    expect(isChatStopCommandText("stop please")).toBe(false);
+    expect(isChatStopCommandText("halt")).toBe(false);
+    expect(isChatStopCommandText("stopp")).toBe(false);
+    expect(isChatStopCommandText("pare")).toBe(false);
     expect(isChatStopCommandText("/status")).toBe(false);
     expect(isChatStopCommandText("please do not do that")).toBe(false);
     expect(isChatStopCommandText("keep going")).toBe(false);

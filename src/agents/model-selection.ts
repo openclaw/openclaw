@@ -351,23 +351,15 @@ export function buildAllowedModelSet(params: {
   }
 
   const allowedKeys = new Set<string>();
-  const configuredProviders = (params.cfg.models?.providers ?? {}) as Record<string, unknown>;
   for (const raw of rawAllowlist) {
     const parsed = parseModelRef(String(raw), params.defaultProvider);
     if (!parsed) {
       continue;
     }
     const key = modelKey(parsed.provider, parsed.model);
-    const providerKey = normalizeProviderId(parsed.provider);
-    if (isCliProvider(parsed.provider, params.cfg)) {
-      allowedKeys.add(key);
-    } else if (catalogKeys.has(key)) {
-      allowedKeys.add(key);
-    } else if (configuredProviders[providerKey] != null) {
-      // Explicitly configured providers should be allowlist-able even when
-      // they don't exist in the curated model catalog.
-      allowedKeys.add(key);
-    }
+    // Explicitly allowlisted models are always permitted, regardless of whether
+    // they appear in the bundled catalog or have a configured provider entry.
+    allowedKeys.add(key);
   }
 
   if (defaultKey) {
@@ -377,6 +369,19 @@ export function buildAllowedModelSet(params: {
   const allowedCatalog = params.catalog.filter((entry) =>
     allowedKeys.has(modelKey(entry.provider, entry.id)),
   );
+
+  // Synthesize catalog entries for allowlisted models absent from the bundled catalog
+  // so that callers can enumerate all allowed models for display/selection.
+  for (const raw of rawAllowlist) {
+    const parsed = parseModelRef(String(raw), params.defaultProvider);
+    if (!parsed) {
+      continue;
+    }
+    const key = modelKey(parsed.provider, parsed.model);
+    if (!catalogKeys.has(key) && allowedKeys.has(key)) {
+      allowedCatalog.push({ provider: parsed.provider, id: parsed.model, name: parsed.model });
+    }
+  }
 
   if (allowedCatalog.length === 0 && allowedKeys.size === 0) {
     if (defaultKey) {

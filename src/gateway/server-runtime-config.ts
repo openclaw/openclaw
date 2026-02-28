@@ -4,6 +4,7 @@ import type {
   GatewayTailscaleConfig,
   loadConfig,
 } from "../config/config.js";
+import { isLoopbackIpAddress } from "../shared/net/ip.js";
 import {
   assertGatewayAuthConfigured,
   type ResolvedGatewayAuth,
@@ -12,7 +13,7 @@ import {
 import { configureUsageReporter } from "./billing/usage-reporter.js";
 import { normalizeControlUiBasePath } from "./control-ui-shared.js";
 import { resolveHooksConfig } from "./hooks.js";
-import { isLoopbackHost, resolveGatewayBindHost } from "./net.js";
+import { isLoopbackHost, isValidIPv4, resolveGatewayBindHost } from "./net.js";
 
 export type GatewayRuntimeConfig = {
   bindHost: string;
@@ -28,6 +29,8 @@ export type GatewayRuntimeConfig = {
   tailscaleMode: "off" | "serve" | "funnel";
   hooksConfig: ReturnType<typeof resolveHooksConfig>;
   canvasHostEnabled: boolean;
+  /** Resolved HSTS header value, or undefined when disabled/unset. */
+  strictTransportSecurityHeader?: string;
 };
 
 export async function resolveGatewayRuntimeConfig(params: {
@@ -104,6 +107,30 @@ export async function resolveGatewayRuntimeConfig(params: {
   if (tailscaleMode !== "off" && !isLoopbackHost(bindHost)) {
     throw new Error("tailscale serve/funnel requires gateway bind=loopback (127.0.0.1)");
   }
+
+  // Bind-mode sanity checks (run before auth/origin checks so error messages
+  // pinpoint the bind misconfiguration).
+  if (bindMode === "loopback" && !isLoopbackHost(bindHost)) {
+    throw new Error(
+      `gateway bind=loopback resolved to non-loopback host ${bindHost}; check your network configuration`,
+    );
+  }
+  if (bindMode === "custom") {
+    if (!customBindHost || customBindHost.trim().length === 0) {
+      throw new Error("gateway.bind=custom requires gateway.customBindHost to be set");
+    }
+    if (!isValidIPv4(customBindHost.trim())) {
+      throw new Error(
+        `gateway.bind=custom requires a valid IPv4 customBindHost, got "${customBindHost.trim()}"`,
+      );
+    }
+    if (bindHost !== customBindHost.trim()) {
+      throw new Error(
+        `gateway bind=custom requested ${customBindHost.trim()} but resolved ${bindHost}`,
+      );
+    }
+  }
+
   if (
     !isLoopbackHost(bindHost) &&
     !hasSharedSecret &&
@@ -116,17 +143,49 @@ export async function resolveGatewayRuntimeConfig(params: {
   }
 
   if (authMode === "trusted-proxy") {
-    if (isLoopbackHost(bindHost)) {
-      throw new Error(
-        "gateway auth mode=trusted-proxy makes no sense with bind=loopback; use bind=lan or bind=custom with gateway.trustedProxies configured",
-      );
-    }
     if (trustedProxies.length === 0) {
       throw new Error(
-        "gateway auth mode=trusted-proxy requires gateway.trustedProxies to be configured with at least one proxy IP",
+        "gateway auth mode=trusted-proxy requires gateway.trustedProxies to be configured",
+      );
+    }
+    // Loopback binding with trusted-proxy is valid only when at least one
+    // trusted proxy is a loopback address (e.g. a local reverse proxy).
+    if (isLoopbackHost(bindHost)) {
+      const hasLoopbackProxy = trustedProxies.some((proxy) => {
+        const bare = proxy.trim();
+        // Handle CIDR notation (e.g. 127.0.0.0/8)
+        const ip = bare.includes("/") ? bare.split("/")[0] : bare;
+        return isLoopbackIpAddress(ip);
+      });
+      if (!hasLoopbackProxy) {
+        throw new Error(
+          "gateway auth mode=trusted-proxy with bind=loopback requires gateway.trustedProxies to include 127.0.0.1, ::1, or a loopback CIDR",
+        );
+      }
+    }
+  }
+
+  // Non-loopback Control UI requires allowedOrigins to prevent CSRF unless
+  // the dangerous Host-header fallback is explicitly enabled.
+  if (!isLoopbackHost(bindHost) && controlUiEnabled) {
+    const allowedOrigins = params.cfg.gateway?.controlUi?.allowedOrigins;
+    const dangerousFallback =
+      params.cfg.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true;
+    if (!dangerousFallback && (!allowedOrigins || allowedOrigins.length === 0)) {
+      throw new Error(
+        "non-loopback Control UI requires gateway.controlUi.allowedOrigins to be configured",
       );
     }
   }
+
+  // Resolve HSTS header from config.
+  const stsRaw = params.cfg.gateway?.http?.securityHeaders?.strictTransportSecurity;
+  const strictTransportSecurityHeader =
+    stsRaw === false || stsRaw === undefined || stsRaw === null
+      ? undefined
+      : typeof stsRaw === "string" && stsRaw.trim().length > 0
+        ? stsRaw.trim()
+        : undefined;
 
   return {
     bindHost,
@@ -144,5 +203,6 @@ export async function resolveGatewayRuntimeConfig(params: {
     tailscaleMode,
     hooksConfig,
     canvasHostEnabled,
+    strictTransportSecurityHeader,
   };
 }

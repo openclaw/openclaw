@@ -142,6 +142,19 @@ export function handleControlUiAvatarRequest(
     return true;
   }
 
+  // Reject avatar symlinks: the filePath must not be a symlink (prevents
+  // path traversal via crafted avatar file references).
+  try {
+    const stat = fs.lstatSync(resolved.filePath);
+    if (stat.isSymbolicLink()) {
+      respondNotFound(res);
+      return true;
+    }
+  } catch {
+    respondNotFound(res);
+    return true;
+  }
+
   if (req.method === "HEAD") {
     res.statusCode = 200;
     res.setHeader("Content-Type", contentTypeForExt(path.extname(resolved.filePath).toLowerCase()));
@@ -175,6 +188,32 @@ function serveIndexHtml(res: ServerResponse, indexPath: string) {
   res.end(fs.readFileSync(indexPath, "utf8"));
 }
 
+const STATIC_ASSET_EXTENSIONS = new Set([
+  ".svg",
+  ".js",
+  ".mjs",
+  ".css",
+  ".png",
+  ".jpg",
+  ".jpeg",
+  ".gif",
+  ".webp",
+  ".ico",
+  ".json",
+  ".map",
+  ".txt",
+  ".woff",
+  ".woff2",
+  ".ttf",
+  ".eot",
+  ".xml",
+  ".webmanifest",
+]);
+
+function isStaticAssetExtension(ext: string): boolean {
+  return STATIC_ASSET_EXTENSIONS.has(ext);
+}
+
 function isSafeRelativePath(relPath: string) {
   if (!relPath) {
     return false;
@@ -183,10 +222,31 @@ function isSafeRelativePath(relPath: string) {
   if (normalized.startsWith("../") || normalized === "..") {
     return false;
   }
+  // Reject absolute paths (e.g. "/etc/passwd" embedded in URL after basePath)
+  if (normalized.startsWith("/")) {
+    return false;
+  }
   if (normalized.includes("\0")) {
     return false;
   }
   return true;
+}
+
+/**
+ * Verify that a resolved file path stays within the root directory after
+ * symlink resolution. Returns false if the real path escapes root, or if
+ * the file does not exist.
+ */
+function isFileWithinRoot(filePath: string, root: string): boolean {
+  try {
+    const realFilePath = fs.realpathSync(filePath);
+    const realRoot = fs.realpathSync(root);
+    // Allow exact match (root/index.html) or nested path (root/assets/foo)
+    return realFilePath === realRoot || realFilePath.startsWith(`${realRoot}${path.sep}`);
+  } catch {
+    // File does not exist or cannot be resolved
+    return false;
+  }
 }
 
 export function handleControlUiHttpRequest(
@@ -341,17 +401,43 @@ export function handleControlUiHttpRequest(
   }
 
   if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
+    // Reject symlinks that escape the control-ui root directory
+    if (!isFileWithinRoot(filePath, root)) {
+      respondNotFound(res);
+      return true;
+    }
     if (path.basename(filePath) === "index.html") {
       serveIndexHtml(res, filePath);
+      return true;
+    }
+    if (req.method === "HEAD") {
+      res.statusCode = 200;
+      res.setHeader("Content-Type", contentTypeForExt(path.extname(filePath).toLowerCase()));
+      res.setHeader("Cache-Control", "no-cache");
+      res.end();
       return true;
     }
     serveFile(res, filePath);
     return true;
   }
 
+  // Return 404 for missing static assets (known file extensions) instead of
+  // serving the SPA fallback.  This prevents browsers from loading index.html
+  // in place of e.g. a missing favicon.svg and triggering parse errors.
+  const requestedExt = path.extname(fileRel).toLowerCase();
+  if (requestedExt && isStaticAssetExtension(requestedExt)) {
+    respondNotFound(res);
+    return true;
+  }
+
   // SPA fallback (client-side router): serve index.html for unknown paths.
   const indexPath = path.join(root, "index.html");
   if (fs.existsSync(indexPath)) {
+    // Reject index.html symlinks that escape the control-ui root directory
+    if (!isFileWithinRoot(indexPath, root)) {
+      respondNotFound(res);
+      return true;
+    }
     serveIndexHtml(res, indexPath);
     return true;
   }

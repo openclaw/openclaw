@@ -1,7 +1,14 @@
 import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
 import { stripEnvelope, stripMessageIdHints } from "../shared/chat-envelope.js";
+import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
 
 export { stripEnvelope };
+
+/** Strip inline directive tags (e.g. [[reply_to...]], [[audio_as_voice]]) from text. */
+function stripDirectiveTags(text: string): string {
+  const result = stripInlineDirectiveTagsForDisplay(text);
+  return result.changed ? result.text : text;
+}
 
 function stripEnvelopeFromContentWithRole(
   content: unknown[],
@@ -17,9 +24,10 @@ function stripEnvelopeFromContentWithRole(
       return item;
     }
     const inboundStripped = stripInboundMetadata(entry.text);
-    const stripped = stripUserEnvelope
+    const afterEnvelope = stripUserEnvelope
       ? stripMessageIdHints(stripEnvelope(inboundStripped))
       : inboundStripped;
+    const stripped = stripDirectiveTags(afterEnvelope);
     if (stripped === entry.text) {
       return item;
     }
@@ -45,9 +53,10 @@ export function stripEnvelopeFromMessage(message: unknown): unknown {
 
   if (typeof entry.content === "string") {
     const inboundStripped = stripInboundMetadata(entry.content);
-    const stripped = stripUserEnvelope
+    const afterEnvelope = stripUserEnvelope
       ? stripMessageIdHints(stripEnvelope(inboundStripped))
       : inboundStripped;
+    const stripped = stripDirectiveTags(afterEnvelope);
     if (stripped !== entry.content) {
       next.content = stripped;
       changed = true;
@@ -60,9 +69,10 @@ export function stripEnvelopeFromMessage(message: unknown): unknown {
     }
   } else if (typeof entry.text === "string") {
     const inboundStripped = stripInboundMetadata(entry.text);
-    const stripped = stripUserEnvelope
+    const afterEnvelope = stripUserEnvelope
       ? stripMessageIdHints(stripEnvelope(inboundStripped))
       : inboundStripped;
+    const stripped = stripDirectiveTags(afterEnvelope);
     if (stripped !== entry.text) {
       next.text = stripped;
       changed = true;

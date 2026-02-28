@@ -213,7 +213,11 @@ export function createHooksRequestHandler(
   const hookAuthFailures = new Map<string, HookAuthFailure>();
 
   const resolveHookClientKey = (req: IncomingMessage): string => {
-    return req.socket?.remoteAddress?.trim() || "unknown";
+    const raw = req.socket?.remoteAddress?.trim() || "unknown";
+    // Normalize IPv4-mapped IPv6 addresses (::ffff:1.2.3.4 → 1.2.3.4)
+    // so both forms share the same rate-limit bucket.
+    const ipv4Mapped = raw.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/i);
+    return ipv4Mapped ? ipv4Mapped[1] : raw;
   };
 
   const recordHookAuthFailure = (
@@ -269,7 +273,8 @@ export function createHooksRequestHandler(
     if (!hooksConfig) {
       return false;
     }
-    const url = new URL(req.url ?? "/", `http://${bindHost}:${port}`);
+    const urlHost = bindHost.includes(":") ? `[${bindHost}]` : bindHost;
+    const url = new URL(req.url ?? "/", `http://${urlHost}:${port}`);
     const basePath = hooksConfig.basePath;
     if (url.pathname !== basePath && !url.pathname.startsWith(`${basePath}/`)) {
       return false;
