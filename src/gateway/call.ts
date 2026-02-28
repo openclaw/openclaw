@@ -143,7 +143,8 @@ export function buildGatewayConnectionDetails(
   // Security check: block ALL insecure ws:// to non-loopback addresses (CWE-319, CVSS 9.8)
   // This applies to the FINAL resolved URL, regardless of source (config, CLI override, etc).
   // Both credentials and chat/conversation data must not be transmitted over plaintext to remote hosts.
-  if (!isSecureWebSocketUrl(url)) {
+  const trustedNetworks = config.gateway?.trustedNetworks;
+  if (!isSecureWebSocketUrl(url, trustedNetworks)) {
     throw new Error(
       [
         `SECURITY ERROR: Gateway URL "${url}" uses plaintext ws:// to a non-loopback address.`,

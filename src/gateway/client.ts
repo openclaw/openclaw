@@ -64,6 +64,7 @@ export type GatewayClientOptions = {
   minProtocol?: number;
   maxProtocol?: number;
   tlsFingerprint?: string;
+  trustedNetworks?: string[];
   onEvent?: (evt: EventFrame) => void;
   onHelloOk?: (hello: HelloOk) => void;
   onConnectError?: (err: Error) => void;
@@ -117,7 +118,7 @@ export class GatewayClient {
     // Security check: block ALL plaintext ws:// to non-loopback addresses (CWE-319, CVSS 9.8)
     // This protects both credentials AND chat/conversation data from MITM attacks.
     // Device tokens may be loaded later in sendConnect(), so we block regardless of hasCredentials.
-    if (!isSecureWebSocketUrl(url)) {
+    if (!isSecureWebSocketUrl(url, this.opts.trustedNetworks)) {
       // Safe hostname extraction - avoid throwing on malformed URLs in error path
       let displayHost = url;
       try {
@@ -128,7 +129,7 @@ export class GatewayClient {
       const error = new Error(
         `SECURITY ERROR: Cannot connect to "${displayHost}" over plaintext ws://. ` +
           "Both credentials and chat data would be exposed to network interception. " +
-          "Use wss:// for remote URLs. Safe defaults: keep gateway.bind=loopback and connect via SSH tunnel " +
+          "Use wss:// for remote URLs, or add the IP to gateway.trustedNetworks for encrypted mesh networks. Safe defaults: keep gateway.bind=loopback and connect via SSH tunnel " +
           "(ssh -N -L 18789:127.0.0.1:18789 user@gateway-host), or use Tailscale Serve/Funnel. " +
           "Run `openclaw doctor --fix` for guidance.",
       );

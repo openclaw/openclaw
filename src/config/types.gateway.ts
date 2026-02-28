@@ -350,6 +350,13 @@ export type GatewayConfig = {
    */
   trustedProxies?: string[];
   /**
+   * CIDR subnets that are trusted for plaintext ws:// connections.
+   * Use this for encrypted mesh networks like WireGuard, Tailscale, or VPNs
+   * where the transport is already encrypted at the network layer.
+   * Example: ["100.64.0.0/10", "10.0.0.0/8"]
+   */
+  trustedNetworks?: string[];
+  /**
    * Allow `x-real-ip` as a fallback only when `x-forwarded-for` is missing.
    * Default: false (safer fail-closed behavior).
    */
