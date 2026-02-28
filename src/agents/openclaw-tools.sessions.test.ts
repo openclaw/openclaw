@@ -509,9 +509,9 @@ describe("sessions tools", () => {
     expect(details.error).toMatch(/Session not found|No session found/);
   });
 
-  // TODO: Remove skip after upstream fix for ACP thread-bound agents (a7d56e3554)
-  // Test expects 4 agent calls but only 1 is made - broken on clean upstream
-  it.skip("sessions_send supports fire-and-forget and wait", async () => {
+  // Fire-and-forget (timeoutSeconds=0) intentionally skips A2A flow (issue #7804)
+  // Only the wait call (timeoutSeconds=1) should trigger A2A
+  it("sessions_send supports fire-and-forget and wait", async () => {
     const calls: Array<{ method?: string; params?: unknown }> = [];
     let agentCallCount = 0;
     let _historyCallCount = 0;
@@ -591,9 +591,14 @@ describe("sessions tools", () => {
       runId: "run-1",
       delivery: { status: "pending", mode: "announce" },
     });
-    await waitForCalls(() => calls.filter((call) => call.method === "agent").length, 4);
-    await waitForCalls(() => calls.filter((call) => call.method === "agent.wait").length, 4);
-    await waitForCalls(() => calls.filter((call) => call.method === "chat.history").length, 4);
+    // Fire-and-forget (timeoutSeconds=0) skips A2A flow (issue #7804)
+    // Only the initial agent call is made
+    expect(calls.filter((call) => call.method === "agent")).toHaveLength(1);
+    expect(calls.filter((call) => call.method === "agent.wait")).toHaveLength(0);
+    expect(calls.filter((call) => call.method === "chat.history")).toHaveLength(0);
+
+    // Reset calls for the wait call
+    calls.length = 0;
 
     const waitPromise = tool.execute("call6", {
       sessionKey: "main",
@@ -607,14 +612,16 @@ describe("sessions tools", () => {
       delivery: { status: "pending", mode: "announce" },
     });
     expect(typeof (waited.details as { runId?: string }).runId).toBe("string");
-    await waitForCalls(() => calls.filter((call) => call.method === "agent").length, 8);
-    await waitForCalls(() => calls.filter((call) => call.method === "agent.wait").length, 8);
-    await waitForCalls(() => calls.filter((call) => call.method === "chat.history").length, 8);
+    // Wait call (timeoutSeconds > 0) triggers A2A flow
+    // 1 initial + 2 reply steps + 1 announce = 4 agent calls
+    await waitForCalls(() => calls.filter((call) => call.method === "agent").length, 4);
+    await waitForCalls(() => calls.filter((call) => call.method === "agent.wait").length, 4);
+    await waitForCalls(() => calls.filter((call) => call.method === "chat.history").length, 4);
 
     const agentCalls = calls.filter((call) => call.method === "agent");
     const waitCalls = calls.filter((call) => call.method === "agent.wait");
     const historyOnlyCalls = calls.filter((call) => call.method === "chat.history");
-    expect(agentCalls).toHaveLength(8);
+    expect(agentCalls).toHaveLength(4);
     for (const call of agentCalls) {
       expect(call.params).toMatchObject({
         lane: "nested",
@@ -649,8 +656,8 @@ describe("sessions tools", () => {
           ),
       ),
     ).toBe(true);
-    expect(waitCalls).toHaveLength(8);
-    expect(historyOnlyCalls).toHaveLength(8);
+    expect(waitCalls).toHaveLength(4);
+    expect(historyOnlyCalls).toHaveLength(4);
     expect(sendCallCount).toBe(0);
   });
 
