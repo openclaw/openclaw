@@ -1,3 +1,4 @@
+import { formatDurationHuman } from "../../infra/format-time/format-duration.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import type { CronPayload } from "../types.js";
@@ -71,7 +72,7 @@ export function inferLegacyName(job: {
     return `Cron: ${truncateText(job.schedule.expr, 52)}`;
   }
   if (kind === "every" && typeof job?.schedule?.everyMs === "number") {
-    return `Every: ${job.schedule.everyMs}ms`;
+    return `Every: ${formatDurationHuman(job.schedule.everyMs)}`;
   }
   if (kind === "at") {
     return "One-shot";

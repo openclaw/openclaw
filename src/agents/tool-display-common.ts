@@ -100,6 +100,21 @@ export function coerceDisplayValue(
     const preview = values.slice(0, maxArrayEntries).join(", ");
     return values.length > maxArrayEntries ? `${preview}…` : preview;
   }
+  // Plain objects: try a compact JSON representation instead of [object Object].
+  if (typeof value === "object") {
+    try {
+      const json = JSON.stringify(value);
+      if (json && json.length <= maxStringChars) {
+        return json;
+      }
+      if (json) {
+        return `${json.slice(0, Math.max(0, maxStringChars - 1))}…`;
+      }
+    } catch {
+      // circular or non-serializable — skip
+    }
+    return undefined;
+  }
   return undefined;
 }
 

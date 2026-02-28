@@ -146,7 +146,7 @@
         "list": { "label": "list" },
         "add": {
           "label": "add",
-          "detailKeys": ["job.name", "job.id", "job.schedule", "job.cron"]
+          "detailKeys": ["job.name", "job.id", "job.schedule.kind"]
         },
         "update": { "label": "update", "detailKeys": ["id"] },
         "remove": { "label": "remove", "detailKeys": ["id"] },
