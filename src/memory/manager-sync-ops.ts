@@ -698,7 +698,10 @@ export abstract class MemoryManagerSyncOps {
           .run(stale.path, "memory");
       } catch (err) {
         // sqlite-vec extension may not be loaded; vector rows cleaned up with chunks below
-        log.debug("Failed to delete from vector table for stale memory file", { path: stale.path, err });
+        log.debug("Failed to delete from vector table for stale memory file", {
+          path: stale.path,
+          err,
+        });
       }
       this.db.prepare(`DELETE FROM chunks WHERE path = ? AND source = ?`).run(stale.path, "memory");
       if (this.fts.enabled && this.fts.available) {
@@ -707,7 +710,10 @@ export abstract class MemoryManagerSyncOps {
             .prepare(`DELETE FROM ${FTS_TABLE} WHERE path = ? AND source = ? AND model = ?`)
             .run(stale.path, "memory", this.provider.model);
         } catch (err) {
-          log.debug("Failed to delete from FTS table for stale memory file", { path: stale.path, err });
+          log.debug("Failed to delete from FTS table for stale memory file", {
+            path: stale.path,
+            err,
+          });
         }
       }
     }
@@ -808,7 +814,10 @@ export abstract class MemoryManagerSyncOps {
           .run(stale.path, "sessions");
       } catch (err) {
         // sqlite-vec extension may not be loaded; vector rows cleaned up with chunks below
-        log.debug("Failed to delete from vector table for stale session file", { path: stale.path, err });
+        log.debug("Failed to delete from vector table for stale session file", {
+          path: stale.path,
+          err,
+        });
       }
       this.db
         .prepare(`DELETE FROM chunks WHERE path = ? AND source = ?`)
@@ -819,7 +828,10 @@ export abstract class MemoryManagerSyncOps {
             .prepare(`DELETE FROM ${FTS_TABLE} WHERE path = ? AND source = ? AND model = ?`)
             .run(stale.path, "sessions", this.provider.model);
         } catch (err) {
-          log.debug("Failed to delete from FTS table for stale session file", { path: stale.path, err });
+          log.debug("Failed to delete from FTS table for stale session file", {
+            path: stale.path,
+            err,
+          });
         }
       }
     }

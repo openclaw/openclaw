@@ -729,7 +729,11 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
           .run(entry.path, options.source);
       } catch (err) {
         // sqlite-vec extension may not be loaded; vector rows will be orphaned until next full reindex
-        log.debug("Failed to delete from vector table before reindex", { path: entry.path, source: options.source, err });
+        log.debug("Failed to delete from vector table before reindex", {
+          path: entry.path,
+          source: options.source,
+          err,
+        });
       }
     }
     if (this.fts.enabled && this.fts.available) {
@@ -738,7 +742,11 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
           .prepare(`DELETE FROM ${FTS_TABLE} WHERE path = ? AND source = ? AND model = ?`)
           .run(entry.path, options.source, this.provider.model);
       } catch (err) {
-        log.debug("Failed to delete from FTS table before reindex", { path: entry.path, source: options.source, err });
+        log.debug("Failed to delete from FTS table before reindex", {
+          path: entry.path,
+          source: options.source,
+          err,
+        });
       }
     }
     this.db
