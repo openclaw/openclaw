@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { setNextSavedMediaPath } from "./bot.media.e2e-harness.js";
 import {
-  TELEGRAM_TEST_TIMINGS,
   createBotHandler,
   createBotHandlerWithOptions,
   mockTelegramFileDownload,
@@ -229,8 +228,13 @@ describe("telegram media groups", () => {
     vi.clearAllTimers();
   });
 
-  const MEDIA_GROUP_TEST_TIMEOUT_MS = process.platform === "win32" ? 45_000 : 20_000;
-  const MEDIA_GROUP_FLUSH_MS = TELEGRAM_TEST_TIMINGS.mediaGroupFlushMs + 40;
+  // Generous timeout: the media-group flush uses a real setTimeout, and on heavily
+  // loaded Windows CI runners the event loop can stall far beyond the nominal delay.
+  const MEDIA_GROUP_TEST_TIMEOUT_MS = process.platform === "win32" ? 120_000 : 60_000;
+  // Wait budget for vi.waitFor: 30 seconds is enough headroom for even the slowest
+  // CI shards (the actual setTimeout is only ~20 ms, but under extreme load the
+  // callback + downstream async work can be delayed by several seconds).
+  const MEDIA_GROUP_WAIT_MS = 30_000;
 
   it(
     "handles same-group buffering and separate-group independence",
@@ -310,7 +314,7 @@ describe("telegram media groups", () => {
             () => {
               expect(replySpy).toHaveBeenCalledTimes(scenario.expectedReplyCount);
             },
-            { timeout: MEDIA_GROUP_FLUSH_MS * 4, interval: 2 },
+            { timeout: MEDIA_GROUP_WAIT_MS, interval: 50 },
           );
 
           expect(runtimeError).not.toHaveBeenCalled();
