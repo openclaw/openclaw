@@ -624,6 +624,89 @@ docker compose run --rm openclaw-cli devices list --url ws://127.0.0.1:18789
 - Dockerfile CMD uses `--allow-unconfigured`; mounted config with `gateway.mode` not `local` will still start. Override CMD to enforce the guard.
 - The gateway container is the source of truth for sessions (`~/.openclaw/agents/<agentId>/sessions/`).
 
+## Backup and migration (Intel Mac to Apple Silicon)
+
+For low-disruption host migration, move OpenClaw data/config and rebuild Docker
+images natively on the new machine.
+
+Use:
+
+- `scripts/migrate/backup-openclaw.sh` on source host
+- `scripts/migrate/restore-openclaw.sh` on target host
+
+### 1) Create backup on source host
+
+From repo root:
+
+```bash
+scripts/migrate/backup-openclaw.sh
+```
+
+The archive includes:
+
+- OpenClaw config dir (`OPENCLAW_CONFIG_DIR` or `~/.openclaw`)
+- OpenClaw workspace dir (`OPENCLAW_WORKSPACE_DIR` or `~/.openclaw/workspace`)
+- `.env` and Docker setup files from repo root
+- metadata + internal checksum manifest
+
+Output files:
+
+- `backups/openclaw-backup-<timestamp>.tar.gz`
+- `backups/openclaw-backup-<timestamp>.tar.gz.sha256`
+
+Optional path overrides:
+
+```bash
+scripts/migrate/backup-openclaw.sh \
+  --config-dir "$HOME/.openclaw" \
+  --workspace-dir "$HOME/.openclaw/workspace" \
+  --output-dir "$HOME/openclaw-backups"
+```
+
+### 2) Transfer archive to target host
+
+Copy archive + checksum file to the new Mac using your normal secure transfer
+method (scp, encrypted disk, etc.).
+
+### 3) Restore on target host
+
+From repo root on target host:
+
+```bash
+scripts/migrate/restore-openclaw.sh --archive /path/to/openclaw-backup-<timestamp>.tar.gz
+```
+
+Default restore behavior:
+
+- verifies archive checksums
+- stops `openclaw-gateway` container first
+- snapshots current config/workspace as `.pre-restore-<timestamp>`
+- restores config/workspace from backup
+- writes backup env file as `.env.from-backup` for review
+
+To overwrite `.env` directly:
+
+```bash
+scripts/migrate/restore-openclaw.sh \
+  --archive /path/to/openclaw-backup-<timestamp>.tar.gz \
+  --apply-env
+```
+
+### 4) Rebuild and validate on target arch
+
+Always rebuild on Apple Silicon:
+
+```bash
+docker compose up -d --build --force-recreate openclaw-gateway
+docker compose run --rm openclaw-cli health
+docker compose run --rm openclaw-cli channels status --probe
+```
+
+### Architecture migration note
+
+Do not carry over architecture-specific binary caches from x86 to arm hosts.
+Rebuild containers and reinstall native toolchains on the target host.
+
 ## Agent Sandbox (host gateway + Docker tools)
 
 Deep dive: [Sandboxing](/gateway/sandboxing)
