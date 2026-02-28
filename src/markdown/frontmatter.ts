@@ -164,9 +164,7 @@ export function parseFrontmatterBlock(content: string): ParsedFrontmatter {
     //    We guard against multi-line YAML objects (indented blocks) by
     //    requiring the line-parser value to be a single-line, non-JSON string.
     const lineParsedIsPlainSingleLine =
-      !value.includes("\n") &&
-      !value.startsWith("{") &&
-      !value.startsWith("[");
+      !value.includes("\n") && !value.startsWith("{") && !value.startsWith("[");
     const yamlWasMisparsedAsObject =
       typeof yamlValue === "string" &&
       (yamlValue.startsWith("{") || yamlValue.startsWith("[")) &&

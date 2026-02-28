@@ -102,4 +102,3 @@ category: openclaw: command
     expect(result.category).toBe("openclaw: command");
   });
 });
-
