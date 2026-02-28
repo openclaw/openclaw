@@ -162,7 +162,7 @@ describe("normalizeModelCompat", () => {
     ).toBe(false);
   });
 
-  it("leaves non-zai models untouched", () => {
+  it("leaves native api.openai.com model untouched", () => {
     const model = {
       ...baseModel(),
       provider: "openai",
@@ -173,7 +173,45 @@ describe("normalizeModelCompat", () => {
     expect(normalized.compat).toBeUndefined();
   });
 
-  it("does not override explicit z.ai compat false", () => {
+  it("forces supportsDeveloperRole off for Azure OpenAI (Chat Completions, not Responses API)", () => {
+    const model = {
+      ...baseModel(),
+      provider: "azure-openai",
+      baseUrl: "https://my-deployment.openai.azure.com/openai",
+    };
+    delete (model as { compat?: unknown }).compat;
+    const normalized = normalizeModelCompat(model);
+    expect(
+      (normalized.compat as { supportsDeveloperRole?: boolean } | undefined)?.supportsDeveloperRole,
+    ).toBe(false);
+  });
+  it("forces supportsDeveloperRole off for generic custom openai-completions provider", () => {
+    const model = {
+      ...baseModel(),
+      provider: "custom-cpa",
+      baseUrl: "https://cpa.example.com/v1",
+    };
+    delete (model as { compat?: unknown }).compat;
+    const normalized = normalizeModelCompat(model);
+    expect(
+      (normalized.compat as { supportsDeveloperRole?: boolean } | undefined)?.supportsDeveloperRole,
+    ).toBe(false);
+  });
+
+  it("forces supportsDeveloperRole off for Qwen proxy via openai-completions", () => {
+    const model = {
+      ...baseModel(),
+      provider: "qwen-proxy",
+      baseUrl: "https://qwen-api.example.org/compatible-mode/v1",
+    };
+    delete (model as { compat?: unknown }).compat;
+    const normalized = normalizeModelCompat(model);
+    expect(
+      (normalized.compat as { supportsDeveloperRole?: boolean } | undefined)?.supportsDeveloperRole,
+    ).toBe(false);
+  });
+
+  it("does not override explicit compat false", () => {
     const model = baseModel();
     model.compat = { supportsDeveloperRole: false };
     const normalized = normalizeModelCompat(model);
