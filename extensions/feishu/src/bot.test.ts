@@ -701,7 +701,6 @@ describe("handleFeishuMessage command authorization", () => {
       "video/mp4",
       "inbound",
       expect.any(Number),
-      "embedded.mov",
     );
   });
 
