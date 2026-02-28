@@ -561,7 +561,12 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
     finalUrl = result.finalUrl;
     release = result.release;
 
-    // Check redirect target against allowlist
+    // Check redirect target against allowlist.
+    // Note: this check prevents content disclosure from non-allowlisted redirect
+    // targets, but the TCP connection and HTTP request to the redirect target are
+    // already established by this point. For strict "no outbound connections to
+    // non-allowlisted hosts" requirements, per-hop URL validation inside
+    // fetchWithSsrFGuard itself would be needed.
     const redirectAllowlist = params.urlAllowlist;
     if (
       redirectAllowlist &&
