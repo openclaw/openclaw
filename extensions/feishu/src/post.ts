@@ -234,7 +234,12 @@ export function parsePostContent(content: string): PostParseResult {
     const parsed = JSON.parse(content);
     const payload = resolvePostPayload(parsed);
     if (!payload) {
-      return { textContent: FALLBACK_POST_TEXT, imageKeys: [], mediaKeys: [], mentionedOpenIds: [] };
+      return {
+        textContent: FALLBACK_POST_TEXT,
+        imageKeys: [],
+        mediaKeys: [],
+        mentionedOpenIds: [],
+      };
     }
 
     const imageKeys: string[] = [];
