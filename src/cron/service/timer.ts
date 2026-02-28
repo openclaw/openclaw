@@ -640,9 +640,12 @@ export async function executeJobCore(
             : 'main job requires payload.kind="systemEvent"',
       };
     }
+    // main-target cron jobs should always resolve via the agent's main session.
+    // Avoid forwarding persisted channel session keys from legacy records.
+    const targetMainSessionKey = undefined;
     state.deps.enqueueSystemEvent(text, {
       agentId: job.agentId,
-      sessionKey: job.sessionKey,
+      sessionKey: targetMainSessionKey,
       contextKey: `cron:${job.id}`,
     });
     if (job.wakeMode === "now" && state.deps.runHeartbeatOnce) {
@@ -659,7 +662,7 @@ export async function executeJobCore(
         heartbeatResult = await state.deps.runHeartbeatOnce({
           reason,
           agentId: job.agentId,
-          sessionKey: job.sessionKey,
+          sessionKey: targetMainSessionKey,
         });
         if (
           heartbeatResult.status !== "skipped" ||
@@ -677,7 +680,7 @@ export async function executeJobCore(
           state.deps.requestHeartbeatNow({
             reason,
             agentId: job.agentId,
-            sessionKey: job.sessionKey,
+            sessionKey: targetMainSessionKey,
           });
           return { status: "ok", summary: text };
         }
@@ -698,7 +701,7 @@ export async function executeJobCore(
       state.deps.requestHeartbeatNow({
         reason: `cron:${job.id}`,
         agentId: job.agentId,
-        sessionKey: job.sessionKey,
+        sessionKey: targetMainSessionKey,
       });
       return { status: "ok", summary: text };
     }
