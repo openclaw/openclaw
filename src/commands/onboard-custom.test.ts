@@ -131,6 +131,45 @@ describe("promptCustomApiConfig", () => {
     expect(JSON.parse(firstCall?.body ?? "{}")).toMatchObject({ max_tokens: 1 });
   });
 
+  it("uses azure-specific headers and body for openai verification probes", async () => {
+    const prompter = createTestPrompter({
+      text: [
+        "https://my-resource.openai.azure.com",
+        "azure-test-key",
+        "gpt-4.1",
+        "custom",
+        "alias",
+      ],
+      select: ["plaintext", "openai"],
+    });
+    const fetchMock = stubFetchSequence([{ ok: true }]);
+
+    await runPromptCustomApi(prompter);
+
+    const firstCall = fetchMock.mock.calls[0];
+    const firstUrl = firstCall?.[0];
+    const firstInit = firstCall?.[1] as
+      | { body?: string; headers?: Record<string, string> }
+      | undefined;
+    if (typeof firstUrl !== "string") {
+      throw new Error("Expected first verification call URL");
+    }
+    const parsedBody = JSON.parse(firstInit?.body ?? "{}");
+
+    expect(firstUrl).toContain("/openai/deployments/gpt-4.1/chat/completions");
+    expect(firstUrl).toContain("api-version=2024-10-21");
+    expect(firstInit?.headers?.["api-key"]).toBe("azure-test-key");
+    expect(firstInit?.headers?.Authorization).toBeUndefined();
+    expect(firstInit?.body).toBeDefined();
+    expect(parsedBody).toMatchObject({
+      messages: [{ role: "user", content: "Hi" }],
+      max_completion_tokens: 5,
+      stream: false,
+    });
+    expect(parsedBody).not.toHaveProperty("model");
+    expect(parsedBody).not.toHaveProperty("max_tokens");
+  });
+
   it("uses expanded max_tokens for anthropic verification probes", async () => {
     const prompter = createTestPrompter({
       text: ["https://example.com", "test-key", "detected-model", "custom", "alias"],
