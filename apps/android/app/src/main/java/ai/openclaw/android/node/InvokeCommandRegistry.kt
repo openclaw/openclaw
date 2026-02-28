@@ -20,7 +20,8 @@ data class NodeRuntimeFlags(
   val locationEnabled: Boolean,
   val smsAvailable: Boolean,
   val voiceWakeEnabled: Boolean,
-  val motionAvailable: Boolean,
+  val motionActivityAvailable: Boolean,
+  val motionPedometerAvailable: Boolean,
   val debugBuild: Boolean,
 )
 
@@ -29,7 +30,8 @@ enum class InvokeCommandAvailability {
   CameraEnabled,
   LocationEnabled,
   SmsAvailable,
-  MotionAvailable,
+  MotionActivityAvailable,
+  MotionPedometerAvailable,
   DebugBuild,
 }
 
@@ -179,11 +181,11 @@ object InvokeCommandRegistry {
       ),
       InvokeCommandSpec(
         name = OpenClawMotionCommand.Activity.rawValue,
-        availability = InvokeCommandAvailability.MotionAvailable,
+        availability = InvokeCommandAvailability.MotionActivityAvailable,
       ),
       InvokeCommandSpec(
         name = OpenClawMotionCommand.Pedometer.rawValue,
-        availability = InvokeCommandAvailability.MotionAvailable,
+        availability = InvokeCommandAvailability.MotionPedometerAvailable,
       ),
       InvokeCommandSpec(
         name = OpenClawSmsCommand.Send.rawValue,
@@ -213,7 +215,7 @@ object InvokeCommandRegistry {
           NodeCapabilityAvailability.LocationEnabled -> flags.locationEnabled
           NodeCapabilityAvailability.SmsAvailable -> flags.smsAvailable
           NodeCapabilityAvailability.VoiceWakeEnabled -> flags.voiceWakeEnabled
-          NodeCapabilityAvailability.MotionAvailable -> flags.motionAvailable
+          NodeCapabilityAvailability.MotionAvailable -> flags.motionActivityAvailable || flags.motionPedometerAvailable
         }
       }
       .map { it.name }
@@ -227,7 +229,8 @@ object InvokeCommandRegistry {
           InvokeCommandAvailability.CameraEnabled -> flags.cameraEnabled
           InvokeCommandAvailability.LocationEnabled -> flags.locationEnabled
           InvokeCommandAvailability.SmsAvailable -> flags.smsAvailable
-          InvokeCommandAvailability.MotionAvailable -> flags.motionAvailable
+          InvokeCommandAvailability.MotionActivityAvailable -> flags.motionActivityAvailable
+          InvokeCommandAvailability.MotionPedometerAvailable -> flags.motionPedometerAvailable
           InvokeCommandAvailability.DebugBuild -> flags.debugBuild
         }
       }

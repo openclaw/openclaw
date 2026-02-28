@@ -25,7 +25,8 @@ class InvokeCommandRegistryTest {
           locationEnabled = false,
           smsAvailable = false,
           voiceWakeEnabled = false,
-          motionAvailable = false,
+          motionActivityAvailable = false,
+          motionPedometerAvailable = false,
           debugBuild = false,
         ),
       )
@@ -52,7 +53,8 @@ class InvokeCommandRegistryTest {
           locationEnabled = true,
           smsAvailable = true,
           voiceWakeEnabled = true,
-          motionAvailable = true,
+          motionActivityAvailable = true,
+          motionPedometerAvailable = true,
           debugBuild = false,
         ),
       )
@@ -79,7 +81,8 @@ class InvokeCommandRegistryTest {
           locationEnabled = false,
           smsAvailable = false,
           voiceWakeEnabled = false,
-          motionAvailable = false,
+          motionActivityAvailable = false,
+          motionPedometerAvailable = false,
           debugBuild = false,
         ),
       )
@@ -117,7 +120,8 @@ class InvokeCommandRegistryTest {
           locationEnabled = true,
           smsAvailable = true,
           voiceWakeEnabled = false,
-          motionAvailable = true,
+          motionActivityAvailable = true,
+          motionPedometerAvailable = true,
           debugBuild = true,
         ),
       )
@@ -144,5 +148,24 @@ class InvokeCommandRegistryTest {
     assertTrue(commands.contains("debug.logs"))
     assertTrue(commands.contains("debug.ed25519"))
     assertTrue(commands.contains("app.update"))
+  }
+
+  @Test
+  fun advertisedCommands_onlyIncludesSupportedMotionCommands() {
+    val commands =
+      InvokeCommandRegistry.advertisedCommands(
+        NodeRuntimeFlags(
+          cameraEnabled = false,
+          locationEnabled = false,
+          smsAvailable = false,
+          voiceWakeEnabled = false,
+          motionActivityAvailable = true,
+          motionPedometerAvailable = false,
+          debugBuild = false,
+        ),
+      )
+
+    assertTrue(commands.contains(OpenClawMotionCommand.Activity.rawValue))
+    assertFalse(commands.contains(OpenClawMotionCommand.Pedometer.rawValue))
   }
 }
