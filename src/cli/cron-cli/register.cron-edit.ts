@@ -59,6 +59,7 @@ export function registerCronEditCommand(cron: Command) {
         "--to <dest>",
         "Delivery destination (E.164, Telegram chatId, or Discord channel/user)",
       )
+      .option("--account <id>", "Channel account id for delivery (multi-account setups)")
       .option("--best-effort-deliver", "Do not fail job if delivery fails")
       .option("--no-best-effort-deliver", "Fail job when delivery fails")
       .action(async (id, opts) => {
@@ -209,6 +210,7 @@ export function registerCronEditCommand(cron: Command) {
           const hasTimeoutSeconds = Boolean(timeoutSeconds && Number.isFinite(timeoutSeconds));
           const hasDeliveryModeFlag = opts.announce || typeof opts.deliver === "boolean";
           const hasDeliveryTarget = typeof opts.channel === "string" || typeof opts.to === "string";
+          const hasDeliveryAccount = typeof opts.account === "string";
           const hasBestEffort = typeof opts.bestEffortDeliver === "boolean";
           const hasAgentTurnPatch =
             typeof opts.message === "string" ||
@@ -217,6 +219,7 @@ export function registerCronEditCommand(cron: Command) {
             hasTimeoutSeconds ||
             hasDeliveryModeFlag ||
             hasDeliveryTarget ||
+            hasDeliveryAccount ||
             hasBestEffort;
           if (hasSystemEventPatch && hasAgentTurnPatch) {
             throw new Error("Choose at most one payload change");
@@ -235,14 +238,14 @@ export function registerCronEditCommand(cron: Command) {
             patch.payload = payload;
           }
 
-          if (hasDeliveryModeFlag || hasDeliveryTarget || hasBestEffort) {
-            const deliveryMode =
-              opts.announce || opts.deliver === true
-                ? "announce"
-                : opts.deliver === false
-                  ? "none"
-                  : "announce";
-            const delivery: Record<string, unknown> = { mode: deliveryMode };
+          if (hasDeliveryModeFlag || hasDeliveryTarget || hasDeliveryAccount || hasBestEffort) {
+            const delivery: Record<string, unknown> = {};
+            if (hasDeliveryModeFlag) {
+              delivery.mode = opts.announce || opts.deliver === true ? "announce" : "none";
+            } else if (hasBestEffort) {
+              // Back-compat: toggling best-effort alone has historically implied announce mode.
+              delivery.mode = "announce";
+            }
             if (typeof opts.channel === "string") {
               const channel = opts.channel.trim();
               delivery.channel = channel ? channel : undefined;
@@ -250,6 +253,10 @@ export function registerCronEditCommand(cron: Command) {
             if (typeof opts.to === "string") {
               const to = opts.to.trim();
               delivery.to = to ? to : undefined;
+            }
+            if (typeof opts.account === "string") {
+              const account = opts.account.trim();
+              delivery.accountId = account ? account : undefined;
             }
             if (typeof opts.bestEffortDeliver === "boolean") {
               delivery.bestEffort = opts.bestEffortDeliver;
