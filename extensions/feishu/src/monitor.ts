@@ -177,6 +177,12 @@ export async function resolveReactionSyntheticEvent(
     return null;
   }
 
+  const account = resolveFeishuAccount({ cfg, accountId });
+  const reactionNotifications = account.config.reactionNotifications ?? "own";
+  if (reactionNotifications === "off") {
+    return null;
+  }
+
   // Skip bot self-reactions
   if (event.operator_type === "app" || senderId === botOpenId) {
     return null;
@@ -187,9 +193,7 @@ export async function resolveReactionSyntheticEvent(
     return null;
   }
 
-  // Fail closed if bot identity cannot be resolved; otherwise reactions on any
-  // message can leak into the agent.
-  if (!botOpenId) {
+  if (reactionNotifications === "own" && !botOpenId) {
     logger?.(
       `feishu[${accountId}]: bot open_id unavailable, skipping reaction ${emoji} on ${messageId}`,
     );
@@ -201,7 +205,7 @@ export async function resolveReactionSyntheticEvent(
     verificationTimeoutMs,
   ).catch(() => null);
   const isBotMessage = reactedMsg?.senderType === "app" || reactedMsg?.senderOpenId === botOpenId;
-  if (!reactedMsg || !isBotMessage) {
+  if (!reactedMsg || (reactionNotifications === "own" && !isBotMessage)) {
     logger?.(
       `feishu[${accountId}]: ignoring reaction on non-bot/unverified message ${messageId} ` +
         `(sender: ${reactedMsg?.senderOpenId ?? "unknown"})`,
