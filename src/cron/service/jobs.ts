@@ -350,10 +350,14 @@ export function nextWakeAtMs(state: CronServiceState) {
   if (enabled.length === 0) {
     return undefined;
   }
-  return enabled.reduce(
-    (min, j) => Math.min(min, j.state.nextRunAtMs),
-    enabled[0].state.nextRunAtMs,
-  );
+  const first = enabled[0]?.state.nextRunAtMs;
+  if (!isFiniteTimestamp(first)) {
+    return undefined;
+  }
+  return enabled.reduce((min, j) => {
+    const next = j.state.nextRunAtMs;
+    return isFiniteTimestamp(next) ? Math.min(min, next) : min;
+  }, first);
 }
 
 export function createJob(state: CronServiceState, input: CronJobCreate): CronJob {

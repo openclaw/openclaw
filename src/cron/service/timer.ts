@@ -255,8 +255,7 @@ export function armTimer(state: CronServiceState) {
           j.enabled &&
           typeof j.state.nextRunAtMs === "number" &&
           Number.isFinite(j.state.nextRunAtMs),
-      )
-        .length ?? 0;
+      ).length ?? 0;
     state.deps.log.debug(
       { jobCount, enabledCount, withNextRun },
       "cron: armTimer skipped - no jobs with nextRunAtMs",
