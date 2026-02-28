@@ -9,28 +9,28 @@ import { z } from "zod";
 export const SimplexUserRoutingSchema = z.object({
   /** SimpleX display name to match (exact match) */
   contactName: z.string(),
-  
+
   /** OpenClaw agent to route messages to (e.g., "digimate", "fiancee-assistant") */
   agent: z.string(),
-  
+
   /** Language for this user (ISO 639-1 code, e.g., "fr", "en") */
   language: z.string().default("fr"),
-  
+
   /** Model to use for this user (e.g., "claude-sonnet-4-6", "claude-haiku") */
   model: z.string().optional(),
-  
+
   /** Whether to respond with voice (TTS) for this user */
   voiceReplies: z.boolean().default(true),
-  
+
   /** System prompt override for this user */
   systemPrompt: z.string().optional(),
-  
+
   /** Whether to include conversation history for this user */
   includeHistory: z.boolean().default(true),
-  
+
   /** Maximum history messages to include */
   maxHistoryMessages: z.number().int().min(1).max(50).default(10),
-  
+
   /** Priority for this route (higher = checked first) */
   priority: z.number().int().min(0).max(100).default(50),
 });
@@ -44,34 +44,34 @@ export type SimplexUserRouting = z.infer<typeof SimplexUserRoutingSchema>;
 export const SimplexGroupRoutingSchema = z.object({
   /** Group display name or ID */
   groupName: z.string(),
-  
+
   /** OpenClaw agent to route messages to */
   agent: z.string(),
-  
+
   /** Language for this group */
   language: z.string().default("fr"),
-  
+
   /** Model to use for this group */
   model: z.string().optional(),
-  
+
   /** Whether to respond with voice */
   voiceReplies: z.boolean().default(false),
-  
+
   /** System prompt override */
   systemPrompt: z.string().optional(),
-  
+
   /** Include conversation history */
   includeHistory: z.boolean().default(true),
-  
+
   /** Max history messages */
   maxHistoryMessages: z.number().int().min(1).max(50).default(10),
-  
+
   /** Route only specific members to agent (empty = all members) */
   memberFilter: z.array(z.string()).optional(),
-  
+
   /** Exclude specific members from routing (e.g., Alexandre's own devices) */
   memberExclude: z.array(z.string()).optional(),
-  
+
   /** Priority for this route */
   priority: z.number().int().min(0).max(100).default(50),
 });
@@ -132,7 +132,7 @@ export const SimplexConfigSchema = z.object({
 
   /**
    * User routing configuration - route specific contacts to specific agents.
-   * 
+   *
    * Example (fiancée use case):
    * [
    *   { contactName: "FormidableVisionary", agent: "fiancee-assistant", language: "fr", voiceReplies: true },
@@ -145,12 +145,12 @@ export const SimplexConfigSchema = z.object({
   /**
    * Group routing configuration - route group messages to agents.
    * Supports member filtering to route specific members to specific agents.
-   * 
+   *
    * Example:
    * [
-   *   { 
-   *     groupName: "EffuzionNext", 
-   *     agent: "fiancee-assistant", 
+   *   {
+   *     groupName: "EffuzionNext",
+   *     agent: "fiancee-assistant",
    *     language: "fr",
    *     memberExclude: ["Talleyrand_2010", "PleasantTeammate", "Digimate"]  // Alexandre's devices
    *   }
@@ -183,21 +183,25 @@ export const SimplexConfigSchema = z.object({
   /**
    * Reconnection settings for the WebSocket client.
    */
-  reconnection: z.object({
-    maxRetries: z.number().int().min(0).optional(),
-    backoffMs: z.number().int().min(0).optional(),
-    backoffFactor: z.number().optional(),
-  }).optional(),
+  reconnection: z
+    .object({
+      maxRetries: z.number().int().min(0).optional(),
+      backoffMs: z.number().int().min(0).optional(),
+      backoffFactor: z.number().optional(),
+    })
+    .optional(),
 
   /**
    * Message format options: control how incoming/outgoing messages are represented.
    */
-  messageOptions: z.object({
-    allowText: z.boolean().optional(),
-    allowFiles: z.boolean().optional(),
-    preferM4AForVoice: z.boolean().optional(),
-    convertImagesToJpeg: z.boolean().optional(),
-  }).optional(),
+  messageOptions: z
+    .object({
+      allowText: z.boolean().optional(),
+      allowFiles: z.boolean().optional(),
+      preferM4AForVoice: z.boolean().optional(),
+      convertImagesToJpeg: z.boolean().optional(),
+    })
+    .optional(),
 
   /**
    * Path to the simplex-chat binary (if not on PATH).

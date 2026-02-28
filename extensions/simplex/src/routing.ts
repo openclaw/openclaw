@@ -1,6 +1,6 @@
 /**
  * SimpleX Message Routing Module
- * 
+ *
  * Handles routing of incoming messages to different OpenClaw agents
  * based on contact/group configuration. This replaces router.py with
  * a more flexible TypeScript implementation.
@@ -42,24 +42,28 @@ export interface RoutingResult {
 
 /**
  * Resolve routing for an incoming message.
- * 
+ *
  * Priority order:
  * 1. User routing (exact contact name match) - highest priority
  * 2. Group routing with member filtering (for group messages)
  * 3. Default agent (if configured)
  */
-export function resolveRouting(
-  config: SimplexConfig,
-  ctx: RoutingContext
-): RoutingResult | null {
-  const { userRouting = [], groupRouting = [], defaultAgent, defaultLanguage = "en", defaultModel, defaultVoiceReplies = false } = config;
+export function resolveRouting(config: SimplexConfig, ctx: RoutingContext): RoutingResult | null {
+  const {
+    userRouting = [],
+    groupRouting = [],
+    defaultAgent,
+    defaultLanguage = "en",
+    defaultModel,
+    defaultVoiceReplies = false,
+  } = config;
 
   // 1. Check user routing (direct messages)
   if (!ctx.isGroup) {
     const userRoute = userRouting.find(
-      (r) => r.contactName.toLowerCase() === ctx.senderName.toLowerCase()
+      (r) => r.contactName.toLowerCase() === ctx.senderName.toLowerCase(),
     );
-    
+
     if (userRoute) {
       return {
         agent: userRoute.agent,
@@ -84,7 +88,7 @@ export function resolveRouting(
       // Check member exclusions first
       if (groupRoute.memberExclude) {
         const isExcluded = groupRoute.memberExclude.some(
-          (excluded) => excluded.toLowerCase() === ctx.senderName.toLowerCase()
+          (excluded) => excluded.toLowerCase() === ctx.senderName.toLowerCase(),
         );
         if (isExcluded) {
           // Sender is excluded - continue to next group route or fall through
@@ -95,7 +99,7 @@ export function resolveRouting(
       // Check member filter (if specified, only these members match)
       if (groupRoute.memberFilter && groupRoute.memberFilter.length > 0) {
         const isIncluded = groupRoute.memberFilter.some(
-          (member) => member.toLowerCase() === ctx.senderName.toLowerCase()
+          (member) => member.toLowerCase() === ctx.senderName.toLowerCase(),
         );
         if (!isIncluded) {
           // Sender not in filter - continue
@@ -136,10 +140,7 @@ export function resolveRouting(
  * Check if a message should be routed to a specific agent.
  * Returns true if routing was found.
  */
-export function shouldRouteToAgent(
-  config: SimplexConfig,
-  ctx: RoutingContext
-): boolean {
+export function shouldRouteToAgent(config: SimplexConfig, ctx: RoutingContext): boolean {
   return resolveRouting(config, ctx) !== null;
 }
 
@@ -148,7 +149,7 @@ export function shouldRouteToAgent(
  */
 export function describeRouting(config: SimplexConfig, ctx: RoutingContext): string {
   const result = resolveRouting(config, ctx);
-  
+
   if (!result) {
     return `No routing configured for ${ctx.isGroup ? `group:${ctx.groupName}/` : ""}${ctx.senderName}`;
   }

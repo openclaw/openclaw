@@ -1,9 +1,9 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { emptyPluginConfigSchema } from "openclaw/plugin-sdk";
 import { simplexPlugin } from "./src/channel.js";
+import type { SimplexConfig } from "./src/config-schema.js";
 import { setSimplexRuntime } from "./src/runtime.js";
 import type { ResolvedSimplexAccount } from "./src/types.js";
-import type { SimplexConfig } from "./src/config-schema.js";
 
 const plugin = {
   id: "simplex",
