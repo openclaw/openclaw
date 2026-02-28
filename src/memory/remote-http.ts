@@ -31,6 +31,7 @@ export async function withRemoteHttpResponse<T>(params: {
     init: params.init,
     policy: params.ssrfPolicy,
     auditContext: params.auditContext ?? "memory-remote",
+    proxy: "env",
   });
   try {
     return await params.onResponse(response);
