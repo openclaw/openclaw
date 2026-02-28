@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/config.js";
+import { resolveAgentDir } from "./agent-scope.js";
 import { getOrLoadBootstrapFiles } from "./bootstrap-cache.js";
 import { applyBootstrapHookOverrides } from "./bootstrap-hooks.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
@@ -66,6 +67,23 @@ export async function resolveBootstrapFilesForRun(params: {
     sessionId: params.sessionId,
     agentId: params.agentId,
   });
+
+  // When an agentDir is configured for this agent, load bootstrap files from
+  // that directory and let them override the shared workspace copies. This
+  // allows per-agent customisation (e.g. a distinct SOUL.md or AGENTS.md)
+  // without touching the shared workspace directory.
+  if (params.agentId && params.config) {
+    const agentDir = resolveAgentDir(params.config, params.agentId);
+    const agentDirFiles = await loadWorkspaceBootstrapFiles(agentDir);
+    const overrides = new Map(agentDirFiles.filter((f) => !f.missing).map((f) => [f.name, f]));
+    if (overrides.size > 0) {
+      return sanitizeBootstrapFiles(
+        updated.map((f) => overrides.get(f.name) ?? f),
+        params.warn,
+      );
+    }
+  }
+
   return sanitizeBootstrapFiles(updated, params.warn);
 }
 

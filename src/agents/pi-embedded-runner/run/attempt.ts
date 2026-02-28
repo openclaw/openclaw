@@ -475,12 +475,18 @@ export async function runEmbeddedAttempt(
     });
 
     const sessionLabel = params.sessionKey ?? params.sessionId;
+    const { defaultAgentId, sessionAgentId } = resolveSessionAgentIds({
+      sessionKey: params.sessionKey,
+      config: params.config,
+      agentId: params.agentId,
+    });
     const { bootstrapFiles: hookAdjustedBootstrapFiles, contextFiles } =
       await resolveBootstrapContextForRun({
         workspaceDir: effectiveWorkspace,
         config: params.config,
         sessionKey: params.sessionKey,
         sessionId: params.sessionId,
+        agentId: sessionAgentId,
         warn: makeBootstrapWarn({ sessionLabel, warn: (message) => log.warn(message) }),
       });
     const workspaceNotes = hookAdjustedBootstrapFiles.some(
@@ -490,12 +496,6 @@ export async function runEmbeddedAttempt(
       : undefined;
 
     const agentDir = params.agentDir ?? resolveOpenClawAgentDir();
-
-    const { defaultAgentId, sessionAgentId } = resolveSessionAgentIds({
-      sessionKey: params.sessionKey,
-      config: params.config,
-      agentId: params.agentId,
-    });
     const effectiveFsWorkspaceOnly = resolveAttemptFsWorkspaceOnly({
       config: params.config,
       sessionAgentId,
