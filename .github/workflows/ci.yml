@@ -37,6 +37,7 @@ jobs:
     outputs:
       run_node: ${{ steps.scope.outputs.run_node }}
       run_macos: ${{ steps.scope.outputs.run_macos }}
+      run_ios: ${{ steps.scope.outputs.run_ios }}
       run_android: ${{ steps.scope.outputs.run_android }}
     steps:
       - name: Checkout
@@ -62,12 +63,14 @@ jobs:
             # Fail-safe: run broad checks if detection fails.
             echo "run_node=true" >> "$GITHUB_OUTPUT"
             echo "run_macos=true" >> "$GITHUB_OUTPUT"
+            echo "run_ios=true" >> "$GITHUB_OUTPUT"
             echo "run_android=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
           run_node=false
           run_macos=false
+          run_ios=false
           run_android=false
           has_non_docs=false
           has_non_native_non_docs=false
@@ -90,6 +93,12 @@ jobs:
                 ;;
               apps/macos/*|apps/ios/*|apps/shared/*|Swabble/*)
                 run_macos=true
+                ;;
+            esac
+
+            case "$path" in
+              apps/ios/*|apps/shared/*)
+                run_ios=true
                 ;;
             esac
 
@@ -121,6 +130,7 @@ jobs:
 
           echo "run_node=${run_node}" >> "$GITHUB_OUTPUT"
           echo "run_macos=${run_macos}" >> "$GITHUB_OUTPUT"
+          echo "run_ios=${run_ios}" >> "$GITHUB_OUTPUT"
           echo "run_android=${run_android}" >> "$GITHUB_OUTPUT"
 
   # Build dist once for Node-relevant changes and share it with downstream jobs.
@@ -614,7 +624,7 @@ jobs:
 
   ios:
     needs: [docs-scope, changed-scope, check]
-    if: needs.docs-scope.outputs.docs_only != 'true' && (github.event_name == 'push' || needs.changed-scope.outputs.run_macos == 'true')
+    if: needs.docs-scope.outputs.docs_only != 'true' && (github.event_name == 'push' || needs.changed-scope.outputs.run_ios == 'true')
     runs-on: macos-latest
     steps:
       - name: Checkout
@@ -773,15 +783,72 @@ jobs:
             sys.exit(1)
           PY
 
-      - name: Build watchOS target
+      - name: watchOS tests
         run: |
           set -euo pipefail
-          xcodebuild build \
+          WATCH_DEST_ID="$(
+            python3 - <<'PY'
+          import json
+          import subprocess
+          import sys
+          import uuid
+
+          def sh(args):
+            return subprocess.check_output(args, text=True).strip()
+
+          devices = json.loads(sh(["xcrun", "simctl", "list", "devices", "-j"]))
+          candidates = []
+          for runtime, devs in (devices.get("devices") or {}).items():
+            if "watchOS" not in runtime:
+              continue
+            for dev in devs or []:
+              if not dev.get("isAvailable"):
+                continue
+              name = str(dev.get("name") or "")
+              udid = str(dev.get("udid") or "")
+              if not udid or "Watch" not in name:
+                continue
+              candidates.append((name, udid))
+
+          candidates.sort(key=lambda it: it[0])
+          if candidates:
+            print(candidates[0][1])
+            sys.exit(0)
+
+          runtimes = json.loads(sh(["xcrun", "simctl", "list", "runtimes", "-j"])).get("runtimes") or []
+          watch_rts = [rt for rt in runtimes if rt.get("platform") == "watchOS" and rt.get("isAvailable")]
+          if not watch_rts:
+            print("No available watchOS runtimes found.", file=sys.stderr)
+            sys.exit(1)
+
+          def version_key(rt):
+            parts = []
+            for p in str(rt.get("version") or "0").split("."):
+              try: parts.append(int(p))
+              except ValueError: parts.append(0)
+            return tuple(parts)
+
+          watch_rts.sort(key=version_key, reverse=True)
+          runtime = watch_rts[0]
+          runtime_id = str(runtime.get("identifier") or "")
+          supported = runtime.get("supportedDeviceTypes") or []
+          watches = [dt for dt in supported if dt.get("productFamily") == "Apple Watch"]
+          if not watches:
+            print("No Watch device types for watchOS runtime.", file=sys.stderr)
+            sys.exit(1)
+          watches.sort(key=lambda dt: str(dt.get("name") or ""))
+          device_type_id = str(watches[-1].get("identifier") or "")
+          sim_name = f"CI Watch {uuid.uuid4().hex[:8]}"
+          udid = sh(["xcrun", "simctl", "create", sim_name, device_type_id, runtime_id])
+          print(udid)
+          PY
+          )"
+          echo "Using watchOS Simulator id: $WATCH_DEST_ID"
+          xcodebuild test \
             -project apps/ios/OpenClaw.xcodeproj \
             -scheme OpenClawWatch \
-            -destination 'generic/platform=watchOS Simulator' \
-            CODE_SIGNING_ALLOWED=NO \
-            ONLY_ACTIVE_ARCH=NO
+            -destination "platform=watchOS Simulator,id=$WATCH_DEST_ID" \
+            CODE_SIGNING_ALLOWED=NO
 
   android:
     needs: [docs-scope, changed-scope, check]

@@ -24,7 +24,7 @@ enum WatchMessagingError: LocalizedError {
 final class WatchMessagingService: NSObject, WatchMessagingServicing {
     private static let logger = Logger(subsystem: "ai.openclaw", category: "watch.messaging")
     private let session: WCSession?
-    private var activationContinuation: CheckedContinuation<Void, Never>?
+    private var pendingActivationContinuations: [CheckedContinuation<Void, Never>] = []
     private var replyHandler: (@Sendable (WatchQuickReplyEvent) -> Void)?
 
     override init() {
@@ -201,7 +201,7 @@ final class WatchMessagingService: NSObject, WatchMessagingServicing {
         if session.activationState == .activated { return }
         session.activate()
         await withCheckedContinuation { continuation in
-            self.activationContinuation = continuation
+            self.pendingActivationContinuations.append(continuation)
         }
     }
 
@@ -236,12 +236,16 @@ extension WatchMessagingService: WCSessionDelegate {
     {
         if let error {
             Self.logger.error("watch activation failed: \(error.localizedDescription, privacy: .public)")
-            return
+        } else {
+            Self.logger.debug("watch activation state=\(Self.activationStateLabel(activationState), privacy: .public)")
         }
-        Self.logger.debug("watch activation state=\(Self.activationStateLabel(activationState), privacy: .public)")
+        // Always resume all waiters so callers never hang, even on error.
         Task { @MainActor in
-            self.activationContinuation?.resume()
-            self.activationContinuation = nil
+            let waiters = self.pendingActivationContinuations
+            self.pendingActivationContinuations.removeAll()
+            for continuation in waiters {
+                continuation.resume()
+            }
         }
     }
 
