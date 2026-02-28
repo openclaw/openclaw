@@ -603,7 +603,7 @@ export async function dispatchReplyFromConfig(params: {
 
     // Emit message:sent with success: false on error (mirrors deliver.ts catch path)
     if (sessionKey && !shouldRouteToOriginating) {
-      const errorContent = accumulatedBlockText || "";
+      const errorContent = "";
       void triggerInternalHook(
         createInternalHookEvent("message", "sent", sessionKey, {
           to: conversationId,
