@@ -132,7 +132,7 @@ export function isOllamaCompatProvider(model: {
   baseUrl?: string;
   api?: string;
 }): boolean {
-  if (model.api === "ollama" || normalizeProviderId(model.provider ?? "") === "ollama") {
+  if (normalizeProviderId(model.provider ?? "") === "ollama") {
     return true;
   }
   if (!model.baseUrl) {
@@ -141,7 +141,11 @@ export function isOllamaCompatProvider(model: {
   try {
     const parsed = new URL(model.baseUrl);
     const hostname = parsed.hostname.toLowerCase();
-    const isLocalhost = hostname === "localhost" || hostname === "127.0.0.1";
+    const isLocalhost =
+      hostname === "localhost" ||
+      hostname === "127.0.0.1" ||
+      hostname === "::1" ||
+      hostname === "[::1]";
     return isLocalhost && parsed.port === "11434";
   } catch {
     return false;
@@ -171,6 +175,24 @@ export function resolveOllamaCompatNumCtxEnabled(params: {
     }
   }
   return true;
+}
+
+export function shouldInjectOllamaCompatNumCtx(params: {
+  model: { api?: string; provider?: string; baseUrl?: string };
+  config?: OpenClawConfig;
+  providerId?: string;
+}): boolean {
+  // Restrict to the OpenAI-compatible adapter path only.
+  if (params.model.api !== "openai-completions") {
+    return false;
+  }
+  if (!isOllamaCompatProvider(params.model)) {
+    return false;
+  }
+  return resolveOllamaCompatNumCtxEnabled({
+    config: params.config,
+    providerId: params.providerId,
+  });
 }
 
 export function wrapOllamaCompatNumCtx(baseFn: StreamFn | undefined, numCtx: number): StreamFn {
@@ -845,15 +867,12 @@ export async function runEmbeddedAttempt(
         typeof params.model.provider === "string" && params.model.provider.trim().length > 0
           ? params.model.provider
           : params.provider;
-      const shouldInjectNumCtx = resolveOllamaCompatNumCtxEnabled({
+      const shouldInjectNumCtx = shouldInjectOllamaCompatNumCtx({
+        model: params.model,
         config: params.config,
         providerId: providerIdForNumCtx,
       });
-      if (
-        shouldInjectNumCtx &&
-        params.model.api !== "ollama" &&
-        isOllamaCompatProvider(params.model)
-      ) {
+      if (shouldInjectNumCtx) {
         const numCtx = Math.max(
           1,
           Math.floor(
