@@ -43,6 +43,31 @@ describe("resolveCronDeliveryPlan", () => {
     expect(plan.requested).toBe(false);
   });
 
+  it("passes through accountId from delivery config", () => {
+    const plan = resolveCronDeliveryPlan(
+      makeJob({
+        delivery: {
+          mode: "announce",
+          channel: "telegram",
+          to: "-1003816714067",
+          accountId: "coordinator",
+        },
+      }),
+    );
+    expect(plan.mode).toBe("announce");
+    expect(plan.accountId).toBe("coordinator");
+    expect(plan.to).toBe("-1003816714067");
+  });
+
+  it("returns undefined accountId when not set", () => {
+    const plan = resolveCronDeliveryPlan(
+      makeJob({
+        delivery: { mode: "announce", channel: "telegram", to: "123" },
+      }),
+    );
+    expect(plan.accountId).toBeUndefined();
+  });
+
   it("resolves webhook mode without channel routing", () => {
     const plan = resolveCronDeliveryPlan(
       makeJob({
