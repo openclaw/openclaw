@@ -168,7 +168,7 @@ describe("subagent resilience", () => {
   });
 
   // -------------------------------------------------------------------------
-  // Fix 3: Give-up notification — parent session gets notified
+  // Fix 2: Give-up notification — parent session gets notified
   // -------------------------------------------------------------------------
 
   describe("give-up notification — parent session notified on lost results", () => {
