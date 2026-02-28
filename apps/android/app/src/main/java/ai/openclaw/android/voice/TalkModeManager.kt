@@ -337,15 +337,17 @@ private const val defaultTalkProvider = "elevenlabs"
     val token = ttsSessionToken
     streamingTts = null  // Clear immediately so a new session isn't clobbered
     activeTtsRunId = null  // Allow next response to start fresh
-    Log.d(tag, "finishStreamingTts: draining, token=$token")
+    Log.d(tag, "finishStreamingTts: sending EOS, token=$token")
     tts.finish()
+    // Wait for drain to complete before abandoning focus and updating UI
     scope.launch {
-      delay(500)
-      while (tts.isPlaying.value) { delay(200) }
-      // Only abandon focus if no new TTS session started while we were draining
-      if (ttsSessionToken == token) abandonAudioFocus()
-      _isSpeaking.value = false
-      _statusText.value = "Ready"
+      while (tts.isPlaying.value) { delay(100) }
+      if (ttsSessionToken == token) {
+        Log.d(tag, "finishStreamingTts: done, abandoning focus")
+        abandonAudioFocus()
+        _isSpeaking.value = false
+        _statusText.value = "Ready"
+      }
     }
   }
 

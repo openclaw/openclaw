@@ -160,7 +160,10 @@ class ElevenLabsStreamingTts(
           val audio = json.optString("audio", "")
           if (audio.isNotEmpty()) {
             val pcmBytes = Base64.decode(audio, Base64.DEFAULT)
+            Log.d(TAG, "received audio chunk: ${pcmBytes.size} bytes")
             writeToTrack(pcmBytes)
+          } else {
+            Log.d(TAG, "received non-audio message: ${text.take(80)}")
           }
         } catch (e: Exception) {
           Log.e(TAG, "Error parsing WebSocket message: ${e.message}")
