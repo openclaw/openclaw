@@ -224,6 +224,34 @@ If your tenant is on Lark (international), set the domain to `lark` (or a full d
 }
 ```
 
+### Quota optimization flags
+
+You can reduce Feishu API usage with two optional flags:
+
+- `typingIndicator` (default `true`): when `false`, skip typing reaction calls.
+- `resolveSenderNames` (default `true`): when `false`, skip sender profile lookup calls.
+
+Set them at top level or per account:
+
+```json5
+{
+  channels: {
+    feishu: {
+      typingIndicator: false,
+      resolveSenderNames: false,
+      accounts: {
+        main: {
+          appId: "cli_xxx",
+          appSecret: "xxx",
+          typingIndicator: true,
+          resolveSenderNames: false,
+        },
+      },
+    },
+  },
+}
+```
+
 ---
 
 ## Step 3: Start + test
