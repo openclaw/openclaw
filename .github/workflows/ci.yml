@@ -390,7 +390,7 @@ jobs:
     runs-on: blacksmith-16vcpu-windows-2025
     timeout-minutes: 45
     env:
-      NODE_OPTIONS: --max-old-space-size=4096
+      NODE_OPTIONS: --max-old-space-size=6144
       # Keep total concurrency predictable on the 16 vCPU runner.
       # Windows shard 2 has shown intermittent instability at 2 workers.
       OPENCLAW_TEST_WORKERS: 1
