@@ -15,6 +15,15 @@ import {
 } from "../protocol/index.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
+// Max character budget for each potentially-large field in the broadcast payload.
+// Oversized fields are omitted (set to null) and a companion *Truncated flag is
+// set so GUI clients can show a "command too long to display" placeholder instead
+// of silently missing the approval event.  The full data is always kept in the
+// manager for audit/forwarder use.
+const MAX_BROADCAST_COMMAND_CHARS = 4096;
+const MAX_BROADCAST_ARGV_CHARS = 4096; // total chars across all argv elements
+const MAX_BROADCAST_PLAN_CHARS = 8192; // JSON-serialised plan
+
 export function createExecApprovalHandlers(
   manager: ExecApprovalManager,
   opts?: { forwarder?: ExecApprovalForwarder },
@@ -160,19 +169,36 @@ export function createExecApprovalHandlers(
         );
         return;
       }
-      // Truncate command in the broadcast payload to prevent large WebSocket frames
-      // from being silently dropped by the `dropIfSlow` backpressure mechanism.
-      // The full command remains in the manager for audit/forwarder use.
-      const MAX_BROADCAST_COMMAND_CHARS = 4096;
+      // Truncate or omit large fields in the broadcast payload so the WebSocket
+      // frame stays under the `dropIfSlow` backpressure threshold.
+      // Each oversized field is replaced with null and a *Truncated companion
+      // flag is set; GUI clients should show a placeholder when they see it.
       const broadcastCommand = record.request.command ?? "";
-      const broadcastRequest =
-        broadcastCommand.length > MAX_BROADCAST_COMMAND_CHARS
-          ? {
-              ...record.request,
-              command: broadcastCommand.slice(0, MAX_BROADCAST_COMMAND_CHARS),
-              commandTruncated: true,
-            }
-          : record.request;
+      const commandTruncated = broadcastCommand.length > MAX_BROADCAST_COMMAND_CHARS;
+
+      const broadcastArgv = record.request.commandArgv;
+      const argvCharCount = broadcastArgv?.reduce((n, s) => n + s.length, 0) ?? 0;
+      const argvTruncated = argvCharCount > MAX_BROADCAST_ARGV_CHARS;
+
+      const broadcastPlan = record.request.systemRunPlanV2;
+      const planTruncated =
+        broadcastPlan !== undefined &&
+        JSON.stringify(broadcastPlan).length > MAX_BROADCAST_PLAN_CHARS;
+
+      const anyTruncated = commandTruncated || argvTruncated || planTruncated;
+      const broadcastRequest = anyTruncated
+        ? {
+            ...record.request,
+            ...(commandTruncated
+              ? {
+                  command: broadcastCommand.slice(0, MAX_BROADCAST_COMMAND_CHARS),
+                  commandTruncated: true,
+                }
+              : {}),
+            ...(argvTruncated ? { commandArgv: null, commandArgvTruncated: true } : {}),
+            ...(planTruncated ? { systemRunPlanV2: null, systemRunPlanV2Truncated: true } : {}),
+          }
+        : record.request;
       context.broadcast(
         "exec.approval.requested",
         {

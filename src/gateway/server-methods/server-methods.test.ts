@@ -792,6 +792,106 @@ describe("exec approval handlers", () => {
       ?.request?.commandTruncated;
     expect(truncatedFlag).toBeUndefined();
   });
+
+  it("slug prefix scan ignores resolved grace-window entries to avoid false ambiguity", async () => {
+    // Two approvals share the same 8-char prefix.  After the first is resolved it
+    // lingers in the map during the 15s grace window.  The prefix scan must skip
+    // it so the second can still be resolved unambiguously via the shared slug.
+    vi.useFakeTimers();
+    try {
+      const manager = new ExecApprovalManager();
+      const handlers = createExecApprovalHandlers(manager);
+      const broadcasts: Array<{ event: string; payload: unknown }> = [];
+      const context = {
+        broadcast: (event: string, payload: unknown) => {
+          broadcasts.push({ event, payload });
+        },
+        hasExecApprovalClients: () => true,
+      };
+
+      const sharedPrefix = "ccddee11";
+      const id1 = `${sharedPrefix}-0000-0000-0000-000000000001`;
+      const id2 = `${sharedPrefix}-0000-0000-0000-000000000002`;
+
+      // Register both
+      void requestExecApproval({
+        handlers,
+        respond: vi.fn(),
+        context,
+        params: { id: id1, host: "gateway" },
+      });
+      void requestExecApproval({
+        handlers,
+        respond: vi.fn(),
+        context,
+        params: { id: id2, host: "gateway" },
+      });
+      for (let i = 0; i < 10; i++) {
+        await Promise.resolve();
+      }
+
+      // Resolve the first — it enters grace window, stays in the map
+      const resolveRespond1 = vi.fn();
+      await resolveExecApproval({ handlers, id: id1, respond: resolveRespond1, context });
+      expect(resolveRespond1).toHaveBeenCalledWith(true, { ok: true }, undefined);
+
+      // Now try to resolve the second via the shared slug — should be unambiguous
+      const resolveRespond2 = vi.fn();
+      await resolveExecApproval({ handlers, id: sharedPrefix, respond: resolveRespond2, context });
+      expect(resolveRespond2).toHaveBeenCalledWith(true, { ok: true }, undefined);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("omits oversized commandArgv from broadcast payload", async () => {
+    const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
+    // Each element is fine individually but total chars exceeds 4096
+    const bigArgv = ["bash", "-c", "x".repeat(5000)];
+
+    await requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: { command: "bash -c ...", commandArgv: bigArgv, host: "gateway" },
+    });
+
+    const requested = broadcasts.find((entry) => entry.event === "exec.approval.requested");
+    const req = (requested?.payload as { request?: Record<string, unknown> })?.request ?? {};
+    expect(req["commandArgv"]).toBeNull();
+    expect(req["commandArgvTruncated"]).toBe(true);
+  });
+
+  it("omits oversized systemRunPlanV2 from broadcast payload", async () => {
+    const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
+    // systemRunPlanV2 is only stored on the record when host=node; use a small argv
+    // so argv truncation doesn't fire, and a very long rawCommand to inflate plan JSON
+    // past the 8192-char threshold.
+    const bigPlan = {
+      version: 2,
+      argv: ["echo", "ok"],
+      cwd: "/tmp",
+      rawCommand: "echo " + "x".repeat(10_000),
+      agentId: "main",
+      sessionKey: null,
+    };
+
+    await requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: {
+        nodeId: "node-1",
+        host: "node",
+        systemRunPlanV2: bigPlan,
+      },
+    });
+
+    const requested = broadcasts.find((entry) => entry.event === "exec.approval.requested");
+    const req = (requested?.payload as { request?: Record<string, unknown> })?.request ?? {};
+    expect(req["systemRunPlanV2"]).toBeNull();
+    expect(req["systemRunPlanV2Truncated"]).toBe(true);
+  });
 });
 
 describe("gateway healthHandlers.status scope handling", () => {
