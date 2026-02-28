@@ -154,13 +154,13 @@ export function loadPluginManifestRegistry(params: {
 
   const discovery = params.candidates
     ? {
-      candidates: params.candidates,
-      diagnostics: params.diagnostics ?? [],
-    }
+        candidates: params.candidates,
+        diagnostics: params.diagnostics ?? [],
+      }
     : discoverOpenClawPlugins({
-      workspaceDir: params.workspaceDir,
-      extraPaths: normalized.loadPaths,
-    });
+        workspaceDir: params.workspaceDir,
+        extraPaths: normalized.loadPaths,
+      });
   const diagnostics: PluginDiagnostic[] = [...discovery.diagnostics];
   const candidates: PluginCandidate[] = discovery.candidates;
   const records: PluginManifestRecord[] = [];
@@ -206,8 +206,7 @@ export function loadPluginManifestRegistry(params: {
         safeRealpathSync(existing.candidate.rootDir, realpathCache) ??
         path.resolve(existing.candidate.rootDir);
       const candidateReal =
-        safeRealpathSync(candidate.rootDir, realpathCache) ??
-        path.resolve(candidate.rootDir);
+        safeRealpathSync(candidate.rootDir, realpathCache) ?? path.resolve(candidate.rootDir);
       const samePlugin = existingReal === candidateReal;
       if (samePlugin) {
         // Prefer higher-precedence origins even if candidates are passed in
