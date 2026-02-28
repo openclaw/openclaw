@@ -204,6 +204,7 @@ const TARGET_KEYS = [
   "hooks.allowedSessionKeyPrefixes",
   "hooks.allowedAgentIds",
   "hooks.maxBodyBytes",
+  "hooks.sessionRetention",
   "hooks.transformsDir",
   "hooks.mappings",
   "hooks.mappings[].action",

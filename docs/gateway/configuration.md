@@ -276,6 +276,7 @@ When validation fails:
         enabled: true,
         token: "shared-secret",
         path: "/hooks",
+        sessionRetention: "30m", // optional
         defaultSessionKey: "hook:ingress",
         allowRequestSessionKey: false,
         allowedSessionKeyPrefixes: ["hook:"],

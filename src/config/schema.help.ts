@@ -1094,6 +1094,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Allowlist of agent IDs that hook mappings are allowed to target when selecting execution agents. Use this to constrain automation events to dedicated service agents.",
   "hooks.maxBodyBytes":
     "Maximum accepted webhook payload size in bytes before the request is rejected. Keep this bounded to reduce abuse risk and protect memory usage under bursty integrations.",
+  "hooks.sessionRetention":
+    "Controls how long completed hook run sessions are kept before pruning (`30m`, `24h`, `7d`, or `false` to disable pruning; default: `false`). Use short retention for high-volume webhook integrations to keep session lists clean.",
   "hooks.presets":
     "Named hook preset bundles applied at load time to seed standard mappings and behavior defaults. Keep preset usage explicit so operators can audit which automations are active.",
   "hooks.transformsDir":

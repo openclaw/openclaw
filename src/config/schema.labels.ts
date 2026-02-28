@@ -519,6 +519,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "hooks.allowedSessionKeyPrefixes": "Hooks Allowed Session Key Prefixes",
   "hooks.allowedAgentIds": "Hooks Allowed Agent IDs",
   "hooks.maxBodyBytes": "Hooks Max Body Bytes",
+  "hooks.sessionRetention": "Hooks Session Retention",
   "hooks.presets": "Hooks Presets",
   "hooks.transformsDir": "Hooks Transforms Directory",
   "hooks.mappings": "Hook Mappings",

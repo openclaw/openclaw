@@ -4,7 +4,12 @@ import path from "node:path";
 import { describe, it, expect, beforeEach } from "vitest";
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import type { Logger } from "./service/state.js";
-import { sweepCronRunSessions, resolveRetentionMs, resetReaperThrottle } from "./session-reaper.js";
+import {
+  sweepCronRunSessions,
+  resolveRetentionMs,
+  resolveHookRetentionMs,
+  resetReaperThrottle,
+} from "./session-reaper.js";
 
 function createTestLogger(): Logger {
   return {
@@ -36,6 +41,25 @@ describe("resolveRetentionMs", () => {
 
   it("falls back to default on invalid string", () => {
     expect(resolveRetentionMs({ sessionRetention: "abc" })).toBe(24 * 3_600_000);
+  });
+});
+
+describe("resolveHookRetentionMs", () => {
+  it("defaults to disabled when no hooks retention is configured", () => {
+    expect(resolveHookRetentionMs()).toBeNull();
+    expect(resolveHookRetentionMs({})).toBeNull();
+  });
+
+  it("parses duration string", () => {
+    expect(resolveHookRetentionMs({ sessionRetention: "30m" })).toBe(30 * 60_000);
+  });
+
+  it("returns null when disabled", () => {
+    expect(resolveHookRetentionMs({ sessionRetention: false })).toBeNull();
+  });
+
+  it("falls back to disabled on invalid string", () => {
+    expect(resolveHookRetentionMs({ sessionRetention: "abc" })).toBeNull();
   });
 });
 
@@ -162,6 +186,40 @@ describe("sweepCronRunSessions", () => {
     } finally {
       fs.rmSync(externalDir, { recursive: true, force: true });
     }
+  });
+
+  it("prunes expired hook sessions when hooks.sessionRetention is configured", async () => {
+    const now = Date.now();
+    const store: Record<string, { sessionId: string; updatedAt: number }> = {
+      "agent:main:hook:old": {
+        sessionId: "hook-old",
+        updatedAt: now - 2 * 3_600_000,
+      },
+      "agent:main:hook:recent": {
+        sessionId: "hook-recent",
+        updatedAt: now - 5 * 60_000,
+      },
+      "agent:main:cron:job1:run:run1": {
+        sessionId: "run1",
+        updatedAt: now - 2 * 3_600_000,
+      },
+    };
+    fs.writeFileSync(storePath, JSON.stringify(store));
+
+    const result = await sweepCronRunSessions({
+      hooksConfig: { sessionRetention: "1h" },
+      cronConfig: { sessionRetention: false },
+      sessionStorePath: storePath,
+      nowMs: now,
+      log,
+      force: true,
+    });
+
+    expect(result.pruned).toBe(1);
+    const updated = JSON.parse(fs.readFileSync(storePath, "utf-8"));
+    expect(updated["agent:main:hook:old"]).toBeUndefined();
+    expect(updated["agent:main:hook:recent"]).toBeDefined();
+    expect(updated["agent:main:cron:job1:run:run1"]).toBeDefined();
   });
 
   it("respects custom retention", async () => {

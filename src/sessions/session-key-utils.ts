@@ -74,6 +74,14 @@ export function isCronSessionKey(sessionKey: string | undefined | null): boolean
   return parsed.rest.toLowerCase().startsWith("cron:");
 }
 
+export function isHookSessionKey(sessionKey: string | undefined | null): boolean {
+  const parsed = parseAgentSessionKey(sessionKey);
+  if (!parsed) {
+    return false;
+  }
+  return /^hook:[^:]+$/.test(parsed.rest);
+}
+
 export function isSubagentSessionKey(sessionKey: string | undefined | null): boolean {
   const raw = (sessionKey ?? "").trim();
   if (!raw) {

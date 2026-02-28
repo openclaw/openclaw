@@ -421,6 +421,7 @@ export const OpenClawSchema = z
         allowedSessionKeyPrefixes: z.array(z.string()).optional(),
         allowedAgentIds: z.array(z.string()).optional(),
         maxBodyBytes: z.number().int().positive().optional(),
+        sessionRetention: z.union([z.string(), z.literal(false)]).optional(),
         presets: z.array(z.string()).optional(),
         transformsDir: z.string().optional(),
         mappings: z.array(HookMappingSchema).optional(),
@@ -428,6 +429,19 @@ export const OpenClawSchema = z
         internal: InternalHooksSchema,
       })
       .strict()
+      .superRefine((val, ctx) => {
+        if (val.sessionRetention !== undefined && val.sessionRetention !== false) {
+          try {
+            parseDurationMs(String(val.sessionRetention).trim(), { defaultUnit: "h" });
+          } catch {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: ["sessionRetention"],
+              message: "invalid duration (use ms, s, m, h, d)",
+            });
+          }
+        }
+      })
       .optional(),
     web: z
       .object({

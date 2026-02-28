@@ -1,4 +1,5 @@
 import type { CronConfig } from "../../config/types.cron.js";
+import type { HooksConfig } from "../../config/types.hooks.js";
 import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
 import type {
   CronDeliveryStatus,
@@ -39,8 +40,10 @@ export type CronServiceDeps = {
   log: Logger;
   storePath: string;
   cronEnabled: boolean;
-  /** CronConfig for session retention settings. */
+  /** CronConfig for cron run session retention settings. */
   cronConfig?: CronConfig;
+  /** HooksConfig for hook run session retention settings. */
+  hooksConfig?: HooksConfig;
   /** Default agent id for jobs without an agent id. */
   defaultAgentId?: string;
   /** Resolve session store path for a given agent id. */

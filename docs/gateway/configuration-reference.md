@@ -2347,6 +2347,7 @@ See [Multiple Gateways](/gateway/multiple-gateways).
     token: "shared-secret",
     path: "/hooks",
     maxBodyBytes: 262144,
+    sessionRetention: "30m", // optional (false disables pruning)
     defaultSessionKey: "hook:ingress",
     allowRequestSessionKey: false,
     allowedSessionKeyPrefixes: ["hook:"],
@@ -2379,6 +2380,8 @@ Auth: `Authorization: Bearer <token>` or `x-openclaw-token: <token>`.
 - `POST /hooks/agent` → `{ message, name?, agentId?, sessionKey?, wakeMode?, deliver?, channel?, to?, model?, thinking?, timeoutSeconds? }`
   - `sessionKey` from request payload is accepted only when `hooks.allowRequestSessionKey=true` (default: `false`).
 - `POST /hooks/<name>` → resolved via `hooks.mappings`
+
+`hooks.sessionRetention` controls how long completed hook run sessions are kept before pruning from `sessions.json` (`false` by default; set e.g. `"30m"` for high-volume webhook flows).
 
 <Accordion title="Mapping details">
 

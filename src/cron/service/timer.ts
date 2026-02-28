@@ -431,6 +431,7 @@ export async function onTimer(state: CronServiceState) {
         try {
           await sweepCronRunSessions({
             cronConfig: state.deps.cronConfig,
+            hooksConfig: state.deps.hooksConfig,
             sessionStorePath: storePath,
             nowMs,
             log: state.deps.log,

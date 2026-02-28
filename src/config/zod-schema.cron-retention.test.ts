@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { OpenClawSchema } from "./zod-schema.js";
 
-describe("OpenClawSchema cron retention and run-log validation", () => {
+describe("OpenClawSchema cron/hooks retention and run-log validation", () => {
   it("accepts valid cron.sessionRetention and runLog values", () => {
     expect(() =>
       OpenClawSchema.parse({
@@ -36,5 +36,41 @@ describe("OpenClawSchema cron retention and run-log validation", () => {
         },
       }),
     ).toThrow(/runLog|maxBytes|size/i);
+  });
+
+  it("accepts valid hooks.sessionRetention", () => {
+    expect(() =>
+      OpenClawSchema.parse({
+        hooks: {
+          enabled: true,
+          token: "secret",
+          sessionRetention: "30m",
+        },
+      }),
+    ).not.toThrow();
+  });
+
+  it("accepts hooks.sessionRetention=false", () => {
+    expect(() =>
+      OpenClawSchema.parse({
+        hooks: {
+          enabled: true,
+          token: "secret",
+          sessionRetention: false,
+        },
+      }),
+    ).not.toThrow();
+  });
+
+  it("rejects invalid hooks.sessionRetention", () => {
+    expect(() =>
+      OpenClawSchema.parse({
+        hooks: {
+          enabled: true,
+          token: "secret",
+          sessionRetention: "abc",
+        },
+      }),
+    ).toThrow(/sessionRetention|duration/i);
   });
 });
