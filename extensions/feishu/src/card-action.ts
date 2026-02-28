@@ -64,7 +64,9 @@ export async function handleFeishuCardAction(params: {
     },
   };
 
-  log(`feishu[${account.accountId}]: handling card action from ${event.operator.open_id}: ${content}`);
+  log(
+    `feishu[${account.accountId}]: handling card action from ${event.operator.open_id}: ${content}`,
+  );
 
   // Dispatch as normal message
   await handleFeishuMessage({

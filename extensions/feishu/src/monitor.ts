@@ -351,7 +351,7 @@ function registerEventHandlers(
     "im.message.reaction.deleted_v1": async () => {
       // Ignore reaction removals
     },
-    "card.action.trigger": async (data) => {
+    "card.action.trigger": async (data: unknown) => {
       try {
         const event = data as unknown as FeishuCardActionEvent;
         const promise = handleFeishuCardAction({
