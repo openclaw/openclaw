@@ -7,6 +7,7 @@ import android.content.pm.PackageManager
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
@@ -97,9 +98,18 @@ class MicCaptureManager(
       start()
       sendQueuedIfIdle()
     } else {
-      stop()
-      flushSessionToQueue()
-      sendQueuedIfIdle()
+      // Give the recognizer time to finish processing buffered audio
+      scope.launch {
+        delay(2000L)
+        stop()
+        // Capture any partial transcript that didn't get a final result from the recognizer
+        val partial = _liveTranscript.value?.trim().orEmpty()
+        if (partial.isNotEmpty() && sessionSegments.isEmpty()) {
+          sessionSegments.add(partial)
+        }
+        flushSessionToQueue()
+        sendQueuedIfIdle()
+      }
     }
   }
 
@@ -124,9 +134,9 @@ class MicCaptureManager(
         null
       } ?: return
 
-    val runId = pendingRunId ?: return
+    val runId = pendingRunId ?: run { Log.d("MicCapture", "no pendingRunId — drop"); return }
     val eventRunId = payload["runId"].asStringOrNull() ?: return
-    if (eventRunId != runId) return
+    if (eventRunId != runId) { Log.d("MicCapture", "runId mismatch: event=$eventRunId pending=$runId"); return }
 
     when (payload["state"].asStringOrNull()) {
       "delta" -> {
@@ -241,7 +251,11 @@ class MicCaptureManager(
   }
 
   private fun flushSessionToQueue() {
-    val message = sessionSegments.joinToString(" ").trim()
+    // Add sentence-ending punctuation between recognizer segments to avoid run-on text
+    val message = sessionSegments.joinToString(". ") { segment ->
+      val trimmed = segment.trimEnd()
+      if (trimmed.isNotEmpty() && trimmed.last() in ".!?,;:") trimmed else trimmed
+    }.trim().let { if (it.isNotEmpty() && it.last() !in ".!?") "$it." else it }
     sessionSegments.clear()
     _liveTranscript.value = null
     lastFinalSegment = null
@@ -517,8 +531,8 @@ class MicCaptureManager(
         val text = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION).orEmpty().firstOrNull()
         if (!text.isNullOrBlank()) {
           onFinalTranscript(text)
-          flushSessionToQueue()
-          sendQueuedIfIdle()
+          // Don't auto-send on silence — accumulate transcript.
+          // Send happens when mic is toggled off (setMicEnabled(false)).
         }
         scheduleRestart()
       }
