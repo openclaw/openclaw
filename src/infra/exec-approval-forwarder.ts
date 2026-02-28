@@ -757,6 +757,12 @@ export function createExecApprovalForwarder(
       return false;
     }
 
+    // Idempotency guard: duplicate "requested" events for the same approval ID
+    // must not re-send prompts or replace pending tracking.
+    if (pending.has(request.id) || getFinalized(request.id)) {
+      return true;
+    }
+
     const expiresInMs = Math.max(0, request.expiresAtMs - nowMs());
     const timeoutId = setTimeout(() => {
       void (async () => {

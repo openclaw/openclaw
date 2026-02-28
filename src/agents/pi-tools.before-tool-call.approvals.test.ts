@@ -117,6 +117,39 @@ describe("before_tool_call approvals.tools", () => {
     expect(mockRequestExecApprovalDecision).toHaveBeenCalledTimes(1);
   });
 
+  it("includes exec command preview and reason in approval summary", async () => {
+    mockRequestExecApprovalDecision.mockResolvedValue("allow-once");
+    const { wrapped, execute } = wrapTool("exec", undefined, {
+      approvals: {
+        tools: { enabled: true, tools: ["exec"] },
+      },
+    });
+
+    await wrapped.execute(
+      "tool-5",
+      {
+        cmd: "git status --short",
+        justification: "Check current repo changes before applying a patch",
+        workdir: "/home/sumix/.openclaw/workspace",
+      },
+      undefined,
+      undefined,
+    );
+
+    expect(mockRequestExecApprovalDecision).toHaveBeenCalledTimes(1);
+    const request = mockRequestExecApprovalDecision.mock.calls[0]?.[0];
+    expect(request).toEqual(
+      expect.objectContaining({
+        command: expect.stringContaining("tool:exec"),
+        cwd: "/home/sumix/.openclaw/workspace",
+      }),
+    );
+    expect(request?.command).toContain("cmd:git status --short");
+    expect(request?.command).toContain("why:Check current repo changes before applying a patch");
+    expect(request?.command).not.toContain("cwd:");
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
+
   it("fails open when configured and approval request errors", async () => {
     mockRequestExecApprovalDecision.mockRejectedValue(new Error("gateway unavailable"));
     const { wrapped, execute } = wrapTool("apply_patch", undefined, {

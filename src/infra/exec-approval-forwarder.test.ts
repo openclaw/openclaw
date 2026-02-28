@@ -207,6 +207,21 @@ describe("exec approval forwarder", () => {
     expect(getFirstDeliveryText(deliver)).toContain("Command: `echo hello`");
   });
 
+  it("dedupes duplicate requested events for the same approval id", async () => {
+    vi.useFakeTimers();
+    const { deliver, forwarder } = createForwarder({ cfg: TARGETS_CFG });
+
+    await expect(forwarder.handleRequested(baseRequest)).resolves.toBe(true);
+    await expect(
+      forwarder.handleRequested({
+        ...baseRequest,
+        expiresAtMs: baseRequest.expiresAtMs + 60_000,
+      }),
+    ).resolves.toBe(true);
+
+    expect(deliver).toHaveBeenCalledTimes(1);
+  });
+
   it("formats complex commands as fenced code blocks", async () => {
     vi.useFakeTimers();
     const { deliver, forwarder } = createForwarder({ cfg: TARGETS_CFG });

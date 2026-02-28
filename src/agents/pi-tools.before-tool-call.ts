@@ -39,6 +39,17 @@ const DEFAULT_TOOL_APPROVAL_ALLOW_ALWAYS_TTL_MS = 21_600_000;
 const MAX_TOOL_APPROVAL_CACHE = 2_048;
 const DEFAULT_SELECTED_TOOL_APPROVALS = new Set(["apply_patch"]);
 const toolApprovalAllowAlwaysCache = new Map<string, number>();
+const TOOL_APPROVAL_COMMAND_PREVIEW_MAX = 140;
+const TOOL_APPROVAL_CONTEXT_PREVIEW_MAX = 80;
+const TOOL_APPROVAL_COMMAND_FIELDS = [
+  "cmd",
+  "command",
+  "shellCommand",
+  "rawCommand",
+  "invokeCommand",
+  "ptyCommand",
+];
+const TOOL_APPROVAL_REASON_FIELDS = ["justification", "reason", "purpose", "description"];
 
 function normalizeApprovalList(values?: string[]): string[] {
   if (!Array.isArray(values)) {
@@ -78,9 +89,24 @@ function sanitizeApprovalField(value: unknown): string | undefined {
   return trimmed ? trimmed : undefined;
 }
 
+function truncateApprovalPreview(value: string, max: number): string {
+  if (value.length <= max) {
+    return value;
+  }
+  return `${value.slice(0, Math.max(0, max - 3))}...`;
+}
+
 function summarizeToolCallForApproval(toolName: string, params: unknown): string {
   const record = isPlainObject(params) ? params : {};
   const action = sanitizeApprovalField(record.action)?.replace(/\s+/g, "_");
+  const commandField = TOOL_APPROVAL_COMMAND_FIELDS.find((field) =>
+    sanitizeApprovalField(record[field]),
+  );
+  const commandValue = commandField ? sanitizeApprovalField(record[commandField]) : undefined;
+  const reasonField = TOOL_APPROVAL_REASON_FIELDS.find((field) =>
+    sanitizeApprovalField(record[field]),
+  );
+  const reasonValue = reasonField ? sanitizeApprovalField(record[reasonField]) : undefined;
   const targetKey = ["path", "filePath", "oldPath", "newPath", "target", "to", "id"].find((key) =>
     sanitizeApprovalField(record[key]),
   );
@@ -89,8 +115,22 @@ function summarizeToolCallForApproval(toolName: string, params: unknown): string
   if (action) {
     parts.push(`action:${action}`);
   }
+  if (commandValue) {
+    const normalizedCommand = truncateApprovalPreview(
+      commandValue.replace(/\s+/g, " "),
+      TOOL_APPROVAL_COMMAND_PREVIEW_MAX,
+    );
+    parts.push(`cmd:${normalizedCommand}`);
+  }
+  if (reasonValue) {
+    const normalizedReason = truncateApprovalPreview(
+      reasonValue.replace(/\s+/g, " "),
+      TOOL_APPROVAL_COMMAND_PREVIEW_MAX,
+    );
+    parts.push(`why:${normalizedReason}`);
+  }
   if (targetKey && targetValue) {
-    const shortValue = targetValue.length > 80 ? `${targetValue.slice(0, 77)}...` : targetValue;
+    const shortValue = truncateApprovalPreview(targetValue, TOOL_APPROVAL_CONTEXT_PREVIEW_MAX);
     parts.push(`${targetKey}:${shortValue}`);
   }
   return parts.join(" ");
