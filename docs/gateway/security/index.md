@@ -38,6 +38,14 @@ openclaw security audit --json
 
 It flags common footguns (Gateway auth exposure, browser control exposure, elevated allowlists, filesystem permissions).
 
+`--fix` applies safe guardrails:
+
+- Tighten `groupPolicy="open"` to `groupPolicy="allowlist"` (and per-account variants) for common channels.
+- Turn `logging.redactSensitive="off"` back to `"tools"`.
+- Tighten local perms (`~/.openclaw` → `700`, config file → `600`, plus common state files like `credentials/*.json`, `agents/*/agent/auth-profiles.json`, and `agents/*/sessions/sessions.json`).
+
+Running an AI agent with shell access on your machine is... _spicy_. Here's how to not get pwned.
+
 OpenClaw is both a product and an experiment: you’re wiring frontier-model behavior into real messaging surfaces and real tools. **There is no “perfectly secure” setup.** The goal is to be deliberate about:
 
 - who can talk to your bot

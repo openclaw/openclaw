@@ -150,6 +150,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
        - `open`
        - `allowlist` (default)
        - `disabled`
+       - `members` — verify all group members are in `groupAllowFrom` (cached 5 min, invalidated on join/leave)
 
     `groupAllowFrom` is used for group sender filtering. If not set, Telegram falls back to `allowFrom`.
     `groupAllowFrom` entries should be numeric Telegram user IDs (`telegram:` / `tg:` prefixes are normalized).
