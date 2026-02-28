@@ -214,7 +214,7 @@ function resolveAliasError(params: {
 function buildOpenAiHeaders(apiKey: string) {
   const headers: Record<string, string> = {};
   if (apiKey) {
-    headers["api-key"] = `${apiKey}`;
+    headers["api-key"] = apiKey;
   }
   return headers;
 }
