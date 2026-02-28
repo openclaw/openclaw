@@ -660,8 +660,9 @@ export async function startGatewayServer(
 
   // Start message lifecycle workers (outbox recovery + pruning).
   let lifecycleWorkers: import("./server-message-lifecycle.js").LifecycleWorkerHandle | undefined;
+  let lifecycleWorkersPromise: Promise<void | undefined> = Promise.resolve(undefined);
   if (!minimalTestGateway) {
-    void (async () => {
+    lifecycleWorkersPromise = (async () => {
       const { startMessageLifecycleWorkers } = await import("./server-message-lifecycle.js");
       lifecycleWorkers = await startMessageLifecycleWorkers({
         cfg: cfgAtStart,
@@ -926,6 +927,7 @@ export async function startGatewayServer(
       authRateLimiter?.dispose();
       browserAuthRateLimiter.dispose();
       channelHealthMonitor?.stop();
+      await lifecycleWorkersPromise.catch(() => undefined);
       await lifecycleWorkers?.stop();
       clearSecretsRuntimeSnapshot();
       await close(opts);
