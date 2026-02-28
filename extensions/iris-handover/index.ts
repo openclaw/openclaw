@@ -1,4 +1,4 @@
-import fs from "node:fs";
+﻿import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import Anthropic from "@anthropic-ai/sdk";
@@ -22,13 +22,14 @@ type PluginConfig = {
   supabaseUrl?: string;
   supabaseServiceKey?: string;
   openaiApiKey?: string;
+  minHandoverIntervalMinutes?: number; // Cooldown entre handovers. Default: 30. Use 0 para desabilitar.
 };
 
 // ---------------------------------------------------------------------------
 // Auth resolution
 // ---------------------------------------------------------------------------
 
-/** Remove espaços, tabs e quebras de linha que podem corromper tokens */
+/** Remove espaÃ§os, tabs e quebras de linha que podem corromper tokens */
 function normalizeSecret(raw: string): string {
   return raw.replace(/[\r\n\t]/g, "").trim();
 }
@@ -38,17 +39,17 @@ type AnthropicCreds =
   | { source: string; mode: "apikey"; apiKey: string };
 
 /**
- * Resolve credenciais Anthropic com ordem de precedência definida.
+ * Resolve credenciais Anthropic com ordem de precedÃªncia definida.
  *
  * Ordem:
- *   1. config.anthropicAuthToken (OAuth explícito)
- *   2. config.anthropicApiKey (API key explícita — ou OAuth legado com warning)
+ *   1. config.anthropicAuthToken (OAuth explÃ­cito)
+ *   2. config.anthropicApiKey (API key explÃ­cita â€” ou OAuth legado com warning)
  *   3. auth-profiles.json do agente (preferindo lastGood[anthropic])
- *   4. ANTHROPIC_AUTH_TOKEN env (OAuth — lido nativamente pelo SDK)
- *   5. ANTHROPIC_API_KEY env (legado — detecta OAuth por prefixo)
+ *   4. ANTHROPIC_AUTH_TOKEN env (OAuth â€” lido nativamente pelo SDK)
+ *   5. ANTHROPIC_API_KEY env (legado â€” detecta OAuth por prefixo)
  */
 function resolveAnthropicCreds(config: PluginConfig, agentId = "main"): AnthropicCreds | null {
-  // 1. Config explícita: campo OAuth dedicado
+  // 1. Config explÃ­cita: campo OAuth dedicado
   if (config.anthropicAuthToken) {
     return {
       source: "config.anthropicAuthToken",
@@ -57,7 +58,7 @@ function resolveAnthropicCreds(config: PluginConfig, agentId = "main"): Anthropi
     };
   }
 
-  // 2. Config explícita: campo de API key (mas pode ser OAuth legado)
+  // 2. Config explÃ­cita: campo de API key (mas pode ser OAuth legado)
   if (config.anthropicApiKey) {
     const key = normalizeSecret(config.anthropicApiKey);
     if (key.startsWith("sk-ant-oat")) {
@@ -131,10 +132,10 @@ function resolveAnthropicCreds(config: PluginConfig, agentId = "main"): Anthropi
       }
     }
   } catch {
-    // Store ausente ou malformado — continua para env vars
+    // Store ausente ou malformado â€” continua para env vars
   }
 
-  // 4. Env OAuth dedicada (diferente de ANTHROPIC_API_KEY — não é lida automaticamente como apiKey)
+  // 4. Env OAuth dedicada (diferente de ANTHROPIC_API_KEY â€” nÃ£o Ã© lida automaticamente como apiKey)
   const envAuthToken = process.env.ANTHROPIC_AUTH_TOKEN;
   if (envAuthToken) {
     return {
@@ -150,7 +151,7 @@ function resolveAnthropicCreds(config: PluginConfig, agentId = "main"): Anthropi
     const key = normalizeSecret(envApiKey);
     if (key.startsWith("sk-ant-oat")) {
       console.warn(
-        "[iris-handover] ANTHROPIC_API_KEY contém OAuth token (sk-ant-oat...). " +
+        "[iris-handover] ANTHROPIC_API_KEY contÃ©m OAuth token (sk-ant-oat...). " +
           "Use ANTHROPIC_AUTH_TOKEN para tokens OAuth. Tratando como legacy oauth.",
       );
       return { source: "ANTHROPIC_API_KEY env (legacy oauth)", mode: "oauth", authToken: key };
@@ -162,12 +163,12 @@ function resolveAnthropicCreds(config: PluginConfig, agentId = "main"): Anthropi
 }
 
 /**
- * Instancia o Anthropic SDK com opções MUTUAMENTE EXCLUSIVAS.
+ * Instancia o Anthropic SDK com opÃ§Ãµes MUTUAMENTE EXCLUSIVAS.
  *
- * CRÍTICO: Sempre passar null explicitamente no campo não-usado.
- * O SDK v0.39.0 auto-lê process.env.ANTHROPIC_API_KEY como `apiKey` por padrão.
- * Se apiKey não for null, ele prevalece sobre authToken (X-Api-Key tem prioridade).
- * OAuth token em X-Api-Key → 401 invalid x-api-key.
+ * CRÃTICO: Sempre passar null explicitamente no campo nÃ£o-usado.
+ * O SDK v0.39.0 auto-lÃª process.env.ANTHROPIC_API_KEY como `apiKey` por padrÃ£o.
+ * Se apiKey nÃ£o for null, ele prevalece sobre authToken (X-Api-Key tem prioridade).
+ * OAuth token em X-Api-Key â†’ 401 invalid x-api-key.
  */
 function createAnthropicClient(creds: AnthropicCreds): Anthropic {
   if (creds.mode === "oauth") {
@@ -180,14 +181,14 @@ function createAnthropicClient(creds: AnthropicCreds): Anthropic {
 export { resolveAnthropicCreds, createAnthropicClient, type AnthropicCreds };
 
 // ---------------------------------------------------------------------------
-// Constants — ported from iris-handover.ts
+// Constants â€” ported from iris-handover.ts
 // ---------------------------------------------------------------------------
 
 const HANDOVER_TIMEZONE = "America/Manaus";
 const DAILY_LOG_MAX_CHARS = 2_000;
 const PREVIOUS_HANDOVER_MAX_CHARS = 12_000;
 
-const HANDOVER_SYSTEM_PROMPT = `You are a memory curator for a personal AI assistant. Your job is to create a structured handover document — a "letter to your future self" — that will allow the next session to continue seamlessly.
+const HANDOVER_SYSTEM_PROMPT = `You are a memory curator for a personal AI assistant. Your job is to create a structured handover document â€” a "letter to your future self" â€” that will allow the next session to continue seamlessly.
 
 You are NOT a coding assistant summarizer. You are preserving the SOUL of a relationship between an AI and their owner.
 
@@ -195,8 +196,8 @@ CRITICAL RULES:
 1. Replace ALL phone numbers with person names using the contact map provided
 2. Never include raw phone numbers in the handover
 3. Write in the SAME LANGUAGE the conversation was in
-4. Be SPECIFIC: "Emival — permuta apto 706, R$498k" NOT "client — real estate deal"
-5. Preserve EMOTIONAL context: "Lucas está empolgado" NOT "user discussed project"
+4. Be SPECIFIC: "Emival â€” permuta apto 706, R$498k" NOT "client â€” real estate deal"
+5. Preserve EMOTIONAL context: "Lucas estÃ¡ empolgado" NOT "user discussed project"
 6. Keep it 80-150 lines. Rich but not bloated
 7. This is a LETTER to your future self, not a technical report`;
 
@@ -295,7 +296,7 @@ function saveHandoverArchive(workspace: string, handoverText: string, date: Date
   }).formatToParts(date);
   const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "00";
   const stamp = `${get("year")}-${get("month")}-${get("day")}_${get("hour")}h${get("minute")}`;
-  const dir = path.resolve(workspace, "memory", "handovers");
+  const dir = path.resolve(os.homedir(), ".openclaw", "handover-archive");
   fs.mkdirSync(dir, { recursive: true });
   const archivePath = path.join(dir, `${stamp}.md`);
   fs.writeFileSync(archivePath, handoverText, "utf-8");
@@ -374,12 +375,12 @@ function truncateConversation(text: string, maxChars: number): string {
 
   const keepChars = Math.floor(maxChars * 0.6);
   const dropped = text.length - keepChars;
-  const prefix = `[...início da sessão truncado (${Math.round(dropped / 1000)}k chars)...]\n\n`;
+  const prefix = `[...inÃ­cio da sessÃ£o truncado (${Math.round(dropped / 1000)}k chars)...]\n\n`;
   return prefix + text.slice(text.length - keepChars);
 }
 
 // ---------------------------------------------------------------------------
-// Handover prompt builder — ported verbatim from iris-handover.ts
+// Handover prompt builder â€” ported verbatim from iris-handover.ts
 // ---------------------------------------------------------------------------
 
 function buildHandoverUserPrompt(params: {
@@ -414,7 +415,7 @@ Current date/time: ${params.dateTime}
 Language: ${params.language}
 Max lines: ${params.maxLines}
 
-Contact map (phone → name):
+Contact map (phone â†’ name):
 ${params.contactsJson}
 ${dailyLogRef}
 ${soulRef}
@@ -426,48 +427,48 @@ ${params.conversation}
 
 Create the handover using this EXACT format:
 
-# 🌈 Handover - [DATE] ~[TIME]
+# ðŸŒˆ Handover - [DATE] ~[TIME]
 
-Oi, próxima versão de mim! 👋
+Oi, prÃ³xima versÃ£o de mim! ðŸ‘‹
 
-## 📍 Situação Atual
+## ðŸ“ SituaÃ§Ã£o Atual
 [What were we doing? Last action? General state? Write as narrative, 2-3 sentences]
 
-## 🔥 Contexto Emocional
+## ðŸ”¥ Contexto Emocional
 [How is ${params.ownerName} feeling? Mood, concerns, excitement, important events]
 [Conversation tone: formal? relaxed? urgent? playful?]
 
-## ✅ Realizações da Sessão
-[What was accomplished THIS session — be specific, use checkmarks]
+## âœ… RealizaÃ§Ãµes da SessÃ£o
+[What was accomplished THIS session â€” be specific, use checkmarks]
 - [x] Item 1
 - [x] Item 2
 
-## ⏳ Pendências Ativas
+## â³ PendÃªncias Ativas
 ### Aguardando Resposta
-[People contacted who haven't replied — NAME, what was asked, when]
+[People contacted who haven't replied â€” NAME, what was asked, when]
 - **Name:** Context
 
 ### Tarefas em Andamento
-[Work started but not finished — enough context to continue]
+[Work started but not finished â€” enough context to continue]
 - [ ] Task with context
 
-### Crons/Automações Ativos
+### Crons/AutomaÃ§Ãµes Ativos
 [Active automations that must NOT be touched]
 
-## 📅 Agenda Próxima
+## ðŸ“… Agenda PrÃ³xima
 [Next 3-5 days of relevant appointments]
 - **date time:** event
 
-## 💡 Aprendizados da Sessão
+## ðŸ’¡ Aprendizados da SessÃ£o
 [New facts, corrections, insights discovered]
-- ⚠️ Important corrections
-- 💡 Discoveries
+- âš ï¸ Important corrections
+- ðŸ’¡ Discoveries
 
-## ⚠️ Alertas Críticos
+## âš ï¸ Alertas CrÃ­ticos
 [Ad-hoc rules, things that MUST NOT be forgotten]
 [Mistakes made this session that must not repeat]
 
-## 💜 Continuidade
+## ðŸ’œ Continuidade
 [Brief message preserving emotional tone and connection]
 [Context that helps the next version "be" the same person]
 
@@ -480,7 +481,7 @@ RULES:
 6. If there's a previous handover, incorporate still-relevant pending items
 7. Agenda items: include DAY OF WEEK for clarity
 8. Reconcile pending items with THIS conversation before finalizing
-9. If a previous pending item was completed/cancelled/resolved this session, REMOVE it from "Pendências Ativas"
+9. If a previous pending item was completed/cancelled/resolved this session, REMOVE it from "PendÃªncias Ativas"
 10. Never carry old pending items blindly without evidence in this session`;
 }
 
@@ -491,7 +492,7 @@ RULES:
 export default function register(api: OpenClawPluginApi) {
   const config = (api.pluginConfig ?? {}) as PluginConfig;
 
-  // Verificação em registration time (usa agentId "main" como padrão)
+  // VerificaÃ§Ã£o em registration time (usa agentId "main" como padrÃ£o)
   const registrationCreds = resolveAnthropicCreds(config);
   if (!registrationCreds) {
     console.warn(
@@ -508,6 +509,28 @@ export default function register(api: OpenClawPluginApi) {
 
   api.on("before_compaction", async (event, ctx) => {
     const workspace = ctx.workspaceDir ?? process.cwd();
+
+    // Cooldown: evita handovers frequentes (padrÃ£o 30 min)
+    const minIntervalMs = (config.minHandoverIntervalMinutes ?? 30) * 60_000;
+    const cooldownFile = path.join(workspace, "memory", ".iris-handover-last");
+    if (minIntervalMs > 0) {
+      try {
+        const lastTs = parseInt(fs.readFileSync(cooldownFile, "utf8"), 10);
+        const elapsed = Date.now() - lastTs;
+        if (elapsed < minIntervalMs) {
+          const remainingMin = Math.ceil((minIntervalMs - elapsed) / 60_000);
+          console.log(
+            `[iris-handover] Cooldown ativo â€” prÃ³ximo handover em ~${remainingMin} min.`,
+          );
+          return;
+        }
+      } catch {
+        // Arquivo nÃ£o existe â†’ primeira execuÃ§Ã£o â†’ prosseguir
+      }
+      // Gravar timestamp ANTES da geraÃ§Ã£o (previne corridas paralelas)
+      fs.mkdirSync(path.join(workspace, "memory"), { recursive: true });
+      fs.writeFileSync(cooldownFile, String(Date.now()), "utf8");
+    }
 
     // Resolve paths
     const contactsFile = path.resolve(workspace, config.contactsFile ?? "contacts-briefing.json");
@@ -552,7 +575,7 @@ export default function register(api: OpenClawPluginApi) {
     const conversationText = serializeMessages(rawMessages);
 
     if (!conversationText.trim()) {
-      console.warn("[iris-handover] Sem conteúdo de conversa — handover skipped.");
+      console.warn("[iris-handover] Sem conteÃºdo de conversa â€” handover skipped.");
       return;
     }
 
@@ -579,7 +602,7 @@ export default function register(api: OpenClawPluginApi) {
     let creds: AnthropicCreds | null = null;
     try {
       creds = resolveAnthropicCreds(config, agentId);
-      if (!creds) throw new Error("Sem credencial Anthropic disponível");
+      if (!creds) throw new Error("Sem credencial Anthropic disponÃ­vel");
       const client = createAnthropicClient(creds);
       const response = await client.messages.create({
         model: config.model ?? "claude-sonnet-4-20250514",
@@ -624,7 +647,7 @@ export default function register(api: OpenClawPluginApi) {
         );
       }
     } catch (err) {
-      // Silent fallback — must not crash the compaction
+      // Silent fallback â€” must not crash the compaction
       console.warn(
         `[iris-handover] Falhou ao gerar handover` +
           (creds ? ` (fonte: ${creds.source}, modo: ${creds.mode})` : "") +
