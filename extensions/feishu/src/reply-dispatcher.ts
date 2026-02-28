@@ -1,3 +1,4 @@
+import path from "path";
 import {
   createReplyPrefixContext,
   createTypingCallbacks,
@@ -9,7 +10,7 @@ import {
 import { resolveFeishuAccount } from "./accounts.js";
 import { registerStreamAppender, unregisterStreamAppender } from "./active-streams.js";
 import { createFeishuClient } from "./client.js";
-import { sendMediaFeishu } from "./media.js";
+import { sendMediaFeishu, uploadImageFeishu } from "./media.js";
 import type { MentionTarget } from "./mention.js";
 import { buildMentionedCardContent } from "./mention.js";
 import { getFeishuRuntime } from "./runtime.js";
@@ -108,6 +109,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   let streaming: FeishuStreamingSession | null = null;
   let streamText = "";
   let lastPartial = "";
+  /** Persisted content (prior AI text + embedded media) that must survive onPartialReply rewrites */
+  let committedText = "";
   let partialUpdateQueue: Promise<void> = Promise.resolve();
   let streamingStartPromise: Promise<void> | null = null;
 
@@ -136,7 +139,13 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         registerStreamAppender(
           chatId,
           (content) => {
-            streamText += content;
+            // Commit pending AI partial text so external content doesn't displace it
+            if (lastPartial) {
+              committedText += lastPartial;
+              lastPartial = "";
+            }
+            committedText += content;
+            streamText = committedText;
             partialUpdateQueue = partialUpdateQueue.then(async () => {
               if (streamingStartPromise) await streamingStartPromise;
               if (streaming?.isActive()) await streaming.update(streamText);
@@ -168,6 +177,45 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     streamingStartPromise = null;
     streamText = "";
     lastPartial = "";
+    committedText = "";
+  };
+
+  /** Upload media and embed as markdown in the streaming card. Returns true on success. */
+  const embedMediaInStream = async (mediaUrl: string): Promise<boolean> => {
+    if (!streaming?.isActive()) return false;
+    try {
+      const mediaMaxBytes = (account.config?.mediaMaxMb ?? 30) * 1024 * 1024;
+      const loaded = await core.media.loadWebMedia(mediaUrl, {
+        maxBytes: mediaMaxBytes,
+        optimizeImages: false,
+      });
+      const ext = path.extname(loaded.fileName ?? "file").toLowerCase();
+      const isImage = [".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".ico", ".tiff"].includes(
+        ext,
+      );
+
+      if (lastPartial) {
+        committedText += lastPartial;
+        lastPartial = "";
+      }
+
+      if (isImage) {
+        const { imageKey } = await uploadImageFeishu({ cfg, image: loaded.buffer, accountId });
+        committedText += `\n![image](${imageKey})\n`;
+      } else {
+        committedText += `\n📎 [${loaded.fileName ?? "file"}](${mediaUrl})\n`;
+      }
+
+      streamText = committedText;
+      partialUpdateQueue = partialUpdateQueue.then(async () => {
+        if (streamingStartPromise) await streamingStartPromise;
+        if (streaming?.isActive()) await streaming.update(streamText);
+      });
+      return true;
+    } catch (err) {
+      params.runtime.error?.(`feishu: embed media in stream failed: ${String(err)}`);
+      return false;
+    }
   };
 
   const { dispatcher, replyOptions, markDispatchIdle } =
@@ -207,22 +255,24 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           }
 
           if (streaming?.isActive()) {
-            if (info?.kind === "final") {
-              streamText = text;
-              await closeStreaming();
-            }
-            // Send media even when streaming handled the text
             if (hasMedia) {
               for (const mediaUrl of mediaList) {
-                await sendMediaFeishu({
-                  cfg,
-                  to: chatId,
-                  mediaUrl,
-                  replyToMessageId: sendReplyToMessageId,
-                  replyInThread,
-                  accountId,
-                });
+                const embedded = await embedMediaInStream(mediaUrl);
+                if (!embedded) {
+                  await sendMediaFeishu({
+                    cfg,
+                    to: chatId,
+                    mediaUrl,
+                    replyToMessageId: sendReplyToMessageId,
+                    replyInThread,
+                    accountId,
+                  });
+                }
               }
+            }
+            if (info?.kind === "final") {
+              streamText = committedText + text;
+              await closeStreaming();
             }
             return;
           }
@@ -306,7 +356,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               return;
             }
             lastPartial = payload.text;
-            streamText = payload.text;
+            streamText = committedText + payload.text;
             partialUpdateQueue = partialUpdateQueue.then(async () => {
               if (streamingStartPromise) {
                 await streamingStartPromise;

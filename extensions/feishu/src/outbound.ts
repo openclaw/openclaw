@@ -1,9 +1,11 @@
 import fs from "fs";
 import path from "path";
 import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk";
-import { sendMediaFeishu } from "./media.js";
+import { getStreamAppender } from "./active-streams.js";
+import { sendMediaFeishu, uploadImageFeishu } from "./media.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { sendMessageFeishu } from "./send.js";
+import { normalizeFeishuTarget } from "./targets.js";
 
 function normalizePossibleLocalImagePath(text: string | undefined): string | null {
   const raw = text?.trim();
@@ -44,11 +46,29 @@ export const feishuOutbound: ChannelOutboundAdapter = {
   chunkerMode: "markdown",
   textChunkLimit: 4000,
   sendText: async ({ cfg, to, text, accountId }) => {
+    const normalizedTo = normalizeFeishuTarget(to);
+
     // Scheme A compatibility shim:
     // when upstream accidentally returns a local image path as plain text,
     // auto-upload and send as Feishu image message instead of leaking path text.
     const localImagePath = normalizePossibleLocalImagePath(text);
     if (localImagePath) {
+      // If streaming is active, upload image and embed in card
+      const appender = normalizedTo ? getStreamAppender(normalizedTo) : undefined;
+      if (appender) {
+        try {
+          const buf = await fs.promises.readFile(localImagePath);
+          const { imageKey } = await uploadImageFeishu({
+            cfg,
+            image: buf,
+            accountId: accountId ?? undefined,
+          });
+          appender(`\n![image](${imageKey})\n`);
+          return { channel: "feishu" };
+        } catch {
+          // fall through to separate message
+        }
+      }
       try {
         const result = await sendMediaFeishu({
           cfg,
@@ -63,10 +83,63 @@ export const feishuOutbound: ChannelOutboundAdapter = {
       }
     }
 
+    // If streaming is active, append text to card instead of sending separate message
+    const appender = normalizedTo ? getStreamAppender(normalizedTo) : undefined;
+    if (appender) {
+      appender(text);
+      return { channel: "feishu" };
+    }
+
     const result = await sendMessageFeishu({ cfg, to, text, accountId: accountId ?? undefined });
     return { channel: "feishu", ...result };
   },
   sendMedia: async ({ cfg, to, text, mediaUrl, accountId, mediaLocalRoots }) => {
+    const normalizedTo = normalizeFeishuTarget(to);
+    const appender = normalizedTo ? getStreamAppender(normalizedTo) : undefined;
+
+    // When streaming is active, embed everything in the card
+    if (appender) {
+      if (text?.trim()) {
+        appender(text);
+      }
+      if (mediaUrl) {
+        try {
+          const mediaMaxBytes = 30 * 1024 * 1024;
+          const loaded = await getFeishuRuntime().media.loadWebMedia(mediaUrl, {
+            maxBytes: mediaMaxBytes,
+            optimizeImages: false,
+            localRoots: mediaLocalRoots?.length ? [...mediaLocalRoots] : undefined,
+          });
+          const ext = path.extname(loaded.fileName ?? "file").toLowerCase();
+          const isImage = [
+            ".jpg",
+            ".jpeg",
+            ".png",
+            ".gif",
+            ".webp",
+            ".bmp",
+            ".ico",
+            ".tiff",
+          ].includes(ext);
+
+          if (isImage) {
+            const { imageKey } = await uploadImageFeishu({
+              cfg,
+              image: loaded.buffer,
+              accountId: accountId ?? undefined,
+            });
+            appender(`\n![image](${imageKey})\n`);
+          } else {
+            appender(`\n📎 [${loaded.fileName ?? "file"}](${mediaUrl})\n`);
+          }
+        } catch (err) {
+          console.error(`[feishu] stream media embed failed:`, err);
+          appender(`\n📎 ${mediaUrl}\n`);
+        }
+      }
+      return { channel: "feishu" };
+    }
+
     // Send text first if provided
     if (text?.trim()) {
       await sendMessageFeishu({ cfg, to, text, accountId: accountId ?? undefined });
