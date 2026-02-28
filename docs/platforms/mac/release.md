@@ -38,7 +38,6 @@ Notes:
 # Default is auto-derived from APP_VERSION when omitted.
 BUNDLE_ID=ai.openclaw.mac \
 APP_VERSION=2026.2.27 \
-APP_BUILD="$(git rev-list --count HEAD)" \
 BUILD_CONFIG=release \
 SIGN_IDENTITY="Developer ID Application: <Developer Name> (<TEAMID>)" \
 scripts/package-mac-app.sh
@@ -56,7 +55,6 @@ scripts/create-dmg.sh dist/OpenClaw.app dist/OpenClaw-2026.2.27.dmg
 NOTARIZE=1 NOTARYTOOL_PROFILE=openclaw-notary \
 BUNDLE_ID=ai.openclaw.mac \
 APP_VERSION=2026.2.27 \
-APP_BUILD="$(git rev-list --count HEAD)" \
 BUILD_CONFIG=release \
 SIGN_IDENTITY="Developer ID Application: <Developer Name> (<TEAMID>)" \
 scripts/package-mac-dist.sh
