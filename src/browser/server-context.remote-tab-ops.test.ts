@@ -64,6 +64,37 @@ function createRemoteRouteHarness(fetchMock?: ReturnType<typeof vi.fn>) {
   return { state, remote: ctx.forProfile("remote"), fetchMock: activeFetchMock };
 }
 
+function createSequentialPageLister<T>(responses: T[]) {
+  return vi.fn(async () => {
+    const next = responses.shift();
+    if (!next) {
+      throw new Error("no more responses");
+    }
+    return next;
+  });
+}
+
+type JsonListEntry = {
+  id: string;
+  title: string;
+  url: string;
+  webSocketDebuggerUrl: string;
+  type: "page";
+};
+
+function createJsonListFetchMock(entries: JsonListEntry[]) {
+  return vi.fn(async (url: unknown) => {
+    const u = String(url);
+    if (!u.includes("/json/list")) {
+      throw new Error(`unexpected fetch: ${u}`);
+    }
+    return {
+      ok: true,
+      json: async () => entries,
+    } as unknown as Response;
+  });
+}
+
 describe("browser server-context remote profile tab operations", () => {
   it("uses Playwright tab operations when available", async () => {
     const listPagesViaPlaywright = vi.fn(async () => [
@@ -153,6 +184,43 @@ describe("browser server-context remote profile tab operations", () => {
     expect(second.targetId).toBe("A");
   });
 
+  it("falls back to the only tab for remote profiles when targetId is stale", async () => {
+    const responses = [
+      [{ targetId: "T1", title: "Tab 1", url: "https://example.com", type: "page" }],
+      [{ targetId: "T1", title: "Tab 1", url: "https://example.com", type: "page" }],
+    ];
+    const listPagesViaPlaywright = createSequentialPageLister(responses);
+
+    vi.spyOn(pwAiModule, "getPwAiModule").mockResolvedValue({
+      listPagesViaPlaywright,
+    } as unknown as Awaited<ReturnType<typeof pwAiModule.getPwAiModule>>);
+
+    const { remote } = createRemoteRouteHarness();
+    const chosen = await remote.ensureTabAvailable("STALE_TARGET");
+    expect(chosen.targetId).toBe("T1");
+  });
+
+  it("keeps rejecting stale targetId for remote profiles when multiple tabs exist", async () => {
+    const responses = [
+      [
+        { targetId: "A", title: "A", url: "https://a.example", type: "page" },
+        { targetId: "B", title: "B", url: "https://b.example", type: "page" },
+      ],
+      [
+        { targetId: "A", title: "A", url: "https://a.example", type: "page" },
+        { targetId: "B", title: "B", url: "https://b.example", type: "page" },
+      ],
+    ];
+    const listPagesViaPlaywright = createSequentialPageLister(responses);
+
+    vi.spyOn(pwAiModule, "getPwAiModule").mockResolvedValue({
+      listPagesViaPlaywright,
+    } as unknown as Awaited<ReturnType<typeof pwAiModule.getPwAiModule>>);
+
+    const { remote } = createRemoteRouteHarness();
+    await expect(remote.ensureTabAvailable("STALE_TARGET")).rejects.toThrow(/tab not found/i);
+  });
+
   it("uses Playwright focus for remote profiles when available", async () => {
     const listPagesViaPlaywright = vi.fn(async () => [
       { targetId: "T1", title: "Tab 1", url: "https://example.com", type: "page" },
@@ -191,24 +259,15 @@ describe("browser server-context remote profile tab operations", () => {
   it("falls back to /json/list when Playwright is not available", async () => {
     vi.spyOn(pwAiModule, "getPwAiModule").mockResolvedValue(null);
 
-    const fetchMock = vi.fn(async (url: unknown) => {
-      const u = String(url);
-      if (!u.includes("/json/list")) {
-        throw new Error(`unexpected fetch: ${u}`);
-      }
-      return {
-        ok: true,
-        json: async () => [
-          {
-            id: "T1",
-            title: "Tab 1",
-            url: "https://example.com",
-            webSocketDebuggerUrl: "wss://browserless.example/devtools/page/T1",
-            type: "page",
-          },
-        ],
-      } as unknown as Response;
-    });
+    const fetchMock = createJsonListFetchMock([
+      {
+        id: "T1",
+        title: "Tab 1",
+        url: "https://example.com",
+        webSocketDebuggerUrl: "wss://browserless.example/devtools/page/T1",
+        type: "page",
+      },
+    ]);
 
     const { remote } = createRemoteRouteHarness(fetchMock);
 
@@ -224,24 +283,15 @@ describe("browser server-context tab selection state", () => {
       .spyOn(cdpModule, "createTargetViaCdp")
       .mockResolvedValue({ targetId: "CREATED" });
 
-    const fetchMock = vi.fn(async (url: unknown) => {
-      const u = String(url);
-      if (!u.includes("/json/list")) {
-        throw new Error(`unexpected fetch: ${u}`);
-      }
-      return {
-        ok: true,
-        json: async () => [
-          {
-            id: "CREATED",
-            title: "New Tab",
-            url: "http://127.0.0.1:8080",
-            webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/CREATED",
-            type: "page",
-          },
-        ],
-      } as unknown as Response;
-    });
+    const fetchMock = createJsonListFetchMock([
+      {
+        id: "CREATED",
+        title: "New Tab",
+        url: "http://127.0.0.1:8080",
+        webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/CREATED",
+        type: "page",
+      },
+    ]);
 
     global.fetch = withFetchPreconnect(fetchMock);
 

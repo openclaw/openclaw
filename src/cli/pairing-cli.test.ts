@@ -52,12 +52,23 @@ describe("pairing cli", () => {
   });
 
   beforeEach(() => {
-    listChannelPairingRequests.mockReset();
-    approveChannelPairingCode.mockReset();
-    notifyPairingApproved.mockReset();
+    listChannelPairingRequests.mockClear();
+    listChannelPairingRequests.mockResolvedValue([]);
+    approveChannelPairingCode.mockClear();
+    approveChannelPairingCode.mockResolvedValue({
+      id: "123",
+      entry: {
+        id: "123",
+        code: "ABCDEFGH",
+        createdAt: "2026-01-08T00:00:00Z",
+        lastSeenAt: "2026-01-08T00:00:00Z",
+      },
+    });
+    notifyPairingApproved.mockClear();
     normalizeChannelId.mockClear();
     getPairingAdapter.mockClear();
     listPairingChannels.mockClear();
+    notifyPairingApproved.mockResolvedValue(undefined);
   });
 
   function createProgram() {

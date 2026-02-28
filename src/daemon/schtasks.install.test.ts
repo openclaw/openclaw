@@ -19,13 +19,23 @@ beforeEach(() => {
 });
 
 describe("installScheduledTask", () => {
-  it("writes quoted set assignments and escapes metacharacters", async () => {
+  async function withUserProfileDir(
+    run: (tmpDir: string, env: Record<string, string>) => Promise<void>,
+  ) {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-schtasks-install-"));
+    const env = {
+      USERPROFILE: tmpDir,
+      OPENCLAW_PROFILE: "default",
+    };
     try {
-      const env = {
-        USERPROFILE: tmpDir,
-        OPENCLAW_PROFILE: "default",
-      };
+      await run(tmpDir, env);
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  }
+
+  it("writes quoted set assignments and escapes metacharacters", async () => {
+    await withUserProfileDir(async (_tmpDir, env) => {
       const { scriptPath } = await installScheduledTask({
         env,
         stdout: new PassThrough(),
@@ -46,6 +56,7 @@ describe("installScheduledTask", () => {
           OC_PERCENT: "%TEMP%",
           OC_BANG: "!token!",
           OC_QUOTE: 'he said "hi"',
+          OC_EMPTY: "",
         },
       });
 
@@ -59,6 +70,7 @@ describe("installScheduledTask", () => {
       expect(script).toContain('set "OC_PERCENT=%%TEMP%%"');
       expect(script).toContain('set "OC_BANG=^!token^!"');
       expect(script).toContain('set "OC_QUOTE=he said ^"hi^""');
+      expect(script).not.toContain('set "OC_EMPTY=');
       expect(script).not.toContain("set OC_INJECT=");
 
       const parsed = await readScheduledTaskCommand(env);
@@ -82,22 +94,16 @@ describe("installScheduledTask", () => {
         OC_BANG: "!token!",
         OC_QUOTE: 'he said "hi"',
       });
+      expect(parsed?.environment).not.toHaveProperty("OC_EMPTY");
 
       expect(schtasksCalls[0]).toEqual(["/Query"]);
       expect(schtasksCalls[1]?.[0]).toBe("/Create");
       expect(schtasksCalls[2]).toEqual(["/Run", "/TN", "OpenClaw Gateway"]);
-    } finally {
-      await fs.rm(tmpDir, { recursive: true, force: true });
-    }
+    });
   });
 
   it("rejects line breaks in command arguments, env vars, and descriptions", async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-schtasks-install-"));
-    const env = {
-      USERPROFILE: tmpDir,
-      OPENCLAW_PROFILE: "default",
-    };
-    try {
+    await withUserProfileDir(async (_tmpDir, env) => {
       await expect(
         installScheduledTask({
           env,
@@ -125,8 +131,6 @@ describe("installScheduledTask", () => {
           environment: {},
         }),
       ).rejects.toThrow(/Task description cannot contain CR or LF/);
-    } finally {
-      await fs.rm(tmpDir, { recursive: true, force: true });
-    }
+    });
   });
 });

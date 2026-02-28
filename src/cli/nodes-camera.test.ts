@@ -1,7 +1,7 @@
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { withTempDir } from "../test-utils/temp-dir.js";
 import {
   cameraTempPath,
   parseCameraClipPayload,
@@ -12,16 +12,18 @@ import {
 } from "./nodes-camera.js";
 import { parseScreenRecordPayload, screenRecordTempPath } from "./nodes-screen.js";
 
-async function withTempDir<T>(prefix: string, run: (dir: string) => Promise<T>): Promise<T> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
-  try {
-    return await run(dir);
-  } finally {
-    await fs.rm(dir, { recursive: true, force: true });
-  }
+async function withCameraTempDir<T>(run: (dir: string) => Promise<T>): Promise<T> {
+  return await withTempDir("openclaw-test-", run);
 }
 
 describe("nodes camera helpers", () => {
+  function stubFetchResponse(response: Response) {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => response),
+    );
+  }
+
   it("parses camera.snap payload", () => {
     expect(
       parseCameraSnapPayload({
@@ -55,6 +57,12 @@ describe("nodes camera helpers", () => {
     });
   });
 
+  it("rejects invalid camera.clip payload", () => {
+    expect(() =>
+      parseCameraClipPayload({ format: "mp4", base64: "AAEC", durationMs: 1234 }),
+    ).toThrow(/invalid camera\.clip payload/i);
+  });
+
   it("builds stable temp paths when id provided", () => {
     const p = cameraTempPath({
       kind: "snap",
@@ -67,7 +75,7 @@ describe("nodes camera helpers", () => {
   });
 
   it("writes camera clip payload to temp path", async () => {
-    await withTempDir("openclaw-test-", async (dir) => {
+    await withCameraTempDir(async (dir) => {
       const out = await writeCameraClipPayloadToFile({
         payload: {
           format: "mp4",
@@ -84,8 +92,27 @@ describe("nodes camera helpers", () => {
     });
   });
 
+  it("writes camera clip payload from url", async () => {
+    stubFetchResponse(new Response("url-clip", { status: 200 }));
+    await withCameraTempDir(async (dir) => {
+      const out = await writeCameraClipPayloadToFile({
+        payload: {
+          format: "mp4",
+          url: "https://example.com/clip.mp4",
+          durationMs: 200,
+          hasAudio: false,
+        },
+        facing: "back",
+        tmpDir: dir,
+        id: "clip2",
+      });
+      expect(out).toBe(path.join(dir, "openclaw-camera-clip-back-clip2.mp4"));
+      await expect(fs.readFile(out, "utf8")).resolves.toBe("url-clip");
+    });
+  });
+
   it("writes base64 to file", async () => {
-    await withTempDir("openclaw-test-", async (dir) => {
+    await withCameraTempDir(async (dir) => {
       const out = path.join(dir, "x.bin");
       await writeBase64ToFile(out, "aGk=");
       await expect(fs.readFile(out, "utf8")).resolves.toBe("hi");
@@ -97,47 +124,75 @@ describe("nodes camera helpers", () => {
   });
 
   it("writes url payload to file", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => new Response("url-content", { status: 200 })),
-    );
-    await withTempDir("openclaw-test-", async (dir) => {
+    stubFetchResponse(new Response("url-content", { status: 200 }));
+    await withCameraTempDir(async (dir) => {
       const out = path.join(dir, "x.bin");
       await writeUrlToFile(out, "https://example.com/clip.mp4");
       await expect(fs.readFile(out, "utf8")).resolves.toBe("url-content");
     });
   });
 
-  it("rejects non-https url payload", async () => {
-    await expect(writeUrlToFile("/tmp/ignored", "http://example.com/x.bin")).rejects.toThrow(
-      /only https/i,
-    );
+  it("rejects invalid url payload responses", async () => {
+    const cases: Array<{
+      name: string;
+      url: string;
+      response?: Response;
+      expectedMessage: RegExp;
+    }> = [
+      {
+        name: "non-https url",
+        url: "http://example.com/x.bin",
+        expectedMessage: /only https/i,
+      },
+      {
+        name: "oversized content-length",
+        url: "https://example.com/huge.bin",
+        response: new Response("tiny", {
+          status: 200,
+          headers: { "content-length": String(999_999_999) },
+        }),
+        expectedMessage: /exceeds max/i,
+      },
+      {
+        name: "non-ok status",
+        url: "https://example.com/down.bin",
+        response: new Response("down", { status: 503, statusText: "Service Unavailable" }),
+        expectedMessage: /503/i,
+      },
+      {
+        name: "empty response body",
+        url: "https://example.com/empty.bin",
+        response: new Response(null, { status: 200 }),
+        expectedMessage: /empty response body/i,
+      },
+    ];
+
+    for (const testCase of cases) {
+      if (testCase.response) {
+        stubFetchResponse(testCase.response);
+      }
+      await expect(writeUrlToFile("/tmp/ignored", testCase.url), testCase.name).rejects.toThrow(
+        testCase.expectedMessage,
+      );
+    }
   });
 
-  it("rejects oversized content-length for url payload", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(
-        async () =>
-          new Response("tiny", {
-            status: 200,
-            headers: { "content-length": String(999_999_999) },
-          }),
-      ),
-    );
-    await expect(writeUrlToFile("/tmp/ignored", "https://example.com/huge.bin")).rejects.toThrow(
-      /exceeds max/i,
-    );
-  });
+  it("removes partially written file when url stream fails", async () => {
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode("partial"));
+        controller.error(new Error("stream exploded"));
+      },
+    });
+    stubFetchResponse(new Response(stream, { status: 200 }));
 
-  it("rejects non-ok https url payload responses", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => new Response("down", { status: 503, statusText: "Service Unavailable" })),
-    );
-    await expect(writeUrlToFile("/tmp/ignored", "https://example.com/down.bin")).rejects.toThrow(
-      /503/i,
-    );
+    await withCameraTempDir(async (dir) => {
+      const out = path.join(dir, "broken.bin");
+      await expect(writeUrlToFile(out, "https://example.com/broken.bin")).rejects.toThrow(
+        /stream exploded/i,
+      );
+      await expect(fs.stat(out)).rejects.toThrow();
+    });
   });
 });
 

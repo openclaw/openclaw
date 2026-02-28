@@ -8,7 +8,11 @@ import {
 } from "../config/sessions.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
 import { runCronIsolatedAgentTurn } from "../cron/isolated-agent.js";
-import { appendCronRunLog, resolveCronRunLogPath } from "../cron/run-log.js";
+import {
+  appendCronRunLog,
+  resolveCronRunLogPath,
+  resolveCronRunLogPruneOptions,
+} from "../cron/run-log.js";
 import { CronService } from "../cron/service.js";
 import { resolveCronStorePath } from "../cron/store.js";
 import { normalizeHttpWebhookUrl } from "../cron/webhook-url.js";
@@ -144,6 +148,7 @@ export function buildGatewayCronService(params: {
   };
 
   const defaultAgentId = resolveDefaultAgentId(params.cfg);
+  const runLogPrune = resolveCronRunLogPruneOptions(params.cfg.cron?.runLog);
   const resolveSessionStorePath = (agentId?: string) =>
     resolveStorePath(params.cfg.session?.store, {
       agentId: agentId ?? defaultAgentId,
@@ -185,13 +190,14 @@ export function buildGatewayCronService(params: {
         deps: { ...params.deps, runtime: defaultRuntime },
       });
     },
-    runIsolatedAgentJob: async ({ job, message }) => {
+    runIsolatedAgentJob: async ({ job, message, abortSignal }) => {
       const { agentId, cfg: runtimeConfig } = resolveCronAgent(job.agentId);
       return await runCronIsolatedAgentTurn({
         cfg: runtimeConfig,
         deps: params.deps,
         job,
         message,
+        abortSignal,
         agentId,
         sessionKey: `cron:${job.id}`,
         lane: "cron",
@@ -288,23 +294,29 @@ export function buildGatewayCronService(params: {
           storePath,
           jobId: evt.jobId,
         });
-        void appendCronRunLog(logPath, {
-          ts: Date.now(),
-          jobId: evt.jobId,
-          action: "finished",
-          status: evt.status,
-          error: evt.error,
-          summary: evt.summary,
-          delivered: evt.delivered,
-          sessionId: evt.sessionId,
-          sessionKey: evt.sessionKey,
-          runAtMs: evt.runAtMs,
-          durationMs: evt.durationMs,
-          nextRunAtMs: evt.nextRunAtMs,
-          model: evt.model,
-          provider: evt.provider,
-          usage: evt.usage,
-        }).catch((err) => {
+        void appendCronRunLog(
+          logPath,
+          {
+            ts: Date.now(),
+            jobId: evt.jobId,
+            action: "finished",
+            status: evt.status,
+            error: evt.error,
+            summary: evt.summary,
+            delivered: evt.delivered,
+            deliveryStatus: evt.deliveryStatus,
+            deliveryError: evt.deliveryError,
+            sessionId: evt.sessionId,
+            sessionKey: evt.sessionKey,
+            runAtMs: evt.runAtMs,
+            durationMs: evt.durationMs,
+            nextRunAtMs: evt.nextRunAtMs,
+            model: evt.model,
+            provider: evt.provider,
+            usage: evt.usage,
+          },
+          runLogPrune,
+        ).catch((err) => {
           cronLogger.warn({ err: String(err), logPath }, "cron: run log append failed");
         });
       }
