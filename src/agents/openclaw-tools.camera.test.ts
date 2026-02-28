@@ -136,6 +136,17 @@ describe("nodes camera_snap", () => {
       deviceId: "cam-123",
     });
   });
+
+  it("rejects facing both when deviceId is provided", async () => {
+    await expect(
+      executeNodes({
+        action: "camera_snap",
+        node: NODE_ID,
+        facing: "both",
+        deviceId: "cam-123",
+      }),
+    ).rejects.toThrow(/facing=both is not allowed when deviceId is set/i);
+  });
 });
 
 describe("nodes notifications_list", () => {
@@ -170,6 +181,170 @@ describe("nodes notifications_list", () => {
     expect(result.content?.[0]).toMatchObject({
       type: "text",
       text: expect.stringContaining('"notifications"'),
+    });
+  });
+});
+
+describe("nodes notifications_action", () => {
+  it("invokes notifications.actions dismiss", async () => {
+    callGateway.mockImplementation(async ({ method, params }) => {
+      if (method === "node.list") {
+        return mockNodeList(["notifications.actions"]);
+      }
+      if (method === "node.invoke") {
+        expect(params).toMatchObject({
+          nodeId: NODE_ID,
+          command: "notifications.actions",
+          params: {
+            key: "n1",
+            action: "dismiss",
+          },
+        });
+        return { payload: { ok: true, key: "n1", action: "dismiss" } };
+      }
+      return unexpectedGatewayMethod(method);
+    });
+
+    const result = await executeNodes({
+      action: "notifications_action",
+      node: NODE_ID,
+      notificationKey: "n1",
+      notificationAction: "dismiss",
+    });
+
+    expect(result.content?.[0]).toMatchObject({
+      type: "text",
+      text: expect.stringContaining('"dismiss"'),
+    });
+  });
+});
+
+describe("nodes device_status and device_info", () => {
+  it("invokes device.status and returns payload", async () => {
+    callGateway.mockImplementation(async ({ method, params }) => {
+      if (method === "node.list") {
+        return mockNodeList(["device.status", "device.info"]);
+      }
+      if (method === "node.invoke") {
+        expect(params).toMatchObject({
+          nodeId: NODE_ID,
+          command: "device.status",
+          params: {},
+        });
+        return {
+          payload: {
+            battery: { state: "charging", lowPowerModeEnabled: false },
+          },
+        };
+      }
+      return unexpectedGatewayMethod(method);
+    });
+
+    const result = await executeNodes({
+      action: "device_status",
+      node: NODE_ID,
+    });
+
+    expect(result.content?.[0]).toMatchObject({
+      type: "text",
+      text: expect.stringContaining('"battery"'),
+    });
+  });
+
+  it("invokes device.info and returns payload", async () => {
+    callGateway.mockImplementation(async ({ method, params }) => {
+      if (method === "node.list") {
+        return mockNodeList(["device.status", "device.info"]);
+      }
+      if (method === "node.invoke") {
+        expect(params).toMatchObject({
+          nodeId: NODE_ID,
+          command: "device.info",
+          params: {},
+        });
+        return {
+          payload: {
+            systemName: "Android",
+            appVersion: "1.0.0",
+          },
+        };
+      }
+      return unexpectedGatewayMethod(method);
+    });
+
+    const result = await executeNodes({
+      action: "device_info",
+      node: NODE_ID,
+    });
+
+    expect(result.content?.[0]).toMatchObject({
+      type: "text",
+      text: expect.stringContaining('"systemName"'),
+    });
+  });
+
+  it("invokes device.permissions and returns payload", async () => {
+    callGateway.mockImplementation(async ({ method, params }) => {
+      if (method === "node.list") {
+        return mockNodeList(["device.permissions"]);
+      }
+      if (method === "node.invoke") {
+        expect(params).toMatchObject({
+          nodeId: NODE_ID,
+          command: "device.permissions",
+          params: {},
+        });
+        return {
+          payload: {
+            permissions: {
+              camera: { status: "granted", promptable: false },
+            },
+          },
+        };
+      }
+      return unexpectedGatewayMethod(method);
+    });
+
+    const result = await executeNodes({
+      action: "device_permissions",
+      node: NODE_ID,
+    });
+
+    expect(result.content?.[0]).toMatchObject({
+      type: "text",
+      text: expect.stringContaining('"permissions"'),
+    });
+  });
+
+  it("invokes device.health and returns payload", async () => {
+    callGateway.mockImplementation(async ({ method, params }) => {
+      if (method === "node.list") {
+        return mockNodeList(["device.health"]);
+      }
+      if (method === "node.invoke") {
+        expect(params).toMatchObject({
+          nodeId: NODE_ID,
+          command: "device.health",
+          params: {},
+        });
+        return {
+          payload: {
+            memory: { pressure: "normal" },
+            battery: { chargingType: "usb" },
+          },
+        };
+      }
+      return unexpectedGatewayMethod(method);
+    });
+
+    const result = await executeNodes({
+      action: "device_health",
+      node: NODE_ID,
+    });
+
+    expect(result.content?.[0]).toMatchObject({
+      type: "text",
+      text: expect.stringContaining('"memory"'),
     });
   });
 });
