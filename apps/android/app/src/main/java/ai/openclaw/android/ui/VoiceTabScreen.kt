@@ -101,7 +101,11 @@ fun VoiceTabScreen(viewModel: MainViewModel) {
         }
       }
     lifecycleOwner.lifecycle.addObserver(observer)
-    onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    onDispose {
+      lifecycleOwner.lifecycle.removeObserver(observer)
+      // Stop TTS when leaving the voice screen
+      viewModel.setVoiceScreenActive(false)
+    }
   }
 
   val requestMicPermission =
