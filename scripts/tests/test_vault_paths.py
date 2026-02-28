@@ -56,11 +56,11 @@ class TestConstants:
     def test_notes_is_200(self):
         assert NOTES == VAULT / "200 정리"
 
-    def test_structure_is_400(self):
-        assert STRUCTURE == VAULT / "400 연결"
+    def test_structure_is_300(self):
+        assert STRUCTURE == VAULT / "300 연결"
 
-    def test_insights_is_500(self):
-        assert INSIGHTS == VAULT / "500 판단"
+    def test_insights_is_400(self):
+        assert INSIGHTS == VAULT / "400 판단"
 
     def test_activity_is_700(self):
         assert ACTIVITY == VAULT / "700 활동"
@@ -170,7 +170,7 @@ class TestVaultCategoryDirs:
         assert VAULT_CATEGORY_DIRS["시장"] == VAULT / "200 정리" / "225 시장"
         assert VAULT_CATEGORY_DIRS["산업분석"] == VAULT / "200 정리" / "230 산업분석"
         assert VAULT_CATEGORY_DIRS["프로그래밍"] == VAULT / "200 정리" / "235 프로그래밍"
-        assert VAULT_CATEGORY_DIRS["인사이트"] == VAULT / "500 판단"
+        assert VAULT_CATEGORY_DIRS["인사이트"] == VAULT / "200 정리" / "240 인사이트"
 
 
 class TestGetFunction:

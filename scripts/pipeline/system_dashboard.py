@@ -40,9 +40,9 @@ log = make_logger(log_file=str(LOG_FILE))
 V3_STAGES = [
     ("100 캡처", INBOX),
     ("200 정리", NOTES),
-    ("300 지식화", AREAS),
-    ("400 연결", STRUCTURE),
-    ("500 판단", INSIGHTS),
+
+    ("300 연결", STRUCTURE),
+    ("400 판단", INSIGHTS),
     ("800 실행", EXECUTION),
 ]
 
@@ -162,7 +162,7 @@ def generate():
 
     # 볼트 통계
     total = _count_md(VAULT_ROOT)
-    moc_dir = VAULT_ROOT / "100 지식" / "125 영역"
+    moc_dir = AREAS
     mocs = len(list(moc_dir.rglob("MOC-*.md"))) if moc_dir.exists() else 0
     inbox_7d = _count_md(V3_STAGES[0][1], max_age_days=7)
     mem_7d = sum(_count_recent(MEMORY_DIR / d, 7) for d in MEMORY_NAMES)

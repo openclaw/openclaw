@@ -17,8 +17,8 @@ VAULT = Path(os.path.expanduser("~/knowledge"))
 _V3_MAP = {
     "캡처":   VAULT / "100 캡처" / "110 수신함",
     "정리":   VAULT / "200 정리",
-    "연결":   VAULT / "400 연결",
-    "판단":   VAULT / "500 판단",
+    "연결":   VAULT / "300 연결",
+    "판단":   VAULT / "400 판단",
     "리소스": VAULT / "600 리소스",
     "활동":   VAULT / "700 활동",
     "운영":   VAULT / "800 운영",
@@ -81,6 +81,7 @@ CAT_COMPANY   = NOTES / "220 기업"
 CAT_MARKET    = NOTES / "225 시장"
 CAT_INDUSTRY  = NOTES / "230 산업분석"
 CAT_PROG      = NOTES / "235 프로그래밍"
+CAT_INSIGHT   = NOTES / "240 인사이트"
 
 # classify.py 전용 — v3 분류 카테고리 → 폴더
 VAULT_CATEGORY_DIRS = {
@@ -88,7 +89,7 @@ VAULT_CATEGORY_DIRS = {
     "시장":     VAULT / "200 정리" / "225 시장",
     "산업분석": VAULT / "200 정리" / "230 산업분석",
     "프로그래밍": VAULT / "200 정리" / "235 프로그래밍",
-    "인사이트": VAULT / "500 판단",
+    "인사이트": VAULT / "200 정리" / "240 인사이트",
 }
 
 
