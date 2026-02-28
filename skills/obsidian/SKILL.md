@@ -73,9 +73,9 @@ sudo snap install obsidian --classic
 
 **Linux (AppImage):**
 ```bash
-wget https://github.com/obsidianmd/obsidian-releases/releases/download/v1.11.7/Obsidian-1.11.7.AppImage
-chmod +x Obsidian-1.11.7.AppImage
-./Obsidian-1.11.7.AppImage
+wget https://github.com/obsidianmd/obsidian-releases/releases/download/v1.12.4/Obsidian-1.12.4.AppImage
+chmod +x Obsidian-1.12.4.AppImage
+./Obsidian-1.12.4.AppImage
 ```
 
 **Download from website:**
