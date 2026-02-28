@@ -206,10 +206,12 @@
             "type": "string"
           },
           "region": {
-            "type": "string"
+            "type": "string",
+            "pattern": "^[a-z0-9]+$"
           },
           "edge": {
-            "type": "string"
+            "type": "string",
+            "pattern": "^[a-z0-9-]+$"
           }
         }
       },

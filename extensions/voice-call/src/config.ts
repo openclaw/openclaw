@@ -78,7 +78,7 @@ export const TwilioConfigSchema = z
      */
     edge: z
       .string()
-      .regex(/^[a-z-]+$/)
+      .regex(/^[a-z0-9-]+$/)
       .optional(),
   })
   .strict();
