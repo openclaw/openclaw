@@ -1,0 +1,69 @@
+{
+  "id": "iris-dashboard",
+  "name": "Iris Dashboard",
+  "description": "Dashboard interativo de tarefas para Iris/Lucas com CRUD, realtime e heartbeat.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["supabaseUrl", "supabaseServiceKey", "dashboardApiKey", "webhookSecret"],
+    "properties": {
+      "supabaseUrl": {
+        "type": "string",
+        "description": "Supabase project URL (e.g. https://xxx.supabase.co)"
+      },
+      "supabaseServiceKey": {
+        "type": "string",
+        "description": "Supabase service role key — usado para operacoes server-side"
+      },
+      "supabaseAnonKey": {
+        "type": "string",
+        "description": "Supabase anon key — usado no browser para Realtime. Opcional; usa service key se nao definido."
+      },
+      "dashboardApiKey": {
+        "type": "string",
+        "description": "Chave de API para autenticar endpoints mutaveis (POST/PATCH/DELETE)"
+      },
+      "webhookSecret": {
+        "type": "string",
+        "description": "Segredo compartilhado com Supabase Webhooks para validar chamadas de webhook"
+      },
+      "heartbeatOutputFile": {
+        "type": "string",
+        "description": "Caminho do arquivo HEARTBEAT.md gerado no boot. Default: memory/HEARTBEAT.md"
+      },
+      "heartbeatSessionKey": {
+        "type": "string",
+        "description": "Session key que recebera system events de conclusao de tarefas (opcional)"
+      }
+    },
+    "uiHints": {
+      "supabaseUrl": {
+        "label": "Supabase URL",
+        "placeholder": "https://xxx.supabase.co"
+      },
+      "supabaseServiceKey": {
+        "label": "Service Role Key",
+        "sensitive": true
+      },
+      "supabaseAnonKey": {
+        "label": "Anon Key (opcional, para Realtime no browser)",
+        "sensitive": true
+      },
+      "dashboardApiKey": {
+        "label": "Dashboard API Key",
+        "sensitive": true
+      },
+      "webhookSecret": {
+        "label": "Webhook Secret",
+        "sensitive": true
+      },
+      "heartbeatOutputFile": {
+        "label": "Arquivo HEARTBEAT.md",
+        "placeholder": "memory/HEARTBEAT.md"
+      },
+      "heartbeatSessionKey": {
+        "label": "Session Key para notificacoes (opcional)"
+      }
+    }
+  }
+}
