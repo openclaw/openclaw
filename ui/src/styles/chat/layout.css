@@ -274,7 +274,9 @@
   margin: -4px;
   border: 2px dashed transparent;
   border-radius: 12px;
-  transition: background 150ms ease-out, border-color 150ms ease-out;
+  transition:
+    background 150ms ease-out,
+    border-color 150ms ease-out;
 }
 
 .chat-compose__row.drag-over {
@@ -294,7 +296,7 @@
 }
 
 /* Hide the "Message" label - keep textarea only */
-.chat-compose__field>span {
+.chat-compose__field > span {
   display: none;
 }
 
