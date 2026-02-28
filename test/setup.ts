@@ -1,5 +1,19 @@
 import { afterAll, afterEach, beforeEach, vi } from "vitest";
 
+// ── Global: disable aeon-memory in all tests by default ──────────────
+// The real `aeon-memory` native binary boots a live AeonMemory singleton whose
+// `isAvailable()` returns true.  That makes every module-level
+//   `import("aeon-memory").then(m => { AeonMemoryPlugin = m.AeonMemory; })`
+// succeed, causing writes to go through Aeon's WAL instead of the legacy JSONL
+// path that existing tests assert against.
+//
+// Mocking it globally ensures all test suites see AeonMemoryPlugin = null
+// (the promise rejects).  Tests that *explicitly* need Aeon behaviour
+// (e.g. aeon-integration.test.ts) use vi.doMock / vi.resetModules to override.
+vi.mock("aeon-memory", () => {
+  throw new Error("aeon-memory is globally mocked in test/setup.ts");
+});
+
 // Ensure Vitest environment is properly set
 process.env.VITEST = "true";
 // Config validation walks plugin manifests; keep an aggressive cache in tests to avoid

@@ -382,6 +382,7 @@ function appendAssistantTranscriptMessage(params: {
     label: params.label,
     idempotencyKey: params.idempotencyKey,
     abortMeta: params.abortMeta,
+    sessionId: params.sessionId,
   });
 }
 

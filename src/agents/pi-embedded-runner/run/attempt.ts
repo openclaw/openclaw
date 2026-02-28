@@ -77,6 +77,7 @@ import { resolveEffectiveToolFsWorkspaceOnly } from "../../tool-fs-policy.js";
 import { resolveTranscriptPolicy } from "../../transcript-policy.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../../workspace.js";
 import { isRunnerAbortError } from "../abort.js";
+import { aeonCheckpointSessionFile } from "../aeon-session-checkpoint.js";
 import { appendCacheTtlTimestamp, isCacheTtlEligibleProvider } from "../cache-ttl.js";
 import { buildEmbeddedExtensionFactories } from "../extensions.js";
 import { applyExtraParamsToAgent } from "../extra-params.js";
@@ -543,7 +544,34 @@ export async function runEmbeddedAttempt(
             params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
           disableMessageTool: params.disableMessageTool,
         });
-    const tools = sanitizeToolsForGoogle({ tools: toolsRaw, provider: params.provider });
+    let tools = sanitizeToolsForGoogle({ tools: toolsRaw, provider: params.provider });
+    // ── AEON ATLAS: Optional semantic tool filter (aeon-memory plugin) ──
+    // On failure, `tools` is guaranteed to remain unmodified (snapshot restore).
+    try {
+      // @ts-ignore: Optional dependency for ultra-low-latency memory
+      const { AeonMemory } = await import("aeon-memory");
+      const aeon = AeonMemory.getInstance();
+      if (aeon && aeon.isAvailable() && params.prompt) {
+        const originalTools = tools;
+        try {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          tools = (await aeon.filterToolsSemantic(params.prompt, tools)) as any;
+        } catch (filterErr) {
+          tools = originalTools; // Restore snapshot — pipeline continues with all tools
+          console.error(
+            "🚨 [AeonMemory] Semantic filter failed, falling back to all tools:",
+            filterErr,
+          );
+        }
+      }
+    } catch (importErr: unknown) {
+      const code =
+        importErr instanceof Error ? (importErr as NodeJS.ErrnoException).code : undefined;
+      if (code !== "ERR_MODULE_NOT_FOUND" && code !== "MODULE_NOT_FOUND") {
+        console.error("🚨 [AeonMemory] Import failed:", importErr);
+      }
+    }
+
     const allowedToolNames = collectAllowedToolNames({
       tools,
       clientTools: params.clientTools,
@@ -731,6 +759,12 @@ export async function runEmbeddedAttempt(
       });
 
       await prewarmSessionFile(params.sessionFile);
+      // ── AEON V3: Materialize WAL → JSONL before Pi reads it ──────────
+      await aeonCheckpointSessionFile({
+        sessionFile: params.sessionFile,
+        sessionId: params.sessionId,
+        cwd: effectiveWorkspace,
+      });
       sessionManager = guardSessionManager(SessionManager.open(params.sessionFile), {
         agentId: sessionAgentId,
         sessionKey: params.sessionKey,

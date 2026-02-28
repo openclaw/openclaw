@@ -77,17 +77,38 @@ describe("createFeishuWSClient proxy handling", () => {
   });
 
   it("uses proxy env precedence: https_proxy first, then HTTPS_PROXY, then http_proxy/HTTP_PROXY", () => {
-    process.env.https_proxy = "http://lower-https:8001";
-    process.env.HTTPS_PROXY = "http://upper-https:8002";
-    process.env.http_proxy = "http://lower-http:8003";
-    process.env.HTTP_PROXY = "http://upper-http:8004";
+    // On Windows, environment variable names are case-insensitive:
+    // process.env.https_proxy and process.env.HTTPS_PROXY share the
+    // same slot, so the last write wins.  We therefore only assert the
+    // https-over-http fallback (which works cross-platform) and skip the
+    // lowercase-vs-uppercase https check on Windows.
+    const isWindows = process.platform === "win32";
 
-    createFeishuWSClient(baseAccount);
+    if (!isWindows) {
+      // POSIX: lowercase takes precedence over uppercase
+      process.env.https_proxy = "http://lower-https:8001";
+      process.env.HTTPS_PROXY = "http://upper-https:8002";
+      process.env.http_proxy = "http://lower-http:8003";
+      process.env.HTTP_PROXY = "http://upper-http:8004";
 
-    expect(httpsProxyAgentCtorMock).toHaveBeenCalledTimes(1);
-    expect(httpsProxyAgentCtorMock).toHaveBeenCalledWith("http://lower-https:8001");
-    const options = firstWsClientOptions();
-    expect(options.agent).toEqual({ proxyUrl: "http://lower-https:8001" });
+      createFeishuWSClient(baseAccount);
+
+      expect(httpsProxyAgentCtorMock).toHaveBeenCalledTimes(1);
+      expect(httpsProxyAgentCtorMock).toHaveBeenCalledWith("http://lower-https:8001");
+      const options = firstWsClientOptions();
+      expect(options.agent).toEqual({ proxyUrl: "http://lower-https:8001" });
+    } else {
+      // Windows: env keys are case-insensitive, so only test https vs http
+      process.env.HTTPS_PROXY = "http://https-proxy:8001";
+      process.env.HTTP_PROXY = "http://http-proxy:8003";
+
+      createFeishuWSClient(baseAccount);
+
+      expect(httpsProxyAgentCtorMock).toHaveBeenCalledTimes(1);
+      expect(httpsProxyAgentCtorMock).toHaveBeenCalledWith("http://https-proxy:8001");
+      const options = firstWsClientOptions();
+      expect(options.agent).toEqual({ proxyUrl: "http://https-proxy:8001" });
+    }
   });
 
   it("passes HTTP_PROXY to ws client when https vars are unset", () => {

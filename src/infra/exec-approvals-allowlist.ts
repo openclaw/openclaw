@@ -1,15 +1,15 @@
 import path from "node:path";
 import {
-  DEFAULT_SAFE_BINS,
   analyzeShellCommand,
+  type CommandResolution,
+  DEFAULT_SAFE_BINS,
+  type ExecCommandAnalysis,
+  type ExecCommandSegment,
   isWindowsPlatform,
   matchAllowlist,
   resolveAllowlistCandidatePath,
   resolveCommandResolutionFromArgv,
   splitCommandChain,
-  type ExecCommandAnalysis,
-  type CommandResolution,
-  type ExecCommandSegment,
 } from "./exec-approvals-analysis.js";
 import type { ExecAllowlistEntry } from "./exec-approvals.js";
 import {

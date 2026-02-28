@@ -257,9 +257,9 @@ importers:
         specifier: ^4.0.18
         version: 4.0.18(@opentelemetry/api@1.9.0)(@types/node@25.3.1)(@vitest/browser-playwright@4.0.18)(jiti@2.6.1)(lightningcss@1.30.2)(tsx@4.21.0)(yaml@2.8.2)
     optionalDependencies:
-      '@discordjs/opus':
-        specifier: ^0.10.0
-        version: 0.10.0
+      aeon-memory:
+        specifier: 1.1.0
+        version: 1.1.0
 
   extensions/acpx:
     dependencies:
@@ -3110,6 +3110,10 @@ packages:
     resolution: {integrity: sha512-C032VkV3cNa13ubq9YhskTWvDTsciNAQfNHZLW3PIN3atdkrzkV0v2yi6Znp7UZDw+pzgpKUsOrZWl64Lwr+3w==}
     engines: {node: '>=18'}
     hasBin: true
+
+  aeon-memory@1.1.0:
+    resolution: {integrity: sha512-C4lvb7QeqXafPRzut9jOnXeG/bZ2T9BbMb4RmbCoCFuRnLPE+JuKYvkM54AG93d03AfqGH1jwH9CSE8BHDEm5w==}
+    engines: {node: '>=18.0.0'}
 
   agent-base@6.0.2:
     resolution: {integrity: sha512-RZNwNclF7+MS/8bDg70amg32dyeZGZxiDuQmZxKLAlQjr3jGyLx+4Kkk58UO7D2QdgFIQCovuSuZESne6RG6XQ==}
@@ -8828,6 +8832,11 @@ snapshots:
       - bare-abort-controller
       - react-native-b4a
       - zod
+
+  aeon-memory@1.1.0:
+    dependencies:
+      node-addon-api: 8.5.0
+    optional: true
 
   agent-base@6.0.2:
     dependencies:

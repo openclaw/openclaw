@@ -24,10 +24,10 @@ import {
   isMentionForwardRequest,
 } from "./mention.js";
 import {
+  isFeishuGroupAllowed,
+  resolveFeishuAllowlistMatch,
   resolveFeishuGroupConfig,
   resolveFeishuReplyPolicy,
-  resolveFeishuAllowlistMatch,
-  isFeishuGroupAllowed,
 } from "./policy.js";
 import { parsePostContent } from "./post.js";
 import { createFeishuReplyDispatcher } from "./reply-dispatcher.js";

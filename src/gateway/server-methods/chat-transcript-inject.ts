@@ -1,4 +1,5 @@
 import { SessionManager } from "@mariozechner/pi-coding-agent";
+import { ensureAeonLoaded } from "../../utils/aeon-loader.js";
 
 type AppendMessageArg = Parameters<SessionManager["appendMessage"]>[0];
 
@@ -22,6 +23,7 @@ export function appendInjectedAssistantMessageToTranscript(params: {
   idempotencyKey?: string;
   abortMeta?: GatewayInjectedAbortMeta;
   now?: number;
+  sessionId?: string;
 }): GatewayInjectedTranscriptAppendResult {
   const now = params.now ?? Date.now();
   const labelPrefix = params.label ? `[${params.label}]\n\n` : "";
@@ -67,7 +69,25 @@ export function appendInjectedAssistantMessageToTranscript(params: {
     // IMPORTANT: Use SessionManager so the entry is attached to the current leaf via parentId.
     // Raw jsonl appends break the parent chain and can hide compaction summaries from context.
     const sessionManager = SessionManager.open(params.transcriptPath);
-    const messageId = sessionManager.appendMessage(messageBody);
+    let messageId: string;
+
+    if (params.sessionId) {
+      const AeonMemoryPlugin = ensureAeonLoaded();
+      if (AeonMemoryPlugin) {
+        const aeon = AeonMemoryPlugin.getInstance("main");
+        if (aeon && aeon.isAvailable()) {
+          aeon.saveTurn(params.sessionId, messageBody);
+          messageId = `aeon-${params.sessionId}-${now}`;
+        } else {
+          messageId = sessionManager.appendMessage(messageBody);
+        }
+      } else {
+        messageId = sessionManager.appendMessage(messageBody);
+      }
+    } else {
+      messageId = sessionManager.appendMessage(messageBody);
+    }
+
     return { ok: true, messageId, message: messageBody };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };

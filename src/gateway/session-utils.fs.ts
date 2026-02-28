@@ -11,6 +11,7 @@ import {
 } from "../config/sessions.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { hasInterSessionUserProvenance } from "../sessions/input-provenance.js";
+import { ensureAeonLoaded } from "../utils/aeon-loader.js";
 import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
 import { extractToolCallNames, hasToolCall } from "../utils/transcript-tools.js";
 import { stripEnvelope } from "./chat-sanitize.js";
@@ -75,6 +76,20 @@ export function readSessionMessages(
   storePath: string | undefined,
   sessionFile?: string,
 ): unknown[] {
+  const AeonMemoryPlugin = ensureAeonLoaded();
+
+  // ── AEON MEMORY: Optional read path (aeon-memory plugin) ──
+  if (AeonMemoryPlugin) {
+    const aeon = AeonMemoryPlugin.getInstance();
+    if (aeon && aeon.isAvailable()) {
+      const aeonMessages = aeon.getTranscript(sessionId);
+      if (aeonMessages.length > 0) {
+        return aeonMessages;
+      }
+    }
+  }
+
+  // ── LEGACY JSONL FALLBACK (for pre-Aeon sessions) ──
   const candidates = resolveSessionTranscriptCandidates(sessionId, storePath, sessionFile);
 
   const filePath = candidates.find((p) => fs.existsSync(p));

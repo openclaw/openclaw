@@ -233,7 +233,7 @@
     "node-llama-cpp": "3.16.2"
   },
   "optionalDependencies": {
-    "@discordjs/opus": "^0.10.0"
+    "aeon-memory": "1.1.0"
   },
   "engines": {
     "node": ">=22.12.0"
@@ -259,6 +259,7 @@
       "@matrix-org/matrix-sdk-crypto-nodejs",
       "@napi-rs/canvas",
       "@whiskeysockets/baileys",
+      "aeon-memory",
       "authenticate-pam",
       "esbuild",
       "koffi",

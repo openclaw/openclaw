@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
+import { getAeonPlugin, loadAeonMemoryAsync } from "../../utils/aeon-loader.js";
 import { resolveDefaultSessionStorePath } from "./paths.js";
 import { resolveAndPersistSessionFile } from "./session-file.js";
 import { loadSessionStore } from "./store.js";
@@ -129,12 +130,13 @@ export async function appendAssistantMessageToSessionTranscript(params: {
   await ensureSessionHeader({ sessionFile, sessionId: entry.sessionId });
 
   const sessionManager = SessionManager.open(sessionFile);
-  sessionManager.appendMessage({
-    role: "assistant",
-    content: [{ type: "text", text: mirrorText }],
-    api: "openai-responses",
-    provider: "openclaw",
-    model: "delivery-mirror",
+
+  const mirrorMessage = {
+    role: "assistant" as const,
+    content: [{ type: "text" as const, text: mirrorText }],
+    api: "openai-responses" as const,
+    provider: "openclaw" as const,
+    model: "delivery-mirror" as const,
     usage: {
       input: 0,
       output: 0,
@@ -149,9 +151,23 @@ export async function appendAssistantMessageToSessionTranscript(params: {
         total: 0,
       },
     },
-    stopReason: "stop",
+    stopReason: "stop" as const,
     timestamp: Date.now(),
-  });
+  };
+
+  await loadAeonMemoryAsync();
+
+  const AeonMemoryPlugin = getAeonPlugin();
+  if (AeonMemoryPlugin) {
+    const aeon = AeonMemoryPlugin.getInstance();
+    if (aeon && aeon.isAvailable()) {
+      aeon.saveTurn(entry.sessionId, mirrorMessage);
+    } else {
+      sessionManager.appendMessage(mirrorMessage);
+    }
+  } else {
+    sessionManager.appendMessage(mirrorMessage);
+  }
 
   emitSessionTranscriptUpdate(sessionFile);
   return { ok: true, sessionFile };

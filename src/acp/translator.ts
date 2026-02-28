@@ -1,25 +1,25 @@
 import { randomUUID } from "node:crypto";
-import type {
-  Agent,
-  AgentSideConnection,
-  AuthenticateRequest,
-  AuthenticateResponse,
-  CancelNotification,
-  InitializeRequest,
-  InitializeResponse,
-  ListSessionsRequest,
-  ListSessionsResponse,
-  LoadSessionRequest,
-  LoadSessionResponse,
-  NewSessionRequest,
-  NewSessionResponse,
-  PromptRequest,
-  PromptResponse,
-  SetSessionModeRequest,
-  SetSessionModeResponse,
-  StopReason,
+import {
+  type Agent,
+  type AgentSideConnection,
+  type AuthenticateRequest,
+  type AuthenticateResponse,
+  type CancelNotification,
+  type InitializeRequest,
+  type InitializeResponse,
+  type ListSessionsRequest,
+  type ListSessionsResponse,
+  type LoadSessionRequest,
+  type LoadSessionResponse,
+  type NewSessionRequest,
+  type NewSessionResponse,
+  PROTOCOL_VERSION,
+  type PromptRequest,
+  type PromptResponse,
+  type SetSessionModeRequest,
+  type SetSessionModeResponse,
+  type StopReason,
 } from "@agentclientprotocol/sdk";
-import { PROTOCOL_VERSION } from "@agentclientprotocol/sdk";
 import type { GatewayClient } from "../gateway/client.js";
 import type { EventFrame } from "../gateway/protocol/index.js";
 import type { SessionsListResult } from "../gateway/session-utils.js";

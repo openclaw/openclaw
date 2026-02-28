@@ -1,6 +1,16 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+// Ensure aeon-memory is always absent in these tests — they test the legacy path.
+vi.mock("../utils/aeon-loader.js", () => ({
+  ensureAeonLoaded: () => null,
+  getAeonPlugin: () => null,
+  loadAeonMemoryAsync: async () => {},
+  triggerAeonLoad: () => {},
+  _resetForTesting: () => {},
+}));
+
 import { installSessionToolResultGuard } from "./session-tool-result-guard.js";
 
 type AppendMessage = Parameters<SessionManager["appendMessage"]>[0];

@@ -5,6 +5,7 @@ import type {
   PluginHookBeforeMessageWriteResult,
 } from "../plugins/types.js";
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
+import { ensureAeonLoaded, getAeonPlugin } from "../utils/aeon-loader.js";
 import {
   HARD_MAX_TOOL_RESULT_CHARS,
   truncateToolResultMessage,
@@ -69,6 +70,8 @@ export function installSessionToolResultGuard(
   flushPendingToolResults: () => void;
   getPendingIds: () => string[];
 } {
+  ensureAeonLoaded();
+
   const originalAppend = sessionManager.appendMessage.bind(sessionManager);
   const pending = new Map<string, string | undefined>();
   const persistMessage = (message: AgentMessage) => {
@@ -120,7 +123,20 @@ export function installSessionToolResultGuard(
           }),
         );
         if (flushed) {
-          originalAppend(flushed as never);
+          if (getAeonPlugin()) {
+            const aeon = getAeonPlugin().getInstance();
+            if (aeon && aeon.isAvailable()) {
+              const sid = (sessionManager as { getSessionId?: () => string }).getSessionId?.();
+              if (!sid) {
+                throw new Error("Cannot persist to Aeon: sessionId unavailable");
+              }
+              aeon.saveTurn(sid, flushed);
+            } else {
+              originalAppend(flushed as never);
+            }
+          } else {
+            originalAppend(flushed as never);
+          }
         }
       }
     }
@@ -128,8 +144,8 @@ export function installSessionToolResultGuard(
   };
 
   const guardedAppend = (message: AgentMessage) => {
-    let nextMessage = message;
     const role = (message as { role?: unknown }).role;
+    let nextMessage = message;
     if (role === "assistant") {
       const sanitized = sanitizeToolCallInputs([message], {
         allowedToolNames: opts?.allowedToolNames,
@@ -163,6 +179,17 @@ export function installSessionToolResultGuard(
       if (!persisted) {
         return undefined;
       }
+      if (getAeonPlugin()) {
+        const aeon = getAeonPlugin().getInstance();
+        if (aeon && aeon.isAvailable()) {
+          const sid = (sessionManager as { getSessionId?: () => string }).getSessionId?.();
+          if (!sid) {
+            throw new Error("Cannot persist to Aeon: sessionId unavailable");
+          }
+          aeon.saveTurn(sid, persisted);
+          return `aeon-${Date.now()}`;
+        }
+      }
       return originalAppend(persisted as never);
     }
 
@@ -193,7 +220,22 @@ export function installSessionToolResultGuard(
     if (!finalMessage) {
       return undefined;
     }
-    const result = originalAppend(finalMessage as never);
+    let result: string;
+    if (getAeonPlugin()) {
+      const aeon = getAeonPlugin().getInstance();
+      if (aeon && aeon.isAvailable()) {
+        const sid = (sessionManager as { getSessionId?: () => string }).getSessionId?.();
+        if (!sid) {
+          throw new Error("Cannot persist to Aeon: sessionId unavailable");
+        }
+        aeon.saveTurn(sid, finalMessage);
+        result = `aeon-${Date.now()}`;
+      } else {
+        result = originalAppend(finalMessage as never) as unknown as string;
+      }
+    } else {
+      result = originalAppend(finalMessage as never) as unknown as string;
+    }
 
     const sessionFile = (
       sessionManager as { getSessionFile?: () => string | null }
@@ -212,7 +254,7 @@ export function installSessionToolResultGuard(
   };
 
   // Monkey-patch appendMessage with our guarded version.
-  sessionManager.appendMessage = guardedAppend as SessionManager["appendMessage"];
+  sessionManager.appendMessage = guardedAppend as unknown as SessionManager["appendMessage"];
 
   return {
     flushPendingToolResults,
