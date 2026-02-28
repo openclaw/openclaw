@@ -212,11 +212,7 @@ async function handlePaste(e: ClipboardEvent, props: ChatProps) {
       )
     ).filter((att): att is ChatAttachment => att !== null);
 
-    props.onAttachmentsChange(
-      typeof props.attachments === "function"
-        ? props.attachments((prev: ChatAttachment[]) => [...prev, ...newAttachments])
-        : [...(props.attachments ?? []), ...newAttachments],
-    );
+    props.onAttachmentsChange([...(props.attachments ?? []), ...newAttachments]);
   } catch (err) {
     console.error("Failed to read pasted files:", err);
   }
@@ -278,11 +274,7 @@ async function handleDrop(e: DragEvent, props: ChatProps) {
       )
     ).filter((att): att is ChatAttachment => att !== null);
 
-    props.onAttachmentsChange(
-      typeof props.attachments === "function"
-        ? props.attachments((prev: ChatAttachment[]) => [...prev, ...newAttachments])
-        : [...(props.attachments ?? []), ...newAttachments],
-    );
+    props.onAttachmentsChange([...(props.attachments ?? []), ...newAttachments]);
   } catch (err) {
     console.error("Failed to read dropped files:", err);
   }
