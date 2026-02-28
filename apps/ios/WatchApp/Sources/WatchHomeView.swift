@@ -52,7 +52,7 @@ struct WatchHomeView: View {
     private var messageContent: some View {
         WatchMessageCard(
             title: store.title,
-            body: store.body,
+            message: store.body,
             details: store.details,
             risk: store.risk,
             isExpired: store.isExpired)
@@ -78,7 +78,20 @@ struct WatchHomeView: View {
 
     @ViewBuilder
     private var actionButtons: some View {
-        ForEach(Array(store.actions.enumerated()), id: \.element.id) { index, action in
+        // First action gets Double Tap gesture shortcut
+        if let first = store.actions.first {
+            WatchActionButton(
+                label: first.label,
+                role: role(for: first),
+                isLoading: store.isReplySending,
+                isDisabled: store.isExpired)
+            {
+                onAction?(first)
+            }
+            .handGestureShortcut(.primaryAction)
+        }
+
+        ForEach(store.actions.dropFirst()) { action in
             WatchActionButton(
                 label: action.label,
                 role: role(for: action),
@@ -87,8 +100,6 @@ struct WatchHomeView: View {
             {
                 onAction?(action)
             }
-            // Double Tap gesture triggers the first action button
-            .handGestureShortcut(index == 0 ? .primaryAction : .never)
         }
     }
 }

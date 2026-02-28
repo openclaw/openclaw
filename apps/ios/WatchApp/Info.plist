@@ -20,6 +20,8 @@
 	<string>2026.2.27</string>
 	<key>CFBundleVersion</key>
 	<string>20260227</string>
+	<key>WKApplication</key>
+	<true/>
 	<key>WKCompanionAppBundleIdentifier</key>
 	<string>$(OPENCLAW_APP_BUNDLE_ID)</string>
 </dict>

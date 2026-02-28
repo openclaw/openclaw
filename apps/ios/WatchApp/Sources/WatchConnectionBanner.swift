@@ -37,7 +37,7 @@ struct WatchConnectionBanner: View {
                 .transition(.opacity)
                 .accessibilityElement(children: .combine)
                 .accessibilityLabel(label)
-                .accessibilityAddTraits(.isStatusElement)
+                .accessibilityAddTraits(.updatesFrequently)
             }
         }
         .onChange(of: isConnected) { _, connected in

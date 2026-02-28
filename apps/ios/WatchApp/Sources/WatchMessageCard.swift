@@ -2,7 +2,7 @@ import SwiftUI
 
 struct WatchMessageCard: View {
     let title: String
-    let body: String
+    let message: String
     var details: String?
     var risk: String?
     var isExpired: Bool = false
@@ -15,7 +15,7 @@ struct WatchMessageCard: View {
             parts.append("\(risk) risk")
         }
         parts.append(title)
-        parts.append(body)
+        parts.append(message)
         if let details, !details.isEmpty {
             parts.append(details)
         }
@@ -35,7 +35,7 @@ struct WatchMessageCard: View {
                 .font(WatchDesignTokens.fontTitle)
                 .lineLimit(2)
 
-            Text(self.body)
+            Text(message)
                 .font(WatchDesignTokens.fontBody)
                 .fixedSize(horizontal: false, vertical: true)
 

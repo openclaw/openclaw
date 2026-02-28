@@ -41,7 +41,7 @@ struct WatchNotifyMessage: Sendable {
         var replyStatusAt: Date?
     }
 
-    static let persistedStateKey = "watch.inbox.state.v1"
+    nonisolated static let persistedStateKey = "watch.inbox.state.v1"
     private let defaults: UserDefaults
 
     var title = "OpenClaw"

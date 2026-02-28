@@ -19,7 +19,6 @@ struct OpenClawWatchApp: App {
                 }
                 .navigationTitle("OpenClaw")
             }
-            .toolbarStyle(.glass)
             .onOpenURL { _ in
                 // Widget taps open openclaw://watch/inbox — the app already shows the
                 // inbox as the root view, so no navigation is needed.

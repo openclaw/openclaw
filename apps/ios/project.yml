@@ -177,7 +177,6 @@ targets:
         excludes:
           - Tests/**
     dependencies:
-      - package: OpenClawKit
       - sdk: WatchConnectivity.framework
       - sdk: UserNotifications.framework
       - sdk: WidgetKit.framework
@@ -204,6 +203,7 @@ targets:
         CFBundleDisplayName: OpenClaw
         CFBundleShortVersionString: "2026.2.27"
         CFBundleVersion: "20260227"
+        WKApplication: true
         WKCompanionAppBundleIdentifier: "$(OPENCLAW_APP_BUNDLE_ID)"
 
   OpenClawTests:

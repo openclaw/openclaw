@@ -33,20 +33,20 @@ import SwiftUI
 #Preview("Card: Normal") {
     WatchMessageCard(
         title: "Daily Summary",
-        body: "3 tasks completed, 1 pending review.")
+        message: "3 tasks completed, 1 pending review.")
 }
 
 #Preview("Card: High Risk") {
     WatchMessageCard(
         title: "Deploy to Production",
-        body: "Merge main into release branch and trigger CI pipeline.",
+        message: "Merge main into release branch and trigger CI pipeline.",
         risk: "high")
 }
 
 #Preview("Card: Expired") {
     WatchMessageCard(
         title: "Session Token Refresh",
-        body: "Token expired 5 minutes ago.",
+        message: "Token expired 5 minutes ago.",
         details: "Session: abc-123",
         isExpired: true)
 }
