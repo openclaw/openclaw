@@ -394,6 +394,8 @@ importers:
 
   extensions/open-prose: {}
 
+  extensions/serpapi-search: {}
+
   extensions/signal: {}
 
   extensions/slack: {}

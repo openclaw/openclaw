@@ -18,7 +18,11 @@
  * in the web_search tool call — zero extra token cost.
  */
 
-import type { OpenClawPluginModule } from "openclaw/plugin-sdk";
+import type {
+  OpenClawPluginApi,
+  OpenClawPluginDefinition,
+  SearchProviderContext,
+} from "openclaw/plugin-sdk";
 
 /** Supported engine → SerpApi engine mapping */
 const ENGINE_MAP: Record<string, string> = {
@@ -224,7 +228,7 @@ function extractResults(
   return [];
 }
 
-const plugin: OpenClawPluginModule = {
+const plugin: OpenClawPluginDefinition = {
   id: "serpapi-search",
   name: "SerpApi Search Provider",
   description:
