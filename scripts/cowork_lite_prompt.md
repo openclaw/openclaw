@@ -7,7 +7,7 @@
 
 ## Step 0: 맥락 로딩
 
-1. `~/knowledge/000 설계/006 루트-시스템-선언.md` — 시스템 전체 선언
+1. `~/knowledge/000 설계/010 적용중/006 루트-시스템-선언.md` — 시스템 전체 선언
 2. `~/.openclaw/workspace/memory/system-digest/latest.json` — 최신 진단
 3. `~/knowledge/800 운영/850 실행/cowork-log.md` — 이전 실행 이력
 

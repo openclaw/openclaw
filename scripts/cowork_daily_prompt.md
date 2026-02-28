@@ -13,7 +13,7 @@
 ## 수행 절차
 
 ### Step 0: 루트 선언 읽기
-`~/knowledge/000 설계/006 루트-시스템-선언.md` — 시스템 전체 선언, 권한, 제약 확인
+`~/knowledge/000 설계/010 적용중/006 루트-시스템-선언.md` — 시스템 전체 선언, 권한, 제약 확인
 
 ### Step 1: 진단 읽기
 1. `~/.openclaw/workspace/memory/system-digest/latest.json` — 시스템 전체 진단
