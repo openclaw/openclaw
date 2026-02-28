@@ -5,29 +5,27 @@ import "./test-helpers/fast-coding-tools.js";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 
-vi.mock("@mariozechner/pi-coding-agent", async () => {
-  const actual = await vi.importActual<typeof import("@mariozechner/pi-coding-agent")>(
-    "@mariozechner/pi-coding-agent",
-  );
-
+function createMockUsage(input: number, output: number) {
   return {
-    ...actual,
-    createAgentSession: async (
-      ...args: Parameters<typeof actual.createAgentSession>
-    ): ReturnType<typeof actual.createAgentSession> => {
-      const result = await actual.createAgentSession(...args);
-      const modelId = (args[0] as { model?: { id?: string } } | undefined)?.model?.id;
-      if (modelId === "mock-throw") {
-        const session = result.session as { prompt?: (...params: unknown[]) => Promise<unknown> };
-        if (session && typeof session.prompt === "function") {
-          session.prompt = async () => {
-            throw new Error("transport failed");
-          };
-        }
-      }
-      return result;
+    input,
+    output,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: input + output,
+    cost: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      total: 0,
     },
   };
+}
+
+vi.mock("@mariozechner/pi-coding-agent", async () => {
+  return await vi.importActual<typeof import("@mariozechner/pi-coding-agent")>(
+    "@mariozechner/pi-coding-agent",
+  );
 });
 
 vi.mock("@mariozechner/pi-ai", async () => {
@@ -40,20 +38,7 @@ vi.mock("@mariozechner/pi-ai", async () => {
     api: model.api,
     provider: model.provider,
     model: model.id,
-    usage: {
-      input: 1,
-      output: 1,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 2,
-      cost: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        total: 0,
-      },
-    },
+    usage: createMockUsage(1, 1),
     timestamp: Date.now(),
   });
 
@@ -65,20 +50,7 @@ vi.mock("@mariozechner/pi-ai", async () => {
     api: model.api,
     provider: model.provider,
     model: model.id,
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        total: 0,
-      },
-    },
+    usage: createMockUsage(0, 0),
     timestamp: Date.now(),
   });
 
@@ -242,61 +214,37 @@ const runDefaultEmbeddedTurn = async (sessionFile: string, prompt: string, sessi
   });
 };
 
-describe.concurrent("runEmbeddedPiAgent", () => {
+describe("runEmbeddedPiAgent", () => {
   it("handles prompt error paths without dropping user state", async () => {
-    for (const testCase of [
-      {
-        label: "assistant error response keeps user message",
-        model: "mock-error",
-        prompt: "boom",
-        runIdPrefix: "prompt-error",
-        expectReject: false,
-      },
-      {
-        label: "transport error fails fast before writing transcript",
-        model: "mock-throw",
-        prompt: "transport error",
-        runIdPrefix: "transport-error",
-        expectReject: true,
-      },
-    ] as const) {
-      const sessionFile = nextSessionFile();
-      const cfg = makeOpenAiConfig([testCase.model]);
-      const sessionKey = nextSessionKey();
-      const execution = runEmbeddedPiAgent({
-        sessionId: "session:test",
-        sessionKey,
-        sessionFile,
-        workspaceDir,
-        config: cfg,
-        prompt: testCase.prompt,
-        provider: "openai",
-        model: testCase.model,
-        timeoutMs: 5_000,
-        agentDir,
-        runId: nextRunId(testCase.runIdPrefix),
-        enqueue: immediateEnqueue,
-      });
+    const sessionFile = nextSessionFile();
+    const cfg = makeOpenAiConfig(["mock-error"]);
+    const sessionKey = nextSessionKey();
+    const result = await runEmbeddedPiAgent({
+      sessionId: "session:test",
+      sessionKey,
+      sessionFile,
+      workspaceDir,
+      config: cfg,
+      prompt: "boom",
+      provider: "openai",
+      model: "mock-error",
+      timeoutMs: 5_000,
+      agentDir,
+      runId: nextRunId("prompt-error"),
+      enqueue: immediateEnqueue,
+    });
+    expect(result.payloads?.[0]?.isError).toBe(true);
 
-      if (testCase.expectReject) {
-        await expect(execution, testCase.label).rejects.toThrow("transport failed");
-        await expect(fs.stat(sessionFile), testCase.label).rejects.toBeTruthy();
-      } else {
-        const result = await execution;
-        expect(result.payloads?.[0]?.isError, testCase.label).toBe(true);
-
-        const messages = await readSessionMessages(sessionFile);
-        const userIndex = messages.findIndex(
-          (message) => message?.role === "user" && textFromContent(message.content) === "boom",
-        );
-        expect(userIndex, testCase.label).toBeGreaterThanOrEqual(0);
-      }
-    }
+    const messages = await readSessionMessages(sessionFile);
+    const userIndex = messages.findIndex(
+      (message) => message?.role === "user" && textFromContent(message.content) === "boom",
+    );
+    expect(userIndex).toBeGreaterThanOrEqual(0);
   });
 
   it(
     "appends new user + assistant after existing transcript entries",
-    { timeout: 90_000 },
+    { timeout: 20_000 },
     async () => {
       const sessionFile = nextSessionFile();
       const sessionKey = nextSessionKey();
@@ -314,20 +262,7 @@ describe.concurrent("runEmbeddedPiAgent", () => {
         api: "openai-responses",
         provider: "openai",
         model: "mock-1",
-        usage: {
-          input: 1,
-          output: 1,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 2,
-          cost: {
-            input: 0,
-            output: 0,
-            cacheRead: 0,
-            cacheWrite: 0,
-            total: 0,
-          },
-        },
+        usage: createMockUsage(1, 1),
         timestamp: Date.now(),
       });
 

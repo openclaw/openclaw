@@ -5,6 +5,7 @@ import {
   type GatewayClientMode,
   type GatewayClientName,
 } from "../../../src/gateway/protocol/client-info.js";
+import { readConnectErrorDetailCode } from "../../../src/gateway/protocol/connect-error-details.js";
 import { clearDeviceAuthToken, loadDeviceAuthToken, storeDeviceAuthToken } from "./device-auth.ts";
 import { loadOrCreateDeviceIdentity, signDevicePayload } from "./device-identity.ts";
 import { generateUUID } from "./uuid.ts";
@@ -25,9 +26,37 @@ export type GatewayResponseFrame = {
   error?: { code: string; message: string; details?: unknown };
 };
 
+export type GatewayErrorInfo = {
+  code: string;
+  message: string;
+  details?: unknown;
+};
+
+export class GatewayRequestError extends Error {
+  readonly gatewayCode: string;
+  readonly details?: unknown;
+
+  constructor(error: GatewayErrorInfo) {
+    super(error.message);
+    this.name = "GatewayRequestError";
+    this.gatewayCode = error.code;
+    this.details = error.details;
+  }
+}
+
+export function resolveGatewayErrorDetailCode(
+  error: { details?: unknown } | null | undefined,
+): string | null {
+  return readConnectErrorDetailCode(error?.details);
+}
+
 export type GatewayHelloOk = {
   type: "hello-ok";
   protocol: number;
+  server?: {
+    version?: string;
+    connId?: string;
+  };
   features?: { methods?: string[]; events?: string[] };
   snapshot?: unknown;
   auth?: {
@@ -55,19 +84,12 @@ export type GatewayBrowserClientOptions = {
   instanceId?: string;
   onHello?: (hello: GatewayHelloOk) => void;
   onEvent?: (evt: GatewayEventFrame) => void;
-  onClose?: (info: { code: number; reason: string }) => void;
+  onClose?: (info: { code: number; reason: string; error?: GatewayErrorInfo }) => void;
   onGap?: (info: { expected: number; received: number }) => void;
 };
 
 // 4008 = application-defined code (browser rejects 1008 "Policy Violation")
 const CONNECT_FAILED_CLOSE_CODE = 4008;
-const DEFAULT_OPERATOR_CONNECT_SCOPES = [
-  "operator.admin",
-  "operator.read",
-  "operator.write",
-  "operator.approvals",
-  "operator.pairing",
-];
 
 export class GatewayBrowserClient {
   private ws: WebSocket | null = null;
@@ -78,6 +100,7 @@ export class GatewayBrowserClient {
   private connectSent = false;
   private connectTimer: number | null = null;
   private backoffMs = 800;
+  private pendingConnectError: GatewayErrorInfo | undefined;
 
   constructor(private opts: GatewayBrowserClientOptions) {}
 
@@ -90,6 +113,7 @@ export class GatewayBrowserClient {
     this.closed = true;
     this.ws?.close();
     this.ws = null;
+    this.pendingConnectError = undefined;
     this.flushPending(new Error("gateway client stopped"));
   }
 
@@ -106,9 +130,11 @@ export class GatewayBrowserClient {
     this.ws.addEventListener("message", (ev) => this.handleMessage(String(ev.data ?? "")));
     this.ws.addEventListener("close", (ev) => {
       const reason = String(ev.reason ?? "");
+      const connectError = this.pendingConnectError;
+      this.pendingConnectError = undefined;
       this.ws = null;
       this.flushPending(new Error(`gateway closed (${ev.code}): ${reason}`));
-      this.opts.onClose?.({ code: ev.code, reason });
+      this.opts.onClose?.({ code: ev.code, reason, error: connectError });
       this.scheduleReconnect();
     });
     this.ws.addEventListener("error", () => {
@@ -136,11 +162,6 @@ export class GatewayBrowserClient {
     if (this.connectSent) {
       return;
     }
-    const nonce = this.connectNonce?.trim() ?? "";
-    if (!nonce) {
-      this.ws?.close(CONNECT_FAILED_CLOSE_CODE, "connect challenge missing nonce");
-      return;
-    }
     this.connectSent = true;
     if (this.connectTimer !== null) {
       window.clearTimeout(this.connectTimer);
@@ -152,9 +173,10 @@ export class GatewayBrowserClient {
     // Gateways may reject this unless gateway.controlUi.allowInsecureAuth is enabled.
     const isSecureContext = typeof crypto !== "undefined" && !!crypto.subtle;
 
-    const scopes = DEFAULT_OPERATOR_CONNECT_SCOPES;
+    const scopes = ["operator.admin", "operator.approvals", "operator.pairing"];
     const role = "operator";
     let deviceIdentity: Awaited<ReturnType<typeof loadOrCreateDeviceIdentity>> | null = null;
+    let canFallbackToShared = false;
     let authToken = this.opts.token;
 
     if (isSecureContext) {
@@ -164,6 +186,7 @@ export class GatewayBrowserClient {
         role,
       })?.token;
       authToken = storedToken ?? this.opts.token;
+      canFallbackToShared = Boolean(storedToken && this.opts.token);
     }
     const auth =
       authToken || this.opts.password
@@ -185,6 +208,7 @@ export class GatewayBrowserClient {
 
     if (isSecureContext && deviceIdentity) {
       const signedAtMs = Date.now();
+      const nonce = this.connectNonce ?? "";
       const payload = buildDeviceAuthPayload({
         deviceId: deviceIdentity.deviceId,
         clientId: this.opts.clientName ?? GATEWAY_CLIENT_NAMES.CONTROL_UI,
@@ -236,12 +260,17 @@ export class GatewayBrowserClient {
         this.backoffMs = 800;
         this.opts.onHello?.(hello);
       })
-      .catch(() => {
-        // Clear stale device token on any connect failure so the next attempt
-        // falls back to the shared gateway token (if present) or retries without
-        // a cached device token. Without this, a rotated/revoked device token
-        // causes an infinite mismatch loop when no shared token is configured.
-        if (deviceIdentity) {
+      .catch((err: unknown) => {
+        if (err instanceof GatewayRequestError) {
+          this.pendingConnectError = {
+            code: err.gatewayCode,
+            message: err.message,
+            details: err.details,
+          };
+        } else {
+          this.pendingConnectError = undefined;
+        }
+        if (canFallbackToShared && deviceIdentity) {
           clearDeviceAuthToken({ deviceId: deviceIdentity.deviceId, role });
         }
         this.ws?.close(CONNECT_FAILED_CLOSE_CODE, "connect failed");
@@ -262,12 +291,10 @@ export class GatewayBrowserClient {
       if (evt.event === "connect.challenge") {
         const payload = evt.payload as { nonce?: unknown } | undefined;
         const nonce = payload && typeof payload.nonce === "string" ? payload.nonce : null;
-        if (!nonce || nonce.trim().length === 0) {
-          this.ws?.close(CONNECT_FAILED_CLOSE_CODE, "connect challenge missing nonce");
-          return;
+        if (nonce) {
+          this.connectNonce = nonce;
+          void this.sendConnect();
         }
-        this.connectNonce = nonce.trim();
-        void this.sendConnect();
         return;
       }
       const seq = typeof evt.seq === "number" ? evt.seq : null;
@@ -295,7 +322,13 @@ export class GatewayBrowserClient {
       if (res.ok) {
         pending.resolve(res.payload);
       } else {
-        pending.reject(new Error(res.error?.message ?? "request failed"));
+        pending.reject(
+          new GatewayRequestError({
+            code: res.error?.code ?? "UNAVAILABLE",
+            message: res.error?.message ?? "request failed",
+            details: res.error?.details,
+          }),
+        );
       }
       return;
     }
@@ -321,10 +354,7 @@ export class GatewayBrowserClient {
       window.clearTimeout(this.connectTimer);
     }
     this.connectTimer = window.setTimeout(() => {
-      if (this.connectSent || this.ws?.readyState !== WebSocket.OPEN) {
-        return;
-      }
-      this.ws?.close(CONNECT_FAILED_CLOSE_CODE, "connect challenge timeout");
-    }, 2_000);
+      void this.sendConnect();
+    }, 750);
   }
 }

@@ -1,6 +1,5 @@
 import { html, nothing } from "lit";
 import { formatRelativeTimestamp } from "../format.ts";
-import { icons } from "../icons.ts";
 import { pathForTab } from "../navigation.ts";
 import { formatSessionTokens } from "../presenter.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../types.ts";
@@ -14,23 +13,12 @@ export type SessionsProps = {
   includeGlobal: boolean;
   includeUnknown: boolean;
   basePath: string;
-  searchQuery: string;
-  sortColumn: "key" | "kind" | "updated" | "tokens";
-  sortDir: "asc" | "desc";
-  page: number;
-  pageSize: number;
-  actionsOpenKey: string | null;
   onFiltersChange: (next: {
     activeMinutes: string;
     limit: string;
     includeGlobal: boolean;
     includeUnknown: boolean;
   }) => void;
-  onSearchChange: (query: string) => void;
-  onSortChange: (column: "key" | "kind" | "updated" | "tokens", dir: "asc" | "desc") => void;
-  onPageChange: (page: number) => void;
-  onPageSizeChange: (size: number) => void;
-  onActionsOpenChange: (key: string | null) => void;
   onRefresh: () => void;
   onPatch: (
     key: string,
@@ -53,7 +41,6 @@ const VERBOSE_LEVELS = [
   { value: "full", label: "full" },
 ] as const;
 const REASONING_LEVELS = ["", "off", "on", "stream"] as const;
-const PAGE_SIZES = [10, 25, 50, 100] as const;
 
 function normalizeProviderId(provider?: string | null): string {
   if (!provider) {
@@ -120,110 +107,24 @@ function resolveThinkLevelPatchValue(value: string, isBinary: boolean): string |
   return value;
 }
 
-function filterRows(rows: GatewaySessionRow[], query: string): GatewaySessionRow[] {
-  const q = query.trim().toLowerCase();
-  if (!q) {
-    return rows;
-  }
-  return rows.filter((row) => {
-    const key = (row.key ?? "").toLowerCase();
-    const label = (row.label ?? "").toLowerCase();
-    const kind = (row.kind ?? "").toLowerCase();
-    const displayName = (row.displayName ?? "").toLowerCase();
-    return key.includes(q) || label.includes(q) || kind.includes(q) || displayName.includes(q);
-  });
-}
-
-function sortRows(
-  rows: GatewaySessionRow[],
-  column: "key" | "kind" | "updated" | "tokens",
-  dir: "asc" | "desc",
-): GatewaySessionRow[] {
-  const cmp = dir === "asc" ? 1 : -1;
-  return [...rows].toSorted((a, b) => {
-    let diff = 0;
-    switch (column) {
-      case "key":
-        diff = (a.key ?? "").localeCompare(b.key ?? "");
-        break;
-      case "kind":
-        diff = (a.kind ?? "").localeCompare(b.kind ?? "");
-        break;
-      case "updated": {
-        const au = a.updatedAt ?? 0;
-        const bu = b.updatedAt ?? 0;
-        diff = au - bu;
-        break;
-      }
-      case "tokens": {
-        const at = a.totalTokens ?? a.inputTokens ?? a.outputTokens ?? 0;
-        const bt = b.totalTokens ?? b.inputTokens ?? b.outputTokens ?? 0;
-        diff = at - bt;
-        break;
-      }
-    }
-    return diff * cmp;
-  });
-}
-
-function paginateRows<T>(rows: T[], page: number, pageSize: number): T[] {
-  const start = page * pageSize;
-  return rows.slice(start, start + pageSize);
-}
-
 export function renderSessions(props: SessionsProps) {
-  const rawRows = props.result?.sessions ?? [];
-  const filtered = filterRows(rawRows, props.searchQuery);
-  const sorted = sortRows(filtered, props.sortColumn, props.sortDir);
-  const totalRows = sorted.length;
-  const totalPages = Math.max(1, Math.ceil(totalRows / props.pageSize));
-  const page = Math.min(props.page, totalPages - 1);
-  const paginated = paginateRows(sorted, page, props.pageSize);
-
-  const sortHeader = (col: "key" | "kind" | "updated" | "tokens", label: string) => {
-    const isActive = props.sortColumn === col;
-    const nextDir = isActive && props.sortDir === "asc" ? ("desc" as const) : ("asc" as const);
-    return html`
-      <th
-        data-sortable
-        data-sort-dir=${isActive ? props.sortDir : ""}
-        @click=${() => props.onSortChange(col, isActive ? nextDir : "desc")}
-      >
-        ${label}
-        <span class="data-table-sort-icon">${icons.arrowUpDown}</span>
-      </th>
-    `;
-  };
-
+  const rows = props.result?.sessions ?? [];
   return html`
-    ${
-      props.actionsOpenKey
-        ? html`
-            <div
-              class="data-table-overlay"
-              @click=${() => props.onActionsOpenChange(null)}
-              aria-hidden="true"
-            ></div>
-          `
-        : nothing
-    }
-    <section class="card" style=${props.actionsOpenKey ? "position: relative; z-index: 41;" : ""}>
-      <div class="row" style="justify-content: space-between; margin-bottom: 12px;">
+    <section class="card">
+      <div class="row" style="justify-content: space-between;">
         <div>
           <div class="card-title">Sessions</div>
-          <div class="card-sub">${props.result ? `Store: ${props.result.path}` : "Active session keys and per-session overrides."}</div>
+          <div class="card-sub">Active session keys and per-session overrides.</div>
         </div>
         <button class="btn" ?disabled=${props.loading} @click=${props.onRefresh}>
           ${props.loading ? "Loading…" : "Refresh"}
         </button>
       </div>
 
-      <div class="filters" style="margin-bottom: 12px;">
-        <label class="field-inline">
-          <span>Active</span>
+      <div class="filters" style="margin-top: 14px;">
+        <label class="field">
+          <span>Active within (minutes)</span>
           <input
-            style="width: 72px;"
-            placeholder="min"
             .value=${props.activeMinutes}
             @input=${(e: Event) =>
               props.onFiltersChange({
@@ -234,10 +135,9 @@ export function renderSessions(props: SessionsProps) {
               })}
           />
         </label>
-        <label class="field-inline">
+        <label class="field">
           <span>Limit</span>
           <input
-            style="width: 64px;"
             .value=${props.limit}
             @input=${(e: Event) =>
               props.onFiltersChange({
@@ -248,7 +148,8 @@ export function renderSessions(props: SessionsProps) {
               })}
           />
         </label>
-        <label class="field-inline checkbox">
+        <label class="field checkbox">
+          <span>Include global</span>
           <input
             type="checkbox"
             .checked=${props.includeGlobal}
@@ -260,9 +161,9 @@ export function renderSessions(props: SessionsProps) {
                 includeUnknown: props.includeUnknown,
               })}
           />
-          <span>Global</span>
         </label>
-        <label class="field-inline checkbox">
+        <label class="field checkbox">
+          <span>Include unknown</span>
           <input
             type="checkbox"
             .checked=${props.includeUnknown}
@@ -274,102 +175,39 @@ export function renderSessions(props: SessionsProps) {
                 includeUnknown: (e.target as HTMLInputElement).checked,
               })}
           />
-          <span>Unknown</span>
         </label>
       </div>
 
       ${
         props.error
-          ? html`<div class="callout danger" style="margin-bottom: 12px;">${props.error}</div>`
+          ? html`<div class="callout danger" style="margin-top: 12px;">${props.error}</div>`
           : nothing
       }
 
-      <div class="data-table-wrapper">
-        <div class="data-table-toolbar">
-          <div class="data-table-search">
-            <input
-              type="text"
-              placeholder="Filter by key, label, kind…"
-              .value=${props.searchQuery}
-              @input=${(e: Event) => props.onSearchChange((e.target as HTMLInputElement).value)}
-            />
-          </div>
-        </div>
+      <div class="muted" style="margin-top: 12px;">
+        ${props.result ? `Store: ${props.result.path}` : ""}
+      </div>
 
-        <div class="data-table-container">
-          <table class="data-table">
-            <thead>
-              <tr>
-                ${sortHeader("key", "Key")}
-                <th>Label</th>
-                ${sortHeader("kind", "Kind")}
-                ${sortHeader("updated", "Updated")}
-                ${sortHeader("tokens", "Tokens")}
-                <th>Thinking</th>
-                <th>Verbose</th>
-                <th>Reasoning</th>
-                <th style="width: 60px;"></th>
-              </tr>
-            </thead>
-            <tbody>
-              ${
-                paginated.length === 0
-                  ? html`
-                      <tr>
-                        <td colspan="9" style="text-align: center; padding: 48px 16px; color: var(--muted)">
-                          No sessions found.
-                        </td>
-                      </tr>
-                    `
-                  : paginated.map((row) =>
-                      renderRow(
-                        row,
-                        props.basePath,
-                        props.onPatch,
-                        props.onDelete,
-                        props.onActionsOpenChange,
-                        props.actionsOpenKey,
-                        props.loading,
-                      ),
-                    )
-              }
-            </tbody>
-          </table>
+      <div class="table" style="margin-top: 16px;">
+        <div class="table-head">
+          <div>Key</div>
+          <div>Label</div>
+          <div>Kind</div>
+          <div>Updated</div>
+          <div>Tokens</div>
+          <div>Thinking</div>
+          <div>Verbose</div>
+          <div>Reasoning</div>
+          <div>Actions</div>
         </div>
-
         ${
-          totalRows > 0
+          rows.length === 0
             ? html`
-                <div class="data-table-pagination">
-                  <div class="data-table-pagination__info">
-                    ${page * props.pageSize + 1}-${Math.min((page + 1) * props.pageSize, totalRows)}
-                    of ${totalRows} row${totalRows === 1 ? "" : "s"}
-                  </div>
-                  <div class="data-table-pagination__controls">
-                    <select
-                      style="height: 32px; padding: 0 8px; font-size: 13px; border-radius: var(--radius-md); border: 1px solid var(--border); background: var(--card);"
-                      .value=${String(props.pageSize)}
-                      @change=${(e: Event) =>
-                        props.onPageSizeChange(Number((e.target as HTMLSelectElement).value))}
-                    >
-                      ${PAGE_SIZES.map((s) => html`<option value=${s}>${s} per page</option>`)}
-                    </select>
-                    <button
-                      ?disabled=${page <= 0}
-                      @click=${() => props.onPageChange(page - 1)}
-                    >
-                      Previous
-                    </button>
-                    <button
-                      ?disabled=${page >= totalPages - 1}
-                      @click=${() => props.onPageChange(page + 1)}
-                    >
-                      Next
-                    </button>
-                  </div>
-                </div>
+                <div class="muted">No sessions found.</div>
               `
-            : nothing
+            : rows.map((row) =>
+                renderRow(row, props.basePath, props.onPatch, props.onDelete, props.loading),
+              )
         }
       </div>
     </section>
@@ -381,8 +219,6 @@ function renderRow(
   basePath: string,
   onPatch: SessionsProps["onPatch"],
   onDelete: SessionsProps["onDelete"],
-  onActionsOpenChange: (key: string | null) => void,
-  actionsOpenKey: string | null,
   disabled: boolean,
 ) {
   const updated = row.updatedAt ? formatRelativeTimestamp(row.updatedAt) : "n/a";
@@ -398,58 +234,36 @@ function renderRow(
     typeof row.displayName === "string" && row.displayName.trim().length > 0
       ? row.displayName.trim()
       : null;
-  const showDisplayName = Boolean(
-    displayName &&
-    displayName !== row.key &&
-    displayName !== (typeof row.label === "string" ? row.label.trim() : ""),
-  );
+  const label = typeof row.label === "string" ? row.label.trim() : "";
+  const showDisplayName = Boolean(displayName && displayName !== row.key && displayName !== label);
   const canLink = row.kind !== "global";
   const chatUrl = canLink
     ? `${pathForTab("chat", basePath)}?session=${encodeURIComponent(row.key)}`
     : null;
-  const isMenuOpen = actionsOpenKey === row.key;
-  const badgeClass =
-    row.kind === "direct"
-      ? "data-table-badge--direct"
-      : row.kind === "group"
-        ? "data-table-badge--group"
-        : row.kind === "global"
-          ? "data-table-badge--global"
-          : "data-table-badge--unknown";
 
   return html`
-    <tr>
-      <td>
-        <div class="mono session-key-cell">
-          ${canLink ? html`<a href=${chatUrl} class="session-link">${row.key}</a>` : row.key}
-          ${
-            showDisplayName
-              ? html`<span class="muted session-key-display-name">${displayName}</span>`
-              : nothing
-          }
-        </div>
-      </td>
-      <td>
+    <div class="table-row">
+      <div class="mono session-key-cell">
+        ${canLink ? html`<a href=${chatUrl} class="session-link">${row.key}</a>` : row.key}
+        ${showDisplayName ? html`<span class="muted session-key-display-name">${displayName}</span>` : nothing}
+      </div>
+      <div>
         <input
           .value=${row.label ?? ""}
           ?disabled=${disabled}
           placeholder="(optional)"
-          style="width: 100%; max-width: 140px; padding: 6px 10px; font-size: 13px; border: 1px solid var(--border); border-radius: var(--radius-sm);"
           @change=${(e: Event) => {
             const value = (e.target as HTMLInputElement).value.trim();
             onPatch(row.key, { label: value || null });
           }}
         />
-      </td>
-      <td>
-        <span class="data-table-badge ${badgeClass}">${row.kind}</span>
-      </td>
-      <td>${updated}</td>
-      <td>${formatSessionTokens(row)}</td>
-      <td>
+      </div>
+      <div>${row.kind}</div>
+      <div>${updated}</div>
+      <div>${formatSessionTokens(row)}</div>
+      <div>
         <select
           ?disabled=${disabled}
-          style="padding: 6px 10px; font-size: 13px; border: 1px solid var(--border); border-radius: var(--radius-sm); min-width: 90px;"
           @change=${(e: Event) => {
             const value = (e.target as HTMLSelectElement).value;
             onPatch(row.key, {
@@ -464,11 +278,10 @@ function renderRow(
               </option>`,
           )}
         </select>
-      </td>
-      <td>
+      </div>
+      <div>
         <select
           ?disabled=${disabled}
-          style="padding: 6px 10px; font-size: 13px; border: 1px solid var(--border); border-radius: var(--radius-sm); min-width: 90px;"
           @change=${(e: Event) => {
             const value = (e.target as HTMLSelectElement).value;
             onPatch(row.key, { verboseLevel: value || null });
@@ -481,11 +294,10 @@ function renderRow(
               </option>`,
           )}
         </select>
-      </td>
-      <td>
+      </div>
+      <div>
         <select
           ?disabled=${disabled}
-          style="padding: 6px 10px; font-size: 13px; border: 1px solid var(--border); border-radius: var(--radius-sm); min-width: 90px;"
           @change=${(e: Event) => {
             const value = (e.target as HTMLSelectElement).value;
             onPatch(row.key, { reasoningLevel: value || null });
@@ -498,53 +310,12 @@ function renderRow(
               </option>`,
           )}
         </select>
-      </td>
-      <td>
-        <div class="data-table-row-actions">
-          <button
-            type="button"
-            class="data-table-row-actions__trigger"
-            aria-label="Open menu"
-            @click=${(e: Event) => {
-              e.stopPropagation();
-              onActionsOpenChange(isMenuOpen ? null : row.key);
-            }}
-          >
-            ${icons.moreHorizontal}
-          </button>
-          ${
-            isMenuOpen
-              ? html`
-                  <div class="data-table-row-actions__menu">
-                    ${
-                      canLink
-                        ? html`
-                            <a
-                              href=${chatUrl}
-                              style="display: block; padding: 8px 12px; font-size: 13px; text-decoration: none; color: var(--text); border-radius: var(--radius-sm);"
-                              @click=${() => onActionsOpenChange(null)}
-                            >
-                              Open in Chat
-                            </a>
-                          `
-                        : nothing
-                    }
-                    <button
-                      type="button"
-                      class="danger"
-                      @click=${() => {
-                        onActionsOpenChange(null);
-                        onDelete(row.key);
-                      }}
-                    >
-                      Delete
-                    </button>
-                  </div>
-                `
-              : nothing
-          }
-        </div>
-      </td>
-    </tr>
+      </div>
+      <div>
+        <button class="btn danger" ?disabled=${disabled} @click=${() => onDelete(row.key)}>
+          Delete
+        </button>
+      </div>
+    </div>
   `;
 }

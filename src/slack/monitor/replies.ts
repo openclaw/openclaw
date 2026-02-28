@@ -16,9 +16,13 @@ export async function deliverReplies(params: {
   runtime: RuntimeEnv;
   textLimit: number;
   replyThreadTs?: string;
+  replyToMode: "off" | "first" | "all";
 }) {
   for (const payload of params.replies) {
-    const threadTs = payload.replyToId ?? params.replyThreadTs;
+    // Keep reply tags opt-in: when replyToMode is off, explicit reply tags
+    // must not force threading.
+    const inlineReplyToId = params.replyToMode === "off" ? undefined : payload.replyToId;
+    const threadTs = inlineReplyToId ?? params.replyThreadTs;
     const mediaList = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
     const text = payload.text ?? "";
     if (!text && mediaList.length === 0) {
@@ -68,12 +72,14 @@ export function resolveSlackThreadTs(params: {
   incomingThreadTs: string | undefined;
   messageTs: string | undefined;
   hasReplied: boolean;
+  isThreadReply?: boolean;
 }): string | undefined {
   const planner = createSlackReplyReferencePlanner({
     replyToMode: params.replyToMode,
     incomingThreadTs: params.incomingThreadTs,
     messageTs: params.messageTs,
     hasReplied: params.hasReplied,
+    isThreadReply: params.isThreadReply,
   });
   return planner.use();
 }
@@ -88,19 +94,14 @@ function createSlackReplyReferencePlanner(params: {
   incomingThreadTs: string | undefined;
   messageTs: string | undefined;
   hasReplied?: boolean;
-  chatType?: "direct" | "channel" | "group";
   isThreadReply?: boolean;
 }) {
-  // When already inside a Slack thread, stay in it — but for DMs where the
-  // "thread" was created by the typing indicator (not a real thread reply),
-  // respect the user's replyToMode setting.
-  // See: https://github.com/openclaw/openclaw/issues/16868
-  const effectiveMode =
-    params.chatType === "direct" && !params.isThreadReply
-      ? params.replyToMode
-      : params.incomingThreadTs
-        ? "all"
-        : params.replyToMode;
+  // Keep backward-compatible behavior: when a thread id is present and caller
+  // does not provide explicit classification, stay in thread. Callers that can
+  // distinguish Slack's auto-populated top-level thread_ts should pass
+  // `isThreadReply: false` to preserve replyToMode behavior.
+  const effectiveIsThreadReply = params.isThreadReply ?? Boolean(params.incomingThreadTs);
+  const effectiveMode = effectiveIsThreadReply ? "all" : params.replyToMode;
   return createReplyReferencePlanner({
     replyToMode: effectiveMode,
     existingId: params.incomingThreadTs,
@@ -114,7 +115,6 @@ export function createSlackReplyDeliveryPlan(params: {
   incomingThreadTs: string | undefined;
   messageTs: string | undefined;
   hasRepliedRef: { value: boolean };
-  chatType?: "direct" | "channel" | "group";
   isThreadReply?: boolean;
 }): SlackReplyDeliveryPlan {
   const replyReference = createSlackReplyReferencePlanner({
@@ -122,7 +122,6 @@ export function createSlackReplyDeliveryPlan(params: {
     incomingThreadTs: params.incomingThreadTs,
     messageTs: params.messageTs,
     hasReplied: params.hasRepliedRef.value,
-    chatType: params.chatType,
     isThreadReply: params.isThreadReply,
   });
   return {

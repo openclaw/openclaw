@@ -38,6 +38,12 @@ const subagentLifecycleHookState = vi.hoisted(() => ({
 const threadBindingMocks = vi.hoisted(() => ({
   unbindThreadBindingsBySessionKey: vi.fn((_params?: unknown) => []),
 }));
+const acpRuntimeMocks = vi.hoisted(() => ({
+  cancel: vi.fn(async () => {}),
+  close: vi.fn(async () => {}),
+  getAcpRuntimeBackend: vi.fn(),
+  requireAcpRuntimeBackend: vi.fn(),
+}));
 
 vi.mock("../auto-reply/reply/queue.js", async () => {
   const actual = await vi.importActual<typeof import("../auto-reply/reply/queue.js")>(
@@ -90,25 +96,45 @@ vi.mock("../discord/monitor/thread-bindings.js", async (importOriginal) => {
   };
 });
 
+vi.mock("../acp/runtime/registry.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../acp/runtime/registry.js")>();
+  return {
+    ...actual,
+    getAcpRuntimeBackend: acpRuntimeMocks.getAcpRuntimeBackend,
+    requireAcpRuntimeBackend: (backendId?: string) => {
+      const backend = acpRuntimeMocks.requireAcpRuntimeBackend(backendId);
+      if (!backend) {
+        throw new Error("missing mocked ACP backend");
+      }
+      return backend;
+    },
+  };
+});
+
 installGatewayTestHooks({ scope: "suite" });
 
 let harness: GatewayServerHarness;
+let sharedSessionStoreDir: string;
+let sharedSessionStorePath: string;
 
 beforeAll(async () => {
   harness = await startGatewayServerHarness();
+  sharedSessionStoreDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-"));
+  sharedSessionStorePath = path.join(sharedSessionStoreDir, "sessions.json");
 });
 
 afterAll(async () => {
   await harness.close();
+  await fs.rm(sharedSessionStoreDir, { recursive: true, force: true });
 });
 
 const openClient = async (opts?: Parameters<typeof connectOk>[1]) => await harness.openClient(opts);
 
 async function createSessionStoreDir() {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-"));
-  const storePath = path.join(dir, "sessions.json");
-  testState.sessionStorePath = storePath;
-  return { dir, storePath };
+  await fs.rm(sharedSessionStoreDir, { recursive: true, force: true });
+  await fs.mkdir(sharedSessionStoreDir, { recursive: true });
+  testState.sessionStorePath = sharedSessionStorePath;
+  return { dir: sharedSessionStoreDir, storePath: sharedSessionStorePath };
 }
 
 async function writeSingleLineSession(dir: string, sessionId: string, content: string) {
@@ -171,6 +197,14 @@ describe("gateway server sessions", () => {
     subagentLifecycleHookMocks.runSubagentEnded.mockClear();
     subagentLifecycleHookState.hasSubagentEndedHook = true;
     threadBindingMocks.unbindThreadBindingsBySessionKey.mockClear();
+    acpRuntimeMocks.cancel.mockClear();
+    acpRuntimeMocks.close.mockClear();
+    acpRuntimeMocks.getAcpRuntimeBackend.mockReset();
+    acpRuntimeMocks.getAcpRuntimeBackend.mockReturnValue(null);
+    acpRuntimeMocks.requireAcpRuntimeBackend.mockReset();
+    acpRuntimeMocks.requireAcpRuntimeBackend.mockImplementation((backendId?: string) =>
+      acpRuntimeMocks.getAcpRuntimeBackend(backendId),
+    );
   });
 
   test("lists and patches session store via sessions.* RPC", async () => {
@@ -197,6 +231,8 @@ describe("gateway server sessions", () => {
         main: {
           sessionId: "sess-main",
           updatedAt: recent,
+          modelProvider: "anthropic",
+          model: "claude-sonnet-4-6",
           inputTokens: 10,
           outputTokens: 20,
           thinkingLevel: "low",
@@ -451,11 +487,13 @@ describe("gateway server sessions", () => {
     const reset = await rpcReq<{
       ok: true;
       key: string;
-      entry: { sessionId: string };
+      entry: { sessionId: string; modelProvider?: string; model?: string };
     }>(ws, "sessions.reset", { key: "agent:main:main" });
     expect(reset.ok).toBe(true);
     expect(reset.payload?.key).toBe("agent:main:main");
     expect(reset.payload?.entry.sessionId).not.toBe("sess-main");
+    expect(reset.payload?.entry.modelProvider).toBe("anthropic");
+    expect(reset.payload?.entry.model).toBe("claude-sonnet-4-6");
     const filesAfterReset = await fs.readdir(dir);
     expect(filesAfterReset.some((f) => f.startsWith("sess-main.jsonl.reset."))).toBe(true);
 
@@ -472,9 +510,7 @@ describe("gateway server sessions", () => {
   });
 
   test("sessions.preview returns transcript previews", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-preview-"));
-    const storePath = path.join(dir, "sessions.json");
-    testState.sessionStorePath = storePath;
+    const { dir } = await createSessionStoreDir();
     const sessionId = "sess-preview";
     const transcriptPath = path.join(dir, `${sessionId}.jsonl`);
     const lines = createToolSummaryPreviewTranscriptLines(sessionId);
@@ -498,9 +534,7 @@ describe("gateway server sessions", () => {
   });
 
   test("sessions.preview resolves legacy mixed-case main alias with custom mainKey", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-preview-alias-"));
-    const storePath = path.join(dir, "sessions.json");
-    testState.sessionStorePath = storePath;
+    const { dir, storePath } = await createSessionStoreDir();
     testState.agentsConfig = { list: [{ id: "ops", default: true }] };
     testState.sessionConfig = { mainKey: "work" };
     const sessionId = "sess-legacy-main";
@@ -533,9 +567,7 @@ describe("gateway server sessions", () => {
   });
 
   test("sessions.resolve and mutators clean legacy main-alias ghost keys", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-cleanup-alias-"));
-    const storePath = path.join(dir, "sessions.json");
-    testState.sessionStorePath = storePath;
+    const { dir, storePath } = await createSessionStoreDir();
     testState.agentsConfig = { list: [{ id: "ops", default: true }] };
     testState.sessionConfig = { mainKey: "work" };
     const sessionId = "sess-alias-cleanup";
@@ -661,6 +693,68 @@ describe("gateway server sessions", () => {
       targetKind: "acp",
       reason: "session-delete",
       sendFarewell: true,
+    });
+
+    ws.close();
+  });
+
+  test("sessions.delete closes ACP runtime handles before removing ACP sessions", async () => {
+    const { dir } = await createSessionStoreDir();
+    await writeSingleLineSession(dir, "sess-main", "hello");
+    await writeSingleLineSession(dir, "sess-acp", "acp");
+
+    await writeSessionStore({
+      entries: {
+        main: { sessionId: "sess-main", updatedAt: Date.now() },
+        "discord:group:dev": {
+          sessionId: "sess-acp",
+          updatedAt: Date.now(),
+          acp: {
+            backend: "acpx",
+            agent: "codex",
+            runtimeSessionName: "runtime:delete",
+            mode: "persistent",
+            state: "idle",
+            lastActivityAt: Date.now(),
+          },
+        },
+      },
+    });
+    acpRuntimeMocks.getAcpRuntimeBackend.mockReturnValue({
+      id: "acpx",
+      runtime: {
+        ensureSession: vi.fn(async () => ({
+          sessionKey: "agent:main:discord:group:dev",
+          backend: "acpx",
+          runtimeSessionName: "runtime:delete",
+        })),
+        runTurn: vi.fn(async function* () {}),
+        cancel: acpRuntimeMocks.cancel,
+        close: acpRuntimeMocks.close,
+      },
+    });
+
+    const { ws } = await openClient();
+    const deleted = await rpcReq<{ ok: true; deleted: boolean }>(ws, "sessions.delete", {
+      key: "discord:group:dev",
+    });
+    expect(deleted.ok).toBe(true);
+    expect(deleted.payload?.deleted).toBe(true);
+    expect(acpRuntimeMocks.close).toHaveBeenCalledWith({
+      handle: {
+        sessionKey: "agent:main:discord:group:dev",
+        backend: "acpx",
+        runtimeSessionName: "runtime:delete",
+      },
+      reason: "session-delete",
+    });
+    expect(acpRuntimeMocks.cancel).toHaveBeenCalledWith({
+      handle: {
+        sessionKey: "agent:main:discord:group:dev",
+        backend: "acpx",
+        runtimeSessionName: "runtime:delete",
+      },
+      reason: "session-delete",
     });
 
     ws.close();
@@ -830,6 +924,57 @@ describe("gateway server sessions", () => {
       targetKind: "acp",
       reason: "session-reset",
       sendFarewell: true,
+    });
+
+    ws.close();
+  });
+
+  test("sessions.reset closes ACP runtime handles for ACP sessions", async () => {
+    const { dir } = await createSessionStoreDir();
+    await writeSingleLineSession(dir, "sess-main", "hello");
+
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-main",
+          updatedAt: Date.now(),
+          acp: {
+            backend: "acpx",
+            agent: "codex",
+            runtimeSessionName: "runtime:reset",
+            mode: "persistent",
+            state: "idle",
+            lastActivityAt: Date.now(),
+          },
+        },
+      },
+    });
+    acpRuntimeMocks.getAcpRuntimeBackend.mockReturnValue({
+      id: "acpx",
+      runtime: {
+        ensureSession: vi.fn(async () => ({
+          sessionKey: "agent:main:main",
+          backend: "acpx",
+          runtimeSessionName: "runtime:reset",
+        })),
+        runTurn: vi.fn(async function* () {}),
+        cancel: vi.fn(async () => {}),
+        close: acpRuntimeMocks.close,
+      },
+    });
+
+    const { ws } = await openClient();
+    const reset = await rpcReq<{ ok: true; key: string }>(ws, "sessions.reset", {
+      key: "main",
+    });
+    expect(reset.ok).toBe(true);
+    expect(acpRuntimeMocks.close).toHaveBeenCalledWith({
+      handle: {
+        sessionKey: "agent:main:main",
+        backend: "acpx",
+        runtimeSessionName: "runtime:reset",
+      },
+      reason: "session-reset",
     });
 
     ws.close();
@@ -1044,9 +1189,7 @@ describe("gateway server sessions", () => {
   });
 
   test("webchat clients cannot patch or delete sessions", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-webchat-"));
-    const storePath = path.join(dir, "sessions.json");
-    testState.sessionStorePath = storePath;
+    await createSessionStoreDir();
 
     await writeSessionStore({
       entries: {

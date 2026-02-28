@@ -102,6 +102,46 @@ describe("handleTelegramAction", () => {
     await expectReactionAdded("extensive");
   });
 
+  it("accepts snake_case message_id for reactions", async () => {
+    const cfg = {
+      channels: { telegram: { botToken: "tok", reactionLevel: "minimal" } },
+    } as OpenClawConfig;
+    await handleTelegramAction(
+      {
+        action: "react",
+        chatId: "123",
+        message_id: "456",
+        emoji: "✅",
+      },
+      cfg,
+    );
+    expect(reactMessageTelegram).toHaveBeenCalledWith(
+      "123",
+      456,
+      "✅",
+      expect.objectContaining({ token: "tok", remove: false }),
+    );
+  });
+
+  it("soft-fails when messageId is missing", async () => {
+    const cfg = {
+      channels: { telegram: { botToken: "tok", reactionLevel: "minimal" } },
+    } as OpenClawConfig;
+    const result = await handleTelegramAction(
+      {
+        action: "react",
+        chatId: "123",
+        emoji: "✅",
+      },
+      cfg,
+    );
+    expect(result.details).toMatchObject({
+      ok: false,
+      reason: "missing_message_id",
+    });
+    expect(reactMessageTelegram).not.toHaveBeenCalled();
+  });
+
   it("removes reactions on empty emoji", async () => {
     const cfg = {
       channels: { telegram: { botToken: "tok", reactionLevel: "minimal" } },
@@ -177,18 +217,10 @@ describe("handleTelegramAction", () => {
     );
   });
 
-  it.each([
-    {
-      level: "off" as const,
-      expectedMessage: /Telegram agent reactions disabled.*reactionLevel="off"/,
-    },
-    {
-      level: "ack" as const,
-      expectedMessage: /Telegram agent reactions disabled.*reactionLevel="ack"/,
-    },
-  ])("blocks reactions when reactionLevel is $level", async ({ level, expectedMessage }) => {
-    await expect(
-      handleTelegramAction(
+  it.each(["off", "ack"] as const)(
+    "soft-fails reactions when reactionLevel is %s",
+    async (level) => {
+      const result = await handleTelegramAction(
         {
           action: "react",
           chatId: "123",
@@ -196,11 +228,15 @@ describe("handleTelegramAction", () => {
           emoji: "✅",
         },
         reactionConfig(level),
-      ),
-    ).rejects.toThrow(expectedMessage);
-  });
+      );
+      expect(result.details).toMatchObject({
+        ok: false,
+        reason: "disabled",
+      });
+    },
+  );
 
-  it("also respects legacy actions.reactions gating", async () => {
+  it("soft-fails when reactions are disabled via actions.reactions", async () => {
     const cfg = {
       channels: {
         telegram: {
@@ -210,17 +246,19 @@ describe("handleTelegramAction", () => {
         },
       },
     } as OpenClawConfig;
-    await expect(
-      handleTelegramAction(
-        {
-          action: "react",
-          chatId: "123",
-          messageId: "456",
-          emoji: "✅",
-        },
-        cfg,
-      ),
-    ).rejects.toThrow(/Telegram reactions are disabled via actions.reactions/);
+    const result = await handleTelegramAction(
+      {
+        action: "react",
+        chatId: "123",
+        messageId: "456",
+        emoji: "✅",
+      },
+      cfg,
+    );
+    expect(result.details).toMatchObject({
+      ok: false,
+      reason: "disabled",
+    });
   });
 
   it("sends a text message", async () => {
@@ -241,6 +279,23 @@ describe("handleTelegramAction", () => {
       type: "text",
       text: expect.stringContaining('"ok": true'),
     });
+  });
+
+  it("forwards trusted mediaLocalRoots into sendMessageTelegram", async () => {
+    await handleTelegramAction(
+      {
+        action: "sendMessage",
+        to: "@testchannel",
+        content: "Hello with local media",
+      },
+      telegramConfig(),
+      { mediaLocalRoots: ["/tmp/agent-root"] },
+    );
+    expect(sendMessageTelegram).toHaveBeenCalledWith(
+      "@testchannel",
+      "Hello with local media",
+      expect.objectContaining({ mediaLocalRoots: ["/tmp/agent-root"] }),
+    );
   });
 
   it.each([
@@ -421,11 +476,7 @@ describe("handleTelegramAction", () => {
   });
 
   it("allows inline buttons in DMs with tg: prefixed targets", async () => {
-    const cfg = {
-      channels: {
-        telegram: { botToken: "tok", capabilities: { inlineButtons: "dm" } },
-      },
-    } as OpenClawConfig;
+    const cfg = telegramConfig({ capabilities: { inlineButtons: "dm" } });
     await handleTelegramAction(
       {
         action: "sendMessage",
@@ -439,11 +490,7 @@ describe("handleTelegramAction", () => {
   });
 
   it("allows inline buttons in groups with topic targets", async () => {
-    const cfg = {
-      channels: {
-        telegram: { botToken: "tok", capabilities: { inlineButtons: "group" } },
-      },
-    } as OpenClawConfig;
+    const cfg = telegramConfig({ capabilities: { inlineButtons: "group" } });
     await handleTelegramAction(
       {
         action: "sendMessage",
@@ -457,11 +504,7 @@ describe("handleTelegramAction", () => {
   });
 
   it("sends messages with inline keyboard buttons when enabled", async () => {
-    const cfg = {
-      channels: {
-        telegram: { botToken: "tok", capabilities: { inlineButtons: "all" } },
-      },
-    } as OpenClawConfig;
+    const cfg = telegramConfig({ capabilities: { inlineButtons: "all" } });
     await handleTelegramAction(
       {
         action: "sendMessage",
@@ -481,11 +524,7 @@ describe("handleTelegramAction", () => {
   });
 
   it("forwards optional button style", async () => {
-    const cfg = {
-      channels: {
-        telegram: { botToken: "tok", capabilities: { inlineButtons: "all" } },
-      },
-    } as OpenClawConfig;
+    const cfg = telegramConfig({ capabilities: { inlineButtons: "all" } });
     await handleTelegramAction(
       {
         action: "sendMessage",
@@ -633,18 +672,20 @@ describe("handleTelegramAction per-account gating", () => {
       },
     } as OpenClawConfig;
 
-    await expect(
-      handleTelegramAction(
-        {
-          action: "react",
-          chatId: "123",
-          messageId: 1,
-          emoji: "👀",
-          accountId: "media",
-        },
-        cfg,
-      ),
-    ).rejects.toThrow(/reactions are disabled via actions.reactions/i);
+    const result = await handleTelegramAction(
+      {
+        action: "react",
+        chatId: "123",
+        messageId: 1,
+        emoji: "👀",
+        accountId: "media",
+      },
+      cfg,
+    );
+    expect(result.details).toMatchObject({
+      ok: false,
+      reason: "disabled",
+    });
   });
 
   it("allows account to explicitly re-enable top-level disabled reaction gate", async () => {

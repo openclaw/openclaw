@@ -1,17 +1,14 @@
-import fs from "node:fs/promises";
-import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { installModelsConfigTestHooks, withModelsTempHome } from "./models-config.e2e-harness.js";
+import { ensureOpenClawModelsJson } from "./models-config.js";
+import { readGeneratedModelsJson } from "./models-config.test-utils.js";
 
 describe("models-config", () => {
   installModelsConfigTestHooks();
 
   it("normalizes gemini 3 ids to preview for google providers", async () => {
     await withModelsTempHome(async () => {
-      const { ensureOpenClawModelsJson } = await import("./models-config.js");
-      const { resolveOpenClawAgentDir } = await import("./agent-paths.js");
-
       const cfg: OpenClawConfig = {
         models: {
           providers: {
@@ -48,11 +45,9 @@ describe("models-config", () => {
 
       await ensureOpenClawModelsJson(cfg);
 
-      const modelPath = path.join(resolveOpenClawAgentDir(), "models.json");
-      const raw = await fs.readFile(modelPath, "utf8");
-      const parsed = JSON.parse(raw) as {
+      const parsed = await readGeneratedModelsJson<{
         providers: Record<string, { models: Array<{ id: string }> }>;
-      };
+      }>();
       const ids = parsed.providers.google?.models?.map((model) => model.id);
       expect(ids).toEqual(["gemini-3-pro-preview", "gemini-3-flash-preview"]);
     });

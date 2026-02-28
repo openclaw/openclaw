@@ -1,3 +1,5 @@
+import { isBlockedObjectKey } from "../infra/prototype-keys.js";
+
 export const DEFAULT_ACCOUNT_ID = "default";
 
 const VALID_ID_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
@@ -17,12 +19,20 @@ function canonicalizeAccountId(value: string): string {
     .slice(0, 64);
 }
 
+function normalizeCanonicalAccountId(value: string): string | undefined {
+  const canonical = canonicalizeAccountId(value);
+  if (!canonical || isBlockedObjectKey(canonical)) {
+    return undefined;
+  }
+  return canonical;
+}
+
 export function normalizeAccountId(value: string | undefined | null): string {
   const trimmed = (value ?? "").trim();
   if (!trimmed) {
     return DEFAULT_ACCOUNT_ID;
   }
-  return canonicalizeAccountId(trimmed) || DEFAULT_ACCOUNT_ID;
+  return normalizeCanonicalAccountId(trimmed) || DEFAULT_ACCOUNT_ID;
 }
 
 export function normalizeOptionalAccountId(value: string | undefined | null): string | undefined {
@@ -30,5 +40,5 @@ export function normalizeOptionalAccountId(value: string | undefined | null): st
   if (!trimmed) {
     return undefined;
   }
-  return canonicalizeAccountId(trimmed) || undefined;
+  return normalizeCanonicalAccountId(trimmed) || undefined;
 }

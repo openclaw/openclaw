@@ -18,13 +18,10 @@ vi.mock("../infra/net/fetch-guard.js", () => ({
   fetchWithSsrFGuard: vi.fn(),
 }));
 
-vi.mock("../security/skill-scanner.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../security/skill-scanner.js")>();
-  return {
-    ...actual,
-    scanDirectoryWithSummary: (...args: unknown[]) => scanDirectoryWithSummaryMock(...args),
-  };
-});
+vi.mock("../security/skill-scanner.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../security/skill-scanner.js")>()),
+  scanDirectoryWithSummary: (...args: unknown[]) => scanDirectoryWithSummaryMock(...args),
+}));
 
 vi.mock("../shared/config-eval.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../shared/config-eval.js")>();

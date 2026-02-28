@@ -60,6 +60,27 @@ describe("resolveSlackChannelConfig", () => {
       matchSource: "direct",
     });
   });
+
+  it("matches channel config key stored in lowercase when Slack delivers uppercase channel ID", () => {
+    // Slack always delivers channel IDs in uppercase (e.g. C0ABC12345).
+    // Users commonly copy them in lowercase from docs or older CLI output.
+    const res = resolveSlackChannelConfig({
+      channelId: "C0ABC12345",
+      channels: { c0abc12345: { allow: true, requireMention: false } },
+      defaultRequireMention: true,
+    });
+    expect(res).toMatchObject({ allowed: true, requireMention: false });
+  });
+
+  it("matches channel config key stored in uppercase when user types lowercase channel ID", () => {
+    // Defensive: also handle the inverse direction.
+    const res = resolveSlackChannelConfig({
+      channelId: "c0abc12345",
+      channels: { C0ABC12345: { allow: true, requireMention: false } },
+      defaultRequireMention: true,
+    });
+    expect(res).toMatchObject({ allowed: true, requireMention: false });
+  });
 });
 
 const baseParams = () => ({
@@ -77,6 +98,7 @@ const baseParams = () => ({
   dmEnabled: true,
   dmPolicy: "open" as const,
   allowFrom: [],
+  allowNameMatching: false,
   groupDmEnabled: true,
   groupDmChannels: [],
   defaultRequireMention: true,
@@ -113,6 +135,16 @@ function createThreadStarterRepliesClient(
   return { replies, client };
 }
 
+function createListedChannelsContext(groupPolicy: "open" | "allowlist") {
+  return createSlackMonitorContext({
+    ...baseParams(),
+    groupPolicy,
+    channelsConfig: {
+      C_LISTED: { requireMention: true },
+    },
+  });
+}
+
 describe("normalizeSlackChannelType", () => {
   it("infers channel types from ids when missing", () => {
     expect(normalizeSlackChannelType(undefined, "C123")).toBe("channel");
@@ -122,6 +154,25 @@ describe("normalizeSlackChannelType", () => {
 
   it("prefers explicit channel_type values", () => {
     expect(normalizeSlackChannelType("mpim", "C123")).toBe("mpim");
+  });
+
+  it("overrides wrong channel_type for D-prefix DM channels", () => {
+    // Slack DM channel IDs always start with "D" — if the event
+    // reports a wrong channel_type, the D-prefix should win.
+    expect(normalizeSlackChannelType("channel", "D123")).toBe("im");
+    expect(normalizeSlackChannelType("group", "D456")).toBe("im");
+    expect(normalizeSlackChannelType("mpim", "D789")).toBe("im");
+  });
+
+  it("preserves correct channel_type for D-prefix DM channels", () => {
+    expect(normalizeSlackChannelType("im", "D123")).toBe("im");
+  });
+
+  it("does not override G-prefix channel_type (ambiguous prefix)", () => {
+    // G-prefix can be either "group" (private channel) or "mpim" (group DM)
+    // — trust the provided channel_type since the prefix is ambiguous.
+    expect(normalizeSlackChannelType("group", "G123")).toBe("group");
+    expect(normalizeSlackChannelType("mpim", "G456")).toBe("mpim");
   });
 });
 
@@ -138,13 +189,7 @@ describe("isChannelAllowed with groupPolicy and channelsConfig", () => {
   it("allows unlisted channels when groupPolicy is open even with channelsConfig entries", () => {
     // Bug fix: when groupPolicy="open" and channels has some entries,
     // unlisted channels should still be allowed (not blocked)
-    const ctx = createSlackMonitorContext({
-      ...baseParams(),
-      groupPolicy: "open",
-      channelsConfig: {
-        C_LISTED: { requireMention: true },
-      },
-    });
+    const ctx = createListedChannelsContext("open");
     // Listed channel should be allowed
     expect(ctx.isChannelAllowed({ channelId: "C_LISTED", channelType: "channel" })).toBe(true);
     // Unlisted channel should ALSO be allowed when policy is "open"
@@ -152,13 +197,7 @@ describe("isChannelAllowed with groupPolicy and channelsConfig", () => {
   });
 
   it("blocks unlisted channels when groupPolicy is allowlist", () => {
-    const ctx = createSlackMonitorContext({
-      ...baseParams(),
-      groupPolicy: "allowlist",
-      channelsConfig: {
-        C_LISTED: { requireMention: true },
-      },
-    });
+    const ctx = createListedChannelsContext("allowlist");
     // Listed channel should be allowed
     expect(ctx.isChannelAllowed({ channelId: "C_LISTED", channelType: "channel" })).toBe(true);
     // Unlisted channel should be blocked when policy is "allowlist"

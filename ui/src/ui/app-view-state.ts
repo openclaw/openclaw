@@ -1,5 +1,6 @@
 import type { EventLogEntry } from "./app-events.ts";
 import type { CompactionStatus, FallbackStatus } from "./app-tool-stream.ts";
+import type { CronFieldErrors } from "./controllers/cron.ts";
 import type { DevicePairingList } from "./controllers/devices.ts";
 import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./controllers/exec-approvals.ts";
@@ -8,22 +9,27 @@ import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";
 import type { Tab } from "./navigation.ts";
 import type { UiSettings } from "./storage.ts";
 import type { ThemeTransitionContext } from "./theme-transition.ts";
-import type { ResolvedTheme, ThemeMode } from "./theme.ts";
+import type { ThemeMode } from "./theme.ts";
 import type {
   AgentsListResult,
   AgentsFilesListResult,
   AgentIdentityResult,
-  AttentionItem,
   ChannelsStatusSnapshot,
   ConfigSnapshot,
   ConfigUiHints,
   CronJob,
+  CronJobsEnabledFilter,
+  CronJobsSortBy,
+  CronDeliveryStatus,
+  CronRunScope,
+  CronSortDir,
+  CronRunsStatusValue,
+  CronRunsStatusFilter,
   CronRunLogEntry,
   CronStatus,
-  HealthSummary,
+  HealthSnapshot,
   LogEntry,
   LogLevel,
-  ModelCatalogEntry,
   NostrProfile,
   PresenceEntry,
   SessionsUsageResult,
@@ -31,6 +37,7 @@ import type {
   SessionUsageTimeSeries,
   SessionsListResult,
   SkillStatusReport,
+  ToolsCatalogResult,
   StatusSummary,
 } from "./types.ts";
 import type { ChatAttachment, ChatQueueItem, CronFormState } from "./ui-types.ts";
@@ -45,10 +52,10 @@ export type AppViewState = {
   basePath: string;
   connected: boolean;
   theme: ThemeMode;
-  themeResolved: ResolvedTheme;
-  themeOrder: ThemeMode[];
+  themeResolved: "light" | "dark";
   hello: GatewayHelloOk | null;
   lastError: string | null;
+  lastErrorCode: string | null;
   eventLog: EventLogEntry[];
   assistantName: string;
   assistantAvatar: string | null;
@@ -131,6 +138,9 @@ export type AppViewState = {
   agentsList: AgentsListResult | null;
   agentsError: string | null;
   agentsSelectedId: string | null;
+  toolsCatalogLoading: boolean;
+  toolsCatalogError: string | null;
+  toolsCatalogResult: ToolsCatalogResult | null;
   agentsPanel: "overview" | "files" | "tools" | "skills" | "channels" | "cron";
   agentFilesLoading: boolean;
   agentFilesError: string | null;
@@ -153,12 +163,6 @@ export type AppViewState = {
   sessionsFilterLimit: string;
   sessionsIncludeGlobal: boolean;
   sessionsIncludeUnknown: boolean;
-  sessionsSearchQuery: string;
-  sessionsSortColumn: "key" | "kind" | "updated" | "tokens";
-  sessionsSortDir: "asc" | "desc";
-  sessionsPage: number;
-  sessionsPageSize: number;
-  sessionsActionsOpenKey: string | null;
   usageLoading: boolean;
   usageResult: SessionsUsageResult | null;
   usageCostSummary: CostUsageSummary | null;
@@ -195,12 +199,35 @@ export type AppViewState = {
   usageLogFilterHasTools: boolean;
   usageLogFilterQuery: string;
   cronLoading: boolean;
+  cronJobsLoadingMore: boolean;
   cronJobs: CronJob[];
+  cronJobsTotal: number;
+  cronJobsHasMore: boolean;
+  cronJobsNextOffset: number | null;
+  cronJobsLimit: number;
+  cronJobsQuery: string;
+  cronJobsEnabledFilter: CronJobsEnabledFilter;
+  cronJobsSortBy: CronJobsSortBy;
+  cronJobsSortDir: CronSortDir;
   cronStatus: CronStatus | null;
   cronError: string | null;
   cronForm: CronFormState;
+  cronFieldErrors: CronFieldErrors;
+  cronEditingJobId: string | null;
   cronRunsJobId: string | null;
+  cronRunsLoadingMore: boolean;
   cronRuns: CronRunLogEntry[];
+  cronRunsTotal: number;
+  cronRunsHasMore: boolean;
+  cronRunsNextOffset: number | null;
+  cronRunsLimit: number;
+  cronRunsScope: CronRunScope;
+  cronRunsStatuses: CronRunsStatusValue[];
+  cronRunsDeliveryStatuses: CronDeliveryStatus[];
+  cronRunsStatusFilter: CronRunsStatusFilter;
+  cronRunsQuery: string;
+  cronRunsSortDir: CronSortDir;
+  cronModelSuggestions: string[];
   cronBusy: boolean;
   skillsLoading: boolean;
   skillsReport: SkillStatusReport | null;
@@ -209,13 +236,10 @@ export type AppViewState = {
   skillEdits: Record<string, string>;
   skillMessages: Record<string, SkillMessage>;
   skillsBusyKey: string | null;
-  healthLoading: boolean;
-  healthResult: HealthSummary | null;
-  healthError: string | null;
   debugLoading: boolean;
   debugStatus: StatusSummary | null;
-  debugHealth: HealthSummary | null;
-  debugModels: ModelCatalogEntry[];
+  debugHealth: HealthSnapshot | null;
+  debugModels: unknown[];
   debugHeartbeat: unknown;
   debugCallMethod: string;
   debugCallParams: string;
@@ -235,12 +259,6 @@ export type AppViewState = {
   logsMaxBytes: number;
   logsAtBottom: boolean;
   updateAvailable: import("./types.js").UpdateAvailable | null;
-  // Overview dashboard state
-  attentionItems: AttentionItem[];
-  paletteOpen: boolean;
-  streamMode: boolean;
-  overviewLogLines: string[];
-  overviewLogCursor: number;
   client: GatewayBrowserClient | null;
   refreshSessionsAfterChat: Set<string>;
   connect: () => void;

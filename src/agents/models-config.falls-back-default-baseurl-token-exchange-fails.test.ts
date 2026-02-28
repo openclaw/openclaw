@@ -32,9 +32,7 @@ describe("models-config", () => {
         });
         globalThis.fetch = fetchMock as unknown as typeof fetch;
 
-        await ensureOpenClawModelsJson({ models: { providers: {} } });
-
-        const agentDir = path.join(process.env.HOME ?? "", ".openclaw", "agents", "main", "agent");
+        const { agentDir } = await ensureOpenClawModelsJson({ models: { providers: {} } });
         expect(await readCopilotBaseUrl(agentDir)).toBe(DEFAULT_COPILOT_API_BASE_URL);
       });
     });
