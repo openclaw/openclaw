@@ -51,7 +51,28 @@ export async function runDiscordGatewayLifecycle(params: {
   }
 
   const HELLO_TIMEOUT_MS = 30000;
+  const MAX_CONSECUTIVE_HELLO_STALLS = 3;
   let helloTimeoutId: ReturnType<typeof setTimeout> | undefined;
+  let consecutiveHelloStalls = 0;
+  const clearResumeState = () => {
+    const mutableGateway = gateway as
+      | (GatewayPlugin & {
+          state?: {
+            sessionId?: string | null;
+            resumeGatewayUrl?: string | null;
+            sequence?: number | null;
+          };
+          sequence?: number | null;
+        })
+      | undefined;
+    if (!mutableGateway?.state) {
+      return;
+    }
+    mutableGateway.state.sessionId = null;
+    mutableGateway.state.resumeGatewayUrl = null;
+    mutableGateway.state.sequence = null;
+    mutableGateway.sequence = null;
+  };
   const onGatewayDebug = (msg: unknown) => {
     const message = String(msg);
     if (!message.includes("WebSocket connection opened")) {
@@ -61,14 +82,24 @@ export async function runDiscordGatewayLifecycle(params: {
       clearTimeout(helloTimeoutId);
     }
     helloTimeoutId = setTimeout(() => {
-      if (!gateway?.isConnected) {
+      if (gateway?.isConnected) {
+        consecutiveHelloStalls = 0;
+      } else {
+        consecutiveHelloStalls += 1;
+        const forceFreshIdentify = consecutiveHelloStalls >= MAX_CONSECUTIVE_HELLO_STALLS;
         params.runtime.log?.(
           danger(
-            `connection stalled: no HELLO received within ${HELLO_TIMEOUT_MS}ms, forcing reconnect`,
+            forceFreshIdentify
+              ? `connection stalled: no HELLO within ${HELLO_TIMEOUT_MS}ms (${consecutiveHelloStalls}/${MAX_CONSECUTIVE_HELLO_STALLS}); forcing fresh identify`
+              : `connection stalled: no HELLO within ${HELLO_TIMEOUT_MS}ms (${consecutiveHelloStalls}/${MAX_CONSECUTIVE_HELLO_STALLS}); retrying resume`,
           ),
         );
+        if (forceFreshIdentify) {
+          clearResumeState();
+          consecutiveHelloStalls = 0;
+        }
         gateway?.disconnect();
-        gateway?.connect(false);
+        gateway?.connect(!forceFreshIdentify);
       }
       helloTimeoutId = undefined;
     }, HELLO_TIMEOUT_MS);
