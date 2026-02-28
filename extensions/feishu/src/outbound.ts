@@ -18,12 +18,22 @@ function normalizePossibleLocalImagePath(text: string | undefined): string | nul
   if (/^(https?:\/\/|data:|file:\/\/)/i.test(raw)) return null;
 
   const ext = path.extname(raw).toLowerCase();
-  const isImageExt = [".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".ico", ".tiff"].includes(ext);
+  const isImageExt = [".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".ico", ".tiff"].includes(
+    ext,
+  );
   if (!isImageExt) return null;
 
   if (!path.isAbsolute(raw)) return null;
   if (!fs.existsSync(raw)) return null;
-  if (!fs.statSync(raw).isFile()) return null;
+
+  // Fix race condition: wrap statSync in try-catch to handle file deletion
+  // between existsSync and statSync
+  try {
+    if (!fs.statSync(raw).isFile()) return null;
+  } catch {
+    // File may have been deleted or became inaccessible between checks
+    return null;
+  }
 
   return raw;
 }
