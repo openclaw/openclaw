@@ -10,9 +10,13 @@ import {
 } from "./sticker-cache.js";
 
 // Mock the state directory to use a temp location
-vi.mock("../config/paths.js", () => ({
-  STATE_DIR: "/tmp/openclaw-test-sticker-cache",
-}));
+vi.mock("../config/paths.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/paths.js")>();
+  return {
+    ...actual,
+    STATE_DIR: "/tmp/openclaw-test-sticker-cache",
+  };
+});
 
 const TEST_CACHE_DIR = "/tmp/openclaw-test-sticker-cache/telegram";
 const TEST_CACHE_FILE = path.join(TEST_CACHE_DIR, "sticker-cache.json");

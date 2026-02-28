@@ -92,7 +92,7 @@ Client                    Gateway
 - **非本地**连接必须签名 `connect.challenge` nonce 并需要明确批准。
 - Gateway 网关认证（`gateway.auth.*`）仍适用于**所有**连接，无论本地还是远程。
 
-详情：[Gateway 网关协议](/gateway/protocol)、[配对](/start/pairing)、[安全](/gateway/security)。
+详情：[Gateway 网关协议](/gateway/protocol)、[配对](/channels/pairing)、[安全](/gateway/security)。
 
 ## 协议类型和代码生成
 

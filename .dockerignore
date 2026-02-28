@@ -46,3 +46,15 @@ Swabble/
 Core/
 Users/
 vendor/
+
+# Needed for building the Canvas A2UI bundle during Docker image builds.
+# Keep the rest of apps/ and vendor/ excluded to avoid a large build context.
+!apps/shared/
+!apps/shared/OpenClawKit/
+!apps/shared/OpenClawKit/Tools/
+!apps/shared/OpenClawKit/Tools/CanvasA2UI/
+!apps/shared/OpenClawKit/Tools/CanvasA2UI/**
+!vendor/a2ui/
+!vendor/a2ui/renderers/
+!vendor/a2ui/renderers/lit/
+!vendor/a2ui/renderers/lit/**

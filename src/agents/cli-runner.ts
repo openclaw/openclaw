@@ -1,26 +1,24 @@
 import type { ImageContent } from "@mariozechner/pi-ai";
+import { resolveHeartbeatPrompt } from "../auto-reply/heartbeat.js";
 import type { ThinkLevel } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/config.js";
-import type { EmbeddedPiRunResult } from "./pi-embedded-runner.js";
-import { resolveHeartbeatPrompt } from "../auto-reply/heartbeat.js";
 import { shouldLogVerbose } from "../globals.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { runCommandWithTimeout } from "../process/exec.js";
-import { resolveUserPath } from "../utils.js";
+import { getProcessSupervisor } from "../process/supervisor/index.js";
 import { resolveSessionAgentIds } from "./agent-scope.js";
 import { makeBootstrapWarn, resolveBootstrapContextForRun } from "./bootstrap-files.js";
 import { resolveCliBackendConfig } from "./cli-backends.js";
 import {
   appendImagePathsToPrompt,
+  buildCliSupervisorScopeKey,
   buildCliArgs,
   buildSystemPrompt,
-  cleanupResumeProcesses,
-  cleanupSuspendedCliProcesses,
   enqueueCliRun,
   normalizeCliModel,
   parseCliJson,
   parseCliJsonl,
+  resolveCliNoOutputTimeoutMs,
   resolvePromptInput,
   resolveSessionIdToSend,
   resolveSystemPromptUsage,
@@ -29,12 +27,15 @@ import {
 import { resolveOpenClawDocsPath } from "./docs-path.js";
 import { FailoverError, resolveFailoverStatus } from "./failover-error.js";
 import { classifyFailoverReason, isFailoverErrorMessage } from "./pi-embedded-helpers.js";
+import type { EmbeddedPiRunResult } from "./pi-embedded-runner.js";
+import { redactRunIdentifier, resolveRunWorkspaceDir } from "./workspace-run.js";
 
 const log = createSubsystemLogger("agent/claude-cli");
 
 export async function runCliAgent(params: {
   sessionId: string;
   sessionKey?: string;
+  agentId?: string;
   sessionFile: string;
   workspaceDir: string;
   config?: OpenClawConfig;
@@ -51,7 +52,21 @@ export async function runCliAgent(params: {
   images?: ImageContent[];
 }): Promise<EmbeddedPiRunResult> {
   const started = Date.now();
-  const resolvedWorkspace = resolveUserPath(params.workspaceDir);
+  const workspaceResolution = resolveRunWorkspaceDir({
+    workspaceDir: params.workspaceDir,
+    sessionKey: params.sessionKey,
+    agentId: params.agentId,
+    config: params.config,
+  });
+  const resolvedWorkspace = workspaceResolution.workspaceDir;
+  const redactedSessionId = redactRunIdentifier(params.sessionId);
+  const redactedSessionKey = redactRunIdentifier(params.sessionKey);
+  const redactedWorkspace = redactRunIdentifier(resolvedWorkspace);
+  if (workspaceResolution.usedFallback) {
+    log.warn(
+      `[workspace-fallback] caller=runCliAgent reason=${workspaceResolution.fallbackReason} run=${params.runId} session=${redactedSessionId} sessionKey=${redactedSessionKey} agent=${workspaceResolution.agentId} workspace=${redactedWorkspace}`,
+    );
+  }
   const workspaceDir = resolvedWorkspace;
 
   const backendResolved = resolveCliBackendConfig(params.provider, params.config);
@@ -81,6 +96,7 @@ export async function runCliAgent(params: {
   const { defaultAgentId, sessionAgentId } = resolveSessionAgentIds({
     sessionKey: params.sessionKey,
     config: params.config,
+    agentId: params.agentId,
   });
   const heartbeatPrompt =
     sessionAgentId === defaultAgentId
@@ -211,19 +227,32 @@ export async function runCliAgent(params: {
         }
         return next;
       })();
-
-      // Cleanup suspended processes that have accumulated (regardless of sessionId)
-      await cleanupSuspendedCliProcesses(backend);
-      if (useResume && cliSessionIdToSend) {
-        await cleanupResumeProcesses(backend, cliSessionIdToSend);
-      }
-
-      const result = await runCommandWithTimeout([backend.command, ...args], {
+      const noOutputTimeoutMs = resolveCliNoOutputTimeoutMs({
+        backend,
         timeoutMs: params.timeoutMs,
+        useResume,
+      });
+      const supervisor = getProcessSupervisor();
+      const scopeKey = buildCliSupervisorScopeKey({
+        backend,
+        backendId: backendResolved.id,
+        cliSessionId: useResume ? cliSessionIdToSend : undefined,
+      });
+
+      const managedRun = await supervisor.spawn({
+        sessionId: params.sessionId,
+        backendId: backendResolved.id,
+        scopeKey,
+        replaceExistingScope: Boolean(useResume && scopeKey),
+        mode: "child",
+        argv: [backend.command, ...args],
+        timeoutMs: params.timeoutMs,
+        noOutputTimeoutMs,
         cwd: workspaceDir,
         env,
         input: stdinPayload,
       });
+      const result = await managedRun.wait();
 
       const stdout = result.stdout.trim();
       const stderr = result.stderr.trim();
@@ -244,7 +273,28 @@ export async function runCliAgent(params: {
         }
       }
 
-      if (result.code !== 0) {
+      if (result.exitCode !== 0 || result.reason !== "exit") {
+        if (result.reason === "no-output-timeout" || result.noOutputTimedOut) {
+          const timeoutReason = `CLI produced no output for ${Math.round(noOutputTimeoutMs / 1000)}s and was terminated.`;
+          log.warn(
+            `cli watchdog timeout: provider=${params.provider} model=${modelId} session=${cliSessionIdToSend ?? params.sessionId} noOutputTimeoutMs=${noOutputTimeoutMs} pid=${managedRun.pid ?? "unknown"}`,
+          );
+          throw new FailoverError(timeoutReason, {
+            reason: "timeout",
+            provider: params.provider,
+            model: modelId,
+            status: resolveFailoverStatus("timeout"),
+          });
+        }
+        if (result.reason === "overall-timeout") {
+          const timeoutReason = `CLI exceeded timeout (${Math.round(params.timeoutMs / 1000)}s) and was terminated.`;
+          throw new FailoverError(timeoutReason, {
+            reason: "timeout",
+            provider: params.provider,
+            model: modelId,
+            status: resolveFailoverStatus("timeout"),
+          });
+        }
         const err = stderr || stdout || "CLI failed.";
         const reason = classifyFailoverReason(err) ?? "unknown";
         const status = resolveFailoverStatus(reason);
@@ -311,6 +361,7 @@ export async function runCliAgent(params: {
 export async function runClaudeCliAgent(params: {
   sessionId: string;
   sessionKey?: string;
+  agentId?: string;
   sessionFile: string;
   workspaceDir: string;
   config?: OpenClawConfig;
@@ -328,6 +379,7 @@ export async function runClaudeCliAgent(params: {
   return runCliAgent({
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
+    agentId: params.agentId,
     sessionFile: params.sessionFile,
     workspaceDir: params.workspaceDir,
     config: params.config,

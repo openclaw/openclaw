@@ -1,178 +1,407 @@
-import { createServer as createHttpsServer } from "node:https";
-import { createServer } from "node:net";
-import { afterEach, describe, expect, test } from "vitest";
-import { WebSocketServer } from "ws";
-import { rawDataToString } from "../infra/ws.js";
-import { GatewayClient } from "./client.js";
+import { Buffer } from "node:buffer";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { DeviceIdentity } from "../infra/device-identity.js";
 
-// Find a free localhost port for ad-hoc WS servers.
-async function getFreePort(): Promise<number> {
-  return await new Promise((resolve, reject) => {
-    const server = createServer();
-    server.listen(0, "127.0.0.1", () => {
-      const port = (server.address() as { port: number }).port;
-      server.close((err) => (err ? reject(err) : resolve(port)));
-    });
+const wsInstances = vi.hoisted((): MockWebSocket[] => []);
+const clearDeviceAuthTokenMock = vi.hoisted(() => vi.fn());
+const loadDeviceAuthTokenMock = vi.hoisted(() => vi.fn());
+const storeDeviceAuthTokenMock = vi.hoisted(() => vi.fn());
+const clearDevicePairingMock = vi.hoisted(() => vi.fn());
+const logDebugMock = vi.hoisted(() => vi.fn());
+
+type WsEvent = "open" | "message" | "close" | "error";
+type WsEventHandlers = {
+  open: () => void;
+  message: (data: string | Buffer) => void;
+  close: (code: number, reason: Buffer) => void;
+  error: (err: unknown) => void;
+};
+
+class MockWebSocket {
+  private openHandlers: WsEventHandlers["open"][] = [];
+  private messageHandlers: WsEventHandlers["message"][] = [];
+  private closeHandlers: WsEventHandlers["close"][] = [];
+  private errorHandlers: WsEventHandlers["error"][] = [];
+  readonly sent: string[] = [];
+
+  constructor(_url: string, _options?: unknown) {
+    wsInstances.push(this);
+  }
+
+  on(event: "open", handler: WsEventHandlers["open"]): void;
+  on(event: "message", handler: WsEventHandlers["message"]): void;
+  on(event: "close", handler: WsEventHandlers["close"]): void;
+  on(event: "error", handler: WsEventHandlers["error"]): void;
+  on(event: WsEvent, handler: WsEventHandlers[WsEvent]): void {
+    switch (event) {
+      case "open":
+        this.openHandlers.push(handler as WsEventHandlers["open"]);
+        return;
+      case "message":
+        this.messageHandlers.push(handler as WsEventHandlers["message"]);
+        return;
+      case "close":
+        this.closeHandlers.push(handler as WsEventHandlers["close"]);
+        return;
+      case "error":
+        this.errorHandlers.push(handler as WsEventHandlers["error"]);
+        return;
+      default:
+        return;
+    }
+  }
+
+  close(_code?: number, _reason?: string): void {}
+
+  send(data: string): void {
+    this.sent.push(data);
+  }
+
+  emitOpen(): void {
+    for (const handler of this.openHandlers) {
+      handler();
+    }
+  }
+
+  emitMessage(data: string): void {
+    for (const handler of this.messageHandlers) {
+      handler(data);
+    }
+  }
+
+  emitClose(code: number, reason: string): void {
+    for (const handler of this.closeHandlers) {
+      handler(code, Buffer.from(reason));
+    }
+  }
+}
+
+vi.mock("ws", () => ({
+  WebSocket: MockWebSocket,
+}));
+
+vi.mock("../infra/device-auth-store.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/device-auth-store.js")>();
+  return {
+    ...actual,
+    loadDeviceAuthToken: (...args: unknown[]) => loadDeviceAuthTokenMock(...args),
+    storeDeviceAuthToken: (...args: unknown[]) => storeDeviceAuthTokenMock(...args),
+    clearDeviceAuthToken: (...args: unknown[]) => clearDeviceAuthTokenMock(...args),
+  };
+});
+
+vi.mock("../infra/device-pairing.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/device-pairing.js")>();
+  return {
+    ...actual,
+    clearDevicePairing: (...args: unknown[]) => clearDevicePairingMock(...args),
+  };
+});
+
+vi.mock("../logger.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../logger.js")>();
+  return {
+    ...actual,
+    logDebug: (...args: unknown[]) => logDebugMock(...args),
+  };
+});
+
+const { GatewayClient } = await import("./client.js");
+
+function getLatestWs(): MockWebSocket {
+  const ws = wsInstances.at(-1);
+  if (!ws) {
+    throw new Error("missing mock websocket instance");
+  }
+  return ws;
+}
+
+function createClientWithIdentity(
+  deviceId: string,
+  onClose: (code: number, reason: string) => void,
+) {
+  const identity: DeviceIdentity = {
+    deviceId,
+    privateKeyPem: "private-key",
+    publicKeyPem: "public-key",
+  };
+  return new GatewayClient({
+    url: "ws://127.0.0.1:18789",
+    deviceIdentity: identity,
+    onClose,
   });
 }
 
-describe("GatewayClient", () => {
-  let wss: WebSocketServer | null = null;
-  let httpsServer: ReturnType<typeof createHttpsServer> | null = null;
+function expectSecurityConnectError(
+  onConnectError: ReturnType<typeof vi.fn>,
+  params?: { expectTailscaleHint?: boolean },
+) {
+  expect(onConnectError).toHaveBeenCalledWith(
+    expect.objectContaining({
+      message: expect.stringContaining("SECURITY ERROR"),
+    }),
+  );
+  const error = onConnectError.mock.calls[0]?.[0] as Error;
+  expect(error.message).toContain("openclaw doctor --fix");
+  if (params?.expectTailscaleHint) {
+    expect(error.message).toContain("Tailscale Serve/Funnel");
+  }
+}
 
-  afterEach(async () => {
-    if (wss) {
-      for (const client of wss.clients) {
-        client.terminate();
-      }
-      await new Promise<void>((resolve) => wss?.close(() => resolve()));
-      wss = null;
-    }
-    if (httpsServer) {
-      httpsServer.closeAllConnections?.();
-      httpsServer.closeIdleConnections?.();
-      await new Promise<void>((resolve) => httpsServer?.close(() => resolve()));
-      httpsServer = null;
-    }
+describe("GatewayClient security checks", () => {
+  beforeEach(() => {
+    wsInstances.length = 0;
   });
 
-  test("closes on missing ticks", async () => {
-    const port = await getFreePort();
-    wss = new WebSocketServer({ port, host: "127.0.0.1" });
+  it("blocks ws:// to non-loopback addresses (CWE-319)", () => {
+    const onConnectError = vi.fn();
+    const client = new GatewayClient({
+      url: "ws://remote.example.com:18789",
+      onConnectError,
+    });
 
-    wss.on("connection", (socket) => {
-      socket.once("message", (data) => {
-        const first = JSON.parse(rawDataToString(data)) as { id?: string };
-        const id = first.id ?? "connect";
-        // Respond with tiny tick interval to trigger watchdog quickly.
-        const helloOk = {
-          type: "hello-ok",
-          protocol: 2,
-          server: { version: "dev", connId: "c1" },
-          features: { methods: [], events: [] },
-          snapshot: {
-            presence: [],
-            health: {},
-            stateVersion: { presence: 1, health: 1 },
-            uptimeMs: 1,
-          },
-          policy: {
-            maxPayload: 512 * 1024,
-            maxBufferedBytes: 1024 * 1024,
-            tickIntervalMs: 5,
-          },
+    client.start();
+
+    expectSecurityConnectError(onConnectError, { expectTailscaleHint: true });
+    expect(wsInstances.length).toBe(0); // No WebSocket created
+    client.stop();
+  });
+
+  it("handles malformed URLs gracefully without crashing", () => {
+    const onConnectError = vi.fn();
+    const client = new GatewayClient({
+      url: "not-a-valid-url",
+      onConnectError,
+    });
+
+    // Should not throw
+    expect(() => client.start()).not.toThrow();
+
+    expectSecurityConnectError(onConnectError);
+    expect(wsInstances.length).toBe(0); // No WebSocket created
+    client.stop();
+  });
+
+  it("allows ws:// to loopback addresses", () => {
+    const onConnectError = vi.fn();
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      onConnectError,
+    });
+
+    client.start();
+
+    expect(onConnectError).not.toHaveBeenCalled();
+    expect(wsInstances.length).toBe(1); // WebSocket created
+    client.stop();
+  });
+
+  it("allows wss:// to any address", () => {
+    const onConnectError = vi.fn();
+    const client = new GatewayClient({
+      url: "wss://remote.example.com:18789",
+      onConnectError,
+    });
+
+    client.start();
+
+    expect(onConnectError).not.toHaveBeenCalled();
+    expect(wsInstances.length).toBe(1); // WebSocket created
+    client.stop();
+  });
+});
+
+describe("GatewayClient close handling", () => {
+  beforeEach(() => {
+    wsInstances.length = 0;
+    clearDeviceAuthTokenMock.mockClear();
+    clearDeviceAuthTokenMock.mockImplementation(() => undefined);
+    clearDevicePairingMock.mockClear();
+    clearDevicePairingMock.mockResolvedValue(true);
+    logDebugMock.mockClear();
+  });
+
+  it("clears stale token on device token mismatch close", () => {
+    const onClose = vi.fn();
+    const client = createClientWithIdentity("dev-1", onClose);
+
+    client.start();
+    getLatestWs().emitClose(
+      1008,
+      "unauthorized: DEVICE token mismatch (rotate/reissue device token)",
+    );
+
+    expect(clearDeviceAuthTokenMock).toHaveBeenCalledWith({ deviceId: "dev-1", role: "operator" });
+    expect(clearDevicePairingMock).toHaveBeenCalledWith("dev-1");
+    expect(onClose).toHaveBeenCalledWith(
+      1008,
+      "unauthorized: DEVICE token mismatch (rotate/reissue device token)",
+    );
+    client.stop();
+  });
+
+  it("does not break close flow when token clear throws", () => {
+    clearDeviceAuthTokenMock.mockImplementation(() => {
+      throw new Error("disk unavailable");
+    });
+    const onClose = vi.fn();
+    const client = createClientWithIdentity("dev-2", onClose);
+
+    client.start();
+    expect(() => {
+      getLatestWs().emitClose(1008, "unauthorized: device token mismatch");
+    }).not.toThrow();
+
+    expect(logDebugMock).toHaveBeenCalledWith(
+      expect.stringContaining("failed clearing stale device-auth token"),
+    );
+    expect(clearDevicePairingMock).not.toHaveBeenCalled();
+    expect(onClose).toHaveBeenCalledWith(1008, "unauthorized: device token mismatch");
+    client.stop();
+  });
+
+  it("does not break close flow when pairing clear rejects", async () => {
+    clearDevicePairingMock.mockRejectedValue(new Error("pairing store unavailable"));
+    const onClose = vi.fn();
+    const client = createClientWithIdentity("dev-3", onClose);
+
+    client.start();
+    expect(() => {
+      getLatestWs().emitClose(1008, "unauthorized: device token mismatch");
+    }).not.toThrow();
+
+    await Promise.resolve();
+    expect(logDebugMock).toHaveBeenCalledWith(
+      expect.stringContaining("failed clearing stale device pairing"),
+    );
+    expect(onClose).toHaveBeenCalledWith(1008, "unauthorized: device token mismatch");
+    client.stop();
+  });
+
+  it("does not clear auth state for non-mismatch close reasons", () => {
+    const onClose = vi.fn();
+    const client = createClientWithIdentity("dev-4", onClose);
+
+    client.start();
+    getLatestWs().emitClose(1008, "unauthorized: signature invalid");
+
+    expect(clearDeviceAuthTokenMock).not.toHaveBeenCalled();
+    expect(clearDevicePairingMock).not.toHaveBeenCalled();
+    expect(onClose).toHaveBeenCalledWith(1008, "unauthorized: signature invalid");
+    client.stop();
+  });
+
+  it("does not clear persisted device auth when explicit shared token is provided", () => {
+    const onClose = vi.fn();
+    const identity: DeviceIdentity = {
+      deviceId: "dev-5",
+      privateKeyPem: "private-key",
+      publicKeyPem: "public-key",
+    };
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      deviceIdentity: identity,
+      token: "shared-token",
+      onClose,
+    });
+
+    client.start();
+    getLatestWs().emitClose(1008, "unauthorized: device token mismatch");
+
+    expect(clearDeviceAuthTokenMock).not.toHaveBeenCalled();
+    expect(clearDevicePairingMock).not.toHaveBeenCalled();
+    expect(onClose).toHaveBeenCalledWith(1008, "unauthorized: device token mismatch");
+    client.stop();
+  });
+});
+
+describe("GatewayClient connect auth payload", () => {
+  beforeEach(() => {
+    wsInstances.length = 0;
+    loadDeviceAuthTokenMock.mockReset();
+    storeDeviceAuthTokenMock.mockReset();
+  });
+
+  function connectFrameFrom(ws: MockWebSocket) {
+    const raw = ws.sent.find((frame) => frame.includes('"method":"connect"'));
+    if (!raw) {
+      throw new Error("missing connect frame");
+    }
+    const parsed = JSON.parse(raw) as {
+      params?: {
+        auth?: {
+          token?: string;
+          deviceToken?: string;
+          password?: string;
         };
-        socket.send(JSON.stringify({ type: "res", id, ok: true, payload: helloOk }));
-      });
-    });
-
-    const closed = new Promise<{ code: number; reason: string }>((resolve) => {
-      const client = new GatewayClient({
-        url: `ws://127.0.0.1:${port}`,
-        onClose: (code, reason) => resolve({ code, reason }),
-      });
-      client.start();
-    });
-
-    const res = await closed;
-    expect(res.code).toBe(4000);
-    expect(res.reason).toContain("tick timeout");
-  }, 4000);
-
-  test("rejects mismatched tls fingerprint", async () => {
-    const key = `-----BEGIN PRIVATE KEY-----
-MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQDrur5CWp4psMMb
-DTPY1aN46HPDxRchGgh8XedNkrlc4z1KFiyLUsXpVIhuyoXq1fflpTDz7++pGEDJ
-Q5pEdChn3fuWgi7gC+pvd5VQ1eAX/7qVE72fhx14NxhaiZU3hCzXjG2SflTEEExk
-UkQTm0rdHSjgLVMhTM3Pqm6Kzfdgtm9ZyXwlAsorE/pvgbUxG3Q4xKNBGzbirZ+1
-EzPDwsjf3fitNtakZJkymu6Kg5lsUihQVXOP0U7f989FmevoTMvJmkvJzsoTRd7s
-XNSOjzOwJr8da8C4HkXi21md1yEccyW0iSh7tWvDrpWDAgW6RMuMHC0tW4bkpDGr
-FpbQOgzVAgMBAAECggEAIMhwf8Ve9CDVTWyNXpU9fgnj2aDOCeg3MGaVzaO/XCPt
-KOHDEaAyDnRXYgMP0zwtFNafo3klnSBWmDbq3CTEXseQHtsdfkKh+J0KmrqXxval
-YeikKSyvBEIzRJoYMqeS3eo1bddcXgT/Pr9zIL/qzivpPJ4JDttBzyTeaTbiNaR9
-KphGNueo+MTQMLreMqw5VAyJ44gy7Z/2TMiMEc/d95wfubcOSsrIfpOKnMvWd/rl
-vxIS33s95L7CjREkixskj5Yo5Wpt3Yf5b0Zi70YiEsCfAZUDrPW7YzMlylzmhMzm
-MARZKfN1Tmo74SGpxUrBury+iPwf1sYcRnsHR+zO8QKBgQD6ISQHRzPboZ3J/60+
-fRLETtrBa9WkvaH9c+woF7l47D4DIlvlv9D3N1KGkUmhMnp2jNKLIlalBNDxBdB+
-iwZP1kikGz4629Ch3/KF/VYscLTlAQNPE42jOo7Hj7VrdQx9zQrK9ZBLteXmSvOh
-bB3aXwXPF3HoTMt9gQ9thhXZJQKBgQDxQxUnQSw43dRlqYOHzPUEwnJkGkuW/qxn
-aRc8eopP5zUaebiDFmqhY36x2Wd+HnXrzufy2o4jkXkWTau8Ns+OLhnIG3PIU9L/
-LYzJMckGb75QYiK1YKMUUSQzlNCS8+TFVCTAvG2u2zCCk7oTIe8aT516BQNjWDjK
-gWo2f87N8QKBgHoVANO4kfwJxszXyMPuIeHEpwquyijNEap2EPaEldcKXz4CYB4j
-4Cc5TkM12F0gGRuRohWcnfOPBTgOYXPSATOoX+4RCe+KaCsJ9gIl4xBvtirrsqS+
-42ue4h9O6fpXt9AS6sii0FnTnzEmtgC8l1mE9X3dcJA0I0HPYytOvY0tAoGAAYJj
-7Xzw4+IvY/ttgTn9BmyY/ptTgbxSI8t6g7xYhStzH5lHWDqZrCzNLBuqFBXosvL2
-bISFgx9z3Hnb6y+EmOUc8C2LyeMMXOBSEygmk827KRGUGgJiwsvHKDN0Ipc4BSwD
-ltkW7pMceJSoA1qg/k8lMxA49zQkFtA8c97U0mECgYEAk2DDN78sRQI8RpSECJWy
-l1O1ikVUAYVeh5HdZkpt++ddfpo695Op9OeD2Eq27Y5EVj8Xl58GFxNk0egLUnYq
-YzSbjcNkR2SbVvuLaV1zlQKm6M5rfvhj4//YrzrrPUQda7Q4eR0as/3q91uzAO2O
-++pfnSCVCyp/TxSkhEDEawU=
------END PRIVATE KEY-----`;
-    const cert = `-----BEGIN CERTIFICATE-----
-MIIDCTCCAfGgAwIBAgIUel0Lv05cjrViyI/H3tABBJxM7NgwDQYJKoZIhvcNAQEL
-BQAwFDESMBAGA1UEAwwJbG9jYWxob3N0MB4XDTI2MDEyMDEyMjEzMloXDTI2MDEy
-MTEyMjEzMlowFDESMBAGA1UEAwwJbG9jYWxob3N0MIIBIjANBgkqhkiG9w0BAQEF
-AAOCAQ8AMIIBCgKCAQEA67q+QlqeKbDDGw0z2NWjeOhzw8UXIRoIfF3nTZK5XOM9
-ShYsi1LF6VSIbsqF6tX35aUw8+/vqRhAyUOaRHQoZ937loIu4Avqb3eVUNXgF/+6
-lRO9n4cdeDcYWomVN4Qs14xtkn5UxBBMZFJEE5tK3R0o4C1TIUzNz6puis33YLZv
-Wcl8JQLKKxP6b4G1MRt0OMSjQRs24q2ftRMzw8LI3934rTbWpGSZMpruioOZbFIo
-UFVzj9FO3/fPRZnr6EzLyZpLyc7KE0Xe7FzUjo8zsCa/HWvAuB5F4ttZndchHHMl
-tIkoe7Vrw66VgwIFukTLjBwtLVuG5KQxqxaW0DoM1QIDAQABo1MwUTAdBgNVHQ4E
-FgQUwNdNkEQtd0n/aofzN7/EeYPPPbIwHwYDVR0jBBgwFoAUwNdNkEQtd0n/aofz
-N7/EeYPPPbIwDwYDVR0TAQH/BAUwAwEB/zANBgkqhkiG9w0BAQsFAAOCAQEAnOnw
-o8Az/bL0A6bGHTYra3L9ArIIljMajT6KDHxylR4LhliuVNAznnhP3UkcZbUdjqjp
-MNOM0lej2pNioondtQdXUskZtqWy6+dLbTm1RYQh1lbCCZQ26o7o/oENzjPksLAb
-jRM47DYxRweTyRWQ5t9wvg/xL0Yi1tWq4u4FCNZlBMgdwAEnXNwVWTzRR9RHwy20
-lmUzM8uQ/p42bk4EvPEV4PI1h5G0khQ6x9CtkadCTDs/ZqoUaJMwZBIDSrdJJSLw
-4Vh8Lqzia1CFB4um9J4S1Gm/VZMBjjeGGBJk7VSYn4ZmhPlbPM+6z39lpQGEG0x4
-r1USnb+wUdA7Zoj/mQ==
------END CERTIFICATE-----`;
-
-    httpsServer = createHttpsServer({ key, cert });
-    wss = new WebSocketServer({ server: httpsServer, maxPayload: 1024 * 1024 });
-    const port = await new Promise<number>((resolve, reject) => {
-      httpsServer?.once("error", reject);
-      httpsServer?.listen(0, "127.0.0.1", () => {
-        const address = httpsServer?.address();
-        if (!address || typeof address === "string") {
-          reject(new Error("https server address unavailable"));
-          return;
-        }
-        resolve(address.port);
-      });
-    });
-
-    let client: GatewayClient | null = null;
-    const error = await new Promise<Error>((resolve) => {
-      let settled = false;
-      const finish = (err: Error) => {
-        if (settled) {
-          return;
-        }
-        settled = true;
-        resolve(err);
       };
-      const timeout = setTimeout(() => {
-        client?.stop();
-        finish(new Error("timeout waiting for tls error"));
-      }, 2000);
-      client = new GatewayClient({
-        url: `wss://127.0.0.1:${port}`,
-        tlsFingerprint: "deadbeef",
-        onConnectError: (err) => {
-          clearTimeout(timeout);
-          client?.stop();
-          finish(err);
-        },
-        onClose: () => {
-          clearTimeout(timeout);
-          client?.stop();
-          finish(new Error("closed without tls error"));
-        },
-      });
-      client.start();
+    };
+    return parsed.params?.auth ?? {};
+  }
+
+  function emitConnectChallenge(ws: MockWebSocket, nonce = "nonce-1") {
+    ws.emitMessage(
+      JSON.stringify({
+        type: "event",
+        event: "connect.challenge",
+        payload: { nonce },
+      }),
+    );
+  }
+
+  it("uses explicit shared token and does not inject stored device token", () => {
+    loadDeviceAuthTokenMock.mockReturnValue({ token: "stored-device-token" });
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      token: "shared-token",
     });
 
-    expect(String(error)).toContain("tls fingerprint mismatch");
+    client.start();
+    const ws = getLatestWs();
+    ws.emitOpen();
+    emitConnectChallenge(ws);
+
+    expect(connectFrameFrom(ws)).toMatchObject({
+      token: "shared-token",
+    });
+    expect(connectFrameFrom(ws).deviceToken).toBeUndefined();
+    client.stop();
+  });
+
+  it("uses stored device token when shared token is not provided", () => {
+    loadDeviceAuthTokenMock.mockReturnValue({ token: "stored-device-token" });
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+    });
+
+    client.start();
+    const ws = getLatestWs();
+    ws.emitOpen();
+    emitConnectChallenge(ws);
+
+    expect(connectFrameFrom(ws)).toMatchObject({
+      token: "stored-device-token",
+      deviceToken: "stored-device-token",
+    });
+    client.stop();
+  });
+
+  it("prefers explicit deviceToken over stored device token", () => {
+    loadDeviceAuthTokenMock.mockReturnValue({ token: "stored-device-token" });
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      deviceToken: "explicit-device-token",
+    });
+
+    client.start();
+    const ws = getLatestWs();
+    ws.emitOpen();
+    emitConnectChallenge(ws);
+
+    expect(connectFrameFrom(ws)).toMatchObject({
+      token: "explicit-device-token",
+      deviceToken: "explicit-device-token",
+    });
+    client.stop();
   });
 });

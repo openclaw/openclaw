@@ -11,8 +11,13 @@ enum CanvasLayout {
 }
 
 final class CanvasPanel: NSPanel {
-    override var canBecomeKey: Bool { true }
-    override var canBecomeMain: Bool { true }
+    override var canBecomeKey: Bool {
+        true
+    }
+
+    override var canBecomeMain: Bool {
+        true
+    }
 }
 
 enum CanvasPresentation {

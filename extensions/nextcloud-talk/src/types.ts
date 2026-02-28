@@ -5,6 +5,8 @@ import type {
   GroupPolicy,
 } from "openclaw/plugin-sdk";
 
+export type { DmPolicy, GroupPolicy };
+
 export type NextcloudTalkRoomConfig = {
   requireMention?: boolean;
   /** Optional tool policy overrides for this room. */
@@ -68,6 +70,8 @@ export type NextcloudTalkAccountConfig = {
   blockStreaming?: boolean;
   /** Merge streamed block replies before sending. */
   blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
+  /** Outbound response prefix override for this channel/account. */
+  responsePrefix?: string;
   /** Media upload max size in MB. */
   mediaMaxMb?: number;
 };
@@ -164,6 +168,10 @@ export type NextcloudTalkWebhookServerOptions = {
   host: string;
   path: string;
   secret: string;
+  maxBodyBytes?: number;
+  readBody?: (req: import("node:http").IncomingMessage, maxBodyBytes: number) => Promise<string>;
+  isBackendAllowed?: (backend: string) => boolean;
+  shouldProcessMessage?: (message: NextcloudTalkInboundMessage) => boolean | Promise<boolean>;
   onMessage: (message: NextcloudTalkInboundMessage) => void | Promise<void>;
   onError?: (error: Error) => void;
   abortSignal?: AbortSignal;

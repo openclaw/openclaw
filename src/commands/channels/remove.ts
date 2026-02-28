@@ -7,6 +7,7 @@ import {
 import { type OpenClawConfig, writeConfigFile } from "../../config/config.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
+import { deleteTelegramUpdateOffset } from "../../telegram/update-offset-store.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
 import { type ChatChannel, channelLabel, requireValidConfig, shouldUseWizard } from "./shared.js";
 
@@ -112,6 +113,11 @@ export async function channelsRemoveCommand(
       cfg: next,
       accountId: resolvedAccountId,
     });
+
+    // Clean up Telegram polling offset to prevent stale offset on bot token change (#18233)
+    if (channel === "telegram") {
+      await deleteTelegramUpdateOffset({ accountId: resolvedAccountId });
+    }
   } else {
     if (!plugin.config.setAccountEnabled) {
       runtime.error(`Channel ${channel} does not support disable.`);

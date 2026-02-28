@@ -1,14 +1,317 @@
+import { spawn, type ChildProcess } from "node:child_process";
+import fs from "node:fs";
+import { homedir } from "node:os";
+import path from "node:path";
+import * as readline from "node:readline";
+import { Readable, Writable } from "node:stream";
+import { fileURLToPath } from "node:url";
 import {
   ClientSideConnection,
   PROTOCOL_VERSION,
   ndJsonStream,
   type RequestPermissionRequest,
+  type RequestPermissionResponse,
   type SessionNotification,
 } from "@agentclientprotocol/sdk";
-import { spawn, type ChildProcess } from "node:child_process";
-import * as readline from "node:readline";
-import { Readable, Writable } from "node:stream";
+import { isKnownCoreToolId } from "../agents/tool-catalog.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
+import { DANGEROUS_ACP_TOOLS } from "../security/dangerous-tools.js";
+
+const SAFE_AUTO_APPROVE_TOOL_IDS = new Set(["read", "search", "web_search", "memory_search"]);
+const TRUSTED_SAFE_TOOL_ALIASES = new Set(["search"]);
+const READ_TOOL_PATH_KEYS = ["path", "file_path", "filePath"];
+const TOOL_NAME_MAX_LENGTH = 128;
+const TOOL_NAME_PATTERN = /^[a-z0-9._-]+$/;
+const TOOL_KIND_BY_ID = new Map<string, string>([
+  ["read", "read"],
+  ["search", "search"],
+  ["web_search", "search"],
+  ["memory_search", "search"],
+]);
+
+type PermissionOption = RequestPermissionRequest["options"][number];
+
+type PermissionResolverDeps = {
+  prompt?: (toolName: string | undefined, toolTitle?: string) => Promise<boolean>;
+  log?: (line: string) => void;
+  cwd?: string;
+};
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function readFirstStringValue(
+  source: Record<string, unknown> | undefined,
+  keys: string[],
+): string | undefined {
+  if (!source) {
+    return undefined;
+  }
+  for (const key of keys) {
+    const value = source[key];
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+  }
+  return undefined;
+}
+
+function normalizeToolName(value: string): string | undefined {
+  const normalized = value.trim().toLowerCase();
+  if (!normalized || normalized.length > TOOL_NAME_MAX_LENGTH) {
+    return undefined;
+  }
+  if (!TOOL_NAME_PATTERN.test(normalized)) {
+    return undefined;
+  }
+  return normalized;
+}
+
+function parseToolNameFromTitle(title: string | undefined | null): string | undefined {
+  if (!title) {
+    return undefined;
+  }
+  const head = title.split(":", 1)[0]?.trim();
+  if (!head) {
+    return undefined;
+  }
+  return normalizeToolName(head);
+}
+
+function resolveToolKindForPermission(toolName: string | undefined): string | undefined {
+  if (!toolName) {
+    return undefined;
+  }
+  return TOOL_KIND_BY_ID.get(toolName) ?? "other";
+}
+
+function resolveToolNameForPermission(params: RequestPermissionRequest): string | undefined {
+  const toolCall = params.toolCall;
+  const toolMeta = asRecord(toolCall?._meta);
+  const rawInput = asRecord(toolCall?.rawInput);
+
+  const fromMeta = readFirstStringValue(toolMeta, ["toolName", "tool_name", "name"]);
+  const fromRawInput = readFirstStringValue(rawInput, ["tool", "toolName", "tool_name", "name"]);
+  const fromTitle = parseToolNameFromTitle(toolCall?.title);
+  return normalizeToolName(fromMeta ?? fromRawInput ?? fromTitle ?? "");
+}
+
+function extractPathFromToolTitle(
+  toolTitle: string | undefined,
+  toolName: string | undefined,
+): string | undefined {
+  if (!toolTitle) {
+    return undefined;
+  }
+  const separator = toolTitle.indexOf(":");
+  if (separator < 0) {
+    return undefined;
+  }
+  const tail = toolTitle.slice(separator + 1).trim();
+  if (!tail) {
+    return undefined;
+  }
+  const keyedMatch = tail.match(/(?:^|,\s*)(?:path|file_path|filePath)\s*:\s*([^,]+)/);
+  if (keyedMatch?.[1]) {
+    return keyedMatch[1].trim();
+  }
+  if (toolName === "read") {
+    return tail;
+  }
+  return undefined;
+}
+
+function resolveToolPathCandidate(
+  params: RequestPermissionRequest,
+  toolName: string | undefined,
+  toolTitle: string | undefined,
+): string | undefined {
+  const rawInput = asRecord(params.toolCall?.rawInput);
+  const fromRawInput = readFirstStringValue(rawInput, READ_TOOL_PATH_KEYS);
+  const fromTitle = extractPathFromToolTitle(toolTitle, toolName);
+  return fromRawInput ?? fromTitle;
+}
+
+function resolveAbsoluteScopedPath(value: string, cwd: string): string | undefined {
+  let candidate = value.trim();
+  if (!candidate) {
+    return undefined;
+  }
+  if (candidate.startsWith("file://")) {
+    try {
+      const parsed = new URL(candidate);
+      candidate = decodeURIComponent(parsed.pathname || "");
+    } catch {
+      return undefined;
+    }
+  }
+  if (candidate === "~") {
+    candidate = homedir();
+  } else if (candidate.startsWith("~/")) {
+    candidate = path.join(homedir(), candidate.slice(2));
+  }
+  const absolute = path.isAbsolute(candidate)
+    ? path.normalize(candidate)
+    : path.resolve(cwd, candidate);
+  return absolute;
+}
+
+function isPathWithinRoot(candidatePath: string, root: string): boolean {
+  const relative = path.relative(root, candidatePath);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+function isReadToolCallScopedToCwd(
+  params: RequestPermissionRequest,
+  toolName: string | undefined,
+  toolTitle: string | undefined,
+  cwd: string,
+): boolean {
+  if (toolName !== "read") {
+    return false;
+  }
+  const rawPath = resolveToolPathCandidate(params, toolName, toolTitle);
+  if (!rawPath) {
+    return false;
+  }
+  const absolutePath = resolveAbsoluteScopedPath(rawPath, cwd);
+  if (!absolutePath) {
+    return false;
+  }
+  return isPathWithinRoot(absolutePath, path.resolve(cwd));
+}
+
+function shouldAutoApproveToolCall(
+  params: RequestPermissionRequest,
+  toolName: string | undefined,
+  toolTitle: string | undefined,
+  cwd: string,
+): boolean {
+  const isTrustedToolId =
+    typeof toolName === "string" &&
+    (isKnownCoreToolId(toolName) || TRUSTED_SAFE_TOOL_ALIASES.has(toolName));
+  if (!toolName || !isTrustedToolId || !SAFE_AUTO_APPROVE_TOOL_IDS.has(toolName)) {
+    return false;
+  }
+  if (toolName === "read") {
+    return isReadToolCallScopedToCwd(params, toolName, toolTitle, cwd);
+  }
+  return true;
+}
+
+function pickOption(
+  options: PermissionOption[],
+  kinds: PermissionOption["kind"][],
+): PermissionOption | undefined {
+  for (const kind of kinds) {
+    const match = options.find((option) => option.kind === kind);
+    if (match) {
+      return match;
+    }
+  }
+  return undefined;
+}
+
+function selectedPermission(optionId: string): RequestPermissionResponse {
+  return { outcome: { outcome: "selected", optionId } };
+}
+
+function cancelledPermission(): RequestPermissionResponse {
+  return { outcome: { outcome: "cancelled" } };
+}
+
+function promptUserPermission(toolName: string | undefined, toolTitle?: string): Promise<boolean> {
+  if (!process.stdin.isTTY || !process.stderr.isTTY) {
+    console.error(`[permission denied] ${toolName ?? "unknown"}: non-interactive terminal`);
+    return Promise.resolve(false);
+  }
+  return new Promise((resolve) => {
+    let settled = false;
+    const rl = readline.createInterface({
+      input: process.stdin,
+      output: process.stderr,
+    });
+
+    const finish = (approved: boolean) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timeout);
+      rl.close();
+      resolve(approved);
+    };
+
+    const timeout = setTimeout(() => {
+      console.error(`\n[permission timeout] denied: ${toolName ?? "unknown"}`);
+      finish(false);
+    }, 30_000);
+
+    const label = toolTitle
+      ? toolName
+        ? `${toolTitle} (${toolName})`
+        : toolTitle
+      : (toolName ?? "unknown tool");
+    rl.question(`\n[permission] Allow "${label}"? (y/N) `, (answer) => {
+      const approved = answer.trim().toLowerCase() === "y";
+      console.error(`[permission ${approved ? "approved" : "denied"}] ${toolName ?? "unknown"}`);
+      finish(approved);
+    });
+  });
+}
+
+export async function resolvePermissionRequest(
+  params: RequestPermissionRequest,
+  deps: PermissionResolverDeps = {},
+): Promise<RequestPermissionResponse> {
+  const log = deps.log ?? ((line: string) => console.error(line));
+  const prompt = deps.prompt ?? promptUserPermission;
+  const cwd = deps.cwd ?? process.cwd();
+  const options = params.options ?? [];
+  const toolTitle = params.toolCall?.title ?? "tool";
+  const toolName = resolveToolNameForPermission(params);
+  const toolKind = resolveToolKindForPermission(toolName);
+
+  if (options.length === 0) {
+    log(`[permission cancelled] ${toolName ?? "unknown"}: no options available`);
+    return cancelledPermission();
+  }
+
+  const allowOption = pickOption(options, ["allow_once", "allow_always"]);
+  const rejectOption = pickOption(options, ["reject_once", "reject_always"]);
+  const autoApproveAllowed = shouldAutoApproveToolCall(params, toolName, toolTitle, cwd);
+  const promptRequired = !toolName || !autoApproveAllowed || DANGEROUS_ACP_TOOLS.has(toolName);
+
+  if (!promptRequired) {
+    const option = allowOption ?? options[0];
+    if (!option) {
+      log(`[permission cancelled] ${toolName}: no selectable options`);
+      return cancelledPermission();
+    }
+    log(`[permission auto-approved] ${toolName} (${toolKind ?? "unknown"})`);
+    return selectedPermission(option.optionId);
+  }
+
+  log(
+    `\n[permission requested] ${toolTitle}${toolName ? ` (${toolName})` : ""}${toolKind ? ` [${toolKind}]` : ""}`,
+  );
+  const approved = await prompt(toolName, toolTitle);
+
+  if (approved && allowOption) {
+    return selectedPermission(allowOption.optionId);
+  }
+  if (!approved && rejectOption) {
+    return selectedPermission(rejectOption.optionId);
+  }
+
+  log(
+    `[permission cancelled] ${toolName ?? "unknown"}: missing ${approved ? "allow" : "reject"} option`,
+  );
+  return cancelledPermission();
+}
 
 export type AcpClientOptions = {
   cwd?: string;
@@ -37,6 +340,25 @@ function buildServerArgs(opts: AcpClientOptions): string[] {
     args.push("--verbose");
   }
   return args;
+}
+
+function resolveSelfEntryPath(): string | null {
+  // Prefer a path relative to the built module location (dist/acp/client.js -> dist/entry.js).
+  try {
+    const here = fileURLToPath(import.meta.url);
+    const candidate = path.resolve(path.dirname(here), "..", "entry.js");
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+  } catch {
+    // ignore
+  }
+
+  const argv1 = process.argv[1]?.trim();
+  if (argv1) {
+    return path.isAbsolute(argv1) ? argv1 : path.resolve(process.cwd(), argv1);
+  }
+  return null;
 }
 
 function printSessionUpdate(notification: SessionNotification): void {
@@ -79,13 +401,16 @@ export async function createAcpClient(opts: AcpClientOptions = {}): Promise<AcpC
   const verbose = Boolean(opts.verbose);
   const log = verbose ? (msg: string) => console.error(`[acp-client] ${msg}`) : () => {};
 
-  ensureOpenClawCliOnPath({ cwd });
-  const serverCommand = opts.serverCommand ?? "openclaw";
+  ensureOpenClawCliOnPath();
   const serverArgs = buildServerArgs(opts);
 
-  log(`spawning: ${serverCommand} ${serverArgs.join(" ")}`);
+  const entryPath = resolveSelfEntryPath();
+  const serverCommand = opts.serverCommand ?? (entryPath ? process.execPath : "openclaw");
+  const effectiveArgs = opts.serverCommand || !entryPath ? serverArgs : [entryPath, ...serverArgs];
 
-  const agent = spawn(serverCommand, serverArgs, {
+  log(`spawning: ${serverCommand} ${effectiveArgs.join(" ")}`);
+
+  const agent = spawn(serverCommand, effectiveArgs, {
     stdio: ["pipe", "pipe", "inherit"],
     cwd,
   });
@@ -104,16 +429,7 @@ export async function createAcpClient(opts: AcpClientOptions = {}): Promise<AcpC
         printSessionUpdate(params);
       },
       requestPermission: async (params: RequestPermissionRequest) => {
-        console.log("\n[permission requested]", params.toolCall?.title ?? "tool");
-        const options = params.options ?? [];
-        const allowOnce = options.find((option) => option.kind === "allow_once");
-        const fallback = options[0];
-        return {
-          outcome: {
-            outcome: "selected",
-            optionId: allowOnce?.optionId ?? fallback?.optionId ?? "allow",
-          },
-        };
+        return resolvePermissionRequest(params, { cwd });
       },
     }),
     stream,

@@ -1,14 +1,23 @@
-import { format } from "node:util";
-import { mergeAllowlist, summarizeMapping, type RuntimeEnv } from "openclaw/plugin-sdk";
-import type { CoreConfig, ReplyToMode } from "../../types.js";
+import {
+  createLoggerBackedRuntime,
+  GROUP_POLICY_BLOCKED_LABEL,
+  mergeAllowlist,
+  resolveAllowlistProviderRuntimeGroupPolicy,
+  resolveDefaultGroupPolicy,
+  summarizeMapping,
+  warnMissingProviderGroupPolicyFallbackOnce,
+  type RuntimeEnv,
+} from "openclaw/plugin-sdk";
 import { resolveMatrixTargets } from "../../resolve-targets.js";
 import { getMatrixRuntime } from "../../runtime.js";
+import type { CoreConfig, ReplyToMode } from "../../types.js";
+import { resolveMatrixAccount } from "../accounts.js";
 import { setActiveMatrixClient } from "../active-client.js";
 import {
   isBunRuntime,
   resolveMatrixAuth,
   resolveSharedMatrixClient,
-  stopSharedClient,
+  stopSharedClientForAccount,
 } from "../client.js";
 import { normalizeMatrixUserId } from "./allowlist.js";
 import { registerMatrixAutoJoin } from "./auto-join.js";
@@ -39,23 +48,16 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   }
 
   const logger = core.logging.getChildLogger({ module: "matrix-auto-reply" });
-  const formatRuntimeMessage = (...args: Parameters<RuntimeEnv["log"]>) => format(...args);
-  const runtime: RuntimeEnv = opts.runtime ?? {
-    log: (...args) => {
-      logger.info(formatRuntimeMessage(...args));
-    },
-    error: (...args) => {
-      logger.error(formatRuntimeMessage(...args));
-    },
-    exit: (code: number): never => {
-      throw new Error(`exit ${code}`);
-    },
-  };
+  const runtime: RuntimeEnv =
+    opts.runtime ??
+    createLoggerBackedRuntime({
+      logger,
+    });
   const logVerboseMessage = (message: string) => {
     if (!core.logging.shouldLogVerbose()) {
       return;
     }
-    logger.debug(message);
+    logger.debug?.(message);
   };
 
   const normalizeUserEntry = (raw: string) =>
@@ -75,13 +77,13 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   ): Promise<string[]> => {
     let allowList = list ?? [];
     if (allowList.length === 0) {
-      return allowList;
+      return allowList.map(String);
     }
     const entries = allowList
       .map((entry) => normalizeUserEntry(String(entry)))
       .filter((entry) => entry && entry !== "*");
     if (entries.length === 0) {
-      return allowList;
+      return allowList.map(String);
     }
     const mapping: string[] = [];
     const unresolved: string[] = [];
@@ -118,13 +120,17 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
         `${label} entries must be full Matrix IDs (example: @user:server). Unresolved entries are ignored.`,
       );
     }
-    return allowList;
+    return allowList.map(String);
   };
 
-  const allowlistOnly = cfg.channels?.matrix?.allowlistOnly === true;
-  let allowFrom = cfg.channels?.matrix?.dm?.allowFrom ?? [];
-  let groupAllowFrom = cfg.channels?.matrix?.groupAllowFrom ?? [];
-  let roomsConfig = cfg.channels?.matrix?.groups ?? cfg.channels?.matrix?.rooms;
+  // Resolve account-specific config for multi-account support
+  const account = resolveMatrixAccount({ cfg, accountId: opts.accountId });
+  const accountConfig = account.config;
+
+  const allowlistOnly = accountConfig.allowlistOnly === true;
+  let allowFrom: string[] = (accountConfig.dm?.allowFrom ?? []).map(String);
+  let groupAllowFrom: string[] = (accountConfig.groupAllowFrom ?? []).map(String);
+  let roomsConfig = accountConfig.groups ?? accountConfig.rooms;
 
   allowFrom = await resolveUserAllowlist("matrix dm allowlist", allowFrom);
   groupAllowFrom = await resolveUserAllowlist("matrix group allowlist", groupAllowFrom);
@@ -213,13 +219,13 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
           ...cfg.channels?.matrix?.dm,
           allowFrom,
         },
-        ...(groupAllowFrom.length > 0 ? { groupAllowFrom } : {}),
+        groupAllowFrom,
         ...(roomsConfig ? { groups: roomsConfig } : {}),
       },
     },
   };
 
-  const auth = await resolveMatrixAuth({ cfg });
+  const auth = await resolveMatrixAuth({ cfg, accountId: opts.accountId });
   const resolvedInitialSyncLimit =
     typeof opts.initialSyncLimit === "number"
       ? Math.max(0, Math.floor(opts.initialSyncLimit))
@@ -234,20 +240,32 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
     startClient: false,
     accountId: opts.accountId,
   });
-  setActiveMatrixClient(client);
+  setActiveMatrixClient(client, opts.accountId);
 
   const mentionRegexes = core.channel.mentions.buildMentionRegexes(cfg);
-  const defaultGroupPolicy = cfg.channels?.defaults?.groupPolicy;
-  const groupPolicyRaw = cfg.channels?.matrix?.groupPolicy ?? defaultGroupPolicy ?? "allowlist";
+  const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
+  const { groupPolicy: groupPolicyRaw, providerMissingFallbackApplied } =
+    resolveAllowlistProviderRuntimeGroupPolicy({
+      providerConfigPresent: cfg.channels?.matrix !== undefined,
+      groupPolicy: accountConfig.groupPolicy,
+      defaultGroupPolicy,
+    });
+  warnMissingProviderGroupPolicyFallbackOnce({
+    providerMissingFallbackApplied,
+    providerKey: "matrix",
+    accountId: account.accountId,
+    blockedLabel: GROUP_POLICY_BLOCKED_LABEL.room,
+    log: (message) => logVerboseMessage(message),
+  });
   const groupPolicy = allowlistOnly && groupPolicyRaw === "open" ? "allowlist" : groupPolicyRaw;
-  const replyToMode = opts.replyToMode ?? cfg.channels?.matrix?.replyToMode ?? "off";
-  const threadReplies = cfg.channels?.matrix?.threadReplies ?? "inbound";
-  const dmConfig = cfg.channels?.matrix?.dm;
+  const replyToMode = opts.replyToMode ?? accountConfig.replyToMode ?? "off";
+  const threadReplies = accountConfig.threadReplies ?? "inbound";
+  const dmConfig = accountConfig.dm;
   const dmEnabled = dmConfig?.enabled ?? true;
   const dmPolicyRaw = dmConfig?.policy ?? "pairing";
   const dmPolicy = allowlistOnly && dmPolicyRaw !== "disabled" ? "allowlist" : dmPolicyRaw;
   const textLimit = core.channel.text.resolveTextChunkLimit(cfg, "matrix");
-  const mediaMaxMb = opts.mediaMaxMb ?? cfg.channels?.matrix?.mediaMaxMb ?? DEFAULT_MEDIA_MAX_MB;
+  const mediaMaxMb = opts.mediaMaxMb ?? accountConfig.mediaMaxMb ?? DEFAULT_MEDIA_MAX_MB;
   const mediaMaxBytes = Math.max(1, mediaMaxMb) * 1024 * 1024;
   const startupMs = Date.now();
   const startupGraceMs = 0;
@@ -279,6 +297,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
     directTracker,
     getRoomInfo,
     getMemberDisplayName,
+    accountId: opts.accountId,
   });
 
   registerMatrixMonitorEvents({
@@ -307,15 +326,16 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   if (auth.encryption && client.crypto) {
     try {
       // Request verification from other sessions
-      const verificationRequest = await client.crypto.requestOwnUserVerification();
+      const verificationRequest = await (
+        client.crypto as { requestOwnUserVerification?: () => Promise<unknown> }
+      ).requestOwnUserVerification?.();
       if (verificationRequest) {
         logger.info("matrix: device verification requested - please verify in another client");
       }
     } catch (err) {
-      logger.debug(
-        { error: String(err) },
-        "Device verification request failed (may already be verified)",
-      );
+      logger.debug?.("Device verification request failed (may already be verified)", {
+        error: String(err),
+      });
     }
   }
 
@@ -323,9 +343,9 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
     const onAbort = () => {
       try {
         logVerboseMessage("matrix: stopping client");
-        stopSharedClient();
+        stopSharedClientForAccount(auth, opts.accountId);
       } finally {
-        setActiveMatrixClient(null);
+        setActiveMatrixClient(null, opts.accountId);
         resolve();
       }
     };

@@ -2,8 +2,9 @@ import type { CronDeliveryMode, CronJob, CronMessageChannel } from "./types.js";
 
 export type CronDeliveryPlan = {
   mode: CronDeliveryMode;
-  channel: CronMessageChannel;
+  channel?: CronMessageChannel;
   to?: string;
+  accountId?: string;
   source: "delivery" | "payload";
   requested: boolean;
 };
@@ -27,19 +28,30 @@ function normalizeTo(value: unknown): string | undefined {
   return trimmed ? trimmed : undefined;
 }
 
+function normalizeAccountId(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed ? trimmed : undefined;
+}
+
 export function resolveCronDeliveryPlan(job: CronJob): CronDeliveryPlan {
   const payload = job.payload.kind === "agentTurn" ? job.payload : null;
   const delivery = job.delivery;
   const hasDelivery = delivery && typeof delivery === "object";
   const rawMode = hasDelivery ? (delivery as { mode?: unknown }).mode : undefined;
+  const normalizedMode = typeof rawMode === "string" ? rawMode.trim().toLowerCase() : rawMode;
   const mode =
-    rawMode === "announce"
+    normalizedMode === "announce"
       ? "announce"
-      : rawMode === "none"
-        ? "none"
-        : rawMode === "deliver"
-          ? "announce"
-          : undefined;
+      : normalizedMode === "webhook"
+        ? "webhook"
+        : normalizedMode === "none"
+          ? "none"
+          : normalizedMode === "deliver"
+            ? "announce"
+            : undefined;
 
   const payloadChannel = normalizeChannel(payload?.channel);
   const payloadTo = normalizeTo(payload?.to);
@@ -47,15 +59,19 @@ export function resolveCronDeliveryPlan(job: CronJob): CronDeliveryPlan {
     (delivery as { channel?: unknown } | undefined)?.channel,
   );
   const deliveryTo = normalizeTo((delivery as { to?: unknown } | undefined)?.to);
+  const deliveryAccountId = normalizeAccountId(
+    (delivery as { accountId?: unknown } | undefined)?.accountId,
+  );
 
   const channel = deliveryChannel ?? payloadChannel ?? "last";
   const to = deliveryTo ?? payloadTo;
   if (hasDelivery) {
-    const resolvedMode = mode ?? "none";
+    const resolvedMode = mode ?? "announce";
     return {
       mode: resolvedMode,
-      channel,
+      channel: resolvedMode === "announce" ? channel : undefined,
       to,
+      accountId: deliveryAccountId,
       source: "delivery",
       requested: resolvedMode === "announce",
     };

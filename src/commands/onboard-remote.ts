@@ -1,19 +1,22 @@
 import type { OpenClawConfig } from "../config/config.js";
+import { isSecureWebSocketUrl } from "../gateway/net.js";
 import type { GatewayBonjourBeacon } from "../infra/bonjour-discovery.js";
-import type { WizardPrompter } from "../wizard/prompts.js";
 import { discoverGatewayBeacons } from "../infra/bonjour-discovery.js";
 import { resolveWideAreaDiscoveryDomain } from "../infra/widearea-dns.js";
+import type { WizardPrompter } from "../wizard/prompts.js";
 import { detectBinary } from "./onboard-helpers.js";
 
 const DEFAULT_GATEWAY_URL = "ws://127.0.0.1:18789";
 
 function pickHost(beacon: GatewayBonjourBeacon): string | undefined {
-  return beacon.tailnetDns || beacon.lanHost || beacon.host;
+  // Security: TXT is unauthenticated. Prefer the resolved service endpoint host.
+  return beacon.host || beacon.tailnetDns || beacon.lanHost;
 }
 
 function buildLabel(beacon: GatewayBonjourBeacon): string {
   const host = pickHost(beacon);
-  const port = beacon.gatewayPort ?? beacon.port ?? 18789;
+  // Security: Prefer the resolved service endpoint port.
+  const port = beacon.port ?? beacon.gatewayPort ?? 18789;
   const title = beacon.displayName ?? beacon.instanceName;
   const hint = host ? `${host}:${port}` : "host unknown";
   return `${title} (${hint})`;
@@ -25,6 +28,17 @@ function ensureWsUrl(value: string): string {
     return DEFAULT_GATEWAY_URL;
   }
   return trimmed;
+}
+
+function validateGatewayWebSocketUrl(value: string): string | undefined {
+  const trimmed = value.trim();
+  if (!trimmed.startsWith("ws://") && !trimmed.startsWith("wss://")) {
+    return "URL must start with ws:// or wss://";
+  }
+  if (!isSecureWebSocketUrl(trimmed)) {
+    return "Use wss:// for remote hosts, or ws://127.0.0.1/localhost via SSH tunnel.";
+  }
+  return undefined;
 }
 
 export async function promptRemoteGatewayConfig(
@@ -80,7 +94,7 @@ export async function promptRemoteGatewayConfig(
 
   if (selectedBeacon) {
     const host = pickHost(selectedBeacon);
-    const port = selectedBeacon.gatewayPort ?? 18789;
+    const port = selectedBeacon.port ?? selectedBeacon.gatewayPort ?? 18789;
     if (host) {
       const mode = await prompter.select({
         message: "Connection method",
@@ -93,7 +107,15 @@ export async function promptRemoteGatewayConfig(
         ],
       });
       if (mode === "direct") {
-        suggestedUrl = `ws://${host}:${port}`;
+        suggestedUrl = `wss://${host}:${port}`;
+        await prompter.note(
+          [
+            "Direct remote access defaults to TLS.",
+            `Using: ${suggestedUrl}`,
+            "If your gateway is loopback-only, choose SSH tunnel and keep ws://127.0.0.1:18789.",
+          ].join("\n"),
+          "Direct remote",
+        );
       } else {
         suggestedUrl = DEFAULT_GATEWAY_URL;
         await prompter.note(
@@ -113,10 +135,7 @@ export async function promptRemoteGatewayConfig(
   const urlInput = await prompter.text({
     message: "Gateway WebSocket URL",
     initialValue: suggestedUrl,
-    validate: (value) =>
-      String(value).trim().startsWith("ws://") || String(value).trim().startsWith("wss://")
-        ? undefined
-        : "URL must start with ws:// or wss://",
+    validate: (value) => validateGatewayWebSocketUrl(String(value)),
   });
   const url = ensureWsUrl(String(urlInput));
 

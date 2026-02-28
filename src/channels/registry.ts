@@ -1,6 +1,6 @@
+import { requireActivePluginRegistry } from "../plugins/runtime.js";
 import type { ChannelMeta } from "./plugins/types.js";
 import type { ChannelId } from "./plugins/types.js";
-import { requireActivePluginRegistry } from "../plugins/runtime.js";
 
 // Channel docking: add new core channels here (order + meta + aliases), then
 // register the plugin in its extension entrypoint and keep protocol IDs in sync.
@@ -8,6 +8,7 @@ export const CHAT_CHANNEL_ORDER = [
   "telegram",
   "whatsapp",
   "discord",
+  "irc",
   "googlechat",
   "slack",
   "signal",
@@ -17,8 +18,6 @@ export const CHAT_CHANNEL_ORDER = [
 export type ChatChannelId = (typeof CHAT_CHANNEL_ORDER)[number];
 
 export const CHANNEL_IDS = [...CHAT_CHANNEL_ORDER] as const;
-
-export const DEFAULT_CHAT_CHANNEL: ChatChannelId = "whatsapp";
 
 export type ChatChannelMeta = ChannelMeta;
 
@@ -57,6 +56,16 @@ const CHAT_CHANNEL_META: Record<ChatChannelId, ChannelMeta> = {
     docsLabel: "discord",
     blurb: "very well supported right now.",
     systemImage: "bubble.left.and.bubble.right",
+  },
+  irc: {
+    id: "irc",
+    label: "IRC",
+    selectionLabel: "IRC (Server + Nick)",
+    detailLabel: "IRC",
+    docsPath: "/channels/irc",
+    docsLabel: "irc",
+    blurb: "classic IRC networks with DM/channel routing and pairing controls.",
+    systemImage: "network",
   },
   googlechat: {
     id: "googlechat",
@@ -102,6 +111,7 @@ const CHAT_CHANNEL_META: Record<ChatChannelId, ChannelMeta> = {
 
 export const CHAT_CHANNEL_ALIASES: Record<string, ChatChannelId> = {
   imsg: "imessage",
+  "internet-relay-chat": "irc",
   "google-chat": "googlechat",
   gchat: "googlechat",
 };

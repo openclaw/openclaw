@@ -1,23 +1,8 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { describe, expect, it, vi } from "vitest";
+import { makeMockHttpResponse } from "../test-http-response.js";
 import { createTestRegistry } from "./__tests__/test-utils.js";
 import { createGatewayPluginRequestHandler } from "./plugins-http.js";
-
-const makeResponse = (): {
-  res: ServerResponse;
-  setHeader: ReturnType<typeof vi.fn>;
-  end: ReturnType<typeof vi.fn>;
-} => {
-  const setHeader = vi.fn();
-  const end = vi.fn();
-  const res = {
-    headersSent: false,
-    statusCode: 200,
-    setHeader,
-    end,
-  } as unknown as ServerResponse;
-  return { res, setHeader, end };
-};
 
 describe("createGatewayPluginRequestHandler", () => {
   it("returns false when no handlers are registered", async () => {
@@ -28,7 +13,7 @@ describe("createGatewayPluginRequestHandler", () => {
       registry: createTestRegistry(),
       log,
     });
-    const { res } = makeResponse();
+    const { res } = makeMockHttpResponse();
     const handled = await handler({} as IncomingMessage, res);
     expect(handled).toBe(false);
   });
@@ -48,7 +33,7 @@ describe("createGatewayPluginRequestHandler", () => {
       >[0]["log"],
     });
 
-    const { res } = makeResponse();
+    const { res } = makeMockHttpResponse();
     const handled = await handler({} as IncomingMessage, res);
     expect(handled).toBe(true);
     expect(first).toHaveBeenCalledTimes(1);
@@ -77,7 +62,7 @@ describe("createGatewayPluginRequestHandler", () => {
       >[0]["log"],
     });
 
-    const { res } = makeResponse();
+    const { res } = makeMockHttpResponse();
     const handled = await handler({ url: "/demo" } as IncomingMessage, res);
     expect(handled).toBe(true);
     expect(routeHandler).toHaveBeenCalledTimes(1);
@@ -103,7 +88,7 @@ describe("createGatewayPluginRequestHandler", () => {
       log,
     });
 
-    const { res, setHeader, end } = makeResponse();
+    const { res, setHeader, end } = makeMockHttpResponse();
     const handled = await handler({} as IncomingMessage, res);
     expect(handled).toBe(true);
     expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("boom"));

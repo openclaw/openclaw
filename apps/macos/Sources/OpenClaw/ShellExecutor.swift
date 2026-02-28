@@ -1,5 +1,5 @@
-import OpenClawIPC
 import Foundation
+import OpenClawIPC
 
 enum ShellExecutor {
     struct ShellResult {
@@ -69,7 +69,7 @@ enum ShellExecutor {
 
         if let timeout, timeout > 0 {
             let nanos = UInt64(timeout * 1_000_000_000)
-            let result = await withTaskGroup(of: ShellResult.self) { group in
+            return await withTaskGroup(of: ShellResult.self) { group in
                 group.addTask { await waitTask.value }
                 group.addTask {
                     try? await Task.sleep(nanoseconds: nanos)
@@ -87,7 +87,6 @@ enum ShellExecutor {
                 group.cancelAll()
                 return first
             }
-            return result
         }
 
         return await waitTask.value

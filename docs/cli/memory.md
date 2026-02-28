@@ -14,7 +14,7 @@ Provided by the active memory plugin (default: `memory-core`; set `plugins.slots
 Related:
 
 - Memory concept: [Memory](/concepts/memory)
-- Plugins: [Plugins](/plugins)
+- Plugins: [Plugins](/tools/plugin)
 
 ## Examples
 
@@ -26,6 +26,7 @@ openclaw memory status --deep --index --verbose
 openclaw memory index
 openclaw memory index --verbose
 openclaw memory search "release checklist"
+openclaw memory search --query "release checklist"
 openclaw memory status --agent main
 openclaw memory index --agent main --verbose
 ```
@@ -36,6 +37,12 @@ Common:
 
 - `--agent <id>`: scope to a single agent (default: all configured agents).
 - `--verbose`: emit detailed logs during probes and indexing.
+
+`memory search`:
+
+- Query input: pass either positional `[query]` or `--query <text>`.
+- If both are provided, `--query` wins.
+- If neither is provided, the command exits with an error.
 
 Notes:
 

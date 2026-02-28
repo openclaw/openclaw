@@ -42,13 +42,32 @@ export type SandboxDockerSettings = {
   extraHosts?: string[];
   /** Additional bind mounts (host:container:mode format, e.g. ["/host/path:/container/path:rw"]). */
   binds?: string[];
+  /**
+   * Dangerous override: allow bind mounts that target reserved container paths
+   * like /workspace or /agent.
+   */
+  dangerouslyAllowReservedContainerTargets?: boolean;
+  /**
+   * Dangerous override: allow bind mount sources outside runtime allowlisted roots
+   * (workspace + agent workspace roots).
+   */
+  dangerouslyAllowExternalBindSources?: boolean;
+  /**
+   * Dangerous override: allow Docker `network: "container:<id>"` namespace joins.
+   * Default behavior blocks container namespace joins to preserve sandbox isolation.
+   */
+  dangerouslyAllowContainerNamespaceJoin?: boolean;
 };
 
 export type SandboxBrowserSettings = {
   enabled?: boolean;
   image?: string;
   containerPrefix?: string;
+  /** Docker network for sandbox browser containers (default: openclaw-sandbox-browser). */
+  network?: string;
   cdpPort?: number;
+  /** Optional CIDR allowlist for CDP ingress at the container edge (for example: 172.21.0.1/32). */
+  cdpSourceRange?: string;
   vncPort?: number;
   noVncPort?: number;
   headless?: boolean;
@@ -65,6 +84,8 @@ export type SandboxBrowserSettings = {
   autoStart?: boolean;
   /** Max time to wait for CDP to become reachable after auto-start (ms). */
   autoStartTimeoutMs?: number;
+  /** Additional bind mounts for the browser container only. When set, replaces docker.binds for the browser container. */
+  binds?: string[];
 };
 
 export type SandboxPruneSettings = {

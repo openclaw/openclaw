@@ -79,7 +79,7 @@ export type PluginRuntime = {
         cfg: unknown;
         channel: string;
         accountId: string;
-        peer: { kind: "dm" | "group" | "channel"; id: string };
+        peer: { kind: RoutePeerKind; id: string };
       }): { sessionKey: string; accountId: string };
     };
     pairing: {
@@ -218,4 +218,4 @@ export type PluginRuntime = {
 - 新连接器模板仅依赖 SDK + 运行时。
 - 外部插件可以在无需访问核心源码的情况下进行开发和更新。
 
-相关文档：[插件](/plugin)、[渠道](/channels/index)、[配置](/gateway/configuration)。
+相关文档：[插件](/tools/plugin)、[渠道](/channels/index)、[配置](/gateway/configuration)。

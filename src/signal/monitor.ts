@@ -1,39 +1,32 @@
-import type { ReplyPayload } from "../auto-reply/types.js";
-import type { OpenClawConfig } from "../config/config.js";
-import type { SignalReactionNotificationMode } from "../config/types.js";
-import type { RuntimeEnv } from "../runtime.js";
 import { chunkTextWithMode, resolveChunkMode, resolveTextChunkLimit } from "../auto-reply/chunk.js";
 import { DEFAULT_GROUP_HISTORY_LIMIT, type HistoryEntry } from "../auto-reply/reply/history.js";
+import type { ReplyPayload } from "../auto-reply/types.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
+import {
+  resolveAllowlistProviderRuntimeGroupPolicy,
+  resolveDefaultGroupPolicy,
+  warnMissingProviderGroupPolicyFallbackOnce,
+} from "../config/runtime-group-policy.js";
+import type { SignalReactionNotificationMode } from "../config/types.js";
+import type { BackoffPolicy } from "../infra/backoff.js";
 import { waitForTransportReady } from "../infra/transport-ready.js";
 import { saveMediaBuffer } from "../media/store.js";
+import { createNonExitingRuntime, type RuntimeEnv } from "../runtime.js";
+import { normalizeStringEntries } from "../shared/string-normalization.js";
 import { normalizeE164 } from "../utils.js";
 import { resolveSignalAccount } from "./accounts.js";
 import { signalCheck, signalRpcRequest } from "./client.js";
-import { spawnSignalDaemon } from "./daemon.js";
+import { formatSignalDaemonExit, spawnSignalDaemon, type SignalDaemonHandle } from "./daemon.js";
 import { isSignalSenderAllowed, type resolveSignalSender } from "./identity.js";
 import { createSignalEventHandler } from "./monitor/event-handler.js";
+import type {
+  SignalAttachment,
+  SignalReactionMessage,
+  SignalReactionTarget,
+} from "./monitor/event-handler.types.js";
 import { sendMessageSignal } from "./send.js";
 import { runSignalSseLoop } from "./sse-reconnect.js";
-
-type SignalReactionMessage = {
-  emoji?: string | null;
-  targetAuthor?: string | null;
-  targetAuthorUuid?: string | null;
-  targetSentTimestamp?: number | null;
-  isRemove?: boolean | null;
-  groupInfo?: {
-    groupId?: string | null;
-    groupName?: string | null;
-  } | null;
-};
-
-type SignalAttachment = {
-  id?: string | null;
-  contentType?: string | null;
-  filename?: string | null;
-  size?: number | null;
-};
 
 export type MonitorSignalOpts = {
   runtime?: RuntimeEnv;
@@ -54,29 +47,88 @@ export type MonitorSignalOpts = {
   allowFrom?: Array<string | number>;
   groupAllowFrom?: Array<string | number>;
   mediaMaxMb?: number;
+  reconnectPolicy?: Partial<BackoffPolicy>;
 };
 
 function resolveRuntime(opts: MonitorSignalOpts): RuntimeEnv {
-  return (
-    opts.runtime ?? {
-      log: console.log,
-      error: console.error,
-      exit: (code: number): never => {
-        throw new Error(`exit ${code}`);
-      },
+  return opts.runtime ?? createNonExitingRuntime();
+}
+
+function mergeAbortSignals(
+  a?: AbortSignal,
+  b?: AbortSignal,
+): { signal?: AbortSignal; dispose: () => void } {
+  if (!a && !b) {
+    return { signal: undefined, dispose: () => {} };
+  }
+  if (!a) {
+    return { signal: b, dispose: () => {} };
+  }
+  if (!b) {
+    return { signal: a, dispose: () => {} };
+  }
+  const controller = new AbortController();
+  const abortFrom = (source: AbortSignal) => {
+    if (!controller.signal.aborted) {
+      controller.abort(source.reason);
     }
-  );
+  };
+  if (a.aborted) {
+    abortFrom(a);
+    return { signal: controller.signal, dispose: () => {} };
+  }
+  if (b.aborted) {
+    abortFrom(b);
+    return { signal: controller.signal, dispose: () => {} };
+  }
+  const onAbortA = () => abortFrom(a);
+  const onAbortB = () => abortFrom(b);
+  a.addEventListener("abort", onAbortA, { once: true });
+  b.addEventListener("abort", onAbortB, { once: true });
+  return {
+    signal: controller.signal,
+    dispose: () => {
+      a.removeEventListener("abort", onAbortA);
+      b.removeEventListener("abort", onAbortB);
+    },
+  };
+}
+
+function createSignalDaemonLifecycle(params: { abortSignal?: AbortSignal }) {
+  let daemonHandle: SignalDaemonHandle | null = null;
+  let daemonStopRequested = false;
+  let daemonExitError: Error | undefined;
+  const daemonAbortController = new AbortController();
+  const mergedAbort = mergeAbortSignals(params.abortSignal, daemonAbortController.signal);
+  const stop = () => {
+    daemonStopRequested = true;
+    daemonHandle?.stop();
+  };
+  const attach = (handle: SignalDaemonHandle) => {
+    daemonHandle = handle;
+    void handle.exited.then((exit) => {
+      if (daemonStopRequested || params.abortSignal?.aborted) {
+        return;
+      }
+      daemonExitError = new Error(formatSignalDaemonExit(exit));
+      if (!daemonAbortController.signal.aborted) {
+        daemonAbortController.abort(daemonExitError);
+      }
+    });
+  };
+  const getExitError = () => daemonExitError;
+  return {
+    attach,
+    stop,
+    getExitError,
+    abortSignal: mergedAbort.signal,
+    dispose: mergedAbort.dispose,
+  };
 }
 
 function normalizeAllowList(raw?: Array<string | number>): string[] {
-  return (raw ?? []).map((entry) => String(entry).trim()).filter(Boolean);
+  return normalizeStringEntries(raw);
 }
-
-type SignalReactionTarget = {
-  kind: "phone" | "uuid";
-  id: string;
-  display: string;
-};
 
 function resolveSignalReactionTargets(reaction: SignalReactionMessage): SignalReactionTarget[] {
   const targets: SignalReactionTarget[] = [];
@@ -299,8 +351,19 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
         ? accountInfo.config.allowFrom
         : []),
   );
-  const defaultGroupPolicy = cfg.channels?.defaults?.groupPolicy;
-  const groupPolicy = accountInfo.config.groupPolicy ?? defaultGroupPolicy ?? "allowlist";
+  const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
+  const { groupPolicy, providerMissingFallbackApplied } =
+    resolveAllowlistProviderRuntimeGroupPolicy({
+      providerConfigPresent: cfg.channels?.signal !== undefined,
+      groupPolicy: accountInfo.config.groupPolicy,
+      defaultGroupPolicy,
+    });
+  warnMissingProviderGroupPolicyFallbackOnce({
+    providerMissingFallbackApplied,
+    providerKey: "signal",
+    accountId: accountInfo.accountId,
+    log: (message) => runtime.log?.(message),
+  });
   const reactionMode = accountInfo.config.reactionNotifications ?? "own";
   const reactionAllowlist = normalizeAllowList(accountInfo.config.reactionAllowlist);
   const mediaMaxBytes = (opts.mediaMaxMb ?? accountInfo.config.mediaMaxMb ?? 8) * 1024 * 1024;
@@ -313,7 +376,8 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
     Math.max(1_000, opts.startupTimeoutMs ?? accountInfo.config.startupTimeoutMs ?? 30_000),
   );
   const readReceiptsViaDaemon = Boolean(autoStart && sendReadReceipts);
-  let daemonHandle: ReturnType<typeof spawnSignalDaemon> | null = null;
+  const daemonLifecycle = createSignalDaemonLifecycle({ abortSignal: opts.abortSignal });
+  let daemonHandle: SignalDaemonHandle | null = null;
 
   if (autoStart) {
     const cliPath = opts.cliPath ?? accountInfo.config.cliPath ?? "signal-cli";
@@ -330,10 +394,11 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
       sendReadReceipts,
       runtime,
     });
+    daemonLifecycle.attach(daemonHandle);
   }
 
   const onAbort = () => {
-    daemonHandle?.stop();
+    daemonLifecycle.stop();
   };
   opts.abortSignal?.addEventListener("abort", onAbort, { once: true });
 
@@ -341,12 +406,16 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
     if (daemonHandle) {
       await waitForSignalDaemonReady({
         baseUrl,
-        abortSignal: opts.abortSignal,
+        abortSignal: daemonLifecycle.abortSignal,
         timeoutMs: startupTimeoutMs,
         logAfterMs: 10_000,
         logIntervalMs: 10_000,
         runtime,
       });
+      const daemonExitError = daemonLifecycle.getExitError();
+      if (daemonExitError) {
+        throw daemonExitError;
+      }
     }
 
     const handleEvent = createSignalEventHandler({
@@ -380,21 +449,28 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
     await runSignalSseLoop({
       baseUrl,
       account,
-      abortSignal: opts.abortSignal,
+      abortSignal: daemonLifecycle.abortSignal,
       runtime,
+      policy: opts.reconnectPolicy,
       onEvent: (event) => {
         void handleEvent(event).catch((err) => {
           runtime.error?.(`event handler failed: ${String(err)}`);
         });
       },
     });
+    const daemonExitError = daemonLifecycle.getExitError();
+    if (daemonExitError) {
+      throw daemonExitError;
+    }
   } catch (err) {
-    if (opts.abortSignal?.aborted) {
+    const daemonExitError = daemonLifecycle.getExitError();
+    if (opts.abortSignal?.aborted && !daemonExitError) {
       return;
     }
     throw err;
   } finally {
+    daemonLifecycle.dispose();
     opts.abortSignal?.removeEventListener("abort", onAbort);
-    daemonHandle?.stop();
+    daemonLifecycle.stop();
   }
 }

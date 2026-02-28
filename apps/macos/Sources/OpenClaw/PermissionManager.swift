@@ -1,11 +1,11 @@
 import AppKit
 import ApplicationServices
 import AVFoundation
-import OpenClawIPC
 import CoreGraphics
 import CoreLocation
 import Foundation
 import Observation
+import OpenClawIPC
 import Speech
 import UserNotifications
 
@@ -336,7 +336,7 @@ final class LocationPermissionRequester: NSObject, CLLocationManagerDelegate {
         cont.resume(returning: status)
     }
 
-    // nonisolated for Swift 6 strict concurrency compatibility
+    /// nonisolated for Swift 6 strict concurrency compatibility
     nonisolated func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
         let status = manager.authorizationStatus
         Task { @MainActor in
@@ -344,7 +344,7 @@ final class LocationPermissionRequester: NSObject, CLLocationManagerDelegate {
         }
     }
 
-    // Legacy callback (still used on some macOS versions / configurations).
+    /// Legacy callback (still used on some macOS versions / configurations).
     nonisolated func locationManager(
         _ manager: CLLocationManager,
         didChangeAuthorization status: CLAuthorizationStatus)

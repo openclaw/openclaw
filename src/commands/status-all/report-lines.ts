@@ -2,7 +2,7 @@ import type { ProgressReporter } from "../../cli/progress.js";
 import { renderTable } from "../../terminal/table.js";
 import { isRich, theme } from "../../terminal/theme.js";
 import { appendStatusAllDiagnosis } from "./diagnosis.js";
-import { formatAge } from "./format.js";
+import { formatTimeAgo } from "./format.js";
 
 type OverviewRow = { Item: string; Value: string };
 
@@ -121,14 +121,14 @@ export async function buildStatusAllReportLines(params: {
 
   const agentRows = params.agentStatus.agents.map((a) => ({
     Agent: a.name?.trim() ? `${a.id} (${a.name.trim()})` : a.id,
-    Bootstrap:
+    BootstrapFile:
       a.bootstrapPending === true
-        ? warn("PENDING")
+        ? warn("PRESENT")
         : a.bootstrapPending === false
-          ? ok("OK")
+          ? ok("ABSENT")
           : "unknown",
     Sessions: String(a.sessionsCount),
-    Active: a.lastActiveAgeMs != null ? formatAge(a.lastActiveAgeMs) : "unknown",
+    Active: a.lastActiveAgeMs != null ? formatTimeAgo(a.lastActiveAgeMs) : "unknown",
     Store: a.sessionsPath,
   }));
 
@@ -136,7 +136,7 @@ export async function buildStatusAllReportLines(params: {
     width: tableWidth,
     columns: [
       { key: "Agent", header: "Agent", minWidth: 12 },
-      { key: "Bootstrap", header: "Bootstrap", minWidth: 10 },
+      { key: "BootstrapFile", header: "Bootstrap file", minWidth: 14 },
       { key: "Sessions", header: "Sessions", align: "right", minWidth: 8 },
       { key: "Active", header: "Active", minWidth: 10 },
       { key: "Store", header: "Store", flex: true, minWidth: 34 },
