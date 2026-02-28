@@ -129,7 +129,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       const providerResult = await createEmbeddingProvider({
         config: cfg,
         agentDir: resolveAgentDir(cfg, agentId),
-        provider: settings.provider,
+        provider: settings.provider === "obsidian" ? "auto" : settings.provider,
         remote: settings.remote,
         model: settings.model,
         fallback: settings.fallback,
