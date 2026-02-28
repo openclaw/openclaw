@@ -1,0 +1,40 @@
+{
+  "taskId": "task-mac-001",
+  "requester": "dingtalk:designer-a",
+  "target": {
+    "agentId": "design-mac-01",
+    "os": "mac"
+  },
+  "input": {
+    "fileHint": "Campaign2024 poster_v1",
+    "edits": [
+      {
+        "layerName": "主标题",
+        "newText": "夏季大促"
+      },
+      {
+        "layerName": "副标题",
+        "newText": "步履不停，稳步前进"
+      }
+    ]
+  },
+  "workflow": {
+    "sourceMode": "inplace"
+  },
+  "output": {
+    "psd": {
+      "mode": "overwrite"
+    },
+    "exports": [
+      {
+        "format": "png",
+        "dir": "~/Desktop"
+      }
+    ]
+  },
+  "options": {
+    "dryRun": true,
+    "createBackup": true,
+    "styleLock": true
+  }
+}

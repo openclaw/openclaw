@@ -1,0 +1,41 @@
+{
+  "taskId": "task-win-001",
+  "requester": "dingtalk:designer-b",
+  "target": {
+    "agentId": "design-win-02",
+    "os": "win"
+  },
+  "input": {
+    "exactPath": "C:\\Design\\Campaign2024\\poster_v1.psd",
+    "edits": [
+      {
+        "layerName": "Title_Main",
+        "newText": "Summer Sale"
+      },
+      {
+        "layerName": "Subtitle",
+        "newText": "Keep Moving Forward"
+      }
+    ]
+  },
+  "workflow": {
+    "sourceMode": "copy_then_edit",
+    "copyToDir": "C:\\Users\\Public\\Desktop"
+  },
+  "output": {
+    "psd": {
+      "mode": "overwrite"
+    },
+    "exports": [
+      {
+        "format": "png",
+        "dir": "C:\\Users\\Public\\Desktop"
+      }
+    ]
+  },
+  "options": {
+    "dryRun": true,
+    "createBackup": true,
+    "styleLock": true
+  }
+}

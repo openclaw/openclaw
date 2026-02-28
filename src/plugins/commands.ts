@@ -50,6 +50,7 @@ const RESERVED_COMMANDS = new Set([
   "activation",
   // Agent control
   "skill",
+  "psd",
   "subagents",
   "kill",
   "steer",

@@ -1,0 +1,97 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PsdAutomatorTask",
+  "type": "object",
+  "required": ["taskId", "input"],
+  "properties": {
+    "taskId": { "type": "string", "minLength": 1 },
+    "requester": { "type": "string" },
+    "target": {
+      "type": "object",
+      "properties": {
+        "agentId": { "type": "string" },
+        "os": { "type": "string", "enum": ["mac", "win"] }
+      },
+      "additionalProperties": false
+    },
+    "input": {
+      "type": "object",
+      "properties": {
+        "exactPath": { "type": "string" },
+        "fileHint": { "type": "string" },
+        "layerName": { "type": "string", "minLength": 1 },
+        "newText": { "type": "string" },
+        "edits": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["layerName", "newText"],
+            "properties": {
+              "layerName": { "type": "string", "minLength": 1 },
+              "newText": { "type": "string" }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "anyOf": [{ "required": ["exactPath"] }, { "required": ["fileHint"] }],
+      "allOf": [
+        {
+          "anyOf": [{ "required": ["edits"] }, { "required": ["layerName", "newText"] }]
+        }
+      ],
+      "additionalProperties": false
+    },
+    "workflow": {
+      "type": "object",
+      "properties": {
+        "sourceMode": { "type": "string", "enum": ["inplace", "copy_then_edit"] },
+        "copyToDir": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "mode": { "type": "string", "enum": ["overwrite", "copy"] },
+        "path": { "type": "string" },
+        "psd": {
+          "type": "object",
+          "properties": {
+            "mode": { "type": "string", "enum": ["overwrite", "copy"] },
+            "path": { "type": "string" }
+          },
+          "additionalProperties": false
+        },
+        "exports": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["format"],
+            "properties": {
+              "format": { "type": "string", "enum": ["png"] },
+              "dir": { "type": "string" },
+              "fileName": { "type": "string" }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "options": {
+      "type": "object",
+      "properties": {
+        "dryRun": { "type": "boolean" },
+        "createBackup": { "type": "boolean" },
+        "styleLock": { "type": "boolean" },
+        "retryOnLockedFile": { "type": "boolean" },
+        "maxRetries": { "type": "integer", "minimum": 0, "maximum": 5 },
+        "pathBridgeMode": { "type": "string", "enum": ["auto", "always", "off"] }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

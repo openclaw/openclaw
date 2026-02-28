@@ -173,6 +173,27 @@ function buildChatCommands(): ChatCommandDefinition[] {
       category: "status",
     }),
     defineChatCommand({
+      key: "psd",
+      nativeName: "psd",
+      description: "Dispatch PSD automation by task file or natural-language request.",
+      textAlias: "/psd",
+      category: "tools",
+      acceptsArgs: true,
+      args: [
+        {
+          name: "agentId",
+          description: "Target agent id",
+          type: "string",
+        },
+        {
+          name: "request",
+          description: "Task JSON path or natural-language request",
+          type: "string",
+          captureRemaining: true,
+        },
+      ],
+    }),
+    defineChatCommand({
       key: "allowlist",
       description: "List/add/remove allowlist entries.",
       textAlias: "/allowlist",
