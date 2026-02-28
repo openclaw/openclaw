@@ -492,7 +492,7 @@ AI/vibe-coded PRs welcome! 🤖
 
 ### Agent Templates
 
-- [awesome-openclaw-agents](https://github.com/mergisi/awesome-openclaw-agents) — Curated collection of copy-paste SOUL.md templates for productivity, marketing, business, and development agents. Deploy any template with [CrewClaw](https://crewclaw.com).
+- [awesome-openclaw-agents](https://github.com/mergisi/awesome-openclaw-agents) — Curated collection of copy-paste SOUL.md templates for productivity, marketing, business, and development agents.
 
 Special thanks to [Mario Zechner](https://mariozechner.at/) for his support and for
 [pi-mono](https://github.com/badlogic/pi-mono).
