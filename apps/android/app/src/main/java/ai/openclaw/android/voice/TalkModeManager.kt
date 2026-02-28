@@ -307,8 +307,9 @@ private const val defaultTalkProvider = "elevenlabs"
     val accepted = streamingTts?.sendText(text) ?: false
     if (!accepted && streamingTts != null) {
       Log.d(tag, "text diverged, restarting streaming TTS")
-      streamingTts?.stop()
+      val oldTts = streamingTts
       streamingTts = null
+      oldTts?.stop()  // Stop old stream — releases AudioTrack before new one starts
       // Restart with the new text
       val voiceId2 = currentVoiceId ?: defaultVoiceId
       val apiKey2 = this.apiKey
