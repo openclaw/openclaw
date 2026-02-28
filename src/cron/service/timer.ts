@@ -210,8 +210,26 @@ export function applyJobResult(
         // schedule computation lands in the same second due to
         // timezone/croner edge cases (see #17821).
         const minNext = result.endedAt + MIN_REFIRE_GAP_MS;
-        job.state.nextRunAtMs =
-          naturalNext !== undefined ? Math.max(naturalNext, minNext) : minNext;
+        const computedNext = naturalNext !== undefined ? Math.max(naturalNext, minNext) : minNext;
+        
+        if (computedNext <= result.endedAt) {
+          state.deps.log.warn(
+            {
+              jobId: job.id,
+              jobName: job.name,
+              computedNext,
+              endedAt: result.endedAt,
+              schedule: job.schedule,
+            },
+            "cron: computed nextRunAtMs is in the past, recomputing from next second",
+          );
+         
+          const retryNext = computeJobNextRunAtMs(job, result.endedAt + 1000);
+          job.state.nextRunAtMs =
+            retryNext !== undefined && retryNext > result.endedAt ? retryNext : computedNext;
+        } else {
+          job.state.nextRunAtMs = computedNext;
+        }
       } else {
         job.state.nextRunAtMs = naturalNext;
       }
@@ -231,6 +249,22 @@ function applyOutcomeToStoredJob(state: CronServiceState, result: TimedCronRunOu
   const jobs = store.jobs;
   const job = jobs.find((entry) => entry.id === result.jobId);
   if (!job) {
+    return;
+  }
+
+  
+  if (typeof job.state.runningAtMs === "number" && job.state.runningAtMs !== result.startedAt) {
+   
+    state.deps.log.warn(
+      {
+        jobId: job.id,
+        expectedRunningAtMs: result.startedAt,
+        actualRunningAtMs: job.state.runningAtMs,
+      },
+      "cron: skipping nextRunAtMs update - job runningAtMs mismatch (concurrent execution?)",
+    );
+    
+    job.state.runningAtMs = undefined;
     return;
   }
 
@@ -355,7 +389,7 @@ export async function onTimer(state: CronServiceState) {
       job: CronJob;
     }): Promise<TimedCronRunOutcome> => {
       const { id, job } = params;
-      const startedAt = state.deps.nowMs();
+    
       job.state.runningAtMs = startedAt;
       emit(state, { jobId: job.id, action: "started", runAtMs: startedAt });
       const jobTimeoutMs = resolveCronJobTimeoutMs(job);
