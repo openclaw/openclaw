@@ -374,7 +374,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       }
     }
 
-    if (mode === "force" && typeof job.state.runningAtMs === "number") {
+    if (typeof job.state.runningAtMs === "number") {
       respond(
         true,
         buildNotAcceptedCronRunPayload({
@@ -388,23 +388,29 @@ export const cronHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    if (
-      mode === "due" &&
-      typeof job.state.nextRunAtMs === "number" &&
-      Number.isFinite(job.state.nextRunAtMs) &&
-      job.state.nextRunAtMs > now
-    ) {
-      respond(
-        true,
-        buildNotAcceptedCronRunPayload({
-          jobId,
-          mode,
-          queuedAt: now,
-          errorMessage: `job not due yet (nextRunAtMs=${job.state.nextRunAtMs})`,
-        }),
-        undefined,
-      );
-      return;
+    if (mode === "due") {
+      const nextRunAtMs = job.state.nextRunAtMs;
+      const hasValidNextRun =
+        typeof nextRunAtMs === "number" && Number.isFinite(nextRunAtMs) && nextRunAtMs > 0;
+      const due = job.enabled && hasValidNextRun && now >= nextRunAtMs;
+      if (!due) {
+        const errorMessage = !job.enabled
+          ? `job is disabled: ${jobId}`
+          : hasValidNextRun
+            ? `job not due yet (nextRunAtMs=${nextRunAtMs})`
+            : `job has no due schedule: ${jobId}`;
+        respond(
+          true,
+          buildNotAcceptedCronRunPayload({
+            jobId,
+            mode,
+            queuedAt: now,
+            errorMessage,
+          }),
+          undefined,
+        );
+        return;
+      }
     }
 
     const requestId = randomUUID();

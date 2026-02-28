@@ -604,6 +604,49 @@ describe("gateway server cron", () => {
     }
   });
 
+  test("returns RUN_NOT_ACCEPTED for due-mode runs when job is disabled", async () => {
+    const { prevSkipCron, dir } = await setupCronTestRun({
+      tempPrefix: "openclaw-gw-cron-due-disabled-",
+      cronEnabled: false,
+    });
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws);
+
+    try {
+      const addRes = await rpcReq(ws, "cron.add", {
+        name: "due disabled",
+        enabled: false,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "agentTurn", message: "run me" },
+      });
+      expect(addRes.ok).toBe(true);
+      const jobId = (addRes.payload as { id?: string } | null)?.id ?? "";
+      expect(jobId.length > 0).toBe(true);
+
+      const runRes = await rpcReq(ws, "cron.run", { id: jobId, mode: "due" }, 20_000);
+      expect(runRes.ok).toBe(true);
+      const payload = runRes.payload as
+        | {
+            accepted?: unknown;
+            status?: unknown;
+            errorType?: unknown;
+            errorMessage?: unknown;
+            runId?: unknown;
+          }
+        | undefined;
+      expect(payload?.accepted).toBe(false);
+      expect(payload?.status).toBe("not-accepted");
+      expect(payload?.errorType).toBe("RUN_NOT_ACCEPTED");
+      expect(payload?.runId).toBe(null);
+      expect(typeof payload?.errorMessage).toBe("string");
+      expect(String(payload?.errorMessage)).toContain("disabled");
+    } finally {
+      await cleanupCronTestRun({ ws, server, dir, prevSkipCron });
+    }
+  });
+
   test("posts webhooks for delivery mode and legacy notify fallback only when summary exists", async () => {
     const legacyNotifyJob = {
       id: "legacy-notify-job",
