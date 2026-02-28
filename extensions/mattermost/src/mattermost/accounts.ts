@@ -164,23 +164,23 @@ export function resolveMattermostAccount(params: {
   };
 }
 
+/**
+ * Resolve the effective replyToMode for a given chat type.
+ * Checks replyToModeByChatType overrides first, then dm.replyToMode for DMs,
+ * then falls back to the global replyToMode (defaulting to "off" for DMs).
+ */
 export function resolveMattermostReplyToMode(
-  account: {
-    config: {
-      replyToMode?: MattermostReplyToMode;
-      replyToModeByChatType?: Partial<Record<MattermostChatTypeKey, MattermostReplyToMode>>;
-      dm?: { replyToMode?: MattermostReplyToMode };
-    };
-  },
-  chatType: MattermostChatTypeKey | undefined,
+  account: ResolvedMattermostAccount,
+  kind: MattermostChatTypeKey,
 ): MattermostReplyToMode {
-  if (chatType !== undefined && account.config.replyToModeByChatType?.[chatType] !== undefined) {
-    return account.config.replyToModeByChatType[chatType] ?? "off";
+  if (account.config.replyToModeByChatType?.[kind] !== undefined) {
+    return account.config.replyToModeByChatType[kind] ?? "off";
   }
-  if (chatType === "direct" && account.config.dm?.replyToMode !== undefined) {
+  if (kind === "direct" && account.config.dm?.replyToMode !== undefined) {
     return account.config.dm.replyToMode ?? "off";
   }
-  if (chatType === "direct") return "off";
+  // DMs default to "off" unless explicitly configured
+  if (kind === "direct") return "off";
   return account.config.replyToMode ?? "off";
 }
 

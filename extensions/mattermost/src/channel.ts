@@ -252,11 +252,11 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = {
   threading: {
     resolveReplyToMode: ({ cfg, accountId, chatType }) => {
       const account = resolveMattermostAccount({ cfg, accountId });
-      const normalizedChatType =
-        chatType === "direct" || chatType === "channel" || chatType === "group"
+      const kind =
+        chatType === "direct" || chatType === "group" || chatType === "channel"
           ? chatType
-          : undefined;
-      return resolveMattermostReplyToMode(account, normalizedChatType);
+          : "channel";
+      return resolveMattermostReplyToMode(account, kind);
     },
   },
   actions: mattermostMessageActions,

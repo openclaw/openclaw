@@ -29,7 +29,7 @@ import {
   type HistoryEntry,
 } from "openclaw/plugin-sdk";
 import { getMattermostRuntime } from "../runtime.js";
-import { resolveMattermostAccount } from "./accounts.js";
+import { resolveMattermostAccount, resolveMattermostReplyToMode } from "./accounts.js";
 import {
   createMattermostClient,
   fetchMattermostChannel,
@@ -184,28 +184,6 @@ function buildMattermostWsUrl(baseUrl: string): string {
   }
   const wsBase = normalized.replace(/^http/i, "ws");
   return `${wsBase}/api/v4/websocket`;
-}
-
-function resolveMattermostReplyToMode(
-  account: {
-    config: {
-      replyToMode?: string;
-      replyToModeByChatType?: Record<string, string>;
-      dm?: { replyToMode?: string };
-    };
-  },
-  kind: string,
-): string {
-  const chatType = kind === "direct" ? "direct" : kind === "channel" ? "channel" : "group";
-  if (account.config.replyToModeByChatType?.[chatType] !== undefined) {
-    return account.config.replyToModeByChatType[chatType] ?? "off";
-  }
-  if (chatType === "direct" && account.config.dm?.replyToMode !== undefined) {
-    return account.config.dm.replyToMode ?? "off";
-  }
-  // For direct messages, default to "off" unless explicitly configured
-  if (chatType === "direct") return "off";
-  return account.config.replyToMode ?? "off";
 }
 
 export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}): Promise<void> {
@@ -686,8 +664,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
 
     const baseSessionKey = route.sessionKey;
     const threadRootId = post.root_id?.trim() || undefined;
-    const chatType = kind === "direct" ? "direct" : kind === "channel" ? "channel" : "group";
-    const replyToMode = resolveMattermostReplyToMode(account, chatType);
+    const replyToMode = resolveMattermostReplyToMode(account, kind);
     const effectiveReplyToId =
       threadRootId ?? (replyToMode === "all" || replyToMode === "first" ? post.id : undefined);
     const threadKeys = resolveThreadSessionKeys({
