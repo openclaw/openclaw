@@ -41,6 +41,7 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getPluginCommandSpecs } from "../../plugins/commands.js";
 import { createNonExitingRuntime, type RuntimeEnv } from "../../runtime.js";
 import { resolveDiscordAccount } from "../accounts.js";
+import { makeDiscordProxyFetch } from "../client.js";
 import { fetchDiscordApplicationId } from "../probe.js";
 import { normalizeDiscordToken } from "../token.js";
 import { createDiscordVoiceCommand } from "../voice/command.js";
@@ -522,16 +523,28 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       listenerTimeout: 120_000,
       ...discordCfg.eventQueue,
     };
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const clientOptions: any = {
+      baseUrl: "http://localhost",
+      deploySecret: "a",
+      clientId: applicationId,
+      publicKey: "a",
+      token,
+      autoDeploy: false,
+      eventQueue: eventQueueOpts,
+    };
+
+    // If proxy is configured, inject custom fetch for Carbon Client
+    const proxy = rawDiscordCfg.proxy?.trim();
+    if (proxy) {
+      clientOptions.requestOptions = {
+        fetch: makeDiscordProxyFetch(proxy),
+      };
+    }
+
     const client = new Client(
-      {
-        baseUrl: "http://localhost",
-        deploySecret: "a",
-        clientId: applicationId,
-        publicKey: "a",
-        token,
-        autoDeploy: false,
-        eventQueue: eventQueueOpts,
-      },
+      clientOptions,
       {
         commands,
         listeners: [new DiscordStatusReadyListener()],
