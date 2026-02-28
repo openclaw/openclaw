@@ -142,6 +142,28 @@ describe("resolveExistingPathsWithinRoot", () => {
   );
 
   it.runIf(process.platform !== "win32")(
+    "returns outside-root message for files reached via escaping symlinked directories",
+    async () => {
+      await withFixtureRoot(async ({ baseDir, uploadsDir }) => {
+        const outsideDir = path.join(baseDir, "outside");
+        await fs.mkdir(outsideDir, { recursive: true });
+        await fs.writeFile(path.join(outsideDir, "secret.txt"), "secret", "utf8");
+        await fs.symlink(outsideDir, path.join(uploadsDir, "alias"));
+
+        const result = await resolveWithinUploads({
+          uploadsDir,
+          requestedPaths: ["alias/secret.txt"],
+        });
+
+        expect(result).toEqual({
+          ok: false,
+          error: "File is outside uploads directory",
+        });
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
     "accepts canonical absolute paths when upload root is a symlink alias",
     async () => {
       await withFixtureRoot(async ({ baseDir }) => {
