@@ -44,6 +44,7 @@ import {
   setTab as setTabInternal,
   setTheme as setThemeInternal,
   onPopState as onPopStateInternal,
+  syncUrlWithSessionKey as syncUrlWithSessionKeyInternal,
 } from "./app-settings.ts";
 import {
   resetToolStream as resetToolStreamInternal,
@@ -665,6 +666,11 @@ export class OpenClawApp extends LitElement {
       sessionKey,
       lastActiveSessionKey: sessionKey,
     });
+    syncUrlWithSessionKeyInternal(
+      this as unknown as Parameters<typeof syncUrlWithSessionKeyInternal>[0],
+      sessionKey,
+      true,
+    );
     void this.loadAssistantIdentity();
     void loadChatHistory(this as unknown as Parameters<typeof loadChatHistory>[0]);
     void refreshChatAvatar(this as unknown as Parameters<typeof refreshChatAvatar>[0]);
@@ -706,6 +712,11 @@ export class OpenClawApp extends LitElement {
         sessionKey: nextActive.sessionKey,
         lastActiveSessionKey: nextActive.sessionKey,
       });
+      syncUrlWithSessionKeyInternal(
+        this as unknown as Parameters<typeof syncUrlWithSessionKeyInternal>[0],
+        nextActive.sessionKey,
+        true,
+      );
       void this.loadAssistantIdentity();
       void loadChatHistory(this as unknown as Parameters<typeof loadChatHistory>[0]);
       void refreshChatAvatar(this as unknown as Parameters<typeof refreshChatAvatar>[0]);
@@ -733,6 +744,11 @@ export class OpenClawApp extends LitElement {
       sessionKey: tab.sessionKey,
       lastActiveSessionKey: tab.sessionKey,
     });
+    syncUrlWithSessionKeyInternal(
+      this as unknown as Parameters<typeof syncUrlWithSessionKeyInternal>[0],
+      tab.sessionKey,
+      true,
+    );
     void this.loadAssistantIdentity();
     void loadChatHistory(this as unknown as Parameters<typeof loadChatHistory>[0]);
     void refreshChatAvatar(this as unknown as Parameters<typeof refreshChatAvatar>[0]);
@@ -763,6 +779,11 @@ export class OpenClawApp extends LitElement {
       sessionKey: newTab.sessionKey,
       lastActiveSessionKey: newTab.sessionKey,
     });
+    syncUrlWithSessionKeyInternal(
+      this as unknown as Parameters<typeof syncUrlWithSessionKeyInternal>[0],
+      newTab.sessionKey,
+      true,
+    );
     void this.loadAssistantIdentity();
     void loadChatHistory(this as unknown as Parameters<typeof loadChatHistory>[0]);
     void refreshChatAvatar(this as unknown as Parameters<typeof refreshChatAvatar>[0]);
