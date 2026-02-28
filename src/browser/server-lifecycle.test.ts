@@ -23,7 +23,11 @@ vi.mock("./server-context.js", () => ({
   listKnownProfileNames: listKnownProfileNamesMock,
 }));
 
-import { ensureExtensionRelayForProfiles, stopKnownBrowserProfiles } from "./server-lifecycle.js";
+import {
+  closeIdleTrackedTabs,
+  ensureExtensionRelayForProfiles,
+  stopKnownBrowserProfiles,
+} from "./server-lifecycle.js";
 
 describe("ensureExtensionRelayForProfiles", () => {
   beforeEach(() => {
@@ -119,5 +123,105 @@ describe("stopKnownBrowserProfiles", () => {
     });
 
     expect(onWarn).toHaveBeenCalledWith("openclaw browser stop failed: Error: oops");
+  });
+});
+
+describe("closeIdleTrackedTabs", () => {
+  beforeEach(() => {
+    createBrowserRouteContextMock.mockClear();
+  });
+
+  function makeProfileState(tabEntries: [string, { lastAccessedAt: number }][]) {
+    return {
+      openedTabs: new Map(
+        tabEntries.map(([id, info]) => [id, { openedAt: info.lastAccessedAt, ...info }]),
+      ),
+    };
+  }
+
+  it("does nothing when tabIdleTimeoutMs is 0", async () => {
+    const closeTab = vi.fn();
+    createBrowserRouteContextMock.mockReturnValue({
+      forProfile: () => ({ closeTab }),
+    });
+    const state = {
+      resolved: { tabIdleTimeoutMs: 0 },
+      profiles: new Map([["openclaw", makeProfileState([["tab-1", { lastAccessedAt: 0 }]])]]),
+    };
+
+    await closeIdleTrackedTabs({ getState: () => state as never, onWarn: vi.fn() });
+
+    expect(closeTab).not.toHaveBeenCalled();
+  });
+
+  it("does nothing when no state is available", async () => {
+    const closeTab = vi.fn();
+    createBrowserRouteContextMock.mockReturnValue({ forProfile: () => ({ closeTab }) });
+
+    await closeIdleTrackedTabs({ getState: () => null, onWarn: vi.fn() });
+
+    expect(closeTab).not.toHaveBeenCalled();
+  });
+
+  it("closes tabs whose lastAccessedAt exceeds the idle timeout", async () => {
+    const closeTab = vi.fn(async () => {});
+    createBrowserRouteContextMock.mockReturnValue({
+      forProfile: () => ({ closeTab }),
+    });
+    const now = Date.now();
+    const state = {
+      resolved: { tabIdleTimeoutMs: 60_000 },
+      profiles: new Map([
+        [
+          "openclaw",
+          makeProfileState([
+            ["tab-idle", { lastAccessedAt: now - 90_000 }], // 90 s ago → idle
+            ["tab-active", { lastAccessedAt: now - 10_000 }], // 10 s ago → active
+          ]),
+        ],
+      ]),
+    };
+
+    await closeIdleTrackedTabs({ getState: () => state as never, onWarn: vi.fn() });
+
+    expect(closeTab).toHaveBeenCalledTimes(1);
+    expect(closeTab).toHaveBeenCalledWith("tab-idle");
+  });
+
+  it("removes stale tracking entry when closeTab fails", async () => {
+    const closeTab = vi.fn(async () => {
+      throw new Error("tab not found");
+    });
+    createBrowserRouteContextMock.mockReturnValue({
+      forProfile: () => ({ closeTab }),
+    });
+    const now = Date.now();
+    const openedTabs = new Map([
+      ["tab-gone", { openedAt: now - 200_000, lastAccessedAt: now - 200_000 }],
+    ]);
+    const state = {
+      resolved: { tabIdleTimeoutMs: 60_000 },
+      profiles: new Map([["openclaw", { openedTabs }]]),
+    };
+
+    await closeIdleTrackedTabs({ getState: () => state as never, onWarn: vi.fn() });
+
+    // Stale entry should be purged even though closeTab threw
+    expect(openedTabs.size).toBe(0);
+  });
+
+  it("skips profiles with no openedTabs", async () => {
+    const closeTab = vi.fn();
+    createBrowserRouteContextMock.mockReturnValue({
+      forProfile: () => ({ closeTab }),
+    });
+    const state = {
+      resolved: { tabIdleTimeoutMs: 60_000 },
+      profiles: new Map([["openclaw", { openedTabs: undefined }]]),
+    };
+
+    await closeIdleTrackedTabs({ getState: () => state as never, onWarn: vi.fn() });
+
+    expect(closeTab).not.toHaveBeenCalled();
   });
 });

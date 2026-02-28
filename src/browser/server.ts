@@ -8,13 +8,18 @@ import { isPwAiLoaded } from "./pw-ai-state.js";
 import { registerBrowserRoutes } from "./routes/index.js";
 import type { BrowserRouteRegistrar } from "./routes/types.js";
 import { type BrowserServerState, createBrowserRouteContext } from "./server-context.js";
-import { ensureExtensionRelayForProfiles, stopKnownBrowserProfiles } from "./server-lifecycle.js";
+import {
+  closeIdleTrackedTabs,
+  ensureExtensionRelayForProfiles,
+  stopKnownBrowserProfiles,
+} from "./server-lifecycle.js";
 import {
   installBrowserAuthMiddleware,
   installBrowserCommonMiddleware,
 } from "./server-middleware.js";
 
 let state: BrowserServerState | null = null;
+let idleCleanupTimer: ReturnType<typeof setInterval> | null = null;
 const log = createSubsystemLogger("browser");
 const logServer = log.child("server");
 
@@ -86,6 +91,22 @@ export async function startBrowserControlServerFromConfig(): Promise<BrowserServ
     onWarn: (message) => logServer.warn(message),
   });
 
+  // Start periodic idle-tab cleanup if tabIdleTimeoutMs is configured
+  if (resolved.tabIdleTimeoutMs > 0) {
+    // Run the cleanup every quarter of the idle period (minimum 60 s)
+    const interval = Math.max(60_000, Math.floor(resolved.tabIdleTimeoutMs / 4));
+    idleCleanupTimer = setInterval(() => {
+      closeIdleTrackedTabs({
+        getState: () => state,
+        onWarn: (message) => logServer.warn(message),
+      }).catch((err) => {
+        logServer.warn(`idle tab cleanup error: ${String(err)}`);
+      });
+    }, interval);
+    // Allow the process to exit even if this timer is still active
+    idleCleanupTimer.unref?.();
+  }
+
   const authMode = browserAuth.token ? "token" : browserAuth.password ? "password" : "off";
   logServer.info(`Browser control listening on http://127.0.0.1:${port}/ (auth=${authMode})`);
   return state;
@@ -95,6 +116,11 @@ export async function stopBrowserControlServer(): Promise<void> {
   const current = state;
   if (!current) {
     return;
+  }
+
+  if (idleCleanupTimer) {
+    clearInterval(idleCleanupTimer);
+    idleCleanupTimer = null;
   }
 
   await stopKnownBrowserProfiles({

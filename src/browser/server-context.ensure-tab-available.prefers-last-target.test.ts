@@ -25,6 +25,8 @@ function makeBrowserState(): BrowserServerState {
       headless: true,
       noSandbox: false,
       attachOnly: false,
+      maxTabs: 0,
+      tabIdleTimeoutMs: 0,
       defaultProfile: "chrome",
       profiles: {
         chrome: {

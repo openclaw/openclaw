@@ -6,3 +6,7 @@ export const DEFAULT_BROWSER_DEFAULT_PROFILE_NAME = "chrome";
 export const DEFAULT_AI_SNAPSHOT_MAX_CHARS = 80_000;
 export const DEFAULT_AI_SNAPSHOT_EFFICIENT_MAX_CHARS = 10_000;
 export const DEFAULT_AI_SNAPSHOT_EFFICIENT_DEPTH = 6;
+/** Default maximum concurrently tracked browser tabs per profile. 0 = no limit. */
+export const DEFAULT_BROWSER_MAX_TABS = 20;
+/** Default idle tab timeout in ms. 0 = disabled. */
+export const DEFAULT_BROWSER_TAB_IDLE_TIMEOUT_MS = 0;

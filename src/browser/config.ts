@@ -13,6 +13,8 @@ import {
   DEFAULT_BROWSER_EVALUATE_ENABLED,
   DEFAULT_BROWSER_DEFAULT_PROFILE_NAME,
   DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
+  DEFAULT_BROWSER_MAX_TABS,
+  DEFAULT_BROWSER_TAB_IDLE_TIMEOUT_MS,
 } from "./constants.js";
 import { CDP_PORT_RANGE_START, getUsedPorts } from "./profiles.js";
 
@@ -36,6 +38,10 @@ export type ResolvedBrowserConfig = {
   profiles: Record<string, BrowserProfileConfig>;
   ssrfPolicy?: SsrFPolicy;
   extraArgs: string[];
+  /** Max concurrently tracked tabs per profile. 0 = disabled. */
+  maxTabs: number;
+  /** Close idle tabs after this many ms. 0 = disabled. */
+  tabIdleTimeoutMs: number;
 };
 
 export type ResolvedBrowserProfile = {
@@ -280,6 +286,11 @@ export function resolveBrowserConfig(
     ? cfg.extraArgs.filter((a): a is string => typeof a === "string" && a.trim().length > 0)
     : [];
   const ssrfPolicy = resolveBrowserSsrFPolicy(cfg);
+  const maxTabs = normalizeTimeoutMs(cfg?.maxTabs, DEFAULT_BROWSER_MAX_TABS);
+  const tabIdleTimeoutMs = normalizeTimeoutMs(
+    cfg?.tabIdleTimeoutMs,
+    DEFAULT_BROWSER_TAB_IDLE_TIMEOUT_MS,
+  );
 
   return {
     enabled,
@@ -301,6 +312,8 @@ export function resolveBrowserConfig(
     profiles,
     ssrfPolicy,
     extraArgs,
+    maxTabs,
+    tabIdleTimeoutMs,
   };
 }
 

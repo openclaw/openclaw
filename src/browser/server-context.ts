@@ -89,7 +89,7 @@ function createProfileContext(
     const current = state();
     let profileState = current.profiles.get(profile.name);
     if (!profileState) {
-      profileState = { profile, running: null, lastTargetId: null };
+      profileState = { profile, running: null, lastTargetId: null, openedTabs: new Map() };
       current.profiles.set(profile.name, profileState);
     }
     return profileState;
@@ -98,6 +98,56 @@ function createProfileContext(
   const setProfileRunning = (running: ProfileRuntimeState["running"]) => {
     const profileState = getProfileState();
     profileState.running = running;
+  };
+
+  /** Returns the openedTabs map, lazily creating it if absent (backward compat). */
+  const getOpenedTabs = (): Map<string, { openedAt: number; lastAccessedAt: number }> => {
+    const profileState = getProfileState();
+    profileState.openedTabs ??= new Map();
+    return profileState.openedTabs;
+  };
+
+  /** Record a newly opened tab and mark it as recently accessed. */
+  const trackOpenedTab = (targetId: string): void => {
+    const now = Date.now();
+    getOpenedTabs().set(targetId, { openedAt: now, lastAccessedAt: now });
+  };
+
+  /** Update the last-access timestamp for a tracked tab (called on any interaction). */
+  const touchTab = (targetId: string): void => {
+    const entry = getOpenedTabs().get(targetId);
+    if (entry) {
+      entry.lastAccessedAt = Date.now();
+    }
+  };
+
+  /**
+   * If tracked tabs exceed maxTabs, close the least-recently-used tabs until within limit.
+   * Best-effort: errors closing individual tabs are silently ignored.
+   */
+  const enforceMaxTabs = async (): Promise<void> => {
+    const maxTabs = state().resolved.maxTabs;
+    if (maxTabs <= 0) {
+      return;
+    }
+    const openedTabs = getOpenedTabs();
+    while (openedTabs.size > maxTabs) {
+      // Find the least-recently-used tracked tab
+      let oldestId: string | null = null;
+      let oldestTime = Infinity;
+      for (const [id, info] of openedTabs) {
+        if (info.lastAccessedAt < oldestTime) {
+          oldestTime = info.lastAccessedAt;
+          oldestId = id;
+        }
+      }
+      if (!oldestId) {
+        break;
+      }
+      // Remove from tracking first so a failed close doesn't loop
+      openedTabs.delete(oldestId);
+      await closeTab(oldestId).catch(() => {});
+    }
   };
 
   const listTabs = async (): Promise<BrowserTab[]> => {
@@ -137,6 +187,9 @@ function createProfileContext(
   };
 
   const openTab = async (url: string): Promise<BrowserTab> => {
+    // Enforce max-tabs limit before opening so we don't exceed the cap
+    await enforceMaxTabs();
+
     const ssrfPolicyOpts = withBrowserNavigationPolicy(state().resolved.ssrfPolicy);
 
     // For remote profiles, use Playwright's persistent connection to create tabs
@@ -152,6 +205,7 @@ function createProfileContext(
         });
         const profileState = getProfileState();
         profileState.lastTargetId = page.targetId;
+        trackOpenedTab(page.targetId);
         return {
           targetId: page.targetId,
           title: page.title,
@@ -172,6 +226,7 @@ function createProfileContext(
     if (createdViaCdp) {
       const profileState = getProfileState();
       profileState.lastTargetId = createdViaCdp;
+      trackOpenedTab(createdViaCdp);
       const deadline = Date.now() + 2000;
       while (Date.now() < deadline) {
         const tabs = await listTabs().catch(() => [] as BrowserTab[]);
@@ -216,6 +271,7 @@ function createProfileContext(
     }
     const profileState = getProfileState();
     profileState.lastTargetId = created.id;
+    trackOpenedTab(created.id);
     const resolvedUrl = created.url ?? url;
     await assertBrowserNavigationResultAllowed({ url: resolvedUrl, ...ssrfPolicyOpts });
     return {
@@ -435,6 +491,8 @@ function createProfileContext(
       throw new Error("tab not found");
     }
     profileState.lastTargetId = chosen.targetId;
+    // Refresh last-access time so active tabs aren't idle-closed
+    touchTab(chosen.targetId);
     return chosen;
   };
 
@@ -486,11 +544,13 @@ function createProfileContext(
           cdpUrl: profile.cdpUrl,
           targetId: resolvedTargetId,
         });
+        getOpenedTabs().delete(resolvedTargetId);
         return;
       }
     }
 
     await fetchOk(appendCdpPath(profile.cdpUrl, `/json/close/${resolvedTargetId}`));
+    getOpenedTabs().delete(resolvedTargetId);
   };
 
   const stopRunningBrowser = async (): Promise<{ stopped: boolean }> => {

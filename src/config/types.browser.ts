@@ -66,4 +66,17 @@ export type BrowserConfig = {
    * Example: ["--window-size=1920,1080", "--disable-infobars"]
    */
   extraArgs?: string[];
+  /**
+   * Max number of concurrently tracked browser tabs (agent-opened).
+   * When the limit is reached, the least-recently-used tab is closed before opening a new one.
+   * Set to 0 to disable. Default: 20.
+   */
+  maxTabs?: number;
+  /**
+   * Close browser tabs that have been idle for this many milliseconds.
+   * Idle means the tab has not been accessed by any browser action since opening or last use.
+   * Set to 0 to disable idle cleanup (default).
+   * Example: 1800000 for 30 minutes.
+   */
+  tabIdleTimeoutMs?: number;
 };

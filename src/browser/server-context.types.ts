@@ -13,6 +13,12 @@ export type ProfileRuntimeState = {
   running: RunningChrome | null;
   /** Sticky tab selection when callers omit targetId (keeps snapshot+act consistent). */
   lastTargetId?: string | null;
+  /**
+   * Tracks tabs opened through the server, keyed by targetId.
+   * Used to enforce maxTabs and drive idle-timeout cleanup.
+   * Optional for backward compatibility with test fixtures; always initialized at runtime.
+   */
+  openedTabs?: Map<string, { openedAt: number; lastAccessedAt: number }>;
 };
 
 export type BrowserServerState = {

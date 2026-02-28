@@ -38,6 +38,8 @@ function makeState(
       headless: true,
       noSandbox: false,
       attachOnly: false,
+      maxTabs: 0,
+      tabIdleTimeoutMs: 0,
       ssrfPolicy: { allowPrivateNetwork: true },
       defaultProfile: profile,
       profiles: {
