@@ -61,6 +61,9 @@ object InvokeCommandRegistry {
       NodeCapabilitySpec(name = OpenClawCapability.Canvas.rawValue),
       NodeCapabilitySpec(name = OpenClawCapability.Screen.rawValue),
       NodeCapabilitySpec(name = OpenClawCapability.Device.rawValue),
+      NodeCapabilitySpec(name = OpenClawCapability.Notifications.rawValue),
+      NodeCapabilitySpec(name = OpenClawCapability.System.rawValue),
+      NodeCapabilitySpec(name = OpenClawCapability.AppUpdate.rawValue),
       NodeCapabilitySpec(
         name = OpenClawCapability.Camera.rawValue,
         availability = NodeCapabilityAvailability.CameraEnabled,
