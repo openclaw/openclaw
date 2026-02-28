@@ -12,7 +12,6 @@ overrides:
   form-data: 2.5.4
   minimatch: 10.2.4
   qs: 6.14.2
-  node-domexception: npm:@nolyfill/domexception@^1.0.28
   '@sinclair/typebox': 0.34.48
   tar: 7.5.9
   tough-cookie: 4.1.3
@@ -150,9 +149,6 @@ importers:
       markdown-it:
         specifier: ^14.1.1
         version: 14.1.1
-      node-domexception:
-        specifier: npm:@nolyfill/domexception@^1.0.28
-        version: '@nolyfill/domexception@1.0.28'
       node-edge-tts:
         specifier: ^1.2.10
         version: 1.2.10
@@ -1625,9 +1621,10 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@nolyfill/domexception@1.0.28':
-    resolution: {integrity: sha512-tlc/FcYIv5i8RYsl2iDil4A0gOihaas1R5jPcIC4Zw3GhjKsVilw90aHcVlhZPTBLGBzd379S+VcnsDjd9ChiA==}
-    engines: {node: '>=12.4.0'}
+  node-domexception@1.0.0:
+    resolution: {integrity: sha512-/jKZoMpw0F8GRwl4/eLROPA3cfcXtLApP0QzLmUT/HuPCZWyB7IY9ZrMeKw2O/nFIqPQB3PVM9aYm0F312AXDQ==}
+    engines: {node: '>=10.5.0'}
+    deprecated: Use your platform's native DOMException instead
 
   '@octokit/app@16.1.2':
     resolution: {integrity: sha512-8j7sEpUYVj18dxvh0KWj6W/l6uAiVRBl1JBDVRqH1VHKAO/G5eRVl4yEoYACjakWers1DjUkcCHyJNQK47JqyQ==}
@@ -7377,7 +7374,7 @@ snapshots:
   '@node-llama-cpp/win-x64@3.16.2':
     optional: true
 
-  '@nolyfill/domexception@1.0.28': {}
+  node-domexception@1.0.0: {}
 
   '@octokit/app@16.1.2':
     dependencies:
@@ -9759,7 +9756,7 @@ snapshots:
 
   fetch-blob@3.2.0:
     dependencies:
-      node-domexception: '@nolyfill/domexception@1.0.28'
+      node-domexception: 1.0.0
       web-streams-polyfill: 3.3.3
 
   file-type@21.3.0:
