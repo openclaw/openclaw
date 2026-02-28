@@ -21,8 +21,15 @@ struct OpenClawWidgetProvider: TimelineProvider {
             risk: nil, hasActions: false, relevance: nil)
     }
 
-    func getSnapshot(in _: Context, completion: @escaping (OpenClawWidgetEntry) -> Void) {
-        completion(readLatestEntry())
+    func getSnapshot(in context: Context, completion: @escaping (OpenClawWidgetEntry) -> Void) {
+        if context.isPreview {
+            // Return rich sample data for the widget gallery
+            completion(OpenClawWidgetEntry(
+                date: .now, title: "OpenClaw", body: "Approve SSH key for deploy?",
+                risk: "high", hasActions: true, relevance: nil))
+        } else {
+            completion(readLatestEntry())
+        }
     }
 
     func getTimeline(in _: Context, completion: @escaping (Timeline<OpenClawWidgetEntry>) -> Void) {
@@ -41,11 +48,20 @@ struct OpenClawWidgetProvider: TimelineProvider {
         }
 
         let hasActions = !(state.actions ?? []).isEmpty
+
+        // Relevance score: higher = more prominent in Smart Stack
         let score: Float = switch state.risk?.lowercased() {
         case "high": 80
         case "medium" where hasActions: 60
         case _ where hasActions: 50
         default: 20
+        }
+
+        // Relevance duration decays: urgent items fade faster so stale alerts don't linger
+        let duration: TimeInterval = switch state.risk?.lowercased() {
+        case "high": 3600       // 1 hour
+        case "medium": 7200     // 2 hours
+        default: 14400          // 4 hours
         }
 
         return OpenClawWidgetEntry(
@@ -54,13 +70,13 @@ struct OpenClawWidgetProvider: TimelineProvider {
             body: state.body,
             risk: state.risk,
             hasActions: hasActions,
-            relevance: TimelineEntryRelevance(score: score))
+            relevance: TimelineEntryRelevance(score: score, duration: duration))
     }
 }
 
 // MARK: - Lightweight Codable state (mirrors WatchInboxStore.PersistedState)
 
-private struct WidgetPersistedState: Codable {
+struct WidgetPersistedState: Codable {
     var title: String
     var body: String
     var updatedAt: Date
@@ -108,6 +124,7 @@ struct OpenClawWidgetView: View {
                 Text(entry.title)
                     .font(WatchDesignTokens.fontTitle)
                     .lineLimit(1)
+                    .widgetAccentable()
                 if let color = riskColor {
                     Circle()
                         .fill(color)
@@ -144,6 +161,15 @@ struct OpenClawWidgetView: View {
             Image(systemName: circularIcon)
                 .font(.system(size: 18))
                 .foregroundStyle(circularTint)
+                .widgetAccentable()
+            // Show a small accent dot when actions are pending
+            if entry.hasActions {
+                Circle()
+                    .fill(.white)
+                    .frame(width: 6, height: 6)
+                    .offset(x: 8, y: 8)
+                    .widgetAccentable()
+            }
         }
         .widgetURL(URL(string: "openclaw://watch/inbox")!)
         .containerBackground(.fill.tertiary, for: .widget)
@@ -153,7 +179,9 @@ struct OpenClawWidgetView: View {
 
     private var inlineContent: some View {
         let prefix = entry.risk?.lowercased() == "high" ? "⚠ " : ""
-        return Text("\(prefix)\(entry.title)")
+        let suffix = entry.hasActions ? " \u{00B7} Actions" : ""
+        return Text("\(prefix)\(entry.title)\(suffix)")
+            .widgetAccentable()
     }
 
     // MARK: - Corner
@@ -161,6 +189,7 @@ struct OpenClawWidgetView: View {
     private var cornerContent: some View {
         Image(systemName: entry.hasActions ? "bubble.left.and.exclamationmark.bubble.right.fill" : "bubble.left.fill")
             .font(.title3)
+            .widgetAccentable()
             .widgetLabel {
                 Text(entry.title)
             }
@@ -197,4 +226,34 @@ struct OpenClawWidgetBundle: WidgetBundle {
         QuickReplyControl()
         ConnectionStatusControl()
     }
+}
+
+// MARK: - Previews
+
+#Preview(as: .accessoryRectangular) {
+    OpenClawWidget()
+} timeline: {
+    OpenClawWidgetEntry(date: .now, title: "OpenClaw", body: "Approve SSH key for deploy?", risk: "high", hasActions: true, relevance: nil)
+    OpenClawWidgetEntry(date: .now, title: "OpenClaw", body: "No messages yet", risk: nil, hasActions: false, relevance: nil)
+}
+
+#Preview(as: .accessoryCircular) {
+    OpenClawWidget()
+} timeline: {
+    OpenClawWidgetEntry(date: .now, title: "OpenClaw", body: "Approve SSH key for deploy?", risk: "high", hasActions: true, relevance: nil)
+    OpenClawWidgetEntry(date: .now, title: "OpenClaw", body: "No messages yet", risk: nil, hasActions: false, relevance: nil)
+}
+
+#Preview(as: .accessoryInline) {
+    OpenClawWidget()
+} timeline: {
+    OpenClawWidgetEntry(date: .now, title: "OpenClaw", body: "Approve SSH key for deploy?", risk: "high", hasActions: true, relevance: nil)
+    OpenClawWidgetEntry(date: .now, title: "OpenClaw", body: "No messages yet", risk: nil, hasActions: false, relevance: nil)
+}
+
+#Preview(as: .accessoryCorner) {
+    OpenClawWidget()
+} timeline: {
+    OpenClawWidgetEntry(date: .now, title: "OpenClaw", body: "Approve SSH key for deploy?", risk: "high", hasActions: true, relevance: nil)
+    OpenClawWidgetEntry(date: .now, title: "OpenClaw", body: "No messages yet", risk: nil, hasActions: false, relevance: nil)
 }
