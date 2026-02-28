@@ -26,6 +26,7 @@ import ai.openclaw.android.normalizeMainKey
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -149,7 +150,7 @@ class TalkModeManager(
   private var chatSubscribedSessionKey: String? = null
   private var configLoaded = false
   @Volatile private var playbackEnabled = true
-  @Volatile private var playbackGeneration = 0L
+  private val playbackGeneration = AtomicLong(0L)
 
   private var player: MediaPlayer? = null
   private var streamingSource: StreamingMediaDataSource? = null
@@ -202,7 +203,7 @@ class TalkModeManager(
     if (playbackEnabled == enabled) return
     playbackEnabled = enabled
     if (!enabled) {
-      playbackGeneration += 1
+      playbackGeneration.incrementAndGet()
       stopSpeaking()
     }
   }
@@ -213,7 +214,8 @@ class TalkModeManager(
 
   suspend fun speakAssistantReply(text: String) {
     if (!playbackEnabled) return
-    val playbackToken = playbackGeneration
+    val playbackToken = playbackGeneration.incrementAndGet()
+    stopSpeaking(resetInterrupt = false)
     ensureConfigLoaded()
     ensurePlaybackActive(playbackToken)
     playAssistant(text, playbackToken)
@@ -394,7 +396,8 @@ class TalkModeManager(
         return
       }
       Log.d(tag, "assistant text ok chars=${assistant.length}")
-      val playbackToken = playbackGeneration
+      val playbackToken = playbackGeneration.incrementAndGet()
+      stopSpeaking(resetInterrupt = false)
       ensurePlaybackActive(playbackToken)
       playAssistant(assistant, playbackToken)
     } catch (err: Throwable) {
@@ -921,14 +924,14 @@ class TalkModeManager(
   }
 
   private fun ensurePlaybackActive(playbackToken: Long) {
-    if (!playbackEnabled || playbackToken != playbackGeneration) {
+    if (!playbackEnabled || playbackToken != playbackGeneration.get()) {
       throw CancellationException("assistant speech cancelled")
     }
   }
 
   private fun isPlaybackCancelled(err: Throwable?, playbackToken: Long): Boolean {
     if (err is CancellationException) return true
-    return !playbackEnabled || playbackToken != playbackGeneration
+    return !playbackEnabled || playbackToken != playbackGeneration.get()
   }
 
   private suspend fun ensureConfigLoaded() {
