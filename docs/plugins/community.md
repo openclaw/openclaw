@@ -45,6 +45,11 @@ Use this format when adding entries:
 
 ## Listed plugins
 
+- **TokenRanger** — Compresses session context via a local Ollama SLM before sending to cloud LLMs, reducing input token costs by 50–80%. GPU-aware (full/light/passthrough strategies). Includes FastAPI sidecar, CLI setup, and `/tokenranger` command.
+  npm: `openclaw-plugin-tokenranger`
+  repo: `https://github.com/synchronic1/openclaw-plugin-tokenranger`
+  install: `openclaw plugins install openclaw-plugin-tokenranger`
+
 - **WeChat** — Connect OpenClaw to WeChat personal accounts via WeChatPadPro (iPad protocol). Supports text, image, and file exchange with keyword-triggered conversations.
   npm: `@icesword760/openclaw-wechat`
   repo: `https://github.com/icesword0760/openclaw-wechat`
