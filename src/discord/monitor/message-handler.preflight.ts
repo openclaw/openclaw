@@ -67,7 +67,7 @@ export type {
   DiscordMessagePreflightParams,
 } from "./message-handler.preflight.types.js";
 
-const DISCORD_BOUND_THREAD_SYSTEM_PREFIXES = ["⚙️", "🤖"];
+const DISCORD_BOUND_THREAD_SYSTEM_PREFIXES = ["⚙️", "🤖", "🧰"];
 
 function isBoundThreadBotSystemMessage(params: {
   isBoundThreadSession: boolean;
