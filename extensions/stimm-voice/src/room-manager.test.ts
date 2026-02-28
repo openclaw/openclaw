@@ -97,6 +97,19 @@ describe("LiveKitRuntime", () => {
       expect(found).toBeDefined();
       expect(found!.roomName).toBe(session.roomName);
     });
+
+    it("rolls back the room when dispatch creation fails", async () => {
+      const runtime = createRuntime();
+      mockCreateDispatch.mockRejectedValueOnce(new Error("dispatch unavailable"));
+
+      await expect(
+        runtime.createSession({ roomName: "rollback-room", originChannel: "web" }),
+      ).rejects.toThrow("dispatch unavailable");
+
+      expect(mockCreateRoom).toHaveBeenCalledWith({ name: "rollback-room", emptyTimeout: 600 });
+      expect(mockDeleteRoom).toHaveBeenCalledWith("rollback-room");
+      expect(runtime.getSession("rollback-room")).toBeUndefined();
+    });
   });
 
   describe("endSession", () => {
@@ -113,8 +126,17 @@ describe("LiveKitRuntime", () => {
       expect(runtime.getSession("to-end")).toBeUndefined();
     });
 
-    it("returns false for unknown room", async () => {
+    it("attempts remote teardown for unknown room and returns true when delete succeeds", async () => {
       const runtime = createRuntime();
+      const ok = await runtime.endSession("nonexistent");
+      expect(ok).toBe(true);
+      expect(mockDeleteRoom).toHaveBeenCalledWith("nonexistent");
+    });
+
+    it("returns false when unknown room teardown also fails remotely", async () => {
+      const runtime = createRuntime();
+      mockDeleteRoom.mockRejectedValueOnce(new Error("room not found"));
+
       const ok = await runtime.endSession("nonexistent");
       expect(ok).toBe(false);
     });

@@ -154,6 +154,10 @@ const stimmVoicePlugin = {
     // Keep claim signing stable across different OpenClaw processes (CLI vs gateway).
     // If no explicit supervisor secret is configured, fall back to LiveKit API secret.
     const claimSecret = config.access.supervisorSecret || `livekit:${config.livekit.apiSecret}`;
+    const hasUnsafePublicSupervisorSecret =
+      config.access.mode === "quick-tunnel" &&
+      !config.access.supervisorSecret &&
+      config.livekit.apiSecret === "secret";
     const claimStore = new Map<string, ClaimRecord>();
     const consumedClaims = new Map<string, number>();
     const claimRateWindowMs = 60_000;
@@ -171,6 +175,12 @@ const stimmVoicePlugin = {
 
     const ensureQuickTunnel = async (): Promise<TunnelInfo | null> => {
       if (config.access.mode !== "quick-tunnel") return null;
+      if (hasUnsafePublicSupervisorSecret) {
+        throw new Error(
+          "[stimm-voice] quick-tunnel mode requires a non-default supervisor secret. " +
+            "Set stimm-voice.access.supervisorSecret (recommended) or use a non-default stimm-voice.livekit.apiSecret.",
+        );
+      }
       if (quickTunnel?.running()) {
         return {
           gatewayUrl: quickTunnel.info.voiceUrl,
@@ -428,6 +438,17 @@ const stimmVoicePlugin = {
           consumedClaims.set(id, Math.max(claim.expiresAt, now + 60_000));
           claimStore.delete(id);
         }
+      }
+    };
+
+    // Undo one-time claim consumption after transient failures (for example
+    // issueJoinToken errors) so clients can retry with the same share link.
+    const rollbackClaimConsumption = (claimId: string): void => {
+      consumedClaims.delete(claimId);
+      const claim = claimStore.get(claimId);
+      if (claim && claim.usedAt && !claim.disconnectToken) {
+        claim.usedAt = undefined;
+        claimStore.set(claimId, claim);
       }
     };
 
@@ -836,6 +857,16 @@ const stimmVoicePlugin = {
           return;
         }
         {
+          if (hasUnsafePublicSupervisorSecret) {
+            res.writeHead(503, { "Content-Type": "application/json" });
+            res.end(
+              JSON.stringify({
+                error:
+                  "insecure_default_supervisor_secret: configure stimm-voice.access.supervisorSecret for quick-tunnel mode",
+              }),
+            );
+            return;
+          }
           // Always enforce auth — fall back to derived secret when no explicit one is configured,
           // matching the claimSecret derivation above.
           const provided = req.headers["x-stimm-supervisor-secret"];
@@ -1013,10 +1044,16 @@ const stimmVoicePlugin = {
             }
 
             const rt = await ensureRuntime();
-            const clientToken = await rt.lk.issueJoinToken(record.roomName, {
-              identity: "user",
-              ttlSeconds: config.access.livekitTokenTtlSeconds,
-            });
+            let clientToken: string;
+            try {
+              clientToken = await rt.lk.issueJoinToken(record.roomName, {
+                identity: "user",
+                ttlSeconds: config.access.livekitTokenTtlSeconds,
+              });
+            } catch (issueErr) {
+              rollbackClaimConsumption(record.claimId);
+              throw issueErr;
+            }
 
             const now = Date.now();
             const disconnectToken = randomBytes(24).toString("hex");
@@ -1182,12 +1219,21 @@ export class LiveKitRuntime {
     // abandoned longer than a token would be valid.
     const emptyTimeout = opts.ttlSeconds ?? 600;
     await this.roomService.createRoom({ name: roomName, emptyTimeout });
-    await this.dispatchService.createDispatch(roomName, LiveKitRuntime.AGENT_NAME, {
-      metadata: JSON.stringify({
-        source: "openclaw-stimm-voice",
-        originChannel: opts.originChannel ?? "web",
-      }),
-    });
+    try {
+      await this.dispatchService.createDispatch(roomName, LiveKitRuntime.AGENT_NAME, {
+        metadata: JSON.stringify({
+          source: "openclaw-stimm-voice",
+          originChannel: opts.originChannel ?? "web",
+        }),
+      });
+    } catch (err) {
+      try {
+        await this.roomService.deleteRoom(roomName);
+      } catch {
+        // Room may already be gone.
+      }
+      throw err;
+    }
 
     const clientToken = await this.generateToken({
       identity: "user",
@@ -1209,14 +1255,14 @@ export class LiveKitRuntime {
   }
 
   async endSession(roomName: string): Promise<boolean> {
-    if (!this.sessions.has(roomName)) return false;
-    this.sessions.delete(roomName);
+    const hadLocalSession = this.sessions.delete(roomName);
     try {
       await this.roomService.deleteRoom(roomName);
+      return true;
     } catch {
       // Room may already be gone.
+      return hadLocalSession;
     }
-    return true;
   }
 
   /**
