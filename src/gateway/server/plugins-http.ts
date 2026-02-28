@@ -19,9 +19,6 @@ export function isRegisteredPluginHttpRoutePath(
   const routes = registry.httpRoutes ?? [];
   return routes.some((entry) => entry.path === pathname);
 }
-// This only checks explicit routes from registerHttpRoute.
-// Wildcard registerHttpHandler endpoints (for example webhooks) use provider-side
-// signature validation and are intentionally not gateway-token gated by this check.
 
 export function createGatewayPluginRequestHandler(params: {
   registry: PluginRegistry;
