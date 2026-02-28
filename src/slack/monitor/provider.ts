@@ -459,7 +459,6 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     if (slackMode === "socket") {
       let reconnectAttempts = 0;
       while (!opts.abortSignal?.aborted) {
-        const disconnectWaiter = waitForSlackSocketDisconnect(app, opts.abortSignal);
         try {
           await app.start();
           reconnectAttempts = 0;
@@ -488,7 +487,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
           break;
         }
 
-        const disconnect = await disconnectWaiter;
+        const disconnect = await waitForSlackSocketDisconnect(app, opts.abortSignal);
         if (opts.abortSignal?.aborted) {
           break;
         }
