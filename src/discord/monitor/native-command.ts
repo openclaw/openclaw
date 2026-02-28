@@ -1,17 +1,17 @@
 import {
+  type AutocompleteInteraction,
   Button,
+  type ButtonInteraction,
   ChannelType,
   Command,
-  Container,
-  Row,
-  StringSelectMenu,
-  TextDisplay,
-  type AutocompleteInteraction,
-  type ButtonInteraction,
   type CommandInteraction,
   type CommandOptions,
   type ComponentData,
+  Container,
+  Row,
+  StringSelectMenu,
   type StringSelectMenuInteraction,
+  TextDisplay,
 } from "@buape/carbon";
 import { ApplicationCommandOptionType, ButtonStyle } from "discord-api-types/v10";
 import {
@@ -24,8 +24,8 @@ import { resolveCommandAuthorization } from "../../auto-reply/command-auth.js";
 import type {
   ChatCommandDefinition,
   CommandArgDefinition,
-  CommandArgValues,
   CommandArgs,
+  CommandArgValues,
   NativeCommandSpec,
 } from "../../auto-reply/commands-registry.js";
 import {
@@ -43,7 +43,7 @@ import type { ReplyPayload } from "../../auto-reply/types.js";
 import { resolveCommandAuthorizedFromAuthorizers } from "../../channels/command-gating.js";
 import { resolveNativeCommandSessionTargets } from "../../channels/native-command-session-targets.js";
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
-import type { OpenClawConfig, loadConfig } from "../../config/config.js";
+import type { loadConfig, OpenClawConfig } from "../../config/config.js";
 import { isDangerousNameMatchingEnabled } from "../../config/dangerous-name-matching.js";
 import { resolveOpenProviderRuntimeGroupPolicy } from "../../config/runtime-group-policy.js";
 import { loadSessionStore, resolveStorePath } from "../../config/sessions.js";
@@ -63,25 +63,25 @@ import {
   resolveDiscordChannelConfigWithFallback,
   resolveDiscordGuildEntry,
   resolveDiscordMemberAccessState,
-  resolveDiscordOwnerAccess,
+  resolveDiscordOwnerAllowedWithRoles,
 } from "./allow-list.js";
 import { resolveDiscordDmCommandAccess } from "./dm-command-auth.js";
 import { handleDiscordDmCommandDecision } from "./dm-command-decision.js";
 import { resolveDiscordChannelInfo } from "./message-utils.js";
 import {
+  type DiscordModelPickerPreferenceScope,
   readDiscordModelPickerRecentModels,
   recordDiscordModelPickerRecentModel,
-  type DiscordModelPickerPreferenceScope,
 } from "./model-picker-preferences.js";
 import {
   DISCORD_MODEL_PICKER_CUSTOM_ID_KEY,
+  type DiscordModelPickerCommandContext,
   loadDiscordModelPickerData,
   parseDiscordModelPickerData,
   renderDiscordModelPickerModelsView,
   renderDiscordModelPickerProvidersView,
   renderDiscordModelPickerRecentsView,
   toDiscordModelPickerMessagePayload,
-  type DiscordModelPickerCommandContext,
 } from "./model-picker.js";
 import { buildDiscordNativeCommandContext } from "./native-command-context.js";
 import {
@@ -409,7 +409,9 @@ function resolveDiscordModelPickerPreferenceScope(params: {
   };
 }
 
-function buildDiscordModelPickerNoticePayload(message: string): { components: Container[] } {
+function buildDiscordModelPickerNoticePayload(message: string): {
+  components: Container[];
+} {
   return {
     components: [new Container([new TextDisplay(message)])],
   };
@@ -570,9 +572,11 @@ function resolveModelPickerSelectionValue(
   return trimmed || null;
 }
 
-function buildDiscordModelPickerSelectionCommand(params: {
-  modelRef: string;
-}): { command: ChatCommandDefinition; args: CommandArgs; prompt: string } | null {
+function buildDiscordModelPickerSelectionCommand(params: { modelRef: string }): {
+  command: ChatCommandDefinition;
+  args: CommandArgs;
+  prompt: string;
+} | null {
   const commandDefinition =
     findCommandByNativeName("model", "discord") ??
     listChatCommands().find((entry) => entry.key === "model");
@@ -1310,7 +1314,10 @@ async function dispatchDiscordCommandInteraction(params: {
   if (!user) {
     return;
   }
-  const sender = resolveDiscordSenderIdentity({ author: user, pluralkitInfo: null });
+  const sender = resolveDiscordSenderIdentity({
+    author: user,
+    pluralkitInfo: null,
+  });
   const channel = interaction.channel;
   const channelType = channel?.type;
   const isDirectMessage = channelType === ChannelType.DM;
@@ -1326,15 +1333,16 @@ async function dispatchDiscordCommandInteraction(params: {
     ? interaction.rawData.member.roles.map((roleId: string) => String(roleId))
     : [];
   const allowNameMatching = isDangerousNameMatchingEnabled(discordConfig);
-  const { ownerAllowList, ownerAllowed: ownerOk } = resolveDiscordOwnerAccess({
-    allowFrom: discordConfig?.allowFrom ?? discordConfig?.dm?.allowFrom ?? [],
-    sender: {
-      id: sender.id,
-      name: sender.name,
-      tag: sender.tag,
-    },
-    allowNameMatching,
-  });
+  const ownerAccess = user
+    ? resolveDiscordOwnerAllowedWithRoles({
+        allowFrom: discordConfig?.allowFrom ?? discordConfig?.dm?.allowFrom ?? [],
+        userId: sender.id,
+        userName: sender.name,
+        userTag: sender.tag,
+        memberRoleIds,
+        allowNameMatching,
+      })
+    : { configured: false, allowed: false };
   const commandsAllowFromAccess = resolveDiscordNativeCommandAllowlistAccess({
     cfg,
     accountId,
@@ -1477,7 +1485,7 @@ async function dispatchDiscordCommandInteraction(params: {
             configured: commandsAllowFromAccess.configured,
             allowed: commandsAllowFromAccess.allowed,
           },
-          { configured: ownerAllowList != null, allowed: ownerOk },
+          { configured: ownerAccess.configured, allowed: ownerAccess.allowed },
           { configured: hasAccessRestrictions, allowed: memberAllowed },
         ]
       : [
@@ -1493,7 +1501,9 @@ async function dispatchDiscordCommandInteraction(params: {
       modeWhenAccessGroupsOff: "configured",
     });
     if (!commandAuthorized) {
-      await respond("You are not authorized to use this command.", { ephemeral: true });
+      await respond("You are not authorized to use this command.", {
+        ephemeral: true,
+      });
       return;
     }
   }
