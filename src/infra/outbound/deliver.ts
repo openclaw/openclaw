@@ -713,7 +713,9 @@ async function deliverOutboundPayloadsCore(
         replyToId: effectivePayload.replyToId ?? params.replyToId ?? undefined,
         threadId: params.threadId ?? undefined,
       };
-      if (handler.sendPayload && effectivePayload.channelData) {
+      // Prefer sendPayload when the adapter supports it (handles all payload fields
+      // including channelData, media, text in a single call).
+      if (handler.sendPayload) {
         const delivery = await handler.sendPayload(effectivePayload, sendOverrides);
         results.push(delivery);
         emitMessageSent({
