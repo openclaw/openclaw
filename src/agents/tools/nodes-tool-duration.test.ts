@@ -7,8 +7,8 @@ const gatewayMocks = vi.hoisted(() => ({
   readGatewayCallOptions: vi.fn(() => ({})),
 }));
 vi.mock("./gateway.js", () => ({
-  callGatewayTool: (...args: unknown[]) => gatewayMocks.callGatewayTool(...args),
-  readGatewayCallOptions: (...args: unknown[]) => gatewayMocks.readGatewayCallOptions(...args),
+  callGatewayTool: gatewayMocks.callGatewayTool,
+  readGatewayCallOptions: gatewayMocks.readGatewayCallOptions,
 }));
 
 const nodeMocks = vi.hoisted(() => ({
@@ -16,7 +16,7 @@ const nodeMocks = vi.hoisted(() => ({
 }));
 vi.mock("./nodes-utils.js", async (importOriginal) => {
   const actual = await importOriginal();
-  return { ...actual, resolveNodeId: (...args: unknown[]) => nodeMocks.resolveNodeId(...args) };
+  return { ...actual, resolveNodeId: nodeMocks.resolveNodeId };
 });
 
 const screenMocks = vi.hoisted(() => ({
@@ -32,9 +32,9 @@ const screenMocks = vi.hoisted(() => ({
   screenRecordTempPath: vi.fn(() => "/tmp/screen.mp4"),
 }));
 vi.mock("../../cli/nodes-screen.js", () => ({
-  parseScreenRecordPayload: (...args: unknown[]) => screenMocks.parseScreenRecordPayload(...args),
-  writeScreenRecordToFile: (...args: unknown[]) => screenMocks.writeScreenRecordToFile(...args),
-  screenRecordTempPath: (...args: unknown[]) => screenMocks.screenRecordTempPath(...args),
+  parseScreenRecordPayload: screenMocks.parseScreenRecordPayload,
+  writeScreenRecordToFile: screenMocks.writeScreenRecordToFile,
+  screenRecordTempPath: screenMocks.screenRecordTempPath,
 }));
 
 const cameraMocks = vi.hoisted(() => ({
@@ -50,9 +50,8 @@ vi.mock("../../cli/nodes-camera.js", async (importOriginal) => {
   const actual = await importOriginal();
   return {
     ...actual,
-    parseCameraClipPayload: (...args: unknown[]) => cameraMocks.parseCameraClipPayload(...args),
-    writeCameraClipPayloadToFile: (...args: unknown[]) =>
-      cameraMocks.writeCameraClipPayloadToFile(...args),
+    parseCameraClipPayload: cameraMocks.parseCameraClipPayload,
+    writeCameraClipPayloadToFile: cameraMocks.writeCameraClipPayloadToFile,
   };
 });
 
