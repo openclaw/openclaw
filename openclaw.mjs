@@ -45,18 +45,15 @@ if (module.enableCompileCache && !process.env.NODE_DISABLE_COMPILE_CACHE) {
 }
 
 // Fast-path: print version and exit without loading the dist bundle.
+// Matches the semantics of hasHelpOrVersion() in src/cli/argv.ts:
+//   --version / -V: argv.some() -- matches anywhere, even after subcommands
+//   -v: hasRootVersionAlias() -- only when no positional command follows
+// The -v alias requires awareness of ROOT_BOOLEAN_FLAGS / ROOT_VALUE_FLAGS
+// to skip correctly, so we leave it to the full CLI parser.
 {
-  const VERSION_FLAGS = new Set(["--version", "-v", "-V"]);
+  const VERSION_FLAGS = new Set(["--version", "-V"]);
   const args = process.argv.slice(2);
-  let wantsVersion = false;
-  for (const arg of args) {
-    if (arg === "--") { break; }
-    if (!arg.startsWith("-")) { break; } // stop at first non-flag (subcommand)
-    if (VERSION_FLAGS.has(arg)) {
-      wantsVersion = true;
-      break;
-    }
-  }
+  const wantsVersion = args.some((arg) => VERSION_FLAGS.has(arg));
   if (wantsVersion) {
     let version = process.env.OPENCLAW_BUNDLED_VERSION;
     if (!version) {
