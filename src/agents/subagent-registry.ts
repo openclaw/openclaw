@@ -1018,29 +1018,8 @@ async function waitForSubagentCompletion(runId: string, waitTimeoutMs: number) {
       accountId: entry.requesterOrigin?.accountId,
       triggerCleanup: true,
     });
-  } catch (error) {
-    defaultRuntime.log(
-      `[warn] waitForSubagentCompletion failed for run ${runId}: ${String(error)}`,
-    );
-    // Recover: mark the run as errored so it doesn't become a zombie.
-    const entry = subagentRuns.get(runId);
-    if (entry && !entry.endedAt) {
-      entry.endedAt = Date.now();
-      entry.outcome = { status: "error", error: `Wait failed: ${String(error)}` };
-      persistSubagentRuns();
-      try {
-        await completeSubagentRun({
-          runId,
-          endedAt: entry.endedAt,
-          outcome: entry.outcome,
-          reason: SUBAGENT_ENDED_REASON_ERROR,
-          sendFarewell: true,
-          triggerCleanup: true,
-        });
-      } catch {
-        // Last resort: at least the run is marked ended via endedAt above.
-      }
-    }
+  } catch {
+    // ignore
   }
 }
 

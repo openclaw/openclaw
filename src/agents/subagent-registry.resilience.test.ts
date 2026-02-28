@@ -1,13 +1,9 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 
 /**
- * Tests for subagent resilience improvements:
- *
- * Fix 1: waitForSubagentCompletion catches gateway errors and marks runs as
- *         errored instead of silently swallowing the exception.
- *
- * Fix 2: When announcement retries are exhausted (give-up), the parent session
- *         is notified via a gateway "agent" message about the lost results.
+ * Tests for subagent resilience: when announcement retries are exhausted
+ * (give-up), the parent session is notified via a gateway "agent" message
+ * about the lost results.
  */
 
 // ---------------------------------------------------------------------------
@@ -33,7 +29,6 @@ vi.mock("../config/config.js", () => ({
 
 vi.mock("../config/sessions.js", () => ({
   loadSessionStore: () => ({
-    "agent:main:subagent:child-err": { sessionId: "sess-err", updatedAt: 1 },
     "agent:main:subagent:child-giveup": { sessionId: "sess-giveup", updatedAt: 1 },
   }),
   resolveAgentIdFromSessionKey: (key: string) => {
@@ -101,75 +96,6 @@ describe("subagent resilience", () => {
       await Promise.resolve();
     }
   };
-
-  // -------------------------------------------------------------------------
-  // Fix 1: Error recovery in waitForSubagentCompletion
-  // -------------------------------------------------------------------------
-
-  describe("error recovery — waitForSubagentCompletion catch block", () => {
-    test("marks run as errored when agent.wait throws", async () => {
-      callGatewayMock.mockImplementation(async (req) => {
-        if (req.method === "agent.wait") {
-          throw new Error("gateway connection lost");
-        }
-        return { status: "ok" };
-      });
-
-      registry.registerSubagentRun({
-        runId: "run-error-recovery",
-        childSessionKey: "agent:main:subagent:child-err",
-        requesterSessionKey: "agent:main:main",
-        requesterDisplayKey: "main",
-        task: "error recovery test",
-        cleanup: "keep",
-        expectsCompletionMessage: true,
-      });
-
-      // waitForSubagentCompletion is fire-and-forget — flush microtasks
-      await flushAsync();
-      await vi.advanceTimersByTimeAsync(1_000);
-      await flushAsync();
-
-      const runs = registry.listSubagentRunsForRequester("agent:main:main");
-      const entry = runs.find((r) => r.runId === "run-error-recovery");
-      expect(entry).toBeDefined();
-      expect(entry!.endedAt).toBeTypeOf("number");
-      expect(entry!.outcome?.status).toBe("error");
-      expect((entry!.outcome as { error?: string }).error).toContain("gateway connection lost");
-    });
-
-    test("error message includes the original exception text", async () => {
-      callGatewayMock.mockImplementation(async (req) => {
-        if (req.method === "agent.wait") {
-          throw new Error("ECONNREFUSED 127.0.0.1:18789");
-        }
-        return { status: "ok" };
-      });
-
-      registry.registerSubagentRun({
-        runId: "run-error-msg",
-        childSessionKey: "agent:main:subagent:child-err",
-        requesterSessionKey: "agent:main:main",
-        requesterDisplayKey: "main",
-        task: "error message test",
-        cleanup: "keep",
-        expectsCompletionMessage: true,
-      });
-
-      await flushAsync();
-      await vi.advanceTimersByTimeAsync(1_000);
-      await flushAsync();
-
-      const runs = registry.listSubagentRunsForRequester("agent:main:main");
-      const entry = runs.find((r) => r.runId === "run-error-msg");
-      const outcome = entry!.outcome as { error?: string };
-      expect(outcome.error).toContain("ECONNREFUSED");
-    });
-  });
-
-  // -------------------------------------------------------------------------
-  // Fix 2: Give-up notification — parent session gets notified
-  // -------------------------------------------------------------------------
 
   describe("give-up notification — parent session notified on lost results", () => {
     test("notifies parent session when announcement retries are exhausted", async () => {
