@@ -4,6 +4,7 @@ import { EnvHttpProxyAgent, getGlobalDispatcher, setGlobalDispatcher } from "und
 import type { TelegramNetworkConfig } from "../config/types.telegram.js";
 import { resolveFetch } from "../infra/fetch.js";
 import { hasProxyEnvConfigured } from "../infra/net/proxy-env.js";
+import { PINNED_AUTO_SELECT_FAMILY_FALLBACK_TIMEOUT_MS } from "../infra/net/ssrf.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   resolveTelegramAutoSelectFamilyDecision,
@@ -87,7 +88,7 @@ function applyTelegramNetworkWorkarounds(network?: TelegramNetworkConfig): void 
           new EnvHttpProxyAgent({
             connect: {
               autoSelectFamily: autoSelectDecision.value,
-              autoSelectFamilyAttemptTimeout: 300,
+              autoSelectFamilyAttemptTimeout: PINNED_AUTO_SELECT_FAMILY_FALLBACK_TIMEOUT_MS,
             },
           }),
         );
