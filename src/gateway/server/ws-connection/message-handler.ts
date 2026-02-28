@@ -38,6 +38,7 @@ import {
   normalizeDeviceMetadataForAuth,
 } from "../../device-auth.js";
 import {
+  isLanSubnetAddress,
   isLocalishHost,
   isLoopbackAddress,
   isTrustedProxyAddress,
@@ -626,7 +627,17 @@ export function attachGatewayWsMessageHandler(params: {
           close(1008, truncateCloseReason(authMessage));
         };
         const clearUnboundScopes = () => {
-          if (scopes.length > 0 && !controlUiAuthPolicy.allowBypass && !sharedAuthOk) {
+          // Don't clear scopes if Control UI bypass is allowed
+          if (controlUiAuthPolicy.allowBypass) {
+            return;
+          }
+          // Don't clear scopes if client is from a trusted LAN subnet with valid shared auth
+          // This allows backend API servers on the local network to authenticate with
+          // shared tokens instead of device identities.
+          if (sharedAuthOk && isLanSubnetAddress(clientIp)) {
+            return;
+          }
+          if (scopes.length > 0) {
             scopes = [];
             connectParams.scopes = scopes;
           }

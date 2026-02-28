@@ -153,6 +153,38 @@ export function isTrustedProxyAddress(ip: string | undefined, trustedProxies?: s
   });
 }
 
+/**
+ * Trusted LAN subnets for backend API access.
+ * Connections from these subnets with valid shared auth can claim operator scopes
+ * without presenting a device identity.
+ */
+const DEFAULT_LAN_SUBNETS = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"];
+
+/**
+ * Returns true if the IP is in a trusted LAN subnet (RFC1918 private ranges)
+ * OR is a loopback address (127.0.0.0/8, ::1).
+ * Used to allow backend API servers on the local network or host to authenticate with
+ * shared tokens instead of device identities.
+ */
+export function isLanSubnetAddress(ip: string | undefined, lanSubnets?: string[]): boolean {
+  const normalized = normalizeIp(ip);
+  if (!normalized) {
+    return false;
+  }
+  // Allow loopback addresses (for host-networked containers)
+  if (isLoopbackIpAddress(normalized)) {
+    return true;
+  }
+  const subnets = lanSubnets && lanSubnets.length > 0 ? lanSubnets : DEFAULT_LAN_SUBNETS;
+  return subnets.some((subnet) => {
+    const candidate = subnet.trim();
+    if (!candidate) {
+      return false;
+    }
+    return isIpInCidr(normalized, candidate);
+  });
+}
+
 export function resolveClientIp(params: {
   remoteAddr?: string;
   forwardedFor?: string;
