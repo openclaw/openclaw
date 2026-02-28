@@ -474,4 +474,32 @@ describe("hooks", () => {
       expect(keys).toEqual([]);
     });
   });
+
+  describe("plugin hook re-registration after clear", () => {
+    it("should survive clearInternalHooks when re-registered from registry", async () => {
+      const handler = vi.fn();
+
+      // Simulate plugin registering a hook during loadGatewayPlugins
+      registerInternalHook("agent:bootstrap", handler);
+
+      // Simulate startGatewaySidecars clearing all hooks
+      clearInternalHooks();
+
+      // Handler should be gone
+      const event = createInternalHookEvent("agent", "bootstrap", "test-session", {
+        workspaceDir: "/tmp",
+        bootstrapFiles: [],
+      });
+      await triggerInternalHook(event);
+      expect(handler).not.toHaveBeenCalled();
+
+      // Simulate re-registration from plugin registry (the fix)
+      registerInternalHook("agent:bootstrap", handler);
+
+      // Now handler should fire
+      await triggerInternalHook(event);
+      expect(handler).toHaveBeenCalledOnce();
+      expect(handler).toHaveBeenCalledWith(event);
+    });
+  });
 });
