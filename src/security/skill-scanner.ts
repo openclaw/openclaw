@@ -381,11 +381,11 @@ async function readScannableSource(filePath: string, maxFileBytes: number): Prom
 async function scanSkillMdIfPresent(
   dirPath: string,
   maxFileBytes: number,
-): Promise<SkillScanFinding[]> {
+): Promise<SkillScanFinding[] | null> {
   const mdPath = path.join(dirPath, "SKILL.md");
   const source = await readScannableSource(mdPath, maxFileBytes);
   if (source == null) {
-    return [];
+    return null;
   }
   return scanSkillMd(source, mdPath);
 }
@@ -400,7 +400,9 @@ export async function scanDirectory(
 
   // Scan SKILL.md for markdown-layer threats
   const mdFindings = await scanSkillMdIfPresent(dirPath, scanOptions.maxFileBytes);
-  allFindings.push(...mdFindings);
+  if (mdFindings !== null) {
+    allFindings.push(...mdFindings);
+  }
 
   for (const file of files) {
     const source = await readScannableSource(file, scanOptions.maxFileBytes);
@@ -425,7 +427,7 @@ export async function scanDirectoryWithSummary(
 
   // Scan SKILL.md for markdown-layer threats
   const mdFindings = await scanSkillMdIfPresent(dirPath, scanOptions.maxFileBytes);
-  if (mdFindings.length > 0) {
+  if (mdFindings !== null) {
     allFindings.push(...mdFindings);
     scannedFiles += 1;
   }

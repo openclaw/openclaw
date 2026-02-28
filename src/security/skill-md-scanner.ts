@@ -52,7 +52,7 @@ const MD_LINE_RULES: MdRule[] = [
     severity: "critical",
     message: "SKILL.md instructs collecting environment variables and sending them externally",
     pattern:
-      /(?:printenv|env\b|set\b|\$\{?[A-Z_]*(?:KEY|TOKEN|SECRET|PASSWORD)[A-Z_]*\}?).*(?:curl|wget|fetch|http|nc\b)/i,
+      /(?:printenv|env\b|set\s+-[aefhuxo]|\$\{?[A-Z_]*(?:KEY|TOKEN|SECRET|PASSWORD)[A-Z_]*\}?).*(?:curl|wget|fetch|http|nc\b)/,
   },
 
   // -- reverse shell / bind shell -------------------------------------------
@@ -144,13 +144,22 @@ export function scanSkillMd(source: string, filePath: string): SkillScanFinding[
   const lines = source.split("\n");
   const matchedRules = new Set<string>();
 
+  // Collapse multi-line HTML comments so md-hidden-instruction can match
+  // comments that span multiple lines (the simplest evasion technique).
+  const collapsedSource = source.replace(/<!--[\s\S]*?-->/g, (m) => m.replace(/\n/g, " "));
+  const collapsedLines = collapsedSource.split("\n");
+
   for (const rule of MD_LINE_RULES) {
     if (matchedRules.has(rule.ruleId)) {
       continue;
     }
 
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
+    // Use collapsed lines for the hidden-instruction rule so multi-line
+    // HTML comments are visible; use original lines for everything else.
+    const scanLines = rule.ruleId === "md-hidden-instruction" ? collapsedLines : lines;
+
+    for (let i = 0; i < scanLines.length; i++) {
+      const line = scanLines[i];
       if (!rule.pattern.test(line)) {
         continue;
       }
