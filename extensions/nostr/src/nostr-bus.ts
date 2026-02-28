@@ -632,7 +632,7 @@ async function sendEncryptedDm(
 
     const startTime = Date.now();
     try {
-      // oxlint-disable-next-line typescript/await-thenable typesciript/no-floating-promises
+      // oxlint-disable-next-line typescript/await-thenable typescript/no-floating-promises
       await pool.publish([relay], reply);
       const latency = Date.now() - startTime;
 
