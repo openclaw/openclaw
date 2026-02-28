@@ -3,9 +3,12 @@
  * Shows real-time tool execution status via edit-in-place status messages.
  *
  * Lifecycle:
- *   1. `onToolStart(name, meta)` — sends/edits a status message (e.g. "🔧 Running exec: ls -la")
- *   2. `onToolEnd(name, meta, isError)` — updates with completion mark
+ *   1. `onToolStart(toolCallId, name, meta)` — sends/edits a status message (e.g. "🔧 Running exec: ls -la")
+ *   2. `onToolEnd(toolCallId, name, meta, isError)` — updates with completion mark
  *   3. `cleanup()` — deletes the status message when the reply is delivered
+ *
+ * Supports concurrent tool execution: multiple tools can be active simultaneously,
+ * each tracked by a unique toolCallId.
  */
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -31,8 +34,8 @@ export type ToolProgressAdapter = {
 };
 
 export type ToolProgressController = {
-  onToolStart: (name?: string, meta?: string) => void;
-  onToolEnd: (name?: string, meta?: string, isError?: boolean) => void;
+  onToolStart: (toolCallId?: string, name?: string, meta?: string) => void;
+  onToolEnd: (toolCallId?: string, name?: string, meta?: string, isError?: boolean) => void;
   cleanup: () => Promise<void>;
 };
 
@@ -61,10 +64,10 @@ function formatToolLine(meta: string | undefined, name: string | undefined): str
 
 function buildStatusText(params: {
   completed: CompletedTool[];
-  active: string | undefined;
+  activeTools: Map<string, string>;
   maxVisible: number;
 }): string {
-  const { completed, active, maxVisible } = params;
+  const { completed, activeTools, maxVisible } = params;
   const lines: string[] = [];
 
   // Show last N completed tools
@@ -78,8 +81,8 @@ function buildStatusText(params: {
     lines.push(`${mark} ${tool.label}`);
   }
 
-  if (active) {
-    lines.push(`⏳ ${active}`);
+  for (const label of activeTools.values()) {
+    lines.push(`⏳ ${label}`);
   }
 
   return lines.join("\n");
@@ -88,6 +91,8 @@ function buildStatusText(params: {
 // ─────────────────────────────────────────────────────────────────────────────
 // Controller
 // ─────────────────────────────────────────────────────────────────────────────
+
+let anonymousCounter = 0;
 
 export function createToolProgressController(params: {
   enabled: boolean;
@@ -101,7 +106,7 @@ export function createToolProgressController(params: {
 
   // State
   let messageId: string | number | undefined;
-  let activeTool: string | undefined;
+  const activeTools = new Map<string, string>();
   const completedTools: CompletedTool[] = [];
   let lastEditAt = 0;
   let lastSentText = "";
@@ -136,7 +141,7 @@ export function createToolProgressController(params: {
     flushEnqueued = false;
     const text = buildStatusText({
       completed: completedTools,
-      active: activeTool,
+      activeTools,
       maxVisible: maxVisibleTools,
     });
 
@@ -182,21 +187,31 @@ export function createToolProgressController(params: {
   }
 
   return {
-    onToolStart(name, meta) {
+    onToolStart(toolCallId, name, meta) {
       if (!enabled || stopped) {
         return;
       }
-      activeTool = formatToolLine(meta, name);
+      const id = toolCallId ?? `anon-${++anonymousCounter}`;
+      activeTools.set(id, formatToolLine(meta, name));
       requestUpdate();
     },
 
-    onToolEnd(name, meta, isError) {
+    onToolEnd(toolCallId, name, meta, isError) {
       if (!enabled || stopped) {
         return;
       }
       const label = formatToolLine(meta, name);
       completedTools.push({ label, isError: isError === true });
-      activeTool = undefined;
+      // Remove the matching active tool; fall back to clearing the first entry
+      // if no toolCallId was provided (legacy/anonymous callers).
+      if (toolCallId && activeTools.has(toolCallId)) {
+        activeTools.delete(toolCallId);
+      } else if (!toolCallId && activeTools.size > 0) {
+        const firstKey = activeTools.keys().next().value;
+        if (firstKey !== undefined) {
+          activeTools.delete(firstKey);
+        }
+      }
       requestUpdate();
     },
 

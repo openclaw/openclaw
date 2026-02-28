@@ -1237,13 +1237,27 @@ export async function handleFeishuMessage(params: {
             replyOptions: {
               ...replyOptions,
               onToolStart: toolProgressEnabled
-                ? async (payload: { name?: string; meta?: string }) => {
-                    toolProgressController.onToolStart(payload.name, payload.meta);
+                ? async (payload: { name?: string; meta?: string; toolCallId?: string }) => {
+                    toolProgressController.onToolStart(
+                      payload.toolCallId,
+                      payload.name,
+                      payload.meta,
+                    );
                   }
                 : undefined,
               onToolEnd: toolProgressEnabled
-                ? async (payload: { name?: string; meta?: string; isError?: boolean }) => {
-                    toolProgressController.onToolEnd(payload.name, payload.meta, payload.isError);
+                ? async (payload: {
+                    name?: string;
+                    meta?: string;
+                    isError?: boolean;
+                    toolCallId?: string;
+                  }) => {
+                    toolProgressController.onToolEnd(
+                      payload.toolCallId,
+                      payload.name,
+                      payload.meta,
+                      payload.isError,
+                    );
                   }
                 : undefined,
             },

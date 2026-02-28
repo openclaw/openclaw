@@ -649,12 +649,17 @@ export const dispatchTelegramMessage = async ({
           statusReactionController || toolProgressEnabled
             ? async (payload) => {
                 await statusReactionController?.setTool(payload.name);
-                toolProgressController.onToolStart(payload.name, payload.meta);
+                toolProgressController.onToolStart(payload.toolCallId, payload.name, payload.meta);
               }
             : undefined,
         onToolEnd: toolProgressEnabled
           ? async (payload) => {
-              toolProgressController.onToolEnd(payload.name, payload.meta, payload.isError);
+              toolProgressController.onToolEnd(
+                payload.toolCallId,
+                payload.name,
+                payload.meta,
+                payload.isError,
+              );
             }
           : undefined,
         onModelSelected,
