@@ -26,22 +26,18 @@ add_task() {
 
     init_registry
 
-    local task=$(cat <<EOF
-{
-  "id": "$task_id",
-  "agent": "$agent",
-  "repo": "$repo",
-  "branch": "$branch",
-  "worktree": "$worktree",
-  "host": "$host",
-  "tmuxSession": "$tmux_session",
-  "description": "$description",
-  "startedAt": $started_at,
-  "status": "running",
-  "notifyOnComplete": true
-}
-EOF
-)
+    local task
+    task=$(jq -n \
+        --arg id "$task_id" \
+        --arg agent "$agent" \
+        --arg repo "$repo" \
+        --arg branch "$branch" \
+        --arg worktree "$worktree" \
+        --arg host "$host" \
+        --arg tmuxSession "$tmux_session" \
+        --arg description "$description" \
+        --argjson startedAt "$started_at" \
+        '{id: $id, agent: $agent, repo: $repo, branch: $branch, worktree: $worktree, host: $host, tmuxSession: $tmuxSession, description: $description, startedAt: $startedAt, status: "running", notifyOnComplete: true}')
 
     jq --argjson task "$task" '.tasks += [$task]' "$REGISTRY_FILE" > "$REGISTRY_FILE.tmp"
     mv "$REGISTRY_FILE.tmp" "$REGISTRY_FILE"
