@@ -39,6 +39,7 @@ import {
   isBillingAssistantError,
   isCompactionFailureError,
   isLikelyContextOverflowError,
+  isLikelySSEParseError,
   isFailoverAssistantError,
   isFailoverErrorMessage,
   parseImageSizeError,
@@ -903,6 +904,13 @@ export async function runEmbeddedPiAgent(
                 },
               };
             }
+            // Handle malformed SSE parse errors (proxy-induced truncation/splitting) with auto-retry
+            if (isLikelySSEParseError(errorText)) {
+              log.warn(
+                `[sse-parse-retry] Malformed SSE event from ${provider}/${modelId}; retrying (error: ${errorText.slice(0, 200)})`,
+              );
+              continue;
+            }
             const promptFailoverReason = classifyFailoverReason(errorText);
             await maybeMarkAuthProfileFailure({
               profileId: lastProfileId,
@@ -977,6 +985,18 @@ export async function runEmbeddedPiAgent(
             log.warn(
               `Profile ${lastProfileId} rejected image payload${details ? ` (${details})` : ""}.`,
             );
+          }
+
+          // Handle malformed SSE parse errors (proxy-induced truncation/splitting) with auto-retry
+          if (
+            !aborted &&
+            (isLikelySSEParseError(assistantErrorText) ||
+              isLikelySSEParseError(lastAssistant?.errorMessage))
+          ) {
+            log.warn(
+              `[sse-parse-retry] Malformed SSE event from ${provider}/${modelId}; retrying (error: ${(assistantErrorText ?? lastAssistant?.errorMessage ?? "").slice(0, 200)})`,
+            );
+            continue;
           }
 
           // Rotate on timeout to try another account/model path in this turn,

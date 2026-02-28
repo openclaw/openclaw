@@ -27,6 +27,7 @@ export {
   isCompactionFailureError,
   isContextOverflowError,
   isLikelyContextOverflowError,
+  isLikelySSEParseError,
   isFailoverAssistantError,
   isFailoverErrorMessage,
   isImageDimensionErrorMessage,

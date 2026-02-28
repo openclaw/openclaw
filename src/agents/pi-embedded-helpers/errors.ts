@@ -837,6 +837,61 @@ export function isImageSizeError(errorMessage?: string): boolean {
   return Boolean(parseImageSizeError(errorMessage));
 }
 
+/**
+ * Detects SyntaxError / JSON parse failures that originate from malformed SSE events.
+ * This typically happens when a reverse proxy (Azure, CloudFlare, nginx) truncates
+ * SSE `data:` lines or splits them via raw newlines in thinking_delta content.
+ * The Anthropic SDK's `JSON.parse(sse.data)` throws, killing the entire stream.
+ */
+export function isLikelySSEParseError(errorMessage?: string): boolean {
+  if (!errorMessage) {
+    return false;
+  }
+  const lower = errorMessage.toLowerCase();
+
+  // Core pattern: SyntaxError from JSON.parse on SSE data
+  const hasSyntaxError =
+    lower.includes("syntaxerror") ||
+    lower.includes("syntax error") ||
+    lower.includes("unexpected end of json") ||
+    lower.includes("unexpected token") ||
+    lower.includes("unterminated string in json") ||
+    lower.includes("bad control character in string literal");
+
+  const hasJsonContext =
+    lower.includes("json") ||
+    lower.includes("json.parse") ||
+    lower.includes("sse") ||
+    lower.includes("stream");
+
+  if (hasSyntaxError && hasJsonContext) {
+    return true;
+  }
+
+  // Anthropic SDK streaming.js specific patterns
+  if (
+    lower.includes("could not parse sse event") ||
+    lower.includes("failed to parse sse") ||
+    lower.includes("malformed sse")
+  ) {
+    return true;
+  }
+
+  // Generic JSON parse failure from streaming context (pi-ai error wrapper)
+  if (
+    (lower.includes("unexpected end of json input") ||
+      lower.includes("expected ',' or '}' after property value in json") ||
+      lower.includes("expected double-quoted property name in json")) &&
+    !isLikelyContextOverflowError(errorMessage) &&
+    !isRateLimitErrorMessage(errorMessage) &&
+    !isBillingErrorMessage(errorMessage)
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
 export function isCloudCodeAssistFormatError(raw: string): boolean {
   return !isImageDimensionErrorMessage(raw) && matchesErrorPatterns(raw, ERROR_PATTERNS.format);
 }
