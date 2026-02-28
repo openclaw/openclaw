@@ -49,7 +49,10 @@ function normalizeSchemaNode(
 
   const nullable = Array.isArray(schema.type) && schema.type.includes("null");
   const type =
-    schemaType(schema) ?? (schema.properties || schema.additionalProperties ? "object" : undefined);
+    schemaType(schema) ?? 
+    (schema.properties || schema.additionalProperties ? "object" : undefined) ??
+    // Treat empty object {} as "object" type for UI rendering
+    (Object.keys(schema).length === 0 ? "object" : undefined);
   normalized.type = type ?? schema.type;
   normalized.nullable = nullable || schema.nullable;
 
@@ -192,15 +195,47 @@ function normalizeUnion(
   const primitiveTypes = new Set(["string", "number", "integer", "boolean"]);
   if (
     remaining.length > 0 &&
-    literals.length === 0 &&
     remaining.every((entry) => entry.type && primitiveTypes.has(String(entry.type)))
   ) {
+    // Handle case where anyOf includes primitive types with const values (e.g., boolean | {const: "auto"})
+    // Merge literals into enum if present
+    const mergedSchema: JsonSchema = {
+      ...schema,
+      nullable,
+    };
+    if (literals.length > 0) {
+      mergedSchema.enum = literals;
+    }
+    return {
+      schema: mergedSchema,
+      unsupportedPaths: [],
+    };
+  }
+
+  // Handle complex type unions (e.g., array | object) by keeping the anyOf structure
+  // This allows the UI to render the field with a type selector
+  if (remaining.length > 1) {
+    // Recursively normalize each option in the union
+    const normalizedRemaining: JsonSchema[] = [];
+    const allUnsupportedPaths: string[] = [];
+    
+    for (const entry of remaining) {
+      const res = normalizeSchemaNode(entry, path);
+      if (res.schema) {
+        normalizedRemaining.push(res.schema);
+      } else {
+        normalizedRemaining.push(entry);
+      }
+      allUnsupportedPaths.push(...res.unsupportedPaths);
+    }
+    
     return {
       schema: {
         ...schema,
+        anyOf: normalizedRemaining,
         nullable,
       },
-      unsupportedPaths: [],
+      unsupportedPaths: allUnsupportedPaths,
     };
   }
 
