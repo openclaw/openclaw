@@ -992,23 +992,25 @@ export async function handleFeishuMessage(params: {
       log(
         `feishu[${account.accountId}]: message in group ${ctx.chatId} did not mention bot, recording to history`,
       );
-      if (chatHistories && groupHistoryKey) {
-        recordPendingHistoryEntryIfEnabled({
-          historyMap: chatHistories,
-          historyKey: groupHistoryKey,
-          limit: historyLimit,
-          entry: {
-            sender: ctx.senderOpenId,
-            body: `${ctx.senderName ?? ctx.senderOpenId}: ${ctx.content}`,
-            timestamp: Date.now(),
-            messageId: ctx.messageId,
-          },
-        });
-      }
       if (!broadcastAgents) {
-        return; // Non-broadcast group: keep current behavior
+        // Non-broadcast group: record to pending history and return
+        if (chatHistories && groupHistoryKey) {
+          recordPendingHistoryEntryIfEnabled({
+            historyMap: chatHistories,
+            historyKey: groupHistoryKey,
+            limit: historyLimit,
+            entry: {
+              sender: ctx.senderOpenId,
+              body: `${ctx.senderName ?? ctx.senderOpenId}: ${ctx.content}`,
+              timestamp: Date.now(),
+              messageId: ctx.messageId,
+            },
+          });
+        }
+        return;
       }
-      // Broadcast group: fall through to dispatch (observer mode, no Feishu response)
+      // Broadcast group: skip history recording (message dispatched directly to all agents)
+      // to avoid duplicating the message in the agent prompt via buildPendingHistoryContextFromMap.
     }
   } else {
   }
@@ -1280,7 +1282,7 @@ export async function handleFeishuMessage(params: {
         ((cfg as Record<string, unknown>).broadcast as Record<string, unknown> | undefined)
           ?.strategy || "parallel";
       const activeAgentId = ctx.mentionedBot ? route.agentId : null;
-      const agentIds = (cfg.agents?.list ?? []).map((a: { id: string }) => a.id);
+      const agentIds = (cfg.agents?.list ?? []).map((a: { id: string }) => a.id.toLowerCase());
       const hasKnownAgents = agentIds.length > 0;
 
       log(
@@ -1288,7 +1290,7 @@ export async function handleFeishuMessage(params: {
       );
 
       const dispatchForAgent = async (agentId: string) => {
-        if (hasKnownAgents && !agentIds.includes(agentId)) {
+        if (hasKnownAgents && !agentIds.includes(agentId.toLowerCase())) {
           log(
             `feishu[${account.accountId}]: broadcast agent ${agentId} not found in agents.list; skipping`,
           );
