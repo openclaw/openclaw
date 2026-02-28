@@ -4,6 +4,7 @@ import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import { resolveApiKeyForProvider } from "../agents/model-auth.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { resolveCommandResolution } from "../infra/exec-command-resolution.js";
 import { resolveMemoryBackendConfig } from "../memory/backend-config.js";
 import { note } from "../terminal/note.js";
 import { resolveUserPath } from "../utils.js";
@@ -33,9 +34,29 @@ export async function noteMemorySearchHealth(
   }
 
   // QMD backend handles embeddings internally (e.g. embeddinggemma) — no
-  // separate embedding provider is needed. Skip the provider check entirely.
+  // separate embedding provider is needed.
+  //
+  // But if QMD is configured and the `qmd` binary is missing, we should warn
+  // loudly — otherwise users may assume their external vault is being indexed.
   const backendConfig = resolveMemoryBackendConfig({ cfg, agentId });
   if (backendConfig.backend === "qmd") {
+    const command = backendConfig.qmd?.command?.trim() || "qmd";
+    const resolution = resolveCommandResolution(command);
+    if (!resolution?.resolvedPath) {
+      note(
+        [
+          `Memory backend is set to "qmd" but the qmd executable was not found on PATH (command: ${command}).`,
+          "OpenClaw will fall back to the builtin memory index, which only indexes workspace memory/*.md files.",
+          "",
+          "Fix (pick one):",
+          "- Install qmd and ensure it is on PATH (e.g. `npm i -g qmd` or your preferred installer)",
+          `- Or switch backends: ${formatCliCommand("openclaw config set memory.backend builtin")}`,
+          "",
+          `Verify: ${formatCliCommand("openclaw memory status --deep")}`,
+        ].join("\n"),
+        "Memory backend",
+      );
+    }
     return;
   }
 

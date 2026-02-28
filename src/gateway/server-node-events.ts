@@ -285,7 +285,7 @@ async function sendReceiptAck(params: {
 export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt: NodeEvent) => {
   switch (evt.event) {
     case "voice.transcript": {
-      const obj = parsePayloadObject(ctx, evt.type, evt.payloadJSON);
+      const obj = parsePayloadObject(ctx, evt.event, evt.payloadJSON);
       if (!obj) {
         return;
       }
@@ -477,7 +477,7 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       return;
     }
     case "notifications.changed": {
-      const obj = parsePayloadObject(ctx, evt.type, evt.payloadJSON);
+      const obj = parsePayloadObject(ctx, evt.event, evt.payloadJSON);
       if (!obj) {
         return;
       }
@@ -541,7 +541,7 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
     case "exec.started":
     case "exec.finished":
     case "exec.denied": {
-      const obj = parsePayloadObject(ctx, evt.type, evt.payloadJSON);
+      const obj = parsePayloadObject(ctx, evt.event, evt.payloadJSON);
       if (!obj) {
         return;
       }
@@ -598,7 +598,7 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       return;
     }
     case "push.apns.register": {
-      const obj = parsePayloadObject(ctx, evt.type, evt.payloadJSON);
+      const obj = parsePayloadObject(ctx, evt.event, evt.payloadJSON);
       if (!obj) {
         return;
       }

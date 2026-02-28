@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/config.js";
+import { resolveCommandResolution } from "../infra/exec-command-resolution.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { ResolvedQmdConfig } from "./backend-config.js";
 import { resolveMemoryBackendConfig } from "./backend-config.js";
@@ -23,42 +24,62 @@ export async function getMemorySearchManager(params: {
 }): Promise<MemorySearchManagerResult> {
   const resolved = resolveMemoryBackendConfig(params);
   if (resolved.backend === "qmd" && resolved.qmd) {
-    const statusOnly = params.purpose === "status";
-    const cacheKey = buildQmdCacheKey(params.agentId, resolved.qmd);
-    if (!statusOnly) {
-      const cached = QMD_MANAGER_CACHE.get(cacheKey);
-      if (cached) {
-        return { manager: cached };
+    const resolution = resolveCommandResolution(resolved.qmd.command);
+    if (!resolution?.resolvedPath) {
+      type QmdWarnGlobal = typeof globalThis & {
+        __openclawQmdMissingWarned?: boolean;
+      };
+      const g: QmdWarnGlobal = globalThis;
+      if (!g.__openclawQmdMissingWarned) {
+        g.__openclawQmdMissingWarned = true;
+        const message =
+          `memory.backend=qmd but qmd executable was not found on PATH (command: ${resolved.qmd.command}). ` +
+          `Falling back to builtin memory index. Install qmd or set memory.backend=builtin.`;
+        log.warn(message);
+        // Ensure the warning is visible even when subsystem logs are filtered.
+        // (Gateway stdout/stderr always captures console output.)
+        // eslint-disable-next-line no-console
+        console.warn(message);
       }
-    }
-    try {
-      const { QmdMemoryManager } = await import("./qmd-manager.js");
-      const primary = await QmdMemoryManager.create({
-        cfg: params.cfg,
-        agentId: params.agentId,
-        resolved,
-        mode: statusOnly ? "status" : "full",
-      });
-      if (primary) {
-        if (statusOnly) {
-          return { manager: primary };
+      // Skip attempting to initialize QMD; use builtin index.
+    } else {
+      const statusOnly = params.purpose === "status";
+      const cacheKey = buildQmdCacheKey(params.agentId, resolved.qmd);
+      if (!statusOnly) {
+        const cached = QMD_MANAGER_CACHE.get(cacheKey);
+        if (cached) {
+          return { manager: cached };
         }
-        const wrapper = new FallbackMemoryManager(
-          {
-            primary,
-            fallbackFactory: async () => {
-              const { MemoryIndexManager } = await import("./manager.js");
-              return await MemoryIndexManager.get(params);
-            },
-          },
-          () => QMD_MANAGER_CACHE.delete(cacheKey),
-        );
-        QMD_MANAGER_CACHE.set(cacheKey, wrapper);
-        return { manager: wrapper };
       }
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      log.warn(`qmd memory unavailable; falling back to builtin: ${message}`);
+      try {
+        const { QmdMemoryManager } = await import("./qmd-manager.js");
+        const primary = await QmdMemoryManager.create({
+          cfg: params.cfg,
+          agentId: params.agentId,
+          resolved,
+          mode: statusOnly ? "status" : "full",
+        });
+        if (primary) {
+          if (statusOnly) {
+            return { manager: primary };
+          }
+          const wrapper = new FallbackMemoryManager(
+            {
+              primary,
+              fallbackFactory: async () => {
+                const { MemoryIndexManager } = await import("./manager.js");
+                return await MemoryIndexManager.get(params);
+              },
+            },
+            () => QMD_MANAGER_CACHE.delete(cacheKey),
+          );
+          QMD_MANAGER_CACHE.set(cacheKey, wrapper);
+          return { manager: wrapper };
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        log.warn(`qmd memory unavailable; falling back to builtin: ${message}`);
+      }
     }
   }
 
