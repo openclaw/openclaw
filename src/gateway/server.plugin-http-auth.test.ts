@@ -414,7 +414,7 @@ describe("gateway plugin HTTP auth boundary", () => {
     });
   });
 
-  test("keeps wildcard plugin handlers ungated when no auth predicate is configured", async () => {
+  test("uses /api/channels auth by default while keeping wildcard handlers ungated with no predicate", async () => {
     const resolvedAuth: ResolvedGatewayAuth = {
       mode: "token",
       token: "test-token",
@@ -428,6 +428,12 @@ describe("gateway plugin HTTP auth boundary", () => {
       run: async () => {
         const handlePluginRequest = vi.fn(async (req: IncomingMessage, res: ServerResponse) => {
           const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
+          if (pathname === "/api/channels/nostr/default/profile") {
+            res.statusCode = 200;
+            res.setHeader("Content-Type", "application/json; charset=utf-8");
+            res.end(JSON.stringify({ ok: true, route: "channel-default" }));
+            return true;
+          }
           if (pathname === "/googlechat") {
             res.statusCode = 200;
             res.setHeader("Content-Type", "application/json; charset=utf-8");
@@ -454,6 +460,15 @@ describe("gateway plugin HTTP auth boundary", () => {
         expect(unauthenticated.res.statusCode).toBe(200);
         expect(unauthenticated.getBody()).toContain('"route":"wildcard-default"');
 
+        const unauthenticatedChannel = createResponse();
+        await dispatchRequest(
+          server,
+          createRequest({ path: "/api/channels/nostr/default/profile" }),
+          unauthenticatedChannel.res,
+        );
+        expect(unauthenticatedChannel.res.statusCode).toBe(401);
+        expect(unauthenticatedChannel.getBody()).toContain("Unauthorized");
+
         const authenticated = createResponse();
         await dispatchRequest(
           server,
@@ -465,6 +480,18 @@ describe("gateway plugin HTTP auth boundary", () => {
         );
         expect(authenticated.res.statusCode).toBe(200);
         expect(authenticated.getBody()).toContain('"route":"wildcard-default"');
+
+        const authenticatedChannel = createResponse();
+        await dispatchRequest(
+          server,
+          createRequest({
+            path: "/api/channels/nostr/default/profile",
+            authorization: "Bearer test-token",
+          }),
+          authenticatedChannel.res,
+        );
+        expect(authenticatedChannel.res.statusCode).toBe(200);
+        expect(authenticatedChannel.getBody()).toContain('"route":"channel-default"');
       },
     });
   });

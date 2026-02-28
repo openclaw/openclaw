@@ -60,6 +60,7 @@ import { getBearerToken } from "./http-utils.js";
 import { handleOpenAiHttpRequest } from "./openai-http.js";
 import { handleOpenResponsesHttpRequest } from "./openresponses-http.js";
 import { GATEWAY_CLIENT_MODES, normalizeGatewayClientMode } from "./protocol/client-info.js";
+import { isProtectedPluginRoutePath } from "./security-path.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { handleToolsInvokeHttpRequest } from "./tools-invoke-http.js";
 
@@ -592,10 +593,9 @@ export function createGatewayHttpServer(opts: {
           return;
         }
       }
+      // Plugins run last so built-in gateway routes keep precedence on overlapping paths.
       if (handlePluginRequest) {
-        if (
-          (shouldEnforcePluginGatewayAuth ?? isProtectedPluginRoutePath)(requestPath)
-        ) {
+        if ((shouldEnforcePluginGatewayAuth ?? isProtectedPluginRoutePath)(requestPath)) {
           const pluginAuthOk = await enforcePluginRouteGatewayAuth({
             req,
             res,
