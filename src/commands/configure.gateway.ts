@@ -335,11 +335,11 @@ export async function promptGatewayConfig(
       const tailscaleOrigin = `https://${tailnetHostname}`;
       if (!allowedOrigins.includes(tailscaleOrigin)) {
         allowedOrigins = [...allowedOrigins, tailscaleOrigin];
-        defaultRuntime.log(`Added Tailscale origin to allowedOrigins: ${tailscaleOrigin}`);
+        runtime.log(`Added Tailscale origin to allowedOrigins: ${tailscaleOrigin}`);
       }
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err);
-      defaultRuntime.warn(
+      runtime.error(
         `Could not detect Tailscale hostname: ${errorMsg}. ` +
         "You may need to manually add your Tailscale origin to gateway.controlUi.allowedOrigins"
       );
