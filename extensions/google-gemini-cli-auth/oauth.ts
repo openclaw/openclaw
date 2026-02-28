@@ -233,14 +233,18 @@ type ClientMetadataPlatform =
   | "WINDOWS_AMD64";
 
 function resolvePlatform(): ClientMetadataPlatform {
-  const arch = process.arch === "arm64" ? "ARM64" : "AMD64";
-  if (process.platform === "darwin") {
-    return arch === "ARM64" ? "DARWIN_ARM64" : "DARWIN_AMD64";
+  const { platform, arch } = process;
+  if (platform === "darwin") {
+    if (arch === "arm64") return "DARWIN_ARM64";
+    if (arch === "x64") return "DARWIN_AMD64";
+    return "PLATFORM_UNSPECIFIED";
   }
-  if (process.platform === "linux") {
-    return arch === "ARM64" ? "LINUX_ARM64" : "LINUX_AMD64";
+  if (platform === "linux") {
+    if (arch === "arm64") return "LINUX_ARM64";
+    if (arch === "x64") return "LINUX_AMD64";
+    return "PLATFORM_UNSPECIFIED";
   }
-  if (process.platform === "win32") {
+  if (platform === "win32" && arch === "x64") {
     return "WINDOWS_AMD64";
   }
   return "PLATFORM_UNSPECIFIED";

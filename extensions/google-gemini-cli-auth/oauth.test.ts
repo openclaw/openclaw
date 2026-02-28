@@ -239,14 +239,28 @@ describe("loginGeminiCliOAuth", () => {
     "GOOGLE_CLOUD_PROJECT_ID",
   ] as const;
 
-  function getExpectedPlatform(): "WINDOWS" | "MACOS" | "LINUX" {
-    if (process.platform === "win32") {
-      return "WINDOWS";
+  function getExpectedPlatform():
+    | "PLATFORM_UNSPECIFIED"
+    | "DARWIN_AMD64"
+    | "DARWIN_ARM64"
+    | "LINUX_AMD64"
+    | "LINUX_ARM64"
+    | "WINDOWS_AMD64" {
+    const { platform, arch } = process;
+    if (platform === "darwin") {
+      if (arch === "arm64") return "DARWIN_ARM64";
+      if (arch === "x64") return "DARWIN_AMD64";
+      return "PLATFORM_UNSPECIFIED";
     }
-    if (process.platform === "linux") {
-      return "LINUX";
+    if (platform === "linux") {
+      if (arch === "arm64") return "LINUX_ARM64";
+      if (arch === "x64") return "LINUX_AMD64";
+      return "PLATFORM_UNSPECIFIED";
     }
-    return "MACOS";
+    if (platform === "win32" && arch === "x64") {
+      return "WINDOWS_AMD64";
+    }
+    return "PLATFORM_UNSPECIFIED";
   }
 
   function getRequestUrl(input: string | URL | Request): string {
@@ -358,7 +372,7 @@ describe("loginGeminiCliOAuth", () => {
     const clientMetadata = getHeaderValue(firstHeaders, "Client-Metadata");
     expect(clientMetadata).toBeDefined();
     expect(JSON.parse(clientMetadata as string)).toEqual({
-      ideType: "ANTIGRAVITY",
+      ideType: "GEMINI_CLI",
       platform: getExpectedPlatform(),
       pluginType: "GEMINI",
     });
@@ -366,7 +380,7 @@ describe("loginGeminiCliOAuth", () => {
     const body = JSON.parse(String(loadRequests[0]?.init?.body));
     expect(body).toEqual({
       metadata: {
-        ideType: "ANTIGRAVITY",
+        ideType: "GEMINI_CLI",
         platform: getExpectedPlatform(),
         pluginType: "GEMINI",
       },
@@ -422,7 +436,7 @@ describe("loginGeminiCliOAuth", () => {
     expect(requests.some((url) => url.includes("v1internal:onboardUser"))).toBe(false);
   });
 
-  it("does not throw when onboardUser returns 400 (proceeds without projectId)", async () => {
+  it("throws when onboardUser returns 400 without a recoverable project", async () => {
     const requests: string[] = [];
     const fetchMock = vi.fn(async (input: string | URL | Request) => {
       const url = getRequestUrl(input);
@@ -450,24 +464,24 @@ describe("loginGeminiCliOAuth", () => {
 
     let authUrl = "";
     const { loginGeminiCliOAuth } = await import("./oauth.js");
-    const result = await loginGeminiCliOAuth({
-      isRemote: true,
-      openUrl: async () => {},
-      log: (msg) => {
-        const found = msg.match(/https:\/\/accounts\.google\.com\/o\/oauth2\/v2\/auth\?[^\s]+/);
-        if (found?.[0]) {
-          authUrl = found[0];
-        }
-      },
-      note: async () => {},
-      prompt: async () => {
-        const state = new URL(authUrl).searchParams.get("state");
-        return `http://localhost:8085/oauth2callback?code=oauth-code&state=${state}`;
-      },
-      progress: { update: () => {}, stop: () => {} },
-    });
-
-    expect(result.projectId).toBe("");
+    await expect(
+      loginGeminiCliOAuth({
+        isRemote: true,
+        openUrl: async () => {},
+        log: (msg) => {
+          const found = msg.match(/https:\/\/accounts\.google\.com\/o\/oauth2\/v2\/auth\?[^\s]+/);
+          if (found?.[0]) {
+            authUrl = found[0];
+          }
+        },
+        note: async () => {},
+        prompt: async () => {
+          const state = new URL(authUrl).searchParams.get("state");
+          return `http://localhost:8085/oauth2callback?code=oauth-code&state=${state}`;
+        },
+        progress: { update: () => {}, stop: () => {} },
+      }),
+    ).rejects.toThrow("Could not provision a Google Cloud project");
     expect(requests.filter((url) => url.includes("v1internal:onboardUser"))).toHaveLength(1);
   });
 
