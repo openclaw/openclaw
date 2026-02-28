@@ -35,7 +35,7 @@ metadata:
               "id": "appimage",
               "kind": "manual",
               "label": "Install Obsidian via AppImage (Linux)",
-              "command": "wget https://github.com/obsidianmd/obsidian-releases/releases/download/v1.12.0/Obsidian-1.12.0.AppImage && chmod +x Obsidian-1.12.0.AppImage",
+              "command": "wget https://github.com/obsidianmd/obsidian-releases/releases/download/v1.12.4/Obsidian-1.12.4.AppImage && chmod +x Obsidian-1.12.4.AppImage",
               "bins": ["obsidian"],
             },
           ],
