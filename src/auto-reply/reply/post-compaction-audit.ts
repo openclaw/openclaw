@@ -104,15 +104,7 @@ export function auditPostCompactionReads(
       const requiredResolved = path.resolve(workspaceDir, required);
       const found = normalizedReads.some((r) => r === requiredResolved);
       if (!found) {
-        if (
-          shouldSkipTimelineCheck &&
-          typeof required !== "string" &&
-          /\d{4}-\d{2}-\d{2}/.test(required.source)
-        ) {
-          // skip timeline requirement when the file doesn't exist yet
-        } else {
-          missingPatterns.push(required);
-        }
+        missingPatterns.push(required);
       }
     } else {
       // RegExp — match against relative paths from workspace
