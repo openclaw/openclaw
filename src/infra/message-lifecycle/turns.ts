@@ -560,6 +560,19 @@ export function abortTurnsForSession(sessionKey: string, opts?: { stateDir?: str
        WHERE session_key=?
          AND status IN ('accepted','running','delivery_pending','failed_retryable')`,
     ).run(now, now, sessionKey.trim());
+    // Cancel any pending outbox entries linked to the now-aborted turns so
+    // recoverPendingDeliveries doesn't replay sends for aborted turns.
+    db.prepare(
+      `UPDATE message_outbox
+         SET status='failed_terminal',
+             error_class='terminal',
+             terminal_reason='turn_aborted',
+             completed_at=?
+       WHERE turn_id IN (
+         SELECT id FROM message_turns WHERE session_key=? AND status='aborted'
+       )
+         AND status IN ('queued','failed_retryable')`,
+    ).run(now, sessionKey.trim());
   } catch (err) {
     logVerbose(`message-lifecycle/turns: abortTurnsForSession failed: ${String(err)}`);
   }
