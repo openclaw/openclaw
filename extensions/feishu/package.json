@@ -1,11 +1,12 @@
 {
   "name": "@openclaw/feishu",
-  "version": "2026.2.26",
+  "version": "2026.2.27",
   "description": "OpenClaw Feishu/Lark channel plugin (community maintained by @m1heng)",
   "type": "module",
   "dependencies": {
     "@larksuiteoapi/node-sdk": "^1.59.0",
     "@sinclair/typebox": "0.34.48",
+    "https-proxy-agent": "^7.0.6",
     "zod": "^4.3.6"
   },
   "openclaw": {
