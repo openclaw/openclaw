@@ -617,12 +617,14 @@ export function loadCombinedSessionStoreForGateway(cfg: OpenClawConfig): {
   return { storePath, store: combined };
 }
 
-export function getSessionDefaults(cfg: OpenClawConfig): GatewaySessionsDefaults {
-  const resolved = resolveConfiguredModelRef({
-    cfg,
-    defaultProvider: DEFAULT_PROVIDER,
-    defaultModel: DEFAULT_MODEL,
-  });
+export function getSessionDefaults(cfg: OpenClawConfig, agentId?: string): GatewaySessionsDefaults {
+  const resolved = agentId
+    ? resolveDefaultModelForAgent({ cfg, agentId })
+    : resolveConfiguredModelRef({
+        cfg,
+        defaultProvider: DEFAULT_PROVIDER,
+        defaultModel: DEFAULT_MODEL,
+      });
   const contextTokens =
     cfg.agents?.defaults?.contextTokens ??
     lookupContextTokens(resolved.model) ??
@@ -902,7 +904,7 @@ export function listSessionsFromStore(params: {
     ts: now,
     path: storePath,
     count: finalSessions.length,
-    defaults: getSessionDefaults(cfg),
+    defaults: getSessionDefaults(cfg, agentId),
     sessions: finalSessions,
   };
 }

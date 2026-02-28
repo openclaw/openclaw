@@ -111,4 +111,68 @@ describe("tui session actions", () => {
     expect(updateFooter).toHaveBeenCalledTimes(2);
     expect(requestRender).toHaveBeenCalledTimes(2);
   });
+
+  it("falls back to defaults model when session entry is not found (new session)", async () => {
+    const listSessions = vi.fn().mockResolvedValue({
+      ts: Date.now(),
+      path: "/tmp/sessions.json",
+      count: 0,
+      defaults: {
+        model: "gemini-3-pro-preview",
+        modelProvider: "google-gemini-cli",
+        contextTokens: 200000,
+      },
+      sessions: [],
+    });
+
+    const state: TuiStateAccess = {
+      agentDefaultId: "main",
+      sessionMainKey: "agent:main:main",
+      sessionScope: "global",
+      agents: [],
+      currentAgentId: "main",
+      currentSessionKey: "agent:main:new-session",
+      currentSessionId: null,
+      activeChatRunId: null,
+      historyLoaded: false,
+      sessionInfo: {},
+      initialSessionApplied: true,
+      isConnected: true,
+      autoMessageSent: false,
+      toolsExpanded: false,
+      showThinking: false,
+      connectionStatus: "connected",
+      activityStatus: "idle",
+      statusTimeout: null,
+      lastCtrlCAt: 0,
+    };
+
+    const updateFooter = vi.fn();
+    const updateAutocompleteProvider = vi.fn();
+    const requestRender = vi.fn();
+
+    const { refreshSessionInfo } = createSessionActions({
+      client: { listSessions } as unknown as GatewayChatClient,
+      chatLog: { addSystem: vi.fn() } as unknown as import("./components/chat-log.js").ChatLog,
+      tui: { requestRender } as unknown as import("@mariozechner/pi-tui").TUI,
+      opts: {},
+      state,
+      agentNames: new Map(),
+      initialSessionInput: "",
+      initialSessionAgentId: null,
+      resolveSessionKey: vi.fn(),
+      updateHeader: vi.fn(),
+      updateFooter,
+      updateAutocompleteProvider,
+      setActivityStatus: vi.fn(),
+    });
+
+    await refreshSessionInfo();
+
+    // Should fall back to defaults instead of showing "unknown"
+    expect(state.sessionInfo.model).toBe("gemini-3-pro-preview");
+    expect(state.sessionInfo.modelProvider).toBe("google-gemini-cli");
+    expect(state.sessionInfo.contextTokens).toBe(200000);
+    expect(updateFooter).toHaveBeenCalled();
+  });
 });
