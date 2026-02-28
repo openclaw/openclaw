@@ -243,7 +243,7 @@ function logToFile(
   message: string,
   meta?: Record<string, unknown>,
 ) {
-  if (level === "silent") {
+  if (level === "silent" || !isFileLogLevelEnabled(level)) {
     return;
   }
   const safeLevel = level;
