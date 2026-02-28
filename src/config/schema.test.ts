@@ -131,6 +131,9 @@ describe("tools.web.urlAllowlist validation", () => {
       "sub.domain.com",
       "a.b.c.d.com",
       "localhost",
+      "::1",
+      "[::1]",
+      "2001:db8::1",
     ];
     for (const pattern of validPatterns) {
       const result = ToolsWebSchema.safeParse({
