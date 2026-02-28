@@ -24,8 +24,9 @@ import {
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { logDebug } from "../../logger.js";
 import { getChildLogger } from "../../logging.js";
-import { buildPairingReply } from "../../pairing/pairing-messages.js";
+import { buildUnpairedResponse } from "../../pairing/pairing-messages.js";
 import { upsertChannelPairingRequest } from "../../pairing/pairing-store.js";
+import { getUnpairedResponseMode } from "../../pairing/unpaired-response.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
 import { DEFAULT_ACCOUNT_ID, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { readStoreAllowFromForDmPolicy } from "../../security/dm-policy-shared.js";
@@ -218,22 +219,23 @@ export async function preflightDiscordMessage(
             logVerbose(
               `discord pairing request sender=${author.id} tag=${formatDiscordUserTag(author)} (${allowMatchMeta})`,
             );
-            try {
-              await sendMessageDiscord(
-                `user:${author.id}`,
-                buildPairingReply({
-                  channel: "discord",
-                  idLine: `Your Discord user id: ${author.id}`,
-                  code,
-                }),
-                {
+            const cfg = loadConfig();
+            const responseText = buildUnpairedResponse({
+              channel: "discord",
+              idLine: `Your Discord user id: ${author.id}`,
+              code,
+              mode: getUnpairedResponseMode(cfg),
+            });
+            if (responseText !== null) {
+              try {
+                await sendMessageDiscord(`user:${author.id}`, responseText, {
                   token: params.token,
                   rest: params.client.rest,
                   accountId: params.accountId,
-                },
-              );
-            } catch (err) {
-              logVerbose(`discord pairing reply failed for ${author.id}: ${String(err)}`);
+                });
+              } catch (err) {
+                logVerbose(`discord pairing reply failed for ${author.id}: ${String(err)}`);
+              }
             }
           }
         } else {

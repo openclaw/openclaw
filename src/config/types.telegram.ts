@@ -7,7 +7,7 @@ import type {
   OutboundRetryConfig,
   ReplyToMode,
 } from "./types.base.js";
-import type { ChannelHeartbeatVisibilityConfig } from "./types.channels.js";
+import type { ChannelHeartbeatVisibilityConfig, UnpairedResponseMode } from "./types.channels.js";
 import type { DmConfig, ProviderCommandsConfig } from "./types.messages.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 
@@ -154,6 +154,14 @@ export type TelegramAccountConfig = {
   reactionLevel?: "off" | "ack" | "minimal" | "extensive";
   /** Heartbeat visibility settings for this channel. */
   heartbeat?: ChannelHeartbeatVisibilityConfig;
+  /**
+   * Response behavior when an unpaired (unauthorized) user sends a message.
+   * - "silent": Do not respond (recommended for security)
+   * - "code-only": Respond with pairing code only (no platform branding)
+   * - "branded": Respond with full OpenClaw branding and pairing instructions
+   * Falls back to channels.defaults.unpairedResponse if not set.
+   */
+  unpairedResponse?: UnpairedResponseMode;
   /** Controls whether link previews are shown in outbound messages. Default: true. */
   linkPreview?: boolean;
   /**
