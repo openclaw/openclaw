@@ -5,6 +5,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { sameFileIdentity } from "./file-identity.js";
 import { assertNoPathAliasEscape } from "./path-alias-guards.js";
+import { expandHomePrefix } from "./home-dir.js";
 import { isNotFoundPathError, isPathInside, isSymlinkOpenError } from "./path-guards.js";
 
 export type SafeOpenErrorCode =
@@ -119,7 +120,8 @@ export async function openFileWithinRoot(params: {
     throw err;
   }
   const rootWithSep = ensureTrailingSep(rootReal);
-  const resolved = path.resolve(rootWithSep, params.relativePath);
+  const expanded = expandHomePrefix(params.relativePath);
+  const resolved = path.resolve(rootWithSep, expanded);
   if (!isPathInside(rootWithSep, resolved)) {
     throw new SafeOpenError("outside-workspace", "file is outside workspace root");
   }
@@ -188,7 +190,8 @@ export async function writeFileWithinRoot(params: {
     throw err;
   }
   const rootWithSep = ensureTrailingSep(rootReal);
-  const resolved = path.resolve(rootWithSep, params.relativePath);
+  const expanded = expandHomePrefix(params.relativePath);
+  const resolved = path.resolve(rootWithSep, expanded);
   if (!isPathInside(rootWithSep, resolved)) {
     throw new SafeOpenError("outside-workspace", "file is outside workspace root");
   }
