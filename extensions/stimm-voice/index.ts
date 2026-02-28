@@ -1176,7 +1176,11 @@ export class LiveKitRuntime {
     ttlSeconds?: number;
   }): Promise<VoiceSessionInternal> {
     const roomName = opts.roomName ?? `stimm-${randomHex(8)}`;
-    await this.roomService.createRoom({ name: roomName });
+    // emptyTimeout: auto-delete the room on the LiveKit side once all
+    // participants have left. Matches the token TTL so the room is never
+    // abandoned longer than a token would be valid.
+    const emptyTimeout = opts.ttlSeconds ?? 600;
+    await this.roomService.createRoom({ name: roomName, emptyTimeout });
     await this.dispatchService.createDispatch(roomName, LiveKitRuntime.AGENT_NAME, {
       metadata: JSON.stringify({
         source: "openclaw-stimm-voice",
