@@ -13,6 +13,7 @@ import type {
   TalkConfig,
 } from "./types.gateway.js";
 import type { HooksConfig } from "./types.hooks.js";
+import type { LocalModelSecurityConfig } from "./types.local-model-security.js";
 import type { MemoryConfig } from "./types.memory.js";
 import type {
   AudioConfig,
@@ -111,6 +112,7 @@ export type OpenClawConfig = {
   canvasHost?: CanvasHostConfig;
   talk?: TalkConfig;
   gateway?: GatewayConfig;
+  localModelSecurity?: LocalModelSecurityConfig;
   memory?: MemoryConfig;
 };
 

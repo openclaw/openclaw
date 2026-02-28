@@ -690,6 +690,49 @@ export const OpenClawSchema = z
       })
       .strict()
       .optional(),
+    localModelSecurity: z
+      .object({
+        mode: z.union([z.literal("off"), z.literal("enforced"), z.literal("audit")]).optional(),
+        networkEgress: z
+          .object({
+            blockExternalRequests: z.boolean().optional(),
+            allowedHosts: z
+              .array(
+                z
+                  .object({
+                    host: z.string().min(1),
+                    port: z.number().int().positive().optional(),
+                    label: z.string().optional(),
+                  })
+                  .strict(),
+              )
+              .optional(),
+            allowedCidrRanges: z.array(z.string()).optional(),
+            blockExternalDns: z.boolean().optional(),
+          })
+          .strict()
+          .optional(),
+        localProviders: z
+          .array(
+            z
+              .object({
+                type: z.union([z.literal("ollama"), z.literal("vllm"), z.literal("custom-openai")]),
+                baseUrl: z.string().min(1),
+                apiKey: z.string().optional(),
+                name: z.string().optional(),
+                requireTls: z.boolean().optional(),
+              })
+              .strict(),
+          )
+          .optional(),
+        blockCloudProviders: z.boolean().optional(),
+        blockWebAccess: z.boolean().optional(),
+        blockTelemetry: z.boolean().optional(),
+        requireTls: z.boolean().optional(),
+        tlsCaPath: z.string().optional(),
+      })
+      .strict()
+      .optional(),
     memory: MemorySchema,
     skills: z
       .object({

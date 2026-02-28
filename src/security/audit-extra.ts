@@ -27,6 +27,9 @@ export {
   type SecurityAuditFinding,
 } from "./audit-extra.sync.js";
 
+// Local model security collectors
+export { collectLocalModelSecurityFindings } from "./audit-local-model.js";
+
 // Async collectors
 export {
   collectSandboxBrowserHashLabelFindings,
