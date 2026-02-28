@@ -579,20 +579,26 @@ async function discoverProject(accessToken: string): Promise<string> {
     }
   }
 
+  // Helper used in both the currentTier and standalone-project paths below.
+  const resolvedProject = (() => {
+    const p = data.cloudaicompanionProject;
+    if (typeof p === "string" && p) return p;
+    if (typeof p === "object" && p?.id) return p.id;
+    return undefined;
+  })();
+
   if (data.currentTier) {
-    const project = data.cloudaicompanionProject;
-    if (typeof project === "string" && project) {
-      return project;
-    }
-    if (typeof project === "object" && project?.id) {
-      return project.id;
-    }
-    if (envProject) {
-      return envProject;
-    }
+    if (resolvedProject) return resolvedProject;
+    if (envProject) return envProject;
     throw new Error(
       "This account requires GOOGLE_CLOUD_PROJECT or GOOGLE_CLOUD_PROJECT_ID to be set.",
     );
+  }
+
+  // If loadCodeAssist returned a project ID without tier info (e.g. 400 body
+  // for an already-provisioned account), return it directly — no onboarding needed.
+  if (resolvedProject) {
+    return resolvedProject;
   }
 
   const tier = getDefaultTier(data.allowedTiers);
