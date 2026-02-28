@@ -1,11 +1,14 @@
-const BLOCKED_ENV_VAR_PATTERNS: ReadonlyArray<RegExp> = [
-  /^ANTHROPIC_API_KEY$/i,
-  /^OPENAI_API_KEY$/i,
-  /^GEMINI_API_KEY$/i,
-  /^OPENROUTER_API_KEY$/i,
-  /^MINIMAX_API_KEY$/i,
-  /^ELEVENLABS_API_KEY$/i,
-  /^SYNTHETIC_API_KEY$/i,
+import { MODEL_AUTH_ENV_VARS } from "../model-auth.js";
+
+/**
+ * Hard denylist: platform/infrastructure secrets that can NEVER be bypassed by
+ * skill `allowedKeys` declarations.  These protect credentials whose leakage
+ * would compromise the gateway, provider billing, or channel integrations.
+ *
+ * Model/provider auth vars are imported from `model-auth.ts` so they stay in
+ * sync when new providers are added.
+ */
+const HARD_BLOCKED_ENV_VAR_PATTERNS: ReadonlyArray<RegExp> = [
   /^TELEGRAM_BOT_TOKEN$/i,
   /^DISCORD_BOT_TOKEN$/i,
   /^SLACK_(BOT|APP)_TOKEN$/i,
@@ -14,8 +17,20 @@ const BLOCKED_ENV_VAR_PATTERNS: ReadonlyArray<RegExp> = [
   /^OPENCLAW_GATEWAY_(TOKEN|PASSWORD)$/i,
   /^AWS_(SECRET_ACCESS_KEY|SECRET_KEY|SESSION_TOKEN)$/i,
   /^(GH|GITHUB)_TOKEN$/i,
-  /^(AZURE|AZURE_OPENAI|COHERE|AI_GATEWAY|OPENROUTER)_API_KEY$/i,
+];
+
+/**
+ * Soft blocked patterns: generic suffix-based heuristics that catch
+ * credential-like names.  These CAN be bypassed by skill `allowedKeys`
+ * declarations (e.g. a Notion skill declaring `primaryEnv: NOTION_API_KEY`).
+ */
+const SOFT_BLOCKED_ENV_VAR_PATTERNS: ReadonlyArray<RegExp> = [
   /_?(API_KEY|TOKEN|PASSWORD|PRIVATE_KEY|SECRET)$/i,
+];
+
+const BLOCKED_ENV_VAR_PATTERNS: ReadonlyArray<RegExp> = [
+  ...HARD_BLOCKED_ENV_VAR_PATTERNS,
+  ...SOFT_BLOCKED_ENV_VAR_PATTERNS,
 ];
 
 const ALLOWED_ENV_VAR_PATTERNS: ReadonlyArray<RegExp> = [
@@ -40,6 +55,8 @@ export type EnvSanitizationOptions = {
   strictMode?: boolean;
   customBlockedPatterns?: ReadonlyArray<RegExp>;
   customAllowedPatterns?: ReadonlyArray<RegExp>;
+  /** Exact key names exempt from blocked-pattern checks (e.g. skill-declared primaryEnv vars). */
+  allowedKeys?: ReadonlySet<string>;
 };
 
 export function validateEnvVarValue(value: string): string | undefined {
@@ -76,7 +93,17 @@ export function sanitizeEnvVars(
       continue;
     }
 
-    if (matchesAnyPattern(key, blockedPatterns)) {
+    // Hard-blocked keys (platform/infra/model-auth secrets) can never be bypassed by allowedKeys.
+    // Normalize to uppercase for the set lookup so configs using non-standard casing are still blocked.
+    if (
+      matchesAnyPattern(key, HARD_BLOCKED_ENV_VAR_PATTERNS) ||
+      MODEL_AUTH_ENV_VARS.has(key.toUpperCase())
+    ) {
+      blocked.push(key);
+      continue;
+    }
+
+    if (matchesAnyPattern(key, blockedPatterns) && !options.allowedKeys?.has(key)) {
       blocked.push(key);
       continue;
     }
