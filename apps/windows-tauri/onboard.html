@@ -1,0 +1,646 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>OpenClaw 初始配置</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg: #0d1117;
+      --surface: #161b22;
+      --surface2: #1f2937;
+      --border: #30363d;
+      --accent: #e07b39;
+      --accent-dim: rgba(224,123,57,0.15);
+      --blue: #1e3a5f;
+      --text: #e6edf3;
+      --muted: #8b949e;
+      --ok: #3fb950;
+      --radius: 10px;
+    }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, "Segoe UI", system-ui, sans-serif;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+    .wizard {
+      width: 100%;
+      max-width: 520px;
+    }
+
+    /* Header */
+    .header {
+      text-align: center;
+      margin-bottom: 32px;
+    }
+    .logo {
+      width: 80px;
+      height: 80px;
+      border-radius: 20px;
+      margin: 0 auto 16px;
+      display: block;
+      background: var(--surface2);
+      padding: 8px;
+    }
+    .header h1 {
+      font-size: 24px;
+      font-weight: 700;
+      letter-spacing: -0.5px;
+    }
+    .header p {
+      color: var(--muted);
+      margin-top: 6px;
+      font-size: 14px;
+    }
+
+    /* Steps indicator */
+    .steps {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0;
+      margin-bottom: 28px;
+    }
+    .step-dot {
+      width: 28px; height: 28px;
+      border-radius: 50%;
+      border: 2px solid var(--border);
+      background: var(--surface);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--muted);
+      transition: all 0.2s;
+      position: relative;
+      z-index: 1;
+    }
+    .step-dot.active {
+      border-color: var(--accent);
+      background: var(--accent-dim);
+      color: var(--accent);
+    }
+    .step-dot.done {
+      border-color: var(--ok);
+      background: rgba(63,185,80,0.15);
+      color: var(--ok);
+    }
+    .step-line {
+      flex: 1;
+      height: 2px;
+      background: var(--border);
+      max-width: 60px;
+    }
+    .step-line.done { background: var(--ok); }
+
+    /* Card */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 28px;
+    }
+    .card-title {
+      font-size: 18px;
+      font-weight: 600;
+      margin-bottom: 6px;
+    }
+    .card-sub {
+      color: var(--muted);
+      font-size: 13px;
+      margin-bottom: 24px;
+      line-height: 1.5;
+    }
+
+    /* Form */
+    .field { margin-bottom: 18px; }
+    label { display: block; font-size: 13px; font-weight: 500; margin-bottom: 6px; color: var(--muted); }
+    input, select, textarea {
+      width: 100%;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      font-size: 14px;
+      padding: 9px 12px;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+    input:focus, select:focus { border-color: var(--accent); }
+    select option { background: var(--surface2); }
+    .hint { font-size: 12px; color: var(--muted); margin-top: 5px; }
+
+    /* Buttons */
+    .btn-row {
+      display: flex;
+      gap: 10px;
+      margin-top: 24px;
+      justify-content: flex-end;
+    }
+    .btn {
+      padding: 9px 20px;
+      border-radius: 6px;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      border: 1px solid var(--border);
+      background: var(--surface2);
+      color: var(--text);
+      transition: background 0.15s;
+    }
+    .btn:hover { background: #2d3748; }
+    .btn.primary {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #fff;
+    }
+    .btn.primary:hover { background: #c96e2e; }
+    .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .btn.ghost { background: transparent; }
+
+    /* Provider cards */
+    .provider-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin-bottom: 18px;
+    }
+    .provider-card {
+      border: 2px solid var(--border);
+      border-radius: 8px;
+      padding: 14px 12px;
+      cursor: pointer;
+      text-align: center;
+      background: var(--surface);
+      transition: all 0.15s;
+    }
+    .provider-card:hover { border-color: var(--muted); }
+    .provider-card.selected {
+      border-color: var(--accent);
+      background: var(--accent-dim);
+    }
+    .provider-card .pname {
+      font-weight: 600;
+      font-size: 14px;
+      margin-top: 4px;
+    }
+    .provider-card .pmodel {
+      font-size: 11px;
+      color: var(--muted);
+      margin-top: 2px;
+    }
+    .provider-emoji { font-size: 24px; }
+
+    /* Alert */
+    .alert {
+      background: rgba(224,123,57,0.12);
+      border: 1px solid rgba(224,123,57,0.3);
+      border-radius: 6px;
+      padding: 12px 14px;
+      font-size: 13px;
+      color: var(--accent);
+      margin-bottom: 18px;
+    }
+    .alert.success {
+      background: rgba(63,185,80,0.1);
+      border-color: rgba(63,185,80,0.3);
+      color: var(--ok);
+    }
+
+    /* Spinner */
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .spinner {
+      width: 18px; height: 18px;
+      border: 2px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+      display: inline-block;
+      vertical-align: middle;
+      margin-right: 8px;
+    }
+
+    /* Step panels */
+    .step-panel { display: none; }
+    .step-panel.active { display: block; }
+
+    /* Welcome art */
+    .welcome-art {
+      text-align: center;
+      padding: 12px 0 4px;
+    }
+    .welcome-art img { width: 100px; height: 100px; border-radius: 20px; }
+    .welcome-features {
+      list-style: none;
+      margin: 16px 0;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .welcome-features li {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 14px;
+      color: var(--muted);
+    }
+    .welcome-features li::before {
+      content: "✓";
+      color: var(--ok);
+      font-weight: 700;
+      font-size: 13px;
+    }
+
+    /* Done step */
+    .done-icon {
+      text-align: center;
+      font-size: 56px;
+      margin: 8px 0 16px;
+    }
+  </style>
+</head>
+<body>
+<div class="wizard">
+  <div class="header">
+    <img class="logo" id="logoImg" src="" alt="OpenClaw" />
+    <h1>OpenClaw 配置向导</h1>
+    <p>首次运行，请完成以下设置</p>
+  </div>
+
+  <!-- Step indicator -->
+  <div class="steps">
+    <div class="step-dot active" id="dot1">1</div>
+    <div class="step-line" id="line1"></div>
+    <div class="step-dot" id="dot2">2</div>
+    <div class="step-line" id="line2"></div>
+    <div class="step-dot" id="dot3">3</div>
+    <div class="step-line" id="line3"></div>
+    <div class="step-dot" id="dot4">4</div>
+  </div>
+
+  <div class="card">
+    <!-- Step 1: Welcome -->
+    <div class="step-panel active" id="panel1">
+      <div class="card-title">欢迎使用 OpenClaw 🦞</div>
+      <div class="card-sub">一个运行在你设备上的私人 AI 助手，通过 Discord、Telegram 等即时通讯工具来操控你的电脑。</div>
+      <ul class="welcome-features">
+        <li>支持 Anthropic Claude、OpenAI GPT、Gemini 等主流模型</li>
+        <li>通过 Discord / Telegram / WhatsApp 等频道发送指令</li>
+        <li>可执行文件操作、网页浏览、代码运行等任务</li>
+        <li>所有数据存储在本地，完全私有</li>
+      </ul>
+      <div class="btn-row">
+        <button class="btn primary" onclick="goStep(2)">开始设置 →</button>
+      </div>
+    </div>
+
+    <!-- Step 2: Model -->
+    <div class="step-panel" id="panel2">
+      <div class="card-title">选择 AI 模型</div>
+      <div class="card-sub">选择你要使用的 AI 服务提供商，并填入对应的 API Key。</div>
+
+      <div class="provider-grid">
+        <div class="provider-card selected" id="p-anthropic" onclick="selectProvider('anthropic')">
+          <div class="provider-emoji">🤖</div>
+          <div class="pname">Anthropic</div>
+          <div class="pmodel">Claude 3.5 Sonnet</div>
+        </div>
+        <div class="provider-card" id="p-openai" onclick="selectProvider('openai')">
+          <div class="provider-emoji">⚡</div>
+          <div class="pname">OpenAI</div>
+          <div class="pmodel">GPT-4o</div>
+        </div>
+        <div class="provider-card" id="p-gemini" onclick="selectProvider('gemini')">
+          <div class="provider-emoji">💎</div>
+          <div class="pname">Google Gemini</div>
+          <div class="pmodel">Gemini 1.5 Pro</div>
+        </div>
+        <div class="provider-card" id="p-ollama" onclick="selectProvider('ollama')">
+          <div class="provider-emoji">🏠</div>
+          <div class="pname">Ollama</div>
+          <div class="pmodel">本地模型</div>
+        </div>
+      </div>
+
+      <div class="field" id="apiKeyField">
+        <label id="apiKeyLabel">Anthropic API Key</label>
+        <input type="password" id="apiKey" placeholder="sk-ant-..." />
+        <div class="hint" id="apiKeyHint">在 <a href="#" style="color:var(--accent)" onclick="openDocs()">console.anthropic.com</a> 获取</div>
+      </div>
+
+      <div class="field" id="ollamaUrlField" style="display:none">
+        <label>Ollama 服务地址</label>
+        <input type="text" id="ollamaUrl" value="http://localhost:11434" />
+        <div class="hint">确保 Ollama 已在本地运行</div>
+      </div>
+
+      <div class="field" id="ollamaModelField" style="display:none">
+        <label>模型名称</label>
+        <input type="text" id="ollamaModel" placeholder="llama3, qwen2.5, etc." />
+      </div>
+
+      <div class="btn-row">
+        <button class="btn ghost" onclick="goStep(1)">← 返回</button>
+        <button class="btn primary" onclick="validateModel()">下一步 →</button>
+      </div>
+    </div>
+
+    <!-- Step 3: Channel (optional) -->
+    <div class="step-panel" id="panel3">
+      <div class="card-title">连接聊天频道（可选）</div>
+      <div class="card-sub">通过聊天应用向 OpenClaw 发送指令。此步骤可跳过，之后在设置页面中随时添加。</div>
+
+      <div class="field">
+        <label>选择频道</label>
+        <select id="channelType" onchange="onChannelChange()">
+          <option value="none">暂时跳过</option>
+          <option value="discord">Discord</option>
+          <option value="telegram">Telegram</option>
+        </select>
+      </div>
+
+      <div id="discordFields" style="display:none">
+        <div class="alert">
+          需要创建一个 Discord Bot：<br/>
+          前往 discord.com/developers → New Application → Bot → Reset Token
+        </div>
+        <div class="field">
+          <label>Discord Bot Token</label>
+          <input type="password" id="discordToken" placeholder="MTxxxxx..." />
+        </div>
+      </div>
+
+      <div id="telegramFields" style="display:none">
+        <div class="alert">
+          通过 @BotFather 在 Telegram 创建 Bot，获取 Token。
+        </div>
+        <div class="field">
+          <label>Telegram Bot Token</label>
+          <input type="password" id="telegramToken" placeholder="1234567890:AAFxxxxx..." />
+        </div>
+      </div>
+
+      <div class="btn-row">
+        <button class="btn ghost" onclick="goStep(2)">← 返回</button>
+        <button class="btn ghost" onclick="goStep(4)">跳过</button>
+        <button class="btn primary" onclick="validateChannel()">下一步 →</button>
+      </div>
+    </div>
+
+    <!-- Step 4: Done -->
+    <div class="step-panel" id="panel4">
+      <div id="savingState">
+        <div class="card-title">正在保存配置…</div>
+        <div class="card-sub"><span class="spinner"></span>请稍候…</div>
+      </div>
+      <div id="doneState" style="display:none">
+        <div class="done-icon">🎉</div>
+        <div class="card-title" style="text-align:center">配置完成！</div>
+        <div class="card-sub" style="text-align:center;margin-top:8px">
+          OpenClaw 网关正在启动，即将打开控制面板…
+        </div>
+        <div class="alert success" style="margin-top:16px">
+          ✓ 配置文件已保存至 ~/.openclaw/openclaw.json
+        </div>
+        <div class="btn-row" style="justify-content:center">
+          <button class="btn primary" onclick="openControlUI()">打开控制面板 →</button>
+        </div>
+      </div>
+      <div id="errorState" style="display:none">
+        <div class="done-icon">⚠️</div>
+        <div class="card-title" style="text-align:center">保存失败</div>
+        <div class="alert" id="errorMsg" style="margin-top:16px"></div>
+        <div class="btn-row" style="justify-content:center">
+          <button class="btn" onclick="goStep(2)">重试</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  // Try to load Tauri invoke API
+  let tauriInvoke = null;
+  async function loadTauri() {
+    try {
+      const m = await import('/node_modules/@tauri-apps/api/core.js').catch(() => null)
+        || await import('https://unpkg.com/@tauri-apps/api@2/core').catch(() => null);
+      if (m) tauriInvoke = m.invoke;
+    } catch {}
+    // Fallback: use window.__TAURI__
+    if (!tauriInvoke && window.__TAURI__) {
+      tauriInvoke = window.__TAURI__.core.invoke;
+    }
+  }
+  loadTauri();
+
+  // Provider config
+  const PROVIDERS = {
+    anthropic: {
+      label: 'Anthropic API Key',
+      hint: '在 console.anthropic.com 获取',
+      placeholder: 'sk-ant-...',
+      model: 'anthropic/claude-sonnet-4-5',
+      keyEnv: 'ANTHROPIC_API_KEY',
+    },
+    openai: {
+      label: 'OpenAI API Key',
+      hint: '在 platform.openai.com 获取',
+      placeholder: 'sk-...',
+      model: 'openai/gpt-4o',
+      keyEnv: 'OPENAI_API_KEY',
+    },
+    gemini: {
+      label: 'Google AI API Key',
+      hint: '在 aistudio.google.com 获取',
+      placeholder: 'AIza...',
+      model: 'google/gemini-1.5-pro',
+      keyEnv: 'GOOGLE_GENERATIVE_AI_API_KEY',
+    },
+    ollama: {
+      label: null,
+      model: null,
+    },
+  };
+
+  let currentProvider = 'anthropic';
+  let step = 1;
+
+  function goStep(n) {
+    document.getElementById(`panel${step}`).classList.remove('active');
+    updateDots(n);
+    step = n;
+    document.getElementById(`panel${step}`).classList.add('active');
+    if (n === 4) saveConfig();
+  }
+
+  function updateDots(n) {
+    for (let i = 1; i <= 4; i++) {
+      const dot = document.getElementById(`dot${i}`);
+      dot.className = 'step-dot' + (i < n ? ' done' : i === n ? ' active' : '');
+      if (i < 4) {
+        const line = document.getElementById(`line${i}`);
+        line.className = 'step-line' + (i < n ? ' done' : '');
+      }
+    }
+  }
+
+  function selectProvider(p) {
+    currentProvider = p;
+    document.querySelectorAll('.provider-card').forEach(c => c.classList.remove('selected'));
+    document.getElementById(`p-${p}`).classList.add('selected');
+
+    const cfg = PROVIDERS[p];
+    const apiKeyField = document.getElementById('apiKeyField');
+    const ollamaFields = document.getElementById('ollamaUrlField');
+    const ollamaModelField = document.getElementById('ollamaModelField');
+
+    if (p === 'ollama') {
+      apiKeyField.style.display = 'none';
+      ollamaFields.style.display = 'block';
+      ollamaModelField.style.display = 'block';
+    } else {
+      apiKeyField.style.display = 'block';
+      ollamaFields.style.display = 'none';
+      ollamaModelField.style.display = 'none';
+      document.getElementById('apiKeyLabel').textContent = cfg.label;
+      document.getElementById('apiKeyHint').textContent = cfg.hint;
+      document.getElementById('apiKey').placeholder = cfg.placeholder;
+      document.getElementById('apiKey').value = '';
+    }
+  }
+
+  function validateModel() {
+    if (currentProvider === 'ollama') {
+      const url = document.getElementById('ollamaUrl').value.trim();
+      const model = document.getElementById('ollamaModel').value.trim();
+      if (!url || !model) { alert('请填写 Ollama 服务地址和模型名称'); return; }
+    } else {
+      const key = document.getElementById('apiKey').value.trim();
+      if (!key) { alert('请填写 API Key'); return; }
+    }
+    goStep(3);
+  }
+
+  function onChannelChange() {
+    const v = document.getElementById('channelType').value;
+    document.getElementById('discordFields').style.display = v === 'discord' ? 'block' : 'none';
+    document.getElementById('telegramFields').style.display = v === 'telegram' ? 'block' : 'none';
+  }
+
+  function validateChannel() {
+    const v = document.getElementById('channelType').value;
+    if (v === 'discord' && !document.getElementById('discordToken').value.trim()) {
+      alert('请填写 Discord Bot Token'); return;
+    }
+    if (v === 'telegram' && !document.getElementById('telegramToken').value.trim()) {
+      alert('请填写 Telegram Bot Token'); return;
+    }
+    goStep(4);
+  }
+
+  async function saveConfig() {
+    document.getElementById('savingState').style.display = 'block';
+    document.getElementById('doneState').style.display = 'none';
+    document.getElementById('errorState').style.display = 'none';
+
+    try {
+      const config = buildConfig();
+      const json = JSON.stringify(config, null, 2);
+
+      if (tauriInvoke) {
+        await tauriInvoke('write_config', { json });
+      } else {
+        // Dev fallback: log to console
+        console.log('Config to write:', json);
+        await new Promise(r => setTimeout(r, 800));
+      }
+
+      document.getElementById('savingState').style.display = 'none';
+      document.getElementById('doneState').style.display = 'block';
+
+      // Auto-open after 3s
+      setTimeout(openControlUI, 3000);
+    } catch (e) {
+      document.getElementById('savingState').style.display = 'none';
+      document.getElementById('errorState').style.display = 'block';
+      document.getElementById('errorMsg').textContent = String(e);
+    }
+  }
+
+  function buildConfig() {
+    const cfg = {
+      gateway: { port: 18789, bind: 'lan', mode: 'local' },
+      auth: { mode: 'token', token: randomToken() },
+      agents: {},
+    };
+
+    // Model config
+    if (currentProvider === 'ollama') {
+      const url = document.getElementById('ollamaUrl').value.trim();
+      const model = document.getElementById('ollamaModel').value.trim();
+      cfg.agents.model = `ollama/${model}`;
+      cfg.agents.env = { OLLAMA_BASE_URL: url };
+    } else {
+      const p = PROVIDERS[currentProvider];
+      const key = document.getElementById('apiKey').value.trim();
+      cfg.agents.model = p.model;
+      cfg.agents.env = { [p.keyEnv]: key };
+    }
+
+    // Channel config
+    const channelType = document.getElementById('channelType').value;
+    if (channelType === 'discord') {
+      cfg.channels = {
+        discord: {
+          enabled: true,
+          token: document.getElementById('discordToken').value.trim(),
+          groupPolicy: 'allowlist'
+        }
+      };
+    } else if (channelType === 'telegram') {
+      cfg.channels = {
+        telegram: {
+          enabled: true,
+          token: document.getElementById('telegramToken').value.trim(),
+          groupPolicy: 'allowlist'
+        }
+      };
+    }
+
+    return cfg;
+  }
+
+  function randomToken() {
+    const arr = new Uint8Array(32);
+    crypto.getRandomValues(arr);
+    return Array.from(arr).map(b => b.toString(16).padStart(2,'0')).join('');
+  }
+
+  async function openControlUI() {
+    if (tauriInvoke) {
+      try { await tauriInvoke('open_control_ui'); } catch {}
+    }
+    window.location.href = 'http://127.0.0.1:18789';
+  }
+
+  function openDocs() {
+    if (window.__TAURI__) {
+      window.__TAURI__.shell.open('https://console.anthropic.com');
+    }
+  }
+
+  // Try to set logo from Tauri resource path
+  (async () => {
+    const img = document.getElementById('logoImg');
+    img.src = 'https://raw.githubusercontent.com/openclaw/openclaw/main/apps/macos/Icon.icon/Assets/openclaw-mac.png';
+    img.onerror = () => { img.style.display = 'none'; };
+  })();
+</script>
+</body>
+</html>

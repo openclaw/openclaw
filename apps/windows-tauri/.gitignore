@@ -1,0 +1,6 @@
+# Tauri build output (do NOT commit)
+src-tauri/target/
+src-tauri/binaries/
+
+# Node
+node_modules/

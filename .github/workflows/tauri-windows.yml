@@ -1,0 +1,161 @@
+name: Build Windows Tauri App
+
+on:
+  push:
+    branches: [Siuyechu]
+    paths:
+      - "apps/windows-tauri/**"
+      - "dist/**"
+      - ".github/workflows/tauri-windows.yml"
+  pull_request:
+    branches: [Siuyechu]
+    paths:
+      - "apps/windows-tauri/**"
+  workflow_dispatch:
+    inputs:
+      release:
+        description: "Create a GitHub Release?"
+        required: false
+        default: "false"
+        type: boolean
+
+concurrency:
+  group: tauri-windows-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-tauri-windows:
+    name: Build Tauri Windows App
+    runs-on: windows-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22.x"
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: "10.23.0"
+          run_install: false
+
+      - name: Get pnpm store directory
+        shell: pwsh
+        run: echo "STORE_PATH=$(pnpm store path --silent)" >> $env:GITHUB_ENV
+
+      - name: Cache pnpm store
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.STORE_PATH }}
+          key: pnpm-store-windows-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: |
+            pnpm-store-windows-
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Cache Rust / Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            apps/windows-tauri/src-tauri/target
+          key: cargo-windows-${{ hashFiles('apps/windows-tauri/src-tauri/Cargo.lock') }}
+          restore-keys: |
+            cargo-windows-
+
+      - name: Install Node dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build Control UI
+        run: pnpm ui:build
+
+      - name: Install Tauri CLI (workspace)
+        run: pnpm add -D @tauri-apps/cli
+        working-directory: apps/windows-tauri
+
+      - name: Copy node.exe as gateway sidecar
+        shell: pwsh
+        run: |
+          $nodePath = (Get-Command node).Source
+          New-Item -ItemType Directory -Force -Path "apps/windows-tauri/src-tauri/binaries"
+          Copy-Item $nodePath "apps/windows-tauri/src-tauri/binaries/gateway-x86_64-pc-windows-msvc.exe"
+          $size = (Get-Item "apps/windows-tauri/src-tauri/binaries/gateway-x86_64-pc-windows-msvc.exe").Length / 1MB
+          Write-Host "Copied node.exe: $([math]::Round($size, 1)) MB"
+
+      - name: Build Tauri Windows App
+        run: pnpm tauri build
+        working-directory: apps/windows-tauri
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: List build outputs
+        shell: pwsh
+        run: |
+          Get-ChildItem apps/windows-tauri/src-tauri/target/release/bundle -Recurse -Include "*.exe","*.msi" |
+            Select-Object FullName, @{N="Size(MB)";E={[math]::Round($_.Length/1MB,1)}}
+
+      # Upload artifacts for every build (PR or push)
+      - name: Upload Windows Installer (NSIS)
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenClaw-Windows-Setup-${{ github.sha }}
+          path: apps/windows-tauri/src-tauri/target/release/bundle/nsis/*.exe
+          retention-days: 14
+
+      - name: Upload Windows Installer (MSI)
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenClaw-Windows-MSI-${{ github.sha }}
+          path: apps/windows-tauri/src-tauri/target/release/bundle/msi/*.msi
+          retention-days: 14
+
+      # Create a GitHub Release on manual trigger or version tag
+      - name: Get app version
+        if: github.event_name == 'workflow_dispatch' && inputs.release == 'true'
+        id: version
+        shell: pwsh
+        run: |
+          $json = Get-Content apps/windows-tauri/src-tauri/tauri.conf.json | ConvertFrom-Json
+          echo "version=$($json.version)" >> $env:GITHUB_OUTPUT
+
+      - name: Create GitHub Release
+        if: github.event_name == 'workflow_dispatch' && inputs.release == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: "windows-v${{ steps.version.outputs.version }}-${{ github.run_number }}"
+          name: "OpenClaw Windows v${{ steps.version.outputs.version }} (build ${{ github.run_number }})"
+          body: |
+            ## OpenClaw Windows 客户端
+
+            **支持平台**: Windows 10/11 x64
+
+            ### 安装说明
+            1. 下载 `OpenClaw_*_x64-setup.exe` 并双击安装
+            2. 首次启动会显示配置向导，填入 AI 模型 API Key
+            3. 按需配置 Discord / Telegram 等频道
+
+            ### 文件说明
+            - `*-setup.exe`: NSIS 安装程序（推荐）
+            - `*_en-US.msi`: MSI 安装包（企业部署用）
+
+            ### 更新日志
+            来自 commit ${{ github.sha }}
+          files: |
+            apps/windows-tauri/src-tauri/target/release/bundle/nsis/*.exe
+            apps/windows-tauri/src-tauri/target/release/bundle/msi/*.msi
+          draft: false
+          prerelease: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
