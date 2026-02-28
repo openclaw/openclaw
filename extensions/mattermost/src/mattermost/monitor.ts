@@ -1001,6 +1001,65 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     },
   });
 
+  // -------------------------------------------------------------------------
+  // Queue recovery — fetch messages queued during scale-to-zero downtime.
+  //
+  // External orchestrators (e.g. KEDA + NATS JetStream watcher) can capture
+  // messages sent while this pod was down and serve them via a simple HTTP
+  // API. Process them through the normal handlePost pipeline before starting
+  // the WebSocket event loop, so no messages are lost during cold start.
+  //
+  // Set OPENCLAW_QUEUE_URL (e.g. http://watcher:9090) and optionally
+  // OPENCLAW_QUEUE_AGENT to enable. When not set, this block is a no-op.
+  // -------------------------------------------------------------------------
+  const queueUrl = process.env.OPENCLAW_QUEUE_URL?.trim();
+  const queueAgent = process.env.OPENCLAW_QUEUE_AGENT?.trim() || botUsername;
+  if (queueUrl && queueAgent) {
+    try {
+      const queueResp = await fetch(`${queueUrl}/queue/${queueAgent}`);
+      if (queueResp.ok) {
+        const queueData = (await queueResp.json()) as {
+          messages?: Array<{
+            post?: MattermostPost;
+            channelName?: string;
+            channelType?: string;
+            teamId?: string;
+            sender?: string;
+          }>;
+        };
+        const queuedMessages = queueData.messages ?? [];
+        if (queuedMessages.length > 0) {
+          runtime.log?.(
+            `processing ${queuedMessages.length} queued message(s) from watcher`,
+          );
+          for (const msg of queuedMessages) {
+            if (!msg.post) continue;
+            const syntheticPayload: MattermostEventPayload = {
+              event: "posted",
+              data: {
+                post: JSON.stringify(msg.post),
+                channel_display_name: msg.channelName ?? "",
+                channel_type: msg.channelType ?? "",
+                team_id: msg.teamId ?? "",
+                sender_name: msg.sender ?? "",
+              },
+            };
+            try {
+              await handlePost(msg.post, syntheticPayload);
+            } catch (err) {
+              runtime.error?.(`queued message failed: ${String(err)}`);
+            }
+          }
+          // ACK — messages processed, safe to remove from queue
+          await fetch(`${queueUrl}/queue/${queueAgent}`, { method: "DELETE" });
+          runtime.log?.(`acked ${queuedMessages.length} queued message(s)`);
+        }
+      }
+    } catch (err) {
+      runtime.error?.(`queue fetch failed: ${String(err)}`);
+    }
+  }
+
   await runWithReconnect(connectOnce, {
     abortSignal: opts.abortSignal,
     jitterRatio: 0.2,
