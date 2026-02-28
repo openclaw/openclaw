@@ -65,6 +65,7 @@ private enum class ConnectInputMode {
 fun ConnectTabScreen(viewModel: MainViewModel) {
   val statusText by viewModel.statusText.collectAsState()
   val isConnected by viewModel.isConnected.collectAsState()
+  val isNodeConnected by viewModel.isNodeConnected.collectAsState()
   val remoteAddress by viewModel.remoteAddress.collectAsState()
   val manualHost by viewModel.manualHost.collectAsState()
   val manualPort by viewModel.manualPort.collectAsState()
@@ -136,7 +137,12 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
       }
     }
 
-  val primaryLabel = if (isConnected) "Disconnect Gateway" else "Connect Gateway"
+  val primaryLabel =
+    when {
+      isConnected && !isNodeConnected -> "Recover Node Session"
+      isConnected -> "Disconnect Gateway"
+      else -> "Connect Gateway"
+    }
 
   Column(
     modifier = Modifier.verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 16.dp),
@@ -190,6 +196,11 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
         Text("TLS: ${if (manualTlsInput) "enabled" else "disabled"}", style = mobileCallout, color = mobileText)
         Text("Token: ${if (gatewayToken.isBlank()) "not set" else "set"}", style = mobileCallout, color = mobileText)
         Text("Reconnect attempts: $reconnectAttempts", style = mobileCallout, color = mobileText)
+        Text(
+          "Node session: ${if (isNodeConnected) "online" else "offline"}",
+          style = mobileCallout,
+          color = if (isNodeConnected) mobileSuccess else mobileWarning,
+        )
         Text(
           "Last error: ${lastGatewayError ?: "none"}",
           style = mobileCallout,
@@ -256,6 +267,11 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
 
     Button(
       onClick = {
+        if (isConnected && !isNodeConnected) {
+          validationText = null
+          viewModel.refreshGatewayConnection()
+          return@Button
+        }
         if (isConnected) {
           viewModel.disconnect()
           validationText = null
@@ -303,7 +319,12 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
       shape = RoundedCornerShape(14.dp),
       colors =
         ButtonDefaults.buttonColors(
-          containerColor = if (isConnected) mobileDanger else mobileAccent,
+          containerColor =
+            when {
+              isConnected && !isNodeConnected -> mobileWarning
+              isConnected -> mobileDanger
+              else -> mobileAccent
+            },
           contentColor = Color.White,
         ),
     ) {

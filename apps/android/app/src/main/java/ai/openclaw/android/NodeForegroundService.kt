@@ -54,7 +54,7 @@ class NodeForegroundService : Service() {
           val text = (server?.let { "$status · $it" } ?: status) + micSuffix
 
           val requiresMic =
-            micEnabled && hasRecordAudioPermission()
+            micListening && hasRecordAudioPermission()
           startForegroundWithTypes(
             notification = buildNotification(title = title, text = text),
             requiresMic = requiresMic,

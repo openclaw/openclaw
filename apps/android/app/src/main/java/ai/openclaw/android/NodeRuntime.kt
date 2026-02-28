@@ -3,6 +3,10 @@ package ai.openclaw.android
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.os.Build
 import android.os.SystemClock
 import android.util.Log
 import androidx.core.content.ContextCompat
@@ -284,6 +288,23 @@ class NodeRuntime(context: Context) {
   private var operatorConnected = false
   private var operatorStatusText: String = "Offline"
   private var nodeStatusText: String = "Offline"
+  private var nodeOfflineSinceMs: Long? = null
+  private var lastNodeRepairAttemptMs: Long = 0L
+  private val connectivityManager = appContext.getSystemService(ConnectivityManager::class.java)
+  private var lastNetworkRepairAttemptElapsedMs: Long = 0L
+  private var networkCallbackRegistered = false
+  private val networkCallback =
+    object : ConnectivityManager.NetworkCallback() {
+      override fun onAvailable(network: Network) {
+        onNetworkChanged("available")
+      }
+
+      override fun onCapabilitiesChanged(network: Network, networkCapabilities: NetworkCapabilities) {
+        if (networkCapabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) {
+          onNetworkChanged("capabilities")
+        }
+      }
+    }
 
   private val operatorSession =
     GatewaySession(
@@ -311,6 +332,8 @@ class NodeRuntime(context: Context) {
       onDisconnected = { message ->
         operatorConnected = false
         operatorStatusText = message
+        nodeOfflineSinceMs = null
+        lastNodeRepairAttemptMs = 0L
         _lastGatewayDisconnectedAtMs.value = System.currentTimeMillis()
         if (message.isNotBlank() && !message.equals("Offline", ignoreCase = true)) {
           _lastGatewayError.value = message
@@ -339,6 +362,8 @@ class NodeRuntime(context: Context) {
       onConnected = { _, _, _ ->
         _nodeConnected.value = true
         nodeStatusText = "Connected"
+        nodeOfflineSinceMs = null
+        lastNodeRepairAttemptMs = 0L
         didAutoRequestCanvasRehydrate = false
         _canvasA2uiHydrated.value = false
         _canvasRehydratePending.value = false
@@ -349,6 +374,11 @@ class NodeRuntime(context: Context) {
       onDisconnected = { message ->
         _nodeConnected.value = false
         nodeStatusText = message
+        if (operatorConnected) {
+          if (nodeOfflineSinceMs == null) nodeOfflineSinceMs = System.currentTimeMillis()
+        } else {
+          nodeOfflineSinceMs = null
+        }
         didAutoRequestCanvasRehydrate = false
         _canvasA2uiHydrated.value = false
         _canvasRehydratePending.value = false
@@ -491,6 +521,59 @@ class NodeRuntime(context: Context) {
       }
   }
 
+  private fun onNetworkChanged(reason: String) {
+    if (connectedEndpoint == null) return
+    val now = SystemClock.elapsedRealtime()
+    if (now - lastNetworkRepairAttemptElapsedMs < 12_000L) return
+    lastNetworkRepairAttemptElapsedMs = now
+
+    scope.launch(Dispatchers.IO) {
+      delay(1_500)
+      if (connectedEndpoint == null) return@launch
+      if (operatorConnected && _nodeConnected.value) return@launch
+      Log.i("OpenClawNode", "network changed ($reason): refreshing gateway session")
+      refreshGatewayConnection()
+    }
+  }
+
+  private fun registerNetworkMonitor() {
+    if (networkCallbackRegistered) return
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) return
+    val manager = connectivityManager ?: return
+    runCatching {
+      manager.registerDefaultNetworkCallback(networkCallback)
+      networkCallbackRegistered = true
+    }.onFailure {
+      Log.w("OpenClawNode", "failed to register network monitor", it)
+    }
+  }
+
+  private suspend fun repairNodeSessionIfNeeded() {
+    if (!operatorConnected || _nodeConnected.value) {
+      nodeOfflineSinceMs = null
+      lastNodeRepairAttemptMs = 0L
+      return
+    }
+
+    val endpoint = connectedEndpoint ?: return
+    val now = System.currentTimeMillis()
+    if (nodeOfflineSinceMs == null) nodeOfflineSinceMs = now
+
+    val offlineForMs = now - (nodeOfflineSinceMs ?: now)
+    if (offlineForMs < 25_000L) return
+    if (now - lastNodeRepairAttemptMs < 30_000L) return
+
+    lastNodeRepairAttemptMs = now
+    nodeStatusText = "Reconnecting node session..."
+    updateStatus()
+
+    val token = prefs.loadGatewayToken()
+    val password = prefs.loadGatewayPassword()
+    val tls = connectionManager.resolveTlsParams(endpoint)
+    nodeSession.connect(endpoint, token, password, connectionManager.buildNodeConnectOptions(), tls)
+    nodeSession.reconnect()
+  }
+
   private fun resolveMainSessionKey(): String {
     val trimmed = _mainSessionKey.value.trim()
     return if (trimmed.isEmpty()) "main" else trimmed
@@ -621,6 +704,7 @@ class NodeRuntime(context: Context) {
       prefs.loadGatewayToken()
     }
 
+    registerNetworkMonitor()
     telemetryCollector.start()
 
     scope.launch(Dispatchers.IO) {
@@ -634,6 +718,13 @@ class NodeRuntime(context: Context) {
       while (true) {
         runCatching { syncTelemetryBacklog() }
         delay(30_000)
+      }
+    }
+
+    scope.launch(Dispatchers.IO) {
+      while (true) {
+        runCatching { repairNodeSessionIfNeeded() }
+        delay(15_000)
       }
     }
 
@@ -1120,6 +1211,8 @@ class NodeRuntime(context: Context) {
     return buildString {
       appendLine("OpenClaw Android diagnostics")
       appendLine("status: ${statusText.value}")
+      appendLine("operatorConnected: $operatorConnected")
+      appendLine("nodeConnected: ${_nodeConnected.value}")
       appendLine("endpoint: $endpointText")
       appendLine("manualTls: $tlsMode")
       appendLine("tokenPresent: $tokenPresent")

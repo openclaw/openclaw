@@ -931,7 +931,7 @@ fun SettingsSheet(viewModel: MainViewModel) {
             modifier = Modifier.fillMaxWidth(),
             colors = listItemColors,
             headlineContent = { Text("Sampling: Low power", style = mobileHeadline) },
-            supportingContent = { Text("Best battery life; coarser updates.", style = mobileCallout) },
+            supportingContent = { Text("Best battery life (~20 min); network-first location.", style = mobileCallout) },
             trailingContent = {
               RadioButton(
                 selected = telemetrySamplingMode == TelemetrySamplingMode.LowPower,
@@ -944,7 +944,7 @@ fun SettingsSheet(viewModel: MainViewModel) {
             modifier = Modifier.fillMaxWidth(),
             colors = listItemColors,
             headlineContent = { Text("Sampling: Balanced", style = mobileHeadline) },
-            supportingContent = { Text("Default mix of quality and battery use.", style = mobileCallout) },
+            supportingContent = { Text("Default mix (~8 min); auto-throttles to Low Power at low battery.", style = mobileCallout) },
             trailingContent = {
               RadioButton(
                 selected = telemetrySamplingMode == TelemetrySamplingMode.Balanced,
@@ -957,7 +957,7 @@ fun SettingsSheet(viewModel: MainViewModel) {
             modifier = Modifier.fillMaxWidth(),
             colors = listItemColors,
             headlineContent = { Text("Sampling: High detail", style = mobileHeadline) },
-            supportingContent = { Text("More frequent updates; higher battery use.", style = mobileCallout) },
+            supportingContent = { Text("Frequent updates (~1 min); highest battery use.", style = mobileCallout) },
             trailingContent = {
               RadioButton(
                 selected = telemetrySamplingMode == TelemetrySamplingMode.HighDetail,

@@ -81,12 +81,14 @@ fun PostOnboardingTabs(viewModel: MainViewModel, modifier: Modifier = Modifier) 
 
   val statusText by viewModel.statusText.collectAsState()
   val isConnected by viewModel.isConnected.collectAsState()
+  val isNodeConnected by viewModel.isNodeConnected.collectAsState()
 
   val statusVisual =
-    remember(statusText, isConnected) {
+    remember(statusText, isConnected, isNodeConnected) {
       val lower = statusText.lowercase()
       when {
-        isConnected -> StatusVisual.Connected
+        isConnected && isNodeConnected -> StatusVisual.Connected
+        isConnected && !isNodeConnected -> StatusVisual.Warning
         lower.contains("connecting") || lower.contains("reconnecting") -> StatusVisual.Connecting
         lower.contains("pairing") || lower.contains("approval") || lower.contains("auth") -> StatusVisual.Warning
         lower.contains("error") || lower.contains("failed") -> StatusVisual.Error
