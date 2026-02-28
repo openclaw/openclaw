@@ -129,7 +129,7 @@ describe("sendMediaFeishu msg_type routing", () => {
     );
   });
 
-  it("uses msg_type=media for opus", async () => {
+  it("uses msg_type=audio for opus", async () => {
     await sendMediaFeishu({
       cfg: {} as any,
       to: "user:ou_target",
@@ -145,7 +145,7 @@ describe("sendMediaFeishu msg_type routing", () => {
 
     expect(messageCreateMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        data: expect.objectContaining({ msg_type: "media" }),
+        data: expect.objectContaining({ msg_type: "audio" }),
       }),
     );
   });
@@ -188,6 +188,32 @@ describe("sendMediaFeishu msg_type routing", () => {
     );
 
     expect(messageCreateMock).not.toHaveBeenCalled();
+  });
+
+  it("passes mediaLocalRoots as localRoots to loadWebMedia for local paths (#27884)", async () => {
+    loadWebMediaMock.mockResolvedValue({
+      buffer: Buffer.from("local-file"),
+      fileName: "doc.pdf",
+      kind: "document",
+      contentType: "application/pdf",
+    });
+
+    const roots = ["/allowed/workspace", "/tmp/openclaw"];
+    await sendMediaFeishu({
+      cfg: {} as any,
+      to: "user:ou_target",
+      mediaUrl: "/allowed/workspace/file.pdf",
+      mediaLocalRoots: roots,
+    });
+
+    expect(loadWebMediaMock).toHaveBeenCalledWith(
+      "/allowed/workspace/file.pdf",
+      expect.objectContaining({
+        maxBytes: expect.any(Number),
+        optimizeImages: false,
+        localRoots: roots,
+      }),
+    );
   });
 
   it("fails closed when media URL fetch is blocked", async () => {

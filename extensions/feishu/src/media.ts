@@ -306,8 +306,8 @@ export async function sendFileFeishu(params: {
   cfg: ClawdbotConfig;
   to: string;
   fileKey: string;
-  /** Use "media" for audio/video files, "file" for documents */
-  msgType?: "file" | "media";
+  /** Use "media" for video, "audio" for audio, "file" for documents */
+  msgType?: "file" | "media" | "audio";
   replyToMessageId?: string;
   accountId?: string;
 }): Promise<SendMediaResult> {
@@ -376,7 +376,9 @@ export function detectFileType(
 }
 
 /**
- * Upload and send media (image or file) from URL, local path, or buffer
+ * Upload and send media (image or file) from URL, local path, or buffer.
+ * When mediaUrl is a local path, mediaLocalRoots (from core outbound context)
+ * must be passed so loadWebMedia allows the path (post CVE-2026-26321).
  */
 export async function sendMediaFeishu(params: {
   cfg: ClawdbotConfig;
@@ -386,8 +388,11 @@ export async function sendMediaFeishu(params: {
   fileName?: string;
   replyToMessageId?: string;
   accountId?: string;
+  /** Allowed roots for local path reads; required for local filePath to work. */
+  mediaLocalRoots?: readonly string[];
 }): Promise<SendMediaResult> {
-  const { cfg, to, mediaUrl, mediaBuffer, fileName, replyToMessageId, accountId } = params;
+  const { cfg, to, mediaUrl, mediaBuffer, fileName, replyToMessageId, accountId, mediaLocalRoots } =
+    params;
   const account = resolveFeishuAccount({ cfg, accountId });
   if (!account.configured) {
     throw new Error(`Feishu account "${account.accountId}" not configured`);
@@ -404,6 +409,7 @@ export async function sendMediaFeishu(params: {
     const loaded = await getFeishuRuntime().media.loadWebMedia(mediaUrl, {
       maxBytes: mediaMaxBytes,
       optimizeImages: false,
+      localRoots: mediaLocalRoots?.length ? mediaLocalRoots : undefined,
     });
     buffer = loaded.buffer;
     name = fileName ?? loaded.fileName ?? "file";
@@ -427,13 +433,13 @@ export async function sendMediaFeishu(params: {
       fileType,
       accountId,
     });
-    // Feishu requires msg_type "media" for audio/video, "file" for documents
-    const isMedia = fileType === "mp4" || fileType === "opus";
+    // Feishu API: opus -> "audio", mp4 -> "media", everything else -> "file"
+    const msgType = fileType === "opus" ? "audio" : fileType === "mp4" ? "media" : "file";
     return sendFileFeishu({
       cfg,
       to,
       fileKey,
-      msgType: isMedia ? "media" : "file",
+      msgType,
       replyToMessageId,
       accountId,
     });
