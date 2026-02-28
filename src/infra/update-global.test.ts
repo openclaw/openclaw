@@ -97,6 +97,20 @@ describe("checkDirectoryOwnership", () => {
     expect(result.foreignFiles).toContain(subDir);
   });
 
+  it("returns ok:true when running as root (uid 0)", async () => {
+    if (typeof process.getuid !== "function") {
+      return;
+    }
+    const originalGetuid = process.getuid;
+    try {
+      process.getuid = () => 0;
+      const result = await checkDirectoryOwnership(tmpDir);
+      expect(result.ok).toBe(true);
+      expect(result.foreignFiles).toHaveLength(0);
+    } finally {
+      process.getuid = originalGetuid;
+    }
+  });
   it("returns ok:true when process.getuid is unavailable (Windows)", async () => {
     const originalGetuid = process.getuid;
     try {

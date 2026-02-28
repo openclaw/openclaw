@@ -165,6 +165,10 @@ export async function checkDirectoryOwnership(dirPath: string): Promise<Director
     return { ok: true, foreignFiles: [] };
   }
   const currentUid = process.getuid();
+  // Root can write any file regardless of ownership — skip the preflight.
+  if (currentUid === 0) {
+    return { ok: true, foreignFiles: [] };
+  }
   const foreignFiles: string[] = [];
 
   async function scan(dir: string): Promise<void> {
