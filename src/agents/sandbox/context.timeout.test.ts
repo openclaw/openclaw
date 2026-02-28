@@ -68,6 +68,14 @@ describe("resolveSandboxContext – timeout guard", () => {
   });
 
   it("aborts the AbortController signal when the timeout fires", async () => {
+    // Call vi.useFakeTimers() BEFORE installing the AbortController stub so
+    // that any AbortController instances created internally by the fake-timer
+    // setup (e.g. for fake-fetch internals) use the real constructor and are
+    // not accidentally captured as the "first instance". After the stub is
+    // registered, only calls made during resolveSandboxContext's own execution
+    // will be intercepted.
+    vi.useFakeTimers();
+
     // Use vi.stubGlobal to intercept AbortController instantiation so we can
     // capture the signal that resolveSandboxContext threads into the inner work.
     let capturedSignal: AbortSignal | undefined;
@@ -85,8 +93,6 @@ describe("resolveSandboxContext – timeout guard", () => {
         }
       },
     );
-
-    vi.useFakeTimers();
 
     const promise = resolveSandboxContext({
       config: cfg,
