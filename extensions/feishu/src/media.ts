@@ -311,6 +311,7 @@ export async function sendFileFeishu(params: {
   /** Use "media" for audio/video files, "file" for documents */
   msgType?: "file" | "media";
   replyToMessageId?: string;
+  replyInThread?: boolean;
   accountId?: string;
 }): Promise<SendMediaResult> {
   const { cfg, to, fileKey, replyToMessageId, replyInThread, accountId } = params;
