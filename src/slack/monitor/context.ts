@@ -363,10 +363,10 @@ export function createSlackMonitorContext(params: {
     const isGroupDm = channelType === "mpim";
     const isRoom = channelType === "channel" || channelType === "group";
 
-    if (isDirectMessage && !params.dmEnabled) {
+    if (isDirectMessage && !ctx.dmEnabled) {
       return false;
     }
-    if (isGroupDm && !params.groupDmEnabled) {
+    if (isGroupDm && !ctx.groupDmEnabled) {
       return false;
     }
 
@@ -400,13 +400,13 @@ export function createSlackMonitorContext(params: {
         Boolean(ctx.channelsConfig) && Object.keys(ctx.channelsConfig ?? {}).length > 0;
       if (
         !isSlackChannelAllowedByPolicy({
-          groupPolicy: params.groupPolicy,
+          groupPolicy: ctx.groupPolicy,
           channelAllowlistConfigured,
           channelAllowed,
         })
       ) {
         logVerbose(
-          `slack: drop channel ${p.channelId} (groupPolicy=${params.groupPolicy}, ${channelMatchMeta})`,
+          `slack: drop channel ${p.channelId} (groupPolicy=${ctx.groupPolicy}, ${channelMatchMeta})`,
         );
         return false;
       }
@@ -414,7 +414,7 @@ export function createSlackMonitorContext(params: {
       // (i.e., have a matching config entry with allow:false). Channels not in the
       // config (matchSource undefined) should be allowed under open policy.
       const hasExplicitConfig = Boolean(channelConfig?.matchSource);
-      if (!channelAllowed && (params.groupPolicy !== "open" || hasExplicitConfig)) {
+      if (!channelAllowed && (ctx.groupPolicy !== "open" || hasExplicitConfig)) {
         logVerbose(`slack: drop channel ${p.channelId} (${channelMatchMeta})`);
         return false;
       }
