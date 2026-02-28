@@ -219,6 +219,71 @@ describe("nodes notifications_action", () => {
   });
 });
 
+describe("nodes screen_record", () => {
+  it("rejects durationMs values above the hard cap", async () => {
+    callGateway.mockImplementation(async ({ method }) => {
+      if (method === "node.list") {
+        return mockNodeList(["screen.record"]);
+      }
+      if (method === "node.invoke") {
+        throw new Error("screen.record should not be called when duration is out of range");
+      }
+      return unexpectedGatewayMethod(method);
+    });
+
+    await expect(
+      executeNodes({
+        action: "screen_record",
+        node: NODE_ID,
+        durationMs: 360_000,
+      }),
+    ).rejects.toThrow(/durationMs must be between 1000 and 300000/i);
+  });
+
+  it("passes bounded durationMs to screen.record", async () => {
+    callGateway.mockImplementation(async ({ method, params }) => {
+      if (method === "node.list") {
+        return mockNodeList(["screen.record"]);
+      }
+      if (method === "node.invoke") {
+        expect(params).toMatchObject({
+          nodeId: NODE_ID,
+          command: "screen.record",
+          params: {
+            durationMs: 30_000,
+            screenIndex: 0,
+            fps: 10,
+            format: "mp4",
+            includeAudio: true,
+          },
+        });
+        return {
+          payload: {
+            format: "mp4",
+            base64: "aGVsbG8=",
+            durationMs: 30_000,
+            fps: 10,
+            screenIndex: 0,
+            hasAudio: true,
+          },
+        };
+      }
+      return unexpectedGatewayMethod(method);
+    });
+
+    const result = await executeNodes({
+      action: "screen_record",
+      node: NODE_ID,
+      durationMs: 30_000,
+    });
+
+    expect(result.content?.[0]).toMatchObject({
+      type: "text",
+      text: expect.stringMatching(/^FILE:/),
+    });
+  });
+});
+
 describe("nodes device_status and device_info", () => {
   it("invokes device.status and returns payload", async () => {
     callGateway.mockImplementation(async ({ method, params }) => {
