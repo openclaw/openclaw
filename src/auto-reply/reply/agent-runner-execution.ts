@@ -357,7 +357,9 @@ export async function runAgentTurnWithFallback(params: {
                 const name = typeof evt.data.name === "string" ? evt.data.name : undefined;
                 const meta = typeof evt.data.meta === "string" ? evt.data.meta : undefined;
                 const toolCallId =
-                  typeof evt.data.toolCallId === "string" ? evt.data.toolCallId : undefined;
+                  typeof evt.data.toolCallId === "string" && evt.data.toolCallId
+                    ? evt.data.toolCallId
+                    : undefined;
                 if (phase === "start" || phase === "update") {
                   await params.typingSignals.signalToolStart();
                   await params.opts?.onToolStart?.({ name, phase, meta, toolCallId });

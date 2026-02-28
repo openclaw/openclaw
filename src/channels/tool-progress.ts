@@ -92,8 +92,6 @@ function buildStatusText(params: {
 // Controller
 // ─────────────────────────────────────────────────────────────────────────────
 
-let anonymousCounter = 0;
-
 export function createToolProgressController(params: {
   enabled: boolean;
   adapter: ToolProgressAdapter;
@@ -103,6 +101,9 @@ export function createToolProgressController(params: {
   const { enabled, adapter, onError } = params;
   const throttleMs = params.config?.throttleMs ?? DEFAULT_THROTTLE_MS;
   const maxVisibleTools = params.config?.maxVisibleTools ?? DEFAULT_MAX_VISIBLE_TOOLS;
+
+  // Per-instance counter for anonymous tool calls (no toolCallId).
+  let anonymousCounter = 0;
 
   // State
   let messageId: string | number | undefined;
@@ -216,12 +217,17 @@ export function createToolProgressController(params: {
     },
 
     async cleanup() {
+      if (stopped) {
+        // Already cleaned up (guard against double-cleanup race).
+        return;
+      }
       stopped = true;
       if (timer) {
         clearTimeout(timer);
         timer = undefined;
       }
-      // Wait for in-flight operations
+      // Wait for in-flight operations (enqueued flushes still run so
+      // the final state is sent before we delete the message).
       await chainPromise;
       if (messageId !== undefined) {
         try {

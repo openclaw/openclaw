@@ -314,4 +314,84 @@ describe("createToolProgressController", () => {
 
     await ctrl.cleanup();
   });
+
+  it("update phase refreshes the active tool label", async () => {
+    const { adapter, messages } = createMockAdapter();
+    const ctrl = createToolProgressController({
+      enabled: true,
+      adapter,
+      config: { throttleMs: 0 },
+    });
+
+    ctrl.onToolStart("tc-1", "exec", "🔧 exec: running");
+    await vi.waitFor(() => expect(adapter.send).toHaveBeenCalledTimes(1));
+
+    // Simulate an update phase (same toolCallId, refreshed meta)
+    ctrl.onToolStart("tc-1", "exec", "🔧 exec: 50% done");
+    await new Promise((r) => setTimeout(r, 50));
+
+    const text = messages[0].text;
+    // Should show the updated label, not duplicate the tool
+    expect(text).toContain("🔧 exec: 50% done");
+    expect(text.match(/⏳/g)?.length).toBe(1);
+
+    await ctrl.cleanup();
+  });
+
+  it("double cleanup is safe (no double-delete)", async () => {
+    const { adapter } = createMockAdapter();
+    const ctrl = createToolProgressController({
+      enabled: true,
+      adapter,
+      config: { throttleMs: 0 },
+    });
+
+    ctrl.onToolStart("tc-1", "exec", "test");
+    await vi.waitFor(() => expect(adapter.send).toHaveBeenCalledTimes(1));
+
+    await ctrl.cleanup();
+    expect(adapter.delete).toHaveBeenCalledTimes(1);
+
+    // Second cleanup should be a no-op
+    await ctrl.cleanup();
+    expect(adapter.delete).toHaveBeenCalledTimes(1);
+  });
+
+  it("per-instance anonymous counters are isolated", async () => {
+    const { adapter: adapter1, messages: msgs1 } = createMockAdapter();
+    const { adapter: adapter2, messages: msgs2 } = createMockAdapter();
+
+    const ctrl1 = createToolProgressController({
+      enabled: true,
+      adapter: adapter1,
+      config: { throttleMs: 0 },
+    });
+    const ctrl2 = createToolProgressController({
+      enabled: true,
+      adapter: adapter2,
+      config: { throttleMs: 0 },
+    });
+
+    // Both controllers generate anonymous IDs independently
+    ctrl1.onToolStart(undefined, "a", "task-a");
+    ctrl2.onToolStart(undefined, "b", "task-b");
+    await vi.waitFor(() => expect(adapter1.send).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(adapter2.send).toHaveBeenCalledTimes(1));
+
+    expect(msgs1[0].text).toContain("task-a");
+    expect(msgs2[0].text).toContain("task-b");
+
+    // End anonymous tools — each controller clears its own
+    ctrl1.onToolEnd(undefined, "a", "task-a", false);
+    ctrl2.onToolEnd(undefined, "b", "task-b", false);
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(msgs1[0].text).toContain("✅ task-a");
+    expect(msgs1[0].text).not.toContain("⏳");
+    expect(msgs2[0].text).toContain("✅ task-b");
+    expect(msgs2[0].text).not.toContain("⏳");
+
+    await ctrl1.cleanup();
+    await ctrl2.cleanup();
+  });
 });
