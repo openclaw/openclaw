@@ -70,7 +70,7 @@ runs:
       shell: bash
       env:
         CI: "true"
-        FROZEN_LOCKFILE: ${{ inputs.frozen-lockfile }}
+        FROZEN_LOCKFILE: ${{ inputs.frozen-lockfile || 'true' }}
       run: |
         set -euo pipefail
         export PATH="$NODE_BIN:$PATH"
