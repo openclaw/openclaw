@@ -249,7 +249,12 @@ class NodeRuntime(context: Context) {
         applyMainSessionKey(mainSessionKey)
         updateStatus()
         micCapture.onGatewayConnectionChanged(true)
-        scope.launch { refreshBrandingFromGateway() }
+        scope.launch {
+          refreshBrandingFromGateway()
+          if (voiceReplySpeakerLazy.isInitialized()) {
+            voiceReplySpeaker.refreshConfig()
+          }
+        }
       },
       onDisconnected = { message ->
         operatorConnected = false
@@ -319,7 +324,7 @@ class NodeRuntime(context: Context) {
       json = json,
       supportsChatSubscribe = false,
     )
-  private val voiceReplySpeaker: TalkModeManager by lazy {
+  private val voiceReplySpeakerLazy: Lazy<TalkModeManager> = lazy {
     // Reuse the existing TalkMode speech engine (ElevenLabs + deterministic system-TTS fallback)
     // without enabling the legacy talk capture loop.
     TalkModeManager(
@@ -328,8 +333,12 @@ class NodeRuntime(context: Context) {
       session = operatorSession,
       supportsChatSubscribe = false,
       isConnected = { operatorConnected },
-    )
+    ).also { speaker ->
+      speaker.setPlaybackEnabled(prefs.speakerEnabled.value)
+    }
   }
+  private val voiceReplySpeaker: TalkModeManager
+    get() = voiceReplySpeakerLazy.value
 
   private val micCapture: MicCaptureManager by lazy {
     MicCaptureManager(
@@ -349,9 +358,7 @@ class NodeRuntime(context: Context) {
         parseChatSendRunId(response) ?: idempotencyKey
       },
       speakAssistantReply = { text ->
-        if (prefs.speakerEnabled.value) {
-          voiceReplySpeaker.speakAssistantReply(text)
-        }
+        voiceReplySpeaker.speakAssistantReply(text)
       },
     )
   }
@@ -641,6 +648,9 @@ class NodeRuntime(context: Context) {
 
   fun setSpeakerEnabled(value: Boolean) {
     prefs.setSpeakerEnabled(value)
+    if (voiceReplySpeakerLazy.isInitialized()) {
+      voiceReplySpeaker.setPlaybackEnabled(value)
+    }
   }
 
   fun refreshGatewayConnection() {
