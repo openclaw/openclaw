@@ -13,6 +13,12 @@ const nowSeconds = (offsetMs = 0) => Math.floor((Date.now() + offsetMs) / 1000);
 const DEFAULT_MESSAGES_CFG = {
   messagePrefix: undefined,
   responsePrefix: undefined,
+  channels: {
+    defaults: {
+      // Use branded mode for tests that expect pairing messages
+      unpairedResponse: "branded",
+    },
+  },
 } as const;
 const TIMESTAMP_OFF_MESSAGES_CFG = {
   ...DEFAULT_MESSAGES_CFG,
