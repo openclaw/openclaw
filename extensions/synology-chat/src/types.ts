@@ -40,7 +40,10 @@ export interface ResolvedSynologyChatAccount {
   nasHost: string;
   webhookPath: string;
   dmPolicy: "open" | "allowlist" | "disabled";
+  /** Allowed user IDs for DM (when dmPolicy=allowlist) */
   allowedUserIds: string[];
+  /** Alias for allowedUserIds, for SDK compatibility */
+  allowFrom?: string[];
   rateLimitPerMinute: number;
   botName: string;
   allowInsecureSsl: boolean;

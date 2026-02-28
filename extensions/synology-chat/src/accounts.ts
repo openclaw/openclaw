@@ -66,6 +66,10 @@ export function resolveAccount(cfg: any, accountId?: string | null): ResolvedSyn
   const envBotName = process.env.OPENCLAW_BOT_NAME ?? "OpenClaw";
 
   // Merge: account override > base channel config > env var
+  const allowedUserIds = parseAllowedUserIds(
+    accountOverride.allowedUserIds ?? channelCfg.allowedUserIds ?? envAllowedUserIds,
+  );
+
   return {
     accountId: id,
     enabled: accountOverride.enabled ?? channelCfg.enabled ?? true,
@@ -74,9 +78,8 @@ export function resolveAccount(cfg: any, accountId?: string | null): ResolvedSyn
     nasHost: accountOverride.nasHost ?? channelCfg.nasHost ?? envNasHost,
     webhookPath: accountOverride.webhookPath ?? channelCfg.webhookPath ?? "/webhook/synology",
     dmPolicy: accountOverride.dmPolicy ?? channelCfg.dmPolicy ?? "allowlist",
-    allowedUserIds: parseAllowedUserIds(
-      accountOverride.allowedUserIds ?? channelCfg.allowedUserIds ?? envAllowedUserIds,
-    ),
+    allowedUserIds,
+    allowFrom: allowedUserIds, // Alias for SDK compatibility
     rateLimitPerMinute:
       accountOverride.rateLimitPerMinute ??
       channelCfg.rateLimitPerMinute ??

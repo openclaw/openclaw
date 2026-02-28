@@ -112,9 +112,9 @@ export function createSynologyChatPlugin() {
           : "channels.synology-chat.";
         return {
           policy: account.dmPolicy ?? "allowlist",
-          allowFrom: account.allowedUserIds ?? [],
+          allowFrom: account.allowFrom ?? account.allowedUserIds ?? [],
           policyPath: `${basePath}dmPolicy`,
-          allowFromPath: basePath,
+          allowFromPath: `${basePath}allowedUserIds`,
           approveHint: "openclaw pairing approve synology-chat <code>",
           normalizeEntry: (raw: string) => raw.toLowerCase().trim(),
         };
