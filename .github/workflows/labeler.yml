@@ -46,7 +46,13 @@ jobs:
                 try {
                   return await callFn();
                 } catch (error) {
-                  if (error.status === 403 && error.message.includes('rate limit')) {
+                  const isRateLimit = (
+                    (error.status === 403 && error.message?.includes('rate limit')) ||
+                    (error.status === 429) ||
+                    error.message?.includes('API rate limit exceeded')
+                  );
+
+                  if (isRateLimit && attempt < 4) {
                     const delay = Math.pow(2, attempt) * 1000;
                     await new Promise(r => setTimeout(r, delay));
                   } else {
@@ -151,7 +157,13 @@ jobs:
                 try {
                   return await callFn();
                 } catch (error) {
-                  if (error.status === 403 && error.message.includes('rate limit')) {
+                  const isRateLimit = (
+                    (error.status === 403 && error.message?.includes('rate limit')) ||
+                    (error.status === 429) ||
+                    error.message?.includes('API rate limit exceeded')
+                  );
+
+                  if (isRateLimit && attempt < 4) {
                     const delay = Math.pow(2, attempt) * 1000;
                     await new Promise(r => setTimeout(r, delay));
                   } else {
@@ -250,7 +262,13 @@ jobs:
                 try {
                   return await callFn();
                 } catch (error) {
-                  if (error.status === 403 && error.message.includes('rate limit')) {
+                  const isRateLimit = (
+                    (error.status === 403 && error.message?.includes('rate limit')) ||
+                    (error.status === 429) ||
+                    error.message?.includes('API rate limit exceeded')
+                  );
+
+                  if (isRateLimit && attempt < 4) {
                     const delay = Math.pow(2, attempt) * 1000;
                     await new Promise(r => setTimeout(r, delay));
                   } else {
@@ -506,7 +524,13 @@ jobs:
                 try {
                   return await callFn();
                 } catch (error) {
-                  if (error.status === 403 && error.message.includes('rate limit')) {
+                  const isRateLimit = (
+                    (error.status === 403 && error.message?.includes('rate limit')) ||
+                    (error.status === 429) ||
+                    error.message?.includes('API rate limit exceeded')
+                  );
+
+                  if (isRateLimit && attempt < 4) {
                     const delay = Math.pow(2, attempt) * 1000;
                     await new Promise(r => setTimeout(r, delay));
                   } else {
