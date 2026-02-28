@@ -139,10 +139,10 @@ export function buildGatewayCronService(params: {
     const sessionKey =
       opts?.sessionKey && agentId
         ? resolveCronSessionKey({
-          runtimeConfig,
-          agentId,
-          requestedSessionKey: opts.sessionKey,
-        })
+            runtimeConfig,
+            agentId,
+            requestedSessionKey: opts.sessionKey,
+          })
         : undefined;
     return { runtimeConfig, agentId, sessionKey };
   };
