@@ -76,6 +76,7 @@ vi.mock("../pi-embedded-helpers.js", () => ({
     return lower.includes("request_too_large") || lower.includes("context window exceeded");
   }),
   isFailoverAssistantError: vi.fn(() => false),
+  isLikelySSEParseError: vi.fn(() => false),
   isFailoverErrorMessage: vi.fn(() => false),
   parseImageSizeError: vi.fn(() => null),
   parseImageDimensionError: vi.fn(() => null),
