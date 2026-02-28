@@ -199,30 +199,38 @@ function matchesNodeSelf(params: {
     return true;
   }
   const { label, help, tags } = resolveFieldMeta(path, schema, hints);
-  if (!matchesTags(criteria.tags, tags)) {
+
+  // When both text and tags are present, require matching BOTH
+  const hasTextQuery = criteria.text.length > 0;
+  const hasTagQuery = criteria.tags.length > 0;
+
+  // Check tags if present
+  if (hasTagQuery && !matchesTags(criteria.tags, tags)) {
     return false;
   }
 
-  if (!criteria.text) {
-    return true;
+  // Check text if present
+  if (hasTextQuery) {
+    const pathLabel = path
+      .filter((segment): segment is string => typeof segment === "string")
+      .join(".");
+    const enumText =
+      schema.enum && schema.enum.length > 0
+        ? schema.enum.map((value) => String(value)).join(" ")
+        : "";
+
+    return matchesText(criteria.text, [
+      label,
+      help,
+      schema.title,
+      schema.description,
+      pathLabel,
+      enumText,
+    ]);
   }
 
-  const pathLabel = path
-    .filter((segment): segment is string => typeof segment === "string")
-    .join(".");
-  const enumText =
-    schema.enum && schema.enum.length > 0
-      ? schema.enum.map((value) => String(value)).join(" ")
-      : "";
-
-  return matchesText(criteria.text, [
-    label,
-    help,
-    schema.title,
-    schema.description,
-    pathLabel,
-    enumText,
-  ]);
+  // If only tags were specified and they matched
+  return true;
 }
 
 export function matchesNodeSearch(params: {

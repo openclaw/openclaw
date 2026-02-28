@@ -1,9 +1,6 @@
 import { html, nothing } from "lit";
 import { ifDefined } from "lit/directives/if-defined.js";
 import type { CronFieldErrors, CronFieldKey } from "../controllers/cron.ts";
-import { formatRelativeTimestamp, formatMs } from "../format.ts";
-import { pathForTab } from "../navigation.ts";
-import { formatCronSchedule, formatNextRun } from "../presenter.ts";
 import type { ChannelUiMetaEntry, CronJob, CronRunLogEntry, CronStatus } from "../types.ts";
 import type {
   CronDeliveryStatus,
@@ -15,6 +12,9 @@ import type {
   CronSortDir,
 } from "../types.ts";
 import type { CronFormState } from "../ui-types.ts";
+import { formatRelativeTimestamp, formatMs } from "../format.ts";
+import { pathForTab } from "../navigation.ts";
+import { formatCronSchedule, formatNextRun } from "../presenter.ts";
 
 export type CronProps = {
   basePath: string;
@@ -576,7 +576,7 @@ export function renderCron(props: CronProps) {
                   `
                 : html`
                     <div class="list" style="margin-top: 12px;">
-                      ${runs.map((entry) => renderRun(entry, props.basePath))}
+                      ${[...runs].toSorted((a, b) => (b.ts ?? 0) - (a.ts ?? 0)).map((entry) => renderRun(entry, props.basePath))}
                     </div>
                   `
           }
@@ -1285,7 +1285,7 @@ function renderJob(job: CronJob, props: CronProps) {
             ?disabled=${props.busy}
             @click=${(event: Event) => {
               event.stopPropagation();
-              selectAnd(() => props.onLoadRuns(job.id));
+              props.onLoadRuns(job.id);
             }}
           >
             History

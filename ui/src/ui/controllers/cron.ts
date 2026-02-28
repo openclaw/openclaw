@@ -1,5 +1,3 @@
-import { DEFAULT_CRON_FORM } from "../app-defaults.ts";
-import { toNumber } from "../format.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import type {
   CronJob,
@@ -15,8 +13,10 @@ import type {
   CronSortDir,
   CronStatus,
 } from "../types.ts";
-import { CRON_CHANNEL_LAST } from "../ui-types.ts";
 import type { CronFormState } from "../ui-types.ts";
+import { DEFAULT_CRON_FORM } from "../app-defaults.ts";
+import { toNumber } from "../format.ts";
+import { CRON_CHANNEL_LAST } from "../ui-types.ts";
 
 export type CronFieldKey =
   | "name"
@@ -502,9 +502,7 @@ export async function addCronJob(state: CronState) {
   state.cronError = null;
   try {
     const form = normalizeCronFormState(state.cronForm);
-    if (form !== state.cronForm) {
-      state.cronForm = form;
-    }
+    state.cronForm = form;
     const fieldErrors = validateCronForm(form);
     state.cronFieldErrors = fieldErrors;
     if (hasCronFormErrors(fieldErrors)) {
@@ -550,7 +548,9 @@ export async function addCronJob(state: CronState) {
       clearCronEditState(state);
     } else {
       await state.client.request("cron.add", job);
-      resetCronFormToDefaults(state);
+      if (form.deliveryMode !== "none") {
+        resetCronFormToDefaults(state);
+      }
     }
     await loadCronJobs(state);
     await loadCronStatus(state);

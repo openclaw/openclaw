@@ -1,6 +1,6 @@
 import { html, nothing } from "lit";
-import { icons } from "../icons.ts";
 import type { ConfigUiHints } from "../types.ts";
+import { icons } from "../icons.ts";
 import { matchesNodeSearch, parseConfigSearchQuery, renderNode } from "./config-form.node.ts";
 import { hintForPath, humanize, schemaType, type JsonSchema } from "./config-form.shared.ts";
 
@@ -290,23 +290,65 @@ function matchesSearch(params: {
   }
   const criteria = parseConfigSearchQuery(params.query);
   const q = criteria.text;
+  const hasTagQuery = criteria.tags.length > 0;
   const meta = SECTION_META[params.key];
 
-  // Check key name
-  if (q && params.key.toLowerCase().includes(q)) {
-    return true;
+  // If both text and tags are specified, require matching BOTH
+  if (q && hasTagQuery) {
+    // Must match text at section level
+    let textMatches = false;
+    if (params.key.toLowerCase().includes(q)) {
+      textMatches = true;
+    }
+    if (!textMatches && meta) {
+      if (meta.label.toLowerCase().includes(q)) {
+        textMatches = true;
+      }
+      if (!textMatches && meta.description.toLowerCase().includes(q)) {
+        textMatches = true;
+      }
+    }
+
+    // If section-level text didn't match, check child nodes
+    if (!textMatches) {
+      textMatches = matchesNodeSearch({
+        schema: params.schema,
+        value: params.sectionValue,
+        path: [params.key],
+        hints: params.uiHints,
+        criteria: { text: q, tags: [] }, // Check text only for child nodes
+      });
+    }
+
+    // Both text and tags must match
+    if (!textMatches) {
+      return false;
+    }
+    return matchesNodeSearch({
+      schema: params.schema,
+      value: params.sectionValue,
+      path: [params.key],
+      hints: params.uiHints,
+      criteria,
+    });
   }
 
-  // Check label and description
-  if (q && meta) {
-    if (meta.label.toLowerCase().includes(q)) {
+  // Text-only query
+  if (q) {
+    if (params.key.toLowerCase().includes(q)) {
       return true;
     }
-    if (meta.description.toLowerCase().includes(q)) {
-      return true;
+    if (meta) {
+      if (meta.label.toLowerCase().includes(q)) {
+        return true;
+      }
+      if (meta.description.toLowerCase().includes(q)) {
+        return true;
+      }
     }
   }
 
+  // Tag-only or text-only child node search
   return matchesNodeSearch({
     schema: params.schema,
     value: params.sectionValue,
