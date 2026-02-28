@@ -200,6 +200,9 @@ class ElevenLabsStreamingTts(
   private var sentFullText = ""
 
   /**
+      // If we already sent a superset of this text, it's just a stale/out-of-order
+      // event from a different thread — not a real divergence. Ignore it.
+      if (sentFullText.startsWith(fullText)) return true
    * Returns true if text was accepted, false if text diverged (caller should restart).
    */
   @Synchronized
@@ -210,6 +213,9 @@ class ElevenLabsStreamingTts(
     // Detect text replacement: if the new text doesn't start with what we already sent,
     // the stream has diverged (e.g., tool call interrupted and text was replaced).
     if (sentFullText.isNotEmpty() && !fullText.startsWith(sentFullText)) {
+      // If we already sent a superset of this text, it's just a stale/out-of-order
+      // event from a different thread — not a real divergence. Ignore it.
+      if (sentFullText.startsWith(fullText)) return true
       Log.d(TAG, "text diverged — sent='${sentFullText.take(60)}' new='${fullText.take(60)}'")
       return false
     }
