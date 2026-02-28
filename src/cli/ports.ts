@@ -329,13 +329,30 @@ export async function forceFreePortAndWait(
 /**
  * Attempt a real TCP bind to verify the port is available at the OS level.
  * Catches TIME_WAIT / kernel-level holds that lsof won't show.
+ *
+ * Resolves false only for EADDRINUSE — a genuinely transient condition
+ * (port still in TIME_WAIT after a --force kill) that the caller should retry.
+ *
+ * All other errors are non-retryable and are rejected immediately:
+ * - EADDRNOTAVAIL: the host address doesn't exist on any local interface
+ *   (hard misconfiguration, not a transient kernel hold).
+ * - EACCES: bind to a privileged port as non-root.
+ * - EINVAL, etc.: other unrecoverable OS errors.
  */
 export function probePortFree(port: number, host = "0.0.0.0"): Promise<boolean> {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const srv = createServer();
     srv.unref();
-    srv.once("error", () => {
-      resolve(false);
+    srv.once("error", (err: NodeJS.ErrnoException) => {
+      srv.close();
+      if (err.code === "EADDRINUSE") {
+        // Genuinely transient — port still in use or TIME_WAIT after a --force kill.
+        resolve(false);
+      } else {
+        // Non-retryable: EADDRNOTAVAIL (bad host address), EACCES (privileged port),
+        // EINVAL, and any other OS errors. Surface immediately; no retry loop.
+        reject(err);
+      }
     });
     srv.listen(port, host, () => {
       srv.close(() => resolve(true));
