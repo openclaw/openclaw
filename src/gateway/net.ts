@@ -357,7 +357,7 @@ export function isLocalishHost(hostHeader?: string): boolean {
  * All other ws:// URLs are considered insecure because both credentials
  * AND chat/conversation data would be exposed to network interception.
  */
-export function isSecureWebSocketUrl(url: string): boolean {
+export function isSecureWebSocketUrl(url: string, trustedNetworks?: string[]): boolean {
   let parsed: URL;
   try {
     parsed = new URL(url);
@@ -374,5 +374,22 @@ export function isSecureWebSocketUrl(url: string): boolean {
   }
 
   // ws:// is only secure for loopback addresses
-  return isLoopbackHost(parsed.hostname);
+  if (isLoopbackHost(parsed.hostname)) {
+    return true;
+  }
+
+  // Check if the host IP is in a trusted network (e.g., WireGuard, Tailscale)
+  if (trustedNetworks && trustedNetworks.length > 0) {
+    const hostname = parsed.hostname;
+    // Only check IPv4 addresses for now (Tailscale uses 100.64.0.0/10)
+    if (isCanonicalDottedDecimalIPv4(hostname)) {
+      for (const cidr of trustedNetworks) {
+        if (isIpInCidr(hostname, cidr)) {
+          return true;
+        }
+      }
+    }
+  }
+
+  return false;
 }
