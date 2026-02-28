@@ -422,6 +422,103 @@ describe("loginGeminiCliOAuth", () => {
     expect(requests.some((url) => url.includes("v1internal:onboardUser"))).toBe(false);
   });
 
+  it("does not throw when onboardUser returns 400 (proceeds without projectId)", async () => {
+    const requests: string[] = [];
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = getRequestUrl(input);
+      requests.push(url);
+
+      if (url === TOKEN_URL) {
+        return responseJson({
+          access_token: "access-token",
+          refresh_token: "refresh-token",
+          expires_in: 3600,
+        });
+      }
+      if (url === USERINFO_URL) {
+        return responseJson({ email: "lobster@openclaw.ai" });
+      }
+      if ([LOAD_PROD, LOAD_DAILY, LOAD_AUTOPUSH].includes(url)) {
+        return responseJson({ error: { message: "bad request" } }, 400);
+      }
+      if (url === "https://cloudcode-pa.googleapis.com/v1internal:onboardUser") {
+        return responseJson({ error: { message: "bad request" } }, 400);
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    let authUrl = "";
+    const { loginGeminiCliOAuth } = await import("./oauth.js");
+    const result = await loginGeminiCliOAuth({
+      isRemote: true,
+      openUrl: async () => {},
+      log: (msg) => {
+        const found = msg.match(/https:\/\/accounts\.google\.com\/o\/oauth2\/v2\/auth\?[^\s]+/);
+        if (found?.[0]) {
+          authUrl = found[0];
+        }
+      },
+      note: async () => {},
+      prompt: async () => {
+        const state = new URL(authUrl).searchParams.get("state");
+        return `http://localhost:8085/oauth2callback?code=oauth-code&state=${state}`;
+      },
+      progress: { update: () => {}, stop: () => {} },
+    });
+
+    expect(result.projectId).toBe("");
+    expect(requests.filter((url) => url.includes("v1internal:onboardUser"))).toHaveLength(1);
+  });
+
+  it("uses GOOGLE_CLOUD_PROJECT when onboardUser returns 400 and env is set", async () => {
+    process.env.GOOGLE_CLOUD_PROJECT = "my-env-project";
+
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = getRequestUrl(input);
+
+      if (url === TOKEN_URL) {
+        return responseJson({
+          access_token: "access-token",
+          refresh_token: "refresh-token",
+          expires_in: 3600,
+        });
+      }
+      if (url === USERINFO_URL) {
+        return responseJson({ email: "lobster@openclaw.ai" });
+      }
+      if ([LOAD_PROD, LOAD_DAILY, LOAD_AUTOPUSH].includes(url)) {
+        return responseJson({ error: { message: "bad request" } }, 400);
+      }
+      if (url === "https://cloudcode-pa.googleapis.com/v1internal:onboardUser") {
+        return responseJson({ error: { message: "bad request" } }, 400);
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    let authUrl = "";
+    const { loginGeminiCliOAuth } = await import("./oauth.js");
+    const result = await loginGeminiCliOAuth({
+      isRemote: true,
+      openUrl: async () => {},
+      log: (msg) => {
+        const found = msg.match(/https:\/\/accounts\.google\.com\/o\/oauth2\/v2\/auth\?[^\s]+/);
+        if (found?.[0]) {
+          authUrl = found[0];
+        }
+      },
+      note: async () => {},
+      prompt: async () => {
+        const state = new URL(authUrl).searchParams.get("state");
+        return `http://localhost:8085/oauth2callback?code=oauth-code&state=${state}`;
+      },
+      progress: { update: () => {}, stop: () => {} },
+    });
+
+    expect(result.projectId).toBe("my-env-project");
+  });
+
   it("continues OAuth flow when loadCodeAssist returns 400 from every endpoint", async () => {
     const requests: string[] = [];
     const fetchMock = vi.fn(async (input: string | URL | Request) => {

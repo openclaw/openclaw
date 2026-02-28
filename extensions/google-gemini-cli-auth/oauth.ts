@@ -584,6 +584,25 @@ async function discoverProject(accessToken: string): Promise<string> {
   });
 
   if (!onboardResponse.ok) {
+    // 400 may mean the account is already provisioned or not eligible for onboarding.
+    // Try to extract a project from the body before giving up.
+    if (onboardResponse.status === 400) {
+      const errorBody = await onboardResponse.json().catch(() => null);
+      const projectFromBody =
+        errorBody?.cloudaicompanionProject?.id ??
+        errorBody?.response?.cloudaicompanionProject?.id ??
+        (typeof errorBody?.cloudaicompanionProject === "string"
+          ? errorBody.cloudaicompanionProject
+          : undefined);
+      if (projectFromBody) {
+        return projectFromBody;
+      }
+      if (envProject) {
+        return envProject;
+      }
+      // Proceed without a project; user can set GOOGLE_CLOUD_PROJECT manually.
+      return "";
+    }
     throw new Error(`onboardUser failed: ${onboardResponse.status} ${onboardResponse.statusText}`);
   }
 
