@@ -254,12 +254,18 @@ export function hasBotMention(msg: Message, botUsername: string) {
   }
   const entities = msg.entities ?? msg.caption_entities ?? [];
   for (const ent of entities) {
-    if (ent.type !== "mention") {
-      continue;
+    // Check for regular @username mentions
+    if (ent.type === "mention") {
+      const slice = (msg.text ?? msg.caption ?? "").slice(ent.offset, ent.offset + ent.length);
+      if (slice.toLowerCase() === `@${botUsername}`) {
+        return true;
+      }
     }
-    const slice = (msg.text ?? msg.caption ?? "").slice(ent.offset, ent.offset + ent.length);
-    if (slice.toLowerCase() === `@${botUsername}`) {
-      return true;
+    // Check for text_mention entities (used for bot-to-bot mentions and user mentions without username)
+    if (ent.type === "text_mention" && "user" in ent && ent.user) {
+      if (ent.user.username?.toLowerCase() === botUsername.toLowerCase()) {
+        return true;
+      }
     }
   }
   return false;
