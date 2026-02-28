@@ -1,6 +1,6 @@
 import type { WizardPrompter } from "../../wizard/prompts.js";
 
-export type ChannelAccessPolicy = "allowlist" | "open" | "disabled";
+export type ChannelAccessPolicy = "allowlist" | "open" | "disabled" | "members";
 
 export function parseAllowlistEntries(raw: string): string[] {
   return raw
