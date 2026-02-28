@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { createServer } from "node:net";
 import { resolveLsofCommandSync } from "../infra/ports-lsof.js";
 import { tryListenOnPort } from "../infra/ports-probe.js";
 import { sleep } from "../utils.js";
@@ -323,4 +324,46 @@ export async function forceFreePortAndWait(
   throw new Error(
     `port ${port} still has listeners after --force: ${still.map((p) => p.pid).join(", ")}`,
   );
+}
+
+/**
+ * Attempt a real TCP bind to verify the port is available at the OS level.
+ * Catches TIME_WAIT / kernel-level holds that lsof won't show.
+ */
+export function probePortFree(port: number, host = "0.0.0.0"): Promise<boolean> {
+  return new Promise((resolve) => {
+    const srv = createServer();
+    srv.unref();
+    srv.once("error", () => {
+      resolve(false);
+    });
+    srv.listen(port, host, () => {
+      srv.close(() => resolve(true));
+    });
+  });
+}
+
+/**
+ * Poll until a real test-bind succeeds, up to `timeoutMs`.
+ * Returns the number of ms waited, or throws if the port never freed.
+ */
+export async function waitForPortBindable(
+  port: number,
+  opts: { timeoutMs?: number; intervalMs?: number } = {},
+): Promise<number> {
+  const timeoutMs = Math.max(opts.timeoutMs ?? 3000, 0);
+  const intervalMs = Math.max(opts.intervalMs ?? 150, 1);
+  let waited = 0;
+  while (waited < timeoutMs) {
+    if (await probePortFree(port)) {
+      return waited;
+    }
+    await sleep(intervalMs);
+    waited += intervalMs;
+  }
+  // Final attempt
+  if (await probePortFree(port)) {
+    return waited;
+  }
+  throw new Error(`port ${port} still not bindable after ${waited}ms (TIME_WAIT or kernel hold)`);
 }
