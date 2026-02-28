@@ -944,4 +944,39 @@ describe("handleFeishuMessage command authorization", () => {
       }),
     );
   });
+
+  it("does not dispatch twice for the same image message_id (regression #28574)", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          dmPolicy: "open",
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: {
+          open_id: "ou-image-dedup",
+        },
+      },
+      message: {
+        message_id: "msg-image-dedup-28574",
+        chat_id: "oc-dm",
+        chat_type: "p2p",
+        message_type: "image",
+        content: JSON.stringify({
+          image_key: "img_dedup_payload",
+        }),
+      },
+    };
+
+    // Dispatch same image event twice concurrently to simulate rapid event delivery
+    await Promise.all([dispatchMessage({ cfg, event }), dispatchMessage({ cfg, event })]);
+
+    // Only one dispatch should occur despite receiving the same image message_id twice
+    expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+  });
 });
