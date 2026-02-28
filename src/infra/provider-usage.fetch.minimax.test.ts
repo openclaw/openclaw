@@ -113,6 +113,47 @@ describe("fetchMinimaxUsage", () => {
     ]);
   });
 
+  it("prefers explicit used percent over derived remaining percent", async () => {
+    const mockFetch = createProviderUsageFetch(async () =>
+      makeResponse(200, {
+        data: {
+          usage_percent: 70,
+          remaining_percent: 30,
+          window_hours: 5,
+        },
+      }),
+    );
+
+    const result = await fetchMinimaxUsage("key", 5000, mockFetch);
+    expect(result.windows).toEqual([
+      {
+        label: "5h",
+        usedPercent: 70,
+        resetAt: undefined,
+      },
+    ]);
+  });
+
+  it("finds nested remaining-percent-only records during candidate scan", async () => {
+    const mockFetch = createProviderUsageFetch(async () =>
+      makeResponse(200, {
+        data: {
+          metadata: { note: "ok" },
+          nested: [{ remaining_percent: 95, window_hours: 5 }],
+        },
+      }),
+    );
+
+    const result = await fetchMinimaxUsage("key", 5000, mockFetch);
+    expect(result.windows).toEqual([
+      {
+        label: "5h",
+        usedPercent: 5,
+        resetAt: undefined,
+      },
+    ]);
+  });
+
   it("derives used from total and remaining counts", async () => {
     const mockFetch = createProviderUsageFetch(async () =>
       makeResponse(200, {

@@ -215,7 +215,7 @@ function hasAny(record: Record<string, unknown>, keys: readonly string[]): boole
 
 function scoreUsageRecord(record: Record<string, unknown>): number {
   let score = 0;
-  if (hasAny(record, PERCENT_KEYS)) {
+  if (hasAny(record, PERCENT_KEYS) || hasAny(record, REMAINING_PERCENT_KEYS)) {
     score += 4;
   }
   if (hasAny(record, TOTAL_KEYS)) {
@@ -320,12 +320,13 @@ function deriveUsedPercent(payload: Record<string, unknown>): number | null {
     return fromCounts;
   }
 
-  // Some MiniMax remains payloads report remaining%, not used%.
-  if (fromRemainingPercent !== null) {
-    return fromRemainingPercent;
+  // Explicit used-percent fields are more direct than inverted remaining-percent fields.
+  if (fromPercent !== null) {
+    return fromPercent;
   }
 
-  return fromPercent;
+  // Some MiniMax remains payloads report remaining%, not used%.
+  return fromRemainingPercent;
 }
 
 export async function fetchMinimaxUsage(
