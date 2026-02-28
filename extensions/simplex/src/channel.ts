@@ -1,7 +1,6 @@
 import fs from "fs";
-import path from "path";
 import os from "os";
-
+import path from "path";
 import {
   collectStatusIssuesFromLastError,
   createDefaultChannelRuntimeState,
@@ -10,6 +9,7 @@ import {
   type ChannelPlugin,
 } from "openclaw/plugin-sdk";
 import { simplexChannelConfigSchema } from "./config-schema.js";
+import { resolveRouting, describeRouting, type RoutingResult } from "./routing.js";
 import { getSimplexRuntime } from "./runtime.js";
 import { startSimplexBus, type SimplexBusHandle, type SimplexMessage } from "./simplex-bus.js";
 import {
@@ -55,6 +55,9 @@ export const simplexPlugin: ChannelPlugin<ResolvedSimplexAccount> = {
       wsUrl: account.wsUrl,
       filterMemberIds: account.filterMemberIds,
       filterDisplayNames: account.filterDisplayNames,
+      userRouting: account.userRouting,
+      groupRouting: account.groupRouting,
+      defaultAgent: account.defaultAgent,
     }),
     resolveAllowFrom: ({ cfg, accountId }) =>
       resolveSimplexAccount({ cfg, accountId }).allowFrom.map(String),
@@ -150,7 +153,12 @@ export const simplexPlugin: ChannelPlugin<ResolvedSimplexAccount> = {
           // Determine file extension from content-type or URL
           const contentType = response.headers.get("content-type") || "";
           let ext = ".bin";
-          if (contentType.includes("image/jpeg") || media.includes(".jpg") || media.includes(".jpeg")) ext = ".jpg";
+          if (
+            contentType.includes("image/jpeg") ||
+            media.includes(".jpg") ||
+            media.includes(".jpeg")
+          )
+            ext = ".jpg";
           else if (contentType.includes("image/png") || media.includes(".png")) ext = ".png";
           else if (contentType.includes("image/gif") || media.includes(".gif")) ext = ".gif";
           else if (contentType.includes("image/webp") || media.includes(".webp")) ext = ".webp";
@@ -164,13 +172,20 @@ export const simplexPlugin: ChannelPlugin<ResolvedSimplexAccount> = {
 
           filePath = tempFile;
         } catch (err) {
-          throw new Error(`Failed to download media from URL: ${err instanceof Error ? err.message : String(err)}`);
+          throw new Error(
+            `Failed to download media from URL: ${err instanceof Error ? err.message : String(err)}`,
+          );
         }
       }
 
       try {
         // Determine if this is a voice message
-        const isVoice = mediaType === "voice" || filePath.endsWith(".m4a") || filePath.endsWith(".mp3") || filePath.endsWith(".ogg") || filePath.endsWith(".wav");
+        const isVoice =
+          mediaType === "voice" ||
+          filePath.endsWith(".m4a") ||
+          filePath.endsWith(".mp3") ||
+          filePath.endsWith(".ogg") ||
+          filePath.endsWith(".wav");
 
         // Send based on chatType and mediaType
         if (chatType === "group") {
@@ -244,6 +259,11 @@ export const simplexPlugin: ChannelPlugin<ResolvedSimplexAccount> = {
         throw new Error("SimpleX channel not configured");
       }
       const runtime = getSimplexRuntime();
+
+      // Load full config for routing
+      const config = runtime.config.loadConfig();
+      const simplexConfig = (config.channels?.simplex ?? {}) as Record<string, unknown>;
+
       const bus = startSimplexBus({
         wsUrl: account.wsUrl,
         onMessage: async (msg: SimplexMessage) => {
@@ -251,29 +271,77 @@ export const simplexPlugin: ChannelPlugin<ResolvedSimplexAccount> = {
           if (account.filterMemberIds.length > 0) {
             const memberId = msg.contactId;
             if (account.filterMemberIds.includes(memberId)) {
-              ctx.log?.debug?.(`[${account.accountId}] Skipping filtered member: ${msg.contactName} (${memberId})`);
+              ctx.log?.debug?.(
+                `[${account.accountId}] Skipping filtered member: ${msg.contactName} (${memberId})`,
+              );
               return;
             }
           }
-          
+
           // Filter out messages from filtered display names
           if (account.filterDisplayNames.length > 0) {
             if (account.filterDisplayNames.includes(msg.contactName)) {
-              ctx.log?.debug?.(`[${account.accountId}] Skipping filtered display name: ${msg.contactName}`);
+              ctx.log?.debug?.(
+                `[${account.accountId}] Skipping filtered display name: ${msg.contactName}`,
+              );
               return;
             }
           }
 
           const chatType = msg.isGroup ? "group" : "direct";
-          const chatId = msg.isGroup 
-            ? `simplex:group:${msg.groupId}` 
-            : `simplex:${msg.contactId}`;
+          const chatId = msg.isGroup ? `simplex:group:${msg.groupId}` : `simplex:${msg.contactId}`;
+
+          // Resolve routing for this message
+          const routingCtx = {
+            senderName: msg.contactName,
+            senderId: msg.contactId,
+            isGroup: msg.isGroup ?? false,
+            groupName: msg.groupName,
+            groupId: msg.groupId,
+            memberId: msg.contactId,
+          };
+
+          // Get routing config from account
+          const routingConfig = {
+            userRouting: account.userRouting,
+            groupRouting: account.groupRouting,
+            defaultAgent: account.defaultAgent,
+            defaultLanguage: account.defaultLanguage,
+            defaultModel: account.defaultModel,
+            defaultVoiceReplies: account.defaultVoiceReplies,
+          };
+
+          const routing = resolveRouting(routingConfig as any, routingCtx);
+
+          // Log routing decision
+          if (routing) {
+            ctx.log?.info(
+              `[${account.accountId}] ${describeRouting(routingConfig as any, routingCtx)}`,
+            );
+          } else {
+            ctx.log?.debug?.(
+              `[${account.accountId}] No specific routing for ${msg.isGroup ? `group:${msg.groupName}/` : ""}${msg.contactName}, using default pipeline`,
+            );
+          }
 
           ctx.log?.debug?.(
             `[${account.accountId}] ${chatType === "group" ? "Group" : "DM"} from ${msg.isGroup ? msg.groupName + "/" + msg.contactName : msg.contactName}: ${msg.text.slice(0, 50)}...`,
           );
 
-          // Forward to OpenClaw's message pipeline
+          // Build routing metadata to pass to the pipeline
+          const routingMetadata = routing
+            ? {
+                agent: routing.agent,
+                language: routing.language,
+                model: routing.model,
+                voiceReplies: routing.voiceReplies,
+                systemPrompt: routing.systemPrompt,
+                includeHistory: routing.includeHistory,
+                maxHistoryMessages: routing.maxHistoryMessages,
+              }
+            : undefined;
+
+          // Forward to OpenClaw's message pipeline with routing info
           await (
             runtime.channel.reply as {
               handleInboundMessage?: (params: unknown) => Promise<void>;
@@ -290,6 +358,14 @@ export const simplexPlugin: ChannelPlugin<ResolvedSimplexAccount> = {
             // For group messages, include group context
             groupId: msg.groupId,
             groupName: msg.groupName,
+            // Routing metadata - tells OpenClaw which agent/model to use
+            agent: routingMetadata?.agent,
+            language: routingMetadata?.language,
+            model: routingMetadata?.model,
+            voiceReplies: routingMetadata?.voiceReplies,
+            systemPrompt: routingMetadata?.systemPrompt,
+            // Voice message flag
+            isVoice: msg.isVoice,
             reply: async (responseText: string) => {
               if (msg.isGroup && msg.groupId) {
                 await bus.sendGroupMessage(msg.groupId, responseText);
