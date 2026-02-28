@@ -28,6 +28,7 @@
     "README.md",
     "assets/",
     "dist/",
+    "dist/control-ui/",
     "docs/",
     "extensions/",
     "skills/"

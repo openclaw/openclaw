@@ -1,3 +1,4 @@
+import type { ModelAliasIndex } from "../../agents/model-selection.js";
 import type { ModelsProviderData } from "../../auto-reply/reply/commands-models.js";
 
 export function createModelsProviderData(
@@ -21,5 +22,6 @@ export function createModelsProviderData(
       provider: defaultProvider,
       model: entries[defaultProvider]?.[0] ?? "gpt-4o",
     },
+    aliasIndex: { byAlias: new Map(), byKey: new Map() },
   };
 }

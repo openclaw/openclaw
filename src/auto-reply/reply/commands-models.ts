@@ -8,6 +8,7 @@ import {
   normalizeProviderId,
   resolveConfiguredModelRef,
   resolveModelRefFromString,
+  type ModelAliasIndex,
 } from "../../agents/model-selection.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -28,6 +29,7 @@ export type ModelsProviderData = {
   byProvider: Map<string, Set<string>>;
   providers: string[];
   resolvedDefault: { provider: string; model: string };
+  aliasIndex: ModelAliasIndex;
 };
 
 /**
@@ -116,7 +118,7 @@ export async function buildModelsProviderData(cfg: OpenClawConfig): Promise<Mode
 
   const providers = [...byProvider.keys()].toSorted();
 
-  return { byProvider, providers, resolvedDefault };
+  return { byProvider, providers, resolvedDefault, aliasIndex };
 }
 
 function formatProviderLine(params: { provider: string; count: number }): string {
@@ -128,17 +130,27 @@ function parseModelsArgs(raw: string): {
   page: number;
   pageSize: number;
   all: boolean;
+  isAllProviders: boolean;
 } {
   const trimmed = raw.trim();
   if (!trimmed) {
-    return { page: 1, pageSize: PAGE_SIZE_DEFAULT, all: false };
+    return { page: 1, pageSize: PAGE_SIZE_DEFAULT, all: false, isAllProviders: false };
   }
 
   const tokens = trimmed.split(/\s+/g).filter(Boolean);
-  const provider = tokens[0]?.trim();
+  let provider: string | undefined = tokens[0]?.trim();
 
   let page = 1;
   let all = false;
+  let isAllProviders = false;
+
+  const firstTokenLower = provider?.toLowerCase();
+  if (firstTokenLower === "all" || firstTokenLower === "--all") {
+    all = true;
+    isAllProviders = true;
+    provider = undefined;
+  }
+
   for (const token of tokens.slice(1)) {
     const lower = token.toLowerCase();
     if (lower === "all" || lower === "--all") {
@@ -177,6 +189,7 @@ function parseModelsArgs(raw: string): {
     page,
     pageSize,
     all,
+    isAllProviders,
   };
 }
 
@@ -228,13 +241,43 @@ export async function resolveModelsCommandReply(params: {
   }
 
   const argText = body.replace(/^\/models\b/i, "").trim();
-  const { provider, page, pageSize, all } = parseModelsArgs(argText);
+  const { provider, page, pageSize, all, isAllProviders } = parseModelsArgs(argText);
 
-  const { byProvider, providers } = await buildModelsProviderData(params.cfg);
+  const { byProvider, providers, aliasIndex } = await buildModelsProviderData(params.cfg);
   const isTelegram = params.surface === "telegram";
 
-  // Provider list (no provider specified)
+  // Provider list or all models list (no provider specified)
   if (!provider) {
+    if (isAllProviders) {
+      const allModels: string[] = [];
+      for (const p of providers) {
+        const sortedModels = [...(byProvider.get(p) ?? new Set<string>())].toSorted();
+        for (const m of sortedModels) {
+          allModels.push(`${p}/${m}`);
+        }
+      }
+      
+      const total = allModels.length;
+      if (total === 0) {
+        const lines: string[] = [
+          "Models (all providers) — none",
+          "",
+          "Browse: /models",
+          "Switch: /model <provider/model>",
+        ];
+        return { text: lines.join("\n") };
+      }
+      
+      const lines: string[] = [`Models (all providers) — ${total} available`];
+      for (const ref of allModels) {
+        const aliases = aliasIndex.byKey.get(ref);
+        const aliasSuffix = aliases && aliases.length > 0 ? ` (${aliases.join(", ")})` : "";
+        lines.push(`- ${ref}${aliasSuffix}`);
+      }
+      lines.push("", "Switch: /model <provider/model>");
+      return { text: lines.join("\n") };
+    }
+
     // For Telegram: show buttons if there are providers
     if (isTelegram && providers.length > 0) {
       const providerInfos: ProviderInfo[] = providers.map((p) => ({
@@ -256,7 +299,7 @@ export async function resolveModelsCommandReply(params: {
         formatProviderLine({ provider: p, count: byProvider.get(p)?.size ?? 0 }),
       ),
       "",
-      "Use: /models <provider>",
+      "Use: /models <provider> (or /models all)",
       "Switch: /model <provider/model>",
     ];
     return { text: lines.join("\n") };
@@ -344,7 +387,10 @@ export async function resolveModelsCommandReply(params: {
 
   const lines: string[] = [header];
   for (const id of pageModels) {
-    lines.push(`- ${provider}/${id}`);
+    const label = `${provider}/${id}`;
+    const aliases = aliasIndex.byKey.get(label);
+    const aliasSuffix = aliases && aliases.length > 0 ? ` (${aliases.join(", ")})` : "";
+    lines.push(`- ${label}${aliasSuffix}`);
   }
 
   lines.push("", "Switch: /model <provider/model>");
