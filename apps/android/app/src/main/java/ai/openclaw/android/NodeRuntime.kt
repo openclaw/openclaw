@@ -361,7 +361,11 @@ class NodeRuntime(context: Context) {
         parseChatSendRunId(response) ?: idempotencyKey
       },
       speakAssistantReply = { text ->
-        voiceReplySpeaker.speakAssistantReply(text)
+        // Skip if TalkModeManager is handling TTS (ttsOnAllResponses) to avoid
+        // double-speaking the same assistant reply from both pipelines.
+        if (!talkMode.ttsOnAllResponses) {
+          voiceReplySpeaker.speakAssistantReply(text)
+        }
       },
     )
   }
