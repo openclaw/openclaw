@@ -54,15 +54,15 @@ export function buildSystemdUnit({
     descriptionLine,
     "After=network-online.target",
     "Wants=network-online.target",
+    // Prevent infinite crash loops (e.g. port conflict) from exhausting system
+    // resources. After 5 failures within 120s, systemd stops retrying.
+    "StartLimitIntervalSec=120",
+    "StartLimitBurst=5",
     "",
     "[Service]",
     `ExecStart=${execStart}`,
     "Restart=always",
     "RestartSec=5",
-    // Prevent infinite crash loops (e.g. port conflict) from exhausting system
-    // resources. After 5 failures within 120s, systemd stops retrying.
-    "StartLimitIntervalSec=120",
-    "StartLimitBurst=5",
     // KillMode=process ensures systemd only waits for the main process to exit.
     // Without this, podman's conmon (container monitor) processes block shutdown
     // since they run as children of the gateway and stay in the same cgroup.
