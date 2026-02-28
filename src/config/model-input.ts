@@ -24,6 +24,14 @@ export function resolveAgentModelFallbackValues(model?: AgentModelConfig): strin
   return Array.isArray(model.fallbacks) ? model.fallbacks : [];
 }
 
+/** Returns true when `fallbacks` is explicitly set (even as an empty array). */
+export function hasExplicitFallbacks(model?: AgentModelConfig): boolean {
+  if (!model || typeof model !== "object") {
+    return false;
+  }
+  return Array.isArray(model.fallbacks);
+}
+
 export function toAgentModelListLike(model?: AgentModelConfig): AgentModelListLike | undefined {
   if (typeof model === "string") {
     const primary = model.trim();

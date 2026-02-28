@@ -80,7 +80,15 @@ export function splitModelRef(ref?: string) {
   }
   const slashIndex = trimmed.indexOf("/");
   if (slashIndex !== -1) {
-    return { provider: trimmed.slice(0, slashIndex), model: trimmed.slice(slashIndex + 1) };
+    const provider = trimmed.slice(0, slashIndex);
+    const model = trimmed.slice(slashIndex + 1);
+    // Malformed refs like "openai/" or "/gpt-5" have empty segments —
+    // treat as invalid so callers surface a validation error rather than
+    // silently falling back to the configured default model.
+    if (!provider || !model) {
+      return { provider: undefined, model: undefined };
+    }
+    return { provider, model };
   }
   return { provider: undefined, model: trimmed };
 }

@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/config.js";
 import {
+  hasExplicitFallbacks,
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
   toAgentModelListLike,
@@ -412,22 +413,24 @@ export function resolveSubagentSpawnModelFallbacks(params: {
 }): string[] | undefined {
   const agentConfig = resolveAgentConfig(params.cfg, params.agentId);
 
-  // Per-agent subagent fallbacks
-  const agentSub = resolveAgentModelFallbackValues(agentConfig?.subagents?.model);
-  if (agentSub.length > 0) {
-    return agentSub;
+  // Per-agent subagent fallbacks.
+  // An explicit empty array (fallbacks: []) means "no fallbacks" and must
+  // short-circuit the cascade so global/default fallbacks are not inherited.
+  const agentSubModel = agentConfig?.subagents?.model;
+  if (hasExplicitFallbacks(agentSubModel)) {
+    return resolveAgentModelFallbackValues(agentSubModel);
   }
 
   // Global subagent fallbacks
-  const globalSub = resolveAgentModelFallbackValues(params.cfg.agents?.defaults?.subagents?.model);
-  if (globalSub.length > 0) {
-    return globalSub;
+  const globalSubModel = params.cfg.agents?.defaults?.subagents?.model;
+  if (hasExplicitFallbacks(globalSubModel)) {
+    return resolveAgentModelFallbackValues(globalSubModel);
   }
 
   // Per-agent model fallbacks
-  const agentModel = resolveAgentModelFallbackValues(agentConfig?.model);
-  if (agentModel.length > 0) {
-    return agentModel;
+  const agentModel = agentConfig?.model;
+  if (hasExplicitFallbacks(agentModel)) {
+    return resolveAgentModelFallbackValues(agentModel);
   }
 
   // undefined = let runWithModelFallback use agents.defaults.model.fallbacks
