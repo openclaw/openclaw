@@ -1178,14 +1178,16 @@ export async function handleFeishuMessage(params: {
 
     const toolProgressConfig = cfg.messages?.toolProgress as ToolProgressConfig | undefined;
     const toolProgressEnabled = toolProgressConfig?.enabled === true;
-    const feishuClient = createFeishuClient(account);
+    // Lazy client: only created when tool progress adapter actually sends a message.
+    let _tpClient: ReturnType<typeof createFeishuClient> | undefined;
+    const getTpClient = () => (_tpClient ??= createFeishuClient(account));
     const feishuReceiveIdType = resolveReceiveIdType(ctx.chatId);
     const toolProgressController = createToolProgressController({
       enabled: toolProgressEnabled,
       adapter: {
         send: async (text) => {
           const content = JSON.stringify({ text });
-          const response = await feishuClient.im.message.create({
+          const response = await getTpClient().im.message.create({
             params: { receive_id_type: feishuReceiveIdType },
             data: {
               receive_id: ctx.chatId,
@@ -1197,13 +1199,13 @@ export async function handleFeishuMessage(params: {
         },
         edit: async (messageId, text) => {
           const content = JSON.stringify({ text });
-          await feishuClient.im.message.update({
+          await getTpClient().im.message.update({
             path: { message_id: messageId as string },
             data: { msg_type: "text", content },
           });
         },
         delete: async (messageId) => {
-          await feishuClient.im.message.delete({
+          await getTpClient().im.message.delete({
             path: { message_id: messageId as string },
           });
         },
