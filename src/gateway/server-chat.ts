@@ -310,15 +310,26 @@ export function createAgentEventHandler({
     // Snapshot the current buffer as a prior segment so text from earlier
     // messages is preserved (#28180).
     //
-    // Boundary detection uses the *raw* (pre-strip) text and checks whether
-    // the incoming text starts with the previous raw text (continuation) or
-    // not (new message). This is more reliable than a length high-water mark
-    // because a new short message could still be longer than the previous one.
-    // The agent guarantees monotonically growing raw text within a single
-    // message, so any non-prefix raw text is a real boundary.
+    // Two complementary checks, either of which triggers a snapshot:
+    //
+    // 1. Raw-text prefix check: within a single message the agent sends
+    //    monotonically growing cumulative text, so the new raw text must start
+    //    with the previous raw text.  Any raw text that is NOT a prefix-
+    //    extension of the last raw text is a definite boundary.
+    //
+    // 2. Cleaned-text prefix check: guards the case where the new message
+    //    begins with text that coincidentally extends the previous message's
+    //    raw text (e.g. old message = "Sure", new message starts "Sure, here…").
+    //    The cleaned (directive-stripped) buffer must also grow monotonically
+    //    within a message, so if the new cleaned text does not start with the
+    //    existing cleaned buffer it is a boundary even when raw text looked like
+    //    a continuation.
     const existing = chatRunState.buffers.get(clientRunId);
     const lastRaw = chatRunState.rawBuffers.get(clientRunId);
-    const isBoundary = existing && lastRaw !== undefined && !text.startsWith(lastRaw);
+    const isBoundary =
+      existing &&
+      lastRaw !== undefined &&
+      (!text.startsWith(lastRaw) || !cleaned.startsWith(existing));
     if (isBoundary) {
       const prior = chatRunState.priorSegments.get(clientRunId);
       chatRunState.priorSegments.set(clientRunId, prior ? `${prior}\n\n${existing}` : existing);
