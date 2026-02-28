@@ -42,6 +42,8 @@ RUN if [ -n "$OPENCLAW_INSTALL_BROWSER" ]; then \
       rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*; \
     fi
 
+RUN npm install -g @xdevplatform/xurl
+
 USER node
 COPY --chown=node:node . .
 # Fix world-writable extensions dirs when building on Windows/WSL (files get mode 777)
