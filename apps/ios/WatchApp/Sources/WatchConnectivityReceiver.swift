@@ -237,4 +237,11 @@ extension WatchConnectivityReceiver: WCSessionDelegate {
             self.store.consume(message: incoming, transport: "applicationContext")
         }
     }
+
+    nonisolated func sessionReachabilityDidChange(_ session: WCSession) {
+        let reachable = session.isReachable
+        Task { @MainActor in
+            self.store.isReachable = reachable
+        }
+    }
 }

@@ -58,7 +58,15 @@ struct WatchNotifyMessage: Sendable {
     var replyStatusText: String?
     var replyStatusAt: Date?
     var isReplySending = false
+    var isReachable = false
     private var lastDeliveryKey: String?
+
+    var hasContent: Bool { updatedAt != nil }
+
+    var isExpired: Bool {
+        guard let expiresAtMs else { return false }
+        return Date().timeIntervalSince1970 * 1000 > Double(expiresAtMs)
+    }
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
