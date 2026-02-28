@@ -1,0 +1,115 @@
+name: Regression bug report
+description: Report behavior that worked previously and now fails in OpenClaw.
+title: "[Regression Bug]: "
+labels:
+  - bug
+  - regression
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this form only for regressions: behavior that previously worked and now fails.
+        Keep reports concise, reproducible, and evidence-based.
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: One-sentence statement of what regressed.
+      placeholder: Replies in Slack threads worked in <prior version> but fail in <current version>.
+    validations:
+      required: true
+  - type: input
+    id: last_known_good_version
+    attributes:
+      label: Last known good version
+      description: Exact version/build where behavior still worked.
+      placeholder: <version such as 2026.2.10>
+    validations:
+      required: true
+  - type: input
+    id: first_bad_version
+    attributes:
+      label: First known bad version
+      description: Exact version/build where behavior first failed.
+      placeholder: <version such as 2026.2.17>
+    validations:
+      required: true
+  - type: textarea
+    id: regression_window
+    attributes:
+      label: Regression window and trigger
+      description: Describe when this started and what changed around that time.
+      placeholder: Started after upgrading from <last-good-version> to <first-bad-version>; no config changes.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Provide the shortest deterministic repro path.
+      placeholder: |
+        1. Configure channel X.
+        2. Send message Y.
+        3. Run command Z.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What should happen if the regression does not exist.
+      placeholder: Agent posts a reply in the same thread.
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: What happens now, including user-visible errors.
+      placeholder: No reply is posted; gateway logs "reply target not found".
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      description: OS and version where this occurs.
+      placeholder: macOS 15.4 / Ubuntu 24.04 / Windows 11
+    validations:
+      required: true
+  - type: input
+    id: install_method
+    attributes:
+      label: Install method
+      description: How OpenClaw was installed or launched.
+      placeholder: npm global / pnpm dev / docker / mac app
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs, screenshots, and evidence
+      description: Include redacted logs/screenshots/recordings that prove the regression.
+      render: shell
+  - type: textarea
+    id: impact
+    attributes:
+      label: Impact and severity
+      description: |
+        Explain who is affected, how severe it is, how often it happens, and the practical consequence.
+        Include:
+        - Affected users/systems/channels
+        - Severity (annoying, blocks workflow, data risk, etc.)
+        - Frequency (always/intermittent/edge case)
+        - Consequence (missed messages, failed onboarding, extra cost, etc.)
+      placeholder: |
+        Affected: Telegram group users on <version>
+        Severity: High (blocks replies)
+        Frequency: 100% repro
+        Consequence: Agents cannot respond in threads
+    validations:
+      required: true
+  - type: textarea
+    id: additional_information
+    attributes:
+      label: Additional information
+      description: Add any context that helps triage but does not fit above.
+      placeholder: Temporary workaround is rolling back to <last-known-good-version>.
