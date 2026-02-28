@@ -210,7 +210,7 @@ export async function startGatewayServer(
           const bindMode = snap.config.gateway?.bind ?? "loopback";
           if (bindMode === "custom" && snap.config.gateway?.customBindHost) {
             preflightHost = snap.config.gateway.customBindHost;
-          } else if (bindMode === "all") {
+          } else if (bindMode === "lan") {
             preflightHost = "0.0.0.0";
           }
         }
