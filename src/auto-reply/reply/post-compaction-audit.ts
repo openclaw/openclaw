@@ -1,11 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 
-// Default required files — constants, extensible to config later
-const DEFAULT_REQUIRED_READS: Array<string | RegExp> = [
-  "WORKFLOW_AUTO.md",
-  /memory\/\d{4}-\d{2}-\d{2}\.md/, // daily memory files
-];
+const DEFAULT_REQUIRED_READS: Array<string | RegExp> = [/memory\/\d{4}-\d{2}-\d{2}\.md/];
 
 /**
  * Audit whether agent read required startup files after compaction.
@@ -22,6 +18,11 @@ export function auditPostCompactionReads(
   for (const required of requiredReads) {
     if (typeof required === "string") {
       const requiredResolved = path.resolve(workspaceDir, required);
+      // Skip files that don't exist in the workspace — avoids false alerts
+      // for hardcoded or user-configured paths that aren't present.
+      if (!fs.existsSync(requiredResolved)) {
+        continue;
+      }
       const found = normalizedReads.some((r) => r === requiredResolved);
       if (!found) {
         missingPatterns.push(required);
