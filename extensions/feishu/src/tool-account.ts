@@ -41,6 +41,7 @@ export function resolveAnyEnabledFeishuToolsConfig(
 ): Required<FeishuToolsConfig> {
   const merged: Required<FeishuToolsConfig> = {
     doc: false,
+    chat: false,
     wiki: false,
     drive: false,
     perm: false,
@@ -49,6 +50,7 @@ export function resolveAnyEnabledFeishuToolsConfig(
   for (const account of accounts) {
     const cfg = resolveToolsConfig(account.config.tools);
     merged.doc = merged.doc || cfg.doc;
+    merged.chat = merged.chat || cfg.chat;
     merged.wiki = merged.wiki || cfg.wiki;
     merged.drive = merged.drive || cfg.drive;
     merged.perm = merged.perm || cfg.perm;
