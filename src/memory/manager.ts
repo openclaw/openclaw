@@ -126,10 +126,20 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       return pending;
     }
     const createPromise = (async () => {
+      // #8131 fixed auth: when provider is "local" we no longer require remote API keys.
+      // When the resolved provider is "auto" (e.g. defaults missing in merge, or tool path),
+      // createEmbeddingProvider("auto") tries local then remote; if a remote profile (e.g.
+      // google:default) has a key, Gemini wins and explicit memorySearch.provider=local is
+      // ignored. Force "local" when config explicitly requests it so we never prefer remote
+      // over explicit local (fixes #29318; workaround was renaming auth profile to avoid
+      // auto-selecting Gemini).
+      const requestedDefault = cfg.agents?.defaults?.memorySearch?.provider;
+      const effectiveProvider =
+        requestedDefault === "local" && settings.provider === "auto" ? "local" : settings.provider;
       const providerResult = await createEmbeddingProvider({
         config: cfg,
         agentDir: resolveAgentDir(cfg, agentId),
-        provider: settings.provider,
+        provider: effectiveProvider,
         remote: settings.remote,
         model: settings.model,
         fallback: settings.fallback,
