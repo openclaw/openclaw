@@ -93,7 +93,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     );
   });
 
-  it("handles request validation and routing", async () => {
+  it("handles request validation and routing", { timeout: 240_000 }, async () => {
     const port = enabledPort;
     const mockAgentOnce = (payloads: Array<{ text: string }>) => {
       agentCommand.mockClear();
@@ -133,6 +133,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
             sessionKey?: string;
             message?: string;
             extraSystemPrompt?: string;
+            messageChannel?: string;
           }
         | undefined;
     const getFirstAgentMessage = () => getFirstAgentCall()?.message ?? "";
@@ -163,6 +164,36 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
           headers: { "x-openclaw-agent-id": "beta" },
           matcher: /^agent:beta:/,
         });
+      }
+
+      {
+        agentCommand.mockClear();
+        agentCommand.mockResolvedValueOnce({ payloads: [{ text: "ok" }] } as never);
+        const res = await postChatCompletions(
+          port,
+          {
+            model: "openclaw",
+            messages: [{ role: "user", content: "hi" }],
+          },
+          { "x-openclaw-message-channel": "custom-client" },
+        );
+        expect(res.status).toBe(200);
+        expect(agentCommand).toHaveBeenCalledTimes(1);
+        expect(getFirstAgentCall()?.messageChannel).toBe("custom-client");
+        await res.text();
+      }
+
+      {
+        agentCommand.mockClear();
+        agentCommand.mockResolvedValueOnce({ payloads: [{ text: "ok" }] } as never);
+        const res = await postChatCompletions(port, {
+          model: "openclaw",
+          messages: [{ role: "user", content: "hi" }],
+        });
+        expect(res.status).toBe(200);
+        expect(agentCommand).toHaveBeenCalledTimes(1);
+        expect(getFirstAgentCall()?.messageChannel).toBe("webchat");
+        await res.text();
       }
 
       {

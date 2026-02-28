@@ -5,6 +5,7 @@ import { agentCommand } from "../commands/agent.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
 import { logWarn } from "../logger.js";
 import { defaultRuntime } from "../runtime.js";
+import { normalizeMessageChannel } from "../utils/message-channel.js";
 import { resolveAssistantStreamDeltaText } from "./agent-event-assistant-text.js";
 import {
   buildAgentMessageFromConversationEntries,
@@ -14,7 +15,7 @@ import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { sendJson, setSseHeaders, writeDone } from "./http-common.js";
 import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
-import { resolveAgentIdForRequest, resolveSessionKey } from "./http-utils.js";
+import { getHeader, resolveAgentIdForRequest, resolveSessionKey } from "./http-utils.js";
 
 type OpenAiHttpOptions = {
   auth: ResolvedGatewayAuth;
@@ -45,14 +46,17 @@ function buildAgentCommandInput(params: {
   prompt: { message: string; extraSystemPrompt?: string };
   sessionKey: string;
   runId: string;
+  /** Message channel from x-openclaw-message-channel header; defaults to "webchat" when missing or empty. */
+  messageChannel?: string;
 }) {
+  const channel = normalizeMessageChannel(params.messageChannel ?? "") ?? "webchat";
   return {
     message: params.prompt.message,
     extraSystemPrompt: params.prompt.extraSystemPrompt,
     sessionKey: params.sessionKey,
     runId: params.runId,
     deliver: false as const,
-    messageChannel: "webchat" as const,
+    messageChannel: channel,
     bestEffortDeliver: false as const,
   };
 }
@@ -239,10 +243,12 @@ export async function handleOpenAiHttpRequest(
 
   const runId = `chatcmpl_${randomUUID()}`;
   const deps = createDefaultDeps();
+  const messageChannelHeader = getHeader(req, "x-openclaw-message-channel");
   const commandInput = buildAgentCommandInput({
     prompt,
     sessionKey,
     runId,
+    messageChannel: messageChannelHeader ?? undefined,
   });
 
   if (!stream) {
