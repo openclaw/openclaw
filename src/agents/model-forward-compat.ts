@@ -25,6 +25,15 @@ const GEMINI_3_1_FLASH_PREFIX = "gemini-3.1-flash";
 const GEMINI_3_1_PRO_TEMPLATE_IDS = ["gemini-3-pro-preview"] as const;
 const GEMINI_3_1_FLASH_TEMPLATE_IDS = ["gemini-3-flash-preview"] as const;
 
+// xAI Grok 4.1 models (grok-4-1-fast-reasoning, grok-4-1-fast-non-reasoning, grok-4-fast-*, grok-code-fast-*)
+// are not yet in pi-ai's built-in xai catalog. Clone grok-4 as a template.
+const XAI_GROK_41_FAST_PREFIX = "grok-4-1-fast";
+const XAI_GROK_4_FAST_PREFIX = "grok-4-fast";
+const XAI_GROK_CODE_FAST_PREFIX = "grok-code-fast";
+const XAI_GROK_TEMPLATE_MODEL_ID = "grok-4";
+const XAI_GROK_41_CONTEXT_WINDOW = 2000000; // 2M tokens for grok-4-1-fast and grok-4-fast
+const XAI_GROK_CODE_FAST_CONTEXT_WINDOW = 256000; // 256K tokens for grok-code-fast
+
 function cloneFirstTemplateModel(params: {
   normalizedProvider: string;
   trimmedModelId: string;
@@ -200,6 +209,60 @@ function resolveGoogleGeminiCli31ForwardCompatModel(
   });
 }
 
+// xAI's Grok 4.1 Fast, Grok 4 Fast, and Grok Code Fast models may not be in pi-ai's catalog yet.
+// Clone grok-4 as a template when these models are requested.
+function resolveXaiGrok41ForwardCompatModel(
+  provider: string,
+  modelId: string,
+  modelRegistry: ModelRegistry,
+): Model<Api> | undefined {
+  if (normalizeProviderId(provider) !== "xai") {
+    return undefined;
+  }
+  const trimmed = modelId.trim();
+  const lower = trimmed.toLowerCase();
+
+  // Determine context window and reasoning based on model variant
+  let contextWindow: number;
+  let reasoning: boolean;
+
+  if (lower.startsWith(XAI_GROK_41_FAST_PREFIX) || lower.startsWith(XAI_GROK_4_FAST_PREFIX)) {
+    contextWindow = XAI_GROK_41_CONTEXT_WINDOW;
+    reasoning = !lower.includes("non-reasoning");
+  } else if (lower.startsWith(XAI_GROK_CODE_FAST_PREFIX)) {
+    contextWindow = XAI_GROK_CODE_FAST_CONTEXT_WINDOW;
+    reasoning = true;
+  } else {
+    return undefined;
+  }
+
+  // Try to find grok-4 as template
+  const template = modelRegistry.find("xai", XAI_GROK_TEMPLATE_MODEL_ID) as Model<Api> | null;
+  if (template) {
+    return normalizeModelCompat({
+      ...template,
+      id: trimmed,
+      name: trimmed,
+      reasoning,
+      contextWindow,
+    } as Model<Api>);
+  }
+
+  // Fallback: create synthetic model definition
+  return normalizeModelCompat({
+    id: trimmed,
+    name: trimmed,
+    api: "openai-completions",
+    provider: "xai",
+    baseUrl: "https://api.x.ai/v1",
+    reasoning,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow,
+    maxTokens: 8192,
+  } as Model<Api>);
+}
+
 // Z.ai's GLM-5 may not be present in pi-ai's built-in model catalog yet.
 // When a user configures zai/glm-5 without a models.json entry, clone glm-4.7 as a forward-compat fallback.
 function resolveZaiGlm5ForwardCompatModel(
@@ -251,6 +314,7 @@ export function resolveForwardCompatModel(
     resolveOpenAICodexGpt53FallbackModel(provider, modelId, modelRegistry) ??
     resolveAnthropicOpus46ForwardCompatModel(provider, modelId, modelRegistry) ??
     resolveAnthropicSonnet46ForwardCompatModel(provider, modelId, modelRegistry) ??
+    resolveXaiGrok41ForwardCompatModel(provider, modelId, modelRegistry) ??
     resolveZaiGlm5ForwardCompatModel(provider, modelId, modelRegistry) ??
     resolveGoogleGeminiCli31ForwardCompatModel(provider, modelId, modelRegistry)
   );

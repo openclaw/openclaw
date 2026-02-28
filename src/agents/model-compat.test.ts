@@ -226,4 +226,63 @@ describe("resolveForwardCompatModel", () => {
     const model = resolveForwardCompatModel("openai", "claude-opus-4-6", registry);
     expect(model).toBeUndefined();
   });
+
+  it("resolves xai grok-4-1-fast-reasoning via grok-4 template", () => {
+    const registry = createRegistry({
+      "xai/grok-4": createTemplateModel("xai", "grok-4"),
+    });
+    const model = resolveForwardCompatModel("xai", "grok-4-1-fast-reasoning", registry);
+    expect(model?.id).toBe("grok-4-1-fast-reasoning");
+    expect(model?.name).toBe("grok-4-1-fast-reasoning");
+    expect(model?.provider).toBe("xai");
+    expect(model?.reasoning).toBe(true);
+    expect(model?.contextWindow).toBe(2000000);
+  });
+
+  it("resolves xai grok-4-1-fast-non-reasoning with reasoning=false", () => {
+    const registry = createRegistry({
+      "xai/grok-4": createTemplateModel("xai", "grok-4"),
+    });
+    const model = resolveForwardCompatModel("xai", "grok-4-1-fast-non-reasoning", registry);
+    expect(model?.id).toBe("grok-4-1-fast-non-reasoning");
+    expect(model?.reasoning).toBe(false);
+    expect(model?.contextWindow).toBe(2000000);
+  });
+
+  it("resolves xai grok-4-fast-reasoning via grok-4 template", () => {
+    const registry = createRegistry({
+      "xai/grok-4": createTemplateModel("xai", "grok-4"),
+    });
+    const model = resolveForwardCompatModel("xai", "grok-4-fast-reasoning", registry);
+    expect(model?.id).toBe("grok-4-fast-reasoning");
+    expect(model?.reasoning).toBe(true);
+    expect(model?.contextWindow).toBe(2000000);
+  });
+
+  it("resolves xai grok-code-fast-1 with 256K context", () => {
+    const registry = createRegistry({
+      "xai/grok-4": createTemplateModel("xai", "grok-4"),
+    });
+    const model = resolveForwardCompatModel("xai", "grok-code-fast-1", registry);
+    expect(model?.id).toBe("grok-code-fast-1");
+    expect(model?.reasoning).toBe(true);
+    expect(model?.contextWindow).toBe(256000);
+  });
+
+  it("resolves xai grok-4-1-fast without template using synthetic fallback", () => {
+    const registry = createRegistry({});
+    const model = resolveForwardCompatModel("xai", "grok-4-1-fast-reasoning", registry);
+    expect(model?.id).toBe("grok-4-1-fast-reasoning");
+    expect(model?.provider).toBe("xai");
+    expect(model?.reasoning).toBe(true);
+    expect(model?.contextWindow).toBe(2000000);
+  });
+
+  it("does not resolve xai grok-4-1 for other providers", () => {
+    const registry = createRegistry({
+      "xai/grok-4": createTemplateModel("xai", "grok-4"),
+    });
+    const model = resolveForwardCompatModel("anthropic", "grok-4-1-fast-reasoning", registry);
+    expect(model).toBeUndefined();
+  });
 });
