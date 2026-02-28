@@ -197,6 +197,33 @@ export async function startGatewayServer(
   port = 18789,
   opts: GatewayServerOptions = {},
 ): Promise<GatewayServer> {
+  // Fast preflight: check default loopback port before any initialization.
+  // This catches the most common conflict case (duplicate gateway on same host)
+  // with zero startup cost. A second precise probe runs after config resolution
+  // to cover non-loopback bind addresses.
+  const preflightHost = opts.host ?? "127.0.0.1";
+  await new Promise<void>((resolve, reject) => {
+    const probe = net.createServer();
+    probe.once("error", (err: NodeJS.ErrnoException) => {
+      if (err.code === "EADDRINUSE") {
+        reject(
+          new GatewayLockError(
+            `another gateway instance is already listening on ws://${preflightHost}:${port}`,
+            err,
+          ),
+        );
+      } else {
+        // Non-port errors (e.g. permission denied) — don't block startup,
+        // let the real bind attempt handle it with full context.
+        resolve();
+      }
+    });
+    probe.once("listening", () => {
+      probe.close(() => resolve());
+    });
+    probe.listen(port, preflightHost);
+  });
+
   const minimalTestGateway =
     process.env.VITEST === "1" && process.env.OPENCLAW_TEST_MINIMAL_GATEWAY === "1";
 
@@ -429,29 +456,30 @@ export async function startGatewayServer(
   let hooksConfig = runtimeConfig.hooksConfig;
   const canvasHostEnabled = runtimeConfig.canvasHostEnabled;
 
-  // Fail fast: check port availability before heavy runtime state initialization.
-  // Without this, a port conflict + systemd Restart=always creates an infinite
-  // crash loop that can exhaust system resources and kill the host VM.
-  // Uses the resolved bindHost so the probe matches the actual bind address.
-  await new Promise<void>((resolve, reject) => {
-    const probe = net.createServer();
-    probe.once("error", (err: NodeJS.ErrnoException) => {
-      if (err.code === "EADDRINUSE") {
-        reject(
-          new GatewayLockError(
-            `another gateway instance is already listening on ws://${bindHost}:${port}`,
-            err,
-          ),
-        );
-      } else {
-        reject(err);
-      }
+  // Precise port probe: now that we know the actual bindHost from config,
+  // verify the target address is free before creating the heavy runtime state.
+  // Skipped if bindHost matches the preflight check we already did above.
+  if (bindHost !== preflightHost) {
+    await new Promise<void>((resolve, reject) => {
+      const probe = net.createServer();
+      probe.once("error", (err: NodeJS.ErrnoException) => {
+        if (err.code === "EADDRINUSE") {
+          reject(
+            new GatewayLockError(
+              `another gateway instance is already listening on ws://${bindHost}:${port}`,
+              err,
+            ),
+          );
+        } else {
+          reject(err);
+        }
+      });
+      probe.once("listening", () => {
+        probe.close(() => resolve());
+      });
+      probe.listen(port, bindHost);
     });
-    probe.once("listening", () => {
-      probe.close(() => resolve());
-    });
-    probe.listen(port, bindHost);
-  });
+  }
 
   // Create auth rate limiters used by connect/auth flows.
   const rateLimitConfig = cfgAtStart.gateway?.auth?.rateLimit;
