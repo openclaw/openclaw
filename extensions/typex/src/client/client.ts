@@ -1,7 +1,8 @@
-import { OpenClawConfig, WizardPrompter } from "openclaw/plugin-sdk";
+import { fetchWithSsrFGuard, OpenClawConfig, WizardPrompter } from "openclaw/plugin-sdk";
 import { TypeXMessageEnum, type TypeXClientOptions } from "./types.js";
 
 const TYPEX_DOMAIN = "https://api-coco.typex.im";
+const TYPEX_ALLOWED_HOSTNAMES = ["api-coco.typex.im"] as const;
 
 let prompter: WizardPrompter | undefined;
 
@@ -33,20 +34,30 @@ export class TypeXClient {
 
   async fetchQrcodeUrl() {
     try {
-      const qrResponse = await fetch(`${TYPEX_DOMAIN}/user/qrcode?login_type=open`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({}),
+      const { response: qrResponse, release } = await fetchWithSsrFGuard({
+        url: `${TYPEX_DOMAIN}/user/qrcode?login_type=open`,
+        init: {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({}),
+        },
+        policy: { allowedHostnames: [...TYPEX_ALLOWED_HOSTNAMES] },
+        auditContext: "typex.fetchQrcodeUrl",
       });
-      if (!qrResponse.ok) {
-        throw new Error(`Failed to get QR code: ${qrResponse.statusText}`);
-      }
-      const qrResult = await qrResponse.json();
-      if (qrResult.code !== 0 || !qrResult.data) {
-        throw new Error(`Failed to get QR code: ${qrResult.msg}`);
-      }
 
-      return qrResult.data;
+      try {
+        if (!qrResponse.ok) {
+          throw new Error(`Failed to get QR code: ${qrResponse.statusText}`);
+        }
+        const qrResult = await qrResponse.json();
+        if (qrResult.code !== 0 || !qrResult.data) {
+          throw new Error(`Failed to get QR code: ${qrResult.msg}`);
+        }
+
+        return qrResult.data;
+      } finally {
+        await release();
+      }
     } catch (error) {
       throw error;
     }
@@ -54,33 +65,43 @@ export class TypeXClient {
 
   async checkLoginStatus(qrcodeId: string) {
     try {
-      const checkRes = await fetch(`${TYPEX_DOMAIN}/open/qrcode/check_auth`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
+      const { response: checkRes, release } = await fetchWithSsrFGuard({
+        url: `${TYPEX_DOMAIN}/open/qrcode/check_auth`,
+        init: {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            qr_code_id: qrcodeId,
+          }),
         },
-        body: JSON.stringify({
-          qr_code_id: qrcodeId,
-        }),
+        policy: { allowedHostnames: [...TYPEX_ALLOWED_HOSTNAMES] },
+        auditContext: "typex.checkLoginStatus",
       });
-      const setCookieHeader = checkRes.headers.get("set-cookie");
 
-      if (setCookieHeader) {
-        const match = setCookieHeader.match(/(sessionid=[^;]+)/);
+      try {
+        const setCookieHeader = checkRes.headers.get("set-cookie");
 
-        if (match && match[1]) {
-          this.accessToken = match[1];
+        if (setCookieHeader) {
+          const match = setCookieHeader.match(/(sessionid=[^;]+)/);
+
+          if (match && match[1]) {
+            this.accessToken = match[1];
+          }
         }
-      }
-      const checkData = await checkRes.json();
-      if (checkData.code === 0) {
-        const { user_id } = checkData.data;
-        this.userId = user_id;
-        return true;
-      } else if (checkData.code === 10001) {
-        return false;
-      } else {
-        return false;
+        const checkData = await checkRes.json();
+        if (checkData.code === 0) {
+          const { user_id } = checkData.data;
+          this.userId = user_id;
+          return true;
+        } else if (checkData.code === 10001) {
+          return false;
+        } else {
+          return false;
+        }
+      } finally {
+        await release();
       }
     } catch (error) {
       throw error;
@@ -117,33 +138,43 @@ export class TypeXClient {
 
     try {
       const url = `${TYPEX_DOMAIN}/open/claw/send_message`;
-      const response = await fetch(url, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Cookie: token,
-        },
-        body: JSON.stringify({
-          content: {
-            text: finalContent,
+      const { response, release } = await fetchWithSsrFGuard({
+        url,
+        init: {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Cookie: token,
           },
-          msg_type: msgType,
-        }),
+          body: JSON.stringify({
+            content: {
+              text: finalContent,
+            },
+            msg_type: msgType,
+          }),
+        },
+        policy: { allowedHostnames: [...TYPEX_ALLOWED_HOSTNAMES] },
+        auditContext: "typex.sendMessage",
       });
-      const resJson = await response.json();
 
-      if (resJson.code !== 0) {
-        throw new Error(`Send message failed: [${resJson.code}] ${resJson.message}`);
-      }
+      try {
+        const resJson = await response.json();
 
-      if (prompter) prompter.note("Message sent successfully", resJson.data);
-      else console.log("Message sent successfully", JSON.stringify(resJson.data));
-
-      return (
-        resJson.data || {
-          message_id: `msg_${Date.now()}`,
+        if (resJson.code !== 0) {
+          throw new Error(`Send message failed: [${resJson.code}] ${resJson.message}`);
         }
-      );
+
+        if (prompter) prompter.note("Message sent successfully", resJson.data);
+        else console.log("Message sent successfully", JSON.stringify(resJson.data));
+
+        return (
+          resJson.data || {
+            message_id: `msg_${Date.now()}`,
+          }
+        );
+      } finally {
+        await release();
+      }
     } catch (error) {
       if (prompter) prompter.note(`Error sending message to TypeX API: ${error}`);
       else console.log(`Error sending message to TypeX API: ${error}`);
@@ -162,27 +193,36 @@ export class TypeXClient {
       const url = `${TYPEX_DOMAIN}/open/claw/message`;
       if (prompter) prompter.note(`Fetching messages from pos: ${pos}`);
       // else console.log(`Fetching messages from pos: ${pos}`);
-      const response = await fetch(url, {
-        method: "POST",
-        headers: {
-          Cookie: this.accessToken,
-          "Content-Type": "application/json",
+      const { response, release } = await fetchWithSsrFGuard({
+        url,
+        init: {
+          method: "POST",
+          headers: {
+            Cookie: this.accessToken,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ pos: pos }),
         },
-        body: JSON.stringify({ pos: pos }),
+        policy: { allowedHostnames: [...TYPEX_ALLOWED_HOSTNAMES] },
+        auditContext: "typex.fetchMessages",
       });
 
-      const resJson = await response.json();
+      try {
+        const resJson = await response.json();
 
-      if (resJson.code !== 0) {
-        if (prompter) prompter.note(`Fetch failed with code ${resJson.code}: ${resJson.message}`);
-        else console.log(`Fetch failed with code ${resJson.code}: ${resJson.message}`);
+        if (resJson.code !== 0) {
+          if (prompter) prompter.note(`Fetch failed with code ${resJson.code}: ${resJson.message}`);
+          else console.log(`Fetch failed with code ${resJson.code}: ${resJson.message}`);
+          return [];
+        }
+        if (Array.isArray(resJson.data)) {
+          return resJson.data;
+        }
+
         return [];
+      } finally {
+        await release();
       }
-      if (Array.isArray(resJson.data)) {
-        return resJson.data;
-      }
-
-      return [];
     } catch (e) {
       if (prompter) prompter.note(`Fetch messages network error: ${e}`);
       else console.log(`Fetch messages network error: ${e}`);
