@@ -27,6 +27,16 @@ vi.mock("../../ui/src/ui/device-identity.ts", () => ({
 
 import { GatewayBrowserClient } from "../../ui/src/ui/gateway.ts";
 
+type GatewayBrowserClientPrivate = GatewayBrowserClient & {
+  request: (method: string, params?: unknown) => Promise<unknown>;
+  sendConnect: () => Promise<void>;
+  lastGoodAuthToken?: string;
+};
+
+function asClientPrivate(client: GatewayBrowserClient): GatewayBrowserClientPrivate {
+  return client as unknown as GatewayBrowserClientPrivate;
+}
+
 describe("GatewayBrowserClient reconnect auth", () => {
   beforeEach(() => {
     loadDeviceAuthTokenMock.mockReset();
@@ -51,38 +61,46 @@ describe("GatewayBrowserClient reconnect auth", () => {
       updatedAtMs: Date.now(),
     });
 
-    const client = new GatewayBrowserClient({
-      url: "ws://127.0.0.1:18789",
-      token: "shared-token",
-    });
+    const client = asClientPrivate(
+      new GatewayBrowserClient({
+        url: "ws://127.0.0.1:18789",
+        token: "shared-token",
+      }),
+    );
 
-    let connectParams: any;
-    (client as any).request = vi.fn(async (_method: string, params: unknown) => {
+    let connectParams: unknown;
+    client.request = vi.fn(async (_method: string, params: unknown) => {
       connectParams = params;
       return { type: "hello-ok", protocol: 3 };
     });
 
-    await (client as any).sendConnect();
+    await client.sendConnect();
 
-    expect(connectParams?.auth?.token).toBe("shared-token");
+    expect((connectParams as { auth?: { token?: string } } | undefined)?.auth?.token).toBe(
+      "shared-token",
+    );
   });
 
   it("reuses last known good token when current sources are unavailable", async () => {
     loadDeviceAuthTokenMock.mockReturnValue(null);
 
-    const client = new GatewayBrowserClient({
-      url: "ws://127.0.0.1:18789",
-    });
-    (client as any).lastGoodAuthToken = "cached-token";
+    const client = asClientPrivate(
+      new GatewayBrowserClient({
+        url: "ws://127.0.0.1:18789",
+      }),
+    );
+    client.lastGoodAuthToken = "cached-token";
 
-    let connectParams: any;
-    (client as any).request = vi.fn(async (_method: string, params: unknown) => {
+    let connectParams: unknown;
+    client.request = vi.fn(async (_method: string, params: unknown) => {
       connectParams = params;
       return { type: "hello-ok", protocol: 3 };
     });
 
-    await (client as any).sendConnect();
+    await client.sendConnect();
 
-    expect(connectParams?.auth?.token).toBe("cached-token");
+    expect((connectParams as { auth?: { token?: string } } | undefined)?.auth?.token).toBe(
+      "cached-token",
+    );
   });
 });
