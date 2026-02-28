@@ -9,8 +9,6 @@ const WINDOWS_WATCH_ARGS = [
   "run",
   "--bind",
   "loopback",
-  "--port",
-  "18789",
   "--allow-unconfigured",
 ];
 const DEFAULT_WATCH_ARGS = ["gateway", "--force"];
