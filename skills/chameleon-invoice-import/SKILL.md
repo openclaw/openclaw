@@ -13,17 +13,22 @@ Process emails matching:
 ## What This Skill Does
 
 1. **Extracts** payout data from Chameleon Collective invoice confirmation emails
-2. **Classifies** the invoice type:
+2. **Checks** if an invoice with this number already exists in QuickBooks
+   - If duplicate found: sends abort notification email and stops processing
+3. **Classifies** the invoice type:
    - **Scenario A**: John has a primary consulting/referral section → creates invoice with Op Fee
    - **Scenario B**: Commission-only from other consultants → creates invoice with just commissions
-3. **Calculates** the appropriate Chameleon Collective Op Fee:
+4. **Calculates** the appropriate Chameleon Collective Op Fee:
    - **8%** for Consulting work
    - **20%** for Solution Partner Referral work
-4. **Creates** a properly formatted QuickBooks invoice with:
+5. **Creates** a properly formatted QuickBooks invoice with:
    - All relevant line items (consulting, commissions)
    - Negative Op Fee line
    - Correct client name in memo
    - Net 30 payment terms
+6. **Sends confirmation email** to john.schneider@chameleon.co with:
+   - Invoice summary
+   - Link to view invoice in QuickBooks Online
 
 ## QuickBooks Invoice Structure
 
@@ -40,11 +45,29 @@ Process emails matching:
 
 ## Key Business Rules
 
-1. **Op Fee is calculated ONLY on John's primary section** (not on commissions from others)
-2. **Skip $0.00 line items** and items where John is not the recipient
-3. **Use the invoice number from the email** as the QuickBooks invoice number
-4. **Due date is Invoice Date + 30 days** (not the due date from the email)
-5. **Commission percentages** vary by project (5%, 7.5%, etc.) - extract from email
+1. **Check for duplicate invoices** before creating - abort if invoice number already exists
+2. **Op Fee is calculated ONLY on John's primary section** (not on commissions from others)
+3. **Skip $0.00 line items** and items where John is not the recipient
+4. **Use the invoice number from the email** as the QuickBooks invoice number
+5. **Due date is Invoice Date + 30 days** (not the due date from the email)
+6. **Commission percentages** vary by project (5%, 7.5%, etc.) - extract from email
+
+## Email Notifications
+
+**Duplicate Invoice Detected**:
+
+- **To**: john.schneider@chameleon.co
+- **Subject**: Duplicate Invoice Detected: [Invoice Number]
+- **Body**: Summarize the invoice details and note that processing was aborted due to existing invoice
+
+**Invoice Created Successfully**:
+
+- **To**: john.schneider@chameleon.co
+- **Subject**: QuickBooks Invoice Created: [Invoice Number]
+- **Body**:
+  - Invoice summary (client, amount, line items)
+  - Direct link to view invoice in QuickBooks Online
+  - Invoice date and due date
 
 ## Detailed Documentation
 
