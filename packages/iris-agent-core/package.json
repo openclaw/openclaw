@@ -1,6 +1,6 @@
 {
   "name": "@mariozechner/pi-agent-core",
-  "version": "0.54.1-iris.1",
+  "version": "0.55.1-iris.1",
   "description": "iris-claw fork of pi-agent-core — parallel tool execution engine",
   "files": [
     "dist",
