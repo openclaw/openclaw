@@ -136,6 +136,8 @@ export function evaluateRuntimeEligibility(
     hasBin: params.hasBin,
     hasRemoteBin: params.hasRemoteBin,
     hasAnyRemoteBin: params.hasAnyRemoteBin,
+    hasSandboxBin: params.hasSandboxBin,
+    hasAnySandboxBin: params.hasAnySandboxBin,
     hasEnv: params.hasEnv,
     isConfigPathTruthy: params.isConfigPathTruthy,
   });
