@@ -1345,9 +1345,9 @@ export async function handleFeishuMessage(params: {
         } else {
           // Observer agent: no-op dispatcher (session entry + inference, no Feishu reply)
           const noopDispatcher = {
-            sendToolResult: async () => {},
-            sendBlockReply: async () => {},
-            sendFinalReply: async () => {},
+            sendToolResult: () => false,
+            sendBlockReply: () => false,
+            sendFinalReply: () => false,
             waitForIdle: async () => {},
             getQueuedCounts: () => ({ tool: 0, block: 0, final: 0 }),
             markComplete: () => {},
