@@ -1,0 +1,24 @@
+{
+  "id": "openfort",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "secretKey": {
+        "type": "string",
+        "description": "Openfort API secret key (sk_live_... or sk_test_...)"
+      },
+      "walletSecret": {
+        "type": "string",
+        "description": "Openfort wallet secret (ws_...)"
+      },
+      "network": {
+        "type": "string",
+        "enum": ["base", "base-sepolia", "solana"],
+        "default": "base-sepolia",
+        "description": "Network to use for wallet operations"
+      }
+    },
+    "required": ["secretKey", "walletSecret"]
+  }
+}
