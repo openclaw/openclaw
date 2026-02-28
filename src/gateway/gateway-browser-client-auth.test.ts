@@ -27,7 +27,7 @@ vi.mock("../../ui/src/ui/device-identity.ts", () => ({
 
 import { GatewayBrowserClient } from "../../ui/src/ui/gateway.ts";
 
-type GatewayBrowserClientPrivate = GatewayBrowserClient & {
+type GatewayBrowserClientPrivate = {
   request: (method: string, params?: unknown) => Promise<unknown>;
   sendConnect: () => Promise<void>;
   lastGoodAuthToken?: string;
