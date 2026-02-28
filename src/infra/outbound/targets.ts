@@ -227,6 +227,18 @@ export function resolveOutboundTarget(params: {
   }
 
   if (effectiveTo) {
+    // When no custom resolveTarget exists, enforce allowFrom here so channels
+    // without a resolver (e.g. Telegram/Slack/Signal/iMessage) cannot bypass
+    // the allowlist by returning ok for any explicit target.
+    if (allowFrom && allowFrom.length > 0 && !allowFrom.includes("*")) {
+      if (!allowFrom.includes(effectiveTo)) {
+        const hint = plugin.messaging?.targetResolver?.hint;
+        return {
+          ok: false,
+          error: missingTargetError(plugin.meta.label ?? params.channel, hint),
+        };
+      }
+    }
     return { ok: true, to: effectiveTo };
   }
   const hint = plugin.messaging?.targetResolver?.hint;

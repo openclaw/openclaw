@@ -66,6 +66,62 @@ describe("resolveOutboundTarget defaultTo config fallback", () => {
   });
 });
 
+describe("resolveOutboundTarget allowFrom fallback enforcement", () => {
+  installResolveOutboundTargetPluginRegistryHooks();
+
+  it("rejects telegram target not in allowFrom list", () => {
+    const cfg: OpenClawConfig = {
+      channels: { telegram: { allowFrom: ["111111111"] } },
+    };
+    const res = resolveOutboundTarget({
+      channel: "telegram",
+      to: "999999999",
+      cfg,
+      mode: "explicit",
+    });
+    expect(res.ok).toBe(false);
+  });
+
+  it("allows telegram target that matches allowFrom entry", () => {
+    const cfg: OpenClawConfig = {
+      channels: { telegram: { allowFrom: ["111111111"] } },
+    };
+    const res = resolveOutboundTarget({
+      channel: "telegram",
+      to: "111111111",
+      cfg,
+      mode: "explicit",
+    });
+    expect(res).toEqual({ ok: true, to: "111111111" });
+  });
+
+  it("allows telegram target when allowFrom contains wildcard", () => {
+    const cfg: OpenClawConfig = {
+      channels: { telegram: { allowFrom: ["*"] } },
+    };
+    const res = resolveOutboundTarget({
+      channel: "telegram",
+      to: "999999999",
+      cfg,
+      mode: "explicit",
+    });
+    expect(res).toEqual({ ok: true, to: "999999999" });
+  });
+
+  it("allows telegram target when no allowFrom is configured", () => {
+    const cfg: OpenClawConfig = {
+      channels: { telegram: {} },
+    };
+    const res = resolveOutboundTarget({
+      channel: "telegram",
+      to: "123456789",
+      cfg,
+      mode: "explicit",
+    });
+    expect(res).toEqual({ ok: true, to: "123456789" });
+  });
+});
+
 describe("resolveSessionDeliveryTarget", () => {
   const expectImplicitRoute = (
     resolved: SessionDeliveryTarget,
