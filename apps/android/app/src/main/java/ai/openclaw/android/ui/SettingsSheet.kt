@@ -4,6 +4,8 @@ import android.Manifest
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.hardware.Sensor
+import android.hardware.SensorManager
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
@@ -66,6 +68,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import ai.openclaw.android.BuildConfig
 import ai.openclaw.android.LocationMode
 import ai.openclaw.android.MainViewModel
+import ai.openclaw.android.node.DeviceNotificationListenerService
 
 @Composable
 fun SettingsSheet(viewModel: MainViewModel) {
@@ -162,6 +165,91 @@ fun SettingsSheet(viewModel: MainViewModel) {
     remember {
       context.packageManager?.hasSystemFeature(PackageManager.FEATURE_TELEPHONY) == true
     }
+  val photosPermission =
+    if (Build.VERSION.SDK_INT >= 33) {
+      Manifest.permission.READ_MEDIA_IMAGES
+    } else {
+      Manifest.permission.READ_EXTERNAL_STORAGE
+    }
+  val motionPermissionRequired = Build.VERSION.SDK_INT >= 29
+  val motionAvailable = remember(context) { hasMotionCapabilities(context) }
+
+  var notificationsPermissionGranted by
+    remember {
+      mutableStateOf(hasNotificationsPermission(context))
+    }
+  val notificationsPermissionLauncher =
+    rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+      notificationsPermissionGranted = granted
+    }
+
+  var notificationListenerEnabled by
+    remember {
+      mutableStateOf(isNotificationListenerEnabled(context))
+    }
+
+  var photosPermissionGranted by
+    remember {
+      mutableStateOf(
+        ContextCompat.checkSelfPermission(context, photosPermission) ==
+          PackageManager.PERMISSION_GRANTED,
+      )
+    }
+  val photosPermissionLauncher =
+    rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+      photosPermissionGranted = granted
+    }
+
+  var contactsPermissionGranted by
+    remember {
+      mutableStateOf(
+        ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CONTACTS) ==
+          PackageManager.PERMISSION_GRANTED &&
+          ContextCompat.checkSelfPermission(context, Manifest.permission.WRITE_CONTACTS) ==
+          PackageManager.PERMISSION_GRANTED,
+      )
+    }
+  val contactsPermissionLauncher =
+    rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { perms ->
+      val readOk = perms[Manifest.permission.READ_CONTACTS] == true
+      val writeOk = perms[Manifest.permission.WRITE_CONTACTS] == true
+      contactsPermissionGranted = readOk && writeOk
+    }
+
+  var calendarPermissionGranted by
+    remember {
+      mutableStateOf(
+        ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CALENDAR) ==
+          PackageManager.PERMISSION_GRANTED &&
+          ContextCompat.checkSelfPermission(context, Manifest.permission.WRITE_CALENDAR) ==
+          PackageManager.PERMISSION_GRANTED,
+      )
+    }
+  val calendarPermissionLauncher =
+    rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { perms ->
+      val readOk = perms[Manifest.permission.READ_CALENDAR] == true
+      val writeOk = perms[Manifest.permission.WRITE_CALENDAR] == true
+      calendarPermissionGranted = readOk && writeOk
+    }
+
+  var motionPermissionGranted by
+    remember {
+      mutableStateOf(
+        !motionPermissionRequired ||
+          ContextCompat.checkSelfPermission(context, Manifest.permission.ACTIVITY_RECOGNITION) ==
+          PackageManager.PERMISSION_GRANTED,
+      )
+    }
+  val motionPermissionLauncher =
+    rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+      motionPermissionGranted = granted
+    }
+
+  var appUpdateInstallEnabled by
+    remember {
+      mutableStateOf(canInstallUnknownApps(context))
+    }
+
   var smsPermissionGranted by
     remember {
       mutableStateOf(
@@ -182,6 +270,26 @@ fun SettingsSheet(viewModel: MainViewModel) {
           micPermissionGranted =
             ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
               PackageManager.PERMISSION_GRANTED
+          notificationsPermissionGranted = hasNotificationsPermission(context)
+          notificationListenerEnabled = isNotificationListenerEnabled(context)
+          photosPermissionGranted =
+            ContextCompat.checkSelfPermission(context, photosPermission) ==
+              PackageManager.PERMISSION_GRANTED
+          contactsPermissionGranted =
+            ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CONTACTS) ==
+              PackageManager.PERMISSION_GRANTED &&
+              ContextCompat.checkSelfPermission(context, Manifest.permission.WRITE_CONTACTS) ==
+              PackageManager.PERMISSION_GRANTED
+          calendarPermissionGranted =
+            ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CALENDAR) ==
+              PackageManager.PERMISSION_GRANTED &&
+              ContextCompat.checkSelfPermission(context, Manifest.permission.WRITE_CALENDAR) ==
+              PackageManager.PERMISSION_GRANTED
+          motionPermissionGranted =
+            !motionPermissionRequired ||
+              ContextCompat.checkSelfPermission(context, Manifest.permission.ACTIVITY_RECOGNITION) ==
+              PackageManager.PERMISSION_GRANTED
+          appUpdateInstallEnabled = canInstallUnknownApps(context)
           smsPermissionGranted =
             ContextCompat.checkSelfPermission(context, Manifest.permission.SEND_SMS) ==
               PackageManager.PERMISSION_GRANTED
@@ -437,6 +545,254 @@ fun SettingsSheet(viewModel: MainViewModel) {
 
       item { HorizontalDivider(color = mobileBorder) }
 
+    // Notifications
+      item {
+        Text(
+          "NOTIFICATIONS",
+          style = mobileCaption1.copy(fontWeight = FontWeight.Bold, letterSpacing = 1.sp),
+          color = mobileAccent,
+        )
+      }
+      item {
+        val buttonLabel =
+          if (notificationsPermissionGranted) {
+            "Manage"
+          } else {
+            "Grant"
+          }
+        ListItem(
+          modifier = settingsRowModifier(),
+          colors = listItemColors,
+          headlineContent = { Text("System Notifications", style = mobileHeadline) },
+          supportingContent = {
+            Text(
+              "Required for `system.notify` and Android foreground service alerts.",
+              style = mobileCallout,
+            )
+          },
+          trailingContent = {
+            Button(
+              onClick = {
+                if (notificationsPermissionGranted || Build.VERSION.SDK_INT < 33) {
+                  openAppSettings(context)
+                } else {
+                  notificationsPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                }
+              },
+              colors = settingsPrimaryButtonColors(),
+              shape = RoundedCornerShape(14.dp),
+            ) {
+              Text(buttonLabel, style = mobileCallout.copy(fontWeight = FontWeight.Bold))
+            }
+          },
+        )
+      }
+      item {
+        ListItem(
+          modifier = settingsRowModifier(),
+          colors = listItemColors,
+          headlineContent = { Text("Notification Listener Access", style = mobileHeadline) },
+          supportingContent = {
+            Text(
+              "Required for `notifications.list` and `notifications.actions`.",
+              style = mobileCallout,
+            )
+          },
+          trailingContent = {
+            Button(
+              onClick = { openNotificationListenerSettings(context) },
+              colors = settingsPrimaryButtonColors(),
+              shape = RoundedCornerShape(14.dp),
+            ) {
+              Text(
+                if (notificationListenerEnabled) "Manage" else "Enable",
+                style = mobileCallout.copy(fontWeight = FontWeight.Bold),
+              )
+            }
+          },
+        )
+      }
+      item { HorizontalDivider(color = mobileBorder) }
+
+    // Data access
+      item {
+        Text(
+          "DATA ACCESS",
+          style = mobileCaption1.copy(fontWeight = FontWeight.Bold, letterSpacing = 1.sp),
+          color = mobileAccent,
+        )
+      }
+      item {
+        ListItem(
+          modifier = settingsRowModifier(),
+          colors = listItemColors,
+          headlineContent = { Text("Photos Permission", style = mobileHeadline) },
+          supportingContent = {
+            Text(
+              "Required for `photos.latest`.",
+              style = mobileCallout,
+            )
+          },
+          trailingContent = {
+            Button(
+              onClick = {
+                if (photosPermissionGranted) {
+                  openAppSettings(context)
+                } else {
+                  photosPermissionLauncher.launch(photosPermission)
+                }
+              },
+              colors = settingsPrimaryButtonColors(),
+              shape = RoundedCornerShape(14.dp),
+            ) {
+              Text(
+                if (photosPermissionGranted) "Manage" else "Grant",
+                style = mobileCallout.copy(fontWeight = FontWeight.Bold),
+              )
+            }
+          },
+        )
+      }
+      item {
+        ListItem(
+          modifier = settingsRowModifier(),
+          colors = listItemColors,
+          headlineContent = { Text("Contacts Permission", style = mobileHeadline) },
+          supportingContent = {
+            Text(
+              "Required for `contacts.search` and `contacts.add`.",
+              style = mobileCallout,
+            )
+          },
+          trailingContent = {
+            Button(
+              onClick = {
+                if (contactsPermissionGranted) {
+                  openAppSettings(context)
+                } else {
+                  contactsPermissionLauncher.launch(arrayOf(Manifest.permission.READ_CONTACTS, Manifest.permission.WRITE_CONTACTS))
+                }
+              },
+              colors = settingsPrimaryButtonColors(),
+              shape = RoundedCornerShape(14.dp),
+            ) {
+              Text(
+                if (contactsPermissionGranted) "Manage" else "Grant",
+                style = mobileCallout.copy(fontWeight = FontWeight.Bold),
+              )
+            }
+          },
+        )
+      }
+      item {
+        ListItem(
+          modifier = settingsRowModifier(),
+          colors = listItemColors,
+          headlineContent = { Text("Calendar Permission", style = mobileHeadline) },
+          supportingContent = {
+            Text(
+              "Required for `calendar.events` and `calendar.add`.",
+              style = mobileCallout,
+            )
+          },
+          trailingContent = {
+            Button(
+              onClick = {
+                if (calendarPermissionGranted) {
+                  openAppSettings(context)
+                } else {
+                  calendarPermissionLauncher.launch(arrayOf(Manifest.permission.READ_CALENDAR, Manifest.permission.WRITE_CALENDAR))
+                }
+              },
+              colors = settingsPrimaryButtonColors(),
+              shape = RoundedCornerShape(14.dp),
+            ) {
+              Text(
+                if (calendarPermissionGranted) "Manage" else "Grant",
+                style = mobileCallout.copy(fontWeight = FontWeight.Bold),
+              )
+            }
+          },
+        )
+      }
+      item {
+        val motionButtonLabel =
+          when {
+            !motionAvailable -> "Unavailable"
+            !motionPermissionRequired -> "Manage"
+            motionPermissionGranted -> "Manage"
+            else -> "Grant"
+          }
+        ListItem(
+          modifier = settingsRowModifier(),
+          colors = listItemColors,
+          headlineContent = { Text("Motion Permission", style = mobileHeadline) },
+          supportingContent = {
+            Text(
+              if (!motionAvailable) {
+                "This device does not expose accelerometer or step-counter motion sensors."
+              } else {
+                "Required for `motion.activity` and `motion.pedometer`."
+              },
+              style = mobileCallout,
+            )
+          },
+          trailingContent = {
+            Button(
+              onClick = {
+                if (!motionAvailable) return@Button
+                if (!motionPermissionRequired || motionPermissionGranted) {
+                  openAppSettings(context)
+                } else {
+                  motionPermissionLauncher.launch(Manifest.permission.ACTIVITY_RECOGNITION)
+                }
+              },
+              enabled = motionAvailable,
+              colors = settingsPrimaryButtonColors(),
+              shape = RoundedCornerShape(14.dp),
+            ) {
+              Text(motionButtonLabel, style = mobileCallout.copy(fontWeight = FontWeight.Bold))
+            }
+          },
+        )
+      }
+      item { HorizontalDivider(color = mobileBorder) }
+
+    // System
+      item {
+        Text(
+          "SYSTEM",
+          style = mobileCaption1.copy(fontWeight = FontWeight.Bold, letterSpacing = 1.sp),
+          color = mobileAccent,
+        )
+      }
+      item {
+        ListItem(
+          modifier = settingsRowModifier(),
+          colors = listItemColors,
+          headlineContent = { Text("Install App Updates", style = mobileHeadline) },
+          supportingContent = {
+            Text(
+              "Enable install access for `app.update` package installs.",
+              style = mobileCallout,
+            )
+          },
+          trailingContent = {
+            Button(
+              onClick = { openUnknownAppSourcesSettings(context) },
+              colors = settingsPrimaryButtonColors(),
+              shape = RoundedCornerShape(14.dp),
+            ) {
+              Text(
+                if (appUpdateInstallEnabled) "Manage" else "Enable",
+                style = mobileCallout.copy(fontWeight = FontWeight.Bold),
+              )
+            }
+          },
+        )
+      }
+      item { HorizontalDivider(color = mobileBorder) }
+
     // Location
       item {
         Text(
@@ -602,4 +958,51 @@ private fun openAppSettings(context: Context) {
       Uri.fromParts("package", context.packageName, null),
     )
   context.startActivity(intent)
+}
+
+private fun openNotificationListenerSettings(context: Context) {
+  val intent = Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)
+  runCatching {
+    context.startActivity(intent)
+  }.getOrElse {
+    openAppSettings(context)
+  }
+}
+
+private fun openUnknownAppSourcesSettings(context: Context) {
+  if (Build.VERSION.SDK_INT < 26) {
+    openAppSettings(context)
+    return
+  }
+  val intent =
+    Intent(
+      Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+      Uri.parse("package:${context.packageName}"),
+    )
+  runCatching {
+    context.startActivity(intent)
+  }.getOrElse {
+    openAppSettings(context)
+  }
+}
+
+private fun hasNotificationsPermission(context: Context): Boolean {
+  if (Build.VERSION.SDK_INT < 33) return true
+  return ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) ==
+    PackageManager.PERMISSION_GRANTED
+}
+
+private fun isNotificationListenerEnabled(context: Context): Boolean {
+  return DeviceNotificationListenerService.isAccessEnabled(context)
+}
+
+private fun canInstallUnknownApps(context: Context): Boolean {
+  if (Build.VERSION.SDK_INT < 26) return true
+  return context.packageManager.canRequestPackageInstalls()
+}
+
+private fun hasMotionCapabilities(context: Context): Boolean {
+  val sensorManager = context.getSystemService(SensorManager::class.java) ?: return false
+  return sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER) != null ||
+    sensorManager.getDefaultSensor(Sensor.TYPE_STEP_COUNTER) != null
 }
