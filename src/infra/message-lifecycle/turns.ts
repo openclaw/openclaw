@@ -303,12 +303,8 @@ export function acceptTurn(
   const db = getLifecycleDb(opts?.stateDir);
   const id = opts?.turnId?.trim() || generateSecureUuid();
   const now = Date.now();
-  // Keep durable turn tracking enabled while deferring persistent dedupe to the
-  // existing inbound dedupe path until per-channel message identity semantics
-  // are fully normalized (for example callback/query ids vs message ids).
-  const disablePersistentDedupe = true;
-  const dedupeKey = disablePersistentDedupe ? undefined : (buildInboundDedupeKey(ctx) ?? undefined);
-  const externalId = disablePersistentDedupe ? null : ctx.MessageSid?.trim() || null;
+  const dedupeKey = buildInboundDedupeKey(ctx) ?? undefined;
+  const externalId = ctx.MessageSid?.trim() || null;
   const channel = String(ctx.OriginatingChannel ?? ctx.Surface ?? ctx.Provider ?? "").toLowerCase();
   const accountId = ctx.AccountId?.trim() ?? "";
   const sessionKey = ctx.SessionKey?.trim() ?? "";
