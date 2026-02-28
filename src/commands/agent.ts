@@ -312,6 +312,27 @@ export async function agentCommand(
     persistedThinking,
     persistedVerbose,
   } = sessionResolution;
+
+  const runId = opts.runId?.trim() || sessionId;
+  const startedAt = Date.now();
+
+  // Register and emit start event as early as possible for low latency feedback
+  if (sessionKey) {
+    registerAgentRunContext(runId, {
+      sessionKey,
+    });
+    if (!opts.skipStartEvent) {
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: {
+          phase: "start",
+          startedAt,
+        },
+      });
+    }
+  }
+
   const sessionAgentId =
     agentIdOverride ??
     resolveSessionAgentId({
@@ -331,7 +352,6 @@ export async function agentCommand(
   });
   const workspaceDir = workspace.dir;
   let sessionEntry = resolvedSessionEntry;
-  const runId = opts.runId?.trim() || sessionId;
   const acpManager = getAcpSessionManager();
   const acpResolution = sessionKey
     ? acpManager.resolveSession({
@@ -359,19 +379,6 @@ export async function agentCommand(
     }
 
     if (acpResolution?.kind === "ready" && sessionKey) {
-      const startedAt = Date.now();
-      registerAgentRunContext(runId, {
-        sessionKey,
-      });
-      emitAgentEvent({
-        runId,
-        stream: "lifecycle",
-        data: {
-          phase: "start",
-          startedAt,
-        },
-      });
-
       let streamedText = "";
       let stopReason: string | undefined;
       try {
@@ -694,7 +701,6 @@ export async function agentCommand(
       sessionEntry = resolvedSessionFile.sessionEntry;
     }
 
-    const startedAt = Date.now();
     let lifecycleEnded = false;
 
     let result: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;

@@ -22,6 +22,7 @@ function setProcessTitleForCommand(actionCommand: Command) {
 
 // Commands that need channel plugins loaded
 const PLUGIN_REQUIRED_COMMANDS = new Set([
+  "agent",
   "message",
   "channels",
   "directory",
