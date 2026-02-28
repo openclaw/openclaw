@@ -237,9 +237,12 @@ function resolveFeishuGroupSession(params: {
     feishuCfg?.groupSessionScope ??
     (legacyTopicSessionMode === "enabled" ? "group_topic" : "group");
 
+  // Keep topic session keys stable across the "first turn creates thread" flow:
+  // first turn may only have message_id, while the next turn carries root_id/thread_id.
+  // Prefer root_id first so both turns stay on the same peer key.
   const topicScope =
     groupSessionScope === "group_topic" || groupSessionScope === "group_topic_sender"
-      ? (normalizedThreadId ?? normalizedRootId ?? (replyInThread ? messageId : null))
+      ? (normalizedRootId ?? normalizedThreadId ?? (replyInThread ? messageId : null))
       : null;
 
   let peerId = chatId;
