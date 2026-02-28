@@ -1,0 +1,12 @@
+{
+  "name": "@openclaw/telegram",
+  "version": "2026.2.27",
+  "private": true,
+  "description": "OpenClaw Telegram channel plugin",
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
