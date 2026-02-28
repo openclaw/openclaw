@@ -134,7 +134,7 @@ describe("openclaw-tools: subagents (sessions_spawn model + thinking)", () => {
     );
     expect(patchCall?.params).toMatchObject({
       key: expect.stringContaining("subagent:"),
-      model: "claude-haiku-4-5",
+      model: "anthropic/claude-haiku-4-5",
     });
   });
 
@@ -251,9 +251,9 @@ describe("openclaw-tools: subagents (sessions_spawn model + thinking)", () => {
       calls,
       acceptedAtBase: 4000,
       patch: async (request) => {
-        const model = (request.params as { model?: unknown } | undefined)?.model;
-        if (model === "bad-model") {
-          throw new Error("invalid model: bad-model");
+        const model = (request.params as { model?: string } | undefined)?.model;
+        if (model) {
+          throw new Error(`invalid model: ${model}`);
         }
         return { ok: true };
       },
@@ -303,5 +303,204 @@ describe("openclaw-tools: subagents (sessions_spawn model + thinking)", () => {
       runId: "run-1",
     });
     expect(spawnedTimeout).toBe(2);
+  });
+});
+
+describe("subagent model fallback", () => {
+  beforeEach(() => {
+    resetSessionsSpawnConfigOverride();
+    resetSubagentRegistryForTests();
+    callGatewayMock.mockClear();
+  });
+
+  it("falls back when primary model returns 429 rate limit", async () => {
+    setSessionsSpawnConfigOverride({
+      session: { mainKey: "main", scope: "per-sender" },
+      agents: {
+        defaults: {
+          subagents: {
+            model: {
+              primary: "openai/gpt-5.1",
+              fallbacks: ["anthropic/claude-opus-4-5"],
+            },
+          },
+        },
+      },
+    });
+
+    const calls: GatewayCall[] = [];
+    let agentCallCount = 0;
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as GatewayCall;
+      calls.push(request);
+      if (request.method === "sessions.patch") {
+        return { ok: true };
+      }
+      if (request.method === "agent") {
+        agentCallCount += 1;
+        if (agentCallCount === 1) {
+          const err = new Error("Rate limit exceeded");
+          (err as Error & { status: number }).status = 429;
+          throw err;
+        }
+        return { runId: "run-fallback", status: "accepted" };
+      }
+      return {};
+    });
+
+    const tool = await getSessionsSpawnTool({
+      agentSessionKey: "agent:research:main",
+      agentChannel: "discord",
+    });
+
+    const result = await tool.execute("call-fallback-429", { task: "do thing" });
+    expect(result.details).toMatchObject({
+      status: "accepted",
+      modelApplied: true,
+    });
+
+    // Verify session was re-patched with the fallback model.
+    const modelPatches = calls.filter(
+      (call) => call.method === "sessions.patch" && (call.params as { model?: string })?.model,
+    );
+    expect(modelPatches.length).toBeGreaterThanOrEqual(2);
+    const lastModelPatch = modelPatches[modelPatches.length - 1];
+    expect((lastModelPatch.params as { model: string }).model).toBe("anthropic/claude-opus-4-5");
+  });
+
+  it("uses primary model when it succeeds", async () => {
+    setSessionsSpawnConfigOverride({
+      session: { mainKey: "main", scope: "per-sender" },
+      agents: {
+        defaults: {
+          subagents: {
+            model: {
+              primary: "openai/gpt-5.1",
+              fallbacks: ["anthropic/claude-opus-4-5"],
+            },
+          },
+        },
+      },
+    });
+
+    const calls: GatewayCall[] = [];
+    mockPatchAndSingleAgentRun({ calls, runId: "run-primary" });
+
+    const tool = await getSessionsSpawnTool({
+      agentSessionKey: "agent:research:main",
+      agentChannel: "discord",
+    });
+
+    const result = await tool.execute("call-primary-ok", { task: "do thing" });
+    expect(result.details).toMatchObject({
+      status: "accepted",
+      modelApplied: true,
+    });
+
+    // Only one agent call should have been made (no fallback).
+    const agentCalls = calls.filter((call) => call.method === "agent");
+    expect(agentCalls).toHaveLength(1);
+
+    // Model patch should use the primary model.
+    const modelPatch = calls.find(
+      (call) => call.method === "sessions.patch" && (call.params as { model?: string })?.model,
+    );
+    expect(modelPatch).toBeDefined();
+    expect((modelPatch!.params as { model: string }).model).toBe("openai/gpt-5.1");
+  });
+
+  it("returns error when all candidates exhausted", async () => {
+    setSessionsSpawnConfigOverride({
+      session: { mainKey: "main", scope: "per-sender" },
+      agents: {
+        defaults: {
+          subagents: {
+            model: {
+              primary: "openai/gpt-5.1",
+              fallbacks: ["anthropic/claude-opus-4-5"],
+            },
+          },
+        },
+      },
+    });
+
+    const calls: GatewayCall[] = [];
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as GatewayCall;
+      calls.push(request);
+      if (request.method === "sessions.patch") {
+        return { ok: true };
+      }
+      if (request.method === "agent") {
+        const err = new Error("Rate limit exceeded");
+        (err as Error & { status: number }).status = 429;
+        throw err;
+      }
+      return {};
+    });
+
+    const tool = await getSessionsSpawnTool({
+      agentSessionKey: "agent:research:main",
+      agentChannel: "discord",
+    });
+
+    const result = await tool.execute("call-all-fail", { task: "do thing" });
+    expect(result.details).toMatchObject({
+      status: "error",
+    });
+  });
+
+  it("each attempt uses a unique idempotency key", async () => {
+    setSessionsSpawnConfigOverride({
+      session: { mainKey: "main", scope: "per-sender" },
+      agents: {
+        defaults: {
+          subagents: {
+            model: {
+              primary: "openai/gpt-5.1",
+              fallbacks: ["anthropic/claude-opus-4-5"],
+            },
+          },
+        },
+      },
+    });
+
+    const calls: GatewayCall[] = [];
+    let agentCallCount = 0;
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as GatewayCall;
+      calls.push(request);
+      if (request.method === "sessions.patch") {
+        return { ok: true };
+      }
+      if (request.method === "agent") {
+        agentCallCount += 1;
+        if (agentCallCount === 1) {
+          const err = new Error("Rate limit exceeded");
+          (err as Error & { status: number }).status = 429;
+          throw err;
+        }
+        return { runId: "run-idem", status: "accepted" };
+      }
+      return {};
+    });
+
+    const tool = await getSessionsSpawnTool({
+      agentSessionKey: "agent:research:main",
+      agentChannel: "discord",
+    });
+
+    const result = await tool.execute("call-idem-check", { task: "do thing" });
+    expect(result.details).toMatchObject({ status: "accepted" });
+
+    const agentCalls = calls.filter((call) => call.method === "agent");
+    expect(agentCalls.length).toBe(2);
+
+    const idemKeys = agentCalls.map(
+      (call) => (call.params as { idempotencyKey?: string }).idempotencyKey,
+    );
+    expect(idemKeys[0]).toBeTruthy();
+    expect(idemKeys[1]).toBeTruthy();
+    expect(idemKeys[0]).not.toBe(idemKeys[1]);
   });
 });

@@ -151,6 +151,14 @@ export function setupSessionsSpawnGatewayMock(setupOpts: SessionsSpawnGatewayMoc
   };
 }
 
+vi.mock("./auth-profiles.js", () => ({
+  ensureAuthProfileStore: vi.fn(() => ({ profiles: new Map() })),
+  getSoonestCooldownExpiry: vi.fn(() => null),
+  isProfileInCooldown: vi.fn(() => false),
+  resolveProfilesUnavailableReason: vi.fn(() => null),
+  resolveAuthProfileOrder: vi.fn(() => []),
+}));
+
 vi.mock("../gateway/call.js", () => ({
   callGateway: (opts: unknown) => hoisted.callGatewayMock(opts),
 }));

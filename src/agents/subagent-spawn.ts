@@ -12,7 +12,11 @@ import {
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { resolveAgentConfig } from "./agent-scope.js";
 import { AGENT_LANE_SUBAGENT } from "./lanes.js";
-import { resolveSubagentSpawnModelSelection } from "./model-selection.js";
+import { runWithModelFallback } from "./model-fallback.js";
+import {
+  resolveSubagentSpawnModelFallbacks,
+  resolveSubagentSpawnModelSelection,
+} from "./model-selection.js";
 import { buildSubagentSystemPrompt } from "./subagent-announce.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import { countActiveRunsForSession, registerSubagentRun } from "./subagent-registry.js";
@@ -277,6 +281,10 @@ export async function spawnSubagentDirect(
     agentId: targetAgentId,
     modelOverride,
   });
+  const resolvedFallbacks = resolveSubagentSpawnModelFallbacks({
+    cfg,
+    agentId: targetAgentId,
+  });
 
   const resolvedThinkingDefaultRaw =
     readStringParam(targetAgentConfig?.subagents ?? {}, "thinking") ??
@@ -312,24 +320,7 @@ export async function spawnSubagentDirect(
     };
   }
 
-  if (resolvedModel) {
-    try {
-      await callGateway({
-        method: "sessions.patch",
-        params: { key: childSessionKey, model: resolvedModel },
-        timeoutMs: 10_000,
-      });
-      modelApplied = true;
-    } catch (err) {
-      const messageText =
-        err instanceof Error ? err.message : typeof err === "string" ? err : "error";
-      return {
-        status: "error",
-        error: messageText,
-        childSessionKey,
-      };
-    }
-  }
+  let resolvedModelActual = resolvedModel;
   if (thinkingOverride !== undefined) {
     try {
       await callGateway({
@@ -403,85 +394,123 @@ export async function spawnSubagentDirect(
     .filter((line): line is string => Boolean(line))
     .join("\n\n");
 
-  const childIdem = crypto.randomUUID();
-  let childRunId: string = childIdem;
-  try {
-    const response = await callGateway<{ runId: string }>({
-      method: "agent",
-      params: {
-        message: childTaskMessage,
-        sessionKey: childSessionKey,
-        channel: requesterOrigin?.channel,
-        to: requesterOrigin?.to ?? undefined,
-        accountId: requesterOrigin?.accountId ?? undefined,
-        threadId: requesterOrigin?.threadId != null ? String(requesterOrigin.threadId) : undefined,
-        idempotencyKey: childIdem,
-        deliver: false,
-        lane: AGENT_LANE_SUBAGENT,
-        extraSystemPrompt: childSystemPrompt,
-        thinking: thinkingOverride,
-        timeout: runTimeoutSeconds,
-        label: label || undefined,
-        spawnedBy: spawnedByKey,
-        groupId: ctx.agentGroupId ?? undefined,
-        groupChannel: ctx.agentGroupChannel ?? undefined,
-        groupSpace: ctx.agentGroupSpace ?? undefined,
-      },
-      timeoutMs: 10_000,
-    });
-    if (typeof response?.runId === "string" && response.runId) {
-      childRunId = response.runId;
-    }
-  } catch (err) {
-    if (threadBindingReady) {
-      const hasEndedHook = hookRunner?.hasHooks("subagent_ended") === true;
-      let endedHookEmitted = false;
-      if (hasEndedHook) {
+  let childRunId: string = crypto.randomUUID();
+
+  // Parse the resolved model into provider/model for runWithModelFallback.
+  const { provider: primaryProvider, model: primaryModel } = splitModelRef(resolvedModel);
+  const fallbackResult = await (async () => {
+    try {
+      const result = await runWithModelFallback<{
+        response: { runId: string } | undefined;
+        attemptIdem: string;
+      }>({
+        cfg,
+        provider: primaryProvider ?? "",
+        model: primaryModel ?? "",
+        fallbacksOverride: resolvedFallbacks,
+        run: async (_provider, _model) => {
+          const candidateModel = `${_provider}/${_model}`;
+          await callGateway({
+            method: "sessions.patch",
+            params: { key: childSessionKey, model: candidateModel },
+            timeoutMs: 10_000,
+          });
+          modelApplied = true;
+          const attemptIdem = crypto.randomUUID();
+          const response = await callGateway<{ runId: string }>({
+            method: "agent",
+            params: {
+              message: childTaskMessage,
+              sessionKey: childSessionKey,
+              channel: requesterOrigin?.channel,
+              to: requesterOrigin?.to ?? undefined,
+              accountId: requesterOrigin?.accountId ?? undefined,
+              threadId:
+                requesterOrigin?.threadId != null ? String(requesterOrigin.threadId) : undefined,
+              idempotencyKey: attemptIdem,
+              deliver: false,
+              lane: AGENT_LANE_SUBAGENT,
+              extraSystemPrompt: childSystemPrompt,
+              thinking: thinkingOverride,
+              timeout: runTimeoutSeconds,
+              label: label || undefined,
+              spawnedBy: spawnedByKey,
+              groupId: ctx.agentGroupId ?? undefined,
+              groupChannel: ctx.agentGroupChannel ?? undefined,
+              groupSpace: ctx.agentGroupSpace ?? undefined,
+            },
+            timeoutMs: 10_000,
+          });
+          return { response, attemptIdem };
+        },
+      });
+      if (typeof result.result.response?.runId === "string" && result.result.response.runId) {
+        childRunId = result.result.response.runId;
+      } else {
+        childRunId = result.result.attemptIdem;
+      }
+      resolvedModelActual = `${result.provider}/${result.model}`;
+      return { status: "ok" as const };
+    } catch (err) {
+      if (threadBindingReady) {
+        const hasEndedHook = hookRunner?.hasHooks("subagent_ended") === true;
+        let endedHookEmitted = false;
+        if (hasEndedHook) {
+          try {
+            await hookRunner?.runSubagentEnded(
+              {
+                targetSessionKey: childSessionKey,
+                targetKind: "subagent",
+                reason: "spawn-failed",
+                sendFarewell: true,
+                accountId: requesterOrigin?.accountId,
+                runId: childRunId,
+                outcome: "error",
+                error: "Session failed to start",
+              },
+              {
+                runId: childRunId,
+                childSessionKey,
+                requesterSessionKey: requesterInternalKey,
+              },
+            );
+            endedHookEmitted = true;
+          } catch {
+            // Spawn should still return an actionable error even if cleanup hooks fail.
+          }
+        }
+        // Always delete the provisional child session after a failed spawn attempt.
+        // If we already emitted subagent_ended above, suppress a duplicate lifecycle hook.
         try {
-          await hookRunner?.runSubagentEnded(
-            {
-              targetSessionKey: childSessionKey,
-              targetKind: "subagent",
-              reason: "spawn-failed",
-              sendFarewell: true,
-              accountId: requesterOrigin?.accountId,
-              runId: childRunId,
-              outcome: "error",
-              error: "Session failed to start",
+          await callGateway({
+            method: "sessions.delete",
+            params: {
+              key: childSessionKey,
+              deleteTranscript: true,
+              emitLifecycleHooks: !endedHookEmitted,
             },
-            {
-              runId: childRunId,
-              childSessionKey,
-              requesterSessionKey: requesterInternalKey,
-            },
-          );
-          endedHookEmitted = true;
+            timeoutMs: 10_000,
+          });
         } catch {
-          // Spawn should still return an actionable error even if cleanup hooks fail.
+          // Best-effort only.
         }
       }
-      // Always delete the provisional child session after a failed spawn attempt.
-      // If we already emitted subagent_ended above, suppress a duplicate lifecycle hook.
-      try {
-        await callGateway({
-          method: "sessions.delete",
-          params: {
-            key: childSessionKey,
-            deleteTranscript: true,
-            emitLifecycleHooks: !endedHookEmitted,
-          },
-          timeoutMs: 10_000,
-        });
-      } catch {
-        // Best-effort only.
-      }
+      const messageText = summarizeError(err);
+      return {
+        status: "error" as const,
+        error: messageText,
+        childSessionKey,
+        runId: childRunId,
+      };
     }
-    const messageText = summarizeError(err);
+  })();
+
+  if (fallbackResult.status === "error") {
     return {
       status: "error",
-      error: messageText,
-      childSessionKey,
-      runId: childRunId,
+      error: fallbackResult.error,
+      childSessionKey: fallbackResult.childSessionKey,
+      runId: fallbackResult.runId,
     };
   }
 
@@ -494,7 +523,7 @@ export async function spawnSubagentDirect(
     task,
     cleanup,
     label: label || undefined,
-    model: resolvedModel,
+    model: resolvedModelActual,
     runTimeoutSeconds,
     expectsCompletionMessage,
     spawnMode,

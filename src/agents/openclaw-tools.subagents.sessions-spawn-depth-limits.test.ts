@@ -11,6 +11,14 @@ vi.mock("../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGatewayMock(opts),
 }));
 
+vi.mock("./auth-profiles.js", () => ({
+  ensureAuthProfileStore: vi.fn(() => ({ profiles: new Map() })),
+  getSoonestCooldownExpiry: vi.fn(() => null),
+  isProfileInCooldown: vi.fn(() => false),
+  resolveProfilesUnavailableReason: vi.fn(() => null),
+  resolveAuthProfileOrder: vi.fn(() => []),
+}));
+
 let storeTemplatePath = "";
 let configOverride: Record<string, unknown> = {
   session: {
@@ -243,8 +251,8 @@ describe("sessions_spawn depth + child limits", () => {
     setSubagentLimits({ maxSpawnDepth: 2 });
     callGatewayMock.mockImplementation(async (opts: unknown) => {
       const req = opts as { method?: string; params?: { model?: string } };
-      if (req.method === "sessions.patch" && req.params?.model === "bad-model") {
-        throw new Error("invalid model: bad-model");
+      if (req.method === "sessions.patch" && req.params?.model) {
+        throw new Error(`invalid model: ${req.params.model}`);
       }
       if (req.method === "agent") {
         return { runId: "run-depth" };
