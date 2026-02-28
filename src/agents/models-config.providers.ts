@@ -144,6 +144,7 @@ const QWEN_PORTAL_DEFAULT_COST = {
 
 const OLLAMA_BASE_URL = OLLAMA_NATIVE_BASE_URL;
 const OLLAMA_API_BASE_URL = OLLAMA_BASE_URL;
+const OLLAMA_SHOW_CONCURRENCY = 8;
 const OLLAMA_DEFAULT_CONTEXT_WINDOW = 128000;
 const OLLAMA_DEFAULT_MAX_TOKENS = 8192;
 const OLLAMA_DEFAULT_COST = {
@@ -292,29 +293,29 @@ async function discoverOllamaModels(
       log.debug("No Ollama models found on local instance");
       return [];
     }
-    const discovered = await Promise.allSettled(
-      data.models.map(async (model) => {
-        const modelId = model.name;
-        const contextWindow = await queryOllamaContextWindow(apiBase, modelId);
-        const isReasoning =
-          modelId.toLowerCase().includes("r1") || modelId.toLowerCase().includes("reasoning");
-        return {
-          id: modelId,
-          name: modelId,
-          reasoning: isReasoning,
-          input: ["text"],
-          cost: OLLAMA_DEFAULT_COST,
-          contextWindow: contextWindow ?? OLLAMA_DEFAULT_CONTEXT_WINDOW,
-          maxTokens: OLLAMA_DEFAULT_MAX_TOKENS,
-        } satisfies ModelDefinitionConfig;
-      }),
-    );
-    return discovered.flatMap((result) => {
-      if (result.status !== "fulfilled") {
-        return [];
-      }
-      return [result.value];
-    });
+    const discovered: ModelDefinitionConfig[] = [];
+    for (let index = 0; index < data.models.length; index += OLLAMA_SHOW_CONCURRENCY) {
+      const batch = data.models.slice(index, index + OLLAMA_SHOW_CONCURRENCY);
+      const batchDiscovered = await Promise.all(
+        batch.map(async (model) => {
+          const modelId = model.name;
+          const contextWindow = await queryOllamaContextWindow(apiBase, modelId);
+          const isReasoning =
+            modelId.toLowerCase().includes("r1") || modelId.toLowerCase().includes("reasoning");
+          return {
+            id: modelId,
+            name: modelId,
+            reasoning: isReasoning,
+            input: ["text"],
+            cost: OLLAMA_DEFAULT_COST,
+            contextWindow: contextWindow ?? OLLAMA_DEFAULT_CONTEXT_WINDOW,
+            maxTokens: OLLAMA_DEFAULT_MAX_TOKENS,
+          } satisfies ModelDefinitionConfig;
+        }),
+      );
+      discovered.push(...batchDiscovered);
+    }
+    return discovered;
   } catch (error) {
     if (!opts?.quiet) {
       log.warn(`Failed to discover Ollama models: ${String(error)}`);
