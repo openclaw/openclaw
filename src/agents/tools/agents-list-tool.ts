@@ -46,7 +46,11 @@ export function createAgentsListTool(opts?: {
           DEFAULT_AGENT_ID,
       );
 
-      const allowAgents = resolveAgentConfig(cfg, requesterAgentId)?.subagents?.allowAgents ?? [];
+      // Check agent-specific allowAgents first, then fall back to global tools.agentToAgent.allow
+      const agentSpecificAllow =
+        resolveAgentConfig(cfg, requesterAgentId)?.subagents?.allowAgents ?? [];
+      const globalAllow = cfg.tools?.agentToAgent?.allow ?? [];
+      const allowAgents = agentSpecificAllow.length > 0 ? agentSpecificAllow : globalAllow;
       const allowAny = allowAgents.some((value) => value.trim() === "*");
       const allowSet = new Set(
         allowAgents
