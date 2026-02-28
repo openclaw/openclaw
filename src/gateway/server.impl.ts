@@ -204,34 +204,35 @@ export async function startGatewayServer(
   {
     let preflightHost: string | null = opts.host ?? null;
     if (!preflightHost) {
-      // CLI --bind flag takes priority over config file.
+      // CLI --bind flag takes priority over config file for the bind mode,
+      // but we always need the config snapshot for custom bind hosts since
+      // the CLI passes only --bind custom without the actual address.
       let bindMode = opts.bind;
-      if (!bindMode) {
-        try {
-          const snap = await readConfigFileSnapshot();
-          // Read bind mode even from invalid snapshots — the gateway.bind
-          // field is a literal string unaffected by ${ENV} substitution, so
-          // it is usable even when other config values failed validation.
+      let customBindHost: string | undefined;
+      try {
+        const snap = await readConfigFileSnapshot();
+        // Read bind mode even from invalid snapshots — the gateway.bind
+        // field is a literal string unaffected by ${ENV} substitution, so
+        // it is usable even when other config values failed validation.
+        if (!bindMode) {
           bindMode = snap.config.gateway?.bind;
-          if (bindMode === "custom" && snap.config.gateway?.customBindHost) {
-            preflightHost = snap.config.gateway.customBindHost;
-          }
-        } catch {
-          // Config unreadable — fall back to loopback probe.
         }
+        customBindHost = snap.config.gateway?.customBindHost;
+      } catch {
+        // Config unreadable — fall back to loopback probe.
       }
-      if (!preflightHost) {
-        const mode = bindMode ?? "loopback";
-        if (mode === "lan") {
-          preflightHost = "0.0.0.0";
-        } else if (mode === "tailnet") {
-          // Tailnet IP requires network discovery that defeats the purpose of
-          // a cheap preflight. Skip the probe — the real bind will surface the
-          // conflict later with full context.
-          preflightHost = null;
-        } else {
-          preflightHost = "127.0.0.1";
-        }
+      const mode = bindMode ?? "loopback";
+      if (mode === "custom" && customBindHost) {
+        preflightHost = customBindHost;
+      } else if (mode === "lan") {
+        preflightHost = "0.0.0.0";
+      } else if (mode === "tailnet") {
+        // Tailnet IP requires network discovery that defeats the purpose of
+        // a cheap preflight. Skip the probe — the real bind will surface the
+        // conflict later with full context.
+        preflightHost = null;
+      } else {
+        preflightHost = "127.0.0.1";
       }
     }
     if (preflightHost) {
