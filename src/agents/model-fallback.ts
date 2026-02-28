@@ -22,6 +22,7 @@ import {
   buildModelAliasIndex,
   modelKey,
   normalizeModelRef,
+  normalizeProviderId,
   resolveConfiguredModelRef,
   resolveModelRefFromString,
 } from "./model-selection.js";
@@ -185,6 +186,30 @@ function resolveImageFallbackCandidates(params: {
   return candidates;
 }
 
+function resolveExplicitFallbackRef(params: {
+  raw: string;
+  defaultProvider: string;
+  aliasIndex: ReturnType<typeof buildModelAliasIndex>;
+}): ModelCandidate | null {
+  const resolved = resolveModelRefFromString({
+    raw: params.raw,
+    defaultProvider: params.defaultProvider,
+    aliasIndex: params.aliasIndex,
+  });
+  if (!resolved) {
+    return null;
+  }
+  const slash = params.raw.indexOf("/");
+  if (slash === -1) {
+    return resolved.ref;
+  }
+  const explicitProvider = normalizeProviderId(params.raw.slice(0, slash).trim());
+  if (explicitProvider === "openai" && resolved.ref.provider === "openai-codex") {
+    return { provider: explicitProvider, model: resolved.ref.model };
+  }
+  return resolved.ref;
+}
+
 function resolveFallbackCandidates(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
@@ -242,7 +267,7 @@ function resolveFallbackCandidates(params: {
   })();
 
   for (const raw of modelFallbacks) {
-    const resolved = resolveModelRefFromString({
+    const resolved = resolveExplicitFallbackRef({
       raw: String(raw ?? ""),
       defaultProvider,
       aliasIndex,
@@ -252,7 +277,7 @@ function resolveFallbackCandidates(params: {
     }
     // Fallbacks are explicit user intent; do not silently filter them by the
     // model allowlist.
-    addExplicitCandidate(resolved.ref);
+    addExplicitCandidate(resolved);
   }
 
   if (params.fallbacksOverride === undefined && primary?.provider && primary.model) {

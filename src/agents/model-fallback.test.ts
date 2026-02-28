@@ -190,6 +190,35 @@ describe("runWithModelFallback", () => {
     expect(run).toHaveBeenCalledWith("openai-codex", "gpt-5.3-codex");
   });
 
+  it("preserves an explicit openai fallback for gpt-5.3-codex", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai-codex/gpt-5.3-codex",
+            fallbacks: ["openai/gpt-5.3-codex"],
+          },
+        },
+      },
+    });
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("rate limited"))
+      .mockResolvedValueOnce("fallback success");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "openai-codex",
+      model: "gpt-5.3-codex",
+      run,
+    });
+
+    expect(result.result).toBe("fallback success");
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(run).toHaveBeenNthCalledWith(1, "openai-codex", "gpt-5.3-codex");
+    expect(run).toHaveBeenNthCalledWith(2, "openai", "gpt-5.3-codex");
+  });
+
   it("falls back on unrecognized errors when candidates remain", async () => {
     const cfg = makeCfg();
     const run = vi.fn().mockRejectedValueOnce(new Error("bad request")).mockResolvedValueOnce("ok");
