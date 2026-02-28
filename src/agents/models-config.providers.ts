@@ -142,8 +142,7 @@ const QWEN_PORTAL_DEFAULT_COST = {
   cacheWrite: 0,
 };
 
-const OLLAMA_BASE_URL = OLLAMA_NATIVE_BASE_URL;
-const OLLAMA_API_BASE_URL = OLLAMA_BASE_URL;
+const OLLAMA_API_BASE_URL = OLLAMA_NATIVE_BASE_URL;
 const OLLAMA_DEFAULT_CONTEXT_WINDOW = 128000;
 const OLLAMA_DEFAULT_MAX_TOKENS = 8192;
 const OLLAMA_DEFAULT_COST = {
@@ -182,6 +181,17 @@ const DEEPSEEK_DEFAULT_MODEL_ID = "deepseek-chat";
 const DEEPSEEK_DEFAULT_CONTEXT_WINDOW = 128000;
 const DEEPSEEK_DEFAULT_MAX_TOKENS = 8192;
 const DEEPSEEK_DEFAULT_COST = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+};
+
+const GPT360_BASE_URL = "https://api.360.cn/v1";
+const GPT360_DEFAULT_MODEL_ID = "360gpt-pro";
+const GPT360_DEFAULT_CONTEXT_WINDOW = 2048;
+const GPT360_DEFAULT_MAX_TOKENS = 2048;
+const GPT360_DEFAULT_COST = {
   input: 0,
   output: 0,
   cacheRead: 0,
@@ -376,7 +386,7 @@ async function discoverVllmModels(
 
 function normalizeApiKeyConfig(value: string): string {
   const trimmed = value.trim();
-  const match = /^\$\{([A-Z0-9_]+)\}$/.exec(trimmed);
+  const match = /^\$\{([A-Z0-9_]+)}$/.exec(trimmed);
   return match?.[1] ?? trimmed;
 }
 
@@ -411,7 +421,6 @@ function resolveApiKeyFromProfiles(params: {
       if (keyRef?.source === "env" && keyRef.id.trim()) {
         return keyRef.id.trim();
       }
-      continue;
     }
     if (cred.type === "token") {
       if (cred.token?.trim()) {
@@ -421,7 +430,6 @@ function resolveApiKeyFromProfiles(params: {
       if (tokenRef?.source === "env" && tokenRef.id.trim()) {
         return tokenRef.id.trim();
       }
-      continue;
     }
   }
   return undefined;
@@ -781,6 +789,24 @@ function buildDeepseekProvider(): ProviderConfig {
   };
 }
 
+function build360GptProvider(): ProviderConfig {
+  return {
+    baseUrl: GPT360_BASE_URL,
+    api: "openai-completions",
+    models: [
+      {
+        id: GPT360_DEFAULT_MODEL_ID,
+        name: "360GPT Pro",
+        reasoning: false,
+        input: ["text"],
+        cost: GPT360_DEFAULT_COST,
+        contextWindow: GPT360_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: GPT360_DEFAULT_MAX_TOKENS,
+      },
+    ],
+  };
+}
+
 function buildZaiProvider(): ProviderConfig {
   return {
     baseUrl: ZAI_BASE_URL,
@@ -1048,24 +1074,31 @@ export async function resolveImplicitProviders(params: {
   }
 
   const siliconKey =
-      resolveEnvApiKeyVarName("siliconflow") ??
-      resolveApiKeyFromProfiles({ provider: "siliconflow", store: authStore });
+    resolveEnvApiKeyVarName("siliconflow") ??
+    resolveApiKeyFromProfiles({ provider: "siliconflow", store: authStore });
   if (siliconKey) {
     providers.siliconflow = { ...buildSiliconflowProvider(), apiKey: siliconKey };
   }
 
   const dashscopeKey =
-      resolveEnvApiKeyVarName("dashscope") ??
-      resolveApiKeyFromProfiles({ provider: "dashscope", store: authStore });
+    resolveEnvApiKeyVarName("dashscope") ??
+    resolveApiKeyFromProfiles({ provider: "dashscope", store: authStore });
   if (dashscopeKey) {
     providers.dashscope = { ...buildDashscopeProvider(), apiKey: dashscopeKey };
   }
 
   const deepseekKey =
-      resolveEnvApiKeyVarName("deepseek") ??
-      resolveApiKeyFromProfiles({ provider: "deepseek", store: authStore });
+    resolveEnvApiKeyVarName("deepseek") ??
+    resolveApiKeyFromProfiles({ provider: "deepseek", store: authStore });
   if (deepseekKey) {
     providers.deepseek = { ...buildDeepseekProvider(), apiKey: deepseekKey };
+  }
+
+  const gpt360Key =
+    resolveEnvApiKeyVarName("360gpt") ??
+    resolveApiKeyFromProfiles({ provider: "360gpt", store: authStore });
+  if (gpt360Key) {
+    providers["360gpt"] = { ...build360GptProvider(), apiKey: gpt360Key };
   }
 
   const volcengineKey =
@@ -1098,12 +1131,11 @@ export async function resolveImplicitProviders(params: {
   }
 
   const zaiKey =
-      resolveEnvApiKeyVarName("zai") ??
-      resolveApiKeyFromProfiles({ provider: "zai", store: authStore });
+    resolveEnvApiKeyVarName("zai") ??
+    resolveApiKeyFromProfiles({ provider: "zai", store: authStore });
   if (zaiKey) {
     providers.zai = { ...buildZaiProvider(), apiKey: zaiKey };
   }
-
 
   const cloudflareProfiles = listProfilesForProvider(authStore, "cloudflare-ai-gateway");
   for (const profileId of cloudflareProfiles) {
