@@ -470,7 +470,7 @@ export async function runCronIsolatedAgentTurn(params: {
           // was successfully resolved. When resolution fails the agent should not
           // be blocked by a target it cannot satisfy (#27898).
           requireExplicitMessageTarget: deliveryRequested && resolvedDelivery.ok,
-          disableMessageTool: deliveryRequested,
+          disableMessageTool: deliveryRequested || deliveryPlan.mode === "none",
           abortSignal,
         });
       },
