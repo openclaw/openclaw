@@ -1,0 +1,41 @@
+{
+  "id": "blockrun-sanitizer",
+  "name": "BlockRun Content Sanitizer",
+  "description": "Dual-LLM content sanitization — routes external content through a cheap Worker model to strip injection attempts before the Manager LLM sees it.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": {
+        "type": "boolean",
+        "default": true,
+        "description": "Enable or disable content sanitization."
+      },
+      "workerProvider": {
+        "type": "string",
+        "default": "blockrun",
+        "description": "Provider to route Worker LLM calls through."
+      },
+      "workerModel": {
+        "type": "string",
+        "default": "deepseek/deepseek-chat",
+        "description": "Model to use for content sanitization."
+      },
+      "maxContentLength": {
+        "type": "number",
+        "default": 10000,
+        "description": "Max characters of raw content sent to the Worker model."
+      },
+      "timeoutMs": {
+        "type": "number",
+        "default": 15000,
+        "description": "Worker LLM call timeout in milliseconds."
+      },
+      "blockOnDetection": {
+        "type": "boolean",
+        "default": false,
+        "description": "If true, drop content entirely when injection is detected instead of returning a sanitized summary."
+      }
+    }
+  }
+}
