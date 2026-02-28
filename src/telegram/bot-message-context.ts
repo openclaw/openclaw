@@ -38,6 +38,7 @@ import type {
 } from "../config/types.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { recordChannelActivity } from "../infra/channel-activity.js";
+import { isOutboundSuppressed } from "../infra/outbound/suppress-outbound.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
 import { DEFAULT_ACCOUNT_ID, resolveThreadSessionKeys } from "../routing/session-key.js";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "../security/dm-policy-shared.js";
@@ -562,8 +563,13 @@ export const buildTelegramMessageContext = async ({
     resolvedStatusReactionEmojis,
   );
   let allowedStatusReactionEmojisPromise: Promise<Set<string> | null> | null = null;
+  const telegramSuppressed = isOutboundSuppressed({
+    cfg,
+    channel: "telegram",
+    accountId: account.accountId,
+  });
   const statusReactionController: StatusReactionController | null =
-    statusReactionsEnabled && msg.message_id
+    statusReactionsEnabled && msg.message_id && !telegramSuppressed
       ? createStatusReactionController({
           enabled: true,
           adapter: {
@@ -614,7 +620,7 @@ export const buildTelegramMessageContext = async ({
           () => false,
         )
       : null
-    : shouldAckReaction() && msg.message_id && reactionApi
+    : shouldAckReaction() && msg.message_id && reactionApi && !telegramSuppressed
       ? withTelegramApiErrorLogging({
           operation: "setMessageReaction",
           fn: () => reactionApi(chatId, msg.message_id, [{ type: "emoji", emoji: ackReaction }]),

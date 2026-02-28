@@ -26,6 +26,7 @@ import { resolveMentionGatingWithBypass } from "../../../channels/mention-gating
 import { recordInboundSession } from "../../../channels/session.js";
 import { readSessionUpdatedAt, resolveStorePath } from "../../../config/sessions.js";
 import { logVerbose, shouldLogVerbose } from "../../../globals.js";
+import { isOutboundSuppressed } from "../../../infra/outbound/suppress-outbound.js";
 import { enqueueSystemEvent } from "../../../infra/system-events.js";
 import { resolveAgentRoute } from "../../../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../../../routing/session-key.js";
@@ -554,8 +555,13 @@ export async function prepareSlackMessage(params: {
     );
 
   const ackReactionMessageTs = message.ts;
+  const slackSuppressed = isOutboundSuppressed({
+    cfg,
+    channel: "slack",
+    accountId: account.accountId,
+  });
   const ackReactionPromise =
-    shouldAckReaction() && ackReactionMessageTs && ackReactionValue
+    shouldAckReaction() && ackReactionMessageTs && ackReactionValue && !slackSuppressed
       ? reactSlackMessage(message.channel, ackReactionMessageTs, ackReactionValue, {
           token: ctx.botToken,
           client: ctx.app.client,
