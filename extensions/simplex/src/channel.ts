@@ -1,3 +1,7 @@
+import fs from "fs";
+import path from "path";
+import os from "os";
+
 import {
   collectStatusIssuesFromLastError,
   createDefaultChannelRuntimeState,
@@ -31,7 +35,7 @@ export const simplexPlugin: ChannelPlugin<ResolvedSimplexAccount> = {
   },
   capabilities: {
     chatTypes: ["direct", "group"],
-    media: false, // TODO: File sending via /file command
+    media: true,
     reactions: false,
     edit: false,
     polls: false,
@@ -49,6 +53,8 @@ export const simplexPlugin: ChannelPlugin<ResolvedSimplexAccount> = {
       enabled: account.enabled,
       configured: account.configured,
       wsUrl: account.wsUrl,
+      filterMemberIds: account.filterMemberIds,
+      filterDisplayNames: account.filterDisplayNames,
     }),
     resolveAllowFrom: ({ cfg, accountId }) =>
       resolveSimplexAccount({ cfg, accountId }).allowFrom.map(String),
@@ -118,6 +124,89 @@ export const simplexPlugin: ChannelPlugin<ResolvedSimplexAccount> = {
         messageId: `simplex-${Date.now()}`,
       };
     },
+    sendMedia: async ({ to, media, chatType, accountId, mediaType }) => {
+      const runtime = getSimplexRuntime();
+      const aid = accountId ?? DEFAULT_ACCOUNT_ID;
+      const bus = activeBuses.get(aid);
+      if (!bus) {
+        throw new Error(`SimpleX bus not running for account ${aid}`);
+      }
+      if (!bus.isConnected()) {
+        throw new Error("SimpleX WebSocket not connected");
+      }
+
+      let filePath = media;
+
+      // If media is a URL, download to temp file
+      if (media.startsWith("http://") || media.startsWith("https://")) {
+        try {
+          const response = await fetch(media);
+          if (!response.ok) {
+            throw new Error(`Failed to download media: ${response.status} ${response.statusText}`);
+          }
+          const arrayBuffer = await response.arrayBuffer();
+          const buffer = Buffer.from(arrayBuffer);
+
+          // Determine file extension from content-type or URL
+          const contentType = response.headers.get("content-type") || "";
+          let ext = ".bin";
+          if (contentType.includes("image/jpeg") || media.includes(".jpg") || media.includes(".jpeg")) ext = ".jpg";
+          else if (contentType.includes("image/png") || media.includes(".png")) ext = ".png";
+          else if (contentType.includes("image/gif") || media.includes(".gif")) ext = ".gif";
+          else if (contentType.includes("image/webp") || media.includes(".webp")) ext = ".webp";
+          else if (contentType.includes("audio/m4a") || media.includes(".m4a")) ext = ".m4a";
+          else if (contentType.includes("audio/mp3") || media.includes(".mp3")) ext = ".mp3";
+          else if (contentType.includes("audio/ogg") || media.includes(".ogg")) ext = ".ogg";
+          else if (contentType.includes("audio/wav") || media.includes(".wav")) ext = ".wav";
+
+          const tempFile = path.join(os.tmpdir(), `simplex-media-${Date.now()}${ext}`);
+          fs.writeFileSync(tempFile, buffer);
+
+          filePath = tempFile;
+        } catch (err) {
+          throw new Error(`Failed to download media from URL: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+
+      try {
+        // Determine if this is a voice message
+        const isVoice = mediaType === "voice" || filePath.endsWith(".m4a") || filePath.endsWith(".mp3") || filePath.endsWith(".ogg") || filePath.endsWith(".wav");
+
+        // Send based on chatType and mediaType
+        if (chatType === "group") {
+          if (isVoice) {
+            // For group voice, use sendGroupFile (SimpleX doesn't have separate voice command)
+            await bus.sendGroupFile(to, filePath);
+          } else {
+            await bus.sendGroupFile(to, filePath);
+          }
+        } else {
+          if (isVoice) {
+            await bus.sendVoice(to, filePath);
+          } else {
+            await bus.sendImage(to, filePath);
+          }
+        }
+
+        return {
+          channel: "simplex" as const,
+          to,
+          chatType,
+          messageId: `simplex-media-${Date.now()}`,
+        };
+      } finally {
+        // Clean up temp file if we downloaded it
+        if (media.startsWith("http://") || media.startsWith("https://")) {
+          try {
+            if (fs.existsSync(filePath)) {
+              fs.unlinkSync(filePath);
+            }
+          } catch {
+            // Ignore cleanup errors
+          }
+        }
+      }
+    },
   },
   status: {
     defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
@@ -158,6 +247,23 @@ export const simplexPlugin: ChannelPlugin<ResolvedSimplexAccount> = {
       const bus = startSimplexBus({
         wsUrl: account.wsUrl,
         onMessage: async (msg: SimplexMessage) => {
+          // Filter out messages from filtered member IDs
+          if (account.filterMemberIds.length > 0) {
+            const memberId = msg.contactId;
+            if (account.filterMemberIds.includes(memberId)) {
+              ctx.log?.debug?.(`[${account.accountId}] Skipping filtered member: ${msg.contactName} (${memberId})`);
+              return;
+            }
+          }
+          
+          // Filter out messages from filtered display names
+          if (account.filterDisplayNames.length > 0) {
+            if (account.filterDisplayNames.includes(msg.contactName)) {
+              ctx.log?.debug?.(`[${account.accountId}] Skipping filtered display name: ${msg.contactName}`);
+              return;
+            }
+          }
+
           const chatType = msg.isGroup ? "group" : "direct";
           const chatId = msg.isGroup 
             ? `simplex:group:${msg.groupId}` 

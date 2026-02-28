@@ -13,6 +13,10 @@ export type ResolvedSimplexAccount = {
   cliPath: string | null;
   dbPath: string | null;
   autoStart: boolean;
+  /** Member IDs to filter out (e.g., own bot's IDs) */
+  filterMemberIds: string[];
+  /** Display names to filter out */
+  filterDisplayNames: string[];
   config: Record<string, unknown>;
 };
 
@@ -31,7 +35,7 @@ export type SimplexWsRequest = {
 export type SimplexWsResponse = {
   corrId?: string;
   type: string; // eg: "ok", "error", "newChatItems", "pairingRequest", "fileReady"
-  payload?: any;
+  payload?: unknown;
   error?: string;
 };
 
@@ -60,33 +64,8 @@ export type SimplexGroup = {
   members?: string[];
 };
 
-export type SimplexMessage =
-  | {
-      kind: "text";
-      text: string;
-    }
-  | {
-      kind: "file";
-      fileId: string;
-      fileName?: string;
-      mime?: string;
-      size?: number;
-    }
-  | {
-      kind: "image";
-      fileId: string;
-      fileName?: string;
-      mime?: string;
-      width?: number;
-      height?: number;
-    }
-  | {
-      kind: "voice";
-      fileId: string;
-      fileName?: string;
-      mime?: string; // often audio/m4a
-      durationMs?: number;
-    };
+// Re-export SimplexMessage from simplex-bus for external use
+export type { SimplexMessage } from "./simplex-bus.js";
 
 /**
  * Resolve SimpleX account from config.
@@ -109,7 +88,7 @@ export function resolveSimplexAccount(params: {
     accountId: params.accountId ?? "default",
     name,
     enabled,
-    configured: enabled, // Configured if enabled (CLI must be running externally or auto-started)
+    configured: enabled,
     wsUrl,
     wsPort,
     wsHost,
@@ -118,6 +97,8 @@ export function resolveSimplexAccount(params: {
     cliPath: (simplexCfg.cliPath as string) ?? null,
     dbPath: (simplexCfg.dbPath as string) ?? null,
     autoStart: (simplexCfg.autoStart as boolean) ?? false,
+    filterMemberIds: (simplexCfg.filterMemberIds as string[]) ?? [],
+    filterDisplayNames: (simplexCfg.filterDisplayNames as string[]) ?? [],
     config: simplexCfg,
   };
 }

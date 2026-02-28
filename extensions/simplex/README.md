@@ -1,4 +1,4 @@
-# @openclaw/simplex
+# @effuzion/openclaw-simplex
 
 SimpleX Chat channel plugin for OpenClaw.
 

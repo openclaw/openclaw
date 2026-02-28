@@ -94,6 +94,19 @@ export const SimplexConfigSchema = z.object({
    * If false, you must start simplex-chat -p <port> manually.
    */
   autoStart: z.boolean().optional(),
+
+  /**
+   * Member IDs to filter out (skip processing messages from these IDs).
+   * Use this to ignore the bot's own messages or other automated accounts.
+   * Example: ["1", "3"] - filters out member IDs 1 and 3
+   */
+  filterMemberIds: z.array(z.string()).optional(),
+
+  /**
+   * Display names to filter out (skip processing messages from these senders).
+   * Example: ["Alexandre", "MyBot"]
+   */
+  filterDisplayNames: z.array(z.string()).optional(),
 });
 
 export type SimplexConfig = z.infer<typeof SimplexConfigSchema>;
