@@ -21,6 +21,7 @@ import { nodeHandlers } from "./server-methods/nodes.js";
 import { pushHandlers } from "./server-methods/push.js";
 import { sendHandlers } from "./server-methods/send.js";
 import { sessionsHandlers } from "./server-methods/sessions.js";
+import { shellHandlers } from "./server-methods/shell.js";
 import { skillsHandlers } from "./server-methods/skills.js";
 import { systemHandlers } from "./server-methods/system.js";
 import { talkHandlers } from "./server-methods/talk.js";
@@ -34,6 +35,7 @@ import { webHandlers } from "./server-methods/web.js";
 import { wizardHandlers } from "./server-methods/wizard.js";
 
 const CONTROL_PLANE_WRITE_METHODS = new Set(["config.apply", "config.patch", "update.run"]);
+
 function authorizeGatewayMethod(method: string, client: GatewayRequestOptions["client"]) {
   if (!client?.connect) {
     return null;
@@ -88,6 +90,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...nodeHandlers,
   ...pushHandlers,
   ...sendHandlers,
+  ...shellHandlers,
   ...usageHandlers,
   ...agentHandlers,
   ...agentsHandlers,

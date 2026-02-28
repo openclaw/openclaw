@@ -27,6 +27,7 @@ import {
 } from "./controllers/exec-approval.ts";
 import { loadNodes } from "./controllers/nodes.ts";
 import { loadSessions } from "./controllers/sessions.ts";
+import type { PtyController } from "./controllers/terminal.ts";
 import {
   resolveGatewayErrorDetailCode,
   type GatewayEventFrame,
@@ -76,6 +77,8 @@ type GatewayHost = {
   execApprovalQueue: ExecApprovalRequest[];
   execApprovalError: string | null;
   updateAvailable: UpdateAvailable | null;
+  ptyController: PtyController;
+  ptySpawned: boolean;
 };
 
 type SessionDefaultsSnapshot = {
@@ -212,6 +215,10 @@ export function connectGateway(host: GatewayHost) {
         return;
       }
       host.connected = false;
+      // Server destroys PTY sessions on WS close; reset controller + UI
+      // state so auto-spawn works correctly after reconnect.
+      host.ptyController.resetSpawnState();
+      host.ptySpawned = false;
       // Code 1012 = Service Restart (expected during config saves, don't show as error)
       host.lastErrorCode =
         resolveGatewayErrorDetailCode(error) ??
@@ -299,6 +306,14 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
     host.eventLog = host.eventLogBuffer;
   }
 
+  // Route PTY events to the controller
+  if (evt.event === "pty.data" || evt.event === "pty.exit") {
+    const consumed = host.ptyController.handleEvent(evt);
+    if (consumed && evt.event === "pty.exit") {
+      host.ptySpawned = false;
+    }
+    return;
+  }
   if (evt.event === "agent") {
     if (host.onboarding) {
       return;
