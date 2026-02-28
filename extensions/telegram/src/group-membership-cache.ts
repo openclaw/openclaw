@@ -22,16 +22,20 @@ type CacheEntry = {
 
 const cache = new Map<string, CacheEntry>();
 
-// Periodic eviction sweep: remove stale entries so the cache stays bounded
-// on long-lived gateways. unref() ensures this timer doesn't keep the process alive.
-const evictionTimer = setInterval(() => {
-  const now = Date.now();
-  for (const [key, entry] of cache.entries()) {
-    if (now - entry.timestamp >= TTL_MS) {
-      cache.delete(key);
+function startEvictionTimer(): ReturnType<typeof setInterval> {
+  // Periodic eviction sweep: remove stale entries so the cache stays bounded
+  // on long-lived gateways. unref() ensures this timer doesn't keep the process alive.
+  return setInterval(() => {
+    const now = Date.now();
+    for (const [key, entry] of cache.entries()) {
+      if (now - entry.timestamp >= TTL_MS) {
+        cache.delete(key);
+      }
     }
-  }
-}, TTL_MS).unref();
+  }, TTL_MS).unref();
+}
+
+let evictionTimer = startEvictionTimer();
 
 /**
  * Build a cache key that includes both the chat ID and a hash of the
@@ -152,9 +156,27 @@ export function invalidateGroupMembership(chatId: number | string): void {
 }
 
 /**
- * Clear all cached entries and stop the eviction timer (for testing).
+ * Clear all cached entries and restart the eviction timer.
+ *
+ * Intended for tests (call in afterEach). Stops the current sweep interval,
+ * clears all entries, then immediately starts a fresh interval so subsequent
+ * tests that use fake timers get a predictable timer state.
+ *
+ * @internal
  */
 export function clearGroupMembershipCache(): void {
-  cache.clear();
   clearInterval(evictionTimer);
+  cache.clear();
+  // Restart the sweep so the module is in a clean, ready state for the next use.
+  evictionTimer = startEvictionTimer();
+}
+
+/**
+ * Return the current number of entries in the cache.
+ * Exposed for testing only — do not rely on this in production code.
+ *
+ * @internal
+ */
+export function getMembershipCacheSize(): number {
+  return cache.size;
 }
