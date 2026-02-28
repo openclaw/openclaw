@@ -1,10 +1,10 @@
 import { Type } from "@sinclair/typebox";
-import { formatCliCommand } from "../../cli/command-format.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { AnyAgentTool } from "./common.js";
+import { formatCliCommand } from "../../cli/command-format.js";
 import { logVerbose } from "../../globals.js";
 import { wrapWebContent } from "../../security/external-content.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
-import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readNumberParam, readStringParam } from "./common.js";
 import {
   WEB_TOOLS_TRUSTED_NETWORK_SSRF_POLICY,
@@ -80,7 +80,7 @@ const WebSearchSchema = Type.Object({
   freshness: Type.Optional(
     Type.String({
       description:
-        "Filter results by discovery time. Brave supports 'pd', 'pw', 'pm', 'py', and date range 'YYYY-MM-DDtoYYYY-MM-DD'. Perplexity supports 'pd', 'pw', 'pm', and 'py'.",
+        "Filter results by discovery time. Brave and Exa support 'pd', 'pw', 'pm', 'py', and date range 'YYYY-MM-DDtoYYYY-MM-DD'. Perplexity supports 'pd', 'pw', 'pm', and 'py'.",
     }),
   ),
 });
@@ -655,10 +655,15 @@ function resolveExaApiKey(exaCfg?: ExaConfig): string | undefined {
 }
 
 /**
- * Map the shared freshness param to an ISO date string for Exa's startPublishedDate.
- * pd=yesterday, pw=7d, pm=30d, py=365d, date range = start of range.
+ * Map the shared freshness param to start/end date strings for Exa's
+ * startPublishedDate / endPublishedDate fields.
+ * pd=yesterday, pw=7d, pm=30d, py=365d.
+ * Date range "YYYY-MM-DDtoYYYY-MM-DD" maps to both start and end.
  */
-function freshnessToExaStartDate(freshness: string): string | undefined {
+function freshnessToExaDates(freshness: string): {
+  startPublishedDate?: string;
+  endPublishedDate?: string;
+} {
   const now = new Date();
   const lower = freshness.toLowerCase();
   const daysAgo = (days: number): string => {
@@ -668,25 +673,30 @@ function freshnessToExaStartDate(freshness: string): string | undefined {
   };
 
   if (lower === "pd") {
-    return daysAgo(1);
+    return { startPublishedDate: daysAgo(1) };
   }
   if (lower === "pw") {
-    return daysAgo(7);
+    return { startPublishedDate: daysAgo(7) };
   }
   if (lower === "pm") {
-    return daysAgo(30);
+    return { startPublishedDate: daysAgo(30) };
   }
   if (lower === "py") {
-    return daysAgo(365);
+    return { startPublishedDate: daysAgo(365) };
   }
 
-  // date range: extract start date
-  const match = freshness.match(/^(\d{4}-\d{2}-\d{2})to/);
-  if (match?.[1]) {
-    return match[1];
+  // date range: extract both start and end
+  const match = freshness.match(/^(\d{4}-\d{2}-\d{2})to(\d{4}-\d{2}-\d{2})$/i);
+  if (match?.[1] && match?.[2]) {
+    return { startPublishedDate: match[1], endPublishedDate: match[2] };
   }
 
-  return undefined;
+  return {};
+}
+
+/** @deprecated Kept for __testing backwards compatibility. */
+function freshnessToExaStartDate(freshness: string): string | undefined {
+  return freshnessToExaDates(freshness).startPublishedDate;
 }
 
 async function withTrustedWebSearchEndpoint<T>(
@@ -1245,9 +1255,12 @@ async function runExaSearch(params: {
   }
 
   if (params.freshness) {
-    const startDate = freshnessToExaStartDate(params.freshness);
-    if (startDate) {
-      body.startPublishedDate = `${startDate}T00:00:00.000Z`;
+    const { startPublishedDate, endPublishedDate } = freshnessToExaDates(params.freshness);
+    if (startPublishedDate) {
+      body.startPublishedDate = `${startPublishedDate}T00:00:00.000Z`;
+    }
+    if (endPublishedDate) {
+      body.endPublishedDate = `${endPublishedDate}T23:59:59.999Z`;
     }
   }
 
@@ -1262,8 +1275,9 @@ async function runExaSearch(params: {
   });
 
   if (!res.ok) {
-    const detail = await readResponseText(res);
-    throw new Error(`Exa Search API error (${res.status}): ${detail || res.statusText}`);
+    const detailResult = await readResponseText(res, { maxBytes: 64_000 });
+    const detail = detailResult.text || res.statusText;
+    throw new Error(`Exa Search API error (${res.status}): ${detail}`);
   }
 
   const data = (await res.json()) as ExaSearchResponse;
@@ -1319,7 +1333,7 @@ async function runWebSearch(params: {
               ? `${params.provider}:${params.query}:${params.grokModel ?? DEFAULT_GROK_MODEL}:${String(params.grokInlineCitations ?? false)}`
               : params.provider === "exa"
                 ? `${params.provider}:${params.query}:${params.count}:${params.exaType || "auto"}:${params.exaContents || "highlights"}:${params.freshness || "default"}`
-                : `${params.provider}:${params.query}:${params.count}:${params.country || "default"}:${params.search_lang || "default"}:${params.ui_lang || "default"}`,
+                : `${String(params.provider)}:${params.query}:${params.count}:${params.country || "default"}:${params.search_lang || "default"}:${params.ui_lang || "default"}`,
   );
   const cached = readCache(SEARCH_CACHE, cacheKey);
   if (cached) {
@@ -1619,7 +1633,8 @@ export function createWebSearchTool(options?: {
       if (rawFreshness && provider !== "brave" && provider !== "perplexity" && provider !== "exa") {
         return jsonResult({
           error: "unsupported_freshness",
-          message: "freshness is only supported by the Brave, Perplexity, and Exa web_search providers.",
+          message:
+            "freshness is only supported by the Brave, Perplexity, and Exa web_search providers.",
           docs: "https://docs.openclaw.ai/tools/web",
         });
       }
@@ -1681,5 +1696,6 @@ export const __testing = {
   extractKimiCitations,
   resolveRedirectUrl,
   freshnessToExaStartDate,
+  freshnessToExaDates,
   resolveExaApiKey,
 } as const;
