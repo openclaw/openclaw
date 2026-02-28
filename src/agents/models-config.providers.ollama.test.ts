@@ -144,6 +144,42 @@ describe("Ollama provider", () => {
     }
   });
 
+  it("caps /api/show requests when /api/tags returns a very large model list", async () => {
+    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
+    process.env.OLLAMA_API_KEY = "test-key";
+    vi.stubEnv("VITEST", "");
+    vi.stubEnv("NODE_ENV", "development");
+    const manyModels = Array.from({ length: 250 }, (_, idx) => ({
+      name: `model-${idx}`,
+      modified_at: "",
+      size: 1,
+      digest: "",
+    }));
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.endsWith("/api/tags")) {
+        return {
+          ok: true,
+          json: async () => ({ models: manyModels }),
+        };
+      }
+      return {
+        ok: true,
+        json: async () => ({ model_info: { "llama.context_length": 65536 } }),
+      };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      const providers = await resolveImplicitProviders({ agentDir });
+      const models = providers?.ollama?.models ?? [];
+      // 1 call for /api/tags + 200 capped /api/show calls.
+      expect(fetchMock).toHaveBeenCalledTimes(201);
+      expect(models).toHaveLength(200);
+    } finally {
+      delete process.env.OLLAMA_API_KEY;
+    }
+  });
+
   it("should have correct model structure without streaming override", () => {
     const mockOllamaModel = {
       id: "llama3.3:latest",

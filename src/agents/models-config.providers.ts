@@ -145,6 +145,7 @@ const QWEN_PORTAL_DEFAULT_COST = {
 const OLLAMA_BASE_URL = OLLAMA_NATIVE_BASE_URL;
 const OLLAMA_API_BASE_URL = OLLAMA_BASE_URL;
 const OLLAMA_SHOW_CONCURRENCY = 8;
+const OLLAMA_SHOW_MAX_MODELS = 200;
 const OLLAMA_DEFAULT_CONTEXT_WINDOW = 128000;
 const OLLAMA_DEFAULT_MAX_TOKENS = 8192;
 const OLLAMA_DEFAULT_COST = {
@@ -293,9 +294,15 @@ async function discoverOllamaModels(
       log.debug("No Ollama models found on local instance");
       return [];
     }
+    const modelsToInspect = data.models.slice(0, OLLAMA_SHOW_MAX_MODELS);
+    if (modelsToInspect.length < data.models.length && !opts?.quiet) {
+      log.warn(
+        `Capping Ollama /api/show inspection to ${OLLAMA_SHOW_MAX_MODELS} models (received ${data.models.length})`,
+      );
+    }
     const discovered: ModelDefinitionConfig[] = [];
-    for (let index = 0; index < data.models.length; index += OLLAMA_SHOW_CONCURRENCY) {
-      const batch = data.models.slice(index, index + OLLAMA_SHOW_CONCURRENCY);
+    for (let index = 0; index < modelsToInspect.length; index += OLLAMA_SHOW_CONCURRENCY) {
+      const batch = modelsToInspect.slice(index, index + OLLAMA_SHOW_CONCURRENCY);
       const batchDiscovered = await Promise.all(
         batch.map(async (model) => {
           const modelId = model.name;
