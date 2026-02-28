@@ -306,7 +306,9 @@ export async function runPreparedReply(
     : [inboundUserContext, baseBodyFinal].filter(Boolean).join("\n\n");
   const baseBodyTrimmed = baseBodyForPrompt.trim();
   const hasMediaAttachment = Boolean(
-    sessionCtx.MediaPath || (sessionCtx.MediaPaths && sessionCtx.MediaPaths.length > 0),
+    sessionCtx.MediaPath ||
+      (sessionCtx.MediaPaths && sessionCtx.MediaPaths.length > 0) ||
+      (opts?.images && opts.images.length > 0),
   );
   if (!baseBodyTrimmed && !hasMediaAttachment) {
     await typing.onReplyStart();
