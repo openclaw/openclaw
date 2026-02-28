@@ -12,7 +12,7 @@ function baseParams(overrides?: Record<string, unknown>) {
     replies: [{ text: "hello" }],
     target: "C123",
     token: "xoxb-test",
-    runtime: {},
+    runtime: { log: () => {}, error: () => {}, exit: () => {} },
     textLimit: 4000,
     replyToMode: "off" as const,
     ...overrides,
