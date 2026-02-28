@@ -260,11 +260,22 @@ export function resolveAgentWorkspaceDir(cfg: OpenClawConfig, agentId: string) {
   }
   const defaultAgentId = resolveDefaultAgentId(cfg);
   if (id === defaultAgentId) {
+    // agents.defaults.workspace acts as an override for the default agent's home-dir workspace.
     const fallback = cfg.agents?.defaults?.workspace?.trim();
     if (fallback) {
       return stripNullBytes(resolveUserPath(fallback));
     }
     return stripNullBytes(resolveDefaultAgentWorkspaceDir(process.env));
+  }
+  // For agents NOT registered in the config list (e.g. anonymous subagents spawned without an
+  // explicit agentId), apply agents.defaults.workspace so they land in the operator-configured
+  // directory rather than inheriting the parent session's workspace.
+  const isRegisteredAgent = resolveAgentEntry(cfg, id) !== undefined;
+  if (!isRegisteredAgent) {
+    const fallback = cfg.agents?.defaults?.workspace?.trim();
+    if (fallback) {
+      return stripNullBytes(resolveUserPath(fallback));
+    }
   }
   const stateDir = resolveStateDir(process.env);
   return stripNullBytes(path.join(stateDir, `workspace-${id}`));

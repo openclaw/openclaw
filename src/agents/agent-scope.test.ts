@@ -427,4 +427,28 @@ describe("resolveAgentConfig", () => {
     const agentDir = resolveAgentDir({} as OpenClawConfig, "main");
     expect(agentDir).toBe(path.join(path.resolve(home), ".openclaw", "agents", "main", "agent"));
   });
+
+  it("resolveAgentWorkspaceDir: agents.defaults.workspace applies to non-default agents without explicit workspace", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: { workspace: "/opt/subagent-workspace" },
+        list: [{ id: "main", workspace: "~/.openclaw/workspace" }],
+      },
+    };
+    // "sub-anon" has no explicit workspace entry → should use agents.defaults.workspace
+    const workspace = resolveAgentWorkspaceDir(cfg, "sub-anon");
+    expect(workspace).toBe(path.resolve("/opt/subagent-workspace"));
+  });
+
+  it("resolveAgentWorkspaceDir: explicit agent workspace takes priority over agents.defaults.workspace", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: { workspace: "/opt/subagent-workspace" },
+        list: [{ id: "main", workspace: "/explicit/main-workspace" }],
+      },
+    };
+    // "main" has explicit workspace → it wins over agents.defaults.workspace
+    const workspace = resolveAgentWorkspaceDir(cfg, "main");
+    expect(workspace).toBe(path.resolve("/explicit/main-workspace"));
+  });
 });

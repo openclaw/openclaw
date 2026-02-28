@@ -250,8 +250,23 @@ export async function spawnSubagentDirect(
   const requesterAgentId = normalizeAgentId(
     ctx.requesterAgentIdOverride ?? parseAgentSessionKey(requesterInternalKey)?.agentId,
   );
-  const targetAgentId = requestedAgentId ? normalizeAgentId(requestedAgentId) : requesterAgentId;
-  if (targetAgentId !== requesterAgentId) {
+  // When the caller does not specify an explicit agentId we are performing an "anonymous" spawn.
+  // In that case we should NOT embed the parent's agentId in the child session key: doing so
+  // would cause resolveAgentWorkspaceDir to pick up the parent's explicit workspace entry
+  // instead of agents.defaults.workspace.  Generate a short unique id so the child's workspace
+  // resolves through the defaults chain (agents.defaults.workspace → per-platform default).
+  // When agents.defaults.workspace is not configured we fall back to the current behaviour
+  // (use requesterAgentId) so that existing deployments are unaffected.
+  const anonymousSpawn = !requestedAgentId;
+  const defaultsWorkspace = cfg.agents?.defaults?.workspace?.trim();
+  const targetAgentId = requestedAgentId
+    ? normalizeAgentId(requestedAgentId)
+    : defaultsWorkspace
+      ? `sub-${crypto.randomUUID().replace(/-/g, "").slice(0, 8)}`
+      : requesterAgentId;
+  // allowAgents only restricts NAMED agent requests; anonymous spawns always pass the check
+  // because the caller is not targeting a specific configured agent.
+  if (!anonymousSpawn && targetAgentId !== requesterAgentId) {
     const allowAgents = resolveAgentConfig(cfg, requesterAgentId)?.subagents?.allowAgents ?? [];
     const allowAny = allowAgents.some((value) => value.trim() === "*");
     const normalizedTargetId = targetAgentId.toLowerCase();
@@ -271,10 +286,13 @@ export async function spawnSubagentDirect(
   const childSessionKey = `agent:${targetAgentId}:subagent:${crypto.randomUUID()}`;
   const childDepth = callerDepth + 1;
   const spawnedByKey = requesterInternalKey;
-  const targetAgentConfig = resolveAgentConfig(cfg, targetAgentId);
+  // For model/thinking config, anonymous spawns inherit the parent agent's configuration.
+  // Named spawns use the explicitly requested agent's configuration.
+  const configAgentId = anonymousSpawn ? requesterAgentId : targetAgentId;
+  const targetAgentConfig = resolveAgentConfig(cfg, configAgentId);
   const resolvedModel = resolveSubagentSpawnModelSelection({
     cfg,
-    agentId: targetAgentId,
+    agentId: configAgentId,
     modelOverride,
   });
 
