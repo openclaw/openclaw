@@ -155,6 +155,10 @@ function updateCompletionProfile(
   }
 
   const trimmed = filtered.join("\n").trimEnd();
+  if (!sourceLine) {
+    const next = trimmed ? `${trimmed}\n` : "";
+    return { next, changed: next !== content, hadExisting };
+  }
   const block = `# OpenClaw Completion\n${sourceLine}`;
   const next = trimmed ? `${trimmed}\n\n${block}\n` : `${block}\n`;
   return { next, changed: next !== content, hadExisting };
@@ -700,3 +704,5 @@ function generateFishCompletion(program: Command): string {
   visit(program, []);
   return script;
 }
+
+export const __testing = { updateCompletionProfile };
