@@ -132,4 +132,33 @@ describe("version resolution", () => {
       ),
     ).toBe("fallback");
   });
+
+  it("uses VERSION constant as fallback so Web UI never shows stale or placeholder version (#30922)", () => {
+    // When no version env vars are set, the caller should pass VERSION as the
+    // fallback so the gateway hello-ok always reports the real package version
+    // rather than "dev" or a stale npm_package_version from a previous install.
+    const version = "2026.2.26";
+    expect(
+      resolveRuntimeServiceVersion(
+        {
+          OPENCLAW_VERSION: "",
+          OPENCLAW_SERVICE_VERSION: "",
+          npm_package_version: "",
+        },
+        version,
+      ),
+    ).toBe(version);
+
+    // Env var still takes priority over the VERSION fallback.
+    expect(
+      resolveRuntimeServiceVersion(
+        {
+          OPENCLAW_VERSION: "2026.2.99",
+          OPENCLAW_SERVICE_VERSION: "",
+          npm_package_version: "",
+        },
+        version,
+      ),
+    ).toBe("2026.2.99");
+  });
 });
