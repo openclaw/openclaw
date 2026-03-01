@@ -1,6 +1,6 @@
 import { formatCliCommand } from "../cli/command-format.js";
 import { withProgress } from "../cli/progress.js";
-import { resolveGatewayPort } from "../config/config.js";
+import { loadConfig, resolveGatewayPort } from "../config/config.js";
 import { buildGatewayConnectionDetails, callGateway } from "../gateway/call.js";
 import { info } from "../globals.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
@@ -80,10 +80,33 @@ export async function statusCommand(
     return;
   }
 
-  const scan = await scanStatus(
-    { json: opts.json, timeoutMs: opts.timeoutMs, all: opts.all },
-    runtime,
-  );
+  const [scan, securityAudit] = opts.json
+    ? await Promise.all([
+        scanStatus({ json: opts.json, timeoutMs: opts.timeoutMs, all: opts.all }, runtime),
+        runSecurityAudit({
+          config: loadConfig(),
+          deep: false,
+          includeFilesystem: true,
+          includeChannelSecurity: true,
+        }),
+      ])
+    : [
+        await scanStatus({ json: opts.json, timeoutMs: opts.timeoutMs, all: opts.all }, runtime),
+        await withProgress(
+          {
+            label: "Running security audit…",
+            indeterminate: true,
+            enabled: true,
+          },
+          async () =>
+            await runSecurityAudit({
+              config: loadConfig(),
+              deep: false,
+              includeFilesystem: true,
+              includeChannelSecurity: true,
+            }),
+        ),
+      ];
   const {
     cfg,
     osSummary,
@@ -104,21 +127,6 @@ export async function statusCommand(
     memory,
     memoryPlugin,
   } = scan;
-
-  const securityAudit = await withProgress(
-    {
-      label: "Running security audit…",
-      indeterminate: true,
-      enabled: opts.json !== true,
-    },
-    async () =>
-      await runSecurityAudit({
-        config: cfg,
-        deep: false,
-        includeFilesystem: true,
-        includeChannelSecurity: true,
-      }),
-  );
 
   const usage = opts.usage
     ? await withProgress(
