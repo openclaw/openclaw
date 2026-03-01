@@ -106,7 +106,7 @@ export async function noteSecurityWarnings(cfg: OpenClawConfig) {
       allowFrom: params.allowFrom,
       normalizeEntry: params.normalizeEntry,
     });
-    const dmScope = cfg.session?.dmScope ?? "main";
+    const dmScope = cfg.session?.dmScope ?? "per-channel-peer";
 
     if (dmPolicy === "open") {
       const allowFromPath = `${params.allowFromPath}allowFrom`;

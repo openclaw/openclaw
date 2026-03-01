@@ -304,7 +304,7 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
 
   const bindings = getEvaluatedBindingsForChannelAccount(input.cfg, channel, accountId);
 
-  const dmScope = input.cfg.session?.dmScope ?? "main";
+  const dmScope = input.cfg.session?.dmScope ?? "per-channel-peer";
   const identityLinks = input.cfg.session?.identityLinks;
 
   const choose = (agentId: string, matchedBy: ResolvedAgentRoute["matchedBy"]) => {
