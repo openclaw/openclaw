@@ -75,6 +75,83 @@ describe("printCronList", () => {
     expect(logs.some((line) => line.includes("(stagger 5m)"))).toBe(true);
   });
 
+  it("shows dash for unset agentId instead of default", () => {
+    const { logs, runtime } = createRuntimeLogCapture();
+    const job = createBaseJob({
+      id: "no-agent-job",
+      name: "No Agent",
+      agentId: undefined,
+      sessionTarget: "isolated",
+      payload: { kind: "agentTurn", message: "hello", model: "sonnet" },
+    });
+
+    printCronList([job], runtime);
+    // Header should say "Agent ID" not "Agent"
+    expect(logs[0]).toContain("Agent ID");
+    // Data row should show "-" for missing agentId, not "default"
+    const dataLine = logs[1] ?? "";
+    expect(dataLine).not.toContain("default");
+  });
+
+  it("shows Model column with payload.model for agentTurn jobs", () => {
+    const { logs, runtime } = createRuntimeLogCapture();
+    const job = createBaseJob({
+      id: "model-job",
+      name: "With Model",
+      agentId: "ops",
+      sessionTarget: "isolated",
+      payload: { kind: "agentTurn", message: "hello", model: "sonnet" },
+    });
+
+    printCronList([job], runtime);
+    expect(logs[0]).toContain("Model");
+    const dataLine = logs[1] ?? "";
+    expect(dataLine).toContain("sonnet");
+  });
+
+  it("shows dash in Model column for systemEvent jobs", () => {
+    const { logs, runtime } = createRuntimeLogCapture();
+    const job = createBaseJob({
+      id: "sys-event-job",
+      name: "System Event",
+      sessionTarget: "main",
+      payload: { kind: "systemEvent", text: "tick" },
+    });
+
+    printCronList([job], runtime);
+    expect(logs[0]).toContain("Model");
+  });
+
+  it("shows dash in Model column for agentTurn jobs without model override", () => {
+    const { logs, runtime } = createRuntimeLogCapture();
+    const job = createBaseJob({
+      id: "no-model-job",
+      name: "No Model",
+      sessionTarget: "isolated",
+      payload: { kind: "agentTurn", message: "hello" },
+    });
+
+    printCronList([job], runtime);
+    const dataLine = logs[1] ?? "";
+    expect(dataLine).not.toContain("undefined");
+  });
+
+  it("shows explicit agentId when set", () => {
+    const { logs, runtime } = createRuntimeLogCapture();
+    const job = createBaseJob({
+      id: "agent-set-job",
+      name: "Agent Set",
+      agentId: "ops",
+      sessionTarget: "isolated",
+      payload: { kind: "agentTurn", message: "hello", model: "opus" },
+    });
+
+    printCronList([job], runtime);
+    const dataLine = logs[1] ?? "";
+    expect(dataLine).toContain("ops");
+    expect(dataLine).toContain("opus");
+  });
+
   it("shows exact label for cron schedules with stagger disabled", () => {
     const { logs, runtime } = createRuntimeLogCapture();
     const job = createBaseJob({
