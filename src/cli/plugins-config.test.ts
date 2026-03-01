@@ -29,4 +29,40 @@ describe("setPluginEnabledInConfig", () => {
       enabled: false,
     });
   });
+
+  it("keeps built-in channel and plugin entry flags in sync", () => {
+    const config = {
+      channels: {
+        telegram: {
+          enabled: true,
+          dmPolicy: "open",
+        },
+      },
+      plugins: {
+        entries: {
+          telegram: {
+            enabled: true,
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const disabled = setPluginEnabledInConfig(config, "telegram", false);
+    expect(disabled.channels?.telegram).toEqual({
+      enabled: false,
+      dmPolicy: "open",
+    });
+    expect(disabled.plugins?.entries?.telegram).toEqual({
+      enabled: false,
+    });
+
+    const reenabled = setPluginEnabledInConfig(disabled, "telegram", true);
+    expect(reenabled.channels?.telegram).toEqual({
+      enabled: true,
+      dmPolicy: "open",
+    });
+    expect(reenabled.plugins?.entries?.telegram).toEqual({
+      enabled: true,
+    });
+  });
 });

@@ -4,6 +4,7 @@ import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent
 import { lookupContextTokens } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import {
+  inferUniqueProviderFromConfiguredModels,
   parseModelRef,
   resolveConfiguredModelRef,
   resolveDefaultModelForAgent,
@@ -21,7 +22,7 @@ import {
   type SessionEntry,
   type SessionScope,
 } from "../config/sessions.js";
-import { openVerifiedFileSync } from "../infra/safe-open-sync.js";
+import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import {
   normalizeAgentId,
   normalizeMainKey,
@@ -101,14 +102,13 @@ function resolveIdentityAvatarUrl(
     return undefined;
   }
   try {
-    const resolvedReal = fs.realpathSync(resolvedCandidate);
-    if (!isPathWithinRoot(workspaceRoot, resolvedReal)) {
-      return undefined;
-    }
-    const opened = openVerifiedFileSync({
-      filePath: resolvedReal,
-      resolvedPath: resolvedReal,
+    const opened = openBoundaryFileSync({
+      absolutePath: resolvedCandidate,
+      rootPath: workspaceRoot,
+      rootRealPath: workspaceRoot,
+      boundaryLabel: "workspace root",
       maxBytes: AVATAR_MAX_BYTES,
+      skipLexicalRootCheck: true,
     });
     if (!opened.ok) {
       return undefined;
@@ -692,6 +692,39 @@ export function resolveSessionModelRef(
   return { provider, model };
 }
 
+export function resolveSessionModelIdentityRef(
+  cfg: OpenClawConfig,
+  entry?:
+    | SessionEntry
+    | Pick<SessionEntry, "model" | "modelProvider" | "modelOverride" | "providerOverride">,
+  agentId?: string,
+): { provider?: string; model: string } {
+  const runtimeModel = entry?.model?.trim();
+  const runtimeProvider = entry?.modelProvider?.trim();
+  if (runtimeModel) {
+    if (runtimeProvider) {
+      return { provider: runtimeProvider, model: runtimeModel };
+    }
+    const inferredProvider = inferUniqueProviderFromConfiguredModels({
+      cfg,
+      model: runtimeModel,
+    });
+    if (inferredProvider) {
+      return { provider: inferredProvider, model: runtimeModel };
+    }
+    if (runtimeModel.includes("/")) {
+      const parsedRuntime = parseModelRef(runtimeModel, DEFAULT_PROVIDER);
+      if (parsedRuntime) {
+        return { provider: parsedRuntime.provider, model: parsedRuntime.model };
+      }
+      return { model: runtimeModel };
+    }
+    return { model: runtimeModel };
+  }
+  const resolved = resolveSessionModelRef(cfg, entry, agentId);
+  return { provider: resolved.provider, model: resolved.model };
+}
+
 export function listSessionsFromStore(params: {
   cfg: OpenClawConfig;
   storePath: string;
@@ -782,8 +815,8 @@ export function listSessionsFromStore(params: {
       const deliveryFields = normalizeSessionDeliveryFields(entry);
       const parsedAgent = parseAgentSessionKey(key);
       const sessionAgentId = normalizeAgentId(parsedAgent?.agentId ?? resolveDefaultAgentId(cfg));
-      const resolvedModel = resolveSessionModelRef(cfg, entry, sessionAgentId);
-      const modelProvider = resolvedModel.provider ?? DEFAULT_PROVIDER;
+      const resolvedModel = resolveSessionModelIdentityRef(cfg, entry, sessionAgentId);
+      const modelProvider = resolvedModel.provider;
       const model = resolvedModel.model ?? DEFAULT_MODEL;
       return {
         key,

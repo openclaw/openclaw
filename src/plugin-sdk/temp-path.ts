@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
+import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 
 function sanitizePrefix(prefix: string): string {
   const normalized = prefix.replace(/[^a-zA-Z0-9_-]+/g, "-").replace(/^-+|-+$/g, "");
@@ -27,6 +27,19 @@ function sanitizeFileName(fileName: string): string {
   return normalized || "download.bin";
 }
 
+function resolveTempRoot(tmpDir?: string): string {
+  return tmpDir ?? resolvePreferredOpenClawTmpDir();
+}
+
+function isNodeErrorWithCode(err: unknown, code: string): boolean {
+  return (
+    typeof err === "object" &&
+    err !== null &&
+    "code" in err &&
+    (err as { code?: string }).code === code
+  );
+}
+
 export function buildRandomTempFilePath(params: {
   prefix: string;
   extension?: string;
@@ -42,7 +55,7 @@ export function buildRandomTempFilePath(params: {
       ? Math.trunc(nowCandidate)
       : Date.now();
   const uuid = params.uuid?.trim() || crypto.randomUUID();
-  return path.join(params.tmpDir ?? os.tmpdir(), `${prefix}-${now}-${uuid}${extension}`);
+  return path.join(resolveTempRoot(params.tmpDir), `${prefix}-${now}-${uuid}${extension}`);
 }
 
 export async function withTempDownloadPath<T>(
@@ -53,13 +66,19 @@ export async function withTempDownloadPath<T>(
   },
   fn: (tmpPath: string) => Promise<T>,
 ): Promise<T> {
-  const tempRoot = params.tmpDir ?? os.tmpdir();
+  const tempRoot = resolveTempRoot(params.tmpDir);
   const prefix = `${sanitizePrefix(params.prefix)}-`;
   const dir = await mkdtemp(path.join(tempRoot, prefix));
   const tmpPath = path.join(dir, sanitizeFileName(params.fileName ?? "download.bin"));
   try {
     return await fn(tmpPath);
   } finally {
-    await rm(dir, { recursive: true, force: true }).catch(() => {});
+    try {
+      await rm(dir, { recursive: true, force: true });
+    } catch (err) {
+      if (!isNodeErrorWithCode(err, "ENOENT")) {
+        console.warn(`temp-path cleanup failed for ${dir}: ${String(err)}`);
+      }
+    }
   }
 }

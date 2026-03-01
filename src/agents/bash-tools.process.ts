@@ -331,7 +331,7 @@ export function createProcessTool(
             const deadline = Date.now() + pollWaitMs;
             while (!scopedSession.exited && Date.now() < deadline) {
               await new Promise((resolve) =>
-                setTimeout(resolve, Math.min(250, deadline - Date.now())),
+                setTimeout(resolve, Math.max(0, Math.min(250, deadline - Date.now()))),
               );
             }
           }

@@ -5,6 +5,9 @@ export function collectEnabledInsecureOrDangerousFlags(cfg: OpenClawConfig): str
   if (cfg.gateway?.controlUi?.allowInsecureAuth === true) {
     enabledFlags.push("gateway.controlUi.allowInsecureAuth=true");
   }
+  if (cfg.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true) {
+    enabledFlags.push("gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true");
+  }
   if (cfg.gateway?.controlUi?.dangerouslyDisableDeviceAuth === true) {
     enabledFlags.push("gateway.controlUi.dangerouslyDisableDeviceAuth=true");
   }

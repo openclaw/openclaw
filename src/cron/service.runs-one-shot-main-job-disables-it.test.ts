@@ -509,7 +509,7 @@ describe("CronService", () => {
     await store.cleanup();
   });
 
-  it("passes agentId + sessionKey to runHeartbeatOnce for main-session wakeMode now jobs", async () => {
+  it("passes agentId and preserves scoped session for wakeMode now main jobs", async () => {
     const runHeartbeatOnce = vi.fn(async () => ({ status: "ran" as const, durationMs: 1 }));
 
     const { store, cron, enqueueSystemEvent, requestHeartbeatNow } =
@@ -616,6 +616,28 @@ describe("CronService", () => {
       cron,
       events,
       name: "weekly delivered",
+      status: "ok",
+    });
+    expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
+    expect(enqueueSystemEvent).not.toHaveBeenCalled();
+    expect(requestHeartbeatNow).not.toHaveBeenCalled();
+    cron.stop();
+    await store.cleanup();
+  });
+
+  it("does not post isolated summary to main when announce delivery was attempted", async () => {
+    const runIsolatedAgentJob = vi.fn(async () => ({
+      status: "ok" as const,
+      summary: "done",
+      delivered: false,
+      deliveryAttempted: true,
+    }));
+    const { store, cron, enqueueSystemEvent, requestHeartbeatNow, events } =
+      await createIsolatedAnnounceHarness(runIsolatedAgentJob);
+    await runIsolatedAnnounceJobAndWait({
+      cron,
+      events,
+      name: "weekly attempted",
       status: "ok",
     });
     expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);

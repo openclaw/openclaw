@@ -338,7 +338,7 @@ describe("gateway server agent", () => {
     expect(second.payload).toEqual(firstFinal.payload);
   });
 
-  test("agent dedupe survives reconnect", { timeout: 60_000 }, async () => {
+  test("agent dedupe survives reconnect", { timeout: 20_000 }, async () => {
     await withGatewayServer(async ({ port }) => {
       const dial = async () => {
         const ws = new WebSocket(`ws://127.0.0.1:${port}`);

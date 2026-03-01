@@ -7,7 +7,7 @@ title: "Zalo"
 
 # Zalo (Bot API)
 
-Status: experimental. Direct messages only; groups coming soon per Zalo docs.
+Status: experimental. DMs are supported; group handling is available with explicit group policy controls.
 
 ## Plugin required
 
@@ -51,7 +51,7 @@ It is a good fit for support or notifications where you want deterministic routi
 - A Zalo Bot API channel owned by the Gateway.
 - Deterministic routing: replies go back to Zalo; the model never chooses channels.
 - DMs share the agent's main session.
-- Groups are not yet supported (Zalo docs state "coming soon").
+- Groups are supported with policy controls (`groupPolicy` + `groupAllowFrom`) and default to fail-closed allowlist behavior.
 
 ## Setup (fast path)
 
@@ -107,6 +107,16 @@ Multi-account support: use `channels.zalo.accounts` with per-account tokens and 
 - Pairing is the default token exchange. Details: [Pairing](/channels/pairing)
 - `channels.zalo.allowFrom` accepts numeric user IDs (no username lookup available).
 
+## Access control (Groups)
+
+- `channels.zalo.groupPolicy` controls group inbound handling: `open | allowlist | disabled`.
+- Default behavior is fail-closed: `allowlist`.
+- `channels.zalo.groupAllowFrom` restricts which sender IDs can trigger the bot in groups.
+- If `groupAllowFrom` is unset, Zalo falls back to `allowFrom` for sender checks.
+- `groupPolicy: "disabled"` blocks all group messages.
+- `groupPolicy: "open"` allows any group member (mention-gated).
+- Runtime note: if `channels.zalo` is missing entirely, runtime still falls back to `groupPolicy="allowlist"` for safety.
+
 ## Long-polling vs webhook
 
 - Default: long-polling (no public URL required).
@@ -130,16 +140,16 @@ Multi-account support: use `channels.zalo.accounts` with per-account tokens and 
 
 ## Capabilities
 
-| Feature         | Status                         |
-| --------------- | ------------------------------ |
-| Direct messages | ✅ Supported                   |
-| Groups          | ❌ Coming soon (per Zalo docs) |
-| Media (images)  | ✅ Supported                   |
-| Reactions       | ❌ Not supported               |
-| Threads         | ❌ Not supported               |
-| Polls           | ❌ Not supported               |
-| Native commands | ❌ Not supported               |
-| Streaming       | ⚠️ Blocked (2000 char limit)   |
+| Feature         | Status                                                   |
+| --------------- | -------------------------------------------------------- |
+| Direct messages | ✅ Supported                                             |
+| Groups          | ⚠️ Supported with policy controls (allowlist by default) |
+| Media (images)  | ✅ Supported                                             |
+| Reactions       | ❌ Not supported                                         |
+| Threads         | ❌ Not supported                                         |
+| Polls           | ❌ Not supported                                         |
+| Native commands | ❌ Not supported                                         |
+| Streaming       | ⚠️ Blocked (2000 char limit)                             |
 
 ## Delivery targets (CLI/cron)
 
@@ -172,6 +182,8 @@ Provider options:
 - `channels.zalo.tokenFile`: read token from file path.
 - `channels.zalo.dmPolicy`: `pairing | allowlist | open | disabled` (default: pairing).
 - `channels.zalo.allowFrom`: DM allowlist (user IDs). `open` requires `"*"`. The wizard will ask for numeric IDs.
+- `channels.zalo.groupPolicy`: `open | allowlist | disabled` (default: allowlist).
+- `channels.zalo.groupAllowFrom`: group sender allowlist (user IDs). Falls back to `allowFrom` when unset.
 - `channels.zalo.mediaMaxMb`: inbound/outbound media cap (MB, default 5).
 - `channels.zalo.webhookUrl`: enable webhook mode (HTTPS required).
 - `channels.zalo.webhookSecret`: webhook secret (8-256 chars).
@@ -186,6 +198,8 @@ Multi-account options:
 - `channels.zalo.accounts.<id>.enabled`: enable/disable account.
 - `channels.zalo.accounts.<id>.dmPolicy`: per-account DM policy.
 - `channels.zalo.accounts.<id>.allowFrom`: per-account allowlist.
+- `channels.zalo.accounts.<id>.groupPolicy`: per-account group policy.
+- `channels.zalo.accounts.<id>.groupAllowFrom`: per-account group sender allowlist.
 - `channels.zalo.accounts.<id>.webhookUrl`: per-account webhook URL.
 - `channels.zalo.accounts.<id>.webhookSecret`: per-account webhook secret.
 - `channels.zalo.accounts.<id>.webhookPath`: per-account webhook path.

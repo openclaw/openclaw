@@ -2,6 +2,7 @@
 // the agent reports a model id. This includes custom models.json entries.
 
 import { loadConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { resolveOpenClawAgentDir } from "./agent-paths.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
 
@@ -13,6 +14,10 @@ type ModelRegistryLike = {
 type ConfigModelEntry = { id?: string; contextWindow?: number };
 type ProviderConfigEntry = { models?: ConfigModelEntry[] };
 type ModelsConfig = { providers?: Record<string, ProviderConfigEntry | undefined> };
+type AgentModelEntry = { params?: Record<string, unknown> };
+
+const ANTHROPIC_1M_MODEL_PREFIXES = ["claude-opus-4", "claude-sonnet-4"] as const;
+export const ANTHROPIC_CONTEXT_1M_TOKENS = 1_048_576;
 
 export function applyDiscoveredContextWindows(params: {
   cache: Map<string, number>;
@@ -108,4 +113,83 @@ export function lookupContextTokens(modelId?: string): number | undefined {
   // Best-effort: kick off loading, but don't block.
   void loadPromise;
   return MODEL_CACHE.get(modelId);
+}
+
+function resolveConfiguredModelParams(
+  cfg: OpenClawConfig | undefined,
+  provider: string,
+  model: string,
+): Record<string, unknown> | undefined {
+  const models = cfg?.agents?.defaults?.models;
+  if (!models) {
+    return undefined;
+  }
+  const key = `${provider}/${model}`.trim().toLowerCase();
+  for (const [rawKey, entry] of Object.entries(models)) {
+    if (rawKey.trim().toLowerCase() === key) {
+      const params = (entry as AgentModelEntry | undefined)?.params;
+      return params && typeof params === "object" ? params : undefined;
+    }
+  }
+  return undefined;
+}
+
+function resolveProviderModelRef(params: {
+  provider?: string;
+  model?: string;
+}): { provider: string; model: string } | undefined {
+  const modelRaw = params.model?.trim();
+  if (!modelRaw) {
+    return undefined;
+  }
+  const providerRaw = params.provider?.trim();
+  if (providerRaw) {
+    return { provider: providerRaw.toLowerCase(), model: modelRaw };
+  }
+  const slash = modelRaw.indexOf("/");
+  if (slash <= 0) {
+    return undefined;
+  }
+  const provider = modelRaw.slice(0, slash).trim().toLowerCase();
+  const model = modelRaw.slice(slash + 1).trim();
+  if (!provider || !model) {
+    return undefined;
+  }
+  return { provider, model };
+}
+
+function isAnthropic1MModel(provider: string, model: string): boolean {
+  if (provider !== "anthropic") {
+    return false;
+  }
+  const normalized = model.trim().toLowerCase();
+  const modelId = normalized.includes("/")
+    ? (normalized.split("/").at(-1) ?? normalized)
+    : normalized;
+  return ANTHROPIC_1M_MODEL_PREFIXES.some((prefix) => modelId.startsWith(prefix));
+}
+
+export function resolveContextTokensForModel(params: {
+  cfg?: OpenClawConfig;
+  provider?: string;
+  model?: string;
+  contextTokensOverride?: number;
+  fallbackContextTokens?: number;
+}): number | undefined {
+  if (typeof params.contextTokensOverride === "number" && params.contextTokensOverride > 0) {
+    return params.contextTokensOverride;
+  }
+
+  const ref = resolveProviderModelRef({
+    provider: params.provider,
+    model: params.model,
+  });
+  if (ref) {
+    const modelParams = resolveConfiguredModelParams(params.cfg, ref.provider, ref.model);
+    if (modelParams?.context1m === true && isAnthropic1MModel(ref.provider, ref.model)) {
+      return ANTHROPIC_CONTEXT_1M_TOKENS;
+    }
+  }
+
+  return lookupContextTokens(params.model) ?? params.fallbackContextTokens;
 }

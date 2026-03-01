@@ -2,6 +2,7 @@ import type { TranslationMap } from "../lib/types.ts";
 
 export const en: TranslationMap = {
   common: {
+    version: "Version",
     health: "Health",
     ok: "OK",
     offline: "Offline",
@@ -117,5 +118,6 @@ export const en: TranslationMap = {
     zhCN: "简体中文 (Simplified Chinese)",
     zhTW: "繁體中文 (Traditional Chinese)",
     ptBR: "Português (Brazilian Portuguese)",
+    de: "Deutsch (German)",
   },
 };

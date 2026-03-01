@@ -29,7 +29,12 @@ import { wrapExternalContent } from "../../security/external-content.js";
 import { BrowserToolSchema } from "./browser-tool.schema.js";
 import { type AnyAgentTool, imageResultFromFile, jsonResult, readStringParam } from "./common.js";
 import { callGatewayTool } from "./gateway.js";
-import { listNodes, resolveNodeIdFromList, type NodeListNode } from "./nodes-utils.js";
+import {
+  listNodes,
+  resolveNodeIdFromList,
+  selectDefaultNodeFromList,
+  type NodeListNode,
+} from "./nodes-utils.js";
 
 function wrapBrowserExternalJson(params: {
   kind: "snapshot" | "console" | "tabs";
@@ -77,6 +82,13 @@ function readOptionalTargetAndTimeout(params: Record<string, unknown>) {
       ? params.timeoutMs
       : undefined;
   return { targetId, timeoutMs };
+}
+
+function readTargetUrlParam(params: Record<string, unknown>) {
+  return (
+    readStringParam(params, "targetUrl") ??
+    readStringParam(params, "url", { required: true, label: "targetUrl" })
+  );
 }
 
 type BrowserProxyFile = {
@@ -143,10 +155,17 @@ async function resolveBrowserNodeTarget(params: {
     return { nodeId, label: node?.displayName ?? node?.remoteIp ?? nodeId };
   }
 
+  const selected = selectDefaultNodeFromList(browserNodes, {
+    preferLocalMac: false,
+    fallback: "none",
+  });
+
   if (params.target === "node") {
-    if (browserNodes.length === 1) {
-      const node = browserNodes[0];
-      return { nodeId: node.nodeId, label: node.displayName ?? node.remoteIp ?? node.nodeId };
+    if (selected) {
+      return {
+        nodeId: selected.nodeId,
+        label: selected.displayName ?? selected.remoteIp ?? selected.nodeId,
+      };
     }
     throw new Error(
       `Multiple browser-capable nodes connected (${browserNodes.length}). Set gateway.nodes.browser.node or pass node=<id>.`,
@@ -157,9 +176,11 @@ async function resolveBrowserNodeTarget(params: {
     return null;
   }
 
-  if (browserNodes.length === 1) {
-    const node = browserNodes[0];
-    return { nodeId: node.nodeId, label: node.displayName ?? node.remoteIp ?? node.nodeId };
+  if (selected) {
+    return {
+      nodeId: selected.nodeId,
+      label: selected.displayName ?? selected.remoteIp ?? selected.nodeId,
+    };
   }
   return null;
 }
@@ -391,9 +412,7 @@ export function createBrowserTool(opts?: {
             return formatTabsToolResult(tabs);
           }
         case "open": {
-          const targetUrl = readStringParam(params, "targetUrl", {
-            required: true,
-          });
+          const targetUrl = readTargetUrlParam(params);
           if (proxyRequest) {
             const result = await proxyRequest({
               method: "POST",
@@ -621,9 +640,7 @@ export function createBrowserTool(opts?: {
           });
         }
         case "navigate": {
-          const targetUrl = readStringParam(params, "targetUrl", {
-            required: true,
-          });
+          const targetUrl = readTargetUrlParam(params);
           const targetId = readStringParam(params, "targetId");
           if (proxyRequest) {
             const result = await proxyRequest({
