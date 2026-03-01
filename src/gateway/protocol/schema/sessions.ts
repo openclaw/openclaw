@@ -21,6 +21,8 @@ export const SessionsListParamsSchema = Type.Object(
     spawnedBy: Type.Optional(NonEmptyString),
     agentId: Type.Optional(NonEmptyString),
     search: Type.Optional(Type.String()),
+    /** When true and `search` is set, also scan transcript content for matches. */
+    searchContent: Type.Optional(Type.Boolean()),
   },
   { additionalProperties: false },
 );

@@ -12,6 +12,7 @@ export type SessionsState = {
   sessionsFilterLimit: string;
   sessionsIncludeGlobal: boolean;
   sessionsIncludeUnknown: boolean;
+  sessionsSearch: string;
 };
 
 export async function loadSessions(
@@ -21,6 +22,8 @@ export async function loadSessions(
     limit?: number;
     includeGlobal?: boolean;
     includeUnknown?: boolean;
+    search?: string;
+    searchContent?: boolean;
   },
 ) {
   if (!state.client || !state.connected) {
@@ -36,6 +39,7 @@ export async function loadSessions(
     const includeUnknown = overrides?.includeUnknown ?? state.sessionsIncludeUnknown;
     const activeMinutes = overrides?.activeMinutes ?? toNumber(state.sessionsFilterActive, 0);
     const limit = overrides?.limit ?? toNumber(state.sessionsFilterLimit, 0);
+    const search = overrides?.search ?? state.sessionsSearch;
     const params: Record<string, unknown> = {
       includeGlobal,
       includeUnknown,
@@ -45,6 +49,12 @@ export async function loadSessions(
     }
     if (limit > 0) {
       params.limit = limit;
+    }
+    if (search) {
+      params.search = search;
+      if (overrides?.searchContent) {
+        params.searchContent = true;
+      }
     }
     const res = await state.client.request<SessionsListResult | undefined>("sessions.list", params);
     if (res) {
