@@ -2,17 +2,19 @@ import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createCliRuntimeCapture } from "./test-runtime-capture.js";
 
-const callGatewayFromCli = vi.fn(async (method: string, _opts: unknown, params?: unknown) => {
-  if (method.endsWith(".get")) {
-    return {
-      path: "/tmp/exec-approvals.json",
-      exists: true,
-      hash: "hash-1",
-      file: { version: 1, agents: {} },
-    };
-  }
-  return { method, params };
-});
+const callGatewayFromCli = vi.fn(
+  async (method: string, _opts: unknown, params?: unknown): Promise<Record<string, unknown>> => {
+    if (method.endsWith(".get")) {
+      return {
+        path: "/tmp/exec-approvals.json",
+        exists: true,
+        hash: "hash-1",
+        file: { version: 1, agents: {} },
+      };
+    }
+    return { method, params };
+  },
+);
 
 const { runtimeErrors, defaultRuntime, resetRuntimeCapture } = createCliRuntimeCapture();
 
