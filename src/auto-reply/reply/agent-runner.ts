@@ -389,6 +389,19 @@ export async function runReplyAgent(params: {
     });
 
     if (runOutcome.kind === "final") {
+      // Gate: internal error/recovery payloads (context overflow, session reset, etc.) must never
+      // be forwarded to non-owner senders. These expose internal system state and are only
+      // meaningful for the session owner. See: https://github.com/openclaw/openclaw/issues/29227
+      if (followupRun.run.senderIsOwner === false) {
+        const text = runOutcome.payload?.text?.trim();
+        if (text) {
+          defaultRuntime.error(
+            `[non-owner-error-gate] Suppressed internal error payload to non-owner sender` +
+              ` (${followupRun.run.senderE164 ?? "unknown"}): ${text.slice(0, 120)}`,
+          );
+        }
+        return finalizeWithFollowup(undefined, queueKey, runFollowupTurn);
+      }
       return finalizeWithFollowup(runOutcome.payload, queueKey, runFollowupTurn);
     }
 
@@ -710,8 +723,29 @@ export async function runReplyAgent(params: {
       finalPayloads = appendUsageLine(finalPayloads, responseUsageLine);
     }
 
+    // Gate: never deliver isError payloads to non-owner senders. System-level error messages
+    // (context overflow, billing, auth) must not be forwarded to external contacts.
+    // See: https://github.com/openclaw/openclaw/issues/29227
+    const gatedFinalPayloads =
+      followupRun.run.senderIsOwner === false
+        ? finalPayloads.filter((p) => {
+            if (p.isError) {
+              defaultRuntime.error(
+                `[non-owner-error-gate] Suppressed isError payload to non-owner sender` +
+                  ` (${followupRun.run.senderE164 ?? "unknown"}): ${(p.text ?? "").slice(0, 120)}`,
+              );
+              return false;
+            }
+            return true;
+          })
+        : finalPayloads;
+
+    if (gatedFinalPayloads.length === 0) {
+      return finalizeWithFollowup(undefined, queueKey, runFollowupTurn);
+    }
+
     return finalizeWithFollowup(
-      finalPayloads.length === 1 ? finalPayloads[0] : finalPayloads,
+      gatedFinalPayloads.length === 1 ? gatedFinalPayloads[0] : gatedFinalPayloads,
       queueKey,
       runFollowupTurn,
     );

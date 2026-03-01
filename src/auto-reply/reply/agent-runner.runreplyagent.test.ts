@@ -1786,4 +1786,96 @@ describe("runReplyAgent memory flush", () => {
       expect(stored[sessionKey].memoryFlushCompactionCount).toBe(2);
     });
   });
+
+  describe("non-owner error gate (#29227)", () => {
+    it("suppresses isError payloads for non-owner senders", async () => {
+      state.runEmbeddedPiAgentMock.mockImplementationOnce(async () => ({
+        payloads: [
+          {
+            text: "Context overflow: prompt too large for the model. Try /reset (or /new) to start a fresh session, or use a larger-context model.",
+            isError: true,
+          },
+        ],
+        meta: {},
+      }));
+
+      const { run } = createMinimalRun({
+        runOverrides: { senderIsOwner: false, senderE164: "+15550001234" },
+      });
+      const res = await run();
+
+      // Non-owner must receive nothing — error must be suppressed.
+      expect(res).toBeUndefined();
+    });
+
+    it("suppresses final-kind error payloads (thrown overflow) for non-owner senders", async () => {
+      // Throwing a context overflow error causes agent-runner-execution to return kind="final"
+      // with an internal error message. The gate should suppress this for non-owners.
+      state.runEmbeddedPiAgentMock.mockImplementationOnce(async () => {
+        throw new Error("context length exceeded");
+      });
+
+      const { run } = createMinimalRun({
+        runOverrides: { senderIsOwner: false, senderE164: "+15550001234" },
+      });
+      const res = await run();
+
+      // Non-owner must receive nothing.
+      expect(res).toBeUndefined();
+    });
+
+    it("still delivers normal (non-error) payloads to non-owner senders", async () => {
+      state.runEmbeddedPiAgentMock.mockImplementationOnce(async () => ({
+        payloads: [{ text: "Hello there!" }],
+        meta: {},
+      }));
+
+      const { run } = createMinimalRun({
+        runOverrides: { senderIsOwner: false },
+      });
+      const res = await run();
+
+      const payload = Array.isArray(res) ? res[0] : res;
+      expect(payload?.text).toBe("Hello there!");
+    });
+
+    it("delivers isError payloads to owner senders (gate inactive when senderIsOwner=true)", async () => {
+      state.runEmbeddedPiAgentMock.mockImplementationOnce(async () => ({
+        payloads: [
+          {
+            text: "Context overflow: prompt too large for the model. Try /reset (or /new) to start a fresh session, or use a larger-context model.",
+            isError: true,
+          },
+        ],
+        meta: {},
+      }));
+
+      const { run } = createMinimalRun({
+        runOverrides: { senderIsOwner: true },
+      });
+      const res = await run();
+
+      const payload = Array.isArray(res) ? res[0] : res;
+      expect(payload?.text).toContain("Context overflow");
+    });
+
+    it("delivers isError payloads when senderIsOwner is undefined (unknown = treat as owner)", async () => {
+      state.runEmbeddedPiAgentMock.mockImplementationOnce(async () => ({
+        payloads: [
+          {
+            text: "Context overflow: prompt too large for the model.",
+            isError: true,
+          },
+        ],
+        meta: {},
+      }));
+
+      // senderIsOwner not set — undefined means unknown / treat as owner context
+      const { run } = createMinimalRun();
+      const res = await run();
+
+      const payload = Array.isArray(res) ? res[0] : res;
+      expect(payload?.text).toContain("Context overflow");
+    });
+  });
 });

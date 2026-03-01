@@ -341,8 +341,10 @@ export function resolveCommandAuthorization(params: {
   const senderId = matchedSender ?? senderCandidates[0];
 
   const enforceOwner = Boolean(dock?.commands?.enforceOwnerForCommands);
-  const senderIsOwner = Boolean(matchedSender);
   const ownerAllowlistConfigured = ownerAllowAll || explicitOwners.length > 0;
+  // When no owner allowlist is configured there's no owner concept, so everyone is treated as an
+  // owner (gate-safe). Only set false when an explicit list is configured and the sender isn't in it.
+  const senderIsOwner = ownerAllowAll || Boolean(matchedSender) || !ownerAllowlistConfigured;
   const requireOwner = enforceOwner || ownerAllowlistConfigured;
   const isOwnerForCommands = !requireOwner
     ? true
