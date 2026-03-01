@@ -188,6 +188,92 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expectInboundContextContract(prepared!.ctxPayload as any);
   });
 
+<<<<<<< HEAD
+=======
+  it("includes forwarded shared attachment text in raw body", async () => {
+    const prepared = await prepareWithDefaultCtx(
+      createSlackMessage({
+        text: "",
+        attachments: [{ is_share: true, author_name: "Bob", text: "Forwarded hello" }],
+      }),
+    );
+
+    expect(prepared).toBeTruthy();
+    expect(prepared!.ctxPayload.RawBody).toContain("[Forwarded message from Bob]\nForwarded hello");
+  });
+
+  it("ignores non-forward attachments when no direct text/files are present", async () => {
+    const prepared = await prepareWithDefaultCtx(
+      createSlackMessage({
+        text: "",
+        files: [],
+        attachments: [{ is_msg_unfurl: true, text: "link unfurl text" }],
+      }),
+    );
+
+    expect(prepared).toBeNull();
+  });
+
+  it("delivers file-only message with placeholder when media download fails", async () => {
+    // Files without url_private will fail to download, simulating a download
+    // failure.  The message should still be delivered with a fallback
+    // placeholder instead of being silently dropped (#25064).
+    const prepared = await prepareWithDefaultCtx(
+      createSlackMessage({
+        text: "",
+        files: [{ name: "voice.ogg" }, { name: "photo.jpg" }],
+      }),
+    );
+
+    expect(prepared).toBeTruthy();
+    expect(prepared!.ctxPayload.RawBody).toContain("[Slack file:");
+    expect(prepared!.ctxPayload.RawBody).toContain("voice.ogg");
+    expect(prepared!.ctxPayload.RawBody).toContain("photo.jpg");
+  });
+
+  it("falls back to generic file label when a Slack file name is empty", async () => {
+    const prepared = await prepareWithDefaultCtx(
+      createSlackMessage({
+        text: "",
+        files: [{ name: "" }],
+      }),
+    );
+
+    expect(prepared).toBeTruthy();
+    expect(prepared!.ctxPayload.RawBody).toContain("[Slack file: file]");
+  });
+
+  it("extracts attachment text for bot messages with empty text when allowBots is true (#27616)", async () => {
+    const slackCtx = createInboundSlackCtx({
+      cfg: {
+        channels: {
+          slack: { enabled: true },
+        },
+      } as OpenClawConfig,
+      defaultRequireMention: false,
+    });
+    // oxlint-disable-next-line typescript/no-explicit-any
+    slackCtx.resolveUserName = async () => ({ name: "Bot" }) as any;
+
+    const account = createSlackAccount({ allowBots: true });
+    const message = createSlackMessage({
+      text: "",
+      bot_id: "B0AGV8EQYA3",
+      subtype: "bot_message",
+      attachments: [
+        {
+          text: "Readiness probe failed: Get http://10.42.13.132:8000/status: context deadline exceeded",
+        },
+      ],
+    });
+
+    const prepared = await prepareMessageWith(slackCtx, account, message);
+
+    expect(prepared).toBeTruthy();
+    expect(prepared!.ctxPayload.RawBody).toContain("Readiness probe failed");
+  });
+
+>>>>>>> 43ddb4135 (fix(slack): extract attachment text for bot messages with empty text (#27616) (#27642))
   it("keeps channel metadata out of GroupSystemPrompt", async () => {
     const slackCtx = createInboundSlackCtx({
       cfg: {
