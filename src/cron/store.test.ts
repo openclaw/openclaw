@@ -32,7 +32,7 @@ describe("resolveCronStorePath", () => {
 describe("cron store", () => {
   it("returns empty store when file does not exist", async () => {
     const store = await makeStorePath();
-    const loaded = await loadCronStore(store.storePath);
+    const loaded = loadCronStore(store.storePath);
     expect(loaded).toEqual({ version: 1, jobs: [] });
     await store.cleanup();
   });
@@ -40,7 +40,7 @@ describe("cron store", () => {
   it("throws when store contains invalid JSON", async () => {
     const store = await makeStorePath();
     await fs.writeFile(store.storePath, "{ not json", "utf-8");
-    await expect(loadCronStore(store.storePath)).rejects.toThrow(/Failed to parse cron store/i);
+    expect(() => loadCronStore(store.storePath)).toThrow(/Failed to parse cron store/i);
     await store.cleanup();
   });
 });

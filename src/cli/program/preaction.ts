@@ -76,9 +76,16 @@ export function registerPreActionHooks(program: Command, programVersion: string)
     if (!verbose) {
       process.env.NODE_NO_WARNINGS ??= "1";
     }
+    // Initialize the datastore early so the PG cache is warm before any reads.
+    // Must run for ALL commands (including bypass commands like secrets) because
+    // they read auth stores synchronously via getDatastore().readJson().
+    const { initDatastore } = await import("../../infra/datastore.js");
+    await initDatastore();
+
     if (CONFIG_GUARD_BYPASS_COMMANDS.has(commandPath[0])) {
       return;
     }
+
     const { ensureConfigReady } = await import("./config-guard.js");
     await ensureConfigReady({ runtime: defaultRuntime, commandPath });
     // Load plugins for commands that need channel access

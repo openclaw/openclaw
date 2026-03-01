@@ -1,7 +1,7 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveStateDir } from "../config/paths.js";
+import { getDatastore } from "./datastore.js";
 
 export type RestartSentinelLog = {
   stdoutTail?: string | null;
@@ -65,46 +65,42 @@ export function resolveRestartSentinelPath(env: NodeJS.ProcessEnv = process.env)
 export async function writeRestartSentinel(
   payload: RestartSentinelPayload,
   env: NodeJS.ProcessEnv = process.env,
-) {
+): Promise<string> {
   const filePath = resolveRestartSentinelPath(env);
-  await fs.mkdir(path.dirname(filePath), { recursive: true });
   const data: RestartSentinel = { version: 1, payload };
-  await fs.writeFile(filePath, `${JSON.stringify(data, null, 2)}\n`, "utf-8");
+  getDatastore().writeJson(filePath, data);
+  // Ensure the sentinel is durable before the caller triggers a restart.
+  // PG backend writes are async; without flush the row may not be committed
+  // before SIGUSR1 kills the process.
+  await getDatastore().flush();
   return filePath;
 }
 
-export async function readRestartSentinel(
-  env: NodeJS.ProcessEnv = process.env,
-): Promise<RestartSentinel | null> {
+export function readRestartSentinel(env: NodeJS.ProcessEnv = process.env): RestartSentinel | null {
   const filePath = resolveRestartSentinelPath(env);
   try {
-    const raw = await fs.readFile(filePath, "utf-8");
-    let parsed: RestartSentinel | undefined;
-    try {
-      parsed = JSON.parse(raw) as RestartSentinel | undefined;
-    } catch {
-      await fs.unlink(filePath).catch(() => {});
-      return null;
-    }
+    const parsed = getDatastore().readJson(filePath) as RestartSentinel | null;
     if (!parsed || parsed.version !== 1 || !parsed.payload) {
-      await fs.unlink(filePath).catch(() => {});
+      // Clean up corrupt or invalid sentinel files (no-op if already absent)
+      getDatastore().delete(filePath);
       return null;
     }
     return parsed;
   } catch {
+    getDatastore().delete(filePath);
     return null;
   }
 }
 
-export async function consumeRestartSentinel(
+export function consumeRestartSentinel(
   env: NodeJS.ProcessEnv = process.env,
-): Promise<RestartSentinel | null> {
+): RestartSentinel | null {
   const filePath = resolveRestartSentinelPath(env);
-  const parsed = await readRestartSentinel(env);
+  const parsed = readRestartSentinel(env);
   if (!parsed) {
     return null;
   }
-  await fs.unlink(filePath).catch(() => {});
+  getDatastore().delete(filePath);
   return parsed;
 }
 

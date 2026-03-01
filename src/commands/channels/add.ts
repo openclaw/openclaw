@@ -302,7 +302,7 @@ export async function channelsAddCommand(
     const nextTelegramToken = resolveTelegramAccount({ cfg: nextConfig, accountId }).token.trim();
     if (previousTelegramToken !== nextTelegramToken) {
       // Clear stale polling offsets after Telegram token rotation.
-      await deleteTelegramUpdateOffset({ accountId });
+      deleteTelegramUpdateOffset({ accountId });
     }
   }
 

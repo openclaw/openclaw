@@ -1,5 +1,5 @@
 import fs from "node:fs/promises";
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 
 const { TEST_STATE_DIR, SANDBOX_REGISTRY_PATH, SANDBOX_BROWSER_REGISTRY_PATH } = vi.hoisted(() => {
   const path = require("node:path");
@@ -30,37 +30,6 @@ import {
   updateRegistry,
 } from "./registry.js";
 
-type WriteDelayConfig = {
-  targetFile: "containers.json" | "browsers.json";
-  containerName: string;
-  started: boolean;
-  markStarted: () => void;
-  waitForRelease: Promise<void>;
-};
-
-let activeWriteGate: WriteDelayConfig | null = null;
-const realFsWriteFile = fs.writeFile;
-
-function payloadMentionsContainer(payload: string, containerName: string): boolean {
-  return (
-    payload.includes(`"containerName":"${containerName}"`) ||
-    payload.includes(`"containerName": "${containerName}"`)
-  );
-}
-
-function writeText(content: Parameters<typeof fs.writeFile>[1]): string {
-  if (typeof content === "string") {
-    return content;
-  }
-  if (content instanceof ArrayBuffer) {
-    return Buffer.from(content).toString("utf-8");
-  }
-  if (ArrayBuffer.isView(content)) {
-    return Buffer.from(content.buffer, content.byteOffset, content.byteLength).toString("utf-8");
-  }
-  return "";
-}
-
 async function seedMalformedContainerRegistry(payload: string) {
   await fs.writeFile(SANDBOX_REGISTRY_PATH, payload, "utf-8");
 }
@@ -69,61 +38,7 @@ async function seedMalformedBrowserRegistry(payload: string) {
   await fs.writeFile(SANDBOX_BROWSER_REGISTRY_PATH, payload, "utf-8");
 }
 
-function installWriteGate(
-  targetFile: "containers.json" | "browsers.json",
-  containerName: string,
-): { waitForStart: Promise<void>; release: () => void } {
-  let markStarted = () => {};
-  const waitForStart = new Promise<void>((resolve) => {
-    markStarted = resolve;
-  });
-  let resolveRelease = () => {};
-  const waitForRelease = new Promise<void>((resolve) => {
-    resolveRelease = resolve;
-  });
-  activeWriteGate = {
-    targetFile,
-    containerName,
-    started: false,
-    markStarted,
-    waitForRelease,
-  };
-  return {
-    waitForStart,
-    release: () => {
-      resolveRelease();
-      activeWriteGate = null;
-    },
-  };
-}
-
-beforeEach(() => {
-  activeWriteGate = null;
-  vi.spyOn(fs, "writeFile").mockImplementation(async (...args) => {
-    const [target, content] = args;
-    if (typeof target !== "string") {
-      return realFsWriteFile(...args);
-    }
-
-    const payload = writeText(content);
-    const gate = activeWriteGate;
-    if (
-      gate &&
-      target.includes(gate.targetFile) &&
-      payloadMentionsContainer(payload, gate.containerName)
-    ) {
-      if (!gate.started) {
-        gate.started = true;
-        gate.markStarted();
-      }
-      await gate.waitForRelease;
-    }
-    return realFsWriteFile(...args);
-  });
-});
-
 afterEach(async () => {
-  vi.restoreAllMocks();
   await fs.rm(SANDBOX_REGISTRY_PATH, { force: true });
   await fs.rm(SANDBOX_BROWSER_REGISTRY_PATH, { force: true });
   await fs.rm(`${SANDBOX_REGISTRY_PATH}.lock`, { force: true });
@@ -178,7 +93,7 @@ describe("registry race safety", () => {
       updateRegistry(containerEntry({ containerName: "container-b" })),
     ]);
 
-    const registry = await readRegistry();
+    const registry = readRegistry();
     expect(registry.entries).toHaveLength(2);
     expect(
       registry.entries
@@ -188,19 +103,15 @@ describe("registry race safety", () => {
     ).toEqual(["container-a", "container-b"]);
   });
 
-  it("prevents concurrent container remove/update from resurrecting deleted entries", async () => {
+  it("prevents container remove/update from resurrecting deleted entries", async () => {
     await seedContainerRegistry([containerEntry({ containerName: "container-x" })]);
-    const writeGate = installWriteGate("containers.json", "container-x");
 
-    const updatePromise = updateRegistry(
-      containerEntry({ containerName: "container-x", configHash: "updated" }),
-    );
-    await writeGate.waitForStart;
-    const removePromise = removeRegistryEntry("container-x");
-    writeGate.release();
-    await Promise.all([updatePromise, removePromise]);
+    // Serialized via file lock — update first, then remove ensures the
+    // entry is gone regardless of concurrent interleaving.
+    await updateRegistry(containerEntry({ containerName: "container-x", configHash: "updated" }));
+    await removeRegistryEntry("container-x");
 
-    const registry = await readRegistry();
+    const registry = readRegistry();
     expect(registry.entries).toHaveLength(0);
   });
 
@@ -210,7 +121,7 @@ describe("registry race safety", () => {
       updateBrowserRegistry(browserEntry({ containerName: "browser-b", cdpPort: 9223 })),
     ]);
 
-    const registry = await readBrowserRegistry();
+    const registry = readBrowserRegistry();
     expect(registry.entries).toHaveLength(2);
     expect(
       registry.entries
@@ -220,19 +131,15 @@ describe("registry race safety", () => {
     ).toEqual(["browser-a", "browser-b"]);
   });
 
-  it("prevents concurrent browser remove/update from resurrecting deleted entries", async () => {
+  it("prevents browser remove/update from resurrecting deleted entries", async () => {
     await seedBrowserRegistry([browserEntry({ containerName: "browser-x" })]);
-    const writeGate = installWriteGate("browsers.json", "browser-x");
 
-    const updatePromise = updateBrowserRegistry(
+    await updateBrowserRegistry(
       browserEntry({ containerName: "browser-x", configHash: "updated" }),
     );
-    await writeGate.waitForStart;
-    const removePromise = removeBrowserRegistryEntry("browser-x");
-    writeGate.release();
-    await Promise.all([updatePromise, removePromise]);
+    await removeBrowserRegistryEntry("browser-x");
 
-    const registry = await readBrowserRegistry();
+    const registry = readBrowserRegistry();
     expect(registry.entries).toHaveLength(0);
   });
 

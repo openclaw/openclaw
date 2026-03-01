@@ -198,7 +198,12 @@ export async function statusAllCommand(
     progress.tick();
 
     progress.setLabel("Checking local state…");
-    const sentinel = await readRestartSentinel().catch(() => null);
+    let sentinel: Awaited<ReturnType<typeof readRestartSentinel>> = null;
+    try {
+      sentinel = readRestartSentinel();
+    } catch {
+      // ignore
+    }
     const lastErr = await readLastGatewayErrorLine(process.env).catch(() => null);
     const port = resolveGatewayPort(cfg);
     const portUsage = await inspectPortUsage(port).catch(() => null);

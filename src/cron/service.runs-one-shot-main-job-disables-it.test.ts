@@ -163,7 +163,85 @@ vi.mock("node:fs", async (importOriginal) => {
     },
   } as unknown as typeof actual.promises;
 
-  const wrapped = { ...actual, promises };
+  // Sync methods — needed because datastore-fs uses readFileSync/writeFileSync etc.
+  const readFileSync = (p: string, enc?: string) => {
+    if (!isFixtureInMock(String(p))) {
+      return actual.readFileSync(p, enc as BufferEncoding);
+    }
+    const entry = fsState.entries.get(absInMock(String(p)));
+    if (!entry || entry.kind !== "file") {
+      throw mkErr("ENOENT", `ENOENT: no such file or directory, open '${p}'`);
+    }
+    return entry.content;
+  };
+  const writeFileSync = (p: string, data: string | Uint8Array, _enc?: string) => {
+    if (!isFixtureInMock(String(p))) {
+      return actual.writeFileSync(p, data);
+    }
+    const content = typeof data === "string" ? data : Buffer.from(data).toString("utf-8");
+    setFile(String(p), content);
+  };
+  const existsSync = (p: string) => {
+    if (!isFixtureInMock(String(p))) {
+      return actual.existsSync(p);
+    }
+    return fsState.entries.has(absInMock(String(p)));
+  };
+  const mkdirSync = (p: string, _opts?: unknown) => {
+    if (!isFixtureInMock(String(p))) {
+      return actual.mkdirSync(p, { recursive: true });
+    }
+    ensureDir(String(p));
+  };
+  const renameSync = (from: string, to: string) => {
+    if (!isFixtureInMock(String(from)) || !isFixtureInMock(String(to))) {
+      return actual.renameSync(from, to);
+    }
+    const fromAbs = absInMock(String(from));
+    const toAbs = absInMock(String(to));
+    const entry = fsState.entries.get(fromAbs);
+    if (!entry || entry.kind !== "file") {
+      throw mkErr("ENOENT", `ENOENT: no such file or directory, rename '${from}' -> '${to}'`);
+    }
+    ensureDir(pathMod.dirname(toAbs));
+    fsState.entries.delete(fromAbs);
+    fsState.entries.set(toAbs, { ...entry, mtimeMs: bumpMtimeMs() });
+  };
+  const copyFileSync = (from: string, to: string) => {
+    if (!isFixtureInMock(String(from)) || !isFixtureInMock(String(to))) {
+      return actual.copyFileSync(from, to);
+    }
+    const entry = fsState.entries.get(absInMock(String(from)));
+    if (!entry || entry.kind !== "file") {
+      throw mkErr("ENOENT", `ENOENT: no such file or directory, copyfile '${from}' -> '${to}'`);
+    }
+    setFile(String(to), entry.content);
+  };
+  const unlinkSync = (p: string) => {
+    if (!isFixtureInMock(String(p))) {
+      return actual.unlinkSync(p);
+    }
+    fsState.entries.delete(absInMock(String(p)));
+  };
+  const chmodSync = (p: string, _mode: number) => {
+    if (!isFixtureInMock(String(p))) {
+      return actual.chmodSync(p, _mode);
+    }
+    // no-op for in-memory fixtures
+  };
+
+  const wrapped = {
+    ...actual,
+    promises,
+    readFileSync,
+    writeFileSync,
+    existsSync,
+    mkdirSync,
+    renameSync,
+    copyFileSync,
+    unlinkSync,
+    chmodSync,
+  };
   return { ...wrapped, default: wrapped };
 });
 

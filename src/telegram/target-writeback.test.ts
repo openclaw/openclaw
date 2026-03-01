@@ -67,7 +67,7 @@ describe("maybePersistResolvedTelegramTarget", () => {
       },
       writeOptions: { expectedConfigPath: "/tmp/openclaw.json" },
     });
-    loadCronStore.mockResolvedValue({
+    loadCronStore.mockReturnValue({
       version: 1,
       jobs: [
         { id: "a", delivery: { channel: "telegram", to: "https://t.me/mychannel" } },
@@ -124,7 +124,7 @@ describe("maybePersistResolvedTelegramTarget", () => {
       },
       writeOptions: {},
     });
-    loadCronStore.mockResolvedValue({ version: 1, jobs: [] });
+    loadCronStore.mockReturnValue({ version: 1, jobs: [] });
 
     await maybePersistResolvedTelegramTarget({
       cfg: {} as OpenClawConfig,
@@ -157,7 +157,7 @@ describe("maybePersistResolvedTelegramTarget", () => {
       },
       writeOptions: {},
     });
-    loadCronStore.mockResolvedValue({
+    loadCronStore.mockReturnValue({
       version: 1,
       jobs: [{ id: "a", delivery: { channel: "telegram", to: "https://t.me/mychannel" } }],
     });

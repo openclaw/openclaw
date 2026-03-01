@@ -1,6 +1,6 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import { type OpenClawConfig, loadConfig } from "../config/config.js";
+import { getDatastore } from "../infra/datastore.js";
 import { isRecord } from "../utils.js";
 import { resolveOpenClawAgentDir } from "./agent-paths.js";
 import {
@@ -101,10 +101,9 @@ function mergeProviders(params: {
   return out;
 }
 
-async function readJson(pathname: string): Promise<unknown> {
+function readJsonData(pathname: string): unknown {
   try {
-    const raw = await fs.readFile(pathname, "utf8");
-    return JSON.parse(raw) as unknown;
+    return getDatastore().readJson(pathname);
   } catch {
     return null;
   }
@@ -143,9 +142,8 @@ export async function ensureOpenClawModelsJson(
   const targetPath = path.join(agentDir, "models.json");
 
   let mergedProviders = providers;
-  let existingRaw = "";
   if (mode === "merge") {
-    const existing = await readJson(targetPath);
+    const existing = readJsonData(targetPath);
     if (isRecord(existing) && isRecord(existing.providers)) {
       const existingProviders = existing.providers as Record<
         string,
@@ -182,18 +180,14 @@ export async function ensureOpenClawModelsJson(
     providers: mergedProviders,
     agentDir,
   });
-  const next = `${JSON.stringify({ providers: normalizedProviders }, null, 2)}\n`;
-  try {
-    existingRaw = await fs.readFile(targetPath, "utf8");
-  } catch {
-    existingRaw = "";
-  }
+  const nextData = { providers: normalizedProviders };
+  const ds = getDatastore();
+  const existingData = ds.readJson(targetPath);
 
-  if (existingRaw === next) {
+  if (JSON.stringify(existingData) === JSON.stringify(nextData)) {
     return { agentDir, wrote: false };
   }
 
-  await fs.mkdir(agentDir, { recursive: true, mode: 0o700 });
-  await fs.writeFile(targetPath, next, { mode: 0o600 });
+  ds.writeJson(targetPath, nextData);
   return { agentDir, wrote: true };
 }

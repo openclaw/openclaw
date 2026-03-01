@@ -9,6 +9,7 @@ import { normalizeProviderId } from "../agents/model-selection.js";
 import { resolveStateDir, type OpenClawConfig } from "../config/config.js";
 import type { ConfigWriteOptions } from "../config/io.js";
 import type { SecretProviderConfig } from "../config/types.secrets.js";
+import { getDatastore } from "../infra/datastore.js";
 import { resolveConfigDir, resolveUserPath } from "../utils.js";
 import { createSecretsConfigIO } from "./config-io.js";
 import {
@@ -330,12 +331,8 @@ async function projectPlanState(params: {
   const authStoreByPath = new Map<string, Record<string, unknown>>();
   if (options.scrubAuthProfilesForProviderTargets && providerTargets.size > 0) {
     for (const authStorePath of collectAuthStorePaths(nextConfig, stateDir)) {
-      if (!fs.existsSync(authStorePath)) {
-        continue;
-      }
-      const raw = fs.readFileSync(authStorePath, "utf8");
-      const parsed = JSON.parse(raw) as unknown;
-      if (!isRecord(parsed) || !isRecord(parsed.profiles)) {
+      const parsed = getDatastore().readJson(authStorePath);
+      if (parsed == null || !isRecord(parsed) || !isRecord(parsed.profiles)) {
         continue;
       }
       const nextStore = structuredClone(parsed) as Record<string, unknown> & {
@@ -394,9 +391,8 @@ async function projectPlanState(params: {
   const authJsonByPath = new Map<string, Record<string, unknown>>();
   if (options.scrubLegacyAuthJson) {
     for (const authJsonPath of collectAuthJsonPaths(stateDir)) {
-      const raw = fs.readFileSync(authJsonPath, "utf8");
-      const parsed = JSON.parse(raw) as unknown;
-      if (!isRecord(parsed)) {
+      const parsed = getDatastore().readJson(authJsonPath);
+      if (parsed == null || !isRecord(parsed)) {
         continue;
       }
       let mutated = false;
@@ -505,14 +501,6 @@ function restoreFileSnapshot(pathname: string, snapshot: FileSnapshot): void {
   writeTextFileAtomic(pathname, snapshot.content, snapshot.mode || 0o600);
 }
 
-function toJsonWrite(pathname: string, value: Record<string, unknown>): ApplyWrite {
-  return {
-    path: pathname,
-    content: `${JSON.stringify(value, null, 2)}\n`,
-    mode: 0o600,
-  };
-}
-
 export async function runSecretsApply(params: {
   plan: SecretsApplyPlan;
   env?: NodeJS.ProcessEnv;
@@ -541,41 +529,60 @@ export async function runSecretsApply(params: {
   }
 
   const io = createSecretsConfigIO({ env });
-  const snapshots = new Map<string, FileSnapshot>();
-  const capture = (pathname: string) => {
-    if (!snapshots.has(pathname)) {
-      snapshots.set(pathname, captureFileSnapshot(pathname));
+  const ds = getDatastore();
+
+  // Capture rollback data: filesystem snapshots for config/.env, datastore values for state JSON.
+  const fsSnapshots = new Map<string, FileSnapshot>();
+  const dsSnapshots = new Map<string, unknown>();
+  const captureFs = (pathname: string) => {
+    if (!fsSnapshots.has(pathname)) {
+      fsSnapshots.set(pathname, captureFileSnapshot(pathname));
     }
   };
 
-  capture(projected.configPath);
-  const writes: ApplyWrite[] = [];
-  for (const [pathname, value] of projected.authStoreByPath.entries()) {
-    capture(pathname);
-    writes.push(toJsonWrite(pathname, value));
+  captureFs(projected.configPath);
+  for (const pathname of projected.authStoreByPath.keys()) {
+    dsSnapshots.set(pathname, ds.readJson(pathname));
   }
-  for (const [pathname, value] of projected.authJsonByPath.entries()) {
-    capture(pathname);
-    writes.push(toJsonWrite(pathname, value));
+  for (const pathname of projected.authJsonByPath.keys()) {
+    dsSnapshots.set(pathname, ds.readJson(pathname));
   }
+  const envWrites: ApplyWrite[] = [];
   for (const [pathname, raw] of projected.envRawByPath.entries()) {
-    capture(pathname);
-    writes.push({
-      path: pathname,
-      content: raw,
-      mode: 0o600,
-    });
+    captureFs(pathname);
+    envWrites.push({ path: pathname, content: raw, mode: 0o600 });
   }
 
   try {
     await io.writeConfigFile(projected.nextConfig, projected.configWriteOptions);
-    for (const write of writes) {
+    for (const [pathname, value] of projected.authStoreByPath.entries()) {
+      ds.writeJson(pathname, value);
+    }
+    for (const [pathname, value] of projected.authJsonByPath.entries()) {
+      ds.writeJson(pathname, value);
+    }
+    // Ensure credential writes are durable before reporting success.
+    // Without this, PG backend writes are fire-and-forget and a transient
+    // DB error could lose the only durable copy of scrubbed credentials.
+    await ds.flush();
+    for (const write of envWrites) {
       writeTextFileAtomic(write.path, write.content, write.mode);
     }
   } catch (err) {
-    for (const [pathname, snapshot] of snapshots.entries()) {
+    for (const [pathname, snapshot] of fsSnapshots.entries()) {
       try {
         restoreFileSnapshot(pathname, snapshot);
+      } catch {
+        // Best effort only; preserve original error.
+      }
+    }
+    for (const [pathname, prev] of dsSnapshots.entries()) {
+      try {
+        if (prev == null) {
+          ds.delete(pathname);
+        } else {
+          ds.writeJson(pathname, prev);
+        }
       } catch {
         // Best effort only; preserve original error.
       }

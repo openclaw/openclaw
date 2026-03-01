@@ -848,7 +848,7 @@
             "groups": [
               {
                 "group": "Install overview",
-                "pages": ["install/index", "install/installer"]
+                "pages": ["install/index", "install/installer", "install/storage-backend"]
               },
               {
                 "group": "Other install methods",

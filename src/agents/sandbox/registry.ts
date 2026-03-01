@@ -1,12 +1,5 @@
-import crypto from "node:crypto";
-import fs from "node:fs/promises";
-import path from "node:path";
-import { acquireSessionWriteLock } from "../session-write-lock.js";
-import {
-  SANDBOX_BROWSER_REGISTRY_PATH,
-  SANDBOX_REGISTRY_PATH,
-  SANDBOX_STATE_DIR,
-} from "./constants.js";
+import { getDatastore } from "../../infra/datastore.js";
+import { SANDBOX_BROWSER_REGISTRY_PATH, SANDBOX_REGISTRY_PATH } from "./constants.js";
 
 export type SandboxRegistryEntry = {
   containerName: string;
@@ -69,66 +62,25 @@ function isRegistryFile<T extends RegistryEntry>(value: unknown): value is Regis
   return Array.isArray(maybeEntries) && maybeEntries.every(isRegistryEntry);
 }
 
-async function withRegistryLock<T>(registryPath: string, fn: () => Promise<T>): Promise<T> {
-  const lock = await acquireSessionWriteLock({ sessionFile: registryPath, allowReentrant: false });
-  try {
-    return await fn();
-  } finally {
-    await lock.release();
-  }
-}
-
-async function readRegistryFromFile<T extends RegistryEntry>(
+function readRegistryData<T extends RegistryEntry>(
   registryPath: string,
   mode: RegistryReadMode,
-): Promise<RegistryFile<T>> {
-  try {
-    const raw = await fs.readFile(registryPath, "utf-8");
-    const parsed = JSON.parse(raw) as unknown;
-    if (isRegistryFile<T>(parsed)) {
-      return parsed;
-    }
-    if (mode === "fallback") {
-      return { entries: [] };
-    }
-    throw new Error(`Invalid sandbox registry format: ${registryPath}`);
-  } catch (error) {
-    const code = (error as { code?: string } | null)?.code;
-    if (code === "ENOENT") {
-      return { entries: [] };
-    }
-    if (mode === "fallback") {
-      return { entries: [] };
-    }
-    if (error instanceof Error) {
-      throw error;
-    }
-    throw new Error(`Failed to read sandbox registry file: ${registryPath}`, { cause: error });
+): RegistryFile<T> {
+  const parsed = getDatastore().readJson(registryPath);
+  if (parsed == null) {
+    return { entries: [] };
   }
+  if (isRegistryFile<T>(parsed)) {
+    return parsed;
+  }
+  if (mode === "fallback") {
+    return { entries: [] };
+  }
+  throw new Error(`Invalid sandbox registry format: ${registryPath}`);
 }
 
-async function writeRegistryFile<T extends RegistryEntry>(
-  registryPath: string,
-  registry: RegistryFile<T>,
-): Promise<void> {
-  await fs.mkdir(SANDBOX_STATE_DIR, { recursive: true });
-  const payload = `${JSON.stringify(registry, null, 2)}\n`;
-  const registryDir = path.dirname(registryPath);
-  const tempPath = path.join(
-    registryDir,
-    `${path.basename(registryPath)}.${crypto.randomUUID()}.tmp`,
-  );
-  await fs.writeFile(tempPath, payload, "utf-8");
-  try {
-    await fs.rename(tempPath, registryPath);
-  } catch (error) {
-    await fs.rm(tempPath, { force: true });
-    throw error;
-  }
-}
-
-export async function readRegistry(): Promise<SandboxRegistry> {
-  return await readRegistryFromFile<SandboxRegistryEntry>(SANDBOX_REGISTRY_PATH, "fallback");
+export function readRegistry(): SandboxRegistry {
+  return readRegistryData<SandboxRegistryEntry>(SANDBOX_REGISTRY_PATH, "fallback");
 }
 
 function upsertEntry<T extends UpsertEntry>(entries: T[], entry: T): T[] {
@@ -151,13 +103,16 @@ async function withRegistryMutation<T extends RegistryEntry>(
   registryPath: string,
   mutate: (entries: T[]) => T[] | null,
 ): Promise<void> {
-  await withRegistryLock(registryPath, async () => {
-    const registry = await readRegistryFromFile<T>(registryPath, "strict");
+  await getDatastore().updateJsonWithLock(registryPath, (data) => {
+    if (data != null && !isRegistryFile<T>(data)) {
+      throw new Error(`Invalid sandbox registry format: ${registryPath}`);
+    }
+    const registry: RegistryFile<T> = (data as RegistryFile<T> | null) ?? { entries: [] };
     const next = mutate(registry.entries);
     if (next === null) {
-      return;
+      return { changed: false, result: registry };
     }
-    await writeRegistryFile(registryPath, { entries: next });
+    return { changed: true, result: { entries: next } };
   });
 }
 
@@ -177,11 +132,8 @@ export async function removeRegistryEntry(containerName: string) {
   });
 }
 
-export async function readBrowserRegistry(): Promise<SandboxBrowserRegistry> {
-  return await readRegistryFromFile<SandboxBrowserRegistryEntry>(
-    SANDBOX_BROWSER_REGISTRY_PATH,
-    "fallback",
-  );
+export function readBrowserRegistry(): SandboxBrowserRegistry {
+  return readRegistryData<SandboxBrowserRegistryEntry>(SANDBOX_BROWSER_REGISTRY_PATH, "fallback");
 }
 
 export async function updateBrowserRegistry(entry: SandboxBrowserRegistryEntry) {

@@ -661,13 +661,7 @@ export async function applyNonInteractiveAuthChoice(params: {
       if (!stored) {
         return null;
       }
-      await setCloudflareAiGatewayConfig(
-        accountId,
-        gatewayId,
-        stored,
-        undefined,
-        apiKeyStorageOptions,
-      );
+      setCloudflareAiGatewayConfig(accountId, gatewayId, stored, undefined, apiKeyStorageOptions);
     }
     nextConfig = applyAuthProfileConfig(nextConfig, {
       profileId: "cloudflare-ai-gateway:default",

@@ -35,7 +35,7 @@ function shouldPruneSandboxEntry(cfg: SandboxConfig, now: number, entry: Pruneab
 
 async function pruneSandboxRegistryEntries<TEntry extends PruneableRegistryEntry>(params: {
   cfg: SandboxConfig;
-  read: () => Promise<{ entries: TEntry[] }>;
+  read: () => { entries: TEntry[] } | Promise<{ entries: TEntry[] }>;
   remove: (containerName: string) => Promise<void>;
   onRemoved?: (entry: TEntry) => Promise<void>;
 }) {

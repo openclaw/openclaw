@@ -1,7 +1,6 @@
 import crypto from "node:crypto";
-import fs from "node:fs";
-import path from "node:path";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
+import { getDatastore } from "./datastore.js";
 import { expandHomePrefix } from "./home-dir.js";
 import { requestJsonlSocket } from "./jsonl-socket.js";
 export * from "./exec-approvals-analysis.js";
@@ -172,11 +171,6 @@ function mergeLegacyAgent(
   };
 }
 
-function ensureDir(filePath: string) {
-  const dir = path.dirname(filePath);
-  fs.mkdirSync(dir, { recursive: true });
-}
-
 // Coerce legacy/corrupted allowlists into `ExecAllowlistEntry[]` before we spread
 // entries to add ids (spreading strings creates {"0":"l","1":"s",...}).
 function coerceAllowlistEntries(allowlist: unknown): ExecAllowlistEntry[] | undefined {
@@ -283,7 +277,9 @@ function generateToken(): string {
 
 export function readExecApprovalsSnapshot(): ExecApprovalsSnapshot {
   const filePath = resolveExecApprovalsPath();
-  if (!fs.existsSync(filePath)) {
+  const ds = getDatastore();
+  const parsed = ds.readJson(filePath) as ExecApprovalsFile | null;
+  if (!parsed) {
     const file = normalizeExecApprovals({ version: 1, agents: {} });
     return {
       path: filePath,
@@ -293,15 +289,9 @@ export function readExecApprovalsSnapshot(): ExecApprovalsSnapshot {
       hash: hashExecApprovalsRaw(null),
     };
   }
-  const raw = fs.readFileSync(filePath, "utf8");
-  let parsed: ExecApprovalsFile | null = null;
-  try {
-    parsed = JSON.parse(raw) as ExecApprovalsFile;
-  } catch {
-    parsed = null;
-  }
+  const raw = JSON.stringify(parsed);
   const file =
-    parsed?.version === 1
+    parsed.version === 1
       ? normalizeExecApprovals(parsed)
       : normalizeExecApprovals({ version: 1, agents: {} });
   return {
@@ -316,12 +306,8 @@ export function readExecApprovalsSnapshot(): ExecApprovalsSnapshot {
 export function loadExecApprovals(): ExecApprovalsFile {
   const filePath = resolveExecApprovalsPath();
   try {
-    if (!fs.existsSync(filePath)) {
-      return normalizeExecApprovals({ version: 1, agents: {} });
-    }
-    const raw = fs.readFileSync(filePath, "utf8");
-    const parsed = JSON.parse(raw) as ExecApprovalsFile;
-    if (parsed?.version !== 1) {
+    const parsed = getDatastore().readJson(filePath) as ExecApprovalsFile | null;
+    if (!parsed || parsed.version !== 1) {
       return normalizeExecApprovals({ version: 1, agents: {} });
     }
     return normalizeExecApprovals(parsed);
@@ -332,13 +318,7 @@ export function loadExecApprovals(): ExecApprovalsFile {
 
 export function saveExecApprovals(file: ExecApprovalsFile) {
   const filePath = resolveExecApprovalsPath();
-  ensureDir(filePath);
-  fs.writeFileSync(filePath, `${JSON.stringify(file, null, 2)}\n`, { mode: 0o600 });
-  try {
-    fs.chmodSync(filePath, 0o600);
-  } catch {
-    // best-effort on platforms without chmod
-  }
+  getDatastore().writeJson(filePath, file);
 }
 
 export function ensureExecApprovals(): ExecApprovalsFile {

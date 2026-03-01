@@ -1,6 +1,5 @@
-import fs from "node:fs";
 import path from "node:path";
-import { saveJsonFile } from "../../infra/json-file.js";
+import { getDatastore } from "../../infra/datastore.js";
 import { resolveUserPath } from "../../utils.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import { AUTH_PROFILE_FILENAME, AUTH_STORE_VERSION, LEGACY_AUTH_FILENAME } from "./constants.js";
@@ -22,12 +21,13 @@ export function resolveAuthStorePathForDisplay(agentDir?: string): string {
 }
 
 export function ensureAuthStoreFile(pathname: string) {
-  if (fs.existsSync(pathname)) {
+  const ds = getDatastore();
+  if (ds.readJson(pathname) !== null) {
     return;
   }
   const payload: AuthProfileStore = {
     version: AUTH_STORE_VERSION,
     profiles: {},
   };
-  saveJsonFile(pathname, payload);
+  ds.writeJson(pathname, payload);
 }

@@ -2,21 +2,9 @@ import os from "node:os";
 import path from "node:path";
 import { normalizeProviderId } from "../../agents/model-selection.js";
 import { resolveStateDir } from "../../config/paths.js";
-import { withFileLock } from "../../infra/file-lock.js";
+import { getDatastore } from "../../infra/datastore.js";
 import { resolveRequiredHomeDir } from "../../infra/home-dir.js";
-import { readJsonFileWithFallback, writeJsonFileAtomically } from "../../plugin-sdk/json-store.js";
 import { normalizeAccountId as normalizeSharedAccountId } from "../../routing/account-id.js";
-
-const MODEL_PICKER_PREFERENCES_LOCK_OPTIONS = {
-  retries: {
-    retries: 8,
-    factor: 2,
-    minTimeout: 50,
-    maxTimeout: 5_000,
-    randomize: true,
-  },
-  stale: 15_000,
-} as const;
 
 const DEFAULT_RECENT_LIMIT = 5;
 
@@ -95,16 +83,17 @@ function sanitizeRecentModels(models: string[] | undefined, limit: number): stri
 }
 
 async function readPreferencesStore(filePath: string): Promise<ModelPickerPreferencesStore> {
-  const { value } = await readJsonFileWithFallback<ModelPickerPreferencesStore>(filePath, {
+  const { value } = getDatastore().readJsonWithFallback(filePath, {
     version: 1,
     entries: {},
   });
-  if (!value || typeof value !== "object" || value.version !== 1) {
+  const v = value as ModelPickerPreferencesStore | null;
+  if (!v || typeof v !== "object" || v.version !== 1) {
     return { version: 1, entries: {} };
   }
   return {
     version: 1,
-    entries: value.entries && typeof value.entries === "object" ? value.entries : {},
+    entries: v.entries && typeof v.entries === "object" ? v.entries : {},
   };
 }
 
@@ -144,8 +133,12 @@ export async function recordDiscordModelPickerRecentModel(params: {
   const limit = Math.max(1, Math.min(params.limit ?? DEFAULT_RECENT_LIMIT, 10));
   const filePath = resolvePreferencesStorePath(params.env);
 
-  await withFileLock(filePath, MODEL_PICKER_PREFERENCES_LOCK_OPTIONS, async () => {
-    const store = await readPreferencesStore(filePath);
+  await getDatastore().updateJsonWithLock(filePath, (raw) => {
+    const r = raw as ModelPickerPreferencesStore | null;
+    const store: ModelPickerPreferencesStore =
+      r && typeof r === "object" && r.version === 1
+        ? { version: 1, entries: r.entries && typeof r.entries === "object" ? r.entries : {} }
+        : { version: 1, entries: {} };
     const existing = sanitizeRecentModels(store.entries[key]?.recent, limit);
     const next = [
       normalizedModelRef,
@@ -157,6 +150,6 @@ export async function recordDiscordModelPickerRecentModel(params: {
       updatedAt: new Date().toISOString(),
     };
 
-    await writeJsonFileAtomically(filePath, store);
+    return { changed: true, result: store };
   });
 }

@@ -11,7 +11,7 @@ import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { STATE_DIR } from "../config/paths.js";
 import { logVerbose } from "../globals.js";
-import { loadJsonFile, saveJsonFile } from "../infra/json-file.js";
+import { getDatastore } from "../infra/datastore.js";
 import { resolveAutoImageModel } from "../media-understanding/runner.js";
 
 const CACHE_FILE = path.join(STATE_DIR, "telegram", "sticker-cache.json");
@@ -33,20 +33,22 @@ interface StickerCache {
 }
 
 function loadCache(): StickerCache {
-  const data = loadJsonFile(CACHE_FILE);
+  const data = getDatastore().readJson(CACHE_FILE) as StickerCache | null;
   if (!data || typeof data !== "object") {
     return { version: CACHE_VERSION, stickers: {} };
   }
-  const cache = data as StickerCache;
-  if (cache.version !== CACHE_VERSION) {
-    // Future: handle migration if needed
+  if (data.version !== CACHE_VERSION) {
     return { version: CACHE_VERSION, stickers: {} };
   }
-  return cache;
+  return data;
 }
 
 function saveCache(cache: StickerCache): void {
-  saveJsonFile(CACHE_FILE, cache);
+  try {
+    getDatastore().writeJson(CACHE_FILE, cache);
+  } catch (err) {
+    console.warn("[sticker-cache] failed to persist cache:", err);
+  }
 }
 
 /**

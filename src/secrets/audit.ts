@@ -6,6 +6,7 @@ import { resolveAuthStorePath } from "../agents/auth-profiles/paths.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import { resolveStateDir, type OpenClawConfig } from "../config/config.js";
 import { coerceSecretRef, type SecretRef } from "../config/types.secrets.js";
+import { getDatastore } from "../infra/datastore.js";
 import { resolveConfigDir, resolveUserPath } from "../utils.js";
 import { createSecretsConfigIO } from "./config-io.js";
 import { listKnownSecretEnvVarNames } from "./provider-env-vars.js";
@@ -163,12 +164,17 @@ function readJsonObject(filePath: string): {
   value: Record<string, unknown> | null;
   error?: string;
 } {
-  if (!fs.existsSync(filePath)) {
-    return { value: null };
-  }
   try {
-    const raw = fs.readFileSync(filePath, "utf8");
-    const parsed = JSON.parse(raw) as unknown;
+    const parsed = getDatastore().readJson(filePath);
+    if (parsed == null) {
+      // readJson returns null for both missing files and corrupt JSON.
+      // Probe with readText to distinguish: if raw content exists, it's corrupt.
+      const raw = getDatastore().readText(filePath);
+      if (raw != null) {
+        return { value: null, error: "Invalid JSON" };
+      }
+      return { value: null };
+    }
     if (!isRecord(parsed)) {
       return { value: null };
     }
@@ -341,11 +347,11 @@ function collectAuthStoreSecrets(params: {
   collector: AuditCollector;
   defaults?: SecretDefaults;
 }): void {
-  if (!fs.existsSync(params.authStorePath)) {
+  const parsedResult = readJsonObject(params.authStorePath);
+  if (parsedResult.value == null && !parsedResult.error) {
     return;
   }
   params.collector.filesScanned.add(params.authStorePath);
-  const parsedResult = readJsonObject(params.authStorePath);
   if (parsedResult.error) {
     addFinding(params.collector, {
       code: "REF_UNRESOLVED",
@@ -450,11 +456,11 @@ function collectAuthJsonResidue(params: { stateDir: string; collector: AuditColl
       continue;
     }
     const authJsonPath = path.join(agentsRoot, entry.name, "agent", "auth.json");
-    if (!fs.existsSync(authJsonPath)) {
+    const parsedResult = readJsonObject(authJsonPath);
+    if (parsedResult.value == null && !parsedResult.error) {
       continue;
     }
     params.collector.filesScanned.add(authJsonPath);
-    const parsedResult = readJsonObject(authJsonPath);
     if (parsedResult.error) {
       addFinding(params.collector, {
         code: "REF_UNRESOLVED",

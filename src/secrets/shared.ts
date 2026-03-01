@@ -16,23 +16,15 @@ export function normalizePositiveInt(value: unknown, fallback: number): number {
   return Math.max(1, Math.floor(fallback));
 }
 
-export function ensureDirForFile(filePath: string): void {
+function ensureDirForFile(filePath: string): void {
   fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 });
 }
 
-export function writeJsonFileSecure(pathname: string, value: unknown): void {
-  ensureDirForFile(pathname);
-  fs.writeFileSync(pathname, `${JSON.stringify(value, null, 2)}\n`, "utf8");
-  fs.chmodSync(pathname, 0o600);
-}
-
-export function readTextFileIfExists(pathname: string): string | null {
-  if (!fs.existsSync(pathname)) {
-    return null;
-  }
-  return fs.readFileSync(pathname, "utf8");
-}
-
+/**
+ * Atomically write text content to an external path (e.g. project .env files).
+ * This is a general-purpose IO helper for the secrets module; it writes to
+ * paths outside ~/.openclaw/ and therefore uses direct filesystem access.
+ */
 export function writeTextFileAtomic(pathname: string, value: string, mode = 0o600): void {
   ensureDirForFile(pathname);
   const tempPath = `${pathname}.tmp-${process.pid}-${Date.now()}`;

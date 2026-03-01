@@ -11,7 +11,7 @@ async function createAgentDir() {
   return fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
 }
 
-function writeProfiles(agentDir: string, profiles: AuthProfileStore["profiles"]) {
+function writeProfiles(agentDir: string, profiles: AuthProfileStore["profiles"]): void {
   saveAuthProfileStore(
     {
       version: 1,

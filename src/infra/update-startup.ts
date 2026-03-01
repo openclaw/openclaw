@@ -6,6 +6,7 @@ import type { loadConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { VERSION } from "../version.js";
+import { getDatastore } from "./datastore.js";
 import { resolveOpenClawPackageRoot } from "./openclaw-root.js";
 import { normalizeUpdateChannel, DEFAULT_PACKAGE_CHANNEL } from "./update-channels.js";
 import { compareSemverStrings, resolveNpmChannelTag, checkUpdateStatus } from "./update-check.js";
@@ -113,19 +114,17 @@ function resolveCheckIntervalMs(cfg: ReturnType<typeof loadConfig>): number {
   return UPDATE_CHECK_INTERVAL_MS;
 }
 
-async function readState(statePath: string): Promise<UpdateCheckState> {
+function readState(statePath: string): UpdateCheckState {
   try {
-    const raw = await fs.readFile(statePath, "utf-8");
-    const parsed = JSON.parse(raw) as UpdateCheckState;
+    const parsed = getDatastore().readJson(statePath) as UpdateCheckState | null;
     return parsed && typeof parsed === "object" ? parsed : {};
   } catch {
     return {};
   }
 }
 
-async function writeState(statePath: string, state: UpdateCheckState): Promise<void> {
-  await fs.mkdir(path.dirname(statePath), { recursive: true });
-  await fs.writeFile(statePath, JSON.stringify(state, null, 2), "utf-8");
+function writeState(statePath: string, state: UpdateCheckState): void {
+  getDatastore().writeJson(statePath, state);
 }
 
 function sameUpdateAvailable(a: UpdateAvailable | null, b: UpdateAvailable | null): boolean {
@@ -322,7 +321,7 @@ export async function runGatewayUpdateCheck(params: {
   }
 
   const statePath = path.join(resolveStateDir(), UPDATE_CHECK_FILENAME);
-  const state = await readState(statePath);
+  const state = readState(statePath);
   const now = Date.now();
   const lastCheckedAt = state.lastCheckedAt ? Date.parse(state.lastCheckedAt) : null;
   if (shouldRunUpdateHints) {
@@ -369,7 +368,7 @@ export async function runGatewayUpdateCheck(params: {
       next: null,
       onUpdateAvailableChange: params.onUpdateAvailableChange,
     });
-    await writeState(statePath, nextState);
+    writeState(statePath, nextState);
     return;
   }
 
@@ -377,7 +376,7 @@ export async function runGatewayUpdateCheck(params: {
   const resolved = await resolveNpmChannelTag({ channel, timeoutMs: 2500 });
   const tag = resolved.tag;
   if (!resolved.version) {
-    await writeState(statePath, nextState);
+    writeState(statePath, nextState);
     return;
   }
 
@@ -481,7 +480,7 @@ export async function runGatewayUpdateCheck(params: {
     });
   }
 
-  await writeState(statePath, nextState);
+  writeState(statePath, nextState);
 }
 
 export function scheduleGatewayUpdateCheck(params: {

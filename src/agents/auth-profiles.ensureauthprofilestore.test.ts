@@ -6,7 +6,7 @@ import { ensureAuthProfileStore } from "./auth-profiles.js";
 import { AUTH_STORE_VERSION, log } from "./auth-profiles/constants.js";
 
 describe("ensureAuthProfileStore", () => {
-  it("migrates legacy auth.json and deletes it (PR #368)", () => {
+  it("migrates legacy auth.json and deletes it (PR #368)", async () => {
     const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-profiles-"));
     try {
       const legacyPath = path.join(agentDir, "auth.json");
@@ -36,6 +36,10 @@ describe("ensureAuthProfileStore", () => {
 
       const migratedPath = path.join(agentDir, "auth-profiles.json");
       expect(fs.existsSync(migratedPath)).toBe(true);
+
+      // The legacy file delete is fire-and-forget (runs after the async
+      // write resolves), so flush the microtask queue before asserting.
+      await new Promise((resolve) => setTimeout(resolve, 50));
       expect(fs.existsSync(legacyPath)).toBe(false);
 
       // idempotent

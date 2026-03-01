@@ -11,48 +11,48 @@ import {
 describe("deleteTelegramUpdateOffset", () => {
   it("removes the offset file so a new bot starts fresh", async () => {
     await withStateDirEnv("openclaw-tg-offset-", async () => {
-      await writeTelegramUpdateOffset({ accountId: "default", updateId: 432_000_000 });
-      expect(await readTelegramUpdateOffset({ accountId: "default" })).toBe(432_000_000);
+      writeTelegramUpdateOffset({ accountId: "default", updateId: 432_000_000 });
+      expect(readTelegramUpdateOffset({ accountId: "default" })).toBe(432_000_000);
 
-      await deleteTelegramUpdateOffset({ accountId: "default" });
-      expect(await readTelegramUpdateOffset({ accountId: "default" })).toBeNull();
+      deleteTelegramUpdateOffset({ accountId: "default" });
+      expect(readTelegramUpdateOffset({ accountId: "default" })).toBeNull();
     });
   });
 
   it("does not throw when the offset file does not exist", async () => {
     await withStateDirEnv("openclaw-tg-offset-", async () => {
-      await expect(deleteTelegramUpdateOffset({ accountId: "nonexistent" })).resolves.not.toThrow();
+      expect(() => deleteTelegramUpdateOffset({ accountId: "nonexistent" })).not.toThrow();
     });
   });
 
   it("only removes the targeted account offset, leaving others intact", async () => {
     await withStateDirEnv("openclaw-tg-offset-", async () => {
-      await writeTelegramUpdateOffset({ accountId: "default", updateId: 100 });
-      await writeTelegramUpdateOffset({ accountId: "alerts", updateId: 200 });
+      writeTelegramUpdateOffset({ accountId: "default", updateId: 100 });
+      writeTelegramUpdateOffset({ accountId: "alerts", updateId: 200 });
 
-      await deleteTelegramUpdateOffset({ accountId: "default" });
+      deleteTelegramUpdateOffset({ accountId: "default" });
 
-      expect(await readTelegramUpdateOffset({ accountId: "default" })).toBeNull();
-      expect(await readTelegramUpdateOffset({ accountId: "alerts" })).toBe(200);
+      expect(readTelegramUpdateOffset({ accountId: "default" })).toBeNull();
+      expect(readTelegramUpdateOffset({ accountId: "alerts" })).toBe(200);
     });
   });
 
   it("returns null when stored offset was written by a different bot token", async () => {
     await withStateDirEnv("openclaw-tg-offset-", async () => {
-      await writeTelegramUpdateOffset({
+      writeTelegramUpdateOffset({
         accountId: "default",
         updateId: 321,
         botToken: "111111:token-a",
       });
 
       expect(
-        await readTelegramUpdateOffset({
+        readTelegramUpdateOffset({
           accountId: "default",
           botToken: "222222:token-b",
         }),
       ).toBeNull();
       expect(
-        await readTelegramUpdateOffset({
+        readTelegramUpdateOffset({
           accountId: "default",
           botToken: "111111:token-a",
         }),
@@ -71,7 +71,7 @@ describe("deleteTelegramUpdateOffset", () => {
       );
 
       expect(
-        await readTelegramUpdateOffset({
+        readTelegramUpdateOffset({
           accountId: "default",
           botToken: "333333:token-c",
         }),

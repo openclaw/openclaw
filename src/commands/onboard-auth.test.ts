@@ -141,7 +141,7 @@ describe("writeOAuthCredentials", () => {
       expires: Date.now() + 60_000,
     } satisfies OAuthCredentials;
 
-    await writeOAuthCredentials("openai-codex", creds);
+    writeOAuthCredentials("openai-codex", creds);
 
     const parsed = await readAuthProfilesForAgent<{
       profiles?: Record<string, OAuthCredentials & { type?: string }>;
@@ -177,7 +177,7 @@ describe("writeOAuthCredentials", () => {
       expires: Date.now() + 60_000,
     } satisfies OAuthCredentials;
 
-    await writeOAuthCredentials("openai-codex", creds, undefined, {
+    writeOAuthCredentials("openai-codex", creds, undefined, {
       syncSiblingAgents: true,
     });
 
@@ -212,7 +212,7 @@ describe("writeOAuthCredentials", () => {
       expires: Date.now() + 60_000,
     } satisfies OAuthCredentials;
 
-    await writeOAuthCredentials("openai-codex", creds, kidAgentDir);
+    writeOAuthCredentials("openai-codex", creds, kidAgentDir);
 
     const kidRaw = await fs.readFile(authProfilePathFor(kidAgentDir), "utf8");
     const kidParsed = JSON.parse(kidRaw) as {
@@ -245,7 +245,7 @@ describe("writeOAuthCredentials", () => {
       expires: Date.now() + 60_000,
     } satisfies OAuthCredentials;
 
-    await writeOAuthCredentials("openai-codex", creds, extKid, {
+    writeOAuthCredentials("openai-codex", creds, extKid, {
       syncSiblingAgents: true,
     });
 
@@ -283,7 +283,7 @@ describe("setMinimaxApiKey", () => {
     const env = await setupAuthTestEnv("openclaw-minimax-", { agentSubdir: "custom-agent" });
     lifecycle.setStateDir(env.stateDir);
 
-    await setMinimaxApiKey("sk-minimax-test");
+    setMinimaxApiKey("sk-minimax-test");
 
     const parsed = await readAuthProfilesForAgent<{
       profiles?: Record<string, { type?: string; provider?: string; key?: string }>;

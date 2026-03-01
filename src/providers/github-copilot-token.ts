@@ -1,6 +1,6 @@
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
-import { loadJsonFile, saveJsonFile } from "../infra/json-file.js";
+import { getDatastore } from "../infra/datastore.js";
 
 const COPILOT_TOKEN_URL = "https://api.github.com/copilot_internal/v2/token";
 
@@ -93,8 +93,10 @@ export async function resolveCopilotApiToken(params: {
 }> {
   const env = params.env ?? process.env;
   const cachePath = params.cachePath?.trim() || resolveCopilotTokenCachePath(env);
-  const loadJsonFileFn = params.loadJsonFileImpl ?? loadJsonFile;
-  const saveJsonFileFn = params.saveJsonFileImpl ?? saveJsonFile;
+  const ds = getDatastore();
+  const loadJsonFileFn = params.loadJsonFileImpl ?? ((p: string) => ds.readJson(p));
+  const saveJsonFileFn =
+    params.saveJsonFileImpl ?? ((p: string, v: CachedCopilotToken) => ds.writeJson(p, v));
   const cached = loadJsonFileFn(cachePath) as CachedCopilotToken | undefined;
   if (cached && typeof cached.token === "string" && typeof cached.expiresAt === "number") {
     if (isTokenUsable(cached)) {

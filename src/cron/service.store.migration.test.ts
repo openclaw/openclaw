@@ -27,7 +27,7 @@ async function migrateAndLoadFirstJob(storePath: string): Promise<Record<string,
   await cron.start();
   cron.stop();
 
-  const loaded = await loadCronStore(storePath);
+  const loaded = loadCronStore(storePath);
   return loaded.jobs[0] as Record<string, unknown>;
 }
 

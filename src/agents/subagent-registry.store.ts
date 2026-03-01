@@ -1,7 +1,7 @@
 import os from "node:os";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
-import { loadJsonFile, saveJsonFile } from "../infra/json-file.js";
+import { getDatastore } from "../infra/datastore.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
@@ -47,7 +47,7 @@ export function resolveSubagentRegistryPath(): string {
 
 export function loadSubagentRegistryFromDisk(): Map<string, SubagentRunRecord> {
   const pathname = resolveSubagentRegistryPath();
-  const raw = loadJsonFile(pathname);
+  const raw = getDatastore().readJson(pathname);
   if (!raw || typeof raw !== "object") {
     return new Map();
   }
@@ -127,5 +127,9 @@ export function saveSubagentRegistryToDisk(runs: Map<string, SubagentRunRecord>)
     version: REGISTRY_VERSION,
     runs: serialized,
   };
-  saveJsonFile(pathname, out);
+  try {
+    getDatastore().writeJson(pathname, out);
+  } catch (err) {
+    console.warn("[subagent-registry] failed to persist registry:", err);
+  }
 }

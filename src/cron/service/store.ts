@@ -238,7 +238,7 @@ export async function ensureLoaded(
   // edits on filesystems with coarse mtime resolution.
 
   const fileMtimeMs = await getFileMtimeMs(state.deps.storePath);
-  const loaded = await loadCronStore(state.deps.storePath);
+  const loaded = loadCronStore(state.deps.storePath);
   const jobs = (loaded.jobs ?? []) as unknown as Array<Record<string, unknown>>;
   let mutated = false;
   for (const raw of jobs) {
@@ -490,7 +490,7 @@ export async function persist(state: CronServiceState) {
   if (!state.store) {
     return;
   }
-  await saveCronStore(state.deps.storePath, state.store);
+  saveCronStore(state.deps.storePath, state.store);
   // Update file mtime after save to prevent immediate reload
   state.storeFileMtimeMs = await getFileMtimeMs(state.deps.storePath);
 }

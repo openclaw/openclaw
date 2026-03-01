@@ -26,7 +26,7 @@ export type SandboxBrowserInfo = SandboxBrowserRegistryEntry & {
 async function listSandboxRegistryItems<
   TEntry extends { containerName: string; image: string; sessionKey: string },
 >(params: {
-  read: () => Promise<{ entries: TEntry[] }>;
+  read: () => { entries: TEntry[] } | Promise<{ entries: TEntry[] }>;
   resolveConfiguredImage: (agentId?: string) => string;
 }): Promise<Array<TEntry & { running: boolean; imageMatch: boolean }>> {
   const registry = await params.read();

@@ -170,7 +170,7 @@ export async function maybePersistResolvedTelegramTarget(params: {
 
   try {
     const storePath = resolveCronStorePath(params.cfg.cron?.store);
-    const store = await loadCronStore(storePath);
+    const store = loadCronStore(storePath);
     let cronChanged = false;
     for (const job of store.jobs) {
       if (job.delivery?.channel !== "telegram") {
@@ -188,7 +188,7 @@ export async function maybePersistResolvedTelegramTarget(params: {
       cronChanged = true;
     }
     if (cronChanged) {
-      await saveCronStore(storePath, store);
+      saveCronStore(storePath, store);
       if (params.verbose) {
         writebackLogger.warn(`resolved Telegram cron delivery target ${raw} -> ${resolvedTarget}`);
       }

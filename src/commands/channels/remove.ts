@@ -116,7 +116,7 @@ export async function channelsRemoveCommand(
 
     // Clean up Telegram polling offset to prevent stale offset on bot token change (#18233)
     if (channel === "telegram") {
-      await deleteTelegramUpdateOffset({ accountId: resolvedAccountId });
+      deleteTelegramUpdateOffset({ accountId: resolvedAccountId });
     }
   } else {
     if (!plugin.config.setAccountEnabled) {

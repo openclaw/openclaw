@@ -150,12 +150,12 @@ function resolveSiblingAgentDirs(primaryAgentDir: string): string[] {
   return result;
 }
 
-export async function writeOAuthCredentials(
+export function writeOAuthCredentials(
   provider: string,
   creds: OAuthCredentials,
   agentDir?: string,
   options?: WriteOAuthCredentialsOptions,
-): Promise<string> {
+): string {
   const email =
     typeof creds.email === "string" && creds.email.trim() ? creds.email.trim() : "default";
   const profileId = `${provider}:${email}`;
@@ -199,7 +199,7 @@ export async function writeOAuthCredentials(
   return profileId;
 }
 
-export async function setAnthropicApiKey(
+export function setAnthropicApiKey(
   key: SecretInput,
   agentDir?: string,
   options?: ApiKeyStorageOptions,
@@ -212,7 +212,7 @@ export async function setAnthropicApiKey(
   });
 }
 
-export async function setOpenaiApiKey(
+export function setOpenaiApiKey(
   key: SecretInput,
   agentDir?: string,
   options?: ApiKeyStorageOptions,
@@ -224,7 +224,7 @@ export async function setOpenaiApiKey(
   });
 }
 
-export async function setGeminiApiKey(
+export function setGeminiApiKey(
   key: SecretInput,
   agentDir?: string,
   options?: ApiKeyStorageOptions,
@@ -237,7 +237,7 @@ export async function setGeminiApiKey(
   });
 }
 
-export async function setMinimaxApiKey(
+export function setMinimaxApiKey(
   key: SecretInput,
   agentDir?: string,
   profileId: string = "minimax:default",
@@ -252,7 +252,7 @@ export async function setMinimaxApiKey(
   });
 }
 
-export async function setMoonshotApiKey(
+export function setMoonshotApiKey(
   key: SecretInput,
   agentDir?: string,
   options?: ApiKeyStorageOptions,
@@ -265,7 +265,7 @@ export async function setMoonshotApiKey(
   });
 }
 
-export async function setKimiCodingApiKey(
+export function setKimiCodingApiKey(
   key: SecretInput,
   agentDir?: string,
   options?: ApiKeyStorageOptions,
@@ -278,7 +278,7 @@ export async function setKimiCodingApiKey(
   });
 }
 
-export async function setVolcengineApiKey(
+export function setVolcengineApiKey(
   key: SecretInput,
   agentDir?: string,
   options?: ApiKeyStorageOptions,
@@ -290,7 +290,7 @@ export async function setVolcengineApiKey(
   });
 }
 
-export async function setByteplusApiKey(
+export function setByteplusApiKey(
   key: SecretInput,
   agentDir?: string,
   options?: ApiKeyStorageOptions,
@@ -302,7 +302,7 @@ export async function setByteplusApiKey(
   });
 }
 
-export async function setSyntheticApiKey(
+export function setSyntheticApiKey(
   key: SecretInput,
   agentDir?: string,
   options?: ApiKeyStorageOptions,
@@ -315,7 +315,7 @@ export async function setSyntheticApiKey(
   });
 }
 
-export async function setVeniceApiKey(
+export function setVeniceApiKey(
   key: SecretInput,
   agentDir?: string,
   options?: ApiKeyStorageOptions,
@@ -336,11 +336,7 @@ export const TOGETHER_DEFAULT_MODEL_REF = "together/moonshotai/Kimi-K2.5";
 export const LITELLM_DEFAULT_MODEL_REF = "litellm/claude-opus-4-6";
 export const VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF = "vercel-ai-gateway/anthropic/claude-opus-4.6";
 
-export async function setZaiApiKey(
-  key: SecretInput,
-  agentDir?: string,
-  options?: ApiKeyStorageOptions,
-) {
+export function setZaiApiKey(key: SecretInput, agentDir?: string, options?: ApiKeyStorageOptions) {
   // Write to resolved agent dir so gateway finds credentials on startup.
   upsertAuthProfile({
     profileId: "zai:default",
@@ -349,7 +345,7 @@ export async function setZaiApiKey(
   });
 }
 
-export async function setXiaomiApiKey(
+export function setXiaomiApiKey(
   key: SecretInput,
   agentDir?: string,
   options?: ApiKeyStorageOptions,
@@ -361,7 +357,7 @@ export async function setXiaomiApiKey(
   });
 }
 
-export async function setOpenrouterApiKey(
+export function setOpenrouterApiKey(
   key: SecretInput,
   agentDir?: string,
   options?: ApiKeyStorageOptions,
@@ -375,7 +371,7 @@ export async function setOpenrouterApiKey(
   });
 }
 
-export async function setCloudflareAiGatewayConfig(
+export function setCloudflareAiGatewayConfig(
   accountId: string,
   gatewayId: string,
   apiKey: SecretInput,
@@ -399,7 +395,7 @@ export async function setCloudflareAiGatewayConfig(
   });
 }
 
-export async function setLitellmApiKey(
+export function setLitellmApiKey(
   key: SecretInput,
   agentDir?: string,
   options?: ApiKeyStorageOptions,
@@ -411,7 +407,7 @@ export async function setLitellmApiKey(
   });
 }
 
-export async function setVercelAiGatewayApiKey(
+export function setVercelAiGatewayApiKey(
   key: SecretInput,
   agentDir?: string,
   options?: ApiKeyStorageOptions,
@@ -423,7 +419,7 @@ export async function setVercelAiGatewayApiKey(
   });
 }
 
-export async function setOpencodeZenApiKey(
+export function setOpencodeZenApiKey(
   key: SecretInput,
   agentDir?: string,
   options?: ApiKeyStorageOptions,
@@ -435,7 +431,7 @@ export async function setOpencodeZenApiKey(
   });
 }
 
-export async function setTogetherApiKey(
+export function setTogetherApiKey(
   key: SecretInput,
   agentDir?: string,
   options?: ApiKeyStorageOptions,
@@ -447,7 +443,7 @@ export async function setTogetherApiKey(
   });
 }
 
-export async function setHuggingfaceApiKey(
+export function setHuggingfaceApiKey(
   key: SecretInput,
   agentDir?: string,
   options?: ApiKeyStorageOptions,
@@ -479,7 +475,7 @@ export function setXaiApiKey(key: SecretInput, agentDir?: string, options?: ApiK
   });
 }
 
-export async function setMistralApiKey(
+export function setMistralApiKey(
   key: SecretInput,
   agentDir?: string,
   options?: ApiKeyStorageOptions,
@@ -491,7 +487,7 @@ export async function setMistralApiKey(
   });
 }
 
-export async function setKilocodeApiKey(
+export function setKilocodeApiKey(
   key: SecretInput,
   agentDir?: string,
   options?: ApiKeyStorageOptions,

@@ -1,10 +1,10 @@
-import fs from "node:fs";
 import path from "node:path";
 import * as PiCodingAgent from "@mariozechner/pi-coding-agent";
 import type {
   AuthStorage as PiAuthStorage,
   ModelRegistry as PiModelRegistry,
 } from "@mariozechner/pi-coding-agent";
+import { getDatastore } from "../infra/datastore.js";
 import { ensureAuthProfileStore } from "./auth-profiles.js";
 import { resolvePiCredentialMapFromStore, type PiCredentialMap } from "./pi-auth-credentials.js";
 
@@ -50,17 +50,9 @@ function scrubLegacyStaticAuthJsonEntries(pathname: string): void {
   if (process.env.OPENCLAW_AUTH_STORE_READONLY === "1") {
     return;
   }
-  if (!fs.existsSync(pathname)) {
-    return;
-  }
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(fs.readFileSync(pathname, "utf8")) as unknown;
-  } catch {
-    return;
-  }
-  if (!isRecord(parsed)) {
+  const ds = getDatastore();
+  const parsed = ds.readJson(pathname) as Record<string, unknown> | null;
+  if (!parsed || !isRecord(parsed)) {
     return;
   }
 
@@ -81,12 +73,11 @@ function scrubLegacyStaticAuthJsonEntries(pathname: string): void {
   }
 
   if (Object.keys(parsed).length === 0) {
-    fs.rmSync(pathname, { force: true });
+    ds.delete(pathname);
     return;
   }
 
-  fs.writeFileSync(pathname, `${JSON.stringify(parsed, null, 2)}\n`, "utf8");
-  fs.chmodSync(pathname, 0o600);
+  ds.writeJson(pathname, parsed);
 }
 
 function createAuthStorage(AuthStorageLike: unknown, path: string, creds: PiCredentialMap) {

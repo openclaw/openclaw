@@ -33,7 +33,7 @@ describe("onboard auth credentials secret refs", () => {
     lifecycle.setStateDir(env.stateDir);
     process.env.MOONSHOT_API_KEY = "sk-moonshot-env";
 
-    await setMoonshotApiKey("sk-moonshot-env");
+    setMoonshotApiKey("sk-moonshot-env");
 
     const parsed = await readAuthProfilesForAgent<{
       profiles?: Record<string, { key?: string; keyRef?: unknown }>;
@@ -49,7 +49,7 @@ describe("onboard auth credentials secret refs", () => {
     lifecycle.setStateDir(env.stateDir);
     process.env.MOONSHOT_API_KEY = "sk-moonshot-env";
 
-    await setMoonshotApiKey("sk-moonshot-env", env.agentDir, { secretInputMode: "ref" });
+    setMoonshotApiKey("sk-moonshot-env", env.agentDir, { secretInputMode: "ref" });
 
     const parsed = await readAuthProfilesForAgent<{
       profiles?: Record<string, { key?: string; keyRef?: unknown }>;
@@ -64,7 +64,7 @@ describe("onboard auth credentials secret refs", () => {
     const env = await setupAuthTestEnv("openclaw-onboard-auth-credentials-inline-ref-");
     lifecycle.setStateDir(env.stateDir);
 
-    await setMoonshotApiKey("${MOONSHOT_API_KEY}");
+    setMoonshotApiKey("${MOONSHOT_API_KEY}");
 
     const parsed = await readAuthProfilesForAgent<{
       profiles?: Record<string, { key?: string; keyRef?: unknown }>;
@@ -80,7 +80,7 @@ describe("onboard auth credentials secret refs", () => {
     lifecycle.setStateDir(env.stateDir);
     process.env.MOONSHOT_API_KEY = "sk-moonshot-other";
 
-    await setMoonshotApiKey("sk-moonshot-plaintext");
+    setMoonshotApiKey("sk-moonshot-plaintext");
 
     const parsed = await readAuthProfilesForAgent<{
       profiles?: Record<string, { key?: string; keyRef?: unknown }>;
@@ -96,7 +96,7 @@ describe("onboard auth credentials secret refs", () => {
     lifecycle.setStateDir(env.stateDir);
     process.env.CLOUDFLARE_AI_GATEWAY_API_KEY = "cf-secret";
 
-    await setCloudflareAiGatewayConfig("account-1", "gateway-1", "cf-secret", env.agentDir, {
+    setCloudflareAiGatewayConfig("account-1", "gateway-1", "cf-secret", env.agentDir, {
       secretInputMode: "ref",
     });
 
@@ -115,7 +115,7 @@ describe("onboard auth credentials secret refs", () => {
     lifecycle.setStateDir(env.stateDir);
     process.env.OPENAI_API_KEY = "sk-openai-env";
 
-    await setOpenaiApiKey("sk-openai-env");
+    setOpenaiApiKey("sk-openai-env");
 
     const parsed = await readAuthProfilesForAgent<{
       profiles?: Record<string, { key?: string; keyRef?: unknown }>;
@@ -131,7 +131,7 @@ describe("onboard auth credentials secret refs", () => {
     lifecycle.setStateDir(env.stateDir);
     process.env.OPENAI_API_KEY = "sk-openai-env";
 
-    await setOpenaiApiKey("sk-openai-env", env.agentDir, { secretInputMode: "ref" });
+    setOpenaiApiKey("sk-openai-env", env.agentDir, { secretInputMode: "ref" });
 
     const parsed = await readAuthProfilesForAgent<{
       profiles?: Record<string, { key?: string; keyRef?: unknown }>;
@@ -148,8 +148,8 @@ describe("onboard auth credentials secret refs", () => {
     process.env.VOLCANO_ENGINE_API_KEY = "volcengine-secret";
     process.env.BYTEPLUS_API_KEY = "byteplus-secret";
 
-    await setVolcengineApiKey("volcengine-secret", env.agentDir, { secretInputMode: "ref" });
-    await setByteplusApiKey("byteplus-secret", env.agentDir, { secretInputMode: "ref" });
+    setVolcengineApiKey("volcengine-secret", env.agentDir, { secretInputMode: "ref" });
+    setByteplusApiKey("byteplus-secret", env.agentDir, { secretInputMode: "ref" });
 
     const parsed = await readAuthProfilesForAgent<{
       profiles?: Record<string, { key?: string; keyRef?: unknown }>;

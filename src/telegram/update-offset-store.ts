@@ -1,8 +1,8 @@
-import crypto from "node:crypto";
-import fs from "node:fs/promises";
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
+import { getDatastore } from "../infra/datastore.js";
 
 const STORE_VERSION = 2;
 
@@ -41,96 +41,78 @@ function extractBotIdFromToken(token?: string): string | null {
   return rawBotId;
 }
 
-function safeParseState(raw: string): TelegramUpdateOffsetState | null {
-  try {
-    const parsed = JSON.parse(raw) as {
-      version?: number;
-      lastUpdateId?: number | null;
-      botId?: string | null;
-    };
-    if (parsed?.version !== STORE_VERSION && parsed?.version !== 1) {
-      return null;
-    }
-    if (parsed.lastUpdateId !== null && typeof parsed.lastUpdateId !== "number") {
-      return null;
-    }
-    if (
-      parsed.version === STORE_VERSION &&
-      parsed.botId !== null &&
-      typeof parsed.botId !== "string"
-    ) {
-      return null;
-    }
-    return {
-      version: STORE_VERSION,
-      lastUpdateId: parsed.lastUpdateId ?? null,
-      botId: parsed.version === STORE_VERSION ? (parsed.botId ?? null) : null,
-    };
-  } catch {
+function safeParseState(raw: unknown): TelegramUpdateOffsetState | null {
+  if (!raw || typeof raw !== "object") {
     return null;
   }
+  const parsed = raw as {
+    version?: number;
+    lastUpdateId?: number | null;
+    botId?: string | null;
+  };
+  if (parsed?.version !== STORE_VERSION && parsed?.version !== 1) {
+    return null;
+  }
+  if (parsed.lastUpdateId !== null && typeof parsed.lastUpdateId !== "number") {
+    return null;
+  }
+  if (
+    parsed.version === STORE_VERSION &&
+    parsed.botId !== null &&
+    typeof parsed.botId !== "string"
+  ) {
+    return null;
+  }
+  return {
+    version: STORE_VERSION,
+    lastUpdateId: parsed.lastUpdateId ?? null,
+    botId: parsed.version === STORE_VERSION ? (parsed.botId ?? null) : null,
+  };
 }
 
-export async function readTelegramUpdateOffset(params: {
+export function readTelegramUpdateOffset(params: {
   accountId?: string;
   botToken?: string;
   env?: NodeJS.ProcessEnv;
-}): Promise<number | null> {
+}): number | null {
   const filePath = resolveTelegramUpdateOffsetPath(params.accountId, params.env);
-  try {
-    const raw = await fs.readFile(filePath, "utf-8");
-    const parsed = safeParseState(raw);
-    const expectedBotId = extractBotIdFromToken(params.botToken);
-    if (expectedBotId && parsed?.botId && parsed.botId !== expectedBotId) {
-      return null;
-    }
-    if (expectedBotId && parsed?.botId === null) {
-      return null;
-    }
-    return parsed?.lastUpdateId ?? null;
-  } catch (err) {
-    const code = (err as { code?: string }).code;
-    if (code === "ENOENT") {
-      return null;
-    }
+  const raw = getDatastore().readJson(filePath);
+  const parsed = safeParseState(raw);
+  const expectedBotId = extractBotIdFromToken(params.botToken);
+  if (expectedBotId && parsed?.botId && parsed.botId !== expectedBotId) {
     return null;
   }
+  if (expectedBotId && parsed?.botId === null) {
+    return null;
+  }
+  return parsed?.lastUpdateId ?? null;
 }
 
-export async function writeTelegramUpdateOffset(params: {
+export function writeTelegramUpdateOffset(params: {
   accountId?: string;
   updateId: number;
   botToken?: string;
   env?: NodeJS.ProcessEnv;
-}): Promise<void> {
+}): void {
   const filePath = resolveTelegramUpdateOffsetPath(params.accountId, params.env);
-  const dir = path.dirname(filePath);
-  await fs.mkdir(dir, { recursive: true, mode: 0o700 });
-  const tmp = path.join(dir, `${path.basename(filePath)}.${crypto.randomUUID()}.tmp`);
   const payload: TelegramUpdateOffsetState = {
     version: STORE_VERSION,
     lastUpdateId: params.updateId,
     botId: extractBotIdFromToken(params.botToken),
   };
-  await fs.writeFile(tmp, `${JSON.stringify(payload, null, 2)}\n`, {
-    encoding: "utf-8",
-  });
-  await fs.chmod(tmp, 0o600);
-  await fs.rename(tmp, filePath);
+  getDatastore().writeJson(filePath, payload);
+  // best-effort: restrict permissions on the file (security-sensitive bot tokens)
+  try {
+    fs.chmodSync(filePath, 0o600);
+  } catch {
+    // no-op — postgres backend has no file to chmod
+  }
 }
 
-export async function deleteTelegramUpdateOffset(params: {
+export function deleteTelegramUpdateOffset(params: {
   accountId?: string;
   env?: NodeJS.ProcessEnv;
-}): Promise<void> {
+}): void {
   const filePath = resolveTelegramUpdateOffsetPath(params.accountId, params.env);
-  try {
-    await fs.unlink(filePath);
-  } catch (err) {
-    const code = (err as { code?: string }).code;
-    if (code === "ENOENT") {
-      return;
-    }
-    throw err;
-  }
+  getDatastore().delete(filePath);
 }
