@@ -79,4 +79,27 @@ describe("fetchCodexUsage", () => {
       { label: "Week", usedPercent: 10, resetAt: 1_700_500_000_000 },
     ]);
   });
+
+  it("infers weekly label from reset_at when limit_window_seconds is absent", async () => {
+    const futureResetSec = Math.floor(Date.now() / 1000) + 5 * 24 * 3600;
+    const mockFetch = createProviderUsageFetch(async () =>
+      makeResponse(200, {
+        rate_limit: {
+          primary_window: {
+            limit_window_seconds: 10_800,
+            used_percent: 5,
+            reset_at: Math.floor(Date.now() / 1000) + 3600,
+          },
+          secondary_window: {
+            used_percent: 14,
+            reset_at: futureResetSec,
+          },
+        },
+      }),
+    );
+
+    const result = await fetchCodexUsage("token", undefined, 5000, mockFetch);
+    expect(result.windows[1]?.label).toBe("Week");
+    expect(result.windows[1]?.usedPercent).toBe(14);
+  });
 });

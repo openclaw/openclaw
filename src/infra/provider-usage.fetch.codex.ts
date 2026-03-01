@@ -64,7 +64,17 @@ export async function fetchCodexUsage(
 
   if (data.rate_limit?.secondary_window) {
     const sw = data.rate_limit.secondary_window;
-    const windowHours = Math.round((sw.limit_window_seconds || 86400) / 3600);
+    let windowHours: number;
+    if (sw.limit_window_seconds && sw.limit_window_seconds > 0) {
+      windowHours = Math.round(sw.limit_window_seconds / 3600);
+    } else if (sw.reset_at) {
+      // When limit_window_seconds is absent, infer from reset_at distance.
+      // A reset > 48h away almost certainly belongs to a weekly window.
+      const remainingSec = sw.reset_at - Math.floor(Date.now() / 1000);
+      windowHours = remainingSec > 48 * 3600 ? 168 : 24;
+    } else {
+      windowHours = 24;
+    }
     const label = windowHours >= 168 ? "Week" : windowHours >= 24 ? "Day" : `${windowHours}h`;
     windows.push({
       label,
