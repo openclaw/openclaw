@@ -75,7 +75,6 @@ monitor:
 symptoms:
   reply_explosion:
     maxRatio: 2.0
-    windowMs: 10000
   out_of_sync:
     enabled: true
 

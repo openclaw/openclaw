@@ -1,4 +1,4 @@
-import type { SimInboundMessage, SimMessage, SimOutboundMessage } from "./types.js";
+import type { SimMessage, SimOutboundMessage } from "./types.js";
 
 /**
  * Ordered message log with O(1) lookups by ID and conversation.
@@ -86,31 +86,6 @@ export class MessageTracker {
       }
     }
     return stale;
-  }
-
-  /** Inbound messages per conversation per time window. */
-  throughput(windowMs: number): Map<string, number[]> {
-    const result = new Map<string, number[]>();
-    if (this.log.length === 0) {
-      return result;
-    }
-
-    const firstTs = this.log[0].ts;
-    for (const [convId, msgs] of this.byConversation) {
-      const inbound = msgs.filter((m): m is SimInboundMessage => m.direction === "inbound");
-      if (inbound.length === 0) {
-        continue;
-      }
-      const lastTs = inbound[inbound.length - 1].ts;
-      const bucketCount = Math.ceil((lastTs - firstTs + 1) / windowMs);
-      const buckets: number[] = Array.from({ length: bucketCount }, () => 0);
-      for (const msg of inbound) {
-        const idx = Math.floor((msg.ts - firstTs) / windowMs);
-        buckets[idx]++;
-      }
-      result.set(convId, buckets);
-    }
-    return result;
   }
 
   /** Total message count. */

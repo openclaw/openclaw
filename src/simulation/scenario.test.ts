@@ -60,7 +60,7 @@ describe("parseScenario", () => {
   });
 
   it("accepts optional symptoms configuration", () => {
-    const yaml = `${VALID_YAML}\nsymptoms:\n  reply_explosion:\n    maxRatio: 2.0\n    windowMs: 5000`;
+    const yaml = `${VALID_YAML}\nsymptoms:\n  reply_explosion:\n    maxRatio: 2.0`;
     const config = parseScenario(yaml);
     expect(config.symptoms?.reply_explosion?.maxRatio).toBe(2.0);
   });

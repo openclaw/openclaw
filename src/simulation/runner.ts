@@ -1,12 +1,8 @@
-import { mkdirSync } from "node:fs";
-import { join } from "node:path";
-import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import {
   enqueueCommandInLane,
   resetLanesByPrefix,
   setCommandLaneConcurrency,
 } from "../process/command-queue.js";
-import { createFakeChannelPlugin } from "./fake-channel.js";
 import { createFakeStreamFn } from "./fake-provider.js";
 import { MessageTracker } from "./message-tracker.js";
 import { QueueMonitor } from "./queue-monitor.js";
@@ -51,12 +47,7 @@ export async function runSimulation(
   // Seeded PRNG for reproducibility
   const rng = scenario.seed !== undefined ? mulberry32(scenario.seed) : undefined;
 
-  // Temporary directory for session state isolation
-  const tmpBase = resolvePreferredOpenClawTmpDir();
-  const simDir = join(tmpBase, `sim-${runId}`);
-  mkdirSync(simDir, { recursive: true });
-
-  log(`[sim] run=${runId} scenario=${scenario.name} dir=${simDir}`);
+  log(`[sim] run=${runId} scenario=${scenario.name}`);
 
   // Wire fake provider
   const allModels: Record<string, { latencyMs: number; response: string; errorRate?: number }> = {};
@@ -71,21 +62,6 @@ export async function runSimulation(
     signal: controller.signal,
     rng,
   });
-
-  // Wire fake channels
-  const fakeChannels = new Map<string, ReturnType<typeof createFakeChannelPlugin>>();
-  for (const ch of scenario.channels) {
-    const plugin = createFakeChannelPlugin({
-      channelType: ch.type,
-      tracker,
-      onOutbound: (msg) => {
-        if (opts?.verbose) {
-          log(`[sim] outbound: conv=${msg.conversationId} text=${msg.text}`);
-        }
-      },
-    });
-    fakeChannels.set(ch.type, plugin);
-  }
 
   // Configure lane concurrency from scenario config
   const maxConcurrent =
@@ -262,7 +238,7 @@ function computeDelay(
 ): number {
   switch (pattern) {
     case "burst":
-      return index * intervalMs;
+      return 0;
     case "steady":
       return index * intervalMs;
     case "random": {

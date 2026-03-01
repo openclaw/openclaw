@@ -51,7 +51,6 @@ monitor:
 symptoms:
   reply_explosion:
     maxRatio: 1.5
-    windowMs: 10000
   queue_backlog:
     maxDepth: 5
     sustainedGrowthSamples: 3

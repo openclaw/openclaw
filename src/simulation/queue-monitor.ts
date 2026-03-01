@@ -17,6 +17,12 @@ export class QueueMonitor {
     this.lanePrefix = lanePrefix;
 
     this.dispose = onDiagnosticEvent((evt: DiagnosticEventPayload) => {
+      // Only capture events relevant to simulation lanes
+      if (this.lanePrefix && "lane" in evt && typeof evt.lane === "string") {
+        if (!evt.lane.startsWith(this.lanePrefix)) {
+          return;
+        }
+      }
       this.timeline.events.push(evt);
     });
 
@@ -42,11 +48,6 @@ export class QueueMonitor {
       clearInterval(this.interval);
       this.interval = undefined;
     }
-    return this.timeline;
-  }
-
-  /** Get a read-only reference to the timeline (for live dashboards). */
-  peek(): Readonly<QueueTimeline> {
     return this.timeline;
   }
 }

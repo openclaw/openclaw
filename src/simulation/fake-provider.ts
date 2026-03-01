@@ -68,7 +68,14 @@ export function createFakeStreamFn(params: {
       timestamp: Date.now(),
     });
 
+    let settled = false;
+
     const timer = setTimeout(() => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+
       try {
         if (params.signal?.aborted) {
           stream.push({
@@ -123,6 +130,10 @@ export function createFakeStreamFn(params: {
     params.signal?.addEventListener(
       "abort",
       () => {
+        if (settled) {
+          return;
+        }
+        settled = true;
         clearTimeout(timer);
         stream.push({
           type: "error",

@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import type { Command } from "commander";
-import { loadScenario, runSimulation } from "../simulation/index.js";
+import { deriveScenario, loadScenario, runSimulation } from "../simulation/index.js";
 
 export function registerSimCli(program: Command) {
   const sim = program.command("sim").description("Gateway simulation harness");
@@ -11,7 +11,6 @@ export function registerSimCli(program: Command) {
     .description("Run a simulation scenario")
     .argument("<scenario>", "Path to scenario YAML file")
     .option("--verbose", "Stream diagnostic events to stderr", false)
-    .option("--report <format>", "Output format: json | markdown | both", "json")
     .option("--out <dir>", "Output directory for report files")
     .option("--seed <number>", "Override scenario seed for reproducibility")
     .action(
@@ -19,7 +18,6 @@ export function registerSimCli(program: Command) {
         scenarioPath: string,
         opts: {
           verbose: boolean;
-          report: string;
           out?: string;
           seed?: string;
         },
@@ -31,12 +29,11 @@ export function registerSimCli(program: Command) {
           return;
         }
 
-        const scenario = loadScenario(resolvedPath);
-
-        // Override seed if provided
-        if (opts.seed !== undefined) {
-          scenario.seed = Number.parseInt(opts.seed, 10);
-        }
+        const base = loadScenario(resolvedPath);
+        const scenario =
+          opts.seed !== undefined
+            ? deriveScenario(base, { seed: Number.parseInt(opts.seed, 10) })
+            : base;
 
         const controller = new AbortController();
         process.on("SIGINT", () => controller.abort());
@@ -52,7 +49,8 @@ export function registerSimCli(program: Command) {
         const json = JSON.stringify(report, null, 2);
         if (opts.out) {
           const outDir = resolve(opts.out);
-          const outPath = join(outDir, `sim-report-${report.scenario}.json`);
+          const safeName = basename(report.scenario).replace(/[^\w\-. ]/g, "_");
+          const outPath = join(outDir, `sim-report-${safeName}.json`);
           writeFileSync(outPath, json);
           console.log(`Report written to ${outPath}`);
         } else {

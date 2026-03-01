@@ -43,7 +43,7 @@ describe("detectSymptoms", () => {
       const symptoms = detectSymptoms({
         messages,
         timeline: emptyTimeline,
-        thresholds: { reply_explosion: { maxRatio: 1.5, windowMs: 10000 } },
+        thresholds: { reply_explosion: { maxRatio: 1.5 } },
       });
       expect(symptoms.some((s) => s.type === "reply_explosion")).toBe(true);
     });
@@ -56,7 +56,7 @@ describe("detectSymptoms", () => {
       const symptoms = detectSymptoms({
         messages,
         timeline: emptyTimeline,
-        thresholds: { reply_explosion: { maxRatio: 1.5, windowMs: 10000 } },
+        thresholds: { reply_explosion: { maxRatio: 1.5 } },
       });
       expect(symptoms.some((s) => s.type === "reply_explosion")).toBe(false);
     });

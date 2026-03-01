@@ -106,7 +106,7 @@ export type SimSymptom =
 // ── Thresholds ───────────────────────────────────────────────────────
 
 export type SymptomThresholds = {
-  reply_explosion?: { maxRatio: number; windowMs: number };
+  reply_explosion?: { maxRatio: number };
   lag_drift?: { maxSlopeMs: number; windowMessages: number };
   queue_backlog?: { maxDepth: number; sustainedGrowthSamples: number };
   stale_context?: { maxStaleness: number };
@@ -199,15 +199,11 @@ export type ScenarioProviderModel = {
 
 export type ScenarioTraffic = {
   conversation: string;
-  pattern: "burst" | "steady" | "random" | "replay";
+  pattern: "burst" | "steady" | "random";
   count: number;
   intervalMs: number;
   startAtMs: number;
   senderIds: string[];
-  /** For replay: path to a traffic log file. */
-  replayFile?: string;
-  /** For random: lambda parameter for Poisson distribution. */
-  lambda?: number;
 };
 
 export type ScenarioMonitor = {

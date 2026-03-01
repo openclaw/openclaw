@@ -27,13 +27,11 @@ const scenarioProviderModelSchema = z.object({
 
 const scenarioTrafficSchema = z.object({
   conversation: z.string().min(1),
-  pattern: z.enum(["burst", "steady", "random", "replay"]),
+  pattern: z.enum(["burst", "steady", "random"]),
   count: z.number().int().positive(),
   intervalMs: z.number().int().nonnegative(),
   startAtMs: z.number().int().nonnegative().default(0),
   senderIds: z.array(z.string().min(1)).min(1),
-  replayFile: z.string().optional(),
-  lambda: z.number().positive().optional(),
 });
 
 const scenarioMonitorSchema = z.object({
@@ -43,9 +41,7 @@ const scenarioMonitorSchema = z.object({
 
 const symptomThresholdsSchema = z
   .object({
-    reply_explosion: z
-      .object({ maxRatio: z.number().positive(), windowMs: z.number().int().positive() })
-      .optional(),
+    reply_explosion: z.object({ maxRatio: z.number().positive() }).optional(),
     lag_drift: z
       .object({
         maxSlopeMs: z.number().positive(),
@@ -82,7 +78,10 @@ const assertionSchema = z.discriminatedUnion("type", [
 ]);
 
 export const scenarioConfigSchema = z.object({
-  name: z.string().min(1),
+  name: z
+    .string()
+    .min(1)
+    .regex(/^[\w][\w\-. ]{0,127}$/, "Scenario name must be alphanumeric, dash, dot, or underscore"),
   description: z.string().optional(),
   seed: z.number().int().optional(),
   agents: z.array(scenarioAgentSchema).min(1),

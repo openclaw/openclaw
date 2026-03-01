@@ -37,7 +37,7 @@ class EWMADetector {
 // ── Default thresholds ───────────────────────────────────────────────
 
 const DEFAULTS: Required<SymptomThresholds> = {
-  reply_explosion: { maxRatio: 1.5, windowMs: 10_000 },
+  reply_explosion: { maxRatio: 1.5 },
   lag_drift: { maxSlopeMs: 200, windowMessages: 10 },
   queue_backlog: { maxDepth: 20, sustainedGrowthSamples: 5 },
   stale_context: { maxStaleness: 3 },
