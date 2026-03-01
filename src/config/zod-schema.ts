@@ -349,9 +349,8 @@ export const OpenClawSchema = z
                 z.literal("paragraph"),
               ])
               .optional(),
-            maxTurnChars: z.number().int().positive().optional(),
-            maxToolSummaryChars: z.number().int().positive().optional(),
-            maxStatusChars: z.number().int().positive().optional(),
+            maxOutputChars: z.number().int().positive().optional(),
+            maxSessionUpdateChars: z.number().int().positive().optional(),
             tagVisibility: z.record(z.string(), z.boolean()).optional(),
           })
           .strict()
