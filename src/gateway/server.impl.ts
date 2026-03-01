@@ -344,6 +344,21 @@ export async function startGatewayServer(
   }
 
   cfgAtStart = loadConfig();
+
+  // Apply config-based global proxy (network.proxy) now that config is loaded.
+  // This supplements the env-var–based proxy installed in entry.ts; an explicit
+  // config value takes precedence over HTTPS_PROXY / HTTP_PROXY env vars.
+  {
+    const configProxy = cfgAtStart.network?.proxy?.trim();
+    if (configProxy) {
+      const { installGlobalProxyDispatcher } = await import("../infra/net/global-proxy.js");
+      const installed = installGlobalProxyDispatcher({ proxyUrl: configProxy });
+      if (installed) {
+        log.info(`gateway: global proxy configured via network.proxy → ${new URL(configProxy).origin}`);
+      }
+    }
+  }
+
   const authBootstrap = await ensureGatewayStartupAuth({
     cfg: cfgAtStart,
     env: process.env,

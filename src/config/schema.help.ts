@@ -361,6 +361,10 @@ export const FIELD_HELP: Record<string, string> = {
     "Expose the local browser control server through node proxy routing so remote clients can use this host's browser capabilities. Keep disabled unless remote automation explicitly depends on it.",
   "nodeHost.browserProxy.allowProfiles":
     "Optional allowlist of browser profile names exposed through node proxy routing. Leave empty to expose all configured profiles, or use a tight list to enforce least-privilege profile access.",
+  network:
+    "Controls global network settings applied to all outbound HTTP(S) connections from the gateway process. Use this section to route traffic through a proxy without setting environment variables.",
+  "network.proxy":
+    "Sets the global outbound proxy URL (HTTP, HTTPS, or SOCKS) applied to all fetch() calls including provider APIs (Claude, OpenAI, Gemini), channel APIs, and web tools. Takes precedence over HTTPS_PROXY / HTTP_PROXY env vars when set.",
   media:
     "Top-level media behavior shared across providers and tools that handle inbound files. Keep defaults unless you need stable filenames for external processing pipelines.",
   "media.preserveFilenames":

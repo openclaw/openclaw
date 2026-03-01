@@ -253,6 +253,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "nodeHost.browserProxy": "Node Browser Proxy",
   "nodeHost.browserProxy.enabled": "Node Browser Proxy Enabled",
   "nodeHost.browserProxy.allowProfiles": "Node Browser Proxy Allowed Profiles",
+  network: "Network",
+  "network.proxy": "Global Proxy URL",
   media: "Media",
   "media.preserveFilenames": "Preserve Media Filenames",
   audio: "Audio",

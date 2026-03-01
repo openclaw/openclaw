@@ -92,6 +92,10 @@ export type OpenClawConfig = {
   secrets?: SecretsConfig;
   skills?: SkillsConfig;
   plugins?: PluginsConfig;
+  network?: {
+    /** Global outbound HTTP(S) proxy URL applied to all fetch() calls (provider APIs, channels, etc.). */
+    proxy?: string;
+  };
   models?: ModelsConfig;
   nodeHost?: NodeHostConfig;
   agents?: AgentsConfig;

@@ -359,6 +359,12 @@ export const OpenClawSchema = z
     bindings: BindingsSchema,
     broadcast: BroadcastSchema,
     audio: AudioSchema,
+    network: z
+      .object({
+        proxy: z.string().optional(),
+      })
+      .strict()
+      .optional(),
     media: z
       .object({
         preserveFilenames: z.boolean().optional(),

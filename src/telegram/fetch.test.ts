@@ -5,6 +5,8 @@ import { resetTelegramFetchStateForTests, resolveTelegramFetch } from "./fetch.j
 const setDefaultAutoSelectFamily = vi.hoisted(() => vi.fn());
 const setDefaultResultOrder = vi.hoisted(() => vi.fn());
 const setGlobalDispatcher = vi.hoisted(() => vi.fn());
+const hasEnvProxyMock = vi.hoisted(() => vi.fn(() => false));
+const installGlobalProxyDispatcherMock = vi.hoisted(() => vi.fn(() => true));
 const AgentCtor = vi.hoisted(() =>
   vi.fn(function MockAgent(this: { options: unknown }, options: unknown) {
     this.options = options;
@@ -29,7 +31,15 @@ vi.mock("node:dns", async () => {
 
 vi.mock("undici", () => ({
   Agent: AgentCtor,
+  EnvHttpProxyAgent: AgentCtor,
   setGlobalDispatcher,
+}));
+
+vi.mock("../infra/net/global-proxy.js", () => ({
+  hasEnvProxy: hasEnvProxyMock,
+  installGlobalProxyDispatcher: installGlobalProxyDispatcherMock,
+  isGlobalProxyInstalled: vi.fn(() => false),
+  resetGlobalProxyStateForTests: vi.fn(),
 }));
 
 const originalFetch = globalThis.fetch;
@@ -39,6 +49,8 @@ afterEach(() => {
   setDefaultAutoSelectFamily.mockReset();
   setDefaultResultOrder.mockReset();
   setGlobalDispatcher.mockReset();
+  hasEnvProxyMock.mockReset().mockReturnValue(false);
+  installGlobalProxyDispatcherMock.mockReset().mockReturnValue(true);
   AgentCtor.mockClear();
   vi.unstubAllEnvs();
   vi.clearAllMocks();

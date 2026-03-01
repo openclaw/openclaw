@@ -42,6 +42,16 @@ if (
   installProcessWarningFilter();
   normalizeEnv();
 
+  // Node.js native fetch (undici) ignores HTTPS_PROXY/HTTP_PROXY env vars;
+  // install a global proxy-aware dispatcher so all outbound fetch() calls
+  // (Anthropic SDK, Telegram, etc.) route through the configured proxy.
+  try {
+    const { installGlobalProxyDispatcher } = await import("./infra/net/global-proxy.js");
+    installGlobalProxyDispatcher();
+  } catch {
+    // Non-critical: proxy support may be unavailable if undici is missing.
+  }
+
   if (shouldForceReadOnlyAuthStore(process.argv)) {
     process.env.OPENCLAW_AUTH_STORE_READONLY = "1";
   }

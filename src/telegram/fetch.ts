@@ -3,6 +3,7 @@ import * as net from "node:net";
 import { Agent, setGlobalDispatcher } from "undici";
 import type { TelegramNetworkConfig } from "../config/types.telegram.js";
 import { resolveFetch } from "../infra/fetch.js";
+import { hasEnvProxy, installGlobalProxyDispatcher } from "../infra/net/global-proxy.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   resolveTelegramAutoSelectFamilyDecision,
@@ -44,15 +45,19 @@ function applyTelegramNetworkWorkarounds(network?: TelegramNetworkConfig): void 
     autoSelectDecision.value !== null &&
     autoSelectDecision.value !== appliedGlobalDispatcherAutoSelectFamily
   ) {
+    const connectOpts = {
+      autoSelectFamily: autoSelectDecision.value,
+      autoSelectFamilyAttemptTimeout: 300,
+    };
     try {
-      setGlobalDispatcher(
-        new Agent({
-          connect: {
-            autoSelectFamily: autoSelectDecision.value,
-            autoSelectFamilyAttemptTimeout: 300,
-          },
-        }),
-      );
+      // When HTTPS_PROXY / HTTP_PROXY env vars are set, use EnvHttpProxyAgent
+      // so the dispatcher preserves proxy support instead of replacing it with
+      // a plain Agent.
+      if (hasEnvProxy()) {
+        installGlobalProxyDispatcher(connectOpts);
+      } else {
+        setGlobalDispatcher(new Agent({ connect: connectOpts }));
+      }
       appliedGlobalDispatcherAutoSelectFamily = autoSelectDecision.value;
       log.info(`global undici dispatcher autoSelectFamily=${autoSelectDecision.value}`);
     } catch {
