@@ -85,6 +85,42 @@ export async function resolveSandboxWorkdir(params: {
   warnings: string[];
 }) {
   const fallback = params.sandbox.workspaceDir;
+  const containerWorkdirRoot = params.sandbox.containerWorkdir;
+
+  // Normalize the workdir path
+  const normalizedWorkdir = params.workdir.replace(/\\/g, "/").replace(/\/+$/, "");
+
+  // Check if workdir is the container workspace root (e.g., "/workspace")
+  if (normalizedWorkdir === containerWorkdirRoot) {
+    return {
+      hostWorkdir: params.sandbox.workspaceDir,
+      containerWorkdir: containerWorkdirRoot,
+    };
+  }
+
+  // Check if workdir is a subdirectory within the container workspace
+  const containerPrefix = `${containerWorkdirRoot}/`;
+  if (normalizedWorkdir.startsWith(containerPrefix)) {
+    const relative = normalizedWorkdir.slice(containerPrefix.length);
+    const hostPath = path.resolve(
+      params.sandbox.workspaceDir,
+      ...relative.split("/").filter(Boolean),
+    );
+    try {
+      const stats = await fs.stat(hostPath);
+      if (!stats.isDirectory()) {
+        throw new Error("workdir is not a directory");
+      }
+      return {
+        hostWorkdir: hostPath,
+        containerWorkdir: normalizedWorkdir,
+      };
+    } catch {
+      // Fall through to host-side validation
+    }
+  }
+
+  // Try host-side path validation for relative or host-absolute paths
   try {
     const resolved = await assertSandboxPath({
       filePath: params.workdir,
