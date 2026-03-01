@@ -776,8 +776,15 @@ export const registerTelegramHandlers = ({
       if (user?.is_bot) {
         return;
       }
-      if (reactionMode === "own" && !wasSentByBot(chatId, messageId)) {
-        return;
+      if (reactionMode === "own") {
+        const botSent = wasSentByBot(chatId, messageId);
+        // null = cache miss (restart / TTL expiry). In DMs, the bot is always
+        // a participant so a miss is a false-negative — forward optimistically.
+        // In groups, unknown → skip (conservative to avoid noise).
+        const skip = isGroup ? botSent !== true : botSent === false;
+        if (skip) {
+          return;
+        }
       }
       const eventAuthContext = await resolveTelegramEventAuthorizationContext({
         chatId,
