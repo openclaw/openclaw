@@ -61,8 +61,7 @@ const account: ResolvedSlackAccount = {
 describe("thread-level session keys", () => {
   it("uses thread-level session key for channel messages", async () => {
     const ctx = buildCtx();
-    // oxlint-disable-next-line typescript/no-explicit-any
-    ctx.resolveUserName = async () => ({ name: "Alice" }) as any;
+    ctx.resolveUserName = async () => ({ name: "Alice" });
 
     const message: SlackMessageEvent = {
       channel: "C123",
@@ -89,8 +88,7 @@ describe("thread-level session keys", () => {
 
   it("uses parent thread_ts for thread replies", async () => {
     const ctx = buildCtx();
-    // oxlint-disable-next-line typescript/no-explicit-any
-    ctx.resolveUserName = async () => ({ name: "Bob" }) as any;
+    ctx.resolveUserName = async () => ({ name: "Bob" });
 
     const message: SlackMessageEvent = {
       channel: "C123",
@@ -117,8 +115,7 @@ describe("thread-level session keys", () => {
 
   it("does not add thread suffix for DMs", async () => {
     const ctx = buildCtx();
-    // oxlint-disable-next-line typescript/no-explicit-any
-    ctx.resolveUserName = async () => ({ name: "Carol" }) as any;
+    ctx.resolveUserName = async () => ({ name: "Carol" });
 
     const message: SlackMessageEvent = {
       channel: "D456",
