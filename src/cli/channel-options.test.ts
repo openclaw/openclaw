@@ -52,8 +52,8 @@ describe("resolveCliChannelOptions", () => {
     listCatalogMock.mockReturnValue([{ id: "catalog-only" }]);
 
     const mod = await loadModule();
-    expect(mod.resolveCliChannelOptions()).toEqual(["cached", "telegram"]);
-    expect(listCatalogMock).not.toHaveBeenCalled();
+    expect(mod.resolveCliChannelOptions()).toEqual(["cached", "telegram", "catalog-only"]);
+    expect(listCatalogMock).toHaveBeenCalledOnce();
   });
 
   it("falls back to dynamic catalog resolution when metadata is missing", async () => {
@@ -85,13 +85,13 @@ describe("resolveCliChannelOptions", () => {
     expect(listPluginsMock).toHaveBeenCalledOnce();
   });
 
-  it("skips precomputed metadata when external catalog env is set", async () => {
+  it("keeps dynamic catalog resolution when external catalog env is set", async () => {
     process.env.OPENCLAW_PLUGIN_CATALOG_PATHS = "/tmp/plugins-catalog.json";
-    readFileSyncMock.mockReturnValue(JSON.stringify({ channelOptions: ["cached"] }));
+    readFileSyncMock.mockReturnValue(JSON.stringify({ channelOptions: ["cached", "telegram"] }));
     listCatalogMock.mockReturnValue([{ id: "custom-catalog" }]);
 
     const mod = await loadModule();
-    expect(mod.resolveCliChannelOptions()).toEqual(["telegram", "discord", "custom-catalog"]);
+    expect(mod.resolveCliChannelOptions()).toEqual(["cached", "telegram", "custom-catalog"]);
     expect(listCatalogMock).toHaveBeenCalledOnce();
     delete process.env.OPENCLAW_PLUGIN_CATALOG_PATHS;
   });
