@@ -35,6 +35,7 @@ export const SessionSchema = z
       ])
       .optional(),
     identityLinks: z.record(z.string(), z.array(z.string())).optional(),
+    sessionLinks: z.record(z.string(), z.array(z.string())).optional(),
     resetTriggers: z.array(z.string()).optional(),
     idleMinutes: z.number().int().positive().optional(),
     reset: SessionResetConfigSchema.optional(),

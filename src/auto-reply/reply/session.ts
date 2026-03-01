@@ -272,7 +272,10 @@ export async function initSessionState(params: {
     }
   }
 
-  sessionKey = resolveSessionKey(sessionScope, sessionCtxForState, mainKey);
+  sessionKey = resolveSessionKey(sessionScope, sessionCtxForState, {
+    mainKey,
+    sessionLinks: sessionCfg?.sessionLinks,
+  });
   const entry = sessionStore[sessionKey];
   const previousSessionEntry = resetTriggered && entry ? { ...entry } : undefined;
   const now = Date.now();

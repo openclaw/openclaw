@@ -159,6 +159,63 @@ describe("sessions", () => {
     });
   }
 
+  describe("sessionLinks", () => {
+    const sessionLinks = {
+      "work-group": ["feishu:group:oc_123", "wechat:group:456@chatroom", "feishu:direct:ou_abc"],
+    };
+
+    it("links feishu group to shared session", () => {
+      // In real usage, From contains just the group ID, Provider identifies the channel
+      const ctx = {
+        Provider: "feishu",
+        ChatType: "group",
+        From: "oc_123",
+      };
+      expect(resolveSessionKey("per-sender", ctx, { sessionLinks })).toBe(
+        "agent:main:linked:work-group",
+      );
+    });
+
+    it("links wechat group to shared session", () => {
+      const ctx = {
+        Provider: "wechat",
+        ChatType: "group",
+        From: "456@chatroom",
+      };
+      expect(resolveSessionKey("per-sender", ctx, { sessionLinks })).toBe(
+        "agent:main:linked:work-group",
+      );
+    });
+
+    it("links feishu direct to shared session", () => {
+      const ctx = {
+        Provider: "feishu",
+        From: "ou_abc",
+      };
+      expect(resolveSessionKey("per-sender", ctx, { sessionLinks })).toBe(
+        "agent:main:linked:work-group",
+      );
+    });
+
+    it("does not link unmatched conversation", () => {
+      const ctx = {
+        Provider: "feishu",
+        From: "ou_unknown",
+      };
+      expect(resolveSessionKey("per-sender", ctx, { sessionLinks })).toBe("agent:main:main");
+    });
+
+    it("respects explicit SessionKey over sessionLinks", () => {
+      const ctx = {
+        Provider: "feishu",
+        ChatType: "group",
+        From: "oc_123",
+        SessionKey: "custom-session",
+      };
+      expect(resolveSessionKey("per-sender", ctx, { sessionLinks })).toBe("custom-session");
+    });
+  });
+
   it("updateLastRoute persists channel and target", async () => {
     const mainSessionKey = "agent:main:main";
     const dir = await createCaseDir("updateLastRoute");

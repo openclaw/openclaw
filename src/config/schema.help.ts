@@ -975,6 +975,8 @@ export const FIELD_HELP: Record<string, string> = {
     'DM session scoping: "main" keeps continuity, while "per-peer", "per-channel-peer", and "per-account-channel-peer" increase isolation. Use isolated modes for shared inboxes or multi-account deployments.',
   "session.identityLinks":
     "Maps canonical identities to provider-prefixed peer IDs so equivalent users resolve to one DM thread (example: telegram:123456). Use this when the same human appears across multiple channels or accounts.",
+  "session.sessionLinks":
+    'Links multiple conversations (DMs, groups, channels) to share a single session context. Format: { "link-name": ["channel:type:id", ...] } where type is "direct", "group", or "channel". Use this to unify context across channels (e.g., link a Feishu group with a WeChat group).',
   "session.resetTriggers":
     "Lists message triggers that force a session reset when matched in inbound content. Use sparingly for explicit reset phrases so context is not dropped unexpectedly during normal conversation.",
   "session.idleMinutes":

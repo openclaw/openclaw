@@ -108,6 +108,13 @@ export type SessionConfig = {
   dmScope?: DmScope;
   /** Map platform-prefixed identities (e.g. "telegram:123") to canonical DM peers. */
   identityLinks?: Record<string, string[]>;
+  /**
+   * Map session link names to arrays of conversation identifiers.
+   * Conversations in the same link group share a single session.
+   * Format: "{channel}:{type}:{id}" where type is "direct", "group", or "channel".
+   * Example: { "work": ["feishu:group:oc_xxx", "wechat:direct:wxid_xxx"] }
+   */
+  sessionLinks?: Record<string, string[]>;
   resetTriggers?: string[];
   idleMinutes?: number;
   reset?: SessionResetConfig;
