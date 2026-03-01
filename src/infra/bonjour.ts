@@ -1,4 +1,3 @@
-import os from "os";
 import { logDebug, logWarn } from "../logger.js";
 import { getLogger } from "../logging.js";
 import { ignoreCiaoCancellationRejection } from "./bonjour-ciao.js";
@@ -37,38 +36,6 @@ function isDisabledByEnv() {
     return true;
   }
   return false;
-}
-
-function getInterfacesWithIp() {
-  const interfaces = os.networkInterfaces();
-  const validInterfaces: string[] = [];
-
-  for (const [name, addresses] of Object.entries(interfaces)) {
-    if (!addresses) {
-      continue;
-    }
-
-    // Check if interface has at least one valid IP address
-    const hasValidIp = addresses.some((addr) => {
-      // Skip internal addresses and link-local addresses
-      if (addr.internal) {
-        return false;
-      }
-      if (addr.family === "IPv4" && addr.address.startsWith("169.254.")) {
-        return false;
-      }
-      if (addr.family === "IPv6" && addr.address.startsWith("fe80:")) {
-        return false;
-      }
-      return true;
-    });
-
-    if (hasValidIp) {
-      validInterfaces.push(name);
-    }
-  }
-
-  return validInterfaces;
 }
 
 function safeServiceName(name: string) {
@@ -122,9 +89,10 @@ export async function startGatewayBonjourAdvertiser(
   }
 
   const { getResponder, Protocol } = await import("@homebridge/ciao");
-  const validInterfaces = getInterfacesWithIp();
+
+  // Use user-specified interfaces if provided, otherwise use default behavior
   const responder = getResponder({
-    interface: validInterfaces.length > 0 ? validInterfaces : undefined,
+    interface: opts.interfaces,
   });
 
   // mDNS service instance names are single DNS labels; dots in hostnames (like

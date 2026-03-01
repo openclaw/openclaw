@@ -50,6 +50,7 @@ type GatewayRunOpts = {
   rawStreamPath?: unknown;
   dev?: boolean;
   reset?: boolean;
+  mdnsInterface?: unknown;
 };
 
 const gatewayLog = createSubsystemLogger("gateway");
@@ -63,6 +64,7 @@ const GATEWAY_RUN_VALUE_KEYS = [
   "tailscale",
   "wsLog",
   "rawStreamPath",
+  "mdnsInterface",
 ] as const;
 
 const GATEWAY_RUN_BOOLEAN_KEYS = [
@@ -287,6 +289,23 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
     env: process.env,
     tailscaleMode: tailscaleMode ?? cfg.gateway?.tailscale?.mode ?? "off",
   });
+
+  // Handle mDNS interface overrides
+  const mdnsInterfaces = [];
+  if (opts.mdnsInterface) {
+    if (Array.isArray(opts.mdnsInterface)) {
+      mdnsInterfaces.push(...opts.mdnsInterface);
+    } else {
+      mdnsInterfaces.push(opts.mdnsInterface as string);
+    }
+  }
+
+  // Override config with CLI-specified mDNS interfaces
+  if (mdnsInterfaces.length > 0) {
+    cfg.discovery = cfg.discovery ?? {};
+    cfg.discovery.mdns = cfg.discovery.mdns ?? {};
+    cfg.discovery.mdns.interfaces = mdnsInterfaces;
+  }
   const resolvedAuthMode = resolvedAuth.mode;
   const tokenValue = resolvedAuth.token;
   const passwordValue = resolvedAuth.password;
@@ -431,6 +450,10 @@ export function addGatewayRunCommand(cmd: Command): Command {
     .option("--compact", 'Alias for "--ws-log compact"', false)
     .option("--raw-stream", "Log raw model stream events to jsonl", false)
     .option("--raw-stream-path <path>", "Raw stream jsonl path")
+    .option(
+      "--mdns-interface <interface>",
+      "Network interface to use for mDNS discovery (can be specified multiple times). Example: --mdns-interface eth0 --mdns-interface wlan0",
+    )
     .action(async (opts, command) => {
       await runGatewayCommand(resolveGatewayRunOptions(opts, command));
     });

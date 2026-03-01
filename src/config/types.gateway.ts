@@ -29,6 +29,12 @@ export type MdnsDiscoveryConfig = {
    * - full: include cliPath/sshPort in TXT records
    */
   mode?: MdnsDiscoveryMode;
+  /**
+   * List of network interfaces to use for mDNS discovery.
+   * Example: ["eth0", "wlan0"]
+   * If not specified, all available interfaces will be used.
+   */
+  interfaces?: string[];
 };
 
 export type DiscoveryConfig = {
