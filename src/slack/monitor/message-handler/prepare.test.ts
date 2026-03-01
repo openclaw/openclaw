@@ -255,6 +255,36 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(prepared!.ctxPayload.RawBody).toContain("[Slack file: file]");
   });
 
+  it("extracts attachment text for bot messages with empty text when allowBots is true (#27616)", async () => {
+    const slackCtx = createInboundSlackCtx({
+      cfg: {
+        channels: {
+          slack: { enabled: true },
+        },
+      } as OpenClawConfig,
+      defaultRequireMention: false,
+    });
+    // oxlint-disable-next-line typescript/no-explicit-any
+    slackCtx.resolveUserName = async () => ({ name: "Bot" }) as any;
+
+    const account = createSlackAccount({ allowBots: true });
+    const message = createSlackMessage({
+      text: "",
+      bot_id: "B0AGV8EQYA3",
+      subtype: "bot_message",
+      attachments: [
+        {
+          text: "Readiness probe failed: Get http://10.42.13.132:8000/status: context deadline exceeded",
+        },
+      ],
+    });
+
+    const prepared = await prepareMessageWith(slackCtx, account, message);
+
+    expect(prepared).toBeTruthy();
+    expect(prepared!.ctxPayload.RawBody).toContain("Readiness probe failed");
+  });
+
   it("keeps channel metadata out of GroupSystemPrompt", async () => {
     const slackCtx = createInboundSlackCtx({
       cfg: {
