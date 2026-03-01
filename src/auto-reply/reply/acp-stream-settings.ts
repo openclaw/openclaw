@@ -5,7 +5,7 @@ import { resolveEffectiveBlockStreamingConfig } from "./block-streaming.js";
 const DEFAULT_ACP_STREAM_COALESCE_IDLE_MS = 350;
 const DEFAULT_ACP_STREAM_MAX_CHUNK_CHARS = 1800;
 const DEFAULT_ACP_REPEAT_SUPPRESSION = true;
-const DEFAULT_ACP_DELIVERY_MODE = "live";
+const DEFAULT_ACP_DELIVERY_MODE = "final_only";
 const DEFAULT_ACP_MAX_TURN_CHARS = 24_000;
 const DEFAULT_ACP_MAX_TOOL_SUMMARY_CHARS = 320;
 const DEFAULT_ACP_MAX_STATUS_CHARS = 320;
