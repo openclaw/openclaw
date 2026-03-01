@@ -1,4 +1,5 @@
 import {
+  CommandLaneClearedError,
   enqueueCommandInLane,
   getAllLaneInfo,
   resetLanesByPrefix,
@@ -98,10 +99,15 @@ export async function runSimulation(
       verbose: opts?.verbose,
     });
 
-    // Wait for all lanes to drain (poll until no queued or active tasks remain)
+    // Wait for all lanes to drain (poll until no queued or active tasks remain).
+    // Deadline accounts for queue depth: worst case is all messages processed
+    // serially at the slowest model's latency, plus margin.
     if (!controller.signal.aborted) {
       const maxLatency = Math.max(...Object.values(allModels).map((m) => m.latencyMs), 1000);
-      const drainDeadline = Date.now() + maxLatency * 5 + 5000;
+      const totalMessages = scenario.traffic.reduce((sum, t) => sum + t.count, 0);
+      const effectiveConcurrency = Math.max(maxConcurrent, 1);
+      const estimatedDrainMs = Math.ceil(totalMessages / effectiveConcurrency) * maxLatency;
+      const drainDeadline = Date.now() + estimatedDrainMs + 5000;
       log(`[sim] waiting for lane drain`);
       await waitForLaneDrain(lanePrefix, drainDeadline, controller.signal);
     }
@@ -269,8 +275,12 @@ async function generateTraffic(scenario: ScenarioConfig, ctx: TrafficContext): P
                 );
               }
             }
-          }).catch(() => {
-            // Lane cleared errors are expected on abort
+          }).catch((err: unknown) => {
+            // Lane cleared errors are expected on abort — surface all others
+            if (!(err instanceof CommandLaneClearedError)) {
+              ctx.log(`[sim] lane task error: ${String(err)}`);
+              throw err;
+            }
           });
 
           resolve();

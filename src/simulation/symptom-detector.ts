@@ -228,7 +228,8 @@ function detectStaleContext(
       if (convMsg.direction !== "inbound") {
         continue;
       }
-      if (convMsg.ts > parent.ts && convMsg.ts < msg.ts) {
+      // Use seq ordering to disambiguate same-millisecond events under burst traffic
+      if (convMsg.seq > parent.seq && convMsg.seq < msg.seq) {
         missed++;
       }
     }
