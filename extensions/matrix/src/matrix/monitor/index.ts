@@ -134,6 +134,18 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   let groupAllowFrom: string[] = (accountConfig.groupAllowFrom ?? []).map(String);
   let roomsConfig = accountConfig.groups ?? accountConfig.rooms;
 
+  // Extract raw Matrix IDs from config before display-name resolution.
+  // Tracked separately so hot-reload can support revocations for Matrix ID entries
+  // (display-name-resolved entries are frozen at startup and require restart to revoke).
+  const rawIdAllowFrom = allowFrom
+    .map((s) => normalizeUserEntry(String(s)))
+    .filter((s) => s && s !== "*" && isMatrixUserId(s))
+    .map(normalizeMatrixUserId);
+  const rawIdGroupAllowFrom = groupAllowFrom
+    .map((s) => normalizeUserEntry(String(s)))
+    .filter((s) => s && s !== "*" && isMatrixUserId(s))
+    .map(normalizeMatrixUserId);
+
   allowFrom = await resolveUserAllowlist("matrix dm allowlist", allowFrom);
   groupAllowFrom = await resolveUserAllowlist("matrix group allowlist", groupAllowFrom);
 
@@ -293,6 +305,8 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
     logger,
     logVerboseMessage,
     allowFrom,
+    rawIdAllowFrom,
+    rawIdGroupAllowFrom,
     roomsConfig,
     mentionRegexes,
     groupPolicy,

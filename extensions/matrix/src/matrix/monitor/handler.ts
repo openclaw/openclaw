@@ -29,6 +29,7 @@ import { reactMatrixMessage, sendMessageMatrix, sendTypingMatrix } from "../send
 import { enforceMatrixDirectMessageAccess, resolveMatrixAccessState } from "./access-policy.js";
 import {
   normalizeMatrixAllowList,
+  normalizeMatrixUserId,
   resolveMatrixAllowListMatch,
   resolveMatrixAllowListMatches,
 } from "./allowlist.js";
@@ -54,6 +55,8 @@ export type MatrixMonitorHandlerParams = {
   logger: RuntimeLogger;
   logVerboseMessage: (message: string) => void;
   allowFrom: string[];
+  rawIdAllowFrom: string[];
+  rawIdGroupAllowFrom: string[];
   roomsConfig: Record<string, MatrixRoomConfig> | undefined;
   mentionRegexes: ReturnType<PluginRuntime["channel"]["mentions"]["buildMentionRegexes"]>;
   groupPolicy: "open" | "allowlist" | "disabled";
@@ -90,6 +93,8 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
     logger,
     logVerboseMessage,
     allowFrom,
+    rawIdAllowFrom,
+    rawIdGroupAllowFrom,
     roomsConfig,
     mentionRegexes,
     groupPolicy,
@@ -243,24 +248,42 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         senderUsername,
       });
       const baseGroupAllowFrom = cfg.channels?.matrix?.groupAllowFrom ?? [];
-      // F5: Hot-reload — re-read raw allowlist entries from live config on each message and merge
-      // with the startup-resolved list. New entries must be full Matrix IDs (@user:server);
-      // display-name resolution only happens at startup.
+      // F5: Hot-reload — per-message live-config read supports both additions and revocations.
+      // Only raw Matrix ID entries (@user:server) are hot-reloadable; display-name-resolved
+      // entries are frozen at startup (revocation requires restart for those).
       const hotCfg = core.config.loadConfig() as CoreConfig;
       const hotAccountCfg = resolveMatrixAccount({
         cfg: hotCfg,
         accountId: resolvedAccountId,
       }).config;
-      const hotDmAllowFrom = (hotAccountCfg.dm?.allowFrom ?? []).map(String);
-      const hotGroupAllowFrom = (hotAccountCfg.groupAllowFrom ?? []).map(String);
+      // Normalize live config entries and keep only raw Matrix IDs (display names can't be
+      // re-resolved at runtime).
+      const toNormalizedMatrixId = (e: string): string | null => {
+        const norm = normalizeMatrixUserId(e);
+        return norm.startsWith("@") && norm.slice(1).includes(":") ? norm : null;
+      };
+      const hotDmRawIds = (hotAccountCfg.dm?.allowFrom ?? [])
+        .map(String)
+        .map(toNormalizedMatrixId)
+        .filter((id): id is string => id !== null);
+      const hotGroupRawIds = (hotAccountCfg.groupAllowFrom ?? [])
+        .map(String)
+        .map(toNormalizedMatrixId)
+        .filter((id): id is string => id !== null);
+      // Display-name-resolved portion = startup list minus raw IDs tracked at startup.
+      // These stay frozen; the raw-ID portion is replaced by the live config (supports revocation).
+      const rawIdAllowFromSet = new Set(rawIdAllowFrom);
+      const rawIdGroupAllowFromSet = new Set(rawIdGroupAllowFrom);
+      const dnResolvedDm = allowFrom.filter((id) => !rawIdAllowFromSet.has(id));
+      const dnResolvedGroup = baseGroupAllowFrom.filter((id) => !rawIdGroupAllowFromSet.has(id));
       const { access, effectiveAllowFrom, effectiveGroupAllowFrom, groupAllowConfigured } =
         await resolveMatrixAccessState({
           isDirectMessage,
           resolvedAccountId,
           dmPolicy,
           groupPolicy,
-          allowFrom: normalizeMatrixAllowList([...allowFrom, ...hotDmAllowFrom]),
-          groupAllowFrom: normalizeMatrixAllowList([...baseGroupAllowFrom, ...hotGroupAllowFrom]),
+          allowFrom: normalizeMatrixAllowList([...dnResolvedDm, ...hotDmRawIds]),
+          groupAllowFrom: normalizeMatrixAllowList([...dnResolvedGroup, ...hotGroupRawIds]),
           senderId,
           readStoreForDmPolicy: pairing.readStoreForDmPolicy,
         });
