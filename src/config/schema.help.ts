@@ -183,8 +183,6 @@ export const FIELD_HELP: Record<string, string> = {
   "acp.stream.maxToolSummaryChars":
     "Maximum characters for projected ACP tool lifecycle/progress summary lines.",
   "acp.stream.maxStatusChars": "Maximum characters for projected ACP status/meta lines.",
-  "acp.stream.maxMetaEventsPerTurn":
-    "Maximum ACP meta events projected per turn (text deltas continue unaffected).",
   "acp.stream.tagVisibility":
     "Per-sessionUpdate visibility overrides for ACP projection (for example usage_update, available_commands_update).",
   "acp.runtime.ttlMinutes":
