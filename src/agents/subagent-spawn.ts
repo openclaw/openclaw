@@ -3,6 +3,7 @@ import { formatThinkingLevels, normalizeThinkLevel } from "../auto-reply/thinkin
 import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../config/agent-limits.js";
 import { loadConfig } from "../config/config.js";
 import { callGateway } from "../gateway/call.js";
+import { emitAgentEvent } from "../infra/agent-events.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import {
   isCronSessionKey,
@@ -498,6 +499,21 @@ export async function spawnSubagentDirect(
     runTimeoutSeconds,
     expectsCompletionMessage,
     spawnMode,
+  });
+
+  // Emit subagent lifecycle event so WS clients can observe spawn.
+  emitAgentEvent({
+    runId: childRunId,
+    stream: "subagent",
+    sessionKey: requesterInternalKey,
+    data: {
+      phase: "spawned",
+      childSessionKey,
+      parentSessionKey: requesterInternalKey,
+      label: label || undefined,
+      task: task.slice(0, 200),
+      model: resolvedModel || undefined,
+    },
   });
 
   if (hookRunner?.hasHooks("subagent_spawned")) {
