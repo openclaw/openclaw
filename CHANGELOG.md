@@ -20,6 +20,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Sandbox/mkdirp boundary checks: allow directory-safe boundary validation for existing in-boundary subdirectories, preventing false `cannot create directories` failures in sandbox write mode. (#30610) Thanks @glitch418x.
 - Android/Voice screen TTS: stream assistant speech via ElevenLabs WebSocket in Talk Mode, stop cleanly on speaker mute/barge-in, and ignore stale out-of-order stream events. (#29521) Thanks @gregmousseau.
 - Web UI/Cron: include configured agent model defaults/fallbacks in cron model suggestions so scheduled-job model autocomplete reflects configured models. (#29709)
 - Cron/Delivery: disable the agent messaging tool when `delivery.mode` is `"none"` so cron output is not sent to Telegram or other channels. (#21808)
@@ -87,9 +88,11 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- ACP/Harness thread spawn routing: force ACP harness thread creation through `sessions_spawn` (`runtime: "acp"`, `thread: true`) and explicitly forbid `message action=thread-create` for ACP harness requests, avoiding misrouted `Unknown channel` errors. (#30957) Thanks @dutifulbob.
 - CLI/Startup (Raspberry Pi + small hosts): speed up startup by avoiding unnecessary plugin preload on fast routes, adding root `--version` fast-path bootstrap bypass, parallelizing status JSON/non-JSON scans where safe, and enabling Node compile cache at startup with env override compatibility (`NODE_COMPILE_CACHE`, `NODE_DISABLE_COMPILE_CACHE`). (#5871) Thanks @BookCatKid and @vincentkoc for raising startup reports, and @lupuletic for related startup work in #27973.
 - CLI/Startup follow-up: add root `--help` fast-path bootstrap bypass, lazily resolve CLI channel options only when commands need them, and generate build-time startup metadata (`dist/cli-startup-metadata.json`) so runtime can avoid catalog scans on low-power hosts. (#30975) Thanks @vincentkoc.
 - Telegram/Outbound API proxy env: keep the Node 22 `autoSelectFamily` global-dispatcher workaround while restoring env-proxy support by using `EnvHttpProxyAgent` so `HTTP_PROXY`/`HTTPS_PROXY` continue to apply to outbound requests. (#26207) Thanks @qsysbio-cjw for reporting and @rylena and @vincentkoc for work.
+- Browser/Security: fail closed on browser-control auth bootstrap errors; if auto-auth setup fails and no explicit token/password exists, browser control server startup now aborts instead of starting unauthenticated. This ships in the next npm release. Thanks @ijxpwastaken.
 - Docs/Slack manifest scopes: add missing DM/group-DM bot scopes (`im:read`, `im:write`, `mpim:read`, `mpim:write`) to the Slack app manifest example so DM setup guidance is complete. (#29999) Thanks @JcMinarro.
 - Slack/Onboarding token help: update setup text to include the “From manifest” app-creation path and current install wording for obtaining the `xoxb-` bot token. (#30846) Thanks @yzhong52.
 - Slack/Bot attachment-only messages: when `allowBots: true`, bot messages with empty `text` now include non-forwarded attachment `text`/`fallback` content so webhook alerts are not silently dropped. (#27616)
@@ -215,6 +218,7 @@ Docs: https://docs.openclaw.ai
 - Agents/Models config: preserve agent-level provider `apiKey` and `baseUrl` during merge-mode `models.json` updates when agent values are present. (#27293) thanks @Sid-Qin.
 - Azure OpenAI Responses: force `store=true` for `azure-openai-responses` direct responses API calls to avoid multi-turn 400 failures. Landed from contributor PR #27499 by @polarbear-Yang. (#27497)
 - Security/Node exec approvals: require structured `commandArgv` approvals for `host=node`, enforce versioned `systemRunBindingV1` matching for argv/cwd/session/agent/env context with fail-closed behavior on missing/mismatched bindings, and add `GIT_EXTERNAL_DIFF` to blocked host env keys. This ships in the next npm release (`2026.2.26`). Thanks @tdjackey for reporting.
+- Security/Command authorization: enforce sender authorization for natural-language abort triggers (`stop`-like text) and `/models` listings, preventing unauthorized session aborts and model-auth metadata disclosure. This ships in the next npm release (`2026.2.27`). Thanks @tdjackey for reporting.
 - Security/Plugin channel HTTP auth: normalize protected `/api/channels` path checks against canonicalized request paths (case + percent-decoding + slash normalization), resolve encoded dot-segment traversal variants, and fail closed on malformed `%`-encoded channel prefixes so alternate-path variants cannot bypass gateway auth. This ships in the next npm release (`2026.2.26`). Thanks @zpbrent for reporting.
 - Security/Gateway node pairing: pin paired-device `platform`/`deviceFamily` metadata across reconnects and bind those fields into device-auth signatures, so reconnect metadata spoofing cannot expand node command allowlists without explicit repair pairing. This ships in the next npm release (`2026.2.26`). Thanks @76embiid21 for reporting.
 - Security/Sandbox path alias guard: reject broken symlink targets by resolving through existing ancestors and failing closed on out-of-root targets, preventing workspace-only `apply_patch` writes from escaping sandbox/workspace boundaries via dangling symlinks. This ships in the next npm release (`2026.2.26`). Thanks @tdjackey for reporting.
