@@ -2063,8 +2063,7 @@ export class QmdMemoryManager implements MemorySearchManager {
   }
 
   private isTimeoutError(err: unknown): boolean {
-    const message = err instanceof Error ? err.message : String(err);
-    return message.includes("timed out after");
+    return err instanceof Error && (err as Error & { timedOut?: boolean }).timedOut === true;
   }
 
   private isUnsupportedQmdOptionError(err: unknown): boolean {
