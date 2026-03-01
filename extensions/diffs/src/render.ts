@@ -171,13 +171,22 @@ function renderDiffCard(payload: DiffViewerPayload): string {
   </section>`;
 }
 
+function renderStaticDiffCard(prerenderedHTML: string): string {
+  return `<section class="oc-diff-card">
+    <diffs-container class="oc-diff-host" data-openclaw-diff-host>
+      <template shadowrootmode="open">${prerenderedHTML}</template>
+    </diffs-container>
+  </section>`;
+}
+
 function buildHtmlDocument(params: {
   title: string;
   bodyHtml: string;
   theme: DiffRenderOptions["presentation"]["theme"];
+  runtimeMode: "viewer" | "image";
 }): string {
   return `<!doctype html>
-<html lang="en">
+<html lang="en"${params.runtimeMode === "image" ? ' data-openclaw-diffs-ready="true"' : ""}>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -258,12 +267,12 @@ function buildHtmlDocument(params: {
     </style>
   </head>
   <body data-theme="${params.theme}">
-    <main class="oc-frame" data-render-mode="viewer">
+    <main class="oc-frame" data-render-mode="${params.runtimeMode}">
       <div data-openclaw-diff-root>
         ${params.bodyHtml}
       </div>
     </main>
-    <script type="module" src="${VIEWER_LOADER_PATH}"></script>
+    ${params.runtimeMode === "viewer" ? `<script type="module" src="${VIEWER_LOADER_PATH}"></script>` : ""}
   </body>
 </html>`;
 }
@@ -271,7 +280,7 @@ function buildHtmlDocument(params: {
 async function renderBeforeAfterDiff(
   input: Extract<DiffInput, { kind: "before_after" }>,
   options: DiffRenderOptions,
-): Promise<{ bodyHtml: string; fileCount: number }> {
+): Promise<{ viewerBodyHtml: string; imageBodyHtml: string; fileCount: number }> {
   const fileName = resolveBeforeAfterFileName(input);
   const lang = normalizeSupportedLanguage(input.lang);
   const oldFile: FileContents = {
@@ -292,13 +301,14 @@ async function renderBeforeAfterDiff(
   });
 
   return {
-    bodyHtml: renderDiffCard({
+    viewerBodyHtml: renderDiffCard({
       prerenderedHTML: result.prerenderedHTML,
       oldFile: result.oldFile,
       newFile: result.newFile,
       options: payloadOptions,
       langs: buildPayloadLanguages({ oldFile: result.oldFile, newFile: result.newFile }),
     }),
+    imageBodyHtml: renderStaticDiffCard(result.prerenderedHTML),
     fileCount: 1,
   };
 }
@@ -306,7 +316,7 @@ async function renderBeforeAfterDiff(
 async function renderPatchDiff(
   input: Extract<DiffInput, { kind: "patch" }>,
   options: DiffRenderOptions,
-): Promise<{ bodyHtml: string; fileCount: number }> {
+): Promise<{ viewerBodyHtml: string; imageBodyHtml: string; fileCount: number }> {
   const files = parsePatchFiles(input.patch).flatMap((entry) => entry.files ?? []);
   if (files.length === 0) {
     throw new Error("Patch input did not contain any file diffs.");
@@ -320,17 +330,21 @@ async function renderPatchDiff(
         options: payloadOptions,
       });
 
-      return renderDiffCard({
-        prerenderedHTML: result.prerenderedHTML,
-        fileDiff: result.fileDiff,
-        options: payloadOptions,
-        langs: buildPayloadLanguages({ fileDiff: result.fileDiff }),
-      });
+      return {
+        viewer: renderDiffCard({
+          prerenderedHTML: result.prerenderedHTML,
+          fileDiff: result.fileDiff,
+          options: payloadOptions,
+          langs: buildPayloadLanguages({ fileDiff: result.fileDiff }),
+        }),
+        image: renderStaticDiffCard(result.prerenderedHTML),
+      };
     }),
   );
 
   return {
-    bodyHtml: sections.join("\n"),
+    viewerBodyHtml: sections.map((section) => section.viewer).join("\n"),
+    imageBodyHtml: sections.map((section) => section.image).join("\n"),
     fileCount: files.length,
   };
 }
@@ -348,8 +362,15 @@ export async function renderDiffDocument(
   return {
     html: buildHtmlDocument({
       title,
-      bodyHtml: rendered.bodyHtml,
+      bodyHtml: rendered.viewerBodyHtml,
       theme: options.presentation.theme,
+      runtimeMode: "viewer",
+    }),
+    imageHtml: buildHtmlDocument({
+      title,
+      bodyHtml: rendered.imageBodyHtml,
+      theme: options.presentation.theme,
+      runtimeMode: "image",
     }),
     title,
     fileCount: rendered.fileCount,
