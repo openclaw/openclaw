@@ -59,6 +59,13 @@ export class SearchableSelectList implements Component {
     return regex;
   }
 
+  private constrainLineWidth(line: string, width: number): string {
+    if (width <= 0) {
+      return "";
+    }
+    return visibleWidth(line) > width ? truncateToWidth(line, width, "") : line;
+  }
+
   private updateFilter() {
     const query = this.searchInput.getValue().trim();
 
@@ -218,14 +225,14 @@ export class SearchableSelectList implements Component {
     const inputWidth = Math.max(1, width - visibleWidth(prompt));
     const inputLines = this.searchInput.render(inputWidth);
     const inputText = inputLines[0] ?? "";
-    lines.push(`${prompt}${this.theme.searchInput(inputText)}`);
+    lines.push(this.constrainLineWidth(`${prompt}${this.theme.searchInput(inputText)}`, width));
     lines.push(""); // Spacer
 
     const query = this.searchInput.getValue().trim();
 
     // If no items match filter, show message
     if (this.filteredItems.length === 0) {
-      lines.push(this.theme.noMatch("  No matches"));
+      lines.push(this.constrainLineWidth(this.theme.noMatch("  No matches"), width));
       return lines;
     }
 
@@ -246,13 +253,15 @@ export class SearchableSelectList implements Component {
         continue;
       }
       const isSelected = i === this.selectedIndex;
-      lines.push(this.renderItemLine(item, isSelected, width, query));
+      lines.push(
+        this.constrainLineWidth(this.renderItemLine(item, isSelected, width, query), width),
+      );
     }
 
     // Show scroll indicator if needed
     if (this.filteredItems.length > this.maxVisible) {
       const scrollInfo = `${this.selectedIndex + 1}/${this.filteredItems.length}`;
-      lines.push(this.theme.scrollInfo(`  ${scrollInfo}`));
+      lines.push(this.constrainLineWidth(this.theme.scrollInfo(`  ${scrollInfo}`), width));
     }
 
     return lines;
@@ -286,7 +295,8 @@ export class SearchableSelectList implements Component {
           const highlightedDesc = this.highlightMatch(truncatedDesc, query);
           const descText = isSelected ? highlightedDesc : this.theme.description(highlightedDesc);
           const line = `${prefix}${valueText}${spacing}${descText}`;
-          return isSelected ? this.theme.selectedText(line) : line;
+          const styled = isSelected ? this.theme.selectedText(line) : line;
+          return this.constrainLineWidth(styled, width);
         }
       }
     }
@@ -295,7 +305,8 @@ export class SearchableSelectList implements Component {
     const truncatedValue = truncateToWidth(displayValue, maxWidth, "");
     const valueText = this.highlightMatch(truncatedValue, query);
     const line = `${prefix}${valueText}`;
-    return isSelected ? this.theme.selectedText(line) : line;
+    const styled = isSelected ? this.theme.selectedText(line) : line;
+    return this.constrainLineWidth(styled, width);
   }
 
   private getDescriptionLayout(

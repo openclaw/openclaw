@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { stripAnsi, visibleWidth } from "../../terminal/ansi.js";
+import { searchableSelectListTheme } from "../theme/theme.js";
 import { SearchableSelectList, type SearchableSelectListTheme } from "./searchable-select-list.js";
 
 const mockTheme: SearchableSelectListTheme = {
@@ -116,6 +117,40 @@ describe("SearchableSelectList", () => {
     list.setSelectedIndex(1); // make first row non-selected so description styling is applied
 
     typeInput(list, "provider");
+
+    const width = 80;
+    const output = list.render(width);
+    for (const line of output) {
+      expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+    }
+  });
+
+  it("keeps /model search rows within width for single-letter queries", () => {
+    const items = [
+      {
+        value: "minimax-cn/MiniMax-M2",
+        label: "minimax-cn/MiniMax-M2",
+        description: "MiniMax M2",
+      },
+      {
+        value: "mistral/codestral-latest",
+        label: "mistral/codestral-latest",
+        description: "Codestral",
+      },
+      {
+        value: "mistral/devstral-medium-latest",
+        label: "mistral/devstral-medium-latest",
+        description: "Devstral Medium",
+      },
+      {
+        value: "moonshot/moonshot-v1-8k",
+        label: "moonshot/moonshot-v1-8k",
+        description: "Moonshot",
+      },
+    ];
+    const list = new SearchableSelectList(items, 12, searchableSelectListTheme);
+
+    typeInput(list, "m");
 
     const width = 80;
     const output = list.render(width);
