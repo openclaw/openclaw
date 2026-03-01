@@ -314,21 +314,42 @@ Then verify backend health:
 /acp doctor
 ```
 
-### Pinned acpx install strategy (current behavior)
+### acpx command and version configuration
 
-`@openclaw/acpx` now enforces a strict plugin-local pinning model:
+By default, `@openclaw/acpx` uses the plugin-local pinned binary:
 
-1. The extension pins an exact acpx dependency in `extensions/acpx/package.json`.
-2. Runtime command is fixed to the plugin-local binary (`extensions/acpx/node_modules/.bin/acpx`), not global `PATH`.
-3. Plugin config does not expose `command` or `commandArgs`, so runtime command drift is blocked.
-4. Startup registers the ACP backend immediately as not-ready.
-5. A background ensure job verifies `acpx --version` against the pinned version.
-6. If missing/mismatched, it runs plugin-local install (`npm install --omit=dev --no-save acpx@<pinned>`) and re-verifies before healthy.
+1. Command defaults to `extensions/acpx/node_modules/.bin/acpx`.
+2. Expected version defaults to the extension pin.
+3. Startup registers ACP backend immediately as not-ready.
+4. A background ensure job verifies `acpx --version`.
+5. If the plugin-local binary is missing or mismatched, it runs:
+   `npm install --omit=dev --no-save acpx@<pinned>` and re-verifies.
+
+You can override command/version in plugin config:
+
+```json
+{
+  "plugins": {
+    "entries": {
+      "acpx": {
+        "enabled": true,
+        "config": {
+          "command": "../acpx/dist/cli.js",
+          "expectedVersion": "any"
+        }
+      }
+    }
+  }
+}
+```
 
 Notes:
 
-- OpenClaw startup stays non-blocking while acpx ensure runs.
-- If network/install fails, backend remains unavailable and `/acp doctor` reports an actionable fix.
+- `command` accepts an absolute path, relative path, or command name (`acpx`).
+- Relative paths resolve from OpenClaw workspace directory.
+- `expectedVersion: "any"` disables strict version matching.
+- When `command` points to a custom binary/path, plugin-local auto-install is disabled.
+- OpenClaw startup remains non-blocking while the backend health check runs.
 
 See [Plugins](/tools/plugin).
 

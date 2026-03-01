@@ -264,8 +264,8 @@ importers:
   extensions/acpx:
     dependencies:
       acpx:
-        specifier: ^0.1.13
-        version: 0.1.13(zod@4.3.6)
+        specifier: 0.1.15
+        version: 0.1.15(zod@4.3.6)
 
   extensions/bluebubbles: {}
 
@@ -3131,8 +3131,8 @@ packages:
       link-preview-js:
         optional: true
 
-  '@whiskeysockets/libsignal-node@git+https://github.com/whiskeysockets/libsignal-node.git#1c30d7d7e76a3b0aa120b04dc6a26f5a12dccf67':
-    resolution: {commit: 1c30d7d7e76a3b0aa120b04dc6a26f5a12dccf67, repo: https://github.com/whiskeysockets/libsignal-node.git, type: git}
+  '@whiskeysockets/libsignal-node@https://codeload.github.com/whiskeysockets/libsignal-node/tar.gz/1c30d7d7e76a3b0aa120b04dc6a26f5a12dccf67':
+    resolution: {tarball: https://codeload.github.com/whiskeysockets/libsignal-node/tar.gz/1c30d7d7e76a3b0aa120b04dc6a26f5a12dccf67}
     version: 2.0.1
 
   abbrev@1.1.1:
@@ -3160,8 +3160,8 @@ packages:
     engines: {node: '>=0.4.0'}
     hasBin: true
 
-  acpx@0.1.13:
-    resolution: {integrity: sha512-C032VkV3cNa13ubq9YhskTWvDTsciNAQfNHZLW3PIN3atdkrzkV0v2yi6Znp7UZDw+pzgpKUsOrZWl64Lwr+3w==}
+  acpx@0.1.15:
+    resolution: {integrity: sha512-1r+tmPT9Oe2Ulv5b4r7O2hCCq5CHVru/H2tcPeTpZek9jR1zBQoBfZ/RcK+9sC9/mnDvWYO5R7Iae64v2LMO+A==}
     engines: {node: '>=18'}
     hasBin: true
 
@@ -9007,7 +9007,7 @@ snapshots:
       '@cacheable/node-cache': 1.7.6
       '@hapi/boom': 9.1.4
       async-mutex: 0.5.0
-      libsignal: '@whiskeysockets/libsignal-node@git+https://github.com/whiskeysockets/libsignal-node.git#1c30d7d7e76a3b0aa120b04dc6a26f5a12dccf67'
+      libsignal: '@whiskeysockets/libsignal-node@https://codeload.github.com/whiskeysockets/libsignal-node/tar.gz/1c30d7d7e76a3b0aa120b04dc6a26f5a12dccf67'
       lru-cache: 11.2.6
       music-metadata: 11.12.1
       p-queue: 9.1.0
@@ -9022,7 +9022,7 @@ snapshots:
       - supports-color
       - utf-8-validate
 
-  '@whiskeysockets/libsignal-node@git+https://github.com/whiskeysockets/libsignal-node.git#1c30d7d7e76a3b0aa120b04dc6a26f5a12dccf67':
+  '@whiskeysockets/libsignal-node@https://codeload.github.com/whiskeysockets/libsignal-node/tar.gz/1c30d7d7e76a3b0aa120b04dc6a26f5a12dccf67':
     dependencies:
       curve25519-js: 0.0.4
       protobufjs: 6.8.8
@@ -9050,7 +9050,7 @@ snapshots:
 
   acorn@8.16.0: {}
 
-  acpx@0.1.13(zod@4.3.6):
+  acpx@0.1.15(zod@4.3.6):
     dependencies:
       '@agentclientprotocol/sdk': 0.14.1(zod@4.3.6)
       commander: 13.1.0

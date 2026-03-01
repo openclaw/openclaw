@@ -1,12 +1,18 @@
 {
   "id": "acpx",
   "name": "ACPX Runtime",
-  "description": "ACP runtime backend powered by a pinned plugin-local acpx CLI.",
+  "description": "ACP runtime backend powered by acpx with configurable command path and version policy.",
   "skills": ["./skills"],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
     "properties": {
+      "command": {
+        "type": "string"
+      },
+      "expectedVersion": {
+        "type": "string"
+      },
       "cwd": {
         "type": "string"
       },
@@ -29,6 +35,14 @@
     }
   },
   "uiHints": {
+    "command": {
+      "label": "acpx Command",
+      "help": "Optional path/command override for acpx (for example /home/user/repos/acpx/dist/cli.js). Leave unset to use plugin-local bundled acpx."
+    },
+    "expectedVersion": {
+      "label": "Expected acpx Version",
+      "help": "Exact version to enforce (for example 0.1.15) or \"any\" to skip strict version matching."
+    },
     "cwd": {
       "label": "Default Working Directory",
       "help": "Default cwd for ACP session operations when not set per session."
