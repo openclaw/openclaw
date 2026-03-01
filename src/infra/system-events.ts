@@ -25,9 +25,19 @@ type SessionQueue = {
   lastContextKey: string | null;
 };
 
-const SYSTEM_EVENT_QUEUES_KEY = Symbol.for("openclaw.systemEvents.queues");
-
-const queues = resolveGlobalMap<string, SessionQueue>(SYSTEM_EVENT_QUEUES_KEY);
+// Use globalThis singleton so the queues Map is shared across bundler chunks.
+// Without this, enqueueSystemEvent (called from dispatch-from-config chunk)
+// and drainSystemEvents (called from get-reply-run chunk) reference different
+// Maps and events are silently lost. Same pattern as internal-hooks.ts.
+const queues: Map<string, SessionQueue> =
+  ((globalThis as Record<string, unknown>).__openclaw_system_event_queues as Map<
+    string,
+    SessionQueue
+  >) ??
+  ((globalThis as Record<string, unknown>).__openclaw_system_event_queues = new Map<
+    string,
+    SessionQueue
+  >());
 
 type SystemEventOptions = {
   sessionKey: string;
@@ -160,3 +170,9 @@ export function resolveSystemEventDeliveryContext(
 export function resetSystemEventsForTest() {
   queues.clear();
 }
+
+// Expose enqueueSystemEvent on globalThis so workspace hooks loaded via
+// dynamic import() can inject system events without needing a direct module
+// import path into the bundled gateway chunks. Follows the same pattern as
+// __openclaw_internal_hook_handlers__ in src/hooks/internal-hooks.ts.
+(globalThis as Record<string, unknown>).__openclaw_enqueueSystemEvent ??= enqueueSystemEvent;
