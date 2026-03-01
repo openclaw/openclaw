@@ -2,10 +2,29 @@
 
 Modern Android node app: connects to the **Gateway WebSocket** (`_bot-gw._tcp`) and exposes **Canvas + Chat + Camera**.
 
+<<<<<<< HEAD
 Notes:
 - The node keeps the connection alive via a **foreground service** (persistent notification with a Disconnect action).
 - Chat always uses the shared session key **`main`** (same session across iOS/macOS/WebChat/Android).
 - Supports modern Android only (`minSdk 31`, Kotlin + Jetpack Compose).
+=======
+### Rebuild Checklist
+
+- [x] New 4-step onboarding flow
+- [x] Connect tab with `Setup Code` + `Manual` modes
+- [x] Encrypted persistence for gateway setup/auth state
+- [x] Chat UI restyled
+- [x] Settings UI restyled and de-duplicated (gateway controls moved to Connect)
+- [x] QR code scanning in onboarding
+- [x] Performance improvements
+- [x] Streaming support in chat UI
+- [x] Request camera/location and other permissions in onboarding/settings flow
+- [x] Push notifications for gateway/chat status updates
+- [x] Security hardening (biometric lock, token handling, safer defaults)
+- [x] Voice tab full functionality
+- [x] Screen tab full functionality
+- [ ] Full end-to-end QA and release hardening
+>>>>>>> 7f9274b71 (chore(android): add kotlin lint/format tooling)
 
 ## Open in Android Studio
 - Open the folder `apps/android`.
@@ -17,6 +36,28 @@ cd apps/android
 ./gradlew :app:assembleDebug
 ./gradlew :app:installDebug
 ./gradlew :app:testDebugUnitTest
+```
+
+## Kotlin Lint + Format
+
+```bash
+pnpm android:lint
+pnpm android:format
+```
+
+Android framework/resource lint (separate pass):
+
+```bash
+pnpm android:lint:android
+```
+
+Direct Gradle tasks:
+
+```bash
+cd apps/android
+./gradlew :app:ktlintCheck :benchmark:ktlintCheck
+./gradlew :app:ktlintFormat :benchmark:ktlintFormat
+./gradlew :app:lintDebug
 ```
 
 `gradlew` auto-detects the Android SDK at `~/Library/Android/sdk` (macOS default) if `ANDROID_SDK_ROOT` / `ANDROID_HOME` are unset.
