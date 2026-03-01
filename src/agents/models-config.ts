@@ -101,6 +101,14 @@ function mergeProviders(params: {
   return out;
 }
 
+function hasExplicitNonEmptyProviderValue(
+  provider: ProviderConfig | undefined,
+  key: "apiKey" | "baseUrl",
+): boolean {
+  const value = provider?.[key];
+  return typeof value === "string" && value.trim().length > 0;
+}
+
 async function readJson(pathname: string): Promise<unknown> {
   try {
     const raw = await fs.readFile(pathname, "utf8");
@@ -118,6 +126,14 @@ export async function ensureOpenClawModelsJson(
   const agentDir = agentDirOverride?.trim() ? agentDirOverride.trim() : resolveOpenClawAgentDir();
 
   const explicitProviders = cfg.models?.providers ?? {};
+  const explicitProviderEntries: Record<string, ProviderConfig> = {};
+  for (const [rawKey, entry] of Object.entries(explicitProviders)) {
+    const providerKey = rawKey.trim();
+    if (!providerKey) {
+      continue;
+    }
+    explicitProviderEntries[providerKey] = entry;
+  }
   const implicitProviders = await resolveImplicitProviders({ agentDir, explicitProviders });
   const providers: Record<string, ProviderConfig> = mergeProviders({
     implicit: implicitProviders,
@@ -156,6 +172,7 @@ export async function ensureOpenClawModelsJson(
         mergedProviders[key] = entry;
       }
       for (const [key, newEntry] of Object.entries(providers)) {
+        const explicitProvider = explicitProviderEntries[key];
         const existing = existingProviders[key] as
           | (NonNullable<ModelsConfig["providers"]>[string] & {
               apiKey?: string;
@@ -164,10 +181,18 @@ export async function ensureOpenClawModelsJson(
           | undefined;
         if (existing) {
           const preserved: Record<string, unknown> = {};
-          if (typeof existing.apiKey === "string" && existing.apiKey) {
+          if (
+            !hasExplicitNonEmptyProviderValue(explicitProvider, "apiKey") &&
+            typeof existing.apiKey === "string" &&
+            existing.apiKey
+          ) {
             preserved.apiKey = existing.apiKey;
           }
-          if (typeof existing.baseUrl === "string" && existing.baseUrl) {
+          if (
+            !hasExplicitNonEmptyProviderValue(explicitProvider, "baseUrl") &&
+            typeof existing.baseUrl === "string" &&
+            existing.baseUrl
+          ) {
             preserved.baseUrl = existing.baseUrl;
           }
           mergedProviders[key] = { ...newEntry, ...preserved };
