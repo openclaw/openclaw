@@ -3,6 +3,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const diagnosticMocks = vi.hoisted(() => ({
   logLaneEnqueue: vi.fn(),
   logLaneDequeue: vi.fn(),
+  logLaneConcurrencyChange: vi.fn(),
+  logLaneTaskComplete: vi.fn(),
+  logLaneTaskError: vi.fn(),
   diag: {
     debug: vi.fn(),
     warn: vi.fn(),
@@ -13,6 +16,9 @@ const diagnosticMocks = vi.hoisted(() => ({
 vi.mock("../logging/diagnostic.js", () => ({
   logLaneEnqueue: diagnosticMocks.logLaneEnqueue,
   logLaneDequeue: diagnosticMocks.logLaneDequeue,
+  logLaneConcurrencyChange: diagnosticMocks.logLaneConcurrencyChange,
+  logLaneTaskComplete: diagnosticMocks.logLaneTaskComplete,
+  logLaneTaskError: diagnosticMocks.logLaneTaskError,
   diagnosticLogger: diagnosticMocks.diag,
 }));
 
