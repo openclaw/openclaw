@@ -32,7 +32,7 @@ import {
 } from "../../auto-reply/thinking.js";
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { applyConfigEnvVars } from "../../config/env-vars.js";
+import { collectConfigRuntimeEnvVars } from "../../config/env-vars.js";
 import {
   resolveSessionTranscriptPath,
   setSessionRuntimeModel,
@@ -99,8 +99,10 @@ export async function runCronIsolatedAgentTurn(params: {
   agentId?: string;
   lane?: string;
 }): Promise<RunCronAgentTurnResult> {
-  // Apply env vars from config so isolated sessions can access them (e.g., OPENROUTER_API_KEY)
-  applyConfigEnvVars(params.cfg);
+  // Collect env vars from config to pass to isolated agent sessions (e.g., OPENROUTER_API_KEY)
+  // Note: We collect env vars here but do NOT apply them to global process.env to avoid
+  // concurrent mutation issues. They are passed directly to agent runners instead.
+  const configEnvVars = collectConfigRuntimeEnvVars(params.cfg);
 
   const abortSignal = params.abortSignal ?? params.signal;
   const isAborted = () => abortSignal?.aborted === true;
@@ -447,6 +449,7 @@ export async function runCronIsolatedAgentTurn(params: {
             timeoutMs,
             runId: cronSession.sessionEntry.sessionId,
             cliSessionId,
+            env: configEnvVars,
           });
         }
         return runEmbeddedPiAgent({

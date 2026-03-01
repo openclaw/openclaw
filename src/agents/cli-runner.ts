@@ -50,6 +50,8 @@ export async function runCliAgent(params: {
   ownerNumbers?: string[];
   cliSessionId?: string;
   images?: ImageContent[];
+  /** Additional environment variables to pass to the CLI process */
+  env?: Record<string, string>;
 }): Promise<EmbeddedPiRunResult> {
   const started = Date.now();
   const workspaceResolution = resolveRunWorkspaceDir({
@@ -221,7 +223,7 @@ export async function runCliAgent(params: {
       }
 
       const env = (() => {
-        const next = { ...process.env, ...backend.env };
+        const next = { ...process.env, ...params.env, ...backend.env };
         for (const key of backend.clearEnv ?? []) {
           delete next[key];
         }
