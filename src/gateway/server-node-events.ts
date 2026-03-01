@@ -4,6 +4,7 @@ import { createOutboundSendDeps } from "../cli/outbound-send-deps.js";
 import { agentCommand } from "../commands/agent.js";
 import { loadConfig } from "../config/config.js";
 import { updateSessionStore } from "../config/sessions.js";
+import { shouldUseSessionScopedHeartbeatWake } from "../infra/heartbeat-reason.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { deliverOutboundPayloads } from "../infra/outbound/deliver.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
@@ -121,10 +122,6 @@ function compactExecEventOutput(raw: string) {
   }
   const safe = Math.max(1, MAX_EXEC_EVENT_OUTPUT_CHARS - 1);
   return `${normalized.slice(0, safe)}…`;
-}
-
-function shouldUseSessionScopedExecWake(sessionKey: string) {
-  return sessionKey.trim().toLowerCase().startsWith("agent:");
 }
 
 function compactNotificationEventText(raw: string) {
@@ -532,7 +529,7 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       if (!sessionKeyRaw) {
         return;
       }
-      const shouldUseScopedWake = shouldUseSessionScopedExecWake(sessionKeyRaw);
+      const shouldUseScopedWake = shouldUseSessionScopedHeartbeatWake(sessionKeyRaw);
       const { canonicalKey: sessionKey } = loadSessionEntry(sessionKeyRaw);
 
       // Respect tools.exec.notifyOnExit setting (default: true)

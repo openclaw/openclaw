@@ -4,6 +4,7 @@ import {
   isHeartbeatEventDrivenReason,
   normalizeHeartbeatWakeReason,
   resolveHeartbeatReasonKind,
+  shouldUseSessionScopedHeartbeatWake,
 } from "./heartbeat-reason.js";
 
 describe("heartbeat-reason", () => {
@@ -51,5 +52,13 @@ describe("heartbeat-reason", () => {
     expect(isHeartbeatActionWakeReason("interval")).toBe(false);
     expect(isHeartbeatActionWakeReason("cron:job-1")).toBe(false);
     expect(isHeartbeatActionWakeReason("retry")).toBe(false);
+  });
+
+  it("uses session-scoped wake only for agent-prefixed session keys", () => {
+    expect(shouldUseSessionScopedHeartbeatWake("agent:main:main")).toBe(true);
+    expect(shouldUseSessionScopedHeartbeatWake(" agent:ops:work ")).toBe(true);
+    expect(shouldUseSessionScopedHeartbeatWake("global")).toBe(false);
+    expect(shouldUseSessionScopedHeartbeatWake("node-123")).toBe(false);
+    expect(shouldUseSessionScopedHeartbeatWake(undefined)).toBe(false);
   });
 });

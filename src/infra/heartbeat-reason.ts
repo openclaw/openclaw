@@ -12,6 +12,11 @@ function trimReason(reason?: string): string {
   return typeof reason === "string" ? reason.trim() : "";
 }
 
+export function shouldUseSessionScopedHeartbeatWake(sessionKey?: string): boolean {
+  const trimmed = trimReason(sessionKey);
+  return trimmed.toLowerCase().startsWith("agent:");
+}
+
 export function normalizeHeartbeatWakeReason(reason?: string): string {
   const trimmed = trimReason(reason);
   return trimmed.length > 0 ? trimmed : "requested";
