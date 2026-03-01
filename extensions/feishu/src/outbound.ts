@@ -5,7 +5,7 @@ import { sendMediaFeishu } from "./media.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { sendMessageFeishu } from "./send.js";
 
-function normalizePossibleLocalImagePath(text: string | undefined): string | null {
+function normalizePossibleLocalFilePath(text: string | undefined): string | null {
   const raw = text?.trim();
   if (!raw) return null;
 
@@ -18,10 +18,46 @@ function normalizePossibleLocalImagePath(text: string | undefined): string | nul
   if (/^(https?:\/\/|data:|file:\/\/)/i.test(raw)) return null;
 
   const ext = path.extname(raw).toLowerCase();
-  const isImageExt = [".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".ico", ".tiff"].includes(
-    ext,
-  );
-  if (!isImageExt) return null;
+  // Support all file types: images, documents, archives, media, etc.
+  const supportedExts = [
+    // Images
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".gif",
+    ".webp",
+    ".bmp",
+    ".ico",
+    ".tiff",
+    // Documents
+    ".pdf",
+    ".doc",
+    ".docx",
+    ".xls",
+    ".xlsx",
+    ".ppt",
+    ".pptx",
+    // Archives
+    ".zip",
+    ".rar",
+    ".7z",
+    ".tar",
+    ".gz",
+    // Media
+    ".mp4",
+    ".mov",
+    ".avi",
+    ".opus",
+    ".ogg",
+    ".mp3",
+    ".wav",
+    // Other common files
+    ".txt",
+    ".json",
+    ".csv",
+    ".xml",
+  ];
+  if (!supportedExts.includes(ext)) return null;
 
   if (!path.isAbsolute(raw)) return null;
   if (!fs.existsSync(raw)) return null;
@@ -45,20 +81,26 @@ export const feishuOutbound: ChannelOutboundAdapter = {
   textChunkLimit: 4000,
   sendText: async ({ cfg, to, text, accountId }) => {
     // Scheme A compatibility shim:
-    // when upstream accidentally returns a local image path as plain text,
-    // auto-upload and send as Feishu image message instead of leaking path text.
-    const localImagePath = normalizePossibleLocalImagePath(text);
-    if (localImagePath) {
+    // when upstream accidentally returns a local file path as plain text,
+    // auto-upload and send as Feishu media message instead of leaking path text.
+    // Supports all file types: images, documents, archives, media, etc.
+    const localFilePath = normalizePossibleLocalFilePath(text);
+    if (localFilePath) {
       try {
+        // Read file into buffer to bypass path security checks
+        const fileBuffer = await fs.promises.readFile(localFilePath);
+        const fileName = path.basename(localFilePath);
+
         const result = await sendMediaFeishu({
           cfg,
           to,
-          mediaUrl: localImagePath,
+          mediaBuffer: fileBuffer,
+          fileName,
           accountId: accountId ?? undefined,
         });
         return { channel: "feishu", ...result };
       } catch (err) {
-        console.error(`[feishu] local image path auto-send failed:`, err);
+        console.error(`[feishu] local file path auto-send failed:`, err);
         // fall through to plain text as last resort
       }
     }
@@ -75,13 +117,41 @@ export const feishuOutbound: ChannelOutboundAdapter = {
     // Upload and send media if URL or local path provided
     if (mediaUrl) {
       try {
-        const result = await sendMediaFeishu({
+        // Check if mediaUrl is a local file path and read it into buffer
+        // to bypass path security checks
+        let sendParams: Parameters<typeof sendMediaFeishu>[0] = {
           cfg,
           to,
           mediaUrl,
           accountId: accountId ?? undefined,
           mediaLocalRoots,
-        });
+        };
+
+        const isLocalPath =
+          !mediaUrl.startsWith("http://") &&
+          !mediaUrl.startsWith("https://") &&
+          !mediaUrl.startsWith("data:") &&
+          !mediaUrl.startsWith("file://") &&
+          fs.existsSync(mediaUrl);
+
+        if (isLocalPath) {
+          try {
+            const fileBuffer = await fs.promises.readFile(mediaUrl);
+            const fileName = path.basename(mediaUrl);
+            sendParams = {
+              cfg,
+              to,
+              mediaBuffer: fileBuffer,
+              fileName,
+              accountId: accountId ?? undefined,
+            };
+          } catch (readErr) {
+            console.error(`[feishu] failed to read local file ${mediaUrl}:`, readErr);
+            // Fall back to passing the URL as-is
+          }
+        }
+
+        const result = await sendMediaFeishu(sendParams);
         return { channel: "feishu", ...result };
       } catch (err) {
         // Log the error for debugging
