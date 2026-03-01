@@ -486,10 +486,12 @@ describe("browser server-context tab selection state", () => {
 
     const opened = await openclaw.openTab("http://127.0.0.1:3009");
     expect(opened.targetId).toBe("NEW");
-    expect(fetchMock).toHaveBeenCalledWith(
-      expect.stringContaining("/json/close/OLD1"),
-      expect.any(Object),
-    );
+    await vi.waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining("/json/close/OLD1"),
+        expect.any(Object),
+      );
+    });
   });
 
   it("does not fail tab open when managed-tab cleanup list fails", async () => {
