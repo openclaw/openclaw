@@ -533,8 +533,16 @@ export function createExecTool(
             return;
           }
           yielded = true;
+          // Mark as backgrounded immediately to ensure the session is tracked
+          // even if the process exits during the drain delay window.
           markBackgrounded(run.session);
-          resolveRunning();
+          // Allow a brief moment for any buffered stdout/stderr to be drained
+          // before resolving. This mitigates output loss when processes with
+          // block-buffered stdout (e.g., bun, node, python) are transitioned
+          // to background mode.
+          setTimeout(() => {
+            resolveRunning();
+          }, 50);
         };
 
         if (allowBackground && yieldWindow !== null) {
@@ -545,9 +553,7 @@ export function createExecTool(
               if (yielded) {
                 return;
               }
-              yielded = true;
-              markBackgrounded(run.session);
-              resolveRunning();
+              onYieldNow();
             }, yieldWindow);
           }
         }
