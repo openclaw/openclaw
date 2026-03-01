@@ -7,7 +7,7 @@ read_when:
   - 正在联合调整 heartbeat 与 cache-ttl 剪枝策略
 x-i18n:
   source_path: docs/reference/prompt-caching.md
-  source_hash: 7952e90d0d6eb23f
+  source_hash: 7952e90d0d6eb23fee4e0046220dddc7c89dc19aae0129d0619290e081a92778
   workflow: manual
   translator: xingzihai
 ---
