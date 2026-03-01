@@ -7,6 +7,7 @@ import {
   parseLaunchctlPrint,
   repairLaunchAgentBootstrap,
   restartLaunchAgent,
+  resolveGatewayLogPaths,
   resolveLaunchAgentPlistPath,
 } from "./launchd.js";
 
@@ -193,7 +194,8 @@ describe("launchd install", () => {
 
   it("fails with actionable guidance when LaunchAgent log path is not writable", async () => {
     const env = createDefaultLaunchdEnv();
-    state.writeFileFailures.add("/Users/test/.openclaw/logs/gateway.log");
+    const { stdoutPath } = resolveGatewayLogPaths(env);
+    state.writeFileFailures.add(stdoutPath);
 
     await expect(
       installLaunchAgent({
@@ -201,9 +203,7 @@ describe("launchd install", () => {
         stdout: new PassThrough(),
         programArguments: defaultProgramArguments,
       }),
-    ).rejects.toThrow(
-      "LaunchAgent log path is not writable: /Users/test/.openclaw/logs/gateway.log",
-    );
+    ).rejects.toThrow(`LaunchAgent log path is not writable: ${stdoutPath}`);
     expect(state.launchctlCalls).toEqual([]);
   });
 
