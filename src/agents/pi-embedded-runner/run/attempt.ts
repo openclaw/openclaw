@@ -5,6 +5,7 @@ import { streamSimple } from "@mariozechner/pi-ai";
 import {
   createAgentSession,
   DefaultResourceLoader,
+  estimateTokens,
   SessionManager,
 } from "@mariozechner/pi-coding-agent";
 import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
@@ -35,6 +36,7 @@ import {
   listChannelSupportedActions,
   resolveChannelMessageToolHints,
 } from "../../channel-tools.js";
+import { estimateMessagesTokens, pruneHistoryToTokenBudget } from "../../compaction.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import { resolveOpenClawDocsPath } from "../../docs-path.js";
 import { isTimeoutError } from "../../failover-error.js";
@@ -421,6 +423,118 @@ function summarizeSessionContext(messages: AgentMessage[]): {
     totalTextChars,
     totalImageBlocks,
     maxMessageTextChars,
+  };
+}
+
+const PRE_SEND_INPUT_BUDGET_SAFETY_RATIO = 0.9;
+const PRE_SEND_RESPONSE_RESERVE_RATIO = 0.08;
+const PRE_SEND_RESPONSE_RESERVE_MIN_TOKENS = 1024;
+const PRE_SEND_RESPONSE_RESERVE_MAX_TOKENS = 8192;
+const PRE_SEND_PROMPT_IMAGE_TOKEN_PENALTY = 2048;
+
+function estimateTextMessageTokens(role: "system" | "user", text: string): number {
+  if (!text.trim()) {
+    return 0;
+  }
+  try {
+    return estimateTokens({
+      role,
+      content: text,
+      timestamp: Date.now(),
+    } as unknown as AgentMessage);
+  } catch {
+    // Conservative fallback for tokenizers that reject synthetic messages.
+    return Math.max(1, Math.ceil(text.length / 4));
+  }
+}
+
+function enforcePromptHistoryBudget(params: {
+  messages: AgentMessage[];
+  contextWindowTokens: number;
+  modelMaxTokens?: number;
+  systemPromptText: string;
+  promptText: string;
+  promptImageCount: number;
+}): {
+  didPrune: boolean;
+  messages: AgentMessage[];
+  historyTokensBefore: number;
+  historyTokensAfter: number;
+  historyBudgetTokens: number;
+  envelopeTokens: number;
+  inputBudgetTokens: number;
+  droppedMessages: number;
+} {
+  const historyTokensBefore = estimateMessagesTokens(params.messages);
+  const responseReserveUpper =
+    typeof params.modelMaxTokens === "number" && Number.isFinite(params.modelMaxTokens)
+      ? Math.max(
+          1,
+          Math.min(PRE_SEND_RESPONSE_RESERVE_MAX_TOKENS, Math.floor(params.modelMaxTokens)),
+        )
+      : PRE_SEND_RESPONSE_RESERVE_MAX_TOKENS;
+  const responseReserveTokens = Math.max(
+    1,
+    Math.min(
+      responseReserveUpper,
+      Math.max(
+        PRE_SEND_RESPONSE_RESERVE_MIN_TOKENS,
+        Math.floor(params.contextWindowTokens * PRE_SEND_RESPONSE_RESERVE_RATIO),
+      ),
+    ),
+  );
+  const inputBudgetTokens = Math.max(
+    1,
+    Math.floor(
+      (params.contextWindowTokens - responseReserveTokens) * PRE_SEND_INPUT_BUDGET_SAFETY_RATIO,
+    ),
+  );
+  const envelopeTokens =
+    estimateTextMessageTokens("system", params.systemPromptText) +
+    estimateTextMessageTokens("user", params.promptText) +
+    params.promptImageCount * PRE_SEND_PROMPT_IMAGE_TOKEN_PENALTY;
+  const historyBudgetTokens = Math.max(0, inputBudgetTokens - envelopeTokens);
+
+  if (historyTokensBefore <= historyBudgetTokens) {
+    return {
+      didPrune: false,
+      messages: params.messages,
+      historyTokensBefore,
+      historyTokensAfter: historyTokensBefore,
+      historyBudgetTokens,
+      envelopeTokens,
+      inputBudgetTokens,
+      droppedMessages: 0,
+    };
+  }
+
+  if (historyBudgetTokens <= 0) {
+    return {
+      didPrune: params.messages.length > 0,
+      messages: [],
+      historyTokensBefore,
+      historyTokensAfter: 0,
+      historyBudgetTokens,
+      envelopeTokens,
+      inputBudgetTokens,
+      droppedMessages: params.messages.length,
+    };
+  }
+
+  const pruned = pruneHistoryToTokenBudget({
+    messages: params.messages,
+    budgetTokens: historyBudgetTokens,
+    parts: 2,
+  });
+  return {
+    didPrune: pruned.messages !== params.messages,
+    messages: pruned.messages,
+    historyTokensBefore,
+    historyTokensAfter: pruned.keptTokens,
+    historyBudgetTokens,
+    envelopeTokens,
+    inputBudgetTokens,
+    droppedMessages: pruned.droppedMessages,
   };
 }
 
@@ -1262,6 +1376,32 @@ export async function runEmbeddedAttempt(
                 ? { root: sandbox.workspaceDir, bridge: sandbox.fsBridge }
                 : undefined,
           });
+
+          const contextWindowTokens = Math.max(
+            1,
+            Math.floor(
+              params.model.contextWindow ?? params.model.maxTokens ?? DEFAULT_CONTEXT_TOKENS,
+            ),
+          );
+          const promptBudgetGuard = enforcePromptHistoryBudget({
+            messages: activeSession.messages,
+            contextWindowTokens,
+            modelMaxTokens: params.model.maxTokens,
+            systemPromptText,
+            promptText: effectivePrompt,
+            promptImageCount: imageResult.images.length,
+          });
+          if (promptBudgetGuard.didPrune) {
+            activeSession.agent.replaceMessages(promptBudgetGuard.messages);
+            log.warn(
+              `[context-budget-guard] pruned history before prompt: ` +
+                `sessionKey=${params.sessionKey ?? params.sessionId} ` +
+                `provider=${params.provider}/${params.modelId} ` +
+                `historyTokens=${promptBudgetGuard.historyTokensBefore}->${promptBudgetGuard.historyTokensAfter} ` +
+                `historyBudget=${promptBudgetGuard.historyBudgetTokens} inputBudget=${promptBudgetGuard.inputBudgetTokens} ` +
+                `envelopeTokens=${promptBudgetGuard.envelopeTokens} droppedMessages=${promptBudgetGuard.droppedMessages}`,
+            );
+          }
 
           cacheTrace?.recordStage("prompt:images", {
             prompt: effectivePrompt,

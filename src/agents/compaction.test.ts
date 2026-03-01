@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   estimateMessagesTokens,
   pruneHistoryForContextShare,
+  pruneHistoryToTokenBudget,
   splitMessagesByTokenShare,
 } from "./compaction.js";
 
@@ -262,5 +263,34 @@ describe("pruneHistoryForContextShare", () => {
     // droppedMessages = 1 (assistant) + 2 (orphaned tool_results) = 3
     // droppedMessagesList only has the assistant message
     expect(pruned.droppedMessages).toBe(pruned.droppedMessagesList.length + 2);
+  });
+});
+
+describe("pruneHistoryToTokenBudget", () => {
+  it("drops oldest messages until total tokens fit explicit budget", () => {
+    const messages = [makeMessage(1, 16_000), makeMessage(2, 1_000)];
+    const latestTokens = estimateMessagesTokens([messages[1]]);
+    const budgetTokens = latestTokens + 32;
+    const pruned = pruneHistoryToTokenBudget({
+      messages,
+      budgetTokens,
+      parts: 2,
+    });
+
+    expect(pruned.messages.map((msg) => msg.timestamp)).toEqual([2]);
+    expect(pruned.keptTokens).toBeLessThanOrEqual(budgetTokens);
+  });
+
+  it("can clear history entirely when budget is near zero", () => {
+    const messages = [makeMessage(1, 8_000)];
+    const pruned = pruneHistoryToTokenBudget({
+      messages,
+      budgetTokens: 0,
+      parts: 2,
+    });
+
+    expect(pruned.messages).toEqual([]);
+    expect(pruned.keptTokens).toBe(0);
+    expect(pruned.droppedMessages).toBeGreaterThan(0);
   });
 });
