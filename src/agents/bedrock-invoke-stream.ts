@@ -39,6 +39,7 @@ interface BedrockInvokeRequest {
   system?: string;
   messages: AnthropicMessage[];
   tools?: AnthropicTool[];
+  temperature?: number;
 }
 
 // ── SSE event types from Anthropic stream ───────────────────────────────────
@@ -84,7 +85,7 @@ interface SseMessageStop {
   type: "message_stop";
 }
 
-type SseEvent =
+export type SseEvent =
   | SseMessageStart
   | SseContentBlockStart
   | SseContentBlockDelta
@@ -102,7 +103,9 @@ type InputContentPart =
   | { type: "tool_use"; id: string; name: string; input: Record<string, unknown> }
   | { type: "toolResult"; toolCallId: string; content: unknown };
 
-function convertMessages(messages: Array<{ role: string; content: unknown }>): AnthropicMessage[] {
+export function convertMessages(
+  messages: Array<{ role: string; content: unknown }>,
+): AnthropicMessage[] {
   const result: AnthropicMessage[] = [];
 
   for (const msg of messages) {
@@ -176,7 +179,7 @@ function convertMessages(messages: Array<{ role: string; content: unknown }>): A
   return result;
 }
 
-function extractTextFromContent(content: unknown): string {
+export function extractTextFromContent(content: unknown): string {
   if (typeof content === "string") {
     return content;
   }
@@ -189,7 +192,7 @@ function extractTextFromContent(content: unknown): string {
     .join("");
 }
 
-function convertTools(tools: Tool[] | undefined): AnthropicTool[] {
+export function convertTools(tools: Tool[] | undefined): AnthropicTool[] {
   if (!tools || !Array.isArray(tools)) {
     return [];
   }
@@ -230,10 +233,11 @@ const EVENT_STREAM_CRC_SIZE = 4;
  * Parse AWS binary event stream frames from a ReadableStream and yield
  * the decoded Anthropic JSON events.
  */
-async function* parseAwsEventStream(
+export async function* parseAwsEventStream(
   reader: ReadableStreamDefaultReader<Uint8Array>,
 ): AsyncGenerator<SseEvent> {
   let buffer = new Uint8Array(0);
+  const decoder = new TextDecoder();
 
   function appendToBuffer(chunk: Uint8Array): void {
     const next = new Uint8Array(buffer.length + chunk.length);
@@ -283,7 +287,6 @@ async function* parseAwsEventStream(
         continue;
       }
 
-      const decoder = new TextDecoder();
       const payloadStr = decoder.decode(payloadBytes);
 
       try {
@@ -337,7 +340,7 @@ export function createBedrockInvokeStreamFn(baseUrl: string): StreamFn {
         };
 
         if (typeof options?.temperature === "number") {
-          (body as unknown as Record<string, unknown>).temperature = options.temperature;
+          body.temperature = options.temperature;
         }
 
         const url = `${trimmedBase}/model/${model.id}/invoke-with-response-stream`;

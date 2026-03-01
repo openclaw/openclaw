@@ -778,6 +778,11 @@ export async function runEmbeddedAttempt(
         const providerBaseUrl =
           typeof providerConfig?.baseUrl === "string" ? providerConfig.baseUrl.trim() : "";
         const bedrockBaseUrl = modelBaseUrl || providerBaseUrl || "";
+        if (!bedrockBaseUrl) {
+          log.warn(
+            `bedrock-invoke: no baseUrl configured for provider "${params.model.provider}"; requests will fail`,
+          );
+        }
         activeSession.agent.streamFn = createBedrockInvokeStreamFn(bedrockBaseUrl);
       } else {
         // Force a stable streamFn reference so vitest can reliably mock @mariozechner/pi-ai.
