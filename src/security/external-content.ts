@@ -116,6 +116,10 @@ const ANGLE_BRACKET_MAP: Record<number, string> = {
   0x27e9: ">", // mathematical right angle bracket
   0xfe64: "<", // small less-than sign
   0xfe65: ">", // small greater-than sign
+  0x276e: "<", // heavy left-pointing angle quotation mark ornament
+  0x276f: ">", // heavy right-pointing angle quotation mark ornament
+  0x29fc: "<", // left-pointing curved angle bracket
+  0x29fd: ">", // right-pointing curved angle bracket
 };
 
 function foldMarkerChar(char: string): string {
@@ -134,8 +138,19 @@ function foldMarkerChar(char: string): string {
 }
 
 function foldMarkerText(input: string): string {
-  return input.replace(
-    /[\uFF21-\uFF3A\uFF41-\uFF5A\uFF1C\uFF1E\u2329\u232A\u3008\u3009\u2039\u203A\u27E8\u27E9\uFE64\uFE65]/g,
+  // First, remove zero-width characters that could hide markers
+  let normalized = input
+    .replace(/\u200B/g, "") // Zero Width Space
+    .replace(/\u200C/g, "") // Zero Width Non-Joiner
+    .replace(/\u200D/g, "") // Zero Width Joiner
+    .replace(/\uFEFF/g, ""); // Zero Width No-Break Space
+
+  // Normalize combining characters to prevent interference
+  normalized = normalized.normalize("NFD").replace(/[\u0300-\u036F]/g, "");
+
+  // Then apply character folding
+  return normalized.replace(
+    /[\uFF21-\uFF3A\uFF41-\uFF5A\uFF1C\uFF1E\u2329\u232A\u3008\u3009\u2039\u203A\u27E8\u27E9\uFE64\uFE65\u276E\u276F\u29FC\u29FD]/g,
     (char) => foldMarkerChar(char),
   );
 }
