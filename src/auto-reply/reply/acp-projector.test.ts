@@ -28,6 +28,37 @@ describe("createAcpReplyProjector", () => {
     ]);
   });
 
+  it("does not suppress identical short text across terminal turn boundaries", async () => {
+    const deliveries: Array<{ kind: string; text?: string }> = [];
+    const projector = createAcpReplyProjector({
+      cfg: createCfg({
+        acp: {
+          enabled: true,
+          stream: {
+            deliveryMode: "live",
+            coalesceIdleMs: 0,
+            maxChunkChars: 64,
+          },
+        },
+      }),
+      shouldSendToolSummaries: true,
+      deliver: async (kind, payload) => {
+        deliveries.push({ kind, text: payload.text });
+        return true;
+      },
+    });
+
+    await projector.onEvent({ type: "text_delta", text: "A", tag: "agent_message_chunk" });
+    await projector.onEvent({ type: "done", stopReason: "end_turn" });
+    await projector.onEvent({ type: "text_delta", text: "A", tag: "agent_message_chunk" });
+    await projector.onEvent({ type: "done", stopReason: "end_turn" });
+
+    expect(deliveries.filter((entry) => entry.kind === "block")).toEqual([
+      { kind: "block", text: "A" },
+      { kind: "block", text: "A" },
+    ]);
+  });
+
   it("flushes staggered live text deltas after idle gaps", async () => {
     vi.useFakeTimers();
     try {
@@ -411,6 +442,53 @@ describe("createAcpReplyProjector", () => {
     expect(deliveries[1]?.text).toContain("Tool Call");
   });
 
+  it("keeps terminal tool updates even when rendered summaries are truncated", async () => {
+    const deliveries: Array<{ kind: string; text?: string }> = [];
+    const projector = createAcpReplyProjector({
+      cfg: createCfg({
+        acp: {
+          enabled: true,
+          stream: {
+            deliveryMode: "live",
+            maxToolSummaryChars: 48,
+            tagVisibility: {
+              tool_call: true,
+              tool_call_update: true,
+            },
+          },
+        },
+      }),
+      shouldSendToolSummaries: true,
+      deliver: async (kind, payload) => {
+        deliveries.push({ kind, text: payload.text });
+        return true;
+      },
+    });
+
+    const longTitle =
+      "Run an intentionally long command title that truncates before lifecycle status is visible";
+    await projector.onEvent({
+      type: "tool_call",
+      tag: "tool_call",
+      toolCallId: "call_truncated_status",
+      status: "in_progress",
+      title: longTitle,
+      text: `${longTitle} (in_progress)`,
+    });
+    await projector.onEvent({
+      type: "tool_call",
+      tag: "tool_call_update",
+      toolCallId: "call_truncated_status",
+      status: "completed",
+      title: longTitle,
+      text: `${longTitle} (completed)`,
+    });
+
+    expect(deliveries.length).toBe(2);
+    expect(deliveries[0]?.kind).toBe("tool");
+    expect(deliveries[1]?.kind).toBe("tool");
+  });
+
   it("renders fallback tool labels without leaking call ids as primary label", async () => {
     const deliveries: Array<{ kind: string; text?: string }> = [];
     const projector = createAcpReplyProjector({
@@ -723,6 +801,57 @@ describe("createAcpReplyProjector", () => {
       type: "tool_call",
       tag: "tool_call",
       toolCallId: "call_hidden_1",
+      status: "in_progress",
+      title: "Run test",
+      text: "Run test (in_progress)",
+    });
+    await projector.onEvent({ type: "text_delta", text: "I don't", tag: "agent_message_chunk" });
+    await projector.flush(true);
+
+    const combinedText = deliveries
+      .filter((entry) => entry.kind === "block")
+      .map((entry) => entry.text ?? "")
+      .join("");
+    expect(combinedText).toBe("fallback. I don't");
+  });
+
+  it("preserves hidden boundary across nonterminal hidden tool updates", async () => {
+    const deliveries: Array<{ kind: string; text?: string }> = [];
+    const projector = createAcpReplyProjector({
+      cfg: createCfg({
+        acp: {
+          enabled: true,
+          stream: {
+            coalesceIdleMs: 0,
+            maxChunkChars: 256,
+            deliveryMode: "live",
+            tagVisibility: {
+              tool_call: false,
+              tool_call_update: false,
+            },
+          },
+        },
+      }),
+      shouldSendToolSummaries: true,
+      deliver: async (kind, payload) => {
+        deliveries.push({ kind, text: payload.text });
+        return true;
+      },
+    });
+
+    await projector.onEvent({ type: "text_delta", text: "fallback.", tag: "agent_message_chunk" });
+    await projector.onEvent({
+      type: "tool_call",
+      tag: "tool_call",
+      toolCallId: "hidden_boundary_1",
+      status: "in_progress",
+      title: "Run test",
+      text: "Run test (in_progress)",
+    });
+    await projector.onEvent({
+      type: "tool_call",
+      tag: "tool_call_update",
+      toolCallId: "hidden_boundary_1",
       status: "in_progress",
       title: "Run test",
       text: "Run test (in_progress)",
