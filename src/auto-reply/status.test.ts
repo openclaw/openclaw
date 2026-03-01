@@ -169,6 +169,26 @@ describe("buildStatusMessage", () => {
     expect(normalizeTestText(text)).toContain("Runtime: docker/all");
   });
 
+  it("falls back to persisted session levels when no inline overrides are provided", () => {
+    const text = buildStatusMessage({
+      agent: { model: "anthropic/claude-opus-4-5" },
+      sessionEntry: {
+        sessionId: "persisted-levels",
+        updatedAt: 0,
+        thinkingLevel: "low",
+        verboseLevel: "on",
+        reasoningLevel: "low",
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+    });
+
+    expect(text).toContain("Think: low");
+    expect(text).toContain("verbose");
+    expect(text).toContain("Reasoning: low");
+  });
+
   it("shows verbose/elevated labels only when enabled", () => {
     const text = buildStatusMessage({
       agent: { model: "anthropic/claude-opus-4-5" },
