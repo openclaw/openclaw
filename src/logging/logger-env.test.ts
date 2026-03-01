@@ -7,6 +7,7 @@ import {
   resetLogger,
   setLoggerOverride,
 } from "../logging.js";
+import { withEnv } from "../test-utils/env.js";
 import { loggingState } from "./state.js";
 
 const testLogPath = path.join(os.tmpdir(), "openclaw-test-env-log-level.log");
@@ -77,5 +78,17 @@ describe("OPENCLAW_LOG_LEVEL", () => {
       .filter((line) => line.includes("OPENCLAW_LOG_LEVEL"));
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toContain('Ignoring invalid OPENCLAW_LOG_LEVEL="nope"');
+  });
+
+  it("expands tilde in logging file paths from config overrides", () => {
+    withEnv({ HOME: "/tmp/openclaw-home-for-logs" }, () => {
+      setLoggerOverride({
+        level: "info",
+        file: "~/.openclaw/logs/gateway.log",
+      });
+      expect(getResolvedLoggerSettings().file).toBe(
+        path.join("/tmp/openclaw-home-for-logs", ".openclaw", "logs", "gateway.log"),
+      );
+    });
   });
 });
