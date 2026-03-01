@@ -43,6 +43,7 @@ import { isDangerousNameMatchingEnabled } from "../../config/dangerous-name-matc
 import { resolveOpenProviderRuntimeGroupPolicy } from "../../config/runtime-group-policy.js";
 import { loadSessionStore, resolveStorePath } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
+import { isOutboundSuppressed } from "../../infra/outbound/suppress-outbound.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { buildPairingReply } from "../../pairing/pairing-messages.js";
@@ -1234,6 +1235,11 @@ async function dispatchDiscordCommandInteraction(params: {
     threadBindings,
     suppressReplies,
   } = params;
+  if (isOutboundSuppressed({ cfg, channel: "discord", accountId })) {
+    logVerbose("[suppressOutbound] Blocked Discord native-command reply");
+    return;
+  }
+
   const respond = async (content: string, options?: { ephemeral?: boolean }) => {
     const payload = {
       content,

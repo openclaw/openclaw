@@ -154,7 +154,16 @@ export async function deliverSlackSlashReplies(params: {
   textLimit: number;
   tableMode?: MarkdownTableMode;
   chunkMode?: ChunkMode;
+  cfg?: OpenClawConfig;
+  accountId?: string;
 }) {
+  if (
+    params.cfg &&
+    isOutboundSuppressed({ cfg: params.cfg, channel: "slack", accountId: params.accountId })
+  ) {
+    logVerbose("[suppressOutbound] Blocked Slack slash reply");
+    return;
+  }
   const messages: string[] = [];
   const chunkLimit = Math.min(params.textLimit, 4000);
   for (const payload of params.replies) {

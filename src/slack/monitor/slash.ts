@@ -612,6 +612,8 @@ export async function registerSlackMonitorSlashCommands(params: {
             channel: "slack",
             accountId: route.accountId,
           }),
+          cfg,
+          accountId: route.accountId,
         });
       };
 
