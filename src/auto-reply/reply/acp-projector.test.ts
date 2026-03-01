@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { prefixSystemMessage } from "../../infra/system-message.js";
 import { createAcpReplyProjector } from "./acp-projector.js";
 import { createAcpTestConfig as createCfg } from "./test-fixtures/acp-runtime.js";
@@ -25,6 +25,81 @@ describe("createAcpReplyProjector", () => {
     expect(deliveries).toEqual([
       { kind: "block", text: "a".repeat(64) },
       { kind: "block", text: "a".repeat(6) },
+    ]);
+  });
+
+  it("flushes staggered live text deltas after idle gaps", async () => {
+    vi.useFakeTimers();
+    try {
+      const deliveries: Array<{ kind: string; text?: string }> = [];
+      const projector = createAcpReplyProjector({
+        cfg: createCfg({
+          acp: {
+            enabled: true,
+            stream: {
+              deliveryMode: "live",
+              coalesceIdleMs: 50,
+              maxChunkChars: 64,
+            },
+          },
+        }),
+        shouldSendToolSummaries: true,
+        deliver: async (kind, payload) => {
+          deliveries.push({ kind, text: payload.text });
+          return true;
+        },
+      });
+
+      await projector.onEvent({ type: "text_delta", text: "A", tag: "agent_message_chunk" });
+      await vi.advanceTimersByTimeAsync(60);
+      await projector.flush(false);
+
+      await projector.onEvent({ type: "text_delta", text: "B", tag: "agent_message_chunk" });
+      await vi.advanceTimersByTimeAsync(60);
+      await projector.flush(false);
+
+      await projector.onEvent({ type: "text_delta", text: "C", tag: "agent_message_chunk" });
+      await vi.advanceTimersByTimeAsync(60);
+      await projector.flush(false);
+
+      expect(deliveries.filter((entry) => entry.kind === "block")).toEqual([
+        { kind: "block", text: "A" },
+        { kind: "block", text: "B" },
+        { kind: "block", text: "C" },
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("splits oversized live text by maxChunkChars", async () => {
+    const deliveries: Array<{ kind: string; text?: string }> = [];
+    const projector = createAcpReplyProjector({
+      cfg: createCfg({
+        acp: {
+          enabled: true,
+          stream: {
+            deliveryMode: "live",
+            coalesceIdleMs: 0,
+            maxChunkChars: 50,
+          },
+        },
+      }),
+      shouldSendToolSummaries: true,
+      deliver: async (kind, payload) => {
+        deliveries.push({ kind, text: payload.text });
+        return true;
+      },
+    });
+
+    const text = `${"a".repeat(50)}${"b".repeat(50)}${"c".repeat(20)}`;
+    await projector.onEvent({ type: "text_delta", text, tag: "agent_message_chunk" });
+    await projector.flush(true);
+
+    expect(deliveries.filter((entry) => entry.kind === "block")).toEqual([
+      { kind: "block", text: "a".repeat(50) },
+      { kind: "block", text: "b".repeat(50) },
+      { kind: "block", text: "c".repeat(20) },
     ]);
   });
 
