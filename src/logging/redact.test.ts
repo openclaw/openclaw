@@ -120,4 +120,14 @@ describe("redactToolDetail", () => {
     expect(output).not.toContain("admin@company.com");
     expect(output).not.toContain("backup@example.org");
   });
+
+  it("does not redact benign task labels flagged by heuristic-only detectors", () => {
+    const input = "double-message-bug-gpt";
+    expect(redactToolDetail(input)).toBe(input);
+  });
+
+  it("does not redact benign command/query text", () => {
+    const input = 'for "OpenClaw docs" (top 3)';
+    expect(redactToolDetail(input)).toBe(input);
+  });
 });

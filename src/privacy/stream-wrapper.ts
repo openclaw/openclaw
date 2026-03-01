@@ -188,10 +188,7 @@ function wrapResponseStream<T>(stream: T, ctx: PrivacyFilterContext): T {
 
   const inner = iterable[Symbol.asyncIterator]();
 
-  const wrapped: AsyncIterable<unknown> & AsyncIterator<unknown> = {
-    [Symbol.asyncIterator]() {
-      return this;
-    },
+  const wrappedIterator: AsyncIterator<unknown> = {
     async next() {
       const result = await inner.next();
       if (result.done) {
@@ -212,7 +209,21 @@ function wrapResponseStream<T>(stream: T, ctx: PrivacyFilterContext): T {
     },
   };
 
-  return wrapped as T;
+  // Preserve all original stream methods/properties (e.g. result()) while wrapping iteration output.
+  const proxy = new Proxy(stream as object, {
+    get(target, prop, receiver) {
+      if (prop === Symbol.asyncIterator) {
+        return () => wrappedIterator;
+      }
+      const value = Reflect.get(target, prop, receiver);
+      if (typeof value === "function") {
+        return value.bind(target);
+      }
+      return value;
+    },
+  });
+
+  return proxy as T;
 }
 
 /** Restore privacy replacements in a single stream chunk. */

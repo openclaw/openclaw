@@ -1,4 +1,5 @@
-import type { Message } from "@mariozechner/pi-ai";
+import type { StreamFn } from "@mariozechner/pi-agent-core";
+import type { Message, Context as PiContext } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 import { PrivacyDetector } from "./detector.js";
 import { PrivacyReplacer } from "./replacer.js";
@@ -7,6 +8,7 @@ import {
   restoreText,
   createPrivacyFilterContext,
   filterMessages,
+  wrapStreamFnPrivacyFilter,
 } from "./stream-wrapper.js";
 
 describe("stream-wrapper integration", () => {
@@ -161,6 +163,42 @@ describe("stream-wrapper integration", () => {
         const restored = replacer.restore(replaced);
         expect(restored).toBe(input.text);
       }
+    });
+  });
+
+  describe("stream wrapper behavior", () => {
+    it("preserves original stream methods like result()", async () => {
+      const ctx = createPrivacyFilterContext("stream-methods-session");
+      const streamLike = {
+        async result() {
+          return { ok: true };
+        },
+        [Symbol.asyncIterator]() {
+          let done = false;
+          return {
+            async next() {
+              if (done) {
+                return { done: true, value: undefined };
+              }
+              done = true;
+              return { done: false, value: { text: "admin@company.com" } };
+            },
+          };
+        },
+      };
+
+      const baseFn = () => streamLike;
+      const wrappedFn = wrapStreamFnPrivacyFilter(baseFn as unknown as StreamFn, ctx);
+      const wrapped = (await Promise.resolve(
+        wrappedFn(
+          {} as unknown as Parameters<StreamFn>[0],
+          { messages: [] } as unknown as PiContext,
+          undefined,
+        ),
+      )) as unknown as typeof streamLike;
+
+      const result = await wrapped.result();
+      expect(result.ok).toBe(true);
     });
   });
 });

@@ -152,6 +152,7 @@ export function getDefaultRedactPatterns(): string[] {
 
 // Lazy-initialized shared detector for log redaction.
 let sharedDetector: PrivacyDetector | undefined;
+const LOG_REDACTION_SKIP_TYPES = new Set(["bare_password", "high_entropy_string"]);
 
 /**
  * Enhanced redaction that combines the existing pattern-based redaction
@@ -173,7 +174,9 @@ export function redactWithPrivacyFilter(text: string, options?: RedactOptions): 
     const detected = sharedDetector.detect(result);
     if (detected.hasPrivacyRisk) {
       // Apply mask-style redaction (not replacement) for log output.
-      const sorted = [...detected.matches].toSorted((a, b) => b.start - a.start);
+      const sorted = detected.matches
+        .filter((match) => !LOG_REDACTION_SKIP_TYPES.has(match.type))
+        .toSorted((a, b) => b.start - a.start);
       for (const match of sorted) {
         const masked = maskToken(match.content);
         result = result.slice(0, match.start) + masked + result.slice(match.end);
