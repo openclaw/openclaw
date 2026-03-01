@@ -1,4 +1,5 @@
 import { sanitizeUserFacingText } from "../../agents/pi-embedded-helpers.js";
+import { escapeRegExp } from "../../utils.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
 import { HEARTBEAT_TOKEN, isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { ReplyPayload } from "../types.js";
@@ -42,6 +43,15 @@ export function normalizeReplyPayload(
       return null;
     }
     text = "";
+  }
+  if (text && text.includes(silentToken)) {
+    const inlineSilentToken = new RegExp(`(^|\\s+)${escapeRegExp(silentToken)}(?=\\s+|$)`, "g");
+    const stripped = text.replace(inlineSilentToken, "$1").trim();
+    if (!stripped && !hasMedia && !hasChannelData) {
+      opts.onSkip?.("silent");
+      return null;
+    }
+    text = stripped;
   }
   if (text && !trimmed) {
     // Keep empty text when media exists so media-only replies still send.

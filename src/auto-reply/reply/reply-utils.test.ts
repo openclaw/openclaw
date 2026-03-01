@@ -108,6 +108,24 @@ describe("normalizeReplyPayload", () => {
       expect(reasons, testCase.name).toEqual([testCase.reason]);
     }
   });
+
+  it("strips inline silent token suffix from mixed content", () => {
+    const normalized = normalizeReplyPayload({ text: "😄 NO_REPLY" });
+    expect(normalized).not.toBeNull();
+    expect(normalized?.text).toBe("😄");
+  });
+
+  it("strips inline silent token prefix from mixed content", () => {
+    const normalized = normalizeReplyPayload({ text: "NO_REPLY 👍" });
+    expect(normalized).not.toBeNull();
+    expect(normalized?.text).toBe("👍");
+  });
+
+  it("does not strip token-like substrings inside words", () => {
+    const normalized = normalizeReplyPayload({ text: "open_NO_REPLY_token" });
+    expect(normalized).not.toBeNull();
+    expect(normalized?.text).toBe("open_NO_REPLY_token");
+  });
 });
 
 describe("typing controller", () => {
