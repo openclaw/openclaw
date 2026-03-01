@@ -8,6 +8,7 @@ import {
   deriveSessionKey,
   loadSessionStore,
   resolveSessionFilePath,
+  resolveSessionFilePathOptions,
   resolveSessionKey,
   resolveSessionTranscriptPath,
   resolveSessionTranscriptsDir,
@@ -595,6 +596,31 @@ describe("sessions", () => {
       expect(sessionFile).toBe(
         path.join(path.resolve("/different/state"), "agents", "bot1", "sessions", "sess-1.jsonl"),
       );
+    });
+  });
+
+  it("resolveSessionFilePathOptions keeps explicit agentId alongside absolute store path", () => {
+    const storePath = "/tmp/openclaw/agents/main/sessions/sessions.json";
+    const resolved = resolveSessionFilePathOptions({
+      agentId: "bot2",
+      storePath,
+    });
+    expect(resolved?.agentId).toBe("bot2");
+    expect(resolved?.sessionsDir).toBe(path.dirname(path.resolve(storePath)));
+  });
+
+  it("resolves sibling agent absolute sessionFile using alternate agentId from options", () => {
+    const stateDir = path.resolve("/home/user/.openclaw");
+    withStateDir(stateDir, () => {
+      const mainStorePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
+      const bot2Session = path.join(stateDir, "agents", "bot2", "sessions", "sess-1.jsonl");
+      const opts = resolveSessionFilePathOptions({
+        agentId: "bot2",
+        storePath: mainStorePath,
+      });
+
+      const sessionFile = resolveSessionFilePath("sess-1", { sessionFile: bot2Session }, opts);
+      expect(sessionFile).toBe(bot2Session);
     });
   });
 
