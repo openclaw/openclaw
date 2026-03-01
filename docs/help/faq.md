@@ -2922,23 +2922,18 @@ Enable cross-provider messaging for the agent:
 
 ```json5
 {
-  agents: {
-    defaults: {
-      tools: {
-        message: {
-          crossContext: {
-            allowAcrossProviders: true,
-            marker: { enabled: true, prefix: "[from {channel}] " },
-          },
-        },
+  tools: {
+    message: {
+      crossContext: {
+        allowAcrossProviders: true,
+        marker: { enabled: true, prefix: "[from {channel}] " },
       },
     },
   },
 }
 ```
 
-Restart the gateway after editing config. If you only want this for a single
-agent, set it under `agents.list[].tools.message` instead.
+Restart the gateway after editing config.
 
 ### Why does it feel like the bot ignores rapidfire messages
 
