@@ -32,7 +32,7 @@ export type OpenBoundaryFileSyncParams = {
   rootRealPath?: string;
   maxBytes?: number;
   rejectHardlinks?: boolean;
-  allowedTypes?: readonly SafeOpenSyncAllowedType[];
+  allowedType?: SafeOpenSyncAllowedType;
   skipLexicalRootCheck?: boolean;
   ioFs?: BoundaryReadFs;
 };
@@ -79,7 +79,7 @@ export function openBoundaryFileSync(params: OpenBoundaryFileSyncParams): Bounda
     resolvedPath,
     rejectHardlinks: params.rejectHardlinks ?? true,
     maxBytes: params.maxBytes,
-    allowedTypes: params.allowedTypes,
+    allowedType: params.allowedType,
     ioFs,
   });
   if (!opened.ok) {
