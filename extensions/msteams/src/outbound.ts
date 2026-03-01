@@ -15,7 +15,6 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
       : ctx.payload.mediaUrl
         ? [ctx.payload.mediaUrl]
         : [];
-    if (!ctx.payload.text && urls.length === 0) return;
     if (urls.length > 0) {
       let lastResult;
       for (let i = 0; i < urls.length; i++) {
