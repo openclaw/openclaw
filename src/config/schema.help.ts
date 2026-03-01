@@ -178,11 +178,10 @@ export const FIELD_HELP: Record<string, string> = {
     "ACP delivery style: live streams projected output incrementally, final_only buffers all projected ACP output until terminal turn events.",
   "acp.stream.hiddenBoundarySeparator":
     "Separator inserted before next visible assistant text when hidden ACP tool lifecycle events occurred (none|space|newline|paragraph). Default: paragraph.",
-  "acp.stream.maxTurnChars":
-    "Maximum assistant text characters projected per ACP turn before truncation notice is emitted.",
-  "acp.stream.maxToolSummaryChars":
-    "Maximum characters for projected ACP tool lifecycle/progress summary lines.",
-  "acp.stream.maxStatusChars": "Maximum characters for projected ACP status/meta lines.",
+  "acp.stream.maxOutputChars":
+    "Maximum assistant output characters projected per ACP turn before truncation notice is emitted.",
+  "acp.stream.maxSessionUpdateChars":
+    "Maximum characters for projected ACP session/update lines (tool/status updates).",
   "acp.stream.tagVisibility":
     "Per-sessionUpdate visibility overrides for ACP projection (for example usage_update, available_commands_update).",
   "acp.runtime.ttlMinutes":

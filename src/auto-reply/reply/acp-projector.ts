@@ -194,7 +194,7 @@ export function createAcpReplyProjector(params: {
   const chunker = new EmbeddedBlockChunker(streaming.chunking);
   const liveIdleFlushMs = Math.max(streaming.coalescing.idleMs, ACP_LIVE_IDLE_FLUSH_FLOOR_MS);
 
-  let emittedTurnChars = 0;
+  let emittedOutputChars = 0;
   let truncationNoticeEmitted = false;
   let lastStatusHash: string | undefined;
   let lastToolHash: string | undefined;
@@ -262,7 +262,7 @@ export function createAcpReplyProjector(params: {
     clearLiveIdleTimer();
     blockReplyPipeline.stop();
     blockReplyPipeline = createTurnBlockReplyPipeline();
-    emittedTurnChars = 0;
+    emittedOutputChars = 0;
     truncationNoticeEmitted = false;
     lastStatusHash = undefined;
     lastToolHash = undefined;
@@ -301,7 +301,7 @@ export function createAcpReplyProjector(params: {
     if (!params.shouldSendToolSummaries) {
       return;
     }
-    const bounded = truncateText(text.trim(), settings.maxStatusChars);
+    const bounded = truncateText(text.trim(), settings.maxSessionUpdateChars);
     if (!bounded) {
       return;
     }
@@ -332,7 +332,7 @@ export function createAcpReplyProjector(params: {
     }
 
     const renderedToolSummary = renderToolSummaryText(event);
-    const toolSummary = truncateText(renderedToolSummary, settings.maxToolSummaryChars);
+    const toolSummary = truncateText(renderedToolSummary, settings.maxSessionUpdateChars);
     const hash = hashText(renderedToolSummary);
     const toolCallId = event.toolCallId?.trim() || undefined;
     const status = normalizeToolStatus(event.status);
@@ -424,14 +424,14 @@ export function createAcpReplyProjector(params: {
         text = `${resolveHiddenBoundarySeparatorText(settings.hiddenBoundarySeparator)}${text}`;
       }
       pendingHiddenBoundary = false;
-      if (emittedTurnChars >= settings.maxTurnChars) {
+      if (emittedOutputChars >= settings.maxOutputChars) {
         await emitTruncationNotice();
         return;
       }
-      const remaining = settings.maxTurnChars - emittedTurnChars;
+      const remaining = settings.maxOutputChars - emittedOutputChars;
       const accepted = remaining < text.length ? text.slice(0, remaining) : text;
       if (accepted.length > 0) {
-        emittedTurnChars += accepted.length;
+        emittedOutputChars += accepted.length;
         lastVisibleOutputTail = accepted.slice(-1);
         if (settings.deliveryMode === "live") {
           liveBufferText += accepted;
