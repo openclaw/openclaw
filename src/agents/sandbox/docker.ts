@@ -364,6 +364,10 @@ export function buildSandboxCreateArgs(params: {
       args.push("-v", bind);
     }
   }
+  const runtime = params.cfg.runtime?.trim();
+  if (runtime) {
+    args.push("--runtime", runtime);
+  }
   return args;
 }
 

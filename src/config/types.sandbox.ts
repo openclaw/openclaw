@@ -42,6 +42,8 @@ export type SandboxDockerSettings = {
   extraHosts?: string[];
   /** Additional bind mounts (host:container:mode format, e.g. ["/host/path:/container/path:rw"]). */
   binds?: string[];
+  /** Docker runtime to use (e.g., nvidia, sysbox-runc, io.containerd.runc.v2). */
+  runtime?: string;
   /**
    * Dangerous override: allow bind mounts that target reserved container paths
    * like /workspace or /agent.

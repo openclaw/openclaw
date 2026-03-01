@@ -147,6 +147,38 @@ Security defaults:
 Docker installs and the containerized gateway live here:
 [Docker](/install/docker)
 
+## Docker runtime
+
+`agents.defaults.sandbox.docker.runtime` specifies the Docker runtime to use for sandbox containers.
+
+**Available runtimes:** Check available runtimes with `docker info | grep Runtimes`. Common options:
+
+- `runc` / `io.containerd.runc.v2` (common defaults depending on your engine)
+- `sysbox-runc` (enhanced isolation)
+- `nvidia` (NVIDIA GPU support, legacy)
+
+**Example:**
+
+```json5
+{
+  agents: {
+    defaults: {
+      sandbox: {
+        docker: {
+          runtime: "io.containerd.runc.v2",
+        },
+      },
+    },
+  },
+}
+```
+
+**Notes:**
+
+- The runtime must exist in `docker info | grep Runtimes` or be configured in the Docker daemon.
+- For NVIDIA GPU support, modern setups use the NVIDIA Container Toolkit (`--gpus all`) instead of `--runtime=nvidia`.
+- If omitted, the Docker default runtime is used (typically `runc`).
+
 ## setupCommand (one-time container setup)
 
 `setupCommand` runs **once** after the sandbox container is created (not on every run).
