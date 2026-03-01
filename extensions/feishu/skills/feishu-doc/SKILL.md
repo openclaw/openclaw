@@ -28,9 +28,7 @@ Returns: title, plain text content, block statistics. Check `hint` field - if pr
 { "action": "write", "doc_token": "ABC123def", "content": "# Title\n\nMarkdown content..." }
 ```
 
-Replaces entire document with markdown content. Supports: headings, lists, code blocks, quotes, links, images (`![](url)` auto-uploaded), bold/italic/strikethrough.
-
-**Limitation:** Markdown tables are NOT supported.
+Replaces entire document with markdown content. Supports: headings, lists, code blocks, quotes, links, images (`![](url)` auto-uploaded), bold/italic/strikethrough, and GFM tables (`| col |` syntax — automatically converted to native Feishu table blocks).
 
 ### Append Content
 
@@ -38,7 +36,7 @@ Replaces entire document with markdown content. Supports: headings, lists, code 
 { "action": "append", "doc_token": "ABC123def", "content": "Additional content" }
 ```
 
-Appends markdown to end of document.
+Appends markdown to end of document. Supports the same content types as `write`, including GFM tables.
 
 ### Create Document
 
@@ -138,15 +136,26 @@ Optional: `parent_block_id` to insert under a specific block.
 
 ### Upload Image to Docx (from URL or local file)
 
+Two ways to control where the image is inserted:
+
+1. `after_block_id` — preferred for mid-document insertion
+
+Insert the image immediately after a known block. Get block IDs from `list_blocks` or `read`.
+
 ```json
 {
   "action": "upload_image",
   "doc_token": "ABC123def",
-  "url": "https://example.com/image.png"
+  "url": "https://example.com/image.png",
+  "after_block_id": "doxcnXxxBlockId"
 }
 ```
 
-Or local path with position control:
+The parent block and insertion index are resolved automatically. Use this whenever you know which block the image should follow.
+
+2. `parent_block_id` + `index` — for inserting as the first child
+
+Use when you need to insert at position 0 (before all existing children of a block), or when you want to append to a specific parent.
 
 ```json
 {
@@ -154,11 +163,11 @@ Or local path with position control:
   "doc_token": "ABC123def",
   "file_path": "/tmp/image.png",
   "parent_block_id": "doxcnParent",
-  "index": 5
+  "index": 0
 }
 ```
 
-Optional `index` (0-based) inserts the image at a specific position among sibling blocks. Omit to append at end.
+`index` is 0-based. Omit to append at the end of the parent. If both `after_block_id` and `parent_block_id` are supplied, `after_block_id` takes priority.
 
 **Note:** Image display size is determined by the uploaded image's pixel dimensions. For small images (e.g. 480x270 GIFs), scale to 800px+ width before uploading to ensure proper display.
 
