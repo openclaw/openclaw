@@ -866,6 +866,7 @@ export class DiscordVoiceReadyListener extends ReadyListener {
 export class DiscordVoicePresenceListener extends VoiceStateUpdateListener {
   // guildId:channelId → Set of user IDs
   private channelUsers = new Map<string, Set<string>>();
+  private leaveTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(
     private manager: DiscordVoiceManager,
@@ -884,37 +885,58 @@ export class DiscordVoicePresenceListener extends VoiceStateUpdateListener {
       return;
     }
 
+    logger.info(
+      `discord voice: presence update: user=${userId} guild=${guildId} channel=${newChannelId ?? "null"}`,
+    );
+
     // Remove user from any previous channel tracking
     for (const [key, users] of this.channelUsers) {
-      if (users.delete(userId) && users.size === 0) {
+      users.delete(userId);
+      if (users.size === 0) {
         this.channelUsers.delete(key);
       }
     }
 
-    // Add user to new channel tracking
+    // Add user to new channel tracking (only when they have a channel)
     if (newChannelId) {
       const key = `${guildId}:${newChannelId}`;
       if (!this.channelUsers.has(key)) {
         this.channelUsers.set(key, new Set());
       }
       this.channelUsers.get(key)!.add(userId);
+
+      // Cancel any pending leave
+      if (this.leaveTimer) {
+        clearTimeout(this.leaveTimer);
+        this.leaveTimer = null;
+      }
     }
 
-    // User joined a voice channel — join if we're not already in one for this guild
+    // User joined a voice channel -- join if we're not already in one for this guild
     if (newChannelId && !this.manager.isInVoice(guildId)) {
-      logVoiceVerbose(`auto-join: user ${userId} joined channel ${newChannelId}`);
+      logger.info(`discord voice: auto-join: user ${userId} in channel ${newChannelId}`);
       await this.manager.join({ guildId, channelId: newChannelId });
       return;
     }
 
-    // Check if our current channel is now empty of humans
+    // Check if our current channel is now empty of humans (with grace period)
     const session = this.manager.status().find((s) => s.guildId === guildId);
     if (session?.channelId) {
       const key = `${guildId}:${session.channelId}`;
       const humans = this.channelUsers.get(key)?.size ?? 0;
-      if (humans === 0) {
-        logVoiceVerbose(`auto-leave: no humans in channel ${session.channelId}`);
-        await this.manager.leave({ guildId });
+      if (humans === 0 && !this.leaveTimer) {
+        logger.info(`discord voice: auto-leave pending (5s grace): channel ${session.channelId}`);
+        this.leaveTimer = setTimeout(async () => {
+          this.leaveTimer = null;
+          // Re-check after grace period
+          const recheckHumans = this.channelUsers.get(key)?.size ?? 0;
+          if (recheckHumans === 0) {
+            logger.info(`discord voice: auto-leave confirmed: channel ${session.channelId}`);
+            await this.manager.leave({ guildId });
+          } else {
+            logger.info(`discord voice: auto-leave cancelled: ${recheckHumans} human(s) returned`);
+          }
+        }, 5000);
       }
     }
   }
