@@ -1,3 +1,11 @@
+---
+summary: "Run OpenClaw with Privatemode confidential computing inference"
+read_when:
+  - You want end-to-end encrypted inference via Privatemode
+  - You need to configure the Privatemode proxy with OpenClaw
+title: "Privatemode"
+---
+
 # Privatemode
 
 [Privatemode](https://privatemode.ai) is a confidential computing inference service that provides end-to-end encryption for your prompts and completions. Unlike standard cloud APIs, not even Privatemode as the service provider can read your data. It exposes an OpenAI-compatible API via a local proxy that handles encryption transparently.
@@ -47,11 +55,11 @@ export PRIVATEMODE_API_KEY=pm-your-key-here
 
 ## Supported models
 
-| Model ID | Name | Modalities | Notes |
-|---|---|---|---|
-| `gemma-3-27b` | Gemma 3 27B | text, image | Multimodal |
-| `gpt-oss-120b` | GPT-OSS 120B | text | Large context |
-| `qwen3-coder-30b-a3b` | Qwen3-Coder 30B-A3B | text | Reasoning, coding |
+| Model ID                | Name                 | Modalities  | Notes             |
+| ----------------------- | -------------------- | ----------- | ----------------- |
+| `gemma-3-27b`           | Gemma 3 27B          | text, image | Multimodal        |
+| `gpt-oss-120b`          | GPT-OSS 120B         | text        | Large context     |
+| `qwen3-coder-30b-a3b`   | Qwen3-Coder 30B-A3B  | text        | Reasoning, coding |
 
 Privatemode also supports embeddings (`qwen3-embedding-4b`) and speech-to-text (`whisper-large-v3`, `voxtral-mini-3b`), though these are not yet wired into OpenClaw's provider model list.
 
