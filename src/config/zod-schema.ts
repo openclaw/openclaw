@@ -341,6 +341,14 @@ export const OpenClawSchema = z
             maxChunkChars: z.number().int().positive().optional(),
             repeatSuppression: z.boolean().optional(),
             deliveryMode: z.union([z.literal("live"), z.literal("final_only")]).optional(),
+            hiddenBoundarySeparator: z
+              .union([
+                z.literal("none"),
+                z.literal("space"),
+                z.literal("newline"),
+                z.literal("paragraph"),
+              ])
+              .optional(),
             maxTurnChars: z.number().int().positive().optional(),
             maxToolSummaryChars: z.number().int().positive().optional(),
             maxStatusChars: z.number().int().positive().optional(),

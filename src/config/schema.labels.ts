@@ -371,6 +371,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "acp.stream.maxChunkChars": "ACP Stream Max Chunk Chars",
   "acp.stream.repeatSuppression": "ACP Stream Repeat Suppression",
   "acp.stream.deliveryMode": "ACP Stream Delivery Mode",
+  "acp.stream.hiddenBoundarySeparator": "ACP Stream Hidden Boundary Separator",
   "acp.stream.maxTurnChars": "ACP Stream Max Turn Chars",
   "acp.stream.maxToolSummaryChars": "ACP Stream Max Tool Summary Chars",
   "acp.stream.maxStatusChars": "ACP Stream Max Status Chars",
