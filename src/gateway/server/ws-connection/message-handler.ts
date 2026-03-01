@@ -812,10 +812,16 @@ export function attachGatewayWsMessageHandler(params: {
               remoteIp: reportedClientIp,
               // Browser-origin non-control-ui clients must not get silent auto-pairing,
               // even on loopback, to prevent malicious scripts from silently pairing.
-              // Token auth only auto-approves pairing for local connections to prevent
-              // stolen tokens from silently pairing remote devices.
+              // Token auth auto-approves for: local connections, or cloud-provisioned
+              // nodes (cap "cloud") whose only auth is the shared gateway token.
               silent:
-                hasBrowserOrigin && !isControlUi ? false : isLocalClient || authMethod === "iam",
+                hasBrowserOrigin && !isControlUi
+                  ? false
+                  : isLocalClient ||
+                    authMethod === "iam" ||
+                    (authMethod === "token" &&
+                      Array.isArray(connectParams.caps) &&
+                      connectParams.caps.includes("cloud")),
             });
             const context = buildRequestContext();
             if (pairing.request.silent === true) {

@@ -175,6 +175,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     scopes: [],
     caps: [
       "system",
+      ...(process.env.BOT_CLOUD_NODE === "true" ? ["cloud"] : []),
       ...(browserProxyEnabled ? ["browser"] : []),
       ...(marketplaceEnabled ? ["marketplace"] : []),
     ],
