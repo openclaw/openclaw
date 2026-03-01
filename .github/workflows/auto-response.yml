@@ -77,6 +77,116 @@ jobs:
             const mentionRegex = /@([A-Za-z0-9-]+)/g;
             const maintainerCache = new Map();
             const normalizeLogin = (login) => login.toLowerCase();
+            const bugSubtypeLabelSpecs = {
+              regression: {
+                color: "D93F0B",
+                description: "Behavior that previously worked and now fails",
+              },
+              "bug:crash": {
+                color: "B60205",
+                description: "Process/app exits unexpectedly or hangs",
+              },
+              "bug:behavior": {
+                color: "D73A4A",
+                description: "Incorrect behavior without a crash",
+              },
+            };
+            const bugTypeToLabel = {
+              "Regression (worked before, now fails)": "regression",
+              "Crash (process/app exits or hangs)": "bug:crash",
+              "Behavior bug (incorrect output/state without crash)": "bug:behavior",
+            };
+            const bugSubtypeLabels = Object.keys(bugSubtypeLabelSpecs);
+
+            const extractIssueFormValue = (body, field) => {
+              if (!body) {
+                return "";
+              }
+              const escapedField = field.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+              const regex = new RegExp(
+                `(?:^|\\n)###\\s+${escapedField}\\s*\\n([\\s\\S]*?)(?=\\n###\\s+|$)`,
+                "i",
+              );
+              const match = body.match(regex);
+              if (!match) {
+                return "";
+              }
+              for (const line of match[1].split("\n")) {
+                const trimmed = line.trim();
+                if (trimmed) {
+                  return trimmed;
+                }
+              }
+              return "";
+            };
+
+            const ensureLabelExists = async (name, color, description) => {
+              try {
+                await github.rest.issues.getLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name,
+                });
+              } catch (error) {
+                if (error?.status !== 404) {
+                  throw error;
+                }
+                await github.rest.issues.createLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name,
+                  color,
+                  description,
+                });
+              }
+            };
+
+            const syncBugSubtypeLabel = async (issue, labelSet) => {
+              if (!labelSet.has("bug")) {
+                return;
+              }
+
+              const selectedBugType = extractIssueFormValue(issue.body ?? "", "Bug type");
+              const targetLabel = bugTypeToLabel[selectedBugType];
+              if (!targetLabel) {
+                return;
+              }
+
+              const targetSpec = bugSubtypeLabelSpecs[targetLabel];
+              await ensureLabelExists(targetLabel, targetSpec.color, targetSpec.description);
+
+              for (const subtypeLabel of bugSubtypeLabels) {
+                if (subtypeLabel === targetLabel) {
+                  continue;
+                }
+                if (!labelSet.has(subtypeLabel)) {
+                  continue;
+                }
+                try {
+                  await github.rest.issues.removeLabel({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: issue.number,
+                    name: subtypeLabel,
+                  });
+                  labelSet.delete(subtypeLabel);
+                } catch (error) {
+                  if (error?.status !== 404) {
+                    throw error;
+                  }
+                }
+              }
+
+              if (!labelSet.has(targetLabel)) {
+                await github.rest.issues.addLabels({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  labels: [targetLabel],
+                });
+                labelSet.add(targetLabel);
+              }
+            };
 
             const isMaintainer = async (login) => {
               if (!login) {
@@ -201,6 +311,8 @@ jobs:
                     body: pingWarningMessage,
                   });
                 }
+
+                await syncBugSubtypeLabel(issue, labelSet);
               }
             }
 
