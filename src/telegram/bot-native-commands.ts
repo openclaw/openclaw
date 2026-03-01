@@ -253,19 +253,21 @@ async function resolveTelegramCommandAuth(params: {
     }
   }
 
-  const dmAllow = normalizeDmAllowFromWithStore({
-    allowFrom: allowFrom,
-    storeAllowFrom: isGroup ? [] : storeAllowFrom,
-    dmPolicy: telegramCfg.dmPolicy ?? "pairing",
-  });
+  const allow = isGroup
+    ? effectiveGroupAllow
+    : normalizeDmAllowFromWithStore({
+        allowFrom: allowFrom,
+        storeAllowFrom,
+        dmPolicy: telegramCfg.dmPolicy ?? "pairing",
+      });
   const senderAllowed = isSenderAllowed({
-    allow: dmAllow,
+    allow,
     senderId,
     senderUsername,
   });
   const commandAuthorized = resolveCommandAuthorizedFromAuthorizers({
     useAccessGroups,
-    authorizers: [{ configured: dmAllow.hasEntries, allowed: senderAllowed }],
+    authorizers: [{ configured: allow.hasEntries, allowed: senderAllowed }],
     modeWhenAccessGroupsOff: "configured",
   });
   if (requireAuth && !commandAuthorized) {
