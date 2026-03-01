@@ -42,7 +42,7 @@ describe("handleControlUiHttpRequest", () => {
 
   function runControlUiRequest(params: {
     url: string;
-    method: "GET" | "HEAD";
+    method: "GET" | "HEAD" | "POST";
     rootPath: string;
     basePath?: string;
   }) {
@@ -136,7 +136,12 @@ describe("handleControlUiHttpRequest", () => {
             root: { kind: "resolved", path: tmp },
             config: {
               agents: { defaults: { workspace: tmp } },
-              ui: { assistant: { name: "</script><script>alert(1)//", avatar: "evil.png" } },
+              ui: {
+                assistant: {
+                  name: "</script><script>alert(1)//",
+                  avatar: "evil.png",
+                },
+              },
             },
           },
         );
@@ -151,13 +156,21 @@ describe("handleControlUiHttpRequest", () => {
       fn: async (tmp) => {
         const { res, end } = makeMockHttpResponse();
         const handled = handleControlUiHttpRequest(
-          { url: CONTROL_UI_BOOTSTRAP_CONFIG_PATH, method: "GET" } as IncomingMessage,
+          {
+            url: CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
+            method: "GET",
+          } as IncomingMessage,
           res,
           {
             root: { kind: "resolved", path: tmp },
             config: {
               agents: { defaults: { workspace: tmp } },
-              ui: { assistant: { name: "</script><script>alert(1)//", avatar: "</script>.png" } },
+              ui: {
+                assistant: {
+                  name: "</script><script>alert(1)//",
+                  avatar: "</script>.png",
+                },
+              },
             },
           },
         );
@@ -176,7 +189,10 @@ describe("handleControlUiHttpRequest", () => {
       fn: async (tmp) => {
         const { res, end } = makeMockHttpResponse();
         const handled = handleControlUiHttpRequest(
-          { url: `/openclaw${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`, method: "GET" } as IncomingMessage,
+          {
+            url: `/openclaw${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`,
+            method: "GET",
+          } as IncomingMessage,
           res,
           {
             basePath: "/openclaw",
@@ -322,6 +338,33 @@ describe("handleControlUiHttpRequest", () => {
         } finally {
           await fs.rm(outsideDir, { recursive: true, force: true });
         }
+      },
+    });
+  });
+
+  it("does not intercept POST to non-control-UI paths with basePath (webhook passthrough)", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const { handled } = runControlUiRequest({
+          url: "/line/webhook",
+          method: "POST",
+          rootPath: tmp,
+          basePath: "/openclaw",
+        });
+        expect(handled).toBe(false);
+      },
+    });
+  });
+
+  it("does not intercept POST to non-control-UI paths without basePath (webhook passthrough)", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const { handled } = runControlUiRequest({
+          url: "/line/webhook",
+          method: "POST",
+          rootPath: tmp,
+        });
+        expect(handled).toBe(false);
       },
     });
   });

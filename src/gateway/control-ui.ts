@@ -118,7 +118,10 @@ function isValidAgentId(agentId: string): boolean {
 export function handleControlUiAvatarRequest(
   req: IncomingMessage,
   res: ServerResponse,
-  opts: { basePath?: string; resolveAvatar: (agentId: string) => ControlUiAvatarResolution },
+  opts: {
+    basePath?: string;
+    resolveAvatar: (agentId: string) => ControlUiAvatarResolution;
+  },
 ): boolean {
   const urlRaw = req.url;
   if (!urlRaw) {
@@ -275,27 +278,39 @@ export function handleControlUiHttpRequest(
   if (!urlRaw) {
     return false;
   }
-  if (req.method !== "GET" && req.method !== "HEAD") {
-    res.statusCode = 405;
-    res.setHeader("Content-Type", "text/plain; charset=utf-8");
-    res.end("Method Not Allowed");
-    return true;
-  }
 
+  // Parse URL and check path BEFORE method — non-control-UI paths must pass through
+  // so webhook handlers (LINE, etc.) can process POST requests.
   const url = new URL(urlRaw, "http://localhost");
   const basePath = normalizeControlUiBasePath(opts?.basePath);
   const pathname = url.pathname;
 
   if (!basePath) {
     if (pathname === "/ui" || pathname.startsWith("/ui/")) {
+      if (req.method !== "GET" && req.method !== "HEAD") {
+        res.statusCode = 405;
+        res.setHeader("Content-Type", "text/plain; charset=utf-8");
+        res.end("Method Not Allowed");
+        return true;
+      }
       applyControlUiSecurityHeaders(res);
       respondNotFound(res);
       return true;
+    }
+    // No basePath and not a /ui path — let other handlers (webhooks, etc.) handle it
+    if (req.method !== "GET" && req.method !== "HEAD") {
+      return false;
     }
   }
 
   if (basePath) {
     if (pathname === basePath) {
+      if (req.method !== "GET" && req.method !== "HEAD") {
+        res.statusCode = 405;
+        res.setHeader("Content-Type", "text/plain; charset=utf-8");
+        res.end("Method Not Allowed");
+        return true;
+      }
       applyControlUiSecurityHeaders(res);
       res.statusCode = 302;
       res.setHeader("Location", `${basePath}/${url.search}`);
@@ -305,6 +320,14 @@ export function handleControlUiHttpRequest(
     if (!pathname.startsWith(`${basePath}/`)) {
       return false;
     }
+  }
+
+  // Path matches a control UI route — only allow GET/HEAD
+  if (req.method !== "GET" && req.method !== "HEAD") {
+    res.statusCode = 405;
+    res.setHeader("Content-Type", "text/plain; charset=utf-8");
+    res.end("Method Not Allowed");
+    return true;
   }
 
   applyControlUiSecurityHeaders(res);
