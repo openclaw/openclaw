@@ -247,7 +247,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         senderId,
         senderUsername,
       });
-      const baseGroupAllowFrom = cfg.channels?.matrix?.groupAllowFrom ?? [];
+      const baseGroupAllowFrom = (cfg.channels?.matrix?.groupAllowFrom ?? []).map(String);
       // F5: Hot-reload — per-message live-config read supports both additions and revocations.
       // Only raw Matrix ID entries (@user:server) are hot-reloadable; display-name-resolved
       // entries are frozen at startup (revocation requires restart for those).
