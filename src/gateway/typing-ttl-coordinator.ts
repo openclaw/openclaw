@@ -98,7 +98,13 @@ export function createTypingTtlCoordinator(
         return;
       }
       deregistered = true;
-      deregister(key);
+      // Only deregister if this specific timer is still the active entry for this key.
+      // If the same key was re-registered before this callback fires, sessions.get(key)
+      // will point to the newer timer — we must not clear it.
+      if (sessions.get(key) === timer) {
+        clearTimeout(timer);
+        sessions.delete(key);
+      }
     };
   };
 

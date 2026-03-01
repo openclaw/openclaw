@@ -20,6 +20,11 @@ export type CommandContext = {
   commandBodyNormalized: string;
   from?: string;
   to?: string;
+  /**
+   * Set to true after reset/new command hooks have been fired for this command context.
+   * Prevents `maybeEmitMissingResetHooks` in `getReplyFromConfig` from double-firing.
+   */
+  resetHookTriggered?: boolean;
 };
 
 export type HandleCommandsParams = {
