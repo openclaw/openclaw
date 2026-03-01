@@ -1,6 +1,7 @@
 import { getAcpSessionManager } from "../acp/control-plane/manager.js";
 import { resolveAcpAgentPolicyError, resolveAcpDispatchPolicyError } from "../acp/policy.js";
 import { toAcpRuntimeError } from "../acp/runtime/errors.js";
+import { runEmbeddedPiAgentWithAdaptiveRouting } from "../agents/adaptive-routing.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 
 const log = createSubsystemLogger("commands/agent");
@@ -173,6 +174,8 @@ function runAgentAttempt(params: {
   primaryProvider: string;
   sessionStore?: Record<string, SessionEntry>;
   storePath?: string;
+  /** True when the user has an explicit per-session or API model override (not just config default). */
+  hasExplicitModelOverride: boolean;
 }) {
   const effectivePrompt = resolveFallbackRetryPrompt({
     body: params.body,
@@ -277,47 +280,56 @@ function runAgentAttempt(params: {
     params.providerOverride === params.primaryProvider
       ? params.sessionEntry?.authProfileOverride
       : undefined;
-  return runEmbeddedPiAgent({
-    sessionId: params.sessionId,
-    sessionKey: params.sessionKey,
-    agentId: params.sessionAgentId,
-    trigger: "user",
-    messageChannel: params.messageChannel,
-    agentAccountId: params.runContext.accountId,
-    messageTo: params.opts.replyTo ?? params.opts.to,
-    messageThreadId: params.opts.threadId,
-    groupId: params.runContext.groupId,
-    groupChannel: params.runContext.groupChannel,
-    groupSpace: params.runContext.groupSpace,
-    spawnedBy: params.spawnedBy,
-    currentChannelId: params.runContext.currentChannelId,
-    currentThreadTs: params.runContext.currentThreadTs,
-    replyToMode: params.runContext.replyToMode,
-    hasRepliedRef: params.runContext.hasRepliedRef,
-    senderIsOwner: params.opts.senderIsOwner,
-    sessionFile: params.sessionFile,
-    workspaceDir: params.workspaceDir,
-    config: params.cfg,
-    skillsSnapshot: params.skillsSnapshot,
-    prompt: effectivePrompt,
-    images: params.isFallbackRetry ? undefined : params.opts.images,
-    clientTools: params.opts.clientTools,
-    provider: params.providerOverride,
-    model: params.modelOverride,
-    authProfileId,
-    authProfileIdSource: authProfileId ? params.sessionEntry?.authProfileOverrideSource : undefined,
-    thinkLevel: params.resolvedThinkLevel,
-    verboseLevel: params.resolvedVerboseLevel,
-    timeoutMs: params.timeoutMs,
-    runId: params.runId,
-    lane: params.opts.lane,
-    abortSignal: params.opts.abortSignal,
-    extraSystemPrompt: params.opts.extraSystemPrompt,
-    inputProvenance: params.opts.inputProvenance,
-    streamParams: params.opts.streamParams,
-    agentDir: params.agentDir,
-    onAgentEvent: params.onAgentEvent,
-  });
+  return runEmbeddedPiAgentWithAdaptiveRouting(
+    {
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      agentId: params.sessionAgentId,
+      trigger: "user",
+      messageChannel: params.messageChannel,
+      agentAccountId: params.runContext.accountId,
+      messageTo: params.opts.replyTo ?? params.opts.to,
+      messageThreadId: params.opts.threadId,
+      groupId: params.runContext.groupId,
+      groupChannel: params.runContext.groupChannel,
+      groupSpace: params.runContext.groupSpace,
+      spawnedBy: params.spawnedBy,
+      currentChannelId: params.runContext.currentChannelId,
+      currentThreadTs: params.runContext.currentThreadTs,
+      replyToMode: params.runContext.replyToMode,
+      hasRepliedRef: params.runContext.hasRepliedRef,
+      senderIsOwner,
+      sessionFile: params.sessionFile,
+      workspaceDir: params.workspaceDir,
+      config: params.cfg,
+      skillsSnapshot: params.skillsSnapshot,
+      prompt: effectivePrompt,
+      images: params.isFallbackRetry ? undefined : params.opts.images,
+      clientTools: params.opts.clientTools,
+      provider: params.providerOverride,
+      model: params.modelOverride,
+      authProfileId,
+      authProfileIdSource: authProfileId
+        ? params.sessionEntry?.authProfileOverrideSource
+        : undefined,
+      thinkLevel: params.resolvedThinkLevel,
+      verboseLevel: params.resolvedVerboseLevel,
+      timeoutMs: params.timeoutMs,
+      runId: params.runId,
+      lane: params.opts.lane,
+      abortSignal: params.opts.abortSignal,
+      extraSystemPrompt: params.opts.extraSystemPrompt,
+      inputProvenance: params.opts.inputProvenance,
+      streamParams: params.opts.streamParams,
+      agentDir: params.agentDir,
+      onAgentEvent: params.onAgentEvent,
+      // True only when user set a per-session model override (e.g. /model gpt-4o).
+      // providerOverride/modelOverride are always set (they're the resolved default), so
+      // we use the dedicated flag from the caller instead.
+      _hasExplicitModelOverride: params.hasExplicitModelOverride,
+    },
+    runEmbeddedPiAgent,
+  );
 }
 
 async function agentCommandInternal(
@@ -856,6 +868,8 @@ async function agentCommandInternal(
             primaryProvider: provider,
             sessionStore,
             storePath,
+            // hasStoredOverride = user previously ran /model to set an explicit model
+            hasExplicitModelOverride: hasStoredOverride,
             onAgentEvent: (evt) => {
               // Track lifecycle end for fallback emission below.
               if (
