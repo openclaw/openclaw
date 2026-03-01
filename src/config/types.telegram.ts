@@ -74,6 +74,8 @@ export type TelegramAccountConfig = {
   groups?: Record<string, TelegramGroupConfig>;
   /** DM allowlist (numeric Telegram user IDs). Onboarding can resolve @username to IDs. */
   allowFrom?: Array<string | number>;
+  /** Default delivery target for CLI `--deliver` when no explicit `--reply-to` is provided. */
+  defaultTo?: string | number;
   /** Optional allowlist for Telegram group senders (numeric Telegram user IDs). */
   groupAllowFrom?: Array<string | number>;
   /**
@@ -93,13 +95,15 @@ export type TelegramAccountConfig = {
   textChunkLimit?: number;
   /** Chunking mode: "length" (default) splits by size; "newline" splits on every newline. */
   chunkMode?: "length" | "newline";
+  /** Enable live stream preview via message edits (default: true). */
+  streaming?: boolean;
   /** Disable block streaming for this account. */
   blockStreaming?: boolean;
-  /** Chunking config for Telegram stream previews in `streamMode: "block"`. */
+  /** @deprecated Legacy chunking config from `streamMode: "block"`; ignored after migration. */
   draftChunk?: BlockStreamingChunkConfig;
   /** Merge streamed block replies before sending. */
   blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
-  /** Telegram stream preview mode (off|partial|block). Default: partial. */
+  /** @deprecated Legacy key; migrated automatically to `streaming` boolean. */
   streamMode?: "off" | "partial" | "block";
   mediaMaxMb?: number;
   /** Telegram API client timeout in seconds (grammY ApiClientOptions). */

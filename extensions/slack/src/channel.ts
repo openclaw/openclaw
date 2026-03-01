@@ -130,6 +130,8 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
         .map((entry) => String(entry).trim())
         .filter(Boolean)
         .map((entry) => entry.toLowerCase()),
+    resolveDefaultTo: ({ cfg, accountId }) =>
+      resolveSlackAccount({ cfg, accountId }).config.defaultTo?.trim() || undefined,
   },
   security: {
     resolveDmPolicy: ({ cfg, accountId, account }) => {

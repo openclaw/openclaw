@@ -22,6 +22,9 @@ import {
 const stripTrailingDirective = (text: string): string => {
   const openIndex = text.lastIndexOf("[[");
   if (openIndex < 0) {
+    if (text.endsWith("[")) {
+      return text.slice(0, -1);
+    }
     return text;
   }
   const closeIndex = text.indexOf("]]", openIndex + 2);

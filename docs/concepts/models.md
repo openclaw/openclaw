@@ -104,6 +104,7 @@ You can switch models for the current session without restarting:
 Notes:
 
 - `/model` (and `/model list`) is a compact, numbered picker (model family + available providers).
+- On Discord, `/model` and `/models` open an interactive picker with provider and model dropdowns plus a Submit step.
 - `/model <#>` selects from that picker.
 - `/model status` is the detailed view (auth candidates and, when configured, provider endpoint `baseUrl` + `api` mode).
 - Model refs are parsed by splitting on the **first** `/`. Use `provider/model` when typing `/model <ref>`.

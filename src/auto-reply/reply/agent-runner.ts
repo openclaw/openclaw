@@ -15,10 +15,16 @@ import {
   updateSessionStoreEntry,
 } from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
+import { emitAgentEvent } from "../../infra/agent-events.js";
 import { emitDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { defaultRuntime } from "../../runtime.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
+import {
+  buildFallbackClearedNotice,
+  buildFallbackNotice,
+  resolveFallbackTransition,
+} from "../fallback-state.js";
 import type { OriginatingChannelType, TemplateContext } from "../templating.js";
 import { resolveResponseUsageMode, type VerboseLevel } from "../thinking.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
@@ -290,6 +296,9 @@ export async function runReplyAgent(params: {
       updatedAt: Date.now(),
       systemSent: false,
       abortedLastRun: false,
+      fallbackNoticeSelectedModel: undefined,
+      fallbackNoticeActiveModel: undefined,
+      fallbackNoticeReason: undefined,
     };
     const agentId = resolveAgentIdFromSessionKey(sessionKey);
     const nextSessionFile = resolveSessionTranscriptPath(
@@ -373,7 +382,14 @@ export async function runReplyAgent(params: {
       return finalizeWithFollowup(runOutcome.payload, queueKey, runFollowupTurn);
     }
 
-    const { runResult, fallbackProvider, fallbackModel, directlySentBlockKeys } = runOutcome;
+    const {
+      runId,
+      runResult,
+      fallbackProvider,
+      fallbackModel,
+      fallbackAttempts,
+      directlySentBlockKeys,
+    } = runOutcome;
     let { didLogHeartbeatStrip, autoCompactionCompleted } = runOutcome;
 
     if (
@@ -414,6 +430,42 @@ export async function runReplyAgent(params: {
     const modelUsed = runResult.meta?.agentMeta?.model ?? fallbackModel ?? defaultModel;
     const providerUsed =
       runResult.meta?.agentMeta?.provider ?? fallbackProvider ?? followupRun.run.provider;
+    const verboseEnabled = resolvedVerboseLevel !== "off";
+    const selectedProvider = followupRun.run.provider;
+    const selectedModel = followupRun.run.model;
+    const fallbackStateEntry =
+      activeSessionEntry ?? (sessionKey ? activeSessionStore?.[sessionKey] : undefined);
+    const fallbackTransition = resolveFallbackTransition({
+      selectedProvider,
+      selectedModel,
+      activeProvider: providerUsed,
+      activeModel: modelUsed,
+      attempts: fallbackAttempts,
+      state: fallbackStateEntry,
+    });
+    if (fallbackTransition.stateChanged) {
+      if (fallbackStateEntry) {
+        fallbackStateEntry.fallbackNoticeSelectedModel = fallbackTransition.nextState.selectedModel;
+        fallbackStateEntry.fallbackNoticeActiveModel = fallbackTransition.nextState.activeModel;
+        fallbackStateEntry.fallbackNoticeReason = fallbackTransition.nextState.reason;
+        fallbackStateEntry.updatedAt = Date.now();
+        activeSessionEntry = fallbackStateEntry;
+      }
+      if (sessionKey && fallbackStateEntry && activeSessionStore) {
+        activeSessionStore[sessionKey] = fallbackStateEntry;
+      }
+      if (sessionKey && storePath) {
+        await updateSessionStoreEntry({
+          storePath,
+          sessionKey,
+          update: async () => ({
+            fallbackNoticeSelectedModel: fallbackTransition.nextState.selectedModel,
+            fallbackNoticeActiveModel: fallbackTransition.nextState.activeModel,
+            fallbackNoticeReason: fallbackTransition.nextState.reason,
+          }),
+        });
+      }
+    }
     const cliSessionId = isCliProvider(providerUsed, cfg)
       ? runResult.meta?.agentMeta?.sessionId?.trim()
       : undefined;
@@ -546,9 +598,68 @@ export async function runReplyAgent(params: {
       }
     }
 
-    // If verbose is enabled and this is a new session, prepend a session hint.
+    // If verbose is enabled, prepend operational run notices.
     let finalPayloads = guardedReplyPayloads;
-    const verboseEnabled = resolvedVerboseLevel !== "off";
+    const verboseNotices: ReplyPayload[] = [];
+
+    if (verboseEnabled && activeIsNewSession) {
+      verboseNotices.push({ text: `🧭 New session: ${followupRun.run.sessionId}` });
+    }
+
+    if (fallbackTransition.fallbackTransitioned) {
+      emitAgentEvent({
+        runId,
+        sessionKey,
+        stream: "lifecycle",
+        data: {
+          phase: "fallback",
+          selectedProvider,
+          selectedModel,
+          activeProvider: providerUsed,
+          activeModel: modelUsed,
+          reasonSummary: fallbackTransition.reasonSummary,
+          attemptSummaries: fallbackTransition.attemptSummaries,
+          attempts: fallbackAttempts,
+        },
+      });
+      if (verboseEnabled) {
+        const fallbackNotice = buildFallbackNotice({
+          selectedProvider,
+          selectedModel,
+          activeProvider: providerUsed,
+          activeModel: modelUsed,
+          attempts: fallbackAttempts,
+        });
+        if (fallbackNotice) {
+          verboseNotices.push({ text: fallbackNotice });
+        }
+      }
+    }
+    if (fallbackTransition.fallbackCleared) {
+      emitAgentEvent({
+        runId,
+        sessionKey,
+        stream: "lifecycle",
+        data: {
+          phase: "fallback_cleared",
+          selectedProvider,
+          selectedModel,
+          activeProvider: providerUsed,
+          activeModel: modelUsed,
+          previousActiveModel: fallbackTransition.previousState.activeModel,
+        },
+      });
+      if (verboseEnabled) {
+        verboseNotices.push({
+          text: buildFallbackClearedNotice({
+            selectedProvider,
+            selectedModel,
+            previousActiveModel: fallbackTransition.previousState.activeModel,
+          }),
+        });
+      }
+    }
+
     if (autoCompactionCompleted) {
       const count = await incrementRunCompactionCount({
         sessionEntry: activeSessionEntry,
@@ -578,11 +689,11 @@ export async function runReplyAgent(params: {
 
       if (verboseEnabled) {
         const suffix = typeof count === "number" ? ` (count ${count})` : "";
-        finalPayloads = [{ text: `🧹 Auto-compaction complete${suffix}.` }, ...finalPayloads];
+        verboseNotices.push({ text: `🧹 Auto-compaction complete${suffix}.` });
       }
     }
-    if (verboseEnabled && activeIsNewSession) {
-      finalPayloads = [{ text: `🧭 New session: ${followupRun.run.sessionId}` }, ...finalPayloads];
+    if (verboseNotices.length > 0) {
+      finalPayloads = [...verboseNotices, ...finalPayloads];
     }
     if (responseUsageLine) {
       finalPayloads = appendUsageLine(finalPayloads, responseUsageLine);

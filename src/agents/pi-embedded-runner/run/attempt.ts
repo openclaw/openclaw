@@ -3,7 +3,12 @@ import os from "node:os";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { ImageContent } from "@mariozechner/pi-ai";
 import { streamSimple } from "@mariozechner/pi-ai";
-import { createAgentSession, SessionManager, SettingsManager } from "@mariozechner/pi-coding-agent";
+import {
+  createAgentSession,
+  DefaultResourceLoader,
+  SessionManager,
+  SettingsManager,
+} from "@mariozechner/pi-coding-agent";
 import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
@@ -45,10 +50,7 @@ import {
   validateGeminiTurns,
 } from "../../pi-embedded-helpers.js";
 import { subscribeEmbeddedPiSession } from "../../pi-embedded-subscribe.js";
-import {
-  ensurePiCompactionReserveTokens,
-  resolveCompactionReserveTokensFloor,
-} from "../../pi-settings.js";
+import { applyPiCompactionSettingsFromConfig } from "../../pi-settings.js";
 import { toClientToolDefinitions } from "../../pi-tool-definition-adapter.js";
 import { createOpenClawCodingTools, resolveToolLoopDetectionConfig } from "../../pi-tools.js";
 import { resolveSandboxContext } from "../../sandbox.js";
@@ -73,7 +75,7 @@ import { resolveTranscriptPolicy } from "../../transcript-policy.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../../workspace.js";
 import { isRunnerAbortError } from "../abort.js";
 import { appendCacheTtlTimestamp, isCacheTtlEligibleProvider } from "../cache-ttl.js";
-import { buildEmbeddedExtensionPaths } from "../extensions.js";
+import { buildEmbeddedExtensionFactories } from "../extensions.js";
 import { applyExtraParamsToAgent } from "../extra-params.js";
 import {
   logToolSchemasForGoogle,
@@ -97,6 +99,7 @@ import {
   buildEmbeddedSystemPrompt,
   createSystemPromptOverride,
 } from "../system-prompt.js";
+import { dropThinkingBlocks } from "../thinking.js";
 import { installToolResultContextGuard } from "../tool-result-context-guard.js";
 import { splitSdkTools } from "../tool-split.js";
 import { describeUnknownError, mapThinkingLevel } from "../utils.js";
@@ -440,6 +443,11 @@ export async function runEmbeddedAttempt(
       reasoningLevel: params.reasoningLevel ?? "off",
       extraSystemPrompt: params.extraSystemPrompt,
       ownerNumbers: params.ownerNumbers,
+      ownerDisplay: params.config?.commands?.ownerDisplay,
+      ownerDisplaySecret:
+        params.config?.commands?.ownerDisplaySecret ??
+        params.config?.gateway?.auth?.token ??
+        params.config?.gateway?.remote?.token,
       reasoningTagHint,
       heartbeatPrompt: isDefaultAgent
         ? resolveHeartbeatPrompt(params.config?.agents?.defaults?.heartbeat?.prompt)
@@ -531,19 +539,32 @@ export async function runEmbeddedAttempt(
       });
 
       const settingsManager = SettingsManager.create(effectiveWorkspace, agentDir);
-      ensurePiCompactionReserveTokens({
+      applyPiCompactionSettingsFromConfig({
         settingsManager,
-        minReserveTokens: resolveCompactionReserveTokensFloor(params.config),
+        cfg: params.config,
       });
 
-      // Call for side effects (sets compaction/pruning runtime state)
-      buildEmbeddedExtensionPaths({
+      // Sets compaction/pruning runtime state and returns extension factories
+      // that must be passed to the resource loader for the safeguard to be active.
+      const extensionFactories = buildEmbeddedExtensionFactories({
         cfg: params.config,
         sessionManager,
         provider: params.provider,
         modelId: params.modelId,
         model: params.model,
       });
+      // Only create an explicit resource loader when there are extension factories
+      // to register; otherwise let createAgentSession use its built-in default.
+      let resourceLoader: DefaultResourceLoader | undefined;
+      if (extensionFactories.length > 0) {
+        resourceLoader = new DefaultResourceLoader({
+          cwd: resolvedWorkspace,
+          agentDir,
+          settingsManager,
+          extensionFactories,
+        });
+        await resourceLoader.reload();
+      }
 
       // Get hook runner early so it's available when creating tools
       const hookRunner = getGlobalHookRunner();
@@ -586,6 +607,7 @@ export async function runEmbeddedAttempt(
         customTools: allCustomTools,
         sessionManager,
         settingsManager,
+        resourceLoader,
       }));
       applySystemPromptOverrideToSession(session, systemPromptText);
       if (!session) {
@@ -655,6 +677,30 @@ export async function runEmbeddedAttempt(
         });
         activeSession.agent.streamFn = cacheTrace.wrapStreamFn(activeSession.agent.streamFn);
       }
+
+      // Copilot/Claude can reject persisted `thinking` blocks (e.g. thinkingSignature:"reasoning_text")
+      // on *any* follow-up provider call (including tool continuations). Wrap the stream function
+      // so every outbound request sees sanitized messages.
+      if (transcriptPolicy.dropThinkingBlocks) {
+        const inner = activeSession.agent.streamFn;
+        activeSession.agent.streamFn = (model, context, options) => {
+          const ctx = context as unknown as { messages?: unknown };
+          const messages = ctx?.messages;
+          if (!Array.isArray(messages)) {
+            return inner(model, context, options);
+          }
+          const sanitized = dropThinkingBlocks(messages as unknown as AgentMessage[]) as unknown;
+          if (sanitized === messages) {
+            return inner(model, context, options);
+          }
+          const nextContext = {
+            ...(context as unknown as Record<string, unknown>),
+            messages: sanitized,
+          } as unknown;
+          return inner(model, nextContext as typeof context, options);
+        };
+      }
+
       if (anthropicPayloadLogger) {
         activeSession.agent.streamFn = anthropicPayloadLogger.wrapStreamFn(
           activeSession.agent.streamFn,
@@ -948,7 +994,7 @@ export async function runEmbeddedAttempt(
             sessionManager.resetLeaf();
           }
           const sessionContext = sessionManager.buildSessionContext();
-          const sanitizedOrphan = transcriptPolicy.normalizeAntigravityThinkingBlocks
+          const sanitizedOrphan = transcriptPolicy.sanitizeThinkingSignatures
             ? sanitizeAntigravityThinkingBlocks(sessionContext.messages)
             : sessionContext.messages;
           activeSession.agent.replaceMessages(sanitizedOrphan);

@@ -81,6 +81,9 @@ describe("memory vector dedupe", () => {
     ).ensureVectorReady = async () => true;
 
     const entry = await buildFileEntry(path.join(workspaceDir, "MEMORY.md"), workspaceDir);
+    if (!entry) {
+      throw new Error("entry missing");
+    }
     await (
       manager as unknown as {
         indexFile: (entry: unknown, options: { source: "memory" }) => Promise<void>;

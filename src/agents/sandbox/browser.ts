@@ -10,20 +10,35 @@ import { defaultRuntime } from "../../runtime.js";
 import { BROWSER_BRIDGES } from "./browser-bridges.js";
 import { computeSandboxBrowserConfigHash } from "./config-hash.js";
 import { resolveSandboxBrowserDockerCreateConfig } from "./config.js";
-import { DEFAULT_SANDBOX_BROWSER_IMAGE, SANDBOX_AGENT_WORKSPACE_MOUNT } from "./constants.js";
+import {
+  DEFAULT_SANDBOX_BROWSER_IMAGE,
+  SANDBOX_AGENT_WORKSPACE_MOUNT,
+  SANDBOX_BROWSER_SECURITY_HASH_EPOCH,
+} from "./constants.js";
 import {
   buildSandboxCreateArgs,
   dockerContainerState,
   execDocker,
+  readDockerContainerEnvVar,
   readDockerContainerLabel,
   readDockerPort,
 } from "./docker.js";
+import {
+  buildNoVncDirectUrl,
+  buildNoVncObserverTokenUrl,
+  consumeNoVncObserverToken,
+  generateNoVncPassword,
+  isNoVncEnabled,
+  NOVNC_PASSWORD_ENV_KEY,
+  issueNoVncObserverToken,
+} from "./novnc-auth.js";
 import { readBrowserRegistry, updateBrowserRegistry } from "./registry.js";
 import { resolveSandboxAgentId, slugifySessionKey } from "./shared.js";
 import { isToolAllowed } from "./tool-policy.js";
 import type { SandboxBrowserContext, SandboxConfig } from "./types.js";
 
 const HOT_BROWSER_WINDOW_MS = 5 * 60 * 1000;
+const CDP_SOURCE_RANGE_ENV_KEY = "OPENCLAW_BROWSER_CDP_SOURCE_RANGE";
 
 async function waitForSandboxCdp(params: { cdpPort: number; timeoutMs: number }): Promise<boolean> {
   const deadline = Date.now() + Math.max(0, params.timeoutMs);
@@ -92,6 +107,23 @@ async function ensureSandboxBrowserImage(image: string) {
   );
 }
 
+async function ensureDockerNetwork(network: string) {
+  const normalized = network.trim().toLowerCase();
+  if (
+    !normalized ||
+    normalized === "bridge" ||
+    normalized === "none" ||
+    normalized.startsWith("container:")
+  ) {
+    return;
+  }
+  const inspect = await execDocker(["network", "inspect", network], { allowFailure: true });
+  if (inspect.code === 0) {
+    return;
+  }
+  await execDocker(["network", "create", "--driver", "bridge", network]);
+}
+
 export async function ensureSandboxBrowser(params: {
   scopeKey: string;
   workspaceDir: string;
@@ -112,6 +144,7 @@ export async function ensureSandboxBrowser(params: {
   const containerName = name.slice(0, 63);
   const state = await dockerContainerState(containerName);
   const browserImage = params.cfg.browser.image ?? DEFAULT_SANDBOX_BROWSER_IMAGE;
+  const cdpSourceRange = params.cfg.browser.cdpSourceRange?.trim() || undefined;
   const browserDockerCfg = resolveSandboxBrowserDockerCreateConfig({
     docker: params.cfg.docker,
     browser: { ...params.cfg.browser, image: browserImage },
@@ -124,7 +157,9 @@ export async function ensureSandboxBrowser(params: {
       noVncPort: params.cfg.browser.noVncPort,
       headless: params.cfg.browser.headless,
       enableNoVnc: params.cfg.browser.enableNoVnc,
+      cdpSourceRange,
     },
+    securityEpoch: SANDBOX_BROWSER_SECURITY_HASH_EPOCH,
     workspaceAccess: params.cfg.workspaceAccess,
     workspaceDir: params.workspaceDir,
     agentWorkspaceDir: params.agentWorkspaceDir,
@@ -135,8 +170,14 @@ export async function ensureSandboxBrowser(params: {
   let running = state.running;
   let currentHash: string | null = null;
   let hashMismatch = false;
+  const noVncEnabled = isNoVncEnabled(params.cfg.browser);
+  let noVncPassword: string | undefined;
 
   if (hasContainer) {
+    if (noVncEnabled) {
+      noVncPassword =
+        (await readDockerContainerEnvVar(containerName, NOVNC_PASSWORD_ENV_KEY)) ?? undefined;
+    }
     const registry = await readBrowserRegistry();
     const registryEntry = registry.entries.find((entry) => entry.containerName === containerName);
     currentHash = await readDockerContainerLabel(containerName, "openclaw.configHash");
@@ -172,12 +213,19 @@ export async function ensureSandboxBrowser(params: {
   }
 
   if (!hasContainer) {
+    if (noVncEnabled) {
+      noVncPassword = generateNoVncPassword();
+    }
+    await ensureDockerNetwork(browserDockerCfg.network);
     await ensureSandboxBrowserImage(browserImage);
     const args = buildSandboxCreateArgs({
       name: containerName,
       cfg: browserDockerCfg,
       scopeKey: params.scopeKey,
-      labels: { "openclaw.sandboxBrowser": "1" },
+      labels: {
+        "openclaw.sandboxBrowser": "1",
+        "openclaw.browserConfigEpoch": SANDBOX_BROWSER_SECURITY_HASH_EPOCH,
+      },
       configHash: expectedHash,
     });
     const mainMountSuffix =
@@ -193,14 +241,20 @@ export async function ensureSandboxBrowser(params: {
       );
     }
     args.push("-p", `127.0.0.1::${params.cfg.browser.cdpPort}`);
-    if (params.cfg.browser.enableNoVnc && !params.cfg.browser.headless) {
+    if (noVncEnabled) {
       args.push("-p", `127.0.0.1::${params.cfg.browser.noVncPort}`);
     }
     args.push("-e", `OPENCLAW_BROWSER_HEADLESS=${params.cfg.browser.headless ? "1" : "0"}`);
     args.push("-e", `OPENCLAW_BROWSER_ENABLE_NOVNC=${params.cfg.browser.enableNoVnc ? "1" : "0"}`);
     args.push("-e", `OPENCLAW_BROWSER_CDP_PORT=${params.cfg.browser.cdpPort}`);
+    if (cdpSourceRange) {
+      args.push("-e", `${CDP_SOURCE_RANGE_ENV_KEY}=${cdpSourceRange}`);
+    }
     args.push("-e", `OPENCLAW_BROWSER_VNC_PORT=${params.cfg.browser.vncPort}`);
     args.push("-e", `OPENCLAW_BROWSER_NOVNC_PORT=${params.cfg.browser.noVncPort}`);
+    if (noVncEnabled && noVncPassword) {
+      args.push("-e", `${NOVNC_PASSWORD_ENV_KEY}=${noVncPassword}`);
+    }
     args.push(browserImage);
     await execDocker(args);
     await execDocker(["start", containerName]);
@@ -213,10 +267,13 @@ export async function ensureSandboxBrowser(params: {
     throw new Error(`Failed to resolve CDP port mapping for ${containerName}.`);
   }
 
-  const mappedNoVnc =
-    params.cfg.browser.enableNoVnc && !params.cfg.browser.headless
-      ? await readDockerPort(containerName, params.cfg.browser.noVncPort)
-      : null;
+  const mappedNoVnc = noVncEnabled
+    ? await readDockerPort(containerName, params.cfg.browser.noVncPort)
+    : null;
+  if (noVncEnabled && !noVncPassword) {
+    noVncPassword =
+      (await readDockerContainerEnvVar(containerName, NOVNC_PASSWORD_ENV_KEY)) ?? undefined;
+  }
 
   const existing = BROWSER_BRIDGES.get(params.scopeKey);
   const existingProfile = existing
@@ -290,6 +347,7 @@ export async function ensureSandboxBrowser(params: {
       authToken: desiredAuthToken,
       authPassword: desiredAuthPassword,
       onEnsureAttachTarget,
+      resolveSandboxNoVncToken: consumeNoVncObserverToken,
     });
   };
 
@@ -315,8 +373,12 @@ export async function ensureSandboxBrowser(params: {
   });
 
   const noVncUrl =
-    mappedNoVnc && params.cfg.browser.enableNoVnc && !params.cfg.browser.headless
-      ? `http://127.0.0.1:${mappedNoVnc}/vnc.html?autoconnect=1&resize=remote`
+    mappedNoVnc && noVncEnabled
+      ? (() => {
+          const directUrl = buildNoVncDirectUrl(mappedNoVnc, noVncPassword);
+          const token = issueNoVncObserverToken({ url: directUrl });
+          return buildNoVncObserverTokenUrl(resolvedBridge.baseUrl, token);
+        })()
       : undefined;
 
   return {

@@ -21,7 +21,7 @@ import { safeEqualSecret } from "../security/secret-equal.js";
 import { handleSlackHttpRequest } from "../slack/http/index.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import {
-  authorizeGatewayConnect,
+  authorizeHttpGatewayConnect,
   isLocalDirectRequest,
   type GatewayAuthResult,
   type ResolvedGatewayAuth,
@@ -133,28 +133,38 @@ async function authorizeCanvasRequest(params: {
   req: IncomingMessage;
   auth: ResolvedGatewayAuth;
   trustedProxies: string[];
+  allowRealIpFallback: boolean;
   clients: Set<GatewayWsClient>;
   canvasCapability?: string;
   malformedScopedPath?: boolean;
   rateLimiter?: AuthRateLimiter;
 }): Promise<GatewayAuthResult> {
-  const { req, auth, trustedProxies, clients, canvasCapability, malformedScopedPath, rateLimiter } =
-    params;
+  const {
+    req,
+    auth,
+    trustedProxies,
+    allowRealIpFallback,
+    clients,
+    canvasCapability,
+    malformedScopedPath,
+    rateLimiter,
+  } = params;
   if (malformedScopedPath) {
     return { ok: false, reason: "unauthorized" };
   }
-  if (isLocalDirectRequest(req, trustedProxies)) {
+  if (isLocalDirectRequest(req, trustedProxies, allowRealIpFallback)) {
     return { ok: true };
   }
 
   let lastAuthFailure: GatewayAuthResult | null = null;
   const token = getBearerToken(req);
   if (token) {
-    const authResult = await authorizeGatewayConnect({
+    const authResult = await authorizeHttpGatewayConnect({
       auth: { ...auth, allowTailscale: false },
       connectAuth: { token, password: token },
       req,
       trustedProxies,
+      allowRealIpFallback,
       rateLimiter,
     });
     if (authResult.ok) {
@@ -499,6 +509,7 @@ export function createGatewayHttpServer(opts: {
     try {
       const configSnapshot = loadConfig();
       const trustedProxies = configSnapshot.gateway?.trustedProxies ?? [];
+      const allowRealIpFallback = configSnapshot.gateway?.allowRealIpFallback === true;
       const scopedCanvas = normalizeCanvasScopedUrl(req.url ?? "/");
       if (scopedCanvas.malformedScopedPath) {
         sendGatewayAuthFailure(res, { ok: false, reason: "unauthorized" });
@@ -515,6 +526,7 @@ export function createGatewayHttpServer(opts: {
         await handleToolsInvokeHttpRequest(req, res, {
           auth: resolvedAuth,
           trustedProxies,
+          allowRealIpFallback,
           rateLimiter,
         })
       ) {
@@ -529,11 +541,12 @@ export function createGatewayHttpServer(opts: {
         // their own auth when exposing sensitive functionality.
         if (requestPath.startsWith("/api/channels/")) {
           const token = getBearerToken(req);
-          const authResult = await authorizeGatewayConnect({
+          const authResult = await authorizeHttpGatewayConnect({
             auth: resolvedAuth,
             connectAuth: token ? { token, password: token } : null,
             req,
             trustedProxies,
+            allowRealIpFallback,
             rateLimiter,
           });
           if (!authResult.ok) {
@@ -551,6 +564,7 @@ export function createGatewayHttpServer(opts: {
             auth: resolvedAuth,
             config: openResponsesConfig,
             trustedProxies,
+            allowRealIpFallback,
             rateLimiter,
           })
         ) {
@@ -562,6 +576,7 @@ export function createGatewayHttpServer(opts: {
           await handleOpenAiHttpRequest(req, res, {
             auth: resolvedAuth,
             trustedProxies,
+            allowRealIpFallback,
             rateLimiter,
           })
         ) {
@@ -574,6 +589,7 @@ export function createGatewayHttpServer(opts: {
             req,
             auth: resolvedAuth,
             trustedProxies,
+            allowRealIpFallback,
             clients,
             canvasCapability: scopedCanvas.capability,
             malformedScopedPath: scopedCanvas.malformedScopedPath,
@@ -662,10 +678,12 @@ export function attachGatewayUpgradeHandler(opts: {
         if (url.pathname === CANVAS_WS_PATH) {
           const configSnapshot = loadConfig();
           const trustedProxies = configSnapshot.gateway?.trustedProxies ?? [];
+          const allowRealIpFallback = configSnapshot.gateway?.allowRealIpFallback === true;
           const ok = await authorizeCanvasRequest({
             req,
             auth: resolvedAuth,
             trustedProxies,
+            allowRealIpFallback,
             clients,
             canvasCapability: scopedCanvas.capability,
             malformedScopedPath: scopedCanvas.malformedScopedPath,

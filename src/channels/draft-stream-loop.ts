@@ -3,6 +3,7 @@ export type DraftStreamLoop = {
   flush: () => Promise<void>;
   stop: () => void;
   resetPending: () => void;
+  resetThrottleWindow: () => void;
   waitForInFlight: () => Promise<void>;
 };
 
@@ -86,6 +87,13 @@ export function createDraftStreamLoop(params: {
     },
     resetPending: () => {
       pendingText = "";
+    },
+    resetThrottleWindow: () => {
+      lastSentAt = 0;
+      if (timer) {
+        clearTimeout(timer);
+        timer = undefined;
+      }
     },
     waitForInFlight: async () => {
       if (inFlightPromise) {

@@ -404,6 +404,7 @@ export const OpenClawSchema = z
             z.literal("tailnet"),
           ])
           .optional(),
+        customBindHost: z.string().optional(),
         controlUi: z
           .object({
             enabled: z.boolean().optional(),
@@ -449,6 +450,7 @@ export const OpenClawSchema = z
           .strict()
           .optional(),
         trustedProxies: z.array(z.string()).optional(),
+        allowRealIpFallback: z.boolean().optional(),
         tools: z
           .object({
             deny: z.array(z.string()).optional(),

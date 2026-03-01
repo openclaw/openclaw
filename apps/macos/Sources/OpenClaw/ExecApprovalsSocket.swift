@@ -360,24 +360,11 @@ private enum ExecHostExecutor {
         let autoAllowSkills: Bool
         let env: [String: String]?
         let resolution: ExecCommandResolution?
-        let allowlistMatch: ExecAllowlistEntry?
+        let allowlistResolutions: [ExecCommandResolution]
+        let allowlistMatches: [ExecAllowlistEntry]
+        let allowlistSatisfied: Bool
         let skillAllow: Bool
     }
-
-    private static let blockedEnvKeys: Set<String> = [
-        "PATH",
-        "NODE_OPTIONS",
-        "PYTHONHOME",
-        "PYTHONPATH",
-        "PERL5LIB",
-        "PERL5OPT",
-        "RUBYOPT",
-    ]
-
-    private static let blockedEnvPrefixes: [String] = [
-        "DYLD_",
-        "LD_",
-    ]
 
     static func handle(_ request: ExecHostRequest) async -> ExecHostResponse {
         let command = request.command.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -408,7 +395,7 @@ private enum ExecHostExecutor {
         if ExecApprovalHelpers.requiresAsk(
             ask: context.ask,
             security: context.security,
-            allowlistMatch: context.allowlistMatch,
+            allowlistMatch: context.allowlistSatisfied ? context.allowlistMatches.first : nil,
             skillAllow: context.skillAllow),
             approvalDecision == nil
         {
@@ -440,7 +427,7 @@ private enum ExecHostExecutor {
         self.persistAllowlistEntry(decision: approvalDecision, context: context)
 
         if context.security == .allowlist,
-           context.allowlistMatch == nil,
+           !context.allowlistSatisfied,
            !context.skillAllow,
            !approvedByAsk
         {
@@ -450,12 +437,21 @@ private enum ExecHostExecutor {
                 reason: "allowlist-miss")
         }
 
-        if let match = context.allowlistMatch {
-            ExecApprovalsStore.recordAllowlistUse(
-                agentId: context.trimmedAgent,
-                pattern: match.pattern,
-                command: context.displayCommand,
-                resolvedPath: context.resolution?.resolvedPath)
+        if context.allowlistSatisfied {
+            var seenPatterns = Set<String>()
+            for (idx, match) in context.allowlistMatches.enumerated() {
+                if !seenPatterns.insert(match.pattern).inserted {
+                    continue
+                }
+                let resolvedPath = idx < context.allowlistResolutions.count
+                    ? context.allowlistResolutions[idx].resolvedPath
+                    : nil
+                ExecApprovalsStore.recordAllowlistUse(
+                    agentId: context.trimmedAgent,
+                    pattern: match.pattern,
+                    command: context.displayCommand,
+                    resolvedPath: resolvedPath)
+            }
         }
 
         if let errorResponse = await self.ensureScreenRecordingAccess(request.needsScreenRecording) {
@@ -480,18 +476,22 @@ private enum ExecHostExecutor {
         let ask = approvals.agent.ask
         let autoAllowSkills = approvals.agent.autoAllowSkills
         let env = self.sanitizedEnv(request.env)
-        let resolution = ExecCommandResolution.resolve(
+        let allowlistResolutions = ExecCommandResolution.resolveForAllowlist(
             command: command,
             rawCommand: request.rawCommand,
             cwd: request.cwd,
             env: env)
-        let allowlistMatch = security == .allowlist
-            ? ExecAllowlistMatcher.match(entries: approvals.allowlist, resolution: resolution)
-            : nil
+        let resolution = allowlistResolutions.first
+        let allowlistMatches = security == .allowlist
+            ? ExecAllowlistMatcher.matchAll(entries: approvals.allowlist, resolutions: allowlistResolutions)
+            : []
+        let allowlistSatisfied = security == .allowlist &&
+            !allowlistResolutions.isEmpty &&
+            allowlistMatches.count == allowlistResolutions.count
         let skillAllow: Bool
-        if autoAllowSkills, let name = resolution?.executableName {
+        if autoAllowSkills, !allowlistResolutions.isEmpty {
             let bins = await SkillBinsCache.shared.currentBins()
-            skillAllow = bins.contains(name)
+            skillAllow = allowlistResolutions.allSatisfy { bins.contains($0.executableName) }
         } else {
             skillAllow = false
         }
@@ -505,7 +505,9 @@ private enum ExecHostExecutor {
             autoAllowSkills: autoAllowSkills,
             env: env,
             resolution: resolution,
-            allowlistMatch: allowlistMatch,
+            allowlistResolutions: allowlistResolutions,
+            allowlistMatches: allowlistMatches,
+            allowlistSatisfied: allowlistSatisfied,
             skillAllow: skillAllow)
     }
 
@@ -514,13 +516,18 @@ private enum ExecHostExecutor {
         context: ExecApprovalContext)
     {
         guard decision == .allowAlways, context.security == .allowlist else { return }
-        guard let pattern = ExecApprovalHelpers.allowlistPattern(
-            command: context.command,
-            resolution: context.resolution)
-        else {
-            return
+        var seenPatterns = Set<String>()
+        for candidate in context.allowlistResolutions {
+            guard let pattern = ExecApprovalHelpers.allowlistPattern(
+                command: context.command,
+                resolution: candidate)
+            else {
+                continue
+            }
+            if seenPatterns.insert(pattern).inserted {
+                ExecApprovalsStore.addAllowlistEntry(agentId: context.trimmedAgent, pattern: pattern)
+            }
         }
-        ExecApprovalsStore.addAllowlistEntry(agentId: context.trimmedAgent, pattern: pattern)
     }
 
     private static func ensureScreenRecordingAccess(_ needsScreenRecording: Bool?) async -> ExecHostResponse? {
@@ -580,18 +587,8 @@ private enum ExecHostExecutor {
             error: nil)
     }
 
-    private static func sanitizedEnv(_ overrides: [String: String]?) -> [String: String]? {
-        guard let overrides else { return nil }
-        var merged = ProcessInfo.processInfo.environment
-        for (rawKey, value) in overrides {
-            let key = rawKey.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !key.isEmpty else { continue }
-            let upper = key.uppercased()
-            if self.blockedEnvKeys.contains(upper) { continue }
-            if self.blockedEnvPrefixes.contains(where: { upper.hasPrefix($0) }) { continue }
-            merged[key] = value
-        }
-        return merged
+    private static func sanitizedEnv(_ overrides: [String: String]?) -> [String: String] {
+        HostEnvSanitizer.sanitize(overrides: overrides)
     }
 }
 
