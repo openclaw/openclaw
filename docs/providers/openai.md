@@ -56,15 +56,20 @@ openclaw models auth login --provider openai-codex
 }
 ```
 
-### Codex transport default
+### Transport default
 
-OpenClaw uses `pi-ai` for model streaming. For `openai-codex/*` models you can set
-`agents.defaults.models.<provider/model>.params.transport` to select transport:
+OpenClaw uses `pi-ai` for model streaming. For both `openai/*` and
+`openai-codex/*`, default transport is `"auto"` (WebSocket-first, then SSE
+fallback).
 
-- Default is `"auto"` (WebSocket-first, then SSE fallback).
+You can set `agents.defaults.models.<provider/model>.params.transport`:
+
 - `"sse"`: force SSE
 - `"websocket"`: force WebSocket
 - `"auto"`: try WebSocket, then fall back to SSE
+
+For `openai/*` (Responses API), OpenClaw also enables WebSocket warm-up by
+default (`openaiWsWarmup: true`) when WebSocket transport is used.
 
 ```json5
 {
@@ -75,6 +80,47 @@ OpenClaw uses `pi-ai` for model streaming. For `openai-codex/*` models you can s
         "openai-codex/gpt-5.3-codex": {
           params: {
             transport: "auto",
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+### OpenAI WebSocket warm-up
+
+OpenAI docs describe warm-up as optional. OpenClaw enables it by default for
+`openai/*` to reduce first-turn latency when using WebSocket transport.
+
+### Disable warm-up
+
+```json5
+{
+  agents: {
+    defaults: {
+      models: {
+        "openai/gpt-5": {
+          params: {
+            openaiWsWarmup: false,
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+### Enable warm-up explicitly
+
+```json5
+{
+  agents: {
+    defaults: {
+      models: {
+        "openai/gpt-5": {
+          params: {
+            openaiWsWarmup: true,
           },
         },
       },

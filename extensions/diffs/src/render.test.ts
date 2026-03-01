@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { DEFAULT_DIFFS_TOOL_DEFAULTS } from "./config.js";
 import { renderDiffDocument } from "./render.js";
 
 describe("renderDiffDocument", () => {
@@ -11,9 +12,8 @@ describe("renderDiffDocument", () => {
         path: "src/example.ts",
       },
       {
-        layout: "unified",
+        presentation: DEFAULT_DIFFS_TOOL_DEFAULTS,
         expandUnchanged: false,
-        theme: "light",
       },
     );
 
@@ -22,6 +22,11 @@ describe("renderDiffDocument", () => {
     expect(rendered.html).toContain("data-openclaw-diff-root");
     expect(rendered.html).toContain("src/example.ts");
     expect(rendered.html).toContain("/plugins/diffs/assets/viewer.js");
+    expect(rendered.imageHtml).not.toContain("/plugins/diffs/assets/viewer.js");
+    expect(rendered.imageHtml).toContain('data-openclaw-diffs-ready="true"');
+    expect(rendered.imageHtml).toContain("max-width: 960px;");
+    expect(rendered.imageHtml).toContain("--diffs-font-size: 16px;");
+    expect(rendered.html).toContain("--diffs-font-size: 15px;");
     expect(rendered.html).not.toContain("fonts.googleapis.com");
   });
 
@@ -48,9 +53,12 @@ describe("renderDiffDocument", () => {
         title: "Workspace patch",
       },
       {
-        layout: "split",
+        presentation: {
+          ...DEFAULT_DIFFS_TOOL_DEFAULTS,
+          layout: "split",
+          theme: "dark",
+        },
         expandUnchanged: true,
-        theme: "dark",
       },
     );
 

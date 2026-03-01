@@ -7,7 +7,7 @@ import type { MarkdownTableMode } from "../../config/types.base.js";
 import { emitMessageSentHook } from "../../hooks/emit-message-sent.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { markdownToSlackMrkdwnChunks } from "../format.js";
-import { sendMessageSlack } from "../send.js";
+import { sendMessageSlack, type SlackSendIdentity } from "../send.js";
 
 export async function deliverReplies(params: {
   replies: ReplyPayload[];
@@ -19,6 +19,7 @@ export async function deliverReplies(params: {
   replyThreadTs?: string;
   replyToMode: "off" | "first" | "all";
   sessionKey?: string;
+  identity?: SlackSendIdentity;
 }) {
   for (const payload of params.replies) {
     // Keep reply tags opt-in: when replyToMode is off, explicit reply tags
@@ -49,6 +50,7 @@ export async function deliverReplies(params: {
           token: params.token,
           threadTs,
           accountId: params.accountId,
+          ...(params.identity ? { identity: params.identity } : {}),
         });
         emitMessageSentHook({ ...hookBase, content: trimmed, success: true });
       } else {
@@ -62,6 +64,7 @@ export async function deliverReplies(params: {
             mediaUrl,
             threadTs,
             accountId: params.accountId,
+            ...(params.identity ? { identity: params.identity } : {}),
           });
           emitMessageSentHook({ ...hookBase, content: caption || mediaUrl, success: true });
         }
