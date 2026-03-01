@@ -6,7 +6,7 @@ import {
   getAcpRuntimeBackend,
   requireAcpRuntimeBackend,
 } from "../../../src/acp/runtime/registry.js";
-import { ACPX_BUNDLED_BIN } from "./config.js";
+import { ACPX_BUNDLED_BIN, ACPX_PINNED_VERSION } from "./config.js";
 import { createAcpxRuntimeService } from "./service.js";
 
 const { ensureAcpxSpy } = vi.hoisted(() => ({
@@ -132,7 +132,7 @@ describe("createAcpxRuntimeService", () => {
         queueOwnerTtlSeconds: 0.25,
         pluginConfig: expect.objectContaining({
           command: ACPX_BUNDLED_BIN,
-          expectedVersion: "0.1.13",
+          expectedVersion: ACPX_PINNED_VERSION,
           allowPluginLocalInstall: true,
         }),
       }),
