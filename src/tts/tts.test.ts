@@ -388,6 +388,26 @@ describe("tts", () => {
       expect(result.overrides.openai?.model).toBeUndefined();
     });
 
+    it("routes generic model to openai when provider=openai is set", () => {
+      const policy = resolveModelOverridePolicy({ enabled: true, allowProvider: true });
+      const input = "Hello [[tts:provider=openai model=speech-2.8-hd]] world";
+      const result = parseTtsDirectives(input, policy);
+
+      expect(result.overrides.provider).toBe("openai");
+      expect(result.overrides.openai?.model).toBe("speech-2.8-hd");
+      expect(result.overrides.minimax?.model).toBeUndefined();
+    });
+
+    it("routes generic model to openai even when provider appears after model", () => {
+      const policy = resolveModelOverridePolicy({ enabled: true, allowProvider: true });
+      const input = "Hello [[tts:model=speech-2.8-hd provider=openai]] world";
+      const result = parseTtsDirectives(input, policy);
+
+      expect(result.overrides.provider).toBe("openai");
+      expect(result.overrides.openai?.model).toBe("speech-2.8-hd");
+      expect(result.overrides.minimax?.model).toBeUndefined();
+    });
+
     it("rejects provider override by default while keeping voice overrides enabled", () => {
       const policy = resolveModelOverridePolicy({ enabled: true });
       const input = "Hello [[tts:provider=edge voice=alloy]] world";
