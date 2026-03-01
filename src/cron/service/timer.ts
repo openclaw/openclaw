@@ -15,6 +15,7 @@ import {
   computeJobNextRunAtMs,
   nextWakeAtMs,
   recomputeNextRunsForMaintenance,
+  recordScheduleComputeError,
   resolveJobPayloadTextForMain,
 } from "./jobs.js";
 import { locked } from "./locked.js";
@@ -361,11 +362,9 @@ export function applyJobResult(
         normalNext = computeJobNextRunAtMs(job, result.endedAt);
       } catch (err) {
         // If the schedule expression/timezone throws (croner edge cases),
-        // fall back to backoff-only schedule so the state update is not lost.
-        state.deps.log.warn(
-          { jobId: job.id, err: String(err) },
-          "cron: computeJobNextRunAtMs threw in error-backoff path, using backoff only",
-        );
+        // record the schedule error (auto-disables after repeated failures)
+        // and fall back to backoff-only schedule so the state update is not lost.
+        recordScheduleComputeError({ state, job, err });
       }
       const backoffNext = result.endedAt + backoff;
       // Use whichever is later: the natural next run or the backoff delay.
@@ -386,12 +385,9 @@ export function applyJobResult(
         naturalNext = computeJobNextRunAtMs(job, result.endedAt);
       } catch (err) {
         // If the schedule expression/timezone throws (croner edge cases),
-        // log a warning and fall through — the minNext safety net below
-        // will still advance nextRunAtMs so the state update is not lost.
-        state.deps.log.warn(
-          { jobId: job.id, err: String(err) },
-          "cron: computeJobNextRunAtMs threw in success path, falling through to safety net",
-        );
+        // record the schedule error (auto-disables after repeated failures)
+        // so a persistent throw doesn't cause a MIN_REFIRE_GAP_MS hot loop.
+        recordScheduleComputeError({ state, job, err });
       }
       if (job.schedule.kind === "cron") {
         // Safety net: ensure the next fire is at least MIN_REFIRE_GAP_MS
