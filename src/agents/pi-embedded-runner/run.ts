@@ -137,8 +137,8 @@ const mergeUsageIntoAccumulator = (
   }
   target.input += usage.input ?? 0;
   target.output += usage.output ?? 0;
-  target.cacheRead += usage.cacheRead ?? 0;
-  target.cacheWrite += usage.cacheWrite ?? 0;
+  target.cacheRead = usage.cacheRead ?? 0;
+  target.cacheWrite = usage.cacheWrite ?? 0;
   target.total +=
     usage.total ??
     (usage.input ?? 0) + (usage.output ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
