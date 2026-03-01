@@ -141,11 +141,13 @@ export async function scanStatus(
       progress.tick();
 
       progress.setLabel("Summarizing channels…");
-      const channels = await buildChannelsTable(cfg, {
-        // Show token previews in regular status; keep `status --all` redacted.
-        // Set `CLAWDBOT_SHOW_SECRETS=0` to force redaction.
-        showSecrets: process.env.CLAWDBOT_SHOW_SECRETS?.trim() !== "0",
-      });
+      const channels = opts.json
+        ? []
+        : await buildChannelsTable(cfg, {
+            // Show token previews in regular status; keep `status --all` redacted.
+            // Set `CLAWDBOT_SHOW_SECRETS=0` to force redaction.
+            showSecrets: process.env.CLAWDBOT_SHOW_SECRETS?.trim() !== "0",
+          });
       progress.tick();
 
       progress.setLabel("Checking memory…");
