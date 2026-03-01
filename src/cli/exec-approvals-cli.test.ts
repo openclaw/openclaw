@@ -53,8 +53,6 @@ vi.mock("../infra/exec-approvals.js", async () => {
     ...actual,
     readExecApprovalsSnapshot: () => localSnapshot,
     saveExecApprovals: vi.fn(),
-    grantTrustWindow: vi.fn(),
-    revokeTrustWindow: vi.fn(),
   };
 });
 
@@ -204,13 +202,13 @@ describe("exec approvals CLI", () => {
         },
       };
 
-      const revokeTrustWindow = vi.mocked(execApprovals.revokeTrustWindow);
-      revokeTrustWindow.mockClear();
-      revokeTrustWindow.mockReturnValue({ ok: true, agentId: "main", summary: undefined });
+      callGatewayFromCli.mockResolvedValueOnce({ ok: true, agentId: "main", summary: undefined });
 
       await runApprovalsCommand(["approvals", "untrust"]);
 
-      expect(revokeTrustWindow).toHaveBeenCalledWith(
+      expect(callGatewayFromCli).toHaveBeenCalledWith(
+        "exec.approvals.untrust",
+        expect.anything(),
         expect.objectContaining({ agentId: "main", keepAudit: true }),
       );
       expect(runtimeErrors).toHaveLength(0);
@@ -226,9 +224,19 @@ describe("exec approvals CLI", () => {
 
       const saveExecApprovals = vi.mocked(execApprovals.saveExecApprovals);
       saveExecApprovals.mockClear();
+      callGatewayFromCli.mockResolvedValueOnce({
+        ok: false,
+        agentId: "main",
+        message: 'No active trust window for agent "main"',
+      });
 
       await runApprovalsCommand(["approvals", "untrust"]);
 
+      expect(callGatewayFromCli).toHaveBeenCalledWith(
+        "exec.approvals.untrust",
+        expect.anything(),
+        expect.objectContaining({ agentId: "main", keepAudit: true }),
+      );
       expect(saveExecApprovals).not.toHaveBeenCalled();
       expect(runtimeErrors).toHaveLength(0);
     });

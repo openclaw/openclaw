@@ -23,10 +23,25 @@ export const ExecApprovalsDefaultsSchema = Type.Object(ExecApprovalsPolicyFields
   additionalProperties: false,
 });
 
+const TrustWindowSchema = Type.Object(
+  {
+    status: Type.Literal("active"),
+    expiresAt: Type.Integer({ minimum: 0 }),
+    grantedAt: Type.Integer({ minimum: 0 }),
+    grantedBy: Type.Optional(Type.String()),
+    security: Type.String(),
+    ask: Type.String(),
+    grantNotified: Type.Optional(Type.Boolean()),
+    expiredNotified: Type.Optional(Type.Boolean()),
+  },
+  { additionalProperties: false },
+);
+
 export const ExecApprovalsAgentSchema = Type.Object(
   {
     ...ExecApprovalsPolicyFields,
     allowlist: Type.Optional(Type.Array(ExecApprovalsAllowlistEntrySchema)),
+    trustWindow: Type.Optional(TrustWindowSchema),
   },
   { additionalProperties: false },
 );

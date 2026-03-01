@@ -214,7 +214,7 @@ export const execApprovalsHandlers: GatewayRequestHandlers = {
     if (!result.ok) {
       respond(
         true,
-        { ok: true, agentId: p.agentId?.trim() || "main", message: result.error },
+        { ok: false, agentId: p.agentId?.trim() || "main", message: result.error },
         undefined,
       );
       return;

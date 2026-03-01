@@ -4,9 +4,7 @@ import JSON5 from "json5";
 import {
   ABSOLUTE_MAX_TRUST_MINUTES,
   DEFAULT_MAX_TRUST_MINUTES,
-  grantTrustWindow,
   readExecApprovalsSnapshot,
-  revokeTrustWindow,
   saveExecApprovals,
   type ExecApprovalsAgent,
   type ExecApprovalsFile,
@@ -548,9 +546,14 @@ export function registerExecApprovalsCli(program: Command) {
           }
         }
 
-        const result = grantTrustWindow({ agentId: agentKey, minutes, grantedBy: "cli" });
-        if (!result.ok) {
-          exitWithError(result.error);
+        const result = (await callGatewayFromCli("exec.approvals.trust", opts, {
+          agentId: agentKey,
+          minutes,
+          grantedBy: "cli",
+        })) as { ok: boolean; agentId?: string; expiresAt?: number; message?: string };
+
+        if (!result?.ok || typeof result.expiresAt !== "number") {
+          exitWithError(result?.message ?? "Failed to grant trust window.");
         }
 
         const expiresDate = new Date(result.expiresAt);
@@ -595,9 +598,14 @@ export function registerExecApprovalsCli(program: Command) {
           : 0;
 
         // Always keep audit here — CLI handles cleanup after interactive prompt
-        const result = revokeTrustWindow({ agentId: agentKey, revokedBy: "cli", keepAudit: true });
-        if (!result.ok) {
-          defaultRuntime.log(result.error);
+        const result = (await callGatewayFromCli("exec.approvals.untrust", opts, {
+          agentId: agentKey,
+          revokedBy: "cli",
+          keepAudit: true,
+        })) as { ok: boolean; agentId?: string; summary?: string; message?: string };
+
+        if (!result?.ok) {
+          defaultRuntime.log(result?.message ?? "No active trust window.");
           return;
         }
 
