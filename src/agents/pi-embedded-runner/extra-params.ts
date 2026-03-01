@@ -319,6 +319,15 @@ function createCodexDefaultTransportWrapper(baseStreamFn: StreamFn | undefined):
     });
 }
 
+function createOpenAIDefaultTransportWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) =>
+    underlying(model, context, {
+      ...options,
+      transport: options?.transport ?? "auto",
+    });
+}
+
 function isAnthropic1MModel(modelId: string): boolean {
   const normalized = modelId.trim().toLowerCase();
   return ANTHROPIC_1M_MODEL_PREFIXES.some((prefix) => normalized.startsWith(prefix));
@@ -740,6 +749,9 @@ export function applyExtraParamsToAgent(
   if (provider === "openai-codex") {
     // Default Codex to WebSocket-first when nothing else specifies transport.
     agent.streamFn = createCodexDefaultTransportWrapper(agent.streamFn);
+  } else if (provider === "openai") {
+    // Default OpenAI Responses to WebSocket-first with transparent SSE fallback.
+    agent.streamFn = createOpenAIDefaultTransportWrapper(agent.streamFn);
   }
   const override =
     extraParamsOverride && Object.keys(extraParamsOverride).length > 0
