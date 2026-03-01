@@ -812,11 +812,11 @@ python src/workers/video_worker.py --api-url https://maibeauty-api-production.up
 
 <!-- AUTO:subrepo-commits:START -->
 
+- `ed67d18 docs(A019): Google Flow 멀티샷 연출 MAIBEAUTY 적용 가이드 (03-01)`
 - `f01471c build(web-admin): switch production build to webpack for stable pages assets (02-26)`
 - `7c1eb07 fix(web-admin): normalize brands list payload to prevent dashboard crash (02-26)`
 - `a6429bf fix(api): prevent auth login 500 when brand code field is missing (02-26)`
 - `68aa2a1 fix(web-admin): stop login-page reload loop on expired tokens (02-26)`
-- `dc4b5fb fix(web-admin): keep login redirects under GitHub Pages base path (02-26)`
 <!-- AUTO:subrepo-commits:END -->
 
 ---
