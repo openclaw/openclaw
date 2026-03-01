@@ -39,6 +39,33 @@ bot onboard --non-interactive \
 
 `--custom-api-key` is optional in non-interactive mode. If omitted, onboarding checks `CUSTOM_API_KEY`.
 
+Store provider keys as refs instead of plaintext:
+
+```bash
+bot onboard --non-interactive \
+  --auth-choice openai-api-key \
+  --secret-input-mode ref \
+  --accept-risk
+```
+
+With `--secret-input-mode ref`, onboarding writes env-backed refs instead of plaintext key values.
+For auth-profile backed providers this writes `keyRef` entries; for custom providers this writes `models.providers.<id>.apiKey` as an env ref (for example `{ source: "env", id: "CUSTOM_API_KEY" }`).
+
+Non-interactive `ref` mode contract:
+
+- Set the provider env var in the onboarding process environment (for example `OPENAI_API_KEY`).
+- Do not pass inline key flags (for example `--openai-api-key`) unless that env var is also set.
+- If an inline key flag is passed without the required env var, onboarding fails fast with guidance.
+
+Interactive onboarding behavior with reference mode:
+
+- Choose **Use secret reference** when prompted.
+- Then choose either:
+  - Environment variable
+  - Encrypted `sops` file (JSON pointer)
+- Onboarding performs a fast preflight validation before saving the ref.
+  - If validation fails, onboarding shows the error and lets you retry.
+
 Non-interactive Z.AI endpoint choices:
 
 Note: `--auth-choice zai-api-key` now auto-detects the best Z.AI endpoint for your key (prefers the general API with `zai/glm-5`).

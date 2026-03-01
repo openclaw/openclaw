@@ -2,10 +2,17 @@ import type { BotConfig } from "../config/config.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
+import type { SecretInputMode } from "./onboard-types.js";
 import { CONTEXT_WINDOW_HARD_MIN_TOKENS } from "../agents/context-window-guard.js";
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { buildModelAliasIndex, modelKey } from "../agents/model-selection.js";
+import { isSecretRef, type SecretInput } from "../config/types.secrets.js";
 import { fetchWithTimeout } from "../utils/fetch-timeout.js";
+import {
+  normalizeSecretInput,
+  normalizeOptionalSecretInput,
+} from "../utils/normalize-secret-input.js";
+import { ensureApiKeyFromEnvOrPrompt } from "./auth-choice.apply-helpers.js";
 import { applyPrimaryModel } from "./model-picker.js";
 import { normalizeAlias } from "./models/shared.js";
 
@@ -60,7 +67,7 @@ export type ApplyCustomApiConfigParams = {
   baseUrl: string;
   modelId: string;
   compatibility: CustomApiCompatibility;
-  apiKey?: string;
+  apiKey?: SecretInput;
   providerId?: string;
   alias?: string;
 };
@@ -243,6 +250,13 @@ type VerificationResult = {
   error?: unknown;
 };
 
+function normalizeOptionalProviderApiKey(value: unknown): SecretInput | undefined {
+  if (isSecretRef(value)) {
+    return value;
+  }
+  return normalizeOptionalSecretInput(value);
+}
+
 async function requestOpenAiVerification(params: {
   baseUrl: string;
   apiKey: string;
@@ -264,7 +278,7 @@ async function requestOpenAiVerification(params: {
         body: JSON.stringify({
           model: params.modelId,
           messages: [{ role: "user", content: "Hi" }],
-          max_tokens: 5,
+          max_tokens: 1024,
         }),
       },
       VERIFY_TIMEOUT_MS,
@@ -295,7 +309,7 @@ async function requestAnthropicVerification(params: {
         },
         body: JSON.stringify({
           model: params.modelId,
-          max_tokens: 16,
+          max_tokens: 1024,
           messages: [{ role: "user", content: "Hi" }],
         }),
       },
@@ -309,8 +323,10 @@ async function requestAnthropicVerification(params: {
 
 async function promptBaseUrlAndKey(params: {
   prompter: WizardPrompter;
+  config: BotConfig;
+  secretInputMode?: SecretInputMode;
   initialBaseUrl?: string;
-}): Promise<{ baseUrl: string; apiKey: string }> {
+}): Promise<{ baseUrl: string; apiKey?: SecretInput; resolvedApiKey: string }> {
   const baseUrlInput = await params.prompter.text({
     message: "API Base URL",
     initialValue: params.initialBaseUrl ?? DEFAULT_OLLAMA_BASE_URL,
@@ -324,12 +340,27 @@ async function promptBaseUrlAndKey(params: {
       }
     },
   });
-  const apiKeyInput = await params.prompter.text({
-    message: "API Key (leave blank if not required)",
-    placeholder: "sk-...",
-    initialValue: "",
+  const baseUrl = baseUrlInput.trim();
+  const providerHint = buildEndpointIdFromUrl(baseUrl) || "custom";
+  let apiKeyInput: SecretInput | undefined;
+  const resolvedApiKey = await ensureApiKeyFromEnvOrPrompt({
+    config: params.config,
+    provider: providerHint,
+    envLabel: "CUSTOM_API_KEY",
+    promptMessage: "API Key (leave blank if not required)",
+    normalize: normalizeSecretInput,
+    validate: () => undefined,
+    prompter: params.prompter,
+    secretInputMode: params.secretInputMode,
+    setCredential: async (apiKey) => {
+      apiKeyInput = apiKey;
+    },
   });
-  return { baseUrl: baseUrlInput.trim(), apiKey: apiKeyInput.trim() };
+  return {
+    baseUrl,
+    apiKey: normalizeOptionalProviderApiKey(apiKeyInput),
+    resolvedApiKey: normalizeSecretInput(resolvedApiKey),
+  };
 }
 
 type CustomApiRetryChoice = "baseUrl" | "model" | "both";
@@ -353,6 +384,31 @@ async function promptCustomApiModelId(prompter: WizardPrompter): Promise<string>
       validate: (val) => (val.trim() ? undefined : "Model ID is required"),
     })
   ).trim();
+}
+
+async function applyCustomApiRetryChoice(params: {
+  prompter: WizardPrompter;
+  config: BotConfig;
+  secretInputMode?: SecretInputMode;
+  retryChoice: CustomApiRetryChoice;
+  current: { baseUrl: string; apiKey?: SecretInput; resolvedApiKey: string; modelId: string };
+}): Promise<{ baseUrl: string; apiKey?: SecretInput; resolvedApiKey: string; modelId: string }> {
+  let { baseUrl, apiKey, resolvedApiKey, modelId } = params.current;
+  if (params.retryChoice === "baseUrl" || params.retryChoice === "both") {
+    const retryInput = await promptBaseUrlAndKey({
+      prompter: params.prompter,
+      config: params.config,
+      secretInputMode: params.secretInputMode,
+      initialBaseUrl: baseUrl,
+    });
+    baseUrl = retryInput.baseUrl;
+    apiKey = retryInput.apiKey;
+    resolvedApiKey = retryInput.resolvedApiKey;
+  }
+  if (params.retryChoice === "model" || params.retryChoice === "both") {
+    modelId = await promptCustomApiModelId(params.prompter);
+  }
+  return { baseUrl, apiKey, resolvedApiKey, modelId };
 }
 
 function resolveProviderApi(
@@ -499,9 +555,8 @@ export function applyCustomApiConfig(params: ApplyCustomApiConfigParams): Custom
     : [...existingModels, nextModel];
   const { apiKey: existingApiKey, ...existingProviderRest } = existingProvider ?? {};
   const normalizedApiKey =
-    params.apiKey?.trim() ||
-    (typeof existingApiKey === "string" ? existingApiKey.trim() : existingApiKey) ||
-    undefined;
+    normalizeOptionalProviderApiKey(params.apiKey) ??
+    normalizeOptionalProviderApiKey(existingApiKey);
 
   let config: BotConfig = {
     ...params.config,
@@ -555,12 +610,18 @@ export async function promptCustomApiConfig(params: {
   prompter: WizardPrompter;
   runtime: RuntimeEnv;
   config: BotConfig;
+  secretInputMode?: SecretInputMode;
 }): Promise<CustomApiResult> {
   const { prompter, runtime, config } = params;
 
-  const baseInput = await promptBaseUrlAndKey({ prompter });
+  const baseInput = await promptBaseUrlAndKey({
+    prompter,
+    config,
+    secretInputMode: params.secretInputMode,
+  });
   let baseUrl = baseInput.baseUrl;
   let apiKey = baseInput.apiKey;
+  let resolvedApiKey = baseInput.resolvedApiKey;
 
   const compatibilityChoice = await prompter.select({
     message: "Endpoint compatibility",
@@ -580,13 +641,21 @@ export async function promptCustomApiConfig(params: {
     let verifiedFromProbe = false;
     if (!compatibility) {
       const probeSpinner = prompter.progress("Detecting endpoint type...");
-      const openaiProbe = await requestOpenAiVerification({ baseUrl, apiKey, modelId });
+      const openaiProbe = await requestOpenAiVerification({
+        baseUrl,
+        apiKey: resolvedApiKey,
+        modelId,
+      });
       if (openaiProbe.ok) {
         probeSpinner.stop("Detected OpenAI-compatible endpoint.");
         compatibility = "openai";
         verifiedFromProbe = true;
       } else {
-        const anthropicProbe = await requestAnthropicVerification({ baseUrl, apiKey, modelId });
+        const anthropicProbe = await requestAnthropicVerification({
+          baseUrl,
+          apiKey: resolvedApiKey,
+          modelId,
+        });
         if (anthropicProbe.ok) {
           probeSpinner.stop("Detected Anthropic-compatible endpoint.");
           compatibility = "anthropic";
@@ -598,17 +667,13 @@ export async function promptCustomApiConfig(params: {
             "Endpoint detection",
           );
           const retryChoice = await promptCustomApiRetryChoice(prompter);
-          if (retryChoice === "baseUrl" || retryChoice === "both") {
-            const retryInput = await promptBaseUrlAndKey({
-              prompter,
-              initialBaseUrl: baseUrl,
-            });
-            baseUrl = retryInput.baseUrl;
-            apiKey = retryInput.apiKey;
-          }
-          if (retryChoice === "model" || retryChoice === "both") {
-            modelId = await promptCustomApiModelId(prompter);
-          }
+          ({ baseUrl, apiKey, resolvedApiKey, modelId } = await applyCustomApiRetryChoice({
+            prompter,
+            config,
+            secretInputMode: params.secretInputMode,
+            retryChoice,
+            current: { baseUrl, apiKey, resolvedApiKey, modelId },
+          }));
           continue;
         }
       }
@@ -621,8 +686,8 @@ export async function promptCustomApiConfig(params: {
     const verifySpinner = prompter.progress("Verifying...");
     const result =
       compatibility === "anthropic"
-        ? await requestAnthropicVerification({ baseUrl, apiKey, modelId })
-        : await requestOpenAiVerification({ baseUrl, apiKey, modelId });
+        ? await requestAnthropicVerification({ baseUrl, apiKey: resolvedApiKey, modelId })
+        : await requestOpenAiVerification({ baseUrl, apiKey: resolvedApiKey, modelId });
     if (result.ok) {
       verifySpinner.stop("Verification successful.");
       break;
@@ -633,17 +698,13 @@ export async function promptCustomApiConfig(params: {
       verifySpinner.stop(`Verification failed: ${formatVerificationError(result.error)}`);
     }
     const retryChoice = await promptCustomApiRetryChoice(prompter);
-    if (retryChoice === "baseUrl" || retryChoice === "both") {
-      const retryInput = await promptBaseUrlAndKey({
-        prompter,
-        initialBaseUrl: baseUrl,
-      });
-      baseUrl = retryInput.baseUrl;
-      apiKey = retryInput.apiKey;
-    }
-    if (retryChoice === "model" || retryChoice === "both") {
-      modelId = await promptCustomApiModelId(prompter);
-    }
+    ({ baseUrl, apiKey, resolvedApiKey, modelId } = await applyCustomApiRetryChoice({
+      prompter,
+      config,
+      secretInputMode: params.secretInputMode,
+      retryChoice,
+      current: { baseUrl, apiKey, resolvedApiKey, modelId },
+    }));
     if (compatibilityChoice === "unknown") {
       compatibility = null;
     }

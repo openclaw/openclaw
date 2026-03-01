@@ -3,21 +3,32 @@ import type { WizardPrompter } from "../wizard/prompts.js";
 import type { ApplyAuthChoiceParams } from "./auth-choice.apply.js";
 import type { SecretInputMode } from "./onboard-types.js";
 import { resolveEnvApiKey } from "../agents/model-auth.js";
-import { type SecretInput, type SecretRef } from "../config/types.secrets.js";
+import {
+  DEFAULT_SECRET_PROVIDER_ALIAS,
+  type SecretInput,
+  type SecretRef,
+} from "../config/types.secrets.js";
 import { encodeJsonPointerToken } from "../secrets/json-pointer.js";
 import { PROVIDER_ENV_VARS } from "../secrets/provider-env-vars.js";
-import {
-  isValidFileSecretRefId,
-  resolveDefaultSecretProviderAlias,
-} from "../secrets/ref-contract.js";
 import { resolveSecretRefString } from "../secrets/resolve.js";
 import { formatApiKeyPreview } from "./auth-choice.api-key.js";
 import { applyDefaultModelChoice } from "./auth-choice.default-model.js";
 
 const ENV_SOURCE_LABEL_RE = /(?:^|:\s)([A-Z][A-Z0-9_]*)$/;
 const ENV_SECRET_REF_ID_RE = /^[A-Z][A-Z0-9_]{0,127}$/;
+const FILE_SECRET_REF_SEGMENT_RE = /^(?:[^~]|~0|~1)*$/;
 
-type SecretRefChoice = "env" | "provider";
+type SecretRefSourceChoice = "env" | "file";
+
+function isValidFileSecretRefId(value: string): boolean {
+  if (!value.startsWith("/")) {
+    return false;
+  }
+  return value
+    .slice(1)
+    .split("/")
+    .every((segment) => FILE_SECRET_REF_SEGMENT_RE.test(segment));
+}
 
 function formatErrorMessage(error: unknown): string {
   if (error instanceof Error && typeof error.message === "string" && error.message.trim()) {
@@ -36,37 +47,34 @@ function resolveDefaultProviderEnvVar(provider: string): string | undefined {
   return envVars?.find((candidate) => candidate.trim().length > 0);
 }
 
-function resolveDefaultFilePointerId(provider: string): string {
+function resolveDefaultSopsPointerId(provider: string): string {
   return `/providers/${encodeJsonPointerToken(provider)}/apiKey`;
 }
 
 function resolveRefFallbackInput(params: {
-  config: BotConfig;
   provider: string;
   preferredEnvVar?: string;
-}): { ref: SecretRef; resolvedValue: string } {
+  envKeyValue?: string;
+}): { input: SecretInput; resolvedValue: string } {
   const fallbackEnvVar = params.preferredEnvVar ?? resolveDefaultProviderEnvVar(params.provider);
-  if (!fallbackEnvVar) {
-    throw new Error(
-      `No default environment variable mapping found for provider "${params.provider}". Set a provider-specific env var, or re-run onboarding in an interactive terminal to configure a ref.`,
-    );
+  if (fallbackEnvVar) {
+    const value = process.env[fallbackEnvVar]?.trim();
+    if (value) {
+      return {
+        input: { source: "env", provider: DEFAULT_SECRET_PROVIDER_ALIAS, id: fallbackEnvVar },
+        resolvedValue: value,
+      };
+    }
   }
-  const value = process.env[fallbackEnvVar]?.trim();
-  if (!value) {
-    throw new Error(
-      `Environment variable "${fallbackEnvVar}" is required for --secret-input-mode ref in non-interactive onboarding.`,
-    );
+  if (params.envKeyValue?.trim()) {
+    return {
+      input: params.envKeyValue.trim(),
+      resolvedValue: params.envKeyValue.trim(),
+    };
   }
-  return {
-    ref: {
-      source: "env",
-      provider: resolveDefaultSecretProviderAlias(params.config, "env", {
-        preferFirstProviderForSource: true,
-      }),
-      id: fallbackEnvVar,
-    },
-    resolvedValue: value,
-  };
+  throw new Error(
+    `No environment variable found for provider "${params.provider}". Re-run onboarding in an interactive terminal to set a secret reference.`,
+  );
 }
 
 async function resolveApiKeyRefForOnboarding(params: {
@@ -77,11 +85,11 @@ async function resolveApiKeyRefForOnboarding(params: {
 }): Promise<{ ref: SecretRef; resolvedValue: string }> {
   const defaultEnvVar =
     params.preferredEnvVar ?? resolveDefaultProviderEnvVar(params.provider) ?? "";
-  const defaultFilePointer = resolveDefaultFilePointerId(params.provider);
-  let sourceChoice: SecretRefChoice = "env";
+  const defaultFilePointer = resolveDefaultSopsPointerId(params.provider);
+  let sourceChoice: SecretRefSourceChoice = "env";
 
   while (true) {
-    const sourceRaw: SecretRefChoice = await params.prompter.select<SecretRefChoice>({
+    const sourceRaw: SecretRefSourceChoice = await params.prompter.select<SecretRefSourceChoice>({
       message: "Where is this API key stored?",
       initialValue: sourceChoice,
       options: [
@@ -91,13 +99,13 @@ async function resolveApiKeyRefForOnboarding(params: {
           hint: "Reference a variable from your runtime environment",
         },
         {
-          value: "provider",
-          label: "Configured secret provider",
-          hint: "Use a configured file or exec secret provider",
+          value: "file",
+          label: "Encrypted sops file",
+          hint: "Reference a JSON pointer from secrets.sources.file",
         },
       ],
     });
-    const source: SecretRefChoice = sourceRaw === "provider" ? "provider" : "env";
+    const source: SecretRefSourceChoice = sourceRaw === "file" ? "file" : "env";
     sourceChoice = source;
 
     if (source === "env") {
@@ -124,13 +132,7 @@ async function resolveApiKeyRefForOnboarding(params: {
           `No valid environment variable name provided for provider "${params.provider}".`,
         );
       }
-      const ref: SecretRef = {
-        source: "env",
-        provider: resolveDefaultSecretProviderAlias(params.config, "env", {
-          preferFirstProviderForSource: true,
-        }),
-        id: envVar,
-      };
+      const ref: SecretRef = { source: "env", provider: DEFAULT_SECRET_PROVIDER_ALIAS, id: envVar };
       const resolvedValue = await resolveSecretRefString(ref, {
         config: params.config,
         env: process.env,
@@ -142,96 +144,36 @@ async function resolveApiKeyRefForOnboarding(params: {
       return { ref, resolvedValue };
     }
 
-    const externalProviders = Object.entries(params.config.secrets?.providers ?? {}).filter(
-      ([, provider]) => provider?.source === "file" || provider?.source === "exec",
-    );
-    if (externalProviders.length === 0) {
-      await params.prompter.note(
-        "No file/exec secret providers are configured yet. Add one under secrets.providers, or select Environment variable.",
-        "No providers configured",
-      );
-      continue;
-    }
-    const defaultProvider = resolveDefaultSecretProviderAlias(params.config, "file", {
-      preferFirstProviderForSource: true,
-    });
-    const selectedProvider = await params.prompter.select<string>({
-      message: "Select secret provider",
-      initialValue:
-        externalProviders.find(([providerName]) => providerName === defaultProvider)?.[0] ??
-        externalProviders[0]?.[0],
-      options: externalProviders.map(([providerName, provider]) => ({
-        value: providerName,
-        label: providerName,
-        hint: provider?.source === "exec" ? "Exec provider" : "File provider",
-      })),
-    });
-    const providerEntry = params.config.secrets?.providers?.[selectedProvider];
-    if (!providerEntry || (providerEntry.source !== "file" && providerEntry.source !== "exec")) {
-      await params.prompter.note(
-        `Provider "${selectedProvider}" is not a file/exec provider.`,
-        "Invalid provider",
-      );
-      continue;
-    }
-    const idPrompt =
-      providerEntry.source === "file"
-        ? "Secret id (JSON pointer for json mode, or 'value' for singleValue mode)"
-        : "Secret id for the exec provider";
-    const idDefault =
-      providerEntry.source === "file"
-        ? providerEntry.mode === "singleValue"
-          ? "value"
-          : defaultFilePointer
-        : `${params.provider}/apiKey`;
-    const idRaw = await params.prompter.text({
-      message: idPrompt,
-      initialValue: idDefault,
-      placeholder: providerEntry.source === "file" ? "/providers/openai/apiKey" : "openai/api-key",
+    const pointerRaw = await params.prompter.text({
+      message: "JSON pointer inside encrypted secrets file",
+      initialValue: defaultFilePointer,
+      placeholder: "/providers/openai/apiKey",
       validate: (value) => {
         const candidate = value.trim();
-        if (!candidate) {
-          return "Secret id cannot be empty.";
-        }
-        if (
-          providerEntry.source === "file" &&
-          providerEntry.mode !== "singleValue" &&
-          !isValidFileSecretRefId(candidate)
-        ) {
+        if (!isValidFileSecretRefId(candidate)) {
           return 'Use an absolute JSON pointer like "/providers/openai/apiKey".';
-        }
-        if (
-          providerEntry.source === "file" &&
-          providerEntry.mode === "singleValue" &&
-          candidate !== "value"
-        ) {
-          return 'singleValue mode expects id "value".';
         }
         return undefined;
       },
     });
-    const id = String(idRaw ?? "").trim() || idDefault;
-    const ref: SecretRef = {
-      source: providerEntry.source,
-      provider: selectedProvider,
-      id,
-    };
+    const pointer = String(pointerRaw ?? "").trim() || defaultFilePointer;
+    const ref: SecretRef = { source: "file", provider: DEFAULT_SECRET_PROVIDER_ALIAS, id: pointer };
     try {
       const resolvedValue = await resolveSecretRefString(ref, {
         config: params.config,
         env: process.env,
       });
       await params.prompter.note(
-        `Validated ${providerEntry.source} reference ${selectedProvider}:${id}. Bot will store a reference, not the key value.`,
+        `Validated encrypted file reference ${pointer}. Bot will store a reference, not the key value.`,
         "Reference validated",
       );
       return { ref, resolvedValue };
     } catch (error) {
       await params.prompter.note(
         [
-          `Could not validate provider reference ${selectedProvider}:${id}.`,
+          "Could not validate this encrypted file reference.",
           formatErrorMessage(error),
-          "Check your provider configuration and try again.",
+          "Check secrets.sources.file configuration and sops key access, then try again.",
         ].join("\n"),
         "Reference check failed",
       );
@@ -349,7 +291,7 @@ export async function resolveSecretInputModeForEnvSelection(params: {
       {
         value: "ref",
         label: "Use secret reference",
-        hint: "Stores a reference to env or configured external secret providers",
+        hint: "Stores a reference to env or encrypted sops secrets",
       },
     ],
   });
@@ -441,11 +383,11 @@ export async function ensureApiKeyFromEnvOrPrompt(params: {
   if (selectedMode === "ref") {
     if (typeof params.prompter.select !== "function") {
       const fallback = resolveRefFallbackInput({
-        config: params.config,
         provider: params.provider,
         preferredEnvVar: envKey?.source ? extractEnvVarFromSourceLabel(envKey.source) : undefined,
+        envKeyValue: envKey?.apiKey,
       });
-      await params.setCredential(fallback.ref, selectedMode);
+      await params.setCredential(fallback.input, selectedMode);
       return fallback.resolvedValue;
     }
     const resolved = await resolveApiKeyRefForOnboarding({

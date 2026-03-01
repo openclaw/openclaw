@@ -33,6 +33,15 @@ When onboarding runs in interactive mode and you choose secret reference storage
 
 If validation fails, onboarding shows the error and lets you retry.
 
+## Onboarding reference preflight
+
+When onboarding runs in interactive mode and you choose secret reference storage, Bot performs a fast preflight check before saving:
+
+- Env refs: validates env var name and confirms a non-empty value is visible during onboarding.
+- File refs (`sops`): validates `secrets.sources.file`, decrypts, and resolves the JSON pointer.
+
+If validation fails, onboarding shows the error and lets you retry with a different ref/source.
+
 ## SecretRef contract
 
 Use one object shape everywhere:

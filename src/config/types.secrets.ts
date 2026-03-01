@@ -15,6 +15,22 @@ export type SecretInput = string | SecretRef;
 
 export const DEFAULT_SECRET_PROVIDER_ALIAS = "default";
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** Runtime type guard for SecretRef shaped values. */
+export function isSecretRef(value: unknown): value is SecretRef {
+  if (!isRecord(value)) {
+    return false;
+  }
+  const { source, id } = value;
+  if (typeof id !== "string" || !id.trim()) {
+    return false;
+  }
+  return source === "env" || source === "file" || source === "exec" || source === "kms";
+}
+
 // ---------------------------------------------------------------------------
 // Secret provider configuration (per-source)
 // ---------------------------------------------------------------------------

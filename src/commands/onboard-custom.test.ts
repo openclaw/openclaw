@@ -221,7 +221,7 @@ describe("promptCustomApiConfig", () => {
 
     const promise = runPromptCustomApi(prompter);
 
-    await vi.advanceTimersByTimeAsync(10000);
+    await vi.advanceTimersByTimeAsync(30000);
     await promise;
 
     expect(prompter.text).toHaveBeenCalledTimes(6);
@@ -248,7 +248,7 @@ describe("promptCustomApiConfig", () => {
     expect(firstCall?.headers?.Authorization).toBe("Bearer test-env-key");
   });
 
-  it("re-prompts source after provider ref preflight fails and succeeds with env ref", async () => {
+  it("re-prompts source after encrypted file ref preflight fails and succeeds with env ref", async () => {
     vi.stubEnv("CUSTOM_PROVIDER_API_KEY", "test-env-key");
     const prompter = createTestPrompter({
       text: [
@@ -259,24 +259,14 @@ describe("promptCustomApiConfig", () => {
         "custom",
         "",
       ],
-      select: ["ref", "provider", "filemain", "env", "openai"],
+      select: ["ref", "file", "env", "openai"],
     });
     stubFetchSequence([{ ok: true }]);
 
-    const result = await runPromptCustomApi(prompter, {
-      secrets: {
-        providers: {
-          filemain: {
-            source: "file",
-            path: "/tmp/bot-missing-provider.json",
-            mode: "json",
-          },
-        },
-      },
-    });
+    const result = await runPromptCustomApi(prompter);
 
     expect(prompter.note).toHaveBeenCalledWith(
-      expect.stringContaining("Could not validate provider reference"),
+      expect.stringContaining("Could not validate this encrypted file reference."),
       "Reference check failed",
     );
     expect(result.config.models?.providers?.custom?.apiKey).toEqual({

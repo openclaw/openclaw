@@ -1,6 +1,6 @@
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import crypto from "node:crypto";
 import fs from "node:fs";
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { BotConfig } from "../../config/config.js";
 import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";

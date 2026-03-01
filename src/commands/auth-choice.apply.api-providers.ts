@@ -1,8 +1,7 @@
 import type { SecretInput } from "../config/types.secrets.js";
 import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
+import type { ApiKeyStorageOptions } from "./onboard-auth.credentials.js";
 import type { AuthChoice, SecretInputMode } from "./onboard-types.js";
-
-type ApiKeyStorageOptions = { secretInputMode?: SecretInputMode };
 import { ensureAuthProfileStore, resolveAuthProfileOrder } from "../agents/auth-profiles.js";
 import { normalizeApiKeyInput, validateApiKeyInput } from "./auth-choice.api-key.js";
 import {
@@ -436,7 +435,8 @@ export async function applyAuthChoiceApiProviders(
         normalize: normalizeApiKeyInput,
         validate: validateApiKeyInput,
         prompter: params.prompter,
-        setCredential: async (apiKey, _mode) => setLitellmApiKey(apiKey, params.agentDir),
+        setCredential: async (apiKey, mode) =>
+          setLitellmApiKey(apiKey, params.agentDir, { secretInputMode: mode }),
         noteMessage:
           "LiteLLM provides a unified API to 100+ LLM providers.\nGet your API key from your LiteLLM proxy or https://litellm.ai\nDefault proxy runs on http://localhost:4000",
         noteTitle: "LiteLLM",
@@ -519,8 +519,10 @@ export async function applyAuthChoiceApiProviders(
       normalize: normalizeApiKeyInput,
       validate: validateApiKeyInput,
       prompter: params.prompter,
-      setCredential: async (apiKey, _mode) =>
-        setCloudflareAiGatewayConfig(accountId, gatewayId, apiKey, params.agentDir),
+      setCredential: async (apiKey, mode) =>
+        setCloudflareAiGatewayConfig(accountId, gatewayId, apiKey, params.agentDir, {
+          secretInputMode: mode,
+        }),
     });
 
     nextConfig = applyAuthProfileConfig(nextConfig, {
@@ -558,7 +560,8 @@ export async function applyAuthChoiceApiProviders(
       normalize: normalizeApiKeyInput,
       validate: validateApiKeyInput,
       prompter: params.prompter,
-      setCredential: async (apiKey, _mode) => setGeminiApiKey(apiKey, params.agentDir),
+      setCredential: async (apiKey, mode) =>
+        setGeminiApiKey(apiKey, params.agentDir, { secretInputMode: mode }),
     });
     nextConfig = applyAuthProfileConfig(nextConfig, {
       profileId: "google:default",
@@ -602,7 +605,8 @@ export async function applyAuthChoiceApiProviders(
       normalize: normalizeApiKeyInput,
       validate: validateApiKeyInput,
       prompter: params.prompter,
-      setCredential: async (apiKey, _mode) => setZaiApiKey(apiKey, params.agentDir),
+      setCredential: async (apiKey, mode) =>
+        setZaiApiKey(apiKey, params.agentDir, { secretInputMode: mode }),
     });
 
     // zai-api-key: auto-detect endpoint + choose a working default model.

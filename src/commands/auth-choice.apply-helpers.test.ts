@@ -184,39 +184,11 @@ describe("ensureApiKeyFromEnvOrPrompt", () => {
     expect(text).not.toHaveBeenCalled();
   });
 
-  it("fails ref mode without select when fallback env var is missing", async () => {
-    delete process.env.MINIMAX_API_KEY;
-    delete process.env.MINIMAX_OAUTH_TOKEN;
-
-    const { confirm, text } = createPromptSpies({
-      confirmResult: true,
-      textResult: "prompt-key",
-    });
-    const setCredential = vi.fn(async () => undefined);
-
-    await expect(
-      ensureApiKeyFromEnvOrPrompt({
-        config: {},
-        provider: "minimax",
-        envLabel: "MINIMAX_API_KEY",
-        promptMessage: "Enter key",
-        normalize: (value) => value.trim(),
-        validate: () => undefined,
-        prompter: createPrompter({ confirm, text }),
-        secretInputMode: "ref",
-        setCredential,
-      }),
-    ).rejects.toThrow(
-      'Environment variable "MINIMAX_API_KEY" is required for --secret-input-mode ref in non-interactive onboarding.',
-    );
-    expect(setCredential).not.toHaveBeenCalled();
-  });
-
-  it("re-prompts after provider ref validation failure and succeeds with env ref", async () => {
+  it("re-prompts after sops ref validation failure and succeeds with env ref", async () => {
     process.env.MINIMAX_API_KEY = "env-key";
     delete process.env.MINIMAX_OAUTH_TOKEN;
 
-    const selectValues: Array<"provider" | "env" | "filemain"> = ["provider", "filemain", "env"];
+    const selectValues: Array<"file" | "env"> = ["file", "env"];
     const select = vi.fn(async () => selectValues.shift() ?? "env") as WizardPrompter["select"];
     const text = vi
       .fn<WizardPrompter["text"]>()
@@ -226,17 +198,7 @@ describe("ensureApiKeyFromEnvOrPrompt", () => {
     const setCredential = vi.fn(async () => undefined);
 
     const result = await ensureApiKeyFromEnvOrPrompt({
-      config: {
-        secrets: {
-          providers: {
-            filemain: {
-              source: "file",
-              path: "/tmp/does-not-exist-secrets.json",
-              mode: "json",
-            },
-          },
-        },
-      },
+      config: {},
       provider: "minimax",
       envLabel: "MINIMAX_API_KEY",
       promptMessage: "Enter key",
@@ -253,7 +215,7 @@ describe("ensureApiKeyFromEnvOrPrompt", () => {
       "ref",
     );
     expect(note).toHaveBeenCalledWith(
-      expect.stringContaining("Could not validate provider reference"),
+      expect.stringContaining("Could not validate this encrypted file reference."),
       "Reference check failed",
     );
   });

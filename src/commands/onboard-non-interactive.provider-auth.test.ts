@@ -3,7 +3,7 @@ import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it } from "vitest";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
-import { captureEnv } from "../test-utils/env.js";
+import { captureEnv, withEnvAsync } from "../test-utils/env.js";
 import { MINIMAX_API_BASE_URL, MINIMAX_CN_API_BASE_URL } from "./onboard-auth.js";
 import {
   createThrowingRuntime,
@@ -27,7 +27,7 @@ type ProviderAuthConfigSnapshot = {
       {
         baseUrl?: string;
         api?: string;
-        apiKey?: string;
+        apiKey?: string | { source?: string; id?: string };
         models?: Array<{ id?: string }>;
       }
     >;
@@ -122,6 +122,14 @@ async function runCustomLocalNonInteractive(
 }
 
 async function readCustomLocalProviderApiKey(configPath: string): Promise<string | undefined> {
+  const cfg = await readJsonFile<ProviderAuthConfigSnapshot>(configPath);
+  const apiKey = cfg.models?.providers?.[CUSTOM_LOCAL_PROVIDER_ID]?.apiKey;
+  return typeof apiKey === "string" ? apiKey : undefined;
+}
+
+async function readCustomLocalProviderApiKeyInput(
+  configPath: string,
+): Promise<string | { source?: string; id?: string } | undefined> {
   const cfg = await readJsonFile<ProviderAuthConfigSnapshot>(configPath);
   return cfg.models?.providers?.[CUSTOM_LOCAL_PROVIDER_ID]?.apiKey;
 }
@@ -286,6 +294,91 @@ describe("onboard (non-interactive): provider auth", () => {
     });
   }, 60_000);
 
+  it.each([
+    {
+      name: "anthropic",
+      prefix: "openclaw-onboard-ref-flag-anthropic-",
+      authChoice: "apiKey",
+      optionKey: "anthropicApiKey",
+      flagName: "--anthropic-api-key",
+      envVar: "ANTHROPIC_API_KEY",
+    },
+    {
+      name: "openai",
+      prefix: "openclaw-onboard-ref-flag-openai-",
+      authChoice: "openai-api-key",
+      optionKey: "openaiApiKey",
+      flagName: "--openai-api-key",
+      envVar: "OPENAI_API_KEY",
+    },
+    {
+      name: "openrouter",
+      prefix: "openclaw-onboard-ref-flag-openrouter-",
+      authChoice: "openrouter-api-key",
+      optionKey: "openrouterApiKey",
+      flagName: "--openrouter-api-key",
+      envVar: "OPENROUTER_API_KEY",
+    },
+    {
+      name: "xai",
+      prefix: "openclaw-onboard-ref-flag-xai-",
+      authChoice: "xai-api-key",
+      optionKey: "xaiApiKey",
+      flagName: "--xai-api-key",
+      envVar: "XAI_API_KEY",
+    },
+    {
+      name: "volcengine",
+      prefix: "openclaw-onboard-ref-flag-volcengine-",
+      authChoice: "volcengine-api-key",
+      optionKey: "volcengineApiKey",
+      flagName: "--volcengine-api-key",
+      envVar: "VOLCANO_ENGINE_API_KEY",
+    },
+    {
+      name: "byteplus",
+      prefix: "openclaw-onboard-ref-flag-byteplus-",
+      authChoice: "byteplus-api-key",
+      optionKey: "byteplusApiKey",
+      flagName: "--byteplus-api-key",
+      envVar: "BYTEPLUS_API_KEY",
+    },
+  ])(
+    "fails fast for $name when --secret-input-mode ref uses explicit key without env and does not leak the key",
+    async ({ prefix, authChoice, optionKey, flagName, envVar }) => {
+      await withOnboardEnv(prefix, async ({ runtime }) => {
+        const providedSecret = `${envVar.toLowerCase()}-should-not-leak`;
+        const options: Record<string, unknown> = {
+          authChoice,
+          secretInputMode: "ref",
+          [optionKey]: providedSecret,
+          skipSkills: true,
+        };
+        const envOverrides: Record<string, string | undefined> = {
+          [envVar]: undefined,
+        };
+
+        await withEnvAsync(envOverrides, async () => {
+          let thrown: Error | undefined;
+          try {
+            await runNonInteractiveOnboardingWithDefaults(runtime, options);
+          } catch (error) {
+            thrown = error as Error;
+          }
+          expect(thrown).toBeDefined();
+          const message = String(thrown?.message ?? "");
+          expect(message).toContain(
+            `${flagName} cannot be used with --secret-input-mode ref unless ${envVar} is set in env.`,
+          );
+          expect(message).toContain(
+            `Set ${envVar} in env and omit ${flagName}, or use --secret-input-mode plaintext.`,
+          );
+          expect(message).not.toContain(providedSecret);
+        });
+      });
+    },
+  );
+
   it("rejects vLLM auth choice in non-interactive mode", async () => {
     await withOnboardEnv("bot-onboard-vllm-non-interactive-", async ({ runtime }) => {
       await expect(
@@ -445,6 +538,49 @@ describe("onboard (non-interactive): provider auth", () => {
       },
     );
   }, 60_000);
+
+  it("stores CUSTOM_API_KEY env ref for non-interactive custom provider auth in ref mode", async () => {
+    await withOnboardEnv(
+      "openclaw-onboard-custom-provider-env-ref-",
+      async ({ configPath, runtime }) => {
+        process.env.CUSTOM_API_KEY = "custom-env-key";
+        await runCustomLocalNonInteractive(runtime, {
+          secretInputMode: "ref",
+        });
+        expect(await readCustomLocalProviderApiKeyInput(configPath)).toEqual({
+          source: "env",
+          provider: "default",
+          id: "CUSTOM_API_KEY",
+        });
+      },
+    );
+  });
+
+  it("fails fast for custom provider ref mode when --custom-api-key is set but CUSTOM_API_KEY env is missing", async () => {
+    await withOnboardEnv("openclaw-onboard-custom-provider-ref-flag-", async ({ runtime }) => {
+      const providedSecret = "custom-inline-key-should-not-leak";
+      await withEnvAsync({ CUSTOM_API_KEY: undefined }, async () => {
+        let thrown: Error | undefined;
+        try {
+          await runCustomLocalNonInteractive(runtime, {
+            secretInputMode: "ref",
+            customApiKey: providedSecret,
+          });
+        } catch (error) {
+          thrown = error as Error;
+        }
+        expect(thrown).toBeDefined();
+        const message = String(thrown?.message ?? "");
+        expect(message).toContain(
+          "--custom-api-key cannot be used with --secret-input-mode ref unless CUSTOM_API_KEY is set in env.",
+        );
+        expect(message).toContain(
+          "Set CUSTOM_API_KEY in env and omit --custom-api-key, or use --secret-input-mode plaintext.",
+        );
+        expect(message).not.toContain(providedSecret);
+      });
+    });
+  });
 
   it("uses matching profile fallback for non-interactive custom provider auth", async () => {
     await withOnboardEnv(

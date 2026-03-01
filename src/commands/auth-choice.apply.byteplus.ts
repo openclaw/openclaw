@@ -30,7 +30,8 @@ export async function applyAuthChoiceBytePlus(
     normalize: normalizeApiKeyInput,
     validate: validateApiKeyInput,
     prompter: params.prompter,
-    setCredential: async (apiKey, _mode) => setByteplusApiKey(apiKey, params.agentDir),
+    setCredential: async (apiKey, mode) =>
+      setByteplusApiKey(apiKey, params.agentDir, { secretInputMode: mode }),
   });
   const configWithAuth = applyAuthProfileConfig(params.config, {
     profileId: "byteplus:default",
