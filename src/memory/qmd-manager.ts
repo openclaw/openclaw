@@ -1127,7 +1127,7 @@ export class QmdMemoryManager implements MemorySearchManager {
       const timer = timeoutMs
         ? setTimeout(() => {
             child.kill("SIGKILL");
-            reject(new Error(`${label} ${args.join(" ")} timed out after ${timeoutMs}ms`));
+            reject(new Error(`${label} timed out after ${timeoutMs}ms`));
           }, timeoutMs)
         : null;
       child.stdout.on("data", (data) => {
@@ -1155,18 +1155,18 @@ export class QmdMemoryManager implements MemorySearchManager {
         }
         if (!discard && (stdoutTruncated || stderrTruncated)) {
           reject(
-            new Error(
-              `${label} ${args.join(" ")} produced too much output (limit ${this.maxQmdOutputChars} chars)`,
-            ),
+            new Error(`${label} produced too much output (limit ${this.maxQmdOutputChars} chars)`),
           );
           return;
         }
         if (code === 0) {
           resolve({ stdout, stderr });
         } else {
-          reject(
-            new Error(`${label} ${args.join(" ")} failed (code ${code}): ${stderr || stdout}`),
-          );
+          // Error messages include sanitized stderr (for error classification by
+          // callers like isCollectionMissingError) but omit raw args which may
+          // contain user queries with control characters (CWE-209).
+          const detail = (stderr || stdout).replace(/[\r\n]+/g, " ").slice(0, 500);
+          reject(new Error(`${label} failed (code ${code}): ${detail}`));
         }
       });
     });

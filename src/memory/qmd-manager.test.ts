@@ -642,7 +642,7 @@ describe("QmdMemoryManager", () => {
       throw new Error("manager missing");
     }
     const syncPromise = manager.sync({ reason: "manual" });
-    const rejected = expect(syncPromise).rejects.toThrow("qmd update timed out after 20ms");
+    const rejected = expect(syncPromise).rejects.toThrow("qmd timed out after 20ms");
     await vi.advanceTimersByTimeAsync(20);
     await rejected;
     await manager.close();
