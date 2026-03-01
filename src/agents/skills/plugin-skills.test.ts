@@ -100,4 +100,76 @@ describe("resolvePluginSkillDirs", () => {
 
     expect(dirs).toEqual([path.resolve(helperRoot, "skills")]);
   });
+
+  it("rejects plugin skill paths that escape the plugin root", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-");
+    const pluginRoot = await tempDirs.make("openclaw-plugin-");
+    const outsideDir = await tempDirs.make("openclaw-outside-");
+    const outsideSkills = path.join(outsideDir, "skills");
+    await fs.mkdir(path.join(pluginRoot, "skills"), { recursive: true });
+    await fs.mkdir(outsideSkills, { recursive: true });
+    const escapePath = path.relative(pluginRoot, outsideSkills);
+
+    hoisted.loadPluginManifestRegistry.mockReturnValue({
+      diagnostics: [],
+      plugins: [
+        {
+          id: "helper",
+          name: "Helper",
+          channels: [],
+          providers: [],
+          skills: ["./skills", escapePath],
+          origin: "workspace",
+          rootDir: pluginRoot,
+          source: pluginRoot,
+          manifestPath: path.join(pluginRoot, "openclaw.plugin.json"),
+        },
+      ],
+    } satisfies PluginManifestRegistry);
+
+    const dirs = resolvePluginSkillDirs({
+      workspaceDir,
+      config: {} as OpenClawConfig,
+    });
+
+    expect(dirs).toEqual([path.resolve(pluginRoot, "skills")]);
+  });
+
+  it("rejects plugin skill symlinks that resolve outside plugin root", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-");
+    const pluginRoot = await tempDirs.make("openclaw-plugin-");
+    const outsideDir = await tempDirs.make("openclaw-outside-");
+    const outsideSkills = path.join(outsideDir, "skills");
+    const linkPath = path.join(pluginRoot, "skills-link");
+    await fs.mkdir(outsideSkills, { recursive: true });
+    await fs.symlink(
+      outsideSkills,
+      linkPath,
+      process.platform === "win32" ? ("junction" as const) : ("dir" as const),
+    );
+
+    hoisted.loadPluginManifestRegistry.mockReturnValue({
+      diagnostics: [],
+      plugins: [
+        {
+          id: "helper",
+          name: "Helper",
+          channels: [],
+          providers: [],
+          skills: ["./skills-link"],
+          origin: "workspace",
+          rootDir: pluginRoot,
+          source: pluginRoot,
+          manifestPath: path.join(pluginRoot, "openclaw.plugin.json"),
+        },
+      ],
+    } satisfies PluginManifestRegistry);
+
+    const dirs = resolvePluginSkillDirs({
+      workspaceDir,
+      config: {} as OpenClawConfig,
+    });
+
+    expect(dirs).toEqual([]);
+  });
 });
