@@ -237,15 +237,42 @@ xychart-beta
     bar [$pts]
     line [$rev]
 ``````
+
+``````mermaid
+quadrantChart
+    title Contribution vs Monetization Matrix
+    x-axis "Low Revenue" --> "High Revenue"
+    y-axis "Low Contribution" --> "High Contribution"
+    quadrant-1 Golden Zone
+    quadrant-2 Contribution-led
+    quadrant-3 Early Stage
+    quadrant-4 Revenue-led
+    MAIBOT: [0.15, 0.75]
+    MAIBOTALKS: [0.25, 0.30]
+    MAIOSS: [0.20, 0.45]
+    MAISECONDBRAIN: [0.30, 0.50]
+    MAIBEAUTY: [0.35, 0.25]
+    MAITOK: [0.10, 0.15]
+    MAITUTOR: [0.10, 0.20]
+    MAISTAR7: [0.10, 0.25]
+    MAICON: [0.12, 0.18]
+    MAIAX: [0.08, 0.30]
+``````
 <!-- AUTO:contribution-dashboard:END -->
 "@
 
 if (Test-Path $MainDashboard) {
     $raw = [System.IO.File]::ReadAllText($MainDashboard, [System.Text.Encoding]::UTF8)
+
     if ($raw -match "<!-- AUTO:contribution-dashboard:START -->") {
-        $escaped = [regex]::Escape("<!-- AUTO:contribution-dashboard:START -->")
-        $raw = $raw -replace "(?s)<!-- AUTO:contribution-dashboard:START -->.*?<!-- AUTO:contribution-dashboard:END -->", $miniBlock
-        [System.IO.File]::WriteAllText($MainDashboard, $raw, [System.Text.Encoding]::UTF8)
-        Write-Host "Main Dashboard synced: $MainDashboard"
+        # 기존 AUTO 블록 + 전후 빈줄/구분선 제거
+        $raw = $raw -replace "(?s)\r?\n*---\r?\n+<!-- AUTO:contribution-dashboard:START -->.*?<!-- AUTO:contribution-dashboard:END -->\r?\n*", ""
+        $raw = $raw -replace "(?s)<!-- AUTO:contribution-dashboard:START -->.*?<!-- AUTO:contribution-dashboard:END -->\r?\n*", ""
     }
+
+    # frontmatter 닫는 ---\n--- 바로 뒤에 AUTO 블록 삽입 (맨 위)
+    $raw = $raw -replace "(---\r?\n---\r?\n)", "`$1`n$miniBlock`n`n---`n`n"
+
+    [System.IO.File]::WriteAllText($MainDashboard, $raw, [System.Text.Encoding]::UTF8)
+    Write-Host "Main Dashboard synced: $MainDashboard"
 }
