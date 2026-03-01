@@ -40,6 +40,7 @@ describe("createAcpReplyProjector", () => {
             deliveryMode: "final_only",
             tagVisibility: {
               available_commands_update: true,
+              tool_call: true,
             },
           },
         },
@@ -99,6 +100,7 @@ describe("createAcpReplyProjector", () => {
             deliveryMode: "final_only",
             tagVisibility: {
               available_commands_update: true,
+              tool_call: true,
             },
           },
         },
@@ -231,6 +233,10 @@ describe("createAcpReplyProjector", () => {
           enabled: true,
           stream: {
             deliveryMode: "live",
+            tagVisibility: {
+              tool_call: true,
+              tool_call_update: true,
+            },
           },
         },
       }),
@@ -289,6 +295,10 @@ describe("createAcpReplyProjector", () => {
           enabled: true,
           stream: {
             deliveryMode: "live",
+            tagVisibility: {
+              tool_call: true,
+              tool_call_update: true,
+            },
           },
         },
       }),
@@ -324,6 +334,8 @@ describe("createAcpReplyProjector", () => {
             repeatSuppression: false,
             tagVisibility: {
               available_commands_update: true,
+              tool_call: true,
+              tool_call_update: true,
             },
           },
         },
@@ -528,6 +540,7 @@ describe("createAcpReplyProjector", () => {
             maxChunkChars: 256,
             deliveryMode: "live",
             tagVisibility: {
+              tool_call: true,
               tool_call_update: false,
             },
           },

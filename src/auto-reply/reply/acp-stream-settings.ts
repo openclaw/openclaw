@@ -13,8 +13,8 @@ const DEFAULT_ACP_MAX_META_EVENTS_PER_TURN = 64;
 
 export const ACP_TAG_VISIBILITY_DEFAULTS: Record<AcpSessionUpdateTag, boolean> = {
   agent_message_chunk: true,
-  tool_call: true,
-  tool_call_update: true,
+  tool_call: false,
+  tool_call_update: false,
   usage_update: false,
   available_commands_update: false,
   current_mode_update: false,
