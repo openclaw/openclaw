@@ -1,8 +1,11 @@
 import { randomUUID } from "node:crypto";
 import type { CliDeps } from "../../cli/deps.js";
 import { loadConfig } from "../../config/config.js";
-import { resolveMainSessionKeyFromConfig } from "../../config/sessions.js";
+import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { resolveMainSessionKeyFromConfig, resolveStorePath } from "../../config/sessions.js";
 import { runCronIsolatedAgentTurn } from "../../cron/isolated-agent.js";
+import { sweepCronRunSessions } from "../../cron/session-reaper.js";
+import type { Logger as ReaperLogger } from "../../cron/service/state.js";
 import type { CronJob } from "../../cron/types.js";
 import { requestHeartbeatNow } from "../../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
@@ -15,6 +18,21 @@ import {
 import { createHooksRequestHandler } from "../server-http.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
+
+function createReaperLogger(logHooks: SubsystemLogger): ReaperLogger {
+  const normalizeMeta = (obj: unknown): Record<string, unknown> | undefined => {
+    if (!obj || typeof obj !== "object") {
+      return undefined;
+    }
+    return obj as Record<string, unknown>;
+  };
+  return {
+    debug: (obj, msg) => logHooks.debug(msg ?? "hook session reaper", normalizeMeta(obj)),
+    info: (obj, msg) => logHooks.info(msg ?? "hook session reaper", normalizeMeta(obj)),
+    warn: (obj, msg) => logHooks.warn(msg ?? "hook session reaper", normalizeMeta(obj)),
+    error: (obj, msg) => logHooks.error(msg ?? "hook session reaper", normalizeMeta(obj)),
+  };
+}
 
 export function createGatewayHooksRequestHandler(params: {
   deps: CliDeps;
@@ -95,6 +113,23 @@ export function createGatewayHooksRequestHandler(params: {
         });
         if (value.wakeMode === "now") {
           requestHeartbeatNow({ reason: `hook:${jobId}:error` });
+        }
+      } finally {
+        try {
+          const cfg = loadConfig();
+          const resolvedAgentId = value.agentId ?? resolveDefaultAgentId(cfg);
+          const sessionStorePath = resolveStorePath(cfg.session?.store, {
+            agentId: resolvedAgentId,
+          });
+          await sweepCronRunSessions({
+            cronConfig: cfg.cron,
+            hooksConfig: cfg.hooks,
+            sessionStorePath,
+            nowMs: Date.now(),
+            log: createReaperLogger(logHooks),
+          });
+        } catch (err) {
+          logHooks.warn(`hook session reaper sweep failed: ${String(err)}`);
         }
       }
     })();
