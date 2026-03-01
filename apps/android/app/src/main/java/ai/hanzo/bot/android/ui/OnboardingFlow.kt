@@ -79,16 +79,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
-<<<<<<< HEAD:apps/android/app/src/main/java/ai/hanzo/bot/android/ui/OnboardingFlow.kt
 import ai.hanzo.bot.android.LocationMode
 import ai.hanzo.bot.android.MainViewModel
 import ai.hanzo.bot.android.R
-=======
-import ai.openclaw.android.LocationMode
-import ai.openclaw.android.MainViewModel
-import ai.openclaw.android.R
-import ai.openclaw.android.node.DeviceNotificationListenerService
->>>>>>> cd61edb0f (fix(android): add missing capability setup surfaces):apps/android/app/src/main/java/ai/openclaw/android/ui/OnboardingFlow.kt
+import ai.hanzo.bot.android.node.DeviceNotificationListenerService
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
 
@@ -325,14 +319,18 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
       if (enabled.isEmpty()) "None selected" else enabled.joinToString(", ")
     }
 
-  val proceedFromPermissions: () -> Unit = {
-    when {
-      enableNotificationListener && !isNotificationListenerEnabled(context) -> {
-        openNotificationListenerSettings(context)
-      }
-      enableAppUpdates && !canInstallUnknownApps(context) -> {
-        openUnknownAppSourcesSettings(context)
-      }
+  val proceedFromPermissions: () -> Unit = proceed@{
+    var openedSpecialSetup = false
+    if (enableNotificationListener && !isNotificationListenerEnabled(context)) {
+      openNotificationListenerSettings(context)
+      openedSpecialSetup = true
+    }
+    if (enableAppUpdates && !canInstallUnknownApps(context)) {
+      openUnknownAppSourcesSettings(context)
+      openedSpecialSetup = true
+    }
+    if (openedSpecialSetup) {
+      return@proceed
     }
     step = OnboardingStep.FinalCheck
   }

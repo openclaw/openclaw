@@ -58,18 +58,12 @@ data class InvokeCommandSpec(
 object InvokeCommandRegistry {
   val capabilityManifest: List<NodeCapabilitySpec> =
     listOf(
-<<<<<<< HEAD:apps/android/app/src/main/java/ai/hanzo/bot/android/node/InvokeCommandRegistry.kt
       NodeCapabilitySpec(name = HanzoBotCapability.Canvas.rawValue),
       NodeCapabilitySpec(name = HanzoBotCapability.Screen.rawValue),
       NodeCapabilitySpec(name = HanzoBotCapability.Device.rawValue),
-=======
-      NodeCapabilitySpec(name = OpenClawCapability.Canvas.rawValue),
-      NodeCapabilitySpec(name = OpenClawCapability.Screen.rawValue),
-      NodeCapabilitySpec(name = OpenClawCapability.Device.rawValue),
-      NodeCapabilitySpec(name = OpenClawCapability.Notifications.rawValue),
-      NodeCapabilitySpec(name = OpenClawCapability.System.rawValue),
-      NodeCapabilitySpec(name = OpenClawCapability.AppUpdate.rawValue),
->>>>>>> cd61edb0f (fix(android): add missing capability setup surfaces):apps/android/app/src/main/java/ai/openclaw/android/node/InvokeCommandRegistry.kt
+      NodeCapabilitySpec(name = HanzoBotCapability.Notifications.rawValue),
+      NodeCapabilitySpec(name = HanzoBotCapability.System.rawValue),
+      NodeCapabilitySpec(name = HanzoBotCapability.AppUpdate.rawValue),
       NodeCapabilitySpec(
         name = HanzoBotCapability.Camera.rawValue,
         availability = NodeCapabilityAvailability.CameraEnabled,
