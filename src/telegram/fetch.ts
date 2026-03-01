@@ -1,6 +1,6 @@
 import * as dns from "node:dns";
 import * as net from "node:net";
-import { Agent, setGlobalDispatcher } from "undici";
+import { Agent, ProxyAgent, setGlobalDispatcher } from "undici";
 import type { TelegramNetworkConfig } from "../config/types.telegram.js";
 import { resolveFetch } from "../infra/fetch.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -45,16 +45,34 @@ function applyTelegramNetworkWorkarounds(network?: TelegramNetworkConfig): void 
     autoSelectDecision.value !== appliedGlobalDispatcherAutoSelectFamily
   ) {
     try {
-      setGlobalDispatcher(
-        new Agent({
-          connect: {
-            autoSelectFamily: autoSelectDecision.value,
-            autoSelectFamilyAttemptTimeout: 300,
-          },
-        }),
-      );
+      // Preserve proxy settings when setting up the global dispatcher
+      // See: https://github.com/openclaw/openclaw/issues/30338
+      const proxyUrl =
+        process.env.HTTPS_PROXY ||
+        process.env.https_proxy ||
+        process.env.HTTP_PROXY ||
+        process.env.http_proxy;
+
+      const dispatcher = proxyUrl
+        ? new ProxyAgent({
+            uri: proxyUrl,
+            connect: {
+              autoSelectFamily: autoSelectDecision.value,
+              autoSelectFamilyAttemptTimeout: 300,
+            },
+          })
+        : new Agent({
+            connect: {
+              autoSelectFamily: autoSelectDecision.value,
+              autoSelectFamilyAttemptTimeout: 300,
+            },
+          });
+
+      setGlobalDispatcher(dispatcher);
       appliedGlobalDispatcherAutoSelectFamily = autoSelectDecision.value;
-      log.info(`global undici dispatcher autoSelectFamily=${autoSelectDecision.value}`);
+      log.info(
+        `global undici dispatcher autoSelectFamily=${autoSelectDecision.value}${proxyUrl ? " (with proxy)" : ""}`,
+      );
     } catch {
       // ignore if setGlobalDispatcher is unavailable
     }
