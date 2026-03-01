@@ -61,7 +61,7 @@ private class AndroidSystemNotificationPoster(
       ContextCompat.checkSelfPermission(appContext, Manifest.permission.POST_NOTIFICATIONS) !=
       PackageManager.PERMISSION_GRANTED
     ) {
-      return
+      throw SecurityException("notifications permission missing")
     }
     NotificationManagerCompat.from(appContext).notify((System.currentTimeMillis() and 0x7FFFFFFF).toInt(), notification)
   }
@@ -127,6 +127,11 @@ class SystemHandler private constructor(
     return try {
       poster.post(params)
       GatewaySession.InvokeResult.ok(null)
+    } catch (_: SecurityException) {
+      GatewaySession.InvokeResult.error(
+        code = "NOT_AUTHORIZED",
+        message = "NOT_AUTHORIZED: notifications",
+      )
     } catch (err: Throwable) {
       GatewaySession.InvokeResult.error(
         code = "UNAVAILABLE",
