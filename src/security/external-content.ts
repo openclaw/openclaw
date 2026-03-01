@@ -27,6 +27,12 @@ const SUSPICIOUS_PATTERNS = [
   /delete\s+all\s+(emails?|files?|data)/i,
   /<\/?system>/i,
   /\]\s*\n\s*\[?(system|assistant|user)\]?:/i,
+  // Credential exfiltration patterns
+  /(?:send|show|tell|give|output|print|display|paste|reveal)\s+(?:me\s+)?(?:the\s+)?(?:your\s+)?(?:api[_\s-]?key|password|secret|token|credentials?)/i,
+  /(?:what\s+is|what's)\s+(?:the\s+)?(?:your\s+)?(?:api[_\s-]?key|password|secret|token)/i,
+  /(?:read|cat|open|access)\s+.*(?:auth-profiles|credentials|openclaw\.json|\.env\b|secrets?\.(json|yaml|yml|age))/i,
+  /(?:navigate|go)\s+to\s+.*(?:evil|attacker|malicious|pastebin|requestbin|webhook\.site)/i,
+  /(?:copy|paste|type|fill|submit)\s+.*(?:api[_\s-]?key|password|secret|token)\s+.*(?:into|to|at)\s+/i,
 ];
 
 /**
