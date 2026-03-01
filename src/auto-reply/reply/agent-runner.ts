@@ -605,7 +605,7 @@ export async function runReplyAgent(params: {
         costConfig,
       });
       if (formatted && responseUsageMode === "full" && sessionKey) {
-        formatted = `${formatted} · session ${sessionKey}`;
+        formatted = `${formatted} · session \`${sessionKey}\``;
       }
       if (formatted) {
         responseUsageLine = formatted;
