@@ -195,7 +195,6 @@ export function createAcpReplyProjector(params: {
   const liveIdleFlushMs = Math.max(streaming.coalescing.idleMs, ACP_LIVE_IDLE_FLUSH_FLOOR_MS);
 
   let emittedTurnChars = 0;
-  let emittedMetaEvents = 0;
   let truncationNoticeEmitted = false;
   let lastStatusHash: string | undefined;
   let lastToolHash: string | undefined;
@@ -264,7 +263,6 @@ export function createAcpReplyProjector(params: {
     blockReplyPipeline.stop();
     blockReplyPipeline = createTurnBlockReplyPipeline();
     emittedTurnChars = 0;
-    emittedMetaEvents = 0;
     truncationNoticeEmitted = false;
     lastStatusHash = undefined;
     lastToolHash = undefined;
@@ -295,21 +293,10 @@ export function createAcpReplyProjector(params: {
     await blockReplyPipeline.flush({ force });
   };
 
-  const consumeMetaQuota = (force: boolean): boolean => {
-    if (force) {
-      return true;
-    }
-    if (emittedMetaEvents >= settings.maxMetaEventsPerTurn) {
-      return false;
-    }
-    emittedMetaEvents += 1;
-    return true;
-  };
-
   const emitSystemStatus = async (
     text: string,
     meta?: AcpProjectedDeliveryMeta,
-    opts?: { force?: boolean; dedupe?: boolean },
+    opts?: { dedupe?: boolean },
   ) => {
     if (!params.shouldSendToolSummaries) {
       return;
@@ -324,9 +311,6 @@ export function createAcpReplyProjector(params: {
     if (shouldDedupe && lastStatusHash === hash) {
       return;
     }
-    if (!consumeMetaQuota(opts?.force === true)) {
-      return;
-    }
     if (settings.deliveryMode === "final_only") {
       pendingToolDeliveries.push({
         payload: { text: formatted },
@@ -339,10 +323,7 @@ export function createAcpReplyProjector(params: {
     lastStatusHash = hash;
   };
 
-  const emitToolSummary = async (
-    event: Extract<AcpRuntimeEvent, { type: "tool_call" }>,
-    opts?: { force?: boolean },
-  ) => {
+  const emitToolSummary = async (event: Extract<AcpRuntimeEvent, { type: "tool_call" }>) => {
     if (!params.shouldSendToolSummaries) {
       return;
     }
@@ -386,9 +367,6 @@ export function createAcpReplyProjector(params: {
       }
     }
 
-    if (!consumeMetaQuota(opts?.force === true)) {
-      return;
-    }
     const deliveryMeta: AcpProjectedDeliveryMeta = {
       ...(event.tag ? { tag: event.tag } : {}),
       ...(toolCallId ? { toolCallId } : {}),
@@ -418,7 +396,6 @@ export function createAcpReplyProjector(params: {
         tag: "session_info_update",
       },
       {
-        force: true,
         dedupe: false,
       },
     );

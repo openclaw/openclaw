@@ -375,7 +375,6 @@ export const FIELD_LABELS: Record<string, string> = {
   "acp.stream.maxTurnChars": "ACP Stream Max Turn Chars",
   "acp.stream.maxToolSummaryChars": "ACP Stream Max Tool Summary Chars",
   "acp.stream.maxStatusChars": "ACP Stream Max Status Chars",
-  "acp.stream.maxMetaEventsPerTurn": "ACP Stream Max Meta Events Per Turn",
   "acp.stream.tagVisibility": "ACP Stream Tag Visibility",
   "acp.runtime.ttlMinutes": "ACP Runtime TTL (minutes)",
   "acp.runtime.installCommand": "ACP Runtime Install Command",
