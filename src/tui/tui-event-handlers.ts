@@ -146,6 +146,20 @@ export function createEventHandlers(context: EventHandlerContext) {
     void loadHistory?.();
   };
 
+  const shouldReloadHistoryForFinalEvent = (message: unknown): boolean => {
+    if (!message || typeof message !== "object") {
+      return true;
+    }
+    const role =
+      typeof (message as Record<string, unknown>).role === "string"
+        ? ((message as Record<string, unknown>).role as string).toLowerCase()
+        : "";
+    if (role && role !== "assistant") {
+      return true;
+    }
+    return false;
+  };
+
   const handleChatEvent = (payload: unknown) => {
     if (!payload || typeof payload !== "object") {
       return;
@@ -160,6 +174,10 @@ export function createEventHandlers(context: EventHandlerContext) {
         return;
       }
       if (evt.state === "final") {
+        if (shouldReloadHistoryForFinalEvent(evt.message)) {
+          maybeRefreshHistoryForRun(evt.runId);
+          tui.requestRender();
+        }
         return;
       }
     }

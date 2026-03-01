@@ -338,6 +338,51 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(loadHistory).toHaveBeenCalledTimes(1);
   });
 
+  it("reloads history when a finalized run receives another final with no payload", () => {
+    const { state, loadHistory, handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: null },
+    });
+
+    handleChatEvent({
+      runId: "run-reused",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: { role: "assistant", content: [{ type: "text", text: "first pass" }] },
+    });
+    loadHistory.mockClear();
+
+    handleChatEvent({
+      runId: "run-reused",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+    });
+
+    expect(loadHistory).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps suppressing duplicate assistant final payloads for finalized runs", () => {
+    const { state, loadHistory, handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: null },
+    });
+
+    handleChatEvent({
+      runId: "run-dup",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: { role: "assistant", content: [{ type: "text", text: "done" }] },
+    });
+    loadHistory.mockClear();
+
+    handleChatEvent({
+      runId: "run-dup",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: { role: "assistant", content: [{ type: "text", text: "duplicate" }] },
+    });
+
+    expect(loadHistory).not.toHaveBeenCalled();
+  });
+
   function createConcurrentRunHarness(localContent = "partial") {
     const { state, chatLog, setActivityStatus, loadHistory, handleChatEvent } =
       createHandlersHarness({
