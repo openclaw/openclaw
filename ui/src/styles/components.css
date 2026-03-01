@@ -2414,6 +2414,11 @@
   border-radius: var(--radius-lg);
   padding: 16px;
   background: var(--card);
+  overflow: auto;
+}
+
+.agent-files-editor .field textarea {
+  min-height: 400px;
 }
 
 .agent-file-header {
