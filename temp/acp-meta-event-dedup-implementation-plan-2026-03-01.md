@@ -25,7 +25,6 @@ Use only these ACP stream controls for this behavior:
   - `maxTurnChars`
   - `maxToolSummaryChars`
   - `maxStatusChars`
-  - `maxMetaEventsPerTurn`
 
 Removed from plan/config:
 

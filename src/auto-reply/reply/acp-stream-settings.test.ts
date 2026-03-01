@@ -13,7 +13,6 @@ describe("acp stream settings", () => {
     expect(settings.hiddenBoundarySeparator).toBe("paragraph");
     expect(settings.repeatSuppression).toBe(true);
     expect(settings.maxTurnChars).toBe(24_000);
-    expect(settings.maxMetaEventsPerTurn).toBe(64);
   });
 
   it("applies explicit stream overrides", () => {
@@ -26,7 +25,6 @@ describe("acp stream settings", () => {
             hiddenBoundarySeparator: "space",
             repeatSuppression: false,
             maxTurnChars: 500,
-            maxMetaEventsPerTurn: 7,
             tagVisibility: {
               usage_update: true,
             },
@@ -38,7 +36,6 @@ describe("acp stream settings", () => {
     expect(settings.hiddenBoundarySeparator).toBe("space");
     expect(settings.repeatSuppression).toBe(false);
     expect(settings.maxTurnChars).toBe(500);
-    expect(settings.maxMetaEventsPerTurn).toBe(7);
     expect(settings.tagVisibility.usage_update).toBe(true);
   });
 

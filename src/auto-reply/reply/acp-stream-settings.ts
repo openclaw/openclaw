@@ -11,7 +11,6 @@ const DEFAULT_ACP_HIDDEN_BOUNDARY_SEPARATOR_LIVE = "space";
 const DEFAULT_ACP_MAX_TURN_CHARS = 24_000;
 const DEFAULT_ACP_MAX_TOOL_SUMMARY_CHARS = 320;
 const DEFAULT_ACP_MAX_STATUS_CHARS = 320;
-const DEFAULT_ACP_MAX_META_EVENTS_PER_TURN = 64;
 
 export const ACP_TAG_VISIBILITY_DEFAULTS: Record<AcpSessionUpdateTag, boolean> = {
   agent_message_chunk: true,
@@ -36,7 +35,6 @@ export type AcpProjectionSettings = {
   maxTurnChars: number;
   maxToolSummaryChars: number;
   maxStatusChars: number;
-  maxMetaEventsPerTurn: number;
   tagVisibility: Partial<Record<AcpSessionUpdateTag, boolean>>;
 };
 
@@ -127,14 +125,6 @@ export function resolveAcpProjectionSettings(cfg: OpenClawConfig): AcpProjection
       min: 64,
       max: 8_000,
     }),
-    maxMetaEventsPerTurn: clampPositiveInteger(
-      stream?.maxMetaEventsPerTurn,
-      DEFAULT_ACP_MAX_META_EVENTS_PER_TURN,
-      {
-        min: 1,
-        max: 2_000,
-      },
-    ),
     tagVisibility: stream?.tagVisibility ?? {},
   };
 }

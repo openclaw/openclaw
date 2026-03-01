@@ -680,57 +680,6 @@ describe("createAcpReplyProjector", () => {
     });
   });
 
-  it("enforces maxMetaEventsPerTurn without suppressing assistant text", async () => {
-    const deliveries: Array<{ kind: string; text?: string }> = [];
-    const projector = createAcpReplyProjector({
-      cfg: createCfg({
-        acp: {
-          enabled: true,
-          stream: {
-            coalesceIdleMs: 0,
-            maxChunkChars: 256,
-            deliveryMode: "live",
-            maxMetaEventsPerTurn: 1,
-            tagVisibility: {
-              usage_update: true,
-            },
-          },
-        },
-      }),
-      shouldSendToolSummaries: true,
-      deliver: async (kind, payload) => {
-        deliveries.push({ kind, text: payload.text });
-        return true;
-      },
-    });
-
-    await projector.onEvent({
-      type: "status",
-      text: "usage updated: 10/100",
-      tag: "usage_update",
-      used: 10,
-      size: 100,
-    });
-    await projector.onEvent({
-      type: "status",
-      text: "usage updated: 11/100",
-      tag: "usage_update",
-      used: 11,
-      size: 100,
-    });
-    await projector.onEvent({
-      type: "text_delta",
-      text: "hello",
-      tag: "agent_message_chunk",
-    });
-    await projector.flush(true);
-
-    expect(deliveries).toEqual([
-      { kind: "tool", text: prefixSystemMessage("usage updated: 10/100") },
-      { kind: "block", text: "hello" },
-    ]);
-  });
-
   it("supports tagVisibility overrides for tool updates", async () => {
     const deliveries: Array<{ kind: string; text?: string }> = [];
     const projector = createAcpReplyProjector({

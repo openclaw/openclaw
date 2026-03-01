@@ -352,7 +352,6 @@ export const OpenClawSchema = z
             maxTurnChars: z.number().int().positive().optional(),
             maxToolSummaryChars: z.number().int().positive().optional(),
             maxStatusChars: z.number().int().positive().optional(),
-            maxMetaEventsPerTurn: z.number().int().positive().optional(),
             tagVisibility: z.record(z.string(), z.boolean()).optional(),
           })
           .strict()
