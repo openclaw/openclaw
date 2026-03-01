@@ -2,6 +2,7 @@ import type { ChannelType, Client, Message } from "@buape/carbon";
 import { StickerFormatType, type APIAttachment, type APIStickerItem } from "discord-api-types/v10";
 import { buildMediaPayload } from "../../channels/plugins/media-payload.js";
 import { logVerbose } from "../../globals.js";
+import { getLogger } from "../../logging/logger.js";
 import { fetchRemoteMedia, type FetchLike } from "../../media/fetch.js";
 import { saveMediaBuffer } from "../../media/store.js";
 
@@ -228,6 +229,7 @@ async function appendResolvedMediaFromAttachments(params: {
         filePathHint: attachment.filename ?? attachment.url,
         maxBytes: params.maxBytes,
         fetchImpl: params.fetchImpl,
+        timeoutMs: 60_000,
       });
       const saved = await saveMediaBuffer(
         fetched.buffer,
@@ -242,7 +244,7 @@ async function appendResolvedMediaFromAttachments(params: {
       });
     } catch (err) {
       const id = attachment.id ?? attachment.url;
-      logVerbose(`${params.errorPrefix} ${id}: ${String(err)}`);
+      getLogger().warn({ err, attachmentId: id }, `${params.errorPrefix} ${id}: ${String(err)}`);
     }
   }
 }
@@ -320,6 +322,7 @@ async function appendResolvedMediaFromStickers(params: {
           filePathHint: candidate.fileName,
           maxBytes: params.maxBytes,
           fetchImpl: params.fetchImpl,
+          timeoutMs: 60_000,
         });
         const saved = await saveMediaBuffer(
           fetched.buffer,
@@ -339,7 +342,10 @@ async function appendResolvedMediaFromStickers(params: {
       }
     }
     if (lastError) {
-      logVerbose(`${params.errorPrefix} ${sticker.id}: ${formatStickerError(lastError)}`);
+      getLogger().warn(
+        { err: lastError, stickerId: sticker.id },
+        `${params.errorPrefix} ${sticker.id}: ${formatStickerError(lastError)}`,
+      );
     }
   }
 }
