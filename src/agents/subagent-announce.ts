@@ -166,8 +166,9 @@ function sanitizeCompletionFindings(findings: string): string {
     if (summarized) {
       return summarized;
     }
-    return "";
+    // Fall through to return original message if JSON parsing failed
   }
+  return message;
   return message;
 }
 
