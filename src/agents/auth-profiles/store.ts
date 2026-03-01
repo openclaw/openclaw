@@ -456,7 +456,10 @@ export function loadAuthProfileStoreForRuntime(
 }
 
 export function loadAuthProfileStoreForSecretsRuntime(agentDir?: string): AuthProfileStore {
-  return loadAuthProfileStoreForRuntime(agentDir, { readOnly: true, allowKeychainPrompt: false });
+  // Secrets runtime snapshots should store the raw per-agent auth file content.
+  // Merging main+agent happens in resolveRuntimeAuthProfileStore(), and storing
+  // pre-merged snapshots can cause stale main data to override fresher updates.
+  return loadAuthProfileStoreForAgent(agentDir, { readOnly: true, allowKeychainPrompt: false });
 }
 
 export function ensureAuthProfileStore(
@@ -506,4 +509,11 @@ export function saveAuthProfileStore(store: AuthProfileStore, agentDir?: string)
     usageStats: store.usageStats ?? undefined,
   } satisfies AuthProfileStore;
   saveJsonFile(authPath, payload);
+
+  // Keep active runtime snapshots coherent with disk writes so subsequent
+  // ensureAuthProfileStore() calls do not rehydrate stale state that can
+  // clobber freshly-written fields (e.g. auth order overrides).
+  if (runtimeAuthStoreSnapshots.size > 0) {
+    runtimeAuthStoreSnapshots.set(resolveRuntimeStoreKey(agentDir), cloneAuthProfileStore(store));
+  }
 }
