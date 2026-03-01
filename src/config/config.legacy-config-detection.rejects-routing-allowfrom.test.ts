@@ -596,8 +596,13 @@ describe("legacy config detection", () => {
             },
           },
         },
+<<<<<<< HEAD
         assert: (config: NonNullable<BotConfig>) => {
           expect(config.channels?.slack?.streaming).toBe("partial");
+=======
+        assert: (config: NonNullable<OpenClawConfig>) => {
+          expect(config.channels?.slack?.streaming).toBe("off");
+>>>>>>> dfbdab5a2 (fix(slack): map legacy streaming=false to off (openclaw#26020) thanks @chilu18)
           expect(config.channels?.slack?.nativeStreaming).toBe(false);
         },
       },
