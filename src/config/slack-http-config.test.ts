@@ -2,6 +2,19 @@ import { describe, expect, it } from "vitest";
 import { validateConfigObject } from "./config.js";
 
 describe("Slack HTTP mode config", () => {
+  it("accepts modal action gating config", () => {
+    const res = validateConfigObject({
+      channels: {
+        slack: {
+          actions: {
+            modals: true,
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(true);
+  });
+
   it("accepts HTTP mode when signing secret is configured", () => {
     const res = validateConfigObject({
       channels: {
