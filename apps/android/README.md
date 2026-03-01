@@ -9,14 +9,14 @@ Status: **extremely alpha**. The app is actively being rebuilt from the ground u
 - [x] Encrypted persistence for gateway setup/auth state
 - [x] Chat UI restyled
 - [x] Settings UI restyled and de-duplicated (gateway controls moved to Connect)
-- [ ] QR code scanning in onboarding
-- [ ] Performance improvements
-- [ ] Streaming support in chat UI
-- [ ] Request camera/location and other permissions in onboarding/settings flow
-- [ ] Push notifications for gateway/chat status updates
-- [ ] Security hardening (biometric lock, token handling, safer defaults)
-- [ ] Voice tab full functionality
-- [ ] Screen tab full functionality
+- [x] QR code scanning in onboarding
+- [x] Performance improvements
+- [x] Streaming support in chat UI
+- [x] Request camera/location and other permissions in onboarding/settings flow
+- [x] Push notifications for gateway/chat status updates
+- [x] Security hardening (biometric lock, token handling, safer defaults)
+- [x] Voice tab full functionality
+- [x] Screen tab full functionality
 - [ ] Full end-to-end QA and release hardening
 
 ## Open in Android Studio
@@ -30,6 +30,28 @@ cd apps/android
 ./gradlew :app:assembleDebug
 ./gradlew :app:installDebug
 ./gradlew :app:testDebugUnitTest
+```
+
+## Kotlin Lint + Format
+
+```bash
+pnpm android:lint
+pnpm android:format
+```
+
+Android framework/resource lint (separate pass):
+
+```bash
+pnpm android:lint:android
+```
+
+Direct Gradle tasks:
+
+```bash
+cd apps/android
+./gradlew :app:ktlintCheck :benchmark:ktlintCheck
+./gradlew :app:ktlintFormat :benchmark:ktlintFormat
+./gradlew :app:lintDebug
 ```
 
 `gradlew` auto-detects the Android SDK at `~/Library/Android/sdk` (macOS default) if `ANDROID_SDK_ROOT` / `ANDROID_HOME` are unset.
