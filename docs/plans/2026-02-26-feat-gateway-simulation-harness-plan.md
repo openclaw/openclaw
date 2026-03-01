@@ -97,13 +97,17 @@ Production issues like reply explosions and lag drift are difficult to reproduce
 **Architecture Strategist — Critical Injection Points:**
 
 - The `streamFnOverride` parameter is the lynchpin. Without it, the fake provider cannot be injected without Vitest module-level mocking. Add to `RunEmbeddedPiAgentParams`:
+
   ```typescript
   streamFnOverride?: StreamFn;
   ```
+
   And in `src/agents/pi-embedded-runner/run/attempt.ts:871`:
+
   ```typescript
   activeSession.agent.streamFn = params.streamFnOverride ?? streamSimple;
   ```
+
 - The existing `enqueue` param override in `RunEmbeddedPiAgentParams` provides the queue injection point — no additional changes needed there.
 - Auth profiles can be faked via config injection: provide a mock agent config with `providers.fake.auth: [{ type: "key", key: "sim-key" }]`. The auth profile selector will use it without additional mocking.
 
@@ -218,6 +222,7 @@ assertions:
 **Best Practices Researcher:**
 
 - Use a **seeded PRNG** for reproducibility. Add `seed?: number` to scenario config. When set, all random decisions (error injection, random traffic patterns, sender selection) use a deterministic generator. Example: mulberry32 (fast, 32-bit, seedable).
+
   ```typescript
   function mulberry32(seed: number) {
     return function () {
@@ -229,6 +234,7 @@ assertions:
     };
   }
   ```
+
 - Add `seed` to scenario YAML (`seed: 42`). Report output includes the seed used so any run can be reproduced.
 
 **Security Sentinel:**
@@ -507,13 +513,17 @@ export function createFakeStreamFn(params: {
 
 - This is the **critical missing piece** in the original plan. `src/agents/pi-embedded-runner/run/attempt.ts:871` hardcodes `streamSimple`. Without Vitest module mocking, the fake provider has no way in.
 - **Required change** to `RunEmbeddedPiAgentParams`:
+
   ```typescript
   streamFnOverride?: StreamFn;
   ```
+
 - **Required change** to `attempt.ts:871`:
+
   ```typescript
   activeSession.agent.streamFn = params.streamFnOverride ?? streamSimple;
   ```
+
 - This is independently useful for any future testing or simulation work.
 
 **Race Condition Reviewer — Ghost Replies After SIGINT:**
@@ -622,6 +632,7 @@ export function getAllLaneInfo(): LaneInfo[] {
 **Performance Oracle:**
 
 - `getAllLaneInfo()` should optionally accept a prefix filter to avoid copying the entire lane map when the simulation only cares about `sim:*` lanes:
+
   ```typescript
   export function getAllLaneInfo(prefix?: string): LaneInfo[] {
     const result: LaneInfo[] = [];
@@ -632,6 +643,7 @@ export function getAllLaneInfo(): LaneInfo[] {
     return result;
   }
   ```
+
 - For high-frequency sampling (every 100ms with many lanes), the snapshot array can grow large. Consider a bounded ring buffer or periodic flush to disk for long-running simulations.
 
 **Diagnostic Event Explorer — Existing Events:**
@@ -742,6 +754,7 @@ export function detectSymptoms(params: {
 **Best Practices Researcher — EWMA for Lag Drift:**
 
 - Instead of O(n) linear regression, use Exponentially Weighted Moving Average for streaming detection:
+
   ```typescript
   class EWMADetector {
     private ewma = 0;
@@ -755,6 +768,7 @@ export function detectSymptoms(params: {
     }
   }
   ```
+
 - Detect drift when EWMA crosses a configurable threshold. This is O(1) per message and avoids storing a sliding window of raw values.
 
 **Performance Oracle — Incremental Detection:**
@@ -808,6 +822,7 @@ Generates a machine-readable JSON report:
 **Agent-Native Architecture:**
 
 - The report should be a typed `SimReport` interface, not an untyped JSON blob:
+
   ```typescript
   export interface SimReport {
     scenario: string;
@@ -821,6 +836,7 @@ Generates a machine-readable JSON report:
     assertions: SimAssertionResult[];
   }
   ```
+
 - `runSimulation()` returns `Promise<SimReport>` — the CLI serializes it to JSON/file, but programmatic callers get a typed object.
 
 ### Phase 1: CLI (`src/commands/sim.ts`)
@@ -852,11 +868,13 @@ openclaw sim validate <scenario.yaml> Validate scenario without running
 **Agent-Native Architecture:**
 
 - The CLI should be a thin wrapper around `runSimulation()`:
+
   ```typescript
   // src/commands/sim.ts
   const report = await runSimulation(scenario, { signal: controller.signal, verbose });
   if (outPath) writeFileSync(join(outPath, "sim-report.json"), JSON.stringify(report, null, 2));
   ```
+
 - This ensures agents can call `runSimulation()` directly without going through the CLI.
 
 #### Live Terminal Dashboard
@@ -1007,6 +1025,7 @@ export function resetLanesByPrefix(prefix: string): void {
 **Architecture Strategist — Auth Faking:**
 
 - Mock auth profiles don't need a separate mock layer. Provide a config object with a fake provider entry:
+
   ```typescript
   const simConfig = {
     providers: {
@@ -1021,6 +1040,7 @@ export function resetLanesByPrefix(prefix: string): void {
     },
   };
   ```
+
 - The auth profile selector will use this config without any additional mocking.
 
 ## Technical Approach
@@ -1101,7 +1121,7 @@ scenarios/
 - [ ] Example scenario YAML files
 - [ ] Integration test: run a scenario end-to-end, verify report output
 
-#### Phase 2: Web Dashboard
+#### Phase 2: Web Dashboard (Implementation Checklist)
 
 - [ ] Standalone HTTP server (NOT gateway — it may not be running)
 - [ ] WebSocket bridge with per-session auth token, bound to `127.0.0.1`
