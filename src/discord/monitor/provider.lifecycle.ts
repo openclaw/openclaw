@@ -51,24 +51,95 @@ export async function runDiscordGatewayLifecycle(params: {
   }
 
   const HELLO_TIMEOUT_MS = 30000;
+  const HELLO_CONNECTED_POLL_MS = 250;
+  const MAX_CONSECUTIVE_HELLO_STALLS = 3;
   let helloTimeoutId: ReturnType<typeof setTimeout> | undefined;
+  let helloConnectedPollId: ReturnType<typeof setInterval> | undefined;
+  let consecutiveHelloStalls = 0;
+  const clearHelloWatch = () => {
+    if (helloTimeoutId) {
+      clearTimeout(helloTimeoutId);
+      helloTimeoutId = undefined;
+    }
+    if (helloConnectedPollId) {
+      clearInterval(helloConnectedPollId);
+      helloConnectedPollId = undefined;
+    }
+  };
+  const resetHelloStallCounter = () => {
+    consecutiveHelloStalls = 0;
+  };
+  const clearResumeState = () => {
+    const mutableGateway = gateway as
+      | (GatewayPlugin & {
+          state?: {
+            sessionId?: string | null;
+            resumeGatewayUrl?: string | null;
+            sequence?: number | null;
+          };
+          sequence?: number | null;
+        })
+      | undefined;
+    if (!mutableGateway?.state) {
+      return;
+    }
+    mutableGateway.state.sessionId = null;
+    mutableGateway.state.resumeGatewayUrl = null;
+    mutableGateway.state.sequence = null;
+    mutableGateway.sequence = null;
+  };
   const onGatewayDebug = (msg: unknown) => {
     const message = String(msg);
+    if (message.includes("WebSocket connection closed")) {
+      // Carbon marks `isConnected` true only after READY/RESUMED and flips it
+      // false during reconnect handling after this debug line is emitted.
+      if (gateway?.isConnected) {
+        resetHelloStallCounter();
+      }
+      clearHelloWatch();
+      return;
+    }
     if (!message.includes("WebSocket connection opened")) {
       return;
     }
-    if (helloTimeoutId) {
-      clearTimeout(helloTimeoutId);
-    }
-    helloTimeoutId = setTimeout(() => {
+    clearHelloWatch();
+
+    let sawConnected = gateway?.isConnected === true;
+    helloConnectedPollId = setInterval(() => {
       if (!gateway?.isConnected) {
+        return;
+      }
+      sawConnected = true;
+      resetHelloStallCounter();
+      if (helloConnectedPollId) {
+        clearInterval(helloConnectedPollId);
+        helloConnectedPollId = undefined;
+      }
+    }, HELLO_CONNECTED_POLL_MS);
+
+    helloTimeoutId = setTimeout(() => {
+      if (helloConnectedPollId) {
+        clearInterval(helloConnectedPollId);
+        helloConnectedPollId = undefined;
+      }
+      if (sawConnected || gateway?.isConnected) {
+        resetHelloStallCounter();
+      } else {
+        consecutiveHelloStalls += 1;
+        const forceFreshIdentify = consecutiveHelloStalls >= MAX_CONSECUTIVE_HELLO_STALLS;
         params.runtime.log?.(
           danger(
-            `connection stalled: no HELLO received within ${HELLO_TIMEOUT_MS}ms, forcing reconnect`,
+            forceFreshIdentify
+              ? `connection stalled: no HELLO within ${HELLO_TIMEOUT_MS}ms (${consecutiveHelloStalls}/${MAX_CONSECUTIVE_HELLO_STALLS}); forcing fresh identify`
+              : `connection stalled: no HELLO within ${HELLO_TIMEOUT_MS}ms (${consecutiveHelloStalls}/${MAX_CONSECUTIVE_HELLO_STALLS}); retrying resume`,
           ),
         );
+        if (forceFreshIdentify) {
+          clearResumeState();
+          resetHelloStallCounter();
+        }
         gateway?.disconnect();
-        gateway?.connect(false);
+        gateway?.connect(!forceFreshIdentify);
       }
       helloTimeoutId = undefined;
     }, HELLO_TIMEOUT_MS);
@@ -137,9 +208,7 @@ export async function runDiscordGatewayLifecycle(params: {
     params.releaseEarlyGatewayErrorGuard?.();
     unregisterGateway(params.accountId);
     stopGatewayLogging();
-    if (helloTimeoutId) {
-      clearTimeout(helloTimeoutId);
-    }
+    clearHelloWatch();
     gatewayEmitter?.removeListener("debug", onGatewayDebug);
     params.abortSignal?.removeEventListener("abort", onAbort);
     if (params.voiceManager) {
