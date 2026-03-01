@@ -12,6 +12,7 @@ import {
   HumanDelaySchema,
   TypingModeSchema,
 } from "./zod-schema.core.js";
+import { ThinkingRouterSchema } from "./zod-schema.thinking-router.js";
 
 export const AgentDefaultsSchema = z
   .object({
@@ -118,6 +119,7 @@ export const AgentDefaultsSchema = z
         z.literal("xhigh"),
       ])
       .optional(),
+    thinkingRouter: ThinkingRouterSchema.optional(),
     verboseDefault: z.union([z.literal("off"), z.literal("on"), z.literal("full")]).optional(),
     elevatedDefault: z
       .union([z.literal("off"), z.literal("on"), z.literal("ask"), z.literal("full")])

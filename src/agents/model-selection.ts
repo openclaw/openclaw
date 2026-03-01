@@ -6,6 +6,7 @@ import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
 import type { ModelCatalogEntry } from "./model-catalog.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
 import { normalizeGoogleModelId } from "./models-config.providers.js";
+import { routeThinkingLevel, type ThinkingRouterContext } from "./thinking-router.js";
 
 const log = createSubsystemLogger("model-selection");
 
@@ -541,7 +542,21 @@ export function resolveThinkingDefault(params: {
   provider: string;
   model: string;
   catalog?: ModelCatalogEntry[];
+  /** User message for dynamic routing (optional). */
+  message?: string;
+  /** Session type for routing context (optional). */
+  sessionType?: ThinkingRouterContext["sessionType"];
 }): ThinkLevel {
+  // Check for dynamic thinking router configuration
+  const routerConfig = params.cfg.agents?.defaults?.thinkingRouter;
+  if (routerConfig?.enabled && params.message) {
+    return routeThinkingLevel(
+      { message: params.message, sessionType: params.sessionType },
+      routerConfig,
+    );
+  }
+
+  // Fall back to static thinkingDefault
   const configured = params.cfg.agents?.defaults?.thinkingDefault;
   if (configured) {
     return configured;

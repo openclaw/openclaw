@@ -387,6 +387,9 @@ export async function resolveReplyDirectives(params: {
     model,
     hasModelDirective: directives.hasModelDirective,
     hasResolvedHeartbeatModelOverride,
+    // Dynamic thinking routing
+    message: ctx.Body ?? ctx.CommandBody,
+    sessionType: ctx.ParentSessionKey ? "subagent" : "main",
   });
   provider = modelState.provider;
   model = modelState.model;
