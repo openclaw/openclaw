@@ -1,4 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ACPX_LOCAL_INSTALL_COMMAND,
   ACPX_PINNED_VERSION,
@@ -20,10 +23,35 @@ vi.mock("./runtime-internals/process.js", () => ({
 import { checkAcpxVersion, ensureAcpx } from "./ensure.js";
 
 describe("acpx ensure", () => {
+  const tempDirs: string[] = [];
+
   beforeEach(() => {
     resolveSpawnFailureMock.mockReset();
     resolveSpawnFailureMock.mockReturnValue(null);
     spawnAndCollectMock.mockReset();
+  });
+
+  function makeTempAcpxInstall(version: string): string {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "acpx-ensure-test-"));
+    tempDirs.push(root);
+    const packageRoot = path.join(root, "node_modules", "acpx");
+    fs.mkdirSync(path.join(packageRoot, "dist"), { recursive: true });
+    fs.mkdirSync(path.join(root, "node_modules", ".bin"), { recursive: true });
+    fs.writeFileSync(
+      path.join(packageRoot, "package.json"),
+      JSON.stringify({ name: "acpx", version }, null, 2),
+      "utf8",
+    );
+    fs.writeFileSync(path.join(packageRoot, "dist", "cli.js"), "#!/usr/bin/env node\n", "utf8");
+    const binPath = path.join(root, "node_modules", ".bin", "acpx");
+    fs.symlinkSync(path.join(packageRoot, "dist", "cli.js"), binPath);
+    return binPath;
+  }
+
+  afterEach(() => {
+    for (const dir of tempDirs.splice(0)) {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("accepts the pinned acpx version", async () => {
@@ -72,6 +100,28 @@ describe("acpx ensure", () => {
       expectedVersion: ACPX_PINNED_VERSION,
       installedVersion: "0.0.9",
       installCommand: ACPX_LOCAL_INSTALL_COMMAND,
+    });
+  });
+
+  it("falls back to package.json version when --version is unsupported", async () => {
+    const command = makeTempAcpxInstall(ACPX_PINNED_VERSION);
+    spawnAndCollectMock.mockResolvedValueOnce({
+      stdout: "",
+      stderr: "error: unknown option '--version'",
+      code: 2,
+      error: null,
+    });
+
+    const result = await checkAcpxVersion({
+      command,
+      cwd: path.dirname(path.dirname(command)),
+      expectedVersion: ACPX_PINNED_VERSION,
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      version: ACPX_PINNED_VERSION,
+      expectedVersion: ACPX_PINNED_VERSION,
     });
   });
 
