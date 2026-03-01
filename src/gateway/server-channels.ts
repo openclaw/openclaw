@@ -200,10 +200,24 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
           getStatus: () => getRuntime(channelId, id),
           setStatus: (next) => setRuntime(channelId, id, next),
         });
+        let exitedWithError = false;
         const trackedPromise = Promise.resolve(task)
           .catch((err) => {
+            exitedWithError = true;
             const message = formatErrorMessage(err);
             setRuntime(channelId, id, { accountId: id, lastError: message });
+            log.error?.(`[${id}] channel exited: ${message}`);
+          })
+          .then(() => {
+            if (exitedWithError || abort.signal.aborted || manuallyStopped.has(rKey)) {
+              return;
+            }
+            const runtime = getRuntime(channelId, id);
+            const message =
+              runtime.lastError?.trim() || "channel exited unexpectedly without error";
+            if (!runtime.lastError) {
+              setRuntime(channelId, id, { accountId: id, lastError: message });
+            }
             log.error?.(`[${id}] channel exited: ${message}`);
           })
           .finally(() => {

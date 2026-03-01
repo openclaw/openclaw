@@ -153,6 +153,23 @@ describe("server-channels auto restart", () => {
     expect(startAccount).toHaveBeenCalledTimes(1);
   });
 
+  it("records an explicit error when a channel exits without throwing", async () => {
+    const startAccount = vi.fn(async () => {});
+    installTestRegistry(
+      createTestPlugin({
+        startAccount,
+      }),
+    );
+    const manager = createManager();
+
+    await manager.startChannels();
+    vi.runAllTicks();
+
+    const snapshot = manager.getRuntimeSnapshot();
+    const account = snapshot.channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+    expect(account?.lastError).toBe("channel exited unexpectedly without error");
+  });
+
   it("marks enabled/configured when account descriptors omit them", () => {
     installTestRegistry(
       createTestPlugin({
