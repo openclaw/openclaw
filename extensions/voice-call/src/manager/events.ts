@@ -91,6 +91,48 @@ function createInboundCall(params: {
   return callRecord;
 }
 
+function createOutboundCallFromProviderEvent(params: {
+  ctx: EventContext;
+  event: Extract<
+    NormalizedEvent,
+    { type: "call.initiated" | "call.ringing" | "call.answered" | "call.active" }
+  >;
+  providerCallId: string;
+}): CallRecord {
+  const { ctx, event, providerCallId } = params;
+  const callId = event.callId?.trim() || providerCallId;
+  const stateByEvent: Record<typeof event.type, CallState> = {
+    "call.initiated": "initiated",
+    "call.ringing": "ringing",
+    "call.answered": "answered",
+    "call.active": "active",
+  };
+  const callRecord: CallRecord = {
+    callId,
+    providerCallId,
+    provider: ctx.provider?.name || "twilio",
+    direction: "outbound",
+    state: stateByEvent[event.type],
+    from: event.from || ctx.config.fromNumber || "unknown",
+    to: event.to || "unknown",
+    startedAt: event.timestamp || Date.now(),
+    ...(event.type === "call.answered" ? { answeredAt: event.timestamp } : undefined),
+    transcript: [],
+    processedEventIds: [],
+    metadata: ctx.config.outbound?.defaultMode
+      ? { mode: ctx.config.outbound.defaultMode }
+      : undefined,
+  };
+
+  ctx.activeCalls.set(callId, callRecord);
+  ctx.providerCallIdMap.set(providerCallId, callId);
+  persistCallRecord(ctx.storePath, callRecord);
+  console.log(
+    `[voice-call] Created outbound call record from provider event: ${callId} (${providerCallId})`,
+  );
+  return callRecord;
+}
+
 export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
   const dedupeKey = event.dedupeKey || event.id;
   if (ctx.processedEventIds.has(dedupeKey)) {
@@ -140,6 +182,23 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
     });
 
     // Normalize event to internal ID for downstream consumers.
+    event.callId = call.callId;
+  }
+
+  if (
+    !call &&
+    event.direction === "outbound" &&
+    event.providerCallId &&
+    (event.type === "call.initiated" ||
+      event.type === "call.ringing" ||
+      event.type === "call.answered" ||
+      event.type === "call.active")
+  ) {
+    call = createOutboundCallFromProviderEvent({
+      ctx,
+      event,
+      providerCallId: event.providerCallId,
+    });
     event.callId = call.callId;
   }
 

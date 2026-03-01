@@ -150,6 +150,59 @@ describe("processEvent (functional)", () => {
     expect(hangupCalls[0]?.providerCallId).toBe("prov-dup");
   });
 
+  it("creates a call record for unknown outbound provider events", () => {
+    const now = Date.now();
+    const ctx = createContext();
+    const event: NormalizedEvent = {
+      id: "evt-outbound-answered",
+      type: "call.answered",
+      callId: "CA-external-1",
+      providerCallId: "CA-external-1",
+      timestamp: now,
+      direction: "outbound",
+      from: "+15550000000",
+      to: "+15550009999",
+    };
+
+    processEvent(ctx, event);
+
+    const mappedCallId = ctx.providerCallIdMap.get("CA-external-1");
+    expect(mappedCallId).toBeTruthy();
+    const call = mappedCallId ? ctx.activeCalls.get(mappedCallId) : undefined;
+    expect(call).toMatchObject({
+      callId: "CA-external-1",
+      providerCallId: "CA-external-1",
+      direction: "outbound",
+      state: "answered",
+      from: "+15550000000",
+      to: "+15550009999",
+      metadata: {
+        mode: ctx.config.outbound.defaultMode,
+      },
+    });
+    expect(call?.answeredAt).toBe(now);
+  });
+
+  it("does not create unknown outbound calls from terminal events only", () => {
+    const ctx = createContext();
+    const event: NormalizedEvent = {
+      id: "evt-outbound-ended",
+      type: "call.ended",
+      callId: "CA-external-ended",
+      providerCallId: "CA-external-ended",
+      timestamp: Date.now(),
+      direction: "outbound",
+      reason: "completed",
+      from: "+15550000000",
+      to: "+15550009999",
+    };
+
+    processEvent(ctx, event);
+
+    expect(ctx.activeCalls.size).toBe(0);
+    expect(ctx.providerCallIdMap.size).toBe(0);
+  });
+
   it("updates providerCallId map when provider ID changes", () => {
     const now = Date.now();
     const ctx = createContext();
