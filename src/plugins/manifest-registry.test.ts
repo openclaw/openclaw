@@ -24,12 +24,16 @@ function createPluginCandidate(params: {
   rootDir: string;
   sourceName?: string;
   origin: "bundled" | "global" | "workspace" | "config";
+  packageName?: string;
+  packageVersion?: string;
 }): PluginCandidate {
   return {
     idHint: params.idHint,
     source: path.join(params.rootDir, params.sourceName ?? "index.ts"),
     rootDir: params.rootDir,
     origin: params.origin,
+    packageName: params.packageName,
+    packageVersion: params.packageVersion,
   };
 }
 
@@ -166,6 +170,35 @@ describe("loadPluginManifestRegistry", () => {
     expect(countDuplicateWarnings(registry)).toBe(0);
     expect(registry.plugins.length).toBe(1);
     expect(registry.plugins[0]?.origin).toBe("config");
+  });
+
+  it("suppresses duplicate warning for same package id/version across origins", () => {
+    const dirA = makeTempDir();
+    const dirB = makeTempDir();
+    const manifest = { id: "feishu", configSchema: { type: "object" } };
+    writeManifest(dirA, manifest);
+    writeManifest(dirB, manifest);
+
+    const registry = loadRegistry([
+      createPluginCandidate({
+        idHint: "feishu",
+        rootDir: dirA,
+        origin: "bundled",
+        packageName: "@openclaw/feishu",
+        packageVersion: "2026.2.26",
+      }),
+      createPluginCandidate({
+        idHint: "feishu",
+        rootDir: dirB,
+        origin: "global",
+        packageName: "@openclaw/feishu",
+        packageVersion: "2026.2.26",
+      }),
+    ]);
+
+    expect(countDuplicateWarnings(registry)).toBe(0);
+    expect(registry.plugins).toHaveLength(1);
+    expect(registry.plugins[0]?.origin).toBe("global");
   });
 
   it("rejects manifest paths that escape plugin root via symlink", () => {

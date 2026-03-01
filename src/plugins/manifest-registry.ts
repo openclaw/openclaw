@@ -103,6 +103,25 @@ function normalizeManifestLabel(raw: string | undefined): string | undefined {
   return trimmed ? trimmed : undefined;
 }
 
+function normalizePackageValue(raw: string | undefined): string | undefined {
+  const trimmed = raw?.trim().toLowerCase();
+  return trimmed ? trimmed : undefined;
+}
+
+function isSamePackageCandidate(a: PluginCandidate, b: PluginCandidate): boolean {
+  const aName = normalizePackageValue(a.packageName);
+  const bName = normalizePackageValue(b.packageName);
+  if (!aName || !bName || aName !== bName) {
+    return false;
+  }
+  const aVersion = normalizePackageValue(a.packageVersion);
+  const bVersion = normalizePackageValue(b.packageVersion);
+  if (aVersion && bVersion && aVersion !== bVersion) {
+    return false;
+  }
+  return true;
+}
+
 function buildRecord(params: {
   manifest: PluginManifest;
   candidate: PluginCandidate;
@@ -200,8 +219,11 @@ export function loadPluginManifestRegistry(params: {
       // is a false-positive duplicate and can be silently skipped.
       const existingReal = safeRealpathSync(existing.candidate.rootDir, realpathCache);
       const candidateReal = safeRealpathSync(candidate.rootDir, realpathCache);
-      const samePlugin = Boolean(existingReal && candidateReal && existingReal === candidateReal);
-      if (samePlugin) {
+      const sameRealPathPlugin = Boolean(
+        existingReal && candidateReal && existingReal === candidateReal,
+      );
+      const samePackagePlugin = isSamePackageCandidate(existing.candidate, candidate);
+      if (sameRealPathPlugin || samePackagePlugin) {
         // Prefer higher-precedence origins even if candidates are passed in
         // an unexpected order (config > workspace > global > bundled).
         if (PLUGIN_ORIGIN_RANK[candidate.origin] < PLUGIN_ORIGIN_RANK[existing.candidate.origin]) {
