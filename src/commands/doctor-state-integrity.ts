@@ -137,6 +137,68 @@ function findOtherStateDirs(stateDir: string): string[] {
   return found;
 }
 
+function isPathUnderRoot(targetPath: string, rootPath: string): boolean {
+  const normalizedTarget = path.resolve(targetPath);
+  const normalizedRoot = path.resolve(rootPath);
+  return (
+    normalizedTarget === normalizedRoot ||
+    normalizedTarget.startsWith(`${normalizedRoot}${path.sep}`)
+  );
+}
+
+function tryResolveRealPath(targetPath: string): string | null {
+  try {
+    return fs.realpathSync(targetPath);
+  } catch {
+    return null;
+  }
+}
+
+export function detectMacCloudSyncedStateDir(
+  stateDir: string,
+  deps?: {
+    platform?: NodeJS.Platform;
+    homedir?: string;
+    resolveRealPath?: (targetPath: string) => string | null;
+  },
+): {
+  path: string;
+  storage: "iCloud Drive" | "CloudStorage provider";
+} | null {
+  const platform = deps?.platform ?? process.platform;
+  if (platform !== "darwin") {
+    return null;
+  }
+
+  // Cloud-sync roots should always be anchored to the OS account home on macOS.
+  // OPENCLAW_HOME can relocate app data defaults, but iCloud/CloudStorage remain under the OS home.
+  const homedir = deps?.homedir ?? os.homedir();
+  const roots = [
+    {
+      storage: "iCloud Drive" as const,
+      root: path.join(homedir, "Library", "Mobile Documents", "com~apple~CloudDocs"),
+    },
+    {
+      storage: "CloudStorage provider" as const,
+      root: path.join(homedir, "Library", "CloudStorage"),
+    },
+  ];
+  const realPath = (deps?.resolveRealPath ?? tryResolveRealPath)(stateDir);
+  // Prefer the resolved target path when available so symlink prefixes do not
+  // misclassify local state dirs as cloud-synced.
+  const candidates = realPath ? [path.resolve(realPath)] : [path.resolve(stateDir)];
+
+  for (const candidate of candidates) {
+    for (const { storage, root } of roots) {
+      if (isPathUnderRoot(candidate, root)) {
+        return { path: candidate, storage };
+      }
+    }
+  }
+
+  return null;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
@@ -222,6 +284,18 @@ export async function noteStateIntegrity(
   const displayStoreDir = shortenHomePath(storeDir);
   const displayConfigPath = configPath ? shortenHomePath(configPath) : undefined;
   const requireOAuthDir = shouldRequireOAuthDir(cfg, env);
+  const cloudSyncedStateDir = detectMacCloudSyncedStateDir(stateDir);
+
+  if (cloudSyncedStateDir) {
+    warnings.push(
+      [
+        `- State directory is under macOS cloud-synced storage (${displayStateDir}; ${cloudSyncedStateDir.storage}).`,
+        "- This can cause slow I/O and sync/lock races for sessions and credentials.",
+        "- Prefer a local non-synced state dir (for example: ~/.openclaw).",
+        `  Set locally: OPENCLAW_STATE_DIR=~/.openclaw ${formatCliCommand("openclaw doctor")}`,
+      ].join("\n"),
+    );
+  }
 
   let stateDirExists = existsDir(stateDir);
   if (!stateDirExists) {
