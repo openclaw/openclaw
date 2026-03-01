@@ -359,6 +359,35 @@ describe("deliverReplies", () => {
     );
   });
 
+  it("voice fallback applies reply-to only on first chunk when replyToMode is first", async () => {
+    const { runtime, sendVoice, sendMessage, bot } = createVoiceFailureHarness({
+      voiceError: createVoiceMessagesForbiddenError(),
+      sendMessageResult: {
+        message_id: 6,
+        chat: { id: "123" },
+      },
+    });
+
+    mockMediaLoad("note.ogg", "audio/ogg", "voice");
+
+    await deliverWith({
+      replies: [
+        { mediaUrl: "https://example.com/note.ogg", text: "chunk-one\n\nchunk-two", replyToId: "77" },
+      ],
+      runtime,
+      bot,
+      replyToMode: "first",
+      textLimit: 12,
+    });
+
+    expect(sendVoice).toHaveBeenCalledTimes(1);
+    expect(sendMessage.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(sendMessage.mock.calls[0][2]).toEqual(
+      expect.objectContaining({ reply_to_message_id: 77 }),
+    );
+    expect(sendMessage.mock.calls[1][2]).not.toHaveProperty("reply_to_message_id");
+  });
+
   it("rethrows non-VOICE_MESSAGES_FORBIDDEN errors from sendVoice", async () => {
     const runtime = createRuntime();
     const sendVoice = vi.fn().mockRejectedValue(new Error("Network error"));
@@ -378,6 +407,89 @@ describe("deliverReplies", () => {
     expect(sendVoice).toHaveBeenCalledTimes(1);
     // Text fallback should NOT be attempted for other errors
     expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("replyToMode 'first' only applies reply-to to the first text chunk", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 20,
+      chat: { id: "123" },
+    });
+    const bot = createBot({ sendMessage });
+
+    // Use a small textLimit to force multiple chunks
+    await deliverReplies({
+      replies: [{ text: "chunk-one\n\nchunk-two", replyToId: "700" }],
+      chatId: "123",
+      token: "tok",
+      runtime,
+      bot,
+      replyToMode: "first",
+      textLimit: 12,
+    });
+
+    expect(sendMessage.mock.calls.length).toBeGreaterThanOrEqual(2);
+    // First chunk should have reply_to_message_id
+    expect(sendMessage.mock.calls[0][2]).toEqual(
+      expect.objectContaining({ reply_to_message_id: 700 }),
+    );
+    // Second chunk should NOT have reply_to_message_id
+    expect(sendMessage.mock.calls[1][2]).not.toHaveProperty("reply_to_message_id");
+  });
+
+  it("replyToMode 'all' applies reply-to to every text chunk", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 21,
+      chat: { id: "123" },
+    });
+    const bot = createBot({ sendMessage });
+
+    await deliverReplies({
+      replies: [{ text: "chunk-one\n\nchunk-two", replyToId: "800" }],
+      chatId: "123",
+      token: "tok",
+      runtime,
+      bot,
+      replyToMode: "all",
+      textLimit: 12,
+    });
+
+    expect(sendMessage.mock.calls.length).toBeGreaterThanOrEqual(2);
+    // Both chunks should have reply_to_message_id
+    for (const call of sendMessage.mock.calls) {
+      expect(call[2]).toEqual(expect.objectContaining({ reply_to_message_id: 800 }));
+    }
+  });
+
+  it("replyToMode 'first' only applies reply-to to first media item", async () => {
+    const runtime = createRuntime();
+    const sendPhoto = vi.fn().mockResolvedValue({
+      message_id: 30,
+      chat: { id: "123" },
+    });
+    const bot = createBot({ sendPhoto });
+
+    mockMediaLoad("a.jpg", "image/jpeg", "img1");
+    mockMediaLoad("b.jpg", "image/jpeg", "img2");
+
+    await deliverReplies({
+      replies: [{ mediaUrls: ["https://a.jpg", "https://b.jpg"], replyToId: "900" }],
+      chatId: "123",
+      token: "tok",
+      runtime,
+      bot,
+      replyToMode: "first",
+      textLimit: 4000,
+    });
+
+    expect(sendPhoto).toHaveBeenCalledTimes(2);
+    // First media should have reply_to_message_id
+    expect(sendPhoto.mock.calls[0][2]).toEqual(
+      expect.objectContaining({ reply_to_message_id: 900 }),
+    );
+    // Second media should NOT have reply_to_message_id
+    expect(sendPhoto.mock.calls[1][2]).not.toHaveProperty("reply_to_message_id");
   });
 
   it("rethrows VOICE_MESSAGES_FORBIDDEN when no text fallback is available", async () => {
