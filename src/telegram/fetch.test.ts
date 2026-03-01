@@ -27,9 +27,13 @@ vi.mock("node:dns", async () => {
   };
 });
 
+const mockOriginalDispatcher = vi.hoisted(() => ({ __original: true }));
+const getGlobalDispatcher = vi.hoisted(() => vi.fn(() => mockOriginalDispatcher));
+
 vi.mock("undici", () => ({
   Agent: AgentCtor,
   setGlobalDispatcher,
+  getGlobalDispatcher,
 }));
 
 const originalFetch = globalThis.fetch;
@@ -39,6 +43,7 @@ afterEach(() => {
   setDefaultAutoSelectFamily.mockReset();
   setDefaultResultOrder.mockReset();
   setGlobalDispatcher.mockReset();
+  getGlobalDispatcher.mockReset().mockReturnValue(mockOriginalDispatcher);
   AgentCtor.mockClear();
   vi.unstubAllEnvs();
   vi.clearAllMocks();
@@ -168,23 +173,21 @@ describe("resolveTelegramFetch", () => {
     expect(setGlobalDispatcher).toHaveBeenCalledTimes(1);
   });
 
-  it("updates global dispatcher when autoSelectFamily decision changes", async () => {
+  it("restores original dispatcher when autoSelectFamily switches from true to false", async () => {
     globalThis.fetch = vi.fn(async () => ({})) as unknown as typeof fetch;
     resolveTelegramFetch(undefined, { network: { autoSelectFamily: true } });
     resolveTelegramFetch(undefined, { network: { autoSelectFamily: false } });
 
+    // First call replaces with autoSelectFamily agent, second restores original.
     expect(setGlobalDispatcher).toHaveBeenCalledTimes(2);
-    expect(AgentCtor).toHaveBeenNthCalledWith(1, {
+    expect(AgentCtor).toHaveBeenCalledTimes(1);
+    expect(AgentCtor).toHaveBeenCalledWith({
       connect: {
         autoSelectFamily: true,
         autoSelectFamilyAttemptTimeout: 300,
       },
     });
-    expect(AgentCtor).toHaveBeenNthCalledWith(2, {
-      connect: {
-        autoSelectFamily: false,
-        autoSelectFamilyAttemptTimeout: 300,
-      },
-    });
+    // Second setGlobalDispatcher call should restore the original dispatcher.
+    expect(setGlobalDispatcher).toHaveBeenNthCalledWith(2, mockOriginalDispatcher);
   });
 });

@@ -1,6 +1,7 @@
 import * as dns from "node:dns";
 import * as net from "node:net";
-import { Agent, setGlobalDispatcher } from "undici";
+import { Agent, getGlobalDispatcher, setGlobalDispatcher } from "undici";
+import type { Dispatcher } from "undici";
 import type { TelegramNetworkConfig } from "../config/types.telegram.js";
 import { resolveFetch } from "../infra/fetch.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -12,6 +13,7 @@ import {
 let appliedAutoSelectFamily: boolean | null = null;
 let appliedDnsResultOrder: string | null = null;
 let appliedGlobalDispatcherAutoSelectFamily: boolean | null = null;
+let originalGlobalDispatcher: Dispatcher | null = null;
 const log = createSubsystemLogger("telegram/network");
 
 // Node 22 workaround: enable autoSelectFamily to allow IPv4 fallback on broken IPv6 networks.
@@ -40,21 +42,40 @@ function applyTelegramNetworkWorkarounds(network?: TelegramNetworkConfig): void 
   // current autoSelectFamily setting so subsequent globalThis.fetch calls
   // inherit the same decision.
   // See: https://github.com/openclaw/openclaw/issues/25676
+  //
+  // IMPORTANT: Replacing the global dispatcher unconditionally (even with
+  // autoSelectFamily=false) swaps in a bare Agent that discards any config
+  // the original default dispatcher carried, breaking other HTTP clients in
+  // the same process (e.g. LLM provider fetches returning 403).
+  //
+  // When enabling (true): save the original dispatcher and replace it.
+  // When disabling (false) after a previous enable: restore the original.
   if (
     autoSelectDecision.value !== null &&
     autoSelectDecision.value !== appliedGlobalDispatcherAutoSelectFamily
   ) {
     try {
-      setGlobalDispatcher(
-        new Agent({
-          connect: {
-            autoSelectFamily: autoSelectDecision.value,
-            autoSelectFamilyAttemptTimeout: 300,
-          },
-        }),
-      );
-      appliedGlobalDispatcherAutoSelectFamily = autoSelectDecision.value;
-      log.info(`global undici dispatcher autoSelectFamily=${autoSelectDecision.value}`);
+      if (autoSelectDecision.value) {
+        // Save the original dispatcher before first replacement.
+        if (originalGlobalDispatcher === null) {
+          originalGlobalDispatcher = getGlobalDispatcher();
+        }
+        setGlobalDispatcher(
+          new Agent({
+            connect: {
+              autoSelectFamily: true,
+              autoSelectFamilyAttemptTimeout: 300,
+            },
+          }),
+        );
+        appliedGlobalDispatcherAutoSelectFamily = true;
+        log.info(`global undici dispatcher autoSelectFamily=true`);
+      } else if (originalGlobalDispatcher !== null) {
+        // Restore the original dispatcher so other HTTP clients are unaffected.
+        setGlobalDispatcher(originalGlobalDispatcher);
+        appliedGlobalDispatcherAutoSelectFamily = false;
+        log.info("global undici dispatcher restored to original");
+      }
     } catch {
       // ignore if setGlobalDispatcher is unavailable
     }
@@ -98,4 +119,5 @@ export function resetTelegramFetchStateForTests(): void {
   appliedAutoSelectFamily = null;
   appliedDnsResultOrder = null;
   appliedGlobalDispatcherAutoSelectFamily = null;
+  originalGlobalDispatcher = null;
 }
