@@ -99,7 +99,7 @@ function buildCompletionDeliveryMessage(params: {
   const header = (() => {
     // Custom header template — only applies to success status.
     if (
-      customHeader != null &&
+      typeof customHeader === "string" &&
       params.outcome?.status !== "error" &&
       params.outcome?.status !== "timeout"
     ) {
