@@ -117,3 +117,9 @@ export function hasSystemEvents(sessionKey: string) {
 export function resetSystemEventsForTest() {
   queues.clear();
 }
+
+// Expose enqueueSystemEvent on globalThis so workspace hooks loaded via
+// dynamic import() can inject system events without needing a direct module
+// import path into the bundled gateway chunks. Follows the same pattern as
+// __openclaw_internal_hook_handlers__ in src/hooks/internal-hooks.ts.
+(globalThis as Record<string, unknown>).__openclaw_enqueueSystemEvent ??= enqueueSystemEvent;
