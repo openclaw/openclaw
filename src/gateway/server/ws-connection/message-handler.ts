@@ -15,7 +15,11 @@ import {
   updatePairedDeviceMetadata,
   verifyDeviceToken,
 } from "../../../infra/device-pairing.js";
-import { updatePairedNodeMetadata } from "../../../infra/node-pairing.js";
+import {
+  approveNodePairing,
+  requestNodePairing,
+  updatePairedNodeMetadata,
+} from "../../../infra/node-pairing.js";
 import { recordRemoteNodeInfo, refreshRemoteNodeBins } from "../../../infra/skills-remote.js";
 import { upsertPresence } from "../../../infra/system-presence.js";
 import { loadVoiceWakeConfig } from "../../../infra/voicewake.js";
@@ -821,8 +825,50 @@ export function attachGatewayWsMessageHandler(params: {
               ...clientPairingMetadata,
               silent: allowSilentLocalPairing,
             });
+            // For nodes, also create a pending entry in the node store so
+            // node.pair.list (which reads from the node store) shows the request.
+            let nodePairingResult: Awaited<ReturnType<typeof requestNodePairing>> | undefined;
+            if (role === "node") {
+              nodePairingResult = await requestNodePairing({
+                nodeId: device.id,
+                deviceRequestId: pairing.request.requestId,
+                displayName: connectParams.client.displayName,
+                platform: connectParams.client.platform,
+                deviceFamily: connectParams.client.deviceFamily,
+                remoteIp: reportedClientIp,
+                silent: allowSilentLocalPairing,
+              }).catch((err) => {
+                logGateway.warn(
+                  `failed to create node pairing request for ${device.id}: ${formatForLog(err)}`,
+                );
+                return undefined;
+              });
+            }
             const context = buildRequestContext();
             if (pairing.request.silent === true) {
+              // Auto-approve the node store entry (if any) in tandem with the device store entry.
+              if (nodePairingResult) {
+                const approvedNode = await approveNodePairing(
+                  nodePairingResult.request.requestId,
+                ).catch((err) => {
+                  logGateway.warn(
+                    `failed to auto-approve node pairing for ${device.id}: ${formatForLog(err)}`,
+                  );
+                  return undefined;
+                });
+                if (approvedNode) {
+                  context.broadcast(
+                    "node.pair.resolved",
+                    {
+                      requestId: nodePairingResult.request.requestId,
+                      nodeId: approvedNode.node.nodeId,
+                      decision: "approved",
+                      ts: Date.now(),
+                    },
+                    { dropIfSlow: true },
+                  );
+                }
+              }
               const approved = await approveDevicePairing(pairing.request.requestId);
               if (approved) {
                 logGateway.info(
@@ -839,8 +885,17 @@ export function attachGatewayWsMessageHandler(params: {
                   { dropIfSlow: true },
                 );
               }
-            } else if (pairing.created) {
-              context.broadcast("device.pair.requested", pairing.request, { dropIfSlow: true });
+            } else {
+              if (pairing.created) {
+                context.broadcast("device.pair.requested", pairing.request, { dropIfSlow: true });
+              }
+              // Broadcast node.pair.requested independently: a node pairing can
+              // be newly created even when the device entry already existed.
+              if (nodePairingResult?.created) {
+                context.broadcast("node.pair.requested", nodePairingResult.request, {
+                  dropIfSlow: true,
+                });
+              }
             }
             if (pairing.request.silent !== true) {
               setHandshakeState("failed");

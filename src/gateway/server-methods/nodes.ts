@@ -1,7 +1,13 @@
 import { loadConfig } from "../../config/config.js";
-import { listDevicePairing } from "../../infra/device-pairing.js";
+import {
+  approveDevicePairing,
+  getDevicePendingRequest,
+  listDevicePairing,
+  rejectDevicePairing,
+} from "../../infra/device-pairing.js";
 import {
   approveNodePairing,
+  getNodePendingRequest,
   listNodePairing,
   rejectNodePairing,
   renamePairedNode,
@@ -85,6 +91,20 @@ function isNodeEntry(entry: { role?: string; roles?: string[] }) {
     return true;
   }
   return false;
+}
+
+/**
+ * Returns true when the pending entry's roles are exclusively "node" — no
+ * merged operator/device scopes.  This prevents a node approval/rejection
+ * from silently affecting a device entry that accumulated broader roles via
+ * the pending-entry merge/upsert path.
+ */
+function isNodeOnlyEntry(entry: { role?: string; roles?: string[] }): boolean {
+  if (Array.isArray(entry.roles) && entry.roles.length > 0) {
+    return entry.roles.every((r) => r === "node");
+  }
+  // No roles array — fall back to checking the single role field.
+  return entry.role === "node";
 }
 
 async function delayMs(ms: number): Promise<void> {
@@ -336,10 +356,80 @@ export const nodeHandlers: GatewayRequestHandlers = {
     }
     const { requestId } = params as { requestId: string };
     await respondUnavailableOnThrow(respond, async () => {
+      // Pre-flight: look up the node pending entry to retrieve the
+      // deviceRequestId BEFORE modifying either store.  When the device
+      // entry has mixed roles we bail early so neither store changes.
+      const nodePending = await getNodePendingRequest(requestId);
+      if (!nodePending) {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown requestId"));
+        return;
+      }
+      if (nodePending.deviceRequestId) {
+        const devicePending = await getDevicePendingRequest(nodePending.deviceRequestId).catch(
+          () => null,
+        );
+        if (devicePending && !isNodeOnlyEntry(devicePending)) {
+          respond(
+            false,
+            undefined,
+            errorShape(
+              ErrorCodes.INVALID_REQUEST,
+              "device entry has mixed roles — use device.pair.approve/reject",
+            ),
+          );
+          return;
+        }
+      }
+
       const approved = await approveNodePairing(requestId);
       if (!approved) {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown requestId"));
         return;
+      }
+      // Sync device store: use the mutation-returned deviceRequestId (authoritative).
+      const deviceRequestId = approved.deviceRequestId;
+      if (deviceRequestId) {
+        // Always validate the device entry after mutation before syncing.
+        // This catches mixed-role merges that occurred between pre-flight and now.
+        const postDevice = await getDevicePendingRequest(deviceRequestId).catch(() => null);
+        if (postDevice && !isNodeOnlyEntry(postDevice)) {
+          context.logGateway.warn(
+            `node.pair.approve: skipping device sync — deviceRequestId ${deviceRequestId} has mixed roles`,
+          );
+          context.broadcast(
+            "node.pair.resolved",
+            {
+              requestId,
+              nodeId: approved.node.nodeId,
+              decision: "approved",
+              ts: Date.now(),
+            },
+            { dropIfSlow: true },
+          );
+          respond(true, approved, undefined);
+          return;
+        }
+
+        await approveDevicePairing(deviceRequestId)
+          .then((deviceApproved) => {
+            if (deviceApproved) {
+              context.broadcast(
+                "device.pair.resolved",
+                {
+                  requestId: deviceRequestId,
+                  deviceId: approved.node.nodeId,
+                  decision: "approved",
+                  ts: Date.now(),
+                },
+                { dropIfSlow: true },
+              );
+            }
+          })
+          .catch((err: unknown) =>
+            context.logGateway.warn(
+              `node.pair.approve: failed to sync device pairing for ${approved.node.nodeId}: ${String(err)}`,
+            ),
+          );
       }
       context.broadcast(
         "node.pair.resolved",
@@ -365,10 +455,80 @@ export const nodeHandlers: GatewayRequestHandlers = {
     }
     const { requestId } = params as { requestId: string };
     await respondUnavailableOnThrow(respond, async () => {
+      // Pre-flight: look up the node pending entry to retrieve the
+      // deviceRequestId BEFORE modifying either store.  When the device
+      // entry has mixed roles we bail early so neither store changes.
+      const nodePending = await getNodePendingRequest(requestId);
+      if (!nodePending) {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown requestId"));
+        return;
+      }
+      if (nodePending.deviceRequestId) {
+        const devicePending = await getDevicePendingRequest(nodePending.deviceRequestId).catch(
+          () => null,
+        );
+        if (devicePending && !isNodeOnlyEntry(devicePending)) {
+          respond(
+            false,
+            undefined,
+            errorShape(
+              ErrorCodes.INVALID_REQUEST,
+              "device entry has mixed roles — use device.pair.approve/reject",
+            ),
+          );
+          return;
+        }
+      }
+
       const rejected = await rejectNodePairing(requestId);
       if (!rejected) {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown requestId"));
         return;
+      }
+      // Sync device store: use the mutation-returned deviceRequestId (authoritative).
+      const deviceRequestId = rejected.deviceRequestId;
+      if (deviceRequestId) {
+        // Always validate the device entry after mutation before syncing.
+        // This catches mixed-role merges that occurred between pre-flight and now.
+        const postDevice = await getDevicePendingRequest(deviceRequestId).catch(() => null);
+        if (postDevice && !isNodeOnlyEntry(postDevice)) {
+          context.logGateway.warn(
+            `node.pair.reject: skipping device sync — deviceRequestId ${deviceRequestId} has mixed roles`,
+          );
+          context.broadcast(
+            "node.pair.resolved",
+            {
+              requestId,
+              nodeId: rejected.nodeId,
+              decision: "rejected",
+              ts: Date.now(),
+            },
+            { dropIfSlow: true },
+          );
+          respond(true, rejected, undefined);
+          return;
+        }
+
+        await rejectDevicePairing(deviceRequestId)
+          .then((deviceRejected) => {
+            if (deviceRejected) {
+              context.broadcast(
+                "device.pair.resolved",
+                {
+                  requestId: deviceRequestId,
+                  deviceId: rejected.nodeId,
+                  decision: "rejected",
+                  ts: Date.now(),
+                },
+                { dropIfSlow: true },
+              );
+            }
+          })
+          .catch((err: unknown) =>
+            context.logGateway.warn(
+              `node.pair.reject: failed to sync device pairing for ${rejected.nodeId}: ${String(err)}`,
+            ),
+          );
       }
       context.broadcast(
         "node.pair.resolved",
