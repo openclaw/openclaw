@@ -2,6 +2,7 @@ import type { MsgContext } from "../../auto-reply/templating.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { ChannelId } from "../../channels/plugins/types.js";
+import type { ChannelOutboundSessionResolveResult } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { recordSessionMetaFromInbound, resolveStorePath } from "../../config/sessions.js";
 import { parseDiscordTarget } from "../../discord/targets.js";
@@ -115,6 +116,148 @@ function buildBaseSessionKey(params: {
     dmScope: params.cfg.session?.dmScope ?? "main",
     identityLinks: params.cfg.session?.identityLinks,
   });
+}
+
+const OPENCLAW_OUTBOUND_SESSION_LEGACY_TLON = "OPENCLAW_OUTBOUND_SESSION_LEGACY_TLON";
+
+type NormalizedPluginSessionResolveResult = {
+  peer: RoutePeer;
+  chatType: "direct" | "group" | "channel";
+  from?: string;
+  to?: string;
+  threadId?: string | number;
+  useThreadSuffix?: boolean;
+};
+
+function resolveDefaultRouteLabels(params: { channel: ChannelId; peer: RoutePeer }): {
+  from: string;
+  to: string;
+  chatType: "direct" | "group" | "channel";
+} {
+  if (params.peer.kind === "direct") {
+    return {
+      from: `${params.channel}:${params.peer.id}`,
+      to: `user:${params.peer.id}`,
+      chatType: "direct",
+    };
+  }
+  if (params.peer.kind === "group") {
+    return {
+      from: `${params.channel}:group:${params.peer.id}`,
+      to: `channel:${params.peer.id}`,
+      chatType: "group",
+    };
+  }
+  return {
+    from: `${params.channel}:channel:${params.peer.id}`,
+    to: `channel:${params.peer.id}`,
+    chatType: "channel",
+  };
+}
+
+function normalizePluginSessionResolveResult(
+  value: ChannelOutboundSessionResolveResult | null | undefined,
+): NormalizedPluginSessionResolveResult | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const peerValue = value.peer;
+  if (!peerValue || typeof peerValue !== "object") {
+    return null;
+  }
+  const peerKind = peerValue.kind;
+  if (peerKind !== "direct" && peerKind !== "group" && peerKind !== "channel") {
+    return null;
+  }
+  const peerId = typeof peerValue.id === "string" ? peerValue.id.trim() : "";
+  if (!peerId) {
+    return null;
+  }
+  const chatType = value.chatType;
+  if (chatType && chatType !== "direct" && chatType !== "group" && chatType !== "channel") {
+    return null;
+  }
+  const threadIdValue = value.threadId;
+  if (
+    threadIdValue != null &&
+    typeof threadIdValue !== "string" &&
+    typeof threadIdValue !== "number"
+  ) {
+    return null;
+  }
+  const fromValue = value.from;
+  if (fromValue != null && typeof fromValue !== "string") {
+    return null;
+  }
+  const toValue = value.to;
+  if (toValue != null && typeof toValue !== "string") {
+    return null;
+  }
+  if (value.useThreadSuffix != null && typeof value.useThreadSuffix !== "boolean") {
+    return null;
+  }
+  return {
+    peer: { kind: peerKind, id: peerId },
+    chatType: chatType ?? peerKind,
+    from: typeof fromValue === "string" && fromValue.trim() ? fromValue.trim() : undefined,
+    to: typeof toValue === "string" && toValue.trim() ? toValue.trim() : undefined,
+    threadId: threadIdValue ?? undefined,
+    useThreadSuffix: value.useThreadSuffix,
+  };
+}
+
+async function resolvePluginSession(
+  params: ResolveOutboundSessionRouteParams,
+): Promise<OutboundSessionRoute | null> {
+  const plugin = getChannelPlugin(params.channel);
+  const resolver = plugin?.outbound?.resolveSession;
+  if (!resolver) {
+    return null;
+  }
+  const resolved = normalizePluginSessionResolveResult(
+    await resolver({
+      cfg: params.cfg,
+      accountId: params.accountId,
+      target: params.target,
+      resolvedTarget: params.resolvedTarget ? { kind: params.resolvedTarget.kind } : undefined,
+      replyToId: params.replyToId ?? undefined,
+      threadId: params.threadId ?? undefined,
+    }),
+  );
+  if (!resolved) {
+    return null;
+  }
+  const baseSessionKey = buildBaseSessionKey({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    channel: params.channel,
+    accountId: params.accountId,
+    peer: resolved.peer,
+  });
+  const threadId = normalizeThreadId(resolved.threadId);
+  const threadKeys = resolveThreadSessionKeys({
+    baseSessionKey,
+    threadId,
+    useSuffix: resolved.useThreadSuffix ?? true,
+  });
+  const labels = resolveDefaultRouteLabels({ channel: params.channel, peer: resolved.peer });
+  return {
+    sessionKey: threadKeys.sessionKey,
+    baseSessionKey,
+    peer: resolved.peer,
+    chatType: resolved.chatType,
+    from: resolved.from ?? labels.from,
+    to: resolved.to ?? labels.to,
+    threadId,
+  };
+}
+
+function shouldUseLegacyTlonSessionResolver(): boolean {
+  const raw = process.env[OPENCLAW_OUTBOUND_SESSION_LEGACY_TLON];
+  if (!raw) {
+    return false;
+  }
+  return raw === "1" || /^true$/i.test(raw.trim());
 }
 
 // Best-effort mpim detection: allowlist/config, then Slack API (if token available).
@@ -721,6 +864,7 @@ function resolveNostrSession(
   };
 }
 
+// Legacy compatibility resolver retained behind OPENCLAW_OUTBOUND_SESSION_LEGACY_TLON.
 function normalizeTlonShip(raw: string): string {
   const trimmed = raw.trim();
   if (!trimmed) {
@@ -891,41 +1035,48 @@ export async function resolveOutboundSessionRoute(
   if (!target) {
     return null;
   }
+  const withTarget = { ...params, target };
+  const pluginRoute = await resolvePluginSession(withTarget);
+  if (pluginRoute) {
+    return pluginRoute;
+  }
   switch (params.channel) {
     case "slack":
-      return await resolveSlackSession({ ...params, target });
+      return await resolveSlackSession(withTarget);
     case "discord":
-      return resolveDiscordSession({ ...params, target });
+      return resolveDiscordSession(withTarget);
     case "telegram":
-      return resolveTelegramSession({ ...params, target });
+      return resolveTelegramSession(withTarget);
     case "whatsapp":
-      return resolveWhatsAppSession({ ...params, target });
+      return resolveWhatsAppSession(withTarget);
     case "signal":
-      return resolveSignalSession({ ...params, target });
+      return resolveSignalSession(withTarget);
     case "imessage":
-      return resolveIMessageSession({ ...params, target });
+      return resolveIMessageSession(withTarget);
     case "matrix":
-      return resolveMatrixSession({ ...params, target });
+      return resolveMatrixSession(withTarget);
     case "msteams":
-      return resolveMSTeamsSession({ ...params, target });
+      return resolveMSTeamsSession(withTarget);
     case "mattermost":
-      return resolveMattermostSession({ ...params, target });
+      return resolveMattermostSession(withTarget);
     case "bluebubbles":
-      return resolveBlueBubblesSession({ ...params, target });
+      return resolveBlueBubblesSession(withTarget);
     case "nextcloud-talk":
-      return resolveNextcloudTalkSession({ ...params, target });
+      return resolveNextcloudTalkSession(withTarget);
     case "zalo":
-      return resolveZaloSession({ ...params, target });
+      return resolveZaloSession(withTarget);
     case "zalouser":
-      return resolveZalouserSession({ ...params, target });
+      return resolveZalouserSession(withTarget);
     case "nostr":
-      return resolveNostrSession({ ...params, target });
+      return resolveNostrSession(withTarget);
     case "tlon":
-      return resolveTlonSession({ ...params, target });
+      return shouldUseLegacyTlonSessionResolver()
+        ? resolveTlonSession(withTarget)
+        : resolveFallbackSession(withTarget);
     case "feishu":
-      return resolveFeishuSession({ ...params, target });
+      return resolveFeishuSession(withTarget);
     default:
-      return resolveFallbackSession({ ...params, target });
+      return resolveFallbackSession(withTarget);
   }
 }
 

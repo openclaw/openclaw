@@ -4,6 +4,7 @@ import type { GroupToolPolicyConfig } from "../../config/types.tools.js";
 import type { OutboundDeliveryResult, OutboundSendDeps } from "../../infra/outbound/deliver.js";
 import type { OutboundIdentity } from "../../infra/outbound/identity.js";
 import type { RuntimeEnv } from "../../runtime.js";
+import type { ChatType } from "../chat-type.js";
 import type {
   ChannelAccountSnapshot,
   ChannelAccountState,
@@ -103,12 +104,43 @@ export type ChannelOutboundPayloadContext = ChannelOutboundContext & {
   payload: ReplyPayload;
 };
 
+export type ChannelOutboundSessionResolveTarget = {
+  kind: "user" | "group" | "channel";
+};
+
+export type ChannelOutboundSessionResolveParams = {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+  target: string;
+  resolvedTarget?: ChannelOutboundSessionResolveTarget;
+  replyToId?: string | null;
+  threadId?: string | number | null;
+};
+
+export type ChannelOutboundSessionResolveResult = {
+  peer: {
+    kind: ChatType;
+    id: string;
+  };
+  chatType?: "direct" | "group" | "channel";
+  from?: string;
+  to?: string;
+  threadId?: string | number | null;
+  useThreadSuffix?: boolean;
+};
+
 export type ChannelOutboundAdapter = {
   deliveryMode: "direct" | "gateway" | "hybrid";
   chunker?: ((text: string, limit: number) => string[]) | null;
   chunkerMode?: "text" | "markdown";
   textChunkLimit?: number;
   pollMaxOptions?: number;
+  resolveSession?: (
+    params: ChannelOutboundSessionResolveParams,
+  ) =>
+    | Promise<ChannelOutboundSessionResolveResult | null>
+    | ChannelOutboundSessionResolveResult
+    | null;
   resolveTarget?: (params: {
     cfg?: OpenClawConfig;
     to?: string;

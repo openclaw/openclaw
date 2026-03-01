@@ -14,6 +14,7 @@ import { buildTlonAccountFields } from "./account-fields.js";
 import { tlonChannelConfigSchema } from "./config-schema.js";
 import { monitorTlonProvider } from "./monitor/index.js";
 import { tlonOnboardingAdapter } from "./onboarding.js";
+import { resolveTlonOutboundSession } from "./outbound-session.js";
 import { formatTargetHint, normalizeShip, parseTlonTarget } from "./targets.js";
 import { resolveTlonAccount, listTlonAccountIds } from "./types.js";
 import { authenticate } from "./urbit/auth.js";
@@ -89,6 +90,7 @@ function applyTlonSetupConfig(params: {
 const tlonOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
   textChunkLimit: 10000,
+  resolveSession: resolveTlonOutboundSession,
   resolveTarget: ({ to }) => {
     const parsed = parseTlonTarget(to ?? "");
     if (!parsed) {

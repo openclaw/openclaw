@@ -2,8 +2,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveTlonOutboundSession } from "../../../extensions/tlon/src/outbound-session.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { typedCases } from "../../test-utils/typed-cases.js";
 import {
   ackDelivery,
@@ -1031,6 +1034,164 @@ describe("resolveOutboundSessionRoute", () => {
       }
       if (testCase.expected.chatType !== undefined) {
         expect(route?.chatType, testCase.name).toBe(testCase.expected.chatType);
+      }
+    }
+  });
+
+  it("builds canonical session keys from plugin outbound session resolvers", async () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "discord",
+          source: "test",
+          plugin: {
+            id: "discord",
+            meta: {
+              id: "discord",
+              label: "Discord",
+              selectionLabel: "Discord",
+              docsPath: "/channels/discord",
+              blurb: "test stub.",
+            },
+            capabilities: { chatTypes: ["direct", "group", "channel"] },
+            config: { listAccountIds: () => [], resolveAccount: () => ({}) },
+            outbound: {
+              deliveryMode: "direct" as const,
+              resolveSession: () => ({
+                peer: { kind: "channel" as const, id: "C-123" },
+                chatType: "channel" as const,
+                from: "discord:custom:C-123",
+                to: "channel:C-123",
+                threadId: "77",
+                useThreadSuffix: false,
+              }),
+            },
+          },
+        },
+      ]),
+    );
+
+    const route = await resolveOutboundSessionRoute({
+      cfg: {},
+      channel: "discord",
+      agentId: "main",
+      target: "ignored-by-plugin",
+    });
+    expect(route).toEqual({
+      sessionKey: "agent:main:discord:channel:c-123",
+      baseSessionKey: "agent:main:discord:channel:c-123",
+      peer: { kind: "channel", id: "C-123" },
+      chatType: "channel",
+      from: "discord:custom:C-123",
+      to: "channel:C-123",
+      threadId: "77",
+    });
+  });
+
+  it("falls back to built-in routing when plugin resolver payload is invalid", async () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "discord",
+          source: "test",
+          plugin: {
+            id: "discord",
+            meta: {
+              id: "discord",
+              label: "Discord",
+              selectionLabel: "Discord",
+              docsPath: "/channels/discord",
+              blurb: "test stub.",
+            },
+            capabilities: { chatTypes: ["direct", "group", "channel"] },
+            config: { listAccountIds: () => [], resolveAccount: () => ({}) },
+            outbound: {
+              deliveryMode: "direct" as const,
+              resolveSession: () =>
+                ({ peer: { kind: "invalid", id: "123" } }) as unknown as {
+                  peer: { kind: "direct"; id: string };
+                },
+            },
+          },
+        },
+      ]),
+    );
+
+    const route = await resolveOutboundSessionRoute({
+      cfg: {},
+      channel: "discord",
+      agentId: "main",
+      target: "user:123",
+    });
+    expect(route).toMatchObject({
+      sessionKey: "agent:main:main",
+      peer: { kind: "direct", id: "123" },
+      chatType: "direct",
+      from: "discord:123",
+      to: "user:123",
+    });
+  });
+
+  it("keeps tlon outbound routing parity between plugin and legacy compat path", async () => {
+    const previousCompat = process.env.OPENCLAW_OUTBOUND_SESSION_LEGACY_TLON;
+    const targets = ["dm:sampel-palnet", "group:~host-ship/general", "~host-ship/general"] as const;
+
+    try {
+      process.env.OPENCLAW_OUTBOUND_SESSION_LEGACY_TLON = "1";
+      setActivePluginRegistry(createTestRegistry([]));
+      const legacyRoutes = await Promise.all(
+        targets.map((target) =>
+          resolveOutboundSessionRoute({
+            cfg: {},
+            channel: "tlon",
+            agentId: "main",
+            target,
+          }),
+        ),
+      );
+
+      process.env.OPENCLAW_OUTBOUND_SESSION_LEGACY_TLON = "0";
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "tlon",
+            source: "test",
+            plugin: {
+              id: "tlon",
+              meta: {
+                id: "tlon",
+                label: "Tlon",
+                selectionLabel: "Tlon",
+                docsPath: "/channels/tlon",
+                blurb: "test stub.",
+              },
+              capabilities: { chatTypes: ["direct", "group"] },
+              config: { listAccountIds: () => [], resolveAccount: () => ({}) },
+              outbound: {
+                deliveryMode: "direct",
+                resolveSession: resolveTlonOutboundSession,
+              },
+            },
+          },
+        ]),
+      );
+      const pluginRoutes = await Promise.all(
+        targets.map((target) =>
+          resolveOutboundSessionRoute({
+            cfg: {},
+            channel: "tlon",
+            agentId: "main",
+            target,
+          }),
+        ),
+      );
+
+      expect(pluginRoutes).toEqual(legacyRoutes);
+    } finally {
+      if (previousCompat === undefined) {
+        delete process.env.OPENCLAW_OUTBOUND_SESSION_LEGACY_TLON;
+      } else {
+        process.env.OPENCLAW_OUTBOUND_SESSION_LEGACY_TLON = previousCompat;
       }
     }
   });
