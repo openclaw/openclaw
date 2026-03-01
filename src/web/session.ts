@@ -110,7 +110,10 @@ export async function createWaSocket(
     process.env.OPENCLAW_WHATSAPP_PROXY ??
     process.env.HTTPS_PROXY ??
     process.env.HTTP_PROXY ??
-    process.env.ALL_PROXY;
+    process.env.ALL_PROXY ??
+    process.env.https_proxy ??
+    process.env.http_proxy ??
+    process.env.all_proxy;
   const sock = makeWASocket({
     auth: {
       creds: state.creds,

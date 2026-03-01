@@ -102,6 +102,38 @@ describe("web session", () => {
     }
   });
 
+  it("passes proxy agent when lowercase proxy env is set", async () => {
+    const keys = [
+      "OPENCLAW_WHATSAPP_PROXY",
+      "HTTPS_PROXY",
+      "HTTP_PROXY",
+      "ALL_PROXY",
+      "https_proxy",
+      "http_proxy",
+      "all_proxy",
+    ] as const;
+    const prev = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
+    for (const key of keys) {
+      delete process.env[key];
+    }
+    process.env.https_proxy = "http://127.0.0.1:7899";
+    try {
+      await createWaSocket(false, false);
+      const makeWASocket = baileys.makeWASocket as ReturnType<typeof vi.fn>;
+      const passed = makeWASocket.mock.calls.at(-1)?.[0] as { agent?: unknown } | undefined;
+      expect(passed?.agent).toBeTruthy();
+    } finally {
+      for (const key of keys) {
+        const value = prev[key];
+        if (value === undefined) {
+          delete process.env[key];
+        } else {
+          process.env[key] = value;
+        }
+      }
+    }
+  });
+
   it("waits for connection open", async () => {
     const ev = new EventEmitter();
     const promise = waitForWaConnection({ ev } as unknown as ReturnType<
