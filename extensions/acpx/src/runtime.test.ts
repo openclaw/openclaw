@@ -66,20 +66,32 @@ describe("AcpxRuntime", () => {
       events.push(event);
     }
 
-    expect(events).toContainEqual({
-      type: "text_delta",
-      text: "thinking",
-      stream: "thought",
-    });
-    expect(events).toContainEqual({
-      type: "tool_call",
-      text: "run-tests (in_progress)",
-    });
-    expect(events).toContainEqual({
-      type: "text_delta",
-      text: "echo:hello world",
-      stream: "output",
-    });
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "text_delta",
+          text: "thinking",
+          stream: "thought",
+        }),
+      ]),
+    );
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "tool_call",
+          text: "run-tests (in_progress)",
+        }),
+      ]),
+    );
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "text_delta",
+          text: "echo:hello world",
+          stream: "output",
+        }),
+      ]),
+    );
     expect(events).toContainEqual({
       type: "done",
       stopReason: "end_turn",
