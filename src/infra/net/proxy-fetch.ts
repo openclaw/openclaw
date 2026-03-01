@@ -1,4 +1,5 @@
 import { EnvHttpProxyAgent, ProxyAgent, fetch as undiciFetch } from "undici";
+import { logWarn } from "../../logger.js";
 
 /**
  * Create a fetch function that routes requests through the given HTTP proxy.
@@ -38,8 +39,10 @@ export function resolveProxyFetchFromEnv(): typeof fetch | undefined {
         ...(init as Record<string, unknown>),
         dispatcher: agent,
       }) as unknown as Promise<Response>) as typeof fetch;
-  } catch {
-    // Malformed proxy URL in env — fall back to direct fetch.
+  } catch (err) {
+    logWarn(
+      `Proxy env var set but agent creation failed — falling back to direct fetch: ${err instanceof Error ? err.message : String(err)}`,
+    );
     return undefined;
   }
 }
