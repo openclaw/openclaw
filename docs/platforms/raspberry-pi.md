@@ -240,6 +240,9 @@ sudo systemctl restart openclaw
 If possible, keep OpenClaw state/cache on SSD-backed storage to avoid SD-card
 random-I/O bottlenecks during cold starts.
 
+How `Restart=` policies help automated recovery:
+[systemd can automate service recovery](https://www.redhat.com/en/blog/systemd-automate-recovery).
+
 ### Reduce Memory Usage
 
 ```bash
