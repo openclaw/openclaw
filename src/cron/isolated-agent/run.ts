@@ -32,6 +32,7 @@ import {
 } from "../../auto-reply/thinking.js";
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { applyConfigEnvVars } from "../../config/env-vars.js";
 import {
   resolveSessionTranscriptPath,
   setSessionRuntimeModel,
@@ -100,6 +101,10 @@ export async function runCronIsolatedAgentTurn(params: {
 }): Promise<RunCronAgentTurnResult> {
   const abortSignal = params.abortSignal ?? params.signal;
   const isAborted = () => abortSignal?.aborted === true;
+  
+  // Apply config.env to process.env so isolated sessions can access
+  // provider API keys and other environment variables (#29886)
+  applyConfigEnvVars(params.cfg, process.env);
   const abortReason = () => {
     const reason = abortSignal?.reason;
     return typeof reason === "string" && reason.trim()
