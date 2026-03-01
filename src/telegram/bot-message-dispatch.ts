@@ -548,7 +548,7 @@ export const dispatchTelegramMessage = async ({
             reasoningStepState.resetForNextStep();
           }
           const canSendAsIs =
-            hasMedia || typeof payload.text !== "string" || payload.text.length > 0;
+            hasMedia || (typeof payload.text === "string" && payload.text.length > 0);
           if (!canSendAsIs) {
             if (info.kind === "final") {
               await flushBufferedFinalAnswer();
