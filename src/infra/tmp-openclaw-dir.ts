@@ -2,7 +2,20 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-export const POSIX_OPENCLAW_TMP_DIR = "/tmp/openclaw";
+// On Windows, resolve /tmp/openclaw to a stable absolute path based on system temp dir
+// to avoid drive-relative path issues (e.g., C:\tmp vs E:\tmp depending on cwd)
+const OPENCLAW_TMP_SUBDIR = "openclaw";
+
+function getPlatformPreferredTmpDir(): string {
+  // On Windows, always use the system temp dir to avoid drive-relative path issues
+  if (process.platform === "win32") {
+    return path.join(os.tmpdir(), OPENCLAW_TMP_SUBDIR);
+  }
+  // On POSIX systems, prefer /tmp/openclaw
+  return "/tmp/openclaw";
+}
+
+export const POSIX_OPENCLAW_TMP_DIR = getPlatformPreferredTmpDir();
 const TMP_DIR_ACCESS_MODE = fs.constants.W_OK | fs.constants.X_OK;
 
 type ResolvePreferredOpenClawTmpDirOptions = {
@@ -152,7 +165,11 @@ export function resolvePreferredOpenClawTmpDir(
   }
 
   try {
-    accessSync("/tmp", TMP_DIR_ACCESS_MODE);
+    // On POSIX systems, check if /tmp is accessible
+    // On Windows, we already use os.tmpdir() which should be accessible
+    if (process.platform !== "win32") {
+      accessSync("/tmp", TMP_DIR_ACCESS_MODE);
+    }
     // Create with a safe default; subsequent callers expect it exists.
     mkdirSync(POSIX_OPENCLAW_TMP_DIR, { recursive: true, mode: 0o700 });
     chmodSync(POSIX_OPENCLAW_TMP_DIR, 0o700);

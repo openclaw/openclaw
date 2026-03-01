@@ -7,6 +7,7 @@ import {
   mkdtempSync,
   rmSync,
   renameSync,
+  statSync,
   unlinkSync,
 } from "node:fs";
 import path from "node:path";
@@ -586,6 +587,17 @@ export async function textToSpeech(params: {
             },
             timeoutMs: config.timeoutMs,
           });
+          // Wait a brief moment to ensure file system has flushed the write
+          await new Promise((resolve) => setTimeout(resolve, 50));
+          // Verify the file was created and is not empty
+          const stats = existsSync(audioPath) ? statSync(audioPath) : null;
+          if (!stats || stats.size === 0) {
+            throw new Error(
+              stats
+                ? `Edge TTS produced empty file: ${audioPath}`
+                : `Edge TTS failed to create file: ${audioPath}`,
+            );
+          }
           return { audioPath, outputFormat };
         };
 

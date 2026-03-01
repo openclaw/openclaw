@@ -1,3 +1,4 @@
+import type { IncomingMessage } from "node:http";
 import WebSocket from "ws";
 import { isLoopbackHost } from "../gateway/net.js";
 import { rawDataToString } from "../infra/ws.js";
@@ -113,27 +114,64 @@ function createCdpSender(ws: WebSocket) {
 }
 
 export async function fetchJson<T>(url: string, timeoutMs = 1500, init?: RequestInit): Promise<T> {
-  const res = await fetchChecked(url, timeoutMs, init);
-  return (await res.json()) as T;
+  // Use native http module for better Windows localhost compatibility
+  const http = await import("node:http");
+  return await new Promise((resolve, reject) => {
+    const headers = getHeadersWithAuth(url, (init?.headers as Record<string, string>) || {});
+    const req = http.get(
+      url,
+      { timeout: timeoutMs, headers },
+      (res: IncomingMessage) => {
+        let data = "";
+        res.on("data", (chunk: Buffer) => (data += chunk));
+        res.on("end", () => {
+          if (res.statusCode && res.statusCode >= 400) {
+            reject(new Error(`HTTP ${res.statusCode}`));
+          } else {
+            try {
+              resolve(JSON.parse(data) as T);
+            } catch (e) {
+              reject(e);
+            }
+          }
+        });
+      },
+    );
+    req.on("error", reject);
+    req.on("timeout", () => {
+      req.destroy();
+      reject(new Error("Request timeout"));
+    });
+  });
 }
 
-async function fetchChecked(url: string, timeoutMs = 1500, init?: RequestInit): Promise<Response> {
-  const ctrl = new AbortController();
-  const t = setTimeout(ctrl.abort.bind(ctrl), timeoutMs);
-  try {
-    const headers = getHeadersWithAuth(url, (init?.headers as Record<string, string>) || {});
-    const res = await fetch(url, { ...init, headers, signal: ctrl.signal });
-    if (!res.ok) {
-      throw new Error(`HTTP ${res.status}`);
-    }
-    return res;
-  } finally {
-    clearTimeout(t);
-  }
-}
 
 export async function fetchOk(url: string, timeoutMs = 1500, init?: RequestInit): Promise<void> {
-  await fetchChecked(url, timeoutMs, init);
+  // Use native http module for better Windows localhost compatibility
+  const http = await import("node:http");
+  await new Promise<void>((resolve, reject) => {
+    const headers = getHeadersWithAuth(url, (init?.headers as Record<string, string>) || {});
+    const req = http.get(
+      url,
+      { timeout: timeoutMs, headers },
+      (res: IncomingMessage) => {
+        // Consume response body
+        res.on("data", () => {});
+        res.on("end", () => {
+          if (res.statusCode && res.statusCode >= 400) {
+            reject(new Error(`HTTP ${res.statusCode}`));
+          } else {
+            resolve();
+          }
+        });
+      },
+    );
+    req.on("error", reject);
+    req.on("timeout", () => {
+      req.destroy();
+      reject(new Error("Request timeout"));
+    });
+  });
 }
 
 export async function withCdpSocket<T>(

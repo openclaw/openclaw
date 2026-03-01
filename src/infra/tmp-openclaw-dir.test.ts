@@ -4,6 +4,8 @@ import { POSIX_OPENCLAW_TMP_DIR, resolvePreferredOpenClawTmpDir } from "./tmp-op
 
 type TmpDirOptions = NonNullable<Parameters<typeof resolvePreferredOpenClawTmpDir>[0]>;
 
+const isWindows = process.platform === "win32";
+
 function fallbackTmp(uid = 501) {
   return path.join("/var/fallback", `openclaw-${uid}`);
 }
@@ -81,6 +83,10 @@ describe("resolvePreferredOpenClawTmpDir", () => {
   });
 
   it("prefers /tmp/openclaw when it does not exist but /tmp is writable", () => {
+    // On Windows, /tmp check is skipped, so this test doesn't apply
+    if (isWindows) {
+      return;
+    }
     const lstatSyncMock = vi
       .fn<NonNullable<TmpDirOptions["lstatSync"]>>()
       .mockImplementationOnce(() => {

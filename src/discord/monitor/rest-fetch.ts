@@ -1,7 +1,32 @@
-import { ProxyAgent, fetch as undiciFetch } from "undici";
+import { ProxyAgent, fetch as undiciFetch, setGlobalDispatcher } from "undici";
 import { danger } from "../../globals.js";
 import { wrapFetchWithAbortSignal } from "../../infra/fetch.js";
 import type { RuntimeEnv } from "../../runtime.js";
+
+let globalProxyApplied = false;
+
+/**
+ * Apply global proxy dispatcher for undici.
+ * This ensures all fetch requests (including @buape/carbon's internal REST client)
+ * use the configured proxy.
+ */
+export function applyDiscordGlobalProxy(proxyUrl: string | undefined, runtime: RuntimeEnv): void {
+  const proxy = proxyUrl?.trim();
+  if (!proxy) {
+    return;
+  }
+  if (globalProxyApplied) {
+    return;
+  }
+  try {
+    const agent = new ProxyAgent(proxy);
+    setGlobalDispatcher(agent);
+    globalProxyApplied = true;
+    runtime.log?.("discord: global rest proxy enabled");
+  } catch (err) {
+    runtime.error?.(danger(`discord: failed to set global proxy: ${String(err)}`));
+  }
+}
 
 export function resolveDiscordRestFetch(
   proxyUrl: string | undefined,

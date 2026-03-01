@@ -224,6 +224,7 @@ vi.mock("./provider.lifecycle.js", () => ({
 }));
 
 vi.mock("./rest-fetch.js", () => ({
+  applyDiscordGlobalProxy: () => {},
   resolveDiscordRestFetch: () => async () => undefined,
 }));
 
