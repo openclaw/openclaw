@@ -4,6 +4,7 @@ import path from "node:path";
 import "./test-helpers/fast-coding-tools.js";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { resolveRollingSummaryPath } from "./context-layering.js";
 
 function createMockUsage(input: number, output: number) {
   return {
@@ -294,5 +295,28 @@ describe("runEmbeddedPiAgent", () => {
 
     expect(result.meta.error).toBeUndefined();
     expect(result.payloads?.length ?? 0).toBeGreaterThan(0);
+  });
+
+  it("persists rolling summary sidecar when context layering is enabled", async () => {
+    const sessionFile = nextSessionFile();
+    const sessionKey = nextSessionKey();
+    const originalFlag = process.env.OPENCLAW_CONTEXT_LAYERS;
+    process.env.OPENCLAW_CONTEXT_LAYERS = "1";
+
+    try {
+      await runDefaultEmbeddedTurn(sessionFile, "Build fallback model flow", sessionKey);
+      const summaryPath = resolveRollingSummaryPath(sessionFile);
+      const raw = await fs.readFile(summaryPath, "utf-8");
+      const summary = JSON.parse(raw) as { goal?: string; completed?: string[] };
+      expect(summary.goal).toContain("Build fallback model flow");
+      expect(Array.isArray(summary.completed)).toBe(true);
+      expect(summary.completed?.[0]).toContain("Last turn outcome");
+    } finally {
+      if (originalFlag === undefined) {
+        delete process.env.OPENCLAW_CONTEXT_LAYERS;
+      } else {
+        process.env.OPENCLAW_CONTEXT_LAYERS = originalFlag;
+      }
+    }
   });
 });

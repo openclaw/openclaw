@@ -16,6 +16,11 @@ import {
   resolveProfilesUnavailableReason,
 } from "../auth-profiles.js";
 import {
+  isContextLayeringEnabled,
+  pickAssistantReplyForSummary,
+  updateRollingContextSummaryForTurn,
+} from "../context-layering.js";
+import {
   CONTEXT_WINDOW_HARD_MIN_TOKENS,
   CONTEXT_WINDOW_WARN_BELOW_TOKENS,
   evaluateContextWindowGuard,
@@ -626,6 +631,7 @@ export async function runEmbeddedPiAgent(
             onReasoningEnd: params.onReasoningEnd,
             onToolResult: params.onToolResult,
             onAgentEvent: params.onAgentEvent,
+            suppressLifecycleErrorEvents: params.suppressLifecycleErrorEvents,
             extraSystemPrompt: params.extraSystemPrompt,
             inputProvenance: params.inputProvenance,
             streamParams: params.streamParams,
@@ -1112,6 +1118,26 @@ export async function runEmbeddedPiAgent(
               messagingToolSentTargets: attempt.messagingToolSentTargets,
               successfulCronAdds: attempt.successfulCronAdds,
             };
+          }
+
+          if (isContextLayeringEnabled()) {
+            const summaryReply = pickAssistantReplyForSummary({
+              payloads,
+              assistantTexts: attempt.assistantTexts,
+            });
+            if (summaryReply) {
+              try {
+                await updateRollingContextSummaryForTurn({
+                  sessionFile: params.sessionFile,
+                  prompt,
+                  assistantReply: summaryReply,
+                });
+              } catch (err) {
+                log.warn(
+                  `context layering summary update failed: runId=${params.runId} error=${describeUnknownError(err)}`,
+                );
+              }
+            }
           }
 
           log.debug(

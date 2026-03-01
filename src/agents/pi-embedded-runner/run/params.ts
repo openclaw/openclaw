@@ -96,6 +96,11 @@ export type RunEmbeddedPiAgentParams = {
   onReasoningEnd?: () => void | Promise<void>;
   onToolResult?: (payload: { text?: string; mediaUrls?: string[] }) => void | Promise<void>;
   onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => void;
+  /**
+   * If true, suppress per-attempt lifecycle phase=error events from embedded subscriber
+   * and let the caller emit one terminal error after fallback exhaustion.
+   */
+  suppressLifecycleErrorEvents?: boolean;
   lane?: string;
   enqueue?: typeof enqueueCommand;
   extraSystemPrompt?: string;

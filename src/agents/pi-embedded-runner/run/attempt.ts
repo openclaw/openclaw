@@ -35,6 +35,12 @@ import {
   listChannelSupportedActions,
   resolveChannelMessageToolHints,
 } from "../../channel-tools.js";
+import {
+  applyContextLayering,
+  isContextLayeringEnabled,
+  loadRollingContextSummary,
+  resolveHotContextTurns,
+} from "../../context-layering.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import { resolveOpenClawDocsPath } from "../../docs-path.js";
 import { isTimeoutError } from "../../failover-error.js";
@@ -1000,9 +1006,24 @@ export async function runEmbeddedAttempt(
         const limited = transcriptPolicy.repairToolUseResultPairing
           ? sanitizeToolUseResultPairing(truncated)
           : truncated;
-        cacheTrace?.recordStage("session:limited", { messages: limited });
-        if (limited.length > 0) {
-          activeSession.agent.replaceMessages(limited);
+        let layeredMessages = limited;
+        if (isContextLayeringEnabled()) {
+          const rollingSummary = await loadRollingContextSummary(params.sessionFile);
+          const layering = applyContextLayering({
+            messages: limited,
+            summary: rollingSummary,
+            keepHotUserTurns: resolveHotContextTurns(),
+          });
+          if (layering.applied) {
+            log.debug(
+              `context layering applied: runId=${params.runId} coldMessages=${layering.coldMessageCount} hotMessages=${layering.messages.length}`,
+            );
+          }
+          layeredMessages = layering.messages;
+        }
+        cacheTrace?.recordStage("session:limited", { messages: layeredMessages });
+        if (layeredMessages.length > 0) {
+          activeSession.agent.replaceMessages(layeredMessages);
         }
       } catch (err) {
         await flushPendingToolResultsAfterIdle({
@@ -1084,6 +1105,7 @@ export async function runEmbeddedAttempt(
         onPartialReply: params.onPartialReply,
         onAssistantMessageStart: params.onAssistantMessageStart,
         onAgentEvent: params.onAgentEvent,
+        suppressLifecycleErrorEvents: params.suppressLifecycleErrorEvents,
         enforceFinalTag: params.enforceFinalTag,
         config: params.config,
         sessionKey: params.sessionKey ?? params.sessionId,

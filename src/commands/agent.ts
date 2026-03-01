@@ -14,6 +14,7 @@ import { clearSessionAuthProfileOverride } from "../agents/auth-profiles/session
 import { runCliAgent } from "../agents/cli-runner.js";
 import { getCliSessionId } from "../agents/cli-session.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { describeFailoverError } from "../agents/failover-error.js";
 import { AGENT_LANE_SUBAGENT } from "../agents/lanes.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import { runWithModelFallback } from "../agents/model-fallback.js";
@@ -146,6 +147,7 @@ function runAgentAttempt(params: {
   resolvedVerboseLevel: VerboseLevel | undefined;
   agentDir: string;
   onAgentEvent: (evt: { stream: string; data?: Record<string, unknown> }) => void;
+  suppressLifecycleErrorEvents: boolean;
   primaryProvider: string;
 }) {
   const effectivePrompt = resolveFallbackRetryPrompt({
@@ -217,6 +219,7 @@ function runAgentAttempt(params: {
     streamParams: params.opts.streamParams,
     agentDir: params.agentDir,
     onAgentEvent: params.onAgentEvent,
+    suppressLifecycleErrorEvents: params.suppressLifecycleErrorEvents,
   });
 }
 
@@ -723,6 +726,49 @@ export async function agentCommand(
         model,
         agentDir,
         fallbacksOverride: effectiveFallbacksOverride,
+        onError: ({
+          provider: failedProvider,
+          model: failedModel,
+          error,
+          attempt,
+          total,
+          nextProvider,
+          nextModel,
+        }) => {
+          if (!nextProvider || !nextModel) {
+            return;
+          }
+          const described = describeFailoverError(error);
+          const reasonSummary = described.reason ?? described.message ?? "provider error";
+          emitAgentEvent({
+            runId,
+            stream: "lifecycle",
+            data: {
+              phase: "fallback",
+              selectedProvider: provider,
+              selectedModel: model,
+              fromProvider: failedProvider,
+              fromModel: failedModel,
+              toProvider: nextProvider,
+              toModel: nextModel,
+              activeProvider: nextProvider,
+              activeModel: nextModel,
+              reasonSummary,
+              attempt,
+              total,
+              attemptSummaries: [failedProvider + "/" + failedModel + ": " + reasonSummary],
+              attempts: [
+                {
+                  provider: failedProvider,
+                  model: failedModel,
+                  reason: reasonSummary,
+                  status: described.status,
+                  code: described.code,
+                },
+              ],
+            },
+          });
+        },
         run: (providerOverride, modelOverride) => {
           const isFallbackRetry = fallbackAttemptIndex > 0;
           fallbackAttemptIndex += 1;
@@ -749,6 +795,7 @@ export async function agentCommand(
             resolvedVerboseLevel,
             agentDir,
             primaryProvider: provider,
+            suppressLifecycleErrorEvents: true,
             onAgentEvent: (evt) => {
               // Track lifecycle end for fallback emission below.
               if (

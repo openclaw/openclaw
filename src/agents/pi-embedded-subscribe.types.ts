@@ -28,6 +28,11 @@ export type SubscribeEmbeddedPiSessionParams = {
   onPartialReply?: (payload: { text?: string; mediaUrls?: string[] }) => void | Promise<void>;
   onAssistantMessageStart?: () => void | Promise<void>;
   onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => void | Promise<void>;
+  /**
+   * If true, suppress per-attempt lifecycle phase=error emissions from the embedded
+   * subscriber so fallback orchestration can emit a single terminal event.
+   */
+  suppressLifecycleErrorEvents?: boolean;
   enforceFinalTag?: boolean;
   config?: OpenClawConfig;
   sessionKey?: string;

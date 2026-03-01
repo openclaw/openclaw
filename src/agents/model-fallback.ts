@@ -100,6 +100,8 @@ type ModelFallbackErrorHandler = (attempt: {
   error: unknown;
   attempt: number;
   total: number;
+  nextProvider?: string;
+  nextModel?: string;
 }) => void | Promise<void>;
 
 type ModelFallbackRunResult<T> = {
@@ -488,12 +490,15 @@ export async function runWithModelFallback<T>(params: {
         status: described.status,
         code: described.code,
       });
+      const nextCandidate = candidates[i + 1];
       await params.onError?.({
         provider: candidate.provider,
         model: candidate.model,
         error: isKnownFailover ? normalized : err,
         attempt: i + 1,
         total: candidates.length,
+        nextProvider: nextCandidate?.provider,
+        nextModel: nextCandidate?.model,
       });
     }
   }
@@ -550,12 +555,15 @@ export async function runWithImageModelFallback<T>(params: {
         model: candidate.model,
         error: err instanceof Error ? err.message : String(err),
       });
+      const nextCandidate = candidates[i + 1];
       await params.onError?.({
         provider: candidate.provider,
         model: candidate.model,
         error: err,
         attempt: i + 1,
         total: candidates.length,
+        nextProvider: nextCandidate?.provider,
+        nextModel: nextCandidate?.model,
       });
     }
   }

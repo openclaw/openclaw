@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { emitAgentEvent } from "../infra/agent-events.js";
 import { createInlineCodeState } from "../markdown/code-spans.js";
 import { handleAgentEnd } from "./pi-embedded-subscribe.handlers.lifecycle.js";
 import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
@@ -9,7 +10,7 @@ vi.mock("../infra/agent-events.js", () => ({
 
 function createContext(
   lastAssistant: unknown,
-  overrides?: { onAgentEvent?: (event: unknown) => void },
+  overrides?: { onAgentEvent?: (event: unknown) => void; suppressLifecycleErrorEvents?: boolean },
 ): EmbeddedPiSubscribeContext {
   return {
     params: {
@@ -17,6 +18,7 @@ function createContext(
       config: {},
       sessionKey: "agent:main:main",
       onAgentEvent: overrides?.onAgentEvent,
+      suppressLifecycleErrorEvents: overrides?.suppressLifecycleErrorEvents,
     },
     state: {
       lastAssistant: lastAssistant as EmbeddedPiSubscribeContext["state"]["lastAssistant"],
@@ -40,6 +42,7 @@ function createContext(
 describe("handleAgentEnd", () => {
   it("logs the resolved error message when run ends with assistant error", () => {
     const onAgentEvent = vi.fn();
+    vi.mocked(emitAgentEvent).mockClear();
     const ctx = createContext(
       {
         role: "assistant",
@@ -63,6 +66,39 @@ describe("handleAgentEnd", () => {
         error: "connection refused",
       },
     });
+  });
+
+  it("suppresses lifecycle error emissions when requested", () => {
+    const onAgentEvent = vi.fn();
+    vi.mocked(emitAgentEvent).mockClear();
+    const ctx = createContext(
+      {
+        role: "assistant",
+        stopReason: "error",
+        errorMessage: "rate limit",
+        content: [{ type: "text", text: "" }],
+      },
+      { onAgentEvent, suppressLifecycleErrorEvents: true },
+    );
+
+    handleAgentEnd(ctx);
+
+    expect(vi.mocked(emitAgentEvent)).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        stream: "lifecycle",
+        data: expect.objectContaining({ phase: "error" }),
+      }),
+    );
+    expect(onAgentEvent).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        stream: "lifecycle",
+        data: expect.objectContaining({ phase: "error" }),
+      }),
+    );
+    expect(ctx.log.warn).not.toHaveBeenCalled();
+    expect(ctx.log.debug).toHaveBeenCalledWith(
+      expect.stringContaining("isError=true suppressed=true"),
+    );
   });
 
   it("keeps non-error run-end logging on debug only", () => {

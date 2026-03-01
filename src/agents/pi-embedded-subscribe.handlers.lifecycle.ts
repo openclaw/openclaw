@@ -37,25 +37,31 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext) {
       model: lastAssistant.model,
     });
     const errorText = (friendlyError || lastAssistant.errorMessage || "LLM request failed.").trim();
-    ctx.log.warn(
-      `embedded run agent end: runId=${ctx.params.runId} isError=true error=${errorText}`,
-    );
-    emitAgentEvent({
-      runId: ctx.params.runId,
-      stream: "lifecycle",
-      data: {
-        phase: "error",
-        error: errorText,
-        endedAt: Date.now(),
-      },
-    });
-    void ctx.params.onAgentEvent?.({
-      stream: "lifecycle",
-      data: {
-        phase: "error",
-        error: errorText,
-      },
-    });
+    if (ctx.params.suppressLifecycleErrorEvents) {
+      ctx.log.debug(
+        `embedded run agent end: runId=${ctx.params.runId} isError=true suppressed=true error=${errorText}`,
+      );
+    } else {
+      ctx.log.warn(
+        `embedded run agent end: runId=${ctx.params.runId} isError=true error=${errorText}`,
+      );
+      emitAgentEvent({
+        runId: ctx.params.runId,
+        stream: "lifecycle",
+        data: {
+          phase: "error",
+          error: errorText,
+          endedAt: Date.now(),
+        },
+      });
+      void ctx.params.onAgentEvent?.({
+        stream: "lifecycle",
+        data: {
+          phase: "error",
+          error: errorText,
+        },
+      });
+    }
   } else {
     ctx.log.debug(`embedded run agent end: runId=${ctx.params.runId} isError=${isError}`);
     emitAgentEvent({

@@ -255,6 +255,35 @@ describe("runWithModelFallback", () => {
     });
   });
 
+  it("passes next fallback candidate metadata to onError", async () => {
+    const cfg = makeCfg();
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(Object.assign(new Error("rate limited"), { status: 429 }))
+      .mockResolvedValueOnce("ok");
+    const onError = vi.fn();
+
+    await runWithModelFallback({
+      cfg,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      run,
+      onError,
+    });
+
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "openai",
+        model: "gpt-4.1-mini",
+        attempt: 1,
+        total: 2,
+        nextProvider: "anthropic",
+        nextModel: "claude-haiku-3-5",
+      }),
+    );
+  });
+
   it("falls back directly to configured primary when an override model fails", async () => {
     const cfg = makeCfg({
       agents: {

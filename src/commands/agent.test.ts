@@ -398,6 +398,61 @@ describe("agentCommand", () => {
     });
   });
 
+  it("emits lifecycle fallback events and suppresses per-attempt lifecycle errors", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      mockConfig(home, store, {
+        model: {
+          primary: "openai/gpt-4.1-mini",
+          fallbacks: ["openai/gpt-5.2"],
+        },
+        models: {
+          "openai/gpt-4.1-mini": {},
+          "openai/gpt-5.2": {},
+        },
+      });
+
+      const lifecycleEvents: Array<Record<string, unknown>> = [];
+      const stop = onAgentEvent((evt) => {
+        if (evt.stream === "lifecycle") {
+          lifecycleEvents.push(evt.data ?? {});
+        }
+      });
+
+      try {
+        vi.mocked(runEmbeddedPiAgent)
+          .mockRejectedValueOnce(Object.assign(new Error("rate limited"), { status: 429 }))
+          .mockResolvedValueOnce({
+            payloads: [{ text: "ok" }],
+            meta: {
+              durationMs: 5,
+              agentMeta: { sessionId: "session-main", provider: "openai", model: "gpt-5.2" },
+            },
+          });
+
+        await agentCommand({ message: "hi", to: "+1555" }, runtime);
+      } finally {
+        stop();
+      }
+
+      expect(vi.mocked(runEmbeddedPiAgent).mock.calls[0]?.[0]?.suppressLifecycleErrorEvents).toBe(
+        true,
+      );
+
+      const fallbackEvent = lifecycleEvents.find((data) => data.phase === "fallback");
+      expect(fallbackEvent).toEqual(
+        expect.objectContaining({
+          selectedProvider: "openai",
+          selectedModel: "gpt-4.1-mini",
+          fromProvider: "openai",
+          fromModel: "gpt-4.1-mini",
+          toProvider: "openai",
+          toModel: "gpt-5.2",
+        }),
+      );
+    });
+  });
+
   it("keeps stored session model override when models allowlist is empty", async () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");
