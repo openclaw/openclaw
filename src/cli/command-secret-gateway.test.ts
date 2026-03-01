@@ -73,6 +73,21 @@ describe("resolveCommandSecretRefsViaGateway", () => {
     ).rejects.toThrow(/failed to resolve secrets from the active gateway snapshot/i);
   });
 
+  it("returns a version-skew hint when gateway does not support secrets.resolve", async () => {
+    callGateway.mockRejectedValueOnce(new Error("unknown method: secrets.resolve"));
+    await expect(
+      resolveCommandSecretRefsViaGateway({
+        config: {
+          talk: {
+            apiKey: { source: "env", provider: "default", id: "TALK_API_KEY" },
+          },
+        } as OpenClawConfig,
+        commandName: "memory status",
+        targetIds: new Set(["talk.apiKey"]),
+      }),
+    ).rejects.toThrow(/does not support secrets\.resolve/i);
+  });
+
   it("fails when gateway returns an invalid secrets.resolve payload", async () => {
     callGateway.mockResolvedValueOnce({
       assignments: "not-an-array",

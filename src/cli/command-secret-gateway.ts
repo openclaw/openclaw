@@ -71,6 +71,18 @@ function collectInactiveSurfacePathsFromDiagnostics(diagnostics: string[]): Set<
   return paths;
 }
 
+function isUnsupportedSecretsResolveError(err: unknown): boolean {
+  const message = describeUnknownError(err).toLowerCase();
+  if (!message.includes("secrets.resolve")) {
+    return false;
+  }
+  return (
+    message.includes("unknown method") ||
+    message.includes("method not found") ||
+    message.includes("invalid request")
+  );
+}
+
 export async function resolveCommandSecretRefsViaGateway(params: {
   config: OpenClawConfig;
   commandName: string;
@@ -93,6 +105,12 @@ export async function resolveCommandSecretRefsViaGateway(params: {
       mode: GATEWAY_CLIENT_MODES.CLI,
     });
   } catch (err) {
+    if (isUnsupportedSecretsResolveError(err)) {
+      throw new Error(
+        `${params.commandName}: active gateway does not support secrets.resolve (${describeUnknownError(err)}). Update the gateway or run without SecretRefs.`,
+        { cause: err },
+      );
+    }
     throw new Error(
       `${params.commandName}: failed to resolve secrets from the active gateway snapshot (${describeUnknownError(err)}). Start the gateway and retry.`,
       { cause: err },
