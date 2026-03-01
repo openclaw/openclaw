@@ -11,8 +11,8 @@ import {
   resolveAwsSdkEnvVarName,
   resolveEnvApiKey,
 } from "../../agents/model-auth.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import { normalizeProviderId } from "../../agents/model-selection.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { shortenHomePath } from "../../utils.js";
 import { maskApiKey } from "./list.format.js";
 import type { ProviderAuthOverview } from "./list.types.js";
@@ -99,12 +99,19 @@ export function resolveProviderAuthOverview(params: {
   const isBedrock = normalizeProviderId(provider) === "amazon-bedrock";
   const bedrockProviderCfg = isBedrock
     ? ((cfg?.models?.providers?.[provider] as { auth?: string } | undefined) ??
-        Object.entries(cfg?.models?.providers ?? {}).find(
-          ([key]) => normalizeProviderId(key) === "amazon-bedrock",
-        )?.[1] as { auth?: string } | undefined)
+      (Object.entries(cfg?.models?.providers ?? {}).find(
+        ([key]) => normalizeProviderId(key) === "amazon-bedrock",
+      )?.[1] as { auth?: string } | undefined))
     : undefined;
   const bedrockAuthOverride = bedrockProviderCfg?.auth;
-  const awsSdkEnvVar = isBedrock && (bedrockAuthOverride === "aws-sdk" || bedrockAuthOverride === undefined) ? resolveAwsSdkEnvVarName() : undefined;
+  const awsSdkEnvVar =
+    isBedrock && (bedrockAuthOverride === "aws-sdk" || bedrockAuthOverride === undefined)
+      ? resolveAwsSdkEnvVarName()
+      : undefined;
+  const awsEnvLabel =
+    awsSdkEnvVar === "AWS_ACCESS_KEY_ID"
+      ? "AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY"
+      : awsSdkEnvVar;
 
   const effective: ProviderAuthOverview["effective"] = (() => {
     if (profiles.length > 0) {
@@ -125,8 +132,7 @@ export function resolveProviderAuthOverview(params: {
       return { kind: "models.json", detail: maskApiKey(customKey) };
     }
     if (awsSdkEnvVar) {
-      const awsLabel = awsSdkEnvVar === "AWS_ACCESS_KEY_ID" ? "AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY" : awsSdkEnvVar;
-      return { kind: "env", detail: `aws-sdk (${awsLabel})` };
+      return { kind: "env", detail: `aws-sdk (${awsEnvLabel})` };
     }
     return { kind: "missing", detail: "missing" };
   })();
@@ -154,8 +160,8 @@ export function resolveProviderAuthOverview(params: {
       : awsSdkEnvVar
         ? {
             env: {
-              value: `aws-sdk (${awsSdkEnvVar === "AWS_ACCESS_KEY_ID" ? "AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY" : awsSdkEnvVar})`,
-              source: `env: ${awsSdkEnvVar === "AWS_ACCESS_KEY_ID" ? "AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY" : awsSdkEnvVar}`,
+              value: `aws-sdk (${awsEnvLabel})`,
+              source: `env: ${awsEnvLabel}`,
             },
           }
         : {}),

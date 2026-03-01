@@ -145,7 +145,9 @@ describe("resolveProviderAuthOverview — Bedrock AWS SDK auth", () => {
     try {
       const overview = resolveProviderAuthOverview({
         provider: "amazon-bedrock",
-        cfg: { models: { providers: { "amazon-bedrock": { auth: "api-key" } } } },
+        cfg: {
+          models: { providers: { "amazon-bedrock": { auth: "api-key", baseUrl: "", models: [] } } },
+        } as never,
         store: { version: 1, profiles: {} } as never,
         modelsPath: "/tmp/models.json",
       });
