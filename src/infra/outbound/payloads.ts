@@ -3,6 +3,7 @@ import {
   isRenderablePayload,
   shouldSuppressReasoningPayload,
 } from "../../auto-reply/reply/reply-payloads.js";
+import { stripSilentReplyToken } from "../../auto-reply/tokens.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 
 export type NormalizedOutboundPayload = {
@@ -56,9 +57,12 @@ export function normalizeReplyPayloadsForDelivery(
     );
     const hasMultipleMedia = (explicitMediaUrls?.length ?? 0) > 1;
     const resolvedMediaUrl = hasMultipleMedia ? undefined : explicitMediaUrl;
+    // Strip NO_REPLY token from the end of message text if present (#30916)
+    // This handles cases where LLMs append NO_REPLY to actual content
+    const strippedText = stripSilentReplyToken(parsed.text ?? "");
     const next: ReplyPayload = {
       ...payload,
-      text: parsed.text ?? "",
+      text: strippedText,
       mediaUrls: mergedMedia.length ? mergedMedia : undefined,
       mediaUrl: resolvedMediaUrl,
       replyToId: payload.replyToId ?? parsed.replyToId,
