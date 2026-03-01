@@ -2209,12 +2209,32 @@ export class QmdMemoryManager implements MemorySearchManager {
       }),
     );
 
-    const bestByDocId = new Map<string, QmdQueryResult>();
-    for (const settled of results) {
-      if (settled.status === "rejected") {
-        log.debug(`qmd mcporter ${params.tool} collection query failed: ${settled.reason}`);
-        continue;
+    const rejected = results.filter((r): r is PromiseRejectedResult => r.status === "rejected");
+    const fulfilled = results.filter(
+      (r): r is PromiseFulfilledResult<{ collectionName: string; parsed: QmdQueryResult[] }> =>
+        r.status === "fulfilled",
+    );
+
+    // Re-throw structural errors (missing collections, unsupported flags) so the
+    // caller can trigger repair/fallback logic. Only swallow transient errors
+    // (timeouts) when at least some collections succeeded.
+    for (const r of rejected) {
+      const err = r.reason;
+      if (this.isMissingCollectionSearchError(err) || this.isUnsupportedQmdOptionError(err)) {
+        throw err instanceof Error ? err : new Error(String(err));
       }
+    }
+    if (fulfilled.length === 0 && rejected.length > 0) {
+      const first = rejected[0].reason;
+      throw first instanceof Error ? first : new Error(String(first));
+    }
+
+    for (const r of rejected) {
+      log.debug(`qmd mcporter ${params.tool} collection query failed: ${r.reason}`);
+    }
+
+    const bestByDocId = new Map<string, QmdQueryResult>();
+    for (const settled of fulfilled) {
       const { parsed } = settled.value;
       for (const entry of parsed) {
         if (typeof entry.docid !== "string" || !entry.docid.trim()) {
