@@ -69,3 +69,34 @@ openclaw security audit --fix --json | jq '{fix: .fix.ok, summary: .report.summa
 - disable tools (`gateway`, `cron`, `exec`, etc.)
 - change gateway bind/auth/network exposure choices
 - remove or rewrite plugins/skills
+
+## Operational pattern for public sharing (non-sensitive)
+
+When preparing public templates or public-facing documentation, keep policy generic and avoid environment-specific secrets/keys:
+
+- Publish only high-level guardrails (deny-by-default for sensitive ops, explicit approval for risky actions).
+- Treat fetched/external input as untrusted content.
+- Apply output redaction before sharing outside local trusted context.
+- Link to a generic baseline checklist instead of private tenant details.
+
+For a short, reusable template, see [Minimal Public Safety Checklist](/security/minimal-public-safety-checklist).
+
+## Template resources for minimal local safety
+
+- Public workflow template: [Minimal Public Safety Shell Guard Templates](/security/minimal-public-safety-shell-guard)
+- Checklist: [Minimal Public Safety Checklist](/security/minimal-public-safety-checklist)
+
+## Public template guard usage notes
+
+When using the template scripts in `scripts/safety-guards`, recommended defaults are:
+
+- Keep `safe_exec` at deny-by-default (`SAFE_EXEC_ALLOW_DANGEROUS=0`) for day-to-day use.
+- Only enable dangerous mode with an explicit `SAFE_EXEC_APPROVAL_NOTE`.
+- Use `public_publish_guard.example.sh` with a strict flag for CI/automation where leakage must not pass.
+
+Example:
+
+```bash
+SAFE_EXEC_ALLOW_DANGEROUS=1 SAFE_EXEC_APPROVAL_NOTE="Manual patch for incident response" ./security_auto.example.sh exec ./repair.sh
+PUBLIC_PUBLISH_STRICT=1 ./security_auto.example.sh publish draft.md > draft-safe.md
+```
