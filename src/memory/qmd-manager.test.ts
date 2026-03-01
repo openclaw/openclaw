@@ -1648,6 +1648,52 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
+  it("re-throws non-timeout errors even when other collections succeed", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [
+            { path: workspaceDir, pattern: "**/*.md", name: "good" },
+            { path: path.join(workspaceDir, "b"), pattern: "**/*.md", name: "broken" },
+          ],
+        },
+      },
+    } as OpenClawConfig;
+
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "search") {
+        const collectionFlag = args.indexOf("-c");
+        const collectionName = collectionFlag >= 0 ? args[collectionFlag + 1] : "";
+        if (collectionName === "broken-main") {
+          // Simulate a spawn/permission failure (non-timeout error)
+          const child = createMockChild({ autoClose: false });
+          process.nextTick(() => child.emit("error", new Error("spawn EACCES")));
+          return child;
+        }
+        const child = createMockChild({ autoClose: false });
+        emitAndClose(
+          child,
+          "stdout",
+          JSON.stringify([
+            { docid: "doc1", score: 0.9, content: "hello", collection: "good-main" },
+          ]),
+        );
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const { manager } = await createManager();
+    await expect(
+      manager.search("test", { sessionKey: "agent:main:slack:dm:u123" }),
+    ).rejects.toThrow("spawn EACCES");
+    await manager.close();
+  });
+
   it("runs qmd searches via mcporter and warns when startDaemon=false", async () => {
     cfg = {
       ...cfg,
