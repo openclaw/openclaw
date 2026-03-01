@@ -45,10 +45,11 @@ These commands work on channels that support persistent thread bindings. See **T
   - OpenClaw tries direct `agent` delivery first with a stable idempotency key.
   - If direct delivery fails, it falls back to queue routing.
   - If queue routing is still not available, the announce is retried with a short exponential backoff before final give-up.
-- The completion message is a system message and includes:
+- The completion handoff to the requester session is runtime-generated internal context (not user-authored text) and includes:
   - `Result` (`assistant` reply text, or latest `toolResult` if the assistant reply is empty)
-  - `Status` (`completed successfully` / `failed` / `timed out`)
+  - `Status` (`completed successfully` / `failed` / `timed out` / `unknown`)
   - compact runtime/token stats
+  - a delivery instruction telling the requester agent to rewrite in normal assistant voice (not forward raw internal metadata)
 - `--model` and `--thinking` override defaults for that specific run.
 - Use `info`/`log` to inspect details and output after completion.
 - `/subagents spawn` is one-shot mode (`mode: "run"`). For persistent thread-bound sessions, use `sessions_spawn` with `thread: true` and `mode: "session"`.
@@ -212,10 +213,13 @@ Sub-agents report back via an announce step:
 - If the sub-agent replies exactly `ANNOUNCE_SKIP`, nothing is posted.
 - Otherwise the announce reply is posted to the requester chat channel via a follow-up `agent` call (`deliver=true`).
 - Announce replies preserve thread/topic routing when available on channel adapters.
-- Announce messages are normalized to a stable template:
-  - `Status:` derived from the run outcome (`success`, `error`, `timeout`, or `unknown`).
-  - `Result:` the summary content from the announce step (or `(not available)` if missing).
-  - `Notes:` error details and other useful context.
+- Announce context is normalized to a stable internal event block:
+  - source (`subagent` or `cron`)
+  - child session key/id
+  - announce type + task label
+  - status line derived from runtime outcome (`success`, `error`, `timeout`, or `unknown`)
+  - result content from the announce step (or `(no output)` if missing)
+  - a follow-up instruction describing when to reply vs. stay silent
 - `Status` is not inferred from model output; it comes from runtime outcome signals.
 
 Announce payloads include a stats line at the end (even when wrapped):
@@ -224,6 +228,7 @@ Announce payloads include a stats line at the end (even when wrapped):
 - Token usage (input/output/total)
 - Estimated cost when model pricing is configured (`models.providers.*.models[].cost`)
 - `sessionKey`, `sessionId`, and transcript path (so the main agent can fetch history via `sessions_history` or inspect the file on disk)
+- Internal metadata is meant for orchestration only; user-facing replies should be rewritten in normal assistant voice.
 
 ## Tool Policy (sub-agent tools)
 

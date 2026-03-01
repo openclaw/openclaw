@@ -200,15 +200,14 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("Do not invent commands");
   });
 
-  it("marks system message blocks as internal and not user-visible", () => {
+  it("guides runtime completion events without exposing internal metadata", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
     });
 
-    expect(prompt).toContain("`[System Message] ...` blocks are internal context");
-    expect(prompt).toContain("are not user-visible by default");
-    expect(prompt).toContain("reports completed cron/subagent work");
-    expect(prompt).toContain("rewrite it in your normal assistant voice");
+    expect(prompt).toContain("Runtime-generated completion events may ask for a user update.");
+    expect(prompt).toContain("Rewrite those in your normal assistant voice");
+    expect(prompt).toContain("do not forward raw internal metadata");
   });
 
   it("guides subagent workflows to avoid polling loops", () => {

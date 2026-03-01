@@ -14,6 +14,7 @@ import { clearSessionAuthProfileOverride } from "../agents/auth-profiles/session
 import { runCliAgent } from "../agents/cli-runner.js";
 import { getCliSessionId } from "../agents/cli-session.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { formatAgentInternalEventsForPrompt } from "../agents/internal-events.js";
 import { AGENT_LANE_SUBAGENT } from "../agents/lanes.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import { runWithModelFallback } from "../agents/model-fallback.js";
@@ -123,6 +124,20 @@ function resolveFallbackRetryPrompt(params: { body: string; isFallbackRetry: boo
   return "Continue where you left off. The previous model attempt failed or timed out.";
 }
 
+function prependInternalEventContext(
+  body: string,
+  events: AgentCommandOpts["internalEvents"],
+): string {
+  if (body.includes("OpenClaw runtime context (internal):")) {
+    return body;
+  }
+  const renderedEvents = formatAgentInternalEventsForPrompt(events);
+  if (!renderedEvents) {
+    return body;
+  }
+  return [renderedEvents, body].filter(Boolean).join("\n\n");
+}
+
 function runAgentAttempt(params: {
   providerOverride: string;
   modelOverride: string;
@@ -225,10 +240,11 @@ export async function agentCommand(
   runtime: RuntimeEnv = defaultRuntime,
   deps: CliDeps = createDefaultDeps(),
 ) {
-  const body = (opts.message ?? "").trim();
-  if (!body) {
+  const message = (opts.message ?? "").trim();
+  if (!message) {
     throw new Error("Message (--message) is required");
   }
+  const body = prependInternalEventContext(message, opts.internalEvents);
   if (!opts.to && !opts.sessionId && !opts.sessionKey && !opts.agentId) {
     throw new Error("Pass --to <E.164>, --session-id, or --agent to choose a session");
   }
