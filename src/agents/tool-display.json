@@ -302,7 +302,7 @@
     "web_fetch": {
       "emoji": "📄",
       "title": "Web Fetch",
-      "detailKeys": ["url", "extractMode", "maxChars"]
+      "detailKeys": ["url", "extractMode", "maxChars", "timeoutSeconds"]
     },
     "whatsapp_login": {
       "emoji": "🟢",

@@ -243,6 +243,7 @@ await web_search({
 - `url`（必需，仅限 http/https）
 - `extractMode`（`markdown` | `text`）
 - `maxChars`（截断长页面）
+- `timeoutSeconds`（可选，单次调用超时覆盖）
 
 注意：
 
@@ -250,6 +251,7 @@ await web_search({
 - Firecrawl 请求使用机器人规避模式并默认缓存结果。
 - `web_fetch` 默认发送类 Chrome 的 User-Agent 和 `Accept-Language`；如需要可覆盖 `userAgent`。
 - `web_fetch` 阻止私有/内部主机名并重新检查重定向（用 `maxRedirects` 限制）。
+- `timeoutSeconds` 优先级：工具参数 -> `tools.web.fetch.timeoutSeconds` -> 默认值（30s）。
 - `web_fetch` 是尽力提取；某些网站需要浏览器工具。
 - 参见 [Firecrawl](/tools/firecrawl) 了解密钥设置和服务详情。
 - 响应会被缓存（默认 15 分钟）以减少重复获取。

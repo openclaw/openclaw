@@ -308,6 +308,7 @@ Fetch a URL and extract readable content.
 - `url` (required, http/https only)
 - `extractMode` (`markdown` | `text`)
 - `maxChars` (truncate long pages)
+- `timeoutSeconds` (optional per-call timeout override)
 
 Notes:
 
@@ -316,6 +317,7 @@ Notes:
 - `web_fetch` sends a Chrome-like User-Agent and `Accept-Language` by default; override `userAgent` if needed.
 - `web_fetch` blocks private/internal hostnames and re-checks redirects (limit with `maxRedirects`).
 - `maxChars` is clamped to `tools.web.fetch.maxCharsCap`.
+- `timeoutSeconds` resolves by precedence: tool argument -> `tools.web.fetch.timeoutSeconds` -> default (30s).
 - `web_fetch` caps the downloaded response body size to `tools.web.fetch.maxResponseBytes` before parsing; oversized responses are truncated and include a warning.
 - `web_fetch` is best-effort extraction; some sites will need the browser tool.
 - See [Firecrawl](/tools/firecrawl) for key setup and service details.

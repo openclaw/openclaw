@@ -118,6 +118,23 @@ function createFetchTool(fetchOverrides: Record<string, unknown> = {}) {
   });
 }
 
+function readTimeoutFromRequestBody(body: unknown): number | undefined {
+  if (typeof body !== "string") {
+    return undefined;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    return undefined;
+  }
+  if (!parsed || typeof parsed !== "object") {
+    return undefined;
+  }
+  const timeout = (parsed as Record<string, unknown>).timeout;
+  return typeof timeout === "number" ? timeout : undefined;
+}
+
 async function captureToolErrorMessage(params: {
   tool: ReturnType<typeof createWebFetchTool>;
   url: string;
@@ -149,6 +166,12 @@ describe("web_fetch extraction fallbacks", () => {
     global.fetch = priorFetch;
     vi.unstubAllEnvs();
     vi.restoreAllMocks();
+  });
+
+  it("exposes timeoutSeconds in web_fetch schema", () => {
+    const tool = createFetchTool();
+    const schema = tool?.parameters as { properties?: Record<string, { type?: string }> };
+    expect(schema.properties?.timeoutSeconds?.type).toBe("number");
   });
 
   it("wraps fetched text with external content markers", async () => {
@@ -331,6 +354,103 @@ describe("web_fetch extraction fallbacks", () => {
     const init = firecrawlCall?.[1];
     const authHeader = new Headers(init?.headers).get("Authorization");
     expect(authHeader).toBe("Bearer firecrawl-test-key");
+  });
+
+  it("applies per-call timeoutSeconds override to direct fetch", async () => {
+    vi.useFakeTimers();
+    try {
+      installMockFetch(
+        (_input: RequestInfo | URL, init?: RequestInit) =>
+          new Promise<Response>((_resolve, reject) => {
+            const onAbort = () => reject(new Error("aborted by timeout"));
+            if (init?.signal?.aborted) {
+              onAbort();
+              return;
+            }
+            init?.signal?.addEventListener("abort", onAbort, { once: true });
+          }),
+      );
+
+      const tool = createFetchTool({
+        timeoutSeconds: 60,
+        firecrawl: { enabled: false },
+      });
+      expect(tool).toBeTruthy();
+
+      const execution = tool?.execute?.("call", {
+        url: "https://example.com/timeout",
+        timeoutSeconds: 1,
+      });
+      const timeoutAssertion = expect(execution).rejects.toThrow("aborted by timeout");
+
+      await vi.advanceTimersByTimeAsync(1_100);
+      await timeoutAssertion;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("applies per-call timeoutSeconds override to firecrawl fallback", async () => {
+    const fetchSpy = installMockFetch((input: RequestInfo | URL) => {
+      const url = requestUrl(input);
+      if (url.includes("api.firecrawl.dev/v2/scrape")) {
+        return Promise.resolve(
+          firecrawlResponse("firecrawl timeout override"),
+        ) as Promise<Response>;
+      }
+      return Promise.resolve(
+        htmlResponse("<!doctype html><html><head></head><body></body></html>", url),
+      ) as Promise<Response>;
+    });
+
+    const tool = createFetchTool({
+      timeoutSeconds: 60,
+      firecrawl: { apiKey: "firecrawl-test", timeoutSeconds: 45 },
+    });
+
+    const result = await tool?.execute?.("call", {
+      url: "https://example.com/firecrawl-timeout-override",
+      timeoutSeconds: 7,
+    });
+    expect(result?.details).toMatchObject({ extractor: "firecrawl" });
+
+    const firecrawlCall = fetchSpy.mock.calls.find((call) =>
+      requestUrl(call[0]).includes("/v2/scrape"),
+    );
+    expect(firecrawlCall).toBeTruthy();
+    const init = firecrawlCall?.[1];
+    expect(readTimeoutFromRequestBody(init?.body)).toBe(7_000);
+  });
+
+  it("uses configured firecrawl timeout when per-call timeoutSeconds is omitted", async () => {
+    const fetchSpy = installMockFetch((input: RequestInfo | URL) => {
+      const url = requestUrl(input);
+      if (url.includes("api.firecrawl.dev/v2/scrape")) {
+        return Promise.resolve(
+          firecrawlResponse("firecrawl configured timeout"),
+        ) as Promise<Response>;
+      }
+      return Promise.resolve(
+        htmlResponse("<!doctype html><html><head></head><body></body></html>", url),
+      ) as Promise<Response>;
+    });
+
+    const tool = createFetchTool({
+      timeoutSeconds: 60,
+      firecrawl: { apiKey: "firecrawl-test", timeoutSeconds: 45 },
+    });
+
+    const result = await tool?.execute?.("call", {
+      url: "https://example.com/firecrawl-timeout-config",
+    });
+    expect(result?.details).toMatchObject({ extractor: "firecrawl" });
+
+    const firecrawlCall = fetchSpy.mock.calls.find((call) =>
+      requestUrl(call[0]).includes("/v2/scrape"),
+    );
+    expect(firecrawlCall).toBeTruthy();
+    const init = firecrawlCall?.[1];
+    expect(readTimeoutFromRequestBody(init?.body)).toBe(45_000);
   });
 
   it("throws when readability is disabled and firecrawl is unavailable", async () => {

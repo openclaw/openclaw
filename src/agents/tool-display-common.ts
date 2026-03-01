@@ -255,10 +255,17 @@ export function resolveWebFetchDetail(args: unknown): string | undefined {
     typeof record.maxChars === "number" && Number.isFinite(record.maxChars) && record.maxChars > 0
       ? Math.floor(record.maxChars)
       : undefined;
+  const timeoutSeconds =
+    typeof record.timeoutSeconds === "number" &&
+    Number.isFinite(record.timeoutSeconds) &&
+    record.timeoutSeconds > 0
+      ? Math.floor(record.timeoutSeconds)
+      : undefined;
 
   const suffix = [
     mode ? `mode ${mode}` : undefined,
     maxChars !== undefined ? `max ${maxChars} chars` : undefined,
+    timeoutSeconds !== undefined ? `timeout ${timeoutSeconds}s` : undefined,
   ]
     .filter((value): value is string => Boolean(value))
     .join(", ");

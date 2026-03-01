@@ -88,6 +88,22 @@ describe("tool display details", () => {
     expect(detail).toBe('for "OpenClaw docs" (top 3)');
   });
 
+  it("formats web_fetch detail with timeout when provided", () => {
+    const detail = formatToolDetail(
+      resolveToolDisplay({
+        name: "web_fetch",
+        args: {
+          url: "https://example.com",
+          extractMode: "text",
+          maxChars: 3000,
+          timeoutSeconds: 9,
+        },
+      }),
+    );
+
+    expect(detail).toBe("from https://example.com (mode text, max 3000 chars, timeout 9s)");
+  });
+
   it("summarizes exec commands with context", () => {
     const detail = formatToolDetail(
       resolveToolDisplay({
