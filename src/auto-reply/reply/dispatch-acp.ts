@@ -239,6 +239,14 @@ export async function tryDispatchAcpReply(params: {
       throw agentPolicyError;
     }
 
+    try {
+      await delivery.startReplyLifecycle();
+    } catch (error) {
+      logVerbose(
+        `dispatch-acp: start reply lifecycle failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+
     await acpManager.runTurn({
       cfg: params.cfg,
       sessionKey,
