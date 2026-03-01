@@ -28,6 +28,7 @@ export type SessionStdin = {
 export interface ProcessSession {
   id: string;
   command: string;
+  agentId?: string;
   scopeKey?: string;
   sessionKey?: string;
   notifyOnExit?: boolean;

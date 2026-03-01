@@ -481,6 +481,7 @@ export function createExecTool(
         pendingMaxOutput,
         notifyOnExit,
         notifyOnExitEmptySuccess,
+        agentId,
         scopeKey: defaults?.scopeKey,
         sessionKey: notifySessionKey,
         timeoutSec: effectiveTimeout,

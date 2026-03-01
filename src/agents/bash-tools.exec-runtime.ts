@@ -241,7 +241,11 @@ function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "faile
   if (!queued) {
     return;
   }
-  requestHeartbeatNow({ reason: "exec-event", sessionKey });
+  requestHeartbeatNow({
+    reason: "exec-event",
+    sessionKey,
+    agentId: session.agentId,
+  });
 }
 
 export function createApprovalSlug(id: string) {
@@ -260,7 +264,7 @@ export function resolveApprovalRunningNoticeMs(value?: number) {
 
 export function emitExecSystemEvent(
   text: string,
-  opts: { sessionKey?: string; contextKey?: string },
+  opts: { sessionKey?: string; contextKey?: string; agentId?: string },
 ) {
   const sessionKey = opts.sessionKey?.trim();
   if (!sessionKey) {
@@ -270,7 +274,11 @@ export function emitExecSystemEvent(
   if (!queued) {
     return;
   }
-  requestHeartbeatNow({ reason: "exec-event", sessionKey });
+  requestHeartbeatNow({
+    reason: "exec-event",
+    sessionKey,
+    agentId: opts.agentId,
+  });
 }
 
 export async function runExecProcess(opts: {
@@ -288,6 +296,7 @@ export async function runExecProcess(opts: {
   pendingMaxOutput: number;
   notifyOnExit: boolean;
   notifyOnExitEmptySuccess?: boolean;
+  agentId?: string;
   scopeKey?: string;
   sessionKey?: string;
   timeoutSec: number | null;
@@ -301,6 +310,7 @@ export async function runExecProcess(opts: {
   const session: ProcessSession = {
     id: sessionId,
     command: opts.command,
+    agentId: opts.agentId,
     scopeKey: opts.scopeKey,
     sessionKey: opts.sessionKey,
     notifyOnExit: opts.notifyOnExit,

@@ -1,5 +1,9 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+  resetHeartbeatWakeStateForTests,
+  setHeartbeatWakeHandler,
+} from "../infra/heartbeat-wake.js";
 import { peekSystemEvents, resetSystemEventsForTest } from "../infra/system-events.js";
 import { captureEnv } from "../test-utils/env.js";
 import { getFinishedSession, resetProcessRegistryForTests } from "./bash-process-registry.js";
@@ -191,24 +195,24 @@ const requireRunningSessionId = (result: { details: unknown }) => {
   return requireSessionId(result.details as { sessionId?: string });
 };
 
-function hasNotifyEventForPrefix(prefix: string): boolean {
-  return peekSystemEvents(DEFAULT_NOTIFY_SESSION_KEY).some((event) => event.includes(prefix));
+function hasNotifyEventForPrefix(prefix: string, sessionKey = DEFAULT_NOTIFY_SESSION_KEY): boolean {
+  return peekSystemEvents(sessionKey).some((event) => event.includes(prefix));
 }
 
-async function waitForNotifyEvent(sessionId: string) {
+async function waitForNotifyEvent(sessionId: string, sessionKey = DEFAULT_NOTIFY_SESSION_KEY) {
   const prefix = sessionId.slice(0, 8);
   let finished = getFinishedSession(sessionId);
-  let hasEvent = hasNotifyEventForPrefix(prefix);
+  let hasEvent = hasNotifyEventForPrefix(prefix, sessionKey);
   await expect
     .poll(() => {
       finished = getFinishedSession(sessionId);
-      hasEvent = hasNotifyEventForPrefix(prefix);
+      hasEvent = hasNotifyEventForPrefix(prefix, sessionKey);
       return Boolean(finished && hasEvent);
     }, NOTIFY_POLL_OPTIONS)
     .toBe(true);
   return {
     finished: finished ?? getFinishedSession(sessionId),
-    hasEvent: hasEvent || hasNotifyEventForPrefix(prefix),
+    hasEvent: hasEvent || hasNotifyEventForPrefix(prefix, sessionKey),
   };
 }
 
@@ -406,6 +410,7 @@ beforeEach(() => {
   callIdCounter = 0;
   resetProcessRegistryForTests();
   resetSystemEventsForTest();
+  resetHeartbeatWakeStateForTests();
 });
 
 describe("exec tool backgrounding", () => {
@@ -515,6 +520,43 @@ describe("exec notifyOnExit", () => {
 
     expect(finished).toBeTruthy();
     expect(hasEvent).toBe(true);
+  });
+
+  it("wakes heartbeat with explicit agentId for non-agent session keys", async () => {
+    const wakeCalls: Array<{ reason?: string; agentId?: string; sessionKey?: string }> = [];
+    const disposeWakeHandler = setHeartbeatWakeHandler(async (opts) => {
+      wakeCalls.push(opts);
+      return { status: "skipped", reason: "disabled" };
+    });
+
+    try {
+      const notifySessionKey = "global";
+      const tool = createNotifyOnExitExecTool({
+        sessionKey: notifySessionKey,
+        agentId: "ops",
+      });
+
+      const sessionId = await startBackgroundCommand(tool, echoAfterDelay("notify-agent"));
+      const status = await waitForCompletion(sessionId);
+      expect(status).toBe(PROCESS_STATUS_COMPLETED);
+      await waitForNotifyEvent(sessionId, notifySessionKey);
+
+      await expect
+        .poll(
+          () =>
+            wakeCalls.some(
+              (call) =>
+                call.reason === "exec-event" &&
+                call.sessionKey === notifySessionKey &&
+                call.agentId === "ops",
+            ),
+          NOTIFY_POLL_OPTIONS,
+        )
+        .toBe(true);
+    } finally {
+      disposeWakeHandler();
+      resetHeartbeatWakeStateForTests();
+    }
   });
 
   it.each<NotifyNoopCase>(NOOP_NOTIFY_CASES)("$label", runNotifyNoopCase);

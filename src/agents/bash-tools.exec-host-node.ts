@@ -229,7 +229,7 @@ export async function executeNodeHostCommand(
       } catch {
         emitExecSystemEvent(
           `Exec denied (node=${nodeId} id=${approvalId}, approval-request-failed): ${params.command}`,
-          { sessionKey: params.notifySessionKey, contextKey },
+          { sessionKey: params.notifySessionKey, contextKey, agentId: params.agentId },
         );
         return;
       }
@@ -265,6 +265,7 @@ export async function executeNodeHostCommand(
           {
             sessionKey: params.notifySessionKey,
             contextKey,
+            agentId: params.agentId,
           },
         );
         return;
@@ -275,7 +276,7 @@ export async function executeNodeHostCommand(
         runningTimer = setTimeout(() => {
           emitExecSystemEvent(
             `Exec running (node=${nodeId} id=${approvalId}, >${noticeSeconds}s): ${params.command}`,
-            { sessionKey: params.notifySessionKey, contextKey },
+            { sessionKey: params.notifySessionKey, contextKey, agentId: params.agentId },
           );
         }, params.approvalRunningNoticeMs);
       }
@@ -292,6 +293,7 @@ export async function executeNodeHostCommand(
           {
             sessionKey: params.notifySessionKey,
             contextKey,
+            agentId: params.agentId,
           },
         );
       } finally {

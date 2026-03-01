@@ -188,6 +188,7 @@ export async function processGatewayAllowlist(
           {
             sessionKey: params.notifySessionKey,
             contextKey,
+            agentId: params.agentId,
           },
         );
         return;
@@ -241,6 +242,7 @@ export async function processGatewayAllowlist(
           {
             sessionKey: params.notifySessionKey,
             contextKey,
+            agentId: params.agentId,
           },
         );
         return;
@@ -263,6 +265,7 @@ export async function processGatewayAllowlist(
           pendingMaxOutput: params.pendingMaxOutput,
           notifyOnExit: false,
           notifyOnExitEmptySuccess: false,
+          agentId: params.agentId,
           scopeKey: params.scopeKey,
           sessionKey: params.notifySessionKey,
           timeoutSec: effectiveTimeout,
@@ -273,6 +276,7 @@ export async function processGatewayAllowlist(
           {
             sessionKey: params.notifySessionKey,
             contextKey,
+            agentId: params.agentId,
           },
         );
         return;
@@ -285,7 +289,7 @@ export async function processGatewayAllowlist(
         runningTimer = setTimeout(() => {
           emitExecSystemEvent(
             `Exec running (gateway id=${approvalId}, session=${run?.session.id}, >${noticeSeconds}s): ${params.command}`,
-            { sessionKey: params.notifySessionKey, contextKey },
+            { sessionKey: params.notifySessionKey, contextKey, agentId: params.agentId },
           );
         }, params.approvalRunningNoticeMs);
       }
@@ -301,7 +305,11 @@ export async function processGatewayAllowlist(
       const summary = output
         ? `Exec finished (gateway id=${approvalId}, session=${run.session.id}, ${exitLabel})\n${output}`
         : `Exec finished (gateway id=${approvalId}, session=${run.session.id}, ${exitLabel})`;
-      emitExecSystemEvent(summary, { sessionKey: params.notifySessionKey, contextKey });
+      emitExecSystemEvent(summary, {
+        sessionKey: params.notifySessionKey,
+        contextKey,
+        agentId: params.agentId,
+      });
     })();
 
     return {
