@@ -27,11 +27,12 @@ vi.mock("../plugins/config-state.js", () => ({
 }));
 
 vi.mock("../plugins/tools.js", () => ({
+  resolvePluginTools: () => [],
   getPluginToolMeta: () => undefined,
 }));
 
-vi.mock("../agents/openclaw-tools.js", () => {
-  const tools = [
+vi.mock("../agents/openclaw-tools.js", () => ({
+  createOpenClawTools: () => [
     {
       name: "cron",
       parameters: { type: "object", properties: { action: { type: "string" } } },
@@ -42,11 +43,8 @@ vi.mock("../agents/openclaw-tools.js", () => {
       parameters: { type: "object", properties: { action: { type: "string" } } },
       execute: async () => ({ ok: true, via: "gateway" }),
     },
-  ];
-  return {
-    createOpenClawTools: () => tools,
-  };
-});
+  ],
+}));
 
 const { handleToolsInvokeHttpRequest } = await import("./tools-invoke-http.js");
 

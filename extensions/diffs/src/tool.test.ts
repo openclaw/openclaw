@@ -200,6 +200,7 @@ function createApi(): OpenClawPluginApi {
       error() {},
     },
     registerTool() {},
+    unregisterTool: () => false,
     registerHook() {},
     registerHttpHandler() {},
     registerHttpRoute() {},

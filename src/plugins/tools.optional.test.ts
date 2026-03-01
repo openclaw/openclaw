@@ -47,6 +47,7 @@ function setRegistry(entries: MockRegistryToolEntry[]) {
       source: string;
       message: string;
     }>,
+    toolListeners: [] as Array<(event: { added: string[]; removed: string[] }) => void>,
   };
   loadOpenClawPluginsMock.mockReturnValue(registry);
   return registry;

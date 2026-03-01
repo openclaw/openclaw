@@ -13,6 +13,8 @@ import type { OpenClawConfig } from "../../../config/config.js";
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
+import { requireActivePluginRegistry } from "../../../plugins/runtime.js";
+import { getPluginToolMeta, resolvePluginTools } from "../../../plugins/tools.js";
 import type {
   PluginHookAgentContext,
   PluginHookBeforeAgentStartResult,
@@ -503,7 +505,7 @@ export async function runEmbeddedAttempt(
     // Check if the model supports native image input
     const modelHasVision = params.model.input?.includes("image") ?? false;
     const toolsRaw = params.disableTools
-      ? []
+      ? ([] as import("../../pi-tools.types.js").AnyAgentTool[])
       : createOpenClawCodingTools({
           agentId: sessionAgentId,
           exec: {
@@ -824,6 +826,54 @@ export async function runEmbeddedAttempt(
         throw new Error("Embedded agent session missing");
       }
       const activeSession = session;
+
+      // Subscribe to plugin tool changes so mid-run registration/unregistration
+      // takes effect on the next LLM turn. When the registry mutates, re-resolve
+      // plugin tools and push the updated list to the agent.
+      const globalRegistry = requireActivePluginRegistry();
+      const coreTools = tools.filter((t) => !getPluginToolMeta(t));
+      const coreToolNames = new Set(coreTools.map((t) => t.name));
+      const onToolsChanged = () => {
+        const pluginTools = resolvePluginTools({
+          context: {
+            config: params.config,
+            workspaceDir: effectiveWorkspace,
+            agentDir,
+            agentId: sessionAgentId,
+            sessionKey: params.sessionKey,
+            messageChannel: normalizeMessageChannel(
+              params.messageChannel ?? params.messageProvider,
+            ),
+            agentAccountId: params.agentAccountId,
+          },
+          existingToolNames: new Set(coreToolNames),
+        });
+        const allTools = [...coreTools, ...pluginTools];
+        const sanitized = sanitizeToolsForGoogle({
+          tools: allTools,
+          provider: params.provider,
+        });
+        activeSession.agent.setTools(sanitized);
+        // Recompute the allowlist from the full tool set.
+        allowedToolNames.clear();
+        for (const t of sanitized) {
+          allowedToolNames.add(t.name);
+        }
+        for (const ct of params.clientTools ?? []) {
+          const name = (ct as { function?: { name?: string } }).function?.name;
+          if (name) {
+            allowedToolNames.add(name);
+          }
+        }
+        log.debug(`plugin tools changed: tools=${sanitized.length}`);
+      };
+      globalRegistry.toolListeners.push(onToolsChanged);
+      const unsubscribePluginRegistry = () => {
+        globalRegistry.toolListeners = globalRegistry.toolListeners.filter(
+          (fn) => fn !== onToolsChanged,
+        );
+      };
+
       removeToolResultContextGuard = installToolResultContextGuard({
         agent: activeSession.agent,
         contextWindowTokens: Math.max(
@@ -1005,6 +1055,7 @@ export async function runEmbeddedAttempt(
           activeSession.agent.replaceMessages(limited);
         }
       } catch (err) {
+        unsubscribePluginRegistry();
         await flushPendingToolResultsAfterIdle({
           agent: activeSession?.agent,
           sessionManager,
@@ -1457,6 +1508,7 @@ export async function runEmbeddedAttempt(
             `run cleanup: runId=${params.runId} sessionId=${params.sessionId} aborted=${aborted} timedOut=${timedOut}`,
           );
         }
+        unsubscribePluginRegistry();
         try {
           unsubscribe();
         } catch (err) {

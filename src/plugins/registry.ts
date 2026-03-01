@@ -135,6 +135,7 @@ export type PluginRegistry = {
   services: PluginServiceRegistration[];
   commands: PluginCommandRegistration[];
   diagnostics: PluginDiagnostic[];
+  toolListeners: Array<(event: { added: string[]; removed: string[] }) => void>;
 };
 
 export type PluginRegistryParams = {
@@ -158,6 +159,7 @@ export function createEmptyPluginRegistry(): PluginRegistry {
     services: [],
     commands: [],
     diagnostics: [],
+    toolListeners: [],
   };
 }
 
@@ -184,6 +186,25 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     }
 
     const normalized = names.map((name) => name.trim()).filter(Boolean);
+
+    // Detect cross-plugin tool name conflicts at registration time.
+    for (const name of normalized) {
+      const conflict = registry.tools.find(
+        (entry) => entry.pluginId !== record.id && entry.names.includes(name),
+      );
+      if (conflict) {
+        const message = `tool name conflict: "${name}" already registered by plugin "${conflict.pluginId}"`;
+        registryParams.logger.error(`[plugins] ${record.id}: ${message}`);
+        pushDiagnostic({
+          level: "error",
+          pluginId: record.id,
+          source: record.source,
+          message,
+        });
+        return;
+      }
+    }
+
     if (normalized.length > 0) {
       record.toolNames.push(...normalized);
     }
@@ -194,6 +215,28 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       optional,
       source: record.source,
     });
+    for (const fn of registry.toolListeners) {
+      fn({ added: normalized, removed: [] });
+    }
+  };
+
+  const unregisterTool = (record: PluginRecord, toolName: string): boolean => {
+    const trimmed = toolName.trim();
+    if (!trimmed) {
+      return false;
+    }
+    const before = registry.tools.length;
+    registry.tools = registry.tools.filter(
+      (entry) => !(entry.pluginId === record.id && entry.names.includes(trimmed)),
+    );
+    if (registry.tools.length === before) {
+      return false;
+    }
+    record.toolNames = record.toolNames.filter((name) => name !== trimmed);
+    for (const fn of registry.toolListeners) {
+      fn({ added: [], removed: [trimmed] });
+    }
+    return true;
   };
 
   const registerHook = (
@@ -487,6 +530,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       runtime: registryParams.runtime,
       logger: normalizeLogger(registryParams.logger),
       registerTool: (tool, opts) => registerTool(record, tool, opts),
+      unregisterTool: (toolName) => unregisterTool(record, toolName),
       registerHook: (events, handler, opts) =>
         registerHook(record, events, handler, opts, params.config),
       registerHttpHandler: (handler) => registerHttpHandler(record, handler),
@@ -507,6 +551,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     createApi,
     pushDiagnostic,
     registerTool,
+    unregisterTool,
     registerChannel,
     registerProvider,
     registerGatewayMethod,

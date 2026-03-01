@@ -23,6 +23,7 @@ const createRegistry = (diagnostics: PluginDiagnostic[]): PluginRegistry => ({
   cliRegistrars: [],
   services: [],
   diagnostics,
+  toolListeners: [],
 });
 
 describe("loadGatewayPlugins", () => {

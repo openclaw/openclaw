@@ -39,7 +39,11 @@ describe("tools.fs.workspaceOnly", () => {
       await fs.writeFile(path.join(agentRoot, "secret.txt"), "shh", "utf8");
 
       const cfg = { tools: { fs: { workspaceOnly: true } } } as unknown as OpenClawConfig;
-      const tools = createOpenClawCodingTools({ sandbox, workspaceDir: sandboxRoot, config: cfg });
+      const tools = createOpenClawCodingTools({
+        sandbox,
+        workspaceDir: sandboxRoot,
+        config: cfg,
+      });
       const { readTool, writeTool, editTool } = expectReadWriteEditTools(tools);
 
       await expect(readTool?.execute("t1", { path: "/agent/secret.txt" })).rejects.toThrow(

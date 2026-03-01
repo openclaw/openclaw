@@ -47,6 +47,7 @@ vi.mock("../plugins/config-state.js", () => ({
 }));
 
 vi.mock("../plugins/tools.js", () => ({
+  resolvePluginTools: () => [],
   getPluginToolMeta: () => undefined,
 }));
 

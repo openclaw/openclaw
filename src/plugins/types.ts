@@ -256,6 +256,13 @@ export type OpenClawPluginApi = {
     tool: AnyAgentTool | OpenClawPluginToolFactory,
     opts?: OpenClawPluginToolOptions,
   ) => void;
+  /**
+   * Unregister a previously registered tool by name.
+   * Only tools owned by this plugin can be unregistered.
+   * Safe to call at any point in the plugin lifecycle, including mid-agent-run.
+   * Returns true if the tool was found and removed, false if not found.
+   */
+  unregisterTool: (toolName: string) => boolean;
   registerHook: (
     events: string | string[],
     handler: InternalHookHandler,

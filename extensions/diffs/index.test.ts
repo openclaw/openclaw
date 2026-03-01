@@ -22,6 +22,7 @@ describe("diffs plugin registration", () => {
         error() {},
       },
       registerTool,
+      unregisterTool: () => false,
       registerHook() {},
       registerHttpHandler,
       registerHttpRoute() {},
@@ -81,6 +82,7 @@ describe("diffs plugin registration", () => {
       registerTool(tool) {
         registeredTool = typeof tool === "function" ? undefined : tool;
       },
+      unregisterTool: () => false,
       registerHook() {},
       registerHttpHandler(handler) {
         registeredHttpHandler = handler as typeof registeredHttpHandler;
