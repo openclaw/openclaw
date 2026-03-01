@@ -33,6 +33,7 @@ export type {
   AuthProfileStore,
   OAuthCredential,
   ProfileUsageStats,
+  ProviderCooldownEntry,
   TokenCredential,
 } from "./auth-profiles/types.js";
 export {
@@ -41,9 +42,12 @@ export {
   clearExpiredCooldowns,
   getSoonestCooldownExpiry,
   isProfileInCooldown,
+  isProviderInCooldown,
   markAuthProfileCooldown,
   markAuthProfileFailure,
   markAuthProfileUsed,
+  markProviderCooldown,
   resolveProfilesUnavailableReason,
   resolveProfileUnusableUntilForDisplay,
+  resolveProviderCooldownKey,
 } from "./auth-profiles/usage.js";

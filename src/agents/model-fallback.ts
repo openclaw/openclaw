@@ -7,6 +7,7 @@ import {
   ensureAuthProfileStore,
   getSoonestCooldownExpiry,
   isProfileInCooldown,
+  isProviderInCooldown,
   resolveProfilesUnavailableReason,
   resolveAuthProfileOrder,
 } from "./auth-profiles.js";
@@ -441,6 +442,24 @@ export async function runWithModelFallback<T>(params: {
         if (decision.markProbe) {
           lastProbeAttempt.set(probeThrottleKey, now);
         }
+      } else if (
+        profileIds.length === 0 &&
+        i < candidates.length - 1 &&
+        isProviderInCooldown(authStore, candidate.provider, candidate.model)
+      ) {
+        // Provider-level cooldown for auth modes without discrete profiles
+        // (e.g., aws-sdk for Bedrock). Skip so fallback candidates get a
+        // chance. The cooldown expires on its own (exponential backoff),
+        // at which point the provider is tried normally again.
+        // Only skip when remaining candidates exist — never skip the final
+        // candidate, otherwise the loop ends with everything skipped. (#30374)
+        attempts.push({
+          provider: candidate.provider,
+          model: candidate.model,
+          error: `Provider ${candidate.provider} in cooldown (no auth profiles).`,
+          reason: "rate_limit",
+        });
+        continue;
       }
     }
 

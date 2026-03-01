@@ -1163,3 +1163,144 @@ describe("isAnthropicBillingError", () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// Provider-level cooldown (profileless providers like aws-sdk) — #30374
+// ---------------------------------------------------------------------------
+
+describe("provider-level cooldown skip", () => {
+  it("skips a provider in provider-level cooldown when fallbacks exist", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "amazon-bedrock/us.anthropic.claude-opus-4-6-v1",
+            fallbacks: ["anthropic/claude-haiku-3-5"],
+          },
+        },
+      },
+    });
+    // Store has no profiles for amazon-bedrock (aws-sdk), but has
+    // provider-level cooldown recorded.
+    const store: AuthProfileStore = {
+      version: AUTH_STORE_VERSION,
+      profiles: {},
+      providerCooldown: {
+        "amazon-bedrock:us.anthropic.claude-opus-4-6-v1": {
+          cooldownUntil: Date.now() + 60_000,
+          errorCount: 1,
+          reason: "rate_limit",
+        },
+      },
+    };
+
+    const run = vi.fn().mockResolvedValue("ok");
+
+    const result = await withTempAuthStore(store, async (tempDir) =>
+      runWithModelFallback({
+        cfg,
+        provider: "amazon-bedrock",
+        model: "us.anthropic.claude-opus-4-6-v1",
+        agentDir: tempDir,
+        run,
+      }),
+    );
+
+    // The primary (Bedrock) should be skipped. The fallback should run.
+    expect(result.result).toBe("ok");
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(run.mock.calls[0]?.[0]).toBe("anthropic");
+    expect(run.mock.calls[0]?.[1]).toBe("claude-haiku-3-5");
+  });
+
+  it("still attempts last candidate even when in cooldown (multiple candidates)", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "amazon-bedrock/us.anthropic.claude-opus-4-6-v1",
+            fallbacks: ["amazon-bedrock/us.anthropic.claude-haiku-3-5-v1"],
+          },
+        },
+      },
+    });
+    // Both candidates are profileless and in cooldown.
+    const store: AuthProfileStore = {
+      version: AUTH_STORE_VERSION,
+      profiles: {},
+      providerCooldown: {
+        "amazon-bedrock:us.anthropic.claude-opus-4-6-v1": {
+          cooldownUntil: Date.now() + 60_000,
+          errorCount: 1,
+          reason: "rate_limit",
+        },
+        "amazon-bedrock:us.anthropic.claude-haiku-3-5-v1": {
+          cooldownUntil: Date.now() + 60_000,
+          errorCount: 1,
+          reason: "rate_limit",
+        },
+      },
+    };
+
+    const run = vi.fn().mockResolvedValue("ok");
+
+    const result = await withTempAuthStore(store, async (tempDir) =>
+      runWithModelFallback({
+        cfg,
+        provider: "amazon-bedrock",
+        model: "us.anthropic.claude-opus-4-6-v1",
+        agentDir: tempDir,
+        run,
+      }),
+    );
+
+    // Primary should be skipped (in cooldown, not the last candidate).
+    // Last candidate (haiku) must still be attempted even though it's in
+    // cooldown — never skip the final candidate.
+    expect(result.result).toBe("ok");
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(run.mock.calls[0]?.[0]).toBe("amazon-bedrock");
+    expect(run.mock.calls[0]?.[1]).toBe("us.anthropic.claude-haiku-3-5-v1");
+  });
+
+  it("still attempts provider in cooldown when it is the only candidate", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "amazon-bedrock/us.anthropic.claude-opus-4-6-v1",
+            // No fallbacks
+          },
+        },
+      },
+    });
+    const store: AuthProfileStore = {
+      version: AUTH_STORE_VERSION,
+      profiles: {},
+      providerCooldown: {
+        "amazon-bedrock:us.anthropic.claude-opus-4-6-v1": {
+          cooldownUntil: Date.now() + 60_000,
+          errorCount: 1,
+          reason: "rate_limit",
+        },
+      },
+    };
+
+    const run = vi.fn().mockResolvedValue("ok");
+
+    const result = await withTempAuthStore(store, async (tempDir) =>
+      runWithModelFallback({
+        cfg,
+        provider: "amazon-bedrock",
+        model: "us.anthropic.claude-opus-4-6-v1",
+        agentDir: tempDir,
+        run,
+      }),
+    );
+
+    // Must try even in cooldown since there are no fallbacks.
+    expect(result.result).toBe("ok");
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(run.mock.calls[0]?.[0]).toBe("amazon-bedrock");
+  });
+});

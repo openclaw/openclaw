@@ -13,6 +13,7 @@ import {
   markAuthProfileFailure,
   markAuthProfileGood,
   markAuthProfileUsed,
+  markProviderCooldown,
   resolveProfilesUnavailableReason,
 } from "../auth-profiles.js";
 import {
@@ -523,16 +524,29 @@ export async function runEmbeddedPiAgent(
         agentDir?: RunEmbeddedPiAgentParams["agentDir"];
       }) => {
         const { profileId, reason } = failure;
-        if (!profileId || !reason || reason === "timeout") {
+        if (!reason || reason === "timeout") {
           return;
         }
-        await markAuthProfileFailure({
-          store: authStore,
-          profileId,
-          reason,
-          cfg: params.config,
-          agentDir,
-        });
+        if (profileId) {
+          await markAuthProfileFailure({
+            store: authStore,
+            profileId,
+            reason,
+            cfg: params.config,
+            agentDir,
+          });
+        } else {
+          // Provider-level cooldown for auth modes without discrete profiles
+          // (e.g., aws-sdk for Bedrock). Without this, the outer fallback
+          // loop never learns that this provider is rate-limited. (#30374)
+          await markProviderCooldown({
+            store: authStore,
+            provider,
+            model: modelId,
+            reason,
+            agentDir,
+          });
+        }
       };
       try {
         while (true) {
@@ -985,18 +999,19 @@ export async function runEmbeddedPiAgent(
             (!aborted && failoverFailure) || (timedOut && !timedOutDuringCompaction);
 
           if (shouldRotate) {
+            const rotateReason =
+              timedOut || assistantFailoverReason === "timeout"
+                ? "timeout"
+                : (assistantFailoverReason ?? "unknown");
+            // Mark cooldown regardless of whether a profile ID exists.
+            // For profileless providers (aws-sdk/Bedrock), this records a
+            // provider-level cooldown so the outer fallback loop can skip
+            // the rate-limited provider on subsequent requests. (#30374)
+            await maybeMarkAuthProfileFailure({
+              profileId: lastProfileId,
+              reason: rotateReason,
+            });
             if (lastProfileId) {
-              const reason =
-                timedOut || assistantFailoverReason === "timeout"
-                  ? "timeout"
-                  : (assistantFailoverReason ?? "unknown");
-              // Skip cooldown for timeouts: a timeout is model/network-specific,
-              // not an auth issue. Marking the profile would poison fallback models
-              // on the same provider (e.g. gpt-5.3 timeout blocks gpt-5.2).
-              await maybeMarkAuthProfileFailure({
-                profileId: lastProfileId,
-                reason,
-              });
               if (timedOut && !isProbeSession) {
                 log.warn(`Profile ${lastProfileId} timed out. Trying next account...`);
               }

@@ -4,8 +4,11 @@ import {
   clearAuthProfileCooldown,
   clearExpiredCooldowns,
   isProfileInCooldown,
+  isProviderInCooldown,
   markAuthProfileFailure,
+  markProviderCooldown,
   resolveProfilesUnavailableReason,
+  resolveProviderCooldownKey,
   resolveProfileUnusableUntil,
   resolveProfileUnusableUntilForDisplay,
 } from "./usage.js";
@@ -635,4 +638,133 @@ describe("markAuthProfileFailure — active windows do not extend on retry", () 
       expect(testCase.readUntil(stats)).toBe(testCase.expectedUntil(now));
     });
   }
+});
+
+// ---------------------------------------------------------------------------
+// Provider-level cooldown (aws-sdk / profileless providers) — #30374
+// ---------------------------------------------------------------------------
+
+describe("resolveProviderCooldownKey", () => {
+  it("normalizes provider and includes model", () => {
+    expect(resolveProviderCooldownKey("Amazon-Bedrock", "us.anthropic.claude-opus-4-6-v1")).toBe(
+      "amazon-bedrock:us.anthropic.claude-opus-4-6-v1",
+    );
+  });
+
+  it("works without a model", () => {
+    expect(resolveProviderCooldownKey("amazon-bedrock")).toBe("amazon-bedrock");
+  });
+});
+
+describe("isProviderInCooldown", () => {
+  it("returns false when no providerCooldown exists", () => {
+    const store = makeStore({});
+    expect(isProviderInCooldown(store, "amazon-bedrock", "model-a")).toBe(false);
+  });
+
+  it("returns false when cooldown has expired", () => {
+    const store = makeStore({});
+    store.providerCooldown = {
+      "amazon-bedrock:model-a": { cooldownUntil: Date.now() - 1000 },
+    };
+    expect(isProviderInCooldown(store, "amazon-bedrock", "model-a")).toBe(false);
+  });
+
+  it("returns true when cooldown is active", () => {
+    const store = makeStore({});
+    store.providerCooldown = {
+      "amazon-bedrock:model-a": { cooldownUntil: Date.now() + 60_000 },
+    };
+    expect(isProviderInCooldown(store, "amazon-bedrock", "model-a")).toBe(true);
+  });
+
+  it("does not match different models on the same provider", () => {
+    const store = makeStore({});
+    store.providerCooldown = {
+      "amazon-bedrock:model-a": { cooldownUntil: Date.now() + 60_000 },
+    };
+    expect(isProviderInCooldown(store, "amazon-bedrock", "model-b")).toBe(false);
+  });
+
+  it("bypasses cooldown for OpenRouter (same as profile-level)", () => {
+    const store = makeStore({});
+    store.providerCooldown = {
+      "openrouter:model-a": { cooldownUntil: Date.now() + 60_000 },
+    };
+    expect(isProviderInCooldown(store, "openrouter", "model-a")).toBe(false);
+  });
+});
+
+describe("markProviderCooldown", () => {
+  it("records cooldown for a provider+model pair", async () => {
+    const store = makeStore({});
+    await markProviderCooldown({
+      store,
+      provider: "amazon-bedrock",
+      model: "us.anthropic.claude-opus-4-6-v1",
+      reason: "rate_limit",
+    });
+
+    const key = "amazon-bedrock:us.anthropic.claude-opus-4-6-v1";
+    const entry = store.providerCooldown?.[key];
+    expect(entry).toBeDefined();
+    expect(entry!.cooldownUntil).toBeGreaterThan(Date.now());
+    expect(entry!.errorCount).toBe(1);
+    expect(entry!.reason).toBe("rate_limit");
+  });
+
+  it("applies exponential backoff on repeated failures", async () => {
+    const store = makeStore({});
+    const key = "amazon-bedrock:model-a";
+    store.providerCooldown = {
+      [key]: {
+        cooldownUntil: Date.now() - 1, // Expired, but recent
+        errorCount: 1,
+        lastFailureAt: Date.now() - 500,
+        reason: "rate_limit",
+      },
+    };
+
+    await markProviderCooldown({
+      store,
+      provider: "amazon-bedrock",
+      model: "model-a",
+      reason: "rate_limit",
+    });
+
+    const entry = store.providerCooldown?.[key];
+    expect(entry.errorCount).toBe(2);
+    // Second failure: 5 min cooldown (5^1 * 60s = 300s)
+    expect(entry.cooldownUntil).toBeGreaterThan(Date.now() + 4 * 60 * 1000);
+  });
+});
+
+describe("clearExpiredCooldowns — provider-level", () => {
+  it("removes expired provider cooldown entries", () => {
+    const store = makeStore({});
+    const now = Date.now();
+    store.providerCooldown = {
+      "amazon-bedrock:model-a": { cooldownUntil: now - 1000 },
+      "amazon-bedrock:model-b": { cooldownUntil: now + 60_000 },
+    };
+
+    const changed = clearExpiredCooldowns(store, now);
+    expect(changed).toBe(true);
+    expect(store.providerCooldown["amazon-bedrock:model-a"]).toBeUndefined();
+    expect(store.providerCooldown["amazon-bedrock:model-b"]).toBeDefined();
+  });
+
+  it("clears provider cooldowns even when usageStats is empty", () => {
+    const store: AuthProfileStore = {
+      version: 1,
+      profiles: {},
+      providerCooldown: {
+        "amazon-bedrock:model-a": { cooldownUntil: Date.now() - 1000 },
+      },
+    };
+
+    const changed = clearExpiredCooldowns(store);
+    expect(changed).toBe(true);
+    expect(store.providerCooldown!["amazon-bedrock:model-a"]).toBeUndefined();
+  });
 });

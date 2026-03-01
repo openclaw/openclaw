@@ -1,7 +1,12 @@
 import type { OpenClawConfig } from "../../config/config.js";
 import { normalizeProviderId } from "../model-selection.js";
 import { saveAuthProfileStore, updateAuthProfileStoreWithLock } from "./store.js";
-import type { AuthProfileFailureReason, AuthProfileStore, ProfileUsageStats } from "./types.js";
+import type {
+  AuthProfileFailureReason,
+  AuthProfileStore,
+  ProfileUsageStats,
+  ProviderCooldownEntry,
+} from "./types.js";
 
 const FAILURE_REASON_PRIORITY: AuthProfileFailureReason[] = [
   "auth_permanent",
@@ -174,12 +179,30 @@ export function getSoonestCooldownExpiry(
  */
 export function clearExpiredCooldowns(store: AuthProfileStore, now?: number): boolean {
   const usageStats = store.usageStats;
-  if (!usageStats) {
-    return false;
-  }
-
   const ts = now ?? Date.now();
   let mutated = false;
+
+  // Clear expired provider-level cooldowns (aws-sdk / profileless providers).
+  if (store.providerCooldown) {
+    for (const [key, entry] of Object.entries(store.providerCooldown)) {
+      if (!entry) {
+        continue;
+      }
+      const expired =
+        typeof entry.cooldownUntil === "number" &&
+        Number.isFinite(entry.cooldownUntil) &&
+        entry.cooldownUntil > 0 &&
+        ts >= entry.cooldownUntil;
+      if (expired) {
+        delete store.providerCooldown[key];
+        mutated = true;
+      }
+    }
+  }
+
+  if (!usageStats) {
+    return mutated;
+  }
 
   for (const [profileId, stats] of Object.entries(usageStats)) {
     if (!stats) {
@@ -556,4 +579,105 @@ export async function clearAuthProfileCooldown(params: {
     failureCounts: undefined,
   };
   saveAuthProfileStore(store, agentDir);
+}
+
+// ---------------------------------------------------------------------------
+// Provider-level cooldown for auth modes without discrete profiles (aws-sdk)
+// ---------------------------------------------------------------------------
+
+/**
+ * Build the key used in `providerCooldown` for a provider+model pair.
+ * Normalises the provider ID so "Amazon-Bedrock" and "amazon-bedrock" share
+ * the same slot.
+ */
+export function resolveProviderCooldownKey(provider: string, model?: string): string {
+  const normalized = normalizeProviderId(provider);
+  return model ? `${normalized}:${model}` : normalized;
+}
+
+/**
+ * Check if a provider+model pair is in cooldown (for providers that do not
+ * have auth profiles, e.g. aws-sdk).
+ */
+export function isProviderInCooldown(
+  store: AuthProfileStore,
+  provider: string,
+  model?: string,
+): boolean {
+  if (isAuthCooldownBypassedForProvider(provider)) {
+    return false;
+  }
+  const key = resolveProviderCooldownKey(provider, model);
+  const entry = store.providerCooldown?.[key];
+  if (!entry?.cooldownUntil) {
+    return false;
+  }
+  return Date.now() < entry.cooldownUntil;
+}
+
+/**
+ * Mark a provider+model pair as rate-limited / failed when no auth profile
+ * ID is available (e.g. aws-sdk auth for Bedrock).  Uses the same
+ * exponential backoff as profile-level cooldown.
+ */
+export async function markProviderCooldown(params: {
+  store: AuthProfileStore;
+  provider: string;
+  model?: string;
+  reason: AuthProfileFailureReason;
+  agentDir?: string;
+}): Promise<void> {
+  const { store, provider, model, reason, agentDir } = params;
+  if (isAuthCooldownBypassedForProvider(provider)) {
+    return;
+  }
+  const key = resolveProviderCooldownKey(provider, model);
+
+  const updated = await updateAuthProfileStoreWithLock({
+    agentDir,
+    updater: (freshStore) => {
+      freshStore.providerCooldown = freshStore.providerCooldown ?? {};
+      const existing: ProviderCooldownEntry = freshStore.providerCooldown[key] ?? {};
+      freshStore.providerCooldown[key] = computeNextProviderCooldown(existing, reason);
+      return true;
+    },
+  });
+  if (updated) {
+    store.providerCooldown = updated.providerCooldown;
+    return;
+  }
+
+  // Lock unavailable — update in-memory store directly.
+  store.providerCooldown = store.providerCooldown ?? {};
+  const existing: ProviderCooldownEntry = store.providerCooldown[key] ?? {};
+  store.providerCooldown[key] = computeNextProviderCooldown(existing, reason);
+  saveAuthProfileStore(store, agentDir);
+}
+
+function computeNextProviderCooldown(
+  existing: ProviderCooldownEntry,
+  reason: AuthProfileFailureReason,
+): ProviderCooldownEntry {
+  const now = Date.now();
+  // Reset error count if the last failure was more than 24 hours ago.
+  const windowMs = 24 * 60 * 60 * 1000;
+  const windowExpired =
+    typeof existing.lastFailureAt === "number" &&
+    existing.lastFailureAt > 0 &&
+    now - existing.lastFailureAt > windowMs;
+
+  const baseErrorCount = windowExpired ? 0 : (existing.errorCount ?? 0);
+  const nextErrorCount = baseErrorCount + 1;
+  const backoffMs = calculateAuthProfileCooldownMs(nextErrorCount);
+
+  return {
+    cooldownUntil: keepActiveWindowOrRecompute({
+      existingUntil: existing.cooldownUntil,
+      now,
+      recomputedUntil: now + backoffMs,
+    }),
+    errorCount: nextErrorCount,
+    lastFailureAt: now,
+    reason,
+  };
 }

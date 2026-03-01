@@ -56,6 +56,17 @@ export type ProfileUsageStats = {
   lastFailureAt?: number;
 };
 
+/**
+ * Cooldown entry for providers that don't use discrete auth profiles
+ * (e.g., aws-sdk authentication for Bedrock). Keyed by `provider:model`.
+ */
+export type ProviderCooldownEntry = {
+  cooldownUntil?: number;
+  errorCount?: number;
+  lastFailureAt?: number;
+  reason?: AuthProfileFailureReason;
+};
+
 export type AuthProfileStore = {
   version: number;
   profiles: Record<string, AuthProfileCredential>;
@@ -68,6 +79,13 @@ export type AuthProfileStore = {
   lastGood?: Record<string, string>;
   /** Usage statistics per profile for round-robin rotation */
   usageStats?: Record<string, ProfileUsageStats>;
+  /**
+   * Provider-level cooldown for auth modes without discrete profiles (e.g.,
+   * aws-sdk). Keyed by `normalizedProvider:model`. This allows the outer
+   * fallback loop to skip rate-limited providers even when no auth profile
+   * IDs exist for cooldown tracking.
+   */
+  providerCooldown?: Record<string, ProviderCooldownEntry>;
 };
 
 export type AuthProfileIdRepairResult = {
