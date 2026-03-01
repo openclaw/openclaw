@@ -95,6 +95,7 @@ Docs: https://docs.openclaw.ai
 - Web UI/Cron jobs: add schedule-kind and last-run-status filters to the Jobs list, with reset control and client-side filtering over loaded results. (#9510) Thanks @guxu11.
 - Cron/One-shot reliability: retry transient one-shot failures with bounded backoff and configurable retry policy before disabling. (#24435) Thanks .
 - Gateway/Cron auditability: add gateway info logs for successful cron create, update, and remove operations. (#25090) Thanks .
+- Gateway/Config patch guard: reject `config.patch` updates that set non-loopback `gateway.bind` while `gateway.tailscale.mode` is `serve`/`funnel`, preventing restart crash loops from invalid bind/tailscale combinations. (#30893)
 - Cron/Schedule errors: notify users when a job is auto-disabled after repeated schedule computation failures. (#29098) Thanks .
 - Cron/Schedule errors: notify users when a job is auto-disabled after repeated schedule computation failures. (#29098) Thanks .
 - File tools/tilde paths: expand `~/...` against the user home directory before workspace-root checks in host file read/write/edit paths, while preserving root-boundary enforcement so outside-root targets remain blocked. (#29779) Thanks @Glucksberg.
