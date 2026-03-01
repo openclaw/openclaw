@@ -161,6 +161,7 @@ function detectQueueBacklog(
 
   for (const [lane, snaps] of byLane) {
     let consecutiveGrowth = 0;
+    let peakGrowthStreak = 0;
     let prevDepth = 0;
     let maxDepth = 0;
     for (const snap of snaps) {
@@ -168,17 +169,18 @@ function detectQueueBacklog(
       maxDepth = Math.max(maxDepth, depth);
       if (depth > prevDepth) {
         consecutiveGrowth++;
+        peakGrowthStreak = Math.max(peakGrowthStreak, consecutiveGrowth);
       } else {
         consecutiveGrowth = 0;
       }
       prevDepth = depth;
     }
-    if (maxDepth > cfg.maxDepth || consecutiveGrowth >= cfg.sustainedGrowthSamples) {
+    if (maxDepth > cfg.maxDepth || peakGrowthStreak >= cfg.sustainedGrowthSamples) {
       const s: SimQueueBacklog = {
         type: "queue_backlog",
         severity: maxDepth > cfg.maxDepth * 2 ? "critical" : "warning",
         ts: Date.now(),
-        description: `Queue backlog on lane ${lane}: depth=${maxDepth} (threshold=${cfg.maxDepth}), consecutive growth=${consecutiveGrowth}`,
+        description: `Queue backlog on lane ${lane}: depth=${maxDepth} (threshold=${cfg.maxDepth}), peak growth streak=${peakGrowthStreak}`,
         lane,
         depth: maxDepth,
         threshold: cfg.maxDepth,

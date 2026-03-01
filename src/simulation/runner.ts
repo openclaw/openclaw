@@ -50,10 +50,16 @@ export async function runSimulation(
 
   log(`[sim] run=${runId} scenario=${scenario.name}`);
 
-  // Wire fake provider
+  // Wire fake provider — flatten all models by ID.
+  // If two providers declare the same modelId the last one wins (log a warning).
   const allModels: Record<string, { latencyMs: number; response: string; errorRate?: number }> = {};
-  for (const [, providerDef] of Object.entries(scenario.providers)) {
+  for (const [providerName, providerDef] of Object.entries(scenario.providers)) {
     for (const [modelId, modelDef] of Object.entries(providerDef.models)) {
+      if (allModels[modelId]) {
+        log(
+          `[sim] warning: duplicate model "${modelId}" in provider "${providerName}" — overwriting`,
+        );
+      }
       allModels[modelId] = modelDef;
     }
   }
@@ -64,9 +70,10 @@ export async function runSimulation(
     rng,
   });
 
-  // Configure lane concurrency from scenario config
-  const maxConcurrent =
+  // Configure lane concurrency from scenario config (guard against NaN from bad casts)
+  const rawConcurrent =
     (scenario.config?.agents?.defaults?.maxConcurrent as number | undefined) ?? 1;
+  const maxConcurrent = Number.isFinite(rawConcurrent) && rawConcurrent > 0 ? rawConcurrent : 1;
 
   // Start queue monitor
   const monitor = new QueueMonitor();
@@ -75,29 +82,34 @@ export async function runSimulation(
 
   log(`[sim] monitor started, sampleIntervalMs=${sampleIntervalMs}`);
 
-  // Generate traffic — all traffic groups start concurrently
-  await generateTraffic(scenario, {
-    tracker,
-    controller,
-    fakeStreamFn,
-    lanePrefix,
-    maxConcurrent,
-    rng,
-    log,
-    verbose: opts?.verbose,
-  });
+  // Wrap in try/finally so monitor and lanes are always cleaned up,
+  // even if generateTraffic throws (e.g. missing conversation ID)
+  let timeline;
+  try {
+    // Generate traffic — all traffic groups start concurrently
+    await generateTraffic(scenario, {
+      tracker,
+      controller,
+      fakeStreamFn,
+      lanePrefix,
+      maxConcurrent,
+      rng,
+      log,
+      verbose: opts?.verbose,
+    });
 
-  // Wait for all lanes to drain (poll until no queued or active tasks remain)
-  if (!controller.signal.aborted) {
-    const maxLatency = Math.max(...Object.values(allModels).map((m) => m.latencyMs), 1000);
-    const drainDeadline = Date.now() + maxLatency * 5 + 5000;
-    log(`[sim] waiting for lane drain`);
-    await waitForLaneDrain(lanePrefix, drainDeadline, controller.signal);
+    // Wait for all lanes to drain (poll until no queued or active tasks remain)
+    if (!controller.signal.aborted) {
+      const maxLatency = Math.max(...Object.values(allModels).map((m) => m.latencyMs), 1000);
+      const drainDeadline = Date.now() + maxLatency * 5 + 5000;
+      log(`[sim] waiting for lane drain`);
+      await waitForLaneDrain(lanePrefix, drainDeadline, controller.signal);
+    }
+  } finally {
+    // Stop monitor and clean up simulation lanes
+    timeline = monitor.stop();
+    resetLanesByPrefix(lanePrefix);
   }
-
-  // Stop monitor and clean up simulation lanes
-  const timeline = monitor.stop();
-  resetLanesByPrefix(lanePrefix);
 
   log(`[sim] complete, messages=${tracker.size}`);
 
@@ -220,7 +232,7 @@ async function generateTraffic(scenario: ScenarioConfig, ctx: TrafficContext): P
               streamOrPromise instanceof Promise ? await streamOrPromise : streamOrPromise;
 
             // Consume the async iterable to drive the stream to completion
-            let responseText = "";
+            let responseText: string | undefined;
             for await (const evt of stream) {
               if (evt.type === "done") {
                 responseText = evt.message.content
@@ -234,25 +246,28 @@ async function generateTraffic(scenario: ScenarioConfig, ctx: TrafficContext): P
               }
             }
 
-            // Record the outbound message so symptom detectors have reply data
-            const outbound: Omit<SimOutboundMessage, "seq"> = {
-              id: uuidv7(),
-              ts: Date.now(),
-              direction: "outbound",
-              conversationId: conv.id,
-              text: responseText,
-              agentId: model.id,
-              causalParentId: recorded.id,
-              causalParentTs: recorded.ts,
-              queueWaitMs,
-              runDurationMs: Date.now() - runStart,
-            };
-            ctx.tracker.record(outbound);
+            // Only record outbound for successful completions — errors/aborts
+            // should not count as replies (they distort symptom ratios)
+            if (responseText !== undefined) {
+              const outbound: Omit<SimOutboundMessage, "seq"> = {
+                id: uuidv7(),
+                ts: Date.now(),
+                direction: "outbound",
+                conversationId: conv.id,
+                text: responseText,
+                agentId: model.id,
+                causalParentId: recorded.id,
+                causalParentTs: recorded.ts,
+                queueWaitMs,
+                runDurationMs: Date.now() - runStart,
+              };
+              ctx.tracker.record(outbound);
 
-            if (ctx.verbose) {
-              ctx.log(
-                `[sim] outbound: conv=${conv.id} agent=${model.id} wait=${queueWaitMs}ms id=${outbound.id}`,
-              );
+              if (ctx.verbose) {
+                ctx.log(
+                  `[sim] outbound: conv=${conv.id} agent=${model.id} wait=${queueWaitMs}ms id=${outbound.id}`,
+                );
+              }
             }
           }).catch(() => {
             // Lane cleared errors are expected on abort
