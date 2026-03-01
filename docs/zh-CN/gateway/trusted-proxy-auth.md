@@ -266,7 +266,7 @@ location / {
 
 - 缺失 `gateway.trustedProxies`；
 - 缺失 `userHeader`；
-- `allowUsers` 为空（允许所有已认证用户）。
+- `gateway.auth.trustedProxy.allowUsers` 为空（允许所有已认证用户）。
 
 ## 故障排查
 
