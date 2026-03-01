@@ -715,8 +715,12 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
       if (isAgentAllowedForChatType(input.cfg, fallback.agentId, chatType)) {
         return fallback;
       }
+      // Default is also blocked; signal blocked using the default agent (not the
+      // binding-matched one) so the caller always sees the default as the
+      // "canonical" blocked identity when no agent is permitted.
+      return { ...fallback, blocked: true };
     }
-    // Default is also blocked (or was already the default); signal blocked.
+    // Was already the default agent; signal blocked.
     return { ...route, blocked: true };
   };
 
