@@ -47,6 +47,7 @@ import {
   formatPermissionRemediation,
   inspectPathPermissions,
 } from "./audit-fs.js";
+import { collectUfwFindings, type ExecUfwFn } from "./audit-ufw.js";
 import { collectEnabledInsecureOrDangerousFlags } from "./dangerous-config-flags.js";
 import { DEFAULT_GATEWAY_HTTP_TOOL_DENY } from "./dangerous-tools.js";
 import type { ExecFn } from "./windows-acl.js";
@@ -103,6 +104,8 @@ export type SecurityAuditOptions = {
   execIcacls?: ExecFn;
   /** Dependency injection for tests (Docker label checks). */
   execDockerRawFn?: typeof execDockerRaw;
+  /** Dependency injection for tests (UFW status on Linux). */
+  execUfwFn?: ExecUfwFn;
 };
 
 function countBySeverity(findings: SecurityAuditFinding[]): SecurityAuditSummary {
@@ -1010,6 +1013,15 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
 
   findings.push(...collectAttackSurfaceSummaryFindings(cfg));
   findings.push(...collectSyncedFolderFindings({ stateDir, configPath }));
+
+  if (platform === "linux") {
+    findings.push(
+      ...(await collectUfwFindings({
+        platform,
+        execUfwFn: opts.execUfwFn,
+      })),
+    );
+  }
 
   findings.push(...collectGatewayConfigFindings(cfg, env));
   findings.push(...collectBrowserControlFindings(cfg, env));
