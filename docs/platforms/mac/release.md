@@ -27,14 +27,17 @@ This app now ships Sparkle auto-updates. Release builds must be Developer ID–s
 Notes:
 
 - `APP_BUILD` maps to `CFBundleVersion`/`sparkle:version`; keep it numeric + monotonic (no `-beta`), or Sparkle compares it as equal.
+- If `APP_BUILD` is omitted, `scripts/package-mac-app.sh` derives a Sparkle-safe default from `APP_VERSION` (`YYYYMMDD0`) and uses the higher of that value and git commit count.
+- You can still override `APP_BUILD` explicitly when release engineering needs a specific monotonic value.
 - Defaults to the current architecture (`$(uname -m)`). For release/universal builds, set `BUILD_ARCHS="arm64 x86_64"` (or `BUILD_ARCHS=all`).
 - Use `scripts/package-mac-dist.sh` for release artifacts (zip + DMG + notarization). Use `scripts/package-mac-app.sh` for local/dev packaging.
 
 ```bash
 # From repo root; set release IDs so Sparkle feed is enabled.
 # APP_BUILD must be numeric + monotonic for Sparkle compare.
+# Default is auto-derived from APP_VERSION when omitted.
 BUNDLE_ID=ai.hanzo.bot.mac \
-APP_VERSION=2026.2.16 \
+APP_VERSION=2026.2.27 \
 APP_BUILD="$(git rev-list --count HEAD)" \
 BUILD_CONFIG=release \
 SIGN_IDENTITY="Developer ID Application: <Developer Name> (<TEAMID>)" \
