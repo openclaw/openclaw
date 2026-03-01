@@ -140,6 +140,9 @@ function findOtherStateDirs(stateDir: string): string[] {
 function isPathUnderRoot(targetPath: string, rootPath: string): boolean {
   const normalizedTarget = path.resolve(targetPath);
   const normalizedRoot = path.resolve(rootPath);
+  if (normalizedRoot === path.sep) {
+    return normalizedTarget.startsWith(path.sep);
+  }
   return (
     normalizedTarget === normalizedRoot ||
     normalizedTarget.startsWith(`${normalizedRoot}${path.sep}`)
@@ -152,6 +155,135 @@ function tryResolveRealPath(targetPath: string): string | null {
   } catch {
     return null;
   }
+}
+
+function decodeMountInfoPath(value: string): string {
+  return value.replace(/\\([0-7]{3})/g, (_, octal: string) =>
+    String.fromCharCode(Number.parseInt(octal, 8)),
+  );
+}
+
+type LinuxMountInfoEntry = {
+  mountPoint: string;
+  fsType: string;
+  source: string;
+};
+
+function parseLinuxMountInfo(rawMountInfo: string): LinuxMountInfoEntry[] {
+  const entries: LinuxMountInfoEntry[] = [];
+  for (const line of rawMountInfo.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      continue;
+    }
+    const separatorIndex = trimmed.indexOf(" - ");
+    if (separatorIndex === -1) {
+      continue;
+    }
+
+    const left = trimmed.slice(0, separatorIndex);
+    const right = trimmed.slice(separatorIndex + 3);
+    const leftFields = left.split(" ");
+    const rightFields = right.split(" ");
+    if (leftFields.length < 5 || rightFields.length < 2) {
+      continue;
+    }
+
+    entries.push({
+      mountPoint: decodeMountInfoPath(leftFields[4]),
+      fsType: rightFields[0],
+      source: decodeMountInfoPath(rightFields[1]),
+    });
+  }
+  return entries;
+}
+
+function findLinuxMountInfoEntryForPath(
+  targetPath: string,
+  entries: LinuxMountInfoEntry[],
+): LinuxMountInfoEntry | null {
+  const normalizedTarget = path.resolve(targetPath);
+  let bestMatch: LinuxMountInfoEntry | null = null;
+  for (const entry of entries) {
+    if (!isPathUnderRoot(normalizedTarget, entry.mountPoint)) {
+      continue;
+    }
+    if (
+      !bestMatch ||
+      path.resolve(entry.mountPoint).length > path.resolve(bestMatch.mountPoint).length
+    ) {
+      bestMatch = entry;
+    }
+  }
+  return bestMatch;
+}
+
+function isMmcDevicePath(devicePath: string): boolean {
+  const name = path.basename(devicePath);
+  return /^mmcblk\d+(?:p\d+)?$/.test(name);
+}
+
+function tryReadLinuxMountInfo(): string | null {
+  try {
+    return fs.readFileSync("/proc/self/mountinfo", "utf8");
+  } catch {
+    return null;
+  }
+}
+
+export function detectLinuxSdBackedStateDir(
+  stateDir: string,
+  deps?: {
+    platform?: NodeJS.Platform;
+    mountInfo?: string;
+    resolveRealPath?: (targetPath: string) => string | null;
+    resolveDeviceRealPath?: (targetPath: string) => string | null;
+  },
+): {
+  path: string;
+  mountPoint: string;
+  fsType: string;
+  source: string;
+} | null {
+  const platform = deps?.platform ?? process.platform;
+  if (platform !== "linux") {
+    return null;
+  }
+
+  const resolveRealPath = deps?.resolveRealPath ?? tryResolveRealPath;
+  const resolvedStatePath = resolveRealPath(stateDir) ?? path.resolve(stateDir);
+  const mountInfo = deps?.mountInfo ?? tryReadLinuxMountInfo();
+  if (!mountInfo) {
+    return null;
+  }
+
+  const mountEntry = findLinuxMountInfoEntryForPath(
+    resolvedStatePath,
+    parseLinuxMountInfo(mountInfo),
+  );
+  if (!mountEntry) {
+    return null;
+  }
+
+  const sourceCandidates = [mountEntry.source];
+  if (mountEntry.source.startsWith("/dev/")) {
+    const resolvedDevicePath = (deps?.resolveDeviceRealPath ?? tryResolveRealPath)(
+      mountEntry.source,
+    );
+    if (resolvedDevicePath) {
+      sourceCandidates.push(path.resolve(resolvedDevicePath));
+    }
+  }
+  if (!sourceCandidates.some(isMmcDevicePath)) {
+    return null;
+  }
+
+  return {
+    path: path.resolve(resolvedStatePath),
+    mountPoint: path.resolve(mountEntry.mountPoint),
+    fsType: mountEntry.fsType,
+    source: mountEntry.source,
+  };
 }
 
 export function detectMacCloudSyncedStateDir(
@@ -285,6 +417,7 @@ export async function noteStateIntegrity(
   const displayConfigPath = configPath ? shortenHomePath(configPath) : undefined;
   const requireOAuthDir = shouldRequireOAuthDir(cfg, env);
   const cloudSyncedStateDir = detectMacCloudSyncedStateDir(stateDir);
+  const linuxSdBackedStateDir = detectLinuxSdBackedStateDir(stateDir);
 
   if (cloudSyncedStateDir) {
     warnings.push(
@@ -293,6 +426,19 @@ export async function noteStateIntegrity(
         "- This can cause slow I/O and sync/lock races for sessions and credentials.",
         "- Prefer a local non-synced state dir (for example: ~/.openclaw).",
         `  Set locally: OPENCLAW_STATE_DIR=~/.openclaw ${formatCliCommand("openclaw doctor")}`,
+      ].join("\n"),
+    );
+  }
+  if (linuxSdBackedStateDir) {
+    const displayMountPoint =
+      linuxSdBackedStateDir.mountPoint === "/"
+        ? "/"
+        : shortenHomePath(linuxSdBackedStateDir.mountPoint);
+    warnings.push(
+      [
+        `- State directory appears to be on SD/eMMC storage (${displayStateDir}; device ${linuxSdBackedStateDir.source}, fs ${linuxSdBackedStateDir.fsType}, mount ${displayMountPoint}).`,
+        "- SD/eMMC media can be slower for random I/O and wear faster under session/log churn.",
+        "- For better startup and state durability, prefer SSD/NVMe (or USB SSD on Raspberry Pi) for OPENCLAW_STATE_DIR.",
       ].join("\n"),
     );
   }
