@@ -386,6 +386,67 @@ subagents:
     ).rejects.toThrow("max pages exceeded");
   });
 
+  it("maps sessions_send to send_message policy", async () => {
+    writeContracts();
+    const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const tool = wrapToolWithBeforeToolCallHook({ name: "sessions_send", execute } as any, {
+      agentId: "catering_pipeline_builder",
+      sessionKey: "agent:catering_pipeline_builder:subagent:test",
+      workspaceDir,
+    });
+    await expect(
+      tool.execute("sessions-send-1", { sessionKey: "agent:main:main", message: "x" }),
+    ).rejects.toThrow("forbidden by actor policy");
+  });
+
+  it("reloads contract cache when max_pages changes", async () => {
+    writeContracts();
+    const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const tool = wrapToolWithBeforeToolCallHook({ name: "browser", execute } as any, {
+      agentId: "catering_pipeline_builder",
+      sessionKey: "agent:catering_pipeline_builder:subagent:test-hot-reload",
+      workspaceDir,
+    });
+    await expect(
+      tool.execute("browse-reload-1", { url: "https://a.example" }, undefined, undefined),
+    ).resolves.toBeDefined();
+    const behaviorDir = join(workspaceDir, "01_agent_os/behavior");
+    writeFileSync(
+      join(behaviorDir, "subagents_registry.yaml"),
+      `version: 1
+subagents:
+  - subagent_id: catering_pipeline_builder
+    allowed_tools: [web_browsing, file_read, file_write, csv_json_processing]
+    forbidden_tools: [send_message, whatsapp_send, email_send, post_publish]
+    write_scopes: [queue/catering_pipeline_builder/]
+    max_pages: 1
+`,
+      "utf8",
+    );
+    await expect(
+      tool.execute("browse-reload-2", { url: "https://b.example" }, undefined, undefined),
+    ).rejects.toThrow("max pages exceeded");
+  });
+
+  it("blocks when contract files are malformed", async () => {
+    const coreDir = join(workspaceDir, "01_agent_os/core");
+    mkdirSync(coreDir, { recursive: true });
+    writeFileSync(join(coreDir, "tool_permissions.yaml"), "executive_orchestrator: [", "utf8");
+    const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const tool = wrapToolWithBeforeToolCallHook({ name: "browser", execute } as any, {
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      workspaceDir,
+    });
+    await expect(
+      tool.execute("exec-malformed-1", { url: "https://example.com" }, undefined, undefined),
+    ).rejects.toThrow("tool permission contracts invalid");
+    expect(execute).not.toHaveBeenCalled();
+  });
+
   afterEach(() => {
     if (workspaceDir) {
       rmSync(workspaceDir, { recursive: true, force: true });

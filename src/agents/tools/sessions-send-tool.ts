@@ -9,6 +9,7 @@ import {
   INTERNAL_MESSAGE_CHANNEL,
 } from "../../utils/message-channel.js";
 import { AGENT_LANE_NESTED } from "../lanes.js";
+import { assertActorCanSendMessage } from "../tool-permission-contracts.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readStringParam } from "./common.js";
 import {
@@ -35,6 +36,7 @@ const SessionsSendToolSchema = Type.Object({
 export function createSessionsSendTool(opts?: {
   agentSessionKey?: string;
   agentChannel?: GatewayMessageChannel;
+  workspaceDir?: string;
   sandboxed?: boolean;
 }): AnyAgentTool {
   return {
@@ -53,6 +55,11 @@ export function createSessionsSendTool(opts?: {
           agentSessionKey: opts?.agentSessionKey,
           sandboxed: opts?.sandboxed,
         });
+      assertActorCanSendMessage({
+        agentId: resolveAgentIdFromSessionKey(effectiveRequesterKey),
+        sessionKey: effectiveRequesterKey,
+        workspaceDir: opts?.workspaceDir,
+      });
 
       const a2aPolicy = createAgentToAgentPolicy(cfg);
       const sessionVisibility = resolveEffectiveSessionToolsVisibility({

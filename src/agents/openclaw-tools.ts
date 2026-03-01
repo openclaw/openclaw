@@ -112,6 +112,7 @@ export function createOpenClawTools(options?: {
     : createMessageTool({
         agentAccountId: options?.agentAccountId,
         agentSessionKey: options?.agentSessionKey,
+        workspaceDir,
         config: options?.config,
         currentChannelId: options?.currentChannelId,
         currentChannelProvider: options?.agentChannel,
@@ -164,6 +165,7 @@ export function createOpenClawTools(options?: {
     createSessionsSendTool({
       agentSessionKey: options?.agentSessionKey,
       agentChannel: options?.agentChannel,
+      workspaceDir,
       sandboxed: options?.sandboxed,
     }),
     createSessionsSpawnTool({

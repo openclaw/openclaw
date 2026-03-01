@@ -23,6 +23,7 @@ import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { listChannelSupportedActions } from "../channel-tools.js";
 import { channelTargetSchema, channelTargetsSchema, stringEnum } from "../schema/typebox.js";
+import { assertActorCanSendMessage } from "../tool-permission-contracts.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readNumberParam, readStringParam } from "./common.js";
 import { resolveGatewayOptions } from "./gateway.js";
@@ -435,6 +436,7 @@ const MessageToolSchema = buildMessageToolSchemaFromActions(AllMessageActions, {
 type MessageToolOptions = {
   agentAccountId?: string;
   agentSessionKey?: string;
+  workspaceDir?: string;
   config?: OpenClawConfig;
   currentChannelId?: string;
   currentChannelProvider?: string;
@@ -640,6 +642,14 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       }
 
       const cfg = options?.config ?? loadConfig();
+      const agentId = options?.agentSessionKey
+        ? resolveSessionAgentId({ sessionKey: options.agentSessionKey, config: cfg })
+        : undefined;
+      assertActorCanSendMessage({
+        agentId,
+        sessionKey: options?.agentSessionKey,
+        workspaceDir: options?.workspaceDir,
+      });
       const action = readStringParam(params, "action", {
         required: true,
       }) as ChannelMessageActionName;
@@ -710,9 +720,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         gateway,
         toolContext,
         sessionKey: options?.agentSessionKey,
-        agentId: options?.agentSessionKey
-          ? resolveSessionAgentId({ sessionKey: options.agentSessionKey, config: cfg })
-          : undefined,
+        agentId,
         sandboxRoot: options?.sandboxRoot,
         abortSignal: signal,
       });
