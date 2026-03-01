@@ -120,7 +120,7 @@ describe("runCommandWithTimeout", () => {
     ).not.toThrow();
     expect(() =>
       assertSafeWindowsShellArgs({
-        args: ["--args", "{\"query\":\"what's new!\"}"],
+        args: ["--args", '{"query":"what\'s new!"}'],
         platform: "win32",
       }),
     ).not.toThrow();
