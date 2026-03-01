@@ -183,11 +183,10 @@ export function detectMacCloudSyncedStateDir(
       root: path.join(homedir, "Library", "CloudStorage"),
     },
   ];
-  const candidates = [path.resolve(stateDir)];
   const realPath = (deps?.resolveRealPath ?? tryResolveRealPath)(stateDir);
-  if (realPath && !candidates.includes(realPath)) {
-    candidates.push(realPath);
-  }
+  // Prefer the resolved target path when available so symlink prefixes do not
+  // misclassify local state dirs as cloud-synced.
+  const candidates = realPath ? [path.resolve(realPath)] : [path.resolve(stateDir)];
 
   for (const candidate of candidates) {
     for (const { storage, root } of roots) {
