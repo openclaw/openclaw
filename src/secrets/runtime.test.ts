@@ -83,6 +83,68 @@ describe("secrets runtime snapshot", () => {
       type: "api_key",
       key: "sk-env-openai",
     });
+    // After normalization, inline SecretRef string should be promoted to keyRef
+    expect(
+      (snapshot.authStores[0].store.profiles["openai:inline"] as Record<string, unknown>).keyRef,
+    ).toEqual({ source: "env", provider: "default", id: "OPENAI_API_KEY" });
+  });
+
+  it("normalizes inline SecretRef object on token to tokenRef", async () => {
+    const config: OpenClawConfig = { models: {}, secrets: {} };
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config,
+      env: { MY_TOKEN: "resolved-token-value" },
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({
+        version: 1,
+        profiles: {
+          "custom:inline-token": {
+            type: "token",
+            provider: "custom",
+            token: { source: "env", provider: "default", id: "MY_TOKEN" },
+          },
+        },
+      }),
+    });
+
+    const profile = snapshot.authStores[0]?.store.profiles["custom:inline-token"] as Record<
+      string,
+      unknown
+    >;
+    // tokenRef should be set from the inline SecretRef
+    expect(profile.tokenRef).toEqual({ source: "env", provider: "default", id: "MY_TOKEN" });
+    // token should be resolved to the actual value after activation
+    activateSecretsRuntimeSnapshot(snapshot);
+    expect(profile.token).toBe("resolved-token-value");
+  });
+
+  it("normalizes inline SecretRef object on key to keyRef", async () => {
+    const config: OpenClawConfig = { models: {}, secrets: {} };
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config,
+      env: { MY_KEY: "resolved-key-value" },
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({
+        version: 1,
+        profiles: {
+          "custom:inline-key": {
+            type: "api_key",
+            provider: "custom",
+            key: { source: "env", provider: "default", id: "MY_KEY" },
+          },
+        },
+      }),
+    });
+
+    const profile = snapshot.authStores[0]?.store.profiles["custom:inline-key"] as Record<
+      string,
+      unknown
+    >;
+    // keyRef should be set from the inline SecretRef
+    expect(profile.keyRef).toEqual({ source: "env", provider: "default", id: "MY_KEY" });
+    // key should be resolved to the actual value after activation
+    activateSecretsRuntimeSnapshot(snapshot);
+    expect(profile.key).toBe("resolved-key-value");
   });
 
   it("resolves file refs via configured file provider", async () => {
