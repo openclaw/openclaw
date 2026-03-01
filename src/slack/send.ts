@@ -8,6 +8,7 @@ import { isSilentReplyText } from "../auto-reply/tokens.js";
 import { loadConfig } from "../config/config.js";
 import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
 import { logVerbose } from "../globals.js";
+import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { loadWebMedia } from "../web/media.js";
 import type { SlackTokenSource } from "./accounts.js";
 import { resolveSlackAccount } from "./accounts.js";
@@ -19,6 +20,10 @@ import { parseSlackTarget } from "./targets.js";
 import { resolveSlackBotToken } from "./token.js";
 
 const SLACK_TEXT_LIMIT = 4000;
+const SLACK_UPLOAD_SSRF_POLICY = {
+  allowedHostnames: ["*.slack.com", "*.slack-edge.com", "*.slack-files.com"],
+  allowRfc2544BenchmarkRange: true,
+};
 
 type SlackRecipient =
   | {
@@ -189,15 +194,11 @@ async function uploadSlackFile(params: {
   threadTs?: string;
   maxBytes?: number;
 }): Promise<string> {
-  const {
-    buffer,
-    contentType: _contentType,
-    fileName,
-  } = await loadWebMedia(params.mediaUrl, {
+  const { buffer, contentType, fileName } = await loadWebMedia(params.mediaUrl, {
     maxBytes: params.maxBytes,
     localRoots: params.mediaLocalRoots,
   });
-  // Use the 3-step upload flow (getUploadURLExternal → PUT → completeUploadExternal)
+  // Use the 3-step upload flow (getUploadURLExternal -> POST -> completeUploadExternal)
   // instead of files.uploadV2 which relies on the deprecated files.upload endpoint
   // and can fail with missing_scope even when files:write is granted.
   const uploadUrlResp = await params.client.files.getUploadURLExternal({
@@ -209,12 +210,24 @@ async function uploadSlackFile(params: {
   }
 
   // Upload the file content to the presigned URL
-  const uploadResp = await fetch(uploadUrlResp.upload_url, {
-    method: "POST",
-    body: buffer,
+  const uploadBody = new Uint8Array(buffer) as BodyInit;
+  const { response: uploadResp, release } = await fetchWithSsrFGuard({
+    url: uploadUrlResp.upload_url,
+    init: {
+      method: "POST",
+      ...(contentType ? { headers: { "Content-Type": contentType } } : {}),
+      body: uploadBody,
+    },
+    policy: SLACK_UPLOAD_SSRF_POLICY,
+    proxy: "env",
+    auditContext: "slack-upload-file",
   });
-  if (!uploadResp.ok) {
-    throw new Error(`Failed to upload file: HTTP ${uploadResp.status}`);
+  try {
+    if (!uploadResp.ok) {
+      throw new Error(`Failed to upload file: HTTP ${uploadResp.status}`);
+    }
+  } finally {
+    await release();
   }
 
   // Complete the upload and share to channel/thread
