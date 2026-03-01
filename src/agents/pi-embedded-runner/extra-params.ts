@@ -57,6 +57,7 @@ type CacheRetentionStreamOptions = Partial<SimpleStreamOptions> & {
  * Applies to:
  * - direct Anthropic provider
  * - Anthropic Claude models on Bedrock when cache retention is explicitly configured
+ * - Anthropic models through OpenRouter
  *
  * OpenRouter uses openai-completions API with hardcoded cache_control instead
  * of the cacheRetention stream option.
@@ -66,13 +67,18 @@ type CacheRetentionStreamOptions = Partial<SimpleStreamOptions> & {
 function resolveCacheRetention(
   extraParams: Record<string, unknown> | undefined,
   provider: string,
+  modelId?: string,
 ): CacheRetention | undefined {
   const isAnthropicDirect = provider === "anthropic";
   const hasBedrockOverride =
     extraParams?.cacheRetention !== undefined || extraParams?.cacheControlTtl !== undefined;
   const isAnthropicBedrock = provider === "amazon-bedrock" && hasBedrockOverride;
+  const isOpenRouterAnthropic =
+    provider === "openrouter" &&
+    typeof modelId === "string" &&
+    modelId.toLowerCase().startsWith("anthropic/");
 
-  if (!isAnthropicDirect && !isAnthropicBedrock) {
+  if (!isAnthropicDirect && !isAnthropicBedrock && !isOpenRouterAnthropic) {
     return undefined;
   }
 
@@ -92,7 +98,7 @@ function resolveCacheRetention(
   }
 
   // Default to "short" only for direct Anthropic when not explicitly configured.
-  // Bedrock retains upstream provider defaults unless explicitly set.
+  // Bedrock and OpenRouter retain upstream provider defaults unless explicitly set.
   if (!isAnthropicDirect) {
     return undefined;
   }
@@ -443,12 +449,39 @@ type PayloadMessage = {
 };
 
 /**
+ * Map cacheRetention to OpenRouter's cache_control type.
+ * - "none" → no cache_control (disabled)
+ * - "short" → { type: "ephemeral" } (5 min)
+ * - "long" → { type: "persistent" } (1 hour)
+ */
+function mapCacheRetentionToOpenRouterCacheControl(
+  cacheRetention: CacheRetention,
+): { type: "ephemeral" } | { type: "persistent" } | undefined {
+  switch (cacheRetention) {
+    case "none":
+      return undefined;
+    case "short":
+      return { type: "ephemeral" };
+    case "long":
+      return { type: "persistent" };
+  }
+}
+
+/**
  * Inject cache_control into the system message for OpenRouter Anthropic models.
  * OpenRouter passes through Anthropic's cache_control field — caching the system
  * prompt avoids re-processing it on every request.
+ *
+ * @param cacheRetention - Controls cache duration: "none" (disabled), "short" (5min), "long" (1hr)
  */
-function createOpenRouterSystemCacheWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
+function createOpenRouterSystemCacheWrapper(
+  baseStreamFn: StreamFn | undefined,
+  cacheRetention?: CacheRetention,
+): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
+  const cacheControl = cacheRetention
+    ? mapCacheRetentionToOpenRouterCacheControl(cacheRetention)
+    : { type: "ephemeral" }; // Default to "short" behavior for backwards compatibility
   return (model, context, options) => {
     if (
       typeof model.provider !== "string" ||
@@ -468,14 +501,16 @@ function createOpenRouterSystemCacheWrapper(baseStreamFn: StreamFn | undefined):
             if (msg.role !== "system" && msg.role !== "developer") {
               continue;
             }
+            // Only inject cache_control if cacheRetention is not "none"
+            if (cacheControl === undefined) {
+              continue;
+            }
             if (typeof msg.content === "string") {
-              msg.content = [
-                { type: "text", text: msg.content, cache_control: { type: "ephemeral" } },
-              ];
+              msg.content = [{ type: "text", text: msg.content, cache_control: cacheControl }];
             } else if (Array.isArray(msg.content) && msg.content.length > 0) {
               const last = msg.content[msg.content.length - 1];
               if (last && typeof last === "object") {
-                (last as Record<string, unknown>).cache_control = { type: "ephemeral" };
+                (last as Record<string, unknown>).cache_control = cacheControl;
               }
             }
           }
@@ -780,7 +815,9 @@ export function applyExtraParamsToAgent(
     // See: openclaw/openclaw#24851
     const openRouterThinkingLevel = modelId === "auto" ? undefined : thinkingLevel;
     agent.streamFn = createOpenRouterWrapper(agent.streamFn, openRouterThinkingLevel);
-    agent.streamFn = createOpenRouterSystemCacheWrapper(agent.streamFn);
+    // Resolve cacheRetention for OpenRouter Anthropic models
+    const openRouterCacheRetention = resolveCacheRetention(merged, provider, modelId);
+    agent.streamFn = createOpenRouterSystemCacheWrapper(agent.streamFn, openRouterCacheRetention);
   }
 
   if (provider === "amazon-bedrock" && !isAnthropicBedrockModel(modelId)) {

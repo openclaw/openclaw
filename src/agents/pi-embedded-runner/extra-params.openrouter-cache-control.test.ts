@@ -2,6 +2,7 @@ import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { Context, Model } from "@mariozechner/pi-ai";
 import { createAssistantMessageEventStream } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../../config/config.js";
 import { applyExtraParamsToAgent } from "./extra-params.js";
 
 type StreamPayload = {
@@ -11,14 +12,14 @@ type StreamPayload = {
   }>;
 };
 
-function runOpenRouterPayload(payload: StreamPayload, modelId: string) {
+function runOpenRouterPayload(payload: StreamPayload, modelId: string, cfg?: OpenClawConfig) {
   const baseStreamFn: StreamFn = (_model, _context, options) => {
     options?.onPayload?.(payload);
     return createAssistantMessageEventStream();
   };
   const agent = { streamFn: baseStreamFn };
 
-  applyExtraParamsToAgent(agent, undefined, "openrouter", modelId);
+  applyExtraParamsToAgent(agent, cfg, "openrouter", modelId);
 
   const model = {
     api: "openai-completions",
@@ -89,5 +90,89 @@ describe("extra-params: OpenRouter Anthropic cache_control", () => {
     runOpenRouterPayload(payload, "anthropic/claude-opus-4-6");
 
     expect(payload.messages[0].content).toBe("Hello");
+  });
+
+  it("respects cacheRetention: none - does not inject cache_control", () => {
+    const payload = {
+      messages: [{ role: "system", content: "You are a helpful assistant." }],
+    };
+
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "openrouter/anthropic/claude-opus-4-6": {
+              params: { cacheRetention: "none" },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    runOpenRouterPayload(payload, "anthropic/claude-opus-4-6", cfg);
+
+    expect(payload.messages[0].content).toBe("You are a helpful assistant.");
+  });
+
+  it("respects cacheRetention: short - injects ephemeral cache_control", () => {
+    const payload = {
+      messages: [{ role: "system", content: "You are a helpful assistant." }],
+    };
+
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "openrouter/anthropic/claude-opus-4-6": {
+              params: { cacheRetention: "short" },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    runOpenRouterPayload(payload, "anthropic/claude-opus-4-6", cfg);
+
+    expect(payload.messages[0].content).toEqual([
+      { type: "text", text: "You are a helpful assistant.", cache_control: { type: "ephemeral" } },
+    ]);
+  });
+
+  it("respects cacheRetention: long - injects persistent cache_control", () => {
+    const payload = {
+      messages: [{ role: "system", content: "You are a helpful assistant." }],
+    };
+
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "openrouter/anthropic/claude-opus-4-6": {
+              params: { cacheRetention: "long" },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    runOpenRouterPayload(payload, "anthropic/claude-opus-4-6", cfg);
+
+    expect(payload.messages[0].content).toEqual([
+      { type: "text", text: "You are a helpful assistant.", cache_control: { type: "persistent" } },
+    ]);
+  });
+
+  it("defaults to ephemeral when cacheRetention is not configured", () => {
+    // This is the existing behavior - should default to ephemeral (short)
+    const payload = {
+      messages: [{ role: "system", content: "You are a helpful assistant." }],
+    };
+
+    // No cfg provided - should default to ephemeral
+    runOpenRouterPayload(payload, "anthropic/claude-opus-4-6");
+
+    expect(payload.messages[0].content).toEqual([
+      { type: "text", text: "You are a helpful assistant.", cache_control: { type: "ephemeral" } },
+    ]);
   });
 });
