@@ -937,11 +937,21 @@ chrome.webNavigation.onCompleted.addListener(({ tabId, frameId }) => void whenRe
 // Push URL/title changes to the relay so its /json/list cache stays fresh.
 // This handles navigations where the debugger stays attached (same-site,
 // pushState, etc.) and the detach/re-attach cycle never fires.
-chrome.tabs.onUpdated.addListener((tabId, changeInfo) => void whenReady(() => {
+chrome.tabs.onUpdated.addListener((tabId, changeInfo) => void whenReady(async () => {
   if (!changeInfo.url) return
   const tab = tabs.get(tabId)
   if (!tab || tab.state !== 'connected') return
   if (!relayWs || relayWs.readyState !== WebSocket.OPEN) return
+
+  // When only the URL changes, changeInfo.title is undefined.
+  // Fall back to the current Chrome tab title to avoid clearing the relay cache.
+  let title = changeInfo.title
+  if (title === undefined) {
+    try {
+      const chromeTab = await chrome.tabs.get(tabId)
+      title = chromeTab.title ?? ''
+    } catch { title = '' }
+  }
 
   sendToRelay({
     method: 'forwardCDPEvent',
@@ -951,7 +961,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => void whenReady(() => {
         targetInfo: {
           targetId: tab.targetId,
           type: 'page',
-          title: changeInfo.title || '',
+          title,
           url: changeInfo.url,
           attached: true,
         },
