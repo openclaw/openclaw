@@ -4,6 +4,7 @@ import android.Manifest
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Context
+import android.content.pm.PackageManager
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
@@ -36,7 +37,7 @@ private class AndroidSystemNotificationPoster(
     if (Build.VERSION.SDK_INT >= 33) {
       val granted =
         ContextCompat.checkSelfPermission(appContext, Manifest.permission.POST_NOTIFICATIONS) ==
-          android.content.pm.PackageManager.PERMISSION_GRANTED
+          PackageManager.PERMISSION_GRANTED
       if (!granted) return false
     }
     return NotificationManagerCompat.from(appContext).areNotificationsEnabled()
@@ -55,6 +56,13 @@ private class AndroidSystemNotificationPoster(
         .setOnlyAlertOnce(true)
         .setSilent(silent)
         .build()
+    if (
+      Build.VERSION.SDK_INT >= 33 &&
+      ContextCompat.checkSelfPermission(appContext, Manifest.permission.POST_NOTIFICATIONS) !=
+      PackageManager.PERMISSION_GRANTED
+    ) {
+      return
+    }
     NotificationManagerCompat.from(appContext).notify((System.currentTimeMillis() and 0x7FFFFFFF).toInt(), notification)
   }
 
