@@ -10,6 +10,7 @@ import android.os.Looper
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
+import android.util.Log
 import androidx.core.content.ContextCompat
 import java.util.UUID
 import kotlinx.coroutines.CoroutineScope
@@ -39,18 +40,16 @@ class MicCaptureManager(
   private val context: Context,
   private val scope: CoroutineScope,
   private val sendToGateway: suspend (String) -> String?,
+  private val speakAssistantReply: suspend (String) -> Unit = {},
 ) {
   companion object {
+    private const val tag = "MicCapture"
     private const val speechMinSessionMs = 30_000L
     private const val speechCompleteSilenceMs = 1_500L
     private const val speechPossibleSilenceMs = 900L
     private const val maxConversationEntries = 40
     private const val pendingRunTimeoutMs = 45_000L
   }
-
-  private data class QueuedUtterance(
-    val text: String,
-  )
 
   private val mainHandler = Handler(Looper.getMainLooper())
   private val json = Json { ignoreUnknownKeys = true }
@@ -79,7 +78,7 @@ class MicCaptureManager(
   private val _isSending = MutableStateFlow(false)
   val isSending: StateFlow<Boolean> = _isSending
 
-  private val messageQueue = ArrayDeque<QueuedUtterance>()
+  private val messageQueue = ArrayDeque<String>()
   private val sessionSegments = mutableListOf<String>()
   private var lastFinalSegment: String? = null
   private var pendingRunId: String? = null
@@ -140,6 +139,7 @@ class MicCaptureManager(
         val finalText = parseAssistantText(payload)?.trim().orEmpty()
         if (finalText.isNotEmpty()) {
           upsertPendingAssistant(text = finalText, isStreaming = false)
+          playAssistantReplyAsync(finalText)
         } else if (pendingAssistantEntryId != null) {
           updateConversationEntry(pendingAssistantEntryId!!, text = null, isStreaming = false)
         }
@@ -251,12 +251,12 @@ class MicCaptureManager(
       role = VoiceConversationRole.User,
       text = message,
     )
-    messageQueue.addLast(QueuedUtterance(text = message))
+    messageQueue.addLast(message)
     publishQueue()
   }
 
   private fun publishQueue() {
-    _queuedMessages.value = messageQueue.map { it.text }
+    _queuedMessages.value = messageQueue.toList()
   }
 
   private fun sendQueuedIfIdle() {
@@ -282,7 +282,7 @@ class MicCaptureManager(
 
     scope.launch {
       try {
-        val runId = sendToGateway(next.text)
+        val runId = sendToGateway(next)
         pendingRunId = runId
         if (runId == null) {
           pendingRunTimeoutJob?.cancel()
@@ -361,15 +361,21 @@ class MicCaptureManager(
 
   private fun updateConversationEntry(id: String, text: String?, isStreaming: Boolean) {
     val current = _conversation.value
-    _conversation.value =
-      current.map { entry ->
-        if (entry.id == id) {
-          val updatedText = text ?: entry.text
-          entry.copy(text = updatedText, isStreaming = isStreaming)
-        } else {
-          entry
-        }
+    if (current.isEmpty()) return
+
+    val targetIndex =
+      when {
+        current[current.lastIndex].id == id -> current.lastIndex
+        else -> current.indexOfFirst { it.id == id }
       }
+    if (targetIndex < 0) return
+
+    val entry = current[targetIndex]
+    val updatedText = text ?: entry.text
+    if (updatedText == entry.text && entry.isStreaming == isStreaming) return
+    val updated = current.toMutableList()
+    updated[targetIndex] = entry.copy(text = updatedText, isStreaming = isStreaming)
+    _conversation.value = updated
   }
 
   private fun upsertPendingAssistant(text: String, isStreaming: Boolean) {
@@ -384,6 +390,18 @@ class MicCaptureManager(
       return
     }
     updateConversationEntry(id = currentId, text = text, isStreaming = isStreaming)
+  }
+
+  private fun playAssistantReplyAsync(text: String) {
+    val spoken = text.trim()
+    if (spoken.isEmpty()) return
+    scope.launch {
+      try {
+        speakAssistantReply(spoken)
+      } catch (err: Throwable) {
+        Log.w(tag, "assistant speech failed: ${err.message ?: err::class.simpleName}")
+      }
+    }
   }
 
   private fun onFinalTranscript(text: String) {
