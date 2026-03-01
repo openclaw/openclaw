@@ -6,6 +6,7 @@ import type { RuntimeEnv } from "../../runtime.js";
 const {
   clientFetchUserMock,
   clientGetPluginMock,
+  capturedClientOptions,
   createDiscordNativeCommandMock,
   createNoopThreadBindingManagerMock,
   createThreadBindingManagerMock,
@@ -20,9 +21,11 @@ const {
   resolveNativeSkillsEnabledMock,
 } = vi.hoisted(() => {
   const createdBindingManagers: Array<{ stop: ReturnType<typeof vi.fn> }> = [];
+  const capturedClientOptions: unknown[] = [];
   return {
     clientFetchUserMock: vi.fn(async (_target: string) => ({ id: "bot-1" })),
     clientGetPluginMock: vi.fn<(_name: string) => unknown>(() => undefined),
+    capturedClientOptions,
     createDiscordNativeCommandMock: vi.fn(() => ({ name: "mock-command" })),
     createNoopThreadBindingManagerMock: vi.fn(() => {
       const manager = { stop: vi.fn() };
@@ -69,7 +72,8 @@ vi.mock("@buape/carbon", () => {
   class Client {
     listeners: unknown[];
     rest: { put: ReturnType<typeof vi.fn> };
-    constructor(_options: unknown, handlers: { listeners?: unknown[] }) {
+    constructor(options: unknown, handlers: { listeners?: unknown[] }) {
+      capturedClientOptions.push(options);
       this.listeners = handlers.listeners ?? [];
       this.rest = { put: vi.fn(async () => undefined) };
     }
@@ -256,6 +260,7 @@ describe("monitorDiscordProvider", () => {
   beforeEach(() => {
     clientFetchUserMock.mockClear().mockResolvedValue({ id: "bot-1" });
     clientGetPluginMock.mockClear().mockReturnValue(undefined);
+    capturedClientOptions.length = 0;
     createDiscordNativeCommandMock.mockClear().mockReturnValue({ name: "mock-command" });
     createNoopThreadBindingManagerMock.mockClear();
     createThreadBindingManagerMock.mockClear();
@@ -333,5 +338,19 @@ describe("monitorDiscordProvider", () => {
     };
     expect(lifecycleArgs.pendingGatewayErrors).toHaveLength(1);
     expect(String(lifecycleArgs.pendingGatewayErrors?.[0])).toContain("4014");
+  });
+
+  it("configures event queue listener timeout for long-running discord handlers", async () => {
+    const { monitorDiscordProvider } = await import("./provider.js");
+
+    await monitorDiscordProvider({
+      config: baseConfig(),
+      runtime: baseRuntime(),
+    });
+
+    const clientOptions = capturedClientOptions[0] as {
+      eventQueue?: { listenerTimeout?: number };
+    };
+    expect(clientOptions.eventQueue?.listenerTimeout).toBe(120_000);
   });
 });

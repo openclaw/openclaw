@@ -110,6 +110,7 @@ function summarizeGuilds(entries?: Record<string, unknown>) {
 
 const DEFAULT_THREAD_BINDING_IDLE_HOURS = 24;
 const DEFAULT_THREAD_BINDING_MAX_AGE_HOURS = 0;
+const DISCORD_EVENT_QUEUE_LISTENER_TIMEOUT_MS = 120_000;
 
 function normalizeThreadBindingHours(raw: unknown): number | undefined {
   if (typeof raw !== "number" || !Number.isFinite(raw)) {
@@ -523,6 +524,9 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
         publicKey: "a",
         token,
         autoDeploy: false,
+        eventQueue: {
+          listenerTimeout: DISCORD_EVENT_QUEUE_LISTENER_TIMEOUT_MS,
+        },
       },
       {
         commands,
