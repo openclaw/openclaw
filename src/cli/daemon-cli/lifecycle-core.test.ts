@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const loadConfig = vi.fn(() => ({
   gateway: {
@@ -38,10 +38,23 @@ vi.mock("../../runtime.js", () => ({
   defaultRuntime,
 }));
 
+let runServiceRestart: typeof import("./lifecycle-core.js").runServiceRestart;
+
 describe("runServiceRestart token drift", () => {
+  beforeAll(async () => {
+    ({ runServiceRestart } = await import("./lifecycle-core.js"));
+  });
+
   beforeEach(() => {
     runtimeLogs.length = 0;
-    loadConfig.mockClear();
+    loadConfig.mockReset();
+    loadConfig.mockReturnValue({
+      gateway: {
+        auth: {
+          token: "config-token",
+        },
+      },
+    });
     service.isLoaded.mockClear();
     service.readCommand.mockClear();
     service.restart.mockClear();
@@ -56,8 +69,6 @@ describe("runServiceRestart token drift", () => {
   });
 
   it("emits drift warning when enabled", async () => {
-    const { runServiceRestart } = await import("./lifecycle-core.js");
-
     await runServiceRestart({
       serviceNoun: "Gateway",
       service,
@@ -72,9 +83,33 @@ describe("runServiceRestart token drift", () => {
     expect(payload.warnings?.[0]).toContain("gateway install --force");
   });
 
-  it("skips drift warning when disabled", async () => {
-    const { runServiceRestart } = await import("./lifecycle-core.js");
+  it("uses env-first token precedence when checking drift", async () => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        auth: {
+          token: "config-token",
+        },
+      },
+    });
+    service.readCommand.mockResolvedValue({
+      environment: { OPENCLAW_GATEWAY_TOKEN: "env-token" },
+    });
+    vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "env-token");
 
+    await runServiceRestart({
+      serviceNoun: "Gateway",
+      service,
+      renderStartHints: () => [],
+      opts: { json: true },
+      checkTokenDrift: true,
+    });
+
+    const jsonLine = runtimeLogs.find((line) => line.trim().startsWith("{"));
+    const payload = JSON.parse(jsonLine ?? "{}") as { warnings?: string[] };
+    expect(payload.warnings).toBeUndefined();
+  });
+
+  it("skips drift warning when disabled", async () => {
     await runServiceRestart({
       serviceNoun: "Node",
       service,

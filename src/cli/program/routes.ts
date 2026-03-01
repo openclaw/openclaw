@@ -3,12 +3,14 @@ import { getFlagValue, getPositiveIntFlagValue, getVerboseFlag, hasFlag } from "
 
 export type RouteSpec = {
   match: (path: string[]) => boolean;
-  loadPlugins?: boolean;
+  loadPlugins?: boolean | ((argv: string[]) => boolean);
   run: (argv: string[]) => Promise<boolean>;
 };
 
 const routeHealth: RouteSpec = {
   match: (path) => path[0] === "health",
+  // Health output uses channel plugin metadata for account fallback/log details.
+  // Keep routed behavior aligned with non-routed command execution.
   loadPlugins: true,
   run: async (argv) => {
     const json = hasFlag(argv, "--json");
@@ -25,6 +27,8 @@ const routeHealth: RouteSpec = {
 
 const routeStatus: RouteSpec = {
   match: (path) => path[0] === "status",
+  // Status runs security audit with channel checks in both text and JSON output,
+  // so plugin registry must be ready for consistent findings.
   loadPlugins: true,
   run: async (argv) => {
     const json = hasFlag(argv, "--json");
@@ -43,9 +47,16 @@ const routeStatus: RouteSpec = {
 };
 
 const routeSessions: RouteSpec = {
-  match: (path) => path[0] === "sessions",
+  // Fast-path only bare `sessions`; subcommands (e.g. `sessions cleanup`)
+  // must fall through to Commander so nested handlers run.
+  match: (path) => path[0] === "sessions" && !path[1],
   run: async (argv) => {
     const json = hasFlag(argv, "--json");
+    const allAgents = hasFlag(argv, "--all-agents");
+    const agent = getFlagValue(argv, "--agent");
+    if (agent === null) {
+      return false;
+    }
     const store = getFlagValue(argv, "--store");
     if (store === null) {
       return false;
@@ -55,7 +66,7 @@ const routeSessions: RouteSpec = {
       return false;
     }
     const { sessionsCommand } = await import("../../commands/sessions.js");
-    await sessionsCommand({ json, store, active }, defaultRuntime);
+    await sessionsCommand({ json, store, agent, allAgents, active }, defaultRuntime);
     return true;
   },
 };

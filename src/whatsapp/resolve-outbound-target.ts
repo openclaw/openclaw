@@ -31,19 +31,18 @@ export function resolveWhatsAppOutboundTarget(params: {
     if (isWhatsAppGroupJid(normalizedTo)) {
       return { ok: true, to: normalizedTo };
     }
-    if (params.mode === "implicit" || params.mode === "heartbeat") {
-      if (hasWildcard || allowList.length === 0) {
-        return { ok: true, to: normalizedTo };
-      }
-      if (allowList.includes(normalizedTo)) {
-        return { ok: true, to: normalizedTo };
-      }
-      return {
-        ok: false,
-        error: missingTargetError("WhatsApp", "<E.164|group JID>"),
-      };
+    // Enforce allowFrom for all direct-message send modes (including explicit).
+    // Group destinations are handled by group policy and are allowed above.
+    if (hasWildcard || allowList.length === 0) {
+      return { ok: true, to: normalizedTo };
     }
-    return { ok: true, to: normalizedTo };
+    if (allowList.includes(normalizedTo)) {
+      return { ok: true, to: normalizedTo };
+    }
+    return {
+      ok: false,
+      error: missingTargetError("WhatsApp", "<E.164|group JID>"),
+    };
   }
 
   return {

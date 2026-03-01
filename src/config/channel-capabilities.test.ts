@@ -148,18 +148,4 @@ const baseRegistry = createTestRegistry([
   { pluginId: "slack", source: "test", plugin: createStubPlugin("slack") },
 ]);
 
-const createMSTeamsPlugin = (): ChannelPlugin => ({
-  id: "msteams",
-  meta: {
-    id: "msteams",
-    label: "Microsoft Teams",
-    selectionLabel: "Microsoft Teams (Bot Framework)",
-    docsPath: "/channels/msteams",
-    blurb: "Bot Framework; enterprise support.",
-  },
-  capabilities: { chatTypes: ["direct"] },
-  config: {
-    listAccountIds: () => [],
-    resolveAccount: () => ({}),
-  },
-});
+const createMSTeamsPlugin = (): ChannelPlugin => createStubPlugin("msteams");

@@ -1,4 +1,4 @@
-FROM node:22-bookworm
+FROM node:22-bookworm@sha256:cd7bcd2e7a1e6f72052feb023c7f6b722205d3fcab7bbcbd2d1bfdab10b1e935
 
 RUN corepack enable
 
@@ -21,5 +21,9 @@ COPY apps/shared/OpenClawKit/Tools/CanvasA2UI ./apps/shared/OpenClawKit/Tools/Ca
 RUN pnpm install --frozen-lockfile
 RUN pnpm build
 RUN pnpm ui:build
+
+RUN useradd --create-home --shell /bin/bash appuser \
+  && chown -R appuser:appuser /app
+USER appuser
 
 CMD ["bash"]

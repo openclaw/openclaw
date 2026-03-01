@@ -6,6 +6,13 @@ import { normalizeSignalAccountInput } from "./onboarding/signal.js";
 import { telegramOutbound } from "./outbound/telegram.js";
 import { whatsappOutbound } from "./outbound/whatsapp.js";
 
+function expectWhatsAppTargetResolutionError(result: unknown) {
+  expect(result).toEqual({
+    ok: false,
+    error: expect.any(Error),
+  });
+}
+
 describe("imessage target normalization", () => {
   it("preserves service prefixes for handles", () => {
     expect(normalizeIMessageMessagingTarget("sms:+1 (555) 222-3333")).toBe("sms:+15552223333");
@@ -35,6 +42,12 @@ describe("signal target normalization", () => {
     expect(
       normalizeSignalMessagingTarget("signal:group:VWATOdKF2hc8zdOS76q9tb0+5BI522e03QLDAq/9yPg="),
     ).toBe("group:VWATOdKF2hc8zdOS76q9tb0+5BI522e03QLDAq/9yPg=");
+  });
+
+  it("preserves case for base64-like group IDs without signal prefix", () => {
+    expect(
+      normalizeSignalMessagingTarget("group:AbCdEfGhIjKlMnOpQrStUvWxYz0123456789+/ABCD="),
+    ).toBe("group:AbCdEfGhIjKlMnOpQrStUvWxYz0123456789+/ABCD=");
   });
 
   it("accepts uuid prefixes for target detection", () => {
@@ -143,10 +156,7 @@ describe("whatsappOutbound.resolveTarget", () => {
       mode: "implicit",
     });
 
-    expect(result).toEqual({
-      ok: false,
-      error: expect.any(Error),
-    });
+    expectWhatsAppTargetResolutionError(result);
   });
 
   it("returns error when implicit target is not in allowFrom", () => {
@@ -156,10 +166,7 @@ describe("whatsappOutbound.resolveTarget", () => {
       mode: "implicit",
     });
 
-    expect(result).toEqual({
-      ok: false,
-      error: expect.any(Error),
-    });
+    expectWhatsAppTargetResolutionError(result);
   });
 
   it("keeps group JID targets even when allowFrom does not contain them", () => {

@@ -12,7 +12,7 @@ import { checkUpdateStatus } from "../../infra/update-check.js";
 import { defaultRuntime } from "../../runtime.js";
 import { renderTable } from "../../terminal/table.js";
 import { theme } from "../../terminal/theme.js";
-import { resolveUpdateRoot, type UpdateStatusOptions } from "./shared.js";
+import { parseTimeoutMsOrExit, resolveUpdateRoot, type UpdateStatusOptions } from "./shared.js";
 
 function formatGitStatusLine(params: {
   branch: string | null;
@@ -31,10 +31,8 @@ function formatGitStatusLine(params: {
 }
 
 export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<void> {
-  const timeoutMs = opts.timeout ? Number.parseInt(opts.timeout, 10) * 1000 : undefined;
-  if (timeoutMs !== undefined && (Number.isNaN(timeoutMs) || timeoutMs <= 0)) {
-    defaultRuntime.error("--timeout must be a positive integer (seconds)");
-    defaultRuntime.exit(1);
+  const timeoutMs = parseTimeoutMsOrExit(opts.timeout);
+  if (timeoutMs === null) {
     return;
   }
 

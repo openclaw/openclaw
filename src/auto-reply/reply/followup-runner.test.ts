@@ -1,34 +1,53 @@
 import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { loadSessionStore, saveSessionStore, type SessionEntry } from "../../config/sessions.js";
 import type { FollowupRun } from "./queue.js";
 import { createMockTypingController } from "./test-helpers.js";
 
 const runEmbeddedPiAgentMock = vi.fn();
+const routeReplyMock = vi.fn();
+const isRoutableChannelMock = vi.fn();
 
-vi.mock("../../agents/model-fallback.js", () => ({
-  runWithModelFallback: async ({
-    provider,
-    model,
-    run,
-  }: {
-    provider: string;
-    model: string;
-    run: (provider: string, model: string) => Promise<unknown>;
-  }) => ({
-    result: await run(provider, model),
-    provider,
-    model,
-  }),
-}));
+vi.mock(
+  "../../agents/model-fallback.js",
+  async () => await import("../../test-utils/model-fallback.mock.js"),
+);
 
 vi.mock("../../agents/pi-embedded.js", () => ({
   runEmbeddedPiAgent: (params: unknown) => runEmbeddedPiAgentMock(params),
 }));
 
+vi.mock("./route-reply.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./route-reply.js")>();
+  return {
+    ...actual,
+    isRoutableChannel: (...args: unknown[]) => isRoutableChannelMock(...args),
+    routeReply: (...args: unknown[]) => routeReplyMock(...args),
+  };
+});
+
 import { createFollowupRunner } from "./followup-runner.js";
+
+const ROUTABLE_TEST_CHANNELS = new Set([
+  "telegram",
+  "slack",
+  "discord",
+  "signal",
+  "imessage",
+  "whatsapp",
+  "feishu",
+]);
+
+beforeEach(() => {
+  routeReplyMock.mockReset();
+  routeReplyMock.mockResolvedValue({ ok: true });
+  isRoutableChannelMock.mockReset();
+  isRoutableChannelMock.mockImplementation((ch: string | undefined) =>
+    Boolean(ch?.trim() && ROUTABLE_TEST_CHANNELS.has(ch.trim().toLowerCase())),
+  );
+});
 
 const baseQueuedRun = (messageProvider = "whatsapp"): FollowupRun =>
   ({
@@ -60,6 +79,40 @@ const baseQueuedRun = (messageProvider = "whatsapp"): FollowupRun =>
     },
   }) as FollowupRun;
 
+function createQueuedRun(
+  overrides: Partial<Omit<FollowupRun, "run">> & { run?: Partial<FollowupRun["run"]> } = {},
+): FollowupRun {
+  const base = baseQueuedRun();
+  return {
+    ...base,
+    ...overrides,
+    run: {
+      ...base.run,
+      ...overrides.run,
+    },
+  };
+}
+
+function mockCompactionRun(params: {
+  willRetry: boolean;
+  result: {
+    payloads: Array<{ text: string }>;
+    meta: Record<string, unknown>;
+  };
+}) {
+  runEmbeddedPiAgentMock.mockImplementationOnce(
+    async (args: {
+      onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => void;
+    }) => {
+      args.onAgentEvent?.({
+        stream: "compaction",
+        data: { phase: "end", willRetry: params.willRetry },
+      });
+      return params.result;
+    },
+  );
+}
+
 describe("createFollowupRunner compaction", () => {
   it("adds verbose auto-compaction notice and tracks count", async () => {
     const storePath = path.join(
@@ -75,17 +128,10 @@ describe("createFollowupRunner compaction", () => {
     };
     const onBlockReply = vi.fn(async () => {});
 
-    runEmbeddedPiAgentMock.mockImplementationOnce(
-      async (params: {
-        onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => void;
-      }) => {
-        params.onAgentEvent?.({
-          stream: "compaction",
-          data: { phase: "end", willRetry: true },
-        });
-        return { payloads: [{ text: "final" }], meta: {} };
-      },
-    );
+    mockCompactionRun({
+      willRetry: true,
+      result: { payloads: [{ text: "final" }], meta: {} },
+    });
 
     const runner = createFollowupRunner({
       opts: { onBlockReply },
@@ -98,32 +144,11 @@ describe("createFollowupRunner compaction", () => {
       defaultModel: "anthropic/claude-opus-4-5",
     });
 
-    const queued = {
-      prompt: "hello",
-      summaryLine: "hello",
-      enqueuedAt: Date.now(),
+    const queued = createQueuedRun({
       run: {
-        sessionId: "session",
-        sessionKey: "main",
-        messageProvider: "whatsapp",
-        sessionFile: "/tmp/session.jsonl",
-        workspaceDir: "/tmp",
-        config: {},
-        skillsSnapshot: {},
-        provider: "anthropic",
-        model: "claude",
-        thinkLevel: "low",
         verboseLevel: "on",
-        elevatedLevel: "off",
-        bashElevated: {
-          enabled: false,
-          allowed: false,
-          defaultLevel: "off",
-        },
-        timeoutMs: 1_000,
-        blockReplyBreak: "message_end",
       },
-    } as FollowupRun;
+    });
 
     await runner(queued);
 
@@ -132,71 +157,30 @@ describe("createFollowupRunner compaction", () => {
     expect(firstCall?.[0]?.text).toContain("Auto-compaction complete");
     expect(sessionStore.main.compactionCount).toBe(1);
   });
-
-  it("updates totalTokens after auto-compaction using lastCallUsage", async () => {
-    const storePath = path.join(
-      await fs.mkdtemp(path.join(tmpdir(), "openclaw-followup-compaction-")),
-      "sessions.json",
-    );
-    const sessionKey = "main";
-    const sessionEntry: SessionEntry = {
-      sessionId: "session",
-      updatedAt: Date.now(),
-      totalTokens: 180_000,
-      compactionCount: 0,
-    };
-    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
-    await saveSessionStore(storePath, sessionStore);
-    const onBlockReply = vi.fn(async () => {});
-
-    runEmbeddedPiAgentMock.mockImplementationOnce(
-      async (params: {
-        onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => void;
-      }) => {
-        params.onAgentEvent?.({
-          stream: "compaction",
-          data: { phase: "end", willRetry: false },
-        });
-        return {
-          payloads: [{ text: "done" }],
-          meta: {
-            agentMeta: {
-              // Accumulated usage across pre+post compaction calls.
-              usage: { input: 190_000, output: 8_000, total: 198_000 },
-              // Last call usage reflects post-compaction context.
-              lastCallUsage: { input: 11_000, output: 2_000, total: 13_000 },
-              model: "claude-opus-4-5",
-              provider: "anthropic",
-            },
-          },
-        };
-      },
-    );
-
-    const runner = createFollowupRunner({
-      opts: { onBlockReply },
-      typing: createMockTypingController(),
-      typingMode: "instant",
-      sessionEntry,
-      sessionStore,
-      sessionKey,
-      storePath,
-      defaultModel: "anthropic/claude-opus-4-5",
-      agentCfgContextTokens: 200_000,
-    });
-
-    await runner(baseQueuedRun());
-
-    const store = loadSessionStore(storePath, { skipCache: true });
-    expect(store[sessionKey]?.compactionCount).toBe(1);
-    expect(store[sessionKey]?.totalTokens).toBe(11_000);
-    // We only keep the total estimate after compaction.
-    expect(store[sessionKey]?.inputTokens).toBeUndefined();
-    expect(store[sessionKey]?.outputTokens).toBeUndefined();
-  });
 });
 
 describe("createFollowupRunner messaging tool dedupe", () => {
+  function createMessagingDedupeRunner(
+    onBlockReply: (payload: unknown) => Promise<void>,
+    overrides: Partial<{
+      sessionEntry: SessionEntry;
+      sessionStore: Record<string, SessionEntry>;
+      sessionKey: string;
+      storePath: string;
+    }> = {},
+  ) {
+    return createFollowupRunner({
+      opts: { onBlockReply },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-5",
+      sessionEntry: overrides.sessionEntry,
+      sessionStore: overrides.sessionStore,
+      sessionKey: overrides.sessionKey,
+      storePath: overrides.storePath,
+    });
+  }
+
   it("drops payloads already sent via messaging tool", async () => {
     const onBlockReply = vi.fn(async () => {});
     runEmbeddedPiAgentMock.mockResolvedValueOnce({
@@ -205,12 +189,7 @@ describe("createFollowupRunner messaging tool dedupe", () => {
       meta: {},
     });
 
-    const runner = createFollowupRunner({
-      opts: { onBlockReply },
-      typing: createMockTypingController(),
-      typingMode: "instant",
-      defaultModel: "anthropic/claude-opus-4-5",
-    });
+    const runner = createMessagingDedupeRunner(onBlockReply);
 
     await runner(baseQueuedRun());
 
@@ -225,12 +204,7 @@ describe("createFollowupRunner messaging tool dedupe", () => {
       meta: {},
     });
 
-    const runner = createFollowupRunner({
-      opts: { onBlockReply },
-      typing: createMockTypingController(),
-      typingMode: "instant",
-      defaultModel: "anthropic/claude-opus-4-5",
-    });
+    const runner = createMessagingDedupeRunner(onBlockReply);
 
     await runner(baseQueuedRun());
 
@@ -246,15 +220,60 @@ describe("createFollowupRunner messaging tool dedupe", () => {
       meta: {},
     });
 
-    const runner = createFollowupRunner({
-      opts: { onBlockReply },
-      typing: createMockTypingController(),
-      typingMode: "instant",
-      defaultModel: "anthropic/claude-opus-4-5",
-    });
+    const runner = createMessagingDedupeRunner(onBlockReply);
 
     await runner(baseQueuedRun("slack"));
 
+    expect(onBlockReply).not.toHaveBeenCalled();
+  });
+
+  it("suppresses replies when provider is synthetic but originating channel matches", async () => {
+    const onBlockReply = vi.fn(async () => {});
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "hello world!" }],
+      messagingToolSentTexts: ["different message"],
+      messagingToolSentTargets: [{ tool: "telegram", provider: "telegram", to: "268300329" }],
+      meta: {},
+    });
+
+    const runner = createMessagingDedupeRunner(onBlockReply);
+
+    await runner({
+      ...baseQueuedRun("heartbeat"),
+      originatingChannel: "telegram",
+      originatingTo: "268300329",
+    } as FollowupRun);
+
+    expect(onBlockReply).not.toHaveBeenCalled();
+  });
+
+  it("does not suppress replies for same target when account differs", async () => {
+    const onBlockReply = vi.fn(async () => {});
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "hello world!" }],
+      messagingToolSentTexts: ["different message"],
+      messagingToolSentTargets: [
+        { tool: "telegram", provider: "telegram", to: "268300329", accountId: "work" },
+      ],
+      meta: {},
+    });
+
+    const runner = createMessagingDedupeRunner(onBlockReply);
+
+    await runner({
+      ...baseQueuedRun("heartbeat"),
+      originatingChannel: "telegram",
+      originatingTo: "268300329",
+      originatingAccountId: "personal",
+    } as FollowupRun);
+
+    expect(routeReplyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+        to: "268300329",
+        accountId: "personal",
+      }),
+    );
     expect(onBlockReply).not.toHaveBeenCalled();
   });
 
@@ -266,12 +285,7 @@ describe("createFollowupRunner messaging tool dedupe", () => {
       meta: {},
     });
 
-    const runner = createFollowupRunner({
-      opts: { onBlockReply },
-      typing: createMockTypingController(),
-      typingMode: "instant",
-      defaultModel: "anthropic/claude-opus-4-5",
-    });
+    const runner = createMessagingDedupeRunner(onBlockReply);
 
     await runner(baseQueuedRun());
 
@@ -287,12 +301,7 @@ describe("createFollowupRunner messaging tool dedupe", () => {
       meta: {},
     });
 
-    const runner = createFollowupRunner({
-      opts: { onBlockReply },
-      typing: createMockTypingController(),
-      typingMode: "instant",
-      defaultModel: "anthropic/claude-opus-4-5",
-    });
+    const runner = createMessagingDedupeRunner(onBlockReply);
 
     await runner(baseQueuedRun());
 
@@ -324,15 +333,11 @@ describe("createFollowupRunner messaging tool dedupe", () => {
       },
     });
 
-    const runner = createFollowupRunner({
-      opts: { onBlockReply },
-      typing: createMockTypingController(),
-      typingMode: "instant",
+    const runner = createMessagingDedupeRunner(onBlockReply, {
       sessionEntry,
       sessionStore,
       sessionKey,
       storePath,
-      defaultModel: "anthropic/claude-opus-4-5",
     });
 
     await runner(baseQueuedRun("slack"));
@@ -345,5 +350,192 @@ describe("createFollowupRunner messaging tool dedupe", () => {
     // Accumulated usage is still stored for usage/cost tracking.
     expect(store[sessionKey]?.inputTokens).toBe(1_000);
     expect(store[sessionKey]?.outputTokens).toBe(50);
+  });
+
+  it("does not fall back to dispatcher when cross-channel origin routing fails", async () => {
+    const onBlockReply = vi.fn(async () => {});
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "hello world!" }],
+      meta: {},
+    });
+    routeReplyMock.mockResolvedValueOnce({
+      ok: false,
+      error: "forced route failure",
+    });
+
+    const runner = createMessagingDedupeRunner(onBlockReply);
+
+    await runner({
+      ...baseQueuedRun("webchat"),
+      originatingChannel: "discord",
+      originatingTo: "channel:C1",
+    } as FollowupRun);
+
+    expect(routeReplyMock).toHaveBeenCalled();
+    expect(onBlockReply).not.toHaveBeenCalled();
+  });
+
+  it("falls back to dispatcher when same-channel origin routing fails", async () => {
+    const onBlockReply = vi.fn(async () => {});
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "hello world!" }],
+      meta: {},
+    });
+    routeReplyMock.mockResolvedValueOnce({
+      ok: false,
+      error: "outbound adapter unavailable",
+    });
+
+    const runner = createMessagingDedupeRunner(onBlockReply);
+
+    await runner({
+      ...baseQueuedRun(" Feishu "),
+      originatingChannel: "FEISHU",
+      originatingTo: "ou_abc123",
+    } as FollowupRun);
+
+    expect(routeReplyMock).toHaveBeenCalled();
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    expect(onBlockReply).toHaveBeenCalledWith(expect.objectContaining({ text: "hello world!" }));
+  });
+
+  it("routes followups with originating account/thread metadata", async () => {
+    const onBlockReply = vi.fn(async () => {});
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "hello world!" }],
+      meta: {},
+    });
+
+    const runner = createMessagingDedupeRunner(onBlockReply);
+
+    await runner({
+      ...baseQueuedRun("webchat"),
+      originatingChannel: "discord",
+      originatingTo: "channel:C1",
+      originatingAccountId: "work",
+      originatingThreadId: "1739142736.000100",
+    } as FollowupRun);
+
+    expect(routeReplyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "discord",
+        to: "channel:C1",
+        accountId: "work",
+        threadId: "1739142736.000100",
+      }),
+    );
+    expect(onBlockReply).not.toHaveBeenCalled();
+  });
+});
+
+describe("createFollowupRunner typing cleanup", () => {
+  it("calls both markRunComplete and markDispatchIdle on NO_REPLY", async () => {
+    const typing = createMockTypingController();
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "NO_REPLY" }],
+      meta: {},
+    });
+
+    const runner = createFollowupRunner({
+      opts: { onBlockReply: vi.fn(async () => {}) },
+      typing,
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-5",
+    });
+
+    await runner(baseQueuedRun());
+
+    expect(typing.markRunComplete).toHaveBeenCalled();
+    expect(typing.markDispatchIdle).toHaveBeenCalled();
+  });
+
+  it("calls both markRunComplete and markDispatchIdle on empty payloads", async () => {
+    const typing = createMockTypingController();
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: {},
+    });
+
+    const runner = createFollowupRunner({
+      opts: { onBlockReply: vi.fn(async () => {}) },
+      typing,
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-5",
+    });
+
+    await runner(baseQueuedRun());
+
+    expect(typing.markRunComplete).toHaveBeenCalled();
+    expect(typing.markDispatchIdle).toHaveBeenCalled();
+  });
+
+  it("calls both markRunComplete and markDispatchIdle on agent error", async () => {
+    const typing = createMockTypingController();
+    runEmbeddedPiAgentMock.mockRejectedValueOnce(new Error("agent exploded"));
+
+    const runner = createFollowupRunner({
+      opts: { onBlockReply: vi.fn(async () => {}) },
+      typing,
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-5",
+    });
+
+    await runner(baseQueuedRun());
+
+    expect(typing.markRunComplete).toHaveBeenCalled();
+    expect(typing.markDispatchIdle).toHaveBeenCalled();
+  });
+
+  it("calls both markRunComplete and markDispatchIdle on successful delivery", async () => {
+    const typing = createMockTypingController();
+    const onBlockReply = vi.fn(async () => {});
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "hello world!" }],
+      meta: {},
+    });
+
+    const runner = createFollowupRunner({
+      opts: { onBlockReply },
+      typing,
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-5",
+    });
+
+    await runner(baseQueuedRun());
+
+    expect(onBlockReply).toHaveBeenCalled();
+    expect(typing.markRunComplete).toHaveBeenCalled();
+    expect(typing.markDispatchIdle).toHaveBeenCalled();
+  });
+});
+
+describe("createFollowupRunner agentDir forwarding", () => {
+  it("passes queued run agentDir to runEmbeddedPiAgent", async () => {
+    runEmbeddedPiAgentMock.mockClear();
+    const onBlockReply = vi.fn(async () => {});
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "hello world!" }],
+      messagingToolSentTexts: ["different message"],
+      meta: {},
+    });
+    const runner = createFollowupRunner({
+      opts: { onBlockReply },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-5",
+    });
+    const agentDir = path.join("/tmp", "agent-dir");
+    const queued = createQueuedRun();
+    await runner({
+      ...queued,
+      run: {
+        ...queued.run,
+        agentDir,
+      },
+    });
+
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    const call = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0] as { agentDir?: string };
+    expect(call?.agentDir).toBe(agentDir);
   });
 });

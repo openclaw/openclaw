@@ -47,6 +47,7 @@ Status: production-ready for bot DMs + groups via grammY. Long polling is the de
 ```
 
     Env fallback: `TELEGRAM_BOT_TOKEN=...` (default account only).
+    Telegram does **not** use `openclaw channels login telegram`; configure token in config/env, then start gateway.
 
   </Step>
 
@@ -108,13 +109,15 @@ Token resolution order is account-aware. In practice, config values win over env
     `channels.telegram.dmPolicy` controls direct message access:
 
     - `pairing` (default)
-    - `allowlist`
+    - `allowlist` (requires at least one sender ID in `allowFrom`)
     - `open` (requires `allowFrom` to include `"*"`)
     - `disabled`
 
     `channels.telegram.allowFrom` accepts numeric Telegram user IDs. `telegram:` / `tg:` prefixes are accepted and normalized.
+    `dmPolicy: "allowlist"` with empty `allowFrom` blocks all DMs and is rejected by config validation.
     The onboarding wizard accepts `@username` input and resolves it to numeric IDs.
     If you upgraded and your config contains `@username` allowlist entries, run `openclaw doctor --fix` to resolve them (best-effort; requires a Telegram bot token).
+    If you previously relied on pairing-store allowlist files, `openclaw doctor --fix` can recover entries into `channels.telegram.allowFrom` in allowlist flows (for example when `dmPolicy: "allowlist"` has no explicit IDs yet).
 
     ### Finding your Telegram user ID
 
@@ -135,10 +138,12 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
   </Tab>
 
   <Tab title="Group policy and allowlists">
-    There are two independent controls:
+    Two controls apply together:
 
     1. **Which groups are allowed** (`channels.telegram.groups`)
-       - no `groups` config: all groups allowed
+       - no `groups` config:
+         - with `groupPolicy: "open"`: any group can pass group-ID checks
+         - with `groupPolicy: "allowlist"` (default): groups are blocked until you add `groups` entries (or `"*"`)
        - `groups` configured: acts as allowlist (explicit IDs or `"*"`)
 
     2. **Which senders are allowed in groups** (`channels.telegram.groupPolicy`)
@@ -147,7 +152,11 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
        - `disabled`
 
     `groupAllowFrom` is used for group sender filtering. If not set, Telegram falls back to `allowFrom`.
-    `groupAllowFrom` entries must be numeric Telegram user IDs.
+    `groupAllowFrom` entries should be numeric Telegram user IDs (`telegram:` / `tg:` prefixes are normalized).
+    Non-numeric entries are ignored for sender authorization.
+    Security boundary (`2026.2.25+`): group sender auth does **not** inherit DM pairing-store approvals.
+    Pairing stays DM-only. For groups, set `groupAllowFrom` or per-group/per-topic `allowFrom`.
+    Runtime note: if `channels.telegram` is completely missing, runtime defaults to fail-closed `groupPolicy="allowlist"` unless `channels.defaults.groupPolicy` is explicitly set.
 
     Example: allow any member in one specific group:
 
@@ -226,21 +235,9 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
     Requirement:
 
-    - `channels.telegram.streamMode` is not `"off"` (default: `"partial"`)
-
-    Modes:
-
-    - `off`: no live preview
-    - `partial`: frequent preview updates from partial text
-    - `block`: chunked preview updates using `channels.telegram.draftChunk`
-
-    `draftChunk` defaults for `streamMode: "block"`:
-
-    - `minChars: 200`
-    - `maxChars: 800`
-    - `breakPreference: "paragraph"`
-
-    `maxChars` is clamped by `channels.telegram.textChunkLimit`.
+    - `channels.telegram.streaming` is `off | partial | block | progress` (default: `off`)
+    - `progress` maps to `partial` on Telegram (compat with cross-channel naming)
+    - legacy `channels.telegram.streamMode` and boolean `streaming` values are auto-mapped
 
     This works in direct chats and groups/topics.
 
@@ -248,7 +245,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
     For complex replies (for example media payloads), OpenClaw falls back to normal final delivery and then cleans up the preview message.
 
-    `streamMode` is separate from block streaming. When block streaming is explicitly enabled for Telegram, OpenClaw skips the preview stream to avoid double-streaming.
+    Preview streaming is separate from block streaming. When block streaming is explicitly enabled for Telegram, OpenClaw skips the preview stream to avoid double-streaming.
 
     Telegram-only reasoning stream:
 
@@ -393,16 +390,18 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
     - `react` (`chatId`, `messageId`, `emoji`)
     - `deleteMessage` (`chatId`, `messageId`)
     - `editMessage` (`chatId`, `messageId`, `content`)
+    - `createForumTopic` (`chatId`, `name`, optional `iconColor`, `iconCustomEmojiId`)
 
-    Channel message actions expose ergonomic aliases (`send`, `react`, `delete`, `edit`, `sticker`, `sticker-search`).
+    Channel message actions expose ergonomic aliases (`send`, `react`, `delete`, `edit`, `sticker`, `sticker-search`, `topic-create`).
 
     Gating controls:
 
     - `channels.telegram.actions.sendMessage`
-    - `channels.telegram.actions.editMessage`
     - `channels.telegram.actions.deleteMessage`
     - `channels.telegram.actions.reactions`
     - `channels.telegram.actions.sticker` (default: disabled)
+
+    Note: `edit` and `topic-create` are currently enabled by default and do not have separate `channels.telegram.actions.*` toggles.
 
     Reaction removal semantics: [/tools/reactions](/tools/reactions)
 
@@ -563,6 +562,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
     Notes:
 
     - `own` means user reactions to bot-sent messages only (best-effort via sent-message cache).
+    - Reaction events still respect Telegram access controls (`dmPolicy`, `allowFrom`, `groupPolicy`, `groupAllowFrom`); unauthorized senders are dropped.
     - Telegram does not provide thread IDs in reaction updates.
       - non-forum groups route to group chat session
       - forum groups route to the group general-topic session (`:topic:1`), not the exact originating topic
@@ -619,6 +619,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
     - set `channels.telegram.webhookSecret` (required when webhook URL is set)
     - optional `channels.telegram.webhookPath` (default `/telegram-webhook`)
     - optional `channels.telegram.webhookHost` (default `127.0.0.1`)
+    - optional `channels.telegram.webhookPort` (default `8787`)
 
     Default local listener for webhook mode binds to `127.0.0.1:8787`.
 
@@ -636,7 +637,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
     - DM history controls:
       - `channels.telegram.dmHistoryLimit`
       - `channels.telegram.dms["<user_id>"].historyLimit`
-    - outbound Telegram API retries are configurable via `channels.telegram.retry`.
+    - `channels.telegram.retry` config applies to Telegram send helpers (CLI/tools/actions) for recoverable outbound API errors.
 
     CLI send target can be numeric chat ID or username:
 
@@ -682,6 +683,29 @@ openclaw message send --channel telegram --target @name --message "hi"
 
     - Node 22+ + custom fetch/proxy can trigger immediate abort behavior if AbortSignal types mismatch.
     - Some hosts resolve `api.telegram.org` to IPv6 first; broken IPv6 egress can cause intermittent Telegram API failures.
+    - If logs include `TypeError: fetch failed` or `Network request for 'getUpdates' failed!`, OpenClaw now retries these as recoverable network errors.
+    - On VPS hosts with unstable direct egress/TLS, route Telegram API calls through `channels.telegram.proxy`:
+
+```yaml
+channels:
+  telegram:
+    proxy: socks5://user:pass@proxy-host:1080
+```
+
+    - Node 22+ defaults to `autoSelectFamily=true` (except WSL2) and `dnsResultOrder=ipv4first`.
+    - If your host is WSL2 or explicitly works better with IPv4-only behavior, force family selection:
+
+```yaml
+channels:
+  telegram:
+    network:
+      autoSelectFamily: false
+```
+
+    - Environment overrides (temporary):
+      - `OPENCLAW_TELEGRAM_DISABLE_AUTO_SELECT_FAMILY=1`
+      - `OPENCLAW_TELEGRAM_ENABLE_AUTO_SELECT_FAMILY=1`
+      - `OPENCLAW_TELEGRAM_DNS_RESULT_ORDER=ipv4first`
     - Validate DNS answers:
 
 ```bash
@@ -702,9 +726,14 @@ Primary reference:
 - `channels.telegram.botToken`: bot token (BotFather).
 - `channels.telegram.tokenFile`: read token from file path.
 - `channels.telegram.dmPolicy`: `pairing | allowlist | open | disabled` (default: pairing).
-- `channels.telegram.allowFrom`: DM allowlist (numeric Telegram user IDs). `open` requires `"*"`. `openclaw doctor --fix` can resolve legacy `@username` entries to IDs.
+- `channels.telegram.allowFrom`: DM allowlist (numeric Telegram user IDs). `allowlist` requires at least one sender ID. `open` requires `"*"`. `openclaw doctor --fix` can resolve legacy `@username` entries to IDs and can recover allowlist entries from pairing-store files in allowlist migration flows.
+- `channels.telegram.defaultTo`: default Telegram target used by CLI `--deliver` when no explicit `--reply-to` is provided.
 - `channels.telegram.groupPolicy`: `open | allowlist | disabled` (default: allowlist).
-- `channels.telegram.groupAllowFrom`: group sender allowlist (numeric Telegram user IDs). `openclaw doctor --fix` can resolve legacy `@username` entries to IDs.
+- `channels.telegram.groupAllowFrom`: group sender allowlist (numeric Telegram user IDs). `openclaw doctor --fix` can resolve legacy `@username` entries to IDs. Non-numeric entries are ignored at auth time. Group auth does not use DM pairing-store fallback (`2026.2.25+`).
+- Multi-account precedence:
+  - `channels.telegram.accounts.default.allowFrom` and `channels.telegram.accounts.default.groupAllowFrom` apply only to the `default` account.
+  - Named accounts inherit `channels.telegram.allowFrom` and `channels.telegram.groupAllowFrom` when account-level values are unset.
+  - Named accounts do not inherit `channels.telegram.accounts.default.allowFrom` / `groupAllowFrom`.
 - `channels.telegram.groups`: per-group defaults + allowlist (use `"*"` for global defaults).
   - `channels.telegram.groups.<id>.groupPolicy`: per-group override for groupPolicy (`open | allowlist | disabled`).
   - `channels.telegram.groups.<id>.requireMention`: mention gating default.
@@ -717,19 +746,22 @@ Primary reference:
   - `channels.telegram.groups.<id>.topics.<threadId>.requireMention`: per-topic mention gating override.
 - `channels.telegram.capabilities.inlineButtons`: `off | dm | group | all | allowlist` (default: allowlist).
 - `channels.telegram.accounts.<account>.capabilities.inlineButtons`: per-account override.
+- `channels.telegram.commands.nativeSkills`: enable/disable Telegram native skills commands.
 - `channels.telegram.replyToMode`: `off | first | all` (default: `off`).
 - `channels.telegram.textChunkLimit`: outbound chunk size (chars).
 - `channels.telegram.chunkMode`: `length` (default) or `newline` to split on blank lines (paragraph boundaries) before length chunking.
 - `channels.telegram.linkPreview`: toggle link previews for outbound messages (default: true).
-- `channels.telegram.streamMode`: `off | partial | block` (live stream preview).
-- `channels.telegram.mediaMaxMb`: inbound/outbound media cap (MB).
-- `channels.telegram.retry`: retry policy for outbound Telegram API calls (attempts, minDelayMs, maxDelayMs, jitter).
-- `channels.telegram.network.autoSelectFamily`: override Node autoSelectFamily (true=enable, false=disable). Defaults to disabled on Node 22 to avoid Happy Eyeballs timeouts.
+- `channels.telegram.streaming`: `off | partial | block | progress` (live stream preview; default: `off`; `progress` maps to `partial`; `block` is legacy preview mode compatibility).
+- `channels.telegram.mediaMaxMb`: inbound Telegram media download/processing cap (MB).
+- `channels.telegram.retry`: retry policy for Telegram send helpers (CLI/tools/actions) on recoverable outbound API errors (attempts, minDelayMs, maxDelayMs, jitter).
+- `channels.telegram.network.autoSelectFamily`: override Node autoSelectFamily (true=enable, false=disable). Defaults to enabled on Node 22+, with WSL2 defaulting to disabled.
+- `channels.telegram.network.dnsResultOrder`: override DNS result order (`ipv4first` or `verbatim`). Defaults to `ipv4first` on Node 22+.
 - `channels.telegram.proxy`: proxy URL for Bot API calls (SOCKS/HTTP).
 - `channels.telegram.webhookUrl`: enable webhook mode (requires `channels.telegram.webhookSecret`).
 - `channels.telegram.webhookSecret`: webhook secret (required when webhookUrl is set).
 - `channels.telegram.webhookPath`: local webhook path (default `/telegram-webhook`).
 - `channels.telegram.webhookHost`: local webhook bind host (default `127.0.0.1`).
+- `channels.telegram.webhookPort`: local webhook bind port (default `8787`).
 - `channels.telegram.actions.reactions`: gate Telegram tool reactions.
 - `channels.telegram.actions.sendMessage`: gate Telegram tool message sends.
 - `channels.telegram.actions.deleteMessage`: gate Telegram tool message deletes.
@@ -743,9 +775,9 @@ Telegram-specific high-signal fields:
 
 - startup/auth: `enabled`, `botToken`, `tokenFile`, `accounts.*`
 - access control: `dmPolicy`, `allowFrom`, `groupPolicy`, `groupAllowFrom`, `groups`, `groups.*.topics.*`
-- command/menu: `commands.native`, `customCommands`
+- command/menu: `commands.native`, `commands.nativeSkills`, `customCommands`
 - threading/replies: `replyToMode`
-- streaming: `streamMode` (preview), `draftChunk`, `blockStreaming`
+- streaming: `streaming` (preview), `blockStreaming`
 - formatting/delivery: `textChunkLimit`, `chunkMode`, `linkPreview`, `responsePrefix`
 - media/network: `mediaMaxMb`, `timeoutSeconds`, `retry`, `network.autoSelectFamily`, `proxy`
 - webhook: `webhookUrl`, `webhookSecret`, `webhookPath`, `webhookHost`

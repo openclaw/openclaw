@@ -26,6 +26,23 @@ describe("web monitor inbox", () => {
     });
   }
 
+  async function runSingleUpsertAndCapture(upsert: unknown) {
+    const onMessage = vi.fn();
+    const listener = await openMonitor(onMessage);
+    const sock = getSock();
+    sock.ev.emit("messages.upsert", upsert);
+    await new Promise((resolve) => setImmediate(resolve));
+    return { onMessage, listener };
+  }
+
+  function expectSingleGroupMessage(
+    onMessage: ReturnType<typeof vi.fn>,
+    expected: Record<string, unknown>,
+  ) {
+    expect(onMessage).toHaveBeenCalledTimes(1);
+    expect(onMessage).toHaveBeenCalledWith(expect.objectContaining(expected));
+  }
+
   it("captures media path for image messages", async () => {
     const onMessage = vi.fn();
     const listener = await openMonitor(onMessage);
@@ -117,16 +134,13 @@ describe("web monitor inbox", () => {
     sock.ev.emit("messages.upsert", upsert);
     await new Promise((resolve) => setImmediate(resolve));
 
-    const content = await (async () => {
-      const deadline = Date.now() + 2_000;
-      while (Date.now() < deadline) {
-        if (fsSync.existsSync(logPath)) {
-          return fsSync.readFileSync(logPath, "utf-8");
-        }
-        await new Promise((resolve) => setTimeout(resolve, 25));
-      }
-      throw new Error(`expected log file to exist: ${logPath}`);
-    })();
+    await vi.waitFor(
+      () => {
+        expect(fsSync.existsSync(logPath)).toBe(true);
+      },
+      { timeout: 2_000, interval: 5 },
+    );
+    const content = fsSync.readFileSync(logPath, "utf-8");
     expect(content).toMatch(/web-inbound/);
     expect(content).toMatch(/ping/);
     await listener.close();
@@ -206,10 +220,7 @@ describe("web monitor inbox", () => {
   });
 
   it("unwraps ephemeral messages, preserves mentions, and still delivers group pings", async () => {
-    const onMessage = vi.fn();
-    const listener = await openMonitor(onMessage);
-    const sock = getSock();
-    const upsert = {
+    const { onMessage, listener } = await runSingleUpsertAndCapture({
       type: "notify",
       messages: [
         {
@@ -231,22 +242,14 @@ describe("web monitor inbox", () => {
           },
         },
       ],
-    };
-
-    sock.ev.emit("messages.upsert", upsert);
-    await new Promise((resolve) => setImmediate(resolve));
-
-    expect(onMessage).toHaveBeenCalledTimes(1);
-    expect(onMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        chatType: "group",
-        conversationId: "424242@g.us",
-        body: "oh hey @Clawd UK !",
-        mentionedJids: ["123@s.whatsapp.net"],
-        senderE164: "+888",
-      }),
-    );
-
+    });
+    expectSingleGroupMessage(onMessage, {
+      chatType: "group",
+      conversationId: "424242@g.us",
+      body: "oh hey @Clawd UK !",
+      mentionedJids: ["123@s.whatsapp.net"],
+      senderE164: "+888",
+    });
     await listener.close();
   });
 
@@ -265,10 +268,7 @@ describe("web monitor inbox", () => {
       },
     });
 
-    const onMessage = vi.fn();
-    const listener = await openMonitor(onMessage);
-    const sock = getSock();
-    const upsert = {
+    const { onMessage, listener } = await runSingleUpsertAndCapture({
       type: "notify",
       messages: [
         {
@@ -286,24 +286,16 @@ describe("web monitor inbox", () => {
           },
         },
       ],
-    };
-
-    sock.ev.emit("messages.upsert", upsert);
-    await new Promise((resolve) => setImmediate(resolve));
-
-    expect(onMessage).toHaveBeenCalledTimes(1);
-    expect(onMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        chatType: "group",
-        from: "55555@g.us",
-        senderE164: "+777",
-        senderJid: "777@s.whatsapp.net",
-        mentionedJids: ["123@s.whatsapp.net"],
-        selfE164: "+123",
-        selfJid: "123@s.whatsapp.net",
-      }),
-    );
-
+    });
+    expectSingleGroupMessage(onMessage, {
+      chatType: "group",
+      from: "55555@g.us",
+      senderE164: "+777",
+      senderJid: "777@s.whatsapp.net",
+      mentionedJids: ["123@s.whatsapp.net"],
+      selfE164: "+123",
+      selfJid: "123@s.whatsapp.net",
+    });
     await listener.close();
   });
 });

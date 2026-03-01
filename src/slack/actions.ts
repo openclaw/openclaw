@@ -5,6 +5,8 @@ import { resolveSlackAccount } from "./accounts.js";
 import { buildSlackBlocksFallbackText } from "./blocks-fallback.js";
 import { validateSlackBlocksArray } from "./blocks-input.js";
 import { createSlackWebClient } from "./client.js";
+import { resolveSlackMedia } from "./monitor/media.js";
+import type { SlackMediaResult } from "./monitor/media.js";
 import { sendMessageSlack } from "./send.js";
 import { resolveSlackBotToken } from "./token.js";
 
@@ -24,6 +26,12 @@ export type SlackMessageSummary = {
     name?: string;
     count?: number;
     users?: string[];
+  }>;
+  /** File attachments on this message. Present when the message has files. */
+  files?: Array<{
+    id?: string;
+    name?: string;
+    mimetype?: string;
   }>;
 };
 
@@ -270,4 +278,49 @@ export async function listSlackPins(
   const client = await getClient(opts);
   const result = await client.pins.list({ channel: channelId });
   return (result.items ?? []) as SlackPin[];
+}
+
+/**
+ * Downloads a Slack file by ID and saves it to the local media store.
+ * Fetches a fresh download URL via files.info to avoid using stale private URLs.
+ * Returns null when the file cannot be found or downloaded.
+ */
+export async function downloadSlackFile(
+  fileId: string,
+  opts: SlackActionClientOpts & { maxBytes: number },
+): Promise<SlackMediaResult | null> {
+  const token = resolveToken(opts.token, opts.accountId);
+  const client = await getClient(opts);
+
+  // Fetch fresh file metadata (includes a current url_private_download).
+  const info = await client.files.info({ file: fileId });
+  const file = info.file as
+    | {
+        id?: string;
+        name?: string;
+        mimetype?: string;
+        url_private?: string;
+        url_private_download?: string;
+      }
+    | undefined;
+
+  if (!file?.url_private_download && !file?.url_private) {
+    return null;
+  }
+
+  const results = await resolveSlackMedia({
+    files: [
+      {
+        id: file.id,
+        name: file.name,
+        mimetype: file.mimetype,
+        url_private: file.url_private,
+        url_private_download: file.url_private_download,
+      },
+    ],
+    token,
+    maxBytes: opts.maxBytes,
+  });
+
+  return results?.[0] ?? null;
 }

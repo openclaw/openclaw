@@ -62,7 +62,7 @@ The agent reads this on each heartbeat and handles all items in one turn.
     defaults: {
       heartbeat: {
         every: "30m", // interval
-        target: "last", // where to deliver alerts
+        target: "last", // explicit alert delivery target (default is "none")
         activeHours: { start: "08:00", end: "22:00" }, // optional
       },
     },
@@ -211,7 +211,7 @@ For ad-hoc workflows, call Lobster directly.
 - Lobster runs as a **local subprocess** (`lobster` CLI) in tool mode and returns a **JSON envelope**.
 - If the tool returns `needs_approval`, you resume with a `resumeToken` and `approve` flag.
 - The tool is an **optional plugin**; enable it additively via `tools.alsoAllow: ["lobster"]` (recommended).
-- If you pass `lobsterPath`, it must be an **absolute path**.
+- Lobster expects the `lobster` CLI to be available on `PATH`.
 
 See [Lobster](/tools/lobster) for full usage and examples.
 

@@ -19,6 +19,8 @@ import {
   resolveDefaultSlackAccountId,
   resolveSlackAccount,
   resolveSlackReplyToMode,
+  resolveOpenProviderRuntimeGroupPolicy,
+  resolveDefaultGroupPolicy,
   resolveSlackGroupRequireMention,
   resolveSlackGroupToolPolicy,
   buildSlackThreadingToolContext,
@@ -47,6 +49,18 @@ function getTokenForOperation(
     return botToken;
   }
   return botToken ?? userToken;
+}
+
+function isSlackAccountConfigured(account: ResolvedSlackAccount): boolean {
+  const mode = account.config.mode ?? "socket";
+  const hasBotToken = Boolean(account.botToken?.trim());
+  if (!hasBotToken) {
+    return false;
+  }
+  if (mode === "http") {
+    return Boolean(account.config.signingSecret?.trim());
+  }
+  return Boolean(account.appToken?.trim());
 }
 
 export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
@@ -114,12 +128,12 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
         accountId,
         clearBaseFields: ["botToken", "appToken", "name"],
       }),
-    isConfigured: (account) => Boolean(account.botToken && account.appToken),
+    isConfigured: (account) => isSlackAccountConfigured(account),
     describeAccount: (account) => ({
       accountId: account.accountId,
       name: account.name,
       enabled: account.enabled,
-      configured: Boolean(account.botToken && account.appToken),
+      configured: isSlackAccountConfigured(account),
       botTokenSource: account.botTokenSource,
       appTokenSource: account.appTokenSource,
     }),
@@ -130,6 +144,8 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
         .map((entry) => String(entry).trim())
         .filter(Boolean)
         .map((entry) => entry.toLowerCase()),
+    resolveDefaultTo: ({ cfg, accountId }) =>
+      resolveSlackAccount({ cfg, accountId }).config.defaultTo?.trim() || undefined,
   },
   security: {
     resolveDmPolicy: ({ cfg, accountId, account }) => {
@@ -148,8 +164,12 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
     },
     collectWarnings: ({ account, cfg }) => {
       const warnings: string[] = [];
-      const defaultGroupPolicy = cfg.channels?.defaults?.groupPolicy;
-      const groupPolicy = account.config.groupPolicy ?? defaultGroupPolicy ?? "open";
+      const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
+      const { groupPolicy } = resolveOpenProviderRuntimeGroupPolicy({
+        providerConfigPresent: cfg.channels?.slack !== undefined,
+        groupPolicy: account.config.groupPolicy,
+        defaultGroupPolicy,
+      });
       const channelAllowlistConfigured =
         Boolean(account.config.channels) && Object.keys(account.config.channels ?? {}).length > 0;
 
@@ -175,7 +195,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
   threading: {
     resolveReplyToMode: ({ cfg, accountId, chatType }) =>
       resolveSlackReplyToMode(resolveSlackAccount({ cfg, accountId }), chatType),
-    allowExplicitReplyTagsWhenOff: true,
+    allowExplicitReplyTagsWhenOff: false,
     buildToolContext: (params) => buildSlackThreadingToolContext(params),
   },
   messaging: {
@@ -237,6 +257,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
       await handleSlackMessageAction({
         providerId: meta.id,
         ctx,
+        includeReadThreadId: true,
         invoke: async (action, cfg, toolContext) =>
           await getSlackRuntime().channel.slack.handleSlackAction(action, cfg, toolContext),
       }),
@@ -316,28 +337,30 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
     deliveryMode: "direct",
     chunker: null,
     textChunkLimit: 4000,
-    sendText: async ({ to, text, accountId, deps, replyToId, cfg }) => {
+    sendText: async ({ to, text, accountId, deps, replyToId, threadId, cfg }) => {
       const send = deps?.sendSlack ?? getSlackRuntime().channel.slack.sendMessageSlack;
       const account = resolveSlackAccount({ cfg, accountId });
       const token = getTokenForOperation(account, "write");
       const botToken = account.botToken?.trim();
       const tokenOverride = token && token !== botToken ? token : undefined;
+      const threadTsValue = replyToId ?? threadId;
       const result = await send(to, text, {
-        threadTs: replyToId ?? undefined,
+        threadTs: threadTsValue != null ? String(threadTsValue) : undefined,
         accountId: accountId ?? undefined,
         ...(tokenOverride ? { token: tokenOverride } : {}),
       });
       return { channel: "slack", ...result };
     },
-    sendMedia: async ({ to, text, mediaUrl, accountId, deps, replyToId, cfg }) => {
+    sendMedia: async ({ to, text, mediaUrl, accountId, deps, replyToId, threadId, cfg }) => {
       const send = deps?.sendSlack ?? getSlackRuntime().channel.slack.sendMessageSlack;
       const account = resolveSlackAccount({ cfg, accountId });
       const token = getTokenForOperation(account, "write");
       const botToken = account.botToken?.trim();
       const tokenOverride = token && token !== botToken ? token : undefined;
+      const threadTsValue = replyToId ?? threadId;
       const result = await send(to, text, {
         mediaUrl,
-        threadTs: replyToId ?? undefined,
+        threadTs: threadTsValue != null ? String(threadTsValue) : undefined,
         accountId: accountId ?? undefined,
         ...(tokenOverride ? { token: tokenOverride } : {}),
       });
@@ -371,7 +394,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
       return await getSlackRuntime().channel.slack.probeSlack(token, timeoutMs);
     },
     buildAccountSnapshot: ({ account, runtime, probe }) => {
-      const configured = Boolean(account.botToken && account.appToken);
+      const configured = isSlackAccountConfigured(account);
       return {
         accountId: account.accountId,
         name: account.name,
@@ -404,6 +427,8 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
         abortSignal: ctx.abortSignal,
         mediaMaxMb: account.config.mediaMaxMb,
         slashCommand: account.config.slashCommand,
+        setStatus: ctx.setStatus as (next: Record<string, unknown>) => void,
+        getStatus: ctx.getStatus as () => Record<string, unknown>,
       });
     },
   },

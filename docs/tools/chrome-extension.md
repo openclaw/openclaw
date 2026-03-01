@@ -53,9 +53,14 @@ After upgrading OpenClaw:
 - Re-run `openclaw browser extension install` to refresh the installed files under your OpenClaw state directory.
 - Chrome → `chrome://extensions` → click “Reload” on the extension.
 
-## Use it (no extra config)
+## Use it (set gateway token once)
 
 OpenClaw ships with a built-in browser profile named `chrome` that targets the extension relay on the default port.
+
+Before first attach, open extension Options and set:
+
+- `Port` (default `18792`)
+- `Gateway token` (must match `gateway.auth.token` / `OPENCLAW_GATEWAY_TOKEN`)
 
 Use it:
 
@@ -71,6 +76,18 @@ openclaw browser create-profile \
   --cdp-url http://127.0.0.1:18792 \
   --color "#00AA00"
 ```
+
+### Custom Gateway ports
+
+If you're using a custom gateway port, the extension relay port is automatically derived:
+
+**Extension Relay Port = Gateway Port + 3**
+
+Example: if `gateway.port: 19001`, then:
+
+- Extension relay port: `19004` (gateway + 3)
+
+Configure the extension to use the derived relay port in the extension Options page.
 
 ## Attach / detach (toolbar button)
 
@@ -89,12 +106,12 @@ openclaw browser create-profile \
 
 - `ON`: attached; OpenClaw can drive that tab.
 - `…`: connecting to the local relay.
-- `!`: relay not reachable (most common: browser relay server isn’t running on this machine).
+- `!`: relay not reachable/authenticated (most common: relay server not running, or gateway token missing/wrong).
 
 If you see `!`:
 
 - Make sure the Gateway is running locally (default setup), or run a node host on this machine if the Gateway runs elsewhere.
-- Open the extension Options page; it shows whether the relay is reachable.
+- Open the extension Options page; it validates relay reachability + gateway-token auth.
 
 ## Remote Gateway (use a node host)
 
@@ -169,7 +186,7 @@ Recommendations:
 - Prefer a dedicated Chrome profile (separate from your personal browsing) for extension relay usage.
 - Keep the Gateway and any node hosts tailnet-only; rely on Gateway auth + node pairing.
 - Avoid exposing relay ports over LAN (`0.0.0.0`) and avoid Funnel (public).
-- The relay blocks non-extension origins and requires an internal auth token for CDP clients.
+- The relay blocks non-extension origins and requires gateway-token auth for both `/cdp` and `/extension`.
 
 Related:
 

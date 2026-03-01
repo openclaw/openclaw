@@ -1,15 +1,39 @@
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
+import { coerceSecretRef } from "../config/types.secrets.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   DEFAULT_COPILOT_API_BASE_URL,
   resolveCopilotApiToken,
 } from "../providers/github-copilot-token.js";
+import {
+  KILOCODE_BASE_URL,
+  KILOCODE_DEFAULT_CONTEXT_WINDOW,
+  KILOCODE_DEFAULT_COST,
+  KILOCODE_DEFAULT_MAX_TOKENS,
+  KILOCODE_MODEL_CATALOG,
+} from "../providers/kilocode-shared.js";
+import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import { ensureAuthProfileStore, listProfilesForProvider } from "./auth-profiles.js";
 import { discoverBedrockModels } from "./bedrock-discovery.js";
+import {
+  buildBytePlusModelDefinition,
+  BYTEPLUS_BASE_URL,
+  BYTEPLUS_MODEL_CATALOG,
+  BYTEPLUS_CODING_BASE_URL,
+  BYTEPLUS_CODING_MODEL_CATALOG,
+} from "./byteplus-models.js";
 import {
   buildCloudflareAiGatewayModelDefinition,
   resolveCloudflareAiGatewayBaseUrl,
 } from "./cloudflare-ai-gateway.js";
+import {
+  buildDoubaoModelDefinition,
+  DOUBAO_BASE_URL,
+  DOUBAO_MODEL_CATALOG,
+  DOUBAO_CODING_BASE_URL,
+  DOUBAO_CODING_MODEL_CATALOG,
+} from "./doubao-models.js";
 import {
   discoverHuggingfaceModels,
   HUGGINGFACE_BASE_URL,
@@ -39,12 +63,12 @@ const MINIMAX_DEFAULT_VISION_MODEL_ID = "MiniMax-VL-01";
 const MINIMAX_DEFAULT_CONTEXT_WINDOW = 200000;
 const MINIMAX_DEFAULT_MAX_TOKENS = 8192;
 const MINIMAX_OAUTH_PLACEHOLDER = "minimax-oauth";
-// Pricing: MiniMax doesn't publish public rates. Override in models.json for accurate costs.
+// Pricing per 1M tokens (USD) — https://platform.minimaxi.com/document/Price
 const MINIMAX_API_COST = {
-  input: 15,
-  output: 60,
-  cacheRead: 2,
-  cacheWrite: 10,
+  input: 0.3,
+  output: 1.2,
+  cacheRead: 0.03,
+  cacheWrite: 0.12,
 };
 
 type ProviderModelConfig = NonNullable<ProviderConfig["models"]>[number];
@@ -96,6 +120,17 @@ const MOONSHOT_DEFAULT_COST = {
   cacheWrite: 0,
 };
 
+const KIMI_CODING_BASE_URL = "https://api.kimi.com/coding/";
+const KIMI_CODING_DEFAULT_MODEL_ID = "k2p5";
+const KIMI_CODING_DEFAULT_CONTEXT_WINDOW = 262144;
+const KIMI_CODING_DEFAULT_MAX_TOKENS = 32768;
+const KIMI_CODING_DEFAULT_COST = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+};
+
 const QWEN_PORTAL_BASE_URL = "https://portal.qwen.ai/v1";
 const QWEN_PORTAL_OAUTH_PLACEHOLDER = "qwen-oauth";
 const QWEN_PORTAL_DEFAULT_CONTEXT_WINDOW = 128000;
@@ -109,9 +144,22 @@ const QWEN_PORTAL_DEFAULT_COST = {
 
 const OLLAMA_BASE_URL = OLLAMA_NATIVE_BASE_URL;
 const OLLAMA_API_BASE_URL = OLLAMA_BASE_URL;
+const OLLAMA_SHOW_CONCURRENCY = 8;
+const OLLAMA_SHOW_MAX_MODELS = 200;
 const OLLAMA_DEFAULT_CONTEXT_WINDOW = 128000;
 const OLLAMA_DEFAULT_MAX_TOKENS = 8192;
 const OLLAMA_DEFAULT_COST = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+};
+
+const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
+const OPENROUTER_DEFAULT_MODEL_ID = "auto";
+const OPENROUTER_DEFAULT_CONTEXT_WINDOW = 200000;
+const OPENROUTER_DEFAULT_MAX_TOKENS = 8192;
+const OPENROUTER_DEFAULT_COST = {
   input: 0,
   output: 0,
   cacheRead: 0,
@@ -149,6 +197,8 @@ const NVIDIA_DEFAULT_COST = {
   cacheRead: 0,
   cacheWrite: 0,
 };
+
+const log = createSubsystemLogger("agents/model-providers");
 
 interface OllamaModel {
   name: string;
@@ -188,7 +238,42 @@ export function resolveOllamaApiBase(configuredBaseUrl?: string): string {
   return trimmed.replace(/\/v1$/i, "");
 }
 
-async function discoverOllamaModels(baseUrl?: string): Promise<ModelDefinitionConfig[]> {
+async function queryOllamaContextWindow(
+  apiBase: string,
+  modelName: string,
+): Promise<number | undefined> {
+  try {
+    const response = await fetch(`${apiBase}/api/show`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: modelName }),
+      signal: AbortSignal.timeout(3000),
+    });
+    if (!response.ok) {
+      return undefined;
+    }
+    const data = (await response.json()) as { model_info?: Record<string, unknown> };
+    if (!data.model_info) {
+      return undefined;
+    }
+    for (const [key, value] of Object.entries(data.model_info)) {
+      if (key.endsWith(".context_length") && typeof value === "number" && Number.isFinite(value)) {
+        const contextWindow = Math.floor(value);
+        if (contextWindow > 0) {
+          return contextWindow;
+        }
+      }
+    }
+    return undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function discoverOllamaModels(
+  baseUrl?: string,
+  opts?: { quiet?: boolean },
+): Promise<ModelDefinitionConfig[]> {
   // Skip Ollama discovery in test environments
   if (process.env.VITEST || process.env.NODE_ENV === "test") {
     return [];
@@ -199,30 +284,49 @@ async function discoverOllamaModels(baseUrl?: string): Promise<ModelDefinitionCo
       signal: AbortSignal.timeout(5000),
     });
     if (!response.ok) {
-      console.warn(`Failed to discover Ollama models: ${response.status}`);
+      if (!opts?.quiet) {
+        log.warn(`Failed to discover Ollama models: ${response.status}`);
+      }
       return [];
     }
     const data = (await response.json()) as OllamaTagsResponse;
     if (!data.models || data.models.length === 0) {
-      console.warn("No Ollama models found on local instance");
+      log.debug("No Ollama models found on local instance");
       return [];
     }
-    return data.models.map((model) => {
-      const modelId = model.name;
-      const isReasoning =
-        modelId.toLowerCase().includes("r1") || modelId.toLowerCase().includes("reasoning");
-      return {
-        id: modelId,
-        name: modelId,
-        reasoning: isReasoning,
-        input: ["text"],
-        cost: OLLAMA_DEFAULT_COST,
-        contextWindow: OLLAMA_DEFAULT_CONTEXT_WINDOW,
-        maxTokens: OLLAMA_DEFAULT_MAX_TOKENS,
-      };
-    });
+    const modelsToInspect = data.models.slice(0, OLLAMA_SHOW_MAX_MODELS);
+    if (modelsToInspect.length < data.models.length && !opts?.quiet) {
+      log.warn(
+        `Capping Ollama /api/show inspection to ${OLLAMA_SHOW_MAX_MODELS} models (received ${data.models.length})`,
+      );
+    }
+    const discovered: ModelDefinitionConfig[] = [];
+    for (let index = 0; index < modelsToInspect.length; index += OLLAMA_SHOW_CONCURRENCY) {
+      const batch = modelsToInspect.slice(index, index + OLLAMA_SHOW_CONCURRENCY);
+      const batchDiscovered = await Promise.all(
+        batch.map(async (model) => {
+          const modelId = model.name;
+          const contextWindow = await queryOllamaContextWindow(apiBase, modelId);
+          const isReasoning =
+            modelId.toLowerCase().includes("r1") || modelId.toLowerCase().includes("reasoning");
+          return {
+            id: modelId,
+            name: modelId,
+            reasoning: isReasoning,
+            input: ["text"],
+            cost: OLLAMA_DEFAULT_COST,
+            contextWindow: contextWindow ?? OLLAMA_DEFAULT_CONTEXT_WINDOW,
+            maxTokens: OLLAMA_DEFAULT_MAX_TOKENS,
+          } satisfies ModelDefinitionConfig;
+        }),
+      );
+      discovered.push(...batchDiscovered);
+    }
+    return discovered;
   } catch (error) {
-    console.warn(`Failed to discover Ollama models: ${String(error)}`);
+    if (!opts?.quiet) {
+      log.warn(`Failed to discover Ollama models: ${String(error)}`);
+    }
     return [];
   }
 }
@@ -246,13 +350,13 @@ async function discoverVllmModels(
       signal: AbortSignal.timeout(5000),
     });
     if (!response.ok) {
-      console.warn(`Failed to discover vLLM models: ${response.status}`);
+      log.warn(`Failed to discover vLLM models: ${response.status}`);
       return [];
     }
     const data = (await response.json()) as VllmModelsResponse;
     const models = data.data ?? [];
     if (models.length === 0) {
-      console.warn("No vLLM models found on local instance");
+      log.warn("No vLLM models found on local instance");
       return [];
     }
 
@@ -275,7 +379,7 @@ async function discoverVllmModels(
         } satisfies ModelDefinitionConfig;
       });
   } catch (error) {
-    console.warn(`Failed to discover vLLM models: ${String(error)}`);
+    log.warn(`Failed to discover vLLM models: ${String(error)}`);
     return [];
   }
 }
@@ -310,10 +414,24 @@ function resolveApiKeyFromProfiles(params: {
       continue;
     }
     if (cred.type === "api_key") {
-      return cred.key;
+      if (cred.key?.trim()) {
+        return cred.key;
+      }
+      const keyRef = coerceSecretRef(cred.keyRef);
+      if (keyRef?.source === "env" && keyRef.id.trim()) {
+        return keyRef.id.trim();
+      }
+      continue;
     }
     if (cred.type === "token") {
-      return cred.token;
+      if (cred.token?.trim()) {
+        return cred.token;
+      }
+      const tokenRef = coerceSecretRef(cred.tokenRef);
+      if (tokenRef?.source === "env" && tokenRef.id.trim()) {
+        return tokenRef.id.trim();
+      }
+      continue;
     }
   }
   return undefined;
@@ -329,10 +447,22 @@ export function normalizeGoogleModelId(id: string): string {
   return id;
 }
 
-function normalizeGoogleProvider(provider: ProviderConfig): ProviderConfig {
+const ANTIGRAVITY_BARE_PRO_IDS = new Set(["gemini-3-pro", "gemini-3.1-pro", "gemini-3-1-pro"]);
+
+export function normalizeAntigravityModelId(id: string): string {
+  if (ANTIGRAVITY_BARE_PRO_IDS.has(id)) {
+    return `${id}-low`;
+  }
+  return id;
+}
+
+function normalizeProviderModels(
+  provider: ProviderConfig,
+  normalizeId: (id: string) => string,
+): ProviderConfig {
   let mutated = false;
   const models = provider.models.map((model) => {
-    const nextId = normalizeGoogleModelId(model.id);
+    const nextId = normalizeId(model.id);
     if (nextId === model.id) {
       return model;
     }
@@ -340,6 +470,14 @@ function normalizeGoogleProvider(provider: ProviderConfig): ProviderConfig {
     return { ...model, id: nextId };
   });
   return mutated ? { ...provider, models } : provider;
+}
+
+function normalizeGoogleProvider(provider: ProviderConfig): ProviderConfig {
+  return normalizeProviderModels(provider, normalizeGoogleModelId);
+}
+
+function normalizeAntigravityProvider(provider: ProviderConfig): ProviderConfig {
+  return normalizeProviderModels(provider, normalizeAntigravityModelId);
 }
 
 export function normalizeProviders(params: {
@@ -359,16 +497,17 @@ export function normalizeProviders(params: {
   for (const [key, provider] of Object.entries(providers)) {
     const normalizedKey = key.trim();
     let normalizedProvider = provider;
+    const configuredApiKey = normalizedProvider.apiKey;
 
     // Fix common misconfig: apiKey set to "${ENV_VAR}" instead of "ENV_VAR".
     if (
-      normalizedProvider.apiKey &&
-      normalizeApiKeyConfig(normalizedProvider.apiKey) !== normalizedProvider.apiKey
+      typeof configuredApiKey === "string" &&
+      normalizeApiKeyConfig(configuredApiKey) !== configuredApiKey
     ) {
       mutated = true;
       normalizedProvider = {
         ...normalizedProvider,
-        apiKey: normalizeApiKeyConfig(normalizedProvider.apiKey),
+        apiKey: normalizeApiKeyConfig(configuredApiKey),
       };
     }
 
@@ -376,7 +515,9 @@ export function normalizeProviders(params: {
     // Fill it from the environment or auth profiles when possible.
     const hasModels =
       Array.isArray(normalizedProvider.models) && normalizedProvider.models.length > 0;
-    if (hasModels && !normalizedProvider.apiKey?.trim()) {
+    const normalizedApiKey = normalizeOptionalSecretInput(normalizedProvider.apiKey);
+    const hasConfiguredApiKey = Boolean(normalizedApiKey || normalizedProvider.apiKey);
+    if (hasModels && !hasConfiguredApiKey) {
       const authMode =
         normalizedProvider.auth ?? (normalizedKey === "amazon-bedrock" ? "aws-sdk" : undefined);
       if (authMode === "aws-sdk") {
@@ -405,6 +546,14 @@ export function normalizeProviders(params: {
       normalizedProvider = googleNormalized;
     }
 
+    if (normalizedKey === "google-antigravity") {
+      const antigravityNormalized = normalizeAntigravityProvider(normalizedProvider);
+      if (antigravityNormalized !== normalizedProvider) {
+        mutated = true;
+      }
+      normalizedProvider = antigravityNormalized;
+    }
+
     next[key] = normalizedProvider;
   }
 
@@ -415,6 +564,7 @@ function buildMinimaxProvider(): ProviderConfig {
   return {
     baseUrl: MINIMAX_PORTAL_BASE_URL,
     api: "anthropic-messages",
+    authHeader: true,
     models: [
       buildMinimaxTextModel({
         id: MINIMAX_DEFAULT_MODEL_ID,
@@ -450,6 +600,7 @@ function buildMinimaxPortalProvider(): ProviderConfig {
   return {
     baseUrl: MINIMAX_PORTAL_BASE_URL,
     api: "anthropic-messages",
+    authHeader: true,
     models: [
       buildMinimaxTextModel({
         id: MINIMAX_DEFAULT_MODEL_ID,
@@ -474,10 +625,28 @@ function buildMoonshotProvider(): ProviderConfig {
         id: MOONSHOT_DEFAULT_MODEL_ID,
         name: "Kimi K2.5",
         reasoning: false,
-        input: ["text"],
+        input: ["text", "image"],
         cost: MOONSHOT_DEFAULT_COST,
         contextWindow: MOONSHOT_DEFAULT_CONTEXT_WINDOW,
         maxTokens: MOONSHOT_DEFAULT_MAX_TOKENS,
+      },
+    ],
+  };
+}
+
+export function buildKimiCodingProvider(): ProviderConfig {
+  return {
+    baseUrl: KIMI_CODING_BASE_URL,
+    api: "anthropic-messages",
+    models: [
+      {
+        id: KIMI_CODING_DEFAULT_MODEL_ID,
+        name: "Kimi for Coding",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: KIMI_CODING_DEFAULT_COST,
+        contextWindow: KIMI_CODING_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: KIMI_CODING_DEFAULT_MAX_TOKENS,
       },
     ],
   };
@@ -518,6 +687,38 @@ function buildSyntheticProvider(): ProviderConfig {
   };
 }
 
+function buildDoubaoProvider(): ProviderConfig {
+  return {
+    baseUrl: DOUBAO_BASE_URL,
+    api: "openai-completions",
+    models: DOUBAO_MODEL_CATALOG.map(buildDoubaoModelDefinition),
+  };
+}
+
+function buildDoubaoCodingProvider(): ProviderConfig {
+  return {
+    baseUrl: DOUBAO_CODING_BASE_URL,
+    api: "openai-completions",
+    models: DOUBAO_CODING_MODEL_CATALOG.map(buildDoubaoModelDefinition),
+  };
+}
+
+function buildBytePlusProvider(): ProviderConfig {
+  return {
+    baseUrl: BYTEPLUS_BASE_URL,
+    api: "openai-completions",
+    models: BYTEPLUS_MODEL_CATALOG.map(buildBytePlusModelDefinition),
+  };
+}
+
+function buildBytePlusCodingProvider(): ProviderConfig {
+  return {
+    baseUrl: BYTEPLUS_CODING_BASE_URL,
+    api: "openai-completions",
+    models: BYTEPLUS_CODING_MODEL_CATALOG.map(buildBytePlusModelDefinition),
+  };
+}
+
 export function buildXiaomiProvider(): ProviderConfig {
   return {
     baseUrl: XIAOMI_BASE_URL,
@@ -545,8 +746,11 @@ async function buildVeniceProvider(): Promise<ProviderConfig> {
   };
 }
 
-async function buildOllamaProvider(configuredBaseUrl?: string): Promise<ProviderConfig> {
-  const models = await discoverOllamaModels(configuredBaseUrl);
+async function buildOllamaProvider(
+  configuredBaseUrl?: string,
+  opts?: { quiet?: boolean },
+): Promise<ProviderConfig> {
+  const models = await discoverOllamaModels(configuredBaseUrl, opts);
   return {
     baseUrl: resolveOllamaApiBase(configuredBaseUrl),
     api: "ollama",
@@ -581,6 +785,30 @@ function buildTogetherProvider(): ProviderConfig {
   };
 }
 
+function buildOpenrouterProvider(): ProviderConfig {
+  return {
+    baseUrl: OPENROUTER_BASE_URL,
+    api: "openai-completions",
+    models: [
+      {
+        id: OPENROUTER_DEFAULT_MODEL_ID,
+        name: "OpenRouter Auto",
+        // reasoning: false here is a catalog default only; it does NOT cause
+        // `reasoning.effort: "none"` to be sent for the "auto" routing model.
+        // applyExtraParamsToAgent skips the reasoning effort injection for
+        // model id "auto" because it dynamically routes to any OpenRouter model
+        // (including ones where reasoning is mandatory and cannot be disabled).
+        // See: openclaw/openclaw#24851
+        reasoning: false,
+        input: ["text", "image"],
+        cost: OPENROUTER_DEFAULT_COST,
+        contextWindow: OPENROUTER_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: OPENROUTER_DEFAULT_MAX_TOKENS,
+      },
+    ],
+  };
+}
+
 async function buildVllmProvider(params?: {
   baseUrl?: string;
   apiKey?: string;
@@ -593,6 +821,7 @@ async function buildVllmProvider(params?: {
     models,
   };
 }
+
 export function buildQianfanProvider(): ProviderConfig {
   return {
     baseUrl: QIANFAN_BASE_URL,
@@ -656,6 +885,22 @@ export function buildNvidiaProvider(): ProviderConfig {
   };
 }
 
+export function buildKilocodeProvider(): ProviderConfig {
+  return {
+    baseUrl: KILOCODE_BASE_URL,
+    api: "openai-completions",
+    models: KILOCODE_MODEL_CATALOG.map((model) => ({
+      id: model.id,
+      name: model.name,
+      reasoning: model.reasoning,
+      input: model.input,
+      cost: KILOCODE_DEFAULT_COST,
+      contextWindow: model.contextWindow ?? KILOCODE_DEFAULT_CONTEXT_WINDOW,
+      maxTokens: model.maxTokens ?? KILOCODE_DEFAULT_MAX_TOKENS,
+    })),
+  };
+}
+
 export async function resolveImplicitProviders(params: {
   agentDir: string;
   explicitProviders?: Record<string, ProviderConfig> | null;
@@ -687,6 +932,13 @@ export async function resolveImplicitProviders(params: {
     providers.moonshot = { ...buildMoonshotProvider(), apiKey: moonshotKey };
   }
 
+  const kimiCodingKey =
+    resolveEnvApiKeyVarName("kimi-coding") ??
+    resolveApiKeyFromProfiles({ provider: "kimi-coding", store: authStore });
+  if (kimiCodingKey) {
+    providers["kimi-coding"] = { ...buildKimiCodingProvider(), apiKey: kimiCodingKey };
+  }
+
   const syntheticKey =
     resolveEnvApiKeyVarName("synthetic") ??
     resolveApiKeyFromProfiles({ provider: "synthetic", store: authStore });
@@ -706,6 +958,28 @@ export async function resolveImplicitProviders(params: {
     providers["qwen-portal"] = {
       ...buildQwenPortalProvider(),
       apiKey: QWEN_PORTAL_OAUTH_PLACEHOLDER,
+    };
+  }
+
+  const volcengineKey =
+    resolveEnvApiKeyVarName("volcengine") ??
+    resolveApiKeyFromProfiles({ provider: "volcengine", store: authStore });
+  if (volcengineKey) {
+    providers.volcengine = { ...buildDoubaoProvider(), apiKey: volcengineKey };
+    providers["volcengine-plan"] = {
+      ...buildDoubaoCodingProvider(),
+      apiKey: volcengineKey,
+    };
+  }
+
+  const byteplusKey =
+    resolveEnvApiKeyVarName("byteplus") ??
+    resolveApiKeyFromProfiles({ provider: "byteplus", store: authStore });
+  if (byteplusKey) {
+    providers.byteplus = { ...buildBytePlusProvider(), apiKey: byteplusKey };
+    providers["byteplus-plan"] = {
+      ...buildBytePlusCodingProvider(),
+      apiKey: byteplusKey,
     };
   }
 
@@ -744,15 +1018,37 @@ export async function resolveImplicitProviders(params: {
     break;
   }
 
-  // Ollama provider - only add if explicitly configured.
+  // Ollama provider - auto-discover if running locally, or add if explicitly configured.
   // Use the user's configured baseUrl (from explicit providers) for model
   // discovery so that remote / non-default Ollama instances are reachable.
+  // Skip discovery when explicit models are already defined.
   const ollamaKey =
     resolveEnvApiKeyVarName("ollama") ??
     resolveApiKeyFromProfiles({ provider: "ollama", store: authStore });
-  if (ollamaKey) {
-    const ollamaBaseUrl = params.explicitProviders?.ollama?.baseUrl;
-    providers.ollama = { ...(await buildOllamaProvider(ollamaBaseUrl)), apiKey: ollamaKey };
+  const explicitOllama = params.explicitProviders?.ollama;
+  const hasExplicitModels =
+    Array.isArray(explicitOllama?.models) && explicitOllama.models.length > 0;
+  if (hasExplicitModels && explicitOllama) {
+    providers.ollama = {
+      ...explicitOllama,
+      baseUrl: resolveOllamaApiBase(explicitOllama.baseUrl),
+      api: explicitOllama.api ?? "ollama",
+      apiKey: ollamaKey ?? explicitOllama.apiKey ?? "ollama-local",
+    };
+  } else {
+    const ollamaBaseUrl = explicitOllama?.baseUrl;
+    const hasExplicitOllamaConfig = Boolean(explicitOllama);
+    // Only suppress warnings for implicit local probing when user has not
+    // explicitly configured Ollama.
+    const ollamaProvider = await buildOllamaProvider(ollamaBaseUrl, {
+      quiet: !ollamaKey && !hasExplicitOllamaConfig,
+    });
+    if (ollamaProvider.models.length > 0 || ollamaKey || explicitOllama?.apiKey) {
+      providers.ollama = {
+        ...ollamaProvider,
+        apiKey: ollamaKey ?? explicitOllama?.apiKey ?? "ollama-local",
+      };
+    }
   }
 
   // vLLM provider - OpenAI-compatible local server (opt-in via env/profile).
@@ -800,11 +1096,25 @@ export async function resolveImplicitProviders(params: {
     providers.qianfan = { ...buildQianfanProvider(), apiKey: qianfanKey };
   }
 
+  const openrouterKey =
+    resolveEnvApiKeyVarName("openrouter") ??
+    resolveApiKeyFromProfiles({ provider: "openrouter", store: authStore });
+  if (openrouterKey) {
+    providers.openrouter = { ...buildOpenrouterProvider(), apiKey: openrouterKey };
+  }
+
   const nvidiaKey =
     resolveEnvApiKeyVarName("nvidia") ??
     resolveApiKeyFromProfiles({ provider: "nvidia", store: authStore });
   if (nvidiaKey) {
     providers.nvidia = { ...buildNvidiaProvider(), apiKey: nvidiaKey };
+  }
+
+  const kilocodeKey =
+    resolveEnvApiKeyVarName("kilocode") ??
+    resolveApiKeyFromProfiles({ provider: "kilocode", store: authStore });
+  if (kilocodeKey) {
+    providers.kilocode = { ...buildKilocodeProvider(), apiKey: kilocodeKey };
   }
 
   return providers;
@@ -833,7 +1143,13 @@ export async function resolveImplicitCopilotProvider(params: {
     const profileId = listProfilesForProvider(authStore, "github-copilot")[0];
     const profile = profileId ? authStore.profiles[profileId] : undefined;
     if (profile && profile.type === "token") {
-      selectedGithubToken = profile.token;
+      selectedGithubToken = profile.token?.trim() ?? "";
+      if (!selectedGithubToken) {
+        const tokenRef = coerceSecretRef(profile.tokenRef);
+        if (tokenRef?.source === "env" && tokenRef.id.trim()) {
+          selectedGithubToken = (env[tokenRef.id] ?? process.env[tokenRef.id] ?? "").trim();
+        }
+      }
     }
   }
 
@@ -850,17 +1166,8 @@ export async function resolveImplicitCopilotProvider(params: {
     }
   }
 
-  // pi-coding-agent's ModelRegistry marks a model "available" only if its
-  // `AuthStorage` has auth configured for that provider (via auth.json/env/etc).
-  // Our Copilot auth lives in OpenClaw's auth-profiles store instead, so we also
-  // write a runtime-only auth.json entry for pi-coding-agent to pick up.
-  //
-  // This is safe because it's (1) within OpenClaw's agent dir, (2) contains the
-  // GitHub token (not the exchanged Copilot token), and (3) matches existing
-  // patterns for OAuth-like providers in pi-coding-agent.
-  // Note: we deliberately do not write pi-coding-agent's `auth.json` here.
-  // OpenClaw uses its own auth store and exchanges tokens at runtime.
-  // `models list` uses OpenClaw's auth heuristics for availability.
+  // We deliberately do not write pi-coding-agent auth.json here.
+  // OpenClaw keeps auth in auth-profiles and resolves runtime availability from that store.
 
   // We intentionally do NOT define custom models for Copilot in models.json.
   // pi-coding-agent treats providers with models as replacements requiring apiKey.
