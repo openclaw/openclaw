@@ -77,6 +77,12 @@ function createVoiceMessagesForbiddenError() {
   );
 }
 
+function createThreadNotFoundError(operation = "sendMessage") {
+  return new Error(
+    `GrammyError: Call to '${operation}' failed! (400: Bad Request: message thread not found)`,
+  );
+}
+
 function createVoiceFailureHarness(params: {
   voiceError: Error;
   sendMessageResult?: { message_id: number; chat: { id: string } };
@@ -223,6 +229,82 @@ describe("deliverReplies", () => {
         message_thread_id: 42,
       }),
     );
+  });
+
+  it("retries DM topic sends without message_thread_id when thread is missing", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi
+      .fn()
+      .mockRejectedValueOnce(createThreadNotFoundError("sendMessage"))
+      .mockResolvedValueOnce({
+        message_id: 7,
+        chat: { id: "123" },
+      });
+    const bot = createBot({ sendMessage });
+
+    await deliverWith({
+      replies: [{ text: "hello" }],
+      runtime,
+      bot,
+      thread: { id: 42, scope: "dm" },
+    });
+
+    expect(sendMessage).toHaveBeenCalledTimes(2);
+    expect(sendMessage.mock.calls[0]?.[2]).toEqual(
+      expect.objectContaining({
+        message_thread_id: 42,
+      }),
+    );
+    expect(sendMessage.mock.calls[1]?.[2]).not.toHaveProperty("message_thread_id");
+    expect(runtime.error).not.toHaveBeenCalled();
+  });
+
+  it("does not retry forum sends without message_thread_id", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockRejectedValue(createThreadNotFoundError("sendMessage"));
+    const bot = createBot({ sendMessage });
+
+    await expect(
+      deliverWith({
+        replies: [{ text: "hello" }],
+        runtime,
+        bot,
+        thread: { id: 42, scope: "forum" },
+      }),
+    ).rejects.toThrow("message thread not found");
+
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(runtime.error).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries media sends without message_thread_id for DM topics", async () => {
+    const runtime = createRuntime();
+    const sendPhoto = vi
+      .fn()
+      .mockRejectedValueOnce(createThreadNotFoundError("sendPhoto"))
+      .mockResolvedValueOnce({
+        message_id: 8,
+        chat: { id: "123" },
+      });
+    const bot = createBot({ sendPhoto });
+
+    mockMediaLoad("photo.jpg", "image/jpeg", "image");
+
+    await deliverWith({
+      replies: [{ mediaUrl: "https://example.com/photo.jpg", text: "caption" }],
+      runtime,
+      bot,
+      thread: { id: 42, scope: "dm" },
+    });
+
+    expect(sendPhoto).toHaveBeenCalledTimes(2);
+    expect(sendPhoto.mock.calls[0]?.[2]).toEqual(
+      expect.objectContaining({
+        message_thread_id: 42,
+      }),
+    );
+    expect(sendPhoto.mock.calls[1]?.[2]).not.toHaveProperty("message_thread_id");
+    expect(runtime.error).not.toHaveBeenCalled();
   });
 
   it("does not include link_preview_options when linkPreview is true", async () => {
