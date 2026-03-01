@@ -17,7 +17,7 @@ import {
   resolveSessionTranscriptPathInDir,
   validateSessionId,
 } from "./paths.js";
-import { resolveSessionResetPolicy } from "./reset.js";
+import { evaluateSessionFreshness, resolveSessionResetPolicy } from "./reset.js";
 import { appendAssistantMessageToSessionTranscript } from "./transcript.js";
 import type { SessionEntry } from "./types.js";
 
@@ -142,6 +142,36 @@ describe("resolveSessionResetPolicy", () => {
 
       expect(groupPolicy.mode).toBe("daily");
     });
+  });
+
+  it("supports off mode and ignores idleMinutes for auto-freshness checks", () => {
+    const policy = resolveSessionResetPolicy({
+      sessionCfg: {
+        reset: { mode: "off", idleMinutes: 1 },
+      } as SessionConfig,
+      resetType: "direct",
+    });
+
+    expect(policy.mode).toBe("off");
+    expect(policy.idleMinutes).toBeUndefined();
+  });
+
+  it("treats sessions as fresh in off mode even across daily/idle boundaries", () => {
+    const now = new Date(2026, 0, 18, 5, 0, 0).getTime();
+    const updatedAt = new Date(2026, 0, 17, 0, 0, 0).getTime();
+    const freshness = evaluateSessionFreshness({
+      updatedAt,
+      now,
+      policy: {
+        mode: "off",
+        atHour: 4,
+        idleMinutes: 1,
+      },
+    });
+
+    expect(freshness.fresh).toBe(true);
+    expect(freshness.dailyResetAt).toBeUndefined();
+    expect(freshness.idleExpiresAt).toBeUndefined();
   });
 });
 

@@ -372,6 +372,7 @@ const TARGET_KEYS = [
 
 const ENUM_EXPECTATIONS: Record<string, string[]> = {
   "memory.citations": ['"auto"', '"on"', '"off"'],
+  "session.reset.mode": ['"daily"', '"idle"', '"off"'],
   "memory.backend": ['"builtin"', '"qmd"'],
   "memory.qmd.searchMode": ['"query"', '"search"', '"vsearch"'],
   "models.mode": ['"merge"', '"replace"'],

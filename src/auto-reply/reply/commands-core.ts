@@ -1,4 +1,12 @@
 import fs from "node:fs/promises";
+import {
+  DEFAULT_RESET_TRIGGER,
+  DEFAULT_RESET_TRIGGERS,
+  resolveChannelResetConfig,
+  resolveSessionResetPolicy,
+  resolveSessionResetType,
+  resolveThreadFlag,
+} from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
@@ -41,6 +49,51 @@ import { routeReply } from "./route-reply.js";
 let HANDLERS: CommandHandler[] | null = null;
 
 export type ResetCommandAction = "new" | "reset";
+
+function resolveResetCommandAction(params: HandleCommandsParams): ResetCommandAction | null {
+  const sessionCfg = params.cfg.session;
+  const configuredResetTriggers = sessionCfg?.resetTriggers?.length
+    ? sessionCfg.resetTriggers
+    : DEFAULT_RESET_TRIGGERS;
+  const isThread = resolveThreadFlag({
+    sessionKey: params.sessionKey,
+    messageThreadId: params.ctx.MessageThreadId,
+    threadLabel: params.ctx.ThreadLabel,
+    threadStarterBody: params.ctx.ThreadStarterBody,
+    parentSessionKey: params.ctx.ParentSessionKey,
+  });
+  const resetType = resolveSessionResetType({
+    sessionKey: params.sessionKey,
+    isGroup: params.isGroup,
+    isThread,
+  });
+  const channelReset = resolveChannelResetConfig({
+    sessionCfg,
+    channel:
+      (params.ctx.OriginatingChannel as string | undefined) ??
+      params.ctx.Surface ??
+      params.ctx.Provider,
+  });
+  const resetPolicy = resolveSessionResetPolicy({
+    sessionCfg,
+    resetType,
+    resetOverride: channelReset,
+  });
+  const allowedResetTriggers =
+    resetPolicy.mode === "off" ? [DEFAULT_RESET_TRIGGER] : configuredResetTriggers;
+
+  const commandBody = params.command.commandBodyNormalized.trim().toLowerCase();
+  for (const trigger of allowedResetTriggers) {
+    if (!trigger) {
+      continue;
+    }
+    const triggerLower = trigger.toLowerCase();
+    if (commandBody === triggerLower || commandBody.startsWith(`${triggerLower} `)) {
+      return triggerLower === "/reset" || triggerLower === "reset" ? "reset" : "new";
+    }
+  }
+  return null;
+}
 
 export async function emitResetCommandHooks(params: {
   action: ResetCommandAction;
@@ -160,8 +213,8 @@ export async function handleCommands(params: HandleCommandsParams): Promise<Comm
       handleAbortTrigger,
     ];
   }
-  const resetMatch = params.command.commandBodyNormalized.match(/^\/(new|reset)(?:\s|$)/);
-  const resetRequested = Boolean(resetMatch);
+  const resetAction = resolveResetCommandAction(params);
+  const resetRequested = resetAction !== null;
   if (resetRequested && !params.command.isAuthorizedSender) {
     logVerbose(
       `Ignoring /reset from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
@@ -171,9 +224,8 @@ export async function handleCommands(params: HandleCommandsParams): Promise<Comm
 
   // Trigger internal hook for reset/new commands
   if (resetRequested && params.command.isAuthorizedSender) {
-    const commandAction: ResetCommandAction = resetMatch?.[1] === "reset" ? "reset" : "new";
     await emitResetCommandHooks({
-      action: commandAction,
+      action: resetAction ?? "new",
       ctx: params.ctx,
       cfg: params.cfg,
       command: params.command,

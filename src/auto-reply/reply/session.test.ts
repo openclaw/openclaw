@@ -552,6 +552,36 @@ describe("initSessionState reset policy", () => {
     expect(result.sessionId).not.toBe(existingSessionId);
   });
 
+  it("does not auto-reset sessions when reset mode is off", async () => {
+    vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
+    const root = await makeCaseDir("openclaw-reset-off-");
+    const storePath = path.join(root, "sessions.json");
+    const sessionKey = "agent:main:whatsapp:dm:off";
+    const existingSessionId = "off-session-id";
+
+    await saveSessionStore(storePath, {
+      [sessionKey]: {
+        sessionId: existingSessionId,
+        updatedAt: new Date(2026, 0, 16, 3, 0, 0).getTime(),
+      },
+    });
+
+    const cfg = {
+      session: {
+        store: storePath,
+        reset: { mode: "off", atHour: 4, idleMinutes: 1 },
+      },
+    } as OpenClawConfig;
+    const result = await initSessionState({
+      ctx: { Body: "hello", SessionKey: sessionKey },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(false);
+    expect(result.sessionId).toBe(existingSessionId);
+  });
+
   it("uses per-type overrides for thread sessions", async () => {
     vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
     const root = await makeCaseDir("openclaw-reset-thread-");
@@ -1022,6 +1052,73 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
       expect(result.isNewSession, testCase.name).toBe(true);
       expect(result.resetTriggered, testCase.name).toBe(true);
       expect(result.sessionId, testCase.name).not.toBe(existingSessionId);
+      expect(result.sessionEntry, testCase.name).toMatchObject(overrides);
+    }
+  });
+
+  it("only resets on /new when reset mode is off", async () => {
+    const storePath = await createStorePath("openclaw-reset-off-trigger-");
+    const sessionKey = "agent:main:telegram:dm:user-off";
+    const existingSessionId = "existing-session-off";
+    const overrides = {
+      verboseLevel: "on",
+      thinkingLevel: "high",
+      reasoningLevel: "low",
+      label: "telegram-priority",
+    } as const;
+    const cases = [
+      {
+        name: "/new still resets in off mode",
+        body: "/new",
+        expectedIsNewSession: true,
+        expectedResetTriggered: true,
+      },
+      {
+        name: "/reset does not reset in off mode",
+        body: "/reset",
+        expectedIsNewSession: false,
+        expectedResetTriggered: false,
+      },
+    ] as const;
+
+    for (const testCase of cases) {
+      await seedSessionStoreWithOverrides({
+        storePath,
+        sessionKey,
+        sessionId: existingSessionId,
+        overrides: { ...overrides },
+      });
+
+      const cfg = {
+        session: {
+          store: storePath,
+          reset: { mode: "off" },
+        },
+      } as OpenClawConfig;
+
+      const result = await initSessionState({
+        ctx: {
+          Body: testCase.body,
+          RawBody: testCase.body,
+          CommandBody: testCase.body,
+          From: "user-off",
+          To: "bot",
+          ChatType: "direct",
+          SessionKey: sessionKey,
+          Provider: "telegram",
+          Surface: "telegram",
+        },
+        cfg,
+        commandAuthorized: true,
+      });
+
+      expect(result.isNewSession, testCase.name).toBe(testCase.expectedIsNewSession);
+      expect(result.resetTriggered, testCase.name).toBe(testCase.expectedResetTriggered);
+      if (testCase.expectedIsNewSession) {
+        expect(result.sessionId, testCase.name).not.toBe(existingSessionId);
+      } else {
+        expect(result.sessionId, testCase.name).toBe(existingSessionId);
+      }
       expect(result.sessionEntry, testCase.name).toMatchObject(overrides);
     }
   });

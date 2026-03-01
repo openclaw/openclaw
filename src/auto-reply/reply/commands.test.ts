@@ -891,6 +891,21 @@ describe("handleCommands hooks", () => {
     spy.mockRestore();
   });
 
+  it("does not trigger reset hooks for /reset when reset mode is off", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+      session: { reset: { mode: "off" } },
+    } as OpenClawConfig;
+    const params = buildParams("/reset", cfg);
+    const spy = vi.spyOn(internalHooks, "triggerInternalHook").mockResolvedValue();
+
+    await handleCommands(params);
+
+    expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
+  });
+
   it("triggers hooks for native /new routed to target sessions", async () => {
     const cfg = {
       commands: { text: true },
