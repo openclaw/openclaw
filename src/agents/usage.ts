@@ -149,6 +149,7 @@ export function derivePromptTokens(usage?: {
 export function deriveSessionTotalTokens(params: {
   usage?: {
     input?: number;
+    output?: number;
     total?: number;
     cacheRead?: number;
     cacheWrite?: number;
@@ -159,11 +160,14 @@ export function deriveSessionTotalTokens(params: {
   const promptOverride = params.promptTokens;
   const hasPromptOverride =
     typeof promptOverride === "number" && Number.isFinite(promptOverride) && promptOverride > 0;
+
   const usage = params.usage;
   if (!usage && !hasPromptOverride) {
     return undefined;
   }
-  const input = usage?.input ?? 0;
+
+  // NOTE: SessionEntry.totalTokens is used as a prompt/context snapshot.
+  // It intentionally excludes completion/output tokens.
   const promptTokens = hasPromptOverride
     ? promptOverride
     : derivePromptTokens({
@@ -171,15 +175,12 @@ export function deriveSessionTotalTokens(params: {
         cacheRead: usage?.cacheRead,
         cacheWrite: usage?.cacheWrite,
       });
-  let total = promptTokens ?? usage?.total ?? input;
-  if (!(total > 0)) {
+
+  if (!(typeof promptTokens === "number") || !Number.isFinite(promptTokens) || promptTokens <= 0) {
     return undefined;
   }
 
-  // NOTE: Do NOT clamp total to contextTokens here. The stored totalTokens
-  // should reflect the actual token count (or best estimate). Clamping causes
-  // /status to display contextTokens/contextTokens (100%) when the accumulated
-  // input exceeds the context window, hiding the real usage. The display layer
-  // (formatTokens in status.ts) already caps the percentage at 999%.
-  return total;
+  // Keep this value unclamped; display layers are responsible for capping
+  // percentages for terminal output.
+  return promptTokens;
 }
