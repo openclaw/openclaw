@@ -4,7 +4,7 @@ import {
   resolveHeartbeatVisibility,
   resolveIndicatorType,
 } from "openclaw/plugin-sdk/channel-runtime";
-import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
+import { canonicalizeMainSessionAlias, loadConfig, resolveDefaultAgentId } from "openclaw/plugin-sdk/config-runtime";
 import {
   loadSessionStore,
   resolveSessionKey,
@@ -85,7 +85,13 @@ export async function runWebHeartbeatOnce(opts: {
   const sessionCfg = cfg.session;
   const sessionScope = sessionCfg?.scope ?? "per-sender";
   const mainKey = normalizeMainKey(sessionCfg?.mainKey);
-  const sessionKey = resolveSessionKey(sessionScope, { From: to }, mainKey);
+  // Canonicalize so the written key matches what read paths produce (#29683).
+  const rawSessionKey = resolveSessionKey(sessionScope, { From: to }, mainKey);
+  const sessionKey = canonicalizeMainSessionAlias({
+    cfg,
+    agentId: resolveDefaultAgentId(cfg),
+    sessionKey: rawSessionKey,
+  });
   if (sessionId) {
     const storePath = resolveStorePath(cfg.session?.store);
     const store = loadSessionStore(storePath);

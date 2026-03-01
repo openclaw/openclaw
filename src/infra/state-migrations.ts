@@ -19,8 +19,10 @@ import { listTelegramAccountIds } from "../plugin-sdk/telegram-runtime.js";
 import {
   buildAgentMainSessionKey,
   DEFAULT_ACCOUNT_ID,
+  DEFAULT_AGENT_ID,
   DEFAULT_MAIN_KEY,
   normalizeAgentId,
+  normalizeMainKey,
 } from "../routing/session-key.js";
 import { isWithinDir } from "./path-safety.js";
 import {
@@ -150,6 +152,22 @@ function canonicalizeSessionKeyForAgent(params: {
   });
   if (canonicalMain !== raw) {
     return canonicalMain.toLowerCase();
+  }
+
+  // Handle cross-agent orphaned keys: "agent:main:xyz" in a store belonging to
+  // a different agent (e.g. "ops"). These are created when write paths used the
+  // hardcoded DEFAULT_AGENT_ID ("main") instead of the configured agent (#29683).
+  const defaultPrefix = `agent:${DEFAULT_AGENT_ID}:`;
+  const rawLower = raw.toLowerCase();
+  if (rawLower.startsWith(defaultPrefix) && agentId !== DEFAULT_AGENT_ID) {
+    const rest = rawLower.slice(defaultPrefix.length);
+    const remapped = `agent:${agentId}:${rest}`;
+    const canonicalized = canonicalizeMainSessionAlias({
+      cfg: { session: { scope: params.scope, mainKey: params.mainKey } },
+      agentId,
+      sessionKey: remapped,
+    });
+    return canonicalized.toLowerCase();
   }
 
   if (raw.toLowerCase().startsWith("agent:")) {
@@ -981,6 +999,135 @@ export async function autoMigrateLegacyAgentDir(params: {
   return await autoMigrateLegacyState(params);
 }
 
+/**
+ * Canonicalize orphaned raw session keys in all known agent session stores.
+ *
+ * Keys written by resolveSessionKey() used DEFAULT_AGENT_ID="main" regardless
+ * of the configured default agent; reads always use resolveSessionStoreKey()
+ * which canonicalizes via canonicalizeMainSessionAlias. This migration renames
+ * any orphaned raw keys to their canonical form in-place, merging with any
+ * existing canonical entry by preferring the most recently updated.
+ *
+ * Safe to run multiple times (idempotent). See #29683.
+ */
+export async function migrateOrphanedSessionKeys(params: {
+  cfg: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+  log?: MigrationLogger;
+}): Promise<{ changes: string[]; warnings: string[] }> {
+  const changes: string[] = [];
+  const warnings: string[] = [];
+  const env = params.env ?? process.env;
+  const stateDir = resolveStateDir(env);
+  const agentId = normalizeAgentId(resolveDefaultAgentId(params.cfg));
+  const mainKey = normalizeMainKey(params.cfg.session?.mainKey);
+  const scope = params.cfg.session?.scope as SessionScope | undefined;
+  const storeConfig = params.cfg.session?.store;
+
+  // Collect all known agent store paths (deduplicated).
+  const storePaths = new Set<string>();
+  // Default agent store.
+  const defaultStorePath = storeConfig
+    ? resolveStorePathFromTemplate(storeConfig, agentId, stateDir)
+    : path.join(stateDir, "agents", agentId, "sessions", "sessions.json");
+  storePaths.add(defaultStorePath);
+  // Configured agents.
+  for (const entry of params.cfg.agents?.list ?? []) {
+    if (entry?.id) {
+      const id = normalizeAgentId(entry.id);
+      const p = storeConfig
+        ? resolveStorePathFromTemplate(storeConfig, id, stateDir)
+        : path.join(stateDir, "agents", id, "sessions", "sessions.json");
+      storePaths.add(p);
+    }
+  }
+  // Agent directories present on disk.
+  const agentsDir = path.join(stateDir, "agents");
+  if (existsDir(agentsDir)) {
+    for (const dirEntry of safeReadDir(agentsDir)) {
+      if (dirEntry.isDirectory()) {
+        const diskAgentId = normalizeAgentId(dirEntry.name);
+        if (diskAgentId) {
+          storePaths.add(path.join(agentsDir, diskAgentId, "sessions", "sessions.json"));
+        }
+      }
+    }
+  }
+
+  for (const storePath of storePaths) {
+    if (!fileExists(storePath)) {
+      continue;
+    }
+    let parsed: ReturnType<typeof readSessionStoreJson5>;
+    try {
+      parsed = readSessionStoreJson5(storePath);
+    } catch (err) {
+      warnings.push(`Could not read ${storePath}: ${String(err)}`);
+      continue;
+    }
+    if (!parsed.ok) {
+      continue;
+    }
+
+    // Determine which agentId this store belongs to from path.
+    const storeAgentId = resolveAgentIdFromStorePath(storePath, stateDir) ?? agentId;
+
+    const { store: canonicalized, legacyKeys } = canonicalizeSessionStore({
+      store: parsed.store,
+      agentId: storeAgentId,
+      mainKey,
+      scope,
+    });
+    if (legacyKeys.length === 0) {
+      continue;
+    }
+
+    const normalized: Record<string, SessionEntry> = {};
+    for (const [key, entry] of Object.entries(canonicalized)) {
+      const ne = normalizeSessionEntry(entry);
+      if (ne) {
+        normalized[key] = ne;
+      }
+    }
+    try {
+      await saveSessionStore(storePath, normalized, { skipMaintenance: true });
+      changes.push(`Canonicalized ${legacyKeys.length} orphaned session key(s) in ${storePath}`);
+    } catch (err) {
+      warnings.push(`Failed to write canonicalized store ${storePath}: ${String(err)}`);
+    }
+  }
+
+  return { changes, warnings };
+}
+
+function resolveStorePathFromTemplate(
+  template: string,
+  agentId: string,
+  _stateDir: string,
+): string {
+  if (template.includes("{agentId}")) {
+    let expanded = template.replaceAll("{agentId}", agentId);
+    if (expanded.startsWith("~")) {
+      expanded = path.join(os.homedir(), expanded.slice(1));
+    }
+    return path.resolve(expanded);
+  }
+  if (template.startsWith("~")) {
+    return path.resolve(path.join(os.homedir(), template.slice(1)));
+  }
+  return path.resolve(template);
+}
+
+function resolveAgentIdFromStorePath(storePath: string, stateDir: string): string | null {
+  const agentsDir = path.join(stateDir, "agents") + path.sep;
+  if (!storePath.startsWith(agentsDir)) {
+    return null;
+  }
+  const relative = storePath.slice(agentsDir.length);
+  const agentPart = relative.split(path.sep)[0];
+  return agentPart ? normalizeAgentId(agentPart) : null;
+}
+
 export async function autoMigrateLegacyState(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -1004,12 +1151,22 @@ export async function autoMigrateLegacyState(params: {
     homedir: params.homedir,
     log: params.log,
   });
+
+  // Canonicalize orphaned session keys regardless of whether legacy migration
+  // is needed — the orphan-key bug (#29683) affects all installs with
+  // non-default agent IDs or mainKey configuration.
+  const orphanKeys = await migrateOrphanedSessionKeys({
+    cfg: params.cfg,
+    env,
+    log: params.log,
+  });
+
   if (env.OPENCLAW_AGENT_DIR?.trim() || env.PI_CODING_AGENT_DIR?.trim()) {
     return {
-      migrated: stateDirResult.migrated,
+      migrated: stateDirResult.migrated || orphanKeys.changes.length > 0,
       skipped: true,
-      changes: stateDirResult.changes,
-      warnings: stateDirResult.warnings,
+      changes: [...stateDirResult.changes, ...orphanKeys.changes],
+      warnings: [...stateDirResult.warnings, ...orphanKeys.warnings],
     };
   }
 
@@ -1020,18 +1177,28 @@ export async function autoMigrateLegacyState(params: {
   });
   if (!detected.sessions.hasLegacy && !detected.agentDir.hasLegacy) {
     return {
-      migrated: stateDirResult.migrated,
+      migrated: stateDirResult.migrated || orphanKeys.changes.length > 0,
       skipped: false,
-      changes: stateDirResult.changes,
-      warnings: stateDirResult.warnings,
+      changes: [...stateDirResult.changes, ...orphanKeys.changes],
+      warnings: [...stateDirResult.warnings, ...orphanKeys.warnings],
     };
   }
 
   const now = params.now ?? (() => Date.now());
   const sessions = await migrateLegacySessions(detected, now);
   const agentDir = await migrateLegacyAgentDir(detected, now);
-  const changes = [...stateDirResult.changes, ...sessions.changes, ...agentDir.changes];
-  const warnings = [...stateDirResult.warnings, ...sessions.warnings, ...agentDir.warnings];
+  const changes = [
+    ...stateDirResult.changes,
+    ...orphanKeys.changes,
+    ...sessions.changes,
+    ...agentDir.changes,
+  ];
+  const warnings = [
+    ...stateDirResult.warnings,
+    ...orphanKeys.warnings,
+    ...sessions.warnings,
+    ...agentDir.warnings,
+  ];
 
   const logger = params.log ?? createSubsystemLogger("state-migrations");
   if (changes.length > 0) {
