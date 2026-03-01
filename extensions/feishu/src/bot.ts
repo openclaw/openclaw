@@ -1321,7 +1321,7 @@ export async function handleFeishuMessage(params: {
         const agentCtx = buildCtxPayloadForAgent(
           agentSessionKey,
           route.accountId,
-          agentId === activeAgentId,
+          ctx.mentionedBot && agentId === activeAgentId,
         );
 
         if (agentId === activeAgentId) {
