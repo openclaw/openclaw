@@ -671,6 +671,95 @@ describe("listSessionsFromStore search", () => {
     expect(result.sessions[0]?.displayName).toBe("Pinned Main");
   });
 
+  test("keeps bare main key title stable when displayName contains transient metadata", () => {
+    const now = Date.now();
+    const store: Record<string, SessionEntry> = {
+      main: {
+        sessionId: "sess-main-bare",
+        updatedAt: now,
+        displayName: "Heartbeat",
+      } as SessionEntry,
+    };
+
+    const result = listSessionsFromStore({
+      cfg: baseCfg,
+      storePath: "/tmp/sessions.json",
+      store,
+      opts: {},
+    });
+
+    expect(result.sessions[0]?.displayName).toBe("Main Session");
+  });
+
+  test("keeps configured main key title stable when displayName contains transient metadata", () => {
+    const now = Date.now();
+    const cfg = {
+      session: { mainKey: "work" },
+      agents: { list: [{ id: "ops", default: true }] },
+    } as OpenClawConfig;
+    const store: Record<string, SessionEntry> = {
+      "agent:ops:work": {
+        sessionId: "sess-main-work",
+        updatedAt: now,
+        displayName: "Heartbeat",
+      } as SessionEntry,
+    };
+
+    const result = listSessionsFromStore({
+      cfg,
+      storePath: "/tmp/sessions.json",
+      store,
+      opts: {},
+    });
+
+    expect(result.sessions[0]?.displayName).toBe("Main Session");
+  });
+
+  test("does not rename non-default agent main sessions", () => {
+    const now = Date.now();
+    const cfg = {
+      session: { mainKey: "work" },
+      agents: { list: [{ id: "ops", default: true }, { id: "dev" }] },
+    } as OpenClawConfig;
+    const store: Record<string, SessionEntry> = {
+      "agent:dev:work": {
+        sessionId: "sess-dev-work",
+        updatedAt: now,
+        displayName: "Dev Main Session",
+      } as SessionEntry,
+    };
+
+    const result = listSessionsFromStore({
+      cfg,
+      storePath: "/tmp/sessions.json",
+      store,
+      opts: {},
+    });
+
+    expect(result.sessions[0]?.displayName).toBe("Dev Main Session");
+  });
+
+  test("keeps main session origin label as fallback when label is missing", () => {
+    const now = Date.now();
+    const store: Record<string, SessionEntry> = {
+      "agent:main:main": {
+        sessionId: "sess-main",
+        updatedAt: now,
+        displayName: "Heartbeat",
+        origin: { label: "Primary Inbox", type: "channel" } as SessionEntry["origin"],
+      } as SessionEntry,
+    };
+
+    const result = listSessionsFromStore({
+      cfg: baseCfg,
+      storePath: "/tmp/sessions.json",
+      store,
+      opts: {},
+    });
+
+    expect(result.sessions[0]?.displayName).toBe("Primary Inbox");
+  });
+
   test("filters sessions across display metadata and key fields", () => {
     const cases = [
       { search: "WORK PROJECT", expectedKey: "agent:main:work-project" },

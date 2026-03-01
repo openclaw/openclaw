@@ -733,6 +733,7 @@ export function listSessionsFromStore(params: {
 }): SessionsListResult {
   const { cfg, storePath, store, opts } = params;
   const now = Date.now();
+  const canonicalMainSessionKey = resolveMainSessionKey(cfg);
 
   const includeGlobal = opts.includeGlobal === true;
   const includeUnknown = opts.includeUnknown === true;
@@ -790,6 +791,7 @@ export function listSessionsFromStore(params: {
       const total = resolveFreshSessionTotalTokens(entry);
       const totalTokensFresh =
         typeof entry?.totalTokens === "number" ? entry?.totalTokensFresh !== false : false;
+      const canonicalSessionKey = resolveSessionStoreKey({ cfg, sessionKey: key });
       const parsed = parseGroupKey(key);
       const parsedAgentSessionKey = parseAgentSessionKey(key);
       const channel = entry?.channel ?? parsed?.channel;
@@ -800,9 +802,9 @@ export function listSessionsFromStore(params: {
       const origin = entry?.origin;
       const originLabel = origin?.label;
       const sessionLabel = entry?.label?.trim();
-      const isMainSession = key.toLowerCase() === "main" || parsedAgentSessionKey?.rest === "main";
+      const isMainSession = canonicalSessionKey === canonicalMainSessionKey;
       const displayName = isMainSession
-        ? sessionLabel || "Main Session"
+        ? sessionLabel || originLabel || "Main Session"
         : (entry?.displayName ??
           (channel
             ? buildGroupDisplayName({
