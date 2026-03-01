@@ -14,6 +14,13 @@ export async function waitForDiscordGatewayStop(params: {
   abortSignal?: AbortSignal;
   onGatewayError?: (err: unknown) => void;
   shouldStopOnError?: (err: unknown) => boolean;
+  /**
+   * Optional callback that receives a `forceStop(err)` function. Callers can
+   * invoke it to force-reject the waiting promise (e.g. from a reconnect
+   * watchdog timer) without having to emit a synthetic error event on the
+   * gateway emitter.
+   */
+  registerForceStop?: (forceStop: (err: unknown) => void) => void;
 }): Promise<void> {
   const { gateway, abortSignal, onGatewayError, shouldStopOnError } = params;
   const emitter = gateway?.emitter;
@@ -65,5 +72,9 @@ export async function waitForDiscordGatewayStop(params: {
 
     abortSignal?.addEventListener("abort", onAbort, { once: true });
     emitter?.on("error", onGatewayErrorEvent);
+
+    // Expose finishReject so external watchdog timers can force-stop without
+    // needing to emit a synthetic error event on the gateway emitter.
+    params.registerForceStop?.(finishReject);
   });
 }

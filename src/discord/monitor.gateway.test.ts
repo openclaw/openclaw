@@ -81,4 +81,76 @@ describe("waitForDiscordGatewayStop", () => {
 
     await expect(promise).resolves.toBeUndefined();
   });
+
+  it("rejects via registerForceStop and disconnects gateway", async () => {
+    const emitter = new EventEmitter();
+    const disconnect = vi.fn();
+    const abort = new AbortController();
+    let forceStop: ((err: unknown) => void) | undefined;
+
+    const promise = waitForDiscordGatewayStop({
+      gateway: { emitter, disconnect },
+      abortSignal: abort.signal,
+      registerForceStop: (fn) => {
+        forceStop = fn;
+      },
+    });
+
+    expect(forceStop).toBeDefined();
+
+    const err = new Error("reconnect watchdog timeout");
+    forceStop!(err);
+
+    await expect(promise).rejects.toThrow("reconnect watchdog timeout");
+    expect(disconnect).toHaveBeenCalledTimes(1);
+    expect(emitter.listenerCount("error")).toBe(0);
+
+    // Subsequent abort is a no-op (already settled).
+    abort.abort();
+    expect(disconnect).toHaveBeenCalledTimes(1);
+  });
+
+  it("forceStop is idempotent — second call has no effect", async () => {
+    const emitter = new EventEmitter();
+    const disconnect = vi.fn();
+    const abort = new AbortController();
+    let forceStop: ((err: unknown) => void) | undefined;
+
+    const promise = waitForDiscordGatewayStop({
+      gateway: { emitter, disconnect },
+      abortSignal: abort.signal,
+      registerForceStop: (fn) => {
+        forceStop = fn;
+      },
+    });
+
+    const err = new Error("watchdog");
+    forceStop!(err);
+    forceStop!(new Error("second call — should be ignored"));
+
+    await expect(promise).rejects.toThrow("watchdog");
+    expect(disconnect).toHaveBeenCalledTimes(1);
+  });
+
+  it("abort wins over registerForceStop when abort fires first", async () => {
+    const emitter = new EventEmitter();
+    const disconnect = vi.fn();
+    const abort = new AbortController();
+    let forceStop: ((err: unknown) => void) | undefined;
+
+    const promise = waitForDiscordGatewayStop({
+      gateway: { emitter, disconnect },
+      abortSignal: abort.signal,
+      registerForceStop: (fn) => {
+        forceStop = fn;
+      },
+    });
+
+    abort.abort();
+    await expect(promise).resolves.toBeUndefined();
+
+    // forceStop called after settlement is a no-op.
+    forceStop!(new Error("too late"));
+    expect(disconnect).toHaveBeenCalledTimes(1);
+  });
 });

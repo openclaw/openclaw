@@ -50,26 +50,73 @@ export async function runDiscordGatewayLifecycle(params: {
 
   const HELLO_TIMEOUT_MS = 30000;
   let helloTimeoutId: ReturnType<typeof setTimeout> | undefined;
+
+  // Reconnect watchdog: if the WebSocket closes and does not re-open within
+  // this window we force-stop the lifecycle so the outer channel manager can
+  // restart the whole provider with exponential backoff. 5 minutes gives the
+  // carbon library's built-in reconnect logic (up to 50 attempts) enough time
+  // to succeed before we escalate to a full provider restart.
+  const RECONNECT_WATCHDOG_MS = 5 * 60_000;
+  let reconnectWatchdogId: ReturnType<typeof setTimeout> | undefined;
+  // Populated once waitForDiscordGatewayStop registers the forceStop callback.
+  let forceStopLifecycle: ((err: unknown) => void) | null = null;
+
+  const clearReconnectWatchdog = () => {
+    if (reconnectWatchdogId !== undefined) {
+      clearTimeout(reconnectWatchdogId);
+      reconnectWatchdogId = undefined;
+    }
+  };
+
+  const startReconnectWatchdog = () => {
+    clearReconnectWatchdog();
+    reconnectWatchdogId = setTimeout(() => {
+      reconnectWatchdogId = undefined;
+      params.runtime.error?.(
+        danger(
+          `[${params.accountId}] discord reconnect watchdog: WebSocket has been closed for ${Math.round(RECONNECT_WATCHDOG_MS / 1000)}s without recovery — forcing provider restart`,
+        ),
+      );
+      forceStopLifecycle?.(
+        new Error(
+          `discord: reconnect watchdog timeout — WebSocket connection not re-established within ${RECONNECT_WATCHDOG_MS}ms`,
+        ),
+      );
+    }, RECONNECT_WATCHDOG_MS);
+  };
+
   const onGatewayDebug = (msg: unknown) => {
     const message = String(msg);
-    if (!message.includes("WebSocket connection opened")) {
+    if (message.includes("WebSocket connection opened")) {
+      // Connection (re-)established — clear any pending watchdog and start the
+      // HELLO timeout to guard against a stalled handshake.
+      clearReconnectWatchdog();
+      if (helloTimeoutId) {
+        clearTimeout(helloTimeoutId);
+      }
+      helloTimeoutId = setTimeout(() => {
+        if (!gateway?.isConnected) {
+          params.runtime.log?.(
+            danger(
+              `connection stalled: no HELLO received within ${HELLO_TIMEOUT_MS}ms, forcing reconnect`,
+            ),
+          );
+          gateway?.disconnect();
+          gateway?.connect(false);
+        }
+        helloTimeoutId = undefined;
+      }, HELLO_TIMEOUT_MS);
       return;
     }
-    if (helloTimeoutId) {
-      clearTimeout(helloTimeoutId);
+
+    // Connection dropped — start the watchdog. The carbon library will attempt
+    // its own reconnects (up to maxAttempts); if it succeeds the "WebSocket
+    // connection opened" branch above will clear the watchdog. If it silently
+    // exhausts retries without emitting an error event the watchdog fires and
+    // forces a clean provider restart.
+    if (message.includes("WebSocket connection closed")) {
+      startReconnectWatchdog();
     }
-    helloTimeoutId = setTimeout(() => {
-      if (!gateway?.isConnected) {
-        params.runtime.log?.(
-          danger(
-            `connection stalled: no HELLO received within ${HELLO_TIMEOUT_MS}ms, forcing reconnect`,
-          ),
-        );
-        gateway?.disconnect();
-        gateway?.connect(false);
-      }
-      helloTimeoutId = undefined;
-    }, HELLO_TIMEOUT_MS);
   };
   gatewayEmitter?.on("debug", onGatewayDebug);
 
@@ -107,12 +154,17 @@ export async function runDiscordGatewayLifecycle(params: {
           params.isDisallowedIntentsError(err)
         );
       },
+      registerForceStop: (fn) => {
+        forceStopLifecycle = fn;
+      },
     });
   } catch (err) {
     if (!sawDisallowedIntents && !params.isDisallowedIntentsError(err)) {
       throw err;
     }
   } finally {
+    clearReconnectWatchdog();
+    forceStopLifecycle = null;
     unregisterGateway(params.accountId);
     stopGatewayLogging();
     if (helloTimeoutId) {

@@ -1,5 +1,6 @@
+import { EventEmitter } from "node:events";
 import type { Client } from "@buape/carbon";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../../runtime.js";
 
 const {
@@ -116,5 +117,152 @@ describe("runDiscordGatewayLifecycle", () => {
     await expect(runDiscordGatewayLifecycle(lifecycleParams)).resolves.toBeUndefined();
 
     expectLifecycleCleanup({ start, stop, threadStop, waitCalls: 1 });
+  });
+});
+
+describe("reconnect watchdog", () => {
+  // Each test uses fake timers so we can advance the 5-minute watchdog without
+  // waiting for real wall-clock time.
+  afterEach(() => {
+    vi.useRealTimers();
+    attachDiscordGatewayLoggingMock.mockReset();
+    getDiscordGatewayEmitterMock.mockReset();
+    waitForDiscordGatewayStopMock.mockReset();
+    registerGatewayMock.mockReset();
+    unregisterGatewayMock.mockReset();
+    stopGatewayLoggingMock.mockReset();
+    attachDiscordGatewayLoggingMock.mockImplementation(() => stopGatewayLoggingMock);
+    getDiscordGatewayEmitterMock.mockReturnValue(undefined);
+    waitForDiscordGatewayStopMock.mockResolvedValue(undefined);
+  });
+
+  /**
+   * Build a test harness where:
+   * - The gateway has a real EventEmitter so debug events can be simulated.
+   * - `waitForDiscordGatewayStop` is mocked to capture the `registerForceStop`
+   *   callback and expose it to the test, allowing the test to both trigger the
+   *   watchdog (by emitting "WebSocket connection closed" and advancing timers)
+   *   and to resolve the wait normally when needed.
+   */
+  function createWatchdogHarness() {
+    const emitter = new EventEmitter();
+    getDiscordGatewayEmitterMock.mockReturnValue(emitter);
+
+    let resolveWait: (() => void) | undefined;
+    let rejectWait: ((err: unknown) => void) | undefined;
+
+    waitForDiscordGatewayStopMock.mockImplementation(
+      (params: {
+        registerForceStop?: (fn: (err: unknown) => void) => void;
+        [key: string]: unknown;
+      }) => {
+        const p = new Promise<void>((resolve, reject) => {
+          resolveWait = resolve;
+          rejectWait = reject;
+        });
+        // Simulate what the real waitForDiscordGatewayStop does: hand out
+        // finishReject to the caller via registerForceStop.
+        params.registerForceStop?.(rejectWait!);
+        return p;
+      },
+    );
+
+    const runtimeError = vi.fn();
+    const runtime: RuntimeEnv = {
+      log: vi.fn(),
+      error: runtimeError,
+      exit: vi.fn(),
+    };
+    const threadStop = vi.fn();
+
+    const lifecycleParams = {
+      accountId: "default",
+      client: { getPlugin: vi.fn(() => undefined) } as unknown as Client,
+      runtime,
+      isDisallowedIntentsError: () => false,
+      voiceManager: null,
+      voiceManagerRef: { current: null },
+      execApprovalsHandler: null,
+      threadBindings: { stop: threadStop },
+    };
+
+    return {
+      emitter,
+      runtimeError,
+      threadStop,
+      lifecycleParams,
+      resolveWait: () => resolveWait?.(),
+    };
+  }
+
+  it("force-stops the lifecycle when WebSocket stays closed beyond the watchdog timeout", async () => {
+    vi.useFakeTimers();
+    const { runDiscordGatewayLifecycle } = await import("./provider.lifecycle.js");
+
+    const { emitter, runtimeError, threadStop, lifecycleParams } = createWatchdogHarness();
+
+    const lifecyclePromise = runDiscordGatewayLifecycle(lifecycleParams);
+    // Attach an early catch so Node.js does not report an "unhandledRejection"
+    // during the gap between the timer firing and the assertion below.
+    lifecyclePromise.catch(() => {});
+
+    // Simulate the gateway WebSocket closing (the carbon library emits this
+    // debug message when the connection drops).
+    emitter.emit("debug", "WebSocket connection closed");
+
+    // Advance past the 5-minute reconnect watchdog timeout.
+    await vi.advanceTimersByTimeAsync(5 * 60_000 + 1000);
+
+    // The watchdog should have called forceStop, causing the lifecycle to
+    // reject with the watchdog error.
+    await expect(lifecyclePromise).rejects.toThrow("reconnect watchdog timeout");
+
+    expect(runtimeError).toHaveBeenCalledWith(expect.stringContaining("reconnect watchdog"));
+    expect(threadStop).toHaveBeenCalledTimes(1);
+    expect(unregisterGatewayMock).toHaveBeenCalledWith("default");
+  });
+
+  it("clears the watchdog when the WebSocket reconnects before the timeout", async () => {
+    vi.useFakeTimers();
+    const { runDiscordGatewayLifecycle } = await import("./provider.lifecycle.js");
+
+    const { emitter, runtimeError, resolveWait, lifecycleParams } = createWatchdogHarness();
+
+    const lifecyclePromise = runDiscordGatewayLifecycle(lifecycleParams);
+
+    // Connection drops.
+    emitter.emit("debug", "WebSocket connection closed");
+
+    // Advance only 2 minutes (less than the 5-minute watchdog).
+    await vi.advanceTimersByTimeAsync(2 * 60_000);
+
+    // Connection re-established — watchdog should be cleared.
+    emitter.emit("debug", "WebSocket connection opened");
+
+    // Advance past where the original watchdog would have fired (still safe).
+    await vi.advanceTimersByTimeAsync(3 * 60_000 + 1000);
+
+    // Lifecycle resolves normally (no watchdog rejection).
+    resolveWait();
+    await expect(lifecyclePromise).resolves.toBeUndefined();
+
+    expect(runtimeError).not.toHaveBeenCalledWith(expect.stringContaining("reconnect watchdog"));
+  });
+
+  it("does not fire the watchdog if no 'WebSocket connection closed' event is emitted", async () => {
+    vi.useFakeTimers();
+    const { runDiscordGatewayLifecycle } = await import("./provider.lifecycle.js");
+
+    const { runtimeError, resolveWait, lifecycleParams } = createWatchdogHarness();
+
+    const lifecyclePromise = runDiscordGatewayLifecycle(lifecycleParams);
+
+    // No connection-closed event — advance well past the watchdog window.
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+
+    resolveWait();
+    await expect(lifecyclePromise).resolves.toBeUndefined();
+
+    expect(runtimeError).not.toHaveBeenCalledWith(expect.stringContaining("reconnect watchdog"));
   });
 });
