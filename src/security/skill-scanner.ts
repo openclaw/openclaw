@@ -47,6 +47,13 @@ const SCANNABLE_EXTENSIONS = new Set([
   ".tsx",
 ]);
 
+/** Markdown/text files are scanned for injected instructions only. */
+const MD_SCANNABLE_EXTENSIONS = new Set([".md", ".txt"]);
+
+export function isMdScannable(filePath: string): boolean {
+  return MD_SCANNABLE_EXTENSIONS.has(path.extname(filePath).toLowerCase());
+}
+
 const DEFAULT_MAX_SCAN_FILES = 500;
 const DEFAULT_MAX_FILE_BYTES = 1024 * 1024;
 
@@ -102,6 +109,27 @@ const LINE_RULES: LineRule[] = [
     severity: "warn",
     message: "WebSocket connection to non-standard port",
     pattern: /new\s+WebSocket\s*\(\s*["']wss?:\/\/[^"']*:(\d+)/,
+  },
+];
+
+/**
+ * Rules applied only to markdown/text files. These detect imperative instruction
+ * patterns that could be used to hijack agent behavior via context injection
+ * (e.g. malicious MEMORY.md, HEARTBEAT.md, or skill documentation).
+ */
+const MD_LINE_RULES: LineRule[] = [
+  {
+    ruleId: "injected-instruction",
+    severity: "warn",
+    message: "Imperative instruction pattern in markdown (possible prompt injection)",
+    pattern:
+      /^(ignore|disregard|forget|you are now|new instructions?|override|execute|system prompt|act as|pretend you are)/im,
+  },
+  {
+    ruleId: "injected-instruction",
+    severity: "warn",
+    message: "Hidden instruction block in markdown (possible prompt injection)",
+    pattern: /<!--\s*(ignore|system|instructions?|override)/i,
   },
 ];
 
@@ -238,6 +266,32 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
     matchedSourceRules.add(ruleKey);
   }
 
+  // --- Markdown injection rules (only for .md / .txt files) ---
+  if (isMdScannable(filePath)) {
+    const matchedMdRules = new Set<string>();
+    for (const rule of MD_LINE_RULES) {
+      if (matchedMdRules.has(rule.ruleId)) {
+        continue;
+      }
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        if (!rule.pattern.test(line)) {
+          continue;
+        }
+        findings.push({
+          ruleId: rule.ruleId,
+          severity: rule.severity,
+          file: filePath,
+          line: i + 1,
+          message: rule.message,
+          evidence: truncateEvidence(line.trim()),
+        });
+        matchedMdRules.add(rule.ruleId);
+        break;
+      }
+    }
+  }
+
   return findings;
 }
 
@@ -276,7 +330,7 @@ async function walkDirWithLimit(dirPath: string, maxFiles: number): Promise<stri
       const fullPath = path.join(currentDir, entry.name);
       if (entry.isDirectory()) {
         stack.push(fullPath);
-      } else if (isScannable(entry.name)) {
+      } else if (isScannable(entry.name) || isMdScannable(entry.name)) {
         files.push(fullPath);
       }
     }
