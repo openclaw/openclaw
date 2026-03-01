@@ -390,22 +390,32 @@ describe("tts", () => {
 
     it("routes generic model to openai when provider=openai is set", () => {
       const policy = resolveModelOverridePolicy({ enabled: true, allowProvider: true });
-      const input = "Hello [[tts:provider=openai model=speech-2.8-hd]] world";
+      const input = "Hello [[tts:provider=openai model=tts-1-hd]] world";
       const result = parseTtsDirectives(input, policy);
 
       expect(result.overrides.provider).toBe("openai");
-      expect(result.overrides.openai?.model).toBe("speech-2.8-hd");
+      expect(result.overrides.openai?.model).toBe("tts-1-hd");
       expect(result.overrides.minimax?.model).toBeUndefined();
     });
 
     it("routes generic model to openai even when provider appears after model", () => {
       const policy = resolveModelOverridePolicy({ enabled: true, allowProvider: true });
-      const input = "Hello [[tts:model=speech-2.8-hd provider=openai]] world";
+      const input = "Hello [[tts:model=tts-1-hd provider=openai]] world";
       const result = parseTtsDirectives(input, policy);
 
       expect(result.overrides.provider).toBe("openai");
-      expect(result.overrides.openai?.model).toBe("speech-2.8-hd");
+      expect(result.overrides.openai?.model).toBe("tts-1-hd");
       expect(result.overrides.minimax?.model).toBeUndefined();
+    });
+
+    it("rejects invalid model for openai provider with warning", () => {
+      const policy = resolveModelOverridePolicy({ enabled: true, allowProvider: true });
+      const input = "Hello [[tts:provider=openai model=speech-2.8-hd]] world";
+      const result = parseTtsDirectives(input, policy);
+
+      expect(result.overrides.provider).toBe("openai");
+      expect(result.overrides.openai?.model).toBeUndefined();
+      expect(result.warnings).toContain('invalid OpenAI model "speech-2.8-hd"');
     });
 
     it("provider-specific model key takes precedence over generic model", () => {
