@@ -414,13 +414,14 @@ Core actions:
 - `member-info` / `role-info`
 - `emoji-list` / `emoji-upload` / `sticker-upload`
 - `role-add` / `role-remove`
-- `channel-info` / `channel-list`
+- `channel-info` / `channel-list` / `channel-create` / `channel-edit`
 - `voice-status`
 - `event-list` / `event-create`
 - `timeout` / `kick` / `ban`
 
 Notes:
 
+- `channel-create` and `channel-edit` (Discord) support `autoArchiveDuration` (for threads) and `defaultAutoArchiveDuration` (for new threads in a channel).
 - `send` routes WhatsApp via the Gateway; other channels go direct.
 - `poll` uses the Gateway for WhatsApp and MS Teams; Discord polls go direct.
 - When a message tool call is bound to an active chat session, sends are constrained to that session’s target to avoid cross-context leaks.

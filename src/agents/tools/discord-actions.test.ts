@@ -337,6 +337,7 @@ describe("handleDiscordGuildAction - channel management", () => {
         name: "test-channel",
         type: 0,
         topic: "Test topic",
+        defaultAutoArchiveDuration: 1440,
       },
       channelsEnabled,
     );
@@ -348,6 +349,7 @@ describe("handleDiscordGuildAction - channel management", () => {
       topic: "Test topic",
       position: undefined,
       nsfw: undefined,
+      defaultAutoArchiveDuration: 1440,
     });
     expect(result.details).toMatchObject({ ok: true });
   });
@@ -374,6 +376,7 @@ describe("handleDiscordGuildAction - channel management", () => {
         channelId: "C1",
         name: "new-name",
         topic: "new topic",
+        defaultAutoArchiveDuration: 4320,
       },
       channelsEnabled,
     );
@@ -388,6 +391,7 @@ describe("handleDiscordGuildAction - channel management", () => {
       archived: undefined,
       locked: undefined,
       autoArchiveDuration: undefined,
+      defaultAutoArchiveDuration: 4320,
     });
   });
 
@@ -413,6 +417,7 @@ describe("handleDiscordGuildAction - channel management", () => {
       archived: true,
       locked: false,
       autoArchiveDuration: 1440,
+      defaultAutoArchiveDuration: undefined,
     });
   });
 
@@ -439,6 +444,7 @@ describe("handleDiscordGuildAction - channel management", () => {
       archived: undefined,
       locked: undefined,
       autoArchiveDuration: undefined,
+      defaultAutoArchiveDuration: undefined,
     });
   });
 

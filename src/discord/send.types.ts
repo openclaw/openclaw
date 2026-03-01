@@ -132,6 +132,7 @@ export type DiscordChannelCreate = {
   topic?: string;
   position?: number;
   nsfw?: boolean;
+  defaultAutoArchiveDuration?: number;
 };
 
 export type DiscordForumTag = {
@@ -153,6 +154,7 @@ export type DiscordChannelEdit = {
   archived?: boolean;
   locked?: boolean;
   autoArchiveDuration?: number;
+  defaultAutoArchiveDuration?: number;
   availableTags?: DiscordForumTag[];
 };
 

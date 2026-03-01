@@ -32,6 +32,9 @@ export async function createChannelDiscord(
   if (payload.nsfw !== undefined) {
     body.nsfw = payload.nsfw;
   }
+  if (payload.defaultAutoArchiveDuration !== undefined) {
+    body.default_auto_archive_duration = payload.defaultAutoArchiveDuration;
+  }
   return (await rest.post(Routes.guildChannels(payload.guildId), {
     body,
   })) as APIChannel;
@@ -69,6 +72,9 @@ export async function editChannelDiscord(
   }
   if (payload.autoArchiveDuration !== undefined) {
     body.auto_archive_duration = payload.autoArchiveDuration;
+  }
+  if (payload.defaultAutoArchiveDuration !== undefined) {
+    body.default_auto_archive_duration = payload.defaultAutoArchiveDuration;
   }
   if (payload.availableTags !== undefined) {
     body.available_tags = payload.availableTags.map((t) => ({

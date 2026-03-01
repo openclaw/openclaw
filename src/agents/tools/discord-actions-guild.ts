@@ -291,6 +291,9 @@ export async function handleDiscordGuildAction(
       const topic = readStringParam(params, "topic");
       const position = readNumberParam(params, "position", { integer: true });
       const nsfw = params.nsfw as boolean | undefined;
+      const defaultAutoArchiveDuration = readNumberParam(params, "defaultAutoArchiveDuration", {
+        integer: true,
+      });
       const channel = accountId
         ? await createChannelDiscord(
             {
@@ -301,6 +304,7 @@ export async function handleDiscordGuildAction(
               topic: topic ?? undefined,
               position: position ?? undefined,
               nsfw,
+              defaultAutoArchiveDuration: defaultAutoArchiveDuration ?? undefined,
             },
             { accountId },
           )
@@ -312,6 +316,7 @@ export async function handleDiscordGuildAction(
             topic: topic ?? undefined,
             position: position ?? undefined,
             nsfw,
+            defaultAutoArchiveDuration: defaultAutoArchiveDuration ?? undefined,
           });
       return jsonResult({ ok: true, channel });
     }
@@ -335,6 +340,9 @@ export async function handleDiscordGuildAction(
       const autoArchiveDuration = readNumberParam(params, "autoArchiveDuration", {
         integer: true,
       });
+      const defaultAutoArchiveDuration = readNumberParam(params, "defaultAutoArchiveDuration", {
+        integer: true,
+      });
       const availableTags = parseAvailableTags(params.availableTags);
       const channel = accountId
         ? await editChannelDiscord(
@@ -349,6 +357,7 @@ export async function handleDiscordGuildAction(
               archived,
               locked,
               autoArchiveDuration: autoArchiveDuration ?? undefined,
+              defaultAutoArchiveDuration: defaultAutoArchiveDuration ?? undefined,
               availableTags,
             },
             { accountId },
@@ -364,6 +373,7 @@ export async function handleDiscordGuildAction(
             archived,
             locked,
             autoArchiveDuration: autoArchiveDuration ?? undefined,
+            defaultAutoArchiveDuration: defaultAutoArchiveDuration ?? undefined,
             availableTags,
           });
       return jsonResult({ ok: true, channel });

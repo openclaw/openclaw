@@ -57,6 +57,114 @@ export function registerMessageDiscordAdminCommands(message: Command, helpers: M
       await helpers.runMessageAction("channel-list", opts);
     });
 
+  helpers
+    .withMessageBase(
+      channel
+        .command("create")
+        .description("Create a channel")
+        .requiredOption("--guild-id <id>", "Guild id")
+        .requiredOption("--name <text>", "Channel name"),
+    )
+    .option("--type <n>", "Channel type (0: text, 2: voice, 5: announcement, 13: stage, 15: forum)")
+    .option("--parentId <id>", "Category/parent id")
+    .option("--topic <text>", "Channel topic")
+    .option("--position <n>", "Channel position")
+    .option("--nsfw", "Mark as NSFW")
+    .option(
+      "--default-auto-archive-duration <n>",
+      "Default auto-archive duration (60, 1440, 4320, 10080)",
+    )
+    .action(async (opts) => {
+      await helpers.runMessageAction("channel-create", opts);
+    });
+
+  helpers
+    .withMessageBase(
+      helpers.withRequiredMessageTarget(channel.command("edit").description("Edit a channel")),
+    )
+    .option("--name <text>", "Channel name")
+    .option("--topic <text>", "Channel topic")
+    .option("--position <n>", "Channel position")
+    .option("--parentId <id>", "Category/parent id")
+    .option("--clearParent", "Clear parent/category")
+    .option("--nsfw", "Mark as NSFW")
+    .option("--no-nsfw", "Unmark as NSFW")
+    .option("--rateLimitPerUser <n>", "Slowmode in seconds")
+    .option("--archived", "Archive thread")
+    .option("--no-archived", "Unarchive thread")
+    .option("--locked", "Lock thread")
+    .option("--no-locked", "Unlock thread")
+    .option("--auto-archive-duration <n>", "Auto-archive duration (60, 1440, 4320, 10080)")
+    .option(
+      "--default-auto-archive-duration <n>",
+      "Default auto-archive duration (60, 1440, 4320, 10080)",
+    )
+    .action(async (opts) => {
+      await helpers.runMessageAction("channel-edit", opts);
+    });
+
+  helpers
+    .withMessageBase(
+      helpers.withRequiredMessageTarget(channel.command("delete").description("Delete a channel")),
+    )
+    .action(async (opts) => {
+      await helpers.runMessageAction("channel-delete", opts);
+    });
+
+  helpers
+    .withMessageBase(
+      helpers.withRequiredMessageTarget(
+        channel
+          .command("move")
+          .description("Move a channel")
+          .requiredOption("--guild-id <id>", "Guild id"),
+      ),
+    )
+    .option("--parentId <id>", "Category/parent id")
+    .option("--clearParent", "Clear parent/category")
+    .option("--position <n>", "Channel position")
+    .action(async (opts) => {
+      await helpers.runMessageAction("channel-move", opts);
+    });
+
+  const category = message.command("category").description("Category actions");
+  helpers
+    .withMessageBase(
+      category
+        .command("create")
+        .description("Create a category")
+        .requiredOption("--guild-id <id>", "Guild id")
+        .requiredOption("--name <text>", "Category name"),
+    )
+    .option("--position <n>", "Category position")
+    .action(async (opts) => {
+      await helpers.runMessageAction("category-create", opts);
+    });
+
+  helpers
+    .withMessageBase(
+      category
+        .command("edit")
+        .description("Edit a category")
+        .requiredOption("--category-id <id>", "Category id"),
+    )
+    .option("--name <text>", "Category name")
+    .option("--position <n>", "Category position")
+    .action(async (opts) => {
+      await helpers.runMessageAction("category-edit", opts);
+    });
+
+  helpers
+    .withMessageBase(
+      category
+        .command("delete")
+        .description("Delete a category")
+        .requiredOption("--category-id <id>", "Category id"),
+    )
+    .action(async (opts) => {
+      await helpers.runMessageAction("category-delete", opts);
+    });
+
   const member = message.command("member").description("Member actions");
   helpers
     .withMessageBase(

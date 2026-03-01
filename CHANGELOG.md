@@ -81,6 +81,10 @@ Docs: https://docs.openclaw.ai
 
 ## Unreleased
 
+### Changes
+
+- Discord/Channel ops: support `default_auto_archive_duration` on `channel-create` and `channel-edit`, and add `--no-nsfw`, `--no-archived`, and `--no-locked` negation flags to `channel-edit` so boolean fields can be explicitly cleared from the CLI.
+
 ### Fixes
 
 - Docs/Slack manifest scopes: add missing DM/group-DM bot scopes (`im:read`, `im:write`, `mpim:read`, `mpim:write`) to the Slack app manifest example so DM setup guidance is complete. (#29999) Thanks @JcMinarro.
