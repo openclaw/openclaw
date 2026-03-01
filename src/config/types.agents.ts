@@ -14,6 +14,11 @@ export type AgentConfig = {
   model?: AgentModelConfig;
   /** Optional allowlist of skills for this agent (omit = all skills; empty = none). */
   skills?: string[];
+  /** Optional per-agent memory access controls. */
+  memory?: {
+    /** Allow this agent to read memory from other agents (ids or "*"). */
+    allowReadFrom?: string[];
+  };
   memorySearch?: MemorySearchConfig;
   /** Human-like delay between block replies for this agent. */
   humanDelay?: HumanDelayConfig;
