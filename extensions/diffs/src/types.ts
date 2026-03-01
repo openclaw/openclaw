@@ -8,6 +8,19 @@ export type DiffLayout = (typeof DIFF_LAYOUTS)[number];
 export type DiffMode = (typeof DIFF_MODES)[number];
 export type DiffTheme = (typeof DIFF_THEMES)[number];
 
+export type DiffPresentationDefaults = {
+  fontFamily: string;
+  fontSize: number;
+  layout: DiffLayout;
+  wordWrap: boolean;
+  background: boolean;
+  theme: DiffTheme;
+};
+
+export type DiffToolDefaults = DiffPresentationDefaults & {
+  mode: DiffMode;
+};
+
 export type BeforeAfterDiffInput = {
   kind: "before_after";
   before: string;
@@ -26,9 +39,8 @@ export type PatchDiffInput = {
 export type DiffInput = BeforeAfterDiffInput | PatchDiffInput;
 
 export type DiffRenderOptions = {
-  layout: DiffLayout;
+  presentation: DiffPresentationDefaults;
   expandUnchanged: boolean;
-  theme: DiffTheme;
 };
 
 export type DiffViewerOptions = {
@@ -39,6 +51,7 @@ export type DiffViewerOptions = {
   diffStyle: DiffLayout;
   expandUnchanged: boolean;
   themeType: DiffTheme;
+  backgroundEnabled: boolean;
   overflow: "scroll" | "wrap";
   unsafeCSS: string;
 };
@@ -54,6 +67,7 @@ export type DiffViewerPayload = {
 
 export type RenderedDiffDocument = {
   html: string;
+  imageHtml: string;
   title: string;
   fileCount: number;
   inputKind: DiffInput["kind"];
