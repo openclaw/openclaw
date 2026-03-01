@@ -203,4 +203,60 @@ describe("runDiscordGatewayLifecycle", () => {
       releaseEarlyGatewayErrorGuard,
     });
   });
+
+  it("health watchdog forces reconnect when disconnected beyond threshold", async () => {
+    vi.useFakeTimers();
+    const { EventEmitter } = await import("node:events");
+    const emitter = new EventEmitter();
+    const gateway = {
+      isConnected: true,
+      options: { reconnect: {} },
+      disconnect: vi.fn(),
+      connect: vi.fn(),
+    };
+    getDiscordGatewayEmitterMock.mockReturnValueOnce(emitter as never);
+
+    let resolveWait!: () => void;
+    waitForDiscordGatewayStopMock.mockReturnValueOnce(
+      new Promise<void>((r) => {
+        resolveWait = r;
+      }),
+    );
+
+    const { runDiscordGatewayLifecycle } = await import("./provider.lifecycle.js");
+    const logFn = vi.fn();
+    const lifecycleParams = {
+      accountId: "test",
+      client: { getPlugin: vi.fn(() => gateway) } as unknown as Client,
+      runtime: { log: logFn } as unknown as RuntimeEnv,
+      isDisallowedIntentsError: () => false,
+      voiceManager: null,
+      voiceManagerRef: { current: null },
+      execApprovalsHandler: { start: vi.fn(async () => {}), stop: vi.fn(async () => {}) },
+      threadBindings: { stop: vi.fn() },
+    };
+
+    const promise = runDiscordGatewayLifecycle(lifecycleParams);
+
+    // Simulate: gateway connected for a while, then disconnects
+    vi.advanceTimersByTime(60_000);
+    expect(gateway.disconnect).not.toHaveBeenCalled();
+
+    // Gateway drops
+    gateway.isConnected = false;
+
+    // First check: only 60s disconnected, below 90s threshold
+    vi.advanceTimersByTime(60_000);
+    expect(gateway.disconnect).not.toHaveBeenCalled();
+
+    // Second check: now 120s disconnected, above 90s threshold
+    vi.advanceTimersByTime(60_000);
+    expect(gateway.disconnect).toHaveBeenCalledTimes(1);
+    expect(gateway.connect).toHaveBeenCalledWith(false);
+    expect(logFn).toHaveBeenCalledWith(expect.stringContaining("discord health watchdog"));
+
+    resolveWait();
+    await promise;
+    vi.useRealTimers();
+  });
 });
