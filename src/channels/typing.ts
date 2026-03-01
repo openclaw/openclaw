@@ -42,7 +42,6 @@ export function createTypingCallbacks(params: CreateTypingCallbacksParams): Typi
       return;
     }
     stopSent = false;
-    startGuard.reset();
     await fireStart();
     if (startGuard.isTripped()) {
       return;

@@ -130,4 +130,22 @@ describe("createTypingCallbacks", () => {
     expect(start).toHaveBeenCalledTimes(3);
     expect(onStartError).not.toHaveBeenCalled();
   });
+
+  it("trips circuit breaker across repeated onReplyStart calls", async () => {
+    const start = vi.fn().mockRejectedValue(new Error("403"));
+    const onStartError = vi.fn();
+    const callbacks = createTypingCallbacks({
+      start,
+      onStartError,
+      maxConsecutiveFailures: 2,
+    });
+
+    // Each onReplyStart call accumulates failures (no reset between ticks)
+    await callbacks.onReplyStart(); // failure 1
+    await callbacks.onReplyStart(); // failure 2 → trips breaker
+    await callbacks.onReplyStart(); // should be skipped (breaker tripped)
+
+    expect(start).toHaveBeenCalledTimes(2);
+    expect(onStartError).toHaveBeenCalledTimes(2);
+  });
 });
