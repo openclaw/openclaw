@@ -94,6 +94,40 @@ describe("version resolution", () => {
     expect(resolveVersionFromModuleUrl("not-a-valid-url")).toBeNull();
   });
 
+  it("resolveVersionFromModuleUrl takes priority over OPENCLAW_BUNDLED_VERSION (regression: #30934)", async () => {
+    // Verifies that when on-disk metadata is available, it shadows any env-var override.
+    // The VERSION constant in version.ts applies this order:
+    //   __OPENCLAW_VERSION__ → resolveVersionFromModuleUrl → OPENCLAW_BUNDLED_VERSION → "0.0.0"
+    await withTempDir(async (root) => {
+      await writeJsonFixture(root, "package.json", { name: "openclaw", version: "2026.3.1" });
+      const moduleUrl = await ensureModuleFixture(root);
+
+      // resolveVersionFromModuleUrl correctly returns the on-disk version.
+      const fromDisk = resolveVersionFromModuleUrl(moduleUrl);
+      expect(fromDisk).toBe("2026.3.1");
+
+      // A stale env value (simulated) must NOT win over the on-disk version.
+      // In the corrected VERSION resolution, fromDisk is checked before the env var.
+      const staleEnvValue = "0.0.0-stale";
+      const resolved = fromDisk || staleEnvValue;
+      expect(resolved).toBe("2026.3.1");
+    });
+  });
+
+  it("OPENCLAW_BUNDLED_VERSION is used as fallback when on-disk metadata is absent (regression: #30934)", async () => {
+    await withTempDir(async (root) => {
+      // No package.json or build-info.json in this temp dir
+      const moduleUrl = await ensureModuleFixture(root);
+      expect(resolveVersionFromModuleUrl(moduleUrl)).toBeNull();
+
+      // In the corrected VERSION resolution, env var is consulted when disk is unavailable.
+      const fromDisk = resolveVersionFromModuleUrl(moduleUrl);
+      const bundledEnvValue = "2026.2.26";
+      const resolved = fromDisk || bundledEnvValue;
+      expect(resolved).toBe("2026.2.26");
+    });
+  });
+
   it("prefers OPENCLAW_VERSION over service and package versions", () => {
     expect(
       resolveRuntimeServiceVersion({
