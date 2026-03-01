@@ -142,6 +142,7 @@ export const TelegramAccountSchemaBase = z
     replyToMode: ReplyToModeSchema.optional(),
     groups: z.record(z.string(), TelegramGroupSchema.optional()).optional(),
     allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
+    allowTo: z.array(z.union([z.string(), z.number()])).optional(),
     defaultTo: z.union([z.string(), z.number()]).optional(),
     groupAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     groupPolicy: GroupPolicySchema.optional().default("allowlist"),

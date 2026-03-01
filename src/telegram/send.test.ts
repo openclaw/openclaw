@@ -436,6 +436,92 @@ describe("sendMessageTelegram", () => {
     );
   });
 
+  it("blocks outbound recipients not in allowTo", async () => {
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          allowTo: [123],
+        },
+      },
+    });
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 1,
+      chat: { id: "999" },
+    });
+    const api = { sendMessage } as unknown as {
+      sendMessage: typeof sendMessage;
+    };
+
+    await expect(
+      sendMessageTelegram("999", "hi", {
+        token: "tok",
+        api,
+      }),
+    ).rejects.toThrow(/blocked by channels\.telegram\.allowTo/i);
+
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("allows outbound recipients when resolved chat id is in allowTo", async () => {
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          allowTo: ["-100123"],
+        },
+      },
+    });
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 1,
+      chat: { id: "-100123" },
+    });
+    const getChat = vi.fn().mockResolvedValue({ id: -100123 });
+    const api = { sendMessage, getChat } as unknown as {
+      sendMessage: typeof sendMessage;
+      getChat: typeof getChat;
+    };
+
+    await sendMessageTelegram("https://t.me/mychannel", "hi", {
+      token: "tok",
+      api,
+    });
+
+    expect(sendMessage).toHaveBeenCalledWith("-100123", "hi", {
+      parse_mode: "HTML",
+    });
+  });
+
+  it("uses account-level allowTo overrides", async () => {
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          allowTo: [111],
+          accounts: {
+            team: {
+              allowTo: [222],
+            },
+          },
+        },
+      },
+    });
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 1,
+      chat: { id: "222" },
+    });
+    const api = { sendMessage } as unknown as {
+      sendMessage: typeof sendMessage;
+    };
+
+    await sendMessageTelegram("222", "hi", {
+      token: "tok",
+      api,
+      accountId: "team",
+    });
+
+    expect(sendMessage).toHaveBeenCalledWith("222", "hi", {
+      parse_mode: "HTML",
+    });
+  });
+
   it("fails clearly when a legacy target cannot be resolved", async () => {
     const getChat = vi.fn().mockRejectedValue(new Error("400: Bad Request: chat not found"));
     const api = { getChat } as unknown as {

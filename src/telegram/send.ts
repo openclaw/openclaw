@@ -183,6 +183,43 @@ async function resolveChatId(
   }
 }
 
+function resolveAllowlistedTelegramChatIds(allowTo: Array<string | number>): Set<string> {
+  const allowlisted = new Set<string>();
+  for (const entry of allowTo) {
+    const token = String(entry).trim();
+    if (!token) {
+      continue;
+    }
+    if (token === "*") {
+      allowlisted.add("*");
+      continue;
+    }
+    const normalized = normalizeTelegramChatId(token);
+    if (normalized) {
+      allowlisted.add(normalized);
+    }
+  }
+  return allowlisted;
+}
+
+function enforceTelegramOutboundAllowlist(params: {
+  accountId: string;
+  allowTo: Array<string | number> | undefined;
+  chatId: string;
+  inputTarget: string;
+}) {
+  if (!Array.isArray(params.allowTo)) {
+    return;
+  }
+  const allowlisted = resolveAllowlistedTelegramChatIds(params.allowTo);
+  if (allowlisted.has("*") || allowlisted.has(params.chatId)) {
+    return;
+  }
+  throw new Error(
+    `Telegram recipient ${JSON.stringify(params.inputTarget)} resolved to chat_id=${params.chatId}, which is blocked by channels.telegram.allowTo for account "${params.accountId}"`,
+  );
+}
+
 async function resolveAndPersistChatId(params: {
   cfg: ReturnType<typeof loadConfig>;
   api: TelegramApiOverride;
@@ -469,6 +506,12 @@ export async function sendMessageTelegram(
     lookupTarget: target.chatId,
     persistTarget: to,
     verbose: opts.verbose,
+  });
+  enforceTelegramOutboundAllowlist({
+    accountId: account.accountId,
+    allowTo: account.config.allowTo,
+    chatId,
+    inputTarget: to,
   });
   const mediaUrl = opts.mediaUrl?.trim();
   const replyMarkup = buildInlineKeyboard(opts.buttons);
