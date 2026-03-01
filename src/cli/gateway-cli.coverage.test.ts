@@ -99,8 +99,8 @@ async function runGatewayCommand(args: string[]) {
   await program.parseAsync(args, { from: "user" });
 }
 
-async function expectGatewayExit(args: string[]) {
-  await expect(runGatewayCommand(args)).rejects.toThrow("__exit__:1");
+async function expectGatewayExit(args: string[], code = 1) {
+  await expect(runGatewayCommand(args)).rejects.toThrow(`__exit__:${code}`);
 }
 
 describe("gateway-cli coverage", () => {
@@ -209,13 +209,28 @@ describe("gateway-cli coverage", () => {
     }
   });
 
-  it("prints stop hints on GatewayLockError when service is loaded", async () => {
+  it("treats already-running GatewayLockError as idempotent success", async () => {
     resetRuntimeCapture();
     serviceIsLoaded.mockResolvedValue(true);
 
     const { GatewayLockError } = await import("../infra/gateway-lock.js");
     startGatewayServer.mockRejectedValueOnce(
-      new GatewayLockError("another gateway instance is already listening"),
+      new GatewayLockError("gateway already running (pid 4321); lock timeout after 5000ms"),
+    );
+    await expectGatewayExit(["gateway", "--token", "test-token", "--allow-unconfigured"], 0);
+
+    expect(startGatewayServer).toHaveBeenCalled();
+    expect(runtimeLogs.join("\n")).toContain("Gateway already running:");
+    expect(runtimeErrors).toHaveLength(0);
+  });
+
+  it("prints stop hints on non-idempotent GatewayLockError when service is loaded", async () => {
+    resetRuntimeCapture();
+    serviceIsLoaded.mockResolvedValue(true);
+
+    const { GatewayLockError } = await import("../infra/gateway-lock.js");
+    startGatewayServer.mockRejectedValueOnce(
+      new GatewayLockError("failed to acquire gateway lock at /tmp/openclaw-gateway.lock"),
     );
     await expectGatewayExit(["gateway", "--token", "test-token", "--allow-unconfigured"]);
 

@@ -113,6 +113,11 @@ function formatModeErrorList<T extends string>(modes: readonly T[]): string {
   return `${quoted.slice(0, -1).join(", ")}, or ${quoted[quoted.length - 1]}`;
 }
 
+function isGatewayAlreadyRunningLockError(message: string): boolean {
+  const normalized = message.toLowerCase();
+  return normalized.includes("gateway already running") || normalized.includes("already listening");
+}
+
 function resolveGatewayRunOptions(opts: GatewayRunOpts, command?: Command): GatewayRunOpts {
   const resolved: GatewayRunOpts = { ...opts };
 
@@ -365,6 +370,11 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
       (err && typeof err === "object" && (err as { name?: string }).name === "GatewayLockError")
     ) {
       const errMessage = describeUnknownError(err);
+      if (isGatewayAlreadyRunningLockError(errMessage)) {
+        defaultRuntime.log(`Gateway already running: ${errMessage}`);
+        defaultRuntime.exit(0);
+        return;
+      }
       defaultRuntime.error(
         `Gateway failed to start: ${errMessage}\nIf the gateway is supervised, stop it with: ${formatCliCommand("openclaw gateway stop")}`,
       );
