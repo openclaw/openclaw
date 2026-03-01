@@ -16,6 +16,7 @@ const {
   createForumTopicTelegram,
   editMessageTelegram,
   reactMessageTelegram,
+  sendLocationTelegram,
   sendMessageTelegram,
   sendPollTelegram,
   sendStickerTelegram,
@@ -1204,6 +1205,61 @@ describe("reactMessageTelegram", () => {
         rawTarget: "@mychannel",
         resolvedChatId: "-100123",
       }),
+    );
+  });
+});
+
+describe("sendLocationTelegram", () => {
+  it("sends a native location pin", async () => {
+    const sendLocation = vi.fn().mockResolvedValue({
+      message_id: 91,
+      chat: { id: "123" },
+    });
+    const api = { sendLocation } as unknown as {
+      sendLocation: typeof sendLocation;
+    };
+
+    const result = await sendLocationTelegram("123", 37.7749, -122.4194, {
+      token: "tok",
+      api,
+    });
+
+    expect(sendLocation).toHaveBeenCalledWith("123", 37.7749, -122.4194, undefined);
+    expect(result).toEqual({
+      messageId: "91",
+      chatId: "123",
+    });
+  });
+
+  it("forwards silent and thread options", async () => {
+    const sendLocation = vi.fn().mockResolvedValue({
+      message_id: 92,
+      chat: { id: "-1001" },
+    });
+    const api = { sendLocation } as unknown as {
+      sendLocation: typeof sendLocation;
+    };
+
+    await sendLocationTelegram("telegram:group:-1001:topic:271", 37.7749, -122.4194, {
+      token: "tok",
+      api,
+      silent: true,
+      replyToMessageId: 7,
+    });
+
+    expect(sendLocation).toHaveBeenCalledWith("-1001", 37.7749, -122.4194, {
+      message_thread_id: 271,
+      reply_to_message_id: 7,
+      disable_notification: true,
+    });
+  });
+
+  it("validates coordinate range", async () => {
+    await expect(sendLocationTelegram("123", 120, 20, { token: "tok" })).rejects.toThrow(
+      /latitude must be between -90 and 90/i,
+    );
+    await expect(sendLocationTelegram("123", 20, 200, { token: "tok" })).rejects.toThrow(
+      /longitude must be between -180 and 180/i,
     );
   });
 });

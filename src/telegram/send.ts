@@ -1141,6 +1141,96 @@ export async function sendPollTelegram(
   return { messageId: String(messageId), chatId: resolvedChatId, pollId };
 }
 
+type TelegramLocationOpts = {
+  token?: string;
+  accountId?: string;
+  verbose?: boolean;
+  api?: TelegramApiOverride;
+  retry?: RetryConfig;
+  /** Message ID to reply to (for threading). */
+  replyToMessageId?: number;
+  /** Forum topic thread ID (for forum supergroups). */
+  messageThreadId?: number;
+  /** Send message silently (no notification). Defaults to false. */
+  silent?: boolean;
+};
+
+/**
+ * Send a native Telegram location pin.
+ * @param to - Chat ID or username (e.g. "123456789" or "@username")
+ * @param latitude - Latitude in range [-90, 90]
+ * @param longitude - Longitude in range [-180, 180]
+ * @param opts - Optional configuration
+ */
+export async function sendLocationTelegram(
+  to: string,
+  latitude: number,
+  longitude: number,
+  opts: TelegramLocationOpts = {},
+): Promise<TelegramSendResult> {
+  if (!Number.isFinite(latitude) || latitude < -90 || latitude > 90) {
+    throw new Error("Telegram latitude must be between -90 and 90");
+  }
+  if (!Number.isFinite(longitude) || longitude < -180 || longitude > 180) {
+    throw new Error("Telegram longitude must be between -180 and 180");
+  }
+
+  const { cfg, account, api } = resolveTelegramApiContext(opts);
+  const target = parseTelegramTarget(to);
+  const chatId = await resolveAndPersistChatId({
+    cfg,
+    api,
+    lookupTarget: target.chatId,
+    persistTarget: to,
+    verbose: opts.verbose,
+  });
+
+  const threadParams = buildTelegramThreadReplyParams({
+    targetMessageThreadId: target.messageThreadId,
+    messageThreadId: opts.messageThreadId,
+    chatType: target.chatType,
+    replyToMessageId: opts.replyToMessageId,
+  });
+  const locationParams = {
+    ...(Object.keys(threadParams).length > 0 ? threadParams : {}),
+    ...(opts.silent === true ? { disable_notification: true } : {}),
+  };
+
+  const requestWithDiag = createTelegramRequestWithDiag({
+    cfg,
+    account,
+    retry: opts.retry,
+    verbose: opts.verbose,
+    shouldRetry: (err) => isRecoverableTelegramNetworkError(err, { context: "send" }),
+  });
+  const requestWithChatNotFound = createRequestWithChatNotFound({
+    requestWithDiag,
+    chatId,
+    input: to,
+  });
+
+  const result = await withTelegramThreadFallback(
+    Object.keys(locationParams).length > 0 ? locationParams : undefined,
+    "location",
+    opts.verbose,
+    async (effectiveParams, label) =>
+      requestWithChatNotFound(
+        () => api.sendLocation(chatId, latitude, longitude, effectiveParams),
+        label,
+      ),
+  );
+
+  const messageId = resolveTelegramMessageIdOrThrow(result, "location send");
+  const resolvedChatId = String(result?.chat?.id ?? chatId);
+  recordSentMessage(chatId, messageId);
+  recordChannelActivity({
+    channel: "telegram",
+    accountId: account.accountId,
+    direction: "outbound",
+  });
+  return { messageId: String(messageId), chatId: resolvedChatId };
+}
+
 // ---------------------------------------------------------------------------
 // Forum topic creation
 // ---------------------------------------------------------------------------

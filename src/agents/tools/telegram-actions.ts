@@ -12,6 +12,7 @@ import {
   deleteMessageTelegram,
   editMessageTelegram,
   reactMessageTelegram,
+  sendLocationTelegram,
   sendMessageTelegram,
   sendStickerTelegram,
 } from "../../telegram/send.js";
@@ -26,6 +27,7 @@ import {
 } from "./common.js";
 
 const TELEGRAM_BUTTON_STYLES: readonly TelegramButtonStyle[] = ["danger", "success", "primary"];
+const TELEGRAM_COORDS_RE = /^\s*(-?(?:\d+(?:\.\d+)?|\.\d+))\s*,\s*(-?(?:\d+(?:\.\d+)?|\.\d+))\s*$/;
 
 export function readTelegramButtons(
   params: Record<string, unknown>,
@@ -80,6 +82,24 @@ export function readTelegramButtons(
   });
   const filtered = rows.filter((row) => row.length > 0);
   return filtered.length > 0 ? filtered : undefined;
+}
+
+function parseTelegramLocation(input: string): { latitude: number; longitude: number } {
+  const match = TELEGRAM_COORDS_RE.exec(input);
+  if (!match) {
+    throw new Error(
+      'location must be in "latitude,longitude" format (example: "37.7749,-122.4194").',
+    );
+  }
+  const latitude = Number.parseFloat(match[1] ?? "");
+  const longitude = Number.parseFloat(match[2] ?? "");
+  if (!Number.isFinite(latitude) || latitude < -90 || latitude > 90) {
+    throw new Error("location latitude must be between -90 and 90.");
+  }
+  if (!Number.isFinite(longitude) || longitude < -180 || longitude > 180) {
+    throw new Error("location longitude must be between -180 and 180.");
+  }
+  return { latitude, longitude };
 }
 
 export async function handleTelegramAction(
@@ -240,6 +260,53 @@ export async function handleTelegramAction(
       ok: true,
       messageId: result.messageId,
       chatId: result.chatId,
+    });
+  }
+
+  if (action === "sendLocation") {
+    if (!isActionEnabled("sendMessage")) {
+      throw new Error("Telegram sendMessage is disabled.");
+    }
+    const to = readStringParam(params, "to", { required: true });
+    const location = readStringParam(params, "location", { required: true });
+    const content = readStringParam(params, "content", {
+      allowEmpty: true,
+    });
+    const replyToMessageId = readNumberParam(params, "replyToMessageId", {
+      integer: true,
+    });
+    const messageThreadId = readNumberParam(params, "messageThreadId", {
+      integer: true,
+    });
+    const { latitude, longitude } = parseTelegramLocation(location);
+    const token = resolveTelegramToken(cfg, { accountId }).token;
+    if (!token) {
+      throw new Error(
+        "Telegram bot token missing. Set TELEGRAM_BOT_TOKEN or channels.telegram.botToken.",
+      );
+    }
+    const result = await sendLocationTelegram(to, latitude, longitude, {
+      token,
+      accountId: accountId ?? undefined,
+      replyToMessageId: replyToMessageId ?? undefined,
+      messageThreadId: messageThreadId ?? undefined,
+      silent: typeof params.silent === "boolean" ? params.silent : undefined,
+    });
+    if (content?.trim()) {
+      await sendMessageTelegram(to, content, {
+        token,
+        accountId: accountId ?? undefined,
+        replyToMessageId: replyToMessageId ?? undefined,
+        messageThreadId: messageThreadId ?? undefined,
+        silent: typeof params.silent === "boolean" ? params.silent : undefined,
+      });
+    }
+    return jsonResult({
+      ok: true,
+      messageId: result.messageId,
+      chatId: result.chatId,
+      latitude,
+      longitude,
     });
   }
 

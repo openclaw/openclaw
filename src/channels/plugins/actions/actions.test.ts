@@ -521,6 +521,23 @@ describe("telegramMessageActions", () => {
         }),
       },
       {
+        name: "location send maps to sendLocation",
+        action: "send" as const,
+        params: {
+          to: "123",
+          location: "37.7749,-122.4194",
+          message: "Meet me here",
+          silent: true,
+        },
+        expectedPayload: expect.objectContaining({
+          action: "sendLocation",
+          to: "123",
+          location: "37.7749,-122.4194",
+          content: "Meet me here",
+          silent: true,
+        }),
+      },
+      {
         name: "silent send forwards silent flag",
         action: "send" as const,
         params: {
@@ -625,6 +642,30 @@ describe("telegramMessageActions", () => {
         accountId: undefined,
       }),
     ).rejects.toThrow();
+
+    expect(handleTelegramAction).not.toHaveBeenCalled();
+  });
+
+  it("rejects mixed location and media sends before reaching telegram-actions", async () => {
+    const cfg = telegramCfg();
+    const handleAction = telegramMessageActions.handleAction;
+    if (!handleAction) {
+      throw new Error("telegram handleAction unavailable");
+    }
+
+    await expect(
+      handleAction({
+        channel: "telegram",
+        action: "send",
+        params: {
+          to: "123",
+          location: "37.7749,-122.4194",
+          media: "https://example.com/map.png",
+        },
+        cfg,
+        accountId: undefined,
+      }),
+    ).rejects.toThrow(/location sends do not support media/i);
 
     expect(handleTelegramAction).not.toHaveBeenCalled();
   });

@@ -8,6 +8,10 @@ const sendMessageTelegram = vi.fn(async () => ({
   messageId: "789",
   chatId: "123",
 }));
+const sendLocationTelegram = vi.fn(async () => ({
+  messageId: "321",
+  chatId: "123",
+}));
 const sendStickerTelegram = vi.fn(async () => ({
   messageId: "456",
   chatId: "123",
@@ -20,6 +24,8 @@ vi.mock("../../telegram/send.js", () => ({
     reactMessageTelegram(...args),
   sendMessageTelegram: (...args: Parameters<typeof sendMessageTelegram>) =>
     sendMessageTelegram(...args),
+  sendLocationTelegram: (...args: Parameters<typeof sendLocationTelegram>) =>
+    sendLocationTelegram(...args),
   sendStickerTelegram: (...args: Parameters<typeof sendStickerTelegram>) =>
     sendStickerTelegram(...args),
   deleteMessageTelegram: (...args: Parameters<typeof deleteMessageTelegram>) =>
@@ -65,6 +71,7 @@ describe("handleTelegramAction", () => {
     envSnapshot = captureEnv(["TELEGRAM_BOT_TOKEN"]);
     reactMessageTelegram.mockClear();
     sendMessageTelegram.mockClear();
+    sendLocationTelegram.mockClear();
     sendStickerTelegram.mockClear();
     deleteMessageTelegram.mockClear();
     process.env.TELEGRAM_BOT_TOKEN = "tok";
@@ -279,6 +286,56 @@ describe("handleTelegramAction", () => {
       type: "text",
       text: expect.stringContaining('"ok": true'),
     });
+  });
+
+  it("sends a native location pin", async () => {
+    await handleTelegramAction(
+      {
+        action: "sendLocation",
+        to: "@testchannel",
+        location: "37.7749,-122.4194",
+      },
+      telegramConfig(),
+    );
+
+    expect(sendLocationTelegram).toHaveBeenCalledWith(
+      "@testchannel",
+      37.7749,
+      -122.4194,
+      expect.objectContaining({ token: "tok" }),
+    );
+  });
+
+  it("sends optional text after location when content is provided", async () => {
+    await handleTelegramAction(
+      {
+        action: "sendLocation",
+        to: "@testchannel",
+        location: "37.7749,-122.4194",
+        content: "Meet me here",
+      },
+      telegramConfig(),
+    );
+
+    expect(sendLocationTelegram).toHaveBeenCalled();
+    expect(sendMessageTelegram).toHaveBeenCalledWith(
+      "@testchannel",
+      "Meet me here",
+      expect.objectContaining({ token: "tok" }),
+    );
+  });
+
+  it("rejects invalid location strings", async () => {
+    await expect(
+      handleTelegramAction(
+        {
+          action: "sendLocation",
+          to: "@testchannel",
+          location: "invalid-location",
+        },
+        telegramConfig(),
+      ),
+    ).rejects.toThrow(/location must be in "latitude,longitude" format/i);
   });
 
   it("forwards trusted mediaLocalRoots into sendMessageTelegram", async () => {

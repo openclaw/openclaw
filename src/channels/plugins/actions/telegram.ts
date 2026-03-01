@@ -20,7 +20,11 @@ const providerId = "telegram";
 function readTelegramSendParams(params: Record<string, unknown>) {
   const to = readStringParam(params, "to", { required: true });
   const mediaUrl = readStringParam(params, "media", { trim: false });
-  const message = readStringParam(params, "message", { required: !mediaUrl, allowEmpty: true });
+  const location = readStringParam(params, "location");
+  const message = readStringParam(params, "message", {
+    required: !mediaUrl && !location,
+    allowEmpty: true,
+  });
   const caption = readStringParam(params, "caption", { allowEmpty: true });
   const content = message || caption || "";
   const replyTo = readStringParam(params, "replyTo");
@@ -33,6 +37,7 @@ function readTelegramSendParams(params: Record<string, unknown>) {
     to,
     content,
     mediaUrl: mediaUrl ?? undefined,
+    location: location ?? undefined,
     replyToMessageId: replyTo ?? undefined,
     messageThreadId: threadId ?? undefined,
     buttons,
@@ -110,6 +115,27 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
   handleAction: async ({ action, params, cfg, accountId, mediaLocalRoots, toolContext }) => {
     if (action === "send") {
       const sendParams = readTelegramSendParams(params);
+      if (sendParams.location && sendParams.mediaUrl) {
+        throw new Error(
+          "Telegram location sends do not support media in the same action. Send location and media separately.",
+        );
+      }
+      if (sendParams.location) {
+        return await handleTelegramAction(
+          {
+            action: "sendLocation",
+            to: sendParams.to,
+            location: sendParams.location,
+            content: sendParams.content,
+            replyToMessageId: sendParams.replyToMessageId,
+            messageThreadId: sendParams.messageThreadId,
+            silent: sendParams.silent,
+            accountId: accountId ?? undefined,
+          },
+          cfg,
+          { mediaLocalRoots },
+        );
+      }
       return await handleTelegramAction(
         {
           action: "sendMessage",
