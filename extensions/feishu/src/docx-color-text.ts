@@ -120,17 +120,25 @@ export async function updateColorText(
 ) {
   const segments = parseColorMarkup(content);
 
+  // Feishu rejects elements with empty content — filter before building the
+  // elements array so edge-case inputs (adjacent tags, lone brackets, etc.)
+  // never reach the API with an empty text_run.content field.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK type
-  const elements: any[] = segments.map((seg) => ({
-    text_run: {
-      content: seg.text,
-      text_element_style: {
-        ...(seg.textColor && { text_color: seg.textColor }),
-        ...(seg.bgColor && { background_color: seg.bgColor }),
-        ...(seg.bold && { bold: true }),
+  const elements: any[] = segments
+    .filter((seg) => seg.text.length > 0)
+    .map((seg) => ({
+      text_run: {
+        content: seg.text,
+        text_element_style: {
+          ...(seg.textColor && { text_color: seg.textColor }),
+          ...(seg.bgColor && { background_color: seg.bgColor }),
+          ...(seg.bold && { bold: true }),
+        },
       },
-    },
-  }));
+    }));
+  if (elements.length === 0) {
+    throw new Error("color_text: content produced no non-empty text segments.");
+  }
 
   const res = await client.docx.documentBlock.patch({
     path: { document_id: docToken, block_id: blockId },

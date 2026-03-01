@@ -11,9 +11,10 @@ import type * as Lark from "@larksuiteoapi/node-sdk";
 
 // ============ Table Utilities ============
 
-// Feishu table constraints
-const MIN_COLUMN_WIDTH = 50; // Feishu API minimum
-const MAX_COLUMN_WIDTH = 400; // Reasonable maximum for readability
+// Feishu table column-width constraints (pixels).
+// Also imported by docx-picture-ops for image-aware column patching.
+export const MIN_COLUMN_WIDTH = 50; // Feishu API minimum
+export const MAX_COLUMN_WIDTH = 400; // Reasonable maximum for readability
 const DEFAULT_TABLE_WIDTH = 730; // Approximate Feishu page content width
 
 /**

@@ -35,6 +35,8 @@ describe("feishu_doc image fetch hardening", () => {
   const blockPatchMock = vi.hoisted(() => vi.fn());
   const scopeListMock = vi.hoisted(() => vi.fn());
 
+  let feishuDocTool: any;
+
   beforeEach(() => {
     vi.clearAllMocks();
 
@@ -112,6 +114,22 @@ describe("feishu_doc image fetch hardening", () => {
     permissionMemberCreateMock.mockResolvedValue({ code: 0 });
     blockPatchMock.mockResolvedValue({ code: 0 });
     scopeListMock.mockResolvedValue({ code: 0, data: { scopes: [] } });
+
+    const registerTool = vi.fn();
+    registerFeishuDocTools({
+      config: {
+        channels: {
+          feishu: { appId: "app_id", appSecret: "app_secret" },
+        },
+      } as any,
+      logger: { debug: vi.fn(), info: vi.fn() } as any,
+      registerTool,
+    } as any);
+
+    feishuDocTool = registerTool.mock.calls
+      .map((call) => call[0])
+      .map((tool) => (typeof tool === "function" ? tool({}) : tool))
+      .find((tool) => tool.name === "feishu_doc");
   });
 
   it("inserts blocks sequentially to preserve document order", async () => {
@@ -135,21 +153,6 @@ describe("feishu_doc image fetch hardening", () => {
       data: { children: [{ block_type: 3, block_id: "h1" }] },
     });
 
-    const registerTool = vi.fn();
-    registerFeishuDocTools({
-      config: {
-        channels: {
-          feishu: { appId: "app_id", appSecret: "app_secret" },
-        },
-      } as any,
-      logger: { debug: vi.fn(), info: vi.fn() } as any,
-      registerTool,
-    } as any);
-
-    const feishuDocTool = registerTool.mock.calls
-      .map((call) => call[0])
-      .map((tool) => (typeof tool === "function" ? tool({}) : tool))
-      .find((tool) => tool.name === "feishu_doc");
     expect(feishuDocTool).toBeDefined();
 
     const result = await feishuDocTool.execute("tool-call", {
@@ -194,21 +197,6 @@ describe("feishu_doc image fetch hardening", () => {
       },
     }));
 
-    const registerTool = vi.fn();
-    registerFeishuDocTools({
-      config: {
-        channels: {
-          feishu: { appId: "app_id", appSecret: "app_secret" },
-        },
-      } as any,
-      logger: { debug: vi.fn(), info: vi.fn() } as any,
-      registerTool,
-    } as any);
-
-    const feishuDocTool = registerTool.mock.calls
-      .map((call) => call[0])
-      .map((tool) => (typeof tool === "function" ? tool({}) : tool))
-      .find((tool) => tool.name === "feishu_doc");
     expect(feishuDocTool).toBeDefined();
 
     const longMarkdown = Array.from(
@@ -254,21 +242,6 @@ describe("feishu_doc image fetch hardening", () => {
       data: { children: data.children },
     }));
 
-    const registerTool = vi.fn();
-    registerFeishuDocTools({
-      config: {
-        channels: {
-          feishu: { appId: "app_id", appSecret: "app_secret" },
-        },
-      } as any,
-      logger: { debug: vi.fn(), info: vi.fn() } as any,
-      registerTool,
-    } as any);
-
-    const feishuDocTool = registerTool.mock.calls
-      .map((call) => call[0])
-      .map((tool) => (typeof tool === "function" ? tool({}) : tool))
-      .find((tool) => tool.name === "feishu_doc");
     expect(feishuDocTool).toBeDefined();
 
     const fencedMarkdown = [
@@ -306,24 +279,6 @@ describe("feishu_doc image fetch hardening", () => {
       new Error("Blocked: resolves to private/internal IP address"),
     );
 
-    const registerTool = vi.fn();
-    registerFeishuDocTools({
-      config: {
-        channels: {
-          feishu: {
-            appId: "app_id",
-            appSecret: "app_secret",
-          },
-        },
-      } as any,
-      logger: { debug: vi.fn(), info: vi.fn() } as any,
-      registerTool,
-    } as any);
-
-    const feishuDocTool = registerTool.mock.calls
-      .map((call) => call[0])
-      .map((tool) => (typeof tool === "function" ? tool({}) : tool))
-      .find((tool) => tool.name === "feishu_doc");
     expect(feishuDocTool).toBeDefined();
 
     const result = await feishuDocTool.execute("tool-call", {
@@ -341,24 +296,6 @@ describe("feishu_doc image fetch hardening", () => {
   });
 
   it("reports owner permission details when grant succeeds", async () => {
-    const registerTool = vi.fn();
-    registerFeishuDocTools({
-      config: {
-        channels: {
-          feishu: {
-            appId: "app_id",
-            appSecret: "app_secret",
-          },
-        },
-      } as any,
-      logger: { debug: vi.fn(), info: vi.fn() } as any,
-      registerTool,
-    } as any);
-
-    const feishuDocTool = registerTool.mock.calls
-      .map((call) => call[0])
-      .map((tool) => (typeof tool === "function" ? tool({}) : tool))
-      .find((tool) => tool.name === "feishu_doc");
     expect(feishuDocTool).toBeDefined();
 
     const result = await feishuDocTool.execute("tool-call", {
@@ -378,24 +315,6 @@ describe("feishu_doc image fetch hardening", () => {
     const consoleWarnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     permissionMemberCreateMock.mockRejectedValueOnce(new Error("permission denied"));
 
-    const registerTool = vi.fn();
-    registerFeishuDocTools({
-      config: {
-        channels: {
-          feishu: {
-            appId: "app_id",
-            appSecret: "app_secret",
-          },
-        },
-      } as any,
-      logger: { debug: vi.fn(), info: vi.fn() } as any,
-      registerTool,
-    } as any);
-
-    const feishuDocTool = registerTool.mock.calls
-      .map((call) => call[0])
-      .map((tool) => (typeof tool === "function" ? tool({}) : tool))
-      .find((tool) => tool.name === "feishu_doc");
     expect(feishuDocTool).toBeDefined();
 
     const result = await feishuDocTool.execute("tool-call", {
@@ -414,24 +333,6 @@ describe("feishu_doc image fetch hardening", () => {
   });
 
   it("skips permission grant when owner_open_id is omitted", async () => {
-    const registerTool = vi.fn();
-    registerFeishuDocTools({
-      config: {
-        channels: {
-          feishu: {
-            appId: "app_id",
-            appSecret: "app_secret",
-          },
-        },
-      } as any,
-      logger: { debug: vi.fn(), info: vi.fn() } as any,
-      registerTool,
-    } as any);
-
-    const feishuDocTool = registerTool.mock.calls
-      .map((call) => call[0])
-      .map((tool) => (typeof tool === "function" ? tool({}) : tool))
-      .find((tool) => tool.name === "feishu_doc");
     expect(feishuDocTool).toBeDefined();
 
     const result = await feishuDocTool.execute("tool-call", {
@@ -449,24 +350,6 @@ describe("feishu_doc image fetch hardening", () => {
       data: { document: { title: "Created Doc" } },
     });
 
-    const registerTool = vi.fn();
-    registerFeishuDocTools({
-      config: {
-        channels: {
-          feishu: {
-            appId: "app_id",
-            appSecret: "app_secret",
-          },
-        },
-      } as any,
-      logger: { debug: vi.fn(), info: vi.fn() } as any,
-      registerTool,
-    } as any);
-
-    const feishuDocTool = registerTool.mock.calls
-      .map((call) => call[0])
-      .map((tool) => (typeof tool === "function" ? tool({}) : tool))
-      .find((tool) => tool.name === "feishu_doc");
     expect(feishuDocTool).toBeDefined();
 
     const result = await feishuDocTool.execute("tool-call", {
@@ -488,24 +371,6 @@ describe("feishu_doc image fetch hardening", () => {
     const localPath = join(tmpdir(), `feishu-docx-upload-${Date.now()}.txt`);
     await fs.writeFile(localPath, "hello from local file", "utf8");
 
-    const registerTool = vi.fn();
-    registerFeishuDocTools({
-      config: {
-        channels: {
-          feishu: {
-            appId: "app_id",
-            appSecret: "app_secret",
-          },
-        },
-      } as any,
-      logger: { debug: vi.fn(), info: vi.fn() } as any,
-      registerTool,
-    } as any);
-
-    const feishuDocTool = registerTool.mock.calls
-      .map((call) => call[0])
-      .map((tool) => (typeof tool === "function" ? tool({}) : tool))
-      .find((tool) => tool.name === "feishu_doc");
     expect(feishuDocTool).toBeDefined();
 
     const result = await feishuDocTool.execute("tool-call", {
@@ -549,24 +414,6 @@ describe("feishu_doc image fetch hardening", () => {
     await fs.writeFile(localPath, "hello from local file", "utf8");
 
     try {
-      const registerTool = vi.fn();
-      registerFeishuDocTools({
-        config: {
-          channels: {
-            feishu: {
-              appId: "app_id",
-              appSecret: "app_secret",
-            },
-          },
-        } as any,
-        logger: { debug: vi.fn(), info: vi.fn() } as any,
-        registerTool,
-      } as any);
-
-      const feishuDocTool = registerTool.mock.calls
-        .map((call) => call[0])
-        .map((tool) => (typeof tool === "function" ? tool({}) : tool))
-        .find((tool) => tool.name === "feishu_doc");
       expect(feishuDocTool).toBeDefined();
 
       const result = await feishuDocTool.execute("tool-call", {
@@ -581,5 +428,21 @@ describe("feishu_doc image fetch hardening", () => {
     } finally {
       await fs.unlink(localPath);
     }
+  });
+
+  it("rejects update_block with empty content before hitting the API", async () => {
+    expect(feishuDocTool).toBeDefined();
+
+    const result = await feishuDocTool.execute("tool-call", {
+      action: "update_block",
+      doc_token: "doc_1",
+      block_id: "block_1",
+      content: "",
+    });
+
+    expect(result.details.error).toMatch(/content must be a non-empty string/);
+    expect(result.details.error).toMatch(/upload_image/);
+    // Guard must fire before any network call
+    expect(blockPatchMock).not.toHaveBeenCalled();
   });
 });
