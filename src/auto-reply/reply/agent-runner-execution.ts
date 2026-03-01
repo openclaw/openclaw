@@ -428,9 +428,7 @@ export async function runAgentTurnWithFallback(params: {
                     };
                   })()
                 : undefined,
-              _hasExplicitModelOverride: Boolean(
-                params.followupRun.run.provider || params.followupRun.run.model,
-              ),
+              _hasExplicitModelOverride: params.followupRun.run.modelExplicitOverride ?? false,
             },
             runEmbeddedPiAgent,
           );

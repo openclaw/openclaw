@@ -362,6 +362,21 @@ export async function runEmbeddedPiAgentWithAdaptiveRouting(
 
   const { provider: localProvider, model: localModel } = parseModelRef(arCfg.localFirstModel!);
   const { provider: cloudProvider, model: cloudModel } = parseModelRef(arCfg.cloudEscalationModel!);
+
+  // If runWithModelFallback has already advanced to a different candidate
+  // (not the local-first model), we are mid-fallback. Bypass adaptive routing
+  // and let the fallback machinery pick the provider/model normally.
+  const isFallbackCandidate =
+    (params.provider && params.provider !== localProvider) ||
+    (params.model && params.model !== localModel);
+
+  if (isFallbackCandidate) {
+    log.debug(
+      `[adaptive-routing] bypassed: mid-fallback candidate ${params.provider}/${params.model}`,
+    );
+    return runFn(params);
+  }
+
   const maxEscalations = arCfg.maxEscalations ?? 1;
   const validationMode = arCfg.validation?.mode ?? "heuristic";
 
