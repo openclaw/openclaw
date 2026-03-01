@@ -586,7 +586,9 @@ export async function runEmbeddedPiAgent(
                       `auto-compaction failed for ${provider}/${modelId}: ${compactResult.reason ?? "nothing to compact"}`,
                     );
                   }
-                  const kind = isCompactionFailure ? "compaction_failure" : "context_overflow";
+                  const kind = isCompactionFailure
+                    ? ("compaction_failure" as const)
+                    : ("context_overflow" as const);
                   return {
                     payloads: [
                       {
@@ -604,7 +606,7 @@ export async function runEmbeddedPiAgent(
                         model: model.id,
                       },
                       systemPromptReport: attempt.systemPromptReport,
-                      error: { kind, message: lastAssistant.errorMessage },
+                      error: { kind, message: lastAssistant.errorMessage ?? "" },
                     },
                   };
                 }
