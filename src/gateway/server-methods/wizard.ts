@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { loadConfig } from "../../config/config.js";
 import { defaultRuntime } from "../../runtime.js";
 import { WizardSession } from "../../wizard/session.js";
 import {
@@ -12,6 +13,33 @@ import {
 import { formatForLog } from "../ws-log.js";
 import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
+
+/**
+ * Check if the wizard has already been completed and channels are configured.
+ * Prevents accidental re-runs that could overwrite existing credentials (#30320).
+ */
+function hasCompletedWizardWithChannels(): boolean {
+  try {
+    const cfg = loadConfig();
+    const hasRun = Boolean(cfg.wizard?.lastRunAt);
+    if (!hasRun) {
+      return false;
+    }
+    // Check if any channel has credentials configured
+    const channels = cfg.channels;
+    if (!channels || typeof channels !== "object") {
+      return false;
+    }
+    for (const channel of Object.values(channels)) {
+      if (channel && typeof channel === "object" && "botToken" in channel && channel.botToken) {
+        return true;
+      }
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
 
 function readWizardStatus(session: WizardSession) {
   return {
@@ -41,6 +69,19 @@ export const wizardHandlers: GatewayRequestHandlers = {
     const running = context.findRunningWizard();
     if (running) {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "wizard already running"));
+      return;
+    }
+    // Guard: refuse to re-run the wizard if it has already completed and channels
+    // are configured, unless the caller explicitly passes `force: true` (#30320).
+    if (!params.force && hasCompletedWizardWithChannels()) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.UNAVAILABLE,
+          "wizard already completed with configured channels; pass force=true to re-run",
+        ),
+      );
       return;
     }
     const sessionId = randomUUID();

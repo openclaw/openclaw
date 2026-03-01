@@ -1417,18 +1417,22 @@ public struct ConfigSchemaResponse: Codable, Sendable {
 public struct WizardStartParams: Codable, Sendable {
     public let mode: AnyCodable?
     public let workspace: String?
+    public let force: Bool?
 
     public init(
         mode: AnyCodable?,
-        workspace: String?)
+        workspace: String?,
+        force: Bool?)
     {
         self.mode = mode
         self.workspace = workspace
+        self.force = force
     }
 
     private enum CodingKeys: String, CodingKey {
         case mode
         case workspace
+        case force
     }
 }
 
