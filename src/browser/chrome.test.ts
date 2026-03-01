@@ -1,5 +1,7 @@
+import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
+import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -135,6 +137,45 @@ describe("browser chrome profile decoration", () => {
 });
 
 describe("browser chrome helpers", () => {
+  function mockLoopbackVersionResponse(params: { statusCode?: number; body?: string }) {
+    return vi.spyOn(http, "request").mockImplementation(((
+      _url: string | URL | http.RequestOptions,
+      _opts?: http.RequestOptions | ((res: http.IncomingMessage) => void),
+      cb?: (res: http.IncomingMessage) => void,
+    ) => {
+      const req = new EventEmitter() as unknown as {
+        setTimeout: (ms: number, fn: () => void) => void;
+        on: (event: string, fn: (...args: unknown[]) => unknown) => unknown;
+        end: () => void;
+        destroy: (err?: Error) => void;
+      };
+      const res = new EventEmitter() as unknown as {
+        statusCode?: number;
+        setEncoding: (encoding: string) => void;
+        resume: () => void;
+        emit: (event: string, ...args: unknown[]) => boolean;
+      };
+      res.statusCode = params.statusCode ?? 200;
+      res.setEncoding = () => {};
+      res.resume = () => {};
+      req.setTimeout = () => {};
+      req.destroy = () => {};
+      req.end = () => {
+        if (typeof cb === "function") {
+          cb(res as never);
+        }
+        const body =
+          params.body ??
+          JSON.stringify({
+            webSocketDebuggerUrl: "ws://127.0.0.1:18800/devtools/browser/abc",
+          });
+        res.emit("data", body);
+        res.emit("end");
+      };
+      return req as never;
+    }) as unknown as typeof http.request);
+  }
+
   function mockExistsSync(match: (pathValue: string) => boolean) {
     return vi.spyOn(fs, "existsSync").mockImplementation((p) => match(String(p)));
   }
@@ -228,7 +269,7 @@ describe("browser chrome helpers", () => {
         json: async () => ({ webSocketDebuggerUrl: "ws://127.0.0.1/devtools" }),
       } as unknown as Response),
     );
-    await expect(isChromeReachable("http://127.0.0.1:12345", 50)).resolves.toBe(true);
+    await expect(isChromeReachable("http://example.com:12345", 50)).resolves.toBe(true);
 
     vi.stubGlobal(
       "fetch",
@@ -237,10 +278,10 @@ describe("browser chrome helpers", () => {
         json: async () => ({}),
       } as unknown as Response),
     );
-    await expect(isChromeReachable("http://127.0.0.1:12345", 50)).resolves.toBe(false);
+    await expect(isChromeReachable("http://example.com:12345", 50)).resolves.toBe(false);
 
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("boom")));
-    await expect(isChromeReachable("http://127.0.0.1:12345", 50)).resolves.toBe(false);
+    await expect(isChromeReachable("http://example.com:12345", 50)).resolves.toBe(false);
   });
 
   it("stopOpenClawChrome no-ops when process is already killed", async () => {
@@ -269,13 +310,7 @@ describe("browser chrome helpers", () => {
   });
 
   it("stopOpenClawChrome escalates to SIGKILL when CDP stays reachable", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue({
-        ok: true,
-        json: async () => ({ webSocketDebuggerUrl: "ws://127.0.0.1/devtools" }),
-      } as unknown as Response),
-    );
+    mockLoopbackVersionResponse({});
     const proc = makeProc();
     await stopOpenClawChrome(
       {

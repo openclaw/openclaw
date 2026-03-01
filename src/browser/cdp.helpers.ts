@@ -1,3 +1,5 @@
+import http from "node:http";
+import https from "node:https";
 import WebSocket from "ws";
 import { isLoopbackHost } from "../gateway/net.js";
 import { rawDataToString } from "../infra/ws.js";
@@ -117,18 +119,162 @@ export async function fetchJson<T>(url: string, timeoutMs = 1500, init?: Request
   return (await res.json()) as T;
 }
 
+function headersToRecord(headersInit?: HeadersInit): Record<string, string> {
+  const headers = new Headers(headersInit ?? {});
+  const out: Record<string, string> = {};
+  headers.forEach((value, key) => {
+    out[key] = value;
+  });
+  return out;
+}
+
+function normalizeRequestBody(body: BodyInit | null | undefined): string | Buffer | undefined {
+  if (body == null) {
+    return undefined;
+  }
+  if (typeof body === "string") {
+    return body;
+  }
+  if (body instanceof URLSearchParams) {
+    return body.toString();
+  }
+  if (body instanceof Buffer) {
+    return body;
+  }
+  if (body instanceof Uint8Array) {
+    return Buffer.from(body);
+  }
+  if (body instanceof ArrayBuffer) {
+    return Buffer.from(body);
+  }
+  throw new Error("Unsupported request body type for direct loopback CDP request");
+}
+
+async function fetchCheckedLoopback(
+  url: string,
+  timeoutMs: number,
+  init?: RequestInit,
+): Promise<Response> {
+  const parsed = new URL(url);
+  const method = (init?.method ?? "GET").toUpperCase();
+  const headers = getHeadersWithAuth(url, headersToRecord(init?.headers));
+  const body = normalizeRequestBody(init?.body);
+  const transport = parsed.protocol === "https:" ? https : http;
+
+  return await new Promise<Response>((resolve, reject) => {
+    const req = transport.request(
+      parsed,
+      {
+        method,
+        headers,
+      },
+      (res) => {
+        const chunks: Buffer[] = [];
+        res.on("data", (chunk) =>
+          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk))),
+        );
+        res.on("end", () => {
+          const responseBody = Buffer.concat(chunks);
+          const responseHeaders = new Headers();
+          for (const [key, value] of Object.entries(res.headers)) {
+            if (Array.isArray(value)) {
+              responseHeaders.set(key, value.join(", "));
+            } else if (typeof value === "string") {
+              responseHeaders.set(key, value);
+            }
+          }
+          resolve(
+            new Response(responseBody, {
+              status: res.statusCode ?? 500,
+              headers: responseHeaders,
+            }),
+          );
+        });
+      },
+    );
+
+    let aborted = false;
+    const signal = init?.signal;
+    const onAbort = () => {
+      aborted = true;
+      req.destroy(new Error("aborted"));
+    };
+    if (signal) {
+      if (signal.aborted) {
+        onAbort();
+      } else {
+        signal.addEventListener("abort", onAbort, { once: true });
+      }
+    }
+
+    req.setTimeout(Math.max(1, timeoutMs), () => {
+      req.destroy(new Error("timed out"));
+    });
+    req.on("error", (err) => {
+      if (signal) {
+        signal.removeEventListener("abort", onAbort);
+      }
+      if (aborted) {
+        reject(signal?.reason instanceof Error ? signal.reason : new Error("aborted"));
+        return;
+      }
+      reject(err);
+    });
+    req.on("close", () => {
+      if (signal) {
+        signal.removeEventListener("abort", onAbort);
+      }
+    });
+
+    if (body !== undefined) {
+      req.write(body);
+    }
+    req.end();
+  });
+}
+
 async function fetchChecked(url: string, timeoutMs = 1500, init?: RequestInit): Promise<Response> {
+  let parsed: URL | null = null;
+  try {
+    parsed = new URL(url);
+  } catch {
+    parsed = null;
+  }
+  const loopbackTarget = Boolean(parsed && isLoopbackHost(parsed.hostname));
+
   const ctrl = new AbortController();
+  let upstreamAbortListener: (() => void) | undefined;
+  if (init?.signal) {
+    if (init.signal.aborted) {
+      ctrl.abort(init.signal.reason);
+    } else {
+      upstreamAbortListener = () => ctrl.abort(init.signal?.reason);
+      init.signal.addEventListener("abort", upstreamAbortListener, { once: true });
+    }
+  }
   const t = setTimeout(ctrl.abort.bind(ctrl), timeoutMs);
   try {
-    const headers = getHeadersWithAuth(url, (init?.headers as Record<string, string>) || {});
-    const res = await fetch(url, { ...init, headers, signal: ctrl.signal });
+    const headers = getHeadersWithAuth(url, headersToRecord(init?.headers));
+    const res = await fetch(url, { ...init, headers, signal: ctrl.signal }).catch(async (err) => {
+      const msg = String(err);
+      const isAbort =
+        ctrl.signal.aborted ||
+        msg.toLowerCase().includes("abort") ||
+        msg.toLowerCase().includes("timed out");
+      if (!loopbackTarget || isAbort || msg.startsWith("Error: HTTP ")) {
+        throw err;
+      }
+      return await fetchCheckedLoopback(url, timeoutMs, { ...init, signal: ctrl.signal });
+    });
     if (!res.ok) {
       throw new Error(`HTTP ${res.status}`);
     }
     return res;
   } finally {
     clearTimeout(t);
+    if (init?.signal && upstreamAbortListener) {
+      init.signal.removeEventListener("abort", upstreamAbortListener);
+    }
   }
 }
 
