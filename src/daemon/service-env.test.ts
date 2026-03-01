@@ -413,6 +413,48 @@ describe("buildNodeServiceEnvironment", () => {
     });
     expect(env.NODE_EXTRA_CA_CERTS).toBe("/custom/certs/ca.pem");
   });
+
+  it("persists OPENCLAW_GATEWAY_TOKEN so the node service survives reboots (regression: #31041)", () => {
+    const env = buildNodeServiceEnvironment({
+      env: { HOME: "/home/user", OPENCLAW_GATEWAY_TOKEN: "tok_abc123" },
+    });
+    expect(env.OPENCLAW_GATEWAY_TOKEN).toBe("tok_abc123");
+  });
+
+  it("trims OPENCLAW_GATEWAY_TOKEN whitespace", () => {
+    const env = buildNodeServiceEnvironment({
+      env: { HOME: "/home/user", OPENCLAW_GATEWAY_TOKEN: "  tok_abc123  " },
+    });
+    expect(env.OPENCLAW_GATEWAY_TOKEN).toBe("tok_abc123");
+  });
+
+  it("omits OPENCLAW_GATEWAY_TOKEN when not set", () => {
+    const env = buildNodeServiceEnvironment({
+      env: { HOME: "/home/user" },
+    });
+    expect(env.OPENCLAW_GATEWAY_TOKEN).toBeUndefined();
+  });
+
+  it("persists OPENCLAW_GATEWAY_PASSWORD so the node service survives reboots", () => {
+    const env = buildNodeServiceEnvironment({
+      env: { HOME: "/home/user", OPENCLAW_GATEWAY_PASSWORD: "s3cret" },
+    });
+    expect(env.OPENCLAW_GATEWAY_PASSWORD).toBe("s3cret");
+  });
+
+  it("omits OPENCLAW_GATEWAY_PASSWORD when not set", () => {
+    const env = buildNodeServiceEnvironment({
+      env: { HOME: "/home/user" },
+    });
+    expect(env.OPENCLAW_GATEWAY_PASSWORD).toBeUndefined();
+  });
+
+  it("forwards OPENCLAW_PROFILE for node services", () => {
+    const env = buildNodeServiceEnvironment({
+      env: { HOME: "/home/user", OPENCLAW_PROFILE: "work" },
+    });
+    expect(env.OPENCLAW_PROFILE).toBe("work");
+  });
 });
 
 describe("resolveGatewayStateDir", () => {

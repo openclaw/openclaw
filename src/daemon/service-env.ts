@@ -279,6 +279,7 @@ export function buildNodeServiceEnvironment(params: {
 }): Record<string, string | undefined> {
   const { env } = params;
   const platform = params.platform ?? process.platform;
+  const profile = env.OPENCLAW_PROFILE;
   const stateDir = env.OPENCLAW_STATE_DIR;
   const configPath = env.OPENCLAW_CONFIG_PATH;
   const tmpDir = env.TMPDIR?.trim() || os.tmpdir();
@@ -288,14 +289,23 @@ export function buildNodeServiceEnvironment(params: {
   // works correctly when running as a LaunchAgent without extra user configuration.
   const nodeCaCerts =
     env.NODE_EXTRA_CA_CERTS ?? (platform === "darwin" ? "/etc/ssl/cert.pem" : undefined);
+  // Persist gateway auth credentials so the node service can reconnect after
+  // a reboot without needing the user to re-run `openclaw node install`.
+  // These are only written to the plist/systemd unit when present at install
+  // time; if absent, the node runner falls back to the config file values.
+  const gatewayToken = env.OPENCLAW_GATEWAY_TOKEN?.trim() || undefined;
+  const gatewayPassword = env.OPENCLAW_GATEWAY_PASSWORD?.trim() || undefined;
   return {
     HOME: env.HOME,
     TMPDIR: tmpDir,
     PATH: buildMinimalServicePath({ env }),
     ...proxyEnv,
     NODE_EXTRA_CA_CERTS: nodeCaCerts,
+    OPENCLAW_PROFILE: profile,
     OPENCLAW_STATE_DIR: stateDir,
     OPENCLAW_CONFIG_PATH: configPath,
+    OPENCLAW_GATEWAY_TOKEN: gatewayToken,
+    OPENCLAW_GATEWAY_PASSWORD: gatewayPassword,
     OPENCLAW_LAUNCHD_LABEL: resolveNodeLaunchAgentLabel(),
     OPENCLAW_SYSTEMD_UNIT: resolveNodeSystemdServiceName(),
     OPENCLAW_WINDOWS_TASK_NAME: resolveNodeWindowsTaskName(),
