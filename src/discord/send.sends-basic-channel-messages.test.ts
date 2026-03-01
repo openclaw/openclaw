@@ -12,6 +12,7 @@ import {
   removeReactionDiscord,
   searchMessagesDiscord,
   sendMessageDiscord,
+  sendTypingDiscord,
   unpinMessageDiscord,
 } from "./send.js";
 import { makeDiscordRest } from "./send.test-harness.js";
@@ -481,6 +482,19 @@ describe("readMessagesDiscord", () => {
     const call = getMock.mock.calls[0];
     const options = call?.[1] as Record<string, unknown>;
     expect(options).toEqual({ limit: 5, before: "10" });
+  });
+});
+
+describe("sendTypingDiscord", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("triggers typing in the requested channel", async () => {
+    const { rest, postMock } = makeDiscordRest();
+    postMock.mockResolvedValue({});
+    await sendTypingDiscord("chan1", { rest, token: "t" });
+    expect(postMock).toHaveBeenCalledWith(Routes.channelTyping("chan1"));
   });
 });
 

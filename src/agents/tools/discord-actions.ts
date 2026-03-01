@@ -12,6 +12,7 @@ const messagingActions = new Set([
   "reactions",
   "sticker",
   "poll",
+  "typing",
   "permissions",
   "fetchMessage",
   "readMessages",

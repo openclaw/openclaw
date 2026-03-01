@@ -195,6 +195,7 @@ describe("discord message actions", () => {
     const cfg = { channels: { discord: { token: "d0" } } } as OpenClawConfig;
     const actions = discordMessageActions.listActions?.({ cfg }) ?? [];
 
+    expect(actions).toContain("typing");
     expect(actions).toContain("emoji-upload");
     expect(actions).toContain("sticker-upload");
     expect(actions).toContain("channel-create");
@@ -322,6 +323,19 @@ describe("handleDiscordMessageAction", () => {
         to: "channel:123",
         question: "Ready?",
         answers: ["Yes", "No"],
+      },
+    },
+    {
+      name: "forwards typing action",
+      input: {
+        action: "typing" as const,
+        params: { to: "channel:123" },
+        accountId: "ops",
+      },
+      expected: {
+        action: "typing",
+        accountId: "ops",
+        channelId: "123",
       },
     },
     {

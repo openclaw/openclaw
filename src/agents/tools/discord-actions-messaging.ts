@@ -20,6 +20,7 @@ import {
   sendMessageDiscord,
   sendPollDiscord,
   sendStickerDiscord,
+  sendTypingDiscord,
   sendVoiceMessageDiscord,
   unpinMessageDiscord,
 } from "../../discord/send.js";
@@ -168,6 +169,16 @@ export async function handleDiscordMessagingAction(
         { ...(accountId ? { accountId } : {}), content },
       );
       return jsonResult({ ok: true });
+    }
+    case "typing": {
+      if (!isActionEnabled("messages")) {
+        throw new Error("Discord message sends are disabled.");
+      }
+      const channelId = resolveChannelId();
+      const result = accountId
+        ? await sendTypingDiscord(channelId, { accountId })
+        : await sendTypingDiscord(channelId);
+      return jsonResult(result);
     }
     case "permissions": {
       if (!isActionEnabled("permissions")) {

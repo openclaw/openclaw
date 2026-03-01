@@ -35,6 +35,7 @@ export {
   pinMessageDiscord,
   readMessagesDiscord,
   searchMessagesDiscord,
+  sendTypingDiscord,
   unpinMessageDiscord,
 } from "./send.messages.js";
 export {

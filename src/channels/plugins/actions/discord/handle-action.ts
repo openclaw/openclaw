@@ -115,6 +115,18 @@ export async function handleDiscordMessageAction(
     );
   }
 
+  if (action === "typing") {
+    return await handleDiscordAction(
+      {
+        action: "typing",
+        accountId: accountId ?? undefined,
+        channelId: resolveChannelId(),
+      },
+      cfg,
+      actionOptions,
+    );
+  }
+
   if (action === "react") {
     const messageId = readStringParam(params, "messageId", { required: true });
     const emoji = readStringParam(params, "emoji", { allowEmpty: true });

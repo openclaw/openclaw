@@ -36,6 +36,15 @@ export async function readMessagesDiscord(
   return (await rest.get(Routes.channelMessages(channelId), params)) as APIMessage[];
 }
 
+export async function sendTypingDiscord(
+  channelId: string,
+  opts: DiscordReactOpts = {},
+): Promise<{ ok: true }> {
+  const rest = resolveDiscordRest(opts);
+  await rest.post(Routes.channelTyping(channelId));
+  return { ok: true };
+}
+
 export async function fetchMessageDiscord(
   channelId: string,
   messageId: string,

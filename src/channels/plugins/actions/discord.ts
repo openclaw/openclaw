@@ -31,6 +31,7 @@ export const discordMessageActions: ChannelMessageActionAdapter = {
       actions.add("read");
       actions.add("edit");
       actions.add("delete");
+      actions.add("typing");
     }
     if (isEnabled("pins")) {
       actions.add("pin");
