@@ -675,10 +675,11 @@ export const dispatchTelegramMessage = async ({
   }
   let sentFallback = false;
   const deliverySummary = deliveryState.snapshot();
-  if (
-    !deliverySummary.delivered &&
-    (deliverySummary.skippedNonSilent > 0 || deliverySummary.failedNonSilent > 0)
-  ) {
+  // Send a fallback message when no reply was delivered. This covers:
+  // - Non-silent replies that were skipped or failed
+  // - Empty text responses from models (e.g. Gemini returning "" with stopReason "stop")
+  //   where no deliver callback fires at all, leaving typing stuck (#30616)
+  if (!deliverySummary.delivered && !queuedFinal) {
     const result = await deliverReplies({
       replies: [{ text: EMPTY_RESPONSE_FALLBACK }],
       ...deliveryBaseOptions,
