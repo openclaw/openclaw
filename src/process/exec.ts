@@ -18,7 +18,10 @@ function resolveNpmArgvForWindows(argv: string[]): string[] | null {
   if (process.platform !== "win32" || argv.length === 0) {
     return null;
   }
-  const basename = path.basename(argv[0]).toLowerCase().replace(/\.(cmd|exe|bat)$/, "");
+  const basename = path
+    .basename(argv[0])
+    .toLowerCase()
+    .replace(/\.(cmd|exe|bat)$/, "");
   const cliName = basename === "npx" ? "npx-cli.js" : basename === "npm" ? "npm-cli.js" : null;
   if (!cliName) {
     return null;
@@ -173,10 +176,8 @@ export async function runCommandWithTimeout(
   }
 
   const stdio = resolveCommandStdio({ hasInput, preferInherit: true });
-  const finalArgv =
-    process.platform === "win32" ? resolveNpmArgvForWindows(argv) ?? argv : argv;
-  const resolvedCommand =
-    finalArgv !== argv ? (finalArgv[0] ?? "") : resolveCommand(argv[0] ?? "");
+  const finalArgv = process.platform === "win32" ? (resolveNpmArgvForWindows(argv) ?? argv) : argv;
+  const resolvedCommand = finalArgv !== argv ? (finalArgv[0] ?? "") : resolveCommand(argv[0] ?? "");
   const child = spawn(resolvedCommand, finalArgv.slice(1), {
     stdio,
     cwd,

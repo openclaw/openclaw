@@ -138,10 +138,7 @@ describe("runCommandWithTimeout", () => {
   it.runIf(process.platform === "win32")(
     "on Windows spawns node + npm-cli.js for npm argv to avoid spawn EINVAL",
     async () => {
-      const result = await runCommandWithTimeout(
-        ["npm", "--version"],
-        { timeoutMs: 10_000 },
-      );
+      const result = await runCommandWithTimeout(["npm", "--version"], { timeoutMs: 10_000 });
       expect(result.code).toBe(0);
       expect(result.stdout.trim()).toMatch(/^\d+\.\d+\.\d+$/);
     },
