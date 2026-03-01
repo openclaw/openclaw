@@ -182,13 +182,15 @@ export function createAcpReplyProjector(params: {
     accountId: params.accountId,
     deliveryMode: settings.deliveryMode,
   });
-  const blockReplyPipeline = createBlockReplyPipeline({
-    onBlockReply: async (payload) => {
-      await params.deliver("block", payload);
-    },
-    timeoutMs: ACP_BLOCK_REPLY_TIMEOUT_MS,
-    coalescing: settings.deliveryMode === "live" ? undefined : streaming.coalescing,
-  });
+  const createTurnBlockReplyPipeline = () =>
+    createBlockReplyPipeline({
+      onBlockReply: async (payload) => {
+        await params.deliver("block", payload);
+      },
+      timeoutMs: ACP_BLOCK_REPLY_TIMEOUT_MS,
+      coalescing: settings.deliveryMode === "live" ? undefined : streaming.coalescing,
+    });
+  let blockReplyPipeline = createTurnBlockReplyPipeline();
   const chunker = new EmbeddedBlockChunker(streaming.chunking);
   const liveIdleFlushMs = Math.max(streaming.coalescing.idleMs, ACP_LIVE_IDLE_FLUSH_FLOOR_MS);
 
@@ -259,6 +261,8 @@ export function createAcpReplyProjector(params: {
 
   const resetTurnState = () => {
     clearLiveIdleTimer();
+    blockReplyPipeline.stop();
+    blockReplyPipeline = createTurnBlockReplyPipeline();
     emittedTurnChars = 0;
     emittedMetaEvents = 0;
     truncationNoticeEmitted = false;
@@ -346,8 +350,9 @@ export function createAcpReplyProjector(params: {
       return;
     }
 
-    const toolSummary = truncateText(renderToolSummaryText(event), settings.maxToolSummaryChars);
-    const hash = hashText(toolSummary);
+    const renderedToolSummary = renderToolSummaryText(event);
+    const toolSummary = truncateText(renderedToolSummary, settings.maxToolSummaryChars);
+    const hash = hashText(renderedToolSummary);
     const toolCallId = event.toolCallId?.trim() || undefined;
     const status = normalizeToolStatus(event.status);
     const isTerminal = status ? TERMINAL_TOOL_STATUSES.has(status) : false;
@@ -495,7 +500,7 @@ export function createAcpReplyProjector(params: {
         if (event.tag && HIDDEN_BOUNDARY_TAGS.has(event.tag)) {
           const status = normalizeToolStatus(event.status);
           const isTerminal = status ? TERMINAL_TOOL_STATUSES.has(status) : false;
-          pendingHiddenBoundary = event.tag === "tool_call" || isTerminal;
+          pendingHiddenBoundary = pendingHiddenBoundary || event.tag === "tool_call" || isTerminal;
         }
         return;
       }
