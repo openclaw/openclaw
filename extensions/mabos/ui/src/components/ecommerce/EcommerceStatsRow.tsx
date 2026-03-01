@@ -10,7 +10,7 @@ type Props = {
 
 export function EcommerceStatsRow({ orders, products, isLoading }: Props) {
   const totalOrders = orders?.length ?? 0;
-  const revenue = orders?.reduce((sum, o) => sum + o.total, 0) ?? 0;
+  const revenue = orders?.reduce((sum, o) => sum + parseFloat(String(o.total)), 0) ?? 0;
   const aov = totalOrders > 0 ? revenue / totalOrders : 0;
   const activeProducts = products?.filter((p) => p.status === "active").length ?? 0;
 

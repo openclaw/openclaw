@@ -344,6 +344,7 @@ export type StockItem = {
   quantity: number;
   reorder_point: number;
   warehouse_id: string | null;
+  warehouse_name?: string;
   status: string;
   unit: string | null;
   created_at: string;
@@ -424,6 +425,7 @@ export type Product = {
 export type Order = {
   id: string;
   customer_id: string;
+  customer_name?: string;
   status: string;
   total: number;
   currency: string;

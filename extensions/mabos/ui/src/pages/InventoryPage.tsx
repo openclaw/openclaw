@@ -23,7 +23,7 @@ const columns: Column<StockItem>[] = [
   {
     key: "warehouse_id",
     header: "Warehouse",
-    render: (row) => (row.warehouse_id as string) || "—",
+    render: (row) => row.warehouse_name ?? (row.warehouse_id as string) ?? "—",
   },
 ];
 

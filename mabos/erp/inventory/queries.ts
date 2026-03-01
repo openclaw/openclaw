@@ -41,16 +41,19 @@ export async function listStockItems(
   const values: unknown[] = [];
   let idx = 1;
   if (params.warehouse_id) {
-    conditions.push(`warehouse_id = $${idx++}`);
+    conditions.push(`si.warehouse_id = $${idx++}`);
     values.push(params.warehouse_id);
   }
   if (params.status) {
-    conditions.push(`status = $${idx++}`);
+    conditions.push(`si.status = $${idx++}`);
     values.push(params.status);
   }
   const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
   const result = await pg.query(
-    `SELECT * FROM erp.stock_items ${where} ORDER BY created_at DESC LIMIT $${idx}`,
+    `SELECT si.*, sn.name AS warehouse_name
+     FROM erp.stock_items si
+     LEFT JOIN erp.supply_nodes sn ON si.warehouse_id = sn.id
+     ${where} ORDER BY si.created_at DESC LIMIT $${idx}`,
     [...values, params.limit ?? 50],
   );
   return result.rows;
@@ -102,11 +105,18 @@ export async function adjustStock(
 export async function lowStockAlerts(pg: PgClient, threshold?: number) {
   const result =
     threshold != null
-      ? await pg.query("SELECT * FROM erp.stock_items WHERE quantity <= $1 ORDER BY quantity ASC", [
-          threshold,
-        ])
+      ? await pg.query(
+          `SELECT si.*, sn.name AS warehouse_name
+           FROM erp.stock_items si
+           LEFT JOIN erp.supply_nodes sn ON si.warehouse_id = sn.id
+           WHERE si.quantity <= $1 ORDER BY si.quantity ASC`,
+          [threshold],
+        )
       : await pg.query(
-          "SELECT * FROM erp.stock_items WHERE quantity <= reorder_point ORDER BY quantity ASC",
+          `SELECT si.*, sn.name AS warehouse_name
+           FROM erp.stock_items si
+           LEFT JOIN erp.supply_nodes sn ON si.warehouse_id = sn.id
+           WHERE si.quantity <= si.reorder_point ORDER BY si.quantity ASC`,
         );
   return result.rows;
 }

@@ -116,16 +116,19 @@ export async function listOrders(
   const values: unknown[] = [];
   let idx = 1;
   if (params.status) {
-    conditions.push(`status = $${idx++}`);
+    conditions.push(`o.status = $${idx++}`);
     values.push(params.status);
   }
   if (params.customer_id) {
-    conditions.push(`customer_id = $${idx++}`);
+    conditions.push(`o.customer_id = $${idx++}`);
     values.push(params.customer_id);
   }
   const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
   const result = await pg.query(
-    `SELECT * FROM erp.orders ${where} ORDER BY created_at DESC LIMIT $${idx}`,
+    `SELECT o.*, c.name AS customer_name, o.line_items AS items
+     FROM erp.orders o
+     LEFT JOIN erp.contacts c ON o.customer_id = c.id
+     ${where} ORDER BY o.created_at DESC LIMIT $${idx}`,
     [...values, params.limit ?? 50],
   );
   return result.rows;

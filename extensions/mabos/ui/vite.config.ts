@@ -17,7 +17,12 @@ export default defineConfig({
   },
   server: {
     proxy: {
-      "/mabos/api": "http://localhost:19001",
+      "/mabos/api": {
+        target: `http://localhost:${process.env.MABOS_GATEWAY_PORT ?? "19001"}`,
+        headers: {
+          Authorization: `Bearer ${process.env.MABOS_GATEWAY_TOKEN ?? "3b6332bd5944d42f8715090fb8ea323a5a691ed4b9a71641"}`,
+        },
+      },
     },
   },
 });

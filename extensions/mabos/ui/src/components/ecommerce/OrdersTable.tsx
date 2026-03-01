@@ -16,7 +16,8 @@ const columns: Column<Order>[] = [
   {
     key: "customer_id",
     header: "Customer",
-    render: (row) => <span className="font-mono text-xs">{row.customer_id.slice(0, 8)}</span>,
+    render: (row) =>
+      row.customer_name ?? <span className="font-mono text-xs">{row.customer_id.slice(0, 8)}</span>,
   },
   {
     key: "items",
@@ -27,7 +28,8 @@ const columns: Column<Order>[] = [
     key: "total",
     header: "Total",
     sortable: true,
-    render: (row) => `$${row.total.toLocaleString(undefined, { minimumFractionDigits: 2 })}`,
+    render: (row) =>
+      `$${parseFloat(String(row.total)).toLocaleString(undefined, { minimumFractionDigits: 2 })}`,
   },
   {
     key: "status",
