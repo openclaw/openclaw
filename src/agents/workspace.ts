@@ -43,6 +43,14 @@ const MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES = 2 * 1024 * 1024;
 const workspaceFileCache = new Map<string, { content: string; identity: string }>();
 
 /**
+ * Process-level cache of workspace directories that have already been
+ * initialized/ensured during the current process lifetime.
+ * This significantly reduces latency on repeat agent runs by skipping
+ * redundant file system existence checks and Git operations.
+ */
+const initializedWorkspaces = new Set<string>();
+
+/**
  * Read workspace files via boundary-safe open and cache by inode/dev/size/mtime identity.
  */
 type WorkspaceGuardedReadResult =
@@ -333,10 +341,29 @@ export async function ensureAgentWorkspace(params?: {
 }> {
   const rawDir = params?.dir?.trim() ? params.dir.trim() : DEFAULT_AGENT_WORKSPACE_DIR;
   const dir = resolveUserPath(rawDir);
+
+  if (initializedWorkspaces.has(dir) && !params?.ensureBootstrapFiles) {
+    return { dir };
+  }
+
   await fs.mkdir(dir, { recursive: true });
 
   if (!params?.ensureBootstrapFiles) {
+    initializedWorkspaces.add(dir);
     return { dir };
+  }
+
+  if (initializedWorkspaces.has(dir)) {
+    return {
+      dir,
+      agentsPath: path.join(dir, DEFAULT_AGENTS_FILENAME),
+      soulPath: path.join(dir, DEFAULT_SOUL_FILENAME),
+      toolsPath: path.join(dir, DEFAULT_TOOLS_FILENAME),
+      identityPath: path.join(dir, DEFAULT_IDENTITY_FILENAME),
+      userPath: path.join(dir, DEFAULT_USER_FILENAME),
+      heartbeatPath: path.join(dir, DEFAULT_HEARTBEAT_FILENAME),
+      bootstrapPath: path.join(dir, DEFAULT_BOOTSTRAP_FILENAME),
+    };
   }
 
   const agentsPath = path.join(dir, DEFAULT_AGENTS_FILENAME);
@@ -445,6 +472,8 @@ export async function ensureAgentWorkspace(params?: {
     await writeWorkspaceOnboardingState(statePath, state);
   }
   await ensureGitRepo(dir, isBrandNewWorkspace);
+
+  initializedWorkspaces.add(dir);
 
   return {
     dir,

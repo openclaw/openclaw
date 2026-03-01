@@ -62,6 +62,19 @@ export function shouldEnsureCliPath(argv: string[]): boolean {
 }
 
 export async function runCli(argv: string[] = process.argv) {
+  try {
+    const fs = await import("node:fs");
+    fs.writeSync(
+      1,
+      JSON.stringify({
+        type: "mind_event",
+        stream: "latency",
+        data: { phase: "boot_step", label: "⚙️ Inicializando CLI y entorno" },
+        timestamp: Date.now(),
+      }) + "\n",
+    );
+  } catch {}
+
   const normalizedArgv = normalizeWindowsArgv(argv);
   loadDotEnv({ quiet: true });
   normalizeEnv();
@@ -78,6 +91,19 @@ export async function runCli(argv: string[] = process.argv) {
 
   // Capture all console output into structured logs while keeping stdout/stderr behavior.
   enableConsoleCapture();
+
+  try {
+    const fs = await import("node:fs");
+    fs.writeSync(
+      1,
+      JSON.stringify({
+        type: "mind_event",
+        stream: "latency",
+        data: { phase: "boot_step", label: "⚙️ Compilando módulos del CLI" },
+        timestamp: Date.now(),
+      }) + "\n",
+    );
+  } catch {}
 
   const { buildProgram } = await import("./program.js");
   const program = buildProgram();
@@ -119,6 +145,19 @@ export async function runCli(argv: string[] = process.argv) {
     const { loadConfig } = await import("../config/config.js");
     registerPluginCliCommands(program, loadConfig());
   }
+
+  try {
+    const fs = await import("node:fs");
+    fs.writeSync(
+      1,
+      JSON.stringify({
+        type: "mind_event",
+        stream: "latency",
+        data: { phase: "boot_step", label: "⚙️ Evaluando comando RPC" },
+        timestamp: Date.now(),
+      }) + "\n",
+    );
+  } catch {}
 
   await program.parseAsync(parseArgv);
 }

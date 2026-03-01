@@ -76,14 +76,14 @@ export class SubconsciousService {
     const historyText =
       analysisWindow.length > 0
         ? analysisWindow
-          .map((m) => {
-            let mText = m.text || m.content || "";
-            if (Array.isArray(mText)) {
-              mText = mText.map((p) => (typeof p === "string" ? p : p.text || "")).join(" ");
-            }
-            return `${m.role}: ${String(mText)}`;
-          })
-          .join("\n")
+            .map((m) => {
+              let mText = m.text || m.content || "";
+              if (Array.isArray(mText)) {
+                mText = mText.map((p) => (typeof p === "string" ? p : p.text || "")).join(" ");
+              }
+              return `${m.role}: ${String(mText)}`;
+            })
+            .join("\n")
         : "(No previous context)";
 
     const prompt = `You are the "Subconscious Observer" of an artificial mind.
@@ -247,7 +247,7 @@ Respond with exactly 3 queries, one per line. No numbers, bullets, or explanatio
     rewriteMemories: boolean = true,
     /** Dedicated agent for observer query generation — should have no thinking for low latency. Falls back to agent. */
     observerAgent?: LLMClient | null,
-    onEvent?: (event: { stream: string; data: any }) => void,
+    onEvent?: (event: { stream: string; data: unknown }) => void,
   ): Promise<string> {
     if (onEvent) {
       onEvent({

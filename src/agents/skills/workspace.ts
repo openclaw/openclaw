@@ -33,6 +33,28 @@ const skillsLogger = createSubsystemLogger("skills");
 const skillCommandDebugOnce = new Set<string>();
 
 /**
+ * Process-level cache for skill snapshots to avoid redundant scans on every turn.
+ * Items expire after a short duration (e.g. 5s) to allow for skill development.
+ */
+const skillSnapshotCache = new Map<string, { snapshot: SkillSnapshot; expiresAt: number }>();
+const SKILL_SNAPSHOT_CACHE_MS = 5000;
+
+function getCachedSkillSnapshot(key: string): SkillSnapshot | null {
+  const cached = skillSnapshotCache.get(key);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.snapshot;
+  }
+  return null;
+}
+
+function setCachedSkillSnapshot(key: string, snapshot: SkillSnapshot) {
+  skillSnapshotCache.set(key, {
+    snapshot,
+    expiresAt: Date.now() + SKILL_SNAPSHOT_CACHE_MS,
+  });
+}
+
+/**
  * Replace the user's home directory prefix with `~` in skill file paths
  * to reduce system prompt token usage. Models understand `~` expansion,
  * and the read tool resolves `~` to the home directory.
@@ -447,9 +469,22 @@ export function buildWorkspaceSkillSnapshot(
   workspaceDir: string,
   opts?: WorkspaceSkillBuildOptions & { snapshotVersion?: number },
 ): SkillSnapshot {
+  const cacheKey = JSON.stringify({
+    workspaceDir,
+    skillFilter: opts?.skillFilter,
+    eligibility: opts?.eligibility,
+  });
+  const cached = getCachedSkillSnapshot(cacheKey);
+  if (cached) {
+    return {
+      ...cached,
+      version: opts?.snapshotVersion ?? cached.version,
+    };
+  }
+
   const { eligible, prompt, resolvedSkills } = resolveWorkspaceSkillPromptState(workspaceDir, opts);
   const skillFilter = normalizeSkillFilter(opts?.skillFilter);
-  return {
+  const snapshot: SkillSnapshot = {
     prompt,
     skills: eligible.map((entry) => ({
       name: entry.skill.name,
@@ -460,6 +495,9 @@ export function buildWorkspaceSkillSnapshot(
     resolvedSkills,
     version: opts?.snapshotVersion,
   };
+
+  setCachedSkillSnapshot(cacheKey, snapshot);
+  return snapshot;
 }
 
 export function buildWorkspaceSkillsPrompt(

@@ -101,15 +101,6 @@ function resolveCacheRetention(
   return "short";
 }
 
-const KNOWN_EXTRA_PARAMS = new Set([
-  "temperature",
-  "maxTokens",
-  "cacheRetention",
-  "cacheControlTtl",
-  "anthropicBeta",
-  "context1m",
-]);
-
 function createStreamFnWithExtraParams(
   baseStreamFn: StreamFn | undefined,
   extraParams: Record<string, unknown> | undefined,

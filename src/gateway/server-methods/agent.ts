@@ -11,7 +11,7 @@ import {
   type SessionEntry,
   updateSessionStore,
 } from "../../config/sessions.js";
-import { registerAgentRunContext } from "../../infra/agent-events.js";
+import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
 import {
   resolveAgentDeliveryPlan,
   resolveAgentOutboundTarget,
@@ -589,6 +589,16 @@ export const agentHandlers: GatewayRequestHandlers = {
     });
     respond(true, accepted, undefined, { runId });
 
+    // [MIND] Emit lifecycle start immediately for zero-latency feedback
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: {
+        phase: "start",
+        startedAt: accepted.acceptedAt,
+      },
+    });
+
     const resolvedThreadId = explicitThreadId ?? deliveryPlan.resolvedThreadId;
 
     void agentCommand(
@@ -620,6 +630,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         bestEffortDeliver,
         messageChannel: originMessageChannel,
         runId,
+        skipStartEvent: true,
         lane: request.lane,
         extraSystemPrompt: request.extraSystemPrompt,
         inputProvenance,

@@ -234,7 +234,34 @@ export async function agentCommand(
     throw new Error("Pass --to <E.164>, --session-id, or --agent to choose a session");
   }
 
+  try {
+    const fs = await import("node:fs");
+    fs.writeSync(
+      1,
+      JSON.stringify({
+        type: "mind_event",
+        stream: "latency",
+        data: { phase: "boot_step", label: "⚙️ Evaluando flag de CLI" },
+        timestamp: Date.now(),
+      }) + "\n",
+    );
+  } catch {}
+
   const cfg = loadConfig();
+
+  try {
+    const fs = await import("node:fs");
+    fs.writeSync(
+      1,
+      JSON.stringify({
+        type: "mind_event",
+        stream: "latency",
+        data: { phase: "boot_step", label: "⚙️ Configuración parseada" },
+        timestamp: Date.now(),
+      }) + "\n",
+    );
+  } catch {}
+
   const agentIdOverrideRaw = opts.agentId?.trim();
   const agentIdOverride = agentIdOverrideRaw ? normalizeAgentId(agentIdOverrideRaw) : undefined;
   if (agentIdOverride) {
@@ -294,6 +321,18 @@ export async function agentCommand(
     overrideSeconds: timeoutSecondsRaw,
   });
 
+  try {
+    fs.writeSync(
+      1,
+      JSON.stringify({
+        type: "mind_event",
+        stream: "latency",
+        data: { phase: "boot_step", label: "🧠 Cargando configuración base" },
+        timestamp: Date.now(),
+      }) + "\n",
+    );
+  } catch {}
+
   const sessionResolution = resolveSession({
     cfg,
     to: opts.to,
@@ -312,6 +351,18 @@ export async function agentCommand(
     persistedThinking,
     persistedVerbose,
   } = sessionResolution;
+
+  try {
+    fs.writeSync(
+      1,
+      JSON.stringify({
+        type: "mind_event",
+        stream: "latency",
+        data: { phase: "boot_step", label: "✅ Cierre sessionStore (Sesión Localizada)" },
+        timestamp: Date.now(),
+      }) + "\n",
+    );
+  } catch {}
 
   const runId = opts.runId?.trim() || sessionId;
   const startedAt = Date.now();
@@ -351,6 +402,19 @@ export async function agentCommand(
     ensureBootstrapFiles: !agentCfg?.skipBootstrap,
   });
   const workspaceDir = workspace.dir;
+
+  try {
+    fs.writeSync(
+      1,
+      JSON.stringify({
+        type: "mind_event",
+        stream: "latency",
+        data: { phase: "boot_step", label: "🧠 Cargando memorias y directorio de trabajo" },
+        timestamp: Date.now(),
+      }) + "\n",
+    );
+  } catch {}
+
   let sessionEntry = resolvedSessionEntry;
   const acpManager = getAcpSessionManager();
   const acpResolution = sessionKey
@@ -578,6 +642,18 @@ export async function agentCommand(
       allowedModelKeys = allowed.allowedKeys;
       allowedModelCatalog = allowed.allowedCatalog;
       allowAnyModel = allowed.allowAny ?? false;
+
+      try {
+        fs.writeSync(
+          1,
+          JSON.stringify({
+            type: "mind_event",
+            stream: "latency",
+            data: { phase: "boot_step", label: "✅ Catálogo de Modelos verificado" },
+            timestamp: Date.now(),
+          }) + "\n",
+        );
+      } catch {}
     }
 
     if (sessionEntry && sessionStore && sessionKey && hasStoredOverride) {
@@ -724,6 +800,19 @@ export async function agentCommand(
       // Track model fallback attempts so retries on an existing session don't
       // re-inject the original prompt as a duplicate user message.
       let fallbackAttemptIndex = 0;
+
+      try {
+        fs.writeSync(
+          1,
+          JSON.stringify({
+            type: "mind_event",
+            stream: "latency",
+            data: { phase: "boot_step", label: "🚀 Boot listo, llamando a la IA" },
+            timestamp: Date.now(),
+          }) + "\n",
+        );
+      } catch {}
+
       const fallbackResult = await runWithModelFallback({
         cfg,
         provider,
@@ -782,7 +871,8 @@ export async function agentCommand(
                   evt.stream === "lifecycle" ||
                   evt.stream === "tool" ||
                   evt.stream === "assistant" ||
-                  evt.stream === "auth-profile"
+                  evt.stream === "auth-profile" ||
+                  evt.stream === "latency"
                 ) {
                   // Use a distinct prefix or structure specific for the bridge
                   const json =
