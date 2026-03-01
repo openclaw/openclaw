@@ -15,10 +15,12 @@ const {
   buildInlineKeyboard,
   createForumTopicTelegram,
   editMessageTelegram,
+  pinMessageTelegram,
   reactMessageTelegram,
   sendMessageTelegram,
   sendPollTelegram,
   sendStickerTelegram,
+  unpinMessageTelegram,
 } = await importTelegramSendModule();
 
 async function expectChatNotFoundWithChatId(
@@ -1205,6 +1207,53 @@ describe("reactMessageTelegram", () => {
         resolvedChatId: "-100123",
       }),
     );
+  });
+});
+
+describe("pin/unpin message actions", () => {
+  it("pins a message", async () => {
+    const pinChatMessage = vi.fn().mockResolvedValue(true);
+    const api = { pinChatMessage } as unknown as {
+      pinChatMessage: typeof pinChatMessage;
+    };
+
+    await pinMessageTelegram("123", 456, {
+      token: "tok",
+      api,
+    });
+
+    expect(pinChatMessage).toHaveBeenCalledWith("123", 456, undefined);
+  });
+
+  it("forwards disable_notification when pinning silently", async () => {
+    const pinChatMessage = vi.fn().mockResolvedValue(true);
+    const api = { pinChatMessage } as unknown as {
+      pinChatMessage: typeof pinChatMessage;
+    };
+
+    await pinMessageTelegram("123", 456, {
+      token: "tok",
+      api,
+      silent: true,
+    });
+
+    expect(pinChatMessage).toHaveBeenCalledWith("123", 456, {
+      disable_notification: true,
+    });
+  });
+
+  it("unpins a message", async () => {
+    const unpinChatMessage = vi.fn().mockResolvedValue(true);
+    const api = { unpinChatMessage } as unknown as {
+      unpinChatMessage: typeof unpinChatMessage;
+    };
+
+    await unpinMessageTelegram("123", 456, {
+      token: "tok",
+      api,
+    });
+
+    expect(unpinChatMessage).toHaveBeenCalledWith("123", 456);
   });
 });
 

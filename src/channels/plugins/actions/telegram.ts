@@ -86,6 +86,10 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
     if (isEnabled("editMessage")) {
       actions.add("edit");
     }
+    if (isEnabled("pins")) {
+      actions.add("pin");
+      actions.add("unpin");
+    }
     if (isEnabled("sticker", false)) {
       actions.add("sticker");
       actions.add("sticker-search");
@@ -167,6 +171,22 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
           messageId,
           content: message,
           buttons,
+          accountId: accountId ?? undefined,
+        },
+        cfg,
+        { mediaLocalRoots },
+      );
+    }
+
+    if (action === "pin" || action === "unpin") {
+      const chatId = readTelegramChatIdParam(params);
+      const messageId = readTelegramMessageIdParam(params);
+      return await handleTelegramAction(
+        {
+          action: action === "pin" ? "pinMessage" : "unpinMessage",
+          chatId,
+          messageId,
+          silent: typeof params.silent === "boolean" ? params.silent : undefined,
           accountId: accountId ?? undefined,
         },
         cfg,

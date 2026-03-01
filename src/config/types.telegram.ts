@@ -16,6 +16,8 @@ export type TelegramActionConfig = {
   sendMessage?: boolean;
   deleteMessage?: boolean;
   editMessage?: boolean;
+  /** Enable pin and unpin actions. */
+  pins?: boolean;
   /** Enable sticker actions (send and search). */
   sticker?: boolean;
   /** Enable forum topic creation. */

@@ -460,6 +460,7 @@ describe("telegramMessageActions", () => {
         name: "default config",
         cfg: telegramCfg(),
         expectSticker: false,
+        expectPins: true,
       },
       {
         name: "per-account sticker enabled",
@@ -473,6 +474,7 @@ describe("telegramMessageActions", () => {
           },
         } as OpenClawConfig,
         expectSticker: true,
+        expectPins: true,
       },
       {
         name: "all accounts omit sticker",
@@ -487,6 +489,20 @@ describe("telegramMessageActions", () => {
           },
         } as OpenClawConfig,
         expectSticker: false,
+        expectPins: true,
+      },
+      {
+        name: "pins disabled globally",
+        cfg: {
+          channels: {
+            telegram: {
+              botToken: "tok",
+              actions: { pins: false },
+            },
+          },
+        } as OpenClawConfig,
+        expectSticker: false,
+        expectPins: false,
       },
     ] as const;
 
@@ -498,6 +514,13 @@ describe("telegramMessageActions", () => {
       } else {
         expect(actions, testCase.name).not.toContain("sticker");
         expect(actions, testCase.name).not.toContain("sticker-search");
+      }
+      if (testCase.expectPins) {
+        expect(actions, testCase.name).toContain("pin");
+        expect(actions, testCase.name).toContain("unpin");
+      } else {
+        expect(actions, testCase.name).not.toContain("pin");
+        expect(actions, testCase.name).not.toContain("unpin");
       }
     }
   });
@@ -566,6 +589,37 @@ describe("telegramMessageActions", () => {
           name: "Build Updates",
           iconColor: undefined,
           iconCustomEmojiId: undefined,
+          accountId: undefined,
+        },
+      },
+      {
+        name: "pin maps to pinMessage",
+        action: "pin" as const,
+        params: {
+          channelId: "123",
+          messageId: 42,
+          silent: true,
+        },
+        expectedPayload: {
+          action: "pinMessage",
+          chatId: "123",
+          messageId: 42,
+          silent: true,
+          accountId: undefined,
+        },
+      },
+      {
+        name: "unpin maps to unpinMessage",
+        action: "unpin" as const,
+        params: {
+          chatId: "123",
+          messageId: 42,
+        },
+        expectedPayload: {
+          action: "unpinMessage",
+          chatId: "123",
+          messageId: 42,
+          silent: undefined,
           accountId: undefined,
         },
       },

@@ -11,9 +11,11 @@ import {
   createForumTopicTelegram,
   deleteMessageTelegram,
   editMessageTelegram,
+  pinMessageTelegram,
   reactMessageTelegram,
   sendMessageTelegram,
   sendStickerTelegram,
+  unpinMessageTelegram,
 } from "../../telegram/send.js";
 import { getCacheStats, searchStickers } from "../../telegram/sticker-cache.js";
 import { resolveTelegramToken } from "../../telegram/token.js";
@@ -310,6 +312,38 @@ export async function handleTelegramAction(
       messageId: result.messageId,
       chatId: result.chatId,
     });
+  }
+
+  if (action === "pinMessage" || action === "unpinMessage") {
+    if (!isActionEnabled("pins")) {
+      throw new Error("Telegram pins are disabled.");
+    }
+    const chatId = readStringOrNumberParam(params, "chatId", {
+      required: true,
+    });
+    const messageId = readNumberParam(params, "messageId", {
+      required: true,
+      integer: true,
+    });
+    const token = resolveTelegramToken(cfg, { accountId }).token;
+    if (!token) {
+      throw new Error(
+        "Telegram bot token missing. Set TELEGRAM_BOT_TOKEN or channels.telegram.botToken.",
+      );
+    }
+    if (action === "pinMessage") {
+      await pinMessageTelegram(chatId ?? "", messageId ?? 0, {
+        token,
+        accountId: accountId ?? undefined,
+        silent: typeof params.silent === "boolean" ? params.silent : undefined,
+      });
+    } else {
+      await unpinMessageTelegram(chatId ?? "", messageId ?? 0, {
+        token,
+        accountId: accountId ?? undefined,
+      });
+    }
+    return jsonResult({ ok: true });
   }
 
   if (action === "sendSticker") {

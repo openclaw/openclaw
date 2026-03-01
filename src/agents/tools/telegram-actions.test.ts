@@ -13,6 +13,8 @@ const sendStickerTelegram = vi.fn(async () => ({
   chatId: "123",
 }));
 const deleteMessageTelegram = vi.fn(async () => ({ ok: true }));
+const pinMessageTelegram = vi.fn(async () => ({ ok: true }));
+const unpinMessageTelegram = vi.fn(async () => ({ ok: true }));
 let envSnapshot: ReturnType<typeof captureEnv>;
 
 vi.mock("../../telegram/send.js", () => ({
@@ -24,6 +26,10 @@ vi.mock("../../telegram/send.js", () => ({
     sendStickerTelegram(...args),
   deleteMessageTelegram: (...args: Parameters<typeof deleteMessageTelegram>) =>
     deleteMessageTelegram(...args),
+  pinMessageTelegram: (...args: Parameters<typeof pinMessageTelegram>) =>
+    pinMessageTelegram(...args),
+  unpinMessageTelegram: (...args: Parameters<typeof unpinMessageTelegram>) =>
+    unpinMessageTelegram(...args),
 }));
 
 describe("handleTelegramAction", () => {
@@ -67,6 +73,8 @@ describe("handleTelegramAction", () => {
     sendMessageTelegram.mockClear();
     sendStickerTelegram.mockClear();
     deleteMessageTelegram.mockClear();
+    pinMessageTelegram.mockClear();
+    unpinMessageTelegram.mockClear();
     process.env.TELEGRAM_BOT_TOKEN = "tok";
   });
 
@@ -415,6 +423,62 @@ describe("handleTelegramAction", () => {
         cfg,
       ),
     ).rejects.toThrow(/Telegram deleteMessage is disabled/);
+  });
+
+  it("pins a message", async () => {
+    const cfg = {
+      channels: { telegram: { botToken: "tok" } },
+    } as OpenClawConfig;
+    await handleTelegramAction(
+      {
+        action: "pinMessage",
+        chatId: "123",
+        messageId: 456,
+      },
+      cfg,
+    );
+    expect(pinMessageTelegram).toHaveBeenCalledWith(
+      "123",
+      456,
+      expect.objectContaining({ token: "tok" }),
+    );
+  });
+
+  it("unpins a message", async () => {
+    const cfg = {
+      channels: { telegram: { botToken: "tok" } },
+    } as OpenClawConfig;
+    await handleTelegramAction(
+      {
+        action: "unpinMessage",
+        chatId: "123",
+        messageId: 456,
+      },
+      cfg,
+    );
+    expect(unpinMessageTelegram).toHaveBeenCalledWith(
+      "123",
+      456,
+      expect.objectContaining({ token: "tok" }),
+    );
+  });
+
+  it("respects pins gating", async () => {
+    const cfg = {
+      channels: {
+        telegram: { botToken: "tok", actions: { pins: false } },
+      },
+    } as OpenClawConfig;
+    await expect(
+      handleTelegramAction(
+        {
+          action: "pinMessage",
+          chatId: "123",
+          messageId: 456,
+        },
+        cfg,
+      ),
+    ).rejects.toThrow(/Telegram pins are disabled/);
   });
 
   it("throws on missing bot token for sendMessage", async () => {
