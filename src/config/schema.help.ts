@@ -693,6 +693,8 @@ export const FIELD_HELP: Record<string, string> = {
   "auth.cooldowns.failureWindowHours": "Failure window (hours) for backoff counters (default: 24).",
   "agents.defaults.workspace":
     "Default workspace path exposed to agent runtime tools for filesystem context and repo-aware behavior. Set this explicitly when running from wrappers so path resolution stays deterministic.",
+  "agents.defaults.bootstrapTier":
+    'Bootstrap loading tier: "minimal" (AGENTS.md + TOOLS.md + SOUL.md + IDENTITY.md + USER.md), "standard" (all recognized files, default), or "full" (standard + extra patterns).',
   "agents.defaults.bootstrapMaxChars":
     "Max characters of each workspace bootstrap file injected into the system prompt before truncation (default: 20000).",
   "agents.defaults.bootstrapTotalMaxChars":
