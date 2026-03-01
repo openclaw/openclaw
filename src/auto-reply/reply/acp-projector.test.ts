@@ -146,6 +146,26 @@ describe("createAcpReplyProjector", () => {
     ]);
   });
 
+  it("hides available_commands_update by default", async () => {
+    const deliveries: Array<{ kind: string; text?: string }> = [];
+    const projector = createAcpReplyProjector({
+      cfg: createCfg(),
+      shouldSendToolSummaries: true,
+      deliver: async (kind, payload) => {
+        deliveries.push({ kind, text: payload.text });
+        return true;
+      },
+    });
+
+    await projector.onEvent({
+      type: "status",
+      text: "available commands updated (7)",
+      tag: "available_commands_update",
+    });
+
+    expect(deliveries).toEqual([]);
+  });
+
   it("dedupes repeated tool lifecycle updates in minimal mode", async () => {
     const deliveries: Array<{ kind: string; text?: string }> = [];
     const projector = createAcpReplyProjector({
@@ -262,6 +282,51 @@ describe("createAcpReplyProjector", () => {
     expect(deliveries).toEqual([{ kind: "block", text: "hello" }]);
   });
 
+  it("allows non-identical status updates in metaMode=verbose while suppressing exact duplicates", async () => {
+    const deliveries: Array<{ kind: string; text?: string }> = [];
+    const projector = createAcpReplyProjector({
+      cfg: createCfg({
+        acp: {
+          enabled: true,
+          stream: {
+            coalesceIdleMs: 0,
+            maxChunkChars: 256,
+            metaMode: "verbose",
+            tagVisibility: {
+              available_commands_update: true,
+            },
+          },
+        },
+      }),
+      shouldSendToolSummaries: true,
+      deliver: async (kind, payload) => {
+        deliveries.push({ kind, text: payload.text });
+        return true;
+      },
+    });
+
+    await projector.onEvent({
+      type: "status",
+      text: "available commands updated (7)",
+      tag: "available_commands_update",
+    });
+    await projector.onEvent({
+      type: "status",
+      text: "available commands updated (7)",
+      tag: "available_commands_update",
+    });
+    await projector.onEvent({
+      type: "status",
+      text: "available commands updated (8)",
+      tag: "available_commands_update",
+    });
+
+    expect(deliveries).toEqual([
+      { kind: "tool", text: prefixSystemMessage("available commands updated (7)") },
+      { kind: "tool", text: prefixSystemMessage("available commands updated (8)") },
+    ]);
+  });
+
   it("truncates oversized turns once and emits one truncation notice", async () => {
     const deliveries: Array<{ kind: string; text?: string }> = [];
     const projector = createAcpReplyProjector({
@@ -298,6 +363,57 @@ describe("createAcpReplyProjector", () => {
     expect(deliveries).toEqual([
       { kind: "block", text: "hello" },
       { kind: "tool", text: prefixSystemMessage("output truncated") },
+    ]);
+  });
+
+  it("enforces maxMetaEventsPerTurn without suppressing assistant text", async () => {
+    const deliveries: Array<{ kind: string; text?: string }> = [];
+    const projector = createAcpReplyProjector({
+      cfg: createCfg({
+        acp: {
+          enabled: true,
+          stream: {
+            coalesceIdleMs: 0,
+            maxChunkChars: 256,
+            maxMetaEventsPerTurn: 1,
+            showUsage: true,
+            tagVisibility: {
+              usage_update: true,
+            },
+          },
+        },
+      }),
+      shouldSendToolSummaries: true,
+      deliver: async (kind, payload) => {
+        deliveries.push({ kind, text: payload.text });
+        return true;
+      },
+    });
+
+    await projector.onEvent({
+      type: "status",
+      text: "usage updated: 10/100",
+      tag: "usage_update",
+      used: 10,
+      size: 100,
+    });
+    await projector.onEvent({
+      type: "status",
+      text: "usage updated: 11/100",
+      tag: "usage_update",
+      used: 11,
+      size: 100,
+    });
+    await projector.onEvent({
+      type: "text_delta",
+      text: "hello",
+      tag: "agent_message_chunk",
+    });
+    await projector.flush(true);
+
+    expect(deliveries).toEqual([
+      { kind: "tool", text: prefixSystemMessage("usage updated: 10/100") },
+      { kind: "block", text: "hello" },
     ]);
   });
 
