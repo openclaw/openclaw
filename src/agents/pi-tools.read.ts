@@ -843,7 +843,18 @@ function createHostEditOperations(root: string, options?: { workspaceOnly?: bool
       });
     },
     access: async (absolutePath: string) => {
-      const relative = toRelativePathInRoot(root, absolutePath);
+      let relative: string;
+      try {
+        relative = toRelativePathInRoot(root, absolutePath);
+      } catch {
+        // toRelativePathInRoot throws "Path escapes workspace root" for paths outside the workspace
+        // We need to convert this to an EACCES error so pi-coding-agent's createEditTool
+        // can distinguish it from ENOENT (file not found) and show the correct error message.
+        const accessError = createFsAccessError("EACCES", absolutePath);
+        // Preserve the original error message for better debugging
+        accessError.message = `Path escapes workspace root: ${absolutePath}`;
+        throw accessError;
+      }
       try {
         const opened = await openFileWithinRoot({
           rootDir: root,
