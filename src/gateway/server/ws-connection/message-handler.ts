@@ -91,6 +91,13 @@ type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 const DEVICE_SIGNATURE_SKEW_MS = 2 * 60 * 1000;
 const BROWSER_ORIGIN_LOOPBACK_RATE_LIMIT_IP = "198.18.0.1";
 
+function normalizeDeviceSignedAtForSkew(signedAt: number): number {
+  // Backward compatibility: some older clients may send Unix seconds instead of
+  // Unix milliseconds. Keep signature verification payload unchanged, but
+  // normalize only for freshness/skew checks.
+  return signedAt > 0 && signedAt < 1_000_000_000_000 ? signedAt * 1000 : signedAt;
+}
+
 type HandshakeBrowserSecurityContext = {
   hasBrowserOriginHeader: boolean;
   enforceOriginCheckForAnyClient: boolean;
@@ -644,9 +651,11 @@ export function attachGatewayWsMessageHandler(params: {
             return;
           }
           const signedAt = device.signedAt;
+          const signedAtForSkew =
+            typeof signedAt === "number" ? normalizeDeviceSignedAtForSkew(signedAt) : signedAt;
           if (
             typeof signedAt !== "number" ||
-            Math.abs(Date.now() - signedAt) > DEVICE_SIGNATURE_SKEW_MS
+            Math.abs(Date.now() - signedAtForSkew) > DEVICE_SIGNATURE_SKEW_MS
           ) {
             rejectDeviceAuthInvalid("device-signature-stale", "device signature expired");
             return;

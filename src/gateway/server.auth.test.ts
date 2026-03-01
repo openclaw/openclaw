@@ -1119,6 +1119,58 @@ describe("gateway server auth/connect", () => {
     }
   });
 
+  test("accepts control ui device signatures that use unix-seconds signedAt", async () => {
+    testState.gatewayControlUi = undefined;
+    testState.gatewayAuth = { mode: "token", token: "secret" };
+    const prevToken = process.env.OPENCLAW_GATEWAY_TOKEN;
+    process.env.OPENCLAW_GATEWAY_TOKEN = "secret";
+    try {
+      await withGatewayServer(async ({ port }) => {
+        const ws = await openWs(port, { origin: originForPort(port) });
+        const challengeNonce = await readConnectChallengeNonce(ws);
+        expect(challengeNonce).toBeTruthy();
+        const nowSeconds = Math.floor(Date.now() / 1000);
+        const { randomUUID } = await import("node:crypto");
+        const os = await import("node:os");
+        const path = await import("node:path");
+        const scopes = [
+          "operator.admin",
+          "operator.read",
+          "operator.write",
+          "operator.approvals",
+          "operator.pairing",
+        ];
+        const { device } = await createSignedDevice({
+          token: "secret",
+          scopes,
+          clientId: GATEWAY_CLIENT_NAMES.CONTROL_UI,
+          clientMode: GATEWAY_CLIENT_MODES.WEBCHAT,
+          identityPath: path.join(
+            os.tmpdir(),
+            `openclaw-controlui-seconds-device-${randomUUID()}.json`,
+          ),
+          signedAtMs: nowSeconds,
+          nonce: String(challengeNonce),
+        });
+        const res = await connectReq(ws, {
+          token: "secret",
+          scopes,
+          device,
+          client: {
+            ...CONTROL_UI_CLIENT,
+          },
+        });
+        expect(res.ok).toBe(true);
+        expect(res.error?.message ?? "").not.toContain("device signature expired");
+        const health = await rpcReq(ws, "health");
+        expect(health.ok).toBe(true);
+        ws.close();
+      });
+    } finally {
+      restoreGatewayToken(prevToken);
+    }
+  });
+
   test("device token auth matrix", async () => {
     const { server, ws, port, prevToken } = await startServerWithClient("secret");
     const { deviceToken, deviceIdentityPath } = await ensurePairedDeviceTokenForCurrentIdentity(ws);
