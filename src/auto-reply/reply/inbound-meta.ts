@@ -31,6 +31,15 @@ function formatConversationTimestamp(value: unknown): string | undefined {
   }
 }
 
+function isTelegramContext(ctx: TemplateContext): boolean {
+  const channel = (
+    safeTrim(ctx.OriginatingChannel) ??
+    safeTrim(ctx.Surface) ??
+    safeTrim(ctx.Provider)
+  )?.toLowerCase();
+  return channel === "telegram";
+}
+
 export function buildInboundMetaSystemPrompt(ctx: TemplateContext): string {
   const chatType = normalizeChatType(ctx.ChatType);
   const isDirect = !chatType || chatType === "direct";
@@ -84,24 +93,25 @@ export function buildInboundUserContextPrefix(ctx: TemplateContext): string {
   const blocks: string[] = [];
   const chatType = normalizeChatType(ctx.ChatType);
   const isDirect = !chatType || chatType === "direct";
+  const includeDirectIdentifiers = isDirect && isTelegramContext(ctx);
+  const includeConversationIdentifiers = !isDirect || includeDirectIdentifiers;
 
   const messageId = safeTrim(ctx.MessageSid);
   const messageIdFull = safeTrim(ctx.MessageSidFull);
   const timestampStr = formatConversationTimestamp(ctx.Timestamp);
 
   const conversationInfo = {
-    message_id: isDirect ? undefined : messageId,
-    message_id_full: isDirect
-      ? undefined
-      : messageIdFull && messageIdFull !== messageId
+    message_id: includeConversationIdentifiers ? messageId : undefined,
+    message_id_full:
+      includeConversationIdentifiers && messageIdFull && messageIdFull !== messageId
         ? messageIdFull
         : undefined,
-    reply_to_id: isDirect ? undefined : safeTrim(ctx.ReplyToId),
-    sender_id: isDirect ? undefined : safeTrim(ctx.SenderId),
+    reply_to_id: includeConversationIdentifiers ? safeTrim(ctx.ReplyToId) : undefined,
+    sender_id: includeConversationIdentifiers ? safeTrim(ctx.SenderId) : undefined,
     conversation_label: isDirect ? undefined : safeTrim(ctx.ConversationLabel),
-    sender: isDirect
-      ? undefined
-      : (safeTrim(ctx.SenderE164) ?? safeTrim(ctx.SenderId) ?? safeTrim(ctx.SenderUsername)),
+    sender: includeConversationIdentifiers
+      ? (safeTrim(ctx.SenderE164) ?? safeTrim(ctx.SenderId) ?? safeTrim(ctx.SenderUsername))
+      : undefined,
     timestamp: timestampStr,
     group_subject: safeTrim(ctx.GroupSubject),
     group_channel: safeTrim(ctx.GroupChannel),
