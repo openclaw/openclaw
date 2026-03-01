@@ -21,6 +21,27 @@ const cfg = {
   embeddingDim: Number(process.env.OPENCLAW_QDRANT_EMBEDDING_DIM || "1536"),
   batchSize: Number(process.env.OPENCLAW_QDRANT_BATCH_SIZE || "32"),
   chunkChars: Number(process.env.OPENCLAW_QDRANT_CHUNK_CHARS || "1200"),
+  codeIndexEnabled:
+    String(process.env.OPENCLAW_QDRANT_CODE_INDEX_ENABLED || "false").toLowerCase() === "true",
+  codeProjectsFile:
+    process.env.OPENCLAW_QDRANT_CODE_PROJECTS_FILE || path.join(ROOT_DIR, "qdrant-setup", "projects.json"),
+  codeProjectPaths: process.env.OPENCLAW_QDRANT_CODE_PROJECT_PATHS || "",
+  codeExtensions: new Set(
+    (process.env.OPENCLAW_QDRANT_CODE_EXTENSIONS ||
+      ".ts,.tsx,.js,.jsx,.mjs,.cjs,.py,.go,.rs,.java,.kt,.swift,.dart,.sql,.sh,.yaml,.yml,.json,.md")
+      .split(",")
+      .map((s) => s.trim().toLowerCase())
+      .filter(Boolean),
+  ),
+  codeIgnoreDirs: new Set(
+    (process.env.OPENCLAW_QDRANT_CODE_IGNORE_DIRS ||
+      "node_modules,.git,dist,build,.next,.nuxt,.pnpm-store,coverage,.turbo,.cache,vendor,tmp")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean),
+  ),
+  codeMaxFileBytes: Number(process.env.OPENCLAW_QDRANT_CODE_MAX_FILE_BYTES || "262144"),
+  codeMaxFiles: Number(process.env.OPENCLAW_QDRANT_CODE_MAX_FILES || "5000"),
 };
 
 function log(msg) {
@@ -78,6 +99,14 @@ function chunkText(text, maxChars) {
   return chunks;
 }
 
+function isLikelyBinary(buf) {
+  const max = Math.min(buf.length, 8000);
+  for (let i = 0; i < max; i += 1) {
+    if (buf[i] === 0) return true;
+  }
+  return false;
+}
+
 async function fetchJson(url, options) {
   const res = await fetch(url, options);
   const text = await res.text();
@@ -124,14 +153,25 @@ async function ensureCollection() {
   }
 }
 
-async function deleteBySource(source) {
+async function deleteByFilter(filter) {
   const url = `${cfg.qdrantUrl}/collections/${cfg.collection}/points/delete?wait=true`;
   await fetchJson(url, {
     method: "POST",
     headers: qdrantHeaders(),
-    body: JSON.stringify({
-      filter: { must: [{ key: "source", match: { value: source } }] },
-    }),
+    body: JSON.stringify({ filter }),
+  });
+}
+
+async function deleteBySource(source) {
+  await deleteByFilter({ must: [{ key: "source", match: { value: source } }] });
+}
+
+async function deleteByKindAndProject(kind, projectId) {
+  await deleteByFilter({
+    must: [
+      { key: "kind", match: { value: kind } },
+      { key: "project_id", match: { value: projectId } },
+    ],
   });
 }
 
@@ -171,7 +211,9 @@ async function collectMemoryFiles() {
 
   try {
     const entries = await fs.readdir(MEMORY_DIR, { withFileTypes: true });
-    for (const e of entries.filter((x) => x.isFile() && x.name.endsWith(".md")).sort((a, b) => a.name.localeCompare(b.name))) {
+    for (const e of entries
+      .filter((x) => x.isFile() && x.name.endsWith(".md"))
+      .sort((a, b) => a.name.localeCompare(b.name))) {
       const p = path.join(MEMORY_DIR, e.name);
       if (!files.includes(p)) files.push(p);
     }
@@ -180,6 +222,158 @@ async function collectMemoryFiles() {
   }
 
   return files;
+}
+
+function parseCsvPaths(value) {
+  return value
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map((p) => ({ id: path.basename(p), path: p, enabled: true }));
+}
+
+async function loadCodeProjects() {
+  const projects = [];
+
+  if (cfg.codeProjectPaths.trim()) {
+    projects.push(...parseCsvPaths(cfg.codeProjectPaths));
+  }
+
+  try {
+    const raw = await fs.readFile(cfg.codeProjectsFile, "utf8");
+    const parsed = JSON.parse(raw);
+    const fromFile = Array.isArray(parsed?.projects) ? parsed.projects : [];
+    for (const p of fromFile) {
+      if (!p || typeof p !== "object") continue;
+      const projectPath = String(p.path || "").trim();
+      if (!projectPath) continue;
+      projects.push({
+        id: String(p.id || path.basename(projectPath)).trim() || path.basename(projectPath),
+        path: projectPath,
+        enabled: p.enabled !== false,
+      });
+    }
+  } catch {
+    // no projects file is fine
+  }
+
+  const seen = new Set();
+  const out = [];
+  for (const p of projects) {
+    if (!p.enabled) continue;
+    const abs = path.isAbsolute(p.path) ? p.path : path.resolve(ROOT_DIR, p.path);
+    const key = `${p.id}::${abs}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    try {
+      const st = await fs.stat(abs);
+      if (!st.isDirectory()) continue;
+      out.push({ id: p.id, root: abs });
+    } catch {
+      // missing path, skip
+    }
+  }
+  return out;
+}
+
+async function* walkProjectFiles(projectRoot) {
+  const stack = [projectRoot];
+  while (stack.length) {
+    const dir = stack.pop();
+    const entries = await fs.readdir(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      const abs = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (cfg.codeIgnoreDirs.has(entry.name)) continue;
+        stack.push(abs);
+        continue;
+      }
+      if (!entry.isFile()) continue;
+
+      const ext = path.extname(entry.name).toLowerCase();
+      if (!cfg.codeExtensions.has(ext)) continue;
+
+      let st;
+      try {
+        st = await fs.stat(abs);
+      } catch {
+        continue;
+      }
+      if (st.size > cfg.codeMaxFileBytes) continue;
+
+      yield abs;
+    }
+  }
+}
+
+async function collectCodeDocuments(project) {
+  const docs = [];
+  let scanned = 0;
+
+  for await (const abs of walkProjectFiles(project.root)) {
+    if (scanned >= cfg.codeMaxFiles) break;
+    scanned += 1;
+
+    let buf;
+    try {
+      buf = await fs.readFile(abs);
+    } catch {
+      continue;
+    }
+
+    if (isLikelyBinary(buf)) continue;
+    const text = buf.toString("utf8");
+    if (!text.trim()) continue;
+
+    const rel = path.relative(project.root, abs);
+    const source = `code:${project.id}:${rel}`;
+    docs.push({
+      source,
+      text,
+      meta: {
+        kind: "code",
+        project_id: project.id,
+        project_root: project.root,
+        rel_path: rel,
+      },
+    });
+  }
+
+  return docs;
+}
+
+async function indexDocuments(docs) {
+  let totalChunks = 0;
+  const points = [];
+
+  for (const doc of docs) {
+    const chunks = chunkText(doc.text, cfg.chunkChars);
+    totalChunks += chunks.length;
+
+    for (let i = 0; i < chunks.length; i += 1) {
+      const text = chunks[i];
+      const vector = await embed(text);
+      const id = hexToUuid(sha256(`${doc.source}\n${i}\n${text}`));
+      points.push({
+        id,
+        vector,
+        payload: {
+          source: doc.source,
+          chunk_index: i,
+          text,
+          updated_at: new Date().toISOString(),
+          ...(doc.meta || {}),
+        },
+      });
+
+      if (points.length >= cfg.batchSize) {
+        await upsertPoints(points.splice(0, points.length));
+      }
+    }
+  }
+
+  if (points.length) await upsertPoints(points);
+  return totalChunks;
 }
 
 async function writeState(summary) {
@@ -202,51 +396,53 @@ async function main() {
   log(`Ensuring Qdrant collection '${cfg.collection}'...`);
   await ensureCollection();
 
-  const files = await collectMemoryFiles();
-  if (!files.length) {
-    await writeState({ files_indexed: 0, chunks_indexed: 0 });
-    log("No memory files found.");
-    return;
-  }
+  const memoryFiles = await collectMemoryFiles();
+  let memoryChunks = 0;
 
-  let totalChunks = 0;
-  log(`Indexing ${files.length} file(s)...`);
-
-  for (const file of files) {
-    const source = path.relative(ROOT_DIR, file);
-    log(`- Refresh source: ${source}`);
-    await deleteBySource(source);
-
-    const raw = await fs.readFile(file, "utf8");
-    const chunks = chunkText(raw, cfg.chunkChars);
-    totalChunks += chunks.length;
-
-    const points = [];
-    for (let i = 0; i < chunks.length; i += 1) {
-      const text = chunks[i];
-      const vector = await embed(text);
-      const id = hexToUuid(sha256(`${source}\n${i}\n${text}`));
-      points.push({
-        id,
-        vector,
-        payload: {
-          source,
-          chunk_index: i,
-          text,
-          updated_at: new Date().toISOString(),
-        },
-      });
-
-      if (points.length >= cfg.batchSize) {
-        await upsertPoints(points.splice(0, points.length));
-      }
+  if (memoryFiles.length) {
+    log(`Indexing memory files (${memoryFiles.length})...`);
+    for (const file of memoryFiles) {
+      const source = path.relative(ROOT_DIR, file);
+      log(`- Refresh memory source: ${source}`);
+      await deleteBySource(source);
+      const raw = await fs.readFile(file, "utf8");
+      const docs = [{ source, text: raw, meta: { kind: "memory" } }];
+      memoryChunks += await indexDocuments(docs);
     }
-
-    if (points.length) await upsertPoints(points);
   }
 
-  await writeState({ files_indexed: files.length, chunks_indexed: totalChunks });
-  log(`Qdrant indexing complete. files=${files.length}, chunks=${totalChunks}`);
+  let codeProjectsIndexed = 0;
+  let codeFilesIndexed = 0;
+  let codeChunksIndexed = 0;
+
+  if (cfg.codeIndexEnabled) {
+    const projects = await loadCodeProjects();
+    log(`Code indexing enabled. projects=${projects.length}`);
+
+    for (const project of projects) {
+      log(`- Refresh project: ${project.id} (${project.root})`);
+      await deleteByKindAndProject("code", project.id);
+      const docs = await collectCodeDocuments(project);
+      codeProjectsIndexed += 1;
+      codeFilesIndexed += docs.length;
+      log(`  files indexed: ${docs.length}`);
+      codeChunksIndexed += await indexDocuments(docs);
+    }
+  }
+
+  await writeState({
+    memory_files_indexed: memoryFiles.length,
+    memory_chunks_indexed: memoryChunks,
+    code_projects_indexed: codeProjectsIndexed,
+    code_files_indexed: codeFilesIndexed,
+    code_chunks_indexed: codeChunksIndexed,
+    files_indexed: memoryFiles.length + codeFilesIndexed,
+    chunks_indexed: memoryChunks + codeChunksIndexed,
+  });
+
+  log(
+    `Qdrant indexing complete. memory_files=${memoryFiles.length}, memory_chunks=${memoryChunks}, code_projects=${codeProjectsIndexed}, code_files=${codeFilesIndexed}, code_chunks=${codeChunksIndexed}`,
+  );
 }
 
 main().catch((err) => {

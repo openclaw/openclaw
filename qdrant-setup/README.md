@@ -13,6 +13,7 @@ This repository integration adds a **non-breaking sidecar** for memory indexing/
 - `scripts/qdrant-memory-run-from-env.sh`
 - `scripts/qdrant-memory-query.mjs`
 - `scripts/qdrant-memory-context.sh`
+- `qdrant-setup/projects.example.json`
 
 ## Env setup
 1. Copy template:
@@ -27,6 +28,14 @@ cp qdrant-setup/qdrant-memory.env.example qdrant-setup/qdrant-memory.env
 - `OPENCLAW_QDRANT_EMBEDDING_MODEL=<your model>`
 - `OPENCLAW_QDRANT_EMBEDDING_DIM=<vector dimension>`
 
+Optional codebase indexing:
+- `OPENCLAW_QDRANT_CODE_INDEX_ENABLED=true`
+- Copy projects template:
+```bash
+cp qdrant-setup/projects.example.json qdrant-setup/projects.json
+```
+- Edit `qdrant-setup/projects.json` with your project paths.
+
 ## Manual operations
 ### Index now
 ```bash
@@ -37,6 +46,12 @@ scripts/qdrant-memory-run-from-env.sh
 ```bash
 set -a; source qdrant-setup/qdrant-memory.env; set +a
 scripts/qdrant-memory-query.mjs --limit 5 "appbuilder build success"
+```
+
+### Semantic query scoped to one project
+```bash
+set -a; source qdrant-setup/qdrant-memory.env; set +a
+scripts/qdrant-memory-query.mjs --kind code --project app-builder --limit 5 "build pipeline"
 ```
 
 ### Context retrieval (policy-aware)
@@ -60,6 +75,11 @@ Optional full disable:
 OPENCLAW_QDRANT_MEMORY_ENABLED=false
 ```
 
+Project-targeted context retrieval:
+```env
+OPENCLAW_QDRANT_ACTIVE_PROJECT=app-builder
+```
+
 ## Cron example (optional)
 ```cron
 */30 * * * * cd /path/to/openclaw && /usr/bin/flock -n /tmp/openclaw-qdrant-index.lock ./scripts/qdrant-memory-run-from-env.sh >> ./memory/cron-qdrant-memory.log 2>&1
@@ -69,4 +89,8 @@ OPENCLAW_QDRANT_MEMORY_ENABLED=false
 - `scripts/qdrant-memory-index.mjs` handles:
   - deterministic UUID point IDs for Qdrant
   - idempotent collection create (`409 already exists` is accepted)
+- Code indexing stores payload metadata:
+  - `kind=code`
+  - `project_id=<id>`
+  - `rel_path=<project-relative-file-path>`
 - If embedding model changes dimension, update `OPENCLAW_QDRANT_EMBEDDING_DIM` and re-index.

@@ -1,0 +1,19 @@
+{
+  "projects": [
+    {
+      "id": "app-builder",
+      "path": "/root/clawd/app-builder",
+      "enabled": true
+    },
+    {
+      "id": "cbt-app",
+      "path": "/root/clawd/CBT-App",
+      "enabled": true
+    },
+    {
+      "id": "wa-coffee-shop",
+      "path": "/root/wa-coffee-shop",
+      "enabled": false
+    }
+  ]
+}
