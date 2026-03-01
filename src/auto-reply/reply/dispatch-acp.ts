@@ -11,6 +11,7 @@ import { readAcpSessionEntry } from "../../acp/runtime/session-meta.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import { logVerbose } from "../../globals.js";
+import { runMessageAction } from "../../infra/outbound/message-action-runner.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import { generateSecureUuid } from "../../infra/secure-random.js";
 import { prefixSystemMessage } from "../../infra/system-message.js";
@@ -157,6 +158,7 @@ export async function tryDispatchAcpReply(params: {
   originatingTo?: string;
   shouldSendToolSummaries: boolean;
   bypassForCommand: boolean;
+  onReplyStart?: () => Promise<void> | void;
   recordProcessed: DispatchProcessedRecorder;
   markIdle: (reason: string) => void;
 }): Promise<AcpDispatchAttemptResult | null> {
@@ -182,9 +184,69 @@ export async function tryDispatchAcpReply(params: {
   let queuedFinal = false;
   let acpAccumulatedBlockText = "";
   let acpBlockCount = 0;
+  let startedReplyLifecycle = false;
+  const toolUpdateMessageById = new Map<
+    string,
+    {
+      channel: string;
+      accountId?: string;
+      to: string;
+      threadId?: string | number;
+      messageId: string;
+    }
+  >();
+
+  const ensureReplyLifecycleStarted = async () => {
+    if (startedReplyLifecycle) {
+      return;
+    }
+    startedReplyLifecycle = true;
+    await params.onReplyStart?.();
+  };
+
+  const tryEditToolUpdate = async (payload: ReplyPayload, toolCallId: string): Promise<boolean> => {
+    if (!params.shouldRouteToOriginating || !params.originatingChannel || !params.originatingTo) {
+      return false;
+    }
+    const handle = toolUpdateMessageById.get(toolCallId);
+    if (!handle?.messageId) {
+      return false;
+    }
+    const message = payload.text?.trim();
+    if (!message) {
+      return false;
+    }
+    try {
+      await runMessageAction({
+        cfg: params.cfg,
+        action: "edit",
+        params: {
+          channel: handle.channel,
+          accountId: handle.accountId,
+          to: handle.to,
+          threadId: handle.threadId,
+          messageId: handle.messageId,
+          message,
+        },
+        sessionKey: params.ctx.SessionKey,
+      });
+      routedCounts.tool += 1;
+      return true;
+    } catch (error) {
+      logVerbose(
+        `dispatch-acp: tool message edit failed for ${toolCallId}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return false;
+    }
+  };
+
   const deliverAcpPayload = async (
     kind: ReplyDispatchKind,
     payload: ReplyPayload,
+    meta?: {
+      toolCallId?: string;
+      allowEdit?: boolean;
+    },
   ): Promise<boolean> => {
     if (kind === "block" && payload.text?.trim()) {
       if (acpAccumulatedBlockText.length > 0) {
@@ -192,6 +254,9 @@ export async function tryDispatchAcpReply(params: {
       }
       acpAccumulatedBlockText += payload.text;
       acpBlockCount += 1;
+    }
+    if ((payload.text?.trim() ?? "").length > 0 || payload.mediaUrl || payload.mediaUrls?.length) {
+      await ensureReplyLifecycleStarted();
     }
 
     const ttsPayload = await maybeApplyTtsToPayload({
@@ -204,6 +269,13 @@ export async function tryDispatchAcpReply(params: {
     });
 
     if (params.shouldRouteToOriginating && params.originatingChannel && params.originatingTo) {
+      const toolCallId = meta?.toolCallId?.trim();
+      if (kind === "tool" && meta?.allowEdit === true && toolCallId) {
+        const edited = await tryEditToolUpdate(ttsPayload, toolCallId);
+        if (edited) {
+          return true;
+        }
+      }
       const result = await routeReply({
         payload: ttsPayload,
         channel: params.originatingChannel,
@@ -218,6 +290,15 @@ export async function tryDispatchAcpReply(params: {
           `dispatch-acp: route-reply (acp/${kind}) failed: ${result.error ?? "unknown error"}`,
         );
         return false;
+      }
+      if (kind === "tool" && meta?.toolCallId && result.messageId) {
+        toolUpdateMessageById.set(meta.toolCallId, {
+          channel: params.originatingChannel,
+          accountId: params.ctx.AccountId,
+          to: params.originatingTo,
+          ...(params.ctx.MessageThreadId != null ? { threadId: params.ctx.MessageThreadId } : {}),
+          messageId: result.messageId,
+        });
       }
       routedCounts[kind] += 1;
       return true;
