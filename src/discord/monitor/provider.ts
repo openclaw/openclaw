@@ -523,6 +523,14 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
         publicKey: "a",
         token,
         autoDeploy: false,
+        // Increase listener timeout to 2 minutes to avoid timeout errors during
+        // long-running operations like LLM inference in cron jobs and message handlers.
+        // The default 30s timeout in Carbon's EventQueue was causing duplicate
+        // deliveries when listeners took too long to process.
+        // See: https://github.com/openclaw/openclaw/issues/30816
+        eventQueue: {
+          listenerTimeout: 120_000,
+        },
       },
       {
         commands,
