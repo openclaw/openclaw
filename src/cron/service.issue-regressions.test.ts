@@ -1360,7 +1360,6 @@ describe("Cron issue regressions", () => {
       runIsolatedAgentJob: createDefaultIsolatedRunner(),
     });
 
-    const result = await executeJobCore(state, mainJob, abortController.signal);
     setTimeout(() => {
       abortController.abort();
     }, 10);
