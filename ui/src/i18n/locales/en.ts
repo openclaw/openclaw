@@ -111,6 +111,9 @@ export const en: TranslationMap = {
     refreshTitle: "Refresh chat data",
     thinkingToggle: "Toggle assistant thinking/working output",
     focusToggle: "Toggle focus mode (hide sidebar + page header)",
+    hideCronSessions: "Hide cron sessions",
+    showCronSessions: "Show cron sessions",
+    showCronSessionsHidden: "Show cron sessions ({count} hidden)",
     onboardingDisabled: "Disabled during onboarding",
   },
   languages: {
