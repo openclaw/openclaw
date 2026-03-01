@@ -89,6 +89,9 @@ async function expectExplicitTelegramTargetAnnounce(params: {
     expect(announceArgs?.requesterOrigin?.to).toBe("123");
     expect(announceArgs?.roundOneReply).toBe(params.expectedText);
     expect(announceArgs?.bestEffortDeliver).toBe(false);
+    expect((announceArgs as { expectsCompletionMessage?: boolean })?.expectsCompletionMessage).toBe(
+      true,
+    );
     expect(deps.sendMessageTelegram).not.toHaveBeenCalled();
   });
 }
