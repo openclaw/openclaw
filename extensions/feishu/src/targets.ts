@@ -24,11 +24,11 @@ export function normalizeFeishuTarget(raw: string): string | null {
     return null;
   }
 
-  // Strip optional provider prefix (e.g., "feishu:")
+  // Strip optional provider prefix (e.g., "feishu:") - handle repeated prefixes from forwarded hops
   let remaining = trimmed;
   const lowered = trimmed.toLowerCase();
-  if (lowered.startsWith("feishu:")) {
-    remaining = trimmed.slice("feishu:".length).trim();
+  while (lowered.startsWith("feishu:")) {
+    remaining = remaining.slice("feishu:".length).trim();
     if (!remaining) {
       return null;
     }
