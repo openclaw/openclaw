@@ -1,6 +1,7 @@
 use crate::services::runtime::BackgroundService;
 use async_trait::async_trait;
 use mdns_sd::{ServiceDaemon, ServiceEvent};
+use std::collections::HashSet;
 use std::net::IpAddr;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -33,6 +34,8 @@ impl DiscoveryService {
                 Err(_) => return,
             };
 
+            let local_hostnames = local_hostname_aliases();
+
             let receiver = match mdns.browse("_openclaw-gw._tcp.local.") {
                 Ok(r) => r,
                 Err(_) => return,
@@ -48,18 +51,20 @@ impl DiscoveryService {
                     }
 
                     if let ServiceEvent::ServiceResolved(info) = event {
-                        if let Some(address) = info
-                            .get_addresses_v4()
+                        let host = info.get_hostname().to_string();
+                        let addresses: Vec<String> = info
+                            .get_addresses()
                             .iter()
-                            .next()
-                            .map(|ip| ip.to_string())
-                        {
+                            .map(ToString::to_string)
+                            .collect();
+
+                        for address in addresses {
                             let payload = serde_json::json!({
-                                "hostname": info.get_hostname(),
+                                "hostname": host,
                                 "port": info.get_port(),
                                 "address": address,
                                 "fullname": info.get_fullname(),
-                                "type": classify_gateway(&address),
+                                "type": classify_gateway(&address, &host, &local_hostnames),
                             });
 
                             let _ = app_clone.emit("gateway_found", payload);
@@ -79,7 +84,46 @@ impl DiscoveryService {
     }
 }
 
-fn classify_gateway(address: &str) -> String {
+fn normalize_hostname(raw: &str) -> String {
+    raw.trim()
+        .trim_end_matches('.')
+        .trim_end_matches(".local")
+        .to_ascii_lowercase()
+}
+
+fn local_hostname_aliases() -> HashSet<String> {
+    let mut aliases = HashSet::new();
+    if let Ok(hostname) = hostname::get() {
+        if let Some(raw) = hostname.to_str() {
+            let normalized = normalize_hostname(raw);
+            if !normalized.is_empty() {
+                aliases.insert(normalized.clone());
+                if let Some((short, _)) = normalized.split_once('.') {
+                    aliases.insert(short.to_string());
+                }
+            }
+        }
+    }
+    aliases
+}
+
+fn is_local_hostname(hostname: &str, local_hostnames: &HashSet<String>) -> bool {
+    if local_hostnames.is_empty() {
+        return false;
+    }
+
+    let normalized = normalize_hostname(hostname);
+    if normalized.is_empty() {
+        return false;
+    }
+
+    local_hostnames.contains(&normalized)
+        || normalized
+            .split_once('.')
+            .is_some_and(|(short, _)| local_hostnames.contains(short))
+}
+
+fn classify_gateway(address: &str, hostname: &str, local_hostnames: &HashSet<String>) -> String {
     if let Ok(ip) = address.parse::<IpAddr>() {
         match ip {
             IpAddr::V4(v4) => {
@@ -87,7 +131,10 @@ fn classify_gateway(address: &str) -> String {
                 if v4.is_loopback() {
                     return "local".into();
                 }
-                if octets[0] == 172 && (16..=31).contains(&octets[1]) {
+                if is_local_hostname(hostname, local_hostnames)
+                    && octets[0] == 172
+                    && (16..=31).contains(&octets[1])
+                {
                     return "wsl".into();
                 }
                 if v4.is_private() {

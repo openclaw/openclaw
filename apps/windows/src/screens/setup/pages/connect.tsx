@@ -183,6 +183,12 @@ export default function SetupConnectPage() {
     setSshPort(22);
     setTokenError("");
 
+    const canUseLocalToken = gatewayData.type === "local" || gatewayData.type === "wsl";
+    if (!canUseLocalToken) {
+      setAskTokenDialog(true);
+      return;
+    }
+
     try {
       // Try local token first; only prompt if no token is available.
       const token = await invoke<string>("get_gateway_token");
