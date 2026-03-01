@@ -88,16 +88,7 @@ describe("DiscordMessageListener", () => {
     };
   }
 
-  async function expectPending(promise: Promise<unknown>) {
-    let resolved = false;
-    void promise.then(() => {
-      resolved = true;
-    });
-    await Promise.resolve();
-    expect(resolved).toBe(false);
-  }
-
-  it("awaits the handler before returning", async () => {
+  it("returns immediately while handler continues in background", async () => {
     let handlerResolved = false;
     const deferred = createDeferred();
     const handler = vi.fn(async () => {
@@ -111,17 +102,54 @@ describe("DiscordMessageListener", () => {
       {} as unknown as import("@buape/carbon").Client,
     );
 
-    // Handler should be called but not yet resolved
-    expect(handler).toHaveBeenCalledOnce();
+    // handle() returns immediately while the background queue starts on the next tick.
+    await expect(handlePromise).resolves.toBeUndefined();
+    await vi.waitFor(() => {
+      expect(handler).toHaveBeenCalledOnce();
+    });
     expect(handlerResolved).toBe(false);
-    await expectPending(handlePromise);
 
-    // Release the handler
+    // Release and let background handler finish.
     deferred.resolve();
-
-    // Now await handle() - it should complete only after handler resolves
-    await handlePromise;
+    await Promise.resolve();
     expect(handlerResolved).toBe(true);
+  });
+
+  it("queues subsequent events until prior message handling completes", async () => {
+    const first = createDeferred();
+    const second = createDeferred();
+    let runCount = 0;
+    const handler = vi.fn(async () => {
+      runCount += 1;
+      if (runCount === 1) {
+        await first.promise;
+        return;
+      }
+      await second.promise;
+    });
+    const listener = new DiscordMessageListener(handler);
+
+    await expect(
+      listener.handle(
+        {} as unknown as import("./monitor/listeners.js").DiscordMessageEvent,
+        {} as unknown as import("@buape/carbon").Client,
+      ),
+    ).resolves.toBeUndefined();
+    await expect(
+      listener.handle(
+        {} as unknown as import("./monitor/listeners.js").DiscordMessageEvent,
+        {} as unknown as import("@buape/carbon").Client,
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    first.resolve();
+    await vi.waitFor(() => {
+      expect(handler).toHaveBeenCalledTimes(2);
+    });
+
+    second.resolve();
+    await Promise.resolve();
   });
 
   it("logs handler failures", async () => {
@@ -138,9 +166,9 @@ describe("DiscordMessageListener", () => {
       {} as unknown as import("./monitor/listeners.js").DiscordMessageEvent,
       {} as unknown as import("@buape/carbon").Client,
     );
-    await Promise.resolve();
-
-    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining("discord handler failed"));
+    await vi.waitFor(() => {
+      expect(logger.error).toHaveBeenCalledWith(expect.stringContaining("discord handler failed"));
+    });
   });
 
   it("logs slow handlers after the threshold", async () => {
@@ -156,21 +184,20 @@ describe("DiscordMessageListener", () => {
       } as unknown as ReturnType<typeof import("../logging/subsystem.js").createSubsystemLogger>;
       const listener = new DiscordMessageListener(handler, logger);
 
-      // Start handle() but don't await yet
+      // handle() should release immediately.
       const handlePromise = listener.handle(
         {} as unknown as import("./monitor/listeners.js").DiscordMessageEvent,
         {} as unknown as import("@buape/carbon").Client,
       );
-      await expectPending(handlePromise);
+      await expect(handlePromise).resolves.toBeUndefined();
+      expect(logger.warn).not.toHaveBeenCalled();
 
-      // Advance time past the slow listener threshold
+      // Advance wall clock past the slow listener threshold.
       vi.setSystemTime(31_000);
 
-      // Release the handler
+      // Release the background handler and allow slow-log finalizer to run.
       deferred.resolve();
-
-      // Now await handle() - it should complete and log the slow listener
-      await handlePromise;
+      await Promise.resolve();
 
       expect(logger.warn).toHaveBeenCalled();
       const warnMock = logger.warn as unknown as { mock: { calls: unknown[][] } };
