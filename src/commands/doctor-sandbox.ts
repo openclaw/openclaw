@@ -11,6 +11,8 @@ import { runCommandWithTimeout, runExec } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { note } from "../terminal/note.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
+// @see src/commands/model-default.ts for patchAgentDefaults
+import { patchAgentDefaults } from "./model-default.js";
 
 type SandboxScriptInfo = {
   scriptPath: string;
@@ -100,41 +102,27 @@ function resolveSandboxBrowserImage(cfg: OpenClawConfig): string {
 }
 
 function updateSandboxDockerImage(cfg: OpenClawConfig, image: string): OpenClawConfig {
-  return {
-    ...cfg,
-    agents: {
-      ...cfg.agents,
-      defaults: {
-        ...cfg.agents?.defaults,
-        sandbox: {
-          ...cfg.agents?.defaults?.sandbox,
-          docker: {
-            ...cfg.agents?.defaults?.sandbox?.docker,
-            image,
-          },
-        },
+  return patchAgentDefaults(cfg, {
+    sandbox: {
+      ...cfg.agents?.defaults?.sandbox,
+      docker: {
+        ...cfg.agents?.defaults?.sandbox?.docker,
+        image,
       },
     },
-  };
+  });
 }
 
 function updateSandboxBrowserImage(cfg: OpenClawConfig, image: string): OpenClawConfig {
-  return {
-    ...cfg,
-    agents: {
-      ...cfg.agents,
-      defaults: {
-        ...cfg.agents?.defaults,
-        sandbox: {
-          ...cfg.agents?.defaults?.sandbox,
-          browser: {
-            ...cfg.agents?.defaults?.sandbox?.browser,
-            image,
-          },
-        },
+  return patchAgentDefaults(cfg, {
+    sandbox: {
+      ...cfg.agents?.defaults?.sandbox,
+      browser: {
+        ...cfg.agents?.defaults?.sandbox?.browser,
+        image,
       },
     },
-  };
+  });
 }
 
 type SandboxImageCheck = {

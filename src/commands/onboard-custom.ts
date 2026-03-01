@@ -12,6 +12,8 @@ import {
 } from "../utils/normalize-secret-input.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { ensureApiKeyFromEnvOrPrompt } from "./auth-choice.apply-helpers.js";
+// @see src/commands/model-default.ts for patchAgentDefaults
+import { patchAgentDefaults } from "./model-default.js";
 import { applyPrimaryModel } from "./model-picker.js";
 import { normalizeAlias } from "./models/shared.js";
 import type { SecretInputMode } from "./onboard-types.js";
@@ -641,22 +643,15 @@ export function applyCustomApiConfig(params: ApplyCustomApiConfigParams): Custom
 
   config = applyPrimaryModel(config, modelRef);
   if (alias) {
-    config = {
-      ...config,
-      agents: {
-        ...config.agents,
-        defaults: {
-          ...config.agents?.defaults,
-          models: {
-            ...config.agents?.defaults?.models,
-            [modelRef]: {
-              ...config.agents?.defaults?.models?.[modelRef],
-              alias,
-            },
-          },
+    config = patchAgentDefaults(config, {
+      models: {
+        ...config.agents?.defaults?.models,
+        [modelRef]: {
+          ...config.agents?.defaults?.models?.[modelRef],
+          alias,
         },
       },
-    };
+    });
   }
 
   return {

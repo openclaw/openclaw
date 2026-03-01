@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/config.js";
-import type { AgentModelListConfig } from "../config/types.js";
+// @see src/commands/model-default.ts for patchAgentDefaultModel and resolvePrimaryModel
+import { patchAgentDefaultModel, resolvePrimaryModel } from "./model-default.js";
 
 export const OPENAI_CODEX_DEFAULT_MODEL = "openai-codex/gpt-5.3-codex";
 
@@ -18,16 +19,6 @@ function shouldSetOpenAICodexModel(model?: string): boolean {
   return normalized === "gpt" || normalized === "gpt-mini";
 }
 
-function resolvePrimaryModel(model?: AgentModelListConfig | string): string | undefined {
-  if (typeof model === "string") {
-    return model;
-  }
-  if (model && typeof model === "object" && typeof model.primary === "string") {
-    return model.primary;
-  }
-  return undefined;
-}
-
 export function applyOpenAICodexModelDefault(cfg: OpenClawConfig): {
   next: OpenClawConfig;
   changed: boolean;
@@ -37,22 +28,7 @@ export function applyOpenAICodexModelDefault(cfg: OpenClawConfig): {
     return { next: cfg, changed: false };
   }
   return {
-    next: {
-      ...cfg,
-      agents: {
-        ...cfg.agents,
-        defaults: {
-          ...cfg.agents?.defaults,
-          model:
-            cfg.agents?.defaults?.model && typeof cfg.agents.defaults.model === "object"
-              ? {
-                  ...cfg.agents.defaults.model,
-                  primary: OPENAI_CODEX_DEFAULT_MODEL,
-                }
-              : { primary: OPENAI_CODEX_DEFAULT_MODEL },
-        },
-      },
-    },
+    next: patchAgentDefaultModel(cfg, { primary: OPENAI_CODEX_DEFAULT_MODEL }),
     changed: true,
   };
 }

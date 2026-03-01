@@ -1,6 +1,8 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { toAgentModelListLike } from "../config/model-input.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
+// @see src/commands/model-default.ts for patchAgentDefaults and patchAgentDefaultModel
+import { patchAgentDefaultModel, patchAgentDefaults } from "./model-default.js";
 import {
   applyAgentDefaultModelPrimary,
   applyOnboardAuthAgentModelsAndProviders,
@@ -94,19 +96,10 @@ export function applyMinimaxHostedConfig(
   params?: { baseUrl?: string },
 ): OpenClawConfig {
   const next = applyMinimaxHostedProviderConfig(cfg, params);
-  return {
-    ...next,
-    agents: {
-      ...next.agents,
-      defaults: {
-        ...next.agents?.defaults,
-        model: {
-          ...toAgentModelListLike(next.agents?.defaults?.model),
-          primary: MINIMAX_HOSTED_MODEL_REF,
-        },
-      },
-    },
-  };
+  return patchAgentDefaultModel(next, {
+    ...toAgentModelListLike(next.agents?.defaults?.model),
+    primary: MINIMAX_HOSTED_MODEL_REF,
+  });
 }
 
 // MiniMax Anthropic-compatible API (platform.minimax.io/anthropic)
@@ -194,14 +187,7 @@ function applyMinimaxApiProviderConfigWithBaseUrl(
   };
 
   return {
-    ...cfg,
-    agents: {
-      ...cfg.agents,
-      defaults: {
-        ...cfg.agents?.defaults,
-        models,
-      },
-    },
+    ...patchAgentDefaults(cfg, { models }),
     models: { mode: cfg.models?.mode ?? "merge", providers },
   };
 }

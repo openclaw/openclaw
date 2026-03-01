@@ -3,6 +3,8 @@ import {
   resolveCloudflareAiGatewayBaseUrl,
 } from "../agents/cloudflare-ai-gateway.js";
 import type { OpenClawConfig } from "../config/config.js";
+// @see src/commands/model-default.ts for patchAgentDefaults
+import { patchAgentDefaults } from "./model-default.js";
 import {
   applyAgentDefaultModelPrimary,
   applyProviderConfigWithDefaultModel,
@@ -19,16 +21,7 @@ export function applyVercelAiGatewayProviderConfig(cfg: OpenClawConfig): OpenCla
     alias: models[VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF]?.alias ?? "Vercel AI Gateway",
   };
 
-  return {
-    ...cfg,
-    agents: {
-      ...cfg.agents,
-      defaults: {
-        ...cfg.agents?.defaults,
-        models,
-      },
-    },
-  };
+  return patchAgentDefaults(cfg, { models });
 }
 
 export function applyCloudflareAiGatewayProviderConfig(
@@ -56,16 +49,7 @@ export function applyCloudflareAiGatewayProviderConfig(
         : undefined;
 
   if (!baseUrl) {
-    return {
-      ...cfg,
-      agents: {
-        ...cfg.agents,
-        defaults: {
-          ...cfg.agents?.defaults,
-          models,
-        },
-      },
-    };
+    return patchAgentDefaults(cfg, { models });
   }
 
   return applyProviderConfigWithDefaultModel(cfg, {

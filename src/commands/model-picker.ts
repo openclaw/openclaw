@@ -12,6 +12,8 @@ import {
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { WizardPrompter, WizardSelectOption } from "../wizard/prompts.js";
+// @see src/commands/model-default.ts for patchAgentDefaults
+import { patchAgentDefaults } from "./model-default.js";
 import { formatTokenK } from "./models/shared.js";
 import { OPENAI_CODEX_DEFAULT_MODEL } from "./openai-codex-model-default.js";
 import { promptAndConfigureVllm } from "./vllm-setup.js";
@@ -467,23 +469,16 @@ export function applyPrimaryModel(cfg: OpenClawConfig, model: string): OpenClawC
     typeof existingModel === "object" && existingModel !== null && "fallbacks" in existingModel
       ? (existingModel as { fallbacks?: string[] }).fallbacks
       : undefined;
-  return {
-    ...cfg,
-    agents: {
-      ...cfg.agents,
-      defaults: {
-        ...defaults,
-        model: {
-          ...(fallbacks ? { fallbacks } : undefined),
-          primary: model,
-        },
-        models: {
-          ...existingModels,
-          [model]: existingModels?.[model] ?? {},
-        },
-      },
+  return patchAgentDefaults(cfg, {
+    model: {
+      ...(fallbacks ? { fallbacks } : undefined),
+      primary: model,
     },
-  };
+    models: {
+      ...existingModels,
+      [model]: existingModels?.[model] ?? {},
+    },
+  });
 }
 
 export function applyModelAllowlist(cfg: OpenClawConfig, models: string[]): OpenClawConfig {
@@ -509,16 +504,7 @@ export function applyModelAllowlist(cfg: OpenClawConfig, models: string[]): Open
     nextModels[key] = existingModels[key] ?? {};
   }
 
-  return {
-    ...cfg,
-    agents: {
-      ...cfg.agents,
-      defaults: {
-        ...defaults,
-        models: nextModels,
-      },
-    },
-  };
+  return patchAgentDefaults(cfg, { models: nextModels });
 }
 
 export function applyModelFallbacksFromSelection(
@@ -550,18 +536,11 @@ export function applyModelFallbacksFromSelection(
         : undefined;
 
   const fallbacks = normalized.filter((key) => key !== resolvedKey);
-  return {
-    ...cfg,
-    agents: {
-      ...cfg.agents,
-      defaults: {
-        ...defaults,
-        model: {
-          ...(typeof existingModel === "object" ? existingModel : undefined),
-          primary: existingPrimary ?? resolvedKey,
-          fallbacks,
-        },
-      },
+  return patchAgentDefaults(cfg, {
+    model: {
+      ...(typeof existingModel === "object" ? existingModel : undefined),
+      primary: existingPrimary ?? resolvedKey,
+      fallbacks,
     },
-  };
+  });
 }

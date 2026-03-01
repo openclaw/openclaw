@@ -5,6 +5,8 @@ import type {
   ModelDefinitionConfig,
   ModelProviderConfig,
 } from "../config/types.models.js";
+// @see src/commands/model-default.ts for patchAgentDefaults and patchAgentDefaultModel
+import { patchAgentDefaultModel, patchAgentDefaults } from "./model-default.js";
 
 function extractAgentDefaultModelFallbacks(model: unknown): string[] | undefined {
   if (!model || typeof model !== "object") {
@@ -25,14 +27,7 @@ export function applyOnboardAuthAgentModelsAndProviders(
   },
 ): OpenClawConfig {
   return {
-    ...cfg,
-    agents: {
-      ...cfg.agents,
-      defaults: {
-        ...cfg.agents?.defaults,
-        models: params.agentModels,
-      },
-    },
+    ...patchAgentDefaults(cfg, { models: params.agentModels }),
     models: {
       mode: cfg.models?.mode ?? "merge",
       providers: params.providers,
@@ -45,19 +40,10 @@ export function applyAgentDefaultModelPrimary(
   primary: string,
 ): OpenClawConfig {
   const existingFallbacks = extractAgentDefaultModelFallbacks(cfg.agents?.defaults?.model);
-  return {
-    ...cfg,
-    agents: {
-      ...cfg.agents,
-      defaults: {
-        ...cfg.agents?.defaults,
-        model: {
-          ...(existingFallbacks ? { fallbacks: existingFallbacks } : undefined),
-          primary,
-        },
-      },
-    },
-  };
+  return patchAgentDefaultModel(cfg, {
+    ...(existingFallbacks ? { fallbacks: existingFallbacks } : undefined),
+    primary,
+  });
 }
 
 export function applyProviderConfigWithDefaultModels(

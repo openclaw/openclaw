@@ -16,6 +16,8 @@ import { formatConfigIssueLines } from "../../config/issue-format.js";
 import { toAgentModelListLike } from "../../config/model-input.js";
 import type { AgentModelConfig } from "../../config/types.agents-shared.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
+// @see src/commands/model-default.ts for patchAgentDefaults
+import { patchAgentDefaults } from "../model-default.js";
 
 export const ensureFlagCompatibility = (opts: { json?: boolean; plain?: boolean }) => {
   if (opts.json && opts.plain) {
@@ -196,17 +198,10 @@ export function applyDefaultModelPrimaryUpdate(params: {
     (defaults as Record<string, unknown>)[params.field] as AgentModelConfig | undefined,
   );
 
-  return {
-    ...params.cfg,
-    agents: {
-      ...params.cfg.agents,
-      defaults: {
-        ...defaults,
-        [params.field]: mergePrimaryFallbackConfig(existing, { primary: key }),
-        models: nextModels,
-      },
-    },
-  };
+  return patchAgentDefaults(params.cfg, {
+    [params.field]: mergePrimaryFallbackConfig(existing, { primary: key }),
+    models: nextModels,
+  });
 }
 
 export { modelKey };

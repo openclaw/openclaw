@@ -1,5 +1,7 @@
 import { logConfigUpdated } from "../../config/logging.js";
 import type { RuntimeEnv } from "../../runtime.js";
+// @see src/commands/model-default.ts for patchAgentDefaults
+import { patchAgentDefaults } from "../model-default.js";
 import { loadModelsConfig } from "./load-config.js";
 import {
   ensureFlagCompatibility,
@@ -66,16 +68,7 @@ export async function modelsAliasesAddCommand(
     }
     const existing = nextModels[modelKey] ?? {};
     nextModels[modelKey] = { ...existing, alias };
-    return {
-      ...cfg,
-      agents: {
-        ...cfg.agents,
-        defaults: {
-          ...cfg.agents?.defaults,
-          models: nextModels,
-        },
-      },
-    };
+    return patchAgentDefaults(cfg, { models: nextModels });
   });
 
   logConfigUpdated(runtime);
@@ -97,16 +90,7 @@ export async function modelsAliasesRemoveCommand(aliasRaw: string, runtime: Runt
     if (!found) {
       throw new Error(`Alias not found: ${alias}`);
     }
-    return {
-      ...cfg,
-      agents: {
-        ...cfg.agents,
-        defaults: {
-          ...cfg.agents?.defaults,
-          models: nextModels,
-        },
-      },
-    };
+    return patchAgentDefaults(cfg, { models: nextModels });
   });
 
   logConfigUpdated(runtime);

@@ -1,5 +1,7 @@
 import { OPENCODE_ZEN_DEFAULT_MODEL_REF } from "../agents/opencode-zen-models.js";
 import type { OpenClawConfig } from "../config/config.js";
+// @see src/commands/model-default.ts for patchAgentDefaults
+import { patchAgentDefaults } from "./model-default.js";
 import { applyAgentDefaultModelPrimary } from "./onboard-auth.config-shared.js";
 
 export function applyOpencodeZenProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
@@ -10,16 +12,7 @@ export function applyOpencodeZenProviderConfig(cfg: OpenClawConfig): OpenClawCon
     alias: models[OPENCODE_ZEN_DEFAULT_MODEL_REF]?.alias ?? "Opus",
   };
 
-  return {
-    ...cfg,
-    agents: {
-      ...cfg.agents,
-      defaults: {
-        ...cfg.agents?.defaults,
-        models,
-      },
-    },
-  };
+  return patchAgentDefaults(cfg, { models });
 }
 
 export function applyOpencodeZenConfig(cfg: OpenClawConfig): OpenClawConfig {

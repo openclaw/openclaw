@@ -1,6 +1,8 @@
 import { toAgentModelListLike } from "../config/model-input.js";
 import { githubCopilotLoginCommand } from "../providers/github-copilot-auth.js";
 import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
+// @see src/commands/model-default.ts for patchAgentDefaultModel
+import { patchAgentDefaultModel } from "./model-default.js";
 import { applyAuthProfileConfig } from "./onboard-auth.js";
 
 export async function applyAuthChoiceGitHubCopilot(
@@ -43,19 +45,10 @@ export async function applyAuthChoiceGitHubCopilot(
 
   if (params.setDefaultModel) {
     const model = "github-copilot/gpt-4o";
-    nextConfig = {
-      ...nextConfig,
-      agents: {
-        ...nextConfig.agents,
-        defaults: {
-          ...nextConfig.agents?.defaults,
-          model: {
-            ...toAgentModelListLike(nextConfig.agents?.defaults?.model),
-            primary: model,
-          },
-        },
-      },
-    };
+    nextConfig = patchAgentDefaultModel(nextConfig, {
+      ...toAgentModelListLike(nextConfig.agents?.defaults?.model),
+      primary: model,
+    });
     await params.prompter.note(`Default model set to ${model}`, "Model configured");
   }
 

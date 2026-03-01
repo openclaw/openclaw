@@ -1,6 +1,8 @@
 import { normalizeProviderId } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ProviderAuthMethod, ProviderPlugin } from "../plugins/types.js";
+// @see src/commands/model-default.ts for patchAgentDefaults
+import { patchAgentDefaults } from "./model-default.js";
 
 export function resolveProviderMatch(
   providers: ProviderPlugin[],
@@ -63,20 +65,13 @@ export function applyDefaultModel(cfg: OpenClawConfig, model: string): OpenClawC
   models[model] = models[model] ?? {};
 
   const existingModel = cfg.agents?.defaults?.model;
-  return {
-    ...cfg,
-    agents: {
-      ...cfg.agents,
-      defaults: {
-        ...cfg.agents?.defaults,
-        models,
-        model: {
-          ...(existingModel && typeof existingModel === "object" && "fallbacks" in existingModel
-            ? { fallbacks: (existingModel as { fallbacks?: string[] }).fallbacks }
-            : undefined),
-          primary: model,
-        },
-      },
+  return patchAgentDefaults(cfg, {
+    models,
+    model: {
+      ...(existingModel && typeof existingModel === "object" && "fallbacks" in existingModel
+        ? { fallbacks: (existingModel as { fallbacks?: string[] }).fallbacks }
+        : undefined),
+      primary: model,
     },
-  };
+  });
 }

@@ -3,6 +3,8 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { logConfigUpdated } from "../../config/logging.js";
 import { resolveAgentModelFallbackValues, toAgentModelListLike } from "../../config/model-input.js";
 import type { RuntimeEnv } from "../../runtime.js";
+// @see src/commands/model-default.ts for patchAgentDefaults
+import { patchAgentDefaults } from "../model-default.js";
 import { loadModelsConfig } from "./load-config.js";
 import {
   DEFAULT_PROVIDER,
@@ -25,17 +27,10 @@ function patchDefaultsFallbacks(
   params: { key: DefaultsFallbackKey; fallbacks: string[]; models?: Record<string, unknown> },
 ): OpenClawConfig {
   const existing = toAgentModelListLike(cfg.agents?.defaults?.[params.key]);
-  return {
-    ...cfg,
-    agents: {
-      ...cfg.agents,
-      defaults: {
-        ...cfg.agents?.defaults,
-        [params.key]: mergePrimaryFallbackConfig(existing, { fallbacks: params.fallbacks }),
-        ...(params.models ? { models: params.models as never } : undefined),
-      },
-    },
-  };
+  return patchAgentDefaults(cfg, {
+    [params.key]: mergePrimaryFallbackConfig(existing, { fallbacks: params.fallbacks }),
+    ...(params.models ? { models: params.models as never } : undefined),
+  });
 }
 
 export async function listFallbacksCommand(

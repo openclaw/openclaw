@@ -11,6 +11,8 @@ import {
 import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
 import { applyDefaultModelChoice } from "./auth-choice.default-model.js";
 import { ensureModelAllowlistEntry } from "./model-allowlist.js";
+// @see src/commands/model-default.ts for patchAgentDefaultModel
+import { patchAgentDefaultModel } from "./model-default.js";
 import {
   applyAuthProfileConfig,
   applyHuggingfaceProviderConfig,
@@ -103,23 +105,12 @@ export async function applyAuthChoiceHuggingface(
     applyDefaultConfig: (config) => {
       const withProvider = applyHuggingfaceProviderConfig(config);
       const existingModel = withProvider.agents?.defaults?.model;
-      const withPrimary = {
-        ...withProvider,
-        agents: {
-          ...withProvider.agents,
-          defaults: {
-            ...withProvider.agents?.defaults,
-            model: {
-              ...(existingModel && typeof existingModel === "object" && "fallbacks" in existingModel
-                ? {
-                    fallbacks: (existingModel as { fallbacks?: string[] }).fallbacks,
-                  }
-                : {}),
-              primary: selectedModelRef,
-            },
-          },
-        },
-      };
+      const withPrimary = patchAgentDefaultModel(withProvider, {
+        ...(existingModel && typeof existingModel === "object" && "fallbacks" in existingModel
+          ? { fallbacks: (existingModel as { fallbacks?: string[] }).fallbacks }
+          : {}),
+        primary: selectedModelRef,
+      });
       return ensureModelAllowlistEntry({
         cfg: withPrimary,
         modelRef: selectedModelRef,

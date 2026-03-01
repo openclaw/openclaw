@@ -7,6 +7,8 @@ import { resolveSessionTranscriptsDir } from "../config/sessions.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { shortenHomePath } from "../utils.js";
+// @see src/commands/model-default.ts for patchAgentDefaults
+import { patchAgentDefaults } from "./model-default.js";
 
 async function readConfigFileRaw(configPath: string): Promise<{
   exists: boolean;
@@ -41,16 +43,7 @@ export async function setupCommand(
 
   const workspace = desiredWorkspace ?? defaults.workspace ?? DEFAULT_AGENT_WORKSPACE_DIR;
 
-  const next: OpenClawConfig = {
-    ...cfg,
-    agents: {
-      ...cfg.agents,
-      defaults: {
-        ...defaults,
-        workspace,
-      },
-    },
-  };
+  const next: OpenClawConfig = patchAgentDefaults(cfg, { workspace });
 
   if (!existingRaw.exists || defaults.workspace !== workspace) {
     await writeConfigFile(next);

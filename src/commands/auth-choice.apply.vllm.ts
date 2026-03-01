@@ -1,5 +1,7 @@
 import type { OpenClawConfig } from "../config/config.js";
 import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
+// @see src/commands/model-default.ts for patchAgentDefaultModel
+import { patchAgentDefaultModel } from "./model-default.js";
 import { promptAndConfigureVllm } from "./vllm-setup.js";
 
 function applyVllmDefaultModel(cfg: OpenClawConfig, modelRef: string): OpenClawConfig {
@@ -9,19 +11,10 @@ function applyVllmDefaultModel(cfg: OpenClawConfig, modelRef: string): OpenClawC
       ? (existingModel as { fallbacks?: string[] }).fallbacks
       : undefined;
 
-  return {
-    ...cfg,
-    agents: {
-      ...cfg.agents,
-      defaults: {
-        ...cfg.agents?.defaults,
-        model: {
-          ...(fallbacks ? { fallbacks } : undefined),
-          primary: modelRef,
-        },
-      },
-    },
-  };
+  return patchAgentDefaultModel(cfg, {
+    ...(fallbacks ? { fallbacks } : undefined),
+    primary: modelRef,
+  });
 }
 
 export async function applyAuthChoiceVllm(

@@ -31,6 +31,8 @@ import {
 } from "./configure.shared.js";
 import { formatHealthCheckFailure } from "./health-format.js";
 import { healthCommand } from "./health.js";
+// @see src/commands/model-default.ts for patchAgentDefaults
+import { patchAgentDefaults } from "./model-default.js";
 import { noteChannelStatus, setupChannels } from "./onboard-channels.js";
 import {
   applyWizardMetadata,
@@ -423,16 +425,7 @@ export async function runConfigureWizard(
           );
         }
       }
-      nextConfig = {
-        ...nextConfig,
-        agents: {
-          ...nextConfig.agents,
-          defaults: {
-            ...nextConfig.agents?.defaults,
-            workspace: workspaceDir,
-          },
-        },
-      };
+      nextConfig = patchAgentDefaults(nextConfig, { workspace: workspaceDir });
       await ensureWorkspaceAndSessions(workspaceDir, runtime);
     };
 

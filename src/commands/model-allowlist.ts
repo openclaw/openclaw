@@ -1,6 +1,8 @@
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveAllowlistModelKey } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/config.js";
+// @see src/commands/model-default.ts for patchAgentDefaults
+import { patchAgentDefaults } from "./model-default.js";
 
 export function ensureModelAllowlistEntry(params: {
   cfg: OpenClawConfig;
@@ -28,14 +30,5 @@ export function ensureModelAllowlistEntry(params: {
     };
   }
 
-  return {
-    ...params.cfg,
-    agents: {
-      ...params.cfg.agents,
-      defaults: {
-        ...params.cfg.agents?.defaults,
-        models,
-      },
-    },
-  };
+  return patchAgentDefaults(params.cfg, { models });
 }

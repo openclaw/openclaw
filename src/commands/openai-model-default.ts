@@ -1,5 +1,7 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { ensureModelAllowlistEntry } from "./model-allowlist.js";
+// @see src/commands/model-default.ts for patchAgentDefaults and patchAgentDefaultModel
+import { patchAgentDefaultModel, patchAgentDefaults } from "./model-default.js";
 
 export const OPENAI_DEFAULT_MODEL = "openai/gpt-5.1-codex";
 
@@ -14,34 +16,10 @@ export function applyOpenAIProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
     alias: models[OPENAI_DEFAULT_MODEL]?.alias ?? "GPT",
   };
 
-  return {
-    ...next,
-    agents: {
-      ...next.agents,
-      defaults: {
-        ...next.agents?.defaults,
-        models,
-      },
-    },
-  };
+  return patchAgentDefaults(next, { models });
 }
 
 export function applyOpenAIConfig(cfg: OpenClawConfig): OpenClawConfig {
   const next = applyOpenAIProviderConfig(cfg);
-  return {
-    ...next,
-    agents: {
-      ...next.agents,
-      defaults: {
-        ...next.agents?.defaults,
-        model:
-          next.agents?.defaults?.model && typeof next.agents.defaults.model === "object"
-            ? {
-                ...next.agents.defaults.model,
-                primary: OPENAI_DEFAULT_MODEL,
-              }
-            : { primary: OPENAI_DEFAULT_MODEL },
-      },
-    },
-  };
+  return patchAgentDefaultModel(next, { primary: OPENAI_DEFAULT_MODEL });
 }

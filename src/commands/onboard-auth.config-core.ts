@@ -31,6 +31,8 @@ import {
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelApi } from "../config/types.models.js";
 import { KILOCODE_BASE_URL } from "../providers/kilocode-shared.js";
+// @see src/commands/model-default.ts for patchAgentDefaults
+import { patchAgentDefaults } from "./model-default.js";
 import {
   HUGGINGFACE_DEFAULT_MODEL_REF,
   KILOCODE_DEFAULT_MODEL_REF,
@@ -154,16 +156,7 @@ export function applyOpenrouterProviderConfig(cfg: OpenClawConfig): OpenClawConf
     alias: models[OPENROUTER_DEFAULT_MODEL_REF]?.alias ?? "OpenRouter",
   };
 
-  return {
-    ...cfg,
-    agents: {
-      ...cfg.agents,
-      defaults: {
-        ...cfg.agents?.defaults,
-        models,
-      },
-    },
-  };
+  return patchAgentDefaults(cfg, { models });
 }
 
 export function applyOpenrouterConfig(cfg: OpenClawConfig): OpenClawConfig {
