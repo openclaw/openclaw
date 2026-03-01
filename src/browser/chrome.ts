@@ -1,5 +1,6 @@
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import fs from "node:fs";
+import type { IncomingMessage } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import WebSocket from "ws";
@@ -91,7 +92,7 @@ async function fetchChromeVersion(cdpUrl: string, timeoutMs = 500): Promise<Chro
           timeout: timeoutMs,
           headers: getHeadersWithAuth(versionUrl),
         },
-        (res: any) => {
+        (res: IncomingMessage) => {
           let data = "";
           res.on("data", (chunk: Buffer) => (data += chunk));
           res.on("end", () => {

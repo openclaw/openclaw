@@ -1,3 +1,4 @@
+import type { IncomingMessage } from "node:http";
 import WebSocket from "ws";
 import { isLoopbackHost } from "../gateway/net.js";
 import { rawDataToString } from "../infra/ws.js";
@@ -120,7 +121,7 @@ export async function fetchJson<T>(url: string, timeoutMs = 1500, init?: Request
     const req = http.get(
       url,
       { timeout: timeoutMs, headers },
-      (res: any) => {
+      (res: IncomingMessage) => {
         let data = "";
         res.on("data", (chunk: Buffer) => (data += chunk));
         res.on("end", () => {
@@ -144,20 +145,6 @@ export async function fetchJson<T>(url: string, timeoutMs = 1500, init?: Request
   });
 }
 
-async function fetchChecked(url: string, timeoutMs = 1500, init?: RequestInit): Promise<Response> {
-  const ctrl = new AbortController();
-  const t = setTimeout(ctrl.abort.bind(ctrl), timeoutMs);
-  try {
-    const headers = getHeadersWithAuth(url, (init?.headers as Record<string, string>) || {});
-    const res = await fetch(url, { ...init, headers, signal: ctrl.signal });
-    if (!res.ok) {
-      throw new Error(`HTTP ${res.status}`);
-    }
-    return res;
-  } finally {
-    clearTimeout(t);
-  }
-}
 
 export async function fetchOk(url: string, timeoutMs = 1500, init?: RequestInit): Promise<void> {
   // Use native http module for better Windows localhost compatibility
@@ -167,7 +154,7 @@ export async function fetchOk(url: string, timeoutMs = 1500, init?: RequestInit)
     const req = http.get(
       url,
       { timeout: timeoutMs, headers },
-      (res: any) => {
+      (res: IncomingMessage) => {
         // Consume response body
         res.on("data", () => {});
         res.on("end", () => {
