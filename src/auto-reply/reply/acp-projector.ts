@@ -4,33 +4,15 @@ import { formatToolSummary, resolveToolDisplay } from "../../agents/tool-display
 import type { OpenClawConfig } from "../../config/config.js";
 import { prefixSystemMessage } from "../../infra/system-message.js";
 import type { ReplyPayload } from "../types.js";
+import {
+  isAcpTagVisible,
+  resolveAcpProjectionSettings,
+  resolveAcpStreamingConfig,
+} from "./acp-stream-settings.js";
 import { createBlockReplyPipeline } from "./block-reply-pipeline.js";
-import { resolveEffectiveBlockStreamingConfig } from "./block-streaming.js";
 import type { ReplyDispatchKind } from "./reply-dispatcher.js";
 
-const DEFAULT_ACP_STREAM_COALESCE_IDLE_MS = 350;
-const DEFAULT_ACP_STREAM_MAX_CHUNK_CHARS = 1800;
-const DEFAULT_ACP_META_MODE = "minimal";
-const DEFAULT_ACP_SHOW_USAGE = false;
-const DEFAULT_ACP_DELIVERY_MODE = "live";
-const DEFAULT_ACP_MAX_TURN_CHARS = 24_000;
-const DEFAULT_ACP_MAX_TOOL_SUMMARY_CHARS = 320;
-const DEFAULT_ACP_MAX_STATUS_CHARS = 320;
-const DEFAULT_ACP_MAX_META_EVENTS_PER_TURN = 64;
 const ACP_BLOCK_REPLY_TIMEOUT_MS = 15_000;
-
-const ACP_TAG_VISIBILITY_DEFAULTS: Record<string, boolean> = {
-  agent_message_chunk: true,
-  tool_call: true,
-  tool_call_update: true,
-  usage_update: false,
-  available_commands_update: false,
-  current_mode_update: false,
-  config_option_update: false,
-  session_info_update: false,
-  plan: false,
-  agent_thought_chunk: false,
-};
 
 const TERMINAL_TOOL_STATUSES = new Set(["completed", "failed", "cancelled", "done", "error"]);
 
@@ -41,124 +23,11 @@ export type AcpProjectedDeliveryMeta = {
   allowEdit?: boolean;
 };
 
-type AcpDeliveryMode = "live" | "final_only";
-type AcpMetaMode = "off" | "minimal" | "verbose";
-
-type AcpProjectionSettings = {
-  deliveryMode: AcpDeliveryMode;
-  metaMode: AcpMetaMode;
-  showUsage: boolean;
-  maxTurnChars: number;
-  maxToolSummaryChars: number;
-  maxStatusChars: number;
-  maxMetaEventsPerTurn: number;
-  tagVisibility: Partial<Record<AcpSessionUpdateTag, boolean>>;
-};
-
 type ToolLifecycleState = {
   started: boolean;
   terminal: boolean;
   lastRenderedHash?: string;
 };
-
-function clampPositiveInteger(
-  value: unknown,
-  fallback: number,
-  bounds: { min: number; max: number },
-): number {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    return fallback;
-  }
-  const rounded = Math.round(value);
-  if (rounded < bounds.min) {
-    return bounds.min;
-  }
-  if (rounded > bounds.max) {
-    return bounds.max;
-  }
-  return rounded;
-}
-
-function clampBoolean(value: unknown, fallback: boolean): boolean {
-  return typeof value === "boolean" ? value : fallback;
-}
-
-function resolveAcpDeliveryMode(value: unknown): AcpDeliveryMode {
-  return value === "final_only" ? "final_only" : DEFAULT_ACP_DELIVERY_MODE;
-}
-
-function resolveAcpMetaMode(value: unknown): AcpMetaMode {
-  if (value === "off" || value === "minimal" || value === "verbose") {
-    return value;
-  }
-  return DEFAULT_ACP_META_MODE;
-}
-
-function resolveAcpStreamCoalesceIdleMs(cfg: OpenClawConfig): number {
-  return clampPositiveInteger(
-    cfg.acp?.stream?.coalesceIdleMs,
-    DEFAULT_ACP_STREAM_COALESCE_IDLE_MS,
-    {
-      min: 0,
-      max: 5_000,
-    },
-  );
-}
-
-function resolveAcpStreamMaxChunkChars(cfg: OpenClawConfig): number {
-  return clampPositiveInteger(cfg.acp?.stream?.maxChunkChars, DEFAULT_ACP_STREAM_MAX_CHUNK_CHARS, {
-    min: 50,
-    max: 4_000,
-  });
-}
-
-function resolveAcpProjectionSettings(cfg: OpenClawConfig): AcpProjectionSettings {
-  const stream = cfg.acp?.stream;
-  return {
-    deliveryMode: resolveAcpDeliveryMode(stream?.deliveryMode),
-    metaMode: resolveAcpMetaMode(stream?.metaMode),
-    showUsage: clampBoolean(stream?.showUsage, DEFAULT_ACP_SHOW_USAGE),
-    maxTurnChars: clampPositiveInteger(stream?.maxTurnChars, DEFAULT_ACP_MAX_TURN_CHARS, {
-      min: 1,
-      max: 500_000,
-    }),
-    maxToolSummaryChars: clampPositiveInteger(
-      stream?.maxToolSummaryChars,
-      DEFAULT_ACP_MAX_TOOL_SUMMARY_CHARS,
-      {
-        min: 64,
-        max: 8_000,
-      },
-    ),
-    maxStatusChars: clampPositiveInteger(stream?.maxStatusChars, DEFAULT_ACP_MAX_STATUS_CHARS, {
-      min: 64,
-      max: 8_000,
-    }),
-    maxMetaEventsPerTurn: clampPositiveInteger(
-      stream?.maxMetaEventsPerTurn,
-      DEFAULT_ACP_MAX_META_EVENTS_PER_TURN,
-      {
-        min: 1,
-        max: 2_000,
-      },
-    ),
-    tagVisibility: stream?.tagVisibility ?? {},
-  };
-}
-
-function resolveAcpStreamingConfig(params: {
-  cfg: OpenClawConfig;
-  provider?: string;
-  accountId?: string;
-}) {
-  return resolveEffectiveBlockStreamingConfig({
-    cfg: params.cfg,
-    provider: params.provider,
-    accountId: params.accountId,
-    maxChunkChars: resolveAcpStreamMaxChunkChars(params.cfg),
-    coalesceIdleMs: resolveAcpStreamCoalesceIdleMs(params.cfg),
-  });
-}
 
 function truncateText(input: string, maxChars: number): string {
   if (input.length <= maxChars) {
@@ -180,23 +49,6 @@ function normalizeToolStatus(status: string | undefined): string | undefined {
   }
   const normalized = status.trim().toLowerCase();
   return normalized || undefined;
-}
-
-function isTagVisible(
-  settings: AcpProjectionSettings,
-  tag: AcpSessionUpdateTag | undefined,
-): boolean {
-  if (!tag) {
-    return true;
-  }
-  const override = settings.tagVisibility[tag];
-  if (typeof override === "boolean") {
-    return override;
-  }
-  if (Object.prototype.hasOwnProperty.call(ACP_TAG_VISIBILITY_DEFAULTS, tag)) {
-    return ACP_TAG_VISIBILITY_DEFAULTS[tag];
-  }
-  return true;
 }
 
 function renderToolSummaryText(event: Extract<AcpRuntimeEvent, { type: "tool_call" }>): string {
@@ -335,7 +187,7 @@ export function createAcpReplyProjector(params: {
     if (!params.shouldSendToolSummaries || settings.metaMode === "off") {
       return;
     }
-    if (!isTagVisible(settings, event.tag)) {
+    if (!isAcpTagVisible(settings, event.tag)) {
       return;
     }
 
@@ -419,7 +271,7 @@ export function createAcpReplyProjector(params: {
       if (event.stream && event.stream !== "output") {
         return;
       }
-      if (!isTagVisible(settings, event.tag)) {
+      if (!isAcpTagVisible(settings, event.tag)) {
         return;
       }
       const text = event.text;
@@ -444,7 +296,7 @@ export function createAcpReplyProjector(params: {
     }
 
     if (event.type === "status") {
-      if (!isTagVisible(settings, event.tag)) {
+      if (!isAcpTagVisible(settings, event.tag)) {
         return;
       }
       if (event.tag === "usage_update") {
