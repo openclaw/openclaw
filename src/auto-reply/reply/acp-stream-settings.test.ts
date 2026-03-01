@@ -39,6 +39,20 @@ describe("acp stream settings", () => {
     expect(settings.tagVisibility.usage_update).toBe(true);
   });
 
+  it("accepts explicit deliveryMode=live override", () => {
+    const settings = resolveAcpProjectionSettings(
+      createAcpTestConfig({
+        acp: {
+          enabled: true,
+          stream: {
+            deliveryMode: "live",
+          },
+        },
+      }),
+    );
+    expect(settings.deliveryMode).toBe("live");
+  });
+
   it("uses default tag visibility when no override is provided", () => {
     const settings = resolveAcpProjectionSettings(createAcpTestConfig());
     expect(isAcpTagVisible(settings, "tool_call")).toBe(true);

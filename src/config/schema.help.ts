@@ -175,7 +175,7 @@ export const FIELD_HELP: Record<string, string> = {
   "acp.stream.repeatSuppression":
     "When true (default), suppress repeated ACP status/tool projection lines in a turn while keeping raw ACP events unchanged.",
   "acp.stream.deliveryMode":
-    "ACP delivery style: live streams block chunks incrementally, final_only buffers text deltas until terminal turn events.",
+    "ACP delivery style: live streams projected output incrementally, final_only buffers all projected ACP output until terminal turn events.",
   "acp.stream.maxTurnChars":
     "Maximum assistant text characters projected per ACP turn before truncation notice is emitted.",
   "acp.stream.maxToolSummaryChars":
