@@ -338,20 +338,12 @@ describe("provider usage loading", () => {
     });
   });
 
-  it("loads snapshots for copilot antigravity gemini codex and xiaomi", async () => {
+  it("loads snapshots for copilot gemini codex and xiaomi", async () => {
     const mockFetch = createProviderUsageFetch(async (url) => {
       if (url.includes("api.github.com/copilot_internal/user")) {
         return makeResponse(200, {
           quota_snapshots: { chat: { percent_remaining: 80 } },
           copilot_plan: "Copilot Pro",
-        });
-      }
-      if (url.includes("cloudcode-pa.googleapis.com/v1internal:loadCodeAssist")) {
-        return makeResponse(200, {
-          availablePromptCredits: 80,
-          planInfo: { monthlyPromptCredits: 100 },
-          currentTier: { name: "Antigravity Pro" },
-          cloudaicompanionProject: "projects/demo",
         });
       }
       if (url.includes("cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels")) {
@@ -380,7 +372,6 @@ describe("provider usage loading", () => {
     const summary = await loadUsageWithAuth(
       [
         { provider: "github-copilot", token: "copilot-token" },
-        { provider: "google-antigravity", token: "antigravity-token" },
         { provider: "google-gemini-cli", token: "gemini-token" },
         { provider: "openai-codex", token: "codex-token", accountId: "acc-1" },
         { provider: "xiaomi", token: "xiaomi-token" },
@@ -390,7 +381,6 @@ describe("provider usage loading", () => {
 
     expect(summary.providers.map((provider) => provider.provider)).toEqual([
       "github-copilot",
-      "google-antigravity",
       "google-gemini-cli",
       "openai-codex",
       "xiaomi",
@@ -398,10 +388,6 @@ describe("provider usage loading", () => {
     expect(
       summary.providers.find((provider) => provider.provider === "github-copilot")?.windows,
     ).toEqual([{ label: "Chat", usedPercent: 20 }]);
-    expect(
-      summary.providers.find((provider) => provider.provider === "google-antigravity")?.windows
-        .length,
-    ).toBeGreaterThan(0);
     expect(
       summary.providers.find((provider) => provider.provider === "google-gemini-cli")?.windows[0]
         ?.label,

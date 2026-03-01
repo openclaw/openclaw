@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { captureEnv, captureFullEnv, withEnv, withEnvAsync } from "./env.js";
 
+function restoreEnvKey(key: string, previous: string | undefined): void {
+  if (previous === undefined) {
+    delete process.env[key];
+  } else {
+    process.env[key] = previous;
+  }
+}
+
 describe("env test utils", () => {
   it("captureEnv restores mutated keys", () => {
     const keyA = "OPENCLAW_ENV_TEST_A";
@@ -63,11 +71,7 @@ describe("env test utils", () => {
 
     expect(seen).toBeUndefined();
     expect(process.env[key]).toBe("outer");
-    if (prev === undefined) {
-      delete process.env[key];
-    } else {
-      process.env[key] = prev;
-    }
+    restoreEnvKey(key, prev);
   });
 
   it("withEnvAsync restores values when callback throws", async () => {
@@ -103,10 +107,6 @@ describe("env test utils", () => {
 
     expect(seen).toBeUndefined();
     expect(process.env[key]).toBe("outer");
-    if (prev === undefined) {
-      delete process.env[key];
-    } else {
-      process.env[key] = prev;
-    }
+    restoreEnvKey(key, prev);
   });
 });

@@ -58,4 +58,20 @@ describe("filterMessagingToolMediaDuplicates", () => {
     });
     expect(result).toBe(payloads);
   });
+
+  it("dedupes equivalent file and local path variants", () => {
+    const result = filterMessagingToolMediaDuplicates({
+      payloads: [{ text: "hello", mediaUrl: "/tmp/photo.jpg" }],
+      sentMediaUrls: ["file:///tmp/photo.jpg"],
+    });
+    expect(result).toEqual([{ text: "hello", mediaUrl: undefined, mediaUrls: undefined }]);
+  });
+
+  it("dedupes encoded file:// paths against local paths", () => {
+    const result = filterMessagingToolMediaDuplicates({
+      payloads: [{ text: "hello", mediaUrl: "/tmp/photo one.jpg" }],
+      sentMediaUrls: ["file:///tmp/photo%20one.jpg"],
+    });
+    expect(result).toEqual([{ text: "hello", mediaUrl: undefined, mediaUrls: undefined }]);
+  });
 });

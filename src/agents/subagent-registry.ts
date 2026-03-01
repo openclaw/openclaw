@@ -1,4 +1,10 @@
 import { loadConfig } from "../config/config.js";
+import {
+  loadSessionStore,
+  resolveAgentIdFromSessionKey,
+  resolveStorePath,
+  type SessionEntry,
+} from "../config/sessions.js";
 import { callGateway } from "../gateway/call.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import { defaultRuntime } from "../runtime.js";
@@ -59,6 +65,13 @@ const MAX_ANNOUNCE_RETRY_COUNT = 3;
  * succeeded. Guards against stale registry entries surviving gateway restarts.
  */
 const ANNOUNCE_EXPIRY_MS = 5 * 60_000; // 5 minutes
+type SubagentRunOrphanReason = "missing-session-entry" | "missing-session-id";
+/**
+ * Embedded runs can emit transient lifecycle `error` events while provider/model
+ * retry is still in progress. Defer terminal error cleanup briefly so a
+ * subsequent lifecycle `start` / `end` can cancel premature failure announces.
+ */
+const LIFECYCLE_ERROR_RETRY_GRACE_MS = 15_000;
 
 function resolveAnnounceRetryDelayMs(retryCount: number) {
   const boundedRetryCount = Math.max(0, Math.min(retryCount, 10));
@@ -82,8 +95,181 @@ function persistSubagentRuns() {
   persistSubagentRunsToDisk(subagentRuns);
 }
 
+function findSessionEntryByKey(store: Record<string, SessionEntry>, sessionKey: string) {
+  const direct = store[sessionKey];
+  if (direct) {
+    return direct;
+  }
+  const normalized = sessionKey.toLowerCase();
+  for (const [key, entry] of Object.entries(store)) {
+    if (key.toLowerCase() === normalized) {
+      return entry;
+    }
+  }
+  return undefined;
+}
+
+function resolveSubagentRunOrphanReason(params: {
+  entry: SubagentRunRecord;
+  storeCache?: Map<string, Record<string, SessionEntry>>;
+}): SubagentRunOrphanReason | null {
+  const childSessionKey = params.entry.childSessionKey?.trim();
+  if (!childSessionKey) {
+    return "missing-session-entry";
+  }
+  try {
+    const cfg = loadConfig();
+    const agentId = resolveAgentIdFromSessionKey(childSessionKey);
+    const storePath = resolveStorePath(cfg.session?.store, { agentId });
+    let store = params.storeCache?.get(storePath);
+    if (!store) {
+      store = loadSessionStore(storePath);
+      params.storeCache?.set(storePath, store);
+    }
+    const sessionEntry = findSessionEntryByKey(store, childSessionKey);
+    if (!sessionEntry) {
+      return "missing-session-entry";
+    }
+    if (typeof sessionEntry.sessionId !== "string" || !sessionEntry.sessionId.trim()) {
+      return "missing-session-id";
+    }
+    return null;
+  } catch {
+    // Best-effort guard: avoid false orphan pruning on transient read/config failures.
+    return null;
+  }
+}
+
+function reconcileOrphanedRun(params: {
+  runId: string;
+  entry: SubagentRunRecord;
+  reason: SubagentRunOrphanReason;
+  source: "restore" | "resume";
+}) {
+  const now = Date.now();
+  let changed = false;
+  if (typeof params.entry.endedAt !== "number") {
+    params.entry.endedAt = now;
+    changed = true;
+  }
+  const orphanOutcome: SubagentRunOutcome = {
+    status: "error",
+    error: `orphaned subagent run (${params.reason})`,
+  };
+  if (!runOutcomesEqual(params.entry.outcome, orphanOutcome)) {
+    params.entry.outcome = orphanOutcome;
+    changed = true;
+  }
+  if (params.entry.endedReason !== SUBAGENT_ENDED_REASON_ERROR) {
+    params.entry.endedReason = SUBAGENT_ENDED_REASON_ERROR;
+    changed = true;
+  }
+  if (params.entry.cleanupHandled !== true) {
+    params.entry.cleanupHandled = true;
+    changed = true;
+  }
+  if (typeof params.entry.cleanupCompletedAt !== "number") {
+    params.entry.cleanupCompletedAt = now;
+    changed = true;
+  }
+  const removed = subagentRuns.delete(params.runId);
+  resumedRuns.delete(params.runId);
+  if (!removed && !changed) {
+    return false;
+  }
+  defaultRuntime.log(
+    `[warn] Subagent orphan run pruned source=${params.source} run=${params.runId} child=${params.entry.childSessionKey} reason=${params.reason}`,
+  );
+  return true;
+}
+
+function reconcileOrphanedRestoredRuns() {
+  const storeCache = new Map<string, Record<string, SessionEntry>>();
+  let changed = false;
+  for (const [runId, entry] of subagentRuns.entries()) {
+    const orphanReason = resolveSubagentRunOrphanReason({
+      entry,
+      storeCache,
+    });
+    if (!orphanReason) {
+      continue;
+    }
+    if (
+      reconcileOrphanedRun({
+        runId,
+        entry,
+        reason: orphanReason,
+        source: "restore",
+      })
+    ) {
+      changed = true;
+    }
+  }
+  return changed;
+}
+
 const resumedRuns = new Set<string>();
 const endedHookInFlightRunIds = new Set<string>();
+const pendingLifecycleErrorByRunId = new Map<
+  string,
+  {
+    timer: NodeJS.Timeout;
+    endedAt: number;
+    error?: string;
+  }
+>();
+
+function clearPendingLifecycleError(runId: string) {
+  const pending = pendingLifecycleErrorByRunId.get(runId);
+  if (!pending) {
+    return;
+  }
+  clearTimeout(pending.timer);
+  pendingLifecycleErrorByRunId.delete(runId);
+}
+
+function clearAllPendingLifecycleErrors() {
+  for (const pending of pendingLifecycleErrorByRunId.values()) {
+    clearTimeout(pending.timer);
+  }
+  pendingLifecycleErrorByRunId.clear();
+}
+
+function schedulePendingLifecycleError(params: { runId: string; endedAt: number; error?: string }) {
+  clearPendingLifecycleError(params.runId);
+  const timer = setTimeout(() => {
+    const pending = pendingLifecycleErrorByRunId.get(params.runId);
+    if (!pending || pending.timer !== timer) {
+      return;
+    }
+    pendingLifecycleErrorByRunId.delete(params.runId);
+    const entry = subagentRuns.get(params.runId);
+    if (!entry) {
+      return;
+    }
+    if (entry.endedReason === SUBAGENT_ENDED_REASON_COMPLETE || entry.outcome?.status === "ok") {
+      return;
+    }
+    void completeSubagentRun({
+      runId: params.runId,
+      endedAt: pending.endedAt,
+      outcome: {
+        status: "error",
+        error: pending.error,
+      },
+      reason: SUBAGENT_ENDED_REASON_ERROR,
+      sendFarewell: true,
+      accountId: entry.requesterOrigin?.accountId,
+      triggerCleanup: true,
+    });
+  }, LIFECYCLE_ERROR_RETRY_GRACE_MS);
+  timer.unref?.();
+  pendingLifecycleErrorByRunId.set(params.runId, {
+    timer,
+    endedAt: params.endedAt,
+    error: params.error,
+  });
+}
 
 function suppressAnnounceForSteerRestart(entry?: SubagentRunRecord) {
   return entry?.suppressAnnounceReason === "steer-restart";
@@ -136,6 +322,7 @@ async function completeSubagentRun(params: {
   accountId?: string;
   triggerCleanup: boolean;
 }) {
+  clearPendingLifecycleError(params.runId);
   const entry = subagentRuns.get(params.runId);
   if (!entry) {
     return;
@@ -211,9 +398,16 @@ function startSubagentAnnounceCleanupFlow(runId: string, entry: SubagentRunRecor
     outcome: entry.outcome,
     spawnMode: entry.spawnMode,
     expectsCompletionMessage: entry.expectsCompletionMessage,
-  }).then((didAnnounce) => {
-    void finalizeSubagentCleanup(runId, entry.cleanup, didAnnounce);
-  });
+  })
+    .then((didAnnounce) => {
+      void finalizeSubagentCleanup(runId, entry.cleanup, didAnnounce);
+    })
+    .catch((error) => {
+      defaultRuntime.log(
+        `[warn] Subagent announce flow failed during cleanup for run ${runId}: ${String(error)}`,
+      );
+      void finalizeSubagentCleanup(runId, entry.cleanup, false);
+    });
   return true;
 }
 
@@ -223,6 +417,20 @@ function resumeSubagentRun(runId: string) {
   }
   const entry = subagentRuns.get(runId);
   if (!entry) {
+    return;
+  }
+  const orphanReason = resolveSubagentRunOrphanReason({ entry });
+  if (orphanReason) {
+    if (
+      reconcileOrphanedRun({
+        runId,
+        entry,
+        reason: orphanReason,
+        source: "resume",
+      })
+    ) {
+      persistSubagentRuns();
+    }
     return;
   }
   if (entry.cleanupCompletedAt) {
@@ -290,6 +498,12 @@ function restoreSubagentRunsOnce() {
     if (restoredCount === 0) {
       return;
     }
+    if (reconcileOrphanedRestoredRuns()) {
+      persistSubagentRuns();
+    }
+    if (subagentRuns.size === 0) {
+      return;
+    }
     // Resume pending work.
     ensureListener();
     if ([...subagentRuns.values()].some((entry) => entry.archiveAtMs)) {
@@ -344,6 +558,7 @@ async function sweepSubagentRuns() {
     if (!entry.archiveAtMs || entry.archiveAtMs > now) {
       continue;
     }
+    clearPendingLifecycleError(runId);
     subagentRuns.delete(runId);
     mutated = true;
     try {
@@ -384,6 +599,7 @@ function ensureListener() {
       }
       const phase = evt.data?.phase;
       if (phase === "start") {
+        clearPendingLifecycleError(evt.runId);
         const startedAt = typeof evt.data?.startedAt === "number" ? evt.data.startedAt : undefined;
         if (startedAt) {
           entry.startedAt = startedAt;
@@ -396,17 +612,23 @@ function ensureListener() {
       }
       const endedAt = typeof evt.data?.endedAt === "number" ? evt.data.endedAt : Date.now();
       const error = typeof evt.data?.error === "string" ? evt.data.error : undefined;
-      const outcome: SubagentRunOutcome =
-        phase === "error"
-          ? { status: "error", error }
-          : evt.data?.aborted
-            ? { status: "timeout" }
-            : { status: "ok" };
+      if (phase === "error") {
+        schedulePendingLifecycleError({
+          runId: evt.runId,
+          endedAt,
+          error,
+        });
+        return;
+      }
+      clearPendingLifecycleError(evt.runId);
+      const outcome: SubagentRunOutcome = evt.data?.aborted
+        ? { status: "timeout" }
+        : { status: "ok" };
       await completeSubagentRun({
         runId: evt.runId,
         endedAt,
         outcome,
-        reason: phase === "error" ? SUBAGENT_ENDED_REASON_ERROR : SUBAGENT_ENDED_REASON_COMPLETE,
+        reason: SUBAGENT_ENDED_REASON_COMPLETE,
         sendFarewell: true,
         accountId: entry.requesterOrigin?.accountId,
         triggerCleanup: true,
@@ -514,6 +736,7 @@ function completeCleanupBookkeeping(params: {
   completedAt: number;
 }) {
   if (params.cleanup === "delete") {
+    clearPendingLifecycleError(params.runId);
     subagentRuns.delete(params.runId);
     persistSubagentRuns();
     retryDeferredCompletedAnnounces(params.runId);
@@ -627,6 +850,7 @@ export function replaceSubagentRunAfterSteer(params: {
   }
 
   if (previousRunId !== nextRunId) {
+    clearPendingLifecycleError(previousRunId);
     subagentRuns.delete(previousRunId);
     resumedRuns.delete(previousRunId);
   }
@@ -788,6 +1012,7 @@ export function resetSubagentRegistryForTests(opts?: { persist?: boolean }) {
   subagentRuns.clear();
   resumedRuns.clear();
   endedHookInFlightRunIds.clear();
+  clearAllPendingLifecycleErrors();
   resetAnnounceQueuesForTests();
   stopSweeper();
   restoreAttempted = false;
@@ -806,6 +1031,7 @@ export function addSubagentRunForTests(entry: SubagentRunRecord) {
 }
 
 export function releaseSubagentRun(runId: string) {
+  clearPendingLifecycleError(runId);
   const didDelete = subagentRuns.delete(runId);
   if (didDelete) {
     persistSubagentRuns();
@@ -873,6 +1099,7 @@ export function markSubagentRunTerminated(params: {
   let updated = 0;
   const entriesByChildSessionKey = new Map<string, SubagentRunRecord>();
   for (const runId of runIds) {
+    clearPendingLifecycleError(runId);
     const entry = subagentRuns.get(runId);
     if (!entry) {
       continue;

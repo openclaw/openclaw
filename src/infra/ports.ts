@@ -1,4 +1,3 @@
-import net from "node:net";
 import { danger, info, shouldLogVerbose, warn } from "../globals.js";
 import { logDebug } from "../logger.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -6,6 +5,7 @@ import { defaultRuntime } from "../runtime.js";
 import { isErrno } from "./errors.js";
 import { formatPortDiagnostics } from "./ports-format.js";
 import { inspectPortUsage } from "./ports-inspect.js";
+import { tryListenOnPort } from "./ports-probe.js";
 import type { PortListener, PortListenerKind, PortUsage, PortUsageStatus } from "./ports-types.js";
 
 class PortInUseError extends Error {
@@ -31,15 +31,7 @@ export async function describePortOwner(port: number): Promise<string | undefine
 export async function ensurePortAvailable(port: number): Promise<void> {
   // Detect EADDRINUSE early with a friendly message.
   try {
-    await new Promise<void>((resolve, reject) => {
-      const tester = net
-        .createServer()
-        .once("error", (err) => reject(err))
-        .once("listening", () => {
-          tester.close(() => resolve());
-        })
-        .listen(port);
-    });
+    await tryListenOnPort({ port });
   } catch (err) {
     if (isErrno(err) && err.code === "EADDRINUSE") {
       throw new PortInUseError(port);

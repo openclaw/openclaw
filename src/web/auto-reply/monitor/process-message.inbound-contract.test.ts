@@ -9,6 +9,9 @@ let capturedDispatchParams: unknown;
 let sessionDir: string | undefined;
 let sessionStorePath: string;
 let backgroundTasks: Set<Promise<unknown>>;
+const { deliverWebReplyMock } = vi.hoisted(() => ({
+  deliverWebReplyMock: vi.fn(async () => {}),
+}));
 
 const defaultReplyLogger = {
   info: () => {},
@@ -24,6 +27,7 @@ function makeProcessMessageArgs(params: {
   cfg?: unknown;
   groupHistories?: Map<string, Array<{ sender: string; body: string }>>;
   groupHistory?: Array<{ sender: string; body: string }>;
+  rememberSentText?: (text: string | undefined, opts: unknown) => void;
 }) {
   return {
     // oxlint-disable-next-line typescript/no-explicit-any
@@ -47,7 +51,8 @@ function makeProcessMessageArgs(params: {
     // oxlint-disable-next-line typescript/no-explicit-any
     replyLogger: defaultReplyLogger as any,
     backgroundTasks,
-    rememberSentText: (_text: string | undefined, _opts: unknown) => {},
+    rememberSentText:
+      params.rememberSentText ?? ((_text: string | undefined, _opts: unknown) => {}),
     echoHas: () => false,
     echoForget: () => {},
     buildCombinedEchoKey: () => "echo",
@@ -75,6 +80,11 @@ vi.mock("./last-route.js", () => ({
   updateLastRouteInBackground: vi.fn(),
 }));
 
+vi.mock("../deliver-reply.js", () => ({
+  deliverWebReply: deliverWebReplyMock,
+}));
+
+import { updateLastRouteInBackground } from "./last-route.js";
 import { processMessage } from "./process-message.js";
 
 describe("web processMessage inbound contract", () => {
@@ -82,6 +92,7 @@ describe("web processMessage inbound contract", () => {
     capturedCtx = undefined;
     capturedDispatchParams = undefined;
     backgroundTasks = new Set();
+    deliverWebReplyMock.mockClear();
     sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-process-message-"));
     sessionStorePath = path.join(sessionDir, "sessions.json");
   });
@@ -228,5 +239,122 @@ describe("web processMessage inbound contract", () => {
     );
 
     expect(groupHistories.get("whatsapp:default:group:123@g.us") ?? []).toHaveLength(0);
+  });
+
+  it("suppresses non-final WhatsApp payload delivery", async () => {
+    const rememberSentText = vi.fn();
+    await processMessage(
+      makeProcessMessageArgs({
+        routeSessionKey: "agent:main:whatsapp:direct:+1555",
+        groupHistoryKey: "+1555",
+        rememberSentText,
+        cfg: {
+          channels: { whatsapp: { blockStreaming: true } },
+          messages: {},
+          session: { store: sessionStorePath },
+        } as unknown as ReturnType<typeof import("../../../config/config.js").loadConfig>,
+        msg: {
+          id: "msg1",
+          from: "+1555",
+          to: "+2000",
+          chatType: "direct",
+          body: "hi",
+        },
+      }),
+    );
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const deliver = (capturedDispatchParams as any)?.dispatcherOptions?.deliver as
+      | ((payload: { text?: string }, info: { kind: "tool" | "block" | "final" }) => Promise<void>)
+      | undefined;
+    expect(deliver).toBeTypeOf("function");
+
+    await deliver?.({ text: "tool payload" }, { kind: "tool" });
+    await deliver?.({ text: "block payload" }, { kind: "block" });
+    expect(deliverWebReplyMock).not.toHaveBeenCalled();
+    expect(rememberSentText).not.toHaveBeenCalled();
+
+    await deliver?.({ text: "final payload" }, { kind: "final" });
+    expect(deliverWebReplyMock).toHaveBeenCalledTimes(1);
+    expect(rememberSentText).toHaveBeenCalledTimes(1);
+  });
+
+  it("forces disableBlockStreaming for WhatsApp dispatch", async () => {
+    await processMessage(
+      makeProcessMessageArgs({
+        routeSessionKey: "agent:main:whatsapp:direct:+1555",
+        groupHistoryKey: "+1555",
+        cfg: {
+          channels: { whatsapp: { blockStreaming: true } },
+          messages: {},
+          session: { store: sessionStorePath },
+        } as unknown as ReturnType<typeof import("../../../config/config.js").loadConfig>,
+        msg: {
+          id: "msg1",
+          from: "+1555",
+          to: "+2000",
+          chatType: "direct",
+          body: "hi",
+        },
+      }),
+    );
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const replyOptions = (capturedDispatchParams as any)?.replyOptions;
+    expect(replyOptions?.disableBlockStreaming).toBe(true);
+  });
+
+  it("updates main last route for DM when session key matches main session key", async () => {
+    const updateLastRouteMock = vi.mocked(updateLastRouteInBackground);
+    updateLastRouteMock.mockClear();
+
+    const args = makeProcessMessageArgs({
+      routeSessionKey: "agent:main:whatsapp:direct:+1000",
+      groupHistoryKey: "+1000",
+      msg: {
+        id: "msg-last-route-1",
+        from: "+1000",
+        to: "+2000",
+        chatType: "direct",
+        body: "hello",
+        senderE164: "+1000",
+      },
+    });
+    args.route = {
+      ...args.route,
+      sessionKey: "agent:main:whatsapp:direct:+1000",
+      mainSessionKey: "agent:main:whatsapp:direct:+1000",
+    };
+
+    await processMessage(args);
+
+    expect(updateLastRouteMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not update main last route for isolated DM scope sessions", async () => {
+    const updateLastRouteMock = vi.mocked(updateLastRouteInBackground);
+    updateLastRouteMock.mockClear();
+
+    const args = makeProcessMessageArgs({
+      routeSessionKey: "agent:main:whatsapp:dm:+1000:peer:+3000",
+      groupHistoryKey: "+3000",
+      msg: {
+        id: "msg-last-route-2",
+        from: "+3000",
+        to: "+2000",
+        chatType: "direct",
+        body: "hello",
+        senderE164: "+3000",
+      },
+    });
+    args.route = {
+      ...args.route,
+      sessionKey: "agent:main:whatsapp:dm:+1000:peer:+3000",
+      mainSessionKey: "agent:main:whatsapp:direct:+1000",
+    };
+
+    await processMessage(args);
+
+    expect(updateLastRouteMock).not.toHaveBeenCalled();
   });
 });

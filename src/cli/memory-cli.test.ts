@@ -33,7 +33,7 @@ beforeAll(async () => {
 
 afterEach(() => {
   vi.restoreAllMocks();
-  getMemorySearchManager.mockReset();
+  getMemorySearchManager.mockClear();
   process.exitCode = undefined;
   setVerbose(false);
 });
@@ -380,6 +380,49 @@ describe("memory cli", () => {
     });
     expect(log).toHaveBeenCalledWith("No matches.");
     expect(close).toHaveBeenCalled();
+  });
+
+  it("accepts --query for memory search", async () => {
+    const close = vi.fn(async () => {});
+    const search = vi.fn(async () => []);
+    mockManager({ search, close });
+
+    const log = spyRuntimeLogs();
+    await runMemoryCli(["search", "--query", "deployment notes"]);
+
+    expect(search).toHaveBeenCalledWith("deployment notes", {
+      maxResults: undefined,
+      minScore: undefined,
+    });
+    expect(log).toHaveBeenCalledWith("No matches.");
+    expect(close).toHaveBeenCalled();
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it("prefers --query when positional and flag are both provided", async () => {
+    const close = vi.fn(async () => {});
+    const search = vi.fn(async () => []);
+    mockManager({ search, close });
+
+    spyRuntimeLogs();
+    await runMemoryCli(["search", "positional", "--query", "flagged"]);
+
+    expect(search).toHaveBeenCalledWith("flagged", {
+      maxResults: undefined,
+      minScore: undefined,
+    });
+    expect(close).toHaveBeenCalled();
+  });
+
+  it("fails when neither positional query nor --query is provided", async () => {
+    const error = spyRuntimeErrors();
+    await runMemoryCli(["search"]);
+
+    expect(error).toHaveBeenCalledWith(
+      "Missing search query. Provide a positional query or use --query <text>.",
+    );
+    expect(getMemorySearchManager).not.toHaveBeenCalled();
+    expect(process.exitCode).toBe(1);
   });
 
   it("prints search results as json when requested", async () => {

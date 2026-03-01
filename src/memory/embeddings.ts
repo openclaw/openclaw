@@ -4,6 +4,10 @@ import type { OpenClawConfig } from "../config/config.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveUserPath } from "../utils.js";
 import { createGeminiEmbeddingProvider, type GeminiEmbeddingClient } from "./embeddings-gemini.js";
+import {
+  createMistralEmbeddingProvider,
+  type MistralEmbeddingClient,
+} from "./embeddings-mistral.js";
 import { createOpenAiEmbeddingProvider, type OpenAiEmbeddingClient } from "./embeddings-openai.js";
 import { createVoyageEmbeddingProvider, type VoyageEmbeddingClient } from "./embeddings-voyage.js";
 import { importNodeLlamaCpp } from "./node-llama.js";
@@ -18,6 +22,7 @@ function sanitizeAndNormalizeEmbedding(vec: number[]): number[] {
 }
 
 export type { GeminiEmbeddingClient } from "./embeddings-gemini.js";
+export type { MistralEmbeddingClient } from "./embeddings-mistral.js";
 export type { OpenAiEmbeddingClient } from "./embeddings-openai.js";
 export type { VoyageEmbeddingClient } from "./embeddings-voyage.js";
 
@@ -29,11 +34,11 @@ export type EmbeddingProvider = {
   embedBatch: (texts: string[]) => Promise<number[][]>;
 };
 
-export type EmbeddingProviderId = "openai" | "local" | "gemini" | "voyage";
+export type EmbeddingProviderId = "openai" | "local" | "gemini" | "voyage" | "mistral";
 export type EmbeddingProviderRequest = EmbeddingProviderId | "auto";
 export type EmbeddingProviderFallback = EmbeddingProviderId | "none";
 
-const REMOTE_EMBEDDING_PROVIDER_IDS = ["openai", "gemini", "voyage"] as const;
+const REMOTE_EMBEDDING_PROVIDER_IDS = ["openai", "gemini", "voyage", "mistral"] as const;
 
 export type EmbeddingProviderResult = {
   provider: EmbeddingProvider | null;
@@ -44,6 +49,7 @@ export type EmbeddingProviderResult = {
   openAi?: OpenAiEmbeddingClient;
   gemini?: GeminiEmbeddingClient;
   voyage?: VoyageEmbeddingClient;
+  mistral?: MistralEmbeddingClient;
 };
 
 export type EmbeddingProviderOptions = {
@@ -153,6 +159,10 @@ export async function createEmbeddingProvider(
     if (id === "voyage") {
       const { provider, client } = await createVoyageEmbeddingProvider(options);
       return { provider, voyage: client };
+    }
+    if (id === "mistral") {
+      const { provider, client } = await createMistralEmbeddingProvider(options);
+      return { provider, mistral: client };
     }
     const { provider, client } = await createOpenAiEmbeddingProvider(options);
     return { provider, openAi: client };

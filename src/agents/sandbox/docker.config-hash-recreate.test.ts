@@ -83,7 +83,7 @@ vi.mock("node:child_process", async (importOriginal) => {
   };
 });
 
-function createSandboxConfig(dns: string[]): SandboxConfig {
+function createSandboxConfig(dns: string[], binds?: string[]): SandboxConfig {
   return {
     mode: "all",
     scope: "shared",
@@ -100,7 +100,8 @@ function createSandboxConfig(dns: string[]): SandboxConfig {
       env: { LANG: "C.UTF-8" },
       dns,
       extraHosts: ["host.docker.internal:host-gateway"],
-      binds: ["/tmp/workspace:/workspace:rw"],
+      binds: binds ?? ["/tmp/workspace:/workspace:rw"],
+      dangerouslyAllowReservedContainerTargets: true,
     },
     browser: {
       enabled: false,
@@ -126,8 +127,8 @@ describe("ensureSandboxContainer config-hash recreation", () => {
     spawnState.calls.length = 0;
     spawnState.inspectRunning = true;
     spawnState.labelHash = "";
-    registryMocks.readRegistry.mockReset();
-    registryMocks.updateRegistry.mockReset();
+    registryMocks.readRegistry.mockClear();
+    registryMocks.updateRegistry.mockClear();
     registryMocks.updateRegistry.mockResolvedValue(undefined);
   });
 
@@ -188,5 +189,60 @@ describe("ensureSandboxContainer config-hash recreation", () => {
         configHash: newHash,
       }),
     );
+  });
+
+  it("applies custom binds after workspace mounts so overlapping binds can override", async () => {
+    const workspaceDir = "/tmp/workspace";
+    const cfg = createSandboxConfig(
+      ["1.1.1.1"],
+      ["/tmp/workspace-shared/USER.md:/workspace/USER.md:ro"],
+    );
+    cfg.docker.dangerouslyAllowExternalBindSources = true;
+    const expectedHash = computeSandboxConfigHash({
+      docker: cfg.docker,
+      workspaceAccess: cfg.workspaceAccess,
+      workspaceDir,
+      agentWorkspaceDir: workspaceDir,
+    });
+
+    spawnState.inspectRunning = false;
+    spawnState.labelHash = "stale-hash";
+    registryMocks.readRegistry.mockResolvedValue({
+      entries: [
+        {
+          containerName: "oc-test-shared",
+          sessionKey: "shared",
+          createdAtMs: 1,
+          lastUsedAtMs: 0,
+          image: cfg.docker.image,
+          configHash: "stale-hash",
+        },
+      ],
+    });
+
+    await ensureSandboxContainer({
+      sessionKey: "agent:main:session-1",
+      workspaceDir,
+      agentWorkspaceDir: workspaceDir,
+      cfg,
+    });
+
+    const createCall = spawnState.calls.find(
+      (call) => call.command === "docker" && call.args[0] === "create",
+    );
+    expect(createCall).toBeDefined();
+    expect(createCall?.args).toContain(`openclaw.configHash=${expectedHash}`);
+
+    const bindArgs: string[] = [];
+    const args = createCall?.args ?? [];
+    for (let i = 0; i < args.length; i += 1) {
+      if (args[i] === "-v" && typeof args[i + 1] === "string") {
+        bindArgs.push(args[i + 1]);
+      }
+    }
+    const workspaceMountIdx = bindArgs.indexOf("/tmp/workspace:/workspace");
+    const customMountIdx = bindArgs.indexOf("/tmp/workspace-shared/USER.md:/workspace/USER.md:ro");
+    expect(workspaceMountIdx).toBeGreaterThanOrEqual(0);
+    expect(customMountIdx).toBeGreaterThan(workspaceMountIdx);
   });
 });

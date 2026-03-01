@@ -445,45 +445,9 @@ function applySkillsPromptLimits(params: { skills: Skill[]; config?: OpenClawCon
 
 export function buildWorkspaceSkillSnapshot(
   workspaceDir: string,
-  opts?: {
-    config?: OpenClawConfig;
-    managedSkillsDir?: string;
-    bundledSkillsDir?: string;
-    entries?: SkillEntry[];
-    /** If provided, only include skills with these names */
-    skillFilter?: string[];
-    eligibility?: SkillEligibilityContext;
-    snapshotVersion?: number;
-  },
+  opts?: WorkspaceSkillBuildOptions & { snapshotVersion?: number },
 ): SkillSnapshot {
-  const skillEntries = opts?.entries ?? loadSkillEntries(workspaceDir, opts);
-  const eligible = filterSkillEntries(
-    skillEntries,
-    opts?.config,
-    opts?.skillFilter,
-    opts?.eligibility,
-  );
-  const promptEntries = eligible.filter(
-    (entry) => entry.invocation?.disableModelInvocation !== true,
-  );
-  const resolvedSkills = promptEntries.map((entry) => entry.skill);
-  const remoteNote = opts?.eligibility?.remote?.note?.trim();
-  const { skillsForPrompt, truncated } = applySkillsPromptLimits({
-    skills: resolvedSkills,
-    config: opts?.config,
-  });
-
-  const truncationNote = truncated
-    ? `⚠️ Skills truncated: included ${skillsForPrompt.length} of ${resolvedSkills.length}. Run \`openclaw skills check\` to audit.`
-    : "";
-
-  const prompt = [
-    remoteNote,
-    truncationNote,
-    formatSkillsForPrompt(compactSkillPaths(skillsForPrompt)),
-  ]
-    .filter(Boolean)
-    .join("\n");
+  const { eligible, prompt, resolvedSkills } = resolveWorkspaceSkillPromptState(workspaceDir, opts);
   const skillFilter = normalizeSkillFilter(opts?.skillFilter);
   return {
     prompt,
@@ -500,16 +464,29 @@ export function buildWorkspaceSkillSnapshot(
 
 export function buildWorkspaceSkillsPrompt(
   workspaceDir: string,
-  opts?: {
-    config?: OpenClawConfig;
-    managedSkillsDir?: string;
-    bundledSkillsDir?: string;
-    entries?: SkillEntry[];
-    /** If provided, only include skills with these names */
-    skillFilter?: string[];
-    eligibility?: SkillEligibilityContext;
-  },
+  opts?: WorkspaceSkillBuildOptions,
 ): string {
+  return resolveWorkspaceSkillPromptState(workspaceDir, opts).prompt;
+}
+
+type WorkspaceSkillBuildOptions = {
+  config?: OpenClawConfig;
+  managedSkillsDir?: string;
+  bundledSkillsDir?: string;
+  entries?: SkillEntry[];
+  /** If provided, only include skills with these names */
+  skillFilter?: string[];
+  eligibility?: SkillEligibilityContext;
+};
+
+function resolveWorkspaceSkillPromptState(
+  workspaceDir: string,
+  opts?: WorkspaceSkillBuildOptions,
+): {
+  eligible: SkillEntry[];
+  prompt: string;
+  resolvedSkills: Skill[];
+} {
   const skillEntries = opts?.entries ?? loadSkillEntries(workspaceDir, opts);
   const eligible = filterSkillEntries(
     skillEntries,
@@ -529,9 +506,14 @@ export function buildWorkspaceSkillsPrompt(
   const truncationNote = truncated
     ? `⚠️ Skills truncated: included ${skillsForPrompt.length} of ${resolvedSkills.length}. Run \`openclaw skills check\` to audit.`
     : "";
-  return [remoteNote, truncationNote, formatSkillsForPrompt(compactSkillPaths(skillsForPrompt))]
+  const prompt = [
+    remoteNote,
+    truncationNote,
+    formatSkillsForPrompt(compactSkillPaths(skillsForPrompt)),
+  ]
     .filter(Boolean)
     .join("\n");
+  return { eligible, prompt, resolvedSkills };
 }
 
 export function resolveSkillsPromptForRun(params: {

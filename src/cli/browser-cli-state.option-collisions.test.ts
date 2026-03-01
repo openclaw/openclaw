@@ -26,12 +26,15 @@ vi.mock("../runtime.js", () => ({
 }));
 
 describe("browser state option collisions", () => {
-  const createBrowserProgram = () => {
+  const createBrowserProgram = ({ withGatewayUrl = false } = {}) => {
     const program = new Command();
     const browser = program
       .command("browser")
       .option("--browser-profile <name>", "Browser profile")
       .option("--json", "Output JSON", false);
+    if (withGatewayUrl) {
+      browser.option("--url <url>", "Gateway WebSocket URL");
+    }
     const parentOpts = (cmd: Command) => cmd.parent?.opts?.() as BrowserParentOpts;
     registerBrowserStateCommands(browser, parentOpts);
     return program;
@@ -77,6 +80,40 @@ describe("browser state option collisions", () => {
     ]);
 
     expect((request as { body?: { targetId?: string } }).body?.targetId).toBe("tab-1");
+  });
+
+  it("resolves --url via parent when addGatewayClientOptions captures it", async () => {
+    const program = createBrowserProgram({ withGatewayUrl: true });
+    await program.parseAsync(
+      [
+        "browser",
+        "--url",
+        "ws://gw",
+        "cookies",
+        "set",
+        "session",
+        "abc",
+        "--url",
+        "https://example.com",
+      ],
+      { from: "user" },
+    );
+    const call = mocks.callBrowserRequest.mock.calls.at(-1);
+    expect(call).toBeDefined();
+    const request = call![1] as { body?: { cookie?: { url?: string } } };
+    expect(request.body?.cookie?.url).toBe("https://example.com");
+  });
+
+  it("inherits --url from parent when subcommand does not provide it", async () => {
+    const program = createBrowserProgram({ withGatewayUrl: true });
+    await program.parseAsync(
+      ["browser", "--url", "https://inherited.example.com", "cookies", "set", "session", "abc"],
+      { from: "user" },
+    );
+    const call = mocks.callBrowserRequest.mock.calls.at(-1);
+    expect(call).toBeDefined();
+    const request = call![1] as { body?: { cookie?: { url?: string } } };
+    expect(request.body?.cookie?.url).toBe("https://inherited.example.com");
   });
 
   it("accepts legacy parent `--json` by parsing payload via positional headers fallback", async () => {

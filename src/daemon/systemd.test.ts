@@ -18,7 +18,7 @@ import {
 
 describe("systemd availability", () => {
   beforeEach(() => {
-    execFileMock.mockReset();
+    execFileMock.mockClear();
   });
 
   it("returns true when systemctl --user succeeds", async () => {
@@ -151,7 +151,7 @@ describe("parseSystemdExecStart", () => {
 
 describe("systemd service control", () => {
   beforeEach(() => {
-    execFileMock.mockReset();
+    execFileMock.mockClear();
   });
 
   it("stops the resolved user unit", async () => {

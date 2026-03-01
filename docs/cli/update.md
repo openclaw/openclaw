@@ -21,6 +21,7 @@ openclaw update wizard
 openclaw update --channel beta
 openclaw update --channel dev
 openclaw update --tag beta
+openclaw update --dry-run
 openclaw update --no-restart
 openclaw update --json
 openclaw --update
@@ -31,6 +32,7 @@ openclaw --update
 - `--no-restart`: skip restarting the Gateway service after a successful update.
 - `--channel <stable|beta|dev>`: set the update channel (git + npm; persisted in config).
 - `--tag <dist-tag|version>`: override the npm dist-tag or version for this update only.
+- `--dry-run`: preview planned update actions (channel/tag/target/restart flow) without writing config, installing, syncing plugins, or restarting.
 - `--json`: print machine-readable `UpdateRunResult` JSON.
 - `--timeout <seconds>`: per-step timeout (default is 1200s).
 
@@ -65,6 +67,8 @@ install method aligned:
 - `dev` → ensures a git checkout (default: `~/openclaw`, override with `OPENCLAW_GIT_DIR`),
   updates it, and installs the global CLI from that checkout.
 - `stable`/`beta` → installs from npm using the matching dist-tag.
+
+The Gateway core auto-updater (when enabled via config) reuses this same update path.
 
 ## Git checkout flow
 
