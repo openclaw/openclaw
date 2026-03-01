@@ -21,6 +21,9 @@ export function setupAccessControlTestHarness(): void {
   beforeEach(() => {
     config = {
       channels: {
+        defaults: {
+          unpairedResponse: "branded",
+        },
         whatsapp: {
           dmPolicy: "pairing",
           allowFrom: [],
