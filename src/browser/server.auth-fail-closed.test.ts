@@ -12,13 +12,12 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../config/config.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/config.js")>();
-  const browserConfig = {
-    enabled: true,
-  };
   return {
     ...actual,
     loadConfig: () => ({
-      browser: browserConfig,
+      browser: {
+        enabled: true,
+      },
     }),
   };
 });
