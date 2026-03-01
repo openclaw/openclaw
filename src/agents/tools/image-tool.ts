@@ -77,10 +77,12 @@ function hasAuthForProvider(params: { provider: string; agentDir: string }): boo
 /**
  * Resolve the effective image model config for the `image` tool.
  *
- * - Prefer explicit config (`agents.defaults.imageModel`).
- * - Otherwise, try to "pair" the primary model with an image-capable model:
- *   - same provider (best effort)
- *   - fall back to OpenAI/Anthropic when available
+ * When agents.defaults.imageModel is set (primary or fallbacks), it is always
+ * used; no hardcoded model or provider is applied. This lets users set a
+ * local/Ollama vision model and control cost.
+ *
+ * When not set, fallback logic pairs the primary model with an image-capable
+ * model (same provider best effort, then OpenAI/Anthropic when available).
  */
 export function resolveImageModelConfigForTool(params: {
   cfg?: OpenClawConfig;

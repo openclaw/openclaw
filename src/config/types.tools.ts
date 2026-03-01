@@ -239,6 +239,9 @@ export type FsToolsConfig = {
   workspaceOnly?: boolean;
 };
 
+/** Per-tool enable/disable. When enabled is false, the tool is omitted from the agent prompt. */
+export type ToolEntriesConfig = Record<string, { enabled?: boolean }>;
+
 export type AgentToolsConfig = {
   /** Base tool profile applied before allow/deny lists. */
   profile?: ToolProfileId;
@@ -248,6 +251,8 @@ export type AgentToolsConfig = {
   deny?: string[];
   /** Optional tool policy overrides keyed by provider id or "provider/model". */
   byProvider?: Record<string, ToolPolicyConfig>;
+  /** Per-tool enable/disable (agent override of global tools.entries). */
+  entries?: ToolEntriesConfig;
   /** Per-agent elevated exec gate (can only further restrict global tools.elevated). */
   elevated?: {
     /** Enable or disable elevated mode for this agent (default: true). */
@@ -382,6 +387,23 @@ export type MemorySearchConfig = {
     enabled?: boolean;
     /** Optional cap on cached embeddings (best-effort). */
     maxEntries?: number;
+  };
+};
+
+export type XaiToolsConfig = {
+  /** xAI API key (defaults to XAI_API_KEY env var). */
+  apiKey?: string;
+  /** Model to use for xAI native tools (default: "grok-4"). */
+  model?: string;
+  /** X (Twitter) search tool via xAI native x_search. */
+  search?: {
+    /** Enable the xai_search tool (default: true when XAI_API_KEY is set). */
+    enabled?: boolean;
+  };
+  /** Python code execution tool via xAI native code_exec_python. */
+  codeExec?: {
+    /** Enable the xai_code_exec tool (default: true when XAI_API_KEY is set). */
+    enabled?: boolean;
   };
 };
 
@@ -559,4 +581,8 @@ export type ToolsConfig = {
       deny?: string[];
     };
   };
+  /** xAI/Grok native tool configuration (x_search, code_exec_python). */
+  xai?: XaiToolsConfig;
+  /** Per-tool enable/disable. Omit or set enabled: true to include (subject to allow/deny); enabled: false omits the tool from the prompt. */
+  entries?: ToolEntriesConfig;
 };

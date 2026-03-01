@@ -1,12 +1,12 @@
 # OpenClaw Forks & Community Enhancements Analysis
 
-_Researched: 2026-02-26 | Last updated: 2026-02-26 (all Tier 1 complete) | Base repo: 231k ⭐, 44k forks_
+_Researched: 2026-02-26 | Last updated: 2026-02-26 (Tier 1 complete + 2 Tier 2 items) | Base repo: 231k ⭐, 44k forks_
 
 ---
 
 ## Implementation Status
 
-All planned implementations are complete and merged into `main` (fork: `rish2jain/openclaw`).
+All planned Tier 1 implementations are complete. Two Tier 2 items (`#6872`, `#12082`) are also now implemented.
 
 ### Community Issue PRs
 
@@ -20,6 +20,8 @@ All planned implementations are complete and merged into `main` (fork: `rish2jai
 | [#27436](https://github.com/openclaw/openclaw/pull/27436) | `feat/rocketchat-channel-7520`            | #7520 — Rocket.Chat integration          | ✅ Merged to main | 2026-02-26 |
 | [#27443](https://github.com/openclaw/openclaw/pull/27443) | `feat/rbac-multi-user-permissions`        | #8081 — Multi-user RBAC                  | ✅ Merged to main | 2026-02-26 |
 | [#17874](https://github.com/openclaw/openclaw/pull/17874) | `feature/lancedb-custom-embeddings`       | — LanceDB custom embeddings              | ✅ Merged to main | 2026-02-26 |
+| —                                                         | `feat/xai-native-tools-6872`              | #6872 — xAI native tools                 | ✅ Merged to main | 2026-02-26 |
+| —                                                         | `feat/plugin-lifecycle-hooks-12082`       | #12082 — Plugin lifecycle interception   | ✅ Merged to main | 2026-02-26 |
 
 ### Upstream PRs Pulled and Integrated
 
@@ -251,6 +253,79 @@ Modified `src/agents/pi-embedded-runner/run/attempt.ts` to skip `resolveBootstra
 - Agent can still call `read_file` to re-check workspace files if needed
 - Expected savings: ~93.5% fewer tokens injected over a conversation (~$1.51 per 100-message session at Claude Sonnet pricing)
 
+### #6872 — xAI/Grok native tools (`src/agents/tools/xai-native-tools.ts`)
+
+Two new tools that use xAI's Responses API built-in server-side capabilities:
+
+**`xai_search`** — X (Twitter) post search via xAI native `x_search`:
+
+- Calls `POST https://api.x.ai/v1/responses` with `tools: [{"type": "x_search"}]`
+- Returns AI-synthesized summary of X posts with source URL citations
+- Distinct from `web_search` (general web) — targets X/Twitter specifically
+- Results cached via `web-shared.ts` cache utilities (same TTL as web search)
+
+**`xai_code_exec`** — Python sandbox via xAI native `code_exec_python`:
+
+- Calls Responses API with `tools: [{"type": "code_exec_python"}]`
+- Grok writes and executes Python in xAI's remote sandbox; returns stdout, stderr, exit code, and AI summary
+- Timeout extended to 3× default (code exec runs longer than search)
+- Only successful runs (exit 0) are cached
+
+**Config:**
+
+```yaml
+tools:
+  xai:
+    apiKey: "" # defaults to XAI_API_KEY env var
+    model: grok-4 # defaults to "grok-4"
+    search:
+      enabled: true # auto-enabled when XAI_API_KEY is set
+    codeExec:
+      enabled: true
+```
+
+**Wired into:** `openclaw-tools.ts` (alongside `webSearchTool`/`webFetchTool`), exported from `web-tools.ts`. `XaiToolsConfig` type added to `types.tools.ts`.
+
+### #12082 — Plugin lifecycle interception hooks
+
+Three targeted changes to complete the tool call lifecycle for plugin authors:
+
+**1. Synthetic result injection** (`src/plugins/types.ts`, `pi-tools.before-tool-call.ts`):
+
+- `PluginHookBeforeToolCallResult` gains `syntheticResult?: unknown`
+- When a plugin returns `syntheticResult` from `before_tool_call`, the actual tool function is skipped and the synthetic value is returned to the LLM
+- `syntheticResult` takes priority over `block` when both are present
+- Wired in both `wrapToolWithBeforeToolCallHook` and `pi-tool-definition-adapter.ts`
+
+**2. AI SDK engine coverage** (`src/agents/aisdk/tools.ts`):
+
+- `convertPiToolToAiSdk()` now fires `before_tool_call` and `after_tool_call` hooks on every tool call
+- Supports blocking, param overrides, synthetic result injection, and fire-and-forget observation
+- Hook errors are silently caught so tool execution is never broken by a plugin error
+
+**Plugin author example:**
+
+```typescript
+api.on("before_tool_call", async (event) => {
+  // Block dangerous commands
+  if (event.toolName === "exec" && event.params.command?.includes("rm -rf")) {
+    return { block: true, blockReason: "Destructive commands are not allowed." };
+  }
+  // Inject a cached result without calling the tool
+  const cached = myCache.get(event.toolName + JSON.stringify(event.params));
+  if (cached) {
+    return { syntheticResult: cached };
+  }
+  // Modify params before execution
+  return { params: { ...event.params, timeout: 5000 } };
+});
+
+api.on("after_tool_call", async (event) => {
+  // Audit all tool calls
+  audit.log({ tool: event.toolName, durationMs: event.durationMs, error: event.error });
+});
+```
+
 ---
 
 ## Executive Summary
@@ -421,7 +496,7 @@ From the upstream GitHub issues (sorted by 👍):
 | 28  | #14992 | Brave Search LLM Context API        | Open — no PR (separate from #19298)                                    |
 | 21  | #19298 | Brave LLM Context API mode          | ✅ **Integrated** — cherry-picked from PR #19298                       |
 | 16  | #4686  | WhatsApp relink bug                 | Open — no PR                                                           |
-| 14  | #22559 | Antigravity Gemini 3 missing        | ✅ **Implemented** — PR #27425, merged                                 |
+| 14  | #22559 | Gemini 3.1 missing from catalog     | ✅ **Implemented** — PR #27425, merged                                 |
 | 12  | #8081  | Multi-user RBAC                     | ✅ **Implemented** — PR #27443, merged                                 |
 | 12  | #7520  | Rocket.Chat integration             | ✅ **Implemented** — PR #27436, merged                                 |
 | 12  | #7309  | DeepSeek API first-class            | Open — no PR                                                           |
@@ -429,8 +504,8 @@ From the upstream GitHub issues (sorted by 👍):
 | 10  | #21290 | OpenTelemetry diagnostics           | `extensions/diagnostics-otel` exists in upstream                       |
 | 10  | #11399 | Extensible web_search via plugins   | Open — no PR                                                           |
 | 9   | #9157  | Workspace token waste (93.5%)       | ✅ **Integrated** — first-message-only injection in pi-embedded-runner |
-| 9   | #6872  | xAI (Grok) native tools             | Open — no PR                                                           |
-| 9   | #12082 | Plugin lifecycle interception hooks | Open — no PR                                                           |
+| 9   | #6872  | xAI (Grok) native tools             | ✅ **Implemented** — `xai_search` (x_search) + `xai_code_exec` tools   |
+| 9   | #12082 | Plugin lifecycle interception hooks | ✅ **Implemented** — `syntheticResult` injection + AI SDK hook wiring  |
 | 6   | #21530 | Native MCP client support           | ✅ **Integrated** — surgical checkout from PR #21530                   |
 | 6   | #26534 | DingTalk channel                    | ✅ **Implemented** — PR #27429, merged                                 |
 
@@ -458,13 +533,13 @@ From the upstream GitHub issues (sorted by 👍):
 
 ### Tier 2 — Integrate If Relevant to Your Use Case
 
-| Enhancement                             | Source               | Effort | Benefit                    | When                              |
-| --------------------------------------- | -------------------- | ------ | -------------------------- | --------------------------------- |
-| **GuardAgent privacy tiers (S1/S2/S3)** | EdgeClaw             | High   | Fine-grained data routing  | Privacy-critical deployments      |
-| **Multi-tenant container isolation**    | openclaw-multitenant | High   | Team/SaaS deployment       | Beyond RBAC — container isolation |
-| **DeepSeek first-class support**        | Issue #7309          | Low    | Cost-efficient alternative | Budget-conscious                  |
-| **xAI/Grok native tools**               | Issue #6872          | Medium | x_search, code_exec        | xAI users                         |
-| **Plugin lifecycle interception**       | Issue #12082         | Medium | Pre/post-tool hook control | Plugin authors                    |
+| Enhancement                             | Source               | Effort | Benefit                    | When                                 |
+| --------------------------------------- | -------------------- | ------ | -------------------------- | ------------------------------------ |
+| **GuardAgent privacy tiers (S1/S2/S3)** | EdgeClaw             | High   | Fine-grained data routing  | Privacy-critical deployments         |
+| **Multi-tenant container isolation**    | openclaw-multitenant | High   | Team/SaaS deployment       | Beyond RBAC — container isolation    |
+| **DeepSeek first-class support**        | Issue #7309          | Low    | Cost-efficient alternative | Budget-conscious                     |
+| **xAI/Grok native tools**               | Issue #6872          | Medium | x_search, code_exec        | ✅ Done (xai_search + xai_code_exec) |
+| **Plugin lifecycle interception**       | Issue #12082         | Medium | Pre/post-tool hook control | ✅ Done (syntheticResult + AI SDK)   |
 
 ### Tier 3 — Monitor, Don't Integrate Yet
 
@@ -495,12 +570,11 @@ From the upstream GitHub issues (sorted by 👍):
 | Fork integrations     | ironclaw (AI SDK engine), Composio (Tool Router), LocalClaw (routing + health) |
 | Issue-driven features | #2317 (SearXNG), #9157 (workspace token optimization)                          |
 
-**Tier 1 is fully complete. Recommended next targets (Tier 2):**
+**Tier 1 is fully complete. Two Tier 2 items are now implemented. Recommended next targets (Tier 2):**
 
 1. **GuardAgent S1/S2/S3 privacy tiers** (EdgeClaw) — the most architecturally novel feature in the ecosystem. Routes sensitive data only to on-prem local models; zero visible change for public-only deployments. High effort, very high value for privacy-sensitive or regulated environments.
 2. **DeepSeek first-class support** (#7309) — low effort, cost-efficient alternative for budget-conscious deployments.
 3. **Crittora boot-time policy verification** — cryptographically signed policy gate; valuable for team/enterprise production deployments.
-4. **Plugin lifecycle interception** (#12082) — pre/post-tool hooks for plugin authors, opens up a new class of audit/compliance integrations.
 
 ---
 

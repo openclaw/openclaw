@@ -84,6 +84,9 @@ import type {
   ExecApprovalsSnapshotSchema,
   ExecApprovalRequestParamsSchema,
   ExecApprovalResolveParamsSchema,
+  ExecApprovalPauseParamsSchema,
+  ExecApprovalResumeParamsSchema,
+  ExecApprovalInterruptParamsSchema,
 } from "./exec-approvals.js";
 import type {
   ConnectParamsSchema,
@@ -245,6 +248,9 @@ export type ExecApprovalsNodeSetParams = Static<typeof ExecApprovalsNodeSetParam
 export type ExecApprovalsSnapshot = Static<typeof ExecApprovalsSnapshotSchema>;
 export type ExecApprovalRequestParams = Static<typeof ExecApprovalRequestParamsSchema>;
 export type ExecApprovalResolveParams = Static<typeof ExecApprovalResolveParamsSchema>;
+export type ExecApprovalPauseParams = Static<typeof ExecApprovalPauseParamsSchema>;
+export type ExecApprovalResumeParams = Static<typeof ExecApprovalResumeParamsSchema>;
+export type ExecApprovalInterruptParams = Static<typeof ExecApprovalInterruptParamsSchema>;
 export type DevicePairListParams = Static<typeof DevicePairListParamsSchema>;
 export type DevicePairApproveParams = Static<typeof DevicePairApproveParamsSchema>;
 export type DevicePairRejectParams = Static<typeof DevicePairRejectParamsSchema>;

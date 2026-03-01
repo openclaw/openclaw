@@ -1,5 +1,6 @@
 import {
   listAgentIds,
+  resolveAgentConfig,
   resolveAgentDir,
   resolveEffectiveModelFallbacks,
   resolveSessionAgentId,
@@ -183,6 +184,7 @@ function runAgentAttempt(params: {
     streamParams: params.opts.streamParams,
     agentDir: params.agentDir,
     onAgentEvent: params.onAgentEvent,
+    toolsFilter: params.opts.toolsFilter,
   });
 }
 
@@ -283,6 +285,13 @@ export async function agentCommand(
       sessionKey: sessionKey ?? opts.sessionKey?.trim(),
       config: cfg,
     });
+  const perAgentCfg = resolveAgentConfig(cfg, sessionAgentId);
+  const effectiveAgentCfg = {
+    ...agentCfg,
+    thinkingDefault:
+      (perAgentCfg?.thinkingDefault as ThinkLevel | undefined) ??
+      (agentCfg?.thinkingDefault as ThinkLevel | undefined),
+  };
   const workspaceDirRaw = resolveAgentWorkspaceDir(cfg, sessionAgentId);
   const agentDir = resolveAgentDir(cfg, sessionAgentId);
   const workspace = await ensureAgentWorkspace({
@@ -308,10 +317,7 @@ export async function agentCommand(
     }
 
     let resolvedThinkLevel =
-      thinkOnce ??
-      thinkOverride ??
-      persistedThinking ??
-      (agentCfg?.thinkingDefault as ThinkLevel | undefined);
+      thinkOnce ?? thinkOverride ?? persistedThinking ?? effectiveAgentCfg?.thinkingDefault;
     const resolvedVerboseLevel =
       verboseOverride ?? persistedVerbose ?? (agentCfg?.verboseDefault as VerboseLevel | undefined);
 

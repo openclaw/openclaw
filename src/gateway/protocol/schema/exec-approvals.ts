@@ -85,6 +85,12 @@ export const ExecApprovalsNodeSetParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+const ExecApprovalRiskLevelSchema = Type.Union([
+  Type.Literal("low"),
+  Type.Literal("medium"),
+  Type.Literal("high"),
+]);
+
 export const ExecApprovalRequestParamsSchema = Type.Object(
   {
     id: Type.Optional(NonEmptyString),
@@ -97,6 +103,8 @@ export const ExecApprovalRequestParamsSchema = Type.Object(
     agentId: Type.Optional(Type.Union([Type.String(), Type.Null()])),
     resolvedPath: Type.Optional(Type.Union([Type.String(), Type.Null()])),
     sessionKey: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+    riskLevel: Type.Optional(Type.Union([ExecApprovalRiskLevelSchema, Type.Null()])),
+    workflow: Type.Optional(Type.Union([Type.String(), Type.Null()])),
     timeoutMs: Type.Optional(Type.Integer({ minimum: 1 })),
     twoPhase: Type.Optional(Type.Boolean()),
   },
@@ -110,3 +118,12 @@ export const ExecApprovalResolveParamsSchema = Type.Object(
   },
   { additionalProperties: false },
 );
+
+const ExecApprovalIdParamsSchema = Type.Object(
+  { id: NonEmptyString },
+  { additionalProperties: false },
+);
+
+export const ExecApprovalPauseParamsSchema = ExecApprovalIdParamsSchema;
+export const ExecApprovalResumeParamsSchema = ExecApprovalIdParamsSchema;
+export const ExecApprovalInterruptParamsSchema = ExecApprovalIdParamsSchema;

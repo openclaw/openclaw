@@ -10,6 +10,9 @@ import {
   formatValidationErrors,
   validateExecApprovalRequestParams,
   validateExecApprovalResolveParams,
+  validateExecApprovalPauseParams,
+  validateExecApprovalResumeParams,
+  validateExecApprovalInterruptParams,
 } from "../protocol/index.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
@@ -51,6 +54,8 @@ export function createExecApprovalHandlers(
         agentId?: string;
         resolvedPath?: string;
         sessionKey?: string;
+        riskLevel?: "low" | "medium" | "high" | null;
+        workflow?: string | null;
         timeoutMs?: number;
         twoPhase?: boolean;
       };
@@ -86,6 +91,8 @@ export function createExecApprovalHandlers(
         agentId: p.agentId ?? null,
         resolvedPath: p.resolvedPath ?? null,
         sessionKey: p.sessionKey ?? null,
+        riskLevel: p.riskLevel ?? null,
+        workflow: p.workflow ?? null,
       };
       const record = manager.create(request, timeoutMs, explicitId);
       record.requestedByConnId = client?.connId ?? null;
@@ -237,6 +244,75 @@ export function createExecApprovalHandlers(
           context.logGateway?.error?.(`exec approvals: forward resolve failed: ${String(err)}`);
         });
       respond(true, { ok: true }, undefined);
+    },
+    "exec.approval.pause": async ({ params, respond }) => {
+      if (!validateExecApprovalPauseParams(params)) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            `invalid exec.approval.pause params: ${formatValidationErrors(
+              validateExecApprovalPauseParams.errors,
+            )}`,
+          ),
+        );
+        return;
+      }
+      const id = (params as { id: string }).id.trim();
+      const ok = manager.pause(id);
+      respond(true, { ok }, undefined);
+    },
+    "exec.approval.resume": async ({ params, respond }) => {
+      if (!validateExecApprovalResumeParams(params)) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            `invalid exec.approval.resume params: ${formatValidationErrors(
+              validateExecApprovalResumeParams.errors,
+            )}`,
+          ),
+        );
+        return;
+      }
+      const id = (params as { id: string }).id.trim();
+      const ok = manager.resume(id);
+      respond(true, { ok }, undefined);
+    },
+    "exec.approval.interrupt": async ({ params, respond, client, context }) => {
+      if (!validateExecApprovalInterruptParams(params)) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            `invalid exec.approval.interrupt params: ${formatValidationErrors(
+              validateExecApprovalInterruptParams.errors,
+            )}`,
+          ),
+        );
+        return;
+      }
+      const id = (params as { id: string }).id.trim();
+      const resolvedBy = client?.connect?.client?.displayName ?? client?.connect?.client?.id;
+      const ok = manager.interrupt(id, resolvedBy ?? null);
+      if (ok) {
+        const snapshot = manager.getSnapshot(id);
+        const resolution = {
+          id,
+          decision: "interrupted" as const,
+          resolvedBy,
+          ts: Date.now(),
+          request: snapshot?.request,
+        };
+        context.broadcast("exec.approval.resolved", resolution, { dropIfSlow: true });
+        void opts?.forwarder?.handleResolved(resolution).catch((err) => {
+          context.logGateway?.error?.(`exec approvals: forward interrupt failed: ${String(err)}`);
+        });
+      }
+      respond(true, { ok }, undefined);
     },
   };
 }

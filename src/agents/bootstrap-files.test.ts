@@ -6,7 +6,11 @@ import {
   type AgentBootstrapHookContext,
 } from "../hooks/internal-hooks.js";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
-import { resolveBootstrapContextForRun, resolveBootstrapFilesForRun } from "./bootstrap-files.js";
+import {
+  resolveBootstrapContextForRun,
+  resolveBootstrapFilesForRun,
+  resolveContextForRun,
+} from "./bootstrap-files.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
 
 function registerExtraBootstrapFileHook() {
@@ -96,5 +100,50 @@ describe("resolveBootstrapContextForRun", () => {
     );
 
     expect(extra?.content).toBe("extra");
+  });
+
+  it("returns empty bootstrap and context when injectMode is once and bootstrapInjected is true", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-once-");
+    const result = await resolveBootstrapContextForRun({
+      workspaceDir,
+      injectMode: "once",
+      bootstrapInjected: true,
+    });
+    expect(result.bootstrapFiles).toEqual([]);
+    expect(result.contextFiles).toEqual([]);
+  });
+});
+
+describe("resolveContextForRun", () => {
+  beforeEach(() => clearInternalHooks());
+  afterEach(() => clearInternalHooks());
+
+  it("uses raw path when context.mode is unset or raw", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-context-raw-");
+    const raw = await resolveBootstrapContextForRun({ workspaceDir });
+    const viaContextUnset = await resolveContextForRun({ workspaceDir });
+    const viaContextRaw = await resolveContextForRun({
+      workspaceDir,
+      config: {
+        agents: { defaults: { context: { mode: "raw" } } },
+      } as import("../config/config.js").OpenClawConfig,
+    });
+    expect(viaContextUnset.contextFiles.length).toBe(raw.contextFiles.length);
+    expect(viaContextRaw.contextFiles.length).toBe(raw.contextFiles.length);
+    expect(viaContextUnset.bootstrapFiles.length).toBe(raw.bootstrapFiles.length);
+    expect(viaContextRaw.bootstrapFiles.length).toBe(raw.bootstrapFiles.length);
+  });
+
+  it("uses index-rank-compact path when context.mode is index-rank-compact (stub delegates to raw)", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-context-index-");
+    const raw = await resolveBootstrapContextForRun({ workspaceDir });
+    const viaCompact = await resolveContextForRun({
+      workspaceDir,
+      config: {
+        agents: { defaults: { context: { mode: "index-rank-compact" } } },
+      } as import("../config/config.js").OpenClawConfig,
+    });
+    expect(viaCompact.bootstrapFiles.length).toBe(raw.bootstrapFiles.length);
+    expect(viaCompact.contextFiles.length).toBe(raw.contextFiles.length);
   });
 });

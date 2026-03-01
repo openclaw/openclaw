@@ -12,7 +12,9 @@ export type HookContext = {
   loopDetection?: ToolLoopDetectionConfig;
 };
 
-type HookOutcome = { blocked: true; reason: string } | { blocked: false; params: unknown };
+type HookOutcome =
+  | { blocked: true; reason: string }
+  | { blocked: false; params: unknown; syntheticResult?: unknown };
 
 const log = createSubsystemLogger("agents/tools");
 const BEFORE_TOOL_CALL_WRAPPED = Symbol("beforeToolCallWrapped");
@@ -151,6 +153,21 @@ export async function runBeforeToolCallHook(args: {
       },
     );
 
+    // syntheticResult takes priority: plugin short-circuits tool execution
+    if (hookResult?.syntheticResult !== undefined) {
+      const effectiveParams =
+        hookResult.params && isPlainObject(hookResult.params)
+          ? isPlainObject(params)
+            ? { ...params, ...hookResult.params }
+            : hookResult.params
+          : params;
+      return {
+        blocked: false,
+        params: effectiveParams,
+        syntheticResult: hookResult.syntheticResult,
+      };
+    }
+
     if (hookResult?.block) {
       return {
         blocked: true,
@@ -192,6 +209,10 @@ export function wrapToolWithBeforeToolCallHook(
       });
       if (outcome.blocked) {
         throw new Error(outcome.reason);
+      }
+      // Plugin injected a synthetic result — skip the real tool call entirely; do not store params
+      if (outcome.syntheticResult !== undefined) {
+        return outcome.syntheticResult as Awaited<ReturnType<typeof execute>>;
       }
       if (toolCallId) {
         adjustedParamsByToolCallId.set(toolCallId, outcome.params);

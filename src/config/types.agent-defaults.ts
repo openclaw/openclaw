@@ -163,6 +163,15 @@ export type AgentDefaultsConfig = {
   bootstrapMaxChars?: number;
   /** Max total chars across all injected bootstrap files (default: 150000). */
   bootstrapTotalMaxChars?: number;
+  /**
+   * When to inject workspace bootstrap files (AGENTS.md, TOOLS.md, etc.).
+   * - "every-turn": inject on every turn (default).
+   * - "once": inject only on first message of the session; later turns get none.
+   * - "minimal": inject once, then a minimal set on later turns (e.g. identity only).
+   */
+  bootstrap?: {
+    injectMode?: "every-turn" | "once" | "minimal";
+  };
   /** Optional IANA timezone for the user (used in system prompt; defaults to host timezone). */
   userTimezone?: string;
   /** Time format in system prompt: auto (OS preference), 12-hour, or 24-hour. */
@@ -183,6 +192,14 @@ export type AgentDefaultsConfig = {
   contextTokens?: number;
   /** Optional CLI backends for text-only fallback (claude-cli, etc.). */
   cliBackends?: Record<string, CliBackendConfig>;
+  /**
+   * Context assembly mode for workspace/memory injection.
+   * - "raw": full bootstrap files and raw memory (default).
+   * - "index-rank-compact": indexed, ranked, and compacted snippets within a token budget (when implemented).
+   */
+  context?: {
+    mode?: "raw" | "index-rank-compact";
+  };
   /** Opt-in: prune old tool results from the LLM context to reduce token usage. */
   contextPruning?: AgentContextPruningConfig;
   /** Compaction tuning and pre-compaction memory flush behavior. */

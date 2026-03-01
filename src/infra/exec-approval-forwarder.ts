@@ -196,6 +196,9 @@ function decisionLabel(decision: ExecApprovalDecision): string {
   if (decision === "allow-always") {
     return "allowed always";
   }
+  if (decision === "interrupted") {
+    return "interrupted";
+  }
   return "denied";
 }
 

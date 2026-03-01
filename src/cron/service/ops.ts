@@ -4,6 +4,7 @@ import {
   computeJobNextRunAtMs,
   createJob,
   findJobOrThrow,
+  validateTriggerOnCompletionOf,
   isJobDue,
   nextWakeAtMs,
   recomputeNextRuns,
@@ -17,6 +18,7 @@ import {
   armTimer,
   emit,
   executeJobCoreWithTimeout,
+  markChainedJobsDue,
   runMissedJobs,
   stopTimer,
   wake,
@@ -265,6 +267,10 @@ export async function update(state: CronServiceState, id: string, patch: CronJob
     warnIfDisabled(state, "update");
     await ensureLoaded(state, { skipRecompute: true });
     const job = findJobOrThrow(state, id);
+    const triggerTarget = (patch as { triggerOnCompletionOf?: string }).triggerOnCompletionOf;
+    if (typeof triggerTarget === "string" && triggerTarget.trim()) {
+      validateTriggerOnCompletionOf(state, id, triggerTarget.trim());
+    }
     const now = state.deps.nowMs();
     applyJobPatch(job, patch);
     if (job.schedule.kind === "every") {
@@ -442,6 +448,7 @@ export async function run(state: CronServiceState, id: string, mode?: "due" | "f
       snapshot: postRunSnapshot,
       removed: postRunRemoved,
     });
+    markChainedJobsDue(state, jobId, endedAt);
     recomputeNextRunsForMaintenance(state);
     await persist(state);
     armTimer(state);

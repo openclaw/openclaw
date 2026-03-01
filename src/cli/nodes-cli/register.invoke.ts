@@ -271,6 +271,9 @@ export function registerNodesInvokeCommands(nodes: Command) {
             if (decision === "deny") {
               throw new Error("exec denied: user denied");
             }
+            if (decision === "interrupted") {
+              throw new Error("exec denied: interrupted");
+            }
             if (!decision) {
               if (askFallback === "full") {
                 approvedByAsk = true;

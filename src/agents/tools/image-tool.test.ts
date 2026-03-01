@@ -282,6 +282,42 @@ describe("image tool implicit imageModel config", () => {
     });
   });
 
+  it("uses only agents.defaults.imageModel when set (no hardcoded model)", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude-sonnet-4" },
+            imageModel: {
+              primary: "ollama/llava",
+              fallbacks: ["openai/gpt-5-mini"],
+            },
+          },
+        },
+      };
+      const resolved = resolveImageModelConfigForTool({ cfg, agentDir });
+      expect(resolved).toEqual({
+        primary: "ollama/llava",
+        fallbacks: ["openai/gpt-5-mini"],
+      });
+      // No API key stubbing: when imageModel is explicit, createImageTool does not check auth at creation; auth is validated when the tool runs.
+      const tool = createImageTool({ config: cfg, agentDir });
+      expect(tool).not.toBeNull();
+    });
+  });
+
+  it("falls back to pairing when agents.defaults.imageModel is not set", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      vi.stubEnv("ANTHROPIC_API_KEY", "anthropic-test");
+      const cfg: OpenClawConfig = {
+        agents: { defaults: { model: { primary: "anthropic/claude-sonnet-4" } } },
+      };
+      const resolved = resolveImageModelConfigForTool({ cfg, agentDir });
+      expect(resolved).not.toBeNull();
+      expect(resolved?.primary).toBeDefined();
+    });
+  });
+
   it("keeps image tool available when primary model supports images (for explicit requests)", async () => {
     // When the primary model supports images, we still keep the tool available
     // because images are auto-injected into prompts. The tool description is

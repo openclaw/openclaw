@@ -119,6 +119,11 @@ export type CronJob = {
   createdAtMs: number;
   updatedAtMs: number;
   schedule: CronSchedule;
+  /**
+   * When set, this job becomes due when the referenced job completes (in addition to schedule).
+   * Chained job runs without waiting for the next schedule tick.
+   */
+  triggerOnCompletionOf?: string;
   sessionTarget: CronSessionTarget;
   wakeMode: CronWakeMode;
   payload: CronPayload;

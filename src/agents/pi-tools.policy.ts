@@ -196,6 +196,31 @@ function resolveProviderToolPolicy(params: {
   return undefined;
 }
 
+/**
+ * Returns the set of tool names (normalized) that are explicitly disabled via
+ * tools.entries.<name>.enabled: false. Agent entries override global.
+ */
+export function resolveDisabledToolNames(params: {
+  config?: OpenClawConfig;
+  agentId?: string;
+}): Set<string> {
+  const globalEntries = params.config?.tools?.entries;
+  const agentConfig =
+    params.config && params.agentId ? resolveAgentConfig(params.config, params.agentId) : undefined;
+  const agentEntries = agentConfig?.tools?.entries;
+  const merged: Record<string, { enabled?: boolean }> = {
+    ...(typeof globalEntries === "object" && globalEntries !== null ? globalEntries : {}),
+    ...(typeof agentEntries === "object" && agentEntries !== null ? agentEntries : {}),
+  };
+  const disabled = new Set<string>();
+  for (const [name, entry] of Object.entries(merged)) {
+    if (entry?.enabled === false) {
+      disabled.add(normalizeToolName(name));
+    }
+  }
+  return disabled;
+}
+
 export function resolveEffectiveToolPolicy(params: {
   config?: OpenClawConfig;
   sessionKey?: string;

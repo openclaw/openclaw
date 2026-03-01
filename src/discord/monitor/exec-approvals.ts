@@ -65,9 +65,11 @@ function decodeCustomIdValue(value: string): string {
   }
 }
 
+export type ExecApprovalButtonAction = ExecApprovalDecision | "interrupt";
+
 export function buildExecApprovalCustomId(
   approvalId: string,
-  action: ExecApprovalDecision,
+  action: ExecApprovalButtonAction,
 ): string {
   return [`${EXEC_APPROVAL_KEY}:id=${encodeCustomIdValue(approvalId)}`, `action=${action}`].join(
     ";",
@@ -76,7 +78,7 @@ export function buildExecApprovalCustomId(
 
 export function parseExecApprovalData(
   data: ComponentData,
-): { approvalId: string; action: ExecApprovalDecision } | null {
+): { approvalId: string; action: ExecApprovalButtonAction } | null {
   if (!data || typeof data !== "object") {
     return null;
   }
@@ -87,8 +89,13 @@ export function parseExecApprovalData(
   if (!rawId || !rawAction) {
     return null;
   }
-  const action = rawAction as ExecApprovalDecision;
-  if (action !== "allow-once" && action !== "allow-always" && action !== "deny") {
+  const action = rawAction as ExecApprovalButtonAction;
+  if (
+    action !== "allow-once" &&
+    action !== "allow-always" &&
+    action !== "deny" &&
+    action !== "interrupt"
+  ) {
     return null;
   }
   return {
@@ -145,7 +152,7 @@ class ExecApprovalActionButton extends Button {
 
   constructor(params: {
     approvalId: string;
-    action: ExecApprovalDecision;
+    action: ExecApprovalButtonAction;
     label: string;
     style: ButtonStyle;
   }) {
@@ -177,6 +184,12 @@ class ExecApprovalActionRow extends Row<Button> {
         label: "Deny",
         style: ButtonStyle.Danger,
       }),
+      new ExecApprovalActionButton({
+        approvalId,
+        action: "interrupt",
+        label: "Interrupt",
+        style: ButtonStyle.Secondary,
+      }),
     ]);
   }
 }
@@ -207,6 +220,12 @@ function resolveExecApprovalAccountId(params: {
 
 function buildExecApprovalMetadataLines(request: ExecApprovalRequest): string[] {
   const lines: string[] = [];
+  if (request.request.riskLevel) {
+    lines.push(`- Risk: ${request.request.riskLevel}`);
+  }
+  if (request.request.workflow) {
+    lines.push(`- Workflow: ${request.request.workflow}`);
+  }
   if (request.request.cwd) {
     lines.push(`- Working Directory: ${request.request.cwd}`);
   }
@@ -268,10 +287,12 @@ function createResolvedContainer(params: {
       ? "Allowed (once)"
       : params.decision === "allow-always"
         ? "Allowed (always)"
-        : "Denied";
+        : params.decision === "interrupted"
+          ? "Interrupted"
+          : "Denied";
 
   const accentColor =
-    params.decision === "deny"
+    params.decision === "deny" || params.decision === "interrupted"
       ? "#ED4245"
       : params.decision === "allow-always"
         ? "#5865F2"
@@ -726,6 +747,29 @@ export class DiscordExecApprovalHandler {
     }
   }
 
+  async interruptApproval(approvalId: string): Promise<boolean> {
+    if (!this.gatewayClient) {
+      logError("discord exec approvals: gateway client not connected");
+      return false;
+    }
+
+    logDebug(`discord exec approvals: interrupting ${approvalId}`);
+
+    try {
+      const result = await this.gatewayClient.request("exec.approval.interrupt", {
+        id: approvalId,
+      });
+      const ok = (result as { ok?: boolean })?.ok === true;
+      if (ok) {
+        logDebug(`discord exec approvals: interrupted ${approvalId} successfully`);
+      }
+      return ok;
+    } catch (err) {
+      logError(`discord exec approvals: interrupt failed: ${String(err)}`);
+      return false;
+    }
+  }
+
   /** Return the list of configured approver IDs. */
   getApprovers(): string[] {
     return this.opts.config.approvers ?? [];
@@ -772,6 +816,26 @@ export class ExecApprovalButton extends Button {
         });
       } catch {
         // Interaction may have expired
+      }
+      return;
+    }
+
+    if (parsed.action === "interrupt") {
+      const ok = await this.ctx.handler.interruptApproval(parsed.approvalId);
+      try {
+        await interaction.update({
+          content: ok
+            ? `⛔ Exec approval interrupted. ID: ${parsed.approvalId}`
+            : "Approval no longer pending or not found.",
+          components: [],
+        });
+      } catch {
+        // Interaction may have expired
+      }
+      if (!ok) {
+        logError(
+          "discord exec approvals: interrupt failed (approval not found or already resolved)",
+        );
       }
       return;
     }

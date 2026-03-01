@@ -74,6 +74,8 @@ export type SessionEntry = {
   inputTokens?: number;
   outputTokens?: number;
   totalTokens?: number;
+  /** When bootstrap.injectMode is "once", set true after first inject so later turns skip full bootstrap. */
+  bootstrapInjected?: boolean;
   /**
    * Whether totalTokens reflects a fresh context snapshot for the latest run.
    * Undefined means legacy/unknown freshness; false forces consumers to treat

@@ -62,7 +62,7 @@ export function createComposioMultiExecuteTool(client: ComposioClient, _config: 
       const normalizedExecutions = executions
         .slice(0, 50)
         .filter(
-          (exec): exec is { tool_slug: string; arguments: Record<string, unknown> } =>
+          (exec): exec is { tool_slug: string } =>
             exec &&
             typeof exec === "object" &&
             typeof exec.tool_slug === "string" &&

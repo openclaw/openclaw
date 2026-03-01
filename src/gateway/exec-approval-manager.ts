@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { ExecApprovalDecision } from "../infra/exec-approvals.js";
+import type { ExecApprovalDecision, ExecApprovalRiskLevel } from "../infra/exec-approvals.js";
 
 // Grace period to keep resolved entries for late awaitDecision calls
 const RESOLVED_ENTRY_GRACE_MS = 15_000;
@@ -14,13 +14,19 @@ export type ExecApprovalRequestPayload = {
   agentId?: string | null;
   resolvedPath?: string | null;
   sessionKey?: string | null;
+  riskLevel?: ExecApprovalRiskLevel | null;
+  workflow?: string | null;
 };
+
+export type ExecApprovalRecordState = "pending" | "paused" | "resumed";
 
 export type ExecApprovalRecord = {
   id: string;
   request: ExecApprovalRequestPayload;
   createdAtMs: number;
   expiresAtMs: number;
+  /** Workflow state for pause/resume; only meaningful while unresolved. */
+  state?: ExecApprovalRecordState;
   // Caller metadata (best-effort). Used to prevent other clients from replaying an approval id.
   requestedByConnId?: string | null;
   requestedByDeviceId?: string | null;
@@ -53,6 +59,7 @@ export class ExecApprovalManager {
       request,
       createdAtMs: now,
       expiresAtMs: now + timeoutMs,
+      state: "pending",
     };
     return record;
   }
@@ -146,6 +153,53 @@ export class ExecApprovalManager {
         this.pending.delete(recordId);
       }
     }, RESOLVED_ENTRY_GRACE_MS);
+    return true;
+  }
+
+  /**
+   * Interrupt an in-flight approval: resolve with "interrupted" so the run stops without executing.
+   */
+  interrupt(recordId: string, resolvedBy?: string | null): boolean {
+    const pending = this.pending.get(recordId);
+    if (!pending) {
+      return false;
+    }
+    if (pending.record.resolvedAtMs !== undefined) {
+      return false;
+    }
+    clearTimeout(pending.timer);
+    pending.record.resolvedAtMs = Date.now();
+    pending.record.decision = "interrupted";
+    pending.record.resolvedBy = resolvedBy ?? null;
+    pending.resolve("interrupted");
+    setTimeout(() => {
+      if (this.pending.get(recordId) === pending) {
+        this.pending.delete(recordId);
+      }
+    }, RESOLVED_ENTRY_GRACE_MS);
+    return true;
+  }
+
+  /** Set approval state to paused (UI/workflow only; promise still pending until resolve). */
+  pause(recordId: string): boolean {
+    const pending = this.pending.get(recordId);
+    if (!pending || pending.record.resolvedAtMs !== undefined) {
+      return false;
+    }
+    pending.record.state = "paused";
+    return true;
+  }
+
+  /** Set approval state to resumed after a pause (UI/workflow only). Only allows paused → resumed. */
+  resume(recordId: string): boolean {
+    const pending = this.pending.get(recordId);
+    if (!pending) {
+      return false;
+    }
+    if (pending.record.resolvedAtMs !== undefined || pending.record.state !== "paused") {
+      return false;
+    }
+    pending.record.state = "resumed";
     return true;
   }
 

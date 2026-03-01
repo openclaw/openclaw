@@ -660,6 +660,33 @@ Max total characters injected across all workspace bootstrap files. Default: `15
 }
 ```
 
+### `agents.defaults.bootstrap.injectMode`
+
+When to inject workspace bootstrap files (AGENTS.md, TOOLS.md, etc.) into the system prompt.
+
+- `every-turn` (default): inject on every turn.
+- `once`: inject only on the first message of the session; later turns get no bootstrap (saves tokens in long chats).
+- `minimal`: inject once, then on later turns inject only a minimal set (e.g. identity and user files).
+
+```json5
+{
+  agents: { defaults: { bootstrap: { injectMode: "once" } } },
+}
+```
+
+### `agents.defaults.context.mode`
+
+Context assembly mode for workspace and memory injection.
+
+- `raw` (default): full bootstrap files and raw memory.
+- `index-rank-compact`: indexed, ranked, and compacted snippets within a token budget (when implemented; currently delegates to raw).
+
+```json5
+{
+  agents: { defaults: { context: { mode: "raw" } } },
+}
+```
+
 ### `agents.defaults.imageMaxDimensionPx`
 
 Max pixel size for the longest image side in transcript/tool image blocks before provider calls.

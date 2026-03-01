@@ -448,6 +448,12 @@ export const FIELD_HELP: Record<string, string> = {
     "Extra tool allowlist entries merged on top of the selected tool profile and default policy. Keep this list small and explicit so audits can quickly identify intentional policy exceptions.",
   "tools.byProvider":
     "Per-provider tool allow/deny overrides keyed by channel/provider ID to tailor capabilities by surface. Use this when one provider needs stricter controls than global tool policy.",
+  "tools.entries":
+    "Per-tool enable/disable by name. Set <toolName>.enabled: false to omit that tool from the agent prompt (saves tokens). Omit or set enabled: true to include, subject to allow/deny policy.",
+  "agents.list[].thinkingDefault":
+    "Per-agent default thinking level (off, minimal, low, medium, high, xhigh). Overrides agents.defaults.thinkingDefault for this agent. Session /model and /think overrides still win.",
+  "agents.list[].tools.entries":
+    "Per-agent override for tools.entries. Use to disable specific tools for one agent while keeping them enabled globally.",
   "agents.list[].tools.profile":
     "Per-agent override for tool profile selection when one agent needs a different capability baseline. Use this sparingly so policy differences across agents stay intentional and reviewable.",
   "agents.list[].tools.alsoAllow":
@@ -683,6 +689,10 @@ export const FIELD_HELP: Record<string, string> = {
   "auth.cooldowns.failureWindowHours": "Failure window (hours) for backoff counters (default: 24).",
   "agents.defaults.workspace":
     "Default workspace path exposed to agent runtime tools for filesystem context and repo-aware behavior. Set this explicitly when running from wrappers so path resolution stays deterministic.",
+  "agents.defaults.bootstrap.injectMode":
+    'When to inject workspace bootstrap files (AGENTS.md, TOOLS.md, etc.). "every-turn" (default): inject every turn. "once": inject only on first message of session, then skip. "minimal": inject once, then only identity/user on later turns. Saves tokens in long conversations.',
+  "agents.defaults.context.mode":
+    'Context assembly mode for workspace and memory. "raw" (default): full bootstrap and raw memory. "index-rank-compact": indexed, ranked, and compacted snippets within a token budget (when implemented).',
   "agents.defaults.bootstrapMaxChars":
     "Max characters of each workspace bootstrap file injected into the system prompt before truncation (default: 20000).",
   "agents.defaults.bootstrapTotalMaxChars":

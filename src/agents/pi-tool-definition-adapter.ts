@@ -106,6 +106,30 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
               params,
               toolCallId,
             });
+            // syntheticResult takes precedence over block (doc: docs/plugins/agent-tools.md)
+            if (hookOutcome.syntheticResult !== undefined) {
+              const syntheticResult = hookOutcome.syntheticResult as Awaited<
+                ReturnType<typeof tool.execute>
+              >;
+              const hookRunner = getGlobalHookRunner();
+              if (hookRunner?.hasHooks("after_tool_call")) {
+                try {
+                  await hookRunner.runAfterToolCall(
+                    {
+                      toolName: name,
+                      params: isPlainObject(params) ? params : {},
+                      result: syntheticResult,
+                    },
+                    { toolName: name },
+                  );
+                } catch (hookErr) {
+                  logDebug(
+                    `after_tool_call hook failed: tool=${normalizedName} error=${String(hookErr)}`,
+                  );
+                }
+              }
+              return syntheticResult;
+            }
             if (hookOutcome.blocked) {
               throw new Error(hookOutcome.reason);
             }
@@ -210,6 +234,26 @@ export function toClientToolDefinitions(
           toolCallId,
           ctx: hookContext,
         });
+        // syntheticResult takes precedence over block (same as toToolDefinitions)
+        if (outcome.syntheticResult !== undefined) {
+          const syntheticResult = outcome.syntheticResult as AgentToolResult<unknown>;
+          const hookRunner = getGlobalHookRunner();
+          if (hookRunner?.hasHooks("after_tool_call")) {
+            try {
+              await hookRunner.runAfterToolCall(
+                {
+                  toolName: func.name,
+                  params: isPlainObject(params) ? params : {},
+                  result: syntheticResult,
+                },
+                { toolName: func.name },
+              );
+            } catch (hookErr) {
+              logDebug(`after_tool_call hook failed: tool=${func.name} error=${String(hookErr)}`);
+            }
+          }
+          return syntheticResult;
+        }
         if (outcome.blocked) {
           throw new Error(outcome.reason);
         }

@@ -356,6 +356,15 @@ export function normalizeCronJobInput(
     }
   }
 
+  if ("triggerOnCompletionOf" in base) {
+    const triggerRaw = base.triggerOnCompletionOf;
+    if (typeof triggerRaw === "string" && triggerRaw.trim()) {
+      next.triggerOnCompletionOf = triggerRaw.trim();
+    } else {
+      delete next.triggerOnCompletionOf;
+    }
+  }
+
   if (isRecord(base.schedule)) {
     next.schedule = coerceSchedule(base.schedule);
   }

@@ -61,7 +61,24 @@ describe("resolveAgentConfig", () => {
       subagents: undefined,
       sandbox: undefined,
       tools: undefined,
+      thinkingDefault: undefined,
     });
+  });
+
+  it("returns per-agent thinkingDefault when set", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: { thinkingDefault: "low" },
+        list: [
+          { id: "main", workspace: "~/openclaw" },
+          { id: "deep", workspace: "~/openclaw", thinkingDefault: "high" },
+          { id: "minimal", workspace: "~/openclaw", thinkingDefault: "off" },
+        ],
+      },
+    };
+    expect(resolveAgentConfig(cfg, "main")?.thinkingDefault).toBeUndefined();
+    expect(resolveAgentConfig(cfg, "deep")?.thinkingDefault).toBe("high");
+    expect(resolveAgentConfig(cfg, "minimal")?.thinkingDefault).toBe("off");
   });
 
   it("resolves explicit and effective model primary separately", () => {

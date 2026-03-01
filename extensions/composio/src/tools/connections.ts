@@ -46,7 +46,7 @@ export function createComposioConnectionsTool(client: ComposioClient, _config: C
       try {
         switch (action) {
           case "list": {
-            const toolkits = await client.listToolkits();
+            const toolkits = await client.listToolkits(userId);
             const response = {
               action: "list",
               count: toolkits.length,

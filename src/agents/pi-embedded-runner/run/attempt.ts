@@ -31,7 +31,7 @@ import { isReasoningTagProvider } from "../../../utils/provider-utils.js";
 import { resolveOpenClawAgentDir } from "../../agent-paths.js";
 import { resolveSessionAgentIds } from "../../agent-scope.js";
 import { createAnthropicPayloadLogger } from "../../anthropic-payload-log.js";
-import { makeBootstrapWarn, resolveBootstrapContextForRun } from "../../bootstrap-files.js";
+import { makeBootstrapWarn, resolveContextForRun } from "../../bootstrap-files.js";
 import { createCacheTrace } from "../../cache-trace.js";
 import {
   listChannelSupportedActions,
@@ -76,6 +76,7 @@ import { buildSystemPromptParams } from "../../system-prompt-params.js";
 import { buildSystemPromptReport } from "../../system-prompt-report.js";
 import { sanitizeToolCallIdsForCloudCodeAssist } from "../../tool-call-id.js";
 import { resolveEffectiveToolFsWorkspaceOnly } from "../../tool-fs-policy.js";
+import { normalizeToolName } from "../../tool-policy.js";
 import { resolveTranscriptPolicy } from "../../transcript-policy.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../../workspace.js";
 import { isRunnerAbortError } from "../abort.js";
@@ -361,16 +362,29 @@ export async function runEmbeddedAttempt(
       .then(() => false)
       .catch(() => true);
 
+    const injectMode = params.config?.agents?.defaults?.bootstrap?.injectMode ?? "every-turn";
+    const skipBootstrapBecauseOnce = injectMode === "once" && params.bootstrapInjected === true;
+
     const sessionLabel = params.sessionKey ?? params.sessionId;
-    const { bootstrapFiles: hookAdjustedBootstrapFiles, contextFiles } = isFirstMessage
-      ? await resolveBootstrapContextForRun({
+    const shouldResolveContext =
+      !skipBootstrapBecauseOnce &&
+      (isFirstMessage || injectMode === "every-turn" || injectMode === "minimal");
+    const { bootstrapFiles: hookAdjustedBootstrapFiles, contextFiles } = shouldResolveContext
+      ? await resolveContextForRun({
           workspaceDir: effectiveWorkspace,
           config: params.config,
           sessionKey: params.sessionKey,
           sessionId: params.sessionId,
-          warn: makeBootstrapWarn({ sessionLabel, warn: (message) => log.warn(message) }),
+          warn: makeBootstrapWarn({
+            sessionLabel,
+            warn: (message) => log.warn(message),
+          }),
+          injectMode,
+          bootstrapInjected: params.bootstrapInjected,
         })
       : { bootstrapFiles: [], contextFiles: [] };
+
+    const bootstrapInjectedThisRun = contextFiles.length > 0;
     const workspaceNotes = hookAdjustedBootstrapFiles.some(
       (file) => file.name === DEFAULT_BOOTSTRAP_FILENAME && !file.missing,
     )
@@ -431,7 +445,17 @@ export async function runEmbeddedAttempt(
             params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
           disableMessageTool: params.disableMessageTool,
         });
-    const tools = sanitizeToolsForGoogle({ tools: toolsRaw, provider: params.provider });
+    const toolsFilter = params.toolsFilter ?? "inherit";
+    const toolsAfterFilter =
+      toolsFilter === "none"
+        ? []
+        : Array.isArray(toolsFilter) && toolsFilter.length > 0
+          ? toolsRaw.filter((t) => {
+              const name = normalizeToolName(t.name);
+              return toolsFilter.some((allowed) => normalizeToolName(allowed) === name);
+            })
+          : toolsRaw;
+    const tools = sanitizeToolsForGoogle({ tools: toolsAfterFilter, provider: params.provider });
     const allowedToolNames = collectAllowedToolNames({
       tools,
       clientTools: params.clientTools,
@@ -1399,6 +1423,7 @@ export async function runEmbeddedAttempt(
         compactionCount: getCompactionCount(),
         // Client tool call detected (OpenResponses hosted tools)
         clientToolCall: clientToolCallDetected ?? undefined,
+        bootstrapInjectedThisRun,
       };
     } finally {
       // Always tear down the session (and release the lock) before we leave this attempt.

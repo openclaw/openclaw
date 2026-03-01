@@ -110,17 +110,24 @@ export function registerComposioCli({ program, client, config, logger }: Registe
 
         // Try to open URL in browser
         try {
-          const { exec } = await import("node:child_process");
+          // Validate URL is http/https before passing to the OS opener
+          const parsed = new URL(result.authUrl);
+          if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+            throw new Error("Auth URL must use http or https");
+          }
+          const { spawn } = await import("node:child_process");
           const platform = process.platform;
-          const cmd =
+          const [bin, ...args] =
             platform === "darwin"
-              ? `open "${result.authUrl}"`
+              ? (["open", result.authUrl] as const)
               : platform === "win32"
-                ? `start "" "${result.authUrl}"`
-                : `xdg-open "${result.authUrl}"`;
-          exec(cmd);
-        } catch {
-          // Silently fail if we can't open browser
+                ? (["cmd", "/c", "start", "", result.authUrl] as const)
+                : (["xdg-open", result.authUrl] as const);
+          spawn(bin, args, { detached: true, stdio: "ignore" }).unref();
+        } catch (err) {
+          const url = result.authUrl;
+          const reason = err instanceof Error ? err.message : String(err);
+          logger.warn(`Could not open browser for auth URL: ${url} — ${reason}`);
         }
       } catch (err) {
         logger.error(`Failed to connect: ${err instanceof Error ? err.message : String(err)}`);

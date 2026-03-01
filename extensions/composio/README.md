@@ -54,7 +54,7 @@ clawdbot composio search "create issue" --toolkit github
 
 ## Agent Tools
 
-The plugin provides four tools for agents:
+The plugin provides six tools for agents:
 
 ### `composio_search_tools`
 
@@ -109,6 +109,14 @@ Manage toolkit connections.
   "toolkits": ["github", "gmail"]
 }
 ```
+
+### `composio_workbench`
+
+Executes Python code in a remote Jupyter sandbox and provides helpers for running Composio tools, invoking LLMs, and processing data (e.g. `run_composio_tool`, `invoke_llm`, `upload_local_file`, `web_search`, `smart_file_extract`).
+
+### `composio_bash`
+
+Execute bash commands in a remote sandbox for file operations, data processing, and handling large tool responses saved to remote files.
 
 ## Advanced Configuration
 

@@ -190,6 +190,8 @@ export async function processGatewayAllowlist(
 
       if (decision === "deny") {
         deniedReason = "user-denied";
+      } else if (decision === "interrupted") {
+        deniedReason = "interrupted";
       } else if (!decision) {
         if (obfuscation.detected) {
           deniedReason = "approval-timeout (obfuscation-detected)";

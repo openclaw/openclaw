@@ -33,6 +33,8 @@ export type SpawnSubagentParams = {
   mode?: SpawnSubagentMode;
   cleanup?: "delete" | "keep";
   expectsCompletionMessage?: boolean;
+  /** Tool filter for the child run: "none" | "inherit" | string[] (tool names). Default "inherit". */
+  tools?: "none" | "inherit" | string[];
 };
 
 export type SpawnSubagentContext = {
@@ -421,6 +423,7 @@ export async function spawnSubagentDirect(
         groupId: ctx.agentGroupId ?? undefined,
         groupChannel: ctx.agentGroupChannel ?? undefined,
         groupSpace: ctx.agentGroupSpace ?? undefined,
+        tools: params.tools,
       },
       timeoutMs: 10_000,
     });

@@ -88,4 +88,43 @@ describe("sessions_spawn thinking defaults", () => {
       expectedThinking: "low",
     });
   });
+
+  it("passes tools filter to agent call when provided", async () => {
+    const tool = createSessionsSpawnTool({ agentSessionKey: "agent:test:main" });
+    const result = await tool.execute("call-tools-none", {
+      task: "summarize",
+      tools: "none",
+    });
+    expect(result.details).toMatchObject({ status: "accepted" });
+
+    const calls = await getGatewayCalls();
+    const agentCall = findLastCall(calls, (call) => call.method === "agent");
+    expect(agentCall?.params?.tools).toBe("none");
+  });
+
+  it("passes tools inherit to agent call when provided", async () => {
+    const tool = createSessionsSpawnTool({ agentSessionKey: "agent:test:main" });
+    const result = await tool.execute("call-tools-inherit", {
+      task: "delegate",
+      tools: "inherit",
+    });
+    expect(result.details).toMatchObject({ status: "accepted" });
+
+    const calls = await getGatewayCalls();
+    const agentCall = findLastCall(calls, (call) => call.method === "agent");
+    expect(agentCall?.params?.tools).toBe("inherit");
+  });
+
+  it("passes tools allowlist to agent call when provided", async () => {
+    const tool = createSessionsSpawnTool({ agentSessionKey: "agent:test:main" });
+    const result = await tool.execute("call-tools-list", {
+      task: "edit file",
+      tools: ["read_file", "write"],
+    });
+    expect(result.details).toMatchObject({ status: "accepted" });
+
+    const calls = await getGatewayCalls();
+    const agentCall = findLastCall(calls, (call) => call.method === "agent");
+    expect(agentCall?.params?.tools).toEqual(["read_file", "write"]);
+  });
 });

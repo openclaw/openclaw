@@ -78,6 +78,8 @@ export const SessionsPatchParamsSchema = Type.Object(
     groupActivation: Type.Optional(
       Type.Union([Type.Literal("mention"), Type.Literal("always"), Type.Null()]),
     ),
+    /** When bootstrap.injectMode is "once", set true after first inject. */
+    bootstrapInjected: Type.Optional(Type.Boolean()),
   },
   { additionalProperties: false },
 );

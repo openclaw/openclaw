@@ -9,6 +9,9 @@
 
 import { tool } from "ai";
 import { jsonSchema } from "ai";
+import { logDebug } from "../../logger.js";
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import { isPlainObject } from "../../utils.js";
 import type { AnyAgentTool } from "../pi-tools.types.js";
 
 /**
@@ -97,24 +100,88 @@ export function convertPiToolToAiSdk(
   // Pi-agent tools have `parameters` (TypeBox schema)
   const schema = typeBoxToJsonSchema(piTool.parameters);
 
+  const toolName = piTool.name ?? "tool";
+
   return tool({
-    description: piTool.description ?? `Tool: ${piTool.name}`,
+    description: piTool.description ?? `Tool: ${toolName}`,
     inputSchema: jsonSchema(schema),
     execute: async (args: Record<string, unknown>): Promise<ToolResult> => {
-      try {
-        // Generate a unique tool call ID for this execution
-        const toolCallId = `aisdk_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      const started = Date.now();
+      const toolCallId = `aisdk_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      const hookRunner = getGlobalHookRunner();
+      const hookCtx = { toolName };
 
-        // Call the pi-agent tool's execute function
-        // Signature: execute(toolCallId, params, signal?, onUpdate?)
+      // --- before_tool_call hook ---
+      let executeArgs = args;
+      if (hookRunner?.hasHooks("before_tool_call")) {
+        try {
+          const hookResult = await hookRunner.runBeforeToolCall(
+            { toolName, params: isPlainObject(args) ? args : {} },
+            hookCtx,
+          );
+          // syntheticResult takes precedence over block (doc: docs/plugins/agent-tools.md)
+          if (hookResult?.syntheticResult !== undefined) {
+            const syntheticOutput =
+              typeof hookResult.syntheticResult === "string"
+                ? hookResult.syntheticResult
+                : JSON.stringify(hookResult.syntheticResult);
+            if (hookRunner.hasHooks("after_tool_call")) {
+              hookRunner
+                .runAfterToolCall(
+                  { toolName, params: args, result: hookResult.syntheticResult, durationMs: 0 },
+                  hookCtx,
+                )
+                .catch((err) => {
+                  logDebug(
+                    `after_tool_call hook failed (synthetic path): ${toolName}: ${String(err)}`,
+                  );
+                });
+            }
+            return { output: syntheticOutput };
+          }
+          if (hookResult?.block) {
+            const reason = hookResult.blockReason ?? "Tool call blocked by plugin hook";
+            if (hookRunner.hasHooks("after_tool_call")) {
+              hookRunner
+                .runAfterToolCall({ toolName, params: args, error: reason, durationMs: 0 }, hookCtx)
+                .catch((err) => {
+                  logDebug(`after_tool_call hook failed (block path): ${toolName}: ${String(err)}`);
+                });
+            }
+            return { output: `Error: ${reason}`, error: reason };
+          }
+          if (hookResult?.params && isPlainObject(hookResult.params)) {
+            executeArgs = isPlainObject(args)
+              ? { ...args, ...hookResult.params }
+              : hookResult.params;
+          }
+        } catch (err) {
+          logDebug(`before_tool_call hook error: ${toolName}: ${String(err)}`);
+          // Hook errors must not break tool execution
+        }
+      }
+
+      // --- actual tool execution ---
+      try {
         const result = await piTool.execute(
           toolCallId,
-          args,
+          executeArgs,
           context.abortSignal,
-          undefined, // onUpdate callback not used for now
+          undefined,
         );
 
-        // AgentToolResult has: { content: (TextContent | ImageContent)[], details: T }
+        // --- after_tool_call hook ---
+        if (hookRunner?.hasHooks("after_tool_call")) {
+          hookRunner
+            .runAfterToolCall(
+              { toolName, params: executeArgs, result, durationMs: Date.now() - started },
+              hookCtx,
+            )
+            .catch((err) => {
+              logDebug(`after_tool_call hook failed (success path): ${toolName}: ${String(err)}`);
+            });
+        }
+
         const output = extractTextFromToolResult(result);
         return {
           output,
@@ -122,6 +189,19 @@ export function convertPiToolToAiSdk(
         };
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
+
+        // --- after_tool_call hook (error path) ---
+        if (hookRunner?.hasHooks("after_tool_call")) {
+          hookRunner
+            .runAfterToolCall(
+              { toolName, params: executeArgs, error: message, durationMs: Date.now() - started },
+              hookCtx,
+            )
+            .catch((err) => {
+              logDebug(`after_tool_call hook failed (error path): ${toolName}: ${String(err)}`);
+            });
+        }
+
         return {
           output: `Error: ${message}`,
           error: message,

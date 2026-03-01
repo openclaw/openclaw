@@ -3,7 +3,7 @@ import type { OpenClawPluginApi } from "../../src/plugins/types.js";
 import { registerComposioCli } from "./src/cli.js";
 import { createComposioClient } from "./src/client.js";
 import { composioPluginConfigSchema, parseComposioConfig } from "./src/config.js";
-import { createCompositoBashTool } from "./src/tools/bash.js";
+import { createComposioBashTool } from "./src/tools/bash.js";
 import { createComposioConnectionsTool } from "./src/tools/connections.js";
 import { createComposioExecuteTool } from "./src/tools/execute.js";
 import { createComposioMultiExecuteTool } from "./src/tools/multi-execute.js";
@@ -53,15 +53,26 @@ const composioPlugin = {
       return;
     }
 
-    const client = createComposioClient(config);
+    const client = createComposioClient(config, api.logger);
 
-    // Register tools — cast to AnyAgentTool to bridge composio return types
+    // Each createComposio*Tool factory (createComposioSearchTool, createComposioExecuteTool,
+    // createComposioMultiExecuteTool, createComposioConnectionsTool, createComposioWorkbenchTool,
+    // createComposioBashTool) returns a tool typed against Composio's internal schema rather than
+    // the plugin API's AnyAgentTool. The `as AnyAgentTool` cast passed to api.registerTool(...) is
+    // intentional: it bridges the structural mismatch so TypeScript accepts the registration call.
+    //
+    // Risks: the cast suppresses type errors that could surface if a factory's return type diverges
+    // from AnyAgentTool at runtime (e.g. missing required fields, incompatible handler signature).
+    // Any such divergence would be a silent runtime failure rather than a compile-time error.
+    //
+    // TODO: remove these casts once the createComposio*Tool signatures are updated to return a type
+    // that satisfies AnyAgentTool directly, making the cast unnecessary and restoring full type safety.
     api.registerTool(createComposioSearchTool(client, config) as AnyAgentTool);
     api.registerTool(createComposioExecuteTool(client, config) as AnyAgentTool);
     api.registerTool(createComposioMultiExecuteTool(client, config) as AnyAgentTool);
     api.registerTool(createComposioConnectionsTool(client, config) as AnyAgentTool);
     api.registerTool(createComposioWorkbenchTool(client, config) as AnyAgentTool);
-    api.registerTool(createCompositoBashTool(client, config) as AnyAgentTool);
+    api.registerTool(createComposioBashTool(client, config) as AnyAgentTool);
 
     // Register CLI commands
     api.registerCli(

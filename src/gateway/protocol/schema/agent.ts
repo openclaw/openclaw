@@ -90,6 +90,14 @@ export const AgentParamsSchema = Type.Object(
     idempotencyKey: NonEmptyString,
     label: Type.Optional(SessionLabelString),
     spawnedBy: Type.Optional(Type.String()),
+    /** Tool filter for this run: "none" | "inherit" | string[] (tool names). Default "inherit". */
+    tools: Type.Optional(
+      Type.Union([
+        Type.Literal("none"),
+        Type.Literal("inherit"),
+        Type.Array(Type.String(), { minItems: 1 }),
+      ]),
+    ),
   },
   { additionalProperties: false },
 );

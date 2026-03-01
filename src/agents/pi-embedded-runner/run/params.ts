@@ -69,6 +69,15 @@ export type RunEmbeddedPiAgentParams = {
   clientTools?: ClientToolDefinition[];
   /** Disable built-in tools for this run (LLM-only mode). */
   disableTools?: boolean;
+  /**
+   * Restrict tools for this run (e.g. from sessions_spawn).
+   * - "inherit": use full resolved list (default).
+   * - "none": no tools.
+   * - string[]: only tools whose name is in the array.
+   */
+  toolsFilter?: "none" | "inherit" | string[];
+  /** When true and bootstrap.injectMode is "once", skip full bootstrap inject (already injected). */
+  bootstrapInjected?: boolean;
   provider?: string;
   model?: string;
   authProfileId?: string;

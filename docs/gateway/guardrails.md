@@ -92,9 +92,10 @@ export default {
       "before_tool_call",
       async (event, ctx) => {
         // event: { toolName, toolCallId, params, messages, systemPrompt? }
-        // Return to block or modify:
-        // { block: true, blockReason: "...", toolResult?: {...} }
+        // Return to block, modify params, or inject a synthetic result:
+        // { block: true, blockReason: "..." }
         // { params: { modified: true } }
+        // { syntheticResult: "cached value" }  — skips real tool execution
       },
       { priority: 50 },
     );

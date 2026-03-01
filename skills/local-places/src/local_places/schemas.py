@@ -47,7 +47,8 @@ class Filters(BaseModel):
     def validate_min_rating(cls, value: float | None) -> float | None:
         if value is None:
             return value
-        if (value * 2) % 1 != 0:
+        doubled = value * 2
+        if abs(doubled - round(doubled)) > 1e-9:
             raise ValueError("min_rating must be in 0.5 increments.")
         return value
 

@@ -631,6 +631,8 @@ export async function runEmbeddedPiAgent(
             streamParams: params.streamParams,
             ownerNumbers: params.ownerNumbers,
             enforceFinalTag: params.enforceFinalTag,
+            bootstrapInjected: params.bootstrapInjected,
+            toolsFilter: params.toolsFilter,
           });
 
           const {
@@ -845,6 +847,7 @@ export async function runEmbeddedPiAgent(
                   model: model.id,
                 },
                 systemPromptReport: attempt.systemPromptReport,
+                bootstrapInjectedThisRun: attempt.bootstrapInjectedThisRun,
                 error: { kind, message: errorText },
               },
             };
@@ -871,6 +874,7 @@ export async function runEmbeddedPiAgent(
                     model: model.id,
                   },
                   systemPromptReport: attempt.systemPromptReport,
+                  bootstrapInjectedThisRun: attempt.bootstrapInjectedThisRun,
                   error: { kind: "role_ordering", message: errorText },
                 },
               };
@@ -899,6 +903,7 @@ export async function runEmbeddedPiAgent(
                     model: model.id,
                   },
                   systemPromptReport: attempt.systemPromptReport,
+                  bootstrapInjectedThisRun: attempt.bootstrapInjectedThisRun,
                   error: { kind: "image_size", message: errorText },
                 },
               };
@@ -1105,6 +1110,7 @@ export async function runEmbeddedPiAgent(
                 agentMeta,
                 aborted,
                 systemPromptReport: attempt.systemPromptReport,
+                bootstrapInjectedThisRun: attempt.bootstrapInjectedThisRun,
               },
               didSendViaMessagingTool: attempt.didSendViaMessagingTool,
               messagingToolSentTexts: attempt.messagingToolSentTexts,
@@ -1137,6 +1143,7 @@ export async function runEmbeddedPiAgent(
               agentMeta,
               aborted,
               systemPromptReport: attempt.systemPromptReport,
+              bootstrapInjectedThisRun: attempt.bootstrapInjectedThisRun,
               // Handle client tool calls (OpenResponses hosted tools)
               stopReason: attempt.clientToolCall ? "tool_calls" : undefined,
               pendingToolCalls: attempt.clientToolCall

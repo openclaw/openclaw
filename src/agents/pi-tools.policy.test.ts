@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import {
   filterToolsByPolicy,
   isToolAllowedByPolicyName,
+  resolveDisabledToolNames,
   resolveSubagentToolPolicy,
 } from "./pi-tools.policy.js";
 
@@ -38,6 +39,45 @@ describe("pi-tools.policy", () => {
 
   it("keeps apply_patch when exec is allowlisted", () => {
     expect(isToolAllowedByPolicyName("apply_patch", { allow: ["exec"] })).toBe(true);
+  });
+});
+
+describe("resolveDisabledToolNames", () => {
+  it("returns empty set when no entries config", () => {
+    expect(resolveDisabledToolNames({})).toEqual(new Set());
+    expect(resolveDisabledToolNames({ config: {} as OpenClawConfig })).toEqual(new Set());
+  });
+
+  it("returns tool names where enabled is false (global)", () => {
+    const cfg = {
+      tools: { entries: { exec: { enabled: false }, web_search: { enabled: false } } },
+    } as unknown as OpenClawConfig;
+    const disabled = resolveDisabledToolNames({ config: cfg });
+    expect(disabled.has("exec")).toBe(true);
+    expect(disabled.has("web_search")).toBe(true);
+    expect(disabled.has("read_file")).toBe(false);
+  });
+
+  it("agent entries override global (agent can re-enable)", () => {
+    const cfg = {
+      tools: { entries: { exec: { enabled: false } } },
+      agents: {
+        list: [{ id: "main", tools: { entries: { exec: { enabled: true } } } }],
+      },
+    } as unknown as OpenClawConfig;
+    const disabled = resolveDisabledToolNames({ config: cfg, agentId: "main" });
+    expect(disabled.has("exec")).toBe(false);
+  });
+
+  it("agent entries override global (agent can disable)", () => {
+    const cfg = {
+      tools: { entries: { read_file: { enabled: true } } },
+      agents: {
+        list: [{ id: "main", tools: { entries: { read_file: { enabled: false } } } }],
+      },
+    } as unknown as OpenClawConfig;
+    const disabled = resolveDisabledToolNames({ config: cfg, agentId: "main" });
+    expect(disabled.has("read_file")).toBe(true);
   });
 });
 

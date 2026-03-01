@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
+import threading
 from typing import Any
 
 import httpx
@@ -22,6 +24,72 @@ GOOGLE_PLACES_BASE_URL = os.getenv(
     "GOOGLE_PLACES_BASE_URL", "https://places.googleapis.com/v1"
 )
 logger = logging.getLogger("local_places.google_places")
+
+# Lazily initialised; created on first request so import has no side effects.
+_http_client: httpx.Client | None = None
+_http_client_lock = threading.Lock()
+
+
+def get_http_client() -> httpx.Client:
+    global _http_client
+    with _http_client_lock:
+        if _http_client is None:
+            _http_client = httpx.Client(timeout=10.0)
+        return _http_client
+
+
+def close_http_client() -> None:
+    global _http_client
+    with _http_client_lock:
+        if _http_client is not None:
+            _http_client.close()
+            _http_client = None
+
+
+# Async client for non-blocking I/O in FastAPI route handlers.
+# Lock is lazily created inside async code so it is bound to the current event loop.
+_async_http_client: httpx.AsyncClient | None = None
+_async_http_client_lock: asyncio.Lock | None = None
+_async_http_client_lock_guard = threading.Lock()
+
+
+async def get_async_http_client() -> httpx.AsyncClient:
+    global _async_http_client, _async_http_client_lock
+    if _async_http_client_lock is None:
+        with _async_http_client_lock_guard:
+            if _async_http_client_lock is None:
+                _async_http_client_lock = asyncio.Lock()
+    async with _async_http_client_lock:
+        if _async_http_client is None:
+            _async_http_client = httpx.AsyncClient(timeout=10.0)
+        return _async_http_client
+
+
+async def close_async_http_client() -> None:
+    global _async_http_client
+    if _async_http_client_lock is None:
+        return
+    async with _async_http_client_lock:
+        if _async_http_client is not None:
+            await _async_http_client.aclose()
+            _async_http_client = None
+
+
+async def _request_async(
+    method: str, url: str, payload: dict[str, Any] | None, field_mask: str
+) -> _GoogleResponse:
+    try:
+        client = await get_async_http_client()
+        response = await client.request(
+            method=method,
+            url=url,
+            headers=_api_headers(field_mask),
+            json=payload,
+        )
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail="Google Places API unavailable.") from exc
+    return _GoogleResponse(response)
+
 
 _PRICE_LEVEL_TO_ENUM = {
     0: "PRICE_LEVEL_FREE",
@@ -98,13 +166,12 @@ def _request(
     method: str, url: str, payload: dict[str, Any] | None, field_mask: str
 ) -> _GoogleResponse:
     try:
-        with httpx.Client(timeout=10.0) as client:
-            response = client.request(
-                method=method,
-                url=url,
-                headers=_api_headers(field_mask),
-                json=payload,
-            )
+        response = get_http_client().request(
+            method=method,
+            url=url,
+            headers=_api_headers(field_mask),
+            json=payload,
+        )
     except httpx.HTTPError as exc:
         raise HTTPException(status_code=502, detail="Google Places API unavailable.") from exc
 
@@ -188,78 +255,54 @@ def _parse_price_level(raw: str | None) -> int | None:
     return _ENUM_TO_PRICE_LEVEL.get(raw)
 
 
-def search_places(request: SearchRequest) -> SearchResponse:
-    url = f"{GOOGLE_PLACES_BASE_URL}/places:searchText"
-    response = _request("POST", url, _build_search_body(request), _SEARCH_FIELD_MASK)
-
+def _validate_and_parse_json(response: _GoogleResponse, context: str) -> dict[str, Any]:
+    """Check status, log on error, parse JSON; raise HTTPException on failure."""
     if response.status_code >= 400:
         logger.error(
-            "Google Places API error %s. response=%s",
+            "Google Places API error %s (context=%s). response=%s",
             response.status_code,
+            context,
             response.text,
         )
         raise HTTPException(
             status_code=502,
             detail=f"Google Places API error ({response.status_code}).",
         )
-
     try:
-        payload = response.json()
+        return response.json()
     except ValueError as exc:
         logger.error(
-            "Google Places API returned invalid JSON. response=%s",
+            "Google Places API returned invalid JSON (context=%s). response=%s",
+            context,
             response.text,
         )
         raise HTTPException(status_code=502, detail="Invalid Google response.") from exc
 
-    places = payload.get("places", [])
-    results = []
-    for place in places:
-        results.append(
-            PlaceSummary(
-                place_id=place.get("id", ""),
-                name=_parse_display_name(place.get("displayName")),
-                address=place.get("formattedAddress"),
-                location=_parse_lat_lng(place.get("location")),
-                rating=place.get("rating"),
-                price_level=_parse_price_level(place.get("priceLevel")),
-                types=place.get("types"),
-                open_now=_parse_open_now(place.get("currentOpeningHours")),
-            )
-        )
 
+def _parse_search_results(payload: dict[str, Any]) -> SearchResponse:
+    places = payload.get("places", [])
+    results = [
+        PlaceSummary(
+            place_id=p.get("id", ""),
+            name=_parse_display_name(p.get("displayName")),
+            address=p.get("formattedAddress"),
+            location=_parse_lat_lng(p.get("location")),
+            rating=p.get("rating"),
+            price_level=_parse_price_level(p.get("priceLevel")),
+            types=p.get("types"),
+            open_now=_parse_open_now(p.get("currentOpeningHours")),
+        )
+        for p in places
+    ]
     return SearchResponse(
         results=results,
         next_page_token=payload.get("nextPageToken"),
     )
 
 
-def get_place_details(place_id: str) -> PlaceDetails:
-    url = f"{GOOGLE_PLACES_BASE_URL}/places/{place_id}"
-    response = _request("GET", url, None, _DETAILS_FIELD_MASK)
-
-    if response.status_code >= 400:
-        logger.error(
-            "Google Places API error %s. response=%s",
-            response.status_code,
-            response.text,
-        )
-        raise HTTPException(
-            status_code=502,
-            detail=f"Google Places API error ({response.status_code}).",
-        )
-
-    try:
-        payload = response.json()
-    except ValueError as exc:
-        logger.error(
-            "Google Places API returned invalid JSON. response=%s",
-            response.text,
-        )
-        raise HTTPException(status_code=502, detail="Invalid Google response.") from exc
-
+def _parse_place_details(payload: dict[str, Any], place_id: str | None = None) -> PlaceDetails:
     return PlaceDetails(
-        place_id=payload.get("id", place_id),
+        place_id=payload.get("id", place_id or ""),
         name=_parse_display_name(payload.get("displayName")),
         address=payload.get("formattedAddress"),
         location=_parse_lat_lng(payload.get("location")),
@@ -273,42 +316,64 @@ def get_place_details(place_id: str) -> PlaceDetails:
     )
 
 
+def _parse_resolve_results(payload: dict[str, Any]) -> LocationResolveResponse:
+    places = payload.get("places", [])
+    results = [
+        ResolvedLocation(
+            place_id=p.get("id", ""),
+            name=_parse_display_name(p.get("displayName")),
+            address=p.get("formattedAddress"),
+            location=_parse_lat_lng(p.get("location")),
+            types=p.get("types"),
+        )
+        for p in places
+    ]
+    return LocationResolveResponse(results=results)
+
+
+def search_places(request: SearchRequest) -> SearchResponse:
+    url = f"{GOOGLE_PLACES_BASE_URL}/places:searchText"
+    response = _request("POST", url, _build_search_body(request), _SEARCH_FIELD_MASK)
+    payload = _validate_and_parse_json(response, "search")
+    return _parse_search_results(payload)
+
+
+def get_place_details(place_id: str) -> PlaceDetails:
+    url = f"{GOOGLE_PLACES_BASE_URL}/places/{place_id}"
+    response = _request("GET", url, None, _DETAILS_FIELD_MASK)
+    payload = _validate_and_parse_json(response, "place_details")
+    return _parse_place_details(payload, place_id)
+
+
 def resolve_locations(request: LocationResolveRequest) -> LocationResolveResponse:
     url = f"{GOOGLE_PLACES_BASE_URL}/places:searchText"
     body = {"textQuery": request.location_text, "pageSize": request.limit}
     response = _request("POST", url, body, _RESOLVE_FIELD_MASK)
+    payload = _validate_and_parse_json(response, "resolve")
+    return _parse_resolve_results(payload)
 
-    if response.status_code >= 400:
-        logger.error(
-            "Google Places API error %s. response=%s",
-            response.status_code,
-            response.text,
-        )
-        raise HTTPException(
-            status_code=502,
-            detail=f"Google Places API error ({response.status_code}).",
-        )
 
-    try:
-        payload = response.json()
-    except ValueError as exc:
-        logger.error(
-            "Google Places API returned invalid JSON. response=%s",
-            response.text,
-        )
-        raise HTTPException(status_code=502, detail="Invalid Google response.") from exc
+async def search_places_async(request: SearchRequest) -> SearchResponse:
+    url = f"{GOOGLE_PLACES_BASE_URL}/places:searchText"
+    response = await _request_async(
+        "POST", url, _build_search_body(request), _SEARCH_FIELD_MASK
+    )
+    payload = _validate_and_parse_json(response, "search")
+    return _parse_search_results(payload)
 
-    places = payload.get("places", [])
-    results = []
-    for place in places:
-        results.append(
-            ResolvedLocation(
-                place_id=place.get("id", ""),
-                name=_parse_display_name(place.get("displayName")),
-                address=place.get("formattedAddress"),
-                location=_parse_lat_lng(place.get("location")),
-                types=place.get("types"),
-            )
-        )
 
-    return LocationResolveResponse(results=results)
+async def get_place_details_async(place_id: str) -> PlaceDetails:
+    url = f"{GOOGLE_PLACES_BASE_URL}/places/{place_id}"
+    response = await _request_async("GET", url, None, _DETAILS_FIELD_MASK)
+    payload = _validate_and_parse_json(response, "place_details")
+    return _parse_place_details(payload, place_id)
+
+
+async def resolve_locations_async(
+    request: LocationResolveRequest,
+) -> LocationResolveResponse:
+    url = f"{GOOGLE_PLACES_BASE_URL}/places:searchText"
+    body = {"textQuery": request.location_text, "pageSize": request.limit}
+    response = await _request_async("POST", url, body, _RESOLVE_FIELD_MASK)
+    payload = _validate_and_parse_json(response, "resolve")
+    return _parse_resolve_results(payload)

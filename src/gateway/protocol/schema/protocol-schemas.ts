@@ -88,6 +88,9 @@ import {
   ExecApprovalsSnapshotSchema,
   ExecApprovalRequestParamsSchema,
   ExecApprovalResolveParamsSchema,
+  ExecApprovalPauseParamsSchema,
+  ExecApprovalResumeParamsSchema,
+  ExecApprovalInterruptParamsSchema,
 } from "./exec-approvals.js";
 import {
   ConnectParamsSchema,
@@ -256,6 +259,9 @@ export const ProtocolSchemas: Record<string, TSchema> = {
   ExecApprovalsSnapshot: ExecApprovalsSnapshotSchema,
   ExecApprovalRequestParams: ExecApprovalRequestParamsSchema,
   ExecApprovalResolveParams: ExecApprovalResolveParamsSchema,
+  ExecApprovalPauseParams: ExecApprovalPauseParamsSchema,
+  ExecApprovalResumeParams: ExecApprovalResumeParamsSchema,
+  ExecApprovalInterruptParams: ExecApprovalInterruptParamsSchema,
   DevicePairListParams: DevicePairListParamsSchema,
   DevicePairApproveParams: DevicePairApproveParamsSchema,
   DevicePairRejectParams: DevicePairRejectParamsSchema,

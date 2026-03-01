@@ -11,6 +11,8 @@ export type ExecHost = "sandbox" | "gateway" | "node";
 export type ExecSecurity = "deny" | "allowlist" | "full";
 export type ExecAsk = "off" | "on-miss" | "always";
 
+export type ExecApprovalRiskLevel = "low" | "medium" | "high";
+
 export type ExecApprovalRequest = {
   id: string;
   request: {
@@ -23,6 +25,8 @@ export type ExecApprovalRequest = {
     agentId?: string | null;
     resolvedPath?: string | null;
     sessionKey?: string | null;
+    riskLevel?: ExecApprovalRiskLevel | null;
+    workflow?: string | null;
   };
   createdAtMs: number;
   expiresAtMs: number;
@@ -494,7 +498,7 @@ export function maxAsk(a: ExecAsk, b: ExecAsk): ExecAsk {
   return order[a] >= order[b] ? a : b;
 }
 
-export type ExecApprovalDecision = "allow-once" | "allow-always" | "deny";
+export type ExecApprovalDecision = "allow-once" | "allow-always" | "deny" | "interrupted";
 
 export async function requestExecApprovalViaSocket(params: {
   socketPath: string;

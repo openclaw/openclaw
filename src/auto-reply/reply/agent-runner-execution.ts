@@ -17,6 +17,7 @@ import {
   resolveSessionTranscriptPath,
   type SessionEntry,
   updateSessionStore,
+  updateSessionStoreEntry,
 } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
@@ -304,6 +305,7 @@ export async function runAgentTurnWithFallback(params: {
             })(),
             suppressToolErrorWarnings: params.opts?.suppressToolErrorWarnings,
             images: params.opts?.images,
+            bootstrapInjected: params.getActiveSessionEntry()?.bootstrapInjected,
             abortSignal: params.opts?.abortSignal,
             blockReplyBreak: params.resolvedBlockStreamingBreak,
             blockReplyChunking: params.blockReplyChunking,
@@ -455,6 +457,18 @@ export async function runAgentTurnWithFallback(params: {
               text: "⚠️ Message ordering conflict. I've reset the conversation - please try again.",
             },
           };
+        }
+      }
+
+      if (runResult.meta?.bootstrapInjectedThisRun && params.sessionKey && params.storePath) {
+        await updateSessionStoreEntry({
+          storePath: params.storePath,
+          sessionKey: params.sessionKey,
+          update: () => ({ bootstrapInjected: true }),
+        });
+        const entry = params.getActiveSessionEntry();
+        if (entry && params.activeSessionStore) {
+          entry.bootstrapInjected = true;
         }
       }
 

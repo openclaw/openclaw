@@ -60,6 +60,8 @@ const CronCommonOptionalFields = {
   description: Type.Optional(Type.String()),
   enabled: Type.Optional(Type.Boolean()),
   deleteAfterRun: Type.Optional(Type.Boolean()),
+  /** When set, this job becomes due when the referenced job (by id) completes. */
+  triggerOnCompletionOf: Type.Optional(NonEmptyString),
 };
 
 function cronIdOrJobIdParams(extraFields: Record<string, TSchema>) {
@@ -214,6 +216,7 @@ export const CronJobSchema = Type.Object(
     createdAtMs: Type.Integer({ minimum: 0 }),
     updatedAtMs: Type.Integer({ minimum: 0 }),
     schedule: CronScheduleSchema,
+    triggerOnCompletionOf: Type.Optional(Type.String()),
     sessionTarget: CronSessionTargetSchema,
     wakeMode: CronWakeModeSchema,
     payload: CronPayloadSchema,

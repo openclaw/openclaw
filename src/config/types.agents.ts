@@ -5,6 +5,9 @@ import type { HumanDelayConfig, IdentityConfig } from "./types.base.js";
 import type { GroupChatConfig } from "./types.messages.js";
 import type { AgentToolsConfig, MemorySearchConfig } from "./types.tools.js";
 
+/** Per-agent default thinking level (overrides agents.defaults.thinkingDefault). */
+export type AgentThinkingDefault = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+
 export type AgentConfig = {
   id: string;
   default?: boolean;
@@ -21,6 +24,8 @@ export type AgentConfig = {
   heartbeat?: AgentDefaultsConfig["heartbeat"];
   identity?: IdentityConfig;
   groupChat?: GroupChatConfig;
+  /** Per-agent default thinking level (overrides agents.defaults.thinkingDefault). */
+  thinkingDefault?: AgentThinkingDefault;
   subagents?: {
     /** Allow spawning sub-agents under other agent ids. Use "*" to allow any. */
     allowAgents?: string[];

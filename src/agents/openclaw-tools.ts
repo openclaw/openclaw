@@ -20,7 +20,12 @@ import { createSessionsSendTool } from "./tools/sessions-send-tool.js";
 import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
 import { createSubagentsTool } from "./tools/subagents-tool.js";
 import { createTtsTool } from "./tools/tts-tool.js";
-import { createWebFetchTool, createWebSearchTool } from "./tools/web-tools.js";
+import {
+  createWebFetchTool,
+  createWebSearchTool,
+  createXaiCodeExecTool,
+  createXaiSearchTool,
+} from "./tools/web-tools.js";
 import { resolveWorkspaceRoot } from "./workspace-dir.js";
 
 export function createOpenClawTools(options?: {
@@ -92,6 +97,8 @@ export function createOpenClawTools(options?: {
     config: options?.config,
     sandboxed: options?.sandboxed,
   });
+  const xaiSearchTool = createXaiSearchTool({ config: options?.config });
+  const xaiCodeExecTool = createXaiCodeExecTool({ config: options?.config });
   const messageTool = options?.disableMessageTool
     ? null
     : createMessageTool({
@@ -168,6 +175,8 @@ export function createOpenClawTools(options?: {
     }),
     ...(webSearchTool ? [webSearchTool] : []),
     ...(webFetchTool ? [webFetchTool] : []),
+    ...(xaiSearchTool ? [xaiSearchTool] : []),
+    ...(xaiCodeExecTool ? [xaiCodeExecTool] : []),
     ...(imageTool ? [imageTool] : []),
   ];
 

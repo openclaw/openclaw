@@ -5,7 +5,7 @@ import type { ComposioConfig } from "../types.js";
 /**
  * Tool parameters for composio_bash
  */
-export const CompositoBashSchema = Type.Object({
+export const ComposioBashSchema = Type.Object({
   command: Type.String({
     description:
       "Bash command to execute in the remote sandbox. " +
@@ -23,7 +23,7 @@ export const CompositoBashSchema = Type.Object({
 /**
  * Create the composio_bash tool
  */
-export function createCompositoBashTool(client: ComposioClient, _config: ComposioConfig) {
+export function createComposioBashTool(client: ComposioClient, _config: ComposioConfig) {
   return {
     name: "composio_bash",
     label: "Composio Remote Bash",
@@ -31,7 +31,7 @@ export function createCompositoBashTool(client: ComposioClient, _config: Composi
       "Execute bash commands in a remote sandbox for file operations, data processing, " +
       "and system tasks. Essential for handling large tool responses saved to remote files. " +
       "Use shell tools like jq, awk, sed, grep for data extraction.",
-    parameters: CompositoBashSchema,
+    parameters: ComposioBashSchema,
 
     async execute(_toolCallId: string, params: Record<string, unknown>) {
       const command = String(params.command || "").trim();

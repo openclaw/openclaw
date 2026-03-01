@@ -483,9 +483,21 @@ export type PluginHookBeforeToolCallEvent = {
 };
 
 export type PluginHookBeforeToolCallResult = {
+  /** Override input params passed to the tool. */
   params?: Record<string, unknown>;
+  /** If true, the tool call is blocked and returns blockReason as an error. */
   block?: boolean;
+  /** Human-readable reason for blocking (returned to the LLM as a tool error). */
   blockReason?: string;
+  /**
+   * Inject a synthetic result instead of executing the tool.
+   *
+   * When set, the tool function is skipped entirely and this value is returned
+   * to the LLM as the tool result. Useful for caching, mocking, or
+   * redirecting tool calls to an alternative implementation.
+   * Takes precedence over `block` when both are set.
+   */
+  syntheticResult?: unknown;
 };
 
 // after_tool_call hook

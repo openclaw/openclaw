@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { createOpenClawTools } from "../agents/openclaw-tools.js";
 import {
+  resolveDisabledToolNames,
   resolveEffectiveToolPolicy,
   resolveGroupToolPolicy,
   resolveSubagentToolPolicy,
@@ -12,6 +13,7 @@ import {
 import {
   collectExplicitAllowlist,
   mergeAlsoAllowPolicy,
+  normalizeToolName,
   resolveToolProfilePolicy,
 } from "../agents/tool-policy.js";
 import { ToolInputError } from "../agents/tools/common.js";
@@ -288,6 +290,12 @@ export async function handleToolsInvokeHttpRequest(
     ],
   });
 
+  const disabledToolNames = resolveDisabledToolNames({ config: cfg, agentId });
+  const entriesFiltered =
+    disabledToolNames.size > 0
+      ? subagentFiltered.filter((t) => !disabledToolNames.has(normalizeToolName(t.name)))
+      : subagentFiltered;
+
   // Gateway HTTP-specific deny list — applies to ALL sessions via HTTP.
   const gatewayToolsCfg = cfg.gateway?.tools;
   const defaultGatewayDeny: string[] = DEFAULT_GATEWAY_HTTP_TOOL_DENY.filter(
@@ -297,7 +305,7 @@ export async function handleToolsInvokeHttpRequest(
     Array.isArray(gatewayToolsCfg?.deny) ? gatewayToolsCfg.deny : [],
   );
   const gatewayDenySet = new Set(gatewayDenyNames);
-  const gatewayFiltered = subagentFiltered.filter((t) => !gatewayDenySet.has(t.name));
+  const gatewayFiltered = entriesFiltered.filter((t) => !gatewayDenySet.has(t.name));
 
   const tool = gatewayFiltered.find((t) => t.name === toolName);
   if (!tool) {

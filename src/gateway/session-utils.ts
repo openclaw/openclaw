@@ -845,6 +845,7 @@ export function listSessionsFromStore(params: {
         totalTokens: total,
         totalTokensFresh,
         responseUsage: entry?.responseUsage,
+        bootstrapInjected: entry?.bootstrapInjected,
         modelProvider,
         model,
         contextTokens: entry?.contextTokens,

@@ -41,6 +41,9 @@ function sanitizeBootstrapFiles(
   return sanitized;
 }
 
+/** Bootstrap file names included in "minimal" inject mode (identity + user only). */
+const MINIMAL_INJECT_ALLOWLIST = new Set(["IDENTITY.md", "USER.md"]);
+
 export async function resolveBootstrapFilesForRun(params: {
   workspaceDir: string;
   config?: OpenClawConfig;
@@ -48,7 +51,13 @@ export async function resolveBootstrapFilesForRun(params: {
   sessionId?: string;
   agentId?: string;
   warn?: (message: string) => void;
+  /** When "once" and bootstrapInjected true, skip loading. When "minimal" and bootstrapInjected true, filter to minimal set. */
+  injectMode?: "every-turn" | "once" | "minimal";
+  bootstrapInjected?: boolean;
 }): Promise<WorkspaceBootstrapFile[]> {
+  if (params.injectMode === "once" && params.bootstrapInjected === true) {
+    return [];
+  }
   const sessionKey = params.sessionKey ?? params.sessionId;
   const rawFiles = params.sessionKey
     ? await getOrLoadBootstrapFiles({
@@ -56,7 +65,10 @@ export async function resolveBootstrapFilesForRun(params: {
         sessionKey: params.sessionKey,
       })
     : await loadWorkspaceBootstrapFiles(params.workspaceDir);
-  const bootstrapFiles = filterBootstrapFilesForSession(rawFiles, sessionKey);
+  let bootstrapFiles = filterBootstrapFilesForSession(rawFiles, sessionKey);
+  if (params.injectMode === "minimal" && params.bootstrapInjected === true) {
+    bootstrapFiles = bootstrapFiles.filter((f) => MINIMAL_INJECT_ALLOWLIST.has(f.name));
+  }
 
   const updated = await applyBootstrapHookOverrides({
     files: bootstrapFiles,
@@ -76,6 +88,8 @@ export async function resolveBootstrapContextForRun(params: {
   sessionId?: string;
   agentId?: string;
   warn?: (message: string) => void;
+  injectMode?: "every-turn" | "once" | "minimal";
+  bootstrapInjected?: boolean;
 }): Promise<{
   bootstrapFiles: WorkspaceBootstrapFile[];
   contextFiles: EmbeddedContextFile[];
@@ -87,4 +101,32 @@ export async function resolveBootstrapContextForRun(params: {
     warn: params.warn,
   });
   return { bootstrapFiles, contextFiles };
+}
+
+export type ResolveContextForRunParams = Parameters<typeof resolveBootstrapContextForRun>[0];
+export type ResolveContextForRunResult = Awaited<ReturnType<typeof resolveBootstrapContextForRun>>;
+
+/**
+ * Resolves workspace/memory context for a run. When agents.defaults.context.mode is
+ * "index-rank-compact", uses the index-rank-compact pipeline (when implemented); otherwise
+ * uses raw bootstrap injection. Keeps existing behavior as fallback.
+ */
+export async function resolveContextForRun(
+  params: ResolveContextForRunParams,
+): Promise<ResolveContextForRunResult> {
+  const mode = params.config?.agents?.defaults?.context?.mode;
+  if (mode === "index-rank-compact") {
+    return getIndexRankCompactContext(params);
+  }
+  return resolveBootstrapContextForRun(params);
+}
+
+/**
+ * Index-rank-compact backend: returns ranked, size-bounded context.
+ * Currently delegates to raw bootstrap; replace with real index + rank + compact when implemented.
+ */
+async function getIndexRankCompactContext(
+  params: ResolveContextForRunParams,
+): Promise<ResolveContextForRunResult> {
+  return resolveBootstrapContextForRun(params);
 }

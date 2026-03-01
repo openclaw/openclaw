@@ -44,6 +44,8 @@ export type EmbeddedPiRunMeta = {
       | "retry_limit";
     message: string;
   };
+  /** When true, caller should patch session with bootstrapInjected: true (inject-once flow). */
+  bootstrapInjectedThisRun?: boolean;
   /** Stop reason for the agent run (e.g., "completed", "tool_calls"). */
   stopReason?: string;
   /** Pending tool calls when stopReason is "tool_calls". */

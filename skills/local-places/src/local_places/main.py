@@ -1,12 +1,21 @@
+import asyncio
 import logging
 import os
+from contextlib import asynccontextmanager
+from typing import AsyncGenerator
 
 from fastapi import FastAPI, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
-from local_places.google_places import get_place_details, resolve_locations, search_places
+from local_places.google_places import (
+    close_async_http_client,
+    close_http_client,
+    get_place_details_async,
+    resolve_locations_async,
+    search_places_async,
+)
 from local_places.schemas import (
     LocationResolveRequest,
     LocationResolveResponse,
@@ -15,9 +24,29 @@ from local_places.schemas import (
     SearchResponse,
 )
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+    yield
+    errors: list[BaseException] = []
+    try:
+        await asyncio.to_thread(close_http_client)
+    except BaseException as e:
+        errors.append(e)
+        logger.exception("Error closing sync HTTP client during shutdown")
+    try:
+        await close_async_http_client()
+    except BaseException as e:
+        errors.append(e)
+        logger.exception("Error closing async HTTP client during shutdown")
+    if errors:
+        raise errors[0]
+
+
 app = FastAPI(
-    title="My API",
-    servers=[{"url": os.getenv("OPENAPI_SERVER_URL", "http://maxims-macbook-air:8000")}],
+    title=os.getenv("OPENAPI_TITLE", "Local Places API"),
+    servers=[{"url": os.getenv("OPENAPI_SERVER_URL", "http://localhost:8000")}],
+    lifespan=lifespan,
 )
 logger = logging.getLogger("local_places.validation")
 
@@ -45,18 +74,18 @@ async def validation_exception_handler(
 
 
 @app.post("/places/search", response_model=SearchResponse)
-def places_search(request: SearchRequest) -> SearchResponse:
-    return search_places(request)
+async def places_search(request: SearchRequest) -> SearchResponse:
+    return await search_places_async(request)
 
 
 @app.get("/places/{place_id}", response_model=PlaceDetails)
-def places_details(place_id: str) -> PlaceDetails:
-    return get_place_details(place_id)
+async def places_details(place_id: str) -> PlaceDetails:
+    return await get_place_details_async(place_id)
 
 
 @app.post("/locations/resolve", response_model=LocationResolveResponse)
-def locations_resolve(request: LocationResolveRequest) -> LocationResolveResponse:
-    return resolve_locations(request)
+async def locations_resolve(request: LocationResolveRequest) -> LocationResolveResponse:
+    return await resolve_locations_async(request)
 
 
 if __name__ == "__main__":

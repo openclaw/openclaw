@@ -223,6 +223,31 @@ export function applyJobResult(
   return shouldDelete;
 }
 
+/**
+ * Mark jobs that are chained to the finished job (triggerOnCompletionOf === finishedJobId)
+ * as due now so the timer picks them up on the next tick.
+ */
+export function markChainedJobsDue(
+  state: CronServiceState,
+  finishedJobId: string,
+  nowMs: number,
+): void {
+  const store = state.store;
+  if (!store?.jobs?.length) {
+    return;
+  }
+  for (const j of store.jobs) {
+    if (
+      j.enabled &&
+      typeof j.triggerOnCompletionOf === "string" &&
+      j.triggerOnCompletionOf.trim() === finishedJobId
+    ) {
+      j.state.nextRunAtMs = nowMs;
+      j.updatedAtMs = nowMs;
+    }
+  }
+}
+
 function applyOutcomeToStoredJob(state: CronServiceState, result: TimedCronRunOutcome): void {
   const store = state.store;
   if (!store) {
@@ -243,6 +268,7 @@ function applyOutcomeToStoredJob(state: CronServiceState, result: TimedCronRunOu
   });
 
   emitJobFinished(state, job, result, result.startedAt);
+  markChainedJobsDue(state, job.id, result.endedAt);
 
   if (shouldDelete) {
     store.jobs = jobs.filter((entry) => entry.id !== job.id);
@@ -809,6 +835,7 @@ export async function executeJob(
   });
 
   emitJobFinished(state, job, coreResult, startedAt);
+  markChainedJobsDue(state, job.id, endedAt);
 
   if (shouldDelete && state.store) {
     state.store.jobs = state.store.jobs.filter((j) => j.id !== job.id);

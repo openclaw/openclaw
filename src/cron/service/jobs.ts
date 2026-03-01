@@ -131,6 +131,40 @@ export function findJobOrThrow(state: CronServiceState, id: string) {
   return job;
 }
 
+/**
+ * Validates triggerOnCompletionOf for an update: referenced job must exist
+ * and setting it must not create a cycle (jobId must not be reachable from triggerTargetId).
+ */
+export function validateTriggerOnCompletionOf(
+  state: CronServiceState,
+  jobId: string,
+  triggerTargetId: string,
+): void {
+  const jobs = state.store?.jobs ?? [];
+  const exists = jobs.some((j) => j.id === triggerTargetId);
+  if (!exists) {
+    throw new Error(`cron job triggerOnCompletionOf references unknown job id: ${triggerTargetId}`);
+  }
+  const visited = new Set<string>();
+  let current: string | undefined = triggerTargetId;
+  while (current) {
+    if (current === jobId) {
+      throw new Error(
+        `cron job triggerOnCompletionOf would create a cycle: ${triggerTargetId} eventually triggers ${jobId}`,
+      );
+    }
+    if (visited.has(current)) {
+      break;
+    }
+    visited.add(current);
+    const nextJob = jobs.find((j) => j.id === current);
+    current =
+      nextJob?.triggerOnCompletionOf?.trim() && nextJob.triggerOnCompletionOf !== current
+        ? nextJob.triggerOnCompletionOf
+        : undefined;
+  }
+}
+
 export function computeJobNextRunAtMs(job: CronJob, nowMs: number): number | undefined {
   if (!job.enabled) {
     return undefined;
@@ -373,6 +407,19 @@ export function createJob(state: CronServiceState, input: CronJobCreate): CronJo
         ? true
         : undefined;
   const enabled = typeof input.enabled === "boolean" ? input.enabled : true;
+  const triggerOnCompletionOf =
+    typeof input.triggerOnCompletionOf === "string" && input.triggerOnCompletionOf.trim()
+      ? input.triggerOnCompletionOf.trim()
+      : undefined;
+  if (triggerOnCompletionOf) {
+    const exists = state.store?.jobs.some((j) => j.id === triggerOnCompletionOf);
+    if (!exists) {
+      throw new Error(
+        `cron job triggerOnCompletionOf references unknown job id: ${triggerOnCompletionOf}`,
+      );
+    }
+  }
+
   const job: CronJob = {
     id,
     agentId: normalizeOptionalAgentId(input.agentId),
@@ -384,6 +431,7 @@ export function createJob(state: CronServiceState, input: CronJobCreate): CronJo
     createdAtMs: now,
     updatedAtMs: now,
     schedule,
+    triggerOnCompletionOf,
     sessionTarget: input.sessionTarget,
     wakeMode: input.wakeMode,
     payload: input.payload,
@@ -460,6 +508,10 @@ export function applyJobPatch(job: CronJob, patch: CronJobPatch) {
   }
   if ("agentId" in patch) {
     job.agentId = normalizeOptionalAgentId((patch as { agentId?: unknown }).agentId);
+  }
+  if ("triggerOnCompletionOf" in patch) {
+    const raw = (patch as { triggerOnCompletionOf?: string }).triggerOnCompletionOf;
+    job.triggerOnCompletionOf = typeof raw === "string" && raw.trim() ? raw.trim() : undefined;
   }
   if ("sessionKey" in patch) {
     job.sessionKey = normalizeOptionalSessionKey((patch as { sessionKey?: unknown }).sessionKey);

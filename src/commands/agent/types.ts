@@ -76,4 +76,6 @@ export type AgentCommandOpts = {
   inputProvenance?: InputProvenance;
   /** Per-call stream param overrides (best-effort). */
   streamParams?: AgentStreamParams;
+  /** Restrict tools for this run: "none" | "inherit" | string[] (tool names). Used by sessions_spawn. */
+  toolsFilter?: "none" | "inherit" | string[];
 };

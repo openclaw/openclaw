@@ -359,6 +359,14 @@ export async function applySessionsPatchToStore(params: {
     }
   }
 
+  if ("bootstrapInjected" in patch) {
+    if (patch.bootstrapInjected === true) {
+      next.bootstrapInjected = true;
+    } else if (patch.bootstrapInjected === false || patch.bootstrapInjected === null) {
+      delete next.bootstrapInjected;
+    }
+  }
+
   store[storeKey] = next;
   return { ok: true, entry: next };
 }
