@@ -446,12 +446,18 @@ export async function runCronIsolatedAgentTurn(params: {
       verboseLevel: resolvedVerboseLevel,
     });
     const messageChannel = resolvedDelivery.channel;
+    // Per-job payload.fallbacks takes priority over agent-level fallbacks.
+    const payloadFallbacks =
+      params.job.payload.kind === "agentTurn" && Array.isArray(params.job.payload.fallbacks)
+        ? params.job.payload.fallbacks
+        : undefined;
     const fallbackResult = await runWithModelFallback({
       cfg: cfgWithAgentDefaults,
       provider,
       model,
       agentDir,
-      fallbacksOverride: resolveAgentModelFallbacksOverride(params.cfg, agentId),
+      fallbacksOverride:
+        payloadFallbacks ?? resolveAgentModelFallbacksOverride(params.cfg, agentId),
       run: (providerOverride, modelOverride) => {
         if (abortSignal?.aborted) {
           throw new Error(abortReason());

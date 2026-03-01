@@ -7,6 +7,7 @@ function cronAgentTurnPayloadSchema(params: { message: TSchema }) {
       kind: Type.Literal("agentTurn"),
       message: params.message,
       model: Type.Optional(Type.String()),
+      fallbacks: Type.Optional(Type.Array(Type.String())),
       thinking: Type.Optional(Type.String()),
       timeoutSeconds: Type.Optional(Type.Integer({ minimum: 0 })),
       allowUnsafeExternalContent: Type.Optional(Type.Boolean()),
