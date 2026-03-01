@@ -182,10 +182,18 @@ describe("external-content security", () => {
 
     it("normalizes additional angle bracket homoglyph markers before sanitizing", () => {
       const bracketPairs: Array<[left: string, right: string]> = [
-        ["\u2329", "\u232A"], // left/right-pointing angle brackets
-        ["\u3008", "\u3009"], // CJK angle brackets
+        ["\u00AB", "\u00BB"], // left/right double angle quotation marks
         ["\u2039", "\u203A"], // single angle quotation marks
+        ["\u226A", "\u226B"], // much less-than/greater-than signs
+        ["\u2329", "\u232A"], // left/right-pointing angle brackets
         ["\u27E8", "\u27E9"], // mathematical angle brackets
+        ["\u27EA", "\u27EB"], // mathematical double angle brackets
+        ["\u27EC", "\u27ED"], // white tortoise shell brackets
+        ["\u2E28", "\u2E29"], // double brackets
+        ["\u3008", "\u3009"], // CJK angle brackets
+        ["\u300A", "\u300B"], // CJK double angle brackets
+        ["\u300C", "\u300D"], // CJK corner brackets
+        ["\u300E", "\u300F"], // CJK white corner brackets
         ["\uFE64", "\uFE65"], // small less-than/greater-than signs
       ];
 

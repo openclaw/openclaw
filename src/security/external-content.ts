@@ -110,12 +110,28 @@ const ANGLE_BRACKET_MAP: Record<number, string> = {
   0x232a: ">", // right-pointing angle bracket
   0x3008: "<", // CJK left angle bracket
   0x3009: ">", // CJK right angle bracket
+  0x300a: "<", // CJK left double angle bracket
+  0x300b: ">", // CJK right double angle bracket
+  0x300c: "<", // CJK left corner bracket
+  0x300d: ">", // CJK right corner bracket
+  0x300e: "<", // CJK left white corner bracket
+  0x300f: ">", // CJK right white corner bracket
   0x2039: "<", // single left-pointing angle quotation mark
   0x203a: ">", // single right-pointing angle quotation mark
+  0x00ab: "<", // left-pointing double angle quotation mark
+  0x00bb: ">", // right-pointing double angle quotation mark
   0x27e8: "<", // mathematical left angle bracket
   0x27e9: ">", // mathematical right angle bracket
+  0x27ea: "<", // mathematical left double angle bracket
+  0x27eb: ">", // mathematical right double angle bracket
+  0x27ec: "<", // mathematical left white tortoise shell bracket
+  0x27ed: ">", // mathematical right white tortoise shell bracket
   0xfe64: "<", // small less-than sign
   0xfe65: ">", // small greater-than sign
+  0x226a: "<", // much less-than
+  0x226b: ">", // much greater-than
+  0x2e28: "<", // left double bracket
+  0x2e29: ">", // right double bracket
 };
 
 function foldMarkerChar(char: string): string {
@@ -135,7 +151,7 @@ function foldMarkerChar(char: string): string {
 
 function foldMarkerText(input: string): string {
   return input.replace(
-    /[\uFF21-\uFF3A\uFF41-\uFF5A\uFF1C\uFF1E\u2329\u232A\u3008\u3009\u2039\u203A\u27E8\u27E9\uFE64\uFE65]/g,
+    /[\uFF21-\uFF3A\uFF41-\uFF5A\uFF1C\uFF1E\u00AB\u00BB\u2039\u203A\u226A\u226B\u2329\u232A\u27E8-\u27ED\u2E28\u2E29\u3008-\u300F\uFE64\uFE65]/g,
     (char) => foldMarkerChar(char),
   );
 }
