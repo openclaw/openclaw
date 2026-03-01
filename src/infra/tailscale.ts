@@ -174,6 +174,39 @@ export async function readTailscaleStatusJson(
   return stdout ? parsePossiblyNoisyJsonObject(stdout) : {};
 }
 
+/**
+ * Check if the tailscaled service is actually running by attempting to get status.
+ * This is more accurate than checking config alone, as it verifies the daemon is active.
+ *
+ * @returns Object with running status and optional error message
+ */
+export async function checkTailscaledService(
+  exec: typeof runExec = runExec,
+  opts?: { timeoutMs?: number },
+): Promise<{ running: boolean; error?: string }> {
+  try {
+    const tailscaleBin = await getTailscaleBinary();
+    await exec(tailscaleBin, ["status"], {
+      timeoutMs: opts?.timeoutMs ?? 3000,
+      maxBuffer: 100_000,
+    });
+    return { running: true };
+  } catch (err) {
+    const errorMsg = err instanceof Error ? err.message : String(err);
+    // Check for specific error patterns that indicate service is not running
+    if (
+      errorMsg.includes("not running") ||
+      errorMsg.includes("connection refused") ||
+      errorMsg.includes("no such host") ||
+      errorMsg.includes("failed to connect")
+    ) {
+      return { running: false, error: "tailscaled service is not running" };
+    }
+    // For other errors (like command not found), still report as not running
+    return { running: false, error: errorMsg };
+  }
+}
+
 export async function ensureGoInstalled(
   exec: typeof runExec = runExec,
   prompt: typeof promptYesNo = promptYesNo,

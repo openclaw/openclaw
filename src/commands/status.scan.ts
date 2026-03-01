@@ -5,7 +5,7 @@ import { normalizeControlUiBasePath } from "../gateway/control-ui-shared.js";
 import { probeGateway } from "../gateway/probe.js";
 import { collectChannelStatusIssues } from "../infra/channels-status-issues.js";
 import { resolveOsSummary } from "../infra/os-summary.js";
-import { getTailnetHostname } from "../infra/tailscale.js";
+import { checkTailscaledService, getTailnetHostname } from "../infra/tailscale.js";
 import { getMemorySearchManager } from "../memory/index.js";
 import type { MemoryProviderStatus } from "../memory/types.js";
 import { runExec } from "../process/exec.js";
@@ -81,8 +81,15 @@ export async function scanStatus(
 
       progress.setLabel("Checking Tailscale…");
       const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
+
+      // Check if tailscaled service is actually running, regardless of config
+      const tailscaleServiceStatus = await checkTailscaledService(runExec, {
+        timeoutMs: 2000,
+      }).catch(() => ({ running: false }));
+
+      // Only attempt to get DNS if service is running AND mode is not "off"
       const tailscaleDns =
-        tailscaleMode === "off"
+        tailscaleMode === "off" || !tailscaleServiceStatus.running
           ? null
           : await getTailnetHostname((cmd, args) =>
               runExec(cmd, args, { timeoutMs: 1200, maxBuffer: 200_000 }),
