@@ -272,6 +272,47 @@ describe("loadOpenClawPlugins", () => {
     expect(memory?.name).toBe("Memory (Core)");
     expect(memory?.version).toBe("1.2.3");
   });
+  it("no duplicate plugin id warning when globally-installed plugin also exists in bundled dir (#30908)", () => {
+    // Regression test: when a user installs feishu globally (~/.openclaw/extensions/feishu/)
+    // and the npm package also bundles feishu (extensions/feishu/), the plugin should
+    // load cleanly from the global copy without emitting a spurious duplicate warning.
+    const globalStateDir = makeTempDir();
+    const globalExtDir = path.join(globalStateDir, "extensions", "feishu");
+    fs.mkdirSync(globalExtDir, { recursive: true });
+
+    const bundledDir = makeTempDir();
+    const bundledFeishuDir = path.join(bundledDir, "feishu");
+    fs.mkdirSync(bundledFeishuDir, { recursive: true });
+
+    const pluginBody = `export default { id: "feishu", register() {} };`;
+
+    writePlugin({ id: "feishu", body: pluginBody, dir: globalExtDir, filename: "index.js" });
+    writePlugin({ id: "feishu", body: pluginBody, dir: bundledFeishuDir, filename: "index.js" });
+
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
+
+    const registry = withEnv({ OPENCLAW_STATE_DIR: globalStateDir }, () =>
+      loadOpenClawPlugins({
+        cache: false,
+        config: {
+          plugins: {
+            entries: { feishu: { enabled: true } },
+          },
+        },
+      }),
+    );
+
+    const duplicateWarnings = registry.diagnostics.filter(
+      (d) => d.level === "warn" && d.message?.includes("duplicate plugin id"),
+    );
+    expect(duplicateWarnings).toHaveLength(0);
+
+    const feishuEntries = registry.plugins.filter((p) => p.id === "feishu");
+    const loadedFeishu = feishuEntries.filter((p) => p.status === "loaded");
+    expect(loadedFeishu).toHaveLength(1);
+    expect(loadedFeishu[0]?.origin).toBe("global");
+  });
+
   it("loads plugins from config paths", () => {
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
     const plugin = writePlugin({
