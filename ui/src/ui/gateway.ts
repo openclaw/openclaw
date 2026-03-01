@@ -10,6 +10,15 @@ import { clearDeviceAuthToken, loadDeviceAuthToken, storeDeviceAuthToken } from 
 import { loadOrCreateDeviceIdentity, signDevicePayload } from "./device-identity.ts";
 import { generateUUID } from "./uuid.ts";
 
+/** Initial delay (ms) before the first WebSocket reconnect attempt. */
+const INITIAL_BACKOFF_MS = 800;
+/** Maximum delay (ms) between reconnect attempts. */
+const MAX_BACKOFF_MS = 15_000;
+/** Multiplier applied to the backoff delay after each failed attempt. */
+const BACKOFF_MULTIPLIER = 1.7;
+/** Delay (ms) before sending the `connect` frame after a WebSocket opens. */
+const CONNECT_QUEUE_DELAY_MS = 750;
+
 export type GatewayEventFrame = {
   type: "event";
   event: string;
@@ -99,7 +108,7 @@ export class GatewayBrowserClient {
   private connectNonce: string | null = null;
   private connectSent = false;
   private connectTimer: number | null = null;
-  private backoffMs = 800;
+  private backoffMs = INITIAL_BACKOFF_MS;
   private pendingConnectError: GatewayErrorInfo | undefined;
 
   constructor(private opts: GatewayBrowserClientOptions) {}
@@ -147,7 +156,7 @@ export class GatewayBrowserClient {
       return;
     }
     const delay = this.backoffMs;
-    this.backoffMs = Math.min(this.backoffMs * 1.7, 15_000);
+    this.backoffMs = Math.min(this.backoffMs * BACKOFF_MULTIPLIER, MAX_BACKOFF_MS);
     window.setTimeout(() => this.connect(), delay);
   }
 
@@ -257,7 +266,7 @@ export class GatewayBrowserClient {
             scopes: hello.auth.scopes ?? [],
           });
         }
-        this.backoffMs = 800;
+        this.backoffMs = INITIAL_BACKOFF_MS;
         this.opts.onHello?.(hello);
       })
       .catch((err: unknown) => {
@@ -355,6 +364,6 @@ export class GatewayBrowserClient {
     }
     this.connectTimer = window.setTimeout(() => {
       void this.sendConnect();
-    }, 750);
+    }, CONNECT_QUEUE_DELAY_MS);
   }
 }
