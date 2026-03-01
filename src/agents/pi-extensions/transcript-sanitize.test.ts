@@ -165,17 +165,18 @@ describe("transcript-sanitize extension", () => {
     expect(result!.messages).toHaveLength(2); // user + assistant
   });
 
-  it("drops duplicate tool_results for the same tool_call_id", () => {
+  it("drops orphaned tool_result whose tool_call_id already has a result", () => {
     const stub = createExtensionStub();
     transcriptSanitizeExtension(stub.api);
 
     // Place two tool_result blocks for the same call_id with a different assistant
-    // in between, so the second one is detected as a cross-transcript duplicate.
+    // in between. The second one has no preceding tool_use, so it is detected as
+    // an orphan (droppedOrphanCount), not a duplicate.
     const messages: AgentMessage[] = [
       makeAssistantWithToolCall("tc1", "exec"),
       makeToolResult({ toolCallId: "tc1", toolName: "exec", text: "first" }),
       makeAssistantText("thinking..."),
-      makeToolResult({ toolCallId: "tc1", toolName: "exec", text: "duplicate" }),
+      makeToolResult({ toolCallId: "tc1", toolName: "exec", text: "orphaned second" }),
       makeUser("done"),
     ] as AgentMessage[];
 
@@ -188,8 +189,15 @@ describe("transcript-sanitize extension", () => {
   });
 
   it("is registered in buildEmbeddedExtensionFactories", async () => {
-    // Verify the import path is valid by importing the module
+    const { buildEmbeddedExtensionFactories } = await import("../pi-embedded-runner/extensions.js");
+    const factories = buildEmbeddedExtensionFactories({
+      cfg: undefined,
+      sessionManager: {} as never,
+      provider: "test",
+      modelId: "test",
+      model: undefined,
+    });
     const mod = await import("./transcript-sanitize.js");
-    expect(typeof mod.default).toBe("function");
+    expect(factories).toContain(mod.default);
   });
 });
