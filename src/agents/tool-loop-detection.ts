@@ -197,6 +197,18 @@ function hashToolOutcome(
 
   const details = isPlainObject(result.details) ? result.details : {};
   const text = extractTextContent(result);
+  if (toolName === "exec" && details.status === "running") {
+    // exec "running" outcomes contain per-attempt session ids/pids in text/details.
+    // Canonicalize to semantic "still running" so no-progress retries can be detected.
+    const canonicalText = text
+      .replace(/\(session [^,]+,\s*pid [^)]+\)/g, "(session <id>, pid <pid>)")
+      .replace(/session [a-zA-Z0-9-]+/g, "session <id>")
+      .replace(/pid \d+/gi, "pid <pid>");
+    return `exec_running:${digestStable({
+      status: details.status,
+      text: canonicalText,
+    })}`;
+  }
   if (isKnownPollToolCall(toolName, params) && toolName === "process" && isPlainObject(params)) {
     const action = params.action;
     if (action === "poll") {
@@ -383,7 +395,9 @@ export function detectToolCallLoop(
   const currentHash = hashToolCall(toolName, params);
   const noProgress = getNoProgressStreak(history, toolName, currentHash);
   const noProgressStreak = noProgress.count;
-  const knownPollTool = isKnownPollToolCall(toolName, params);
+  const knownNoProgressTool =
+    isKnownPollToolCall(toolName, params) ||
+    (toolName === "exec" && noProgress.latestResultHash?.startsWith("exec_running:") === true);
   const pingPong = getPingPongStreak(history, currentHash);
 
   if (noProgressStreak >= resolvedConfig.globalCircuitBreakerThreshold) {
@@ -401,34 +415,34 @@ export function detectToolCallLoop(
   }
 
   if (
-    knownPollTool &&
+    knownNoProgressTool &&
     resolvedConfig.detectors.knownPollNoProgress &&
     noProgressStreak >= resolvedConfig.criticalThreshold
   ) {
-    log.error(`Critical polling loop detected: ${toolName} repeated ${noProgressStreak} times`);
+    log.error(`Critical no-progress loop detected: ${toolName} repeated ${noProgressStreak} times`);
     return {
       stuck: true,
       level: "critical",
       detector: "known_poll_no_progress",
       count: noProgressStreak,
-      message: `CRITICAL: Called ${toolName} with identical arguments and no progress ${noProgressStreak} times. This appears to be a stuck polling loop. Session execution blocked to prevent resource waste.`,
-      warningKey: `poll:${toolName}:${currentHash}:${noProgress.latestResultHash ?? "none"}`,
+      message: `CRITICAL: Called ${toolName} with identical arguments and no progress ${noProgressStreak} times. This appears to be a stuck no-progress loop. Session execution blocked to prevent resource waste.`,
+      warningKey: `noprogress:${toolName}:${currentHash}:${noProgress.latestResultHash ?? "none"}`,
     };
   }
 
   if (
-    knownPollTool &&
+    knownNoProgressTool &&
     resolvedConfig.detectors.knownPollNoProgress &&
     noProgressStreak >= resolvedConfig.warningThreshold
   ) {
-    log.warn(`Polling loop warning: ${toolName} repeated ${noProgressStreak} times`);
+    log.warn(`No-progress loop warning: ${toolName} repeated ${noProgressStreak} times`);
     return {
       stuck: true,
       level: "warning",
       detector: "known_poll_no_progress",
       count: noProgressStreak,
       message: `WARNING: You have called ${toolName} ${noProgressStreak} times with identical arguments and no progress. Stop polling and either (1) increase wait time between checks, or (2) report the task as failed if the process is stuck.`,
-      warningKey: `poll:${toolName}:${currentHash}:${noProgress.latestResultHash ?? "none"}`,
+      warningKey: `noprogress:${toolName}:${currentHash}:${noProgress.latestResultHash ?? "none"}`,
     };
   }
 
@@ -476,7 +490,7 @@ export function detectToolCallLoop(
   ).length;
 
   if (
-    !knownPollTool &&
+    !knownNoProgressTool &&
     resolvedConfig.detectors.genericRepeat &&
     recentCount >= resolvedConfig.warningThreshold
   ) {

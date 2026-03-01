@@ -132,6 +132,36 @@ describe("before_tool_call loop detection behavior", () => {
     };
   }
 
+  function createNoProgressExecFixture(command: string) {
+    let attempt = 0;
+    const execute = vi.fn().mockImplementation(async () => {
+      const current = attempt;
+      attempt += 1;
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Command still running (session wave-${current}, pid ${
+              2000 + current
+            }). Use process (list/poll/log/write/kill/clear/remove) for follow-up.`,
+          },
+        ],
+        details: {
+          status: "running",
+          sessionId: `wave-${current}`,
+          pid: 2000 + current,
+          startedAt: 1700000000000 + current,
+          cwd: "/tmp",
+          tail: "",
+        },
+      };
+    });
+    return {
+      tool: createWrappedTool("exec", execute),
+      params: { command, pty: true },
+    };
+  }
+
   function expectCriticalLoopEvent(
     loopEvent: DiagnosticToolLoopEvent | undefined,
     params: {
@@ -157,6 +187,18 @@ describe("before_tool_call loop detection behavior", () => {
 
     await expect(
       tool.execute(`poll-${CRITICAL_THRESHOLD}`, params, undefined, undefined),
+    ).rejects.toThrow("CRITICAL");
+  });
+
+  it("blocks repeated exec running retries with dynamic session ids", async () => {
+    const { tool, params } = createNoProgressExecFixture("git diff --stat HEAD~1");
+
+    for (let i = 0; i < CRITICAL_THRESHOLD; i += 1) {
+      await expect(tool.execute(`exec-${i}`, params, undefined, undefined)).resolves.toBeDefined();
+    }
+
+    await expect(
+      tool.execute(`exec-${CRITICAL_THRESHOLD}`, params, undefined, undefined),
     ).rejects.toThrow("CRITICAL");
   });
 

@@ -75,6 +75,27 @@ function createNoProgressPollFixture(sessionId: string) {
   };
 }
 
+function createExecRunningResult(attempt: number) {
+  return {
+    content: [
+      {
+        type: "text",
+        text: `Command still running (session ocean-${attempt}, pid ${
+          1000 + attempt
+        }). Use process (list/poll/log/write/kill/clear/remove) for follow-up.`,
+      },
+    ],
+    details: {
+      status: "running",
+      sessionId: `ocean-${attempt}`,
+      pid: 1000 + attempt,
+      startedAt: 1700000000000 + attempt,
+      cwd: "/tmp",
+      tail: "",
+    },
+  };
+}
+
 function recordSuccessfulPingPongCalls(params: {
   state: SessionState;
   readParams: { path: string };
@@ -360,6 +381,22 @@ describe("tool-loop-detection", () => {
         expect(loopResult.level).toBe("warning");
         expect(loopResult.detector).toBe("known_poll_no_progress");
         expect(loopResult.message).toContain("no progress");
+      }
+    });
+
+    it("warns for repeated exec running retries with dynamic session ids", () => {
+      const state = createState();
+      const params = { command: "git diff --stat HEAD~1", pty: true };
+      for (let i = 0; i < WARNING_THRESHOLD; i += 1) {
+        recordSuccessfulCall(state, "exec", params, createExecRunningResult(i), i);
+      }
+
+      const loopResult = detectToolCallLoop(state, "exec", params, enabledLoopDetectionConfig);
+      expect(loopResult.stuck).toBe(true);
+      if (loopResult.stuck) {
+        expect(loopResult.level).toBe("warning");
+        expect(loopResult.detector).toBe("known_poll_no_progress");
+        expect(loopResult.count).toBe(WARNING_THRESHOLD);
       }
     });
 
