@@ -558,7 +558,7 @@ export function registerBrowserAgentActRoutes(
               clickRequest.timeoutMs = timeoutMs;
             }
             await pw.clickViaPlaywright(clickRequest);
-            return res.json({ ok: true, targetId: tab.targetId, url: tab.url });
+            return res.json({ ok: true });
           }
           case "type": {
             const ref = toStringOrEmpty(body.ref) || undefined;
@@ -626,7 +626,7 @@ export function registerBrowserAgentActRoutes(
               typeRequest.timeoutMs = timeoutMs;
             }
             await pw.typeViaPlaywright(typeRequest);
-            return res.json({ ok: true, targetId: tab.targetId, url: tab.url });
+            return res.json({ ok: true });
           }
           case "press": {
             const key = toStringOrEmpty(body.key);
@@ -656,7 +656,7 @@ export function registerBrowserAgentActRoutes(
               key,
               delayMs: delayMs ?? undefined,
             });
-            return res.json({ ok: true, targetId: tab.targetId, url: tab.url });
+            return res.json({ ok: true });
           }
           case "hover": {
             const ref = toStringOrEmpty(body.ref) || undefined;
@@ -699,7 +699,7 @@ export function registerBrowserAgentActRoutes(
               selector,
               timeoutMs: timeoutMs ?? undefined,
             });
-            return res.json({ ok: true, targetId: tab.targetId, url: tab.url });
+            return res.json({ ok: true });
           }
           case "scrollIntoView": {
             const ref = toStringOrEmpty(body.ref) || undefined;
@@ -750,7 +750,7 @@ export function registerBrowserAgentActRoutes(
               scrollRequest.timeoutMs = timeoutMs;
             }
             await pw.scrollIntoViewViaPlaywright(scrollRequest);
-            return res.json({ ok: true, targetId: tab.targetId, url: tab.url });
+            return res.json({ ok: true });
           }
           case "drag": {
             const startRef = toStringOrEmpty(body.startRef) || undefined;
@@ -801,7 +801,7 @@ export function registerBrowserAgentActRoutes(
               endSelector,
               timeoutMs: timeoutMs ?? undefined,
             });
-            return res.json({ ok: true, targetId: tab.targetId, url: tab.url });
+            return res.json({ ok: true });
           }
           case "select": {
             const ref = toStringOrEmpty(body.ref) || undefined;
@@ -854,7 +854,7 @@ export function registerBrowserAgentActRoutes(
               values,
               timeoutMs: timeoutMs ?? undefined,
             });
-            return res.json({ ok: true, targetId: tab.targetId, url: tab.url });
+            return res.json({ ok: true });
           }
           case "fill": {
             const rawFields = Array.isArray(body.fields) ? body.fields : [];
@@ -899,7 +899,7 @@ export function registerBrowserAgentActRoutes(
               fields,
               timeoutMs: timeoutMs ?? undefined,
             });
-            return res.json({ ok: true, targetId: tab.targetId, url: tab.url });
+            return res.json({ ok: true });
           }
           case "resize": {
             const width = toNumber(body.width);
@@ -927,7 +927,7 @@ export function registerBrowserAgentActRoutes(
               width,
               height,
             });
-            return res.json({ ok: true, targetId: tab.targetId, url: tab.url });
+            return res.json({ ok: true });
           }
           case "wait": {
             const timeMs = toNumber(body.timeMs);
@@ -1001,7 +1001,7 @@ export function registerBrowserAgentActRoutes(
               fn,
               timeoutMs,
             });
-            return res.json({ ok: true, targetId: tab.targetId, url: tab.url });
+            return res.json({ ok: true });
           }
           case "evaluate": {
             if (!evaluateEnabled) {
@@ -1050,12 +1050,7 @@ export function registerBrowserAgentActRoutes(
               evalRequest.timeoutMs = evalTimeoutMs;
             }
             const result = await pw.evaluateViaPlaywright(evalRequest);
-            return res.json({
-              ok: true,
-              targetId: tab.targetId,
-              url: tab.url,
-              result,
-            });
+            return res.json({ ok: true, result });
           }
           case "close": {
             if (isExistingSession) {
@@ -1152,7 +1147,7 @@ export function registerBrowserAgentActRoutes(
           timeoutMs: timeoutMs ?? undefined,
           maxChars: maxChars ?? undefined,
         });
-        res.json({ ok: true, targetId: tab.targetId, url: tab.url, response: result });
+        res.json({ ok: true, response: result });
       },
     });
   });
@@ -1204,7 +1199,7 @@ export function registerBrowserAgentActRoutes(
           targetId: tab.targetId,
           ref,
         });
-        res.json({ ok: true, targetId: tab.targetId, url: tab.url });
+        res.json({ ok: true });
       },
     });
   });

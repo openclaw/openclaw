@@ -32,7 +32,7 @@ export function registerBrowserAgentDebugRoutes(
           targetId: tab.targetId,
           level: level.trim() || undefined,
         });
-        res.json({ ok: true, messages, targetId: tab.targetId, url: tab.url });
+        res.json({ ok: true, messages });
       },
     });
   });
