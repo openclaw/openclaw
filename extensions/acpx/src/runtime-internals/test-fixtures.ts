@@ -185,12 +185,9 @@ if (command === "prompt") {
 
   if (stdinText.includes("trigger-error")) {
     emitJson({
-      jsonrpc: "2.0",
-      id: requestId,
-      error: {
-        code: -32000,
-        message: "mock failure",
-      },
+      type: "error",
+      code: "-32000",
+      message: "mock failure",
     });
     process.exit(1);
   }
@@ -208,13 +205,7 @@ if (command === "prompt") {
       sessionUpdate: "agent_message_chunk",
       content: { type: "text", text: " gamma" },
     });
-    emitJson({
-      jsonrpc: "2.0",
-      id: requestId,
-      result: {
-        stopReason: "end_turn",
-      },
-    });
+    emitJson({ type: "done", stopReason: "end_turn" });
     process.exit(0);
   }
 
@@ -223,20 +214,8 @@ if (command === "prompt") {
       sessionUpdate: "agent_message_chunk",
       content: { type: "text", text: "ok" },
     });
-    emitJson({
-      jsonrpc: "2.0",
-      id: requestId,
-      result: {
-        stopReason: "end_turn",
-      },
-    });
-    emitJson({
-      jsonrpc: "2.0",
-      id: requestId,
-      result: {
-        stopReason: "end_turn",
-      },
-    });
+    emitJson({ type: "done", stopReason: "end_turn" });
+    emitJson({ type: "done", stopReason: "end_turn" });
     process.exit(0);
   }
 
@@ -255,22 +234,15 @@ if (command === "prompt") {
     sessionUpdate: "agent_message_chunk",
     content: { type: "text", text: "echo:" + stdinText.trim() },
   });
-  emitJson({
-    jsonrpc: "2.0",
-    id: requestId,
-    result: {
-      stopReason: "end_turn",
-    },
-  });
+  emitJson({ type: "done", stopReason: "end_turn" });
   process.exit(0);
 }
 
 writeLog({ kind: "unknown", args });
 emitJson({
-  error: {
-    code: "USAGE",
-    message: "unknown command",
-  },
+  type: "error",
+  code: "USAGE",
+  message: "unknown command",
 });
 process.exit(2);
 `;
