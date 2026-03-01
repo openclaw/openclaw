@@ -264,8 +264,8 @@ importers:
   extensions/acpx:
     dependencies:
       acpx:
-        specifier: ^0.1.13
-        version: 0.1.13(zod@4.3.6)
+        specifier: 0.1.14
+        version: 0.1.14(zod@4.3.6)
 
   extensions/bluebubbles: {}
 
@@ -3160,8 +3160,8 @@ packages:
     engines: {node: '>=0.4.0'}
     hasBin: true
 
-  acpx@0.1.13:
-    resolution: {integrity: sha512-C032VkV3cNa13ubq9YhskTWvDTsciNAQfNHZLW3PIN3atdkrzkV0v2yi6Znp7UZDw+pzgpKUsOrZWl64Lwr+3w==}
+  acpx@0.1.14:
+    resolution: {integrity: sha512-kq1tU7VCOLW3dIK77PpGoJPMsIqmnOSiQJGsWfWiOYgTXYIsbNtP04ilsaobgDd/MUgjo9ttXD1abziQ3OH5Pg==}
     engines: {node: '>=18'}
     hasBin: true
 
@@ -9050,7 +9050,7 @@ snapshots:
 
   acorn@8.16.0: {}
 
-  acpx@0.1.13(zod@4.3.6):
+  acpx@0.1.14(zod@4.3.6):
     dependencies:
       '@agentclientprotocol/sdk': 0.14.1(zod@4.3.6)
       commander: 13.1.0
