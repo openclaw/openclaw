@@ -14,6 +14,18 @@ let appliedDnsResultOrder: string | null = null;
 let appliedGlobalDispatcherAutoSelectFamily: boolean | null = null;
 const log = createSubsystemLogger("telegram/network");
 
+function hasProxyEnvConfigured(): boolean {
+  const env = process.env ?? {};
+  const keys = ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"];
+  for (const key of keys) {
+    const value = env[key];
+    if (typeof value === "string" && value.trim().length > 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
 // Node 22 workaround: enable autoSelectFamily to allow IPv4 fallback on broken IPv6 networks.
 // Many networks have IPv6 configured but not routed, causing "Network is unreachable" errors.
 // See: https://github.com/nodejs/node/issues/54359
@@ -44,19 +56,25 @@ function applyTelegramNetworkWorkarounds(network?: TelegramNetworkConfig): void 
     autoSelectDecision.value !== null &&
     autoSelectDecision.value !== appliedGlobalDispatcherAutoSelectFamily
   ) {
-    try {
-      setGlobalDispatcher(
-        new Agent({
-          connect: {
-            autoSelectFamily: autoSelectDecision.value,
-            autoSelectFamilyAttemptTimeout: 300,
-          },
-        }),
+    if (hasProxyEnvConfigured()) {
+      log.info(
+        "skip global undici dispatcher autoSelectFamily override because proxy env is configured",
       );
-      appliedGlobalDispatcherAutoSelectFamily = autoSelectDecision.value;
-      log.info(`global undici dispatcher autoSelectFamily=${autoSelectDecision.value}`);
-    } catch {
-      // ignore if setGlobalDispatcher is unavailable
+    } else {
+      try {
+        setGlobalDispatcher(
+          new Agent({
+            connect: {
+              autoSelectFamily: autoSelectDecision.value,
+              autoSelectFamilyAttemptTimeout: 300,
+            },
+          }),
+        );
+        appliedGlobalDispatcherAutoSelectFamily = autoSelectDecision.value;
+        log.info(`global undici dispatcher autoSelectFamily=${autoSelectDecision.value}`);
+      } catch {
+        // ignore if setGlobalDispatcher is unavailable
+      }
     }
   }
 

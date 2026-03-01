@@ -50,6 +50,15 @@ afterEach(() => {
 });
 
 describe("resolveTelegramFetch", () => {
+  function clearProxyEnv(): void {
+    vi.stubEnv("HTTPS_PROXY", "");
+    vi.stubEnv("https_proxy", "");
+    vi.stubEnv("HTTP_PROXY", "");
+    vi.stubEnv("http_proxy", "");
+    vi.stubEnv("ALL_PROXY", "");
+    vi.stubEnv("all_proxy", "");
+  }
+
   it("returns wrapped global fetch when available", async () => {
     const fetchMock = vi.fn(async () => ({}));
     globalThis.fetch = fetchMock as unknown as typeof fetch;
@@ -148,6 +157,7 @@ describe("resolveTelegramFetch", () => {
   });
 
   it("replaces global undici dispatcher with autoSelectFamily-enabled agent", async () => {
+    clearProxyEnv();
     globalThis.fetch = vi.fn(async () => ({})) as unknown as typeof fetch;
     resolveTelegramFetch(undefined, { network: { autoSelectFamily: true } });
 
@@ -160,7 +170,17 @@ describe("resolveTelegramFetch", () => {
     });
   });
 
+  it("does not replace global dispatcher when proxy env is configured", async () => {
+    vi.stubEnv("HTTPS_PROXY", "http://127.0.0.1:7890");
+    globalThis.fetch = vi.fn(async () => ({})) as unknown as typeof fetch;
+    resolveTelegramFetch(undefined, { network: { autoSelectFamily: true } });
+
+    expect(setGlobalDispatcher).not.toHaveBeenCalled();
+    expect(AgentCtor).not.toHaveBeenCalled();
+  });
+
   it("sets global dispatcher only once across repeated equal decisions", async () => {
+    clearProxyEnv();
     globalThis.fetch = vi.fn(async () => ({})) as unknown as typeof fetch;
     resolveTelegramFetch(undefined, { network: { autoSelectFamily: true } });
     resolveTelegramFetch(undefined, { network: { autoSelectFamily: true } });
@@ -169,6 +189,7 @@ describe("resolveTelegramFetch", () => {
   });
 
   it("updates global dispatcher when autoSelectFamily decision changes", async () => {
+    clearProxyEnv();
     globalThis.fetch = vi.fn(async () => ({})) as unknown as typeof fetch;
     resolveTelegramFetch(undefined, { network: { autoSelectFamily: true } });
     resolveTelegramFetch(undefined, { network: { autoSelectFamily: false } });
