@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
@@ -11,6 +12,17 @@ import type { AnyAgentTool } from "./pi-tools.types.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import { sanitizeToolResultImages } from "./tool-images.js";
+
+// Expand tilde in file paths to user's home directory
+function expandTilde(filePath: string): string {
+  if (filePath === "~") {
+    return os.homedir();
+  }
+  if (filePath.startsWith("~/")) {
+    return os.homedir() + filePath.slice(1);
+  }
+  return filePath;
+}
 
 // NOTE(steipete): Upstream read now does file-magic MIME detection; we keep the wrapper
 // to normalize payloads and sanitize oversized images before they hit providers.
@@ -764,11 +776,13 @@ function createHostWriteOperations(root: string, options?: { workspaceOnly?: boo
     // When workspaceOnly is false, allow writes anywhere on the host
     return {
       mkdir: async (dir: string) => {
-        const resolved = path.resolve(dir);
+        const expanded = expandTilde(dir);
+        const resolved = path.resolve(expanded);
         await fs.mkdir(resolved, { recursive: true });
       },
       writeFile: async (absolutePath: string, content: string) => {
-        const resolved = path.resolve(absolutePath);
+        const expanded = expandTilde(absolutePath);
+        const resolved = path.resolve(expanded);
         const dir = path.dirname(resolved);
         await fs.mkdir(dir, { recursive: true });
         await fs.writeFile(resolved, content, "utf-8");
@@ -803,17 +817,20 @@ function createHostEditOperations(root: string, options?: { workspaceOnly?: bool
     // When workspaceOnly is false, allow edits anywhere on the host
     return {
       readFile: async (absolutePath: string) => {
-        const resolved = path.resolve(absolutePath);
+        const expanded = expandTilde(absolutePath);
+        const resolved = path.resolve(expanded);
         return await fs.readFile(resolved);
       },
       writeFile: async (absolutePath: string, content: string) => {
-        const resolved = path.resolve(absolutePath);
+        const expanded = expandTilde(absolutePath);
+        const resolved = path.resolve(expanded);
         const dir = path.dirname(resolved);
         await fs.mkdir(dir, { recursive: true });
         await fs.writeFile(resolved, content, "utf-8");
       },
       access: async (absolutePath: string) => {
-        const resolved = path.resolve(absolutePath);
+        const expanded = expandTilde(absolutePath);
+        const resolved = path.resolve(expanded);
         await fs.access(resolved);
       },
     } as const;
@@ -869,7 +886,7 @@ function toRelativePathInRoot(
   options?: { allowRoot?: boolean },
 ): string {
   const rootResolved = path.resolve(root);
-  const resolved = path.resolve(candidate);
+  const resolved = path.resolve(expandTilde(candidate));
   const relative = path.relative(rootResolved, resolved);
   if (relative === "" || relative === ".") {
     if (options?.allowRoot) {
