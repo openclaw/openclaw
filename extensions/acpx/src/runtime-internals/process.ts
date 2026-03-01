@@ -45,6 +45,7 @@ export function spawnWithResolvedCommand(params: {
   command: string;
   args: string[];
   cwd: string;
+  env?: NodeJS.ProcessEnv;
 }): ChildProcessWithoutNullStreams {
   const resolved = resolveSpawnCommand({
     command: params.command,
@@ -53,7 +54,7 @@ export function spawnWithResolvedCommand(params: {
 
   return spawn(resolved.command, resolved.args, {
     cwd: params.cwd,
-    env: process.env,
+    env: params.env ?? process.env,
     stdio: ["pipe", "pipe", "pipe"],
     shell: resolved.shell,
   });
@@ -84,6 +85,7 @@ export async function spawnAndCollect(params: {
   command: string;
   args: string[];
   cwd: string;
+  env?: NodeJS.ProcessEnv;
 }): Promise<{
   stdout: string;
   stderr: string;

@@ -162,6 +162,7 @@ export class AcpxRuntime implements AcpRuntime {
       }),
       cwd,
       fallbackCode: "ACP_SESSION_INIT_FAILED",
+      env: this.buildAgentEnv(agent),
     });
     const ensuredEvent = events.find(
       (event) =>
@@ -225,6 +226,7 @@ export class AcpxRuntime implements AcpRuntime {
       command: this.config.command,
       args,
       cwd: state.cwd,
+      env: this.buildAgentEnv(state.agent),
     });
     child.stdin.on("error", () => {
       // Ignore EPIPE when the child exits before stdin flush completes.
@@ -309,6 +311,7 @@ export class AcpxRuntime implements AcpRuntime {
       cwd: state.cwd,
       fallbackCode: "ACP_TURN_FAILED",
       ignoreNoSession: true,
+      env: this.buildAgentEnv(state.agent),
     });
     const detail = events.find((event) => !toAcpxErrorEvent(event)) ?? events[0];
     if (!detail) {
@@ -351,6 +354,7 @@ export class AcpxRuntime implements AcpRuntime {
       }),
       cwd: state.cwd,
       fallbackCode: "ACP_TURN_FAILED",
+      env: this.buildAgentEnv(state.agent),
     });
   }
 
@@ -372,6 +376,7 @@ export class AcpxRuntime implements AcpRuntime {
       }),
       cwd: state.cwd,
       fallbackCode: "ACP_TURN_FAILED",
+      env: this.buildAgentEnv(state.agent),
     });
   }
 
@@ -462,6 +467,7 @@ export class AcpxRuntime implements AcpRuntime {
       cwd: state.cwd,
       fallbackCode: "ACP_TURN_FAILED",
       ignoreNoSession: true,
+      env: this.buildAgentEnv(state.agent),
     });
   }
 
@@ -475,6 +481,7 @@ export class AcpxRuntime implements AcpRuntime {
       cwd: state.cwd,
       fallbackCode: "ACP_TURN_FAILED",
       ignoreNoSession: true,
+      env: this.buildAgentEnv(state.agent),
     });
   }
 
@@ -498,6 +505,19 @@ export class AcpxRuntime implements AcpRuntime {
       cwd: this.config.cwd,
       mode: "persistent",
     };
+  }
+
+  private buildAgentEnv(agent: string): NodeJS.ProcessEnv {
+    // Codex ACP prefers ChatGPT device auth. If OPENAI_API_KEY is present in env,
+    // codex-acp will choose API-key auth and can fail with quota errors.
+    if (agent !== "codex") {
+      return process.env;
+    }
+    const env: NodeJS.ProcessEnv = { ...process.env };
+    delete env.OPENAI_API_KEY;
+    delete env.OPENAI_ORG_ID;
+    delete env.OPENAI_PROJECT_ID;
+    return env;
   }
 
   private buildControlArgs(params: { cwd: string; command: string[] }): string[] {
@@ -528,11 +548,13 @@ export class AcpxRuntime implements AcpRuntime {
     cwd: string;
     fallbackCode: AcpRuntimeErrorCode;
     ignoreNoSession?: boolean;
+    env?: NodeJS.ProcessEnv;
   }): Promise<AcpxJsonObject[]> {
     const result = await spawnAndCollect({
       command: this.config.command,
       args: params.args,
       cwd: params.cwd,
+      env: params.env,
     });
 
     if (result.error) {
