@@ -8,7 +8,7 @@ import { logDebug, logError } from "../logger.js";
 import { resolveCommandStdio } from "./spawn-utils.js";
 
 const execFileAsync = promisify(execFile);
-const WINDOWS_UNSAFE_SHELL_ARG_PATTERN = /[\r\n&|<>%!]/;
+const WINDOWS_UNSAFE_SHELL_ARG_PATTERN = /[\r\n&|<>]/;
 
 /**
  * On Windows, Node 18.20.2+ (CVE-2024-27980) rejects spawning .cmd/.bat directly
@@ -90,7 +90,7 @@ export function assertSafeWindowsShellArgs(params: {
     return;
   }
   throw new Error(
-    `Unsafe Windows shell argument: ${unsafeArg}. Remove shell metacharacters (& | < > % !).`,
+    `Unsafe Windows shell argument: ${unsafeArg}. Remove shell metacharacters (& | < >).`,
   );
 }
 

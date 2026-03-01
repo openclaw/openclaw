@@ -111,16 +111,25 @@ describe("runCommandWithTimeout", () => {
     ).not.toThrow();
   });
 
+  it("allows literal % and ! when Windows shell mode is required", () => {
+    expect(() =>
+      assertSafeWindowsShellArgs({
+        args: ["--args", '{"query":"100% coverage"}'],
+        platform: "win32",
+      }),
+    ).not.toThrow();
+    expect(() =>
+      assertSafeWindowsShellArgs({
+        args: ["--args", "{\"query\":\"what's new!\"}"],
+        platform: "win32",
+      }),
+    ).not.toThrow();
+  });
+
   it("rejects unsafe args when Windows shell mode is required", () => {
     expect(() =>
       assertSafeWindowsShellArgs({
         args: ["pack", "@openclaw/feishu@0.0.1&calc"],
-        platform: "win32",
-      }),
-    ).toThrow(/unsafe windows shell argument/i);
-    expect(() =>
-      assertSafeWindowsShellArgs({
-        args: ["%PATH%"],
         platform: "win32",
       }),
     ).toThrow(/unsafe windows shell argument/i);
