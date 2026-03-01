@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { callGateway } from "../gateway/call.js";
 import { validateSecretsResolveResult } from "../gateway/protocol/index.js";
+import { collectCommandSecretAssignmentsFromSnapshot } from "../secrets/command-config.js";
 import { setPathExistingStrict } from "../secrets/path-utils.js";
 import { describeUnknownError } from "../secrets/shared.js";
 import { discoverConfigSecretTargetsByIds } from "../secrets/target-registry.js";
@@ -54,6 +55,22 @@ function parseGatewaySecretsResolveResult(payload: unknown): {
   };
 }
 
+function collectInactiveSurfacePathsFromDiagnostics(diagnostics: string[]): Set<string> {
+  const paths = new Set<string>();
+  for (const entry of diagnostics) {
+    const marker = ": secret ref is configured on an inactive surface;";
+    const markerIndex = entry.indexOf(marker);
+    if (markerIndex <= 0) {
+      continue;
+    }
+    const path = entry.slice(0, markerIndex).trim();
+    if (path.length > 0) {
+      paths.add(path);
+    }
+  }
+  return paths;
+}
+
 export async function resolveCommandSecretRefsViaGateway(params: {
   config: OpenClawConfig;
   commandName: string;
@@ -99,6 +116,14 @@ export async function resolveCommandSecretRefsViaGateway(params: {
       );
     }
   }
+  const inactiveRefPaths = collectInactiveSurfacePathsFromDiagnostics(parsed.diagnostics);
+  collectCommandSecretAssignmentsFromSnapshot({
+    sourceConfig: params.config,
+    resolvedConfig,
+    commandName: params.commandName,
+    targetIds: params.targetIds,
+    inactiveRefPaths,
+  });
 
   return {
     resolvedConfig,

@@ -114,4 +114,51 @@ describe("resolveCommandSecretRefsViaGateway", () => {
       }),
     ).rejects.toThrow(/Path segment does not exist/i);
   });
+
+  it("fails when configured refs remain unresolved after gateway assignments are applied", async () => {
+    callGateway.mockResolvedValueOnce({
+      assignments: [],
+      diagnostics: [],
+    });
+
+    await expect(
+      resolveCommandSecretRefsViaGateway({
+        config: {
+          talk: {
+            apiKey: { source: "env", provider: "default", id: "TALK_API_KEY" },
+          },
+        } as OpenClawConfig,
+        commandName: "memory status",
+        targetIds: new Set(["talk.apiKey"]),
+      }),
+    ).rejects.toThrow(/talk\.apiKey is unresolved in the active runtime snapshot/i);
+  });
+
+  it("allows unresolved refs when gateway diagnostics mark the target as inactive", async () => {
+    callGateway.mockResolvedValueOnce({
+      assignments: [],
+      diagnostics: [
+        "talk.apiKey: secret ref is configured on an inactive surface; skipping command-time assignment.",
+      ],
+    });
+
+    const result = await resolveCommandSecretRefsViaGateway({
+      config: {
+        talk: {
+          apiKey: { source: "env", provider: "default", id: "TALK_API_KEY" },
+        },
+      } as OpenClawConfig,
+      commandName: "memory status",
+      targetIds: new Set(["talk.apiKey"]),
+    });
+
+    expect(result.resolvedConfig.talk?.apiKey).toEqual({
+      source: "env",
+      provider: "default",
+      id: "TALK_API_KEY",
+    });
+    expect(result.diagnostics).toEqual([
+      "talk.apiKey: secret ref is configured on an inactive surface; skipping command-time assignment.",
+    ]);
+  });
 });
