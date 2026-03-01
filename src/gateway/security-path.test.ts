@@ -9,13 +9,25 @@ import {
 describe("security-path canonicalization", () => {
   it("canonicalizes decoded case/slash variants", () => {
     expect(canonicalizePathForSecurity("/API/channels//nostr/default/profile/")).toEqual({
-      path: "/api/channels/nostr/default/profile",
+      canonicalPath: "/api/channels/nostr/default/profile",
+      candidates: ["/api/channels/nostr/default/profile"],
       malformedEncoding: false,
       rawNormalizedPath: "/api/channels/nostr/default/profile",
     });
-    expect(canonicalizePathForSecurity("/api/%63hannels%2Fnostr%2Fdefault%2Fprofile").path).toBe(
-      "/api/channels/nostr/default/profile",
-    );
+    const encoded = canonicalizePathForSecurity("/api/%63hannels%2Fnostr%2Fdefault%2Fprofile");
+    expect(encoded.canonicalPath).toBe("/api/channels/nostr/default/profile");
+    expect(encoded.candidates).toContain("/api/%63hannels%2fnostr%2fdefault%2fprofile");
+    expect(encoded.candidates).toContain("/api/channels/nostr/default/profile");
+  });
+
+  it("resolves traversal after repeated decoding", () => {
+    expect(
+      canonicalizePathForSecurity("/api/foo/..%2fchannels/nostr/default/profile").canonicalPath,
+    ).toBe("/api/channels/nostr/default/profile");
+    expect(
+      canonicalizePathForSecurity("/api/foo/%252e%252e%252fchannels/nostr/default/profile")
+        .canonicalPath,
+    ).toBe("/api/channels/nostr/default/profile");
   });
 
   it("marks malformed encoding", () => {
@@ -29,6 +41,9 @@ describe("security-path protected-prefix matching", () => {
     "/API/channels/nostr/default/profile",
     "/api/channels%2Fnostr%2Fdefault%2Fprofile",
     "/api/%63hannels/nostr/default/profile",
+    "/api/foo/..%2fchannels/nostr/default/profile",
+    "/api/foo/%2e%2e%2fchannels/nostr/default/profile",
+    "/api/foo/%252e%252e%252fchannels/nostr/default/profile",
     "/api/channels%2",
     "/api/channels%zz",
   ];
@@ -43,6 +58,7 @@ describe("security-path protected-prefix matching", () => {
   it("does not protect unrelated paths", () => {
     expect(isProtectedPluginRoutePath("/plugin/public")).toBe(false);
     expect(isProtectedPluginRoutePath("/api/channels-public")).toBe(false);
+    expect(isProtectedPluginRoutePath("/api/foo/..%2fchannels-public")).toBe(false);
     expect(isProtectedPluginRoutePath("/api/channel")).toBe(false);
   });
 });

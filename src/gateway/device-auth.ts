@@ -14,11 +14,21 @@ export type DeviceAuthPayloadV3Params = DeviceAuthPayloadParams & {
   deviceFamily?: string | null;
 };
 
-function normalizeMetadataField(value?: string | null): string {
+function toLowerAscii(input: string): string {
+  return input.replace(/[A-Z]/g, (char) => String.fromCharCode(char.charCodeAt(0) + 32));
+}
+
+export function normalizeDeviceMetadataForAuth(value?: string | null): string {
   if (typeof value !== "string") {
     return "";
   }
-  return value.trim().toLowerCase();
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return "";
+  }
+  // Keep cross-runtime normalization deterministic (TS/Swift/Kotlin) by only
+  // lowercasing ASCII metadata fields used in auth payloads.
+  return toLowerAscii(trimmed);
 }
 
 export function buildDeviceAuthPayload(params: DeviceAuthPayloadParams): string {
@@ -40,8 +50,8 @@ export function buildDeviceAuthPayload(params: DeviceAuthPayloadParams): string 
 export function buildDeviceAuthPayloadV3(params: DeviceAuthPayloadV3Params): string {
   const scopes = params.scopes.join(",");
   const token = params.token ?? "";
-  const platform = normalizeMetadataField(params.platform);
-  const deviceFamily = normalizeMetadataField(params.deviceFamily);
+  const platform = normalizeDeviceMetadataForAuth(params.platform);
+  const deviceFamily = normalizeDeviceMetadataForAuth(params.deviceFamily);
   return [
     "v3",
     params.deviceId,

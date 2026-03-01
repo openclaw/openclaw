@@ -8,6 +8,7 @@ import { resolveAgentMainSessionKey } from "../../config/sessions.js";
 import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
 import { resolveAgentOutboundIdentity } from "../../infra/outbound/identity.js";
 import { resolveOutboundSessionRoute } from "../../infra/outbound/outbound-session.js";
+import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
 import { logWarn } from "../../logger.js";
 import type { CronJob, CronRunTelemetry } from "../types.js";
 import type { DeliveryTargetResolution } from "./delivery-target.js";
@@ -170,6 +171,11 @@ export async function dispatchCronDelivery(
         });
       }
       deliveryAttempted = true;
+      const deliverySession = buildOutboundSessionContext({
+        cfg: params.cfgWithAgentDefaults,
+        agentId: params.agentId,
+        sessionKey: params.agentSessionKey,
+      });
       const deliveryResults = await deliverOutboundPayloads({
         cfg: params.cfgWithAgentDefaults,
         channel: delivery.channel,
@@ -177,7 +183,7 @@ export async function dispatchCronDelivery(
         accountId: delivery.accountId,
         threadId: delivery.threadId,
         payloads: payloadsForDelivery,
-        agentId: params.agentId,
+        session: deliverySession,
         identity,
         bestEffort: params.deliveryBestEffort,
         deps: createOutboundSendDeps(params.deps),
@@ -303,6 +309,10 @@ export async function dispatchCronDelivery(
         timeoutMs: params.timeoutMs,
         cleanup: params.job.deleteAfterRun ? "delete" : "keep",
         roundOneReply: synthesizedText,
+        // Cron output is a finished completion message: send it directly to the
+        // target channel via the completion-direct-send path rather than injecting
+        // a trigger message into the (likely idle) main agent session.
+        expectsCompletionMessage: true,
         // Keep delivery outcome truthful for cron state: if outbound send fails,
         // announce flow must report false so caller can apply best-effort policy.
         bestEffortDeliver: false,

@@ -109,6 +109,8 @@ On **Permissions**, click **Batch import** and paste:
       "application:application.app_message_stats.overview:readonly",
       "application:application:self_manage",
       "application:bot.menu:write",
+      "cardkit:card:read",
+      "cardkit:card:write",
       "contact:user.employee_id:readonly",
       "corehr:file:download",
       "event:ip_list",
@@ -222,6 +224,34 @@ If your tenant is on Lark (international), set the domain to `lark` (or a full d
 }
 ```
 
+### Quota optimization flags
+
+You can reduce Feishu API usage with two optional flags:
+
+- `typingIndicator` (default `true`): when `false`, skip typing reaction calls.
+- `resolveSenderNames` (default `true`): when `false`, skip sender profile lookup calls.
+
+Set them at top level or per account:
+
+```json5
+{
+  channels: {
+    feishu: {
+      typingIndicator: false,
+      resolveSenderNames: false,
+      accounts: {
+        main: {
+          appId: "cli_xxx",
+          appSecret: "xxx",
+          typingIndicator: true,
+          resolveSenderNames: false,
+        },
+      },
+    },
+  },
+}
+```
+
 ---
 
 ## Step 3: Start + test
@@ -315,14 +345,36 @@ After approval, you can chat normally.
 }
 ```
 
-### Allow specific users in groups only
+### Allow specific groups only
 
 ```json5
 {
   channels: {
     feishu: {
       groupPolicy: "allowlist",
-      groupAllowFrom: ["ou_xxx", "ou_yyy"],
+      // Feishu group IDs (chat_id) look like: oc_xxx
+      groupAllowFrom: ["oc_xxx", "oc_yyy"],
+    },
+  },
+}
+```
+
+### Allow specific users to run control commands in a group (e.g. /reset, /new)
+
+In addition to allowing the group itself, control commands are gated by the **sender** open_id.
+
+```json5
+{
+  channels: {
+    feishu: {
+      groupPolicy: "allowlist",
+      groupAllowFrom: ["oc_xxx"],
+      groups: {
+        oc_xxx: {
+          // Feishu user IDs (open_id) look like: ou_xxx
+          allowFrom: ["ou_user1", "ou_user2"],
+        },
+      },
     },
   },
 }

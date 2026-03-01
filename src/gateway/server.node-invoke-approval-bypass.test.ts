@@ -75,9 +75,11 @@ async function requestAllowOnceApproval(
   nodeId: string,
 ): Promise<string> {
   const approvalId = crypto.randomUUID();
+  const commandArgv = command.split(/\s+/).filter((part) => part.length > 0);
   const requestP = rpcReq(ws, "exec.approval.request", {
     id: approvalId,
     command,
+    commandArgv,
     nodeId,
     cwd: null,
     host: "node",
