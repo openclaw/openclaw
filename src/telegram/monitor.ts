@@ -12,6 +12,7 @@ import { resolveTelegramAccount } from "./accounts.js";
 import { resolveTelegramAllowedUpdates } from "./allowed-updates.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { createTelegramBot } from "./bot.js";
+import { TelegramExecApprovalHandler } from "./exec-approvals.js";
 import { isRecoverableTelegramNetworkError } from "./network-errors.js";
 import { makeProxyFetch } from "./proxy.js";
 import { readTelegramUpdateOffset, writeTelegramUpdateOffset } from "./update-offset-store.js";
@@ -97,6 +98,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
   const log = opts.runtime?.error ?? console.error;
   let activeRunner: ReturnType<typeof run> | undefined;
   let forceRestarted = false;
+  let execApprovalHandler: TelegramExecApprovalHandler | null = null;
 
   // Register handler for Grammy HttpError unhandled rejections.
   // This catches network errors that escape the polling loop's try-catch
@@ -136,6 +138,17 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
 
     const proxyFetch =
       opts.proxyFetch ?? (account.config.proxy ? makeProxyFetch(account.config.proxy) : undefined);
+
+    // Start exec approval handler if configured
+    const execApprovalsCfg = account.config.execApprovals;
+    if (execApprovalsCfg?.enabled && (execApprovalsCfg.approvers?.length ?? 0) > 0) {
+      execApprovalHandler = new TelegramExecApprovalHandler({
+        accountId: account.accountId,
+        config: execApprovalsCfg,
+        cfg,
+      });
+      void execApprovalHandler.start();
+    }
 
     let lastUpdateId = await readTelegramUpdateOffset({
       accountId: account.accountId,
@@ -224,6 +237,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
             lastUpdateId,
             onUpdateId: persistUpdateId,
           },
+          execApprovalHandler,
         });
       } catch (err) {
         const shouldRetry = await waitBeforeRetryOnRecoverableSetupError(
@@ -332,6 +346,9 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
       }
     }
   } finally {
+    if (execApprovalHandler) {
+      void execApprovalHandler.stop();
+    }
     unregisterHandler();
   }
 }

@@ -47,6 +47,7 @@ import {
 } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
 import { enforceTelegramDmAccess } from "./dm-access.js";
+import { parseExecApprovalCallbackData } from "./exec-approvals.js";
 import {
   evaluateTelegramGroupBaseAccess,
   evaluateTelegramGroupPolicyAccess,
@@ -114,6 +115,7 @@ export const registerTelegramHandlers = ({
   shouldSkipUpdate,
   processMessage,
   logger,
+  execApprovalHandler,
 }: RegisterTelegramHandlerParams) => {
   const DEFAULT_TEXT_FRAGMENT_MAX_GAP_MS = 1500;
   const TELEGRAM_TEXT_FRAGMENT_START_THRESHOLD_CHARS = 4000;
@@ -1042,6 +1044,26 @@ export const registerTelegramHandlers = ({
         }
         return await bot.api.sendMessage(callbackMessage.chat.id, text, params);
       };
+
+      // Exec approval callbacks have their own authorization (approvers list),
+      // independent of inline button scope, so check them first.
+      if (data.startsWith("ea:")) {
+        const parsed = parseExecApprovalCallbackData(data);
+        if (parsed && execApprovalHandler) {
+          const approvers = execApprovalHandler.getApprovers();
+          const senderId = callback.from?.id ? String(callback.from.id) : "";
+          if (!approvers.some((id) => String(id) === senderId)) {
+            return;
+          }
+          try {
+            await editCallbackMessage("Submitting decision...");
+          } catch {
+            // Message may have been deleted
+          }
+          await execApprovalHandler.resolveApproval(parsed.approvalId, parsed.action);
+        }
+        return;
+      }
 
       const inlineButtonsScope = resolveTelegramInlineButtonsScope({
         cfg,
