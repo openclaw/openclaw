@@ -47,10 +47,14 @@ async function handleSlackPinEvent(params: {
   }
 }
 
-export function registerSlackPinEvents(params: { ctx: SlackMonitorContext }) {
-  const { ctx } = params;
+export function registerSlackPinEvents(params: {
+  ctx: SlackMonitorContext;
+  trackEvent?: () => void;
+}) {
+  const { ctx, trackEvent } = params;
 
   ctx.app.event("pin_added", async ({ event, body }: SlackEventMiddlewareArgs<"pin_added">) => {
+    trackEvent?.();
     await handleSlackPinEvent({
       ctx,
       body,
@@ -62,6 +66,7 @@ export function registerSlackPinEvents(params: { ctx: SlackMonitorContext }) {
   });
 
   ctx.app.event("pin_removed", async ({ event, body }: SlackEventMiddlewareArgs<"pin_removed">) => {
+    trackEvent?.();
     await handleSlackPinEvent({
       ctx,
       body,

@@ -12,8 +12,11 @@ import type {
   SlackChannelRenamedEvent,
 } from "../types.js";
 
-export function registerSlackChannelEvents(params: { ctx: SlackMonitorContext }) {
-  const { ctx } = params;
+export function registerSlackChannelEvents(params: {
+  ctx: SlackMonitorContext;
+  trackEvent?: () => void;
+}) {
+  const { ctx, trackEvent } = params;
 
   const enqueueChannelSystemEvent = (params: {
     kind: "created" | "renamed";
@@ -48,6 +51,7 @@ export function registerSlackChannelEvents(params: { ctx: SlackMonitorContext })
     "channel_created",
     async ({ event, body }: SlackEventMiddlewareArgs<"channel_created">) => {
       try {
+        trackEvent?.();
         if (ctx.shouldDropMismatchedSlackEvent(body)) {
           return;
         }
@@ -66,6 +70,7 @@ export function registerSlackChannelEvents(params: { ctx: SlackMonitorContext })
     "channel_rename",
     async ({ event, body }: SlackEventMiddlewareArgs<"channel_rename">) => {
       try {
+        trackEvent?.();
         if (ctx.shouldDropMismatchedSlackEvent(body)) {
           return;
         }
@@ -84,6 +89,7 @@ export function registerSlackChannelEvents(params: { ctx: SlackMonitorContext })
     "channel_id_changed",
     async ({ event, body }: SlackEventMiddlewareArgs<"channel_id_changed">) => {
       try {
+        trackEvent?.();
         if (ctx.shouldDropMismatchedSlackEvent(body)) {
           return;
         }
