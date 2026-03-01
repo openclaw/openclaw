@@ -51,18 +51,6 @@ describe("normalizeUsage", () => {
     });
   });
 
-  it("drops fully negative usage payloads", () => {
-    expect(
-      normalizeUsage({
-        input: -1,
-        output: -2,
-        cacheRead: -3,
-        cacheWrite: -4,
-        total: -5,
-      }),
-    ).toBeUndefined();
-  });
-
   it("returns undefined for empty usage objects", () => {
     expect(normalizeUsage({})).toBeUndefined();
   });

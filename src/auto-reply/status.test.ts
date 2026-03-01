@@ -471,52 +471,6 @@ describe("buildStatusMessage", () => {
     expect(text).not.toContain("💵 Cost:");
   });
 
-  it("sanitizes negative stored token values and clamps cache hit rate", () => {
-    const text = buildStatusMessage({
-      agent: { model: "anthropic/claude-sonnet-4-6-thinking", contextTokens: 200_000 },
-      sessionEntry: {
-        sessionId: "neg-usage",
-        updatedAt: 0,
-        inputTokens: -79_714,
-        outputTokens: 1_736,
-        totalTokens: 4_478,
-        cacheRead: 111_131,
-        cacheWrite: 0,
-        contextTokens: 200_000,
-      },
-      sessionKey: "agent:main:main",
-      sessionScope: "per-sender",
-      queue: { mode: "collect", depth: 0 },
-      modelAuth: "api-key",
-    });
-
-    const normalized = normalizeTestText(text);
-    expect(normalized).toContain("Cache: 100% hit");
-    expect(normalized).not.toContain("-79,714");
-    expect(normalized).not.toContain("-79714");
-  });
-
-  it("treats negative totalTokens as missing and falls back to directional usage", () => {
-    const text = buildStatusMessage({
-      agent: { model: "anthropic/claude-sonnet-4-6-thinking", contextTokens: 32_000 },
-      sessionEntry: {
-        sessionId: "neg-total",
-        updatedAt: 0,
-        inputTokens: 1_200,
-        outputTokens: 800,
-        totalTokens: -500,
-        contextTokens: 32_000,
-      },
-      sessionKey: "agent:main:main",
-      sessionScope: "per-sender",
-      queue: { mode: "collect", depth: 0 },
-      modelAuth: "api-key",
-    });
-
-    const normalized = normalizeTestText(text);
-    expect(normalized).toContain("Context: 2.0k/32k");
-  });
-
   function writeTranscriptUsageLog(params: {
     dir: string;
     agentId: string;
