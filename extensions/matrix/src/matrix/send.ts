@@ -22,6 +22,7 @@ import {
   EventType,
   MsgType,
   RelationType,
+  type MatrixMentions,
   type MatrixOutboundContent,
   type MatrixSendOpts,
   type MatrixSendResult,
@@ -31,7 +32,24 @@ import {
 const MATRIX_TEXT_LIMIT = 4000;
 const getCore = () => getMatrixRuntime();
 
-export type { MatrixSendOpts, MatrixSendResult } from "./send/types.js";
+// Regex to match Matrix user IDs in text: @username:domain
+const MATRIX_USER_ID_REGEX = /@[a-zA-Z0-9._=+/\-]+:[a-zA-Z0-9.-]+(?::\d+)?/g;
+
+function extractMentionsFromText(text: string): string[] {
+  MATRIX_USER_ID_REGEX.lastIndex = 0;
+  const matches = text.match(MATRIX_USER_ID_REGEX);
+  return matches ? [...new Set(matches)] : [];
+}
+
+/** Merge explicit mentions with user IDs found in the message text. */
+function resolveMentions(text: string, explicit?: MatrixMentions): MatrixMentions | undefined {
+  const textMentions = extractMentionsFromText(text);
+  const userIds = new Set<string>([...(explicit?.user_ids ?? []), ...textMentions]);
+  if (userIds.size === 0 && !explicit?.room) return undefined;
+  return { user_ids: Array.from(userIds), room: explicit?.room };
+}
+
+export type { MatrixMentions, MatrixSendOpts, MatrixSendResult } from "./send/types.js";
 export { resolveMatrixRoomId } from "./send/targets.js";
 
 export async function sendMessageMatrix(
@@ -128,7 +146,11 @@ export async function sendMessageMatrix(
           if (!text) {
             continue;
           }
-          const followup = buildTextContent(text, followupRelation);
+          const followup = buildTextContent(
+            text,
+            followupRelation,
+            resolveMentions(text, opts.mentions),
+          );
           const followupEventId = await sendContent(followup);
           lastMessageId = followupEventId ?? lastMessageId;
         }
@@ -138,7 +160,7 @@ export async function sendMessageMatrix(
           if (!text) {
             continue;
           }
-          const content = buildTextContent(text, relation);
+          const content = buildTextContent(text, relation, resolveMentions(text, opts.mentions));
           const eventId = await sendContent(content);
           lastMessageId = eventId ?? lastMessageId;
         }

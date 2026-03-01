@@ -1,11 +1,13 @@
 import {
   createLoggerBackedRuntime,
+  DEFAULT_GROUP_HISTORY_LIMIT,
   GROUP_POLICY_BLOCKED_LABEL,
   mergeAllowlist,
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
   summarizeMapping,
   warnMissingProviderGroupPolicyFallbackOnce,
+  type HistoryEntry,
   type RuntimeEnv,
 } from "openclaw/plugin-sdk";
 import { resolveMatrixTargets } from "../../resolve-targets.js";
@@ -131,6 +133,18 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   let allowFrom: string[] = (accountConfig.dm?.allowFrom ?? []).map(String);
   let groupAllowFrom: string[] = (accountConfig.groupAllowFrom ?? []).map(String);
   let roomsConfig = accountConfig.groups ?? accountConfig.rooms;
+
+  // Extract raw Matrix IDs from config before display-name resolution.
+  // Tracked separately so hot-reload can support revocations for Matrix ID entries
+  // (display-name-resolved entries are frozen at startup and require restart to revoke).
+  const rawIdAllowFrom = allowFrom
+    .map((s) => normalizeUserEntry(String(s)))
+    .filter((s) => s && s !== "*" && isMatrixUserId(s))
+    .map(normalizeMatrixUserId);
+  const rawIdGroupAllowFrom = groupAllowFrom
+    .map((s) => normalizeUserEntry(String(s)))
+    .filter((s) => s && s !== "*" && isMatrixUserId(s))
+    .map(normalizeMatrixUserId);
 
   allowFrom = await resolveUserAllowlist("matrix dm allowlist", allowFrom);
   groupAllowFrom = await resolveUserAllowlist("matrix group allowlist", groupAllowFrom);
@@ -268,7 +282,15 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   const mediaMaxMb = opts.mediaMaxMb ?? accountConfig.mediaMaxMb ?? DEFAULT_MEDIA_MAX_MB;
   const mediaMaxBytes = Math.max(1, mediaMaxMb) * 1024 * 1024;
   const startupMs = Date.now();
-  const startupGraceMs = 0;
+  const startupGraceMs = 600000; // 10 min grace window to catch recent messages after restart
+  const historyLimit = Math.max(
+    0,
+    accountConfig.historyLimit ??
+      (cfg as { messages?: { groupChat?: { historyLimit?: number } } }).messages?.groupChat
+        ?.historyLimit ??
+      DEFAULT_GROUP_HISTORY_LIMIT,
+  );
+  const roomHistories = new Map<string, HistoryEntry[]>();
   const directTracker = createDirectRoomTracker(client, { log: logVerboseMessage });
   registerMatrixAutoJoin({ client, cfg, runtime });
   const warnedEncryptedRooms = new Set<string>();
@@ -283,6 +305,8 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
     logger,
     logVerboseMessage,
     allowFrom,
+    rawIdAllowFrom,
+    rawIdGroupAllowFrom,
     roomsConfig,
     mentionRegexes,
     groupPolicy,
@@ -298,6 +322,8 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
     getRoomInfo,
     getMemberDisplayName,
     accountId: opts.accountId,
+    historyLimit,
+    roomHistories,
   });
 
   registerMatrixMonitorEvents({

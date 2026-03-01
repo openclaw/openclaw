@@ -84,6 +84,11 @@ export type MatrixSendResult = {
   roomId: string;
 };
 
+export type MatrixMentions = {
+  user_ids?: string[];
+  room?: boolean;
+};
+
 export type MatrixSendOpts = {
   client?: import("@vector-im/matrix-bot-sdk").MatrixClient;
   mediaUrl?: string;
@@ -93,6 +98,8 @@ export type MatrixSendOpts = {
   timeoutMs?: number;
   /** Send audio as voice message (voice bubble) instead of audio file. Defaults to false. */
   audioAsVoice?: boolean;
+  /** Matrix mentions to include in the message (MSC3952). */
+  mentions?: MatrixMentions;
 };
 
 export type MatrixMediaMsgType =

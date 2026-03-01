@@ -93,6 +93,8 @@ export type MatrixConfig = {
   rooms?: Record<string, MatrixRoomConfig>;
   /** Per-action tool gating (default: true for all). */
   actions?: MatrixActionConfig;
+  /** Number of non-mentioned room messages to buffer as context (0 = disabled). */
+  historyLimit?: number;
 };
 
 export type CoreConfig = {

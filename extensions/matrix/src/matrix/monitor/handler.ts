@@ -1,18 +1,23 @@
 import type { LocationMessageEventContent, MatrixClient } from "@vector-im/matrix-bot-sdk";
 import {
   DEFAULT_ACCOUNT_ID,
+  buildPendingHistoryContextFromMap,
+  clearHistoryEntriesIfEnabled,
   createScopedPairingAccess,
   createReplyPrefixOptions,
   createTypingCallbacks,
   formatAllowlistMatchMeta,
   logInboundDrop,
   logTypingFailure,
+  recordPendingHistoryEntryIfEnabled,
   resolveControlCommandGate,
+  type HistoryEntry,
   type PluginRuntime,
   type RuntimeEnv,
   type RuntimeLogger,
 } from "openclaw/plugin-sdk";
 import type { CoreConfig, MatrixRoomConfig, ReplyToMode } from "../../types.js";
+import { resolveMatrixAccount } from "../accounts.js";
 import { fetchEventSummary } from "../actions/summary.js";
 import {
   formatPollAsText,
@@ -24,6 +29,7 @@ import { reactMatrixMessage, sendMessageMatrix, sendTypingMatrix } from "../send
 import { enforceMatrixDirectMessageAccess, resolveMatrixAccessState } from "./access-policy.js";
 import {
   normalizeMatrixAllowList,
+  normalizeMatrixUserId,
   resolveMatrixAllowListMatch,
   resolveMatrixAllowListMatches,
 } from "./allowlist.js";
@@ -49,6 +55,8 @@ export type MatrixMonitorHandlerParams = {
   logger: RuntimeLogger;
   logVerboseMessage: (message: string) => void;
   allowFrom: string[];
+  rawIdAllowFrom: string[];
+  rawIdGroupAllowFrom: string[];
   roomsConfig: Record<string, MatrixRoomConfig> | undefined;
   mentionRegexes: ReturnType<PluginRuntime["channel"]["mentions"]["buildMentionRegexes"]>;
   groupPolicy: "open" | "allowlist" | "disabled";
@@ -72,6 +80,8 @@ export type MatrixMonitorHandlerParams = {
   ) => Promise<{ name?: string; canonicalAlias?: string; altAliases: string[] }>;
   getMemberDisplayName: (roomId: string, userId: string) => Promise<string>;
   accountId?: string | null;
+  historyLimit: number;
+  roomHistories: Map<string, HistoryEntry[]>;
 };
 
 export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParams) {
@@ -83,6 +93,8 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
     logger,
     logVerboseMessage,
     allowFrom,
+    rawIdAllowFrom,
+    rawIdGroupAllowFrom,
     roomsConfig,
     mentionRegexes,
     groupPolicy,
@@ -98,6 +110,8 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
     getRoomInfo,
     getMemberDisplayName,
     accountId,
+    historyLimit,
+    roomHistories,
   } = params;
   const resolvedAccountId = accountId?.trim() || DEFAULT_ACCOUNT_ID;
   const pairing = createScopedPairingAccess({
@@ -233,15 +247,43 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         senderId,
         senderUsername,
       });
-      const groupAllowFrom = cfg.channels?.matrix?.groupAllowFrom ?? [];
+      const baseGroupAllowFrom = (cfg.channels?.matrix?.groupAllowFrom ?? []).map(String);
+      // F5: Hot-reload — per-message live-config read supports both additions and revocations.
+      // Only raw Matrix ID entries (@user:server) are hot-reloadable; display-name-resolved
+      // entries are frozen at startup (revocation requires restart for those).
+      const hotCfg = core.config.loadConfig() as CoreConfig;
+      const hotAccountCfg = resolveMatrixAccount({
+        cfg: hotCfg,
+        accountId: resolvedAccountId,
+      }).config;
+      // Normalize live config entries and keep only raw Matrix IDs (display names can't be
+      // re-resolved at runtime).
+      const toNormalizedMatrixId = (e: string): string | null => {
+        const norm = normalizeMatrixUserId(e);
+        return norm.startsWith("@") && norm.slice(1).includes(":") ? norm : null;
+      };
+      const hotDmRawIds = (hotAccountCfg.dm?.allowFrom ?? [])
+        .map(String)
+        .map(toNormalizedMatrixId)
+        .filter((id): id is string => id !== null);
+      const hotGroupRawIds = (hotAccountCfg.groupAllowFrom ?? [])
+        .map(String)
+        .map(toNormalizedMatrixId)
+        .filter((id): id is string => id !== null);
+      // Display-name-resolved portion = startup list minus raw IDs tracked at startup.
+      // These stay frozen; the raw-ID portion is replaced by the live config (supports revocation).
+      const rawIdAllowFromSet = new Set(rawIdAllowFrom);
+      const rawIdGroupAllowFromSet = new Set(rawIdGroupAllowFrom);
+      const dnResolvedDm = allowFrom.filter((id) => !rawIdAllowFromSet.has(id));
+      const dnResolvedGroup = baseGroupAllowFrom.filter((id) => !rawIdGroupAllowFromSet.has(id));
       const { access, effectiveAllowFrom, effectiveGroupAllowFrom, groupAllowConfigured } =
         await resolveMatrixAccessState({
           isDirectMessage,
           resolvedAccountId,
           dmPolicy,
           groupPolicy,
-          allowFrom,
-          groupAllowFrom,
+          allowFrom: normalizeMatrixAllowList([...dnResolvedDm, ...hotDmRawIds]),
+          groupAllowFrom: normalizeMatrixAllowList([...dnResolvedGroup, ...hotGroupRawIds]),
           senderId,
           readStoreForDmPolicy: pairing.readStoreForDmPolicy,
         });
@@ -331,6 +373,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
             sizeBytes: contentSize,
             maxBytes: mediaMaxBytes,
             file: contentFile,
+            accountId: resolvedAccountId,
           });
         } catch (err) {
           logVerboseMessage(`matrix: media download failed: ${String(err)}`);
@@ -411,6 +454,18 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       const canDetectMention = mentionRegexes.length > 0 || hasExplicitMention;
       if (isRoom && shouldRequireMention && !wasMentioned && !shouldBypassMention) {
         logger.info("skipping room message", { roomId, reason: "no-mention" });
+        // F4: Record non-mentioned messages as pending history context
+        recordPendingHistoryEntryIfEnabled({
+          historyMap: roomHistories,
+          historyKey: roomId,
+          limit: historyLimit,
+          entry: {
+            sender: senderName,
+            body: bodyText,
+            timestamp: eventTs ?? undefined,
+            messageId: event.event_id ?? undefined,
+          },
+        });
         return;
       }
 
@@ -503,14 +558,36 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         senderLabel,
       });
 
+      // F4: Build history context — prepend buffered non-mentioned messages to the body
+      let combinedBody = body;
+      const historyKey = isRoom ? roomId : undefined;
+      if (isRoom && historyKey) {
+        combinedBody = buildPendingHistoryContextFromMap({
+          historyMap: roomHistories,
+          historyKey,
+          limit: historyLimit,
+          currentMessage: combinedBody,
+          formatEntry: (entry) =>
+            core.channel.reply.formatAgentEnvelope({
+              channel: "Matrix",
+              from: roomName ?? roomId,
+              timestamp: entry.timestamp,
+              body: `${entry.sender}: ${entry.body}${entry.messageId ? ` [id:${entry.messageId}]` : ""}`,
+              envelope: envelopeOptions,
+            }),
+        });
+      }
+
       const groupSystemPrompt = roomConfig?.systemPrompt?.trim() || undefined;
+      // When history entries were prepended, use combinedBody for BodyForAgent so the
+      // buffered context actually reaches the model (pipeline prefers BodyForAgent over Body).
+      const bodyForAgent =
+        isRoom && combinedBody !== body
+          ? combinedBody
+          : resolveMatrixBodyForAgent({ isDirectMessage, bodyText, senderLabel });
       const ctxPayload = core.channel.reply.finalizeInboundContext({
-        Body: body,
-        BodyForAgent: resolveMatrixBodyForAgent({
-          isDirectMessage,
-          bodyText,
-          senderLabel,
-        }),
+        Body: combinedBody,
+        BodyForAgent: bodyForAgent,
         RawBody: bodyText,
         CommandBody: bodyText,
         From: isDirectMessage ? `matrix:${senderId}` : `matrix:channel:${roomId}`,
@@ -673,6 +750,14 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           }),
       });
       if (!queuedFinal) {
+        // F4: Clear history buffer even when no reply was dispatched
+        if (isRoom && historyKey) {
+          clearHistoryEntriesIfEnabled({
+            historyMap: roomHistories,
+            historyKey,
+            limit: historyLimit,
+          });
+        }
         return;
       }
       didSendReply = true;
@@ -680,6 +765,14 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       logVerboseMessage(
         `matrix: delivered ${finalCount} reply${finalCount === 1 ? "" : "ies"} to ${replyTarget}`,
       );
+      // F4: Clear history buffer after successful reply
+      if (isRoom && historyKey) {
+        clearHistoryEntriesIfEnabled({
+          historyMap: roomHistories,
+          historyKey,
+          limit: historyLimit,
+        });
+      }
       if (didSendReply) {
         const previewText = bodyText.replace(/\s+/g, " ").slice(0, 160);
         core.system.enqueueSystemEvent(`Matrix message from ${senderName}: ${previewText}`, {
