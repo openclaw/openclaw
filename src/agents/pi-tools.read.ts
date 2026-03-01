@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { createEditTool, createReadTool, createWriteTool } from "@mariozechner/pi-coding-agent";
 import { SafeOpenError, openFileWithinRoot, writeFileWithinRoot } from "../infra/fs-safe.js";
+import { expandHomePrefix } from "../infra/home-dir.js";
 import { detectMime } from "../media/mime.js";
 import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
 import type { ImageSanitizationLimits } from "./image-sanitization.js";
@@ -413,6 +414,7 @@ function normalizeTextLikeParam(record: Record<string, unknown>, key: string) {
 // Normalize tool parameters from Claude Code conventions to pi-coding-agent conventions.
 // Claude Code uses file_path/old_string/new_string while pi-coding-agent uses path/oldText/newText.
 // This prevents models trained on Claude Code from getting stuck in tool-call loops.
+
 export function normalizeToolParams(params: unknown): Record<string, unknown> | undefined {
   if (!params || typeof params !== "object") {
     return undefined;
@@ -421,8 +423,12 @@ export function normalizeToolParams(params: unknown): Record<string, unknown> | 
   const normalized = { ...record };
   // file_path → path (read, write, edit)
   if ("file_path" in normalized && !("path" in normalized)) {
-    normalized.path = normalized.file_path;
+    normalized.path = expandHomePrefix(String(normalized.file_path));
     delete normalized.file_path;
+  }
+  // Expand ~ in path for read, write, and edit tools
+  if ("path" in normalized) {
+    normalized.path = expandHomePrefix(String(normalized.path));
   }
   // old_string → oldText (edit)
   if ("old_string" in normalized && !("oldText" in normalized)) {
