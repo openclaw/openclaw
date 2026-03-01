@@ -47,6 +47,10 @@ describe("extractGeminiCliCredentials", () => {
   `;
 
   let originalPath: string | undefined;
+  let originalNpmConfigPrefix: string | undefined;
+  let originalUpperNpmConfigPrefix: string | undefined;
+  let originalAppData: string | undefined;
+  let originalLocalAppData: string | undefined;
 
   function makeFakeLayout() {
     const binDir = join(rootDir, "fake", "bin");
@@ -147,10 +151,18 @@ describe("extractGeminiCliCredentials", () => {
   beforeEach(async () => {
     vi.clearAllMocks();
     originalPath = process.env.PATH;
+    originalNpmConfigPrefix = process.env.npm_config_prefix;
+    originalUpperNpmConfigPrefix = process.env.NPM_CONFIG_PREFIX;
+    originalAppData = process.env.APPDATA;
+    originalLocalAppData = process.env.LOCALAPPDATA;
   });
 
   afterEach(() => {
     process.env.PATH = originalPath;
+    process.env.npm_config_prefix = originalNpmConfigPrefix;
+    process.env.NPM_CONFIG_PREFIX = originalUpperNpmConfigPrefix;
+    process.env.APPDATA = originalAppData;
+    process.env.LOCALAPPDATA = originalLocalAppData;
   });
 
   it("returns null when gemini binary is not in PATH", async () => {
@@ -175,8 +187,55 @@ describe("extractGeminiCliCredentials", () => {
     });
   });
 
+  it("supports quoted PATH entries for gemini binary lookup", async () => {
+    const layout = installGeminiLayout({ oauth2Exists: true, oauth2Content: FAKE_OAUTH2_CONTENT });
+    process.env.PATH = `"${layout.binDir}"`;
+
+    const { extractGeminiCliCredentials, clearCredentialsCache } = await import("./oauth.js");
+    clearCredentialsCache();
+    const result = extractGeminiCliCredentials();
+
+    expect(result).toEqual({
+      clientId: FAKE_CLIENT_ID,
+      clientSecret: FAKE_CLIENT_SECRET,
+    });
+  });
+
   it("extracts credentials when PATH entry is an npm global shim", async () => {
     installNpmShimLayout({ oauth2Exists: true, oauth2Content: FAKE_OAUTH2_CONTENT });
+
+    const { extractGeminiCliCredentials, clearCredentialsCache } = await import("./oauth.js");
+    clearCredentialsCache();
+    const result = extractGeminiCliCredentials();
+
+    expect(result).toEqual({
+      clientId: FAKE_CLIENT_ID,
+      clientSecret: FAKE_CLIENT_SECRET,
+    });
+  });
+
+  it("falls back to npm prefix candidates when gemini binary lookup fails", async () => {
+    const npmPrefix = join(rootDir, "fake", "npm-prefix");
+    const oauth2Path = join(
+      npmPrefix,
+      "node_modules",
+      "@google",
+      "gemini-cli",
+      "node_modules",
+      "@google",
+      "gemini-cli-core",
+      "dist",
+      "src",
+      "code_assist",
+      "oauth2.js",
+    );
+    process.env.PATH = join(rootDir, "no-gemini-here");
+    process.env.npm_config_prefix = npmPrefix;
+
+    mockExistsSync.mockImplementation(
+      (p: string) => normalizePath(p) === normalizePath(oauth2Path),
+    );
+    mockReadFileSync.mockReturnValue(FAKE_OAUTH2_CONTENT);
 
     const { extractGeminiCliCredentials, clearCredentialsCache } = await import("./oauth.js");
     clearCredentialsCache();

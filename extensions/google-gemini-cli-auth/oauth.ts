@@ -74,12 +74,11 @@ export function extractGeminiCliCredentials(): { clientId: string; clientSecret:
 
   try {
     const geminiPath = findInPath("gemini");
-    if (!geminiPath) {
+    const resolvedPath = geminiPath ? realpathSync(geminiPath) : undefined;
+    const geminiCliDirs = resolveGeminiCliDirs({ geminiPath, resolvedPath });
+    if (geminiCliDirs.length === 0) {
       return null;
     }
-
-    const resolvedPath = realpathSync(geminiPath);
-    const geminiCliDirs = resolveGeminiCliDirs(geminiPath, resolvedPath);
 
     let content: string | null = null;
     for (const geminiCliDir of geminiCliDirs) {
@@ -136,15 +135,35 @@ export function extractGeminiCliCredentials(): { clientId: string; clientSecret:
   return null;
 }
 
-function resolveGeminiCliDirs(geminiPath: string, resolvedPath: string): string[] {
-  const binDir = dirname(geminiPath);
-  const candidates = [
-    dirname(dirname(resolvedPath)),
-    join(dirname(resolvedPath), "node_modules", "@google", "gemini-cli"),
-    join(binDir, "node_modules", "@google", "gemini-cli"),
-    join(dirname(binDir), "node_modules", "@google", "gemini-cli"),
-    join(dirname(binDir), "lib", "node_modules", "@google", "gemini-cli"),
-  ];
+function resolveGeminiCliDirs(params: { geminiPath?: string; resolvedPath?: string }): string[] {
+  const candidates: string[] = [];
+
+  if (params.geminiPath && params.resolvedPath) {
+    const binDir = dirname(params.geminiPath);
+    candidates.push(
+      dirname(dirname(params.resolvedPath)),
+      join(dirname(params.resolvedPath), "node_modules", "@google", "gemini-cli"),
+      join(binDir, "node_modules", "@google", "gemini-cli"),
+      join(dirname(binDir), "node_modules", "@google", "gemini-cli"),
+      join(dirname(binDir), "lib", "node_modules", "@google", "gemini-cli"),
+    );
+  }
+
+  const npmPrefixes = [
+    process.env.npm_config_prefix,
+    process.env.NPM_CONFIG_PREFIX,
+    process.env.APPDATA ? join(process.env.APPDATA, "npm") : undefined,
+    process.env.LOCALAPPDATA ? join(process.env.LOCALAPPDATA, "npm") : undefined,
+  ]
+    .map((value) => value?.trim())
+    .filter((value): value is string => Boolean(value));
+
+  for (const prefix of npmPrefixes) {
+    candidates.push(
+      join(prefix, "node_modules", "@google", "gemini-cli"),
+      join(prefix, "lib", "node_modules", "@google", "gemini-cli"),
+    );
+  }
 
   const deduped: string[] = [];
   const seen = new Set<string>();
@@ -161,8 +180,12 @@ function resolveGeminiCliDirs(geminiPath: string, resolvedPath: string): string[
 }
 
 function findInPath(name: string): string | null {
-  const exts = process.platform === "win32" ? [".cmd", ".bat", ".exe", ""] : [""];
-  for (const dir of (process.env.PATH ?? "").split(delimiter)) {
+  const exts = process.platform === "win32" ? [".cmd", ".bat", ".exe", ".ps1", ""] : [""];
+  const pathEntries = (process.env.PATH ?? "")
+    .split(delimiter)
+    .map((entry) => entry.trim().replace(/^"(.*)"$/u, "$1"))
+    .filter(Boolean);
+  for (const dir of pathEntries) {
     for (const ext of exts) {
       const p = join(dir, name + ext);
       if (existsSync(p)) {

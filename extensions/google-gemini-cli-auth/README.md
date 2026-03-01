@@ -39,3 +39,9 @@ Override auto-detected credentials with:
 
 - `OPENCLAW_GEMINI_OAUTH_CLIENT_ID` / `GEMINI_CLI_OAUTH_CLIENT_ID`
 - `OPENCLAW_GEMINI_OAUTH_CLIENT_SECRET` / `GEMINI_CLI_OAUTH_CLIENT_SECRET`
+
+If Google Code Assist project discovery fails (for example with `loadCodeAssist` 400 responses),
+set one of:
+
+- `GOOGLE_CLOUD_PROJECT`
+- `GOOGLE_CLOUD_PROJECT_ID`
