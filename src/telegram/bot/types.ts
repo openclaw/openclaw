@@ -12,6 +12,9 @@ export type TelegramContext = {
   message: Message;
   me?: UserFromGetMe;
   getFile: () => Promise<{ file_path?: string }>;
+  api?: {
+    getFile: (fileId: string, signal?: AbortSignal) => Promise<{ file_path?: string }>;
+  };
 };
 
 /** Telegram sticker metadata for context enrichment and caching. */

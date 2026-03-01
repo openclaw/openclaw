@@ -33,6 +33,7 @@ const BOT_TOKEN = "tok123";
 function makeCtx(
   mediaField: "voice" | "audio" | "photo" | "video",
   getFile: TelegramContext["getFile"],
+  api?: TelegramContext["api"],
 ): TelegramContext {
   const msg: Record<string, unknown> = {
     message_id: 1,
@@ -60,6 +61,7 @@ function makeCtx(
       username: "bot",
     } as unknown as TelegramContext["me"],
     getFile,
+    api,
   };
 }
 
@@ -154,6 +156,44 @@ describe("resolveMedia getFile retry", () => {
     const result = await promise;
 
     expect(getFile).toHaveBeenCalledTimes(2);
+    expect(result).toEqual(
+      expect.objectContaining({ path: "/tmp/file_0.oga", placeholder: "<media:audio>" }),
+    );
+  });
+
+  it("aborts timed-out api.getFile calls before retrying", async () => {
+    const apiGetFile = vi
+      .fn()
+      .mockImplementationOnce((_fileId: string, signal?: AbortSignal) => {
+        return new Promise<{ file_path?: string }>((_, reject) => {
+          signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+        });
+      })
+      .mockResolvedValueOnce({ file_path: "voice/file_0.oga" });
+
+    const getFile = vi.fn().mockResolvedValue({ file_path: "unused.oga" });
+
+    fetchRemoteMedia.mockResolvedValueOnce({
+      buffer: Buffer.from("audio"),
+      contentType: "audio/ogg",
+      fileName: "file_0.oga",
+    });
+    saveMediaBuffer.mockResolvedValueOnce({
+      path: "/tmp/file_0.oga",
+      contentType: "audio/ogg",
+    });
+
+    const promise = resolveMedia(
+      makeCtx("voice", getFile, { getFile: apiGetFile }),
+      MAX_MEDIA_BYTES,
+      BOT_TOKEN,
+    );
+    await vi.advanceTimersByTimeAsync(15_001);
+    await vi.runAllTimersAsync();
+    const result = await promise;
+
+    expect(apiGetFile).toHaveBeenCalledTimes(2);
+    expect(getFile).not.toHaveBeenCalled();
     expect(result).toEqual(
       expect.objectContaining({ path: "/tmp/file_0.oga", placeholder: "<media:audio>" }),
     );

@@ -349,7 +349,12 @@ export async function resolveMedia(
     }
 
     try {
-      const file = await ctx.getFile();
+      const file = await getTelegramFileWithTimeout(
+        ctx,
+        sticker.file_id,
+        TELEGRAM_GET_FILE_TIMEOUT_MS,
+        "telegram:getFile",
+      );
       if (!file.file_path) {
         logVerbose("telegram: getFile returned no file_path for sticker");
         return null;
@@ -423,7 +428,13 @@ export async function resolveMedia(
   let file: { file_path?: string };
   try {
     file = await retryAsync(
-      () => withTimeout(() => ctx.getFile(), TELEGRAM_GET_FILE_TIMEOUT_MS, "telegram:getFile"),
+      () =>
+        getTelegramFileWithTimeout(
+          ctx,
+          m.file_id,
+          TELEGRAM_GET_FILE_TIMEOUT_MS,
+          "telegram:getFile",
+        ),
       {
         attempts: 3,
         minDelayMs: 1000,
@@ -462,18 +473,40 @@ export async function resolveMedia(
   return { path: saved.path, contentType: saved.contentType, placeholder };
 }
 
-async function withTimeout<T>(run: () => Promise<T>, timeoutMs: number, label: string): Promise<T> {
+async function getTelegramFileWithTimeout(
+  ctx: TelegramContext,
+  fileId: string,
+  timeoutMs: number,
+  label: string,
+): Promise<{ file_path?: string }> {
+  const normalizedTimeoutMs = Math.max(1, timeoutMs);
+
+  if (ctx.api && typeof ctx.api.getFile === "function") {
+    const controller = new AbortController();
+    const timer = setTimeout(() => {
+      controller.abort();
+    }, normalizedTimeoutMs);
+
+    try {
+      return await ctx.api.getFile(fileId, controller.signal);
+    } catch (err) {
+      if (controller.signal.aborted) {
+        throw new Error(`${label} timed out after ${normalizedTimeoutMs}ms`, { cause: err });
+      }
+      throw err;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
-      run(),
-      new Promise<T>((_, reject) => {
-        timer = setTimeout(
-          () => {
-            reject(new Error(`${label} timed out after ${timeoutMs}ms`));
-          },
-          Math.max(1, timeoutMs),
-        );
+      ctx.getFile(),
+      new Promise<{ file_path?: string }>((_, reject) => {
+        timer = setTimeout(() => {
+          reject(new Error(`${label} timed out after ${normalizedTimeoutMs}ms`));
+        }, normalizedTimeoutMs);
       }),
     ]);
   } finally {
