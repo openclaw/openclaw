@@ -61,4 +61,46 @@ describe("DiffArtifactStore", () => {
     const updated = await store.updateImagePath(artifact.id, imagePath);
     expect(updated.imagePath).toBe(imagePath);
   });
+
+  it("allocates standalone image paths outside artifact metadata", async () => {
+    const imagePath = store.allocateStandaloneImagePath();
+    expect(imagePath).toMatch(/preview\.png$/);
+    expect(imagePath).toContain(rootDir);
+  });
+
+  it("throttles cleanup sweeps across repeated artifact creation", async () => {
+    vi.useFakeTimers();
+    const now = new Date("2026-02-27T16:00:00Z");
+    vi.setSystemTime(now);
+    store = new DiffArtifactStore({
+      rootDir,
+      cleanupIntervalMs: 60_000,
+    });
+    const cleanupSpy = vi.spyOn(store, "cleanupExpired").mockResolvedValue();
+
+    await store.createArtifact({
+      html: "<html>one</html>",
+      title: "One",
+      inputKind: "before_after",
+      fileCount: 1,
+    });
+    await store.createArtifact({
+      html: "<html>two</html>",
+      title: "Two",
+      inputKind: "before_after",
+      fileCount: 1,
+    });
+
+    expect(cleanupSpy).toHaveBeenCalledTimes(1);
+
+    vi.setSystemTime(new Date(now.getTime() + 61_000));
+    await store.createArtifact({
+      html: "<html>three</html>",
+      title: "Three",
+      inputKind: "before_after",
+      fileCount: 1,
+    });
+
+    expect(cleanupSpy).toHaveBeenCalledTimes(2);
+  });
 });
