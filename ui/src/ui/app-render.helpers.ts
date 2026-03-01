@@ -10,7 +10,7 @@ import { icons } from "./icons.ts";
 import { iconForTab, pathForTab, titleForTab, type Tab } from "./navigation.ts";
 import type { ThemeTransitionContext } from "./theme-transition.ts";
 import type { ThemeMode } from "./theme.ts";
-import type { SessionsListResult } from "./types.ts";
+import type { AgentsListResult, SessionsListResult } from "./types.ts";
 
 type SessionDefaultsSnapshot = {
   mainSessionKey?: string;
@@ -88,6 +88,7 @@ export function renderChatControls(state: AppViewState) {
     state.sessionKey,
     state.sessionsResult,
     mainSessionKey,
+    state.agentsList,
   );
   const disableThinkingToggle = state.onboarding;
   const disableFocusToggle = state.onboarding;
@@ -349,10 +350,11 @@ export function resolveSessionDisplayName(
   return fallbackName;
 }
 
-function resolveSessionOptions(
+export function resolveSessionOptions(
   sessionKey: string,
   sessions: SessionsListResult | null,
   mainSessionKey?: string | null,
+  agentsList?: AgentsListResult | null,
 ) {
   const seen = new Set<string>();
   const options: Array<{ key: string; displayName?: string }> = [];
@@ -376,6 +378,25 @@ function resolveSessionOptions(
       key: sessionKey,
       displayName: resolveSessionDisplayName(sessionKey, resolvedCurrent),
     });
+  }
+
+  // Add configured agents that don't have sessions yet.
+  // This ensures all agents appear in the dropdown even if they
+  // haven't been chatted with or their sessions expired from the
+  // active-minutes filter.
+  if (agentsList?.agents) {
+    const mainKey = agentsList.mainKey || "main";
+    for (const agent of agentsList.agents) {
+      const agentSessionKey = `agent:${agent.id}:${mainKey}`;
+      if (!seen.has(agentSessionKey)) {
+        seen.add(agentSessionKey);
+        const agentName = agent.identity?.name?.trim() || agent.name?.trim() || agent.id;
+        options.push({
+          key: agentSessionKey,
+          displayName: agentName,
+        });
+      }
+    }
   }
 
   // Add sessions from the result

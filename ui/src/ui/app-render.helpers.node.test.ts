@@ -1,11 +1,48 @@
 import { describe, expect, it } from "vitest";
-import { parseSessionKey, resolveSessionDisplayName } from "./app-render.helpers.ts";
-import type { SessionsListResult } from "./types.ts";
+import type { AgentsListResult, SessionsListResult } from "./types.ts";
+
+// Stub browser globals that i18n accesses at module level.
+if (typeof globalThis.localStorage === "undefined") {
+  const store: Record<string, string> = {};
+  // @ts-expect-error — minimal stub for Node tests
+  globalThis.localStorage = {
+    getItem: (key: string) => store[key] ?? null,
+    setItem: (key: string, value: string) => {
+      store[key] = value;
+    },
+    removeItem: (key: string) => {
+      delete store[key];
+    },
+  };
+}
+
+// Dynamic import after localStorage stub is applied.
+const { parseSessionKey, resolveSessionDisplayName, resolveSessionOptions } =
+  await import("./app-render.helpers.ts");
 
 type SessionRow = SessionsListResult["sessions"][number];
 
 function row(overrides: Partial<SessionRow> & { key: string }): SessionRow {
-  return { kind: "direct", updatedAt: 0, ...overrides };
+  return { kind: "direct" as const, updatedAt: 0, ...overrides };
+}
+
+function sessions(rows: SessionRow[]): SessionsListResult {
+  return {
+    ts: 0,
+    path: "",
+    count: rows.length,
+    defaults: { model: null, contextTokens: null },
+    sessions: rows,
+  };
+}
+
+function agents(ids: string[], opts?: { mainKey?: string; defaultId?: string }): AgentsListResult {
+  return {
+    defaultId: opts?.defaultId ?? ids[0] ?? "main",
+    mainKey: opts?.mainKey ?? "main",
+    scope: "per-sender",
+    agents: ids.map((id) => ({ id })),
+  };
 }
 
 /* ================================================================
@@ -259,5 +296,128 @@ describe("resolveSessionDisplayName", () => {
         row({ key: "agent:main:bluebubbles:direct:+19257864429", label: "Tyler" }),
       ),
     ).toBe("Tyler");
+  });
+});
+
+/* ================================================================
+ *  resolveSessionOptions – dropdown option generation
+ * ================================================================ */
+
+describe("resolveSessionOptions", () => {
+  it("includes configured agents without active sessions", () => {
+    const agentsList = agents(["main", "ops", "research"]);
+    const result = resolveSessionOptions(
+      "agent:main:main",
+      sessions([]),
+      "agent:main:main",
+      agentsList,
+    );
+    const keys = result.map((o) => o.key);
+    expect(keys).toContain("agent:main:main");
+    expect(keys).toContain("agent:ops:main");
+    expect(keys).toContain("agent:research:main");
+  });
+
+  it("does not duplicate agents that already have sessions", () => {
+    const agentsList = agents(["main", "ops"]);
+    const result = resolveSessionOptions(
+      "agent:main:main",
+      sessions([
+        row({ key: "agent:main:main", label: "Main" }),
+        row({ key: "agent:ops:main", label: "Ops" }),
+      ]),
+      "agent:main:main",
+      agentsList,
+    );
+    const keys = result.map((o) => o.key);
+    const mainCount = keys.filter((k) => k === "agent:main:main").length;
+    const opsCount = keys.filter((k) => k === "agent:ops:main").length;
+    expect(mainCount).toBe(1);
+    expect(opsCount).toBe(1);
+  });
+
+  it("uses custom mainKey from agents list", () => {
+    const agentsList = agents(["main", "ops"], { mainKey: "work" });
+    const result = resolveSessionOptions(
+      "agent:main:work",
+      sessions([]),
+      "agent:main:work",
+      agentsList,
+    );
+    const keys = result.map((o) => o.key);
+    expect(keys).toContain("agent:ops:work");
+  });
+
+  it("uses agent identity name as display name", () => {
+    const agentsList: AgentsListResult = {
+      defaultId: "main",
+      mainKey: "main",
+      scope: "per-sender",
+      agents: [{ id: "main" }, { id: "ops", name: "Operations", identity: { name: "Ops Bot" } }],
+    };
+    const result = resolveSessionOptions(
+      "agent:main:main",
+      sessions([]),
+      "agent:main:main",
+      agentsList,
+    );
+    const opsOption = result.find((o) => o.key === "agent:ops:main");
+    expect(opsOption?.displayName).toBe("Ops Bot");
+  });
+
+  it("falls back to agent name when identity name is absent", () => {
+    const agentsList: AgentsListResult = {
+      defaultId: "main",
+      mainKey: "main",
+      scope: "per-sender",
+      agents: [{ id: "main" }, { id: "ops", name: "Operations" }],
+    };
+    const result = resolveSessionOptions(
+      "agent:main:main",
+      sessions([]),
+      "agent:main:main",
+      agentsList,
+    );
+    const opsOption = result.find((o) => o.key === "agent:ops:main");
+    expect(opsOption?.displayName).toBe("Operations");
+  });
+
+  it("falls back to agent id when no name is available", () => {
+    const agentsList = agents(["main", "ops"]);
+    const result = resolveSessionOptions(
+      "agent:main:main",
+      sessions([]),
+      "agent:main:main",
+      agentsList,
+    );
+    const opsOption = result.find((o) => o.key === "agent:ops:main");
+    expect(opsOption?.displayName).toBe("ops");
+  });
+
+  it("works without agents list (backward compatible)", () => {
+    const result = resolveSessionOptions(
+      "agent:main:main",
+      sessions([row({ key: "agent:main:main" })]),
+      "agent:main:main",
+    );
+    expect(result).toHaveLength(1);
+    expect(result[0].key).toBe("agent:main:main");
+  });
+
+  it("preserves session entries alongside agent entries", () => {
+    const agentsList = agents(["main", "ops"]);
+    const result = resolveSessionOptions(
+      "agent:main:main",
+      sessions([
+        row({ key: "agent:main:main" }),
+        row({ key: "agent:main:telegram:direct:user1", label: "Tyler" }),
+      ]),
+      "agent:main:main",
+      agentsList,
+    );
+    const keys = result.map((o) => o.key);
+    expect(keys).toContain("agent:main:main");
+    expect(keys).toContain("agent:ops:main");
+    expect(keys).toContain("agent:main:telegram:direct:user1");
   });
 });
