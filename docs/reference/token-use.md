@@ -154,6 +154,12 @@ agents:
 
 This maps to Anthropic's `context-1m-2025-08-07` beta header.
 
+This only applies when `context1m: true` is set on that model entry.
+
+Requirement: the credential must be eligible for long-context usage (API key
+billing, or subscription with Extra Usage enabled). If not, Anthropic responds
+with `HTTP 429: rate_limit_error: Extra usage is required for long context requests`.
+
 If you authenticate Anthropic with OAuth/subscription tokens (`sk-ant-oat-*`),
 OpenClaw skips the `context-1m-*` beta header because Anthropic currently
 rejects that combination with HTTP 401.

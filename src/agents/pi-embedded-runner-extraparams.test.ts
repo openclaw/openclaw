@@ -763,6 +763,19 @@ describe("applyExtraParamsToAgent", () => {
     });
   });
 
+  it("does not add Anthropic 1M beta header when context1m is not enabled", () => {
+    const cfg = buildAnthropicModelConfig("anthropic/claude-opus-4-6", {
+      temperature: 0.2,
+    });
+    const headers = runAnthropicHeaderCase({
+      cfg,
+      modelId: "claude-opus-4-6",
+      options: { headers: { "X-Custom": "1" } },
+    });
+
+    expect(headers).toEqual({ "X-Custom": "1" });
+  });
+
   it("skips context1m beta for OAuth tokens but preserves OAuth-required betas", () => {
     const calls: Array<SimpleStreamOptions | undefined> = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {
