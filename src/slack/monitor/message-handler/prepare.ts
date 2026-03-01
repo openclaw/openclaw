@@ -186,7 +186,7 @@ export async function prepareSlackMessage(params: {
   // in that thread share an isolated session (instead of falling back to the
   // base DM/channel session for the first message).
   const autoThreadId =
-    !isThreadReply && ctx.replyToMode === "all" && threadContext.messageTs
+    !isThreadReply && replyToMode === "all" && threadContext.messageTs
       ? threadContext.messageTs
       : undefined;
   const threadKeys = resolveThreadSessionKeys({
