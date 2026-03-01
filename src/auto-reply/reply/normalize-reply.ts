@@ -1,6 +1,11 @@
 import { sanitizeUserFacingText } from "../../agents/pi-embedded-helpers.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
-import { HEARTBEAT_TOKEN, isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
+import {
+  HEARTBEAT_TOKEN,
+  isSilentReplyText,
+  SILENT_REPLY_TOKEN,
+  stripSilentReplyToken,
+} from "../tokens.js";
 import type { ReplyPayload } from "../types.js";
 import { hasLineDirectives, parseLineDirectives } from "./line-directives.js";
 import {
@@ -43,6 +48,22 @@ export function normalizeReplyPayload(
     }
     text = "";
   }
+  // Strip trailing NO_REPLY tokens that LLMs sometimes append after real
+  // content (e.g. "Here is the answer\n\nNO_REPLY").  Must run after the
+  // full-match silent check above so purely-silent messages are still
+  // suppressed rather than delivered as empty strings.
+  if (text?.includes(silentToken)) {
+    const stripped = stripSilentReplyToken(text, silentToken);
+    if (stripped.didStrip) {
+      text = stripped.text || undefined;
+      // If stripping left nothing and there's no media, suppress entirely.
+      if (!text?.trim() && !hasMedia && !hasChannelData) {
+        opts.onSkip?.("silent");
+        return null;
+      }
+    }
+  }
+
   if (text && !trimmed) {
     // Keep empty text when media exists so media-only replies still send.
     text = "";

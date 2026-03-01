@@ -94,6 +94,27 @@ describe("normalizeReplyPayload", () => {
     expect(normalized?.channelData).toEqual(payload.channelData);
   });
 
+  it("strips trailing NO_REPLY from substantive text (#30916)", () => {
+    const payload = {
+      text: "File's there. Same false failure as before.\n\nNO_REPLY",
+    };
+    const normalized = normalizeReplyPayload(payload);
+    expect(normalized).not.toBeNull();
+    expect(normalized?.text).toBe("File's there. Same false failure as before.");
+  });
+
+  it("suppresses message when stripping NO_REPLY leaves nothing", () => {
+    // Edge case: text is just newline + NO_REPLY (not caught by exact match
+    // because of the leading newline, but strip leaves empty text).
+    const reasons: string[] = [];
+    const normalized = normalizeReplyPayload(
+      { text: "\n NO_REPLY" },
+      { onSkip: (r) => reasons.push(r) },
+    );
+    expect(normalized).toBeNull();
+    expect(reasons).toContain("silent");
+  });
+
   it("records skip reasons for silent/empty payloads", () => {
     const cases = [
       { name: "silent", payload: { text: SILENT_REPLY_TOKEN }, reason: "silent" },
