@@ -217,4 +217,45 @@ describe("resolveTelegramFetch", () => {
       },
     });
   });
+
+  it("retries once with ipv4 fallback when fetch fails with network timeout/unreachable", async () => {
+    const timeoutErr = Object.assign(new Error("connect ETIMEDOUT 149.154.166.110:443"), {
+      code: "ETIMEDOUT",
+    });
+    const unreachableErr = Object.assign(new Error("connect ENETUNREACH 2001:67c:4e8:f004::9:443"), {
+      code: "ENETUNREACH",
+    });
+    const fetchError = Object.assign(new TypeError("fetch failed"), {
+      cause: Object.assign(new Error("aggregate"), {
+        errors: [timeoutErr, unreachableErr],
+      }),
+    });
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValueOnce(fetchError)
+      .mockResolvedValueOnce({ ok: true } as Response);
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const resolved = resolveTelegramFetch();
+    if (!resolved) {
+      throw new Error("expected resolved fetch");
+    }
+
+    await resolved("https://api.telegram.org/file/botx/photos/file_1.jpg");
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(setGlobalDispatcher).toHaveBeenCalledTimes(2);
+    expect(AgentCtor).toHaveBeenNthCalledWith(1, {
+      connect: {
+        autoSelectFamily: true,
+        autoSelectFamilyAttemptTimeout: 300,
+      },
+    });
+    expect(AgentCtor).toHaveBeenNthCalledWith(2, {
+      connect: {
+        autoSelectFamily: false,
+        autoSelectFamilyAttemptTimeout: 300,
+      },
+    });
+  });
 });
