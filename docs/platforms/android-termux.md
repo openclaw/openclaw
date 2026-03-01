@@ -6,6 +6,24 @@ read_when:
 title: "Android (Termux)"
 ---
 
+> ⚠️ **Important**: Running Gateway on Android is **NOT recommended** for production.
+>
+> **Recommended approach**: Run Gateway on a remote Linux/Windows/macOS server, and use Android as a **client/node**.
+>
+> See [Android App](/platforms/android) for using Android as a node.
+
+# Android 10+ Running Guide (Termux)
+
+This guide explains how to run OpenClaw Gateway on Android devices using **Termux**, a Linux-like terminal emulator for Android.
+
+> **Note**: Android 10+ restricts background execution. Termux provides a way to run Node.js applications, but requires specific setup for persistent background operation.
+summary: "Run OpenClaw Gateway on Android 10+ using Termux"
+read_when:
+  - Running OpenClaw on Android devices
+  - Using Termux as a Linux-like environment on Android
+title: "Android (Termux)"
+---
+
 # Android 10+ Running Guide (Termux)
 
 This guide explains how to run OpenClaw Gateway on Android devices using **Termux**, a Linux-like terminal emulator for Android.
