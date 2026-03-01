@@ -1313,18 +1313,13 @@
                 "pages": [
                   "reference/AGENTS.default",
                   "reference/templates/AGENTS",
-                  "reference/templates/AGENTS.dev",
                   "reference/templates/BOOT",
                   "reference/templates/BOOTSTRAP",
                   "reference/templates/HEARTBEAT",
                   "reference/templates/IDENTITY",
-                  "reference/templates/IDENTITY.dev",
                   "reference/templates/SOUL",
-                  "reference/templates/SOUL.dev",
                   "reference/templates/TOOLS",
-                  "reference/templates/TOOLS.dev",
-                  "reference/templates/USER",
-                  "reference/templates/USER.dev"
+                  "reference/templates/USER"
                 ]
               },
               {
@@ -1903,18 +1898,13 @@
                 "pages": [
                   "zh-CN/reference/AGENTS.default",
                   "zh-CN/reference/templates/AGENTS",
-                  "zh-CN/reference/templates/AGENTS.dev",
                   "zh-CN/reference/templates/BOOT",
                   "zh-CN/reference/templates/BOOTSTRAP",
                   "zh-CN/reference/templates/HEARTBEAT",
                   "zh-CN/reference/templates/IDENTITY",
-                  "zh-CN/reference/templates/IDENTITY.dev",
                   "zh-CN/reference/templates/SOUL",
-                  "zh-CN/reference/templates/SOUL.dev",
                   "zh-CN/reference/templates/TOOLS",
-                  "zh-CN/reference/templates/TOOLS.dev",
-                  "zh-CN/reference/templates/USER",
-                  "zh-CN/reference/templates/USER.dev"
+                  "zh-CN/reference/templates/USER"
                 ]
               },
               {
