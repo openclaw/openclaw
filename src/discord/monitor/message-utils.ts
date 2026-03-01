@@ -5,6 +5,20 @@ import { logVerbose } from "../../globals.js";
 import { fetchRemoteMedia, type FetchLike } from "../../media/fetch.js";
 import { saveMediaBuffer } from "../../media/store.js";
 
+/**
+ * SSRF policy for Discord CDN/media downloads.
+ *
+ * Discord attachment URLs point to cdn.discordapp.com and media.discordapp.net.
+ * On networks using proxy tools with fake-ip mode (e.g. Surge, Clash), these
+ * hostnames may resolve to RFC 2544 benchmark addresses (198.18.0.0/15) which
+ * are blocked by default SSRF protection.  Explicitly allowlisting Discord
+ * media hostnames ensures attachments can be downloaded regardless of local DNS
+ * resolution behavior.
+ */
+const DISCORD_MEDIA_SSRF_POLICY = {
+  hostnameAllowlist: ["cdn.discordapp.com", "media.discordapp.net"],
+};
+
 export type DiscordMediaInfo = {
   path: string;
   contentType?: string;
@@ -228,6 +242,7 @@ async function appendResolvedMediaFromAttachments(params: {
         filePathHint: attachment.filename ?? attachment.url,
         maxBytes: params.maxBytes,
         fetchImpl: params.fetchImpl,
+        ssrfPolicy: DISCORD_MEDIA_SSRF_POLICY,
       });
       const saved = await saveMediaBuffer(
         fetched.buffer,
@@ -320,6 +335,7 @@ async function appendResolvedMediaFromStickers(params: {
           filePathHint: candidate.fileName,
           maxBytes: params.maxBytes,
           fetchImpl: params.fetchImpl,
+          ssrfPolicy: DISCORD_MEDIA_SSRF_POLICY,
         });
         const saved = await saveMediaBuffer(
           fetched.buffer,
