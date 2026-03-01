@@ -58,6 +58,12 @@ describe("PlaywrightDiffScreenshotter", () => {
 
     expect(launchMock).toHaveBeenCalledTimes(1);
     expect(browser.newPage).toHaveBeenCalledTimes(2);
+    expect(browser.newPage).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        deviceScaleFactor: 2,
+      }),
+    );
     expect(pages).toHaveLength(2);
     expect(pages[0]?.close).toHaveBeenCalledTimes(1);
     expect(pages[1]?.close).toHaveBeenCalledTimes(1);
