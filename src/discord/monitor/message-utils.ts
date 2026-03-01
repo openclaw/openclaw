@@ -2,6 +2,7 @@ import type { ChannelType, Client, Message } from "@buape/carbon";
 import { StickerFormatType, type APIAttachment, type APIStickerItem } from "discord-api-types/v10";
 import { buildMediaPayload } from "../../channels/plugins/media-payload.js";
 import { logVerbose } from "../../globals.js";
+import type { SsrFPolicy } from "../../infra/net/ssrf.js";
 import { fetchRemoteMedia, type FetchLike } from "../../media/fetch.js";
 import { saveMediaBuffer } from "../../media/store.js";
 
@@ -52,6 +53,13 @@ const DISCORD_CHANNEL_INFO_CACHE = new Map<
   { value: DiscordChannelInfo | null; expiresAt: number }
 >();
 const DISCORD_STICKER_ASSET_BASE_URL = "https://media.discordapp.net/stickers";
+
+const DISCORD_MEDIA_SSRF_POLICY: SsrFPolicy = {
+  // Discord CDN downloads should be trusted even when DNS/proxy resolution
+  // maps to private/internal ranges (e.g. Clash TUN fake-ip 198.18.x.x).
+  allowedHostnames: ["cdn.discordapp.com", "media.discordapp.net"],
+  allowRfc2544BenchmarkRange: true,
+};
 
 export function __resetDiscordChannelInfoCacheForTest() {
   DISCORD_CHANNEL_INFO_CACHE.clear();
@@ -228,6 +236,7 @@ async function appendResolvedMediaFromAttachments(params: {
         filePathHint: attachment.filename ?? attachment.url,
         maxBytes: params.maxBytes,
         fetchImpl: params.fetchImpl,
+        ssrfPolicy: DISCORD_MEDIA_SSRF_POLICY,
       });
       const saved = await saveMediaBuffer(
         fetched.buffer,
@@ -320,6 +329,7 @@ async function appendResolvedMediaFromStickers(params: {
           filePathHint: candidate.fileName,
           maxBytes: params.maxBytes,
           fetchImpl: params.fetchImpl,
+          ssrfPolicy: DISCORD_MEDIA_SSRF_POLICY,
         });
         const saved = await saveMediaBuffer(
           fetched.buffer,
