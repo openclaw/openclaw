@@ -285,7 +285,12 @@ export class SearchableSelectList implements Component {
           // Highlight plain text first, then apply theme styling to avoid corrupting ANSI codes
           const highlightedDesc = this.highlightMatch(truncatedDesc, query);
           const descText = isSelected ? highlightedDesc : this.theme.description(highlightedDesc);
-          const line = `${prefix}${valueText}${spacing}${descText}`;
+          let line = `${prefix}${valueText}${spacing}${descText}`;
+          // Ensure line doesn't exceed terminal width after highlighting
+          const lineWidth = visibleWidth(line);
+          if (lineWidth > width) {
+            line = truncateToWidth(line, width, "");
+          }
           return isSelected ? this.theme.selectedText(line) : line;
         }
       }
@@ -294,7 +299,12 @@ export class SearchableSelectList implements Component {
     const maxWidth = width - prefixWidth - 2;
     const truncatedValue = truncateToWidth(displayValue, maxWidth, "");
     const valueText = this.highlightMatch(truncatedValue, query);
-    const line = `${prefix}${valueText}`;
+    let line = `${prefix}${valueText}`;
+    // Ensure line doesn't exceed terminal width after highlighting
+    const lineWidth = visibleWidth(line);
+    if (lineWidth > width) {
+      line = truncateToWidth(line, width, "");
+    }
     return isSelected ? this.theme.selectedText(line) : line;
   }
 
