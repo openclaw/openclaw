@@ -440,12 +440,17 @@ export async function preflightDiscordMessage(
     })
   ) {
     if (params.groupPolicy === "disabled") {
+      logDebug(`[discord-preflight] drop: groupPolicy disabled`);
       logVerbose(`discord: drop guild message (groupPolicy: disabled, ${channelMatchMeta})`);
     } else if (!channelAllowlistConfigured) {
+      logDebug(`[discord-preflight] drop: groupPolicy allowlist, no channel allowlist configured`);
       logVerbose(
         `discord: drop guild message (groupPolicy: allowlist, no channel allowlist, ${channelMatchMeta})`,
       );
     } else {
+      logDebug(
+        `[discord] Ignored message from channel ${messageChannelId} (not in guild allowlist). Add to guilds.<guildId>.channels to enable.`,
+      );
       logVerbose(
         `Blocked discord channel ${messageChannelId} not in guild channel allowlist (groupPolicy: allowlist, ${channelMatchMeta})`,
       );
