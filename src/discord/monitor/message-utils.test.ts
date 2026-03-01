@@ -323,6 +323,78 @@ describe("resolveDiscordMessageText", () => {
 
     expect(text).toBe("<media:sticker> (1 sticker)");
   });
+
+  it("uses embed title when content is empty", () => {
+    const text = resolveDiscordMessageText(
+      asMessage({
+        content: "",
+        embeds: [{ title: "Breaking" }],
+      }),
+    );
+
+    expect(text).toBe("Breaking");
+  });
+
+  it("uses embed description when content is empty", () => {
+    const text = resolveDiscordMessageText(
+      asMessage({
+        content: "",
+        embeds: [{ description: "Details" }],
+      }),
+    );
+
+    expect(text).toBe("Details");
+  });
+
+  it("joins embed title and description when content is empty", () => {
+    const text = resolveDiscordMessageText(
+      asMessage({
+        content: "",
+        embeds: [{ title: "Breaking", description: "Details" }],
+      }),
+    );
+
+    expect(text).toBe("Breaking\nDetails");
+  });
+
+  it("prefers message content over embed fallback text", () => {
+    const text = resolveDiscordMessageText(
+      asMessage({
+        content: "hello from content",
+        embeds: [{ title: "Breaking", description: "Details" }],
+      }),
+    );
+
+    expect(text).toBe("hello from content");
+  });
+
+  it("joins forwarded snapshot embed title and description when content is empty", () => {
+    const text = resolveDiscordMessageText(
+      asMessage({
+        content: "",
+        rawData: {
+          message_snapshots: [
+            {
+              message: {
+                content: "",
+                embeds: [{ title: "Forwarded title", description: "Forwarded details" }],
+                attachments: [],
+                author: {
+                  id: "u2",
+                  username: "Bob",
+                  discriminator: "0",
+                },
+              },
+            },
+          ],
+        },
+      }),
+      { includeForwarded: true },
+    );
+
+    expect(text).toContain("[Forwarded message from @Bob]");
+    expect(text).toContain("Forwarded title\nForwarded details");
+  });
 });
 
 describe("resolveDiscordChannelInfo", () => {
