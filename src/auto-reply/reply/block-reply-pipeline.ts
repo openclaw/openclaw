@@ -41,9 +41,14 @@ export function createBlockReplyPayloadKey(payload: ReplyPayload): string {
     : payload.mediaUrl
       ? [payload.mediaUrl]
       : [];
+  // When the payload contains text, exclude media from the key so that
+  // final payloads enriched with TTS audio are still recognised as duplicates
+  // of the text-only block that was already streamed (#30316).
+  // Media-only payloads (no text) still include the media list to avoid
+  // collapsing distinct media sends.
   return JSON.stringify({
     text,
-    mediaList,
+    mediaList: text ? [] : mediaList,
     replyToId: payload.replyToId ?? null,
   });
 }
