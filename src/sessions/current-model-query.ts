@@ -79,8 +79,9 @@ async function getSessionInfo(sessionKey: string): Promise<{
       }
     }
 
-    // Check for provider/model overrides
-    if (session.providerOverride && session.modelOverride) {
+    // Check for provider/model overrides only if session.model didn't already
+    // resolve an explicit model. session.model takes precedence over overrides.
+    if (!effectiveModel && session.providerOverride && session.modelOverride) {
       effectiveModel = {
         provider: session.providerOverride,
         model: session.modelOverride,
@@ -133,16 +134,15 @@ async function getStoredSessionModel(sessionKey: string): Promise<ModelRef | nul
 
 /**
  * Load the session store from disk/config.
- * This is a simplified version - in practice this might be more complex.
+ *
+ * TODO: Implement this function using OpenClaw's actual session persistence layer
+ * (e.g. config/sessions.js or the gateway store). Until then this is a stub that
+ * always returns null, which means `getStoredSessionModel` immediately falls back
+ * to the configured default model. The entire stub + its callers can be removed if
+ * session-store access is handled exclusively via the gateway (getSessionInfo).
  */
 async function loadSessionStore(): Promise<Record<string, SessionEntry> | null> {
-  try {
-    // This would need to be implemented based on how OpenClaw stores session data
-    // For now, return null to force fallback to default model
-    return null;
-  } catch (error) {
-    return null;
-  }
+  return null;
 }
 
 /**

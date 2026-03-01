@@ -26,7 +26,6 @@ import {
 import {
   getInheritedModel,
   formatModelRef,
-  isSupportedProvider,
 } from "./sessions-model-inheritance.js";
 
 const SessionsSpawnToolSchema = Type.Object({
