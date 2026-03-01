@@ -60,10 +60,12 @@ export function isSilentReplyPrefixText(
   if (!trimmed) {
     return false;
   }
-  // Only allow all-caps (with underscores) so we don't false-positive on
-  // normal words like "no" or "not". Check the original (not uppercased)
-  // text so that mixed-case like "No" is rejected.
-  if (/[^A-Z_]/.test(trimmed)) {
+  // Accept all-uppercase OR all-lowercase token-like strings (letters +
+  // underscores only). Reject mixed-case natural language like "No" or "Not"
+  // which are common real words, not sentinel prefixes.
+  const isAllUpper = /^[A-Z_]+$/.test(trimmed);
+  const isAllLower = /^[a-z_]+$/.test(trimmed);
+  if (!isAllUpper && !isAllLower) {
     return false;
   }
   const normalized = trimmed.toUpperCase();

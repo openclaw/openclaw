@@ -89,8 +89,17 @@ describe("isSilentReplyPrefixText", () => {
     expect(isSilentReplyPrefixText("HEARTBEAT", "HEARTBEAT_OK")).toBe(true);
   });
 
+  it("matches all-lowercase token prefixes (case-insensitive)", () => {
+    // Models may emit lowercase variants; these should still be caught.
+    expect(isSilentReplyPrefixText("no_reply")).toBe(true);
+    expect(isSilentReplyPrefixText("no_re")).toBe(true);
+    expect(isSilentReplyPrefixText("no")).toBe(true);
+    expect(isSilentReplyPrefixText("heartbeat_", "HEARTBEAT_OK")).toBe(true);
+  });
+
   it("rejects ambiguous natural-language prefixes", () => {
     expect(isSilentReplyPrefixText("N")).toBe(false);
+    expect(isSilentReplyPrefixText("n")).toBe(false);
     expect(isSilentReplyPrefixText("No")).toBe(false);
     expect(isSilentReplyPrefixText("no")).toBe(false);
     expect(isSilentReplyPrefixText("Hello")).toBe(false);
