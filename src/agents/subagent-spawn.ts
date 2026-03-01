@@ -14,6 +14,7 @@ import { resolveAgentConfig } from "./agent-scope.js";
 import { AGENT_LANE_SUBAGENT } from "./lanes.js";
 import { runWithModelFallback } from "./model-fallback.js";
 import {
+  resolveDefaultModelForAgent,
   resolveSubagentSpawnModelFallbacks,
   resolveSubagentSpawnModelSelection,
 } from "./model-selection.js";
@@ -405,7 +406,11 @@ export async function spawnSubagentDirect(
   let childRunId: string = crypto.randomUUID();
 
   // Parse the resolved model into provider/model for runWithModelFallback.
+  // When the resolved model is unqualified (e.g. "gpt-5.1" without a provider),
+  // use the target agent's default provider so that runWithModelFallback does not
+  // incorrectly normalize against the global default (which may be a different provider).
   const { provider: primaryProvider, model: primaryModel } = splitModelRef(resolvedModel);
+  const agentDefault = resolveDefaultModelForAgent({ cfg, agentId: targetAgentId });
   const fallbackResult = await (async () => {
     try {
       const result = await runWithModelFallback<{
@@ -413,8 +418,8 @@ export async function spawnSubagentDirect(
         attemptIdem: string;
       }>({
         cfg,
-        provider: primaryProvider ?? "",
-        model: primaryModel ?? "",
+        provider: primaryProvider ?? agentDefault.provider,
+        model: primaryModel ?? agentDefault.model,
         fallbacksOverride: resolvedFallbacks,
         // Any error (including non-failover errors like invalid model names)
         // may trigger the next fallback candidate. This is intentional: align
