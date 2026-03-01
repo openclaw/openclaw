@@ -136,7 +136,6 @@ describe("node exec events", () => {
     );
     expect(requestHeartbeatNowMock).toHaveBeenCalledWith({
       reason: "exec-event",
-      sessionKey: "node-node-2",
     });
   });
 
@@ -164,6 +163,33 @@ describe("node exec events", () => {
     expect(requestHeartbeatNowMock).toHaveBeenCalledWith({
       reason: "exec-event",
       sessionKey: "agent:main:node-node-2",
+    });
+  });
+
+  it("falls back to unscoped wake for non-agent canonical exec session keys", async () => {
+    loadSessionEntryMock.mockReturnValueOnce({
+      ...buildSessionLookup("global"),
+      canonicalKey: "global",
+    });
+    const ctx = buildCtx();
+    await handleNodeEvent(ctx, "node-2", {
+      event: "exec.finished",
+      payloadJSON: JSON.stringify({
+        runId: "run-global",
+        exitCode: 0,
+        timedOut: false,
+        output: "done",
+        sessionKey: "global",
+      }),
+    });
+
+    expect(loadSessionEntryMock).toHaveBeenCalledWith("global");
+    expect(enqueueSystemEventMock).toHaveBeenCalledWith(
+      "Exec finished (node=node-2 id=run-global, code 0)\ndone",
+      { sessionKey: "global", contextKey: "exec:run-global" },
+    );
+    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({
+      reason: "exec-event",
     });
   });
 
@@ -202,7 +228,6 @@ describe("node exec events", () => {
     expect(text.length).toBeLessThan(280);
     expect(requestHeartbeatNowMock).toHaveBeenCalledWith({
       reason: "exec-event",
-      sessionKey: "node-node-2",
     });
   });
 

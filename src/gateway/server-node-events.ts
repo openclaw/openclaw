@@ -123,6 +123,10 @@ function compactExecEventOutput(raw: string) {
   return `${normalized.slice(0, safe)}…`;
 }
 
+function shouldUseSessionScopedExecWake(sessionKey: string) {
+  return sessionKey.trim().toLowerCase().startsWith("agent:");
+}
+
 function compactNotificationEventText(raw: string) {
   const normalized = raw.replace(/\s+/g, " ").trim();
   if (!normalized) {
@@ -577,7 +581,11 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
         contextKey: runId ? `exec:${runId}` : "exec",
       });
       if (queued) {
-        requestHeartbeatNow({ reason: "exec-event", sessionKey });
+        if (shouldUseSessionScopedExecWake(sessionKey)) {
+          requestHeartbeatNow({ reason: "exec-event", sessionKey });
+        } else {
+          requestHeartbeatNow({ reason: "exec-event" });
+        }
       }
       return;
     }

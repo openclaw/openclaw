@@ -199,6 +199,22 @@ function compactNotifyOutput(value: string, maxChars = DEFAULT_NOTIFY_SNIPPET_CH
   return `${normalized.slice(0, safe)}…`;
 }
 
+function shouldUseSessionScopedExecWake(sessionKey: string) {
+  return sessionKey.trim().toLowerCase().startsWith("agent:");
+}
+
+function requestExecEventWake(opts: { sessionKey: string; agentId?: string }) {
+  if (!shouldUseSessionScopedExecWake(opts.sessionKey)) {
+    requestHeartbeatNow({ reason: "exec-event" });
+    return;
+  }
+  requestHeartbeatNow({
+    reason: "exec-event",
+    sessionKey: opts.sessionKey,
+    agentId: opts.agentId,
+  });
+}
+
 export function applyShellPath(env: Record<string, string>, shellPath?: string | null) {
   if (!shellPath) {
     return;
@@ -241,11 +257,7 @@ function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "faile
   if (!queued) {
     return;
   }
-  requestHeartbeatNow({
-    reason: "exec-event",
-    sessionKey,
-    agentId: session.agentId,
-  });
+  requestExecEventWake({ sessionKey, agentId: session.agentId });
 }
 
 export function createApprovalSlug(id: string) {
@@ -274,11 +286,7 @@ export function emitExecSystemEvent(
   if (!queued) {
     return;
   }
-  requestHeartbeatNow({
-    reason: "exec-event",
-    sessionKey,
-    agentId: opts.agentId,
-  });
+  requestExecEventWake({ sessionKey, agentId: opts.agentId });
 }
 
 export async function runExecProcess(opts: {
