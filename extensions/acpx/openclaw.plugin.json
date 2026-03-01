@@ -41,7 +41,7 @@
     },
     "expectedVersion": {
       "label": "Expected acpx Version",
-      "help": "Exact version to enforce (for example 0.1.14) or \"any\" to skip strict version matching."
+      "help": "Exact version to enforce (for example 0.1.15) or \"any\" to skip strict version matching."
     },
     "cwd": {
       "label": "Default Working Directory",
