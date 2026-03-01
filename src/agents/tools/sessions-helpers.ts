@@ -31,6 +31,7 @@ import { sanitizeUserFacingText } from "../pi-embedded-helpers.js";
 import {
   stripDowngradedToolCallText,
   stripMinimaxToolCallXml,
+  stripOpenAIWireFormatText,
   stripThinkingTagsFromText,
 } from "../pi-embedded-utils.js";
 
@@ -141,7 +142,9 @@ export function sanitizeTextContent(text: string): string {
   if (!text) {
     return text;
   }
-  return stripThinkingTagsFromText(stripDowngradedToolCallText(stripMinimaxToolCallXml(text)));
+  return stripThinkingTagsFromText(
+    stripDowngradedToolCallText(stripMinimaxToolCallXml(stripOpenAIWireFormatText(text))),
+  );
 }
 
 export function extractAssistantText(message: unknown): string | undefined {

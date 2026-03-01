@@ -207,6 +207,33 @@ export function stripThinkingTagsFromText(text: string): string {
   return stripReasoningTagsFromText(text, { mode: "strict", trim: "both" });
 }
 
+/**
+ * Strip raw OpenAI function-call wire format that leaks into text content.
+ * When models like Codex fail to produce properly structured tool calls, they
+ * sometimes emit raw function-call wire format like "assistant to=functions.xxx"
+ * mixed with hallucinated text. This removes those patterns.
+ *
+ * Example leaked text:
+ *   "+#+#assistant to=functions.subagents.commentary 体育彩票天天json
+ *   {"action":"list","recentMinutes":20}"
+ */
+export function stripOpenAIWireFormatText(text: string): string {
+  if (!text) {
+    return text;
+  }
+  // Pattern matches "assistant to=functions.toolName" followed by optional content
+  // Use global flag to replace all occurrences
+  const wireFormatRe = /assistant to=functions\.\S+/g;
+  // Check if there's anything to replace by testing the original text
+  if (!wireFormatRe.test(text)) {
+    return text;
+  }
+  // Reset lastIndex before replace (test advances it)
+  wireFormatRe.lastIndex = 0;
+  const cleaned = text.replace(wireFormatRe, "");
+  return cleaned.trim();
+}
+
 export function extractAssistantText(msg: AssistantMessage): string {
   const extracted =
     extractTextFromChatContent(msg.content, {

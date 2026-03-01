@@ -4,6 +4,7 @@ import {
   extractAssistantText,
   formatReasoningMessage,
   stripDowngradedToolCallText,
+  stripOpenAIWireFormatText,
 } from "./pi-embedded-utils.js";
 
 function makeAssistantMessage(
@@ -545,6 +546,64 @@ describe("stripDowngradedToolCallText", () => {
 
     for (const testCase of cases) {
       expect(stripDowngradedToolCallText(testCase.text), testCase.name).toBe(testCase.expected);
+    }
+  });
+});
+
+describe("stripOpenAIWireFormatText", () => {
+  it("strips raw function-call wire format from text", () => {
+    const cases = [
+      {
+        name: "basic function call leak",
+        text: "+#+#assistant to=functions.subagents.commentary",
+        expected: "+#+#",
+      },
+      {
+        name: "function call with trailing content",
+        text: "+#+#assistant to=functions.subagents.commentary 体育彩票天天json",
+        expected: "+#+# 体育彩票天天json",
+      },
+      {
+        name: "function call with JSON arguments",
+        text:
+          "+#+#assistant to=functions.subagents.commentary\n" +
+          '{"action":"list","recentMinutes":20}',
+        expected: '+#+#\n{"action":"list","recentMinutes":20}',
+      },
+      {
+        name: "multiple function call leaks",
+        text: "assistant to=functions.subagents.commentary\nassistant to=functions.sessions_list.commentary",
+        expected: "",
+      },
+      {
+        name: "function call in middle of text",
+        text: "Before assistant to=functions.foo.bar After",
+        expected: "Before  After",
+      },
+      {
+        name: "no function call leak",
+        text: "Just a normal response without any leaks.",
+        expected: "Just a normal response without any leaks.",
+      },
+      {
+        name: "similar but different pattern",
+        text: "assistant to=functions is not the same",
+        expected: "assistant to=functions is not the same",
+      },
+      {
+        name: "empty string",
+        text: "",
+        expected: "",
+      },
+      {
+        name: "function call with trailing content",
+        text: "assistant to=functions.subagents.commentary some json here and then normal text after",
+        expected: "some json here and then normal text after",
+      },
+    ] as const;
+
+    for (const testCase of cases) {
+      expect(stripOpenAIWireFormatText(testCase.text), testCase.name).toBe(testCase.expected);
     }
   });
 });
