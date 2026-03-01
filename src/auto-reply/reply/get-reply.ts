@@ -199,7 +199,23 @@ export async function getReplyFromConfig(
   const hasSessionModelOverride = Boolean(
     sessionEntry.modelOverride?.trim() || sessionEntry.providerOverride?.trim(),
   );
-  if (!hasResolvedHeartbeatModelOverride && !hasSessionModelOverride && channelModelOverride) {
+  // Apply session model override if present (user selected model via /model command)
+  if (hasSessionModelOverride && !hasResolvedHeartbeatModelOverride) {
+    const overrideProvider = sessionEntry.providerOverride?.trim() || defaultProvider;
+    const overrideModel = sessionEntry.modelOverride?.trim();
+    if (overrideModel) {
+      const resolved = resolveModelRefFromString({
+        raw: overrideModel,
+        defaultProvider: overrideProvider,
+        aliasIndex,
+      });
+      if (resolved) {
+        provider = resolved.ref.provider;
+        model = resolved.ref.model;
+      }
+    }
+  } else if (!hasResolvedHeartbeatModelOverride && channelModelOverride) {
+    // Only apply channel model override when there's no session model override
     const resolved = resolveModelRefFromString({
       raw: channelModelOverride.model,
       defaultProvider,
