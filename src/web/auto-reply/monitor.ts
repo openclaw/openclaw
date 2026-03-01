@@ -22,7 +22,7 @@ import {
   resolveReconnectPolicy,
   sleepWithAbort,
 } from "../reconnect.js";
-import { formatError, getWebAuthAgeMs, readWebSelfId } from "../session.js";
+import { formatError, getWebAuthAgeMs, logoutWeb, readWebSelfId } from "../session.js";
 import { DEFAULT_WEB_MEDIA_BYTES } from "./constants.js";
 import { whatsappHeartbeatLog, whatsappLog } from "./loggers.js";
 import { buildMentionConfig } from "./mentions.js";
@@ -401,9 +401,33 @@ export async function monitorWebChannel(
     });
 
     if (loggedOut) {
-      runtime.error(
-        `WhatsApp session logged out. Run \`${formatCliCommand("openclaw channels login --channel web")}\` to relink.`,
-      );
+      let clearedCachedAuth = false;
+      try {
+        const cleared = await logoutWeb({
+          authDir: account.authDir,
+          isLegacyAuthDir: account.isLegacyAuthDir,
+          runtime,
+        });
+        clearedCachedAuth = cleared;
+      } catch (err) {
+        reconnectLogger.warn(
+          {
+            connectionId,
+            error: formatError(err),
+          },
+          "web reconnect: failed to clear cached auth after logged-out disconnect",
+        );
+      }
+      const relinkCommand = formatCliCommand("openclaw channels login --channel web");
+      if (clearedCachedAuth) {
+        runtime.error(
+          `WhatsApp session logged out. Cleared cached web session. Run \`${relinkCommand}\` to relink.`,
+        );
+      } else {
+        runtime.error(
+          `WhatsApp session logged out, but failed to clear cached web session. Fix filesystem permissions, then run \`${relinkCommand}\` to relink.`,
+        );
+      }
       await closeListener();
       break;
     }

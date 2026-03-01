@@ -184,10 +184,45 @@ export async function waitForWaConnection(sock: ReturnType<typeof makeWASocket>)
 }
 
 export function getStatusCode(err: unknown) {
-  return (
-    (err as { output?: { statusCode?: number } })?.output?.statusCode ??
-    (err as { status?: number })?.status
-  );
+  if (!err || typeof err !== "object") {
+    return undefined;
+  }
+
+  // Baileys can wrap disconnect errors as:
+  // - { output: { statusCode } }
+  // - { error: { output: { statusCode } } }
+  // - { lastDisconnect: { error: { output: { statusCode } } } }
+  // Traverse these known wrappers to avoid missing logged-out/device-removed cases.
+  const queue: unknown[] = [err];
+  const seen = new Set<unknown>();
+
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (!current || typeof current !== "object" || seen.has(current)) {
+      continue;
+    }
+    seen.add(current);
+
+    const outputStatus = (current as { output?: { statusCode?: unknown } })?.output?.statusCode;
+    if (typeof outputStatus === "number") {
+      return outputStatus;
+    }
+
+    const statusCode = (current as { statusCode?: unknown })?.statusCode;
+    if (typeof statusCode === "number") {
+      return statusCode;
+    }
+
+    const status = (current as { status?: unknown })?.status;
+    if (typeof status === "number") {
+      return status;
+    }
+
+    queue.push((current as { error?: unknown })?.error);
+    queue.push((current as { lastDisconnect?: { error?: unknown } })?.lastDisconnect?.error);
+  }
+
+  return undefined;
 }
 
 function safeStringify(value: unknown, limit = 800): string {
