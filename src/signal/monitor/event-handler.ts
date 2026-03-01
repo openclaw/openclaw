@@ -631,7 +631,9 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     const attachments = dataMessage.attachments ?? [];
     if (attachments.length > 0 && !deps.ignoreAttachments) {
       for (const attachment of attachments) {
-        if (!attachment?.id) { continue; }
+        if (!attachment?.id) {
+          continue;
+        }
         try {
           const fetched = await deps.fetchAttachment({
             baseUrl: deps.baseUrl,
@@ -645,7 +647,9 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
             const path = fetched.path;
             const type = fetched.contentType ?? attachment.contentType ?? undefined;
             mediaPaths.push(path);
-            if (type) { mediaTypes.push(type); }
+            if (type) {
+              mediaTypes.push(type);
+            }
             // First attachment sets the legacy single-media fields
             if (!mediaPath) {
               mediaPath = path;
