@@ -8,6 +8,7 @@ import {
   getVerboseFlag,
   hasHelpOrVersion,
   hasFlag,
+  isRootHelpInvocation,
   isRootVersionInvocation,
   shouldMigrateState,
   shouldMigrateStateFromPath,
@@ -92,6 +93,51 @@ describe("argv helpers", () => {
     },
   ])("detects root-only version invocations: $name", ({ argv, expected }) => {
     expect(isRootVersionInvocation(argv)).toBe(expected);
+  });
+
+  it.each([
+    {
+      name: "root --help",
+      argv: ["node", "openclaw", "--help"],
+      expected: true,
+    },
+    {
+      name: "root -h",
+      argv: ["node", "openclaw", "-h"],
+      expected: true,
+    },
+    {
+      name: "root --help with profile",
+      argv: ["node", "openclaw", "--profile", "work", "--help"],
+      expected: true,
+    },
+    {
+      name: "subcommand --help",
+      argv: ["node", "openclaw", "status", "--help"],
+      expected: false,
+    },
+    {
+      name: "help before subcommand token",
+      argv: ["node", "openclaw", "--help", "status"],
+      expected: false,
+    },
+    {
+      name: "help after -- terminator",
+      argv: ["node", "openclaw", "nodes", "run", "--", "git", "--help"],
+      expected: false,
+    },
+    {
+      name: "unknown root flag before help",
+      argv: ["node", "openclaw", "--unknown", "--help"],
+      expected: false,
+    },
+    {
+      name: "unknown root flag after help",
+      argv: ["node", "openclaw", "--help", "--unknown"],
+      expected: false,
+    },
+  ])("detects root-only help invocations: $name", ({ argv, expected }) => {
+    expect(isRootHelpInvocation(argv)).toBe(expected);
   });
 
   it.each([
