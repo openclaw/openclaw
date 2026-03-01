@@ -52,6 +52,7 @@ export type SlackActionConfig = {
   reactions?: boolean;
   messages?: boolean;
   pins?: boolean;
+  modals?: boolean;
   search?: boolean;
   permissions?: boolean;
   memberInfo?: boolean;

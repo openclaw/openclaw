@@ -35,6 +35,26 @@ describe("tool display details", () => {
     expect(detail).not.toContain("remove");
   });
 
+  it("formats modal message actions with modal-specific details", () => {
+    const detail = formatToolDetail(
+      resolveToolDisplay({
+        name: "message",
+        args: {
+          action: "modal-update",
+          provider: "slack",
+          viewId: "V123",
+          hash: "hash-123",
+          accountId: "aiden",
+        },
+      }),
+    );
+
+    expect(detail).toContain("provider slack");
+    expect(detail).toContain("view id V123");
+    expect(detail).toContain("hash hash-123");
+    expect(detail).toContain("account id aiden");
+  });
+
   it("keeps positive numbers and true booleans", () => {
     const detail = formatToolDetail(
       resolveToolDisplay({

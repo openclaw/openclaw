@@ -905,6 +905,38 @@ describe("registerSlackInteractionEvents", () => {
     );
   });
 
+  it("routes modal submissions via private metadata sessionKey", async () => {
+    enqueueSystemEventMock.mockReset();
+    const { ctx, getViewHandler, resolveSessionKey } = createContext();
+    registerSlackInteractionEvents({ ctx: ctx as never });
+    const viewHandler = getViewHandler();
+    expect(viewHandler).toBeTruthy();
+
+    const ack = vi.fn().mockResolvedValue(undefined);
+    await viewHandler!({
+      ack,
+      body: {
+        user: { id: "U701" },
+        view: {
+          id: "V701",
+          callback_id: "openclaw:deploy_form",
+          private_metadata: JSON.stringify({
+            sessionKey: "agent:main:slack:channel:C777",
+            channelId: "C777",
+            channelType: "channel",
+            userId: "U701",
+          }),
+          state: { values: {} },
+        },
+      },
+    } as never);
+
+    expect(ack).toHaveBeenCalled();
+    expect(resolveSessionKey).not.toHaveBeenCalled();
+    const [, options] = enqueueSystemEventMock.mock.calls[0] as [string, { sessionKey?: string }];
+    expect(options.sessionKey).toBe("agent:main:slack:channel:C777");
+  });
+
   it("blocks modal events when private metadata userId does not match submitter", async () => {
     enqueueSystemEventMock.mockClear();
     const { ctx, getViewHandler } = createContext();
@@ -956,6 +988,42 @@ describe("registerSlackInteractionEvents", () => {
 
     expect(ack).toHaveBeenCalled();
     expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+  });
+
+  it("falls back to default modal routing when private metadata omits routing keys", async () => {
+    enqueueSystemEventMock.mockReset();
+    const { ctx, getViewHandler, resolveSessionKey } = createContext();
+    registerSlackInteractionEvents({ ctx: ctx as never });
+    const viewHandler = getViewHandler();
+    expect(viewHandler).toBeTruthy();
+
+    const ack = vi.fn().mockResolvedValue(undefined);
+    await viewHandler!({
+      ack,
+      body: {
+        user: { id: "U702" },
+        view: {
+          id: "V702",
+          callback_id: "openclaw:deploy_form",
+          private_metadata: JSON.stringify({ userId: "U702", note: "no routing keys" }),
+          state: { values: {} },
+        },
+      },
+    } as never);
+
+    expect(ack).toHaveBeenCalled();
+    expect(resolveSessionKey).toHaveBeenCalledWith({});
+    const [eventText, options] = enqueueSystemEventMock.mock.calls[0] as [
+      string,
+      { sessionKey?: string },
+    ];
+    const payload = JSON.parse(eventText.replace("Slack interaction: ", "")) as {
+      routedChannelId?: string;
+      routedChannelType?: string;
+    };
+    expect(payload.routedChannelId).toBeUndefined();
+    expect(payload.routedChannelType).toBeUndefined();
+    expect(options.sessionKey).toBe("agent:ops:slack:channel:C1");
   });
 
   it("captures modal input labels and picker values across block types", async () => {

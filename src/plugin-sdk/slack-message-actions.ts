@@ -2,6 +2,7 @@ import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { readNumberParam, readStringParam } from "../agents/tools/common.js";
 import type { ChannelMessageActionContext } from "../channels/plugins/types.js";
 import { parseSlackBlocksInput } from "../slack/blocks-input.js";
+import { parseSlackModalViewInput } from "../slack/views-input.js";
 
 type SlackActionInvoke = (
   action: Record<string, unknown>,
@@ -11,6 +12,10 @@ type SlackActionInvoke = (
 
 function readSlackBlocksParam(actionParams: Record<string, unknown>) {
   return parseSlackBlocksInput(actionParams.blocks) as Record<string, unknown>[] | undefined;
+}
+
+function readSlackModalViewParam(actionParams: Record<string, unknown>) {
+  return parseSlackModalViewInput(actionParams.view) as Record<string, unknown>;
 }
 
 export async function handleSlackMessageAction(params: {
@@ -147,6 +152,58 @@ export async function handleSlackMessageAction(params: {
         accountId,
       },
       cfg,
+    );
+  }
+
+  if (action === "modal-open") {
+    const triggerId = readStringParam(actionParams, "triggerId", { required: true });
+    const view = readSlackModalViewParam(actionParams);
+    return await invoke(
+      {
+        action: "openModal",
+        triggerId,
+        view,
+        accountId,
+      },
+      cfg,
+      ctx.toolContext,
+    );
+  }
+
+  if (action === "modal-push") {
+    const triggerId = readStringParam(actionParams, "triggerId", { required: true });
+    const view = readSlackModalViewParam(actionParams);
+    return await invoke(
+      {
+        action: "pushModal",
+        triggerId,
+        view,
+        accountId,
+      },
+      cfg,
+      ctx.toolContext,
+    );
+  }
+
+  if (action === "modal-update") {
+    const view = readSlackModalViewParam(actionParams);
+    const viewId = readStringParam(actionParams, "viewId");
+    const externalId = readStringParam(actionParams, "externalId");
+    const hash = readStringParam(actionParams, "hash");
+    if (!viewId && !externalId) {
+      throw new Error("Slack modal-update requires viewId or externalId.");
+    }
+    return await invoke(
+      {
+        action: "updateModal",
+        view,
+        viewId,
+        externalId,
+        hash,
+        accountId,
+      },
+      cfg,
+      ctx.toolContext,
     );
   }
 
