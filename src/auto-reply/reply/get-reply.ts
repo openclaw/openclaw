@@ -199,7 +199,26 @@ export async function getReplyFromConfig(
   const hasSessionModelOverride = Boolean(
     sessionEntry.modelOverride?.trim() || sessionEntry.providerOverride?.trim(),
   );
-  if (!hasResolvedHeartbeatModelOverride && !hasSessionModelOverride && channelModelOverride) {
+  // Per-topic model override (e.g., Telegram forum topic config) — more specific than channel override.
+  let hasResolvedTopicModelOverride = false;
+  if (!hasResolvedHeartbeatModelOverride && !hasSessionModelOverride && opts?.topicModelOverride) {
+    const resolved = resolveModelRefFromString({
+      raw: opts.topicModelOverride,
+      defaultProvider,
+      aliasIndex,
+    });
+    if (resolved) {
+      provider = resolved.ref.provider;
+      model = resolved.ref.model;
+      hasResolvedTopicModelOverride = true;
+    }
+  }
+  if (
+    !hasResolvedHeartbeatModelOverride &&
+    !hasSessionModelOverride &&
+    !hasResolvedTopicModelOverride &&
+    channelModelOverride
+  ) {
     const resolved = resolveModelRefFromString({
       raw: channelModelOverride.model,
       defaultProvider,

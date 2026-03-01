@@ -150,6 +150,7 @@ export const dispatchTelegramMessage = async ({
     groupHistories,
     route,
     skillFilter,
+    topicModelOverride,
     sendTyping,
     sendRecordVoice,
     ackReactionPromise,
@@ -572,6 +573,7 @@ export const dispatchTelegramMessage = async ({
       },
       replyOptions: {
         skillFilter,
+        topicModelOverride,
         disableBlockStreaming,
         onPartialReply:
           answerLane.stream || reasoningLane.stream

@@ -40,6 +40,8 @@ export type GetReplyOptions = {
   suppressTyping?: boolean;
   /** Resolved heartbeat model override (provider/model string from merged per-agent config). */
   heartbeatModelOverride?: string;
+  /** Per-topic model override (e.g., from Telegram forum topic config). */
+  topicModelOverride?: string;
   /** If true, suppress tool error warning payloads for this run. */
   suppressToolErrorWarnings?: boolean;
   onPartialReply?: (payload: ReplyPayload) => Promise<void> | void;

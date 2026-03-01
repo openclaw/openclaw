@@ -183,6 +183,8 @@ export type TelegramTopicConfig = {
   allowFrom?: Array<string | number>;
   /** Optional system prompt snippet for this topic. */
   systemPrompt?: string;
+  /** Per-topic model override (e.g., "anthropic/claude-opus-4-6"). Best paired with sharedTopicSession on the group for shared conversation history. */
+  model?: string;
 };
 
 export type TelegramGroupConfig = {
@@ -196,6 +198,8 @@ export type TelegramGroupConfig = {
   skills?: string[];
   /** Per-topic configuration (key is message_thread_id as string) */
   topics?: Record<string, TelegramTopicConfig>;
+  /** When true, all forum topics share a single session (conversation history). Pair with per-topic `model` to let users pick a model by topic. */
+  sharedTopicSession?: boolean;
   /** If false, disable the bot for this group (and its topics). */
   enabled?: boolean;
   /** Optional allowlist for group senders (numeric Telegram user IDs). */

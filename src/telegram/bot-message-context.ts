@@ -175,8 +175,17 @@ export const buildTelegramMessageContext = async ({
   const resolvedThreadId = threadSpec.scope === "forum" ? threadSpec.id : undefined;
   const replyThreadId = threadSpec.id;
   const { groupConfig, topicConfig } = resolveTelegramGroupConfig(chatId, resolvedThreadId);
-  const peerId = isGroup ? buildTelegramGroupPeerId(chatId, resolvedThreadId) : String(chatId);
-  const parentPeer = buildTelegramParentPeer({ isGroup, resolvedThreadId, chatId });
+  // When sharedTopicSession is enabled, all forum topics use the base group ID for routing
+  // so they share a single session (conversation history). Reply routing still uses resolvedThreadId.
+  const useSharedTopicSession = isGroup && isForum && groupConfig?.sharedTopicSession === true;
+  const routingPeerId = useSharedTopicSession
+    ? String(chatId)
+    : isGroup
+      ? buildTelegramGroupPeerId(chatId, resolvedThreadId)
+      : String(chatId);
+  const parentPeer = useSharedTopicSession
+    ? undefined
+    : buildTelegramParentPeer({ isGroup, resolvedThreadId, chatId });
   // Fresh config for bindings lookup; other routing inputs are payload-derived.
   const route = resolveAgentRoute({
     cfg: loadConfig(),
@@ -184,7 +193,7 @@ export const buildTelegramMessageContext = async ({
     accountId: account.accountId,
     peer: {
       kind: isGroup ? "group" : "direct",
-      id: peerId,
+      id: routingPeerId,
     },
     parentPeer,
   });
@@ -312,7 +321,11 @@ export const buildTelegramMessageContext = async ({
     hasControlCommand: hasControlCommandInMessage,
   });
   const commandAuthorized = commandGate.commandAuthorized;
-  const historyKey = isGroup ? buildTelegramGroupPeerId(chatId, resolvedThreadId) : undefined;
+  const historyKey = isGroup
+    ? useSharedTopicSession
+      ? String(chatId)
+      : buildTelegramGroupPeerId(chatId, resolvedThreadId)
+    : undefined;
 
   let placeholder = resolveTelegramMediaPlaceholder(msg) ?? "";
 
@@ -629,10 +642,12 @@ export const buildTelegramMessageContext = async ({
     });
   }
 
-  const { skillFilter, groupSystemPrompt } = resolveTelegramGroupPromptSettings({
-    groupConfig,
-    topicConfig,
-  });
+  const { skillFilter, groupSystemPrompt, topicModelOverride } = resolveTelegramGroupPromptSettings(
+    {
+      groupConfig,
+      topicConfig,
+    },
+  );
   const commandBody = normalizeCommandBody(rawBody, { botUsername });
   const inboundHistory =
     isGroup && historyKey && historyLimit > 0
@@ -767,6 +782,7 @@ export const buildTelegramMessageContext = async ({
     groupHistories,
     route,
     skillFilter,
+    topicModelOverride,
     sendTyping,
     sendRecordVoice,
     ackReactionPromise,

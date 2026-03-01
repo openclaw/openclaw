@@ -7,6 +7,7 @@ export function resolveTelegramGroupPromptSettings(params: {
 }): {
   skillFilter: string[] | undefined;
   groupSystemPrompt: string | undefined;
+  topicModelOverride: string | undefined;
 } {
   const skillFilter = firstDefined(params.topicConfig?.skills, params.groupConfig?.skills);
   const systemPromptParts = [
@@ -15,5 +16,6 @@ export function resolveTelegramGroupPromptSettings(params: {
   ].filter((entry): entry is string => Boolean(entry));
   const groupSystemPrompt =
     systemPromptParts.length > 0 ? systemPromptParts.join("\n\n") : undefined;
-  return { skillFilter, groupSystemPrompt };
+  const topicModelOverride = params.topicConfig?.model?.trim() || undefined;
+  return { skillFilter, groupSystemPrompt, topicModelOverride };
 }
