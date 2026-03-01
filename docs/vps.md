@@ -67,5 +67,34 @@ source ~/.bashrc
 
 - `NODE_COMPILE_CACHE` improves repeated command startup times.
 - `OPENCLAW_NO_RESPAWN=1` avoids extra startup overhead from a self-respawn path.
+- Optional experimental path: `OPENCLAW_CLI_BUNDLED_ENTRY=1` uses `dist/entry.bundle.mjs` when available.
 - First command run warms cache; subsequent runs are faster.
 - For Raspberry Pi specifics, see [Raspberry Pi](/platforms/raspberry-pi).
+
+### systemd tuning checklist (optional)
+
+For VM hosts using `systemd`, consider:
+
+- Add service env for stable startup path:
+  - `OPENCLAW_NO_RESPAWN=1`
+  - `NODE_COMPILE_CACHE=/var/tmp/openclaw-compile-cache`
+- Keep restart behavior explicit:
+  - `Restart=always`
+  - `RestartSec=2`
+  - `TimeoutStartSec=90`
+- Prefer SSD-backed disks for state/cache paths to reduce random-I/O cold-start penalties.
+
+Example:
+
+```bash
+sudo systemctl edit openclaw
+```
+
+```ini
+[Service]
+Environment=OPENCLAW_NO_RESPAWN=1
+Environment=NODE_COMPILE_CACHE=/var/tmp/openclaw-compile-cache
+Restart=always
+RestartSec=2
+TimeoutStartSec=90
+```
