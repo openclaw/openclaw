@@ -56,3 +56,100 @@ jobs:
             Closing due to inactivity.
             If you believe this PR should be revived, post in #pr-thunderdome-dangerzone on Discord to talk to a maintainer.
             That channel is the escape hatch for high-quality PRs that get auto-closed.
+
+  lock-closed-issues:
+    permissions:
+      issues: write
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    steps:
+      - uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
+        id: app-token
+        with:
+          app-id: "2729701"
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+      - name: Lock closed issues after 48h of no comments
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          script: |
+            const lockAfterHours = 48;
+            const lockAfterMs = lockAfterHours * 60 * 60 * 1000;
+            const perPage = 100;
+            const cutoffMs = Date.now() - lockAfterMs;
+            const { owner, repo } = context.repo;
+
+            let locked = 0;
+            let inspected = 0;
+
+            let page = 1;
+            while (true) {
+              const { data: issues } = await github.rest.issues.listForRepo({
+                owner,
+                repo,
+                state: "closed",
+                sort: "updated",
+                direction: "desc",
+                per_page: perPage,
+                page,
+              });
+
+              if (issues.length === 0) {
+                break;
+              }
+
+              for (const issue of issues) {
+                if (issue.pull_request) {
+                  continue;
+                }
+                if (issue.locked) {
+                  continue;
+                }
+                if (!issue.closed_at) {
+                  continue;
+                }
+
+                inspected += 1;
+                const closedAtMs = Date.parse(issue.closed_at);
+                if (!Number.isFinite(closedAtMs)) {
+                  continue;
+                }
+                if (closedAtMs > cutoffMs) {
+                  continue;
+                }
+
+                let lastCommentMs = 0;
+                if (issue.comments > 0) {
+                  const { data: comments } = await github.rest.issues.listComments({
+                    owner,
+                    repo,
+                    issue_number: issue.number,
+                    per_page: 1,
+                    page: 1,
+                    sort: "created",
+                    direction: "desc",
+                  });
+
+                  if (comments.length > 0) {
+                    lastCommentMs = Date.parse(comments[0].created_at);
+                  }
+                }
+
+                const lastActivityMs = Math.max(closedAtMs, lastCommentMs || 0);
+                if (lastActivityMs > cutoffMs) {
+                  continue;
+                }
+
+                await github.rest.issues.lock({
+                  owner,
+                  repo,
+                  issue_number: issue.number,
+                  lock_reason: "resolved",
+                });
+
+                locked += 1;
+              }
+
+              page += 1;
+            }
+
+            core.info(`Inspected ${inspected} closed issues; locked ${locked}.`);
