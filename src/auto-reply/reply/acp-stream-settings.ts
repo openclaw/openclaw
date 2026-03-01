@@ -6,6 +6,7 @@ const DEFAULT_ACP_STREAM_COALESCE_IDLE_MS = 350;
 const DEFAULT_ACP_STREAM_MAX_CHUNK_CHARS = 1800;
 const DEFAULT_ACP_REPEAT_SUPPRESSION = true;
 const DEFAULT_ACP_DELIVERY_MODE = "final_only";
+const DEFAULT_ACP_HIDDEN_BOUNDARY_SEPARATOR = "newline";
 const DEFAULT_ACP_MAX_TURN_CHARS = 24_000;
 const DEFAULT_ACP_MAX_TOOL_SUMMARY_CHARS = 320;
 const DEFAULT_ACP_MAX_STATUS_CHARS = 320;
@@ -25,9 +26,11 @@ export const ACP_TAG_VISIBILITY_DEFAULTS: Record<AcpSessionUpdateTag, boolean> =
 };
 
 export type AcpDeliveryMode = "live" | "final_only";
+export type AcpHiddenBoundarySeparator = "none" | "space" | "newline" | "paragraph";
 
 export type AcpProjectionSettings = {
   deliveryMode: AcpDeliveryMode;
+  hiddenBoundarySeparator: AcpHiddenBoundarySeparator;
   repeatSuppression: boolean;
   maxTurnChars: number;
   maxToolSummaryChars: number;
@@ -65,6 +68,13 @@ function resolveAcpDeliveryMode(value: unknown): AcpDeliveryMode {
   return DEFAULT_ACP_DELIVERY_MODE;
 }
 
+function resolveAcpHiddenBoundarySeparator(value: unknown): AcpHiddenBoundarySeparator {
+  if (value === "none" || value === "space" || value === "newline" || value === "paragraph") {
+    return value;
+  }
+  return DEFAULT_ACP_HIDDEN_BOUNDARY_SEPARATOR;
+}
+
 function resolveAcpStreamCoalesceIdleMs(cfg: OpenClawConfig): number {
   return clampPositiveInteger(
     cfg.acp?.stream?.coalesceIdleMs,
@@ -87,6 +97,7 @@ export function resolveAcpProjectionSettings(cfg: OpenClawConfig): AcpProjection
   const stream = cfg.acp?.stream;
   return {
     deliveryMode: resolveAcpDeliveryMode(stream?.deliveryMode),
+    hiddenBoundarySeparator: resolveAcpHiddenBoundarySeparator(stream?.hiddenBoundarySeparator),
     repeatSuppression: clampBoolean(stream?.repeatSuppression, DEFAULT_ACP_REPEAT_SUPPRESSION),
     maxTurnChars: clampPositiveInteger(stream?.maxTurnChars, DEFAULT_ACP_MAX_TURN_CHARS, {
       min: 1,
