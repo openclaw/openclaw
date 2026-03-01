@@ -42,6 +42,8 @@ import { readStoreAllowFromForDmPolicy } from "../../security/dm-policy-shared.j
 import { resolveDiscordComponentEntry, resolveDiscordModalEntry } from "../components-registry.js";
 import {
   createDiscordFormModal,
+  DISCORD_COMPONENT_CUSTOM_ID_KEY,
+  DISCORD_MODAL_CUSTOM_ID_KEY,
   formatDiscordComponentEventText,
   parseDiscordComponentCustomId,
   parseDiscordComponentCustomIdForCarbon,
@@ -1437,7 +1439,9 @@ export class AgentSelectMenu extends StringSelectMenu {
 
 class DiscordComponentButton extends Button {
   label = "component";
-  customId = "*";
+  // Must be unique across component handlers. Carbon's ComponentHandler de-dupes by customId.
+  // Keep the occomp prefix so parseDiscordComponentCustomIdForCarbon returns key="*".
+  customId = `${DISCORD_COMPONENT_CUSTOM_ID_KEY}:handler=button`;
   style = ButtonStyle.Primary;
   customIdParser = parseDiscordComponentCustomIdForCarbon;
   private ctx: AgentComponentContext;
@@ -1469,7 +1473,8 @@ class DiscordComponentButton extends Button {
 }
 
 class DiscordComponentStringSelect extends StringSelectMenu {
-  customId = "*";
+  // Must be unique across component handlers. Carbon's ComponentHandler de-dupes by customId.
+  customId = `${DISCORD_COMPONENT_CUSTOM_ID_KEY}:handler=string-select`;
   options: APIStringSelectComponent["options"] = [];
   customIdParser = parseDiscordComponentCustomIdForCarbon;
   private ctx: AgentComponentContext;
@@ -1492,7 +1497,8 @@ class DiscordComponentStringSelect extends StringSelectMenu {
 }
 
 class DiscordComponentUserSelect extends UserSelectMenu {
-  customId = "*";
+  // Must be unique across component handlers. Carbon's ComponentHandler de-dupes by customId.
+  customId = `${DISCORD_COMPONENT_CUSTOM_ID_KEY}:handler=user-select`;
   customIdParser = parseDiscordComponentCustomIdForCarbon;
   private ctx: AgentComponentContext;
 
@@ -1514,7 +1520,8 @@ class DiscordComponentUserSelect extends UserSelectMenu {
 }
 
 class DiscordComponentRoleSelect extends RoleSelectMenu {
-  customId = "*";
+  // Must be unique across component handlers. Carbon's ComponentHandler de-dupes by customId.
+  customId = `${DISCORD_COMPONENT_CUSTOM_ID_KEY}:handler=role-select`;
   customIdParser = parseDiscordComponentCustomIdForCarbon;
   private ctx: AgentComponentContext;
 
@@ -1536,7 +1543,8 @@ class DiscordComponentRoleSelect extends RoleSelectMenu {
 }
 
 class DiscordComponentMentionableSelect extends MentionableSelectMenu {
-  customId = "*";
+  // Must be unique across component handlers. Carbon's ComponentHandler de-dupes by customId.
+  customId = `${DISCORD_COMPONENT_CUSTOM_ID_KEY}:handler=mentionable-select`;
   customIdParser = parseDiscordComponentCustomIdForCarbon;
   private ctx: AgentComponentContext;
 
@@ -1558,7 +1566,8 @@ class DiscordComponentMentionableSelect extends MentionableSelectMenu {
 }
 
 class DiscordComponentChannelSelect extends ChannelSelectMenu {
-  customId = "*";
+  // Must be unique across component handlers. Carbon's ComponentHandler de-dupes by customId.
+  customId = `${DISCORD_COMPONENT_CUSTOM_ID_KEY}:handler=channel-select`;
   customIdParser = parseDiscordComponentCustomIdForCarbon;
   private ctx: AgentComponentContext;
 
@@ -1581,7 +1590,9 @@ class DiscordComponentChannelSelect extends ChannelSelectMenu {
 
 class DiscordComponentModal extends Modal {
   title = "OpenClaw form";
-  customId = "*";
+  // Must be unique across modal handlers. Carbon's ModalHandler de-dupes by customId.
+  // Keep the ocmodal prefix so parseDiscordModalCustomIdForCarbon returns key="*".
+  customId = `${DISCORD_MODAL_CUSTOM_ID_KEY}:handler=modal`;
   components = [];
   customIdParser = parseDiscordModalCustomIdForCarbon;
   private ctx: AgentComponentContext;
