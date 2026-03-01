@@ -737,7 +737,7 @@ export async function runTui(opts: TuiOptions) {
     trustWindowFetchPromise = (async () => {
       try {
         const result = await client.getTrustStatus({ agentId: currentAgentId });
-        trustWindow = result.trustWindow ?? null;
+        trustWindow = (result.trustWindow as TrustWindow | undefined) ?? null;
       } catch {
         trustWindow = null;
       }
