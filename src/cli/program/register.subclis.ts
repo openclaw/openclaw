@@ -296,6 +296,15 @@ const entries: SubCliEntry[] = [
       mod.registerCompletionCli(program);
     },
   },
+  {
+    name: "adaptive-routing",
+    description: "Adaptive Model Routing management and token savings stats",
+    hasSubcommands: true,
+    register: async (program) => {
+      const mod = await import("../adaptive-routing-cli.js");
+      mod.registerAdaptiveRoutingCli(program);
+    },
+  },
 ];
 
 export function getSubCliEntries(): SubCliEntry[] {
