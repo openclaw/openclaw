@@ -99,4 +99,29 @@ describe("channels dock", () => {
 
     expect(formatted).toEqual(["user", "foo", "plain"]);
   });
+
+  it("telegram elevated allowFrom fallback resolves per-account allowlists", () => {
+    const telegramDock = getChannelDock("telegram");
+    const cfg = {
+      channels: {
+        telegram: {
+          allowFrom: ["root-user"],
+          accounts: {
+            work: {
+              allowFrom: ["work-user"],
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const workAllowFrom = telegramDock?.elevated?.allowFromFallback?.({ cfg, accountId: "work" });
+    const defaultAllowFrom = telegramDock?.elevated?.allowFromFallback?.({
+      cfg,
+      accountId: "missing",
+    });
+
+    expect(workAllowFrom).toEqual(["work-user"]);
+    expect(defaultAllowFrom).toEqual(["root-user"]);
+  });
 });
