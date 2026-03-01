@@ -8,17 +8,17 @@
 
 **DO NOT** change internal code references. This keeps the fork mergeable with upstream.
 
-| Change | Do It? | Reason |
-|--------|--------|--------|
-| UI theme & colors | ✅ Yes | Separate CSS/components |
-| Logo & visual assets | ✅ Yes | Separate asset files |
-| Dashboard display text | ✅ Yes | UI layer only |
-| README & docs | ✅ Yes | Your fork, your docs |
-| Package name (`openclaw`) | ❌ NO | Merge conflicts |
-| CLI command (`openclaw`) | ❌ NO | Merge conflicts |
-| Env vars (`OPENCLAW_*`) | ❌ NO | Merge conflicts |
-| Config paths (`~/.openclaw/`) | ❌ NO | Merge conflicts |
-| Internal source strings | ❌ NO | Merge conflicts |
+| Change                        | Do It? | Reason                  |
+| ----------------------------- | ------ | ----------------------- |
+| UI theme & colors             | ✅ Yes | Separate CSS/components |
+| Logo & visual assets          | ✅ Yes | Separate asset files    |
+| Dashboard display text        | ✅ Yes | UI layer only           |
+| README & docs                 | ✅ Yes | Your fork, your docs    |
+| Package name (`openclaw`)     | ❌ NO  | Merge conflicts         |
+| CLI command (`openclaw`)      | ❌ NO  | Merge conflicts         |
+| Env vars (`OPENCLAW_*`)       | ❌ NO  | Merge conflicts         |
+| Config paths (`~/.openclaw/`) | ❌ NO  | Merge conflicts         |
+| Internal source strings       | ❌ NO  | Merge conflicts         |
 
 ---
 
@@ -73,15 +73,15 @@ These live in separate files/layers with minimal upstream conflict:
 
 ### ❌ Do NOT Change (Upstream Compatibility)
 
-| Keep As-Is | Location | Why |
-|------------|----------|-----|
-| `openclaw` package name | `package.json` | npm identity |
-| `openclaw` CLI command | `bin` field | User scripts depend on it |
-| `OPENCLAW_*` env vars | Throughout source | Config compatibility |
-| `~/.openclaw/` paths | Config loading | User data location |
-| Internal class/function names | `src/**/*.ts` | Massive merge conflicts |
-| Log prefixes `[openclaw]` | Logger code | Minor, not worth changing |
-| API endpoints | Gateway | Client compatibility |
+| Keep As-Is                    | Location          | Why                       |
+| ----------------------------- | ----------------- | ------------------------- |
+| `openclaw` package name       | `package.json`    | npm identity              |
+| `openclaw` CLI command        | `bin` field       | User scripts depend on it |
+| `OPENCLAW_*` env vars         | Throughout source | Config compatibility      |
+| `~/.openclaw/` paths          | Config loading    | User data location        |
+| Internal class/function names | `src/**/*.ts`     | Massive merge conflicts   |
+| Log prefixes `[openclaw]`     | Logger code       | Minor, not worth changing |
+| API endpoints                 | Gateway           | Client compatibility      |
 
 ### Alias Option (Optional)
 
@@ -100,30 +100,30 @@ Or publish a tiny wrapper package later.
 
 ### Brand Elements
 
-| Element | Value |
-|---------|-------|
-| **Display Name** | Operator |
-| **Tagline** | "I need an exit." |
-| **Emoji** | 🔴 (red pill) |
-| **Theme** | Matrix / Cyberpunk |
+| Element          | Value              |
+| ---------------- | ------------------ |
+| **Display Name** | Operator           |
+| **Tagline**      | "I need an exit."  |
+| **Emoji**        | 🔴 (red pill)      |
+| **Theme**        | Matrix / Cyberpunk |
 
 ### Color Palette
 
-| Name | Hex | CSS Variable |
-|------|-----|--------------|
-| Background | `#0D0208` | `--matrix-black` |
-| Surface | `#003B00` | `--matrix-dark-green` |
-| Muted | `#008F11` | `--matrix-green` |
-| Primary | `#00FF41` | `--matrix-lime` |
-| Accent | `#39FF14` | `--matrix-glow` |
-| Destructive | `#FF0000` | `--red-pill` |
+| Name        | Hex       | CSS Variable          |
+| ----------- | --------- | --------------------- |
+| Background  | `#0D0208` | `--matrix-black`      |
+| Surface     | `#003B00` | `--matrix-dark-green` |
+| Muted       | `#008F11` | `--matrix-green`      |
+| Primary     | `#00FF41` | `--matrix-lime`       |
+| Accent      | `#39FF14` | `--matrix-glow`       |
+| Destructive | `#FF0000` | `--red-pill`          |
 
 ### Typography
 
-| Usage | Font Stack |
-|-------|------------|
-| UI | `'Share Tech Mono', 'Fira Code', monospace` |
-| Code | `'Fira Code', 'JetBrains Mono', monospace` |
+| Usage | Font Stack                                  |
+| ----- | ------------------------------------------- |
+| UI    | `'Share Tech Mono', 'Fira Code', monospace` |
+| Code  | `'Fira Code', 'JetBrains Mono', monospace`  |
 
 ### Effects
 
@@ -138,14 +138,14 @@ Or publish a tiny wrapper package later.
 
 ### Strings to Update (UI Layer Only)
 
-| Location | Original | New |
-|----------|----------|-----|
-| Page title | "OpenClaw Dashboard" | "Operator" |
-| Sidebar header | "OpenClaw" | "Operator" |
-| Welcome message | "Welcome to OpenClaw" | "Wake up, Neo." |
-| Footer | "OpenClaw v..." | "Operator • v..." |
-| Error states | Generic | Matrix-themed |
-| Empty states | Generic | Matrix-themed |
+| Location        | Original              | New               |
+| --------------- | --------------------- | ----------------- |
+| Page title      | "OpenClaw Dashboard"  | "Operator"        |
+| Sidebar header  | "OpenClaw"            | "Operator"        |
+| Welcome message | "Welcome to OpenClaw" | "Wake up, Neo."   |
+| Footer          | "OpenClaw v..."       | "Operator • v..." |
+| Error states    | Generic               | Matrix-themed     |
+| Empty states    | Generic               | Matrix-themed     |
 
 ### Where These Live
 
@@ -157,19 +157,20 @@ All in the new `ui/` React components — **not** in backend `src/`.
 
 ### Files to Create/Replace
 
-| File | Location | Purpose |
-|------|----------|---------|
-| `logo.svg` | `ui/public/` | Main logo |
-| `logo-text.svg` | `ui/public/` | Logo with "Operator" text |
-| `favicon.svg` | `ui/public/` | Browser tab icon |
-| `favicon.ico` | `ui/public/` | Legacy favicon |
-| `apple-touch-icon.png` | `ui/public/` | iOS bookmark |
-| `og-image.png` | `ui/public/` | Social share preview |
-| `README-header.png` | Root | GitHub header |
+| File                   | Location     | Purpose                   |
+| ---------------------- | ------------ | ------------------------- |
+| `logo.svg`             | `ui/public/` | Main logo                 |
+| `logo-text.svg`        | `ui/public/` | Logo with "Operator" text |
+| `favicon.svg`          | `ui/public/` | Browser tab icon          |
+| `favicon.ico`          | `ui/public/` | Legacy favicon            |
+| `apple-touch-icon.png` | `ui/public/` | iOS bookmark              |
+| `og-image.png`         | `ui/public/` | Social share preview      |
+| `README-header.png`    | Root         | GitHub header             |
 
 ### Logo Concepts
 
 Options to consider:
+
 1. Stylized "O" with Matrix code effect
 2. Headset/operator icon
 3. Red pill icon
@@ -199,18 +200,18 @@ git push origin main
 
 ### Expected Conflict Zones
 
-| Path | Conflict Risk | Resolution |
-|------|---------------|------------|
-| `ui/**` | High | Keep yours (custom UI) |
-| `assets/**` | Medium | Keep yours (custom branding) |
-| `README.md` | High | Keep yours or merge manually |
-| `package.json` | Low | Usually auto-merge, check version |
-| `src/**` | None | Should auto-merge cleanly |
+| Path           | Conflict Risk | Resolution                        |
+| -------------- | ------------- | --------------------------------- |
+| `ui/**`        | High          | Keep yours (custom UI)            |
+| `assets/**`    | Medium        | Keep yours (custom branding)      |
+| `README.md`    | High          | Keep yours or merge manually      |
+| `package.json` | Low           | Usually auto-merge, check version |
+| `src/**`       | None          | Should auto-merge cleanly         |
 
 ### Conflict Resolution Rules
 
 1. **Your UI** → Always keep yours
-2. **Your assets** → Always keep yours  
+2. **Your assets** → Always keep yours
 3. **Their bug fixes** → Accept theirs
 4. **Their features** → Accept theirs
 5. **Version bumps** → Take higher version
@@ -220,24 +221,28 @@ git push origin main
 ## Implementation Checklist
 
 ### Phase 1: Visual Foundation
+
 - [ ] Create Matrix color palette CSS
 - [ ] Set up custom fonts
 - [ ] Design logo concepts
 - [ ] Create favicon
 
 ### Phase 2: UI Rebrand
+
 - [ ] Build new React UI (separate task)
 - [ ] Apply Matrix theme throughout
 - [ ] Update display text to "Operator"
 - [ ] Add custom animations/effects
 
 ### Phase 3: Assets
+
 - [ ] Finalize logo
 - [ ] Create all icon sizes
 - [ ] Create social preview image
 - [ ] Update README header
 
 ### Phase 4: Documentation
+
 - [ ] Update README.md
 - [ ] Keep OpenClaw attribution
 - [ ] Document your additions
@@ -251,12 +256,12 @@ Keep a note in README acknowledging the upstream:
 ```markdown
 ## Credits
 
-Operator is a fork of [OpenClaw](https://github.com/openclaw/openclaw), 
-the open-source personal AI assistant. 
+Operator is a fork of [OpenClaw](https://github.com/openclaw/openclaw),
+the open-source personal AI assistant.
 
 Built with 💚 on top of the amazing OpenClaw foundation.
 ```
 
 ---
 
-*Last updated: 2026-02-01*
+_Last updated: 2026-02-01_

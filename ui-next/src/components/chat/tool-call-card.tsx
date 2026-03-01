@@ -1,7 +1,7 @@
 import { Wrench, ChevronDown, ChevronRight, Check, Eye } from "lucide-react";
 import { useState } from "react";
-import type { ChatMessageContent } from "@/store/chat-store";
 import { cn } from "@/lib/utils";
+import type { ChatMessageContent } from "@/store/chat-store";
 
 /** Threshold below which tool result text is shown inline (not collapsed). */
 const INLINE_THRESHOLD = 80;
@@ -220,7 +220,7 @@ function formatArgs(args: unknown): string {
   try {
     return JSON.stringify(args, null, 2);
   } catch {
-    return String(args);
+    return JSON.stringify(args);
   }
 }
 

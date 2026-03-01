@@ -1,6 +1,5 @@
 import { Settings, RotateCcw, Save, Loader2, AlertTriangle, CheckCircle2 } from "lucide-react";
 import { useState, useEffect, useCallback } from "react";
-import type { JsonSchema, ConfigUiHints, ConfigSchemaResponse } from "@/types/agents";
 import { ConfigDiffBanner } from "@/components/config/config-diff-banner";
 import { ConfigFormView } from "@/components/config/config-form-view";
 import { ConfigSidebar } from "@/components/config/config-sidebar";
@@ -12,6 +11,7 @@ import { normalizeSchemaNode } from "@/lib/config-schema";
 import { loadSettings, saveSettings } from "@/lib/storage";
 import { cn } from "@/lib/utils";
 import { useGatewayStore } from "@/store/gateway-store";
+import type { JsonSchema, ConfigUiHints, ConfigSchemaResponse } from "@/types/agents";
 
 type ConfigResult = {
   config?: Record<string, unknown>;
@@ -112,8 +112,8 @@ export function ConfigPage() {
 
   useEffect(() => {
     if (isConnected) {
-      loadConfig();
-      loadSchema();
+      void loadConfig();
+      void loadSchema();
     }
   }, [isConnected, loadConfig, loadSchema]);
 
@@ -340,7 +340,7 @@ export function ConfigPage() {
             {/* Form view */}
             {formMode === "form" && canShowForm && formValue ? (
               <ConfigFormView
-                schema={normalizedSchema!}
+                schema={normalizedSchema}
                 formValue={formValue}
                 hints={hints}
                 activeSection={activeSection}

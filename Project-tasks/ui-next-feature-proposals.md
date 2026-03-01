@@ -151,28 +151,79 @@ These features are **not yet implemented** in ui-next. Each section describes wh
 
 ---
 
-## 6. Memory & Workspace File Browser
+## 6. Memory Dashboard
 
-**What:** View and edit workspace files (SOUL, IDENTITY, etc.).
+**What:** Full memory management dashboard with file browsing, semantic search, index health monitoring, and activity tracking. Implemented as a dedicated `/memory` route with 4 sub-tabs.
+
+**Status:** Implemented with dynamic backend adaptation (QMD vs Builtin).
 
 **Gateway API:**
 | Method | Purpose |
 |---|---|
-| `agents.files.list` | List files. |
+| `memory.status` | Returns full `MemoryProviderStatus` (backend, provider, model, files, chunks, dirty, sources, vector, FTS, cache, fallback info) + embedding probe result + health boolean. |
+| `memory.search` | Semantic search across memory index. Params: `{ query, maxResults?, minScore? }`. Returns `{ results[], provider, backend, model? }`. |
+| `memory.reindex` | Force re-index. Calls `manager.sync({ reason: "dashboard", force: true })`. Returns `{ ok, error? }`. |
+| `agents.files.list` | List available memory files for the default agent. |
 | `agents.files.get` | Read file content. |
 | `agents.files.set` | Write file content. |
+| `sessions.list` | List recent sessions (for activity log parsing). |
+| `chat.history` | Load session messages (to extract memory tool calls for activity log). |
 
-**UI Components:**
+**Sub-tabs:**
 
-- **Layout**: `ResizablePanel` (Sidebar for file list, Main for editor).
-- **Editor**: `Textarea` (simple) or integrate `monaco-editor` / `CodeMirror` (preferred/advanced).
-- **Viewer**: Use `shiki` for syntax highlighting (read-only mode).
-- **Icons**: `FileText`, `Folder` from Lucide.
+### Tab A: Files
 
-**Implementation Plan:**
+- Left panel: file list sorted by date, showing name, size, last modified.
+- Right panel: textarea editor with Save/Revert buttons and unsaved changes indicator.
+- Data: `agents.files.list` filtered to memory files, `agents.files.get`/`set` for read/write.
 
-1. **Security**: Only allow listed files (`AGENTS.md`, `SOUL.md`, etc.).
-2. Add "Unsaved Changes" indicator.
+### Tab B: Search
+
+- Search input with search history dropdown (persisted to localStorage, max 20).
+- Results show snippet, score badge (green >= 0.8, yellow >= 0.5, muted < 0.5), source badge, file link.
+- Cross-tab: clicking a result file link switches to Files tab and selects the file.
+- Backend badge + search mode badge (builtin shows hybrid/fts-only mode).
+- **Backend-adaptive empty states:** distinguishes "no documents indexed" (index empty) vs "no results matched" (query mismatch) using `files` count from search response.
+
+### Tab C: Index Status
+
+- 4-state health badge: Healthy (green), Degraded (yellow, fallback active), Empty (yellow, no content), Unavailable (red).
+- Re-index Now button.
+- **Backend-adaptive stat cards:**
+  - QMD: Documents, Collections (from `status.custom.qmd`), Backend.
+  - Builtin: Files, Chunks, Backend.
+- Source counts DataTable (builtin only).
+- **Backend-adaptive additional info:**
+  - QMD: model, vector (always managed by qmd).
+  - Builtin: model, vector (sqlite-vec), FTS, cache, batch embedding status.
+- Conditional alerts: fallback active (with reason), embedding probe failed, no files/documents indexed.
+
+### Tab D: Activity Log
+
+- Filter buttons: All, Reads, Writes.
+- Timeline entries parsed from recent session transcripts: timestamp, operation badge, tool name, file/query, session key.
+- "Load more sessions" button for paginated loading.
+- Operations tracked: `memory_search`, `memory_get`, `memory_read`, `write`/`edit`/`read` on memory paths.
+
+**Store:** `ui-next/src/store/memory-store.ts` (Zustand)
+
+State shape covers all 4 tabs: files, search, index status, activity log, plus active tab persistence.
+
+**Hook:** `ui-next/src/hooks/use-memory.ts`
+
+Wraps all RPC calls with store updates: `getMemoryStatus`, `searchMemory`, `reindexMemory`, `listMemoryFiles`, `getMemoryFile`, `setMemoryFile`, `loadActivityLog`.
+
+**localStorage keys:**
+
+- `openclaw.memory.searchHistory` — search query history (max 20)
+- `openclaw.memory.activeTab` — last active tab
+
+**Files:**
+
+- `src/gateway/server-methods/memory-dashboard.ts` — 3 RPC handlers
+- `ui-next/src/store/memory-store.ts` — Zustand store
+- `ui-next/src/hooks/use-memory.ts` — RPC hook
+- `ui-next/src/pages/memory.tsx` — Page with 4 tabs
 
 ---
 

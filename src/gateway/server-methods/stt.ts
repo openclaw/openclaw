@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { GatewayRequestHandlers } from "./types.js";
 import { requireApiKey, resolveApiKeyForProvider } from "../../agents/model-auth.js";
 import { loadConfig } from "../../config/config.js";
 import { DEFAULT_AUDIO_MODELS } from "../../media-understanding/defaults.js";
@@ -14,6 +13,7 @@ import {
 import { runExec } from "../../process/exec.js";
 import { ErrorCodes, errorShape } from "../protocol/index.js";
 import { formatForLog } from "../ws-log.js";
+import type { GatewayRequestHandlers } from "./types.js";
 
 /** Formats natively supported by whisper-cli. */
 const WHISPER_NATIVE_FORMATS = new Set(["wav", "flac", "mp3", "ogg"]);

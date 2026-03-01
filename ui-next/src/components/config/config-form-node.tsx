@@ -1,12 +1,12 @@
 import { ChevronDown, ChevronRight, Plus, Trash2 } from "lucide-react";
 import { useState } from "react";
-import type { JsonSchema, ConfigUiHints } from "@/types/agents";
 import { Button } from "@/components/ui/button";
 import { FormField, EnumField, NumberField, SecretInput } from "@/components/ui/custom/form";
 import { Switch } from "@/components/ui/switch";
 import { hintForPath, isSensitivePath, getFieldLabel, defaultValue } from "@/lib/config-form-utils";
 import { schemaType, extractEnumValues, normalizeSchemaNode } from "@/lib/config-schema";
 import { cn } from "@/lib/utils";
+import type { JsonSchema, ConfigUiHints } from "@/types/agents";
 
 // ============================================================
 // Shared props for recursive rendering
@@ -94,7 +94,7 @@ export function FormNode({
         <FormField label={label} description={description}>
           <input
             type="text"
-            value={typeof value === "string" ? value : String(value ?? "")}
+            value={typeof value === "string" ? value : String((value as string) ?? "")}
             onChange={(e) => onPatch(path, e.target.value)}
             placeholder={hint?.placeholder}
             className={cn(
@@ -189,10 +189,12 @@ function ObjectField({
   const properties = schema.properties ?? {};
 
   // Sort by hint order, then alphabetically
-  const sortedKeys = Object.keys(properties).sort((a, b) => {
+  const sortedKeys = Object.keys(properties).toSorted((a, b) => {
     const orderA = hintForPath([...path, a], hints)?.order ?? 50;
     const orderB = hintForPath([...path, b], hints)?.order ?? 50;
-    if (orderA !== orderB) return orderA - orderB;
+    if (orderA !== orderB) {
+      return orderA - orderB;
+    }
     return a.localeCompare(b);
   });
 
@@ -260,7 +262,9 @@ function ObjectField({
   );
 
   // Top-level sections: flat, no wrapper
-  if (depth === 0) return content;
+  if (depth === 0) {
+    return content;
+  }
 
   // Nested: collapsible
   return (
@@ -361,7 +365,7 @@ function ArrayField({
                 ) : (
                   <input
                     type="text"
-                    value={String(item ?? "")}
+                    value={String((item as string) ?? "")}
                     onChange={(e) => onPatch([...path, i], e.target.value)}
                     className="w-full rounded-md border bg-background px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
                   />
@@ -402,7 +406,9 @@ function AddCustomEntry({
 
   const handleAdd = () => {
     const key = newKey.trim();
-    if (!key || existingKeys.has(key)) return;
+    if (!key || existingKeys.has(key)) {
+      return;
+    }
     onPatch([...path, key], defaultValue(schema));
     setNewKey("");
   };

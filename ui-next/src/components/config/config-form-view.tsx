@@ -1,6 +1,6 @@
-import type { JsonSchema, ConfigUiHints } from "@/types/agents";
 import { hintForPath } from "@/lib/config-form-utils";
 import { CONFIG_SECTIONS, getSectionMetaOrDefault } from "@/lib/config-sections";
+import type { JsonSchema, ConfigUiHints } from "@/types/agents";
 import { FormNode } from "./config-form-node";
 
 type ConfigFormViewProps = {
@@ -24,16 +24,26 @@ function matchesSearch(
   const lower = term.toLowerCase();
 
   // Match key name
-  if (key.toLowerCase().includes(lower)) return true;
+  if (key.toLowerCase().includes(lower)) {
+    return true;
+  }
 
   // Match label/title
   const hint = hintForPath(path, hints);
-  if (hint?.label?.toLowerCase().includes(lower)) return true;
-  if (schema.title?.toLowerCase().includes(lower)) return true;
-  if (schema.description?.toLowerCase().includes(lower)) return true;
+  if (hint?.label?.toLowerCase().includes(lower)) {
+    return true;
+  }
+  if (schema.title?.toLowerCase().includes(lower)) {
+    return true;
+  }
+  if (schema.description?.toLowerCase().includes(lower)) {
+    return true;
+  }
 
   // Match enum values
-  if (schema.enum?.some((v) => String(v).toLowerCase().includes(lower))) return true;
+  if (schema.enum?.some((v) => String(v).toLowerCase().includes(lower))) {
+    return true;
+  }
 
   // Recurse into object properties
   if (schema.properties) {
@@ -63,12 +73,14 @@ export function ConfigFormView({
   } else {
     // Sort by CONFIG_SECTIONS order, then remaining alphabetically
     const sectionOrder = CONFIG_SECTIONS.map((s) => s.key);
-    sectionKeys = Object.keys(properties).sort((a, b) => {
+    sectionKeys = Object.keys(properties).toSorted((a, b) => {
       const ai = sectionOrder.indexOf(a);
       const bi = sectionOrder.indexOf(b);
       const oa = ai === -1 ? 999 : ai;
       const ob = bi === -1 ? 999 : bi;
-      if (oa !== ob) return oa - ob;
+      if (oa !== ob) {
+        return oa - ob;
+      }
       return a.localeCompare(b);
     });
   }
@@ -77,21 +89,29 @@ export function ConfigFormView({
   if (searchQuery) {
     sectionKeys = sectionKeys.filter((key) => {
       const sectionSchema = properties[key];
-      if (!sectionSchema) return false;
+      if (!sectionSchema) {
+        return false;
+      }
       return matchesSearch(key, sectionSchema, hints, [key], searchQuery);
     });
   }
 
   // Also filter nested properties when searching
   const getFilteredSchema = (key: string, sectionSchema: JsonSchema): JsonSchema => {
-    if (!searchQuery || !sectionSchema.properties) return sectionSchema;
+    if (!searchQuery || !sectionSchema.properties) {
+      return sectionSchema;
+    }
 
     const term = searchQuery.toLowerCase();
     // If the section key itself matches, show all properties
-    if (key.toLowerCase().includes(term)) return sectionSchema;
+    if (key.toLowerCase().includes(term)) {
+      return sectionSchema;
+    }
 
     const meta = getSectionMetaOrDefault(key);
-    if (meta?.label.toLowerCase().includes(term)) return sectionSchema;
+    if (meta?.label.toLowerCase().includes(term)) {
+      return sectionSchema;
+    }
 
     // Filter to matching properties
     const filteredProps: Record<string, JsonSchema> = {};
@@ -105,17 +125,23 @@ export function ConfigFormView({
 
   // Sort properties within each section by hint order
   const getSortedSchema = (key: string, sectionSchema: JsonSchema): JsonSchema => {
-    if (!sectionSchema.properties) return sectionSchema;
+    if (!sectionSchema.properties) {
+      return sectionSchema;
+    }
 
-    const sortedEntries = Object.entries(sectionSchema.properties).sort(([a], [b]) => {
+    const sortedEntries = Object.entries(sectionSchema.properties).toSorted(([a], [b]) => {
       const orderA = hintForPath([key, a], hints)?.order ?? 50;
       const orderB = hintForPath([key, b], hints)?.order ?? 50;
-      if (orderA !== orderB) return orderA - orderB;
+      if (orderA !== orderB) {
+        return orderA - orderB;
+      }
       return a.localeCompare(b);
     });
 
     const sorted: Record<string, JsonSchema> = {};
-    for (const [k, v] of sortedEntries) sorted[k] = v;
+    for (const [k, v] of sortedEntries) {
+      sorted[k] = v;
+    }
     return { ...sectionSchema, properties: sorted };
   };
 
@@ -131,7 +157,9 @@ export function ConfigFormView({
     <div className="space-y-6">
       {sectionKeys.map((key) => {
         const sectionSchema = properties[key];
-        if (!sectionSchema) return null;
+        if (!sectionSchema) {
+          return null;
+        }
 
         const meta = getSectionMetaOrDefault(key);
         const Icon = meta?.icon;
@@ -142,7 +170,9 @@ export function ConfigFormView({
         const sorted = getSortedSchema(key, filtered);
 
         // Skip sections with no visible properties after filtering
-        if (sorted.properties && Object.keys(sorted.properties).length === 0) return null;
+        if (sorted.properties && Object.keys(sorted.properties).length === 0) {
+          return null;
+        }
 
         return (
           <section key={key} className="rounded-lg border border-border bg-card overflow-hidden">

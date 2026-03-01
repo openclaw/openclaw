@@ -1,6 +1,6 @@
 import { Wifi, WifiOff, Loader2 } from "lucide-react";
-import type { ConnectionStatus as ConnectionStatusType } from "@/store/gateway-store";
 import { cn } from "@/lib/utils";
+import type { ConnectionStatus as ConnectionStatusType } from "@/store/gateway-store";
 
 export type ConnectionStatusProps = {
   status: ConnectionStatusType;
