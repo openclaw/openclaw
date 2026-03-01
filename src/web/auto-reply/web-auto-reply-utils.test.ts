@@ -127,6 +127,50 @@ describe("resolveMentionTargets with @lid mapping", () => {
       expect(selfTargets.selfE164).toBe("+1777");
     });
   });
+
+  it("matches LID mention that resolves to selfE164 (issue #25300)", async () => {
+    await withTempDir("openclaw-lid-mapping-", async (authDir) => {
+      await fs.writeFile(
+        path.join(authDir, "lid-mapping-12345_reverse.json"),
+        JSON.stringify("+15551234567"),
+      );
+
+      const msg = makeMsg({
+        body: "ping",
+        mentionedJids: ["12345@lid"],
+        selfE164: "+15551234567",
+        selfJid: "15551234567@s.whatsapp.net",
+      });
+
+      const targets = resolveMentionTargets(msg, authDir);
+      expect(targets.normalizedMentions).toContain("+15551234567");
+
+      const mentionCfg = { mentionRegexes: [/\bopenclaw\b/i] };
+      expect(isBotMentionedFromTargets(msg, mentionCfg, targets)).toBe(true);
+    });
+  });
+
+  it("matches LID mention when selfE164 has whitespace/formatting differences", async () => {
+    await withTempDir("openclaw-lid-mapping-", async (authDir) => {
+      await fs.writeFile(
+        path.join(authDir, "lid-mapping-12345_reverse.json"),
+        JSON.stringify("+1 555 123 4567"),
+      );
+
+      const msg = makeMsg({
+        body: "ping",
+        mentionedJids: ["12345@lid"],
+        selfE164: "+15551234567",
+        selfJid: "15551234567@s.whatsapp.net",
+      });
+
+      const targets = resolveMentionTargets(msg, authDir);
+      expect(targets.normalizedMentions).toContain("+15551234567");
+
+      const mentionCfg = { mentionRegexes: [/\bopenclaw\b/i] };
+      expect(isBotMentionedFromTargets(msg, mentionCfg, targets)).toBe(true);
+    });
+  });
 });
 
 describe("getSessionSnapshot", () => {

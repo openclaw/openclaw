@@ -291,7 +291,15 @@ export function createAgentEventHandler({
     if (isSilentReplyText(cleaned, SILENT_REPLY_TOKEN)) {
       return;
     }
-    chatRunState.buffers.set(clientRunId, cleaned);
+    const prevBuffer = chatRunState.buffers.get(clientRunId) ?? "";
+    if (cleaned.startsWith(prevBuffer)) {
+      chatRunState.buffers.set(clientRunId, cleaned);
+    } else if (prevBuffer.startsWith(cleaned)) {
+      // Current text is a prefix of buffer; keep buffer (may be late/duplicate event)
+    } else {
+      // New assistant message (e.g., after tool calls): append to preserve pre-tool text
+      chatRunState.buffers.set(clientRunId, prevBuffer ? `${prevBuffer}\n\n${cleaned}` : cleaned);
+    }
     if (shouldHideHeartbeatChatOutput(clientRunId, sourceRunId)) {
       return;
     }
