@@ -60,6 +60,7 @@ Default should be minimal-noise out of the box:
    - `repeatSuppression=false`:
      - forward repeated status/tool updates as they arrive.
 3. Keep existing text streaming path and existing guardrails (`maxTurnChars`, meta caps).
+   - In `deliveryMode=final_only`, defer all projected ACP output (text + meta/tool) until terminal turn events.
 4. Keep canonical formatting:
    - system lines via `prefixSystemMessage(...)`
    - tool lines via shared tool formatter path.
