@@ -60,7 +60,11 @@ vi.mock("./bot-message-context.js", () => ({
 
 const { readAllowFromStoreMock, upsertPairingRequestMock } = vi.hoisted(() => ({
   readAllowFromStoreMock: vi.fn(async () => [] as string[]),
-  upsertPairingRequestMock: vi.fn(async () => ({ code: "CODE", created: true })),
+  upsertPairingRequestMock: vi.fn(async () => ({
+    code: "CODE",
+    created: true,
+    shouldRemind: true,
+  })),
 }));
 
 let handleLineWebhookEvents: typeof import("./bot-handlers.js").handleLineWebhookEvents;

@@ -306,9 +306,16 @@ describe("createTelegramBot", () => {
       });
       readChannelAllowFromStore.mockResolvedValue([]);
       upsertChannelPairingRequest.mockClear();
-      upsertChannelPairingRequest.mockResolvedValue({ code: "PAIRCODE", created: true });
+      upsertChannelPairingRequest.mockResolvedValue({
+        code: "PAIRCODE",
+        created: true,
+        shouldRemind: true,
+      });
       for (const result of testCase.upsertResults) {
-        upsertChannelPairingRequest.mockResolvedValueOnce(result);
+        upsertChannelPairingRequest.mockResolvedValueOnce({
+          ...result,
+          shouldRemind: result.created,
+        });
       }
 
       createTelegramBot({ token: "tok" });
@@ -344,7 +351,11 @@ describe("createTelegramBot", () => {
       channels: { telegram: { dmPolicy: "pairing" } },
     });
     readChannelAllowFromStore.mockResolvedValue([]);
-    upsertChannelPairingRequest.mockResolvedValue({ code: "PAIRME12", created: true });
+    upsertChannelPairingRequest.mockResolvedValue({
+      code: "PAIRME12",
+      created: true,
+      shouldRemind: true,
+    });
     sendMessageSpy.mockClear();
     replySpy.mockClear();
 
@@ -427,7 +438,11 @@ describe("createTelegramBot", () => {
       channels: { telegram: { dmPolicy: "pairing" } },
     });
     readChannelAllowFromStore.mockResolvedValue([]);
-    upsertChannelPairingRequest.mockResolvedValue({ code: "PAIRME12", created: true });
+    upsertChannelPairingRequest.mockResolvedValue({
+      code: "PAIRME12",
+      created: true,
+      shouldRemind: true,
+    });
     sendMessageSpy.mockClear();
     replySpy.mockClear();
 

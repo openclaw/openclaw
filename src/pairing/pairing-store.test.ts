@@ -16,6 +16,7 @@ import {
   readChannelAllowFromStoreSync,
   removeChannelAllowFromStoreEntry,
   upsertChannelPairingRequest,
+  type PairingRequest,
 } from "./pairing-store.js";
 
 let fixtureRoot = "";
@@ -393,6 +394,124 @@ describe("pairing store", () => {
 
       const scoped = await readChannelAllowFromStore("telegram", process.env, DEFAULT_ACCOUNT_ID);
       expect(scoped).toEqual(["1002", "1001"]);
+    });
+  });
+
+  describe("reminder logic", () => {
+    it("increments reminder count on repeated messages within 5 minutes", async () => {
+      await withTempStateDir(async () => {
+        const first = await upsertChannelPairingRequest({
+          channel: "telegram",
+          id: "user1",
+          accountId: DEFAULT_ACCOUNT_ID,
+        });
+        expect(first.created).toBe(true);
+        expect(first.shouldRemind).toBe(true);
+
+        const second = await upsertChannelPairingRequest({
+          channel: "telegram",
+          id: "user1",
+          accountId: DEFAULT_ACCOUNT_ID,
+        });
+        expect(second.created).toBe(false);
+        expect(second.shouldRemind).toBe(true);
+
+        const third = await upsertChannelPairingRequest({
+          channel: "telegram",
+          id: "user1",
+          accountId: DEFAULT_ACCOUNT_ID,
+        });
+        expect(third.created).toBe(false);
+        expect(third.shouldRemind).toBe(true);
+      });
+    });
+
+    it("resets reminder count after 5-minute window", async () => {
+      await withTempStateDir(async (stateDir) => {
+        // Create initial request
+        const first = await upsertChannelPairingRequest({
+          channel: "telegram",
+          id: "user1",
+          accountId: DEFAULT_ACCOUNT_ID,
+        });
+        expect(first.shouldRemind).toBe(true);
+
+        // Manually set lastReminderAt to be > 5 minutes ago
+        const filePath = resolvePairingFilePath(stateDir, "telegram");
+        const raw = await fs.readFile(filePath, "utf8");
+        const parsed = JSON.parse(raw) as { requests: PairingRequest[] };
+        const oldTime = new Date(Date.now() - 6 * 60 * 1000).toISOString();
+        parsed.requests[0].lastReminderAt = oldTime;
+        parsed.requests[0].reminderCount = 5;
+        await fs.writeFile(filePath, `${JSON.stringify(parsed, null, 2)}\n`, "utf8");
+
+        // After window expires, count should reset and shouldRemind should be true
+        const after = await upsertChannelPairingRequest({
+          channel: "telegram",
+          id: "user1",
+          accountId: DEFAULT_ACCOUNT_ID,
+        });
+        expect(after.shouldRemind).toBe(true);
+      });
+    });
+
+    it("stops reminding after 5 reminders within the window", async () => {
+      await withTempStateDir(async () => {
+        // Create request
+        await upsertChannelPairingRequest({
+          channel: "telegram",
+          id: "user1",
+          accountId: DEFAULT_ACCOUNT_ID,
+        });
+
+        // Call 4 more times (total 5 reminders)
+        for (let i = 0; i < 4; i++) {
+          const result = await upsertChannelPairingRequest({
+            channel: "telegram",
+            id: "user1",
+            accountId: DEFAULT_ACCOUNT_ID,
+          });
+          expect(result.shouldRemind).toBe(true);
+        }
+
+        // 6th call should not remind
+        const sixth = await upsertChannelPairingRequest({
+          channel: "telegram",
+          id: "user1",
+          accountId: DEFAULT_ACCOUNT_ID,
+        });
+        expect(sixth.shouldRemind).toBe(false);
+      });
+    });
+
+    it("handles backwards compatibility with requests without reminder fields", async () => {
+      await withTempStateDir(async (stateDir) => {
+        // Create a request without reminder fields (simulating old data)
+        const filePath = resolvePairingFilePath(stateDir, "telegram");
+        await fs.mkdir(path.dirname(filePath), { recursive: true });
+        const oldRequest = {
+          id: "user1",
+          code: "OLDCODE",
+          createdAt: new Date().toISOString(),
+          lastSeenAt: new Date().toISOString(),
+          meta: { accountId: "default" }, // Required for matching
+          // No reminderCount or lastReminderAt
+        };
+        await fs.writeFile(
+          filePath,
+          `${JSON.stringify({ version: 1, requests: [oldRequest] }, null, 2)}\n`,
+          "utf8",
+        );
+
+        // Should still work and shouldRemind should be true (count starts at 0, < 5)
+        const result = await upsertChannelPairingRequest({
+          channel: "telegram",
+          id: "user1",
+          accountId: DEFAULT_ACCOUNT_ID,
+        });
+        expect(result.shouldRemind).toBe(true);
+        expect(result.code).toBe("OLDCODE");
+      });
     });
   });
 });

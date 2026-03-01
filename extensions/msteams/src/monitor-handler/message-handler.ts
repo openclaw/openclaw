@@ -212,7 +212,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
           id: senderId,
           meta: { name: senderName },
         });
-        if (request) {
+        if (request && (request.created || request.shouldRemind)) {
           log.info("msteams pairing request created", {
             sender: senderId,
             label: senderName,

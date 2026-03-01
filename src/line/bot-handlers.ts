@@ -71,12 +71,12 @@ async function sendLinePairingReply(params: {
   context: LineHandlerContext;
 }): Promise<void> {
   const { senderId, replyToken, context } = params;
-  const { code, created } = await upsertChannelPairingRequest({
+  const { code, created, shouldRemind } = await upsertChannelPairingRequest({
     channel: "line",
     id: senderId,
     accountId: context.account.accountId,
   });
-  if (!created) {
+  if (!created && !shouldRemind) {
     return;
   }
   logVerbose(`line pairing request sender=${senderId}`);

@@ -14,6 +14,8 @@ const PAIRING_CODE_LENGTH = 8;
 const PAIRING_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const PAIRING_PENDING_TTL_MS = 60 * 60 * 1000;
 const PAIRING_PENDING_MAX = 3;
+const REMINDER_WINDOW_MS = 5 * 60 * 1000; // 5 minutes
+const REMINDER_MAX_COUNT = 5;
 const PAIRING_STORE_LOCK_OPTIONS = {
   retries: {
     retries: 10,
@@ -33,6 +35,8 @@ export type PairingRequest = {
   createdAt: string;
   lastSeenAt: string;
   meta?: Record<string, string>;
+  reminderCount?: number;
+  lastReminderAt?: string;
 };
 
 type PairingStore = {
@@ -553,7 +557,7 @@ export async function upsertChannelPairingRequest(params: {
   env?: NodeJS.ProcessEnv;
   /** Extension channels can pass their adapter directly to bypass registry lookup. */
   pairingAdapter?: ChannelPairingAdapter;
-}): Promise<{ code: string; created: boolean }> {
+}): Promise<{ code: string; created: boolean; shouldRemind: boolean }> {
   const env = params.env ?? process.env;
   const filePath = resolvePairingPath(params.channel, env);
   return await withFileLock(
@@ -600,12 +604,35 @@ export async function upsertChannelPairingRequest(params: {
         const existingCode =
           existing && typeof existing.code === "string" ? existing.code.trim() : "";
         const code = existingCode || generateUniqueCode(existingCodes);
+
+        // Check if we should remind (within 5 minutes, max 5 times)
+        const currentReminderCount = existing?.reminderCount ?? 0;
+        const lastReminderAt = existing?.lastReminderAt;
+        const lastReminderMs = lastReminderAt ? (parseTimestamp(lastReminderAt) ?? 0) : 0;
+        const timeSinceLastReminder = nowMs - lastReminderMs;
+
+        let shouldRemind = false;
+        let newReminderCount = currentReminderCount;
+
+        // Reset count if outside the window
+        if (timeSinceLastReminder > REMINDER_WINDOW_MS) {
+          newReminderCount = 0;
+        }
+
+        // Allow reminder if within limit
+        if (newReminderCount < REMINDER_MAX_COUNT) {
+          shouldRemind = true;
+          newReminderCount++;
+        }
+
         const next: PairingRequest = {
           id,
           code,
           createdAt: existing?.createdAt ?? now,
           lastSeenAt: now,
           meta: meta ?? existing?.meta,
+          reminderCount: newReminderCount,
+          lastReminderAt: shouldRemind ? now : existing?.lastReminderAt,
         };
         reqs[existingIdx] = next;
         const { requests: capped } = pruneExcessRequests(reqs, PAIRING_PENDING_MAX);
@@ -613,7 +640,7 @@ export async function upsertChannelPairingRequest(params: {
           version: 1,
           requests: capped,
         } satisfies PairingStore);
-        return { code, created: false };
+        return { code, created: false, shouldRemind };
       }
 
       const { requests: capped, removed: cappedRemoved } = pruneExcessRequests(
@@ -628,7 +655,7 @@ export async function upsertChannelPairingRequest(params: {
             requests: reqs,
           } satisfies PairingStore);
         }
-        return { code: "", created: false };
+        return { code: "", created: false, shouldRemind: false };
       }
       const code = generateUniqueCode(existingCodes);
       const next: PairingRequest = {
@@ -636,13 +663,15 @@ export async function upsertChannelPairingRequest(params: {
         code,
         createdAt: now,
         lastSeenAt: now,
+        reminderCount: 1,
+        lastReminderAt: now,
         ...(meta ? { meta } : {}),
       };
       await writeJsonFile(filePath, {
         version: 1,
         requests: [...reqs, next],
       } satisfies PairingStore);
-      return { code, created: true };
+      return { code, created: true, shouldRemind: true };
     },
   );
 }

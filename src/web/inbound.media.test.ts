@@ -5,7 +5,9 @@ import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const readAllowFromStoreMock = vi.fn().mockResolvedValue([]);
-const upsertPairingRequestMock = vi.fn().mockResolvedValue({ code: "PAIRCODE", created: true });
+const upsertPairingRequestMock = vi
+  .fn()
+  .mockResolvedValue({ code: "PAIRCODE", created: true, shouldRemind: true });
 const saveMediaBufferSpy = vi.fn();
 
 vi.mock("../config/config.js", async (importOriginal) => {

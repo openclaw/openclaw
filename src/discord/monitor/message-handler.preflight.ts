@@ -205,7 +205,7 @@ export async function preflightDiscordMessage(
       if (!permitted) {
         commandAuthorized = false;
         if (dmPolicy === "pairing") {
-          const { code, created } = await upsertChannelPairingRequest({
+          const { code, created, shouldRemind } = await upsertChannelPairingRequest({
             channel: "discord",
             id: author.id,
             accountId: resolvedAccountId,
@@ -214,7 +214,7 @@ export async function preflightDiscordMessage(
               name: author.username ?? undefined,
             },
           });
-          if (created) {
+          if (created || shouldRemind) {
             logVerbose(
               `discord pairing request sender=${author.id} tag=${formatDiscordUserTag(author)} (${allowMatchMeta})`,
             );

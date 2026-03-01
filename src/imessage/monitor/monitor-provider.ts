@@ -263,7 +263,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       if (!sender) {
         return;
       }
-      const { code, created } = await upsertChannelPairingRequest({
+      const { code, created, shouldRemind } = await upsertChannelPairingRequest({
         channel: "imessage",
         id: decision.senderId,
         accountId: accountInfo.accountId,
@@ -272,7 +272,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
           chatId: chatId ? String(chatId) : undefined,
         },
       });
-      if (created) {
+      if (created || shouldRemind) {
         logVerbose(`imessage pairing request sender=${decision.senderId}`);
         try {
           await sendMessageIMessage(

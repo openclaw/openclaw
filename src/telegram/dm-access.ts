@@ -70,7 +70,7 @@ export async function enforceTelegramDmAccess(params: {
   if (dmPolicy === "pairing") {
     try {
       const telegramUserId = sender.userId ?? sender.candidateId;
-      const { code, created } = await upsertChannelPairingRequest({
+      const { code, created, shouldRemind } = await upsertChannelPairingRequest({
         channel: "telegram",
         id: telegramUserId,
         accountId,
@@ -80,7 +80,7 @@ export async function enforceTelegramDmAccess(params: {
           lastName: sender.lastName,
         },
       });
-      if (created) {
+      if (created || shouldRemind) {
         logger.info(
           {
             chatId: String(chatId),
@@ -90,6 +90,7 @@ export async function enforceTelegramDmAccess(params: {
             lastName: sender.lastName,
             matchKey: allowMatch.matchKey ?? "none",
             matchSource: allowMatch.matchSource ?? "none",
+            created,
           },
           "telegram pairing request",
         );

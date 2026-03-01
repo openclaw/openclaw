@@ -22,7 +22,11 @@ describe("msteams monitor handler authz", () => {
         },
         pairing: {
           readAllowFromStore,
-          upsertPairingRequest: vi.fn(async () => null),
+          upsertPairingRequest: vi.fn(async () => ({
+            code: "CODE",
+            created: true,
+            shouldRemind: true,
+          })),
         },
         text: {
           hasControlCommand: () => false,

@@ -171,13 +171,13 @@ export async function checkInboundAccessControl(params: {
       if (suppressPairingReply) {
         logVerbose(`Skipping pairing reply for historical DM from ${candidate}.`);
       } else {
-        const { code, created } = await upsertChannelPairingRequest({
+        const { code, created, shouldRemind } = await upsertChannelPairingRequest({
           channel: "whatsapp",
           id: candidate,
           accountId: account.accountId,
           meta: { name: (params.pushName ?? "").trim() || undefined },
         });
-        if (created) {
+        if (created || shouldRemind) {
           logVerbose(
             `whatsapp pairing request sender=${candidate} name=${params.pushName ?? "unknown"}`,
           );

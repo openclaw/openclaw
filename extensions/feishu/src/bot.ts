@@ -889,11 +889,11 @@ export async function handleFeishuMessage(params: {
 
     if (!isGroup && dmPolicy !== "open" && !dmAllowed) {
       if (dmPolicy === "pairing") {
-        const { code, created } = await pairing.upsertPairingRequest({
+        const { code, created, shouldRemind } = await pairing.upsertPairingRequest({
           id: ctx.senderOpenId,
           meta: { name: ctx.senderName },
         });
-        if (created) {
+        if (created || shouldRemind) {
           log(`feishu[${account.accountId}]: pairing request sender=${ctx.senderOpenId}`);
           try {
             await sendMessageFeishu({

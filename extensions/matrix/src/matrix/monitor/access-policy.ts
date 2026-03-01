@@ -75,6 +75,7 @@ export async function enforceMatrixDirectMessageAccess(params: {
   }) => Promise<{
     code: string;
     created: boolean;
+    shouldRemind: boolean;
   }>;
   sendPairingReply: (text: string) => Promise<void>;
   logVerboseMessage: (message: string) => void;

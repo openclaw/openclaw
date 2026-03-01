@@ -113,6 +113,7 @@ vi.mock("../pairing/pairing-store.js", () => ({
   upsertChannelPairingRequest: vi.fn(async () => ({
     code: "PAIRCODE",
     created: true,
+    shouldRemind: true,
   })),
 }));
 

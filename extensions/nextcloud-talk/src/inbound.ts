@@ -174,11 +174,11 @@ export async function handleNextcloudTalkInbound(params: {
   } else {
     if (access.decision !== "allow") {
       if (access.decision === "pairing") {
-        const { code, created } = await pairing.upsertPairingRequest({
+        const { code, created, shouldRemind } = await pairing.upsertPairingRequest({
           id: senderId,
           meta: { name: senderName || undefined },
         });
-        if (created) {
+        if (created || shouldRemind) {
           try {
             await sendMessageNextcloudTalk(
               roomToken,

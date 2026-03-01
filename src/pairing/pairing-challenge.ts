@@ -10,7 +10,7 @@ export type PairingChallengeParams = {
   upsertPairingRequest: (params: {
     id: string;
     meta?: PairingMeta;
-  }) => Promise<{ code: string; created: boolean }>;
+  }) => Promise<{ code: string; created: boolean; shouldRemind: boolean }>;
   sendPairingReply: (text: string) => Promise<void>;
   buildReplyText?: (params: { code: string; senderIdLine: string }) => string;
   onCreated?: (params: { code: string }) => void;
@@ -24,11 +24,11 @@ export type PairingChallengeParams = {
 export async function issuePairingChallenge(
   params: PairingChallengeParams,
 ): Promise<{ created: boolean; code?: string }> {
-  const { code, created } = await params.upsertPairingRequest({
+  const { code, created, shouldRemind } = await params.upsertPairingRequest({
     id: params.senderId,
     meta: params.meta,
   });
-  if (!created) {
+  if (!created && !shouldRemind) {
     return { created: false };
   }
   params.onCreated?.({ code });

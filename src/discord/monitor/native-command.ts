@@ -1382,7 +1382,7 @@ async function dispatchDiscordCommandInteraction(params: {
       if (!permitted) {
         commandAuthorized = false;
         if (dmPolicy === "pairing") {
-          const { code, created } = await upsertChannelPairingRequest({
+          const { code, created, shouldRemind } = await upsertChannelPairingRequest({
             channel: "discord",
             id: user.id,
             accountId,
@@ -1391,7 +1391,7 @@ async function dispatchDiscordCommandInteraction(params: {
               name: sender.name,
             },
           });
-          if (created) {
+          if (created || shouldRemind) {
             await respond(
               buildPairingReply({
                 channel: "discord",

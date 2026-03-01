@@ -209,11 +209,11 @@ export async function handleIrcInbound(params: {
       }).allowed;
       if (!dmAllowed) {
         if (dmPolicy === "pairing") {
-          const { code, created } = await pairing.upsertPairingRequest({
+          const { code, created, shouldRemind } = await pairing.upsertPairingRequest({
             id: senderDisplay.toLowerCase(),
             meta: { name: message.senderNick || undefined },
           });
-          if (created) {
+          if (created || shouldRemind) {
             try {
               const reply = core.channel.pairing.buildPairingReply({
                 channel: CHANNEL_ID,

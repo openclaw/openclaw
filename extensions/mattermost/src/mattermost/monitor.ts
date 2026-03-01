@@ -431,12 +431,12 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           return;
         }
         if (accessDecision.decision === "pairing") {
-          const { code, created } = await pairing.upsertPairingRequest({
+          const { code, created, shouldRemind } = await pairing.upsertPairingRequest({
             id: senderId,
             meta: { name: senderName },
           });
           logVerboseMessage(`mattermost: pairing request sender=${senderId} created=${created}`);
-          if (created) {
+          if (created || shouldRemind) {
             try {
               await sendMessageMattermost(
                 `user:${senderId}`,
