@@ -85,6 +85,50 @@ final class ControlChannel {
     private var recoveryTask: Task<Void, Never>?
     private var lastRecoveryAt: Date?
 
+    // FIX: Throttle rapid non-connected state transitions (macOS 26 icon storm).
+    // When the gateway connection bounces between connecting ↔ degraded rapidly,
+    // each state change triggers SwiftUI observation updates that can cause
+    // MenuBarExtra to recreate its NSStatusItem. By debouncing intermediate states,
+    // we prevent the UI from thrashing during connection instability.
+    private var pendingStateTask: Task<Void, Never>?
+    private var lastStateChangeAt: Date = .distantPast
+
+    /// Applies a state change with optional throttling for non-terminal transitions.
+    /// Transitions to/from `.connected` and `.disconnected` are applied immediately
+    /// so the user sees success/failure without delay. Rapid `.connecting` ↔ `.degraded`
+    /// oscillations are debounced with a 500ms window to prevent UI thrashing.
+    private func setStateThrottled(_ newState: ConnectionState) {
+        // Always apply terminal states immediately
+        if newState == .connected || newState == .disconnected
+            || self.state == .connected || self.state == .disconnected
+        {
+            self.pendingStateTask?.cancel()
+            self.pendingStateTask = nil
+            self.state = newState
+            self.lastStateChangeAt = Date()
+            return
+        }
+
+        // Throttle rapid non-terminal state changes (connecting ↔ degraded)
+        let now = Date()
+        let elapsed = now.timeIntervalSince(self.lastStateChangeAt)
+        if elapsed < 0.5 {
+            self.pendingStateTask?.cancel()
+            self.pendingStateTask = Task { [weak self] in
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                guard let self, !Task.isCancelled else { return }
+                self.state = newState
+                self.lastStateChangeAt = Date()
+            }
+            return
+        }
+
+        self.pendingStateTask?.cancel()
+        self.pendingStateTask = nil
+        self.state = newState
+        self.lastStateChangeAt = now
+    }
+
     private init() {
         self.startEventStream()
     }
@@ -105,11 +149,11 @@ final class ControlChannel {
                 self.logger.info(
                     "control channel configure mode=remote " +
                         "target=\(target, privacy: .public) identitySet=\(idSet, privacy: .public)")
-                self.state = .connecting
+                self.setStateThrottled(.connecting)
                 _ = try await GatewayEndpointStore.shared.ensureRemoteControlTunnel()
                 await self.refreshEndpoint(reason: "configure")
             } catch {
-                self.state = .degraded(error.localizedDescription)
+                self.setStateThrottled(.degraded(error.localizedDescription))
                 throw error
             }
         }
@@ -117,20 +161,20 @@ final class ControlChannel {
 
     func refreshEndpoint(reason: String) async {
         self.logger.info("control channel refresh endpoint reason=\(reason, privacy: .public)")
-        self.state = .connecting
+        self.setStateThrottled(.connecting)
         do {
             try await self.establishGatewayConnection()
-            self.state = .connected
+            self.setStateThrottled(.connected)
             PresenceReporter.shared.sendImmediate(reason: "connect")
         } catch {
             let message = self.friendlyGatewayMessage(error)
-            self.state = .degraded(message)
+            self.setStateThrottled(.degraded(message))
         }
     }
 
     func disconnect() async {
         await GatewayConnection.shared.shutdown()
-        self.state = .disconnected
+        self.setStateThrottled(.disconnected)
         self.lastPingMs = nil
         self.authSourceLabel = nil
     }
@@ -146,11 +190,11 @@ final class ControlChannel {
             let payload = try await self.request(method: "health", params: params, timeoutMs: timeoutMs)
             let ms = Date().timeIntervalSince(start) * 1000
             self.lastPingMs = ms
-            self.state = .connected
+            self.setStateThrottled(.connected)
             return payload
         } catch {
             let message = self.friendlyGatewayMessage(error)
-            self.state = .degraded(message)
+            self.setStateThrottled(.degraded(message))
             throw ControlChannelError.badResponse(message)
         }
     }
@@ -173,11 +217,11 @@ final class ControlChannel {
                 method: method,
                 params: rawParams,
                 timeoutMs: timeoutMs)
-            self.state = .connected
+            self.setStateThrottled(.connected)
             return data
         } catch {
             let message = self.friendlyGatewayMessage(error)
-            self.state = .degraded(message)
+            self.setStateThrottled(.degraded(message))
             throw ControlChannelError.badResponse(message)
         }
     }
@@ -366,9 +410,9 @@ final class ControlChannel {
                 NotificationCenter.default.post(name: .controlHeartbeat, object: data)
             }
         case let .event(evt) where evt.event == "shutdown":
-            self.state = .degraded("gateway shutdown")
+            self.setStateThrottled(.degraded("gateway shutdown"))
         case .snapshot:
-            self.state = .connected
+            self.setStateThrottled(.connected)
         default:
             break
         }

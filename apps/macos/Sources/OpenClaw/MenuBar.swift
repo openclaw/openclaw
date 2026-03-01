@@ -53,6 +53,21 @@ struct OpenClawApp: App {
         }
         .menuBarExtraStyle(.menu)
         .menuBarExtraAccess(isPresented: self.$isMenuPresented) { item in
+            // FIX: Guard against duplicate NSStatusItem creation (macOS 26 icon storm).
+            // During rapid gateway connection state changes, SwiftUI may re-evaluate
+            // the MenuBarExtra body and invoke this callback multiple times. Without
+            // this guard, each invocation can create a new menu bar icon, resulting in
+            // hundreds of duplicate icons flooding the menu bar.
+            //
+            // Three cases:
+            // 1. Same item we already have → skip (no-op)
+            // 2. New item while we have an existing one → remove old, adopt new
+            // 3. First item → adopt as normal
+            if let existing = self.statusItem, existing === item { return }
+            if let existing = self.statusItem, existing !== item {
+                Self.logger.warning("Duplicate NSStatusItem detected — removing previous instance")
+                NSStatusBar.system.removeStatusItem(existing)
+            }
             self.statusItem = item
             MenuSessionsInjector.shared.install(into: item)
             self.applyStatusItemAppearance(paused: self.state.isPaused, sleeping: self.isGatewaySleeping)
