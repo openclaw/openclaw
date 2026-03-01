@@ -668,6 +668,7 @@ function mergeCronDelivery(
     to: existing?.to,
     accountId: existing?.accountId,
     bestEffort: existing?.bestEffort,
+    failureDestination: existing?.failureDestination,
   };
 
   if (typeof patch.mode === "string") {
@@ -684,6 +685,20 @@ function mergeCronDelivery(
   }
   if (typeof patch.bestEffort === "boolean") {
     next.bestEffort = patch.bestEffort;
+  }
+  if ("failureDestination" in patch) {
+    if (patch.failureDestination === undefined) {
+      next.failureDestination = undefined;
+    } else {
+      const existingFd = next.failureDestination;
+      const patchFd = patch.failureDestination;
+      next.failureDestination = {
+        channel: patchFd?.channel ?? existingFd?.channel,
+        to: patchFd?.to ?? existingFd?.to,
+        accountId: patchFd?.accountId ?? existingFd?.accountId,
+        mode: patchFd?.mode ?? existingFd?.mode,
+      };
+    }
   }
 
   return next;
@@ -718,6 +733,14 @@ function mergeCronFailureAlert(
         ? patch.cooldownMs
         : -1;
     next.cooldownMs = cooldownMs >= 0 ? Math.floor(cooldownMs) : undefined;
+  }
+  if ("mode" in patch) {
+    const mode = typeof patch.mode === "string" ? patch.mode.trim() : "";
+    next.mode = mode === "announce" || mode === "webhook" ? mode : undefined;
+  }
+  if ("accountId" in patch) {
+    const accountId = typeof patch.accountId === "string" ? patch.accountId.trim() : "";
+    next.accountId = accountId ? accountId : undefined;
   }
 
   return next;

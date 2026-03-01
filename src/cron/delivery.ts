@@ -174,7 +174,7 @@ function isSameDeliveryTarget(
   delivery: CronDelivery,
   failurePlan: CronFailureDeliveryPlan,
 ): boolean {
-  const primaryMode = delivery.mode ?? "none";
+  const primaryMode = delivery.mode ?? "announce";
   if (primaryMode === "none") {
     return false;
   }
