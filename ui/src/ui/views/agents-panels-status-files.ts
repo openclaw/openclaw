@@ -461,6 +461,8 @@ export function renderAgentFiles(params: {
                           <label class="field" style="margin-top: 12px;">
                             <span>Content</span>
                             <textarea
+                              class="agent-file-content-textarea"
+                              rows="18"
                               .value=${draft}
                               @input=${(e: Event) =>
                                 params.onFileDraftChange(

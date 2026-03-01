@@ -2414,6 +2414,7 @@
   border-radius: var(--radius-lg);
   padding: 16px;
   background: var(--card);
+  align-self: start;
 }
 
 .agent-file-header {
@@ -2437,6 +2438,11 @@
 .agent-file-actions {
   display: flex;
   gap: 8px;
+}
+
+.agent-file-content-textarea {
+  width: 100%;
+  min-height: 300px;
 }
 
 .agent-tools-meta {
