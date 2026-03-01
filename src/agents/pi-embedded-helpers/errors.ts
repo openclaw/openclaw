@@ -237,6 +237,174 @@ function stripFinalTagsFromText(text: string): string {
   return text.replace(FINAL_TAG_RE, "");
 }
 
+const SYSTEM_MESSAGE_BLOCK_RE =
+  /(?:^|\n)[ \t]*\[System Message\][^\n\S]*[\s\S]*?(?=(?:\n{2,}|\n?\s*$))/gi;
+
+function stripSystemMessageBlocks(text: string): string {
+  if (!text) {
+    return text;
+  }
+  return text.replace(SYSTEM_MESSAGE_BLOCK_RE, (match, offset) => {
+    // Preserve a single separating newline when stripping mid-string blocks so paragraphs
+    // around the system marker don't collapse together.
+    if (offset > 0 && /\n$/.test(match)) {
+      return "\n";
+    }
+    return "";
+  });
+}
+
+const RAW_JSON_PREFIX_RE = /^[\s\r\n]*[{[]/;
+const RAW_JSON_CODE_FENCE_RE = /^\s*```/;
+const SUSPICIOUS_JSON_KEYS = new Set([
+  "analysis",
+  "backend",
+  "channel",
+  "context",
+  "delta",
+  "internal",
+  "logs",
+  "messages",
+  "metadata",
+  "model",
+  "prompt",
+  "provider",
+  "route",
+  "session",
+  "system",
+  "tool",
+  "tool_calls",
+  "tools",
+]);
+
+function jsonMaxDepth(value: unknown, depth = 0): number {
+  if (value === null || typeof value !== "object") {
+    return depth;
+  }
+  const nextDepth = depth + 1;
+  if (Array.isArray(value)) {
+    if (value.length === 0) {
+      return nextDepth;
+    }
+    return value.reduce((max, entry) => Math.max(max, jsonMaxDepth(entry, nextDepth)), nextDepth);
+  }
+  const entries = Object.values(value as Record<string, unknown>);
+  if (entries.length === 0) {
+    return nextDepth;
+  }
+  return entries.reduce((max, entry) => Math.max(max, jsonMaxDepth(entry, nextDepth)), nextDepth);
+}
+
+function countSuspiciousJsonKeys(value: unknown): number {
+  if (!value || typeof value !== "object") {
+    return 0;
+  }
+  const queue: unknown[] = [value];
+  let count = 0;
+  while (queue.length > 0) {
+    // oxlint-disable-next-line typescript/no-non-null-assertion
+    const current = queue.shift()!;
+    if (!current || typeof current !== "object") {
+      continue;
+    }
+    if (Array.isArray(current)) {
+      queue.push(...current);
+      continue;
+    }
+    for (const [key, val] of Object.entries(current as Record<string, unknown>)) {
+      if (SUSPICIOUS_JSON_KEYS.has(key.toLowerCase())) {
+        count += 1;
+      }
+      if (val && typeof val === "object") {
+        queue.push(val);
+      }
+    }
+  }
+  return count;
+}
+
+function extractUserFacingTextFromJson(
+  value: unknown,
+  opts?: { allowLoose?: boolean },
+): string | undefined {
+  const allowLoose = opts?.allowLoose ?? false;
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return undefined;
+    }
+    if (!allowLoose) {
+      return trimmed;
+    }
+    return /\s/.test(trimmed) || trimmed.length > 24 ? trimmed : undefined;
+  }
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      const nested = extractUserFacingTextFromJson(entry, opts);
+      if (nested) {
+        return nested;
+      }
+    }
+    return undefined;
+  }
+  if (value && typeof value === "object") {
+    const obj = value as Record<string, unknown>;
+    // Prefer common text-bearing fields first.
+    const preferredKeys = ["message", "text", "content", "response", "error"];
+    for (const key of preferredKeys) {
+      if (key in obj) {
+        const nested = extractUserFacingTextFromJson(obj[key], opts);
+        if (nested) {
+          return nested;
+        }
+      }
+    }
+    if (allowLoose) {
+      for (const val of Object.values(obj)) {
+        const nested = extractUserFacingTextFromJson(val, opts);
+        if (nested) {
+          return nested;
+        }
+      }
+    }
+  }
+  return undefined;
+}
+
+function stripStandaloneJsonPayload(text: string): string {
+  if (!text) {
+    return text;
+  }
+  const trimmed = text.trim();
+  if (!RAW_JSON_PREFIX_RE.test(trimmed) || RAW_JSON_CODE_FENCE_RE.test(trimmed)) {
+    return text;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    return text;
+  }
+
+  const depth = jsonMaxDepth(parsed);
+  const suspiciousKeys = countSuspiciousJsonKeys(parsed);
+  const looksInternal =
+    trimmed.length > 800 ||
+    suspiciousKeys >= 2 ||
+    (suspiciousKeys >= 1 && (depth > 1 || trimmed.length > 200));
+  if (!looksInternal) {
+    return text;
+  }
+
+  const extracted =
+    extractUserFacingTextFromJson(parsed, { allowLoose: false }) ??
+    extractUserFacingTextFromJson(parsed, { allowLoose: true });
+  if (extracted) {
+    return extracted;
+  }
+  return "";
+}
+
 function collapseConsecutiveDuplicateBlocks(text: string): string {
   const trimmed = text.trim();
   if (!trimmed) {
@@ -554,8 +722,10 @@ export function sanitizeUserFacingText(text: string, opts?: { errorContext?: boo
     return text;
   }
   const errorContext = opts?.errorContext ?? false;
-  const stripped = stripFinalTagsFromText(text);
-  const trimmed = stripped.trim();
+  const withoutFinalTags = stripFinalTagsFromText(text);
+  const withoutSystemBlocks = stripSystemMessageBlocks(withoutFinalTags);
+  const withoutRawJson = stripStandaloneJsonPayload(withoutSystemBlocks);
+  const trimmed = withoutRawJson.trim();
   if (!trimmed) {
     return "";
   }
@@ -599,7 +769,7 @@ export function sanitizeUserFacingText(text: string, opts?: { errorContext?: boo
 
   // Strip leading blank lines (including whitespace-only lines) without clobbering indentation on
   // the first content line (e.g. markdown/code blocks).
-  const withoutLeadingEmptyLines = stripped.replace(/^(?:[ \t]*\r?\n)+/, "");
+  const withoutLeadingEmptyLines = withoutRawJson.replace(/^(?:[ \t]*\r?\n)+/, "");
   return collapseConsecutiveDuplicateBlocks(withoutLeadingEmptyLines);
 }
 
