@@ -236,11 +236,12 @@ function resolveMainSessionKey(
 ): string | null {
   const snapshot = hello?.snapshot as { sessionDefaults?: SessionDefaultsSnapshot } | undefined;
   const mainSessionKey = snapshot?.sessionDefaults?.mainSessionKey?.trim();
-  if (mainSessionKey) {
+  // Ignore Heartbeat as main session - it's a system session, not a user session
+  if (mainSessionKey && mainSessionKey !== "Heartbeat") {
     return mainSessionKey;
   }
   const mainKey = snapshot?.sessionDefaults?.mainKey?.trim();
-  if (mainKey) {
+  if (mainKey && mainKey !== "Heartbeat") {
     return mainKey;
   }
   if (sessions?.sessions?.some((row) => row.key === "main")) {
