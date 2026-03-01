@@ -471,6 +471,55 @@ Notes:
 - `click`/`type`/etc require a `ref` from `snapshot` (either numeric `12` or role ref `e12`).
   CSS selectors are intentionally not supported for actions.
 
+## Best practices (reliable workflow)
+
+Use this sequence to avoid most browser automation failures:
+
+1. Start with a fresh snapshot before acting:
+   - `openclaw browser snapshot --interactive`
+2. Use refs from that snapshot for actions (`click`, `type`, `hover`, `drag`, `select`).
+3. Re-snapshot after navigation, major UI changes, or frame switches.
+4. Add explicit waits for dynamic pages:
+   - `openclaw browser wait --load networkidle`
+   - `openclaw browser wait --url "**/target"`
+   - `openclaw browser wait "#selector"`
+5. Prefer role refs over CSS selectors for stability.
+
+### Arming calls (critical)
+
+Some actions require an arming call **before** the trigger step:
+
+- File upload:
+  - arm: `openclaw browser upload /tmp/openclaw/uploads/file.pdf`
+  - trigger: `openclaw browser click <ref>`
+- File download:
+  - arm: `openclaw browser download <ref> report.pdf`
+  - trigger: click/export action
+- Dialogs:
+  - arm: `openclaw browser dialog --accept` (or `--dismiss`)
+  - trigger: click button that opens `alert/confirm/prompt`
+
+If you skip arming, upload/download/dialog behavior may fail or race.
+
+### iframe workflow (no manual frame switching)
+
+Use frame-scoped snapshots and refs instead of manual context switching:
+
+1. `openclaw browser snapshot --frame "iframe#app" --interactive`
+2. Use returned refs (`e12`, `e33`, etc.) with normal actions.
+3. Re-run frame snapshot after iframe navigation/reload.
+
+### Quick troubleshooting
+
+- `tab not found` / stale ref:
+  - take a new snapshot and retry with fresh refs.
+- Download file not found:
+  - ensure you armed with `browser download` before triggering.
+- Dialog closed unexpectedly:
+  - ensure `browser dialog --accept|--dismiss` ran before the trigger click.
+- Action hits wrong element:
+  - use `openclaw browser highlight <ref>` to verify target resolution.
+
 ## Snapshots and refs
 
 OpenClaw supports two “snapshot” styles:
