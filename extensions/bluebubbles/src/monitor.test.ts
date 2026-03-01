@@ -16,6 +16,7 @@ import { setBlueBubblesRuntime } from "./runtime.js";
 // Mock dependencies
 vi.mock("./send.js", () => ({
   resolveChatGuidForTarget: vi.fn().mockResolvedValue("iMessage;-;+15551234567"),
+  resolveChatRecordForTarget: vi.fn().mockResolvedValue(null),
   sendMessageBlueBubbles: vi.fn().mockResolvedValue({ messageId: "msg-123" }),
 }));
 
@@ -1598,6 +1599,65 @@ describe("BlueBubbles webhook monitor", () => {
       const callArgs = getFirstDispatchCall();
       expect(callArgs.ctx.GroupSubject).toBe("Family");
       expect(callArgs.ctx.GroupMembers).toBe("Alice (+15551234567), Bob (+15557654321)");
+    });
+
+    it("enriches group members from chat metadata when webhook participants are missing", async () => {
+      const { resolveChatRecordForTarget } = await import("./send.js");
+      vi.mocked(resolveChatRecordForTarget).mockResolvedValueOnce({
+        guid: "iMessage;+;chat123456",
+        displayName: "Family",
+        participants: [
+          { address: "+15551234567", displayName: "Alice" },
+          { address: "+15557654321", displayName: "Bob" },
+          { address: "+15559876543", displayName: "Emily" },
+        ],
+      });
+
+      const account = createMockAccount({ groupPolicy: "open" });
+      const config: OpenClawConfig = {};
+      const core = createMockRuntime();
+      setBlueBubblesRuntime(core);
+
+      unregister = registerBlueBubblesWebhookTarget({
+        account,
+        config,
+        runtime: { log: vi.fn(), error: vi.fn() },
+        core,
+        path: "/bluebubbles-webhook",
+      });
+
+      const payload = {
+        type: "new-message",
+        data: {
+          text: "hello group",
+          handle: { address: "+15551234567" },
+          isGroup: true,
+          isFromMe: false,
+          guid: "msg-1",
+          chatGuid: "iMessage;+;chat123456",
+          date: Date.now(),
+        },
+      };
+
+      const req = createMockRequest("POST", "/bluebubbles-webhook", payload);
+      const res = createMockResponse();
+
+      await handleBlueBubblesWebhookRequest(req, res);
+      await flushAsync();
+
+      expect(resolveChatRecordForTarget).toHaveBeenCalledWith(
+        expect.objectContaining({
+          baseUrl: "http://localhost:1234",
+          password: "test-password",
+          target: { kind: "chat_guid", chatGuid: "iMessage;+;chat123456" },
+        }),
+      );
+      expect(mockDispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalled();
+      const callArgs = getFirstDispatchCall();
+      expect(callArgs.ctx.GroupSubject).toBe("Family");
+      expect(callArgs.ctx.GroupMembers).toBe(
+        "Alice (+15551234567), Bob (+15557654321), Emily (+15559876543)",
+      );
     });
   });
 

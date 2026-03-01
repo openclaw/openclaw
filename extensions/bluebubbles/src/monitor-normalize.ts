@@ -339,7 +339,7 @@ function normalizeParticipantEntry(entry: unknown): BlueBubblesParticipant | nul
   return { id: normalizedId, name };
 }
 
-function normalizeParticipantList(raw: unknown): BlueBubblesParticipant[] {
+export function normalizeParticipantList(raw: unknown): BlueBubblesParticipant[] {
   if (!Array.isArray(raw) || raw.length === 0) {
     return [];
   }

@@ -12,6 +12,7 @@ import {
 } from "openclaw/plugin-sdk";
 import {
   normalizeWebhookMessage,
+  normalizeParticipantList,
   normalizeWebhookReaction,
   type NormalizedWebhookMessage,
 } from "./monitor-normalize.js";
@@ -30,6 +31,7 @@ import {
 } from "./monitor-shared.js";
 import { fetchBlueBubblesServerInfo } from "./probe.js";
 import { getBlueBubblesRuntime } from "./runtime.js";
+import { resolveChatRecordForTarget } from "./send.js";
 
 /**
  * Entry type for debouncing inbound messages.
@@ -125,6 +127,97 @@ type BlueBubblesDebouncer = {
  * Each target gets its own debouncer keyed by a unique identifier.
  */
 const targetDebouncers = new Map<WebhookTarget, BlueBubblesDebouncer>();
+
+type ChatLookupTarget =
+  | { kind: "chat_guid"; chatGuid: string }
+  | { kind: "chat_id"; chatId: number }
+  | { kind: "chat_identifier"; chatIdentifier: string };
+
+function resolveParticipantLookupTarget(
+  message: NormalizedWebhookMessage,
+): ChatLookupTarget | null {
+  const chatGuid = message.chatGuid?.trim();
+  if (chatGuid) {
+    return { kind: "chat_guid", chatGuid };
+  }
+  if (typeof message.chatId === "number" && Number.isFinite(message.chatId)) {
+    return { kind: "chat_id", chatId: message.chatId };
+  }
+  const chatIdentifier = message.chatIdentifier?.trim();
+  if (chatIdentifier) {
+    return { kind: "chat_identifier", chatIdentifier };
+  }
+  return null;
+}
+
+function extractChatDisplayName(chat: Record<string, unknown> | null): string | undefined {
+  if (!chat) {
+    return undefined;
+  }
+  const candidate =
+    (typeof chat.displayName === "string" ? chat.displayName : undefined) ??
+    (typeof chat.name === "string" ? chat.name : undefined);
+  const trimmed = candidate?.trim();
+  return trimmed || undefined;
+}
+
+async function enrichWebhookMessageParticipants(
+  message: NormalizedWebhookMessage,
+  target: WebhookTarget,
+): Promise<NormalizedWebhookMessage> {
+  if (!message.isGroup) {
+    return message;
+  }
+  const existingParticipants = message.participants ?? [];
+  if (existingParticipants.length > 1) {
+    return message;
+  }
+  const lookupTarget = resolveParticipantLookupTarget(message);
+  if (!lookupTarget) {
+    return message;
+  }
+  const baseUrl = target.account.baseUrl?.trim() ?? target.account.config.serverUrl?.trim() ?? "";
+  const password = target.account.config.password?.trim() ?? "";
+  if (!baseUrl || !password) {
+    return message;
+  }
+  try {
+    const chat = await resolveChatRecordForTarget({
+      baseUrl,
+      password,
+      timeoutMs: 5000,
+      target: lookupTarget,
+    });
+    const participantsRaw =
+      chat && Array.isArray(chat["participants"]) ? chat["participants"] : null;
+    const enrichedParticipants = participantsRaw ? normalizeParticipantList(participantsRaw) : [];
+    const shouldReplaceParticipants = enrichedParticipants.length > existingParticipants.length;
+    const chatName = message.chatName ?? extractChatDisplayName(chat);
+
+    if (!shouldReplaceParticipants && chatName === message.chatName) {
+      return message;
+    }
+    if (shouldReplaceParticipants) {
+      logVerbose(
+        target.core,
+        target.runtime,
+        `participant enrichment applied chatGuid=${message.chatGuid ?? ""} before=${existingParticipants.length} after=${enrichedParticipants.length}`,
+      );
+    }
+    return {
+      ...message,
+      participants: shouldReplaceParticipants ? enrichedParticipants : existingParticipants,
+      chatName,
+    };
+  } catch (err) {
+    logVerbose(
+      target.core,
+      target.runtime,
+      `participant enrichment failed chatGuid=${message.chatGuid ?? ""} err=${String(err)}`,
+    );
+    return message;
+  }
+}
 
 function resolveBlueBubblesDebounceMs(
   config: OpenClawConfig,
@@ -452,11 +545,13 @@ export async function handleBlueBubblesWebhookRequest(
     // Route messages through debouncer to coalesce rapid-fire events
     // (e.g., text message + URL balloon arriving as separate webhooks)
     const debouncer = getOrCreateDebouncer(target);
-    debouncer.enqueue({ message, target }).catch((err) => {
-      target.runtime.error?.(
-        `[${target.account.accountId}] BlueBubbles webhook failed: ${String(err)}`,
-      );
-    });
+    enrichWebhookMessageParticipants(message, target)
+      .then((enrichedMessage) => debouncer.enqueue({ message: enrichedMessage, target }))
+      .catch((err) => {
+        target.runtime.error?.(
+          `[${target.account.accountId}] BlueBubbles webhook failed: ${String(err)}`,
+        );
+      });
   }
 
   res.statusCode = 200;

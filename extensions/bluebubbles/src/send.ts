@@ -107,7 +107,7 @@ function resolvePrivateApiDecision(params: {
   };
 }
 
-type BlueBubblesChatRecord = Record<string, unknown>;
+export type BlueBubblesChatRecord = Record<string, unknown>;
 
 function extractChatGuid(chat: BlueBubblesChatRecord): string | null {
   const candidates = [
@@ -207,16 +207,16 @@ async function queryChats(params: {
   return Array.isArray(data) ? (data as BlueBubblesChatRecord[]) : [];
 }
 
-export async function resolveChatGuidForTarget(params: {
+export async function resolveChatRecordForTarget(params: {
   baseUrl: string;
   password: string;
   timeoutMs?: number;
   target: BlueBubblesSendTarget;
-}): Promise<string | null> {
-  if (params.target.kind === "chat_guid") {
-    return params.target.chatGuid;
-  }
-
+}): Promise<BlueBubblesChatRecord | null> {
+  const targetChatGuid = params.target.kind === "chat_guid" ? params.target.chatGuid.trim() : null;
+  const targetChatGuidIdentifier = targetChatGuid
+    ? extractChatIdentifierFromChatGuid(targetChatGuid)
+    : null;
   const normalizedHandle =
     params.target.kind === "handle" ? normalizeBlueBubblesHandle(params.target.address) : "";
   const targetChatId = params.target.kind === "chat_id" ? params.target.chatId : null;
@@ -224,7 +224,7 @@ export async function resolveChatGuidForTarget(params: {
     params.target.kind === "chat_identifier" ? params.target.chatIdentifier : null;
 
   const limit = 500;
-  let participantMatch: string | null = null;
+  let participantMatch: BlueBubblesChatRecord | null = null;
   for (let offset = 0; offset < 5000; offset += limit) {
     const chats = await queryChats({
       baseUrl: params.baseUrl,
@@ -237,25 +237,45 @@ export async function resolveChatGuidForTarget(params: {
       break;
     }
     for (const chat of chats) {
+      const guid = extractChatGuid(chat);
+      if (targetChatGuid && guid === targetChatGuid) {
+        return chat;
+      }
+      if (targetChatGuidIdentifier) {
+        const guidIdentifier = guid ? extractChatIdentifierFromChatGuid(guid) : null;
+        if (guidIdentifier && guidIdentifier === targetChatGuidIdentifier) {
+          return chat;
+        }
+        const chatIdentifierField =
+          typeof chat.identifier === "string"
+            ? chat.identifier
+            : typeof chat.chatIdentifier === "string"
+              ? chat.chatIdentifier
+              : typeof chat.chat_identifier === "string"
+                ? chat.chat_identifier
+                : "";
+        if (chatIdentifierField && chatIdentifierField === targetChatGuidIdentifier) {
+          return chat;
+        }
+      }
       if (targetChatId != null) {
         const chatId = extractChatId(chat);
         if (chatId != null && chatId === targetChatId) {
-          return extractChatGuid(chat);
+          return chat;
         }
       }
       if (targetChatIdentifier) {
-        const guid = extractChatGuid(chat);
         if (guid) {
           // Back-compat: some callers might pass a full chat GUID.
           if (guid === targetChatIdentifier) {
-            return guid;
+            return chat;
           }
 
           // Primary match: BlueBubbles `chat_identifier:*` targets correspond to the
           // third component of the chat GUID: `service;(+|-) ;identifier`.
           const guidIdentifier = extractChatIdentifierFromChatGuid(guid);
           if (guidIdentifier && guidIdentifier === targetChatIdentifier) {
-            return guid;
+            return chat;
           }
         }
 
@@ -268,14 +288,13 @@ export async function resolveChatGuidForTarget(params: {
                 ? chat.chat_identifier
                 : "";
         if (identifier && identifier === targetChatIdentifier) {
-          return guid ?? extractChatGuid(chat);
+          return chat;
         }
       }
       if (normalizedHandle) {
-        const guid = extractChatGuid(chat);
         const directHandle = guid ? extractHandleFromChatGuid(guid) : null;
         if (directHandle && directHandle === normalizedHandle) {
-          return guid;
+          return chat;
         }
         if (!participantMatch && guid) {
           // Only consider DM chats (`;-;` separator) as participant matches.
@@ -287,7 +306,7 @@ export async function resolveChatGuidForTarget(params: {
               normalizeBlueBubblesHandle(entry),
             );
             if (participants.includes(normalizedHandle)) {
-              participantMatch = guid;
+              participantMatch = chat;
             }
           }
         }
@@ -295,6 +314,22 @@ export async function resolveChatGuidForTarget(params: {
     }
   }
   return participantMatch;
+}
+
+export async function resolveChatGuidForTarget(params: {
+  baseUrl: string;
+  password: string;
+  timeoutMs?: number;
+  target: BlueBubblesSendTarget;
+}): Promise<string | null> {
+  if (params.target.kind === "chat_guid") {
+    return params.target.chatGuid;
+  }
+  const chat = await resolveChatRecordForTarget(params);
+  if (!chat) {
+    return null;
+  }
+  return extractChatGuid(chat);
 }
 
 /**
