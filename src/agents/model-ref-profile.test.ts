@@ -46,4 +46,11 @@ describe("splitTrailingAuthProfile", () => {
       model: "provider/foo@bar/baz",
     });
   });
+
+  it("keeps @ inside auth profile ids (email-style oauth profiles)", () => {
+    expect(splitTrailingAuthProfile("flash@google-gemini-cli:test@gmail.com")).toEqual({
+      model: "flash",
+      profile: "google-gemini-cli:test@gmail.com",
+    });
+  });
 });

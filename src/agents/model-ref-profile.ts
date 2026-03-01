@@ -7,17 +7,13 @@ export function splitTrailingAuthProfile(raw: string): {
     return { model: "" };
   }
 
-  const profileDelimiter = trimmed.lastIndexOf("@");
-  const lastSlash = trimmed.lastIndexOf("/");
-  if (profileDelimiter <= 0 || profileDelimiter <= lastSlash) {
-    return { model: trimmed };
+  for (let profileDelimiter = trimmed.indexOf("@"); profileDelimiter > 0; ) {
+    const model = trimmed.slice(0, profileDelimiter).trim();
+    const profile = trimmed.slice(profileDelimiter + 1).trim();
+    if (model && profile && !profile.includes("/")) {
+      return { model, profile };
+    }
+    profileDelimiter = trimmed.indexOf("@", profileDelimiter + 1);
   }
-
-  const model = trimmed.slice(0, profileDelimiter).trim();
-  const profile = trimmed.slice(profileDelimiter + 1).trim();
-  if (!model || !profile) {
-    return { model: trimmed };
-  }
-
-  return { model, profile };
+  return { model: trimmed };
 }

@@ -36,6 +36,13 @@ describe("extractModelDirective", () => {
       expect(result.rawProfile).toBe("myprofile");
     });
 
+    it("supports auth profile overrides that include @ (email-based oauth ids)", () => {
+      const result = extractModelDirective("/model flash@google-gemini-cli:test@gmail.com");
+      expect(result.hasDirective).toBe(true);
+      expect(result.rawModel).toBe("flash");
+      expect(result.rawProfile).toBe("google-gemini-cli:test@gmail.com");
+    });
+
     it("keeps OpenRouter preset paths that include @ in the model name", () => {
       const result = extractModelDirective("/model openrouter/@preset/kimi-2-5");
       expect(result.hasDirective).toBe(true);
