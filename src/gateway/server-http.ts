@@ -62,6 +62,7 @@ import { handleOpenResponsesHttpRequest } from "./openresponses-http.js";
 import { GATEWAY_CLIENT_MODES, normalizeGatewayClientMode } from "./protocol/client-info.js";
 import { isProtectedPluginRoutePath } from "./security-path.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
+import { handleTasksHttpRequest } from "./tasks-http.js";
 import { handleToolsInvokeHttpRequest } from "./tools-invoke-http.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
@@ -527,6 +528,34 @@ export function createGatewayHttpServer(opts: {
       if (await handleSlackHttpRequest(req, res)) {
         return;
       }
+      // Local task dashboard API (Control UI tab).
+      {
+        const base = controlUiBasePath?.trim() ? controlUiBasePath.trim().replace(/\/+$/, "") : "";
+        const tasksPrefix = base ? `${base}/api/tasks` : "/api/tasks";
+        if (requestPath === tasksPrefix || requestPath.startsWith(`${tasksPrefix}/`)) {
+          const token = getBearerToken(req);
+          const authResult = await authorizeGatewayConnect({
+            auth: resolvedAuth,
+            connectAuth: token ? { token, password: token } : null,
+            req,
+            trustedProxies,
+            rateLimiter,
+          });
+          if (!authResult.ok) {
+            sendGatewayAuthFailure(res, authResult);
+            return;
+          }
+          if (
+            await handleTasksHttpRequest(req, res, {
+              cfg: configSnapshot,
+              basePath: controlUiBasePath,
+            })
+          ) {
+            return;
+          }
+        }
+      }
+
       if (handlePluginRequest) {
         // Protected plugin route prefixes are gateway-auth protected by default.
         // Non-protected plugin routes remain plugin-owned and must enforce
