@@ -106,6 +106,7 @@ export const FunctionCallItemSchema = z
 export const FunctionCallOutputItemSchema = z
   .object({
     type: z.literal("function_call_output"),
+    id: z.string().optional(),
     call_id: z.string(),
     output: z.string(),
   })
@@ -231,6 +232,15 @@ export const OutputItemSchema = z.discriminatedUnion("type", [
       call_id: z.string(),
       name: z.string(),
       arguments: z.string(),
+      status: z.enum(["in_progress", "completed"]).optional(),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("function_call_output"),
+      id: z.string().optional(),
+      call_id: z.string(),
+      output: z.string(),
       status: z.enum(["in_progress", "completed"]).optional(),
     })
     .strict(),

@@ -79,6 +79,8 @@ export type RunEmbeddedPiAgentParams = {
   toolResultFormat?: ToolResultFormat;
   /** If true, suppress tool error warning payloads for this run (including mutating tools). */
   suppressToolErrorWarnings?: boolean;
+  /** Optional max decoded bytes to include for base64 data in tool results. */
+  toolResultMaxDataBytes?: number;
   execOverrides?: Pick<ExecToolDefaults, "host" | "security" | "ask" | "node">;
   bashElevated?: ExecElevatedDefaults;
   timeoutMs: number;
