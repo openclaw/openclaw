@@ -776,7 +776,7 @@ function createSandboxEditOperations(params: SandboxToolParams) {
 }
 
 function createHostWriteOperations(root: string, options?: { workspaceOnly?: boolean }) {
-  const workspaceOnly = options?.workspaceOnly !== false;
+  const workspaceOnly = options?.workspaceOnly === true;
 
   if (!workspaceOnly) {
     // When workspaceOnly is false, allow writes anywhere on the host
@@ -815,7 +815,7 @@ function createHostWriteOperations(root: string, options?: { workspaceOnly?: boo
 }
 
 function createHostEditOperations(root: string, options?: { workspaceOnly?: boolean }) {
-  const workspaceOnly = options?.workspaceOnly !== false;
+  const workspaceOnly = options?.workspaceOnly === true;
 
   if (!workspaceOnly) {
     // When workspaceOnly is false, allow edits anywhere on the host
