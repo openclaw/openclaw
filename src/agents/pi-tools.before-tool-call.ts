@@ -1,3 +1,6 @@
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { parse as parseYaml } from "yaml";
 import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
 import type { SessionState } from "../logging/diagnostic-session-state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -13,6 +16,7 @@ export type HookContext = {
   sessionId?: string;
   runId?: string;
   loopDetection?: ToolLoopDetectionConfig;
+  workspaceDir?: string;
 };
 
 type HookOutcome = { blocked: true; reason: string } | { blocked: false; params: unknown };
@@ -23,6 +27,212 @@ const adjustedParamsByToolCallId = new Map<string, unknown>();
 const MAX_TRACKED_ADJUSTED_PARAMS = 1024;
 const LOOP_WARNING_BUCKET_SIZE = 10;
 const MAX_LOOP_WARNING_KEYS = 256;
+const actorWebPageUsage = new Map<string, number>();
+
+type ToolPermissionsFile = {
+  executive_orchestrator?: {
+    allowed_tools?: string[];
+    forbidden_tools?: string[];
+    write_scopes?: string[];
+    max_pages?: number;
+  };
+};
+
+type SubagentsRegistryFile = {
+  subagents?: Array<{
+    subagent_id?: string;
+    allowed_tools?: string[];
+    forbidden_tools?: string[];
+    write_scopes?: string[];
+    max_pages?: number;
+  }>;
+};
+
+type ActorPermissionPolicy = {
+  actor: string;
+  allowedTools: Set<string>;
+  forbiddenTools: Set<string>;
+  writeScopes: string[];
+  maxPages: number;
+};
+
+type PermissionContracts = {
+  executive?: ToolPermissionsFile["executive_orchestrator"];
+  subagents?: SubagentsRegistryFile["subagents"];
+};
+
+const permissionsCache = new Map<string, PermissionContracts>();
+
+function normalizePermissionToken(value: unknown): string {
+  if (typeof value === "string") {
+    return value.trim().toLowerCase();
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return `${value}`.trim().toLowerCase();
+  }
+  return "";
+}
+
+function parseYamlFile<T>(path: string): T | undefined {
+  if (!existsSync(path)) {
+    return undefined;
+  }
+  try {
+    const raw = readFileSync(path, "utf8");
+    return parseYaml(raw) as T;
+  } catch (err) {
+    log.warn(`tool permissions parse failed for ${path}: ${String(err)}`);
+    return undefined;
+  }
+}
+
+function loadPermissionContracts(workspaceDir?: string): PermissionContracts | undefined {
+  if (!workspaceDir) {
+    return undefined;
+  }
+  const cached = permissionsCache.get(workspaceDir);
+  if (cached) {
+    return cached;
+  }
+  const toolPermissionsPath = join(workspaceDir, "01_agent_os/core/tool_permissions.yaml");
+  const subagentsRegistryPath = join(workspaceDir, "01_agent_os/behavior/subagents_registry.yaml");
+  const toolPermissions = parseYamlFile<ToolPermissionsFile>(toolPermissionsPath);
+  const subagentsRegistry = parseYamlFile<SubagentsRegistryFile>(subagentsRegistryPath);
+  if (!toolPermissions && !subagentsRegistry) {
+    return undefined;
+  }
+  const loaded: PermissionContracts = {
+    executive: toolPermissions?.executive_orchestrator,
+    subagents: subagentsRegistry?.subagents,
+  };
+  permissionsCache.set(workspaceDir, loaded);
+  return loaded;
+}
+
+function resolveActorPolicy(ctx?: HookContext): ActorPermissionPolicy | undefined {
+  const contracts = loadPermissionContracts(ctx?.workspaceDir);
+  if (!contracts) {
+    return undefined;
+  }
+  const agentId = normalizePermissionToken(ctx?.agentId);
+  const isExecutive =
+    agentId === "main" || agentId === "executive_orchestrator" || agentId === "don_cordazzo";
+  if (isExecutive && contracts.executive) {
+    return {
+      actor: "executive_orchestrator",
+      allowedTools: new Set(
+        (contracts.executive.allowed_tools ?? []).map(normalizePermissionToken),
+      ),
+      forbiddenTools: new Set(
+        (contracts.executive.forbidden_tools ?? []).map(normalizePermissionToken),
+      ),
+      writeScopes: contracts.executive.write_scopes ?? [],
+      maxPages: Number(contracts.executive.max_pages ?? 0),
+    };
+  }
+  const subagent = (contracts.subagents ?? []).find(
+    (entry) => normalizePermissionToken(entry?.subagent_id) === agentId,
+  );
+  if (!subagent) {
+    return undefined;
+  }
+  return {
+    actor: agentId,
+    allowedTools: new Set((subagent.allowed_tools ?? []).map(normalizePermissionToken)),
+    forbiddenTools: new Set((subagent.forbidden_tools ?? []).map(normalizePermissionToken)),
+    writeScopes: subagent.write_scopes ?? [],
+    maxPages: Number(subagent.max_pages ?? 0),
+  };
+}
+
+function mapRuntimeToolToPermission(toolName: string): string {
+  switch (toolName) {
+    case "browser":
+      return "web_browsing";
+    case "message":
+      return "send_message";
+    case "read":
+      return "file_read";
+    case "write":
+    case "edit":
+    case "apply_patch":
+      return "file_write";
+    default:
+      return toolName;
+  }
+}
+
+function parseWritePath(toolName: string, params: unknown): string | undefined {
+  if (!isPlainObject(params)) {
+    return undefined;
+  }
+  const pathLike =
+    params.file_path ?? params.path ?? params.target_file ?? params.output_path ?? params.filename;
+  if (typeof pathLike === "string" && pathLike.trim().length > 0) {
+    return pathLike.trim();
+  }
+  if (toolName !== "apply_patch") {
+    return undefined;
+  }
+  const input = params.input;
+  if (typeof input !== "string") {
+    return undefined;
+  }
+  const match = input.match(/^\*\*\*\s+(?:Update|Add|Delete)\s+File:\s+(.+)$/m);
+  if (!match) {
+    return undefined;
+  }
+  return match[1].trim();
+}
+
+function writePathAllowed(writePath: string, scopes: string[]): boolean {
+  const normalized = writePath.trim().replace(/^\/+/, "");
+  return scopes.some((scope) => normalized.startsWith(scope.trim().replace(/^\/+/, "")));
+}
+
+function evaluateContractPolicy(args: {
+  toolName: string;
+  params: unknown;
+  ctx?: HookContext;
+}): string | undefined {
+  const actorPolicy = resolveActorPolicy(args.ctx);
+  if (!actorPolicy) {
+    return undefined;
+  }
+  const permissionTool = mapRuntimeToolToPermission(args.toolName);
+
+  if (actorPolicy.forbiddenTools.has(permissionTool)) {
+    return `forbidden by actor policy (${actorPolicy.actor}): ${permissionTool}`;
+  }
+  if (actorPolicy.allowedTools.size > 0 && !actorPolicy.allowedTools.has(permissionTool)) {
+    return `tool not allowed for ${actorPolicy.actor}: ${permissionTool}`;
+  }
+  if (permissionTool === "web_browsing") {
+    if (actorPolicy.maxPages <= 0) {
+      return `web browsing disabled for ${actorPolicy.actor}`;
+    }
+    const actorKey = `${actorPolicy.actor}:${args.ctx?.sessionKey ?? "session"}`;
+    const used = actorWebPageUsage.get(actorKey) ?? 0;
+    const next = used + 1;
+    if (next > actorPolicy.maxPages) {
+      return `max pages exceeded for ${actorPolicy.actor}: ${next}>${actorPolicy.maxPages}`;
+    }
+    actorWebPageUsage.set(actorKey, next);
+  }
+  if (permissionTool === "file_write") {
+    const writePath = parseWritePath(args.toolName, args.params);
+    if (!writePath) {
+      return `missing write path for scoped actor ${actorPolicy.actor}`;
+    }
+    if (
+      actorPolicy.writeScopes.length > 0 &&
+      !writePathAllowed(writePath, actorPolicy.writeScopes)
+    ) {
+      return `write scope violation for ${actorPolicy.actor}: ${writePath}`;
+    }
+  }
+  return undefined;
+}
 
 function buildAdjustedParamsKey(params: { runId?: string; toolCallId: string }): string {
   if (params.runId && params.runId.trim()) {
@@ -89,6 +299,17 @@ export async function runBeforeToolCallHook(args: {
 }): Promise<HookOutcome> {
   const toolName = normalizeToolName(args.toolName || "tool");
   const params = args.params;
+  const policyBlockReason = evaluateContractPolicy({
+    toolName,
+    params,
+    ctx: args.ctx,
+  });
+  if (policyBlockReason) {
+    return {
+      blocked: true,
+      reason: policyBlockReason,
+    };
+  }
 
   if (args.ctx?.sessionKey) {
     const { getDiagnosticSessionState } = await import("../logging/diagnostic-session-state.js");

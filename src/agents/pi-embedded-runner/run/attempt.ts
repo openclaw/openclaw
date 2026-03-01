@@ -924,6 +924,7 @@ export async function runEmbeddedAttempt(
               sessionId: params.sessionId,
               runId: params.runId,
               loopDetection: clientToolLoopDetection,
+              workspaceDir: params.workspaceDir,
             },
           )
         : [];

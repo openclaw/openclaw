@@ -1,4 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetDiagnosticSessionStateForTest } from "../logging/diagnostic-session-state.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { toClientToolDefinitions, toToolDefinitions } from "./pi-tool-definition-adapter.js";
@@ -277,5 +280,115 @@ describe("before_tool_call hook integration for client tools", () => {
       value: "ok",
       extra: true,
     });
+  });
+});
+
+describe("before_tool_call contract policy integration", () => {
+  let hookRunner: HookRunnerMock;
+  let workspaceDir: string;
+
+  beforeEach(() => {
+    resetDiagnosticSessionStateForTest();
+    hookRunner = installMockHookRunner();
+    hookRunner.hasHooks.mockReturnValue(false);
+    workspaceDir = mkdtempSync(join(tmpdir(), "openclaw-policy-"));
+  });
+
+  function writeContracts() {
+    const coreDir = join(workspaceDir, "01_agent_os/core");
+    const behaviorDir = join(workspaceDir, "01_agent_os/behavior");
+    mkdirSync(coreDir, { recursive: true });
+    mkdirSync(behaviorDir, { recursive: true });
+    writeFileSync(
+      join(coreDir, "tool_permissions.yaml"),
+      `version: 1
+executive_orchestrator:
+  allowed_tools: [file_read, file_write, csv_json_processing, calculation]
+  forbidden_tools: [web_browsing, send_message, whatsapp_send, email_send, post_publish]
+  write_scopes: [executive/, summaries/]
+  max_pages: 0
+`,
+      "utf8",
+    );
+    writeFileSync(
+      join(behaviorDir, "subagents_registry.yaml"),
+      `version: 1
+subagents:
+  - subagent_id: catering_pipeline_builder
+    allowed_tools: [web_browsing, file_read, file_write, csv_json_processing]
+    forbidden_tools: [send_message, whatsapp_send, email_send, post_publish]
+    write_scopes: [queue/catering_pipeline_builder/]
+    max_pages: 2
+`,
+      "utf8",
+    );
+  }
+
+  it("blocks executive web browsing from contract policy", async () => {
+    writeContracts();
+    const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const tool = wrapToolWithBeforeToolCallHook({ name: "browser", execute } as any, {
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      workspaceDir,
+    });
+    await expect(
+      tool.execute("exec-web-1", { url: "https://example.com" }, undefined, undefined),
+    ).rejects.toThrow("forbidden by actor policy");
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("enforces catering write scope from contract policy", async () => {
+    writeContracts();
+    const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const tool = wrapToolWithBeforeToolCallHook({ name: "write", execute } as any, {
+      agentId: "catering_pipeline_builder",
+      sessionKey: "agent:catering_pipeline_builder:subagent:test",
+      workspaceDir,
+    });
+    await expect(
+      tool.execute(
+        "write-bad-1",
+        { file_path: "executive/out.md", content: "x" },
+        undefined,
+        undefined,
+      ),
+    ).rejects.toThrow("write scope violation");
+    await expect(
+      tool.execute(
+        "write-ok-1",
+        { file_path: "queue/catering_pipeline_builder/out.md", content: "x" },
+        undefined,
+        undefined,
+      ),
+    ).resolves.toBeDefined();
+  });
+
+  it("enforces catering max_pages limits from contract policy", async () => {
+    writeContracts();
+    const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const tool = wrapToolWithBeforeToolCallHook({ name: "browser", execute } as any, {
+      agentId: "catering_pipeline_builder",
+      sessionKey: "agent:catering_pipeline_builder:subagent:test",
+      workspaceDir,
+    });
+    await expect(
+      tool.execute("browse-1", { url: "https://a.example" }, undefined, undefined),
+    ).resolves.toBeDefined();
+    await expect(
+      tool.execute("browse-2", { url: "https://b.example" }, undefined, undefined),
+    ).resolves.toBeDefined();
+    await expect(
+      tool.execute("browse-3", { url: "https://c.example" }, undefined, undefined),
+    ).rejects.toThrow("max pages exceeded");
+  });
+
+  afterEach(() => {
+    if (workspaceDir) {
+      rmSync(workspaceDir, { recursive: true, force: true });
+    }
   });
 });
