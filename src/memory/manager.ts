@@ -491,11 +491,20 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     force?: boolean;
     progress?: (update: MemorySyncProgressUpdate) => void;
   }): Promise<void> {
+    const MAX_READONLY_RECOVERY_ATTEMPTS = 3;
     try {
       await this.runSync(params);
       return;
     } catch (err) {
       if (!this.isReadonlyDbError(err) || this.closed) {
+        throw err;
+      }
+      if (this.readonlyRecoveryAttempts >= MAX_READONLY_RECOVERY_ATTEMPTS) {
+        const reason = this.extractErrorReason(err);
+        log.error(
+          `memory sync readonly recovery failed after ${MAX_READONLY_RECOVERY_ATTEMPTS} attempts`,
+          { reason },
+        );
         throw err;
       }
       const reason = this.extractErrorReason(err);
