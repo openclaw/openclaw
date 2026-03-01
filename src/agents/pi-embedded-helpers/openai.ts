@@ -6,6 +6,11 @@ type OpenAIThinkingBlock = {
   thinkingSignature?: unknown;
 };
 
+type OpenAIToolCallBlock = {
+  type?: unknown;
+  id?: unknown;
+};
+
 type OpenAIReasoningSignature = {
   id: string;
   type: string;
@@ -57,6 +62,130 @@ function hasFollowingNonThinkingBlock(
     }
   }
   return false;
+}
+
+function splitOpenAIFunctionCallPairing(id: string): {
+  callId: string;
+  itemId?: string;
+} {
+  const separator = id.indexOf("|");
+  if (separator <= 0 || separator >= id.length - 1) {
+    return { callId: id };
+  }
+  return {
+    callId: id.slice(0, separator),
+    itemId: id.slice(separator + 1),
+  };
+}
+
+function isOpenAIToolCallType(type: unknown): boolean {
+  return type === "toolCall" || type === "toolUse" || type === "functionCall";
+}
+
+/**
+ * OpenAI can reject replayed `function_call` items with an `fc_*` id if the
+ * matching `reasoning` item is absent in the same assistant turn.
+ *
+ * When that pairing is missing, strip the `|fc_*` suffix from tool call ids so
+ * pi-ai omits `function_call.id` on replay.
+ */
+export function downgradeOpenAIFunctionCallReasoningPairs(
+  messages: AgentMessage[],
+): AgentMessage[] {
+  const rewrittenIds = new Map<string, string>();
+  let changed = false;
+
+  const rewrittenAssistantMessages = messages.map((msg) => {
+    if (!msg || typeof msg !== "object" || (msg as { role?: unknown }).role !== "assistant") {
+      return msg;
+    }
+    const assistantMsg = msg as Extract<AgentMessage, { role: "assistant" }>;
+    if (!Array.isArray(assistantMsg.content)) {
+      return msg;
+    }
+
+    let seenReplayableReasoning = false;
+    let assistantChanged = false;
+    const nextContent = assistantMsg.content.map((block) => {
+      if (!block || typeof block !== "object") {
+        return block;
+      }
+
+      const thinkingBlock = block as OpenAIThinkingBlock;
+      if (
+        thinkingBlock.type === "thinking" &&
+        parseOpenAIReasoningSignature(thinkingBlock.thinkingSignature)
+      ) {
+        seenReplayableReasoning = true;
+        return block;
+      }
+
+      const toolCallBlock = block as OpenAIToolCallBlock;
+      if (!isOpenAIToolCallType(toolCallBlock.type) || typeof toolCallBlock.id !== "string") {
+        return block;
+      }
+
+      const pairing = splitOpenAIFunctionCallPairing(toolCallBlock.id);
+      if (seenReplayableReasoning || !pairing.itemId || !pairing.itemId.startsWith("fc_")) {
+        return block;
+      }
+
+      assistantChanged = true;
+      rewrittenIds.set(toolCallBlock.id, pairing.callId);
+      return {
+        ...(block as unknown as Record<string, unknown>),
+        id: pairing.callId,
+      } as typeof block;
+    });
+
+    if (!assistantChanged) {
+      return msg;
+    }
+    changed = true;
+    return { ...assistantMsg, content: nextContent } as AgentMessage;
+  });
+
+  if (rewrittenIds.size === 0) {
+    return messages;
+  }
+
+  const rewrittenMessages = rewrittenAssistantMessages.map((msg) => {
+    if (!msg || typeof msg !== "object" || (msg as { role?: unknown }).role !== "toolResult") {
+      return msg;
+    }
+    const toolResult = msg as Extract<AgentMessage, { role: "toolResult" }> & {
+      toolUseId?: unknown;
+    };
+    let toolResultChanged = false;
+    const updates: Record<string, string> = {};
+
+    if (typeof toolResult.toolCallId === "string") {
+      const nextToolCallId = rewrittenIds.get(toolResult.toolCallId);
+      if (nextToolCallId && nextToolCallId !== toolResult.toolCallId) {
+        updates.toolCallId = nextToolCallId;
+        toolResultChanged = true;
+      }
+    }
+
+    if (typeof toolResult.toolUseId === "string") {
+      const nextToolUseId = rewrittenIds.get(toolResult.toolUseId);
+      if (nextToolUseId && nextToolUseId !== toolResult.toolUseId) {
+        updates.toolUseId = nextToolUseId;
+        toolResultChanged = true;
+      }
+    }
+
+    if (!toolResultChanged) {
+      return msg;
+    }
+    changed = true;
+    return {
+      ...toolResult,
+      ...updates,
+    } as AgentMessage;
+  });
+
+  return changed ? rewrittenMessages : messages;
 }
 
 /**
