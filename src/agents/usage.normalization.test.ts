@@ -38,6 +38,23 @@ describe("normalizeUsage", () => {
     expect(normalizeUsage({})).toBeUndefined();
   });
 
+  it("clamps negative usage counters to zero", () => {
+    const usage = normalizeUsage({
+      input_tokens: -120,
+      output_tokens: 25,
+      total_tokens: -95,
+      cache_read_input_tokens: -4,
+      cache_creation_input_tokens: -8,
+    });
+    expect(usage).toEqual({
+      input: 0,
+      output: 25,
+      cacheRead: 0,
+      cacheWrite: 0,
+      total: 0,
+    });
+  });
+
   it("guards against empty/zero usage overwrites", () => {
     expect(hasNonzeroUsage(undefined)).toBe(false);
     expect(hasNonzeroUsage(null)).toBe(false);
