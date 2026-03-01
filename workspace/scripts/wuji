@@ -1,0 +1,190 @@
+#!/usr/bin/env python3
+"""
+wuji — unified CLI for managing OpenClaw agents.
+
+Usage:
+    wuji list                     List all configured agents
+    wuji <agent> <command> ...    Run command for an agent
+    wuji <agent>                  Show agent help
+"""
+
+import importlib.util
+import json
+import os
+import sys
+from pathlib import Path
+
+WORKSPACE = Path(__file__).resolve().parent.parent  # workspace/
+sys.path.insert(0, str(WORKSPACE))
+
+from lib.agent_base import (
+    GENERIC_COMMANDS,
+    _find_agent,
+    _load_openclaw,
+    _workspace_path,
+    print_agent_help,
+    run_generic,
+)
+
+
+def discover_agents():
+    """Discover agents from openclaw.json + filesystem."""
+    agents = {}
+
+    # From config
+    try:
+        cfg = _load_openclaw()
+        for a in cfg.get("agents", {}).get("list", []):
+            agents[a["id"]] = a
+    except Exception:
+        pass
+
+    # From filesystem: workspace/agents/*/
+    agents_dir = WORKSPACE / "agents"
+    if agents_dir.exists():
+        for d in sorted(agents_dir.iterdir()):
+            if d.is_dir() and d.name not in agents:
+                agents[d.name] = {"id": d.name, "workspace": str(d)}
+
+    # Special: workspace/meihui/ (not under agents/)
+    meihui = WORKSPACE / "meihui"
+    if meihui.is_dir() and "meihui" not in agents:
+        agents["meihui"] = {"id": "meihui", "workspace": str(meihui)}
+
+    return agents
+
+
+def load_agent_cli(agent):
+    """Load agent-specific cli.py if it exists. Returns COMMANDS dict or None.
+
+    Search order:
+      1. workspace/<agent-id>/cli.py  (for meihui etc. at top level)
+      2. workspace/agents/<agent-id>/cli.py  (canonical location)
+      3. <agent-workspace>/cli.py  (if workspace points elsewhere)
+    """
+    aid = agent["id"]
+    candidates = [
+        WORKSPACE / aid / "cli.py",
+        WORKSPACE / "agents" / aid / "cli.py",
+    ]
+    ws = _workspace_path(agent)
+    ws_cli = ws / "cli.py"
+    if ws_cli not in candidates:
+        candidates.append(ws_cli)
+
+    cli_path = None
+    for c in candidates:
+        if c.exists():
+            cli_path = c
+            break
+
+    if cli_path is None:
+        return None
+
+    spec = importlib.util.spec_from_file_location(f"agent_cli_{aid}", cli_path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return getattr(mod, "COMMANDS", None)
+
+
+def resolve_command(commands, args):
+    """Walk the COMMANDS dict tree to find the handler + remaining args.
+
+    Returns (handler_fn, remaining_args) or (None, args).
+    """
+    if not commands or not args:
+        return None, args
+
+    key = args[0]
+    val = commands.get(key)
+    if val is None:
+        return None, args
+
+    if callable(val):
+        return val, args[1:]
+
+    if isinstance(val, dict):
+        if len(args) > 1:
+            return resolve_command(val, args[1:])
+        # Subcommand group but no sub-sub-command → show help
+        return None, args
+
+    return None, args
+
+
+def cmd_list():
+    """List all configured agents."""
+    agents = discover_agents()
+    if not agents:
+        print("  No agents found.")
+        return
+
+    # Count bindings
+    try:
+        cfg = _load_openclaw()
+        bindings = cfg.get("bindings", [])
+    except Exception:
+        bindings = []
+
+    print(f"\n  {'Agent':<16} {'Model':<30} {'Groups':>6}  Workspace")
+    print(f"  {'─' * 16} {'─' * 30} {'─' * 6}  {'─' * 30}")
+
+    for aid in sorted(agents):
+        a = agents[aid]
+        model = a.get("model", {}).get("primary", "-")
+        ws = Path(a.get("workspace", ""))
+        n_groups = len([b for b in bindings if b.get("agentId") == aid])
+        has_cli = "✓" if (ws / "cli.py").exists() else " "
+        print(f"  {aid:<16} {model:<30} {n_groups:>6}  {ws}")
+
+    print(f"\n  {len(agents)} agents total\n")
+
+
+def main():
+    args = sys.argv[1:]
+
+    if not args or args[0] in ("-h", "--help", "help"):
+        print(__doc__)
+        return
+
+    if args[0] == "list":
+        cmd_list()
+        return
+
+    # Agent dispatch
+    agent_id = args[0]
+    agent = _find_agent(agent_id)
+    if agent is None:
+        print(f"  Unknown agent: {agent_id}")
+        print(f"  Run 'wuji list' to see available agents.")
+        sys.exit(1)
+
+    command_args = args[1:]
+    extra_commands = load_agent_cli(agent)
+
+    if not command_args or command_args[0] in ("-h", "--help", "help"):
+        print_agent_help(agent, extra_commands)
+        return
+
+    command = command_args[0]
+    rest = command_args[1:]
+
+    # Try generic first
+    if command in GENERIC_COMMANDS:
+        run_generic(agent, command, rest)
+        return
+
+    # Try agent-specific
+    if extra_commands:
+        handler, handler_args = resolve_command(extra_commands, command_args)
+        if handler:
+            handler(agent, handler_args)
+            return
+
+    print(f"  Unknown command: {command}")
+    print_agent_help(agent, extra_commands)
+    sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
