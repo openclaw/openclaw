@@ -10,6 +10,8 @@ import {
 import { observeTopbar, scheduleChatScroll, scheduleLogsScroll } from "./app-scroll.ts";
 import {
   applySettingsFromUrl,
+  attachThemeListener,
+  detachThemeListener,
   inferBasePath,
   syncTabWithLocation,
   syncThemeWithSettings,
@@ -19,6 +21,8 @@ import type { Tab } from "./navigation.ts";
 
 type LifecycleHost = {
   basePath: string;
+  client?: { stop: () => void } | null;
+  connected?: boolean;
   tab: Tab;
   assistantName: string;
   assistantAvatar: string | null;
@@ -36,28 +40,14 @@ type LifecycleHost = {
   topbarObserver: ResizeObserver | null;
 };
 
-function handleCmdK(host: LifecycleHost, e: KeyboardEvent) {
-  if ((e.metaKey || e.ctrlKey) && e.key === "k") {
-    e.preventDefault();
-    (host as unknown as { paletteOpen: boolean }).paletteOpen = !(
-      host as unknown as { paletteOpen: boolean }
-    ).paletteOpen;
-  }
-}
-
 export function handleConnected(host: LifecycleHost) {
   host.basePath = inferBasePath();
   void loadControlUiBootstrapConfig(host);
   applySettingsFromUrl(host as unknown as Parameters<typeof applySettingsFromUrl>[0]);
   syncTabWithLocation(host as unknown as Parameters<typeof syncTabWithLocation>[0], true);
   syncThemeWithSettings(host as unknown as Parameters<typeof syncThemeWithSettings>[0]);
+  attachThemeListener(host as unknown as Parameters<typeof attachThemeListener>[0]);
   window.addEventListener("popstate", host.popStateHandler);
-  (host as unknown as { cmdKHandler: (e: KeyboardEvent) => void }).cmdKHandler = (e) =>
-    handleCmdK(host, e);
-  window.addEventListener(
-    "keydown",
-    (host as unknown as { cmdKHandler: (e: KeyboardEvent) => void }).cmdKHandler,
-  );
   connectGateway(host as unknown as Parameters<typeof connectGateway>[0]);
   startNodesPolling(host as unknown as Parameters<typeof startNodesPolling>[0]);
   if (host.tab === "logs") {
@@ -74,13 +64,13 @@ export function handleFirstUpdated(host: LifecycleHost) {
 
 export function handleDisconnected(host: LifecycleHost) {
   window.removeEventListener("popstate", host.popStateHandler);
-  const cmdK = (host as unknown as { cmdKHandler?: (e: KeyboardEvent) => void }).cmdKHandler;
-  if (cmdK) {
-    window.removeEventListener("keydown", cmdK);
-  }
   stopNodesPolling(host as unknown as Parameters<typeof stopNodesPolling>[0]);
   stopLogsPolling(host as unknown as Parameters<typeof stopLogsPolling>[0]);
   stopDebugPolling(host as unknown as Parameters<typeof stopDebugPolling>[0]);
+  host.client?.stop();
+  host.client = null;
+  host.connected = false;
+  detachThemeListener(host as unknown as Parameters<typeof detachThemeListener>[0]);
   host.topbarObserver?.disconnect();
   host.topbarObserver = null;
 }

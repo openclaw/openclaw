@@ -20,6 +20,19 @@ const { sendGatewayAuthFailure } = await import("./http-common.js");
 const { getBearerToken } = await import("./http-utils.js");
 
 describe("authorizeGatewayBearerRequestOrReply", () => {
+  const bearerAuth = {
+    mode: "token",
+    token: "secret",
+    password: undefined,
+    allowTailscale: true,
+  } satisfies ResolvedGatewayAuth;
+
+  const makeAuthorizeParams = () => ({
+    req: {} as IncomingMessage,
+    res: {} as ServerResponse,
+    auth: bearerAuth,
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -31,16 +44,7 @@ describe("authorizeGatewayBearerRequestOrReply", () => {
       reason: "token_missing",
     });
 
-    const ok = await authorizeGatewayBearerRequestOrReply({
-      req: {} as IncomingMessage,
-      res: {} as ServerResponse,
-      auth: {
-        mode: "token",
-        token: "secret",
-        password: undefined,
-        allowTailscale: true,
-      } satisfies ResolvedGatewayAuth,
-    });
+    const ok = await authorizeGatewayBearerRequestOrReply(makeAuthorizeParams());
 
     expect(ok).toBe(false);
     expect(vi.mocked(authorizeHttpGatewayConnect)).toHaveBeenCalledWith(
@@ -55,16 +59,7 @@ describe("authorizeGatewayBearerRequestOrReply", () => {
     vi.mocked(getBearerToken).mockReturnValue("abc");
     vi.mocked(authorizeHttpGatewayConnect).mockResolvedValue({ ok: true, method: "token" });
 
-    const ok = await authorizeGatewayBearerRequestOrReply({
-      req: {} as IncomingMessage,
-      res: {} as ServerResponse,
-      auth: {
-        mode: "token",
-        token: "secret",
-        password: undefined,
-        allowTailscale: true,
-      } satisfies ResolvedGatewayAuth,
-    });
+    const ok = await authorizeGatewayBearerRequestOrReply(makeAuthorizeParams());
 
     expect(ok).toBe(true);
     expect(vi.mocked(authorizeHttpGatewayConnect)).toHaveBeenCalledWith(

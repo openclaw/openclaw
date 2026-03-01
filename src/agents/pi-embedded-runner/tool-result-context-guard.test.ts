@@ -91,6 +91,18 @@ async function applyGuardToContext(
   return await agent.transformContext?.(contextForNextCall, new AbortController().signal);
 }
 
+function expectCompactedToolResultsWithoutContextNotice(
+  contextForNextCall: AgentMessage[],
+  oldIndex: number,
+  newIndex: number,
+) {
+  const oldResultText = getToolResultText(contextForNextCall[oldIndex]);
+  const newResultText = getToolResultText(contextForNextCall[newIndex]);
+  expect(oldResultText).toBe(PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER);
+  expect(newResultText).toBe(PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER);
+  expect(newResultText).not.toContain(CONTEXT_LIMIT_TRUNCATION_NOTICE);
+}
+
 describe("installToolResultContextGuard", () => {
   it("compacts oldest-first when total context overflows, even if each result fits individually", async () => {
     const agent = makeGuardableAgent();
@@ -98,12 +110,7 @@ describe("installToolResultContextGuard", () => {
     const transformed = await applyGuardToContext(agent, contextForNextCall);
 
     expect(transformed).toBe(contextForNextCall);
-    const oldResultText = getToolResultText(contextForNextCall[1]);
-    const newResultText = getToolResultText(contextForNextCall[2]);
-
-    expect(oldResultText).toBe(PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER);
-    expect(newResultText).toBe(PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER);
-    expect(newResultText).not.toContain(CONTEXT_LIMIT_TRUNCATION_NOTICE);
+    expectCompactedToolResultsWithoutContextNotice(contextForNextCall, 1, 2);
   });
 
   it("keeps compacting oldest-first until context is back under budget", async () => {
@@ -187,13 +194,7 @@ describe("installToolResultContextGuard", () => {
     ];
 
     await agent.transformContext?.(contextForNextCall, new AbortController().signal);
-
-    const oldResultText = getToolResultText(contextForNextCall[1]);
-    const newResultText = getToolResultText(contextForNextCall[2]);
-
-    expect(oldResultText).toBe(PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER);
-    expect(newResultText).toBe(PREEMPTIVE_TOOL_RESULT_COMPACTION_PLACEHOLDER);
-    expect(newResultText).not.toContain(CONTEXT_LIMIT_TRUNCATION_NOTICE);
+    expectCompactedToolResultsWithoutContextNotice(contextForNextCall, 1, 2);
   });
 
   it("wraps an existing transformContext and guards the transformed output", async () => {

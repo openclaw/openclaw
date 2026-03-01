@@ -4,6 +4,7 @@ import { createInternalHookEvent, triggerInternalHook } from "../../hooks/intern
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { shouldHandleTextCommands } from "../commands-registry.js";
+import { handleAcpCommand } from "./commands-acp.js";
 import { handleAllowlistCommand } from "./commands-allowlist.js";
 import { handleApproveCommand } from "./commands-approve.js";
 import { handleBashCommand } from "./commands-bash.js";
@@ -37,44 +38,32 @@ import type {
 } from "./commands-types.js";
 import { routeReply } from "./route-reply.js";
 
-// ---------------------------------------------------------------------------
-// Reset command hook helpers
-// ---------------------------------------------------------------------------
+let HANDLERS: CommandHandler[] | null = null;
 
-/**
- * The action that triggered a /new or /reset command.
- */
-export type ResetCommandAction = "reset" | "new";
+export type ResetCommandAction = "new" | "reset";
 
-type EmitResetCommandHooksParams = Pick<
-  HandleCommandsParams,
-  | "ctx"
-  | "cfg"
-  | "command"
-  | "sessionKey"
-  | "sessionEntry"
-  | "previousSessionEntry"
-  | "workspaceDir"
-> & { action: ResetCommandAction };
-
-/**
- * Emit internal and plugin hooks for a /new or /reset command.
- *
- * Extracted so that `getReplyFromConfig` can fire these hooks for cases where
- * the command was processed outside the normal `handleCommands` path (e.g. when
- * the directive flow handled the reset before commands were evaluated).
- */
-export async function emitResetCommandHooks(params: EmitResetCommandHooksParams): Promise<void> {
-  const commandAction = params.action;
-
-  const hookEvent = createInternalHookEvent("command", commandAction, params.sessionKey ?? "", {
+export async function emitResetCommandHooks(params: {
+  action: ResetCommandAction;
+  ctx: HandleCommandsParams["ctx"];
+  cfg: HandleCommandsParams["cfg"];
+  command: Pick<
+    HandleCommandsParams["command"],
+    "surface" | "senderId" | "channel" | "from" | "to" | "resetHookTriggered"
+  >;
+  sessionKey?: string;
+  sessionEntry?: HandleCommandsParams["sessionEntry"];
+  previousSessionEntry?: HandleCommandsParams["previousSessionEntry"];
+  workspaceDir: string;
+}): Promise<void> {
+  const hookEvent = createInternalHookEvent("command", params.action, params.sessionKey ?? "", {
     sessionEntry: params.sessionEntry,
     previousSessionEntry: params.previousSessionEntry,
     commandSource: params.command.surface,
     senderId: params.command.senderId,
-    cfg: params.cfg,
+    cfg: params.cfg, // Pass config for LLM slug generation
   });
   await triggerInternalHook(hookEvent);
+  params.command.resetHookTriggered = true;
 
   // Send hook messages immediately if present
   if (hookEvent.messages.length > 0) {
@@ -126,7 +115,7 @@ export async function emitResetCommandHooks(params: EmitResetCommandHooksParams)
           logVerbose("before_reset: no session file available, firing hook with empty messages");
         }
         await hookRunner.runBeforeReset(
-          { sessionFile, messages, reason: commandAction },
+          { sessionFile, messages, reason: params.action },
           {
             agentId: params.sessionKey?.split(":")[0] ?? "main",
             sessionKey: params.sessionKey,
@@ -140,8 +129,6 @@ export async function emitResetCommandHooks(params: EmitResetCommandHooksParams)
     })();
   }
 }
-
-let HANDLERS: CommandHandler[] | null = null;
 
 export async function handleCommands(params: HandleCommandsParams): Promise<CommandHandlerResult> {
   if (HANDLERS === null) {
@@ -164,6 +151,7 @@ export async function handleCommands(params: HandleCommandsParams): Promise<Comm
       handleExportSessionCommand,
       handleWhoamiCommand,
       handleSubagentsCommand,
+      handleAcpCommand,
       handleConfigCommand,
       handleDebugCommand,
       handleModelsCommand,
@@ -184,7 +172,16 @@ export async function handleCommands(params: HandleCommandsParams): Promise<Comm
   // Trigger internal hook for reset/new commands
   if (resetRequested && params.command.isAuthorizedSender) {
     const commandAction: ResetCommandAction = resetMatch?.[1] === "reset" ? "reset" : "new";
-    await emitResetCommandHooks({ ...params, action: commandAction });
+    await emitResetCommandHooks({
+      action: commandAction,
+      ctx: params.ctx,
+      cfg: params.cfg,
+      command: params.command,
+      sessionKey: params.sessionKey,
+      sessionEntry: params.sessionEntry,
+      previousSessionEntry: params.previousSessionEntry,
+      workspaceDir: params.workspaceDir,
+    });
     // Mark the command context so that maybeEmitMissingResetHooks (in getReplyFromConfig)
     // knows the hook was already fired and does not double-emit.
     params.command.resetHookTriggered = true;

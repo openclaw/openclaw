@@ -23,7 +23,7 @@ import { danger, logVerbose, shouldLogVerbose } from "../globals.js";
 import { formatUncaughtError } from "../infra/errors.js";
 import { getChildLogger } from "../logging.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import type { RuntimeEnv } from "../runtime.js";
+import { createNonExitingRuntime, type RuntimeEnv } from "../runtime.js";
 import { resolveTelegramAccount } from "./accounts.js";
 import { registerTelegramHandlers } from "./bot-handlers.js";
 import { createTelegramMessageProcessor } from "./bot-message.js";
@@ -40,6 +40,7 @@ import {
   resolveTelegramStreamMode,
 } from "./bot/helpers.js";
 import { resolveTelegramFetch } from "./fetch.js";
+import { createTelegramSendChatActionHandler } from "./sendchataction-401-backoff.js";
 
 export type TelegramBotOptions = {
   token: string;
@@ -113,13 +114,7 @@ export function getTelegramSequentialKey(ctx: {
 }
 
 export function createTelegramBot(opts: TelegramBotOptions) {
-  const runtime: RuntimeEnv = opts.runtime ?? {
-    log: console.log,
-    error: console.error,
-    exit: (code: number): never => {
-      throw new Error(`exit ${code}`);
-    },
-  };
+  const runtime: RuntimeEnv = opts.runtime ?? createNonExitingRuntime();
   const cfg = opts.config ?? loadConfig();
   const account = resolveTelegramAccount({
     cfg,
@@ -354,6 +349,20 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     return { groupConfig, topicConfig };
   };
 
+  // Global sendChatAction handler with 401 backoff / circuit breaker (issue #27092).
+  // Created BEFORE the message processor so it can be injected into every message context.
+  // Shared across all message contexts for this account so that consecutive 401s
+  // from ANY chat are tracked together — prevents infinite retry storms.
+  const sendChatActionHandler = createTelegramSendChatActionHandler({
+    sendChatActionFn: (chatId, action, threadParams) =>
+      bot.api.sendChatAction(
+        chatId,
+        action,
+        threadParams as Parameters<typeof bot.api.sendChatAction>[2],
+      ),
+    logger: (message) => logVerbose(`telegram: ${message}`),
+  });
+
   const processMessage = createTelegramMessageProcessor({
     bot,
     cfg,
@@ -369,6 +378,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     resolveGroupActivation,
     resolveGroupRequireMention,
     resolveTelegramGroupConfig,
+    sendChatActionHandler,
     runtime,
     replyToMode,
     streamMode,
@@ -404,6 +414,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     runtime,
     mediaMaxBytes,
     telegramCfg,
+    allowFrom,
     groupAllowFrom,
     resolveGroupPolicy,
     resolveTelegramGroupConfig,

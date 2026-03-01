@@ -3,7 +3,7 @@ import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import type { EmbeddingProviderOptions } from "./embeddings.js";
 import { buildRemoteBaseUrlPolicy } from "./remote-http.js";
 
-type RemoteEmbeddingProviderId = "openai" | "voyage";
+export type RemoteEmbeddingProviderId = "openai" | "voyage" | "mistral";
 
 export async function resolveRemoteEmbeddingBearerClient(params: {
   provider: RemoteEmbeddingProviderId;

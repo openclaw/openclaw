@@ -1,6 +1,7 @@
 import { formatDurationPrecise } from "../infra/format-time/format-duration.ts";
 import { formatRuntimeStatusWithDetails } from "../infra/runtime-status.ts";
 import type { SessionStatus } from "./status.types.js";
+export { shortenText } from "./text-format.js";
 
 export const formatKTokens = (value: number) =>
   `${(value / 1000).toFixed(value >= 10_000 ? 0 : 1)}k`;
@@ -10,14 +11,6 @@ export const formatDuration = (ms: number | null | undefined) => {
     return "unknown";
   }
   return formatDurationPrecise(ms, { decimals: 1 });
-};
-
-export const shortenText = (value: string, maxLen: number) => {
-  const chars = Array.from(value);
-  if (chars.length <= maxLen) {
-    return value;
-  }
-  return `${chars.slice(0, Math.max(0, maxLen - 1)).join("")}…`;
 };
 
 export const formatTokensCompact = (

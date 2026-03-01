@@ -152,3 +152,15 @@ export function makeSnapshotChangedOpenAIReasoningScenario() {
     modelId: "gpt-5.2-codex",
   };
 }
+
+export async function sanitizeSnapshotChangedOpenAIReasoning(params: {
+  sanitizeSessionHistory: SanitizeSessionHistoryFn;
+}) {
+  const { sessionManager, messages, modelId } = makeSnapshotChangedOpenAIReasoningScenario();
+  return await sanitizeWithOpenAIResponses({
+    sanitizeSessionHistory: params.sanitizeSessionHistory,
+    messages,
+    modelId,
+    sessionManager,
+  });
+}

@@ -96,6 +96,18 @@ vi.mock("./common.js", async () => {
 import { DEFAULT_AI_SNAPSHOT_MAX_CHARS } from "../../browser/constants.js";
 import { createBrowserTool } from "./browser-tool.js";
 
+function mockSingleBrowserProxyNode() {
+  nodesUtilsMocks.listNodes.mockResolvedValue([
+    {
+      nodeId: "node-1",
+      displayName: "Browser Node",
+      connected: true,
+      caps: ["browser"],
+      commands: ["browser.proxy"],
+    },
+  ]);
+}
+
 describe("browser tool snapshot maxChars", () => {
   afterEach(() => {
     vi.clearAllMocks();
@@ -210,15 +222,7 @@ describe("browser tool snapshot maxChars", () => {
   });
 
   it("routes to node proxy when target=node", async () => {
-    nodesUtilsMocks.listNodes.mockResolvedValue([
-      {
-        nodeId: "node-1",
-        displayName: "Browser Node",
-        connected: true,
-        caps: ["browser"],
-        commands: ["browser.proxy"],
-      },
-    ]);
+    mockSingleBrowserProxyNode();
     const tool = createBrowserTool();
     await tool.execute?.("call-1", { action: "status", target: "node" });
 
@@ -234,15 +238,7 @@ describe("browser tool snapshot maxChars", () => {
   });
 
   it("keeps sandbox bridge url when node proxy is available", async () => {
-    nodesUtilsMocks.listNodes.mockResolvedValue([
-      {
-        nodeId: "node-1",
-        displayName: "Browser Node",
-        connected: true,
-        caps: ["browser"],
-        commands: ["browser.proxy"],
-      },
-    ]);
+    mockSingleBrowserProxyNode();
     const tool = createBrowserTool({ sandboxBridgeUrl: "http://127.0.0.1:9999" });
     await tool.execute?.("call-1", { action: "status" });
 
@@ -254,15 +250,7 @@ describe("browser tool snapshot maxChars", () => {
   });
 
   it("keeps chrome profile on host when node proxy is available", async () => {
-    nodesUtilsMocks.listNodes.mockResolvedValue([
-      {
-        nodeId: "node-1",
-        displayName: "Browser Node",
-        connected: true,
-        caps: ["browser"],
-        commands: ["browser.proxy"],
-      },
-    ]);
+    mockSingleBrowserProxyNode();
     const tool = createBrowserTool();
     await tool.execute?.("call-1", { action: "status", profile: "chrome" });
 
@@ -271,6 +259,51 @@ describe("browser tool snapshot maxChars", () => {
       expect.objectContaining({ profile: "chrome" }),
     );
     expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalled();
+  });
+});
+
+describe("browser tool url alias support", () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+    configMocks.loadConfig.mockReturnValue({ browser: {} });
+    nodesUtilsMocks.listNodes.mockResolvedValue([]);
+  });
+
+  it("accepts url alias for open", async () => {
+    const tool = createBrowserTool();
+    await tool.execute?.("call-1", { action: "open", url: "https://example.com" });
+
+    expect(browserClientMocks.browserOpenTab).toHaveBeenCalledWith(
+      undefined,
+      "https://example.com",
+      expect.objectContaining({ profile: undefined }),
+    );
+  });
+
+  it("accepts url alias for navigate", async () => {
+    const tool = createBrowserTool();
+    await tool.execute?.("call-1", {
+      action: "navigate",
+      url: "https://example.com",
+      targetId: "tab-1",
+    });
+
+    expect(browserActionsMocks.browserNavigate).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({
+        url: "https://example.com",
+        targetId: "tab-1",
+        profile: undefined,
+      }),
+    );
+  });
+
+  it("keeps targetUrl required error label when both params are missing", async () => {
+    const tool = createBrowserTool();
+
+    await expect(tool.execute?.("call-1", { action: "open" })).rejects.toThrow(
+      "targetUrl required",
+    );
   });
 });
 

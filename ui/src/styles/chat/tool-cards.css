@@ -1,15 +1,14 @@
 /* Tool Card Styles */
 .chat-tool-card {
-  border: 1px solid color-mix(in srgb, var(--border) 90%, transparent);
-  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  border-radius: 8px;
   padding: 12px;
   margin-top: 8px;
-  background: color-mix(in srgb, var(--card) 97%, transparent);
+  background: var(--card);
   box-shadow: inset 0 1px 0 var(--card-highlight);
   transition:
     border-color 150ms ease-out,
-    background 150ms ease-out,
-    box-shadow 150ms ease-out;
+    background 150ms ease-out;
   /* Fixed max-height to ensure cards don't expand too much */
   max-height: 120px;
   overflow: hidden;
@@ -17,8 +16,7 @@
 
 .chat-tool-card:hover {
   border-color: var(--border-strong);
-  background: color-mix(in srgb, var(--card) 82%, var(--bg-hover));
-  box-shadow: var(--shadow-sm);
+  background: var(--bg-hover);
 }
 
 /* First tool card in a group - no top margin */
@@ -130,13 +128,13 @@
   color: var(--muted);
   margin-top: 8px;
   padding: 8px 10px;
-  background: color-mix(in srgb, var(--secondary) 92%, transparent);
+  background: var(--secondary);
   border-radius: var(--radius-md);
   white-space: pre-wrap;
   overflow: hidden;
   max-height: 44px;
   line-height: 1.4;
-  border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
+  border: 1px solid var(--border);
 }
 
 .chat-tool-card--clickable:hover .chat-tool-card__preview {
@@ -150,18 +148,16 @@
   color: var(--text);
   margin-top: 6px;
   padding: 6px 8px;
-  background: color-mix(in srgb, var(--secondary) 92%, transparent);
+  background: var(--secondary);
   border-radius: var(--radius-sm);
-  border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
   white-space: pre-wrap;
   word-break: break-word;
 }
 
 /* Reading Indicator */
 .chat-reading-indicator {
-  background: color-mix(in srgb, var(--secondary) 70%, transparent);
-  border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
-  border-radius: var(--radius-md);
+  background: transparent;
+  border: 1px solid var(--border);
   padding: 12px;
   display: inline-flex;
 }
@@ -203,177 +199,4 @@
     opacity: 1;
     transform: scale(1);
   }
-}
-
-/* ===========================================
-   Collapsible Tool Cards
-   =========================================== */
-
-.chat-tools-collapse {
-  margin-top: 8px;
-  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
-  border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--card) 94%, transparent);
-  overflow: hidden;
-}
-
-.chat-tools-summary {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 8px 12px;
-  cursor: pointer;
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--muted);
-  user-select: none;
-  list-style: none;
-  transition:
-    color 150ms ease,
-    background 150ms ease;
-}
-
-.chat-tools-summary::-webkit-details-marker {
-  display: none;
-}
-
-.chat-tools-summary::before {
-  content: "▸";
-  font-size: 10px;
-  flex-shrink: 0;
-  transition: transform 150ms ease;
-}
-
-.chat-tools-collapse[open] > .chat-tools-summary::before {
-  transform: rotate(90deg);
-}
-
-.chat-tools-summary:hover {
-  color: var(--text);
-  background: color-mix(in srgb, var(--bg-hover) 50%, transparent);
-}
-
-.chat-tools-summary__icon {
-  display: inline-flex;
-  align-items: center;
-  width: 14px;
-  height: 14px;
-  color: var(--accent);
-  opacity: 0.7;
-  flex-shrink: 0;
-}
-
-.chat-tools-summary__icon svg {
-  width: 14px;
-  height: 14px;
-}
-
-.chat-tools-summary__count {
-  font-weight: 600;
-  color: var(--text);
-}
-
-.chat-tools-summary__names {
-  color: var(--muted);
-  font-weight: 400;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.chat-tools-collapse__body {
-  padding: 4px 12px 12px;
-  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
-}
-
-.chat-tools-collapse__body .chat-tool-card:first-child {
-  margin-top: 8px;
-}
-
-/* ===========================================
-   Collapsible JSON Block
-   =========================================== */
-
-.chat-json-collapse {
-  margin-top: 4px;
-  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
-  border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--secondary) 60%, transparent);
-  overflow: hidden;
-}
-
-.chat-json-summary {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 10px;
-  cursor: pointer;
-  font-size: 12px;
-  color: var(--muted);
-  user-select: none;
-  list-style: none;
-  transition:
-    color 150ms ease,
-    background 150ms ease;
-}
-
-.chat-json-summary::-webkit-details-marker {
-  display: none;
-}
-
-.chat-json-summary::before {
-  content: "▸";
-  font-size: 10px;
-  flex-shrink: 0;
-  transition: transform 150ms ease;
-}
-
-.chat-json-collapse[open] > .chat-json-summary::before {
-  transform: rotate(90deg);
-}
-
-.chat-json-summary:hover {
-  color: var(--text);
-  background: color-mix(in srgb, var(--bg-hover) 50%, transparent);
-}
-
-.chat-json-badge {
-  display: inline-flex;
-  align-items: center;
-  padding: 1px 5px;
-  border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--accent) 15%, transparent);
-  color: var(--accent);
-  font-size: 10px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  line-height: 1.4;
-  flex-shrink: 0;
-}
-
-.chat-json-label {
-  font-family: var(--mono);
-  font-size: 11px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.chat-json-content {
-  margin: 0;
-  padding: 10px 12px;
-  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
-  font-family: var(--mono);
-  font-size: 12px;
-  line-height: 1.5;
-  color: var(--text);
-  overflow-x: auto;
-  max-height: 400px;
-  overflow-y: auto;
-}
-
-.chat-json-content code {
-  font-family: inherit;
-  font-size: inherit;
 }

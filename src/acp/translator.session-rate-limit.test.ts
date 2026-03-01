@@ -1,5 +1,4 @@
 import type {
-  AgentSideConnection,
   LoadSessionRequest,
   NewSessionRequest,
   PromptRequest,
@@ -8,20 +7,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { GatewayClient } from "../gateway/client.js";
 import { createInMemorySessionStore } from "./session.js";
 import { AcpGatewayAgent } from "./translator.js";
-
-function createConnection(): AgentSideConnection {
-  return {
-    sessionUpdate: vi.fn(async () => {}),
-  } as unknown as AgentSideConnection;
-}
-
-function createGateway(
-  request: GatewayClient["request"] = vi.fn(async () => ({ ok: true })) as GatewayClient["request"],
-): GatewayClient {
-  return {
-    request,
-  } as unknown as GatewayClient;
-}
+import { createAcpConnection, createAcpGateway } from "./translator.test-helpers.js";
 
 function createNewSessionRequest(cwd = "/tmp"): NewSessionRequest {
   return {
@@ -55,7 +41,7 @@ function createPromptRequest(
 async function expectOversizedPromptRejected(params: { sessionId: string; text: string }) {
   const request = vi.fn(async () => ({ ok: true })) as GatewayClient["request"];
   const sessionStore = createInMemorySessionStore();
-  const agent = new AcpGatewayAgent(createConnection(), createGateway(request), {
+  const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway(request), {
     sessionStore,
   });
   await agent.loadSession(createLoadSessionRequest(params.sessionId));
@@ -74,7 +60,7 @@ async function expectOversizedPromptRejected(params: { sessionId: string; text: 
 describe("acp session creation rate limit", () => {
   it("rate limits excessive newSession bursts", async () => {
     const sessionStore = createInMemorySessionStore();
-    const agent = new AcpGatewayAgent(createConnection(), createGateway(), {
+    const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway(), {
       sessionStore,
       sessionCreateRateLimit: {
         maxRequests: 2,
@@ -93,7 +79,7 @@ describe("acp session creation rate limit", () => {
 
   it("does not count loadSession refreshes for an existing session ID", async () => {
     const sessionStore = createInMemorySessionStore();
-    const agent = new AcpGatewayAgent(createConnection(), createGateway(), {
+    const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway(), {
       sessionStore,
       sessionCreateRateLimit: {
         maxRequests: 1,

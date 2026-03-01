@@ -20,7 +20,7 @@ import {
 } from "../infra/exec-host.js";
 import { sanitizeHostExecEnv } from "../infra/host-env-security.js";
 import { runBrowserProxyCommand } from "./invoke-browser.js";
-import { handleSystemRunInvoke } from "./invoke-system-run.js";
+import { buildSystemRunApprovalPlanV2, handleSystemRunInvoke } from "./invoke-system-run.js";
 import type {
   ExecEventPayload,
   RunResult,
@@ -35,6 +35,7 @@ const DEFAULT_NODE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sb
 const execHostEnforced = process.env.OPENCLAW_NODE_EXEC_HOST?.trim().toLowerCase() === "app";
 const execHostFallbackAllowed =
   process.env.OPENCLAW_NODE_EXEC_FALLBACK?.trim().toLowerCase() !== "0";
+const preferMacAppExecHost = process.platform === "darwin" && execHostEnforced;
 
 type SystemWhichParams = {
   bins: string[];
@@ -419,6 +420,30 @@ export async function handleInvoke(
     return;
   }
 
+  if (command === "system.run.prepare") {
+    try {
+      const params = decodeParams<{
+        command?: unknown;
+        rawCommand?: unknown;
+        cwd?: unknown;
+        agentId?: unknown;
+        sessionKey?: unknown;
+      }>(frame.paramsJSON);
+      const prepared = buildSystemRunApprovalPlanV2(params);
+      if (!prepared.ok) {
+        await sendErrorResult(client, frame, "INVALID_REQUEST", prepared.message);
+        return;
+      }
+      await sendJsonPayloadResult(client, frame, {
+        cmdText: prepared.cmdText,
+        plan: prepared.plan,
+      });
+    } catch (err) {
+      await sendInvalidRequestResult(client, frame, err);
+    }
+    return;
+  }
+
   if (command !== "system.run") {
     await sendErrorResult(client, frame, "UNAVAILABLE", "command not supported");
     return;
@@ -457,6 +482,7 @@ export async function handleInvoke(
     sendExecFinishedEvent: async ({ sessionKey, runId, cmdText, result }) => {
       await sendExecFinishedEvent({ client, sessionKey, runId, cmdText, result });
     },
+    preferMacAppExecHost,
   });
 }
 

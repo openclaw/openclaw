@@ -1,15 +1,23 @@
 import { splitBatchRequests } from "./batch-utils.js";
 import { runWithConcurrency } from "./internal.js";
 
-export async function runEmbeddingBatchGroups<TRequest>(params: {
-  requests: TRequest[];
-  maxRequests: number;
+export type EmbeddingBatchExecutionParams = {
   wait: boolean;
   pollIntervalMs: number;
   timeoutMs: number;
   concurrency: number;
-  debugLabel: string;
   debug?: (message: string, data?: Record<string, unknown>) => void;
+};
+
+export async function runEmbeddingBatchGroups<TRequest>(params: {
+  requests: TRequest[];
+  maxRequests: number;
+  wait: EmbeddingBatchExecutionParams["wait"];
+  pollIntervalMs: EmbeddingBatchExecutionParams["pollIntervalMs"];
+  timeoutMs: EmbeddingBatchExecutionParams["timeoutMs"];
+  concurrency: EmbeddingBatchExecutionParams["concurrency"];
+  debugLabel: string;
+  debug?: EmbeddingBatchExecutionParams["debug"];
   runGroup: (args: {
     group: TRequest[];
     groupIndex: number;
@@ -37,4 +45,20 @@ export async function runEmbeddingBatchGroups<TRequest>(params: {
 
   await runWithConcurrency(tasks, params.concurrency);
   return byCustomId;
+}
+
+export function buildEmbeddingBatchGroupOptions<TRequest>(
+  params: { requests: TRequest[] } & EmbeddingBatchExecutionParams,
+  options: { maxRequests: number; debugLabel: string },
+) {
+  return {
+    requests: params.requests,
+    maxRequests: options.maxRequests,
+    wait: params.wait,
+    pollIntervalMs: params.pollIntervalMs,
+    timeoutMs: params.timeoutMs,
+    concurrency: params.concurrency,
+    debug: params.debug,
+    debugLabel: options.debugLabel,
+  };
 }

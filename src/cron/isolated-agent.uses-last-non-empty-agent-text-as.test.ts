@@ -6,7 +6,13 @@ import { loadModelCatalog } from "../agents/model-catalog.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import type { CliDeps } from "../cli/deps.js";
 import { runCronIsolatedAgentTurn } from "./isolated-agent.js";
-import { makeCfg, makeJob, withTempCronHome } from "./isolated-agent.test-harness.js";
+import {
+  makeCfg,
+  makeJob,
+  withTempCronHome,
+  writeSessionStore,
+  writeSessionStoreEntries,
+} from "./isolated-agent.test-harness.js";
 import type { CronJob } from "./types.js";
 const withTempHome = withTempCronHome;
 
@@ -21,14 +27,18 @@ function makeDeps(): CliDeps {
   };
 }
 
-function mockEmbeddedTexts(texts: string[]) {
+function mockEmbeddedPayloads(payloads: Array<{ text?: string; isError?: boolean }>) {
   vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
-    payloads: texts.map((text) => ({ text })),
+    payloads,
     meta: {
       durationMs: 5,
       agentMeta: { sessionId: "s", provider: "p", model: "m" },
     },
   });
+}
+
+function mockEmbeddedTexts(texts: string[]) {
+  mockEmbeddedPayloads(texts.map((text) => ({ text })));
 }
 
 function mockEmbeddedOk() {
@@ -42,33 +52,6 @@ function expectEmbeddedProviderModel(expected: { provider: string; model: string
   };
   expect(call?.provider).toBe(expected.provider);
   expect(call?.model).toBe(expected.model);
-}
-
-async function writeSessionStore(
-  home: string,
-  entries: Record<string, Record<string, unknown>> = {},
-) {
-  const dir = path.join(home, ".openclaw", "sessions");
-  await fs.mkdir(dir, { recursive: true });
-  const storePath = path.join(dir, "sessions.json");
-  await fs.writeFile(
-    storePath,
-    JSON.stringify(
-      {
-        "agent:main:main": {
-          sessionId: "main-session",
-          updatedAt: Date.now(),
-          lastProvider: "webchat",
-          lastTo: "",
-        },
-        ...entries,
-      },
-      null,
-      2,
-    ),
-    "utf-8",
-  );
-  return storePath;
 }
 
 async function readSessionEntry(storePath: string, key: string) {
@@ -98,7 +81,17 @@ type RunCronTurnOptions = {
 };
 
 async function runCronTurn(home: string, options: RunCronTurnOptions = {}) {
-  const storePath = options.storePath ?? (await writeSessionStore(home, options.storeEntries));
+  const storePath =
+    options.storePath ??
+    (await writeSessionStoreEntries(home, {
+      "agent:main:main": {
+        sessionId: "main-session",
+        updatedAt: Date.now(),
+        lastProvider: "webchat",
+        lastTo: "",
+      },
+      ...options.storeEntries,
+    }));
   const deps = options.deps ?? makeDeps();
   if (options.mockTexts === null) {
     vi.mocked(runEmbeddedPiAgent).mockClear();
@@ -182,6 +175,83 @@ describe("runCronIsolatedAgentTurn", () => {
 
       expect(res.status).toBe("ok");
       expect(res.summary).toBe("last");
+    });
+  });
+
+  it("returns error when embedded run payload is marked as error", async () => {
+    await withTempHome(async (home) => {
+      mockEmbeddedPayloads([
+        {
+          text: "⚠️ 🛠️ Exec failed: /bin/bash: line 1: python: command not found",
+          isError: true,
+        },
+      ]);
+      const { res } = await runCronTurn(home, {
+        jobPayload: DEFAULT_AGENT_TURN_PAYLOAD,
+        mockTexts: null,
+      });
+
+      expect(res.status).toBe("error");
+      expect(res.error).toContain("command not found");
+      expect(res.summary).toContain("Exec failed");
+    });
+  });
+
+  it("treats transient error payloads as non-fatal when a later success payload exists", async () => {
+    await withTempHome(async (home) => {
+      mockEmbeddedPayloads([
+        {
+          text: "⚠️ ✍️ Write: failed",
+          isError: true,
+        },
+        {
+          text: "Write completed successfully.",
+          isError: false,
+        },
+      ]);
+      const { res } = await runCronTurn(home, {
+        jobPayload: DEFAULT_AGENT_TURN_PAYLOAD,
+        mockTexts: null,
+      });
+
+      expect(res.status).toBe("ok");
+      expect(res.summary).toBe("Write completed successfully.");
+    });
+  });
+
+  it("keeps error status when run-level error accompanies post-error text", async () => {
+    await withTempHome(async (home) => {
+      vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
+        payloads: [
+          { text: "Model context overflow", isError: true },
+          { text: "Partial assistant text before error" },
+        ],
+        meta: {
+          durationMs: 5,
+          agentMeta: { sessionId: "s", provider: "p", model: "m" },
+          error: { kind: "context_overflow", message: "exceeded context window" },
+        },
+      });
+      const { res } = await runCronTurn(home, {
+        jobPayload: DEFAULT_AGENT_TURN_PAYLOAD,
+        mockTexts: null,
+      });
+
+      expect(res.status).toBe("error");
+    });
+  });
+
+  it("passes resolved agentDir to runEmbeddedPiAgent", async () => {
+    await withTempHome(async (home) => {
+      const { res } = await runCronTurn(home, {
+        jobPayload: DEFAULT_AGENT_TURN_PAYLOAD,
+      });
+
+      expect(res.status).toBe("ok");
+      const call = vi.mocked(runEmbeddedPiAgent).mock.calls.at(-1)?.[0] as {
+        agentDir?: string;
+      };
+      expect(call?.agentDir).toBe(path.join(home, ".openclaw", "agents", "main", "agent"));
     });
   });
 
@@ -454,7 +524,7 @@ describe("runCronIsolatedAgentTurn", () => {
 
   it("starts a fresh session id for each cron run", async () => {
     await withTempHome(async (home) => {
-      const storePath = await writeSessionStore(home);
+      const storePath = await writeSessionStore(home, { lastProvider: "webchat", lastTo: "" });
       const deps = makeDeps();
 
       const first = (
@@ -488,7 +558,7 @@ describe("runCronIsolatedAgentTurn", () => {
 
   it("preserves an existing cron session label", async () => {
     await withTempHome(async (home) => {
-      const storePath = await writeSessionStore(home);
+      const storePath = await writeSessionStore(home, { lastProvider: "webchat", lastTo: "" });
       const raw = await fs.readFile(storePath, "utf-8");
       const store = JSON.parse(raw) as Record<string, Record<string, unknown>>;
       store["agent:main:cron:job-1"] = {

@@ -1,7 +1,13 @@
 import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
 import { normalizeProviderId, parseModelRef } from "../agents/model-selection.js";
 import { DEFAULT_AGENT_MAX_CONCURRENT, DEFAULT_SUBAGENT_MAX_CONCURRENT } from "./agent-limits.js";
-import { resolveTalkApiKey } from "./talk.js";
+import { resolveAgentModelPrimaryValue } from "./model-input.js";
+import {
+  DEFAULT_TALK_PROVIDER,
+  normalizeTalkConfig,
+  resolveActiveTalkProviderConfig,
+  resolveTalkApiKey,
+} from "./talk.js";
 import type { OpenClawConfig } from "./types.js";
 import type { ModelDefinitionConfig } from "./types.models.js";
 
@@ -162,21 +168,46 @@ export function applySessionDefaults(
 }
 
 export function applyTalkApiKey(config: OpenClawConfig): OpenClawConfig {
+  const normalized = normalizeTalkConfig(config);
   const resolved = resolveTalkApiKey();
   if (!resolved) {
-    return config;
+    return normalized;
   }
-  const existing = config.talk?.apiKey?.trim();
-  if (existing) {
-    return config;
+
+  const talk = normalized.talk;
+  const active = resolveActiveTalkProviderConfig(talk);
+  if (active.provider && active.provider !== DEFAULT_TALK_PROVIDER) {
+    return normalized;
   }
-  return {
-    ...config,
-    talk: {
-      ...config.talk,
-      apiKey: resolved,
-    },
+
+  const existingProviderApiKey =
+    typeof active.config?.apiKey === "string" ? active.config.apiKey.trim() : "";
+  const existingLegacyApiKey = typeof talk?.apiKey === "string" ? talk.apiKey.trim() : "";
+  if (existingProviderApiKey || existingLegacyApiKey) {
+    return normalized;
+  }
+
+  const providerId = active.provider ?? DEFAULT_TALK_PROVIDER;
+  const providers = { ...talk?.providers };
+  const providerConfig = { ...providers[providerId], apiKey: resolved };
+  providers[providerId] = providerConfig;
+
+  const nextTalk = {
+    ...talk,
+    provider: talk?.provider ?? providerId,
+    providers,
+    // Keep legacy shape populated during compatibility rollout.
+    apiKey: resolved,
   };
+
+  return {
+    ...normalized,
+    talk: nextTalk,
+  };
+}
+
+export function applyTalkConfigNormalization(config: OpenClawConfig): OpenClawConfig {
+  return normalizeTalkConfig(config);
 }
 
 export function applyModelDefaults(cfg: OpenClawConfig): OpenClawConfig {
@@ -409,10 +440,19 @@ export function applyContextPruningDefaults(cfg: OpenClawConfig): OpenClawConfig
   if (authMode === "api_key") {
     const nextModels = defaults.models ? { ...defaults.models } : {};
     let modelsMutated = false;
+    const isAnthropicCacheRetentionTarget = (
+      parsed: { provider: string; model: string } | null | undefined,
+    ): parsed is { provider: string; model: string } =>
+      Boolean(
+        parsed &&
+        (parsed.provider === "anthropic" ||
+          (parsed.provider === "amazon-bedrock" &&
+            parsed.model.toLowerCase().includes("anthropic.claude"))),
+      );
 
     for (const [key, entry] of Object.entries(nextModels)) {
       const parsed = parseModelRef(key, "anthropic");
-      if (!parsed || parsed.provider !== "anthropic") {
+      if (!isAnthropicCacheRetentionTarget(parsed)) {
         continue;
       }
       const current = entry ?? {};
@@ -427,10 +467,12 @@ export function applyContextPruningDefaults(cfg: OpenClawConfig): OpenClawConfig
       modelsMutated = true;
     }
 
-    const primary = resolvePrimaryModelRef(defaults.model?.primary ?? undefined);
+    const primary = resolvePrimaryModelRef(
+      resolveAgentModelPrimaryValue(defaults.model) ?? undefined,
+    );
     if (primary) {
       const parsedPrimary = parseModelRef(primary, "anthropic");
-      if (parsedPrimary?.provider === "anthropic") {
+      if (isAnthropicCacheRetentionTarget(parsedPrimary)) {
         const key = `${parsedPrimary.provider}/${parsedPrimary.model}`;
         const entry = nextModels[key];
         const current = entry ?? {};

@@ -6,14 +6,19 @@ const { supervisorSpawnMock } = vi.hoisted(() => ({
   supervisorSpawnMock: vi.fn(),
 }));
 
-vi.mock("../process/supervisor/index.js", () => ({
-  getProcessSupervisor: () => ({
+const makeSupervisor = () => {
+  const noop = vi.fn();
+  return {
     spawn: (...args: unknown[]) => supervisorSpawnMock(...args),
-    cancel: vi.fn(),
-    cancelScope: vi.fn(),
-    reconcileOrphans: vi.fn(),
-    getRecord: vi.fn(),
-  }),
+    cancel: noop,
+    cancelScope: noop,
+    reconcileOrphans: noop,
+    getRecord: noop,
+  };
+};
+
+vi.mock("../process/supervisor/index.js", () => ({
+  getProcessSupervisor: () => makeSupervisor(),
 }));
 
 afterEach(() => {

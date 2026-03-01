@@ -30,6 +30,21 @@ describe("subscribeEmbeddedPiSession", () => {
     expect(resolved).toBe(true);
   });
 
+  it("does not count compaction until end event", async () => {
+    const { emit, subscription } = createSubscribedSessionHarness({
+      runId: "run-compaction-count",
+    });
+
+    emit({ type: "auto_compaction_start" });
+    expect(subscription.getCompactionCount()).toBe(0);
+
+    emit({ type: "auto_compaction_end", willRetry: true });
+    expect(subscription.getCompactionCount()).toBe(0);
+
+    emit({ type: "auto_compaction_end", willRetry: false });
+    expect(subscription.getCompactionCount()).toBe(1);
+  });
+
   it("emits compaction events on the agent event bus", async () => {
     const { emit } = createSubscribedSessionHarness({
       runId: "run-compaction",

@@ -1,5 +1,16 @@
 import * as Lark from "@larksuiteoapi/node-sdk";
+import { HttpsProxyAgent } from "https-proxy-agent";
 import type { FeishuDomain, ResolvedFeishuAccount } from "./types.js";
+
+function getWsProxyAgent(): HttpsProxyAgent<string> | undefined {
+  const proxyUrl =
+    process.env.https_proxy ||
+    process.env.HTTPS_PROXY ||
+    process.env.http_proxy ||
+    process.env.HTTP_PROXY;
+  if (!proxyUrl) return undefined;
+  return new HttpsProxyAgent(proxyUrl);
+}
 
 // Multi-account client cache
 const clientCache = new Map<
@@ -81,11 +92,13 @@ export function createFeishuWSClient(account: ResolvedFeishuAccount): Lark.WSCli
     throw new Error(`Feishu credentials not configured for account "${accountId}"`);
   }
 
+  const agent = getWsProxyAgent();
   return new Lark.WSClient({
     appId,
     appSecret,
     domain: resolveDomain(domain),
     loggerLevel: Lark.LoggerLevel.info,
+    ...(agent ? { agent } : {}),
   });
 }
 

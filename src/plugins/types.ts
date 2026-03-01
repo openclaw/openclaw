@@ -29,6 +29,7 @@ export type PluginLogger = {
 export type PluginConfigUiHint = {
   label?: string;
   help?: string;
+  tags?: string[];
   advanced?: boolean;
   sensitive?: boolean;
   placeholder?: string;

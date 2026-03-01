@@ -1,6 +1,10 @@
 ---
 title: Outbound Session Mirroring Refactor (Issue #1520)
 description: Track outbound session mirroring refactor notes, decisions, tests, and open items.
+summary: "Refactor notes for mirroring outbound sends into target channel sessions"
+read_when:
+  - Working on outbound transcript/session mirroring behavior
+  - Debugging sessionKey derivation for send/message tool paths
 ---
 
 # Outbound Session Mirroring Refactor (Issue #1520)
@@ -58,7 +62,7 @@ Outbound sends were mirrored into the _current_ agent session (tool session key)
 
 ## Tests Added/Updated
 
-- `src/infra/outbound/outbound-session.test.ts`
+- `src/infra/outbound/outbound.test.ts`
   - Slack thread session key.
   - Telegram topic session key.
   - dmScope identityLinks with Discord.
@@ -80,6 +84,6 @@ Outbound sends were mirrored into the _current_ agent session (tool session key)
 - `src/agents/tools/message-tool.ts`
 - `src/gateway/server-methods/send.ts`
 - Tests in:
-  - `src/infra/outbound/outbound-session.test.ts`
+  - `src/infra/outbound/outbound.test.ts`
   - `src/agents/tools/message-tool.test.ts`
   - `src/gateway/server-methods/send.test.ts`

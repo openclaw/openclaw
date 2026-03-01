@@ -45,6 +45,38 @@ describe("resolveSlackThreadTargets", () => {
     expect(statusThreadTs).toBeUndefined();
   });
 
+  it("does not treat auto-created top-level thread_ts as a real thread when mode is off", () => {
+    const { replyThreadTs, statusThreadTs, isThreadReply } = resolveSlackThreadTargets({
+      replyToMode: "off",
+      message: {
+        type: "message",
+        channel: "C1",
+        ts: "123",
+        thread_ts: "123",
+      },
+    });
+
+    expect(isThreadReply).toBe(false);
+    expect(replyThreadTs).toBeUndefined();
+    expect(statusThreadTs).toBeUndefined();
+  });
+
+  it("keeps first-mode behavior for auto-created top-level thread_ts", () => {
+    const { replyThreadTs, statusThreadTs, isThreadReply } = resolveSlackThreadTargets({
+      replyToMode: "first",
+      message: {
+        type: "message",
+        channel: "C1",
+        ts: "123",
+        thread_ts: "123",
+      },
+    });
+
+    expect(isThreadReply).toBe(false);
+    expect(replyThreadTs).toBeUndefined();
+    expect(statusThreadTs).toBeUndefined();
+  });
+
   it("sets messageThreadId for top-level messages when replyToMode is all", () => {
     const context = resolveSlackThreadContext({
       replyToMode: "all",

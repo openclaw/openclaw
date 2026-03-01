@@ -28,20 +28,26 @@ describe("gateway control-plane write rate limit", () => {
     } as unknown as Parameters<typeof handleGatewayRequest>[0]["context"];
   }
 
+  function buildConnect(): NonNullable<
+    Parameters<typeof handleGatewayRequest>[0]["client"]
+  >["connect"] {
+    return {
+      role: "operator",
+      scopes: ["operator.admin"],
+      client: {
+        id: "openclaw-control-ui",
+        version: "1.0.0",
+        platform: "darwin",
+        mode: "ui",
+      },
+      minProtocol: 1,
+      maxProtocol: 1,
+    };
+  }
+
   function buildClient() {
     return {
-      connect: {
-        role: "operator",
-        scopes: ["operator.admin"],
-        client: {
-          id: "openclaw-control-ui",
-          version: "1.0.0",
-          platform: "darwin",
-          mode: "ui",
-        },
-        minProtocol: 1,
-        maxProtocol: 1,
-      },
+      connect: buildConnect(),
       connId: "conn-1",
       clientIp: "10.0.0.5",
     } as Parameters<typeof handleGatewayRequest>[0]["client"];
@@ -127,18 +133,7 @@ describe("gateway control-plane write rate limit", () => {
 
   it("uses connId fallback when both device and client IP are unknown", () => {
     const key = resolveControlPlaneRateLimitKey({
-      connect: {
-        role: "operator",
-        scopes: ["operator.admin"],
-        client: {
-          id: "openclaw-control-ui",
-          version: "1.0.0",
-          platform: "darwin",
-          mode: "ui",
-        },
-        minProtocol: 1,
-        maxProtocol: 1,
-      },
+      connect: buildConnect(),
       connId: "conn-fallback",
     });
     expect(key).toBe("unknown-device|unknown-ip|conn=conn-fallback");
@@ -146,18 +141,7 @@ describe("gateway control-plane write rate limit", () => {
 
   it("keeps device/IP-based key when identity is present", () => {
     const key = resolveControlPlaneRateLimitKey({
-      connect: {
-        role: "operator",
-        scopes: ["operator.admin"],
-        client: {
-          id: "openclaw-control-ui",
-          version: "1.0.0",
-          platform: "darwin",
-          mode: "ui",
-        },
-        minProtocol: 1,
-        maxProtocol: 1,
-      },
+      connect: buildConnect(),
       connId: "conn-fallback",
       clientIp: "10.0.0.10",
     });

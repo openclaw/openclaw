@@ -1,3 +1,5 @@
+import { isBunRuntime, isNodeRuntime } from "../daemon/runtime-binary.js";
+
 const HELP_FLAGS = new Set(["-h", "--help"]);
 const VERSION_FLAGS = new Set(["-V", "--version"]);
 const ROOT_VERSION_ALIAS_FLAG = "-v";
@@ -79,6 +81,42 @@ export function hasRootVersionAlias(argv: string[]): boolean {
     return false;
   }
   return hasAlias;
+}
+
+export function isRootVersionInvocation(argv: string[]): boolean {
+  const args = argv.slice(2);
+  let hasVersion = false;
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i];
+    if (!arg) {
+      continue;
+    }
+    if (arg === FLAG_TERMINATOR) {
+      break;
+    }
+    if (arg === ROOT_VERSION_ALIAS_FLAG || VERSION_FLAGS.has(arg)) {
+      hasVersion = true;
+      continue;
+    }
+    if (ROOT_BOOLEAN_FLAGS.has(arg)) {
+      continue;
+    }
+    if (arg.startsWith("--profile=") || arg.startsWith("--log-level=")) {
+      continue;
+    }
+    if (ROOT_VALUE_FLAGS.has(arg)) {
+      const next = args[i + 1];
+      if (isValueToken(next)) {
+        i += 1;
+      }
+      continue;
+    }
+    if (arg.startsWith("-")) {
+      return false;
+    }
+    return false;
+  }
+  return hasVersion;
 }
 
 export function getFlagValue(argv: string[], name: string): string | null | undefined {
@@ -163,29 +201,13 @@ export function buildParseArgv(params: {
       : baseArgv[0]?.endsWith("openclaw")
         ? baseArgv.slice(1)
         : baseArgv;
-  const executable = (normalizedArgv[0]?.split(/[/\\]/).pop() ?? "").toLowerCase();
   const looksLikeNode =
-    normalizedArgv.length >= 2 && (isNodeExecutable(executable) || isBunExecutable(executable));
+    normalizedArgv.length >= 2 &&
+    (isNodeRuntime(normalizedArgv[0] ?? "") || isBunRuntime(normalizedArgv[0] ?? ""));
   if (looksLikeNode) {
     return normalizedArgv;
   }
   return ["node", programName || "openclaw", ...normalizedArgv];
-}
-
-const nodeExecutablePattern = /^node-\d+(?:\.\d+)*(?:\.exe)?$/;
-
-function isNodeExecutable(executable: string): boolean {
-  return (
-    executable === "node" ||
-    executable === "node.exe" ||
-    executable === "nodejs" ||
-    executable === "nodejs.exe" ||
-    nodeExecutablePattern.test(executable)
-  );
-}
-
-function isBunExecutable(executable: string): boolean {
-  return executable === "bun" || executable === "bun.exe";
 }
 
 export function shouldMigrateStateFromPath(path: string[]): boolean {

@@ -9,7 +9,7 @@ import {
   type JsonSchema,
 } from "./config-form.shared.ts";
 
-const META_KEYS = new Set(["title", "description", "default", "nullable"]);
+const META_KEYS = new Set(["title", "description", "default", "nullable", "tags", "x-tags"]);
 
 function isAnySchema(schema: JsonSchema): boolean {
   const keys = Object.keys(schema ?? {}).filter((key) => !META_KEYS.has(key));
@@ -25,44 +25,6 @@ function jsonValue(value: unknown): string {
   } catch {
     return "";
   }
-}
-
-function renderJsonFallback(params: {
-  label: string;
-  help: string | undefined;
-  value: unknown;
-  path: Array<string | number>;
-  disabled: boolean;
-  showLabel: boolean;
-  onPatch: (path: Array<string | number>, value: unknown) => void;
-}): TemplateResult {
-  const { label, help, value, path, disabled, showLabel, onPatch } = params;
-  const display = jsonValue(value);
-  return html`
-    <div class="cfg-field">
-      ${showLabel ? html`<label class="cfg-field__label">${label}</label>` : nothing}
-      ${help ? html`<div class="cfg-field__help">${help}</div>` : nothing}
-      <textarea
-        class="cfg-textarea"
-        rows=${Math.min(Math.max((display.match(/\n/g)?.length ?? 0) + 1, 2), 10)}
-        placeholder="JSON value"
-        .value=${display}
-        ?disabled=${disabled}
-        @change=${(e: Event) => {
-          const raw = (e.target as HTMLTextAreaElement).value.trim();
-          if (!raw) {
-            onPatch(path, undefined);
-            return;
-          }
-          try {
-            onPatch(path, JSON.parse(raw));
-          } catch {
-            // leave as-is if invalid JSON
-          }
-        }}
-      ></textarea>
-    </div>
-  `;
 }
 
 // SVG Icons as template literals
@@ -132,6 +94,234 @@ const icons = {
   `,
 };
 
+type FieldMeta = {
+  label: string;
+  help?: string;
+  tags: string[];
+};
+
+export type ConfigSearchCriteria = {
+  text: string;
+  tags: string[];
+};
+
+function hasSearchCriteria(criteria: ConfigSearchCriteria | undefined): boolean {
+  return Boolean(criteria && (criteria.text.length > 0 || criteria.tags.length > 0));
+}
+
+export function parseConfigSearchQuery(query: string): ConfigSearchCriteria {
+  const tags: string[] = [];
+  const seen = new Set<string>();
+  const raw = query.trim();
+  const stripped = raw.replace(/(^|\s)tag:([^\s]+)/gi, (_, leading: string, token: string) => {
+    const normalized = token.trim().toLowerCase();
+    if (normalized && !seen.has(normalized)) {
+      seen.add(normalized);
+      tags.push(normalized);
+    }
+    return leading;
+  });
+  return {
+    text: stripped.trim().toLowerCase(),
+    tags,
+  };
+}
+
+function normalizeTags(raw: unknown): string[] {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  const seen = new Set<string>();
+  const tags: string[] = [];
+  for (const value of raw) {
+    if (typeof value !== "string") {
+      continue;
+    }
+    const tag = value.trim();
+    if (!tag) {
+      continue;
+    }
+    const key = tag.toLowerCase();
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    tags.push(tag);
+  }
+  return tags;
+}
+
+function resolveFieldMeta(
+  path: Array<string | number>,
+  schema: JsonSchema,
+  hints: ConfigUiHints,
+): FieldMeta {
+  const hint = hintForPath(path, hints);
+  const label = hint?.label ?? schema.title ?? humanize(String(path.at(-1)));
+  const help = hint?.help ?? schema.description;
+  const schemaTags = normalizeTags(schema["x-tags"] ?? schema.tags);
+  const hintTags = normalizeTags(hint?.tags);
+  return {
+    label,
+    help,
+    tags: hintTags.length > 0 ? hintTags : schemaTags,
+  };
+}
+
+function matchesText(text: string, candidates: Array<string | undefined>): boolean {
+  if (!text) {
+    return true;
+  }
+  for (const candidate of candidates) {
+    if (candidate && candidate.toLowerCase().includes(text)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function matchesTags(filterTags: string[], fieldTags: string[]): boolean {
+  if (filterTags.length === 0) {
+    return true;
+  }
+  const normalized = new Set(fieldTags.map((tag) => tag.toLowerCase()));
+  return filterTags.every((tag) => normalized.has(tag));
+}
+
+function matchesNodeSelf(params: {
+  schema: JsonSchema;
+  path: Array<string | number>;
+  hints: ConfigUiHints;
+  criteria: ConfigSearchCriteria;
+}): boolean {
+  const { schema, path, hints, criteria } = params;
+  if (!hasSearchCriteria(criteria)) {
+    return true;
+  }
+  const { label, help, tags } = resolveFieldMeta(path, schema, hints);
+  if (!matchesTags(criteria.tags, tags)) {
+    return false;
+  }
+
+  if (!criteria.text) {
+    return true;
+  }
+
+  const pathLabel = path
+    .filter((segment): segment is string => typeof segment === "string")
+    .join(".");
+  const enumText =
+    schema.enum && schema.enum.length > 0
+      ? schema.enum.map((value) => String(value)).join(" ")
+      : "";
+
+  return matchesText(criteria.text, [
+    label,
+    help,
+    schema.title,
+    schema.description,
+    pathLabel,
+    enumText,
+  ]);
+}
+
+export function matchesNodeSearch(params: {
+  schema: JsonSchema;
+  value: unknown;
+  path: Array<string | number>;
+  hints: ConfigUiHints;
+  criteria: ConfigSearchCriteria;
+}): boolean {
+  const { schema, value, path, hints, criteria } = params;
+  if (!hasSearchCriteria(criteria)) {
+    return true;
+  }
+  if (matchesNodeSelf({ schema, path, hints, criteria })) {
+    return true;
+  }
+
+  const type = schemaType(schema);
+  if (type === "object") {
+    const fallback = value ?? schema.default;
+    const obj =
+      fallback && typeof fallback === "object" && !Array.isArray(fallback)
+        ? (fallback as Record<string, unknown>)
+        : {};
+    const props = schema.properties ?? {};
+    for (const [propKey, node] of Object.entries(props)) {
+      if (
+        matchesNodeSearch({
+          schema: node,
+          value: obj[propKey],
+          path: [...path, propKey],
+          hints,
+          criteria,
+        })
+      ) {
+        return true;
+      }
+    }
+    const additional = schema.additionalProperties;
+    if (additional && typeof additional === "object") {
+      const reserved = new Set(Object.keys(props));
+      for (const [entryKey, entryValue] of Object.entries(obj)) {
+        if (reserved.has(entryKey)) {
+          continue;
+        }
+        if (
+          matchesNodeSearch({
+            schema: additional,
+            value: entryValue,
+            path: [...path, entryKey],
+            hints,
+            criteria,
+          })
+        ) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  if (type === "array") {
+    const itemsSchema = Array.isArray(schema.items) ? schema.items[0] : schema.items;
+    if (!itemsSchema) {
+      return false;
+    }
+    const arr = Array.isArray(value) ? value : Array.isArray(schema.default) ? schema.default : [];
+    if (arr.length === 0) {
+      return false;
+    }
+    for (let idx = 0; idx < arr.length; idx += 1) {
+      if (
+        matchesNodeSearch({
+          schema: itemsSchema,
+          value: arr[idx],
+          path: [...path, idx],
+          hints,
+          criteria,
+        })
+      ) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+function renderTags(tags: string[]): TemplateResult | typeof nothing {
+  if (tags.length === 0) {
+    return nothing;
+  }
+  return html`
+    <div class="cfg-tags">
+      ${tags.map((tag) => html`<span class="cfg-tag">${tag}</span>`)}
+    </div>
+  `;
+}
+
 export function renderNode(params: {
   schema: JsonSchema;
   value: unknown;
@@ -140,18 +330,28 @@ export function renderNode(params: {
   unsupported: Set<string>;
   disabled: boolean;
   showLabel?: boolean;
+  searchCriteria?: ConfigSearchCriteria;
   onPatch: (path: Array<string | number>, value: unknown) => void;
 }): TemplateResult | typeof nothing {
   const { schema, value, path, hints, unsupported, disabled, onPatch } = params;
   const showLabel = params.showLabel ?? true;
   const type = schemaType(schema);
-  const hint = hintForPath(path, hints);
-  const label = hint?.label ?? schema.title ?? humanize(String(path.at(-1)));
-  const help = hint?.help ?? schema.description;
+  const { label, help, tags } = resolveFieldMeta(path, schema, hints);
   const key = pathKey(path);
+  const criteria = params.searchCriteria;
 
   if (unsupported.has(key)) {
-    return renderJsonFallback({ label, help, value, path, disabled, onPatch, showLabel });
+    return html`<div class="cfg-field cfg-field--error">
+      <div class="cfg-field__label">${label}</div>
+      <div class="cfg-field__error">Unsupported schema node. Use Raw mode.</div>
+    </div>`;
+  }
+  if (
+    criteria &&
+    hasSearchCriteria(criteria) &&
+    !matchesNodeSearch({ schema, value, path, hints, criteria })
+  ) {
+    return nothing;
   }
 
   // Handle anyOf/oneOf unions
@@ -185,6 +385,7 @@ export function renderNode(params: {
         <div class="cfg-field">
           ${showLabel ? html`<label class="cfg-field__label">${label}</label>` : nothing}
           ${help ? html`<div class="cfg-field__help">${help}</div>` : nothing}
+          ${renderTags(tags)}
           <div class="cfg-segmented">
             ${literals.map(
               (lit) => html`
@@ -250,6 +451,7 @@ export function renderNode(params: {
         <div class="cfg-field">
           ${showLabel ? html`<label class="cfg-field__label">${label}</label>` : nothing}
           ${help ? html`<div class="cfg-field__help">${help}</div>` : nothing}
+          ${renderTags(tags)}
           <div class="cfg-segmented">
             ${options.map(
               (opt) => html`
@@ -293,6 +495,7 @@ export function renderNode(params: {
         <div class="cfg-toggle-row__content">
           <span class="cfg-toggle-row__label">${label}</span>
           ${help ? html`<span class="cfg-toggle-row__help">${help}</span>` : nothing}
+          ${renderTags(tags)}
         </div>
         <div class="cfg-toggle">
           <input
@@ -317,8 +520,13 @@ export function renderNode(params: {
     return renderTextInput({ ...params, inputType: "text" });
   }
 
-  // Fallback — render a JSON textarea for types the form renderer doesn't know about
-  return renderJsonFallback({ label, help, value, path, disabled, onPatch, showLabel });
+  // Fallback
+  return html`
+    <div class="cfg-field cfg-field--error">
+      <div class="cfg-field__label">${label}</div>
+      <div class="cfg-field__error">Unsupported type: ${type}. Use Raw mode.</div>
+    </div>
+  `;
 }
 
 function renderTextInput(params: {
@@ -328,14 +536,14 @@ function renderTextInput(params: {
   hints: ConfigUiHints;
   disabled: boolean;
   showLabel?: boolean;
+  searchCriteria?: ConfigSearchCriteria;
   inputType: "text" | "number";
   onPatch: (path: Array<string | number>, value: unknown) => void;
 }): TemplateResult {
   const { schema, value, path, hints, disabled, onPatch, inputType } = params;
   const showLabel = params.showLabel ?? true;
   const hint = hintForPath(path, hints);
-  const label = hint?.label ?? schema.title ?? humanize(String(path.at(-1)));
-  const help = hint?.help ?? schema.description;
+  const { label, help, tags } = resolveFieldMeta(path, schema, hints);
   const isSensitive =
     (hint?.sensitive ?? false) && !/^\$\{[^}]*\}$/.test(String(value ?? "").trim());
   const placeholder =
@@ -352,6 +560,7 @@ function renderTextInput(params: {
     <div class="cfg-field">
       ${showLabel ? html`<label class="cfg-field__label">${label}</label>` : nothing}
       ${help ? html`<div class="cfg-field__help">${help}</div>` : nothing}
+      ${renderTags(tags)}
       <div class="cfg-input-wrap">
         <input
           type=${isSensitive ? "password" : inputType}
@@ -405,13 +614,12 @@ function renderNumberInput(params: {
   hints: ConfigUiHints;
   disabled: boolean;
   showLabel?: boolean;
+  searchCriteria?: ConfigSearchCriteria;
   onPatch: (path: Array<string | number>, value: unknown) => void;
 }): TemplateResult {
   const { schema, value, path, hints, disabled, onPatch } = params;
   const showLabel = params.showLabel ?? true;
-  const hint = hintForPath(path, hints);
-  const label = hint?.label ?? schema.title ?? humanize(String(path.at(-1)));
-  const help = hint?.help ?? schema.description;
+  const { label, help, tags } = resolveFieldMeta(path, schema, hints);
   const displayValue = value ?? schema.default ?? "";
   const numValue = typeof displayValue === "number" ? displayValue : 0;
 
@@ -419,6 +627,7 @@ function renderNumberInput(params: {
     <div class="cfg-field">
       ${showLabel ? html`<label class="cfg-field__label">${label}</label>` : nothing}
       ${help ? html`<div class="cfg-field__help">${help}</div>` : nothing}
+      ${renderTags(tags)}
       <div class="cfg-number">
         <button
           type="button"
@@ -455,14 +664,13 @@ function renderSelect(params: {
   hints: ConfigUiHints;
   disabled: boolean;
   showLabel?: boolean;
+  searchCriteria?: ConfigSearchCriteria;
   options: unknown[];
   onPatch: (path: Array<string | number>, value: unknown) => void;
 }): TemplateResult {
   const { schema, value, path, hints, disabled, options, onPatch } = params;
   const showLabel = params.showLabel ?? true;
-  const hint = hintForPath(path, hints);
-  const label = hint?.label ?? schema.title ?? humanize(String(path.at(-1)));
-  const help = hint?.help ?? schema.description;
+  const { label, help, tags } = resolveFieldMeta(path, schema, hints);
   const resolvedValue = value ?? schema.default;
   const currentIndex = options.findIndex(
     (opt) => opt === resolvedValue || String(opt) === String(resolvedValue),
@@ -473,6 +681,7 @@ function renderSelect(params: {
     <div class="cfg-field">
       ${showLabel ? html`<label class="cfg-field__label">${label}</label>` : nothing}
       ${help ? html`<div class="cfg-field__help">${help}</div>` : nothing}
+      ${renderTags(tags)}
       <select
         class="cfg-select"
         ?disabled=${disabled}
@@ -501,12 +710,17 @@ function renderObject(params: {
   unsupported: Set<string>;
   disabled: boolean;
   showLabel?: boolean;
+  searchCriteria?: ConfigSearchCriteria;
   onPatch: (path: Array<string | number>, value: unknown) => void;
 }): TemplateResult {
-  const { schema, value, path, hints, unsupported, disabled, onPatch } = params;
-  const hint = hintForPath(path, hints);
-  const label = hint?.label ?? schema.title ?? humanize(String(path.at(-1)));
-  const help = hint?.help ?? schema.description;
+  const { schema, value, path, hints, unsupported, disabled, onPatch, searchCriteria } = params;
+  const showLabel = params.showLabel ?? true;
+  const { label, help, tags } = resolveFieldMeta(path, schema, hints);
+  const selfMatched =
+    searchCriteria && hasSearchCriteria(searchCriteria)
+      ? matchesNodeSelf({ schema, path, hints, criteria: searchCriteria })
+      : false;
+  const childSearchCriteria = selfMatched ? undefined : searchCriteria;
 
   const fallback = value ?? schema.default;
   const obj =
@@ -539,6 +753,7 @@ function renderObject(params: {
         hints,
         unsupported,
         disabled,
+        searchCriteria: childSearchCriteria,
         onPatch,
       }),
     )}
@@ -552,6 +767,7 @@ function renderObject(params: {
             unsupported,
             disabled,
             reservedKeys: reserved,
+            searchCriteria: childSearchCriteria,
             onPatch,
           })
         : nothing
@@ -567,11 +783,22 @@ function renderObject(params: {
     `;
   }
 
+  if (!showLabel) {
+    return html`
+      <div class="cfg-fields cfg-fields--inline">
+        ${fields}
+      </div>
+    `;
+  }
+
   // Nested objects get collapsible treatment
   return html`
-    <details class="cfg-object" open>
+    <details class="cfg-object" ?open=${path.length <= 2}>
       <summary class="cfg-object__header">
-        <span class="cfg-object__title">${label}</span>
+        <span class="cfg-object__title-wrap">
+          <span class="cfg-object__title">${label}</span>
+          ${renderTags(tags)}
+        </span>
         <span class="cfg-object__chevron">${icons.chevronDown}</span>
       </summary>
       ${help ? html`<div class="cfg-object__help">${help}</div>` : nothing}
@@ -590,13 +817,17 @@ function renderArray(params: {
   unsupported: Set<string>;
   disabled: boolean;
   showLabel?: boolean;
+  searchCriteria?: ConfigSearchCriteria;
   onPatch: (path: Array<string | number>, value: unknown) => void;
 }): TemplateResult {
-  const { schema, value, path, hints, unsupported, disabled, onPatch } = params;
+  const { schema, value, path, hints, unsupported, disabled, onPatch, searchCriteria } = params;
   const showLabel = params.showLabel ?? true;
-  const hint = hintForPath(path, hints);
-  const label = hint?.label ?? schema.title ?? humanize(String(path.at(-1)));
-  const help = hint?.help ?? schema.description;
+  const { label, help, tags } = resolveFieldMeta(path, schema, hints);
+  const selfMatched =
+    searchCriteria && hasSearchCriteria(searchCriteria)
+      ? matchesNodeSelf({ schema, path, hints, criteria: searchCriteria })
+      : false;
+  const childSearchCriteria = selfMatched ? undefined : searchCriteria;
 
   const itemsSchema = Array.isArray(schema.items) ? schema.items[0] : schema.items;
   if (!itemsSchema) {
@@ -613,7 +844,10 @@ function renderArray(params: {
   return html`
     <div class="cfg-array">
       <div class="cfg-array__header">
-        ${showLabel ? html`<span class="cfg-array__label">${label}</span>` : nothing}
+        <div class="cfg-array__title">
+          ${showLabel ? html`<span class="cfg-array__label">${label}</span>` : nothing}
+          ${renderTags(tags)}
+        </div>
         <span class="cfg-array__count">${arr.length} item${arr.length !== 1 ? "s" : ""}</span>
         <button
           type="button"
@@ -664,6 +898,7 @@ function renderArray(params: {
                   hints,
                   unsupported,
                   disabled,
+                  searchCriteria: childSearchCriteria,
                   showLabel: false,
                   onPatch,
                 })}
@@ -686,11 +921,34 @@ function renderMapField(params: {
   unsupported: Set<string>;
   disabled: boolean;
   reservedKeys: Set<string>;
+  searchCriteria?: ConfigSearchCriteria;
   onPatch: (path: Array<string | number>, value: unknown) => void;
 }): TemplateResult {
-  const { schema, value, path, hints, unsupported, disabled, reservedKeys, onPatch } = params;
+  const {
+    schema,
+    value,
+    path,
+    hints,
+    unsupported,
+    disabled,
+    reservedKeys,
+    onPatch,
+    searchCriteria,
+  } = params;
   const anySchema = isAnySchema(schema);
   const entries = Object.entries(value ?? {}).filter(([key]) => !reservedKeys.has(key));
+  const visibleEntries =
+    searchCriteria && hasSearchCriteria(searchCriteria)
+      ? entries.filter(([key, entryValue]) =>
+          matchesNodeSearch({
+            schema,
+            value: entryValue,
+            path: [...path, key],
+            hints,
+            criteria: searchCriteria,
+          }),
+        )
+      : entries;
 
   return html`
     <div class="cfg-map">
@@ -718,38 +976,53 @@ function renderMapField(params: {
       </div>
 
       ${
-        entries.length === 0
+        visibleEntries.length === 0
           ? html`
               <div class="cfg-map__empty">No custom entries.</div>
             `
           : html`
         <div class="cfg-map__items">
-          ${entries.map(([key, entryValue]) => {
+          ${visibleEntries.map(([key, entryValue]) => {
             const valuePath = [...path, key];
             const fallback = jsonValue(entryValue);
             return html`
               <div class="cfg-map__item">
-                <div class="cfg-map__item-key">
-                  <input
-                    type="text"
-                    class="cfg-input cfg-input--sm"
-                    placeholder="Key"
-                    .value=${key}
+                <div class="cfg-map__item-header">
+                  <div class="cfg-map__item-key">
+                    <input
+                      type="text"
+                      class="cfg-input cfg-input--sm"
+                      placeholder="Key"
+                      .value=${key}
+                      ?disabled=${disabled}
+                      @change=${(e: Event) => {
+                        const nextKey = (e.target as HTMLInputElement).value.trim();
+                        if (!nextKey || nextKey === key) {
+                          return;
+                        }
+                        const next = { ...value };
+                        if (nextKey in next) {
+                          return;
+                        }
+                        next[nextKey] = next[key];
+                        delete next[key];
+                        onPatch(path, next);
+                      }}
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    class="cfg-map__item-remove"
+                    title="Remove entry"
                     ?disabled=${disabled}
-                    @change=${(e: Event) => {
-                      const nextKey = (e.target as HTMLInputElement).value.trim();
-                      if (!nextKey || nextKey === key) {
-                        return;
-                      }
+                    @click=${() => {
                       const next = { ...value };
-                      if (nextKey in next) {
-                        return;
-                      }
-                      next[nextKey] = next[key];
                       delete next[key];
                       onPatch(path, next);
                     }}
-                  />
+                  >
+                    ${icons.trash}
+                  </button>
                 </div>
                 <div class="cfg-map__item-value">
                   ${
@@ -783,24 +1056,12 @@ function renderMapField(params: {
                           hints,
                           unsupported,
                           disabled,
+                          searchCriteria,
                           showLabel: false,
                           onPatch,
                         })
                   }
                 </div>
-                <button
-                  type="button"
-                  class="cfg-map__item-remove"
-                  title="Remove entry"
-                  ?disabled=${disabled}
-                  @click=${() => {
-                    const next = { ...value };
-                    delete next[key];
-                    onPatch(path, next);
-                  }}
-                >
-                  ${icons.trash}
-                </button>
               </div>
             `;
           })}

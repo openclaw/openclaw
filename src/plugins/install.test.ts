@@ -167,6 +167,26 @@ function setupPluginInstallDirs() {
   return { tmpDir, pluginDir, extensionsDir };
 }
 
+function setupInstallPluginFromDirFixture(params?: { devDependencies?: Record<string, string> }) {
+  const workDir = makeTempDir();
+  const stateDir = makeTempDir();
+  const pluginDir = path.join(workDir, "plugin");
+  fs.mkdirSync(path.join(pluginDir, "dist"), { recursive: true });
+  fs.writeFileSync(
+    path.join(pluginDir, "package.json"),
+    JSON.stringify({
+      name: "@openclaw/test-plugin",
+      version: "0.0.1",
+      openclaw: { extensions: ["./dist/index.js"] },
+      dependencies: { "left-pad": "1.3.0" },
+      ...(params?.devDependencies ? { devDependencies: params.devDependencies } : {}),
+    }),
+    "utf-8",
+  );
+  fs.writeFileSync(path.join(pluginDir, "dist", "index.js"), "export {};", "utf-8");
+  return { pluginDir, extensionsDir: path.join(stateDir, "extensions") };
+}
+
 async function installFromDirWithWarnings(params: { pluginDir: string; extensionsDir: string }) {
   const warnings: string[] = [];
   const result = await installPluginFromDir({
@@ -445,21 +465,7 @@ describe("installPluginFromArchive", () => {
 
 describe("installPluginFromDir", () => {
   it("uses --ignore-scripts for dependency install", async () => {
-    const workDir = makeTempDir();
-    const stateDir = makeTempDir();
-    const pluginDir = path.join(workDir, "plugin");
-    fs.mkdirSync(path.join(pluginDir, "dist"), { recursive: true });
-    fs.writeFileSync(
-      path.join(pluginDir, "package.json"),
-      JSON.stringify({
-        name: "@openclaw/test-plugin",
-        version: "0.0.1",
-        openclaw: { extensions: ["./dist/index.js"] },
-        dependencies: { "left-pad": "1.3.0" },
-      }),
-      "utf-8",
-    );
-    fs.writeFileSync(path.join(pluginDir, "dist", "index.js"), "export {};", "utf-8");
+    const { pluginDir, extensionsDir } = setupInstallPluginFromDirFixture();
 
     const run = vi.mocked(runCommandWithTimeout);
     await expectInstallUsesIgnoreScripts({
@@ -467,31 +473,18 @@ describe("installPluginFromDir", () => {
       install: async () =>
         await installPluginFromDir({
           dirPath: pluginDir,
-          extensionsDir: path.join(stateDir, "extensions"),
+          extensionsDir,
         }),
     });
   });
 
   it("strips workspace devDependencies before npm install", async () => {
-    const workDir = makeTempDir();
-    const stateDir = makeTempDir();
-    const pluginDir = path.join(workDir, "plugin");
-    fs.mkdirSync(path.join(pluginDir, "dist"), { recursive: true });
-    fs.writeFileSync(
-      path.join(pluginDir, "package.json"),
-      JSON.stringify({
-        name: "@openclaw/test-plugin",
-        version: "0.0.1",
-        openclaw: { extensions: ["./dist/index.js"] },
-        dependencies: { "left-pad": "1.3.0" },
-        devDependencies: {
-          openclaw: "workspace:*",
-          vitest: "^3.0.0",
-        },
-      }),
-      "utf-8",
-    );
-    fs.writeFileSync(path.join(pluginDir, "dist", "index.js"), "export {};", "utf-8");
+    const { pluginDir, extensionsDir } = setupInstallPluginFromDirFixture({
+      devDependencies: {
+        openclaw: "workspace:*",
+        vitest: "^3.0.0",
+      },
+    });
 
     const run = vi.mocked(runCommandWithTimeout);
     run.mockResolvedValue({
@@ -505,7 +498,7 @@ describe("installPluginFromDir", () => {
 
     const res = await installPluginFromDir({
       dirPath: pluginDir,
-      extensionsDir: path.join(stateDir, "extensions"),
+      extensionsDir,
     });
     expect(res.ok).toBe(true);
     if (!res.ok) {
@@ -519,6 +512,87 @@ describe("installPluginFromDir", () => {
     };
     expect(manifest.devDependencies?.openclaw).toBeUndefined();
     expect(manifest.devDependencies?.vitest).toBe("^3.0.0");
+  });
+
+  it("uses openclaw.plugin.json id as install key when it differs from package name", async () => {
+    const { pluginDir, extensionsDir } = setupPluginInstallDirs();
+    fs.mkdirSync(path.join(pluginDir, "dist"), { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: "@openclaw/cognee-openclaw",
+        version: "0.0.1",
+        openclaw: { extensions: ["./dist/index.js"] },
+      }),
+      "utf-8",
+    );
+    fs.writeFileSync(path.join(pluginDir, "dist", "index.js"), "export {};", "utf-8");
+    fs.writeFileSync(
+      path.join(pluginDir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: "memory-cognee",
+        configSchema: { type: "object", properties: {} },
+      }),
+      "utf-8",
+    );
+
+    const infoMessages: string[] = [];
+    const res = await installPluginFromDir({
+      dirPath: pluginDir,
+      extensionsDir,
+      logger: { info: (msg: string) => infoMessages.push(msg), warn: () => {} },
+    });
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      return;
+    }
+    expect(res.pluginId).toBe("memory-cognee");
+    expect(res.targetDir).toBe(path.join(extensionsDir, "memory-cognee"));
+    expect(
+      infoMessages.some((msg) =>
+        msg.includes(
+          'Plugin manifest id "memory-cognee" differs from npm package name "cognee-openclaw"',
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  it("normalizes scoped manifest ids to unscoped install keys", async () => {
+    const { pluginDir, extensionsDir } = setupPluginInstallDirs();
+    fs.mkdirSync(path.join(pluginDir, "dist"), { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: "@openclaw/cognee-openclaw",
+        version: "0.0.1",
+        openclaw: { extensions: ["./dist/index.js"] },
+      }),
+      "utf-8",
+    );
+    fs.writeFileSync(path.join(pluginDir, "dist", "index.js"), "export {};", "utf-8");
+    fs.writeFileSync(
+      path.join(pluginDir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: "@team/memory-cognee",
+        configSchema: { type: "object", properties: {} },
+      }),
+      "utf-8",
+    );
+
+    const res = await installPluginFromDir({
+      dirPath: pluginDir,
+      extensionsDir,
+      expectedPluginId: "memory-cognee",
+      logger: { info: () => {}, warn: () => {} },
+    });
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      return;
+    }
+    expect(res.pluginId).toBe("memory-cognee");
+    expect(res.targetDir).toBe(path.join(extensionsDir, "memory-cognee"));
   });
 });
 

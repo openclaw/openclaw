@@ -29,6 +29,23 @@ import {
 import { buildCursorPositionResponse, stripDsrRequests } from "./pty-dsr.js";
 import { getShellConfig, sanitizeBinaryOutput } from "./shell-utils.js";
 
+// Sanitize inherited host env before merge so dangerous variables from process.env
+// are not propagated into non-sandboxed executions.
+export function sanitizeHostBaseEnv(env: Record<string, string>): Record<string, string> {
+  const sanitized: Record<string, string> = {};
+  for (const [key, value] of Object.entries(env)) {
+    const upperKey = key.toUpperCase();
+    if (upperKey === "PATH") {
+      sanitized[key] = value;
+      continue;
+    }
+    if (isDangerousHostEnvVarName(upperKey)) {
+      continue;
+    }
+    sanitized[key] = value;
+  }
+  return sanitized;
+}
 // Centralized sanitization helper.
 // Throws an error if dangerous variables or PATH modifications are detected on the host.
 export function validateHostEnv(env: Record<string, string>): void {
@@ -267,7 +284,7 @@ export async function runExecProcess(opts: {
   notifyOnExitEmptySuccess?: boolean;
   scopeKey?: string;
   sessionKey?: string;
-  timeoutSec: number;
+  timeoutSec: number | null;
   onUpdate?: (partialResult: AgentToolResult<ExecToolDetails>) => void;
 }): Promise<ExecProcessHandle> {
   const startedAt = Date.now();
@@ -482,7 +499,13 @@ export async function runExecProcess(opts: {
     .then((exit): ExecProcessOutcome => {
       const durationMs = Date.now() - startedAt;
       const isNormalExit = exit.reason === "exit";
-      const status: "completed" | "failed" = isNormalExit ? "completed" : "failed";
+      const exitCode = exit.exitCode ?? 0;
+      // Shell exit codes 126 (not executable) and 127 (command not found) are
+      // unrecoverable infrastructure failures that should surface as real errors
+      // rather than silently completing — e.g. `python: command not found`.
+      const isShellFailure = exitCode === 126 || exitCode === 127;
+      const status: "completed" | "failed" =
+        isNormalExit && !isShellFailure ? "completed" : "failed";
 
       markExited(session, exit.exitCode, exit.exitSignal, status);
       maybeNotifyOnExit(session, status);
@@ -491,7 +514,6 @@ export async function runExecProcess(opts: {
       }
       const aggregated = session.aggregated.trim();
       if (status === "completed") {
-        const exitCode = exit.exitCode ?? 0;
         const exitMsg = exitCode !== 0 ? `\n\n(Command exited with code ${exitCode})` : "";
         return {
           status: "completed",
@@ -502,9 +524,14 @@ export async function runExecProcess(opts: {
           timedOut: false,
         };
       }
-      const reason =
-        exit.reason === "overall-timeout"
-          ? `Command timed out after ${opts.timeoutSec} seconds`
+      const reason = isShellFailure
+        ? exitCode === 127
+          ? "Command not found"
+          : "Command not executable (permission denied)"
+        : exit.reason === "overall-timeout"
+          ? typeof opts.timeoutSec === "number" && opts.timeoutSec > 0
+            ? `Command timed out after ${opts.timeoutSec} seconds`
+            : "Command timed out"
           : exit.reason === "no-output-timeout"
             ? "Command timed out waiting for output"
             : exit.exitSignal != null

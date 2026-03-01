@@ -7,7 +7,7 @@
   display: flex;
   gap: 12px;
   align-items: flex-start;
-  margin-bottom: 8px;
+  margin-bottom: 16px;
   margin-left: 4px;
   margin-right: 16px;
 }
@@ -83,15 +83,14 @@
 
 /* Avatar Styles */
 .chat-avatar {
-  width: 38px;
-  height: 38px;
-  border-radius: var(--radius-md);
-  border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
-  background: color-mix(in srgb, var(--panel-strong) 95%, transparent);
+  width: 40px;
+  height: 40px;
+  border-radius: 8px;
+  background: var(--panel-strong);
   display: grid;
   place-items: center;
   font-weight: 600;
-  font-size: 13px;
+  font-size: 14px;
   flex-shrink: 0;
   align-self: flex-end; /* Align with last message in group */
   margin-bottom: 4px; /* Optical alignment */
@@ -124,26 +123,18 @@ img.chat-avatar {
   object-position: center;
 }
 
-/* Logo avatar (OpenClaw favicon) - contain to show full logo */
-img.chat-avatar.chat-avatar--logo {
-  object-fit: contain;
-  padding: 6px;
-  box-sizing: border-box;
-}
-
 /* Minimal Bubble Design - dynamic width based on content */
 .chat-bubble {
   position: relative;
   display: inline-block;
-  border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
-  background: color-mix(in srgb, var(--card) 97%, transparent);
+  border: 1px solid transparent;
+  background: var(--card);
   border-radius: var(--radius-lg);
   padding: 10px 14px;
-  box-shadow: inset 0 1px 0 var(--card-highlight);
+  box-shadow: none;
   transition:
     background 150ms ease-out,
-    border-color 150ms ease-out,
-    box-shadow 150ms ease-out;
+    border-color 150ms ease-out;
   max-width: 100%;
   word-wrap: break-word;
 }
@@ -156,8 +147,8 @@ img.chat-avatar.chat-avatar--logo {
   position: absolute;
   top: 6px;
   right: 8px;
-  border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
-  background: color-mix(in srgb, var(--bg) 94%, transparent);
+  border: 1px solid var(--border);
+  background: var(--bg);
   color: var(--muted);
   border-radius: var(--radius-md);
   padding: 4px 6px;
@@ -168,8 +159,7 @@ img.chat-avatar.chat-avatar--logo {
   pointer-events: none;
   transition:
     opacity 120ms ease-out,
-    background 120ms ease-out,
-    border-color 120ms ease-out;
+    background 120ms ease-out;
 }
 
 .chat-copy-btn__icon {
@@ -216,7 +206,6 @@ img.chat-avatar.chat-avatar--logo {
 
 .chat-copy-btn:hover {
   background: var(--bg-hover);
-  border-color: var(--border-strong);
 }
 
 .chat-copy-btn[data-copying="1"] {
@@ -254,20 +243,29 @@ img.chat-avatar.chat-avatar--logo {
   }
 }
 
+/* Light mode: restore borders */
+:root[data-theme="light"] .chat-bubble {
+  border-color: var(--border);
+  box-shadow: inset 0 1px 0 var(--card-highlight);
+}
+
 .chat-bubble:hover {
-  background: color-mix(in srgb, var(--card) 82%, var(--bg-hover));
-  border-color: var(--border-strong);
-  box-shadow: var(--shadow-sm);
+  background: var(--bg-hover);
 }
 
 /* User bubbles have different styling */
 .chat-group.user .chat-bubble {
-  background: color-mix(in srgb, var(--accent-subtle) 85%, var(--secondary));
-  border-color: color-mix(in srgb, var(--accent) 30%, transparent);
+  background: var(--accent-subtle);
+  border-color: transparent;
+}
+
+:root[data-theme="light"] .chat-group.user .chat-bubble {
+  border-color: rgba(234, 88, 12, 0.2);
+  background: rgba(251, 146, 60, 0.12);
 }
 
 .chat-group.user .chat-bubble:hover {
-  background: var(--danger-subtle);
+  background: rgba(255, 77, 77, 0.15);
 }
 
 /* Streaming animation */
@@ -298,61 +296,5 @@ img.chat-avatar.chat-avatar--logo {
   to {
     opacity: 1;
     transform: translateY(0);
-  }
-}
-
-/* Delete button (appears on hover in group footer) */
-
-.chat-group-delete {
-  all: unset;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 18px;
-  height: 18px;
-  border-radius: var(--radius-sm);
-  color: var(--muted);
-  cursor: pointer;
-  opacity: 0;
-  pointer-events: none;
-  transition:
-    opacity 120ms ease-out,
-    color 120ms ease-out,
-    background 120ms ease-out;
-  margin-left: auto;
-}
-
-.chat-group-delete svg {
-  width: 12px;
-  height: 12px;
-  stroke: currentColor;
-  fill: none;
-  stroke-width: 2px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
-.chat-group:hover .chat-group-delete {
-  opacity: 0.5;
-  pointer-events: auto;
-}
-
-.chat-group-delete:hover {
-  opacity: 1 !important;
-  color: var(--danger);
-  background: var(--danger-subtle);
-}
-
-.chat-group-delete:focus-visible {
-  opacity: 1;
-  pointer-events: auto;
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
-}
-
-@media (hover: none) {
-  .chat-group-delete {
-    opacity: 0.5;
-    pointer-events: auto;
   }
 }

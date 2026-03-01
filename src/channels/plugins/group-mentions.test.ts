@@ -20,7 +20,7 @@ const cfg = {
           requireMention: false,
           tools: { allow: ["message.send"] },
           toolsBySender: {
-            "user:alice": { allow: ["sessions.list"] },
+            "id:user:alice": { allow: ["sessions.list"] },
           },
         },
         "*": {
@@ -109,14 +109,14 @@ describe("group mentions (discord)", () => {
               requireMention: false,
               tools: { allow: ["message.guild"] },
               toolsBySender: {
-                "user:guild-admin": { allow: ["sessions.list"] },
+                "id:user:guild-admin": { allow: ["sessions.list"] },
               },
               channels: {
                 "123": {
                   requireMention: true,
                   tools: { allow: ["message.channel"] },
                   toolsBySender: {
-                    "user:channel-admin": { deny: ["exec"] },
+                    "id:user:channel-admin": { deny: ["exec"] },
                   },
                 },
               },

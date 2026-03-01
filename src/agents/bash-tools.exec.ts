@@ -25,6 +25,7 @@ import {
   renderExecHostLabel,
   resolveApprovalRunningNoticeMs,
   runExecProcess,
+  sanitizeHostBaseEnv,
   execSchema,
   validateHostEnv,
 } from "./bash-tools.exec-runtime.js";
@@ -172,7 +173,11 @@ export function createExecTool(
   } = resolveExecSafeBinRuntimePolicy({
     local: {
       safeBins: defaults?.safeBins,
+      safeBinTrustedDirs: defaults?.safeBinTrustedDirs,
       safeBinProfiles: defaults?.safeBinProfiles,
+    },
+    onWarning: (message) => {
+      logInfo(message);
     },
   });
   if (unprofiledSafeBins.length > 0) {
@@ -299,7 +304,7 @@ export function createExecTool(
       if (elevatedRequested) {
         logInfo(`exec: elevated command ${truncateMiddle(params.command, 120)}`);
       }
-      const configuredHost = defaults?.host ?? (defaults?.sandbox ? "sandbox" : "gateway");
+      const configuredHost = defaults?.host ?? "sandbox";
       const sandboxHostConfigured = defaults?.host === "sandbox";
       const requestedHost = normalizeExecHost(params.host) ?? null;
       let host: ExecHost = requestedHost ?? configuredHost;
@@ -355,7 +360,8 @@ export function createExecTool(
         workdir = resolveWorkdir(rawWorkdir, warnings);
       }
 
-      const baseEnv = coerceEnv(process.env);
+      const inheritedBaseEnv = coerceEnv(process.env);
+      const baseEnv = host === "sandbox" ? inheritedBaseEnv : sanitizeHostBaseEnv(inheritedBaseEnv);
 
       // Logic: Sandbox gets raw env. Host (gateway/node) must pass validation.
       // We validate BEFORE merging to prevent any dangerous vars from entering the stream.
@@ -401,6 +407,10 @@ export function createExecTool(
           requestedNode: params.node?.trim(),
           boundNode: defaults?.node?.trim(),
           sessionKey: defaults?.sessionKey,
+          turnSourceChannel: defaults?.messageProvider,
+          turnSourceTo: defaults?.currentChannelId,
+          turnSourceAccountId: defaults?.accountId,
+          turnSourceThreadId: defaults?.currentThreadTs,
           agentId,
           security,
           ask,
@@ -427,6 +437,10 @@ export function createExecTool(
           safeBinProfiles,
           agentId,
           sessionKey: defaults?.sessionKey,
+          turnSourceChannel: defaults?.messageProvider,
+          turnSourceTo: defaults?.currentChannelId,
+          turnSourceAccountId: defaults?.accountId,
+          turnSourceThreadId: defaults?.currentThreadTs,
           scopeKey: defaults?.scopeKey,
           warnings,
           notifySessionKey,
@@ -441,8 +455,12 @@ export function createExecTool(
         execCommandOverride = gatewayResult.execCommandOverride;
       }
 
-      const effectiveTimeout =
-        typeof params.timeout === "number" ? params.timeout : defaultTimeoutSec;
+      const explicitTimeoutSec = typeof params.timeout === "number" ? params.timeout : null;
+      const backgroundTimeoutBypass =
+        allowBackground && explicitTimeoutSec === null && (backgroundRequested || yieldRequested);
+      const effectiveTimeout = backgroundTimeoutBypass
+        ? null
+        : (explicitTimeoutSec ?? defaultTimeoutSec);
       const getWarningText = () => (warnings.length ? `${warnings.join("\n")}\n\n` : "");
       const usePty = params.pty === true && !sandbox;
 

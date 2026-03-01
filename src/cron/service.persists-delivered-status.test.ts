@@ -40,7 +40,7 @@ function buildMainSessionSystemEventJob(name: string): CronAddInput {
 function createIsolatedCronWithFinishedBarrier(params: {
   storePath: string;
   delivered?: boolean;
-  onFinished?: (evt: { jobId: string; delivered?: boolean }) => void;
+  onFinished?: (evt: { jobId: string; delivered?: boolean; deliveryStatus?: string }) => void;
 }) {
   const finished = createFinishedBarrier();
   const cron = new CronService({
@@ -56,7 +56,11 @@ function createIsolatedCronWithFinishedBarrier(params: {
     })),
     onEvent: (evt) => {
       if (evt.action === "finished") {
-        params.onFinished?.({ jobId: evt.jobId, delivered: evt.delivered });
+        params.onFinished?.({
+          jobId: evt.jobId,
+          delivered: evt.delivered,
+          deliveryStatus: evt.deliveryStatus,
+        });
       }
       finished.onEvent(evt);
     },
@@ -94,7 +98,10 @@ describe("CronService persists delivered status", () => {
     });
 
     expect(updated?.state.lastStatus).toBe("ok");
+    expect(updated?.state.lastRunStatus).toBe("ok");
     expect(updated?.state.lastDelivered).toBe(true);
+    expect(updated?.state.lastDeliveryStatus).toBe("delivered");
+    expect(updated?.state.lastDeliveryError).toBeUndefined();
 
     cron.stop();
   });
@@ -114,12 +121,15 @@ describe("CronService persists delivered status", () => {
     });
 
     expect(updated?.state.lastStatus).toBe("ok");
+    expect(updated?.state.lastRunStatus).toBe("ok");
     expect(updated?.state.lastDelivered).toBe(false);
+    expect(updated?.state.lastDeliveryStatus).toBe("not-delivered");
+    expect(updated?.state.lastDeliveryError).toBeUndefined();
 
     cron.stop();
   });
 
-  it("persists lastDelivered=undefined when isolated job does not deliver", async () => {
+  it("persists not-requested delivery state when delivery is not configured", async () => {
     const store = await makeStorePath();
     const { cron, finished } = createIsolatedCronWithFinishedBarrier({
       storePath: store.storePath,
@@ -133,7 +143,35 @@ describe("CronService persists delivered status", () => {
     });
 
     expect(updated?.state.lastStatus).toBe("ok");
+    expect(updated?.state.lastRunStatus).toBe("ok");
     expect(updated?.state.lastDelivered).toBeUndefined();
+    expect(updated?.state.lastDeliveryStatus).toBe("not-requested");
+    expect(updated?.state.lastDeliveryError).toBeUndefined();
+
+    cron.stop();
+  });
+
+  it("persists unknown delivery state when delivery is requested but the runner omits delivered", async () => {
+    const store = await makeStorePath();
+    const { cron, finished } = createIsolatedCronWithFinishedBarrier({
+      storePath: store.storePath,
+    });
+
+    await cron.start();
+    const { updated } = await runSingleJobAndReadState({
+      cron,
+      finished,
+      job: {
+        ...buildIsolatedAgentTurnJob("delivery-unknown"),
+        delivery: { mode: "announce", channel: "telegram", to: "123" },
+      },
+    });
+
+    expect(updated?.state.lastStatus).toBe("ok");
+    expect(updated?.state.lastRunStatus).toBe("ok");
+    expect(updated?.state.lastDelivered).toBeUndefined();
+    expect(updated?.state.lastDeliveryStatus).toBe("unknown");
+    expect(updated?.state.lastDeliveryError).toBeUndefined();
 
     cron.stop();
   });
@@ -153,7 +191,9 @@ describe("CronService persists delivered status", () => {
     });
 
     expect(updated?.state.lastStatus).toBe("ok");
+    expect(updated?.state.lastRunStatus).toBe("ok");
     expect(updated?.state.lastDelivered).toBeUndefined();
+    expect(updated?.state.lastDeliveryStatus).toBe("not-requested");
     expect(enqueueSystemEvent).toHaveBeenCalled();
 
     cron.stop();
@@ -161,7 +201,7 @@ describe("CronService persists delivered status", () => {
 
   it("emits delivered in the finished event", async () => {
     const store = await makeStorePath();
-    let capturedEvent: { jobId: string; delivered?: boolean } | undefined;
+    let capturedEvent: { jobId: string; delivered?: boolean; deliveryStatus?: string } | undefined;
     const { cron, finished } = createIsolatedCronWithFinishedBarrier({
       storePath: store.storePath,
       delivered: true,
@@ -179,6 +219,7 @@ describe("CronService persists delivered status", () => {
 
     expect(capturedEvent).toBeDefined();
     expect(capturedEvent?.delivered).toBe(true);
+    expect(capturedEvent?.deliveryStatus).toBe("delivered");
     cron.stop();
   });
 });

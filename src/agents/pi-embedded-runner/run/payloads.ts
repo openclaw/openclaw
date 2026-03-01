@@ -67,6 +67,12 @@ function resolveToolErrorWarningPolicy(params: {
   if ((normalizedToolName === "exec" || normalizedToolName === "bash") && !includeDetails) {
     return { showWarning: false, includeDetails };
   }
+  // sessions_send timeouts and errors are transient inter-session communication
+  // issues — the message may still have been delivered. Suppress warnings to
+  // prevent raw error text from leaking into the chat surface (#23989).
+  if (normalizedToolName === "sessions_send") {
+    return { showWarning: false, includeDetails };
+  }
   const isMutatingToolError =
     params.lastToolError.mutatingAction ?? isLikelyMutatingToolName(params.lastToolError.toolName);
   if (isMutatingToolError) {
@@ -95,12 +101,14 @@ export function buildEmbeddedRunPayloads(params: {
   toolResultFormat?: ToolResultFormat;
   suppressToolErrorWarnings?: boolean;
   inlineToolResultsAllowed: boolean;
+  didSendViaMessagingTool?: boolean;
 }): Array<{
   text?: string;
   mediaUrl?: string;
   mediaUrls?: string[];
   replyToId?: string;
   isError?: boolean;
+  isReasoning?: boolean;
   audioAsVoice?: boolean;
   replyToTag?: boolean;
   replyToCurrent?: boolean;
@@ -109,6 +117,7 @@ export function buildEmbeddedRunPayloads(params: {
     text: string;
     media?: string[];
     isError?: boolean;
+    isReasoning?: boolean;
     audioAsVoice?: boolean;
     replyToId?: string;
     replyToTag?: boolean;
@@ -180,7 +189,7 @@ export function buildEmbeddedRunPayloads(params: {
       ? formatReasoningMessage(extractAssistantThinking(params.lastAssistant))
       : "";
   if (reasoningText) {
-    replyItems.push({ text: reasoningText });
+    replyItems.push({ text: reasoningText, isReasoning: true });
   }
 
   const fallbackAnswerText = params.lastAssistant ? extractAssistantText(params.lastAssistant) : "";
@@ -308,7 +317,7 @@ export function buildEmbeddedRunPayloads(params: {
   }
 
   const hasAudioAsVoiceTag = replyItems.some((item) => item.audioAsVoice);
-  const payloads = replyItems
+  return replyItems
     .map((item) => ({
       text: item.text?.trim() ? item.text.trim() : undefined,
       mediaUrls: item.media?.length ? item.media : undefined,
@@ -328,13 +337,4 @@ export function buildEmbeddedRunPayloads(params: {
       }
       return true;
     });
-  if (
-    payloads.length === 0 &&
-    params.toolMetas.length > 0 &&
-    !params.lastToolError &&
-    !lastAssistantErrored
-  ) {
-    return [{ text: "✅ Done." }];
-  }
-  return payloads;
 }

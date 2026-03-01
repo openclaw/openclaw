@@ -25,7 +25,6 @@ describe("config view", () => {
     searchQuery: "",
     activeSection: null,
     activeSubsection: null,
-    streamMode: false,
     onRawChange: vi.fn(),
     onFormModeChange: vi.fn(),
     onFormPatch: vi.fn(),
@@ -38,7 +37,7 @@ describe("config view", () => {
     onSubsectionChange: vi.fn(),
   });
 
-  it("allows save with mixed union schemas", () => {
+  it("allows save when form is unsafe", () => {
     const container = document.createElement("div");
     render(
       renderConfig({
@@ -198,5 +197,36 @@ describe("config view", () => {
     (input as HTMLInputElement).value = "gateway";
     input.dispatchEvent(new Event("input", { bubbles: true }));
     expect(onSearchChange).toHaveBeenCalledWith("gateway");
+  });
+
+  it("shows all tag options in compact tag picker", () => {
+    const container = document.createElement("div");
+    render(renderConfig(baseProps()), container);
+
+    const options = Array.from(container.querySelectorAll(".config-search__tag-option")).map(
+      (option) => option.textContent?.trim(),
+    );
+    expect(options).toContain("tag:security");
+    expect(options).toContain("tag:advanced");
+    expect(options).toHaveLength(15);
+  });
+
+  it("updates search query when toggling a tag option", () => {
+    const container = document.createElement("div");
+    const onSearchChange = vi.fn();
+    render(
+      renderConfig({
+        ...baseProps(),
+        onSearchChange,
+      }),
+      container,
+    );
+
+    const option = container.querySelector<HTMLButtonElement>(
+      '.config-search__tag-option[data-tag="security"]',
+    );
+    expect(option).toBeTruthy();
+    option?.click();
+    expect(onSearchChange).toHaveBeenCalledWith("tag:security");
   });
 });

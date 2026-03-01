@@ -186,11 +186,9 @@ export async function applySessionsPatchToStore(params: {
       if (!normalized) {
         return invalid('invalid reasoningLevel (use "on"|"off"|"stream")');
       }
-      if (normalized === "off") {
-        delete next.reasoningLevel;
-      } else {
-        next.reasoningLevel = normalized;
-      }
+      // Persist "off" explicitly so that resolveDefaultReasoningLevel()
+      // does not re-enable reasoning for capable models (#24406).
+      next.reasoningLevel = normalized;
     }
   }
 

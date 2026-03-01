@@ -48,4 +48,21 @@ describe("resolveSessionAgentIds", () => {
     });
     expect(sessionAgentId).toBe("main");
   });
+
+  it("uses explicit agentId when sessionKey is missing", () => {
+    const { sessionAgentId } = resolveSessionAgentIds({
+      agentId: "main",
+      config: cfg,
+    });
+    expect(sessionAgentId).toBe("main");
+  });
+
+  it("prefers explicit agentId over non-agent session keys", () => {
+    const { sessionAgentId } = resolveSessionAgentIds({
+      sessionKey: "telegram:slash:123",
+      agentId: "main",
+      config: cfg,
+    });
+    expect(sessionAgentId).toBe("main");
+  });
 });

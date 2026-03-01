@@ -26,18 +26,27 @@ describe("memory vector dedupe", () => {
   let indexPath: string;
   let manager: MemoryIndexManager | null = null;
 
+  async function seedMemoryWorkspace(rootDir: string) {
+    await fs.mkdir(path.join(rootDir, "memory"));
+    await fs.writeFile(path.join(rootDir, "MEMORY.md"), "Hello memory.");
+  }
+
+  async function closeManagerIfOpen() {
+    if (!manager) {
+      return;
+    }
+    await manager.close();
+    manager = null;
+  }
+
   beforeEach(async () => {
     workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mem-"));
     indexPath = path.join(workspaceDir, "index.sqlite");
-    await fs.mkdir(path.join(workspaceDir, "memory"));
-    await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "Hello memory.");
+    await seedMemoryWorkspace(workspaceDir);
   });
 
   afterEach(async () => {
-    if (manager) {
-      await manager.close();
-      manager = null;
-    }
+    await closeManagerIfOpen();
     await fs.rm(workspaceDir, { recursive: true, force: true });
   });
 

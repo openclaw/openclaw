@@ -105,18 +105,23 @@ export function createDiscordDraftStream(params: {
     }
   };
 
+  const readMessageId = () => streamMessageId;
+  const clearMessageId = () => {
+    streamMessageId = undefined;
+  };
+  const isValidStreamMessageId = (value: unknown): value is string => typeof value === "string";
+  const deleteStreamMessage = async (messageId: string) => {
+    await rest.delete(Routes.channelMessage(channelId, messageId));
+  };
+
   const { loop, update, stop, clear } = createFinalizableDraftLifecycle({
     throttleMs,
     state: streamState,
     sendOrEditStreamMessage,
-    readMessageId: () => streamMessageId,
-    clearMessageId: () => {
-      streamMessageId = undefined;
-    },
-    isValidMessageId: (value): value is string => typeof value === "string",
-    deleteMessage: async (messageId) => {
-      await rest.delete(Routes.channelMessage(channelId, messageId));
-    },
+    readMessageId,
+    clearMessageId,
+    isValidMessageId: isValidStreamMessageId,
+    deleteMessage: deleteStreamMessage,
     warn: params.warn,
     warnPrefix: "discord stream preview cleanup failed",
   });

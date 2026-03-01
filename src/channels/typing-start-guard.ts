@@ -1,52 +1,63 @@
-/**
- * Typing start guard — prevents the typing callback from executing when the
- * controller is sealed or the run has already completed.
- *
- * Used by TypingController to ensure that late-arriving callbacks (e.g. from
- * tool/block-streaming emitters that don't await their listeners) cannot restart
- * the typing indicator after cleanup has run.
- */
-
 export type TypingStartGuard = {
-  /**
-   * Run `fn` only if the guard allows it (not sealed, not blocked).
-   * If `rethrowOnError` was set, errors from `fn` propagate; otherwise they are swallowed.
-   */
-  run: (fn: () => Promise<void>) => Promise<void>;
+  run: (start: () => Promise<void> | void) => Promise<"started" | "skipped" | "failed" | "tripped">;
+  reset: () => void;
+  isTripped: () => boolean;
 };
 
-/**
- * Create a typing start guard.
- *
- * @param params.isSealed    - Returns true once the typing controller is permanently stopped.
- *                             A sealed controller must never restart typing.
- * @param params.shouldBlock - Returns true while the current model run has completed but the
- *                             controller is not yet cleaned up (run-complete state).
- *                             New typing ticks are skipped in this window.
- * @param params.rethrowOnError - When true, errors thrown by `fn` are re-thrown (useful for
- *                                the initial trigger which needs to surface failures).
- *                                When false/omitted, errors are swallowed.
- */
 export function createTypingStartGuard(params: {
   isSealed: () => boolean;
-  shouldBlock: () => boolean;
+  shouldBlock?: () => boolean;
+  onStartError?: (err: unknown) => void;
+  maxConsecutiveFailures?: number;
+  onTrip?: () => void;
   rethrowOnError?: boolean;
 }): TypingStartGuard {
-  const { isSealed, shouldBlock, rethrowOnError } = params;
+  const maxConsecutiveFailures =
+    typeof params.maxConsecutiveFailures === "number" && params.maxConsecutiveFailures > 0
+      ? Math.floor(params.maxConsecutiveFailures)
+      : undefined;
+  let consecutiveFailures = 0;
+  let tripped = false;
 
-  const run = async (fn: () => Promise<void>): Promise<void> => {
-    if (isSealed() || shouldBlock()) {
-      return;
+  const isBlocked = () => {
+    if (params.isSealed()) {
+      return true;
+    }
+    if (tripped) {
+      return true;
+    }
+    return params.shouldBlock?.() === true;
+  };
+
+  const run: TypingStartGuard["run"] = async (start) => {
+    if (isBlocked()) {
+      return "skipped";
     }
     try {
-      await fn();
+      await start();
+      consecutiveFailures = 0;
+      return "started";
     } catch (err) {
-      if (rethrowOnError) {
+      consecutiveFailures += 1;
+      params.onStartError?.(err);
+      if (params.rethrowOnError) {
         throw err;
       }
-      // Otherwise swallow — the guard is resilient by default.
+      if (maxConsecutiveFailures && consecutiveFailures >= maxConsecutiveFailures) {
+        tripped = true;
+        params.onTrip?.();
+        return "tripped";
+      }
+      return "failed";
     }
   };
 
-  return { run };
+  return {
+    run,
+    reset: () => {
+      consecutiveFailures = 0;
+      tripped = false;
+    },
+    isTripped: () => tripped,
+  };
 }
