@@ -10,10 +10,8 @@ export type AcpStreamConfig = {
   coalesceIdleMs?: number;
   /** Maximum text size per streamed chunk. */
   maxChunkChars?: number;
-  /** Controls how ACP meta/system updates are projected to channels. */
-  metaMode?: "off" | "minimal" | "verbose";
-  /** Toggles usage_update projection in channel-facing output. */
-  showUsage?: boolean;
+  /** Suppresses repeated ACP status/tool projection lines within a turn. */
+  repeatSuppression?: boolean;
   /** Live streams chunks or waits for terminal event before delivery. */
   deliveryMode?: "live" | "final_only";
   /** Maximum assistant text characters forwarded per turn. */

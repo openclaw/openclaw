@@ -10,8 +10,7 @@ describe("acp stream settings", () => {
   it("resolves stable defaults", () => {
     const settings = resolveAcpProjectionSettings(createAcpTestConfig());
     expect(settings.deliveryMode).toBe("live");
-    expect(settings.metaMode).toBe("minimal");
-    expect(settings.showUsage).toBe(false);
+    expect(settings.repeatSuppression).toBe(true);
     expect(settings.maxTurnChars).toBe(24_000);
     expect(settings.maxMetaEventsPerTurn).toBe(64);
   });
@@ -23,8 +22,7 @@ describe("acp stream settings", () => {
           enabled: true,
           stream: {
             deliveryMode: "final_only",
-            metaMode: "off",
-            showUsage: true,
+            repeatSuppression: false,
             maxTurnChars: 500,
             maxMetaEventsPerTurn: 7,
             tagVisibility: {
@@ -35,8 +33,7 @@ describe("acp stream settings", () => {
       }),
     );
     expect(settings.deliveryMode).toBe("final_only");
-    expect(settings.metaMode).toBe("off");
-    expect(settings.showUsage).toBe(true);
+    expect(settings.repeatSuppression).toBe(false);
     expect(settings.maxTurnChars).toBe(500);
     expect(settings.maxMetaEventsPerTurn).toBe(7);
     expect(settings.tagVisibility.usage_update).toBe(true);
