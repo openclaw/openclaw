@@ -153,6 +153,60 @@ openclaw onboard
 
 Full guide: [Getting Started](/start/getting-started)
 
+## Windows native service (without WSL2)
+
+OpenClaw supports running as a native Windows service using the Windows Service Control Manager (SCM) or WinSW wrapper.
+
+### Service modes
+
+| Mode | Log Directory | Requires Admin | Use Case |
+|------|---------------|---------------|----------|
+| `user` (default) | `%LOCALAPPDATA%\OpenClaw\logs` | No | Personal desktop |
+| `machine` | `%PROGRAMDATA%\OpenClaw\logs` | Yes | Server/multi-user |
+
+### Commands
+
+```powershell
+# Install service (user mode - no admin required)
+openclaw service install
+
+# Install service (machine mode - requires admin)
+openclaw service install --mode machine
+
+# Start/Stop/Status
+openclaw service start
+openclaw service stop
+openclaw service status
+
+# Uninstall
+openclaw service uninstall
+```
+
+### Log files
+
+- **User mode**: `C:\Users\<username>\AppData\Local\OpenClaw\logs\`
+- **Machine mode**: `C:\ProgramData\OpenClaw\logs\`
+
+Log files are rotated daily with the pattern `openclaw-YYYY-MM-DD.log`. Logs older than 24 hours are automatically pruned.
+
+### Troubleshooting
+
+**Service fails to start with "Access Denied"**
+- Machine mode requires Administrator privileges
+- Try user mode instead: `openclaw service install --mode user`
+
+**Logs location**
+- Check logs at the paths above
+- Run with `--verbose` for more detailed output
+
+**Check service status**
+```powershell
+openclaw service status
+sc query OpenClawGateway
+```
+
+---
+
 ## Windows companion app
 
 We do not have a Windows companion app yet. Contributions are welcome if you want

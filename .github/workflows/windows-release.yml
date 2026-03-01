@@ -1,0 +1,136 @@
+# Windows Release Workflow
+# Builds Windows executable with WinSW and creates release artifacts
+
+name: Windows Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag (e.g., v2024.1.0)'
+        required: false
+        type: string
+
+concurrency:
+  group: windows-release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+
+      - name: Install pnpm
+        run: npm install -g pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build OpenClaw
+        run: pnpm build
+
+      - name: Download WinSW
+        shell: pwsh
+        run: |
+          $winswVersion = "v2.12.0"
+          $winswUrl = "https://github.com/winsw/winsw/releases/download/$winswVersion/WinSW-x64.exe"
+          $outputPath = "third_party/winsw/WinSW-x64.exe"
+          
+          Write-Host "Downloading WinSW $winswVersion..."
+          curl -L -o $outputPath $winswUrl
+          
+          # Verify SHA256
+          $sha256 = (Get-FileHash $outputPath -Algorithm SHA256).Hash
+          Write-Host "WinSW SHA256: $sha256"
+          "WinSW-x64.exe SHA256: $sha256" | Out-File -FilePath "third_party/winsw/SHA256.txt" -Encoding UTF8
+
+      - name: Create distribution directory
+        shell: pwsh
+        run: |
+          $version = "${{ github.ref_name }}" -replace '^v', ''
+          if ("${{ github.event.inputs.version }}") {
+            $version = "${{ github.event.inputs.version }}" -replace '^v', ''
+          }
+          
+          $distDir = "dist"
+          New-Item -ItemType Directory -Force -Path $distDir | Out-Null
+          
+          # Copy built files
+          Copy-Item -Path "dist/*" -Destination $distDir -Recurse -Force
+          
+          # Copy WinSW
+          Copy-Item -Path "third_party/winsw/WinSW-x64.exe" -Destination "$distDir/openclaw-gateway.exe" -Force
+          Copy-Item -Path "third_party/winsw/openclaw-gateway.xml" -Destination $distDir -Force
+          Copy-Item -Path "third_party/winsw/LICENSE" -Destination $distDir -Force
+          
+          # Copy LICENSE
+          Copy-Item -Path "LICENSE" -Destination $distDir -Force
+          
+          # Copy icon
+          Copy-Item -Path "installer/openclaw.ico" -Destination $distDir -Force
+          Copy-Item -Path "LICENSE" -Destination $distDir -Force
+          
+          # Create zip archive
+          Compress-Archive -Path "$distDir/*" -DestinationPath "OpenClaw-windows-$version.zip" -Force
+          
+          Write-Host "Created: OpenClaw-windows-$version.zip"
+          Get-ChildItem -Path . -Filter "*.zip" | Select-Object Name, Length
+
+      - name: Build Inno Setup Installer
+        uses: matheusalves/inno-setup-action@v1
+        with:
+          appName: OpenClaw
+          appVersion: ${{ github.ref_name }}
+          appPublisher: OpenClaw
+          appPublisherUrl: https://openclaw.ai
+          appSupportUrl: https://github.com/openclaw/openclaw
+          appExeName: openclaw.exe
+          outputDir: dist
+          installerFile: installer/openclaw.iss
+
+      - name: Generate SHA256 checksums
+        shell: pwsh
+        run: |
+          Get-ChildItem -Path . -Filter "*.zip","*.exe" | ForEach-Object {
+            $sha256 = (Get-FileHash $_.FullName -Algorithm SHA256).Hash
+            "$sha256  $($_.Name)" | Out-File -FilePath "sha256.txt" -Append -Encoding UTF8
+          }
+          Get-Content sha256.txt
+
+      - name: Upload Release Asset
+        uses: softprops/action-gh-release@v1
+        if: startsWith(github.ref, 'refs/tags/v')
+        with:
+          files: |
+            OpenClaw-windows-*.zip
+            OpenClaw-*-Setup.exe
+            sha256.txt
+          generate_release_notes: true
+          draft: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-build
+          path: |
+            OpenClaw-windows-*.zip
+            OpenClaw-*-Setup.exe
+            sha256.txt
+          retention-days: 7

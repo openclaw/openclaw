@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  WinSW Configuration for OpenClaw Gateway Service
+  
+  This file is used by WinSW to configure the Windows service.
+  Placeholders will be replaced by the installer at runtime.
+-->
+<service>
+  <!-- Service ID - must be unique -->
+  <id>{{SERVICE_ID}}</id>
+  
+  <!-- Display name shown in Services control panel -->
+  <name>{{SERVICE_NAME}}</name>
+  
+  <!-- Service description -->
+  <description>{{SERVICE_DESCRIPTION}}</description>
+  
+  <!-- Executable to run (WinSW itself will be renamed) -->
+  <executable>{{EXECUTABLE_PATH}}</executable>
+  
+  <!-- Arguments passed to the executable -->
+  <arguments>{{GATEWAY_ARGUMENTS}}</arguments>
+  
+  <!-- Working directory -->
+  <workingdirectory>{{WORKING_DIRECTORY}}</workingdirectory>
+  
+  <!-- Log directory -->
+  <logpath>{{LOG_DIRECTORY}}</logpath>
+  
+  <!-- Log rotation mode: rotate (default), reset, roll -->
+  <logmode>rotate</logmode>
+  
+  <!-- Automatic restart on failure -->
+  <onfailure action="restart" delay="60 sec"/>
+  <onfailure action="restart" delay="60 sec"/>
+  <onfailure action="reboot" delay="60 sec"/>
+  
+  <!-- Reset failure count after 24 hours (86400 seconds) -->
+  <resetfailure>86400</resetfailure>
+  
+  <!-- Seconds to wait for service to stop -->
+  <stopwait>30</stopwait>
+  
+  <!-- Service startup type: auto, manual, disabled -->
+  <startmode>auto</startmode>
+  
+  <!-- Allow service to interact with desktop (optional) -->
+  <!-- <interactive>false</interactive> -->
+  
+  <!-- Environment variables (optional) -->
+  <!--
+  <env name="OPENCLAW_PROFILE" value="default"/>
+  -->
+</service>
