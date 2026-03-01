@@ -932,6 +932,7 @@ export async function handleFeishuMessage(params: {
     ? [...new Set(rawBroadcastAgents.map((id) => normalizeAgentId(id)))]
     : null;
 
+  let requireMention = false; // DMs never require mention; groups may override below
   if (isGroup) {
     if (groupConfig?.enabled === false) {
       log(`feishu[${account.accountId}]: group ${ctx.chatId} is disabled`);
@@ -986,11 +987,11 @@ export async function handleFeishuMessage(params: {
       }
     }
 
-    const { requireMention } = resolveFeishuReplyPolicy({
+    ({ requireMention } = resolveFeishuReplyPolicy({
       isDirectMessage: false,
       globalConfig: feishuCfg,
       groupConfig,
-    });
+    }));
 
     if (requireMention && !ctx.mentionedBot) {
       log(
@@ -1289,7 +1290,8 @@ export async function handleFeishuMessage(params: {
       const strategy =
         ((cfg as Record<string, unknown>).broadcast as Record<string, unknown> | undefined)
           ?.strategy || "parallel";
-      const activeAgentId = ctx.mentionedBot ? normalizeAgentId(route.agentId) : null;
+      const activeAgentId =
+        ctx.mentionedBot || !requireMention ? normalizeAgentId(route.agentId) : null;
       const agentIds = (cfg.agents?.list ?? []).map((a: { id: string }) => normalizeAgentId(a.id));
       const hasKnownAgents = agentIds.length > 0;
 
