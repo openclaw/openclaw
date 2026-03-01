@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createOpenClawCodingTools } from "./pi-tools.js";
 
 describe("FS tools with workspaceOnly=false", () => {
@@ -17,6 +17,7 @@ describe("FS tools with workspaceOnly=false", () => {
   });
 
   afterEach(async () => {
+    vi.unstubAllEnvs();
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
@@ -143,6 +144,44 @@ describe("FS tools with workspaceOnly=false", () => {
     expect(hasError).toBe(false);
     const content = await fs.readFile(outsideRelativeFile, "utf-8");
     expect(content).toBe("new relative content");
+  });
+
+  it("should allow edit outside workspace via ~ path when workspaceOnly=false", async () => {
+    const fakeHome = path.join(tmpDir, "fake-home");
+    const tildeFile = path.join(
+      fakeHome,
+      ".npm-global/lib/node_modules/openclaw/skills/gog/SKILL.md",
+    );
+    await fs.mkdir(path.dirname(tildeFile), { recursive: true });
+    await fs.writeFile(tildeFile, "old tilde content", "utf-8");
+    vi.stubEnv("OPENCLAW_HOME", fakeHome);
+
+    const tools = createOpenClawCodingTools({
+      workspaceDir,
+      config: {
+        tools: {
+          fs: {
+            workspaceOnly: false,
+          },
+        },
+      },
+    });
+
+    const editTool = tools.find((t) => t.name === "edit");
+    expect(editTool).toBeDefined();
+
+    const result = await editTool!.execute("test-call-2c", {
+      path: "~/.npm-global/lib/node_modules/openclaw/skills/gog/SKILL.md",
+      oldText: "old tilde content",
+      newText: "new tilde content",
+    });
+
+    const hasError = result.content.some(
+      (c) => c.type === "text" && c.text.toLowerCase().includes("error"),
+    );
+    expect(hasError).toBe(false);
+    const content = await fs.readFile(tildeFile, "utf-8");
+    expect(content).toBe("new tilde content");
   });
 
   it("should allow read outside workspace when workspaceOnly=false", async () => {
