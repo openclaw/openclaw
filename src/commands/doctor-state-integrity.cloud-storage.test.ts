@@ -64,6 +64,26 @@ describe("detectMacCloudSyncedStateDir", () => {
     });
   });
 
+  it("ignores cloud-synced symlink prefix when resolved target is local", () => {
+    const symlinkPath = path.join(
+      home,
+      "Library",
+      "CloudStorage",
+      "OneDrive-Personal",
+      "OpenClaw",
+      ".openclaw",
+    );
+    const resolvedLocalPath = path.join(home, ".openclaw");
+
+    const result = detectMacCloudSyncedStateDir(symlinkPath, {
+      platform: "darwin",
+      homedir: home,
+      resolveRealPath: () => resolvedLocalPath,
+    });
+
+    expect(result).toBeNull();
+  });
+
   it("anchors cloud detection to OS homedir when OPENCLAW_HOME is overridden", () => {
     const stateDir = path.join(home, "Library", "CloudStorage", "iCloud Drive", ".openclaw");
     const originalOpenClawHome = process.env.OPENCLAW_HOME;
