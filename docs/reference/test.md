@@ -52,8 +52,7 @@ Usage:
 - `pnpm tsx scripts/bench-cli-startup.ts`
 - `pnpm tsx scripts/bench-cli-startup.ts --runs 12`
 - `pnpm tsx scripts/bench-cli-startup.ts --entry dist/entry.js --timeout-ms 45000`
-- `pnpm tsx scripts/bench-cli-startup.ts --entry-primary dist/entry.js --entry-secondary dist/entry.bundle.mjs`
-- `pnpm tsx scripts/bench-cli-startup.ts --entry-primary dist/entry.js --compare-bundle`
+- `pnpm tsx scripts/bench-cli-startup.ts --entry-primary dist/entry.js --entry-secondary dist/entry.mjs`
 
 This benchmarks these commands:
 
@@ -64,20 +63,8 @@ This benchmarks these commands:
 - `status`
 
 Output includes avg, p50, p95, min/max, and exit-code/signal distribution for each command.
-When `--entry-secondary` (or `--compare-bundle`) is set, it also prints avg deltas
-(`secondary - primary`) and percentages per command.
-
-## Experimental snapshot build
-
-For local experiments only (not enabled by default in runtime):
-
-- `pnpm build:cli-snapshot`
-
-This writes `dist/openclaw-cli.snapshot.blob` using Node's snapshot builder with a
-small CLI module warm-set. You can override paths with:
-
-- `OPENCLAW_CLI_SNAPSHOT_ENTRY=dist/entry.bundle.mjs`
-- `OPENCLAW_CLI_SNAPSHOT_BLOB=dist/openclaw-cli.snapshot.blob`
+When `--entry-secondary` is set, it also prints avg deltas (`secondary - primary`)
+and percentages per command.
 
 ## Onboarding E2E (Docker)
 
