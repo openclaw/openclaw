@@ -172,10 +172,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Coalescer idle flush window in milliseconds for ACP streamed text before block replies are emitted.",
   "acp.stream.maxChunkChars":
     "Maximum chunk size for ACP streamed block projection before splitting into multiple block replies.",
-  "acp.stream.metaMode":
-    "ACP metadata projection mode: off suppresses status/tool lines, minimal dedupes aggressively, verbose streams non-identical updates.",
-  "acp.stream.showUsage":
-    "When true, usage_update events are projected as system lines only when usage values change.",
+  "acp.stream.repeatSuppression":
+    "When true (default), suppress repeated ACP status/tool projection lines in a turn while keeping raw ACP events unchanged.",
   "acp.stream.deliveryMode":
     "ACP delivery style: live streams block chunks incrementally, final_only buffers text deltas until terminal turn events.",
   "acp.stream.maxTurnChars":
