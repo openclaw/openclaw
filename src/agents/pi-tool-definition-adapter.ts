@@ -38,6 +38,37 @@ type ToolExecuteArgs = ToolDefinition["execute"] extends (...args: infer P) => u
   : ToolExecuteArgsCurrent;
 type ToolExecuteArgsAny = ToolExecuteArgs | ToolExecuteArgsLegacy | ToolExecuteArgsCurrent;
 
+function compactToolParametersSchema(
+  schema: ToolDefinition["parameters"],
+): ToolDefinition["parameters"] {
+  const seen = new WeakMap<object, unknown>();
+  const compact = (value: unknown, depth: number): unknown => {
+    if (Array.isArray(value)) {
+      return value.map((entry) => compact(entry, depth + 1));
+    }
+    if (!value || typeof value !== "object") {
+      return value;
+    }
+    const cached = seen.get(value);
+    if (cached !== undefined) {
+      return cached;
+    }
+    const output: Record<string, unknown> = {};
+    seen.set(value, output);
+    for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+      if (key === "title") {
+        continue;
+      }
+      if (key === "description" && depth > 0) {
+        continue;
+      }
+      output[key] = compact(entry, depth + 1);
+    }
+    return output;
+  };
+  return compact(schema, 0) as ToolDefinition["parameters"];
+}
+
 function isAbortSignal(value: unknown): value is AbortSignal {
   return typeof value === "object" && value !== null && "aborted" in value;
 }
@@ -145,7 +176,7 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
       name,
       label: tool.label ?? name,
       description: tool.description ?? "",
-      parameters: tool.parameters,
+      parameters: compactToolParametersSchema(tool.parameters),
       execute: async (...args: ToolExecuteArgs): Promise<AgentToolResult<unknown>> => {
         const { toolCallId, params, onUpdate, signal } = splitToolExecuteArgs(args);
         let executeParams = params;
@@ -255,7 +286,7 @@ export function toClientToolDefinitions(
       name: func.name,
       label: func.name,
       description: func.description ?? "",
-      parameters: func.parameters as ToolDefinition["parameters"],
+      parameters: compactToolParametersSchema(func.parameters as ToolDefinition["parameters"]),
       execute: async (...args: ToolExecuteArgs): Promise<AgentToolResult<unknown>> => {
         const { toolCallId, params } = splitToolExecuteArgs(args);
         const outcome = await runBeforeToolCallHook({
