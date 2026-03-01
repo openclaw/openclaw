@@ -13,6 +13,7 @@ export type FeishuMessageInfo = {
   chatId: string;
   senderId?: string;
   senderOpenId?: string;
+  senderType?: string;
   content: string;
   contentType: string;
   createTime?: number;
@@ -72,6 +73,17 @@ export async function getMessageFeishu(params: {
       const parsed = JSON.parse(content);
       if (item.msg_type === "text" && parsed.text) {
         content = parsed.text;
+      } else if (item.msg_type === "interactive" && parsed.elements) {
+        // Extract text from interactive card
+        const texts: string[] = [];
+        for (const element of parsed.elements) {
+          if (element.tag === "div" && element.text?.content) {
+            texts.push(element.text.content);
+          } else if (element.tag === "markdown" && element.content) {
+            texts.push(element.content);
+          }
+        }
+        content = texts.join("\n") || "[Interactive Card]";
       }
     } catch {
       // Keep raw content if parsing fails
@@ -82,6 +94,7 @@ export async function getMessageFeishu(params: {
       chatId: item.chat_id ?? "",
       senderId: item.sender?.id,
       senderOpenId: item.sender?.id_type === "open_id" ? item.sender?.id : undefined,
+      senderType: item.sender?.sender_type,
       content,
       contentType: item.msg_type ?? "text",
       createTime: item.create_time ? parseInt(item.create_time, 10) : undefined,

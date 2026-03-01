@@ -117,3 +117,24 @@ describe("FeishuConfigSchema replyInThread", () => {
     expect(result.accounts?.main?.replyInThread).toBe("enabled");
   });
 });
+
+describe("FeishuConfigSchema optimization flags", () => {
+  it("defaults top-level typingIndicator and resolveSenderNames to true", () => {
+    const result = FeishuConfigSchema.parse({});
+    expect(result.typingIndicator).toBe(true);
+    expect(result.resolveSenderNames).toBe(true);
+  });
+
+  it("accepts account-level optimization flags", () => {
+    const result = FeishuConfigSchema.parse({
+      accounts: {
+        main: {
+          typingIndicator: false,
+          resolveSenderNames: false,
+        },
+      },
+    });
+    expect(result.accounts?.main?.typingIndicator).toBe(false);
+    expect(result.accounts?.main?.resolveSenderNames).toBe(false);
+  });
+});

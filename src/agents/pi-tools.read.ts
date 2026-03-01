@@ -854,6 +854,9 @@ function createHostEditOperations(root: string, options?: { workspaceOnly?: bool
         if (error instanceof SafeOpenError && error.code === "not-found") {
           throw createFsAccessError("ENOENT", absolutePath);
         }
+        if (error instanceof SafeOpenError && error.code === "outside-workspace") {
+          throw createFsAccessError("EACCES", absolutePath);
+        }
         throw error;
       }
     },

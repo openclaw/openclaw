@@ -13,6 +13,8 @@ function normalizeHostForConnectSrc(rawHost: string | undefined): string | null 
 export function buildControlUiCspHeader(requestHost?: string): string {
   // Control UI: block framing, block inline scripts, keep styles permissive
   // (UI uses a lot of inline style attributes in templates).
+  // Keep Google Fonts origins explicit in CSP for deployments that load
+  // external Google Fonts stylesheets/font files.
   const dynamicHost = normalizeHostForConnectSrc(requestHost);
   const connectSrc = [
     "'self'",
@@ -31,9 +33,9 @@ export function buildControlUiCspHeader(requestHost?: string): string {
     "object-src 'none'",
     "frame-ancestors 'none'",
     "script-src 'self'",
-    "style-src 'self' 'unsafe-inline'",
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
     "img-src 'self' data: https:",
-    "font-src 'self'",
+    "font-src 'self' https://fonts.gstatic.com",
     `connect-src ${connectSrc.join(" ")}`,
   ].join("; ");
 }
